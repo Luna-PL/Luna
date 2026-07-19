@@ -460,6 +460,7 @@ struct ImplDecl : Decl {
 struct Program : ASTNode {
     std::string packageName;
     bool isPackage = false;
+    bool hasAnyKernel = false;
     std::vector<std::string> sourceFiles;
     std::vector<std::unique_ptr<Decl>> declarations;
 };

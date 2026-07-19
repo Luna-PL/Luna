@@ -387,12 +387,12 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
     auto entryBB = llvm::BasicBlock::Create(*mCtx, "entry", func);
     mBuilder->SetInsertPoint(entryBB);
 
-    // The command-line driver initializes the selected backend before JIT
-    // compilation. An AOT executable, however, enters this generated function
-    // directly. Give its source-level main the same explicit failure boundary
-    // so an unavailable CUDA/ROCm runtime cannot turn into a null device
-    // pointer access or a silent simulator fallback.
-    if (decl->name == "main") {
+    // GPU init is only needed when kernels exist. Pure-CPU programs must never
+    // reference rt_gpu_* symbols so they materialise on every platform (incl.
+    // Windows CI).  When kernels ARE present, the generated main performs its
+    // own runtime check so AOT binaries exit clearly when the backend is
+    // misconfigured, rather than crashing on a null device pointer.
+    if (decl->name == "main" && mIsAOT) {
         auto initialize = mModule->getOrInsertFunction(
             "rt_gpu_initialize", mHelpers->i32Ty());
         auto reportFailure = mModule->getOrInsertFunction(

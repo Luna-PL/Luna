@@ -150,9 +150,9 @@ int main(int argc, char* argv[]) {
 
     if (cmd == "repl") {
         if (!rt_gpu_initialize()) {
-            std::cerr << "GPU backend initialization failed for '" << rt_gpu_backend_name()
-                      << "': " << rt_gpu_last_error() << "\n";
-            return 1;
+            std::cerr << "Warning: GPU backend '" << rt_gpu_backend_name()
+                      << "' init failed (" << rt_gpu_last_error()
+                      << ") — REPL without GPU works.\n";
         }
         std::cout << "REPL mode — JIT-compiling expressions one at a time\n";
         std::cout << "Type 'exit' to quit.\n\n";
@@ -272,9 +272,9 @@ int main(int argc, char* argv[]) {
     }
 
     if (!rt_gpu_initialize()) {
-        std::cerr << "GPU backend initialization failed for '" << rt_gpu_backend_name()
-                  << "': " << rt_gpu_last_error() << "\n";
-        return 1;
+        std::cerr << "Warning: GPU backend '" << rt_gpu_backend_name()
+                  << "' init failed (" << rt_gpu_last_error()
+                  << ") — CPU programs still work.\n";
     }
 
     // ─── Pipeline ──────────────────────────────────────────────────
@@ -312,6 +312,7 @@ int main(int argc, char* argv[]) {
     // 6. Code generation
     CodeGenerator cg(prog->packageName.empty() ? filePath : prog->packageName);
     cg.setOptimizationLevel(optimizationLevel);
+    cg.setIsAOT(true);
     if (!cg.generate(prog, &sema.symTable())) {
         printErrors(cg.errors());
         return 1;

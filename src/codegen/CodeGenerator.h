@@ -27,6 +27,7 @@ public:
 
     bool generate(Program* program, SymbolTable* symTable);
     void setOptimizationLevel(LunaOptimizationLevel level) { mOptimizationLevel = level; }
+    void setIsAOT(bool aot) { mIsAOT = aot; }
 
     // JIT: compile and run, returning main()'s exit code
     int jitRun();
@@ -118,4 +119,5 @@ private:
     bool mHasRtAlloc = false;
     bool mHasRtFree = false;
     bool mHasPrintf = false;
+    bool mIsAOT = false;
 };
