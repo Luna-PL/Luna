@@ -6,7 +6,11 @@
 int main() {
     // The simulator is deterministic and available in ordinary CI.  It still
     // exercises the common event-state ABI used by CUDA and ROCm.
+    #ifdef _WIN32
+    _putenv("LUNA_GPU_BACKEND=sim");
+#else
     setenv("LUNA_GPU_BACKEND", "sim", 1);
+#endif
     if (!rt_gpu_initialize()) return 1;
     if (rt_gpu_await_event(1) != 1) return 2;
     if (rt_gpu_await_event(0) != 0) return 3;

@@ -59,7 +59,7 @@ target_compile_definitions(luna PRIVATE
     BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}"
 )
 
-if(UNIX AND NOT APPLE)
+if(UNIX AND NOT APPLE AND NOT WIN32)
     target_compile_definitions(luna PRIVATE _GNU_SOURCE)
 endif()
 
@@ -67,7 +67,7 @@ endif()
 # platform-specific linker flags so the same project works with other LLVM
 # versions and on macOS.
 target_link_libraries(luna PRIVATE LLVM)
-if(CMAKE_DL_LIBS)
+if(CMAKE_DL_LIBS AND NOT WIN32)
     target_link_libraries(runtime PUBLIC ${CMAKE_DL_LIBS})
     target_link_libraries(luna PRIVATE ${CMAKE_DL_LIBS})
 endif()
