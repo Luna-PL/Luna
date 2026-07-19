@@ -377,11 +377,11 @@ int main(int argc, char* argv[]) {
         else if (optimizationLevel == LunaOptimizationLevel::O3)
             aotOptimizationFlag = "-O3";
         std::string linkerCmd = shellQuote(aotCompiler) + " " +
-            aotOptimizationFlag + " " + shellQuote(irPath.string()) + " " +
+            aotOptimizationFlag + " " + shellQuote(irPath.generic_string()) + " " +
             shellQuote(runtimeLibrary);
         if (std::string(LUNA_DL_LIBRARY).size())
             linkerCmd += " -l" + std::string(LUNA_DL_LIBRARY);
-        linkerCmd += " -o " + shellQuote(exePath.string());
+        linkerCmd += " -o " + shellQuote(exePath.generic_string());
         for (const auto& library : linkLibraries) {
             if (isLibraryPath(library)) linkerCmd += " " + shellQuote(library);
             else linkerCmd += " " + shellQuote("-l" + library);
