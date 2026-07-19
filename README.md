@@ -14,6 +14,16 @@ Windows have native stable-core CI workflows; Windows uses the MSYS2 UCRT64
 toolchain. GPU hardware tests are optional and require the corresponding vendor
 runtime and device.
 
+## Warnings && Errors
+
+windows build failed and we modify some logic of JIT
+
+so we now disable windows build
+
+maybe we will fix it in Beta test
+
+[details](docs/bug&warnings.md)
+
 ## Build
 
 The validated toolchain is LLVM/Clang 22, CMake 3.20 or newer, a C++17
