@@ -1,0 +1,11 @@
+// A loop can execute zero or many times.  Moving/freeing an outer resource
+// from its fall-through body would therefore make post-loop ownership depend
+// on the iteration count.
+fn main() -> i32 {
+    linear let buffer = new i32(1);
+    while false {
+        free buffer;
+    }
+    free buffer;
+    return 0;
+}

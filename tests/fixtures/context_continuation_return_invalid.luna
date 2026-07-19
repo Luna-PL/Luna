@@ -1,0 +1,13 @@
+context around {
+    resume();
+    print(2);
+}
+
+fn main() -> i32 {
+    apply hook(around) {
+        slot context hook {
+            return 1;
+        }
+    }
+    return 0;
+}

@@ -1,0 +1,16 @@
+context guarded {
+    let token = gpu_alloc_i32(1);
+    gpu_store_i32(borrow mut token, 0, 7);
+    resume();
+    print(gpu_load_i32(borrow token, 0));
+    gpu_free(move token);
+}
+
+fn main() -> i32 {
+    apply operation(guarded) {
+        slot context operation {
+            print(6);
+        }
+    }
+    return 0;
+}

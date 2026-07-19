@@ -1,0 +1,9 @@
+// Per-iteration resources are scoped to the loop body, so the outer state is
+// invariant even though the body owns and frees memory.
+fn main() -> i32 {
+    while false {
+        let temporary = new i32(1);
+        free temporary;
+    }
+    return 0;
+}

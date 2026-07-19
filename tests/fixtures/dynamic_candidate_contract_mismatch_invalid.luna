@@ -1,0 +1,15 @@
+context proceed(value: i32) {
+    resume();
+}
+
+interceptor inspect(value: i32) {
+    print(value);
+}
+
+fn main() -> i32 {
+    dynamic slot context hook(value: i32);
+    dynamic apply hook(proceed, inspect) {
+        hook(1) { print(2); }
+    }
+    return 0;
+}

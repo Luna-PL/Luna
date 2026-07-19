@@ -1,0 +1,5 @@
+fn main() -> i32 {
+    let values = [10, 20];
+    let view = slice(borrow values, 0, 2);
+    return view[2];
+}

@@ -1,0 +1,35 @@
+// `constexpr fn` calls with compile-time arguments are folded by the compiler.
+constexpr fn pow2(n: i32) -> i32 {
+    if n == 0 { return 1; }
+    else { return 2 * pow2(n - 1); }
+}
+
+struct Point {
+    x: i32;
+    y: i64;
+}
+
+enum Choice {
+    Left(i32);
+    Right;
+}
+
+fn main() -> i32 {
+    const let scale = pow2(5);
+    const let field_count = type_field_count::<Point>();
+    const let point_size = type_size::<Point>();
+    const let is_product = type_is_struct::<Point>();
+
+    print(type_of::<Point>());
+    print(type_kind::<Point>());
+    print(type_nominal::<Point>());
+    print(type_field_name::<Point>(1));
+    print(type_field_type::<Point>(1));
+    print(type_variant_name::<Choice>(0));
+    print(scale);
+    print(field_count);
+    print(point_size);
+
+    if is_product { return scale + field_count + point_size; }
+    return 1;
+}

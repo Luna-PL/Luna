@@ -1,0 +1,10 @@
+// Luna — Template / Generics example (monomorphization)
+fn id<T>(x: T) -> T {
+    return x;
+}
+
+fn main() -> i32 {
+    let a: i32 = 99;
+    let b = id(a);
+    return b;
+}

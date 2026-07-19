@@ -1,0 +1,19 @@
+// Arithmetic, bitwise, shift, and compound-assignment operators.
+fn main() -> i32 {
+    let value: i32 = 5;
+    value <<= 2;       // 20
+
+    let mixed = (value | 3) ^ 1;
+    print(mixed);      // 22
+    print(mixed & 7);  // 6
+    print(~mixed);     // -23
+    print(mixed >> 1); // 11
+
+    value += 2;
+    value *= 3;
+    value /= 2;
+    value %= 5;
+    print(value);      // 3
+
+    return mixed & 7;
+}

@@ -1,0 +1,13 @@
+fn main() -> i32 {
+    let checksum: i32 = 0;
+    let i: i32 = 0;
+    while i < 500000 {
+        let item = new i32(i);
+        // `new i32` is an owning heap value in Luna; scope exit releases it.
+        // Keep the loop value in the checksum so the workload remains live.
+        checksum = (checksum + i) % 1000003;
+        i += 1;
+    }
+    print(checksum & 255);
+    return 0;
+}

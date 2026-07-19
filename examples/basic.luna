@@ -1,0 +1,20 @@
+// Luna — Luna Language: Basic Example
+// Demonstrates: stack allocation, arithmetic, auto inference, functions
+
+fn main() -> i32 {
+    // Stack allocation
+    let x: i32 = 42;
+    let y: i32 = 58;
+
+    // Auto type inference
+    let z = x + y;
+
+    // Call another function with auto type
+    let doubled = double(z);
+
+    return doubled;
+}
+
+fn double(n: i32) -> i32 {
+    return n * 2;
+}

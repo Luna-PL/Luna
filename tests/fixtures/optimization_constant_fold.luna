@@ -1,0 +1,9 @@
+fn compute() -> i32 {
+    let left = 20;
+    let right = 22;
+    return left + right;
+}
+
+fn main() -> i32 {
+    return compute();
+}

@@ -1,0 +1,17 @@
+// Luna — Luna Language: Heap & Ownership Example
+// Demonstrates: new (heap allocation), move semantics, auto-free
+
+fn main() -> i32 {
+    // Heap allocation
+    let p = new i32(100);
+    
+    // Move ownership
+    let q = move p;
+    // Cannot use p after move — ownership checker will catch this
+    
+    // Use q (now owns the heap memory)
+    let z = 2 + 5;
+    
+    // q will be auto-freed at end of scope
+    return z;
+}

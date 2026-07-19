@@ -1,0 +1,18 @@
+// The initial heterogeneous-compute backend executes this dispatch through a
+// CPU simulator, while preserving the device-buffer and event ownership ABI.
+kernel fn add_one(index: i32, data: &mut device_buffer<i32>) {
+    let value = gpu_load_i32(data, index);
+    gpu_store_i32(data, index, value + 1);
+}
+
+fn main() -> i32 {
+    linear let data = gpu_alloc_i32(8);
+    gpu_store_i32(borrow mut data, 0, 41);
+
+    let done = launch add_one[threads: 8](borrow mut data);
+    await done;
+
+    print(gpu_load_i32(borrow data, 0)); // 42
+    gpu_free(move data);
+    return 0;
+}

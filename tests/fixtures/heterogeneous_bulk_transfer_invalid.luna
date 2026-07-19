@@ -1,0 +1,9 @@
+extern "C" fn calloc(count: usize, size: usize) -> raw<i32>;
+
+fn main() -> i32 {
+    linear let host = calloc(1, 4);
+    linear let data = gpu_alloc_i32(1);
+    // Upload writes the buffer, so a shared buffer borrow is insufficient.
+    gpu_copy_from_host_i32(borrow data, borrow host, 1);
+    return 0;
+}

@@ -1,0 +1,15 @@
+// A return from the slot continuation must return from the enclosing function
+// and must not execute the context's post-resume code.
+context around {
+    resume();
+    print(2);
+}
+
+fn main() -> i32 {
+    apply hook(around) {
+        slot context hook {
+            return 1;
+        }
+    }
+    return 0;
+}

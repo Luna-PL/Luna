@@ -1,0 +1,15 @@
+// A launch event is linear and may be moved; its in-flight buffer loan moves
+// with it and is released by awaiting the new binding.
+kernel fn write_one(index: i32, data: &mut device_buffer<i32>) {
+    gpu_store_i32(data, index, 9);
+}
+
+fn main() -> i32 {
+    linear let data = gpu_alloc_i32(1);
+    let done = launch write_one[threads: 1](borrow mut data);
+    let adopted = move done;
+    await adopted;
+    print(gpu_load_i32(borrow data, 0)); // 9
+    gpu_free(move data);
+    return 0;
+}

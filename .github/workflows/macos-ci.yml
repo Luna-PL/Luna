@@ -1,0 +1,30 @@
+name: macOS CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  stable-core:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CMake, Ninja, and LLVM
+        run: brew install cmake ninja llvm
+
+      - name: Configure
+        shell: bash
+        run: |
+          llvm_prefix="$(brew --prefix llvm)"
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER="${llvm_prefix}/bin/clang" \
+            -DCMAKE_CXX_COMPILER="${llvm_prefix}/bin/clang++" \
+            -DLLVM_DIR="${llvm_prefix}/lib/cmake/llvm"
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Stable core regression suite
+        run: ctest --test-dir build -LE hardware --output-on-failure

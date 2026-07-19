@@ -1,0 +1,21 @@
+// Runtime-selected, statically linked fragment candidates. The runtime picks
+// LUNA_FRAGMENT_PIPELINE when set, otherwise the first candidate (`trace`).
+context trace(value: i32) {
+    print(value);
+    resume();
+}
+
+context audit(value: i32) {
+    print(value + 2);
+    resume();
+}
+
+fn main() -> i32 {
+    dynamic slot context pipeline(value: i32);
+    dynamic apply pipeline(trace, audit) {
+        pipeline(41) {
+            print(42);
+        }
+    }
+    return 0;
+}

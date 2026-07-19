@@ -1,0 +1,9 @@
+context invalid {
+    resume();
+    abort();
+}
+
+fn main() -> i32 {
+    apply hook(invalid) { slot context hook { } }
+    return 0;
+}

@@ -1,0 +1,18 @@
+// The host allocation is deliberately an explicit FFI raw pointer: Luna's
+// first bulk-transfer ABI does not yet expose a safe array or slice type.
+extern "C" fn calloc(count: usize, size: usize) -> raw<i32>;
+extern "C" fn c_free(linear pointer: raw<i32>) as "free";
+
+fn main() -> i32 {
+    linear let host = calloc(8, 4);
+    linear let data = gpu_alloc_i32(8);
+
+    gpu_copy_from_host_i32(borrow mut data, borrow host, 8);
+    gpu_store_i32(borrow mut data, 0, 42);
+    gpu_copy_to_host_i32(borrow mut host, borrow data, 8);
+
+    let result = gpu_load_i32(borrow data, 0);
+    gpu_free(move data);
+    c_free(move host);
+    return result;
+}

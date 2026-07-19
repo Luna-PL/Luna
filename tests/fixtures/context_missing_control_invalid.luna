@@ -1,0 +1,8 @@
+context invalid {
+    print(1);
+}
+
+fn main() -> i32 {
+    apply hook(invalid) { slot context hook { } }
+    return 0;
+}

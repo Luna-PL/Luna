@@ -1,0 +1,16 @@
+// This program is intentionally rejected: the continuation frees a linear
+// capture, so replaying it would double-free the same resource.
+context many replay {
+    resume();
+    resume();
+}
+
+fn main() -> i32 {
+    linear let buffer = new i32(1);
+    apply cleanup(replay) {
+        slot context many cleanup {
+            free buffer;
+        }
+    }
+    return 0;
+}

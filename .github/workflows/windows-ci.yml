@@ -1,0 +1,40 @@
+name: Windows CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  stable-core:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install UCRT64 CMake, Ninja, and LLVM
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          path-type: inherit
+          install: >-
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-llvm
+            mingw-w64-ucrt-x86_64-clang
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=/ucrt64/bin/clang.exe \
+            -DCMAKE_CXX_COMPILER=/ucrt64/bin/clang++.exe \
+            -DLLVM_DIR=/ucrt64/lib/cmake/llvm
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Stable core regression suite
+        run: ctest --test-dir build -LE hardware --output-on-failure

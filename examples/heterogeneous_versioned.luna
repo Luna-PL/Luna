@@ -1,0 +1,14 @@
+// Version selection composes with launch just as it does with regular calls.
+kernel fn bump @stable(1.0.0)(index: i32, data: &mut device_buffer<i32>) {
+    let value = gpu_load_i32(data, index);
+    gpu_store_i32(data, index, value + 3);
+}
+
+fn main() -> i32 {
+    linear let data = gpu_alloc_i32(1);
+    let done = launch bump@stable()[threads: 1](borrow mut data);
+    await done;
+    print(gpu_load_i32(borrow data, 0)); // 3
+    gpu_free(move data);
+    return 0;
+}

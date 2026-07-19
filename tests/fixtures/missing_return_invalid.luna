@@ -1,0 +1,10 @@
+// The return in the then branch does not cover the false path.
+fn classify() -> i32 {
+    if true {
+        return 1;
+    }
+}
+
+fn main() -> i32 {
+    return classify();
+}

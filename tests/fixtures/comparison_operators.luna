@@ -1,0 +1,12 @@
+// Relational operators share the expression parser with generic type syntax;
+// this exercises every integer relation in ordinary control flow.
+fn main() -> i32 {
+    let lower = 3;
+    let upper = 5;
+    if lower < upper && upper > lower && lower <= 3 && upper >= 5 &&
+       lower != upper && upper == 5 {
+        return 42;
+    } else {
+        return 0;
+    }
+}

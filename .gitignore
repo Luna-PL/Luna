@@ -1,0 +1,27 @@
+# Local build and CMake state
+/build/
+/.omo/
+/.cache/
+/cmake-build-*/
+CMakeCache.txt
+CMakeFiles/
+CTestTestfile.cmake
+Makefile
+compile_commands.json
+install_manifest.txt
+
+# Compiler outputs generated beside a Luna source file
+*.bc
+*.ll
+*.o
+*.out
+
+# AOT executables generated from examples and fixtures
+/examples/basic
+/examples/heap
+/examples/inference
+/examples/test
+/tests/fixtures/**/*.exe
+/tests/fixtures/**/fragment_contracts
+/tests/fixtures/**/control_flow_valid
+/tests/fixtures/**/ffi_aot

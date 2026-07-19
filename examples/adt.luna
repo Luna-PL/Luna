@@ -1,0 +1,49 @@
+// Product ADT: the declaration is nominal, while its fields are a
+// structural product used by constructor constraints.
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+struct Box<T> {
+    value: T;
+}
+
+// Sum ADT with a generic payload.
+enum Option<T> {
+    None;
+    Some(T);
+}
+
+fn accept_point(point: Point) -> i32 {
+    return 7;
+}
+
+fn read_x(point: Point) -> i32 {
+    return point.x;
+}
+
+fn read_box(boxed: Box<i32>) -> i32 {
+    return boxed.value;
+}
+
+fn accept_option(value: Option<i32>) -> i32 {
+    return 0;
+}
+
+fn make_some() -> Option<i32> {
+    return Option::Some(1);
+}
+
+fn main() -> i32 {
+    let point = new Point(1, 2);
+    let boxed = new Box<i32>(9);
+    read_x(point);
+    let option_value: Option<i32> = Option::<i32>::Some(1);
+    let none_value: Option<i32> = Option::None();
+    let inferred_option = make_some();
+    accept_option(option_value);
+    let x = read_x(point);
+    let y = read_box(boxed);
+    return y + x - 3;
+}

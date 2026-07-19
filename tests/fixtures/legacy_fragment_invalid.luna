@@ -1,0 +1,4 @@
+fragment ambiguous {
+}
+
+fn main() -> i32 { return 0; }

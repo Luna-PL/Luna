@@ -1,0 +1,8 @@
+fn runtime_value() -> i32 {
+    return 5;
+}
+
+fn main() -> i32 {
+    const let value = runtime_value();
+    return value;
+}

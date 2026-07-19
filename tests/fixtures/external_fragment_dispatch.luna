@@ -1,0 +1,19 @@
+// The external name is intentionally absent from the source program.  It is
+// selected at runtime from a separately built shared library.
+interceptor trace(value: i32) {
+    print(value + 1);
+}
+
+interceptor audit(value: i32) {
+    print(value + 2);
+}
+
+fn main() -> i32 {
+    dynamic slot interceptor pipeline(value: i32);
+    dynamic apply pipeline(trace, audit) {
+        pipeline(41) {
+            print(42);
+        }
+    }
+    return 0;
+}

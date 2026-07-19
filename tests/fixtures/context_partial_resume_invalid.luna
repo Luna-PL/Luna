@@ -1,0 +1,13 @@
+context invalid(flag: bool) {
+    if flag {
+        resume();
+    } else {
+        print(1);
+    }
+}
+
+fn main() -> i32 {
+    slot context hook(flag: bool);
+    apply hook(invalid) { hook(true) { } }
+    return 0;
+}

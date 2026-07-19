@@ -1,0 +1,34 @@
+interceptor audit {
+    print(10);
+}
+
+context around {
+    print(20);
+    resume();
+    print(30);
+}
+
+context reject {
+    print(40);
+    abort();
+}
+
+fn main() -> i32 {
+    apply first(audit) {
+        slot interceptor first {
+            print(11);
+        }
+    }
+    apply second(around) {
+        slot context second {
+            print(21);
+        }
+    }
+    apply third(reject) {
+        slot context third {
+            print(99);
+        }
+        print(41);
+    }
+    return 0;
+}

@@ -1,0 +1,12 @@
+// Both paths that continue after the conditional consume the same linear
+// resource.  This must be accepted without the old sequential-branch
+// false-positive (the second free used to see the first branch's state).
+fn main() -> i32 {
+    linear let buffer = new i32(1);
+    if true {
+        free buffer;
+    } else {
+        free buffer;
+    }
+    return 0;
+}

@@ -1,0 +1,10 @@
+// The else path returns with the outer linear resource still live.
+fn main() -> i32 {
+    linear let buffer = new i32(1);
+    if true {
+        free buffer;
+        return 0;
+    } else {
+        return 0;
+    }
+}

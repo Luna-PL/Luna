@@ -1,0 +1,14 @@
+fn mix(value: i32) -> i32 {
+    return (value * 1664525 + 1013904223) & 2147483647;
+}
+
+fn main() -> i32 {
+    let value: i32 = 1;
+    let i: i32 = 0;
+    while i < 20000000 {
+        value = mix(value);
+        i += 1;
+    }
+    print(value & 255);
+    return 0;
+}

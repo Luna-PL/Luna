@@ -1,0 +1,28 @@
+struct Box @stable(1.0.0) {
+    value: i32;
+}
+
+struct Box @stable(2.0.0) {
+    value: i32;
+    revision: i32;
+}
+
+trait Tagged @stable(1.0.0) {
+    fn validate(value: i32) -> i32;
+}
+
+impl Tagged@stable() for Box@stable(1.0.0) {
+    fn validate(value: i32) -> i32 {
+        return value;
+    }
+}
+
+fn retain<T>(value: T) -> T where T: Tagged@stable() {
+    return value;
+}
+
+fn main() -> i32 {
+    let first = new Box@stable(1.0.0)(7);
+    let retained = retain(first);
+    return 0;
+}

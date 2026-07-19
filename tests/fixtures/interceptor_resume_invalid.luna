@@ -1,0 +1,8 @@
+interceptor invalid {
+    resume();
+}
+
+fn main() -> i32 {
+    apply hook(invalid) { slot interceptor hook { } }
+    return 0;
+}

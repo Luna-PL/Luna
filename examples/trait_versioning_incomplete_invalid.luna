@@ -1,0 +1,7 @@
+trait Transform @stable(1.0.0) {
+    fn transform(value: i32) -> i32;
+}
+
+// This exact trait version requires `transform`; an empty impl is not enough.
+impl Transform@stable() for i32 {
+}

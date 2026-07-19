@@ -1,0 +1,6 @@
+fn main() -> i32 {
+    let values: array<i32, 4> = [10, 20, 30, 40];
+    values[1] = values[0] + 5;
+    print(values[1]);
+    return values[3];
+}

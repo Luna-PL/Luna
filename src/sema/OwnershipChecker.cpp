@@ -1,0 +1,1290 @@
+#include "OwnershipChecker.h"
+#include "../diagnostics/Diagnostic.h"
+#include <functional>
+#include <unordered_set>
+
+OwnershipChecker::OwnershipChecker() {
+    enterScope();
+}
+
+bool OwnershipChecker::check(Program* program, SymbolTable& symTable) {
+    mSymTable = &symTable;
+    mFragments.clear();
+    mApplyScopes.clear();
+    mSlotScopes.clear();
+    mApplyScopes.emplace_back();
+    mSlotScopes.emplace_back();
+    for (auto& declaration : program->declarations) {
+        if (auto* fragment = dynamic_cast<FragmentDecl*>(declaration.get())) {
+            mFragments[fragment->name] = fragment;
+            if (!fragment->generatedSymbolName.empty())
+                mFragments[fragment->generatedSymbolName] = fragment;
+        }
+    }
+    for (auto& declaration : program->declarations) {
+        if (auto* function = dynamic_cast<FunctionDecl*>(declaration.get())) {
+            if (function->isExtern) continue;
+            if (!checkFunction(function)) return false;
+        } else if (auto* impl = dynamic_cast<ImplDecl*>(declaration.get())) {
+            for (auto& method : impl->methods)
+                if (!checkFunction(method.get())) return false;
+        }
+    }
+    return mErrors.empty();
+}
+
+bool OwnershipChecker::checkFunction(FunctionDecl* decl) {
+    setDiagnosticLocation(decl);
+    enterScope();
+    mApplyScopes.emplace_back();
+    mSlotScopes.emplace_back();
+
+    for (auto& param : decl->params) {
+        TypePtr type = resolveType(param.type.get(), {});
+        bool isReference = type && type->kind == TypeKind::Reference;
+        // Function parameters are non-owning views by default.  A nominal
+        // type lowers to a pointer, but that pointer still belongs to the
+        // caller unless the interface explicitly models a linear transfer.
+        // Treating every heap-shaped parameter as locally owned caused
+        // ordinary calls such as read_x(point) to free the caller's value on
+        // return, followed by a second free in the caller.
+        define(param.name, type, false,
+               param.isLinear || isLinearTypeAST(param.type.get()),
+               isReference, isReference && type->isMutable);
+        // define() also classifies heap-shaped local values from their type
+        // so constructor results receive automatic cleanup.  Parameters are
+        // the one intentional exception: their storage is owned by the
+        // caller, irrespective of their representation.
+        mScopes.back()[param.name].isHeapAllocated = false;
+    }
+
+    FlowResult bodyResult;
+    if (decl->body) bodyResult = checkBlock(decl->body.get());
+    if (!bodyResult.ok) {
+        exitScope();
+        mApplyScopes.pop_back();
+        mSlotScopes.pop_back();
+        return false;
+    }
+
+    releaseLoansInCurrentScope();
+    if (bodyResult.fallsThrough) validateLinearScope();
+
+    if (decl->body && bodyResult.fallsThrough) {
+        for (auto& name : collectFreesAtScopeExit()) {
+            auto freeStmt = std::make_unique<FreeStmt>();
+            freeStmt->operand = std::make_unique<IdentifierExpr>(name);
+            decl->body->stmts.push_back(std::move(freeStmt));
+        }
+    }
+
+    exitScope();
+    mApplyScopes.pop_back();
+    mSlotScopes.pop_back();
+    return mErrors.empty();
+}
+
+OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
+    enterScope();
+    mApplyScopes.emplace_back();
+    mSlotScopes.emplace_back();
+    FlowResult result;
+    for (auto& stmt : block->stmts) {
+        result = checkStmt(stmt.get());
+        if (!result.ok) {
+            releaseLoansInCurrentScope();
+            exitScope();
+            mApplyScopes.pop_back();
+            mSlotScopes.pop_back();
+            return {false, result.fallsThrough};
+        }
+        // Statements after a return are unreachable.  In particular, they
+        // must not be treated as another ownership path: doing so produces
+        // false use-after-move/free errors and invalid branch merges.
+        if (!result.fallsThrough) break;
+    }
+
+    // References created in this block cannot be used after the block. End
+    // their loans before deciding which owned values may be freed.
+    releaseLoansInCurrentScope();
+    // A terminating path was validated at its `return` statement across all
+    // active scopes.  There is no fall-through state to validate here.
+    if (result.fallsThrough) validateLinearScope();
+    if (!mErrors.empty()) {
+        exitScope();
+        mApplyScopes.pop_back();
+        mSlotScopes.pop_back();
+        return {false, result.fallsThrough};
+    }
+
+    std::vector<std::string> frees = collectFreesAtScopeExit();
+    std::vector<std::unique_ptr<Stmt>> freeStmts;
+    for (const auto& name : frees) {
+        auto freeStmt = std::make_unique<FreeStmt>();
+        freeStmt->operand = std::make_unique<IdentifierExpr>(name);
+        freeStmts.push_back(std::move(freeStmt));
+    }
+
+    // Return-path cleanup is recorded on each ReturnStmt while that precise
+    // control-flow state is available.  The block cleanup below is only for
+    // actual fall-through; appending it after a terminating statement would
+    // be unreachable and cannot release a nested-return path.
+    if (result.fallsThrough) {
+        auto& statements = block->stmts;
+        for (const auto& freeStmt : freeStmts) {
+            auto* original = dynamic_cast<FreeStmt*>(freeStmt.get());
+            auto copy = std::make_unique<FreeStmt>();
+            if (original && original->operand) {
+                if (auto* id = dynamic_cast<IdentifierExpr*>(original->operand.get()))
+                    copy->operand = std::make_unique<IdentifierExpr>(id->name);
+            }
+            statements.push_back(std::move(copy));
+        }
+    }
+
+    exitScope();
+    mApplyScopes.pop_back();
+    mSlotScopes.pop_back();
+    return {mErrors.empty(), result.fallsThrough};
+}
+
+OwnershipChecker::FlowResult OwnershipChecker::checkSlotInvoke(SlotInvokeStmt* slot) {
+    auto lookupApplied = [this](const std::string& name) -> FragmentDecl* {
+        for (auto it = mApplyScopes.rbegin(); it != mApplyScopes.rend(); ++it) {
+            auto found = it->find(name);
+            if (found != it->end()) return found->second;
+        }
+        return nullptr;
+    };
+    auto lookupDefault = [this, slot](const std::string& name) -> FragmentDecl* {
+        if (!slot->defaultFragment.empty()) {
+            auto direct = mFragments.find(slot->defaultFragment);
+            if (direct != mFragments.end()) return direct->second;
+        }
+        for (auto it = mSlotScopes.rbegin(); it != mSlotScopes.rend(); ++it) {
+            auto found = it->find(name);
+            if (found == it->end() || !found->second || found->second->defaultFragment.empty()) continue;
+            auto fragment = mFragments.find(found->second->defaultFragment);
+            if (fragment != mFragments.end()) return fragment->second;
+        }
+        return nullptr;
+    };
+
+    FragmentDecl* fragment = lookupApplied(slot->name);
+    if (!fragment) fragment = lookupDefault(slot->name);
+
+    if (slot->usesDynamicDispatch) {
+        if (slot->resolvedDynamicFragmentNames.empty()) {
+            error("dynamic slot '" + slot->name + "' has no resolved fragment candidates",
+                  slot->line, slot->col);
+            return false;
+        }
+        const CheckerState before = captureState();
+        CheckerState merged;
+        bool haveMerged = false;
+        bool ok = true;
+        for (const auto& name : slot->resolvedDynamicFragmentNames) {
+            auto candidate = mFragments.find(name);
+            if (candidate == mFragments.end()) {
+                error("dynamic slot '" + slot->name + "' references unknown fragment '" + name + "'",
+                      slot->line, slot->col);
+                ok = false;
+                continue;
+            }
+            const bool multiShot = candidate->second->cardinality == FragmentCardinality::Many;
+            if (multiShot) {
+                error("dynamic slot '" + slot->name + "' cannot use multi-shot fragment '" +
+                      candidate->second->name + "' in the initial runtime ABI", slot->line, slot->col);
+                ok = false;
+                continue;
+            }
+            restoreState(before);
+            FlowResult candidateResult = checkFragment(candidate->second, slot, multiShot);
+            if (!candidateResult.ok) {
+                ok = false;
+                continue;
+            }
+            if (!candidateResult.fallsThrough) continue;
+            const CheckerState after = captureState();
+            if (!haveMerged) {
+                merged = after;
+                haveMerged = true;
+                continue;
+            }
+            bool same = merged.scopes.size() == after.scopes.size() &&
+                        merged.loans.size() == after.loans.size();
+            if (same) {
+                for (size_t index = 0; index < merged.scopes.size() && same; ++index) {
+                    if (merged.scopes[index].size() != after.scopes[index].size()) {
+                        same = false;
+                        break;
+                    }
+                    for (const auto& [variable, prior] : merged.scopes[index]) {
+                        auto current = after.scopes[index].find(variable);
+                        if (current == after.scopes[index].end() || !sameVarState(prior, current->second)) {
+                            same = false;
+                            break;
+                        }
+                    }
+                    if (index < merged.loans.size() &&
+                        !sameLoanState(merged.loans[index], after.loans[index]))
+                        same = false;
+                }
+            }
+            if (!same) {
+                error("dynamic fragments bound to slot '" + slot->name +
+                      "' leave different ownership or borrow states; dynamic alternatives must be effect-compatible",
+                      slot->line, slot->col);
+                ok = false;
+            }
+        }
+        if (ok && haveMerged) restoreState(merged);
+        else restoreState(before);
+        return {ok && haveMerged, haveMerged};
+    }
+
+    if (!fragment) return checkBlock(slot->continuation.get());
+
+    const bool multiShot = fragment->cardinality == FragmentCardinality::Many;
+    if (!multiShot) return checkFragment(fragment, slot, false);
+
+    // Multi-shot continuations are replayed from the same frame. Check one
+    // execution on a snapshot, then reject any captured ownership transition.
+    const auto savedScopes = mScopes;
+    const auto savedLoans = mLoansInScope;
+    const size_t errorsBefore = mErrors.size();
+    bool continuationOk = checkBlock(slot->continuation.get()).ok;
+    const bool consumes = continuationConsumesCapturedState(savedScopes);
+    mScopes = savedScopes;
+    mLoansInScope = savedLoans;
+    if (consumes) {
+        error("slot '" + slot->name + "' continuation consumes or frees captured state and cannot be resumed more than once",
+              slot->line, slot->col);
+        continuationOk = false;
+    }
+    // Do not emit duplicate diagnostics from the validation-only traversal.
+    if (mErrors.size() > errorsBefore && !continuationOk) {
+        // Preserve real continuation diagnostics while ensuring the fragment
+        // itself is still checked with resume treated as a replay marker.
+    }
+    FlowResult fragmentResult = checkFragment(fragment, slot, true);
+    return {continuationOk && fragmentResult.ok, fragmentResult.fallsThrough};
+}
+
+OwnershipChecker::FlowResult OwnershipChecker::checkFragment(
+    FragmentDecl* fragment, SlotInvokeStmt* slot, bool multiShot) {
+    const CheckerState before = captureState();
+    auto* savedContinuation = mCurrentSlotContinuation;
+    const bool savedManyValidation = mValidatingManyContinuation;
+    const bool savedCheckingContinuation = mCheckingSlotContinuation;
+    auto* savedAbortExits = mCurrentFragmentAbortExits;
+    const size_t savedScopeBase = mCurrentFragmentScopeBase;
+    const size_t savedApplyBase = mCurrentFragmentApplyBase;
+    const size_t savedSlotBase = mCurrentFragmentSlotBase;
+    std::vector<CheckerState> exits;
+    mCurrentSlotContinuation = slot->continuation.get();
+    mValidatingManyContinuation = multiShot;
+    mCheckingSlotContinuation = false;
+    mCurrentFragmentAbortExits = &exits;
+    mCurrentFragmentScopeBase = before.scopes.size();
+    mCurrentFragmentApplyBase = before.applyScopes.size();
+    mCurrentFragmentSlotBase = before.slotScopes.size();
+
+    enterScope();
+    for (auto& param : fragment->params) {
+        TypePtr type = param.inferredType ? param.inferredType
+                                           : resolveType(param.type.get(), {});
+        bool isReference = type && type->kind == TypeKind::Reference;
+        define(param.name, type, type && type->isHeapType(), param.isLinear,
+               isReference, isReference && type->isMutable);
+    }
+    FlowResult body = fragment->body ? checkBlock(fragment->body.get()) : FlowResult{};
+    bool ok = body.ok;
+    if (ok && body.fallsThrough && fragment->kind == FragmentKind::Interceptor) {
+        FlowResult continuation = checkBlock(slot->continuation.get());
+        ok = continuation.ok;
+        body.fallsThrough = continuation.fallsThrough;
+    }
+    if (ok && body.fallsThrough) {
+        CheckerState normal = captureState();
+        normal.scopes.resize(before.scopes.size());
+        normal.loans.resize(before.loans.size());
+        normal.applyScopes.resize(before.applyScopes.size());
+        normal.slotScopes.resize(before.slotScopes.size());
+        exits.push_back(std::move(normal));
+    }
+    exitScope();
+
+    mCurrentSlotContinuation = savedContinuation;
+    mValidatingManyContinuation = savedManyValidation;
+    mCheckingSlotContinuation = savedCheckingContinuation;
+    mCurrentFragmentAbortExits = savedAbortExits;
+    mCurrentFragmentScopeBase = savedScopeBase;
+    mCurrentFragmentApplyBase = savedApplyBase;
+    mCurrentFragmentSlotBase = savedSlotBase;
+
+    restoreState(before);
+    if (!ok) return {false, false};
+    // An empty exit set is a valid function-return path when the continuation
+    // itself returned. It is not a fallthrough path and must not be merged
+    // with ownership state that continues after the slot.
+    if (exits.empty()) return {true, false};
+    CheckerState merged = exits.front();
+    for (size_t index = 1; index < exits.size(); ++index) {
+        if (!mergeFallthroughStates(before, merged, exits[index], slot))
+            return {false, false};
+        merged = captureState();
+    }
+    restoreState(merged);
+    // An abort exits the fragment but deliberately resumes the code after
+    // the slot invocation. A continuation return, in contrast, leaves no
+    // fragment exit and terminates the enclosing function.
+    return {true, body.fallsThrough || !exits.empty()};
+}
+
+bool OwnershipChecker::continuationConsumesCapturedState(
+    const std::vector<std::unordered_map<std::string, VarInfo>>& before) const {
+    const size_t scopeCount = std::min(before.size(), mScopes.size());
+    for (size_t i = 0; i < scopeCount; ++i) {
+        for (const auto& [name, prior] : before[i]) {
+            auto current = mScopes[i].find(name);
+            if (current == mScopes[i].end()) continue;
+            if (prior.state == OwnState::Valid && current->second.state != OwnState::Valid)
+                return true;
+        }
+    }
+    return false;
+}
+
+OwnershipChecker::CheckerState OwnershipChecker::captureState() const {
+    return {mScopes, mLoansInScope, mApplyScopes, mSlotScopes};
+}
+
+void OwnershipChecker::restoreState(const CheckerState& state) {
+    mScopes = state.scopes;
+    mLoansInScope = state.loans;
+    mApplyScopes = state.applyScopes;
+    mSlotScopes = state.slotScopes;
+}
+
+bool OwnershipChecker::sameVarState(const VarInfo& left, const VarInfo& right) const {
+    if (left.state != right.state ||
+        left.sharedBorrows != right.sharedBorrows ||
+        left.mutableBorrow != right.mutableBorrow ||
+        left.inFlightReads != right.inFlightReads ||
+        left.inFlightWrites != right.inFlightWrites ||
+        left.isGpuEvent != right.isGpuEvent ||
+        left.eventResources.size() != right.eventResources.size())
+        return false;
+    for (size_t i = 0; i < left.eventResources.size(); ++i) {
+        if (left.eventResources[i].source != right.eventResources[i].source ||
+            left.eventResources[i].isMutable != right.eventResources[i].isMutable)
+            return false;
+    }
+    return true;
+}
+
+bool OwnershipChecker::sameLoanState(const std::vector<Loan>& left,
+                                     const std::vector<Loan>& right) const {
+    if (left.size() != right.size()) return false;
+    for (size_t i = 0; i < left.size(); ++i) {
+        if (left[i].source != right[i].source || left[i].isMutable != right[i].isMutable)
+            return false;
+    }
+    return true;
+}
+
+bool OwnershipChecker::sameApplyState(
+    const std::vector<std::unordered_map<std::string, FragmentDecl*>>& left,
+    const std::vector<std::unordered_map<std::string, FragmentDecl*>>& right) const {
+    if (left.size() != right.size()) return false;
+    for (size_t i = 0; i < left.size(); ++i) {
+        if (left[i].size() != right[i].size()) return false;
+        for (const auto& [name, fragment] : left[i]) {
+            auto found = right[i].find(name);
+            if (found == right[i].end() || found->second != fragment) return false;
+        }
+    }
+    return true;
+}
+
+bool OwnershipChecker::sameSlotState(
+    const std::vector<std::unordered_map<std::string, SlotDeclStmt*>>& left,
+    const std::vector<std::unordered_map<std::string, SlotDeclStmt*>>& right) const {
+    if (left.size() != right.size()) return false;
+    for (size_t i = 0; i < left.size(); ++i) {
+        if (left[i].size() != right[i].size()) return false;
+        for (const auto& [name, slot] : left[i]) {
+            auto found = right[i].find(name);
+            if (found == right[i].end() || found->second != slot) return false;
+        }
+    }
+    return true;
+}
+
+std::string OwnershipChecker::describeControlFlowDifference(
+    const std::string& name, const VarInfo& left, const VarInfo& right,
+    const char* construct) const {
+    const bool consumedOnOnePath =
+        (left.state == OwnState::Valid) != (right.state == OwnState::Valid);
+    if (consumedOnOnePath) {
+        if (left.isGpuEvent || right.isGpuEvent)
+            return "launch event '" + name + "' is awaited or moved on only some paths through `" +
+                   construct + "`; every path that continues must leave it in the same state";
+        if (left.isLinear || right.isLinear)
+            return "linear resource '" + name + "' is consumed on only some paths through `" +
+                   construct + "`; consume it before the branch or on every path that continues";
+        if (left.isHeapAllocated || right.isHeapAllocated)
+            return "owned heap value '" + name + "' is freed or moved on only some paths through `" +
+                   construct + "`; make ownership consistent before continuing";
+    }
+    if (left.sharedBorrows != right.sharedBorrows || left.mutableBorrow != right.mutableBorrow)
+        return "borrow state of '" + name + "' differs across paths through `" + construct +
+               "`; a borrow may not escape only one branch";
+    if (left.inFlightReads != right.inFlightReads || left.inFlightWrites != right.inFlightWrites)
+        return "in-flight state of device buffer '" + name + "' differs across paths through `" +
+               construct + "`; await the launch event on every continuing path";
+    return "ownership state of '" + name + "' differs across paths through `" + construct +
+           "`; every path that continues must agree";
+}
+
+bool OwnershipChecker::mergeFallthroughStates(const CheckerState& before,
+                                              const CheckerState& left,
+                                              const CheckerState& right,
+                                              const ASTNode* controlFlow) {
+    if (before.scopes.size() != left.scopes.size() ||
+        before.scopes.size() != right.scopes.size()) {
+        error("internal ownership-state mismatch while merging control-flow paths",
+              controlFlow ? controlFlow->line : 0, controlFlow ? controlFlow->col : 0);
+        restoreState(before);
+        return false;
+    }
+
+    CheckerState merged = left;
+    bool ok = true;
+    for (size_t i = 0; i < before.scopes.size(); ++i) {
+        for (const auto& [name, prior] : before.scopes[i]) {
+            auto leftVar = left.scopes[i].find(name);
+            auto rightVar = right.scopes[i].find(name);
+            if (leftVar == left.scopes[i].end() || rightVar == right.scopes[i].end()) {
+                error("ownership binding '" + name + "' is not available on every control-flow path",
+                      controlFlow ? controlFlow->line : 0, controlFlow ? controlFlow->col : 0);
+                ok = false;
+                continue;
+            }
+            if (!sameVarState(leftVar->second, rightVar->second)) {
+                error(describeControlFlowDifference(name, leftVar->second, rightVar->second, "if"),
+                      controlFlow ? controlFlow->line : 0, controlFlow ? controlFlow->col : 0);
+                ok = false;
+                continue;
+            }
+            merged.scopes[i][name] = leftVar->second;
+        }
+    }
+
+    bool sameLoans = left.loans.size() == right.loans.size();
+    if (sameLoans) {
+        for (size_t i = 0; i < left.loans.size(); ++i) {
+            if (!sameLoanState(left.loans[i], right.loans[i])) {
+                sameLoans = false;
+                break;
+            }
+        }
+    }
+    if (ok && (!sameLoans || !sameApplyState(left.applyScopes, right.applyScopes) ||
+               !sameSlotState(left.slotScopes, right.slotScopes))) {
+        error("lexical borrow, slot, or apply state differs across paths through `if`; "
+              "such state must remain branch-local", controlFlow ? controlFlow->line : 0,
+              controlFlow ? controlFlow->col : 0);
+        ok = false;
+    }
+
+    if (ok) restoreState(merged);
+    else restoreState(before);
+    return ok;
+}
+
+bool OwnershipChecker::loopPreservesOuterState(const CheckerState& before,
+                                               const CheckerState& after,
+                                               const ASTNode* loop) {
+    if (before.scopes.size() != after.scopes.size()) {
+        error("internal ownership-state mismatch while checking loop",
+              loop ? loop->line : 0, loop ? loop->col : 0);
+        return false;
+    }
+    bool ok = true;
+    for (size_t i = 0; i < before.scopes.size(); ++i) {
+        for (const auto& [name, prior] : before.scopes[i]) {
+            auto current = after.scopes[i].find(name);
+            if (current == after.scopes[i].end() || !sameVarState(prior, current->second)) {
+                error("loop body changes ownership, borrow, or in-flight state of '" + name +
+                      "'; because a loop may run zero or many times, consume or await outer "
+                      "resources outside the loop", loop ? loop->line : 0,
+                      loop ? loop->col : 0);
+                ok = false;
+            }
+        }
+    }
+    bool sameLoans = before.loans.size() == after.loans.size();
+    if (sameLoans) {
+        for (size_t i = 0; i < before.loans.size(); ++i) {
+            if (!sameLoanState(before.loans[i], after.loans[i])) {
+                sameLoans = false;
+                break;
+            }
+        }
+    }
+    if (ok && (!sameLoans || !sameApplyState(before.applyScopes, after.applyScopes) ||
+               !sameSlotState(before.slotScopes, after.slotScopes))) {
+        error("loop body changes a lexical slot or apply binding; make that binding local to the loop body",
+              loop ? loop->line : 0, loop ? loop->col : 0);
+        ok = false;
+    }
+    return ok;
+}
+
+OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
+    setDiagnosticLocation(stmt);
+    if (auto* declaration = dynamic_cast<SlotDeclStmt*>(stmt)) {
+        if (mSlotScopes.back().count(declaration->name)) {
+            error("duplicate slot declaration '" + declaration->name + "'", declaration->line, declaration->col);
+            return false;
+        }
+        mSlotScopes.back()[declaration->name] = declaration;
+        return true;
+    }
+    if (auto* slot = dynamic_cast<SlotInvokeStmt*>(stmt)) return checkSlotInvoke(slot);
+    if (auto* apply = dynamic_cast<ApplyStmt*>(stmt)) {
+        auto fragment = mFragments.find(apply->fragmentName);
+        if (fragment == mFragments.end()) {
+            error("unknown fragment '" + apply->fragmentName + "' in apply", apply->line, apply->col);
+            return false;
+        }
+        if (apply->body) {
+            mApplyScopes.emplace_back();
+            mApplyScopes.back()[apply->slotName] = fragment->second;
+            bool ok = checkBlock(apply->body.get()).ok;
+            mApplyScopes.pop_back();
+            return ok;
+        }
+        mApplyScopes.back()[apply->slotName] = fragment->second;
+        return true;
+    }
+    if (dynamic_cast<ResumeStmt*>(stmt)) {
+        if (!mCurrentSlotContinuation) {
+            error("`resume()` may only appear in an applied fragment", stmt->line, stmt->col);
+            return false;
+        }
+        if (mValidatingManyContinuation) return true;
+        const bool savedCheckingContinuation = mCheckingSlotContinuation;
+        mCheckingSlotContinuation = true;
+        FlowResult continuation = checkBlock(mCurrentSlotContinuation);
+        mCheckingSlotContinuation = savedCheckingContinuation;
+        return continuation;
+    }
+    if (dynamic_cast<AbortStmt*>(stmt)) {
+        if (!mCurrentFragmentAbortExits) {
+            error("`abort()` may only appear in an applied interceptor or context",
+                  stmt->line, stmt->col);
+            return false;
+        }
+        bool ok = true;
+        for (size_t index = mCurrentFragmentScopeBase; index < mScopes.size(); ++index) {
+            for (const auto& [name, info] : mScopes[index]) {
+                if (info.isLinear && info.state == OwnState::Valid) {
+                    error("Linear variable '" + name +
+                          "' must be consumed before aborting the fragment",
+                          stmt->line, stmt->col);
+                    ok = false;
+                }
+            }
+        }
+        CheckerState exit = captureState();
+        exit.scopes.resize(mCurrentFragmentScopeBase);
+        exit.loans.resize(mCurrentFragmentScopeBase);
+        exit.applyScopes.resize(mCurrentFragmentApplyBase);
+        exit.slotScopes.resize(mCurrentFragmentSlotBase);
+        mCurrentFragmentAbortExits->push_back(std::move(exit));
+        return {ok, false};
+    }
+    if (auto* await = dynamic_cast<AwaitStmt*>(stmt)) {
+        auto* id = dynamic_cast<IdentifierExpr*>(await->event.get());
+        auto* event = id ? lookup(id->name) : nullptr;
+        if (!event || !event->isGpuEvent) {
+            error("`await` requires a named launch event", await->line, await->col);
+            return false;
+        }
+        if (event->state != OwnState::Valid) {
+            error("launch event '" + id->name + "' has already been consumed", id->line, id->col);
+            return false;
+        }
+        finishEvent(event);
+        return consume(event, "await");
+    }
+    if (auto* let = dynamic_cast<LetStmt*>(stmt)) {
+        const size_t loanCount = mLoansInScope.back().size();
+        VarInfo* movedSource = nullptr;
+        if (auto* move = dynamic_cast<MoveExpr*>(let->initializer.get())) {
+            if (auto* id = dynamic_cast<IdentifierExpr*>(move->operand.get()))
+                movedSource = lookup(id->name);
+        }
+        if (!checkExpr(let->initializer.get())) return false;
+
+        TypePtr type = let->typeAnnotation
+            ? resolveType(let->typeAnnotation.get(), {}) : TyUnknown;
+        bool isReference = type && type->kind == TypeKind::Reference;
+        bool isMutableReference = isReference && type->isMutable;
+        bool isHeap = dynamic_cast<HeapAllocExpr*>(let->initializer.get()) != nullptr;
+        bool isLinear = let->isLinear || isLinearTypeAST(let->typeAnnotation.get());
+        if (auto* call = dynamic_cast<CallExpr*>(let->initializer.get()))
+            isLinear = isLinear || call->returnsLinear;
+        if (auto* call = dynamic_cast<CallExpr*>(let->initializer.get())) {
+            if (auto* callee = dynamic_cast<IdentifierExpr*>(call->callee.get());
+                callee && callee->name == "slice") {
+                // slice(borrow array, ...) retains the loan for the lexical
+                // lifetime of the view, exactly like a named reference.
+                isReference = true;
+            }
+        }
+
+        if (movedSource) {
+            isHeap = isHeap || movedSource->isHeapAllocated;
+            isLinear = isLinear || movedSource->isLinear;
+            isReference = isReference || movedSource->isReference;
+            isMutableReference = isMutableReference || movedSource->isMutableReference;
+            if (!type || type == TyUnknown) type = movedSource->type;
+        }
+        if (auto* borrow = dynamic_cast<BorrowExpr*>(let->initializer.get())) {
+            isReference = true;
+            isMutableReference = borrow->isMutable;
+        }
+        if (auto* address = dynamic_cast<AddrOfExpr*>(let->initializer.get())) {
+            isReference = true;
+            isMutableReference = address->isMutable;
+        }
+
+        if (auto* id = dynamic_cast<IdentifierExpr*>(let->initializer.get())) {
+            auto* source = lookup(id->name);
+            if (source && source->isLinear) {
+                error("Linear variable '" + id->name +
+                      "' must be moved explicitly when initializing '" + let->name + "'");
+                return false;
+            }
+        }
+
+        define(let->name, type, isHeap, isLinear, isReference, isMutableReference);
+        if (auto* launch = dynamic_cast<LaunchExpr*>(let->initializer.get())) {
+            auto* event = lookup(let->name);
+            if (event) {
+                event->isGpuEvent = true;
+                event->eventResources.clear();
+                for (const auto& resource : launch->inFlightResources)
+                    event->eventResources.push_back({resource.first, resource.second});
+            }
+        } else if (movedSource && movedSource->isGpuEvent) {
+            // Events are linear handles, not mere integers. Moving one must
+            // move the in-flight buffer loans as well, so await on the new
+            // binding releases exactly the resources launched by the old one.
+            auto* event = lookup(let->name);
+            if (event) {
+                event->isGpuEvent = true;
+                event->eventResources = std::move(movedSource->eventResources);
+            }
+        }
+        if (!isReference) {
+            while (mLoansInScope.back().size() > loanCount) {
+                releaseLoan(mLoansInScope.back().back());
+                mLoansInScope.back().pop_back();
+            }
+        }
+        return true;
+    }
+    if (auto* expression = dynamic_cast<ExprStmt*>(stmt)) {
+        if (dynamic_cast<LaunchExpr*>(expression->expr.get())) {
+            error("a launch event must be bound and awaited; write `let done = launch ...; await done;`",
+                  expression->line, expression->col);
+            return false;
+        }
+        if (auto* call = dynamic_cast<CallExpr*>(expression->expr.get());
+            call && call->returnsLinear) {
+            error("owning result of FFI call must be bound to a variable and consumed",
+                  expression->line, expression->col);
+            return false;
+        }
+        const size_t loanCount = mLoansInScope.back().size();
+        bool ok = checkExpr(expression->expr.get());
+        while (mLoansInScope.back().size() > loanCount) {
+            releaseLoan(mLoansInScope.back().back());
+            mLoansInScope.back().pop_back();
+        }
+        return ok;
+    }
+    if (auto* ret = dynamic_cast<ReturnStmt*>(stmt)) {
+        const size_t loanCount = mLoansInScope.back().size();
+        bool ok = true;
+        if (ret->value) {
+            ok = checkExpr(ret->value.get());
+            if (isReferenceExpr(ret->value.get())) {
+                error("Reference cannot escape the function through return");
+                ok = false;
+            }
+            if (auto* id = dynamic_cast<IdentifierExpr*>(ret->value.get())) {
+                auto* var = lookup(id->name);
+                if (var && var->isGpuEvent) {
+                    error("launch event '" + id->name + "' cannot escape; await it before returning",
+                          id->line, id->col);
+                    ok = false;
+                } else if (var && (var->isLinear || var->isHeapAllocated)) {
+                    // Returning an owned heap value transfers it to the
+                    // caller.  Without this transition an automatic cleanup
+                    // at the return point would free the returned pointer.
+                    ok = consume(var, "return");
+                }
+            }
+        }
+        while (mLoansInScope.back().size() > loanCount) {
+            releaseLoan(mLoansInScope.back().back());
+            mLoansInScope.back().pop_back();
+        }
+        if (mCurrentFragmentAbortExits && !mCheckingSlotContinuation) {
+            // Returning from a fragment ends only that fragment. Its local
+            // resources must be closed, while enclosing function resources
+            // remain available to the code after the slot.
+            for (size_t index = mCurrentFragmentScopeBase; index < mScopes.size(); ++index) {
+                for (const auto& [name, info] : mScopes[index]) {
+                    if (info.isLinear && info.state == OwnState::Valid) {
+                        error("Linear variable '" + name +
+                              "' must be consumed before returning from the fragment",
+                              stmt->line, stmt->col);
+                        ok = false;
+                    }
+                }
+            }
+            if (ok) {
+                ret->autoFrees = collectFreesAtFragmentExit();
+                CheckerState exit = captureState();
+                exit.scopes.resize(mCurrentFragmentScopeBase);
+                exit.loans.resize(mCurrentFragmentScopeBase);
+                exit.applyScopes.resize(mCurrentFragmentApplyBase);
+                exit.slotScopes.resize(mCurrentFragmentSlotBase);
+                mCurrentFragmentAbortExits->push_back(std::move(exit));
+            }
+            return {ok, false};
+        }
+        const size_t errorsBeforeReturnValidation = mErrors.size();
+        if (ok) {
+            validateLinearReturnPath();
+            ret->autoFrees = collectFreesAtReturn();
+        }
+        if (mErrors.size() != errorsBeforeReturnValidation) ok = false;
+        return {ok, false};
+    }
+    if (auto* conditional = dynamic_cast<IfStmt*>(stmt)) {
+        if (!checkExpr(conditional->cond.get())) return false;
+
+        const CheckerState before = captureState();
+        FlowResult thenResult = checkBlock(conditional->thenBlock.get());
+        const CheckerState thenState = captureState();
+        if (!thenResult.ok) {
+            restoreState(before);
+            return false;
+        }
+
+        restoreState(before);
+        FlowResult elseResult = conditional->elseBranch
+            ? checkStmt(conditional->elseBranch.get())
+            : FlowResult{};
+        const CheckerState elseState = captureState();
+        if (!elseResult.ok) {
+            restoreState(before);
+            return false;
+        }
+
+        // Only paths that can reach the next statement participate in the
+        // merge.  A returning branch has already been validated at its own
+        // scope exit and cannot cause a false conflict after this `if`.
+        if (thenResult.fallsThrough && elseResult.fallsThrough) {
+            if (!mergeFallthroughStates(before, thenState, elseState, conditional))
+                return false;
+            return {true, true};
+        }
+        if (thenResult.fallsThrough) {
+            restoreState(thenState);
+            return {true, true};
+        }
+        if (elseResult.fallsThrough) {
+            restoreState(elseState);
+            return {true, true};
+        }
+        restoreState(before);
+        return {true, false};
+    }
+    if (auto* loop = dynamic_cast<WhileStmt*>(stmt)) {
+        if (!checkExpr(loop->cond.get())) return false;
+        const CheckerState before = captureState();
+        FlowResult bodyResult = checkBlock(loop->body.get());
+        const CheckerState after = captureState();
+        restoreState(before);
+        if (!bodyResult.ok) return false;
+        if (bodyResult.fallsThrough && !loopPreservesOuterState(before, after, loop))
+            return false;
+        return {true, true};
+    }
+    if (auto* loop = dynamic_cast<ForStmt*>(stmt)) {
+        if (!checkExpr(loop->iterable.get())) return false;
+        enterScope();
+        define(loop->varName, TyI32, false);
+        const CheckerState before = captureState();
+        FlowResult bodyResult = checkBlock(loop->body.get());
+        const CheckerState after = captureState();
+        restoreState(before);
+        bool ok = bodyResult.ok;
+        if (ok && bodyResult.fallsThrough)
+            ok = loopPreservesOuterState(before, after, loop);
+        exitScope();
+        return {ok, true};
+    }
+    if (auto* freeStmt = dynamic_cast<FreeStmt*>(stmt)) {
+        auto* id = dynamic_cast<IdentifierExpr*>(freeStmt->operand.get());
+        auto* var = id ? lookup(id->name) : nullptr;
+        if (!var) {
+            error("Cannot free undefined variable");
+            return false;
+        }
+        if (!var->isHeapAllocated) {
+            error("Cannot free non-heap variable '" + id->name + "'");
+            return false;
+        }
+        if (isDeviceBuffer(var->type)) {
+            error("device buffer '" + id->name + "' must be released with `gpu_free(move " +
+                  id->name + ")`", id->line, id->col);
+            return false;
+        }
+        if (!consume(var, "free")) return false;
+        var->state = OwnState::Freed;
+        return true;
+    }
+    if (auto* nested = dynamic_cast<BlockStmt*>(stmt)) return checkBlock(nested);
+    return true;
+}
+
+bool OwnershipChecker::checkExpr(Expr* expr) {
+    if (!expr) return true;
+    setDiagnosticLocation(expr);
+    if (auto* launch = dynamic_cast<LaunchExpr*>(expr)) {
+        if (mValidatingManyContinuation) {
+            error("a multi-shot fragment cannot launch asynchronous work because its continuation may be replayed",
+                  launch->line, launch->col);
+            return false;
+        }
+        for (auto& arg : launch->args) {
+            bool isInFlightBorrow = false;
+            if (auto* borrow = dynamic_cast<BorrowExpr*>(arg.get())) {
+                if (auto* id = dynamic_cast<IdentifierExpr*>(borrow->operand.get())) {
+                    for (const auto& resource : launch->inFlightResources) {
+                        if (resource.first == id->name) {
+                            isInFlightBorrow = true;
+                            break;
+                        }
+                    }
+                }
+            }
+            if (!isInFlightBorrow && !checkExpr(arg.get())) return false;
+        }
+        for (const auto& resource : launch->inFlightResources) {
+            if (!beginInFlightBorrow(resource.first, resource.second)) return false;
+        }
+        return true;
+    }
+    if (auto* move = dynamic_cast<MoveExpr*>(expr)) {
+        if (auto* id = dynamic_cast<IdentifierExpr*>(move->operand.get())) {
+            auto* var = lookup(id->name);
+            if (!var) {
+                error("move of undefined variable '" + id->name + "'", id->line, id->col);
+                return false;
+            }
+            return consume(var, "move");
+        }
+        return checkExpr(move->operand.get());
+    }
+    if (auto* borrow = dynamic_cast<BorrowExpr*>(expr)) {
+        if (auto* id = dynamic_cast<IdentifierExpr*>(borrow->operand.get())) {
+            setDiagnosticLocation(id);
+            return acquireLoan(id->name, borrow->isMutable);
+        }
+        return checkExpr(borrow->operand.get());
+    }
+    if (auto* address = dynamic_cast<AddrOfExpr*>(expr)) {
+        if (auto* id = dynamic_cast<IdentifierExpr*>(address->operand.get())) {
+            setDiagnosticLocation(id);
+            return acquireLoan(id->name, address->isMutable);
+        }
+        return checkExpr(address->operand.get());
+    }
+    if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
+        auto* var = lookup(id->name);
+        if (!var) return true; // functions are resolved by semantic analysis
+        if (var->state == OwnState::Moved) {
+            error("use after move of '" + id->name + "'", id->line, id->col);
+            return false;
+        }
+        if (var->state == OwnState::Freed) {
+            error("use after free of '" + id->name + "'", id->line, id->col);
+            return false;
+        }
+        if (var->isGpuEvent) {
+            error("launch event '" + id->name + "' must be consumed with `await`", id->line, id->col);
+            return false;
+        }
+        if (var->inFlightReads > 0 || var->inFlightWrites > 0) {
+            error("device buffer '" + id->name +
+                  "' is in flight; await its launch event before accessing it", id->line, id->col);
+            return false;
+        }
+        return true;
+    }
+    if (auto* binary = dynamic_cast<BinaryExpr*>(expr))
+        return checkExpr(binary->lhs.get()) && checkExpr(binary->rhs.get());
+    if (auto* unary = dynamic_cast<UnaryExpr*>(expr))
+        return checkExpr(unary->operand.get());
+    if (auto* call = dynamic_cast<CallExpr*>(expr)) {
+        if (!checkExpr(call->callee.get())) return false;
+        for (auto& arg : call->args) {
+            if (auto* id = dynamic_cast<IdentifierExpr*>(arg.get())) {
+                auto* var = lookup(id->name);
+                if (var && var->isLinear) {
+                    error("Linear variable '" + id->name +
+                          "' must be moved explicitly when passed to a call");
+                    return false;
+                }
+            }
+            if (!checkExpr(arg.get())) return false;
+        }
+        return true;
+    }
+    if (auto* variant = dynamic_cast<VariantConstructExpr*>(expr)) {
+        for (auto& arg : variant->args)
+            if (!checkExpr(arg.get())) return false;
+        return true;
+    }
+    if (auto* assignment = dynamic_cast<AssignExpr*>(expr)) {
+        if (!checkExpr(assignment->rhs.get())) return false;
+        if (!checkWriteTarget(assignment->lhs.get())) return false;
+        return true;
+    }
+    if (auto* deref = dynamic_cast<DerefExpr*>(expr))
+        return checkExpr(deref->operand.get());
+    if (auto* heap = dynamic_cast<HeapAllocExpr*>(expr))
+        return checkExpr(heap->initializer.get());
+    if (auto* field = dynamic_cast<FieldAccessExpr*>(expr))
+        return checkExpr(field->object.get());
+    return true;
+}
+
+void OwnershipChecker::enterScope() {
+    mScopes.emplace_back();
+    mLoansInScope.emplace_back();
+}
+
+void OwnershipChecker::exitScope() {
+    releaseLoansInCurrentScope();
+    mLoansInScope.pop_back();
+    if (mScopes.size() > 1) mScopes.pop_back();
+}
+
+void OwnershipChecker::releaseLoansInCurrentScope() {
+    auto& loans = mLoansInScope.back();
+    while (!loans.empty()) {
+        releaseLoan(loans.back());
+        loans.pop_back();
+    }
+}
+
+bool OwnershipChecker::acquireLoan(const std::string& name, bool isMutable) {
+    auto* var = lookup(name);
+    if (!var) {
+        error("Borrow of undefined variable '" + name + "'");
+        return false;
+    }
+    if (var->state == OwnState::Moved) {
+        error("Cannot borrow '" + name + "' after move");
+        return false;
+    }
+    if (var->state == OwnState::Freed) {
+        error("Cannot borrow '" + name + "' after free");
+        return false;
+    }
+    if (var->inFlightReads > 0 || var->inFlightWrites > 0) {
+        error("Cannot borrow device buffer '" + name + "' while a launch is in flight");
+        return false;
+    }
+    if (isMutable && var->isReference && !var->isMutableReference) {
+        error("Cannot mutably borrow through a shared reference '" + name + "'");
+        return false;
+    }
+    if (isMutable && (var->mutableBorrow || var->sharedBorrows > 0)) {
+        error("Cannot mutably borrow '" + name + "' while it is already borrowed");
+        return false;
+    }
+    if (!isMutable && var->mutableBorrow) {
+        error("Cannot borrow '" + name + "' while it is mutably borrowed");
+        return false;
+    }
+    if (isMutable) var->mutableBorrow = true;
+    else ++var->sharedBorrows;
+    mLoansInScope.back().push_back({name, isMutable});
+    return true;
+}
+
+bool OwnershipChecker::beginInFlightBorrow(const std::string& name, bool isMutable) {
+    auto* var = lookup(name);
+    if (!var) {
+        error("launch borrows undefined device buffer '" + name + "'");
+        return false;
+    }
+    if (!isDeviceBuffer(var->type)) {
+        error("launch resource '" + name + "' is not a device buffer");
+        return false;
+    }
+    if (var->state != OwnState::Valid) {
+        error("Cannot launch with invalid device buffer '" + name + "'");
+        return false;
+    }
+    if (var->sharedBorrows > 0 || var->mutableBorrow ||
+        var->inFlightReads > 0 || var->inFlightWrites > 0) {
+        error("Cannot launch with device buffer '" + name +
+              "' while it is borrowed or already in flight");
+        return false;
+    }
+    if (isMutable) ++var->inFlightWrites;
+    else ++var->inFlightReads;
+    return true;
+}
+
+void OwnershipChecker::finishEvent(VarInfo* event) {
+    if (!event) return;
+    for (const auto& resource : event->eventResources) {
+        auto* buffer = lookup(resource.source);
+        if (!buffer) continue;
+        if (resource.isMutable) {
+            if (buffer->inFlightWrites > 0) --buffer->inFlightWrites;
+        } else if (buffer->inFlightReads > 0) {
+            --buffer->inFlightReads;
+        }
+    }
+    event->eventResources.clear();
+}
+
+void OwnershipChecker::releaseLoan(const Loan& loan) {
+    auto* var = lookup(loan.source);
+    if (!var) return;
+    if (loan.isMutable) var->mutableBorrow = false;
+    else if (var->sharedBorrows > 0) --var->sharedBorrows;
+}
+
+bool OwnershipChecker::consume(VarInfo* var, const std::string& action) {
+    if (!var) return false;
+    if (var->state == OwnState::Moved) {
+        error("Use-after-move of '" + var->name + "' during " + action);
+        return false;
+    }
+    if (var->state == OwnState::Freed) {
+        error("Use-after-free of '" + var->name + "' during " + action);
+        return false;
+    }
+    if (var->sharedBorrows > 0 || var->mutableBorrow) {
+        error("Cannot " + action + " '" + var->name + "' while it is borrowed");
+        return false;
+    }
+    if (var->inFlightReads > 0 || var->inFlightWrites > 0) {
+        error("Cannot " + action + " device buffer '" + var->name +
+              "' while a launch is in flight");
+        return false;
+    }
+    var->state = OwnState::Moved;
+    return true;
+}
+
+bool OwnershipChecker::checkWriteTarget(Expr* expr) {
+    if (auto* index = dynamic_cast<IndexExpr*>(expr)) {
+        // Writing an element mutates the owning array just as surely as
+        // rebinding it does; route the base through the normal loan check.
+        if (!checkWriteTarget(index->object.get())) return false;
+        return checkExpr(index->index.get());
+    }
+    auto* id = dynamic_cast<IdentifierExpr*>(expr);
+    if (!id) return checkExpr(expr);
+    auto* var = lookup(id->name);
+    if (!var) {
+        error("Assignment to undefined variable '" + id->name + "'");
+        return false;
+    }
+    if (var->state != OwnState::Valid) {
+        error("Assignment to invalid variable '" + id->name + "'");
+        return false;
+    }
+    if (var->sharedBorrows > 0 || var->mutableBorrow) {
+        error("Cannot assign to '" + id->name + "' while it is borrowed");
+        return false;
+    }
+    if (var->inFlightReads > 0 || var->inFlightWrites > 0) {
+        error("Cannot assign to device buffer '" + id->name + "' while a launch is in flight");
+        return false;
+    }
+    if (var->isLinear) {
+        error("Cannot overwrite linear variable '" + id->name +
+              "' without consuming its current value");
+        return false;
+    }
+    return true;
+}
+
+bool OwnershipChecker::isLinearTypeAST(const TypeAST* ast) const {
+    return dynamic_cast<const LinearTypeAST*>(ast) != nullptr;
+}
+
+bool OwnershipChecker::isReferenceExpr(Expr* expr) {
+    if (dynamic_cast<BorrowExpr*>(expr) || dynamic_cast<AddrOfExpr*>(expr)) return true;
+    if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
+        auto* var = lookup(id->name);
+        return var && var->isReference;
+    }
+    return false;
+}
+
+OwnershipChecker::VarInfo* OwnershipChecker::lookup(const std::string& name) {
+    for (auto it = mScopes.rbegin(); it != mScopes.rend(); ++it) {
+        auto found = it->find(name);
+        if (found != it->end()) return &found->second;
+    }
+    return nullptr;
+}
+
+void OwnershipChecker::define(const std::string& name, TypePtr type, bool isHeap,
+                              bool isLinear, bool isReference,
+                              bool isMutableReference) {
+    VarInfo info;
+    info.name = name;
+    info.type = type;
+    info.isHeapAllocated = isHeap || (type && type->isHeapType());
+    info.isLinear = isLinear || isDeviceBuffer(type) || isEvent(type);
+    info.isReference = isReference;
+    info.isMutableReference = isMutableReference;
+    info.isGpuEvent = isEvent(type);
+    mScopes.back()[name] = info;
+}
+
+std::vector<std::string> OwnershipChecker::collectFreesAtScopeExit() {
+    std::vector<std::string> frees;
+    for (auto& [name, info] : mScopes.back()) {
+        if (info.isHeapAllocated && !info.isLinear && info.state == OwnState::Valid)
+            frees.push_back(name);
+    }
+    return frees;
+}
+
+std::vector<std::string> OwnershipChecker::collectFreesAtReturn() const {
+    std::vector<std::string> frees;
+    // Exit order is innermost to outermost, matching lexical destruction.
+    for (auto scope = mScopes.rbegin(); scope != mScopes.rend(); ++scope) {
+        for (const auto& [name, info] : *scope) {
+            if (info.isHeapAllocated && !info.isLinear && info.state == OwnState::Valid)
+                frees.push_back(name);
+        }
+    }
+    return frees;
+}
+
+std::vector<std::string> OwnershipChecker::collectFreesAtFragmentExit() const {
+    std::vector<std::string> frees;
+    for (size_t index = mScopes.size(); index > mCurrentFragmentScopeBase; --index) {
+        for (const auto& [name, info] : mScopes[index - 1]) {
+            if (info.isHeapAllocated && !info.isLinear && info.state == OwnState::Valid)
+                frees.push_back(name);
+        }
+    }
+    return frees;
+}
+
+void OwnershipChecker::validateLinearScope() {
+    // An unawaited event is the root cause for each buffer it still holds in
+    // flight. Report that actionable error once instead of adding a second,
+    // derivative "not consumed" diagnostic for the same-scope buffer.
+    std::unordered_set<std::string> resourcesHeldByUnawaitedEvents;
+    for (const auto& [_, info] : mScopes.back()) {
+        if (!info.isGpuEvent || info.state != OwnState::Valid) continue;
+        for (const auto& resource : info.eventResources)
+            resourcesHeldByUnawaitedEvents.insert(resource.source);
+    }
+    for (const auto& [name, info] : mScopes.back()) {
+        if (info.isLinear && info.state == OwnState::Valid) {
+            if (info.isGpuEvent)
+                error("launch event '" + name + "' was not awaited before leaving its scope");
+            else if (isDeviceBuffer(info.type) && resourcesHeldByUnawaitedEvents.count(name))
+                continue;
+            else
+                error("Linear variable '" + name + "' was not consumed before leaving its scope");
+        }
+    }
+}
+
+void OwnershipChecker::validateLinearReturnPath() {
+    // Returning exits every active lexical scope, not only the innermost
+    // block that contains the `return`.  Checking the complete stack here
+    // makes an early return as strict as ordinary fall-through scope exit.
+    std::unordered_set<std::string> resourcesHeldByUnawaitedEvents;
+    for (const auto& scope : mScopes) {
+        for (const auto& [_, info] : scope) {
+            if (!info.isGpuEvent || info.state != OwnState::Valid) continue;
+            for (const auto& resource : info.eventResources)
+                resourcesHeldByUnawaitedEvents.insert(resource.source);
+        }
+    }
+    for (const auto& scope : mScopes) {
+        for (const auto& [name, info] : scope) {
+            if (!info.isLinear || info.state != OwnState::Valid) continue;
+            if (info.isGpuEvent)
+                error("launch event '" + name + "' was not awaited before returning");
+            else if (isDeviceBuffer(info.type) && resourcesHeldByUnawaitedEvents.count(name))
+                continue;
+            else
+                error("Linear variable '" + name + "' was not consumed before returning");
+        }
+    }
+}
+
+bool OwnershipChecker::isDeviceBuffer(const TypePtr& type) const {
+    return type && type->kind == TypeKind::DeviceBuffer;
+}
+
+bool OwnershipChecker::isEvent(const TypePtr& type) const {
+    return type && type->kind == TypeKind::Event;
+}
+
+void OwnershipChecker::error(const std::string& msg, int line, int col) {
+    if (line <= 0) line = mDiagnosticLine;
+    if (col <= 0) col = mDiagnosticCol;
+    std::string hint;
+    if (msg.find("after move") != std::string::npos)
+        hint = "use the value before `move`, borrow it instead, or create a replacement value";
+    else if (msg.find("in flight") != std::string::npos || msg.find("was not awaited") != std::string::npos)
+        hint = "bind the launch result and call `await event` before reusing, moving, or freeing the device buffer";
+    else if (msg.find("borrow") != std::string::npos)
+        hint = "a value may have many shared borrows or one mutable borrow, but not both";
+    else if (msg.find("Linear variable") != std::string::npos)
+        hint = "consume it with `move`, pass it to an owning operation, or `free` it when it is heap-allocated";
+    else if (msg.find("cannot be resumed more than once") != std::string::npos)
+        hint = "make the fragment single-shot, or ensure the continuation does not consume, free, or mutate captured ownership state";
+    else if (msg.find("free") != std::string::npos)
+        hint = "only heap-allocated values may be explicitly freed";
+    mErrors.push_back(diagnostic::format(
+        "ownership", msg, mDiagnosticFile, line, col, hint,
+        diagnostic::sourceLineFromFile(mDiagnosticFile, line)));
+}
+
+void OwnershipChecker::setDiagnosticLocation(const ASTNode* node) {
+    if (!node) return;
+    if (!node->sourcePath.empty()) mDiagnosticFile = node->sourcePath;
+    if (node->line > 0) mDiagnosticLine = node->line;
+    if (node->col > 0) mDiagnosticCol = node->col;
+}

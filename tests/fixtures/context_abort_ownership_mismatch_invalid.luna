@@ -1,0 +1,18 @@
+context guard(flag: bool) {
+    if flag {
+        abort();
+    } else {
+        resume();
+    }
+}
+
+fn main() -> i32 {
+    let data = gpu_alloc_i32(1);
+    slot context guarded(flag: bool);
+    apply guarded(guard) {
+        guarded(true) {
+            gpu_free(move data);
+        }
+    }
+    return 0;
+}

@@ -1,0 +1,36 @@
+// Constraint-based inference: every omitted type is solved by declarations,
+// operators, return statements, and call-site consumers.
+fn identity(value) {
+    return value;
+}
+
+fn annotated_auto(value: auto) -> auto {
+    return value;
+}
+
+fn generic_identity<T>(value) -> T {
+    return value;
+}
+
+fn add(left, right) {
+    return left + right;
+}
+
+fn negate(value) {
+    return !value;
+}
+
+fn dereference(value) {
+    return *value;
+}
+
+fn main() {
+    let answer = add(annotated_auto(identity(20)), generic_identity(22));
+    let increment = fn(value) {
+        return value + 1;
+    };
+    let flag = negate(false);
+    let source: i32 = 41;
+    let same = dereference(&source);
+    return answer;
+}

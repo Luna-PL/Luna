@@ -1,0 +1,28 @@
+// Loop-local plugin weaving demo. Candidates are linked into this executable;
+// the environment variable selects which typed context runs at each call.
+
+context log(value: i32) {
+    print(100 + value);
+    resume();
+}
+
+context audit(value: i32) {
+    print(200 + value);
+    resume();
+}
+
+fn main() -> i32 {
+    let i: i32 = 0;
+
+    dynamic slot context hook(value: i32);
+    dynamic apply hook(log, audit) {
+        while i < 3 {
+            hook(i) {
+                print(10 + i);
+            }
+            i += 1;
+        }
+    }
+
+    return 0;
+}

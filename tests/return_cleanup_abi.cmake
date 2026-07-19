@@ -1,0 +1,47 @@
+# Return cleanup is control-flow sensitive.  Build a fixture with one nested
+# and one fall-through return, then make sure the generated IR contains one
+# rt_free at each return site rather than a single unreachable cleanup.
+
+if(NOT DEFINED LUNA_EXECUTABLE OR NOT EXISTS "${LUNA_EXECUTABLE}")
+    message(FATAL_ERROR "LUNA_EXECUTABLE must point at a built luna binary")
+endif()
+if(NOT DEFINED LUNA_SOURCE_DIR)
+    message(FATAL_ERROR "LUNA_SOURCE_DIR must point at the source tree")
+endif()
+
+set(source_path "${LUNA_SOURCE_DIR}/tests/fixtures/ownership_return_cleanup.luna")
+set(ir_path "${source_path}.ll")
+set(executable_path "${LUNA_SOURCE_DIR}/tests/fixtures/ownership_return_cleanup")
+if(WIN32)
+    set(executable_path "${executable_path}.exe")
+endif()
+
+function(cleanup_outputs)
+    file(REMOVE "${ir_path}" "${executable_path}")
+endfunction()
+
+cleanup_outputs()
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${source_path}"
+    RESULT_VARIABLE build_result
+    OUTPUT_VARIABLE build_output
+    ERROR_VARIABLE build_error
+)
+if(NOT build_result EQUAL 0 OR NOT EXISTS "${ir_path}")
+    cleanup_outputs()
+    message(FATAL_ERROR
+        "return-cleanup AOT build failed.\n"
+        "Result: ${build_result}\n"
+        "Output:\n${build_output}\n${build_error}")
+endif()
+
+file(READ "${ir_path}" ir)
+string(REGEX MATCHALL "call void @rt_free" cleanup_calls "${ir}")
+list(LENGTH cleanup_calls cleanup_count)
+cleanup_outputs()
+
+if(NOT cleanup_count EQUAL 2)
+    message(FATAL_ERROR
+        "return cleanup did not remain path-sensitive. Expected two rt_free calls, "
+        "found ${cleanup_count}.\nIR:\n${ir}")
+endif()

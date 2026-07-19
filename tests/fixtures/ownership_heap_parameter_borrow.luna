@@ -1,0 +1,17 @@
+// Heap-shaped function parameters are borrowed from the caller by default.
+// Both calls must remain valid and the allocation must be freed exactly once
+// at the end of main.
+struct Box {
+    value: i32;
+}
+
+fn read(boxed: Box) -> i32 {
+    return boxed.value;
+}
+
+fn main() -> i32 {
+    let boxed = new Box(21);
+    let first = read(boxed);
+    let second = read(boxed);
+    return first + second;
+}

@@ -1,0 +1,5 @@
+package duplicate_export;
+
+export fn shared() -> i32 {
+    return 2;
+}

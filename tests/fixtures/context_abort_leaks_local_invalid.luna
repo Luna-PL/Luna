@@ -1,0 +1,9 @@
+context invalid {
+    let temporary = gpu_alloc_i32(1);
+    abort();
+}
+
+fn main() -> i32 {
+    apply hook(invalid) { slot context hook { } }
+    return 0;
+}

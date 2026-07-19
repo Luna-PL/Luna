@@ -1,0 +1,10 @@
+trait Transform @stable(1.0.0) {
+    fn transform(value: i32) -> i32;
+}
+
+// A versioned trait must never silently bind through its bare name.
+impl Transform for i32 {
+    fn transform(value: i32) -> i32 {
+        return value;
+    }
+}

@@ -1,0 +1,16 @@
+context reject {
+    abort();
+}
+
+fn main() -> i32 {
+    let data = gpu_alloc_i32(1);
+    apply hook(reject) {
+        slot context hook {
+            gpu_free(move data);
+        }
+        gpu_store_i32(borrow mut data, 0, 42);
+        print(gpu_load_i32(borrow data, 0));
+        gpu_free(move data);
+    }
+    return 0;
+}

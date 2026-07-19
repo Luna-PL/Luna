@@ -1,0 +1,11 @@
+context trace(value: i32) {
+    resume();
+}
+
+fn main() -> i32 {
+    slot context pipeline(value: i32);
+    dynamic apply pipeline(trace) {
+        pipeline(1) { print(1); }
+    }
+    return 0;
+}

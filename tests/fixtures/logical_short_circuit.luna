@@ -1,0 +1,16 @@
+// `side_effect` must never run: false && _ and true || _ skip their RHS.
+fn side_effect() -> bool {
+    print(99);
+    return true;
+}
+
+fn main() -> i32 {
+    if false && side_effect() {
+        return 1;
+    }
+    if true || side_effect() {
+        return 42;
+    } else {
+        return 0;
+    }
+}

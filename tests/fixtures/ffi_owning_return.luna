@@ -1,0 +1,12 @@
+extern "C" fn malloc(size: usize) -> linear raw<u8>;
+extern "C" fn c_free(linear pointer: raw<u8>) as "free";
+
+fn allocate() -> linear raw<u8> {
+    return malloc(16);
+}
+
+fn main() -> i32 {
+    let buffer = allocate();
+    c_free(move buffer);
+    return 0;
+}

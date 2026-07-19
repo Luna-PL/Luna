@@ -1,0 +1,12 @@
+// There is no fall-through path, but each terminal path must independently
+// consume the linear resource before returning.
+fn main() -> i32 {
+    linear let buffer = new i32(1);
+    if true {
+        free buffer;
+        return 0;
+    } else {
+        free buffer;
+        return 0;
+    }
+}

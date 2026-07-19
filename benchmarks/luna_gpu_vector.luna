@@ -1,0 +1,45 @@
+// Large ROCm benchmark workload: 16,777,216 i32 elements (64 MiB) are
+// initialized once and transformed ten times. It is deliberately separate
+// from correctness smoke tests, which use only eight threads.
+kernel fn initialize(index: i32, data: &mut device_buffer<i32>) {
+    gpu_store_i32(data, index, index);
+}
+
+kernel fn transform(index: i32, data: &mut device_buffer<i32>) {
+    let value = gpu_load_i32(data, index);
+    gpu_store_i32(data, index, value * 3 + 1);
+}
+
+fn main() -> i32 {
+    linear let data = gpu_alloc_i32(16777216);
+
+    let initialized = launch initialize[threads: 16777216](borrow mut data);
+    await initialized;
+
+    let step1 = launch transform[threads: 16777216](borrow mut data);
+    await step1;
+    let step2 = launch transform[threads: 16777216](borrow mut data);
+    await step2;
+    let step3 = launch transform[threads: 16777216](borrow mut data);
+    await step3;
+    let step4 = launch transform[threads: 16777216](borrow mut data);
+    await step4;
+    let step5 = launch transform[threads: 16777216](borrow mut data);
+    await step5;
+    let step6 = launch transform[threads: 16777216](borrow mut data);
+    await step6;
+    let step7 = launch transform[threads: 16777216](borrow mut data);
+    await step7;
+    let step8 = launch transform[threads: 16777216](borrow mut data);
+    await step8;
+    let step9 = launch transform[threads: 16777216](borrow mut data);
+    await step9;
+    let step10 = launch transform[threads: 16777216](borrow mut data);
+    await step10;
+
+    // (3^10 - 1) / 2 = 29524 for element zero.
+    let checksum = gpu_load_i32(borrow data, 0);
+    print(checksum);
+    gpu_free(move data);
+    return 0;
+}

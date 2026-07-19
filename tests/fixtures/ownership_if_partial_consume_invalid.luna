@@ -1,0 +1,9 @@
+// The false path would leave `buffer` live at function exit.  The checker
+// must reject it at the `if`, rather than treating the then block as certain.
+fn main() -> i32 {
+    linear let buffer = new i32(1);
+    if true {
+        free buffer;
+    }
+    return 0;
+}

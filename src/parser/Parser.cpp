@@ -1,0 +1,1373 @@
+#include "Parser.h"
+#include "../diagnostics/Diagnostic.h"
+#include <sstream>
+
+Parser::Parser(std::vector<Token> tokens, std::string sourceName, std::string source)
+    : mTokens(std::move(tokens)), mSourceName(std::move(sourceName)), mSource(std::move(source)) {}
+
+std::unique_ptr<Program> Parser::parse() {
+    auto program = std::make_unique<Program>();
+    if (check(TokenKind::Package)) {
+        parsePackageHeader(program.get());
+        program->isPackage = true;
+    }
+    while (!isAtEnd()) {
+        const int declarationStart = mPos;
+        if (auto decl = parseDeclaration()) {
+            program->declarations.push_back(std::move(decl));
+        } else {
+            // A malformed top-level declaration must not hide every later
+            // error in the file. Advance to a statement terminator or the
+            // next declaration introducer, then continue collecting errors.
+            synchronizeDeclaration();
+            if (mPos == declarationStart && !isAtEnd()) advance();
+        }
+    }
+    return program;
+}
+
+bool Parser::parsePackageHeader(Program* program) {
+    consume(TokenKind::Package, "Expected 'package'");
+    if (!match(TokenKind::Identifier)) {
+        addError("expected a package name, found " + diagnostic::quotedToken(peek().lexeme),
+                 "write `package my_package;`");
+        return false;
+    }
+    program->packageName = mTokens[mPos - 1].lexeme;
+    consume(TokenKind::SemiColon, "Expected ';' after package name");
+    return true;
+}
+
+std::unique_ptr<Decl> Parser::parseDeclaration() {
+    const Token start = peek();
+    const bool isExported = match(TokenKind::Export);
+    const bool isConstexpr = match(TokenKind::Constexpr);
+    bool isExtern = match(TokenKind::Extern);
+    const bool isKernel = match(TokenKind::Kernel);
+    std::string abi;
+    if (check(TokenKind::StringLiteral) && (isExtern || isExported))
+        abi = advance().lexeme;
+    if (isExtern && abi.empty()) abi = "C";
+    std::unique_ptr<Decl> decl;
+    if (match(TokenKind::Fn)) decl = parseFunctionDecl(false, isExtern, abi, isConstexpr, isKernel);
+    else if (match(TokenKind::Interceptor)) decl = parseFragmentDecl(FragmentKind::Interceptor);
+    else if (match(TokenKind::Context)) decl = parseFragmentDecl(FragmentKind::Context);
+    else if (match(TokenKind::Fragment)) {
+        addError("`fragment` is ambiguous and is no longer accepted",
+                 "use `interceptor name { ... }`, `context name { ... }`, or `context many name { ... }`");
+        return nullptr;
+    }
+    else if (match(TokenKind::Struct)) decl = parseStructDecl();
+    else if (match(TokenKind::Enum)) decl = parseEnumDecl();
+    else if (match(TokenKind::Trait)) decl = parseTraitDecl();
+    else if (match(TokenKind::Impl)) decl = parseImplDecl();
+    else {
+        if (isExported || isExtern || isConstexpr || isKernel) {
+            addError("expected a declaration after `export`, found " +
+                     diagnostic::quotedToken(peek().lexeme),
+                     "only `fn`, `interceptor`, `context`, `struct`, `enum`, and `trait` can be exported");
+        } else {
+            addError("expected a declaration, found " + diagnostic::quotedToken(peek().lexeme),
+                     "start a declaration with `fn`, `interceptor`, `context`, `struct`, `enum`, `trait`, or `impl`");
+        }
+        advance(); // skip unexpected token
+        return nullptr;
+    }
+    if (decl) {
+        decl->isExported = isExported;
+        decl->sourcePath = mSourceName;
+        decl->line = start.line;
+        decl->col = start.col;
+    }
+    return decl;
+}
+
+std::unique_ptr<FragmentDecl> Parser::parseFragmentDecl(FragmentKind kind) {
+    auto decl = std::make_unique<FragmentDecl>();
+    decl->kind = kind;
+    if (kind == FragmentKind::Context && match(TokenKind::Many))
+        decl->cardinality = FragmentCardinality::Many;
+    else if (kind == FragmentKind::Interceptor && check(TokenKind::Many))
+        addError("interceptor is always single-pass and cannot be `many`");
+    if (!match(TokenKind::Identifier)) {
+        addError("expected a fragment name, found " + diagnostic::quotedToken(peek().lexeme),
+                 "write `fragment name { ... }` or `fragment name(value) { ... }`");
+        return nullptr;
+    }
+    decl->name = mTokens[mPos - 1].lexeme;
+    decl->versionTag = parseDeclaredVersionTag();
+    if (match(TokenKind::LParen)) {
+        decl->params = parseParams();
+        consume(TokenKind::RParen, "Expected ')' after fragment parameters");
+    }
+    decl->body = parseBlock();
+    return decl;
+}
+
+// ─── Function ──────────────────────────────────────────────────────
+
+std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(bool isTraitMethod,
+                                                         bool isExtern,
+                                                         std::string abi,
+                                                         bool isConstexpr,
+                                                         bool isKernel) {
+    auto decl = std::make_unique<FunctionDecl>();
+    decl->isExtern = isExtern;
+    decl->isConstexpr = isConstexpr;
+    decl->isKernel = isKernel;
+    decl->abi = std::move(abi);
+
+    if (match(TokenKind::Identifier)) {
+        decl->name = mTokens[mPos - 1].lexeme;
+    } else {
+        // Trait methods may have operator-style names; for simplicity just require IDENT
+        addError("expected a function name, found " + diagnostic::quotedToken(peek().lexeme));
+        return nullptr;
+    }
+
+    decl->versionTag = parseDeclaredVersionTag();
+    decl->typeParams = parseTypeParamList();
+    consume(TokenKind::LParen, "Expected '(' after function name");
+    decl->params = parseParams();
+    consume(TokenKind::RParen, "Expected ')' after parameters");
+
+    if (match(TokenKind::Arrow)) {
+        decl->returnType = parseType();
+        decl->returnsLinear = dynamic_cast<LinearTypeAST*>(decl->returnType.get()) != nullptr;
+    }
+
+    if (isExtern && check(TokenKind::Identifier) && peek().lexeme == "as") {
+        advance();
+        if (match(TokenKind::StringLiteral)) {
+            decl->linkName = mTokens[mPos - 1].lexeme;
+        } else {
+            addError("Expected string symbol name after 'as'");
+        }
+    }
+
+    decl->whereClauses = parseWhereClause();
+
+    if (isTraitMethod) {
+        consume(TokenKind::SemiColon, "Expected ';' after trait method signature");
+    } else if (isExtern) {
+        consume(TokenKind::SemiColon, "Expected ';' after extern function declaration");
+    } else {
+        decl->body = parseBlock();
+    }
+
+    return decl;
+}
+
+// ─── Struct ────────────────────────────────────────────────────────
+
+std::unique_ptr<StructDecl> Parser::parseStructDecl() {
+    auto decl = std::make_unique<StructDecl>();
+    if (!match(TokenKind::Identifier)) {
+        addError("Expected struct name");
+        return nullptr;
+    }
+    decl->name = mTokens[mPos - 1].lexeme;
+    decl->versionTag = parseDeclaredVersionTag();
+    decl->typeParams = parseTypeParamList();
+    consume(TokenKind::LBrace, "Expected '{' for struct body");
+
+    while (!check(TokenKind::RBrace) && !isAtEnd()) {
+        if (!match(TokenKind::Identifier)) {
+            addError("Expected field name in struct");
+            break;
+        }
+        Param field;
+        field.name = mTokens[mPos - 1].lexeme;
+        consume(TokenKind::Colon, "Expected ':' after field name");
+        field.type = parseType();
+        consume(TokenKind::SemiColon, "Expected ';' after field type");
+        decl->fields.push_back(std::move(field));
+    }
+    consume(TokenKind::RBrace, "Expected '}' after struct body");
+    return decl;
+}
+
+std::unique_ptr<EnumDecl> Parser::parseEnumDecl() {
+    auto decl = std::make_unique<EnumDecl>();
+    if (!match(TokenKind::Identifier)) {
+        addError("Expected enum name");
+        return nullptr;
+    }
+    decl->name = mTokens[mPos - 1].lexeme;
+    decl->versionTag = parseDeclaredVersionTag();
+    decl->typeParams = parseTypeParamList();
+    consume(TokenKind::LBrace, "Expected '{' for enum body");
+
+    while (!check(TokenKind::RBrace) && !isAtEnd()) {
+        if (!match(TokenKind::Identifier)) {
+            addError("Expected enum variant name");
+            advance();
+            continue;
+        }
+        EnumDecl::Variant variant;
+        variant.name = mTokens[mPos - 1].lexeme;
+        if (match(TokenKind::LParen)) {
+            if (!check(TokenKind::RParen)) {
+                do {
+                    variant.fields.push_back(parseType());
+                } while (match(TokenKind::Comma));
+            }
+            consume(TokenKind::RParen, "Expected ')' after enum variant fields");
+        }
+        // Both semicolon and comma are accepted between variants. The
+        // semicolon form matches struct declarations and is unambiguous.
+        if (!match(TokenKind::SemiColon)) match(TokenKind::Comma);
+        decl->variants.push_back(std::move(variant));
+    }
+    consume(TokenKind::RBrace, "Expected '}' after enum body");
+    return decl;
+}
+
+// ─── Trait ─────────────────────────────────────────────────────────
+
+std::unique_ptr<TraitDecl> Parser::parseTraitDecl() {
+    auto decl = std::make_unique<TraitDecl>();
+    if (!match(TokenKind::Identifier)) {
+        addError("Expected trait name");
+        return nullptr;
+    }
+    decl->name = mTokens[mPos - 1].lexeme;
+    decl->versionTag = parseDeclaredVersionTag();
+    decl->typeParams = parseTypeParamList();
+    consume(TokenKind::LBrace, "Expected '{' for trait body");
+
+    while (!check(TokenKind::RBrace) && !isAtEnd()) {
+        if (match(TokenKind::Fn)) {
+            auto method = parseFunctionDecl(true);
+            if (method) {
+                TraitDecl::MethodSig sig;
+                sig.name = method->name;
+                sig.returnType = std::move(method->returnType);
+                for (auto& p : method->params)
+                    sig.params.push_back(std::move(p));
+                decl->methods.push_back(std::move(sig));
+            }
+        } else {
+            addError("Expected 'fn' in trait body");
+            advance();
+        }
+    }
+    consume(TokenKind::RBrace, "Expected '}' after trait body");
+    return decl;
+}
+
+// ─── Impl ──────────────────────────────────────────────────────────
+
+std::unique_ptr<ImplDecl> Parser::parseImplDecl() {
+    auto decl = std::make_unique<ImplDecl>();
+    decl->typeParams = parseTypeParamList();
+
+    if (!match(TokenKind::Identifier)) {
+        addError("Expected trait name in impl");
+        return nullptr;
+    }
+    decl->trait = parseTraitRef(mTokens[mPos - 1]);
+
+    if (!match(TokenKind::For)) {
+        addError("Expected 'for' after trait name in impl");
+        return nullptr;
+    }
+
+    decl->targetType = parseType();
+    consume(TokenKind::LBrace, "Expected '{' in impl");
+
+    while (!check(TokenKind::RBrace) && !isAtEnd()) {
+        if (match(TokenKind::Fn)) {
+            auto method = parseFunctionDecl(false);
+            if (method) decl->methods.push_back(std::move(method));
+        } else {
+            addError("Expected 'fn' in impl body");
+            advance();
+        }
+    }
+    consume(TokenKind::RBrace, "Expected '}' after impl body");
+    return decl;
+}
+
+// ─── Block ─────────────────────────────────────────────────────────
+
+std::unique_ptr<BlockStmt> Parser::parseBlock() {
+    auto block = std::make_unique<BlockStmt>();
+    consume(TokenKind::LBrace, "Expected '{'");
+    while (!check(TokenKind::RBrace) && !isAtEnd()) {
+        if (auto stmt = parseStatement()) {
+            block->stmts.push_back(std::move(stmt));
+        }
+    }
+    consume(TokenKind::RBrace, "Expected '}'");
+    return block;
+}
+
+// ─── Statements ────────────────────────────────────────────────────
+
+std::unique_ptr<Stmt> Parser::parseStatement() {
+    const Token start = peek();
+    const auto stamp = [&](std::unique_ptr<Stmt> stmt) {
+        if (stmt && stmt->line <= 0) {
+            stmt->sourcePath = mSourceName;
+            stmt->line = start.line;
+            stmt->col = start.col;
+        }
+        return stmt;
+    };
+    if (match(TokenKind::Linear)) {
+        if (match(TokenKind::Let)) return stamp(parseLetStmt(true));
+        addError("Expected 'let' after 'linear'");
+        return nullptr;
+    }
+    if (match(TokenKind::Const)) {
+        if (match(TokenKind::Let)) return stamp(parseLetStmt(false, true));
+        addError("expected `let` after `const`",
+                 "write `const let name = compile_time_expression;`");
+        synchronizeStatement();
+        return nullptr;
+    }
+    if (match(TokenKind::Let)) return stamp(parseLetStmt(false, match(TokenKind::Const)));
+    if (match(TokenKind::Free)) return stamp(parseFreeStmt());
+    if (match(TokenKind::Slot)) return stamp(parseSlotStmt());
+    if (match(TokenKind::Resume)) return stamp(parseResumeStmt());
+    if (match(TokenKind::Abort)) return stamp(parseAbortStmt());
+    if (match(TokenKind::Await)) return stamp(parseAwaitStmt());
+    if (match(TokenKind::Apply)) return stamp(parseApplyStmt());
+    if (match(TokenKind::Dynamic)) {
+        if (match(TokenKind::Slot)) return stamp(parseSlotStmt(true));
+        if (match(TokenKind::Apply)) return stamp(parseApplyStmt(true));
+        addError("`dynamic` must introduce `slot` or `apply`",
+                 "write `dynamic slot name(value: Type);` or `dynamic apply name(fragment, ...) { ... }`");
+        synchronizeStatement();
+        return nullptr;
+    }
+    if (match(TokenKind::Return)) return stamp(parseReturnStmt());
+    if (match(TokenKind::If)) return stamp(parseIfStmt());
+    if (match(TokenKind::While)) return stamp(parseWhileStmt());
+    if (match(TokenKind::For)) return stamp(parseForStmt());
+    if (match(TokenKind::LBrace)) return stamp(parseBlock());
+    if (isNamedSlotInvocationStart()) return stamp(parseNamedSlotInvokeStmt());
+    if (check(TokenKind::Identifier) && peekAhead(1).kind == TokenKind::Eq) {
+        // Assignment statement (lhs = expr ;) — handled in parseExprStmt via parseExpr
+    }
+    return stamp(parseExprStmt());
+}
+
+std::unique_ptr<Stmt> Parser::parseSlotStmt(bool isDynamic) {
+    const Token start = mTokens[mPos - 1]; // `slot` was consumed by parseStatement
+    FragmentKind acceptedKind;
+    FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
+    if (match(TokenKind::Interceptor)) acceptedKind = FragmentKind::Interceptor;
+    else if (match(TokenKind::Context)) {
+        acceptedKind = FragmentKind::Context;
+        if (match(TokenKind::Many)) acceptedCardinality = FragmentCardinality::Many;
+    }
+    else {
+        addError("slot must declare its fragment contract",
+                 "write `slot interceptor name { ... }` or `slot context name { ... }`");
+        synchronizeStatement();
+        return nullptr;
+    }
+    if (!match(TokenKind::Identifier)) {
+        addError("expected a slot name, found " + diagnostic::quotedToken(peek().lexeme),
+                 "write `slot name { ... }` or `slot name(value: Type);`");
+        synchronizeStatement();
+        return nullptr;
+    }
+    const std::string name = mTokens[mPos - 1].lexeme;
+    std::vector<Param> params;
+    bool hasInterface = false;
+    if (match(TokenKind::LParen)) {
+        hasInterface = true;
+        params = parseParams();
+        consume(TokenKind::RParen, "Expected ')' after slot interface");
+    }
+
+    std::string defaultFragment;
+    std::optional<VersionSelector> defaultFragmentSelector;
+    if (match(TokenKind::Default)) {
+        if (!match(TokenKind::Identifier)) {
+            addError("expected a fragment name after `default`");
+            synchronizeStatement();
+            return nullptr;
+        }
+        defaultFragment = mTokens[mPos - 1].lexeme;
+        if (match(TokenKind::At)) defaultFragmentSelector = parseVersionSelector();
+    }
+
+    if (check(TokenKind::SemiColon)) {
+        advance();
+        if (!hasInterface) {
+            addError("a separately declared slot requires an explicit interface",
+                     "use `slot " + name + "(value: Type);`, or define an implicit slot with a continuation block");
+            return nullptr;
+        }
+        auto stmt = std::make_unique<SlotDeclStmt>();
+        stmt->name = name;
+        stmt->acceptedKind = acceptedKind;
+        stmt->acceptedCardinality = acceptedCardinality;
+        stmt->isDynamic = isDynamic;
+        stmt->params = std::move(params);
+        stmt->defaultFragment = std::move(defaultFragment);
+        stmt->defaultFragmentSelector = std::move(defaultFragmentSelector);
+        stmt->sourcePath = mSourceName; stmt->line = start.line; stmt->col = start.col;
+        return stmt;
+    }
+
+    if (!check(TokenKind::LBrace)) {
+        addError("expected `;` or a continuation block after slot declaration");
+        synchronizeStatement();
+        return nullptr;
+    }
+    auto stmt = std::make_unique<SlotInvokeStmt>();
+    stmt->name = name;
+    stmt->acceptedKind = acceptedKind;
+    stmt->acceptedCardinality = acceptedCardinality;
+    stmt->isDynamic = isDynamic;
+    stmt->isImplicitCapture = !hasInterface;
+    stmt->interfaceParams = std::move(params);
+    stmt->defaultFragment = std::move(defaultFragment);
+    stmt->defaultFragmentSelector = std::move(defaultFragmentSelector);
+    stmt->continuation = parseBlock();
+    stmt->sourcePath = mSourceName; stmt->line = start.line; stmt->col = start.col;
+    return stmt;
+}
+
+std::unique_ptr<Stmt> Parser::parseResumeStmt() {
+    const Token start = mTokens[mPos - 1]; // `resume` already consumed
+    consume(TokenKind::LParen, "Expected '(' after `resume`");
+    if (!check(TokenKind::RParen)) {
+        addError("`resume` does not accept arguments",
+                 "the slot continuation restores its original captured frame; write `resume()`");
+        synchronizeStatement();
+        return nullptr;
+    }
+    consume(TokenKind::RParen, "Expected ')' after `resume`");
+    consume(TokenKind::SemiColon, "Expected ';' after `resume()`");
+    auto stmt = std::make_unique<ResumeStmt>();
+    stmt->sourcePath = mSourceName; stmt->line = start.line; stmt->col = start.col;
+    return stmt;
+}
+
+std::unique_ptr<Stmt> Parser::parseAbortStmt() {
+    const Token start = mTokens[mPos - 1];
+    consume(TokenKind::LParen, "Expected '(' after `abort`");
+    consume(TokenKind::RParen, "Expected ')' after `abort`");
+    consume(TokenKind::SemiColon, "Expected ';' after `abort()`");
+    auto stmt = std::make_unique<AbortStmt>();
+    stmt->sourcePath = mSourceName; stmt->line = start.line; stmt->col = start.col;
+    return stmt;
+}
+
+std::unique_ptr<Stmt> Parser::parseAwaitStmt() {
+    const Token start = mTokens[mPos - 1]; // `await` already consumed
+    auto stmt = std::make_unique<AwaitStmt>();
+    stmt->event = parseExpr();
+    consume(TokenKind::SemiColon, "Expected ';' after await expression");
+    stmt->sourcePath = mSourceName; stmt->line = start.line; stmt->col = start.col;
+    return stmt;
+}
+
+std::unique_ptr<Stmt> Parser::parseApplyStmt(bool isDynamic) {
+    const Token start = mTokens[mPos - 1]; // `apply` already consumed
+    auto stmt = std::make_unique<ApplyStmt>();
+    stmt->isDynamic = isDynamic;
+    if (!match(TokenKind::Identifier)) {
+        addError("expected a slot name after `apply`");
+        synchronizeStatement();
+        return nullptr;
+    }
+    stmt->slotName = mTokens[mPos - 1].lexeme;
+    consume(TokenKind::LParen, "Expected '(' after slot name in `apply`");
+    if (!match(TokenKind::Identifier)) {
+        addError("expected a fragment name in `apply`");
+        synchronizeStatement();
+        return nullptr;
+    }
+    stmt->fragmentName = mTokens[mPos - 1].lexeme;
+    if (match(TokenKind::At)) stmt->fragmentSelector = parseVersionSelector();
+    while (isDynamic && match(TokenKind::Comma)) {
+        if (!match(TokenKind::Identifier)) {
+            addError("expected a fragment name after ',' in dynamic apply");
+            synchronizeStatement();
+            return nullptr;
+        }
+        stmt->alternativeFragmentNames.push_back(mTokens[mPos - 1].lexeme);
+    }
+    consume(TokenKind::RParen, "Expected ')' after fragment name in `apply`");
+    if (check(TokenKind::LBrace)) stmt->body = parseBlock();
+    else consume(TokenKind::SemiColon, "Expected ';' or a block after `apply`");
+    stmt->sourcePath = mSourceName; stmt->line = start.line; stmt->col = start.col;
+    return stmt;
+}
+
+std::unique_ptr<Stmt> Parser::parseNamedSlotInvokeStmt() {
+    const Token start = peek();
+    auto stmt = std::make_unique<SlotInvokeStmt>();
+    stmt->name = advance().lexeme;
+    consume(TokenKind::LParen, "Expected '(' after slot name");
+    if (!check(TokenKind::RParen)) stmt->args = parseArgs();
+    consume(TokenKind::RParen, "Expected ')' after slot arguments");
+    stmt->continuation = parseBlock();
+    stmt->sourcePath = mSourceName; stmt->line = start.line; stmt->col = start.col;
+    return stmt;
+}
+
+std::unique_ptr<Stmt> Parser::parseLetStmt(bool isLinear, bool isConst) {
+    auto stmt = std::make_unique<LetStmt>();
+    stmt->isLinear = isLinear;
+    stmt->isConst = isConst;
+    if (match(TokenKind::Linear)) stmt->isLinear = true;
+    if (!match(TokenKind::Identifier)) {
+        addError("Expected variable name after 'let'");
+        synchronizeStatement();
+        return nullptr;
+    }
+    stmt->name = mTokens[mPos - 1].lexeme;
+
+    if (match(TokenKind::Colon)) {
+        stmt->typeAnnotation = parseType();
+    }
+
+    consume(TokenKind::Eq, "Expected '=' in let binding");
+    stmt->initializer = parseExpr();
+    consume(TokenKind::SemiColon, "Expected ';' after let binding");
+    return stmt;
+}
+
+std::unique_ptr<Stmt> Parser::parseFreeStmt() {
+    auto stmt = std::make_unique<FreeStmt>();
+    stmt->operand = parseExpr();
+    consume(TokenKind::SemiColon, "Expected ';' after free");
+    return stmt;
+}
+
+std::unique_ptr<Stmt> Parser::parseReturnStmt() {
+    auto stmt = std::make_unique<ReturnStmt>();
+    if (!check(TokenKind::SemiColon)) {
+        stmt->value = parseExpr();
+    }
+    consume(TokenKind::SemiColon, "Expected ';' after return");
+    return stmt;
+}
+
+std::unique_ptr<Stmt> Parser::parseIfStmt() {
+    auto stmt = std::make_unique<IfStmt>();
+    stmt->cond = parseExpr();
+    stmt->thenBlock = parseBlock();
+    if (match(TokenKind::Else)) {
+        if (check(TokenKind::If)) {
+            stmt->elseBranch = parseIfStmt();
+        } else {
+            stmt->elseBranch = parseBlock();
+        }
+    }
+    return stmt;
+}
+
+std::unique_ptr<Stmt> Parser::parseWhileStmt() {
+    auto stmt = std::make_unique<WhileStmt>();
+    stmt->cond = parseExpr();
+    stmt->body = parseBlock();
+    return stmt;
+}
+
+std::unique_ptr<Stmt> Parser::parseForStmt() {
+    auto stmt = std::make_unique<ForStmt>();
+    if (!match(TokenKind::Identifier)) {
+        addError("Expected loop variable in for");
+        return nullptr;
+    }
+    stmt->varName = mTokens[mPos - 1].lexeme;
+    if (!check(TokenKind::Identifier) || mTokens[mPos].lexeme != "in") {
+        addError("Expected 'in' in for-loop");
+        return nullptr;
+    }
+    advance(); // consume "in" (it's an identifier, not a keyword)
+    stmt->iterable = parseExpr();
+    stmt->body = parseBlock();
+    return stmt;
+}
+
+std::unique_ptr<Stmt> Parser::parseExprStmt() {
+    auto stmt = std::make_unique<ExprStmt>();
+    stmt->expr = parseExpr();
+    consume(TokenKind::SemiColon, "Expected ';' after expression");
+    return stmt;
+}
+
+// ─── Expressions — precedence climbing ─────────────────────────────
+
+std::unique_ptr<Expr> Parser::parseExpr() {
+    return parseAssignment();
+}
+
+std::unique_ptr<Expr> Parser::parseAssignment() {
+    auto lhs = parseOr();
+    if (check(TokenKind::Eq) || check(TokenKind::PlusEq) || check(TokenKind::MinusEq) ||
+        check(TokenKind::StarEq) || check(TokenKind::SlashEq) || check(TokenKind::PercentEq) ||
+        check(TokenKind::AndEq) || check(TokenKind::OrEq) || check(TokenKind::XorEq) ||
+        check(TokenKind::ShiftLeftEq) || check(TokenKind::ShiftRightEq)) {
+        auto expr = std::make_unique<AssignExpr>();
+        expr->op = advance().kind;
+        expr->lhs = std::move(lhs);
+        expr->rhs = parseExpr();
+        return expr;
+    }
+    return lhs;
+}
+
+std::unique_ptr<Expr> Parser::parseOr() {
+    auto lhs = parseAnd();
+    while (match(TokenKind::OrOr)) {
+        auto expr = std::make_unique<BinaryExpr>();
+        expr->lhs = std::move(lhs);
+        expr->op = TokenKind::OrOr;
+        expr->rhs = parseAnd();
+        lhs = std::move(expr);
+    }
+    return lhs;
+}
+
+std::unique_ptr<Expr> Parser::parseAnd() {
+    auto lhs = parseBitOr();
+    while (match(TokenKind::AndAnd)) {
+        auto expr = std::make_unique<BinaryExpr>();
+        expr->lhs = std::move(lhs);
+        expr->op = TokenKind::AndAnd;
+        expr->rhs = parseBitOr();
+        lhs = std::move(expr);
+    }
+    return lhs;
+}
+
+std::unique_ptr<Expr> Parser::parseBitOr() {
+    auto lhs = parseBitXor();
+    while (match(TokenKind::BitOr)) {
+        auto expr = std::make_unique<BinaryExpr>();
+        expr->lhs = std::move(lhs); expr->op = TokenKind::BitOr;
+        expr->rhs = parseBitXor(); lhs = std::move(expr);
+    }
+    return lhs;
+}
+
+std::unique_ptr<Expr> Parser::parseBitXor() {
+    auto lhs = parseBitAnd();
+    while (match(TokenKind::BitXor)) {
+        auto expr = std::make_unique<BinaryExpr>();
+        expr->lhs = std::move(lhs); expr->op = TokenKind::BitXor;
+        expr->rhs = parseBitAnd(); lhs = std::move(expr);
+    }
+    return lhs;
+}
+
+std::unique_ptr<Expr> Parser::parseBitAnd() {
+    auto lhs = parseEquality();
+    while (match(TokenKind::Ampersand)) {
+        auto expr = std::make_unique<BinaryExpr>();
+        expr->lhs = std::move(lhs); expr->op = TokenKind::Ampersand;
+        expr->rhs = parseEquality(); lhs = std::move(expr);
+    }
+    return lhs;
+}
+
+std::unique_ptr<Expr> Parser::parseEquality() {
+    auto lhs = parseComparison();
+    while (check(TokenKind::EqEq) || check(TokenKind::Neq)) {
+        auto expr = std::make_unique<BinaryExpr>();
+        expr->lhs = std::move(lhs); expr->op = advance().kind;
+        expr->rhs = parseComparison(); lhs = std::move(expr);
+    }
+    return lhs;
+}
+
+std::unique_ptr<Expr> Parser::parseComparison() {
+    auto lhs = parseShift();
+    while (check(TokenKind::Lt) || check(TokenKind::LtEq) ||
+           check(TokenKind::Gt) || check(TokenKind::GtEq)) {
+        auto op = advance().kind;
+        auto expr = std::make_unique<BinaryExpr>();
+        expr->lhs = std::move(lhs);
+        expr->op = op;
+        expr->rhs = parseShift();
+        lhs = std::move(expr);
+    }
+    return lhs;
+}
+
+std::unique_ptr<Expr> Parser::parseShift() {
+    auto lhs = parseAddSub();
+    while (check(TokenKind::ShiftLeft) || check(TokenKind::ShiftRight)) {
+        auto expr = std::make_unique<BinaryExpr>();
+        expr->lhs = std::move(lhs); expr->op = advance().kind;
+        expr->rhs = parseAddSub(); lhs = std::move(expr);
+    }
+    return lhs;
+}
+
+std::unique_ptr<Expr> Parser::parseAddSub() {
+    auto lhs = parseMulDiv();
+    while (match(TokenKind::Plus) || match(TokenKind::Minus)) {
+        auto expr = std::make_unique<BinaryExpr>();
+        expr->lhs = std::move(lhs);
+        expr->op = mTokens[mPos - 1].kind;
+        expr->rhs = parseMulDiv();
+        lhs = std::move(expr);
+    }
+    return lhs;
+}
+
+std::unique_ptr<Expr> Parser::parseMulDiv() {
+    auto lhs = parseUnary();
+    while (match(TokenKind::Star) || match(TokenKind::Slash) || match(TokenKind::Percent)) {
+        auto expr = std::make_unique<BinaryExpr>();
+        expr->lhs = std::move(lhs);
+        expr->op = mTokens[mPos - 1].kind;
+        expr->rhs = parseUnary();
+        lhs = std::move(expr);
+    }
+    return lhs;
+}
+
+std::unique_ptr<Expr> Parser::parseUnary() {
+    if (match(TokenKind::Minus) || match(TokenKind::Not) || match(TokenKind::Tilde) ||
+        match(TokenKind::Star)) {
+        auto expr = std::make_unique<UnaryExpr>();
+        expr->op = mTokens[mPos - 1].kind;
+        expr->operand = parseUnary();
+        return expr;
+    }
+    if (match(TokenKind::Ampersand)) {
+        auto expr = std::make_unique<AddrOfExpr>();
+        expr->isMutable = match(TokenKind::Mut);
+        expr->operand = parseUnary();
+        return expr;
+    }
+    if (match(TokenKind::Move)) {
+        auto expr = std::make_unique<MoveExpr>();
+        expr->operand = parseUnary();
+        return expr;
+    }
+    if (match(TokenKind::Borrow)) {
+        auto expr = std::make_unique<BorrowExpr>();
+        expr->isMutable = match(TokenKind::Mut);
+        expr->operand = parseUnary();
+        return expr;
+    }
+    return parsePostfix();
+}
+
+std::unique_ptr<Expr> Parser::parsePostfix() {
+    auto expr = parsePrimary();
+
+    while (true) {
+        if (match(TokenKind::LParen)) {
+            auto call = std::make_unique<CallExpr>();
+            call->callee = std::move(expr);
+            if (!check(TokenKind::RParen)) {
+                call->args = parseArgs();
+            }
+            consume(TokenKind::RParen, "Expected ')' after call arguments");
+            expr = std::move(call);
+        } else if (match(TokenKind::At)) {
+            const Token selectorStart = mTokens[mPos - 1];
+            auto selector = parseVersionSelector();
+            if (!selector) {
+                addError("expected a version selector after `@`",
+                         "write `name@stable()` or `name@stable(1.3.2)`");
+                break;
+            }
+            auto call = std::make_unique<CallExpr>();
+            call->callee = std::move(expr);
+            call->versionSelector = std::move(selector);
+            call->sourcePath = mSourceName;
+            call->line = selectorStart.line;
+            call->col = selectorStart.col;
+            // The selector itself supplies an empty argument list.  A second
+            // parenthesized group carries ordinary runtime arguments.
+            if (match(TokenKind::LParen)) {
+                if (!check(TokenKind::RParen)) call->args = parseArgs();
+                consume(TokenKind::RParen, "Expected ')' after versioned call arguments");
+            }
+            expr = std::move(call);
+        } else if (match(TokenKind::Dot)) {
+            auto access = std::make_unique<FieldAccessExpr>();
+            access->object = std::move(expr);
+            if (!match(TokenKind::Identifier)) {
+                addError("Expected field name after '.'");
+                break;
+            }
+            access->field = mTokens[mPos - 1].lexeme;
+            expr = std::move(access);
+        } else if (match(TokenKind::LBracket)) {
+            auto first = parseExpr();
+            if (match(TokenKind::DotDot)) {
+                auto call = std::make_unique<CallExpr>();
+                auto callee = std::make_unique<IdentifierExpr>("slice");
+                callee->sourcePath = mSourceName; call->callee = std::move(callee);
+                auto borrow = std::make_unique<BorrowExpr>();
+                borrow->operand = std::move(expr);
+                call->args.push_back(std::move(borrow));
+                call->args.push_back(std::move(first));
+                call->args.push_back(parseExpr());
+                consume(TokenKind::RBracket, "Expected ']' after slice range");
+                expr = std::move(call);
+                continue;
+            }
+            auto idx = std::make_unique<IndexExpr>();
+            idx->object = std::move(expr);
+            idx->index = std::move(first);
+            consume(TokenKind::RBracket, "Expected ']'");
+            expr = std::move(idx);
+        } else if (match(TokenKind::ColonColon)) {
+            // Generic call: id::<T>(args), or ADT constructor:
+            // Option::<i32>::Some(1) / Option::None().
+            std::string ownerName;
+            if (auto* owner = dynamic_cast<IdentifierExpr*>(expr.get()))
+                ownerName = owner->name;
+            std::vector<std::unique_ptr<TypeAST>> typeArgs;
+            bool hadTypeArgs = match(TokenKind::Lt);
+            if (hadTypeArgs) {
+                if (!check(TokenKind::Gt)) {
+                    do {
+                        typeArgs.push_back(parseType());
+                    } while (match(TokenKind::Comma));
+                }
+                consume(TokenKind::Gt, "Expected '>' after type arguments");
+            }
+
+            bool isVariant = match(TokenKind::ColonColon) ||
+                             (!hadTypeArgs && check(TokenKind::Identifier));
+            if (isVariant) {
+                auto variant = std::make_unique<VariantConstructExpr>();
+                variant->typeName = ownerName;
+                variant->typeArgs = std::move(typeArgs);
+                if (!match(TokenKind::Identifier)) {
+                    addError("Expected enum variant name after '::'");
+                    expr = std::move(variant);
+                    continue;
+                }
+                variant->variantName = mTokens[mPos - 1].lexeme;
+                consume(TokenKind::LParen, "Expected '(' after enum variant");
+                if (!check(TokenKind::RParen)) variant->args = parseArgs();
+                consume(TokenKind::RParen, "Expected ')' after enum variant arguments");
+                expr = std::move(variant);
+            } else {
+                auto call = std::make_unique<CallExpr>();
+                call->callee = std::move(expr);
+                call->typeArgASTs = std::move(typeArgs);
+                if (match(TokenKind::LParen)) {
+                    if (!check(TokenKind::RParen)) call->args = parseArgs();
+                    consume(TokenKind::RParen, "Expected ')' after call arguments");
+                }
+                expr = std::move(call);
+            }
+        } else {
+            break;
+        }
+    }
+    return expr;
+}
+
+std::unique_ptr<Expr> Parser::parsePrimary() {
+    if (match(TokenKind::IntLiteral)) {
+        const Token& token = mTokens[mPos - 1];
+        auto node = std::make_unique<IntLiteralExpr>(std::stoll(token.lexeme));
+        node->sourcePath = mSourceName; node->line = token.line; node->col = token.col;
+        return node;
+    }
+    if (match(TokenKind::FloatLiteral)) {
+        const Token& token = mTokens[mPos - 1];
+        auto node = std::make_unique<FloatLiteralExpr>(std::stod(token.lexeme));
+        node->sourcePath = mSourceName; node->line = token.line; node->col = token.col;
+        return node;
+    }
+    if (match(TokenKind::StringLiteral)) {
+        const Token& token = mTokens[mPos - 1];
+        auto node = std::make_unique<StringLiteralExpr>(token.lexeme);
+        node->sourcePath = mSourceName; node->line = token.line; node->col = token.col;
+        return node;
+    }
+    if (match(TokenKind::True)) {
+        const Token& token = mTokens[mPos - 1];
+        auto node = std::make_unique<BoolLiteralExpr>(true);
+        node->sourcePath = mSourceName; node->line = token.line; node->col = token.col;
+        return node;
+    }
+    if (match(TokenKind::False)) {
+        const Token& token = mTokens[mPos - 1];
+        auto node = std::make_unique<BoolLiteralExpr>(false);
+        node->sourcePath = mSourceName; node->line = token.line; node->col = token.col;
+        return node;
+    }
+    if (match(TokenKind::Identifier)) {
+        const Token& token = mTokens[mPos - 1];
+        auto node = std::make_unique<IdentifierExpr>(token.lexeme);
+        node->sourcePath = mSourceName; node->line = token.line; node->col = token.col;
+        return node;
+    }
+    if (match(TokenKind::If)) {
+        auto iexpr = std::make_unique<IfExpr>();
+        iexpr->cond = parseExpr();
+        iexpr->thenExpr = std::make_unique<BlockExpr>(parseBlock());
+        if (match(TokenKind::Else)) {
+            if (check(TokenKind::If)) {
+                auto innerIf = std::make_unique<IfExpr>();
+                advance(); // consume 'if'
+                innerIf->cond = parseExpr();
+                innerIf->thenExpr = std::make_unique<BlockExpr>(parseBlock());
+                if (match(TokenKind::Else)) {
+                    if (check(TokenKind::If)) {
+                        // nested if-else-if: simplify to else block
+                        innerIf->elseExpr = std::make_unique<BlockExpr>(parseBlock());
+                    } else {
+                        innerIf->elseExpr = std::make_unique<BlockExpr>(parseBlock());
+                    }
+                } else {
+                    innerIf->elseExpr = std::make_unique<BlockExpr>(
+                        std::make_unique<BlockStmt>());
+                }
+                iexpr->elseExpr = std::move(innerIf);
+            } else {
+                iexpr->elseExpr = std::make_unique<BlockExpr>(parseBlock());
+            }
+        } else {
+            addError("If-expression requires an else branch");
+        }
+        return iexpr;
+    }
+    if (match(TokenKind::New)) {
+        auto type = parseType();
+        consume(TokenKind::LParen, "Expected '(' after type in new expression");
+        auto alloc = std::make_unique<HeapAllocExpr>();
+        alloc->allocatedTypeAST = std::move(type);
+        auto init = std::make_unique<CallExpr>();
+        // Build a synthetic call: new T(args) → call T(args)
+        auto* allocatedNamed = dynamic_cast<NamedTypeAST*>(alloc->allocatedTypeAST.get());
+        auto calleeType = std::make_unique<IdentifierExpr>(
+            allocatedNamed ? allocatedNamed->name : "?");
+        init->callee = std::move(calleeType);
+        if (!check(TokenKind::RParen)) {
+            init->args = parseArgs();
+        }
+        consume(TokenKind::RParen, "Expected ')' after new arguments");
+        alloc->initializer = std::move(init);
+        return alloc;
+    }
+    if (match(TokenKind::LParen)) {
+        auto expr = parseExpr();
+        consume(TokenKind::RParen, "Expected ')' after grouped expression");
+        return expr;
+    }
+    if (match(TokenKind::LBracket)) {
+        const Token start = mTokens[mPos - 1];
+        auto array = std::make_unique<ArrayLiteralExpr>();
+        array->sourcePath = mSourceName; array->line = start.line; array->col = start.col;
+        if (!check(TokenKind::RBracket)) {
+            do { array->elements.push_back(parseExpr()); } while (match(TokenKind::Comma));
+        }
+        consume(TokenKind::RBracket, "Expected ']' after array literal");
+        return array;
+    }
+
+    if (match(TokenKind::Fn)) {
+        // Lambda: fn(params) -> Type { body } or fn(params) { body }
+        return parseLambda(parseDeclaredVersionTag());
+    }
+    if (match(TokenKind::Launch)) return parseLaunchExpr();
+    addError("expected an expression, found " + diagnostic::quotedToken(peek().lexeme));
+    advance(); // skip bad token to prevent infinite loop
+    return std::make_unique<IntLiteralExpr>(0); // error recovery
+}
+
+std::unique_ptr<Expr> Parser::parseLaunchExpr() {
+    const Token start = mTokens[mPos - 1]; // `launch` already consumed
+    auto launch = std::make_unique<LaunchExpr>();
+    launch->sourcePath = mSourceName; launch->line = start.line; launch->col = start.col;
+    if (!match(TokenKind::Identifier)) {
+        addError("expected a kernel name after `launch`",
+                 "write `launch kernel_name[threads: count](arguments)`");
+        return launch;
+    }
+    launch->kernelName = mTokens[mPos - 1].lexeme;
+    if (match(TokenKind::At)) {
+        launch->kernelSelector = parseVersionSelector();
+        if (!launch->kernelSelector)
+            addError("expected a kernel version selector after `@`");
+    }
+    consume(TokenKind::LBracket, "Expected '[' after kernel name in launch");
+    if (!match(TokenKind::Identifier) || mTokens[mPos - 1].lexeme != "threads") {
+        addError("expected `threads` launch option", "write `[threads: count]`");
+    }
+    consume(TokenKind::Colon, "Expected ':' after `threads`");
+    launch->threads = parseExpr();
+    consume(TokenKind::RBracket, "Expected ']' after launch options");
+    consume(TokenKind::LParen, "Expected '(' before launch arguments");
+    if (!check(TokenKind::RParen)) launch->args = parseArgs();
+    consume(TokenKind::RParen, "Expected ')' after launch arguments");
+    return launch;
+}
+
+std::unique_ptr<Expr> Parser::parseLambda(std::optional<VersionTag> versionTag) {
+    // Already consumed 'fn' in parsePrimary
+    consume(TokenKind::LParen, "Expected '(' after fn in lambda");
+    auto params = parseParams();
+    consume(TokenKind::RParen, "Expected ')' after lambda params");
+
+    auto lambda = std::make_unique<LambdaExpr>();
+    lambda->params = std::move(params);
+    lambda->versionTag = std::move(versionTag);
+
+    if (match(TokenKind::Arrow)) {
+        lambda->returnType = parseType();
+    }
+
+    lambda->body = parseBlock();
+    return lambda;
+}
+
+std::unique_ptr<Expr> Parser::parseIfExpr() {
+    auto expr = std::make_unique<IfExpr>();
+    expr->cond = parseExpr();
+    expr->thenExpr = std::make_unique<BlockExpr>(parseBlock());
+    consume(TokenKind::Else, "If-expression requires 'else'");
+    if (check(TokenKind::If)) {
+        expr->elseExpr = parseIfExpr();
+    } else {
+        expr->elseExpr = std::make_unique<BlockExpr>(parseBlock());
+    }
+    return expr;
+}
+
+// ─── Types ─────────────────────────────────────────────────────────
+
+std::unique_ptr<TypeAST> Parser::parseType() {
+    if (match(TokenKind::Linear)) {
+        return std::make_unique<LinearTypeAST>(parseType());
+    }
+    // & Type
+    if (match(TokenKind::Ampersand)) {
+        bool isMutable = match(TokenKind::Mut);
+        auto ref = std::make_unique<RefTypeAST>(parseType(), isMutable);
+        return ref;
+    }
+    // Closure type: (ParamType, ...) -> ReturnType. `fn` remains reserved
+    // for lambda expressions and function declarations.
+    if (check(TokenKind::LParen)) {
+        return parseFunctionType();
+    }
+    // Self
+    if (match(TokenKind::Self)) {
+        return std::make_unique<NamedTypeAST>("Self");
+    }
+    if (match(TokenKind::Auto)) {
+        return std::make_unique<NamedTypeAST>("auto");
+    }
+    // Built-in type keywords
+    if (check(TokenKind::TyI32) || check(TokenKind::TyI64) ||
+        check(TokenKind::TyF32) || check(TokenKind::TyF64) ||
+        check(TokenKind::TyBool) || check(TokenKind::TyString)) {
+        auto tok = advance();
+        return std::make_unique<NamedTypeAST>(tok.lexeme);
+    }
+    // Named type (user type or type param)
+    if (match(TokenKind::Identifier)) {
+        const Token typeName = mTokens[mPos - 1];
+        auto named = std::make_unique<NamedTypeAST>(typeName.lexeme);
+        named->sourcePath = mSourceName;
+        named->line = typeName.line;
+        named->col = typeName.col;
+        if (match(TokenKind::Lt)) {
+            named->typeArgs.push_back(parseType());
+            if (named->name == "array" && match(TokenKind::Comma)) {
+                if (match(TokenKind::IntLiteral))
+                    named->arrayLength = static_cast<uint64_t>(std::stoull(mTokens[mPos - 1].lexeme));
+                else
+                    addError("array<T, N> requires a non-negative integer compile-time length",
+                             "write `array<i32, 4>`, not a runtime expression");
+            } else while (match(TokenKind::Comma)) {
+                named->typeArgs.push_back(parseType());
+            }
+            consume(TokenKind::Gt, "Expected '>' after type arguments");
+        }
+        if (match(TokenKind::At)) {
+            named->versionSelector = parseVersionSelector();
+            if (!named->versionSelector)
+                addError("expected a type version selector after `@`",
+                         "write `Type@stable()` or `Type@stable(1.3.2)`");
+        }
+        return named;
+    }
+
+    addError("expected a type, found " + diagnostic::quotedToken(peek().lexeme),
+             "use a built-in type such as `i32`, or a declared type name");
+    return std::make_unique<NamedTypeAST>("i32"); // error recovery
+}
+
+std::unique_ptr<TypeAST> Parser::parseFunctionType() {
+    consume(TokenKind::LParen, "Expected '(' in closure type");
+    auto ft = std::make_unique<FunctionTypeAST>();
+    if (!check(TokenKind::RParen)) {
+        do {
+            ft->paramTypes.push_back(parseType());
+        } while (match(TokenKind::Comma));
+    }
+    consume(TokenKind::RParen, "Expected ')' after closure parameter types");
+    consume(TokenKind::Arrow, "Expected '->' in closure type");
+    ft->returnType = parseType();
+    return ft;
+}
+
+// ─── Helpers ───────────────────────────────────────────────────────
+
+std::vector<Param> Parser::parseParams() {
+    std::vector<Param> params;
+    if (check(TokenKind::RParen)) return params;
+
+    do {
+        Param p;
+        p.isLinear = match(TokenKind::Linear);
+        if (!match(TokenKind::Identifier)) {
+            addError("Expected parameter name");
+            break;
+        }
+        p.name = mTokens[mPos - 1].lexeme;
+        // A parameter type is an optional constraint. If it is omitted, the
+        // semantic analyzer creates an inference variable.
+        if (match(TokenKind::Colon)) p.type = parseType();
+        params.push_back(std::move(p));
+    } while (match(TokenKind::Comma));
+
+    return params;
+}
+
+std::vector<std::unique_ptr<Expr>> Parser::parseArgs() {
+    std::vector<std::unique_ptr<Expr>> args;
+    do {
+        args.push_back(parseExpr());
+    } while (match(TokenKind::Comma));
+    return args;
+}
+
+std::vector<std::string> Parser::parseTypeParamList() {
+    std::vector<std::string> params;
+    if (match(TokenKind::Lt)) {
+        do {
+            if (!match(TokenKind::Identifier)) {
+                addError("Expected type parameter name");
+                break;
+            }
+            params.push_back(mTokens[mPos - 1].lexeme);
+        } while (match(TokenKind::Comma));
+        consume(TokenKind::Gt, "Expected '>' after type parameters");
+    }
+    return params;
+}
+
+std::vector<WhereClause> Parser::parseWhereClause() {
+    std::vector<WhereClause> clauses;
+    if (match(TokenKind::Where)) {
+        do {
+            if (!match(TokenKind::Identifier)) {
+                addError("Expected type parameter name in where clause");
+                break;
+            }
+            WhereClause clause;
+            clause.typeParam = mTokens[mPos - 1].lexeme;
+            consume(TokenKind::Colon, "Expected ':' in where clause");
+            if (!match(TokenKind::Identifier)) {
+                addError("Expected trait name in where clause");
+                break;
+            }
+            clause.trait = parseTraitRef(mTokens[mPos - 1]);
+            clauses.push_back(std::move(clause));
+        } while (match(TokenKind::Comma));
+    }
+    return clauses;
+}
+
+TraitRef Parser::parseTraitRef(const Token& nameToken) {
+    TraitRef trait;
+    trait.name = nameToken.lexeme;
+    trait.sourcePath = mSourceName;
+    trait.line = nameToken.line;
+    trait.col = nameToken.col;
+    if (match(TokenKind::At)) {
+        trait.versionSelector = parseVersionSelector();
+        if (!trait.versionSelector) {
+            addError("expected a trait version selector after `@`",
+                     "write `Trait@stable()` or `Trait@stable(1.3.2)`");
+        }
+    }
+    return trait;
+}
+
+std::optional<SemanticVersion> Parser::parseSemanticVersion() {
+    if (!match(TokenKind::VersionLiteral)) {
+        addError("expected a semantic version in `x.y.z` form, found " +
+                 diagnostic::quotedToken(peek().lexeme),
+                 "write a complete version such as `1.3.2`");
+        return std::nullopt;
+    }
+    const std::string& text = mTokens[mPos - 1].lexeme;
+    std::istringstream input(text);
+    SemanticVersion version;
+    char first = 0, second = 0;
+    if (!(input >> version.major >> first >> version.minor >> second >> version.patch) ||
+        first != '.' || second != '.' || !input.eof() ||
+        version.major < 0 || version.minor < 0 || version.patch < 0) {
+        addError("invalid semantic version " + diagnostic::quotedToken(text),
+                 "versions use non-negative `major.minor.patch` components");
+        return std::nullopt;
+    }
+    return version;
+}
+
+std::optional<VersionTag> Parser::parseDeclaredVersionTag() {
+    if (!match(TokenKind::At)) return std::nullopt;
+    if (!match(TokenKind::Identifier)) {
+        addError("expected a tag name after `@`", "write `@stable(1.3.2)`");
+        return std::nullopt;
+    }
+    VersionTag tag;
+    tag.name = mTokens[mPos - 1].lexeme;
+    consume(TokenKind::LParen, "Expected '(' after version tag name");
+    auto version = parseSemanticVersion();
+    consume(TokenKind::RParen, "Expected ')' after version tag");
+    if (!version) return std::nullopt;
+    tag.version = *version;
+    return tag;
+}
+
+std::optional<VersionSelector> Parser::parseVersionSelector() {
+    if (!match(TokenKind::Identifier)) return std::nullopt;
+    VersionSelector selector;
+    selector.tag = mTokens[mPos - 1].lexeme;
+    consume(TokenKind::LParen, "Expected '(' after version tag name");
+    if (!check(TokenKind::RParen)) selector.version = parseSemanticVersion();
+    consume(TokenKind::RParen, "Expected ')' after version selector");
+    return selector;
+}
+
+// ─── Token helpers ─────────────────────────────────────────────────
+
+const Token& Parser::peek() const {
+    static Token eof(TokenKind::EndOfFile, "", 0, 0);
+    if (mPos >= (int)mTokens.size() || mTokens[mPos].kind == TokenKind::EndOfFile) {
+        return eof;
+    }
+    return mTokens[mPos];
+}
+
+const Token& Parser::peekAhead(int n) const {
+    int idx = mPos + n;
+    if (idx >= (int)mTokens.size()) {
+        static Token eof(TokenKind::EndOfFile, "", 0, 0);
+        return eof;
+    }
+    return mTokens[idx];
+}
+
+Token Parser::advance() {
+    return mTokens[mPos++];
+}
+
+bool Parser::check(TokenKind kind) const {
+    return peek().kind == kind;
+}
+
+bool Parser::match(TokenKind kind) {
+    if (check(kind)) {
+        mPos++;
+        return true;
+    }
+    return false;
+}
+
+Token Parser::consume(TokenKind kind, const std::string& errorMsg) {
+    if (check(kind)) {
+        return advance();
+    }
+    addError(errorMsg + ", found " + diagnostic::quotedToken(peek().lexeme));
+    return Token(TokenKind::Error, "", peek().line, peek().col);
+}
+
+bool Parser::isAtEnd() const {
+    return mPos >= (int)mTokens.size() || peek().kind == TokenKind::EndOfFile;
+}
+
+bool Parser::isNamedSlotInvocationStart() const {
+    if (!check(TokenKind::Identifier) || peekAhead(1).kind != TokenKind::LParen) return false;
+    int depth = 0;
+    for (int i = mPos + 1; i < static_cast<int>(mTokens.size()); ++i) {
+        const TokenKind kind = mTokens[i].kind;
+        if (kind == TokenKind::LParen) ++depth;
+        else if (kind == TokenKind::RParen && --depth == 0)
+            return i + 1 < static_cast<int>(mTokens.size()) &&
+                   mTokens[i + 1].kind == TokenKind::LBrace;
+        else if (kind == TokenKind::EndOfFile) return false;
+    }
+    return false;
+}
+
+void Parser::addError(const std::string& msg, const std::string& hint) {
+    std::string message = msg;
+    if (message.rfind("Expected", 0) == 0) message[0] = 'e';
+    std::string resolvedHint = hint;
+    if (resolvedHint.empty()) {
+        if (message.find("';'") != std::string::npos)
+            resolvedHint = "terminate this statement with `;`";
+        else if (message.find("')'") != std::string::npos)
+            resolvedHint = "check that every `(` has a matching `)`";
+        else if (message.find("'}'") != std::string::npos)
+            resolvedHint = "check that every `{` has a matching `}`";
+        else if (message.find("variable name") != std::string::npos)
+            resolvedHint = "write an identifier after `let`, for example `let value = ...;`";
+        else if (message.find("function name") != std::string::npos)
+            resolvedHint = "write an identifier after `fn`";
+    }
+    mErrors.push_back(diagnostic::format("parse", message, mSourceName, peek().line, peek().col,
+                                         resolvedHint, sourceLineAt(peek().line)));
+}
+
+void Parser::synchronizeDeclaration() {
+    while (!isAtEnd()) {
+        if (match(TokenKind::SemiColon)) return;
+        switch (peek().kind) {
+            case TokenKind::Export:
+            case TokenKind::Constexpr:
+            case TokenKind::Extern:
+            case TokenKind::Kernel:
+            case TokenKind::Fn:
+            case TokenKind::Fragment:
+            case TokenKind::Struct:
+            case TokenKind::Enum:
+            case TokenKind::Trait:
+            case TokenKind::Impl:
+                return;
+            default:
+                advance();
+        }
+    }
+}
+
+void Parser::synchronizeStatement() {
+    while (!isAtEnd() && !check(TokenKind::SemiColon) && !check(TokenKind::RBrace))
+        advance();
+    if (check(TokenKind::SemiColon)) advance();
+}
+
+std::string Parser::sourceLineAt(int line) const {
+    if (line <= 0) return "";
+    int current = 1;
+    size_t begin = 0;
+    for (size_t i = 0; i <= mSource.size(); ++i) {
+        if (i == mSource.size() || mSource[i] == '\n') {
+            if (current == line) return mSource.substr(begin, i - begin);
+            begin = i + 1;
+            ++current;
+        }
+    }
+    return "";
+}

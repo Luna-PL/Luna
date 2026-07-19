@@ -1,0 +1,36 @@
+name: Linux CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  stable-core:
+    runs-on: ubuntu-24.04
+    env:
+      LUNA_CXX: clang++-22
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CMake, Ninja, and LLVM 22
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates cmake curl lsb-release ninja-build wget
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22 all
+          rm llvm.sh
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=clang-22 \
+            -DCMAKE_CXX_COMPILER=clang++-22 \
+            -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm
+
+      - name: Build
+        run: cmake --build build --parallel
+
+      - name: Stable core regression suite
+        run: ctest --test-dir build --output-on-failure

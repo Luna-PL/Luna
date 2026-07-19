@@ -1,0 +1,10 @@
+// Expected ownership error: event must be awaited before leaving its scope.
+kernel fn write_one(index: i32, data: &mut device_buffer<i32>) {
+    gpu_store_i32(data, index, 1);
+}
+
+fn main() -> i32 {
+    linear let data = gpu_alloc_i32(1);
+    let done = launch write_one[threads: 1](borrow mut data);
+    return 0;
+}

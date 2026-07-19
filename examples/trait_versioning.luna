@@ -1,0 +1,33 @@
+trait Transform @stable(1.0.0) {
+    fn transform(value: i32) -> i32;
+}
+
+trait Transform @stable(2.0.0) {
+    fn transform(value: i32) -> i32;
+}
+
+impl Transform@stable(1.0.0) for i32 {
+    fn transform(value: i32) -> i32 {
+        return value + 1;
+    }
+}
+
+impl Transform@stable() for i32 {
+    fn transform(value: i32) -> i32 {
+        return value + 2;
+    }
+}
+
+fn keep_v1<T>(value: T) -> T where T: Transform@stable(1.0.0) {
+    return value;
+}
+
+fn keep_latest<T>(value: T) -> T where T: Transform@stable() {
+    return value;
+}
+
+fn main() -> i32 {
+    print(keep_v1(7));
+    print(keep_latest(8));
+    return 0;
+}

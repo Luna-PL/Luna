@@ -1,0 +1,6 @@
+extern "C" fn malloc(size: usize) -> linear raw<u8>;
+
+fn main() -> i32 {
+    malloc(16);
+    return 0;
+}

@@ -1,0 +1,15 @@
+context stop {
+    print(1);
+    return;
+    print(99);
+}
+
+fn main() -> i32 {
+    apply hook(stop) {
+        slot context hook {
+            print(42);
+        }
+        print(7);
+    }
+    return 0;
+}

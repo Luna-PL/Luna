@@ -1,0 +1,7 @@
+package exported_package;
+
+fn main() -> i32 {
+    let result = add(40, private_offset());
+    print(result);
+    return 0;
+}

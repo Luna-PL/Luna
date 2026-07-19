@@ -1,0 +1,5 @@
+extern "C" fn identity<T>(value: T) -> T;
+
+fn main() -> i32 {
+    return 0;
+}

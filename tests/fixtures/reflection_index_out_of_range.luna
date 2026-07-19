@@ -1,0 +1,9 @@
+struct Pair {
+    left: i32;
+    right: i32;
+}
+
+fn main() -> i32 {
+    const let missing = type_field_name::<Pair>(2);
+    return 0;
+}

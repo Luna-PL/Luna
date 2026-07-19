@@ -1,0 +1,14 @@
+// C ABI import example. `cstr` is a NUL-terminated, non-owning C string.
+extern "C" fn puts(message: cstr) -> i32;
+extern "C" fn malloc(size: usize) -> linear raw<u8>;
+extern "C" fn c_free(linear pointer: raw<u8>) as "free";
+
+fn main() -> i32 {
+    let message: cstr = "hello from C FFI";
+    puts(message);
+
+    // The owning FFI return makes this binding linear automatically.
+    let buffer = malloc(16);
+    c_free(move buffer);
+    return 0;
+}

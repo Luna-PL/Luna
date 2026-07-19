@@ -1,0 +1,9 @@
+// This declaration is intentionally under-constrained and should be rejected:
+// no declaration or consumer provides a type for value.
+fn unresolved(value) {
+    return value;
+}
+
+fn main() -> i32 {
+    return 0;
+}

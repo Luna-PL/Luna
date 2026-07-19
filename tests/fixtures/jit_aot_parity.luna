@@ -1,0 +1,14 @@
+// The parity harness runs this exact program through both execution paths.
+// It covers compound assignment, bitwise operators, relations, short-circuit
+// control flow, observable stdout, and a non-zero source-level exit code.
+fn main() -> i32 {
+    let value: i32 = 5;
+    value <<= 2;
+    let result = (value | 3) ^ 1;
+    if result > 0 && true {
+        print(result);
+        return result & 7;
+    } else {
+        return 0;
+    }
+}

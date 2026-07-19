@@ -1,0 +1,5 @@
+package mismatch_a;
+
+fn first() -> i32 {
+    return 0;
+}

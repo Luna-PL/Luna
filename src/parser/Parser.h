@@ -1,0 +1,94 @@
+#pragma once
+
+#include "AST.h"
+#include "../lexer/Token.h"
+#include <memory>
+#include <string>
+#include <vector>
+
+class Parser {
+public:
+    explicit Parser(std::vector<Token> tokens, std::string sourceName = "<input>",
+                    std::string source = "");
+
+    std::unique_ptr<Program> parse();
+    const std::vector<std::string>& errors() const { return mErrors; }
+
+private:
+    std::unique_ptr<Decl> parseDeclaration();
+    bool parsePackageHeader(Program* program);
+    std::unique_ptr<FunctionDecl> parseFunctionDecl(bool isTraitMethod = false,
+                                                    bool isExtern = false,
+                                                    std::string abi = "",
+                                                    bool isConstexpr = false,
+                                                    bool isKernel = false);
+    std::unique_ptr<StructDecl> parseStructDecl();
+    std::unique_ptr<EnumDecl> parseEnumDecl();
+    std::unique_ptr<FragmentDecl> parseFragmentDecl(FragmentKind kind);
+    std::unique_ptr<TraitDecl> parseTraitDecl();
+    std::unique_ptr<ImplDecl> parseImplDecl();
+    std::unique_ptr<BlockStmt> parseBlock();
+    std::unique_ptr<Stmt> parseStatement();
+    std::unique_ptr<Stmt> parseLetStmt(bool isLinear = false, bool isConst = false);
+    std::unique_ptr<Stmt> parseReturnStmt();
+    std::unique_ptr<Stmt> parseIfStmt();
+    std::unique_ptr<Stmt> parseWhileStmt();
+    std::unique_ptr<Stmt> parseForStmt();
+    std::unique_ptr<Stmt> parseFreeStmt();
+    std::unique_ptr<Stmt> parseSlotStmt(bool isDynamic = false);
+    std::unique_ptr<Stmt> parseResumeStmt();
+    std::unique_ptr<Stmt> parseAbortStmt();
+    std::unique_ptr<Stmt> parseAwaitStmt();
+    std::unique_ptr<Stmt> parseApplyStmt(bool isDynamic = false);
+    std::unique_ptr<Stmt> parseNamedSlotInvokeStmt();
+    std::unique_ptr<Stmt> parseExprStmt();
+
+    std::unique_ptr<Expr> parseExpr();
+    std::unique_ptr<Expr> parseAssignment();
+    std::unique_ptr<Expr> parseOr();
+    std::unique_ptr<Expr> parseAnd();
+    std::unique_ptr<Expr> parseBitOr();
+    std::unique_ptr<Expr> parseBitXor();
+    std::unique_ptr<Expr> parseBitAnd();
+    std::unique_ptr<Expr> parseEquality();
+    std::unique_ptr<Expr> parseComparison();
+    std::unique_ptr<Expr> parseShift();
+    std::unique_ptr<Expr> parseAddSub();
+    std::unique_ptr<Expr> parseMulDiv();
+    std::unique_ptr<Expr> parseUnary();
+    std::unique_ptr<Expr> parsePostfix();
+    std::unique_ptr<Expr> parsePrimary();
+    std::unique_ptr<Expr> parseIfExpr();
+    std::unique_ptr<Expr> parseLambda(std::optional<VersionTag> versionTag = std::nullopt);
+    std::unique_ptr<Expr> parseLaunchExpr();
+
+    std::unique_ptr<TypeAST> parseType();
+    std::unique_ptr<TypeAST> parseFunctionType();
+    std::vector<Param> parseParams();
+    std::vector<std::unique_ptr<Expr>> parseArgs();
+    std::vector<std::string> parseTypeParamList();
+    std::vector<WhereClause> parseWhereClause();
+    std::optional<VersionTag> parseDeclaredVersionTag();
+    std::optional<VersionSelector> parseVersionSelector();
+    std::optional<SemanticVersion> parseSemanticVersion();
+    TraitRef parseTraitRef(const Token& nameToken);
+
+    const Token& peek() const;
+    const Token& peekAhead(int n) const;
+    Token advance();
+    bool check(TokenKind kind) const;
+    bool match(TokenKind kind);
+    Token consume(TokenKind kind, const std::string& errorMsg);
+    bool isAtEnd() const;
+    bool isNamedSlotInvocationStart() const;
+    void addError(const std::string& msg, const std::string& hint = "");
+    void synchronizeDeclaration();
+    void synchronizeStatement();
+    std::string sourceLineAt(int line) const;
+
+    std::vector<Token> mTokens;
+    int mPos = 0;
+    std::string mSourceName;
+    std::string mSource;
+    std::vector<std::string> mErrors;
+};

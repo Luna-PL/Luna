@@ -1,0 +1,8 @@
+fn only @stable(1.0.0)() -> i32 {
+    return 1;
+}
+
+fn main() -> i32 {
+    // `1.1.0` is a well-formed selector, but this release was never declared.
+    return only@stable(1.1.0);
+}

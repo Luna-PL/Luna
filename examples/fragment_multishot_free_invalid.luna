@@ -1,0 +1,16 @@
+// This program is intentionally rejected by the ownership pass: even a
+// non-linear heap value cannot be freed by a replayed continuation.
+context many replay {
+    resume();
+    resume();
+}
+
+fn main() -> i32 {
+    let buffer = new i32(1);
+    apply cleanup(replay) {
+        slot context many cleanup {
+            free buffer;
+        }
+    }
+    return 0;
+}
