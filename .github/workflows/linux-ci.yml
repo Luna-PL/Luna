@@ -30,7 +30,9 @@ jobs:
             -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm
 
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --parallel --verbose
 
       - name: Stable core regression suite
-        run: ctest --test-dir build -LE hardware --output-on-failure
+        run: |
+          export PATH="/usr/lib/llvm-22/bin:$PATH"
+          ctest --test-dir build -LE hardware --output-on-failure

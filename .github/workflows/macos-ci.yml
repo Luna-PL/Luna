@@ -24,7 +24,7 @@ jobs:
             -DLLVM_DIR="${llvm_prefix}/lib/cmake/llvm"
 
       - name: Build
-        run: cmake --build build --parallel
+        run: cmake --build build --parallel --verbose
 
       - name: Stable core regression suite
         run: |

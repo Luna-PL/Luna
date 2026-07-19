@@ -34,7 +34,9 @@ jobs:
             -DLLVM_DIR=/ucrt64/lib/cmake/llvm
 
       - name: Build
-        run: cmake --build build --parallel
+        run: |
+          export PATH="/ucrt64/bin:$PATH"
+          cmake --build build --parallel --verbose
 
       - name: Stable core regression suite
         run: |
