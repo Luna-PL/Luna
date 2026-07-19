@@ -37,4 +37,7 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Stable core regression suite
-        run: ctest --test-dir build -LE hardware --output-on-failure
+        run: |
+          export PATH="/ucrt64/bin:$PATH"
+          export LUNA_CXX="/ucrt64/bin/clang++.exe"
+          ctest --test-dir build -LE hardware --output-on-failure

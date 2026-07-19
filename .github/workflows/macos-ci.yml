@@ -27,4 +27,8 @@ jobs:
         run: cmake --build build --parallel
 
       - name: Stable core regression suite
-        run: ctest --test-dir build -LE hardware --output-on-failure
+        run: |
+          llvm_prefix="$(brew --prefix llvm)"
+          export LUNA_CXX="${llvm_prefix}/bin/clang++"
+          export PATH="${llvm_prefix}/bin:$PATH"
+          ctest --test-dir build -LE hardware --output-on-failure
