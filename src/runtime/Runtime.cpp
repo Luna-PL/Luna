@@ -432,6 +432,14 @@ void rt_free(void* ptr) {
     std::free(ptr);
 }
 
+void rt_print_i32(int32_t value) {
+    std::printf("%d\n", value);
+}
+
+void rt_print_cstr(const char* value) {
+    std::printf("%s\n", value ? value : "");
+}
+
 int32_t rt_array_index_or_abort(int32_t index, size_t length) {
     if (index >= 0 && static_cast<size_t>(index) < length) return index;
     std::fprintf(stderr, "Luna runtime error: array index %d is outside length %zu\n", index, length);

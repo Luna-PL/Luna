@@ -81,7 +81,6 @@ private:
     llvm::AllocaInst* createEntryBlockAlloca(llvm::Function* func,
                                               llvm::Type* type,
                                               const std::string& name);
-    llvm::Value* getOrCreatePrintf();
     size_t fieldIndex(const TypePtr& type, const std::string& field) const;
 
     void error(const std::string& msg);
@@ -128,5 +127,4 @@ private:
     LunaGpuTargetConfig mGpuTargets;
     bool mHasRtAlloc = false;
     bool mHasRtFree = false;
-    bool mHasPrintf = false;
 };

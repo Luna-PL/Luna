@@ -37,7 +37,18 @@ function(check_parity name input_path ir_path executable_path level)
             "${name} (${level}): JIT execution failed.\nResult: ${jit_result}\n"
             "Output:\n${jit_transcript}")
     endif()
-    string(SUBSTRING "${jit_output}" 0 ${jit_marker} jit_program_output)
+    # This matrix includes explicit C FFI. A foreign Windows DLL may own a
+    # different CRT buffer and flush its stdout after the Luna driver's status
+    # marker. Compare the complete program stdout with that driver-owned line
+    # removed; the dedicated jit-aot-parity test separately enforces that
+    # Luna's own `print` output precedes the marker.
+    set(jit_program_output "${jit_output}")
+    string(REPLACE "Program exited with code: ${jit_result}\r\n" ""
+           jit_program_output "${jit_program_output}")
+    string(REPLACE "Program exited with code: ${jit_result}\n" ""
+           jit_program_output "${jit_program_output}")
+    string(REPLACE "Program exited with code: ${jit_result}" ""
+           jit_program_output "${jit_program_output}")
 
     execute_process(
         COMMAND "${LUNA_EXECUTABLE}" build "${input_path}" "${level}"

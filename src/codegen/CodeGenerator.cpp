@@ -1697,19 +1697,21 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             }
         }
 
-        // Handle print built-in (maps to printf)
+        // Language-level print has a fixed Luna runtime ABI. In particular,
+        // do not make JIT objects resolve a platform variadic printf: MinGW's
+        // wrapper and UCRT export can otherwise use different buffering paths.
         if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
             if (calleeId->name == "print" && !call->args.empty()) {
-                auto printfFn = mModule->getOrInsertFunction("printf",
-                    llvm::FunctionType::get(mHelpers->i32Ty(), {mHelpers->ptrTy()}, true));
                 for (auto& arg : call->args) {
                     llvm::Value* argVal = generateExpr(arg.get());
                     if (argVal->getType()->isIntegerTy(32)) {
-                        auto* fmt = mBuilder->CreateGlobalString("%d\n", "printfmt");
-                        mBuilder->CreateCall(printfFn, {fmt, argVal});
+                        auto print = mModule->getOrInsertFunction(
+                            "rt_print_i32", mHelpers->voidTy(), mHelpers->i32Ty());
+                        mBuilder->CreateCall(print, {argVal});
                     } else {
-                        auto* fmt = mBuilder->CreateGlobalString("%s\n", "printfmt");
-                        mBuilder->CreateCall(printfFn, {fmt, argVal});
+                        auto print = mModule->getOrInsertFunction(
+                            "rt_print_cstr", mHelpers->voidTy(), mHelpers->ptrTy());
+                        mBuilder->CreateCall(print, {argVal});
                     }
                 }
                 return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
@@ -2585,6 +2587,8 @@ int CodeGenerator::jitRun() {
     };
     bindRuntime("rt_malloc", &rt_malloc);
     bindRuntime("rt_free", &rt_free);
+    bindRuntime("rt_print_i32", &rt_print_i32);
+    bindRuntime("rt_print_cstr", &rt_print_cstr);
     bindRuntime("rt_array_index_or_abort", &rt_array_index_or_abort);
     bindRuntime("rt_dynamic_fragment_select", &rt_dynamic_fragment_select);
     bindRuntime("rt_dynamic_fragment_matches", &rt_dynamic_fragment_matches);

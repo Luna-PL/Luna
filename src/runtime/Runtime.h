@@ -10,6 +10,11 @@ extern "C" {
 
 void* rt_malloc(size_t size);
 void  rt_free(void* ptr);
+// Language-level printing uses a stable Luna ABI instead of resolving the
+// platform's variadic printf from a JIT object. This keeps JIT/AOT output and
+// buffering behavior identical across ELF, Mach-O, and MinGW/UCRT.
+void  rt_print_i32(int32_t value);
+void  rt_print_cstr(const char* value);
 // Generated safe array accesses call this before forming a GEP. It never
 // returns on failure, preventing undefined behaviour from out-of-bounds IR.
 int32_t rt_array_index_or_abort(int32_t index, size_t length);

@@ -51,6 +51,17 @@ if(NOT build_result EQUAL 0 OR NOT EXISTS "${ir_path}" OR NOT EXISTS "${executab
         "Output:\n${build_output}\n${build_error}")
 endif()
 
+# `print` is a language runtime operation, not an ambient variadic libc call.
+# Keeping this ABI explicit avoids MinGW/UCRT symbol and buffering divergence.
+file(READ "${ir_path}" generated_ir)
+string(FIND "${generated_ir}" "call void @rt_print_i32" runtime_print_at)
+string(FIND "${generated_ir}" "@printf" ambient_printf_at)
+if(runtime_print_at EQUAL -1 OR NOT ambient_printf_at EQUAL -1)
+    cleanup_outputs()
+    message(FATAL_ERROR
+        "print lowering escaped the Luna runtime ABI.\n${generated_ir}")
+endif()
+
 execute_process(
     COMMAND "${executable_path}"
     RESULT_VARIABLE aot_result
