@@ -30,8 +30,9 @@ sudo cmake --install build --prefix /opt/luna
 
 ## 可选硬件门
 
-- ROCm：设置 `LUNA_GPU_BACKEND=rocm`，确认 `rocminfo` 可见目标 GPU，再启用
-  `-DLUNA_ENABLE_ROCM_SMOKE=ON`。
+- ROCm：确认 `rocminfo` 可见目标 GPU，再启用
+  `-DLUNA_ENABLE_ROCM_SMOKE=ON -DLUNA_ROCM_SMOKE_ARCH=gfx*`。测试会显式
+  编译该 GPU 目标，并在执行时设置 `LUNA_GPU_BACKEND=rocm`。
 - CUDA：需要 NVIDIA 驱动和 CUDA Driver API；当前仓库没有 NVIDIA 硬件 CI。
 
 硬件测试未通过时不能标记为编译器核心回归；应记录为发布环境缺少设备、驱动

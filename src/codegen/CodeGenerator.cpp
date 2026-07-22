@@ -359,10 +359,9 @@ bool CodeGenerator::generate(moon::Module* program) {
     // executable would embed the temporary empty-device-module placeholder.
     generateBodies(true);
 
-    // PTX is only necessary when the user selected CUDA. Keeping it out of
-    // simulator builds preserves Luna's portable default and avoids requiring
-    // an NVPTX-enabled LLVM installation merely to run CPU tests.
-    if (rt_gpu_should_emit_ptx()) {
+    // Device code-object targets are explicit compiler inputs. Runtime backend
+    // selection must never silently alter an AOT/JIT artifact.
+    if (mGpuTargets.emitPTX) {
         for (auto& decl : program->declarations) {
             if (auto* function = dynamic_cast<FunctionDecl*>(decl.get())) {
                 if (function->isKernel && function->isCodegenReachable &&
@@ -370,7 +369,7 @@ bool CodeGenerator::generate(moon::Module* program) {
             }
         }
     }
-    if (rt_gpu_should_emit_amdgpu()) {
+    if (mGpuTargets.emitHSACO) {
         for (auto& decl : program->declarations) {
             if (auto* function = dynamic_cast<FunctionDecl*>(decl.get())) {
                 if (function->isKernel && function->isCodegenReachable &&
@@ -2160,7 +2159,7 @@ bool CodeGenerator::emitKernelPTX(FunctionDecl* kernel) {
     }
     llvm::TargetOptions options;
     std::unique_ptr<llvm::TargetMachine> machine(target->createTargetMachine(
-        llvm::Triple(targetTriple), "sm_52", "", options, llvm::Reloc::PIC_,
+        llvm::Triple(targetTriple), mGpuTargets.cudaArchitecture, "", options, llvm::Reloc::PIC_,
         std::nullopt, llvm::CodeGenOptLevel::Aggressive));
     if (!machine) {
         error("could not create LLVM NVPTX target machine for kernel '" + kernel->name + "'");
@@ -2258,11 +2257,7 @@ bool CodeGenerator::emitKernelHSACO(FunctionDecl* kernel) {
     }
 
     constexpr const char* targetTriple = "amdgcn-amd-amdhsa";
-    const char* requestedArch = std::getenv("LUNA_AMDGPU_ARCH");
-    // Navi 32 (RX 7700 XT / RX 7800 XT) is gfx1101. A different GPU can
-    // select its architecture without recompiling Luna.
-    const std::string architecture = requestedArch && *requestedArch
-        ? requestedArch : "gfx1101";
+    const std::string& architecture = mGpuTargets.rocmArchitecture;
     std::string targetError;
     const llvm::Target* target = llvm::TargetRegistry::lookupTarget(
         llvm::Triple(targetTriple), targetError);
@@ -2578,8 +2573,6 @@ int CodeGenerator::jitRun() {
                 &rt_gpu_report_operation_error_and_abort);
     bindRuntime("rt_gpu_backend_is_cuda", &rt_gpu_backend_is_cuda);
     bindRuntime("rt_gpu_backend_is_rocm", &rt_gpu_backend_is_rocm);
-    bindRuntime("rt_gpu_should_emit_ptx", &rt_gpu_should_emit_ptx);
-    bindRuntime("rt_gpu_should_emit_amdgpu", &rt_gpu_should_emit_amdgpu);
     bindRuntime("rt_gpu_alloc_i32", &rt_gpu_alloc_i32);
     bindRuntime("rt_gpu_free", &rt_gpu_free);
     bindRuntime("rt_gpu_load_i32", &rt_gpu_load_i32);

@@ -45,6 +45,13 @@ Run an example through the JIT:
 ./build/luna run examples/operators.luna -O2
 ```
 
+GPU code-object generation and execution are explicit, separate choices:
+
+```sh
+LUNA_GPU_BACKEND=rocm ./build/luna run examples/heterogeneous.luna -O2 \
+  --gpu-target=rocm:gfx1101
+```
+
 For AOT, use an explicit installed runtime when building outside the source
 tree:
 

@@ -7,7 +7,7 @@ set -euo pipefail
 luna_driver="${1:?missing Luna executable}"
 source_root="${2:?missing source root}"
 hipcc_bin="${HIPCC:-hipcc}"
-architecture="${LUNA_AMDGPU_ARCH:-gfx1101}"
+architecture="${LUNA_ROCM_ARCH:-gfx1101}"
 iterations="${LUNA_BENCH_ITERATIONS:-3}"
 optimization="${LUNA_BENCH_OPT_LEVEL:--O2}"
 source="${source_root}/benchmarks/luna_gpu_vector.luna"
@@ -45,8 +45,8 @@ fi
 # the build half can run on a compiler-only machine, while the produced AOT
 # binary is still executed with ROCm below. This also makes ISA investigations
 # possible without occupying a GPU.
-env LUNA_GPU_BACKEND=sim LUNA_GPU_EMIT_AMDGPU=1 LUNA_AMDGPU_ARCH="${architecture}" \
-    "${luna_driver}" build "${source}" "${optimization}" >/dev/null
+"${luna_driver}" build "${source}" "${optimization}" \
+    "--gpu-target=rocm:${architecture}" >/dev/null
 
 elapsed_ms() {
     awk -v start="$1" -v end="$2" 'BEGIN { printf "%.3f", (end - start) / 1000000 }'

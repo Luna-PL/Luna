@@ -52,78 +52,89 @@ and the vendor/runtime error, then terminates with a non-zero status. This is
 also true for AOT binaries. The simulator's completed event succeeds through
 the same `await` ABI.
 
-## Backend selection
+## Compile targets and runtime backend
 
-The simulator is the default and runs dispatch synchronously under the hood while preserving the asynchronous ownership contract:
+The simulator is the default and runs dispatch synchronously under the hood
+while preserving the asynchronous ownership contract. Device code generation
+and runtime selection are deliberately separate:
 
-PTX/HSACO selection happens while compiling and only inspects
-`LUNA_GPU_BACKEND` or the explicit offline-emission flags. It does not initialize
-CUDA/HIP or require a physical GPU on the build machine. The generated JIT/AOT
-entry point initializes and validates the selected runtime only when reachable
-kernel capability is actually present.
+- `--gpu-target=sim|cuda[:sm_*]|rocm[:gfx*]` is a compiler option. It determines
+  which device artifacts are embedded and never initializes CUDA/HIP.
+- `LUNA_GPU_BACKEND=sim|cuda|rocm` is read only by the generated program. It
+  selects which embedded representation to execute.
+
+Targets may be comma-separated, for example
+`--gpu-target=sim,cuda:sm_86,rocm:gfx1101`. One architecture per vendor is
+currently supported. The host simulator form is available for every reachable
+kernel; `sim` is the default when no target option is given.
 
 ```sh
 ./build/luna run examples/heterogeneous.luna
 # or explicitly:
-LUNA_GPU_BACKEND=sim ./build/luna run examples/heterogeneous.luna
+LUNA_GPU_BACKEND=sim ./build/luna run examples/heterogeneous.luna \
+  --gpu-target=sim
 ```
 
-Select CUDA with a functioning NVIDIA driver; no CUDA Toolkit or NVRTC installation is needed at build time because the Driver API is loaded dynamically:
+Select CUDA with a functioning NVIDIA driver. No CUDA Toolkit or NVRTC is
+needed at build time because the Driver API is loaded dynamically:
 
 ```sh
-LUNA_GPU_BACKEND=cuda ./build/luna run examples/heterogeneous.luna
+LUNA_GPU_BACKEND=cuda ./build/luna run examples/heterogeneous.luna \
+  --gpu-target=cuda:sm_52
 ```
 
-CUDA currently emits one-dimensional grids with 256 threads per block and uses the default CUDA stream. The source `index` parameter is lowered to `blockIdx.x * blockDim.x + threadIdx.x` in PTX, while the simulator provides the same value through its dispatch loop. `await event` synchronizes and destroys the associated CUDA event. If CUDA is requested but the Driver API cannot initialize, Luna fails before compilation with the driver error; it never silently falls back to the simulator.
+CUDA emits one-dimensional grids with 256 threads per block and uses the
+default CUDA stream. If the Driver API cannot initialize, the generated entry
+point fails before entering the user `main`; it never silently falls back to
+the simulator.
 
-Select ROCm for an AMD GPU. Luna loads `libamdhip64.so` dynamically, so its headers and compiler are not build dependencies, but a working ROCm HIP runtime and kernel driver are required to execute on the device:
+Select ROCm for an AMD GPU. Luna loads `libamdhip64.so` dynamically, so its
+headers and compiler are not build dependencies, but a working HIP runtime and
+kernel driver are required to execute on the device:
 
 ```sh
-LUNA_GPU_BACKEND=rocm ./build/luna run examples/heterogeneous.luna
+LUNA_GPU_BACKEND=rocm ./build/luna run examples/heterogeneous.luna \
+  --gpu-target=rocm:gfx1101
 ```
 
-ROCm uses the same one-dimensional, 256-thread launch geometry. The source `index` becomes `workgroup_id_x * 256 + workitem_id_x`; `await event` synchronizes and destroys the HIP event. Luna defaults its offline AMDGPU code generation to `gfx1101`, suitable for Navi 32 / RX 7700 XT and RX 7800 XT. Set `LUNA_AMDGPU_ARCH` for another GPU, for example `LUNA_AMDGPU_ARCH=gfx1030`. AMDGPU emission also requires the matching LLVM linker, `ld.lld`, in `PATH`; it is normally installed with LLVM and is only invoked when emitting a ROCm/offline AMDGPU kernel.
+ROCm uses the same one-dimensional, 256-thread launch geometry. The default
+ROCm target is `gfx1101`, suitable for Navi 32 / RX 7700 XT and RX 7800 XT.
+Select another GPU explicitly, for example `--gpu-target=rocm:gfx1030`.
+AMDGPU emission also requires the matching LLVM `ld.lld` in `PATH`.
 
-On an ROCm-equipped AMD machine, enable the opt-in hardware smoke test to run
-the basic kernel through both JIT and AOT. The test dispatches eight threads
-and confirms the host reads back `42`; it is a correctness smoke test, not a
-thermal or throughput workload:
+On an ROCm-equipped AMD machine, enable the opt-in hardware smoke test:
 
 ```sh
-cmake -S . -B build -DLUNA_ENABLE_ROCM_SMOKE=ON
+cmake -S . -B build -DLUNA_ENABLE_ROCM_SMOKE=ON \
+  -DLUNA_ROCM_SMOKE_ARCH=gfx1101
 cmake --build build
 ctest --test-dir build -L rocm --output-on-failure
 ```
 
-It is disabled by default so ordinary CPU-only CI stays deterministic. Set
-`LUNA_AMDGPU_ARCH` in the CTest environment when the GPU is not `gfx1101`.
-
-Build machines without a GPU can validate the NVPTX lowering while still executing with the simulator:
+Build machines without a GPU can emit a device artifact and still execute the
+simulator, because no runtime backend is selected:
 
 ```sh
-LUNA_GPU_EMIT_PTX=1 ./build/luna run examples/heterogeneous.luna
+./build/luna run examples/heterogeneous.luna --gpu-target=cuda:sm_52
+./build/luna run examples/heterogeneous.luna --gpu-target=rocm:gfx1101
 ```
 
-This emits PTX during compilation and takes the simulator branch at runtime.
-For an AOT executable that may later run with CUDA, use the same variable while building so PTX is embedded in the emitted host IR:
+For deployment, embed the target while building and select it only while
+running:
 
 ```sh
-LUNA_GPU_EMIT_PTX=1 ./build/luna build examples/heterogeneous.luna
+./build/luna build examples/heterogeneous.luna --gpu-target=cuda:sm_52
 LUNA_GPU_BACKEND=cuda ./examples/heterogeneous
-```
 
-The analogous ROCm validation path emits a real HSACO while execution still stays on the simulator. It is useful before ROCm is installed on a build machine:
-
-```sh
-LUNA_GPU_EMIT_AMDGPU=1 ./build/luna run examples/heterogeneous.luna
-```
-
-For an AOT executable that will run on an AMD GPU later, embed the HSACO at build time and select ROCm when launching it:
-
-```sh
-LUNA_GPU_EMIT_AMDGPU=1 ./build/luna build examples/heterogeneous.luna
+./build/luna build examples/heterogeneous.luna --gpu-target=rocm:gfx1101
 LUNA_GPU_BACKEND=rocm ./examples/heterogeneous
 ```
+
+An AOT binary does not synthesize a missing target at runtime. Selecting ROCm
+for an artifact built without HSACO, or CUDA for one built without PTX,
+produces a clear launch error and a non-zero exit. Future Moon containers may
+retain a verified kernel recipe for MoonRuntime JIT; ordinary native AOT
+artifacts do not.
 
 Kernel declarations may carry ordinary Metadata, for example `@version(1, 0, 0) kernel fn bump(...)`. A named `launch bump[threads: n](...)` currently requires that `bump` resolve to one kernel declaration; an ambiguous metadata family is rejected. Runtime kernel-family binding will be an explicit dynamic operation rather than postfix version syntax.
 

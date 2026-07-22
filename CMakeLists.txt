@@ -19,6 +19,8 @@ option(LUNA_ENABLE_ROCM_SMOKE "Run ROCm JIT/AOT smoke tests on a configured AMD 
 option(LUNA_ENABLE_ROCM_BENCHMARK "Run the large Luna versus C++23/HIP ROCm comparison" OFF)
 option(LUNA_ENABLE_CPU_BENCHMARK "Run common Luna versus C++23 CPU benchmarks" OFF)
 option(LUNA_ENABLE_BASIC_BENCHMARK "Run the lightweight Luna CPU baseline" OFF)
+set(LUNA_ROCM_SMOKE_ARCH "gfx1101" CACHE STRING
+    "AMDGPU architecture used by the opt-in ROCm smoke test")
 
 add_library(runtime STATIC src/runtime/Runtime.cpp)
 
@@ -205,6 +207,7 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_error_boundary_abi.cmake
     )
     add_test(
@@ -219,6 +222,7 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/jit_aot_extended_parity.cmake
     )
     add_test(
@@ -229,10 +233,19 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/jit_runtime_symbols.cmake
     )
     add_test(
+        NAME luna.gpu-target-split
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/gpu_target_split.cmake
+    )
+    add_test(
         NAME luna.stable-core-parity
         COMMAND ${CMAKE_COMMAND}
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stable_core_parity.cmake
     )
     add_test(
@@ -249,6 +262,8 @@ if(BUILD_TESTING)
             COMMAND ${CMAKE_COMMAND}
                 -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
                 -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                -DLUNA_ROCM_ARCH=${LUNA_ROCM_SMOKE_ARCH}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/rocm_smoke.cmake
         )
         set_tests_properties(luna.rocm-smoke PROPERTIES LABELS "rocm;hardware")

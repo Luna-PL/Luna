@@ -5,14 +5,17 @@
 ```sh
 LUNA_BENCH_ITERATIONS=20 \
 LUNA_GPU_BACKEND=sim \
+LUNA_GPU_TARGET=sim \
 ./tools/benchmark_heterogeneous.sh
 ```
 
 脚本输出三项端到端时间：重复 JIT 编译并执行、一次 AOT 构建、重复 AOT 执行。默认输入是仅八线程的基础 kernel 示例，适合正确性与启动开销，负载太小而不应期待风扇或功耗有可感知变化。对 ROCm 运行前，先确认设备可见：
 
 ```sh
-LUNA_GPU_BACKEND=rocm ./build/luna run examples/heterogeneous.luna -O2
-LUNA_GPU_BACKEND=rocm ./tools/benchmark_heterogeneous.sh
+LUNA_GPU_BACKEND=rocm ./build/luna run examples/heterogeneous.luna -O2 \
+  --gpu-target=rocm:gfx1101
+LUNA_GPU_BACKEND=rocm LUNA_GPU_TARGET=rocm:gfx1101 \
+  ./tools/benchmark_heterogeneous.sh
 ```
 
 ## Luna 与 C++23/HIP 大规模对照
@@ -22,6 +25,7 @@ LUNA_GPU_BACKEND=rocm ./tools/benchmark_heterogeneous.sh
 ```sh
 cmake -S . -B build \
   -DLUNA_ENABLE_ROCM_SMOKE=ON \
+  -DLUNA_ROCM_SMOKE_ARCH=gfx1101 \
   -DLUNA_ENABLE_ROCM_BENCHMARK=ON
 cmake --build build
 LUNA_BENCH_ITERATIONS=5 \
@@ -32,7 +36,7 @@ ctest --test-dir build -L benchmark --output-on-failure
 
 `C++23 stream` 只在整串 dispatch 完成后同步，代表同一计算的连续提交吞吐上限。Luna 当前因线性设备缓冲区的借用规则，在每次 `await` 后完成同步与 event 回收；因此应优先将 Luna 的 kernel/wall 时间与 `C++23 awaited` 对照。后者在每个 launch 后创建、记录、同步并销毁 event，刻意匹配这一安全语义的生命周期成本。两列共同保留，可以明确区分 kernel 代码生成差距与同步策略成本。
 
-如需检查最终 AMDGPU 指令而不是中间 LLVM IR，可在 AOT 构建时设置一个已存在的目录：`LUNA_GPU_DUMP_HSACO=/tmp/luna-hsaco LUNA_GPU_BACKEND=rocm ./build/luna build benchmarks/luna_gpu_vector.luna -O2`。这会写出每个 kernel 的独立 `.hsaco`，可用 ROCm 的 `llvm-objdump -d --mcpu=gfx1101` 反汇编；该变量只用于诊断，不改变生成的可执行文件。
+如需检查最终 AMDGPU 指令而不是中间 LLVM IR，可在 AOT 构建时设置一个已存在的目录：`LUNA_GPU_DUMP_HSACO=/tmp/luna-hsaco ./build/luna build benchmarks/luna_gpu_vector.luna -O2 --gpu-target=rocm:gfx1101`。这会写出每个 kernel 的独立 `.hsaco`，可用 ROCm 的 `llvm-objdump -d --mcpu=gfx1101` 反汇编；该变量只用于诊断，不改变生成的可执行文件。
 
 建议分别记录：
 
@@ -41,4 +45,4 @@ ctest --test-dir build -L benchmark --output-on-failure
 - 逐元素 kernel 的总时间和每元素时间；
 - 同一后端、同一优化等级下的 JIT 首次运行与 AOT 重复运行。
 
-报告应包含 GPU 型号、`LUNA_AMDGPU_ARCH`、ROCm/驱动版本、CPU、优化等级、元素数、预热次数和采样次数。基础 ROCm JIT/AOT 冒烟已在 RX 7800 XT 上通过；性能结果仍应在固定频率、预热和足够采样次数后单独记录。
+报告应包含 GPU 型号、`--gpu-target`、ROCm/驱动版本、CPU、优化等级、元素数、预热次数和采样次数。基础 ROCm JIT/AOT 冒烟已在 RX 7800 XT 上通过；性能结果仍应在固定频率、预热和足够采样次数后单独记录。

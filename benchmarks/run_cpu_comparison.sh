@@ -51,7 +51,7 @@ fi
 
 for workload in "${workloads[@]}"; do
     source="${luna_sources[${workload}]}"
-    env LUNA_GPU_BACKEND=sim "${luna_driver}" build "${source}" "${optimization}" >/dev/null
+    "${luna_driver}" build "${source}" "${optimization}" >/dev/null
     luna_binaries[${workload}]="${source%.luna}"
 done
 

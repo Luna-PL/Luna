@@ -2,23 +2,26 @@
 
 ## Windows JIT/AOT 与异构计算修复状态
 
-2026-07-22 已完成候选修复，等待 GitHub Windows runner 和真实 ROCm
-设备的外部验证：
+2026-07-22 已完成候选修复；真实 ROCm JIT/AOT 已在外部设备验证，Windows
+部分仍等待 GitHub runner：
 
 1. JIT 使用 ORC `absoluteSymbols` 显式注册实际被 LLVM 模块引用的全部
    Luna `rt_*` 函数，不再依赖可执行文件导出表、`-rdynamic` 或
    `__declspec(dllexport)`。
 2. kernel runtime 入口由 MoonIR `features.kernel` 控制；纯 CPU 和未使用
    kernel 不生成 `rt_gpu_*` 引用，JIT/AOT 的含 kernel 模块使用相同入口检查。
-3. PTX/HSACO 的编译期选择不再初始化 CUDA/HIP；离线或交叉 AOT 无需编译机
-   存在可用 GPU，设备初始化推迟到生成程序执行。
+3. PTX/HSACO 使用显式 `--gpu-target` 选择；`LUNA_GPU_BACKEND` 仅用于生成
+   程序的运行时选择。离线或交叉 AOT 无需编译机存在可用 GPU，设备初始化
+   推迟到生成程序执行。
 4. AOT 链接已从 `std::system()` 字符串命令改为 LLVM
    `ExecuteAndWait` 参数数组，消除 CMD/MSYS2 二次解析引号的问题。
 5. `windows-ci.yml` 已恢复，并单独运行 JIT/AOT parity、显式 runtime symbol、
-   AOT runtime boundary 和 MoonIR cost boundary 后再运行完整非硬件测试。
+   GPU target/runtime split、AOT runtime boundary 和 MoonIR cost boundary 后再
+   运行完整非硬件测试。
 
-本机 Linux 的 simulator、JIT/AOT parity 和离线 AMDGPU ISA 回归已通过。
-Windows CI 和真实 ROCm JIT/AOT 只有在外部执行完成后才能标记为已验证。
+本机 Linux 的 simulator、JIT/AOT parity 和离线 AMDGPU ISA 回归已通过；
+真实 ROCm 的 JIT 与 AOT 均输出 `42` 并正常退出。Windows CI 只有在 GitHub
+runner 执行完成后才能标记为已验证。
 
 ## 待确定的机制
 

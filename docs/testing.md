@@ -26,10 +26,12 @@ ctest --test-dir build --output-on-failure
 ROCm 与 CUDA 的实机测试不包含在默认 CTest 中：默认测试必须在无 GPU 的 CI 主机上运行。ROCm 冒烟测试在具备 AMD GPU 的主机上额外执行：
 
 ```sh
-LUNA_GPU_BACKEND=rocm ./build/luna run examples/heterogeneous.luna
+LUNA_GPU_BACKEND=rocm ./build/luna run examples/heterogeneous.luna \
+  --gpu-target=rocm:gfx1101
 ```
 
-也可在配置阶段启用 `-DLUNA_ENABLE_ROCM_SMOKE=ON`，然后执行
+也可在配置阶段启用 `-DLUNA_ENABLE_ROCM_SMOKE=ON` 并通过
+`-DLUNA_ROCM_SMOKE_ARCH=gfx1101` 指定目标 ISA，然后执行
 `ctest --test-dir build -L rocm --output-on-failure`。该可选测试会分别验证 ROCm 的 JIT 与 AOT kernel 路径。
 
 CPU 对照基准可通过 `-DLUNA_ENABLE_CPU_BENCHMARK=ON` 启用，详情见 [cpu_benchmarks.md](cpu_benchmarks.md)。

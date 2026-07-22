@@ -38,9 +38,11 @@ int         rt_fragment_plugin_invoke(const char* slot_name,
                                       const LunaFragmentInvocationV1* invocation);
 void        rt_fragment_plugin_report_error_and_abort();
 
-// The backend is selected before compilation through LUNA_GPU_BACKEND:
-// `sim` (the default), `cuda`, or `rocm`. Vendor runtimes are loaded at
-// runtime, so building Luna does not require CUDA or ROCm SDK headers.
+// The execution backend is selected at runtime through LUNA_GPU_BACKEND:
+// `sim` (the default), `cuda`, or `rocm`. Device code-object targets are
+// selected separately with the compiler's --gpu-target option. Vendor
+// runtimes are loaded dynamically, so building Luna does not require CUDA or
+// ROCm SDK headers.
 // Set LUNA_GPU_PROFILE=1 to emit accumulated CUDA/ROCm device-event kernel
 // time as `Luna GPU profile: kernel_ms=<value>` when the process exits.
 int         rt_gpu_initialize();
@@ -53,12 +55,6 @@ void        rt_gpu_report_initialization_error();
 void        rt_gpu_report_operation_error_and_abort();
 int         rt_gpu_backend_is_cuda();
 int         rt_gpu_backend_is_rocm();
-// Enables offline PTX validation with LUNA_GPU_EMIT_PTX=1 while execution
-// remains on the simulator. This is useful on build machines without a GPU.
-// Compile-time code-object selection only. These functions inspect the target
-// environment without initializing CUDA/HIP or requiring a physical device.
-int         rt_gpu_should_emit_ptx();
-int         rt_gpu_should_emit_amdgpu();
 
 // Device memory and host/device scalar transfer. In the simulator a device
 // buffer is host-backed; CUDA and ROCm backends keep an opaque device pointer.

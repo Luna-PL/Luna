@@ -58,9 +58,11 @@ static void printUsage() {
 
 Usage:
   luna --version            Print the compiler version
-  luna run    <file-or-package> [-O0|-O2|-O3] [--link <shared-library>]  JIT-compile and execute
+  luna run    <file-or-package> [-O0|-O2|-O3] [--link <shared-library>]
+                   [--gpu-target <target[,target...]>]  JIT-compile and execute
   luna build  <file-or-package> [-O0|-O2|-O3] [--link <library-or-name>]
                    [--runtime-lib <path>] [--cc <compiler>]
+                   [--gpu-target <target[,target...]>]
                    [--reserve-kernel-runtime] [--emit-moonir <path>]
                    [--moon-cost-report]  AOT-compile to executable
   luna repl                  Interactive REPL (JIT)
@@ -78,7 +80,8 @@ Features:
   • Ownership system (move, borrow, auto-free)
   • Linear values and strict shared/mutable borrow checking (linear, borrow mut, &mut)
   • Heterogeneous compute surface (kernel fn, device_buffer<T>, launch, await)
-  • GPU backends via LUNA_GPU_BACKEND=sim|cuda|rocm (default: sim)
+  • GPU code targets via --gpu-target=sim|cuda[:sm_*]|rocm[:gfx*]
+  • Runtime backend via LUNA_GPU_BACKEND=sim|cuda|rocm (default: sim)
 
 Examples: see examples/*.luna
 )";
@@ -116,6 +119,74 @@ static bool isLibraryPath(const std::string& value) {
            value.find('\\') != std::string::npos ||
            endsWith(".a") || endsWith(".so") || endsWith(".dylib") ||
            endsWith(".dll") || endsWith(".lib");
+}
+
+static bool parseGpuTargets(const std::string& specification,
+                            LunaGpuTargetConfig& targets,
+                            std::string& error) {
+    if (specification.empty()) {
+        error = "GPU target list must not be empty";
+        return false;
+    }
+    size_t start = 0;
+    while (start <= specification.size()) {
+        const size_t comma = specification.find(',', start);
+        const std::string item = specification.substr(
+            start, comma == std::string::npos ? std::string::npos : comma - start);
+        if (item.empty()) {
+            error = "GPU target list contains an empty target";
+            return false;
+        }
+        const size_t colon = item.find(':');
+        const std::string backend = item.substr(0, colon);
+        const std::string architecture = colon == std::string::npos
+            ? "" : item.substr(colon + 1);
+        if (backend == "sim") {
+            if (colon != std::string::npos) {
+                error = "sim GPU target does not accept an architecture";
+                return false;
+            }
+        } else if (backend == "cuda") {
+            const std::string selected = architecture.empty() ? "sm_52" : architecture;
+            if (colon != std::string::npos && architecture.empty()) {
+                error = "CUDA GPU target requires an architecture after ':'";
+                return false;
+            }
+            if (selected.rfind("sm_", 0) != 0) {
+                error = "CUDA architecture must use the sm_* spelling";
+                return false;
+            }
+            if (targets.emitPTX && targets.cudaArchitecture != selected) {
+                error = "one artifact cannot contain multiple CUDA architectures yet";
+                return false;
+            }
+            targets.emitPTX = true;
+            targets.cudaArchitecture = selected;
+        } else if (backend == "rocm") {
+            const std::string selected = architecture.empty() ? "gfx1101" : architecture;
+            if (colon != std::string::npos && architecture.empty()) {
+                error = "ROCm GPU target requires an architecture after ':'";
+                return false;
+            }
+            if (selected.rfind("gfx", 0) != 0) {
+                error = "ROCm architecture must use the gfx* spelling";
+                return false;
+            }
+            if (targets.emitHSACO && targets.rocmArchitecture != selected) {
+                error = "one artifact cannot contain multiple ROCm architectures yet";
+                return false;
+            }
+            targets.emitHSACO = true;
+            targets.rocmArchitecture = selected;
+        } else {
+            error = "unknown GPU target '" + backend +
+                "'; expected sim, cuda[:sm_*], or rocm[:gfx*]";
+            return false;
+        }
+        if (comma == std::string::npos) break;
+        start = comma + 1;
+    }
+    return true;
 }
 
 int main(int argc, char* argv[]) {
@@ -225,6 +296,7 @@ int main(int argc, char* argv[]) {
     std::string runtimeLibrary;
     std::string aotCompiler;
     std::string moonIrOutput;
+    LunaGpuTargetConfig gpuTargets;
     bool printMoonCostReport = false;
     bool reserveKernelRuntime = false;
     LunaOptimizationLevel optimizationLevel = LunaOptimizationLevel::O0;
@@ -261,6 +333,18 @@ int main(int argc, char* argv[]) {
             aotCompiler = argv[++i];
         } else if (option.rfind("--cc=", 0) == 0) {
             aotCompiler = option.substr(5);
+        } else if (option == "--gpu-target" && i + 1 < argc) {
+            std::string targetError;
+            if (!parseGpuTargets(argv[++i], gpuTargets, targetError)) {
+                std::cerr << "Invalid --gpu-target: " << targetError << "\n";
+                return 1;
+            }
+        } else if (option.rfind("--gpu-target=", 0) == 0) {
+            std::string targetError;
+            if (!parseGpuTargets(option.substr(13), gpuTargets, targetError)) {
+                std::cerr << "Invalid --gpu-target: " << targetError << "\n";
+                return 1;
+            }
         } else if (option == "--reserve-kernel-runtime") {
             reserveKernelRuntime = true;
         } else if (option == "--moon-cost-report") {
@@ -364,6 +448,7 @@ int main(int argc, char* argv[]) {
     // 8. LLVM lowering consumes MoonIR only.
     CodeGenerator cg(prog->packageName.empty() ? filePath : prog->packageName);
     cg.setOptimizationLevel(optimizationLevel);
+    cg.setGpuTargets(std::move(gpuTargets));
     if (!cg.generate(moonModule.get())) {
         printErrors(cg.errors());
         return 1;

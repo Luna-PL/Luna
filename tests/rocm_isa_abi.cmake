@@ -35,12 +35,12 @@ file(MAKE_DIRECTORY "${dump_dir}")
 
 execute_process(
     COMMAND ${CMAKE_COMMAND} -E env
-        # Selecting the real backend during compilation must remain an offline
-        # operation: no HIP device or driver is required until the program runs.
-        LUNA_GPU_BACKEND=rocm
-        LUNA_AMDGPU_ARCH=gfx1101
+        # Runtime backend selection must not influence compilation. An invalid
+        # execution backend is therefore harmless for this AOT-only step.
+        LUNA_GPU_BACKEND=invalid-backend
         LUNA_GPU_DUMP_HSACO=${dump_dir}
         "${LUNA_EXECUTABLE}" build "${source}" -O3
+        --gpu-target=rocm:gfx1101
     RESULT_VARIABLE build_result
     OUTPUT_VARIABLE build_output
     ERROR_VARIABLE build_error

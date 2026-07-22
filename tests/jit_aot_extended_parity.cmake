@@ -4,9 +4,17 @@
 if(NOT DEFINED LUNA_EXECUTABLE OR NOT EXISTS "${LUNA_EXECUTABLE}")
     message(FATAL_ERROR "LUNA_EXECUTABLE must point at a built luna binary")
 endif()
-if(NOT DEFINED LUNA_SOURCE_DIR)
-    message(FATAL_ERROR "LUNA_SOURCE_DIR must point at the source tree")
+if(NOT DEFINED LUNA_SOURCE_DIR OR NOT DEFINED LUNA_BINARY_DIR)
+    message(FATAL_ERROR "LUNA_SOURCE_DIR and LUNA_BINARY_DIR are required")
 endif()
+
+set(work_dir "${LUNA_BINARY_DIR}/jit-aot-extended-parity")
+file(REMOVE_RECURSE "${work_dir}")
+file(MAKE_DIRECTORY "${work_dir}")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/exported_package"
+     DESTINATION "${work_dir}")
+file(COPY "${LUNA_SOURCE_DIR}/examples/heterogeneous.luna"
+     DESTINATION "${work_dir}")
 
 set(LUNA_EXE_SUFFIX "")
 if(WIN32)
@@ -60,16 +68,17 @@ function(check_parity name input_path ir_path executable_path)
     endif()
 endfunction()
 
-set(package_dir "${LUNA_SOURCE_DIR}/tests/fixtures/packages/exported_package")
+set(package_dir "${work_dir}/exported_package")
 check_parity(
     "multi-file package"
     "${package_dir}"
     "${package_dir}/exported_package.ll"
     "${package_dir}/exported_package${LUNA_EXE_SUFFIX}")
 
-set(heterogeneous_source "${LUNA_SOURCE_DIR}/examples/heterogeneous.luna")
+set(heterogeneous_source "${work_dir}/heterogeneous.luna")
 check_parity(
     "heterogeneous simulator"
     "${heterogeneous_source}"
     "${heterogeneous_source}.ll"
-    "${LUNA_SOURCE_DIR}/examples/heterogeneous${LUNA_EXE_SUFFIX}")
+    "${work_dir}/heterogeneous${LUNA_EXE_SUFFIX}")
+file(REMOVE_RECURSE "${work_dir}")

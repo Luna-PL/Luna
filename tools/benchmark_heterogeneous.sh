@@ -8,6 +8,7 @@ set -euo pipefail
 
 driver="${LUNA_EXECUTABLE:-./build/luna}"
 backend="${LUNA_GPU_BACKEND:-sim}"
+gpu_target="${LUNA_GPU_TARGET:-sim}"
 source="${LUNA_BENCH_SOURCE:-examples/heterogeneous.luna}"
 iterations="${LUNA_BENCH_ITERATIONS:-10}"
 
@@ -54,12 +55,14 @@ run_repeated() {
 echo "Luna heterogeneous benchmark"
 echo "  source:     $source"
 echo "  backend:    $backend"
+echo "  target:     $gpu_target"
 echo "  iterations: $iterations"
 
-run_repeated "JIT compile + execute (-O2)" "$driver" run "$source" -O2
+run_repeated "JIT compile + execute (-O2)" "$driver" run "$source" -O2 \
+    "--gpu-target=$gpu_target"
 
 build_start="$(now_ns)"
-env LUNA_GPU_BACKEND="$backend" "$driver" build "$source" -O2 >/dev/null
+"$driver" build "$source" -O2 "--gpu-target=$gpu_target" >/dev/null
 build_end="$(now_ns)"
 printf '%-28s total=%8sms\n' "AOT build (-O2)" "$(elapsed_ms "$build_start" "$build_end")"
 

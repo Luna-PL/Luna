@@ -43,7 +43,7 @@ jobs:
           export PATH="/ucrt64/bin:$PATH"
           export LUNA_CXX=/ucrt64/bin/clang++.exe
           ctest --test-dir build \
-            -R 'jit-aot|jit-runtime-symbols|aot-runtime-boundary|moon-cost-boundaries' \
+            -R 'jit-aot|jit-runtime-symbols|gpu-target-split|aot-runtime-boundary|moon-cost-boundaries' \
             --output-on-failure
 
       - name: Stable core regression suite

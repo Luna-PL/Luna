@@ -14,10 +14,21 @@
 #include <llvm/Support/TargetSelect.h>
 #include <array>
 #include <string>
+#include <utility>
 #include <vector>
 #include <unordered_map>
 
 enum class LunaOptimizationLevel { O0, O2, O3 };
+
+// Device code-object targets are compiler inputs. Runtime backend selection is
+// deliberately separate and remains owned by LUNA_GPU_BACKEND in Runtime.cpp.
+// The host simulator form is always available for every reachable kernel.
+struct LunaGpuTargetConfig {
+    bool emitPTX = false;
+    std::string cudaArchitecture = "sm_52";
+    bool emitHSACO = false;
+    std::string rocmArchitecture = "gfx1101";
+};
 
 class CodeGenerator {
 public:
@@ -26,6 +37,7 @@ public:
 
     bool generate(moon::Module* module);
     void setOptimizationLevel(LunaOptimizationLevel level) { mOptimizationLevel = level; }
+    void setGpuTargets(LunaGpuTargetConfig targets) { mGpuTargets = std::move(targets); }
 
     // JIT: compile and run, returning main()'s exit code
     int jitRun();
@@ -113,6 +125,7 @@ private:
     // dynamic fragments can opt in to the standard LLVM speed pipelines once
     // their behavior is covered by parity tests.
     LunaOptimizationLevel mOptimizationLevel = LunaOptimizationLevel::O0;
+    LunaGpuTargetConfig mGpuTargets;
     bool mHasRtAlloc = false;
     bool mHasRtFree = false;
     bool mHasPrintf = false;
