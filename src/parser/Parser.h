@@ -17,6 +17,10 @@ public:
 private:
     std::unique_ptr<Decl> parseDeclaration();
     bool parsePackageHeader(Program* program);
+    bool parseModuleHeader(Program* program);
+    bool parseUsingHeader(Program* program);
+    bool parsePackageId(std::string& result);
+    bool parseModulePath(std::string& result);
     std::unique_ptr<FunctionDecl> parseFunctionDecl(bool isTraitMethod = false,
                                                     bool isExtern = false,
                                                     std::string abi = "",

@@ -27,6 +27,7 @@ foreach(forbidden IN ITEMS
         "rt_dynamic_fragment_matches"
         "continuation.frame"
         "fragment.resume"
+        "@rt_alloc"
         "@rt_malloc")
     string(FIND "${lowered_ir}" "${forbidden}" found)
     if(NOT found EQUAL -1)

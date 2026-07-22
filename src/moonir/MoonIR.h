@@ -390,6 +390,7 @@ struct Decl : Node {
     std::string familyId;
     std::string name;
     std::string generatedSymbolName;
+    std::string modulePath;
     bool isExported = false;
     Retention retention = Retention::CompileTime;
     std::vector<MetadataInstance> metadata;
@@ -489,6 +490,12 @@ struct Module {
     uint32_t formatMajor = FormatMajor;
     uint32_t formatMinor = FormatMinor;
     std::string name;
+    struct PackageUse {
+        std::string packageId;
+        std::string alias;
+    };
+    std::vector<std::string> sourceModules;
+    std::vector<PackageUse> packageUses;
     bool isPackage = false;
     std::vector<std::string> sourceFiles;
     FeatureFlags features;

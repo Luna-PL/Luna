@@ -1,0 +1,6 @@
+package org.luna.std;
+module io;
+using org.luna.core as core;
+
+// std::io is reserved here as a real module. print/scan are added only after
+// their formatting traits and Runtime ABI error model have been agreed.

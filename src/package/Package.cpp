@@ -27,15 +27,15 @@ std::vector<PackageExport> PackageLoader::exports(const Program* program) {
     for (const auto& declaration : program->declarations) {
         if (!declaration->isExported) continue;
         if (auto* function = dynamic_cast<FunctionDecl*>(declaration.get()))
-            result.push_back({publicDeclarationName(function, function->name), "function"});
+            result.push_back({publicDeclarationName(function, function->name), "function", function->modulePath});
         else if (auto* fragment = dynamic_cast<FragmentDecl*>(declaration.get()))
-            result.push_back({publicDeclarationName(fragment, fragment->name), "fragment"});
+            result.push_back({publicDeclarationName(fragment, fragment->name), "fragment", fragment->modulePath});
         else if (auto* structure = dynamic_cast<StructDecl*>(declaration.get()))
-            result.push_back({publicDeclarationName(structure, structure->name), "struct"});
+            result.push_back({publicDeclarationName(structure, structure->name), "struct", structure->modulePath});
         else if (auto* enumeration = dynamic_cast<EnumDecl*>(declaration.get()))
-            result.push_back({publicDeclarationName(enumeration, enumeration->name), "enum"});
+            result.push_back({publicDeclarationName(enumeration, enumeration->name), "enum", enumeration->modulePath});
         else if (auto* trait = dynamic_cast<TraitDecl*>(declaration.get()))
-            result.push_back({publicDeclarationName(trait, trait->name), "trait"});
+            result.push_back({publicDeclarationName(trait, trait->name), "trait", trait->modulePath});
     }
     return result;
 }

@@ -6,6 +6,7 @@
 #include "../parser/AST.h"
 #include "../sema/SymbolTable.h"
 
+#include <algorithm>
 #include <sstream>
 
 namespace moon {
@@ -51,6 +52,9 @@ std::unique_ptr<Module> LunaLowerer::lower(const Program& program,
     module->name = program.packageName.empty() ? "main" : program.packageName;
     module->isPackage = program.isPackage;
     module->sourceFiles = program.sourceFiles;
+    for (const auto& use : program.packageUses)
+        module->packageUses.push_back({use.packageId, use.alias});
+    module->sourceModules = program.sourceModules;
     module->features.kernelRuntimeReserved = reserveKernelRuntime;
 
     for (const auto& declaration : program.declarations) {
@@ -737,6 +741,7 @@ Retention LunaLowerer::lowerRetention(RetentionKind retention) const {
 
 void LunaLowerer::lowerCommonDeclaration(const ::Decl* source,
                                          moon::Decl& target) {
+    target.modulePath = source->modulePath;
     target.retention = lowerRetention(source->retention);
     for (const auto& attachment : source->metadata) {
         MetadataInstance instance;

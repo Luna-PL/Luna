@@ -59,6 +59,7 @@ static void printUsage() {
 
 Usage:
   luna --version            Print the compiler version
+  luna check  <file-or-package> [--emit-moonir <path>]  Verify through MoonIR
   luna run    <file-or-package> [-O0|-O2|-O3] [--link <shared-library>]
                    [--gpu-target <target[,target...]>]  JIT-compile and execute
   luna build  <file-or-package> [-O0|-O2|-O3] [--link <library-or-name>]
@@ -76,7 +77,7 @@ Features:
   • Trait constraints (fn sum<T: Addable>(a: T, b: T) -> T)
   • Where clauses (where T: Clone)
   • Algebraic data types (struct Point { x: i32; }, enum Option<T> { ... })
-  • Packages (a directory of .luna files; use `export` for public declarations)
+  • Reverse-DNS packages with module/submodule source identities and explicit exports
   • Nominal ADT binding with structural fields and layouts
   • Ownership system (move, borrow, auto-free)
   • Linear values and strict shared/mutable borrow checking (linear, borrow mut, &mut)
@@ -290,6 +291,12 @@ int main(int argc, char* argv[]) {
         return 0;
     }
 
+    if (cmd != "run" && cmd != "build" && cmd != "check") {
+        std::cerr << "Unknown command: " << cmd << "\n";
+        printUsage();
+        return 1;
+    }
+
     if (argc < 3) {
         std::cerr << "Error: Missing file argument\n";
         printUsage();
@@ -449,6 +456,11 @@ int main(int argc, char* argv[]) {
         moonPrinter.print(*moonModule, output);
     }
     if (printMoonCostReport) moonPrinter.printCostReport(*moonModule, std::cout);
+
+    // Library packages deliberately have no main function. `check` validates
+    // the complete frontend -> MoonIR boundary without manufacturing an
+    // executable entry point or paying LLVM code-generation costs.
+    if (cmd == "check") return 0;
 
     // 8. LLVM lowering consumes MoonIR only.
     CodeGenerator cg(prog->packageName.empty() ? filePath : prog->packageName);

@@ -1,0 +1,11 @@
+[[package]]
+id = "org.luna.fixture.core"
+version = "1.0.0"
+source = "workspace:core"
+hash = "fixture-core-v1"
+
+[[package]]
+id = "org.luna.fixture.app"
+version = "1.0.0"
+source = "workspace:app"
+hash = "fixture-app-v1"

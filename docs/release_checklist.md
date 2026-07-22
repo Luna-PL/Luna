@@ -1,15 +1,15 @@
-# Luna 0.1.0-alpha 发布检查清单
+# Luna 0.2.0-alpha 发布检查清单
 
 ## 已完成
 
-- [x] 版本元数据统一为 `0.1.0-alpha`。
+- [x] 版本元数据统一为 `0.2.0-alpha`。
 - [x] `luna --version` 可直接报告版本。
 - [x] Linux CI 配置存在，覆盖稳定核心构建与 CTest。
-- [ ] macOS 原生 CI 已配置于 `.github/workflows/macos-ci.yml`；待 GitHub runner 首次通过后勾选。跨平台 CMake 路径已移除 Linux/发行版硬编码。
-- [ ] Windows 原生 CI 已配置于 `.github/workflows/windows-ci.yml`；待 GitHub runner 首次通过后勾选。Windows 构建使用 MSYS2 UCRT64，并覆盖 `.exe` AOT 与原生动态库加载路径。
+- [x] macOS 原生 CI 已通过，跨平台 CMake 路径不依赖 Linux/发行版硬编码。
+- [x] Windows 原生 CI 已在 MSYS2 UCRT64 上通过，包含 `.exe` AOT、ORC JIT 和原生动态库加载路径。
 - [x] 非硬件 CTest 回归通过，包含 JIT/AOT、包、FFI、所有权、CPS、优化和外部片段 ABI。
 - [x] 默认关闭的基础 CPU benchmark 已加入，并明确区分 JIT、AOT 构建、AOT 执行和 C++23 执行指标。
-- [x] 安装结果包含驱动、运行时库、插件 ABI 头文件和文档。
+- [x] 安装结果包含驱动、运行时库、Runtime/Plugin ABI 头文件和文档。
 - [x] 已知限制、GPU 前置条件和实验性语义已记录。
 - [x] 构建目录和编译生成物已加入忽略规则。
 - [x] 采用 MIT / Apache-2.0 双许可证，并随安装结果发布许可证文本。

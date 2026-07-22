@@ -1,0 +1,7 @@
+package org.luna.self_using;
+module application;
+using org.luna.self_using as self_package;
+
+fn main() -> i32 {
+    return 0;
+}

@@ -37,6 +37,11 @@ void Printer::print(const Module& module, std::ostream& out) const {
     feature("kernel", module.features.kernel);
     feature("kernel_runtime_reserved", module.features.kernelRuntimeReserved);
     out << "]\n";
+    for (const auto& sourceModule : module.sourceModules)
+        out << "  moon.source_module \""
+            << (sourceModule.empty() ? "<root>" : sourceModule) << "\"\n";
+    for (const auto& use : module.packageUses)
+        out << "  moon.using \"" << use.packageId << "\" as " << use.alias << "\n";
 
     for (const auto& type : module.typeTable) {
         out << "  moon.type @" << type.id.value

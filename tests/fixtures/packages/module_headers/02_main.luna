@@ -1,0 +1,7 @@
+package org.luna.module_headers;
+module application;
+using org.luna.std as std;
+
+fn main() -> i32 {
+    return answer();
+}

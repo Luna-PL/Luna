@@ -1,6 +1,6 @@
 # Return cleanup is control-flow sensitive.  Build a fixture with one nested
 # and one fall-through return, then make sure the generated IR contains one
-# rt_free at each return site rather than a single unreachable cleanup.
+# rt_dealloc at each return site rather than a single unreachable cleanup.
 
 if(NOT DEFINED LUNA_EXECUTABLE OR NOT EXISTS "${LUNA_EXECUTABLE}")
     message(FATAL_ERROR "LUNA_EXECUTABLE must point at a built luna binary")
@@ -36,12 +36,20 @@ if(NOT build_result EQUAL 0 OR NOT EXISTS "${ir_path}")
 endif()
 
 file(READ "${ir_path}" ir)
-string(REGEX MATCHALL "call void @rt_free" cleanup_calls "${ir}")
+string(REGEX MATCHALL "call void @rt_dealloc" cleanup_calls "${ir}")
 list(LENGTH cleanup_calls cleanup_count)
 cleanup_outputs()
 
 if(NOT cleanup_count EQUAL 2)
     message(FATAL_ERROR
-        "return cleanup did not remain path-sensitive. Expected two rt_free calls, "
+        "return cleanup did not remain path-sensitive. Expected two rt_dealloc calls, "
         "found ${cleanup_count}.\nIR:\n${ir}")
+endif()
+
+string(REGEX MATCHALL "call void @rt_dealloc\\(ptr [^,]+, i64 4, i64 4\\)" exact_layout_calls "${ir}")
+list(LENGTH exact_layout_calls exact_layout_count)
+if(NOT exact_layout_count EQUAL 2)
+    message(FATAL_ERROR
+        "return cleanup did not preserve the exact i32 allocation layout. "
+        "Expected two size=4/alignment=4 calls, found ${exact_layout_count}.\nIR:\n${ir}")
 endif()

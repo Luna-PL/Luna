@@ -1,8 +1,12 @@
 #include "Runtime.h"
+#include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cctype>
+#include <cstddef>
 #include <cstring>
 #include <cstdio>
+#include <new>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -14,6 +18,140 @@
 #endif
 
 namespace {
+
+bool isValidAlignment(size_t alignment) {
+    return alignment != 0 && (alignment & (alignment - 1)) == 0;
+}
+
+void* defaultAllocate(void*, size_t size, size_t alignment) {
+    if (!isValidAlignment(alignment)) return nullptr;
+    const size_t actualSize = size == 0 ? 1 : size;
+    if (alignment <= alignof(std::max_align_t)) return std::malloc(actualSize);
+    return ::operator new(actualSize, std::align_val_t(alignment), std::nothrow);
+}
+
+void defaultDeallocate(void*, void* pointer, size_t, size_t alignment) {
+    if (!pointer) return;
+    if (alignment <= alignof(std::max_align_t)) {
+        std::free(pointer);
+        return;
+    }
+    ::operator delete(pointer, std::align_val_t(alignment));
+}
+
+void* defaultReallocate(void* context, void* pointer, size_t oldSize,
+                        size_t newSize, size_t alignment) {
+    if (!isValidAlignment(alignment)) return nullptr;
+    if (!pointer) return defaultAllocate(context, newSize, alignment);
+    if (newSize == 0) {
+        defaultDeallocate(context, pointer, oldSize, alignment);
+        return nullptr;
+    }
+    if (alignment <= alignof(std::max_align_t)) return std::realloc(pointer, newSize);
+    void* replacement = defaultAllocate(context, newSize, alignment);
+    if (!replacement) return nullptr;
+    std::memcpy(replacement, pointer, std::min(oldSize, newSize));
+    defaultDeallocate(context, pointer, oldSize, alignment);
+    return replacement;
+}
+
+int defaultConsoleWrite(void*, uint32_t stream, const char* bytes, size_t byteCount) {
+    if (!bytes && byteCount != 0) return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
+    if (stream != LUNA_CONSOLE_STDOUT && stream != LUNA_CONSOLE_STDERR)
+        return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
+    FILE* output = stream == LUNA_CONSOLE_STDERR ? stderr : stdout;
+    return std::fwrite(bytes, 1, byteCount, output) == byteCount
+        ? LUNA_RUNTIME_STATUS_OK : LUNA_RUNTIME_STATUS_UNSUPPORTED_OPERATION;
+}
+
+int defaultConsoleFlush(void*, uint32_t stream) {
+    if (stream != LUNA_CONSOLE_STDOUT && stream != LUNA_CONSOLE_STDERR)
+        return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
+    FILE* output = stream == LUNA_CONSOLE_STDERR ? stderr : stdout;
+    return std::fflush(output) == 0
+        ? LUNA_RUNTIME_STATUS_OK : LUNA_RUNTIME_STATUS_UNSUPPORTED_OPERATION;
+}
+
+const LunaAllocatorV1 defaultAllocator{
+    LUNA_RUNTIME_ABI_V1,
+    sizeof(LunaAllocatorV1),
+    nullptr,
+    defaultAllocate,
+    defaultReallocate,
+    defaultDeallocate,
+};
+
+const LunaConsoleV1 defaultConsole{
+    LUNA_RUNTIME_ABI_V1,
+    sizeof(LunaConsoleV1),
+    nullptr,
+    defaultConsoleWrite,
+    defaultConsoleFlush,
+};
+
+const LunaHostServicesV1 defaultHostServices{
+    LUNA_HOST_SERVICES_MAGIC_V1,
+    LUNA_RUNTIME_ABI_V1,
+    sizeof(LunaHostServicesV1),
+    0,
+    LUNA_HOST_CAP_ALLOCATOR | LUNA_HOST_CAP_CONSOLE,
+    &defaultAllocator,
+    &defaultConsole,
+    nullptr,
+};
+
+std::atomic<const LunaHostServicesV1*> installedHostServices{&defaultHostServices};
+// 0: configurable, -1: an installation is in progress, 1: services are live.
+std::atomic<int> hostServicesPhase{0};
+
+bool validAllocator(const LunaAllocatorV1* allocator) {
+    return allocator && allocator->abi_version == LUNA_RUNTIME_ABI_V1 &&
+        allocator->struct_size >= sizeof(LunaAllocatorV1) &&
+        allocator->allocate && allocator->reallocate && allocator->deallocate;
+}
+
+bool validConsole(const LunaConsoleV1* console) {
+    return console && console->abi_version == LUNA_RUNTIME_ABI_V1 &&
+        console->struct_size >= sizeof(LunaConsoleV1) &&
+        console->write && console->flush;
+}
+
+bool validExecutableMemory(const LunaExecutableMemoryV1* memory) {
+    return memory && memory->abi_version == LUNA_RUNTIME_ABI_V1 &&
+        memory->struct_size >= sizeof(LunaExecutableMemoryV1) &&
+        memory->reserve && memory->seal && memory->release;
+}
+
+bool validHostServices(const LunaHostServicesV1* services) {
+    if (!services || services->magic != LUNA_HOST_SERVICES_MAGIC_V1 ||
+        services->abi_version != LUNA_RUNTIME_ABI_V1 ||
+        services->struct_size < sizeof(LunaHostServicesV1) ||
+        services->reserved_zero != 0 ||
+        (services->capabilities & LUNA_HOST_CAP_ALLOCATOR) == 0 ||
+        !validAllocator(services->allocator))
+        return false;
+    if ((services->capabilities & LUNA_HOST_CAP_CONSOLE) != 0 &&
+        !validConsole(services->console))
+        return false;
+    if ((services->capabilities & LUNA_HOST_CAP_EXECUTABLE_MEMORY) != 0 &&
+        !validExecutableMemory(services->executable_memory))
+        return false;
+    return true;
+}
+
+const LunaHostServicesV1* activateHostServices() {
+    for (;;) {
+        int phase = hostServicesPhase.load(std::memory_order_acquire);
+        if (phase == 1)
+            return installedHostServices.load(std::memory_order_acquire);
+        if (phase == -1) continue;
+        int expected = 0;
+        if (hostServicesPhase.compare_exchange_weak(
+                expected, 1, std::memory_order_acq_rel,
+                std::memory_order_acquire))
+            return installedHostServices.load(std::memory_order_acquire);
+    }
+}
 
 // Keep native dynamic loading behind one adapter. CUDA/HIP headers are not a
 // build dependency, and the simulator remains usable without vendor SDKs.
@@ -424,20 +562,76 @@ void* asOpaquePointer(CUdeviceptr buffer) {
 
 } // namespace
 
+int rt_install_host_services_v1(const LunaHostServicesV1* services) {
+    if (!services) return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
+    if (services->abi_version != LUNA_RUNTIME_ABI_V1 ||
+        services->magic != LUNA_HOST_SERVICES_MAGIC_V1)
+        return LUNA_RUNTIME_STATUS_UNSUPPORTED_ABI;
+    if (!validHostServices(services)) return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
+    int expected = 0;
+    if (!hostServicesPhase.compare_exchange_strong(
+            expected, -1, std::memory_order_acq_rel,
+            std::memory_order_acquire))
+        return LUNA_RUNTIME_STATUS_ALREADY_ACTIVE;
+    installedHostServices.store(services, std::memory_order_release);
+    hostServicesPhase.store(0, std::memory_order_release);
+    return LUNA_RUNTIME_STATUS_OK;
+}
+
+const LunaHostServicesV1* rt_host_services_v1() {
+    return activateHostServices();
+}
+
+void* rt_alloc(size_t size, size_t alignment) {
+    if (!isValidAlignment(alignment)) return nullptr;
+    const auto* services = activateHostServices();
+    return services->allocator->allocate(
+        services->allocator->context, size, alignment);
+}
+
+void* rt_realloc(void* pointer, size_t old_size, size_t new_size,
+                 size_t alignment) {
+    if (!isValidAlignment(alignment)) return nullptr;
+    const auto* services = activateHostServices();
+    const auto* allocator = services->allocator;
+    if (!allocator->reallocate) return nullptr;
+    return allocator->reallocate(
+        allocator->context, pointer, old_size, new_size, alignment);
+}
+
+void rt_dealloc(void* pointer, size_t size, size_t alignment) {
+    if (!pointer || !isValidAlignment(alignment)) return;
+    const auto* services = activateHostServices();
+    services->allocator->deallocate(
+        services->allocator->context, pointer, size, alignment);
+}
+
 void* rt_malloc(size_t size) {
-    return std::malloc(size);
+    return rt_alloc(size, LUNA_DEFAULT_HOST_ALIGNMENT);
 }
 
 void rt_free(void* ptr) {
-    std::free(ptr);
+    rt_dealloc(ptr, 0, LUNA_DEFAULT_HOST_ALIGNMENT);
 }
 
 void rt_print_i32(int32_t value) {
-    std::printf("%d\n", value);
+    char buffer[32];
+    const int length = std::snprintf(buffer, sizeof(buffer), "%d\n", value);
+    if (length <= 0) return;
+    const auto* services = activateHostServices();
+    if ((services->capabilities & LUNA_HOST_CAP_CONSOLE) == 0) return;
+    const LunaConsoleV1* console = services->console;
+    console->write(console->context, LUNA_CONSOLE_STDOUT, buffer,
+                   static_cast<size_t>(length));
 }
 
 void rt_print_cstr(const char* value) {
-    std::printf("%s\n", value ? value : "");
+    const char* text = value ? value : "";
+    const auto* services = activateHostServices();
+    if ((services->capabilities & LUNA_HOST_CAP_CONSOLE) == 0) return;
+    const LunaConsoleV1* console = services->console;
+    console->write(console->context, LUNA_CONSOLE_STDOUT, text, std::strlen(text));
+    console->write(console->context, LUNA_CONSOLE_STDOUT, "\n", 1);
 }
 
 int32_t rt_array_index_or_abort(int32_t index, size_t length) {

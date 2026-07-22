@@ -2,8 +2,8 @@
 
 ## Windows JIT/AOT 与异构计算修复状态
 
-2026-07-22 已完成候选修复；真实 ROCm JIT/AOT 已在外部设备验证，Windows
-部分仍等待 GitHub runner：
+2026-07-22 修复已在 Linux、macOS 与 Windows GitHub runner 通过；真实
+ROCm JIT/AOT 也已在外部设备验证：
 
 1. JIT 使用 ORC `absoluteSymbols` 显式注册实际被 LLVM 模块引用的全部
    Luna `rt_*` 函数，不再依赖可执行文件导出表、`-rdynamic` 或
@@ -20,13 +20,14 @@
    运行完整非硬件测试。
 
 本机 Linux 的 simulator、JIT/AOT parity 和离线 AMDGPU ISA 回归已通过；
-真实 ROCm 的 JIT 与 AOT 均输出 `42` 并正常退出。Windows CI 只有在 GitHub
-runner 执行完成后才能标记为已验证。
+真实 ROCm 的 JIT 与 AOT 均输出 `42` 并正常退出。
 
 ## 待确定的机制
 
-1. 既然我们使用结构化类型，那么函数自然应该允许接受结构化类型，而不一定是名义类型，但是对于结构化类型，label versioning机制也许需要变动，考虑类似using语法强化名义类型的类型安全
-2. 标签需要更精确的机制，比如可以用一些运算符确定精确版本和最大兼容版本等，可能需要引入require语句
-3. 确定versioning机制的发生时间。我倾向于按需支付性能成本地支持动态选取，其他时候则确定静态化选择，可能需要引入dynmaic修饰
-4. 语言原生级别并发的设计问题
-5. 异构计算的基座设计问题
+1. external fragment plugin v2 如何接收 `LunaRuntimeModuleContextV1`，并在不暴露
+   栈 continuation 的前提下支持 `context/resume()`。
+2. 将 C FFI 的 `linear raw<T>` allocator/deallocator 约定升级为可验证的
+   foreign release capability，并定义 C struct/union 布局导入。
+3. Moon 容器验证、加载授权与 hotspot/JIT 的 W^X 可执行内存策略。
+4. CUDA 硬件 CI 和更多 ROCm 架构的长时间验证。
+5. 语言原生并发仍延后，不纳入当前 Runtime ABI/ownership 收敛工作。

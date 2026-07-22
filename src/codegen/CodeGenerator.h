@@ -74,6 +74,8 @@ private:
     void emitGpuOperationFailureCheck(llvm::Value* operationSucceeded,
                                       llvm::Function* func);
     llvm::Value* coerceCallArgument(llvm::Value* value, llvm::Type* target);
+    TypePtr allocationTypeForExpr(moon::Expr* expr) const;
+    void emitLunaDeallocation(llvm::Value* pointer, const TypePtr& type);
     bool emitKernelPTX(moon::FunctionDecl* kernel);
     bool emitKernelHSACO(moon::FunctionDecl* kernel);
 
@@ -125,6 +127,4 @@ private:
     // their behavior is covered by parity tests.
     LunaOptimizationLevel mOptimizationLevel = LunaOptimizationLevel::O0;
     LunaGpuTargetConfig mGpuTargets;
-    bool mHasRtAlloc = false;
-    bool mHasRtFree = false;
 };

@@ -8,7 +8,7 @@ enum class TokenKind {
     Fn, Let, Const, Constexpr, New, Move, Borrow, Affine, Linear, Mut, Free, Extern, Auto, Return,
     Fragment, Interceptor, Context, Many, Slot, Resume, Abort, Apply, Default,
     Meta, Select, With, Runtime, Dynamic, Nominal, Kernel, Launch, Await,
-    Trait, Impl, Where, Struct, Enum, Package, Export, If, Else, While, For,
+    Trait, Impl, Where, Struct, Enum, Package, Module, Using, As, Export, If, Else, While, For,
     True, False, Self,
     // Built-in types (parsed as keywords for type annotations)
     TyI32, TyI64, TyF32, TyF64, TyBool, TyString,
@@ -60,7 +60,8 @@ const std::unordered_map<std::string, TokenKind> KEYWORDS = {
     {"return", TokenKind::Return}, {"trait",  TokenKind::Trait},
     {"impl",   TokenKind::Impl},   {"where",  TokenKind::Where},
     {"struct", TokenKind::Struct}, {"enum",   TokenKind::Enum},
-    {"package", TokenKind::Package}, {"export", TokenKind::Export},
+    {"package", TokenKind::Package}, {"module", TokenKind::Module},
+    {"using", TokenKind::Using}, {"as", TokenKind::As}, {"export", TokenKind::Export},
     {"if",     TokenKind::If},
     {"else",   TokenKind::Else},   {"while",  TokenKind::While},
     {"for",    TokenKind::For},    {"true",   TokenKind::True},
@@ -110,6 +111,9 @@ inline std::string tokenKindName(TokenKind k) {
         case TokenKind::Struct: return "struct";
         case TokenKind::Enum: return "enum";
         case TokenKind::Package: return "package";
+        case TokenKind::Module: return "module";
+        case TokenKind::Using: return "using";
+        case TokenKind::As: return "as";
         case TokenKind::Export: return "export";
         case TokenKind::If: return "if";
         case TokenKind::Else: return "else";

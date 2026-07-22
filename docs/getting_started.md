@@ -34,7 +34,9 @@ cmake --install build --prefix "$PWD/.local/luna"
 sudo cmake --install build --prefix /opt/luna
 ```
 
-安装结果包含 `bin/luna`、`lib/libruntime.a`、许可证和文档。已安装的驱动在 AOT 构建时应显式指定运行时库和链接器，避免依赖原始构建目录：
+安装结果包含 `bin/luna`、`lib/libruntime.a`、
+`include/luna/runtime/{RuntimeABI,FragmentPluginABI}.h`、许可证和文档。
+已安装的驱动在 AOT 构建时应显式指定运行时库和链接器，避免依赖原始构建目录：
 
 ```sh
 /opt/luna/bin/luna build app.luna \

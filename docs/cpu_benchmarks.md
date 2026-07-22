@@ -43,4 +43,4 @@ LUNA_CPU_ITERATIONS=10 \
 | array | 8.828 ms | 8.815 ms | 1.00x |
 | allocation | 5.344 ms | 3.444 ms | 1.55x |
 
-这组结果显示，最终 AOT 优化级别修正后，标量循环、分支、调用和安全数组都已接近 C++23。`allocation` 仍然是有意保留的真实 `rt_malloc/rt_free` 成本；C++23 `-O3` 可证明本例的 `new/delete` 没有可观察结果并将其消除，因此这一项不是严格等价的分配器对照，应单独解读。GPU 性能基准仍使用独立的 ROCm 对照，不与本表混合。
+这组结果显示，最终 AOT 优化级别修正后，标量循环、分支、调用和安全数组都已接近 C++23。`allocation` 仍然是有意保留的真实 `rt_alloc/rt_dealloc` Runtime ABI 成本；C++23 `-O3` 可证明本例的 `new/delete` 没有可观察结果并将其消除，因此这一项不是严格等价的分配器对照，应单独解读。GPU 性能基准仍使用独立的 ROCm 对照，不与本表混合。

@@ -136,4 +136,7 @@ Alpha 阶段优先保证正确性与可观测性；性能工作按以下顺序�
 
 ## 近期下一步
 
-四周 Alpha 计划的工程任务已完成：稳定核心已有 Linux CI、18 项非硬件 CTest 回归和已知限制文档。正式 `0.1.0-alpha` 仍保持 `Unreleased`，下一步是按安装文档在全新环境验证构建/运行，并随后封存版本；ROCm/CUDA 的性能与硬件兼容性记录继续累积。
+当前 `0.2.0-alpha` 稳定核心已在 Linux、macOS 和 Windows UCRT64 CI 上通过，
+默认配置有 23 项非硬件 CTest 回归。语言内部分配/输出已收敛到 Runtime ABI v1，
+下一步是将用户 C FFI 的 owning raw pointer 逐步升级为带释放 capability 的类型化
+adapter，同时继续累积 ROCm/CUDA 性能与硬件兼容性记录。

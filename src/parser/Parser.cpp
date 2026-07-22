@@ -10,9 +10,12 @@ std::unique_ptr<Program> Parser::parse() {
         parsePackageHeader(program.get());
         program->isPackage = true;
     }
+    if (check(TokenKind::Module)) parseModuleHeader(program.get());
+    while (check(TokenKind::Using)) parseUsingHeader(program.get());
     while (!isAtEnd()) {
         const int declarationStart = mPos;
         if (auto decl = parseDeclaration()) {
+            decl->modulePath = program->modulePath;
             program->declarations.push_back(std::move(decl));
         } else {
             // A malformed top-level declaration must not hide every later
@@ -27,13 +30,76 @@ std::unique_ptr<Program> Parser::parse() {
 
 bool Parser::parsePackageHeader(Program* program) {
     consume(TokenKind::Package, "Expected 'package'");
-    if (!match(TokenKind::Identifier)) {
+    if (!parsePackageId(program->packageName)) {
         addError("expected a package name, found " + diagnostic::quotedToken(peek().lexeme),
-                 "write `package my_package;`");
+                 "write `package com.example.my_package;`");
         return false;
     }
-    program->packageName = mTokens[mPos - 1].lexeme;
     consume(TokenKind::SemiColon, "Expected ';' after package name");
+    return true;
+}
+
+bool Parser::parseModuleHeader(Program* program) {
+    const Token start = consume(TokenKind::Module, "Expected 'module'");
+    if (!parseModulePath(program->modulePath)) {
+        addError("expected a module path, found " + diagnostic::quotedToken(peek().lexeme),
+                 "write `module io;` or `module io::format;`");
+        return false;
+    }
+    consume(TokenKind::SemiColon, "Expected ';' after module path");
+    (void)start;
+    return true;
+}
+
+bool Parser::parseUsingHeader(Program* program) {
+    const Token start = consume(TokenKind::Using, "Expected 'using'");
+    Program::PackageUse use;
+    use.sourcePath = mSourceName;
+    use.line = start.line;
+    use.col = start.col;
+    if (!parsePackageId(use.packageId)) {
+        addError("expected a Package ID after `using`",
+                 "write `using org.example.library as library;`");
+        return false;
+    }
+    if (!match(TokenKind::As)) {
+        addError("package using declaration requires a local alias",
+                 "append `as name`, for example `using org.luna.std as std;`");
+        return false;
+    }
+    if (!match(TokenKind::Identifier)) {
+        addError("expected an identifier after `as` in using declaration");
+        return false;
+    }
+    use.alias = mTokens[mPos - 1].lexeme;
+    consume(TokenKind::SemiColon, "Expected ';' after using declaration");
+    program->packageUses.push_back(std::move(use));
+    return true;
+}
+
+bool Parser::parsePackageId(std::string& result) {
+    if (!match(TokenKind::Identifier)) return false;
+    result = mTokens[mPos - 1].lexeme;
+    while (match(TokenKind::Dot)) {
+        if (!match(TokenKind::Identifier)) {
+            addError("expected a Package ID component after '.'");
+            return false;
+        }
+        result += "." + mTokens[mPos - 1].lexeme;
+    }
+    return true;
+}
+
+bool Parser::parseModulePath(std::string& result) {
+    if (!match(TokenKind::Identifier)) return false;
+    result = mTokens[mPos - 1].lexeme;
+    while (match(TokenKind::ColonColon)) {
+        if (!match(TokenKind::Identifier)) {
+            addError("expected a module component after '::'");
+            return false;
+        }
+        result += "::" + mTokens[mPos - 1].lexeme;
+    }
     return true;
 }
 
@@ -226,8 +292,7 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(bool isTraitMethod,
                 : luna::ownership::Usage::Copy);
     }
 
-    if (isExtern && check(TokenKind::Identifier) && peek().lexeme == "as") {
-        advance();
+    if (isExtern && match(TokenKind::As)) {
         if (match(TokenKind::StringLiteral)) {
             decl->linkName = mTokens[mPos - 1].lexeme;
         } else {

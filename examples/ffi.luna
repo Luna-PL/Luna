@@ -3,6 +3,9 @@ extern "C" fn puts(message: cstr) -> i32;
 extern "C" fn malloc(size: usize) -> linear raw<u8>;
 extern "C" fn c_free(linear pointer: raw<u8>) as "free";
 
+// `buffer` belongs to the foreign C allocation domain and must be returned to
+// c_free. It must never be passed to Luna `free`/rt_dealloc.
+
 fn main() -> i32 {
     let message: cstr = "hello from C FFI";
     puts(message);

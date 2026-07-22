@@ -1,0 +1,6 @@
+[package]
+id = "org.luna.fixture.core"
+version = "1.0.0"
+sources = ["src"]
+
+[dependencies]

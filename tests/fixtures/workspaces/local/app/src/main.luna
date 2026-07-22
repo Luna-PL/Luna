@@ -1,0 +1,7 @@
+package org.luna.fixture.app;
+module application;
+using org.luna.fixture.core as core;
+
+fn main() -> i32 {
+    return 42;
+}

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Luna VERSION 0.1.0 LANGUAGES C CXX)
+project(Luna VERSION 0.2.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 
@@ -23,6 +23,13 @@ set(LUNA_ROCM_SMOKE_ARCH "gfx1101" CACHE STRING
     "AMDGPU architecture used by the opt-in ROCm smoke test")
 
 add_library(runtime STATIC src/runtime/Runtime.cpp)
+
+add_library(runtime-abi-c-compile OBJECT tests/runtime_abi_c_compile.c)
+target_include_directories(runtime-abi-c-compile PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(runtime-abi-test tests/runtime_abi_test.cpp)
+target_include_directories(runtime-abi-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(runtime-abi-test PRIVATE runtime)
 
 add_executable(runtime-gpu-error-test tests/runtime_gpu_error_test.cpp)
 target_include_directories(runtime-gpu-error-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -107,13 +114,18 @@ install(TARGETS luna runtime
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
-install(FILES src/runtime/FragmentPluginABI.h
+install(FILES src/runtime/FragmentPluginABI.h src/runtime/RuntimeABI.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/luna/runtime)
 install(FILES README.md CHANGELOG.md VERSION LICENSE-MIT LICENSE-APACHE
         DESTINATION ${CMAKE_INSTALL_DOCDIR})
 install(DIRECTORY docs/ DESTINATION ${CMAKE_INSTALL_DOCDIR})
+install(DIRECTORY stdlib/ DESTINATION ${CMAKE_INSTALL_DATADIR}/luna/stdlib)
 
 if(BUILD_TESTING)
+    add_test(
+        NAME luna.runtime-abi-v1
+        COMMAND $<TARGET_FILE:runtime-abi-test>
+    )
     add_test(
         NAME luna.semantic-regressions
         COMMAND ${CMAKE_COMMAND}
@@ -127,6 +139,22 @@ if(BUILD_TESTING)
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/package_export_abi.cmake
+    )
+    add_test(
+        NAME luna.package-module-model
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/package_module_model.cmake
+    )
+    add_test(
+        NAME luna.package-manifest-workspace
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/package_manifest_workspace.cmake
     )
     add_test(
         NAME luna.return-cleanup-abi

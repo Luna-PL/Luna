@@ -1,5 +1,7 @@
 #include "CGHelpers.h"
 
+#include <algorithm>
+
 CGHelpers::CGHelpers(llvm::LLVMContext& ctx) : mCtx(ctx) {}
 
 llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
@@ -80,5 +82,30 @@ uint64_t typeSize(const TypePtr& type) {
         }
         case TypeKind::Enum: return 8; // tagged union (opaque for now)
         default: return 0;
+    }
+}
+
+uint64_t typeAlignment(const TypePtr& type) {
+    if (!type) return 1;
+    switch (type->kind) {
+        case TypeKind::I8:
+        case TypeKind::U8:
+        case TypeKind::Bool: return 1;
+        case TypeKind::I16:
+        case TypeKind::U16: return 2;
+        case TypeKind::I32:
+        case TypeKind::U32:
+        case TypeKind::F32:
+        case TypeKind::Event: return 4;
+        case TypeKind::Array: return typeAlignment(type->inner);
+        case TypeKind::Struct:
+        case TypeKind::Record: {
+            uint64_t alignment = 1;
+            for (const auto& field : type->fields)
+                alignment = std::max(alignment, typeAlignment(field.type));
+            return alignment;
+        }
+        case TypeKind::Unit: return 1;
+        default: return 8;
     }
 }

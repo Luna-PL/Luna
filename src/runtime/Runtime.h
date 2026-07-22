@@ -3,11 +3,28 @@
 #include <cstddef>
 #include <cstdint>
 #include "FragmentPluginABI.h"
+#include "RuntimeABI.h"
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+// Installations are accepted only before the first runtime service is used.
+// The descriptor and every nested service table must remain alive for the
+// process lifetime. Passing nullptr restores nothing and is rejected.
+int rt_install_host_services_v1(const LunaHostServicesV1* services);
+const LunaHostServicesV1* rt_host_services_v1();
+
+// Luna-owned host memory. New generated code always supplies the exact Luna
+// layout; a host allocator may therefore avoid per-allocation headers.
+void* rt_alloc(size_t size, size_t alignment);
+void* rt_realloc(void* pointer, size_t old_size, size_t new_size,
+                 size_t alignment);
+void  rt_dealloc(void* pointer, size_t size, size_t alignment);
+
+// Alpha compatibility bridge for already emitted IR. New compiler output
+// does not use these layout-less entry points. Custom allocators that support
+// old IR must accept size == 0 on deallocation.
 void* rt_malloc(size_t size);
 void  rt_free(void* ptr);
 // Language-level printing uses a stable Luna ABI instead of resolving the

@@ -42,7 +42,7 @@ CPU 对照基准可通过 `-DLUNA_ENABLE_CPU_BENCHMARK=ON` 启用，详情见 [c
 
 `luna.package-export-abi` 是独立的 AOT ABI 测试：它确认 package 中带有 `export` 的函数在 LLVM IR 中为外部符号，而未导出的函数为 `internal`。测试在结束时删除自身生成的 `.ll` 与可执行文件。
 
-`luna.return-cleanup-abi` 是路径敏感释放的 AOT 测试：它确认嵌套分支和落空路径上的每个 `return` 都在自身路径上发射一次 `rt_free`，而不是把清理留在不可达的块末尾。
+`luna.return-cleanup-abi` 是路径敏感释放的 AOT 测试：它确认嵌套分支和落空路径上的每个 `return` 都在自身路径上发射一次携带精确 `size/alignment` 的 `rt_dealloc`，而不是把清理留在不可达的块末尾。
 
 `luna.control-flow-aot` 确认两支均 `return` 的条件语句可生成、链接并运行有效的 AOT LLVM IR；语义回归同时拒绝非 `unit` 函数中未覆盖的返回路径。
 

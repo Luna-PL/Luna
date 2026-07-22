@@ -365,6 +365,9 @@ struct IdentPattern : Pattern {
 
 // ─── Declarations ────────────────────────────────────────────────────
 struct Decl : ASTNode {
+    // Empty denotes the package root module. Module identity is source-level
+    // namespace information and remains separate from the Package ID.
+    std::string modulePath;
     // Package declarations are private by default. An explicit export is the
     // only way a declaration becomes part of the package's public interface.
     bool isExported = false;
@@ -479,7 +482,17 @@ struct MetaDecl : Decl {
 };
 
 struct Program : ASTNode {
+    struct PackageUse : ASTNode {
+        std::string packageId;
+        std::string alias;
+    };
+    // Canonical package identity uses dot-separated reverse-DNS components.
+    // packageName is retained as the field name during the Alpha migration.
     std::string packageName;
+    // One source unit belongs to one module; empty means the root module.
+    std::string modulePath;
+    std::vector<std::string> sourceModules;
+    std::vector<PackageUse> packageUses;
     bool isPackage = false;
     bool hasAnyKernel = false;
     std::vector<std::string> sourceFiles;

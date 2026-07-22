@@ -1,0 +1,6 @@
+package org.luna.fixture.core;
+module values;
+
+export fn library_value() -> i32 {
+    return 42;
+}

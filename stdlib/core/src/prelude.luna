@@ -1,0 +1,8 @@
+package org.luna.core;
+module prelude;
+
+// The first core package intentionally contains no compiler/runtime imports.
+// Its surface will grow only from operations that work in a no-host setting.
+export fn identity<T>(value: T) -> T {
+    return value;
+}

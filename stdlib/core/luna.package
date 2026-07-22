@@ -1,0 +1,6 @@
+[package]
+id = "org.luna.core"
+version = "0.2.0-alpha"
+sources = ["src"]
+
+[dependencies]

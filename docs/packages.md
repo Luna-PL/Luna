@@ -1,50 +1,124 @@
-# 包与显式导出
+# Package、module 与显式导出
 
-## 中文说明
+Luna 将发布单元与源码命名空间分开：
 
-包由同一目录中的多个 `.luna` 文件组成，文件按名字排序后合并分析。只有写出
-`export` 的声明进入公共接口；未导出的函数、类型或片段仍属于包内部。Alpha 暂不
-提供跨包依赖、锁文件和远程仓库解析。
+- **Package** 是版本、依赖、签名、缓存和 Moon 容器的单元。
+- **module** 是 package 内的源码命名空间。一个 package 可以有多个 module，
+  module 可以有子 module。
+- **workspace** 在后续阶段组织多个相关 package；package 本身没有语义子包。
 
-一个包是同一目录下所有 `.luna` 文件的集合。目录会按文件名排序后加载；每个文件应使用相同的 `package` 名称。目录没有显式 `package` 声明时，目录名就是包名。
+## 命名规则
+
+Package ID 使用由 `.` 分隔的反向 DNS 名称：
+
+```luna
+package org.luna.std;
+package com.example.graphics.vulkan;
+```
+
+module 使用 `::` 表示层级：
+
+```luna
+module io;
+module io::format;
+module collections::ordered;
+```
+
+因此，`.` 只属于 Package ID，`::` 只属于语言名称路径。
+
+`com.example.graphics` 和 `com.example.graphics.vulkan` 是两个完全独立的 package。
+后者不会自动继承前者的依赖、可见性或版本。反向 DNS 前缀表示发布命名权，
+不表示语言父子关系。
+
+## 源文件头
+
+每个源文件最多声明一个 package 和一个 module，顺序为 package、module、using：
+
+```luna
+package com.example.application;
+module commands::build;
+
+using org.luna.std as std;
+using com.example.serialization as serde;
+```
+
+`using` 引用的是 package，不是 module。`as` 别名必须在当前 package 内唯一；
+同一别名不能指向两个 Package ID，package 也不能 `using` 自己。未声明
+`module` 的文件属于 package root module，用于兼容现有源码。
+
+未来的完全限定路径为：
+
+```luna
+std::io::print("value = {}", value);
+serde::json::decode<Data>(source);
+```
+
+其中 `std` / `serde` 是 package alias，`io` / `json` 是 module，末尾是声明。
+
+## 本地 package 组装
+
+当前驱动仍将同一目录下按文件名排序的 `.luna` 文件组装成一个 package。
+所有显式 `package` 声明必须一致，但每个文件可以声明不同 module：
 
 ```text
-math_demo/
-  01_math.luna
-  02_main.luna
+application/
+  01_io.luna       # module io;
+  02_format.luna   # module io::format;
+  03_main.luna     # module application;
 ```
 
-```luna
-// 01_math.luna
-package math_demo;
+PackageManager 已保留 module 图和 `Package ID -> alias` 依赖边，MoonIR 也保留
+`moon.source_module` 和 `moon.using`。带 manifest 的 package 使用下面的严格最小 TOML
+schema：
 
-export fn add(left: i32, right: i32) -> i32 {
-    return left + right;
-}
+```toml
+# luna.package
+[package]
+id = "com.example.application"
+version = "1.0.0"
+sources = ["src"]
 
-fn helper() -> i32 {
-    return 1;
-}
+[dependencies]
+"org.luna.std" = "0.2.0-alpha"
 ```
 
-```luna
-// 02_main.luna
-package math_demo;
+`sources` 必须是 package 目录内的相对文件或目录，不允许绝对路径或 `..`
+逃逸。目录中的 `.luna` 文件递归枚举并按路径排序。源码里每个 `using`
+都必须有对应 `[dependencies]` 项。
 
-fn main() -> i32 {
-    return add(20, 22);
-}
+```toml
+# luna.workspace
+[workspace]
+members = ["core", "std", "application"]
 ```
 
-使用目录作为输入：
+PackageManager 从当前 package 向上查找最近的 `luna.workspace`，再读取各 member
+的 `luna.package`，用规范 Package ID 定位本地依赖。它不会隐式搜索其他
+父目录、网络或系统库路径。
 
-```sh
-./build/luna run math_demo -O2
-./build/luna build math_demo -O2
+```toml
+# luna.lock（工具生成并按 Package ID 规范排序）
+[[package]]
+id = "org.luna.std"
+version = "0.2.0-alpha"
+source = "workspace:std"
+hash = "..."
 ```
 
-`export` 是 ABI 承诺，而不是仅用于解析的标记。未导出的包级函数在生成的 LLVM IR 中保持内部链接；`export` 的函数使用外部符号。函数、结构体、枚举、trait、`interceptor` 与 `context` 均可声明为导出。`extern` 函数不能同时导出。
+当前 Alpha 本地 resolver 要求精确版本，并核对 lock 中的 Package ID、version 和
+workspace source。`hash` 字段已是必填的非空完整性槽位，但在 Moon 容器/注册表
+产物格式冻结前尚不计算或验证内容摘要。跨 module 限定名解析与重名隔离是
+紧接着的 resolver 里程碑；在此之前仍保留现有包内扁平名解析兼容。
 
-同一包内声明身份必须唯一。同名函数可以通过不同的类型化 Metadata 成为一个 declaration family；完全相同的名称与 Metadata 身份仍会报重复。包加载会报告包名不匹配、重复导出和跨文件语法错误，并带有源文件位置。
+对于没有 `main` 的库 package，使用 `luna check <package>` 完成 lexer 到验证后
+MoonIR 的全路径检查，不生成 LLVM IR 或可执行文件。
 
-当前 `PackageManager` 已独立负责确定性源码枚举与 package graph，但依赖清单、远程仓库、锁文件和跨包导入仍是后续工作。公开 API 的 Metadata/Selector 规则见 [versioning.md](versioning.md)。
+## 显式导出
+
+只有写出 `export` 的声明进入 package 公共接口；未导出函数、类型和片段仍属于
+package 内部。`export` 是 ABI 承诺，不是单纯的名称解析标记。未导出包级
+函数在 LLVM IR 中保持内部链接；导出函数使用外部符号。
+
+函数、结构体、枚举、trait、`interceptor` 与 `context` 均可导出。`extern`
+函数不能同时导出。Metadata/Selector 的公开接口规则见
+[versioning.md](versioning.md)。

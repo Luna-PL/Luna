@@ -30,3 +30,4 @@ private:
 
 // Map a Luna type kind to its size in bytes
 uint64_t typeSize(const TypePtr& type);
+uint64_t typeAlignment(const TypePtr& type);

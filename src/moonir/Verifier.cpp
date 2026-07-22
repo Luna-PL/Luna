@@ -4,6 +4,7 @@
 #include "../core/TypeRelations.h"
 
 #include <algorithm>
+#include <cctype>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -46,6 +47,29 @@ bool metadataConstantMatches(const ConstantValue& value, const TypePtr& type) {
     return false;
 }
 
+bool validIdentifier(const std::string& value) {
+    if (value.empty() || (!std::isalpha(static_cast<unsigned char>(value[0])) &&
+                          value[0] != '_'))
+        return false;
+    return std::all_of(value.begin() + 1, value.end(), [](unsigned char character) {
+        return std::isalnum(character) || character == '_';
+    });
+}
+
+bool validSeparatedName(const std::string& value, const std::string& separator,
+                        bool emptyAllowed = false) {
+    if (value.empty()) return emptyAllowed;
+    size_t begin = 0;
+    for (;;) {
+        const size_t end = value.find(separator, begin);
+        const std::string component = value.substr(
+            begin, end == std::string::npos ? std::string::npos : end - begin);
+        if (!validIdentifier(component)) return false;
+        if (end == std::string::npos) return true;
+        begin = end + separator.size();
+    }
+}
+
 } // namespace
 
 bool Verifier::verify(const Module& module) {
@@ -57,6 +81,28 @@ bool Verifier::verify(const Module& module) {
     }
     if (!module.typeTableSealed)
         error({}, "MoonIR type table must be sealed before verification");
+    if (!validSeparatedName(module.name, "."))
+        error({}, "module has an invalid canonical Package ID '" + module.name + "'");
+    std::unordered_set<std::string> sourceModules;
+    for (const auto& sourceModule : module.sourceModules) {
+        if (!validSeparatedName(sourceModule, "::", true))
+            error({}, "invalid source module path '" + sourceModule + "'");
+        if (!sourceModules.insert(sourceModule).second)
+            error({}, "duplicate source module path '" + sourceModule + "'");
+    }
+    std::unordered_map<std::string, std::string> packageAliases;
+    for (const auto& use : module.packageUses) {
+        if (!validSeparatedName(use.packageId, ".") || !validIdentifier(use.alias)) {
+            error({}, "invalid package using entry '" + use.packageId + "' as '" +
+                      use.alias + "'");
+            continue;
+        }
+        if (use.packageId == module.name)
+            error({}, "package cannot use itself as '" + use.alias + "'");
+        auto [found, inserted] = packageAliases.emplace(use.alias, use.packageId);
+        if (!inserted && found->second != use.packageId)
+            error({}, "package alias '" + use.alias + "' identifies multiple packages");
+    }
 
     for (const auto& type : module.typeTable) {
         if (type.id.empty()) {

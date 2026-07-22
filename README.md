@@ -1,24 +1,26 @@
-# Luna 0.1.0-alpha
+# Luna 0.2.0-alpha
 
 > 中文简介：Luna 是由 GitHub 组织 [Luna-PL](https://github.com/Luna-PL)
 > 维护的 LLVM 系统编程语言原型，仓库为
 > [Luna-PL/Luna](https://github.com/Luna-PL/Luna)，命令行工具为 `luna`。
 
 Luna is an LLVM-backed systems-language prototype with explicit package
-exports, affine/linear ownership and Place-based borrowing, C FFI, structured fragments/slots,
-JIT/AOT compilation, and an initial CPU/CUDA/ROCm heterogeneous-compute
-surface.
+exports, verified MoonIR, affine/linear ownership and Place-based borrowing,
+structured fragments/slots, JIT/AOT compilation, a versioned host Runtime ABI,
+explicit C FFI, and an initial CPU/CUDA/ROCm heterogeneous-compute surface.
 
 This release is an experimental Linux/macOS/Windows Alpha. Linux, macOS, and
 Windows have native stable-core CI workflows; Windows uses the MSYS2 UCRT64
 toolchain. GPU hardware tests are optional and require the corresponding vendor
 runtime and device.
 
-## Warnings && Errors
+## Platform status
 
-Windows CI has been restored with explicit ORC runtime-symbol registration and
-parameterized AOT process launching. The candidate fix is locally validated on
-Linux and awaits confirmation from the GitHub Windows runner.
+The stable core currently builds and passes CI on Linux, macOS, and Windows
+(MSYS2 UCRT64). JIT and AOT use the same explicit Luna runtime-symbol boundary
+on all three platforms. CUDA/ROCm hardware execution remains opt-in because CI
+runners do not provide the corresponding devices; the CPU simulator is always
+available for reachable kernels.
 
 [details](docs/bug&warnings.md)
 
@@ -75,6 +77,9 @@ The driver reports its release version with:
 - [Types and structural/nominal identity](docs/types.md)
 - [Fragments and slots](docs/fragments.md)
 - [External fragment plugins](docs/dynamic_plugins.md)
+- [Runtime ABI and allocation domains](docs/runtime_abi.md)
+- [C FFI boundary](docs/ffi.md)
+- [Standard-library skeleton](docs/standard_library.md)
 - [Heterogeneous compute](docs/heterogeneous_compute.md)
 - [Post-Alpha roadmap](docs/future_roadmap.md)
 - [Basic benchmark](docs/benchmarks.md)

@@ -102,6 +102,12 @@ not safe to expose that frame as an arbitrary shared-library callback. External
 plugins also cannot capture Luna lexical variables, retain argument pointers,
 or provide `many` behavior in v1.
 
+Runtime ABI v1 已定义 `LunaHostServicesV1` 和
+`LunaRuntimeModuleContextV1`，但当前 fragment plugin v1 不会偷偷改变调用
+结构来携带它们。未来 plugin ABI v2 应显式接收经宿主授权的 module
+context，从中获取 allocator/console 等服务；插件不应依赖宿主进程恰好
+导出某个 C runtime 符号。
+
 The runtime keeps successfully loaded libraries alive for the process lifetime
 and rejects duplicate `(slot, fragment, contract)` registrations. This makes
 the plugin path suitable for deployment configuration and tests, but the

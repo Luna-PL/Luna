@@ -92,10 +92,14 @@ value = receive(channel);
 
 ## 4. 更多 C FFI
 
+Runtime ABI v1 已经把语言内部分配、清理和输出从原始 C FFI 中拆出；
+后续工作只针对用户显式声明的外部边界：
+
 1. 完善 `extern "C"` 类型映射：固定宽度整数、浮点、C 字符串、数组指针、
    opaque handle 和 ABI 对齐属性。
-2. 用 `own`, `borrow`, `nullable`, `out`, `inout` 等显式契约标注外部参数；
-   未标注的裸指针保持不安全并要求显式 unsafe 边界。
+2. 用 `own`, `borrow`, `nullable`, `out`, `inout` 等显式契约标注外部参数，
+   并把 allocator/deallocator 配对降级为 `LunaOwnedForeignMemoryV1` 式的可验证
+   release capability；未标注的裸指针保持不安全并要求显式 unsafe 边界。
 3. 支持 C struct/enum/union 的声明导入和布局检查，优先接入 clang AST/header
    importer，而不是重新实现完整 C 预处理器。
 4. 增加安全 callback/trampoline：回调生命周期由线性 token 管理，线程进入、

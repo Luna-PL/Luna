@@ -811,9 +811,8 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
             // Only heap-owning values lower to pointers. Stack arrays and
             // borrowed slice fat pointers have no destructor in this phase.
             if (!ptr->getType()->isPointerTy()) continue;
-            auto rtFree = mModule->getOrInsertFunction(
-                "rt_free", mHelpers->voidTy(), mHelpers->ptrTy());
-            mBuilder->CreateCall(rtFree, {mBuilder->CreateBitCast(ptr, mHelpers->ptrTy())});
+            auto type = mLocalTypes.find(name);
+            emitLunaDeallocation(ptr, type == mLocalTypes.end() ? nullptr : type->second);
         }
         if (mCurrentFragmentReturn) {
             // A fragment return ends only the fragment. It does not return
@@ -965,9 +964,7 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
     }
     if (auto* freeStmt = dynamic_cast<FreeStmt*>(stmt)) {
         llvm::Value* ptr = generateExpr(freeStmt->operand.get());
-        auto rtFree = mModule->getOrInsertFunction(
-            "rt_free", mHelpers->voidTy(), mHelpers->ptrTy());
-        mBuilder->CreateCall(rtFree, { mBuilder->CreateBitCast(ptr, mHelpers->ptrTy()) });
+        emitLunaDeallocation(ptr, allocationTypeForExpr(freeStmt->operand.get()));
         return;
     }
 }
@@ -1513,12 +1510,14 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         // Enum values use an opaque heap representation for now. The
         // semantic layer has already checked the nominal enum and payload;
         // pattern matching/tag lowering can build on this allocation later.
-        auto rtMalloc = mModule->getOrInsertFunction(
-            "rt_malloc", mHelpers->ptrTy(), mHelpers->sizeTy());
+        auto rtAlloc = mModule->getOrInsertFunction(
+            "rt_alloc", mHelpers->ptrTy(), mHelpers->sizeTy(), mHelpers->sizeTy());
         auto sizeVal = llvm::ConstantInt::get(
             mHelpers->sizeTy(), typeSize(variant->constructedType));
+        auto alignmentVal = llvm::ConstantInt::get(
+            mHelpers->sizeTy(), typeAlignment(variant->constructedType));
         for (auto& arg : variant->args) generateExpr(arg.get());
-        return mBuilder->CreateCall(rtMalloc, {sizeVal}, "enumalloc");
+        return mBuilder->CreateCall(rtAlloc, {sizeVal, alignmentVal}, "enumalloc");
     }
     if (auto* field = dynamic_cast<FieldAccessExpr*>(expr)) {
         TypePtr objectType;
@@ -1778,9 +1777,12 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
     if (auto* ha = dynamic_cast<HeapAllocExpr*>(expr)) {
         uint64_t sz = typeSize(ha->allocatedType);
         auto* sizeVal = llvm::ConstantInt::get(mHelpers->sizeTy(), sz);
-        auto rtMalloc = mModule->getOrInsertFunction(
-            "rt_malloc", mHelpers->ptrTy(), mHelpers->sizeTy());
-        llvm::Value* ptr = mBuilder->CreateCall(rtMalloc, {sizeVal}, "heapalloc");
+        auto* alignmentVal = llvm::ConstantInt::get(
+            mHelpers->sizeTy(), typeAlignment(ha->allocatedType));
+        auto rtAlloc = mModule->getOrInsertFunction(
+            "rt_alloc", mHelpers->ptrTy(), mHelpers->sizeTy(), mHelpers->sizeTy());
+        llvm::Value* ptr = mBuilder->CreateCall(
+            rtAlloc, {sizeVal, alignmentVal}, "heapalloc");
 
         // Initialize: store constructor args at the malloc'd pointer
         if (auto* initCall = dynamic_cast<CallExpr*>(ha->initializer.get())) {
@@ -2541,6 +2543,32 @@ llvm::Value* CodeGenerator::coerceCallArgument(llvm::Value* value, llvm::Type* t
     return value;
 }
 
+TypePtr CodeGenerator::allocationTypeForExpr(moon::Expr* expr) const {
+    if (!expr) return nullptr;
+    if (auto* move = dynamic_cast<moon::MoveExpr*>(expr))
+        return allocationTypeForExpr(move->operand.get());
+    if (auto* borrow = dynamic_cast<moon::BorrowExpr*>(expr))
+        return allocationTypeForExpr(borrow->operand.get());
+    if (auto* id = dynamic_cast<moon::IdentifierExpr*>(expr)) {
+        auto found = mLocalTypes.find(id->name);
+        if (found != mLocalTypes.end()) return found->second;
+    }
+    return expr->type;
+}
+
+void CodeGenerator::emitLunaDeallocation(llvm::Value* pointer, const TypePtr& type) {
+    auto rtDealloc = mModule->getOrInsertFunction(
+        "rt_dealloc", mHelpers->voidTy(), mHelpers->ptrTy(),
+        mHelpers->sizeTy(), mHelpers->sizeTy());
+    const uint64_t size = type ? typeSize(type) : 0;
+    const uint64_t alignment = type ? typeAlignment(type) : LUNA_DEFAULT_HOST_ALIGNMENT;
+    mBuilder->CreateCall(rtDealloc, {
+        mBuilder->CreateBitCast(pointer, mHelpers->ptrTy()),
+        llvm::ConstantInt::get(mHelpers->sizeTy(), size),
+        llvm::ConstantInt::get(mHelpers->sizeTy(), alignment),
+    });
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────
 
 llvm::AllocaInst* CodeGenerator::createEntryBlockAlloca(
@@ -2585,6 +2613,10 @@ int CodeGenerator::jitRun() {
         runtimeSymbols[(*JIT)->mangleAndIntern(name)] =
             ExecutorSymbolDef::fromPtr(address, exported);
     };
+    bindRuntime("rt_alloc", &rt_alloc);
+    bindRuntime("rt_realloc", &rt_realloc);
+    bindRuntime("rt_dealloc", &rt_dealloc);
+    bindRuntime("rt_host_services_v1", &rt_host_services_v1);
     bindRuntime("rt_malloc", &rt_malloc);
     bindRuntime("rt_free", &rt_free);
     bindRuntime("rt_print_i32", &rt_print_i32);

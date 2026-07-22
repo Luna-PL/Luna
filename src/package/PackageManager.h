@@ -16,6 +16,12 @@ struct PackageGraph {
     // Dependency and lock nodes are deliberately empty in the local-source
     // implementation, but they belong to this component rather than Driver.
     std::vector<std::string> dependencies;
+    std::vector<PackageUse> dependencyUses;
+    std::vector<std::string> modules;
+    std::vector<ResolvedPackage> resolvedPackages;
+    std::string manifestPath;
+    std::string workspacePath;
+    std::string lockPath;
     std::vector<std::string> enabledCapabilities;
 };
 

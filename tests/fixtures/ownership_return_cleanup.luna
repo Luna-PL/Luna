@@ -1,5 +1,5 @@
 // Both return sites keep `buffer` live until the return itself.  The AOT
-// regression verifies that each exact return path emits one rt_free call.
+// regression verifies that each exact return path emits one rt_dealloc call.
 fn main() -> i32 {
     let buffer = new i32(1);
     if true {
