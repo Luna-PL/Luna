@@ -348,6 +348,8 @@ struct SelectExpr : Expr {
     bool isDynamic = false;
     std::string resolvedDeclarationId;
     std::string resolvedSymbolName;
+    std::string resolvedFamilyId;
+    std::string resolvedSelectorDeclarationId;
     std::vector<std::string> dynamicCandidateIds;
     std::string dynamicMetadataSchemaId;
     std::vector<DynamicFilterArgument> dynamicFilterArguments;
@@ -365,6 +367,10 @@ struct IdentPattern : Pattern {
 
 // ─── Declarations ────────────────────────────────────────────────────
 struct Decl : ASTNode {
+    // Every declaration keeps its owning Package ID independently from its
+    // module path. The package loader fills this field before semantic
+    // analysis, including for declarations loaded from dependencies.
+    std::string packageId;
     // Empty denotes the package root module. Module identity is source-level
     // namespace information and remains separate from the Package ID.
     std::string modulePath;
@@ -483,6 +489,9 @@ struct MetaDecl : Decl {
 
 struct Program : ASTNode {
     struct PackageUse : ASTNode {
+        // Package whose source declared this alias. Aliases are package-local
+        // and therefore may be reused by unrelated dependency packages.
+        std::string ownerPackageId;
         std::string packageId;
         std::string alias;
     };

@@ -90,16 +90,19 @@ bool Verifier::verify(const Module& module) {
         if (!sourceModules.insert(sourceModule).second)
             error({}, "duplicate source module path '" + sourceModule + "'");
     }
-    std::unordered_map<std::string, std::string> packageAliases;
+    std::unordered_map<std::string, std::unordered_map<std::string, std::string>>
+        packageAliases;
     for (const auto& use : module.packageUses) {
-        if (!validSeparatedName(use.packageId, ".") || !validIdentifier(use.alias)) {
+        if (!validSeparatedName(use.ownerPackageId, ".") ||
+            !validSeparatedName(use.packageId, ".") || !validIdentifier(use.alias)) {
             error({}, "invalid package using entry '" + use.packageId + "' as '" +
                       use.alias + "'");
             continue;
         }
-        if (use.packageId == module.name)
+        if (use.packageId == use.ownerPackageId)
             error({}, "package cannot use itself as '" + use.alias + "'");
-        auto [found, inserted] = packageAliases.emplace(use.alias, use.packageId);
+        auto [found, inserted] = packageAliases[use.ownerPackageId].emplace(
+            use.alias, use.packageId);
         if (!inserted && found->second != use.packageId)
             error({}, "package alias '" + use.alias + "' identifies multiple packages");
     }
@@ -272,6 +275,12 @@ bool Verifier::verify(const Module& module) {
 }
 
 void Verifier::verifyDeclaration(const Decl& declaration, const Module& module) {
+    if (!validSeparatedName(declaration.packageId, "."))
+        error(declaration.location, "declaration has invalid Package ID '" +
+                                    declaration.packageId + "'");
+    if (!validSeparatedName(declaration.modulePath, "::", true))
+        error(declaration.location, "declaration has invalid module path '" +
+                                    declaration.modulePath + "'");
     if (auto* function = dynamic_cast<const FunctionDecl*>(&declaration)) {
         verifyFunction(*function, module);
         return;

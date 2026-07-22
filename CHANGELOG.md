@@ -2,11 +2,15 @@
 
 ## 0.2.0-alpha — Unreleased
 
+- Reorganized the project entry documentation into an English default README and a linked Simplified Chinese README, with feature, Hello World, build, CLI, platform, roadmap, and topic-oriented documentation entry points.
 - Added the versioned, C-compatible Runtime ABI v1 with replaceable host allocator and console services, exact `size/alignment` allocation lowering, foreign-resource carriers, and an optional W^X executable-memory capability reserved for MoonRuntime/JIT hosts.
 - Moved compiler-generated `new`, automatic cleanup, explicit `free`, and language `print` behind Luna runtime symbols; kept layout-less `rt_malloc/rt_free` only as an Alpha compatibility bridge for previously emitted IR.
 - Verified the stable JIT/AOT/runtime boundaries on Linux, macOS, and Windows UCRT64, including explicit ORC symbol registration and parameterized AOT process launching.
 - Separated reverse-DNS Package IDs from `::` module/submodule identities, added `using <Package ID> as <alias>` dependency edges, and preserved the package/module graph in verified MoonIR.
 - Added strict Alpha TOML schemas for `luna.package`, `luna.workspace`, and `luna.lock`, local workspace Package ID resolution, manifest source roots, a no-codegen `luna check` command, and logically independent `org.luna.core`/`org.luna.std` packages.
+- Added recursive locked-workspace dependency loading, `alias::module::symbol` and `module::symbol` resolution, package-private export enforcement, and deterministic linkage isolation for same-named declarations in different modules.
+- Added an executable two-package, multi-module language showcase and a portable MoonIR/JIT/AOT integration test covering the complete positive Alpha feature surface.
+- Materialized solved omitted/`auto` signature types before MoonIR lowering, restoring verified JIT/AOT code generation for inferred function and closure signatures.
 
 ## 0.1.0-alpha — Development baseline
 

@@ -116,10 +116,18 @@ private:
 
     void error(const std::string& msg, int line = 0, int col = 0);
     void setDiagnosticLocation(const ASTNode* node);
+    void setDeclarationContext(const Decl* declaration);
+    std::string sourceDeclarationKey(const std::string& name,
+                                     bool diagnoseVisibility = true);
+    SymbolInfo* lookupSymbol(const std::string& name);
+    TypePtr lookupDeclaredType(const std::string& name);
 
     SymbolTable mSymTable;
     std::unordered_map<std::string, MetaDecl*> mMetadataSchemas;
     std::unordered_map<std::string, std::vector<FunctionDecl*>> mFunctionFamilies;
+    std::unordered_map<std::string, Decl*> mQualifiedDeclarations;
+    std::unordered_map<std::string,
+        std::unordered_map<std::string, std::string>> mPackageAliases;
     // Exact TraitId → (exact target TypeId → [methodName → FunctionDecl*]).
     std::unordered_map<std::string,
         std::unordered_map<std::string,
@@ -138,6 +146,8 @@ private:
     std::unordered_map<std::string, FunctionDecl*> mInstantiatedFunctions;
     std::vector<std::string> mErrors;
     Program* mProgram = nullptr;
+    std::string mCurrentPackageId;
+    std::string mCurrentModulePath;
     std::string mDiagnosticFile;
     int mDiagnosticLine = 0;
     int mDiagnosticCol = 0;

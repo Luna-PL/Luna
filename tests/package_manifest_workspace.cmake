@@ -27,6 +27,43 @@ string(FIND "${moon_text}" "moon.using \"org.luna.fixture.core\" as core" using_
 if(using_at EQUAL -1)
     message(FATAL_ERROR "resolved dependency edge was not retained in MoonIR.\n${moon_text}")
 endif()
+string(FIND "${moon_text}" "__luna_" isolated_symbol_at)
+if(isolated_symbol_at EQUAL -1)
+    message(FATAL_ERROR
+        "same-named declarations in separate modules did not receive isolated linkage.\n${moon_text}")
+endif()
+
+set(aot_workspace "${LUNA_BINARY_DIR}/manifest-aot-workspace")
+file(REMOVE_RECURSE "${aot_workspace}")
+file(COPY "${workspace}/" DESTINATION "${aot_workspace}")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${aot_workspace}/app"
+    RESULT_VARIABLE aot_build_result
+    OUTPUT_VARIABLE aot_build_output
+    ERROR_VARIABLE aot_build_error
+)
+set(aot_executable "${aot_workspace}/app/org.luna.fixture.app")
+if(WIN32)
+    string(APPEND aot_executable ".exe")
+endif()
+if(NOT aot_build_result EQUAL 0 OR NOT EXISTS "${aot_executable}")
+    file(REMOVE_RECURSE "${aot_workspace}")
+    message(FATAL_ERROR
+        "qualified dependency call failed to build through AOT.\n"
+        "${aot_build_output}\n${aot_build_error}")
+endif()
+execute_process(
+    COMMAND "${aot_executable}"
+    RESULT_VARIABLE aot_run_result
+    OUTPUT_VARIABLE aot_run_output
+    ERROR_VARIABLE aot_run_error
+)
+file(REMOVE_RECURSE "${aot_workspace}")
+if(NOT aot_run_result EQUAL 42)
+    message(FATAL_ERROR
+        "qualified dependency call diverged under AOT.\n"
+        "Result: ${aot_run_result}\n${aot_run_output}\n${aot_run_error}")
+endif()
 
 foreach(library IN ITEMS
         "${LUNA_SOURCE_DIR}/stdlib/core"
@@ -76,4 +113,21 @@ string(FIND "${undeclared_output}\n${undeclared_error}"
 file(REMOVE_RECURSE "${invalid_workspace}")
 if(NOT undeclared_result EQUAL 1 OR undeclared_at EQUAL -1)
     message(FATAL_ERROR "source using without a manifest dependency was accepted")
+endif()
+
+file(REMOVE_RECURSE "${invalid_workspace}")
+file(COPY "${workspace}/" DESTINATION "${invalid_workspace}")
+file(WRITE "${invalid_workspace}/app/src/main.luna"
+"package org.luna.fixture.app;\nmodule application;\nusing org.luna.fixture.core as core;\n\nfn main() -> i32 {\n    return core::values::private_value();\n}\n")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" check "${invalid_workspace}/app"
+    RESULT_VARIABLE private_result
+    OUTPUT_VARIABLE private_output
+    ERROR_VARIABLE private_error
+)
+string(FIND "${private_output}\n${private_error}"
+       "is private to package 'org.luna.fixture.core'" private_at)
+file(REMOVE_RECURSE "${invalid_workspace}")
+if(NOT private_result EQUAL 1 OR private_at EQUAL -1)
+    message(FATAL_ERROR "a private dependency declaration crossed the package boundary")
 endif()

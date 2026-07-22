@@ -386,6 +386,7 @@ struct AssignExpr : Expr {
 
 struct Decl : Node {
     virtual ~Decl() = default;
+    std::string packageId;
     std::string declarationId;
     std::string familyId;
     std::string name;
@@ -491,6 +492,7 @@ struct Module {
     uint32_t formatMinor = FormatMinor;
     std::string name;
     struct PackageUse {
+        std::string ownerPackageId;
         std::string packageId;
         std::string alias;
     };

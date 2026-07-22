@@ -1,0 +1,81 @@
+package org.luna.examples.showcase.app;
+module application;
+
+using org.luna.examples.showcase.foundation as showcase;
+
+fn inferred_add(left: auto, right: auto) -> auto {
+    return left + right;
+}
+
+fn main() -> i32 {
+    // constexpr, generic monomorphization, inference and ordinary control flow.
+    const let scale = showcase::algorithms::pow2(3);
+    let inferred = inferred_add(scale, 1);
+    let generic = showcase::algorithms::identity::<i32>(inferred);
+    let flowed = showcase::algorithms::control_flow(generic);
+
+    // Structural and nominal ADTs, qualified constructors and static traits.
+    let pixel = new showcase::data::model::Pixel(12);
+    let structural = showcase::data::model::read_point(pixel);
+    let counter = new showcase::data::model::Counter(structural);
+    let retained = showcase::data::model::keep(move counter);
+    let choice = showcase::data::model::StructuralChoice::Some(1);
+    let command = showcase::data::model::Command::Add(1);
+    let adt_score = showcase::data::model::accept_choice(choice) +
+                    showcase::data::model::accept_command(command);
+
+    // Static and runtime metadata selection share the same declaration family.
+    let selected = select showcase::dispatch::answer
+                   with showcase::dispatch::choose(1, 0, 0);
+    let static_value = selected(move retained.value);
+    let dynamic_selected = dynamic select showcase::dispatch::answer
+                           with showcase::dispatch::choose(2, 0, 0);
+    let dynamic_value = dynamic_selected(static_value);
+
+    // Closures, arrays, indexing, slicing, borrowing and compound operators.
+    let add_one = fn(value: i32) -> i32 {
+        return value + 1;
+    };
+    let values: array<i32, 4> = [dynamic_value, flowed, adt_score, scale];
+    values[1] += 1;
+    let middle = values[1..3];
+    let closure_value = add_one(middle[0]);
+
+    // Static and dynamic fragments exercise interceptor/context continuation
+    // contracts without requiring an external plugin.
+    slot interceptor audit_slot(value: i32);
+    apply audit_slot(showcase::effects::audit) {
+        audit_slot(closure_value) {
+            print(closure_value);
+        }
+    }
+
+    dynamic slot context pipeline(value: i32);
+    dynamic apply pipeline(showcase::effects::trace,
+                           showcase::effects::observe) {
+        pipeline(closure_value) {
+            print(dynamic_value);
+        }
+    }
+
+    // Reflection is compile-time data and therefore adds no runtime registry.
+    const let is_nominal = type_is_nominal::<showcase::data::model::Counter>();
+    const let field_count = type_field_count::<showcase::data::model::Counter>();
+
+    // Reachable kernel code runs through the CPU simulator by default. Device
+    // storage and the launch event are both linearly consumed.
+    let device = gpu_alloc_i32(1);
+    gpu_store_i32(borrow mut device, 0, 41);
+    let launched = launch showcase::device::increment[threads: 1](borrow mut device);
+    let adopted = move launched;
+    await adopted;
+    let answer = gpu_load_i32(borrow device, 0);
+    gpu_free(move device);
+
+    print(type_id::<showcase::data::model::Counter>());
+    print(answer);
+    if is_nominal && field_count == 1 {
+        return answer;
+    }
+    return 1;
+}

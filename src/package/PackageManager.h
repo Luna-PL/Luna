@@ -13,8 +13,8 @@ struct PackageRequest {
 struct PackageGraph {
     std::string rootPath;
     std::vector<std::string> sourceUnits;
-    // Dependency and lock nodes are deliberately empty in the local-source
-    // implementation, but they belong to this component rather than Driver.
+    // Dependency edges and locked local workspace nodes belong to the package
+    // layer; the driver consumes only the assembled typed source graph.
     std::vector<std::string> dependencies;
     std::vector<PackageUse> dependencyUses;
     std::vector<std::string> modules;

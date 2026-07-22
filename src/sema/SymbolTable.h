@@ -41,7 +41,9 @@ public:
 
     bool define(const std::string& name, SymbolInfo info);
     bool defineAtRoot(const std::string& name, SymbolInfo info);
+    void defineLinkage(const std::string& name, SymbolInfo info);
     SymbolInfo* lookup(const std::string& name);
+    SymbolInfo* lookupLinkage(const std::string& name);
     bool hasInCurrentScope(const std::string& name) const;
 
     // Types: store the resolved TypePtr for user-defined types/traits
@@ -52,4 +54,5 @@ public:
 private:
     std::vector<std::unordered_map<std::string, SymbolInfo>> mScopes;
     std::unordered_map<std::string, TypePtr> mTypeMap; // global type/trait registry
+    std::unordered_map<std::string, SymbolInfo> mLinkageSymbols;
 };

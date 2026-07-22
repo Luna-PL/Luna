@@ -4,7 +4,9 @@
 
 Luna 目前是一个研究型语言原型，正从功能验证阶段进入工程化的 Alpha 阶段。
 
-它已经具备包与显式导出、线性所有权与借用、FFI、版本标签、`const` / `constexpr`、初版反射、interceptor / context / slot，以及 CPU 模拟器、CUDA PTX 与经 ROCm 实机验证的异构计算路径。
+它已经具备 package/module 与显式导出、线性所有权与借用、FFI、Metadata 与
+selector、`const` / `constexpr`、初版反射、interceptor / context / slot，
+以及 CPU 模拟器、CUDA PTX 与经 ROCm 实机验证的异构计算路径。
 
 当前的首要目标不是继续扩大语言表面，而是冻结核心语义、补齐边界检查、建立回归测试，并使 JIT、AOT 与真实 GPU 后端的行为一致。
 
@@ -29,7 +31,7 @@ Luna 目前是一个研究型语言原型，正从功能验证阶段进入工程
 - JIT 与 AOT 编译路径。
 - `kernel fn`、`device_buffer<i32>`、`launch`、`await` 的初始异构 ABI。
 - CPU 模拟器与 ROCm `gfx1101` 路径；CUDA 保持已实现但标记为待硬件验证。
-- 版本标签的函数、结构、trait、interceptor/context 与 slot 已实现语义。
+- Metadata 可附加到函数、类型与 trait；静态/动态 selector 和显式运行时保留已实现。
 
 ## Alpha 实验性能力
 
@@ -137,6 +139,7 @@ Alpha 阶段优先保证正确性与可观测性；性能工作按以下顺序�
 ## 近期下一步
 
 当前 `0.2.0-alpha` 稳定核心已在 Linux、macOS 和 Windows UCRT64 CI 上通过，
-默认配置有 23 项非硬件 CTest 回归。语言内部分配/输出已收敛到 Runtime ABI v1，
-下一步是将用户 C FFI 的 owning raw pointer 逐步升级为带释放 capability 的类型化
-adapter，同时继续累积 ROCm/CUDA 性能与硬件兼容性记录。
+默认配置有 26 项非硬件 CTest 回归。语言内部分配/输出已收敛到 Runtime ABI v1，
+下一步优先引入一等错误处理，以此支撑标准库和格式化 `std::io`；随后继续收敛
+所有权/仿射/线性检查、Moon 容器验证边界和 package 工具链，同时累积
+ROCm/CUDA 性能与硬件兼容性记录。原生结构化并发将在这些基础稳定后继续设计。

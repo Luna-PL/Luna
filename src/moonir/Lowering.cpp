@@ -37,6 +37,23 @@ std::string kindPrefix(const ::Decl* declaration) {
     return "impl";
 }
 
+std::string declarationNamespace(const ::Decl* declaration,
+                                 const std::string& fallbackPackage) {
+    std::string result = declaration && !declaration->packageId.empty()
+        ? declaration->packageId : fallbackPackage;
+    if (declaration && !declaration->modulePath.empty())
+        result += "::" + declaration->modulePath;
+    return result;
+}
+
+std::string declarationIdentity(const ::Decl* declaration,
+                                const std::string& fallbackPackage,
+                                const std::string& kind,
+                                const std::string& symbol) {
+    return declarationNamespace(declaration, fallbackPackage) +
+           "::" + kind + "::" + symbol;
+}
+
 } // namespace
 
 std::unique_ptr<Module> LunaLowerer::lower(const Program& program,
@@ -53,7 +70,9 @@ std::unique_ptr<Module> LunaLowerer::lower(const Program& program,
     module->isPackage = program.isPackage;
     module->sourceFiles = program.sourceFiles;
     for (const auto& use : program.packageUses)
-        module->packageUses.push_back({use.packageId, use.alias});
+        module->packageUses.push_back({
+            use.ownerPackageId.empty() ? module->name : use.ownerPackageId,
+            use.packageId, use.alias});
     module->sourceModules = program.sourceModules;
     module->features.kernelRuntimeReserved = reserveKernelRuntime;
 
@@ -326,9 +345,8 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
     } else if (auto* selection = dynamic_cast<const ::SelectExpr*>(expression)) {
         if (selection->isDynamic) {
             auto value = std::make_unique<moon::DynamicSelectExpr>();
-            value->familyId = mModule->name + "::fn::" + selection->targetName;
-            value->selectorDeclarationId = mModule->name + "::fn::" +
-                                           selection->selectorName;
+            value->familyId = selection->resolvedFamilyId;
+            value->selectorDeclarationId = selection->resolvedSelectorDeclarationId;
             value->metadataSchemaId = selection->dynamicMetadataSchemaId;
             value->type = selection->selectedType;
             for (const auto& binding : selection->dynamicFilterArguments) {
@@ -371,8 +389,7 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
             }
             for (const auto& source : selection->dynamicCandidates) {
                 DynamicSelectCandidate candidate;
-                candidate.declarationId = mModule->name + "::fn::" +
-                                          source.declarationId;
+                candidate.declarationId = source.declarationId;
                 candidate.linkageName = source.symbolName;
                 candidate.metadataValues = source.metadataValues;
                 value->candidates.push_back(std::move(candidate));
@@ -549,8 +566,9 @@ std::unique_ptr<moon::FunctionDecl> LunaLowerer::lowerFunction(
     result->name = function->name;
     result->generatedSymbolName = function->generatedSymbolName.empty()
         ? function->name : function->generatedSymbolName;
-    result->familyId = mModule->name + "::fn::" + function->name;
-    result->declarationId = mModule->name + "::fn::" + result->generatedSymbolName;
+    result->familyId = declarationIdentity(function, mModule->name, "fn", function->name);
+    result->declarationId = declarationIdentity(
+        function, mModule->name, "fn", result->generatedSymbolName);
     result->isExported = function->isExported;
     result->isKernel = function->isKernel;
     result->isExtern = function->isExtern;
@@ -604,8 +622,9 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         result->location = locationOf(fragment);
         result->name = fragment->name;
         result->generatedSymbolName = declarationSymbol(fragment);
-        result->familyId = mModule->name + "::fragment::" + fragment->name;
-        result->declarationId = mModule->name + "::fragment::" + result->generatedSymbolName;
+        result->familyId = declarationIdentity(fragment, mModule->name, "fragment", fragment->name);
+        result->declarationId = declarationIdentity(
+            fragment, mModule->name, "fragment", result->generatedSymbolName);
         result->isExported = fragment->isExported;
         result->kind = fragment->kind == ::FragmentKind::Interceptor
             ? moon::FragmentKind::Interceptor : moon::FragmentKind::Context;
@@ -624,8 +643,9 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         result->location = locationOf(structure);
         result->name = structure->name;
         result->generatedSymbolName = declarationSymbol(structure);
-        result->familyId = mModule->name + "::struct::" + structure->name;
-        result->declarationId = mModule->name + "::struct::" + result->generatedSymbolName;
+        result->familyId = declarationIdentity(structure, mModule->name, "struct", structure->name);
+        result->declarationId = declarationIdentity(
+            structure, mModule->name, "struct", result->generatedSymbolName);
         result->isExported = structure->isExported;
         result->typeParams = structure->typeParams;
         for (const auto& field : structure->fields)
@@ -641,8 +661,9 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         result->location = locationOf(enumeration);
         result->name = enumeration->name;
         result->generatedSymbolName = declarationSymbol(enumeration);
-        result->familyId = mModule->name + "::enum::" + enumeration->name;
-        result->declarationId = mModule->name + "::enum::" + result->generatedSymbolName;
+        result->familyId = declarationIdentity(enumeration, mModule->name, "enum", enumeration->name);
+        result->declarationId = declarationIdentity(
+            enumeration, mModule->name, "enum", result->generatedSymbolName);
         result->isExported = enumeration->isExported;
         result->typeParams = enumeration->typeParams;
         for (const auto& variant : enumeration->variants) {
@@ -663,8 +684,9 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         result->location = locationOf(trait);
         result->name = trait->name;
         result->generatedSymbolName = declarationSymbol(trait);
-        result->familyId = mModule->name + "::trait::" + trait->name;
-        result->declarationId = mModule->name + "::trait::" + result->generatedSymbolName;
+        result->familyId = declarationIdentity(trait, mModule->name, "trait", trait->name);
+        result->declarationId = declarationIdentity(
+            trait, mModule->name, "trait", result->generatedSymbolName);
         result->isExported = trait->isExported;
         result->typeParams = trait->typeParams;
         for (const auto& parameter : trait->traitParams)
@@ -677,8 +699,9 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
             lowered.returnType = lowerType(method.returnType.get());
             result->methods.push_back(std::move(lowered));
         }
-        result->type = mSymbols ? mSymbols->lookupType(result->generatedSymbolName) : nullptr;
-        if (!result->type && mSymbols) result->type = mSymbols->lookupType(trait->name);
+        result->type = mSymbols ? mSymbols->lookupType(trait->resolvedTraitId) : nullptr;
+        if (!result->type && mSymbols)
+            result->type = mSymbols->lookupType(result->generatedSymbolName);
         lowerCommonDeclaration(trait, *result);
         addDeclarationRecord(*result, DeclarationKind::Trait, result->type);
         return result;
@@ -691,8 +714,10 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         result->resolvedTargetTypeId = implementation->resolvedTargetTypeId;
         result->generatedSymbolName = result->resolvedTraitId + "__for__" +
                                       result->resolvedTargetTypeId;
-        result->familyId = mModule->name + "::impl::" + result->resolvedTraitId;
-        result->declarationId = mModule->name + "::impl::" + result->generatedSymbolName;
+        result->familyId = declarationIdentity(
+            implementation, mModule->name, "impl", result->resolvedTraitId);
+        result->declarationId = declarationIdentity(
+            implementation, mModule->name, "impl", result->generatedSymbolName);
         result->typeParams = implementation->typeParams;
         result->targetType = lowerType(implementation->targetType.get());
         for (const auto& method : implementation->methods)
@@ -705,7 +730,7 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         MetadataSchema schema;
         const auto schemaSymbol = metadata->generatedSymbolName.empty()
             ? metadata->name : metadata->generatedSymbolName;
-        schema.id = mModule->name + "::meta::" + schemaSymbol;
+        schema.id = declarationIdentity(metadata, mModule->name, "meta", schemaSymbol);
         schema.name = metadata->name;
         schema.location = locationOf(metadata);
         for (const auto& field : metadata->fields)
@@ -715,16 +740,17 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         mModule->metadataSchemas.push_back(std::move(schema));
 
         DeclarationRecord record;
-        record.id = mModule->name + "::meta::" +
-                    (metadata->generatedSymbolName.empty()
-                        ? metadata->name : metadata->generatedSymbolName);
-        record.familyId = mModule->name + "::meta::" + metadata->name;
+        record.id = declarationIdentity(metadata, mModule->name, "meta",
+            metadata->generatedSymbolName.empty()
+                ? metadata->name : metadata->generatedSymbolName);
+        record.familyId = declarationIdentity(
+            metadata, mModule->name, "meta", metadata->name);
         record.sourceName = metadata->name;
         record.linkageName = metadata->generatedSymbolName;
         record.kind = DeclarationKind::MetadataSchema;
         record.retention = lowerRetention(metadata->retention);
         record.location = locationOf(metadata);
-        record.type = mSymbols ? mSymbols->lookupType(metadata->name) : nullptr;
+        record.type = mSymbols ? mSymbols->lookupType(schemaSymbol) : nullptr;
         mModule->registerType(record.type);
         mModule->declarationTable.push_back(std::move(record));
         return nullptr;
@@ -741,6 +767,7 @@ Retention LunaLowerer::lowerRetention(RetentionKind retention) const {
 
 void LunaLowerer::lowerCommonDeclaration(const ::Decl* source,
                                          moon::Decl& target) {
+    target.packageId = source->packageId.empty() ? mModule->name : source->packageId;
     target.modulePath = source->modulePath;
     target.retention = lowerRetention(source->retention);
     for (const auto& attachment : source->metadata) {

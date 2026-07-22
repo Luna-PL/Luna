@@ -1,0 +1,14 @@
+package org.luna.fixture.core;
+module alternate;
+
+export nominal struct PublicBox {
+    alternative: i32;
+}
+
+export nominal enum PublicOption {
+    Different;
+}
+
+export fn library_value() -> i32 {
+    return 7;
+}

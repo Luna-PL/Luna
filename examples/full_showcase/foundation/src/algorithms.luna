@@ -1,0 +1,25 @@
+package org.luna.examples.showcase.foundation;
+module algorithms;
+
+export constexpr fn pow2(value: i32) -> i32 {
+    if value == 0 { return 1; }
+    else { return 2 * pow2(value - 1); }
+}
+
+export fn identity<T>(value: T) -> T {
+    return value;
+}
+
+export fn control_flow(seed: i32) -> i32 {
+    let value = seed;
+    let index = 0;
+    while index < 3 {
+        value += 1;
+        index += 1;
+    }
+    if value > seed {
+        return value;
+    } else {
+        return seed;
+    }
+}

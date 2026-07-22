@@ -1,0 +1,7 @@
+package org.luna.examples.showcase.foundation;
+module device;
+
+export kernel fn increment(index: i32, data: &mut device_buffer<i32>) {
+    let value = gpu_load_i32(data, index);
+    gpu_store_i32(data, index, value + 1);
+}

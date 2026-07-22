@@ -1,0 +1,27 @@
+package org.luna.examples.showcase.foundation;
+module dispatch;
+
+export meta release {
+    major: i32;
+    minor: i32;
+    patch: i32;
+}
+
+export fn choose(
+    view: declaration_view,
+    major: i32,
+    minor: i32,
+    patch: i32
+) -> declaration_ref {
+    return select_unique(view, release(major, minor, patch));
+}
+
+export runtime@release(1, 0, 0)
+fn answer(value: i32) -> i32 {
+    return value + 1;
+}
+
+export runtime@release(2, 0, 0)
+fn answer(value: i32) -> i32 {
+    return value + 2;
+}

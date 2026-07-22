@@ -1,6 +1,27 @@
 package org.luna.fixture.core;
 module values;
 
+export nominal struct PublicBox {
+    value: i32;
+}
+
+export nominal enum PublicOption {
+    None;
+    Some(i32);
+}
+
 export fn library_value() -> i32 {
     return 42;
+}
+
+export fn read_public(boxed: PublicBox) -> i32 {
+    return boxed.value;
+}
+
+export fn accept_option(value: PublicOption) -> i32 {
+    return 42;
+}
+
+fn private_value() -> i32 {
+    return 99;
 }

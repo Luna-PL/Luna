@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <set>
 #include <sstream>
 #include <unordered_map>
@@ -298,6 +299,54 @@ bool parseSource(const fs::path& path,
     return parser.errors().empty();
 }
 
+bool collectManifestSources(const fs::path& packageRoot,
+                            const PackageManifest& manifest,
+                            std::vector<fs::path>& files,
+                            std::vector<std::string>& errors) {
+    std::error_code ec;
+    for (const auto& sourceRoot : manifest.sources) {
+        const fs::path relative(sourceRoot);
+        if (relative.is_absolute() ||
+            std::find(relative.begin(), relative.end(), fs::path("..")) != relative.end()) {
+            errors.push_back(diagnostic::format(
+                "package", "source root escapes the package: '" + sourceRoot + "'",
+                manifest.path, 0, 0,
+                "source roots must be relative paths inside the package"));
+            return false;
+        }
+        const fs::path root = packageRoot / relative;
+        if (!fs::exists(root, ec)) {
+            errors.push_back(diagnostic::format(
+                "package", "manifest source root does not exist: '" + sourceRoot + "'",
+                manifest.path, 0, 0, "create the path or update sources"));
+            return false;
+        }
+        if (fs::is_regular_file(root, ec) && root.extension() == ".luna")
+            files.push_back(root);
+        else if (fs::is_directory(root, ec)) {
+            for (const auto& entry : fs::recursive_directory_iterator(root, ec)) {
+                if (ec) break;
+                if (entry.is_regular_file(ec) && entry.path().extension() == ".luna")
+                    files.push_back(entry.path());
+            }
+        }
+    }
+    std::sort(files.begin(), files.end());
+    files.erase(std::unique(files.begin(), files.end()), files.end());
+    return true;
+}
+
+void assignDeclarationOwner(Decl* declaration, const std::string& packageId) {
+    if (!declaration) return;
+    declaration->packageId = packageId;
+    if (auto* implementation = dynamic_cast<ImplDecl*>(declaration)) {
+        for (auto& method : implementation->methods) {
+            method->packageId = packageId;
+            method->modulePath = declaration->modulePath;
+        }
+    }
+}
+
 } // namespace
 
 PackageManager::PackageManager(luna::macro::MacroProcessor macroProcessor)
@@ -328,33 +377,7 @@ bool PackageManager::load(const PackageRequest& request, LoadedPackage& result,
         if (hasManifest) {
             if (!parsePackageManifest(manifestPath, manifest, errors)) return false;
             graph.manifestPath = manifestPath.string();
-            for (const auto& sourceRoot : manifest.sources) {
-                const fs::path relative(sourceRoot);
-                if (relative.is_absolute() ||
-                    std::find(relative.begin(), relative.end(), fs::path("..")) != relative.end()) {
-                    errors.push_back(diagnostic::format(
-                        "package", "source root escapes the package: '" + sourceRoot + "'",
-                        manifestPath.string(), 0, 0,
-                        "source roots must be relative paths inside the package"));
-                    return false;
-                }
-                const fs::path root = input / relative;
-                if (!fs::exists(root, ec)) {
-                    errors.push_back(diagnostic::format(
-                        "package", "manifest source root does not exist: '" + sourceRoot + "'",
-                        manifestPath.string(), 0, 0, "create the path or update sources"));
-                    return false;
-                }
-                if (fs::is_regular_file(root, ec) && root.extension() == ".luna")
-                    files.push_back(root);
-                else if (fs::is_directory(root, ec)) {
-                    for (const auto& entry : fs::recursive_directory_iterator(root, ec)) {
-                        if (ec) break;
-                        if (entry.is_regular_file(ec) && entry.path().extension() == ".luna")
-                            files.push_back(entry.path());
-                    }
-                }
-            }
+            if (!collectManifestSources(input, manifest, files, errors)) return false;
         } else {
             for (const auto& entry : fs::directory_iterator(input, ec)) {
                 if (ec) break;
@@ -426,6 +449,9 @@ bool PackageManager::load(const PackageRequest& request, LoadedPackage& result,
             }
         }
 
+        for (auto& declaration : sourceProgram->declarations)
+            assignDeclarationOwner(declaration.get(), result.program->packageName.empty()
+                ? sourceProgram->packageName : result.program->packageName);
         for (auto& declaration : sourceProgram->declarations)
             result.program->declarations.push_back(std::move(declaration));
     }
@@ -533,6 +559,133 @@ bool PackageManager::load(const PackageRequest& request, LoadedPackage& result,
                   [](const ResolvedPackage& left, const ResolvedPackage& right) {
                       return left.id < right.id;
                   });
+
+        // Parse the complete local dependency closure into the same typed
+        // compilation unit. Visibility is still enforced by semantic name
+        // resolution: only exported declarations can cross a Package ID.
+        std::set<std::string> loadedDependencies;
+        std::set<std::string> loadingDependencies;
+        std::function<bool(const std::string&)> loadDependency;
+        loadDependency = [&](const std::string& packageId) -> bool {
+            if (loadedDependencies.count(packageId)) return true;
+            if (!loadingDependencies.insert(packageId).second) {
+                errors.push_back(diagnostic::format(
+                    "package", "cyclic package dependency involving '" + packageId + "'",
+                    workspacePath.string(), 0, 0,
+                    "package dependencies must form an acyclic graph"));
+                return false;
+            }
+            auto resolved = workspacePackages.find(packageId);
+            if (resolved == workspacePackages.end()) return false;
+            PackageManifest dependencyManifest;
+            const fs::path dependencyRoot(resolved->second.rootPath);
+            if (!parsePackageManifest(dependencyRoot / "luna.package",
+                                      dependencyManifest, errors))
+                return false;
+            std::vector<fs::path> dependencyFiles;
+            if (!collectManifestSources(dependencyRoot, dependencyManifest,
+                                        dependencyFiles, errors))
+                return false;
+
+            std::unordered_map<std::string, PackageUse> dependencyUses;
+            for (const auto& dependencyFile : dependencyFiles) {
+                std::unique_ptr<Program> sourceProgram;
+                if (!parseSource(dependencyFile, mMacroProcessor, sourceProgram, errors))
+                    return false;
+                if (!sourceProgram->packageName.empty() &&
+                    sourceProgram->packageName != packageId) {
+                    errors.push_back(diagnostic::format(
+                        "package", "package name '" + sourceProgram->packageName +
+                        "' does not match manifest Package ID '" + packageId + "'",
+                        dependencyFile.string(), 0, 0,
+                        "dependency sources must declare their owning Package ID"));
+                    return false;
+                }
+                result.program->sourceFiles.push_back(dependencyFile.string());
+                for (const auto& sourceUse : sourceProgram->packageUses) {
+                    PackageUse use{sourceUse.packageId, sourceUse.alias,
+                                   sourceUse.sourcePath, sourceUse.line, sourceUse.col};
+                    auto existing = dependencyUses.find(use.alias);
+                    if (existing != dependencyUses.end() &&
+                        existing->second.packageId != use.packageId) {
+                        errors.push_back(diagnostic::format(
+                            "package", "package alias '" + use.alias +
+                            "' is ambiguous inside '" + packageId + "'",
+                            use.sourcePath, use.line, use.column,
+                            "aliases are shared by all modules of one package"));
+                        return false;
+                    }
+                    dependencyUses.emplace(use.alias, use);
+                }
+                for (auto& declaration : sourceProgram->declarations) {
+                    assignDeclarationOwner(declaration.get(), packageId);
+                    result.program->declarations.push_back(std::move(declaration));
+                }
+            }
+
+            for (const auto& [alias, use] : dependencyUses) {
+                (void)alias;
+                const std::string usedPackageId = use.packageId;
+                auto constraint = dependencyManifest.dependencies.find(use.packageId);
+                auto nested = workspacePackages.find(use.packageId);
+                if (constraint == dependencyManifest.dependencies.end() ||
+                    nested == workspacePackages.end() ||
+                    constraint->second != nested->second.version) {
+                    errors.push_back(diagnostic::format(
+                        "package", "cannot resolve dependency '" + use.packageId +
+                        "' used by '" + packageId + "'",
+                        use.sourcePath, use.line, use.column,
+                        "declare an exact-version local workspace dependency"));
+                    return false;
+                }
+                auto locked = std::find_if(
+                    lockedPackages.begin(), lockedPackages.end(),
+                    [&](const ResolvedPackage& item) { return item.id == usedPackageId; });
+                if (locked == lockedPackages.end() ||
+                    locked->version != nested->second.version ||
+                    locked->source != nested->second.source) {
+                    errors.push_back(diagnostic::format(
+                        "package", "luna.lock does not pin transitive package '" +
+                        use.packageId + "'", graph.lockPath, 0, 0,
+                        "regenerate the workspace lock file"));
+                    return false;
+                }
+                result.program->packageUses.push_back({});
+                auto& mergedUse = result.program->packageUses.back();
+                mergedUse.ownerPackageId = packageId;
+                mergedUse.packageId = use.packageId;
+                mergedUse.alias = use.alias;
+                mergedUse.sourcePath = use.sourcePath;
+                mergedUse.line = use.line;
+                mergedUse.col = use.column;
+                if (std::none_of(graph.resolvedPackages.begin(),
+                                 graph.resolvedPackages.end(),
+                                 [&](const ResolvedPackage& item) {
+                                     return item.id == usedPackageId;
+                                 })) {
+                    auto pinned = nested->second;
+                    pinned.hash = locked->hash;
+                    graph.resolvedPackages.push_back(std::move(pinned));
+                }
+                if (!loadDependency(use.packageId)) return false;
+            }
+            loadingDependencies.erase(packageId);
+            loadedDependencies.insert(packageId);
+            return true;
+        };
+        const auto directDependencies = graph.resolvedPackages;
+        for (const auto& dependency : directDependencies)
+            if (!loadDependency(dependency.id)) success = false;
+        std::sort(graph.resolvedPackages.begin(), graph.resolvedPackages.end(),
+                  [](const ResolvedPackage& left, const ResolvedPackage& right) {
+                      return left.id < right.id;
+                  });
+        graph.resolvedPackages.erase(
+            std::unique(graph.resolvedPackages.begin(), graph.resolvedPackages.end(),
+                        [](const ResolvedPackage& left, const ResolvedPackage& right) {
+                            return left.id == right.id;
+                        }),
+            graph.resolvedPackages.end());
     }
 
     for (const auto& [alias, use] : usesByAlias) {
@@ -548,6 +701,7 @@ bool PackageManager::load(const PackageRequest& request, LoadedPackage& result,
         result.packageUses.push_back(use);
         result.program->packageUses.push_back({});
         auto& mergedUse = result.program->packageUses.back();
+        mergedUse.ownerPackageId = result.program->packageName;
         mergedUse.packageId = use.packageId;
         mergedUse.alias = use.alias;
         mergedUse.sourcePath = use.sourcePath;

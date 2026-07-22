@@ -21,6 +21,8 @@ private:
     bool parseUsingHeader(Program* program);
     bool parsePackageId(std::string& result);
     bool parseModulePath(std::string& result);
+    bool parseQualifiedName(std::string& result);
+    void parseQualifiedNameTail(std::string& result);
     std::unique_ptr<FunctionDecl> parseFunctionDecl(bool isTraitMethod = false,
                                                     bool isExtern = false,
                                                     std::string abi = "",

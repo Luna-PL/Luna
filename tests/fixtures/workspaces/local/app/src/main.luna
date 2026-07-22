@@ -3,5 +3,8 @@ module application;
 using org.luna.fixture.core as core;
 
 fn main() -> i32 {
-    return 42;
+    let boxed = new core::values::PublicBox(core::values::library_value());
+    let option = core::values::PublicOption::Some(1);
+    return core::values::read_public(boxed) +
+           core::values::accept_option(option) - 42;
 }

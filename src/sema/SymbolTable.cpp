@@ -26,12 +26,21 @@ bool SymbolTable::defineAtRoot(const std::string& name, SymbolInfo info) {
     return true;
 }
 
+void SymbolTable::defineLinkage(const std::string& name, SymbolInfo info) {
+    mLinkageSymbols[name] = std::move(info);
+}
+
 SymbolInfo* SymbolTable::lookup(const std::string& name) {
     for (auto it = mScopes.rbegin(); it != mScopes.rend(); ++it) {
         auto found = it->find(name);
         if (found != it->end()) return &found->second;
     }
     return nullptr;
+}
+
+SymbolInfo* SymbolTable::lookupLinkage(const std::string& name) {
+    auto found = mLinkageSymbols.find(name);
+    return found == mLinkageSymbols.end() ? nullptr : &found->second;
 }
 
 bool SymbolTable::hasInCurrentScope(const std::string& name) const {

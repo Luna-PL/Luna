@@ -5,7 +5,7 @@ Luna 将发布单元与源码命名空间分开：
 - **Package** 是版本、依赖、签名、缓存和 Moon 容器的单元。
 - **module** 是 package 内的源码命名空间。一个 package 可以有多个 module，
   module 可以有子 module。
-- **workspace** 在后续阶段组织多个相关 package；package 本身没有语义子包。
+- **workspace** 组织多个相关的本地 package；package 本身没有语义子包。
 
 ## 命名规则
 
@@ -46,7 +46,7 @@ using com.example.serialization as serde;
 同一别名不能指向两个 Package ID，package 也不能 `using` 自己。未声明
 `module` 的文件属于 package root module，用于兼容现有源码。
 
-未来的完全限定路径为：
+完全限定路径为：
 
 ```luna
 std::io::print("value = {}", value);
@@ -57,7 +57,8 @@ serde::json::decode<Data>(source);
 
 ## 本地 package 组装
 
-当前驱动仍将同一目录下按文件名排序的 `.luna` 文件组装成一个 package。
+对于没有 manifest 的目录输入，驱动会将目录下按文件名排序的 `.luna` 文件组装
+成兼容 package。对于带 `luna.package` 的输入，则按照 `sources` 递归装载源码。
 所有显式 `package` 声明必须一致，但每个文件可以声明不同 module：
 
 ```text
@@ -107,8 +108,26 @@ hash = "..."
 
 当前 Alpha 本地 resolver 要求精确版本，并核对 lock 中的 Package ID、version 和
 workspace source。`hash` 字段已是必填的非空完整性槽位，但在 Moon 容器/注册表
-产物格式冻结前尚不计算或验证内容摘要。跨 module 限定名解析与重名隔离是
-紧接着的 resolver 里程碑；在此之前仍保留现有包内扁平名解析兼容。
+产物格式冻结前尚不计算或验证内容摘要。
+
+resolver 会递归装载本地依赖闭包。声明身份由 Package ID、module path 与源码名称
+共同构成：未限定名称只在当前 module 查找；同一 package 的其他 module 使用
+`module::symbol`；依赖声明使用 `alias::module::symbol`。不同 module 可以安全声明
+同名符号，编译器会生成彼此隔离且确定性的链接名。跨 Package ID 的引用必须指向
+`export` 声明，而 package 内跨 module 引用不要求 `export`。
+
+```luna
+// org.luna.fixture.app / module application
+using org.luna.fixture.core as core;
+
+fn main() -> i32 {
+    return core::values::library_value();
+}
+```
+
+依赖 package 自己的 `using` 别名保持在其所有者命名空间内，因此不同 package 可以
+重复使用同一个别名而不互相污染。该所有权关系与每个依赖声明的 Package ID/module
+身份均会保留到 MoonIR，并由 verifier 检查。
 
 对于没有 `main` 的库 package，使用 `luna check <package>` 完成 lexer 到验证后
 MoonIR 的全路径检查，不生成 LLVM IR 或可执行文件。

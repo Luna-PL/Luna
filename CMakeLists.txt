@@ -116,9 +116,11 @@ install(TARGETS luna runtime
 )
 install(FILES src/runtime/FragmentPluginABI.h src/runtime/RuntimeABI.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/luna/runtime)
-install(FILES README.md CHANGELOG.md VERSION LICENSE-MIT LICENSE-APACHE
+install(FILES README.md README.zh-CN.md CHANGELOG.md VERSION LICENSE-MIT LICENSE-APACHE
         DESTINATION ${CMAKE_INSTALL_DOCDIR})
-install(DIRECTORY docs/ DESTINATION ${CMAKE_INSTALL_DOCDIR})
+install(DIRECTORY docs/ DESTINATION ${CMAKE_INSTALL_DOCDIR}/docs)
+install(DIRECTORY examples/full_showcase/
+        DESTINATION ${CMAKE_INSTALL_DOCDIR}/examples/full_showcase)
 install(DIRECTORY stdlib/ DESTINATION ${CMAKE_INSTALL_DATADIR}/luna/stdlib)
 
 if(BUILD_TESTING)
@@ -155,6 +157,14 @@ if(BUILD_TESTING)
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/package_manifest_workspace.cmake
+    )
+    add_test(
+        NAME luna.full-showcase
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/full_showcase.cmake
     )
     add_test(
         NAME luna.return-cleanup-abi

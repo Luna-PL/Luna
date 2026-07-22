@@ -1,0 +1,6 @@
+package org.luna.examples.showcase.app;
+module foreign;
+
+// An unused declaration still verifies Luna's explicit C ABI surface without
+// making this portable showcase depend on a platform-specific host symbol.
+extern "C" fn optional_host_hook(value: i32) -> i32;

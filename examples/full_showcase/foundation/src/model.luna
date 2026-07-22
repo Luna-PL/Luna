@@ -1,0 +1,52 @@
+package org.luna.examples.showcase.foundation;
+module data::model;
+
+// Structural products with the same shape are compatible.
+export struct Point {
+    value: i32;
+}
+
+export struct Pixel {
+    value: i32;
+}
+
+// Nominal declarations retain identity even when their shape matches.
+export nominal struct Counter {
+    value: i32;
+}
+
+export enum StructuralChoice {
+    None;
+    Some(i32);
+}
+
+export nominal enum Command {
+    Stop;
+    Add(i32);
+}
+
+export trait Tagged {
+    fn tag(value: Counter) -> i32;
+}
+
+impl Tagged for Counter {
+    fn tag(value: Counter) -> i32 {
+        return value.value;
+    }
+}
+
+export fn keep<T>(affine value: T) -> affine T where T: Tagged {
+    return value;
+}
+
+export fn read_point(point: Point) -> i32 {
+    return point.value;
+}
+
+export fn accept_choice(value: StructuralChoice) -> i32 {
+    return 1;
+}
+
+export fn accept_command(value: Command) -> i32 {
+    return 1;
+}

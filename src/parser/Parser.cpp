@@ -103,6 +103,22 @@ bool Parser::parseModulePath(std::string& result) {
     return true;
 }
 
+bool Parser::parseQualifiedName(std::string& result) {
+    if (!match(TokenKind::Identifier)) return false;
+    result = mTokens[mPos - 1].lexeme;
+    parseQualifiedNameTail(result);
+    return true;
+}
+
+void Parser::parseQualifiedNameTail(std::string& result) {
+    while (check(TokenKind::ColonColon) &&
+           peekAhead(1).kind == TokenKind::Identifier) {
+        advance();
+        advance();
+        result += "::" + mTokens[mPos - 1].lexeme;
+    }
+}
+
 std::unique_ptr<Decl> Parser::parseDeclaration() {
     const Token start = peek();
     bool isExported = false;
@@ -637,19 +653,19 @@ std::unique_ptr<Stmt> Parser::parseApplyStmt(bool isDynamic) {
     }
     stmt->slotName = mTokens[mPos - 1].lexeme;
     consume(TokenKind::LParen, "Expected '(' after slot name in `apply`");
-    if (!match(TokenKind::Identifier)) {
+    if (!parseQualifiedName(stmt->fragmentName)) {
         addError("expected a fragment name in `apply`");
         synchronizeStatement();
         return nullptr;
     }
-    stmt->fragmentName = mTokens[mPos - 1].lexeme;
     while (isDynamic && match(TokenKind::Comma)) {
-        if (!match(TokenKind::Identifier)) {
+        std::string alternative;
+        if (!parseQualifiedName(alternative)) {
             addError("expected a fragment name after ',' in dynamic apply");
             synchronizeStatement();
             return nullptr;
         }
-        stmt->alternativeFragmentNames.push_back(mTokens[mPos - 1].lexeme);
+        stmt->alternativeFragmentNames.push_back(std::move(alternative));
     }
     consume(TokenKind::RParen, "Expected ')' after fragment name in `apply`");
     if (check(TokenKind::LBrace)) stmt->body = parseBlock();
@@ -993,6 +1009,46 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
                 consume(TokenKind::Gt, "Expected '>' after type arguments");
             }
 
+            // A non-generic qualified value path remains an IdentifierExpr.
+            // This lets semantic analysis resolve `alias::module::symbol`
+            // against package and module namespaces. Enum constructors keep
+            // their established UpperCamelCase terminal spelling.
+            if (!hadTypeArgs && check(TokenKind::Identifier)) {
+                std::vector<std::string> members;
+                do {
+                    if (!match(TokenKind::Identifier)) break;
+                    members.push_back(mTokens[mPos - 1].lexeme);
+                    if (!(check(TokenKind::ColonColon) &&
+                          peekAhead(1).kind == TokenKind::Identifier))
+                        break;
+                    advance();
+                } while (true);
+                const bool isVariantConstructor = !members.empty() &&
+                    !members.back().empty() &&
+                    members.back().front() >= 'A' && members.back().front() <= 'Z' &&
+                    check(TokenKind::LParen);
+                if (isVariantConstructor) {
+                    auto variant = std::make_unique<VariantConstructExpr>();
+                    variant->typeName = ownerName;
+                    for (size_t index = 0; index + 1 < members.size(); ++index)
+                        variant->typeName += "::" + members[index];
+                    variant->variantName = members.back();
+                    consume(TokenKind::LParen, "Expected '(' after enum variant");
+                    if (!check(TokenKind::RParen)) variant->args = parseArgs();
+                    consume(TokenKind::RParen, "Expected ')' after enum variant arguments");
+                    expr = std::move(variant);
+                    continue;
+                } else {
+                    if (auto* owner = dynamic_cast<IdentifierExpr*>(expr.get())) {
+                        for (const auto& member : members)
+                            owner->name += "::" + member;
+                    } else {
+                        addError("qualified paths require an identifier owner");
+                    }
+                    continue;
+                }
+            }
+
             bool isVariant = match(TokenKind::ColonColon) ||
                              (!hadTypeArgs && check(TokenKind::Identifier));
             if (isVariant) {
@@ -1034,21 +1090,19 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         selection->sourcePath = mSourceName;
         selection->line = start.line;
         selection->col = start.col;
-        if (!match(TokenKind::Identifier)) {
+        if (!parseQualifiedName(selection->selectorName)) {
             addError("expected a selector function name after `@`",
                      "write `@selector(arguments) target`");
             return selection;
         }
-        selection->selectorName = mTokens[mPos - 1].lexeme;
         consume(TokenKind::LParen, "Expected '(' after selector function name");
         if (!check(TokenKind::RParen)) selection->selectorArgs = parseArgs();
         consume(TokenKind::RParen, "Expected ')' after selector arguments");
-        if (!match(TokenKind::Identifier)) {
+        if (!parseQualifiedName(selection->targetName)) {
             addError("expected a declaration family after selector sugar",
                      "write `@selector(arguments) target`");
             return selection;
         }
-        selection->targetName = mTokens[mPos - 1].lexeme;
         return selection;
     }
     if (match(TokenKind::IntLiteral)) {
@@ -1170,18 +1224,16 @@ std::unique_ptr<SelectExpr> Parser::parseSelectExpr(bool isDynamic,
     selection->line = start.line;
     selection->col = start.col;
     selection->isDynamic = isDynamic;
-    if (!match(TokenKind::Identifier)) {
+    if (!parseQualifiedName(selection->targetName)) {
         addError("expected a declaration family after `select`",
                  "write `select target with selector(arguments)`");
         return selection;
     }
-    selection->targetName = mTokens[mPos - 1].lexeme;
     consume(TokenKind::With, "Expected 'with' after select target");
-    if (!match(TokenKind::Identifier)) {
+    if (!parseQualifiedName(selection->selectorName)) {
         addError("expected a selector function after `with`");
         return selection;
     }
-    selection->selectorName = mTokens[mPos - 1].lexeme;
     consume(TokenKind::LParen, "Expected '(' after selector function name");
     if (!check(TokenKind::RParen)) selection->selectorArgs = parseArgs();
     consume(TokenKind::RParen, "Expected ')' after selector arguments");
@@ -1192,12 +1244,11 @@ std::unique_ptr<Expr> Parser::parseLaunchExpr() {
     const Token start = mTokens[mPos - 1]; // `launch` already consumed
     auto launch = std::make_unique<LaunchExpr>();
     launch->sourcePath = mSourceName; launch->line = start.line; launch->col = start.col;
-    if (!match(TokenKind::Identifier)) {
+    if (!parseQualifiedName(launch->kernelName)) {
         addError("expected a kernel name after `launch`",
                  "write `launch kernel_name[threads: count](arguments)`");
         return launch;
     }
-    launch->kernelName = mTokens[mPos - 1].lexeme;
     consume(TokenKind::LBracket, "Expected '[' after kernel name in launch");
     if (!match(TokenKind::Identifier) || mTokens[mPos - 1].lexeme != "threads") {
         addError("expected `threads` launch option", "write `[threads: count]`");
@@ -1282,6 +1333,13 @@ std::unique_ptr<TypeAST> Parser::parseType() {
         named->sourcePath = mSourceName;
         named->line = typeName.line;
         named->col = typeName.col;
+        while (match(TokenKind::ColonColon)) {
+            if (!match(TokenKind::Identifier)) {
+                addError("Expected type name component after '::'");
+                break;
+            }
+            named->name += "::" + mTokens[mPos - 1].lexeme;
+        }
         if (match(TokenKind::Lt)) {
             named->typeArgs.push_back(parseType());
             if (named->name == "array" && match(TokenKind::Comma)) {
@@ -1402,6 +1460,7 @@ std::vector<WhereClause> Parser::parseWhereClause() {
 TraitRef Parser::parseTraitRef(const Token& nameToken) {
     TraitRef trait;
     trait.name = nameToken.lexeme;
+    parseQualifiedNameTail(trait.name);
     trait.sourcePath = mSourceName;
     trait.line = nameToken.line;
     trait.col = nameToken.col;

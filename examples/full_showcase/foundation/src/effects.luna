@@ -1,0 +1,21 @@
+package org.luna.examples.showcase.foundation;
+module effects;
+
+export interceptor audit(value: i32) {
+    print(value);
+}
+
+export context around(value: i32) {
+    print(value);
+    resume();
+}
+
+export runtime context trace(value: i32) {
+    print(value);
+    resume();
+}
+
+export runtime context observe(value: i32) {
+    print(value + 1);
+    resume();
+}

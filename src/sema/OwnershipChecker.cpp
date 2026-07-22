@@ -579,7 +579,9 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
     }
     if (auto* slot = dynamic_cast<SlotInvokeStmt*>(stmt)) return checkSlotInvoke(slot);
     if (auto* apply = dynamic_cast<ApplyStmt*>(stmt)) {
-        auto fragment = mFragments.find(apply->fragmentName);
+        const std::string& fragmentName = apply->resolvedFragmentName.empty()
+            ? apply->fragmentName : apply->resolvedFragmentName;
+        auto fragment = mFragments.find(fragmentName);
         if (fragment == mFragments.end()) {
             error("unknown fragment '" + apply->fragmentName + "' in apply", apply->line, apply->col);
             return false;
@@ -1003,8 +1005,12 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
     if (auto* call = dynamic_cast<CallExpr*>(expr)) {
         if (!checkExpr(call->callee.get())) return false;
         SymbolInfo* calleeInfo = nullptr;
-        if (auto* callee = dynamic_cast<IdentifierExpr*>(call->callee.get()))
-            calleeInfo = mSymTable ? mSymTable->lookup(callee->name) : nullptr;
+        if (auto* callee = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
+            if (mSymTable && !call->resolvedSymbolName.empty())
+                calleeInfo = mSymTable->lookupLinkage(call->resolvedSymbolName);
+            if (!calleeInfo)
+                calleeInfo = mSymTable ? mSymTable->lookup(callee->name) : nullptr;
+        }
         for (size_t index = 0; index < call->args.size(); ++index) {
             auto& arg = call->args[index];
             if (!dynamic_cast<MoveExpr*>(arg.get())) {

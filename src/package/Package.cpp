@@ -26,6 +26,9 @@ std::vector<PackageExport> PackageLoader::exports(const Program* program) {
 
     for (const auto& declaration : program->declarations) {
         if (!declaration->isExported) continue;
+        if (!declaration->packageId.empty() &&
+            declaration->packageId != program->packageName)
+            continue;
         if (auto* function = dynamic_cast<FunctionDecl*>(declaration.get()))
             result.push_back({publicDeclarationName(function, function->name), "function", function->modulePath});
         else if (auto* fragment = dynamic_cast<FragmentDecl*>(declaration.get()))

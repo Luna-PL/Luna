@@ -3,5 +3,5 @@ module application;
 using org.luna.std as std;
 
 fn main() -> i32 {
-    return answer();
+    return math::integer::answer();
 }

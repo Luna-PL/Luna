@@ -15,7 +15,9 @@ Luna Alpha 0.2.0 是用于语言试验和内部项目的 Linux/macOS/Windows 编
 - 大规模 ROCm 对照可与 C++23/HIP 执行同一 64 MiB、十轮变换工作负载。设置 `LUNA_GPU_PROFILE=1` 可输出 CUDA/ROCm device-event 累计 kernel 时间；它目前是 runtime profiling 开关，尚未形成稳定的源语言计时 API。
 - CUDA 代码生成已实现，但尚未在本仓库的 NVIDIA 硬件 CI 上验证。
 - ROCm 冒烟测试需要可见 AMD GPU、HIP 运行时、内核驱动和匹配的 `--gpu-target=rocm:gfx*`。基础 JIT/AOT 冒烟已在 RX 7800 XT 上通过；更广泛的 GPU 型号、长时间稳定性与性能数据仍待积累。
-- 包仅支持同一目录的 `.luna` 文件；尚无依赖元数据、锁文件和远程包解析。
+- Package 已支持严格的 `luna.package`、本地 `luna.workspace`、`luna.lock`、
+  精确版本依赖和递归 workspace 依赖装载；远程 registry、内容摘要验证、缓存和
+  网络依赖解析尚未实现。
 - AOT 安装后须显式传入 `--runtime-lib` / `--cc`，或设置 `LUNA_RUNTIME_LIB` / `LUNA_CXX`。
 
 ## 升级承诺

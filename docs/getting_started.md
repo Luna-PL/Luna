@@ -1,6 +1,18 @@
-# 安装与快速开始
+# Luna 安装与快速开始
 
-Luna Alpha 在 Linux、macOS 和 Windows 上从源码构建。当前构建经过 LLVM 22.1 验证，要求 CMake 3.20+、C++17 编译器、Ninja（可选）和系统 C++ 链接器。CMake 不假设 Arch、Debian、Homebrew 或 MacPorts 的固定安装路径。Windows 的 MSYS2 UCRT64 安装方式见 [windows_build.md](windows_build.md)。
+[English](getting_started.en.md) | [简体中文](getting_started.md)
+
+本文从源码构建开始，带领新贡献者完成 Luna 程序的检查、JIT 运行和 AOT 构建。
+Luna Alpha 支持 Linux、macOS 和 Windows，但目前仍是研究型编译器，而非生产版本。
+
+## 1. 准备工具链
+
+当前构建经过 LLVM/Clang 22 验证，要求 CMake 3.20+、C++17 编译器、Ninja
+（可选）和系统 C++ 链接器。CMake 不假设 Arch、Debian、Homebrew 或 MacPorts
+的固定安装路径。Windows 的 MSYS2 UCRT64 安装方式见
+[Windows 构建指南](windows_build.md)。
+
+## 2. 构建并测试编译器
 
 安装 LLVM、Clang、CMake 与 Ninja 后，使用本机 `llvm-config` 把 LLVM CMake 目录传给 CMake：
 
@@ -14,13 +26,48 @@ cmake --build build
 ctest --test-dir build -LE hardware --output-on-failure
 ```
 
-如果发行版将 LLVM 的 CMake 配置安装到别处，使用 `llvm-config --cmakedir` 的结果设置 `LLVM_DIR`。构建成功后可直接 JIT 运行或生成 AOT 可执行文件：
+`-LE hardware` 让默认测试在没有 GPU 的主机上也可运行。硬件测试的启用方式见
+[测试与回归](testing.md)。
+
+## 3. 编写并运行程序
+
+新建 `hello.luna`：
+
+```luna
+fn main() -> i32 {
+    print("Hello, Luna!");
+    return 0;
+}
+```
+
+依次验证 MoonIR、JIT 和 AOT：
 
 ```sh
-./build/luna run examples/operators.luna -O2
-./build/luna build examples/operators.luna -O2
-./examples/operators
+./build/luna check hello.luna
+./build/luna run hello.luna -O2
+./build/luna build hello.luna -O2
+./hello
 ```
+
+`check` 在验证后的 MoonIR 处停止，适合没有 `main` 的库 package；`run` 使用
+LLVM JIT；`build` 会生成 `hello.luna.ll` 和本机可执行文件（Windows 为
+`hello.exe`）。完整参数见[编译器命令参考](cli.zh-CN.md)。
+
+## 4. 单文件与 package
+
+独立 `.luna` 文件不要求 manifest。输入目录中存在 `luna.package` 时，驱动会启用
+package 解析，读取最近的 workspace/lockfile，并递归装载声明的本地依赖：
+
+```sh
+./build/luna check examples/full_showcase/app
+LUNA_GPU_BACKEND=sim ./build/luna run examples/full_showcase/app -O2
+```
+
+Package ID、module 路径、manifest 和导出规则见
+[Package 与 module](packages.md)。完整语言能力可以通过
+[全方位示例](../examples/full_showcase/README.md)了解。
+
+## 5. 安装开发构建
 
 安装到用户可写的暂存目录：
 
@@ -45,3 +92,12 @@ sudo cmake --install build --prefix /opt/luna
 ```
 
 也可用 `LUNA_RUNTIME_LIB` 和 `LUNA_CXX` 设置这两个默认值。更多 AOT 细节见 [aot_build.md](aot_build.md)，错误码见 [diagnostics.md](diagnostics.md)。
+
+## 下一步阅读
+
+- [主要特性概览](features.zh-CN.md)
+- [编译器命令参考](cli.zh-CN.md)
+- [类型系统](types.md)
+- [Metadata 与 selector](versioning.md)
+- [异构计算](heterogeneous_compute.md)
+- [演进路线图](evolution_roadmap.md)

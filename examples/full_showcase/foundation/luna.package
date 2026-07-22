@@ -1,0 +1,6 @@
+[package]
+id = "org.luna.examples.showcase.foundation"
+version = "0.2.0-alpha"
+sources = ["src"]
+
+[dependencies]

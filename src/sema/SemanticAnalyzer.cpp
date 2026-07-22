@@ -13,13 +13,15 @@ static std::string displayTraitRef(const TraitRef& trait) {
     return trait.name;
 }
 
-static std::string moduleIdentity(const Program* program) {
-    return program && !program->packageName.empty() ? program->packageName : "main";
-}
-
 static std::string nominalDeclarationIdentity(
-    const Program* program, const char* kind, const std::string& symbol) {
-    return moduleIdentity(program) + "::" + kind + "::" + symbol;
+    const Program* program, const char* kind, const std::string& symbol,
+    const Decl* declaration = nullptr) {
+    std::string owner = declaration && !declaration->packageId.empty()
+        ? declaration->packageId
+        : (program && !program->packageName.empty() ? program->packageName : "main");
+    if (declaration && !declaration->modulePath.empty())
+        owner += "::" + declaration->modulePath;
+    return owner + "::" + kind + "::" + symbol;
 }
 
 static uint64_t stableMetadataHash(const std::string& value) {
@@ -65,6 +67,39 @@ static std::string metadataDeclarationName(const std::string& base,
     return output.str();
 }
 
+static std::string effectivePackageId(const Program* program, const Decl* declaration) {
+    if (declaration && !declaration->packageId.empty()) return declaration->packageId;
+    if (program && !program->packageName.empty()) return program->packageName;
+    return "main";
+}
+
+static std::string qualifiedDeclarationKey(const std::string& packageId,
+                                           const std::string& modulePath,
+                                           const std::string& name) {
+    return packageId + "::" + (modulePath.empty() ? "" : modulePath + "::") + name;
+}
+
+static std::vector<std::string> splitQualifiedName(const std::string& name) {
+    std::vector<std::string> parts;
+    size_t begin = 0;
+    while (begin <= name.size()) {
+        const size_t separator = name.find("::", begin);
+        parts.push_back(name.substr(begin, separator == std::string::npos
+            ? std::string::npos : separator - begin));
+        if (separator == std::string::npos) break;
+        begin = separator + 2;
+    }
+    return parts;
+}
+
+static std::string isolatedLinkageName(const std::string& key,
+                                       const std::string& sourceName) {
+    std::ostringstream output;
+    output << "__luna_" << std::hex << std::setw(16) << std::setfill('0')
+           << stableMetadataHash(key) << "_" << sourceName;
+    return output.str();
+}
+
 SemanticAnalyzer::SemanticAnalyzer() {
     // Register built-in types
     mSymTable.defineType("i32", TyI32);
@@ -95,6 +130,8 @@ bool SemanticAnalyzer::analyze(Program* program) {
     mFragments.clear();
     mMetadataSchemas.clear();
     mFunctionFamilies.clear();
+    mQualifiedDeclarations.clear();
+    mPackageAliases.clear();
     mGeneratedInstances.clear();
     mInstantiator.reset();
     mInstantiatedFunctions.clear();
@@ -102,14 +139,36 @@ bool SemanticAnalyzer::analyze(Program* program) {
     mTraitTypeParams.clear();
     mTraitMethods.clear();
     mImpls.clear();
+    mCurrentPackageId = program->packageName.empty() ? "main" : program->packageName;
+    mCurrentModulePath.clear();
     const size_t sourceDeclarationCount = program->declarations.size();
+
+    for (const auto& use : program->packageUses) {
+        const std::string owner = use.ownerPackageId.empty()
+            ? mCurrentPackageId : use.ownerPackageId;
+        mPackageAliases[owner][use.alias] = use.packageId;
+    }
 
     // A package has one shared namespace even when its declarations come from
     // different files. Diagnose collisions here instead of allowing LLVM to
     // silently create suffixed symbols during code generation.
     std::unordered_map<std::string, Decl*> declaredNames;
+    std::unordered_map<std::string, size_t> linkageNameCounts;
+    size_t rootEntryCount = 0;
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         auto* declaration = program->declarations[i].get();
+        std::string name;
+        if (auto* f = dynamic_cast<FunctionDecl*>(declaration)) name = f->name;
+        else if (auto* f = dynamic_cast<FragmentDecl*>(declaration)) name = f->name;
+        else if (auto* s = dynamic_cast<StructDecl*>(declaration)) name = s->name;
+        else if (auto* e = dynamic_cast<EnumDecl*>(declaration)) name = e->name;
+        else if (auto* t = dynamic_cast<TraitDecl*>(declaration)) name = t->name;
+        else if (auto* m = dynamic_cast<MetaDecl*>(declaration)) name = m->name;
+        if (!name.empty()) ++linkageNameCounts[metadataDeclarationName(name, declaration)];
+    }
+    for (size_t i = 0; i < sourceDeclarationCount; ++i) {
+        auto* declaration = program->declarations[i].get();
+        setDeclarationContext(declaration);
         setDiagnosticLocation(declaration);
         std::string name;
         if (auto* f = dynamic_cast<FunctionDecl*>(declaration)) name = f->name;
@@ -119,10 +178,25 @@ bool SemanticAnalyzer::analyze(Program* program) {
         else if (auto* t = dynamic_cast<TraitDecl*>(declaration)) name = t->name;
         else if (auto* m = dynamic_cast<MetaDecl*>(declaration)) name = m->name;
         if (!name.empty()) {
-            declaration->generatedSymbolName = metadataDeclarationName(name, declaration);
-            std::string identity = declaration->generatedSymbolName;
+            const std::string familyKey = qualifiedDeclarationKey(
+                mCurrentPackageId, mCurrentModulePath, name);
+            const std::string sourceLinkage = metadataDeclarationName(name, declaration);
+            const bool isRootEntry = name == "main" &&
+                mCurrentPackageId == (program->packageName.empty()
+                    ? std::string("main") : program->packageName);
+            if (isRootEntry && ++rootEntryCount > 1)
+                error("Package has more than one 'main' entry declaration");
+            declaration->generatedSymbolName = isRootEntry
+                ? "main"
+                : (linkageNameCounts[sourceLinkage] > 1 || sourceLinkage == "main")
+                ? isolatedLinkageName(familyKey + "::" + sourceLinkage, sourceLinkage)
+                : sourceLinkage;
+            const std::string identity = familyKey + "::" + sourceLinkage;
             if (!declaredNames.emplace(identity, declaration).second)
-                error("Duplicate package declaration '" + name + "'");
+                error("Duplicate package declaration '" + name + "' in module '" +
+                      (mCurrentModulePath.empty() ? std::string("<root>")
+                                                  : mCurrentModulePath) + "'");
+            mQualifiedDeclarations.emplace(familyKey, declaration);
         }
         if (declaration->isExported && dynamic_cast<ImplDecl*>(declaration))
             error("Only functions, types, and traits can be exported; 'impl' is an internal declaration");
@@ -131,6 +205,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
     // other declaration need their types during the declaration pass.
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         if (auto* metadata = dynamic_cast<MetaDecl*>(program->declarations[i].get())) {
+            setDeclarationContext(metadata);
             setDiagnosticLocation(metadata);
             declareMeta(metadata);
         }
@@ -140,28 +215,34 @@ bool SemanticAnalyzer::analyze(Program* program) {
     // the order in which source declarations appear.
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         if (auto* s = dynamic_cast<StructDecl*>(program->declarations[i].get())) {
+            setDeclarationContext(s);
             const std::string identity = s->generatedSymbolName.empty()
                 ? s->name : s->generatedSymbolName;
-            if (!mDeclaredTypes.count(identity)) {
+            const std::string sourceKey = qualifiedDeclarationKey(
+                mCurrentPackageId, mCurrentModulePath, s->name);
+            if (!mDeclaredTypes.count(sourceKey)) {
                 auto type = Type::makeStruct(s->name, {}, s->isNominal
-                    ? nominalDeclarationIdentity(program, "struct", identity) : "");
+                    ? nominalDeclarationIdentity(program, "struct", identity, s) : "");
                 type->typeParams = s->typeParams;
                 mDeclaredTypes[identity] = type;
-                mDeclaredTypes[s->name] = type;
+                mDeclaredTypes[sourceKey] = type;
                 mSymTable.defineType(identity, type);
-                mSymTable.defineType(s->name, type);
+                mSymTable.defineType(sourceKey, type);
             }
         } else if (auto* e = dynamic_cast<EnumDecl*>(program->declarations[i].get())) {
+            setDeclarationContext(e);
             const std::string identity = e->generatedSymbolName.empty()
                 ? e->name : e->generatedSymbolName;
-            if (!mDeclaredTypes.count(identity)) {
+            const std::string sourceKey = qualifiedDeclarationKey(
+                mCurrentPackageId, mCurrentModulePath, e->name);
+            if (!mDeclaredTypes.count(sourceKey)) {
                 auto type = Type::makeEnum(e->name, {}, e->isNominal
-                    ? nominalDeclarationIdentity(program, "enum", identity) : "");
+                    ? nominalDeclarationIdentity(program, "enum", identity, e) : "");
                 type->typeParams = e->typeParams;
                 mDeclaredTypes[identity] = type;
-                mDeclaredTypes[e->name] = type;
+                mDeclaredTypes[sourceKey] = type;
                 mSymTable.defineType(identity, type);
-                mSymTable.defineType(e->name, type);
+                mSymTable.defineType(sourceKey, type);
             }
         }
     }
@@ -171,6 +252,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         auto& decl = program->declarations[i];
         if (auto* t = dynamic_cast<TraitDecl*>(decl.get())) {
+            setDeclarationContext(t);
             setDiagnosticLocation(t);
             declareTrait(t);
         }
@@ -178,6 +260,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
     // Pass 1b: declare all remaining types, functions, fragments, and impls.
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         auto& decl = program->declarations[i];
+        setDeclarationContext(decl.get());
         setDiagnosticLocation(decl.get());
         validateMetadata(decl.get());
         if (auto* f = dynamic_cast<FunctionDecl*>(decl.get())) declareFunction(f);
@@ -190,6 +273,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
     // generic call. This also supports trait declarations after their uses.
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         if (auto* t = dynamic_cast<TraitDecl*>(program->declarations[i].get())) {
+            setDeclarationContext(t);
             setDiagnosticLocation(t);
             analyzeTrait(t);
         }
@@ -197,6 +281,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
     // Pass 2b: analyze all ordinary bodies.
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         auto& decl = program->declarations[i];
+        setDeclarationContext(decl.get());
         setDiagnosticLocation(decl.get());
         if (auto* f = dynamic_cast<FunctionDecl*>(decl.get())) analyzeFunction(f);
         else if (auto* s = dynamic_cast<StructDecl*>(decl.get())) analyzeStruct(s);
@@ -231,7 +316,9 @@ bool SemanticAnalyzer::analyze(Program* program) {
 // ─── Declaration pass ──────────────────────────────────────────────
 
 void SemanticAnalyzer::declareFunction(FunctionDecl* decl) {
-    mFunctionFamilies[decl->name].push_back(decl);
+    const std::string sourceKey = qualifiedDeclarationKey(
+        mCurrentPackageId, mCurrentModulePath, decl->name);
+    mFunctionFamilies[sourceKey].push_back(decl);
     std::unordered_map<std::string, TypePtr> bindings;
     for (auto& tp : decl->typeParams) {
         bindings[tp] = Type::makeTypeParam(tp);
@@ -271,9 +358,11 @@ void SemanticAnalyzer::declareFunction(FunctionDecl* decl) {
         info.paramContracts.push_back(contract);
         info.paramTypes.push_back(pt);
     }
-    if (mFunctionFamilies[decl->name].size() == 1) {
-        mSymTable.defineAtRoot(decl->name, info);
+    if (mFunctionFamilies[sourceKey].size() == 1) {
+        mSymTable.defineAtRoot(sourceKey, info);
     }
+    mSymTable.defineLinkage(decl->generatedSymbolName.empty()
+        ? decl->name : decl->generatedSymbolName, info);
     if (decl->isConstexpr)
         mConstexprFunctions[decl->generatedSymbolName.empty()
             ? decl->name : decl->generatedSymbolName] = decl;
@@ -283,7 +372,9 @@ void SemanticAnalyzer::declareFunction(FunctionDecl* decl) {
 
 void SemanticAnalyzer::declareMeta(MetaDecl* decl) {
     if (!decl) return;
-    if (mMetadataSchemas.count(decl->name)) {
+    const std::string sourceKey = qualifiedDeclarationKey(
+        mCurrentPackageId, mCurrentModulePath, decl->name);
+    if (mMetadataSchemas.count(sourceKey)) {
         error("duplicate metadata schema '" + decl->name + "'", decl->line, decl->col);
         return;
     }
@@ -299,11 +390,12 @@ void SemanticAnalyzer::declareMeta(MetaDecl* decl) {
     const auto schemaSymbol = decl->generatedSymbolName.empty()
         ? decl->name : decl->generatedSymbolName;
     auto metadataType = Type::makeMetadata(
-        nominalDeclarationIdentity(mProgram, "meta", schemaSymbol),
+        nominalDeclarationIdentity(mProgram, "meta", schemaSymbol, decl),
         std::move(fields));
     metadataType->name = decl->name;
-    mMetadataSchemas[decl->name] = decl;
-    mSymTable.defineType(decl->name, metadataType);
+    mMetadataSchemas[sourceKey] = decl;
+    mSymTable.defineType(sourceKey, metadataType);
+    mSymTable.defineType(schemaSymbol, metadataType);
 
     SymbolInfo constructor;
     constructor.kind = SymbolKind::Metadata;
@@ -311,7 +403,7 @@ void SemanticAnalyzer::declareMeta(MetaDecl* decl) {
     constructor.returnType = metadataType;
     for (const auto& field : decl->fields)
         constructor.paramTypes.push_back(field.inferredType);
-    if (!mSymTable.defineAtRoot(decl->name, std::move(constructor)))
+    if (!mSymTable.defineAtRoot(sourceKey, std::move(constructor)))
         error("metadata schema name '" + decl->name +
               "' conflicts with an existing declaration", decl->line, decl->col);
 }
@@ -326,7 +418,7 @@ void SemanticAnalyzer::analyzeMeta(MetaDecl* decl) {
 void SemanticAnalyzer::validateMetadata(Decl* decl) {
     if (!decl) return;
     for (auto& attachment : decl->metadata) {
-        auto schema = mMetadataSchemas.find(attachment.schemaName);
+        auto schema = mMetadataSchemas.find(sourceDeclarationKey(attachment.schemaName));
         if (schema == mMetadataSchemas.end()) {
             error("unknown metadata schema '" + attachment.schemaName + "'",
                   decl->line, decl->col);
@@ -335,7 +427,7 @@ void SemanticAnalyzer::validateMetadata(Decl* decl) {
         const auto schemaSymbol = schema->second->generatedSymbolName.empty()
             ? schema->second->name : schema->second->generatedSymbolName;
         attachment.resolvedSchemaId = nominalDeclarationIdentity(
-            mProgram, "meta", schemaSymbol);
+            mProgram, "meta", schemaSymbol, schema->second);
         if (attachment.arguments.size() != schema->second->fields.size()) {
             error("metadata '" + attachment.schemaName + "' expects " +
                   std::to_string(schema->second->fields.size()) + " arguments, got " +
@@ -370,7 +462,9 @@ void SemanticAnalyzer::validateMetadata(Decl* decl) {
 }
 
 void SemanticAnalyzer::declareFragment(FragmentDecl* decl) {
-    if (!mFragments.emplace(decl->name, decl).second) {
+    const std::string sourceKey = qualifiedDeclarationKey(
+        mCurrentPackageId, mCurrentModulePath, decl->name);
+    if (!mFragments.emplace(sourceKey, decl).second) {
         error("duplicate fragment declaration '" + decl->name + "'", decl->line, decl->col);
         return;
     }
@@ -387,7 +481,7 @@ void SemanticAnalyzer::declareFragment(FragmentDecl* decl) {
         decl->kind == FragmentKind::Interceptor
             ? ContinuationKind::Interceptor : ContinuationKind::Context);
     decl->structuralType = info.type;
-    mSymTable.defineAtRoot(decl->name, info);
+    mSymTable.defineAtRoot(sourceKey, info);
 }
 
 bool SemanticAnalyzer::isFFIType(const TypePtr& type, const std::string& context) {
@@ -444,7 +538,7 @@ void SemanticAnalyzer::declareStruct(StructDecl* decl) {
     auto declared = mDeclaredTypes[identity];
     if (!declared) {
         declared = Type::makeStruct(decl->name, {}, decl->isNominal
-            ? nominalDeclarationIdentity(mProgram, "struct", identity) : "");
+            ? nominalDeclarationIdentity(mProgram, "struct", identity, decl) : "");
         mDeclaredTypes[identity] = declared;
     }
     declared->typeParams = decl->typeParams;
@@ -456,8 +550,10 @@ void SemanticAnalyzer::declareStruct(StructDecl* decl) {
     info.isExported = decl->isExported;
     info.type = declared;
     info.typeParams = decl->typeParams;
-    mSymTable.defineAtRoot(decl->name, info);
-    mSymTable.defineType(decl->name, declared);
+    const std::string sourceKey = qualifiedDeclarationKey(
+        mCurrentPackageId, mCurrentModulePath, decl->name);
+    mSymTable.defineAtRoot(sourceKey, info);
+    mSymTable.defineType(sourceKey, declared);
     mSymTable.defineType(identity, declared);
 
     std::unordered_map<std::string, TypePtr> bindings;
@@ -480,13 +576,15 @@ void SemanticAnalyzer::declareEnum(EnumDecl* decl) {
     auto declared = mDeclaredTypes[identity];
     if (!declared) {
         declared = Type::makeEnum(decl->name, {}, decl->isNominal
-            ? nominalDeclarationIdentity(mProgram, "enum", identity) : "");
+            ? nominalDeclarationIdentity(mProgram, "enum", identity, decl) : "");
         mDeclaredTypes[identity] = declared;
     }
     declared->typeParams = decl->typeParams;
     declared->variants.clear();
     mDeclaredTypes[identity] = declared;
-    mSymTable.defineType(decl->name, declared);
+    const std::string sourceKey = qualifiedDeclarationKey(
+        mCurrentPackageId, mCurrentModulePath, decl->name);
+    mSymTable.defineType(sourceKey, declared);
     mSymTable.defineType(identity, declared);
 
     std::unordered_map<std::string, TypePtr> bindings;
@@ -506,12 +604,14 @@ void SemanticAnalyzer::declareEnum(EnumDecl* decl) {
 void SemanticAnalyzer::declareTrait(TraitDecl* decl) {
     const std::string identity = traitIdentity(decl);
     decl->resolvedTraitId = identity;
-    if (!mTraits.emplace(decl->name, decl).second)
+    const std::string sourceKey = qualifiedDeclarationKey(
+        mCurrentPackageId, mCurrentModulePath, decl->name);
+    if (!mTraits.emplace(sourceKey, decl).second)
         error("duplicate trait declaration '" + decl->name + "'", decl->line, decl->col);
     mTraitTypeParams[identity] = decl->typeParams;
     // Traits are compile-time interfaces with stable declaration identity.
     mSymTable.defineType(identity, Type::makeTrait(identity));
-    mSymTable.defineType(decl->name, Type::makeTrait(identity));
+    mSymTable.defineType(sourceKey, Type::makeTrait(identity));
 }
 
 void SemanticAnalyzer::declareImpl(ImplDecl* decl) {
@@ -1203,7 +1303,7 @@ void SemanticAnalyzer::exitSlotScope() {
 
 FragmentDecl* SemanticAnalyzer::selectFragment(
     const std::string& name, const ASTNode* useSite) {
-    auto fragment = mFragments.find(name);
+    auto fragment = mFragments.find(sourceDeclarationKey(name));
     if (fragment != mFragments.end()) return fragment->second;
     error("unknown fragment '" + name + "'", useSite->line, useSite->col);
     return nullptr;
@@ -1213,7 +1313,7 @@ std::string SemanticAnalyzer::traitIdentity(const TraitDecl* trait) const {
     if (!trait) return "";
     const auto symbol = trait->generatedSymbolName.empty()
         ? trait->name : trait->generatedSymbolName;
-    return nominalDeclarationIdentity(mProgram, "trait", symbol);
+    return nominalDeclarationIdentity(mProgram, "trait", symbol, trait);
 }
 
 std::string SemanticAnalyzer::typeIdentity(const TypePtr& type) const {
@@ -1238,7 +1338,7 @@ std::string SemanticAnalyzer::resolveTraitRef(TraitRef& trait, const ASTNode* us
     if (!trait.resolvedTraitId.empty()) return trait.resolvedTraitId;
     const ASTNode* diagnosticSite = trait.line > 0 ? static_cast<const ASTNode*>(&trait) : useSite;
     TraitDecl* selected = nullptr;
-    auto declared = mTraits.find(trait.name);
+    auto declared = mTraits.find(sourceDeclarationKey(trait.name));
     if (declared != mTraits.end()) selected = declared->second;
     else {
         error("unknown trait '" + trait.name + "'",
@@ -1475,14 +1575,15 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
     if (auto* sl = dynamic_cast<StringLiteralExpr*>(expr)) return TyString;
     if (auto* bl = dynamic_cast<BoolLiteralExpr*>(expr)) return TyBool;
     if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
-        auto family = mFunctionFamilies.find(id->name);
+        const std::string declarationKey = sourceDeclarationKey(id->name);
+        auto family = mFunctionFamilies.find(declarationKey);
         if (family != mFunctionFamilies.end() && family->second.size() > 1) {
             error("declaration family '" + id->name +
                   "' is ambiguous; use `select " + id->name +
                   " with selector(...)`", id->line, id->col);
             return TyUnknown;
         }
-        auto* sym = mSymTable.lookup(id->name);
+        auto* sym = lookupSymbol(id->name);
         if (!sym) {
             error("undefined name '" + id->name + "'", id->line, id->col);
             return TyUnknown;
@@ -1571,7 +1672,7 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
         }
     }
     if (auto* variant = dynamic_cast<VariantConstructExpr*>(expr)) {
-        auto nominalIt = mDeclaredTypes.find(variant->typeName);
+        auto nominalIt = mDeclaredTypes.find(sourceDeclarationKey(variant->typeName));
         if (nominalIt == mDeclaredTypes.end() ||
             nominalIt->second->kind != TypeKind::Enum) {
             error("'" + variant->typeName + "' is not an enum type");
@@ -1820,13 +1921,15 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
 }
 
 TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
-    auto targetFamily = mFunctionFamilies.find(selection->targetName);
+    const std::string targetKey = sourceDeclarationKey(selection->targetName);
+    const std::string selectorKey = sourceDeclarationKey(selection->selectorName);
+    auto targetFamily = mFunctionFamilies.find(targetKey);
     if (targetFamily == mFunctionFamilies.end() || targetFamily->second.empty()) {
         error("unknown declaration family '" + selection->targetName + "'",
               selection->line, selection->col);
         return TyUnknown;
     }
-    auto selectorFamily = mFunctionFamilies.find(selection->selectorName);
+    auto selectorFamily = mFunctionFamilies.find(selectorKey);
     if (selectorFamily == mFunctionFamilies.end() || selectorFamily->second.size() != 1) {
         error("selector function '" + selection->selectorName +
               "' must resolve to exactly one declaration",
@@ -1834,6 +1937,13 @@ TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
         return TyUnknown;
     }
     auto* selectorFunction = selectorFamily->second.front();
+    const auto selectorSymbol = selectorFunction->generatedSymbolName.empty()
+        ? selectorFunction->name : selectorFunction->generatedSymbolName;
+    selection->resolvedSelectorDeclarationId = nominalDeclarationIdentity(
+        mProgram, "fn", selectorSymbol, selectorFunction);
+    selection->resolvedFamilyId = nominalDeclarationIdentity(
+        mProgram, "fn", targetFamily->second.front()->name,
+        targetFamily->second.front());
     if (selectorFunction->params.empty() ||
         resolved(selectorFunction->params.front().inferredType)->kind !=
             TypeKind::DeclarationView) {
@@ -1898,16 +2008,25 @@ TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
     auto* metadataCall = dynamic_cast<CallExpr*>(protocolCall->args[1].get());
     auto* metadataName = metadataCall
         ? dynamic_cast<IdentifierExpr*>(metadataCall->callee.get()) : nullptr;
-    if (!metadataName || !mMetadataSchemas.count(metadataName->name)) {
+    std::string metadataKey;
+    if (metadataName) {
+        const std::string savedPackage = mCurrentPackageId;
+        const std::string savedModule = mCurrentModulePath;
+        setDeclarationContext(selectorFunction);
+        metadataKey = sourceDeclarationKey(metadataName->name);
+        mCurrentPackageId = savedPackage;
+        mCurrentModulePath = savedModule;
+    }
+    if (!metadataName || !mMetadataSchemas.count(metadataKey)) {
         error("select_unique requires a user-declared metadata value as its filter",
               selection->line, selection->col);
         return TyUnknown;
     }
-    auto* schemaDeclaration = mMetadataSchemas[metadataName->name];
+    auto* schemaDeclaration = mMetadataSchemas[metadataKey];
     const auto schemaSymbol = schemaDeclaration->generatedSymbolName.empty()
         ? schemaDeclaration->name : schemaDeclaration->generatedSymbolName;
     selection->dynamicMetadataSchemaId = nominalDeclarationIdentity(
-        mProgram, "meta", schemaSymbol);
+        mProgram, "meta", schemaSymbol, schemaDeclaration);
     std::vector<ConstValue> wantedValues;
     selection->dynamicFilterArguments.clear();
     for (auto& argument : metadataCall->args) {
@@ -1999,7 +2118,8 @@ TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
                     return TyUnknown;
                 }
                 SelectExpr::DynamicCandidate dynamicCandidate;
-                dynamicCandidate.declarationId = viewCandidate.declarationId;
+                dynamicCandidate.declarationId = nominalDeclarationIdentity(
+                    mProgram, "fn", viewCandidate.declarationId, candidate);
                 dynamicCandidate.symbolName = viewCandidate.declarationId;
                 dynamicCandidate.metadataValues = attachment.evaluatedArguments;
                 selection->dynamicCandidates.push_back(std::move(dynamicCandidate));
@@ -2100,7 +2220,7 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
         return selected->returnType;
     }
     if (id) {
-        auto* symbol = mSymTable.lookup(id->name);
+        auto* symbol = lookupSymbol(id->name);
         if (symbol && symbol->kind == SymbolKind::Metadata) {
             if (call->args.size() != symbol->paramTypes.size()) {
                 error("metadata constructor '" + id->name + "' expects " +
@@ -2249,7 +2369,7 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
               call->line, call->col);
         return TyUnknown;
     }
-    SymbolInfo* sym = id ? mSymTable.lookup(id->name) : nullptr;
+    SymbolInfo* sym = id ? lookupSymbol(id->name) : nullptr;
     auto constrainArgument = [this](Expr* expr, const TypePtr& expected,
                                      const std::string& context) {
         TypePtr actual = analyzeExpr(expr);
@@ -2265,12 +2385,18 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
     };
 
     if (id) {
-        auto family = mFunctionFamilies.find(id->name);
+        const std::string declarationKey = sourceDeclarationKey(id->name);
+        auto family = mFunctionFamilies.find(declarationKey);
         if (family != mFunctionFamilies.end() && family->second.size() > 1) {
             error("declaration family '" + id->name +
                   "' is ambiguous; use `select " + id->name +
                   " with selector(...)`", call->line, call->col);
             return TyUnknown;
+        }
+        if (family != mFunctionFamilies.end() && family->second.size() == 1) {
+            auto* declaration = family->second.front();
+            call->resolvedSymbolName = declaration->generatedSymbolName.empty()
+                ? declaration->name : declaration->generatedSymbolName;
         }
     }
 
@@ -2339,10 +2465,17 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
                                       mGeneratedInstances.back().get() == specialized;
             if (newlyCreated) {
                 mProgram->declarations.push_back(std::move(mGeneratedInstances.back()));
+                const std::string savedPackage = mCurrentPackageId;
+                const std::string savedModule = mCurrentModulePath;
+                setDeclarationContext(specialized);
                 declareFunction(specialized);
                 analyzeFunction(specialized);
+                mCurrentPackageId = savedPackage;
+                mCurrentModulePath = savedModule;
             }
             id->name = specialized->name;
+            call->resolvedSymbolName = specialized->generatedSymbolName.empty()
+                ? specialized->name : specialized->generatedSymbolName;
             call->returnsLinear = specialized->returnsLinear;
             call->returnUsage = specialized->returnUsage;
             return specialized->inferredReturnType
@@ -2360,7 +2493,9 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
         constrainArgument(call->args[i].get(), sym->paramTypes[i],
                           "argument " + std::to_string(i + 1) + " of '" + id->name + "'");
     if (id) {
-        auto constexprIt = mConstexprFunctions.find(id->name);
+        const std::string constexprName = call->resolvedSymbolName.empty()
+            ? id->name : call->resolvedSymbolName;
+        auto constexprIt = mConstexprFunctions.find(constexprName);
         if (constexprIt != mConstexprFunctions.end()) {
             if (auto value = evaluateConstExpr(call)) call->compileTimeValue = std::move(*value);
         }
@@ -2380,7 +2515,7 @@ TypePtr SemanticAnalyzer::analyzeLaunch(LaunchExpr* launch) {
     requireInteger(analyzeExpr(launch->threads.get()), "launch thread count");
 
     FunctionDecl* kernel = nullptr;
-    auto family = mFunctionFamilies.find(launch->kernelName);
+    auto family = mFunctionFamilies.find(sourceDeclarationKey(launch->kernelName));
     if (family != mFunctionFamilies.end() && family->second.size() > 1) {
         error("kernel declaration family '" + launch->kernelName +
               "' is ambiguous; dynamic kernel selection requires an explicit future kernel binding operation",
@@ -2833,6 +2968,8 @@ static std::unique_ptr<Expr> cloneExpr(
         c->isDynamic = e->isDynamic;
         c->resolvedDeclarationId = e->resolvedDeclarationId;
         c->resolvedSymbolName = e->resolvedSymbolName;
+        c->resolvedFamilyId = e->resolvedFamilyId;
+        c->resolvedSelectorDeclarationId = e->resolvedSelectorDeclarationId;
         c->dynamicCandidateIds = e->dynamicCandidateIds;
         c->dynamicMetadataSchemaId = e->dynamicMetadataSchemaId;
         c->dynamicFilterArguments = e->dynamicFilterArguments;
@@ -2918,7 +3055,7 @@ FunctionDecl* SemanticAnalyzer::monomorphize(FunctionDecl* generic, const TypeVe
     const auto genericSymbol = generic->generatedSymbolName.empty()
         ? generic->name : generic->generatedSymbolName;
     request.genericDeclarationId = nominalDeclarationIdentity(
-        mProgram, "fn", genericSymbol);
+        mProgram, "fn", genericSymbol, generic);
     for (const auto& type : concreteTypes)
         request.typeArguments.push_back(typeIdentity(resolved(type)));
     request.requestedBy = mDiagnosticFile + ":" +
@@ -2939,6 +3076,8 @@ FunctionDecl* SemanticAnalyzer::monomorphize(FunctionDecl* generic, const TypeVe
     specialized->sourcePath = generic->sourcePath;
     specialized->line = generic->line;
     specialized->col = generic->col;
+    specialized->packageId = generic->packageId;
+    specialized->modulePath = generic->modulePath;
     specialized->isExported = generic->isExported;
     specialized->isKernel = generic->isKernel;
     specialized->isConstexpr = generic->isConstexpr;
@@ -3074,13 +3213,14 @@ TypePtr SemanticAnalyzer::resolveTypeAST(const TypeAST* ast,
                 ? nullptr : resolveTypeAST(named->typeArgs.front().get(), bindings);
             return Type::makeDeclarationRef(callable);
         }
-        if (auto metadata = mSymTable.lookupType(named->name);
+        if (auto metadata = lookupDeclaredType(named->name);
             metadata && metadata->kind == TypeKind::Metadata) {
             return metadata;
         }
 
         TypePtr nominalType;
-        auto nominal = mDeclaredTypes.find(named->name);
+        const std::string typeKey = sourceDeclarationKey(named->name);
+        auto nominal = mDeclaredTypes.find(typeKey);
         if (nominal != mDeclaredTypes.end()) nominalType = nominal->second;
         if (nominalType) {
             TypeVec args;
@@ -3298,16 +3438,24 @@ void SemanticAnalyzer::materializeInferredTypes(Program* program) {
     std::function<void(Expr*)> visitExpr;
     std::function<void(BlockStmt*)> visitBlock;
     std::function<void(Stmt*)> visitStmt;
+    const auto needsConcreteAnnotation = [](const std::unique_ptr<TypeAST>& type) {
+        if (!type) return true;
+        const auto* named = dynamic_cast<const NamedTypeAST*>(type.get());
+        return named && named->name == "auto";
+    };
 
     visitExpr = [&](Expr* expr) {
         if (!expr) return;
         if (auto* l = dynamic_cast<LambdaExpr*>(expr)) {
             for (auto& p : l->params) {
                 checkUnresolved(p.inferredType, "lambda parameter '" + p.name + "'");
-                if (!p.type) p.type = typeToAST(p.inferredType);
+                p.inferredType = resolved(p.inferredType);
+                if (needsConcreteAnnotation(p.type)) p.type = typeToAST(p.inferredType);
             }
             checkUnresolved(l->closureType, "lambda type");
-            if (!l->returnType && l->closureType && l->closureType->kind == TypeKind::Function)
+            l->closureType = resolved(l->closureType);
+            if (needsConcreteAnnotation(l->returnType) && l->closureType &&
+                l->closureType->kind == TypeKind::Function)
                 l->returnType = typeToAST(l->closureType->returnType);
             visitBlock(l->body.get());
             return;
@@ -3363,13 +3511,23 @@ void SemanticAnalyzer::materializeInferredTypes(Program* program) {
 
     for (auto& decl : program->declarations) {
         if (auto* f = dynamic_cast<FunctionDecl*>(decl.get())) {
-            for (auto& p : f->params) if (!p.type) p.type = typeToAST(p.inferredType);
-            if (!f->returnType) f->returnType = typeToAST(f->inferredReturnType);
+            for (auto& p : f->params) {
+                p.inferredType = resolved(p.inferredType);
+                if (needsConcreteAnnotation(p.type)) p.type = typeToAST(p.inferredType);
+            }
+            f->inferredReturnType = resolved(f->inferredReturnType);
+            if (needsConcreteAnnotation(f->returnType))
+                f->returnType = typeToAST(f->inferredReturnType);
             visitBlock(f->body.get());
         } else if (auto* i = dynamic_cast<ImplDecl*>(decl.get())) {
             for (auto& f : i->methods) {
-                for (auto& p : f->params) if (!p.type) p.type = typeToAST(p.inferredType);
-                if (!f->returnType) f->returnType = typeToAST(f->inferredReturnType);
+                for (auto& p : f->params) {
+                    p.inferredType = resolved(p.inferredType);
+                    if (needsConcreteAnnotation(p.type)) p.type = typeToAST(p.inferredType);
+                }
+                f->inferredReturnType = resolved(f->inferredReturnType);
+                if (needsConcreteAnnotation(f->returnType))
+                    f->returnType = typeToAST(f->inferredReturnType);
                 visitBlock(f->body.get());
             }
         }
@@ -3407,4 +3565,59 @@ void SemanticAnalyzer::setDiagnosticLocation(const ASTNode* node) {
     if (!node->sourcePath.empty()) mDiagnosticFile = node->sourcePath;
     if (node->line > 0) mDiagnosticLine = node->line;
     if (node->col > 0) mDiagnosticCol = node->col;
+}
+
+void SemanticAnalyzer::setDeclarationContext(const Decl* declaration) {
+    mCurrentPackageId = effectivePackageId(mProgram, declaration);
+    mCurrentModulePath = declaration ? declaration->modulePath : std::string{};
+}
+
+std::string SemanticAnalyzer::sourceDeclarationKey(
+    const std::string& name, bool diagnoseVisibility) {
+    const auto parts = splitQualifiedName(name);
+    std::string packageId = mCurrentPackageId;
+    std::string modulePath = mCurrentModulePath;
+    std::string symbol = name;
+
+    if (parts.size() > 1) {
+        size_t moduleBegin = 0;
+        auto ownerAliases = mPackageAliases.find(mCurrentPackageId);
+        if (ownerAliases != mPackageAliases.end()) {
+            auto alias = ownerAliases->second.find(parts.front());
+            if (alias != ownerAliases->second.end()) {
+                packageId = alias->second;
+                moduleBegin = 1;
+            }
+        }
+        symbol = parts.back();
+        modulePath.clear();
+        for (size_t index = moduleBegin; index + 1 < parts.size(); ++index) {
+            if (!modulePath.empty()) modulePath += "::";
+            modulePath += parts[index];
+        }
+    }
+
+    const std::string key = qualifiedDeclarationKey(packageId, modulePath, symbol);
+    auto declaration = mQualifiedDeclarations.find(key);
+    if (declaration == mQualifiedDeclarations.end())
+        return parts.size() == 1 ? name : key;
+    if (diagnoseVisibility && packageId != mCurrentPackageId &&
+        !declaration->second->isExported) {
+        error("declaration '" + name + "' is private to package '" + packageId + "'");
+    }
+    return key;
+}
+
+SymbolInfo* SemanticAnalyzer::lookupSymbol(const std::string& name) {
+    // Lexical bindings and compiler built-ins deliberately shadow package
+    // declarations for an unqualified name.
+    if (name.find("::") == std::string::npos) {
+        if (auto* direct = mSymTable.lookup(name)) return direct;
+    }
+    return mSymTable.lookup(sourceDeclarationKey(name));
+}
+
+TypePtr SemanticAnalyzer::lookupDeclaredType(const std::string& name) {
+    if (auto direct = mSymTable.lookupType(name)) return direct;
+    return mSymTable.lookupType(sourceDeclarationKey(name));
 }
