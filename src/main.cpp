@@ -20,6 +20,7 @@
 #include <llvm/Support/Program.h>
 
 #include <iostream>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <cstdlib>
@@ -280,6 +281,10 @@ int main(int argc, char* argv[]) {
             }
 
             int result = cg.jitRun();
+            // Generated `print` calls use C stdio. On Windows a redirected
+            // stdout is block-buffered independently from the C++ stream, so
+            // establish the user-output-before-prompt ordering explicitly.
+            std::fflush(stdout);
             std::cout << "= " << result << "\n";
         }
         return 0;
@@ -457,6 +462,9 @@ int main(int argc, char* argv[]) {
     if (cmd == "run") {
         if (!loadJITLibraries(linkLibraries)) return 1;
         int result = cg.jitRun();
+        // Keep the CLI marker after all observable program output on every
+        // CRT, including MinGW/UCRT under redirected GitHub Actions stdout.
+        std::fflush(stdout);
         std::cout << "Program exited with code: " << result << std::endl;
         return result;
     }
