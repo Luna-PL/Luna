@@ -1,11 +1,11 @@
 // Runtime-selected, statically linked fragment candidates. The runtime picks
 // LUNA_FRAGMENT_PIPELINE when set, otherwise the first candidate (`trace`).
-context trace(value: i32) {
+runtime context trace(value: i32) {
     print(value);
     resume();
 }
 
-context audit(value: i32) {
+runtime context audit(value: i32) {
     print(value + 2);
     resume();
 }

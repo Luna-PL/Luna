@@ -1,7 +1,7 @@
 # Full Week-2 behavior matrix.  Each stable-core input is executed through
 # JIT and AOT at O0, O2, and O3; both its source-level exit status and observable
 # stdout must agree.  This is intentionally broader than a smoke test: it
-# catches optimization/linking drift in generics, traits, versions, FFI,
+# catches optimization/linking drift in generics, traits, selectors, FFI,
 # packages, and the portable GPU simulator.
 
 if(NOT DEFINED LUNA_EXECUTABLE OR NOT EXISTS "${LUNA_EXECUTABLE}")
@@ -81,9 +81,10 @@ check_file("generic monomorphization" "examples/generic.luna")
 check_file("compile-time reflection" "examples/compile_time.luna")
 check_file("closure" "examples/closure.luna")
 check_file("ADT lowering" "examples/adt.luna")
-check_file("declaration versioning" "examples/versioning.luna")
-check_file("trait versioning" "examples/trait_versioning.luna")
-check_file("nominal trait versioning" "examples/trait_versioned_nominal.luna")
+check_file("metadata selection" "examples/versioning.luna")
+check_file("dynamic metadata selection" "examples/dynamic_select.luna")
+check_file("trait metadata" "examples/trait_versioning.luna")
+check_file("nominal trait metadata" "examples/trait_versioned_nominal.luna")
 check_file("C FFI" "examples/ffi.luna")
 check_file("heterogeneous simulator" "examples/heterogeneous.luna")
 check_file("heterogeneous bulk transfer" "tests/fixtures/heterogeneous_bulk_transfer.luna")

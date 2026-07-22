@@ -1,0 +1,18 @@
+struct First { value: i32; }
+struct Second { value: i32; }
+
+trait Tagged {
+    fn validate(value: i32) -> i32;
+}
+
+impl Tagged for First {
+    fn validate(value: i32) -> i32 { return value; }
+}
+
+fn retain<T>(affine value: T) -> affine T where T: Tagged { return value; }
+
+fn main() -> i32 {
+    let value = new Second(7);
+    let retained = retain(move value);
+    return 0;
+}

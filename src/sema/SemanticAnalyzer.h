@@ -2,6 +2,7 @@
 
 #include "TypeSystem.h"
 #include "SymbolTable.h"
+#include "../instantiation/Instantiator.h"
 #include "../parser/AST.h"
 #include <string>
 #include <vector>
@@ -19,6 +20,8 @@ struct StructDecl;
 struct EnumDecl;
 struct TraitDecl;
 struct ImplDecl;
+struct MetaDecl;
+struct SelectExpr;
 struct ASTNode;
 
 class SemanticAnalyzer {
@@ -39,6 +42,7 @@ private:
     void declareTrait(TraitDecl* decl);
     void declareImpl(ImplDecl* decl);
     void declareFragment(FragmentDecl* decl);
+    void declareMeta(MetaDecl* decl);
     void validateFFIFunction(FunctionDecl* decl);
     bool isFFIType(const TypePtr& type, const std::string& context);
 
@@ -47,6 +51,8 @@ private:
     void analyzeEnum(EnumDecl* decl);
     void analyzeTrait(TraitDecl* decl);
     void analyzeImpl(ImplDecl* decl);
+    void analyzeMeta(MetaDecl* decl);
+    void validateMetadata(Decl* decl);
     void analyzeSlotDecl(SlotDeclStmt* stmt);
     void analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedReturn);
     void analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn);
@@ -59,6 +65,7 @@ private:
     TypePtr analyzeExpr(Expr* expr);
     TypePtr analyzeCall(CallExpr* call);
     TypePtr analyzeLaunch(LaunchExpr* launch);
+    TypePtr analyzeSelect(SelectExpr* selection);
     bool statementAlwaysReturns(const Stmt* stmt) const;
     bool blockAlwaysReturns(const BlockStmt* block) const;
 
@@ -94,18 +101,8 @@ private:
     lookupConst(const std::string& name) const;
     void enterSlotScope();
     void exitSlotScope();
-    FunctionDecl* selectVersionedFunction(const std::string& name,
-                                          const VersionSelector& selector,
-                                          const ASTNode* useSite);
     FragmentDecl* selectFragment(const std::string& name,
-                                 const std::optional<VersionSelector>& selector,
                                  const ASTNode* useSite);
-    TypePtr selectVersionedNominal(const std::string& name,
-                                   const VersionSelector& selector,
-                                   const ASTNode* useSite);
-    TraitDecl* selectVersionedTrait(const std::string& name,
-                                    const VersionSelector& selector,
-                                    const ASTNode* useSite);
     std::string resolveTraitRef(TraitRef& trait, const ASTNode* useSite);
     std::string typeIdentity(const TypePtr& type) const;
     std::string traitIdentity(const TraitDecl* trait) const;
@@ -121,9 +118,9 @@ private:
     void setDiagnosticLocation(const ASTNode* node);
 
     SymbolTable mSymTable;
+    std::unordered_map<std::string, MetaDecl*> mMetadataSchemas;
+    std::unordered_map<std::string, std::vector<FunctionDecl*>> mFunctionFamilies;
     // Exact TraitId → (exact target TypeId → [methodName → FunctionDecl*]).
-    // Both keys are resolved during semantic analysis; raw source names never
-    // participate in versioned trait coherence.
     std::unordered_map<std::string,
         std::unordered_map<std::string,
             std::unordered_map<std::string, FunctionDecl*>>> mImpls;
@@ -131,26 +128,14 @@ private:
     std::unordered_map<std::string, std::vector<std::string>> mTraitTypeParams;
     // Trait → methods
     std::unordered_map<std::string, std::vector<std::pair<std::string, FunctionDecl*>>> mTraitMethods;
-    struct VersionedTrait {
-        SemanticVersion version;
-        TraitDecl* decl;
-    };
     std::unordered_map<std::string, TraitDecl*> mTraits;
-    std::unordered_map<std::string,
-        std::unordered_map<std::string, std::vector<VersionedTrait>>> mVersionedTraits;
-    std::unordered_map<std::string, TypePtr> mNominalTypes;
-    struct VersionedNominal {
-        SemanticVersion version;
-        TypePtr type;
-    };
-    std::unordered_map<std::string,
-        std::unordered_map<std::string, std::vector<FunctionDecl*>>> mVersionedFunctions;
-    std::unordered_map<std::string,
-        std::unordered_map<std::string, std::vector<FragmentDecl*>>> mVersionedFragments;
-    std::unordered_map<std::string,
-        std::unordered_map<std::string, std::vector<VersionedNominal>>> mVersionedNominals;
+    // Source declaration names map to resolved types regardless of whether
+    // their identity policy is structural or nominal.
+    std::unordered_map<std::string, TypePtr> mDeclaredTypes;
 
     std::vector<std::unique_ptr<FunctionDecl>> mGeneratedInstances;
+    luna::instantiation::Instantiator mInstantiator;
+    std::unordered_map<std::string, FunctionDecl*> mInstantiatedFunctions;
     std::vector<std::string> mErrors;
     Program* mProgram = nullptr;
     std::string mDiagnosticFile;
@@ -162,6 +147,7 @@ private:
     bool mInFunction = false;
     bool mInKernel = false;
     bool mCurrentFunctionReturnsLinear = false;
+    luna::ownership::Usage mCurrentFunctionReturnUsage = luna::ownership::Usage::Copy;
     bool mSawReturn = false;
     ConstraintSolver mConstraints;
     std::vector<std::pair<TypePtr, std::string>> mInferenceRoots;
@@ -174,7 +160,6 @@ private:
         TypeVec paramTypes;
         std::vector<std::string> paramNames;
         std::string defaultFragment;
-        std::optional<VersionSelector> defaultFragmentSelector;
         std::string resolvedDefaultFragmentName;
         FragmentKind acceptedKind = FragmentKind::Interceptor;
         FragmentCardinality acceptedCardinality = FragmentCardinality::Once;

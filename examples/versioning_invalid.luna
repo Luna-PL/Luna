@@ -1,8 +1,12 @@
-fn only @stable(1.0.0)() -> i32 {
-    return 1;
+meta version { major: i32; minor: i32; patch: i32; }
+
+fn choice(view: declaration_view, major: i32, minor: i32, patch: i32) -> declaration_ref {
+    return select_unique(view, version(major, minor, patch));
 }
 
+@version(1, 0, 0)
+fn only() -> i32 { return 1; }
+
 fn main() -> i32 {
-    // `1.1.0` is a well-formed selector, but this release was never declared.
-    return only@stable(1.1.0);
+    return @choice(1, 1, 0) only();
 }

@@ -36,7 +36,8 @@ inline std::string errorCode(const std::string& phase, const std::string& messag
         if (has("Type constraint failed")) return "SEM0002";
         if (has("may finish without returning")) return "SEM0003";
         if (has("FFI") || has("ABI") || has("extern function")) return "SEM0101";
-        if (has("versioned") || has("has no `@")) return "SEM0201";
+        if (has("selector") || has("metadata") || has("declaration family"))
+            return "SEM0201";
         if (has("trait")) return "SEM0301";
         if (has("kernel")) return "SEM0401";
         return "SEM9999";

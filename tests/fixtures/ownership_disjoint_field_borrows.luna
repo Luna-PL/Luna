@@ -1,0 +1,8 @@
+struct Pair { left: i32; right: i32; }
+
+fn main() -> i32 {
+    let pair = new Pair(1, 2);
+    let left = borrow mut pair.left;
+    let right = borrow pair.right;
+    return 0;
+}

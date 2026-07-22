@@ -27,9 +27,12 @@ private:
     std::unique_ptr<FragmentDecl> parseFragmentDecl(FragmentKind kind);
     std::unique_ptr<TraitDecl> parseTraitDecl();
     std::unique_ptr<ImplDecl> parseImplDecl();
+    std::unique_ptr<MetaDecl> parseMetaDecl();
     std::unique_ptr<BlockStmt> parseBlock();
     std::unique_ptr<Stmt> parseStatement();
-    std::unique_ptr<Stmt> parseLetStmt(bool isLinear = false, bool isConst = false);
+    std::unique_ptr<Stmt> parseLetStmt(
+        luna::ownership::Usage usage = luna::ownership::Usage::Copy,
+        bool isConst = false);
     std::unique_ptr<Stmt> parseReturnStmt();
     std::unique_ptr<Stmt> parseIfStmt();
     std::unique_ptr<Stmt> parseWhileStmt();
@@ -59,8 +62,10 @@ private:
     std::unique_ptr<Expr> parsePostfix();
     std::unique_ptr<Expr> parsePrimary();
     std::unique_ptr<Expr> parseIfExpr();
-    std::unique_ptr<Expr> parseLambda(std::optional<VersionTag> versionTag = std::nullopt);
+    std::unique_ptr<Expr> parseLambda();
     std::unique_ptr<Expr> parseLaunchExpr();
+    std::unique_ptr<SelectExpr> parseSelectExpr(bool isDynamic,
+                                                bool selectAlreadyConsumed = true);
 
     std::unique_ptr<TypeAST> parseType();
     std::unique_ptr<TypeAST> parseFunctionType();
@@ -68,10 +73,8 @@ private:
     std::vector<std::unique_ptr<Expr>> parseArgs();
     std::vector<std::string> parseTypeParamList();
     std::vector<WhereClause> parseWhereClause();
-    std::optional<VersionTag> parseDeclaredVersionTag();
-    std::optional<VersionSelector> parseVersionSelector();
-    std::optional<SemanticVersion> parseSemanticVersion();
     TraitRef parseTraitRef(const Token& nameToken);
+    Decl::MetadataAttachment parseMetadataAttachment(RetentionKind retention);
 
     const Token& peek() const;
     const Token& peekAhead(int n) const;

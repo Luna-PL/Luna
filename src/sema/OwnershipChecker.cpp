@@ -1,6 +1,7 @@
 #include "OwnershipChecker.h"
 #include "../diagnostics/Diagnostic.h"
 #include <functional>
+#include <algorithm>
 #include <unordered_set>
 
 OwnershipChecker::OwnershipChecker() {
@@ -40,7 +41,8 @@ bool OwnershipChecker::checkFunction(FunctionDecl* decl) {
     mSlotScopes.emplace_back();
 
     for (auto& param : decl->params) {
-        TypePtr type = resolveType(param.type.get(), {});
+        TypePtr type = param.inferredType ? param.inferredType
+                                          : resolveType(param.type.get(), {});
         bool isReference = type && type->kind == TypeKind::Reference;
         // Function parameters are non-owning views by default.  A nominal
         // type lowers to a pointer, but that pointer still belongs to the
@@ -48,8 +50,17 @@ bool OwnershipChecker::checkFunction(FunctionDecl* decl) {
         // Treating every heap-shaped parameter as locally owned caused
         // ordinary calls such as read_x(point) to free the caller's value on
         // return, followed by a second free in the caller.
-        define(param.name, type, false,
-               param.isLinear || isLinearTypeAST(param.type.get()),
+        const bool explicitUsage = param.hasExplicitUsage || param.isLinear ||
+            dynamic_cast<LinearTypeAST*>(param.type.get()) ||
+            dynamic_cast<AffineTypeAST*>(param.type.get());
+        const auto syntaxUsage = usageFromTypeAST(param.type.get());
+        const auto usage = explicitUsage
+            ? (param.isLinear ? luna::ownership::Usage::Linear
+                              : (syntaxUsage == luna::ownership::Usage::Copy
+                                  ? param.usage : syntaxUsage))
+            : defaultUsageForType(type);
+        const auto contract = parameterContractFor(type, usage, explicitUsage);
+        define(param.name, type, false, contract.usage, contract.relation,
                isReference, isReference && type->isMutable);
         // define() also classifies heap-shaped local values from their type
         // so constructor results receive automatic cleanup.  Parameters are
@@ -295,8 +306,10 @@ OwnershipChecker::FlowResult OwnershipChecker::checkFragment(
         TypePtr type = param.inferredType ? param.inferredType
                                            : resolveType(param.type.get(), {});
         bool isReference = type && type->kind == TypeKind::Reference;
-        define(param.name, type, type && type->isHeapType(), param.isLinear,
-               isReference, isReference && type->isMutable);
+        const auto usage = param.isLinear ? luna::ownership::Usage::Linear
+                                         : param.usage;
+        define(param.name, type, type && type->isHeapType(), usage,
+               param.relation, isReference, isReference && type->isMutable);
     }
     FlowResult body = fragment->body ? checkBlock(fragment->body.get()) : FlowResult{};
     bool ok = body.ok;
@@ -376,8 +389,17 @@ bool OwnershipChecker::sameVarState(const VarInfo& left, const VarInfo& right) c
         left.isGpuEvent != right.isGpuEvent ||
         left.eventResources.size() != right.eventResources.size())
         return false;
+    if (left.movedPlaces.size() != right.movedPlaces.size()) return false;
+    std::vector<std::string> leftMoved;
+    std::vector<std::string> rightMoved;
+    for (const auto& place : left.movedPlaces) leftMoved.push_back(renderPlace(place));
+    for (const auto& place : right.movedPlaces) rightMoved.push_back(renderPlace(place));
+    std::sort(leftMoved.begin(), leftMoved.end());
+    std::sort(rightMoved.begin(), rightMoved.end());
+    if (leftMoved != rightMoved) return false;
     for (size_t i = 0; i < left.eventResources.size(); ++i) {
-        if (left.eventResources[i].source != right.eventResources[i].source ||
+        if (renderPlace(left.eventResources[i].source) !=
+                renderPlace(right.eventResources[i].source) ||
             left.eventResources[i].isMutable != right.eventResources[i].isMutable)
             return false;
     }
@@ -388,7 +410,8 @@ bool OwnershipChecker::sameLoanState(const std::vector<Loan>& left,
                                      const std::vector<Loan>& right) const {
     if (left.size() != right.size()) return false;
     for (size_t i = 0; i < left.size(); ++i) {
-        if (left[i].source != right[i].source || left[i].isMutable != right[i].isMutable)
+        if (renderPlace(left[i].source) != renderPlace(right[i].source) ||
+            left[i].isMutable != right[i].isMutable)
             return false;
     }
     return true;
@@ -431,7 +454,8 @@ std::string OwnershipChecker::describeControlFlowDifference(
         if (left.isGpuEvent || right.isGpuEvent)
             return "launch event '" + name + "' is awaited or moved on only some paths through `" +
                    construct + "`; every path that continues must leave it in the same state";
-        if (left.isLinear || right.isLinear)
+        if (luna::ownership::mustConsume(left.usage) ||
+            luna::ownership::mustConsume(right.usage))
             return "linear resource '" + name + "' is consumed on only some paths through `" +
                    construct + "`; consume it before the branch or on every path that continues";
         if (left.isHeapAllocated || right.isHeapAllocated)
@@ -591,7 +615,8 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
         bool ok = true;
         for (size_t index = mCurrentFragmentScopeBase; index < mScopes.size(); ++index) {
             for (const auto& [name, info] : mScopes[index]) {
-                if (info.isLinear && info.state == OwnState::Valid) {
+                if (luna::ownership::mustConsume(info.usage) &&
+                    info.state == OwnState::Valid) {
                     error("Linear variable '" + name +
                           "' must be consumed before aborting the fragment",
                           stmt->line, stmt->col);
@@ -624,20 +649,28 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
     if (auto* let = dynamic_cast<LetStmt*>(stmt)) {
         const size_t loanCount = mLoansInScope.back().size();
         VarInfo* movedSource = nullptr;
+        std::optional<Place> movedPlace;
         if (auto* move = dynamic_cast<MoveExpr*>(let->initializer.get())) {
-            if (auto* id = dynamic_cast<IdentifierExpr*>(move->operand.get()))
-                movedSource = lookup(id->name);
+            movedPlace = extractPlace(move->operand.get());
+            if (movedPlace) movedSource = lookup(movedPlace->root);
         }
         if (!checkExpr(let->initializer.get())) return false;
 
-        TypePtr type = let->typeAnnotation
-            ? resolveType(let->typeAnnotation.get(), {}) : TyUnknown;
+        TypePtr type = let->inferredType ? let->inferredType
+            : (let->typeAnnotation ? resolveType(let->typeAnnotation.get(), {}) : TyUnknown);
         bool isReference = type && type->kind == TypeKind::Reference;
         bool isMutableReference = isReference && type->isMutable;
         bool isHeap = dynamic_cast<HeapAllocExpr*>(let->initializer.get()) != nullptr;
-        bool isLinear = let->isLinear || isLinearTypeAST(let->typeAnnotation.get());
-        if (auto* call = dynamic_cast<CallExpr*>(let->initializer.get()))
-            isLinear = isLinear || call->returnsLinear;
+        luna::ownership::Usage usage = let->hasExplicitUsage
+            ? let->usage : defaultUsageForType(type);
+        const auto annotatedUsage = usageFromTypeAST(let->typeAnnotation.get());
+        if (annotatedUsage != luna::ownership::Usage::Copy) usage = annotatedUsage;
+        if (auto* call = dynamic_cast<CallExpr*>(let->initializer.get())) {
+            if (call->returnUsage != luna::ownership::Usage::Copy)
+                usage = call->returnUsage;
+            else if (call->returnsLinear)
+                usage = luna::ownership::Usage::Linear;
+        }
         if (auto* call = dynamic_cast<CallExpr*>(let->initializer.get())) {
             if (auto* callee = dynamic_cast<IdentifierExpr*>(call->callee.get());
                 callee && callee->name == "slice") {
@@ -649,7 +682,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
 
         if (movedSource) {
             isHeap = isHeap || movedSource->isHeapAllocated;
-            isLinear = isLinear || movedSource->isLinear;
+            usage = movedSource->usage;
             isReference = isReference || movedSource->isReference;
             isMutableReference = isMutableReference || movedSource->isMutableReference;
             if (!type || type == TyUnknown) type = movedSource->type;
@@ -665,21 +698,32 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
 
         if (auto* id = dynamic_cast<IdentifierExpr*>(let->initializer.get())) {
             auto* source = lookup(id->name);
-            if (source && source->isLinear) {
-                error("Linear variable '" + id->name +
+            if (source && luna::ownership::isMoveOnly(source->usage)) {
+                error(std::string(luna::ownership::usageName(source->usage)) +
+                      " variable '" + id->name +
                       "' must be moved explicitly when initializing '" + let->name + "'");
                 return false;
             }
         }
 
-        define(let->name, type, isHeap, isLinear, isReference, isMutableReference);
+        const bool borrowedCallResult = dynamic_cast<CallExpr*>(let->initializer.get()) &&
+            usage == luna::ownership::Usage::Copy && type && type->isHeapType();
+        const auto relation = isReference
+            ? (isMutableReference ? luna::ownership::Relation::MutableBorrow
+                                  : luna::ownership::Relation::SharedBorrow)
+            : (borrowedCallResult ? luna::ownership::Relation::SharedBorrow
+                                  : luna::ownership::Relation::Owned);
+        let->usage = usage;
+        let->isLinear = usage == luna::ownership::Usage::Linear;
+        define(let->name, type, isHeap, usage, relation,
+               isReference, isMutableReference);
         if (auto* launch = dynamic_cast<LaunchExpr*>(let->initializer.get())) {
             auto* event = lookup(let->name);
             if (event) {
                 event->isGpuEvent = true;
                 event->eventResources.clear();
                 for (const auto& resource : launch->inFlightResources)
-                    event->eventResources.push_back({resource.first, resource.second});
+                    event->eventResources.push_back({{resource.first, {}}, resource.second});
             }
         } else if (movedSource && movedSource->isGpuEvent) {
             // Events are linear handles, not mere integers. Moving one must
@@ -706,8 +750,9 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
             return false;
         }
         if (auto* call = dynamic_cast<CallExpr*>(expression->expr.get());
-            call && call->returnsLinear) {
-            error("owning result of FFI call must be bound to a variable and consumed",
+            call && luna::ownership::isMoveOnly(call->returnUsage)) {
+            error("owning result of FFI call must be bound to a variable and consumed "
+                  "(all move-only results require an explicit owner)",
                   expression->line, expression->col);
             return false;
         }
@@ -728,17 +773,21 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                 error("Reference cannot escape the function through return");
                 ok = false;
             }
-            if (auto* id = dynamic_cast<IdentifierExpr*>(ret->value.get())) {
-                auto* var = lookup(id->name);
+            if (auto place = extractPlace(ret->value.get())) {
+                auto* var = lookup(place->root);
                 if (var && var->isGpuEvent) {
-                    error("launch event '" + id->name + "' cannot escape; await it before returning",
-                          id->line, id->col);
+                    error("launch event '" + place->root + "' cannot escape; await it before returning",
+                          ret->value->line, ret->value->col);
                     ok = false;
-                } else if (var && (var->isLinear || var->isHeapAllocated)) {
+                } else if (var && (luna::ownership::isMoveOnly(var->usage) ||
+                                   var->isHeapAllocated ||
+                                   (var->relation != luna::ownership::Relation::Owned &&
+                                    defaultUsageForType(typeOfPlace(*place)) !=
+                                        luna::ownership::Usage::Copy))) {
                     // Returning an owned heap value transfers it to the
                     // caller.  Without this transition an automatic cleanup
                     // at the return point would free the returned pointer.
-                    ok = consume(var, "return");
+                    ok = consume(*place, "return");
                 }
             }
         }
@@ -752,7 +801,8 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
             // remain available to the code after the slot.
             for (size_t index = mCurrentFragmentScopeBase; index < mScopes.size(); ++index) {
                 for (const auto& [name, info] : mScopes[index]) {
-                    if (info.isLinear && info.state == OwnState::Valid) {
+                    if (luna::ownership::mustConsume(info.usage) &&
+                        info.state == OwnState::Valid) {
                         error("Linear variable '" + name +
                               "' must be consumed before returning from the fragment",
                               stmt->line, stmt->col);
@@ -762,6 +812,13 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
             }
             if (ok) {
                 ret->autoFrees = collectFreesAtFragmentExit();
+                ret->cleanups.clear();
+                for (const auto& place : ret->autoFrees) {
+                    auto* variable = lookup(place);
+                    ret->cleanups.push_back({
+                        place, luna::ownership::CleanupAction::Deallocate,
+                        variable ? variable->type : nullptr});
+                }
                 CheckerState exit = captureState();
                 exit.scopes.resize(mCurrentFragmentScopeBase);
                 exit.loans.resize(mCurrentFragmentScopeBase);
@@ -775,6 +832,13 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
         if (ok) {
             validateLinearReturnPath();
             ret->autoFrees = collectFreesAtReturn();
+            ret->cleanups.clear();
+            for (const auto& place : ret->autoFrees) {
+                auto* variable = lookup(place);
+                ret->cleanups.push_back({
+                    place, luna::ownership::CleanupAction::Deallocate,
+                    variable ? variable->type : nullptr});
+            }
         }
         if (mErrors.size() != errorsBeforeReturnValidation) ok = false;
         return {ok, false};
@@ -871,6 +935,12 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
 bool OwnershipChecker::checkExpr(Expr* expr) {
     if (!expr) return true;
     setDiagnosticLocation(expr);
+    if (auto* selection = dynamic_cast<SelectExpr*>(expr)) {
+        for (auto& arg : selection->selectorArgs) {
+            if (!checkExpr(arg.get())) return false;
+        }
+        return true;
+    }
     if (auto* launch = dynamic_cast<LaunchExpr*>(expr)) {
         if (mValidatingManyContinuation) {
             error("a multi-shot fragment cannot launch asynchronous work because its continuation may be replayed",
@@ -897,41 +967,24 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
         return true;
     }
     if (auto* move = dynamic_cast<MoveExpr*>(expr)) {
-        if (auto* id = dynamic_cast<IdentifierExpr*>(move->operand.get())) {
-            auto* var = lookup(id->name);
-            if (!var) {
-                error("move of undefined variable '" + id->name + "'", id->line, id->col);
-                return false;
-            }
-            return consume(var, "move");
-        }
+        if (auto place = extractPlace(move->operand.get()))
+            return consume(*place, "move");
         return checkExpr(move->operand.get());
     }
     if (auto* borrow = dynamic_cast<BorrowExpr*>(expr)) {
-        if (auto* id = dynamic_cast<IdentifierExpr*>(borrow->operand.get())) {
-            setDiagnosticLocation(id);
-            return acquireLoan(id->name, borrow->isMutable);
-        }
+        if (auto place = extractPlace(borrow->operand.get()))
+            return acquireLoan(*place, borrow->isMutable);
         return checkExpr(borrow->operand.get());
     }
     if (auto* address = dynamic_cast<AddrOfExpr*>(expr)) {
-        if (auto* id = dynamic_cast<IdentifierExpr*>(address->operand.get())) {
-            setDiagnosticLocation(id);
-            return acquireLoan(id->name, address->isMutable);
-        }
+        if (auto place = extractPlace(address->operand.get()))
+            return acquireLoan(*place, address->isMutable);
         return checkExpr(address->operand.get());
     }
     if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
         auto* var = lookup(id->name);
         if (!var) return true; // functions are resolved by semantic analysis
-        if (var->state == OwnState::Moved) {
-            error("use after move of '" + id->name + "'", id->line, id->col);
-            return false;
-        }
-        if (var->state == OwnState::Freed) {
-            error("use after free of '" + id->name + "'", id->line, id->col);
-            return false;
-        }
+        if (!isPlaceAvailable({id->name, {}}, "use")) return false;
         if (var->isGpuEvent) {
             error("launch event '" + id->name + "' must be consumed with `await`", id->line, id->col);
             return false;
@@ -949,13 +1002,25 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
         return checkExpr(unary->operand.get());
     if (auto* call = dynamic_cast<CallExpr*>(expr)) {
         if (!checkExpr(call->callee.get())) return false;
-        for (auto& arg : call->args) {
-            if (auto* id = dynamic_cast<IdentifierExpr*>(arg.get())) {
-                auto* var = lookup(id->name);
-                if (var && var->isLinear) {
-                    error("Linear variable '" + id->name +
-                          "' must be moved explicitly when passed to a call");
-                    return false;
+        SymbolInfo* calleeInfo = nullptr;
+        if (auto* callee = dynamic_cast<IdentifierExpr*>(call->callee.get()))
+            calleeInfo = mSymTable ? mSymTable->lookup(callee->name) : nullptr;
+        for (size_t index = 0; index < call->args.size(); ++index) {
+            auto& arg = call->args[index];
+            if (!dynamic_cast<MoveExpr*>(arg.get())) {
+                if (auto place = extractPlace(arg.get())) {
+                    auto* var = lookup(place->root);
+                    const bool owningParameter = calleeInfo &&
+                        index < calleeInfo->paramContracts.size() &&
+                        calleeInfo->paramContracts[index].relation ==
+                            luna::ownership::Relation::Owned;
+                    if (var && luna::ownership::isMoveOnly(var->usage) &&
+                        (owningParameter || !calleeInfo)) {
+                        error(std::string(luna::ownership::usageName(var->usage)) +
+                              " value '" + renderPlace(*place) +
+                              "' must be moved explicitly when passed to an owning call");
+                        return false;
+                    }
                 }
             }
             if (!checkExpr(arg.get())) return false;
@@ -977,7 +1042,14 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
     if (auto* heap = dynamic_cast<HeapAllocExpr*>(expr))
         return checkExpr(heap->initializer.get());
     if (auto* field = dynamic_cast<FieldAccessExpr*>(expr))
-        return checkExpr(field->object.get());
+        return extractPlace(field).has_value()
+            ? isPlaceAvailable(*extractPlace(field), "use")
+            : checkExpr(field->object.get());
+    if (auto* index = dynamic_cast<IndexExpr*>(expr)) {
+        if (!checkExpr(index->index.get())) return false;
+        if (auto place = extractPlace(index)) return isPlaceAvailable(*place, "use");
+        return checkExpr(index->object.get());
+    }
     return true;
 }
 
@@ -1000,39 +1072,108 @@ void OwnershipChecker::releaseLoansInCurrentScope() {
     }
 }
 
-bool OwnershipChecker::acquireLoan(const std::string& name, bool isMutable) {
-    auto* var = lookup(name);
-    if (!var) {
-        error("Borrow of undefined variable '" + name + "'");
-        return false;
+std::optional<OwnershipChecker::Place> OwnershipChecker::extractPlace(Expr* expr) const {
+    if (!expr) return std::nullopt;
+    if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) return Place{id->name, {}};
+    if (auto* field = dynamic_cast<FieldAccessExpr*>(expr)) {
+        auto place = extractPlace(field->object.get());
+        if (!place) return std::nullopt;
+        place->components.push_back("." + field->field);
+        return place;
     }
+    if (auto* index = dynamic_cast<IndexExpr*>(expr)) {
+        auto place = extractPlace(index->object.get());
+        if (!place) return std::nullopt;
+        if (auto* literal = dynamic_cast<IntLiteralExpr*>(index->index.get()))
+            place->components.push_back("[" + std::to_string(literal->value) + "]");
+        else
+            place->components.push_back("[*]");
+        return place;
+    }
+    if (auto* dereference = dynamic_cast<DerefExpr*>(expr)) {
+        auto place = extractPlace(dereference->operand.get());
+        if (!place) return std::nullopt;
+        place->components.push_back("*");
+        return place;
+    }
+    return std::nullopt;
+}
+
+std::string OwnershipChecker::renderProjection(const Place& place) const {
+    std::string result;
+    for (const auto& component : place.components) result += component;
+    return result;
+}
+
+std::string OwnershipChecker::renderPlace(const Place& place) const {
+    return place.root + renderProjection(place);
+}
+
+bool OwnershipChecker::placesOverlap(const Place& left, const Place& right) const {
+    if (left.root != right.root) return false;
+    const size_t common = std::min(left.components.size(), right.components.size());
+    for (size_t index = 0; index < common; ++index) {
+        const auto& a = left.components[index];
+        const auto& b = right.components[index];
+        const bool wildcard = a == "[*]" || b == "[*]";
+        if (a != b && !wildcard) return false;
+    }
+    return true;
+}
+
+bool OwnershipChecker::hasConflictingLoan(const Place& place, bool forMutation) const {
+    for (const auto& scope : mLoansInScope) {
+        for (const auto& loan : scope) {
+            if (!placesOverlap(place, loan.source)) continue;
+            if (forMutation || loan.isMutable) return true;
+        }
+    }
+    return false;
+}
+
+bool OwnershipChecker::isPlaceAvailable(const Place& place, const std::string& action) {
+    auto* var = lookup(place.root);
+    if (!var) return true;
     if (var->state == OwnState::Moved) {
-        error("Cannot borrow '" + name + "' after move");
+        error(action + " after move of '" + renderPlace(place) + "'");
         return false;
     }
     if (var->state == OwnState::Freed) {
-        error("Cannot borrow '" + name + "' after free");
+        error(action + " after free of '" + renderPlace(place) + "'");
         return false;
     }
+    for (const auto& moved : var->movedPlaces) {
+        if (placesOverlap(place, moved)) {
+            error(action + " of moved place '" + renderPlace(place) + "'");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool OwnershipChecker::acquireLoan(const Place& place, bool isMutable) {
+    auto* var = lookup(place.root);
+    if (!var) {
+        error("Borrow of undefined place '" + renderPlace(place) + "'");
+        return false;
+    }
+    if (!isPlaceAvailable(place, "borrow")) return false;
     if (var->inFlightReads > 0 || var->inFlightWrites > 0) {
-        error("Cannot borrow device buffer '" + name + "' while a launch is in flight");
+        error("Cannot borrow device buffer '" + place.root + "' while a launch is in flight");
         return false;
     }
     if (isMutable && var->isReference && !var->isMutableReference) {
-        error("Cannot mutably borrow through a shared reference '" + name + "'");
+        error("Cannot mutably borrow through a shared reference '" + place.root + "'");
         return false;
     }
-    if (isMutable && (var->mutableBorrow || var->sharedBorrows > 0)) {
-        error("Cannot mutably borrow '" + name + "' while it is already borrowed");
-        return false;
-    }
-    if (!isMutable && var->mutableBorrow) {
-        error("Cannot borrow '" + name + "' while it is mutably borrowed");
+    if (hasConflictingLoan(place, isMutable)) {
+        error("Cannot " + std::string(isMutable ? "mutably " : "") + "borrow '" +
+              renderPlace(place) + "' while an overlapping place is borrowed");
         return false;
     }
     if (isMutable) var->mutableBorrow = true;
     else ++var->sharedBorrows;
-    mLoansInScope.back().push_back({name, isMutable});
+    mLoansInScope.back().push_back({place, isMutable});
     return true;
 }
 
@@ -1064,7 +1205,7 @@ bool OwnershipChecker::beginInFlightBorrow(const std::string& name, bool isMutab
 void OwnershipChecker::finishEvent(VarInfo* event) {
     if (!event) return;
     for (const auto& resource : event->eventResources) {
-        auto* buffer = lookup(resource.source);
+        auto* buffer = lookup(resource.source.root);
         if (!buffer) continue;
         if (resource.isMutable) {
             if (buffer->inFlightWrites > 0) --buffer->inFlightWrites;
@@ -1076,71 +1217,124 @@ void OwnershipChecker::finishEvent(VarInfo* event) {
 }
 
 void OwnershipChecker::releaseLoan(const Loan& loan) {
-    auto* var = lookup(loan.source);
+    auto* var = lookup(loan.source.root);
     if (!var) return;
     if (loan.isMutable) var->mutableBorrow = false;
     else if (var->sharedBorrows > 0) --var->sharedBorrows;
 }
 
 bool OwnershipChecker::consume(VarInfo* var, const std::string& action) {
-    if (!var) return false;
-    if (var->state == OwnState::Moved) {
-        error("Use-after-move of '" + var->name + "' during " + action);
+    return var && consume(Place{var->name, {}}, action);
+}
+
+bool OwnershipChecker::allDirectFieldsMoved(const VarInfo& var) const {
+    if (!var.type || var.type->fields.empty()) return false;
+    for (const auto& field : var.type->fields) {
+        const Place direct{var.name, {"." + field.name}};
+        bool covered = false;
+        for (const auto& moved : var.movedPlaces) {
+            if (moved.components.size() <= direct.components.size() &&
+                placesOverlap(direct, moved)) {
+                covered = true;
+                break;
+            }
+        }
+        if (!covered) return false;
+    }
+    return true;
+}
+
+TypePtr OwnershipChecker::typeOfPlace(const Place& place) const {
+    auto* self = const_cast<OwnershipChecker*>(this);
+    auto* variable = self->lookup(place.root);
+    TypePtr current = variable ? variable->type : nullptr;
+    for (const auto& component : place.components) {
+        if (!current) return nullptr;
+        if (!component.empty() && component.front() == '.') {
+            const std::string fieldName = component.substr(1);
+            TypePtr next;
+            for (const auto& field : current->fields)
+                if (field.name == fieldName) { next = field.type; break; }
+            current = next;
+        } else if (!component.empty() && component.front() == '[') {
+            current = current->inner;
+        } else if (component == "*") {
+            current = current->inner;
+        }
+    }
+    return current;
+}
+
+bool OwnershipChecker::consume(const Place& place, const std::string& action) {
+    auto* var = lookup(place.root);
+    if (!var) {
+        error(action + " of undefined place '" + renderPlace(place) + "'");
         return false;
     }
-    if (var->state == OwnState::Freed) {
-        error("Use-after-free of '" + var->name + "' during " + action);
+    if (!isPlaceAvailable(place, action)) return false;
+    if (!place.components.empty() &&
+        defaultUsageForType(typeOfPlace(place)) == luna::ownership::Usage::Copy)
+        return true;
+    if (var->relation != luna::ownership::Relation::Owned) {
+        error("Cannot " + action + " borrowed place '" + renderPlace(place) +
+              "'; declare an owning affine or linear parameter to transfer it");
         return false;
     }
-    if (var->sharedBorrows > 0 || var->mutableBorrow) {
-        error("Cannot " + action + " '" + var->name + "' while it is borrowed");
+    if (hasConflictingLoan(place, true)) {
+        error("Cannot " + action + " '" + renderPlace(place) +
+              "' while an overlapping place is borrowed");
         return false;
     }
     if (var->inFlightReads > 0 || var->inFlightWrites > 0) {
-        error("Cannot " + action + " device buffer '" + var->name +
+        error("Cannot " + action + " device buffer '" + place.root +
               "' while a launch is in flight");
         return false;
     }
-    var->state = OwnState::Moved;
+    // Moving a Copy value is observationally a copy. Affine and linear values
+    // transfer ownership and invalidate precisely the selected place.
+    if (var->usage == luna::ownership::Usage::Copy) return true;
+    if (place.components.empty()) var->state = OwnState::Moved;
+    else {
+        var->movedPlaces.push_back(place);
+        if (allDirectFieldsMoved(*var)) var->state = OwnState::Moved;
+    }
     return true;
 }
 
 bool OwnershipChecker::checkWriteTarget(Expr* expr) {
-    if (auto* index = dynamic_cast<IndexExpr*>(expr)) {
-        // Writing an element mutates the owning array just as surely as
-        // rebinding it does; route the base through the normal loan check.
-        if (!checkWriteTarget(index->object.get())) return false;
-        return checkExpr(index->index.get());
-    }
-    auto* id = dynamic_cast<IdentifierExpr*>(expr);
-    if (!id) return checkExpr(expr);
-    auto* var = lookup(id->name);
+    if (auto* index = dynamic_cast<IndexExpr*>(expr))
+        if (!checkExpr(index->index.get())) return false;
+    auto place = extractPlace(expr);
+    if (!place) return checkExpr(expr);
+    auto* var = lookup(place->root);
     if (!var) {
-        error("Assignment to undefined variable '" + id->name + "'");
+        error("Assignment to undefined place '" + renderPlace(*place) + "'");
         return false;
     }
-    if (var->state != OwnState::Valid) {
-        error("Assignment to invalid variable '" + id->name + "'");
-        return false;
-    }
-    if (var->sharedBorrows > 0 || var->mutableBorrow) {
-        error("Cannot assign to '" + id->name + "' while it is borrowed");
+    if (!isPlaceAvailable(*place, "assignment")) return false;
+    if (hasConflictingLoan(*place, true)) {
+        error("Cannot assign to '" + place->root +
+              "' while it is borrowed (overlapping place '" +
+              renderPlace(*place) + "')");
         return false;
     }
     if (var->inFlightReads > 0 || var->inFlightWrites > 0) {
-        error("Cannot assign to device buffer '" + id->name + "' while a launch is in flight");
+        error("Cannot assign to device buffer '" + place->root + "' while a launch is in flight");
         return false;
     }
-    if (var->isLinear) {
-        error("Cannot overwrite linear variable '" + id->name +
+    if (luna::ownership::isMoveOnly(var->usage) && place->components.empty()) {
+        error("Cannot overwrite " + std::string(luna::ownership::usageName(var->usage)) +
+              " variable '" + place->root +
               "' without consuming its current value");
         return false;
     }
     return true;
 }
 
-bool OwnershipChecker::isLinearTypeAST(const TypeAST* ast) const {
-    return dynamic_cast<const LinearTypeAST*>(ast) != nullptr;
+luna::ownership::Usage OwnershipChecker::usageFromTypeAST(const TypeAST* ast) const {
+    if (dynamic_cast<const LinearTypeAST*>(ast)) return luna::ownership::Usage::Linear;
+    if (dynamic_cast<const AffineTypeAST*>(ast)) return luna::ownership::Usage::Affine;
+    return luna::ownership::Usage::Copy;
 }
 
 bool OwnershipChecker::isReferenceExpr(Expr* expr) {
@@ -1161,13 +1355,19 @@ OwnershipChecker::VarInfo* OwnershipChecker::lookup(const std::string& name) {
 }
 
 void OwnershipChecker::define(const std::string& name, TypePtr type, bool isHeap,
-                              bool isLinear, bool isReference,
-                              bool isMutableReference) {
+                              luna::ownership::Usage usage,
+                              luna::ownership::Relation relation,
+                              bool isReference, bool isMutableReference) {
     VarInfo info;
     info.name = name;
     info.type = type;
-    info.isHeapAllocated = isHeap || (type && type->isHeapType());
-    info.isLinear = isLinear || isDeviceBuffer(type) || isEvent(type);
+    info.isHeapAllocated = relation == luna::ownership::Relation::Owned &&
+        (isHeap || (type && type->isHeapType()));
+    info.usage = (isDeviceBuffer(type) || isEvent(type))
+        ? luna::ownership::Usage::Linear
+        : (usage == luna::ownership::Usage::Copy && info.isHeapAllocated
+            ? luna::ownership::Usage::Affine : usage);
+    info.relation = relation;
     info.isReference = isReference;
     info.isMutableReference = isMutableReference;
     info.isGpuEvent = isEvent(type);
@@ -1177,7 +1377,8 @@ void OwnershipChecker::define(const std::string& name, TypePtr type, bool isHeap
 std::vector<std::string> OwnershipChecker::collectFreesAtScopeExit() {
     std::vector<std::string> frees;
     for (auto& [name, info] : mScopes.back()) {
-        if (info.isHeapAllocated && !info.isLinear && info.state == OwnState::Valid)
+        if (info.isHeapAllocated && !luna::ownership::mustConsume(info.usage) &&
+            info.state == OwnState::Valid)
             frees.push_back(name);
     }
     return frees;
@@ -1188,7 +1389,8 @@ std::vector<std::string> OwnershipChecker::collectFreesAtReturn() const {
     // Exit order is innermost to outermost, matching lexical destruction.
     for (auto scope = mScopes.rbegin(); scope != mScopes.rend(); ++scope) {
         for (const auto& [name, info] : *scope) {
-            if (info.isHeapAllocated && !info.isLinear && info.state == OwnState::Valid)
+            if (info.isHeapAllocated && !luna::ownership::mustConsume(info.usage) &&
+                info.state == OwnState::Valid)
                 frees.push_back(name);
         }
     }
@@ -1199,7 +1401,8 @@ std::vector<std::string> OwnershipChecker::collectFreesAtFragmentExit() const {
     std::vector<std::string> frees;
     for (size_t index = mScopes.size(); index > mCurrentFragmentScopeBase; --index) {
         for (const auto& [name, info] : mScopes[index - 1]) {
-            if (info.isHeapAllocated && !info.isLinear && info.state == OwnState::Valid)
+            if (info.isHeapAllocated && !luna::ownership::mustConsume(info.usage) &&
+                info.state == OwnState::Valid)
                 frees.push_back(name);
         }
     }
@@ -1214,10 +1417,10 @@ void OwnershipChecker::validateLinearScope() {
     for (const auto& [_, info] : mScopes.back()) {
         if (!info.isGpuEvent || info.state != OwnState::Valid) continue;
         for (const auto& resource : info.eventResources)
-            resourcesHeldByUnawaitedEvents.insert(resource.source);
+            resourcesHeldByUnawaitedEvents.insert(resource.source.root);
     }
     for (const auto& [name, info] : mScopes.back()) {
-        if (info.isLinear && info.state == OwnState::Valid) {
+        if (luna::ownership::mustConsume(info.usage) && info.state == OwnState::Valid) {
             if (info.isGpuEvent)
                 error("launch event '" + name + "' was not awaited before leaving its scope");
             else if (isDeviceBuffer(info.type) && resourcesHeldByUnawaitedEvents.count(name))
@@ -1237,12 +1440,13 @@ void OwnershipChecker::validateLinearReturnPath() {
         for (const auto& [_, info] : scope) {
             if (!info.isGpuEvent || info.state != OwnState::Valid) continue;
             for (const auto& resource : info.eventResources)
-                resourcesHeldByUnawaitedEvents.insert(resource.source);
+                resourcesHeldByUnawaitedEvents.insert(resource.source.root);
         }
     }
     for (const auto& scope : mScopes) {
         for (const auto& [name, info] : scope) {
-            if (!info.isLinear || info.state != OwnState::Valid) continue;
+            if (!luna::ownership::mustConsume(info.usage) ||
+                info.state != OwnState::Valid) continue;
             if (info.isGpuEvent)
                 error("launch event '" + name + "' was not awaited before returning");
             else if (isDeviceBuffer(info.type) && resourcesHeldByUnawaitedEvents.count(name))

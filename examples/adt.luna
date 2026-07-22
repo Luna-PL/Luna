@@ -1,16 +1,16 @@
 // Product ADT: the declaration is nominal, while its fields are a
 // structural product used by constructor constraints.
-struct Point {
+nominal struct Point {
     x: i32;
     y: i32;
 }
 
-struct Box<T> {
+nominal struct Box<T> {
     value: T;
 }
 
 // Sum ADT with a generic payload.
-enum Option<T> {
+nominal enum Option<T> {
     None;
     Some(T);
 }

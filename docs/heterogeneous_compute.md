@@ -56,6 +56,12 @@ the same `await` ABI.
 
 The simulator is the default and runs dispatch synchronously under the hood while preserving the asynchronous ownership contract:
 
+PTX/HSACO selection happens while compiling and only inspects
+`LUNA_GPU_BACKEND` or the explicit offline-emission flags. It does not initialize
+CUDA/HIP or require a physical GPU on the build machine. The generated JIT/AOT
+entry point initializes and validates the selected runtime only when reachable
+kernel capability is actually present.
+
 ```sh
 ./build/luna run examples/heterogeneous.luna
 # or explicitly:
@@ -119,7 +125,9 @@ LUNA_GPU_EMIT_AMDGPU=1 ./build/luna build examples/heterogeneous.luna
 LUNA_GPU_BACKEND=rocm ./examples/heterogeneous
 ```
 
-Kernel declarations and launches use the existing version selector syntax. For example, `kernel fn bump @stable(1.0.0)(...)` is launched with `launch bump@stable()[threads: n](...)`; an omitted selector is rejected when the kernel name is versioned.
+Kernel declarations may carry ordinary Metadata, for example `@version(1, 0, 0) kernel fn bump(...)`. A named `launch bump[threads: n](...)` currently requires that `bump` resolve to one kernel declaration; an ambiguous metadata family is rejected. Runtime kernel-family binding will be an explicit dynamic operation rather than postfix version syntax.
+
+Kernels are code-generated only when referenced by a reachable lowered launch. Merely declaring a kernel emits a deferred MoonIR recipe and no `rt_gpu_*` host symbol. `--reserve-kernel-runtime` explicitly retains kernel code and runtime initialization when a host needs future dynamic kernel capability.
 
 Initial i32 device operations are:
 

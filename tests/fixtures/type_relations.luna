@@ -1,0 +1,27 @@
+struct Point { value: i32; }
+struct Pixel { value: i32; }
+
+nominal struct UserId { value: i32; }
+nominal struct OrderId { value: i32; }
+
+meta left_tag { value: i32; }
+meta right_tag { value: i32; }
+
+fn main() -> i32 {
+    if type_same::<Point, Pixel>() {
+        if type_same_shape::<UserId, OrderId>() {
+            if !type_same::<UserId, OrderId>() {
+                if type_abi_compatible::<UserId, OrderId>() {
+                    if type_same_shape::<left_tag, right_tag>() {
+                        if !type_same::<left_tag, right_tag>() {
+                            if !type_abi_compatible::<left_tag, right_tag>() {
+                                return 42;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    return 1;
+}

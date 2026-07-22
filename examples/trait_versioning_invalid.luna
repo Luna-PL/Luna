@@ -1,10 +1,6 @@
-trait Transform @stable(1.0.0) {
-    fn transform(value: i32) -> i32;
-}
+fn old_style() -> i32 { return 1; }
 
-// A versioned trait must never silently bind through its bare name.
-impl Transform for i32 {
-    fn transform(value: i32) -> i32 {
-        return value;
-    }
+fn main() -> i32 {
+    // Postfix @tag selection is intentionally rejected with a migration hint.
+    return old_style@stable();
 }

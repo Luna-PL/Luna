@@ -1,0 +1,4 @@
+fn main() -> i32 {
+    affine let token: i32 = 7;
+    return 7;
+}

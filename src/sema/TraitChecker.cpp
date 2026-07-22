@@ -1,4 +1,5 @@
 #include "TraitChecker.h"
+#include "../core/TypeRelations.h"
 #include "../diagnostics/Diagnostic.h"
 #include <sstream>
 
@@ -6,13 +7,13 @@ TraitChecker::TraitChecker() {}
 
 static std::string traitIdOf(const TraitDecl* trait) {
     if (!trait) return "";
+    if (!trait->resolvedTraitId.empty()) return trait->resolvedTraitId;
     return trait->generatedSymbolName.empty() ? trait->name : trait->generatedSymbolName;
 }
 
 static std::string typeIdOf(const TypePtr& type) {
     if (!type) return "?";
-    if (!type->nominalId.empty()) return type->nominalId;
-    return type->toString();
+    return luna::types::typeId(type).value;
 }
 
 bool TraitChecker::check(Program* program) {

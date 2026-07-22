@@ -7,7 +7,9 @@
 #include <unordered_map>
 #include <memory>
 
-enum class SymbolKind { Variable, Function, Fragment, Slot, Struct, Trait, TypeParam };
+enum class SymbolKind {
+    Variable, Function, Fragment, Slot, Struct, Trait, TypeParam, Metadata
+};
 
 struct FunctionDecl; // forward
 
@@ -19,10 +21,14 @@ struct SymbolInfo {
     std::vector<std::string> typeParams;  // for generic Function/Struct
     bool isHeapAllocated = false;         // for Variable
     bool isLinear = false;                // for Variable/parameter
+    luna::ownership::Usage usage = luna::ownership::Usage::Copy;
+    luna::ownership::Relation relation = luna::ownership::Relation::Owned;
     bool isConst = false;                 // for compile-time immutable bindings
     bool isExported = false;              // for package-level declarations
     bool isExtern = false;                 // for C ABI declarations
     bool returnsLinear = false;            // owning function result
+    luna::ownership::Usage returnUsage = luna::ownership::Usage::Copy;
+    std::vector<luna::ownership::Contract> paramContracts;
     FunctionDecl* genericDecl = nullptr;  // for template instantiation
 };
 

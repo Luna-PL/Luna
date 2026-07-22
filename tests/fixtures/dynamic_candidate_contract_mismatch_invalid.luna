@@ -1,8 +1,8 @@
-context proceed(value: i32) {
+runtime context proceed(value: i32) {
     resume();
 }
 
-interceptor inspect(value: i32) {
+runtime interceptor inspect(value: i32) {
     print(value);
 }
 

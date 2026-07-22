@@ -1,0 +1,16 @@
+struct First {
+    x: i32;
+    y: i32;
+}
+
+struct Second {
+    y: i32;
+    x: i32;
+}
+
+fn accept(value: First) -> i32 { return 1; }
+
+fn main() -> i32 {
+    let value = new Second(2, 1);
+    return accept(value);
+}

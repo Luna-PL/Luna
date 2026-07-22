@@ -7,12 +7,17 @@
 #include "sema/SemanticAnalyzer.h"
 #include "sema/TraitChecker.h"
 #include "sema/OwnershipChecker.h"
+#include "moonir/Lowering.h"
+#include "moonir/Verifier.h"
+#include "moonir/Optimizer.h"
+#include "moonir/Printer.h"
 #include "codegen/CodeGenerator.h"
 #include "runtime/Runtime.h"
 #include "Version.h"
 #include "package/Package.h"
 #include "diagnostics/Diagnostic.h"
 #include <llvm/Support/DynamicLibrary.h>
+#include <llvm/Support/Program.h>
 
 #include <iostream>
 #include <fstream>
@@ -55,7 +60,9 @@ Usage:
   luna --version            Print the compiler version
   luna run    <file-or-package> [-O0|-O2|-O3] [--link <shared-library>]  JIT-compile and execute
   luna build  <file-or-package> [-O0|-O2|-O3] [--link <library-or-name>]
-                   [--runtime-lib <path>] [--cc <compiler>]  AOT-compile to executable
+                   [--runtime-lib <path>] [--cc <compiler>]
+                   [--reserve-kernel-runtime] [--emit-moonir <path>]
+                   [--moon-cost-report]  AOT-compile to executable
   luna repl                  Interactive REPL (JIT)
 
 Features:
@@ -77,39 +84,15 @@ Examples: see examples/*.luna
 )";
 }
 
-static std::string shellQuote(const std::string& value) {
-#ifdef _WIN32
-    // The AOT driver invokes the platform command interpreter through
-    // std::system.  Quote according to the Windows C runtime convention and
-    // protect backslashes that occur immediately before a quote or at EOL.
+static std::string quoteForDisplay(const std::string& value) {
+    if (value.find_first_of(" \t\"'") == std::string::npos) return value;
     std::string quoted = "\"";
-    size_t backslashes = 0;
     for (char c : value) {
-        if (c == '\\') {
-            ++backslashes;
-            continue;
-        }
-        if (c == '"') {
-            quoted.append(backslashes * 2 + 1, '\\');
-            quoted += '"';
-        } else {
-            quoted.append(backslashes, '\\');
-            quoted += c;
-        }
-        backslashes = 0;
+        if (c == '"' || c == '\\') quoted += '\\';
+        quoted += c;
     }
-    quoted.append(backslashes * 2, '\\');
     quoted += '"';
     return quoted;
-#else
-    std::string quoted = "'";
-    for (char c : value) {
-        if (c == '\'') quoted += "'\\''";
-        else quoted += c;
-    }
-    quoted += "'";
-    return quoted;
-#endif
 }
 
 static bool loadJITLibraries(const std::vector<std::string>& libraries) {
@@ -149,11 +132,6 @@ int main(int argc, char* argv[]) {
     }
 
     if (cmd == "repl") {
-        if (!rt_gpu_initialize()) {
-            std::cerr << "Warning: GPU backend '" << rt_gpu_backend_name()
-                      << "' init failed (" << rt_gpu_last_error()
-                      << ") — REPL without GPU works.\n";
-        }
         std::cout << "REPL mode — JIT-compiling expressions one at a time\n";
         std::cout << "Type 'exit' to quit.\n\n";
 
@@ -201,8 +179,31 @@ int main(int argc, char* argv[]) {
                 continue;
             }
 
+            moon::LunaLowerer lowerer;
+            auto moonModule = lowerer.lower(*prog, sema.symTable());
+            if (!lowerer.errors().empty()) {
+                printErrors(lowerer.errors(), "moon-lower");
+                continue;
+            }
+            moon::Verifier verifier;
+            if (!verifier.verify(*moonModule)) {
+                printErrors(verifier.errors(), "moon-verify");
+                continue;
+            }
+            moon::Optimizer optimizer;
+            if (!optimizer.run(*moonModule, {
+                    moon::OptimizationLevel::None,
+                    moon::OptimizationPurpose::JustInTime})) {
+                printErrors(optimizer.errors(), "moon-opt");
+                continue;
+            }
+            if (!verifier.verify(*moonModule)) {
+                printErrors(verifier.errors(), "moon-verify");
+                continue;
+            }
+
             CodeGenerator cg("repl");
-            if (!cg.generate(prog.get(), &sema.symTable())) {
+            if (!cg.generate(moonModule.get())) {
                 printErrors(cg.errors());
                 continue;
             }
@@ -223,6 +224,9 @@ int main(int argc, char* argv[]) {
     std::vector<std::string> linkLibraries;
     std::string runtimeLibrary;
     std::string aotCompiler;
+    std::string moonIrOutput;
+    bool printMoonCostReport = false;
+    bool reserveKernelRuntime = false;
     LunaOptimizationLevel optimizationLevel = LunaOptimizationLevel::O0;
     for (int i = 3; i < argc; ++i) {
         std::string option = argv[i];
@@ -257,6 +261,14 @@ int main(int argc, char* argv[]) {
             aotCompiler = argv[++i];
         } else if (option.rfind("--cc=", 0) == 0) {
             aotCompiler = option.substr(5);
+        } else if (option == "--reserve-kernel-runtime") {
+            reserveKernelRuntime = true;
+        } else if (option == "--moon-cost-report") {
+            printMoonCostReport = true;
+        } else if (option == "--emit-moonir" && i + 1 < argc) {
+            moonIrOutput = argv[++i];
+        } else if (option.rfind("--emit-moonir=", 0) == 0) {
+            moonIrOutput = option.substr(14);
         } else {
             std::cerr << "Unknown option: " << option << "\n";
             printUsage();
@@ -269,12 +281,6 @@ int main(int argc, char* argv[]) {
             "driver", "AOT linker options are only valid with `build`",
             "", 0, 0, "use `luna build ... --runtime-lib <path> --cc <compiler>") << "\n";
         return 1;
-    }
-
-    if (!rt_gpu_initialize()) {
-        std::cerr << "Warning: GPU backend '" << rt_gpu_backend_name()
-                  << "' init failed (" << rt_gpu_last_error()
-                  << ") — CPU programs still work.\n";
     }
 
     // ─── Pipeline ──────────────────────────────────────────────────
@@ -308,12 +314,57 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    // Generating code
-    // 6. Code generation
+    // 6. Lower the checked Luna program into the sole backend input.
+    moon::LunaLowerer lowerer;
+    auto moonModule = lowerer.lower(*prog, sema.symTable(), reserveKernelRuntime);
+    if (!lowerer.errors().empty()) {
+        printErrors(lowerer.errors(), "moon-lower");
+        return 1;
+    }
+
+    // 7. MoonIR is a security and correctness boundary. Both AOT and JIT
+    // reject invalid modules before an LLVMContext is allowed to consume them.
+    moon::Verifier verifier;
+    if (!verifier.verify(*moonModule)) {
+        printErrors(verifier.errors(), "moon-verify");
+        return 1;
+    }
+
+    moon::OptimizationLevel moonOptimizationLevel = moon::OptimizationLevel::None;
+    if (optimizationLevel == LunaOptimizationLevel::O2)
+        moonOptimizationLevel = moon::OptimizationLevel::Standard;
+    else if (optimizationLevel == LunaOptimizationLevel::O3)
+        moonOptimizationLevel = moon::OptimizationLevel::Aggressive;
+    moon::Optimizer optimizer;
+    if (!optimizer.run(*moonModule, {
+            moonOptimizationLevel,
+            cmd == "build" ? moon::OptimizationPurpose::AheadOfTime
+                           : moon::OptimizationPurpose::JustInTime})) {
+        printErrors(optimizer.errors(), "moon-opt");
+        return 1;
+    }
+    if (!verifier.verify(*moonModule)) {
+        printErrors(verifier.errors(), "moon-verify");
+        return 1;
+    }
+
+    moon::Printer moonPrinter;
+    if (!moonIrOutput.empty()) {
+        std::ofstream output(moonIrOutput);
+        if (!output) {
+            std::cerr << diagnostic::format(
+                "driver", "cannot write MoonIR file '" + moonIrOutput + "'",
+                moonIrOutput, 0, 0, "check the output directory and permissions") << "\n";
+            return 1;
+        }
+        moonPrinter.print(*moonModule, output);
+    }
+    if (printMoonCostReport) moonPrinter.printCostReport(*moonModule, std::cout);
+
+    // 8. LLVM lowering consumes MoonIR only.
     CodeGenerator cg(prog->packageName.empty() ? filePath : prog->packageName);
     cg.setOptimizationLevel(optimizationLevel);
-    cg.setIsAOT(true);
-    if (!cg.generate(prog, &sema.symTable())) {
+    if (!cg.generate(moonModule.get())) {
         printErrors(cg.errors());
         return 1;
     }
@@ -376,22 +427,46 @@ int main(int argc, char* argv[]) {
             aotOptimizationFlag = "-O2";
         else if (optimizationLevel == LunaOptimizationLevel::O3)
             aotOptimizationFlag = "-O3";
-        std::string linkerCmd = shellQuote(aotCompiler) + " " +
-            aotOptimizationFlag + " " + shellQuote(irPath.generic_string()) + " " +
-            shellQuote(runtimeLibrary);
-        if (std::string(LUNA_DL_LIBRARY).size())
-            linkerCmd += " -l" + std::string(LUNA_DL_LIBRARY);
-        linkerCmd += " -o " + shellQuote(exePath.generic_string());
-        for (const auto& library : linkLibraries) {
-            if (isLibraryPath(library)) linkerCmd += " " + shellQuote(library);
-            else linkerCmd += " " + shellQuote("-l" + library);
+        auto compilerPath = llvm::sys::findProgramByName(aotCompiler);
+        if (!compilerPath) {
+            std::cerr << diagnostic::format(
+                "driver", "cannot find AOT compiler '" + aotCompiler + "': " +
+                    compilerPath.getError().message(),
+                aotCompiler, 0, 0,
+                "pass --cc with an executable path or add the compiler to PATH") << "\n";
+            return 1;
         }
-        std::cout << "Linking: " << linkerCmd << "\n";
-        int linkResult = std::system(linkerCmd.c_str());
+
+        std::vector<std::string> linkerArgs = {
+            *compilerPath,
+            aotOptimizationFlag,
+            irPath.generic_string(),
+            runtimeLibrary,
+        };
+        if (std::string(LUNA_DL_LIBRARY).size())
+            linkerArgs.push_back("-l" + std::string(LUNA_DL_LIBRARY));
+        linkerArgs.push_back("-o");
+        linkerArgs.push_back(exePath.generic_string());
+        for (const auto& library : linkLibraries) {
+            linkerArgs.push_back(isLibraryPath(library) ? library : "-l" + library);
+        }
+
+        std::cout << "Linking:";
+        for (const auto& argument : linkerArgs)
+            std::cout << ' ' << quoteForDisplay(argument);
+        std::cout << "\n";
+
+        std::vector<llvm::StringRef> linkerArgRefs;
+        linkerArgRefs.reserve(linkerArgs.size());
+        for (const auto& argument : linkerArgs) linkerArgRefs.emplace_back(argument);
+        std::string executionError;
+        const int linkResult = llvm::sys::ExecuteAndWait(
+            *compilerPath, linkerArgRefs, std::nullopt, {}, 0, 0, &executionError);
         if (linkResult != 0) {
             std::cerr << diagnostic::format(
                 "driver", "AOT linker '" + aotCompiler + "' failed with status " +
-                std::to_string(linkResult), "", 0, 0,
+                std::to_string(linkResult) +
+                    (executionError.empty() ? "" : ": " + executionError), "", 0, 0,
                 "inspect the linker command above; verify --cc, --runtime-lib, and every --link dependency") << "\n";
             return 1;
         }

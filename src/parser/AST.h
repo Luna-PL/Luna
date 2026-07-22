@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../lexer/Token.h"
+#include "../core/Ownership.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -21,47 +22,8 @@ struct TypeAST;
 
 enum class FragmentKind { Interceptor, Context };
 enum class FragmentCardinality { Once, Many };
-
-// Versions are language values rather than strings so version ordering is
-// semantic (`1.10.0` is newer than `1.2.0`) and never lexicographic.
-struct SemanticVersion {
-    int major = 0;
-    int minor = 0;
-    int patch = 0;
-
-    bool operator==(const SemanticVersion& other) const {
-        return major == other.major && minor == other.minor && patch == other.patch;
-    }
-    bool operator<(const SemanticVersion& other) const {
-        if (major != other.major) return major < other.major;
-        if (minor != other.minor) return minor < other.minor;
-        return patch < other.patch;
-    }
-    std::string toString() const {
-        return std::to_string(major) + "." + std::to_string(minor) + "." +
-               std::to_string(patch);
-    }
-};
-
-struct VersionTag {
-    std::string name;
-    SemanticVersion version;
-};
-
-// A selector without `version` means the latest declaration in that tag.
-struct VersionSelector {
-    std::string tag;
-    std::optional<SemanticVersion> version;
-};
-
-inline std::string versionedDeclarationName(
-    const std::string& name, const std::optional<VersionTag>& tag) {
-    if (!tag) return name;
-    return name + "__" + tag->name + "__v" +
-           std::to_string(tag->version.major) + "_" +
-           std::to_string(tag->version.minor) + "_" +
-           std::to_string(tag->version.patch);
-}
+enum class RetentionKind { CompileTime, Runtime, Dynamic };
+using MetadataConstValue = std::variant<int64_t, double, bool, std::string>;
 
 // ─── AST Node base ───────────────────────────────────────────────────
 struct ASTNode {
@@ -71,13 +33,8 @@ struct ASTNode {
     int col = 0;
 };
 
-// Traits participate in constraint solving and coherence, so a trait use must
-// retain its selector and eventually the exact declaration identity chosen by
-// semantic analysis.  A plain string is not sufficient once traits are
-// versioned.
 struct TraitRef : ASTNode {
     std::string name;
-    std::optional<VersionSelector> versionSelector;
     std::string resolvedTraitId;
 };
 
@@ -95,7 +52,6 @@ struct NamedTypeAST : TypeAST {
     // compile-time integer rather than an expression: array layout is part of
     // the ABI and must never depend on a runtime value.
     std::optional<uint64_t> arrayLength;
-    std::optional<VersionSelector> versionSelector;
     TypePtr resolvedType;
     explicit NamedTypeAST(std::string n) : name(std::move(n)) {}
 };
@@ -108,6 +64,10 @@ struct RefTypeAST : TypeAST {
 struct LinearTypeAST : TypeAST {
     std::unique_ptr<TypeAST> inner;
     explicit LinearTypeAST(std::unique_ptr<TypeAST> i) : inner(std::move(i)) {}
+};
+struct AffineTypeAST : TypeAST {
+    std::unique_ptr<TypeAST> inner;
+    explicit AffineTypeAST(std::unique_ptr<TypeAST> i) : inner(std::move(i)) {}
 };
 struct FunctionTypeAST : TypeAST {
     std::vector<std::unique_ptr<TypeAST>> paramTypes;
@@ -125,8 +85,13 @@ struct LetStmt : Stmt {
     std::string name;
     bool isConst = false;
     bool isLinear = false;
+    luna::ownership::Usage usage = luna::ownership::Usage::Copy;
+    bool hasExplicitUsage = false;
     std::unique_ptr<TypeAST> typeAnnotation; // optional
     std::unique_ptr<Expr> initializer;
+    // The typed frontend records every binding's canonical type for MoonIR
+    // lowering. Backend passes never consult the scoped SymbolTable.
+    TypePtr inferredType;
 };
 
 struct ReturnStmt : Stmt {
@@ -135,6 +100,12 @@ struct ReturnStmt : Stmt {
     // remain live on this exact return path and therefore need runtime
     // cleanup before the LLVM `ret` is emitted.
     std::vector<std::string> autoFrees;
+    struct CleanupObligation {
+        std::string place;
+        luna::ownership::CleanupAction action = luna::ownership::CleanupAction::Drop;
+        TypePtr type;
+    };
+    std::vector<CleanupObligation> cleanups;
 };
 
 struct ExprStmt : Stmt {
@@ -172,7 +143,6 @@ struct SlotDeclStmt : Stmt {
     bool isDynamic = false;
     std::vector<Param> params;
     std::string defaultFragment;
-    std::optional<VersionSelector> defaultFragmentSelector;
     std::string resolvedDefaultFragmentName;
     TypePtr structuralType;
 };
@@ -192,7 +162,6 @@ struct SlotInvokeStmt : Stmt {
     std::vector<Param> interfaceParams;
     std::vector<std::string> resolvedParamNames;
     std::string defaultFragment;
-    std::optional<VersionSelector> defaultFragmentSelector;
     std::string resolvedDefaultFragmentName;
     TypePtr structuralType;
 };
@@ -215,7 +184,6 @@ struct ApplyStmt : Stmt {
     // is installed for this slot.
     std::vector<std::string> alternativeFragmentNames;
     std::vector<std::string> resolvedAlternativeFragmentNames;
-    std::optional<VersionSelector> fragmentSelector;
     std::string resolvedFragmentName;
     std::unique_ptr<BlockStmt> body;
 };
@@ -264,13 +232,14 @@ struct CallExpr : Expr {
     std::vector<std::unique_ptr<Expr>> args;
     TypeVec typeArgs;
     std::vector<std::unique_ptr<TypeAST>> typeArgASTs;
-    std::optional<VersionSelector> versionSelector;
-    // Semantic analysis writes the hygienic LLVM symbol selected by `@tag`.
+    // Semantic analysis writes the hygienic symbol selected by metadata or
+    // generic instantiation.
     std::string resolvedSymbolName;
     // `linear` is an ownership qualifier rather than an LLVM ABI type. Keep
     // it on calls so the ownership pass can enforce an owning FFI result even
     // though the resolved value type is still `raw<T>`.
     bool returnsLinear = false;
+    luna::ownership::Usage returnUsage = luna::ownership::Usage::Copy;
     std::optional<std::variant<int64_t, double, bool, std::string>> compileTimeValue;
 };
 
@@ -279,7 +248,6 @@ struct CallExpr : Expr {
 // size used by the CPU simulator and by the initial GPU ABI.
 struct LaunchExpr : Expr {
     std::string kernelName;
-    std::optional<VersionSelector> kernelSelector;
     std::string resolvedKernelName;
     std::unique_ptr<Expr> threads;
     std::vector<std::unique_ptr<Expr>> args;
@@ -351,13 +319,40 @@ struct LambdaExpr : Expr {
     // Set during sema (closure analysis)
     TypePtr closureType;
     std::vector<std::string> captures;
-    std::optional<VersionTag> versionTag;
 };
 
 struct AssignExpr : Expr {
     TokenKind op = TokenKind::Eq;
     std::unique_ptr<Expr> lhs;
     std::unique_ptr<Expr> rhs;
+};
+
+// A selector is an ordinary function. Semantic analysis injects a compiler-
+// owned DeclarationView as its hidden first argument and resolves this node to
+// one declaration identity before static MoonIR lowering.
+struct SelectExpr : Expr {
+    struct DynamicFilterArgument {
+        // Index into selectorArgs when the selector protocol forwards one of
+        // its explicit parameters; otherwise the binding is a literal.
+        std::optional<size_t> selectorArgumentIndex;
+        std::optional<MetadataConstValue> constant;
+    };
+    struct DynamicCandidate {
+        std::string declarationId;
+        std::string symbolName;
+        std::vector<MetadataConstValue> metadataValues;
+    };
+    std::string targetName;
+    std::string selectorName;
+    std::vector<std::unique_ptr<Expr>> selectorArgs;
+    bool isDynamic = false;
+    std::string resolvedDeclarationId;
+    std::string resolvedSymbolName;
+    std::vector<std::string> dynamicCandidateIds;
+    std::string dynamicMetadataSchemaId;
+    std::vector<DynamicFilterArgument> dynamicFilterArguments;
+    std::vector<DynamicCandidate> dynamicCandidates;
+    TypePtr selectedType;
 };
 
 // ─── Patterns ─────────────────────────────────────────────────────────
@@ -373,15 +368,26 @@ struct Decl : ASTNode {
     // Package declarations are private by default. An explicit export is the
     // only way a declaration becomes part of the package's public interface.
     bool isExported = false;
-    std::optional<VersionTag> versionTag;
-    // Versioned declarations share a source name but must never share an LLVM
-    // linkage name.  Untagged declarations keep this empty and use `name`.
+    // Metadata-distinguished declarations share a source family but always
+    // receive a unique generated linkage identity.
     std::string generatedSymbolName;
+    RetentionKind retention = RetentionKind::CompileTime;
+    struct MetadataAttachment {
+        std::string schemaName;
+        std::vector<std::unique_ptr<Expr>> arguments;
+        RetentionKind retention = RetentionKind::CompileTime;
+        std::string resolvedSchemaId;
+        std::vector<MetadataConstValue> evaluatedArguments;
+    };
+    std::vector<MetadataAttachment> metadata;
 };
 
 struct Param {
     std::string name;
     bool isLinear = false;
+    luna::ownership::Usage usage = luna::ownership::Usage::Copy;
+    bool hasExplicitUsage = false;
+    luna::ownership::Relation relation = luna::ownership::Relation::Owned;
     std::unique_ptr<TypeAST> type;
     TypePtr inferredType; // Filled by constraint-based semantic analysis.
 };
@@ -391,6 +397,7 @@ struct FunctionDecl : Decl {
     bool isKernel = false;
     bool isExtern = false;
     bool isConstexpr = false;
+    bool isSelector = false;
     std::string abi;
     std::string linkName;
     std::vector<std::string> typeParams;
@@ -399,6 +406,7 @@ struct FunctionDecl : Decl {
     // Preserves a direct `-> linear raw<T>` return annotation. Type lowering
     // intentionally erases `linear`, so ownership needs this separate bit.
     bool returnsLinear = false;
+    luna::ownership::Usage returnUsage = luna::ownership::Usage::Copy;
     TypePtr inferredReturnType; // Filled when return type is omitted/auto.
     std::vector<WhereClause> whereClauses;
     std::unique_ptr<BlockStmt> body;
@@ -420,6 +428,7 @@ struct FragmentDecl : Decl {
 
 struct StructDecl : Decl {
     std::string name;
+    bool isNominal = false;
     std::vector<std::string> typeParams;
     std::vector<Param> fields;
 };
@@ -433,12 +442,14 @@ struct EnumDecl : Decl {
         std::vector<std::unique_ptr<TypeAST>> fields;
     };
     std::string name;
+    bool isNominal = false;
     std::vector<std::string> typeParams;
     std::vector<Variant> variants;
 };
 
 struct TraitDecl : Decl {
     std::string name;
+    std::string resolvedTraitId;
     std::vector<std::string> typeParams;
     std::vector<Param> traitParams;
     struct MethodSig {
@@ -455,6 +466,16 @@ struct ImplDecl : Decl {
     std::unique_ptr<TypeAST> targetType;
     std::string resolvedTargetTypeId;
     std::vector<std::unique_ptr<FunctionDecl>> methods;
+};
+
+struct MetaDecl : Decl {
+    struct Field {
+        std::string name;
+        std::unique_ptr<TypeAST> type;
+        TypePtr inferredType;
+    };
+    std::string name;
+    std::vector<Field> fields;
 };
 
 struct Program : ASTNode {

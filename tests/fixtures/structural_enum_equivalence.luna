@@ -1,0 +1,16 @@
+enum First {
+    None;
+    Some(i32);
+}
+
+enum Second {
+    None;
+    Some(i32);
+}
+
+fn accept(value: First) -> i32 { return 42; }
+
+fn main() -> i32 {
+    let value = Second::Some(1);
+    return accept(value);
+}

@@ -1,9 +1,9 @@
-interceptor hook @stable(1.0.0) {
-    print(1);
-}
+meta revision { value: i32; }
 
-context hook @stable(1.1.0) {
-    resume();
-}
+@revision(1)
+interceptor hook { print(1); }
+
+@revision(2)
+context hook { resume(); }
 
 fn main() -> i32 { return 0; }

@@ -1,0 +1,11 @@
+struct First { value: i32; }
+struct Second { value: i32; }
+
+fn inspect<T>(value: T) -> i32 { return 1; }
+
+fn main() -> i32 {
+    let first = new First(7);
+    let second = new Second(9);
+    print(inspect(first));
+    return inspect(second);
+}

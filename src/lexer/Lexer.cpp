@@ -75,15 +75,6 @@ Token Lexer::readNumber() {
         isFloat = true;
         lexeme += advance(); // '.'
         while (!isAtEnd() && std::isdigit(peek())) lexeme += advance();
-        // Semantic versions are intentionally a distinct literal.  Looking
-        // for the second numeric component keeps normal floats (`1.25`)
-        // unchanged while accepting only the canonical `x.y.z` form here.
-        if (!isAtEnd() && peek() == '.' && mPos + 1 < (int)mSource.size() &&
-            std::isdigit(mSource[mPos + 1])) {
-            lexeme += advance();
-            while (!isAtEnd() && std::isdigit(peek())) lexeme += advance();
-            return Token(TokenKind::VersionLiteral, lexeme, mStartLine, mStartCol);
-        }
     }
     return Token(isFloat ? TokenKind::FloatLiteral : TokenKind::IntLiteral,
                  lexeme, mStartLine, mStartCol);

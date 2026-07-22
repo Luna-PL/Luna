@@ -35,8 +35,9 @@ file(MAKE_DIRECTORY "${dump_dir}")
 
 execute_process(
     COMMAND ${CMAKE_COMMAND} -E env
-        LUNA_GPU_BACKEND=sim
-        LUNA_GPU_EMIT_AMDGPU=1
+        # Selecting the real backend during compilation must remain an offline
+        # operation: no HIP device or driver is required until the program runs.
+        LUNA_GPU_BACKEND=rocm
         LUNA_AMDGPU_ARCH=gfx1101
         LUNA_GPU_DUMP_HSACO=${dump_dir}
         "${LUNA_EXECUTABLE}" build "${source}" -O3

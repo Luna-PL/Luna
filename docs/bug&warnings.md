@@ -1,36 +1,29 @@
 # bug & warnings
 
-## 异构计算出现的问题
+## Windows JIT/AOT 与异构计算修复状态
 
-1. setenv和putenv存在的环境影响问题
-2. 现在的模式是必定注入GPU异构计算相关逻辑，这也许会导致严重问题。将在下一个版本中强化异构计算能力时解决
-3. GPU检查从致命错误降为warning
-4. 为最快修复上述问题，JIT模式不再引用rt_gpu_*符号
+2026-07-22 已完成候选修复，等待 GitHub Windows runner 和真实 ROCm
+设备的外部验证：
 
-以上问题根源来源于异构计算的支持极不完善。将在下一轮升级迭代中进行完善
-目前的短期修复意味着也许会导致JIT出现问题，异构计算支持出现问题等
-报告日期 GMT+8 2026.7.18 18：44
+1. JIT 使用 ORC `absoluteSymbols` 显式注册实际被 LLVM 模块引用的全部
+   Luna `rt_*` 函数，不再依赖可执行文件导出表、`-rdynamic` 或
+   `__declspec(dllexport)`。
+2. kernel runtime 入口由 MoonIR `features.kernel` 控制；纯 CPU 和未使用
+   kernel 不生成 `rt_gpu_*` 引用，JIT/AOT 的含 kernel 模块使用相同入口检查。
+3. PTX/HSACO 的编译期选择不再初始化 CUDA/HIP；离线或交叉 AOT 无需编译机
+   存在可用 GPU，设备初始化推迟到生成程序执行。
+4. AOT 链接已从 `std::system()` 字符串命令改为 LLVM
+   `ExecuteAndWait` 参数数组，消除 CMD/MSYS2 二次解析引号的问题。
+5. `windows-ci.yml` 已恢复，并单独运行 JIT/AOT parity、显式 runtime symbol、
+   AOT runtime boundary 和 MoonIR cost boundary 后再运行完整非硬件测试。
 
+本机 Linux 的 simulator、JIT/AOT parity 和离线 AMDGPU ISA 回归已通过。
+Windows CI 和真实 ROCm JIT/AOT 只有在外部执行完成后才能标记为已验证。
 
-## 两类剩余问题
+## 待确定的机制
 
-类别 1：JIT 符号缺失（测试 1, 7, 13）
-Symbols not found: [ __main, rt_gpu_initialize, rt_gpu_report_initialization_error ]
-CodeGenerator::generateFunctionBody() 第 ~396 行——JIT 生成的 main() 仍嵌入 GPU 初始化调用。
-存疑结论：我的 mIsAOT 修复逻辑正确，但CI 二进制未包含此修改（未 push / CI 用了旧缓存）。
-
-类别 2：AOT 链接 CMD 引号解析失败（测试 2-6, 8-10, 14, 16, 17）
-The filename, directory name, or volume label syntax is incorrect.
-路径已全部 /（generic_string() 生效了）。但 shellQuote 把每个参数单独包双引号：
-
-"clang++.exe" -O0 "file.ll" "libruntime.a" -o "output.exe"
-CMD 的 "clang++.exe" 关—开—关引号序列在某些 MSYS2 环境解析异常，把 clang++" -O0 "D: 当成一个命令名：
-
-'clang++" -O0 "D:' is not recognized as an internal or external command
-证据：不经过 std::system() 的原生可执行文件测试（11, 12, 15）全部通过。
-
-修改位置
-
-问题	文件	行号	需要改什么
-JIT GPU 符号	src/codegen/CodeGenerator.cpp	~396	if (decl->name == "main" && mIsAOT) — 确认此行存在
-AOT CMD 引号	src/main.cpp	~378-384	不要每个参数都 shellQuote。只对含空格的参数加引号。或者 Windows 上改用 CreateProcess 替代 std::system()
+1. 既然我们使用结构化类型，那么函数自然应该允许接受结构化类型，而不一定是名义类型，但是对于结构化类型，label versioning机制也许需要变动，考虑类似using语法强化名义类型的类型安全
+2. 标签需要更精确的机制，比如可以用一些运算符确定精确版本和最大兼容版本等，可能需要引入require语句
+3. 确定versioning机制的发生时间。我倾向于按需支付性能成本地支持动态选取，其他时候则确定静态化选择，可能需要引入dynmaic修饰
+4. 语言原生级别并发的设计问题
+5. 异构计算的基座设计问题

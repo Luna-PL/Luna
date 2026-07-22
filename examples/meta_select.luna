@@ -1,0 +1,30 @@
+// Metadata schemas are source-level types.  Attachments are compile-time-only
+// unless the attachment is prefixed with `runtime` or `dynamic`.
+meta version {
+    major: i32;
+    minor: i32;
+    patch: i32;
+}
+
+// DeclarationView is compiler-owned and injected by `select`; callers only
+// provide the three explicit version fields.
+fn choice(view: declaration_view, major: i32, minor: i32, patch: i32) -> declaration_ref {
+    return select_unique(view, version(major, minor, patch));
+}
+
+@version(1, 0, 0)
+fn answer() -> i32 {
+    return 10;
+}
+
+@version(2, 0, 0)
+fn answer() -> i32 {
+    return 20;
+}
+
+fn main() -> i32 {
+    let selected = select answer with choice(1, 0, 0);
+    print(selected());
+    print(@choice(2, 0, 0) answer());
+    return @choice(2, 0, 0) answer();
+}

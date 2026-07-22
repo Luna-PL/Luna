@@ -1,6 +1,6 @@
 # The AOT driver must accept an explicit runtime archive, diagnose a missing
-# archive predictably, and preserve the generated executable's runtime GPU
-# initialization boundary.
+# archive predictably, and only create a runtime GPU initialization boundary
+# when kernel support is used or explicitly reserved.
 
 if(NOT DEFINED LUNA_EXECUTABLE OR NOT EXISTS "${LUNA_EXECUTABLE}")
     message(FATAL_ERROR "LUNA_EXECUTABLE must point at a built luna binary")
@@ -45,14 +45,45 @@ execute_process(
     OUTPUT_VARIABLE runtime_output
     ERROR_VARIABLE runtime_error
 )
-string(FIND "${runtime_output}\n${runtime_error}"
-    "GPU backend initialization failed for 'invalid-backend': unknown GPU backend 'invalid-backend'"
-    initialization_error_at)
-if(NOT runtime_result EQUAL 1 OR initialization_error_at EQUAL -1)
+if(NOT runtime_result EQUAL 0)
     cleanup_outputs()
     message(FATAL_ERROR
-        "AOT startup did not report an invalid GPU backend clearly.\nResult: ${runtime_result}\n"
+        "An unused kernel unexpectedly created a GPU runtime dependency.\n"
+        "Result: ${runtime_result}\n"
         "Output:\n${runtime_output}\n${runtime_error}")
+endif()
+
+cleanup_outputs()
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${source_path}"
+            --runtime-lib "${LUNA_RUNTIME_LIBRARY}" --cc clang++
+            --reserve-kernel-runtime
+    RESULT_VARIABLE reserved_build_result
+    OUTPUT_VARIABLE reserved_build_output
+    ERROR_VARIABLE reserved_build_error
+)
+if(NOT reserved_build_result EQUAL 0 OR NOT EXISTS "${ir_path}" OR NOT EXISTS "${executable_path}")
+    cleanup_outputs()
+    message(FATAL_ERROR
+        "AOT build with reserved kernel support failed.\nResult: ${reserved_build_result}\n"
+        "Output:\n${reserved_build_output}\n${reserved_build_error}")
+endif()
+
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env LUNA_GPU_BACKEND=invalid-backend "${executable_path}"
+    RESULT_VARIABLE reserved_runtime_result
+    OUTPUT_VARIABLE reserved_runtime_output
+    ERROR_VARIABLE reserved_runtime_error
+)
+string(FIND "${reserved_runtime_output}\n${reserved_runtime_error}"
+    "GPU backend initialization failed for 'invalid-backend': unknown GPU backend 'invalid-backend'"
+    initialization_error_at)
+if(NOT reserved_runtime_result EQUAL 1 OR initialization_error_at EQUAL -1)
+    cleanup_outputs()
+    message(FATAL_ERROR
+        "Reserved kernel support did not report an invalid GPU backend clearly.\n"
+        "Result: ${reserved_runtime_result}\n"
+        "Output:\n${reserved_runtime_output}\n${reserved_runtime_error}")
 endif()
 
 cleanup_outputs()

@@ -1,5 +1,4 @@
 package duplicate_version;
 
-fn greet @stable(1.0.0)() -> i32 {
-    return 2;
-}
+@version(1, 0, 0)
+fn greet() -> i32 { return 2; }

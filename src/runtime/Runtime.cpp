@@ -629,14 +629,19 @@ int rt_gpu_backend_is_rocm() {
 }
 
 int rt_gpu_should_emit_ptx() {
+    // Code-object selection is a compile-time query and must not initialize a
+    // physical device. This permits cross/offline AOT and lets JIT finish
+    // compilation before the generated entry point validates the backend.
+    const char* backend = std::getenv("LUNA_GPU_BACKEND");
     const char* requested = std::getenv("LUNA_GPU_EMIT_PTX");
-    return (rt_gpu_backend_is_cuda() ||
+    return ((backend && std::strcmp(backend, "cuda") == 0) ||
             (requested && std::strcmp(requested, "1") == 0)) ? 1 : 0;
 }
 
 int rt_gpu_should_emit_amdgpu() {
+    const char* backend = std::getenv("LUNA_GPU_BACKEND");
     const char* requested = std::getenv("LUNA_GPU_EMIT_AMDGPU");
-    return (rt_gpu_backend_is_rocm() ||
+    return ((backend && std::strcmp(backend, "rocm") == 0) ||
             (requested && std::strcmp(requested, "1") == 0)) ? 1 : 0;
 }
 

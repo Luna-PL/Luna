@@ -1,23 +1,68 @@
 #include "SemanticAnalyzer.h"
+#include "../core/TypeRelations.h"
 #include "../parser/AST.h"
 #include "../diagnostics/Diagnostic.h"
+#include "../selector/Selector.h"
 #include <sstream>
 #include <functional>
 #include <cmath>
 #include <set>
+#include <iomanip>
 
 static std::string displayTraitRef(const TraitRef& trait) {
-    if (!trait.versionSelector) return trait.name;
-    std::string result = trait.name + "@" + trait.versionSelector->tag + "(";
-    result += trait.versionSelector->version
-        ? trait.versionSelector->version->toString() : "";
-    return result + ")";
+    return trait.name;
 }
 
-static std::string displayDeclarationIdentity(
-    const std::string& name, const std::optional<VersionTag>& tag) {
-    if (!tag) return name;
-    return name + "@" + tag->name + "(" + tag->version.toString() + ")";
+static std::string moduleIdentity(const Program* program) {
+    return program && !program->packageName.empty() ? program->packageName : "main";
+}
+
+static std::string nominalDeclarationIdentity(
+    const Program* program, const char* kind, const std::string& symbol) {
+    return moduleIdentity(program) + "::" + kind + "::" + symbol;
+}
+
+static uint64_t stableMetadataHash(const std::string& value) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (unsigned char byte : value) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
+}
+
+static std::string metadataExpressionKey(const Expr* expression) {
+    if (auto* value = dynamic_cast<const IntLiteralExpr*>(expression))
+        return "i:" + std::to_string(value->value);
+    if (auto* value = dynamic_cast<const FloatLiteralExpr*>(expression)) {
+        std::ostringstream output;
+        output << "f:" << std::setprecision(17) << value->value;
+        return output.str();
+    }
+    if (auto* value = dynamic_cast<const BoolLiteralExpr*>(expression))
+        return value->value ? "b:1" : "b:0";
+    if (auto* value = dynamic_cast<const StringLiteralExpr*>(expression))
+        return "s:" + std::to_string(value->value.size()) + ":" + value->value;
+    if (auto* value = dynamic_cast<const IdentifierExpr*>(expression))
+        return "id:" + value->name;
+    return "expr@" + expression->sourcePath + ":" +
+           std::to_string(expression->line) + ":" + std::to_string(expression->col);
+}
+
+static std::string metadataDeclarationName(const std::string& base,
+                                           const Decl* declaration) {
+    if (!declaration || declaration->metadata.empty()) return base;
+    std::string key;
+    for (const auto& attachment : declaration->metadata) {
+        key += attachment.schemaName + "(";
+        for (const auto& argument : attachment.arguments)
+            key += metadataExpressionKey(argument.get()) + ";";
+        key += ")";
+    }
+    std::ostringstream output;
+    output << base << "__meta_" << std::hex << std::setw(16)
+           << std::setfill('0') << stableMetadataHash(key);
+    return output.str();
 }
 
 SemanticAnalyzer::SemanticAnalyzer() {
@@ -48,11 +93,12 @@ bool SemanticAnalyzer::analyze(Program* program) {
     mDynamicApplyScopes.clear();
     enterSlotScope();
     mFragments.clear();
-    mVersionedFunctions.clear();
-    mVersionedFragments.clear();
-    mVersionedNominals.clear();
+    mMetadataSchemas.clear();
+    mFunctionFamilies.clear();
+    mGeneratedInstances.clear();
+    mInstantiator.reset();
+    mInstantiatedFunctions.clear();
     mTraits.clear();
-    mVersionedTraits.clear();
     mTraitTypeParams.clear();
     mTraitMethods.clear();
     mImpls.clear();
@@ -71,16 +117,23 @@ bool SemanticAnalyzer::analyze(Program* program) {
         else if (auto* s = dynamic_cast<StructDecl*>(declaration)) name = s->name;
         else if (auto* e = dynamic_cast<EnumDecl*>(declaration)) name = e->name;
         else if (auto* t = dynamic_cast<TraitDecl*>(declaration)) name = t->name;
+        else if (auto* m = dynamic_cast<MetaDecl*>(declaration)) name = m->name;
         if (!name.empty()) {
-            declaration->generatedSymbolName = versionedDeclarationName(
-                name, declaration->versionTag);
+            declaration->generatedSymbolName = metadataDeclarationName(name, declaration);
             std::string identity = declaration->generatedSymbolName;
             if (!declaredNames.emplace(identity, declaration).second)
-                error("Duplicate package declaration '" +
-                      displayDeclarationIdentity(name, declaration->versionTag) + "'");
+                error("Duplicate package declaration '" + name + "'");
         }
         if (declaration->isExported && dynamic_cast<ImplDecl*>(declaration))
             error("Only functions, types, and traits can be exported; 'impl' is an internal declaration");
+    }
+    // Metadata schemas are ordinary declarations, but attachments on every
+    // other declaration need their types during the declaration pass.
+    for (size_t i = 0; i < sourceDeclarationCount; ++i) {
+        if (auto* metadata = dynamic_cast<MetaDecl*>(program->declarations[i].get())) {
+            setDiagnosticLocation(metadata);
+            declareMeta(metadata);
+        }
     }
     // Bind every nominal name before resolving any field. This permits
     // forward references and makes the declaration identity independent from
@@ -89,38 +142,32 @@ bool SemanticAnalyzer::analyze(Program* program) {
         if (auto* s = dynamic_cast<StructDecl*>(program->declarations[i].get())) {
             const std::string identity = s->generatedSymbolName.empty()
                 ? s->name : s->generatedSymbolName;
-            if (!mNominalTypes.count(identity)) {
-                auto type = Type::makeStruct(s->name, {}, identity);
+            if (!mDeclaredTypes.count(identity)) {
+                auto type = Type::makeStruct(s->name, {}, s->isNominal
+                    ? nominalDeclarationIdentity(program, "struct", identity) : "");
                 type->typeParams = s->typeParams;
-                mNominalTypes[identity] = type;
+                mDeclaredTypes[identity] = type;
+                mDeclaredTypes[s->name] = type;
                 mSymTable.defineType(identity, type);
-                if (s->versionTag) {
-                    mVersionedNominals[s->name][s->versionTag->name].push_back(
-                        {s->versionTag->version, type});
-                } else {
-                    mSymTable.defineType(s->name, type);
-                }
+                mSymTable.defineType(s->name, type);
             }
         } else if (auto* e = dynamic_cast<EnumDecl*>(program->declarations[i].get())) {
             const std::string identity = e->generatedSymbolName.empty()
                 ? e->name : e->generatedSymbolName;
-            if (!mNominalTypes.count(identity)) {
-                auto type = Type::makeEnum(e->name, {}, identity);
+            if (!mDeclaredTypes.count(identity)) {
+                auto type = Type::makeEnum(e->name, {}, e->isNominal
+                    ? nominalDeclarationIdentity(program, "enum", identity) : "");
                 type->typeParams = e->typeParams;
-                mNominalTypes[identity] = type;
+                mDeclaredTypes[identity] = type;
+                mDeclaredTypes[e->name] = type;
                 mSymTable.defineType(identity, type);
-                if (e->versionTag) {
-                    mVersionedNominals[e->name][e->versionTag->name].push_back(
-                        {e->versionTag->version, type});
-                } else {
-                    mSymTable.defineType(e->name, type);
-                }
+                mSymTable.defineType(e->name, type);
             }
         }
     }
     // Pass 1a: register every trait identity before impls or generic
-    // constraints are touched. This makes version selection declaration-order
-    // independent, just as nominal type binding above is.
+    // constraints are touched. This makes metadata-qualified declaration
+    // families order-independent, just as nominal type binding above is.
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         auto& decl = program->declarations[i];
         if (auto* t = dynamic_cast<TraitDecl*>(decl.get())) {
@@ -132,6 +179,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         auto& decl = program->declarations[i];
         setDiagnosticLocation(decl.get());
+        validateMetadata(decl.get());
         if (auto* f = dynamic_cast<FunctionDecl*>(decl.get())) declareFunction(f);
         else if (auto* f = dynamic_cast<FragmentDecl*>(decl.get())) declareFragment(f);
         else if (auto* s = dynamic_cast<StructDecl*>(decl.get())) declareStruct(s);
@@ -154,6 +202,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
         else if (auto* s = dynamic_cast<StructDecl*>(decl.get())) analyzeStruct(s);
         else if (auto* e = dynamic_cast<EnumDecl*>(decl.get())) analyzeEnum(e);
         else if (auto* i = dynamic_cast<ImplDecl*>(decl.get())) analyzeImpl(i);
+        else if (auto* m = dynamic_cast<MetaDecl*>(decl.get())) analyzeMeta(m);
     }
     // Numeric constraints have a useful, deterministic default. Other
     // unresolved variables are diagnosed because silently turning them into
@@ -182,6 +231,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
 // ─── Declaration pass ──────────────────────────────────────────────
 
 void SemanticAnalyzer::declareFunction(FunctionDecl* decl) {
+    mFunctionFamilies[decl->name].push_back(decl);
     std::unordered_map<std::string, TypePtr> bindings;
     for (auto& tp : decl->typeParams) {
         bindings[tp] = Type::makeTypeParam(tp);
@@ -197,16 +247,31 @@ void SemanticAnalyzer::declareFunction(FunctionDecl* decl) {
     if ((decl->isExtern || !decl->abi.empty()) && !decl->returnType)
         info.returnType = TyUnit;
     decl->inferredReturnType = info.returnType;
+    const bool explicitReturnUsage = decl->returnsLinear ||
+        dynamic_cast<AffineTypeAST*>(decl->returnType.get()) != nullptr;
+    decl->returnUsage = explicitReturnUsage
+        ? (decl->returnsLinear ? luna::ownership::Usage::Linear
+                               : luna::ownership::Usage::Affine)
+        : defaultUsageForType(info.returnType);
+    info.returnUsage = decl->returnUsage;
     info.typeParams = decl->typeParams;
     info.genericDecl = decl;
     for (auto& p : decl->params) {
         TypePtr pt = declaredType(p.type.get(), bindings);
         p.inferredType = pt;
+        const bool explicitUsage = p.hasExplicitUsage || p.isLinear ||
+            dynamic_cast<LinearTypeAST*>(p.type.get()) != nullptr ||
+            dynamic_cast<AffineTypeAST*>(p.type.get()) != nullptr;
+        const auto usage = p.isLinear || dynamic_cast<LinearTypeAST*>(p.type.get())
+            ? luna::ownership::Usage::Linear
+            : (explicitUsage ? luna::ownership::Usage::Affine : defaultUsageForType(pt));
+        const auto contract = parameterContractFor(pt, usage, explicitUsage);
+        p.usage = contract.usage;
+        p.relation = contract.relation;
+        info.paramContracts.push_back(contract);
         info.paramTypes.push_back(pt);
     }
-    if (decl->versionTag) {
-        mVersionedFunctions[decl->name][decl->versionTag->name].push_back(decl);
-    } else {
+    if (mFunctionFamilies[decl->name].size() == 1) {
         mSymTable.defineAtRoot(decl->name, info);
     }
     if (decl->isConstexpr)
@@ -216,29 +281,113 @@ void SemanticAnalyzer::declareFunction(FunctionDecl* decl) {
         validateFFIFunction(decl);
 }
 
-void SemanticAnalyzer::declareFragment(FragmentDecl* decl) {
-    if (decl->versionTag) {
-        auto& versions = mVersionedFragments[decl->name][decl->versionTag->name];
-        if (!versions.empty() &&
-            (versions.front()->kind != decl->kind ||
-             versions.front()->cardinality != decl->cardinality)) {
-            error("versioned fragment '" + decl->name + "@" + decl->versionTag->name +
-                  "' changes its interceptor/context or once/many contract",
+void SemanticAnalyzer::declareMeta(MetaDecl* decl) {
+    if (!decl) return;
+    if (mMetadataSchemas.count(decl->name)) {
+        error("duplicate metadata schema '" + decl->name + "'", decl->line, decl->col);
+        return;
+    }
+    std::set<std::string> fieldNames;
+    std::vector<TypeField> fields;
+    for (auto& field : decl->fields) {
+        if (!fieldNames.insert(field.name).second)
+            error("duplicate metadata field '" + field.name + "' in '" +
+                  decl->name + "'", decl->line, decl->col);
+        field.inferredType = declaredType(field.type.get(), {});
+        fields.push_back({field.name, field.inferredType});
+    }
+    const auto schemaSymbol = decl->generatedSymbolName.empty()
+        ? decl->name : decl->generatedSymbolName;
+    auto metadataType = Type::makeMetadata(
+        nominalDeclarationIdentity(mProgram, "meta", schemaSymbol),
+        std::move(fields));
+    metadataType->name = decl->name;
+    mMetadataSchemas[decl->name] = decl;
+    mSymTable.defineType(decl->name, metadataType);
+
+    SymbolInfo constructor;
+    constructor.kind = SymbolKind::Metadata;
+    constructor.type = metadataType;
+    constructor.returnType = metadataType;
+    for (const auto& field : decl->fields)
+        constructor.paramTypes.push_back(field.inferredType);
+    if (!mSymTable.defineAtRoot(decl->name, std::move(constructor)))
+        error("metadata schema name '" + decl->name +
+              "' conflicts with an existing declaration", decl->line, decl->col);
+}
+
+void SemanticAnalyzer::analyzeMeta(MetaDecl* decl) {
+    if (!decl) return;
+    for (auto& field : decl->fields)
+        checkUnresolved(field.inferredType,
+                        "metadata field '" + decl->name + "." + field.name + "'");
+}
+
+void SemanticAnalyzer::validateMetadata(Decl* decl) {
+    if (!decl) return;
+    for (auto& attachment : decl->metadata) {
+        auto schema = mMetadataSchemas.find(attachment.schemaName);
+        if (schema == mMetadataSchemas.end()) {
+            error("unknown metadata schema '" + attachment.schemaName + "'",
                   decl->line, decl->col);
-            return;
+            continue;
         }
-        versions.push_back(decl);
-    } else if (!mFragments.emplace(decl->name, decl).second) {
+        const auto schemaSymbol = schema->second->generatedSymbolName.empty()
+            ? schema->second->name : schema->second->generatedSymbolName;
+        attachment.resolvedSchemaId = nominalDeclarationIdentity(
+            mProgram, "meta", schemaSymbol);
+        if (attachment.arguments.size() != schema->second->fields.size()) {
+            error("metadata '" + attachment.schemaName + "' expects " +
+                  std::to_string(schema->second->fields.size()) + " arguments, got " +
+                  std::to_string(attachment.arguments.size()), decl->line, decl->col);
+            continue;
+        }
+        attachment.evaluatedArguments.clear();
+        for (size_t index = 0; index < attachment.arguments.size(); ++index) {
+            auto value = evaluateConstExpr(attachment.arguments[index].get());
+            if (!value) {
+                error("metadata argument " + std::to_string(index + 1) + " of '" +
+                      attachment.schemaName + "' is not a compile-time value",
+                      decl->line, decl->col);
+                continue;
+            }
+            TypePtr actual = TyUnknown;
+            if (std::holds_alternative<int64_t>(*value)) actual = TyI32;
+            else if (std::holds_alternative<double>(*value)) actual = TyF64;
+            else if (std::holds_alternative<bool>(*value)) actual = TyBool;
+            else if (std::holds_alternative<std::string>(*value)) actual = TyString;
+            constrain(actual, schema->second->fields[index].inferredType,
+                      "metadata field '" + attachment.schemaName + "." +
+                          schema->second->fields[index].name + "'");
+            attachment.evaluatedArguments.push_back(*value);
+        }
+        if (attachment.retention == RetentionKind::Runtime &&
+            decl->retention == RetentionKind::CompileTime)
+            decl->retention = RetentionKind::Runtime;
+        if (attachment.retention == RetentionKind::Dynamic)
+            decl->retention = RetentionKind::Dynamic;
+    }
+}
+
+void SemanticAnalyzer::declareFragment(FragmentDecl* decl) {
+    if (!mFragments.emplace(decl->name, decl).second) {
         error("duplicate fragment declaration '" + decl->name + "'", decl->line, decl->col);
         return;
     }
     SymbolInfo info;
     info.kind = SymbolKind::Fragment;
+    TypeVec parameterTypes;
+    for (auto& parameter : decl->params) {
+        parameter.inferredType = declaredType(parameter.type.get(), {});
+        parameterTypes.push_back(parameter.inferredType);
+    }
     info.type = Type::makeFragment(
-        {}, TyUnit, decl->cardinality == FragmentCardinality::Many,
+        std::move(parameterTypes), TyUnit,
+        decl->cardinality == FragmentCardinality::Many,
         decl->kind == FragmentKind::Interceptor
             ? ContinuationKind::Interceptor : ContinuationKind::Context);
-    if (!decl->versionTag) mSymTable.defineAtRoot(decl->name, info);
+    decl->structuralType = info.type;
+    mSymTable.defineAtRoot(decl->name, info);
 }
 
 bool SemanticAnalyzer::isFFIType(const TypePtr& type, const std::string& context) {
@@ -292,25 +441,24 @@ void SemanticAnalyzer::validateFFIFunction(FunctionDecl* decl) {
 void SemanticAnalyzer::declareStruct(StructDecl* decl) {
     const std::string identity = decl->generatedSymbolName.empty()
         ? decl->name : decl->generatedSymbolName;
-    auto nominal = mNominalTypes[identity];
-    if (!nominal) {
-        nominal = Type::makeStruct(decl->name, {}, identity);
-        mNominalTypes[identity] = nominal;
+    auto declared = mDeclaredTypes[identity];
+    if (!declared) {
+        declared = Type::makeStruct(decl->name, {}, decl->isNominal
+            ? nominalDeclarationIdentity(mProgram, "struct", identity) : "");
+        mDeclaredTypes[identity] = declared;
     }
-    nominal->typeParams = decl->typeParams;
-    nominal->fields.clear();
-    mNominalTypes[identity] = nominal;
+    declared->typeParams = decl->typeParams;
+    declared->fields.clear();
+    mDeclaredTypes[identity] = declared;
 
     SymbolInfo info;
     info.kind = SymbolKind::Struct;
     info.isExported = decl->isExported;
-    info.type = nominal;
+    info.type = declared;
     info.typeParams = decl->typeParams;
-    if (!decl->versionTag) {
-        mSymTable.defineAtRoot(decl->name, info);
-        mSymTable.defineType(decl->name, nominal);
-    }
-    mSymTable.defineType(identity, nominal);
+    mSymTable.defineAtRoot(decl->name, info);
+    mSymTable.defineType(decl->name, declared);
+    mSymTable.defineType(identity, declared);
 
     std::unordered_map<std::string, TypePtr> bindings;
     for (auto& tp : decl->typeParams) bindings[tp] = Type::makeTypeParam(tp);
@@ -319,23 +467,27 @@ void SemanticAnalyzer::declareStruct(StructDecl* decl) {
         typedField.name = field.name;
         typedField.type = resolveTypeAST(field.type.get(), bindings);
         field.inferredType = typedField.type;
-        nominal->fields.push_back(std::move(typedField));
+        declared->fields.push_back(std::move(typedField));
     }
+    if (!decl->isNominal && luna::types::isRecursiveShape(declared))
+        error("recursive structural type '" + decl->name + "' requires `nominal`",
+              decl->line, decl->col);
 }
 
 void SemanticAnalyzer::declareEnum(EnumDecl* decl) {
     const std::string identity = decl->generatedSymbolName.empty()
         ? decl->name : decl->generatedSymbolName;
-    auto nominal = mNominalTypes[identity];
-    if (!nominal) {
-        nominal = Type::makeEnum(decl->name, {}, identity);
-        mNominalTypes[identity] = nominal;
+    auto declared = mDeclaredTypes[identity];
+    if (!declared) {
+        declared = Type::makeEnum(decl->name, {}, decl->isNominal
+            ? nominalDeclarationIdentity(mProgram, "enum", identity) : "");
+        mDeclaredTypes[identity] = declared;
     }
-    nominal->typeParams = decl->typeParams;
-    nominal->variants.clear();
-    mNominalTypes[identity] = nominal;
-    if (!decl->versionTag) mSymTable.defineType(decl->name, nominal);
-    mSymTable.defineType(identity, nominal);
+    declared->typeParams = decl->typeParams;
+    declared->variants.clear();
+    mDeclaredTypes[identity] = declared;
+    mSymTable.defineType(decl->name, declared);
+    mSymTable.defineType(identity, declared);
 
     std::unordered_map<std::string, TypePtr> bindings;
     for (auto& tp : decl->typeParams) bindings[tp] = Type::makeTypeParam(tp);
@@ -344,24 +496,22 @@ void SemanticAnalyzer::declareEnum(EnumDecl* decl) {
         typedVariant.name = variant.name;
         for (auto& field : variant.fields)
             typedVariant.fields.push_back(resolveTypeAST(field.get(), bindings));
-        nominal->variants.push_back(std::move(typedVariant));
+        declared->variants.push_back(std::move(typedVariant));
     }
+    if (!decl->isNominal && luna::types::isRecursiveShape(declared))
+        error("recursive structural type '" + decl->name + "' requires `nominal`",
+              decl->line, decl->col);
 }
 
 void SemanticAnalyzer::declareTrait(TraitDecl* decl) {
     const std::string identity = traitIdentity(decl);
-    if (decl->versionTag) {
-        mVersionedTraits[decl->name][decl->versionTag->name].push_back(
-            {decl->versionTag->version, decl});
-    } else {
-        mTraits[decl->name] = decl;
-    }
+    decl->resolvedTraitId = identity;
+    if (!mTraits.emplace(decl->name, decl).second)
+        error("duplicate trait declaration '" + decl->name + "'", decl->line, decl->col);
     mTraitTypeParams[identity] = decl->typeParams;
-    // Traits are compile-time interfaces. Their type object uses the complete
-    // identity so tagged traits cannot be unified accidentally.
+    // Traits are compile-time interfaces with stable declaration identity.
     mSymTable.defineType(identity, Type::makeTrait(identity));
-    if (!decl->versionTag)
-        mSymTable.defineType(decl->name, Type::makeTrait(identity));
+    mSymTable.defineType(decl->name, Type::makeTrait(identity));
 }
 
 void SemanticAnalyzer::declareImpl(ImplDecl* decl) {
@@ -392,8 +542,21 @@ void SemanticAnalyzer::declareImpl(ImplDecl* decl) {
         info.kind = SymbolKind::Function;
         info.returnType = declaredType(method->returnType.get(), {});
         method->inferredReturnType = info.returnType;
+        method->returnUsage = method->returnsLinear
+            ? luna::ownership::Usage::Linear : defaultUsageForType(info.returnType);
+        info.returnUsage = method->returnUsage;
         for (auto& p : method->params) {
             p.inferredType = declaredType(p.type.get(), {});
+            const bool explicitUsage = p.hasExplicitUsage || p.isLinear ||
+                dynamic_cast<LinearTypeAST*>(p.type.get()) ||
+                dynamic_cast<AffineTypeAST*>(p.type.get());
+            auto requestedUsage = p.isLinear ? luna::ownership::Usage::Linear
+                : (explicitUsage ? p.usage : defaultUsageForType(p.inferredType));
+            auto contract = parameterContractFor(
+                p.inferredType, requestedUsage, explicitUsage);
+            p.usage = contract.usage;
+            p.relation = contract.relation;
+            info.paramContracts.push_back(contract);
             info.paramTypes.push_back(p.inferredType);
         }
         mSymTable.defineAtRoot(method->name, info);
@@ -407,10 +570,14 @@ void SemanticAnalyzer::analyzeFunction(FunctionDecl* decl) {
     bool savedInFunction = mInFunction;
     bool savedInKernel = mInKernel;
     bool savedReturnsLinear = mCurrentFunctionReturnsLinear;
+    auto savedReturnUsage = mCurrentFunctionReturnUsage;
     bool savedSawReturn = mSawReturn;
     mInFunction = true;
     mInKernel = decl->isKernel;
     mCurrentFunctionReturnsLinear = decl->returnsLinear;
+    if (decl->returnUsage == luna::ownership::Usage::Copy && decl->inferredReturnType)
+        decl->returnUsage = defaultUsageForType(resolved(decl->inferredReturnType));
+    mCurrentFunctionReturnUsage = decl->returnUsage;
     mSawReturn = false;
     mSymTable.enterScope();
     enterConstScope();
@@ -442,7 +609,8 @@ void SemanticAnalyzer::analyzeFunction(FunctionDecl* decl) {
             error("kernel '" + decl->name + "' requires an explicit first parameter `index: i32`",
                   decl->line, decl->col);
         } else if (!decl->params.front().type ||
-                   !resolved(decl->params.front().inferredType)->equals(TyI32)) {
+                   !luna::types::sameType(
+                       resolved(decl->params.front().inferredType), TyI32)) {
             error("kernel '" + decl->name + "' must declare its first parameter as `index: i32`",
                   decl->line, decl->col);
         }
@@ -454,9 +622,19 @@ void SemanticAnalyzer::analyzeFunction(FunctionDecl* decl) {
         info.type = p.inferredType
             ? p.inferredType
             : declaredType(p.type.get(), typeBindings);
-        info.isLinear = p.isLinear || dynamic_cast<LinearTypeAST*>(p.type.get()) != nullptr ||
-                        resolved(info.type)->kind == TypeKind::DeviceBuffer ||
-                        resolved(info.type)->kind == TypeKind::Event;
+        const bool explicitUsage = p.hasExplicitUsage || p.isLinear ||
+            dynamic_cast<LinearTypeAST*>(p.type.get()) != nullptr ||
+            dynamic_cast<AffineTypeAST*>(p.type.get()) != nullptr;
+        info.usage = p.isLinear || dynamic_cast<LinearTypeAST*>(p.type.get())
+            ? luna::ownership::Usage::Linear
+            : (explicitUsage ? p.usage : defaultUsageForType(resolved(info.type)));
+        const auto contract = parameterContractFor(
+            resolved(info.type), info.usage, explicitUsage);
+        info.relation = contract.relation;
+        info.usage = contract.usage;
+        info.isLinear = info.usage == luna::ownership::Usage::Linear;
+        p.usage = info.usage;
+        p.relation = info.relation;
         p.inferredType = info.type;
         info.isHeapAllocated = false;
         mSymTable.define(p.name, info);
@@ -496,14 +674,15 @@ void SemanticAnalyzer::analyzeFunction(FunctionDecl* decl) {
     // gives a source-level diagnostic instead of letting host IR verification
     // discover an unterminated LLVM basic block later in the pipeline.
     if (!decl->isExtern && decl->body &&
-        !resolved(mCurrentReturnType)->equals(TyUnit) &&
+        !luna::types::sameType(resolved(mCurrentReturnType), TyUnit) &&
         !blockAlwaysReturns(decl->body.get())) {
         error("function '" + decl->name + "' may finish without returning '" +
               resolved(mCurrentReturnType)->toString() + "'",
               decl->line, decl->col);
     }
 
-    if (decl->isKernel && !resolved(mCurrentReturnType)->equals(TyUnit))
+    if (decl->isKernel &&
+        !luna::types::sameType(resolved(mCurrentReturnType), TyUnit))
         error("kernel '" + decl->name + "' must return unit", decl->line, decl->col);
 
     mSymTable.exitScope();
@@ -513,6 +692,7 @@ void SemanticAnalyzer::analyzeFunction(FunctionDecl* decl) {
     mInFunction = savedInFunction;
     mInKernel = savedInKernel;
     mCurrentFunctionReturnsLinear = savedReturnsLinear;
+    mCurrentFunctionReturnUsage = savedReturnUsage;
     mSawReturn = savedSawReturn;
 }
 
@@ -530,8 +710,8 @@ void SemanticAnalyzer::analyzeStruct(StructDecl* decl) {
 void SemanticAnalyzer::analyzeEnum(EnumDecl* decl) {
     const std::string identity = decl->generatedSymbolName.empty()
         ? decl->name : decl->generatedSymbolName;
-    auto it = mNominalTypes.find(identity);
-    if (it == mNominalTypes.end()) return;
+    auto it = mDeclaredTypes.find(identity);
+    if (it == mDeclaredTypes.end()) return;
     std::unordered_map<std::string, bool> names;
     for (auto& variant : it->second->variants) {
         if (names[variant.name])
@@ -631,10 +811,8 @@ void SemanticAnalyzer::analyzeSlotDecl(SlotDeclStmt* stmt) {
     info.paramTypes = params;
     for (const auto& param : stmt->params) info.paramNames.push_back(param.name);
     info.defaultFragment = stmt->defaultFragment;
-    info.defaultFragmentSelector = stmt->defaultFragmentSelector;
     if (!info.defaultFragment.empty()) {
-        if (auto* fragment = selectFragment(info.defaultFragment,
-                                            info.defaultFragmentSelector, stmt)) {
+        if (auto* fragment = selectFragment(info.defaultFragment, stmt)) {
             if (fragment->kind != info.acceptedKind ||
                 fragment->cardinality != info.acceptedCardinality)
                 error("default binding for slot '" + stmt->name +
@@ -693,7 +871,6 @@ void SemanticAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedR
         active.acceptedCardinality = stmt->acceptedCardinality;
         active.isImplicitCapture = true;
         active.defaultFragment = stmt->defaultFragment;
-        active.defaultFragmentSelector = stmt->defaultFragmentSelector;
         active.structuralType = Type::makeSlot(
             {}, TyUnit, active.acceptedCardinality == FragmentCardinality::Many,
             active.acceptedKind == FragmentKind::Interceptor
@@ -708,7 +885,6 @@ void SemanticAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedR
         active.acceptedKind = stmt->acceptedKind;
         active.acceptedCardinality = stmt->acceptedCardinality;
         active.defaultFragment = stmt->defaultFragment;
-        active.defaultFragmentSelector = stmt->defaultFragmentSelector;
         for (auto& param : stmt->interfaceParams) {
             if (!param.type) {
                 error("inline slot parameter '" + param.name + "' requires a type", stmt->line, stmt->col);
@@ -784,7 +960,7 @@ void SemanticAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedR
         return;
     }
     if (!fragment && !active.defaultFragment.empty()) {
-        fragment = selectFragment(active.defaultFragment, active.defaultFragmentSelector, stmt);
+        fragment = selectFragment(active.defaultFragment, stmt);
     }
     if (fragment) {
         active.resolvedDefaultFragmentName = fragment->generatedSymbolName.empty()
@@ -800,7 +976,7 @@ void SemanticAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedR
 }
 
 void SemanticAnalyzer::analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn) {
-    auto* fragment = selectFragment(stmt->fragmentName, stmt->fragmentSelector, stmt);
+    auto* fragment = selectFragment(stmt->fragmentName, stmt);
     if (!fragment) return;
     stmt->resolvedFragmentName = fragment->generatedSymbolName.empty()
         ? fragment->name : fragment->generatedSymbolName;
@@ -828,10 +1004,18 @@ void SemanticAnalyzer::analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn) {
                   stmt->line, stmt->col);
             return;
         }
+        auto requireRuntimeCandidate = [this, stmt](const FragmentDecl* candidate) {
+            if (candidate && candidate->retention == RetentionKind::CompileTime)
+                error("dynamic apply candidate '" + candidate->name +
+                      "' must be declared `runtime` or `dynamic`",
+                      stmt->line, stmt->col);
+        };
+        requireRuntimeCandidate(fragment);
         std::vector<FragmentDecl*> candidates{fragment};
         for (const auto& name : stmt->alternativeFragmentNames) {
-            auto* candidate = selectFragment(name, std::nullopt, stmt);
+            auto* candidate = selectFragment(name, stmt);
             if (!candidate) continue;
+            requireRuntimeCandidate(candidate);
             if (!matchesContract(candidate, slot))
                 error("dynamic candidate '" + candidate->name + "' does not match slot '" +
                       stmt->slotName + "' contract", stmt->line, stmt->col);
@@ -1017,129 +1201,24 @@ void SemanticAnalyzer::exitSlotScope() {
     if (mDynamicApplyScopes.size() > 1) mDynamicApplyScopes.pop_back();
 }
 
-FunctionDecl* SemanticAnalyzer::selectVersionedFunction(
-    const std::string& name, const VersionSelector& selector, const ASTNode* useSite) {
-    auto functions = mVersionedFunctions.find(name);
-    if (functions == mVersionedFunctions.end()) {
-        error("function '" + name + "' has no versioned declarations", useSite->line, useSite->col);
-        return nullptr;
-    }
-    auto tagged = functions->second.find(selector.tag);
-    if (tagged == functions->second.end() || tagged->second.empty()) {
-        error("function '" + name + "' has no `@" + selector.tag + "` version", useSite->line, useSite->col);
-        return nullptr;
-    }
-    FunctionDecl* selected = nullptr;
-    for (auto* candidate : tagged->second) {
-        if (!candidate || !candidate->versionTag) continue;
-        if (selector.version && !(candidate->versionTag->version == *selector.version)) continue;
-        if (!selected || selected->versionTag->version < candidate->versionTag->version)
-            selected = candidate;
-    }
-    if (!selected) {
-        error("function '" + name + "' has no `@" + selector.tag + "(" +
-              selector.version->toString() + ")` declaration", useSite->line, useSite->col);
-    }
-    return selected;
-}
-
 FragmentDecl* SemanticAnalyzer::selectFragment(
-    const std::string& name, const std::optional<VersionSelector>& selector,
-    const ASTNode* useSite) {
-    if (!selector) {
-        auto fragment = mFragments.find(name);
-        if (fragment != mFragments.end()) return fragment->second;
-        error("unknown fragment '" + name + "'", useSite->line, useSite->col);
-        return nullptr;
-    }
-    auto fragments = mVersionedFragments.find(name);
-    if (fragments == mVersionedFragments.end()) {
-        error("fragment '" + name + "' has no versioned declarations", useSite->line, useSite->col);
-        return nullptr;
-    }
-    auto tagged = fragments->second.find(selector->tag);
-    if (tagged == fragments->second.end() || tagged->second.empty()) {
-        error("fragment '" + name + "' has no `@" + selector->tag + "` version",
-              useSite->line, useSite->col);
-        return nullptr;
-    }
-    FragmentDecl* selected = nullptr;
-    for (auto* candidate : tagged->second) {
-        if (!candidate || !candidate->versionTag) continue;
-        if (selector->version && !(candidate->versionTag->version == *selector->version)) continue;
-        if (!selected || selected->versionTag->version < candidate->versionTag->version)
-            selected = candidate;
-    }
-    if (!selected) {
-        error("fragment '" + name + "' has no `@" + selector->tag + "(" +
-              selector->version->toString() + ")` declaration", useSite->line, useSite->col);
-    }
-    return selected;
-}
-
-TypePtr SemanticAnalyzer::selectVersionedNominal(
-    const std::string& name, const VersionSelector& selector, const ASTNode* useSite) {
-    auto types = mVersionedNominals.find(name);
-    if (types == mVersionedNominals.end()) {
-        error("type '" + name + "' has no versioned declarations", useSite->line, useSite->col);
-        return TyUnknown;
-    }
-    auto tagged = types->second.find(selector.tag);
-    if (tagged == types->second.end() || tagged->second.empty()) {
-        error("type '" + name + "' has no `@" + selector.tag + "` version",
-              useSite->line, useSite->col);
-        return TyUnknown;
-    }
-    const VersionedNominal* selected = nullptr;
-    for (const auto& candidate : tagged->second) {
-        if (selector.version && !(candidate.version == *selector.version)) continue;
-        if (!selected || selected->version < candidate.version) selected = &candidate;
-    }
-    if (!selected) {
-        error("type '" + name + "' has no `@" + selector.tag + "(" +
-              selector.version->toString() + ")` declaration", useSite->line, useSite->col);
-        return TyUnknown;
-    }
-    return selected->type;
-}
-
-TraitDecl* SemanticAnalyzer::selectVersionedTrait(
-    const std::string& name, const VersionSelector& selector, const ASTNode* useSite) {
-    auto traits = mVersionedTraits.find(name);
-    if (traits == mVersionedTraits.end()) {
-        error("trait '" + name + "' has no versioned declarations", useSite->line, useSite->col);
-        return nullptr;
-    }
-    auto tagged = traits->second.find(selector.tag);
-    if (tagged == traits->second.end() || tagged->second.empty()) {
-        error("trait '" + name + "' has no `@" + selector.tag + "` version",
-              useSite->line, useSite->col);
-        return nullptr;
-    }
-    TraitDecl* selected = nullptr;
-    for (const auto& candidate : tagged->second) {
-        if (!candidate.decl) continue;
-        if (selector.version && !(candidate.version == *selector.version)) continue;
-        if (!selected || selected->versionTag->version < candidate.version)
-            selected = candidate.decl;
-    }
-    if (!selected) {
-        error("trait '" + name + "' has no `@" + selector.tag + "(" +
-              selector.version->toString() + ")` declaration", useSite->line, useSite->col);
-    }
-    return selected;
+    const std::string& name, const ASTNode* useSite) {
+    auto fragment = mFragments.find(name);
+    if (fragment != mFragments.end()) return fragment->second;
+    error("unknown fragment '" + name + "'", useSite->line, useSite->col);
+    return nullptr;
 }
 
 std::string SemanticAnalyzer::traitIdentity(const TraitDecl* trait) const {
     if (!trait) return "";
-    return trait->generatedSymbolName.empty()
+    const auto symbol = trait->generatedSymbolName.empty()
         ? trait->name : trait->generatedSymbolName;
+    return nominalDeclarationIdentity(mProgram, "trait", symbol);
 }
 
 std::string SemanticAnalyzer::typeIdentity(const TypePtr& type) const {
     if (!type) return "?";
-    if (!type->nominalId.empty()) return type->nominalId;
-    return type->toString();
+    return luna::types::typeId(type).value;
 }
 
 bool SemanticAnalyzer::satisfiesTrait(const std::string& traitId, const TypePtr& type) const {
@@ -1159,20 +1238,12 @@ std::string SemanticAnalyzer::resolveTraitRef(TraitRef& trait, const ASTNode* us
     if (!trait.resolvedTraitId.empty()) return trait.resolvedTraitId;
     const ASTNode* diagnosticSite = trait.line > 0 ? static_cast<const ASTNode*>(&trait) : useSite;
     TraitDecl* selected = nullptr;
-    if (trait.versionSelector) {
-        selected = selectVersionedTrait(trait.name, *trait.versionSelector, diagnosticSite);
-    } else {
-        auto untagged = mTraits.find(trait.name);
-        if (untagged != mTraits.end()) {
-            selected = untagged->second;
-        } else if (mVersionedTraits.count(trait.name)) {
-            error("trait '" + trait.name + "' is versioned; select a tag explicitly",
-                  diagnosticSite->line, diagnosticSite->col);
-            return "";
-        } else {
-            error("unknown trait '" + trait.name + "'", diagnosticSite->line, diagnosticSite->col);
-            return "";
-        }
+    auto declared = mTraits.find(trait.name);
+    if (declared != mTraits.end()) selected = declared->second;
+    else {
+        error("unknown trait '" + trait.name + "'",
+              diagnosticSite->line, diagnosticSite->col);
+        return "";
     }
     if (!selected) return "";
     trait.resolvedTraitId = traitIdentity(selected);
@@ -1264,8 +1335,15 @@ TypePtr SemanticAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
         info.isConst = ls->isConst;
         info.isHeapAllocated = isHeap || declaredType->isHeapType();
         auto finalType = resolved(declaredType);
-        info.isLinear = ls->isLinear || dynamic_cast<LinearTypeAST*>(ls->typeAnnotation.get()) != nullptr ||
-                        finalType->kind == TypeKind::DeviceBuffer || finalType->kind == TypeKind::Event;
+        ls->inferredType = finalType;
+        if (ls->isLinear || dynamic_cast<LinearTypeAST*>(ls->typeAnnotation.get()))
+            ls->usage = luna::ownership::Usage::Linear;
+        else if (dynamic_cast<AffineTypeAST*>(ls->typeAnnotation.get()))
+            ls->usage = luna::ownership::Usage::Affine;
+        else if (ls->usage == luna::ownership::Usage::Copy)
+            ls->usage = defaultUsageForType(finalType);
+        info.usage = ls->usage;
+        info.isLinear = info.usage == luna::ownership::Usage::Linear;
         mSymTable.define(ls->name, info);
         // Device resources and completion events carry ownership semantics.
         // Preserve their inferred type on the AST so the ownership and codegen
@@ -1291,18 +1369,26 @@ TypePtr SemanticAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
             if (!(dynamic_cast<StringLiteralExpr*>(rs->value.get()) &&
                   resolved(mCurrentReturnType)->kind == TypeKind::CStr))
                 constrain(valueType, mCurrentReturnType, "return statement");
-            bool returningLinear = false;
+            luna::ownership::Usage returningUsage = luna::ownership::Usage::Copy;
             if (auto* call = dynamic_cast<CallExpr*>(rs->value.get())) {
-                returningLinear = call->returnsLinear;
+                returningUsage = call->returnsLinear
+                    ? luna::ownership::Usage::Linear : call->returnUsage;
             } else if (auto* id = dynamic_cast<IdentifierExpr*>(rs->value.get())) {
                 if (auto* symbol = mSymTable.lookup(id->name))
-                    returningLinear = symbol->isLinear;
+                    returningUsage = symbol->isLinear
+                        ? luna::ownership::Usage::Linear : symbol->usage;
             }
-            if (returningLinear && !mCurrentFunctionReturnsLinear) {
-                error("returning an owning value requires a `-> linear raw<T>` function return annotation",
+            if (returningUsage == luna::ownership::Usage::Linear &&
+                mCurrentFunctionReturnUsage != luna::ownership::Usage::Linear) {
+                error("returning a linear value requires a linear function return contract",
                       rs->line, rs->col);
-            } else if (!returningLinear && mCurrentFunctionReturnsLinear) {
+            } else if (returningUsage != luna::ownership::Usage::Linear &&
+                       mCurrentFunctionReturnUsage == luna::ownership::Usage::Linear) {
                 error("function declared with `-> linear raw<T>` must return an owning value",
+                      rs->line, rs->col);
+            } else if (returningUsage == luna::ownership::Usage::Affine &&
+                       mCurrentFunctionReturnUsage == luna::ownership::Usage::Copy) {
+                error("returning an affine value requires an affine function return contract",
                       rs->line, rs->col);
             }
         } else {
@@ -1389,6 +1475,13 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
     if (auto* sl = dynamic_cast<StringLiteralExpr*>(expr)) return TyString;
     if (auto* bl = dynamic_cast<BoolLiteralExpr*>(expr)) return TyBool;
     if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
+        auto family = mFunctionFamilies.find(id->name);
+        if (family != mFunctionFamilies.end() && family->second.size() > 1) {
+            error("declaration family '" + id->name +
+                  "' is ambiguous; use `select " + id->name +
+                  " with selector(...)`", id->line, id->col);
+            return TyUnknown;
+        }
         auto* sym = mSymTable.lookup(id->name);
         if (!sym) {
             error("undefined name '" + id->name + "'", id->line, id->col);
@@ -1396,9 +1489,14 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
         }
         if (sym->kind == SymbolKind::Function)
             return Type::makeFunction(sym->paramTypes,
-                                      sym->returnType ? sym->returnType : TyUnit);
+                                      sym->returnType ? sym->returnType : TyUnit,
+                                      sym->paramContracts,
+                                      {luna::ownership::Relation::Owned,
+                                       sym->returnUsage});
         return sym->type ? resolved(sym->type) : TyUnknown;
     }
+    if (auto* selection = dynamic_cast<SelectExpr*>(expr))
+        return analyzeSelect(selection);
     if (auto* bin = dynamic_cast<BinaryExpr*>(expr)) {
         TypePtr lhsType = analyzeExpr(bin->lhs.get());
         TypePtr rhsType = analyzeExpr(bin->rhs.get());
@@ -1473,8 +1571,8 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
         }
     }
     if (auto* variant = dynamic_cast<VariantConstructExpr*>(expr)) {
-        auto nominalIt = mNominalTypes.find(variant->typeName);
-        if (nominalIt == mNominalTypes.end() ||
+        auto nominalIt = mDeclaredTypes.find(variant->typeName);
+        if (nominalIt == mDeclaredTypes.end() ||
             nominalIt->second->kind != TypeKind::Enum) {
             error("'" + variant->typeName + "' is not an enum type");
             return TyUnknown;
@@ -1602,7 +1700,17 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
             SymbolInfo info;
             info.kind = SymbolKind::Variable;
             info.type = pt;
-            info.isLinear = p.isLinear || dynamic_cast<LinearTypeAST*>(p.type.get()) != nullptr;
+            const bool explicitUsage = p.hasExplicitUsage || p.isLinear ||
+                dynamic_cast<LinearTypeAST*>(p.type.get()) ||
+                dynamic_cast<AffineTypeAST*>(p.type.get());
+            info.usage = p.isLinear ? luna::ownership::Usage::Linear
+                : (explicitUsage ? p.usage : defaultUsageForType(pt));
+            const auto contract = parameterContractFor(pt, info.usage, explicitUsage);
+            info.relation = contract.relation;
+            info.usage = contract.usage;
+            info.isLinear = info.usage == luna::ownership::Usage::Linear;
+            p.usage = info.usage;
+            p.relation = info.relation;
             mSymTable.define(p.name, info);
         }
         TypePtr bodyRet = le->returnType ? declaredType(le->returnType.get(), {}) : mConstraints.fresh();
@@ -1616,11 +1724,15 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
 
         // Build closure function type: fn(ParamTypes) -> ReturnType
         TypeVec paramTypes;
+        std::vector<luna::ownership::Contract> paramContracts;
         for (auto& p : le->params) {
             paramTypes.push_back(p.inferredType);
+            paramContracts.push_back({p.relation, p.usage});
         }
         TypePtr retType = bodyRet;
-        le->closureType = Type::makeFunction(paramTypes, retType);
+        le->closureType = Type::makeFunction(
+            paramTypes, retType, std::move(paramContracts),
+            {luna::ownership::Relation::Owned, defaultUsageForType(retType)});
 
         // Capture analysis: scan body for free variables from enclosing scopes
         // (simplified: just note lambda for codegen, captures resolved later)
@@ -1707,15 +1819,329 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
     return TyUnknown;
 }
 
+TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
+    auto targetFamily = mFunctionFamilies.find(selection->targetName);
+    if (targetFamily == mFunctionFamilies.end() || targetFamily->second.empty()) {
+        error("unknown declaration family '" + selection->targetName + "'",
+              selection->line, selection->col);
+        return TyUnknown;
+    }
+    auto selectorFamily = mFunctionFamilies.find(selection->selectorName);
+    if (selectorFamily == mFunctionFamilies.end() || selectorFamily->second.size() != 1) {
+        error("selector function '" + selection->selectorName +
+              "' must resolve to exactly one declaration",
+              selection->line, selection->col);
+        return TyUnknown;
+    }
+    auto* selectorFunction = selectorFamily->second.front();
+    if (selectorFunction->params.empty() ||
+        resolved(selectorFunction->params.front().inferredType)->kind !=
+            TypeKind::DeclarationView) {
+        error("selector function '" + selection->selectorName +
+              "' must declare declaration_view as its first parameter",
+              selection->line, selection->col);
+        return TyUnknown;
+    }
+    if (selection->selectorArgs.size() + 1 != selectorFunction->params.size()) {
+        error("selector function '" + selection->selectorName + "' expects " +
+              std::to_string(selectorFunction->params.size() - 1) +
+              " explicit arguments", selection->line, selection->col);
+        return TyUnknown;
+    }
+    if (resolved(selectorFunction->inferredReturnType)->kind !=
+        TypeKind::DeclarationRef) {
+        error("selector function '" + selection->selectorName +
+              "' must return declaration_ref",
+              selection->line, selection->col);
+        return TyUnknown;
+    }
+
+    std::unordered_map<std::string, ConstValue> selectorLocals;
+    for (size_t index = 0; index < selection->selectorArgs.size(); ++index) {
+        constrain(analyzeExpr(selection->selectorArgs[index].get()),
+                  selectorFunction->params[index + 1].inferredType,
+                  "selector argument " + std::to_string(index + 1));
+        if (!selection->isDynamic) {
+            auto value = evaluateConstExpr(selection->selectorArgs[index].get());
+            if (!value) {
+                error("static selector argument " + std::to_string(index + 1) +
+                      " is not a compile-time value", selection->line, selection->col);
+                return TyUnknown;
+            }
+            selectorLocals[selectorFunction->params[index + 1].name] = *value;
+        }
+    }
+
+    // The initial selector evaluator supports the protocol primitive rather
+    // than any policy: user code decides which metadata value to construct,
+    // while select_unique performs membership and uniqueness validation.
+    ReturnStmt* selectorReturn = nullptr;
+    if (selectorFunction->body) {
+        for (auto& statement : selectorFunction->body->stmts) {
+            if (auto* returned = dynamic_cast<ReturnStmt*>(statement.get())) {
+                selectorReturn = returned;
+                break;
+            }
+        }
+    }
+    auto* protocolCall = selectorReturn
+        ? dynamic_cast<CallExpr*>(selectorReturn->value.get()) : nullptr;
+    auto* protocolName = protocolCall
+        ? dynamic_cast<IdentifierExpr*>(protocolCall->callee.get()) : nullptr;
+    if (!protocolName || protocolName->name != "select_unique" ||
+        protocolCall->args.size() != 2) {
+        error("selector function '" + selection->selectorName +
+              "' must return select_unique(view, metadata_value) in the initial selector protocol",
+              selection->line, selection->col);
+        return TyUnknown;
+    }
+    auto* metadataCall = dynamic_cast<CallExpr*>(protocolCall->args[1].get());
+    auto* metadataName = metadataCall
+        ? dynamic_cast<IdentifierExpr*>(metadataCall->callee.get()) : nullptr;
+    if (!metadataName || !mMetadataSchemas.count(metadataName->name)) {
+        error("select_unique requires a user-declared metadata value as its filter",
+              selection->line, selection->col);
+        return TyUnknown;
+    }
+    auto* schemaDeclaration = mMetadataSchemas[metadataName->name];
+    const auto schemaSymbol = schemaDeclaration->generatedSymbolName.empty()
+        ? schemaDeclaration->name : schemaDeclaration->generatedSymbolName;
+    selection->dynamicMetadataSchemaId = nominalDeclarationIdentity(
+        mProgram, "meta", schemaSymbol);
+    std::vector<ConstValue> wantedValues;
+    selection->dynamicFilterArguments.clear();
+    for (auto& argument : metadataCall->args) {
+        if (!selection->isDynamic) {
+            auto value = evaluateConstExpr(argument.get(), selectorLocals);
+            if (!value) {
+                error("selector metadata expression is not compile-time evaluable",
+                      selection->line, selection->col);
+                return TyUnknown;
+            }
+            wantedValues.push_back(*value);
+            continue;
+        }
+
+        SelectExpr::DynamicFilterArgument binding;
+        if (auto* identifier = dynamic_cast<IdentifierExpr*>(argument.get())) {
+            for (size_t parameterIndex = 1;
+                 parameterIndex < selectorFunction->params.size(); ++parameterIndex) {
+                if (selectorFunction->params[parameterIndex].name == identifier->name) {
+                    binding.selectorArgumentIndex = parameterIndex - 1;
+                    break;
+                }
+            }
+        }
+        if (!binding.selectorArgumentIndex) {
+            auto constant = evaluateConstExpr(argument.get());
+            if (constant) binding.constant = *constant;
+        }
+        if (!binding.selectorArgumentIndex && !binding.constant) {
+            error("dynamic selector metadata expressions must be an explicit selector "
+                  "argument or a compile-time literal in the initial protocol",
+                  selection->line, selection->col);
+            return TyUnknown;
+        }
+        selection->dynamicFilterArguments.push_back(std::move(binding));
+    }
+
+    TypePtr callableType;
+    std::vector<luna::selector::Candidate> candidates;
+    std::vector<std::string> matches;
+    auto retention = [](RetentionKind value) {
+        if (value == RetentionKind::Runtime) return luna::selector::Retention::Runtime;
+        if (value == RetentionKind::Dynamic) return luna::selector::Retention::Dynamic;
+        return luna::selector::Retention::CompileTime;
+    };
+    selection->dynamicCandidates.clear();
+    for (auto* candidate : targetFamily->second) {
+        TypeVec parameters;
+        std::vector<luna::ownership::Contract> contracts;
+        for (const auto& parameter : candidate->params) {
+            parameters.push_back(resolved(parameter.inferredType));
+            contracts.push_back({parameter.relation, parameter.usage});
+        }
+        auto candidateType = Type::makeFunction(
+            std::move(parameters), resolved(candidate->inferredReturnType),
+            std::move(contracts),
+            {luna::ownership::Relation::Owned, candidate->returnUsage});
+        if (!callableType) callableType = candidateType;
+        else if (!luna::types::sameType(callableType, candidateType)) {
+            error("declaration family '" + selection->targetName +
+                  "' contains incompatible callable signatures",
+                  selection->line, selection->col);
+            return TyUnknown;
+        }
+        luna::selector::Candidate viewCandidate;
+        viewCandidate.declarationId = candidate->generatedSymbolName.empty()
+            ? candidate->name : candidate->generatedSymbolName;
+        viewCandidate.familyId = selection->targetName;
+        viewCandidate.callableType = candidateType;
+        viewCandidate.retention = retention(candidate->retention);
+        bool staticMatched = false;
+        size_t dynamicSchemaAttachmentCount = 0;
+        for (const auto& attachment : candidate->metadata) {
+            luna::selector::Metadata instance;
+            instance.schemaId = attachment.resolvedSchemaId;
+            instance.values = attachment.evaluatedArguments;
+            instance.retention = retention(attachment.retention);
+            viewCandidate.metadata.push_back(std::move(instance));
+            if (attachment.schemaName != metadataName->name) continue;
+            if (!selection->isDynamic && attachment.evaluatedArguments == wantedValues)
+                staticMatched = true;
+            if (selection->isDynamic) {
+                ++dynamicSchemaAttachmentCount;
+                if (attachment.retention == RetentionKind::CompileTime) {
+                    error("dynamic selector cannot inspect compile-time-only metadata '" +
+                          attachment.schemaName + "' on '" +
+                          viewCandidate.declarationId + "'",
+                          selection->line, selection->col);
+                    return TyUnknown;
+                }
+                SelectExpr::DynamicCandidate dynamicCandidate;
+                dynamicCandidate.declarationId = viewCandidate.declarationId;
+                dynamicCandidate.symbolName = viewCandidate.declarationId;
+                dynamicCandidate.metadataValues = attachment.evaluatedArguments;
+                selection->dynamicCandidates.push_back(std::move(dynamicCandidate));
+            }
+        }
+        if (staticMatched) matches.push_back(viewCandidate.declarationId);
+        if (selection->isDynamic && dynamicSchemaAttachmentCount > 1) {
+            error("dynamic selector initially requires at most one '" +
+                  metadataName->name + "' attachment per declaration",
+                  selection->line, selection->col);
+            return TyUnknown;
+        }
+        candidates.push_back(std::move(viewCandidate));
+    }
+
+    luna::selector::DeclarationView view(std::move(candidates));
+    luna::selector::Engine engine;
+    if (selection->isDynamic) {
+        std::string planError;
+        auto plan = engine.planDynamic(view,
+            selectorFunction->generatedSymbolName.empty()
+                ? selectorFunction->name : selectorFunction->generatedSymbolName,
+            planError);
+        if (!plan) {
+            error(planError, selection->line, selection->col);
+            return TyUnknown;
+        }
+        selection->dynamicCandidateIds = plan->candidateIds;
+        if (selection->dynamicCandidates.empty()) {
+            error("dynamic selector has no runtime-visible '" + metadataName->name +
+                  "' metadata candidates", selection->line, selection->col);
+            return TyUnknown;
+        }
+
+        // An exact-match selector must never have an input that maps to two
+        // declarations.  Reject duplicate retained metadata at compile time;
+        // the generated runtime check then only distinguishes unique/no-match.
+        auto valueKey = [](const ConstValue& value) {
+            if (auto* integer = std::get_if<int64_t>(&value))
+                return std::string("i:") + std::to_string(*integer);
+            if (auto* floating = std::get_if<double>(&value)) {
+                std::ostringstream out;
+                out << "f:" << std::setprecision(17) << *floating;
+                return out.str();
+            }
+            if (auto* boolean = std::get_if<bool>(&value))
+                return std::string(*boolean ? "b:1" : "b:0");
+            const auto& string = std::get<std::string>(value);
+            return "s:" + std::to_string(string.size()) + ":" + string;
+        };
+        std::unordered_map<std::string, std::string> retainedKeys;
+        for (const auto& candidate : selection->dynamicCandidates) {
+            std::string key;
+            for (const auto& value : candidate.metadataValues)
+                key += valueKey(value) + ";";
+            auto [existing, inserted] = retainedKeys.emplace(key, candidate.declarationId);
+            if (!inserted && existing->second != candidate.declarationId) {
+                error("dynamic selector metadata is ambiguous between '" +
+                      existing->second + "' and '" + candidate.declarationId + "'",
+                      selection->line, selection->col);
+                return TyUnknown;
+            }
+        }
+        selection->resolvedDeclarationId.clear();
+        selection->resolvedSymbolName.clear();
+        selection->selectedType = callableType;
+        selectorFunction->isSelector = true;
+        return callableType;
+    }
+    auto result = engine.validate(view, matches);
+    if (!result.success()) {
+        error("selector '" + selection->selectorName + "' failed for family '" +
+              selection->targetName + "': " + result.message,
+              selection->line, selection->col);
+        return TyUnknown;
+    }
+    selection->resolvedDeclarationId = result.selected->declarationId;
+    selection->resolvedSymbolName = result.selected->declarationId;
+    selection->selectedType = callableType;
+    selectorFunction->isSelector = true;
+    return callableType;
+}
+
 TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
     auto* id = dynamic_cast<IdentifierExpr*>(call->callee.get());
+    if (auto* selection = dynamic_cast<SelectExpr*>(call->callee.get())) {
+        auto selected = resolved(analyzeSelect(selection));
+        if (selected->kind != TypeKind::Function) return TyUnknown;
+        if (selected->paramTypes.size() != call->args.size()) {
+            error("Argument count mismatch for selected declaration family '" +
+                  selection->targetName + "'", call->line, call->col);
+            return TyUnknown;
+        }
+        for (size_t index = 0; index < call->args.size(); ++index)
+            constrain(analyzeExpr(call->args[index].get()), selected->paramTypes[index],
+                      "selected call argument " + std::to_string(index + 1));
+        call->resolvedSymbolName = selection->resolvedSymbolName;
+        return selected->returnType;
+    }
+    if (id) {
+        auto* symbol = mSymTable.lookup(id->name);
+        if (symbol && symbol->kind == SymbolKind::Metadata) {
+            if (call->args.size() != symbol->paramTypes.size()) {
+                error("metadata constructor '" + id->name + "' expects " +
+                      std::to_string(symbol->paramTypes.size()) + " arguments",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            for (size_t index = 0; index < call->args.size(); ++index)
+                constrain(analyzeExpr(call->args[index].get()), symbol->paramTypes[index],
+                          "metadata constructor argument " + std::to_string(index + 1));
+            return symbol->returnType;
+        }
+        if (id->name == "select_unique") {
+            if (call->args.size() != 2) {
+                error("select_unique expects a DeclarationView and one metadata value",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            auto view = resolved(analyzeExpr(call->args[0].get()));
+            auto metadata = resolved(analyzeExpr(call->args[1].get()));
+            if (view->kind != TypeKind::DeclarationView)
+                error("first argument of select_unique must be declaration_view",
+                      call->line, call->col);
+            if (metadata->kind != TypeKind::Metadata)
+                error("second argument of select_unique must be a metadata value",
+                      call->line, call->col);
+            return Type::makeDeclarationRef(view->inner);
+        }
+    }
     if (id && (id->name == "type_of" || id->name == "type_kind" ||
-               id->name == "type_nominal" || id->name == "type_size" ||
+               id->name == "type_id" || id->name == "type_shape" ||
+               id->name == "type_domain" || id->name == "type_nominal" ||
+               id->name == "type_size" ||
                id->name == "type_field_count" || id->name == "type_field_name" ||
                id->name == "type_field_type" || id->name == "type_variant_count" ||
                id->name == "type_variant_name" || id->name == "type_variant_field_count" ||
                id->name == "type_is_struct" || id->name == "type_is_enum" ||
-               id->name == "type_is_nominal" || id->name == "type_is_reference"))
+               id->name == "type_is_nominal" || id->name == "type_is_structural" ||
+               id->name == "type_is_meta" || id->name == "type_is_reference" ||
+               id->name == "type_same" || id->name == "type_same_shape" ||
+               id->name == "type_abi_compatible"))
         return analyzeReflectionCall(call, id->name);
     if (id && id->name == "slice") {
         if (call->args.size() != 3) { error("slice expects `slice(borrow array, start, end)`", call->line, call->col); return TyUnknown; }
@@ -1838,61 +2264,14 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
         constrain(actual, expected, context);
     };
 
-    if (call->versionSelector) {
-        if (!id) {
-            error("a version selector can only be applied to a named function");
+    if (id) {
+        auto family = mFunctionFamilies.find(id->name);
+        if (family != mFunctionFamilies.end() && family->second.size() > 1) {
+            error("declaration family '" + id->name +
+                  "' is ambiguous; use `select " + id->name +
+                  " with selector(...)`", call->line, call->col);
             return TyUnknown;
         }
-        auto* function = selectVersionedFunction(id->name, *call->versionSelector, call);
-        if (!function) return TyUnknown;
-        if (call->args.size() != function->params.size()) {
-            error("Argument count mismatch for versioned function '" + id->name + "'", call->line, call->col);
-            return TyUnknown;
-        }
-        if (!function->typeParams.empty()) {
-            TypeVec concreteTypes;
-            for (auto& arg : call->args) concreteTypes.push_back(analyzeExpr(arg.get()));
-            if (concreteTypes.size() > function->typeParams.size())
-                concreteTypes.resize(function->typeParams.size());
-
-            for (auto& clause : function->whereClauses) {
-                const std::string& parameterName = clause.typeParam;
-                const std::string& traitId = clause.trait.resolvedTraitId;
-                for (size_t i = 0; i < function->typeParams.size(); ++i) {
-                    if (function->typeParams[i] != parameterName || i >= concreteTypes.size()) continue;
-                    const std::string typeName = typeIdentity(resolved(concreteTypes[i]));
-                    if (!satisfiesTrait(traitId, resolved(concreteTypes[i])))
-                        error("Type '" + typeName + "' does not satisfy trait '" +
-                              displayTraitRef(clause.trait) + "'");
-                }
-            }
-
-            auto* specialized = monomorphize(function, concreteTypes);
-            if (!specialized || !mProgram || mGeneratedInstances.empty()) return TyUnknown;
-            mProgram->declarations.push_back(std::move(mGeneratedInstances.back()));
-            declareFunction(specialized);
-            analyzeFunction(specialized);
-            call->resolvedSymbolName = specialized->generatedSymbolName.empty()
-                ? specialized->name : specialized->generatedSymbolName;
-            call->returnsLinear = specialized->returnsLinear;
-            return specialized->inferredReturnType ? specialized->inferredReturnType : TyUnit;
-        }
-        for (size_t i = 0; i < call->args.size(); ++i)
-            constrainArgument(call->args[i].get(), function->params[i].inferredType,
-                              "argument " + std::to_string(i + 1) + " of '" + id->name +
-                              "@" + call->versionSelector->tag + "'");
-        call->resolvedSymbolName = function->generatedSymbolName.empty()
-            ? function->name : function->generatedSymbolName;
-        call->returnsLinear = function->returnsLinear;
-        if (function->isConstexpr) {
-            if (auto value = evaluateConstExpr(call)) call->compileTimeValue = std::move(*value);
-        }
-        return function->inferredReturnType ? function->inferredReturnType : TyUnit;
-    }
-
-    if (id && !sym && mVersionedFunctions.count(id->name)) {
-        error("function '" + id->name + "' is versioned; select a tag explicitly", call->line, call->col);
-        return TyUnknown;
     }
 
     // Direct calls and closure calls both become constraints. This is the
@@ -1956,11 +2335,16 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
         }
         auto* specialized = monomorphize(sym->genericDecl, concreteTypes);
         if (specialized && mProgram) {
-            mProgram->declarations.push_back(std::move(mGeneratedInstances.back()));
-            declareFunction(specialized);
-            analyzeFunction(specialized);
+            const bool newlyCreated = !mGeneratedInstances.empty() &&
+                                      mGeneratedInstances.back().get() == specialized;
+            if (newlyCreated) {
+                mProgram->declarations.push_back(std::move(mGeneratedInstances.back()));
+                declareFunction(specialized);
+                analyzeFunction(specialized);
+            }
             id->name = specialized->name;
             call->returnsLinear = specialized->returnsLinear;
+            call->returnUsage = specialized->returnUsage;
             return specialized->inferredReturnType
                 ? specialized->inferredReturnType : TyUnit;
         }
@@ -1982,6 +2366,7 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
         }
     }
     call->returnsLinear = sym->returnsLinear;
+    call->returnUsage = sym->returnUsage;
     return sym->returnType ? sym->returnType : TyUnit;
 }
 
@@ -1995,17 +2380,15 @@ TypePtr SemanticAnalyzer::analyzeLaunch(LaunchExpr* launch) {
     requireInteger(analyzeExpr(launch->threads.get()), "launch thread count");
 
     FunctionDecl* kernel = nullptr;
-    if (launch->kernelSelector) {
-        kernel = selectVersionedFunction(launch->kernelName, *launch->kernelSelector, launch);
+    auto family = mFunctionFamilies.find(launch->kernelName);
+    if (family != mFunctionFamilies.end() && family->second.size() > 1) {
+        error("kernel declaration family '" + launch->kernelName +
+              "' is ambiguous; dynamic kernel selection requires an explicit future kernel binding operation",
+              launch->line, launch->col);
+    } else if (family != mFunctionFamilies.end() && !family->second.empty()) {
+        kernel = family->second.front();
     } else {
-        auto* symbol = mSymTable.lookup(launch->kernelName);
-        if (symbol && symbol->kind == SymbolKind::Function)
-            kernel = symbol->genericDecl;
-        else if (mVersionedFunctions.count(launch->kernelName))
-            error("kernel '" + launch->kernelName +
-                  "' is versioned; select a tag explicitly in `launch`", launch->line, launch->col);
-        else
-            error("unknown kernel '" + launch->kernelName + "'", launch->line, launch->col);
+        error("unknown kernel '" + launch->kernelName + "'", launch->line, launch->col);
     }
     if (!kernel) return TyUnknown;
     if (!kernel->isKernel) {
@@ -2013,7 +2396,9 @@ TypePtr SemanticAnalyzer::analyzeLaunch(LaunchExpr* launch) {
               launch->line, launch->col);
         return TyUnknown;
     }
-    if (kernel->params.empty() || !resolved(kernel->params.front().inferredType)->equals(TyI32)) {
+    if (kernel->params.empty() ||
+        !luna::types::sameType(
+            resolved(kernel->params.front().inferredType), TyI32)) {
         error("kernel '" + launch->kernelName + "' does not satisfy the required `index: i32` launch ABI",
               launch->line, launch->col);
         return TyUnknown;
@@ -2058,6 +2443,25 @@ TypePtr SemanticAnalyzer::analyzeLaunch(LaunchExpr* launch) {
 }
 
 TypePtr SemanticAnalyzer::analyzeReflectionCall(CallExpr* call, const std::string& name) {
+    const bool isBinaryRelation = name == "type_same" ||
+        name == "type_same_shape" || name == "type_abi_compatible";
+    if (isBinaryRelation) {
+        if (call->typeArgASTs.size() != 2 || !call->args.empty()) {
+            error(name + " expects exactly two type arguments and no value arguments",
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        auto lhs = resolved(resolveTypeAST(call->typeArgASTs[0].get(), {}));
+        auto rhs = resolved(resolveTypeAST(call->typeArgASTs[1].get(), {}));
+        if (name == "type_same")
+            call->compileTimeValue = luna::types::sameType(lhs, rhs);
+        else if (name == "type_same_shape")
+            call->compileTimeValue = luna::types::sameShape(lhs, rhs);
+        else
+            call->compileTimeValue = luna::types::isAbiCompatible(lhs, rhs);
+        return TyBool;
+    }
+
     TypePtr type;
     if (!call->typeArgASTs.empty()) {
         if (call->typeArgASTs.size() != 1) {
@@ -2125,11 +2529,29 @@ TypePtr SemanticAnalyzer::analyzeReflectionCall(CallExpr* call, const std::strin
 
     if (name == "type_of") call->compileTimeValue = type->toString();
     else if (name == "type_kind") call->compileTimeValue = kindName(type);
+    else if (name == "type_id")
+        call->compileTimeValue = luna::types::typeId(type).value;
+    else if (name == "type_shape")
+        call->compileTimeValue = luna::types::shapeId(type).value;
+    else if (name == "type_domain") {
+        switch (type->domain) {
+            case luna::types::TypeDomain::Value: call->compileTimeValue = std::string("value"); break;
+            case luna::types::TypeDomain::Meta: call->compileTimeValue = std::string("meta"); break;
+            case luna::types::TypeDomain::Compiler: call->compileTimeValue = std::string("compiler"); break;
+            case luna::types::TypeDomain::Inference: call->compileTimeValue = std::string("inference"); break;
+            case luna::types::TypeDomain::Error: call->compileTimeValue = std::string("error"); break;
+        }
+    }
     else if (name == "type_nominal") call->compileTimeValue = type->nominalId;
     else if (name == "type_size") call->compileTimeValue = typeSize(type);
     else if (name == "type_is_struct") call->compileTimeValue = type->kind == TypeKind::Struct;
     else if (name == "type_is_enum") call->compileTimeValue = type->kind == TypeKind::Enum;
     else if (name == "type_is_nominal") call->compileTimeValue = !type->nominalId.empty();
+    else if (name == "type_is_structural")
+        call->compileTimeValue =
+            type->identityMode == luna::types::IdentityMode::Structural;
+    else if (name == "type_is_meta")
+        call->compileTimeValue = type->domain == luna::types::TypeDomain::Meta;
     else if (name == "type_is_reference") call->compileTimeValue = type->kind == TypeKind::Reference;
     else if (name == "type_field_count") {
         if (type->kind != TypeKind::Struct && type->kind != TypeKind::Record) {
@@ -2164,8 +2586,9 @@ TypePtr SemanticAnalyzer::analyzeReflectionCall(CallExpr* call, const std::strin
 
     if (name == "type_size" || name == "type_field_count" || name == "type_variant_count" ||
         name == "type_variant_field_count") return TyI32;
-    if (name == "type_is_struct" || name == "type_is_enum" || name == "type_is_nominal" ||
-        name == "type_is_reference") return TyBool;
+    if (name == "type_is_struct" || name == "type_is_enum" ||
+        name == "type_is_nominal" || name == "type_is_structural" ||
+        name == "type_is_meta" || name == "type_is_reference") return TyBool;
     return TyString;
 }
 
@@ -2331,6 +2754,9 @@ FunctionDecl* SemanticAnalyzer::findMatchingImpl(const std::string& traitName,
 
 // ─── AST cloning helpers for monomorphization ────────────────────
 
+static TypePtr substituteNominalType(
+    const TypePtr& type,
+    const std::unordered_map<std::string, TypePtr>& bindings);
 static std::unique_ptr<Expr> cloneExpr(
     Expr* src, const std::unordered_map<std::string, TypePtr>& bindings);
 static std::unique_ptr<Stmt> cloneStmt(
@@ -2396,12 +2822,29 @@ static std::unique_ptr<Expr> cloneExpr(
         auto c = std::make_unique<CallExpr>();
         c->callee = cloneExpr(e->callee.get(), bindings);
         for (auto& a : e->args) c->args.push_back(cloneExpr(a.get(), bindings));
+        c->returnsLinear = e->returnsLinear;
+        c->returnUsage = e->returnUsage;
+        return c;
+    }
+    if (auto* e = dynamic_cast<SelectExpr*>(src)) {
+        auto c = std::make_unique<SelectExpr>();
+        c->targetName = e->targetName;
+        c->selectorName = e->selectorName;
+        c->isDynamic = e->isDynamic;
+        c->resolvedDeclarationId = e->resolvedDeclarationId;
+        c->resolvedSymbolName = e->resolvedSymbolName;
+        c->dynamicCandidateIds = e->dynamicCandidateIds;
+        c->dynamicMetadataSchemaId = e->dynamicMetadataSchemaId;
+        c->dynamicFilterArguments = e->dynamicFilterArguments;
+        c->dynamicCandidates = e->dynamicCandidates;
+        c->selectedType = substituteNominalType(e->selectedType, bindings);
+        for (auto& arg : e->selectorArgs)
+            c->selectorArgs.push_back(cloneExpr(arg.get(), bindings));
         return c;
     }
     if (auto* e = dynamic_cast<LaunchExpr*>(src)) {
         auto c = std::make_unique<LaunchExpr>();
         c->kernelName = e->kernelName;
-        c->kernelSelector = e->kernelSelector;
         c->resolvedKernelName = e->resolvedKernelName;
         c->threads = cloneExpr(e->threads.get(), bindings);
         for (auto& arg : e->args) c->args.push_back(cloneExpr(arg.get(), bindings));
@@ -2426,7 +2869,10 @@ static std::unique_ptr<Stmt> cloneStmt(
     if (auto* s = dynamic_cast<LetStmt*>(src)) {
         auto c = std::make_unique<LetStmt>();
         c->name = s->name;
+        c->isConst = s->isConst;
         c->isLinear = s->isLinear;
+        c->usage = s->usage;
+        c->hasExplicitUsage = s->hasExplicitUsage;
         if (s->typeAnnotation) {
             auto* na = dynamic_cast<NamedTypeAST*>(s->typeAnnotation.get());
             std::string typeName = na ? na->name : "i32";
@@ -2435,12 +2881,14 @@ static std::unique_ptr<Stmt> cloneStmt(
                 it != bindings.end() ? it->second->toString() : typeName);
         }
         c->initializer = cloneExpr(s->initializer.get(), bindings);
+        c->inferredType = s->inferredType;
         return c;
     }
     if (auto* s = dynamic_cast<ReturnStmt*>(src)) {
         auto c = std::make_unique<ReturnStmt>();
         if (s->value) c->value = cloneExpr(s->value.get(), bindings);
         c->autoFrees = s->autoFrees;
+        c->cleanups = s->cleanups;
         return c;
     }
     if (auto* s = dynamic_cast<ExprStmt*>(src)) {
@@ -2466,12 +2914,36 @@ static std::unique_ptr<BlockStmt> cloneBlock(
 }
 
 FunctionDecl* SemanticAnalyzer::monomorphize(FunctionDecl* generic, const TypeVec& concreteTypes) {
+    luna::instantiation::Request request;
+    const auto genericSymbol = generic->generatedSymbolName.empty()
+        ? generic->name : generic->generatedSymbolName;
+    request.genericDeclarationId = nominalDeclarationIdentity(
+        mProgram, "fn", genericSymbol);
+    for (const auto& type : concreteTypes)
+        request.typeArguments.push_back(typeIdentity(resolved(type)));
+    request.requestedBy = mDiagnosticFile + ":" +
+        std::to_string(mDiagnosticLine) + ":" + std::to_string(mDiagnosticCol);
+    const std::string requestKey =
+        luna::instantiation::Instantiator::keyFor(request);
+    auto cached = mInstantiatedFunctions.find(requestKey);
+    if (cached != mInstantiatedFunctions.end()) return cached->second;
+
+    const auto& entry = mInstantiator.begin(request);
+    if (entry.state == luna::instantiation::State::Failed) {
+        error("generic instantiation previously failed: " + entry.failure);
+        return nullptr;
+    }
     auto specialized = std::make_unique<FunctionDecl>();
-    specialized->name = generic->name + "_" + std::to_string(mGeneratedInstances.size());
+    specialized->name = entry.instanceId;
+    specialized->generatedSymbolName = entry.instanceId;
+    specialized->sourcePath = generic->sourcePath;
+    specialized->line = generic->line;
+    specialized->col = generic->col;
     specialized->isExported = generic->isExported;
     specialized->isKernel = generic->isKernel;
     specialized->isConstexpr = generic->isConstexpr;
     specialized->returnsLinear = generic->returnsLinear;
+    specialized->returnUsage = generic->returnUsage;
     specialized->isTemplateInstance = true;
     specialized->concreteTypeArgs = concreteTypes;
 
@@ -2484,6 +2956,9 @@ FunctionDecl* SemanticAnalyzer::monomorphize(FunctionDecl* generic, const TypeVe
         Param cp;
         cp.name = p.name;
         cp.isLinear = p.isLinear;
+        cp.usage = p.usage;
+        cp.relation = p.relation;
+        cp.hasExplicitUsage = p.hasExplicitUsage;
         TypePtr parameterType = p.type
             ? resolveType(p.type.get(), bindings)
             : mConstraints.resolve(p.inferredType);
@@ -2501,6 +2976,9 @@ FunctionDecl* SemanticAnalyzer::monomorphize(FunctionDecl* generic, const TypeVe
         if (specialized->returnsLinear)
             specialized->returnType = std::make_unique<LinearTypeAST>(
                 std::move(specialized->returnType));
+        else if (generic->returnUsage == luna::ownership::Usage::Affine)
+            specialized->returnType = std::make_unique<AffineTypeAST>(
+                std::move(specialized->returnType));
         }
 
     if (generic->body) {
@@ -2510,16 +2988,23 @@ FunctionDecl* SemanticAnalyzer::monomorphize(FunctionDecl* generic, const TypeVe
     }
 
     mGeneratedInstances.push_back(std::move(specialized));
-    return mGeneratedInstances.back().get();
+    auto* result = mGeneratedInstances.back().get();
+    mInstantiatedFunctions[requestKey] = result;
+    if (!mInstantiator.complete(requestKey)) {
+        mInstantiator.fail(requestKey, "instance state transition failed");
+        error("generic instantiator could not finalize '" + entry.instanceId + "'");
+        return nullptr;
+    }
+    return result;
 }
 
 TypePtr SemanticAnalyzer::resolveTypeAST(const TypeAST* ast,
     const std::unordered_map<std::string, TypePtr>& bindings) {
     if (!ast) return TyUnit;
     if (auto* named = dynamic_cast<const NamedTypeAST*>(ast)) {
-        // Monomorphization may materialize a version-selected nominal type
-        // into an AST annotation. Preserve that exact nominal identity instead
-        // of resolving its display name as an untagged type again.
+        // Monomorphization may materialize an already-resolved nominal type
+        // into an AST annotation. Preserve that exact identity instead of
+        // resolving its display name through the declaration family again.
         if (named->resolvedType) return named->resolvedType;
         auto bound = bindings.find(named->name);
         if (bound != bindings.end()) return bound->second;
@@ -2569,19 +3054,34 @@ TypePtr SemanticAnalyzer::resolveTypeAST(const TypeAST* ast,
             return Type::makeSlice(resolveTypeAST(named->typeArgs[0].get(), bindings));
         }
         if (named->name == "event") return TyEvent;
-
-        TypePtr nominalType;
-        if (named->versionSelector) {
-            nominalType = selectVersionedNominal(named->name, *named->versionSelector, named);
-            if (!nominalType || nominalType->kind == TypeKind::Unknown) return TyUnknown;
-        } else {
-            auto nominal = mNominalTypes.find(named->name);
-            if (nominal != mNominalTypes.end()) nominalType = nominal->second;
-            else if (mVersionedNominals.count(named->name)) {
-                error("type '" + named->name + "' is versioned; select a tag explicitly", named->line, named->col);
+        if (named->name == "declaration_view") {
+            if (named->typeArgs.size() > 1) {
+                error("declaration_view accepts at most one callable type argument",
+                      named->line, named->col);
                 return TyUnknown;
             }
+            TypePtr callable = named->typeArgs.empty()
+                ? nullptr : resolveTypeAST(named->typeArgs.front().get(), bindings);
+            return Type::makeDeclarationView(callable);
         }
+        if (named->name == "declaration_ref") {
+            if (named->typeArgs.size() > 1) {
+                error("declaration_ref accepts at most one callable type argument",
+                      named->line, named->col);
+                return TyUnknown;
+            }
+            TypePtr callable = named->typeArgs.empty()
+                ? nullptr : resolveTypeAST(named->typeArgs.front().get(), bindings);
+            return Type::makeDeclarationRef(callable);
+        }
+        if (auto metadata = mSymTable.lookupType(named->name);
+            metadata && metadata->kind == TypeKind::Metadata) {
+            return metadata;
+        }
+
+        TypePtr nominalType;
+        auto nominal = mDeclaredTypes.find(named->name);
+        if (nominal != mDeclaredTypes.end()) nominalType = nominal->second;
         if (nominalType) {
             TypeVec args;
             for (auto& arg : named->typeArgs)
@@ -2597,12 +3097,31 @@ TypePtr SemanticAnalyzer::resolveTypeAST(const TypeAST* ast,
                                    ref->isMutable);
     if (auto* linear = dynamic_cast<const LinearTypeAST*>(ast))
         return resolveTypeAST(linear->inner.get(), bindings);
+    if (auto* affine = dynamic_cast<const AffineTypeAST*>(ast))
+        return resolveTypeAST(affine->inner.get(), bindings);
     if (auto* fn = dynamic_cast<const FunctionTypeAST*>(ast)) {
         TypeVec params;
-        for (auto& param : fn->paramTypes)
-            params.push_back(resolveTypeAST(param.get(), bindings));
-        return Type::makeFunction(std::move(params),
-                                  resolveTypeAST(fn->returnType.get(), bindings));
+        std::vector<luna::ownership::Contract> contracts;
+        for (auto& param : fn->paramTypes) {
+            auto type = resolveTypeAST(param.get(), bindings);
+            auto usage = dynamic_cast<LinearTypeAST*>(param.get())
+                ? luna::ownership::Usage::Linear
+                : (dynamic_cast<AffineTypeAST*>(param.get())
+                    ? luna::ownership::Usage::Affine
+                    : defaultUsageForType(type));
+            contracts.push_back(parameterContractFor(
+                type, usage, usage != luna::ownership::Usage::Copy));
+            params.push_back(std::move(type));
+        }
+        auto returnType = resolveTypeAST(fn->returnType.get(), bindings);
+        auto returnUsage = dynamic_cast<LinearTypeAST*>(fn->returnType.get())
+            ? luna::ownership::Usage::Linear
+            : (dynamic_cast<AffineTypeAST*>(fn->returnType.get())
+                ? luna::ownership::Usage::Affine
+                : defaultUsageForType(returnType));
+        return Type::makeFunction(
+            std::move(params), std::move(returnType), std::move(contracts),
+            {luna::ownership::Relation::Owned, returnUsage});
     }
     return TyUnknown;
 }
@@ -2627,7 +3146,8 @@ static TypePtr substituteNominalType(
         for (auto& param : type->paramTypes)
             params.push_back(substituteNominalType(param, bindings));
         return Type::makeFunction(std::move(params),
-                                  substituteNominalType(type->returnType, bindings));
+                                  substituteNominalType(type->returnType, bindings),
+                                  type->paramContracts, type->returnContract);
     }
     if (type->kind == TypeKind::Struct || type->kind == TypeKind::Record) {
         std::vector<TypeField> fields;
@@ -2797,10 +3317,16 @@ void SemanticAnalyzer::materializeInferredTypes(Program* program) {
         if (auto* c = dynamic_cast<CallExpr*>(expr)) {
             visitExpr(c->callee.get()); for (auto& a : c->args) visitExpr(a.get()); return;
         }
+        if (auto* s = dynamic_cast<SelectExpr*>(expr)) {
+            s->selectedType = resolved(s->selectedType);
+            for (auto& a : s->selectorArgs) visitExpr(a.get());
+            return;
+        }
         if (auto* l = dynamic_cast<LaunchExpr*>(expr)) {
             visitExpr(l->threads.get()); for (auto& a : l->args) visitExpr(a.get()); return;
         }
         if (auto* v = dynamic_cast<VariantConstructExpr*>(expr)) {
+            v->constructedType = resolved(v->constructedType);
             for (auto& a : v->args) visitExpr(a.get()); return;
         }
         if (auto* a = dynamic_cast<AssignExpr*>(expr)) { visitExpr(a->lhs.get()); visitExpr(a->rhs.get()); return; }
@@ -2817,7 +3343,11 @@ void SemanticAnalyzer::materializeInferredTypes(Program* program) {
     visitStmt = [&](Stmt* stmt) {
         if (!stmt) return;
         if (auto* b = dynamic_cast<BlockStmt*>(stmt)) { visitBlock(b); return; }
-        if (auto* l = dynamic_cast<LetStmt*>(stmt)) { visitExpr(l->initializer.get()); return; }
+        if (auto* l = dynamic_cast<LetStmt*>(stmt)) {
+            l->inferredType = resolved(l->inferredType);
+            visitExpr(l->initializer.get());
+            return;
+        }
         if (auto* r = dynamic_cast<ReturnStmt*>(stmt)) { visitExpr(r->value.get()); return; }
         if (auto* a = dynamic_cast<AwaitStmt*>(stmt)) { visitExpr(a->event.get()); return; }
         if (auto* e = dynamic_cast<ExprStmt*>(stmt)) { visitExpr(e->expr.get()); return; }
@@ -2856,11 +3386,9 @@ void SemanticAnalyzer::error(const std::string& msg, int line, int col) {
         hint = "C FFI signatures may use only C-compatible scalar, `cstr`, `raw<T>`, or supported reference types";
     else if (msg.find("Argument count mismatch") != std::string::npos)
         hint = "adjust the call arguments to match the function declaration";
-    else if (msg.find("has no `@") != std::string::npos ||
-             msg.find("has no versioned declarations") != std::string::npos)
-        hint = "check the tag and version, or use `name@tag()` to select that tag's latest declaration";
-    else if (msg.find("is versioned; select a tag") != std::string::npos)
-        hint = "write `name@tag()` for the newest tagged release, or pin `name@tag(x.y.z)`";
+    else if (msg.find("declaration family") != std::string::npos ||
+             msg.find("selector") != std::string::npos)
+        hint = "use `select target with selector(arguments)` or `@selector(arguments) target`; a selector must return exactly one candidate";
     else if (msg.find("not callable") != std::string::npos)
         hint = "call a function value, not an ordinary value";
     else if (msg.find("must be an integer") != std::string::npos)

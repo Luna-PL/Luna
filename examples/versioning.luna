@@ -1,69 +1,36 @@
-// `@tag()` selects the largest declared version in that channel.  Supplying
-// `x.y.z` instead pins the call or fragment binding to one historical version.
-
-fn greet @stable(1.0.0)() -> i32 {
-    return 10;
+// Version is library-defined metadata. The compiler only understands the
+// selector protocol and never applies SemVer/latest policy by itself.
+meta release {
+    channel: string;
+    major: i32;
+    minor: i32;
+    patch: i32;
 }
 
-fn greet @stable(1.2.0)() -> i32 {
-    return 12;
+fn choose_release(view: declaration_view, channel: string,
+                  major: i32, minor: i32, patch: i32) -> declaration_ref {
+    return select_unique(view, release(channel, major, minor, patch));
 }
 
-fn greet @dev(2.0.0)() -> i32 {
-    return 20;
-}
+@release("stable", 1, 0, 0)
+fn greet() -> i32 { return 10; }
 
-fn add_one @stable(1.0.0)(value: i32) -> i32 {
-    return value + 1;
-}
+@release("stable", 1, 2, 0)
+fn greet() -> i32 { return 12; }
 
-fn add_one @stable(1.1.0)(value: i32) -> i32 {
-    return value + 2;
-}
+@release("dev", 2, 0, 0)
+fn greet() -> i32 { return 20; }
 
-fn identity @stable(1.0.0)<T>(value: T) -> T {
-    return value;
-}
+@release("stable", 1, 0, 0)
+fn add_one(value: i32) -> i32 { return value + 1; }
 
-context trace @stable(1.0.0) {
-    print(1);
-    resume();
-}
-
-context trace @stable(1.1.0) {
-    print(2);
-    resume();
-}
-
-struct Point @stable(1.0.0) {
-    x: i32;
-}
-
-struct Point @stable(1.1.0) {
-    x: i32;
-    y: i32;
-}
-
-// Tagged nominal versions are distinct types; this annotation selects the
-// latest stable Point without relying on declaration order.
-fn inspect(point: Point@stable()) -> i32 {
-    return 0;
-}
+@release("stable", 1, 1, 0)
+fn add_one(value: i32) -> i32 { return value + 2; }
 
 fn main() -> i32 {
-    slot context default_trace(value: i32) default trace@stable();
-    print(greet@stable());
-    print(greet@stable(1.0.0));
-    print(add_one@stable()(5));
-    print(add_one@stable(1.0.0)(5));
-    print(identity@stable()(9));
-    apply point(trace@stable()) {
-        slot context point {
-            print(3);
-        }
-    }
-    default_trace(0) {
-        print(4);
-    }
-    return greet@dev(2.0.0);
+    let stable = select greet with choose_release("stable", 1, 2, 0);
+    print(stable());
+    print(@choose_release("stable", 1, 0, 0) greet());
+    print(@choose_release("stable", 1, 1, 0) add_one(5));
+    return @choose_release("dev", 2, 0, 0) greet();
 }

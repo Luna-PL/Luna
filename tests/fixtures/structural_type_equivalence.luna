@@ -1,0 +1,16 @@
+struct Point {
+    x: i32;
+}
+
+struct Pixel {
+    x: i32;
+}
+
+fn read(point: Point) -> i32 {
+    return point.x;
+}
+
+fn main() -> i32 {
+    let pixel = new Pixel(41);
+    return read(pixel);
+}

@@ -22,7 +22,10 @@ llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
         case TypeKind::String:
         case TypeKind::CStr:
         case TypeKind::RawPointer:
-        case TypeKind::DeviceBuffer: return ptrTy();
+        case TypeKind::DeviceBuffer:
+        case TypeKind::Metadata:
+        case TypeKind::DeclarationView:
+        case TypeKind::DeclarationRef: return ptrTy();
         case TypeKind::Array:
             return llvm::ArrayType::get(toLLVMType(type->inner), type->arrayLength);
         case TypeKind::Slice:
@@ -62,7 +65,10 @@ uint64_t typeSize(const TypePtr& type) {
         case TypeKind::CStr: return 8; // pointer size
         case TypeKind::Reference:
         case TypeKind::RawPointer: return 8;
-        case TypeKind::DeviceBuffer: return 8;
+        case TypeKind::DeviceBuffer:
+        case TypeKind::Metadata:
+        case TypeKind::DeclarationView:
+        case TypeKind::DeclarationRef: return 8;
         case TypeKind::Array: return type->arrayLength * typeSize(type->inner);
         case TypeKind::Slice: return 16;
         case TypeKind::Event: return 4;

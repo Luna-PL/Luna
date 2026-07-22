@@ -1,9 +1,8 @@
 #include "CodeGenerator.h"
 #include "../diagnostics/Diagnostic.h"
-#include "../sema/TypeSystem.h"
-#include "../parser/AST.h"
 #include "../runtime/Runtime.h"
 #include <cstdlib>
+#include <cstring>
 #include <sstream>
 #include <optional>
 #include <iterator>
@@ -24,9 +23,54 @@
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Utils/Cloning.h>
+#include <llvm/Transforms/Utils/ModuleUtils.h>
 
 #include <llvm/TargetParser/Host.h>
 // BitcodeWriter no longer needed (using text IR output)
+
+using moon::AbortStmt;
+using moon::AddrOfExpr;
+using moon::ApplyStmt;
+using moon::ArrayLiteralExpr;
+using moon::AssignExpr;
+using moon::AwaitStmt;
+using moon::BinaryExpr;
+using moon::BlockStmt;
+using moon::BoolLiteralExpr;
+using moon::BorrowExpr;
+using moon::CallExpr;
+using moon::DerefExpr;
+using moon::DynamicSelectExpr;
+using moon::Expr;
+using moon::ExprStmt;
+using moon::FieldAccessExpr;
+using moon::FloatLiteralExpr;
+using moon::ForStmt;
+using moon::FragmentCardinality;
+using moon::FragmentDecl;
+using moon::FragmentKind;
+using moon::FreeStmt;
+using moon::FunctionDecl;
+using moon::HeapAllocExpr;
+using moon::IdentifierExpr;
+using moon::IfStmt;
+using moon::IndexExpr;
+using moon::IntLiteralExpr;
+using moon::ImplDecl;
+using moon::LambdaExpr;
+using moon::LaunchExpr;
+using moon::LetStmt;
+using moon::MoveExpr;
+using moon::Operator;
+using moon::ResumeStmt;
+using moon::ReturnStmt;
+using moon::SlotDeclStmt;
+using moon::SlotInvokeStmt;
+using moon::Stmt;
+using moon::StringLiteralExpr;
+using moon::UnaryExpr;
+using moon::VariantConstructExpr;
+using moon::WhileStmt;
 
 static void initializeLLVM() {
     static bool initialized = false;
@@ -60,7 +104,7 @@ std::optional<uint64_t> knownArrayIndexUpperBound(
         if (it != knownUpperBounds.end()) return it->second;
     }
     const auto* binary = dynamic_cast<const BinaryExpr*>(expression);
-    if (!binary || binary->op != TokenKind::Ampersand) return std::nullopt;
+    if (!binary || binary->op != Operator::BitAnd) return std::nullopt;
     const auto* mask = dynamic_cast<const IntLiteralExpr*>(binary->rhs.get());
     if (!mask || mask->value < 0) return std::nullopt;
     return static_cast<uint64_t>(mask->value) + 1;
@@ -72,6 +116,15 @@ bool isProvablySafeArrayIndex(
     const std::unordered_map<std::string, uint64_t>& knownUpperBounds) {
     auto upperBound = knownArrayIndexUpperBound(expression, knownUpperBounds);
     return upperBound && *upperBound <= length;
+}
+
+uint64_t stableRuntimeId(const std::string& text) {
+    uint64_t hash = 1469598103934665603ULL;
+    for (unsigned char byte : text) {
+        hash ^= byte;
+        hash *= 1099511628211ULL;
+    }
+    return hash;
 }
 
 void appendLittleEndianU64(std::string& output, uint64_t value) {
@@ -224,8 +277,7 @@ CodeGenerator::CodeGenerator(const std::string& moduleName)
 
 CodeGenerator::~CodeGenerator() = default;
 
-bool CodeGenerator::generate(Program* program, SymbolTable* symTable) {
-    mSymTable = symTable;
+bool CodeGenerator::generate(moon::Module* program) {
     mProgram = program;
     mFunctions.clear();
     mFragments.clear();
@@ -239,18 +291,20 @@ bool CodeGenerator::generate(Program* program, SymbolTable* symTable) {
             const std::string key = fragment->generatedSymbolName.empty()
                 ? fragment->name : fragment->generatedSymbolName;
             mFragments[key] = fragment;
-            if (!fragment->versionTag) mFragments[fragment->name] = fragment;
+            if (key == fragment->name) mFragments[fragment->name] = fragment;
         }
     }
 
     auto declareFunc = [&](FunctionDecl* f) {
+        if (f->isSelector) return;
+        if (f->isKernel && !f->isCodegenReachable) return;
         if (!f->typeParams.empty() && !f->isTemplateInstance) return;
         std::vector<llvm::Type*> paramLLVMTypes;
         for (auto& p : f->params) {
-            paramLLVMTypes.push_back(mHelpers->toLLVMType(typeForAST(p.type.get())));
+            paramLLVMTypes.push_back(mHelpers->toLLVMType(p.type));
         }
         llvm::Type* retLLVMType = f->returnType
-            ? mHelpers->toLLVMType(typeForAST(f->returnType.get()))
+            ? mHelpers->toLLVMType(f->returnType)
             : mHelpers->voidTy();
         auto funcType = llvm::FunctionType::get(retLLVMType, paramLLVMTypes, false);
         // A package's ABI is its explicit export list. `main` remains visible
@@ -266,19 +320,23 @@ bool CodeGenerator::generate(Program* program, SymbolTable* symTable) {
         auto* function = llvm::Function::Create(
             funcType, linkage, symbolName, mModule.get());
         mFunctions[internalName] = function;
-        if (!f->versionTag) mFunctions[f->name] = function;
+        if (internalName == f->name) mFunctions[f->name] = function;
     };
 
     auto generateBodies = [&](bool kernels) {
         for (auto& decl : program->declarations) {
             if (auto* function = dynamic_cast<FunctionDecl*>(decl.get())) {
-                if (function->isKernel == kernels &&
+                if (!function->isSelector &&
+                    (!function->isKernel || function->isCodegenReachable) &&
+                    function->isKernel == kernels &&
                     (function->typeParams.empty() || function->isTemplateInstance))
                     generateFunctionBody(function);
             }
             if (auto* impl = dynamic_cast<ImplDecl*>(decl.get())) {
                 for (auto& method : impl->methods) {
-                    if (method->isKernel == kernels &&
+                    if (!method->isSelector &&
+                        (!method->isKernel || method->isCodegenReachable) &&
+                        method->isKernel == kernels &&
                         (method->typeParams.empty() || method->isTemplateInstance))
                         generateFunctionBody(method.get());
                 }
@@ -294,6 +352,8 @@ bool CodeGenerator::generate(Program* program, SymbolTable* symTable) {
         }
     }
 
+    emitRuntimeDescriptors();
+
     // Pass 2: generate kernels first. The target-specific code object must
     // exist before host launch expressions are lowered, otherwise an AOT
     // executable would embed the temporary empty-device-module placeholder.
@@ -305,14 +365,16 @@ bool CodeGenerator::generate(Program* program, SymbolTable* symTable) {
     if (rt_gpu_should_emit_ptx()) {
         for (auto& decl : program->declarations) {
             if (auto* function = dynamic_cast<FunctionDecl*>(decl.get())) {
-                if (function->isKernel && !emitKernelPTX(function)) return false;
+                if (function->isKernel && function->isCodegenReachable &&
+                    !emitKernelPTX(function)) return false;
             }
         }
     }
     if (rt_gpu_should_emit_amdgpu()) {
         for (auto& decl : program->declarations) {
             if (auto* function = dynamic_cast<FunctionDecl*>(decl.get())) {
-                if (function->isKernel && !emitKernelHSACO(function)) return false;
+                if (function->isKernel && function->isCodegenReachable &&
+                    !emitKernelHSACO(function)) return false;
             }
         }
     }
@@ -356,6 +418,153 @@ bool CodeGenerator::generate(Program* program, SymbolTable* symTable) {
     return mErrors.empty();
 }
 
+void CodeGenerator::emitRuntimeDescriptors() {
+    if (!mProgram || !mProgram->features.runtime) return;
+
+    auto* i8 = llvm::Type::getInt8Ty(*mCtx);
+    auto* i32 = mHelpers->i32Ty();
+    auto* i64 = llvm::Type::getInt64Ty(*mCtx);
+    auto* ptr = llvm::cast<llvm::PointerType>(mHelpers->ptrTy());
+    auto* metadataValueType = llvm::StructType::create(*mCtx, "moon.metadata.value");
+    metadataValueType->setBody({i8, i64, ptr});
+    auto* metadataInstanceType = llvm::StructType::create(
+        *mCtx, "moon.metadata.instance");
+    metadataInstanceType->setBody({ptr, i64, ptr, i8});
+    auto* descriptorType = llvm::StructType::create(
+        *mCtx, "moon.declaration.descriptor");
+    descriptorType->setBody({i32, ptr, ptr, ptr, i8, i8, i64, ptr, ptr});
+
+    std::unordered_map<std::string, llvm::Constant*> strings;
+    auto cString = [&](const std::string& text) -> llvm::Constant* {
+        auto found = strings.find(text);
+        if (found != strings.end()) return found->second;
+        auto* initializer = llvm::ConstantDataArray::getString(*mCtx, text, true);
+        std::ostringstream name;
+        name << "__moon_string_" << std::hex << stableRuntimeId(text);
+        auto* global = new llvm::GlobalVariable(
+            *mModule, initializer->getType(), true,
+            llvm::GlobalValue::PrivateLinkage, initializer, name.str());
+        global->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+        auto* zero = llvm::ConstantInt::get(i32, 0);
+        llvm::Constant* indices[] = {zero, zero};
+        auto* address = llvm::ConstantExpr::getInBoundsGetElementPtr(
+            initializer->getType(), global, indices);
+        strings.emplace(text, address);
+        return address;
+    };
+
+    std::vector<llvm::GlobalValue*> retainedGlobals;
+    std::vector<llvm::Constant*> descriptorPointers;
+    for (const auto& record : mProgram->declarationTable) {
+        std::vector<const moon::MetadataInstance*> retainedMetadata;
+        for (const auto& metadata : record.metadata) {
+            if (metadata.retention != moon::Retention::CompileTime)
+                retainedMetadata.push_back(&metadata);
+        }
+        if (record.retention == moon::Retention::CompileTime &&
+            retainedMetadata.empty())
+            continue;
+
+        std::ostringstream suffixStream;
+        suffixStream << std::hex << stableRuntimeId(record.id);
+        const std::string suffix = suffixStream.str();
+        std::vector<llvm::Constant*> metadataConstants;
+        for (size_t metadataIndex = 0;
+             metadataIndex < retainedMetadata.size(); ++metadataIndex) {
+            const auto& metadata = *retainedMetadata[metadataIndex];
+            std::vector<llvm::Constant*> valueConstants;
+            for (const auto& value : metadata.values) {
+                uint8_t kind = 0;
+                uint64_t payload = 0;
+                llvm::Constant* text = llvm::ConstantPointerNull::get(ptr);
+                if (auto* integer = std::get_if<int64_t>(&value)) {
+                    payload = static_cast<uint64_t>(*integer);
+                } else if (auto* floating = std::get_if<double>(&value)) {
+                    kind = 1;
+                    static_assert(sizeof(payload) == sizeof(*floating));
+                    std::memcpy(&payload, floating, sizeof(payload));
+                } else if (auto* boolean = std::get_if<bool>(&value)) {
+                    kind = 2;
+                    payload = *boolean ? 1 : 0;
+                } else {
+                    kind = 3;
+                    text = cString(std::get<std::string>(value));
+                }
+                valueConstants.push_back(llvm::ConstantStruct::get(
+                    metadataValueType,
+                    {llvm::ConstantInt::get(i8, kind),
+                     llvm::ConstantInt::get(i64, payload), text}));
+            }
+
+            llvm::Constant* valuesPointer = llvm::ConstantPointerNull::get(ptr);
+            if (!valueConstants.empty()) {
+                auto* arrayType = llvm::ArrayType::get(
+                    metadataValueType, valueConstants.size());
+                auto* array = llvm::ConstantArray::get(arrayType, valueConstants);
+                auto* valuesGlobal = new llvm::GlobalVariable(
+                    *mModule, arrayType, true, llvm::GlobalValue::PrivateLinkage,
+                    array, "__moon_meta_values_" + suffix + "_" +
+                           std::to_string(metadataIndex));
+                valuesPointer = valuesGlobal;
+            }
+            metadataConstants.push_back(llvm::ConstantStruct::get(
+                metadataInstanceType,
+                {cString(metadata.schemaId),
+                 llvm::ConstantInt::get(i64, metadata.values.size()),
+                 valuesPointer,
+                 llvm::ConstantInt::get(
+                     i8, static_cast<uint8_t>(metadata.retention))}));
+        }
+
+        llvm::Constant* metadataPointer = llvm::ConstantPointerNull::get(ptr);
+        if (!metadataConstants.empty()) {
+            auto* arrayType = llvm::ArrayType::get(
+                metadataInstanceType, metadataConstants.size());
+            auto* array = llvm::ConstantArray::get(arrayType, metadataConstants);
+            auto* metadataGlobal = new llvm::GlobalVariable(
+                *mModule, arrayType, true, llvm::GlobalValue::PrivateLinkage,
+                array, "__moon_metadata_" + suffix);
+            metadataPointer = metadataGlobal;
+        }
+
+        llvm::Constant* entry = llvm::ConstantPointerNull::get(ptr);
+        auto function = mFunctions.find(record.linkageName);
+        if (function != mFunctions.end()) entry = function->second;
+        auto* descriptor = llvm::ConstantStruct::get(
+            descriptorType,
+            {llvm::ConstantInt::get(i32, 1),
+             cString(record.id), cString(record.familyId),
+             cString(record.linkageName),
+             llvm::ConstantInt::get(i8, static_cast<uint8_t>(record.kind)),
+             llvm::ConstantInt::get(i8, static_cast<uint8_t>(record.retention)),
+             llvm::ConstantInt::get(i64, retainedMetadata.size()),
+             metadataPointer, entry});
+        auto* descriptorGlobal = new llvm::GlobalVariable(
+            *mModule, descriptorType, true, llvm::GlobalValue::InternalLinkage,
+            descriptor, "__moon_descriptor_" + suffix);
+        descriptorGlobal->setSection(".moon.runtime.descriptor");
+        retainedGlobals.push_back(descriptorGlobal);
+        descriptorPointers.push_back(descriptorGlobal);
+    }
+
+    if (descriptorPointers.empty()) return;
+    auto* pointerArrayType = llvm::ArrayType::get(ptr, descriptorPointers.size());
+    auto* pointerArray = llvm::ConstantArray::get(pointerArrayType, descriptorPointers);
+    auto* registryType = llvm::StructType::get(i64, pointerArrayType);
+    auto* registryValue = llvm::ConstantStruct::get(
+        registryType,
+        {llvm::ConstantInt::get(i64, descriptorPointers.size()), pointerArray});
+    std::ostringstream registryName;
+    registryName << "__moon_runtime_registry_" << std::hex
+                 << stableRuntimeId(mProgram->name);
+    auto* registry = new llvm::GlobalVariable(
+        *mModule, registryType, true, llvm::GlobalValue::ExternalLinkage,
+        registryValue, registryName.str());
+    registry->setSection(".moon.runtime.registry");
+    retainedGlobals.push_back(registry);
+    llvm::appendToCompilerUsed(*mModule, retainedGlobals);
+}
+
 // ─── Function generation ───────────────────────────────────────────
 
 void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
@@ -367,7 +576,7 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
     if (!func) return;
 
     llvm::Type* retLLVMType = decl->returnType
-        ? mHelpers->toLLVMType(typeForAST(decl->returnType.get()))
+        ? mHelpers->toLLVMType(decl->returnType)
         : mHelpers->voidTy();
 
     if (!decl->body || decl->isExtern) return;
@@ -392,7 +601,7 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
     // Windows CI).  When kernels ARE present, the generated main performs its
     // own runtime check so AOT binaries exit clearly when the backend is
     // misconfigured, rather than crashing on a null device pointer.
-    if (decl->name == "main" && mIsAOT) {
+    if (decl->name == "main" && mProgram && mProgram->features.kernel) {
         auto initialize = mModule->getOrInsertFunction(
             "rt_gpu_initialize", mHelpers->i32Ty());
         auto reportFailure = mModule->getOrInsertFunction(
@@ -421,7 +630,7 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
         auto* alloca = createEntryBlockAlloca(func, argVal->getType(), p.name);
         mBuilder->CreateStore(argVal, alloca);
         mLocals[p.name] = alloca;
-        mLocalTypes[p.name] = typeForAST(p.type.get());
+        mLocalTypes[p.name] = p.type;
     }
 
     generateBlock(decl->body.get(), func);
@@ -461,11 +670,7 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
             // Inferred aggregate types (notably array literals) have no AST
             // annotation. Semantic analysis has already canonicalised them in
             // the symbol table; preserve that information for GEP lowering.
-            if (ls->typeAnnotation)
-                mLocalTypes[ls->name] = typeForAST(ls->typeAnnotation.get());
-            else if (mSymTable) {
-                if (auto* symbol = mSymTable->lookup(ls->name)) mLocalTypes[ls->name] = symbol->type;
-            }
+            if (ls->type) mLocalTypes[ls->name] = ls->type;
         }
         if (auto upperBound = knownArrayIndexUpperBound(
                 ls->initializer.get(), mLocalKnownUpperBounds))
@@ -569,7 +774,8 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         // conditionals and loops without double-freeing values already moved
         // or explicitly freed by that path.
         for (const auto& name : rs->autoFrees) {
-            IdentifierExpr cleanup(name);
+            IdentifierExpr cleanup;
+            cleanup.name = name;
             llvm::Value* ptr = generateExpr(&cleanup);
             // Only heap-owning values lower to pointers. Stack arrays and
             // borrowed slice fat pointers have no destructor in this phase.
@@ -1006,7 +1212,7 @@ void CodeGenerator::generateFragmentInline(FragmentDecl* fragment, SlotInvokeStm
         TypePtr type;
         if (i < slot->args.size()) {
             value = generateExpr(slot->args[i].get());
-            type = fragment->params[i].inferredType;
+            type = fragment->params[i].type;
         } else if (i < slot->resolvedParamNames.size()) {
             auto outer = mLocals.find(slot->resolvedParamNames[i]);
             if (outer != mLocals.end()) {
@@ -1073,18 +1279,108 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             auto* alloca = it->second;
             return mBuilder->CreateLoad(alloca->getAllocatedType(), alloca, id->name);
         }
+        auto function = mFunctions.find(id->name);
+        if (function != mFunctions.end()) return function->second;
         return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+    }
+    if (auto* selection = dynamic_cast<DynamicSelectExpr*>(expr)) {
+        auto* opaquePointerType = llvm::cast<llvm::PointerType>(mHelpers->ptrTy());
+        std::vector<llvm::Value*> filterValues;
+        for (auto& argument : selection->filterArguments)
+            filterValues.push_back(generateExpr(argument.get()));
+
+        llvm::Value* selected = llvm::ConstantPointerNull::get(opaquePointerType);
+        llvm::Value* matchCount = llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+        for (const auto& candidate : selection->candidates) {
+            llvm::Value* matches = llvm::ConstantInt::getTrue(*mCtx);
+            for (size_t index = 0; index < filterValues.size(); ++index) {
+                llvm::Value* actual = filterValues[index];
+                const auto& expectedValue = candidate.metadataValues[index];
+                llvm::Value* equal = nullptr;
+                if (auto* integer = std::get_if<int64_t>(&expectedValue)) {
+                    if (!actual->getType()->isIntegerTy()) {
+                        error("dynamic selector integer metadata type mismatch");
+                        return llvm::ConstantPointerNull::get(opaquePointerType);
+                    }
+                    auto* expected = llvm::ConstantInt::get(
+                        actual->getType(), static_cast<uint64_t>(*integer), true);
+                    equal = mBuilder->CreateICmpEQ(actual, expected, "dynamic.meta.eq");
+                } else if (auto* floating = std::get_if<double>(&expectedValue)) {
+                    if (!actual->getType()->isFloatingPointTy()) {
+                        error("dynamic selector floating metadata type mismatch");
+                        return llvm::ConstantPointerNull::get(opaquePointerType);
+                    }
+                    auto* expected = llvm::ConstantFP::get(actual->getType(), *floating);
+                    equal = mBuilder->CreateFCmpOEQ(actual, expected, "dynamic.meta.eq");
+                } else if (auto* boolean = std::get_if<bool>(&expectedValue)) {
+                    if (!actual->getType()->isIntegerTy()) {
+                        error("dynamic selector boolean metadata type mismatch");
+                        return llvm::ConstantPointerNull::get(opaquePointerType);
+                    }
+                    auto* expected = llvm::ConstantInt::get(
+                        actual->getType(), *boolean ? 1 : 0);
+                    equal = mBuilder->CreateICmpEQ(actual, expected, "dynamic.meta.eq");
+                } else {
+                    const auto& string = std::get<std::string>(expectedValue);
+                    if (!actual->getType()->isPointerTy()) {
+                        error("dynamic selector string metadata type mismatch");
+                        return llvm::ConstantPointerNull::get(opaquePointerType);
+                    }
+                    auto* storage = mBuilder->CreateGlobalString(
+                        string, "dynamic.meta.string");
+                    auto* expected = mBuilder->CreateInBoundsGEP(
+                        storage->getValueType(), storage,
+                        {llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
+                         llvm::ConstantInt::get(mHelpers->i32Ty(), 0)});
+                    auto compare = mModule->getOrInsertFunction(
+                        "strcmp", mHelpers->i32Ty(), mHelpers->ptrTy(),
+                        mHelpers->ptrTy());
+                    auto* compared = mBuilder->CreateCall(
+                        compare, {actual, expected}, "dynamic.meta.strcmp");
+                    equal = mBuilder->CreateICmpEQ(
+                        compared, llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
+                        "dynamic.meta.eq");
+                }
+                matches = mBuilder->CreateAnd(matches, equal, "dynamic.meta.all");
+            }
+            auto function = mFunctions.find(candidate.linkageName);
+            if (function == mFunctions.end()) {
+                error("dynamic select candidate '" + candidate.linkageName +
+                      "' has no generated function");
+                return llvm::ConstantPointerNull::get(opaquePointerType);
+            }
+            selected = mBuilder->CreateSelect(matches, function->second, selected,
+                                              "dynamic.selected");
+            matchCount = mBuilder->CreateAdd(
+                matchCount, mBuilder->CreateZExt(matches, mHelpers->i32Ty()),
+                "dynamic.match.count");
+        }
+
+        auto* valid = mBuilder->CreateICmpEQ(
+            matchCount, llvm::ConstantInt::get(mHelpers->i32Ty(), 1),
+            "dynamic.select.unique");
+        auto* success = llvm::BasicBlock::Create(
+            *mCtx, "dynamic.select.success", mCurrentFunc);
+        auto* failure = llvm::BasicBlock::Create(
+            *mCtx, "dynamic.select.failure", mCurrentFunc);
+        mBuilder->CreateCondBr(valid, success, failure);
+        mBuilder->SetInsertPoint(failure);
+        auto abort = mModule->getOrInsertFunction("abort", mHelpers->voidTy());
+        mBuilder->CreateCall(abort);
+        mBuilder->CreateUnreachable();
+        mBuilder->SetInsertPoint(success);
+        return selected;
     }
     if (auto* bin = dynamic_cast<BinaryExpr*>(expr)) {
         llvm::Value* lhs = generateExpr(bin->lhs.get());
-        if (bin->op == TokenKind::AndAnd || bin->op == TokenKind::OrOr) {
+        if (bin->op == Operator::LogicalAnd || bin->op == Operator::LogicalOr) {
             // `&&` and `||` are control-flow operators, not integer bitwise
             // aliases.  Lower them through a small CFG so the right-hand
             // expression is evaluated only when it is semantically needed.
             auto* originBB = mBuilder->GetInsertBlock();
             auto* rhsBB = llvm::BasicBlock::Create(*mCtx, "logic.rhs", mCurrentFunc);
             auto* mergeBB = llvm::BasicBlock::Create(*mCtx, "logic.merge", mCurrentFunc);
-            if (bin->op == TokenKind::AndAnd)
+            if (bin->op == Operator::LogicalAnd)
                 mBuilder->CreateCondBr(lhs, rhsBB, mergeBB);
             else
                 mBuilder->CreateCondBr(lhs, mergeBB, rhsBB);
@@ -1096,67 +1392,67 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
 
             mBuilder->SetInsertPoint(mergeBB);
             auto* result = mBuilder->CreatePHI(mHelpers->boolTy(), 2,
-                                               bin->op == TokenKind::AndAnd
+                                               bin->op == Operator::LogicalAnd
                                                    ? "and.shortcircuit"
                                                    : "or.shortcircuit");
             result->addIncoming(llvm::ConstantInt::get(
-                mHelpers->boolTy(), bin->op == TokenKind::AndAnd ? 0 : 1), originBB);
+                mHelpers->boolTy(), bin->op == Operator::LogicalAnd ? 0 : 1), originBB);
             result->addIncoming(rhs, rhsEndBB);
             return result;
         }
         llvm::Value* rhs = generateExpr(bin->rhs.get());
         switch (bin->op) {
-            case TokenKind::Plus:
+            case Operator::Add:
                 return lhs->getType()->isFloatingPointTy()
                     ? mBuilder->CreateFAdd(lhs, rhs, "addtmp")
                     : mBuilder->CreateAdd(lhs, rhs, "addtmp");
-            case TokenKind::Minus:
+            case Operator::Subtract:
                 return lhs->getType()->isFloatingPointTy()
                     ? mBuilder->CreateFSub(lhs, rhs, "subtmp")
                     : mBuilder->CreateSub(lhs, rhs, "subtmp");
-            case TokenKind::Star:
+            case Operator::Multiply:
                 return lhs->getType()->isFloatingPointTy()
                     ? mBuilder->CreateFMul(lhs, rhs, "multmp")
                     : mBuilder->CreateMul(lhs, rhs, "multmp");
-            case TokenKind::Slash:
+            case Operator::Divide:
                 return lhs->getType()->isFloatingPointTy()
                     ? mBuilder->CreateFDiv(lhs, rhs, "divtmp")
                     : mBuilder->CreateSDiv(lhs, rhs, "divtmp");
-            case TokenKind::Percent:
+            case Operator::Remainder:
                 return lhs->getType()->isFloatingPointTy()
                     ? mBuilder->CreateFRem(lhs, rhs, "remtmp")
                     : mBuilder->CreateSRem(lhs, rhs, "remtmp");
-            case TokenKind::Ampersand:
+            case Operator::BitAnd:
                 return mBuilder->CreateAnd(lhs, rhs, "bitandtmp");
-            case TokenKind::BitOr:
+            case Operator::BitOr:
                 return mBuilder->CreateOr(lhs, rhs, "bitortmp");
-            case TokenKind::BitXor:
+            case Operator::BitXor:
                 return mBuilder->CreateXor(lhs, rhs, "bitxortmp");
-            case TokenKind::ShiftLeft:
+            case Operator::ShiftLeft:
                 return mBuilder->CreateShl(lhs, rhs, "shltmp");
-            case TokenKind::ShiftRight:
+            case Operator::ShiftRight:
                 return mBuilder->CreateAShr(lhs, rhs, "shrtmp");
-            case TokenKind::EqEq:
+            case Operator::Equal:
                 return lhs->getType()->isFloatingPointTy()
                     ? mBuilder->CreateFCmpOEQ(lhs, rhs, "eqtmp")
                     : mBuilder->CreateICmpEQ(lhs, rhs, "eqtmp");
-            case TokenKind::Neq:
+            case Operator::NotEqual:
                 return lhs->getType()->isFloatingPointTy()
                     ? mBuilder->CreateFCmpONE(lhs, rhs, "neqtmp")
                     : mBuilder->CreateICmpNE(lhs, rhs, "neqtmp");
-            case TokenKind::Lt:
+            case Operator::Less:
                 return lhs->getType()->isFloatingPointTy()
                     ? mBuilder->CreateFCmpOLT(lhs, rhs, "lttmp")
                     : mBuilder->CreateICmpSLT(lhs, rhs, "lttmp");
-            case TokenKind::LtEq:
+            case Operator::LessEqual:
                 return lhs->getType()->isFloatingPointTy()
                     ? mBuilder->CreateFCmpOLE(lhs, rhs, "letmp")
                     : mBuilder->CreateICmpSLE(lhs, rhs, "letmp");
-            case TokenKind::Gt:
+            case Operator::Greater:
                 return lhs->getType()->isFloatingPointTy()
                     ? mBuilder->CreateFCmpOGT(lhs, rhs, "gttmp")
                     : mBuilder->CreateICmpSGT(lhs, rhs, "gttmp");
-            case TokenKind::GtEq:
+            case Operator::GreaterEqual:
                 return lhs->getType()->isFloatingPointTy()
                     ? mBuilder->CreateFCmpOGE(lhs, rhs, "getmp")
                     : mBuilder->CreateICmpSGE(lhs, rhs, "getmp");
@@ -1166,15 +1462,15 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
     if (auto* un = dynamic_cast<UnaryExpr*>(expr)) {
         llvm::Value* op = generateExpr(un->operand.get());
         switch (un->op) {
-            case TokenKind::Minus:
+            case Operator::Negate:
                 return op->getType()->isFloatingPointTy()
                     ? mBuilder->CreateFNeg(op, "negtmp")
                     : mBuilder->CreateNeg(op, "negtmp");
-            case TokenKind::Not:
+            case Operator::LogicalNot:
                 return mBuilder->CreateNot(op, "nottmp");
-            case TokenKind::Tilde:
+            case Operator::BitNot:
                 return mBuilder->CreateNot(op, "bitnottmp");
-            case TokenKind::Star: {
+            case Operator::Dereference: {
                 auto* ptrTy = llvm::PointerType::get(*mCtx, 0);
                 auto* ptr = mBuilder->CreateBitCast(op, ptrTy);
                 return mBuilder->CreateLoad(mHelpers->i32Ty(), ptr, "dereftmp");
@@ -1414,19 +1710,35 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             }
 
             
-            // Indirect call via closure variable
-            auto it = mLocals.find(calleeId->name);
-            if (it != mLocals.end()) {
-                llvm::Value* fnPtr = mBuilder->CreateLoad(
-                    llvm::PointerType::get(*mCtx, 0), it->second, "fnptr");
-                std::vector<llvm::Value*> args;
-                for (auto& arg : call->args) args.push_back(generateExpr(arg.get()));
-                auto* fnTy = llvm::FunctionType::get(mHelpers->i32Ty(),
-                    std::vector<llvm::Type*>(call->args.size(), mHelpers->i32Ty()), false);
-                auto* fnPtrTy = llvm::PointerType::get(*mCtx, 0);
-                return mBuilder->CreateCall(fnTy,
-                    mBuilder->CreateBitCast(fnPtr, fnPtrTy), args, "closurecall");
+        }
+        // Every non-direct callable uses its resolved MoonIR function type.
+        // This covers closures, statically selected bindings, and dynamic
+        // selector results without baking an i32-only ABI into LLVM lowering.
+        TypePtr callableType = call->callee ? call->callee->type : nullptr;
+        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
+            auto localType = mLocalTypes.find(calleeId->name);
+            if ((!callableType || callableType->kind != TypeKind::Function) &&
+                localType != mLocalTypes.end())
+                callableType = localType->second;
+        }
+        if (callableType && callableType->kind == TypeKind::Function) {
+            llvm::Value* functionPointer = generateExpr(call->callee.get());
+            std::vector<llvm::Type*> parameterTypes;
+            std::vector<llvm::Value*> arguments;
+            for (size_t index = 0; index < callableType->paramTypes.size(); ++index)
+                parameterTypes.push_back(mHelpers->toLLVMType(callableType->paramTypes[index]));
+            for (size_t index = 0; index < call->args.size(); ++index) {
+                llvm::Value* argument = generateExpr(call->args[index].get());
+                if (index < parameterTypes.size())
+                    argument = coerceCallArgument(argument, parameterTypes[index]);
+                arguments.push_back(argument);
             }
+            auto* returnType = mHelpers->toLLVMType(callableType->returnType);
+            auto* functionType = llvm::FunctionType::get(
+                returnType, parameterTypes, false);
+            return mBuilder->CreateCall(
+                functionType, functionPointer, arguments,
+                returnType->isVoidTy() ? "" : "indirect.call");
         }
         return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
     }
@@ -1489,35 +1801,35 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             auto it = mLocals.find(id->name);
             if (it != mLocals.end()) {
                 llvm::Value* result = rhs;
-                if (as->op != TokenKind::Eq) {
+                if (as->op != Operator::Assign) {
                     llvm::Value* lhs = mBuilder->CreateLoad(
                         it->second->getAllocatedType(), it->second, id->name + ".old");
                     switch (as->op) {
-                        case TokenKind::PlusEq:
+                        case Operator::AddAssign:
                             result = lhs->getType()->isFloatingPointTy()
                                 ? mBuilder->CreateFAdd(lhs, rhs, "addeqtmp")
                                 : mBuilder->CreateAdd(lhs, rhs, "addeqtmp"); break;
-                        case TokenKind::MinusEq:
+                        case Operator::SubtractAssign:
                             result = lhs->getType()->isFloatingPointTy()
                                 ? mBuilder->CreateFSub(lhs, rhs, "subeqtmp")
                                 : mBuilder->CreateSub(lhs, rhs, "subeqtmp"); break;
-                        case TokenKind::StarEq:
+                        case Operator::MultiplyAssign:
                             result = lhs->getType()->isFloatingPointTy()
                                 ? mBuilder->CreateFMul(lhs, rhs, "muleqtmp")
                                 : mBuilder->CreateMul(lhs, rhs, "muleqtmp"); break;
-                        case TokenKind::SlashEq:
+                        case Operator::DivideAssign:
                             result = lhs->getType()->isFloatingPointTy()
                                 ? mBuilder->CreateFDiv(lhs, rhs, "diveqtmp")
                                 : mBuilder->CreateSDiv(lhs, rhs, "diveqtmp"); break;
-                        case TokenKind::PercentEq:
+                        case Operator::RemainderAssign:
                             result = lhs->getType()->isFloatingPointTy()
                                 ? mBuilder->CreateFRem(lhs, rhs, "remeqtmp")
                                 : mBuilder->CreateSRem(lhs, rhs, "remeqtmp"); break;
-                        case TokenKind::AndEq: result = mBuilder->CreateAnd(lhs, rhs, "andeqtmp"); break;
-                        case TokenKind::OrEq: result = mBuilder->CreateOr(lhs, rhs, "oreqtmp"); break;
-                        case TokenKind::XorEq: result = mBuilder->CreateXor(lhs, rhs, "xoreqtmp"); break;
-                        case TokenKind::ShiftLeftEq: result = mBuilder->CreateShl(lhs, rhs, "shleqtmp"); break;
-                        case TokenKind::ShiftRightEq: result = mBuilder->CreateAShr(lhs, rhs, "shreqtmp"); break;
+                        case Operator::BitAndAssign: result = mBuilder->CreateAnd(lhs, rhs, "andeqtmp"); break;
+                        case Operator::BitOrAssign: result = mBuilder->CreateOr(lhs, rhs, "oreqtmp"); break;
+                        case Operator::BitXorAssign: result = mBuilder->CreateXor(lhs, rhs, "xoreqtmp"); break;
+                        case Operator::ShiftLeftAssign: result = mBuilder->CreateShl(lhs, rhs, "shleqtmp"); break;
+                        case Operator::ShiftRightAssign: result = mBuilder->CreateAShr(lhs, rhs, "shreqtmp"); break;
                         default: break;
                     }
                 }
@@ -1554,19 +1866,14 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         // Generate a hidden function for the lambda body
         static int lambdaCount = 0;
         std::string lambdaName = "__lambda_" + std::to_string(lambdaCount++);
-        if (le->versionTag) {
-            lambdaName += "__" + le->versionTag->name + "__v" +
-                std::to_string(le->versionTag->version.major) + "_" +
-                std::to_string(le->versionTag->version.minor) + "_" +
-                std::to_string(le->versionTag->version.patch);
-        }
+        if (!le->identitySuffix.empty()) lambdaName += "__" + le->identitySuffix;
 
         // Build LLVM function for lambda
         std::vector<llvm::Type*> paramTypes;
         for (auto& p : le->params)
-            paramTypes.push_back(mHelpers->toLLVMType(resolveType(p.type.get(), {})));
+            paramTypes.push_back(mHelpers->toLLVMType(p.type));
         llvm::Type* retTy = le->returnType
-            ? mHelpers->toLLVMType(resolveType(le->returnType.get(), {})) : mHelpers->i32Ty();
+            ? mHelpers->toLLVMType(le->returnType) : mHelpers->i32Ty();
         auto funcTy = llvm::FunctionType::get(retTy, paramTypes, false);
         auto func = llvm::Function::Create(
             funcTy, llvm::Function::InternalLinkage, lambdaName, mModule.get());
@@ -1596,7 +1903,7 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             auto* alloca = createEntryBlockAlloca(func, arg.getType(), le->params[idx].name);
             mBuilder->CreateStore(&arg, alloca);
             mLocals[le->params[idx].name] = alloca;
-            mLocalTypes[le->params[idx].name] = typeForAST(le->params[idx].type.get());
+            mLocalTypes[le->params[idx].name] = le->params[idx].type;
             idx++;
         }
 
@@ -2218,18 +2525,6 @@ void CodeGenerator::error(const std::string& msg) {
                                          "this is usually caused by an earlier invalid declaration or unsupported construct"));
 }
 
-TypePtr CodeGenerator::typeForAST(const TypeAST* ast) const {
-    if (!ast) return nullptr;
-    if (auto* named = dynamic_cast<const NamedTypeAST*>(ast)) {
-        if (named->resolvedType) return named->resolvedType;
-        if (mSymTable) {
-            auto nominal = mSymTable->lookupType(named->name);
-            if (nominal) return nominal;
-        }
-    }
-    return resolveType(ast, {});
-}
-
 size_t CodeGenerator::fieldIndex(const TypePtr& type, const std::string& field) const {
     if (!type) return static_cast<size_t>(-1);
     for (size_t i = 0; i < type->fields.size(); ++i)
@@ -2249,6 +2544,59 @@ int CodeGenerator::jitRun() {
         return 1;
     }
 
+    // Luna runtime calls are language ABI symbols, not ambient process
+    // symbols. Register every referenced helper explicitly so JIT behavior
+    // does not depend on ELF -rdynamic, Mach-O export policy, or Windows
+    // __declspec(dllexport). System/user-library symbols remain available via
+    // the target-process search generator below.
+    SymbolMap runtimeSymbols;
+    const auto exported = JITSymbolFlags::Exported;
+    auto bindRuntime = [&](StringRef name, auto* address) {
+        if (!mModule->getFunction(name)) return;
+        runtimeSymbols[(*JIT)->mangleAndIntern(name)] =
+            ExecutorSymbolDef::fromPtr(address, exported);
+    };
+    bindRuntime("rt_malloc", &rt_malloc);
+    bindRuntime("rt_free", &rt_free);
+    bindRuntime("rt_array_index_or_abort", &rt_array_index_or_abort);
+    bindRuntime("rt_dynamic_fragment_select", &rt_dynamic_fragment_select);
+    bindRuntime("rt_dynamic_fragment_matches", &rt_dynamic_fragment_matches);
+    bindRuntime("rt_dynamic_fragment_report_unknown_and_abort",
+                &rt_dynamic_fragment_report_unknown_and_abort);
+    bindRuntime("rt_fragment_plugin_load", &rt_fragment_plugin_load);
+    bindRuntime("rt_fragment_plugin_last_error", &rt_fragment_plugin_last_error);
+    bindRuntime("rt_fragment_plugin_is_registered", &rt_fragment_plugin_is_registered);
+    bindRuntime("rt_fragment_plugin_invoke", &rt_fragment_plugin_invoke);
+    bindRuntime("rt_fragment_plugin_report_error_and_abort",
+                &rt_fragment_plugin_report_error_and_abort);
+    bindRuntime("rt_gpu_initialize", &rt_gpu_initialize);
+    bindRuntime("rt_gpu_backend_name", &rt_gpu_backend_name);
+    bindRuntime("rt_gpu_last_error", &rt_gpu_last_error);
+    bindRuntime("rt_gpu_report_initialization_error",
+                &rt_gpu_report_initialization_error);
+    bindRuntime("rt_gpu_report_operation_error_and_abort",
+                &rt_gpu_report_operation_error_and_abort);
+    bindRuntime("rt_gpu_backend_is_cuda", &rt_gpu_backend_is_cuda);
+    bindRuntime("rt_gpu_backend_is_rocm", &rt_gpu_backend_is_rocm);
+    bindRuntime("rt_gpu_should_emit_ptx", &rt_gpu_should_emit_ptx);
+    bindRuntime("rt_gpu_should_emit_amdgpu", &rt_gpu_should_emit_amdgpu);
+    bindRuntime("rt_gpu_alloc_i32", &rt_gpu_alloc_i32);
+    bindRuntime("rt_gpu_free", &rt_gpu_free);
+    bindRuntime("rt_gpu_load_i32", &rt_gpu_load_i32);
+    bindRuntime("rt_gpu_store_i32", &rt_gpu_store_i32);
+    bindRuntime("rt_gpu_copy_from_host_i32", &rt_gpu_copy_from_host_i32);
+    bindRuntime("rt_gpu_copy_to_host_i32", &rt_gpu_copy_to_host_i32);
+    bindRuntime("rt_gpu_launch_ptx", &rt_gpu_launch_ptx);
+    bindRuntime("rt_gpu_launch_hsaco", &rt_gpu_launch_hsaco);
+    bindRuntime("rt_gpu_await_event", &rt_gpu_await_event);
+    if (!runtimeSymbols.empty()) {
+        if (auto err = (*JIT)->getMainJITDylib().define(
+                absoluteSymbols(std::move(runtimeSymbols)))) {
+            llvm::errs() << "JIT runtime symbols: " << toString(std::move(err)) << "\n";
+            return 1;
+        }
+    }
+
     auto tsm = ThreadSafeModule(std::move(mModule), std::move(mCtx));
     auto err = (*JIT)->addIRModule(std::move(tsm));
     if (err) {
@@ -2256,7 +2604,8 @@ int CodeGenerator::jitRun() {
         return 1;
     }
 
-    // Make host process symbols (rt_malloc, rt_free) available to JIT
+    // Resolve libc and explicitly loaded user-library symbols. Luna's own
+    // runtime symbols were defined above and never rely on this fallback.
     auto &ES = (*JIT)->getExecutionSession();
     auto dlsg = EPCDynamicLibrarySearchGenerator::GetForTargetProcess(ES);
     if (dlsg) {

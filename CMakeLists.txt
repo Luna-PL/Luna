@@ -35,6 +35,7 @@ target_link_libraries(fragment-plugin-test PRIVATE runtime)
 
 add_executable(luna
     src/main.cpp
+    src/core/TypeRelations.cpp
     src/lexer/Lexer.cpp
     src/parser/Parser.cpp
     src/sema/TypeSystem.cpp
@@ -42,10 +43,19 @@ add_executable(luna
     src/sema/SemanticAnalyzer.cpp
     src/sema/TraitChecker.cpp
     src/sema/OwnershipChecker.cpp
+    src/selector/Selector.cpp
+    src/instantiation/Instantiator.cpp
+    src/moonir/MoonIR.cpp
+    src/moonir/Lowering.cpp
+    src/moonir/Verifier.cpp
+    src/moonir/Optimizer.cpp
+    src/moonir/Printer.cpp
     src/codegen/CGHelpers.cpp
     src/codegen/CodeGenerator.cpp
     src/runtime/Runtime.cpp
+    src/macro/MacroProcessor.cpp
     src/package/Package.cpp
+    src/package/PackageManager.cpp
 )
 
 target_include_directories(luna PRIVATE ${LLVM_INCLUDE_DIRS})
@@ -71,7 +81,9 @@ if(CMAKE_DL_LIBS AND NOT WIN32)
     target_link_libraries(runtime PUBLIC ${CMAKE_DL_LIBS})
     target_link_libraries(luna PRIVATE ${CMAKE_DL_LIBS})
 endif()
-set_target_properties(luna PROPERTIES ENABLE_EXPORTS TRUE)
+# JIT-visible Luna runtime symbols are registered explicitly with ORC. Do not
+# export every compiler symbol merely to make in-process JIT work: that policy
+# is unreliable on Windows and unnecessarily enlarges the host symbol surface.
 
 # Keep a build-tree compatibility name for existing Alpha scripts.  The
 # installed and documented driver is `luna`; the old `llvm-demo` name is not
@@ -210,11 +222,26 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/jit_aot_extended_parity.cmake
     )
     add_test(
+        NAME luna.jit-runtime-symbols
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/jit_runtime_symbols.cmake
+    )
+    add_test(
         NAME luna.stable-core-parity
         COMMAND ${CMAKE_COMMAND}
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/stable_core_parity.cmake
+    )
+    add_test(
+        NAME luna.moon-cost-boundaries
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/moon_cost_boundaries.cmake
     )
     if(LUNA_ENABLE_ROCM_SMOKE)
         add_test(

@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
+#include <optional>
 
 class OwnershipChecker {
 public:
@@ -17,8 +19,17 @@ public:
 private:
     enum class OwnState { Valid, Moved, Freed };
 
+    // A Place identifies storage, not merely a value-producing expression.
+    // Components are field names, constant indices, `[*]`, or `*` for a
+    // dereference. Prefix overlap is the basis for partial-move and loan
+    // conflict checks.
+    struct Place {
+        std::string root;
+        std::vector<std::string> components;
+    };
+
     struct Loan {
-        std::string source;
+        Place source;
         bool isMutable = false;
     };
 
@@ -26,7 +37,9 @@ private:
         OwnState state = OwnState::Valid;
         TypePtr type;
         bool isHeapAllocated = false;
-        bool isLinear = false;
+        luna::ownership::Usage usage = luna::ownership::Usage::Copy;
+        luna::ownership::Relation relation = luna::ownership::Relation::Owned;
+        std::vector<Place> movedPlaces;
         bool isReference = false;
         bool isMutableReference = false;
         int sharedBorrows = 0;
@@ -87,21 +100,31 @@ private:
     void enterScope();
     void exitScope();
     void releaseLoansInCurrentScope();
-    bool acquireLoan(const std::string& name, bool isMutable);
+    bool acquireLoan(const Place& place, bool isMutable);
     bool beginInFlightBorrow(const std::string& name, bool isMutable);
     void finishEvent(VarInfo* event);
     void releaseLoan(const Loan& loan);
+    bool consume(const Place& place, const std::string& action);
     bool consume(VarInfo* var, const std::string& action);
     bool checkWriteTarget(Expr* expr);
-    bool isLinearTypeAST(const TypeAST* ast) const;
+    luna::ownership::Usage usageFromTypeAST(const TypeAST* ast) const;
     bool isReferenceExpr(Expr* expr);
     bool isDeviceBuffer(const TypePtr& type) const;
     bool isEvent(const TypePtr& type) const;
+    std::optional<Place> extractPlace(Expr* expr) const;
+    std::string renderPlace(const Place& place) const;
+    std::string renderProjection(const Place& place) const;
+    bool placesOverlap(const Place& left, const Place& right) const;
+    bool isPlaceAvailable(const Place& place, const std::string& action);
+    bool hasConflictingLoan(const Place& place, bool forMutation) const;
+    bool allDirectFieldsMoved(const VarInfo& var) const;
+    TypePtr typeOfPlace(const Place& place) const;
 
     VarInfo* lookup(const std::string& name);
     void define(const std::string& name, TypePtr type, bool isHeap,
-                bool isLinear = false, bool isReference = false,
-                bool isMutableReference = false);
+                luna::ownership::Usage usage = luna::ownership::Usage::Copy,
+                luna::ownership::Relation relation = luna::ownership::Relation::Owned,
+                bool isReference = false, bool isMutableReference = false);
 
     std::vector<std::string> collectFreesAtScopeExit();
     std::vector<std::string> collectFreesAtReturn() const;

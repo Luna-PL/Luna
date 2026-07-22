@@ -1,6 +1,5 @@
 #include "Parser.h"
 #include "../diagnostics/Diagnostic.h"
-#include <sstream>
 
 Parser::Parser(std::vector<Token> tokens, std::string sourceName, std::string source)
     : mTokens(std::move(tokens)), mSourceName(std::move(sourceName)), mSource(std::move(source)) {}
@@ -40,10 +39,36 @@ bool Parser::parsePackageHeader(Program* program) {
 
 std::unique_ptr<Decl> Parser::parseDeclaration() {
     const Token start = peek();
-    const bool isExported = match(TokenKind::Export);
-    const bool isConstexpr = match(TokenKind::Constexpr);
-    bool isExtern = match(TokenKind::Extern);
-    const bool isKernel = match(TokenKind::Kernel);
+    bool isExported = false;
+    bool isConstexpr = false;
+    bool isExtern = false;
+    bool isKernel = false;
+    bool isNominal = false;
+    RetentionKind retention = RetentionKind::CompileTime;
+    std::vector<Decl::MetadataAttachment> metadata;
+    bool consumedModifier = true;
+    while (consumedModifier) {
+        consumedModifier = false;
+        if (match(TokenKind::Export)) { isExported = true; consumedModifier = true; }
+        else if (match(TokenKind::Constexpr)) { isConstexpr = true; consumedModifier = true; }
+        else if (match(TokenKind::Extern)) { isExtern = true; consumedModifier = true; }
+        else if (match(TokenKind::Kernel)) { isKernel = true; consumedModifier = true; }
+        else if (match(TokenKind::Nominal)) { isNominal = true; consumedModifier = true; }
+        else if (match(TokenKind::Runtime)) {
+            consumedModifier = true;
+            if (check(TokenKind::At))
+                metadata.push_back(parseMetadataAttachment(RetentionKind::Runtime));
+            else retention = RetentionKind::Runtime;
+        } else if (match(TokenKind::Dynamic)) {
+            consumedModifier = true;
+            if (check(TokenKind::At))
+                metadata.push_back(parseMetadataAttachment(RetentionKind::Dynamic));
+            else retention = RetentionKind::Dynamic;
+        } else if (check(TokenKind::At)) {
+            consumedModifier = true;
+            metadata.push_back(parseMetadataAttachment(RetentionKind::CompileTime));
+        }
+    }
     std::string abi;
     if (check(TokenKind::StringLiteral) && (isExtern || isExported))
         abi = advance().lexeme;
@@ -61,8 +86,9 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
     else if (match(TokenKind::Enum)) decl = parseEnumDecl();
     else if (match(TokenKind::Trait)) decl = parseTraitDecl();
     else if (match(TokenKind::Impl)) decl = parseImplDecl();
+    else if (match(TokenKind::Meta)) decl = parseMetaDecl();
     else {
-        if (isExported || isExtern || isConstexpr || isKernel) {
+        if (isExported || isExtern || isConstexpr || isKernel || isNominal) {
             addError("expected a declaration after `export`, found " +
                      diagnostic::quotedToken(peek().lexeme),
                      "only `fn`, `interceptor`, `context`, `struct`, `enum`, and `trait` can be exported");
@@ -74,12 +100,73 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
         return nullptr;
     }
     if (decl) {
+        if (auto* structure = dynamic_cast<StructDecl*>(decl.get())) {
+            structure->isNominal = isNominal;
+        } else if (auto* enumeration = dynamic_cast<EnumDecl*>(decl.get())) {
+            enumeration->isNominal = isNominal;
+        } else if (isNominal) {
+            addError("`nominal` can only modify a struct or enum declaration",
+                     "remove `nominal` or apply it to `struct`/`enum`");
+        }
+        // A runtime-visible attachment needs a descriptor to live on. Keep
+        // that implication local to the attached declaration so one schema
+        // does not make every use of it pay a runtime cost.
+        for (const auto& attachment : metadata) {
+            if (attachment.retention == RetentionKind::Dynamic)
+                retention = RetentionKind::Dynamic;
+            else if (attachment.retention == RetentionKind::Runtime &&
+                     retention == RetentionKind::CompileTime)
+                retention = RetentionKind::Runtime;
+        }
         decl->isExported = isExported;
+        decl->retention = retention;
+        decl->metadata = std::move(metadata);
         decl->sourcePath = mSourceName;
         decl->line = start.line;
         decl->col = start.col;
     }
     return decl;
+}
+
+Decl::MetadataAttachment Parser::parseMetadataAttachment(RetentionKind retention) {
+    Decl::MetadataAttachment attachment;
+    attachment.retention = retention;
+    consume(TokenKind::At, "Expected '@' before metadata attachment");
+    if (!match(TokenKind::Identifier)) {
+        addError("expected a metadata schema name after `@`",
+                 "declare it with `meta name { ... }` and attach it as `@name(...)`");
+        return attachment;
+    }
+    attachment.schemaName = mTokens[mPos - 1].lexeme;
+    consume(TokenKind::LParen, "Expected '(' after metadata schema name");
+    if (!check(TokenKind::RParen)) attachment.arguments = parseArgs();
+    consume(TokenKind::RParen, "Expected ')' after metadata arguments");
+    return attachment;
+}
+
+std::unique_ptr<MetaDecl> Parser::parseMetaDecl() {
+    auto declaration = std::make_unique<MetaDecl>();
+    if (!match(TokenKind::Identifier)) {
+        addError("expected a metadata type name after `meta`");
+        return nullptr;
+    }
+    declaration->name = mTokens[mPos - 1].lexeme;
+    consume(TokenKind::LBrace, "Expected '{' for metadata schema body");
+    while (!check(TokenKind::RBrace) && !isAtEnd()) {
+        if (!match(TokenKind::Identifier)) {
+            addError("expected a metadata field name");
+            synchronizeStatement();
+            continue;
+        }
+        MetaDecl::Field field;
+        field.name = mTokens[mPos - 1].lexeme;
+        consume(TokenKind::Colon, "Expected ':' after metadata field name");
+        field.type = parseType();
+        consume(TokenKind::SemiColon, "Expected ';' after metadata field type");
+        declaration->fields.push_back(std::move(field));
+    }
+    consume(TokenKind::RBrace, "Expected '}' after metadata schema body");
+    return declaration;
 }
 
 std::unique_ptr<FragmentDecl> Parser::parseFragmentDecl(FragmentKind kind) {
@@ -95,7 +182,6 @@ std::unique_ptr<FragmentDecl> Parser::parseFragmentDecl(FragmentKind kind) {
         return nullptr;
     }
     decl->name = mTokens[mPos - 1].lexeme;
-    decl->versionTag = parseDeclaredVersionTag();
     if (match(TokenKind::LParen)) {
         decl->params = parseParams();
         consume(TokenKind::RParen, "Expected ')' after fragment parameters");
@@ -125,7 +211,6 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(bool isTraitMethod,
         return nullptr;
     }
 
-    decl->versionTag = parseDeclaredVersionTag();
     decl->typeParams = parseTypeParamList();
     consume(TokenKind::LParen, "Expected '(' after function name");
     decl->params = parseParams();
@@ -134,6 +219,11 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(bool isTraitMethod,
     if (match(TokenKind::Arrow)) {
         decl->returnType = parseType();
         decl->returnsLinear = dynamic_cast<LinearTypeAST*>(decl->returnType.get()) != nullptr;
+        decl->returnUsage = decl->returnsLinear
+            ? luna::ownership::Usage::Linear
+            : (dynamic_cast<AffineTypeAST*>(decl->returnType.get())
+                ? luna::ownership::Usage::Affine
+                : luna::ownership::Usage::Copy);
     }
 
     if (isExtern && check(TokenKind::Identifier) && peek().lexeme == "as") {
@@ -167,7 +257,6 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl() {
         return nullptr;
     }
     decl->name = mTokens[mPos - 1].lexeme;
-    decl->versionTag = parseDeclaredVersionTag();
     decl->typeParams = parseTypeParamList();
     consume(TokenKind::LBrace, "Expected '{' for struct body");
 
@@ -194,7 +283,6 @@ std::unique_ptr<EnumDecl> Parser::parseEnumDecl() {
         return nullptr;
     }
     decl->name = mTokens[mPos - 1].lexeme;
-    decl->versionTag = parseDeclaredVersionTag();
     decl->typeParams = parseTypeParamList();
     consume(TokenKind::LBrace, "Expected '{' for enum body");
 
@@ -232,7 +320,6 @@ std::unique_ptr<TraitDecl> Parser::parseTraitDecl() {
         return nullptr;
     }
     decl->name = mTokens[mPos - 1].lexeme;
-    decl->versionTag = parseDeclaredVersionTag();
     decl->typeParams = parseTypeParamList();
     consume(TokenKind::LBrace, "Expected '{' for trait body");
 
@@ -316,18 +403,27 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         return stmt;
     };
     if (match(TokenKind::Linear)) {
-        if (match(TokenKind::Let)) return stamp(parseLetStmt(true));
+        if (match(TokenKind::Let))
+            return stamp(parseLetStmt(luna::ownership::Usage::Linear));
         addError("Expected 'let' after 'linear'");
         return nullptr;
     }
+    if (match(TokenKind::Affine)) {
+        if (match(TokenKind::Let))
+            return stamp(parseLetStmt(luna::ownership::Usage::Affine));
+        addError("Expected 'let' after 'affine'");
+        return nullptr;
+    }
     if (match(TokenKind::Const)) {
-        if (match(TokenKind::Let)) return stamp(parseLetStmt(false, true));
+        if (match(TokenKind::Let))
+            return stamp(parseLetStmt(luna::ownership::Usage::Copy, true));
         addError("expected `let` after `const`",
                  "write `const let name = compile_time_expression;`");
         synchronizeStatement();
         return nullptr;
     }
-    if (match(TokenKind::Let)) return stamp(parseLetStmt(false, match(TokenKind::Const)));
+    if (match(TokenKind::Let))
+        return stamp(parseLetStmt(luna::ownership::Usage::Copy, match(TokenKind::Const)));
     if (match(TokenKind::Free)) return stamp(parseFreeStmt());
     if (match(TokenKind::Slot)) return stamp(parseSlotStmt());
     if (match(TokenKind::Resume)) return stamp(parseResumeStmt());
@@ -385,7 +481,6 @@ std::unique_ptr<Stmt> Parser::parseSlotStmt(bool isDynamic) {
     }
 
     std::string defaultFragment;
-    std::optional<VersionSelector> defaultFragmentSelector;
     if (match(TokenKind::Default)) {
         if (!match(TokenKind::Identifier)) {
             addError("expected a fragment name after `default`");
@@ -393,7 +488,6 @@ std::unique_ptr<Stmt> Parser::parseSlotStmt(bool isDynamic) {
             return nullptr;
         }
         defaultFragment = mTokens[mPos - 1].lexeme;
-        if (match(TokenKind::At)) defaultFragmentSelector = parseVersionSelector();
     }
 
     if (check(TokenKind::SemiColon)) {
@@ -410,7 +504,6 @@ std::unique_ptr<Stmt> Parser::parseSlotStmt(bool isDynamic) {
         stmt->isDynamic = isDynamic;
         stmt->params = std::move(params);
         stmt->defaultFragment = std::move(defaultFragment);
-        stmt->defaultFragmentSelector = std::move(defaultFragmentSelector);
         stmt->sourcePath = mSourceName; stmt->line = start.line; stmt->col = start.col;
         return stmt;
     }
@@ -428,7 +521,6 @@ std::unique_ptr<Stmt> Parser::parseSlotStmt(bool isDynamic) {
     stmt->isImplicitCapture = !hasInterface;
     stmt->interfaceParams = std::move(params);
     stmt->defaultFragment = std::move(defaultFragment);
-    stmt->defaultFragmentSelector = std::move(defaultFragmentSelector);
     stmt->continuation = parseBlock();
     stmt->sourcePath = mSourceName; stmt->line = start.line; stmt->col = start.col;
     return stmt;
@@ -486,7 +578,6 @@ std::unique_ptr<Stmt> Parser::parseApplyStmt(bool isDynamic) {
         return nullptr;
     }
     stmt->fragmentName = mTokens[mPos - 1].lexeme;
-    if (match(TokenKind::At)) stmt->fragmentSelector = parseVersionSelector();
     while (isDynamic && match(TokenKind::Comma)) {
         if (!match(TokenKind::Identifier)) {
             addError("expected a fragment name after ',' in dynamic apply");
@@ -514,11 +605,20 @@ std::unique_ptr<Stmt> Parser::parseNamedSlotInvokeStmt() {
     return stmt;
 }
 
-std::unique_ptr<Stmt> Parser::parseLetStmt(bool isLinear, bool isConst) {
+std::unique_ptr<Stmt> Parser::parseLetStmt(luna::ownership::Usage usage, bool isConst) {
     auto stmt = std::make_unique<LetStmt>();
-    stmt->isLinear = isLinear;
+    stmt->usage = usage;
+    stmt->hasExplicitUsage = usage != luna::ownership::Usage::Copy;
+    stmt->isLinear = usage == luna::ownership::Usage::Linear;
     stmt->isConst = isConst;
-    if (match(TokenKind::Linear)) stmt->isLinear = true;
+    if (match(TokenKind::Linear)) {
+        stmt->usage = luna::ownership::Usage::Linear;
+        stmt->hasExplicitUsage = true;
+        stmt->isLinear = true;
+    } else if (match(TokenKind::Affine)) {
+        stmt->usage = luna::ownership::Usage::Affine;
+        stmt->hasExplicitUsage = true;
+    }
     if (!match(TokenKind::Identifier)) {
         addError("Expected variable name after 'let'");
         synchronizeStatement();
@@ -731,6 +831,14 @@ std::unique_ptr<Expr> Parser::parseMulDiv() {
 }
 
 std::unique_ptr<Expr> Parser::parseUnary() {
+    if (match(TokenKind::Dynamic)) {
+        if (!match(TokenKind::Select)) {
+            addError("`dynamic` in expression position must introduce `select`",
+                     "write `dynamic select target with selector(...)`");
+            return std::make_unique<IntLiteralExpr>(0);
+        }
+        return parseSelectExpr(true);
+    }
     if (match(TokenKind::Minus) || match(TokenKind::Not) || match(TokenKind::Tilde) ||
         match(TokenKind::Star)) {
         auto expr = std::make_unique<UnaryExpr>();
@@ -771,26 +879,9 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
             consume(TokenKind::RParen, "Expected ')' after call arguments");
             expr = std::move(call);
         } else if (match(TokenKind::At)) {
-            const Token selectorStart = mTokens[mPos - 1];
-            auto selector = parseVersionSelector();
-            if (!selector) {
-                addError("expected a version selector after `@`",
-                         "write `name@stable()` or `name@stable(1.3.2)`");
-                break;
-            }
-            auto call = std::make_unique<CallExpr>();
-            call->callee = std::move(expr);
-            call->versionSelector = std::move(selector);
-            call->sourcePath = mSourceName;
-            call->line = selectorStart.line;
-            call->col = selectorStart.col;
-            // The selector itself supplies an empty argument list.  A second
-            // parenthesized group carries ordinary runtime arguments.
-            if (match(TokenKind::LParen)) {
-                if (!check(TokenKind::RParen)) call->args = parseArgs();
-                consume(TokenKind::RParen, "Expected ')' after versioned call arguments");
-            }
-            expr = std::move(call);
+            addError("postfix `@tag(...)` versioning has been removed",
+                     "declare a `meta` schema and write `select target with selector(...)` or `@selector(...) target`");
+            break;
         } else if (match(TokenKind::Dot)) {
             auto access = std::make_unique<FieldAccessExpr>();
             access->object = std::move(expr);
@@ -871,6 +962,30 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
 }
 
 std::unique_ptr<Expr> Parser::parsePrimary() {
+    if (match(TokenKind::Select)) return parseSelectExpr(false);
+    if (match(TokenKind::At)) {
+        const Token start = mTokens[mPos - 1];
+        auto selection = std::make_unique<SelectExpr>();
+        selection->sourcePath = mSourceName;
+        selection->line = start.line;
+        selection->col = start.col;
+        if (!match(TokenKind::Identifier)) {
+            addError("expected a selector function name after `@`",
+                     "write `@selector(arguments) target`");
+            return selection;
+        }
+        selection->selectorName = mTokens[mPos - 1].lexeme;
+        consume(TokenKind::LParen, "Expected '(' after selector function name");
+        if (!check(TokenKind::RParen)) selection->selectorArgs = parseArgs();
+        consume(TokenKind::RParen, "Expected ')' after selector arguments");
+        if (!match(TokenKind::Identifier)) {
+            addError("expected a declaration family after selector sugar",
+                     "write `@selector(arguments) target`");
+            return selection;
+        }
+        selection->targetName = mTokens[mPos - 1].lexeme;
+        return selection;
+    }
     if (match(TokenKind::IntLiteral)) {
         const Token& token = mTokens[mPos - 1];
         auto node = std::make_unique<IntLiteralExpr>(std::stoll(token.lexeme));
@@ -973,12 +1088,39 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
 
     if (match(TokenKind::Fn)) {
         // Lambda: fn(params) -> Type { body } or fn(params) { body }
-        return parseLambda(parseDeclaredVersionTag());
+        return parseLambda();
     }
     if (match(TokenKind::Launch)) return parseLaunchExpr();
     addError("expected an expression, found " + diagnostic::quotedToken(peek().lexeme));
     advance(); // skip bad token to prevent infinite loop
     return std::make_unique<IntLiteralExpr>(0); // error recovery
+}
+
+std::unique_ptr<SelectExpr> Parser::parseSelectExpr(bool isDynamic,
+                                                    bool selectAlreadyConsumed) {
+    (void)selectAlreadyConsumed;
+    const Token start = mTokens[mPos - 1];
+    auto selection = std::make_unique<SelectExpr>();
+    selection->sourcePath = mSourceName;
+    selection->line = start.line;
+    selection->col = start.col;
+    selection->isDynamic = isDynamic;
+    if (!match(TokenKind::Identifier)) {
+        addError("expected a declaration family after `select`",
+                 "write `select target with selector(arguments)`");
+        return selection;
+    }
+    selection->targetName = mTokens[mPos - 1].lexeme;
+    consume(TokenKind::With, "Expected 'with' after select target");
+    if (!match(TokenKind::Identifier)) {
+        addError("expected a selector function after `with`");
+        return selection;
+    }
+    selection->selectorName = mTokens[mPos - 1].lexeme;
+    consume(TokenKind::LParen, "Expected '(' after selector function name");
+    if (!check(TokenKind::RParen)) selection->selectorArgs = parseArgs();
+    consume(TokenKind::RParen, "Expected ')' after selector arguments");
+    return selection;
 }
 
 std::unique_ptr<Expr> Parser::parseLaunchExpr() {
@@ -991,11 +1133,6 @@ std::unique_ptr<Expr> Parser::parseLaunchExpr() {
         return launch;
     }
     launch->kernelName = mTokens[mPos - 1].lexeme;
-    if (match(TokenKind::At)) {
-        launch->kernelSelector = parseVersionSelector();
-        if (!launch->kernelSelector)
-            addError("expected a kernel version selector after `@`");
-    }
     consume(TokenKind::LBracket, "Expected '[' after kernel name in launch");
     if (!match(TokenKind::Identifier) || mTokens[mPos - 1].lexeme != "threads") {
         addError("expected `threads` launch option", "write `[threads: count]`");
@@ -1009,7 +1146,7 @@ std::unique_ptr<Expr> Parser::parseLaunchExpr() {
     return launch;
 }
 
-std::unique_ptr<Expr> Parser::parseLambda(std::optional<VersionTag> versionTag) {
+std::unique_ptr<Expr> Parser::parseLambda() {
     // Already consumed 'fn' in parsePrimary
     consume(TokenKind::LParen, "Expected '(' after fn in lambda");
     auto params = parseParams();
@@ -1017,7 +1154,6 @@ std::unique_ptr<Expr> Parser::parseLambda(std::optional<VersionTag> versionTag) 
 
     auto lambda = std::make_unique<LambdaExpr>();
     lambda->params = std::move(params);
-    lambda->versionTag = std::move(versionTag);
 
     if (match(TokenKind::Arrow)) {
         lambda->returnType = parseType();
@@ -1045,6 +1181,9 @@ std::unique_ptr<Expr> Parser::parseIfExpr() {
 std::unique_ptr<TypeAST> Parser::parseType() {
     if (match(TokenKind::Linear)) {
         return std::make_unique<LinearTypeAST>(parseType());
+    }
+    if (match(TokenKind::Affine)) {
+        return std::make_unique<AffineTypeAST>(parseType());
     }
     // & Type
     if (match(TokenKind::Ampersand)) {
@@ -1091,12 +1230,6 @@ std::unique_ptr<TypeAST> Parser::parseType() {
             }
             consume(TokenKind::Gt, "Expected '>' after type arguments");
         }
-        if (match(TokenKind::At)) {
-            named->versionSelector = parseVersionSelector();
-            if (!named->versionSelector)
-                addError("expected a type version selector after `@`",
-                         "write `Type@stable()` or `Type@stable(1.3.2)`");
-        }
         return named;
     }
 
@@ -1127,7 +1260,14 @@ std::vector<Param> Parser::parseParams() {
 
     do {
         Param p;
-        p.isLinear = match(TokenKind::Linear);
+        if (match(TokenKind::Linear)) {
+            p.isLinear = true;
+            p.usage = luna::ownership::Usage::Linear;
+            p.hasExplicitUsage = true;
+        } else if (match(TokenKind::Affine)) {
+            p.usage = luna::ownership::Usage::Affine;
+            p.hasExplicitUsage = true;
+        }
         if (!match(TokenKind::Identifier)) {
             addError("Expected parameter name");
             break;
@@ -1136,6 +1276,13 @@ std::vector<Param> Parser::parseParams() {
         // A parameter type is an optional constraint. If it is omitted, the
         // semantic analyzer creates an inference variable.
         if (match(TokenKind::Colon)) p.type = parseType();
+        if (dynamic_cast<RefTypeAST*>(p.type.get())) {
+            auto* reference = static_cast<RefTypeAST*>(p.type.get());
+            p.relation = reference->isMutable
+                ? luna::ownership::Relation::MutableBorrow
+                : luna::ownership::Relation::SharedBorrow;
+            p.usage = luna::ownership::Usage::Copy;
+        }
         params.push_back(std::move(p));
     } while (match(TokenKind::Comma));
 
@@ -1193,61 +1340,7 @@ TraitRef Parser::parseTraitRef(const Token& nameToken) {
     trait.sourcePath = mSourceName;
     trait.line = nameToken.line;
     trait.col = nameToken.col;
-    if (match(TokenKind::At)) {
-        trait.versionSelector = parseVersionSelector();
-        if (!trait.versionSelector) {
-            addError("expected a trait version selector after `@`",
-                     "write `Trait@stable()` or `Trait@stable(1.3.2)`");
-        }
-    }
     return trait;
-}
-
-std::optional<SemanticVersion> Parser::parseSemanticVersion() {
-    if (!match(TokenKind::VersionLiteral)) {
-        addError("expected a semantic version in `x.y.z` form, found " +
-                 diagnostic::quotedToken(peek().lexeme),
-                 "write a complete version such as `1.3.2`");
-        return std::nullopt;
-    }
-    const std::string& text = mTokens[mPos - 1].lexeme;
-    std::istringstream input(text);
-    SemanticVersion version;
-    char first = 0, second = 0;
-    if (!(input >> version.major >> first >> version.minor >> second >> version.patch) ||
-        first != '.' || second != '.' || !input.eof() ||
-        version.major < 0 || version.minor < 0 || version.patch < 0) {
-        addError("invalid semantic version " + diagnostic::quotedToken(text),
-                 "versions use non-negative `major.minor.patch` components");
-        return std::nullopt;
-    }
-    return version;
-}
-
-std::optional<VersionTag> Parser::parseDeclaredVersionTag() {
-    if (!match(TokenKind::At)) return std::nullopt;
-    if (!match(TokenKind::Identifier)) {
-        addError("expected a tag name after `@`", "write `@stable(1.3.2)`");
-        return std::nullopt;
-    }
-    VersionTag tag;
-    tag.name = mTokens[mPos - 1].lexeme;
-    consume(TokenKind::LParen, "Expected '(' after version tag name");
-    auto version = parseSemanticVersion();
-    consume(TokenKind::RParen, "Expected ')' after version tag");
-    if (!version) return std::nullopt;
-    tag.version = *version;
-    return tag;
-}
-
-std::optional<VersionSelector> Parser::parseVersionSelector() {
-    if (!match(TokenKind::Identifier)) return std::nullopt;
-    VersionSelector selector;
-    selector.tag = mTokens[mPos - 1].lexeme;
-    consume(TokenKind::LParen, "Expected '(' after version tag name");
-    if (!check(TokenKind::RParen)) selector.version = parseSemanticVersion();
-    consume(TokenKind::RParen, "Expected ')' after version selector");
-    return selector;
 }
 
 // ─── Token helpers ─────────────────────────────────────────────────
@@ -1343,6 +1436,7 @@ void Parser::synchronizeDeclaration() {
             case TokenKind::Fragment:
             case TokenKind::Struct:
             case TokenKind::Enum:
+            case TokenKind::Nominal:
             case TokenKind::Trait:
             case TokenKind::Impl:
                 return;

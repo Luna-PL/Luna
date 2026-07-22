@@ -55,6 +55,8 @@ int         rt_gpu_backend_is_cuda();
 int         rt_gpu_backend_is_rocm();
 // Enables offline PTX validation with LUNA_GPU_EMIT_PTX=1 while execution
 // remains on the simulator. This is useful on build machines without a GPU.
+// Compile-time code-object selection only. These functions inspect the target
+// environment without initializing CUDA/HIP or requiring a physical device.
 int         rt_gpu_should_emit_ptx();
 int         rt_gpu_should_emit_amdgpu();
 

@@ -1,12 +1,12 @@
 // Loop-local plugin weaving demo. Candidates are linked into this executable;
 // the environment variable selects which typed context runs at each call.
 
-context log(value: i32) {
+runtime context log(value: i32) {
     print(100 + value);
     resume();
 }
 
-context audit(value: i32) {
+runtime context audit(value: i32) {
     print(200 + value);
     resume();
 }

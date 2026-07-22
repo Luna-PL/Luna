@@ -5,7 +5,7 @@
 > [Luna-PL/Luna](https://github.com/Luna-PL/Luna)，命令行工具为 `luna`。
 
 Luna is an LLVM-backed systems-language prototype with explicit package
-exports, linear ownership and borrowing, C FFI, structured fragments/slots,
+exports, affine/linear ownership and Place-based borrowing, C FFI, structured fragments/slots,
 JIT/AOT compilation, and an initial CPU/CUDA/ROCm heterogeneous-compute
 surface.
 
@@ -16,11 +16,9 @@ runtime and device.
 
 ## Warnings && Errors
 
-windows build failed and we modify some logic of JIT
-
-so we now disable windows build
-
-maybe we will fix it in Beta test
+Windows CI has been restored with explicit ORC runtime-symbol registration and
+parameterized AOT process launching. The candidate fix is locally validated on
+Linux and awaits confirmation from the GitHub Windows runner.
 
 [details](docs/bug&warnings.md)
 
@@ -67,6 +65,7 @@ The driver reports its release version with:
 - [Alpha release notes](docs/alpha_release.md)
 - [Release checklist](docs/release_checklist.md)
 - [Packages and exports](docs/packages.md)
+- [Types and structural/nominal identity](docs/types.md)
 - [Fragments and slots](docs/fragments.md)
 - [External fragment plugins](docs/dynamic_plugins.md)
 - [Heterogeneous compute](docs/heterogeneous_compute.md)

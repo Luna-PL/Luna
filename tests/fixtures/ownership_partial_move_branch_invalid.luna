@@ -1,0 +1,10 @@
+struct Bundle { first: string; second: string; }
+
+fn main() -> i32 {
+    let bundle = new Bundle("left", "right");
+    if true {
+        let first = move bundle.first;
+    }
+    print(bundle.second);
+    return 0;
+}

@@ -30,9 +30,13 @@ results are normal compile-time strings, integers, or booleans:
 | --- | --- |
 | `type_of::<T>()` | Full type spelling, including type arguments |
 | `type_kind::<T>()` | `struct`, `enum`, `reference`, `integer`, etc. |
+| `type_id::<T>()` / `type_shape::<T>()` | Stable semantic type identity / structural shape identity |
+| `type_domain::<T>()` | `value`, `meta`, or `compiler` |
 | `type_nominal::<T>()` | Nominal declaration identity, or an empty string |
 | `type_size::<T>()` | Static layout size in bytes |
-| `type_is_struct::<T>()`, `type_is_enum::<T>()`, `type_is_nominal::<T>()`, `type_is_reference::<T>()` | Type predicates |
+| `type_is_struct::<T>()`, `type_is_enum::<T>()`, `type_is_nominal::<T>()`, `type_is_structural::<T>()`, `type_is_meta::<T>()`, `type_is_reference::<T>()` | Type predicates |
+| `type_same::<A, B>()` / `type_same_shape::<A, B>()` | Exact semantic identity / structural-shape relation |
+| `type_abi_compatible::<A, B>()` | Conservative target-independent ABI compatibility precursor |
 | `type_field_count::<T>()` | Struct/record field count |
 | `type_field_name::<T>(index)` / `type_field_type::<T>(index)` | Field metadata; index must be a compile-time integer |
 | `type_variant_count::<T>()` | Enum variant count |

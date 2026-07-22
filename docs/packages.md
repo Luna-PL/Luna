@@ -45,6 +45,6 @@ fn main() -> i32 {
 
 `export` 是 ABI 承诺，而不是仅用于解析的标记。未导出的包级函数在生成的 LLVM IR 中保持内部链接；`export` 的函数使用外部符号。函数、结构体、枚举、trait、`interceptor` 与 `context` 均可声明为导出。`extern` 函数不能同时导出。
 
-同一包内声明身份必须唯一；版本化声明以名称、tag 与完整版本号共同组成身份，例如 `greet@stable(1.0.0)`。包加载会报告包名不匹配、重复导出和跨文件语法错误，并带有源文件位置。
+同一包内声明身份必须唯一。同名函数可以通过不同的类型化 Metadata 成为一个 declaration family；完全相同的名称与 Metadata 身份仍会报重复。包加载会报告包名不匹配、重复导出和跨文件语法错误，并带有源文件位置。
 
-当前包系统不包含依赖清单、远程仓库、锁文件或跨包导入语法；这些属于 Beta 前的工具链与生态工作。公开 API 的版本选择规则见 [versioning.md](versioning.md)。
+当前 `PackageManager` 已独立负责确定性源码枚举与 package graph，但依赖清单、远程仓库、锁文件和跨包导入仍是后续工作。公开 API 的 Metadata/Selector 规则见 [versioning.md](versioning.md)。
