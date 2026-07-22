@@ -87,6 +87,37 @@ static void initializeLLVM() {
 
 namespace {
 
+#ifdef _WIN32
+// MinGW inserts a call to __main when lowering a function named `main` so a
+// native executable can run GCC-style global constructors. Luna JIT modules
+// contain no such CRT constructor tables, while the statically linked MinGW
+// implementation is not exported for ORC process lookup. This no-op provides
+// exactly the compiler-inserted support symbol required to materialize the JIT
+// entry point without depending on the host executable's export table.
+void lunaJitMingwMain() {}
+#endif
+
+struct MoonRuntimeSectionNames {
+    const char* descriptors;
+    const char* registry;
+};
+
+MoonRuntimeSectionNames moonRuntimeSectionNames() {
+    const llvm::Triple host(llvm::sys::getProcessTriple());
+    if (host.isOSBinFormatMachO()) {
+        // Mach-O section specifications require both a segment and a section;
+        // each component is limited to 16 bytes. Keep these stable because a
+        // future MoonRuntime loader will enumerate them directly.
+        return {"__DATA,__moon_desc", "__DATA,__moon_registry"};
+    }
+    if (host.isOSBinFormatCOFF()) {
+        // '$' suffixes are the conventional COFF subsection spelling and keep
+        // all Moon runtime records grouped deterministically by the linker.
+        return {".moon$D", ".moon$R"};
+    }
+    return {".moon.runtime.descriptor", ".moon.runtime.registry"};
+}
+
 // A non-negative bit-mask index is statically bounded: x & mask is always in
 // [0, mask], even when x is signed. The map contains exclusive upper bounds
 // for simple locals whose initializers established such a range. Preserve
@@ -452,6 +483,7 @@ void CodeGenerator::emitRuntimeDescriptors() {
         return address;
     };
 
+    const MoonRuntimeSectionNames runtimeSections = moonRuntimeSectionNames();
     std::vector<llvm::GlobalValue*> retainedGlobals;
     std::vector<llvm::Constant*> descriptorPointers;
     for (const auto& record : mProgram->declarationTable) {
@@ -541,7 +573,7 @@ void CodeGenerator::emitRuntimeDescriptors() {
         auto* descriptorGlobal = new llvm::GlobalVariable(
             *mModule, descriptorType, true, llvm::GlobalValue::InternalLinkage,
             descriptor, "__moon_descriptor_" + suffix);
-        descriptorGlobal->setSection(".moon.runtime.descriptor");
+        descriptorGlobal->setSection(runtimeSections.descriptors);
         retainedGlobals.push_back(descriptorGlobal);
         descriptorPointers.push_back(descriptorGlobal);
     }
@@ -559,7 +591,7 @@ void CodeGenerator::emitRuntimeDescriptors() {
     auto* registry = new llvm::GlobalVariable(
         *mModule, registryType, true, llvm::GlobalValue::ExternalLinkage,
         registryValue, registryName.str());
-    registry->setSection(".moon.runtime.registry");
+    registry->setSection(runtimeSections.registry);
     retainedGlobals.push_back(registry);
     llvm::appendToCompilerUsed(*mModule, retainedGlobals);
 }
@@ -2582,6 +2614,10 @@ int CodeGenerator::jitRun() {
     bindRuntime("rt_gpu_launch_ptx", &rt_gpu_launch_ptx);
     bindRuntime("rt_gpu_launch_hsaco", &rt_gpu_launch_hsaco);
     bindRuntime("rt_gpu_await_event", &rt_gpu_await_event);
+#ifdef _WIN32
+    runtimeSymbols[(*JIT)->mangleAndIntern("__main")] =
+        ExecutorSymbolDef::fromPtr(&lunaJitMingwMain, exported);
+#endif
     if (!runtimeSymbols.empty()) {
         if (auto err = (*JIT)->getMainJITDylib().define(
                 absoluteSymbols(std::move(runtimeSymbols)))) {
