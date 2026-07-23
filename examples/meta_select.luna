@@ -6,10 +6,20 @@ meta version {
     patch: i32;
 }
 
-// DeclarationView is compiler-owned and injected by `select`; callers only
-// provide the three explicit version fields.
+// The view is supplied by `select`, but it is a real iterable built-in value.
+// The selector body is ordinary user policy rather than a compiler AST pattern.
 fn choice(view: declaration_view, major: i32, minor: i32, patch: i32) -> declaration_ref {
-    return select_unique(view, version(major, minor, patch));
+    let fallback = declaration_at(view, 0);
+    for candidate in view {
+        for attached in metadata::<version>(candidate) {
+            if attached.major == major &&
+               attached.minor == minor &&
+               attached.patch == patch {
+                return candidate;
+            }
+        }
+    }
+    return fallback;
 }
 
 @version(1, 0, 0)

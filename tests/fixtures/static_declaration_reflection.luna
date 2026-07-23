@@ -1,0 +1,14 @@
+meta marker { value: i32; }
+
+@marker(7)
+fn answer(value: i32) -> i32 {
+    return value + 1;
+}
+
+fn main() -> i32 {
+    let known = declaration_of::<(i32) -> i32>(answer);
+    print(declaration_id(known));
+    print(declaration_signature(known));
+    if declaration_has_metadata::<marker>(known) { return 42; }
+    return 1;
+}

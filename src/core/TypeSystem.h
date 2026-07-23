@@ -20,7 +20,7 @@ enum class TypeKind {
     F32, F64, Bool, String, CStr, RawPointer, Unit,
     Struct, Record, Enum, Trait, TypeParam, Reference, Function, Slot, Fragment,
     DeviceBuffer, Event, Array, Slice,
-    Metadata, DeclarationView, DeclarationRef,
+    Metadata, MetadataView, DeclarationView, DeclarationRef,
     InferenceVar,
     Unknown
 };
@@ -154,6 +154,14 @@ struct Type {
         t->fields = std::move(schemaFields);
         return t;
     }
+    static TypePtr makeMetadataView(TypePtr metadata = nullptr) {
+        auto t = std::make_shared<Type>();
+        t->kind = TypeKind::MetadataView;
+        t->domain = luna::types::TypeDomain::Compiler;
+        t->identityMode = luna::types::IdentityMode::CompilerIntrinsic;
+        t->inner = std::move(metadata);
+        return t;
+    }
     static TypePtr makeDeclarationView(TypePtr callable = nullptr) {
         auto t = std::make_shared<Type>();
         t->kind = TypeKind::DeclarationView;
@@ -253,6 +261,8 @@ struct Type {
             case TypeKind::Slice: return "slice<" + (inner ? inner->toString() : "?") + ">";
             case TypeKind::Event: return "event";
             case TypeKind::Metadata: return "meta " + name;
+            case TypeKind::MetadataView:
+                return "metadata_view<" + (inner ? inner->toString() : "_") + ">";
             case TypeKind::DeclarationView:
                 return "declaration_view<" + (inner ? inner->toString() : "_") + ">";
             case TypeKind::DeclarationRef:

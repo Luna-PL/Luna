@@ -138,10 +138,11 @@ bool Verifier::verify(const Module& module) {
              type.identityMode != luna::types::IdentityMode::MetaSchema))
             error({}, "metadata type '" + type.id.value +
                       "' is outside the Meta type domain");
-        if ((type.kind == TypeKind::DeclarationView ||
+        if ((type.kind == TypeKind::MetadataView ||
+             type.kind == TypeKind::DeclarationView ||
              type.kind == TypeKind::DeclarationRef) &&
             type.domain != luna::types::TypeDomain::Compiler)
-            error({}, "declaration protocol type '" + type.id.value +
+            error({}, "compile-time view/reference type '" + type.id.value +
                       "' is outside the Compiler type domain");
         if (type.kind == TypeKind::Trait &&
             type.domain != luna::types::TypeDomain::Compiler)

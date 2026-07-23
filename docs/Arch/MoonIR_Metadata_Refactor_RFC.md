@@ -196,16 +196,23 @@ let f = @choice(1, 2, 2) func;
 ### 5.1 建议的内建边界类型
 
 ```luna
-compiler type DeclarationView<T>;
-compiler type DeclarationRef<T>;
-compiler type Selection<T>;
+compiler type declaration_view<T>;
+compiler type declaration_ref<T>;
+compiler type metadata_view<M>;
 ```
 
-- `DeclarationView<T>`：只读、有限、由编译器维护的候选列表视图。
-- `DeclarationRef<T>`：携带 declaration identity 的已验证引用。
-- `Selection<T>`：成功、无解或多解；编译器最终只接受唯一成功结果。
+- `declaration_view<T>`：只读、有限、可遍历的候选列表视图。
+- `declaration_ref<T>`：携带 declaration identity 的已验证引用。
+- `metadata_view<M>`：一个声明上指定 schema 的只读、有限、可遍历实例视图。
 
-编译器向 selector 隐式注入第一个 `DeclarationView<T>` 参数，使源码调用保持 `choice(1, 2, 2)`。Selector 本身仍是可独立类型检查和测试的普通函数。
+Selector 声明侧显式声明第一个 `declaration_view<T>` 参数；`select` 调用侧按公开
+协议提供该参数，使源码调用保持 `choice(1, 2, 2)`。视图不是只能传给
+`select_unique` 的占位对象：用户可以用普通 `for`、条件、局部绑定、辅助函数、
+Metadata 字段访问和静态声明反射实现策略，并直接返回输入视图中的
+`declaration_ref<T>`。`select_unique` 仅是可选便利原语。
+
+静态模型的冻结定义及 Constraint/Reflection 边界见
+[`Static_Meta_Select_Reflection_Constraint_RFC.md`](Static_Meta_Select_Reflection_Constraint_RFC.md)。
 
 ### 5.2 静态与动态 Select
 

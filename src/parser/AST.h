@@ -39,8 +39,18 @@ struct TraitRef : ASTNode {
 };
 
 struct WhereClause {
+    enum class Kind { TraitBound, Constraint };
+    Kind kind = Kind::TraitBound;
     std::string typeParam;
     TraitRef trait;
+    std::string constraintName;
+    std::vector<std::unique_ptr<TypeAST>> constraintTypeArgs;
+
+    WhereClause() = default;
+    WhereClause(WhereClause&&) noexcept = default;
+    WhereClause& operator=(WhereClause&&) noexcept = default;
+    WhereClause(const WhereClause&) = delete;
+    WhereClause& operator=(const WhereClause&) = delete;
 };
 
 // ─── Types (as AST nodes, used during parsing) ───────────────────────
@@ -241,6 +251,9 @@ struct CallExpr : Expr {
     bool returnsLinear = false;
     luna::ownership::Usage returnUsage = luna::ownership::Usage::Copy;
     std::optional<std::variant<int64_t, double, bool, std::string>> compileTimeValue;
+    // Static declaration reflection keeps identity in the frontend. It is
+    // erased after a surrounding reflection query or select is folded.
+    std::string compileTimeDeclarationId;
 };
 
 // A launch is an expression so the returned event can be held in a linear
@@ -327,9 +340,10 @@ struct AssignExpr : Expr {
     std::unique_ptr<Expr> rhs;
 };
 
-// A selector is an ordinary function. Semantic analysis injects a compiler-
-// owned DeclarationView as its hidden first argument and resolves this node to
-// one declaration identity before static MoonIR lowering.
+// A selector is an ordinary function over a real built-in DeclarationView.
+// The declaration writes that first parameter explicitly; the select
+// expression supplies the finite view according to the public protocol and
+// resolves the returned DeclarationRef before static MoonIR lowering.
 struct SelectExpr : Expr {
     struct DynamicFilterArgument {
         // Index into selectorArgs when the selector protocol forwards one of
@@ -407,6 +421,7 @@ struct FunctionDecl : Decl {
     bool isExtern = false;
     bool isConstexpr = false;
     bool isSelector = false;
+    bool isDynamicSelector = false;
     std::string abi;
     std::string linkName;
     std::vector<std::string> typeParams;
@@ -485,6 +500,14 @@ struct MetaDecl : Decl {
     };
     std::string name;
     std::vector<Field> fields;
+};
+
+// A named compile-time boolean predicate over types. Constraints have no
+// runtime representation; they are evaluated at generic instantiation sites.
+struct ConstraintDecl : Decl {
+    std::string name;
+    std::vector<std::string> typeParams;
+    std::unique_ptr<Expr> predicate;
 };
 
 struct Program : ASTNode {

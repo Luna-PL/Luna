@@ -26,14 +26,16 @@ struct Metadata {
 
 struct Candidate {
     std::string declarationId;
+    std::string symbolName;
     std::string familyId;
     TypePtr callableType;
     Retention retention = Retention::CompileTime;
     std::vector<Metadata> metadata;
 };
 
-// Compiler-owned, immutable view injected as a selector function's hidden
-// first argument. It never transfers declaration ownership to user code.
+// Immutable finite view supplied by a select expression through the public
+// selector protocol. Frontend built-ins expose iteration and reflection while
+// this component owns the view's membership/same-family invariants.
 class DeclarationView {
 public:
     explicit DeclarationView(std::vector<Candidate> candidates = {});
@@ -76,8 +78,8 @@ struct DynamicPlan {
 class Engine {
 public:
     // The ordinary selector function returns declaration identities. Engine
-    // applies the compiler-owned safety rules and accepts exactly one member
-    // of the injected view.
+    // enforces the public membership rule and accepts exactly one member of
+    // the supplied view.
     Result validate(const DeclarationView& view,
                     const std::vector<std::string>& returnedIds) const;
 

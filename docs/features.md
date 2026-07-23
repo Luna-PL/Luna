@@ -26,6 +26,9 @@ Structs and enums are structural by default. `nominal` creates an explicit
 identity boundary without conflating semantic identity with physical layout.
 Generics are instantiated for concrete uses, and ordinary static traits are
 resolved at compile time without a vtable or runtime trait lookup.
+Named `constraint` predicates provide a separate C++-concept-style boundary:
+they compose compile-time type propositions and are discharged at generic
+instantiation sites without entering MoonIR.
 
 Detailed design: [Types and identity](types.md) and
 [Type-system identity RFC](Arch/Type_System_Identity_RFC.md).
@@ -41,8 +44,10 @@ Detailed design: [Ownership and affine model](Arch/Ownership_Affine_Model_RFC.md
 
 ## Metadata and dynamic capability
 
-Metadata schemas are first-class declarations. Static `select` is resolved at
-compile time. Runtime visibility must be requested with `runtime`, while
+Metadata schemas are first-class declarations. Static `select` executes an
+ordinary user function over real iterable declaration/metadata views and is
+resolved at compile time. Known declarations can instead use direct static
+reflection without metadata or selection. Runtime visibility must be requested with `runtime`, while
 `dynamic select` and `dynamic apply` explicitly opt into runtime binding costs.
 Compile-time-only metadata is not silently retained.
 

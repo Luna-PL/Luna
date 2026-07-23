@@ -76,6 +76,8 @@ Features:
   • Templates / Generics (fn id<T>(x: T) -> T { x })
   • Trait constraints (fn sum<T: Addable>(a: T, b: T) -> T)
   • Where clauses (where T: Clone)
+  • Named compile-time constraints (constraint Small<T> = ...)
+  • Iterable static selector views and declaration reflection
   • Algebraic data types (struct Point { x: i32; }, enum Option<T> { ... })
   • Reverse-DNS packages with module/submodule source identities and explicit exports
   • Nominal ADT binding with structural fields and layouts

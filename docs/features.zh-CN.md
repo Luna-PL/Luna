@@ -21,6 +21,8 @@ MoonIR 未来还将作为可移植 Moon 容器和 MoonRuntime 的语言级安全
 结构体和枚举默认采用结构化身份，`nominal` 显式创建名义边界。语义类型身份不会
 和目标平台物理布局混为一谈。泛型按实际需要实例化，普通静态 trait 在编译期
 解析，不需要 vtable 或运行时 trait 查找。
+具名 `constraint` 谓词提供独立的 C++ concept 风格边界：用户可以组合编译期
+类型命题，编译器在泛型实例化点完成证明，constraint 不进入 MoonIR。
 
 具体设计：[类型与身份](types.md)和
 [类型系统身份 RFC](Arch/Type_System_Identity_RFC.md)。
@@ -35,9 +37,11 @@ event 会被检查器及 MoonIR 明确记录。
 
 ## Metadata 与动态能力
 
-Metadata schema 是一等声明。静态 `select` 在编译期完成；只有使用 `runtime`
-才保留运行时可见信息，`dynamic select` / `dynamic apply` 则显式承担运行时绑定
-成本。普通编译期 Metadata 不会被悄悄带入运行时。
+Metadata schema 是一等声明。静态 `select` 会在真实、可遍历的声明与 metadata
+视图上执行普通用户函数，并在编译期完成。对象已经可由名称和签名确定时，可以
+直接做静态声明反射，不需要 Metadata 或 Select。只有使用 `runtime` 才保留
+运行时可见信息，`dynamic select` / `dynamic apply` 则显式承担运行时绑定成本。
+普通编译期 Metadata 不会被悄悄带入运行时。
 
 具体说明：[Metadata 与 selector](versioning.md)。
 

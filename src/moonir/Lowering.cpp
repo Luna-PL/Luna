@@ -423,6 +423,9 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
     if (auto* block = dynamic_cast<const ::BlockStmt*>(statement)) {
         result = lowerBlock(block);
     } else if (auto* let = dynamic_cast<const ::LetStmt*>(statement)) {
+        if (let->inferredType &&
+            let->inferredType->kind == TypeKind::DeclarationRef)
+            return nullptr;
         auto value = std::make_unique<moon::LetStmt>();
         value->name = let->name;
         value->isConst = let->isConst;
@@ -615,8 +618,15 @@ std::unique_ptr<moon::FunctionDecl> LunaLowerer::lowerFunction(
 }
 
 std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
-    if (auto* function = dynamic_cast<const ::FunctionDecl*>(declaration))
+    if (auto* function = dynamic_cast<const ::FunctionDecl*>(declaration)) {
+        // A purely static selector has already reduced every use to a concrete
+        // declaration. Erase its compiler-only function and view types before
+        // MoonIR so the zero-cost rule is structural, not merely a backend
+        // optimization.
+        if (function->isSelector && !function->isDynamicSelector)
+            return nullptr;
         return lowerFunction(function);
+    }
     if (auto* fragment = dynamic_cast<const ::FragmentDecl*>(declaration)) {
         auto result = std::make_unique<moon::FragmentDecl>();
         result->location = locationOf(fragment);
@@ -755,6 +765,10 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         mModule->declarationTable.push_back(std::move(record));
         return nullptr;
     }
+    // Named constraints are fully discharged by semantic analysis. Keeping
+    // them out of MoonIR preserves the default zero-runtime-cost boundary.
+    if (dynamic_cast<const ::ConstraintDecl*>(declaration))
+        return nullptr;
     error(declaration, "unsupported declaration reached MoonIR lowering");
     return nullptr;
 }

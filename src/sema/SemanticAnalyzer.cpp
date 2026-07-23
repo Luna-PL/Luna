@@ -129,6 +129,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
     enterSlotScope();
     mFragments.clear();
     mMetadataSchemas.clear();
+    mConcepts.clear();
     mFunctionFamilies.clear();
     mQualifiedDeclarations.clear();
     mPackageAliases.clear();
@@ -164,6 +165,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
         else if (auto* e = dynamic_cast<EnumDecl*>(declaration)) name = e->name;
         else if (auto* t = dynamic_cast<TraitDecl*>(declaration)) name = t->name;
         else if (auto* m = dynamic_cast<MetaDecl*>(declaration)) name = m->name;
+        else if (auto* c = dynamic_cast<ConstraintDecl*>(declaration)) name = c->name;
         if (!name.empty()) ++linkageNameCounts[metadataDeclarationName(name, declaration)];
     }
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
@@ -177,6 +179,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
         else if (auto* e = dynamic_cast<EnumDecl*>(declaration)) name = e->name;
         else if (auto* t = dynamic_cast<TraitDecl*>(declaration)) name = t->name;
         else if (auto* m = dynamic_cast<MetaDecl*>(declaration)) name = m->name;
+        else if (auto* c = dynamic_cast<ConstraintDecl*>(declaration)) name = c->name;
         if (!name.empty()) {
             const std::string familyKey = qualifiedDeclarationKey(
                 mCurrentPackageId, mCurrentModulePath, name);
@@ -208,6 +211,17 @@ bool SemanticAnalyzer::analyze(Program* program) {
             setDeclarationContext(metadata);
             setDiagnosticLocation(metadata);
             declareMeta(metadata);
+        }
+    }
+    // Constraints are named compile-time predicates. Register all names
+    // before functions so where clauses and constraint composition are
+    // declaration-order independent.
+    for (size_t i = 0; i < sourceDeclarationCount; ++i) {
+        if (auto* concept =
+                dynamic_cast<ConstraintDecl*>(program->declarations[i].get())) {
+            setDeclarationContext(concept);
+            setDiagnosticLocation(concept);
+            declareConstraint(concept);
         }
     }
     // Bind every nominal name before resolving any field. This permits
@@ -288,6 +302,8 @@ bool SemanticAnalyzer::analyze(Program* program) {
         else if (auto* e = dynamic_cast<EnumDecl*>(decl.get())) analyzeEnum(e);
         else if (auto* i = dynamic_cast<ImplDecl*>(decl.get())) analyzeImpl(i);
         else if (auto* m = dynamic_cast<MetaDecl*>(decl.get())) analyzeMeta(m);
+        else if (auto* c = dynamic_cast<ConstraintDecl*>(decl.get()))
+            analyzeConstraint(c);
     }
     // Numeric constraints have a useful, deterministic default. Other
     // unresolved variables are diagnosed because silently turning them into
@@ -323,8 +339,24 @@ void SemanticAnalyzer::declareFunction(FunctionDecl* decl) {
     for (auto& tp : decl->typeParams) {
         bindings[tp] = Type::makeTypeParam(tp);
     }
-    for (auto& clause : decl->whereClauses)
-        resolveTraitRef(clause.trait, decl);
+    for (auto& clause : decl->whereClauses) {
+        if (clause.kind == WhereClause::Kind::TraitBound) {
+            resolveTraitRef(clause.trait, decl);
+            continue;
+        }
+        const std::string key = sourceDeclarationKey(clause.constraintName);
+        auto concept = mConcepts.find(key);
+        if (concept == mConcepts.end()) {
+            error("unknown constraint '" + clause.constraintName + "'",
+                  decl->line, decl->col);
+            continue;
+        }
+        clause.constraintName = key;
+        if (clause.constraintTypeArgs.size() != concept->second->typeParams.size())
+            error("constraint '" + concept->second->name + "' expects " +
+                  std::to_string(concept->second->typeParams.size()) +
+                  " type arguments", decl->line, decl->col);
+    }
     SymbolInfo info;
     info.kind = SymbolKind::Function;
     info.isExported = decl->isExported;
@@ -406,6 +438,39 @@ void SemanticAnalyzer::declareMeta(MetaDecl* decl) {
     if (!mSymTable.defineAtRoot(sourceKey, std::move(constructor)))
         error("metadata schema name '" + decl->name +
               "' conflicts with an existing declaration", decl->line, decl->col);
+}
+
+void SemanticAnalyzer::declareConstraint(ConstraintDecl* decl) {
+    if (!decl) return;
+    const std::string sourceKey = qualifiedDeclarationKey(
+        mCurrentPackageId, mCurrentModulePath, decl->name);
+    if (!mConcepts.emplace(sourceKey, decl).second) {
+        error("duplicate constraint '" + decl->name + "'", decl->line, decl->col);
+        return;
+    }
+    std::set<std::string> parameters;
+    for (const auto& parameter : decl->typeParams) {
+        if (!parameters.insert(parameter).second)
+            error("duplicate type parameter '" + parameter +
+                  "' in constraint '" + decl->name + "'", decl->line, decl->col);
+    }
+}
+
+void SemanticAnalyzer::analyzeConstraint(ConstraintDecl* decl) {
+    if (!decl || !decl->predicate) return;
+    mSymTable.enterScope();
+    for (const auto& parameter : decl->typeParams) {
+        SymbolInfo info;
+        info.kind = SymbolKind::TypeParam;
+        info.type = Type::makeTypeParam(parameter);
+        mSymTable.define(parameter, info);
+    }
+    TypePtr predicate = resolved(analyzeExpr(decl->predicate.get()));
+    if (predicate->kind != TypeKind::Bool &&
+        predicate->kind != TypeKind::InferenceVar)
+        error("constraint '" + decl->name +
+              "' predicate must have type bool", decl->line, decl->col);
+    mSymTable.exitScope();
 }
 
 void SemanticAnalyzer::analyzeMeta(MetaDecl* decl) {
@@ -1434,6 +1499,11 @@ TypePtr SemanticAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
         info.type = declaredType;
         info.isConst = ls->isConst;
         info.isHeapAllocated = isHeap || declaredType->isHeapType();
+        if (auto* reflected =
+                dynamic_cast<CallExpr*>(ls->initializer.get());
+            reflected && !reflected->compileTimeDeclarationId.empty())
+            info.compileTimeDeclarationId =
+                reflected->compileTimeDeclarationId;
         auto finalType = resolved(declaredType);
         ls->inferredType = finalType;
         if (ls->isLinear || dynamic_cast<LinearTypeAST*>(ls->typeAnnotation.get()))
@@ -1510,12 +1580,22 @@ TypePtr SemanticAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
         return TyUnit;
     }
     if (auto* fs = dynamic_cast<ForStmt*>(stmt)) {
-        // For simplicity, just analyze body; iterable type isn't checked deeply
-        analyzeExpr(fs->iterable.get());
+        TypePtr iterable = resolved(analyzeExpr(fs->iterable.get()));
+        TypePtr element = TyI32;
+        if (iterable->kind == TypeKind::DeclarationView)
+            element = Type::makeDeclarationRef(iterable->inner);
+        else if (iterable->kind == TypeKind::MetadataView)
+            element = iterable->inner;
+        else if (iterable->kind != TypeKind::Array &&
+                 iterable->kind != TypeKind::Slice)
+            error("for-loop requires an array, slice, declaration_view, or "
+                  "metadata_view", fs->line, fs->col);
+        else
+            element = iterable->inner;
         mSymTable.enterScope();
         SymbolInfo vi;
         vi.kind = SymbolKind::Variable;
-        vi.type = TyI32; // assume iterator yields i32 for now
+        vi.type = element;
         mSymTable.define(fs->varName, vi);
         analyzeBlock(fs->body.get(), expectedReturn);
         mSymTable.exitScope();
@@ -1724,7 +1804,9 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
         TypePtr objectType = resolved(analyzeExpr(fa->object.get()));
         if (objectType->kind == TypeKind::Reference && objectType->inner)
             objectType = resolved(objectType->inner);
-        if (objectType->kind != TypeKind::Struct && objectType->kind != TypeKind::Record) {
+        if (objectType->kind != TypeKind::Struct &&
+            objectType->kind != TypeKind::Record &&
+            objectType->kind != TypeKind::Metadata) {
             error("Field access requires a product type, got " + objectType->toString());
             return TyUnknown;
         }
@@ -1967,6 +2049,7 @@ TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
     }
 
     std::unordered_map<std::string, ConstValue> selectorLocals;
+    std::vector<ConstValue> staticSelectorArguments;
     for (size_t index = 0; index < selection->selectorArgs.size(); ++index) {
         constrain(analyzeExpr(selection->selectorArgs[index].get()),
                   selectorFunction->params[index + 1].inferredType,
@@ -1979,12 +2062,78 @@ TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
                 return TyUnknown;
             }
             selectorLocals[selectorFunction->params[index + 1].name] = *value;
+            staticSelectorArguments.push_back(*value);
         }
     }
 
-    // The initial selector evaluator supports the protocol primitive rather
-    // than any policy: user code decides which metadata value to construct,
-    // while select_unique performs membership and uniqueness validation.
+    if (!selection->isDynamic) {
+        TypePtr callableType;
+        std::vector<luna::selector::Candidate> candidates;
+        for (auto* candidate : targetFamily->second) {
+            TypeVec parameters;
+            std::vector<luna::ownership::Contract> contracts;
+            for (const auto& parameter : candidate->params) {
+                parameters.push_back(resolved(parameter.inferredType));
+                contracts.push_back({parameter.relation, parameter.usage});
+            }
+            auto candidateType = Type::makeFunction(
+                std::move(parameters), resolved(candidate->inferredReturnType),
+                std::move(contracts),
+                {luna::ownership::Relation::Owned, candidate->returnUsage});
+            if (!callableType) callableType = candidateType;
+            else if (!luna::types::sameType(callableType, candidateType)) {
+                error("declaration family '" + selection->targetName +
+                      "' contains incompatible callable signatures",
+                      selection->line, selection->col);
+                return TyUnknown;
+            }
+
+            luna::selector::Candidate viewCandidate;
+            viewCandidate.symbolName = candidate->generatedSymbolName.empty()
+                ? candidate->name : candidate->generatedSymbolName;
+            viewCandidate.declarationId = nominalDeclarationIdentity(
+                mProgram, "fn", viewCandidate.symbolName, candidate);
+            viewCandidate.familyId = selection->resolvedFamilyId;
+            viewCandidate.callableType = candidateType;
+            for (const auto& attachment : candidate->metadata) {
+                luna::selector::Metadata instance;
+                instance.schemaId = attachment.resolvedSchemaId;
+                instance.values = attachment.evaluatedArguments;
+                if (attachment.retention == RetentionKind::Runtime)
+                    instance.retention = luna::selector::Retention::Runtime;
+                else if (attachment.retention == RetentionKind::Dynamic)
+                    instance.retention = luna::selector::Retention::Dynamic;
+                viewCandidate.metadata.push_back(std::move(instance));
+            }
+            candidates.push_back(std::move(viewCandidate));
+        }
+
+        luna::selector::DeclarationView view(std::move(candidates));
+        std::string evaluationFailure;
+        auto selectedId = evaluateSelectorFunction(
+            selectorFunction, view, staticSelectorArguments, evaluationFailure);
+        luna::selector::Engine engine;
+        auto result = engine.validate(
+            view, selectedId ? std::vector<std::string>{*selectedId}
+                             : std::vector<std::string>{});
+        if (!selectedId || !result.success()) {
+            const std::string reason = !evaluationFailure.empty()
+                ? evaluationFailure : result.message;
+            error("selector '" + selection->selectorName +
+                  "' failed for family '" + selection->targetName + "': " +
+                  reason, selection->line, selection->col);
+            return TyUnknown;
+        }
+        selection->resolvedDeclarationId = result.selected->declarationId;
+        selection->resolvedSymbolName = result.selected->symbolName;
+        selection->selectedType = callableType;
+        selectorFunction->isSelector = true;
+        return callableType;
+    }
+
+    // The existing runtime protocol remains frozen until runtime/dynamic
+    // capabilities are specified. Static selection above no longer depends
+    // on this exact-match primitive.
     ReturnStmt* selectorReturn = nullptr;
     if (selectorFunction->body) {
         for (auto& statement : selectorFunction->body->stmts) {
@@ -2001,7 +2150,8 @@ TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
     if (!protocolName || protocolName->name != "select_unique" ||
         protocolCall->args.size() != 2) {
         error("selector function '" + selection->selectorName +
-              "' must return select_unique(view, metadata_value) in the initial selector protocol",
+              "' must use select_unique(view, metadata_value) in the "
+              "provisional dynamic exact-match protocol",
               selection->line, selection->col);
         return TyUnknown;
     }
@@ -2092,9 +2242,11 @@ TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
             return TyUnknown;
         }
         luna::selector::Candidate viewCandidate;
-        viewCandidate.declarationId = candidate->generatedSymbolName.empty()
+        viewCandidate.symbolName = candidate->generatedSymbolName.empty()
             ? candidate->name : candidate->generatedSymbolName;
-        viewCandidate.familyId = selection->targetName;
+        viewCandidate.declarationId = nominalDeclarationIdentity(
+            mProgram, "fn", viewCandidate.symbolName, candidate);
+        viewCandidate.familyId = selection->resolvedFamilyId;
         viewCandidate.callableType = candidateType;
         viewCandidate.retention = retention(candidate->retention);
         bool staticMatched = false;
@@ -2118,9 +2270,8 @@ TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
                     return TyUnknown;
                 }
                 SelectExpr::DynamicCandidate dynamicCandidate;
-                dynamicCandidate.declarationId = nominalDeclarationIdentity(
-                    mProgram, "fn", viewCandidate.declarationId, candidate);
-                dynamicCandidate.symbolName = viewCandidate.declarationId;
+                dynamicCandidate.declarationId = viewCandidate.declarationId;
+                dynamicCandidate.symbolName = viewCandidate.symbolName;
                 dynamicCandidate.metadataValues = attachment.evaluatedArguments;
                 selection->dynamicCandidates.push_back(std::move(dynamicCandidate));
             }
@@ -2187,6 +2338,7 @@ TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
         selection->resolvedSymbolName.clear();
         selection->selectedType = callableType;
         selectorFunction->isSelector = true;
+        selectorFunction->isDynamicSelector = true;
         return callableType;
     }
     auto result = engine.validate(view, matches);
@@ -2197,7 +2349,7 @@ TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
         return TyUnknown;
     }
     selection->resolvedDeclarationId = result.selected->declarationId;
-    selection->resolvedSymbolName = result.selected->declarationId;
+    selection->resolvedSymbolName = result.selected->symbolName;
     selection->selectedType = callableType;
     selectorFunction->isSelector = true;
     return callableType;
@@ -2220,6 +2372,86 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
         return selected->returnType;
     }
     if (id) {
+        if (id->name == "declaration_of" ||
+            id->name == "declaration_id" ||
+            id->name == "declaration_signature")
+            return analyzeDeclarationReflectionCall(call, id->name);
+        if (id->name == "declaration_count") {
+            if (call->args.size() != 1 ||
+                resolved(analyzeExpr(call->args.front().get()))->kind !=
+                    TypeKind::DeclarationView)
+                error("declaration_count expects one declaration_view",
+                      call->line, call->col);
+            return TyI32;
+        }
+        if (id->name == "declaration_at") {
+            if (call->args.size() != 2) {
+                error("declaration_at expects a declaration_view and an index",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            TypePtr view = resolved(analyzeExpr(call->args[0].get()));
+            requireInteger(analyzeExpr(call->args[1].get()),
+                           "declaration_at index");
+            if (view->kind != TypeKind::DeclarationView) {
+                error("first argument of declaration_at must be declaration_view",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            return Type::makeDeclarationRef(view->inner);
+        }
+        if (id->name == "metadata" ||
+            id->name == "declaration_has_metadata") {
+            if (call->typeArgASTs.size() != 1 || call->args.size() != 1) {
+                error(id->name +
+                      " expects one metadata type argument and one declaration_ref",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            TypePtr metadataType =
+                resolved(resolveTypeAST(call->typeArgASTs.front().get(), {}));
+            TypePtr declaration = resolved(analyzeExpr(call->args.front().get()));
+            if (metadataType->kind != TypeKind::Metadata)
+                error(id->name + " type argument must be a meta schema",
+                      call->line, call->col);
+            if (declaration->kind != TypeKind::DeclarationRef)
+                error(id->name + " value argument must be declaration_ref",
+                      call->line, call->col);
+            if (id->name == "declaration_has_metadata" &&
+                metadataType->kind == TypeKind::Metadata) {
+                std::string declarationId;
+                if (auto* reflected =
+                        dynamic_cast<CallExpr*>(call->args.front().get()))
+                    declarationId = reflected->compileTimeDeclarationId;
+                else if (auto* identifier = dynamic_cast<IdentifierExpr*>(
+                             call->args.front().get())) {
+                    if (auto* symbol = mSymTable.lookup(identifier->name))
+                        declarationId = symbol->compileTimeDeclarationId;
+                }
+                if (!declarationId.empty()) {
+                    bool attached = false;
+                    for (const auto& [familyName, family] : mFunctionFamilies) {
+                        for (auto* candidate : family) {
+                            const auto symbol =
+                                candidate->generatedSymbolName.empty()
+                                ? candidate->name
+                                : candidate->generatedSymbolName;
+                            if (nominalDeclarationIdentity(
+                                    mProgram, "fn", symbol, candidate) !=
+                                declarationId)
+                                continue;
+                            for (const auto& instance : candidate->metadata)
+                                if (instance.resolvedSchemaId ==
+                                    metadataType->nominalId)
+                                    attached = true;
+                        }
+                    }
+                    call->compileTimeValue = attached;
+                }
+            }
+            return id->name == "metadata"
+                ? Type::makeMetadataView(metadataType) : TyBool;
+        }
         auto* symbol = lookupSymbol(id->name);
         if (symbol && symbol->kind == SymbolKind::Metadata) {
             if (call->args.size() != symbol->paramTypes.size()) {
@@ -2248,6 +2480,21 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
                 error("second argument of select_unique must be a metadata value",
                       call->line, call->col);
             return Type::makeDeclarationRef(view->inner);
+        }
+        const std::string conceptKey = sourceDeclarationKey(id->name, false);
+        auto concept = mConcepts.find(conceptKey);
+        if (concept != mConcepts.end()) {
+            if (!call->args.empty() ||
+                call->typeArgASTs.size() != concept->second->typeParams.size()) {
+                error("constraint '" + concept->second->name + "' expects " +
+                      std::to_string(concept->second->typeParams.size()) +
+                      " type arguments and no value arguments",
+                      call->line, call->col);
+            } else {
+                for (auto& type : call->typeArgASTs)
+                    resolveTypeAST(type.get(), {});
+            }
+            return TyBool;
         }
     }
     if (id && (id->name == "type_of" || id->name == "type_kind" ||
@@ -2447,16 +2694,43 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
         if (concreteTypes.size() > sym->typeParams.size())
             concreteTypes.resize(sym->typeParams.size());
 
+        std::unordered_map<std::string, TypePtr> constraintBindings;
+        for (size_t index = 0;
+             index < sym->genericDecl->typeParams.size() &&
+             index < concreteTypes.size(); ++index)
+            constraintBindings[sym->genericDecl->typeParams[index]] =
+                resolved(concreteTypes[index]);
         for (auto& clause : sym->genericDecl->whereClauses) {
-            const std::string& tpName = clause.typeParam;
-            const std::string& traitId = clause.trait.resolvedTraitId;
-            for (size_t j = 0; j < sym->genericDecl->typeParams.size(); ++j) {
-                if (sym->genericDecl->typeParams[j] == tpName && j < concreteTypes.size()) {
-                    std::string typeName = typeIdentity(resolved(concreteTypes[j]));
-                    if (!satisfiesTrait(traitId, resolved(concreteTypes[j])))
-                        error("Type '" + typeName + "' does not satisfy trait '" +
-                              displayTraitRef(clause.trait) + "'");
+            if (clause.kind == WhereClause::Kind::TraitBound) {
+                const std::string& tpName = clause.typeParam;
+                const std::string& traitId = clause.trait.resolvedTraitId;
+                auto concrete = constraintBindings.find(tpName);
+                if (concrete != constraintBindings.end() &&
+                    !satisfiesTrait(traitId, concrete->second))
+                    error("Type '" + typeIdentity(concrete->second) +
+                          "' does not satisfy trait '" +
+                          displayTraitRef(clause.trait) + "'");
+                continue;
+            }
+
+            TypeVec conceptArguments;
+            for (auto& argument : clause.constraintTypeArgs)
+                conceptArguments.push_back(resolved(
+                    resolveTypeAST(argument.get(), constraintBindings)));
+            std::vector<std::string> activeConstraints;
+            auto satisfied = evaluateConstraint(
+                clause.constraintName, conceptArguments, activeConstraints);
+            if (!satisfied) {
+                error("constraint '" + clause.constraintName +
+                      "' is not compile-time evaluable");
+            } else if (!*satisfied) {
+                std::string types;
+                for (size_t index = 0; index < conceptArguments.size(); ++index) {
+                    if (index) types += ", ";
+                    types += conceptArguments[index]->toString();
                 }
+                error("constraint '" + clause.constraintName +
+                      "<" + types + ">' is not satisfied");
             }
         }
         auto* specialized = monomorphize(sym->genericDecl, concreteTypes);
@@ -2727,6 +3001,115 @@ TypePtr SemanticAnalyzer::analyzeReflectionCall(CallExpr* call, const std::strin
     return TyString;
 }
 
+TypePtr SemanticAnalyzer::analyzeDeclarationReflectionCall(
+    CallExpr* call, const std::string& name) {
+    if (name == "declaration_of") {
+        if (call->args.size() != 1) {
+            error("declaration_of expects exactly one declaration name",
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        auto* identifier =
+            dynamic_cast<IdentifierExpr*>(call->args.front().get());
+        if (!identifier) {
+            error("declaration_of requires a statically named declaration",
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        auto family = mFunctionFamilies.find(
+            sourceDeclarationKey(identifier->name));
+        if (family == mFunctionFamilies.end() || family->second.empty()) {
+            error("unknown declaration '" + identifier->name + "'",
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        TypePtr requested;
+        if (!call->typeArgASTs.empty()) {
+            if (call->typeArgASTs.size() != 1) {
+                error("declaration_of accepts at most one callable type argument",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            requested = resolved(
+                resolveTypeAST(call->typeArgASTs.front().get(), {}));
+            if (requested->kind != TypeKind::Function)
+                error("declaration_of type argument must be a callable type",
+                      call->line, call->col);
+        }
+
+        FunctionDecl* selected = nullptr;
+        TypePtr selectedType;
+        for (auto* candidate : family->second) {
+            TypeVec parameters;
+            std::vector<luna::ownership::Contract> contracts;
+            for (const auto& parameter : candidate->params) {
+                parameters.push_back(resolved(parameter.inferredType));
+                contracts.push_back({parameter.relation, parameter.usage});
+            }
+            TypePtr callable = Type::makeFunction(
+                std::move(parameters), resolved(candidate->inferredReturnType),
+                std::move(contracts),
+                {luna::ownership::Relation::Owned, candidate->returnUsage});
+            if (requested && !luna::types::sameType(requested, callable))
+                continue;
+            if (selected) {
+                error("declaration_of '" + identifier->name +
+                      "' is ambiguous; provide a unique callable signature "
+                      "or use select for an open declaration family",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            selected = candidate;
+            selectedType = callable;
+        }
+        if (!selected) {
+            error("declaration_of found no declaration matching the requested "
+                  "signature for '" + identifier->name + "'",
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        const auto symbol = selected->generatedSymbolName.empty()
+            ? selected->name : selected->generatedSymbolName;
+        call->compileTimeDeclarationId = nominalDeclarationIdentity(
+            mProgram, "fn", symbol, selected);
+        call->resolvedSymbolName = symbol;
+        return Type::makeDeclarationRef(selectedType);
+    }
+
+    if (call->args.size() != 1) {
+        error(name + " expects exactly one declaration_ref",
+              call->line, call->col);
+        return TyUnknown;
+    }
+    TypePtr reference = resolved(analyzeExpr(call->args.front().get()));
+    if (reference->kind != TypeKind::DeclarationRef) {
+        error(name + " expects a declaration_ref",
+              call->line, call->col);
+        return TyUnknown;
+    }
+    if (auto* nested =
+            dynamic_cast<CallExpr*>(call->args.front().get());
+        nested && !nested->compileTimeDeclarationId.empty()) {
+        if (name == "declaration_id")
+            call->compileTimeValue = nested->compileTimeDeclarationId;
+        else if (reference->inner)
+            call->compileTimeValue =
+                luna::types::typeId(reference->inner).value;
+    } else if (auto* identifier =
+                   dynamic_cast<IdentifierExpr*>(call->args.front().get())) {
+        auto* symbol = mSymTable.lookup(identifier->name);
+        if (symbol && !symbol->compileTimeDeclarationId.empty()) {
+            if (name == "declaration_id")
+                call->compileTimeValue =
+                    symbol->compileTimeDeclarationId;
+            else if (reference->inner)
+                call->compileTimeValue =
+                    luna::types::typeId(reference->inner).value;
+        }
+    }
+    return TyString;
+}
+
 void SemanticAnalyzer::enterConstScope() { mConstScopes.emplace_back(); }
 
 void SemanticAnalyzer::exitConstScope() {
@@ -2873,6 +3256,693 @@ bool SemanticAnalyzer::evaluateConstBlock(BlockStmt* block,
         }
     }
     return false;
+}
+
+std::optional<SemanticAnalyzer::ConstValue>
+SemanticAnalyzer::evaluateConstraintExpr(
+    Expr* expr, const std::unordered_map<std::string, TypePtr>& bindings,
+    std::vector<std::string>& active) {
+    if (!expr) return std::nullopt;
+    if (auto* value = dynamic_cast<IntLiteralExpr*>(expr)) return value->value;
+    if (auto* value = dynamic_cast<FloatLiteralExpr*>(expr)) return value->value;
+    if (auto* value = dynamic_cast<BoolLiteralExpr*>(expr)) return value->value;
+    if (auto* value = dynamic_cast<StringLiteralExpr*>(expr)) return value->value;
+    if (auto* identifier = dynamic_cast<IdentifierExpr*>(expr)) {
+        if (auto* value = lookupConst(identifier->name)) return *value;
+        return std::nullopt;
+    }
+    if (auto* unary = dynamic_cast<UnaryExpr*>(expr)) {
+        auto operand = evaluateConstraintExpr(unary->operand.get(), bindings, active);
+        if (!operand) return std::nullopt;
+        if (unary->op == TokenKind::Not) {
+            if (auto* value = std::get_if<bool>(&*operand)) return !*value;
+        }
+        if (unary->op == TokenKind::Minus) {
+            if (auto* value = std::get_if<int64_t>(&*operand)) return -*value;
+            if (auto* value = std::get_if<double>(&*operand)) return -*value;
+        }
+        return std::nullopt;
+    }
+    if (auto* binary = dynamic_cast<BinaryExpr*>(expr)) {
+        auto lhs = evaluateConstraintExpr(binary->lhs.get(), bindings, active);
+        if (!lhs) return std::nullopt;
+        if (binary->op == TokenKind::AndAnd) {
+            auto* boolean = std::get_if<bool>(&*lhs);
+            if (!boolean) return std::nullopt;
+            if (!*boolean) return false;
+        }
+        if (binary->op == TokenKind::OrOr) {
+            auto* boolean = std::get_if<bool>(&*lhs);
+            if (!boolean) return std::nullopt;
+            if (*boolean) return true;
+        }
+        auto rhs = evaluateConstraintExpr(binary->rhs.get(), bindings, active);
+        if (!rhs) return std::nullopt;
+        auto li = std::get_if<int64_t>(&*lhs);
+        auto ri = std::get_if<int64_t>(&*rhs);
+        if (li && ri) {
+            switch (binary->op) {
+                case TokenKind::Plus: return *li + *ri;
+                case TokenKind::Minus: return *li - *ri;
+                case TokenKind::Star: return *li * *ri;
+                case TokenKind::Slash: if (*ri != 0) return *li / *ri; break;
+                case TokenKind::Percent: if (*ri != 0) return *li % *ri; break;
+                case TokenKind::EqEq: return *li == *ri;
+                case TokenKind::Neq: return *li != *ri;
+                case TokenKind::Lt: return *li < *ri;
+                case TokenKind::LtEq: return *li <= *ri;
+                case TokenKind::Gt: return *li > *ri;
+                case TokenKind::GtEq: return *li >= *ri;
+                default: break;
+            }
+        }
+        auto lb = std::get_if<bool>(&*lhs);
+        auto rb = std::get_if<bool>(&*rhs);
+        if (lb && rb) {
+            if (binary->op == TokenKind::AndAnd) return *lb && *rb;
+            if (binary->op == TokenKind::OrOr) return *lb || *rb;
+            if (binary->op == TokenKind::EqEq) return *lb == *rb;
+            if (binary->op == TokenKind::Neq) return *lb != *rb;
+        }
+        auto ls = std::get_if<std::string>(&*lhs);
+        auto rs = std::get_if<std::string>(&*rhs);
+        if (ls && rs) {
+            if (binary->op == TokenKind::EqEq) return *ls == *rs;
+            if (binary->op == TokenKind::Neq) return *ls != *rs;
+        }
+        return std::nullopt;
+    }
+    auto* call = dynamic_cast<CallExpr*>(expr);
+    auto* callee = call
+        ? dynamic_cast<IdentifierExpr*>(call->callee.get()) : nullptr;
+    if (!call || !callee || !call->args.empty()) return std::nullopt;
+
+    const std::string conceptKey =
+        sourceDeclarationKey(callee->name, false);
+    if (mConcepts.count(conceptKey)) {
+        TypeVec arguments;
+        for (auto& argument : call->typeArgASTs)
+            arguments.push_back(resolved(
+                resolveTypeAST(argument.get(), bindings)));
+        auto value = evaluateConstraint(conceptKey, arguments, active);
+        return value ? std::optional<ConstValue>(*value) : std::nullopt;
+    }
+
+    auto resolveArgument = [&](size_t index) -> TypePtr {
+        if (index >= call->typeArgASTs.size()) return TyUnknown;
+        return resolved(resolveTypeAST(
+            call->typeArgASTs[index].get(), bindings));
+    };
+    const bool binaryRelation = callee->name == "type_same" ||
+        callee->name == "type_same_shape" ||
+        callee->name == "type_abi_compatible";
+    if (binaryRelation) {
+        if (call->typeArgASTs.size() != 2) return std::nullopt;
+        TypePtr lhs = resolveArgument(0);
+        TypePtr rhs = resolveArgument(1);
+        if (callee->name == "type_same")
+            return luna::types::sameType(lhs, rhs);
+        if (callee->name == "type_same_shape")
+            return luna::types::sameShape(lhs, rhs);
+        return luna::types::isAbiCompatible(lhs, rhs);
+    }
+    if (call->typeArgASTs.size() != 1) return std::nullopt;
+    TypePtr type = resolveArgument(0);
+    if (!type || type->kind == TypeKind::Unknown ||
+        type->kind == TypeKind::TypeParam ||
+        type->kind == TypeKind::InferenceVar)
+        return std::nullopt;
+    if (callee->name == "type_is_struct")
+        return type->kind == TypeKind::Struct;
+    if (callee->name == "type_is_enum")
+        return type->kind == TypeKind::Enum;
+    if (callee->name == "type_is_nominal")
+        return !type->nominalId.empty();
+    if (callee->name == "type_is_structural")
+        return type->identityMode == luna::types::IdentityMode::Structural;
+    if (callee->name == "type_is_meta")
+        return type->domain == luna::types::TypeDomain::Meta;
+    if (callee->name == "type_is_reference")
+        return type->kind == TypeKind::Reference;
+    if (callee->name == "type_field_count") {
+        if (type->kind != TypeKind::Struct &&
+            type->kind != TypeKind::Record)
+            return std::nullopt;
+        return static_cast<int64_t>(type->fields.size());
+    }
+    if (callee->name == "type_variant_count") {
+        if (type->kind != TypeKind::Enum) return std::nullopt;
+        return static_cast<int64_t>(type->variants.size());
+    }
+    if (callee->name == "type_id")
+        return luna::types::typeId(type).value;
+    if (callee->name == "type_shape")
+        return luna::types::shapeId(type).value;
+    if (callee->name == "type_size") {
+        std::function<int64_t(const TypePtr&)> sizeOf =
+            [&](const TypePtr& item) -> int64_t {
+            switch (item->kind) {
+                case TypeKind::I8: case TypeKind::U8:
+                case TypeKind::Bool: return 1;
+                case TypeKind::I16: case TypeKind::U16: return 2;
+                case TypeKind::I32: case TypeKind::U32:
+                case TypeKind::F32: return 4;
+                case TypeKind::I64: case TypeKind::U64:
+                case TypeKind::USize: case TypeKind::ISize:
+                case TypeKind::F64: case TypeKind::String:
+                case TypeKind::CStr: case TypeKind::RawPointer:
+                case TypeKind::Reference: return 8;
+                case TypeKind::Array:
+                    return static_cast<int64_t>(item->arrayLength) *
+                        sizeOf(item->inner);
+                case TypeKind::Struct: case TypeKind::Record: {
+                    int64_t total = 0;
+                    for (const auto& field : item->fields)
+                        total += sizeOf(field.type);
+                    return total;
+                }
+                case TypeKind::Enum: return 8;
+                default: return 0;
+            }
+        };
+        return sizeOf(type);
+    }
+    return std::nullopt;
+}
+
+std::optional<bool> SemanticAnalyzer::evaluateConstraint(
+    const std::string& name, const TypeVec& arguments,
+    std::vector<std::string>& active) {
+    auto found = mConcepts.find(name);
+    if (found == mConcepts.end()) {
+        const auto key = sourceDeclarationKey(name, false);
+        found = mConcepts.find(key);
+    }
+    if (found == mConcepts.end() ||
+        found->second->typeParams.size() != arguments.size())
+        return std::nullopt;
+    if (std::find(active.begin(), active.end(), found->first) != active.end())
+        return std::nullopt;
+    active.push_back(found->first);
+    std::unordered_map<std::string, TypePtr> bindings;
+    for (size_t index = 0; index < arguments.size(); ++index)
+        bindings[found->second->typeParams[index]] = arguments[index];
+    auto value = evaluateConstraintExpr(
+        found->second->predicate.get(), bindings, active);
+    active.pop_back();
+    if (!value) return std::nullopt;
+    if (auto* boolean = std::get_if<bool>(&*value)) return *boolean;
+    return std::nullopt;
+}
+
+std::optional<SemanticAnalyzer::SelectorValue>
+SemanticAnalyzer::evaluateSelectorExpr(
+    Expr* expr, std::unordered_map<std::string, SelectorValue>& locals) {
+    if (!expr) return std::nullopt;
+    if (auto* value = dynamic_cast<IntLiteralExpr*>(expr)) return value->value;
+    if (auto* value = dynamic_cast<FloatLiteralExpr*>(expr)) return value->value;
+    if (auto* value = dynamic_cast<BoolLiteralExpr*>(expr)) return value->value;
+    if (auto* value = dynamic_cast<StringLiteralExpr*>(expr)) return value->value;
+    if (auto* identifier = dynamic_cast<IdentifierExpr*>(expr)) {
+        auto local = locals.find(identifier->name);
+        if (local != locals.end()) return local->second;
+        if (auto* value = lookupConst(identifier->name))
+            return std::visit([](const auto& item) -> SelectorValue {
+                return item;
+            }, *value);
+        return std::nullopt;
+    }
+    if (auto* field = dynamic_cast<FieldAccessExpr*>(expr)) {
+        auto object = evaluateSelectorExpr(field->object.get(), locals);
+        auto* metadata = object
+            ? std::get_if<SelectorMetadataValue>(&*object) : nullptr;
+        if (!metadata) return std::nullopt;
+        for (const auto& [key, schema] : mMetadataSchemas) {
+            const auto symbol = schema->generatedSymbolName.empty()
+                ? schema->name : schema->generatedSymbolName;
+            if (nominalDeclarationIdentity(
+                    mProgram, "meta", symbol, schema) != metadata->schemaId)
+                continue;
+            for (size_t index = 0; index < schema->fields.size(); ++index) {
+                if (schema->fields[index].name != field->field ||
+                    index >= metadata->fields.size())
+                    continue;
+                return std::visit([](const auto& item) -> SelectorValue {
+                    return item;
+                }, metadata->fields[index]);
+            }
+        }
+        return std::nullopt;
+    }
+    if (auto* unary = dynamic_cast<UnaryExpr*>(expr)) {
+        auto operand = evaluateSelectorExpr(unary->operand.get(), locals);
+        if (!operand) return std::nullopt;
+        if (unary->op == TokenKind::Not) {
+            if (auto* value = std::get_if<bool>(&*operand)) return !*value;
+        } else if (unary->op == TokenKind::Minus) {
+            if (auto* value = std::get_if<int64_t>(&*operand)) return -*value;
+            if (auto* value = std::get_if<double>(&*operand)) return -*value;
+        } else if (unary->op == TokenKind::Tilde) {
+            if (auto* value = std::get_if<int64_t>(&*operand)) return ~*value;
+        }
+        return std::nullopt;
+    }
+    if (auto* binary = dynamic_cast<BinaryExpr*>(expr)) {
+        auto lhs = evaluateSelectorExpr(binary->lhs.get(), locals);
+        if (!lhs) return std::nullopt;
+        if (binary->op == TokenKind::AndAnd) {
+            auto* value = std::get_if<bool>(&*lhs);
+            if (!value) return std::nullopt;
+            if (!*value) return false;
+        } else if (binary->op == TokenKind::OrOr) {
+            auto* value = std::get_if<bool>(&*lhs);
+            if (!value) return std::nullopt;
+            if (*value) return true;
+        }
+        auto rhs = evaluateSelectorExpr(binary->rhs.get(), locals);
+        if (!rhs) return std::nullopt;
+        auto li = std::get_if<int64_t>(&*lhs);
+        auto ri = std::get_if<int64_t>(&*rhs);
+        if (li && ri) {
+            switch (binary->op) {
+                case TokenKind::Plus: return *li + *ri;
+                case TokenKind::Minus: return *li - *ri;
+                case TokenKind::Star: return *li * *ri;
+                case TokenKind::Slash: if (*ri != 0) return *li / *ri; break;
+                case TokenKind::Percent: if (*ri != 0) return *li % *ri; break;
+                case TokenKind::EqEq: return *li == *ri;
+                case TokenKind::Neq: return *li != *ri;
+                case TokenKind::Lt: return *li < *ri;
+                case TokenKind::LtEq: return *li <= *ri;
+                case TokenKind::Gt: return *li > *ri;
+                case TokenKind::GtEq: return *li >= *ri;
+                case TokenKind::Ampersand: return *li & *ri;
+                case TokenKind::BitOr: return *li | *ri;
+                case TokenKind::BitXor: return *li ^ *ri;
+                default: break;
+            }
+        }
+        auto lf = std::get_if<double>(&*lhs);
+        auto rf = std::get_if<double>(&*rhs);
+        if (lf && rf) {
+            switch (binary->op) {
+                case TokenKind::Plus: return *lf + *rf;
+                case TokenKind::Minus: return *lf - *rf;
+                case TokenKind::Star: return *lf * *rf;
+                case TokenKind::Slash: if (*rf != 0.0) return *lf / *rf; break;
+                case TokenKind::EqEq: return *lf == *rf;
+                case TokenKind::Neq: return *lf != *rf;
+                case TokenKind::Lt: return *lf < *rf;
+                case TokenKind::LtEq: return *lf <= *rf;
+                case TokenKind::Gt: return *lf > *rf;
+                case TokenKind::GtEq: return *lf >= *rf;
+                default: break;
+            }
+        }
+        auto lb = std::get_if<bool>(&*lhs);
+        auto rb = std::get_if<bool>(&*rhs);
+        if (lb && rb) {
+            if (binary->op == TokenKind::AndAnd) return *lb && *rb;
+            if (binary->op == TokenKind::OrOr) return *lb || *rb;
+            if (binary->op == TokenKind::EqEq) return *lb == *rb;
+            if (binary->op == TokenKind::Neq) return *lb != *rb;
+        }
+        auto ls = std::get_if<std::string>(&*lhs);
+        auto rs = std::get_if<std::string>(&*rhs);
+        if (ls && rs) {
+            if (binary->op == TokenKind::EqEq) return *ls == *rs;
+            if (binary->op == TokenKind::Neq) return *ls != *rs;
+            if (binary->op == TokenKind::Lt) return *ls < *rs;
+            if (binary->op == TokenKind::LtEq) return *ls <= *rs;
+            if (binary->op == TokenKind::Gt) return *ls > *rs;
+            if (binary->op == TokenKind::GtEq) return *ls >= *rs;
+        }
+        return std::nullopt;
+    }
+    if (auto* assignment = dynamic_cast<AssignExpr*>(expr)) {
+        auto* identifier = dynamic_cast<IdentifierExpr*>(assignment->lhs.get());
+        if (!identifier || !locals.count(identifier->name)) return std::nullopt;
+        auto value = evaluateSelectorExpr(assignment->rhs.get(), locals);
+        if (!value) return std::nullopt;
+        if (assignment->op == TokenKind::Eq) {
+            locals[identifier->name] = *value;
+            return *value;
+        }
+        const TokenKind operation =
+            assignment->op == TokenKind::PlusEq ? TokenKind::Plus :
+            assignment->op == TokenKind::MinusEq ? TokenKind::Minus :
+            assignment->op == TokenKind::StarEq ? TokenKind::Star :
+            assignment->op == TokenKind::SlashEq ? TokenKind::Slash :
+            TokenKind::Percent;
+        auto current = locals[identifier->name];
+        auto li = std::get_if<int64_t>(&current);
+        auto ri = std::get_if<int64_t>(&*value);
+        if (!li || !ri) return std::nullopt;
+        int64_t updated = *li;
+        if (operation == TokenKind::Plus) updated += *ri;
+        else if (operation == TokenKind::Minus) updated -= *ri;
+        else if (operation == TokenKind::Star) updated *= *ri;
+        else if (operation == TokenKind::Slash && *ri != 0) updated /= *ri;
+        else if (operation == TokenKind::Percent && *ri != 0) updated %= *ri;
+        else return std::nullopt;
+        locals[identifier->name] = updated;
+        return updated;
+    }
+    if (auto* call = dynamic_cast<CallExpr*>(expr)) {
+        auto* callee = dynamic_cast<IdentifierExpr*>(call->callee.get());
+        if (!callee) return std::nullopt;
+        if (callee->name == "declaration_of" && call->args.size() == 1) {
+            auto* target =
+                dynamic_cast<IdentifierExpr*>(call->args.front().get());
+            if (!target) return std::nullopt;
+            auto family = mFunctionFamilies.find(
+                sourceDeclarationKey(target->name, false));
+            if (family == mFunctionFamilies.end()) return std::nullopt;
+            TypePtr requested;
+            if (call->typeArgASTs.size() == 1)
+                requested = resolved(resolveTypeAST(
+                    call->typeArgASTs.front().get(), {}));
+            FunctionDecl* selected = nullptr;
+            for (auto* candidate : family->second) {
+                TypeVec parameters;
+                std::vector<luna::ownership::Contract> contracts;
+                for (const auto& parameter : candidate->params) {
+                    parameters.push_back(resolved(parameter.inferredType));
+                    contracts.push_back(
+                        {parameter.relation, parameter.usage});
+                }
+                TypePtr callable = Type::makeFunction(
+                    std::move(parameters),
+                    resolved(candidate->inferredReturnType),
+                    std::move(contracts),
+                    {luna::ownership::Relation::Owned,
+                     candidate->returnUsage});
+                if (requested &&
+                    !luna::types::sameType(requested, callable))
+                    continue;
+                if (selected) return std::nullopt;
+                selected = candidate;
+            }
+            if (!selected) return std::nullopt;
+            const auto symbol = selected->generatedSymbolName.empty()
+                ? selected->name : selected->generatedSymbolName;
+            return SelectorDeclarationValue{
+                nominalDeclarationIdentity(
+                    mProgram, "fn", symbol, selected)};
+        }
+        std::vector<SelectorValue> arguments;
+        for (auto& argument : call->args) {
+            auto value = evaluateSelectorExpr(argument.get(), locals);
+            if (!value) return std::nullopt;
+            arguments.push_back(std::move(*value));
+        }
+        if (callee->name == "declaration_count" && arguments.size() == 1) {
+            auto* view = std::get_if<SelectorDeclarationViewValue>(&arguments[0]);
+            if (view) return static_cast<int64_t>(view->declarationIds.size());
+            return std::nullopt;
+        }
+        if (callee->name == "declaration_at" && arguments.size() == 2) {
+            auto* view = std::get_if<SelectorDeclarationViewValue>(&arguments[0]);
+            auto* index = std::get_if<int64_t>(&arguments[1]);
+            if (!view || !index || *index < 0 ||
+                static_cast<size_t>(*index) >= view->declarationIds.size())
+                return std::nullopt;
+            return SelectorDeclarationValue{
+                view->declarationIds[static_cast<size_t>(*index)]};
+        }
+        if ((callee->name == "declaration_id" ||
+             callee->name == "declaration_signature") &&
+            arguments.size() == 1) {
+            auto* declaration =
+                std::get_if<SelectorDeclarationValue>(&arguments[0]);
+            if (!declaration) return std::nullopt;
+            if (callee->name == "declaration_id")
+                return declaration->declarationId;
+            const auto* candidate = mActiveSelectorView
+                ? mActiveSelectorView->find(declaration->declarationId) : nullptr;
+            if (!candidate || !candidate->callableType)
+                return std::nullopt;
+            return SelectorValue(
+                luna::types::typeId(candidate->callableType).value);
+        }
+        if ((callee->name == "metadata" ||
+             callee->name == "declaration_has_metadata") &&
+            arguments.size() == 1 && call->typeArgASTs.size() == 1) {
+            auto* declaration =
+                std::get_if<SelectorDeclarationValue>(&arguments[0]);
+            if (!declaration || !mActiveSelectorView) return std::nullopt;
+            TypePtr schema = resolved(
+                resolveTypeAST(call->typeArgASTs.front().get(), {}));
+            const auto* candidate =
+                mActiveSelectorView->find(declaration->declarationId);
+            if (!candidate || schema->kind != TypeKind::Metadata)
+                return std::nullopt;
+            SelectorMetadataViewValue matches;
+            for (const auto& metadata : candidate->metadata) {
+                if (metadata.schemaId == schema->nominalId)
+                    matches.values.push_back(
+                        {metadata.schemaId, metadata.values});
+            }
+            if (callee->name == "declaration_has_metadata")
+                return !matches.values.empty();
+            return matches;
+        }
+        if (callee->name == "select_unique" && arguments.size() == 2) {
+            auto* view = std::get_if<SelectorDeclarationViewValue>(&arguments[0]);
+            auto* wanted = std::get_if<SelectorMetadataValue>(&arguments[1]);
+            if (!view || !wanted || !mActiveSelectorView) return std::nullopt;
+            std::optional<std::string> match;
+            for (const auto& id : view->declarationIds) {
+                const auto* candidate = mActiveSelectorView->find(id);
+                if (!candidate) continue;
+                for (const auto& metadata : candidate->metadata) {
+                    if (metadata.schemaId != wanted->schemaId ||
+                        metadata.values != wanted->fields)
+                        continue;
+                    if (match) return std::nullopt;
+                    match = id;
+                }
+            }
+            return SelectorDeclarationValue{match ? *match : std::string()};
+        }
+        const std::string metadataKey =
+            sourceDeclarationKey(callee->name, false);
+        auto metadata = mMetadataSchemas.find(metadataKey);
+        if (metadata != mMetadataSchemas.end()) {
+            std::vector<ConstValue> fields;
+            for (const auto& argument : arguments) {
+                if (auto* value = std::get_if<int64_t>(&argument))
+                    fields.push_back(*value);
+                else if (auto* value = std::get_if<double>(&argument))
+                    fields.push_back(*value);
+                else if (auto* value = std::get_if<bool>(&argument))
+                    fields.push_back(*value);
+                else if (auto* value = std::get_if<std::string>(&argument))
+                    fields.push_back(*value);
+                else return std::nullopt;
+            }
+            const auto symbol = metadata->second->generatedSymbolName.empty()
+                ? metadata->second->name
+                : metadata->second->generatedSymbolName;
+            return SelectorMetadataValue{
+                nominalDeclarationIdentity(
+                    mProgram, "meta", symbol, metadata->second),
+                std::move(fields)};
+        }
+        auto function = mFunctionFamilies.find(
+            sourceDeclarationKey(callee->name, false));
+        if (function == mFunctionFamilies.end() ||
+            function->second.size() != 1 ||
+            !function->second.front()->isConstexpr ||
+            function->second.front()->params.size() != arguments.size())
+            return std::nullopt;
+        if (++mConstEvaluationDepth > 128) {
+            --mConstEvaluationDepth;
+            return std::nullopt;
+        }
+        std::unordered_map<std::string, SelectorValue> functionLocals;
+        for (size_t index = 0; index < arguments.size(); ++index)
+            functionLocals[function->second.front()->params[index].name] =
+                arguments[index];
+        std::optional<SelectorValue> result;
+        bool returned = false;
+        const bool evaluated = evaluateSelectorBlock(
+                function->second.front()->body.get(), functionLocals,
+                result, returned);
+        --mConstEvaluationDepth;
+        if (!evaluated || !returned)
+            return std::nullopt;
+        return result;
+    }
+    return std::nullopt;
+}
+
+bool SemanticAnalyzer::evaluateSelectorBlock(
+    BlockStmt* block, std::unordered_map<std::string, SelectorValue>& locals,
+    std::optional<SelectorValue>& result, bool& returned) {
+    if (!block) return false;
+    for (auto& statement : block->stmts) {
+        if (auto* binding = dynamic_cast<LetStmt*>(statement.get())) {
+            auto value = evaluateSelectorExpr(binding->initializer.get(), locals);
+            if (!value) return false;
+            locals[binding->name] = std::move(*value);
+        } else if (auto* ret = dynamic_cast<ReturnStmt*>(statement.get())) {
+            if (!ret->value) return false;
+            result = evaluateSelectorExpr(ret->value.get(), locals);
+            returned = result.has_value();
+            return returned;
+        } else if (auto* conditional =
+                       dynamic_cast<IfStmt*>(statement.get())) {
+            auto condition =
+                evaluateSelectorExpr(conditional->cond.get(), locals);
+            auto* boolean = condition
+                ? std::get_if<bool>(&*condition) : nullptr;
+            if (!boolean) return false;
+            if (*boolean) {
+                if (!evaluateSelectorBlock(
+                        conditional->thenBlock.get(), locals, result, returned))
+                    return false;
+            } else if (conditional->elseBranch) {
+                if (auto* block = dynamic_cast<BlockStmt*>(
+                        conditional->elseBranch.get())) {
+                    if (!evaluateSelectorBlock(
+                            block, locals, result, returned))
+                        return false;
+                } else {
+                    auto wrapper = dynamic_cast<IfStmt*>(
+                        conditional->elseBranch.get());
+                    if (!wrapper) return false;
+                    auto conditionValue =
+                        evaluateSelectorExpr(wrapper->cond.get(), locals);
+                    auto* nested = conditionValue
+                        ? std::get_if<bool>(&*conditionValue) : nullptr;
+                    if (!nested) return false;
+                    if (*nested && !evaluateSelectorBlock(
+                            wrapper->thenBlock.get(), locals, result, returned))
+                        return false;
+                    if (!*nested && wrapper->elseBranch) {
+                        auto* nestedElse = dynamic_cast<BlockStmt*>(
+                            wrapper->elseBranch.get());
+                        if (!nestedElse || !evaluateSelectorBlock(
+                                nestedElse, locals, result, returned))
+                            return false;
+                    }
+                }
+            }
+            if (returned) return true;
+        } else if (auto* loop = dynamic_cast<ForStmt*>(statement.get())) {
+            auto iterable =
+                evaluateSelectorExpr(loop->iterable.get(), locals);
+            if (!iterable) return false;
+            std::vector<SelectorValue> elements;
+            if (auto* declarations =
+                    std::get_if<SelectorDeclarationViewValue>(&*iterable)) {
+                for (const auto& id : declarations->declarationIds)
+                    elements.push_back(SelectorDeclarationValue{id});
+            } else if (auto* metadata =
+                           std::get_if<SelectorMetadataViewValue>(&*iterable)) {
+                for (const auto& value : metadata->values)
+                    elements.push_back(value);
+            } else {
+                return false;
+            }
+            auto previous = locals.find(loop->varName);
+            std::optional<SelectorValue> saved =
+                previous == locals.end()
+                ? std::nullopt
+                : std::optional<SelectorValue>(previous->second);
+            for (auto& element : elements) {
+                locals[loop->varName] = std::move(element);
+                if (!evaluateSelectorBlock(
+                        loop->body.get(), locals, result, returned))
+                    return false;
+                if (returned) return true;
+            }
+            if (saved) locals[loop->varName] = *saved;
+            else locals.erase(loop->varName);
+        } else if (auto* loop = dynamic_cast<WhileStmt*>(statement.get())) {
+            for (size_t iteration = 0; iteration < 10000; ++iteration) {
+                auto condition =
+                    evaluateSelectorExpr(loop->cond.get(), locals);
+                auto* boolean = condition
+                    ? std::get_if<bool>(&*condition) : nullptr;
+                if (!boolean) return false;
+                if (!*boolean) break;
+                if (!evaluateSelectorBlock(
+                        loop->body.get(), locals, result, returned))
+                    return false;
+                if (returned) return true;
+                if (iteration == 9999) return false;
+            }
+        } else if (auto* expression =
+                       dynamic_cast<ExprStmt*>(statement.get())) {
+            if (!evaluateSelectorExpr(expression->expr.get(), locals))
+                return false;
+        } else {
+            return false;
+        }
+    }
+    return true;
+}
+
+std::optional<std::string> SemanticAnalyzer::evaluateSelectorFunction(
+    FunctionDecl* function, const luna::selector::DeclarationView& view,
+    const std::vector<ConstValue>& arguments, std::string& failure) {
+    failure.clear();
+    if (!function || function->params.size() != arguments.size() + 1) {
+        failure = "selector invocation does not match its declaration";
+        return std::nullopt;
+    }
+    std::unordered_map<std::string, SelectorValue> locals;
+    SelectorDeclarationViewValue input;
+    for (const auto& candidate : view.candidates())
+        input.declarationIds.push_back(candidate.declarationId);
+    locals[function->params.front().name] = std::move(input);
+    for (size_t index = 0; index < arguments.size(); ++index) {
+        locals[function->params[index + 1].name] =
+            std::visit([](const auto& item) -> SelectorValue {
+                return item;
+            }, arguments[index]);
+    }
+    const auto* previousView = mActiveSelectorView;
+    const std::string previousPackage = mCurrentPackageId;
+    const std::string previousModule = mCurrentModulePath;
+    setDeclarationContext(function);
+    mActiveSelectorView = &view;
+    if (++mConstEvaluationDepth > 128) {
+        --mConstEvaluationDepth;
+        mActiveSelectorView = previousView;
+        mCurrentPackageId = previousPackage;
+        mCurrentModulePath = previousModule;
+        failure = "selector recursion depth exceeded 128";
+        return std::nullopt;
+    }
+    std::optional<SelectorValue> result;
+    bool returned = false;
+    const bool evaluated = evaluateSelectorBlock(
+        function->body.get(), locals, result, returned);
+    --mConstEvaluationDepth;
+    mActiveSelectorView = previousView;
+    mCurrentPackageId = previousPackage;
+    mCurrentModulePath = previousModule;
+    if (!evaluated) {
+        failure = "selector body is not compile-time evaluable";
+        return std::nullopt;
+    }
+    if (!returned || !result) {
+        failure = "selector returned no declaration";
+        return std::nullopt;
+    }
+    auto* declaration = std::get_if<SelectorDeclarationValue>(&*result);
+    if (!declaration) {
+        failure = "selector result is not a declaration_ref";
+        return std::nullopt;
+    }
+    if (declaration->declarationId.empty()) {
+        failure = "selector returned no legal declaration";
+        return std::nullopt;
+    }
+    return declaration->declarationId;
 }
 
 FunctionDecl* SemanticAnalyzer::findMatchingImpl(const std::string& traitName,
@@ -3147,6 +4217,9 @@ TypePtr SemanticAnalyzer::resolveTypeAST(const TypeAST* ast,
         if (named->resolvedType) return named->resolvedType;
         auto bound = bindings.find(named->name);
         if (bound != bindings.end()) return bound->second;
+        if (auto* symbol = mSymTable.lookup(named->name);
+            symbol && symbol->kind == SymbolKind::TypeParam && symbol->type)
+            return symbol->type;
         if (named->name == "i32") return TyI32;
         if (named->name == "i64") return TyI64;
         if (named->name == "i8") return TyI8;
@@ -3193,6 +4266,19 @@ TypePtr SemanticAnalyzer::resolveTypeAST(const TypeAST* ast,
             return Type::makeSlice(resolveTypeAST(named->typeArgs[0].get(), bindings));
         }
         if (named->name == "event") return TyEvent;
+        if (named->name == "metadata_view") {
+            if (named->typeArgs.size() != 1) {
+                error("metadata_view<M> requires exactly one metadata type",
+                      named->line, named->col);
+                return TyUnknown;
+            }
+            TypePtr metadata = resolveTypeAST(
+                named->typeArgs.front().get(), bindings);
+            if (resolved(metadata)->kind != TypeKind::Metadata)
+                error("metadata_view type argument must be a meta schema",
+                      named->line, named->col);
+            return Type::makeMetadataView(metadata);
+        }
         if (named->name == "declaration_view") {
             if (named->typeArgs.size() > 1) {
                 error("declaration_view accepts at most one callable type argument",
@@ -3553,6 +4639,8 @@ void SemanticAnalyzer::error(const std::string& msg, int line, int col) {
         hint = "bitwise operators (`&`, `|`, `^`, `~`) and shifts (`<<`, `>>`) only accept integer operands";
     else if (msg.find("const binding") != std::string::npos)
         hint = "use literals, other const bindings, reflection queries, or a `constexpr fn` call with compile-time arguments";
+    else if (msg.find("constraint '") != std::string::npos)
+        hint = "constraint predicates must be compile-time bool expressions and must hold for every concrete generic instantiation";
     else if (msg.find("type_") != std::string::npos && msg.find("requires") != std::string::npos)
         hint = "pass a valid type with `<Type>()`; metadata indexes must be non-negative compile-time integers";
     mErrors.push_back(diagnostic::format(

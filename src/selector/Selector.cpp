@@ -47,7 +47,7 @@ Result Engine::validate(const DeclarationView& view,
     const auto* selected = view.find(returnedIds.front());
     if (!selected)
         return {ResultKind::InvalidCandidate, std::nullopt,
-                "selector returned a declaration outside its injected candidate view"};
+                "selector returned a declaration outside its supplied candidate view"};
     return {ResultKind::Unique, *selected, {}};
 }
 

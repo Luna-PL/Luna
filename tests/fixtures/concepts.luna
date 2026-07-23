@@ -1,0 +1,13 @@
+constraint SmallValue<T> =
+    type_size::<T>() <= 8;
+
+constraint PlainSmallValue<T> =
+    !type_is_meta::<T>() && SmallValue::<T>();
+
+fn keep<T>(value: T) -> T where PlainSmallValue<T> {
+    return value;
+}
+
+fn main() -> i32 {
+    return keep(42);
+}

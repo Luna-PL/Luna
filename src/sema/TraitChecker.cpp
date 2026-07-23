@@ -69,6 +69,7 @@ void TraitChecker::checkConcreteFunction(FunctionDecl* decl) {
     if (decl->whereClauses.empty()) return;
 
     for (auto& clause : decl->whereClauses) {
+        if (clause.kind != WhereClause::Kind::TraitBound) continue;
         const std::string& typeParamName = clause.typeParam;
         const std::string& traitId = clause.trait.resolvedTraitId;
         if (traitId.empty()) {

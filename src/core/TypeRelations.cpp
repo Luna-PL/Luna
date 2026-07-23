@@ -78,6 +78,7 @@ const char* kindName(TypeKind kind) {
         case TypeKind::Array: return "array";
         case TypeKind::Slice: return "slice";
         case TypeKind::Metadata: return "metadata";
+        case TypeKind::MetadataView: return "metadata_view";
         case TypeKind::DeclarationView: return "declaration_view";
         case TypeKind::DeclarationRef: return "declaration_ref";
         case TypeKind::InferenceVar: return "inference_var";
@@ -125,6 +126,7 @@ std::string canonicalShapeImpl(
         case TypeKind::RawPointer:
         case TypeKind::DeviceBuffer:
         case TypeKind::Slice:
+        case TypeKind::MetadataView:
         case TypeKind::DeclarationView:
         case TypeKind::DeclarationRef:
             appendType(type->inner);
@@ -194,7 +196,8 @@ std::string canonicalIdentityImpl(const TypePtr& type) {
             appendPart(result, std::to_string(type->inferenceId));
         if (type->kind == TypeKind::TypeParam)
             appendPart(result, type->name);
-        if ((type->kind == TypeKind::DeclarationView ||
+        if ((type->kind == TypeKind::MetadataView ||
+             type->kind == TypeKind::DeclarationView ||
              type->kind == TypeKind::DeclarationRef) && type->inner)
             appendPart(result, canonicalIdentityImpl(type->inner));
         return result;

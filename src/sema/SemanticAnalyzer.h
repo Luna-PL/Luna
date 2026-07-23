@@ -21,8 +21,13 @@ struct EnumDecl;
 struct TraitDecl;
 struct ImplDecl;
 struct MetaDecl;
+struct ConstraintDecl;
 struct SelectExpr;
 struct ASTNode;
+
+namespace luna::selector {
+class DeclarationView;
+}
 
 class SemanticAnalyzer {
 public:
@@ -33,6 +38,25 @@ public:
     SymbolTable& symTable() { return mSymTable; }
 
 private:
+    using ConstValue = std::variant<int64_t, double, bool, std::string>;
+    struct SelectorDeclarationValue {
+        std::string declarationId;
+    };
+    struct SelectorMetadataValue {
+        std::string schemaId;
+        std::vector<ConstValue> fields;
+    };
+    struct SelectorDeclarationViewValue {
+        std::vector<std::string> declarationIds;
+    };
+    struct SelectorMetadataViewValue {
+        std::vector<SelectorMetadataValue> values;
+    };
+    using SelectorValue = std::variant<
+        int64_t, double, bool, std::string,
+        SelectorDeclarationValue, SelectorMetadataValue,
+        SelectorDeclarationViewValue, SelectorMetadataViewValue>;
+
     TypePtr resolveTypeAST(const TypeAST* ast,
                            const std::unordered_map<std::string, TypePtr>& bindings);
 
@@ -43,6 +67,7 @@ private:
     void declareImpl(ImplDecl* decl);
     void declareFragment(FragmentDecl* decl);
     void declareMeta(MetaDecl* decl);
+    void declareConstraint(ConstraintDecl* decl);
     void validateFFIFunction(FunctionDecl* decl);
     bool isFFIType(const TypePtr& type, const std::string& context);
 
@@ -52,6 +77,7 @@ private:
     void analyzeTrait(TraitDecl* decl);
     void analyzeImpl(ImplDecl* decl);
     void analyzeMeta(MetaDecl* decl);
+    void analyzeConstraint(ConstraintDecl* decl);
     void validateMetadata(Decl* decl);
     void analyzeSlotDecl(SlotDeclStmt* stmt);
     void analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedReturn);
@@ -82,6 +108,22 @@ private:
     std::unique_ptr<TypeAST> typeToAST(const TypePtr& type);
     void checkUnresolved(const TypePtr& type, const std::string& context);
     TypePtr analyzeReflectionCall(CallExpr* call, const std::string& name);
+    TypePtr analyzeDeclarationReflectionCall(CallExpr* call,
+                                             const std::string& name);
+    std::optional<SelectorValue> evaluateSelectorExpr(
+        Expr* expr, std::unordered_map<std::string, SelectorValue>& locals);
+    bool evaluateSelectorBlock(
+        BlockStmt* block, std::unordered_map<std::string, SelectorValue>& locals,
+        std::optional<SelectorValue>& result, bool& returned);
+    std::optional<std::string> evaluateSelectorFunction(
+        FunctionDecl* function, const luna::selector::DeclarationView& view,
+        const std::vector<ConstValue>& arguments, std::string& failure);
+    std::optional<ConstValue> evaluateConstraintExpr(
+        Expr* expr, const std::unordered_map<std::string, TypePtr>& bindings,
+        std::vector<std::string>& active);
+    std::optional<bool> evaluateConstraint(
+        const std::string& name, const TypeVec& arguments,
+        std::vector<std::string>& active);
     std::optional<std::variant<int64_t, double, bool, std::string>>
     evaluateConstExpr(Expr* expr,
                       const std::unordered_map<std::string,
@@ -124,6 +166,7 @@ private:
 
     SymbolTable mSymTable;
     std::unordered_map<std::string, MetaDecl*> mMetadataSchemas;
+    std::unordered_map<std::string, ConstraintDecl*> mConcepts;
     std::unordered_map<std::string, std::vector<FunctionDecl*>> mFunctionFamilies;
     std::unordered_map<std::string, Decl*> mQualifiedDeclarations;
     std::unordered_map<std::string,
@@ -161,10 +204,10 @@ private:
     bool mSawReturn = false;
     ConstraintSolver mConstraints;
     std::vector<std::pair<TypePtr, std::string>> mInferenceRoots;
-    using ConstValue = std::variant<int64_t, double, bool, std::string>;
     std::vector<std::unordered_map<std::string, ConstValue>> mConstScopes;
     std::unordered_map<std::string, FunctionDecl*> mConstexprFunctions;
     int mConstEvaluationDepth = 0;
+    const luna::selector::DeclarationView* mActiveSelectorView = nullptr;
     struct SlotInfo {
         std::string name;
         TypeVec paramTypes;

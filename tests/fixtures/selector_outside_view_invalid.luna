@@ -1,0 +1,17 @@
+meta tag { value: i32; }
+
+fn foreign() -> i32 { return 99; }
+
+fn bad_choice(
+    candidates: declaration_view<() -> i32>
+) -> declaration_ref<() -> i32> {
+    return declaration_of(foreign);
+}
+
+@tag(1)
+fn answer() -> i32 { return 42; }
+
+fn main() -> i32 {
+    let selected = select answer with bad_choice();
+    return selected();
+}

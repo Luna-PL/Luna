@@ -1,0 +1,11 @@
+constraint Tiny<T> =
+    type_size::<T>() <= 4;
+
+fn keep<T>(value: T) -> T where Tiny<T> {
+    return value;
+}
+
+fn main() -> i32 {
+    let result = keep("too large");
+    return 0;
+}

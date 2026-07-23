@@ -34,6 +34,7 @@ private:
     std::unique_ptr<TraitDecl> parseTraitDecl();
     std::unique_ptr<ImplDecl> parseImplDecl();
     std::unique_ptr<MetaDecl> parseMetaDecl();
+    std::unique_ptr<ConstraintDecl> parseConstraintDecl();
     std::unique_ptr<BlockStmt> parseBlock();
     std::unique_ptr<Stmt> parseStatement();
     std::unique_ptr<Stmt> parseLetStmt(

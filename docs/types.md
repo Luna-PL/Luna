@@ -58,8 +58,9 @@ Luna distinguishes:
 
 - Value types used by ordinary execution;
 - Meta types created by `meta` schemas and normally evaluated at compile time;
-- Compiler protocol types such as `declaration_view<T>` and
-  `declaration_ref<T>`.
+- Compiler types such as `declaration_view<T>`, `declaration_ref<T>`, and
+  `metadata_view<M>`. These are real iterable/queryable static values even
+  though they have no default runtime representation.
 
 Inference variables and error-recovery types are Sema implementation state and
 are rejected by the MoonIR verifier.

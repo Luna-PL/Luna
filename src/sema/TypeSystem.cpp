@@ -46,6 +46,11 @@ TypePtr resolveType(const TypeAST* ast,
             return Type::makeSlice(resolveType(named->typeArgs[0].get(), typeBindings));
         }
         if (named->name == "event") return TyEvent;
+        if (named->name == "metadata_view") {
+            if (named->typeArgs.size() != 1) return TyUnknown;
+            return Type::makeMetadataView(
+                resolveType(named->typeArgs.front().get(), typeBindings));
+        }
         if (named->name == "declaration_view") {
             TypePtr callable;
             if (!named->typeArgs.empty())
@@ -105,7 +110,8 @@ TypePtr ConstraintSolver::resolve(const TypePtr& type) {
 
     if ((type->kind == TypeKind::Reference || type->kind == TypeKind::RawPointer ||
          type->kind == TypeKind::DeviceBuffer || type->kind == TypeKind::Array ||
-         type->kind == TypeKind::Slice || type->kind == TypeKind::DeclarationView ||
+         type->kind == TypeKind::Slice || type->kind == TypeKind::MetadataView ||
+         type->kind == TypeKind::DeclarationView ||
          type->kind == TypeKind::DeclarationRef) && type->inner)
         type->inner = resolve(type->inner);
     else if (type->kind == TypeKind::Function || type->kind == TypeKind::Slot ||
@@ -129,6 +135,7 @@ bool ConstraintSolver::contains(const TypePtr& type, int id) {
         return resolved->inferenceId == id;
     if (resolved->kind == TypeKind::Reference || resolved->kind == TypeKind::RawPointer ||
         resolved->kind == TypeKind::DeviceBuffer || resolved->kind == TypeKind::Array ||
+        resolved->kind == TypeKind::MetadataView ||
         resolved->kind == TypeKind::DeclarationView || resolved->kind == TypeKind::DeclarationRef)
         return contains(resolved->inner, id);
     if (resolved->kind == TypeKind::Function || resolved->kind == TypeKind::Slot ||
@@ -220,6 +227,7 @@ bool ConstraintSolver::unifyInternal(const TypePtr& lhs, const TypePtr& rhs,
         return unifyInternal(a->inner, b->inner, reason);
     }
     if (a->kind == TypeKind::RawPointer || a->kind == TypeKind::DeviceBuffer ||
+        a->kind == TypeKind::MetadataView ||
         a->kind == TypeKind::DeclarationView || a->kind == TypeKind::DeclarationRef) {
         if (!a->inner || !b->inner) return !a->inner && !b->inner;
         return unifyInternal(a->inner, b->inner, reason);
@@ -311,6 +319,7 @@ void ConstraintSolver::collectUnresolvedNumeric(const TypePtr& type) {
         return;
     }
     if (resolved->kind == TypeKind::Reference || resolved->kind == TypeKind::RawPointer ||
+        resolved->kind == TypeKind::MetadataView ||
         resolved->kind == TypeKind::DeclarationView ||
         resolved->kind == TypeKind::DeclarationRef)
         collectUnresolvedNumeric(resolved->inner);
@@ -333,6 +342,7 @@ bool ConstraintSolver::hasUnresolved(const TypePtr& type) {
     if (!resolved) return false;
     if (resolved->kind == TypeKind::InferenceVar) return true;
     if (resolved->kind == TypeKind::Reference || resolved->kind == TypeKind::RawPointer ||
+        resolved->kind == TypeKind::MetadataView ||
         resolved->kind == TypeKind::DeclarationView ||
         resolved->kind == TypeKind::DeclarationRef)
         return hasUnresolved(resolved->inner);

@@ -30,6 +30,9 @@ struct SymbolInfo {
     luna::ownership::Usage returnUsage = luna::ownership::Usage::Copy;
     std::vector<luna::ownership::Contract> paramContracts;
     FunctionDecl* genericDecl = nullptr;  // for template instantiation
+    // Non-empty only for frontend-only declaration_ref values. These values
+    // are erased before MoonIR after static reflection has consumed them.
+    std::string compileTimeDeclarationId;
 };
 
 class SymbolTable {

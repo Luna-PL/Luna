@@ -169,14 +169,17 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
     else if (match(TokenKind::Trait)) decl = parseTraitDecl();
     else if (match(TokenKind::Impl)) decl = parseImplDecl();
     else if (match(TokenKind::Meta)) decl = parseMetaDecl();
+    else if (match(TokenKind::Constraint)) decl = parseConstraintDecl();
     else {
         if (isExported || isExtern || isConstexpr || isKernel || isNominal) {
             addError("expected a declaration after `export`, found " +
                      diagnostic::quotedToken(peek().lexeme),
-                     "only `fn`, `interceptor`, `context`, `struct`, `enum`, and `trait` can be exported");
+                     "only `fn`, `interceptor`, `context`, `struct`, `enum`, "
+                     "`trait`, `meta`, and `constraint` can be exported");
         } else {
             addError("expected a declaration, found " + diagnostic::quotedToken(peek().lexeme),
-                     "start a declaration with `fn`, `interceptor`, `context`, `struct`, `enum`, `trait`, or `impl`");
+                     "start a declaration with `fn`, `interceptor`, `context`, "
+                     "`struct`, `enum`, `trait`, `impl`, `meta`, or `constraint`");
         }
         advance(); // skip unexpected token
         return nullptr;
@@ -248,6 +251,23 @@ std::unique_ptr<MetaDecl> Parser::parseMetaDecl() {
         declaration->fields.push_back(std::move(field));
     }
     consume(TokenKind::RBrace, "Expected '}' after metadata schema body");
+    return declaration;
+}
+
+std::unique_ptr<ConstraintDecl> Parser::parseConstraintDecl() {
+    auto declaration = std::make_unique<ConstraintDecl>();
+    if (!match(TokenKind::Identifier)) {
+        addError("expected a constraint name after `constraint`");
+        return nullptr;
+    }
+    declaration->name = mTokens[mPos - 1].lexeme;
+    declaration->typeParams = parseTypeParamList();
+    if (declaration->typeParams.empty())
+        addError("constraint '" + declaration->name +
+                 "' requires at least one type parameter");
+    consume(TokenKind::Eq, "Expected '=' after constraint parameters");
+    declaration->predicate = parseExpr();
+    consume(TokenKind::SemiColon, "Expected ';' after constraint predicate");
     return declaration;
 }
 
@@ -1443,14 +1463,30 @@ std::vector<WhereClause> Parser::parseWhereClause() {
                 addError("Expected type parameter name in where clause");
                 break;
             }
+            const Token first = mTokens[mPos - 1];
             WhereClause clause;
-            clause.typeParam = mTokens[mPos - 1].lexeme;
-            consume(TokenKind::Colon, "Expected ':' in where clause");
-            if (!match(TokenKind::Identifier)) {
-                addError("Expected trait name in where clause");
-                break;
+            if (match(TokenKind::Colon)) {
+                clause.kind = WhereClause::Kind::TraitBound;
+                clause.typeParam = first.lexeme;
+                if (!match(TokenKind::Identifier)) {
+                    addError("Expected trait name in where clause");
+                    break;
+                }
+                clause.trait = parseTraitRef(mTokens[mPos - 1]);
+            } else {
+                clause.kind = WhereClause::Kind::Constraint;
+                clause.constraintName = first.lexeme;
+                parseQualifiedNameTail(clause.constraintName);
+                consume(TokenKind::Lt,
+                        "Expected '<' after constraint name in where clause");
+                if (!check(TokenKind::Gt)) {
+                    do {
+                        clause.constraintTypeArgs.push_back(parseType());
+                    } while (match(TokenKind::Comma));
+                }
+                consume(TokenKind::Gt,
+                        "Expected '>' after constraint type arguments");
             }
-            clause.trait = parseTraitRef(mTokens[mPos - 1]);
             clauses.push_back(std::move(clause));
         } while (match(TokenKind::Comma));
     }
@@ -1558,11 +1594,18 @@ void Parser::synchronizeDeclaration() {
             case TokenKind::Kernel:
             case TokenKind::Fn:
             case TokenKind::Fragment:
+            case TokenKind::Interceptor:
+            case TokenKind::Context:
             case TokenKind::Struct:
             case TokenKind::Enum:
             case TokenKind::Nominal:
             case TokenKind::Trait:
             case TokenKind::Impl:
+            case TokenKind::Meta:
+            case TokenKind::Constraint:
+            case TokenKind::Runtime:
+            case TokenKind::Dynamic:
+            case TokenKind::At:
                 return;
             default:
                 advance();

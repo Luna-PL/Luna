@@ -7,7 +7,7 @@ enum class TokenKind {
     // Keywords
     Fn, Let, Const, Constexpr, New, Move, Borrow, Affine, Linear, Mut, Free, Extern, Auto, Return,
     Fragment, Interceptor, Context, Many, Slot, Resume, Abort, Apply, Default,
-    Meta, Select, With, Runtime, Dynamic, Nominal, Kernel, Launch, Await,
+    Meta, Constraint, Select, With, Runtime, Dynamic, Nominal, Kernel, Launch, Await,
     Trait, Impl, Where, Struct, Enum, Package, Module, Using, As, Export, If, Else, While, For,
     True, False, Self,
     // Built-in types (parsed as keywords for type annotations)
@@ -47,7 +47,8 @@ const std::unordered_map<std::string, TokenKind> KEYWORDS = {
     {"resume", TokenKind::Resume}, {"apply", TokenKind::Apply},
     {"abort", TokenKind::Abort},
     {"default", TokenKind::Default},
-    {"meta", TokenKind::Meta}, {"select", TokenKind::Select},
+    {"meta", TokenKind::Meta}, {"constraint", TokenKind::Constraint},
+    {"select", TokenKind::Select},
     {"with", TokenKind::With}, {"runtime", TokenKind::Runtime},
     {"dynamic", TokenKind::Dynamic}, {"nominal", TokenKind::Nominal},
     {"kernel", TokenKind::Kernel}, {"launch", TokenKind::Launch},
@@ -87,6 +88,7 @@ inline std::string tokenKindName(TokenKind k) {
         case TokenKind::Apply: return "apply";
         case TokenKind::Default: return "default";
         case TokenKind::Meta: return "meta";
+        case TokenKind::Constraint: return "constraint";
         case TokenKind::Select: return "select";
         case TokenKind::With: return "with";
         case TokenKind::Runtime: return "runtime";

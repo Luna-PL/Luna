@@ -1,0 +1,38 @@
+meta release {
+    channel: string;
+    major: i32;
+}
+
+fn choose_release(
+    candidates: declaration_view<() -> i32>,
+    channel: string,
+    minimum_major: i32
+) -> declaration_ref<() -> i32> {
+    let best = declaration_at(candidates, 0);
+    let best_major = -1;
+    for candidate in candidates {
+        for info in metadata::<release>(candidate) {
+            if info.channel == channel && info.major >= minimum_major {
+                if info.major > best_major {
+                    best = candidate;
+                    best_major = info.major;
+                }
+            }
+        }
+    }
+    return best;
+}
+
+@release("stable", 1)
+fn answer() -> i32 { return 10; }
+
+@release("dev", 4)
+fn answer() -> i32 { return 40; }
+
+@release("stable", 3)
+fn answer() -> i32 { return 30; }
+
+fn main() -> i32 {
+    let selected = select answer with choose_release("stable", 2);
+    return selected();
+}

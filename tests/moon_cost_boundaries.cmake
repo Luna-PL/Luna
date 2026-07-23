@@ -10,6 +10,8 @@ file(REMOVE_RECURSE "${work_dir}")
 file(MAKE_DIRECTORY "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/kernel_unused.luna" DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/examples/dynamic_select.luna" DESTINATION "${work_dir}")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/selector_user_logic.luna" DESTINATION "${work_dir}")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/concepts.luna" DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/generic_instance_reuse.luna" DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/structural_generic_instance_reuse.luna" DESTINATION "${work_dir}")
 
@@ -65,6 +67,42 @@ if(runtime_registry EQUAL -1 OR dynamic_binding EQUAL -1 OR
    NOT dynamic_gpu EQUAL -1 OR dynamic_feature EQUAL -1)
     file(REMOVE_RECURSE "${work_dir}")
     message(FATAL_ERROR "dynamic select/runtime descriptor cost boundary is incorrect")
+endif()
+
+set(static_selector_source "${work_dir}/selector_user_logic.luna")
+build_case("${static_selector_source}" "${work_dir}/static-selector.moonir")
+file(READ "${static_selector_source}.ll" static_selector_ir)
+file(READ "${work_dir}/static-selector.moonir" static_selector_moon)
+string(FIND "${static_selector_ir}" "choose_release" static_selector_machine_code)
+string(FIND "${static_selector_ir}" "__moon_runtime_registry_" static_selector_registry)
+string(FIND "${static_selector_moon}" "choose_release" static_selector_protocol)
+string(FIND "${static_selector_moon}" "declaration_view" static_selector_view)
+string(FIND "${static_selector_moon}" "dynamic_select" static_selector_dynamic)
+if(NOT static_selector_machine_code EQUAL -1 OR
+   NOT static_selector_registry EQUAL -1 OR
+   NOT static_selector_protocol EQUAL -1 OR
+   NOT static_selector_view EQUAL -1 OR
+   NOT static_selector_dynamic EQUAL -1)
+    file(REMOVE_RECURSE "${work_dir}")
+    message(FATAL_ERROR
+        "static selector/view protocol was not fully erased\n${static_selector_moon}")
+endif()
+
+set(concept_source "${work_dir}/concepts.luna")
+build_case("${concept_source}" "${work_dir}/concepts.moonir")
+file(READ "${concept_source}.ll" concept_ir)
+file(READ "${work_dir}/concepts.moonir" concept_moon)
+string(FIND "${concept_ir}" "SmallValue" concept_machine_code)
+string(FIND "${concept_moon}" "SmallValue" concept_ir_declaration)
+string(FIND "${concept_moon}" "PlainSmallValue" composed_concept_ir_declaration)
+string(FIND "${concept_moon}" "runtime" concept_runtime)
+if(NOT concept_machine_code EQUAL -1 OR
+   NOT concept_ir_declaration EQUAL -1 OR
+   NOT composed_concept_ir_declaration EQUAL -1 OR
+   NOT concept_runtime EQUAL -1)
+    file(REMOVE_RECURSE "${work_dir}")
+    message(FATAL_ERROR
+        "compile-time constraint leaked into generated artifacts\n${concept_moon}")
 endif()
 
 set(generic_source "${work_dir}/generic_instance_reuse.luna")

@@ -44,3 +44,54 @@ results are normal compile-time strings, integers, or booleans:
 
 The compiler emits diagnostics for non-constant `const` initializers, invalid
 reflection targets, and out-of-range reflection indexes.
+
+## Named constraints
+
+`constraint` declares a C++-concept-style named compile-time boolean predicate
+over types:
+
+```luna
+constraint SmallValue<T> =
+    type_size::<T>() <= 8;
+
+constraint PlainSmallValue<T> =
+    !type_is_meta::<T>() && SmallValue::<T>();
+
+fn keep<T>(value: T) -> T where PlainSmallValue<T> {
+    return value;
+}
+```
+
+Constraints may compose other constraints and use boolean, comparison, and
+compile-time type-reflection operations. They are substituted and evaluated at
+generic instantiation sites. A false predicate rejects the instantiation at
+the `where` boundary; a predicate that cannot be evaluated is also a compile
+error. Constraint declarations are discharged before MoonIR and have no
+runtime representation or fallback check.
+
+Trait bounds and constraints are intentionally distinct:
+
+```luna
+fn first<T>(value: T) -> T where T: Sequence { return value; }
+fn second<T>(value: T) -> T where SmallValue<T> { return value; }
+```
+
+The first asks for an implemented behavior; the second asks the compiler to
+prove a named proposition. C++-style `requires` expressions that test whether
+arbitrary source expressions are well formed are not part of this initial
+constraint release.
+
+## Static declaration reflection
+
+Known declarations can be reflected without metadata or selection:
+
+```luna
+let known = declaration_of::<(i32) -> i32>(answer);
+print(declaration_id(known));
+print(declaration_signature(known));
+```
+
+The optional callable type disambiguates ordinary overloads. The resulting
+`declaration_ref<T>` exists only during compilation and is erased after its
+static queries are folded. If name and signature still leave an open
+declaration family, use a static selector instead.
