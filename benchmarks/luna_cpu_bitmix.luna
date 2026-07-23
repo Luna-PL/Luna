@@ -1,0 +1,13 @@
+fn main() -> i32 {
+    let value: i32 = 305419896;
+    let i: i32 = 0;
+    while i < 20000000 {
+        value = (value ^ (value << 13)) & 2147483647;
+        value = value ^ (value >> 17);
+        value = value ^ (value << 5);
+        value = value & 2147483647;
+        i += 1;
+    }
+    print(value & 255);
+    return 0;
+}

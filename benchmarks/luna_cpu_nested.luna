@@ -1,0 +1,14 @@
+fn main() -> i32 {
+    let state: i32 = 1;
+    let row: i32 = 0;
+    while row < 2500 {
+        let column: i32 = 0;
+        while column < 4000 {
+            state = (state * 33 + row + column) & 2147483647;
+            column += 1;
+        }
+        row += 1;
+    }
+    print(state & 255);
+    return 0;
+}

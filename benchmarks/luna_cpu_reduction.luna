@@ -1,0 +1,16 @@
+fn main() -> i32 {
+    let first: i32 = 1;
+    let second: i32 = 3;
+    let third: i32 = 5;
+    let fourth: i32 = 7;
+    let i: i32 = 0;
+    while i < 10000000 {
+        first = (first * 33 + (i & 255)) & 2147483647;
+        second = (second * 65 + ((i * 3) & 255)) & 2147483647;
+        third = (third * 129 + ((i * 5) & 255)) & 2147483647;
+        fourth = (fourth * 257 + ((i * 7) & 255)) & 2147483647;
+        i += 1;
+    }
+    print((first + second + third + fourth) & 255);
+    return 0;
+}

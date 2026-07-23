@@ -28,6 +28,33 @@ Luna 将静态、无额外运行时开销的语言机制，与需要显式选择
 
 可以先阅读[主要特性概览](docs/features.zh-CN.md)，或直接查看[可编译运行的完整示例](examples/full_showcase/README.md)。
 
+## CPU 微基准快照
+
+在本地 Ryzen 5 7500F 验证设备上，Luna AOT 与 Clang C++23 均使用
+LLVM/Clang 22.1.6 和 `-O3`。下表是在两次预热后采样 10 次所得的端到端执行时间
+中位数；数值越低越好，`Luna/C++23` 是耗时比。
+
+| 工作负载 | Luna AOT | C++23 | Luna/C++23 |
+|---|---:|---:|---:|
+| 整数递推 | 4.127 ms | 4.066 ms | 1.02x |
+| 高分支循环 | 25.665 ms | 26.248 ms | 0.98x |
+| 可内联调用 | 4.005 ms | 3.950 ms | 1.01x |
+| 安全定长数组 | 8.811 ms | 9.086 ms | 0.97x |
+| 位混合 | 35.232 ms | 35.711 ms | 0.99x |
+| 四链归约 | 13.761 ms | 10.851 ms | 1.27x |
+| 有状态数组扫描 | 14.192 ms | 14.577 ms | 0.97x |
+| 嵌套循环 | 4.489 ms | 4.137 ms | 1.09x |
+| 分配边界† | 15.320 ms | 3.490 ms | 4.39x |
+
+> **重要：这些性能对比是高度理想化的微基准，无法说明实际项目中的性能差距。**
+> 两条路径使用同一 LLVM 后端家族，计时包含进程启动，测试没有固定 CPU 频率，
+> 很小的工作集也无法代表真实应用的内存、并发、I/O 或延迟行为。†分配用例中
+> Clang 消除了 C++ 的 `new/delete`，而 Luna 有意保留 Runtime ABI 分配，所以该行
+> 不能作为分配器排名。
+
+[查看详细 CPU 对比、工作负载定义、限制与复现步骤](docs/cpu_benchmarks.md)。
+GPU 数据单独记录在[异构性能基准](docs/heterogeneous_benchmarks.md)中。
+
 ## Hello, World
 
 一个最小 Luna 程序是包含 `main` 函数的 `.luna` 文件：
@@ -136,6 +163,7 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
 - [标准库雏形](docs/standard_library.md)
 - [诊断参考](docs/diagnostics.md)
 - [测试与回归](docs/testing.md)
+- [CPU 性能对比](docs/cpu_benchmarks.md)
 - [演进路线图](docs/evolution_roadmap.md)
 - [架构设计文档](docs/Arch/README.md)
 

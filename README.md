@@ -32,6 +32,37 @@ opt-in runtime and dynamic capabilities:
 
 [Explore the feature overview](docs/features.md), or open the [complete executable showcase](examples/full_showcase/README.md).
 
+## CPU microbenchmark snapshot
+
+On the local Ryzen 5 7500F validation host, Luna AOT and Clang C++23 were both
+built with LLVM/Clang 22.1.6 at `-O3`. The table reports median end-to-end
+execution time over 10 measured runs after two warmups; lower is better, and
+`Luna/C++23` is a time ratio.
+
+| Workload | Luna AOT | C++23 | Luna/C++23 |
+|---|---:|---:|---:|
+| Integer recurrence | 4.127 ms | 4.066 ms | 1.02x |
+| Branch-heavy loop | 25.665 ms | 26.248 ms | 0.98x |
+| Inlineable calls | 4.005 ms | 3.950 ms | 1.01x |
+| Safe fixed array | 8.811 ms | 9.086 ms | 0.97x |
+| Bit mixing | 35.232 ms | 35.711 ms | 0.99x |
+| Four-chain reduction | 13.761 ms | 10.851 ms | 1.27x |
+| Stateful array scan | 14.192 ms | 14.577 ms | 0.97x |
+| Nested loops | 4.489 ms | 4.137 ms | 1.09x |
+| Allocation boundary† | 15.320 ms | 3.490 ms | 4.39x |
+
+> **Important:** these are highly idealized microbenchmarks. They cannot
+> establish the performance gap in real applications. Both paths share the
+> LLVM backend family, process startup is included, CPU frequency was not
+> pinned, and the tiny working sets do not represent application memory,
+> concurrency, I/O or latency behavior. †Clang eliminates the C++ `new/delete`
+> pair in the allocation case while Luna deliberately retains its Runtime ABI
+> allocation, so that row is not an allocator ranking.
+
+[Read the detailed CPU comparison, workload definitions, caveats and reproduction steps](docs/cpu_benchmarks.en.md).
+GPU measurements are documented separately in the
+[heterogeneous benchmark guide](docs/heterogeneous_benchmarks.md).
+
 ## Hello, World
 
 A Luna program is a `.luna` source file with a `main` function:
@@ -144,6 +175,7 @@ or reference material:
 - [Standard-library skeleton](docs/standard_library.md)
 - [Diagnostics](docs/diagnostics.md)
 - [Testing](docs/testing.md)
+- [CPU performance comparison](docs/cpu_benchmarks.en.md)
 - [Roadmap](docs/roadmap.md)
 - [Architecture documents](docs/Arch/README.md)
 

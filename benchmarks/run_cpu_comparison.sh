@@ -1,29 +1,38 @@
 #!/usr/bin/env bash
-# Compare common CPU workloads through Luna AOT and C++23 -O3. This is an
-# opt-in benchmark, not a correctness test: process startup is included and
-# the safe-array workload intentionally exposes bounds-checking overhead.
+# Compare common CPU workloads through Luna AOT and C++23. This is an opt-in
+# microbenchmark, not a correctness test or an application-performance claim:
+# process startup is included and some language abstractions are not identical.
 set -euo pipefail
 
 luna_driver="${1:?missing Luna executable}"
 source_root="${2:?missing source root}"
 iterations="${LUNA_CPU_ITERATIONS:-5}"
+warmups="${LUNA_CPU_WARMUPS:-1}"
 optimization="${LUNA_CPU_OPT_LEVEL:--O3}"
 cpp_compiler="${CXX:-clang++}"
 temp_dir="$(mktemp -d /tmp/luna-cpu-bench.XXXXXX)"
 cpp_binary="${temp_dir}/cpp23_cpu_suite"
 
-workloads=(arithmetic branch calls array allocation)
-declare -A luna_sources=(
-    [arithmetic]="${source_root}/benchmarks/luna_cpu_arithmetic.luna"
-    [branch]="${source_root}/benchmarks/luna_cpu_branch.luna"
-    [calls]="${source_root}/benchmarks/luna_cpu_calls.luna"
-    [array]="${source_root}/benchmarks/luna_cpu_array.luna"
-    [allocation]="${source_root}/benchmarks/luna_cpu_allocation.luna"
-)
-declare -A luna_binaries
+workloads=(arithmetic branch calls array allocation bitmix reduction array-scan nested)
+
+luna_source_for() {
+    case "$1" in
+        arithmetic) echo "${source_root}/benchmarks/luna_cpu_arithmetic.luna" ;;
+        branch) echo "${source_root}/benchmarks/luna_cpu_branch.luna" ;;
+        calls) echo "${source_root}/benchmarks/luna_cpu_calls.luna" ;;
+        array) echo "${source_root}/benchmarks/luna_cpu_array.luna" ;;
+        allocation) echo "${source_root}/benchmarks/luna_cpu_allocation.luna" ;;
+        bitmix) echo "${source_root}/benchmarks/luna_cpu_bitmix.luna" ;;
+        reduction) echo "${source_root}/benchmarks/luna_cpu_reduction.luna" ;;
+        array-scan) echo "${source_root}/benchmarks/luna_cpu_array_scan.luna" ;;
+        nested) echo "${source_root}/benchmarks/luna_cpu_nested.luna" ;;
+        *) return 2 ;;
+    esac
+}
 
 cleanup() {
-    for source in "${luna_sources[@]}"; do
+    for workload in "${workloads[@]}"; do
+        source="$(luna_source_for "${workload}")"
         rm -f -- "${source}.ll" "${source%.luna}"
     done
     rm -rf -- "${temp_dir}"
@@ -32,6 +41,10 @@ trap cleanup EXIT
 
 if ! [[ "${iterations}" =~ ^[1-9][0-9]*$ ]]; then
     echo "LUNA_CPU_ITERATIONS must be a positive integer" >&2
+    exit 2
+fi
+if ! [[ "${warmups}" =~ ^[0-9]+$ ]]; then
+    echo "LUNA_CPU_WARMUPS must be a non-negative integer" >&2
     exit 2
 fi
 case "${optimization}" in
@@ -50,9 +63,8 @@ fi
     "${source_root}/benchmarks/cpp23_cpu_suite.cpp" -o "${cpp_binary}"
 
 for workload in "${workloads[@]}"; do
-    source="${luna_sources[${workload}]}"
+    source="$(luna_source_for "${workload}")"
     "${luna_driver}" build "${source}" "${optimization}" >/dev/null
-    luna_binaries[${workload}]="${source%.luna}"
 done
 
 average_median_p95() {
@@ -74,36 +86,70 @@ elapsed_ms() {
     awk -v start="$1" -v end="$2" 'BEGIN { printf "%.3f", (end - start) / 1000000 }'
 }
 
+timestamp_ns() {
+    local value
+    value="$(date +%s%N)"
+    if [[ "${value}" != *%N* ]]; then
+        printf '%s\n' "${value}"
+        return
+    fi
+    if ! command -v python3 >/dev/null; then
+        echo "this benchmark needs GNU date or python3 for nanosecond timing" >&2
+        exit 2
+    fi
+    python3 -c 'import time; print(time.perf_counter_ns())'
+}
+
 echo "Luna CPU/C++23 performance comparison"
 echo "  iterations: ${iterations}"
+echo "  warmups per executable/workload: ${warmups}"
 echo "  optimization: ${optimization}"
-echo "  note: wall time includes process startup; array includes Luna bounds checks"
+echo "  host: $(uname -srm)"
+echo "  C++ compiler: $("${cpp_compiler}" --version | head -n 1)"
+echo "  note: wall time includes process startup; array workloads include Luna safety semantics"
+echo "  warning: idealized microbenchmarks cannot establish a real-world performance gap"
 
 for workload in "${workloads[@]}"; do
     expected="$(${cpp_binary} "${workload}" | tail -n 1)"
+    luna_binary="$(luna_source_for "${workload}")"
+    luna_binary="${luna_binary%.luna}"
     luna_times="${temp_dir}/${workload}.luna"
     cpp_times="${temp_dir}/${workload}.cpp"
     : > "${luna_times}"
     : > "${cpp_times}"
 
-    for ((run = 1; run <= iterations; ++run)); do
-        start="$(date +%s%N)"
-        luna_output="$("${luna_binaries[${workload}]}")"
-        end="$(date +%s%N)"
-        if [[ "${luna_output}" != *"${expected}"* ]]; then
-            echo "Luna ${workload} checksum mismatch: expected ${expected}, output=${luna_output}" >&2
-            exit 1
-        fi
-        printf '%s\n' "$(elapsed_ms "${start}" "${end}")" >> "${luna_times}"
-
-        start="$(date +%s%N)"
+    for ((run = 0; run < warmups; ++run)); do
+        luna_output="$("${luna_binary}")"
         cpp_output="$(${cpp_binary} "${workload}")"
-        end="$(date +%s%N)"
-        if [[ "${cpp_output}" != *"${expected}"* ]]; then
-            echo "C++23 ${workload} checksum mismatch: expected ${expected}, output=${cpp_output}" >&2
+        if [[ "${luna_output}" != "${expected}" ||
+              "${cpp_output}" != "${expected}" ]]; then
+            echo "warmup checksum mismatch for ${workload}: expected ${expected}" >&2
             exit 1
         fi
-        printf '%s\n' "$(elapsed_ms "${start}" "${end}")" >> "${cpp_times}"
+    done
+
+    for ((run = 1; run <= iterations; ++run)); do
+        if ((run % 2 == 1)); then
+            order=(luna cpp)
+        else
+            order=(cpp luna)
+        fi
+        for implementation in "${order[@]}"; do
+            start="$(timestamp_ns)"
+            if [[ "${implementation}" == "luna" ]]; then
+                output="$("${luna_binary}")"
+                timing_file="${luna_times}"
+            else
+                output="$(${cpp_binary} "${workload}")"
+                timing_file="${cpp_times}"
+            fi
+            end="$(timestamp_ns)"
+            if [[ "${output}" != "${expected}" ]]; then
+                echo "${implementation} ${workload} checksum mismatch: expected ${expected}, output=${output}" >&2
+                exit 1
+            fi
+            printf '%s\n' "$(elapsed_ms "${start}" "${end}")" >> "${timing_file}"
+        done
     done
 
     read -r luna_avg luna_median luna_p95 <<< "$(average_median_p95 "${luna_times}")"

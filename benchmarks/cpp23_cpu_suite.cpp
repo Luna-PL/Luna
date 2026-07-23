@@ -57,6 +57,63 @@ std::uint32_t allocation() {
     }
     return static_cast<std::uint32_t>(checksum) & 255u;
 }
+
+std::uint32_t bitmix() {
+    std::uint32_t value = 305'419'896u;
+    for (int i = 0; i < kIterations; ++i) {
+        value = (value ^ (value << 13)) & 2'147'483'647u;
+        value ^= value >> 17;
+        value ^= value << 5;
+        value &= 2'147'483'647u;
+    }
+    return value & 255u;
+}
+
+std::uint32_t reduction() {
+    std::uint32_t first = 1;
+    std::uint32_t second = 3;
+    std::uint32_t third = 5;
+    std::uint32_t fourth = 7;
+    for (int i = 0; i < 10'000'000; ++i) {
+        const auto value = static_cast<std::uint32_t>(i);
+        first = (first * 33u + (value & 255u)) & 2'147'483'647u;
+        second = (second * 65u + ((value * 3u) & 255u)) & 2'147'483'647u;
+        third = (third * 129u + ((value * 5u) & 255u)) & 2'147'483'647u;
+        fourth = (fourth * 257u + ((value * 7u) & 255u)) & 2'147'483'647u;
+    }
+    return (first + second + third + fourth) & 255u;
+}
+
+std::uint32_t array_scan() {
+    std::array<std::int32_t, 64> values{};
+    for (std::size_t i = 0; i < values.size(); ++i) {
+        values[i] = static_cast<std::int32_t>(i + 1);
+    }
+    std::int32_t state = 1;
+    for (int i = 0; i < kIterations; ++i) {
+        const auto index = static_cast<std::size_t>(i & 63);
+        const auto next = (static_cast<std::uint32_t>(values[index]) +
+                           static_cast<std::uint32_t>(state) +
+                           (static_cast<std::uint32_t>(i) & 31u)) &
+                          2'147'483'647u;
+        values[index] = static_cast<std::int32_t>(next);
+        state = static_cast<std::int32_t>(
+            (static_cast<std::uint32_t>(state) + next) & 2'147'483'647u);
+    }
+    return static_cast<std::uint32_t>(state) & 255u;
+}
+
+std::uint32_t nested() {
+    std::uint32_t state = 1;
+    for (int row = 0; row < 2'500; ++row) {
+        for (int column = 0; column < 4'000; ++column) {
+            state = (state * 33u + static_cast<std::uint32_t>(row) +
+                     static_cast<std::uint32_t>(column)) &
+                    2'147'483'647u;
+        }
+    }
+    return state & 255u;
+}
 } // namespace
 
 int main(int argc, char** argv) {
@@ -67,6 +124,10 @@ int main(int argc, char** argv) {
     else if (std::strcmp(argv[1], "calls") == 0) result = calls();
     else if (std::strcmp(argv[1], "array") == 0) result = safe_array_reference();
     else if (std::strcmp(argv[1], "allocation") == 0) result = allocation();
+    else if (std::strcmp(argv[1], "bitmix") == 0) result = bitmix();
+    else if (std::strcmp(argv[1], "reduction") == 0) result = reduction();
+    else if (std::strcmp(argv[1], "array-scan") == 0) result = array_scan();
+    else if (std::strcmp(argv[1], "nested") == 0) result = nested();
     else return 2;
     std::printf("%u\n", result);
     return 0;
