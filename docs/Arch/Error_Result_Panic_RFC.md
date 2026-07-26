@@ -34,11 +34,21 @@ is_ok(result)
 is_err(result)
 unwrap(result)
 unwrap_err(result)
+
+match result {
+    Ok(value) => { ... },
+    Err(error) => { ... }
+}
 ```
 
 上下文足够时，`Ok`/`Err` 的另一侧类型由约束求解器推导；上下文不足时可写显式
 `::<T, E>`。`unwrap` 和 `unwrap_err` 在 variant 不匹配时调用 `panic`，因此只
 适合断言已经建立的程序不变量，不是常规错误处理接口。
+
+`match` 是 enum 与 Result 共用、穷尽且封闭的结构化匹配；对 Result 必须各有一个
+`Ok` 和 `Err` 分支，载荷绑定只在对应分支可见。`match move result` 转移
+仿射/线性 Result 的所有权；普通 Copy Result 可以直接匹配。MoonIR 保留已验证的
+tag 分派和载荷偏移，因此不增加 handler、动态分派或新的运行时控制机制。
 
 ### 所有权
 
@@ -57,12 +67,28 @@ unwrap_err(result)
 表达式 `value?` 要求：
 
 1. `value` 的类型是 `Result<T, E>`；
-2. 当前普通函数返回 `Result<U, E>`；
-3. 两个 `E` 当前必须是同一语义类型。
+2. 当前普通函数返回 `Result<U, F>`；
+3. `E` 与 `F` 相同，或存在唯一的静态 `impl From<E> for F`。
 
 成功分支产生 `T`。错误分支在当前函数内执行与 `return` 相同的路径敏感清理，
-然后直接返回原错误 Result 的 ABI 值。初始版本不执行隐式 `From`/转换；后续若
-增加错误转换，应以普通静态 trait 调用表达，而不是扩展成 effect handler。
+若错误类型不同则调用唯一选中的 `From::from`，随后按外层 `Result<U, F>` 的布局
+重新构造 `Err` 并返回。即使 `E == F` 也会重建外层 Result，不能因为成功载荷
+`T` 与 `U` 的尺寸可能不同而错误复用内层 ABI 值。
+
+`From<Source>` 是编译器已知身份、用户提供实现的静态转换 trait：
+
+```luna
+impl From<ParseError> for AppError {
+    fn from(error: ParseError) -> AppError { ... }
+}
+```
+
+当前只接受具体 Source/Target、一个非泛型 `from(Source) -> Target` 方法；若
+Source 是 move-only，参数必须显式写为 `affine` 或 `linear` 来取得所有权。解析按
+精确 TypeId 查找且只允许一条直接边；不进行传递转换搜索，不使用 vtable，也不在
+运行时查询注册表。这样可以避免转换链随导入集合改变、歧义和隐藏分配。泛型 From
+impl 的显式静态调用语法仍待补充；跨包 orphan/coherence 已要求 impl package
+拥有 trait 或目标名义类型，`From` 则要求拥有 Source 或 Target。
 
 `?` 不允许出现在 fragment 中。fragment 的 `return`/`abort` 终止的是 fragment，
 而不是其宿主函数；允许 `?` 穿过这条边界会同时模糊控制所有者和清理所有者。
@@ -85,21 +111,52 @@ obligation。LLVM 后端不能重新猜测所有权状态。
 先定义任务边界、foreign frame、Drop 顺序和双重 panic；不能把现有 abort 语义
 无声改成异常展开。
 
-源码层暂未公开独立的 `never` 类型。Sema 已把直接 panic 语句识别为终止路径；
-在通用发散表达式进入语言前，应先完成 `never` 的类型合一和不可达代码降低。
+源码层公开 `never` 作为发散表达式的类型。`never` 没有可构造值，是所有普通值
+类型的 bottom type；`panic` 和其他确定不返回的调用产生 `never`。Sema 用它完成
+分支类型合一和返回路径判断，LLVM lowering 为不返回函数附加 `noreturn` 并以
+`unreachable` 终止控制流。
 
-## 5. 当前 ABI 与限制
+## 5. 标准错误与外部边界
 
-初始 Result ABI 是 `{ tag: i1, payload: i64 }`，整体 size/alignment 为 `16/8`。
-它直接支持整数、布尔、浮点和一字指针表示的载荷；Luna 当前的 nominal
-struct/enum、引用、字符串、unique、`rc` 和 `arc` 均使用指针表示。
+Core/Std 不应提供一个吞掉所有信息的全局错误枚举。库 API 返回最窄的具体错误，
+应用可以用自己的 tagged union 汇总，并通过 `From` 接入 `?`。预定的层次为：
 
-数组、slice、嵌套 Result 等超过一字或 LLVM aggregate 的内联载荷尚未形成稳定
-Result ABI。它们在进入稳定核心前需要改为按最大载荷大小和对齐推导的通用 tagged
-union layout，并增加 JIT/AOT ABI 测试。当前一字 ABI 不应发布为跨 Moon 容器的
-长期稳定外部 ABI。
+- Core：`InvalidArgument`、`BoundsError`、`UtfError` 等不依赖 host 的值错误；
+- 分配：`AllocError`，只携带稳定原因码和请求布局，不隐式 panic；
+- Std：`IoError`、`PathError` 等 host/OS 错误；
+- 边界：`FfiError`、`RuntimeError`、`GpuError`，保留 domain、稳定 code，并可选
+  拥有一份诊断文本，不能只借用易失的 `last_error` 指针。
 
-## 6. 与后续协程的关系
+Core 的值错误现已基于通用匹配和冻结的 inline ADT ABI 物化。依赖 host 的
+`FfiError`/`RuntimeError`/`GpuError` 仍等待 owned diagnostic OOM 策略与
+status/out-parameter ABI，不会借用易失的外部错误文本。
+
+原始 `extern "C"` 只接受 C ABI 类型，明确拒绝直接传递 Luna `Result` 或标准错误
+ADT。安全 adapter 是普通 Luna 函数：调用 raw FFI，立即读取 status/errno/错误
+快照，复制所需诊断，再返回 `Result<T, FfiError>`。编译器不会猜测某个返回值是否
+是 errno，也不会自动读取进程全局错误状态。
+
+Runtime ABI 同样以稳定 status/domain/code 为机器判据，文本只用于诊断。当前仍
+只有 abort 边界的 runtime 操作，应在相应 Core/Std adapter 落地时增加可恢复
+status/out-parameter 入口；不能把可能失败的 C++ 异常越过 C ABI，也不能把
+`rt_gpu_last_error()` 之类的借用字符串直接存进长期错误值。
+
+详细边界见 [标准错误与 FFI/Runtime 转换](Standard_Error_Boundaries_RFC.md)。
+
+## 6. 当前 ABI 与限制
+
+Result 使用通用 tagged-union ABI：
+`{ tag: i1, payload: [N x i64] }`，其中
+`N = max(1, ceil(max(sizeof(T), sizeof(E)) / 8))`。tag 后的隐式 padding 使载荷
+保持 8 字节对齐，整体 size 为 `8 + 8*N`、alignment 为 8。数组、slice 和嵌套
+Result 均可作为内联载荷；指针表示的 nominal struct、引用、字符串、`rc` 和
+`arc` 存放一个指针字。清理代码先读 tag，且递归销毁嵌套 Result 中唯一活跃的
+载荷。
+
+该布局目前是编译器与 MoonIR 共同验证的内部 ABI；在发布为稳定 FFI ABI 前，仍需
+明确目标平台 data layout、非 64 位平台策略和更高对齐载荷的规则。
+
+## 7. 与后续协程的关系
 
 协程可以让返回路径跨越挂起点，但不改变错误的含义：
 
@@ -108,5 +165,6 @@ union layout，并增加 JIT/AOT ABI 测试。当前一字 ABI 不应发布为�
 - panic 仍采用明确的任务或进程终止策略；
 - 片段/槽不能因为协程存在而获得隐式错误 handler。
 
-因此应先稳定 Result 的通用布局、错误转换 trait、panic 边界和 cleanup 验证，再
-设计一等无栈协程关键字。
+因此协程语法、frame ABI 和关键字设计全部延后；至少要先稳定 Core 错误/Option/
+Iterator、资源清理和 package trait 边界。当前错误模型不得为了预想中的 async
+语法预埋隐式 handler 或 effect summary。

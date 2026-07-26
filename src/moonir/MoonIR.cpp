@@ -1,4 +1,5 @@
 #include "MoonIR.h"
+#include "../core/TypeLayout.h"
 #include "../core/TypeRelations.h"
 
 #include <algorithm>
@@ -57,6 +58,15 @@ void Module::registerType(const TypePtr& type) {
     record.nominalDeclarationId = type->nominalId;
     record.canonicalType = canonicalTypeValue;
     record.canonicalShape = luna::types::canonicalShape(type);
+    record.valueSize = luna::layout::valueSize(type);
+    record.valueAlignment = luna::layout::valueAlignment(type);
+    if (type->kind == TypeKind::Enum ||
+        type->kind == TypeKind::Result) {
+        record.layoutAbiVersion =
+            luna::layout::InlineAdtAbiVersion;
+        record.abiLayout =
+            luna::layout::inlineAdtLayoutSignature(type);
+    }
     const auto addReference = [&](const TypePtr& referenced) {
         if (referenced) record.referencedTypeIds.push_back(luna::types::typeId(referenced));
     };

@@ -1,0 +1,16 @@
+fn stop() -> never {
+    panic("unreachable stop");
+}
+
+fn choose(flag: bool) -> i32 {
+    if flag {
+        stop();
+    }
+    return 42;
+}
+
+fn main() -> i32 {
+    print(type_kind::<never>());
+    print(type_size::<never>());
+    return choose(false);
+}

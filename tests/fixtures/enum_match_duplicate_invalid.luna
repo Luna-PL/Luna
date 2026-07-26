@@ -1,0 +1,22 @@
+nominal enum Signal {
+    Stop;
+    Number(i32);
+}
+
+fn inspect(value: Signal) -> i32 {
+    match value {
+        Stop => {
+            return 0;
+        },
+        Stop => {
+            return 1;
+        },
+        Number(number) => {
+            return number;
+        }
+    }
+}
+
+fn main() -> i32 {
+    return inspect(Signal::Stop());
+}

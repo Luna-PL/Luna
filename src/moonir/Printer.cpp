@@ -58,6 +58,10 @@ void Printer::print(const Module& module, std::ostream& out) const {
         out << " resource "
             << luna::sysmeta::resourceManagementName(
                 type.sysmeta.resource.management);
+        out << " abi_size " << type.valueSize
+            << " abi_align " << type.valueAlignment;
+        if (!type.abiLayout.empty())
+            out << " inline_layout \"" << type.abiLayout << '"';
         out << "\n";
     }
 

@@ -542,6 +542,7 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
     }
     if (match(TokenKind::Return)) return stamp(parseReturnStmt());
     if (match(TokenKind::If)) return stamp(parseIfStmt());
+    if (match(TokenKind::Match)) return stamp(parseMatchStmt());
     if (match(TokenKind::While)) return stamp(parseWhileStmt());
     if (match(TokenKind::For)) return stamp(parseForStmt());
     if (match(TokenKind::LBrace)) return stamp(parseBlock());
@@ -766,6 +767,68 @@ std::unique_ptr<Stmt> Parser::parseIfStmt() {
         }
     }
     return stmt;
+}
+
+std::unique_ptr<Stmt> Parser::parseMatchStmt() {
+    const Token start = mTokens[mPos - 1];
+    auto statement = std::make_unique<MatchStmt>();
+    statement->scrutinee = parseExpr();
+    consume(TokenKind::LBrace, "Expected '{' after match value");
+
+    while (!check(TokenKind::RBrace) && !isAtEnd()) {
+        if (!match(TokenKind::Identifier)) {
+            addError("Expected an enum variant pattern in match arm");
+            synchronizeStatement();
+            break;
+        }
+        MatchArm arm;
+        const Token first = mTokens[mPos - 1];
+        arm.sourcePath = mSourceName;
+        arm.line = first.line;
+        arm.col = first.col;
+        std::vector<std::string> path{first.lexeme};
+        while (match(TokenKind::ColonColon)) {
+            if (!match(TokenKind::Identifier)) {
+                addError("Expected a variant name after '::' in match pattern");
+                break;
+            }
+            path.push_back(mTokens[mPos - 1].lexeme);
+        }
+        arm.variantName = path.back();
+        if (path.size() > 1) {
+            for (size_t index = 0; index + 1 < path.size(); ++index) {
+                if (!arm.typeQualifier.empty())
+                    arm.typeQualifier += "::";
+                arm.typeQualifier += path[index];
+            }
+        }
+        if (match(TokenKind::LParen)) {
+            if (!check(TokenKind::RParen)) {
+                do {
+                    if (!match(TokenKind::Identifier)) {
+                        addError("Expected a payload binding in enum match pattern");
+                        synchronizeStatement();
+                        break;
+                    }
+                    arm.bindings.push_back(
+                        mTokens[mPos - 1].lexeme);
+                } while (match(TokenKind::Comma));
+            }
+            consume(TokenKind::RParen,
+                    "Expected ')' after enum match bindings");
+        }
+        consume(TokenKind::FatArrow, "Expected '=>' after enum match pattern");
+        arm.body = parseBlock();
+        match(TokenKind::Comma);
+        statement->arms.push_back(std::move(arm));
+    }
+    consume(TokenKind::RBrace, "Expected '}' after match arms");
+    if (statement->arms.empty())
+        addError("match requires at least one arm");
+    statement->sourcePath = mSourceName;
+    statement->line = start.line;
+    statement->col = start.col;
+    return statement;
 }
 
 std::unique_ptr<Stmt> Parser::parseWhileStmt() {
@@ -1530,6 +1593,14 @@ TraitRef Parser::parseTraitRef(const Token& nameToken) {
     TraitRef trait;
     trait.name = nameToken.lexeme;
     parseQualifiedNameTail(trait.name);
+    if (match(TokenKind::Lt)) {
+        if (!check(TokenKind::Gt)) {
+            do {
+                trait.typeArgs.push_back(parseType());
+            } while (match(TokenKind::Comma));
+        }
+        consume(TokenKind::Gt, "Expected '>' after trait type arguments");
+    }
     trait.sourcePath = mSourceName;
     trait.line = nameToken.line;
     trait.col = nameToken.col;

@@ -1,0 +1,73 @@
+nominal struct Resource {
+    marker: i32;
+}
+
+impl Drop for Resource {
+    fn drop(resource: &mut Resource) -> unit {
+        print(resource.marker);
+    }
+}
+
+fn consume_with_take() -> unit {
+    let first = new Resource(201);
+    let second = new Resource(202);
+    let third = new Resource(203);
+    let values = [move first, move second, move third];
+    let pending = values.into_iter().take(1);
+    pending.for_each(
+        fn(affine resource: Resource) -> unit {
+            print(resource.marker + 1000);
+        });
+}
+
+fn abandon_without_consuming() -> unit {
+    let first = new Resource(211);
+    let second = new Resource(212);
+    let values = [move first, move second];
+    let pending = values.into_iter();
+}
+
+fn return_before_consuming() -> i32 {
+    let first = new Resource(221);
+    let second = new Resource(222);
+    let values = [move first, move second];
+    let pending = values.into_iter();
+    return 7;
+}
+
+fn return_from_loop() -> i32 {
+    let first = new Resource(231);
+    let second = new Resource(232);
+    let third = new Resource(233);
+    let values = [move first, move second, move third];
+    let pending = values.into_iter();
+    for resource in pending {
+        return resource.marker;
+    }
+    return 0;
+}
+
+fn conditional_return_before_consuming(stop: bool) -> i32 {
+    let first = new Resource(241);
+    let second = new Resource(242);
+    let values = [move first, move second];
+    let pending = values.into_iter();
+    if stop {
+        return 9;
+    }
+    pending.for_each(
+        fn(affine resource: Resource) -> unit {
+            print(resource.marker + 1000);
+        });
+    return 10;
+}
+
+fn main() -> i32 {
+    consume_with_take();
+    abandon_without_consuming();
+    print(return_before_consuming());
+    print(return_from_loop());
+    print(conditional_return_before_consuming(true));
+    print(conditional_return_before_consuming(false));
+    return 0;
+}

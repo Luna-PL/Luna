@@ -35,6 +35,41 @@ event 会被检查器及 MoonIR 明确记录。
 
 具体设计：[所有权与仿射模型](Arch/Ownership_Affine_Model_RFC.md)。
 
+## 错误与 panic
+
+可恢复失败使用普通值 `Result<T, E>`。通用 enum/Result 穷尽 `match` 绑定活动载荷；
+后缀 `?` 携带路径敏感清理义务，并在错误类型不同时调用唯一、静态解析的
+`From<Source> for Target`。冻结的 inline ADT 布局支持普通 enum、数组、slice 与
+嵌套 Result，清理只作用于当前 tag 对应的载荷。
+
+`panic(string)` 是 abort 边界，不展开语言栈。该模型不引入完整代数效应，也没有
+独立 effect summary；编译器所需事实继续由只读 sysmeta 推导。
+
+具体设计：[Result 与 panic RFC](Arch/Error_Result_Panic_RFC.md)和
+[标准错误与外部转换边界](Arch/Standard_Error_Boundaries_RFC.md)。
+
+## 迭代与管道
+
+数组、slice 和整数 `range` 可组成惰性的 `map`/`filter`/`take`，并终结到
+`for`、`fold`、`for_each` 或 `count`；编译器已知链融合为一个 LLVM 循环。
+Core 提供具有稳定 package identity 的 `Option`、`Iterator`、`IntoIterator`、
+`FromIterator` 与基础 adapter。用户 trait 成员调用静态解析到唯一 impl symbol，
+用户 Core Iterator 可直接驱动 `for`。
+
+协议产生的 move-only 元素以 `Some` tag 作为逐轮初始化状态：正常循环体末尾和
+函数提前返回路径都恰好清理一次，已经移动走的元素不再清理。`for` 现会插入唯一的
+静态 Core `IntoIterator` 转换并持有隐藏状态；consuming move-only 数组使用逐元素
+初始化位，`filter`/`take` 会清理拒绝项，`map` 可从 Copy 输入产生 move-only
+输出，也可通过显式 owning 参数消费 move-only 输入。lambda 函数体已进入路径敏感
+所有权检查，`fold`/`for_each`/`count` 会持有 move-only 终结 recipe 的隐藏状态。
+affine move-only fold 累加器现使用独立 replacement 初始化位并把最终值转移给
+调用者。linear 累加器与捕获式 closure environment 仍是后续边界。
+无捕获 recipe（包括拥有 move-only 数组源的 recipe）现可物化为 affine、单次消费
+的局部栈值。owning recipe 使用逐元素初始化位，在消费、丢弃和提前返回路径恰好清理
+剩余元素，同时保持静态融合且不引入 iterator runtime allocation。
+
+具体说明：[迭代、管道与容器边界](iterators.md)。
+
 ## Metadata 与动态能力
 
 Metadata schema 是一等声明。静态 `select` 会在真实、可遍历的声明与 metadata

@@ -8,7 +8,7 @@ enum class TokenKind {
     Fn, Let, Const, Constexpr, New, Rc, Arc, Move, Borrow, Affine, Linear, Mut, Free, Extern, Auto, Return,
     Fragment, Interceptor, Context, Many, Slot, Resume, Abort, Apply, Default,
     Meta, Constraint, Select, With, Runtime, Dynamic, Nominal, Kernel, Launch, Await,
-    Trait, Impl, Where, Struct, Enum, Package, Module, Using, As, Export, If, Else, While, For,
+    Trait, Impl, Where, Struct, Enum, Package, Module, Using, As, Export, If, Else, Match, While, For,
     True, False, Self,
     // Built-in types (parsed as keywords for type annotations)
     TyI32, TyI64, TyF32, TyF64, TyBool, TyString,
@@ -20,7 +20,7 @@ enum class TokenKind {
     AndEq, OrEq, XorEq, ShiftLeftEq, ShiftRightEq,
     EqEq, Neq, Lt, LtEq, Gt, GtEq, ShiftLeft, ShiftRight,
     AndAnd, OrOr, BitOr, BitXor, Not, Tilde,
-    Arrow, Colon, SemiColon, ColonColon, Dot, DotDot, Ampersand, At, Question,
+    Arrow, FatArrow, Colon, SemiColon, ColonColon, Dot, DotDot, Ampersand, At, Question,
     // Delimiters
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Comma, Less, Greater,
@@ -65,7 +65,8 @@ const std::unordered_map<std::string, TokenKind> KEYWORDS = {
     {"package", TokenKind::Package}, {"module", TokenKind::Module},
     {"using", TokenKind::Using}, {"as", TokenKind::As}, {"export", TokenKind::Export},
     {"if",     TokenKind::If},
-    {"else",   TokenKind::Else},   {"while",  TokenKind::While},
+    {"else",   TokenKind::Else},   {"match",  TokenKind::Match},
+    {"while",  TokenKind::While},
     {"for",    TokenKind::For},    {"true",   TokenKind::True},
     {"false",  TokenKind::False},  {"Self",   TokenKind::Self},
     {"i32",    TokenKind::TyI32},  {"i64",    TokenKind::TyI64},
@@ -122,6 +123,7 @@ inline std::string tokenKindName(TokenKind k) {
         case TokenKind::Export: return "export";
         case TokenKind::If: return "if";
         case TokenKind::Else: return "else";
+        case TokenKind::Match: return "match";
         case TokenKind::While: return "while";
         case TokenKind::For: return "for";
         case TokenKind::True: return "true";
@@ -168,6 +170,7 @@ inline std::string tokenKindName(TokenKind k) {
         case TokenKind::Not: return "!";
         case TokenKind::Tilde: return "~";
         case TokenKind::Arrow: return "->";
+        case TokenKind::FatArrow: return "=>";
         case TokenKind::Colon: return ":";
         case TokenKind::SemiColon: return ";";
         case TokenKind::ColonColon: return "::";

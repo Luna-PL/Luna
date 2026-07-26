@@ -10,6 +10,9 @@ export nominal enum PublicOption {
     Some(i32);
 }
 
+export trait Describe {
+}
+
 export fn library_value() -> i32 {
     return 42;
 }

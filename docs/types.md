@@ -104,6 +104,25 @@ payload rather than trusting a hash alone.
 See [the type identity RFC](Arch/Type_System_Identity_RFC.md) for the compiler
 model and migration plan.
 
+## Inline sum layout and matching
+
+Enums and `Result<T, E>` use MoonIR inline-ADT ABI v1: an eight-byte tag
+storage region followed by an eight-byte-aligned payload region sized for the
+largest variant. Variant order fixes tag values; field order and aligned byte
+offsets are recorded in the frozen MoonIR type table. Recursive inline sums
+are rejected unless recursion crosses a pointer-, reference-, `rc`-, `arc`-,
+or nominal-struct boundary.
+
+`match` evaluates its scrutinee once, checks every variant exactly once, and
+binds only the active payload. A move-only sum requires `match move`; cleanup
+then follows the selected arm and destroys only the active fields.
+
+Trait implementations are globally coherent across all loaded packages. An
+ordinary impl is legal only when its package owns the trait or the nominal
+target type. `Drop` requires a locally owned nominal target; `From<Source>`
+requires the package to own Source or Target. Structural targets therefore
+cannot bypass a foreign trait's orphan boundary.
+
 ## Ownership and usage are separate
 
 Every value contract separates its ownership relation (`owned`, shared
@@ -139,6 +158,8 @@ Linear. Cleanup reads the tag and destroys only the active payload.
 
 Postfix `?` unwraps `Ok` and returns `Err` from the current Result-returning
 function after running the same path-sensitive cleanup as an explicit return.
-It requires the same error type on both Results and cannot implicitly cross a
-fragment/slot boundary. See the
+The error type is either identical or converted through one exact static
+`From<Source> for Target` implementation. Exhaustive Result `match` binds the
+active payload; `match move` transfers a move-only Result. Neither mechanism
+can implicitly cross a fragment/slot boundary. See the
 [Result and panic RFC](Arch/Error_Result_Panic_RFC.md).

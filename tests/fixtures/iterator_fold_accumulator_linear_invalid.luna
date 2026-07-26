@@ -1,0 +1,21 @@
+nominal struct Accumulator {
+    value: i32;
+}
+
+impl Drop for Accumulator {
+    fn drop(value: &mut Accumulator) -> unit {}
+}
+
+fn main() -> i32 {
+    linear let initial = new Accumulator(0);
+    let values = [1];
+    let result = values.into_iter().fold(
+        move initial,
+        fn(affine accumulator: Accumulator, value: i32)
+            -> affine Accumulator {
+            return new Accumulator(
+                accumulator.value + value);
+        });
+    print(result.value);
+    return 0;
+}

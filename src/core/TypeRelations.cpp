@@ -64,6 +64,7 @@ const char* kindName(TypeKind kind) {
         case TypeKind::CStr: return "cstr";
         case TypeKind::RawPointer: return "raw";
         case TypeKind::Unit: return "unit";
+        case TypeKind::Never: return "never";
         case TypeKind::Struct: return "product";
         case TypeKind::Record: return "product";
         case TypeKind::Enum: return "sum";

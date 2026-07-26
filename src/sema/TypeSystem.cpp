@@ -26,6 +26,7 @@ TypePtr resolveType(const TypeAST* ast,
         if (named->name == "string") return TyString;
         if (named->name == "cstr") return TyCStr;
         if (named->name == "unit") return TyUnit;
+        if (named->name == "never") return TyNever;
         if (named->name == "Self") return Type::makeTypeParam("Self");
 
         if (named->name == "raw") {

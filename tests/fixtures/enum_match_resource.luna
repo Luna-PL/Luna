@@ -1,0 +1,32 @@
+nominal struct Resource {
+    marker: i32;
+}
+
+impl Drop for Resource {
+    fn drop(resource: &mut Resource) -> unit {
+        print(resource.marker);
+    }
+}
+
+nominal enum ResourceChoice {
+    Empty;
+    Item(Resource);
+}
+
+fn consume(choice: affine ResourceChoice) -> i32 {
+    match move choice {
+        Empty => {
+            return 0;
+        },
+        Item(resource) => {
+            return resource.marker;
+        }
+    }
+}
+
+fn main() -> i32 {
+    let resource = new Resource(71);
+    let choice = ResourceChoice::Item(move resource);
+    print(consume(move choice));
+    return 0;
+}

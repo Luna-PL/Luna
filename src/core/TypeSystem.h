@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
+#include <functional>
 #include <cstdint>
 
 using TypeVec = std::vector<TypePtr>;
@@ -18,7 +20,7 @@ enum class ContinuationKind { Interceptor, Context };
 
 enum class TypeKind {
     I8, I16, I32, I64, U8, U16, U32, U64, USize, ISize,
-    F32, F64, Bool, String, CStr, RawPointer, Unit,
+    F32, F64, Bool, String, CStr, RawPointer, Unit, Never,
     Struct, Record, Enum, Result, Trait, TypeParam, Reference, Rc, Arc,
     Function, Slot, Fragment, Iterator,
     DeviceBuffer, Event, Array, Slice,
@@ -47,6 +49,7 @@ enum class IteratorOp : uint8_t {
     Fold,
     ForEach,
     Count,
+    Collect,
 };
 
 struct TypeField {
@@ -346,15 +349,30 @@ struct Type {
     }
 
     bool isHeapType() const {
-        if (kind == TypeKind::Result) {
-            for (const auto& argument : typeArgs)
-                if (argument && argument->isHeapType()) return true;
-            return false;
-        }
-        return kind == TypeKind::String || kind == TypeKind::Struct ||
-               kind == TypeKind::Record || kind == TypeKind::Enum ||
-               kind == TypeKind::DeviceBuffer || kind == TypeKind::Rc ||
-               kind == TypeKind::Arc;
+        std::unordered_set<const Type*> active;
+        std::function<bool(const Type*)> visit = [&](const Type* type) {
+            if (!type || !active.insert(type).second) return false;
+            if (type->kind == TypeKind::Result) {
+                for (const auto& argument : type->typeArgs)
+                    if (argument && visit(argument.get())) return true;
+                return false;
+            }
+            if (type->kind == TypeKind::Enum) {
+                for (const auto& variant : type->variants)
+                    for (const auto& field : variant.fields)
+                        if (field && visit(field.get())) return true;
+                return false;
+            }
+            if (type->kind == TypeKind::Array)
+                return visit(type->inner.get());
+            return type->kind == TypeKind::String ||
+                   type->kind == TypeKind::Struct ||
+                   type->kind == TypeKind::Record ||
+                   type->kind == TypeKind::DeviceBuffer ||
+                   type->kind == TypeKind::Rc ||
+                   type->kind == TypeKind::Arc;
+        };
+        return visit(this);
     }
 
     std::string toString() const {
@@ -395,6 +413,7 @@ struct Type {
             case TypeKind::DeclarationRef:
                 return "declaration_ref<" + (inner ? inner->toString() : "_") + ">";
             case TypeKind::Unit: return "unit";
+            case TypeKind::Never: return "never";
             case TypeKind::Struct:
             case TypeKind::Record:
             case TypeKind::Enum: {
@@ -440,26 +459,49 @@ struct Type {
 };
 
 inline luna::ownership::Usage defaultUsageForType(const TypePtr& type) {
-    if (!type) return luna::ownership::Usage::Copy;
-    if (type->kind == TypeKind::Result) {
-        // A Result owns exactly one active payload, so its usage is the
-        // strongest usage of either variant. Scalar-only Results remain Copy;
-        // resource-bearing Results are Affine, and a linear payload makes the
-        // whole container Linear.
-        auto usage = luna::ownership::Usage::Copy;
-        for (const auto& argument : type->typeArgs) {
-            const auto item = defaultUsageForType(argument);
-            if (item == luna::ownership::Usage::Linear)
-                return luna::ownership::Usage::Linear;
-            if (item == luna::ownership::Usage::Affine)
-                usage = luna::ownership::Usage::Affine;
+    std::unordered_set<const Type*> active;
+    std::function<luna::ownership::Usage(const TypePtr&)> visit =
+        [&](const TypePtr& item) {
+        if (!item) return luna::ownership::Usage::Copy;
+        if (!active.insert(item.get()).second)
+            return luna::ownership::Usage::Copy;
+        if (item->kind == TypeKind::Result ||
+            item->kind == TypeKind::Enum ||
+            item->kind == TypeKind::Array) {
+            auto usage = luna::ownership::Usage::Copy;
+            std::vector<TypePtr> payloads;
+            if (item->kind == TypeKind::Result)
+                payloads = item->typeArgs;
+            else if (item->kind == TypeKind::Enum)
+                for (const auto& variant : item->variants)
+                    payloads.insert(
+                        payloads.end(),
+                        variant.fields.begin(), variant.fields.end());
+            else
+                payloads.push_back(item->inner);
+            for (const auto& payload : payloads) {
+                const auto payloadUsage = visit(payload);
+                if (payloadUsage == luna::ownership::Usage::Linear) {
+                    active.erase(item.get());
+                    return luna::ownership::Usage::Linear;
+                }
+                if (payloadUsage == luna::ownership::Usage::Affine)
+                    usage = luna::ownership::Usage::Affine;
+            }
+            active.erase(item.get());
+            return usage;
         }
-        return usage;
-    }
-    if (type->kind == TypeKind::Event || type->kind == TypeKind::DeviceBuffer)
-        return luna::ownership::Usage::Linear;
-    if (type->isHeapType()) return luna::ownership::Usage::Affine;
-    return luna::ownership::Usage::Copy;
+        active.erase(item.get());
+        if (item->kind == TypeKind::Event ||
+            item->kind == TypeKind::DeviceBuffer)
+            return luna::ownership::Usage::Linear;
+        if (item->kind == TypeKind::Iterator)
+            return luna::ownership::Usage::Affine;
+        if (item->isHeapType())
+            return luna::ownership::Usage::Affine;
+        return luna::ownership::Usage::Copy;
+    };
+    return visit(type);
 }
 
 inline luna::ownership::Contract parameterContractFor(
@@ -497,6 +539,7 @@ inline TypePtr TyBool   = Type::makePrimitive(TypeKind::Bool);
 inline TypePtr TyString = Type::makePrimitive(TypeKind::String);
 inline TypePtr TyCStr   = Type::makePrimitive(TypeKind::CStr);
 inline TypePtr TyUnit   = Type::makePrimitive(TypeKind::Unit);
+inline TypePtr TyNever  = Type::makePrimitive(TypeKind::Never);
 inline TypePtr TyEvent  = Type::makeEvent();
 inline TypePtr TyUnknown = Type::makeUnknown();
 

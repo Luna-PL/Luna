@@ -1,0 +1,248 @@
+package org.luna.fixture.core_surface;
+module application;
+using org.luna.core as core;
+
+nominal struct Counter {
+    value: i32;
+}
+
+impl core::iter::Iterator<i32> for Counter {
+    fn next(iterator: &mut Counter) -> core::option::Option<i32> {
+        if iterator.value > 0 {
+            let value = iterator.value;
+            iterator.value = 0;
+            return core::option::Option::<i32>::Some(value);
+        }
+        return core::option::Option::<i32>::None();
+    }
+}
+
+nominal struct Bag {
+    value: i32;
+}
+
+impl core::iter::IntoIterator<i32, Counter> for Bag {
+    fn into_iter(value: affine Bag) -> affine Counter {
+        let item: i32 = value.value;
+        return new Counter(item);
+    }
+}
+
+nominal struct TemporarySource {
+    value: i32;
+    drop_marker: i32;
+}
+
+nominal struct TemporaryIterator {
+    value: i32;
+    drop_marker: i32;
+}
+
+impl Drop for TemporaryIterator {
+    fn drop(iterator: &mut TemporaryIterator) -> unit {
+        print(iterator.drop_marker);
+    }
+}
+
+impl core::iter::Iterator<i32> for TemporaryIterator {
+    fn next(iterator: &mut TemporaryIterator)
+        -> core::option::Option<i32> {
+        if iterator.value > 0 {
+            let value = iterator.value;
+            iterator.value = 0;
+            return core::option::Option::<i32>::Some(value);
+        }
+        return core::option::Option::<i32>::None();
+    }
+}
+
+impl core::iter::IntoIterator<i32, TemporaryIterator>
+    for TemporarySource {
+    fn into_iter(value: affine TemporarySource)
+        -> affine TemporaryIterator {
+        let item: i32 = value.value;
+        let marker: i32 = value.drop_marker;
+        return new TemporaryIterator(item, marker);
+    }
+}
+
+fn return_from_implicit_loop() -> i32 {
+    let source = new TemporarySource(6, 73);
+    for value in source {
+        return value;
+    }
+    return 0;
+}
+
+nominal struct Resource {
+    marker: i32;
+}
+
+impl Drop for Resource {
+    fn drop(resource: &mut Resource) -> unit {
+        print(resource.marker);
+    }
+}
+
+nominal struct ResourceIterator {
+    remaining: i32;
+}
+
+impl core::iter::Iterator<Resource> for ResourceIterator {
+    fn next(iterator: &mut ResourceIterator)
+        -> core::option::Option<Resource> {
+        if iterator.remaining > 0 {
+            let marker = iterator.remaining;
+            iterator.remaining = 0;
+            let resource = new Resource(marker);
+            return core::option::Option::<Resource>::Some(
+                move resource);
+        }
+        return core::option::Option::<Resource>::None();
+    }
+}
+
+fn return_from_resource_loop() -> i32 {
+    let iterator = new ResourceIterator(72);
+    for resource in iterator {
+        return resource.marker;
+    }
+    return 0;
+}
+
+nominal struct SumBuilder {
+    total: i32;
+}
+
+nominal struct CollectedSum {
+    total: i32;
+}
+
+impl core::iter::FromIterator<i32, SumBuilder> for CollectedSum {
+    fn begin() -> affine SumBuilder {
+        return new SumBuilder(0);
+    }
+
+    fn push(builder: &mut SumBuilder, affine item: i32) -> unit {
+        builder.total += item;
+    }
+
+    fn finish(affine builder: SumBuilder) -> affine CollectedSum {
+        let total = builder.total;
+        return new CollectedSum(total);
+    }
+}
+
+nominal struct ResourceSumBuilder {
+    total: i32;
+}
+
+nominal struct CollectedResources {
+    total: i32;
+}
+
+impl core::iter::FromIterator<Resource, ResourceSumBuilder>
+    for CollectedResources {
+    fn begin() -> affine ResourceSumBuilder {
+        return new ResourceSumBuilder(0);
+    }
+
+    fn push(
+        builder: &mut ResourceSumBuilder,
+        affine item: Resource
+    ) -> unit {
+        builder.total += item.marker;
+    }
+
+    fn finish(affine builder: ResourceSumBuilder)
+        -> affine CollectedResources {
+        let total = builder.total;
+        return new CollectedResources(total);
+    }
+}
+
+fn main() -> i32 {
+    let counter = new Counter(42);
+    let total = 0;
+    for value in counter {
+        total += value;
+    }
+    if total != 42 {
+        return 1;
+    }
+    let bag = new Bag(5);
+    for value in bag {
+        total += value;
+    }
+    if total != 47 {
+        return 2;
+    }
+    let temporary_source = new TemporarySource(7, 74);
+    for value in temporary_source {
+        total += value;
+    }
+    let early_value = return_from_implicit_loop();
+    if total != 54 || early_value != 6 {
+        return 3;
+    }
+
+    let resources = new ResourceIterator(71);
+    for resource in resources {
+        print(resource.marker);
+    }
+    print(return_from_resource_loop());
+
+    let collect_values = [1, 2, 3, 4];
+    let collected = collect_values.into_iter()
+        .map(fn(value: i32) -> i32 {
+            return value * 2;
+        })
+        .filter(fn(value: i32) -> bool {
+            return value > 4;
+        })
+        .take(2)
+        .collect::<CollectedSum>();
+    if collected.total != 14 {
+        return 7;
+    }
+
+    let pending_collection = range(1, 5).take(3);
+    let collected_pending =
+        pending_collection.collect::<CollectedSum>();
+    if collected_pending.total != 6 {
+        return 8;
+    }
+
+    let first_collected_resource = new Resource(181);
+    let second_collected_resource = new Resource(182);
+    let third_collected_resource = new Resource(183);
+    let collected_resource_values = [
+        move first_collected_resource,
+        move second_collected_resource,
+        move third_collected_resource
+    ];
+    let collected_resources =
+        collected_resource_values.into_iter()
+            .take(1)
+            .collect::<CollectedResources>();
+    if collected_resources.total != 181 {
+        return 9;
+    }
+
+    let bounds: core::error::BoundsError =
+        core::error::BoundsError::Empty();
+    match bounds {
+        core::error::BoundsError::Empty => {
+            let adapter: core::iter::Map<i32, i32> =
+                core::iter::Map::<i32, i32>::Adapter(40, 2);
+            match adapter {
+                core::iter::Map::Adapter(value, transform) => {
+                    return value + transform;
+                }
+            }
+        },
+        core::error::BoundsError::OutOfBounds(index, length) => {
+            return 3;
+        }
+    }
+}

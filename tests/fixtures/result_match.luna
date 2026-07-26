@@ -1,0 +1,18 @@
+fn inspect(value: Result<i32, i32>) -> i32 {
+    match value {
+        Ok(number) => {
+            print(number);
+            return number + 1;
+        },
+        Err(error) => {
+            print(error);
+            return error + 2;
+        }
+    }
+}
+
+fn main() -> i32 {
+    print(inspect(Ok::<i32, i32>(40)));
+    print(inspect(Err::<i32, i32>(50)));
+    return 0;
+}

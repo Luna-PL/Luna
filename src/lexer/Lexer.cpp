@@ -132,8 +132,10 @@ Token Lexer::readOperator() {
                                     : Token(TokenKind::Percent, "%", mStartLine, mStartCol);
         case '!': return match('=') ? Token(TokenKind::Neq, "!=", mStartLine, mStartCol)
                                     : Token(TokenKind::Not, "!", mStartLine, mStartCol);
-        case '=': return match('=') ? Token(TokenKind::EqEq, "==", mStartLine, mStartCol)
-                                    : Token(TokenKind::Eq, "=", mStartLine, mStartCol);
+        case '=':
+            if (match('=')) return Token(TokenKind::EqEq, "==", mStartLine, mStartCol);
+            if (match('>')) return Token(TokenKind::FatArrow, "=>", mStartLine, mStartCol);
+            return Token(TokenKind::Eq, "=", mStartLine, mStartCol);
         case '&': return match('&') ? Token(TokenKind::AndAnd, "&&", mStartLine, mStartCol)
                                     : (match('=') ? Token(TokenKind::AndEq, "&=", mStartLine, mStartCol)
                                                    : Token(TokenKind::Ampersand, "&", mStartLine, mStartCol));

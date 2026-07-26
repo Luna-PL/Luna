@@ -1,4 +1,5 @@
 #include "Verifier.h"
+#include "../core/TypeLayout.h"
 
 #include "../diagnostics/Diagnostic.h"
 #include "../core/TypeRelations.h"
@@ -28,41 +29,6 @@ bool isIntegerMetadataType(TypeKind kind) {
         case TypeKind::U64:
         case TypeKind::USize:
         case TypeKind::ISize:
-            return true;
-        default:
-            return false;
-    }
-}
-
-bool fitsInitialResultPayload(TypeKind kind) {
-    switch (kind) {
-        case TypeKind::I8:
-        case TypeKind::I16:
-        case TypeKind::I32:
-        case TypeKind::I64:
-        case TypeKind::U8:
-        case TypeKind::U16:
-        case TypeKind::U32:
-        case TypeKind::U64:
-        case TypeKind::USize:
-        case TypeKind::ISize:
-        case TypeKind::F32:
-        case TypeKind::F64:
-        case TypeKind::Bool:
-        case TypeKind::String:
-        case TypeKind::CStr:
-        case TypeKind::RawPointer:
-        case TypeKind::Unit:
-        case TypeKind::Struct:
-        case TypeKind::Record:
-        case TypeKind::Enum:
-        case TypeKind::TypeParam:
-        case TypeKind::Reference:
-        case TypeKind::Rc:
-        case TypeKind::Arc:
-        case TypeKind::Function:
-        case TypeKind::DeviceBuffer:
-        case TypeKind::Event:
             return true;
         default:
             return false;
@@ -168,6 +134,32 @@ bool Verifier::verify(const Module& module) {
             !type.nominalDeclarationId.empty())
             error({}, "structural type '" + type.id.value +
                       "' unexpectedly carries a nominal identity");
+        if (type.valueAlignment == 0 ||
+            (type.valueAlignment & (type.valueAlignment - 1)) != 0)
+            error({}, "type '" + type.id.value +
+                      "' has an invalid ABI alignment");
+        if (type.kind == TypeKind::Enum ||
+            type.kind == TypeKind::Result) {
+            if (type.layoutAbiVersion !=
+                luna::layout::InlineAdtAbiVersion)
+                error({}, "inline ADT '" + type.id.value +
+                          "' uses an unsupported layout ABI");
+            const std::string prefix =
+                "luna.inline-adt.v" +
+                std::to_string(luna::layout::InlineAdtAbiVersion) +
+                ";tag_storage=" +
+                std::to_string(luna::layout::InlineTagStorageSize) +
+                ";payload_align=" +
+                std::to_string(luna::layout::InlinePayloadAlignment) +
+                ";size=" + std::to_string(type.valueSize);
+            if (type.abiLayout.rfind(prefix, 0) != 0)
+                error({}, "inline ADT '" + type.id.value +
+                          "' has an inconsistent frozen ABI signature");
+        } else if (type.layoutAbiVersion != 0 ||
+                   !type.abiLayout.empty()) {
+            error({}, "non-ADT type '" + type.id.value +
+                      "' unexpectedly carries inline ADT ABI metadata");
+        }
         if (type.kind == TypeKind::Metadata &&
             (type.domain != luna::types::TypeDomain::Meta ||
              type.identityMode != luna::types::IdentityMode::MetaSchema))
@@ -200,13 +192,6 @@ bool Verifier::verify(const Module& module) {
             if (type.referencedTypeIds.size() != 2) {
                 error({}, "Result type '" + type.id.value +
                           "' must reference exactly value and error payload types");
-            } else {
-                for (const auto& payloadId : type.referencedTypeIds) {
-                    const auto* payload = module.findType(payloadId);
-                    if (payload && !fitsInitialResultPayload(payload->kind))
-                        error({}, "Result payload type '" + payload->displayName +
-                                  "' does not fit the initial one-word Result ABI");
-                }
             }
         }
         if (type.sysmeta.resource.needsDrop !=
@@ -453,6 +438,8 @@ void Verifier::verifyDeclaration(const Decl& declaration, const Module& module) 
 
 void Verifier::verifyFunction(const FunctionDecl& function, const Module& module) {
     const bool generic = isGeneric(function);
+    const bool previousAllowance = mAllowTypeParameters;
+    mAllowTypeParameters = generic;
     if (function.name.empty()) error(function.location, "function has no source name");
     if (function.generatedSymbolName.empty() && function.linkName.empty())
         error(function.location, "function '" + function.name + "' has no linkage identity");
@@ -483,6 +470,7 @@ void Verifier::verifyFunction(const FunctionDecl& function, const Module& module
         function.returnType->kind != TypeKind::Unit)
         error(function.location, "kernel '" + function.name + "' must return unit");
     if (function.body) verifyBlock(function.body.get(), module, function.name);
+    mAllowTypeParameters = previousAllowance;
 }
 
 void Verifier::verifyBlock(const BlockStmt* block, const Module& module,
@@ -510,6 +498,55 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
         if (let->isLinear != (let->usage == luna::ownership::Usage::Linear))
             error(let->location, "binding '" + let->name +
                   "' has inconsistent linear compatibility flag");
+        if (let->materializesIteratorRecipe) {
+            if (!let->type ||
+                let->type->kind != TypeKind::Iterator)
+                error(let->location,
+                      "materialized iterator binding '" +
+                      let->name +
+                      "' has no iterator type");
+            auto* call = dynamic_cast<const CallExpr*>(
+                let->initializer.get());
+            if (!call ||
+                call->iteratorOp == IteratorOp::None ||
+                call->iteratorOp == IteratorOp::Fold ||
+                call->iteratorOp == IteratorOp::ForEach ||
+                call->iteratorOp == IteratorOp::Count ||
+                call->iteratorOp == IteratorOp::Collect)
+                error(let->location,
+                      "materialized iterator binding '" +
+                      let->name +
+                      "' has no adapter recipe");
+            if (let->materializedIteratorOwnsSource) {
+                verifyType(
+                    let->materializedIteratorSourceType,
+                    let->location,
+                    "materialized iterator source");
+                const TypePtr source =
+                    let->materializedIteratorSourceType;
+                if (!source ||
+                    source->kind != TypeKind::Array ||
+                    !source->inner ||
+                    defaultUsageForType(source->inner) ==
+                        luna::ownership::Usage::Copy ||
+                    luna::ownership::mustConsume(
+                        defaultUsageForType(source)))
+                    error(let->location,
+                          "owning materialized iterator '" +
+                          let->name +
+                          "' has no affine move-only array source");
+            } else if (let->materializedIteratorSourceType) {
+                error(let->location,
+                      "non-owning materialized iterator '" +
+                      let->name +
+                      "' carries an owning source witness");
+            }
+        } else if (let->materializedIteratorOwnsSource ||
+                   let->materializedIteratorSourceType) {
+            error(let->location,
+                  "ordinary binding '" + let->name +
+                  "' carries materialized iterator source state");
+        }
     } else if (auto* ret = dynamic_cast<const ReturnStmt*>(stmt)) {
         if (ret->value) verifyExpr(ret->value.get(), module, owner);
         std::unordered_set<std::string> cleanupPlaces;
@@ -530,6 +567,64 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
         verifyBlock(conditional->thenBlock.get(), module, owner);
         if (conditional->elseBranch)
             verifyStmt(conditional->elseBranch.get(), module, owner);
+    } else if (auto* match = dynamic_cast<const MatchStmt*>(stmt)) {
+        verifyExpr(match->scrutinee.get(), module, owner);
+        verifyType(match->matchedType, match->location, "match type");
+        if (match->arms.empty())
+            error(match->location, "match in '" + owner + "' has no arms");
+        const size_t expectedVariantCount =
+            match->matchedType &&
+                    match->matchedType->kind == TypeKind::Result
+                ? 2
+                : (match->matchedType
+                    ? match->matchedType->variants.size() : 0);
+        if (match->arms.size() != expectedVariantCount)
+            error(match->location, "match in '" + owner +
+                  "' is not exhaustive in frozen MoonIR");
+        std::unordered_set<uint32_t> variants;
+        for (const auto& arm : match->arms) {
+            if (!variants.insert(arm.variantIndex).second)
+                error(arm.location, "duplicate match variant index in '" +
+                      owner + "'");
+            if (arm.variantIndex >= expectedVariantCount)
+                error(arm.location, "match arm has an out-of-range variant "
+                      "index in '" + owner + "'");
+            if (arm.bindings.size() != arm.bindingTypes.size())
+                error(arm.location, "match arm binding/type arity mismatch in '" +
+                      owner + "'");
+            TypeVec expectedFields;
+            if (match->matchedType &&
+                match->matchedType->kind == TypeKind::Enum &&
+                arm.variantIndex <
+                    match->matchedType->variants.size()) {
+                expectedFields =
+                    match->matchedType->variants[
+                        arm.variantIndex].fields;
+            } else if (match->matchedType &&
+                       match->matchedType->kind ==
+                           TypeKind::Result &&
+                       match->matchedType->typeArgs.size() == 2 &&
+                       arm.variantIndex < 2) {
+                expectedFields.push_back(
+                    match->matchedType->typeArgs[
+                        arm.variantIndex == 1 ? 0 : 1]);
+            }
+            if (arm.bindingTypes.size() != expectedFields.size())
+                error(arm.location, "match arm payload arity disagrees with "
+                      "its frozen variant in '" + owner + "'");
+            const size_t comparable = std::min(
+                arm.bindingTypes.size(), expectedFields.size());
+            for (size_t index = 0; index < comparable; ++index) {
+                if (!luna::types::sameType(
+                        arm.bindingTypes[index],
+                        expectedFields[index]))
+                    error(arm.location, "match binding type disagrees with "
+                          "its frozen variant payload in '" + owner + "'");
+            }
+            for (const auto& type : arm.bindingTypes)
+                verifyType(type, arm.location, "match binding type");
+            verifyBlock(arm.body.get(), module, owner);
+        }
     } else if (auto* loop = dynamic_cast<const WhileStmt*>(stmt)) {
         verifyExpr(loop->cond.get(), module, owner);
         verifyBlock(loop->body.get(), module, owner);
@@ -537,6 +632,52 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
         verifyExpr(loop->iterable.get(), module, owner);
         verifyType(loop->elementType, loop->location,
                    "for-loop element type");
+        if (!loop->protocolNextSymbol.empty()) {
+            verifyType(loop->protocolIteratorType, loop->location,
+                       "iterator protocol state type");
+            verifyType(loop->protocolOptionType, loop->location,
+                       "iterator protocol option type");
+            if (!loop->protocolOptionType ||
+                loop->protocolOptionType->kind != TypeKind::Enum) {
+                error(loop->location,
+                      "iterator protocol for-loop requires an enum Option type");
+            } else {
+                const auto variantCount =
+                    loop->protocolOptionType->variants.size();
+                if (loop->protocolNoneVariant >= variantCount ||
+                    loop->protocolSomeVariant >= variantCount ||
+                    loop->protocolNoneVariant ==
+                        loop->protocolSomeVariant)
+                    error(loop->location,
+                          "iterator protocol for-loop has invalid Option variants");
+            }
+            if (!loop->protocolIntoSymbol.empty()) {
+                verifyType(loop->protocolInputType,
+                           loop->location,
+                           "IntoIterator protocol input type");
+                if (loop->protocolStateName.empty())
+                    error(loop->location,
+                          "IntoIterator protocol for-loop has no hidden "
+                          "state identity");
+            } else if (!loop->protocolStateName.empty()) {
+                error(loop->location,
+                      "direct Iterator for-loop unexpectedly owns a "
+                      "hidden state identity");
+            }
+        }
+        if (!loop->recipeStateName.empty()) {
+            verifyType(loop->recipeSourceType,
+                       loop->location,
+                       "consuming recipe source type");
+            if (!loop->recipeSourceType ||
+                loop->recipeSourceType->kind !=
+                    TypeKind::Array ||
+                defaultUsageForType(
+                    loop->recipeSourceType->inner) ==
+                    luna::ownership::Usage::Copy)
+                error(loop->location,
+                      "consuming recipe state must own a move-only array");
+        }
         verifyBlock(loop->body.get(), module, owner);
     } else if (auto* release = dynamic_cast<const FreeStmt*>(stmt)) {
         verifyExpr(release->operand.get(), module, owner);
@@ -650,12 +791,47 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
             const bool terminal =
                 call->iteratorOp == IteratorOp::Fold ||
                 call->iteratorOp == IteratorOp::ForEach ||
-                call->iteratorOp == IteratorOp::Count;
+                call->iteratorOp == IteratorOp::Count ||
+                call->iteratorOp == IteratorOp::Collect;
             if (!terminal &&
                 (!call->type ||
                  call->type->kind != TypeKind::Iterator))
                 error(call->location,
                       "iterator adapter does not produce an iterator recipe");
+            if (call->iteratorOp == IteratorOp::Collect) {
+                verifyType(
+                    call->iteratorCollectTargetType,
+                    call->location,
+                    "iterator collect target");
+                verifyType(
+                    call->iteratorCollectBuilderType,
+                    call->location,
+                    "iterator collect builder");
+                if (call->iteratorCollectBeginSymbol.empty() ||
+                    call->iteratorCollectPushSymbol.empty() ||
+                    call->iteratorCollectFinishSymbol.empty())
+                    error(call->location,
+                          "iterator collect has an incomplete "
+                          "FromIterator protocol witness");
+            }
+            if (!call->iteratorRecipeStateName.empty()) {
+                if (!terminal)
+                    error(call->location,
+                          "non-terminal iterator adapter owns terminal recipe state");
+                verifyType(
+                    call->iteratorRecipeSourceType,
+                    call->location,
+                    "iterator terminal recipe source");
+                if (!call->iteratorRecipeSourceType ||
+                    call->iteratorRecipeSourceType->kind !=
+                        TypeKind::Array ||
+                    !call->iteratorRecipeSourceType->inner ||
+                    defaultUsageForType(
+                        call->iteratorRecipeSourceType->inner) ==
+                        luna::ownership::Usage::Copy)
+                    error(call->location,
+                          "iterator terminal recipe state does not own a move-only array");
+            }
         }
         if (call->returnsLinear !=
             (call->returnUsage == luna::ownership::Usage::Linear))
@@ -690,15 +866,30 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
         verifyExpr(propagation->operand.get(), module, owner);
         verifyType(propagation->resultType, propagation->location,
                    "error propagation Result");
+        verifyType(propagation->propagatedResultType, propagation->location,
+                   "propagated Result");
         verifyType(propagation->valueType, propagation->location,
                    "error propagation value");
         verifyType(propagation->errorType, propagation->location,
                    "error propagation error");
+        verifyType(propagation->propagatedErrorType, propagation->location,
+                   "propagated error");
         if (!propagation->resultType ||
             propagation->resultType->kind != TypeKind::Result ||
             propagation->resultType->typeArgs.size() != 2)
             error(propagation->location,
                   "error propagation has no validated Result<T, E> type");
+        if (!propagation->propagatedResultType ||
+            propagation->propagatedResultType->kind != TypeKind::Result ||
+            propagation->propagatedResultType->typeArgs.size() != 2)
+            error(propagation->location,
+                  "error propagation has no validated enclosing Result<T, E> type");
+        if (!luna::types::sameType(
+                propagation->errorType,
+                propagation->propagatedErrorType) &&
+            propagation->errorConversionSymbol.empty())
+            error(propagation->location,
+                  "error propagation changes error type without a static From conversion");
         std::unordered_set<std::string> cleanupPlaces;
         for (const auto& cleanup : propagation->cleanups) {
             if (cleanup.place.empty())
@@ -751,7 +942,8 @@ void Verifier::verifyType(const TypePtr& type, const SourceLocation& location,
         error(location, context + " contains a non-materialized Sema type");
     if (type->kind == TypeKind::Unknown || type->kind == TypeKind::InferenceVar)
         error(location, context + " contains an unresolved type");
-    if (type->kind == TypeKind::TypeParam && !allowTypeParameter)
+    if (type->kind == TypeKind::TypeParam &&
+        !allowTypeParameter && !mAllowTypeParameters)
         error(location, context + " contains a type parameter outside a generic recipe");
     if (type->inner) verifyType(type->inner, location, context, allowTypeParameter);
     for (const auto& argument : type->typeArgs)

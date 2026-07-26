@@ -1,5 +1,6 @@
 #include "SemanticAnalyzer.h"
 #include "../core/TypeRelations.h"
+#include "../core/TypeLayout.h"
 #include "../parser/AST.h"
 #include "../diagnostics/Diagnostic.h"
 #include "../selector/Selector.h"
@@ -73,6 +74,17 @@ static std::string effectivePackageId(const Program* program, const Decl* declar
     return "main";
 }
 
+static std::string nominalTypeOwner(const TypePtr& type) {
+    if (!type || type->nominalId.empty()) return {};
+    const size_t separator = type->nominalId.find("::");
+    return separator == std::string::npos
+        ? std::string{} : type->nominalId.substr(0, separator);
+}
+
+static TypePtr substituteNominalType(
+    const TypePtr& type,
+    const std::unordered_map<std::string, TypePtr>& bindings);
+
 static std::string qualifiedDeclarationKey(const std::string& packageId,
                                            const std::string& modulePath,
                                            const std::string& name) {
@@ -90,6 +102,38 @@ static std::vector<std::string> splitQualifiedName(const std::string& name) {
         begin = separator + 2;
     }
     return parts;
+}
+
+static bool reachesInlineType(
+    const TypePtr& current, const Type* target,
+    std::unordered_set<const Type*>& active) {
+    if (!current) return false;
+    if (current.get() == target) return true;
+    if (!active.insert(current.get()).second) return false;
+    bool reaches = false;
+    switch (current->kind) {
+        case TypeKind::Array:
+            reaches = reachesInlineType(
+                current->inner, target, active);
+            break;
+        case TypeKind::Result:
+            for (const auto& argument : current->typeArgs)
+                reaches = reaches ||
+                    reachesInlineType(argument, target, active);
+            break;
+        case TypeKind::Enum:
+            for (const auto& variant : current->variants)
+                for (const auto& field : variant.fields)
+                    reaches = reaches ||
+                        reachesInlineType(field, target, active);
+            break;
+        default:
+            // Product values and explicit pointer/reference/shared wrappers
+            // are representation barriers in the current ABI.
+            break;
+    }
+    active.erase(current.get());
+    return reaches;
 }
 
 static std::string isolatedLinkageName(const std::string& key,
@@ -137,15 +181,24 @@ bool SemanticAnalyzer::analyze(Program* program) {
     mInstantiator.reset();
     mInstantiatedFunctions.clear();
     mInferenceRoots.clear();
+    mIteratorStateCounter = 0;
     mTraits.clear();
     mTraitTypeParams.clear();
     mTraitMethods.clear();
+    mTraitOwners.clear();
     // Drop is a compiler-known resource contract. Programs provide impls,
     // but cannot replace its identity or signature with a source declaration.
     mTraitMethods[luna::sysmeta::DropTraitId] = {
         {luna::sysmeta::DropMethodName, nullptr}
     };
+    mTraitOwners[luna::sysmeta::DropTraitId] = "luna.compiler";
+    mTraitMethods[luna::sysmeta::FromTraitId] = {
+        {luna::sysmeta::FromMethodName, nullptr}
+    };
+    mTraitOwners[luna::sysmeta::FromTraitId] = "luna.compiler";
     mImpls.clear();
+    mFromConversions.clear();
+    mFromIteratorImplementations.clear();
     mCurrentPackageId = program->packageName.empty() ? "main" : program->packageName;
     mCurrentModulePath.clear();
     const size_t sourceDeclarationCount = program->declarations.size();
@@ -277,17 +330,33 @@ bool SemanticAnalyzer::analyze(Program* program) {
             declareTrait(t);
         }
     }
-    // Pass 1b: declare all remaining types, functions, fragments, and impls.
+    // Pass 1b: populate every product/sum shape before any function or impl
+    // can instantiate a generic nominal type.  Merely prebinding the nominal
+    // name above is insufficient: an early Option<i32> instantiation would
+    // otherwise copy an empty variant set and become declaration-order
+    // dependent across packages.
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         auto& decl = program->declarations[i];
         setDeclarationContext(decl.get());
         setDiagnosticLocation(decl.get());
         validateMetadata(decl.get());
-        if (auto* f = dynamic_cast<FunctionDecl*>(decl.get())) declareFunction(f);
-        else if (auto* f = dynamic_cast<FragmentDecl*>(decl.get())) declareFragment(f);
-        else if (auto* s = dynamic_cast<StructDecl*>(decl.get())) declareStruct(s);
+        if (auto* s = dynamic_cast<StructDecl*>(decl.get())) declareStruct(s);
         else if (auto* e = dynamic_cast<EnumDecl*>(decl.get())) declareEnum(e);
-        else if (auto* i = dynamic_cast<ImplDecl*>(decl.get())) declareImpl(i);
+    }
+    // Pass 1c: declarations that may resolve or instantiate those complete
+    // nominal shapes.
+    for (size_t i = 0; i < sourceDeclarationCount; ++i) {
+        auto& decl = program->declarations[i];
+        setDeclarationContext(decl.get());
+        setDiagnosticLocation(decl.get());
+        if (auto* f = dynamic_cast<FunctionDecl*>(decl.get()))
+            declareFunction(f);
+        else if (auto* f =
+                     dynamic_cast<FragmentDecl*>(decl.get()))
+            declareFragment(f);
+        else if (auto* implementation =
+                     dynamic_cast<ImplDecl*>(decl.get()))
+            declareImpl(implementation);
     }
     // Pass 2a: materialize all trait method sets before checking any impl or
     // generic call. This also supports trait declarations after their uses.
@@ -687,6 +756,12 @@ void SemanticAnalyzer::declareEnum(EnumDecl* decl) {
 }
 
 void SemanticAnalyzer::declareTrait(TraitDecl* decl) {
+    if (decl->name == "Drop" || decl->name == "From") {
+        error("trait name '" + decl->name +
+              "' is reserved for a compiler-known resource/error contract",
+              decl->line, decl->col);
+        return;
+    }
     const std::string identity = traitIdentity(decl);
     decl->resolvedTraitId = identity;
     const std::string sourceKey = qualifiedDeclarationKey(
@@ -694,6 +769,7 @@ void SemanticAnalyzer::declareTrait(TraitDecl* decl) {
     if (!mTraits.emplace(sourceKey, decl).second)
         error("duplicate trait declaration '" + decl->name + "'", decl->line, decl->col);
     mTraitTypeParams[identity] = decl->typeParams;
+    mTraitOwners[identity] = effectivePackageId(mProgram, decl);
     // Traits are compile-time interfaces with stable declaration identity.
     mSymTable.defineType(identity, Type::makeTrait(identity));
     mSymTable.defineType(sourceKey, Type::makeTrait(identity));
@@ -702,9 +778,155 @@ void SemanticAnalyzer::declareTrait(TraitDecl* decl) {
 void SemanticAnalyzer::declareImpl(ImplDecl* decl) {
     const std::string traitId = resolveTraitRef(decl->trait, decl);
     if (traitId.empty()) return;
+    const auto coreFromIterator =
+        mTraits.find(luna::sysmeta::FromIteratorTraitId);
+    const bool isCoreFromIteratorTrait =
+        coreFromIterator != mTraits.end() &&
+        traitId == traitIdentity(coreFromIterator->second);
     const TypePtr targetType = resolveTypeAST(decl->targetType.get(), {});
     const std::string targetId = typeIdentity(targetType);
     decl->resolvedTargetTypeId = targetId;
+    const std::string implPackage =
+        effectivePackageId(mProgram, decl);
+    const std::string targetOwner =
+        nominalTypeOwner(resolved(targetType));
+    const auto traitOwnerEntry = mTraitOwners.find(traitId);
+    const std::string traitOwner =
+        traitOwnerEntry == mTraitOwners.end()
+            ? std::string{} : traitOwnerEntry->second;
+
+    auto registerMethod = [&](FunctionDecl* method,
+                              const std::string& symbol,
+                              bool exposeUnqualified = true) {
+        method->generatedSymbolName = symbol;
+        SymbolInfo info;
+        info.kind = SymbolKind::Function;
+        info.returnType = declaredType(method->returnType.get(), {});
+        method->inferredReturnType = info.returnType;
+        info.returnsLinear = method->returnsLinear;
+        method->returnUsage = method->returnsLinear
+            ? luna::ownership::Usage::Linear
+            : defaultUsageForType(info.returnType);
+        info.returnUsage = method->returnUsage;
+        for (auto& parameter : method->params) {
+            parameter.inferredType = declaredType(parameter.type.get(), {});
+            const bool explicitUsage =
+                parameter.hasExplicitUsage || parameter.isLinear ||
+                dynamic_cast<LinearTypeAST*>(parameter.type.get()) ||
+                dynamic_cast<AffineTypeAST*>(parameter.type.get());
+            auto requestedUsage = parameter.isLinear
+                ? luna::ownership::Usage::Linear
+                : (explicitUsage ? parameter.usage
+                                 : defaultUsageForType(parameter.inferredType));
+            auto contract = parameterContractFor(
+                parameter.inferredType, requestedUsage, explicitUsage);
+            parameter.usage = contract.usage;
+            parameter.relation = contract.relation;
+            info.paramContracts.push_back(contract);
+            info.paramTypes.push_back(parameter.inferredType);
+        }
+        if (exposeUnqualified)
+            mSymTable.defineAtRoot(method->name, info);
+        mSymTable.defineLinkage(symbol, info);
+    };
+
+    if (traitId == luna::sysmeta::FromTraitId) {
+        if (!decl->typeParams.empty()) {
+            error("generic `impl From<Source>` is not yet supported; use concrete error types",
+                  decl->line, decl->col);
+            return;
+        }
+        if (decl->trait.typeArgs.size() != 1) {
+            error("From expects exactly one source type argument",
+                  decl->line, decl->col);
+            return;
+        }
+        TypePtr sourceType = resolveTypeAST(
+            decl->trait.typeArgs.front().get(), {});
+        decl->trait.resolvedTypeArgs = {sourceType};
+        const std::string sourceOwner =
+            nominalTypeOwner(resolved(sourceType));
+        if (targetOwner != implPackage &&
+            sourceOwner != implPackage) {
+            error("orphan impl of compiler trait `From`: package '" +
+                  implPackage +
+                  "' owns neither target type '" +
+                  targetType->toString() + "' nor source type '" +
+                  sourceType->toString() + "'",
+                  decl->line, decl->col);
+            return;
+        }
+        const std::string sourceId = typeIdentity(sourceType);
+        auto& conversions = mFromConversions[targetId];
+        if (conversions.count(sourceId)) {
+            error("duplicate `From<" + sourceType->toString() +
+                  "> for " + targetType->toString() + "` implementation",
+                  decl->line, decl->col);
+            return;
+        }
+        FunctionDecl* conversion = nullptr;
+        for (auto& method : decl->methods) {
+            if (method->name == luna::sysmeta::FromMethodName && !conversion)
+                conversion = method.get();
+            const std::string symbol =
+                std::string(luna::sysmeta::FromTraitId) + "__" + sourceId +
+                "__for__" + targetId + "__" + method->name;
+            registerMethod(method.get(), symbol, false);
+        }
+        decl->generatedSymbolName =
+            std::string(luna::sysmeta::FromTraitId) + "__" + sourceId +
+            "__for__" + targetId;
+        conversions.emplace(sourceId, FromConversion{
+            sourceType, targetType, conversion,
+            conversion ? conversion->generatedSymbolName : std::string{}
+        });
+        return;
+    }
+
+    const auto traitParameters = mTraitTypeParams.find(traitId);
+    const size_t expectedTraitArgumentCount =
+        traitParameters == mTraitTypeParams.end()
+            ? 0 : traitParameters->second.size();
+    if (decl->trait.typeArgs.size() !=
+        expectedTraitArgumentCount) {
+        error("trait '" + displayTraitRef(decl->trait) +
+              "' expects " +
+              std::to_string(expectedTraitArgumentCount) +
+              " type argument(s)", decl->line, decl->col);
+        return;
+    }
+    decl->trait.resolvedTypeArgs.clear();
+    for (auto& argument : decl->trait.typeArgs)
+        decl->trait.resolvedTypeArgs.push_back(
+            resolveTypeAST(argument.get(), {}));
+
+    if (isCoreFromIteratorTrait &&
+        !decl->typeParams.empty()) {
+        error("generic `FromIterator` impls are reserved until impl "
+              "specialization participates in coherence; use a concrete "
+              "collection, item, and builder type",
+              decl->line, decl->col);
+        return;
+    }
+
+    if (traitId == luna::sysmeta::DropTraitId) {
+        if (targetOwner != implPackage) {
+            error("orphan impl of `Drop`: package '" + implPackage +
+                  "' does not own nominal target type '" +
+                  targetType->toString() + "'",
+                  decl->line, decl->col);
+            return;
+        }
+    } else if (traitOwner != implPackage &&
+               targetOwner != implPackage) {
+        error("orphan impl of trait '" + displayTraitRef(decl->trait) +
+              "': package '" + implPackage +
+              "' owns neither the trait nor nominal target type '" +
+              targetType->toString() + "'",
+              decl->line, decl->col);
+        return;
+    }
+
     auto& implementations = mImpls[traitId];
     if (implementations.count(targetId)) {
         error("duplicate impl of trait '" + traitId + "' for type '" + targetId + "'",
@@ -720,31 +942,27 @@ void SemanticAnalyzer::declareImpl(ImplDecl* decl) {
             continue;
         }
         methods[method->name] = method.get();
-        method->generatedSymbolName = traitId + "__for__" + targetId + "__" + method->name;
-
-        // Also register as callable function in symbol table
-        SymbolInfo info;
-        info.kind = SymbolKind::Function;
-        info.returnType = declaredType(method->returnType.get(), {});
-        method->inferredReturnType = info.returnType;
-        method->returnUsage = method->returnsLinear
-            ? luna::ownership::Usage::Linear : defaultUsageForType(info.returnType);
-        info.returnUsage = method->returnUsage;
-        for (auto& p : method->params) {
-            p.inferredType = declaredType(p.type.get(), {});
-            const bool explicitUsage = p.hasExplicitUsage || p.isLinear ||
-                dynamic_cast<LinearTypeAST*>(p.type.get()) ||
-                dynamic_cast<AffineTypeAST*>(p.type.get());
-            auto requestedUsage = p.isLinear ? luna::ownership::Usage::Linear
-                : (explicitUsage ? p.usage : defaultUsageForType(p.inferredType));
-            auto contract = parameterContractFor(
-                p.inferredType, requestedUsage, explicitUsage);
-            p.usage = contract.usage;
-            p.relation = contract.relation;
-            info.paramContracts.push_back(contract);
-            info.paramTypes.push_back(p.inferredType);
-        }
-        mSymTable.defineAtRoot(method->name, info);
+        registerMethod(
+            method.get(),
+            traitId + "__for__" + targetId + "__" + method->name);
+    }
+    if (isCoreFromIteratorTrait &&
+        decl->trait.resolvedTypeArgs.size() == 2) {
+        FromIteratorImplementation protocol;
+        protocol.item = decl->trait.resolvedTypeArgs[0];
+        protocol.builder = decl->trait.resolvedTypeArgs[1];
+        protocol.target = targetType;
+        auto begin = methods.find(
+            luna::sysmeta::FromIteratorBeginMethodName);
+        auto push = methods.find(
+            luna::sysmeta::FromIteratorPushMethodName);
+        auto finish = methods.find(
+            luna::sysmeta::FromIteratorFinishMethodName);
+        if (begin != methods.end()) protocol.begin = begin->second;
+        if (push != methods.end()) protocol.push = push->second;
+        if (finish != methods.end()) protocol.finish = finish->second;
+        mFromIteratorImplementations[targetId] =
+            std::move(protocol);
     }
 }
 
@@ -904,12 +1122,55 @@ void SemanticAnalyzer::analyzeEnum(EnumDecl* decl) {
             error("Duplicate enum variant '" + variant.name + "' in '" + decl->name + "'");
         names[variant.name] = true;
     }
+    for (const auto& variant : it->second->variants) {
+        for (const auto& field : variant.fields) {
+            std::unordered_set<const Type*> active;
+            if (reachesInlineType(
+                    field, it->second.get(), active)) {
+                error("enum '" + decl->name +
+                      "' has an infinite inline layout through variant '" +
+                      variant.name +
+                      "'; place the recursive value behind a nominal "
+                      "struct, raw pointer, rc, arc, or reference",
+                      decl->line, decl->col);
+            }
+        }
+    }
 }
 
 void SemanticAnalyzer::analyzeTrait(TraitDecl* decl) {
     // Store method signatures for constraint checking
     auto& sigs = mTraitMethods[traitIdentity(decl)];
+    std::unordered_map<std::string, TypePtr> bindings;
+    bindings["Self"] = Type::makeTypeParam("Self");
+    for (const auto& typeParameter : decl->typeParams)
+        bindings[typeParameter] =
+            Type::makeTypeParam(typeParameter);
     for (auto& method : decl->methods) {
+        for (auto& parameter : method.params) {
+            parameter.inferredType =
+                resolveTypeAST(parameter.type.get(), bindings);
+            const bool explicitUsage =
+                parameter.hasExplicitUsage ||
+                parameter.isLinear ||
+                dynamic_cast<LinearTypeAST*>(
+                    parameter.type.get()) ||
+                dynamic_cast<AffineTypeAST*>(
+                    parameter.type.get());
+            const auto requestedUsage = parameter.isLinear
+                ? luna::ownership::Usage::Linear
+                : (explicitUsage
+                    ? parameter.usage
+                    : defaultUsageForType(
+                        parameter.inferredType));
+            const auto contract = parameterContractFor(
+                parameter.inferredType, requestedUsage,
+                explicitUsage);
+            parameter.relation = contract.relation;
+            parameter.usage = contract.usage;
+        }
+        method.inferredReturnType =
+            resolveTypeAST(method.returnType.get(), bindings);
         // Create a FunctionDecl-like entry
         auto fd = std::make_unique<FunctionDecl>();
         fd->name = method.name;
@@ -935,6 +1196,72 @@ void SemanticAnalyzer::analyzeTrait(TraitDecl* decl) {
 void SemanticAnalyzer::analyzeImpl(ImplDecl* decl) {
     const std::string traitId = decl->trait.resolvedTraitId;
     if (traitId.empty()) return;
+    const auto coreFromIterator =
+        mTraits.find(luna::sysmeta::FromIteratorTraitId);
+    const bool isCoreFromIteratorTrait =
+        coreFromIterator != mTraits.end() &&
+        traitId == traitIdentity(coreFromIterator->second);
+    if (traitId == luna::sysmeta::FromTraitId) {
+        const TypePtr source = decl->trait.resolvedTypeArgs.size() == 1
+            ? resolved(decl->trait.resolvedTypeArgs.front()) : TyUnknown;
+        const TypePtr target = resolved(
+            resolveTypeAST(decl->targetType.get(), {}));
+        FunctionDecl* conversion = nullptr;
+        for (auto& method : decl->methods) {
+            if (method->name != luna::sysmeta::FromMethodName) {
+                error("impl of `From` defines unknown method '" +
+                      method->name + "'", method->line, method->col);
+            } else if (conversion) {
+                error("impl of `From` defines `from` more than once",
+                      method->line, method->col);
+            } else {
+                conversion = method.get();
+            }
+            analyzeFunction(method.get());
+        }
+        bool valid = conversion != nullptr;
+        if (!conversion) {
+            error("impl of `From<" + source->toString() +
+                  "> for " + target->toString() +
+                  "` is missing method `from`", decl->line, decl->col);
+            return;
+        }
+        if (!conversion->typeParams.empty()) {
+            error("From::from may not be generic",
+                  conversion->line, conversion->col);
+            valid = false;
+        }
+        if (conversion->params.size() != 1 ||
+            !luna::types::sameType(
+                resolved(conversion->params.front().inferredType), source)) {
+            error("From::from requires exactly one parameter of type '" +
+                  source->toString() + "'", conversion->line, conversion->col);
+            valid = false;
+        } else if (luna::ownership::isMoveOnly(
+                       defaultUsageForType(source)) &&
+                   (conversion->params.front().relation !=
+                        luna::ownership::Relation::Owned ||
+                    conversion->params.front().usage !=
+                        defaultUsageForType(source))) {
+            error("From::from must take ownership of move-only source '" +
+                  source->toString() +
+                  "' with an explicit affine or linear parameter",
+                  conversion->line, conversion->col);
+            valid = false;
+        }
+        if (!luna::types::sameType(
+                resolved(conversion->inferredReturnType), target)) {
+            error("From::from must return '" + target->toString() + "'",
+                  conversion->line, conversion->col);
+            valid = false;
+        }
+        if (!valid) {
+            auto targetIt = mFromConversions.find(typeIdentity(target));
+            if (targetIt != mFromConversions.end())
+                targetIt->second.erase(typeIdentity(source));
+        }
+        return;
+    }
     // Verify that each impl method matches a trait method
     auto traitIt = mTraitMethods.find(traitId);
     if (traitIt == mTraitMethods.end()) {
@@ -971,6 +1298,211 @@ void SemanticAnalyzer::analyzeImpl(ImplDecl* decl) {
     for (auto& method : decl->methods) {
         // Analyze the method body
         analyzeFunction(method.get());
+    }
+
+    TraitDecl* traitDeclaration = nullptr;
+    for (const auto& [_, candidate] : mTraits) {
+        if (candidate &&
+            traitIdentity(candidate) == traitId) {
+            traitDeclaration = candidate;
+            break;
+        }
+    }
+    if (traitDeclaration) {
+        std::unordered_map<std::string, TypePtr>
+            signatureBindings;
+        signatureBindings["Self"] = resolved(
+            resolveTypeAST(decl->targetType.get(),
+                           typeBindings));
+        for (size_t index = 0;
+             index < traitDeclaration->typeParams.size() &&
+             index < decl->trait.resolvedTypeArgs.size();
+             ++index)
+            signatureBindings[
+                traitDeclaration->typeParams[index]] =
+                resolved(decl->trait.resolvedTypeArgs[index]);
+
+        for (const auto& signature :
+             traitDeclaration->methods) {
+            auto implementationMethod = std::find_if(
+                decl->methods.begin(), decl->methods.end(),
+                [&](const std::unique_ptr<FunctionDecl>& method) {
+                    return method &&
+                           method->name == signature.name;
+                });
+            if (implementationMethod == decl->methods.end())
+                continue;
+            auto* method = implementationMethod->get();
+            if (method->params.size() !=
+                signature.params.size()) {
+                error("method '" + signature.name +
+                      "' has the wrong parameter count for trait '" +
+                      displayTraitRef(decl->trait) + "'",
+                      method->line, method->col);
+                continue;
+            }
+            for (size_t index = 0;
+                 index < method->params.size(); ++index) {
+                TypePtr expected = substituteNominalType(
+                    signature.params[index].inferredType,
+                    signatureBindings);
+                if (!luna::types::sameType(
+                        resolved(method->params[index].inferredType),
+                        resolved(expected)))
+                    error("parameter " +
+                          std::to_string(index + 1) +
+                          " of method '" + signature.name +
+                          "' must be '" + expected->toString() + "'",
+                          method->line, method->col);
+                if (method->params[index].relation !=
+                        signature.params[index].relation ||
+                    method->params[index].usage !=
+                        signature.params[index].usage)
+                    error("ownership contract of parameter " +
+                          std::to_string(index + 1) +
+                          " in method '" + signature.name +
+                          "' does not match trait '" +
+                          displayTraitRef(decl->trait) + "'",
+                          method->line, method->col);
+            }
+            TypePtr expectedReturn = substituteNominalType(
+                signature.inferredReturnType,
+                signatureBindings);
+            if (!luna::types::sameType(
+                    resolved(method->inferredReturnType),
+                    resolved(expectedReturn)))
+                error("method '" + signature.name +
+                      "' must return '" +
+                      expectedReturn->toString() + "'",
+                      method->line, method->col);
+        }
+    }
+
+    if (isCoreFromIteratorTrait) {
+        const TypePtr target = resolved(
+            resolveTypeAST(decl->targetType.get(), typeBindings));
+        auto protocolIt =
+            mFromIteratorImplementations.find(typeIdentity(target));
+        bool valid =
+            protocolIt != mFromIteratorImplementations.end();
+        FromIteratorImplementation* protocol =
+            valid ? &protocolIt->second : nullptr;
+        const TypePtr item =
+            protocol ? resolved(protocol->item) : TyUnknown;
+        const TypePtr builder =
+            protocol ? resolved(protocol->builder) : TyUnknown;
+
+        const auto rejectGeneric = [&](FunctionDecl* method) {
+            if (!method || method->typeParams.empty()) return;
+            error("FromIterator::" + method->name +
+                  " may not be generic",
+                  method->line, method->col);
+            valid = false;
+        };
+        if (!protocol || !protocol->begin ||
+            !protocol->push || !protocol->finish) {
+            valid = false;
+        } else {
+            rejectGeneric(protocol->begin);
+            rejectGeneric(protocol->push);
+            rejectGeneric(protocol->finish);
+            if (!protocol->begin->params.empty() ||
+                !luna::types::sameType(
+                    resolved(protocol->begin->inferredReturnType),
+                    builder) ||
+                protocol->begin->returnUsage !=
+                    luna::ownership::Usage::Affine) {
+                error("FromIterator::begin must take no parameters and "
+                      "return `affine " + builder->toString() + "`",
+                      protocol->begin->line, protocol->begin->col);
+                valid = false;
+            }
+            if (protocol->push->params.size() != 2) {
+                error("FromIterator::push must take `&mut " +
+                      builder->toString() + "` and `affine " +
+                      item->toString() + "`",
+                      protocol->push->line, protocol->push->col);
+                valid = false;
+            } else {
+                const TypePtr builderParameter = resolved(
+                    protocol->push->params[0].inferredType);
+                if (!builderParameter ||
+                    builderParameter->kind != TypeKind::Reference ||
+                    !builderParameter->isMutable ||
+                    !luna::types::sameType(
+                        resolved(builderParameter->inner), builder) ||
+                    !luna::types::sameType(
+                        resolved(protocol->push->params[1].inferredType),
+                        item) ||
+                    protocol->push->params[1].relation !=
+                        luna::ownership::Relation::Owned ||
+                    protocol->push->params[1].usage !=
+                        luna::ownership::Usage::Affine) {
+                    error("FromIterator::push must take `&mut " +
+                          builder->toString() + "` and `affine " +
+                          item->toString() + "` (got `" +
+                          (builderParameter
+                              ? builderParameter->toString()
+                              : std::string("?")) + "`, `" +
+                          resolved(protocol->push->params[1].inferredType)->
+                              toString() + "` with " +
+                          std::string(luna::ownership::relationName(
+                              protocol->push->params[1].relation)) + "/" +
+                          std::string(luna::ownership::usageName(
+                              protocol->push->params[1].usage)) + ")",
+                          protocol->push->line, protocol->push->col);
+                    valid = false;
+                }
+            }
+            if (!luna::types::sameType(
+                    resolved(protocol->push->inferredReturnType),
+                    TyUnit)) {
+                error("FromIterator::push must return unit",
+                      protocol->push->line, protocol->push->col);
+                valid = false;
+            }
+            if (protocol->finish->params.size() != 1 ||
+                !luna::types::sameType(
+                    resolved(protocol->finish->params.front().inferredType),
+                    builder) ||
+                protocol->finish->params.front().relation !=
+                    luna::ownership::Relation::Owned ||
+                protocol->finish->params.front().usage !=
+                    luna::ownership::Usage::Affine ||
+                !luna::types::sameType(
+                    resolved(protocol->finish->inferredReturnType),
+                    target) ||
+                protocol->finish->returnUsage !=
+                    luna::ownership::Usage::Affine) {
+                error("FromIterator::finish must take `affine " +
+                      builder->toString() + "` and return `affine " +
+                      target->toString() + "` (got parameter `" +
+                      (protocol->finish->params.empty()
+                          ? std::string("?")
+                          : resolved(protocol->finish->params.front().
+                                inferredType)->toString()) +
+                      "` and return `" +
+                      resolved(protocol->finish->inferredReturnType)->
+                          toString() + "`)",
+                      protocol->finish->line, protocol->finish->col);
+                valid = false;
+            }
+            if (luna::ownership::mustConsume(
+                    defaultUsageForType(item)) ||
+                luna::ownership::mustConsume(
+                    defaultUsageForType(builder)) ||
+                luna::ownership::mustConsume(
+                    defaultUsageForType(target))) {
+                error("FromIterator currently requires affine-or-copy item, "
+                      "builder, and target types; linear collection state "
+                      "needs an explicit hidden obligation",
+                      decl->line, decl->col);
+                valid = false;
+            }
+        }
+        if (!valid)
+            mFromIteratorImplementations.erase(
+                typeIdentity(target));
     }
 
     if (traitId == luna::sysmeta::DropTraitId) {
@@ -1404,6 +1936,15 @@ void SemanticAnalyzer::analyzeFragmentForSlot(
             if (branch->elseBranch) elsePaths = analyzeStmtPaths(branch->elseBranch.get(), incoming);
             return mergePaths(std::move(thenPaths), elsePaths);
         }
+        if (auto* match = dynamic_cast<const MatchStmt*>(stmt)) {
+            ControlPaths paths;
+            paths.active.clear();
+            for (const auto& arm : match->arms)
+                paths = mergePaths(
+                    std::move(paths),
+                    analyzePaths(arm.body.get(), incoming));
+            return paths;
+        }
         if (auto* loop = dynamic_cast<const WhileStmt*>(stmt)) {
             ControlPaths body = analyzePaths(loop->body.get(), incoming);
             // A loop may execute zero times or repeat. Any resume in its body
@@ -1525,7 +2066,14 @@ bool SemanticAnalyzer::satisfiesTrait(const std::string& traitId, const TypePtr&
 std::string SemanticAnalyzer::resolveTraitRef(TraitRef& trait, const ASTNode* useSite) {
     if (!trait.resolvedTraitId.empty()) return trait.resolvedTraitId;
     if (trait.name == "Drop") {
+        if (!trait.typeArgs.empty())
+            error("Drop does not accept type arguments",
+                  trait.line, trait.col);
         trait.resolvedTraitId = luna::sysmeta::DropTraitId;
+        return trait.resolvedTraitId;
+    }
+    if (trait.name == "From") {
+        trait.resolvedTraitId = luna::sysmeta::FromTraitId;
         return trait.resolvedTraitId;
     }
     const ASTNode* diagnosticSite = trait.line > 0 ? static_cast<const ASTNode*>(&trait) : useSite;
@@ -1633,11 +2181,87 @@ TypePtr SemanticAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
                 reflected->compileTimeDeclarationId;
         auto finalType = resolved(declaredType);
         ls->inferredType = finalType;
-        if (finalType->kind == TypeKind::Iterator)
-            error("lazy iterator recipes must be consumed inline by `for`, "
-                  "`fold`, `for_each`, or `count`; escaping adapter values "
-                  "are reserved until Core Iterator structs are materialized",
-                  ls->line, ls->col);
+        ls->materializesIteratorRecipe = false;
+        ls->materializedIteratorOwnsSource = false;
+        ls->materializedIteratorSourceType.reset();
+        if (finalType->kind == TypeKind::Iterator) {
+            CallExpr* base = nullptr;
+            std::function<void(Expr*)> findBase =
+                [&](Expr* expression) {
+                    auto* call =
+                        dynamic_cast<CallExpr*>(
+                            expression);
+                    if (!call) return;
+                    if (call->iteratorOp ==
+                            IteratorOp::Range ||
+                        call->iteratorOp ==
+                            IteratorOp::Iter ||
+                        call->iteratorOp ==
+                            IteratorOp::IterMut ||
+                        call->iteratorOp ==
+                            IteratorOp::IntoIter) {
+                        base = call;
+                        return;
+                    }
+                    auto* member =
+                        dynamic_cast<FieldAccessExpr*>(
+                            call->callee.get());
+                    if (member)
+                        findBase(member->object.get());
+                };
+            findBase(ls->initializer.get());
+            bool supported = base != nullptr;
+            if (base && base->iteratorOp !=
+                            IteratorOp::Range) {
+                auto* member =
+                    dynamic_cast<FieldAccessExpr*>(
+                        base->callee.get());
+                auto* source = member
+                    ? dynamic_cast<IdentifierExpr*>(
+                          member->object.get())
+                    : nullptr;
+                if (!source) {
+                    error("materialized iterator recipe "
+                          "requires a local array or slice "
+                          "source",
+                          ls->line, ls->col);
+                    supported = false;
+                }
+                TypePtr sourceType;
+                if (base->resultType &&
+                    !base->resultType->typeArgs.empty())
+                    sourceType = resolved(
+                        base->resultType->
+                            typeArgs.front());
+                if (base->iteratorOp ==
+                        IteratorOp::IntoIter &&
+                    sourceType &&
+                    sourceType->kind == TypeKind::Array &&
+                    sourceType->inner &&
+                    defaultUsageForType(
+                        sourceType->inner) !=
+                        luna::ownership::Usage::Copy) {
+                    if (luna::ownership::mustConsume(
+                            defaultUsageForType(sourceType))) {
+                        error("materialized iterator recipe cannot hide a "
+                              "linear source obligation",
+                              ls->line, ls->col);
+                        supported = false;
+                    } else {
+                        ls->materializedIteratorOwnsSource = true;
+                        ls->materializedIteratorSourceType =
+                            sourceType;
+                    }
+                }
+            }
+            if (!base) {
+                error("an iterator binding cannot be "
+                      "re-materialized from another recipe; "
+                      "consume the existing binding directly",
+                      ls->line, ls->col);
+            }
+            ls->materializesIteratorRecipe = supported;
+        }
         if (ls->isLinear || dynamic_cast<LinearTypeAST*>(ls->typeAnnotation.get()))
             ls->usage = luna::ownership::Usage::Linear;
         else if (dynamic_cast<AffineTypeAST*>(ls->typeAnnotation.get()))
@@ -1705,6 +2329,112 @@ TypePtr SemanticAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
         if (is->elseBranch) analyzeStmt(is->elseBranch.get(), expectedReturn);
         return TyUnit;
     }
+    if (auto* match = dynamic_cast<MatchStmt*>(stmt)) {
+        TypePtr matched = resolved(analyzeExpr(match->scrutinee.get()));
+        match->matchedType = matched;
+
+        struct VariantView {
+            std::string name;
+            size_t physicalIndex = 0;
+            TypeVec fields;
+        };
+        std::vector<VariantView> variants;
+        if (matched && matched->kind == TypeKind::Enum) {
+            for (size_t index = 0; index < matched->variants.size(); ++index)
+                variants.push_back({
+                    matched->variants[index].name, index,
+                    matched->variants[index].fields});
+        } else if (matched && matched->kind == TypeKind::Result &&
+                   matched->typeArgs.size() == 2) {
+            // Result's frozen ABI uses false/0 for Err and true/1 for Ok.
+            variants.push_back({"Err", 0, {matched->typeArgs[1]}});
+            variants.push_back({"Ok", 1, {matched->typeArgs[0]}});
+        } else {
+            error("match requires an enum or Result value",
+                  match->line, match->col);
+            return TyUnit;
+        }
+
+        std::unordered_set<std::string> seenVariants;
+        for (auto& arm : match->arms) {
+            const auto selected = std::find_if(
+                variants.begin(), variants.end(),
+                [&](const VariantView& variant) {
+                    return variant.name == arm.variantName;
+                });
+            if (selected == variants.end()) {
+                error("unknown variant '" + arm.variantName +
+                      "' in match on '" + matched->toString() + "'",
+                      arm.line, arm.col);
+                continue;
+            }
+            std::string qualifierName = arm.typeQualifier;
+            const size_t qualifierSeparator =
+                qualifierName.rfind("::");
+            if (qualifierSeparator != std::string::npos)
+                qualifierName =
+                    qualifierName.substr(qualifierSeparator + 2);
+            if (!arm.typeQualifier.empty() &&
+                qualifierName != matched->name &&
+                arm.typeQualifier != matched->toString()) {
+                error("match pattern qualifier '" + arm.typeQualifier +
+                      "' does not name matched type '" +
+                      matched->toString() + "'", arm.line, arm.col);
+            }
+            if (!seenVariants.insert(arm.variantName).second)
+                error("duplicate match arm for variant '" +
+                      arm.variantName + "'", arm.line, arm.col);
+            if (arm.bindings.size() != selected->fields.size()) {
+                error("variant '" + arm.variantName + "' expects " +
+                      std::to_string(selected->fields.size()) +
+                      " payload binding(s), got " +
+                      std::to_string(arm.bindings.size()),
+                      arm.line, arm.col);
+            }
+            arm.variantIndex = selected->physicalIndex;
+            arm.bindingTypes = selected->fields;
+
+            mSymTable.enterScope();
+            std::unordered_set<std::string> seenBindings;
+            const size_t count =
+                std::min(arm.bindings.size(), arm.bindingTypes.size());
+            for (size_t index = 0; index < count; ++index) {
+                if (!seenBindings.insert(arm.bindings[index]).second) {
+                    error("duplicate payload binding '" +
+                          arm.bindings[index] + "'", arm.line, arm.col);
+                    continue;
+                }
+                SymbolInfo binding;
+                binding.kind = SymbolKind::Variable;
+                binding.type = arm.bindingTypes[index];
+                binding.usage =
+                    defaultUsageForType(arm.bindingTypes[index]);
+                binding.isLinear =
+                    binding.usage == luna::ownership::Usage::Linear;
+                mSymTable.define(arm.bindings[index], binding);
+            }
+            analyzeBlock(arm.body.get(), expectedReturn);
+            mSymTable.exitScope();
+        }
+
+        if (seenVariants.size() != variants.size()) {
+            std::string missing;
+            for (const auto& variant : variants) {
+                if (seenVariants.count(variant.name)) continue;
+                if (!missing.empty()) missing += ", ";
+                missing += variant.name;
+            }
+            if (matched->kind == TypeKind::Result) {
+                error("Result match must contain exactly one `Ok` arm "
+                      "and one `Err` arm", match->line, match->col);
+            } else {
+                error("match on '" + matched->toString() +
+                      "' is not exhaustive; missing variant(s): " +
+                      missing, match->line, match->col);
+            }
+        }
+        return TyUnit;
+    }
     if (auto* ws = dynamic_cast<WhileStmt*>(stmt)) {
         TypePtr condType = analyzeExpr(ws->cond.get());
         requireBool(condType, "while condition");
@@ -1714,27 +2444,353 @@ TypePtr SemanticAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
     if (auto* fs = dynamic_cast<ForStmt*>(stmt)) {
         TypePtr iterable = resolved(analyzeExpr(fs->iterable.get()));
         TypePtr element = TyI32;
+        fs->protocolNextSymbol.clear();
+        fs->protocolIteratorType.reset();
+        fs->protocolOptionType.reset();
+        fs->protocolIntoSymbol.clear();
+        fs->protocolInputType.reset();
+        fs->protocolStateName.clear();
+        fs->protocolStateNeedsCleanup = false;
+        fs->recipeStateName.clear();
+        fs->recipeSourceType.reset();
+        const auto markMoveOnlyRecipe =
+            [&](Expr* source,
+                const TypePtr& sourceType) {
+                if (!sourceType ||
+                    sourceType->kind !=
+                        TypeKind::Array ||
+                    defaultUsageForType(
+                        sourceType->inner) ==
+                        luna::ownership::Usage::Copy)
+                    return;
+                if (!dynamic_cast<IdentifierExpr*>(
+                        source)) {
+                    error("move-only consuming array iteration "
+                          "currently requires a local source binding",
+                          fs->line, fs->col);
+                    return;
+                }
+                fs->recipeSourceType = sourceType;
+                fs->recipeStateName =
+                    "$for.recipe." +
+                    std::to_string(fs->line) + "." +
+                    std::to_string(fs->col) + "." +
+                    fs->varName;
+            };
         if (iterable->kind == TypeKind::DeclarationView)
             element = Type::makeDeclarationRef(iterable->inner);
         else if (iterable->kind == TypeKind::MetadataView)
             element = iterable->inner;
-        else if (iterable->kind == TypeKind::Iterator)
+        else if (iterable->kind == TypeKind::Iterator) {
             element = iterable->inner;
+            std::function<void(Expr*)> findConsumingArray =
+                [&](Expr* expression) {
+                    auto* call =
+                        dynamic_cast<CallExpr*>(
+                            expression);
+                    if (!call) return;
+                    auto* member =
+                        dynamic_cast<FieldAccessExpr*>(
+                            call->callee.get());
+                    if (!member) return;
+                    if (call->iteratorOp ==
+                        IteratorOp::IntoIter) {
+                        TypePtr sourceType;
+                        if (call->resultType &&
+                            !call->resultType->
+                                typeArgs.empty())
+                            sourceType = resolved(
+                                call->resultType->
+                                    typeArgs.front());
+                        markMoveOnlyRecipe(
+                            member->object.get(),
+                            sourceType);
+                        return;
+                    }
+                    findConsumingArray(
+                        member->object.get());
+                };
+            findConsumingArray(
+                fs->iterable.get());
+        }
         else if (iterable->kind == TypeKind::Slice)
             element = Type::makeReference(iterable->inner);
         else if (iterable->kind == TypeKind::Array) {
             element = iterable->inner;
-            if (defaultUsageForType(element) !=
-                luna::ownership::Usage::Copy)
-                error("direct array iteration currently requires Copy "
-                      "elements; use an explicit ownership adapter once "
-                      "move-only item drop-state tracking is available",
-                      fs->line, fs->col);
+            markMoveOnlyRecipe(
+                fs->iterable.get(), iterable);
         }
-        else if (iterable->kind != TypeKind::Array &&
-                 iterable->kind != TypeKind::Slice)
-            error("for-loop requires an array, slice, iterator, "
-                  "declaration_view, or metadata_view", fs->line, fs->col);
+        else {
+            // User-defined loops are a closed Core protocol, not structural
+            // "has a next method" duck typing.  This preserves coherence and
+            // leaves compiler iterator recipes free to use their fused path.
+            TraitDecl* iteratorTrait = nullptr;
+            auto coreIterator =
+                mTraits.find(luna::sysmeta::IteratorTraitId);
+            if (coreIterator != mTraits.end())
+                iteratorTrait = coreIterator->second;
+            const std::string iteratorTraitId =
+                traitIdentity(iteratorTrait);
+            FunctionDecl* next = nullptr;
+            FunctionDecl* into = nullptr;
+            TypePtr iteratorStateType = iterable;
+            TypePtr declaredIntoItem;
+            if (!iteratorTraitId.empty()) {
+                auto traitImpls = mImpls.find(iteratorTraitId);
+                if (traitImpls != mImpls.end()) {
+                    auto implementation = traitImpls->second.find(
+                        typeIdentity(iterable));
+                    if (implementation != traitImpls->second.end()) {
+                        auto method =
+                            implementation->second.find("next");
+                        if (method !=
+                            implementation->second.end())
+                            next = method->second;
+                    }
+                }
+            }
+
+            if (!next) {
+                TraitDecl* intoIteratorTrait = nullptr;
+                auto coreIntoIterator = mTraits.find(
+                    luna::sysmeta::IntoIteratorTraitId);
+                if (coreIntoIterator != mTraits.end())
+                    intoIteratorTrait =
+                        coreIntoIterator->second;
+                const std::string intoTraitId =
+                    traitIdentity(intoIteratorTrait);
+                if (!intoTraitId.empty()) {
+                    auto traitImpls =
+                        mImpls.find(intoTraitId);
+                    if (traitImpls != mImpls.end()) {
+                        auto implementation =
+                            traitImpls->second.find(
+                                typeIdentity(iterable));
+                        if (implementation !=
+                            traitImpls->second.end()) {
+                            auto method =
+                                implementation->second.find(
+                                    "into_iter");
+                            if (method !=
+                                implementation->second.end())
+                                into = method->second;
+                        }
+                    }
+                }
+                if (into) {
+                    if (into->params.size() != 1 ||
+                        !luna::types::sameType(
+                            resolved(into->params.front().
+                                inferredType),
+                            iterable) ||
+                        into->params.front().relation !=
+                            luna::ownership::Relation::Owned) {
+                        error("Core IntoIterator::into_iter must "
+                              "take ownership of exactly one '" +
+                              iterable->toString() +
+                              "' value", into->line, into->col);
+                    }
+                    iteratorStateType = resolved(
+                        into->inferredReturnType);
+
+                    // Recover the declared Item/Iter association from the
+                    // exact coherent impl.  Method return type alone carries
+                    // Iter but not the associated Item witness.
+                    for (const auto& declaration :
+                         mProgram->declarations) {
+                        auto* implementation =
+                            dynamic_cast<ImplDecl*>(
+                                declaration.get());
+                        if (!implementation ||
+                            implementation->trait.
+                                resolvedTraitId !=
+                                intoTraitId ||
+                            implementation->
+                                resolvedTargetTypeId !=
+                                typeIdentity(iterable))
+                            continue;
+                        if (implementation->trait.
+                                resolvedTypeArgs.size() ==
+                            2) {
+                            declaredIntoItem = resolved(
+                                implementation->trait.
+                                    resolvedTypeArgs[0]);
+                            TypePtr declaredIterator =
+                                resolved(
+                                    implementation->trait.
+                                        resolvedTypeArgs[1]);
+                            if (!luna::types::sameType(
+                                    declaredIterator,
+                                    iteratorStateType))
+                                error("Core IntoIterator::into_iter "
+                                      "return type disagrees with "
+                                      "its Iter argument",
+                                      into->line, into->col);
+                        }
+                        break;
+                    }
+
+                    if (!iteratorTraitId.empty()) {
+                        auto traitImpls =
+                            mImpls.find(iteratorTraitId);
+                        if (traitImpls != mImpls.end()) {
+                            auto implementation =
+                                traitImpls->second.find(
+                                    typeIdentity(
+                                        iteratorStateType));
+                            if (implementation !=
+                                traitImpls->second.end()) {
+                                auto method =
+                                    implementation->second.find(
+                                        "next");
+                                if (method !=
+                                    implementation->second.end())
+                                    next = method->second;
+                            }
+                        }
+                    }
+                    if (!next)
+                        error("Core IntoIterator for type '" +
+                              iterable->toString() +
+                              "' returns '" +
+                              iteratorStateType->toString() +
+                              "', which does not implement "
+                              "core::iter::Iterator",
+                              fs->line, fs->col);
+                }
+            }
+
+            bool validProtocol = next != nullptr;
+            if (!next) {
+                if (!into)
+                    error("for-loop type '" +
+                          iterable->toString() +
+                          "' implements neither "
+                          "core::iter::Iterator nor "
+                          "core::iter::IntoIterator",
+                          fs->line, fs->col);
+            } else if (!dynamic_cast<IdentifierExpr*>(
+                           fs->iterable.get())) {
+                error("Core Iterator/IntoIterator for-loop source must "
+                      "currently be a local binding",
+                      fs->line, fs->col);
+                validProtocol = false;
+            }
+
+            if (next) {
+                if (next->params.size() != 1) {
+                    error("Core Iterator::next must have exactly one "
+                          "receiver parameter", next->line, next->col);
+                    validProtocol = false;
+                } else {
+                    TypePtr receiver = resolved(
+                        next->params.front().inferredType);
+                    if (!receiver ||
+                        receiver->kind != TypeKind::Reference ||
+                        !receiver->isMutable ||
+                        !luna::types::sameType(
+                            resolved(receiver->inner),
+                            iteratorStateType)) {
+                        error("Core Iterator::next receiver must be '&mut " +
+                              iteratorStateType->toString() + "'",
+                              next->line, next->col);
+                        validProtocol = false;
+                    }
+                }
+
+                TypePtr option = resolved(
+                    next->inferredReturnType);
+                TypePtr coreOption;
+                auto optionDeclaration =
+                    mDeclaredTypes.find(
+                        luna::sysmeta::OptionTypeId);
+                if (optionDeclaration !=
+                    mDeclaredTypes.end())
+                    coreOption =
+                        resolved(optionDeclaration->second);
+                const bool isCoreOption =
+                    option && coreOption &&
+                    option->kind == TypeKind::Enum &&
+                    !option->nominalId.empty() &&
+                    option->nominalId ==
+                        coreOption->nominalId;
+                size_t noneIndex = 0;
+                size_t someIndex = 0;
+                bool foundNone = false;
+                bool foundSome = false;
+                if (isCoreOption) {
+                    for (size_t index = 0;
+                         index < option->variants.size();
+                         ++index) {
+                        const auto& variant =
+                            option->variants[index];
+                        if (variant.name == "None" &&
+                            variant.fields.empty()) {
+                            noneIndex = index;
+                            foundNone = true;
+                        } else if (
+                            variant.name == "Some" &&
+                            variant.fields.size() == 1) {
+                            someIndex = index;
+                            element =
+                                resolved(variant.fields.front());
+                            foundSome = true;
+                        }
+                    }
+                }
+                if (foundSome && declaredIntoItem &&
+                    !luna::types::sameType(
+                        element, declaredIntoItem)) {
+                    error("Core IntoIterator Item type '" +
+                          declaredIntoItem->toString() +
+                          "' disagrees with Iterator item type '" +
+                          element->toString() + "'",
+                          fs->line, fs->col);
+                    validProtocol = false;
+                }
+                if (!isCoreOption || !foundNone ||
+                    !foundSome) {
+                    error("Core Iterator::next must return "
+                          "core::option::Option<Item> (resolved '" +
+                          (option
+                              ? option->toString()
+                              : std::string("?")) +
+                          "' with nominal identity '" +
+                          (option
+                              ? option->nominalId
+                              : std::string{}) +
+                          "', expected '" +
+                          (coreOption
+                              ? coreOption->nominalId
+                              : std::string{}) + "')",
+                          next->line, next->col);
+                    validProtocol = false;
+                }
+                if (validProtocol) {
+                    fs->protocolNextSymbol =
+                        next->generatedSymbolName.empty()
+                            ? next->name
+                            : next->generatedSymbolName;
+                    fs->protocolIteratorType =
+                        iteratorStateType;
+                    fs->protocolOptionType = option;
+                    fs->protocolNoneVariant = noneIndex;
+                    fs->protocolSomeVariant = someIndex;
+                    if (into) {
+                        fs->protocolIntoSymbol =
+                            into->generatedSymbolName.empty()
+                                ? into->name
+                                : into->generatedSymbolName;
+                        fs->protocolInputType = iterable;
+                        fs->protocolStateName =
+                            "$for.iterator." +
+                            std::to_string(fs->line) + "." +
+                            std::to_string(fs->col) + "." +
+                            fs->varName;
+                    }
+                }
+            }
+        }
         fs->elementType = element;
         mSymTable.enterScope();
         SymbolInfo vi;
@@ -1775,9 +2831,11 @@ bool SemanticAnalyzer::statementAlwaysReturns(const Stmt* stmt) const {
     if (dynamic_cast<const ReturnStmt*>(stmt)) return true;
     if (auto* expression = dynamic_cast<const ExprStmt*>(stmt)) {
         if (auto* call = dynamic_cast<const CallExpr*>(expression->expr.get())) {
-            if (auto* callee =
-                    dynamic_cast<const IdentifierExpr*>(call->callee.get()))
-                if (callee->name == "panic") return true;
+            if ((call->resultType &&
+                 call->resultType->kind == TypeKind::Never) ||
+                (call->intrinsicType &&
+                 call->intrinsicType->kind == TypeKind::Never))
+                return true;
         }
     }
     if (auto* block = dynamic_cast<const BlockStmt*>(stmt)) return blockAlwaysReturns(block);
@@ -1785,6 +2843,13 @@ bool SemanticAnalyzer::statementAlwaysReturns(const Stmt* stmt) const {
         return conditional->elseBranch &&
                blockAlwaysReturns(conditional->thenBlock.get()) &&
                statementAlwaysReturns(conditional->elseBranch.get());
+    }
+    if (auto* match = dynamic_cast<const MatchStmt*>(stmt)) {
+        return !match->arms.empty() &&
+               std::all_of(match->arms.begin(), match->arms.end(),
+                           [&](const MatchArm& arm) {
+                               return blockAlwaysReturns(arm.body.get());
+                           });
     }
     if (auto* apply = dynamic_cast<const ApplyStmt*>(stmt))
         return apply->body && blockAlwaysReturns(apply->body.get());
@@ -1946,9 +3011,21 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
                   std::to_string(selected->fields.size()) + " arguments");
             return constructed;
         }
-        for (size_t i = 0; i < variant->args.size(); ++i)
-            constrain(analyzeExpr(variant->args[i].get()), selected->fields[i],
-                      "enum variant argument");
+        for (size_t i = 0; i < variant->args.size(); ++i) {
+            TypePtr actual = analyzeExpr(variant->args[i].get());
+            const TypePtr expected = resolved(selected->fields[i]);
+            // Literals are representationally polymorphic at a statically
+            // known enum field, matching call and FFI argument behavior.
+            if (dynamic_cast<IntLiteralExpr*>(
+                    variant->args[i].get()) &&
+                isNumericType(expected))
+                continue;
+            if (dynamic_cast<StringLiteralExpr*>(
+                    variant->args[i].get()) &&
+                expected->kind == TypeKind::CStr)
+                continue;
+            constrain(actual, expected, "enum variant argument");
+        }
         return constructed;
     }
     if (auto* launch = dynamic_cast<LaunchExpr*>(expr)) return analyzeLaunch(launch);
@@ -1993,11 +3070,33 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
                   propagation->line, propagation->col);
             return TyUnknown;
         }
-        constrain(result->typeArgs[1], functionResult->typeArgs[1],
-                  "error propagation");
+        TypePtr sourceError = resolved(result->typeArgs[1]);
+        TypePtr targetError = resolved(functionResult->typeArgs[1]);
+        if (!luna::types::sameType(sourceError, targetError)) {
+            auto targetConversions =
+                mFromConversions.find(typeIdentity(targetError));
+            auto conversion = targetConversions == mFromConversions.end()
+                ? std::unordered_map<std::string, FromConversion>::const_iterator{}
+                : targetConversions->second.find(typeIdentity(sourceError));
+            if (targetConversions == mFromConversions.end() ||
+                conversion == targetConversions->second.end() ||
+                !conversion->second.method ||
+                conversion->second.symbol.empty()) {
+                error("`?` cannot convert error '" + sourceError->toString() +
+                      "' to '" + targetError->toString() +
+                      "'; implement `From<" + sourceError->toString() +
+                      "> for " + targetError->toString() + "`",
+                      propagation->line, propagation->col);
+                return TyUnknown;
+            }
+            propagation->errorConversionSymbol =
+                conversion->second.symbol;
+        }
         propagation->resultType = result;
+        propagation->propagatedResultType = functionResult;
         propagation->valueType = result->typeArgs[0];
-        propagation->errorType = result->typeArgs[1];
+        propagation->errorType = sourceError;
+        propagation->propagatedErrorType = targetError;
         return propagation->valueType;
     }
     if (auto* ha = dynamic_cast<HeapAllocExpr*>(expr)) {
@@ -2071,6 +3170,10 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
         // Analyze lambda: enter new scope, register params, analyze body
         TypePtr savedReturn = mCurrentReturnType;
         bool savedSawReturn = mSawReturn;
+        bool savedReturnsLinear =
+            mCurrentFunctionReturnsLinear;
+        auto savedReturnUsage =
+            mCurrentFunctionReturnUsage;
         mSymTable.enterScope();
         for (auto& p : le->params) {
             TypePtr pt = p.inferredType ? p.inferredType : declaredType(p.type.get(), {});
@@ -2092,12 +3195,31 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
             mSymTable.define(p.name, info);
         }
         TypePtr bodyRet = le->returnType ? declaredType(le->returnType.get(), {}) : mConstraints.fresh();
+        const bool returnsLinear =
+            dynamic_cast<LinearTypeAST*>(
+                le->returnType.get()) != nullptr;
+        const bool returnsAffine =
+            dynamic_cast<AffineTypeAST*>(
+                le->returnType.get()) != nullptr;
+        const auto returnUsage = returnsLinear
+            ? luna::ownership::Usage::Linear
+            : (returnsAffine
+                   ? luna::ownership::Usage::Affine
+                   : defaultUsageForType(bodyRet));
         mCurrentReturnType = bodyRet;
+        mCurrentFunctionReturnsLinear =
+            returnsLinear;
+        mCurrentFunctionReturnUsage =
+            returnUsage;
         mSawReturn = false;
         if (le->body) analyzeBlock(le->body.get(), bodyRet);
         if (!mSawReturn) constrain(bodyRet, TyUnit, "lambda without a return value");
         mSymTable.exitScope();
         mCurrentReturnType = savedReturn;
+        mCurrentFunctionReturnsLinear =
+            savedReturnsLinear;
+        mCurrentFunctionReturnUsage =
+            savedReturnUsage;
         mSawReturn = savedSawReturn;
 
         // Build closure function type: fn(ParamTypes) -> ReturnType
@@ -2110,7 +3232,7 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
         TypePtr retType = bodyRet;
         le->closureType = Type::makeFunction(
             paramTypes, retType, std::move(paramContracts),
-            {luna::ownership::Relation::Owned, defaultUsageForType(retType)});
+            {luna::ownership::Relation::Owned, returnUsage});
 
         // Capture analysis: scan body for free variables from enclosing scopes
         // (simplified: just note lambda for codegen, captures resolved later)
@@ -2191,6 +3313,8 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
         };
         TypePtr thenType = branchType(ie->thenExpr.get());
         TypePtr elseType = branchType(ie->elseExpr.get());
+        if (resolved(thenType)->kind == TypeKind::Never) return elseType;
+        if (resolved(elseType)->kind == TypeKind::Never) return thenType;
         constrain(thenType, elseType, "if-expression branches");
         return thenType;
     }
@@ -2553,7 +3677,7 @@ TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
 TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
     auto* id = dynamic_cast<IdentifierExpr*>(call->callee.get());
     if (auto* member = dynamic_cast<FieldAccessExpr*>(call->callee.get()))
-        return analyzeIteratorCall(call, member);
+        return analyzeMemberCall(call, member);
     if (auto* selection = dynamic_cast<SelectExpr*>(call->callee.get())) {
         auto selected = resolved(analyzeSelect(selection));
         if (selected->kind != TypeKind::Function) return TyUnknown;
@@ -2566,6 +3690,7 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
             constrain(analyzeExpr(call->args[index].get()), selected->paramTypes[index],
                       "selected call argument " + std::to_string(index + 1));
         call->resolvedSymbolName = selection->resolvedSymbolName;
+        call->resultType = selected->returnType;
         return selected->returnType;
     }
     if (id) {
@@ -2649,8 +3774,9 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
                 message->kind != TypeKind::CStr)
                 error("panic message must be string or cstr, got " +
                       message->toString(), call->line, call->col);
-            call->intrinsicType = TyUnit;
-            return TyUnit;
+            call->intrinsicType = TyNever;
+            call->resultType = TyNever;
+            return TyNever;
         }
         if (id->name == "clone") {
             if (call->args.size() != 1) {
@@ -2985,10 +4111,80 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
     // type parameters are explicit variables, whereas omitted ordinary
     // signatures use the inference variables in paramTypes/returnType below.
     if (!sym->typeParams.empty() && sym->genericDecl) {
+        TypeVec actualTypes;
+        for (auto& argument : call->args)
+            actualTypes.push_back(resolved(analyzeExpr(argument.get())));
         TypeVec concreteTypes;
-        for (auto& arg : call->args) concreteTypes.push_back(analyzeExpr(arg.get()));
-        if (concreteTypes.size() > sym->typeParams.size())
-            concreteTypes.resize(sym->typeParams.size());
+        if (!call->typeArgASTs.empty()) {
+            if (call->typeArgASTs.size() != sym->typeParams.size()) {
+                error("generic function '" + id->name + "' expects " +
+                      std::to_string(sym->typeParams.size()) +
+                      " type argument(s)", call->line, call->col);
+                return TyUnknown;
+            }
+            for (auto& typeArgument : call->typeArgASTs)
+                concreteTypes.push_back(resolved(
+                    resolveTypeAST(typeArgument.get(), {})));
+        } else {
+            std::unordered_map<std::string, TypePtr> inferred;
+            std::function<void(const TypePtr&, const TypePtr&)> infer =
+                [&](const TypePtr& patternValue,
+                    const TypePtr& actualValue) {
+                const TypePtr pattern = resolved(patternValue);
+                const TypePtr actual = resolved(actualValue);
+                if (!pattern || !actual) return;
+                if (pattern->kind == TypeKind::TypeParam) {
+                    if (std::find(sym->typeParams.begin(),
+                                  sym->typeParams.end(),
+                                  pattern->name) ==
+                        sym->typeParams.end())
+                        return;
+                    auto existing = inferred.find(pattern->name);
+                    if (existing == inferred.end())
+                        inferred[pattern->name] = actual;
+                    else if (!luna::types::sameType(
+                                 existing->second, actual))
+                        error("conflicting inference for generic type '" +
+                              pattern->name + "'", call->line, call->col);
+                    return;
+                }
+                if (pattern->kind != actual->kind) return;
+                if (!pattern->typeArgs.empty() &&
+                    pattern->typeArgs.size() ==
+                        actual->typeArgs.size()) {
+                    for (size_t index = 0;
+                         index < pattern->typeArgs.size(); ++index)
+                        infer(pattern->typeArgs[index],
+                              actual->typeArgs[index]);
+                }
+                if (pattern->inner && actual->inner)
+                    infer(pattern->inner, actual->inner);
+                if (pattern->kind == TypeKind::Function &&
+                    pattern->paramTypes.size() ==
+                        actual->paramTypes.size()) {
+                    for (size_t index = 0;
+                         index < pattern->paramTypes.size(); ++index)
+                        infer(pattern->paramTypes[index],
+                              actual->paramTypes[index]);
+                    infer(pattern->returnType, actual->returnType);
+                }
+            };
+            for (size_t index = 0;
+                 index < sym->paramTypes.size() &&
+                 index < actualTypes.size(); ++index)
+                infer(sym->paramTypes[index], actualTypes[index]);
+            for (const auto& parameter : sym->typeParams) {
+                auto found = inferred.find(parameter);
+                if (found == inferred.end()) {
+                    error("could not infer generic type argument '" +
+                          parameter + "' for '" + id->name + "'",
+                          call->line, call->col);
+                    return TyUnknown;
+                }
+                concreteTypes.push_back(found->second);
+            }
+        }
+        call->typeArgs = concreteTypes;
 
         std::unordered_map<std::string, TypePtr> constraintBindings;
         for (size_t index = 0;
@@ -2996,6 +4192,17 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
              index < concreteTypes.size(); ++index)
             constraintBindings[sym->genericDecl->typeParams[index]] =
                 resolved(concreteTypes[index]);
+        for (size_t index = 0;
+             index < sym->paramTypes.size() &&
+             index < call->args.size(); ++index) {
+            constrainArgument(
+                call->args[index].get(),
+                substituteNominalType(
+                    resolved(sym->paramTypes[index]),
+                    constraintBindings),
+                "argument " + std::to_string(index + 1) +
+                    " of generic call");
+        }
         for (auto& clause : sym->genericDecl->whereClauses) {
             if (clause.kind == WhereClause::Kind::TraitBound) {
                 const std::string& tpName = clause.typeParam;
@@ -3048,8 +4255,9 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
                 ? specialized->name : specialized->generatedSymbolName;
             call->returnsLinear = specialized->returnsLinear;
             call->returnUsage = specialized->returnUsage;
-            return specialized->inferredReturnType
+            call->resultType = specialized->inferredReturnType
                 ? specialized->inferredReturnType : TyUnit;
+            return call->resultType;
         }
     }
 
@@ -3072,7 +4280,157 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
     }
     call->returnsLinear = sym->returnsLinear;
     call->returnUsage = sym->returnUsage;
-    return sym->returnType ? sym->returnType : TyUnit;
+    call->resultType = sym->returnType ? sym->returnType : TyUnit;
+    return call->resultType;
+}
+
+TypePtr SemanticAnalyzer::analyzeMemberCall(
+    CallExpr* call, FieldAccessExpr* member) {
+    TypePtr receiver =
+        resolved(analyzeExpr(member->object.get()));
+    const std::string methodName = member->field;
+    const bool collectionEntry =
+        (receiver->kind == TypeKind::Array ||
+         receiver->kind == TypeKind::Slice) &&
+        (methodName == "iter" ||
+         methodName == "iter_mut" ||
+         methodName == "into_iter");
+    const bool recipeOperation =
+        receiver->kind == TypeKind::Iterator &&
+        (methodName == "map" ||
+         methodName == "filter" ||
+         methodName == "take" ||
+         methodName == "fold" ||
+         methodName == "for_each" ||
+         methodName == "count" ||
+         methodName == "collect");
+    if (collectionEntry || recipeOperation)
+        return analyzeIteratorCall(call, member);
+
+    if (mInKernel) {
+        error("user trait method calls are not yet available in kernel code",
+              call->line, call->col);
+        return TyUnknown;
+    }
+    if (!call->typeArgASTs.empty()) {
+        error("generic trait methods are not yet supported by member syntax",
+              call->line, call->col);
+        return TyUnknown;
+    }
+
+    TypePtr target = receiver;
+    if (target->kind == TypeKind::Reference && target->inner)
+        target = resolved(target->inner);
+    const std::string targetId = typeIdentity(target);
+
+    struct Candidate {
+        std::string traitId;
+        FunctionDecl* method = nullptr;
+        TypePtr receiverType;
+    };
+    std::vector<Candidate> candidates;
+    for (const auto& [traitId, targets] : mImpls) {
+        if (traitId == luna::sysmeta::DropTraitId ||
+            traitId == luna::sysmeta::FromTraitId)
+            continue;
+        auto implementation = targets.find(targetId);
+        if (implementation == targets.end()) continue;
+        auto method = implementation->second.find(methodName);
+        if (method == implementation->second.end() ||
+            !method->second ||
+            method->second->params.empty())
+            continue;
+        TypePtr expected = resolved(
+            method->second->params.front().inferredType);
+        bool acceptsReceiver =
+            luna::types::sameType(expected, receiver) ||
+            luna::types::sameType(expected, target);
+        if (expected->kind == TypeKind::Reference &&
+            expected->inner)
+            acceptsReceiver = luna::types::sameType(
+                resolved(expected->inner), target);
+        if (acceptsReceiver)
+            candidates.push_back(
+                {traitId, method->second, expected});
+    }
+
+    if (candidates.empty()) {
+        error("no trait method '" + methodName +
+              "' is implemented for receiver type '" +
+              receiver->toString() + "'", call->line, call->col);
+        return TyUnknown;
+    }
+    if (candidates.size() > 1) {
+        std::string traits;
+        for (const auto& candidate : candidates) {
+            if (!traits.empty()) traits += ", ";
+            traits += candidate.traitId;
+        }
+        error("member call '" + methodName +
+              "' is ambiguous for type '" + target->toString() +
+              "' across traits: " + traits,
+              call->line, call->col);
+        return TyUnknown;
+    }
+
+    auto selected = candidates.front();
+    FunctionDecl* method = selected.method;
+    if (call->args.size() + 1 != method->params.size()) {
+        error("trait method '" + methodName + "' expects " +
+              std::to_string(method->params.size() - 1) +
+              " explicit argument(s)", call->line, call->col);
+        return TyUnknown;
+    }
+
+    std::unique_ptr<FieldAccessExpr> ownedMember(
+        static_cast<FieldAccessExpr*>(call->callee.release()));
+    std::unique_ptr<Expr> implicitReceiver =
+        std::move(ownedMember->object);
+    if (selected.receiverType->kind ==
+            TypeKind::Reference &&
+        receiver->kind != TypeKind::Reference) {
+        auto borrow = std::make_unique<BorrowExpr>();
+        borrow->isMutable =
+            selected.receiverType->isMutable;
+        borrow->operand = std::move(implicitReceiver);
+        implicitReceiver = std::move(borrow);
+    }
+    call->args.insert(call->args.begin(),
+                      std::move(implicitReceiver));
+    auto callee =
+        std::make_unique<IdentifierExpr>(methodName);
+    callee->sourcePath = call->sourcePath;
+    callee->line = call->line;
+    callee->col = call->col;
+    call->callee = std::move(callee);
+    call->resolvedSymbolName =
+        method->generatedSymbolName.empty()
+            ? method->name
+            : method->generatedSymbolName;
+
+    for (size_t index = 0;
+         index < call->args.size(); ++index) {
+        TypePtr expected =
+            resolved(method->params[index].inferredType);
+        TypePtr actual =
+            resolved(analyzeExpr(call->args[index].get()));
+        if (dynamic_cast<IntLiteralExpr*>(
+                call->args[index].get()) &&
+            isNumericType(expected))
+            continue;
+        if (dynamic_cast<StringLiteralExpr*>(
+                call->args[index].get()) &&
+            expected->kind == TypeKind::CStr)
+            continue;
+        constrain(actual, expected,
+                  "argument " + std::to_string(index + 1) +
+                  " of trait method '" + methodName + "'");
+    }
+    call->returnsLinear = method->returnsLinear;
+    call->returnUsage = method->returnUsage;
+    call->resultType = method->inferredReturnType
+        ? resolved(method->inferredReturnType) : TyUnit;
+    return call->resultType;
 }
 
 TypePtr SemanticAnalyzer::analyzeIteratorCall(
@@ -3085,12 +4443,87 @@ TypePtr SemanticAnalyzer::analyzeIteratorCall(
     }
     const std::string& name = member->field;
     TypePtr receiver = resolved(analyzeExpr(member->object.get()));
+    if (name != "collect" && !call->typeArgASTs.empty()) {
+        error("iterator `" + name +
+              "` does not accept explicit type arguments",
+              call->line, call->col);
+        return TyUnknown;
+    }
+    call->iteratorRecipeStateName.clear();
+    call->iteratorRecipeSourceType.reset();
+    const auto markTerminalRecipe =
+        [&](IteratorOp op) {
+            if (op != IteratorOp::Fold &&
+                op != IteratorOp::ForEach &&
+                op != IteratorOp::Count &&
+                op != IteratorOp::Collect)
+                return;
+            std::function<void(Expr*)> findSource =
+                [&](Expr* expression) {
+                    auto* sourceCall =
+                        dynamic_cast<CallExpr*>(
+                            expression);
+                    if (!sourceCall) return;
+                    auto* sourceMember =
+                        dynamic_cast<FieldAccessExpr*>(
+                            sourceCall->callee.get());
+                    if (!sourceMember) return;
+                    if (sourceCall->iteratorOp ==
+                        IteratorOp::IntoIter) {
+                        TypePtr sourceType;
+                        if (sourceCall->resultType &&
+                            !sourceCall->resultType->
+                                typeArgs.empty())
+                            sourceType = resolved(
+                                sourceCall->resultType->
+                                    typeArgs.front());
+                        if (!sourceType ||
+                            sourceType->kind !=
+                                TypeKind::Array ||
+                            !sourceType->inner ||
+                            defaultUsageForType(
+                                sourceType->inner) ==
+                                luna::ownership::Usage::Copy)
+                            return;
+                        if (!dynamic_cast<
+                                IdentifierExpr*>(
+                                sourceMember->
+                                    object.get())) {
+                            error("move-only iterator terminal "
+                                  "currently requires a local "
+                                  "array source binding",
+                                  call->line, call->col);
+                            return;
+                        }
+                        if (luna::ownership::mustConsume(
+                                defaultUsageForType(
+                                    sourceType))) {
+                            error("linear iterator terminal "
+                                  "state cannot be hidden from "
+                                  "explicit consumption",
+                                  call->line, call->col);
+                            return;
+                        }
+                        call->iteratorRecipeSourceType =
+                            sourceType;
+                        call->iteratorRecipeStateName =
+                            "$terminal.recipe." +
+                            std::to_string(
+                                mIteratorStateCounter++);
+                        return;
+                    }
+                    findSource(
+                        sourceMember->object.get());
+                };
+            findSource(member->object.get());
+        };
     const auto finish = [&](IteratorOp op, const TypePtr& result,
                             const TypePtr& input, const TypePtr& output) {
         call->iteratorOp = op;
         call->resultType = result;
         call->iteratorInputType = input;
         call->iteratorOutputType = output;
+        markTerminalRecipe(op);
         return result;
     };
     const auto requireCount = [&](size_t expected) {
@@ -3122,12 +4555,6 @@ TypePtr SemanticAnalyzer::analyzeIteratorCall(
             mode = IteratorMode::Consuming;
             op = IteratorOp::IntoIter;
             item = element;
-            if (defaultUsageForType(item) !=
-                luna::ownership::Usage::Copy) {
-                error("the initial `into_iter` pipeline supports only Copy "
-                      "elements; move-only item iteration requires adapter "
-                      "drop-state tracking", call->line, call->col);
-            }
         }
         return finish(
             op, Type::makeIterator(item, mode, receiver),
@@ -3161,12 +4588,14 @@ TypePtr SemanticAnalyzer::analyzeIteratorCall(
         if (transform->kind != TypeKind::Function) return TyUnknown;
         constrain(item, transform->paramTypes[0], "iterator map input");
         TypePtr output = resolved(transform->returnType);
-        if (defaultUsageForType(item) != luna::ownership::Usage::Copy ||
-            defaultUsageForType(output) != luna::ownership::Usage::Copy) {
-            error("the initial map adapter requires Copy input and output; "
-                  "move-only adapters require per-item drop-state tracking",
+        if (defaultUsageForType(item) !=
+                luna::ownership::Usage::Copy &&
+            (transform->paramContracts.empty() ||
+             transform->paramContracts[0].relation !=
+                 luna::ownership::Relation::Owned))
+            error("map transform must own a move-only input "
+                  "because the input does not continue downstream",
                   call->line, call->col);
-        }
         return finish(
             IteratorOp::Map,
             Type::makeIterator(output, receiver->iteratorMode, receiver),
@@ -3178,8 +4607,13 @@ TypePtr SemanticAnalyzer::analyzeIteratorCall(
         if (predicate->kind != TypeKind::Function) return TyUnknown;
         constrain(item, predicate->paramTypes[0], "iterator filter input");
         requireBool(predicate->returnType, "iterator filter predicate");
-        if (defaultUsageForType(item) != luna::ownership::Usage::Copy)
-            error("filter cannot discard a move-only iterator item",
+        if (defaultUsageForType(item) !=
+                luna::ownership::Usage::Copy &&
+            (predicate->paramContracts.empty() ||
+             predicate->paramContracts[0].relation !=
+                 luna::ownership::Relation::SharedBorrow))
+            error("filter predicate must borrow a move-only item "
+                  "because accepted items continue downstream",
                   call->line, call->col);
         return finish(
             IteratorOp::Filter,
@@ -3205,11 +4639,45 @@ TypePtr SemanticAnalyzer::analyzeIteratorCall(
         constrain(item, reducer->paramTypes[1], "iterator fold item");
         constrain(reducer->returnType, accumulator,
                   "iterator fold result");
-        if (defaultUsageForType(accumulator) !=
-            luna::ownership::Usage::Copy)
-            error("the initial fold accumulator must be Copy",
+        const auto accumulatorUsage =
+            defaultUsageForType(accumulator);
+        if (luna::ownership::mustConsume(
+                accumulatorUsage)) {
+            error("linear fold accumulators are reserved "
+                  "until terminal state can expose an "
+                  "explicit linear obligation",
                   call->line, call->col);
-        return finish(IteratorOp::Fold, accumulator, item, accumulator);
+        } else if (accumulatorUsage !=
+                   luna::ownership::Usage::Copy) {
+            if (reducer->paramContracts.empty() ||
+                reducer->paramContracts[0].relation !=
+                    luna::ownership::Relation::Owned)
+                error("fold reducer must own a move-only "
+                      "accumulator",
+                      call->line, call->col);
+            if (reducer->returnContract.relation !=
+                    luna::ownership::Relation::Owned ||
+                reducer->returnContract.usage !=
+                    accumulatorUsage)
+                error("fold reducer must return ownership "
+                      "of the replacement accumulator",
+                      call->line, call->col);
+        }
+        if (defaultUsageForType(item) !=
+                luna::ownership::Usage::Copy &&
+            (reducer->paramContracts.size() < 2 ||
+             reducer->paramContracts[1].relation !=
+                 luna::ownership::Relation::Owned))
+            error("fold reducer must own a move-only item",
+                  call->line, call->col);
+        TypePtr result = finish(
+            IteratorOp::Fold, accumulator,
+            item, accumulator);
+        call->returnUsage = accumulatorUsage;
+        call->returnsLinear =
+            accumulatorUsage ==
+            luna::ownership::Usage::Linear;
+        return result;
     }
     if (name == "for_each") {
         if (!requireCount(1)) return TyUnknown;
@@ -3217,11 +4685,74 @@ TypePtr SemanticAnalyzer::analyzeIteratorCall(
         if (action->kind != TypeKind::Function) return TyUnknown;
         constrain(item, action->paramTypes[0], "iterator for_each item");
         constrain(action->returnType, TyUnit, "iterator for_each result");
+        if (defaultUsageForType(item) !=
+                luna::ownership::Usage::Copy &&
+            (action->paramContracts.empty() ||
+             action->paramContracts[0].relation !=
+                 luna::ownership::Relation::Owned))
+            error("for_each action must own a move-only item",
+                  call->line, call->col);
         return finish(IteratorOp::ForEach, TyUnit, item, TyUnit);
     }
     if (name == "count") {
         if (!requireCount(0)) return TyUnknown;
         return finish(IteratorOp::Count, TyI32, item, TyI32);
+    }
+    if (name == "collect") {
+        if (!requireCount(0)) return TyUnknown;
+        if (call->typeArgASTs.size() != 1) {
+            error("iterator `collect` requires exactly one explicit target "
+                  "type: `.collect::<Target>()`",
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        TypePtr target = resolved(
+            resolveTypeAST(call->typeArgASTs.front().get(), {}));
+        if (!target || target->kind == TypeKind::Unknown ||
+            target->domain != luna::types::TypeDomain::Value) {
+            error("iterator `collect` target must be a concrete value type",
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        const auto implementation =
+            mFromIteratorImplementations.find(typeIdentity(target));
+        if (implementation == mFromIteratorImplementations.end()) {
+            error("no coherent Core `FromIterator` implementation exists "
+                  "for collect target '" + target->toString() + "'",
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        const auto& protocol = implementation->second;
+        if (!luna::types::sameType(
+                resolved(protocol.item), resolved(item))) {
+            error("Core `FromIterator` for '" + target->toString() +
+                  "' collects '" + protocol.item->toString() +
+                  "', but this iterator yields '" + item->toString() + "'",
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        if (!protocol.begin || !protocol.push || !protocol.finish) {
+            error("Core `FromIterator` implementation for '" +
+                  target->toString() +
+                  "' does not provide the complete begin/push/finish protocol",
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        call->iteratorCollectTargetType = target;
+        call->iteratorCollectBuilderType =
+            resolved(protocol.builder);
+        call->iteratorCollectBeginSymbol =
+            protocol.begin->generatedSymbolName;
+        call->iteratorCollectPushSymbol =
+            protocol.push->generatedSymbolName;
+        call->iteratorCollectFinishSymbol =
+            protocol.finish->generatedSymbolName;
+        TypePtr result = finish(
+            IteratorOp::Collect, target, item, target);
+        call->returnUsage = protocol.finish->returnUsage;
+        call->returnsLinear =
+            protocol.finish->returnsLinear;
+        return result;
     }
 
     error("unknown iterator adapter or terminal `" + name + "`",
@@ -3355,6 +4886,7 @@ TypePtr SemanticAnalyzer::analyzeReflectionCall(CallExpr* call, const std::strin
             case TypeKind::Result: return std::string("result");
             case TypeKind::Trait: return std::string("trait");
             case TypeKind::Unit: return std::string("unit");
+            case TypeKind::Never: return std::string("never");
             default: return std::string("unknown");
         }
     };
@@ -3367,13 +4899,19 @@ TypePtr SemanticAnalyzer::analyzeReflectionCall(CallExpr* call, const std::strin
             case TypeKind::F64: case TypeKind::String: case TypeKind::CStr:
             case TypeKind::RawPointer: case TypeKind::Reference:
             case TypeKind::Rc: case TypeKind::Arc: return 8;
+            case TypeKind::Array:
+                return static_cast<int64_t>(t->arrayLength) *
+                    typeSize(t->inner);
+            case TypeKind::Slice: return 16;
             case TypeKind::Struct: case TypeKind::Record: {
                 int64_t total = 0;
                 for (const auto& field : t->fields) total += typeSize(field.type);
                 return total == 0 ? 8 : total;
             }
-            case TypeKind::Enum: return 8;
-            case TypeKind::Result: return 16;
+            case TypeKind::Enum:
+            case TypeKind::Result:
+                return static_cast<int64_t>(
+                    luna::layout::valueSize(t));
             default: return 0;
         }
     };
@@ -3877,8 +5415,10 @@ SemanticAnalyzer::evaluateConstraintExpr(
                         total += sizeOf(field.type);
                     return total;
                 }
-                case TypeKind::Enum: return 8;
-                case TypeKind::Result: return 16;
+                case TypeKind::Enum:
+                case TypeKind::Result:
+                    return static_cast<int64_t>(
+                        luna::layout::valueSize(item));
                 default: return 0;
             }
         };
@@ -4500,6 +6040,27 @@ static std::unique_ptr<Expr> cloneExpr(
             ? substituteNominalType(e->iteratorOutputType, bindings)
             : nullptr;
         c->iteratorOp = e->iteratorOp;
+        c->iteratorRecipeStateName = e->iteratorRecipeStateName;
+        c->iteratorRecipeSourceType = e->iteratorRecipeSourceType
+            ? substituteNominalType(
+                  e->iteratorRecipeSourceType, bindings)
+            : nullptr;
+        c->iteratorCollectTargetType =
+            e->iteratorCollectTargetType
+                ? substituteNominalType(
+                      e->iteratorCollectTargetType, bindings)
+                : nullptr;
+        c->iteratorCollectBuilderType =
+            e->iteratorCollectBuilderType
+                ? substituteNominalType(
+                      e->iteratorCollectBuilderType, bindings)
+                : nullptr;
+        c->iteratorCollectBeginSymbol =
+            e->iteratorCollectBeginSymbol;
+        c->iteratorCollectPushSymbol =
+            e->iteratorCollectPushSymbol;
+        c->iteratorCollectFinishSymbol =
+            e->iteratorCollectFinishSymbol;
         return c;
     }
     if (auto* e = dynamic_cast<HeapAllocExpr*>(src)) {
@@ -4563,6 +6124,17 @@ static std::unique_ptr<Expr> cloneExpr(
         for (auto& arg : e->args) c->args.push_back(cloneExpr(arg.get(), bindings));
         return c;
     }
+    if (auto* e = dynamic_cast<VariantConstructExpr*>(src)) {
+        auto c = std::make_unique<VariantConstructExpr>();
+        c->typeName = e->typeName;
+        c->variantName = e->variantName;
+        c->constructedType = e->constructedType
+            ? substituteNominalType(e->constructedType, bindings)
+            : nullptr;
+        for (auto& argument : e->args)
+            c->args.push_back(cloneExpr(argument.get(), bindings));
+        return c;
+    }
     if (auto* e = dynamic_cast<AssignExpr*>(src)) {
         auto c = std::make_unique<AssignExpr>();
         c->op = e->op;
@@ -4607,6 +6179,26 @@ static std::unique_ptr<Stmt> cloneStmt(
     if (auto* s = dynamic_cast<ExprStmt*>(src)) {
         auto c = std::make_unique<ExprStmt>();
         c->expr = cloneExpr(s->expr.get(), bindings);
+        return c;
+    }
+    if (auto* s = dynamic_cast<MatchStmt*>(src)) {
+        auto c = std::make_unique<MatchStmt>();
+        c->scrutinee = cloneExpr(s->scrutinee.get(), bindings);
+        c->matchedType = s->matchedType
+            ? substituteNominalType(s->matchedType, bindings)
+            : nullptr;
+        for (const auto& sourceArm : s->arms) {
+            MatchArm arm;
+            arm.typeQualifier = sourceArm.typeQualifier;
+            arm.variantName = sourceArm.variantName;
+            arm.bindings = sourceArm.bindings;
+            arm.variantIndex = sourceArm.variantIndex;
+            for (const auto& type : sourceArm.bindingTypes)
+                arm.bindingTypes.push_back(
+                    substituteNominalType(type, bindings));
+            arm.body = cloneBlock(sourceArm.body.get(), bindings);
+            c->arms.push_back(std::move(arm));
+        }
         return c;
     }
     if (auto* s = dynamic_cast<AwaitStmt*>(src)) {
@@ -4674,9 +6266,11 @@ FunctionDecl* SemanticAnalyzer::monomorphize(FunctionDecl* generic, const TypeVe
         cp.usage = p.usage;
         cp.relation = p.relation;
         cp.hasExplicitUsage = p.hasExplicitUsage;
-        TypePtr parameterType = p.type
-            ? resolveType(p.type.get(), bindings)
-            : mConstraints.resolve(p.inferredType);
+        TypePtr parameterType = p.inferredType
+            ? substituteNominalType(
+                  mConstraints.resolve(p.inferredType), bindings)
+            : (p.type ? resolveType(p.type.get(), bindings)
+                      : TyUnknown);
         if (parameterType && parameterType->kind == TypeKind::TypeParam) {
             auto it = bindings.find(parameterType->name);
             if (it != bindings.end()) parameterType = it->second;
@@ -4687,7 +6281,12 @@ FunctionDecl* SemanticAnalyzer::monomorphize(FunctionDecl* generic, const TypeVe
     }
 
     if (generic->returnType) {
-        specialized->returnType = typeToAST(resolveType(generic->returnType.get(), bindings));
+        const TypePtr returnType = generic->inferredReturnType
+            ? substituteNominalType(
+                  mConstraints.resolve(generic->inferredReturnType),
+                  bindings)
+            : resolveType(generic->returnType.get(), bindings);
+        specialized->returnType = typeToAST(returnType);
         if (specialized->returnsLinear)
             specialized->returnType = std::make_unique<LinearTypeAST>(
                 std::move(specialized->returnType));
@@ -4742,6 +6341,7 @@ TypePtr SemanticAnalyzer::resolveTypeAST(const TypeAST* ast,
         if (named->name == "string") return TyString;
         if (named->name == "cstr") return TyCStr;
         if (named->name == "unit") return TyUnit;
+        if (named->name == "never") return TyNever;
         if (named->name == "Self") return Type::makeTypeParam("Self");
 
         if (named->name == "raw") {
@@ -4923,6 +6523,9 @@ static TypePtr substituteNominalType(
         auto result = type->kind == TypeKind::Struct
             ? Type::makeStruct(type->name, std::move(fields), type->nominalId)
             : Type::makeRecord(std::move(fields));
+        for (const auto& argument : type->typeArgs)
+            result->typeArgs.push_back(
+                substituteNominalType(argument, bindings));
         return result;
     }
     if (type->kind == TypeKind::Enum) {
@@ -4934,7 +6537,12 @@ static TypePtr substituteNominalType(
                 copied.fields.push_back(substituteNominalType(field, bindings));
             variants.push_back(std::move(copied));
         }
-        return Type::makeEnum(type->name, std::move(variants), type->nominalId);
+        auto result =
+            Type::makeEnum(type->name, std::move(variants), type->nominalId);
+        for (const auto& argument : type->typeArgs)
+            result->typeArgs.push_back(
+                substituteNominalType(argument, bindings));
+        return result;
     }
     return type;
 }
@@ -4968,6 +6576,9 @@ bool SemanticAnalyzer::constrain(const TypePtr& actual, const TypePtr& expected,
                                  const std::string& context) {
     if (!actual || !expected || actual->kind == TypeKind::Unknown ||
         expected->kind == TypeKind::Unknown) return true;
+    // `never` is the bottom type: a diverging expression can inhabit every
+    // expected value type, while ordinary values cannot inhabit `never`.
+    if (resolved(actual)->kind == TypeKind::Never) return true;
     std::string reason;
     if (!mConstraints.unify(actual, expected, &reason)) {
         error("Type constraint failed in " + context + ": " + reason);
@@ -5139,8 +6750,10 @@ void SemanticAnalyzer::materializeInferredTypes(Program* program) {
         if (auto* t = dynamic_cast<TryExpr*>(expr)) {
             visitExpr(t->operand.get());
             t->resultType = resolved(t->resultType);
+            t->propagatedResultType = resolved(t->propagatedResultType);
             t->valueType = resolved(t->valueType);
             t->errorType = resolved(t->errorType);
+            t->propagatedErrorType = resolved(t->propagatedErrorType);
             return;
         }
         if (auto* i = dynamic_cast<IfExpr*>(expr)) { visitExpr(i->cond.get()); visitExpr(i->thenExpr.get()); visitExpr(i->elseExpr.get()); return; }
@@ -5158,10 +6771,32 @@ void SemanticAnalyzer::materializeInferredTypes(Program* program) {
         if (auto* a = dynamic_cast<AwaitStmt*>(stmt)) { visitExpr(a->event.get()); return; }
         if (auto* e = dynamic_cast<ExprStmt*>(stmt)) { visitExpr(e->expr.get()); return; }
         if (auto* i = dynamic_cast<IfStmt*>(stmt)) { visitExpr(i->cond.get()); visitBlock(i->thenBlock.get()); visitStmt(i->elseBranch.get()); return; }
+        if (auto* m = dynamic_cast<MatchStmt*>(stmt)) {
+            visitExpr(m->scrutinee.get());
+            m->matchedType = resolved(m->matchedType);
+            for (auto& arm : m->arms) {
+                for (auto& type : arm.bindingTypes)
+                    type = resolved(type);
+                visitBlock(arm.body.get());
+            }
+            return;
+        }
         if (auto* w = dynamic_cast<WhileStmt*>(stmt)) { visitExpr(w->cond.get()); visitBlock(w->body.get()); return; }
         if (auto* f = dynamic_cast<ForStmt*>(stmt)) {
             visitExpr(f->iterable.get());
             f->elementType = resolved(f->elementType);
+            if (f->protocolIteratorType)
+                f->protocolIteratorType =
+                    resolved(f->protocolIteratorType);
+            if (f->protocolOptionType)
+                f->protocolOptionType =
+                    resolved(f->protocolOptionType);
+            if (f->protocolInputType)
+                f->protocolInputType =
+                    resolved(f->protocolInputType);
+            if (f->recipeSourceType)
+                f->recipeSourceType =
+                    resolved(f->recipeSourceType);
             visitBlock(f->body.get());
             return;
         }

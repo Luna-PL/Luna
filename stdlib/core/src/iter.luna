@@ -1,0 +1,55 @@
+package org.luna.core;
+module iter;
+
+// User iterators expose ordinary, finite control flow. Compiler-fused array,
+// slice and range recipes may implement the same semantic protocol without
+// materializing these adapters.
+export trait Iterator<Item> {
+    fn next(iterator: &mut Self) -> option::Option<Item>;
+}
+
+export trait IntoIterator<Item, Iter> {
+    fn into_iter(value: affine Self) -> affine Iter;
+}
+
+// Compiler-fused recipes never cross the ABI as an `Iter` value. Collection
+// therefore uses a static builder protocol: begin once, push each fused item,
+// then finish once. `Builder` and the resulting `Self` stay affine.
+export trait FromIterator<Item, Builder> {
+    fn begin() -> affine Builder;
+    fn push(builder: &mut Builder, affine item: Item) -> unit;
+    fn finish(affine builder: Builder) -> affine Self;
+}
+
+export nominal enum Map<I, F> {
+    Adapter(I, F);
+}
+
+export nominal enum Filter<I, P> {
+    Adapter(I, P);
+}
+
+export nominal enum Take<I> {
+    Adapter(I, usize);
+}
+
+export fn map<I, F>(
+    affine iterator: I,
+    affine transform: F
+) -> affine Map<I, F> {
+    return Map::<I, F>::Adapter(move iterator, move transform);
+}
+
+export fn filter<I, P>(
+    affine iterator: I,
+    affine predicate: P
+) -> affine Filter<I, P> {
+    return Filter::<I, P>::Adapter(move iterator, move predicate);
+}
+
+export fn take<I>(
+    affine iterator: I,
+    count: usize
+) -> affine Take<I> {
+    return Take::<I>::Adapter(move iterator, count);
+}

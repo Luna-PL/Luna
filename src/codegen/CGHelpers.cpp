@@ -1,4 +1,5 @@
 #include "CGHelpers.h"
+#include "../core/TypeLayout.h"
 
 #include <algorithm>
 
@@ -32,19 +33,34 @@ llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
         case TypeKind::DeclarationView:
         case TypeKind::DeclarationRef: return ptrTy();
         case TypeKind::Iterator: return ptrTy();
-        case TypeKind::Result:
-            return llvm::StructType::get(mCtx, {boolTy(), i64Ty()});
+        case TypeKind::Result: {
+            const uint64_t valueSize = type->typeArgs.size() > 0
+                ? luna::layout::valueSize(type->typeArgs[0]) : 0;
+            const uint64_t errorSize = type->typeArgs.size() > 1
+                ? luna::layout::valueSize(type->typeArgs[1]) : 0;
+            const uint64_t words =
+                std::max<uint64_t>(1, (std::max(valueSize, errorSize) + 7) / 8);
+            return llvm::StructType::get(
+                mCtx, {boolTy(), llvm::ArrayType::get(i64Ty(), words)});
+        }
+        case TypeKind::Enum: {
+            const uint64_t words =
+                std::max<uint64_t>(
+                    1, luna::layout::enumPayloadSize(type) / 8);
+            return llvm::StructType::get(
+                mCtx, {i32Ty(), llvm::ArrayType::get(i64Ty(), words)});
+        }
         case TypeKind::Array:
             return llvm::ArrayType::get(toLLVMType(type->inner), type->arrayLength);
         case TypeKind::Slice:
             return llvm::StructType::get(mCtx, {ptrTy(), sizeTy()});
         case TypeKind::Event: return i32Ty();
-        case TypeKind::Unit:  return voidTy();
+        case TypeKind::Unit:
+        case TypeKind::Never: return voidTy();
         case TypeKind::Reference:
             return ptrTy();
         case TypeKind::Struct:
         case TypeKind::Record:
-        case TypeKind::Enum:
             return ptrTy();
         case TypeKind::Function:
             return ptrTy(); // function pointers are opaque ptrs
@@ -90,8 +106,12 @@ uint64_t typeSize(const TypePtr& type) {
             for (auto& field : type->fields) size += typeSize(field.type);
             return size == 0 ? 8 : size;
         }
-        case TypeKind::Enum: return 8; // tagged union (opaque for now)
-        case TypeKind::Result: return 16;
+        case TypeKind::Enum:
+            return luna::layout::valueSize(type);
+        case TypeKind::Result: {
+            return luna::layout::valueSize(type);
+        }
+        case TypeKind::Never: return 0;
         default: return 0;
     }
 }
@@ -116,8 +136,10 @@ uint64_t typeAlignment(const TypePtr& type) {
                 alignment = std::max(alignment, typeAlignment(field.type));
             return alignment;
         }
-        case TypeKind::Unit: return 1;
-        case TypeKind::Result: return 8;
+        case TypeKind::Unit:
+        case TypeKind::Never: return 1;
+        case TypeKind::Result:
+        case TypeKind::Enum: return 8;
         default: return 8;
     }
 }

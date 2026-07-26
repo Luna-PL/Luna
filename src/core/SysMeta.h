@@ -15,13 +15,18 @@ inline constexpr uint16_t SchemaMajor = 1;
 inline constexpr uint16_t SchemaMinor = 0;
 inline constexpr const char* DropTraitId = "luna.compiler.Drop";
 inline constexpr const char* DropMethodName = "drop";
-inline constexpr const char* OptionTypeId = "org.luna.core::prelude::Option";
+inline constexpr const char* FromTraitId = "luna.compiler.From";
+inline constexpr const char* FromMethodName = "from";
+inline constexpr const char* OptionTypeId = "org.luna.core::option::Option";
 inline constexpr const char* IteratorTraitId =
     "org.luna.core::iter::Iterator";
 inline constexpr const char* IntoIteratorTraitId =
     "org.luna.core::iter::IntoIterator";
 inline constexpr const char* FromIteratorTraitId =
     "org.luna.core::iter::FromIterator";
+inline constexpr const char* FromIteratorBeginMethodName = "begin";
+inline constexpr const char* FromIteratorPushMethodName = "push";
+inline constexpr const char* FromIteratorFinishMethodName = "finish";
 
 enum class ControlForm : uint8_t {
     Plain,

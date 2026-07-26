@@ -45,10 +45,11 @@ Detailed design: [Ownership and affine model](Arch/Ownership_Affine_Model_RFC.md
 ## Errors and panic
 
 Recoverable failure uses the ordinary `Result<T, E>` value type. `Ok`, `Err`,
-`is_ok`, `is_err`, `unwrap` and `unwrap_err` form the initial intrinsic
-surface; postfix `?` performs a checked early return and carries path-sensitive
-cleanup obligations through MoonIR. Resource-bearing Results clean only their
-active payload.
+exhaustive general enum/Result `match`, inspection/extraction intrinsics and postfix `?`
+form the initial surface. `?` either preserves the error type or invokes one
+exact statically selected `From<Source> for Target` conversion, while carrying
+path-sensitive cleanup obligations through MoonIR. Resource-bearing and nested
+Results clean only their active payload.
 
 `panic(string)` is an abort boundary, not stack unwinding: it reports through
 the Runtime ABI console and terminates. This error model does not introduce a
@@ -64,9 +65,25 @@ The initial compiler-known recipe is fused into one LLVM loop with no
 intermediate collection or iterator runtime allocation. Shared and mutable
 iteration participate in the ownership checker.
 
-General containers remain library types rather than builtins. User-defined
-Iterator implementations and escaping adapter values are reserved until the
-Core `Option`/Iterator layouts and move-only per-item drop state are complete.
+General containers remain library types rather than builtins. Core now
+materializes `Option<T>`, `Iterator`/`IntoIterator`/`FromIterator`, and inline
+`Map`/`Filter`/`Take` adapters. Trait member calls select one static impl
+symbol, and user Core `Iterator` implementations now drive `for` directly.
+Move-only protocol items are dropped exactly once on normal and function-return
+paths. `for` now inserts the unique static Core `IntoIterator` conversion and
+owns its hidden state. Consuming move-only arrays use per-element initialization
+bits; `filter`/`take` clean rejected items, and `map` may produce move-only
+outputs or consume move-only inputs through an explicit owning parameter.
+Lambda bodies now receive path-sensitive ownership checking, while
+`fold`/`for_each`/`count` own hidden move-only terminal recipe state. Move-only
+affine fold accumulators use an explicit replacement initialization bit and
+transfer the final value to the caller. Linear accumulators and captured
+closure environments remain staged boundaries. No-capture recipes, including
+recipes that own move-only array sources, can now materialize as affine,
+single-consumption local stack values. Owning recipes carry per-element
+initialization bits so consumption, abandonment and early returns close each
+remaining item exactly once while retaining fused lowering and zero iterator
+runtime allocation.
 
 Detailed design and current limits: [Iteration, pipelines and container
 boundaries](iterators.md).

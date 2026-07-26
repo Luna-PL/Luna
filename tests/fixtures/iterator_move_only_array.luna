@@ -1,0 +1,154 @@
+nominal struct ArrayResource {
+    marker: i32;
+}
+
+impl Drop for ArrayResource {
+    fn drop(resource: &mut ArrayResource) -> unit {
+        print(resource.marker);
+    }
+}
+
+fn drop_unconsumed_array() -> unit {
+    let first = new ArrayResource(61);
+    let second = new ArrayResource(62);
+    let values = [move first, move second];
+    let moved_values = move values;
+}
+
+fn consume_all() -> unit {
+    let first = new ArrayResource(71);
+    let second = new ArrayResource(72);
+    let values = [move first, move second];
+    for resource in values {
+        print(resource.marker);
+    }
+}
+
+fn stop_with_take() -> unit {
+    let first = new ArrayResource(81);
+    let second = new ArrayResource(82);
+    let third = new ArrayResource(83);
+    let values = [move first, move second, move third];
+    for resource in values.into_iter().take(1) {
+        print(resource.marker);
+    }
+}
+
+fn return_from_loop() -> i32 {
+    let first = new ArrayResource(91);
+    let second = new ArrayResource(92);
+    let values = [move first, move second];
+    for resource in values {
+        return resource.marker;
+    }
+    return 0;
+}
+
+fn adapter_rejections() -> unit {
+    let first = new ArrayResource(101);
+    let second = new ArrayResource(102);
+    let third = new ArrayResource(103);
+    let values = [move first, move second, move third];
+    for resource in values.into_iter()
+        .filter(fn(value: ArrayResource) -> bool {
+            return value.marker >= 102;
+        })
+        .take(1) {
+        print(resource.marker);
+    }
+}
+
+fn map_move_only_output() -> unit {
+    let values = [121, 122, 123];
+    for resource in values.into_iter()
+        .map(fn(value: i32) -> affine ArrayResource {
+            return new ArrayResource(value);
+        })
+        .filter(fn(value: ArrayResource) -> bool {
+            return value.marker >= 122;
+        })
+        .take(1) {
+        print(resource.marker);
+    }
+}
+
+fn map_move_only_input() -> unit {
+    let resource = new ArrayResource(131);
+    let values = [move resource];
+    for marker in values.into_iter()
+        .map(fn(affine value: ArrayResource) -> i32 {
+            return value.marker + 100;
+        }) {
+        print(marker);
+    }
+}
+
+fn count_move_only_items() -> unit {
+    let first = new ArrayResource(141);
+    let second = new ArrayResource(142);
+    let values = [move first, move second];
+    print(values.into_iter().take(1).count());
+    let third = new ArrayResource(143);
+    let more_values = [move third];
+    print(more_values.into_iter().count());
+}
+
+fn for_each_move_only_item() -> unit {
+    let resource = new ArrayResource(151);
+    let values = [move resource];
+    values.into_iter().for_each(
+        fn(affine value: ArrayResource) -> unit {
+            print(value.marker);
+        });
+}
+
+fn fold_move_only_item() -> unit {
+    let resource = new ArrayResource(161);
+    let values = [move resource];
+    print(values.into_iter().fold(
+        0,
+        fn(total: i32, affine value: ArrayResource) -> i32 {
+            return total + value.marker;
+        }));
+}
+
+fn map_move_only_through() -> unit {
+    let resource = new ArrayResource(171);
+    let values = [move resource];
+    for forwarded in values.into_iter()
+        .map(fn(affine value: ArrayResource)
+            -> affine ArrayResource {
+            return value;
+        }) {
+        print(forwarded.marker);
+    }
+}
+
+fn fold_move_only_accumulator() -> unit {
+    let initial = new ArrayResource(181);
+    let values = [1, 2];
+    let result = values.into_iter().fold(
+        move initial,
+        fn(affine accumulator: ArrayResource, value: i32)
+            -> affine ArrayResource {
+            return new ArrayResource(
+                accumulator.marker + value);
+        });
+    print(result.marker);
+}
+
+fn main() -> i32 {
+    drop_unconsumed_array();
+    consume_all();
+    stop_with_take();
+    print(return_from_loop());
+    adapter_rejections();
+    map_move_only_output();
+    map_move_only_input();
+    count_move_only_items();
+    for_each_move_only_item();
+    fold_move_only_item();
+    map_move_only_through();
+    fold_move_only_accumulator();
+    return 0;
+}

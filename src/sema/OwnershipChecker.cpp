@@ -8,6 +8,10 @@ static luna::ownership::CleanupAction cleanupActionFor(const TypePtr& type) {
     if (!type) return luna::ownership::CleanupAction::Deallocate;
     if (type->kind == TypeKind::Result)
         return luna::ownership::CleanupAction::ResultDrop;
+    if (type->kind == TypeKind::Enum)
+        return luna::ownership::CleanupAction::EnumDrop;
+    if (type->kind == TypeKind::Array)
+        return luna::ownership::CleanupAction::ArrayDrop;
     switch (type->sysmeta.resource.management) {
         case luna::sysmeta::ResourceManagement::Rc:
             return luna::ownership::CleanupAction::RcRelease;
@@ -80,11 +84,13 @@ bool OwnershipChecker::checkFunction(FunctionDecl* decl) {
         const auto contract = parameterContractFor(type, usage, explicitUsage);
         define(param.name, type, false, contract.usage, contract.relation,
                isReference, isReference && type->isMutable);
-        // define() also classifies heap-shaped local values from their type
-        // so constructor results receive automatic cleanup.  Parameters are
-        // the one intentional exception: their storage is owned by the
-        // caller, irrespective of their representation.
-        mScopes.back()[param.name].isHeapAllocated = false;
+        // An unqualified heap-shaped parameter is a borrowed view. Explicit
+        // affine/linear syntax transfers ownership to the callee, so an
+        // affine parameter needs ordinary return-path cleanup and a linear
+        // parameter must be consumed before exit.
+        mScopes.back()[param.name].isHeapAllocated =
+            contract.relation == luna::ownership::Relation::Owned &&
+            type && type->isHeapType();
     }
 
     FlowResult bodyResult;
@@ -114,6 +120,136 @@ bool OwnershipChecker::checkFunction(FunctionDecl* decl) {
     mApplyScopes.pop_back();
     mSlotScopes.pop_back();
     return mErrors.empty();
+}
+
+bool OwnershipChecker::checkLambda(LambdaExpr* lambda) {
+    setDiagnosticLocation(lambda);
+    const size_t errorsBefore = mErrors.size();
+
+    auto savedScopes = std::move(mScopes);
+    auto savedLoans = std::move(mLoansInScope);
+    auto savedApplyScopes = std::move(mApplyScopes);
+    auto savedSlotScopes = std::move(mSlotScopes);
+    auto savedUnavailableCaptures =
+        std::move(mUnavailableLambdaCaptures);
+    auto* savedSlotContinuation = mCurrentSlotContinuation;
+    const bool savedManyContinuation =
+        mValidatingManyContinuation;
+    const bool savedCheckingContinuation =
+        mCheckingSlotContinuation;
+    auto* savedAbortExits =
+        mCurrentFragmentAbortExits;
+    const size_t savedFragmentScopeBase =
+        mCurrentFragmentScopeBase;
+    const size_t savedFragmentApplyBase =
+        mCurrentFragmentApplyBase;
+    const size_t savedFragmentSlotBase =
+        mCurrentFragmentSlotBase;
+
+    mUnavailableLambdaCaptures =
+        savedUnavailableCaptures;
+    for (const auto& scope : savedScopes)
+        for (const auto& [name, _] : scope)
+            mUnavailableLambdaCaptures.insert(name);
+
+    mScopes.clear();
+    mLoansInScope.clear();
+    mApplyScopes.clear();
+    mSlotScopes.clear();
+    enterScope();
+    mApplyScopes.emplace_back();
+    mSlotScopes.emplace_back();
+    mCurrentSlotContinuation = nullptr;
+    mValidatingManyContinuation = false;
+    mCheckingSlotContinuation = false;
+    mCurrentFragmentAbortExits = nullptr;
+    mCurrentFragmentScopeBase = 0;
+    mCurrentFragmentApplyBase = 0;
+    mCurrentFragmentSlotBase = 0;
+
+    for (auto& param : lambda->params) {
+        TypePtr type = param.inferredType
+            ? param.inferredType
+            : resolveType(param.type.get(), {});
+        const bool isReference =
+            type && type->kind == TypeKind::Reference;
+        const bool explicitUsage =
+            param.hasExplicitUsage || param.isLinear ||
+            dynamic_cast<LinearTypeAST*>(param.type.get()) ||
+            dynamic_cast<AffineTypeAST*>(param.type.get());
+        const auto syntaxUsage =
+            usageFromTypeAST(param.type.get());
+        const auto usage = explicitUsage
+            ? (param.isLinear
+                   ? luna::ownership::Usage::Linear
+                   : (syntaxUsage ==
+                              luna::ownership::Usage::Copy
+                          ? param.usage
+                          : syntaxUsage))
+            : defaultUsageForType(type);
+        const auto contract =
+            parameterContractFor(
+                type, usage, explicitUsage);
+        define(param.name, type, false,
+               contract.usage, contract.relation,
+               isReference,
+               isReference && type->isMutable);
+        mScopes.back()[param.name].isHeapAllocated =
+            contract.relation ==
+                luna::ownership::Relation::Owned &&
+            type && type->isHeapType();
+    }
+
+    FlowResult bodyResult;
+    if (lambda->body)
+        bodyResult = checkBlock(lambda->body.get());
+
+    releaseLoansInCurrentScope();
+    if (bodyResult.ok && bodyResult.fallsThrough)
+        validateLinearScope();
+    if (lambda->body && bodyResult.ok &&
+        bodyResult.fallsThrough) {
+        for (const auto& name :
+             collectFreesAtScopeExit()) {
+            auto cleanup =
+                std::make_unique<FreeStmt>();
+            cleanup->operand =
+                std::make_unique<IdentifierExpr>(name);
+            auto* variable = lookup(name);
+            cleanup->action = cleanupActionFor(
+                variable ? variable->type : nullptr);
+            lambda->body->stmts.push_back(
+                std::move(cleanup));
+        }
+    }
+
+    exitScope();
+    mApplyScopes.pop_back();
+    mSlotScopes.pop_back();
+
+    mScopes = std::move(savedScopes);
+    mLoansInScope = std::move(savedLoans);
+    mApplyScopes = std::move(savedApplyScopes);
+    mSlotScopes = std::move(savedSlotScopes);
+    mUnavailableLambdaCaptures =
+        std::move(savedUnavailableCaptures);
+    mCurrentSlotContinuation =
+        savedSlotContinuation;
+    mValidatingManyContinuation =
+        savedManyContinuation;
+    mCheckingSlotContinuation =
+        savedCheckingContinuation;
+    mCurrentFragmentAbortExits =
+        savedAbortExits;
+    mCurrentFragmentScopeBase =
+        savedFragmentScopeBase;
+    mCurrentFragmentApplyBase =
+        savedFragmentApplyBase;
+    mCurrentFragmentSlotBase =
+        savedFragmentSlotBase;
+
+    return bodyResult.ok &&
+           mErrors.size() == errorsBefore;
 }
 
 OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
@@ -698,7 +834,102 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
             : (let->typeAnnotation ? resolveType(let->typeAnnotation.get(), {}) : TyUnknown);
         bool isReference = type && type->kind == TypeKind::Reference;
         bool isMutableReference = isReference && type->isMutable;
-        bool isHeap = dynamic_cast<HeapAllocExpr*>(let->initializer.get()) != nullptr;
+        if (let->materializedIteratorOwnsSource) {
+            CallExpr* base = nullptr;
+            std::function<void(Expr*)> findBase =
+                [&](Expr* expression) {
+                    auto* call =
+                        dynamic_cast<CallExpr*>(expression);
+                    if (!call) return;
+                    if (call->iteratorOp ==
+                            IteratorOp::IntoIter) {
+                        base = call;
+                        return;
+                    }
+                    auto* member =
+                        dynamic_cast<FieldAccessExpr*>(
+                            call->callee.get());
+                    if (member)
+                        findBase(member->object.get());
+                };
+            findBase(let->initializer.get());
+            auto* member = base
+                ? dynamic_cast<FieldAccessExpr*>(
+                      base->callee.get())
+                : nullptr;
+            auto source = member
+                ? extractPlace(member->object.get())
+                : std::nullopt;
+            auto* sourceVariable = source
+                ? lookup(source->root) : nullptr;
+            if (sourceVariable &&
+                luna::ownership::mustConsume(
+                    sourceVariable->usage)) {
+                error("materialized iterator recipe cannot hide linear "
+                      "source '" + source->root + "'",
+                      let->line, let->col);
+                return false;
+            }
+            if (!source ||
+                !consume(*source,
+                         "owning materialized iterator binding")) {
+                if (!source)
+                    error("owning materialized iterator requires a local "
+                          "source binding",
+                          let->line, let->col);
+                return false;
+            }
+        }
+        if (let->materializesIteratorRecipe) {
+            CallExpr* base = nullptr;
+            std::function<void(Expr*)> findBase =
+                [&](Expr* expression) {
+                    auto* call =
+                        dynamic_cast<CallExpr*>(
+                            expression);
+                    if (!call) return;
+                    if (call->iteratorOp ==
+                            IteratorOp::Range ||
+                        call->iteratorOp ==
+                            IteratorOp::Iter ||
+                        call->iteratorOp ==
+                            IteratorOp::IterMut ||
+                        call->iteratorOp ==
+                            IteratorOp::IntoIter) {
+                        base = call;
+                        return;
+                    }
+                    auto* member =
+                        dynamic_cast<FieldAccessExpr*>(
+                            call->callee.get());
+                    if (member)
+                        findBase(member->object.get());
+                };
+            findBase(let->initializer.get());
+            if (base &&
+                (base->iteratorOp ==
+                     IteratorOp::Iter ||
+                 base->iteratorOp ==
+                     IteratorOp::IterMut)) {
+                auto* member =
+                    dynamic_cast<FieldAccessExpr*>(
+                        base->callee.get());
+                auto source = member
+                    ? extractPlace(
+                          member->object.get())
+                    : std::nullopt;
+                if (!source ||
+                    !acquireLoan(
+                        *source,
+                        base->iteratorOp ==
+                            IteratorOp::IterMut))
+                    return false;
+            }
+        }
+        bool isHeap =
+            dynamic_cast<HeapAllocExpr*>(
+                let->initializer.get()) != nullptr ||
+            let->materializedIteratorOwnsSource;
         luna::ownership::Usage usage = let->hasExplicitUsage
             ? let->usage : defaultUsageForType(type);
         const auto annotatedUsage = usageFromTypeAST(let->typeAnnotation.get());
@@ -708,6 +939,10 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                 usage = call->returnUsage;
             else if (call->returnsLinear)
                 usage = luna::ownership::Usage::Linear;
+            if (luna::ownership::isMoveOnly(
+                    call->returnUsage) &&
+                type && type->isHeapType())
+                isHeap = true;
         }
         if (auto* call = dynamic_cast<CallExpr*>(let->initializer.get())) {
             if (auto* callee = dynamic_cast<IdentifierExpr*>(call->callee.get());
@@ -755,6 +990,12 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
         let->isLinear = usage == luna::ownership::Usage::Linear;
         define(let->name, type, isHeap, usage, relation,
                isReference, isMutableReference);
+        if (auto* recipe = lookup(let->name)) {
+            recipe->materializedIteratorOwnsSource =
+                let->materializedIteratorOwnsSource;
+            recipe->materializedIteratorSourceType =
+                let->materializedIteratorSourceType;
+        }
         if (auto* launch = dynamic_cast<LaunchExpr*>(let->initializer.get())) {
             auto* event = lookup(let->name);
             if (event) {
@@ -773,7 +1014,8 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                 event->eventResources = std::move(movedSource->eventResources);
             }
         }
-        if (!isReference) {
+        if (!isReference &&
+            !let->materializesIteratorRecipe) {
             while (mLoansInScope.back().size() > loanCount) {
                 releaseLoan(mLoansInScope.back().back());
                 mLoansInScope.back().pop_back();
@@ -921,6 +1163,79 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
         restoreState(before);
         return {true, false};
     }
+    if (auto* match = dynamic_cast<MatchStmt*>(stmt)) {
+        if (match->matchedType &&
+            luna::ownership::isMoveOnly(
+                defaultUsageForType(match->matchedType)) &&
+            !dynamic_cast<MoveExpr*>(match->scrutinee.get())) {
+            error("match on a move-only value requires explicit `match move ...`",
+                  match->line, match->col);
+            return false;
+        }
+        if (!checkExpr(match->scrutinee.get())) return false;
+
+        const CheckerState before = captureState();
+        std::optional<CheckerState> merged;
+        bool anyFallsThrough = false;
+        for (auto& arm : match->arms) {
+            restoreState(before);
+            enterScope();
+            for (size_t index = 0;
+                 index < arm.bindings.size() &&
+                 index < arm.bindingTypes.size(); ++index) {
+                const auto usage =
+                    defaultUsageForType(arm.bindingTypes[index]);
+                define(arm.bindings[index], arm.bindingTypes[index],
+                       false, usage);
+            }
+
+            FlowResult armResult = checkBlock(arm.body.get());
+            if (!armResult.ok) {
+                exitScope();
+                restoreState(before);
+                return false;
+            }
+            if (armResult.fallsThrough) {
+                validateLinearScope();
+                if (!mErrors.empty()) {
+                    exitScope();
+                    restoreState(before);
+                    return false;
+                }
+                for (const auto& name : collectFreesAtScopeExit()) {
+                    auto cleanup = std::make_unique<FreeStmt>();
+                    cleanup->operand =
+                        std::make_unique<IdentifierExpr>(name);
+                    auto* variable = lookup(name);
+                    cleanup->action = cleanupActionFor(
+                        variable ? variable->type : nullptr);
+                    arm.body->stmts.push_back(std::move(cleanup));
+                }
+            }
+            exitScope();
+            const CheckerState armState = captureState();
+
+            if (!armResult.fallsThrough) continue;
+            anyFallsThrough = true;
+            if (!merged) {
+                merged = armState;
+            } else {
+                restoreState(*merged);
+                if (!mergeFallthroughStates(
+                        before, *merged, armState, match)) {
+                    restoreState(before);
+                    return false;
+                }
+                merged = captureState();
+            }
+        }
+        if (anyFallsThrough && merged) {
+            restoreState(*merged);
+            return {true, true};
+        }
+        restoreState(before);
+        return {true, false};
+    }
     if (auto* loop = dynamic_cast<WhileStmt*>(stmt)) {
         if (!checkExpr(loop->cond.get())) return false;
         const CheckerState before = captureState();
@@ -933,7 +1248,116 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
         return {true, true};
     }
     if (auto* loop = dynamic_cast<ForStmt*>(stmt)) {
-        if (!checkExpr(loop->iterable.get())) return false;
+        std::optional<Place> consumedMaterializedRecipe;
+        bool materializedRecipeOwnsSource = false;
+        TypePtr materializedRecipeSourceType;
+        std::function<std::optional<Place>(Expr*)>
+            materializedRecipe =
+                [&](Expr* expression)
+                    -> std::optional<Place> {
+            if (auto place =
+                    extractPlace(expression)) {
+                auto* variable =
+                    lookup(place->root);
+                if (variable &&
+                    variable->type &&
+                    variable->type->kind ==
+                        TypeKind::Iterator)
+                    return place;
+            }
+            auto* call =
+                dynamic_cast<CallExpr*>(
+                    expression);
+            auto* member = call
+                ? dynamic_cast<FieldAccessExpr*>(
+                      call->callee.get())
+                : nullptr;
+            return member
+                ? materializedRecipe(
+                      member->object.get())
+                : std::nullopt;
+        };
+        if (auto recipe =
+                materializedRecipe(
+                    loop->iterable.get())) {
+            auto* variable = lookup(recipe->root);
+            consumedMaterializedRecipe = recipe;
+            materializedRecipeOwnsSource =
+                variable &&
+                variable->materializedIteratorOwnsSource;
+            materializedRecipeSourceType =
+                variable
+                    ? variable->
+                        materializedIteratorSourceType
+                    : nullptr;
+            if (!consume(*recipe,
+                         "materialized iterator consumption"))
+                return false;
+        } else if (!loop->recipeStateName.empty()) {
+            if (!checkExpr(loop->iterable.get()))
+                return false;
+            std::function<Expr*(Expr*)>
+                consumingSource =
+                    [&](Expr* expression) -> Expr* {
+                auto* call =
+                    dynamic_cast<CallExpr*>(
+                        expression);
+                if (!call)
+                    return expression;
+                auto* member =
+                    dynamic_cast<FieldAccessExpr*>(
+                        call->callee.get());
+                if (!member) return nullptr;
+                if (call->iteratorOp ==
+                    IteratorOp::IntoIter)
+                    return member->object.get();
+                return consumingSource(
+                    member->object.get());
+            };
+            Expr* sourceExpression =
+                consumingSource(
+                    loop->iterable.get());
+            auto source =
+                extractPlace(sourceExpression);
+            auto* sourceVariable = source
+                ? lookup(source->root) : nullptr;
+            if (sourceVariable &&
+                luna::ownership::mustConsume(
+                    sourceVariable->usage)) {
+                error("linear consuming array iterator "
+                      "state cannot be hidden from explicit "
+                      "consumption",
+                      loop->line, loop->col);
+                return false;
+            }
+            if (!source ||
+                !consume(*source,
+                         "consuming array iteration")) {
+                if (!source)
+                    error("move-only consuming array iteration "
+                          "requires a local source binding",
+                          loop->line, loop->col);
+                return false;
+            }
+        } else if (!loop->protocolIntoSymbol.empty()) {
+            auto source = extractPlace(
+                loop->iterable.get());
+            if (!source) {
+                error("implicit IntoIterator currently requires a "
+                      "local source binding",
+                      loop->line, loop->col);
+                return false;
+            }
+            // `for item in source` is the ownership syntax for the Core
+            // IntoIterator contract.  The conversion takes source by value;
+            // requiring an additional written `move` would defeat the
+            // language-level desugaring.
+            if (!consume(*source,
+                         "implicit IntoIterator conversion"))
+                return false;
+        } else if (!checkExpr(loop->iterable.get())) {
+            return false;
+        }
         enterScope();
         // Iterator recipes are ephemeral, but a borrow made by their source
         // must remain live for the complete loop body.
@@ -964,19 +1388,105 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
         if (!sourceLoanAcquired) {
             if (auto place = extractPlace(loop->iterable.get())) {
                 auto* variable = lookup(place->root);
-                if (variable && variable->type &&
-                    variable->type->kind == TypeKind::Slice) {
-                    if (!acquireLoan(*place, false)) {
+                const bool protocolLoan =
+                    !loop->protocolNextSymbol.empty() &&
+                    loop->protocolIntoSymbol.empty();
+                const bool sliceLoan =
+                    variable && variable->type &&
+                    variable->type->kind == TypeKind::Slice;
+                if (protocolLoan || sliceLoan) {
+                    if (!acquireLoan(*place, protocolLoan)) {
                         exitScope();
                         return false;
                     }
                 }
             }
         }
-        define(loop->varName, loop->elementType ? loop->elementType : TyI32, false);
         const CheckerState before = captureState();
+        if (!loop->recipeStateName.empty()) {
+            TypePtr stateType =
+                loop->recipeSourceType;
+            define(loop->recipeStateName,
+                   stateType, true,
+                   defaultUsageForType(stateType));
+        }
+        if (consumedMaterializedRecipe &&
+            materializedRecipeOwnsSource) {
+            define(
+                consumedMaterializedRecipe->root,
+                materializedRecipeSourceType,
+                true,
+                defaultUsageForType(
+                    materializedRecipeSourceType));
+        }
+        if (!loop->protocolIntoSymbol.empty()) {
+            TypePtr stateType = loop->protocolIteratorType
+                ? loop->protocolIteratorType : TyUnknown;
+            const auto stateUsage =
+                defaultUsageForType(stateType);
+            if (luna::ownership::mustConsume(stateUsage)) {
+                error("implicit IntoIterator result has linear type '" +
+                      stateType->toString() +
+                      "' and cannot be hidden from explicit consumption",
+                      loop->line, loop->col);
+                exitScope();
+                return false;
+            }
+            define(loop->protocolStateName, stateType,
+                   stateType && stateType->isHeapType(),
+                   stateUsage);
+            auto* state = lookup(
+                loop->protocolStateName);
+            loop->protocolStateNeedsCleanup =
+                state && state->isHeapAllocated;
+            if (loop->protocolStateNeedsCleanup)
+                loop->protocolStateCleanup =
+                    cleanupActionFor(state->type);
+        }
+        define(loop->varName, loop->elementType ? loop->elementType : TyI32, false);
         FlowResult bodyResult = checkBlock(loop->body.get());
-        const CheckerState after = captureState();
+        CheckerState after = captureState();
+        if (bodyResult.ok && bodyResult.fallsThrough) {
+            auto* item = lookup(loop->varName);
+            if (item && item->state == OwnState::Valid) {
+                if (luna::ownership::mustConsume(item->usage)) {
+                    error("Linear iterator item '" + loop->varName +
+                          "' must be consumed on every loop iteration",
+                          loop->line, loop->col);
+                    bodyResult.ok = false;
+                } else if (item->isHeapAllocated) {
+                    // The binding is reinitialized by every successful
+                    // `next`.  Its normal-path cleanup therefore belongs at
+                    // the end of the loop body, not after the complete loop.
+                    auto cleanup = std::make_unique<FreeStmt>();
+                    cleanup->operand =
+                        std::make_unique<IdentifierExpr>(
+                            loop->varName);
+                    cleanup->action =
+                        cleanupActionFor(item->type);
+                    loop->body->stmts.push_back(
+                        std::move(cleanup));
+                }
+            }
+        }
+        // The iteration binding is fresh on every trip and is not an outer
+        // loop invariant.  Returning paths already recorded its cleanup;
+        // fall-through paths either consumed it or received the cleanup above.
+        if (!after.scopes.empty())
+            after.scopes.back().erase(loop->varName);
+        if (!after.scopes.empty() &&
+            !loop->protocolStateName.empty())
+            after.scopes.back().erase(
+                loop->protocolStateName);
+        if (!after.scopes.empty() &&
+            !loop->recipeStateName.empty())
+            after.scopes.back().erase(
+                loop->recipeStateName);
+        if (!after.scopes.empty() &&
+            consumedMaterializedRecipe &&
+            materializedRecipeOwnsSource)
+            after.scopes.back().erase(
+                consumedMaterializedRecipe->root);
         restoreState(before);
         bool ok = bodyResult.ok;
         if (ok && bodyResult.fallsThrough)
@@ -1012,6 +1522,9 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
 bool OwnershipChecker::checkExpr(Expr* expr) {
     if (!expr) return true;
     setDiagnosticLocation(expr);
+    if (auto* lambda =
+            dynamic_cast<LambdaExpr*>(expr))
+        return checkLambda(lambda);
     if (auto* selection = dynamic_cast<SelectExpr*>(expr)) {
         for (auto& arg : selection->selectorArgs) {
             if (!checkExpr(arg.get())) return false;
@@ -1077,7 +1590,18 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
     }
     if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
         auto* var = lookup(id->name);
-        if (!var) return true; // functions are resolved by semantic analysis
+        if (!var) {
+            if (mUnavailableLambdaCaptures.count(
+                    id->name)) {
+                error("lambda capture of local '" +
+                      id->name +
+                      "' is reserved until closure "
+                      "environment layout is implemented",
+                      id->line, id->col);
+                return false;
+            }
+            return true; // functions are resolved by semantic analysis
+        }
         if (!isPlaceAvailable({id->name, {}}, "use")) return false;
         if (var->isGpuEvent) {
             error("launch event '" + id->name + "' must be consumed with `await`", id->line, id->col);
@@ -1105,8 +1629,140 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
             } else if (!checkExpr(call->callee.get())) {
                 return false;
             }
+            if (call->iteratorOp ==
+                    IteratorOp::Fold &&
+                call->iteratorOutputType &&
+                luna::ownership::isMoveOnly(
+                    defaultUsageForType(
+                        call->iteratorOutputType)) &&
+                !call->args.empty()) {
+                Expr* initial =
+                    call->args.front().get();
+                auto* transfer =
+                    dynamic_cast<MoveExpr*>(
+                        initial);
+                Expr* sourceExpression = transfer
+                    ? transfer->operand.get()
+                    : initial;
+                auto source =
+                    extractPlace(sourceExpression);
+                if (source && !transfer) {
+                    error("move-only fold accumulator '" +
+                          renderPlace(*source) +
+                          "' must be moved explicitly",
+                          call->line, call->col);
+                    return false;
+                }
+                auto* sourceVariable = source
+                    ? lookup(source->root) : nullptr;
+                if (sourceVariable &&
+                    luna::ownership::mustConsume(
+                        sourceVariable->usage)) {
+                    error("linear fold accumulator cannot "
+                          "be hidden in affine replacement "
+                          "state",
+                          call->line, call->col);
+                    return false;
+                }
+            }
             for (auto& arg : call->args)
                 if (!checkExpr(arg.get())) return false;
+            const bool terminal =
+                call->iteratorOp ==
+                    IteratorOp::Fold ||
+                call->iteratorOp ==
+                    IteratorOp::ForEach ||
+                call->iteratorOp ==
+                    IteratorOp::Count ||
+                call->iteratorOp ==
+                    IteratorOp::Collect;
+            if (terminal) {
+                std::function<std::optional<Place>(
+                    Expr*)> materializedRecipe =
+                    [&](Expr* expression)
+                        -> std::optional<Place> {
+                    if (auto place =
+                            extractPlace(expression)) {
+                        auto* variable =
+                            lookup(place->root);
+                        if (variable &&
+                            variable->type &&
+                            variable->type->kind ==
+                                TypeKind::Iterator)
+                            return place;
+                    }
+                    auto* nested =
+                        dynamic_cast<CallExpr*>(
+                            expression);
+                    auto* nestedMember = nested
+                        ? dynamic_cast<
+                              FieldAccessExpr*>(
+                              nested->callee.get())
+                        : nullptr;
+                    return nestedMember
+                        ? materializedRecipe(
+                              nestedMember->
+                                  object.get())
+                        : std::nullopt;
+                };
+                auto* terminalMember =
+                    dynamic_cast<FieldAccessExpr*>(
+                        call->callee.get());
+                auto recipe = terminalMember
+                    ? materializedRecipe(
+                          terminalMember->
+                              object.get())
+                    : std::nullopt;
+                if (recipe &&
+                    !consume(
+                        *recipe,
+                        "materialized iterator terminal"))
+                    return false;
+            }
+            if (!call->iteratorRecipeStateName.empty()) {
+                std::function<Expr*(Expr*)>
+                    consumingSource =
+                        [&](Expr* expression) -> Expr* {
+                    auto* sourceCall =
+                        dynamic_cast<CallExpr*>(
+                            expression);
+                    if (!sourceCall)
+                        return nullptr;
+                    auto* sourceMember =
+                        dynamic_cast<FieldAccessExpr*>(
+                            sourceCall->callee.get());
+                    if (!sourceMember) return nullptr;
+                    if (sourceCall->iteratorOp ==
+                        IteratorOp::IntoIter)
+                        return sourceMember->object.get();
+                    return consumingSource(
+                        sourceMember->object.get());
+                };
+                auto* member =
+                    dynamic_cast<FieldAccessExpr*>(
+                        call->callee.get());
+                Expr* sourceExpression = member
+                    ? consumingSource(
+                          member->object.get())
+                    : nullptr;
+                auto source =
+                    extractPlace(sourceExpression);
+                auto* sourceVariable = source
+                    ? lookup(source->root) : nullptr;
+                if (sourceVariable &&
+                    luna::ownership::mustConsume(
+                        sourceVariable->usage)) {
+                    error("linear iterator terminal state "
+                          "cannot be hidden from explicit "
+                          "consumption",
+                          call->line, call->col);
+                    return false;
+                }
+                if (!source ||
+                    !consume(*source,
+                             "move-only iterator terminal"))
+                    return false;
+            }
             return true;
         }
         if (!checkExpr(call->callee.get())) return false;
@@ -1147,8 +1803,45 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
         return true;
     }
     if (auto* variant = dynamic_cast<VariantConstructExpr*>(expr)) {
-        for (auto& arg : variant->args)
+        const TypeVariant* selected = nullptr;
+        if (variant->constructedType) {
+            for (const auto& candidate :
+                 variant->constructedType->variants) {
+                if (candidate.name == variant->variantName) {
+                    selected = &candidate;
+                    break;
+                }
+            }
+        }
+        for (size_t index = 0; index < variant->args.size(); ++index) {
+            auto& arg = variant->args[index];
+            if (selected && index < selected->fields.size() &&
+                luna::ownership::isMoveOnly(
+                    defaultUsageForType(selected->fields[index])) &&
+                !dynamic_cast<MoveExpr*>(arg.get())) {
+                error("move-only payload for variant '" +
+                      variant->variantName +
+                      "' must be moved explicitly");
+                return false;
+            }
             if (!checkExpr(arg.get())) return false;
+        }
+        return true;
+    }
+    if (auto* array = dynamic_cast<ArrayLiteralExpr*>(expr)) {
+        for (auto& element : array->elements) {
+            if (array->elementType &&
+                luna::ownership::isMoveOnly(
+                    defaultUsageForType(
+                        array->elementType)) &&
+                !dynamic_cast<MoveExpr*>(
+                    element.get())) {
+                error("move-only array elements must be moved "
+                      "explicitly into the array");
+                return false;
+            }
+            if (!checkExpr(element.get())) return false;
+        }
         return true;
     }
     if (auto* assignment = dynamic_cast<AssignExpr*>(expr)) {

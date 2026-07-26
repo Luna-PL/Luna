@@ -143,7 +143,20 @@ Alpha 阶段优先保证正确性与可观测性；性能工作按以下顺序�
 当前已引入第一阶段一等错误处理：`Result<T, E>`、`?` 的清理后传播和 abort 型
 `panic`；数组、切片和 `range` 的惰性 `map`/`filter`/`take` 管道现可融合到
 `for`/`fold`/`for_each`/`count`，且已有无 runtime allocation 的 JIT/AOT
-一致性检查。下一步优先推广通用 Result 载荷布局、静态错误转换 trait，并物化
-Core `Option`/Iterator adapter 以支持用户容器和 move-only 元素；随后继续收敛
-所有权/仿射/线性检查、Moon 容器验证边界和 package 工具链，同时累积
-ROCm/CUDA 性能与硬件兼容性记录。原生结构化并发将在这些基础稳定后继续设计。
+一致性检查。通用 enum/Result 匹配、冻结的 inline ADT ABI、正式 `never`、静态
+`From<Source>`、跨包 trait coherence/orphan 规则以及 Core 错误、
+`Option`/Iterator trait/adapter 已经落地；用户 trait 成员调用现为静态分派，
+Core Iterator 已接入 `for`，协议产生的 move-only 元素也已覆盖正常循环末尾与
+函数提前返回的逐项清理。`for` 的隐式 Core `IntoIterator` 物化与隐藏状态清理、
+consuming array 的逐元素 drop-state，以及 move-only `filter`/`take` 和
+`map` 输入/输出的拒绝/截断清理现已完成。lambda 函数体已进入路径敏感所有权检查，
+move-only `fold`/`for_each`/`count` 也会物化终结 recipe 隐藏状态。
+`collect::<Target>()` 现通过唯一 Core `FromIterator` 的
+`begin/push/finish` builder 协议静态降低，不建立中间容器或 iterator ABI。下一步处理
+跨函数 Core adapter Drop 布局和 closure environment；无捕获 recipe（包括拥有
+move-only 数组源的 recipe）已能作为 affine 局部栈值物化，并通过逐元素初始化位覆盖
+消费、丢弃和提前返回，同时保持静态融合。affine
+move-only fold 累加器替换也已经具有独立初始化位。随后继续收敛所有权/仿射/线性检查、Moon
+容器验证边界和 package 工具链，同时累积
+ROCm/CUDA 性能与硬件兼容性记录。无栈协程和原生结构化并发的语法/ABI 设计均
+延后到 Core 标准库、错误边界和资源模型稳定之后。

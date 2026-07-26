@@ -47,6 +47,7 @@ target_link_libraries(fragment-plugin-test PRIVATE runtime)
 add_executable(luna
     src/main.cpp
     src/core/TypeRelations.cpp
+    src/core/TypeLayout.cpp
     src/lexer/Lexer.cpp
     src/parser/Parser.cpp
     src/sema/TypeSystem.cpp
@@ -161,6 +162,14 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/package_manifest_workspace.cmake
     )
     add_test(
+        NAME luna.core-surface
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/core_surface.cmake
+    )
+    add_test(
         NAME luna.full-showcase
         COMMAND ${CMAKE_COMMAND}
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
@@ -181,6 +190,13 @@ if(BUILD_TESTING)
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/result_error_aot.cmake
+    )
+    add_test(
+        NAME luna.result-extended-aot
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/result_extended_aot.cmake
     )
     add_test(
         NAME luna.control-flow-aot
@@ -209,6 +225,27 @@ if(BUILD_TESTING)
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/iterator_pipeline_aot.cmake
+    )
+    add_test(
+        NAME luna.iterator-move-only-aot
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/iterator_move_only_aot.cmake
+    )
+    add_test(
+        NAME luna.iterator-materialized-aot
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/iterator_materialized_aot.cmake
+    )
+    add_test(
+        NAME luna.iterator-materialized-move-only-aot
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/iterator_materialized_move_only_aot.cmake
     )
     add_test(
         NAME luna.optimization-pipeline

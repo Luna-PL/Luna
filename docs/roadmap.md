@@ -20,10 +20,26 @@ We will comprehensively refine the design of the reflection mechanism to better 
 ### 3. Error handling before a broad standard library
 
 The first executable slice is now present: `Result<T, E>`, intrinsic
-construction/inspection, ownership-aware `?`, active-payload cleanup and
-abort-style `panic` agree in Sema, MoonIR, LLVM JIT and AOT. Next, generalize the
-payload layout, add static error-conversion traits, and broaden JIT/AOT parity
-before stabilizing file, I/O, allocation and package error APIs.
+construction/inspection, a general tagged-union payload layout, formal `never`,
+ownership-aware `?`, recursive active-payload cleanup, exhaustive enum/Result
+matching, static `From<Source>` conversion and abort-style `panic` agree in
+Sema, MoonIR, LLVM JIT and AOT. Inline ADT ABI, cross-package trait
+coherence/orphan rules, Core value errors, `Option`, and Iterator adapters are
+now materialized. User trait member calls use static impl symbols, Core
+`Iterator` drives protocol `for` loops, and move-only protocol items are
+cleaned exactly once on normal and returning paths. `for` now owns implicit
+Core `IntoIterator` state, while consuming arrays and fused `filter`/`take`
+carry per-element drop state. Lambda bodies and move-only terminal recipes now
+participate in that model, including affine fold accumulator replacement state.
+No-capture recipes, including recipes that own move-only array sources, now
+materialize as single-consumption stack values without losing fusion. Owning
+recipes use per-element initialization bits on consumption, abandonment and
+early-return paths. `collect::<Target>()`
+now lowers through one coherent Core `FromIterator` begin/push/finish builder
+implementation without materializing an iterator ABI or intermediate
+collection. Next, map this compiler-internal Drop state to stable cross-function
+Core adapter layouts, then define closure environments and the diagnostic/status
+ABI before host I/O and boundary error types.
 
 ### 4. Package and standard-library foundation
 

@@ -47,6 +47,8 @@ private:
         int inFlightReads = 0;
         int inFlightWrites = 0;
         bool isGpuEvent = false;
+        bool materializedIteratorOwnsSource = false;
+        TypePtr materializedIteratorSourceType;
         std::vector<Loan> eventResources;
         std::string name;
     };
@@ -71,6 +73,7 @@ private:
     };
 
     bool checkFunction(FunctionDecl* decl);
+    bool checkLambda(LambdaExpr* lambda);
     FlowResult checkBlock(BlockStmt* block);
     FlowResult checkStmt(Stmt* stmt);
     bool checkExpr(Expr* expr);
@@ -154,4 +157,9 @@ private:
     size_t mCurrentFragmentScopeBase = 0;
     size_t mCurrentFragmentApplyBase = 0;
     size_t mCurrentFragmentSlotBase = 0;
+    // Closures do not yet have an environment layout.  While checking a
+    // lambda, names from enclosing local scopes are kept here so an attempted
+    // capture is diagnosed instead of silently compiling as an unresolved
+    // function/global reference.
+    std::unordered_set<std::string> mUnavailableLambdaCaptures;
 };

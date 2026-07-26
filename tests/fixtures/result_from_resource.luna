@@ -1,0 +1,31 @@
+nominal struct SourceErrorResource {
+    marker: i32;
+}
+
+impl Drop for SourceErrorResource {
+    fn drop(resource: &mut SourceErrorResource) -> unit {
+        print(resource.marker);
+    }
+}
+
+impl From<SourceErrorResource> for i32 {
+    fn from(affine error: SourceErrorResource) -> i32 {
+        return error.marker;
+    }
+}
+
+fn source() -> Result<i32, SourceErrorResource> {
+    let error = new SourceErrorResource(71);
+    return Err::<i32, SourceErrorResource>(move error);
+}
+
+fn translated() -> Result<i32, i32> {
+    let value = source()?;
+    return Ok::<i32, i32>(value);
+}
+
+fn main() -> i32 {
+    let result = translated();
+    print(unwrap_err(move result));
+    return 0;
+}

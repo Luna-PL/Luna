@@ -1,7 +1,20 @@
-fn unsupported() -> Result<Result<i32, i32>, i32> {
-    panic("unreachable");
+fn nested() -> Result<Result<i32, i32>, i32> {
+    return Ok::<Result<i32, i32>, i32>(
+        Ok::<i32, i32>(41)
+    );
+}
+
+fn aggregate() -> Result<array<i32, 3>, i32> {
+    return Ok::<array<i32, 3>, i32>([10, 20, 30]);
 }
 
 fn main() -> i32 {
-    return 0;
+    let outer = nested();
+    let inner = unwrap(move outer);
+    print(unwrap(move inner));
+
+    let aggregate_result = aggregate();
+    let values = unwrap(move aggregate_result);
+    print(type_size::<Result<array<i32, 3>, i32> >());
+    return values[2];
 }

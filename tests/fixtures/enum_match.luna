@@ -1,0 +1,27 @@
+nominal enum Message {
+    Empty;
+    Number(i32);
+    Pair(i32, i32);
+}
+
+fn inspect(value: Message) -> i32 {
+    match value {
+        Message::Empty => {
+            return 1;
+        },
+        Message::Number(number) => {
+            return number + 2;
+        },
+        Message::Pair(left, right) => {
+            return left + right;
+        }
+    }
+}
+
+fn main() -> i32 {
+    print(type_size::<Message>());
+    print(inspect(Message::Empty()));
+    print(inspect(Message::Number(40)));
+    print(inspect(Message::Pair(20, 22)));
+    return 0;
+}

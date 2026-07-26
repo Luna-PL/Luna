@@ -1,0 +1,13 @@
+nominal struct BorrowedSourceError {
+    marker: i32;
+}
+
+impl From<BorrowedSourceError> for i32 {
+    fn from(error: BorrowedSourceError) -> i32 {
+        return error.marker;
+    }
+}
+
+fn main() -> i32 {
+    return 0;
+}

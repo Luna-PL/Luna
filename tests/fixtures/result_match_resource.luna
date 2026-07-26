@@ -1,0 +1,40 @@
+nominal struct MatchedResource {
+    marker: i32;
+}
+
+impl Drop for MatchedResource {
+    fn drop(resource: &mut MatchedResource) -> unit {
+        print(resource.marker);
+    }
+}
+
+fn inspect_ok() -> i32 {
+    let resource = new MatchedResource(61);
+    let result = Ok::<MatchedResource, i32>(move resource);
+    match move result {
+        Ok(value) => {
+            return value.marker;
+        },
+        Err(error) => {
+            return error;
+        }
+    }
+}
+
+fn inspect_err() -> i32 {
+    let result = Err::<MatchedResource, i32>(62);
+    match move result {
+        Ok(value) => {
+            return value.marker;
+        },
+        Err(error) => {
+            return error;
+        }
+    }
+}
+
+fn main() -> i32 {
+    print(inspect_ok());
+    print(inspect_err());
+    return 0;
+}

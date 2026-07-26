@@ -1,4 +1,5 @@
 #include "CodeGenerator.h"
+#include "../core/TypeLayout.h"
 #include "../diagnostics/Diagnostic.h"
 #include "../runtime/Runtime.h"
 #include <cstdlib>
@@ -60,6 +61,7 @@ using moon::ImplDecl;
 using moon::LambdaExpr;
 using moon::LaunchExpr;
 using moon::LetStmt;
+using moon::MatchStmt;
 using moon::MoveExpr;
 using moon::Operator;
 using moon::ResumeStmt;
@@ -351,6 +353,8 @@ bool CodeGenerator::generate(moon::Module* program) {
         const std::string symbolName = f->linkName.empty() ? internalName : f->linkName;
         auto* function = llvm::Function::Create(
             funcType, linkage, symbolName, mModule.get());
+        if (f->returnType && f->returnType->kind == TypeKind::Never)
+            function->addFnAttr(llvm::Attribute::NoReturn);
         mFunctions[internalName] = function;
         if (internalName == f->name) mFunctions[f->name] = function;
     };
@@ -618,6 +622,8 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
     mCurrentFunctionIsKernel = decl->isKernel;
     mLocals.clear();
     mLocalTypes.clear();
+    mArrayDropFlags.clear();
+    mMaterializedIterators.clear();
     mLocalKnownUpperBounds.clear();
     mSlotDefaults.clear();
     mCurrentSlotContinuation = nullptr;
@@ -683,7 +689,43 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         return;
     }
     if (auto* ls = dynamic_cast<LetStmt*>(stmt)) {
+        if (ls->materializesIteratorRecipe) {
+            IteratorPlan plan;
+            if (!buildIteratorPlan(
+                    ls->initializer.get(), plan) ||
+                !materializeIteratorBinding(
+                    ls->name, plan)) {
+                error("failed to materialize iterator "
+                      "binding '" + ls->name + "'");
+                return;
+            }
+            auto materialized =
+                mMaterializedIterators.find(
+                    ls->name);
+            if (materialized ==
+                    mMaterializedIterators.end() ||
+                materialized->second.ownsSource !=
+                    ls->materializedIteratorOwnsSource) {
+                error("materialized iterator binding '" +
+                      ls->name +
+                      "' disagrees with its verified owning-source witness");
+                return;
+            }
+            auto* token = createEntryBlockAlloca(
+                func, mHelpers->ptrTy(),
+                ls->name + ".iterator");
+            mBuilder->CreateStore(
+                llvm::ConstantPointerNull::get(
+                    llvm::cast<llvm::PointerType>(
+                        mHelpers->ptrTy())),
+                token);
+            mLocals[ls->name] = token;
+            mLocalTypes[ls->name] = ls->type;
+            mLocalKnownUpperBounds.erase(ls->name);
+            return;
+        }
         llvm::Value* initVal = generateExpr(ls->initializer.get());
+        if (mBuilder->GetInsertBlock()->getTerminator()) return;
         llvm::Type* valType;
         mLocalKnownUpperBounds.erase(ls->name);
 
@@ -808,6 +850,7 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
     }
     if (auto* rs = dynamic_cast<ReturnStmt*>(stmt)) {
         llvm::Value* retVal = rs->value ? generateExpr(rs->value.get()) : nullptr;
+        if (mBuilder->GetInsertBlock()->getTerminator()) return;
         // Ownership checking records the heap values that are still live on
         // this exact return path.  Emitting cleanup here (rather than at a
         // surrounding block's textual end) also covers returns nested in
@@ -911,6 +954,95 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         }
         return;
     }
+    if (auto* match = dynamic_cast<MatchStmt*>(stmt)) {
+        if (!match->matchedType ||
+            (match->matchedType->kind != TypeKind::Enum &&
+             match->matchedType->kind != TypeKind::Result)) {
+            error("match has no validated enum type");
+            return;
+        }
+        llvm::Value* value = generateExpr(match->scrutinee.get());
+        llvm::Value* tag =
+            mBuilder->CreateExtractValue(value, {0}, "match.tag");
+        llvm::Value* payload =
+            mBuilder->CreateExtractValue(value, {1}, "match.payload");
+        auto* tagType = llvm::dyn_cast<llvm::IntegerType>(tag->getType());
+        if (!tagType) {
+            error("match tag is not an integer");
+            return;
+        }
+
+        auto* mergeBB = llvm::BasicBlock::Create(*mCtx, "match.merge");
+        auto* invalidBB = llvm::BasicBlock::Create(
+            *mCtx, "match.invalid_tag", func);
+        auto* dispatch = mBuilder->CreateSwitch(
+            tag, invalidBB, match->arms.size());
+        bool anyFallsThrough = false;
+        const auto outerLocals = mLocals;
+        const auto outerTypes = mLocalTypes;
+        const auto outerBounds = mLocalKnownUpperBounds;
+
+        for (const auto& arm : match->arms) {
+            auto* armBB = llvm::BasicBlock::Create(
+                *mCtx, "match." + arm.variantName, func);
+            dispatch->addCase(
+                llvm::ConstantInt::get(tagType, arm.variantIndex),
+                armBB);
+            mBuilder->SetInsertPoint(armBB);
+            mLocals = outerLocals;
+            mLocalTypes = outerTypes;
+            mLocalKnownUpperBounds = outerBounds;
+
+            const TypeVariant* enumVariant = nullptr;
+            if (match->matchedType->kind == TypeKind::Enum &&
+                arm.variantIndex < match->matchedType->variants.size())
+                enumVariant =
+                    &match->matchedType->variants[arm.variantIndex];
+            for (size_t index = 0;
+                 index < arm.bindings.size() &&
+                 index < arm.bindingTypes.size(); ++index) {
+                uint64_t offset = 0;
+                if (enumVariant)
+                    offset = luna::layout::variantFieldOffset(
+                        *enumVariant, index);
+                llvm::Value* fieldValue = unpackResultPayload(
+                    payload, arm.bindingTypes[index], offset);
+                auto* storage = createEntryBlockAlloca(
+                    func, mHelpers->toLLVMType(arm.bindingTypes[index]),
+                    arm.bindings[index]);
+                mBuilder->CreateStore(fieldValue, storage);
+                mLocals[arm.bindings[index]] = storage;
+                mLocalTypes[arm.bindings[index]] =
+                    arm.bindingTypes[index];
+                mLocalKnownUpperBounds.erase(arm.bindings[index]);
+            }
+            generateBlock(arm.body.get(), func);
+            if (!mBuilder->GetInsertBlock()->getTerminator()) {
+                mBuilder->CreateBr(mergeBB);
+                anyFallsThrough = true;
+            }
+        }
+        mLocals = outerLocals;
+        mLocalTypes = outerTypes;
+        mLocalKnownUpperBounds = outerBounds;
+
+        mBuilder->SetInsertPoint(invalidBB);
+        auto panic = mModule->getOrInsertFunction(
+            "rt_panic_cstr", mHelpers->voidTy(), mHelpers->ptrTy());
+        auto* message = mBuilder->CreateGlobalString(
+            "invalid enum tag in match", "match.invalid_tag.message");
+        mBuilder->CreateCall(panic, {message});
+        mBuilder->CreateUnreachable();
+
+        if (anyFallsThrough) {
+            mergeBB->insertInto(func, nullptr);
+            mBuilder->SetInsertPoint(mergeBB);
+        } else {
+            delete mergeBB;
+            mBuilder->SetInsertPoint(invalidBB);
+        }
+        return;
+    }
     if (auto* ws = dynamic_cast<WhileStmt*>(stmt)) {
         auto* condBB = llvm::BasicBlock::Create(*mCtx, "whilecond", func);
         auto* bodyBB = llvm::BasicBlock::Create(*mCtx, "whilebody");
@@ -934,11 +1066,210 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         return;
     }
     if (auto* fs = dynamic_cast<ForStmt*>(stmt)) {
+        if (!fs->protocolNextSymbol.empty()) {
+            auto* sourceName =
+                dynamic_cast<IdentifierExpr*>(
+                    fs->iterable.get());
+            auto sourceLocal = sourceName
+                ? mLocals.find(sourceName->name)
+                : mLocals.end();
+            auto nextFunction =
+                mFunctions.find(fs->protocolNextSymbol);
+            if (!sourceName ||
+                sourceLocal == mLocals.end() ||
+                nextFunction == mFunctions.end()) {
+                error("for-loop Core Iterator protocol references "
+                      "unmaterialized state or next method");
+                return;
+            }
+
+            TypePtr elementType = fs->elementType
+                ? fs->elementType : TyI32;
+            auto* loopVariable = createEntryBlockAlloca(
+                func, mHelpers->toLLVMType(elementType),
+                fs->varName);
+            llvm::Function* next =
+                nextFunction->second;
+            llvm::AllocaInst* stateStorage = nullptr;
+
+            if (!fs->protocolIntoSymbol.empty()) {
+                auto intoFunction =
+                    mFunctions.find(
+                        fs->protocolIntoSymbol);
+                if (intoFunction == mFunctions.end() ||
+                    intoFunction->second->arg_size() != 1) {
+                    error("for-loop Core IntoIterator protocol "
+                          "references an invalid conversion method");
+                    return;
+                }
+                llvm::Function* into =
+                    intoFunction->second;
+                llvm::Value* source =
+                    generateExpr(fs->iterable.get());
+                source = coerceCallArgument(
+                    source,
+                    into->getFunctionType()->
+                        getParamType(0));
+                llvm::Value* state =
+                    mBuilder->CreateCall(
+                        into, {source},
+                        "iterator.into_state");
+                llvm::Type* stateType =
+                    mHelpers->toLLVMType(
+                        fs->protocolIteratorType);
+                stateStorage = createEntryBlockAlloca(
+                    func, stateType,
+                    fs->protocolStateName);
+                mBuilder->CreateStore(
+                    coerceCallArgument(state, stateType),
+                    stateStorage);
+                mLocals[fs->protocolStateName] =
+                    stateStorage;
+                mLocalTypes[fs->protocolStateName] =
+                    fs->protocolIteratorType;
+                mLocalKnownUpperBounds.erase(
+                    fs->protocolStateName);
+            } else {
+                stateStorage = sourceLocal->second;
+            }
+
+            llvm::AllocaInst* shadowedLocal = nullptr;
+            TypePtr shadowedType;
+            std::optional<uint64_t> shadowedBound;
+            if (auto found = mLocals.find(fs->varName);
+                found != mLocals.end())
+                shadowedLocal = found->second;
+            if (auto found =
+                    mLocalTypes.find(fs->varName);
+                found != mLocalTypes.end())
+                shadowedType = found->second;
+            if (auto found =
+                    mLocalKnownUpperBounds.find(
+                        fs->varName);
+                found != mLocalKnownUpperBounds.end())
+                shadowedBound = found->second;
+
+            mLocals[fs->varName] = loopVariable;
+            mLocalTypes[fs->varName] = elementType;
+            mLocalKnownUpperBounds.erase(fs->varName);
+
+            auto* nextBlock = llvm::BasicBlock::Create(
+                *mCtx, "iterator.next", func);
+            auto* someBlock = llvm::BasicBlock::Create(
+                *mCtx, "iterator.some", func);
+            auto* noneBlock = llvm::BasicBlock::Create(
+                *mCtx, "iterator.none", func);
+            auto* invalidBlock = llvm::BasicBlock::Create(
+                *mCtx, "iterator.invalid_tag", func);
+            mBuilder->CreateBr(nextBlock);
+
+            mBuilder->SetInsertPoint(nextBlock);
+            llvm::Value* receiver = stateStorage;
+            if (fs->protocolIteratorType &&
+                (fs->protocolIteratorType->kind ==
+                     TypeKind::Struct ||
+                 fs->protocolIteratorType->kind ==
+                     TypeKind::Record))
+                receiver = mBuilder->CreateLoad(
+                    stateStorage->getAllocatedType(),
+                    stateStorage,
+                    "iterator.state");
+            if (next->arg_size() != 1) {
+                error("Core Iterator::next has an invalid LLVM "
+                      "function signature");
+                return;
+            }
+            receiver = coerceCallArgument(
+                receiver,
+                next->getFunctionType()->getParamType(0));
+            llvm::Value* option = mBuilder->CreateCall(
+                next, {receiver}, "iterator.option");
+            if (!option->getType()->isStructTy()) {
+                error("Core Iterator::next did not lower to an "
+                      "inline Option value");
+                return;
+            }
+            llvm::Value* tag = mBuilder->CreateExtractValue(
+                option, {0}, "iterator.tag");
+            auto* tagType =
+                llvm::dyn_cast<llvm::IntegerType>(
+                    tag->getType());
+            if (!tagType) {
+                error("Core Iterator Option tag is not an integer");
+                return;
+            }
+            auto* dispatch = mBuilder->CreateSwitch(
+                tag, invalidBlock, 2);
+            dispatch->addCase(
+                llvm::ConstantInt::get(
+                    tagType, fs->protocolNoneVariant),
+                noneBlock);
+            dispatch->addCase(
+                llvm::ConstantInt::get(
+                    tagType, fs->protocolSomeVariant),
+                someBlock);
+
+            mBuilder->SetInsertPoint(someBlock);
+            llvm::Value* payload =
+                mBuilder->CreateExtractValue(
+                    option, {1}, "iterator.payload");
+            llvm::Value* item = unpackResultPayload(
+                payload, elementType);
+            mBuilder->CreateStore(
+                coerceCallArgument(
+                    item,
+                    loopVariable->getAllocatedType()),
+                loopVariable);
+            generateBlock(fs->body.get(), func);
+            if (!mBuilder->GetInsertBlock()->getTerminator())
+                mBuilder->CreateBr(nextBlock);
+
+            mBuilder->SetInsertPoint(invalidBlock);
+            auto panic = mModule->getOrInsertFunction(
+                "rt_panic_cstr", mHelpers->voidTy(),
+                mHelpers->ptrTy());
+            auto* message = mBuilder->CreateGlobalString(
+                "invalid Core Iterator Option tag",
+                "iterator.invalid_tag.message");
+            mBuilder->CreateCall(panic, {message});
+            mBuilder->CreateUnreachable();
+
+            mBuilder->SetInsertPoint(noneBlock);
+            if (!fs->protocolIntoSymbol.empty()) {
+                if (fs->protocolStateNeedsCleanup)
+                    emitCleanup(
+                        fs->protocolStateName,
+                        fs->protocolStateCleanup);
+                mLocals.erase(
+                    fs->protocolStateName);
+                mLocalTypes.erase(
+                    fs->protocolStateName);
+                mLocalKnownUpperBounds.erase(
+                    fs->protocolStateName);
+            }
+            if (shadowedLocal)
+                mLocals[fs->varName] = shadowedLocal;
+            else
+                mLocals.erase(fs->varName);
+            if (shadowedType)
+                mLocalTypes[fs->varName] = shadowedType;
+            else
+                mLocalTypes.erase(fs->varName);
+            if (shadowedBound)
+                mLocalKnownUpperBounds[fs->varName] =
+                    *shadowedBound;
+            else
+                mLocalKnownUpperBounds.erase(fs->varName);
+            return;
+        }
+
         IteratorPlan plan;
         if (!buildIteratorPlan(fs->iterable.get(), plan)) {
             error("for-loop iterable is not a materializable iterator recipe");
             return;
         }
+        plan.ownedStateName =
+            fs->recipeStateName;
         TypePtr elementType = fs->elementType ? fs->elementType : plan.itemType;
         auto* loopVariable = createEntryBlockAlloca(
             func, mHelpers->toLLVMType(elementType), fs->varName);
@@ -964,6 +1295,20 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
                 loopVariable);
             generateBlock(fs->body.get(), func);
         });
+
+        if (!plan.ownedStateName.empty()) {
+            emitCleanup(
+                plan.ownedStateName,
+                luna::ownership::CleanupAction::ArrayDrop);
+            mArrayDropFlags.erase(
+                plan.ownedStateName);
+            mLocals.erase(
+                plan.ownedStateName);
+            mLocalTypes.erase(
+                plan.ownedStateName);
+            mLocalKnownUpperBounds.erase(
+                plan.ownedStateName);
+        }
 
         if (shadowedLocal) mLocals[fs->varName] = shadowedLocal;
         else mLocals.erase(fs->varName);
@@ -1305,6 +1650,15 @@ bool CodeGenerator::buildIteratorPlan(Expr* expr, IteratorPlan& plan) {
     if (!call) {
         TypePtr sourceType = expr->type;
         if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
+            auto materialized =
+                mMaterializedIterators.find(
+                    id->name);
+            if (materialized !=
+                mMaterializedIterators.end()) {
+                plan = materialized->second.plan;
+                plan.materializedName = id->name;
+                return true;
+            }
             auto found = mLocalTypes.find(id->name);
             if (found != mLocalTypes.end()) sourceType = found->second;
         }
@@ -1373,21 +1727,175 @@ bool CodeGenerator::buildIteratorPlan(Expr* expr, IteratorPlan& plan) {
     return false;
 }
 
+bool CodeGenerator::materializeIteratorBinding(
+    const std::string& name,
+    const IteratorPlan& plan) {
+    MaterializedIterator state;
+    state.plan = plan;
+    state.plan.materializedName.clear();
+    TypePtr sourceType = plan.sourceType;
+    llvm::Value* initial = nullptr;
+    state.ownsSource =
+        plan.mode == IteratorMode::Consuming &&
+        sourceType &&
+        sourceType->kind == TypeKind::Array &&
+        sourceType->inner &&
+        defaultUsageForType(sourceType->inner) !=
+            luna::ownership::Usage::Copy;
+
+    if (plan.mode == IteratorMode::Range) {
+        initial = coerceCallArgument(
+            generateExpr(plan.rangeStart),
+            mHelpers->i32Ty());
+        state.limit = coerceCallArgument(
+            generateExpr(plan.rangeEnd),
+            mHelpers->i32Ty());
+    } else {
+        if (!sourceType) return false;
+        if (sourceType->kind == TypeKind::Array) {
+            if (auto* id =
+                    dynamic_cast<IdentifierExpr*>(
+                        plan.source);
+                id && mLocals.count(id->name) &&
+                plan.mode !=
+                    IteratorMode::Consuming) {
+                state.sourceData =
+                    mLocals[id->name];
+            } else {
+                llvm::Value* value =
+                    generateExpr(plan.source);
+                auto* storage =
+                    createEntryBlockAlloca(
+                        mCurrentFunc,
+                        value->getType(),
+                        name + ".iterator.source");
+                mBuilder->CreateStore(
+                    value, storage);
+                state.sourceData = storage;
+                if (state.ownsSource) {
+                    auto* flagsType =
+                        llvm::ArrayType::get(
+                            mHelpers->boolTy(),
+                            sourceType->arrayLength);
+                    state.sourceDropFlags =
+                        createEntryBlockAlloca(
+                            mCurrentFunc,
+                            flagsType,
+                            name +
+                                ".iterator.source.flags");
+                    for (uint64_t index = 0;
+                         index <
+                             sourceType->arrayLength;
+                         ++index) {
+                        auto* flag =
+                            mBuilder->CreateInBoundsGEP(
+                                flagsType,
+                                state.sourceDropFlags,
+                                {llvm::ConstantInt::get(
+                                     mHelpers->i32Ty(),
+                                     0),
+                                 llvm::ConstantInt::get(
+                                     mHelpers->i32Ty(),
+                                     index)});
+                        mBuilder->CreateStore(
+                            llvm::ConstantInt::getTrue(
+                                *mCtx),
+                            flag);
+                    }
+                }
+            }
+            initial = llvm::ConstantInt::get(
+                mHelpers->i32Ty(), 0);
+            state.limit = llvm::ConstantInt::get(
+                mHelpers->i32Ty(),
+                sourceType->arrayLength);
+        } else if (sourceType->kind ==
+                   TypeKind::Slice) {
+            llvm::Value* slice =
+                generateExpr(plan.source);
+            state.sourceData =
+                mBuilder->CreateExtractValue(
+                    slice, {0},
+                    name + ".iterator.slice.data");
+            state.limit = coerceCallArgument(
+                mBuilder->CreateExtractValue(
+                    slice, {1},
+                    name +
+                        ".iterator.slice.length"),
+                mHelpers->i32Ty());
+            initial = llvm::ConstantInt::get(
+                mHelpers->i32Ty(), 0);
+        } else {
+            return false;
+        }
+    }
+
+    state.steps.reserve(plan.steps.size());
+    for (const auto& step : plan.steps) {
+        RuntimeIteratorStep runtime;
+        runtime.description = step;
+        runtime.value =
+            generateExpr(step.argument);
+        if (step.op == IteratorOp::Take) {
+            runtime.value = coerceCallArgument(
+                runtime.value,
+                mHelpers->i32Ty());
+            runtime.remaining =
+                createEntryBlockAlloca(
+                    mCurrentFunc,
+                    mHelpers->i32Ty(),
+                    name +
+                        ".iterator.take.remaining");
+            mBuilder->CreateStore(
+                runtime.value,
+                runtime.remaining);
+        }
+        state.steps.push_back(runtime);
+    }
+
+    state.indexStorage =
+        createEntryBlockAlloca(
+            mCurrentFunc,
+            mHelpers->i32Ty(),
+            name + ".iterator.index");
+    mBuilder->CreateStore(
+        initial, state.indexStorage);
+    mMaterializedIterators[name] =
+        std::move(state);
+    return true;
+}
+
 void CodeGenerator::emitIteratorPipeline(
     const IteratorPlan& plan,
     const std::function<void(llvm::Value*)>& consume,
     const std::function<void()>& prepareTerminal) {
-    struct RuntimeStep {
-        IteratorStep description;
-        llvm::Value* value = nullptr;
-        llvm::AllocaInst* remaining = nullptr;
-    };
-
     llvm::Value* sourceData = nullptr;
     llvm::Value* limit = nullptr;
     llvm::Value* initial = nullptr;
+    llvm::AllocaInst* indexStorage =
+        nullptr;
+    std::vector<RuntimeIteratorStep> steps;
+    size_t materializedStepCount = 0;
+    llvm::AllocaInst* materializedSourceDropFlags =
+        nullptr;
     TypePtr sourceType = plan.sourceType;
-    if (plan.mode == IteratorMode::Range) {
+    auto materialized =
+        plan.materializedName.empty()
+        ? mMaterializedIterators.end()
+        : mMaterializedIterators.find(
+              plan.materializedName);
+    if (materialized !=
+        mMaterializedIterators.end()) {
+        sourceData =
+            materialized->second.sourceData;
+        limit = materialized->second.limit;
+        indexStorage =
+            materialized->second.indexStorage;
+        steps = materialized->second.steps;
+        materializedStepCount = steps.size();
+        materializedSourceDropFlags =
+            materialized->second.sourceDropFlags;
+    } else if (plan.mode == IteratorMode::Range) {
         initial = coerceCallArgument(generateExpr(plan.rangeStart), mHelpers->i32Ty());
         limit = coerceCallArgument(generateExpr(plan.rangeEnd), mHelpers->i32Ty());
     } else {
@@ -1403,9 +1911,47 @@ void CodeGenerator::emitIteratorPipeline(
             } else {
                 llvm::Value* value = generateExpr(plan.source);
                 auto* storage = createEntryBlockAlloca(
-                    mCurrentFunc, value->getType(), "iter.array");
+                    mCurrentFunc, value->getType(),
+                    plan.ownedStateName.empty()
+                        ? "iter.array"
+                        : plan.ownedStateName);
                 mBuilder->CreateStore(value, storage);
                 sourceData = storage;
+                if (!plan.ownedStateName.empty()) {
+                    mLocals[plan.ownedStateName] =
+                        storage;
+                    mLocalTypes[plan.ownedStateName] =
+                        sourceType;
+                    auto* flagsType =
+                        llvm::ArrayType::get(
+                            mHelpers->boolTy(),
+                            sourceType->arrayLength);
+                    auto* flags =
+                        createEntryBlockAlloca(
+                            mCurrentFunc, flagsType,
+                            plan.ownedStateName +
+                                ".flags");
+                    for (uint64_t index = 0;
+                         index <
+                             sourceType->arrayLength;
+                         ++index) {
+                        auto* flag =
+                            mBuilder->CreateInBoundsGEP(
+                                flagsType, flags,
+                                {llvm::ConstantInt::get(
+                                     mHelpers->i32Ty(),
+                                     0),
+                                 llvm::ConstantInt::get(
+                                     mHelpers->i32Ty(),
+                                     index)});
+                        mBuilder->CreateStore(
+                            llvm::ConstantInt::getTrue(
+                                *mCtx),
+                            flag);
+                    }
+                    mArrayDropFlags[
+                        plan.ownedStateName] = flags;
+                }
             }
             initial = llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
             limit = llvm::ConstantInt::get(
@@ -1425,10 +1971,14 @@ void CodeGenerator::emitIteratorPipeline(
 
     // Preserve source-language evaluation order: source, adapter arguments
     // from left to right, then terminal arguments.
-    std::vector<RuntimeStep> steps;
     steps.reserve(plan.steps.size());
-    for (const auto& step : plan.steps) {
-        RuntimeStep runtime;
+    for (size_t stepIndex =
+             materializedStepCount;
+         stepIndex < plan.steps.size();
+         ++stepIndex) {
+        const auto& step =
+            plan.steps[stepIndex];
+        RuntimeIteratorStep runtime;
         runtime.description = step;
         runtime.value = generateExpr(step.argument);
         if (step.op == IteratorOp::Take) {
@@ -1441,9 +1991,13 @@ void CodeGenerator::emitIteratorPipeline(
     }
     if (prepareTerminal) prepareTerminal();
 
-    auto* indexStorage = createEntryBlockAlloca(
-        mCurrentFunc, mHelpers->i32Ty(), "iter.index");
-    mBuilder->CreateStore(initial, indexStorage);
+    if (!indexStorage) {
+        indexStorage = createEntryBlockAlloca(
+            mCurrentFunc, mHelpers->i32Ty(),
+            "iter.index");
+        mBuilder->CreateStore(
+            initial, indexStorage);
+    }
 
     auto* condition = llvm::BasicBlock::Create(
         *mCtx, "iter.condition", mCurrentFunc);
@@ -1465,6 +2019,18 @@ void CodeGenerator::emitIteratorPipeline(
     mBuilder->SetInsertPoint(body);
 
     llvm::Value* item = nullptr;
+    TypePtr currentItemType =
+        plan.mode == IteratorMode::Range
+            ? TyI32
+            : (plan.mode == IteratorMode::Shared
+                   ? Type::makeReference(
+                         sourceType->inner)
+                   : (plan.mode ==
+                              IteratorMode::Mutable
+                          ? Type::makeReference(
+                                sourceType->inner,
+                                true)
+                          : sourceType->inner));
     if (plan.mode == IteratorMode::Range) {
         item = index;
     } else {
@@ -1485,6 +2051,40 @@ void CodeGenerator::emitIteratorPipeline(
             : mBuilder->CreateLoad(elementType, element, "iter.item");
     }
 
+    // A consuming source transfers ownership to the current pipeline item
+    // before any adapter runs. Every rejecting/truncating edge below must
+    // therefore clean that current item rather than leaving the source bit
+    // initialized.
+    llvm::AllocaInst* transferredSourceFlags =
+        materializedSourceDropFlags;
+    if (!transferredSourceFlags &&
+        !plan.ownedStateName.empty()) {
+        auto flags =
+            mArrayDropFlags.find(
+                plan.ownedStateName);
+        if (flags != mArrayDropFlags.end())
+            transferredSourceFlags =
+                flags->second;
+        else {
+            error("move-only consuming array iterator has no "
+                  "initialization state");
+            return;
+        }
+    }
+    if (transferredSourceFlags) {
+        auto* flag = mBuilder->CreateInBoundsGEP(
+            transferredSourceFlags->
+                getAllocatedType(),
+            transferredSourceFlags,
+            {llvm::ConstantInt::get(
+                 mHelpers->i32Ty(), 0),
+             index},
+            "iter.item.initialized");
+        mBuilder->CreateStore(
+            llvm::ConstantInt::getFalse(*mCtx),
+            flag);
+    }
+
     for (auto& step : steps) {
         if (step.description.op == IteratorOp::Map) {
             auto* input = mHelpers->toLLVMType(step.description.inputType);
@@ -1493,6 +2093,8 @@ void CodeGenerator::emitIteratorPipeline(
             item = mBuilder->CreateCall(
                 callableType, step.value,
                 {coerceCallArgument(item, input)}, "iter.map");
+            currentItemType =
+                step.description.outputType;
         } else if (step.description.op == IteratorOp::Filter) {
             auto* input = mHelpers->toLLVMType(step.description.inputType);
             auto* callableType = llvm::FunctionType::get(
@@ -1502,7 +2104,29 @@ void CodeGenerator::emitIteratorPipeline(
                 {coerceCallArgument(item, input)}, "iter.filter");
             auto* acceptedBlock = llvm::BasicBlock::Create(
                 *mCtx, "iter.filter.accept", mCurrentFunc);
-            mBuilder->CreateCondBr(accepted, acceptedBlock, next);
+            if (defaultUsageForType(
+                    currentItemType) ==
+                luna::ownership::Usage::Copy) {
+                mBuilder->CreateCondBr(
+                    accepted, acceptedBlock, next);
+            } else {
+                auto* rejectedBlock =
+                    llvm::BasicBlock::Create(
+                        *mCtx,
+                        "iter.filter.reject",
+                        mCurrentFunc);
+                mBuilder->CreateCondBr(
+                    accepted, acceptedBlock,
+                    rejectedBlock);
+                mBuilder->SetInsertPoint(
+                    rejectedBlock);
+                emitOwnedPayloadCleanup(
+                    item, currentItemType,
+                    "iter.filter.rejected");
+                if (!mBuilder->GetInsertBlock()->
+                        getTerminator())
+                    mBuilder->CreateBr(next);
+            }
             mBuilder->SetInsertPoint(acceptedBlock);
         } else if (step.description.op == IteratorOp::Take) {
             auto* remaining = mBuilder->CreateLoad(
@@ -1513,7 +2137,29 @@ void CodeGenerator::emitIteratorPipeline(
                 "iter.take.more");
             auto* takeBlock = llvm::BasicBlock::Create(
                 *mCtx, "iter.take.item", mCurrentFunc);
-            mBuilder->CreateCondBr(canTake, takeBlock, exit);
+            if (defaultUsageForType(
+                    currentItemType) ==
+                luna::ownership::Usage::Copy) {
+                mBuilder->CreateCondBr(
+                    canTake, takeBlock, exit);
+            } else {
+                auto* exhaustedBlock =
+                    llvm::BasicBlock::Create(
+                        *mCtx,
+                        "iter.take.exhausted",
+                        mCurrentFunc);
+                mBuilder->CreateCondBr(
+                    canTake, takeBlock,
+                    exhaustedBlock);
+                mBuilder->SetInsertPoint(
+                    exhaustedBlock);
+                emitOwnedPayloadCleanup(
+                    item, currentItemType,
+                    "iter.take.rejected");
+                if (!mBuilder->GetInsertBlock()->
+                        getTerminator())
+                    mBuilder->CreateBr(exit);
+            }
             mBuilder->SetInsertPoint(takeBlock);
             mBuilder->CreateStore(
                 mBuilder->CreateSub(
@@ -1538,6 +2184,12 @@ void CodeGenerator::emitIteratorPipeline(
         indexStorage);
     mBuilder->CreateBr(condition);
     mBuilder->SetInsertPoint(exit);
+    if (!plan.materializedName.empty()) {
+        emitMaterializedIteratorCleanup(
+            plan.materializedName);
+        mMaterializedIterators.erase(
+            plan.materializedName);
+    }
 }
 
 llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
@@ -1547,10 +2199,29 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
         error("invalid iterator terminal recipe");
         return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
     }
+    plan.ownedStateName =
+        call->iteratorRecipeStateName;
+    const auto finishOwnedRecipe = [&] {
+        if (plan.ownedStateName.empty()) return;
+        emitCleanup(
+            plan.ownedStateName,
+            luna::ownership::CleanupAction::ArrayDrop);
+        mArrayDropFlags.erase(plan.ownedStateName);
+        mLocals.erase(plan.ownedStateName);
+        mLocalTypes.erase(plan.ownedStateName);
+        mLocalKnownUpperBounds.erase(
+            plan.ownedStateName);
+    };
 
     if (call->iteratorOp == IteratorOp::Fold) {
         llvm::AllocaInst* accumulator = nullptr;
+        llvm::AllocaInst* accumulatorInitialized =
+            nullptr;
         llvm::Value* reducer = nullptr;
+        const bool ownsAccumulator =
+            defaultUsageForType(
+                call->iteratorOutputType) !=
+            luna::ownership::Usage::Copy;
         auto* accumulatorType = mHelpers->toLLVMType(call->iteratorOutputType);
         auto* itemType = mHelpers->toLLVMType(call->iteratorInputType);
         auto* reducerType = llvm::FunctionType::get(
@@ -1558,21 +2229,48 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
         emitIteratorPipeline(plan, [&](llvm::Value* item) {
             auto* current = mBuilder->CreateLoad(
                 accumulatorType, accumulator, "iter.fold.current");
+            if (accumulatorInitialized)
+                mBuilder->CreateStore(
+                    llvm::ConstantInt::getFalse(
+                        *mCtx),
+                    accumulatorInitialized);
             auto* reduced = mBuilder->CreateCall(
                 reducerType, reducer,
                 {current, coerceCallArgument(item, itemType)},
                 "iter.fold.value");
             mBuilder->CreateStore(reduced, accumulator);
+            if (accumulatorInitialized)
+                mBuilder->CreateStore(
+                    llvm::ConstantInt::getTrue(
+                        *mCtx),
+                    accumulatorInitialized);
         }, [&] {
             llvm::Value* initial = generateExpr(call->args[0].get());
             accumulator = createEntryBlockAlloca(
                 mCurrentFunc, accumulatorType, "iter.fold.accumulator");
             mBuilder->CreateStore(
                 coerceCallArgument(initial, accumulatorType), accumulator);
+            if (ownsAccumulator) {
+                accumulatorInitialized =
+                    createEntryBlockAlloca(
+                        mCurrentFunc,
+                        mHelpers->boolTy(),
+                        "iter.fold.accumulator.initialized");
+                mBuilder->CreateStore(
+                    llvm::ConstantInt::getTrue(
+                        *mCtx),
+                    accumulatorInitialized);
+            }
             reducer = generateExpr(call->args[1].get());
         });
-        return mBuilder->CreateLoad(
+        finishOwnedRecipe();
+        llvm::Value* result = mBuilder->CreateLoad(
             accumulatorType, accumulator, "iter.fold.result");
+        if (accumulatorInitialized)
+            mBuilder->CreateStore(
+                llvm::ConstantInt::getFalse(*mCtx),
+                accumulatorInitialized);
+        return result;
     }
 
     if (call->iteratorOp == IteratorOp::ForEach) {
@@ -1586,12 +2284,13 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
         }, [&] {
             action = generateExpr(call->args[0].get());
         });
+        finishOwnedRecipe();
         return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
     }
 
     if (call->iteratorOp == IteratorOp::Count) {
         llvm::AllocaInst* count = nullptr;
-        emitIteratorPipeline(plan, [&](llvm::Value*) {
+        emitIteratorPipeline(plan, [&](llvm::Value* item) {
             auto* current = mBuilder->CreateLoad(
                 mHelpers->i32Ty(), count, "iter.count.current");
             mBuilder->CreateStore(
@@ -1600,14 +2299,92 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
                     llvm::ConstantInt::get(mHelpers->i32Ty(), 1),
                     "iter.count.next"),
                 count);
+            emitOwnedPayloadCleanup(
+                item, plan.itemType,
+                "iter.count.item");
         }, [&] {
             count = createEntryBlockAlloca(
                 mCurrentFunc, mHelpers->i32Ty(), "iter.count");
             mBuilder->CreateStore(
                 llvm::ConstantInt::get(mHelpers->i32Ty(), 0), count);
         });
+        finishOwnedRecipe();
         return mBuilder->CreateLoad(
             mHelpers->i32Ty(), count, "iter.count.result");
+    }
+
+    if (call->iteratorOp == IteratorOp::Collect) {
+        const auto findProtocolFunction =
+            [&](const std::string& symbol) -> llvm::Function* {
+                const auto known = mFunctions.find(symbol);
+                if (known != mFunctions.end())
+                    return known->second;
+                return mModule->getFunction(symbol);
+            };
+        llvm::Function* begin = findProtocolFunction(
+            call->iteratorCollectBeginSymbol);
+        llvm::Function* push = findProtocolFunction(
+            call->iteratorCollectPushSymbol);
+        llvm::Function* finish = findProtocolFunction(
+            call->iteratorCollectFinishSymbol);
+        if (!begin || !push || !finish ||
+            begin->arg_size() != 0 ||
+            push->arg_size() != 2 ||
+            finish->arg_size() != 1 ||
+            !call->iteratorCollectBuilderType ||
+            !call->iteratorCollectTargetType) {
+            error("collect has an invalid lowered FromIterator protocol");
+            return llvm::PoisonValue::get(
+                mHelpers->toLLVMType(call->type));
+        }
+
+        llvm::AllocaInst* builderStorage = nullptr;
+        llvm::Type* builderType =
+            mHelpers->toLLVMType(
+                call->iteratorCollectBuilderType);
+        emitIteratorPipeline(plan, [&](llvm::Value* item) {
+            llvm::Value* builderArgument = nullptr;
+            if (call->iteratorCollectBuilderType->kind ==
+                    TypeKind::Struct ||
+                call->iteratorCollectBuilderType->kind ==
+                    TypeKind::Record) {
+                builderArgument = mBuilder->CreateLoad(
+                    builderType, builderStorage,
+                    "iter.collect.builder.borrow");
+            } else {
+                builderArgument = builderStorage;
+            }
+            mBuilder->CreateCall(
+                push,
+                {coerceCallArgument(
+                     builderArgument,
+                     push->getFunctionType()->
+                         getParamType(0)),
+                 coerceCallArgument(
+                     item,
+                     push->getFunctionType()->
+                         getParamType(1))});
+        }, [&] {
+            llvm::Value* builder = mBuilder->CreateCall(
+                begin, {}, "iter.collect.begin");
+            builderStorage = createEntryBlockAlloca(
+                mCurrentFunc, builderType,
+                "iter.collect.builder");
+            mBuilder->CreateStore(
+                coerceCallArgument(builder, builderType),
+                builderStorage);
+        });
+        finishOwnedRecipe();
+        llvm::Value* builder = mBuilder->CreateLoad(
+            builderType, builderStorage,
+            "iter.collect.builder.finish");
+        return mBuilder->CreateCall(
+            finish,
+            {coerceCallArgument(
+                builder,
+                finish->getFunctionType()->
+                    getParamType(0))},
+            "iter.collect.result");
     }
 
     error("non-terminal iterator recipe reached value code generation");
@@ -1839,17 +2616,74 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         }
     }
     if (auto* variant = dynamic_cast<VariantConstructExpr*>(expr)) {
-        // Enum values use an opaque heap representation for now. The
-        // semantic layer has already checked the nominal enum and payload;
-        // pattern matching/tag lowering can build on this allocation later.
-        auto rtAlloc = mModule->getOrInsertFunction(
-            "rt_alloc", mHelpers->ptrTy(), mHelpers->sizeTy(), mHelpers->sizeTy());
-        auto sizeVal = llvm::ConstantInt::get(
-            mHelpers->sizeTy(), typeSize(variant->constructedType));
-        auto alignmentVal = llvm::ConstantInt::get(
-            mHelpers->sizeTy(), typeAlignment(variant->constructedType));
-        for (auto& arg : variant->args) generateExpr(arg.get());
-        return mBuilder->CreateCall(rtAlloc, {sizeVal, alignmentVal}, "enumalloc");
+        if (!variant->constructedType ||
+            variant->constructedType->kind != TypeKind::Enum) {
+            error("enum construction has no validated inline ADT type");
+            return llvm::PoisonValue::get(mHelpers->i32Ty());
+        }
+        size_t variantIndex = 0;
+        const TypeVariant* selected = nullptr;
+        for (; variantIndex < variant->constructedType->variants.size();
+             ++variantIndex) {
+            if (variant->constructedType->variants[variantIndex].name ==
+                variant->variantName) {
+                selected =
+                    &variant->constructedType->variants[variantIndex];
+                break;
+            }
+        }
+        auto* enumLLVM = llvm::dyn_cast<llvm::StructType>(
+            mHelpers->toLLVMType(variant->constructedType));
+        if (!selected || !enumLLVM || enumLLVM->getNumElements() != 2) {
+            error("enum variant has no validated inline ADT layout");
+            return llvm::PoisonValue::get(mHelpers->i32Ty());
+        }
+        auto* payloadLLVM = enumLLVM->getElementType(1);
+        auto* payloadStorage = createEntryBlockAlloca(
+            mCurrentFunc, payloadLLVM, "enum.payload.storage");
+        mBuilder->CreateStore(
+            llvm::Constant::getNullValue(payloadLLVM), payloadStorage);
+        for (size_t fieldIndex = 0;
+             fieldIndex < variant->args.size() &&
+             fieldIndex < selected->fields.size(); ++fieldIndex) {
+            llvm::Value* fieldValue =
+                generateExpr(variant->args[fieldIndex].get());
+            auto* sourceStorage = createEntryBlockAlloca(
+                mCurrentFunc, fieldValue->getType(),
+                "enum.payload.source");
+            mBuilder->CreateStore(fieldValue, sourceStorage);
+            const uint64_t offset =
+                luna::layout::variantFieldOffset(*selected, fieldIndex);
+            llvm::Value* destination = payloadStorage;
+            if (offset != 0)
+                destination = mBuilder->CreateGEP(
+                    llvm::Type::getInt8Ty(*mCtx), payloadStorage,
+                    llvm::ConstantInt::get(
+                        mHelpers->sizeTy(), offset),
+                    "enum.payload.field");
+            mBuilder->CreateMemCpy(
+                destination, llvm::Align(std::max<uint64_t>(
+                    1, std::min<uint64_t>(
+                        8, luna::layout::valueAlignment(
+                               selected->fields[fieldIndex])))),
+                sourceStorage, llvm::Align(std::max<uint64_t>(
+                    1, std::min<uint64_t>(
+                        8, luna::layout::valueAlignment(
+                               selected->fields[fieldIndex])))),
+                luna::layout::valueSize(
+                    selected->fields[fieldIndex]));
+        }
+        llvm::Value* payload = mBuilder->CreateLoad(
+            payloadLLVM, payloadStorage, "enum.payload");
+        llvm::Value* result =
+            llvm::UndefValue::get(enumLLVM);
+        result = mBuilder->CreateInsertValue(
+            result,
+            llvm::ConstantInt::get(
+                mHelpers->i32Ty(), variantIndex),
+            {0}, "enum.tag");
+        return mBuilder->CreateInsertValue(
+            result, payload, {1}, "enum.value");
     }
     if (auto* field = dynamic_cast<FieldAccessExpr*>(expr)) {
         TypePtr objectType;
@@ -1922,11 +2756,12 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
     if (auto* call = dynamic_cast<CallExpr*>(expr)) {
         if (call->iteratorOp == IteratorOp::Fold ||
             call->iteratorOp == IteratorOp::ForEach ||
-            call->iteratorOp == IteratorOp::Count)
+            call->iteratorOp == IteratorOp::Count ||
+            call->iteratorOp == IteratorOp::Collect)
             return generateIteratorTerminal(call);
         if (call->iteratorOp != IteratorOp::None) {
             error("iterator adapters are ephemeral and must end in `for`, "
-                  "`fold`, `for_each`, or `count`");
+                  "`fold`, `for_each`, `count`, or `collect`");
             return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
         }
         if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
@@ -1937,7 +2772,8 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             TypePtr payloadType = call->intrinsicType->typeArgs[
                 isOk ? 0 : 1];
             llvm::Value* payload = generateExpr(call->args.front().get());
-            llvm::Value* bits = packResultPayload(payload, payloadType);
+            llvm::Value* bits = packResultPayload(
+                payload, payloadType, call->intrinsicType);
             llvm::Value* result = llvm::UndefValue::get(
                 mHelpers->toLLVMType(call->intrinsicType));
             result = mBuilder->CreateInsertValue(
@@ -2163,9 +2999,14 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
                     args.push_back(value);
                 }
                 
-                return mBuilder->CreateCall(
+                auto* emitted = mBuilder->CreateCall(
                     callee, args,
                     callee->getReturnType()->isVoidTy() ? "" : "calltmp");
+                if (call->type && call->type->kind == TypeKind::Never) {
+                    mBuilder->CreateUnreachable();
+                    return llvm::PoisonValue::get(mHelpers->i32Ty());
+                }
+                return emitted;
             }
 
             
@@ -2252,9 +3093,42 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             *mCtx, "try.error", mCurrentFunc);
         mBuilder->CreateCondBr(isOk, success, failure);
         mBuilder->SetInsertPoint(failure);
+        llvm::Value* errorBits =
+            mBuilder->CreateExtractValue(result, {1}, "try.error.bits");
+        llvm::Value* errorValue =
+            unpackResultPayload(errorBits, propagation->errorType);
+        if (!propagation->errorConversionSymbol.empty()) {
+            auto conversion =
+                mFunctions.find(propagation->errorConversionSymbol);
+            if (conversion == mFunctions.end()) {
+                error("error propagation references unknown From conversion '" +
+                      propagation->errorConversionSymbol + "'");
+            } else {
+                errorValue = mBuilder->CreateCall(
+                    conversion->second,
+                    {coerceCallArgument(
+                        errorValue,
+                        conversion->second->getFunctionType()->getParamType(0))},
+                    "try.converted_error");
+            }
+        }
+        TypePtr propagatedResult = propagation->propagatedResultType
+            ? propagation->propagatedResultType : propagation->resultType;
+        TypePtr propagatedError = propagation->propagatedErrorType
+            ? propagation->propagatedErrorType : propagation->errorType;
+        llvm::Value* propagatedBits = packResultPayload(
+            errorValue, propagatedError, propagatedResult);
+        llvm::Value* propagatedValue = llvm::UndefValue::get(
+            mHelpers->toLLVMType(propagatedResult));
+        propagatedValue = mBuilder->CreateInsertValue(
+            propagatedValue,
+            llvm::ConstantInt::get(mHelpers->boolTy(), 0),
+            {0}, "try.error.tag");
+        propagatedValue = mBuilder->CreateInsertValue(
+            propagatedValue, propagatedBits, {1}, "try.error.value");
         for (const auto& cleanup : propagation->cleanups)
             emitCleanup(cleanup.place, cleanup.action);
-        mBuilder->CreateRet(result);
+        mBuilder->CreateRet(propagatedValue);
         mBuilder->SetInsertPoint(success);
         llvm::Value* bits =
             mBuilder->CreateExtractValue(result, {1}, "try.value");
@@ -2319,6 +3193,98 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
                 return rhs;
             }
         }
+        if (auto* field =
+                dynamic_cast<FieldAccessExpr*>(
+                    as->lhs.get())) {
+            TypePtr objectType;
+            if (auto* id =
+                    dynamic_cast<IdentifierExpr*>(
+                        field->object.get())) {
+                auto type = mLocalTypes.find(id->name);
+                if (type != mLocalTypes.end())
+                    objectType = type->second;
+            }
+            if (objectType &&
+                objectType->kind == TypeKind::Reference)
+                objectType = objectType->inner;
+            if (objectType &&
+                (objectType->kind == TypeKind::Rc ||
+                 objectType->kind == TypeKind::Arc))
+                objectType = objectType->inner;
+            const size_t index =
+                fieldIndex(objectType, field->field);
+            if (objectType &&
+                index != static_cast<size_t>(-1)) {
+                llvm::Value* object =
+                    generateExpr(field->object.get());
+                uint64_t offset = 0;
+                for (size_t fieldIndex = 0;
+                     fieldIndex < index; ++fieldIndex)
+                    offset += typeSize(
+                        objectType->fields[
+                            fieldIndex].type);
+                llvm::Value* pointer =
+                    mBuilder->CreateGEP(
+                        llvm::Type::getInt8Ty(*mCtx),
+                        object,
+                        llvm::ConstantInt::get(
+                            mHelpers->sizeTy(), offset),
+                        "field.assign.ptr");
+                auto* valueType =
+                    mHelpers->toLLVMType(
+                        objectType->fields[index].type);
+                llvm::Value* result =
+                    coerceCallArgument(rhs, valueType);
+                if (as->op != Operator::Assign) {
+                    llvm::Value* previous =
+                        mBuilder->CreateLoad(
+                            valueType, pointer,
+                            "field.assign.old");
+                    switch (as->op) {
+                        case Operator::AddAssign:
+                            result = valueType->isFloatingPointTy()
+                                ? mBuilder->CreateFAdd(
+                                      previous, result,
+                                      "field.assign.add")
+                                : mBuilder->CreateAdd(
+                                      previous, result,
+                                      "field.assign.add");
+                            break;
+                        case Operator::SubtractAssign:
+                            result = valueType->isFloatingPointTy()
+                                ? mBuilder->CreateFSub(
+                                      previous, result,
+                                      "field.assign.sub")
+                                : mBuilder->CreateSub(
+                                      previous, result,
+                                      "field.assign.sub");
+                            break;
+                        case Operator::MultiplyAssign:
+                            result = valueType->isFloatingPointTy()
+                                ? mBuilder->CreateFMul(
+                                      previous, result,
+                                      "field.assign.mul")
+                                : mBuilder->CreateMul(
+                                      previous, result,
+                                      "field.assign.mul");
+                            break;
+                        case Operator::DivideAssign:
+                            result = valueType->isFloatingPointTy()
+                                ? mBuilder->CreateFDiv(
+                                      previous, result,
+                                      "field.assign.div")
+                                : mBuilder->CreateSDiv(
+                                      previous, result,
+                                      "field.assign.div");
+                            break;
+                        default:
+                            break;
+                    }
+                }
+                mBuilder->CreateStore(result, pointer);
+                return result;
+            }
+        }
         if (auto* id = dynamic_cast<IdentifierExpr*>(as->lhs.get())) {
             auto it = mLocals.find(id->name);
             if (it != mLocals.end()) {
@@ -2368,7 +3334,16 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
     if (auto* bw = dynamic_cast<BorrowExpr*>(expr)) {
         if (auto* id = dynamic_cast<IdentifierExpr*>(bw->operand.get())) {
             auto it = mLocals.find(id->name);
-            if (it != mLocals.end()) return it->second;
+            if (it != mLocals.end()) {
+                auto type = mLocalTypes.find(id->name);
+                if (type != mLocalTypes.end() && type->second &&
+                    (type->second->kind == TypeKind::Struct ||
+                     type->second->kind == TypeKind::Record))
+                    return mBuilder->CreateLoad(
+                        it->second->getAllocatedType(), it->second,
+                        id->name + ".borrowed_object");
+                return it->second;
+            }
         }
         return generateExpr(bw->operand.get());
     }
@@ -2404,12 +3379,18 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         auto savedFunc = mCurrentFunc;
         auto savedLocals = std::move(mLocals);
         auto savedLocalTypes = std::move(mLocalTypes);
+        auto savedArrayDropFlags =
+            std::move(mArrayDropFlags);
+        auto savedMaterializedIterators =
+            std::move(mMaterializedIterators);
         auto savedUpperBounds = std::move(mLocalKnownUpperBounds);
         auto savedContinuationFrames = std::move(mContinuationFrames);
         const unsigned savedContinuationFrameCounter = mContinuationFrameCounter;
         auto savedIP = mBuilder->saveIP();
         mLocals.clear();
         mLocalTypes.clear();
+        mArrayDropFlags.clear();
+        mMaterializedIterators.clear();
         mLocalKnownUpperBounds.clear();
         mContinuationFrames.clear();
         mContinuationFrameCounter = 0;
@@ -2439,6 +3420,10 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         mCurrentFunc = savedFunc;
         mLocals = std::move(savedLocals);
         mLocalTypes = std::move(savedLocalTypes);
+        mArrayDropFlags =
+            std::move(savedArrayDropFlags);
+        mMaterializedIterators =
+            std::move(savedMaterializedIterators);
         mLocalKnownUpperBounds = std::move(savedUpperBounds);
         mContinuationFrames = std::move(savedContinuationFrames);
         mContinuationFrameCounter = savedContinuationFrameCounter;
@@ -3060,49 +4045,53 @@ void CodeGenerator::emitLunaDeallocation(llvm::Value* pointer, const TypePtr& ty
 }
 
 llvm::Value* CodeGenerator::packResultPayload(
-    llvm::Value* value, const TypePtr& type) {
-    if (!value || !type || type->kind == TypeKind::Unit)
-        return llvm::ConstantInt::get(mHelpers->i64Ty(), 0);
-    llvm::Type* source = value->getType();
-    if (source->isPointerTy())
-        return mBuilder->CreatePtrToInt(
-            value, mHelpers->i64Ty(), "result.payload.bits");
-    if (source->isIntegerTy())
-        return mBuilder->CreateZExtOrTrunc(
-            value, mHelpers->i64Ty(), "result.payload.bits");
-    if (source->isDoubleTy())
-        return mBuilder->CreateBitCast(
-            value, mHelpers->i64Ty(), "result.payload.bits");
-    if (source->isFloatTy()) {
-        auto* narrow = mBuilder->CreateBitCast(
-            value, mHelpers->i32Ty(), "result.payload.f32");
-        return mBuilder->CreateZExt(
-            narrow, mHelpers->i64Ty(), "result.payload.bits");
+    llvm::Value* value, const TypePtr& type, const TypePtr& resultType) {
+    auto* resultLLVM = llvm::dyn_cast<llvm::StructType>(
+        mHelpers->toLLVMType(resultType));
+    if (!resultLLVM || resultLLVM->getNumElements() != 2) {
+        error("Result payload has no validated tagged-union layout");
+        return llvm::PoisonValue::get(
+            llvm::ArrayType::get(mHelpers->i64Ty(), 1));
     }
-    error("Result payload type '" + type->toString() +
-          "' does not fit the initial one-word Result ABI");
-    return llvm::ConstantInt::get(mHelpers->i64Ty(), 0);
+    auto* payloadLLVM = resultLLVM->getElementType(1);
+    auto* payloadStorage = createEntryBlockAlloca(
+        mCurrentFunc, payloadLLVM, "result.payload.storage");
+    mBuilder->CreateStore(
+        llvm::Constant::getNullValue(payloadLLVM), payloadStorage);
+    if (value && type && type->kind != TypeKind::Unit &&
+        type->kind != TypeKind::Never) {
+        auto* sourceStorage = createEntryBlockAlloca(
+            mCurrentFunc, value->getType(), "result.payload.source");
+        mBuilder->CreateStore(value, sourceStorage);
+        const uint64_t storedSize =
+            luna::layout::valueSize(type);
+        mBuilder->CreateMemCpy(
+            payloadStorage, llvm::Align(8),
+            sourceStorage, llvm::Align(std::max<uint64_t>(
+                1, std::min<uint64_t>(
+                    8, luna::layout::valueAlignment(type)))),
+            storedSize);
+    }
+    return mBuilder->CreateLoad(
+        payloadLLVM, payloadStorage, "result.payload.bits");
 }
 
 llvm::Value* CodeGenerator::unpackResultPayload(
-    llvm::Value* bits, const TypePtr& type) {
+    llvm::Value* bits, const TypePtr& type, uint64_t byteOffset) {
     if (!type || type->kind == TypeKind::Unit)
         return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
     llvm::Type* target = mHelpers->toLLVMType(type);
-    if (target->isPointerTy())
-        return mBuilder->CreateIntToPtr(bits, target, "result.payload");
-    if (target->isIntegerTy())
-        return mBuilder->CreateTruncOrBitCast(bits, target, "result.payload");
-    if (target->isDoubleTy())
-        return mBuilder->CreateBitCast(bits, target, "result.payload");
-    if (target->isFloatTy()) {
-        auto* narrow = mBuilder->CreateTrunc(
-            bits, mHelpers->i32Ty(), "result.payload.f32");
-        return mBuilder->CreateBitCast(narrow, target, "result.payload");
-    }
-    error("Result payload type '" + type->toString() +
-          "' does not fit the initial one-word Result ABI");
-    return llvm::PoisonValue::get(target);
+    auto* payloadStorage = createEntryBlockAlloca(
+        mCurrentFunc, bits->getType(), "result.payload.unpack");
+    mBuilder->CreateStore(bits, payloadStorage);
+    llvm::Value* fieldStorage = payloadStorage;
+    if (byteOffset != 0)
+        fieldStorage = mBuilder->CreateGEP(
+            llvm::Type::getInt8Ty(*mCtx), payloadStorage,
+            llvm::ConstantInt::get(
+                mHelpers->sizeTy(), byteOffset),
+            "payload.field");
+    return mBuilder->CreateLoad(target, fieldStorage, "result.payload");
 }
 
 void CodeGenerator::emitOwnedPayloadCleanup(
@@ -3110,6 +4099,92 @@ void CodeGenerator::emitOwnedPayloadCleanup(
     if (!value || !type ||
         defaultUsageForType(type) == luna::ownership::Usage::Copy)
         return;
+    if (type->kind == TypeKind::Array &&
+        type->inner) {
+        for (uint64_t index = 0;
+             index < type->arrayLength; ++index)
+            emitOwnedPayloadCleanup(
+                mBuilder->CreateExtractValue(
+                    value,
+                    {static_cast<unsigned>(index)},
+                    label + ".element"),
+                type->inner,
+                label + "." +
+                    std::to_string(index));
+        return;
+    }
+    if (type->kind == TypeKind::Result && type->typeArgs.size() == 2) {
+        llvm::Value* isOk =
+            mBuilder->CreateExtractValue(value, {0}, label + ".is_ok");
+        llvm::Value* bits =
+            mBuilder->CreateExtractValue(value, {1}, label + ".payload");
+        auto* okBlock = llvm::BasicBlock::Create(
+            *mCtx, label + ".drop_ok", mCurrentFunc);
+        auto* errorBlock = llvm::BasicBlock::Create(
+            *mCtx, label + ".drop_err", mCurrentFunc);
+        auto* continueBlock = llvm::BasicBlock::Create(
+            *mCtx, label + ".dropped", mCurrentFunc);
+        mBuilder->CreateCondBr(isOk, okBlock, errorBlock);
+        mBuilder->SetInsertPoint(okBlock);
+        emitOwnedPayloadCleanup(
+            unpackResultPayload(bits, type->typeArgs[0]),
+            type->typeArgs[0], label + ".ok");
+        if (!mBuilder->GetInsertBlock()->getTerminator())
+            mBuilder->CreateBr(continueBlock);
+        mBuilder->SetInsertPoint(errorBlock);
+        emitOwnedPayloadCleanup(
+            unpackResultPayload(bits, type->typeArgs[1]),
+            type->typeArgs[1], label + ".err");
+        if (!mBuilder->GetInsertBlock()->getTerminator())
+            mBuilder->CreateBr(continueBlock);
+        mBuilder->SetInsertPoint(continueBlock);
+        return;
+    }
+    if (type->kind == TypeKind::Enum) {
+        llvm::Value* tag =
+            mBuilder->CreateExtractValue(value, {0}, label + ".tag");
+        llvm::Value* bits =
+            mBuilder->CreateExtractValue(value, {1}, label + ".payload");
+        auto* continueBlock = llvm::BasicBlock::Create(
+            *mCtx, label + ".dropped", mCurrentFunc);
+        auto* invalidBlock = llvm::BasicBlock::Create(
+            *mCtx, label + ".invalid_tag", mCurrentFunc);
+        auto* dispatch = mBuilder->CreateSwitch(
+            tag, invalidBlock, type->variants.size());
+        for (size_t variantIndex = 0;
+             variantIndex < type->variants.size(); ++variantIndex) {
+            const auto& variant = type->variants[variantIndex];
+            auto* variantBlock = llvm::BasicBlock::Create(
+                *mCtx, label + "." + variant.name, mCurrentFunc);
+            dispatch->addCase(
+                llvm::ConstantInt::get(
+                    llvm::Type::getInt32Ty(*mCtx), variantIndex),
+                variantBlock);
+            mBuilder->SetInsertPoint(variantBlock);
+            for (size_t fieldIndex = 0;
+                 fieldIndex < variant.fields.size(); ++fieldIndex) {
+                emitOwnedPayloadCleanup(
+                    unpackResultPayload(
+                        bits, variant.fields[fieldIndex],
+                        luna::layout::variantFieldOffset(
+                            variant, fieldIndex)),
+                    variant.fields[fieldIndex],
+                    label + "." + variant.name + "." +
+                        std::to_string(fieldIndex));
+            }
+            if (!mBuilder->GetInsertBlock()->getTerminator())
+                mBuilder->CreateBr(continueBlock);
+        }
+        mBuilder->SetInsertPoint(invalidBlock);
+        auto panic = mModule->getOrInsertFunction(
+            "rt_panic_cstr", mHelpers->voidTy(), mHelpers->ptrTy());
+        auto* message = mBuilder->CreateGlobalString(
+            "invalid inline enum tag", "enum.invalid_tag.message");
+        mBuilder->CreateCall(panic, {message});
+        mBuilder->CreateUnreachable();
+        mBuilder->SetInsertPoint(continueBlock);
+        return;
+    }
     if (type->kind == TypeKind::Rc || type->kind == TypeKind::Arc) {
         const bool atomic = type->kind == TypeKind::Arc;
         auto release = mModule->getOrInsertFunction(
@@ -3167,8 +4242,103 @@ void CodeGenerator::emitOwnedPayloadCleanup(
     emitLunaDeallocation(value, type);
 }
 
+void CodeGenerator::emitMaterializedIteratorCleanup(
+    const std::string& name) {
+    auto materialized =
+        mMaterializedIterators.find(name);
+    if (materialized ==
+        mMaterializedIterators.end() ||
+        !materialized->second.ownsSource)
+        return;
+    auto& state = materialized->second;
+    TypePtr sourceType = state.plan.sourceType;
+    if (!sourceType ||
+        sourceType->kind != TypeKind::Array ||
+        !sourceType->inner ||
+        !state.sourceData ||
+        !state.sourceDropFlags) {
+        error("owning materialized iterator '" +
+              name +
+              "' has no validated source drop state");
+        return;
+    }
+    auto* arrayType =
+        mHelpers->toLLVMType(sourceType);
+    auto* elementType =
+        mHelpers->toLLVMType(sourceType->inner);
+    for (uint64_t index = 0;
+         index < sourceType->arrayLength;
+         ++index) {
+        auto* flagPointer =
+            mBuilder->CreateInBoundsGEP(
+                state.sourceDropFlags->
+                    getAllocatedType(),
+                state.sourceDropFlags,
+                {llvm::ConstantInt::get(
+                     mHelpers->i32Ty(), 0),
+                 llvm::ConstantInt::get(
+                     mHelpers->i32Ty(), index)},
+                name + ".iterator.source.flag");
+        llvm::Value* initialized =
+            mBuilder->CreateLoad(
+                mHelpers->boolTy(),
+                flagPointer,
+                name +
+                    ".iterator.source.initialized");
+        auto* dropBlock =
+            llvm::BasicBlock::Create(
+                *mCtx,
+                name + ".iterator.source.drop." +
+                    std::to_string(index),
+                mCurrentFunc);
+        auto* continueBlock =
+            llvm::BasicBlock::Create(
+                *mCtx,
+                name + ".iterator.source.after." +
+                    std::to_string(index),
+                mCurrentFunc);
+        mBuilder->CreateCondBr(
+            initialized, dropBlock,
+            continueBlock);
+        mBuilder->SetInsertPoint(dropBlock);
+        auto* elementPointer =
+            mBuilder->CreateInBoundsGEP(
+                arrayType,
+                state.sourceData,
+                {llvm::ConstantInt::get(
+                     mHelpers->i32Ty(), 0),
+                 llvm::ConstantInt::get(
+                     mHelpers->i32Ty(), index)},
+                name +
+                    ".iterator.source.element");
+        llvm::Value* element =
+            mBuilder->CreateLoad(
+                elementType,
+                elementPointer,
+                name +
+                    ".iterator.source.value");
+        mBuilder->CreateStore(
+            llvm::ConstantInt::getFalse(*mCtx),
+            flagPointer);
+        emitOwnedPayloadCleanup(
+            element, sourceType->inner,
+            name + ".iterator.source." +
+                std::to_string(index));
+        if (!mBuilder->GetInsertBlock()->
+                getTerminator())
+            mBuilder->CreateBr(
+                continueBlock);
+        mBuilder->SetInsertPoint(
+            continueBlock);
+    }
+}
+
 void CodeGenerator::emitCleanup(
     const std::string& place, luna::ownership::CleanupAction action) {
+    if (mMaterializedIterators.count(place)) {
+        emitMaterializedIteratorCleanup(place);
+        return;
+    }
     auto local = mLocals.find(place);
     if (local == mLocals.end()) {
         error("cleanup references unknown local '" + place + "'");
@@ -3210,6 +4380,78 @@ void CodeGenerator::emitCleanup(
         if (!mBuilder->GetInsertBlock()->getTerminator())
             mBuilder->CreateBr(continueBlock);
         mBuilder->SetInsertPoint(continueBlock);
+        return;
+    }
+    if (action == luna::ownership::CleanupAction::EnumDrop) {
+        if (!type || type->kind != TypeKind::Enum) {
+            error("enum cleanup for '" + place +
+                  "' has no validated enum type");
+            return;
+        }
+        emitOwnedPayloadCleanup(
+            pointer, type, place + ".enum");
+        return;
+    }
+    if (action == luna::ownership::CleanupAction::ArrayDrop) {
+        if (!type || type->kind != TypeKind::Array ||
+            !type->inner) {
+            error("array cleanup for '" + place +
+                  "' has no validated array type");
+            return;
+        }
+        auto flags = mArrayDropFlags.find(place);
+        for (uint64_t index = 0;
+             index < type->arrayLength; ++index) {
+            llvm::Value* element =
+                mBuilder->CreateExtractValue(
+                    pointer,
+                    {static_cast<unsigned>(index)},
+                    place + ".element");
+            if (flags == mArrayDropFlags.end()) {
+                emitOwnedPayloadCleanup(
+                    element, type->inner,
+                    place + "." +
+                        std::to_string(index));
+                continue;
+            }
+            auto* dropBlock =
+                llvm::BasicBlock::Create(
+                    *mCtx,
+                    place + ".drop." +
+                        std::to_string(index),
+                    mCurrentFunc);
+            auto* continueBlock =
+                llvm::BasicBlock::Create(
+                    *mCtx,
+                    place + ".after." +
+                        std::to_string(index),
+                    mCurrentFunc);
+            auto* flagPointer =
+                mBuilder->CreateInBoundsGEP(
+                    flags->second->getAllocatedType(),
+                    flags->second,
+                    {llvm::ConstantInt::get(
+                         mHelpers->i32Ty(), 0),
+                     llvm::ConstantInt::get(
+                         mHelpers->i32Ty(), index)},
+                    place + ".flag");
+            llvm::Value* initialized =
+                mBuilder->CreateLoad(
+                    mHelpers->boolTy(), flagPointer,
+                    place + ".initialized");
+            mBuilder->CreateCondBr(
+                initialized, dropBlock,
+                continueBlock);
+            mBuilder->SetInsertPoint(dropBlock);
+            emitOwnedPayloadCleanup(
+                element, type->inner,
+                place + "." +
+                    std::to_string(index));
+            if (!mBuilder->GetInsertBlock()->
+                    getTerminator())
+                mBuilder->CreateBr(continueBlock);
+            mBuilder->SetInsertPoint(continueBlock);
+        }
         return;
     }
     if (!pointer->getType()->isPointerTy()) return;

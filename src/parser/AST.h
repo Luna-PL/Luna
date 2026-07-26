@@ -32,6 +32,8 @@ struct ASTNode {
 
 struct TraitRef : ASTNode {
     std::string name;
+    std::vector<std::unique_ptr<TypeAST>> typeArgs;
+    TypeVec resolvedTypeArgs;
     std::string resolvedTraitId;
 };
 
@@ -99,6 +101,12 @@ struct LetStmt : Stmt {
     // The typed frontend records every binding's canonical type for MoonIR
     // lowering. Backend passes never consult the scoped SymbolTable.
     TypePtr inferredType;
+    // A compiler iterator recipe may be materialized as a single-consumption
+    // stack value. An owning recipe records its hidden source witness so the
+    // ownership and backend passes can close every still-initialized element.
+    bool materializesIteratorRecipe = false;
+    bool materializedIteratorOwnsSource = false;
+    TypePtr materializedIteratorSourceType;
 };
 
 // A path-specific cleanup is attached to the control transfer that leaves
@@ -130,6 +138,21 @@ struct IfStmt : Stmt {
     std::unique_ptr<Stmt> elseBranch; // BlockStmt or IfStmt
 };
 
+struct MatchArm : ASTNode {
+    std::string typeQualifier;
+    std::string variantName;
+    std::vector<std::string> bindings;
+    size_t variantIndex = 0;
+    TypeVec bindingTypes;
+    std::unique_ptr<BlockStmt> body;
+};
+
+struct MatchStmt : Stmt {
+    std::unique_ptr<Expr> scrutinee;
+    TypePtr matchedType;
+    std::vector<MatchArm> arms;
+};
+
 struct WhileStmt : Stmt {
     std::unique_ptr<Expr> cond;
     std::unique_ptr<BlockStmt> body;
@@ -140,6 +163,27 @@ struct ForStmt : Stmt {
     std::unique_ptr<Expr> iterable;
     std::unique_ptr<BlockStmt> body;
     TypePtr elementType;
+    // Empty keeps the compiler-fused array/slice/range recipe path.  A
+    // non-empty symbol denotes the exact Core Iterator::next implementation
+    // selected by semantic analysis; codegen must not repeat trait lookup.
+    std::string protocolNextSymbol;
+    TypePtr protocolIteratorType;
+    TypePtr protocolOptionType;
+    size_t protocolNoneVariant = 0;
+    size_t protocolSomeVariant = 0;
+    // When non-empty, `for source` consumes source through the unique Core
+    // IntoIterator impl exactly once and owns the resulting hidden iterator
+    // state until None or an enclosing early return.
+    std::string protocolIntoSymbol;
+    TypePtr protocolInputType;
+    std::string protocolStateName;
+    bool protocolStateNeedsCleanup = false;
+    luna::ownership::CleanupAction protocolStateCleanup =
+        luna::ownership::CleanupAction::Deallocate;
+    // A move-only compiler recipe owns a stack snapshot of its source array.
+    // Per-element initialization bits make partial consumption recoverable.
+    std::string recipeStateName;
+    TypePtr recipeSourceType;
 };
 
 struct FreeStmt : Stmt {
@@ -265,6 +309,18 @@ struct CallExpr : Expr {
     TypePtr iteratorInputType;
     TypePtr iteratorOutputType;
     IteratorOp iteratorOp = IteratorOp::None;
+    // A move-only terminal recipe consumes a local array source and owns a
+    // hidden snapshot until the terminal has produced its result.
+    std::string iteratorRecipeStateName;
+    TypePtr iteratorRecipeSourceType;
+    // `collect::<Target>()` consumes a compiler-only iterator recipe through
+    // one exact Core FromIterator builder implementation. These witnesses
+    // keep static protocol selection explicit across MoonIR lowering.
+    TypePtr iteratorCollectTargetType;
+    TypePtr iteratorCollectBuilderType;
+    std::string iteratorCollectBeginSymbol;
+    std::string iteratorCollectPushSymbol;
+    std::string iteratorCollectFinishSymbol;
     std::optional<std::variant<int64_t, double, bool, std::string>> compileTimeValue;
     // Static declaration reflection keeps identity in the frontend. It is
     // erased after a surrounding reflection query or select is folded.
@@ -316,8 +372,11 @@ struct HeapAllocExpr : Expr {
 struct TryExpr : Expr {
     std::unique_ptr<Expr> operand;
     TypePtr resultType;
+    TypePtr propagatedResultType;
     TypePtr valueType;
     TypePtr errorType;
+    TypePtr propagatedErrorType;
+    std::string errorConversionSymbol;
     std::vector<CleanupObligation> cleanups;
 };
 
@@ -505,6 +564,7 @@ struct TraitDecl : Decl {
         std::string name;
         std::vector<Param> params;
         std::unique_ptr<TypeAST> returnType;
+        TypePtr inferredReturnType;
     };
     std::vector<MethodSig> methods;
 };

@@ -13,7 +13,7 @@
 namespace moon {
 
 inline constexpr uint32_t FormatMajor = 0;
-inline constexpr uint32_t FormatMinor = 2;
+inline constexpr uint32_t FormatMinor = 3;
 
 struct SourceLocation {
     std::string path;
@@ -118,6 +118,10 @@ struct TypeRecord {
     std::string nominalDeclarationId;
     std::string canonicalType;
     std::string canonicalShape;
+    uint32_t layoutAbiVersion = 0;
+    uint64_t valueSize = 0;
+    uint64_t valueAlignment = 1;
+    std::string abiLayout;
     // Immediate graph edges make the frozen table independently traversable;
     // Moon readers never need a frontend-owned Type pointer to discover the
     // complete closed type graph.
@@ -168,6 +172,9 @@ struct LetStmt : Stmt {
     luna::ownership::Usage usage = luna::ownership::Usage::Copy;
     TypePtr type;
     std::unique_ptr<Expr> initializer;
+    bool materializesIteratorRecipe = false;
+    bool materializedIteratorOwnsSource = false;
+    TypePtr materializedIteratorSourceType;
 };
 
 struct ReturnStmt : Stmt {
@@ -186,6 +193,20 @@ struct IfStmt : Stmt {
     std::unique_ptr<Stmt> elseBranch;
 };
 
+struct MatchArm : Node {
+    std::string variantName;
+    uint32_t variantIndex = 0;
+    std::vector<std::string> bindings;
+    TypeVec bindingTypes;
+    std::unique_ptr<BlockStmt> body;
+};
+
+struct MatchStmt : Stmt {
+    std::unique_ptr<Expr> scrutinee;
+    TypePtr matchedType;
+    std::vector<MatchArm> arms;
+};
+
 struct WhileStmt : Stmt {
     std::unique_ptr<Expr> cond;
     std::unique_ptr<BlockStmt> body;
@@ -196,6 +217,19 @@ struct ForStmt : Stmt {
     std::unique_ptr<Expr> iterable;
     std::unique_ptr<BlockStmt> body;
     TypePtr elementType;
+    std::string protocolNextSymbol;
+    TypePtr protocolIteratorType;
+    TypePtr protocolOptionType;
+    uint32_t protocolNoneVariant = 0;
+    uint32_t protocolSomeVariant = 0;
+    std::string protocolIntoSymbol;
+    TypePtr protocolInputType;
+    std::string protocolStateName;
+    bool protocolStateNeedsCleanup = false;
+    luna::ownership::CleanupAction protocolStateCleanup =
+        luna::ownership::CleanupAction::Deallocate;
+    std::string recipeStateName;
+    TypePtr recipeSourceType;
 };
 
 struct FreeStmt : Stmt {
@@ -298,6 +332,13 @@ struct CallExpr : Expr {
     TypePtr iteratorInputType;
     TypePtr iteratorOutputType;
     IteratorOp iteratorOp = IteratorOp::None;
+    std::string iteratorRecipeStateName;
+    TypePtr iteratorRecipeSourceType;
+    TypePtr iteratorCollectTargetType;
+    TypePtr iteratorCollectBuilderType;
+    std::string iteratorCollectBeginSymbol;
+    std::string iteratorCollectPushSymbol;
+    std::string iteratorCollectFinishSymbol;
     std::optional<ConstantValue> compileTimeValue;
 };
 
@@ -357,8 +398,11 @@ struct HeapAllocExpr : Expr {
 struct TryExpr : Expr {
     std::unique_ptr<Expr> operand;
     TypePtr resultType;
+    TypePtr propagatedResultType;
     TypePtr valueType;
     TypePtr errorType;
+    TypePtr propagatedErrorType;
+    std::string errorConversionSymbol;
     std::vector<CleanupObligation> cleanups;
 };
 

@@ -1,0 +1,39 @@
+fn main() -> i32 {
+    let values = [1, 2, 3, 4];
+    let pending = values.iter().map(
+        fn(value: &i32) -> i32 {
+            return *value * 10;
+        }
+    ).filter(
+        fn(value: i32) -> bool {
+            return value >= 20;
+        }
+    ).take(2);
+    for value in pending {
+        print(value);
+    }
+
+    let count = 1;
+    let delayed = range(5, 10).take(count);
+    count = 3;
+    print(delayed.count());
+
+    let extended = range(1, 5).take(3);
+    print(extended
+        .map(fn(value: i32) -> i32 {
+            return value * 2;
+        })
+        .fold(
+            0,
+            fn(total: i32, value: i32) -> i32 {
+                return total + value;
+            }));
+
+    let copies = [7, 8];
+    let snapshot = copies.into_iter();
+    copies[0] = 9;
+    for value in snapshot {
+        print(value);
+    }
+    return 0;
+}

@@ -254,7 +254,29 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         value->iteratorInputType = call->iteratorInputType;
         value->iteratorOutputType = call->iteratorOutputType;
         value->iteratorOp = call->iteratorOp;
+        value->iteratorRecipeStateName =
+            call->iteratorRecipeStateName;
+        value->iteratorRecipeSourceType =
+            call->iteratorRecipeSourceType;
+        value->iteratorCollectTargetType =
+            call->iteratorCollectTargetType;
+        value->iteratorCollectBuilderType =
+            call->iteratorCollectBuilderType;
+        value->iteratorCollectBeginSymbol =
+            call->iteratorCollectBeginSymbol;
+        value->iteratorCollectPushSymbol =
+            call->iteratorCollectPushSymbol;
+        value->iteratorCollectFinishSymbol =
+            call->iteratorCollectFinishSymbol;
         value->compileTimeValue = call->compileTimeValue;
+        if (mModule &&
+            !value->iteratorRecipeStateName.empty())
+            mModule->registerType(
+                value->iteratorRecipeSourceType);
+        if (mModule && value->iteratorOp == IteratorOp::Collect) {
+            mModule->registerType(value->iteratorCollectTargetType);
+            mModule->registerType(value->iteratorCollectBuilderType);
+        }
         if (call->resultType) {
             value->type = call->resultType;
             if (mModule) mModule->registerType(call->resultType);
@@ -331,8 +353,11 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         auto value = std::make_unique<moon::TryExpr>();
         value->operand = lowerExpr(propagation->operand.get());
         value->resultType = propagation->resultType;
+        value->propagatedResultType = propagation->propagatedResultType;
         value->valueType = propagation->valueType;
         value->errorType = propagation->errorType;
+        value->propagatedErrorType = propagation->propagatedErrorType;
+        value->errorConversionSymbol = propagation->errorConversionSymbol;
         value->type = propagation->valueType;
         for (const auto& cleanup : propagation->cleanups) {
             moon::CleanupObligation lowered;
@@ -480,12 +505,21 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         value->isConst = let->isConst;
         value->isLinear = let->isLinear;
         value->usage = let->usage;
+        value->materializesIteratorRecipe =
+            let->materializesIteratorRecipe;
+        value->materializedIteratorOwnsSource =
+            let->materializedIteratorOwnsSource;
+        value->materializedIteratorSourceType =
+            let->materializedIteratorSourceType;
         value->initializer = lowerExpr(let->initializer.get());
         value->type = let->inferredType
             ? let->inferredType
             : (let->typeAnnotation
                 ? lowerType(let->typeAnnotation.get())
                 : (value->initializer ? value->initializer->type : nullptr));
+        if (mModule && value->materializedIteratorOwnsSource)
+            mModule->registerType(
+                value->materializedIteratorSourceType);
         if (mModule) mModule->registerType(value->type);
         result = std::move(value);
     } else if (auto* ret = dynamic_cast<const ::ReturnStmt*>(statement)) {
@@ -513,6 +547,24 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         value->thenBlock = lowerBlock(conditional->thenBlock.get());
         value->elseBranch = lowerStmt(conditional->elseBranch.get());
         result = std::move(value);
+    } else if (auto* match = dynamic_cast<const ::MatchStmt*>(statement)) {
+        auto value = std::make_unique<moon::MatchStmt>();
+        value->scrutinee = lowerExpr(match->scrutinee.get());
+        value->matchedType = match->matchedType;
+        if (mModule) mModule->registerType(value->matchedType);
+        for (const auto& sourceArm : match->arms) {
+            moon::MatchArm arm;
+            arm.location = locationOf(&sourceArm);
+            arm.variantName = sourceArm.variantName;
+            arm.variantIndex = static_cast<uint32_t>(sourceArm.variantIndex);
+            arm.bindings = sourceArm.bindings;
+            arm.bindingTypes = sourceArm.bindingTypes;
+            for (const auto& type : arm.bindingTypes)
+                if (mModule) mModule->registerType(type);
+            arm.body = lowerBlock(sourceArm.body.get());
+            value->arms.push_back(std::move(arm));
+        }
+        result = std::move(value);
     } else if (auto* loop = dynamic_cast<const ::WhileStmt*>(statement)) {
         auto value = std::make_unique<moon::WhileStmt>();
         value->cond = lowerExpr(loop->cond.get());
@@ -524,7 +576,31 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         value->iterable = lowerExpr(loop->iterable.get());
         value->body = lowerBlock(loop->body.get());
         value->elementType = loop->elementType;
+        value->protocolNextSymbol = loop->protocolNextSymbol;
+        value->protocolIteratorType = loop->protocolIteratorType;
+        value->protocolOptionType = loop->protocolOptionType;
+        value->protocolNoneVariant =
+            static_cast<uint32_t>(loop->protocolNoneVariant);
+        value->protocolSomeVariant =
+            static_cast<uint32_t>(loop->protocolSomeVariant);
+        value->protocolIntoSymbol = loop->protocolIntoSymbol;
+        value->protocolInputType = loop->protocolInputType;
+        value->protocolStateName = loop->protocolStateName;
+        value->protocolStateNeedsCleanup =
+            loop->protocolStateNeedsCleanup;
+        value->protocolStateCleanup =
+            loop->protocolStateCleanup;
+        value->recipeStateName = loop->recipeStateName;
+        value->recipeSourceType = loop->recipeSourceType;
         if (mModule) mModule->registerType(value->elementType);
+        if (mModule &&
+            !value->protocolNextSymbol.empty()) {
+            mModule->registerType(value->protocolIteratorType);
+            mModule->registerType(value->protocolOptionType);
+            mModule->registerType(value->protocolInputType);
+        }
+        if (mModule && !value->recipeStateName.empty())
+            mModule->registerType(value->recipeSourceType);
         result = std::move(value);
     } else if (auto* release = dynamic_cast<const ::FreeStmt*>(statement)) {
         auto value = std::make_unique<moon::FreeStmt>();
@@ -646,9 +722,11 @@ std::unique_ptr<moon::FunctionDecl> LunaLowerer::lowerFunction(
     result->typeParams = function->typeParams;
     for (const auto& parameter : function->params)
         result->params.push_back(lowerParam(parameter));
-    result->returnType = function->returnType
-        ? lowerType(function->returnType.get())
-        : (function->inferredReturnType ? function->inferredReturnType : TyUnit);
+    result->returnType = function->inferredReturnType
+        ? function->inferredReturnType
+        : (function->returnType
+            ? lowerType(function->returnType.get()) : TyUnit);
+    if (mModule) mModule->registerType(result->returnType);
     result->returnsLinear = function->returnsLinear;
     result->returnUsage = function->returnUsage;
     result->body = lowerBlock(function->body.get());
@@ -797,8 +875,9 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         result->name = "impl";
         result->resolvedTraitId = implementation->trait.resolvedTraitId;
         result->resolvedTargetTypeId = implementation->resolvedTargetTypeId;
-        result->generatedSymbolName = result->resolvedTraitId + "__for__" +
-                                      result->resolvedTargetTypeId;
+        result->generatedSymbolName = implementation->generatedSymbolName.empty()
+            ? result->resolvedTraitId + "__for__" + result->resolvedTargetTypeId
+            : implementation->generatedSymbolName;
         result->familyId = declarationIdentity(
             implementation, mModule->name, "impl", result->resolvedTraitId);
         result->declarationId = declarationIdentity(

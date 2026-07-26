@@ -28,6 +28,7 @@ private:
 
     std::vector<std::string> mErrors;
     std::unordered_set<std::string> mVerifiedTypeIds;
+    bool mAllowTypeParameters = false;
 };
 
 } // namespace moon

@@ -1,0 +1,29 @@
+package org.luna.core;
+module option;
+
+export nominal enum Option<T> {
+    None;
+    Some(T);
+}
+
+export fn is_some<T>(value: Option<T>) -> bool {
+    match value {
+        None => {
+            return false;
+        },
+        Some(item) => {
+            return true;
+        }
+    }
+}
+
+export fn is_none<T>(value: Option<T>) -> bool {
+    match value {
+        None => {
+            return true;
+        },
+        Some(item) => {
+            return false;
+        }
+    }
+}

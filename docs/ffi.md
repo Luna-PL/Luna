@@ -15,6 +15,12 @@ extern "C" fn c_free(linear pointer: raw<u8>) as "free";
 
 当前稳定支持的 ABI 类型是整数、浮点、`cstr`、`raw<T>`、`unit`，以及指向这些标量的引用。`string`、结构体、枚举、闭包、trait 对象和 `device_buffer<T>` 不可穿过 C ABI；编译器会在声明处拒绝它们。
 
+`Result<T, E>` 和标准错误 ADT 同样不能直接穿过 C ABI。可恢复的外部 API 应保留
+原始 status/out-parameter 声明，再由普通 Luna adapter 立即捕获 errno/status 和
+诊断快照，返回 `Result<T, FfiError>`。编译器不会隐式读取 errno，也不会把外部
+`last_error` 的短期借用字符串自动提升为拥有错误。详见
+[标准错误与 FFI/Runtime 转换](Arch/Standard_Error_Boundaries_RFC.md)。
+
 每个 C ABI 参数必须写出显式类型。需要将所有权移交给外部函数时，形参应标记为 `linear`，调用点必须写 `move value`；例如 `c_free(move buffer)`。外部 allocator 的拥有型返回值必须写为 `-> linear raw<T>`；其调用结果自动成为 linear，即使调用点只写 `let buffer = malloc(16);` 也必须被移动或消费，不能静默丢弃。这个契约可由普通 Luna 函数以相同的 `-> linear raw<T>` 返回标记继续转发。当前 owning-return 契约仅允许 `raw<T>`，避免把任意 C ABI 值误标为需释放资源。
 
 外来 allocator 返回的指针必须交还给同一分配域的 deallocator；它不是 Luna

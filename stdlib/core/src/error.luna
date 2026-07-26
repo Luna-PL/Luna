@@ -1,0 +1,37 @@
+package org.luna.core;
+module error;
+
+// Stable, host-independent Core error identities. Numeric variant order is
+// part of the frozen inline ADT ABI; new cases must be appended.
+export nominal enum ErrorCode {
+    InvalidArgument;
+    OutOfBounds;
+    InvalidUtf8;
+    InvalidLayout;
+    OutOfMemory;
+}
+
+export nominal enum InvalidArgumentError {
+    InvalidArgument(i32);
+}
+
+export nominal enum BoundsError {
+    Empty;
+    OutOfBounds(usize, usize);
+}
+
+export nominal enum UtfError {
+    InvalidByte(usize, u8);
+    Truncated(usize);
+    InvalidScalar(u32);
+}
+
+export nominal enum LayoutError {
+    SizeOverflow;
+    InvalidAlignment(usize);
+}
+
+export nominal enum AllocError {
+    InvalidLayout(LayoutError);
+    OutOfMemory(usize, usize);
+}

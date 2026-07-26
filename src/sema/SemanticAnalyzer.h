@@ -91,6 +91,7 @@ private:
     TypePtr analyzeBlock(BlockStmt* block, TypePtr expectedReturnType);
     TypePtr analyzeExpr(Expr* expr);
     TypePtr analyzeCall(CallExpr* call);
+    TypePtr analyzeMemberCall(CallExpr* call, FieldAccessExpr* member);
     TypePtr analyzeIteratorCall(CallExpr* call, FieldAccessExpr* member);
     TypePtr analyzeLaunch(LaunchExpr* launch);
     TypePtr analyzeSelect(SelectExpr* selection);
@@ -177,10 +178,34 @@ private:
     std::unordered_map<std::string,
         std::unordered_map<std::string,
             std::unordered_map<std::string, FunctionDecl*>>> mImpls;
+    struct FromConversion {
+        TypePtr source;
+        TypePtr target;
+        FunctionDecl* method = nullptr;
+        std::string symbol;
+    };
+    // Exact target TypeId -> exact source TypeId -> one static conversion.
+    std::unordered_map<std::string,
+        std::unordered_map<std::string, FromConversion>> mFromConversions;
+    struct FromIteratorImplementation {
+        TypePtr item;
+        TypePtr builder;
+        TypePtr target;
+        FunctionDecl* begin = nullptr;
+        FunctionDecl* push = nullptr;
+        FunctionDecl* finish = nullptr;
+    };
+    // Exact target TypeId -> one coherent Core FromIterator builder protocol.
+    std::unordered_map<std::string, FromIteratorImplementation>
+        mFromIteratorImplementations;
     // Trait → typeParams
     std::unordered_map<std::string, std::vector<std::string>> mTraitTypeParams;
     // Trait → methods
     std::unordered_map<std::string, std::vector<std::pair<std::string, FunctionDecl*>>> mTraitMethods;
+    // Exact TraitId → owning Package ID. Compiler-known traits use the
+    // reserved compiler owner and can only be implemented through their
+    // stricter built-in orphan rules.
+    std::unordered_map<std::string, std::string> mTraitOwners;
     std::unordered_map<std::string, TraitDecl*> mTraits;
     // Source declaration names map to resolved types regardless of whether
     // their identity policy is structural or nominal.
@@ -209,6 +234,7 @@ private:
     std::vector<std::unordered_map<std::string, ConstValue>> mConstScopes;
     std::unordered_map<std::string, FunctionDecl*> mConstexprFunctions;
     int mConstEvaluationDepth = 0;
+    uint64_t mIteratorStateCounter = 0;
     const luna::selector::DeclarationView* mActiveSelectorView = nullptr;
     struct SlotInfo {
         std::string name;

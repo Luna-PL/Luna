@@ -1,0 +1,13 @@
+nominal enum ConvertedError {
+    Message(cstr);
+}
+
+impl From<i32> for ConvertedError {
+    fn from(error: cstr) -> ConvertedError {
+        return ConvertedError::Message(error);
+    }
+}
+
+fn main() -> i32 {
+    return 0;
+}

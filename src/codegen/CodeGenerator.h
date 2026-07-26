@@ -70,7 +70,25 @@ private:
         IteratorMode mode = IteratorMode::Copy;
         moon::Expr* rangeStart = nullptr;
         moon::Expr* rangeEnd = nullptr;
+        std::string ownedStateName;
+        std::string materializedName;
         std::vector<IteratorStep> steps;
+    };
+
+    struct RuntimeIteratorStep {
+        IteratorStep description;
+        llvm::Value* value = nullptr;
+        llvm::AllocaInst* remaining = nullptr;
+    };
+
+    struct MaterializedIterator {
+        IteratorPlan plan;
+        llvm::Value* sourceData = nullptr;
+        llvm::Value* limit = nullptr;
+        llvm::AllocaInst* indexStorage = nullptr;
+        llvm::AllocaInst* sourceDropFlags = nullptr;
+        bool ownsSource = false;
+        std::vector<RuntimeIteratorStep> steps;
     };
 
     void generateFunctionBody(moon::FunctionDecl* decl);
@@ -86,6 +104,9 @@ private:
         moon::SlotInvokeStmt* slot, llvm::Function* func, llvm::Value* selected);
     llvm::Value* generateExpr(moon::Expr* expr);
     bool buildIteratorPlan(moon::Expr* expr, IteratorPlan& plan);
+    bool materializeIteratorBinding(
+        const std::string& name,
+        const IteratorPlan& plan);
     void emitIteratorPipeline(const IteratorPlan& plan,
                               const std::function<void(llvm::Value*)>& consume,
                               const std::function<void()>& prepareTerminal = {});
@@ -101,8 +122,11 @@ private:
     void emitLunaDeallocation(llvm::Value* pointer, const TypePtr& type);
     void emitCleanup(const std::string& place,
                      luna::ownership::CleanupAction action);
-    llvm::Value* packResultPayload(llvm::Value* value, const TypePtr& type);
-    llvm::Value* unpackResultPayload(llvm::Value* bits, const TypePtr& type);
+    void emitMaterializedIteratorCleanup(const std::string& name);
+    llvm::Value* packResultPayload(llvm::Value* value, const TypePtr& type,
+                                   const TypePtr& resultType);
+    llvm::Value* unpackResultPayload(llvm::Value* bits, const TypePtr& type,
+                                     uint64_t byteOffset = 0);
     void emitOwnedPayloadCleanup(llvm::Value* value, const TypePtr& type,
                                  const std::string& label);
     bool emitKernelPTX(moon::FunctionDecl* kernel);
@@ -126,6 +150,11 @@ private:
     // Current state
     std::unordered_map<std::string, llvm::AllocaInst*> mLocals;
     std::unordered_map<std::string, TypePtr> mLocalTypes;
+    // Hidden consuming-array iterator states use one initialization bit per
+    // element. ArrayDrop consults these bits on normal and early exits.
+    std::unordered_map<std::string, llvm::AllocaInst*> mArrayDropFlags;
+    std::unordered_map<std::string, MaterializedIterator>
+        mMaterializedIterators;
     // Exclusive upper bounds proven from local initializers, used only to
     // remove redundant safe-array checks. Any assignment invalidates a bound.
     std::unordered_map<std::string, uint64_t> mLocalKnownUpperBounds;

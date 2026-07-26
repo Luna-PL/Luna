@@ -1,0 +1,14 @@
+nominal struct Resource {
+    marker: i32;
+}
+
+impl Drop for Resource {
+    fn drop(resource: &mut Resource) -> unit {}
+}
+
+fn main() -> i32 {
+    let resource = new Resource(1);
+    linear let values = [move resource];
+    print(values.into_iter().count());
+    return 0;
+}

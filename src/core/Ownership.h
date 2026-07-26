@@ -72,6 +72,8 @@ enum class CleanupAction : uint8_t {
     RcRelease,
     ArcRelease,
     ResultDrop,
+    EnumDrop,
+    ArrayDrop,
 };
 
 inline constexpr std::string_view cleanupActionName(CleanupAction action) {
@@ -81,6 +83,8 @@ inline constexpr std::string_view cleanupActionName(CleanupAction action) {
         case CleanupAction::RcRelease: return "rc_release";
         case CleanupAction::ArcRelease: return "arc_release";
         case CleanupAction::ResultDrop: return "result_drop";
+        case CleanupAction::EnumDrop: return "enum_drop";
+        case CleanupAction::ArrayDrop: return "array_drop";
     }
     return "invalid";
 }

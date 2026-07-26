@@ -131,3 +131,65 @@ file(REMOVE_RECURSE "${invalid_workspace}")
 if(NOT private_result EQUAL 1 OR private_at EQUAL -1)
     message(FATAL_ERROR "a private dependency declaration crossed the package boundary")
 endif()
+
+file(REMOVE_RECURSE "${invalid_workspace}")
+file(COPY "${workspace}/" DESTINATION "${invalid_workspace}")
+file(WRITE "${invalid_workspace}/app/src/main.luna"
+"package org.luna.fixture.app;\nmodule application;\nusing org.luna.fixture.core as core;\n\nnominal struct AppValue { value: i32; }\n\nimpl core::values::Describe for AppValue {\n}\n\nfn main() -> i32 { return 0; }\n")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" check "${invalid_workspace}/app"
+    RESULT_VARIABLE local_target_result
+    OUTPUT_VARIABLE local_target_output
+    ERROR_VARIABLE local_target_error
+)
+if(NOT local_target_result EQUAL 0)
+    file(REMOVE_RECURSE "${invalid_workspace}")
+    message(FATAL_ERROR
+        "foreign trait implementation for a local nominal target was rejected.\n"
+        "${local_target_output}\n${local_target_error}")
+endif()
+
+file(WRITE "${invalid_workspace}/app/src/main.luna"
+"package org.luna.fixture.app;\nmodule application;\nusing org.luna.fixture.core as core;\n\nimpl core::values::Describe for core::values::PublicBox {\n}\n\nfn main() -> i32 { return 0; }\n")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" check "${invalid_workspace}/app"
+    RESULT_VARIABLE orphan_result
+    OUTPUT_VARIABLE orphan_output
+    ERROR_VARIABLE orphan_error
+)
+string(FIND "${orphan_output}\n${orphan_error}"
+       "orphan impl of trait 'core::values::Describe'" orphan_at)
+if(NOT orphan_result EQUAL 1 OR orphan_at EQUAL -1)
+    file(REMOVE_RECURSE "${invalid_workspace}")
+    message(FATAL_ERROR "foreign-trait/foreign-type orphan impl was accepted")
+endif()
+
+file(WRITE "${invalid_workspace}/app/src/main.luna"
+"package org.luna.fixture.app;\nmodule application;\nusing org.luna.fixture.core as core;\n\nimpl Drop for core::values::PublicBox {\n    fn drop(value: &mut core::values::PublicBox) -> unit {\n    }\n}\n\nfn main() -> i32 { return 0; }\n")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" check "${invalid_workspace}/app"
+    RESULT_VARIABLE drop_orphan_result
+    OUTPUT_VARIABLE drop_orphan_output
+    ERROR_VARIABLE drop_orphan_error
+)
+string(FIND "${drop_orphan_output}\n${drop_orphan_error}"
+       "orphan impl of `Drop`" drop_orphan_at)
+if(NOT drop_orphan_result EQUAL 1 OR drop_orphan_at EQUAL -1)
+    file(REMOVE_RECURSE "${invalid_workspace}")
+    message(FATAL_ERROR "foreign Drop impl was accepted")
+endif()
+
+file(WRITE "${invalid_workspace}/app/src/main.luna"
+"package org.luna.fixture.app;\nmodule application;\nusing org.luna.fixture.core as core;\n\nimpl From<core::values::PublicOption> for core::values::PublicBox {\n    fn from(value: core::values::PublicOption) -> core::values::PublicBox {\n        return new core::values::PublicBox(0);\n    }\n}\n\nfn main() -> i32 { return 0; }\n")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" check "${invalid_workspace}/app"
+    RESULT_VARIABLE from_orphan_result
+    OUTPUT_VARIABLE from_orphan_output
+    ERROR_VARIABLE from_orphan_error
+)
+string(FIND "${from_orphan_output}\n${from_orphan_error}"
+       "orphan impl of compiler trait `From`" from_orphan_at)
+file(REMOVE_RECURSE "${invalid_workspace}")
+if(NOT from_orphan_result EQUAL 1 OR from_orphan_at EQUAL -1)
+    message(FATAL_ERROR "foreign From impl was accepted")
+endif()

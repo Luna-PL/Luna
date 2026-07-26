@@ -1,0 +1,35 @@
+nominal enum ConvertedError {
+    Message(cstr);
+}
+
+impl From<i32> for ConvertedError {
+    fn from(error: i32) -> ConvertedError {
+        print(error);
+        return ConvertedError::Message("converted");
+    }
+}
+
+fn source(succeed: bool) -> Result<i32, i32> {
+    if succeed {
+        return Ok::<i32, i32>(41);
+    }
+    return Err::<i32, i32>(7);
+}
+
+fn translated(succeed: bool) -> Result<i32, ConvertedError> {
+    let value = source(succeed)?;
+    return Ok::<i32, ConvertedError>(value + 1);
+}
+
+fn main() -> i32 {
+    let success = translated(true);
+    print(unwrap(move success));
+    let failure = translated(false);
+    let converted = unwrap_err(move failure);
+    match converted {
+        Message(message) => {
+            print(message);
+        }
+    }
+    return 0;
+}

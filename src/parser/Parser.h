@@ -42,6 +42,7 @@ private:
         bool isConst = false);
     std::unique_ptr<Stmt> parseReturnStmt();
     std::unique_ptr<Stmt> parseIfStmt();
+    std::unique_ptr<Stmt> parseMatchStmt();
     std::unique_ptr<Stmt> parseWhileStmt();
     std::unique_ptr<Stmt> parseForStmt();
     std::unique_ptr<Stmt> parseFreeStmt();

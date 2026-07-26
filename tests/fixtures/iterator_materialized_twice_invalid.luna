@@ -1,0 +1,6 @@
+fn main() -> i32 {
+    let pending = range(0, 3);
+    print(pending.count());
+    print(pending.count());
+    return 0;
+}

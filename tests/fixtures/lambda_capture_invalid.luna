@@ -1,0 +1,7 @@
+fn main() -> i32 {
+    let captured = 41;
+    let add_one = fn() -> i32 {
+        return captured + 1;
+    };
+    return add_one();
+}

@@ -1,0 +1,9 @@
+fn main() -> i32 {
+    let values = [1, 2, 3];
+    let pending = values.iter_mut();
+    values[0] = 4;
+    for value in pending {
+        *value += 1;
+    }
+    return 0;
+}

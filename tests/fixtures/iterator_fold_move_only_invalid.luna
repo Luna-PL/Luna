@@ -1,0 +1,18 @@
+nominal struct Resource {
+    marker: i32;
+}
+
+impl Drop for Resource {
+    fn drop(resource: &mut Resource) -> unit {}
+}
+
+fn main() -> i32 {
+    let resource = new Resource(1);
+    let values = [move resource];
+    print(values.into_iter().fold(
+        0,
+        fn(total: i32, value: Resource) -> i32 {
+            return total + value.marker;
+        }));
+    return 0;
+}
