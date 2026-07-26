@@ -11,5 +11,6 @@
 - `Type_System_Identity_RFC.md`：Value/Meta/Compiler 类型域、结构形状、名义身份、类型关系与 MoonIR Type Table 迁移设计。
 - `Ownership_Affine_Model_RFC.md`：Owned/Borrow 与 Copy/Affine/Linear 的正交模型、Place、控制流合并和 MoonIR cleanup 契约。
 - `Error_Result_Panic_RFC.md`：`Result<T, E>`、`?`、abort 型 `panic`、资源清理和非代数效应边界。
+- `../iterators.md`：无完整 effect system 前提下的惰性迭代配方、循环融合、所有权和标准库容器边界。
 
 建议先直接修改总纲中的错误或争议点，再以总纲为基础拆分正式 Specification。

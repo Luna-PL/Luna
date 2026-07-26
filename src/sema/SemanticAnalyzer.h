@@ -91,6 +91,7 @@ private:
     TypePtr analyzeBlock(BlockStmt* block, TypePtr expectedReturnType);
     TypePtr analyzeExpr(Expr* expr);
     TypePtr analyzeCall(CallExpr* call);
+    TypePtr analyzeIteratorCall(CallExpr* call, FieldAccessExpr* member);
     TypePtr analyzeLaunch(LaunchExpr* launch);
     TypePtr analyzeSelect(SelectExpr* selection);
     bool statementAlwaysReturns(const Stmt* stmt) const;

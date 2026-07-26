@@ -1,0 +1,7 @@
+fn main() -> i32 {
+    let values = [1, 2, 3];
+    for value in values.iter_mut() {
+        print(values[0]);
+    }
+    return 0;
+}

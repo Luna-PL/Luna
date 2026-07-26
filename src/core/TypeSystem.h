@@ -20,11 +20,33 @@ enum class TypeKind {
     I8, I16, I32, I64, U8, U16, U32, U64, USize, ISize,
     F32, F64, Bool, String, CStr, RawPointer, Unit,
     Struct, Record, Enum, Result, Trait, TypeParam, Reference, Rc, Arc,
-    Function, Slot, Fragment,
+    Function, Slot, Fragment, Iterator,
     DeviceBuffer, Event, Array, Slice,
     Metadata, MetadataView, DeclarationView, DeclarationRef,
     InferenceVar,
     Unknown
+};
+
+enum class IteratorMode : uint8_t {
+    Copy,
+    Shared,
+    Mutable,
+    Consuming,
+    Range,
+};
+
+enum class IteratorOp : uint8_t {
+    None,
+    Iter,
+    IterMut,
+    IntoIter,
+    Range,
+    Map,
+    Filter,
+    Take,
+    Fold,
+    ForEach,
+    Count,
 };
 
 struct TypeField {
@@ -65,6 +87,7 @@ struct Type {
     // of their type: a Many fragment cannot bind to a Once-only slot.
     bool isMultiShot = false;
     ContinuationKind continuationKind = ContinuationKind::Context;
+    IteratorMode iteratorMode = IteratorMode::Copy;
     std::vector<TypeField> fields;       // for Struct/Record
     std::vector<TypeVariant> variants;   // for Enum
     int inferenceId = -1;        // for InferenceVar
@@ -111,6 +134,22 @@ struct Type {
         t->kind = TypeKind::Result;
         t->name = "Result";
         t->typeArgs = {std::move(value), std::move(error)};
+        return t;
+    }
+    static TypePtr makeIterator(TypePtr item, IteratorMode mode,
+                                TypePtr source = nullptr) {
+        auto t = std::make_shared<Type>();
+        t->kind = TypeKind::Iterator;
+        t->name = "Iterator";
+        t->domain = luna::types::TypeDomain::Compiler;
+        t->identityMode = luna::types::IdentityMode::CompilerIntrinsic;
+        t->inner = std::move(item);
+        t->iteratorMode = mode;
+        // The initial adapter lowering is a host-only compiler recipe. This
+        // is derived compiler authority, not an effect annotation supplied
+        // by source code.
+        t->sysmeta.capability.hostOnly = true;
+        if (source) t->typeArgs.push_back(std::move(source));
         return t;
     }
     static TypePtr makeTrait(const std::string& n) {
@@ -390,6 +429,9 @@ struct Type {
                 std::string(continuationKind == ContinuationKind::Interceptor
                                 ? "interceptor(" : "context(") +
                 std::to_string(paramTypes.size()) + (isMultiShot ? "; many)" : "; once)");
+            case TypeKind::Iterator:
+                return "iterator<" +
+                    (inner ? inner->toString() : std::string("?")) + ">";
             case TypeKind::InferenceVar: return "?" + std::to_string(inferenceId);
             default: return "<unknown>";
         }

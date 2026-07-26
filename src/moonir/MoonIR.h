@@ -195,6 +195,7 @@ struct ForStmt : Stmt {
     std::string varName;
     std::unique_ptr<Expr> iterable;
     std::unique_ptr<BlockStmt> body;
+    TypePtr elementType;
 };
 
 struct FreeStmt : Stmt {
@@ -294,6 +295,9 @@ struct CallExpr : Expr {
     bool returnsLinear = false;
     luna::ownership::Usage returnUsage = luna::ownership::Usage::Copy;
     TypePtr intrinsicType;
+    TypePtr iteratorInputType;
+    TypePtr iteratorOutputType;
+    IteratorOp iteratorOp = IteratorOp::None;
     std::optional<ConstantValue> compileTimeValue;
 };
 

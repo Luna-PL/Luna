@@ -56,6 +56,21 @@ general algebraic-effect system or an effect-summary layer.
 
 Detailed design: [Result and panic RFC](Arch/Error_Result_Panic_RFC.md).
 
+## Iteration pipelines
+
+Arrays, slices and integer `range` values can feed lazy `map`, `filter` and
+`take` adapters, then terminate in `for`, `fold`, `for_each` or `count`.
+The initial compiler-known recipe is fused into one LLVM loop with no
+intermediate collection or iterator runtime allocation. Shared and mutable
+iteration participate in the ownership checker.
+
+General containers remain library types rather than builtins. User-defined
+Iterator implementations and escaping adapter values are reserved until the
+Core `Option`/Iterator layouts and move-only per-item drop state are complete.
+
+Detailed design and current limits: [Iteration, pipelines and container
+boundaries](iterators.md).
+
 ## Metadata and dynamic capability
 
 Metadata schemas are first-class declarations. Static `select` executes an
@@ -109,4 +124,5 @@ fixed arrays, indexing and borrowed slices. Heap-owned general collections and
 the formatted standard I/O layer remain roadmap work.
 
 Detailed guides: [Compile-time facilities](compile_time.md),
-[arrays and slices](arrays.md), and [standard-library skeleton](standard_library.md).
+[arrays and slices](arrays.md), [iteration pipelines](iterators.md), and
+[standard-library skeleton](standard_library.md).

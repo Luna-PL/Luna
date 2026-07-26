@@ -13,6 +13,7 @@
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/Support/TargetSelect.h>
 #include <array>
+#include <functional>
 #include <string>
 #include <utility>
 #include <vector>
@@ -55,6 +56,23 @@ private:
         llvm::Type* returnType = nullptr;
     };
 
+    struct IteratorStep {
+        IteratorOp op = IteratorOp::None;
+        moon::Expr* argument = nullptr;
+        TypePtr inputType;
+        TypePtr outputType;
+    };
+
+    struct IteratorPlan {
+        moon::Expr* source = nullptr;
+        TypePtr sourceType;
+        TypePtr itemType;
+        IteratorMode mode = IteratorMode::Copy;
+        moon::Expr* rangeStart = nullptr;
+        moon::Expr* rangeEnd = nullptr;
+        std::vector<IteratorStep> steps;
+    };
+
     void generateFunctionBody(moon::FunctionDecl* decl);
     void generateStmt(moon::Stmt* stmt, llvm::Function* func = nullptr);
     void generateBlock(moon::BlockStmt* block, llvm::Function* func);
@@ -67,6 +85,11 @@ private:
     std::array<llvm::Value*, 4> generateExternalFragmentInvocation(
         moon::SlotInvokeStmt* slot, llvm::Function* func, llvm::Value* selected);
     llvm::Value* generateExpr(moon::Expr* expr);
+    bool buildIteratorPlan(moon::Expr* expr, IteratorPlan& plan);
+    void emitIteratorPipeline(const IteratorPlan& plan,
+                              const std::function<void(llvm::Value*)>& consume,
+                              const std::function<void()>& prepareTerminal = {});
+    llvm::Value* generateIteratorTerminal(moon::CallExpr* call);
     llvm::Value* generateLaunch(moon::LaunchExpr* launch);
     llvm::Value* generateDeviceBufferPointer(moon::Expr* expr);
     llvm::Value* generateHostRawPointer(moon::Expr* expr);

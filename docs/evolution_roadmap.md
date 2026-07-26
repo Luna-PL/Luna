@@ -139,9 +139,11 @@ Alpha 阶段优先保证正确性与可观测性；性能工作按以下顺序�
 ## 近期下一步
 
 当前 `0.2.0-alpha` 稳定核心已在 Linux、macOS 和 Windows UCRT64 CI 上通过，
-默认配置有 26 项非硬件 CTest 回归。语言内部分配/输出已收敛到 Runtime ABI v1，
+默认配置由非硬件 CTest 持续回归。语言内部分配/输出已收敛到 Runtime ABI v1，
 当前已引入第一阶段一等错误处理：`Result<T, E>`、`?` 的清理后传播和 abort 型
-`panic`。下一步优先推广通用 Result 载荷布局、静态错误转换 trait 与 JIT/AOT
-一致性，以此支撑标准库和格式化 `std::io`；随后继续收敛所有权/仿射/线性检查、
-Moon 容器验证边界和 package 工具链，同时累积
+`panic`；数组、切片和 `range` 的惰性 `map`/`filter`/`take` 管道现可融合到
+`for`/`fold`/`for_each`/`count`，且已有无 runtime allocation 的 JIT/AOT
+一致性检查。下一步优先推广通用 Result 载荷布局、静态错误转换 trait，并物化
+Core `Option`/Iterator adapter 以支持用户容器和 move-only 元素；随后继续收敛
+所有权/仿射/线性检查、Moon 容器验证边界和 package 工具链，同时累积
 ROCm/CUDA 性能与硬件兼容性记录。原生结构化并发将在这些基础稳定后继续设计。

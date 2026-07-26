@@ -31,6 +31,7 @@ llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
         case TypeKind::MetadataView:
         case TypeKind::DeclarationView:
         case TypeKind::DeclarationRef: return ptrTy();
+        case TypeKind::Iterator: return ptrTy();
         case TypeKind::Result:
             return llvm::StructType::get(mCtx, {boolTy(), i64Ty()});
         case TypeKind::Array:
@@ -79,6 +80,7 @@ uint64_t typeSize(const TypePtr& type) {
         case TypeKind::MetadataView:
         case TypeKind::DeclarationView:
         case TypeKind::DeclarationRef: return 8;
+        case TypeKind::Iterator: return 8;
         case TypeKind::Array: return type->arrayLength * typeSize(type->inner);
         case TypeKind::Slice: return 16;
         case TypeKind::Event: return 4;

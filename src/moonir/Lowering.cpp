@@ -251,8 +251,14 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         value->returnsLinear = call->returnsLinear;
         value->returnUsage = call->returnUsage;
         value->intrinsicType = call->intrinsicType;
+        value->iteratorInputType = call->iteratorInputType;
+        value->iteratorOutputType = call->iteratorOutputType;
+        value->iteratorOp = call->iteratorOp;
         value->compileTimeValue = call->compileTimeValue;
-        if (call->intrinsicType) {
+        if (call->resultType) {
+            value->type = call->resultType;
+            if (mModule) mModule->registerType(call->resultType);
+        } else if (call->intrinsicType) {
             if (auto* callee = dynamic_cast<const ::IdentifierExpr*>(
                     call->callee.get())) {
                 if (callee->name == "Ok" || callee->name == "Err")
@@ -376,6 +382,7 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
                 ? lambda->closureType->returnType : TyI32);
         value->body = lowerBlock(lambda->body.get());
         value->closureType = lambda->closureType;
+        value->type = lambda->closureType;
         value->captures = lambda->captures;
         result = std::move(value);
     } else if (auto* assignment = dynamic_cast<const ::AssignExpr*>(expression)) {
@@ -516,6 +523,8 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         value->varName = loop->varName;
         value->iterable = lowerExpr(loop->iterable.get());
         value->body = lowerBlock(loop->body.get());
+        value->elementType = loop->elementType;
+        if (mModule) mModule->registerType(value->elementType);
         result = std::move(value);
     } else if (auto* release = dynamic_cast<const ::FreeStmt*>(statement)) {
         auto value = std::make_unique<moon::FreeStmt>();

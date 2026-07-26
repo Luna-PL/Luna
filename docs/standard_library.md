@@ -18,3 +18,8 @@ stdlib/
 `org.luna.std` 已预留真实的 `io` module，但当前仍没有把编译器内建
 `print` 包装成库函数。在动手前需要先冻结格式串验证、`Format`/`Scan`
 trait、静态/动态格式付费边界和错误返回类型。
+
+迭代管道的第一阶段已由编译器对数组、切片和 `range` 直接融合，不要求 `Vec`
+成为 builtin。Core 已保留 `Option`、`Iterator`、`IntoIterator` 和
+`FromIterator` 的稳定身份；下一阶段会物化这些 trait/adapter 布局，再让标准库
+动态容器和用户类型接入。当前边界见[迭代、管道与容器边界](iterators.md)。

@@ -2,6 +2,7 @@
 
 #include "../lexer/Token.h"
 #include "../core/Ownership.h"
+#include "../core/TypeSystem.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -10,10 +11,6 @@
 #include <cstdint>
 
 // ─── Forward declarations ────────────────────────────────────────────
-struct Type;
-using TypePtr = std::shared_ptr<Type>;
-using TypeVec = std::vector<TypePtr>;
-
 struct Param;
 struct Expr;
 struct Stmt;
@@ -142,6 +139,7 @@ struct ForStmt : Stmt {
     std::string varName;
     std::unique_ptr<Expr> iterable;
     std::unique_ptr<BlockStmt> body;
+    TypePtr elementType;
 };
 
 struct FreeStmt : Stmt {
@@ -263,6 +261,10 @@ struct CallExpr : Expr {
     bool returnsLinear = false;
     luna::ownership::Usage returnUsage = luna::ownership::Usage::Copy;
     TypePtr intrinsicType;
+    TypePtr resultType;
+    TypePtr iteratorInputType;
+    TypePtr iteratorOutputType;
+    IteratorOp iteratorOp = IteratorOp::None;
     std::optional<std::variant<int64_t, double, bool, std::string>> compileTimeValue;
     // Static declaration reflection keeps identity in the frontend. It is
     // erased after a surrounding reflection query or select is folded.

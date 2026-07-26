@@ -934,38 +934,45 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         return;
     }
     if (auto* fs = dynamic_cast<ForStmt*>(stmt)) {
-        // Simple fixed-iteration for-loop: iterates 10 times
-        // Create counter on stack
-        auto* counterAlloca = createEntryBlockAlloca(func, mHelpers->i32Ty(), fs->varName + "_cnt");
-        mBuilder->CreateStore(llvm::ConstantInt::get(mHelpers->i32Ty(), 0), counterAlloca);
-        mLocals[fs->varName] = counterAlloca;
-
-        auto* condBB = llvm::BasicBlock::Create(*mCtx, "forcond", func);
-        auto* bodyBB = llvm::BasicBlock::Create(*mCtx, "forbody");
-        auto* exitBB = llvm::BasicBlock::Create(*mCtx, "forexit");
-
-        mBuilder->CreateBr(condBB);
-        mBuilder->SetInsertPoint(condBB);
-        llvm::Value* cntVal = mBuilder->CreateLoad(mHelpers->i32Ty(), counterAlloca, "cnt");
-        llvm::Value* condVal = mBuilder->CreateICmpSLT(cntVal,
-            llvm::ConstantInt::get(mHelpers->i32Ty(), 10), "forcond_val");
-        mBuilder->CreateCondBr(condVal, bodyBB, exitBB);
-
-        exitBB->insertInto(func, nullptr);
-        bodyBB->insertInto(func, exitBB);
-        mBuilder->SetInsertPoint(bodyBB);
-        generateBlock(fs->body.get(), func);
-        // Increment counter
-        if (!mBuilder->GetInsertBlock()->getTerminator()) {
-            llvm::Value* cnt2 = mBuilder->CreateLoad(mHelpers->i32Ty(), counterAlloca, "cnt2");
-            llvm::Value* inc = mBuilder->CreateAdd(cnt2,
-                llvm::ConstantInt::get(mHelpers->i32Ty(), 1), "inc");
-            mBuilder->CreateStore(inc, counterAlloca);
-            mBuilder->CreateBr(condBB);
+        IteratorPlan plan;
+        if (!buildIteratorPlan(fs->iterable.get(), plan)) {
+            error("for-loop iterable is not a materializable iterator recipe");
+            return;
         }
+        TypePtr elementType = fs->elementType ? fs->elementType : plan.itemType;
+        auto* loopVariable = createEntryBlockAlloca(
+            func, mHelpers->toLLVMType(elementType), fs->varName);
 
-        mBuilder->SetInsertPoint(exitBB);
-        mLocals.erase(fs->varName);
+        llvm::AllocaInst* shadowedLocal = nullptr;
+        TypePtr shadowedType;
+        std::optional<uint64_t> shadowedBound;
+        if (auto found = mLocals.find(fs->varName); found != mLocals.end())
+            shadowedLocal = found->second;
+        if (auto found = mLocalTypes.find(fs->varName);
+            found != mLocalTypes.end())
+            shadowedType = found->second;
+        if (auto found = mLocalKnownUpperBounds.find(fs->varName);
+            found != mLocalKnownUpperBounds.end())
+            shadowedBound = found->second;
+
+        mLocals[fs->varName] = loopVariable;
+        mLocalTypes[fs->varName] = elementType;
+        mLocalKnownUpperBounds.erase(fs->varName);
+        emitIteratorPipeline(plan, [&](llvm::Value* item) {
+            mBuilder->CreateStore(
+                coerceCallArgument(item, loopVariable->getAllocatedType()),
+                loopVariable);
+            generateBlock(fs->body.get(), func);
+        });
+
+        if (shadowedLocal) mLocals[fs->varName] = shadowedLocal;
+        else mLocals.erase(fs->varName);
+        if (shadowedType) mLocalTypes[fs->varName] = shadowedType;
+        else mLocalTypes.erase(fs->varName);
+        if (shadowedBound)
+            mLocalKnownUpperBounds[fs->varName] = *shadowedBound;
+        else
+            mLocalKnownUpperBounds.erase(fs->varName);
         return;
     }
     if (auto* freeStmt = dynamic_cast<FreeStmt*>(stmt)) {
@@ -1292,6 +1299,321 @@ void CodeGenerator::generateFragmentInline(FragmentDecl* fragment, SlotInvokeStm
     mLocalKnownUpperBounds = std::move(savedUpperBounds);
 }
 
+bool CodeGenerator::buildIteratorPlan(Expr* expr, IteratorPlan& plan) {
+    if (!expr) return false;
+    auto* call = dynamic_cast<CallExpr*>(expr);
+    if (!call) {
+        TypePtr sourceType = expr->type;
+        if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
+            auto found = mLocalTypes.find(id->name);
+            if (found != mLocalTypes.end()) sourceType = found->second;
+        }
+        if (!sourceType ||
+            (sourceType->kind != TypeKind::Array &&
+             sourceType->kind != TypeKind::Slice))
+            return false;
+        plan.source = expr;
+        plan.sourceType = sourceType;
+        plan.mode = sourceType->kind == TypeKind::Slice
+            ? IteratorMode::Shared : IteratorMode::Consuming;
+        plan.itemType = plan.mode == IteratorMode::Shared
+            ? Type::makeReference(sourceType->inner)
+            : sourceType->inner;
+        return true;
+    }
+
+    if (call->iteratorOp == IteratorOp::Range) {
+        if (call->args.size() != 2) return false;
+        plan.rangeStart = call->args[0].get();
+        plan.rangeEnd = call->args[1].get();
+        plan.itemType = TyI32;
+        plan.mode = IteratorMode::Range;
+        return true;
+    }
+
+    auto* member = dynamic_cast<FieldAccessExpr*>(call->callee.get());
+    if (!member) return false;
+    if (call->iteratorOp == IteratorOp::Iter ||
+        call->iteratorOp == IteratorOp::IterMut ||
+        call->iteratorOp == IteratorOp::IntoIter) {
+        plan.source = member->object.get();
+        if (call->type && call->type->kind == TypeKind::Iterator &&
+            !call->type->typeArgs.empty())
+            plan.sourceType = call->type->typeArgs.front();
+        if (!plan.sourceType) {
+            if (auto* id = dynamic_cast<IdentifierExpr*>(plan.source)) {
+                auto found = mLocalTypes.find(id->name);
+                if (found != mLocalTypes.end()) plan.sourceType = found->second;
+            }
+        }
+        plan.itemType = call->iteratorOutputType;
+        plan.mode = call->iteratorOp == IteratorOp::Iter
+            ? IteratorMode::Shared
+            : (call->iteratorOp == IteratorOp::IterMut
+                ? IteratorMode::Mutable : IteratorMode::Consuming);
+        return plan.sourceType &&
+               (plan.sourceType->kind == TypeKind::Array ||
+                plan.sourceType->kind == TypeKind::Slice);
+    }
+
+    if (call->iteratorOp == IteratorOp::Map ||
+        call->iteratorOp == IteratorOp::Filter ||
+        call->iteratorOp == IteratorOp::Take) {
+        if (!buildIteratorPlan(member->object.get(), plan)) return false;
+        if (call->args.size() != 1) return false;
+        plan.steps.push_back({
+            call->iteratorOp,
+            call->args.front().get(),
+            call->iteratorInputType,
+            call->iteratorOutputType
+        });
+        plan.itemType = call->iteratorOutputType;
+        return true;
+    }
+    return false;
+}
+
+void CodeGenerator::emitIteratorPipeline(
+    const IteratorPlan& plan,
+    const std::function<void(llvm::Value*)>& consume,
+    const std::function<void()>& prepareTerminal) {
+    struct RuntimeStep {
+        IteratorStep description;
+        llvm::Value* value = nullptr;
+        llvm::AllocaInst* remaining = nullptr;
+    };
+
+    llvm::Value* sourceData = nullptr;
+    llvm::Value* limit = nullptr;
+    llvm::Value* initial = nullptr;
+    TypePtr sourceType = plan.sourceType;
+    if (plan.mode == IteratorMode::Range) {
+        initial = coerceCallArgument(generateExpr(plan.rangeStart), mHelpers->i32Ty());
+        limit = coerceCallArgument(generateExpr(plan.rangeEnd), mHelpers->i32Ty());
+    } else {
+        if (!sourceType) {
+            error("iterator source has no materialized array or slice type");
+            return;
+        }
+        if (sourceType->kind == TypeKind::Array) {
+            if (auto* id = dynamic_cast<IdentifierExpr*>(plan.source);
+                id && mLocals.count(id->name) &&
+                plan.mode != IteratorMode::Consuming) {
+                sourceData = mLocals[id->name];
+            } else {
+                llvm::Value* value = generateExpr(plan.source);
+                auto* storage = createEntryBlockAlloca(
+                    mCurrentFunc, value->getType(), "iter.array");
+                mBuilder->CreateStore(value, storage);
+                sourceData = storage;
+            }
+            initial = llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+            limit = llvm::ConstantInt::get(
+                mHelpers->i32Ty(), sourceType->arrayLength);
+        } else if (sourceType->kind == TypeKind::Slice) {
+            llvm::Value* slice = generateExpr(plan.source);
+            sourceData = mBuilder->CreateExtractValue(slice, {0}, "iter.slice.data");
+            limit = coerceCallArgument(
+                mBuilder->CreateExtractValue(slice, {1}, "iter.slice.length"),
+                mHelpers->i32Ty());
+            initial = llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+        } else {
+            error("unsupported iterator source in code generation");
+            return;
+        }
+    }
+
+    // Preserve source-language evaluation order: source, adapter arguments
+    // from left to right, then terminal arguments.
+    std::vector<RuntimeStep> steps;
+    steps.reserve(plan.steps.size());
+    for (const auto& step : plan.steps) {
+        RuntimeStep runtime;
+        runtime.description = step;
+        runtime.value = generateExpr(step.argument);
+        if (step.op == IteratorOp::Take) {
+            runtime.value = coerceCallArgument(runtime.value, mHelpers->i32Ty());
+            runtime.remaining = createEntryBlockAlloca(
+                mCurrentFunc, mHelpers->i32Ty(), "iter.take.remaining");
+            mBuilder->CreateStore(runtime.value, runtime.remaining);
+        }
+        steps.push_back(runtime);
+    }
+    if (prepareTerminal) prepareTerminal();
+
+    auto* indexStorage = createEntryBlockAlloca(
+        mCurrentFunc, mHelpers->i32Ty(), "iter.index");
+    mBuilder->CreateStore(initial, indexStorage);
+
+    auto* condition = llvm::BasicBlock::Create(
+        *mCtx, "iter.condition", mCurrentFunc);
+    auto* body = llvm::BasicBlock::Create(*mCtx, "iter.body");
+    auto* next = llvm::BasicBlock::Create(*mCtx, "iter.next");
+    auto* exit = llvm::BasicBlock::Create(*mCtx, "iter.exit");
+    mBuilder->CreateBr(condition);
+
+    mBuilder->SetInsertPoint(condition);
+    llvm::Value* index = mBuilder->CreateLoad(
+        mHelpers->i32Ty(), indexStorage, "iter.current");
+    llvm::Value* hasItem = mBuilder->CreateICmpSLT(
+        index, limit, "iter.has_item");
+    mBuilder->CreateCondBr(hasItem, body, exit);
+
+    exit->insertInto(mCurrentFunc, nullptr);
+    next->insertInto(mCurrentFunc, exit);
+    body->insertInto(mCurrentFunc, next);
+    mBuilder->SetInsertPoint(body);
+
+    llvm::Value* item = nullptr;
+    if (plan.mode == IteratorMode::Range) {
+        item = index;
+    } else {
+        auto* elementType = mHelpers->toLLVMType(sourceType->inner);
+        llvm::Value* element = nullptr;
+        if (sourceType->kind == TypeKind::Array) {
+            element = mBuilder->CreateInBoundsGEP(
+                mHelpers->toLLVMType(sourceType), sourceData,
+                {llvm::ConstantInt::get(mHelpers->i32Ty(), 0), index},
+                "iter.array.element");
+        } else {
+            element = mBuilder->CreateGEP(
+                elementType, sourceData, index, "iter.slice.element");
+        }
+        item = (plan.mode == IteratorMode::Shared ||
+                plan.mode == IteratorMode::Mutable)
+            ? element
+            : mBuilder->CreateLoad(elementType, element, "iter.item");
+    }
+
+    for (auto& step : steps) {
+        if (step.description.op == IteratorOp::Map) {
+            auto* input = mHelpers->toLLVMType(step.description.inputType);
+            auto* output = mHelpers->toLLVMType(step.description.outputType);
+            auto* callableType = llvm::FunctionType::get(output, {input}, false);
+            item = mBuilder->CreateCall(
+                callableType, step.value,
+                {coerceCallArgument(item, input)}, "iter.map");
+        } else if (step.description.op == IteratorOp::Filter) {
+            auto* input = mHelpers->toLLVMType(step.description.inputType);
+            auto* callableType = llvm::FunctionType::get(
+                mHelpers->boolTy(), {input}, false);
+            auto* accepted = mBuilder->CreateCall(
+                callableType, step.value,
+                {coerceCallArgument(item, input)}, "iter.filter");
+            auto* acceptedBlock = llvm::BasicBlock::Create(
+                *mCtx, "iter.filter.accept", mCurrentFunc);
+            mBuilder->CreateCondBr(accepted, acceptedBlock, next);
+            mBuilder->SetInsertPoint(acceptedBlock);
+        } else if (step.description.op == IteratorOp::Take) {
+            auto* remaining = mBuilder->CreateLoad(
+                mHelpers->i32Ty(), step.remaining, "iter.take.count");
+            auto* canTake = mBuilder->CreateICmpSGT(
+                remaining,
+                llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
+                "iter.take.more");
+            auto* takeBlock = llvm::BasicBlock::Create(
+                *mCtx, "iter.take.item", mCurrentFunc);
+            mBuilder->CreateCondBr(canTake, takeBlock, exit);
+            mBuilder->SetInsertPoint(takeBlock);
+            mBuilder->CreateStore(
+                mBuilder->CreateSub(
+                    remaining,
+                    llvm::ConstantInt::get(mHelpers->i32Ty(), 1),
+                    "iter.take.decrement"),
+                step.remaining);
+        }
+    }
+
+    consume(item);
+    if (!mBuilder->GetInsertBlock()->getTerminator())
+        mBuilder->CreateBr(next);
+
+    mBuilder->SetInsertPoint(next);
+    index = mBuilder->CreateLoad(
+        mHelpers->i32Ty(), indexStorage, "iter.previous");
+    mBuilder->CreateStore(
+        mBuilder->CreateAdd(
+            index, llvm::ConstantInt::get(mHelpers->i32Ty(), 1),
+            "iter.advance"),
+        indexStorage);
+    mBuilder->CreateBr(condition);
+    mBuilder->SetInsertPoint(exit);
+}
+
+llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
+    auto* member = dynamic_cast<FieldAccessExpr*>(call->callee.get());
+    IteratorPlan plan;
+    if (!member || !buildIteratorPlan(member->object.get(), plan)) {
+        error("invalid iterator terminal recipe");
+        return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+    }
+
+    if (call->iteratorOp == IteratorOp::Fold) {
+        llvm::AllocaInst* accumulator = nullptr;
+        llvm::Value* reducer = nullptr;
+        auto* accumulatorType = mHelpers->toLLVMType(call->iteratorOutputType);
+        auto* itemType = mHelpers->toLLVMType(call->iteratorInputType);
+        auto* reducerType = llvm::FunctionType::get(
+            accumulatorType, {accumulatorType, itemType}, false);
+        emitIteratorPipeline(plan, [&](llvm::Value* item) {
+            auto* current = mBuilder->CreateLoad(
+                accumulatorType, accumulator, "iter.fold.current");
+            auto* reduced = mBuilder->CreateCall(
+                reducerType, reducer,
+                {current, coerceCallArgument(item, itemType)},
+                "iter.fold.value");
+            mBuilder->CreateStore(reduced, accumulator);
+        }, [&] {
+            llvm::Value* initial = generateExpr(call->args[0].get());
+            accumulator = createEntryBlockAlloca(
+                mCurrentFunc, accumulatorType, "iter.fold.accumulator");
+            mBuilder->CreateStore(
+                coerceCallArgument(initial, accumulatorType), accumulator);
+            reducer = generateExpr(call->args[1].get());
+        });
+        return mBuilder->CreateLoad(
+            accumulatorType, accumulator, "iter.fold.result");
+    }
+
+    if (call->iteratorOp == IteratorOp::ForEach) {
+        llvm::Value* action = nullptr;
+        auto* itemType = mHelpers->toLLVMType(call->iteratorInputType);
+        auto* actionType = llvm::FunctionType::get(
+            mHelpers->voidTy(), {itemType}, false);
+        emitIteratorPipeline(plan, [&](llvm::Value* item) {
+            mBuilder->CreateCall(
+                actionType, action, {coerceCallArgument(item, itemType)});
+        }, [&] {
+            action = generateExpr(call->args[0].get());
+        });
+        return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+    }
+
+    if (call->iteratorOp == IteratorOp::Count) {
+        llvm::AllocaInst* count = nullptr;
+        emitIteratorPipeline(plan, [&](llvm::Value*) {
+            auto* current = mBuilder->CreateLoad(
+                mHelpers->i32Ty(), count, "iter.count.current");
+            mBuilder->CreateStore(
+                mBuilder->CreateAdd(
+                    current,
+                    llvm::ConstantInt::get(mHelpers->i32Ty(), 1),
+                    "iter.count.next"),
+                count);
+        }, [&] {
+            count = createEntryBlockAlloca(
+                mCurrentFunc, mHelpers->i32Ty(), "iter.count");
+            mBuilder->CreateStore(
+                llvm::ConstantInt::get(mHelpers->i32Ty(), 0), count);
+        });
+        return mBuilder->CreateLoad(
+            mHelpers->i32Ty(), count, "iter.count.result");
+    }
+
+    error("non-terminal iterator recipe reached value code generation");
+    return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+}
+
 // ─── Expression generation ─────────────────────────────────────────
 
 llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
@@ -1598,6 +1920,15 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
     }
     if (auto* launch = dynamic_cast<LaunchExpr*>(expr)) return generateLaunch(launch);
     if (auto* call = dynamic_cast<CallExpr*>(expr)) {
+        if (call->iteratorOp == IteratorOp::Fold ||
+            call->iteratorOp == IteratorOp::ForEach ||
+            call->iteratorOp == IteratorOp::Count)
+            return generateIteratorTerminal(call);
+        if (call->iteratorOp != IteratorOp::None) {
+            error("iterator adapters are ephemeral and must end in `for`, "
+                  "`fold`, `for_each`, or `count`");
+            return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+        }
         if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
             calleeId && (calleeId->name == "Ok" || calleeId->name == "Err") &&
             call->args.size() == 1 && call->intrinsicType &&
@@ -1931,6 +2262,42 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
     }
     if (auto* as = dynamic_cast<AssignExpr*>(expr)) {
         llvm::Value* rhs = generateExpr(as->rhs.get());
+        moon::Expr* dereferencedOperand = nullptr;
+        if (auto* dereference = dynamic_cast<DerefExpr*>(as->lhs.get()))
+            dereferencedOperand = dereference->operand.get();
+        if (auto* unary = dynamic_cast<UnaryExpr*>(as->lhs.get());
+            unary && unary->op == Operator::Dereference)
+            dereferencedOperand = unary->operand.get();
+        if (dereferencedOperand) {
+            llvm::Value* pointer = generateExpr(dereferencedOperand);
+            auto* valueType = rhs->getType();
+            llvm::Value* result = rhs;
+            if (as->op != Operator::Assign) {
+                llvm::Value* lhs = mBuilder->CreateLoad(
+                    valueType, pointer, "deref.old");
+                switch (as->op) {
+                    case Operator::AddAssign:
+                        result = valueType->isFloatingPointTy()
+                            ? mBuilder->CreateFAdd(lhs, rhs, "deref.add")
+                            : mBuilder->CreateAdd(lhs, rhs, "deref.add"); break;
+                    case Operator::SubtractAssign:
+                        result = valueType->isFloatingPointTy()
+                            ? mBuilder->CreateFSub(lhs, rhs, "deref.sub")
+                            : mBuilder->CreateSub(lhs, rhs, "deref.sub"); break;
+                    case Operator::MultiplyAssign:
+                        result = valueType->isFloatingPointTy()
+                            ? mBuilder->CreateFMul(lhs, rhs, "deref.mul")
+                            : mBuilder->CreateMul(lhs, rhs, "deref.mul"); break;
+                    case Operator::DivideAssign:
+                        result = valueType->isFloatingPointTy()
+                            ? mBuilder->CreateFDiv(lhs, rhs, "deref.div")
+                            : mBuilder->CreateSDiv(lhs, rhs, "deref.div"); break;
+                    default: break;
+                }
+            }
+            mBuilder->CreateStore(result, pointer);
+            return result;
+        }
         if (auto* index = dynamic_cast<IndexExpr*>(as->lhs.get())) {
             auto* id = dynamic_cast<IdentifierExpr*>(index->object.get());
             if (id && mLocals.count(id->name) && mLocalTypes[id->name] &&
@@ -2063,7 +2430,10 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         }
 
         if (le->body) generateBlock(le->body.get(), func);
-        if (!mBuilder->GetInsertBlock()->getTerminator()) mBuilder->CreateRet(llvm::ConstantInt::get(retTy, 0));
+        if (!mBuilder->GetInsertBlock()->getTerminator()) {
+            if (retTy->isVoidTy()) mBuilder->CreateRetVoid();
+            else mBuilder->CreateRet(llvm::Constant::getNullValue(retTy));
+        }
 
         // Restore state (including insert point)
         mCurrentFunc = savedFunc;

@@ -935,7 +935,45 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
     if (auto* loop = dynamic_cast<ForStmt*>(stmt)) {
         if (!checkExpr(loop->iterable.get())) return false;
         enterScope();
-        define(loop->varName, TyI32, false);
+        // Iterator recipes are ephemeral, but a borrow made by their source
+        // must remain live for the complete loop body.
+        std::function<CallExpr*(Expr*)> sourceCall = [&](Expr* expression) -> CallExpr* {
+            auto* call = dynamic_cast<CallExpr*>(expression);
+            if (!call) return nullptr;
+            if (call->iteratorOp == IteratorOp::Iter ||
+                call->iteratorOp == IteratorOp::IterMut ||
+                call->iteratorOp == IteratorOp::IntoIter)
+                return call;
+            auto* member = dynamic_cast<FieldAccessExpr*>(call->callee.get());
+            return member ? sourceCall(member->object.get()) : nullptr;
+        };
+        bool sourceLoanAcquired = false;
+        if (auto* source = sourceCall(loop->iterable.get())) {
+            auto* member = dynamic_cast<FieldAccessExpr*>(source->callee.get());
+            if (member && (source->iteratorOp == IteratorOp::Iter ||
+                           source->iteratorOp == IteratorOp::IterMut)) {
+                if (auto place = extractPlace(member->object.get())) {
+                    if (!acquireLoan(*place, source->iteratorOp == IteratorOp::IterMut)) {
+                        exitScope();
+                        return false;
+                    }
+                    sourceLoanAcquired = true;
+                }
+            }
+        }
+        if (!sourceLoanAcquired) {
+            if (auto place = extractPlace(loop->iterable.get())) {
+                auto* variable = lookup(place->root);
+                if (variable && variable->type &&
+                    variable->type->kind == TypeKind::Slice) {
+                    if (!acquireLoan(*place, false)) {
+                        exitScope();
+                        return false;
+                    }
+                }
+            }
+        }
+        define(loop->varName, loop->elementType ? loop->elementType : TyI32, false);
         const CheckerState before = captureState();
         FlowResult bodyResult = checkBlock(loop->body.get());
         const CheckerState after = captureState();
@@ -1057,6 +1095,20 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
     if (auto* unary = dynamic_cast<UnaryExpr*>(expr))
         return checkExpr(unary->operand.get());
     if (auto* call = dynamic_cast<CallExpr*>(expr)) {
+        if (call->iteratorOp != IteratorOp::None) {
+            // Method syntax stores the recipe receiver in the field-access
+            // callee. It is an expression dependency, not a callable value.
+            if (auto* member = dynamic_cast<FieldAccessExpr*>(call->callee.get())) {
+                if (!checkExpr(member->object.get())) return false;
+            } else if (call->iteratorOp == IteratorOp::Range) {
+                // `range` has an identifier callee and only its bounds matter.
+            } else if (!checkExpr(call->callee.get())) {
+                return false;
+            }
+            for (auto& arg : call->args)
+                if (!checkExpr(arg.get())) return false;
+            return true;
+        }
         if (!checkExpr(call->callee.get())) return false;
         if (auto* callee = dynamic_cast<IdentifierExpr*>(call->callee.get());
             callee && (callee->name == "clone" ||
@@ -1214,6 +1266,11 @@ bool OwnershipChecker::isPlaceAvailable(const Place& place, const std::string& a
             error(action + " of moved place '" + renderPlace(place) + "'");
             return false;
         }
+    }
+    if (hasConflictingLoan(place, false)) {
+        error("Cannot " + action + " '" + renderPlace(place) +
+              "' while an overlapping place is mutably borrowed");
+        return false;
     }
     return true;
 }

@@ -535,6 +535,8 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
         verifyBlock(loop->body.get(), module, owner);
     } else if (auto* loop = dynamic_cast<const ForStmt*>(stmt)) {
         verifyExpr(loop->iterable.get(), module, owner);
+        verifyType(loop->elementType, loop->location,
+                   "for-loop element type");
         verifyBlock(loop->body.get(), module, owner);
     } else if (auto* release = dynamic_cast<const FreeStmt*>(stmt)) {
         verifyExpr(release->operand.get(), module, owner);
@@ -637,6 +639,24 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
         if (call->intrinsicType)
             verifyType(call->intrinsicType, call->location,
                        "intrinsic call type witness");
+        if (call->iteratorOp != IteratorOp::None) {
+            verifyType(call->iteratorInputType, call->location,
+                       "iterator operation input");
+            verifyType(call->iteratorOutputType, call->location,
+                       "iterator operation output");
+            if (!call->type)
+                error(call->location,
+                      "iterator operation has no result type");
+            const bool terminal =
+                call->iteratorOp == IteratorOp::Fold ||
+                call->iteratorOp == IteratorOp::ForEach ||
+                call->iteratorOp == IteratorOp::Count;
+            if (!terminal &&
+                (!call->type ||
+                 call->type->kind != TypeKind::Iterator))
+                error(call->location,
+                      "iterator adapter does not produce an iterator recipe");
+        }
         if (call->returnsLinear !=
             (call->returnUsage == luna::ownership::Usage::Linear))
             error(call->location, "call in '" + owner +

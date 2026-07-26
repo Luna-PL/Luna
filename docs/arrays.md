@@ -23,3 +23,10 @@ print(middle[0]); // 20
 切片是 `{data, length}` 的非拥有借用视图。它存活期间来源数组不能被写入；切片索引同样执行运行时边界检查。`start` 和 `end` 均允许等于数组长度仅作为半开区间的 `end`，且必须满足 `start <= end`。当前稳定表面只提供只读 `slice<T>`；`slice_mut<T>` 会在可变子借用和重叠区间证明完成后开放。
 
 `raw<T>` 与 `device_buffer<T>` 不会隐式转换为数组或切片。堆拥有的 `vec<T>` 必须等待通用 Drop/析构协议完成后才会作为安全容器开放。
+
+## 迭代
+
+数组和切片现可使用 `iter()`、`iter_mut()`、`into_iter()`，并接入
+`map`/`filter`/`take` 以及 `for`/`fold`/`for_each`/`count`。适配器链不会
+建立中间容器。直接遍历数组按值产生 `Copy` 元素，直接遍历切片产生共享引用。
+完整语义与阶段性限制见[迭代、管道与容器边界](iterators.md)。

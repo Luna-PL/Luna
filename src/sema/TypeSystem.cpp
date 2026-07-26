@@ -126,7 +126,8 @@ TypePtr ConstraintSolver::resolve(const TypePtr& type) {
          type->kind == TypeKind::DeviceBuffer || type->kind == TypeKind::Array ||
          type->kind == TypeKind::Slice || type->kind == TypeKind::MetadataView ||
          type->kind == TypeKind::DeclarationView ||
-         type->kind == TypeKind::DeclarationRef) && type->inner)
+         type->kind == TypeKind::DeclarationRef ||
+         type->kind == TypeKind::Iterator) && type->inner)
         type->inner = resolve(type->inner);
     else if (type->kind == TypeKind::Function || type->kind == TypeKind::Slot ||
              type->kind == TypeKind::Fragment) {
@@ -151,7 +152,9 @@ bool ConstraintSolver::contains(const TypePtr& type, int id) {
         resolved->kind == TypeKind::Rc || resolved->kind == TypeKind::Arc ||
         resolved->kind == TypeKind::DeviceBuffer || resolved->kind == TypeKind::Array ||
         resolved->kind == TypeKind::MetadataView ||
-        resolved->kind == TypeKind::DeclarationView || resolved->kind == TypeKind::DeclarationRef)
+        resolved->kind == TypeKind::DeclarationView ||
+        resolved->kind == TypeKind::DeclarationRef ||
+        resolved->kind == TypeKind::Iterator)
         return contains(resolved->inner, id);
     if (resolved->kind == TypeKind::Function || resolved->kind == TypeKind::Slot ||
         resolved->kind == TypeKind::Fragment) {
@@ -244,7 +247,14 @@ bool ConstraintSolver::unifyInternal(const TypePtr& lhs, const TypePtr& rhs,
     if (a->kind == TypeKind::RawPointer || a->kind == TypeKind::Rc ||
         a->kind == TypeKind::Arc || a->kind == TypeKind::DeviceBuffer ||
         a->kind == TypeKind::MetadataView ||
-        a->kind == TypeKind::DeclarationView || a->kind == TypeKind::DeclarationRef) {
+        a->kind == TypeKind::DeclarationView ||
+        a->kind == TypeKind::DeclarationRef ||
+        a->kind == TypeKind::Iterator) {
+        if (a->kind == TypeKind::Iterator &&
+            a->iteratorMode != b->iteratorMode) {
+            if (reason) *reason = "iterator ownership modes differ";
+            return false;
+        }
         if (!a->inner || !b->inner) return !a->inner && !b->inner;
         return unifyInternal(a->inner, b->inner, reason);
     }

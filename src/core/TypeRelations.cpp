@@ -76,6 +76,7 @@ const char* kindName(TypeKind kind) {
         case TypeKind::Function: return "function";
         case TypeKind::Slot: return "slot";
         case TypeKind::Fragment: return "fragment";
+        case TypeKind::Iterator: return "iterator";
         case TypeKind::DeviceBuffer: return "device_buffer";
         case TypeKind::Event: return "event";
         case TypeKind::Array: return "array";
@@ -137,7 +138,11 @@ std::string canonicalShapeImpl(
         case TypeKind::MetadataView:
         case TypeKind::DeclarationView:
         case TypeKind::DeclarationRef:
+        case TypeKind::Iterator:
             appendType(type->inner);
+            if (type->kind == TypeKind::Iterator)
+                appendPart(result, std::to_string(
+                    static_cast<unsigned>(type->iteratorMode)));
             break;
         case TypeKind::Array:
             appendPart(result, std::to_string(type->arrayLength));

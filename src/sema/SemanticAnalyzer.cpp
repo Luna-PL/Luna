@@ -223,11 +223,11 @@ bool SemanticAnalyzer::analyze(Program* program) {
     // before functions so where clauses and constraint composition are
     // declaration-order independent.
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
-        if (auto* concept =
+        if (auto* constraintDecl =
                 dynamic_cast<ConstraintDecl*>(program->declarations[i].get())) {
-            setDeclarationContext(concept);
-            setDiagnosticLocation(concept);
-            declareConstraint(concept);
+            setDeclarationContext(constraintDecl);
+            setDiagnosticLocation(constraintDecl);
+            declareConstraint(constraintDecl);
         }
     }
     // Bind every nominal name before resolving any field. This permits
@@ -351,16 +351,16 @@ void SemanticAnalyzer::declareFunction(FunctionDecl* decl) {
             continue;
         }
         const std::string key = sourceDeclarationKey(clause.constraintName);
-        auto concept = mConcepts.find(key);
-        if (concept == mConcepts.end()) {
+        auto constraintIt = mConcepts.find(key);
+        if (constraintIt == mConcepts.end()) {
             error("unknown constraint '" + clause.constraintName + "'",
                   decl->line, decl->col);
             continue;
         }
         clause.constraintName = key;
-        if (clause.constraintTypeArgs.size() != concept->second->typeParams.size())
-            error("constraint '" + concept->second->name + "' expects " +
-                  std::to_string(concept->second->typeParams.size()) +
+        if (clause.constraintTypeArgs.size() != constraintIt->second->typeParams.size())
+            error("constraint '" + constraintIt->second->name + "' expects " +
+                  std::to_string(constraintIt->second->typeParams.size()) +
                   " type arguments", decl->line, decl->col);
     }
     SymbolInfo info;
@@ -1633,6 +1633,11 @@ TypePtr SemanticAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
                 reflected->compileTimeDeclarationId;
         auto finalType = resolved(declaredType);
         ls->inferredType = finalType;
+        if (finalType->kind == TypeKind::Iterator)
+            error("lazy iterator recipes must be consumed inline by `for`, "
+                  "`fold`, `for_each`, or `count`; escaping adapter values "
+                  "are reserved until Core Iterator structs are materialized",
+                  ls->line, ls->col);
         if (ls->isLinear || dynamic_cast<LinearTypeAST*>(ls->typeAnnotation.get()))
             ls->usage = luna::ownership::Usage::Linear;
         else if (dynamic_cast<AffineTypeAST*>(ls->typeAnnotation.get()))
@@ -1713,16 +1718,30 @@ TypePtr SemanticAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
             element = Type::makeDeclarationRef(iterable->inner);
         else if (iterable->kind == TypeKind::MetadataView)
             element = iterable->inner;
+        else if (iterable->kind == TypeKind::Iterator)
+            element = iterable->inner;
+        else if (iterable->kind == TypeKind::Slice)
+            element = Type::makeReference(iterable->inner);
+        else if (iterable->kind == TypeKind::Array) {
+            element = iterable->inner;
+            if (defaultUsageForType(element) !=
+                luna::ownership::Usage::Copy)
+                error("direct array iteration currently requires Copy "
+                      "elements; use an explicit ownership adapter once "
+                      "move-only item drop-state tracking is available",
+                      fs->line, fs->col);
+        }
         else if (iterable->kind != TypeKind::Array &&
                  iterable->kind != TypeKind::Slice)
-            error("for-loop requires an array, slice, declaration_view, or "
-                  "metadata_view", fs->line, fs->col);
-        else
-            element = iterable->inner;
+            error("for-loop requires an array, slice, iterator, "
+                  "declaration_view, or metadata_view", fs->line, fs->col);
+        fs->elementType = element;
         mSymTable.enterScope();
         SymbolInfo vi;
         vi.kind = SymbolKind::Variable;
         vi.type = element;
+        vi.usage = defaultUsageForType(element);
+        vi.isLinear = vi.usage == luna::ownership::Usage::Linear;
         mSymTable.define(fs->varName, vi);
         analyzeBlock(fs->body.get(), expectedReturn);
         mSymTable.exitScope();
@@ -2533,6 +2552,8 @@ TypePtr SemanticAnalyzer::analyzeSelect(SelectExpr* selection) {
 
 TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
     auto* id = dynamic_cast<IdentifierExpr*>(call->callee.get());
+    if (auto* member = dynamic_cast<FieldAccessExpr*>(call->callee.get()))
+        return analyzeIteratorCall(call, member);
     if (auto* selection = dynamic_cast<SelectExpr*>(call->callee.get())) {
         auto selected = resolved(analyzeSelect(selection));
         if (selected->kind != TypeKind::Function) return TyUnknown;
@@ -2548,6 +2569,21 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
         return selected->returnType;
     }
     if (id) {
+        if (id->name == "range") {
+            if (call->args.size() != 2) {
+                error("range expects start and end integer values",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            requireInteger(analyzeExpr(call->args[0].get()), "range start");
+            requireInteger(analyzeExpr(call->args[1].get()), "range end");
+            call->iteratorOp = IteratorOp::Range;
+            call->iteratorInputType = TyI32;
+            call->iteratorOutputType = TyI32;
+            call->resultType =
+                Type::makeIterator(TyI32, IteratorMode::Range);
+            return call->resultType;
+        }
         if (id->name == "Ok" || id->name == "Err") {
             if (call->args.size() != 1) {
                 error(id->name + " expects exactly one payload value",
@@ -2742,12 +2778,12 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
             return Type::makeDeclarationRef(view->inner);
         }
         const std::string conceptKey = sourceDeclarationKey(id->name, false);
-        auto concept = mConcepts.find(conceptKey);
-        if (concept != mConcepts.end()) {
+        auto constraintIt = mConcepts.find(conceptKey);
+        if (constraintIt != mConcepts.end()) {
             if (!call->args.empty() ||
-                call->typeArgASTs.size() != concept->second->typeParams.size()) {
-                error("constraint '" + concept->second->name + "' expects " +
-                      std::to_string(concept->second->typeParams.size()) +
+                call->typeArgASTs.size() != constraintIt->second->typeParams.size()) {
+                error("constraint '" + constraintIt->second->name + "' expects " +
+                      std::to_string(constraintIt->second->typeParams.size()) +
                       " type arguments and no value arguments",
                       call->line, call->col);
             } else {
@@ -3037,6 +3073,160 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
     call->returnsLinear = sym->returnsLinear;
     call->returnUsage = sym->returnUsage;
     return sym->returnType ? sym->returnType : TyUnit;
+}
+
+TypePtr SemanticAnalyzer::analyzeIteratorCall(
+    CallExpr* call, FieldAccessExpr* member) {
+    if (mInKernel) {
+        error("kernel iterator pipelines are reserved until their adapter "
+              "closures can be cloned into the device module",
+              call->line, call->col);
+        return TyUnknown;
+    }
+    const std::string& name = member->field;
+    TypePtr receiver = resolved(analyzeExpr(member->object.get()));
+    const auto finish = [&](IteratorOp op, const TypePtr& result,
+                            const TypePtr& input, const TypePtr& output) {
+        call->iteratorOp = op;
+        call->resultType = result;
+        call->iteratorInputType = input;
+        call->iteratorOutputType = output;
+        return result;
+    };
+    const auto requireCount = [&](size_t expected) {
+        if (call->args.size() == expected) return true;
+        error("iterator `" + name + "` expects " +
+              std::to_string(expected) + " argument" +
+              (expected == 1 ? "" : "s"), call->line, call->col);
+        return false;
+    };
+
+    if (name == "iter" || name == "iter_mut" ||
+        name == "into_iter") {
+        if (!requireCount(0)) return TyUnknown;
+        if (receiver->kind != TypeKind::Array &&
+            receiver->kind != TypeKind::Slice) {
+            error("`" + name + "` requires an array or slice receiver, got " +
+                  receiver->toString(), call->line, call->col);
+            return TyUnknown;
+        }
+        TypePtr element = receiver->inner;
+        IteratorMode mode = IteratorMode::Shared;
+        IteratorOp op = IteratorOp::Iter;
+        TypePtr item = Type::makeReference(element);
+        if (name == "iter_mut") {
+            mode = IteratorMode::Mutable;
+            op = IteratorOp::IterMut;
+            item = Type::makeReference(element, true);
+        } else if (name == "into_iter") {
+            mode = IteratorMode::Consuming;
+            op = IteratorOp::IntoIter;
+            item = element;
+            if (defaultUsageForType(item) !=
+                luna::ownership::Usage::Copy) {
+                error("the initial `into_iter` pipeline supports only Copy "
+                      "elements; move-only item iteration requires adapter "
+                      "drop-state tracking", call->line, call->col);
+            }
+        }
+        return finish(
+            op, Type::makeIterator(item, mode, receiver),
+            element, item);
+    }
+
+    if (receiver->kind != TypeKind::Iterator || !receiver->inner) {
+        error("`" + name + "` requires an iterator receiver, got " +
+              receiver->toString(), call->line, call->col);
+        return TyUnknown;
+    }
+    const TypePtr item = receiver->inner;
+
+    auto callable = [&](size_t argumentIndex, size_t parameterCount,
+                        const std::string& context) -> TypePtr {
+        TypePtr type = resolved(analyzeExpr(call->args[argumentIndex].get()));
+        if (type->kind != TypeKind::Function ||
+            type->paramTypes.size() != parameterCount) {
+            error(context + " requires a callable with " +
+                  std::to_string(parameterCount) + " parameter" +
+                  (parameterCount == 1 ? "" : "s"),
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        return type;
+    };
+
+    if (name == "map") {
+        if (!requireCount(1)) return TyUnknown;
+        TypePtr transform = callable(0, 1, "iterator map");
+        if (transform->kind != TypeKind::Function) return TyUnknown;
+        constrain(item, transform->paramTypes[0], "iterator map input");
+        TypePtr output = resolved(transform->returnType);
+        if (defaultUsageForType(item) != luna::ownership::Usage::Copy ||
+            defaultUsageForType(output) != luna::ownership::Usage::Copy) {
+            error("the initial map adapter requires Copy input and output; "
+                  "move-only adapters require per-item drop-state tracking",
+                  call->line, call->col);
+        }
+        return finish(
+            IteratorOp::Map,
+            Type::makeIterator(output, receiver->iteratorMode, receiver),
+            item, output);
+    }
+    if (name == "filter") {
+        if (!requireCount(1)) return TyUnknown;
+        TypePtr predicate = callable(0, 1, "iterator filter");
+        if (predicate->kind != TypeKind::Function) return TyUnknown;
+        constrain(item, predicate->paramTypes[0], "iterator filter input");
+        requireBool(predicate->returnType, "iterator filter predicate");
+        if (defaultUsageForType(item) != luna::ownership::Usage::Copy)
+            error("filter cannot discard a move-only iterator item",
+                  call->line, call->col);
+        return finish(
+            IteratorOp::Filter,
+            Type::makeIterator(item, receiver->iteratorMode, receiver),
+            item, item);
+    }
+    if (name == "take") {
+        if (!requireCount(1)) return TyUnknown;
+        requireInteger(analyzeExpr(call->args[0].get()),
+                       "iterator take count");
+        return finish(
+            IteratorOp::Take,
+            Type::makeIterator(item, receiver->iteratorMode, receiver),
+            item, item);
+    }
+    if (name == "fold") {
+        if (!requireCount(2)) return TyUnknown;
+        TypePtr accumulator = resolved(analyzeExpr(call->args[0].get()));
+        TypePtr reducer = callable(1, 2, "iterator fold");
+        if (reducer->kind != TypeKind::Function) return TyUnknown;
+        constrain(accumulator, reducer->paramTypes[0],
+                  "iterator fold accumulator");
+        constrain(item, reducer->paramTypes[1], "iterator fold item");
+        constrain(reducer->returnType, accumulator,
+                  "iterator fold result");
+        if (defaultUsageForType(accumulator) !=
+            luna::ownership::Usage::Copy)
+            error("the initial fold accumulator must be Copy",
+                  call->line, call->col);
+        return finish(IteratorOp::Fold, accumulator, item, accumulator);
+    }
+    if (name == "for_each") {
+        if (!requireCount(1)) return TyUnknown;
+        TypePtr action = callable(0, 1, "iterator for_each");
+        if (action->kind != TypeKind::Function) return TyUnknown;
+        constrain(item, action->paramTypes[0], "iterator for_each item");
+        constrain(action->returnType, TyUnit, "iterator for_each result");
+        return finish(IteratorOp::ForEach, TyUnit, item, TyUnit);
+    }
+    if (name == "count") {
+        if (!requireCount(0)) return TyUnknown;
+        return finish(IteratorOp::Count, TyI32, item, TyI32);
+    }
+
+    error("unknown iterator adapter or terminal `" + name + "`",
+          call->line, call->col);
+    return TyUnknown;
 }
 
 TypePtr SemanticAnalyzer::analyzeLaunch(LaunchExpr* launch) {
@@ -4300,6 +4490,16 @@ static std::unique_ptr<Expr> cloneExpr(
         c->intrinsicType = e->intrinsicType
             ? substituteNominalType(e->intrinsicType, bindings)
             : nullptr;
+        c->resultType = e->resultType
+            ? substituteNominalType(e->resultType, bindings)
+            : nullptr;
+        c->iteratorInputType = e->iteratorInputType
+            ? substituteNominalType(e->iteratorInputType, bindings)
+            : nullptr;
+        c->iteratorOutputType = e->iteratorOutputType
+            ? substituteNominalType(e->iteratorOutputType, bindings)
+            : nullptr;
+        c->iteratorOp = e->iteratorOp;
         return c;
     }
     if (auto* e = dynamic_cast<HeapAllocExpr*>(src)) {
@@ -4699,6 +4899,13 @@ static TypePtr substituteNominalType(
         return Type::makeResult(
             substituteNominalType(type->typeArgs[0], bindings),
             substituteNominalType(type->typeArgs[1], bindings));
+    if (type->kind == TypeKind::Iterator)
+        return Type::makeIterator(
+            substituteNominalType(type->inner, bindings),
+            type->iteratorMode,
+            type->typeArgs.empty()
+                ? nullptr
+                : substituteNominalType(type->typeArgs.front(), bindings));
     if (type->kind == TypeKind::DeviceBuffer)
         return Type::makeDeviceBuffer(substituteNominalType(type->inner, bindings));
     if (type->kind == TypeKind::Function) {
@@ -4897,6 +5104,12 @@ void SemanticAnalyzer::materializeInferredTypes(Program* program) {
         if (auto* c = dynamic_cast<CallExpr*>(expr)) {
             if (c->intrinsicType)
                 c->intrinsicType = resolved(c->intrinsicType);
+            if (c->resultType)
+                c->resultType = resolved(c->resultType);
+            if (c->iteratorInputType)
+                c->iteratorInputType = resolved(c->iteratorInputType);
+            if (c->iteratorOutputType)
+                c->iteratorOutputType = resolved(c->iteratorOutputType);
             for (auto& type : c->typeArgs) type = resolved(type);
             visitExpr(c->callee.get());
             for (auto& a : c->args) visitExpr(a.get());
@@ -4919,6 +5132,10 @@ void SemanticAnalyzer::materializeInferredTypes(Program* program) {
         if (auto* f = dynamic_cast<FieldAccessExpr*>(expr)) { visitExpr(f->object.get()); return; }
         if (auto* i = dynamic_cast<IndexExpr*>(expr)) { visitExpr(i->object.get()); visitExpr(i->index.get()); return; }
         if (auto* h = dynamic_cast<HeapAllocExpr*>(expr)) { visitExpr(h->initializer.get()); return; }
+        if (auto* m = dynamic_cast<MoveExpr*>(expr)) { visitExpr(m->operand.get()); return; }
+        if (auto* b = dynamic_cast<BorrowExpr*>(expr)) { visitExpr(b->operand.get()); return; }
+        if (auto* d = dynamic_cast<DerefExpr*>(expr)) { visitExpr(d->operand.get()); return; }
+        if (auto* a = dynamic_cast<AddrOfExpr*>(expr)) { visitExpr(a->operand.get()); return; }
         if (auto* t = dynamic_cast<TryExpr*>(expr)) {
             visitExpr(t->operand.get());
             t->resultType = resolved(t->resultType);
@@ -4926,10 +5143,6 @@ void SemanticAnalyzer::materializeInferredTypes(Program* program) {
             t->errorType = resolved(t->errorType);
             return;
         }
-        if (auto* m = dynamic_cast<MoveExpr*>(expr)) { visitExpr(m->operand.get()); return; }
-        if (auto* b = dynamic_cast<BorrowExpr*>(expr)) { visitExpr(b->operand.get()); return; }
-        if (auto* d = dynamic_cast<DerefExpr*>(expr)) { visitExpr(d->operand.get()); return; }
-        if (auto* a = dynamic_cast<AddrOfExpr*>(expr)) { visitExpr(a->operand.get()); return; }
         if (auto* i = dynamic_cast<IfExpr*>(expr)) { visitExpr(i->cond.get()); visitExpr(i->thenExpr.get()); visitExpr(i->elseExpr.get()); return; }
         if (auto* b = dynamic_cast<BlockExpr*>(expr)) { visitBlock(b->block.get()); return; }
     };
@@ -4946,7 +5159,12 @@ void SemanticAnalyzer::materializeInferredTypes(Program* program) {
         if (auto* e = dynamic_cast<ExprStmt*>(stmt)) { visitExpr(e->expr.get()); return; }
         if (auto* i = dynamic_cast<IfStmt*>(stmt)) { visitExpr(i->cond.get()); visitBlock(i->thenBlock.get()); visitStmt(i->elseBranch.get()); return; }
         if (auto* w = dynamic_cast<WhileStmt*>(stmt)) { visitExpr(w->cond.get()); visitBlock(w->body.get()); return; }
-        if (auto* f = dynamic_cast<ForStmt*>(stmt)) { visitExpr(f->iterable.get()); visitBlock(f->body.get()); return; }
+        if (auto* f = dynamic_cast<ForStmt*>(stmt)) {
+            visitExpr(f->iterable.get());
+            f->elementType = resolved(f->elementType);
+            visitBlock(f->body.get());
+            return;
+        }
         if (auto* f = dynamic_cast<FreeStmt*>(stmt)) { visitExpr(f->operand.get()); return; }
     };
     visitBlock = [&](BlockStmt* block) {

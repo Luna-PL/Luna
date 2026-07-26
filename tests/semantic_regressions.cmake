@@ -176,6 +176,8 @@ expect_success("explicit rc and arc cloning" "tests/fixtures/rc_arc.luna" "7\n8\
 expect_success("Result construction, inspection, and extraction" "tests/fixtures/result_basic.luna" "16\n10\n11\n13\n12")
 expect_success("Result propagation cleans both paths" "tests/fixtures/result_propagation.luna" "70\n43\n70\n7")
 expect_success("Result drops only its active resource payload" "tests/fixtures/result_resource_cleanup.luna" "81\n82")
+expect_success("fused iterator pipelines and mutable iteration" "tests/fixtures/iterator_pipeline.luna" "14\n20\n30\n40\n3\n1\n2\n3\n4\n5\n6\n7\n70\n8\n9\n90\n11\n15\nProgram exited with code: 14")
+expect_success("borrowed slice iteration" "tests/fixtures/iterator_slice.luna" "20\n30\n40\nProgram exited with code: 3")
 expect_runtime_failure("explicit panic" "tests/fixtures/panic.luna" "Luna panic: intentional panic")
 expect_runtime_failure("unwrap failure panics" "tests/fixtures/result_unwrap_panic.luna" "Luna panic: called unwrap on Err")
 
@@ -194,6 +196,9 @@ expect_error("recursive structural type requires nominal" "tests/fixtures/recurs
 expect_error("structural field order is exact" "tests/fixtures/structural_field_order_invalid.luna" "record fields differ")
 expect_error("unresolved inference" "examples/inference_error.luna" "Could not infer parameter 'value'")
 expect_error("generic argument count" "tests/fixtures/generic_argument_count_invalid.luna" "Argument count mismatch for 'identity'")
+expect_error("iterator recipe cannot escape" "tests/fixtures/iterator_recipe_escape_invalid.luna" "lazy iterator recipes must be consumed inline")
+expect_error("iterator map input type" "tests/fixtures/iterator_map_type_invalid.luna" "Type constraint failed in iterator map input")
+expect_error("mutable iterator holds exclusive source borrow" "tests/fixtures/iterator_mut_borrow_conflict_invalid.luna" "while an overlapping place is mutably borrowed")
 expect_error("missing non-unit return path" "tests/fixtures/missing_return_invalid.luna" "function 'classify' may finish without returning 'i32'")
 expect_error("non-numeric relational comparison" "tests/fixtures/comparison_non_numeric_invalid.luna" "left operand of comparison expression must be numeric, got bool")
 expect_error_with_source("non-constant const binding" "tests/fixtures/constexpr_nonconstant.luna" "const binding 'value' is not a compile-time expression" "const let value = runtime_value();")
