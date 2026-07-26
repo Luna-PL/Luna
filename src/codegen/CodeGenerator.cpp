@@ -68,6 +68,7 @@ using moon::SlotDeclStmt;
 using moon::SlotInvokeStmt;
 using moon::Stmt;
 using moon::StringLiteralExpr;
+using moon::TryExpr;
 using moon::UnaryExpr;
 using moon::VariantConstructExpr;
 using moon::WhileStmt;
@@ -691,7 +692,8 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
             mBuilder->CreateStore(initVal, varPtr);
             mLocals[ls->name] = varPtr;
             if (auto* heap = dynamic_cast<HeapAllocExpr*>(ls->initializer.get()))
-                mLocalTypes[ls->name] = heap->allocatedType;
+                mLocalTypes[ls->name] = heap->type
+                    ? heap->type : heap->allocatedType;
         } else {
             valType = initVal->getType();
             if (valType->isVoidTy()) valType = mHelpers->i32Ty();
@@ -775,10 +777,17 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         generateStructuredContinuation(mCurrentSlotContinuation, func);
         return;
     }
-    if (dynamic_cast<AbortStmt*>(stmt)) {
+    if (auto* abort = dynamic_cast<AbortStmt*>(stmt)) {
         if (!mCurrentFragmentExit) {
             error("abort() reached code generation without an active fragment");
             return;
+        }
+        if (!abort->cleanups.empty()) {
+            for (const auto& cleanup : abort->cleanups)
+                emitCleanup(cleanup.place, cleanup.action);
+        } else {
+            for (const auto& name : abort->autoFrees)
+                emitCleanup(name, luna::ownership::CleanupAction::Deallocate);
         }
         mBuilder->CreateBr(mCurrentFragmentExit);
         return;
@@ -804,15 +813,12 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         // surrounding block's textual end) also covers returns nested in
         // conditionals and loops without double-freeing values already moved
         // or explicitly freed by that path.
-        for (const auto& name : rs->autoFrees) {
-            IdentifierExpr cleanup;
-            cleanup.name = name;
-            llvm::Value* ptr = generateExpr(&cleanup);
-            // Only heap-owning values lower to pointers. Stack arrays and
-            // borrowed slice fat pointers have no destructor in this phase.
-            if (!ptr->getType()->isPointerTy()) continue;
-            auto type = mLocalTypes.find(name);
-            emitLunaDeallocation(ptr, type == mLocalTypes.end() ? nullptr : type->second);
+        if (!rs->cleanups.empty()) {
+            for (const auto& cleanup : rs->cleanups)
+                emitCleanup(cleanup.place, cleanup.action);
+        } else {
+            for (const auto& name : rs->autoFrees)
+                emitCleanup(name, luna::ownership::CleanupAction::Deallocate);
         }
         if (mCurrentFragmentReturn) {
             // A fragment return ends only the fragment. It does not return
@@ -963,8 +969,12 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         return;
     }
     if (auto* freeStmt = dynamic_cast<FreeStmt*>(stmt)) {
-        llvm::Value* ptr = generateExpr(freeStmt->operand.get());
-        emitLunaDeallocation(ptr, allocationTypeForExpr(freeStmt->operand.get()));
+        if (auto* id = dynamic_cast<IdentifierExpr*>(freeStmt->operand.get()))
+            emitCleanup(id->name, freeStmt->action);
+        else {
+            llvm::Value* ptr = generateExpr(freeStmt->operand.get());
+            emitLunaDeallocation(ptr, allocationTypeForExpr(freeStmt->operand.get()));
+        }
         return;
     }
 }
@@ -1527,6 +1537,9 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         }
         if (objectType && objectType->kind == TypeKind::Reference)
             objectType = objectType->inner;
+        if (objectType && (objectType->kind == TypeKind::Rc ||
+                           objectType->kind == TypeKind::Arc))
+            objectType = objectType->inner;
         size_t index = fieldIndex(objectType, field->field);
         if (!objectType || index == static_cast<size_t>(-1))
             return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
@@ -1585,6 +1598,89 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
     }
     if (auto* launch = dynamic_cast<LaunchExpr*>(expr)) return generateLaunch(launch);
     if (auto* call = dynamic_cast<CallExpr*>(expr)) {
+        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
+            calleeId && (calleeId->name == "Ok" || calleeId->name == "Err") &&
+            call->args.size() == 1 && call->intrinsicType &&
+            call->intrinsicType->kind == TypeKind::Result) {
+            const bool isOk = calleeId->name == "Ok";
+            TypePtr payloadType = call->intrinsicType->typeArgs[
+                isOk ? 0 : 1];
+            llvm::Value* payload = generateExpr(call->args.front().get());
+            llvm::Value* bits = packResultPayload(payload, payloadType);
+            llvm::Value* result = llvm::UndefValue::get(
+                mHelpers->toLLVMType(call->intrinsicType));
+            result = mBuilder->CreateInsertValue(
+                result, llvm::ConstantInt::get(mHelpers->boolTy(), isOk ? 1 : 0),
+                {0}, isOk ? "ok.tag" : "err.tag");
+            return mBuilder->CreateInsertValue(
+                result, bits, {1}, isOk ? "ok.value" : "err.value");
+        }
+        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
+            calleeId && (calleeId->name == "is_ok" ||
+                         calleeId->name == "is_err") &&
+            call->args.size() == 1) {
+            llvm::Value* result = generateExpr(call->args.front().get());
+            llvm::Value* isOk =
+                mBuilder->CreateExtractValue(result, {0}, "result.is_ok");
+            return calleeId->name == "is_ok"
+                ? isOk : mBuilder->CreateNot(isOk, "result.is_err");
+        }
+        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
+            calleeId && (calleeId->name == "unwrap" ||
+                         calleeId->name == "unwrap_err") &&
+            call->args.size() == 1 && call->intrinsicType &&
+            call->intrinsicType->kind == TypeKind::Result) {
+            llvm::Value* result = generateExpr(call->args.front().get());
+            llvm::Value* isOk =
+                mBuilder->CreateExtractValue(result, {0}, "result.tag");
+            const bool wantOk = calleeId->name == "unwrap";
+            llvm::Value* valid = wantOk
+                ? isOk : mBuilder->CreateNot(isOk, "result.want_err");
+            auto* success = llvm::BasicBlock::Create(
+                *mCtx, "result.unwrap", mCurrentFunc);
+            auto* failure = llvm::BasicBlock::Create(
+                *mCtx, "result.unwrap.panic", mCurrentFunc);
+            mBuilder->CreateCondBr(valid, success, failure);
+            mBuilder->SetInsertPoint(failure);
+            auto panic = mModule->getOrInsertFunction(
+                "rt_panic_cstr", mHelpers->voidTy(), mHelpers->ptrTy());
+            auto* message = mBuilder->CreateGlobalString(
+                wantOk ? "called unwrap on Err" :
+                         "called unwrap_err on Ok",
+                "result.unwrap.message");
+            mBuilder->CreateCall(panic, {message});
+            mBuilder->CreateUnreachable();
+            mBuilder->SetInsertPoint(success);
+            llvm::Value* bits =
+                mBuilder->CreateExtractValue(result, {1}, "result.payload");
+            return unpackResultPayload(
+                bits, call->intrinsicType->typeArgs[wantOk ? 0 : 1]);
+        }
+        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
+            calleeId && calleeId->name == "panic" &&
+            call->args.size() == 1) {
+            llvm::Value* message = generateExpr(call->args.front().get());
+            auto panic = mModule->getOrInsertFunction(
+                "rt_panic_cstr", mHelpers->voidTy(), mHelpers->ptrTy());
+            mBuilder->CreateCall(panic, {
+                coerceCallArgument(message, mHelpers->ptrTy())
+            });
+            mBuilder->CreateUnreachable();
+            return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+        }
+        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
+            calleeId && calleeId->name == "clone" && call->args.size() == 1) {
+            llvm::Value* handle = generateExpr(call->args.front().get());
+            const bool atomic = call->type &&
+                call->type->kind == TypeKind::Arc;
+            auto retain = mModule->getOrInsertFunction(
+                atomic ? "rt_arc_retain" : "rt_rc_retain",
+                mHelpers->voidTy(), mHelpers->ptrTy());
+            mBuilder->CreateCall(retain, {
+                coerceCallArgument(handle, mHelpers->ptrTy())
+            });
+            return handle;
+        }
         if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get()); calleeId && calleeId->name == "slice" && call->args.size() == 3) {
             auto* source = generateExpr(call->args[0].get());
             auto* start = coerceCallArgument(generateExpr(call->args[1].get()), mHelpers->i32Ty());
@@ -1779,8 +1875,14 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         auto* sizeVal = llvm::ConstantInt::get(mHelpers->sizeTy(), sz);
         auto* alignmentVal = llvm::ConstantInt::get(
             mHelpers->sizeTy(), typeAlignment(ha->allocatedType));
+        const char* allocationSymbol = "rt_alloc";
+        if (ha->storage == HeapStorageKind::Rc)
+            allocationSymbol = "rt_rc_alloc";
+        else if (ha->storage == HeapStorageKind::Arc)
+            allocationSymbol = "rt_arc_alloc";
         auto rtAlloc = mModule->getOrInsertFunction(
-            "rt_alloc", mHelpers->ptrTy(), mHelpers->sizeTy(), mHelpers->sizeTy());
+            allocationSymbol, mHelpers->ptrTy(),
+            mHelpers->sizeTy(), mHelpers->sizeTy());
         llvm::Value* ptr = mBuilder->CreateCall(
             rtAlloc, {sizeVal, alignmentVal}, "heapalloc");
 
@@ -1808,6 +1910,24 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             }
         }
         return ptr;
+    }
+    if (auto* propagation = dynamic_cast<TryExpr*>(expr)) {
+        llvm::Value* result = generateExpr(propagation->operand.get());
+        llvm::Value* isOk =
+            mBuilder->CreateExtractValue(result, {0}, "try.is_ok");
+        auto* success = llvm::BasicBlock::Create(
+            *mCtx, "try.success", mCurrentFunc);
+        auto* failure = llvm::BasicBlock::Create(
+            *mCtx, "try.error", mCurrentFunc);
+        mBuilder->CreateCondBr(isOk, success, failure);
+        mBuilder->SetInsertPoint(failure);
+        for (const auto& cleanup : propagation->cleanups)
+            emitCleanup(cleanup.place, cleanup.action);
+        mBuilder->CreateRet(result);
+        mBuilder->SetInsertPoint(success);
+        llvm::Value* bits =
+            mBuilder->CreateExtractValue(result, {1}, "try.value");
+        return unpackResultPayload(bits, propagation->valueType);
     }
     if (auto* as = dynamic_cast<AssignExpr*>(expr)) {
         llvm::Value* rhs = generateExpr(as->rhs.get());
@@ -2569,6 +2689,221 @@ void CodeGenerator::emitLunaDeallocation(llvm::Value* pointer, const TypePtr& ty
     });
 }
 
+llvm::Value* CodeGenerator::packResultPayload(
+    llvm::Value* value, const TypePtr& type) {
+    if (!value || !type || type->kind == TypeKind::Unit)
+        return llvm::ConstantInt::get(mHelpers->i64Ty(), 0);
+    llvm::Type* source = value->getType();
+    if (source->isPointerTy())
+        return mBuilder->CreatePtrToInt(
+            value, mHelpers->i64Ty(), "result.payload.bits");
+    if (source->isIntegerTy())
+        return mBuilder->CreateZExtOrTrunc(
+            value, mHelpers->i64Ty(), "result.payload.bits");
+    if (source->isDoubleTy())
+        return mBuilder->CreateBitCast(
+            value, mHelpers->i64Ty(), "result.payload.bits");
+    if (source->isFloatTy()) {
+        auto* narrow = mBuilder->CreateBitCast(
+            value, mHelpers->i32Ty(), "result.payload.f32");
+        return mBuilder->CreateZExt(
+            narrow, mHelpers->i64Ty(), "result.payload.bits");
+    }
+    error("Result payload type '" + type->toString() +
+          "' does not fit the initial one-word Result ABI");
+    return llvm::ConstantInt::get(mHelpers->i64Ty(), 0);
+}
+
+llvm::Value* CodeGenerator::unpackResultPayload(
+    llvm::Value* bits, const TypePtr& type) {
+    if (!type || type->kind == TypeKind::Unit)
+        return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+    llvm::Type* target = mHelpers->toLLVMType(type);
+    if (target->isPointerTy())
+        return mBuilder->CreateIntToPtr(bits, target, "result.payload");
+    if (target->isIntegerTy())
+        return mBuilder->CreateTruncOrBitCast(bits, target, "result.payload");
+    if (target->isDoubleTy())
+        return mBuilder->CreateBitCast(bits, target, "result.payload");
+    if (target->isFloatTy()) {
+        auto* narrow = mBuilder->CreateTrunc(
+            bits, mHelpers->i32Ty(), "result.payload.f32");
+        return mBuilder->CreateBitCast(narrow, target, "result.payload");
+    }
+    error("Result payload type '" + type->toString() +
+          "' does not fit the initial one-word Result ABI");
+    return llvm::PoisonValue::get(target);
+}
+
+void CodeGenerator::emitOwnedPayloadCleanup(
+    llvm::Value* value, const TypePtr& type, const std::string& label) {
+    if (!value || !type ||
+        defaultUsageForType(type) == luna::ownership::Usage::Copy)
+        return;
+    if (type->kind == TypeKind::Rc || type->kind == TypeKind::Arc) {
+        const bool atomic = type->kind == TypeKind::Arc;
+        auto release = mModule->getOrInsertFunction(
+            atomic ? "rt_arc_release" : "rt_rc_release",
+            mHelpers->i32Ty(), mHelpers->ptrTy());
+        auto* lastCount = mBuilder->CreateCall(
+            release, {coerceCallArgument(value, mHelpers->ptrTy())},
+            label + ".last");
+        auto* last = mBuilder->CreateICmpNE(
+            lastCount, llvm::ConstantInt::get(mHelpers->i32Ty(), 0));
+        auto* finalBlock = llvm::BasicBlock::Create(
+            *mCtx, label + ".final", mCurrentFunc);
+        auto* continueBlock = llvm::BasicBlock::Create(
+            *mCtx, label + ".released", mCurrentFunc);
+        mBuilder->CreateCondBr(last, finalBlock, continueBlock);
+        mBuilder->SetInsertPoint(finalBlock);
+        TypePtr payload = type->inner;
+        if (payload && payload->sysmeta.resource.needsDrop) {
+            const std::string& symbol = payload->sysmeta.abi.dropGlueSymbol;
+            auto drop = mFunctions.find(symbol);
+            if (symbol.empty() || drop == mFunctions.end()) {
+                error("shared Result payload has no compiler-validated drop glue");
+            } else {
+                mBuilder->CreateCall(drop->second, {
+                    coerceCallArgument(
+                        value, drop->second->getFunctionType()->getParamType(0))
+                });
+            }
+        }
+        auto deallocate = mModule->getOrInsertFunction(
+            "rt_shared_dealloc", mHelpers->voidTy(), mHelpers->ptrTy());
+        mBuilder->CreateCall(
+            deallocate, {coerceCallArgument(value, mHelpers->ptrTy())});
+        mBuilder->CreateBr(continueBlock);
+        mBuilder->SetInsertPoint(continueBlock);
+        return;
+    }
+    if (!value->getType()->isPointerTy()) {
+        error("move-only Result payload '" + type->toString() +
+              "' is not representable by the initial cleanup ABI");
+        return;
+    }
+    if (type->sysmeta.resource.needsDrop) {
+        const std::string& symbol = type->sysmeta.abi.dropGlueSymbol;
+        auto drop = mFunctions.find(symbol);
+        if (symbol.empty() || drop == mFunctions.end()) {
+            error("Result payload has no compiler-validated drop glue");
+        } else {
+            mBuilder->CreateCall(drop->second, {
+                coerceCallArgument(
+                    value, drop->second->getFunctionType()->getParamType(0))
+            });
+        }
+    }
+    emitLunaDeallocation(value, type);
+}
+
+void CodeGenerator::emitCleanup(
+    const std::string& place, luna::ownership::CleanupAction action) {
+    auto local = mLocals.find(place);
+    if (local == mLocals.end()) {
+        error("cleanup references unknown local '" + place + "'");
+        return;
+    }
+    llvm::Value* pointer = mBuilder->CreateLoad(
+        local->second->getAllocatedType(), local->second, place + ".cleanup");
+    TypePtr type;
+    auto typed = mLocalTypes.find(place);
+    if (typed != mLocalTypes.end()) type = typed->second;
+    if (action == luna::ownership::CleanupAction::ResultDrop) {
+        if (!type || type->kind != TypeKind::Result ||
+            type->typeArgs.size() != 2) {
+            error("Result cleanup for '" + place +
+                  "' has no validated Result type");
+            return;
+        }
+        llvm::Value* isOk =
+            mBuilder->CreateExtractValue(pointer, {0}, place + ".is_ok");
+        llvm::Value* bits =
+            mBuilder->CreateExtractValue(pointer, {1}, place + ".payload");
+        auto* okBlock = llvm::BasicBlock::Create(
+            *mCtx, place + ".drop_ok", mCurrentFunc);
+        auto* errorBlock = llvm::BasicBlock::Create(
+            *mCtx, place + ".drop_err", mCurrentFunc);
+        auto* continueBlock = llvm::BasicBlock::Create(
+            *mCtx, place + ".dropped", mCurrentFunc);
+        mBuilder->CreateCondBr(isOk, okBlock, errorBlock);
+        mBuilder->SetInsertPoint(okBlock);
+        emitOwnedPayloadCleanup(
+            unpackResultPayload(bits, type->typeArgs[0]),
+            type->typeArgs[0], place + ".ok");
+        if (!mBuilder->GetInsertBlock()->getTerminator())
+            mBuilder->CreateBr(continueBlock);
+        mBuilder->SetInsertPoint(errorBlock);
+        emitOwnedPayloadCleanup(
+            unpackResultPayload(bits, type->typeArgs[1]),
+            type->typeArgs[1], place + ".err");
+        if (!mBuilder->GetInsertBlock()->getTerminator())
+            mBuilder->CreateBr(continueBlock);
+        mBuilder->SetInsertPoint(continueBlock);
+        return;
+    }
+    if (!pointer->getType()->isPointerTy()) return;
+    if (action == luna::ownership::CleanupAction::RcRelease ||
+        action == luna::ownership::CleanupAction::ArcRelease) {
+        const bool atomic =
+            action == luna::ownership::CleanupAction::ArcRelease;
+        auto release = mModule->getOrInsertFunction(
+            atomic ? "rt_arc_release" : "rt_rc_release",
+            mHelpers->i32Ty(), mHelpers->ptrTy());
+        auto* isLastCount = mBuilder->CreateCall(
+            release, {mBuilder->CreateBitCast(pointer, mHelpers->ptrTy())},
+            atomic ? "arc.last" : "rc.last");
+        auto* isLast = mBuilder->CreateICmpNE(
+            isLastCount, llvm::ConstantInt::get(mHelpers->i32Ty(), 0));
+        auto* finalBlock = llvm::BasicBlock::Create(
+            *mCtx, atomic ? "arc.final" : "rc.final", mCurrentFunc);
+        auto* continueBlock = llvm::BasicBlock::Create(
+            *mCtx, atomic ? "arc.released" : "rc.released", mCurrentFunc);
+        mBuilder->CreateCondBr(isLast, finalBlock, continueBlock);
+        mBuilder->SetInsertPoint(finalBlock);
+
+        TypePtr payload = type &&
+            (type->kind == TypeKind::Rc || type->kind == TypeKind::Arc)
+            ? type->inner : nullptr;
+        if (payload && payload->sysmeta.resource.needsDrop) {
+            const std::string& symbol = payload->sysmeta.abi.dropGlueSymbol;
+            auto drop = mFunctions.find(symbol);
+            if (symbol.empty() || drop == mFunctions.end()) {
+                error("final shared cleanup for '" + place +
+                      "' has no compiler-validated payload drop glue");
+            } else {
+                mBuilder->CreateCall(drop->second, {
+                    coerceCallArgument(pointer,
+                        drop->second->getFunctionType()->getParamType(0))
+                });
+            }
+        }
+        auto deallocate = mModule->getOrInsertFunction(
+            "rt_shared_dealloc", mHelpers->voidTy(), mHelpers->ptrTy());
+        mBuilder->CreateCall(deallocate, {
+            mBuilder->CreateBitCast(pointer, mHelpers->ptrTy())
+        });
+        mBuilder->CreateBr(continueBlock);
+        mBuilder->SetInsertPoint(continueBlock);
+        return;
+    }
+    if (action == luna::ownership::CleanupAction::Drop) {
+        const std::string symbol = type
+            ? type->sysmeta.abi.dropGlueSymbol : std::string{};
+        auto drop = mFunctions.find(symbol);
+        if (symbol.empty() || drop == mFunctions.end()) {
+            error("drop cleanup for '" + place +
+                  "' has no compiler-validated drop glue");
+            return;
+        }
+        mBuilder->CreateCall(drop->second, {
+            coerceCallArgument(pointer,
+                drop->second->getFunctionType()->getParamType(0))
+        });
+    }
+    emitLunaDeallocation(pointer, type);
+}
+
 // ─── Helpers ───────────────────────────────────────────────────────
 
 llvm::AllocaInst* CodeGenerator::createEntryBlockAlloca(
@@ -2616,6 +2951,14 @@ int CodeGenerator::jitRun() {
     bindRuntime("rt_alloc", &rt_alloc);
     bindRuntime("rt_realloc", &rt_realloc);
     bindRuntime("rt_dealloc", &rt_dealloc);
+    bindRuntime("rt_rc_alloc", &rt_rc_alloc);
+    bindRuntime("rt_rc_retain", &rt_rc_retain);
+    bindRuntime("rt_rc_release", &rt_rc_release);
+    bindRuntime("rt_arc_alloc", &rt_arc_alloc);
+    bindRuntime("rt_arc_retain", &rt_arc_retain);
+    bindRuntime("rt_arc_release", &rt_arc_release);
+    bindRuntime("rt_shared_dealloc", &rt_shared_dealloc);
+    bindRuntime("rt_panic_cstr", &rt_panic_cstr);
     bindRuntime("rt_host_services_v1", &rt_host_services_v1);
     bindRuntime("rt_malloc", &rt_malloc);
     bindRuntime("rt_free", &rt_free);

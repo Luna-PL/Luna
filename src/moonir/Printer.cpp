@@ -55,6 +55,9 @@ void Printer::print(const Module& module, std::ostream& out) const {
             << " spelling \"" << type.displayName << '"';
         if (!type.nominalDeclarationId.empty())
             out << " nominal @" << type.nominalDeclarationId;
+        out << " resource "
+            << luna::sysmeta::resourceManagementName(
+                type.sysmeta.resource.management);
         out << "\n";
     }
 
@@ -78,6 +81,23 @@ void Printer::print(const Module& module, std::ostream& out) const {
         if (record.type) out << " : " << typeName(record.type);
         printLocation(record.location, out);
         out << "\n";
+        out << "    moon.sysmeta v" << record.sysmeta.schemaMajor << '.'
+            << record.sysmeta.schemaMinor
+            << " control "
+            << luna::sysmeta::controlFormName(record.sysmeta.control.form)
+            << '/' << luna::sysmeta::cardinalityName(
+                record.sysmeta.control.cardinality)
+            << " storage "
+            << luna::sysmeta::continuationStorageName(
+                record.sysmeta.control.storage)
+            << " forwarding "
+            << luna::sysmeta::forwardingName(
+                record.sysmeta.control.forwarding)
+            << " resource "
+            << luna::sysmeta::resourceManagementName(
+                record.sysmeta.resource.management)
+            << " params " << record.sysmeta.resource.parameters.size()
+            << "\n";
         for (const auto& metadata : record.metadata) {
             out << "    moon.attach @" << metadata.schemaId << " retention "
                 << retentionName(metadata.retention) << " values "

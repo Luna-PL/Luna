@@ -19,9 +19,11 @@ We will comprehensively refine the design of the reflection mechanism to better 
 
 ### 3. Error handling before a broad standard library
 
-Define first-class, ownership-aware error propagation before stabilizing file,
-I/O, allocation and package APIs. `Result`-style values, cleanup on error paths
-and FFI/runtime error conversion must agree in Sema, MoonIR, JIT and AOT.
+The first executable slice is now present: `Result<T, E>`, intrinsic
+construction/inspection, ownership-aware `?`, active-payload cleanup and
+abort-style `panic` agree in Sema, MoonIR, LLVM JIT and AOT. Next, generalize the
+payload layout, add static error-conversion traits, and broaden JIT/AOT parity
+before stabilizing file, I/O, allocation and package error APIs.
 
 ### 4. Package and standard-library foundation
 

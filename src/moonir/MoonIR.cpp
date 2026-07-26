@@ -52,6 +52,7 @@ void Module::registerType(const TypePtr& type) {
     record.domain = type->domain;
     record.identityMode = type->identityMode;
     record.kind = type->kind;
+    record.sysmeta = type->sysmeta;
     record.displayName = type->toString();
     record.nominalDeclarationId = type->nominalId;
     record.canonicalType = canonicalTypeValue;

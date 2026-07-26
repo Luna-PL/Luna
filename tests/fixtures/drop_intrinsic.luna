@@ -1,0 +1,15 @@
+nominal struct Resource {
+    value: i32;
+}
+
+impl Drop for Resource {
+    fn drop(resource: &mut Resource) -> unit {
+        print(91);
+    }
+}
+
+fn main() -> i32 {
+    let resource = new Resource(7);
+    print(92);
+    return 0;
+}

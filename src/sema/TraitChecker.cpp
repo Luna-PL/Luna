@@ -33,6 +33,9 @@ bool TraitChecker::check(Program* program) {
 }
 
 void TraitChecker::registerTraits(Program* program) {
+    mTraitSigs[luna::sysmeta::DropTraitId] = {
+        {luna::sysmeta::DropMethodName, {}, TyUnit}
+    };
     for (auto& decl : program->declarations) {
         if (auto* td = dynamic_cast<TraitDecl*>(decl.get())) {
             std::vector<MethodSig> sigs;

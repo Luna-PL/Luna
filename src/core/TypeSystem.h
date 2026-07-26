@@ -4,6 +4,7 @@
 
 #include "TypeIdentity.h"
 #include "Ownership.h"
+#include "SysMeta.h"
 
 #include <memory>
 #include <string>
@@ -18,7 +19,8 @@ enum class ContinuationKind { Interceptor, Context };
 enum class TypeKind {
     I8, I16, I32, I64, U8, U16, U32, U64, USize, ISize,
     F32, F64, Bool, String, CStr, RawPointer, Unit,
-    Struct, Record, Enum, Trait, TypeParam, Reference, Function, Slot, Fragment,
+    Struct, Record, Enum, Result, Trait, TypeParam, Reference, Rc, Arc,
+    Function, Slot, Fragment,
     DeviceBuffer, Event, Array, Slice,
     Metadata, MetadataView, DeclarationView, DeclarationRef,
     InferenceVar,
@@ -56,6 +58,9 @@ struct Type {
     // erase this from the machine ABI only after MoonIR verification.
     std::vector<luna::ownership::Contract> paramContracts;
     luna::ownership::Contract returnContract;
+    // Compiler-derived, read-only semantic facts. This replaces a separate
+    // user-visible effect summary without turning sysmeta into user metadata.
+    luna::sysmeta::Facts sysmeta;
     // Slots and fragments are structural continuations. `isMultiShot` is part
     // of their type: a Many fragment cannot bind to a Once-only slot.
     bool isMultiShot = false;
@@ -101,6 +106,13 @@ struct Type {
         t->variants = std::move(variants);
         return t;
     }
+    static TypePtr makeResult(TypePtr value, TypePtr error) {
+        auto t = std::make_shared<Type>();
+        t->kind = TypeKind::Result;
+        t->name = "Result";
+        t->typeArgs = {std::move(value), std::move(error)};
+        return t;
+    }
     static TypePtr makeTrait(const std::string& n) {
         auto t = std::make_shared<Type>();
         t->kind = TypeKind::Trait; t->name = n;
@@ -124,6 +136,22 @@ struct Type {
     static TypePtr makeRawPointer(TypePtr inner) {
         auto t = std::make_shared<Type>();
         t->kind = TypeKind::RawPointer; t->inner = std::move(inner);
+        return t;
+    }
+    static TypePtr makeRc(TypePtr inner) {
+        auto t = std::make_shared<Type>();
+        t->kind = TypeKind::Rc;
+        t->inner = std::move(inner);
+        t->sysmeta.resource.management =
+            luna::sysmeta::ResourceManagement::Rc;
+        return t;
+    }
+    static TypePtr makeArc(TypePtr inner) {
+        auto t = std::make_shared<Type>();
+        t->kind = TypeKind::Arc;
+        t->inner = std::move(inner);
+        t->sysmeta.resource.management =
+            luna::sysmeta::ResourceManagement::Arc;
         return t;
     }
     static TypePtr makeDeviceBuffer(TypePtr element) {
@@ -190,26 +218,76 @@ struct Type {
         if (t->paramContracts.empty())
             t->paramContracts.resize(t->paramTypes.size());
         t->returnContract = resultContract;
+        t->sysmeta.resource.parameters = t->paramContracts;
+        t->sysmeta.resource.result = t->returnContract;
         return t;
     }
-    static TypePtr makeSlot(TypeVec params, TypePtr ret = nullptr, bool multiShot = false,
-                            ContinuationKind behavior = ContinuationKind::Context) {
+    static TypePtr makeSlot(
+        TypeVec params, TypePtr ret = nullptr, bool multiShot = false,
+        ContinuationKind behavior = ContinuationKind::Context,
+        std::vector<luna::ownership::Contract> contracts = {},
+        luna::ownership::Contract resultContract = {}) {
         auto t = std::make_shared<Type>();
         t->kind = TypeKind::Slot;
         t->paramTypes = std::move(params);
         t->returnType = ret ? std::move(ret) : makePrimitive(TypeKind::Unit);
+        t->paramContracts = std::move(contracts);
+        if (t->paramContracts.empty())
+            t->paramContracts.resize(t->paramTypes.size());
+        t->returnContract = resultContract;
         t->isMultiShot = multiShot;
         t->continuationKind = behavior;
+        t->sysmeta.resource.parameters = t->paramContracts;
+        t->sysmeta.resource.result = t->returnContract;
+        t->sysmeta.control.form =
+            behavior == ContinuationKind::Interceptor
+                ? luna::sysmeta::ControlForm::Interceptor
+                : luna::sysmeta::ControlForm::Context;
+        t->sysmeta.control.cardinality = multiShot
+            ? luna::sysmeta::Cardinality::Many
+            : luna::sysmeta::Cardinality::Once;
+        t->sysmeta.control.storage =
+            luna::sysmeta::ContinuationStorage::ScopedStack;
+        t->sysmeta.control.forwarding =
+            behavior == ContinuationKind::Interceptor
+                ? luna::sysmeta::Forwarding::Automatic
+                : luna::sysmeta::Forwarding::Explicit;
+        t->sysmeta.control.abortPermitted = true;
+        t->sysmeta.capability.hostOnly = true;
         return t;
     }
-    static TypePtr makeFragment(TypeVec params, TypePtr ret = nullptr, bool multiShot = false,
-                                ContinuationKind behavior = ContinuationKind::Context) {
+    static TypePtr makeFragment(
+        TypeVec params, TypePtr ret = nullptr, bool multiShot = false,
+        ContinuationKind behavior = ContinuationKind::Context,
+        std::vector<luna::ownership::Contract> contracts = {},
+        luna::ownership::Contract resultContract = {}) {
         auto t = std::make_shared<Type>();
         t->kind = TypeKind::Fragment;
         t->paramTypes = std::move(params);
         t->returnType = ret ? std::move(ret) : makePrimitive(TypeKind::Unit);
+        t->paramContracts = std::move(contracts);
+        if (t->paramContracts.empty())
+            t->paramContracts.resize(t->paramTypes.size());
+        t->returnContract = resultContract;
         t->isMultiShot = multiShot;
         t->continuationKind = behavior;
+        t->sysmeta.resource.parameters = t->paramContracts;
+        t->sysmeta.resource.result = t->returnContract;
+        t->sysmeta.control.form =
+            behavior == ContinuationKind::Interceptor
+                ? luna::sysmeta::ControlForm::Interceptor
+                : luna::sysmeta::ControlForm::Context;
+        t->sysmeta.control.cardinality = multiShot
+            ? luna::sysmeta::Cardinality::Many
+            : luna::sysmeta::Cardinality::Once;
+        t->sysmeta.control.storage =
+            luna::sysmeta::ContinuationStorage::ScopedStack;
+        t->sysmeta.control.forwarding =
+            behavior == ContinuationKind::Interceptor
+                ? luna::sysmeta::Forwarding::Automatic
+                : luna::sysmeta::Forwarding::Explicit;
+        t->sysmeta.control.abortPermitted = true;
+        t->sysmeta.capability.hostOnly = true;
         return t;
     }
     static TypePtr makeUnknown() {
@@ -229,9 +307,15 @@ struct Type {
     }
 
     bool isHeapType() const {
+        if (kind == TypeKind::Result) {
+            for (const auto& argument : typeArgs)
+                if (argument && argument->isHeapType()) return true;
+            return false;
+        }
         return kind == TypeKind::String || kind == TypeKind::Struct ||
                kind == TypeKind::Record || kind == TypeKind::Enum ||
-               kind == TypeKind::DeviceBuffer;
+               kind == TypeKind::DeviceBuffer || kind == TypeKind::Rc ||
+               kind == TypeKind::Arc;
     }
 
     std::string toString() const {
@@ -253,6 +337,10 @@ struct Type {
             case TypeKind::CStr: return "cstr";
             case TypeKind::RawPointer:
                 return "raw<" + (inner ? inner->toString() : "?") + ">";
+            case TypeKind::Rc:
+                return "rc<" + (inner ? inner->toString() : "?") + ">";
+            case TypeKind::Arc:
+                return "arc<" + (inner ? inner->toString() : "?") + ">";
             case TypeKind::DeviceBuffer:
                 return "device_buffer<" + (inner ? inner->toString() : "?") + ">";
             case TypeKind::Array:
@@ -282,6 +370,12 @@ struct Type {
                 }
                 return result;
             }
+            case TypeKind::Result:
+                return "Result<" +
+                    (typeArgs.size() > 0 && typeArgs[0]
+                        ? typeArgs[0]->toString() : "?") + ", " +
+                    (typeArgs.size() > 1 && typeArgs[1]
+                        ? typeArgs[1]->toString() : "?") + ">";
             case TypeKind::Trait: return "trait " + name;
             case TypeKind::TypeParam: return "'" + name;
             case TypeKind::Reference:
@@ -305,6 +399,21 @@ struct Type {
 
 inline luna::ownership::Usage defaultUsageForType(const TypePtr& type) {
     if (!type) return luna::ownership::Usage::Copy;
+    if (type->kind == TypeKind::Result) {
+        // A Result owns exactly one active payload, so its usage is the
+        // strongest usage of either variant. Scalar-only Results remain Copy;
+        // resource-bearing Results are Affine, and a linear payload makes the
+        // whole container Linear.
+        auto usage = luna::ownership::Usage::Copy;
+        for (const auto& argument : type->typeArgs) {
+            const auto item = defaultUsageForType(argument);
+            if (item == luna::ownership::Usage::Linear)
+                return luna::ownership::Usage::Linear;
+            if (item == luna::ownership::Usage::Affine)
+                usage = luna::ownership::Usage::Affine;
+        }
+        return usage;
+    }
     if (type->kind == TypeKind::Event || type->kind == TypeKind::DeviceBuffer)
         return luna::ownership::Usage::Linear;
     if (type->isHeapType()) return luna::ownership::Usage::Affine;

@@ -104,17 +104,22 @@ struct LetStmt : Stmt {
     TypePtr inferredType;
 };
 
+// A path-specific cleanup is attached to the control transfer that leaves
+// the owning scope.  Keeping this independent from ReturnStmt is important:
+// fragment abort and future control-exit edges need the same resource
+// semantics.
+struct CleanupObligation {
+    std::string place;
+    luna::ownership::CleanupAction action = luna::ownership::CleanupAction::Drop;
+    TypePtr type;
+};
+
 struct ReturnStmt : Stmt {
     std::unique_ptr<Expr> value; // nullptr for unit return
     // Filled by ownership checking.  These are non-linear heap values that
     // remain live on this exact return path and therefore need runtime
     // cleanup before the LLVM `ret` is emitted.
     std::vector<std::string> autoFrees;
-    struct CleanupObligation {
-        std::string place;
-        luna::ownership::CleanupAction action = luna::ownership::CleanupAction::Drop;
-        TypePtr type;
-    };
     std::vector<CleanupObligation> cleanups;
 };
 
@@ -141,6 +146,8 @@ struct ForStmt : Stmt {
 
 struct FreeStmt : Stmt {
     std::unique_ptr<Expr> operand;
+    luna::ownership::CleanupAction action =
+        luna::ownership::CleanupAction::Deallocate;
 };
 
 // A local slot either declares an explicit interface (`slot s(x: T);`) or
@@ -177,7 +184,12 @@ struct SlotInvokeStmt : Stmt {
 };
 
 struct ResumeStmt : Stmt {};
-struct AbortStmt : Stmt {};
+struct AbortStmt : Stmt {
+    // Fragment-local affine owners that must be released before control skips
+    // the continuation and rejoins after the slot.
+    std::vector<std::string> autoFrees;
+    std::vector<CleanupObligation> cleanups;
+};
 
 struct AwaitStmt : Stmt {
     std::unique_ptr<Expr> event;
@@ -250,6 +262,7 @@ struct CallExpr : Expr {
     // though the resolved value type is still `raw<T>`.
     bool returnsLinear = false;
     luna::ownership::Usage returnUsage = luna::ownership::Usage::Copy;
+    TypePtr intrinsicType;
     std::optional<std::variant<int64_t, double, bool, std::string>> compileTimeValue;
     // Static declaration reflection keeps identity in the frontend. It is
     // erased after a surrounding reflection query or select is folded.
@@ -294,6 +307,16 @@ struct HeapAllocExpr : Expr {
     std::unique_ptr<Expr> initializer; // CallExpr to construct
     std::unique_ptr<TypeAST> allocatedTypeAST;
     TypePtr allocatedType;             // Set during sema
+    TypePtr resultType;                // Unique T, rc<T>, or arc<T>
+    HeapStorageKind storage = HeapStorageKind::Unique;
+};
+
+struct TryExpr : Expr {
+    std::unique_ptr<Expr> operand;
+    TypePtr resultType;
+    TypePtr valueType;
+    TypePtr errorType;
+    std::vector<CleanupObligation> cleanups;
 };
 
 struct MoveExpr : Expr {

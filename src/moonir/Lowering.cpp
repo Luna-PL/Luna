@@ -250,7 +250,29 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         value->resolvedSymbolName = call->resolvedSymbolName;
         value->returnsLinear = call->returnsLinear;
         value->returnUsage = call->returnUsage;
+        value->intrinsicType = call->intrinsicType;
         value->compileTimeValue = call->compileTimeValue;
+        if (call->intrinsicType) {
+            if (auto* callee = dynamic_cast<const ::IdentifierExpr*>(
+                    call->callee.get())) {
+                if (callee->name == "Ok" || callee->name == "Err")
+                    value->type = call->intrinsicType;
+                else if (callee->name == "is_ok" || callee->name == "is_err")
+                    value->type = TyBool;
+                else if (callee->name == "unwrap" &&
+                         call->intrinsicType->typeArgs.size() == 2)
+                    value->type = call->intrinsicType->typeArgs[0];
+                else if (callee->name == "unwrap_err" &&
+                         call->intrinsicType->typeArgs.size() == 2)
+                    value->type = call->intrinsicType->typeArgs[1];
+                else if (callee->name == "panic")
+                    value->type = TyUnit;
+            }
+            if (mModule) mModule->registerType(call->intrinsicType);
+        } else if (!call->typeArgs.empty() &&
+            (call->typeArgs.front()->kind == TypeKind::Rc ||
+             call->typeArgs.front()->kind == TypeKind::Arc))
+            value->type = call->typeArgs.front();
         result = std::move(value);
     } else if (auto* launch = dynamic_cast<const ::LaunchExpr*>(expression)) {
         auto value = std::make_unique<moon::LaunchExpr>();
@@ -294,7 +316,27 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         auto value = std::make_unique<moon::HeapAllocExpr>();
         value->initializer = lowerExpr(allocation->initializer.get());
         value->allocatedType = allocation->allocatedType;
-        value->type = Type::makeRawPointer(allocation->allocatedType);
+        value->storage = allocation->storage;
+        value->type = allocation->resultType
+            ? allocation->resultType
+            : Type::makeRawPointer(allocation->allocatedType);
+        result = std::move(value);
+    } else if (auto* propagation = dynamic_cast<const ::TryExpr*>(expression)) {
+        auto value = std::make_unique<moon::TryExpr>();
+        value->operand = lowerExpr(propagation->operand.get());
+        value->resultType = propagation->resultType;
+        value->valueType = propagation->valueType;
+        value->errorType = propagation->errorType;
+        value->type = propagation->valueType;
+        for (const auto& cleanup : propagation->cleanups) {
+            moon::CleanupObligation lowered;
+            lowered.place = cleanup.place;
+            lowered.action = cleanup.action;
+            lowered.typeId = cleanup.type
+                ? luna::types::typeId(cleanup.type)
+                : luna::types::TypeId{};
+            value->cleanups.push_back(std::move(lowered));
+        }
         result = std::move(value);
     } else if (auto* move = dynamic_cast<const ::MoveExpr*>(expression)) {
         auto value = std::make_unique<moon::MoveExpr>();
@@ -478,6 +520,7 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
     } else if (auto* release = dynamic_cast<const ::FreeStmt*>(statement)) {
         auto value = std::make_unique<moon::FreeStmt>();
         value->operand = lowerExpr(release->operand.get());
+        value->action = release->action;
         result = std::move(value);
     } else if (auto* slot = dynamic_cast<const ::SlotDeclStmt*>(statement)) {
         auto value = std::make_unique<moon::SlotDeclStmt>();
@@ -520,8 +563,20 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         result = std::move(value);
     } else if (dynamic_cast<const ::ResumeStmt*>(statement)) {
         result = std::make_unique<moon::ResumeStmt>();
-    } else if (dynamic_cast<const ::AbortStmt*>(statement)) {
-        result = std::make_unique<moon::AbortStmt>();
+    } else if (auto* abort = dynamic_cast<const ::AbortStmt*>(statement)) {
+        auto value = std::make_unique<moon::AbortStmt>();
+        value->autoFrees = abort->autoFrees;
+        for (const auto& cleanup : abort->cleanups) {
+            moon::CleanupObligation lowered;
+            lowered.place = cleanup.place;
+            lowered.action = cleanup.action;
+            if (cleanup.type) {
+                if (mModule) mModule->registerType(cleanup.type);
+                lowered.typeId = luna::types::typeId(cleanup.type);
+            }
+            value->cleanups.push_back(std::move(lowered));
+        }
+        result = std::move(value);
     } else if (auto* await = dynamic_cast<const ::AwaitStmt*>(statement)) {
         auto value = std::make_unique<moon::AwaitStmt>();
         value->event = lowerExpr(await->event.get());
@@ -601,6 +656,15 @@ std::unique_ptr<moon::FunctionDecl> LunaLowerer::lowerFunction(
     const auto callableType = Type::makeFunction(
         std::move(parameterTypes), result->returnType, std::move(parameterContracts),
         {luna::ownership::Relation::Owned, result->returnUsage});
+    result->sysmeta = callableType->sysmeta;
+    result->sysmeta.capability.ffi =
+        result->isExtern || !result->abi.empty();
+    result->sysmeta.capability.gpu = result->isKernel;
+    result->sysmeta.capability.hostOnly = !result->isKernel;
+    result->sysmeta.capability.runtimeRetained =
+        function->retention != RetentionKind::CompileTime;
+    result->sysmeta.abi.stableBoundary =
+        result->isExtern || !result->abi.empty();
     addDeclarationRecord(*result, DeclarationKind::Function, callableType);
     if (!result->isKernel && !result->isSelector &&
                (result->typeParams.empty() || result->isTemplateInstance)) {
@@ -644,6 +708,8 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
             result->params.push_back(lowerParam(parameter));
         result->body = lowerBlock(fragment->body.get());
         result->structuralType = fragment->structuralType;
+        if (result->structuralType)
+            result->sysmeta = result->structuralType->sysmeta;
         lowerCommonDeclaration(fragment, *result);
         addDeclarationRecord(*result, DeclarationKind::Fragment, result->structuralType);
         return result;
@@ -759,6 +825,8 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         record.linkageName = metadata->generatedSymbolName;
         record.kind = DeclarationKind::MetadataSchema;
         record.retention = lowerRetention(metadata->retention);
+        record.sysmeta.capability.runtimeRetained =
+            metadata->retention != RetentionKind::CompileTime;
         record.location = locationOf(metadata);
         record.type = mSymbols ? mSymbols->lookupType(schemaSymbol) : nullptr;
         mModule->registerType(record.type);
@@ -784,6 +852,8 @@ void LunaLowerer::lowerCommonDeclaration(const ::Decl* source,
     target.packageId = source->packageId.empty() ? mModule->name : source->packageId;
     target.modulePath = source->modulePath;
     target.retention = lowerRetention(source->retention);
+    target.sysmeta.capability.runtimeRetained =
+        source->retention != RetentionKind::CompileTime;
     for (const auto& attachment : source->metadata) {
         MetadataInstance instance;
         instance.schemaId = attachment.resolvedSchemaId;
@@ -822,7 +892,9 @@ TypePtr LunaLowerer::inferredExprType(const ::Expr* expression) const {
     if (auto* array = dynamic_cast<const ::ArrayLiteralExpr*>(expression))
         return Type::makeArray(array->elementType, array->elements.size());
     if (auto* allocation = dynamic_cast<const ::HeapAllocExpr*>(expression))
-        return Type::makeRawPointer(allocation->allocatedType);
+        return allocation->resultType
+            ? allocation->resultType
+            : Type::makeRawPointer(allocation->allocatedType);
     if (dynamic_cast<const ::LaunchExpr*>(expression)) return TyEvent;
     return nullptr;
 }
@@ -839,6 +911,13 @@ void LunaLowerer::addDeclarationRecord(const moon::Decl& declaration,
     record.retention = declaration.retention;
     record.metadata = declaration.metadata;
     record.type = std::move(type);
+    record.sysmeta = declaration.sysmeta;
+    if (record.type) {
+        record.sysmeta.resource = record.type->sysmeta.resource;
+        if (record.type->kind == TypeKind::Slot ||
+            record.type->kind == TypeKind::Fragment)
+            record.sysmeta.control = record.type->sysmeta.control;
+    }
     record.location = declaration.location;
     mModule->declarationTable.push_back(std::move(record));
 }

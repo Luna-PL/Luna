@@ -42,6 +42,20 @@ resource transitions visible to both the checker and MoonIR.
 
 Detailed design: [Ownership and affine model](Arch/Ownership_Affine_Model_RFC.md).
 
+## Errors and panic
+
+Recoverable failure uses the ordinary `Result<T, E>` value type. `Ok`, `Err`,
+`is_ok`, `is_err`, `unwrap` and `unwrap_err` form the initial intrinsic
+surface; postfix `?` performs a checked early return and carries path-sensitive
+cleanup obligations through MoonIR. Resource-bearing Results clean only their
+active payload.
+
+`panic(string)` is an abort boundary, not stack unwinding: it reports through
+the Runtime ABI console and terminates. This error model does not introduce a
+general algebraic-effect system or an effect-summary layer.
+
+Detailed design: [Result and panic RFC](Arch/Error_Result_Panic_RFC.md).
+
 ## Metadata and dynamic capability
 
 Metadata schemas are first-class declarations. Static `select` executes an

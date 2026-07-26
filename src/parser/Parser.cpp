@@ -156,7 +156,8 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
         abi = advance().lexeme;
     if (isExtern && abi.empty()) abi = "C";
     std::unique_ptr<Decl> decl;
-    if (match(TokenKind::Fn)) decl = parseFunctionDecl(false, isExtern, abi, isConstexpr, isKernel);
+    if (match(TokenKind::Fn))
+        decl = parseFunctionDecl(false, isExtern, abi, isConstexpr, isKernel);
     else if (match(TokenKind::Interceptor)) decl = parseFragmentDecl(FragmentKind::Interceptor);
     else if (match(TokenKind::Context)) decl = parseFragmentDecl(FragmentKind::Context);
     else if (match(TokenKind::Fragment)) {
@@ -979,6 +980,13 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
             }
             consume(TokenKind::RParen, "Expected ')' after call arguments");
             expr = std::move(call);
+        } else if (match(TokenKind::Question)) {
+            auto propagation = std::make_unique<TryExpr>();
+            propagation->sourcePath = mSourceName;
+            propagation->line = mTokens[mPos - 1].line;
+            propagation->col = mTokens[mPos - 1].col;
+            propagation->operand = std::move(expr);
+            expr = std::move(propagation);
         } else if (match(TokenKind::At)) {
             addError("postfix `@tag(...)` versioning has been removed",
                      "declare a `meta` schema and write `select target with selector(...)` or `@selector(...) target`");
@@ -1191,10 +1199,24 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         }
         return iexpr;
     }
-    if (match(TokenKind::New)) {
+    HeapStorageKind heapStorage = HeapStorageKind::Unique;
+    bool isHeapAllocation = false;
+    if (match(TokenKind::Rc)) {
+        heapStorage = HeapStorageKind::Rc;
+        consume(TokenKind::New, "Expected 'new' after 'rc'");
+        isHeapAllocation = true;
+    } else if (match(TokenKind::Arc)) {
+        heapStorage = HeapStorageKind::Arc;
+        consume(TokenKind::New, "Expected 'new' after 'arc'");
+        isHeapAllocation = true;
+    } else if (match(TokenKind::New)) {
+        isHeapAllocation = true;
+    }
+    if (isHeapAllocation) {
         auto type = parseType();
         consume(TokenKind::LParen, "Expected '(' after type in new expression");
         auto alloc = std::make_unique<HeapAllocExpr>();
+        alloc->storage = heapStorage;
         alloc->allocatedTypeAST = std::move(type);
         auto init = std::make_unique<CallExpr>();
         // Build a synthetic call: new T(args) → call T(args)
@@ -1338,6 +1360,17 @@ std::unique_ptr<TypeAST> Parser::parseType() {
     }
     if (match(TokenKind::Auto)) {
         return std::make_unique<NamedTypeAST>("auto");
+    }
+    if (check(TokenKind::Rc) || check(TokenKind::Arc)) {
+        const Token wrapper = advance();
+        auto named = std::make_unique<NamedTypeAST>(wrapper.lexeme);
+        named->sourcePath = mSourceName;
+        named->line = wrapper.line;
+        named->col = wrapper.col;
+        consume(TokenKind::Lt, "Expected '<' after shared ownership type");
+        named->typeArgs.push_back(parseType());
+        consume(TokenKind::Gt, "Expected '>' after shared ownership element type");
+        return named;
     }
     // Built-in type keywords
     if (check(TokenKind::TyI32) || check(TokenKind::TyI64) ||

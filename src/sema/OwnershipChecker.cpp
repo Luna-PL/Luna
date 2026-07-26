@@ -4,6 +4,24 @@
 #include <algorithm>
 #include <unordered_set>
 
+static luna::ownership::CleanupAction cleanupActionFor(const TypePtr& type) {
+    if (!type) return luna::ownership::CleanupAction::Deallocate;
+    if (type->kind == TypeKind::Result)
+        return luna::ownership::CleanupAction::ResultDrop;
+    switch (type->sysmeta.resource.management) {
+        case luna::sysmeta::ResourceManagement::Rc:
+            return luna::ownership::CleanupAction::RcRelease;
+        case luna::sysmeta::ResourceManagement::Arc:
+            return luna::ownership::CleanupAction::ArcRelease;
+        case luna::sysmeta::ResourceManagement::Value:
+        case luna::sysmeta::ResourceManagement::Unique:
+            return type->sysmeta.resource.needsDrop
+                ? luna::ownership::CleanupAction::Drop
+                : luna::ownership::CleanupAction::Deallocate;
+    }
+    return luna::ownership::CleanupAction::Deallocate;
+}
+
 OwnershipChecker::OwnershipChecker() {
     enterScope();
 }
@@ -85,6 +103,9 @@ bool OwnershipChecker::checkFunction(FunctionDecl* decl) {
         for (auto& name : collectFreesAtScopeExit()) {
             auto freeStmt = std::make_unique<FreeStmt>();
             freeStmt->operand = std::make_unique<IdentifierExpr>(name);
+            auto* variable = lookup(name);
+            freeStmt->action = cleanupActionFor(
+                variable ? variable->type : nullptr);
             decl->body->stmts.push_back(std::move(freeStmt));
         }
     }
@@ -133,6 +154,9 @@ OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
     for (const auto& name : frees) {
         auto freeStmt = std::make_unique<FreeStmt>();
         freeStmt->operand = std::make_unique<IdentifierExpr>(name);
+        auto* variable = lookup(name);
+        freeStmt->action = cleanupActionFor(
+            variable ? variable->type : nullptr);
         freeStmts.push_back(std::move(freeStmt));
     }
 
@@ -145,6 +169,8 @@ OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
         for (const auto& freeStmt : freeStmts) {
             auto* original = dynamic_cast<FreeStmt*>(freeStmt.get());
             auto copy = std::make_unique<FreeStmt>();
+            copy->action = original ? original->action
+                                    : luna::ownership::CleanupAction::Deallocate;
             if (original && original->operand) {
                 if (auto* id = dynamic_cast<IdentifierExpr*>(original->operand.get()))
                     copy->operand = std::make_unique<IdentifierExpr>(id->name);
@@ -608,7 +634,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
         mCheckingSlotContinuation = savedCheckingContinuation;
         return continuation;
     }
-    if (dynamic_cast<AbortStmt*>(stmt)) {
+    if (auto* abort = dynamic_cast<AbortStmt*>(stmt)) {
         if (!mCurrentFragmentAbortExits) {
             error("`abort()` may only appear in an applied interceptor or context",
                   stmt->line, stmt->col);
@@ -624,6 +650,16 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                           stmt->line, stmt->col);
                     ok = false;
                 }
+            }
+        }
+        if (ok) {
+            abort->autoFrees = collectFreesAtFragmentExit();
+            abort->cleanups.clear();
+            for (const auto& place : abort->autoFrees) {
+                auto* variable = lookup(place);
+                abort->cleanups.push_back({
+                    place, cleanupActionFor(variable ? variable->type : nullptr),
+                    variable ? variable->type : nullptr});
             }
         }
         CheckerState exit = captureState();
@@ -817,8 +853,8 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                 ret->cleanups.clear();
                 for (const auto& place : ret->autoFrees) {
                     auto* variable = lookup(place);
-                    ret->cleanups.push_back({
-                        place, luna::ownership::CleanupAction::Deallocate,
+                ret->cleanups.push_back({
+                        place, cleanupActionFor(variable ? variable->type : nullptr),
                         variable ? variable->type : nullptr});
                 }
                 CheckerState exit = captureState();
@@ -838,7 +874,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
             for (const auto& place : ret->autoFrees) {
                 auto* variable = lookup(place);
                 ret->cleanups.push_back({
-                    place, luna::ownership::CleanupAction::Deallocate,
+                    place, cleanupActionFor(variable ? variable->type : nullptr),
                     variable ? variable->type : nullptr});
             }
         }
@@ -927,6 +963,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
             return false;
         }
         if (!consume(var, "free")) return false;
+        freeStmt->action = cleanupActionFor(var->type);
         var->state = OwnState::Freed;
         return true;
     }
@@ -968,6 +1005,23 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
         }
         return true;
     }
+    if (auto* propagation = dynamic_cast<TryExpr*>(expr)) {
+        if (auto place = extractPlace(propagation->operand.get())) {
+            if (!consume(*place, "error propagation")) return false;
+        } else if (!checkExpr(propagation->operand.get())) {
+            return false;
+        }
+        propagation->cleanups.clear();
+        for (const auto& place : collectFreesAtReturn()) {
+            auto* variable = lookup(place);
+            propagation->cleanups.push_back({
+                place,
+                cleanupActionFor(variable ? variable->type : nullptr),
+                variable ? variable->type : nullptr
+            });
+        }
+        return true;
+    }
     if (auto* move = dynamic_cast<MoveExpr*>(expr)) {
         if (auto place = extractPlace(move->operand.get()))
             return consume(*place, "move");
@@ -1004,6 +1058,13 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
         return checkExpr(unary->operand.get());
     if (auto* call = dynamic_cast<CallExpr*>(expr)) {
         if (!checkExpr(call->callee.get())) return false;
+        if (auto* callee = dynamic_cast<IdentifierExpr*>(call->callee.get());
+            callee && (callee->name == "clone" ||
+                       callee->name == "is_ok" ||
+                       callee->name == "is_err")) {
+            return call->args.size() == 1 &&
+                   checkExpr(call->args.front().get());
+        }
         SymbolInfo* calleeInfo = nullptr;
         if (auto* callee = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
             if (mSymTable && !call->resolvedSymbolName.empty())

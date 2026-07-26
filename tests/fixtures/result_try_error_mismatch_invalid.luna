@@ -1,0 +1,12 @@
+fn source() -> Result<i32, string> {
+    return Err("failure");
+}
+
+fn pipeline() -> Result<i32, i32> {
+    let value = source()?;
+    return Ok(value);
+}
+
+fn main() -> i32 {
+    return 0;
+}

@@ -113,6 +113,7 @@ struct TypeRecord {
     luna::types::TypeDomain domain = luna::types::TypeDomain::Value;
     luna::types::IdentityMode identityMode = luna::types::IdentityMode::Structural;
     TypeKind kind = TypeKind::Unknown;
+    luna::sysmeta::Facts sysmeta;
     std::string displayName;
     std::string nominalDeclarationId;
     std::string canonicalType;
@@ -132,6 +133,7 @@ struct DeclarationRecord {
     Retention retention = Retention::CompileTime;
     std::vector<MetadataInstance> metadata;
     TypePtr type;
+    luna::sysmeta::Facts sysmeta;
     SourceLocation location;
 };
 
@@ -197,6 +199,8 @@ struct ForStmt : Stmt {
 
 struct FreeStmt : Stmt {
     std::unique_ptr<Expr> operand;
+    luna::ownership::CleanupAction action =
+        luna::ownership::CleanupAction::Deallocate;
 };
 
 struct SlotDeclStmt : Stmt {
@@ -228,7 +232,10 @@ struct SlotInvokeStmt : Stmt {
 };
 
 struct ResumeStmt : Stmt {};
-struct AbortStmt : Stmt {};
+struct AbortStmt : Stmt {
+    std::vector<std::string> autoFrees;
+    std::vector<CleanupObligation> cleanups;
+};
 
 struct AwaitStmt : Stmt {
     std::unique_ptr<Expr> event;
@@ -286,6 +293,7 @@ struct CallExpr : Expr {
     std::string resolvedSymbolName;
     bool returnsLinear = false;
     luna::ownership::Usage returnUsage = luna::ownership::Usage::Copy;
+    TypePtr intrinsicType;
     std::optional<ConstantValue> compileTimeValue;
 };
 
@@ -339,6 +347,15 @@ struct ArrayLiteralExpr : Expr {
 struct HeapAllocExpr : Expr {
     std::unique_ptr<Expr> initializer;
     TypePtr allocatedType;
+    HeapStorageKind storage = HeapStorageKind::Unique;
+};
+
+struct TryExpr : Expr {
+    std::unique_ptr<Expr> operand;
+    TypePtr resultType;
+    TypePtr valueType;
+    TypePtr errorType;
+    std::vector<CleanupObligation> cleanups;
 };
 
 struct MoveExpr : Expr {
@@ -395,6 +412,7 @@ struct Decl : Node {
     bool isExported = false;
     Retention retention = Retention::CompileTime;
     std::vector<MetadataInstance> metadata;
+    luna::sysmeta::Facts sysmeta;
 };
 
 struct FunctionDecl : Decl {

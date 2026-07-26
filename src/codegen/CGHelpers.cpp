@@ -24,11 +24,15 @@ llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
         case TypeKind::String:
         case TypeKind::CStr:
         case TypeKind::RawPointer:
+        case TypeKind::Rc:
+        case TypeKind::Arc:
         case TypeKind::DeviceBuffer:
         case TypeKind::Metadata:
         case TypeKind::MetadataView:
         case TypeKind::DeclarationView:
         case TypeKind::DeclarationRef: return ptrTy();
+        case TypeKind::Result:
+            return llvm::StructType::get(mCtx, {boolTy(), i64Ty()});
         case TypeKind::Array:
             return llvm::ArrayType::get(toLLVMType(type->inner), type->arrayLength);
         case TypeKind::Slice:
@@ -67,7 +71,9 @@ uint64_t typeSize(const TypePtr& type) {
         case TypeKind::String:
         case TypeKind::CStr: return 8; // pointer size
         case TypeKind::Reference:
-        case TypeKind::RawPointer: return 8;
+        case TypeKind::RawPointer:
+        case TypeKind::Rc:
+        case TypeKind::Arc: return 8;
         case TypeKind::DeviceBuffer:
         case TypeKind::Metadata:
         case TypeKind::MetadataView:
@@ -83,6 +89,7 @@ uint64_t typeSize(const TypePtr& type) {
             return size == 0 ? 8 : size;
         }
         case TypeKind::Enum: return 8; // tagged union (opaque for now)
+        case TypeKind::Result: return 16;
         default: return 0;
     }
 }
@@ -108,6 +115,7 @@ uint64_t typeAlignment(const TypePtr& type) {
             return alignment;
         }
         case TypeKind::Unit: return 1;
+        case TypeKind::Result: return 8;
         default: return 8;
     }
 }

@@ -1,0 +1,6 @@
+fn main() -> i32 {
+    let owner = rc new i32(7);
+    let alias = owner;
+    print(alias);
+    return 0;
+}

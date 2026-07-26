@@ -3,6 +3,12 @@
 #include <cstdint>
 #include <string_view>
 
+enum class HeapStorageKind : uint8_t {
+    Unique,
+    Rc,
+    Arc,
+};
+
 namespace luna::ownership {
 
 // Ownership answers who is responsible for the value. Usage answers how many
@@ -63,12 +69,18 @@ inline constexpr std::string_view usageName(Usage usage) {
 enum class CleanupAction : uint8_t {
     Drop,
     Deallocate,
+    RcRelease,
+    ArcRelease,
+    ResultDrop,
 };
 
 inline constexpr std::string_view cleanupActionName(CleanupAction action) {
     switch (action) {
         case CleanupAction::Drop: return "drop";
         case CleanupAction::Deallocate: return "deallocate";
+        case CleanupAction::RcRelease: return "rc_release";
+        case CleanupAction::ArcRelease: return "arc_release";
+        case CleanupAction::ResultDrop: return "result_drop";
     }
     return "invalid";
 }

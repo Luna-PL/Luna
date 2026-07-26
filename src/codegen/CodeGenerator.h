@@ -76,6 +76,12 @@ private:
     llvm::Value* coerceCallArgument(llvm::Value* value, llvm::Type* target);
     TypePtr allocationTypeForExpr(moon::Expr* expr) const;
     void emitLunaDeallocation(llvm::Value* pointer, const TypePtr& type);
+    void emitCleanup(const std::string& place,
+                     luna::ownership::CleanupAction action);
+    llvm::Value* packResultPayload(llvm::Value* value, const TypePtr& type);
+    llvm::Value* unpackResultPayload(llvm::Value* bits, const TypePtr& type);
+    void emitOwnedPayloadCleanup(llvm::Value* value, const TypePtr& type,
+                                 const std::string& label);
     bool emitKernelPTX(moon::FunctionDecl* kernel);
     bool emitKernelHSACO(moon::FunctionDecl* kernel);
 

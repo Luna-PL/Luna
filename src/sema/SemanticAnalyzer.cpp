@@ -136,9 +136,15 @@ bool SemanticAnalyzer::analyze(Program* program) {
     mGeneratedInstances.clear();
     mInstantiator.reset();
     mInstantiatedFunctions.clear();
+    mInferenceRoots.clear();
     mTraits.clear();
     mTraitTypeParams.clear();
     mTraitMethods.clear();
+    // Drop is a compiler-known resource contract. Programs provide impls,
+    // but cannot replace its identity or signature with a source declaration.
+    mTraitMethods[luna::sysmeta::DropTraitId] = {
+        {luna::sysmeta::DropMethodName, nullptr}
+    };
     mImpls.clear();
     mCurrentPackageId = program->packageName.empty() ? "main" : program->packageName;
     mCurrentModulePath.clear();
@@ -536,15 +542,29 @@ void SemanticAnalyzer::declareFragment(FragmentDecl* decl) {
     SymbolInfo info;
     info.kind = SymbolKind::Fragment;
     TypeVec parameterTypes;
+    std::vector<luna::ownership::Contract> parameterContracts;
     for (auto& parameter : decl->params) {
         parameter.inferredType = declaredType(parameter.type.get(), {});
         parameterTypes.push_back(parameter.inferredType);
+        const bool explicitUsage = parameter.hasExplicitUsage || parameter.isLinear ||
+            dynamic_cast<LinearTypeAST*>(parameter.type.get()) != nullptr ||
+            dynamic_cast<AffineTypeAST*>(parameter.type.get()) != nullptr;
+        const auto requestedUsage = parameter.isLinear
+            ? luna::ownership::Usage::Linear
+            : (explicitUsage ? parameter.usage
+                             : defaultUsageForType(parameter.inferredType));
+        const auto contract = parameterContractFor(
+            parameter.inferredType, requestedUsage, explicitUsage);
+        parameter.relation = contract.relation;
+        parameter.usage = contract.usage;
+        parameterContracts.push_back(contract);
     }
     info.type = Type::makeFragment(
         std::move(parameterTypes), TyUnit,
         decl->cardinality == FragmentCardinality::Many,
         decl->kind == FragmentKind::Interceptor
-            ? ContinuationKind::Interceptor : ContinuationKind::Context);
+            ? ContinuationKind::Interceptor : ContinuationKind::Context,
+        std::move(parameterContracts));
     decl->structuralType = info.type;
     mSymTable.defineAtRoot(sourceKey, info);
 }
@@ -831,7 +851,8 @@ void SemanticAnalyzer::analyzeFunction(FunctionDecl* decl) {
     // A function without an explicit return value is a unit-producing
     // declaration. Explicit return statements have already constrained this
     // variable through analyzeStmt.
-    if (!decl->isExtern && !mSawReturn)
+    if (!decl->isExtern && !mSawReturn &&
+        !(decl->body && blockAlwaysReturns(decl->body.get())))
         constrain(mCurrentReturnType, TyUnit, "empty function body");
 
     // A single return statement is not enough for a non-unit function: every
@@ -951,6 +972,49 @@ void SemanticAnalyzer::analyzeImpl(ImplDecl* decl) {
         // Analyze the method body
         analyzeFunction(method.get());
     }
+
+    if (traitId == luna::sysmeta::DropTraitId) {
+        FunctionDecl* drop = nullptr;
+        auto dropIt = implementation.find(luna::sysmeta::DropMethodName);
+        if (dropIt != implementation.end()) drop = dropIt->second;
+        const TypePtr target = resolveTypeAST(decl->targetType.get(), typeBindings);
+        bool valid = drop != nullptr;
+        if (drop && !drop->typeParams.empty()) {
+            error("Drop::drop may not be generic", drop->line, drop->col);
+            valid = false;
+        }
+        if (drop && drop->params.size() != 1) {
+            error("Drop::drop requires exactly one parameter of type '&mut " +
+                  target->toString() + "'", drop->line, drop->col);
+            valid = false;
+        } else if (drop) {
+            const TypePtr parameter = resolved(drop->params.front().inferredType);
+            if (!parameter || parameter->kind != TypeKind::Reference ||
+                !parameter->isMutable ||
+                !luna::types::sameType(resolved(parameter->inner), resolved(target))) {
+                error("Drop::drop parameter must be '&mut " + target->toString() + "'",
+                      drop->line, drop->col);
+                valid = false;
+            }
+        }
+        if (drop && !luna::types::sameType(
+                resolved(drop->inferredReturnType), TyUnit)) {
+            error("Drop::drop must return unit", drop->line, drop->col);
+            valid = false;
+        }
+        if (valid) {
+            const std::string targetId = typeIdentity(target);
+            for (auto& [_, declared] : mDeclaredTypes) {
+                if (declared && typeIdentity(declared) == targetId) {
+                    declared->sysmeta.resource.needsDrop = true;
+                    declared->sysmeta.abi.dropGlueSymbol =
+                        drop->generatedSymbolName;
+                }
+            }
+            target->sysmeta.resource.needsDrop = true;
+            target->sysmeta.abi.dropGlueSymbol = drop->generatedSymbolName;
+        }
+    }
 }
 
 void SemanticAnalyzer::analyzeSlotDecl(SlotDeclStmt* stmt) {
@@ -959,13 +1023,27 @@ void SemanticAnalyzer::analyzeSlotDecl(SlotDeclStmt* stmt) {
         return;
     }
     TypeVec params;
+    std::vector<luna::ownership::Contract> contracts;
     for (auto& param : stmt->params) {
         if (!param.type) {
             error("explicit slot parameter '" + param.name + "' requires a type", stmt->line, stmt->col);
             params.push_back(TyUnknown);
+            contracts.push_back({});
         } else {
             param.inferredType = declaredType(param.type.get(), {});
             params.push_back(param.inferredType);
+            const bool explicitUsage = param.hasExplicitUsage || param.isLinear ||
+                dynamic_cast<LinearTypeAST*>(param.type.get()) != nullptr ||
+                dynamic_cast<AffineTypeAST*>(param.type.get()) != nullptr;
+            const auto requestedUsage = param.isLinear
+                ? luna::ownership::Usage::Linear
+                : (explicitUsage ? param.usage
+                                 : defaultUsageForType(param.inferredType));
+            const auto contract = parameterContractFor(
+                param.inferredType, requestedUsage, explicitUsage);
+            param.relation = contract.relation;
+            param.usage = contract.usage;
+            contracts.push_back(contract);
         }
     }
     SlotInfo info;
@@ -974,6 +1052,7 @@ void SemanticAnalyzer::analyzeSlotDecl(SlotDeclStmt* stmt) {
     info.acceptedCardinality = stmt->acceptedCardinality;
     info.isDynamic = stmt->isDynamic;
     info.paramTypes = params;
+    info.paramContracts = contracts;
     for (const auto& param : stmt->params) info.paramNames.push_back(param.name);
     info.defaultFragment = stmt->defaultFragment;
     if (!info.defaultFragment.empty()) {
@@ -990,7 +1069,8 @@ void SemanticAnalyzer::analyzeSlotDecl(SlotDeclStmt* stmt) {
     info.structuralType = Type::makeSlot(
         params, TyUnit, info.acceptedCardinality == FragmentCardinality::Many,
         info.acceptedKind == FragmentKind::Interceptor
-            ? ContinuationKind::Interceptor : ContinuationKind::Context);
+            ? ContinuationKind::Interceptor : ContinuationKind::Context,
+        contracts);
     stmt->structuralType = info.structuralType;
     mSlotScopes.back().emplace(stmt->name, info);
 
@@ -1059,6 +1139,17 @@ void SemanticAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedR
             auto parameterType = declaredType(param.type.get(), {});
             param.inferredType = parameterType;
             active.paramTypes.push_back(parameterType);
+            const bool explicitUsage = param.hasExplicitUsage || param.isLinear ||
+                dynamic_cast<LinearTypeAST*>(param.type.get()) != nullptr ||
+                dynamic_cast<AffineTypeAST*>(param.type.get()) != nullptr;
+            const auto requestedUsage = param.isLinear
+                ? luna::ownership::Usage::Linear
+                : (explicitUsage ? param.usage : defaultUsageForType(parameterType));
+            const auto contract = parameterContractFor(
+                parameterType, requestedUsage, explicitUsage);
+            param.relation = contract.relation;
+            param.usage = contract.usage;
+            active.paramContracts.push_back(contract);
             active.paramNames.push_back(param.name);
             auto* captured = mSymTable.lookup(param.name);
             if (!captured) error("inline slot parameter '" + param.name + "' has no matching local binding");
@@ -1069,7 +1160,8 @@ void SemanticAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedR
             active.paramTypes, TyUnit,
             active.acceptedCardinality == FragmentCardinality::Many,
             active.acceptedKind == FragmentKind::Interceptor
-                ? ContinuationKind::Interceptor : ContinuationKind::Context);
+                ? ContinuationKind::Interceptor : ContinuationKind::Context,
+            active.paramContracts);
         mSlotScopes.back()[stmt->name] = active;
     } else {
         auto* declared = lookupSlot(stmt->name);
@@ -1120,7 +1212,8 @@ void SemanticAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedR
             }
             stmt->resolvedDynamicFragmentNames.push_back(
                 candidate->generatedSymbolName.empty() ? candidate->name : candidate->generatedSymbolName);
-            analyzeFragmentForSlot(candidate, stmt->name, active.paramTypes, captures);
+            analyzeFragmentForSlot(candidate, stmt->name, active.paramTypes,
+                                   active.paramContracts, captures);
         }
         return;
     }
@@ -1137,7 +1230,8 @@ void SemanticAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedR
         fragment->cardinality != active.acceptedCardinality)
         error("fragment '" + fragment->name + "' does not match slot '" + stmt->name +
               "' interceptor/context and once/many contract", stmt->line, stmt->col);
-    analyzeFragmentForSlot(fragment, stmt->name, active.paramTypes, captures);
+    analyzeFragmentForSlot(fragment, stmt->name, active.paramTypes,
+                           active.paramContracts, captures);
 }
 
 void SemanticAnalyzer::analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn) {
@@ -1212,6 +1306,7 @@ void SemanticAnalyzer::analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn) {
 
 void SemanticAnalyzer::analyzeFragmentForSlot(
     FragmentDecl* fragment, const std::string& slotName, const TypeVec& parameterTypes,
+    const std::vector<luna::ownership::Contract>& parameterContracts,
     const std::unordered_map<std::string, SymbolInfo>& captures) {
     if (fragment->params.size() > parameterTypes.size()) {
         error("fragment '" + fragment->name + "' requires " +
@@ -1223,11 +1318,13 @@ void SemanticAnalyzer::analyzeFragmentForSlot(
     SlotInfo context;
     context.name = slotName;
     context.paramTypes = parameterTypes;
+    context.paramContracts = parameterContracts;
     context.structuralType = Type::makeSlot(
         parameterTypes, TyUnit,
         fragment->cardinality == FragmentCardinality::Many,
         fragment->kind == FragmentKind::Interceptor
-            ? ContinuationKind::Interceptor : ContinuationKind::Context);
+            ? ContinuationKind::Interceptor : ContinuationKind::Context,
+        parameterContracts);
     const SlotInfo* savedSlot = mCurrentFragmentSlot;
     FragmentDecl* savedFragment = mCurrentFragmentDecl;
     TypePtr savedReturnType = mCurrentReturnType;
@@ -1243,6 +1340,21 @@ void SemanticAnalyzer::analyzeFragmentForSlot(
         info.type = parameterTypes[i];
         if (param.type) constrain(declaredType(param.type.get(), {}), info.type,
                                   "parameter '" + param.name + "' of fragment '" + fragment->name + "'");
+        if (i < parameterContracts.size()) {
+            const luna::ownership::Contract fragmentContract{
+                param.relation, param.usage};
+            if (fragmentContract != parameterContracts[i]) {
+                error("parameter '" + param.name + "' of fragment '" +
+                      fragment->name + "' has ownership contract " +
+                      std::string(luna::ownership::relationName(fragmentContract.relation)) +
+                      "/" + std::string(luna::ownership::usageName(fragmentContract.usage)) +
+                      ", but slot '" + slotName + "' requires " +
+                      std::string(luna::ownership::relationName(
+                          parameterContracts[i].relation)) +
+                      "/" + std::string(luna::ownership::usageName(
+                          parameterContracts[i].usage)));
+            }
+        }
         param.inferredType = info.type;
         mSymTable.define(param.name, info);
     }
@@ -1337,10 +1449,21 @@ void SemanticAnalyzer::analyzeFragmentForSlot(
             }
         }
     }
+    // A fragment may leave parameter types implicit until it is bound to a
+    // typed slot. Rebuild its own declaration shape from the now-resolved
+    // prefix rather than copying the entire slot interface into the fragment.
+    TypeVec fragmentParameterTypes;
+    std::vector<luna::ownership::Contract> fragmentParameterContracts;
+    for (const auto& parameter : fragment->params) {
+        fragmentParameterTypes.push_back(parameter.inferredType);
+        fragmentParameterContracts.push_back(
+            {parameter.relation, parameter.usage});
+    }
     fragment->structuralType = Type::makeFragment(
-        parameterTypes, TyUnit, isMany,
+        std::move(fragmentParameterTypes), TyUnit, isMany,
         fragment->kind == FragmentKind::Interceptor
-            ? ContinuationKind::Interceptor : ContinuationKind::Context);
+            ? ContinuationKind::Interceptor : ContinuationKind::Context,
+        std::move(fragmentParameterContracts));
     if (isMany) {
         for (const auto& [name, info] : captures) {
             if (info.isLinear) {
@@ -1401,6 +1524,10 @@ bool SemanticAnalyzer::satisfiesTrait(const std::string& traitId, const TypePtr&
 
 std::string SemanticAnalyzer::resolveTraitRef(TraitRef& trait, const ASTNode* useSite) {
     if (!trait.resolvedTraitId.empty()) return trait.resolvedTraitId;
+    if (trait.name == "Drop") {
+        trait.resolvedTraitId = luna::sysmeta::DropTraitId;
+        return trait.resolvedTraitId;
+    }
     const ASTNode* diagnosticSite = trait.line > 0 ? static_cast<const ASTNode*>(&trait) : useSite;
     TraitDecl* selected = nullptr;
     auto declared = mTraits.find(sourceDeclarationKey(trait.name));
@@ -1627,6 +1754,13 @@ TypePtr SemanticAnalyzer::analyzeBlock(BlockStmt* block, TypePtr expectedReturn)
 bool SemanticAnalyzer::statementAlwaysReturns(const Stmt* stmt) const {
     if (!stmt) return false;
     if (dynamic_cast<const ReturnStmt*>(stmt)) return true;
+    if (auto* expression = dynamic_cast<const ExprStmt*>(stmt)) {
+        if (auto* call = dynamic_cast<const CallExpr*>(expression->expr.get())) {
+            if (auto* callee =
+                    dynamic_cast<const IdentifierExpr*>(call->callee.get()))
+                if (callee->name == "panic") return true;
+        }
+    }
     if (auto* block = dynamic_cast<const BlockStmt*>(stmt)) return blockAlwaysReturns(block);
     if (auto* conditional = dynamic_cast<const IfStmt*>(stmt)) {
         return conditional->elseBranch &&
@@ -1804,6 +1938,9 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
         TypePtr objectType = resolved(analyzeExpr(fa->object.get()));
         if (objectType->kind == TypeKind::Reference && objectType->inner)
             objectType = resolved(objectType->inner);
+        if ((objectType->kind == TypeKind::Rc ||
+             objectType->kind == TypeKind::Arc) && objectType->inner)
+            objectType = resolved(objectType->inner);
         if (objectType->kind != TypeKind::Struct &&
             objectType->kind != TypeKind::Record &&
             objectType->kind != TypeKind::Metadata) {
@@ -1815,6 +1952,34 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
         }
         error("Type '" + objectType->toString() + "' has no field '" + fa->field + "'");
         return TyUnknown;
+    }
+    if (auto* propagation = dynamic_cast<TryExpr*>(expr)) {
+        if (mCurrentFragmentDecl) {
+            error("`?` may not propagate across a fragment/slot boundary; "
+                  "handle the Result explicitly inside the fragment",
+                  propagation->line, propagation->col);
+            return TyUnknown;
+        }
+        TypePtr result = resolved(analyzeExpr(propagation->operand.get()));
+        if (result->kind != TypeKind::Result ||
+            result->typeArgs.size() != 2) {
+            error("`?` requires Result<T, E>, got " + result->toString(),
+                  propagation->line, propagation->col);
+            return TyUnknown;
+        }
+        TypePtr functionResult = resolved(mCurrentReturnType);
+        if (!mInFunction || functionResult->kind != TypeKind::Result ||
+            functionResult->typeArgs.size() != 2) {
+            error("`?` requires the enclosing function to return Result",
+                  propagation->line, propagation->col);
+            return TyUnknown;
+        }
+        constrain(result->typeArgs[1], functionResult->typeArgs[1],
+                  "error propagation");
+        propagation->resultType = result;
+        propagation->valueType = result->typeArgs[0];
+        propagation->errorType = result->typeArgs[1];
+        return propagation->valueType;
     }
     if (auto* ha = dynamic_cast<HeapAllocExpr*>(expr)) {
         if (mInKernel) {
@@ -1853,7 +2018,18 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
                               "primitive allocation initializer");
             }
         }
-        return ha->allocatedType;
+        switch (ha->storage) {
+            case HeapStorageKind::Unique:
+                ha->resultType = ha->allocatedType;
+                break;
+            case HeapStorageKind::Rc:
+                ha->resultType = Type::makeRc(ha->allocatedType);
+                break;
+            case HeapStorageKind::Arc:
+                ha->resultType = Type::makeArc(ha->allocatedType);
+                break;
+        }
+        return ha->resultType;
     }
     if (auto* mv = dynamic_cast<MoveExpr*>(expr)) {
         return analyzeExpr(mv->operand.get());
@@ -2372,6 +2548,90 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
         return selected->returnType;
     }
     if (id) {
+        if (id->name == "Ok" || id->name == "Err") {
+            if (call->args.size() != 1) {
+                error(id->name + " expects exactly one payload value",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            TypePtr valueType = mConstraints.fresh();
+            TypePtr errorType = mConstraints.fresh();
+            if (!call->typeArgASTs.empty()) {
+                if (call->typeArgASTs.size() != 2) {
+                    error(id->name +
+                          " explicit arguments must be `<Value, Error>`",
+                          call->line, call->col);
+                    return TyUnknown;
+                }
+                valueType =
+                    resolveTypeAST(call->typeArgASTs[0].get(), {});
+                errorType =
+                    resolveTypeAST(call->typeArgASTs[1].get(), {});
+            }
+            TypePtr payload = analyzeExpr(call->args.front().get());
+            constrain(payload, id->name == "Ok" ? valueType : errorType,
+                      id->name + " payload");
+            call->intrinsicType =
+                Type::makeResult(valueType, errorType);
+            mInferenceRoots.emplace_back(
+                call->intrinsicType,
+                "type arguments of '" + id->name + "'");
+            call->returnUsage =
+                defaultUsageForType(call->intrinsicType);
+            return call->intrinsicType;
+        }
+        if (id->name == "is_ok" || id->name == "is_err" ||
+            id->name == "unwrap" || id->name == "unwrap_err") {
+            if (call->args.size() != 1) {
+                error(id->name + " expects exactly one Result value",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            TypePtr result = resolved(analyzeExpr(call->args.front().get()));
+            if (result->kind != TypeKind::Result ||
+                result->typeArgs.size() != 2) {
+                error(id->name + " expects Result<T, E>, got " +
+                      result->toString(), call->line, call->col);
+                return TyUnknown;
+            }
+            call->intrinsicType = result;
+            if (id->name == "is_ok" || id->name == "is_err")
+                return TyBool;
+            TypePtr extracted = result->typeArgs[
+                id->name == "unwrap" ? 0 : 1];
+            call->returnUsage = defaultUsageForType(extracted);
+            return extracted;
+        }
+        if (id->name == "panic") {
+            if (call->args.size() != 1) {
+                error("panic expects exactly one string message",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            TypePtr message = resolved(analyzeExpr(call->args.front().get()));
+            if (message->kind != TypeKind::String &&
+                message->kind != TypeKind::CStr)
+                error("panic message must be string or cstr, got " +
+                      message->toString(), call->line, call->col);
+            call->intrinsicType = TyUnit;
+            return TyUnit;
+        }
+        if (id->name == "clone") {
+            if (call->args.size() != 1) {
+                error("clone expects exactly one rc<T> or arc<T> handle",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            TypePtr handle = resolved(analyzeExpr(call->args.front().get()));
+            if (handle->kind != TypeKind::Rc && handle->kind != TypeKind::Arc) {
+                error("clone is only defined for rc<T> and arc<T>, got " +
+                      handle->toString(), call->line, call->col);
+                return TyUnknown;
+            }
+            call->returnUsage = luna::ownership::Usage::Affine;
+            call->typeArgs = {handle};
+            return handle;
+        }
         if (id->name == "declaration_of" ||
             id->name == "declaration_id" ||
             id->name == "declaration_signature")
@@ -2895,11 +3155,14 @@ TypePtr SemanticAnalyzer::analyzeReflectionCall(CallExpr* call, const std::strin
             case TypeKind::Bool: return std::string("bool");
             case TypeKind::String: case TypeKind::CStr: return std::string("string");
             case TypeKind::RawPointer: return std::string("raw_pointer");
+            case TypeKind::Rc: return std::string("rc");
+            case TypeKind::Arc: return std::string("arc");
             case TypeKind::Reference: return std::string("reference");
             case TypeKind::Function: return std::string("function");
             case TypeKind::Struct: return std::string("struct");
             case TypeKind::Record: return std::string("record");
             case TypeKind::Enum: return std::string("enum");
+            case TypeKind::Result: return std::string("result");
             case TypeKind::Trait: return std::string("trait");
             case TypeKind::Unit: return std::string("unit");
             default: return std::string("unknown");
@@ -2912,13 +3175,15 @@ TypePtr SemanticAnalyzer::analyzeReflectionCall(CallExpr* call, const std::strin
             case TypeKind::I32: case TypeKind::U32: case TypeKind::F32: return 4;
             case TypeKind::I64: case TypeKind::U64: case TypeKind::USize: case TypeKind::ISize:
             case TypeKind::F64: case TypeKind::String: case TypeKind::CStr:
-            case TypeKind::RawPointer: case TypeKind::Reference: return 8;
+            case TypeKind::RawPointer: case TypeKind::Reference:
+            case TypeKind::Rc: case TypeKind::Arc: return 8;
             case TypeKind::Struct: case TypeKind::Record: {
                 int64_t total = 0;
                 for (const auto& field : t->fields) total += typeSize(field.type);
                 return total == 0 ? 8 : total;
             }
             case TypeKind::Enum: return 8;
+            case TypeKind::Result: return 16;
             default: return 0;
         }
     };
@@ -3411,7 +3676,8 @@ SemanticAnalyzer::evaluateConstraintExpr(
                 case TypeKind::USize: case TypeKind::ISize:
                 case TypeKind::F64: case TypeKind::String:
                 case TypeKind::CStr: case TypeKind::RawPointer:
-                case TypeKind::Reference: return 8;
+                case TypeKind::Reference: case TypeKind::Rc:
+                case TypeKind::Arc: return 8;
                 case TypeKind::Array:
                     return static_cast<int64_t>(item->arrayLength) *
                         sizeOf(item->inner);
@@ -3422,6 +3688,7 @@ SemanticAnalyzer::evaluateConstraintExpr(
                     return total;
                 }
                 case TypeKind::Enum: return 8;
+                case TypeKind::Result: return 16;
                 default: return 0;
             }
         };
@@ -4029,6 +4296,43 @@ static std::unique_ptr<Expr> cloneExpr(
         for (auto& a : e->args) c->args.push_back(cloneExpr(a.get(), bindings));
         c->returnsLinear = e->returnsLinear;
         c->returnUsage = e->returnUsage;
+        c->typeArgs = e->typeArgs;
+        c->intrinsicType = e->intrinsicType
+            ? substituteNominalType(e->intrinsicType, bindings)
+            : nullptr;
+        return c;
+    }
+    if (auto* e = dynamic_cast<HeapAllocExpr*>(src)) {
+        auto c = std::make_unique<HeapAllocExpr>();
+        c->initializer = cloneExpr(e->initializer.get(), bindings);
+        c->allocatedType = e->allocatedType
+            ? substituteNominalType(e->allocatedType, bindings)
+            : nullptr;
+        c->resultType = e->resultType
+            ? substituteNominalType(e->resultType, bindings)
+            : nullptr;
+        c->storage = e->storage;
+        if (c->allocatedType) {
+            auto syntax = std::make_unique<NamedTypeAST>(
+                c->allocatedType->toString());
+            syntax->resolvedType = c->allocatedType;
+            c->allocatedTypeAST = std::move(syntax);
+        }
+        return c;
+    }
+    if (auto* e = dynamic_cast<TryExpr*>(src)) {
+        auto c = std::make_unique<TryExpr>();
+        c->operand = cloneExpr(e->operand.get(), bindings);
+        c->resultType = e->resultType
+            ? substituteNominalType(e->resultType, bindings)
+            : nullptr;
+        c->valueType = e->valueType
+            ? substituteNominalType(e->valueType, bindings)
+            : nullptr;
+        c->errorType = e->errorType
+            ? substituteNominalType(e->errorType, bindings)
+            : nullptr;
+        c->cleanups = e->cleanups;
         return c;
     }
     if (auto* e = dynamic_cast<SelectExpr*>(src)) {
@@ -4044,7 +4348,9 @@ static std::unique_ptr<Expr> cloneExpr(
         c->dynamicMetadataSchemaId = e->dynamicMetadataSchemaId;
         c->dynamicFilterArguments = e->dynamicFilterArguments;
         c->dynamicCandidates = e->dynamicCandidates;
-        c->selectedType = substituteNominalType(e->selectedType, bindings);
+        c->selectedType = e->selectedType
+            ? substituteNominalType(e->selectedType, bindings)
+            : nullptr;
         for (auto& arg : e->selectorArgs)
             c->selectorArgs.push_back(cloneExpr(arg.get(), bindings));
         return c;
@@ -4245,6 +4551,26 @@ TypePtr SemanticAnalyzer::resolveTypeAST(const TypeAST* ast,
             }
             return Type::makeRawPointer(resolveTypeAST(named->typeArgs[0].get(), bindings));
         }
+        if (named->name == "Result") {
+            if (named->typeArgs.size() != 2) {
+                error("Result<T, E> requires value and error type arguments",
+                      named->line, named->col);
+                return TyUnknown;
+            }
+            return Type::makeResult(
+                resolveTypeAST(named->typeArgs[0].get(), bindings),
+                resolveTypeAST(named->typeArgs[1].get(), bindings));
+        }
+        if (named->name == "rc" || named->name == "arc") {
+            if (named->typeArgs.size() != 1) {
+                error(named->name + "<T> requires exactly one type argument");
+                return TyUnknown;
+            }
+            TypePtr element =
+                resolveTypeAST(named->typeArgs.front().get(), bindings);
+            return named->name == "rc"
+                ? Type::makeRc(element) : Type::makeArc(element);
+        }
         if (named->name == "device_buffer") {
             if (named->typeArgs.size() != 1) {
                 error("device_buffer<T> requires exactly one element type");
@@ -4365,6 +4691,14 @@ static TypePtr substituteNominalType(
                                    type->isMutable);
     if (type->kind == TypeKind::RawPointer)
         return Type::makeRawPointer(substituteNominalType(type->inner, bindings));
+    if (type->kind == TypeKind::Rc)
+        return Type::makeRc(substituteNominalType(type->inner, bindings));
+    if (type->kind == TypeKind::Arc)
+        return Type::makeArc(substituteNominalType(type->inner, bindings));
+    if (type->kind == TypeKind::Result && type->typeArgs.size() == 2)
+        return Type::makeResult(
+            substituteNominalType(type->typeArgs[0], bindings),
+            substituteNominalType(type->typeArgs[1], bindings));
     if (type->kind == TypeKind::DeviceBuffer)
         return Type::makeDeviceBuffer(substituteNominalType(type->inner, bindings));
     if (type->kind == TypeKind::Function) {
@@ -4484,6 +4818,18 @@ std::unique_ptr<TypeAST> SemanticAnalyzer::typeToAST(const TypePtr& type) {
         raw->typeArgs.push_back(typeToAST(t->inner));
         return raw;
     }
+    if (t->kind == TypeKind::Rc || t->kind == TypeKind::Arc) {
+        auto shared = std::make_unique<NamedTypeAST>(
+            t->kind == TypeKind::Rc ? "rc" : "arc");
+        shared->typeArgs.push_back(typeToAST(t->inner));
+        return shared;
+    }
+    if (t->kind == TypeKind::Result && t->typeArgs.size() == 2) {
+        auto result = std::make_unique<NamedTypeAST>("Result");
+        result->typeArgs.push_back(typeToAST(t->typeArgs[0]));
+        result->typeArgs.push_back(typeToAST(t->typeArgs[1]));
+        return result;
+    }
     if (t->kind == TypeKind::DeviceBuffer) {
         auto buffer = std::make_unique<NamedTypeAST>("device_buffer");
         buffer->typeArgs.push_back(typeToAST(t->inner));
@@ -4549,10 +4895,16 @@ void SemanticAnalyzer::materializeInferredTypes(Program* program) {
         if (auto* b = dynamic_cast<BinaryExpr*>(expr)) { visitExpr(b->lhs.get()); visitExpr(b->rhs.get()); return; }
         if (auto* u = dynamic_cast<UnaryExpr*>(expr)) { visitExpr(u->operand.get()); return; }
         if (auto* c = dynamic_cast<CallExpr*>(expr)) {
-            visitExpr(c->callee.get()); for (auto& a : c->args) visitExpr(a.get()); return;
+            if (c->intrinsicType)
+                c->intrinsicType = resolved(c->intrinsicType);
+            for (auto& type : c->typeArgs) type = resolved(type);
+            visitExpr(c->callee.get());
+            for (auto& a : c->args) visitExpr(a.get());
+            return;
         }
         if (auto* s = dynamic_cast<SelectExpr*>(expr)) {
-            s->selectedType = resolved(s->selectedType);
+            if (s->selectedType)
+                s->selectedType = resolved(s->selectedType);
             for (auto& a : s->selectorArgs) visitExpr(a.get());
             return;
         }
@@ -4567,6 +4919,13 @@ void SemanticAnalyzer::materializeInferredTypes(Program* program) {
         if (auto* f = dynamic_cast<FieldAccessExpr*>(expr)) { visitExpr(f->object.get()); return; }
         if (auto* i = dynamic_cast<IndexExpr*>(expr)) { visitExpr(i->object.get()); visitExpr(i->index.get()); return; }
         if (auto* h = dynamic_cast<HeapAllocExpr*>(expr)) { visitExpr(h->initializer.get()); return; }
+        if (auto* t = dynamic_cast<TryExpr*>(expr)) {
+            visitExpr(t->operand.get());
+            t->resultType = resolved(t->resultType);
+            t->valueType = resolved(t->valueType);
+            t->errorType = resolved(t->errorType);
+            return;
+        }
         if (auto* m = dynamic_cast<MoveExpr*>(expr)) { visitExpr(m->operand.get()); return; }
         if (auto* b = dynamic_cast<BorrowExpr*>(expr)) { visitExpr(b->operand.get()); return; }
         if (auto* d = dynamic_cast<DerefExpr*>(expr)) { visitExpr(d->operand.get()); return; }

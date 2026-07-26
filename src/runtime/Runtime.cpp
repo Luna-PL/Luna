@@ -19,6 +19,19 @@
 
 namespace {
 
+struct SharedAllocationHeader {
+    void* allocation = nullptr;
+    size_t allocationSize = 0;
+    size_t allocationAlignment = 0;
+    uint64_t rcCount = 1;
+    std::atomic<uint64_t> arcCount{1};
+};
+
+SharedAllocationHeader* sharedHeader(void* pointer) {
+    return reinterpret_cast<SharedAllocationHeader*>(
+        static_cast<unsigned char*>(pointer) - sizeof(SharedAllocationHeader));
+}
+
 bool isValidAlignment(size_t alignment) {
     return alignment != 0 && (alignment & (alignment - 1)) == 0;
 }
@@ -604,6 +617,89 @@ void rt_dealloc(void* pointer, size_t size, size_t alignment) {
     const auto* services = activateHostServices();
     services->allocator->deallocate(
         services->allocator->context, pointer, size, alignment);
+}
+
+static void* sharedAlloc(size_t size, size_t alignment) {
+    if (!isValidAlignment(alignment)) return nullptr;
+    const size_t effectiveAlignment =
+        std::max(alignment, alignof(SharedAllocationHeader));
+    const size_t total =
+        sizeof(SharedAllocationHeader) + (size == 0 ? 1 : size) +
+        effectiveAlignment - 1;
+    void* allocation = rt_alloc(total, effectiveAlignment);
+    if (!allocation) return nullptr;
+    const uintptr_t first =
+        reinterpret_cast<uintptr_t>(allocation) +
+        sizeof(SharedAllocationHeader);
+    const uintptr_t payload =
+        (first + effectiveAlignment - 1) & ~(effectiveAlignment - 1);
+    auto* header = reinterpret_cast<SharedAllocationHeader*>(
+        payload - sizeof(SharedAllocationHeader));
+    new (header) SharedAllocationHeader();
+    header->allocation = allocation;
+    header->allocationSize = total;
+    header->allocationAlignment = effectiveAlignment;
+    return reinterpret_cast<void*>(payload);
+}
+
+void* rt_rc_alloc(size_t size, size_t alignment) {
+    return sharedAlloc(size, alignment);
+}
+
+void rt_rc_retain(void* pointer) {
+    if (pointer) ++sharedHeader(pointer)->rcCount;
+}
+
+int32_t rt_rc_release(void* pointer) {
+    if (!pointer) return 0;
+    auto* header = sharedHeader(pointer);
+    if (header->rcCount == 0) return 0;
+    return --header->rcCount == 0 ? 1 : 0;
+}
+
+void* rt_arc_alloc(size_t size, size_t alignment) {
+    return sharedAlloc(size, alignment);
+}
+
+void rt_arc_retain(void* pointer) {
+    if (pointer)
+        sharedHeader(pointer)->arcCount.fetch_add(
+            1, std::memory_order_relaxed);
+}
+
+int32_t rt_arc_release(void* pointer) {
+    if (!pointer) return 0;
+    return sharedHeader(pointer)->arcCount.fetch_sub(
+        1, std::memory_order_acq_rel) == 1 ? 1 : 0;
+}
+
+void rt_shared_dealloc(void* pointer) {
+    if (!pointer) return;
+    auto* header = sharedHeader(pointer);
+    void* allocation = header->allocation;
+    const size_t size = header->allocationSize;
+    const size_t alignment = header->allocationAlignment;
+    header->~SharedAllocationHeader();
+    rt_dealloc(allocation, size, alignment);
+}
+
+void rt_panic_cstr(const char* message) {
+    const char* text = message ? message : "panic";
+    const auto* services = activateHostServices();
+    if ((services->capabilities & LUNA_HOST_CAP_CONSOLE) != 0 &&
+        services->console) {
+        const LunaConsoleV1* console = services->console;
+        constexpr const char prefix[] = "Luna panic: ";
+        constexpr const char newline[] = "\n";
+        console->write(console->context, LUNA_CONSOLE_STDERR,
+                       prefix, sizeof(prefix) - 1);
+        console->write(console->context, LUNA_CONSOLE_STDERR,
+                       text, std::strlen(text));
+        console->write(console->context, LUNA_CONSOLE_STDERR,
+                       newline, sizeof(newline) - 1);
+        console->flush(console->context, LUNA_CONSOLE_STDERR);
+    }
+    std::abort();
 }
 
 void* rt_malloc(size_t size) {

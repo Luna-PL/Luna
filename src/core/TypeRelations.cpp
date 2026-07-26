@@ -67,9 +67,12 @@ const char* kindName(TypeKind kind) {
         case TypeKind::Struct: return "product";
         case TypeKind::Record: return "product";
         case TypeKind::Enum: return "sum";
+        case TypeKind::Result: return "result";
         case TypeKind::Trait: return "trait";
         case TypeKind::TypeParam: return "type_param";
         case TypeKind::Reference: return "reference";
+        case TypeKind::Rc: return "rc";
+        case TypeKind::Arc: return "arc";
         case TypeKind::Function: return "function";
         case TypeKind::Slot: return "slot";
         case TypeKind::Fragment: return "fragment";
@@ -119,11 +122,16 @@ std::string canonicalShapeImpl(
                 for (const auto& field : variant.fields) appendType(field);
             }
             break;
+        case TypeKind::Result:
+            for (const auto& argument : type->typeArgs) appendType(argument);
+            break;
         case TypeKind::Reference:
             appendPart(result, type->isMutable ? "mutable" : "shared");
             appendType(type->inner);
             break;
         case TypeKind::RawPointer:
+        case TypeKind::Rc:
+        case TypeKind::Arc:
         case TypeKind::DeviceBuffer:
         case TypeKind::Slice:
         case TypeKind::MetadataView:

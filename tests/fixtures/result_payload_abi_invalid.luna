@@ -1,0 +1,7 @@
+fn unsupported() -> Result<Result<i32, i32>, i32> {
+    panic("unreachable");
+}
+
+fn main() -> i32 {
+    return 0;
+}

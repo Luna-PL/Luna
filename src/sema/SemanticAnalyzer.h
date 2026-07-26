@@ -84,6 +84,7 @@ private:
     void analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn);
     void analyzeFragmentForSlot(FragmentDecl* fragment, const std::string& slotName,
                                 const TypeVec& parameterTypes,
+                                const std::vector<luna::ownership::Contract>& parameterContracts,
                                 const std::unordered_map<std::string, SymbolInfo>& captures);
 
     TypePtr analyzeStmt(Stmt* stmt, TypePtr expectedReturnType);
@@ -211,6 +212,7 @@ private:
     struct SlotInfo {
         std::string name;
         TypeVec paramTypes;
+        std::vector<luna::ownership::Contract> paramContracts;
         std::vector<std::string> paramNames;
         std::string defaultFragment;
         std::string resolvedDefaultFragmentName;

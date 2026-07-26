@@ -129,3 +129,16 @@ tracked independently, so moving `pair.left` does not invalidate
 
 See [the ownership and affine RFC](Arch/Ownership_Affine_Model_RFC.md) for the
 complete contract and MoonIR rules.
+
+## Result values
+
+`Result<T, E>` is a structural tagged value for recoverable failure. Its usage
+is derived from both variants: it is Copy only when both payloads are Copy,
+Affine when either payload is Affine, and Linear when either payload is
+Linear. Cleanup reads the tag and destroys only the active payload.
+
+Postfix `?` unwraps `Ok` and returns `Err` from the current Result-returning
+function after running the same path-sensitive cleanup as an explicit return.
+It requires the same error type on both Results and cannot implicitly cross a
+fragment/slot boundary. See the
+[Result and panic RFC](Arch/Error_Result_Panic_RFC.md).

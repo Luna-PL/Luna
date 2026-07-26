@@ -32,6 +32,19 @@ TypePtr resolveType(const TypeAST* ast,
             if (named->typeArgs.size() != 1) return TyUnknown;
             return Type::makeRawPointer(resolveType(named->typeArgs[0].get(), typeBindings));
         }
+        if (named->name == "Result") {
+            if (named->typeArgs.size() != 2) return TyUnknown;
+            return Type::makeResult(
+                resolveType(named->typeArgs[0].get(), typeBindings),
+                resolveType(named->typeArgs[1].get(), typeBindings));
+        }
+        if (named->name == "rc" || named->name == "arc") {
+            if (named->typeArgs.size() != 1) return TyUnknown;
+            TypePtr inner =
+                resolveType(named->typeArgs.front().get(), typeBindings);
+            return named->name == "rc"
+                ? Type::makeRc(inner) : Type::makeArc(inner);
+        }
         if (named->name == "device_buffer") {
             if (named->typeArgs.size() != 1) return TyUnknown;
             return Type::makeDeviceBuffer(resolveType(named->typeArgs[0].get(), typeBindings));
@@ -109,6 +122,7 @@ TypePtr ConstraintSolver::resolve(const TypePtr& type) {
     }
 
     if ((type->kind == TypeKind::Reference || type->kind == TypeKind::RawPointer ||
+         type->kind == TypeKind::Rc || type->kind == TypeKind::Arc ||
          type->kind == TypeKind::DeviceBuffer || type->kind == TypeKind::Array ||
          type->kind == TypeKind::Slice || type->kind == TypeKind::MetadataView ||
          type->kind == TypeKind::DeclarationView ||
@@ -134,6 +148,7 @@ bool ConstraintSolver::contains(const TypePtr& type, int id) {
     if (resolved->kind == TypeKind::InferenceVar)
         return resolved->inferenceId == id;
     if (resolved->kind == TypeKind::Reference || resolved->kind == TypeKind::RawPointer ||
+        resolved->kind == TypeKind::Rc || resolved->kind == TypeKind::Arc ||
         resolved->kind == TypeKind::DeviceBuffer || resolved->kind == TypeKind::Array ||
         resolved->kind == TypeKind::MetadataView ||
         resolved->kind == TypeKind::DeclarationView || resolved->kind == TypeKind::DeclarationRef)
@@ -226,11 +241,20 @@ bool ConstraintSolver::unifyInternal(const TypePtr& lhs, const TypePtr& rhs,
         }
         return unifyInternal(a->inner, b->inner, reason);
     }
-    if (a->kind == TypeKind::RawPointer || a->kind == TypeKind::DeviceBuffer ||
+    if (a->kind == TypeKind::RawPointer || a->kind == TypeKind::Rc ||
+        a->kind == TypeKind::Arc || a->kind == TypeKind::DeviceBuffer ||
         a->kind == TypeKind::MetadataView ||
         a->kind == TypeKind::DeclarationView || a->kind == TypeKind::DeclarationRef) {
         if (!a->inner || !b->inner) return !a->inner && !b->inner;
         return unifyInternal(a->inner, b->inner, reason);
+    }
+    if (a->kind == TypeKind::Result) {
+        if (a->typeArgs.size() != 2 || b->typeArgs.size() != 2) {
+            if (reason) *reason = "Result requires value and error types";
+            return false;
+        }
+        return unifyInternal(a->typeArgs[0], b->typeArgs[0], reason) &&
+               unifyInternal(a->typeArgs[1], b->typeArgs[1], reason);
     }
     if (bothProducts) {
         if (a->fields.size() != b->fields.size()) {
@@ -319,6 +343,7 @@ void ConstraintSolver::collectUnresolvedNumeric(const TypePtr& type) {
         return;
     }
     if (resolved->kind == TypeKind::Reference || resolved->kind == TypeKind::RawPointer ||
+        resolved->kind == TypeKind::Rc || resolved->kind == TypeKind::Arc ||
         resolved->kind == TypeKind::MetadataView ||
         resolved->kind == TypeKind::DeclarationView ||
         resolved->kind == TypeKind::DeclarationRef)
@@ -342,6 +367,7 @@ bool ConstraintSolver::hasUnresolved(const TypePtr& type) {
     if (!resolved) return false;
     if (resolved->kind == TypeKind::InferenceVar) return true;
     if (resolved->kind == TypeKind::Reference || resolved->kind == TypeKind::RawPointer ||
+        resolved->kind == TypeKind::Rc || resolved->kind == TypeKind::Arc ||
         resolved->kind == TypeKind::MetadataView ||
         resolved->kind == TypeKind::DeclarationView ||
         resolved->kind == TypeKind::DeclarationRef)

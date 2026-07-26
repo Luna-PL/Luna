@@ -22,6 +22,8 @@ ctest --test-dir build --output-on-failure
 - 线性资源的路径敏感所有权：`if` 的双路径消费/单路径泄漏、提前 `return` 的终止路径、循环零次/多次执行边界，以及不可达语句。
 - GPU in-flight buffer、未 `await` event 与 event 在提前返回前的释放要求。
 - CPU 模拟器下的基础、版本化和 move-event 异构计算。
+- `Drop`、`rc`/`arc` 的显式克隆和最终释放，以及 Result 两个 variant 的活动载荷清理。
+- `Result` 构造/判别/解包、`?` 的成功与错误提前返回、错误路径 cleanup、fragment 边界拒绝和 abort 型 panic。
 
 ROCm 与 CUDA 的实机测试不包含在默认 CTest 中：默认测试必须在无 GPU 的 CI 主机上运行。ROCm 冒烟测试在具备 AMD GPU 的主机上额外执行：
 
@@ -43,6 +45,9 @@ CPU 对照基准可通过 `-DLUNA_ENABLE_CPU_BENCHMARK=ON` 启用，详情见 [c
 `luna.package-export-abi` 是独立的 AOT ABI 测试：它确认 package 中带有 `export` 的函数在 LLVM IR 中为外部符号，而未导出的函数为 `internal`。测试在结束时删除自身生成的 `.ll` 与可执行文件。
 
 `luna.return-cleanup-abi` 是路径敏感释放的 AOT 测试：它确认嵌套分支和落空路径上的每个 `return` 都在自身路径上发射一次携带精确 `size/alignment` 的 `rt_dealloc`，而不是把清理留在不可达的块末尾。
+
+`luna.result-error-aot` 比较 Result 传播案例的 JIT/AOT 输出，并检查 AOT IR
+同时保留 `try.error`、资源清理和 unwrap panic 边界。
 
 `luna.control-flow-aot` 确认两支均 `return` 的条件语句可生成、链接并运行有效的 AOT LLVM IR；语义回归同时拒绝非 `unit` 函数中未覆盖的返回路径。
 

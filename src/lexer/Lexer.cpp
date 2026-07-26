@@ -138,6 +138,7 @@ Token Lexer::readOperator() {
                                     : (match('=') ? Token(TokenKind::AndEq, "&=", mStartLine, mStartCol)
                                                    : Token(TokenKind::Ampersand, "&", mStartLine, mStartCol));
         case '@': return Token(TokenKind::At, "@", mStartLine, mStartCol);
+        case '?': return Token(TokenKind::Question, "?", mStartLine, mStartCol);
         case '|': return match('|') ? Token(TokenKind::OrOr, "||", mStartLine, mStartCol)
                                     : (match('=') ? Token(TokenKind::OrEq, "|=", mStartLine, mStartCol)
                                                    : Token(TokenKind::BitOr, "|", mStartLine, mStartCol));

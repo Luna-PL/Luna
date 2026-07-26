@@ -68,6 +68,19 @@ function(expect_success_with_env name source environment expected)
     endif()
 endfunction()
 
+function(expect_runtime_failure name source expected)
+    run_luna("${source}" transcript result)
+    string(FIND "${transcript}" "error[" compiler_error)
+    string(FIND "${transcript}" "${expected}" expected_at)
+    if("${result}" STREQUAL "0" OR NOT compiler_error EQUAL -1 OR expected_at EQUAL -1)
+        message(FATAL_ERROR
+            "${name} did not terminate at the expected runtime failure boundary.\n"
+            "Expected text: ${expected}\n"
+            "Process result: ${result}\n"
+            "Transcript:\n${transcript}")
+    endif()
+endfunction()
+
 function(expect_error name source expected)
     run_luna("${source}" transcript result)
     string(FIND "${transcript}" "error[" compiler_error)
@@ -158,6 +171,13 @@ expect_success("heap parameters borrow caller ownership" "tests/fixtures/ownersh
 expect_success("safe fixed arrays" "tests/fixtures/safe_arrays.luna" "Program exited with code: 40")
 expect_success("borrowed safe slice" "tests/fixtures/slice_borrow.luna" "Program exited with code: 30")
 expect_success("empty tail slice" "tests/fixtures/slice_empty_tail.luna" "Program exited with code: 0")
+expect_success("compiler-known Drop trait" "tests/fixtures/drop_intrinsic.luna" "92\n91")
+expect_success("explicit rc and arc cloning" "tests/fixtures/rc_arc.luna" "7\n8\n99\n99")
+expect_success("Result construction, inspection, and extraction" "tests/fixtures/result_basic.luna" "16\n10\n11\n13\n12")
+expect_success("Result propagation cleans both paths" "tests/fixtures/result_propagation.luna" "70\n43\n70\n7")
+expect_success("Result drops only its active resource payload" "tests/fixtures/result_resource_cleanup.luna" "81\n82")
+expect_runtime_failure("explicit panic" "tests/fixtures/panic.luna" "Luna panic: intentional panic")
+expect_runtime_failure("unwrap failure panics" "tests/fixtures/result_unwrap_panic.luna" "Luna panic: called unwrap on Err")
 
 # Negative programs: nominal typing, inference, metadata selection, fragment
 # replay, package assembly, linear resources, and in-flight device ownership.
@@ -238,3 +258,11 @@ expect_error("partial move invalidates only selected place" "tests/fixtures/owne
 expect_success("disjoint field borrows" "tests/fixtures/ownership_disjoint_field_borrows.luna" "Program exited with code: 0")
 expect_error("overlapping field borrows" "tests/fixtures/ownership_overlapping_field_borrows_invalid.luna" "overlapping place is borrowed")
 expect_error("partial move branch state" "tests/fixtures/ownership_partial_move_branch_invalid.luna" "ownership state of 'bundle' differs across paths through `if`")
+expect_error("rc handles require explicit clone" "tests/fixtures/rc_implicit_copy_invalid.luna" "must be moved explicitly")
+expect_error("question mark requires Result" "tests/fixtures/result_try_non_result_invalid.luna" "`?` requires Result<T, E>, got i32")
+expect_error("question mark requires Result-returning function" "tests/fixtures/result_try_non_result_function_invalid.luna" "`?` requires the enclosing function to return Result")
+expect_error("question mark preserves the error type" "tests/fixtures/result_try_error_mismatch_invalid.luna" "Type constraint failed in error propagation")
+expect_error("question mark cannot cross fragment boundary" "tests/fixtures/result_try_fragment_invalid.luna" "`?` may not propagate across a fragment/slot boundary")
+expect_error("Result constructor requires enough type context" "tests/fixtures/result_ambiguous_constructor_invalid.luna" "Could not infer type arguments of 'Ok'")
+expect_error("Result rejects unsupported aggregate payload ABI" "tests/fixtures/result_payload_abi_invalid.luna" "does not fit the initial one-word Result ABI")
+expect_error("panic requires a text message" "tests/fixtures/panic_message_type_invalid.luna" "panic message must be string or cstr")

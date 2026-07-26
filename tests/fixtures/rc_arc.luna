@@ -1,0 +1,20 @@
+nominal struct SharedResource {
+    value: i32;
+}
+
+impl Drop for SharedResource {
+    fn drop(resource: &mut SharedResource) -> unit {
+        print(99);
+    }
+}
+
+fn main() -> i32 {
+    let local = rc new SharedResource(7);
+    let local_clone = clone(local);
+    print(local_clone.value);
+
+    let concurrent = arc new SharedResource(8);
+    let concurrent_clone = clone(concurrent);
+    print(concurrent_clone.value);
+    return 0;
+}

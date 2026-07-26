@@ -1,0 +1,35 @@
+nominal struct ResultResource {
+    marker: i32;
+}
+
+impl Drop for ResultResource {
+    fn drop(resource: &mut ResultResource) -> unit {
+        print(resource.marker);
+    }
+}
+
+fn make_ok() -> Result<ResultResource, i32> {
+    let resource = new ResultResource(81);
+    return Ok(move resource);
+}
+
+fn make_err() -> Result<i32, ResultResource> {
+    let resource = new ResultResource(82);
+    return Err(move resource);
+}
+
+fn discard_ok() -> i32 {
+    let result = make_ok();
+    return 0;
+}
+
+fn discard_err() -> i32 {
+    let result = make_err();
+    return 0;
+}
+
+fn main() -> i32 {
+    discard_ok();
+    discard_err();
+    return 0;
+}

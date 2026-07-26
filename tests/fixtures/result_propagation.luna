@@ -1,0 +1,31 @@
+nominal struct ErrorPathResource {
+    value: i32;
+}
+
+impl Drop for ErrorPathResource {
+    fn drop(resource: &mut ErrorPathResource) -> unit {
+        print(70);
+    }
+}
+
+fn source(ok: bool) -> Result<i32, i32> {
+    if ok {
+        return Ok(42);
+    }
+    return Err(7);
+}
+
+fn pipeline(ok: bool) -> Result<i32, i32> {
+    let resource = new ErrorPathResource(1);
+    let value = source(ok)?;
+    return Ok(value + 1);
+}
+
+fn main() -> i32 {
+    let success = pipeline(true);
+    print(unwrap(move success));
+
+    let failure = pipeline(false);
+    print(unwrap_err(move failure));
+    return 0;
+}

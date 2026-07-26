@@ -5,7 +5,7 @@
 
 enum class TokenKind {
     // Keywords
-    Fn, Let, Const, Constexpr, New, Move, Borrow, Affine, Linear, Mut, Free, Extern, Auto, Return,
+    Fn, Let, Const, Constexpr, New, Rc, Arc, Move, Borrow, Affine, Linear, Mut, Free, Extern, Auto, Return,
     Fragment, Interceptor, Context, Many, Slot, Resume, Abort, Apply, Default,
     Meta, Constraint, Select, With, Runtime, Dynamic, Nominal, Kernel, Launch, Await,
     Trait, Impl, Where, Struct, Enum, Package, Module, Using, As, Export, If, Else, While, For,
@@ -20,7 +20,7 @@ enum class TokenKind {
     AndEq, OrEq, XorEq, ShiftLeftEq, ShiftRightEq,
     EqEq, Neq, Lt, LtEq, Gt, GtEq, ShiftLeft, ShiftRight,
     AndAnd, OrOr, BitOr, BitXor, Not, Tilde,
-    Arrow, Colon, SemiColon, ColonColon, Dot, DotDot, Ampersand, At,
+    Arrow, Colon, SemiColon, ColonColon, Dot, DotDot, Ampersand, At, Question,
     // Delimiters
     LParen, RParen, LBrace, RBrace, LBracket, RBracket,
     Comma, Less, Greater,
@@ -54,6 +54,7 @@ const std::unordered_map<std::string, TokenKind> KEYWORDS = {
     {"kernel", TokenKind::Kernel}, {"launch", TokenKind::Launch},
     {"await", TokenKind::Await},
     {"new",    TokenKind::New},    {"move",   TokenKind::Move},
+    {"rc",     TokenKind::Rc},     {"arc",    TokenKind::Arc},
     {"borrow", TokenKind::Borrow}, {"affine", TokenKind::Affine},
     {"linear", TokenKind::Linear},
     {"mut",    TokenKind::Mut},    {"free",   TokenKind::Free},
@@ -98,6 +99,8 @@ inline std::string tokenKindName(TokenKind k) {
         case TokenKind::Launch: return "launch";
         case TokenKind::Await: return "await";
         case TokenKind::New: return "new";
+        case TokenKind::Rc: return "rc";
+        case TokenKind::Arc: return "arc";
         case TokenKind::Move: return "move";
         case TokenKind::Borrow: return "borrow";
         case TokenKind::Affine: return "affine";
@@ -172,6 +175,7 @@ inline std::string tokenKindName(TokenKind k) {
         case TokenKind::DotDot: return "..";
         case TokenKind::Ampersand: return "&";
         case TokenKind::At: return "@";
+        case TokenKind::Question: return "?";
         case TokenKind::LParen: return "(";
         case TokenKind::RParen: return ")";
         case TokenKind::LBrace: return "{";

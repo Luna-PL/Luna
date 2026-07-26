@@ -1,0 +1,5 @@
+fn main() -> i32 {
+    let failure = Err::<i32, i32>(9);
+    unwrap(move failure);
+    return 0;
+}

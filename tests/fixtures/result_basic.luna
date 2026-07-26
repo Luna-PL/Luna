@@ -1,0 +1,19 @@
+fn value() -> Result<i32, i32> {
+    return Ok::<i32, i32>(11);
+}
+
+fn main() -> i32 {
+    print(type_size::<Result<i32, i32> >());
+    let result = value();
+    if is_ok(result) {
+        print(10);
+    }
+    print(unwrap(move result));
+
+    let failure = Err::<i32, i32>(12);
+    if is_err(failure) {
+        print(13);
+    }
+    print(unwrap_err(move failure));
+    return 0;
+}

@@ -34,6 +34,41 @@ bool isIntegerMetadataType(TypeKind kind) {
     }
 }
 
+bool fitsInitialResultPayload(TypeKind kind) {
+    switch (kind) {
+        case TypeKind::I8:
+        case TypeKind::I16:
+        case TypeKind::I32:
+        case TypeKind::I64:
+        case TypeKind::U8:
+        case TypeKind::U16:
+        case TypeKind::U32:
+        case TypeKind::U64:
+        case TypeKind::USize:
+        case TypeKind::ISize:
+        case TypeKind::F32:
+        case TypeKind::F64:
+        case TypeKind::Bool:
+        case TypeKind::String:
+        case TypeKind::CStr:
+        case TypeKind::RawPointer:
+        case TypeKind::Unit:
+        case TypeKind::Struct:
+        case TypeKind::Record:
+        case TypeKind::Enum:
+        case TypeKind::TypeParam:
+        case TypeKind::Reference:
+        case TypeKind::Rc:
+        case TypeKind::Arc:
+        case TypeKind::Function:
+        case TypeKind::DeviceBuffer:
+        case TypeKind::Event:
+            return true;
+        default:
+            return false;
+    }
+}
+
 bool metadataConstantMatches(const ConstantValue& value, const TypePtr& type) {
     if (!type) return false;
     if (std::holds_alternative<int64_t>(value))
@@ -123,7 +158,7 @@ bool Verifier::verify(const Module& module) {
             type.identityMode == luna::types::IdentityMode::Inference ||
             type.identityMode == luna::types::IdentityMode::Error)
             error({}, "unresolved Sema type entered MoonIR type table as '" +
-                      type.id.value + "'");
+                      type.id.value + "' (" + type.displayName + ")");
         if ((type.identityMode == luna::types::IdentityMode::Nominal ||
              type.identityMode == luna::types::IdentityMode::MetaSchema) &&
             type.nominalDeclarationId.empty())
@@ -148,6 +183,36 @@ bool Verifier::verify(const Module& module) {
             type.domain != luna::types::TypeDomain::Compiler)
             error({}, "trait type '" + type.id.value +
                       "' is outside the Compiler type domain");
+        if (type.sysmeta.schemaMajor != luna::sysmeta::SchemaMajor)
+            error({}, "type '" + type.id.value +
+                      "' uses an unsupported sysmeta schema");
+        if (type.kind == TypeKind::Rc &&
+            type.sysmeta.resource.management !=
+                luna::sysmeta::ResourceManagement::Rc)
+            error({}, "rc type '" + type.id.value +
+                      "' has inconsistent resource sysmeta");
+        if (type.kind == TypeKind::Arc &&
+            type.sysmeta.resource.management !=
+                luna::sysmeta::ResourceManagement::Arc)
+            error({}, "arc type '" + type.id.value +
+                      "' has inconsistent resource sysmeta");
+        if (type.kind == TypeKind::Result) {
+            if (type.referencedTypeIds.size() != 2) {
+                error({}, "Result type '" + type.id.value +
+                          "' must reference exactly value and error payload types");
+            } else {
+                for (const auto& payloadId : type.referencedTypeIds) {
+                    const auto* payload = module.findType(payloadId);
+                    if (payload && !fitsInitialResultPayload(payload->kind))
+                        error({}, "Result payload type '" + payload->displayName +
+                                  "' does not fit the initial one-word Result ABI");
+                }
+            }
+        }
+        if (type.sysmeta.resource.needsDrop !=
+            !type.sysmeta.abi.dropGlueSymbol.empty())
+            error({}, "type '" + type.id.value +
+                      "' has inconsistent Drop sysmeta");
     }
     for (const auto& type : module.typeTable) {
         for (const auto& referenced : type.referencedTypeIds) {
@@ -198,11 +263,55 @@ bool Verifier::verify(const Module& module) {
         if (record.retention != Retention::CompileTime && !module.features.runtime)
             error(record.location, "runtime-retained declaration '" + record.id +
                                    "' is present without the runtime feature");
+        if (record.sysmeta.schemaMajor != luna::sysmeta::SchemaMajor)
+            error(record.location, "declaration '" + record.id +
+                                   "' uses an unsupported sysmeta schema");
+        if (record.sysmeta.capability.dynamicDispatch &&
+            !module.features.dynamicApply)
+            error(record.location, "declaration '" + record.id +
+                                   "' requires dynamic dispatch without the module capability");
+        if (record.sysmeta.capability.runtimeRetained !=
+            (record.retention != Retention::CompileTime))
+            error(record.location, "declaration '" + record.id +
+                                   "' has inconsistent runtime-retention sysmeta");
         if (record.type) {
             const auto stableType = luna::types::typeId(record.type);
             if (!mVerifiedTypeIds.count(stableType.value))
                 error(record.location, "declaration '" + record.id +
                                        "' references a type absent from the type table");
+            if ((record.type->kind == TypeKind::Function ||
+                 record.type->kind == TypeKind::Slot ||
+                 record.type->kind == TypeKind::Fragment) &&
+                record.sysmeta.resource.parameters.size() !=
+                    record.type->paramTypes.size())
+                error(record.location, "declaration '" + record.id +
+                                       "' sysmeta parameter contract count does not match its type");
+            const size_t contractCount = std::min(
+                record.sysmeta.resource.parameters.size(),
+                record.type->paramContracts.size());
+            for (size_t index = 0; index < contractCount; ++index) {
+                if (record.sysmeta.resource.parameters[index] !=
+                    record.type->paramContracts[index])
+                    error(record.location, "declaration '" + record.id +
+                                           "' sysmeta ownership contract differs from its type");
+            }
+            if (record.sysmeta.resource.result != record.type->returnContract)
+                error(record.location, "declaration '" + record.id +
+                                       "' sysmeta result contract differs from its type");
+        }
+        if (record.kind == DeclarationKind::Fragment) {
+            const auto form = record.sysmeta.control.form;
+            if (form != luna::sysmeta::ControlForm::Interceptor &&
+                form != luna::sysmeta::ControlForm::Context)
+                error(record.location, "fragment '" + record.id +
+                                       "' has no fragment control sysmeta");
+            if (record.sysmeta.control.storage !=
+                luna::sysmeta::ContinuationStorage::ScopedStack)
+                error(record.location, "fragment '" + record.id +
+                                       "' must use a scoped continuation in the current ABI");
+            if (!record.sysmeta.capability.hostOnly)
+                error(record.location, "fragment '" + record.id +
+                                       "' must be host-only in the current ABI");
         }
         for (const auto& metadata : record.metadata) {
             auto schema = schemasById.find(metadata.schemaId);
@@ -258,6 +367,10 @@ bool Verifier::verify(const Module& module) {
                                              declaration->declarationId + "'");
             if (record->second->familyId != declaration->familyId)
                 error(declaration->location, "declaration table family mismatch for '" +
+                                             declaration->declarationId + "'");
+            if (record->second->sysmeta.schemaMajor !=
+                declaration->sysmeta.schemaMajor)
+                error(declaration->location, "declaration sysmeta schema mismatch for '" +
                                              declaration->declarationId + "'");
         }
         verifyDeclaration(*declaration, module);
@@ -435,6 +548,18 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
         if (apply->isDynamic && !module.features.dynamicApply)
             error(apply->location, "dynamic apply is present without dynamic apply capability");
         if (apply->body) verifyBlock(apply->body.get(), module, owner);
+    } else if (auto* abort = dynamic_cast<const AbortStmt*>(stmt)) {
+        std::unordered_set<std::string> cleanupPlaces;
+        for (const auto& cleanup : abort->cleanups) {
+            if (cleanup.place.empty())
+                error(abort->location, "abort cleanup in '" + owner + "' has no place");
+            else if (!cleanupPlaces.insert(cleanup.place).second)
+                error(abort->location, "duplicate abort cleanup for place '" +
+                      cleanup.place + "' in '" + owner + "'");
+            if (cleanup.typeId.empty() || !module.findType(cleanup.typeId))
+                error(abort->location, "abort cleanup for place '" + cleanup.place +
+                      "' references no frozen type in '" + owner + "'");
+        }
     } else if (auto* await = dynamic_cast<const AwaitStmt*>(stmt)) {
         verifyExpr(await->event.get(), module, owner);
     }
@@ -509,6 +634,9 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
         verifyExpr(call->callee.get(), module, owner);
         for (const auto& argument : call->args)
             verifyExpr(argument.get(), module, owner);
+        if (call->intrinsicType)
+            verifyType(call->intrinsicType, call->location,
+                       "intrinsic call type witness");
         if (call->returnsLinear !=
             (call->returnUsage == luna::ownership::Usage::Linear))
             error(call->location, "call in '" + owner +
@@ -538,6 +666,33 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
     } else if (auto* allocation = dynamic_cast<const HeapAllocExpr*>(expr)) {
         verifyType(allocation->allocatedType, allocation->location, "heap allocation");
         verifyExpr(allocation->initializer.get(), module, owner);
+    } else if (auto* propagation = dynamic_cast<const TryExpr*>(expr)) {
+        verifyExpr(propagation->operand.get(), module, owner);
+        verifyType(propagation->resultType, propagation->location,
+                   "error propagation Result");
+        verifyType(propagation->valueType, propagation->location,
+                   "error propagation value");
+        verifyType(propagation->errorType, propagation->location,
+                   "error propagation error");
+        if (!propagation->resultType ||
+            propagation->resultType->kind != TypeKind::Result ||
+            propagation->resultType->typeArgs.size() != 2)
+            error(propagation->location,
+                  "error propagation has no validated Result<T, E> type");
+        std::unordered_set<std::string> cleanupPlaces;
+        for (const auto& cleanup : propagation->cleanups) {
+            if (cleanup.place.empty())
+                error(propagation->location,
+                      "error propagation cleanup has no place in '" + owner + "'");
+            else if (!cleanupPlaces.insert(cleanup.place).second)
+                error(propagation->location,
+                      "duplicate error propagation cleanup for '" +
+                      cleanup.place + "' in '" + owner + "'");
+            if (cleanup.typeId.empty() || !module.findType(cleanup.typeId))
+                error(propagation->location,
+                      "error propagation cleanup for '" + cleanup.place +
+                      "' references no frozen type in '" + owner + "'");
+        }
     } else if (auto* move = dynamic_cast<const MoveExpr*>(expr)) {
         verifyExpr(move->operand.get(), module, owner);
     } else if (auto* borrow = dynamic_cast<const BorrowExpr*>(expr)) {

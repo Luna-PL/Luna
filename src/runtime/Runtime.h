@@ -21,6 +21,14 @@ void* rt_alloc(size_t size, size_t alignment);
 void* rt_realloc(void* pointer, size_t old_size, size_t new_size,
                  size_t alignment);
 void  rt_dealloc(void* pointer, size_t size, size_t alignment);
+void* rt_rc_alloc(size_t size, size_t alignment);
+void  rt_rc_retain(void* pointer);
+int32_t rt_rc_release(void* pointer);
+void* rt_arc_alloc(size_t size, size_t alignment);
+void  rt_arc_retain(void* pointer);
+int32_t rt_arc_release(void* pointer);
+void  rt_shared_dealloc(void* pointer);
+void  rt_panic_cstr(const char* message);
 
 // Alpha compatibility bridge for already emitted IR. New compiler output
 // does not use these layout-less entry points. Custom allocators that support
