@@ -135,6 +135,11 @@ above; the inventory proves coverage and does not repeat semantic explanations. 
 Git internals, and ignored generated artifacts are excluded.
 
 <!-- FILE_INVENTORY_BEGIN -->
+- `.github/workflows/linux-ci.yml`
+- `.github/workflows/macos-ci.yml`
+- `.github/workflows/release.yml`
+- `.github/workflows/windows-ci.yml`
+- `.gitignore`
 - `CHANGELOG.md`
 - `CMakeLists.txt`
 - `LICENSE-APACHE`
@@ -208,6 +213,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `docs/versioning.zh-CN.md`
 - `docs/windows_build.md`
 - `docs/windows_build.zh-CN.md`
+- `examples/.gitignore`
 - `examples/adt.luna`
 - `examples/adt_error.luna`
 - `examples/basic.luna`

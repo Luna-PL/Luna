@@ -321,6 +321,11 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 排除的生成产物不属于清单。
 
 <!-- FILE_INVENTORY_BEGIN -->
+- `.github/workflows/linux-ci.yml`
+- `.github/workflows/macos-ci.yml`
+- `.github/workflows/release.yml`
+- `.github/workflows/windows-ci.yml`
+- `.gitignore`
 - `CHANGELOG.md`
 - `CMakeLists.txt`
 - `LICENSE-APACHE`
@@ -394,6 +399,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `docs/versioning.zh-CN.md`
 - `docs/windows_build.md`
 - `docs/windows_build.zh-CN.md`
+- `examples/.gitignore`
 - `examples/adt.luna`
 - `examples/adt_error.luna`
 - `examples/basic.luna`
@@ -734,4 +740,3 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/structured_cps_abi.cmake`
 - `tools/benchmark_heterogeneous.sh`
 <!-- FILE_INVENTORY_END -->
-
