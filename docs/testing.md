@@ -117,8 +117,9 @@ coverage beyond JIT process-symbol resolution.
 including arithmetic/bitwise operations, relational comparisons, and short-circuit control flow.
 
 `luna.optimization-pipeline` checks `-O0/-O2/-O3` entry points and compares `-O0` with
-`-O2` IR: local stack slots should be promoted and constant computation folded, while
-optimized JIT/AOT must return the same result.
+`-O2` IR: local stack slots should be promoted and constant computation folded. It also
+checks the bounded four-way O3 hint on a straight-line reduction loop, excludes a tiny
+nested recurrence from that hint, and requires optimized JIT/AOT to return the same result.
 
 `luna.fragment-lowering-abi` checks that static fragments do not degrade into dynamic
 candidate selection or heap allocation. `luna.structured-cps-abi` checks, at O0, the

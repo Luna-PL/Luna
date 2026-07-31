@@ -87,7 +87,10 @@ CPU 对照基准可通过 `-DLUNA_ENABLE_CPU_BENCHMARK=ON` 启用，详情见
 
 `luna.jit-aot-parity` 对同一含标准输出和非零返回码的程序比较 JIT 与 AOT 的退出码及 stdout，覆盖算术/位运算、关系比较和短路控制流。
 
-`luna.optimization-pipeline` 检查 `-O0/-O2/-O3` 入口，并对比 `-O0` 与 `-O2` 的 IR：局部栈槽应被提升、常量计算应折叠，同时优化后的 JIT/AOT 必须返回相同结果。
+`luna.optimization-pipeline` 检查 `-O0/-O2/-O3` 入口，并对比 `-O0` 与 `-O2`
+的 IR：局部栈槽应被提升、常量计算应折叠；它还验证直线 reduction loop 的有界
+O3 四路展开提示，并防止同一提示应用于过小的嵌套递归，同时优化后的 JIT/AOT
+必须返回相同结果。
 
 `luna.fragment-lowering-abi` 检查静态 fragment 不会退化为动态候选选择或堆分配；`luna.structured-cps-abi` 则在 O0 下检查 context 续体的栈上 frame、独立入口和返回分发块，并运行“续体内 return”案例，确认 `resume()` 后的代码不会错误执行。
 
@@ -109,4 +112,3 @@ C/C++ ABI 可编译性。
 `luna.jit-aot-extended-parity` 以 `-O2` 比较多文件包和 CPU 模拟器异构程序的 JIT/AOT 退出码及 stdout，确保优化不破坏包级链接或 host-side launch/event 降低。
 
 `luna.stable-core-parity` 是第二周的完整一致性矩阵：它对稳定核心示例在 `-O0`、`-O2` 与 `-O3` 下分别比较 JIT/AOT 的 stdout、退出码和 stderr，覆盖泛型、反射、闭包、ADT、版本、trait、FFI、多文件包与 CPU 模拟器异构程序。它还防止 ADT 形参被误判为被调用方拥有的堆内存，从而在正常调用后发生重复释放。
-

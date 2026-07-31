@@ -4,6 +4,9 @@
 
 #include <optional>
 
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/Metadata.h>
+
 using moon::AbortStmt;
 using moon::ApplyStmt;
 using moon::AwaitStmt;
@@ -23,6 +26,52 @@ using moon::SlotDeclStmt;
 using moon::SlotInvokeStmt;
 using moon::Stmt;
 using moon::WhileStmt;
+
+namespace {
+
+// Four-way unrolling exposes small scalar recurrences more effectively to the
+// native backend. Restrict the hint to a single straight-line, call-free latch
+// so effectful or control-flow-heavy loops retain LLVM's own cost decision.
+bool shouldUnrollStraightLineLoop(const llvm::BasicBlock* body,
+                                  const llvm::BranchInst* latch) {
+    if (!body || !latch || latch->getParent() != body ||
+        !latch->isUnconditional())
+        return false;
+
+    unsigned instructionCount = 0;
+    for (const llvm::Instruction& instruction : *body) {
+        if (++instructionCount > 48 ||
+            llvm::isa<llvm::CallBase>(instruction))
+            return false;
+        if (const auto* load = llvm::dyn_cast<llvm::LoadInst>(&instruction);
+            load && (load->isVolatile() || load->isAtomic()))
+            return false;
+        if (const auto* store = llvm::dyn_cast<llvm::StoreInst>(&instruction);
+            store && (store->isVolatile() || store->isAtomic()))
+            return false;
+    }
+    // Very small single-recurrence loops generally gain nothing from forced
+    // unrolling and can lengthen their dependency chain (notably nested-loop
+    // kernels). Require enough independent work for the four-way hint.
+    return instructionCount >= 24;
+}
+
+void setLoopUnrollCount(llvm::BranchInst* latch, llvm::LLVMContext& context,
+                        unsigned count) {
+    auto temporary = llvm::MDNode::getTemporary(context, {});
+    llvm::Metadata* countOperands[] = {
+        llvm::MDString::get(context, "llvm.loop.unroll.count"),
+        llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+            llvm::Type::getInt32Ty(context), count)),
+    };
+    auto* countNode = llvm::MDNode::get(context, countOperands);
+    llvm::Metadata* loopOperands[] = {temporary.get(), countNode};
+    auto* loopID = llvm::MDNode::getDistinct(context, loopOperands);
+    loopID->replaceOperandWith(0, loopID);
+    latch->setMetadata(llvm::LLVMContext::MD_loop, loopID);
+}
+
+} // namespace
 
 // ─── Statement generation ──────────────────────────────────────────
 
@@ -402,8 +451,12 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         bodyBB->insertInto(func, exitBB);
         mBuilder->SetInsertPoint(bodyBB);
         generateBlock(ws->body.get(), func);
-        if (!mBuilder->GetInsertBlock()->getTerminator())
-            mBuilder->CreateBr(condBB);
+        if (!mBuilder->GetInsertBlock()->getTerminator()) {
+            auto* latch = mBuilder->CreateBr(condBB);
+            if (mOptimizationLevel == LunaOptimizationLevel::O3 &&
+                shouldUnrollStraightLineLoop(bodyBB, latch))
+                setLoopUnrollCount(latch, *mCtx, 4);
+        }
 
         mBuilder->SetInsertPoint(exitBB);
         return;

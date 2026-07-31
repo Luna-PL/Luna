@@ -87,3 +87,72 @@ string(FIND "${o3_ir}" "ret i32 42" o3_constant_return)
 if(o3_constant_return EQUAL -1)
     message(FATAL_ERROR "-O3 did not preserve the expected constant result.\nIR:\n${o3_ir}")
 endif()
+
+# Small straight-line, call-free while loops receive a conservative four-way
+# O3 unroll hint. The reduction workload keeps the recurrence live and makes
+# the selected count directly visible in optimized IR.
+set(loop_source_path "${LUNA_SOURCE_DIR}/benchmarks/luna_cpu_reduction.luna")
+set(loop_ir_path "${loop_source_path}.ll")
+set(loop_executable_path "${LUNA_SOURCE_DIR}/benchmarks/luna_cpu_reduction")
+if(WIN32)
+    set(loop_executable_path "${loop_executable_path}.exe")
+endif()
+file(REMOVE "${loop_ir_path}" "${loop_executable_path}")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${loop_source_path}" -O3
+    RESULT_VARIABLE loop_build_result
+    OUTPUT_VARIABLE loop_build_output
+    ERROR_VARIABLE loop_build_error
+)
+if(NOT loop_build_result EQUAL 0 OR NOT EXISTS "${loop_ir_path}")
+    file(REMOVE "${loop_ir_path}" "${loop_executable_path}")
+    message(FATAL_ERROR
+        "O3 loop-unroll regression build failed.\nResult: ${loop_build_result}\n"
+        "Output:\n${loop_build_output}\n${loop_build_error}")
+endif()
+file(READ "${loop_ir_path}" loop_ir)
+file(REMOVE "${loop_ir_path}" "${loop_executable_path}")
+string(REGEX MATCH
+    "%addeqtmp\\.3 = add [^\n]*i32 [^\n]*, 4"
+    loop_unroll_increment "${loop_ir}")
+if(loop_unroll_increment STREQUAL "")
+    message(FATAL_ERROR
+        "-O3 did not apply the expected four-way straight-line loop unroll.\n"
+        "IR:\n${loop_ir}")
+endif()
+
+# A tiny single-recurrence inner loop is intentionally below the heuristic's
+# lower bound: forcing it to four-way unroll lengthens the dependency chain.
+set(nested_source_path "${LUNA_SOURCE_DIR}/benchmarks/luna_cpu_nested.luna")
+set(nested_ir_path "${nested_source_path}.ll")
+set(nested_executable_path "${LUNA_SOURCE_DIR}/benchmarks/luna_cpu_nested")
+if(WIN32)
+    set(nested_executable_path "${nested_executable_path}.exe")
+endif()
+file(REMOVE "${nested_ir_path}" "${nested_executable_path}")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${nested_source_path}" -O3
+    RESULT_VARIABLE nested_build_result
+    OUTPUT_VARIABLE nested_build_output
+    ERROR_VARIABLE nested_build_error
+)
+if(NOT nested_build_result EQUAL 0 OR NOT EXISTS "${nested_ir_path}")
+    file(REMOVE "${nested_ir_path}" "${nested_executable_path}")
+    message(FATAL_ERROR
+        "O3 nested-loop regression build failed.\nResult: ${nested_build_result}\n"
+        "Output:\n${nested_build_output}\n${nested_build_error}")
+endif()
+file(READ "${nested_ir_path}" nested_ir)
+file(REMOVE "${nested_ir_path}" "${nested_executable_path}")
+string(REGEX MATCH
+    "add [^\n]*i32 %column[^,\n]*, 1"
+    nested_scalar_increment "${nested_ir}")
+string(REGEX MATCH
+    "add [^\n]*i32 %column[^,\n]*, 4"
+    nested_forced_increment "${nested_ir}")
+if(nested_scalar_increment STREQUAL "" OR
+   NOT nested_forced_increment STREQUAL "")
+    message(FATAL_ERROR
+        "-O3 forced four-way unrolling on the small nested recurrence.\n"
+        "IR:\n${nested_ir}")
+endif()

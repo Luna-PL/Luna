@@ -41,6 +41,9 @@
 - Declared `0.2.0-alpha` a long-lived maintenance line with no scheduled Beta
   or language-version bump, and shifted near-term development toward
   diagnostics, editor/build/package integration, distribution and reliability.
+- Added a bounded O3 four-way unroll hint for medium-sized straight-line,
+  call-free while loops, with positive reduction coverage and a nested-loop
+  exclusion regression.
 
 ## 0.1.0-alpha — Development baseline
 

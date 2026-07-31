@@ -99,9 +99,10 @@ Options accepting values also support `--name=value`.
 
 `-O0` keeps the most direct experimental control-flow IR and is the Alpha
 default. `-O2` runs the standard LLVM speed pipeline; `-O3` selects the more
-aggressive pipeline. Host modules are verified before and after optimization,
-and AOT passes the same level to the native compiler. Device kernels use a
-separate target-specific O3 pipeline.
+aggressive pipeline and gives small straight-line, call-free while loops a
+bounded four-way unroll hint. Host modules are verified before and after
+optimization, and AOT passes the same level to the native compiler. Device
+kernels use a separate target-specific O3 pipeline.
 
 ## GPU targets and runtime backends
 
