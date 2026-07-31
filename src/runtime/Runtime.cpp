@@ -685,6 +685,8 @@ int rt_runtime_error_snapshot_v1(uint32_t domain,
 void* rt_alloc(size_t size, size_t alignment) {
     if (!isValidAlignment(alignment)) return nullptr;
     const auto* services = activateHostServices();
+    if (services == &defaultHostServices)
+        return defaultAllocate(nullptr, size, alignment);
     return services->allocator->allocate(
         services->allocator->context, size, alignment);
 }
@@ -693,6 +695,8 @@ void* rt_realloc(void* pointer, size_t old_size, size_t new_size,
                  size_t alignment) {
     if (!isValidAlignment(alignment)) return nullptr;
     const auto* services = activateHostServices();
+    if (services == &defaultHostServices)
+        return defaultReallocate(nullptr, pointer, old_size, new_size, alignment);
     const auto* allocator = services->allocator;
     if (!allocator->reallocate) return nullptr;
     return allocator->reallocate(
@@ -702,6 +706,10 @@ void* rt_realloc(void* pointer, size_t old_size, size_t new_size,
 void rt_dealloc(void* pointer, size_t size, size_t alignment) {
     if (!pointer || !isValidAlignment(alignment)) return;
     const auto* services = activateHostServices();
+    if (services == &defaultHostServices) {
+        defaultDeallocate(nullptr, pointer, size, alignment);
+        return;
+    }
     services->allocator->deallocate(
         services->allocator->context, pointer, size, alignment);
 }

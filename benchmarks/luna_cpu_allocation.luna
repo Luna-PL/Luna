@@ -4,7 +4,8 @@ fn main() -> i32 {
     while i < 500000 {
         let item = new i32(i);
         // `new i32` is an owning heap value in Luna; scope exit releases it.
-        // Keep the loop value in the checksum so the workload remains live.
+        // Unique heap values are ownership tokens in the Alpha surface; keep
+        // the initializer live in the checksum while scope exit releases item.
         checksum = (checksum + i) % 1000003;
         i += 1;
     }

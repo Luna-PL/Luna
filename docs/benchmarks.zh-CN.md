@@ -37,8 +37,11 @@ LUNA_CPU_ITERATIONS=10 LUNA_CPU_WARMUPS=2 \
 
 2026-07-23 的 Ryzen 5 7500F / Clang 22 基线中，八项非分配 workload 有七项位于
 C++23 的 `0.97x–1.09x`，归约为 `1.27x`。分配项为 `4.39x`，因为 Luna 保留真实
-`rt_alloc/rt_dealloc`，Clang 则删除了无外部可观察效果的 C++ `new/delete`。
-它只说明优化边界，不能用于分配器排名。
+`rt_alloc/rt_dealloc`，Clang 则删除了 C++ `new/delete`；该结果现已废弃。当前分配
+workload 在两端都初始化分配，并将 C++ allocator adapter 放在独立翻译单元中，
+因此普通非 LTO 构建会真实执行两端分配路径。由于 Alpha 的 unique heap value 是
+ownership token，不能直接解引用，checksum 使用两端共同的 initializer source 保持
+计算存活。使用该项进行比较前应先记录新基线。
 
 ## 异构与 ROCm 对照
 

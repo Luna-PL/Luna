@@ -104,8 +104,8 @@ errno，也不会延长外部 `last_error` 指针的生命周期。JIT 通过宿
 ## 按需付费
 
 - 没有 `new`、清理或 `print` 的静态代码不会生成对应 runtime 调用。
-- 普通分配调用是一次固定 `rt_alloc` 边界；可替换服务表的间接调用发生在
-  runtime 内部，不在每个语言对象内嵌 capability/header。
+- 普通分配调用是一次固定 `rt_alloc` 边界。默认 allocator 走 runtime 内的直接
+  fast path；宿主安装的 allocator 仍通过可替换服务表调用。两条路径都不会在每个
+  语言对象中内嵌 capability 或隐藏分配 header。
 - 可执行内存、GPU、动态选择和动态 apply 都是独立 capability，不会因为链接
   `libruntime` 就自动启用。
-

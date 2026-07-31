@@ -40,10 +40,14 @@ applications, memory bandwidth, concurrency, I/O or allocation architecture.
 
 The 2026-07-23 Ryzen 5 7500F / Clang 22 baseline placed seven of eight
 non-allocation workloads between `0.97x` and `1.09x` of C++23; reduction was
-`1.27x`. The allocation row was `4.39x` because Luna retained real
-`rt_alloc/rt_dealloc` calls while Clang eliminated the unobservable C++
-`new/delete` pair. This is an optimization-boundary observation, not an
-allocator ranking.
+`1.27x`. Its former `4.39x` allocation result is retired: Luna retained real
+`rt_alloc/rt_dealloc` calls while Clang eliminated the C++ `new/delete` pair.
+The current allocation workload initializes an allocation on both sides and
+keeps the C++ allocator adapter in a separate translation unit, so ordinary
+non-LTO builds execute both allocation paths. Its checksum keeps the common
+initializer source live because Alpha unique heap values are ownership tokens,
+not directly dereferenceable values. Record a new baseline before using that
+row for comparisons.
 
 ## Heterogeneous and ROCm comparison
 

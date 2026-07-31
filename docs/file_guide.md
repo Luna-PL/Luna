@@ -121,7 +121,8 @@ remains outside the canonical pair.
 
 Examples demonstrate one topic per file; full_showcase is the combined Alpha example and
 slot_plugins demonstrates plugin use. Benchmark runners are responsible for reproducible
-build, sampling, and reporting.
+build, sampling, and reporting. `cpp23_allocation_support.cpp` keeps the C++ allocation
+workload observable across a non-LTO translation-unit boundary.
 
 Test scripts own assertions for exit status, diagnostics, IR, ABI, and output. Fixtures own
 source inputs. semantic_regressions.cmake is the positive/negative language matrix; other
@@ -147,6 +148,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `README.md`
 - `README.zh-CN.md`
 - `VERSION`
+- `benchmarks/cpp23_allocation_support.cpp`
 - `benchmarks/cpp23_cpu_suite.cpp`
 - `benchmarks/cpp23_hip_vector.cpp`
 - `benchmarks/luna_cpu_allocation.luna`

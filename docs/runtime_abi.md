@@ -112,8 +112,8 @@ external fragment ABI v1 remains unchanged and will not be extended silently.
 ## Pay only for what is used
 
 - Static code without `new`, cleanup, or `print` generates no corresponding runtime call.
-- An ordinary allocation is one fixed `rt_alloc` boundary; indirect calls through a
-  replaceable service table happen inside Runtime, not as an embedded capability/header in
-  every language object.
+- An ordinary allocation is one fixed `rt_alloc` boundary. The default allocator takes a
+  direct Runtime fast path; an installed host allocator uses the replaceable service table.
+  Neither path embeds a capability or hidden allocation header in every language object.
 - Executable memory, GPU, dynamic selection, and dynamic apply are independent capabilities;
   linking `libruntime` does not enable them automatically.

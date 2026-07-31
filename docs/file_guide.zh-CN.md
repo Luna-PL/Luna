@@ -290,7 +290,8 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 只演示插件使用。
 
 `benchmarks/luna_cpu_*.luna` 分别提供命名操作的 Luna CPU 工作负载；
-`cpp23_cpu_suite.cpp` 是对照实现；`luna_gpu_vector.luna` 与
+`cpp23_cpu_suite.cpp` 是对照实现，`cpp23_allocation_support.cpp` 通过非 LTO
+翻译单元边界保持分配调用可观察；`luna_gpu_vector.luna` 与
 `cpp23_hip_vector.cpp` 是 GPU 对照；三个 `run_*.sh` 只负责可复现构建、采样和报告。
 `tools/benchmark_heterogeneous.sh` 是异构 benchmark 的开发者入口，不构成 CI 门禁。
 
@@ -333,6 +334,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `README.md`
 - `README.zh-CN.md`
 - `VERSION`
+- `benchmarks/cpp23_allocation_support.cpp`
 - `benchmarks/cpp23_cpu_suite.cpp`
 - `benchmarks/cpp23_hip_vector.cpp`
 - `benchmarks/luna_cpu_allocation.luna`

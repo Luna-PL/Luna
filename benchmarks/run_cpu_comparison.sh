@@ -60,7 +60,9 @@ if ! command -v "${cpp_compiler}" >/dev/null; then
 fi
 
 "${cpp_compiler}" -std=c++23 "${optimization}" \
-    "${source_root}/benchmarks/cpp23_cpu_suite.cpp" -o "${cpp_binary}"
+    "${source_root}/benchmarks/cpp23_cpu_suite.cpp" \
+    "${source_root}/benchmarks/cpp23_allocation_support.cpp" \
+    -o "${cpp_binary}"
 
 for workload in "${workloads[@]}"; do
     source="$(luna_source_for "${workload}")"

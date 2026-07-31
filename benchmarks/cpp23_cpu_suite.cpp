@@ -4,6 +4,11 @@
 #include <cstdlib>
 #include <cstring>
 
+// Defined in a separate translation unit so an ordinary non-LTO benchmark
+// build cannot fold the allocation/deallocation pair into scalar arithmetic.
+extern "C" void* luna_benchmark_allocate(std::size_t size);
+extern "C" void luna_benchmark_deallocate(void* pointer);
+
 namespace {
 constexpr int kIterations = 20'000'000;
 constexpr int kAllocations = 500'000;
@@ -51,9 +56,11 @@ std::uint32_t safe_array_reference() {
 std::uint32_t allocation() {
     std::int32_t checksum = 0;
     for (int i = 0; i < kAllocations; ++i) {
-        auto* item = new std::int32_t(i);
-        checksum = (checksum + *item) % 1'000'003;
-        delete item;
+        auto* item = static_cast<std::int32_t*>(
+            luna_benchmark_allocate(sizeof(std::int32_t)));
+        *item = i;
+        checksum = (checksum + i) % 1'000'003;
+        luna_benchmark_deallocate(item);
     }
     return static_cast<std::uint32_t>(checksum) & 255u;
 }
