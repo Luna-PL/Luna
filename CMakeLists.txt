@@ -109,7 +109,7 @@ if(LUNA_ENABLE_SANITIZERS)
         -fno-omit-frame-pointer)
 endif()
 
-target_include_directories(luna PRIVATE ${LLVM_INCLUDE_DIRS})
+target_include_directories(luna SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_include_directories(luna PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 target_compile_definitions(luna PRIVATE
