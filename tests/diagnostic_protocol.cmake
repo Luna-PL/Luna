@@ -1,3 +1,5 @@
+cmake_minimum_required(VERSION 3.20)
+
 if(NOT DEFINED LUNA_EXECUTABLE OR NOT EXISTS "${LUNA_EXECUTABLE}")
     message(FATAL_ERROR "LUNA_EXECUTABLE must point at a built luna binary")
 endif()
