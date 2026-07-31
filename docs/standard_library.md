@@ -22,8 +22,10 @@ trait、静态/动态格式付费边界和错误返回类型。
 错误层采用“具体错误 + 静态 `From` 聚合”。Core 已物化无 host 依赖的
 `ErrorCode`、`InvalidArgumentError`、`BoundsError`、`UtfError`、
 `LayoutError` 和 `AllocError`；它们使用冻结的 inline ADT ABI。依赖易失错误文本
-和 Runtime status 快照的边界错误仍暂不公开，避免在 owned diagnostic string 的
-OOM 策略和 status/out-parameter ABI 完成前固化错误边界。边界设计见
+的语言层边界错误仍暂不公开。Runtime 已提供 caller-owned 的
+`domain/code/message` 快照，并规定 owned diagnostic 分配失败时保留机器字段、
+省略文本；下一步是在 Std 中物化安全 adapter 和具体错误类型，而不是直接暴露
+兼容用的 `last_error` 指针。边界设计见
 [标准错误与 FFI/Runtime 转换 RFC](Arch/Standard_Error_Boundaries_RFC.md)。
 
 迭代管道的第一阶段已由编译器对数组、切片和 `range` 直接融合，不要求 `Vec`

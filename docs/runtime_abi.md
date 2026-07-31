@@ -29,6 +29,31 @@ void  rt_dealloc(void* pointer, size_t size, size_t alignment);
 诊断并 flush，随后 abort；它不执行语言栈展开或局部 Drop。可恢复错误应使用
 `Result<T, E>`，由生成代码在提前返回前执行路径敏感清理。
 
+## 可恢复错误快照
+
+Runtime ABI v1 通过 `rt_runtime_error_snapshot_v1` 暴露可恢复边界错误。调用者
+指定 `LUNA_RUNTIME_ERROR_DOMAIN_FRAGMENT_PLUGIN` 或
+`LUNA_RUNTIME_ERROR_DOMAIN_GPU`，得到稳定的 `domain/code` 和可选 UTF-8
+诊断文本：
+
+```c
+LunaRuntimeErrorSnapshotV1 snapshot;
+int status = rt_runtime_error_snapshot_v1(
+    LUNA_RUNTIME_ERROR_DOMAIN_GPU, &snapshot, NULL, 0);
+```
+
+空缓冲区用于查询 `message_size`，有诊断文本时返回
+`LUNA_RUNTIME_STATUS_BUFFER_TOO_SMALL`。再次调用时由 adapter 提供
+`message_size + 1` 字节即可复制含结尾 NUL 的文本。缓冲不足时也会写入完整
+`domain/code/message_size`，并在非空缓冲区中留下安全截断且以 NUL 结尾的文本。
+
+错误身份只由 `domain/code` 决定，文本仅用于诊断。快照操作本身不分配内存；
+安全 adapter 若无法为 owned message 分配空间，必须保留机器错误字段并省略文本，
+不能 panic，也不能把 `rt_gpu_last_error` 或
+`rt_fragment_plugin_last_error` 返回的易失指针存进长期值。两个旧
+`last_error` 入口为 Alpha 兼容保留，新 adapter 应使用快照接口，并在失败调用后
+立即复制。
+
 ## 四个不可混用的资源域
 
 1. **Luna host heap**：使用 `rt_alloc/rt_dealloc`，布局由 MoonIR/编译器确定。

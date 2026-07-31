@@ -25,3 +25,4 @@ install_manifest.txt
 /tests/fixtures/**/fragment_contracts
 /tests/fixtures/**/control_flow_valid
 /tests/fixtures/**/ffi_aot
+.DS_Store

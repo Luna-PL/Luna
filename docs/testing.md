@@ -64,6 +64,10 @@ CPU 对照基准可通过 `-DLUNA_ENABLE_CPU_BENCHMARK=ON` 启用，详情见 [c
 `luna.aot-runtime-boundary` 覆盖显式 `--runtime-lib` / `--cc`、缺失运行时库的 `DRV0001` 诊断，以及 AOT 可执行文件的 GPU 后端初始化失败边界。
 
 `luna.runtime-gpu-error-state` 验证 CPU 模拟器下 event 的成功与无效状态 ABI；`luna.gpu-error-boundary-abi` 检查 AOT IR 中 `await` 的失败分支会调用统一 GPU 错误终止入口，保证 CUDA/ROCm 的 launch 或同步失败不会静默继续执行。
+前者同时检查 Runtime error snapshot 的稳定 GPU domain/code、两阶段消息复制和
+旧 `last_error` 兼容，并确保一次 operation error 不会反向污染已成功的 backend
+初始化状态；`luna.runtime-abi-v1` 覆盖 fragment plugin 错误快照以及公开头文件的
+C/C++ ABI 可编译性。
 
 `luna.jit-aot-extended-parity` 以 `-O2` 比较多文件包和 CPU 模拟器异构程序的 JIT/AOT 退出码及 stdout，确保优化不破坏包级链接或 host-side launch/event 降低。
 

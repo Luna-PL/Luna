@@ -4,6 +4,7 @@
 
 - Reorganized the project entry documentation into an English default README and a linked Simplified Chinese README, with feature, Hello World, build, CLI, platform, roadmap, and topic-oriented documentation entry points.
 - Added the versioned, C-compatible Runtime ABI v1 with replaceable host allocator and console services, exact `size/alignment` allocation lowering, foreign-resource carriers, and an optional W^X executable-memory capability reserved for MoonRuntime/JIT hosts.
+- Added caller-owned Runtime error snapshots with stable GPU/plugin domain and code fields, allocation-free diagnostic copying, and compatibility coverage for the legacy borrowed `last_error` views.
 - Moved compiler-generated `new`, automatic cleanup, explicit `free`, and language `print` behind Luna runtime symbols; kept layout-less `rt_malloc/rt_free` only as an Alpha compatibility bridge for previously emitted IR.
 - Verified the stable JIT/AOT/runtime boundaries on Linux, macOS, and Windows UCRT64, including explicit ORC symbol registration and parameterized AOT process launching.
 - Separated reverse-DNS Package IDs from `::` module/submodule identities, added `using <Package ID> as <alias>` dependency edges, and preserved the package/module graph in verified MoonIR.

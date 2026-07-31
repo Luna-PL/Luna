@@ -14,6 +14,9 @@ extern "C" {
 // process lifetime. Passing nullptr restores nothing and is rejected.
 int rt_install_host_services_v1(const LunaHostServicesV1* services);
 const LunaHostServicesV1* rt_host_services_v1();
+int rt_runtime_error_snapshot_v1(uint32_t domain,
+                                 LunaRuntimeErrorSnapshotV1* snapshot,
+                                 char* message, size_t message_capacity);
 
 // Luna-owned host memory. New generated code always supplies the exact Luna
 // layout; a host allocator may therefore avoid per-allocation headers.

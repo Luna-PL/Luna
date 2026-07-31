@@ -127,18 +127,21 @@ Core/Std 不应提供一个吞掉所有信息的全局错误枚举。库 API 返
 - 边界：`FfiError`、`RuntimeError`、`GpuError`，保留 domain、稳定 code，并可选
   拥有一份诊断文本，不能只借用易失的 `last_error` 指针。
 
-Core 的值错误现已基于通用匹配和冻结的 inline ADT ABI 物化。依赖 host 的
-`FfiError`/`RuntimeError`/`GpuError` 仍等待 owned diagnostic OOM 策略与
-status/out-parameter ABI，不会借用易失的外部错误文本。
+Core 的值错误现已基于通用匹配和冻结的 inline ADT ABI 物化。Runtime ABI v1
+也已为 GPU 与 external fragment plugin 提供 caller-owned
+`domain/code/message` 快照，并规定分配失败时保留机器字段、允许省略诊断文本。
+语言层 `FfiError`/`RuntimeError`/`GpuError` 及其安全 adapter 仍待物化；它们
+不会借用易失的外部错误文本。
 
 原始 `extern "C"` 只接受 C ABI 类型，明确拒绝直接传递 Luna `Result` 或标准错误
 ADT。安全 adapter 是普通 Luna 函数：调用 raw FFI，立即读取 status/errno/错误
 快照，复制所需诊断，再返回 `Result<T, FfiError>`。编译器不会猜测某个返回值是否
 是 errno，也不会自动读取进程全局错误状态。
 
-Runtime ABI 同样以稳定 status/domain/code 为机器判据，文本只用于诊断。当前仍
-只有 abort 边界的 runtime 操作，应在相应 Core/Std adapter 落地时增加可恢复
-status/out-parameter 入口；不能把可能失败的 C++ 异常越过 C ABI，也不能把
+Runtime ABI 同样以稳定 status/domain/code 为机器判据，文本只用于诊断。
+`rt_runtime_error_snapshot_v1` 已能复制最近一次 GPU/plugin 错误；具体可恢复操作
+仍应逐步采用 status/out-parameter 返回，并由相应 Core/Std adapter 转成
+`Result`。不能把可能失败的 C++ 异常越过 C ABI，也不能把
 `rt_gpu_last_error()` 之类的借用字符串直接存进长期错误值。
 
 详细边界见 [标准错误与 FFI/Runtime 转换](Standard_Error_Boundaries_RFC.md)。

@@ -21,7 +21,43 @@ enum LunaRuntimeStatusV1 {
     LUNA_RUNTIME_STATUS_UNSUPPORTED_ABI = -2,
     LUNA_RUNTIME_STATUS_ALREADY_ACTIVE = -3,
     LUNA_RUNTIME_STATUS_UNSUPPORTED_OPERATION = -4,
+    LUNA_RUNTIME_STATUS_BUFFER_TOO_SMALL = -5,
 };
+
+// Stable error identities for recoverable Runtime boundaries. Diagnostic text
+// is deliberately not an identity and may be omitted by callers that cannot
+// allocate storage for it.
+enum LunaRuntimeErrorDomainV1 {
+    LUNA_RUNTIME_ERROR_DOMAIN_NONE = 0,
+    LUNA_RUNTIME_ERROR_DOMAIN_FRAGMENT_PLUGIN = 1,
+    LUNA_RUNTIME_ERROR_DOMAIN_GPU = 2,
+};
+
+enum LunaRuntimeErrorCodeV1 {
+    LUNA_RUNTIME_ERROR_NONE = 0,
+    LUNA_RUNTIME_ERROR_UNKNOWN = 1,
+    LUNA_RUNTIME_ERROR_INVALID_ARGUMENT = 2,
+    LUNA_RUNTIME_ERROR_UNSUPPORTED_ABI = 3,
+    LUNA_RUNTIME_ERROR_DYNAMIC_LIBRARY = 4,
+    LUNA_RUNTIME_ERROR_MISSING_SYMBOL = 5,
+    LUNA_RUNTIME_ERROR_INVALID_DESCRIPTOR = 6,
+    LUNA_RUNTIME_ERROR_DUPLICATE_REGISTRATION = 7,
+    LUNA_RUNTIME_ERROR_NOT_FOUND = 8,
+    LUNA_RUNTIME_ERROR_INVALID_RESULT = 9,
+    LUNA_RUNTIME_ERROR_BACKEND_UNAVAILABLE = 10,
+    LUNA_RUNTIME_ERROR_BACKEND_OPERATION = 11,
+    LUNA_RUNTIME_ERROR_INVALID_STATE = 12,
+};
+
+typedef struct LunaRuntimeErrorSnapshotV1 {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t domain;
+    int32_t code;
+    // UTF-8 bytes excluding the trailing NUL. A zero value means that no
+    // diagnostic text is available.
+    uint64_t message_size;
+} LunaRuntimeErrorSnapshotV1;
 
 enum LunaHostCapabilityV1 {
     LUNA_HOST_CAP_ALLOCATOR = UINT64_C(1) << 0,
@@ -127,6 +163,15 @@ typedef struct LunaRuntimeModuleContextV1 {
 // before the first allocation, console call, or explicit descriptor query.
 int rt_install_host_services_v1(const LunaHostServicesV1* services);
 const LunaHostServicesV1* rt_host_services_v1(void);
+
+// Copies the most recent error for `domain` into caller-owned storage. The
+// snapshot metadata is always written when `snapshot` and `domain` are valid.
+// `message_capacity` includes room for the trailing NUL. A null/zero buffer is
+// a size query; BUFFER_TOO_SMALL reports a truncated or omitted message while
+// preserving domain, code, and the complete required message_size.
+int rt_runtime_error_snapshot_v1(uint32_t domain,
+                                 LunaRuntimeErrorSnapshotV1* snapshot,
+                                 char* message, size_t message_capacity);
 
 void* rt_alloc(size_t size, size_t alignment);
 void* rt_realloc(void* pointer, size_t old_size, size_t new_size,

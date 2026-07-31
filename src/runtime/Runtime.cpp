@@ -9,6 +9,7 @@
 #include <new>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #ifdef _WIN32
@@ -311,9 +312,11 @@ struct HipPendingEvent {
 
 struct GpuRuntimeState {
     bool initialized = false;
+    bool initializationSucceeded = false;
     bool cuda = false;
     bool rocm = false;
     std::string backend = "sim";
+    int32_t errorCode = LUNA_RUNTIME_ERROR_NONE;
     std::string error;
     CudaApi api;
     HipApi hip;
@@ -337,6 +340,7 @@ struct FragmentPluginState {
         std::string path;
     };
     std::vector<Loaded> loaded;
+    int32_t errorCode = LUNA_RUNTIME_ERROR_NONE;
     std::string error;
 };
 
@@ -348,6 +352,24 @@ GpuRuntimeState& state() {
 FragmentPluginState& fragmentPlugins() {
     static FragmentPluginState value;
     return value;
+}
+
+void clearFragmentPluginError() {
+    auto& plugins = fragmentPlugins();
+    plugins.errorCode = LUNA_RUNTIME_ERROR_NONE;
+    plugins.error.clear();
+}
+
+void setFragmentPluginError(int32_t code, std::string message) {
+    auto& plugins = fragmentPlugins();
+    plugins.errorCode = code;
+    plugins.error = std::move(message);
+}
+
+void setGpuError(int32_t code, std::string message) {
+    auto& runtime = state();
+    runtime.errorCode = code;
+    runtime.error = std::move(message);
 }
 
 bool gpuProfilingRequested() {
@@ -393,8 +415,10 @@ bool loadRuntimeSymbol(Api& api, T& target, const char* name) {
 }
 
 void setCudaError(const char* operation, CUresult status) {
-    state().error = std::string("CUDA Driver API call '") + operation +
-        "' failed with code " + std::to_string(status);
+    setGpuError(
+        LUNA_RUNTIME_ERROR_BACKEND_OPERATION,
+        std::string("CUDA Driver API call '") + operation +
+            "' failed with code " + std::to_string(status));
 }
 
 bool checkCuda(const char* operation, CUresult status) {
@@ -412,8 +436,10 @@ bool loadCudaApi() {
 #endif
     runtime.api.library = lunaOpenLibrary(libraryName);
     if (!runtime.api.library) {
-        runtime.error = "could not load " + std::string(libraryName) + ": " +
-            lunaDynamicLoaderError();
+        setGpuError(
+            LUNA_RUNTIME_ERROR_BACKEND_UNAVAILABLE,
+            "could not load " + std::string(libraryName) + ": " +
+                lunaDynamicLoaderError());
         return false;
     }
     CudaApi& api = runtime.api;
@@ -440,8 +466,10 @@ bool loadCudaApi() {
          loadRuntimeSymbol(api, api.eventDestroy, "cuEventDestroy")) &&
         loadRuntimeSymbol(api, api.eventElapsedTime, "cuEventElapsedTime");
     if (!symbolsLoaded) {
-        runtime.error = std::string(libraryName) +
-            " is missing a required CUDA Driver API symbol";
+        setGpuError(
+            LUNA_RUNTIME_ERROR_MISSING_SYMBOL,
+            std::string(libraryName) +
+                " is missing a required CUDA Driver API symbol");
         lunaCloseLibrary(api.library);
         api.library = nullptr;
         return false;
@@ -450,13 +478,14 @@ bool loadCudaApi() {
 }
 
 void setHipError(const char* operation, hipError_t status) {
-    state().error = std::string("HIP runtime call '") + operation +
+    std::string message = std::string("HIP runtime call '") + operation +
         "' failed with code " + std::to_string(status);
     if (state().hip.getErrorString) {
         const char* description = state().hip.getErrorString(status);
         if (description && *description)
-            state().error += " (" + std::string(description) + ")";
+            message += " (" + std::string(description) + ")";
     }
+    setGpuError(LUNA_RUNTIME_ERROR_BACKEND_OPERATION, std::move(message));
 }
 
 bool checkHip(const char* operation, hipError_t status) {
@@ -465,8 +494,9 @@ bool checkHip(const char* operation, hipError_t status) {
     return false;
 }
 
-void setGpuOperationError(const std::string& message) {
-    state().error = message;
+void setGpuOperationError(const std::string& message,
+                          int32_t code = LUNA_RUNTIME_ERROR_INVALID_STATE) {
+    setGpuError(code, message);
 }
 
 const LunaFragmentPluginDescriptorV1* findFragmentPlugin(
@@ -487,19 +517,24 @@ const LunaFragmentPluginDescriptorV1* findFragmentPlugin(
 
 bool validateFragmentPluginDescriptor(
     const LunaFragmentPluginDescriptorV1* descriptor, const char* path) {
-    auto& plugins = fragmentPlugins();
     const std::string source = path ? path : "<plugin>";
     if (!descriptor) {
-        plugins.error = "plugin '" + source + "' returned a null descriptor";
+        setFragmentPluginError(
+            LUNA_RUNTIME_ERROR_INVALID_DESCRIPTOR,
+            "plugin '" + source + "' returned a null descriptor");
         return false;
     }
     if (descriptor->magic != LUNA_FRAGMENT_PLUGIN_DESCRIPTOR_V1 ||
         descriptor->abi_version != LUNA_FRAGMENT_PLUGIN_ABI_V1) {
-        plugins.error = "plugin '" + source + "' uses an unsupported fragment ABI";
+        setFragmentPluginError(
+            LUNA_RUNTIME_ERROR_UNSUPPORTED_ABI,
+            "plugin '" + source + "' uses an unsupported fragment ABI");
         return false;
     }
     if (descriptor->descriptor_size < sizeof(LunaFragmentPluginDescriptorV1)) {
-        plugins.error = "plugin '" + source + "' has a truncated fragment descriptor";
+        setFragmentPluginError(
+            LUNA_RUNTIME_ERROR_INVALID_DESCRIPTOR,
+            "plugin '" + source + "' has a truncated fragment descriptor");
         return false;
     }
     if (!descriptor->plugin_id || !*descriptor->plugin_id ||
@@ -507,8 +542,10 @@ bool validateFragmentPluginDescriptor(
         !descriptor->slot_name || !*descriptor->slot_name ||
         !descriptor->contract_hash || !*descriptor->contract_hash ||
         !descriptor->entry) {
-        plugins.error = "plugin '" + source +
-            "' has incomplete fragment metadata or no entry point";
+        setFragmentPluginError(
+            LUNA_RUNTIME_ERROR_INVALID_DESCRIPTOR,
+            "plugin '" + source +
+                "' has incomplete fragment metadata or no entry point");
         return false;
     }
     if (descriptor->fragment_kind != LUNA_FRAGMENT_KIND_INTERCEPTOR ||
@@ -516,9 +553,11 @@ bool validateFragmentPluginDescriptor(
         (descriptor->effects & LUNA_FRAGMENT_EFFECT_HOST_ONLY) == 0 ||
         (descriptor->effects & ~(LUNA_FRAGMENT_EFFECT_HOST_ONLY |
                                  LUNA_FRAGMENT_EFFECT_MAY_ABORT)) != 0) {
-        plugins.error = "plugin '" + source +
-            "' is outside the v1 external fragment contract: only host-only "
-            "single-shot interceptors are supported";
+        setFragmentPluginError(
+            LUNA_RUNTIME_ERROR_INVALID_DESCRIPTOR,
+            "plugin '" + source +
+                "' is outside the v1 external fragment contract: only host-only "
+                "single-shot interceptors are supported");
         return false;
     }
     return true;
@@ -536,8 +575,10 @@ bool loadHipApi() {
         if (runtime.hip.library) break;
     }
     if (!runtime.hip.library) {
-        runtime.error = "could not load HIP runtime library (install the ROCm HIP runtime): " +
-            lunaDynamicLoaderError();
+        setGpuError(
+            LUNA_RUNTIME_ERROR_BACKEND_UNAVAILABLE,
+            "could not load HIP runtime library (install the ROCm HIP runtime): " +
+                lunaDynamicLoaderError());
         return false;
     }
     HipApi& api = runtime.hip;
@@ -557,7 +598,9 @@ bool loadHipApi() {
         loadRuntimeSymbol(api, api.eventElapsedTime, "hipEventElapsedTime") &&
         loadRuntimeSymbol(api, api.getErrorString, "hipGetErrorString");
     if (!symbolsLoaded) {
-        runtime.error = "HIP runtime library is missing a required HIP Module API symbol";
+        setGpuError(
+            LUNA_RUNTIME_ERROR_MISSING_SYMBOL,
+            "HIP runtime library is missing a required HIP Module API symbol");
         lunaCloseLibrary(api.library);
         api.library = nullptr;
         return false;
@@ -593,6 +636,50 @@ int rt_install_host_services_v1(const LunaHostServicesV1* services) {
 
 const LunaHostServicesV1* rt_host_services_v1() {
     return activateHostServices();
+}
+
+int rt_runtime_error_snapshot_v1(uint32_t domain,
+                                 LunaRuntimeErrorSnapshotV1* snapshot,
+                                 char* message, size_t message_capacity) {
+    if (!snapshot || (message_capacity != 0 && !message))
+        return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
+
+    int32_t code = LUNA_RUNTIME_ERROR_NONE;
+    const std::string* diagnostic = nullptr;
+    switch (domain) {
+    case LUNA_RUNTIME_ERROR_DOMAIN_FRAGMENT_PLUGIN: {
+        const auto& plugins = fragmentPlugins();
+        code = plugins.errorCode;
+        diagnostic = &plugins.error;
+        break;
+    }
+    case LUNA_RUNTIME_ERROR_DOMAIN_GPU: {
+        const auto& runtime = state();
+        code = runtime.errorCode;
+        diagnostic = &runtime.error;
+        break;
+    }
+    default:
+        return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
+    }
+
+    snapshot->abi_version = LUNA_RUNTIME_ABI_V1;
+    snapshot->struct_size = sizeof(LunaRuntimeErrorSnapshotV1);
+    snapshot->domain = domain;
+    snapshot->code = code;
+    snapshot->message_size = diagnostic->size();
+
+    if (message_capacity != 0) {
+        const size_t copied = std::min(
+            diagnostic->size(), message_capacity - 1);
+        if (copied != 0)
+            std::memmove(message, diagnostic->data(), copied);
+        message[copied] = '\0';
+    }
+    return message_capacity > diagnostic->size()
+        ? LUNA_RUNTIME_STATUS_OK
+        : (diagnostic->empty() ? LUNA_RUNTIME_STATUS_OK
+                               : LUNA_RUNTIME_STATUS_BUFFER_TOO_SMALL);
 }
 
 void* rt_alloc(size_t size, size_t alignment) {
@@ -759,9 +846,11 @@ void rt_dynamic_fragment_report_unknown_and_abort(const char* slot_name,
 
 int rt_fragment_plugin_load(const char* path) {
     auto& plugins = fragmentPlugins();
-    plugins.error.clear();
+    clearFragmentPluginError();
     if (!path || !*path) {
-        plugins.error = "fragment plugin path is empty";
+        setFragmentPluginError(
+            LUNA_RUNTIME_ERROR_INVALID_ARGUMENT,
+            "fragment plugin path is empty");
         return 0;
     }
 
@@ -771,16 +860,20 @@ int rt_fragment_plugin_load(const char* path) {
 
     void* library = lunaOpenLibrary(path);
     if (!library) {
-        plugins.error = "could not load fragment plugin '" + std::string(path) + "': " +
-            lunaDynamicLoaderError();
+        setFragmentPluginError(
+            LUNA_RUNTIME_ERROR_DYNAMIC_LIBRARY,
+            "could not load fragment plugin '" + std::string(path) + "': " +
+                lunaDynamicLoaderError());
         return 0;
     }
 
     auto descriptorFn = reinterpret_cast<LunaFragmentPluginDescriptorFnV1>(
         lunaLoadSymbol(library, "luna_fragment_plugin_descriptor_v1"));
     if (!descriptorFn) {
-        plugins.error = "fragment plugin '" + std::string(path) +
-            "' does not export luna_fragment_plugin_descriptor_v1";
+        setFragmentPluginError(
+            LUNA_RUNTIME_ERROR_MISSING_SYMBOL,
+            "fragment plugin '" + std::string(path) +
+                "' does not export luna_fragment_plugin_descriptor_v1");
         lunaCloseLibrary(library);
         return 0;
     }
@@ -792,9 +885,11 @@ int rt_fragment_plugin_load(const char* path) {
     }
     if (findFragmentPlugin(descriptor->slot_name, descriptor->fragment_name,
                            descriptor->contract_hash)) {
-        plugins.error = "fragment plugin '" + std::string(path) +
-            "' duplicates registered fragment '" + descriptor->fragment_name +
-            "' for slot '" + descriptor->slot_name + "'";
+        setFragmentPluginError(
+            LUNA_RUNTIME_ERROR_DUPLICATE_REGISTRATION,
+            "fragment plugin '" + std::string(path) +
+                "' duplicates registered fragment '" + descriptor->fragment_name +
+                "' for slot '" + descriptor->slot_name + "'");
         lunaCloseLibrary(library);
         return 0;
     }
@@ -819,28 +914,35 @@ int rt_fragment_plugin_invoke(const char* slot_name,
                               const LunaFragmentInvocationV1* invocation) {
     auto* descriptor = findFragmentPlugin(slot_name, fragment_name, contract_hash);
     if (!descriptor) {
-        fragmentPlugins().error = "no external fragment registered for slot '" +
-            std::string(slot_name ? slot_name : "<unknown>") + "', fragment '" +
-            std::string(fragment_name ? fragment_name : "<unknown>") +
-            "' and the requested contract";
+        setFragmentPluginError(
+            LUNA_RUNTIME_ERROR_NOT_FOUND,
+            "no external fragment registered for slot '" +
+                std::string(slot_name ? slot_name : "<unknown>") + "', fragment '" +
+                std::string(fragment_name ? fragment_name : "<unknown>") +
+                "' and the requested contract");
         return LUNA_FRAGMENT_PLUGIN_ERROR;
     }
     if (!invocation || invocation->abi_version != LUNA_FRAGMENT_PLUGIN_ABI_V1) {
-        fragmentPlugins().error = "external fragment invocation uses an unsupported ABI";
+        setFragmentPluginError(
+            LUNA_RUNTIME_ERROR_UNSUPPORTED_ABI,
+            "external fragment invocation uses an unsupported ABI");
         return LUNA_FRAGMENT_PLUGIN_ERROR;
     }
     const int result = descriptor->entry(invocation);
     if (result != LUNA_FRAGMENT_PLUGIN_CONTINUE &&
         result != LUNA_FRAGMENT_PLUGIN_ABORT) {
-        fragmentPlugins().error = "external fragment '" +
-            std::string(descriptor->fragment_name) + "' returned an invalid action";
+        setFragmentPluginError(
+            LUNA_RUNTIME_ERROR_INVALID_RESULT,
+            "external fragment '" + std::string(descriptor->fragment_name) +
+                "' returned an invalid action");
         return LUNA_FRAGMENT_PLUGIN_ERROR;
     }
     if (result == LUNA_FRAGMENT_PLUGIN_ABORT &&
         (descriptor->effects & LUNA_FRAGMENT_EFFECT_MAY_ABORT) == 0) {
-        fragmentPlugins().error = "external fragment '" +
-            std::string(descriptor->fragment_name) +
-            "' returned abort without declaring the may-abort effect";
+        setFragmentPluginError(
+            LUNA_RUNTIME_ERROR_INVALID_RESULT,
+            "external fragment '" + std::string(descriptor->fragment_name) +
+                "' returned abort without declaring the may-abort effect");
         return LUNA_FRAGMENT_PLUGIN_ERROR;
     }
     return result;
@@ -857,7 +959,7 @@ void rt_fragment_plugin_report_error_and_abort() {
 
 int rt_gpu_initialize() {
     auto& runtime = state();
-    if (runtime.initialized) return runtime.error.empty() ? 1 : 0;
+    if (runtime.initialized) return runtime.initializationSucceeded ? 1 : 0;
     runtime.initialized = true;
     runtime.profileEnabled = gpuProfilingRequested();
     if (runtime.profileEnabled && !runtime.profileReporterRegistered) {
@@ -865,8 +967,11 @@ int rt_gpu_initialize() {
         runtime.profileReporterRegistered = true;
     }
     const char* requested = std::getenv("LUNA_GPU_BACKEND");
-    if (!requested || std::strcmp(requested, "sim") == 0 || std::strcmp(requested, "cpu") == 0)
+    if (!requested || std::strcmp(requested, "sim") == 0 ||
+        std::strcmp(requested, "cpu") == 0) {
+        runtime.initializationSucceeded = true;
         return 1;
+    }
     runtime.backend = requested;
     if (std::strcmp(requested, "cuda") == 0) {
         runtime.backend = "cuda";
@@ -876,6 +981,7 @@ int rt_gpu_initialize() {
         if (!checkCuda("cuDeviceGet", runtime.api.deviceGet(&device, 0))) return 0;
         if (!checkCuda("cuCtxCreate", runtime.api.ctxCreate(&runtime.context, 0, device))) return 0;
         runtime.cuda = true;
+        runtime.initializationSucceeded = true;
         return 1;
     }
     if (std::strcmp(requested, "rocm") == 0 || std::strcmp(requested, "hip") == 0) {
@@ -884,11 +990,14 @@ int rt_gpu_initialize() {
         if (!checkHip("hipInit", runtime.hip.init(0))) return 0;
         if (!checkHip("hipSetDevice", runtime.hip.setDevice(0))) return 0;
         runtime.rocm = true;
+        runtime.initializationSucceeded = true;
         return 1;
     }
     {
-        runtime.error = std::string("unknown GPU backend '") + requested +
-            "'; use 'sim', 'cuda', or 'rocm'";
+        setGpuError(
+            LUNA_RUNTIME_ERROR_BACKEND_UNAVAILABLE,
+            std::string("unknown GPU backend '") + requested +
+                "'; use 'sim', 'cuda', or 'rocm'");
         return 0;
     }
 }
@@ -996,11 +1105,15 @@ int rt_gpu_copy_from_host_i32(void* destination, const int32_t* source,
                               int32_t element_count) {
     if (!rt_gpu_initialize()) return 0;
     if (!destination || !source) {
-        setGpuOperationError("host-to-device copy requires non-null source and destination pointers");
+        setGpuOperationError(
+            "host-to-device copy requires non-null source and destination pointers",
+            LUNA_RUNTIME_ERROR_INVALID_ARGUMENT);
         return 0;
     }
     if (element_count < 0) {
-        setGpuOperationError("host-to-device copy requires a non-negative element count");
+        setGpuOperationError(
+            "host-to-device copy requires a non-negative element count",
+            LUNA_RUNTIME_ERROR_INVALID_ARGUMENT);
         return 0;
     }
     const size_t bytes = static_cast<size_t>(element_count) * sizeof(int32_t);
@@ -1018,11 +1131,15 @@ int rt_gpu_copy_to_host_i32(int32_t* destination, const void* source,
                             int32_t element_count) {
     if (!rt_gpu_initialize()) return 0;
     if (!destination || !source) {
-        setGpuOperationError("device-to-host copy requires non-null source and destination pointers");
+        setGpuOperationError(
+            "device-to-host copy requires non-null source and destination pointers",
+            LUNA_RUNTIME_ERROR_INVALID_ARGUMENT);
         return 0;
     }
     if (element_count < 0) {
-        setGpuOperationError("device-to-host copy requires a non-negative element count");
+        setGpuOperationError(
+            "device-to-host copy requires a non-negative element count",
+            LUNA_RUNTIME_ERROR_INVALID_ARGUMENT);
         return 0;
     }
     const size_t bytes = static_cast<size_t>(element_count) * sizeof(int32_t);
@@ -1044,13 +1161,17 @@ int32_t rt_gpu_launch_ptx(const char* ptx, const char* kernel_name,
                              state().backend + "'");
         return 0;
     }
-    if (!ptx || !*ptx) {
-        setGpuOperationError("CUDA kernel '" + std::string(kernel_name ? kernel_name : "<unknown>") +
-                             "' has no embedded PTX module");
+    if (!ptx || !*ptx || !kernel_name || !*kernel_name) {
+        setGpuOperationError(
+            "CUDA kernel '" + std::string(kernel_name ? kernel_name : "<unknown>") +
+                "' has no embedded PTX module",
+            LUNA_RUNTIME_ERROR_INVALID_ARGUMENT);
         return 0;
     }
     if (threads <= 0) {
-        setGpuOperationError("CUDA kernel launch requires a positive thread count");
+        setGpuOperationError(
+            "CUDA kernel launch requires a positive thread count",
+            LUNA_RUNTIME_ERROR_INVALID_ARGUMENT);
         return 0;
     }
     auto& runtime = state();
@@ -1112,13 +1233,17 @@ int32_t rt_gpu_launch_hsaco(const void* hsaco, size_t hsaco_size,
                              state().backend + "'");
         return 0;
     }
-    if (!hsaco || hsaco_size == 0) {
-        setGpuOperationError("ROCm kernel '" + std::string(kernel_name ? kernel_name : "<unknown>") +
-                             "' has no embedded HSACO module");
+    if (!hsaco || hsaco_size == 0 || !kernel_name || !*kernel_name) {
+        setGpuOperationError(
+            "ROCm kernel '" + std::string(kernel_name ? kernel_name : "<unknown>") +
+                "' has no embedded HSACO module",
+            LUNA_RUNTIME_ERROR_INVALID_ARGUMENT);
         return 0;
     }
     if (threads <= 0) {
-        setGpuOperationError("ROCm kernel launch requires a positive thread count");
+        setGpuOperationError(
+            "ROCm kernel launch requires a positive thread count",
+            LUNA_RUNTIME_ERROR_INVALID_ARGUMENT);
         return 0;
     }
     auto& runtime = state();

@@ -4572,6 +4572,8 @@ int CodeGenerator::jitRun() {
     bindRuntime("rt_shared_dealloc", &rt_shared_dealloc);
     bindRuntime("rt_panic_cstr", &rt_panic_cstr);
     bindRuntime("rt_host_services_v1", &rt_host_services_v1);
+    bindRuntime("rt_runtime_error_snapshot_v1",
+                &rt_runtime_error_snapshot_v1);
     bindRuntime("rt_malloc", &rt_malloc);
     bindRuntime("rt_free", &rt_free);
     bindRuntime("rt_print_i32", &rt_print_i32);

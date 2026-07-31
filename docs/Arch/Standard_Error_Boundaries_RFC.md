@@ -1,6 +1,6 @@
 # 标准错误与 FFI/Runtime 转换 RFC
 
-状态：Core 值错误已物化；FFI/Runtime 边界等待 owned diagnostic/status ABI。
+状态：Core 值错误已物化；Runtime 快照 ABI 已落地，语言层安全 adapter 待实现。
 
 ## 1. 目标
 
@@ -56,6 +56,12 @@ extern "C" fn foreign_read(handle: raw<u8>, out: raw<u8>) -> i32;
 成功，非零值由稳定 domain/code 解释。`last_error` 文本只是紧邻失败调用的借用
 诊断视图，adapter 必须立即复制，且不能把它当唯一错误身份。
 
+Runtime ABI v1 的 `rt_runtime_error_snapshot_v1` 已为 GPU 与 external fragment
+plugin 提供统一快照：第一次调用可查询所需字节数，第二次复制到调用方拥有的
+缓冲区。快照操作不分配；adapter 的 owned message 分配失败时保留 domain/code
+并省略 message。这是诊断文本的 OOM 策略，不会把可恢复错误升级为 panic。
+旧 `last_error` 指针仅保留兼容用途。
+
 abort 型入口（`rt_panic_cstr`、当前 GPU operation abort reporter）只服务已判定为
 不可恢复的边缘。标准库 API 不应为了复用这些入口而把可恢复 I/O、分配或设备错误
 升级为 panic。
@@ -80,7 +86,8 @@ Core 值错误已满足前三项并发布；FFI/Runtime/GPU 边界错误仍须�
 1. [x] 通用 enum variant 匹配；
 2. [x] 稳定 inline ADT layout；
 3. [x] 跨包 trait coherence/orphan 规则；
-4. [ ] owned diagnostic string 的 OOM 策略；
-5. [ ] Runtime status/domain/code 快照 ABI 与 JIT/AOT 测试。
+4. [x] owned diagnostic string 的 OOM 策略；
+5. [ ] Runtime status/domain/code 快照 ABI 已实现并有 C/C++ ABI 回归；仍需语言层
+   安全 adapter 的 JIT/AOT 测试。
 
 协程不在这些前置条件中，也不会在此阶段设计。
