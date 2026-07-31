@@ -98,16 +98,15 @@ driver should receive explicit AOT toolchain paths:
 ```
 
 `LUNA_RUNTIME_LIB` and `LUNA_CXX` provide environment defaults for the same
-options. See [AOT builds](aot_build.md) and the
-[compiler command reference](cli.md) for the complete boundary.
+options. See the [compiler command reference](cli.md) for the complete boundary.
 
 ## Where to continue
 
 - [Feature overview](features.md)
 - [Compiler commands](cli.md)
-- [Types](types.md)
+- [Type-system reference](reference/type_system.md)
 - [Packages and modules](packages.md)
 - [Metadata and selectors](versioning.md)
-- [Ownership model](Arch/Ownership_Affine_Model_RFC.md)
+- [Architecture and ownership decisions](decisions.md)
 - [Heterogeneous compute](heterogeneous_compute.md)
 - [Roadmap](roadmap.md)

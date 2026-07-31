@@ -91,13 +91,16 @@ sudo cmake --install build --prefix /opt/luna
   --cc "$(command -v clang++)"
 ```
 
-也可用 `LUNA_RUNTIME_LIB` 和 `LUNA_CXX` 设置这两个默认值。更多 AOT 细节见 [aot_build.md](aot_build.md)，错误码见 [diagnostics.md](diagnostics.md)。
+也可用 `LUNA_RUNTIME_LIB` 和 `LUNA_CXX` 设置这两个默认值。完整 AOT 参数见
+[编译器命令参考](cli.zh-CN.md)，错误码见
+[错误模型](reference/error_model.md#10-编译器诊断编号)。
 
 ## 下一步阅读
 
 - [主要特性概览](features.zh-CN.md)
 - [编译器命令参考](cli.zh-CN.md)
-- [类型系统](types.md)
+- [完整类型系统参考](reference/type_system.md)
+- [架构与设计决策](architecture.md)
 - [Metadata 与 selector](versioning.md)
 - [异构计算](heterogeneous_compute.md)
-- [演进路线图](evolution_roadmap.md)
+- [演进路线图](roadmap.md)

@@ -7,7 +7,6 @@
 #include "../sema/SymbolTable.h"
 
 #include <algorithm>
-#include <sstream>
 
 namespace moon {
 
@@ -26,15 +25,6 @@ std::string declarationSymbol(const ::Decl* declaration) {
     const auto name = declarationName(declaration);
     return declaration && !declaration->generatedSymbolName.empty()
         ? declaration->generatedSymbolName : name;
-}
-
-std::string kindPrefix(const ::Decl* declaration) {
-    if (dynamic_cast<const ::FunctionDecl*>(declaration)) return "fn";
-    if (dynamic_cast<const ::FragmentDecl*>(declaration)) return "fragment";
-    if (dynamic_cast<const ::StructDecl*>(declaration)) return "struct";
-    if (dynamic_cast<const ::EnumDecl*>(declaration)) return "enum";
-    if (dynamic_cast<const ::TraitDecl*>(declaration)) return "trait";
-    return "impl";
 }
 
 std::string declarationNamespace(const ::Decl* declaration,

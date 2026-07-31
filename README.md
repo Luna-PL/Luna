@@ -59,9 +59,7 @@ execution time over 10 measured runs after two warmups; lower is better, and
 > pair in the allocation case while Luna deliberately retains its Runtime ABI
 > allocation, so that row is not an allocator ranking.
 
-[Read the detailed CPU comparison, workload definitions, caveats and reproduction steps](docs/cpu_benchmarks.en.md).
-GPU measurements are documented separately in the
-[heterogeneous benchmark guide](docs/heterogeneous_benchmarks.md).
+[Read the workload definitions, caveats and CPU/GPU reproduction steps](docs/benchmarks.md).
 
 ## Hello, World
 
@@ -132,9 +130,9 @@ The current local hardware validation environment is:
 - GPU: AMD Radeon RX 7800 XT (`gfx1101` / Navi 32)
 - RAM: 32 GiB DDR5
 
-Luna supports native heterogeneous computation. 
-The CPU simulator and AMD ROCm paths have been tested on the available hardware; 
-CUDA code generation exists but still requires broader NVIDIA hardware validation. 
+Luna supports native heterogeneous computation.
+The CPU simulator and AMD ROCm paths have been tested on the available hardware;
+CUDA code generation exists but still requires broader NVIDIA hardware validation.
 See the [testing guide](docs/testing.md) and [heterogeneous-compute guide](docs/heterogeneous_compute.md).
 
 ## Next evolution
@@ -153,7 +151,7 @@ adding broad new surface area:
 6. improve diagnostics, formatting, language-server and package ecosystem
    tooling.
 
-See the [English roadmap](docs/roadmap.md) and the [detailed evolution roadmap](docs/evolution_roadmap.md).
+See the [single active roadmap](docs/roadmap.md).
 
 ## Documentation
 
@@ -164,20 +162,20 @@ or reference material:
 - [Feature overview](docs/features.md)
 - [Compiler command reference](docs/cli.md)
 - [Full language showcase](examples/full_showcase/README.md)
+- [0.2 Alpha semantic reference](docs/reference/README.md) (Simplified Chinese)
+- [Complete type-system reference](docs/reference/type_system.md) (Simplified Chinese)
+- [Documentation recording rules](docs/reference/documentation_rules.md) (Simplified Chinese)
 - [Packages and modules](docs/packages.md)
-- [Types and structural/nominal identity](docs/types.md)
 - [Metadata and selectors](docs/versioning.md)
-- [Ownership and affine/linear design](docs/Arch/Ownership_Affine_Model_RFC.md)
+- [Architecture](docs/architecture.md)
+- [Architecture decisions](docs/decisions.md)
 - [Fragments and slots](docs/fragments.md)
-- [Runtime ABI](docs/runtime_abi.md)
-- [C FFI](docs/ffi.md)
+- [Runtime ABI and C FFI](docs/runtime_abi.md)
 - [Heterogeneous compute](docs/heterogeneous_compute.md)
 - [Standard-library skeleton](docs/standard_library.md)
-- [Diagnostics](docs/diagnostics.md)
 - [Testing](docs/testing.md)
-- [CPU performance comparison](docs/cpu_benchmarks.en.md)
+- [Performance benchmarks](docs/benchmarks.md)
 - [Roadmap](docs/roadmap.md)
-- [Architecture documents](docs/Arch/README.md)
 
 ## License
 

@@ -2,6 +2,18 @@
 
 ## 0.2.0-alpha — Unreleased
 
+- Established the A0 documentation contract, 0.2 Alpha semantic baseline,
+  exhaustive built-in/internal type inventory, and a frozen error-model
+  reference that separates language guarantees from implementation ABI and
+  planned adapters.
+- Established A1 release hygiene: removed tracked build outputs, ignored
+  repository-local `build-*` trees, added an isolated installed-tree JIT/AOT
+  smoke test, and enabled strict-warning plus ASan/UBSan Linux CI gates.
+- Consolidated the active documentation from 57 Markdown files and 9,297 lines
+  to 33 files and about 4,100 lines: current semantics remain in
+  `docs/reference`, architecture rationale is summarized in two documents, and
+  superseded drafts, duplicate roadmaps and temporary status pages now rely on
+  Git history instead of a maintained archive tree.
 - Reorganized the project entry documentation into an English default README and a linked Simplified Chinese README, with feature, Hello World, build, CLI, platform, roadmap, and topic-oriented documentation entry points.
 - Added the versioned, C-compatible Runtime ABI v1 with replaceable host allocator and console services, exact `size/alignment` allocation lowering, foreign-resource carriers, and an optional W^X executable-memory capability reserved for MoonRuntime/JIT hosts.
 - Added caller-owned Runtime error snapshots with stable GPU/plugin domain and code fields, allocation-free diagnostic copying, and compatibility coverage for the legacy borrowed `last_error` views.

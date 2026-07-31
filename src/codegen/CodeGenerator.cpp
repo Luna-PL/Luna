@@ -21,6 +21,7 @@
 #include <llvm/Support/MemoryBuffer.h>
 #include <llvm/Support/Path.h>
 #include <llvm/Support/Program.h>
+#include <llvm/Support/Compiler.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
 #include <llvm/Transforms/Utils/Cloning.h>
@@ -89,6 +90,20 @@ static void initializeLLVM() {
 }
 
 namespace {
+
+using LunaJitEntry = int (*)();
+
+// UBSan's `function` check probes metadata immediately before every indirect
+// call target. ORC-generated functions do not carry that compiler-emitted
+// metadata and may begin at a page boundary, where the probe itself would
+// fault. Keep the single JIT boundary exempt while retaining ASan/UBSan
+// instrumentation everywhere else in the compiler and embedded runtime.
+#if defined(__clang__)
+LLVM_NO_SANITIZE("function")
+#endif
+int invokeLunaJitEntry(LunaJitEntry entry) {
+    return entry();
+}
 
 #ifdef _WIN32
 // MinGW inserts a call to __main when lowering a function named `main` so a
@@ -4640,8 +4655,8 @@ int CodeGenerator::jitRun() {
         return 1;
     }
 
-    auto mainFn = jitTargetAddressToPointer<int(*)()>(mainSym->getValue());
-    return mainFn();
+    auto mainFn = mainSym->toPtr<int()>();
+    return invokeLunaJitEntry(mainFn);
 }
 
 // ─── AOT: Emit LLVM bitcode ────────────────────────────────────────

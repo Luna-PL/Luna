@@ -2,7 +2,8 @@
 
 Luna 的稳定核心使用 CTest 执行语义回归。该套件同时覆盖应通过的程序和应拒绝的程序；它不把源语言 `main` 的非零返回值当作编译失败，而是检查编译器打印的 `Program exited with code:` 行或结构化诊断。
 
-核心错误还带有稳定错误码；具体格式和当前公开编号见 [诊断参考](diagnostics.md)。
+核心错误还带有稳定错误码；具体格式和当前公开编号见
+[错误模型的诊断编号](reference/error_model.md#10-编译器诊断编号)。
 
 ## 运行
 
@@ -11,6 +12,36 @@ cmake -S . -B build
 cmake --build build -j4
 ctest --test-dir build --output-on-failure
 ```
+
+发布候选构建应同时把项目自身的警告提升为错误：
+
+```sh
+cmake -S . -B build -DLUNA_STRICT_WARNINGS=ON
+cmake --build build --parallel
+```
+
+Linux CI 在 C++17/C++23 构建矩阵中都启用该门禁。它只作用于 Luna
+仓库拥有的 target，不把 LLVM 或系统头文件的第三方警告误算为项目回归。
+
+内存安全与未定义行为门禁可独立启用：
+
+```sh
+cmake -S . -B build-sanitized -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_C_COMPILER=clang \
+  -DCMAKE_CXX_COMPILER=clang++ \
+  -DLUNA_ENABLE_SANITIZERS=ON \
+  -DLUNA_STRICT_WARNINGS=ON
+cmake --build build-sanitized --parallel
+ASAN_OPTIONS=detect_leaks=0 \
+UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
+  ctest --test-dir build-sanitized -LE hardware --output-on-failure
+```
+
+该选项用 ASan/UBSan 插桩编译器及进程内 JIT runtime，但不污染安装用的
+`libruntime.a`，因此安装后的 AOT 测试不需要额外链接 sanitizer runtime。
+ORC 生成的入口函数没有 Clang UBSan 的函数类型前缀元数据，故仅 JIT 入口的
+一次间接调用关闭 `function` 检查；调用前后的编译器与 runtime 仍保持插桩。
 
 当前 `luna.semantic-regressions` 覆盖：
 
@@ -36,7 +67,8 @@ LUNA_GPU_BACKEND=rocm ./build/luna run examples/heterogeneous.luna \
 `-DLUNA_ROCM_SMOKE_ARCH=gfx1101` 指定目标 ISA，然后执行
 `ctest --test-dir build -L rocm --output-on-failure`。该可选测试会分别验证 ROCm 的 JIT 与 AOT kernel 路径。
 
-CPU 对照基准可通过 `-DLUNA_ENABLE_CPU_BENCHMARK=ON` 启用，详情见 [cpu_benchmarks.md](cpu_benchmarks.md)。
+CPU 对照基准可通过 `-DLUNA_ENABLE_CPU_BENCHMARK=ON` 启用，详情见
+[性能基准](benchmarks.zh-CN.md)。
 
 设置 `-DLUNA_ENABLE_ROCM_BENCHMARK=ON` 会额外注册 `luna.rocm-cpp23-comparison`：它用 16,777,216 个元素、十轮变换对照 Luna AOT 与 C++23/HIP，并校验两者结果。它带 `benchmark` label，不在默认测试集内。
 
@@ -62,6 +94,11 @@ CPU 对照基准可通过 `-DLUNA_ENABLE_CPU_BENCHMARK=ON` 启用，详情见 [c
 `luna.external-fragment-plugin-abi` 使用真实共享库验证外部描述符的 ABI、注册、重复契约拒绝和显式参数调用；`luna.external-fragment-dispatch` 则让动态槽选择静态候选之外的外部 interceptor，确认插件继续动作后槽续体仍然执行。
 
 `luna.aot-runtime-boundary` 覆盖显式 `--runtime-lib` / `--cc`、缺失运行时库的 `DRV0001` 诊断，以及 AOT 可执行文件的 GPU 后端初始化失败边界。
+
+`luna.install-smoke` 把当前构建安装到隔离的临时前缀，确认驱动、静态
+runtime、公开 ABI 头文件、标准库 workspace 与语义参考文档均已安装；随后只用
+安装树完成 `--version`、`check`、JIT 和显式 runtime/compiler 的 AOT
+构建与运行。该测试带 `release` 和 `install` label，是发布包布局的自动化门禁。
 
 `luna.runtime-gpu-error-state` 验证 CPU 模拟器下 event 的成功与无效状态 ABI；`luna.gpu-error-boundary-abi` 检查 AOT IR 中 `await` 的失败分支会调用统一 GPU 错误终止入口，保证 CUDA/ROCm 的 launch 或同步失败不会静默继续执行。
 前者同时检查 Runtime error snapshot 的稳定 GPU domain/code、两阶段消息复制和

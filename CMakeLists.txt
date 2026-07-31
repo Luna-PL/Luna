@@ -21,6 +21,9 @@ option(LUNA_ENABLE_ROCM_SMOKE "Run ROCm JIT/AOT smoke tests on a configured AMD 
 option(LUNA_ENABLE_ROCM_BENCHMARK "Run the large Luna versus C++23/HIP ROCm comparison" OFF)
 option(LUNA_ENABLE_CPU_BENCHMARK "Run common Luna versus C++23 CPU benchmarks" OFF)
 option(LUNA_ENABLE_BASIC_BENCHMARK "Run the lightweight Luna CPU baseline" OFF)
+option(LUNA_STRICT_WARNINGS "Treat compiler warnings in Luna-owned targets as errors" OFF)
+option(LUNA_ENABLE_SANITIZERS
+    "Instrument the compiler and embedded JIT runtime with ASan/UBSan" OFF)
 set(LUNA_ROCM_SMOKE_ARCH "gfx1101" CACHE STRING
     "AMDGPU architecture used by the opt-in ROCm smoke test")
 
@@ -69,6 +72,42 @@ add_executable(luna
     src/package/Package.cpp
     src/package/PackageManager.cpp
 )
+
+if(LUNA_STRICT_WARNINGS)
+    set(luna_warning_targets
+        runtime
+        runtime-abi-c-compile
+        runtime-abi-test
+        runtime-gpu-error-test
+        luna-fragment-plugin-fixture
+        fragment-plugin-test
+        luna
+    )
+    foreach(target IN LISTS luna_warning_targets)
+        if(MSVC)
+            target_compile_options(${target} PRIVATE /W4 /WX)
+        else()
+            target_compile_options(${target} PRIVATE
+                -Wall -Wextra -Wpedantic -Werror)
+        endif()
+    endforeach()
+endif()
+
+if(LUNA_ENABLE_SANITIZERS)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        message(FATAL_ERROR
+            "LUNA_ENABLE_SANITIZERS requires Clang or GCC")
+    endif()
+    # `luna` embeds Runtime.cpp for JIT symbol resolution, so instrumenting
+    # this target covers the compiler and its in-process runtime without
+    # contaminating the installed AOT runtime archive with sanitizer symbols.
+    target_compile_options(luna PRIVATE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer)
+    target_link_options(luna PRIVATE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer)
+endif()
 
 target_include_directories(luna PRIVATE ${LLVM_INCLUDE_DIRS})
 target_include_directories(luna PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -275,6 +314,24 @@ if(BUILD_TESTING)
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -DLUNA_RUNTIME_LIBRARY=$<TARGET_FILE:runtime>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/aot_runtime_boundary.cmake
+    )
+    add_test(
+        NAME luna.install-smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -DLUNA_BUILD_CONFIG=$<CONFIG>
+            -DLUNA_AOT_COMPILER=${CMAKE_CXX_COMPILER}
+            -DLUNA_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
+            -DLUNA_RUNTIME_FILE=$<TARGET_FILE_NAME:runtime>
+            -DLUNA_INSTALL_BINDIR=${CMAKE_INSTALL_BINDIR}
+            -DLUNA_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}
+            -DLUNA_INSTALL_INCLUDEDIR=${CMAKE_INSTALL_INCLUDEDIR}
+            -DLUNA_INSTALL_DATADIR=${CMAKE_INSTALL_DATADIR}
+            -DLUNA_INSTALL_DOCDIR=${CMAKE_INSTALL_DOCDIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/install_smoke.cmake
+    )
+    set_tests_properties(luna.install-smoke PROPERTIES
+        LABELS "release;install"
     )
     add_test(
         NAME luna.runtime-gpu-error-state

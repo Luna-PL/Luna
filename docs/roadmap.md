@@ -1,87 +1,92 @@
-# Luna roadmap
+# Luna roadmap / Luna 路线图
 
-[English summary](roadmap.md) | [中文详细路线](evolution_roadmap.md)
+> 文档类别：项目路线图
+> 适用版本：0.2 Alpha 之后
+> 状态：Planned
+> 规范性：非规范
+> 更新：2026-07-31
 
-Luna's next phase prioritizes a coherent, testable language foundation over
-rapid expansion of syntax. This page is the short English roadmap; the
-[detailed evolution roadmap](evolution_roadmap.md) and
-[post-Alpha plan](future_roadmap.md) retain the full design notes.
+This is the single active roadmap. The Chinese sections are authoritative;
+English readers can use the summary below. Planned syntax is not a statement of
+current compiler support.
 
-## Immediate priorities
+## English summary
 
-### 1. Dynamic & runtime descriptor re-design
+Before Beta, Luna will prioritize:
 
-We will clarify and partition the capability sets provided by the runtime and dynamic modifiers, and refactor the current compiler design.
+1. closing the documented type, ownership and error semantics;
+2. splitting the compiler without changing the Alpha semantic baseline;
+3. defining safe standard-library adapters over Runtime and C FFI;
+4. extending heterogeneous compute without weakening explicit target/runtime boundaries;
+5. evolving fragment plugins only after continuation lifetime and capability rules are proven;
+6. adding package integrity, tooling and diagnostics before any remote registry.
 
-### 2. Design of a more comprehensive reflection capability
+Concurrency, broad dynamic reflection, hot replacement and remote dependency
+resolution remain later work.
 
-We will comprehensively refine the design of the reflection mechanism to better support our type system architecture. Furthermore, we will enable the processing of language objects with attached metadata by reflection, thereby further eliminating dependencies on selectors. Selectors will explicitly serve as user-defined or open-ended operational tools, whereas reflection will function as a lower-level primitive. For language objects with closed boundaries or fully determined states, this structural shift will yield significantly better performance.
+## 当前原则
 
-### 3. Error handling before a broad standard library
+- 当前能力以 [0.2 Alpha 语义参考](reference/README.md) 为准。
+- 路线图中的语法、类型和 API 默认都未实现。
+- 先补契约、负例和迁移说明，再扩大语言表面。
+- Runtime、Dynamic 和硬件能力必须显式启用并具有可解释成本。
+- 代码拆分只能移动实现职责，不得顺便改变冻结语义。
 
-The first executable slice is now present: `Result<T, E>`, intrinsic
-construction/inspection, a general tagged-union payload layout, formal `never`,
-ownership-aware `?`, recursive active-payload cleanup, exhaustive enum/Result
-matching, static `From<Source>` conversion and abort-style `panic` agree in
-Sema, MoonIR, LLVM JIT and AOT. Inline ADT ABI, cross-package trait
-coherence/orphan rules, Core value errors, `Option`, and Iterator adapters are
-now materialized. User trait member calls use static impl symbols, Core
-`Iterator` drives protocol `for` loops, and move-only protocol items are
-cleaned exactly once on normal and returning paths. `for` now owns implicit
-Core `IntoIterator` state, while consuming arrays and fused `filter`/`take`
-carry per-element drop state. Lambda bodies and move-only terminal recipes now
-participate in that model, including affine fold accumulator replacement state.
-No-capture recipes, including recipes that own move-only array sources, now
-materialize as single-consumption stack values without losing fusion. Owning
-recipes use per-element initialization bits on consumption, abandonment and
-early-return paths. `collect::<Target>()`
-now lowers through one coherent Core `FromIterator` begin/push/finish builder
-implementation without materializing an iterator ABI or intermediate
-collection. Next, map this compiler-internal Drop state to stable cross-function
-Core adapter layouts, then define closure environments and the diagnostic/status
-ABI before host I/O and boundary error types.
+## 近期：文档与编译器结构
 
-### 4. Package and standard-library foundation
+1. 维持类型系统、内置类型和错误模型的单一权威来源。
+2. 建立实现模块地图，先拆分 driver，再拆分 CodeGenerator。
+3. 最后拆分 SemanticAnalyzer；每次移动都保持 JIT/AOT 和语义回归。
+4. 为 Parser、Sema、MoonIR、Codegen 和 Runtime 建立稳定内部接口。
 
-Finish local package workflows and keep `org.luna.core` separate from
-host-dependent `org.luna.std`. The first public library surface should include
-errors, strings/slices and a high-performance formatted `std::io` design with
-clear static/dynamic cost boundaries.
+## Beta 前：语言语义闭合
 
-### 5. Ownership and type-system closure
+- 完成 `From`、Drop、递归类型和泛型边界的明确规则。
+- 继续补齐 Place、部分移动、借用和控制流合并负例。
+- 保持 `Result`/`?` 为显式可恢复失败，panic 保持 abort 边界，除非另有完整 RFC。
+- 将标准库类型和编译器内置类型持续分离。
+- 让 diagnostics 的稳定编号覆盖新增核心错误。
 
-Continue tightening structural/nominal identity, trait coherence, partial
-moves, borrows and affine/linear control-flow merging. Static traits and static
-selection should retain zero runtime dispatch overhead.
+## 标准库与外部边界
 
-### 6. Moon containers and MoonRuntime boundaries
+- 在 `core`、`alloc/host`、`sys` 之间建立明确依赖方向。
+- 用安全 adapter 包装 Runtime status、GPU error、errno 和 foreign resource。
+- 通用堆拥有容器必须等待 Drop、allocator domain 和异常路径清理闭合。
+- 扩大 C struct/union 和 callback FFI 前先定义布局、生命周期和线程边界。
 
-Freeze the verified Moon container contract, validation rules, capability
-descriptors and compatibility fields. Reserve interfaces for safe loading,
-runtime JIT adaptation and hotspot evolution without prematurely fixing a full
-runtime implementation.
+## 异构计算
 
-### 7. Heterogeneous generalization
+1. 保持 `--gpu-target` 与 `LUNA_GPU_BACKEND` 分离。
+2. 扩展设备标量、buffer 和 grid 表面，同时维护 CPU simulator 一致性。
+3. 对 CUDA/ROCm 增加更多硬件矩阵、长时间测试和可复现性能基线。
+4. 在语言层 profiling API 稳定前继续使用显式 runtime/benchmark 工具。
 
-Generalize `device_buffer<T>`, address spaces, launch configuration, queues and
-events. Maintain one source-level safety model across the simulator, ROCm and
-CUDA while expanding real-device correctness and performance coverage.
+## Fragment、Runtime 与 Dynamic
 
-### 8. Tooling and ecosystem
+- 外部 plugin v1 继续限制为 host-only、single-shot interceptor。
+- plugin v2 必须显式接收授权的 module context。
+- 外部 context/resume、多发射和捕获必须先解决持久 continuation frame 与占用证明。
+- Runtime Descriptor、registry、unload 和 re-select 必须具有显式生命周期。
+- Dynamic reflection、inspect、replace 和 runtime weaving 不进入 Beta 核心，除非先完成
+  capability、安全和回滚模型。
 
-Improve diagnostics, formatter and language-server support; add reproducible
-package caches and registries; expand fuzzing, sanitizer, cross-platform and
-JIT/AOT parity tests.
+## Package 与工具链
 
-## Later work
+- 增加内容摘要、缓存、签名和可复现构建验证。
+- 远程 registry 和网络依赖解析晚于本地 workspace/lock 完整性。
+- 改进 formatter、language server、诊断源码片段和测试选择。
+- 发布流程继续使用严格警告、ASan/UBSan、安装树 JIT/AOT 与平台 CI。
 
-Native structured concurrency remains important, but follows the error,
-ownership and standard-library foundations it depends on. External dynamic
-contexts, richer C import/callback support and additional accelerator backends
-also remain post-foundation work.
+## 后续能力
 
-## Delivery rule
+语言原生并发、task-local failure、通用 async、完整运行时反射、热替换和分布式
+package 解析属于 Beta 之后的独立设计，不应通过小型补丁偷偷进入 Alpha。
 
-Every promoted feature must have explicit semantics, positive and negative
-tests, JIT/AOT parity, cost documentation and a migration note. Unsupported
-dynamic or hardware behavior must fail explicitly rather than silently degrade.
+## 交付规则
+
+每项路线图工作必须同时说明：
+
+- 所属层级和静态/运行时成本；
+- 类型、所有权、错误和 ABI 影响；
+- 正例、负例及 JIT/AOT 或硬件证据；
+- 文档权威来源和迁移策略。

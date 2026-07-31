@@ -44,7 +44,10 @@ luna build <文件或package> [-O0|-O2|-O3] [选项]
 
 文件输入 `build app.luna` 会生成 `app.luna.ll` 和 `app`；package 目录会在目录
 中生成 `<package-id>.ll` 和 `<package-id>`。Windows 可执行文件带 `.exe` 后缀。
-更多说明见 [AOT 构建](aot_build.md)。
+
+开发构建默认使用自身的 `libruntime.a` 和 `clang++`。安装、打包或交叉环境应该
+传入 `--runtime-lib` 和 `--cc`，也可设置 `LUNA_RUNTIME_LIB` 与 `LUNA_CXX`。
+缺少 runtime 会报告 `DRV0001`，native linker 失败会报告 `DRV0002`。
 
 ### REPL
 
@@ -70,6 +73,10 @@ luna repl
 | `--cc <编译器>` | `build` | 指定 C++ 链接驱动。 |
 
 接受参数的长选项同时支持 `--名称=值`。
+
+`-O0` 保留最直接的实验性控制流 IR，是 Alpha 默认值；`-O2` 运行标准 LLVM
+速度优化管线，`-O3` 使用更积极的管线。宿主 module 在优化前后都会验证，AOT
+也把同一级别传给 native compiler。设备 kernel 使用独立的目标相关 O3 管线。
 
 ## GPU target 与运行时后端
 
@@ -98,7 +105,7 @@ LUNA_GPU_BACKEND=rocm luna run app.luna -O2 \
 | `LUNA_FRAGMENT_PLUGIN=<路径>` | 加载 Alpha v1 外部 fragment 插件。 |
 | `LUNA_FRAGMENT_<SLOT>=<名称>` | 为 slot 选择已链接的动态 fragment 候选。 |
 
-插件限制及环境选择规则见[外部 fragment 插件](dynamic_plugins.md)。
+插件限制及环境选择规则见[Fragment 与插件](fragments.md)。
 
 ## 常用工作流
 

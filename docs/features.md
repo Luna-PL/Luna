@@ -18,7 +18,7 @@ MoonIR is intended to preserve language-level safety and dynamic contracts for
 future portable Moon containers and MoonRuntime loading. The container loader
 and hotspot runtime are reserved interfaces, not completed release features.
 
-Detailed design: [MoonIR metadata refactor RFC](Arch/MoonIR_Metadata_Refactor_RFC.md).
+Detailed design: [Architecture decisions D001/D002](decisions.md).
 
 ## Types, generics and traits
 
@@ -30,8 +30,9 @@ Named `constraint` predicates provide a separate C++-concept-style boundary:
 they compose compile-time type propositions and are discharged at generic
 instantiation sites without entering MoonIR.
 
-Detailed design: [Types and identity](types.md) and
-[Type-system identity RFC](Arch/Type_System_Identity_RFC.md).
+Normative reference: [Type system](reference/type_system.md) and
+[built-in type inventory](reference/builtin_types.md). Rationale:
+[architecture decisions D003/D004](decisions.md).
 
 ## Ownership and explicit cost
 
@@ -40,7 +41,7 @@ shared-borrowed or mutably borrowed, while their use may be copy, affine or
 linear. `move`, `borrow`, path-sensitive cleanup and linear kernel events make
 resource transitions visible to both the checker and MoonIR.
 
-Detailed design: [Ownership and affine model](Arch/Ownership_Affine_Model_RFC.md).
+Detailed design: [Architecture decision D004](decisions.md).
 
 ## Errors and panic
 
@@ -55,7 +56,8 @@ Results clean only their active payload.
 the Runtime ABI console and terminates. This error model does not introduce a
 general algebraic-effect system or an effect-summary layer.
 
-Detailed design: [Result and panic RFC](Arch/Error_Result_Panic_RFC.md).
+Normative reference: [Error model](reference/error_model.md). Rationale:
+[architecture decisions D005/D006](decisions.md).
 
 ## Iteration pipelines
 
@@ -114,8 +116,7 @@ Detailed guide: [Packages and modules](packages.md).
 control effects. Static paths use direct structured lowering; dynamic paths are
 explicit and retain only the descriptors needed for runtime dispatch.
 
-Detailed guide: [Fragments and slots](fragments.md) and
-[external fragment plugins](dynamic_plugins.md).
+Detailed guide: [Fragments, slots and plugins](fragments.md).
 
 ## Runtime and C FFI
 
@@ -123,7 +124,7 @@ Compiler-generated allocation, cleanup and output use the versioned Luna
 Runtime ABI. User C interoperability remains an explicit `extern "C"` boundary
 with constrained types and ownership contracts.
 
-Detailed guides: [Runtime ABI](runtime_abi.md) and [C FFI](ffi.md).
+Detailed guide: [Runtime ABI and C FFI](runtime_abi.md).
 
 ## Heterogeneous compute
 
@@ -141,5 +142,5 @@ fixed arrays, indexing and borrowed slices. Heap-owned general collections and
 the formatted standard I/O layer remain roadmap work.
 
 Detailed guides: [Compile-time facilities](compile_time.md),
-[arrays and slices](arrays.md), [iteration pipelines](iterators.md), and
+[arrays, slices and iteration pipelines](iterators.md), and
 [standard-library skeleton](standard_library.md).

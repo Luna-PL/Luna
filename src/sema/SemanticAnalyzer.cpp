@@ -2868,10 +2868,10 @@ bool SemanticAnalyzer::blockAlwaysReturns(const BlockStmt* block) const {
 
 TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
     setDiagnosticLocation(expr);
-    if (auto* il = dynamic_cast<IntLiteralExpr*>(expr)) return TyI32;
-    if (auto* fl = dynamic_cast<FloatLiteralExpr*>(expr)) return TyF64;
-    if (auto* sl = dynamic_cast<StringLiteralExpr*>(expr)) return TyString;
-    if (auto* bl = dynamic_cast<BoolLiteralExpr*>(expr)) return TyBool;
+    if (dynamic_cast<IntLiteralExpr*>(expr)) return TyI32;
+    if (dynamic_cast<FloatLiteralExpr*>(expr)) return TyF64;
+    if (dynamic_cast<StringLiteralExpr*>(expr)) return TyString;
+    if (dynamic_cast<BoolLiteralExpr*>(expr)) return TyBool;
     if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
         const std::string declarationKey = sourceDeclarationKey(id->name);
         auto family = mFunctionFamilies.find(declarationKey);

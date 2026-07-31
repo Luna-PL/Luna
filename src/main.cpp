@@ -22,7 +22,6 @@
 #include <iostream>
 #include <cstdio>
 #include <fstream>
-#include <sstream>
 #include <cstdlib>
 #include <string>
 #include <vector>
@@ -31,17 +30,6 @@
 #ifndef LUNA_DL_LIBRARY
 #define LUNA_DL_LIBRARY ""
 #endif
-
-static std::string readFile(const std::string& path) {
-    std::ifstream f(path);
-    if (!f) {
-        std::cerr << "Error: Cannot read file '" << path << "'\n";
-        std::exit(1);
-    }
-    std::stringstream ss;
-    ss << f.rdbuf();
-    return ss.str();
-}
 
 static void printErrors(const std::vector<std::string>& errors, const char* stage = nullptr) {
     for (auto& e : errors) {

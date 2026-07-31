@@ -118,7 +118,47 @@ dynamic apply pipeline(trace, audit) {
 }
 ```
 
-See [dynamic_plugins.md](dynamic_plugins.md) for the linked runtime selection
-boundary and the Alpha v1 external shared-library ABI. External plugins are
-currently limited to host-only, single-shot interceptors with explicit
-parameters; static contexts retain the stronger stack-safe CPS implementation.
+## Runtime selection
+
+Dynamic apply selects from a finite set of linked, type-checked candidates. The
+first candidate is the deterministic fallback. A slot name maps to an
+environment key:
+
+```text
+slot: pipeline       -> LUNA_FRAGMENT_PIPELINE
+slot: request-log    -> LUNA_FRAGMENT_REQUEST_LOG
+```
+
+An unknown candidate reports an error instead of invoking an arbitrary pointer.
+Selection occurs at each slot invocation, but every candidate must preserve the
+same linear, borrow and device in-flight state. Dynamic slots remain host-only.
+The environment is useful for tests and deployment configuration; it is not a
+security boundary.
+
+## External shared-library plugins
+
+Alpha plugin ABI v1 supports host-only, single-shot interceptors with explicit
+parameters:
+
+```text
+LUNA_FRAGMENT_PIPELINE=external_trace
+LUNA_FRAGMENT_PLUGIN=/path/to/libtrace.so
+luna run app.luna
+```
+
+Windows uses the corresponding `.dll` path. A plugin exports
+`luna_fragment_plugin_descriptor_v1`; the runtime validates its plugin
+id/version, slot name, ABI hash, parameter layout, once/many capability, effect
+flags and entry point before registration.
+
+The entry receives read-only pointers to explicit slot arguments and returns a
+declared `continue` or `abort`. The host then executes the statically generated
+continuation. Libraries remain loaded for the process lifetime, and duplicate
+`(slot, fragment, contract)` registrations are rejected.
+
+External `context`, `resume()`, `many`, lexical capture and retained argument
+pointers are not allowed. They require a persistent continuation frame and a
+proven lifetime model; exposing the current stack frame as a shared-library
+callback would be unsound. Runtime ABI v1 defines host/module service tables,
+but plugin v1 does not implicitly receive them. A future v2 must accept an
+explicitly authorized module context.

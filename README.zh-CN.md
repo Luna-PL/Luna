@@ -52,8 +52,7 @@ LLVM/Clang 22.1.6 和 `-O3`。下表是在两次预热后采样 10 次所得的�
 > Clang 消除了 C++ 的 `new/delete`，而 Luna 有意保留 Runtime ABI 分配，所以该行
 > 不能作为分配器排名。
 
-[查看详细 CPU 对比、工作负载定义、限制与复现步骤](docs/cpu_benchmarks.md)。
-GPU 数据单独记录在[异构性能基准](docs/heterogeneous_benchmarks.md)中。
+[查看 CPU/GPU 工作负载、限制与复现步骤](docs/benchmarks.zh-CN.md)。
 
 ## Hello, World
 
@@ -141,8 +140,7 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
 5. 泛化异构内存与 kernel target，扩大真实硬件验证；
 6. 完善诊断、格式化器、语言服务器和 package 生态工具。
 
-详细阶段、稳定性承诺和长期计划见
-[Luna 演进路线图](docs/evolution_roadmap.md)与[Alpha 之后的发展路线](docs/future_roadmap.md)。
+详细阶段、稳定性承诺和长期计划见[统一路线图](docs/roadmap.md)。
 
 ## 文档
 
@@ -152,20 +150,20 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
 - [主要特性概览](docs/features.zh-CN.md)
 - [编译器命令参考](docs/cli.zh-CN.md)
 - [完整语言示例](examples/full_showcase/README.md)
+- [0.2 Alpha 语义参考](docs/reference/README.md)
+- [完整类型系统参考](docs/reference/type_system.md)
+- [文档记录规则](docs/reference/documentation_rules.md)
 - [Package 与 module](docs/packages.md)
-- [结构化/名义类型身份](docs/types.md)
 - [Metadata 与 selector](docs/versioning.md)
-- [所有权与仿射/线性模型](docs/Arch/Ownership_Affine_Model_RFC.md)
+- [当前架构](docs/architecture.md)
+- [架构决策](docs/decisions.md)
 - [Fragment 与 slot](docs/fragments.md)
-- [Runtime ABI](docs/runtime_abi.md)
-- [C FFI](docs/ffi.md)
+- [Runtime ABI 与 C FFI](docs/runtime_abi.md)
 - [异构计算](docs/heterogeneous_compute.md)
 - [标准库雏形](docs/standard_library.md)
-- [诊断参考](docs/diagnostics.md)
 - [测试与回归](docs/testing.md)
-- [CPU 性能对比](docs/cpu_benchmarks.md)
-- [演进路线图](docs/evolution_roadmap.md)
-- [架构设计文档](docs/Arch/README.md)
+- [性能基准](docs/benchmarks.zh-CN.md)
+- [演进路线图](docs/roadmap.md)
 
 ## 许可证
 

@@ -45,7 +45,12 @@ luna build <file-or-package> [-O0|-O2|-O3] [options]
 
 For a file input, `build app.luna` writes `app.luna.ll` and `app`. For a package
 directory, it writes `<package-id>.ll` and `<package-id>` inside that directory.
-Windows adds `.exe` to the executable. See [AOT builds](aot_build.md).
+Windows adds `.exe` to the executable.
+
+Development builds default to their own `libruntime.a` and `clang++`. Installed,
+packaged or cross-environment builds should pass `--runtime-lib` and `--cc`, or
+set `LUNA_RUNTIME_LIB` and `LUNA_CXX`. A missing runtime reports `DRV0001`; a
+native linker failure reports `DRV0002`.
 
 ### REPL
 
@@ -72,6 +77,12 @@ interactive environment.
 | `--cc <compiler>` | `build` | Select the C++ linker driver. |
 
 Options accepting values also support `--name=value`.
+
+`-O0` keeps the most direct experimental control-flow IR and is the Alpha
+default. `-O2` runs the standard LLVM speed pipeline; `-O3` selects the more
+aggressive pipeline. Host modules are verified before and after optimization,
+and AOT passes the same level to the native compiler. Device kernels use a
+separate target-specific O3 pipeline.
 
 ## GPU targets and runtime backends
 
@@ -104,7 +115,7 @@ not silently fall back. See [Heterogeneous compute](heterogeneous_compute.md).
 | `LUNA_FRAGMENT_<SLOT>=<name>` | Choose a linked dynamic fragment candidate for a slot. |
 
 Plugin constraints and environment-driven selection are described in
-[External fragment plugins](dynamic_plugins.md).
+[Fragments and plugins](fragments.md).
 
 ## Useful workflows
 

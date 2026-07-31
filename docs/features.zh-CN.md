@@ -14,7 +14,7 @@ Luna 源码先经过类型、trait 和所有权检查，再降级到 MoonIR。Mo
 MoonIR 未来还将作为可移植 Moon 容器和 MoonRuntime 的语言级安全边界。容器加载、
 验证和 hotspot runtime 目前属于已预留但尚未完整交付的接口。
 
-具体设计：[MoonIR Metadata 重构 RFC](Arch/MoonIR_Metadata_Refactor_RFC.md)。
+具体设计：[架构决策 D001/D002](decisions.md)。
 
 ## 类型、泛型与 trait
 
@@ -24,8 +24,9 @@ MoonIR 未来还将作为可移植 Moon 容器和 MoonRuntime 的语言级安全
 具名 `constraint` 谓词提供独立的 C++ concept 风格边界：用户可以组合编译期
 类型命题，编译器在泛型实例化点完成证明，constraint 不进入 MoonIR。
 
-具体设计：[类型与身份](types.md)和
-[类型系统身份 RFC](Arch/Type_System_Identity_RFC.md)。
+规范参考：[完整类型系统](reference/type_system.md)和
+[内置类型清单](reference/builtin_types.md)。设计理由见
+[架构决策 D003/D004](decisions.md)。
 
 ## 所有权与显式成本
 
@@ -33,20 +34,21 @@ Luna 将所有权关系和使用次数分开：值可以是拥有、共享借用
 copy、affine 或 linear 使用约束。`move`、`borrow`、路径敏感清理和线性 kernel
 event 会被检查器及 MoonIR 明确记录。
 
-具体设计：[所有权与仿射模型](Arch/Ownership_Affine_Model_RFC.md)。
+具体设计：[架构决策 D004](decisions.md)。
 
 ## 错误与 panic
 
 可恢复失败使用普通值 `Result<T, E>`。通用 enum/Result 穷尽 `match` 绑定活动载荷；
 后缀 `?` 携带路径敏感清理义务，并在错误类型不同时调用唯一、静态解析的
-`From<Source> for Target`。冻结的 inline ADT 布局支持普通 enum、数组、slice 与
-嵌套 Result，清理只作用于当前 tag 对应的载荷。
+`From<Source> for Target`。0.2 编译器/MoonIR 的 inline ADT v1 布局支持普通
+enum、数组、slice 与嵌套 Result，清理只作用于当前 tag 对应的载荷；该内部布局
+不是 C FFI 承诺。
 
 `panic(string)` 是 abort 边界，不展开语言栈。该模型不引入完整代数效应，也没有
 独立 effect summary；编译器所需事实继续由只读 sysmeta 推导。
 
-具体设计：[Result 与 panic RFC](Arch/Error_Result_Panic_RFC.md)和
-[标准错误与外部转换边界](Arch/Standard_Error_Boundaries_RFC.md)。
+规范参考：[错误模型契约](reference/error_model.md)。设计理由和后续边界见
+[架构决策 D005/D006](decisions.md)。
 
 ## 迭代与管道
 
@@ -94,15 +96,14 @@ Package ID 使用反向 DNS 名称，是版本和依赖单元；module 使用 `:
 控制效果。静态路径直接结构化降级；动态路径必须显式声明，并只保留运行时分派
 所需的 descriptor。
 
-具体说明：[Fragment 与 slot](fragments.md)和
-[外部 fragment 插件](dynamic_plugins.md)。
+具体说明：[Fragment、slot 与插件](fragments.md)。
 
 ## Runtime 与 C FFI
 
 编译器生成的分配、清理和输出经过带版本的 Luna Runtime ABI。用户 C 互操作仍是
 显式 `extern "C"` 边界，并受到类型与所有权契约约束。
 
-具体说明：[Runtime ABI](runtime_abi.md)和 [C FFI](ffi.md)。
+具体说明：[Runtime ABI 与 C FFI](runtime_abi.md)。
 
 ## 异构计算
 
@@ -117,5 +118,5 @@ CUDA/ROCm target 生成设备代码。`launch` 返回线性 event，`await` 完�
 Alpha 已包含 `const`、`constexpr`、编译期类型反射、安全定长数组、索引和借用
 切片。堆拥有通用容器和格式化标准 I/O 仍属于后续路线。
 
-具体说明：[编译期能力](compile_time.md)、[数组与切片](arrays.md)和
+具体说明：[编译期能力](compile_time.md)、[数组、切片与迭代](iterators.md)和
 [标准库雏形](standard_library.md)。

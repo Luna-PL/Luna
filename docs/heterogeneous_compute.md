@@ -160,4 +160,4 @@ rejected for literals and fails at runtime for dynamic values.
 
 The valid and invalid examples are in `examples/heterogeneous*.luna`.
 Benchmark methodology and the JIT/AOT sampling script are in
-[heterogeneous_benchmarks.md](heterogeneous_benchmarks.md).
+[performance benchmark guide](benchmarks.md).

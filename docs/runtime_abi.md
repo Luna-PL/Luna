@@ -67,6 +67,32 @@ int status = rt_runtime_error_snapshot_v1(
    execute -> release` 的 W^X 合约。默认 runtime 不声明该 capability；未来
    MoonRuntime/hotspot JIT 必须显式获得宿主授权。
 
+## C FFI 边界
+
+Runtime ABI 服务编译器生成的语言操作；用户声明的原始 C 接口使用显式
+`extern "C"`，二者不能混用：
+
+```luna
+extern "C" fn puts(message: cstr) -> i32;
+extern "C" fn malloc(size: usize) -> linear raw<u8>;
+extern "C" fn c_free(linear pointer: raw<u8>) as "free";
+```
+
+导出使用 `export "C" fn`。`extern` 声明不可同时 `export`，也不能是泛型或
+`constexpr`。当前 C ABI 只接受整数、浮点、`cstr`、`raw<T>`、`unit` 及指向这些
+标量的引用；`string`、ADT、闭包、trait object、`device_buffer<T>` 和
+`Result<T, E>` 都不能直接穿过边界。
+
+每个参数必须有显式类型。所有权移交使用 `linear` 参数和 `move` 调用；外部
+allocator 的拥有返回写作 `linear raw<T>`。外来指针必须交还创建它的分配域，
+不能传给 Luna `free`/`rt_dealloc`。当前配对责任由声明者承担，后续安全 adapter
+可使用 `LunaOwnedForeignMemoryV1` 的 release capability。
+
+可恢复外部 API 应保留原始 status/out-parameter 声明，在普通 Luna adapter 中立即
+捕获 errno/status 和诊断快照，再返回 `Result<T, FfiError>`。编译器不会隐式读取
+errno，也不会延长外部 `last_error` 指针的生命周期。JIT 通过宿主进程解析用户 C
+符号，AOT 通过系统链接器；两条路径均有 `puts`/`free` 回归。
+
 ## 版本化与未来模块
 
 `LunaHostServicesV1` 使用 `magic`、`abi_version`、`struct_size` 和 capability bits

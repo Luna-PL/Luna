@@ -1,5 +1,6 @@
 # Local build and CMake state
 /build/
+/build-*/
 /.omo/
 /.cache/
 /cmake-build-*/

@@ -1,7 +1,17 @@
-# 基础性能基准 / Basic benchmark
+# Luna performance benchmarks
 
-Luna-PL 提供一个默认关闭的轻量基准，用于快速观察编译、启动和简单标量循环
-的变化。它不是正确性测试，也不是跨机器排行榜。
+[English](benchmarks.md) | [简体中文](benchmarks.zh-CN.md)
+
+> Document type: measurement guide
+> Status: non-normative
+
+Benchmarks are opt-in trend detectors, not correctness tests or cross-machine
+rankings. Always record the Luna commit, CPU/GPU, OS, compiler and driver
+versions, optimization level, warmups, sample count and clock/isolation state.
+Compilation, JIT compile-and-run, AOT execution and device-event time are
+different metrics and must not be compared as if they had the same boundary.
+
+## Lightweight staged benchmark
 
 ```sh
 cmake -S . -B build -DLUNA_ENABLE_BASIC_BENCHMARK=ON
@@ -10,27 +20,69 @@ LUNA_BASIC_BENCH_ITERATIONS=10 \
   ctest --test-dir build -V -R luna.basic-benchmark
 ```
 
-也可以直接运行：
+This reports Luna JIT compile+run, Luna AOT build, Luna AOT run and C++23 run
+separately for a deterministic integer workload.
+
+## CPU comparison
 
 ```sh
-LUNA_BASIC_BENCH_ITERATIONS=10 \
-  bash benchmarks/run_basic_benchmark.sh ./build/luna .
+cmake -S . -B build -DLUNA_ENABLE_CPU_BENCHMARK=ON
+cmake --build build --parallel
+LUNA_CPU_ITERATIONS=10 LUNA_CPU_WARMUPS=2 \
+  ctest --test-dir build -V -R luna.cpu-comparison
 ```
 
-## 指标含义
+The suite compares Luna AOT and C++23 on arithmetic, branches, calls, fixed
+arrays, allocation, bit mixing, reduction, array scanning and nested loops. It
+alternates run order, reports mean/median/p95 and verifies identical checksums.
+These are small scalar/L1 workloads; they do not represent realistic
+applications, memory bandwidth, concurrency, I/O or allocation architecture.
 
-基准使用 20,000,000 次整数混合运算，并分别报告：
+The 2026-07-23 Ryzen 5 7500F / Clang 22 baseline placed seven of eight
+non-allocation workloads between `0.97x` and `1.09x` of C++23; reduction was
+`1.27x`. The allocation row was `4.39x` because Luna retained real
+`rt_alloc/rt_dealloc` calls while Clang eliminated the unobservable C++
+`new/delete` pair. This is an optimization-boundary observation, not an
+allocator ranking.
 
-- `Luna JIT compile+run`：包含解析、语义分析、LLVM 编译、进程启动和运行；
-  它主要反映交互式首次运行体验，不能与纯运行时吞吐直接比较。
-- `Luna AOT build`：只反映编译和链接成本。
-- `Luna AOT run`：包含 AOT 进程启动和运行时初始化，更接近部署后的 CPU 端到端成本。
-- `C++23 run`：C++ 可执行文件启动和运行时间，用作同一算术结果的参考。
+## Heterogeneous and ROCm comparison
 
-Luna 和 C++23 的边界并不完全相同：Luna 经过自己的运行时、所有权和诊断边界，
-而 C++ 编译器可能消除不同的临时对象或调用。因此 benchmark 输出会同时打印
-checksum，但性能数值只能在相同机器、相同编译器、相同优化级别和相同采样方式下
-作趋势比较。首次运行、CPU 频率、系统负载和缓存都会影响结果。
+For JIT/AOT staging on the simulator or a configured backend:
 
-更完整的 CPU workload 见 [cpu_benchmarks.md](cpu_benchmarks.md)；GPU/ROCm 基准
-见 [heterogeneous_benchmarks.md](heterogeneous_benchmarks.md)。
+```sh
+LUNA_BENCH_ITERATIONS=20 \
+LUNA_GPU_BACKEND=sim \
+LUNA_GPU_TARGET=sim \
+  ./tools/benchmark_heterogeneous.sh
+```
+
+The optional ROCm comparison uses the same 64 MiB input and ten transforms in
+Luna and C++23/HIP:
+
+```sh
+cmake -S . -B build \
+  -DLUNA_ENABLE_ROCM_SMOKE=ON \
+  -DLUNA_ROCM_SMOKE_ARCH=gfx1101 \
+  -DLUNA_ENABLE_ROCM_BENCHMARK=ON
+cmake --build build
+LUNA_BENCH_ITERATIONS=20 \
+  ctest --test-dir build -L benchmark --output-on-failure
+```
+
+Compare Luna primarily with the C++ `awaited` path, which matches Luna's
+launch/await lifecycle. The `stream` path is retained as a throughput reference.
+Wall time includes process startup, HIP initialization, module loading and
+synchronization; `LUNA_GPU_PROFILE=1` reports device-event kernel time.
+
+On the recorded RX 7800 XT/gfx1101 run after hidden kernarg/SGPR cleanup, Luna
+reported a `1.438 ms` average kernel time versus `1.681 ms` for C++23 awaited,
+while AOT wall time was `55.765 ms` versus `54.569 ms`. This single-device
+result confirms the descriptor fix but is not a general performance claim.
+
+## Contribution rules
+
+1. Preserve equivalent computation and verify the same checksum.
+2. Keep results observable so optimizers cannot remove the workload unnoticed.
+3. State differences in safety, ownership, allocation or synchronization.
+4. Report raw environment and sampling data beside summarized ratios.
+5. Treat same-machine longitudinal trends as more useful than one-off rankings.
