@@ -52,12 +52,13 @@ AOT 消费同一份已检查 MoonIR，并共享宿主优化级别与 runtime ABI
 
 | 目录/组件 | 当前职责 |
 |---|---|
+| `src/driver` | `CommandLine` 解析 CLI；`CompilerPipeline` 编排前端、MoonIR 与 codegen；`AotLinker` 负责产物和外部工具链；`Driver` 负责命令分派、REPL 与 JIT |
 | `src/lexer`, `src/parser` | 源码 token、语法树和恢复诊断 |
 | `src/sema` | 类型形成、推断、trait、所有权、借用和控制流状态 |
 | `src/selector` | 静态/动态候选选择 |
 | `src/instantiation` | 泛型实例化 |
 | `src/moonir` | 单一后端输入、验证、优化和成本报告 |
-| `src/codegen` | LLVM host/device 降低、ORC JIT 和 AOT IR |
+| `src/codegen` | LLVM lowering；`CodeGeneratorModule` 编排声明收集、kernel/host lowering、验证与优化，`CodeGeneratorFunctions` 隔离单个函数的状态、参数、GPU 初始化门槛与隐式返回 lowering，`CodeGeneratorStatements` 隔离 statement/block lowering，`CodeGeneratorExpressions` 隔离 expression lowering，`CodeGeneratorRangeAnalysis` 提供 statement/expression 共用的安全数组索引范围证明，`CodeGeneratorExecution` 隔离生命周期初始化、ORC JIT 和 AOT IR，`CodeGeneratorFragments` 隔离 continuation、slot、动态/外部 fragment dispatch 与 inline lowering，`CodeGeneratorGpu` 隔离 PTX/HSACO 设备代码对象、buffer ABI、错误边界与 launch lowering，`CodeGeneratorIterator` 隔离 iterator 计划、物化、pipeline 与 terminal lowering，`CodeGeneratorCleanup` 隔离 Result/enum/共享所有权与数组的清理 lowering，`CodeGeneratorRuntimeDescriptors` 隔离运行时 declaration/metadata registry emission |
 | `src/runtime` | Runtime ABI v1、GPU backend 和 fragment plugin ABI |
 | `src/package` | package/module/workspace/lock 装载与导出边界 |
 

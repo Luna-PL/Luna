@@ -49,6 +49,10 @@ target_link_libraries(fragment-plugin-test PRIVATE runtime)
 
 add_executable(luna
     src/main.cpp
+    src/driver/AotLinker.cpp
+    src/driver/CommandLine.cpp
+    src/driver/CompilerPipeline.cpp
+    src/driver/Driver.cpp
     src/core/TypeRelations.cpp
     src/core/TypeLayout.cpp
     src/lexer/Lexer.cpp
@@ -67,6 +71,17 @@ add_executable(luna
     src/moonir/Printer.cpp
     src/codegen/CGHelpers.cpp
     src/codegen/CodeGenerator.cpp
+    src/codegen/CodeGeneratorCleanup.cpp
+    src/codegen/CodeGeneratorExecution.cpp
+    src/codegen/CodeGeneratorExpressions.cpp
+    src/codegen/CodeGeneratorFragments.cpp
+    src/codegen/CodeGeneratorFunctions.cpp
+    src/codegen/CodeGeneratorGpu.cpp
+    src/codegen/CodeGeneratorIterator.cpp
+    src/codegen/CodeGeneratorModule.cpp
+    src/codegen/CodeGeneratorRangeAnalysis.cpp
+    src/codegen/CodeGeneratorRuntimeDescriptors.cpp
+    src/codegen/CodeGeneratorStatements.cpp
     src/runtime/Runtime.cpp
     src/macro/MacroProcessor.cpp
     src/package/Package.cpp
