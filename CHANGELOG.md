@@ -24,6 +24,23 @@
 - Added recursive locked-workspace dependency loading, `alias::module::symbol` and `module::symbol` resolution, package-private export enforcement, and deterministic linkage isolation for same-named declarations in different modules.
 - Added an executable two-package, multi-module language showcase and a portable MoonIR/JIT/AOT integration test covering the complete positive Alpha feature surface.
 - Materialized solved omitted/`auto` signature types before MoonIR lowering, restoring verified JIT/AOT code generation for inferred function and closure signatures.
+- Replaced placeholder-based generic-body cloning with exhaustive AST cloning,
+  recursive type substitution and source-location preservation; nested generic
+  calls no longer rewrite source identifiers to internal instance symbols.
+- Split the REPL from the driver, routed in-memory submissions through the
+  production compiler pipeline, and defined a tested Alpha contract for i32
+  expressions, persistent one-line declarations and isolated statements.
+- Added a tag-gated prerelease workflow that tests and publishes checksummed
+  Linux x86_64, macOS runner-architecture and Windows UCRT64 x86_64 prebuilt
+  archives with bundled LLVM compiler runtime dependencies.
+- Added one authoritative repository file guide with directory dependency
+  rules, per-production-file responsibilities, a complete path inventory and a
+  CTest gate that rejects unregistered files.
+- Removed the final legacy build-tree compatibility executable/symlink; build,
+  install, documentation and release surfaces now use only `luna`.
+- Declared `0.2.0-alpha` a long-lived maintenance line with no scheduled Beta
+  or language-version bump, and shifted near-term development toward
+  diagnostics, editor/build/package integration, distribution and reliability.
 
 ## 0.1.0-alpha — Development baseline
 

@@ -1,26 +1,19 @@
-# Loop-local slot plugins
+# Loop-Local Slot Plugins
 
-这个示例展示类型安全的运行时插件织入点：
+This example demonstrates a type-safe runtime plugin injection point:
 
-```text
+~~~text
 dynamic slot context hook(value: i32);
 dynamic apply hook(log, audit) { ... }
-```
+~~~
+The hook is inside the while-loop body and is invoked again on every iteration.
+log and audit are statically linked candidate contexts; the runtime selects one
+through an environment variable:
 
-`hook` 位于 `while` 循环体内，每次迭代都会重新调用。`log` 和 `audit`
-是静态链接进程序的候选 context，运行时通过环境变量选择：
-
-```sh
+~~~sh
 LUNA_GPU_BACKEND=sim ./build/luna run \
   examples/slot_plugins/loop_plugins.luna
 
 LUNA_GPU_BACKEND=sim LUNA_FRAGMENT_HOOK=audit \
   ./build/luna run examples/slot_plugins/loop_plugins.luna
-```
-
-默认候选是 `log`。两个插件都使用相同的 `context(value: i32)` 接口和
-`resume()`，因此每次迭代会先输出插件事件，再输出槽续体中的 `10 + i`。
-
-当前动态插件边界是“已链接候选 + 运行时选择”，还不是 `.so/.dll` 热加载。
-循环内 slot 可以重复调用，但插件不能在循环中消费外层线性资源；这类
-状态变化会被 ownership checker 拒绝。
+~~~

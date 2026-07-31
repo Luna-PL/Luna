@@ -1,177 +1,214 @@
-# Luna 文档记录规则
+# Luna Documentation Recording Rules
 
-> 文档类别：项目规范
-> 适用版本：Luna 0.2.0-alpha 及后续文档
-> 状态：Frozen for Alpha
-> 规范性：规范
-> 首次实现核对：`d0ab31c`（2026-07-31）
+> Document category: project policy
+> Applies to: Luna 0.2.0-alpha and later documentation
+> Status: Frozen for Alpha
+> Normative status: normative
+> Initial implementation audit: `d0ab31c` (2026-07-31)
 
-本文规定 Luna 文档如何区分事实、承诺、实现和计划。所有新增语言参考、架构说明、
-RFC、教程和发布说明都必须遵守这些规则。
+This document defines how Luna documentation separates facts, commitments, implementation,
+and plans. All new language references, architecture notes, RFCs, tutorials, and release
+notes must follow these rules.
 
-## 1. 每篇文档必须声明元信息
+## 1. Every document must declare metadata
 
-规范或参考文档必须在标题后声明：
+Normative or reference documents must declare the following after the title:
 
 ```text
-文档类别：语言契约 / Alpha 参考 / 实现说明 / RFC / 教程 / 发布说明
-适用版本：适用的 Luna 版本
-状态：Frozen for Alpha / Implemented Experimental / Internal / Draft / Planned / Superseded
-规范性：规范 / 部分规范 / 非规范
-实现核对：最后核对的提交和日期
+Document category: language contract / Alpha reference / implementation note / RFC / tutorial / release note
+Applies to: applicable Luna version
+Status: Frozen for Alpha / Implemented Experimental / Internal / Draft / Planned / Superseded
+Normative status: normative / partially normative / non-normative
+Implementation audit: last audited commit and date
 ```
 
-旧文档可渐进补齐，但没有状态声明的旧文档不得自动被解释为稳定语言承诺。
+Older documents may acquire metadata incrementally, but an old document without a status
+declaration must not be automatically interpreted as a stable language commitment.
 
-## 2. 四种事实必须分开记录
+## 2. Four kinds of fact must remain separate
 
-### 2.1 语言契约
+### 2.1 Language contract
 
-描述用户和工具可以依赖的语义，例如：
+Describe semantics that users and tools may depend on, such as:
 
-- `never` 是普通值类型的 bottom type；
-- `Result` 只拥有当前 tag 对应的载荷；
-- `?` 在错误路径执行与 `return` 相同的清理；
-- 名义身份不能因布局相同而被抹除。
+- `never` is the bottom type for ordinary values;
+- `Result` owns only the payload selected by its current tag;
+- `?` performs the same cleanup on the error path as `return`;
+- nominal identity cannot be erased because layout is equal.
 
-语言契约使用“必须”“不得”“可以”等规范词。改变契约必须附带迁移说明、正例、
-负例和版本影响。
+Language contracts use normative words such as “must,” “must not,” and “may.” A contract
+change requires migration notes, positive and negative examples, and version impact.
 
-### 2.2 当前实现
+### 2.2 Current implementation
 
-描述当前编译器已经交付但尚未全部冻结的行为，例如：
+Describe behavior already delivered by the compiler but not fully frozen, such as:
 
-- 当前只支持一跳、具体类型的 `From<Source>`；
-- 当前 kernel 数据操作只开放 `i32`；
-- 当前 closure environment 尚未物化。
+- only one-hop, concrete-type `From<Source>` is currently supported;
+- kernel data operations currently expose only `i32`;
+- the closure environment is not yet materialized.
 
-当前实现必须写明限制，不能用未来时态包装成已经交付的能力。
+Current implementation notes must state limitations and must not present future work as
+delivered capability.
 
-### 2.3 内部表示
+### 2.3 Internal representation
 
-描述 Sema、MoonIR、LLVM 或 Runtime 的实现选择，例如：
+Describe implementation choices in Sema, MoonIR, LLVM, or Runtime, such as:
 
-- `TypeKind::InferenceVar`；
-- inline ADT 的 tag storage；
-- 编译器融合的 Iterator recipe；
-- 某个源码文件或类的职责。
+- `TypeKind::InferenceVar`;
+- inline ADT tag storage;
+- a compiler-fused Iterator recipe;
+- the responsibility of a source file or class.
 
-除非另有版本化 ABI 声明，内部表示不构成源码兼容承诺。实现说明必须链接到对应的
-语言契约，不能反过来用实现细节定义语言含义。
+Unless a versioned ABI says otherwise, internal representation is not a source-compatibility
+commitment. An implementation note must link to the relevant language contract; it must not
+define language meaning in reverse from implementation detail.
 
-### 2.4 计划能力
+### 2.4 Planned capability
 
-描述尚未实现或尚未采用的设计，例如：
+Describe designs that are not implemented or not yet adopted, such as:
 
-- 泛型 `From`；
-- Runtime/GPU 的语言层安全 adapter；
-- task-local panic；
-- 远程 package registry。
+- generic `From`;
+- language-level safety adapters for Runtime/GPU;
+- task-local panic;
+- a remote package registry.
 
-计划能力必须使用 `Planned` 或 `Draft`，不得与当前命令、语法和示例混排成可用
-功能。
+Planned capabilities must use `Planned` or `Draft` and must not be mixed with current
+commands, syntax, or examples as if they were usable features.
 
-## 3. 状态词的含义
+## 3. Meaning of status words
 
-| 状态 | 含义 |
+| Status | Meaning |
 |---|---|
-| `Frozen for Alpha` | 在 0.2 Alpha 内视为契约；变更需要明确迁移说明 |
-| `Implemented Experimental` | 已实现并有测试，但 Beta 前允许调整 |
-| `Internal` | 编译器或 Runtime 内部事实，不承诺源码兼容 |
-| `Draft` | 正在讨论，尚未采用 |
-| `Planned` | 已确定方向但没有完整实现 |
-| `Superseded` | 已被指定的新文档替代，只保留历史理由 |
+| `Frozen for Alpha` | A contract during 0.2 Alpha; changes require explicit migration notes |
+| `Implemented Experimental` | Implemented and tested, but may change before the Alpha line ends |
+| `Internal` | Compiler or Runtime fact; no source-compatibility promise |
+| `Draft` | Under discussion and not adopted |
+| `Planned` | Direction agreed, but no complete implementation |
+| `Superseded` | Replaced by a designated newer document; retained only for historical rationale |
 
-“稳定”必须说明稳定范围。`Runtime ABI v1 稳定`、`0.2 Alpha 源码语义冻结`和
-`内部布局在当前编译器中固定`是三种不同承诺。
+“Stable” must name its scope. “Runtime ABI v1 is stable,” “0.2 Alpha source semantics are
+frozen,” and “internal layout is fixed in the current compiler” are three different
+commitments.
 
-## 4. 规范词
+## 4. Normative words
 
-- **必须 / 不得**：实现和有效程序必须满足；
-- **应该 / 不应该**：强约定，偏离时必须说明理由；
-- **可以**：允许但不要求；
-- **当前**：只描述适用版本实现；
-- **计划 / 后续**：不属于当前交付。
+- **Must / must not**: an implementation and every valid program must satisfy this;
+- **Should / should not**: a strong convention; deviations must explain why;
+- **May**: permitted but not required;
+- **Current**: describes only the implementation for the applicable version;
+- **Planned / later**: not part of the current delivery.
 
-教程可以使用自然语言，但链接到的参考必须给出精确规则。示例不能代替规则。
+Tutorials may use natural language, but their referenced material must state precise rules.
+Examples cannot replace rules.
 
-## 5. 事实来源与冲突处理
+## 5. Sources of truth and conflict handling
 
-文档不是代码的注释副本，代码也不能在没有文档变更时静默改变语言。核对顺序是：
+Documentation is not a duplicate code comment, and code must not silently change language
+behavior without a documentation change. Verify in this order:
 
-1. 已采用且状态为 `Frozen for Alpha` 的语义基线和语言契约；
-2. 可执行正例、负例、MoonIR/ABI 回归；
-3. 当前实现；
-4. Alpha 参考和专题说明；
-5. RFC、路线图和历史设计文档。
+1. adopted semantic baselines and language contracts marked `Frozen for Alpha`;
+2. executable positive/negative examples and MoonIR/ABI regressions;
+3. current implementation;
+4. Alpha references and topic notes;
+5. RFCs, roadmap, and historical design documents.
 
-若契约与实现不一致，必须记录为实现缺陷或待决语义，不能通过改写教程掩盖差异。
-若两份规范冲突，必须指定一份为权威来源，并将另一份标为 `Superseded` 或降为
-非规范说明。
+If a contract disagrees with implementation, record an implementation defect or pending
+semantic decision; do not hide the discrepancy by rewriting a tutorial. If two normative
+documents conflict, designate one as authoritative and mark the other `Superseded` or
+downgrade it to a non-normative note.
 
-## 6. 类型文档的最低记录单元
+## 6. Minimum record for type documentation
 
-每个内置类型或类型构造器至少记录：
+Every builtin type or type constructor must record at least:
 
-| 字段 | 内容 |
+| Field | Content |
 |---|---|
-| 源码拼写 | 用户如何写出它；若不可写则明确说明 |
-| 类型域 | Value、Meta、Compiler、Inference 或 Error |
-| 身份模式 | Builtin、Structural、Nominal、MetaSchema、CompilerIntrinsic |
-| 形成规则 | 参数个数、参数种类、常量和递归限制 |
-| 值来源 | 字面量、构造器、调用结果或仅由编译器产生 |
-| 类型关系 | TypeId、ShapeId 和名义身份如何参与相等 |
-| relation/usage | ownership relation 与 Copy/Affine/Linear 规则 |
-| 清理 | Drop、释放、引用计数或无清理 |
-| 布局 | 语言是否承诺；若只属内部 ABI 必须标明 |
-| 转换 | 隐式、上下文相关和显式转换 |
-| 边界 | FFI、kernel、constexpr、Runtime 是否允许 |
-| 稳定性 | 契约、实验性、内部或计划 |
-| 证据 | 对应测试、MoonIR 验证或 ABI 回归 |
+| Source spelling | How users write it; state explicitly if it is not writable |
+| Type domain | Value, Meta, Compiler, Inference, or Error |
+| Identity mode | Builtin, Structural, Nominal, MetaSchema, CompilerIntrinsic |
+| Formation rules | Parameter count/kinds, constants, and recursion limits |
+| Value source | Literal, constructor, call result, or compiler-only |
+| Type relations | How TypeId, ShapeId, and nominal identity participate in equality |
+| relation/usage | Ownership relation and Copy/Affine/Linear rules |
+| Cleanup | Drop, release, reference counting, or none |
+| Layout | Whether language guarantees it; label internal ABI explicitly |
+| Conversion | Implicit, contextual, and explicit conversions |
+| Boundaries | Whether FFI, kernel, constexpr, and Runtime allow it |
+| Stability | Contract, experimental, internal, or planned |
+| Evidence | Relevant tests, MoonIR verification, or ABI regressions |
 
-`TypeKind` 不是源码类型清单。一个枚举项可能是用户类型、编译期值、降级 recipe、
-推断状态或错误恢复占位，文档必须先分类。
+`TypeKind` is not a source-type inventory. An enum member may represent a user type,
+compile-time value, lowering recipe, inference state, or error-recovery placeholder; the
+documentation must classify it first.
 
-## 7. 示例与测试
+## 7. Examples and tests
 
-- 语言契约至少有一个正例和一个相关负例；
-- 涉及所有权、清理或 ABI 的规则必须有 JIT/AOT 或 MoonIR 回归；
-- 示例应使用当前 CI 工具链可解析的语法；
-- 计划语法只能出现在标为 `Draft`/`Planned` 的代码块中；
-- 教程中的可运行示例应该复用测试 fixture，或明确给出同步责任；
-- 性能数字必须记录环境、采样方法和局限，不能转化为语义承诺。
+- Every language contract needs at least one positive example and one relevant negative example;
+- ownership, cleanup, or ABI rules require JIT/AOT or MoonIR regression coverage;
+- examples should use syntax parsable by the current CI toolchain;
+- planned syntax may appear only in code blocks labeled `Draft`/`Planned`;
+- runnable tutorial examples should reuse test fixtures or state their synchronization owner;
+- performance numbers must record environment, sampling method, and limitations, and must not
+  be turned into semantic commitments.
 
-## 8. 版本与变更记录
+## 8. Versioning and change records
 
-语义变更必须同时完成：
+A semantic change must complete all of the following:
 
-1. 更新语义基线或明确说明基线未变；
-2. 更新参考文档和状态矩阵；
-3. 添加或更新正例、负例和必要的 ABI 测试；
-4. 在 `CHANGELOG.md` 记录用户可观察影响；
-5. 对已冻结行为提供迁移说明；
-6. 检查中英文入口是否仍指向同一事实来源。
+1. update the semantic baseline or state explicitly that it remains unchanged;
+2. update references and status matrices;
+3. add or update positive, negative, and required ABI tests;
+4. record user-visible impact in `CHANGELOG.md`;
+5. provide migration notes for frozen behavior;
+6. verify that English and Chinese entry points still reference the same facts.
 
-只重构代码且不改变语义时，应在实现说明中更新组件映射，不应重写语言契约。
+A code-only refactor that does not change semantics should update component mappings in the
+implementation notes, not rewrite the language contract.
 
-## 9. 链接与重复
+## 9. Links and duplication
 
-- 一项规则只指定一个权威定义；
-- 教程、概览和 README 使用摘要并链接权威定义；
-- RFC 解释“为什么”，参考说明“现在是什么”；
-- 物理布局统一链接布局章节，不在多个教程中复制数字；
-- 标准库类型和编译器内置类型必须分开，名字相似也不得混为同一身份。
-- 已采用 RFC 的有效理由应压缩进 `docs/decisions.md`，不继续与当前参考平行维护；
-- 被替代文档在转移独有内容、更新入站链接并通过链接检查后直接删除；Git 历史是档案，
-  不建立仍需维护的 `docs/archive/`；
-- 临时状态、修复记录和阶段完成情况进入 `CHANGELOG.md`，不形成永久专题页。
+- Each rule has one authoritative definition;
+- tutorials, overviews, and READMEs summarize and link to the authority;
+- RFCs explain “why,” while references explain “what is true now”;
+- physical layout links to one layout section instead of copying numbers across tutorials;
+- standard-library types and compiler builtins remain separate even when their names resemble each other;
+- adopted RFC rationale should be condensed into `docs/decisions.md`, rather than maintained
+  in parallel with the current reference;
+- a superseded document should be deleted after unique content is migrated, inbound links are
+  updated, and link checks pass; Git history is the archive, not a maintained `docs/archive/`;
+- temporary status, fix records, and phase completion belong in `CHANGELOG.md`, not in a
+  permanent topic page.
 
-## 10. 文档维护门
+## 10. Documentation maintenance gate
 
-文档变更必须确认：
+Every documentation change must confirm that:
 
-- 相对链接全部存在，且活动专题至少能从一个入口到达；
-- 没有重新定义已有权威规则；
-- 计划能力和当前实现仍明确分开；
-- 性能数字保留环境和结论边界；
-- 语义事实与对应回归、实现和版本记录一致。
+- all relative links exist and every active topic is reachable from at least one entry point;
+- no existing authoritative rule is redefined;
+- planned capability and current implementation remain clearly separate;
+- performance numbers retain their environment and conclusion boundaries;
+- semantic facts agree with the corresponding regressions, implementation, and release record.
+
+## 11. Bilingual documentation rules
+
+“Bilingual” applies to human-facing Markdown documents and user-visible help. It does not
+apply to source code, ASTs, test fixtures, lockfiles, original license text, or machine
+configuration; copying these into translations would create two inconsistent sources of truth.
+User-visible diagnostics and CLI help in source must retain stable English identifiers. Chinese
+translations belong in documentation or a future localization resource layer, not in a second
+copy of compiler logic.
+
+The default document filename must be English, for example `docs/alpha_release.md`. The
+Chinese counterpart uses the same name with the `.zh-CN.md` suffix, for example
+`docs/alpha_release.zh-CN.md`. Each pair must share version, status, normative status, and
+implementation-audit metadata, and must link to each other. The English file is the default
+entry point for CI, release notes, and README files.
+
+The existing `getting_started.en.md` is a historical transitional name. After the migration,
+English should become `getting_started.md` and Chinese `getting_started.zh-CN.md`; only one
+short-lived redirect document with a migration note may remain under the old name.
+
+A translation must faithfully express the same authoritative rule: code blocks, type spelling,
+error codes, commands, paths, and version strings must not be translated; explanatory prose
+may be translated. When either language version is added or changed, update the other as well,
+and keep both discoverable in the file guide.

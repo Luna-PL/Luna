@@ -1,11 +1,15 @@
-# 测试与回归
+# Testing and Regressions
 
-Luna 的稳定核心使用 CTest 执行语义回归。该套件同时覆盖应通过的程序和应拒绝的程序；它不把源语言 `main` 的非零返回值当作编译失败，而是检查编译器打印的 `Program exited with code:` 行或结构化诊断。
+Luna's stable core uses CTest for semantic regressions. The suite covers both programs that
+should pass and programs that should be rejected. It does not treat a non-zero return from
+source-language `main` as a compilation failure; it checks the compiler's
+`Program exited with code:` line or a structured diagnostic.
 
-核心错误还带有稳定错误码；具体格式和当前公开编号见
-[错误模型的诊断编号](reference/error_model.md#10-编译器诊断编号)。
+Core errors also have stable error codes. See the [error-model diagnostic
+codes](reference/error_model.md#10-compiler-diagnostic-codes) for the format and current
+public numbering.
 
-## 运行
+## Running
 
 ```sh
 cmake -S . -B build
@@ -13,17 +17,18 @@ cmake --build build -j4
 ctest --test-dir build --output-on-failure
 ```
 
-发布候选构建应同时把项目自身的警告提升为错误：
+Release-candidate builds should also promote project-owned warnings to errors:
 
 ```sh
 cmake -S . -B build -DLUNA_STRICT_WARNINGS=ON
 cmake --build build --parallel
 ```
 
-Linux CI 在 C++17/C++23 构建矩阵中都启用该门禁。它只作用于 Luna
-仓库拥有的 target，不把 LLVM 或系统头文件的第三方警告误算为项目回归。
+Linux CI enables this gate in both the C++17 and C++23 build matrices. It applies only to
+targets owned by the Luna repository, so third-party warnings from LLVM or system headers
+are not misclassified as project regressions.
 
-内存安全与未定义行为门禁可独立启用：
+Memory-safety and undefined-behavior gates can be enabled independently:
 
 ```sh
 cmake -S . -B build-sanitized -G Ninja \
@@ -38,74 +43,120 @@ UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
   ctest --test-dir build-sanitized -LE hardware --output-on-failure
 ```
 
-该选项用 ASan/UBSan 插桩编译器及进程内 JIT runtime，但不污染安装用的
-`libruntime.a`，因此安装后的 AOT 测试不需要额外链接 sanitizer runtime。
-ORC 生成的入口函数没有 Clang UBSan 的函数类型前缀元数据，故仅 JIT 入口的
-一次间接调用关闭 `function` 检查；调用前后的编译器与 runtime 仍保持插桩。
+This instruments the compiler and in-process JIT Runtime with ASan/UBSan without
+contaminating the installed `libruntime.a`; installed AOT tests need no additional
+sanitizer-runtime link. ORC entry functions lack Clang UBSan function-type-prefix metadata,
+so the single indirect call at a JIT entry disables `function` checking; compiler and
+Runtime instrumentation before and after the call remains enabled.
 
-当前 `luna.semantic-regressions` 覆盖：
+Current `luna.semantic-regressions` covers:
 
-- lexer/parser 的结构化错误与顶层多错误恢复、基础函数、算术/位/关系运算符和逻辑短路、闭包、泛型单态化、`const` / `constexpr`、编译期反射。
-- interceptor / context / slot 的有效路径、abort 合流与多发射资源安全负例。
-- 函数、类型和 trait 的版本选择与不完整 impl。
-- 多文件包、跨文件解析恢复、显式导出、重复符号/版本身份、导出/FFI 边界与包名一致性。
-- C ABI 的 JIT/AOT `puts` 链接、线性 `free` 移交，以及 ABI、泛型和参数类型边界的负例。
-- 线性资源的路径敏感所有权：`if` 的双路径消费/单路径泄漏、提前 `return` 的终止路径、循环零次/多次执行边界，以及不可达语句。
-- GPU in-flight buffer、未 `await` event 与 event 在提前返回前的释放要求。
-- CPU 模拟器下的基础、版本化和 move-event 异构计算。
-- `Drop`、`rc`/`arc` 的显式克隆和最终释放，以及 Result 两个 variant 的活动载荷清理。
-- `Result` 构造/判别/解包、`?` 的成功与错误提前返回、错误路径 cleanup、fragment 边界拒绝和 abort 型 panic。
+- structured lexer/parser errors and top-level multi-error recovery; basic functions,
+  arithmetic/bitwise/relational operators and logical short-circuiting; closures, generic
+  monomorphization, `const`/`constexpr`, and compile-time reflection;
+- valid interceptor/context/slot paths, abort merging, and multi-emission resource-safety
+  negatives;
+- version selection for functions, types, and traits, plus incomplete implementations;
+- multi-file packages, cross-file parse recovery, explicit exports, duplicate
+  symbol/version identity, export/FFI boundaries, and package-name consistency;
+- JIT/AOT C ABI `puts` linking, linear `free` transfer, and ABI, generic, and parameter
+  type boundary negatives;
+- path-sensitive ownership of linear resources: two-path consumption and one-path leaks in
+  `if`, terminating early `return` paths, zero/multiple loop iterations, and unreachable
+  statements;
+- GPU in-flight buffers, unawaited events, and event-release requirements before early return;
+- basic, versioned, and move-event heterogeneous computation on the CPU simulator;
+- `Drop`, explicit `rc`/`arc` cloning and final release, and active-payload cleanup for
+  both Result variants;
+- Result construction/discrimination/unwrapping, successful and error early returns through
+  `?`, error-path cleanup, fragment-boundary rejection, and abort-style panic.
 
-ROCm 与 CUDA 的实机测试不包含在默认 CTest 中：默认测试必须在无 GPU 的 CI 主机上运行。ROCm 冒烟测试在具备 AMD GPU 的主机上额外执行：
+ROCm and CUDA hardware tests are not part of default CTest: default tests must run on CI hosts
+without a GPU. ROCm smoke tests run additionally on hosts with an AMD GPU:
 
 ```sh
 LUNA_GPU_BACKEND=rocm ./build/luna run examples/heterogeneous.luna \
   --gpu-target=rocm:gfx1101
 ```
 
-也可在配置阶段启用 `-DLUNA_ENABLE_ROCM_SMOKE=ON` 并通过
-`-DLUNA_ROCM_SMOKE_ARCH=gfx1101` 指定目标 ISA，然后执行
-`ctest --test-dir build -L rocm --output-on-failure`。该可选测试会分别验证 ROCm 的 JIT 与 AOT kernel 路径。
+Configuration may also enable `-DLUNA_ENABLE_ROCM_SMOKE=ON` and select the target ISA with
+`-DLUNA_ROCM_SMOKE_ARCH=gfx1101`, followed by
+`ctest --test-dir build -L rocm --output-on-failure`. This optional test separately checks
+ROCm JIT and AOT kernel paths.
 
-CPU 对照基准可通过 `-DLUNA_ENABLE_CPU_BENCHMARK=ON` 启用，详情见
-[性能基准](benchmarks.zh-CN.md)。
+CPU comparison benchmarks can be enabled with `-DLUNA_ENABLE_CPU_BENCHMARK=ON`; see the
+[benchmark guide](benchmarks.md).
 
-设置 `-DLUNA_ENABLE_ROCM_BENCHMARK=ON` 会额外注册 `luna.rocm-cpp23-comparison`：它用 16,777,216 个元素、十轮变换对照 Luna AOT 与 C++23/HIP，并校验两者结果。它带 `benchmark` label，不在默认测试集内。
+Setting `-DLUNA_ENABLE_ROCM_BENCHMARK=ON` additionally registers
+`luna.rocm-cpp23-comparison`. It compares Luna AOT with C++23/HIP over 16,777,216 elements
+and ten transformation rounds, and verifies both results. It carries the `benchmark` label
+and is outside the default test set.
 
-每次修复语义或诊断问题时，应同时添加一个最小正例或负例，并在 `tests/semantic_regressions.cmake` 中断言稳定的输出或关键诊断文本。
+Every semantic or diagnostic fix should add a minimal positive or negative example and assert
+stable output or key diagnostic text in `tests/semantic_regressions.cmake`.
 
-`luna.package-export-abi` 是独立的 AOT ABI 测试：它确认 package 中带有 `export` 的函数在 LLVM IR 中为外部符号，而未导出的函数为 `internal`。测试在结束时删除自身生成的 `.ll` 与可执行文件。
+`luna.package-export-abi` is an independent AOT ABI test: it verifies that exported
+package functions are external symbols in LLVM IR while non-exported functions are
+`internal`. The test removes its generated `.ll` and executable at the end.
 
-`luna.return-cleanup-abi` 是路径敏感释放的 AOT 测试：它确认嵌套分支和落空路径上的每个 `return` 都在自身路径上发射一次携带精确 `size/alignment` 的 `rt_dealloc`，而不是把清理留在不可达的块末尾。
+`luna.return-cleanup-abi` tests path-sensitive release: every `return` in nested branches
+and fall-through paths emits one `rt_dealloc` with exact `size/alignment` on its own path,
+rather than leaving cleanup in an unreachable block tail.
 
-`luna.result-error-aot` 比较 Result 传播案例的 JIT/AOT 输出，并检查 AOT IR
-同时保留 `try.error`、资源清理和 unwrap panic 边界。
+`luna.result-error-aot` compares JIT/AOT output for Result propagation and checks that AOT
+IR preserves `try.error`, resource cleanup, and the unwrap-panic boundary.
 
-`luna.control-flow-aot` 确认两支均 `return` 的条件语句可生成、链接并运行有效的 AOT LLVM IR；语义回归同时拒绝非 `unit` 函数中未覆盖的返回路径。
+`luna.control-flow-aot` confirms that a conditional with both branches returning can
+generate, link, and run valid AOT LLVM IR; semantic regression tests also reject uncovered
+return paths in non-`unit` functions.
 
-`luna.ffi-aot` 通过系统链接器构建并运行 C FFI 示例，补足 JIT 进程符号解析之外的 ABI 路径。
+`luna.ffi-aot` builds and runs a C FFI example through the system linker, supplementing ABI
+coverage beyond JIT process-symbol resolution.
 
-`luna.jit-aot-parity` 对同一含标准输出和非零返回码的程序比较 JIT 与 AOT 的退出码及 stdout，覆盖算术/位运算、关系比较和短路控制流。
+`luna.jit-aot-parity` compares exit code and stdout for the same program under JIT and AOT,
+including arithmetic/bitwise operations, relational comparisons, and short-circuit control flow.
 
-`luna.optimization-pipeline` 检查 `-O0/-O2/-O3` 入口，并对比 `-O0` 与 `-O2` 的 IR：局部栈槽应被提升、常量计算应折叠，同时优化后的 JIT/AOT 必须返回相同结果。
+`luna.optimization-pipeline` checks `-O0/-O2/-O3` entry points and compares `-O0` with
+`-O2` IR: local stack slots should be promoted and constant computation folded, while
+optimized JIT/AOT must return the same result.
 
-`luna.fragment-lowering-abi` 检查静态 fragment 不会退化为动态候选选择或堆分配；`luna.structured-cps-abi` 则在 O0 下检查 context 续体的栈上 frame、独立入口和返回分发块，并运行“续体内 return”案例，确认 `resume()` 后的代码不会错误执行。
+`luna.fragment-lowering-abi` checks that static fragments do not degrade into dynamic
+candidate selection or heap allocation. `luna.structured-cps-abi` checks, at O0, the
+stack frame, independent entry, and return-dispatch block for a context continuation, and
+runs a continuation-internal return case to ensure code after `resume()` is not executed
+incorrectly.
 
-`luna.external-fragment-plugin-abi` 使用真实共享库验证外部描述符的 ABI、注册、重复契约拒绝和显式参数调用；`luna.external-fragment-dispatch` 则让动态槽选择静态候选之外的外部 interceptor，确认插件继续动作后槽续体仍然执行。
+`luna.external-fragment-plugin-abi` uses a real shared library to verify external descriptor
+ABI, registration, duplicate-contract rejection, and explicit-parameter calls.
+`luna.external-fragment-dispatch` selects an external interceptor beyond static candidates
+and confirms that the slot continuation still runs after plugin continuation.
 
-`luna.aot-runtime-boundary` 覆盖显式 `--runtime-lib` / `--cc`、缺失运行时库的 `DRV0001` 诊断，以及 AOT 可执行文件的 GPU 后端初始化失败边界。
+`luna.aot-runtime-boundary` covers explicit `--runtime-lib`/`--cc`, the
+`DRV0001` missing-runtime diagnostic, and GPU-backend initialization failure in an AOT
+executable.
 
-`luna.install-smoke` 把当前构建安装到隔离的临时前缀，确认驱动、静态
-runtime、公开 ABI 头文件、标准库 workspace 与语义参考文档均已安装；随后只用
-安装树完成 `--version`、`check`、JIT 和显式 runtime/compiler 的 AOT
-构建与运行。该测试带 `release` 和 `install` label，是发布包布局的自动化门禁。
+`luna.install-smoke` installs the current build into an isolated temporary prefix and
+checks the driver, static Runtime, public ABI headers, standard-library workspace, and
+semantic-reference documents. It then uses only the installation tree for `--version`,
+`check`, JIT, and explicit Runtime/compiler AOT build-and-run checks. With `release` and
+`install` labels, it is an automated gate for release-package layout.
 
-`luna.runtime-gpu-error-state` 验证 CPU 模拟器下 event 的成功与无效状态 ABI；`luna.gpu-error-boundary-abi` 检查 AOT IR 中 `await` 的失败分支会调用统一 GPU 错误终止入口，保证 CUDA/ROCm 的 launch 或同步失败不会静默继续执行。
-前者同时检查 Runtime error snapshot 的稳定 GPU domain/code、两阶段消息复制和
-旧 `last_error` 兼容，并确保一次 operation error 不会反向污染已成功的 backend
-初始化状态；`luna.runtime-abi-v1` 覆盖 fragment plugin 错误快照以及公开头文件的
-C/C++ ABI 可编译性。
+`luna.runtime-gpu-error-state` verifies successful and invalid event ABI states on the CPU
+simulator. `luna.gpu-error-boundary-abi` checks that an `await` failure branch in AOT IR
+calls the unified GPU-error termination entry, so CUDA/ROCm launch or synchronization
+failures cannot continue silently. The former also checks stable GPU domain/code fields in
+the Runtime error snapshot, two-stage message copying, legacy `last_error` compatibility,
+and that one operation error does not contaminate successful backend initialization.
+`luna.runtime-abi-v1` covers fragment-plugin error snapshots and C/C++ compilability of the
+public header.
 
-`luna.jit-aot-extended-parity` 以 `-O2` 比较多文件包和 CPU 模拟器异构程序的 JIT/AOT 退出码及 stdout，确保优化不破坏包级链接或 host-side launch/event 降低。
+`luna.jit-aot-extended-parity` compares, at `-O2`, JIT/AOT exit code and stdout for
+multi-file packages and CPU-simulator heterogeneous programs, ensuring optimization does not
+break package-level linking or host-side launch/event lowering.
 
-`luna.stable-core-parity` 是第二周的完整一致性矩阵：它对稳定核心示例在 `-O0`、`-O2` 与 `-O3` 下分别比较 JIT/AOT 的 stdout、退出码和 stderr，覆盖泛型、反射、闭包、ADT、版本、trait、FFI、多文件包与 CPU 模拟器异构程序。它还防止 ADT 形参被误判为被调用方拥有的堆内存，从而在正常调用后发生重复释放。
+`luna.stable-core-parity` is the full second-week consistency matrix. It separately compares
+JIT/AOT stdout, exit code, and stderr for stable-core examples at `-O0`, `-O2`, and
+`-O3`, covering generics, reflection, closures, ADTs, versioning, traits, FFI, multi-file
+packages, and CPU-simulator heterogeneous programs. It also prevents ADT parameters from
+being misclassified as heap memory owned by the callee, which would cause double release
+after an ordinary call.

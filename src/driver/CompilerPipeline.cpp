@@ -1,9 +1,11 @@
 #include "driver/CompilerPipeline.h"
 
+#include "lexer/Lexer.h"
 #include "moonir/Lowering.h"
 #include "moonir/Optimizer.h"
 #include "moonir/Verifier.h"
 #include "package/Package.h"
+#include "parser/Parser.h"
 #include "sema/OwnershipChecker.h"
 #include "sema/SemanticAnalyzer.h"
 #include "sema/TraitChecker.h"
@@ -14,13 +16,7 @@ namespace luna::driver {
 
 bool CompilerPipeline::compileToMoonIR(
     const CompilerPipelineOptions& options) {
-    mOptimizationLevel = options.optimizationLevel;
-    mModuleName.clear();
-    mDeclaredPackageName.clear();
-    mMoonModule.reset();
-    mCodeGenerator.reset();
-    mErrors.clear();
-    mErrorStage.clear();
+    reset(options);
 
     LoadedPackage loaded;
     std::vector<std::string> packageErrors;
@@ -28,8 +24,42 @@ bool CompilerPipeline::compileToMoonIR(
         return fail(packageErrors);
     auto* program = loaded.program.get();
     mDeclaredPackageName = program->packageName;
-    mModuleName = mDeclaredPackageName.empty()
-        ? options.inputPath : mDeclaredPackageName;
+    return compileProgram(
+        program, options,
+        mDeclaredPackageName.empty()
+            ? options.inputPath : mDeclaredPackageName);
+}
+
+bool CompilerPipeline::compileSourceToMoonIR(
+    const std::string& source, const std::string& virtualPath,
+    const CompilerPipelineOptions& options) {
+    reset(options);
+
+    Lexer lexer(source, virtualPath);
+    auto tokens = lexer.tokenize();
+    if (!lexer.errors().empty()) return fail(lexer.errors(), "lexer");
+
+    Parser parser(std::move(tokens), virtualPath, source);
+    auto program = parser.parse();
+    if (!parser.errors().empty()) return fail(parser.errors(), "parser");
+    mDeclaredPackageName = program->packageName;
+    return compileProgram(program.get(), options, virtualPath);
+}
+
+void CompilerPipeline::reset(const CompilerPipelineOptions& options) {
+    mOptimizationLevel = options.optimizationLevel;
+    mModuleName.clear();
+    mDeclaredPackageName.clear();
+    mMoonModule.reset();
+    mCodeGenerator.reset();
+    mErrors.clear();
+    mErrorStage.clear();
+}
+
+bool CompilerPipeline::compileProgram(
+    Program* program, const CompilerPipelineOptions& options,
+    std::string moduleName) {
+    mModuleName = std::move(moduleName);
 
     SemanticAnalyzer sema;
     if (!sema.analyze(program)) return fail(sema.errors());

@@ -58,9 +58,28 @@ native linker failure reports `DRV0002`.
 luna repl
 ```
 
-The current REPL wraps each entered statement in a temporary `main` and runs it
-through JIT. It is experimental and is not yet a persistent declaration-based
-interactive environment.
+The Alpha REPL deliberately exposes a narrow, tested contract:
+
+```text
+= 20 + 22
+:decl fn twice(value: i32) -> i32 { return value + value; }
+= twice(21)
+print(7)
+:reset
+:quit
+```
+
+- `= <expression>` evaluates an expression whose result must be `i32`.
+- `:decl <declaration>` validates and persists one complete single-line
+  declaration. Persisted declarations are recompiled with later submissions.
+- Other input executes as one statement in a temporary `main`.
+- `:help`, `:reset` and `:quit` display the contract, discard declarations and
+  exit respectively. `exit` remains a compatibility spelling for `:quit`.
+
+This is an **Implemented Experimental** tool, not a persistent runtime. Multiline
+input is unsupported. Local variables, heap values, JIT globals and runtime
+state do not survive a submission. A declaration that cannot be represented on
+one line should be placed in a source file and run with `luna run`.
 
 ## Common options
 

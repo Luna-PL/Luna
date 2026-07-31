@@ -1,11 +1,11 @@
 # Heterogeneous compute (initial ABI)
 
-## 中文说明
-
-异构计算目前提供 CPU simulator、CUDA 和 ROCm 三条路径。`device_buffer`、`launch`
-和 `await` 具有独立的所有权与事件生命周期；默认 simulator 方便无 GPU 环境回归。
-设备端函数不能使用 host continuation 或 host-only 动态 effect，硬件后端不可用时
-必须显式报错，不会静默切换后端。
+Heterogeneous compute currently provides CPU simulator, CUDA, and ROCm paths.
+`device_buffer`, `launch`, and `await` have independent ownership and event
+lifetimes. The simulator is the default for regression on hosts without a GPU.
+Device functions cannot use host continuations or host-only dynamic effects; an
+unavailable hardware backend must report an explicit error and never fall back
+silently.
 
 Luna now has a safe, explicit asynchronous compute surface. The default backend is a CPU simulator so programs run everywhere. CUDA and ROCm backends clone each `kernel fn` into an LLVM device module, emit PTX or a linked HSA code object (HSACO), load it through the CUDA Driver API or HIP Module API, dispatch it, and return a real device event. The ROCm path packages the linked HSACO in the Clang HIP module bundle that `hipModuleLoadData` accepts. The source ABI keeps allocation, scalar transfers, dispatch, and synchronization separate from ordinary host memory.
 

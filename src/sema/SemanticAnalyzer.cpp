@@ -4250,7 +4250,6 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
                 mCurrentPackageId = savedPackage;
                 mCurrentModulePath = savedModule;
             }
-            id->name = specialized->name;
             call->resolvedSymbolName = specialized->generatedSymbolName.empty()
                 ? specialized->name : specialized->generatedSymbolName;
             call->returnsLinear = specialized->returnsLinear;
@@ -5959,264 +5958,517 @@ FunctionDecl* SemanticAnalyzer::findMatchingImpl(const std::string& traitName,
 static TypePtr substituteNominalType(
     const TypePtr& type,
     const std::unordered_map<std::string, TypePtr>& bindings);
-static std::unique_ptr<Expr> cloneExpr(
-    Expr* src, const std::unordered_map<std::string, TypePtr>& bindings);
-static std::unique_ptr<Stmt> cloneStmt(
-    Stmt* src, const std::unordered_map<std::string, TypePtr>& bindings);
-static std::unique_ptr<BlockStmt> cloneBlock(
-    BlockStmt* src, const std::unordered_map<std::string, TypePtr>& bindings);
 
-static std::unique_ptr<Expr> cloneExpr(
-    Expr* src, const std::unordered_map<std::string, TypePtr>& bindings) {
-    if (!src) return nullptr;
-    if (auto* e = dynamic_cast<IntLiteralExpr*>(src))
-        return std::make_unique<IntLiteralExpr>(e->value);
-    if (auto* e = dynamic_cast<FloatLiteralExpr*>(src))
-        return std::make_unique<FloatLiteralExpr>(e->value);
-    if (auto* e = dynamic_cast<StringLiteralExpr*>(src))
-        return std::make_unique<StringLiteralExpr>(e->value);
-    if (auto* e = dynamic_cast<BoolLiteralExpr*>(src))
-        return std::make_unique<BoolLiteralExpr>(e->value);
-    if (auto* e = dynamic_cast<IdentifierExpr*>(src)) {
-        auto it = bindings.find(e->name);
-        if (it != bindings.end()) {
-            // Substitute type param with concrete literal (0 as placeholder)
-            return std::make_unique<IntLiteralExpr>(0);
-        }
-        return std::make_unique<IdentifierExpr>(e->name);
-    }
-    if (auto* e = dynamic_cast<BinaryExpr*>(src)) {
-        auto c = std::make_unique<BinaryExpr>();
-        c->lhs = cloneExpr(e->lhs.get(), bindings);
-        c->op = e->op;
-        c->rhs = cloneExpr(e->rhs.get(), bindings);
-        return c;
-    }
-    if (auto* e = dynamic_cast<UnaryExpr*>(src)) {
-        auto c = std::make_unique<UnaryExpr>();
-        c->op = e->op;
-        c->operand = cloneExpr(e->operand.get(), bindings);
-        return c;
-    }
-    if (auto* e = dynamic_cast<MoveExpr*>(src)) {
-        auto c = std::make_unique<MoveExpr>();
-        c->operand = cloneExpr(e->operand.get(), bindings);
-        return c;
-    }
-    if (auto* e = dynamic_cast<BorrowExpr*>(src)) {
-        auto c = std::make_unique<BorrowExpr>();
-        c->isMutable = e->isMutable;
-        c->operand = cloneExpr(e->operand.get(), bindings);
-        return c;
-    }
-    if (auto* e = dynamic_cast<AddrOfExpr*>(src)) {
-        auto c = std::make_unique<AddrOfExpr>();
-        c->isMutable = e->isMutable;
-        c->operand = cloneExpr(e->operand.get(), bindings);
-        return c;
-    }
-    if (auto* e = dynamic_cast<DerefExpr*>(src)) {
-        auto c = std::make_unique<DerefExpr>();
-        c->operand = cloneExpr(e->operand.get(), bindings);
-        return c;
-    }
-    if (auto* e = dynamic_cast<CallExpr*>(src)) {
-        auto c = std::make_unique<CallExpr>();
-        c->callee = cloneExpr(e->callee.get(), bindings);
-        for (auto& a : e->args) c->args.push_back(cloneExpr(a.get(), bindings));
-        c->returnsLinear = e->returnsLinear;
-        c->returnUsage = e->returnUsage;
-        c->typeArgs = e->typeArgs;
-        c->intrinsicType = e->intrinsicType
-            ? substituteNominalType(e->intrinsicType, bindings)
-            : nullptr;
-        c->resultType = e->resultType
-            ? substituteNominalType(e->resultType, bindings)
-            : nullptr;
-        c->iteratorInputType = e->iteratorInputType
-            ? substituteNominalType(e->iteratorInputType, bindings)
-            : nullptr;
-        c->iteratorOutputType = e->iteratorOutputType
-            ? substituteNominalType(e->iteratorOutputType, bindings)
-            : nullptr;
-        c->iteratorOp = e->iteratorOp;
-        c->iteratorRecipeStateName = e->iteratorRecipeStateName;
-        c->iteratorRecipeSourceType = e->iteratorRecipeSourceType
-            ? substituteNominalType(
-                  e->iteratorRecipeSourceType, bindings)
-            : nullptr;
-        c->iteratorCollectTargetType =
-            e->iteratorCollectTargetType
-                ? substituteNominalType(
-                      e->iteratorCollectTargetType, bindings)
-                : nullptr;
-        c->iteratorCollectBuilderType =
-            e->iteratorCollectBuilderType
-                ? substituteNominalType(
-                      e->iteratorCollectBuilderType, bindings)
-                : nullptr;
-        c->iteratorCollectBeginSymbol =
-            e->iteratorCollectBeginSymbol;
-        c->iteratorCollectPushSymbol =
-            e->iteratorCollectPushSymbol;
-        c->iteratorCollectFinishSymbol =
-            e->iteratorCollectFinishSymbol;
-        return c;
-    }
-    if (auto* e = dynamic_cast<HeapAllocExpr*>(src)) {
-        auto c = std::make_unique<HeapAllocExpr>();
-        c->initializer = cloneExpr(e->initializer.get(), bindings);
-        c->allocatedType = e->allocatedType
-            ? substituteNominalType(e->allocatedType, bindings)
-            : nullptr;
-        c->resultType = e->resultType
-            ? substituteNominalType(e->resultType, bindings)
-            : nullptr;
-        c->storage = e->storage;
-        if (c->allocatedType) {
-            auto syntax = std::make_unique<NamedTypeAST>(
-                c->allocatedType->toString());
-            syntax->resolvedType = c->allocatedType;
-            c->allocatedTypeAST = std::move(syntax);
-        }
-        return c;
-    }
-    if (auto* e = dynamic_cast<TryExpr*>(src)) {
-        auto c = std::make_unique<TryExpr>();
-        c->operand = cloneExpr(e->operand.get(), bindings);
-        c->resultType = e->resultType
-            ? substituteNominalType(e->resultType, bindings)
-            : nullptr;
-        c->valueType = e->valueType
-            ? substituteNominalType(e->valueType, bindings)
-            : nullptr;
-        c->errorType = e->errorType
-            ? substituteNominalType(e->errorType, bindings)
-            : nullptr;
-        c->cleanups = e->cleanups;
-        return c;
-    }
-    if (auto* e = dynamic_cast<SelectExpr*>(src)) {
-        auto c = std::make_unique<SelectExpr>();
-        c->targetName = e->targetName;
-        c->selectorName = e->selectorName;
-        c->isDynamic = e->isDynamic;
-        c->resolvedDeclarationId = e->resolvedDeclarationId;
-        c->resolvedSymbolName = e->resolvedSymbolName;
-        c->resolvedFamilyId = e->resolvedFamilyId;
-        c->resolvedSelectorDeclarationId = e->resolvedSelectorDeclarationId;
-        c->dynamicCandidateIds = e->dynamicCandidateIds;
-        c->dynamicMetadataSchemaId = e->dynamicMetadataSchemaId;
-        c->dynamicFilterArguments = e->dynamicFilterArguments;
-        c->dynamicCandidates = e->dynamicCandidates;
-        c->selectedType = e->selectedType
-            ? substituteNominalType(e->selectedType, bindings)
-            : nullptr;
-        for (auto& arg : e->selectorArgs)
-            c->selectorArgs.push_back(cloneExpr(arg.get(), bindings));
-        return c;
-    }
-    if (auto* e = dynamic_cast<LaunchExpr*>(src)) {
-        auto c = std::make_unique<LaunchExpr>();
-        c->kernelName = e->kernelName;
-        c->resolvedKernelName = e->resolvedKernelName;
-        c->threads = cloneExpr(e->threads.get(), bindings);
-        for (auto& arg : e->args) c->args.push_back(cloneExpr(arg.get(), bindings));
-        return c;
-    }
-    if (auto* e = dynamic_cast<VariantConstructExpr*>(src)) {
-        auto c = std::make_unique<VariantConstructExpr>();
-        c->typeName = e->typeName;
-        c->variantName = e->variantName;
-        c->constructedType = e->constructedType
-            ? substituteNominalType(e->constructedType, bindings)
-            : nullptr;
-        for (auto& argument : e->args)
-            c->args.push_back(cloneExpr(argument.get(), bindings));
-        return c;
-    }
-    if (auto* e = dynamic_cast<AssignExpr*>(src)) {
-        auto c = std::make_unique<AssignExpr>();
-        c->op = e->op;
-        c->lhs = cloneExpr(e->lhs.get(), bindings);
-        c->rhs = cloneExpr(e->rhs.get(), bindings);
-        return c;
-    }
-    // Default: return placeholder
-    return std::make_unique<IntLiteralExpr>(0);
-}
+class MonomorphizationCloner {
+public:
+    explicit MonomorphizationCloner(
+        const std::unordered_map<std::string, TypePtr>& typeBindings)
+        : bindings(typeBindings) {}
 
-static std::unique_ptr<Stmt> cloneStmt(
-    Stmt* src, const std::unordered_map<std::string, TypePtr>& bindings) {
-    if (!src) return nullptr;
-    if (auto* s = dynamic_cast<BlockStmt*>(src))
-        return cloneBlock(s, bindings);
-    if (auto* s = dynamic_cast<LetStmt*>(src)) {
-        auto c = std::make_unique<LetStmt>();
-        c->name = s->name;
-        c->isConst = s->isConst;
-        c->isLinear = s->isLinear;
-        c->usage = s->usage;
-        c->hasExplicitUsage = s->hasExplicitUsage;
-        if (s->typeAnnotation) {
-            auto* na = dynamic_cast<NamedTypeAST*>(s->typeAnnotation.get());
-            std::string typeName = na ? na->name : "i32";
-            auto it = bindings.find(typeName);
-            c->typeAnnotation = std::make_unique<NamedTypeAST>(
-                it != bindings.end() ? it->second->toString() : typeName);
+    std::unique_ptr<BlockStmt> cloneBlock(const BlockStmt* src) {
+        if (!src) return nullptr;
+        auto clone = located(std::make_unique<BlockStmt>(), src);
+        for (const auto& statement : src->stmts) {
+            auto clonedStatement = cloneStmt(statement.get());
+            if (!clonedStatement) return nullptr;
+            clone->stmts.push_back(std::move(clonedStatement));
         }
-        c->initializer = cloneExpr(s->initializer.get(), bindings);
-        c->inferredType = s->inferredType;
-        return c;
+        return clone;
     }
-    if (auto* s = dynamic_cast<ReturnStmt*>(src)) {
-        auto c = std::make_unique<ReturnStmt>();
-        if (s->value) c->value = cloneExpr(s->value.get(), bindings);
-        c->autoFrees = s->autoFrees;
-        c->cleanups = s->cleanups;
-        return c;
-    }
-    if (auto* s = dynamic_cast<ExprStmt*>(src)) {
-        auto c = std::make_unique<ExprStmt>();
-        c->expr = cloneExpr(s->expr.get(), bindings);
-        return c;
-    }
-    if (auto* s = dynamic_cast<MatchStmt*>(src)) {
-        auto c = std::make_unique<MatchStmt>();
-        c->scrutinee = cloneExpr(s->scrutinee.get(), bindings);
-        c->matchedType = s->matchedType
-            ? substituteNominalType(s->matchedType, bindings)
-            : nullptr;
-        for (const auto& sourceArm : s->arms) {
-            MatchArm arm;
-            arm.typeQualifier = sourceArm.typeQualifier;
-            arm.variantName = sourceArm.variantName;
-            arm.bindings = sourceArm.bindings;
-            arm.variantIndex = sourceArm.variantIndex;
-            for (const auto& type : sourceArm.bindingTypes)
-                arm.bindingTypes.push_back(
-                    substituteNominalType(type, bindings));
-            arm.body = cloneBlock(sourceArm.body.get(), bindings);
-            c->arms.push_back(std::move(arm));
-        }
-        return c;
-    }
-    if (auto* s = dynamic_cast<AwaitStmt*>(src)) {
-        auto c = std::make_unique<AwaitStmt>();
-        c->event = cloneExpr(s->event.get(), bindings);
-        return c;
-    }
-    return std::make_unique<ExprStmt>();
-}
 
-static std::unique_ptr<BlockStmt> cloneBlock(
-    BlockStmt* src, const std::unordered_map<std::string, TypePtr>& bindings) {
-    auto c = std::make_unique<BlockStmt>();
-    for (auto& s : src->stmts) {
-        c->stmts.push_back(cloneStmt(s.get(), bindings));
+    const std::string& failure() const { return failureMessage; }
+
+private:
+    const std::unordered_map<std::string, TypePtr>& bindings;
+    std::string failureMessage;
+
+    template <typename T>
+    static std::unique_ptr<T> located(
+        std::unique_ptr<T> clone, const ASTNode* source) {
+        if (clone && source) {
+            clone->sourcePath = source->sourcePath;
+            clone->line = source->line;
+            clone->col = source->col;
+        }
+        return clone;
     }
-    return c;
-}
+
+    void fail(const char* category) {
+        if (failureMessage.empty())
+            failureMessage =
+                std::string("unsupported ") + category +
+                " AST node in generic function body";
+    }
+
+    TypePtr substitute(const TypePtr& type) const {
+        return type ? substituteNominalType(type, bindings) : nullptr;
+    }
+
+    CleanupObligation cloneCleanup(const CleanupObligation& source) const {
+        CleanupObligation clone;
+        clone.place = source.place;
+        clone.action = source.action;
+        clone.type = substitute(source.type);
+        return clone;
+    }
+
+    std::unique_ptr<TypeAST> cloneType(const TypeAST* src) {
+        if (!src) return nullptr;
+        if (auto* type = dynamic_cast<const NamedTypeAST*>(src)) {
+            auto clone = std::make_unique<NamedTypeAST>(type->name);
+            clone->arrayLength = type->arrayLength;
+            clone->resolvedType = substitute(type->resolvedType);
+            for (const auto& argument : type->typeArgs) {
+                auto clonedArgument = cloneType(argument.get());
+                if (!clonedArgument) return nullptr;
+                clone->typeArgs.push_back(std::move(clonedArgument));
+            }
+            if (auto bound = bindings.find(type->name);
+                bound != bindings.end()) {
+                clone->name = bound->second->toString();
+                clone->resolvedType = bound->second;
+                clone->typeArgs.clear();
+                clone->arrayLength.reset();
+            }
+            return located(std::move(clone), src);
+        }
+        if (auto* type = dynamic_cast<const RefTypeAST*>(src)) {
+            auto inner = cloneType(type->inner.get());
+            if (!inner) return nullptr;
+            return located(
+                std::make_unique<RefTypeAST>(
+                    std::move(inner), type->isMutable),
+                src);
+        }
+        if (auto* type = dynamic_cast<const LinearTypeAST*>(src)) {
+            auto inner = cloneType(type->inner.get());
+            if (!inner) return nullptr;
+            return located(
+                std::make_unique<LinearTypeAST>(std::move(inner)), src);
+        }
+        if (auto* type = dynamic_cast<const AffineTypeAST*>(src)) {
+            auto inner = cloneType(type->inner.get());
+            if (!inner) return nullptr;
+            return located(
+                std::make_unique<AffineTypeAST>(std::move(inner)), src);
+        }
+        if (auto* type = dynamic_cast<const FunctionTypeAST*>(src)) {
+            auto clone = std::make_unique<FunctionTypeAST>();
+            for (const auto& parameter : type->paramTypes) {
+                auto clonedParameter = cloneType(parameter.get());
+                if (!clonedParameter) return nullptr;
+                clone->paramTypes.push_back(std::move(clonedParameter));
+            }
+            clone->returnType = cloneType(type->returnType.get());
+            if (type->returnType && !clone->returnType) return nullptr;
+            return located(std::move(clone), src);
+        }
+        fail("type");
+        return nullptr;
+    }
+
+    Param cloneParam(const Param& source) {
+        Param clone;
+        clone.name = source.name;
+        clone.isLinear = source.isLinear;
+        clone.usage = source.usage;
+        clone.hasExplicitUsage = source.hasExplicitUsage;
+        clone.relation = source.relation;
+        clone.type = cloneType(source.type.get());
+        clone.inferredType = substitute(source.inferredType);
+        return clone;
+    }
+
+    std::unique_ptr<Expr> cloneExpr(const Expr* src) {
+        if (!src) return nullptr;
+        if (auto* expr = dynamic_cast<const IntLiteralExpr*>(src))
+            return located(
+                std::make_unique<IntLiteralExpr>(expr->value), src);
+        if (auto* expr = dynamic_cast<const FloatLiteralExpr*>(src))
+            return located(
+                std::make_unique<FloatLiteralExpr>(expr->value), src);
+        if (auto* expr = dynamic_cast<const StringLiteralExpr*>(src))
+            return located(
+                std::make_unique<StringLiteralExpr>(expr->value), src);
+        if (auto* expr = dynamic_cast<const BoolLiteralExpr*>(src))
+            return located(
+                std::make_unique<BoolLiteralExpr>(expr->value), src);
+        if (auto* expr = dynamic_cast<const IdentifierExpr*>(src))
+            return located(
+                std::make_unique<IdentifierExpr>(expr->name), src);
+        if (auto* expr = dynamic_cast<const BinaryExpr*>(src)) {
+            auto clone = std::make_unique<BinaryExpr>();
+            clone->lhs = cloneExpr(expr->lhs.get());
+            clone->op = expr->op;
+            clone->rhs = cloneExpr(expr->rhs.get());
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const UnaryExpr*>(src)) {
+            auto clone = std::make_unique<UnaryExpr>();
+            clone->op = expr->op;
+            clone->operand = cloneExpr(expr->operand.get());
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const CallExpr*>(src)) {
+            auto clone = std::make_unique<CallExpr>();
+            clone->callee = cloneExpr(expr->callee.get());
+            for (const auto& argument : expr->args)
+                clone->args.push_back(cloneExpr(argument.get()));
+            for (const auto& type : expr->typeArgs)
+                clone->typeArgs.push_back(substitute(type));
+            for (const auto& type : expr->typeArgASTs)
+                clone->typeArgASTs.push_back(cloneType(type.get()));
+            clone->resolvedSymbolName = expr->resolvedSymbolName;
+            clone->returnsLinear = expr->returnsLinear;
+            clone->returnUsage = expr->returnUsage;
+            clone->intrinsicType = substitute(expr->intrinsicType);
+            clone->resultType = substitute(expr->resultType);
+            clone->iteratorInputType = substitute(expr->iteratorInputType);
+            clone->iteratorOutputType = substitute(expr->iteratorOutputType);
+            clone->iteratorOp = expr->iteratorOp;
+            clone->iteratorRecipeStateName =
+                expr->iteratorRecipeStateName;
+            clone->iteratorRecipeSourceType =
+                substitute(expr->iteratorRecipeSourceType);
+            clone->iteratorCollectTargetType =
+                substitute(expr->iteratorCollectTargetType);
+            clone->iteratorCollectBuilderType =
+                substitute(expr->iteratorCollectBuilderType);
+            clone->iteratorCollectBeginSymbol =
+                expr->iteratorCollectBeginSymbol;
+            clone->iteratorCollectPushSymbol =
+                expr->iteratorCollectPushSymbol;
+            clone->iteratorCollectFinishSymbol =
+                expr->iteratorCollectFinishSymbol;
+            clone->compileTimeValue = expr->compileTimeValue;
+            clone->compileTimeDeclarationId =
+                expr->compileTimeDeclarationId;
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const LaunchExpr*>(src)) {
+            auto clone = std::make_unique<LaunchExpr>();
+            clone->kernelName = expr->kernelName;
+            clone->resolvedKernelName = expr->resolvedKernelName;
+            clone->threads = cloneExpr(expr->threads.get());
+            for (const auto& argument : expr->args)
+                clone->args.push_back(cloneExpr(argument.get()));
+            clone->inFlightResources = expr->inFlightResources;
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const VariantConstructExpr*>(src)) {
+            auto clone = std::make_unique<VariantConstructExpr>();
+            clone->typeName = expr->typeName;
+            clone->variantName = expr->variantName;
+            for (const auto& type : expr->typeArgs)
+                clone->typeArgs.push_back(cloneType(type.get()));
+            for (const auto& argument : expr->args)
+                clone->args.push_back(cloneExpr(argument.get()));
+            clone->constructedType = substitute(expr->constructedType);
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const FieldAccessExpr*>(src)) {
+            auto clone = std::make_unique<FieldAccessExpr>();
+            clone->object = cloneExpr(expr->object.get());
+            clone->field = expr->field;
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const IndexExpr*>(src)) {
+            auto clone = std::make_unique<IndexExpr>();
+            clone->object = cloneExpr(expr->object.get());
+            clone->index = cloneExpr(expr->index.get());
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const ArrayLiteralExpr*>(src)) {
+            auto clone = std::make_unique<ArrayLiteralExpr>();
+            for (const auto& element : expr->elements)
+                clone->elements.push_back(cloneExpr(element.get()));
+            clone->elementType = substitute(expr->elementType);
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const HeapAllocExpr*>(src)) {
+            auto clone = std::make_unique<HeapAllocExpr>();
+            clone->initializer = cloneExpr(expr->initializer.get());
+            clone->allocatedTypeAST =
+                cloneType(expr->allocatedTypeAST.get());
+            clone->allocatedType = substitute(expr->allocatedType);
+            clone->resultType = substitute(expr->resultType);
+            clone->storage = expr->storage;
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const TryExpr*>(src)) {
+            auto clone = std::make_unique<TryExpr>();
+            clone->operand = cloneExpr(expr->operand.get());
+            clone->resultType = substitute(expr->resultType);
+            clone->propagatedResultType =
+                substitute(expr->propagatedResultType);
+            clone->valueType = substitute(expr->valueType);
+            clone->errorType = substitute(expr->errorType);
+            clone->propagatedErrorType =
+                substitute(expr->propagatedErrorType);
+            clone->errorConversionSymbol =
+                expr->errorConversionSymbol;
+            for (const auto& cleanup : expr->cleanups)
+                clone->cleanups.push_back(cloneCleanup(cleanup));
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const MoveExpr*>(src)) {
+            auto clone = std::make_unique<MoveExpr>();
+            clone->operand = cloneExpr(expr->operand.get());
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const BorrowExpr*>(src)) {
+            auto clone = std::make_unique<BorrowExpr>();
+            clone->isMutable = expr->isMutable;
+            clone->operand = cloneExpr(expr->operand.get());
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const DerefExpr*>(src)) {
+            auto clone = std::make_unique<DerefExpr>();
+            clone->operand = cloneExpr(expr->operand.get());
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const AddrOfExpr*>(src)) {
+            auto clone = std::make_unique<AddrOfExpr>();
+            clone->isMutable = expr->isMutable;
+            clone->operand = cloneExpr(expr->operand.get());
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const BlockExpr*>(src)) {
+            auto block = cloneBlock(expr->block.get());
+            if (!block) return nullptr;
+            return located(
+                std::make_unique<BlockExpr>(std::move(block)), src);
+        }
+        if (auto* expr = dynamic_cast<const IfExpr*>(src)) {
+            auto clone = std::make_unique<IfExpr>();
+            clone->cond = cloneExpr(expr->cond.get());
+            clone->thenExpr = cloneExpr(expr->thenExpr.get());
+            clone->elseExpr = cloneExpr(expr->elseExpr.get());
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const LambdaExpr*>(src)) {
+            auto clone = std::make_unique<LambdaExpr>();
+            for (const auto& parameter : expr->params)
+                clone->params.push_back(cloneParam(parameter));
+            clone->returnType = cloneType(expr->returnType.get());
+            clone->body = cloneBlock(expr->body.get());
+            clone->closureType = substitute(expr->closureType);
+            clone->captures = expr->captures;
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const AssignExpr*>(src)) {
+            auto clone = std::make_unique<AssignExpr>();
+            clone->op = expr->op;
+            clone->lhs = cloneExpr(expr->lhs.get());
+            clone->rhs = cloneExpr(expr->rhs.get());
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const SelectExpr*>(src)) {
+            auto clone = std::make_unique<SelectExpr>();
+            clone->targetName = expr->targetName;
+            clone->selectorName = expr->selectorName;
+            for (const auto& argument : expr->selectorArgs)
+                clone->selectorArgs.push_back(cloneExpr(argument.get()));
+            clone->isDynamic = expr->isDynamic;
+            clone->resolvedDeclarationId =
+                expr->resolvedDeclarationId;
+            clone->resolvedSymbolName = expr->resolvedSymbolName;
+            clone->resolvedFamilyId = expr->resolvedFamilyId;
+            clone->resolvedSelectorDeclarationId =
+                expr->resolvedSelectorDeclarationId;
+            clone->dynamicCandidateIds = expr->dynamicCandidateIds;
+            clone->dynamicMetadataSchemaId =
+                expr->dynamicMetadataSchemaId;
+            clone->dynamicFilterArguments =
+                expr->dynamicFilterArguments;
+            clone->dynamicCandidates = expr->dynamicCandidates;
+            clone->selectedType = substitute(expr->selectedType);
+            return located(std::move(clone), src);
+        }
+        fail("expression");
+        return nullptr;
+    }
+
+    std::unique_ptr<Stmt> cloneStmt(const Stmt* src) {
+        if (!src) return nullptr;
+        if (auto* statement = dynamic_cast<const BlockStmt*>(src))
+            return cloneBlock(statement);
+        if (auto* statement = dynamic_cast<const LetStmt*>(src)) {
+            auto clone = std::make_unique<LetStmt>();
+            clone->name = statement->name;
+            clone->isConst = statement->isConst;
+            clone->isLinear = statement->isLinear;
+            clone->usage = statement->usage;
+            clone->hasExplicitUsage = statement->hasExplicitUsage;
+            clone->typeAnnotation =
+                cloneType(statement->typeAnnotation.get());
+            clone->initializer =
+                cloneExpr(statement->initializer.get());
+            clone->inferredType = substitute(statement->inferredType);
+            clone->materializesIteratorRecipe =
+                statement->materializesIteratorRecipe;
+            clone->materializedIteratorOwnsSource =
+                statement->materializedIteratorOwnsSource;
+            clone->materializedIteratorSourceType =
+                substitute(statement->materializedIteratorSourceType);
+            return located(std::move(clone), src);
+        }
+        if (auto* statement = dynamic_cast<const ReturnStmt*>(src)) {
+            auto clone = std::make_unique<ReturnStmt>();
+            clone->value = cloneExpr(statement->value.get());
+            clone->autoFrees = statement->autoFrees;
+            for (const auto& cleanup : statement->cleanups)
+                clone->cleanups.push_back(cloneCleanup(cleanup));
+            return located(std::move(clone), src);
+        }
+        if (auto* statement = dynamic_cast<const ExprStmt*>(src)) {
+            auto clone = std::make_unique<ExprStmt>();
+            clone->expr = cloneExpr(statement->expr.get());
+            return located(std::move(clone), src);
+        }
+        if (auto* statement = dynamic_cast<const IfStmt*>(src)) {
+            auto clone = std::make_unique<IfStmt>();
+            clone->cond = cloneExpr(statement->cond.get());
+            clone->thenBlock = cloneBlock(statement->thenBlock.get());
+            clone->elseBranch = cloneStmt(statement->elseBranch.get());
+            return located(std::move(clone), src);
+        }
+        if (auto* statement = dynamic_cast<const MatchStmt*>(src)) {
+            auto clone = std::make_unique<MatchStmt>();
+            clone->scrutinee = cloneExpr(statement->scrutinee.get());
+            clone->matchedType = substitute(statement->matchedType);
+            for (const auto& sourceArm : statement->arms) {
+                MatchArm arm;
+                arm.sourcePath = sourceArm.sourcePath;
+                arm.line = sourceArm.line;
+                arm.col = sourceArm.col;
+                arm.typeQualifier = sourceArm.typeQualifier;
+                arm.variantName = sourceArm.variantName;
+                arm.bindings = sourceArm.bindings;
+                arm.variantIndex = sourceArm.variantIndex;
+                for (const auto& type : sourceArm.bindingTypes)
+                    arm.bindingTypes.push_back(substitute(type));
+                arm.body = cloneBlock(sourceArm.body.get());
+                clone->arms.push_back(std::move(arm));
+            }
+            return located(std::move(clone), src);
+        }
+        if (auto* statement = dynamic_cast<const WhileStmt*>(src)) {
+            auto clone = std::make_unique<WhileStmt>();
+            clone->cond = cloneExpr(statement->cond.get());
+            clone->body = cloneBlock(statement->body.get());
+            return located(std::move(clone), src);
+        }
+        if (auto* statement = dynamic_cast<const ForStmt*>(src)) {
+            auto clone = std::make_unique<ForStmt>();
+            clone->varName = statement->varName;
+            clone->iterable = cloneExpr(statement->iterable.get());
+            clone->body = cloneBlock(statement->body.get());
+            clone->elementType = substitute(statement->elementType);
+            clone->protocolNextSymbol = statement->protocolNextSymbol;
+            clone->protocolIteratorType =
+                substitute(statement->protocolIteratorType);
+            clone->protocolOptionType =
+                substitute(statement->protocolOptionType);
+            clone->protocolNoneVariant =
+                statement->protocolNoneVariant;
+            clone->protocolSomeVariant =
+                statement->protocolSomeVariant;
+            clone->protocolIntoSymbol = statement->protocolIntoSymbol;
+            clone->protocolInputType =
+                substitute(statement->protocolInputType);
+            clone->protocolStateName = statement->protocolStateName;
+            clone->protocolStateNeedsCleanup =
+                statement->protocolStateNeedsCleanup;
+            clone->protocolStateCleanup =
+                statement->protocolStateCleanup;
+            clone->recipeStateName = statement->recipeStateName;
+            clone->recipeSourceType =
+                substitute(statement->recipeSourceType);
+            return located(std::move(clone), src);
+        }
+        if (auto* statement = dynamic_cast<const FreeStmt*>(src)) {
+            auto clone = std::make_unique<FreeStmt>();
+            clone->operand = cloneExpr(statement->operand.get());
+            clone->action = statement->action;
+            return located(std::move(clone), src);
+        }
+        if (auto* statement = dynamic_cast<const SlotDeclStmt*>(src)) {
+            auto clone = std::make_unique<SlotDeclStmt>();
+            clone->name = statement->name;
+            clone->acceptedKind = statement->acceptedKind;
+            clone->acceptedCardinality =
+                statement->acceptedCardinality;
+            clone->isDynamic = statement->isDynamic;
+            for (const auto& parameter : statement->params)
+                clone->params.push_back(cloneParam(parameter));
+            clone->defaultFragment = statement->defaultFragment;
+            clone->resolvedDefaultFragmentName =
+                statement->resolvedDefaultFragmentName;
+            clone->structuralType =
+                substitute(statement->structuralType);
+            return located(std::move(clone), src);
+        }
+        if (auto* statement = dynamic_cast<const SlotInvokeStmt*>(src)) {
+            auto clone = std::make_unique<SlotInvokeStmt>();
+            clone->name = statement->name;
+            clone->acceptedKind = statement->acceptedKind;
+            clone->acceptedCardinality =
+                statement->acceptedCardinality;
+            clone->isDynamic = statement->isDynamic;
+            clone->usesDynamicDispatch =
+                statement->usesDynamicDispatch;
+            clone->resolvedDynamicFragmentNames =
+                statement->resolvedDynamicFragmentNames;
+            for (const auto& argument : statement->args)
+                clone->args.push_back(cloneExpr(argument.get()));
+            clone->continuation =
+                cloneBlock(statement->continuation.get());
+            clone->isImplicitCapture =
+                statement->isImplicitCapture;
+            for (const auto& parameter : statement->interfaceParams)
+                clone->interfaceParams.push_back(cloneParam(parameter));
+            clone->resolvedParamNames =
+                statement->resolvedParamNames;
+            clone->defaultFragment = statement->defaultFragment;
+            clone->resolvedDefaultFragmentName =
+                statement->resolvedDefaultFragmentName;
+            clone->structuralType =
+                substitute(statement->structuralType);
+            return located(std::move(clone), src);
+        }
+        if (dynamic_cast<const ResumeStmt*>(src))
+            return located(std::make_unique<ResumeStmt>(), src);
+        if (auto* statement = dynamic_cast<const AbortStmt*>(src)) {
+            auto clone = std::make_unique<AbortStmt>();
+            clone->autoFrees = statement->autoFrees;
+            for (const auto& cleanup : statement->cleanups)
+                clone->cleanups.push_back(cloneCleanup(cleanup));
+            return located(std::move(clone), src);
+        }
+        if (auto* statement = dynamic_cast<const AwaitStmt*>(src)) {
+            auto clone = std::make_unique<AwaitStmt>();
+            clone->event = cloneExpr(statement->event.get());
+            return located(std::move(clone), src);
+        }
+        if (auto* statement = dynamic_cast<const ApplyStmt*>(src)) {
+            auto clone = std::make_unique<ApplyStmt>();
+            clone->slotName = statement->slotName;
+            clone->fragmentName = statement->fragmentName;
+            clone->isDynamic = statement->isDynamic;
+            clone->alternativeFragmentNames =
+                statement->alternativeFragmentNames;
+            clone->resolvedAlternativeFragmentNames =
+                statement->resolvedAlternativeFragmentNames;
+            clone->resolvedFragmentName =
+                statement->resolvedFragmentName;
+            clone->body = cloneBlock(statement->body.get());
+            return located(std::move(clone), src);
+        }
+        fail("statement");
+        return nullptr;
+    }
+};
 
 FunctionDecl* SemanticAnalyzer::monomorphize(FunctionDecl* generic, const TypeVec& concreteTypes) {
     luna::instantiation::Request request;
@@ -6296,7 +6548,17 @@ FunctionDecl* SemanticAnalyzer::monomorphize(FunctionDecl* generic, const TypeVe
         }
 
     if (generic->body) {
-        specialized->body = cloneBlock(generic->body.get(), bindings);
+        MonomorphizationCloner cloner(bindings);
+        specialized->body = cloner.cloneBlock(generic->body.get());
+        if (!specialized->body || !cloner.failure().empty()) {
+            const std::string failure = cloner.failure().empty()
+                ? "generic function body could not be cloned"
+                : cloner.failure();
+            mInstantiator.fail(requestKey, failure);
+            error("cannot instantiate generic function '" + generic->name +
+                  "': " + failure);
+            return nullptr;
+        }
     } else {
         specialized->body = std::make_unique<BlockStmt>();
     }
@@ -6486,65 +6748,40 @@ static TypePtr substituteNominalType(
         auto it = bindings.find(type->name);
         return it == bindings.end() ? type : it->second;
     }
-    if (type->kind == TypeKind::Reference)
-        return Type::makeReference(substituteNominalType(type->inner, bindings),
-                                   type->isMutable);
-    if (type->kind == TypeKind::RawPointer)
-        return Type::makeRawPointer(substituteNominalType(type->inner, bindings));
-    if (type->kind == TypeKind::Rc)
-        return Type::makeRc(substituteNominalType(type->inner, bindings));
-    if (type->kind == TypeKind::Arc)
-        return Type::makeArc(substituteNominalType(type->inner, bindings));
-    if (type->kind == TypeKind::Result && type->typeArgs.size() == 2)
-        return Type::makeResult(
-            substituteNominalType(type->typeArgs[0], bindings),
-            substituteNominalType(type->typeArgs[1], bindings));
-    if (type->kind == TypeKind::Iterator)
-        return Type::makeIterator(
-            substituteNominalType(type->inner, bindings),
-            type->iteratorMode,
-            type->typeArgs.empty()
-                ? nullptr
-                : substituteNominalType(type->typeArgs.front(), bindings));
-    if (type->kind == TypeKind::DeviceBuffer)
-        return Type::makeDeviceBuffer(substituteNominalType(type->inner, bindings));
-    if (type->kind == TypeKind::Function) {
-        TypeVec params;
-        for (auto& param : type->paramTypes)
-            params.push_back(substituteNominalType(param, bindings));
-        return Type::makeFunction(std::move(params),
-                                  substituteNominalType(type->returnType, bindings),
-                                  type->paramContracts, type->returnContract);
+
+    // Preserve every semantic property of the canonical type while replacing
+    // type parameters recursively. This also covers arrays, slices, callable
+    // ownership contracts, metadata views, slots, and fragments; maintaining
+    // a partial kind switch here previously left generic signatures with
+    // unresolved nested parameters.
+    auto result = std::make_shared<Type>(*type);
+    if (type->inner)
+        result->inner = substituteNominalType(type->inner, bindings);
+    result->typeArgs.clear();
+    for (const auto& argument : type->typeArgs)
+        result->typeArgs.push_back(
+            substituteNominalType(argument, bindings));
+    result->paramTypes.clear();
+    for (const auto& parameter : type->paramTypes)
+        result->paramTypes.push_back(
+            substituteNominalType(parameter, bindings));
+    if (type->returnType)
+        result->returnType =
+            substituteNominalType(type->returnType, bindings);
+    result->fields.clear();
+    for (const auto& field : type->fields)
+        result->fields.push_back(
+            {field.name, substituteNominalType(field.type, bindings)});
+    result->variants.clear();
+    for (const auto& variant : type->variants) {
+        TypeVariant copied;
+        copied.name = variant.name;
+        for (const auto& field : variant.fields)
+            copied.fields.push_back(
+                substituteNominalType(field, bindings));
+        result->variants.push_back(std::move(copied));
     }
-    if (type->kind == TypeKind::Struct || type->kind == TypeKind::Record) {
-        std::vector<TypeField> fields;
-        for (auto& field : type->fields)
-            fields.push_back({field.name, substituteNominalType(field.type, bindings)});
-        auto result = type->kind == TypeKind::Struct
-            ? Type::makeStruct(type->name, std::move(fields), type->nominalId)
-            : Type::makeRecord(std::move(fields));
-        for (const auto& argument : type->typeArgs)
-            result->typeArgs.push_back(
-                substituteNominalType(argument, bindings));
-        return result;
-    }
-    if (type->kind == TypeKind::Enum) {
-        std::vector<TypeVariant> variants;
-        for (auto& variant : type->variants) {
-            TypeVariant copied;
-            copied.name = variant.name;
-            for (auto& field : variant.fields)
-                copied.fields.push_back(substituteNominalType(field, bindings));
-            variants.push_back(std::move(copied));
-        }
-        auto result =
-            Type::makeEnum(type->name, std::move(variants), type->nominalId);
-        for (const auto& argument : type->typeArgs)
-            result->typeArgs.push_back(
-                substituteNominalType(argument, bindings));
-        return result;
-    }
-    return type;
+    return result;
 }
 
 TypePtr SemanticAnalyzer::instantiateNominal(const TypePtr& type,

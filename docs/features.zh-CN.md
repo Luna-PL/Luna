@@ -4,7 +4,7 @@
 
 本文是 Luna 0.2.0-alpha 已实现语言表面的导航图。每节只解释该能力在整体架构中的
 位置，并链接到具体参考或设计文档。实验性状态和已知限制见
-[Alpha 发布说明](alpha_release.md)。
+[Alpha 发布说明](alpha_release.zh-CN.md)。
 
 ## 经过验证的编译管线
 

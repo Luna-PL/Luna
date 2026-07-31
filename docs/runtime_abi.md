@@ -1,18 +1,19 @@
-# Runtime ABI v1 与分配域
+# Runtime ABI v1 and Allocation Domains
 
-Luna 0.2.0-alpha 开始把语言基础能力与原始 C FFI 分离。编译器生成的
-`new`、路径敏感自动清理、显式 `free` 与语言 `print` 只调用 Luna
-Runtime ABI，不再直接解析 `malloc/free/printf`。公开的 C 兼容头文件为
-`runtime/RuntimeABI.h`。
+Starting with Luna 0.2.0-alpha, language facilities are separated from raw C FFI. Compiler-
+generated `new`, path-sensitive automatic cleanup, explicit `free`, and language `print`
+call only the Luna Runtime ABI; they no longer resolve `malloc/free/printf` directly. The
+public C-compatible header is `runtime/RuntimeABI.h`.
 
-## 设计边界
+## Design boundary
 
-Runtime ABI 是分配合约，不是一套固定的分配算法。默认实现可以使用
-平台 C/C++ runtime；嵌入式宿主也可在第一次 runtime 服务调用前通过
-`rt_install_host_services_v1` 安装自己的 allocator 和 console。安装后的描述符及
-其嵌套服务表必须保持到进程结束。
+The Runtime ABI is an allocation contract, not a fixed allocation algorithm. The default
+implementation may use the platform C/C++ runtime. An embedded host may install its own
+allocator and console before the first runtime service call with
+`rt_install_host_services_v1`. The installed descriptor and its nested service tables must
+remain valid until process exit.
 
-新生成的分配调用为：
+New generated allocation calls are:
 
 ```c
 void* rt_alloc(size_t size, size_t alignment);
@@ -21,20 +22,22 @@ void* rt_realloc(void* pointer, size_t old_size, size_t new_size,
 void  rt_dealloc(void* pointer, size_t size, size_t alignment);
 ```
 
-编译器在分配和每条清理路径上携带同一精确布局，因此自定义 allocator
-不需要为每个对象添加隐藏头。`rt_malloc/rt_free` 仅为已经生成的 Alpha IR
-保留兼容；新 IR 不使用它们。
+The compiler carries the same exact layout through allocation and every cleanup path, so a
+custom allocator does not need a hidden header on each object. `rt_malloc/rt_free` remain
+compatibility entries for already-generated Alpha IR; new IR does not use them.
 
-不可恢复错误调用 `rt_panic_cstr`。该入口通过已安装 console 的 stderr 写入
-诊断并 flush，随后 abort；它不执行语言栈展开或局部 Drop。可恢复错误应使用
-`Result<T, E>`，由生成代码在提前返回前执行路径敏感清理。
+Non-recoverable errors call `rt_panic_cstr`. This writes the diagnostic to stderr through
+the installed console, flushes, and aborts; it does not unwind the language stack or perform
+local Drop. Recoverable errors should use `Result<T, E>`; generated code performs
+path-sensitive cleanup before returning early.
 
-## 可恢复错误快照
+## Recoverable error snapshots
 
-Runtime ABI v1 通过 `rt_runtime_error_snapshot_v1` 暴露可恢复边界错误。调用者
-指定 `LUNA_RUNTIME_ERROR_DOMAIN_FRAGMENT_PLUGIN` 或
-`LUNA_RUNTIME_ERROR_DOMAIN_GPU`，得到稳定的 `domain/code` 和可选 UTF-8
-诊断文本：
+Runtime ABI v1 exposes recoverable boundary errors through
+`rt_runtime_error_snapshot_v1`. The caller selects
+`LUNA_RUNTIME_ERROR_DOMAIN_FRAGMENT_PLUGIN` or
+`LUNA_RUNTIME_ERROR_DOMAIN_GPU` and receives stable `domain/code` fields plus optional
+UTF-8 diagnostic text:
 
 ```c
 LunaRuntimeErrorSnapshotV1 snapshot;
@@ -42,35 +45,36 @@ int status = rt_runtime_error_snapshot_v1(
     LUNA_RUNTIME_ERROR_DOMAIN_GPU, &snapshot, NULL, 0);
 ```
 
-空缓冲区用于查询 `message_size`，有诊断文本时返回
-`LUNA_RUNTIME_STATUS_BUFFER_TOO_SMALL`。再次调用时由 adapter 提供
-`message_size + 1` 字节即可复制含结尾 NUL 的文本。缓冲不足时也会写入完整
-`domain/code/message_size`，并在非空缓冲区中留下安全截断且以 NUL 结尾的文本。
+An empty buffer queries `message_size`. When diagnostic text exists, the call returns
+`LUNA_RUNTIME_STATUS_BUFFER_TOO_SMALL`. A second call can copy the NUL-terminated text
+when the adapter supplies `message_size + 1` bytes. Even when the buffer is too small,
+the call writes complete `domain/code/message_size` fields and leaves safely truncated,
+NUL-terminated text in a non-empty buffer.
 
-错误身份只由 `domain/code` 决定，文本仅用于诊断。快照操作本身不分配内存；
-安全 adapter 若无法为 owned message 分配空间，必须保留机器错误字段并省略文本，
-不能 panic，也不能把 `rt_gpu_last_error` 或
-`rt_fragment_plugin_last_error` 返回的易失指针存进长期值。两个旧
-`last_error` 入口为 Alpha 兼容保留，新 adapter 应使用快照接口，并在失败调用后
-立即复制。
+Error identity is determined only by `domain/code`; text is diagnostic. Snapshot operations
+do not allocate. If a safe adapter cannot allocate an owned message, it must preserve the
+machine fields and omit text, not panic, and must not store the volatile pointer returned by
+`rt_gpu_last_error` or `rt_fragment_plugin_last_error` in a long-lived value. The two
+legacy `last_error` entries remain for Alpha compatibility; new adapters should use the
+snapshot interface and copy immediately after a failing call.
 
-## 四个不可混用的资源域
+## Four resource domains that must not be mixed
 
-1. **Luna host heap**：使用 `rt_alloc/rt_dealloc`，布局由 MoonIR/编译器确定。
-2. **Foreign/C resources**：由创建它的库提供释放 capability。
-   `LunaOwnedForeignMemoryV1` 是为后续类型化 C FFI adapter 预留的携带者；
-   这类指针不能传给 `rt_dealloc`。
-3. **Device resources**：使用 `rt_gpu_*` 及后端自己的地址空间/释放协议。CPU
-   simulator 只是同一设备 ABI 的 host-backed 实现，不会把设备指针变成 Luna
-   host-heap 指针。
-4. **Executable memory**：`LunaExecutableMemoryV1` 预留 `reserve -> write -> seal ->
-   execute -> release` 的 W^X 合约。默认 runtime 不声明该 capability；未来
-   MoonRuntime/hotspot JIT 必须显式获得宿主授权。
+1. **Luna host heap**: uses `rt_alloc/rt_dealloc`; layout is determined by MoonIR/compiler.
+2. **Foreign/C resources**: released by the capability supplied by the creating library.
+   `LunaOwnedForeignMemoryV1` is reserved for a future typed C FFI adapter; these pointers
+   must not be passed to `rt_dealloc`.
+3. **Device resources**: use `rt_gpu_*` and the backend's address space/release protocol.
+   The CPU simulator is only a host-backed implementation of the same device ABI; it does
+   not turn a device pointer into a Luna host-heap pointer.
+4. **Executable memory**: `LunaExecutableMemoryV1` reserves a W^X contract of
+   `reserve -> write -> seal -> execute -> release`. The default runtime does not declare
+   this capability; a future MoonRuntime/hotspot JIT must obtain explicit host authorization.
 
-## C FFI 边界
+## C FFI boundary
 
-Runtime ABI 服务编译器生成的语言操作；用户声明的原始 C 接口使用显式
-`extern "C"`，二者不能混用：
+The Runtime ABI serves compiler-generated language operations; user-declared raw C
+interfaces use explicit `extern "C"`, and the two must not be mixed:
 
 ```luna
 extern "C" fn puts(message: cstr) -> i32;
@@ -78,33 +82,38 @@ extern "C" fn malloc(size: usize) -> linear raw<u8>;
 extern "C" fn c_free(linear pointer: raw<u8>) as "free";
 ```
 
-导出使用 `export "C" fn`。`extern` 声明不可同时 `export`，也不能是泛型或
-`constexpr`。当前 C ABI 只接受整数、浮点、`cstr`、`raw<T>`、`unit` 及指向这些
-标量的引用；`string`、ADT、闭包、trait object、`device_buffer<T>` 和
-`Result<T, E>` 都不能直接穿过边界。
+Exports use `export "C" fn`. An `extern` declaration cannot also be exported and cannot
+be generic or `constexpr`. The current C ABI accepts only integers, floats, `cstr`,
+`raw<T>`, `unit`, and references to those scalars; `string`, ADTs, closures, trait
+objects, `device_buffer<T>`, and `Result<T, E>` cannot cross the boundary directly.
 
-每个参数必须有显式类型。所有权移交使用 `linear` 参数和 `move` 调用；外部
-allocator 的拥有返回写作 `linear raw<T>`。外来指针必须交还创建它的分配域，
-不能传给 Luna `free`/`rt_dealloc`。当前配对责任由声明者承担，后续安全 adapter
-可使用 `LunaOwnedForeignMemoryV1` 的 release capability。
+Every parameter must have an explicit type. Ownership transfer uses a `linear` parameter
+and a `move` call; an owned return from a foreign allocator is written
+`linear raw<T>`. A foreign pointer must be returned to the domain that created it and must
+not be passed to Luna `free`/`rt_dealloc`. The declaration author currently owns the
+pairing responsibility; a future safe adapter may use the release capability of
+`LunaOwnedForeignMemoryV1`.
 
-可恢复外部 API 应保留原始 status/out-parameter 声明，在普通 Luna adapter 中立即
-捕获 errno/status 和诊断快照，再返回 `Result<T, FfiError>`。编译器不会隐式读取
-errno，也不会延长外部 `last_error` 指针的生命周期。JIT 通过宿主进程解析用户 C
-符号，AOT 通过系统链接器；两条路径均有 `puts`/`free` 回归。
+A recoverable foreign API should preserve its raw status/out-parameter declaration, capture
+errno/status and the diagnostic snapshot immediately in an ordinary Luna adapter, then
+return `Result<T, FfiError>`. The compiler does not read errno implicitly or extend the
+lifetime of a foreign `last_error` pointer. JIT resolves user C symbols through the host
+process, while AOT uses the system linker; both paths have `puts`/`free` regressions.
 
-## 版本化与未来模块
+## Versioning and future modules
 
-`LunaHostServicesV1` 使用 `magic`、`abi_version`、`struct_size` 和 capability bits
-进行验证。v1 只能在结构尾部追加字段，消费方必须先检查 `struct_size`。
-`LunaRuntimeModuleContextV1` 预留给经验证的 Moon 容器和未来插件 ABI v2，
-使动态模块通过授权的服务表工作，而不是依赖进程里偶然可见的 C
-符号。当前 external fragment ABI v1 仍保持原样，不会被无声扩展。
+`LunaHostServicesV1` is validated with `magic`, `abi_version`, `struct_size`, and
+capability bits. v1 may append fields only at the end of the structure, and consumers must
+check `struct_size`. `LunaRuntimeModuleContextV1` is reserved for verified Moon
+containers and a future plugin ABI v2, allowing dynamic modules to use an authorized
+service table rather than relying on accidentally visible process C symbols. The current
+external fragment ABI v1 remains unchanged and will not be extended silently.
 
-## 按需付费
+## Pay only for what is used
 
-- 没有 `new`、清理或 `print` 的静态代码不会生成对应 runtime 调用。
-- 普通分配调用是一次固定 `rt_alloc` 边界；可替换服务表的间接调用发生在
-  runtime 内部，不在每个语言对象内嵌 capability/header。
-- 可执行内存、GPU、动态选择和动态 apply 都是独立 capability，不会因为链接
-  `libruntime` 就自动启用。
+- Static code without `new`, cleanup, or `print` generates no corresponding runtime call.
+- An ordinary allocation is one fixed `rt_alloc` boundary; indirect calls through a
+  replaceable service table happen inside Runtime, not as an embedded capability/header in
+  every language object.
+- Executable memory, GPU, dynamic selection, and dynamic apply are independent capabilities;
+  linking `libruntime` does not enable them automatically.

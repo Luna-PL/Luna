@@ -1,10 +1,11 @@
 # Interceptors, contexts, and slots
 
-## 中文说明
-
-片段机制明确区分三件事：`interceptor` 正常完成后自动继续，`context` 通过
-`resume()` 控制续体，`abort()` 显式跳过续体，`return` 只结束当前片段。槽会把
-参数、发射次数和所有权效果写进契约；静态路径尽量内联，动态路径才保留分派成本。
+The fragment model distinguishes three behaviors: an `interceptor` continues
+automatically after normal completion, a `context` controls its continuation
+through `resume()`, and `abort()` explicitly skips the continuation.
+`return` ends only the current fragment. Slots record parameters, emission
+cardinality, and ownership effects in their contracts; static paths are kept
+inline whenever possible, while dynamic paths retain dispatch cost.
 
 Luna does not infer a fragment's control behavior from how many times
 `resume()` happens to occur. The declaration and the slot both carry an

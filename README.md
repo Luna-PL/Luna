@@ -11,8 +11,13 @@ the [Luna-PL](https://github.com/Luna-PL) organization. Its compiler preserves
 language semantics in verified MoonIR before lowering to LLVM for JIT or AOT
 compilation.
 
-The project is currently an Alpha compiler for language research and internal
-experiments. APIs and experimental syntax may still change before Beta.
+The project is entering a long-lived `0.2.0-alpha` maintenance line for
+language research and internal experiments. There is no scheduled Beta or
+language-version bump. Near-term development is focused on the toolchain:
+diagnostics, editor/build/package integration, distribution, reproducibility
+and reliability. Language work is limited to correctness, safety and closing
+documented contract gaps; experimental syntax may still change within that
+boundary.
 [Read the Alpha release notes](docs/alpha_release.md) for the precise support
 boundary and known limitations.
 
@@ -83,7 +88,7 @@ native executable:
 ```
 
 `print` is currently the minimal language/runtime output operation; the future
-formatted API will live in `std::io`. Continue with the [English getting-started guide](docs/getting_started.en.md).
+formatted API will live in `std::io`. Continue with the [English getting-started guide](docs/getting_started.md).
 
 ## Build from source
 
@@ -99,7 +104,7 @@ cmake --build build --parallel
 ctest --test-dir build -LE hardware --output-on-failure
 ```
 
-See the [complete build and installation guide](docs/getting_started.en.md).
+See the [complete build and installation guide](docs/getting_started.md).
 Windows uses the MSYS2 UCRT64 toolchain documented in the [Windows build guide](docs/windows_build.md).
 
 ## Compiler commands
@@ -113,11 +118,13 @@ directory containing `luna.package`:
 | `luna check <input>` | Verify source through MoonIR without generating machine code. |
 | `luna run <input> [-O0\|-O2\|-O3]` | JIT-compile and execute a program. |
 | `luna build <input> [-O0\|-O2\|-O3]` | Emit LLVM IR, link the Runtime ABI, and produce a native executable. |
-| `luna repl` | Start the experimental JIT REPL. |
+| `luna repl` | Start the limited Alpha REPL (`=`, `:decl`, single-line statements). |
 
 The driver also exposes explicit linker, runtime, MoonIR, cost-report and GPU target options.
 Runtime backend selection is separate from code-object generation.
 See the [compiler command reference](docs/cli.md) for commands, options, environment variables and examples.
+Repository contributors should use the [file and responsibility guide](docs/file_guide.md)
+before adding or moving implementation files.
 
 ## Platform and test status
 
@@ -137,19 +144,16 @@ See the [testing guide](docs/testing.md) and [heterogeneous-compute guide](docs/
 
 ## Next evolution
 
-The immediate direction is to finish the stable language foundation before
-adding broad new surface area:
+The immediate direction is toolchain development on the existing Alpha
+language baseline:
 
-1. introduce first-class error handling and use it as the basis of the
-   standard library;
-2. complete package/module tooling and grow `org.luna.core` / `org.luna.std`,
-   including formatted `std::io`;
-3. refine ownership, affine/linear checking and the explicit cost model;
-4. freeze Moon container validation and reserve MoonRuntime loading, JIT and
-   hotspot evolution interfaces;
-5. generalize heterogeneous memory, kernel targets and hardware validation;
-6. improve diagnostics, formatting, language-server and package ecosystem
-   tooling.
+1. improve diagnostics, source mapping and machine-readable output;
+2. add formatter, language-server and editor integration;
+3. complete build/test/package/workspace workflows and local caching;
+4. harden installation, prebuilt distribution and reproducible builds;
+5. improve benchmark, profiling, MoonIR inspection and developer-audit tools;
+6. fix language correctness or safety defects without expanding the active
+   language surface.
 
 See the [single active roadmap](docs/roadmap.md).
 
@@ -158,13 +162,13 @@ See the [single active roadmap](docs/roadmap.md).
 Each topic starts with a short overview and links onward to its detailed design
 or reference material:
 
-- [Getting started](docs/getting_started.en.md)
+- [Getting started](docs/getting_started.md)
 - [Feature overview](docs/features.md)
 - [Compiler command reference](docs/cli.md)
 - [Full language showcase](examples/full_showcase/README.md)
-- [0.2 Alpha semantic reference](docs/reference/README.md) (Simplified Chinese)
-- [Complete type-system reference](docs/reference/type_system.md) (Simplified Chinese)
-- [Documentation recording rules](docs/reference/documentation_rules.md) (Simplified Chinese)
+- [0.2 Alpha semantic reference](docs/reference/README.md)
+- [Complete type-system reference](docs/reference/type_system.md)
+- [Documentation recording rules](docs/reference/documentation_rules.md)
 - [Packages and modules](docs/packages.md)
 - [Metadata and selectors](docs/versioning.md)
 - [Architecture](docs/architecture.md)

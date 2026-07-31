@@ -1,86 +1,89 @@
-# Luna 0.2 Alpha 类型系统参考
+# Luna 0.2 Alpha Type-System Reference
 
-> 文档类别：语言契约与 Alpha 参考
-> 适用版本：Luna 0.2.0-alpha
-> 状态：核心模型 Frozen for Alpha；具体表面按章节标注
-> 规范性：类型域、身份、关系、usage 和形成规则规范；内部布局部分非公共 ABI
-> 首次实现核对：`d0ab31c`（2026-07-31）
+> Document category: language contract and Alpha reference
+> Applies to: Luna 0.2.0-alpha
+> Status: core model Frozen for Alpha; individual surfaces are labeled by section
+> Normative status: type domains, identity, relations, usage, and formation rules are normative; internal layout is not public ABI
+> Initial implementation audit: `d0ab31c` (2026-07-31)
 
-本文定义 Luna 当前类型系统的共同词汇和规则。所有源码类型的逐项状态见
-[内置类型清单](builtin_types.md)。设计理由见
-[架构决策 D003/D004](../decisions.md)。
+This document defines the common vocabulary and rules of Luna's current type system. See the
+[builtin type inventory](builtin_types.md) for the status of every source type. See
+[architecture decisions D003/D004](../decisions.md) for the rationale.
 
-## 1. 类型不等于布局，也不等于所有权
+## 1. Type is not layout or ownership
 
-Luna 对一个值至少回答四个不同问题：
+For every value, Luna answers at least four separate questions:
 
-1. **类型**：它允许哪些值和操作；
-2. **身份**：它与另一个类型是否语义相同、结构相同；
-3. **ownership contract**：谁拥有它、可以消费几次；
-4. **布局**：当前目标和 ABI 如何表示它。
+1. **Type**: which values and operations are allowed;
+2. **Identity**: whether it is semantically or structurally the same as another type;
+3. **Ownership contract**: who owns it and how many times it may be consumed;
+4. **Layout**: how the current target and ABI represent it.
 
-两种类型可以布局相同但身份不同；同一类型可以在一个位置被拥有、在另一个位置被
-借用；`move` 改变所有权状态但不创建新类型。
+Two types may have the same layout but different identity. One type may be owned at one
+location and borrowed at another. `move` changes ownership state; it does not create a
+new type.
 
-## 2. 类型域
+## 2. Type domains
 
-| 类型域 | 含义 | 能否进入已验证运行时 MoonIR |
+| Domain | Meaning | May enter verified runtime MoonIR |
 |---|---|---|
-| Value | 普通执行值 | 可以 |
-| Meta | Metadata schema/实例 | 默认只在编译期；显式保留时使用单独运行时编码 |
-| Compiler | 声明视图、类型参数、融合 recipe 等编译器值 | 默认不可以 |
-| Inference | 未求解类型变量 | 不可以 |
-| Error | 诊断恢复占位 | 不可以 |
+| Value | Ordinary execution value | Yes |
+| Meta | Metadata schema/instance | Compile-time by default; explicit retention requires a separate runtime encoding |
+| Compiler | Declaration views, type parameters, fusion recipes, and other compiler values | No by default |
+| Inference | Unresolved type variable | No |
+| Error | Diagnostic-recovery placeholder | No |
 
-域是类型身份的一部分。一个 Meta schema 即使字段与 Value struct 完全相同，也不是
-同一个类型。
+The domain is part of type identity. A Meta schema with exactly the fields of a Value
+struct is still a different type.
 
-## 3. 身份模式
+## 3. Identity modes
 
-| 模式 | 典型来源 | 身份规则 |
+| Mode | Typical source | Identity rule |
 |---|---|---|
-| Builtin | `i32`、`bool`、`never` | 由语言内置种类和参数确定 |
-| Structural | 默认 `struct`、默认 `enum`、`Result`、函数 | 由完整结构形状确定 |
-| Nominal | `nominal struct/enum`、trait | 由 package/module 声明身份确定 |
-| MetaSchema | `meta` schema | 始终具有 schema 声明身份 |
-| CompilerIntrinsic | 视图、type parameter、Iterator recipe | 由编译器契约确定，不是普通用户布局 |
-| Inference/Error | Sema 状态 | 不形成可发布类型身份 |
+| Builtin | `i32`, `bool`, `never` | Determined by builtin kind and parameters |
+| Structural | Default `struct`, default `enum`, `Result`, functions | Determined by complete structural shape |
+| Nominal | `nominal struct/enum`, traits | Determined by package/module declaration identity |
+| MetaSchema | `meta` schema | Always has schema declaration identity |
+| CompilerIntrinsic | Views, type parameters, Iterator recipes | Determined by compiler contract, not ordinary user layout |
+| Inference/Error | Sema state | Does not form a publishable type identity |
 
 ### 3.1 TypeId
 
-`TypeId` 表示语义类型身份。默认结构类型的 TypeId 来自其规范结构；名义类型的
-TypeId 包含声明身份和泛型实参。
+`TypeId` is semantic type identity. A default structural type derives its TypeId from its
+canonical structure; a nominal type includes declaration identity and generic arguments.
 
 ### 3.2 ShapeId
 
-`ShapeId` 描述结构形状。它包括：
+`ShapeId` describes structural shape, including:
 
-- 字段/variant 名称和顺序；
-- 字段和载荷类型；
-- 泛型实例参数；
-- 引用的共享/可变类别；
-- 函数参数与返回；
-- callable 参数/返回的 relation 与 usage；
-- slot/fragment 的控制种类和 Once/Many cardinality。
+- field/variant names and order;
+- field and payload types;
+- generic instantiation arguments;
+- shared/mutable reference categories;
+- function parameters and return type;
+- callable parameter/return relations and usage;
+- slot/fragment control kind and Once/Many cardinality.
 
-忽略名义 brand 后形状相同，不代表可以隐式赋值。
+Equal shape after ignoring a nominal brand does not permit implicit assignment.
 
 ### 3.3 ABI compatibility
 
-`type_abi_compatible` 当前是保守的、目标无关的兼容关系。它不能代替 TypeId，也
-不能授权越过名义、FFI 或所有权边界。最终机器兼容仍受目标 data layout 和版本化
-ABI 约束。
+`type_abi_compatible` is currently a conservative, target-independent compatibility
+relation. It cannot replace TypeId or authorize crossing nominal, FFI, or ownership
+boundaries. Final machine compatibility remains constrained by target data layout and
+versioned ABI.
 
-## 4. 源码类型类别
+## 4. Source type categories
 
-### 4.1 标量和特殊内置类型
+### 4.1 Scalar and special builtins
 
-整数、浮点、`bool`、`string`、`cstr`、`unit`、`never` 和 `event` 由编译器直接
-识别。完整宽度、usage 和布局见[内置类型清单](builtin_types.md)。
+The compiler directly recognizes integers, floats, `bool`, `string`, `cstr`, `unit`,
+`never`, and `event`. See the [builtin type inventory](builtin_types.md) for widths,
+usage, and layout.
 
-### 4.2 参数化内置类型
+### 4.2 Parameterized builtins
 
-当前源码可形成：
+Current source syntax can form:
 
 ```text
 raw<T>
@@ -95,226 +98,242 @@ device_buffer<T>
 (P1, P2, ...) -> R
 ```
 
-`affine T` 和 `linear T` 可以出现在绑定、参数、返回和 callable contract 位置，
-但修饰的是 usage，不是 `T` 的 TypeId。
+`affine T` and `linear T` may occur in bindings, parameters, returns, and callable
+contracts. They qualify usage, not the TypeId of `T`.
 
-### 4.3 用户声明类型
+### 4.3 User-declared types
 
-- `struct`：默认结构 product；
-- `nominal struct`：名义 product；
-- `enum`：默认结构 sum；
-- `nominal enum`：名义 sum；
-- `trait`：始终声明身份；
-- `meta`：始终 MetaSchema 身份。
+- `struct`: default structural product;
+- `nominal struct`: nominal product;
+- `enum`: default structural sum;
+- `nominal enum`: nominal sum;
+- `trait`: always declaration identity;
+- `meta`: always MetaSchema identity.
 
-源码目前没有独立 `record` 声明语法。`TypeKind::Record` 是编译器内部的匿名结构
-product 表示，不能据此声称语言已经提供 record literal/type 语法。
+The source language currently has no separate `record` declaration syntax.
+`TypeKind::Record` is the compiler's internal anonymous structural-product form; it must
+not be used to claim that record literals or record types are already a language feature.
 
-### 4.4 控制和编译期类型
+### 4.4 Control and compile-time types
 
-slot、fragment、Metadata view、declaration view/ref 和编译器 Iterator recipe
-具有专门契约。它们不能因为在内部 `TypeKind` 中有一项就被当成普通可存储数据。
+Slots, fragments, Metadata views, declaration views/refs, and compiler Iterator recipes
+have specialized contracts. An internal `TypeKind` entry does not make them ordinary
+storable data.
 
-## 5. 类型形成规则
+## 5. Type-formation rules
 
-### 5.1 命名和泛型类型
+### 5.1 Named and generic types
 
-命名类型先解析当前类型参数和 `Self`，再解析 package/module 可见声明，最后匹配
-内置名称。泛型实例必须提供声明要求的实参；实参参与最终类型身份。
+A named type first resolves current type parameters and `Self`, then package/module-visible
+declarations, and finally builtin names. Generic instantiations must provide the arguments
+required by the declaration; those arguments participate in final type identity.
 
-### 5.2 引用
+### 5.2 References
 
-若 `T` 是已形成类型，则 `&T` 和 `&mut T` 是不同引用类型：
+When `T` is a formed type, `&T` and `&mut T` are distinct:
 
-- `&T` 具有 shared-borrow relation；
-- `&mut T` 具有 mutable-borrow relation；
-- 两者不能通过形状统一互换；
-- 引用不拥有 `T`，不能比来源 loan 活得更久。
+- `&T` has a shared-borrow relation;
+- `&mut T` has a mutable-borrow relation;
+- shape unification cannot interchange them;
+- a reference does not own `T` and cannot outlive its source loan.
 
-### 5.3 数组与切片
+### 5.3 Arrays and slices
 
-`array<T, N>` 要求：
+`array<T, N>` requires:
 
-- 恰好一个元素类型；
-- `N` 是源码中的编译期非负整数；
-- 长度属于类型身份和结构形状。
+- exactly one element type;
+- `N` as a non-negative compile-time integer in source;
+- length as part of type identity and structural shape.
 
-`slice<T>` 是当前只读、非拥有 `{data, length}` 视图。创建 slice 会对来源建立
-共享 loan；`raw<T>`、`device_buffer<T>` 不会隐式变成 slice。
+`slice<T>` is currently a read-only, non-owning `{data, length}` view. Creating one
+establishes a shared loan on the source. `raw<T>` and `device_buffer<T>` do not become
+slices implicitly.
 
 ### 5.4 Result
 
-`Result<T, E>` 恰好有两个可用于普通运行时值位置的载荷类型。它是结构 sum；其
-活动载荷、usage、匹配和清理规则见[错误模型契约](error_model.md)。Sema 对
-Compiler/Meta 载荷的完整 well-formedness 负例矩阵仍是 A0 后的实现核对项。
+`Result<T, E>` has exactly two payload types usable in ordinary runtime value positions.
+It is a structural sum; its active payload, usage, matching, and cleanup rules are defined
+in the [error-model contract](error_model.md). Sema's complete negative well-formedness
+matrix for Compiler/Meta payloads remains an A0 follow-up audit item.
 
-### 5.5 callable
+### 5.5 Callables
 
-闭包/函数类型写作：
+Closure/function types are written as:
 
 ```luna
 (i32, &string) -> bool
 (affine Resource) -> affine Resource
 ```
 
-参数和返回类型、relation 与 usage 都属于 callable 的语言级 shape。后端只有在
-MoonIR 验证后才能从机器调用约定中擦除不需要的静态信息。
+Parameter and return types, relations, and usage are part of the callable's language-level
+shape. Only after MoonIR verification may the backend erase static information unnecessary
+for the machine calling convention.
 
-### 5.6 递归
+### 5.6 Recursion
 
-第一版拒绝无限 inline 递归结构。递归必须跨越编译器认可的表示边界，例如名义
-pointer-represented product、引用、`raw`、`rc` 或 `arc`。结构相等和布局计算不得
-因递归进入无限展开。
+The first version rejects infinitely inline recursive structures. Recursion must cross a
+compiler-recognized representation boundary, such as a nominal pointer-represented product,
+reference, `raw`, `rc`, or `arc`. Structural equality and layout computation must not
+expand recursively without bound.
 
-## 6. 推断与 `auto`
+## 6. Inference and `auto`
 
-`auto` 是“在此创建推断变量”的源码请求，不是可以反射、存储或传递的类型。
+`auto` requests creation of an inference variable at that source position. It is not a
+type that can be reflected, stored, or passed.
 
-Sema 使用 Inference 域变量收集约束：
+Sema collects constraints in the Inference domain:
 
-- 相等/赋值/参数/返回产生统一约束；
-- 数值运算产生 numeric 约束；
-- 条件和逻辑运算产生 bool 约束；
-- 未受其他约束的数值推断变量默认到 `i32`；
-- 仍未求解的变量产生诊断；
-- MoonIR Verifier 拒绝 `InferenceVar` 和 `Unknown`。
+- equality, assignment, parameter, and return positions produce unification constraints;
+- numeric operations produce numeric constraints;
+- conditions and logical operations produce bool constraints;
+- unconstrained numeric inference variables default to `i32`;
+- unresolved variables produce diagnostics;
+- the MoonIR Verifier rejects `InferenceVar` and `Unknown`.
 
-错误恢复中用 `i32` 或 `Unknown` 继续解析，不代表错误程序获得了有效类型。
+Using `i32` or `Unknown` during error recovery only permits continued diagnosis; it does
+not give an erroneous program valid `i32` semantics.
 
-## 7. 字面量与转换
+## 7. Literals and conversion
 
-### 7.1 默认类型
+### 7.1 Default types
 
-| 字面量 | 默认类型 |
+| Literal | Default type |
 |---|---|
-| 整数 | `i32` |
-| 浮点 | `f64` |
+| Integer | `i32` |
+| Floating point | `f64` |
 | `true`/`false` | `bool` |
-| 字符串 | `string` |
+| String | `string` |
 
-### 7.2 当前上下文规则
+### 7.2 Current contextual rules
 
-当前调用参数检查允许整数常量在已知 numeric 参数位置按目标宽度生成；当前没有
-完整范围诊断。字符串字面量可以在已知 `cstr` 的绑定、参数和返回位置使用。
+Call-argument checking may represent an integer constant at the target width in a known
+numeric parameter position; complete range diagnostics are not yet implemented. A string
+literal may be used in a binding, parameter, or return position known to be `cstr`.
 
-这些是字面量的上下文表示规则，不是：
+These are contextual literal-representation rules, not:
 
-- 任意整数类型之间的隐式转换；
-- 任意 `string` 到 `cstr` 的隐式转换；
-- 用户值的通用 cast；
-- ABI 兼容即类型兼容。
+- implicit conversion between arbitrary integer types;
+- implicit conversion from arbitrary `string` to `cstr`;
+- a general cast for user values;
+- a claim that ABI compatibility is type compatibility.
 
-### 7.3 普通数值运算
+### 7.3 Ordinary numeric operations
 
-- `+ - * / %` 要求 numeric 操作数，并统一为同一类型；
-- `& | ^ ~` 要求 integer；
-- shift 的左值和计数都必须为 integer，结果类型取左值；
-- `< <= > >=` 要求同一 numeric 类型，结果为 `bool`；
-- `&& || !` 要求 `bool`；
-- `== !=` 要求两个操作数可统一，结果为 `bool`。
+- `+ - * / %` require numeric operands and unify them to one type;
+- `& | ^ ~` require integer operands;
+- shift value and count must both be integers; the result type is the left operand's type;
+- `< <= > >=` require one numeric type and produce `bool`;
+- `&& || !` require `bool`;
+- `== !=` require operands that can unify and produce `bool`.
 
-0.2 不承诺一般性的隐式数值提升。需要新增转换时必须先定义溢出、截断、符号和
-constexpr 行为。
+0.2 makes no general implicit numeric-promotion promise. A new conversion must first
+define overflow, truncation, signedness, and constexpr behavior.
 
-## 8. relation 与 usage
+## 8. Relation and usage
 
-### 8.1 relation
+### 8.1 Relation
 
-| relation | 含义 |
+| Relation | Meaning |
 |---|---|
-| owned | 当前位置承担消费/清理责任 |
-| shared_borrow | 只读 loan，不承担释放责任 |
-| mutable_borrow | 独占可写 loan，不承担释放责任 |
+| owned | The current position is responsible for consumption/cleanup |
+| shared_borrow | Read-only loan; no release responsibility |
+| mutable_borrow | Exclusive writable loan; no release responsibility |
 
-### 8.2 usage
+### 8.2 Usage
 
-| usage | 含义 |
+| Usage | Meaning |
 |---|---|
-| Copy | 可以重复使用 |
-| Affine | 至多消费一次；未消费时可以由作用域清理 |
-| Linear | 必须在每条可达路径恰好转移、等待或消费 |
+| Copy | May be reused |
+| Affine | May be consumed at most once; an unconsumed value may be cleaned up by scope |
+| Linear | Must be transferred, awaited, or consumed exactly once on every reachable path |
 
-### 8.3 默认参数规则
+### 8.3 Default parameter rules
 
-未显式标注的 Copy 参数是拥有 Copy 值。未显式标注的 move-only 参数保持共享借用
-视图。要消费调用方值，参数必须显式写 `affine` 或 `linear`，调用点必须进行相应
-`move`。
+An unannotated Copy parameter owns its Copy value. An unannotated move-only parameter
+retains shared-borrow view semantics. To consume the caller's value, the parameter must
+explicitly use `affine` or `linear`, and the call site must perform the corresponding
+`move`.
 
-引用参数直接从 `&T`/`&mut T` 得到 shared/mutable relation；usage 为 Copy，
-但 loan 生命周期仍受检查。
+Reference parameters derive shared/mutable relation from `&T`/`&mut T`. Their usage is
+Copy, but loan lifetimes remain checked.
 
-## 9. 清理与组合类型
+## 9. Cleanup and compound types
 
-清理责任来自拥有值的 usage 和资源管理方式：
+Cleanup responsibility comes from owned-value usage and resource-management strategy:
 
-- 独占 product/string：Drop/Deallocate；
-- `rc<T>`：RcRelease；
-- `arc<T>`：ArcRelease；
-- Result/enum：读取 tag 后只清理活动载荷；
-- array：按仍初始化元素执行 ArrayDrop；
-- event：必须 await 或合法转移；
-- device buffer：必须显式释放或合法转移；
-- 借用、裸 Copy 指针、标量：不释放来源资源。
+- exclusive product/string: Drop/Deallocate;
+- `rc<T>`: RcRelease;
+- `arc<T>`: ArcRelease;
+- Result/enum: inspect the tag, then clean only the active payload;
+- array: ArrayDrop for elements that remain initialized;
+- event: must be awaited or legally transferred;
+- device buffer: must be explicitly released or legally transferred;
+- borrow, raw Copy pointer, and scalar: do not release the source resource.
 
-组合 usage 使用 `Linear > Affine > Copy`。该规则不能因某条常见路径只使用 Copy
-variant 而放宽。
+Compound usage follows `Linear > Affine > Copy`. A common path that uses only a Copy
+variant cannot weaken this rule.
 
-## 10. 当前布局层
+## 10. Current layout layers
 
-布局分为三层：
+Layout has three layers:
 
-1. **语言语义**：字段/variant 顺序、活动载荷和身份边界；
-2. **0.2 编译器/MoonIR Alpha ABI**：当前 64 位值大小、对齐和 inline ADT v1；
-3. **公共 Runtime/C FFI ABI**：只包含显式版本化并允许穿过边界的类型。
+1. **Language semantics**: field/variant order, active payload, and identity boundaries;
+2. **0.2 compiler/MoonIR Alpha ABI**: current 64-bit size, alignment, and inline ADT v1;
+3. **Public Runtime/C FFI ABI**: only explicitly versioned types permitted across the boundary.
 
-当前 product 类型是 pointer-represented；array 和 slice 内联；enum/Result 使用
-8 字节 tag storage 和 8 字节对齐 payload。具体数字见
-[内置类型清单](builtin_types.md)。
+Current product types are pointer-represented; arrays and slices are inline; enum/Result
+use 8-byte tag storage and an 8-byte-aligned payload. See the
+[builtin type inventory](builtin_types.md) for exact numbers.
 
-这些数字不得自动推广到 32 位目标、跨版本 Moon 容器或 C ABI。`type_size` 当前
-报告的是第 2 层事实。
+These numbers must not be generalized to 32-bit targets, cross-version Moon containers, or
+the C ABI. `type_size` currently reports facts from layer 2.
 
-## 11. 边界
+## 11. Boundaries
 
 ### 11.1 C FFI
 
-当前允许整数、浮点、`cstr`、`raw<T>`、`unit`，以及指向受支持标量的引用。
-`bool`、`string`、product、enum、Result、shared handle、closure 和 device buffer
-不属于当前 C ABI 表面。拥有型 FFI 返回只允许显式 `linear raw<T>`。
+Integers, floats, `cstr`, `raw<T>`, `unit`, and references to supported scalars are
+currently allowed. `bool`, `string`, products, enums, Result, shared handles, closures,
+and device buffers are outside the current C ABI surface. Owning FFI returns require an
+explicit `linear raw<T>`.
 
-### 11.2 kernel
+### 11.2 Kernels
 
-kernel 参数需要显式 ABI 类型；当前稳定设备表面主要是标量和
-`&device_buffer<i32>`/`&mut device_buffer<i32>`。`string`、host allocation、
-FFI、reflection、closure 和 host continuation 不得进入当前 device 子语言。
+Kernel parameters require explicit ABI types. The stable device surface is currently
+primarily scalars and `&device_buffer<i32>`/`&mut device_buffer<i32>`. `string`, host
+allocation, FFI, reflection, closures, and host continuations must not enter the current
+device sublanguage.
 
-### 11.3 compile time
+### 11.3 Compile time
 
-constexpr 当前处理标量字面量、不可变绑定、受支持表达式和反射结果。Compiler/Meta
-值只有在编译器提供相应求值规则时才可参与，不获得默认运行时表示。
+Constexpr currently handles scalar literals, immutable bindings, supported expressions, and
+reflection results. Compiler/Meta values participate only when the compiler provides the
+corresponding evaluation rule; they do not acquire a default runtime representation.
 
-## 12. 标准库类型不是编译器内置类型
+## 12. Standard-library types are not compiler builtins
 
-`org.luna.core` 中的 `Option<T>`、错误 enum、`Iterator`、`IntoIterator`、
-`FromIterator`、`Map`、`Filter` 和 `Take` 都有 package/module 声明身份。
+`Option<T>`, error enums, `Iterator`, `IntoIterator`, `FromIterator`, `Map`,
+`Filter`, and `Take` in `org.luna.core` have package/module declaration identity.
 
-编译器可以识别唯一 Core trait 并静态融合，但不得把同形状的用户 trait 当成 Core
-协议。内部 `TypeKind::Iterator` 表示融合 recipe，不等于
-`org.luna.core::iter::Iterator` trait，也不会自动成为跨函数 ABI。
+The compiler may recognize the unique Core trait and fuse it statically, but must not treat
+a same-shaped user trait as the Core protocol. Internal `TypeKind::Iterator` denotes a
+fusion recipe; it is not the `org.luna.core::iter::Iterator` trait and does not
+automatically become a cross-function ABI.
 
-## 13. 实现映射与后续拆分
+## 13. Implementation mapping and future separation
 
-| 责任 | 当前主要实现 |
+| Responsibility | Current primary implementation |
 |---|---|
-| 类型 AST/语法 | `src/parser/AST.h`、`src/parser/Parser.cpp` |
-| 类型种类和构造 | `src/core/TypeSystem.h` |
-| 推断/统一 | `src/sema/TypeSystem.cpp` |
-| 声明解析和内建语义 | `src/sema/SemanticAnalyzer.cpp` |
-| 身份与形状 | `src/core/TypeRelations.cpp` |
-| relation/usage | `src/core/Ownership.h`、OwnershipChecker |
-| 大小和对齐 | `src/core/TypeLayout.cpp` |
-| 可信类型表 | MoonIR/Verifier |
-| 机器表示 | CGHelpers/CodeGenerator |
+| Type AST/syntax | `src/parser/AST.h`, `src/parser/Parser.cpp` |
+| Type kinds and formation | `src/core/TypeSystem.h` |
+| Inference/unification | `src/sema/TypeSystem.cpp` |
+| Declaration resolution and builtin semantics | `src/sema/SemanticAnalyzer.cpp` |
+| Identity and shape | `src/core/TypeRelations.cpp` |
+| Relation/usage | `src/core/Ownership.h`, OwnershipChecker |
+| Size and alignment | `src/core/TypeLayout.cpp` |
+| Trusted type table | MoonIR/Verifier |
+| Machine representation | CGHelpers/CodeGenerator |
 
-后续代码拆分应围绕这些责任进行，并逐步建立集中内置类型注册表。重构前后必须保持
-本参考和[0.2 Alpha 语义基线](semantic_baseline_0.2.md)不变。
+Future code separation should follow these responsibilities and gradually establish a
+centralized builtin-type registry. Refactoring must preserve this reference and the
+[0.2 Alpha semantic baseline](semantic_baseline_0.2.md).

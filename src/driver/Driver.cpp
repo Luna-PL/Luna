@@ -2,20 +2,8 @@
 #include "driver/AotLinker.h"
 #include "driver/CommandLine.h"
 #include "driver/CompilerPipeline.h"
-#include "lexer/Lexer.h"
-#include "lexer/Token.h"
-#include "parser/Parser.h"
-#include "parser/AST.h"
-#include "sema/TypeSystem.h"
-#include "sema/SymbolTable.h"
-#include "sema/SemanticAnalyzer.h"
-#include "sema/TraitChecker.h"
-#include "sema/OwnershipChecker.h"
-#include "moonir/Lowering.h"
-#include "moonir/Verifier.h"
-#include "moonir/Optimizer.h"
+#include "driver/Repl.h"
 #include "moonir/Printer.h"
-#include "codegen/CodeGenerator.h"
 #include "runtime/Runtime.h"
 #include "Version.h"
 #include "package/Package.h"
@@ -103,90 +91,7 @@ int run(int argc, char* argv[]) {
     }
 
     if (cmd == "repl") {
-        std::cout << "REPL mode — JIT-compiling expressions one at a time\n";
-        std::cout << "Type 'exit' to quit.\n\n";
-
-        std::string line;
-        while (true) {
-            std::cout << "luna> ";
-            if (!std::getline(std::cin, line) || line == "exit") break;
-
-            if (line.empty()) continue;
-
-            // Wrap line into a minimal program
-            std::string source = "fn main() -> i32 {\n    " + line + ";\n    return 0;\n}";
-
-            Lexer lexer(source, "<repl>");
-            auto tokens = lexer.tokenize();
-
-            if (!lexer.errors().empty()) {
-                printErrors(lexer.errors());
-                continue;
-            }
-
-            Parser parser(std::move(tokens), "<repl>", source);
-            auto prog = parser.parse();
-
-            if (!parser.errors().empty()) {
-                printErrors(parser.errors());
-                continue;
-            }
-
-            SemanticAnalyzer sema;
-            if (!sema.analyze(prog.get())) {
-                printErrors(sema.errors());
-                continue;
-            }
-
-            TraitChecker traits;
-            if (!traits.check(prog.get())) {
-                printErrors(traits.errors());
-                continue;
-            }
-
-            OwnershipChecker owner;
-            if (!owner.check(prog.get(), sema.symTable())) {
-                printErrors(owner.errors());
-                continue;
-            }
-
-            moon::LunaLowerer lowerer;
-            auto moonModule = lowerer.lower(*prog, sema.symTable());
-            if (!lowerer.errors().empty()) {
-                printErrors(lowerer.errors(), "moon-lower");
-                continue;
-            }
-            moon::Verifier verifier;
-            if (!verifier.verify(*moonModule)) {
-                printErrors(verifier.errors(), "moon-verify");
-                continue;
-            }
-            moon::Optimizer optimizer;
-            if (!optimizer.run(*moonModule, {
-                    moon::OptimizationLevel::None,
-                    moon::OptimizationPurpose::JustInTime})) {
-                printErrors(optimizer.errors(), "moon-opt");
-                continue;
-            }
-            if (!verifier.verify(*moonModule)) {
-                printErrors(verifier.errors(), "moon-verify");
-                continue;
-            }
-
-            CodeGenerator cg("repl");
-            if (!cg.generate(moonModule.get())) {
-                printErrors(cg.errors());
-                continue;
-            }
-
-            int result = cg.jitRun();
-            // Generated `print` calls use C stdio. On Windows a redirected
-            // stdout is block-buffered independently from the C++ stream, so
-            // establish the user-output-before-prompt ordering explicitly.
-            std::fflush(stdout);
-            std::cout << "= " << result << "\n";
-        }
-        return 0;
+        return runRepl(std::cin, std::cout, std::cerr);
     }
 
     auto parseResult = parseCommandLine(argc, argv);

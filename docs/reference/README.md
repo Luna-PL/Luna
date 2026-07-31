@@ -1,43 +1,54 @@
-# Luna 0.2 Alpha 语义参考
+# Luna 0.2 Alpha Semantic Reference
 
-> 文档类别：参考入口
-> 适用版本：Luna 0.2.0-alpha
-> 状态：Active
-> 规范性：本页只定义导航；各子文档单独声明规范性
-> 首次实现核对：`d0ab31c`（2026-07-31）
+> Document category: reference entry point
+> Applies to: Luna 0.2.0-alpha
+> Status: Active
+> Normative status: this page defines navigation only; each subdocument declares its own status
+> Initial implementation audit: `d0ab31c` (2026-07-31)
 
-本目录保存 Luna 0.2 Alpha 的语义基线和可逐项核对的语言参考。它把语言承诺、
-当前实现、内部表示和未来计划分开，避免把某个编译器版本的偶然实现写成永久语言
-规则。
+This directory contains the semantic baseline and itemized language reference for Luna 0.2
+Alpha. It separates language commitments, the current implementation, internal
+representation, and future plans so that an incidental compiler implementation is not
+mistaken for a permanent language rule.
 
-## 阅读顺序
+## Reading order
 
-1. [文档记录规则](documentation_rules.md)：文档类别、状态、规范性和变更规则；
-2. [0.2 Alpha 语义基线](semantic_baseline_0.2.md)：A0 已冻结的核心决策和未冻结边界；
-3. [类型系统参考](type_system.md)：类型域、身份、关系、推断、所有权和布局模型；
-4. [内置类型清单](builtin_types.md)：所有源码内置、编译器内在和内部类型的权威清点；
-5. [错误模型契约](error_model.md)：`Result`、`?`、`panic` 和外部错误边界。
+1. [Documentation recording rules](documentation_rules.md): document categories, status,
+   normative scope, and change rules;
+2. [0.2 Alpha semantic baseline](semantic_baseline_0.2.md): the core decisions frozen by
+   A0 and the boundaries that remain open;
+3. [Type-system reference](type_system.md): type domains, identity, relations, inference,
+   ownership, and layout model;
+4. [Builtin type inventory](builtin_types.md): the authoritative inventory of source-level
+   builtins, compiler intrinsics, and internal types;
+5. [Error-model contract](error_model.md): `Result`, `?`, `panic`, and Runtime/FFI
+   error boundaries.
 
-补充理由与实现说明：
+Additional rationale and implementation notes:
 
-- [当前架构](../architecture.md)
-- [已采用架构决策](../decisions.md)
+- [Current architecture](../architecture.md)
+- [Adopted architecture decisions](../decisions.md)
 - [Runtime ABI](../runtime_abi.md)
-- [测试与回归](../testing.md)
+- [Testing and regressions](../testing.md)
 
-架构和决策文档不能覆盖本目录中已经冻结的 0.2 Alpha 契约。发现冲突时，按
-[文档记录规则](documentation_rules.md)处理并记录差异，不能静默选择一种行为。
+Architecture and decision documents cannot override a 0.2 Alpha contract that is frozen in
+this directory. When a conflict is found, follow the
+[documentation recording rules](documentation_rules.md) and record the discrepancy; do not
+silently choose one behavior.
 
-## A0 范围
+## A0 scope
 
-A0 只做语义清点、契约分层和文档冻结，不借文档工作扩展语言表面。当前范围包括：
+A0 inventories semantics, separates contracts, and freezes documentation. It does not
+expand the language surface as a side effect of documentation work. The current scope
+includes:
 
-- 类型域、类型身份、结构/名义关系；
-- 源码可见内置类型和编译器内在类型；
-- ownership relation、usage cardinality 与类型的关系；
-- `Result`、`?`、`panic` 和 Runtime/FFI 错误边界；
-- 语言语义、MoonIR 契约和物理布局的分层；
-- 已实现、实验性、内部和计划能力的状态标注。
+- type domains, type identity, and structural/nominal relations;
+- source-visible builtin types and compiler intrinsic types;
+- the relationship between ownership relation, usage cardinality, and types;
+- `Result`, `?`, `panic`, and Runtime/FFI error boundaries;
+- the separation of language semantics, MoonIR contracts, and physical layout;
+- status labels for implemented, experimental, internal, and planned capabilities.
 
-selector、fragment、GPU、package 和标准库仍由各专题文档描述。只有它们与类型或
-错误模型相交的部分进入本次基线。
+Selectors, fragments, GPU, packages, and the standard library remain documented by their
+respective topic guides. Only the portions that intersect the type or error model enter
+this baseline.

@@ -10,8 +10,10 @@ Luna 是由 GitHub 组织 [Luna-PL](https://github.com/Luna-PL) 维护的、基�
 LLVM 的实验性系统编程语言。编译器首先把 Luna 源程序降级到经过验证的
 MoonIR，在保留语言语义和安全边界后，再统一对接 LLVM JIT 与 AOT。
 
-项目目前处于面向语言研究和内部试验的 Alpha 阶段，实验性语法和 API 在 Beta
-前仍可能调整。准确的支持边界和已知限制请见[Alpha 发布说明](docs/alpha_release.md)。
+项目将进入长期维护的 `0.2.0-alpha` 版本线，目前没有预定的 Beta 或语言版本升级。
+近期开发重心转向工具链，包括诊断、编辑器/构建/package 集成、分发、可复现性与
+可靠性。语言层工作只处理正确性、安全性和已记录契约缺口；实验性语法仍可在该边界
+内调整。准确支持范围和限制见[Alpha 发布说明](docs/alpha_release.zh-CN.md)。
 
 ## 主要特性
 
@@ -106,11 +108,12 @@ package 目录：
 | `luna check <输入>` | 验证源码直到 MoonIR，不生成机器码。 |
 | `luna run <输入> [-O0\|-O2\|-O3]` | 使用 JIT 编译并运行程序。 |
 | `luna build <输入> [-O0\|-O2\|-O3]` | 生成 LLVM IR、链接 Runtime ABI，并输出本机可执行文件。 |
-| `luna repl` | 启动实验性的 JIT REPL。 |
+| `luna repl` | 启动有限 Alpha REPL（`=`、`:decl`、单行语句）。 |
 
 驱动还提供显式链接、运行时库、MoonIR 导出、成本报告和 GPU target 选项。
 运行时后端选择与设备代码生成是两个独立决策。完整参数、环境变量和示例见
 [编译器命令参考](docs/cli.zh-CN.md)。
+新增或移动实现文件前，请先查阅[仓库文件与职责指南](docs/file_guide.md)。
 
 ## 平台与测试状态
 
@@ -130,15 +133,14 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
 
 ## 下一步演进
 
-近期将先完成稳定的语言基础，再扩大新的语言表面：
+近期在现有 Alpha 语言基线上发展工具链：
 
-1. 引入一等错误处理，并以它作为标准库接口的基础；
-2. 完善 package/module 工具链，扩展 `org.luna.core` / `org.luna.std`，包括格式化
-   `std::io`；
-3. 继续收敛所有权、仿射/线性检查和显式成本模型；
-4. 冻结 Moon 容器验证格式，并为 MoonRuntime 加载、JIT 和 hotspot 演进预留接口；
-5. 泛化异构内存与 kernel target，扩大真实硬件验证；
-6. 完善诊断、格式化器、语言服务器和 package 生态工具。
+1. 改进诊断、源码映射和机器可读输出；
+2. 增加 formatter、language server 与编辑器集成；
+3. 完善 build/test/package/workspace 工作流和本地缓存；
+4. 加固安装、预编译分发和可复现构建；
+5. 改进 benchmark、profiling、MoonIR 检查和开发者审计工具；
+6. 修复语言正确性或安全缺陷，但不主动扩大当前语言表面。
 
 详细阶段、稳定性承诺和长期计划见[统一路线图](docs/roadmap.md)。
 

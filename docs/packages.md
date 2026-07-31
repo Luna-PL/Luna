@@ -1,22 +1,22 @@
-# Package、module 与显式导出
+# Packages, Modules, and Explicit Exports
 
-Luna 将发布单元与源码命名空间分开：
+Luna separates release units from source namespaces:
 
-- **Package** 是版本、依赖、签名、缓存和 Moon 容器的单元。
-- **module** 是 package 内的源码命名空间。一个 package 可以有多个 module，
-  module 可以有子 module。
-- **workspace** 组织多个相关的本地 package；package 本身没有语义子包。
+- **Package** is the unit of versioning, dependencies, signatures, caching, and Moon containers.
+- **module** is a source namespace inside a package. A package may contain multiple modules,
+  and modules may contain child modules.
+- **workspace** organizes related local packages; a package does not have semantic subpackages.
 
-## 命名规则
+## Naming rules
 
-Package ID 使用由 `.` 分隔的反向 DNS 名称：
+A Package ID uses a reverse-DNS name separated by `.`:
 
 ```luna
 package org.luna.std;
 package com.example.graphics.vulkan;
 ```
 
-module 使用 `::` 表示层级：
+Modules use `::` for hierarchy:
 
 ```luna
 module io;
@@ -24,15 +24,17 @@ module io::format;
 module collections::ordered;
 ```
 
-因此，`.` 只属于 Package ID，`::` 只属于语言名称路径。
+Therefore `.` belongs only to Package IDs, while `::` belongs only to language name
+paths.
 
-`com.example.graphics` 和 `com.example.graphics.vulkan` 是两个完全独立的 package。
-后者不会自动继承前者的依赖、可见性或版本。反向 DNS 前缀表示发布命名权，
-不表示语言父子关系。
+`com.example.graphics` and `com.example.graphics.vulkan` are two independent packages.
+The latter does not inherit dependencies, visibility, or version from the former. A reverse-DNS
+prefix conveys publishing namespace ownership, not a language parent-child relationship.
 
-## 源文件头
+## Source-file header
 
-每个源文件最多声明一个 package 和一个 module，顺序为 package、module、using：
+Each source file may declare at most one package and one module, in package/module/using
+order:
 
 ```luna
 package com.example.application;
@@ -42,24 +44,27 @@ using org.luna.std as std;
 using com.example.serialization as serde;
 ```
 
-`using` 引用的是 package，不是 module。`as` 别名必须在当前 package 内唯一；
-同一别名不能指向两个 Package ID，package 也不能 `using` 自己。未声明
-`module` 的文件属于 package root module，用于兼容现有源码。
+`using` refers to a package, not a module. An `as` alias must be unique within the current
+package; one alias cannot refer to two Package IDs, and a package cannot `using` itself.
+A file without a `module` declaration belongs to the package root module for compatibility
+with existing source.
 
-完全限定路径为：
+Fully qualified paths are:
 
 ```luna
 std::io::print("value = {}", value);
 serde::json::decode<Data>(source);
 ```
 
-其中 `std` / `serde` 是 package alias，`io` / `json` 是 module，末尾是声明。
+Here `std`/`serde` are package aliases, `io`/`json` are modules, and the final
+component is a declaration.
 
-## 本地 package 组装
+## Local package assembly
 
-对于没有 manifest 的目录输入，驱动会将目录下按文件名排序的 `.luna` 文件组装
-成兼容 package。对于带 `luna.package` 的输入，则按照 `sources` 递归装载源码。
-所有显式 `package` 声明必须一致，但每个文件可以声明不同 module：
+For directory input without a manifest, the driver assembles the `.luna` files in
+filename order into a compatibility package. For input with `luna.package`, it recursively
+loads sources according to `sources`. All explicit `package` declarations must agree,
+while files may declare different modules:
 
 ```text
 application/
@@ -68,9 +73,9 @@ application/
   03_main.luna     # module application;
 ```
 
-PackageManager 已保留 module 图和 `Package ID -> alias` 依赖边，MoonIR 也保留
-`moon.source_module` 和 `moon.using`。带 manifest 的 package 使用下面的严格最小 TOML
-schema：
+PackageManager retains the module graph and `Package ID -> alias` dependency edges, and
+MoonIR retains `moon.source_module` and `moon.using`. A manifest package uses this strict
+minimal TOML schema:
 
 ```toml
 # luna.package
@@ -83,9 +88,9 @@ sources = ["src"]
 "org.luna.std" = "0.2.0-alpha"
 ```
 
-`sources` 必须是 package 目录内的相对文件或目录，不允许绝对路径或 `..`
-逃逸。目录中的 `.luna` 文件递归枚举并按路径排序。源码里每个 `using`
-都必须有对应 `[dependencies]` 项。
+`sources` must be a relative file or directory inside the package directory; absolute paths
+and `..` escapes are not allowed. `.luna` files in directories are enumerated recursively
+and sorted by path. Every source `using` must have a corresponding `[dependencies]` entry.
 
 ```toml
 # luna.workspace
@@ -93,12 +98,13 @@ sources = ["src"]
 members = ["core", "std", "application"]
 ```
 
-PackageManager 从当前 package 向上查找最近的 `luna.workspace`，再读取各 member
-的 `luna.package`，用规范 Package ID 定位本地依赖。它不会隐式搜索其他
-父目录、网络或系统库路径。
+PackageManager searches upward from the current package for the nearest
+`luna.workspace`, then reads each member's `luna.package` and locates local dependencies
+by canonical Package ID. It does not implicitly search other parent directories, networks, or
+system library paths.
 
 ```toml
-# luna.lock（工具生成并按 Package ID 规范排序）
+# luna.lock (tool-generated and canonically sorted by Package ID)
 [[package]]
 id = "org.luna.std"
 version = "0.2.0-alpha"
@@ -106,15 +112,18 @@ source = "workspace:std"
 hash = "..."
 ```
 
-当前 Alpha 本地 resolver 要求精确版本，并核对 lock 中的 Package ID、version 和
-workspace source。`hash` 字段已是必填的非空完整性槽位，但在 Moon 容器/注册表
-产物格式冻结前尚不计算或验证内容摘要。
+The current Alpha local resolver requires exact versions and checks Package ID, version, and
+workspace source against the lock file. The `hash` field is already a required non-empty
+integrity slot, but content digests are not yet computed or verified until Moon-container and
+registry artifact formats are frozen.
 
-resolver 会递归装载本地依赖闭包。声明身份由 Package ID、module path 与源码名称
-共同构成：未限定名称只在当前 module 查找；同一 package 的其他 module 使用
-`module::symbol`；依赖声明使用 `alias::module::symbol`。不同 module 可以安全声明
-同名符号，编译器会生成彼此隔离且确定性的链接名。跨 Package ID 的引用必须指向
-`export` 声明，而 package 内跨 module 引用不要求 `export`。
+The resolver recursively loads the local dependency closure. Declaration identity consists of
+Package ID, module path, and source name: an unqualified name is looked up only in the
+current module; another module in the same package uses `module::symbol`; a dependency uses
+`alias::module::symbol`. Different modules may safely declare same-named symbols, and the
+compiler generates isolated deterministic linkage names. A reference across Package IDs must
+target an `export` declaration; an intra-package cross-module reference does not require
+`export`.
 
 ```luna
 // org.luna.fixture.app / module application
@@ -125,19 +134,20 @@ fn main() -> i32 {
 }
 ```
 
-依赖 package 自己的 `using` 别名保持在其所有者命名空间内，因此不同 package 可以
-重复使用同一个别名而不互相污染。该所有权关系与每个依赖声明的 Package ID/module
-身份均会保留到 MoonIR，并由 verifier 检查。
+A dependency package's `using` aliases remain in its owner's namespace, so different
+packages may reuse an alias without contamination. This ownership relation and each
+dependency's Package ID/module identity remain in MoonIR and are checked by the verifier.
 
-对于没有 `main` 的库 package，使用 `luna check <package>` 完成 lexer 到验证后
-MoonIR 的全路径检查，不生成 LLVM IR 或可执行文件。
+For a library package without `main`, use `luna check <package>` for the full lexer-to-
+verified-MoonIR check; it does not generate LLVM IR or an executable.
 
-## 显式导出
+## Explicit exports
 
-只有写出 `export` 的声明进入 package 公共接口；未导出函数、类型和片段仍属于
-package 内部。`export` 是 ABI 承诺，不是单纯的名称解析标记。未导出包级
-函数在 LLVM IR 中保持内部链接；导出函数使用外部符号。
+Only declarations written with `export` enter the package public interface; non-exported
+functions, types, and fragments remain package-internal. `export` is an ABI commitment, not
+merely a name-resolution marker. Non-exported package-level functions retain internal
+linkage in LLVM IR; exported functions use external symbols.
 
-函数、结构体、枚举、trait、`interceptor` 与 `context` 均可导出。`extern`
-函数不能同时导出。Metadata/Selector 的公开接口规则见
-[versioning.md](versioning.md)。
+Functions, structs, enums, traits, `interceptor`, and `context` may be exported.
+`extern` functions cannot also be exported. See [versioning.md](versioning.md) for public
+Metadata/Selector interface rules.

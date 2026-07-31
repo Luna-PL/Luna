@@ -1,10 +1,9 @@
-# Compile-time computation and reflection
+# Compile-time Computation and Reflection
 
-## 中文说明
-
-Luna 支持 `const`、`constexpr` 和编译期反射。编译器会在参数全部可求值时折叠
-`constexpr` 调用，并在类型检查阶段处理 `type_of`、字段查询和完整类型描述。
-当前求值器有递归深度限制，不能把运行时输入伪装成编译期值。
+Luna supports `const`, `constexpr`, and compile-time reflection. The compiler folds
+`constexpr` calls when all arguments are evaluable and processes `type_of`, field queries,
+and complete type descriptions during type checking. The current evaluator has a recursion
+depth limit and cannot disguise runtime input as a compile-time value.
 
 Luna has immutable compile-time bindings and compile-time functions:
 
@@ -13,18 +12,17 @@ constexpr fn double(n: i32) -> i32 { return n * 2; }
 const let answer = double(21);
 ```
 
-`const let` initializers must be evaluable during compilation. `constexpr fn`
-calls are folded when all arguments are compile-time values. The evaluator
-supports literals, immutable bindings, arithmetic/bitwise/comparison/logical
-expressions, recursive `constexpr` calls (depth limit: 128), local `let`
-bindings, returns, and compile-time `if` branches.
+`const let` initializers must be evaluable during compilation. `constexpr fn` calls are
+folded when all arguments are compile-time values. The evaluator supports literals, immutable
+bindings, arithmetic/bitwise/comparison/logical expressions, recursive `constexpr` calls
+(depth limit: 128), local `let` bindings, returns, and compile-time `if` branches.
 
-Closure *types* omit the old `fn` prefix: `(i32, string) -> bool`. Lambda
-expressions keep `fn`, for example `fn(x: i32) -> i32 { return x + 1; }`.
+Closure *types* omit the old `fn` prefix: `(i32, string) -> bool`. Lambda expressions keep
+`fn`, for example `fn(x: i32) -> i32 { return x + 1; }`.
 
 Reflection queries are compile-time built-ins. They take either a type argument
-(`query::<Point>()`) or, where applicable, a value (`type_of(point)`). Their
-results are normal compile-time strings, integers, or booleans:
+(`query::<Point>()`) or, where applicable, a value (`type_of(point)`). Their results are
+normal compile-time strings, integers, or booleans:
 
 | Query | Result |
 | --- | --- |
@@ -42,13 +40,12 @@ results are normal compile-time strings, integers, or booleans:
 | `type_variant_count::<T>()` | Enum variant count |
 | `type_variant_name::<T>(index)` / `type_variant_field_count::<T>(index)` | Enum-variant metadata |
 
-The compiler emits diagnostics for non-constant `const` initializers, invalid
-reflection targets, and out-of-range reflection indexes.
+The compiler emits diagnostics for non-constant `const` initializers, invalid reflection
+targets, and out-of-range reflection indexes.
 
 ## Named constraints
 
-`constraint` declares a C++-concept-style named compile-time boolean predicate
-over types:
+`constraint` declares a C++-concept-style named compile-time boolean predicate over types:
 
 ```luna
 constraint SmallValue<T> =
@@ -62,12 +59,11 @@ fn keep<T>(value: T) -> T where PlainSmallValue<T> {
 }
 ```
 
-Constraints may compose other constraints and use boolean, comparison, and
-compile-time type-reflection operations. They are substituted and evaluated at
-generic instantiation sites. A false predicate rejects the instantiation at
-the `where` boundary; a predicate that cannot be evaluated is also a compile
-error. Constraint declarations are discharged before MoonIR and have no
-runtime representation or fallback check.
+Constraints may compose other constraints and use boolean, comparison, and compile-time
+type-reflection operations. They are substituted and evaluated at generic instantiation
+sites. A false predicate rejects the instantiation at the `where` boundary; a predicate
+that cannot be evaluated is also a compile error. Constraint declarations are discharged
+before MoonIR and have no runtime representation or fallback check.
 
 Trait bounds and constraints are intentionally distinct:
 
@@ -76,10 +72,9 @@ fn first<T>(value: T) -> T where T: Sequence { return value; }
 fn second<T>(value: T) -> T where SmallValue<T> { return value; }
 ```
 
-The first asks for an implemented behavior; the second asks the compiler to
-prove a named proposition. C++-style `requires` expressions that test whether
-arbitrary source expressions are well formed are not part of this initial
-constraint release.
+The first asks for an implemented behavior; the second asks the compiler to prove a named
+proposition. C++-style `requires` expressions that test whether arbitrary source expressions
+are well formed are not part of this initial constraint release.
 
 ## Static declaration reflection
 
@@ -92,6 +87,6 @@ print(declaration_signature(known));
 ```
 
 The optional callable type disambiguates ordinary overloads. The resulting
-`declaration_ref<T>` exists only during compilation and is erased after its
-static queries are folded. If name and signature still leave an open
-declaration family, use a static selector instead.
+`declaration_ref<T>` exists only during compilation and is erased after its static queries
+are folded. If name and signature still leave an open declaration family, use a static selector
+instead.

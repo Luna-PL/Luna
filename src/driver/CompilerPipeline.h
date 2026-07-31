@@ -6,6 +6,8 @@
 #include <string>
 #include <vector>
 
+struct Program;
+
 namespace luna::driver {
 
 struct CompilerPipelineOptions {
@@ -18,6 +20,9 @@ struct CompilerPipelineOptions {
 class CompilerPipeline {
 public:
     bool compileToMoonIR(const CompilerPipelineOptions& options);
+    bool compileSourceToMoonIR(
+        const std::string& source, const std::string& virtualPath,
+        const CompilerPipelineOptions& options = {});
     bool generateCode(LunaGpuTargetConfig gpuTargets);
 
     const moon::Module& moonModule() const;
@@ -27,6 +32,10 @@ public:
     const std::string& errorStage() const;
 
 private:
+    bool compileProgram(
+        Program* program, const CompilerPipelineOptions& options,
+        std::string moduleName);
+    void reset(const CompilerPipelineOptions& options);
     bool fail(const std::vector<std::string>& errors,
               std::string stage = {});
 

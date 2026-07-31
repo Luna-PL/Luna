@@ -1,0 +1,267 @@
+name: Prebuilt release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing v-prefixed tag to package and publish
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    env:
+      LUNA_CXX: clang++-22
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Install release toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates cmake curl lsb-release ninja-build patchelf wget
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22 all
+          rm llvm.sh
+
+      - name: Verify version and configure
+        run: |
+          version="$(cat VERSION)"
+          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          test "$tag" = "v$version"
+          cmake -S . -B build-release -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=clang-22 \
+            -DCMAKE_CXX_COMPILER=clang++-22 \
+            -DLUNA_STRICT_WARNINGS=ON \
+            -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm
+
+      - name: Build and test
+        run: |
+          cmake --build build-release --parallel --verbose
+          export PATH="/usr/lib/llvm-22/bin:$PATH"
+          ctest --test-dir build-release -LE hardware --output-on-failure
+
+      - name: Stage Linux x86_64 archive
+        run: |
+          version="$(cat VERSION)"
+          package="luna-$version-linux-x86_64"
+          cmake --install build-release --prefix "$PWD/stage/$package"
+          llvm_library="$(ldd "stage/$package/bin/luna" | awk '/libLLVM/{print $3; exit}')"
+          test -n "$llvm_library"
+          cp -L "$llvm_library" "stage/$package/lib/"
+          patchelf --set-rpath '$ORIGIN/../lib' "stage/$package/bin/luna"
+          {
+            echo "Luna $version prebuilt Alpha package"
+            echo "Target: Ubuntu 24.04 x86_64 (glibc)"
+            echo "Bundled compiler dependency: $(basename "$llvm_library")"
+            echo "AOT requirement: a compatible LLVM 22 clang++ linker driver"
+            echo "Support scope: JIT/check are packaged; CUDA/ROCm require host drivers and runtimes"
+            echo "Source commit: $GITHUB_SHA"
+          } > "stage/$package/RELEASE-MANIFEST.txt"
+          mkdir -p dist
+          (
+            cd stage
+            cmake -E tar czf "../dist/$package.tar.gz" --format=gnutar \
+              "$package"
+          )
+          (
+            cd dist
+            sha256sum "$package.tar.gz" > "$package.tar.gz.sha256"
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-linux
+          path: dist/*
+          if-no-files-found: error
+
+  macos:
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Install release toolchain
+        run: brew install cmake dylibbundler ninja llvm
+
+      - name: Verify version and configure
+        shell: bash
+        run: |
+          version="$(cat VERSION)"
+          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          test "$tag" = "v$version"
+          llvm_prefix="$(brew --prefix llvm)"
+          cmake -S . -B build-release -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER="$llvm_prefix/bin/clang" \
+            -DCMAKE_CXX_COMPILER="$llvm_prefix/bin/clang++" \
+            -DLUNA_STRICT_WARNINGS=ON \
+            -DLLVM_DIR="$llvm_prefix/lib/cmake/llvm"
+
+      - name: Build and test
+        shell: bash
+        run: |
+          cmake --build build-release --parallel --verbose
+          llvm_prefix="$(brew --prefix llvm)"
+          export LUNA_CXX="$llvm_prefix/bin/clang++"
+          export PATH="$llvm_prefix/bin:$PATH"
+          ctest --test-dir build-release -LE hardware --output-on-failure
+
+      - name: Stage macOS archive
+        shell: bash
+        run: |
+          version="$(cat VERSION)"
+          architecture="$(uname -m)"
+          package="luna-$version-macos-$architecture"
+          cmake --install build-release --prefix "$PWD/stage/$package"
+          llvm_library="$(otool -L "stage/$package/bin/luna" | awk '/libLLVM.*dylib/{print $1; exit}')"
+          test -n "$llvm_library"
+          llvm_name="$(basename "$llvm_library")"
+          dylibbundler -od -b \
+            -x "stage/$package/bin/luna" \
+            -d "stage/$package/lib" \
+            -p "@executable_path/../lib/"
+          find "stage/$package/lib" -type f -name '*.dylib' \
+            -exec codesign --force --sign - {} \;
+          codesign --force --sign - "stage/$package/bin/luna"
+          {
+            echo "Luna $version prebuilt Alpha package"
+            echo "Target: macOS 14 $architecture"
+            echo "Bundled compiler dependency: $llvm_name and its non-system dylib closure"
+            echo "AOT requirement: a compatible Homebrew LLVM clang++ linker driver"
+            echo "Support scope: JIT/check are packaged; CUDA/ROCm require host drivers and runtimes"
+            echo "Source commit: $GITHUB_SHA"
+          } > "stage/$package/RELEASE-MANIFEST.txt"
+          mkdir -p dist
+          (
+            cd stage
+            cmake -E tar czf "../dist/$package.tar.gz" --format=gnutar \
+              "$package"
+          )
+          (
+            cd dist
+            shasum -a 256 "$package.tar.gz" > "$package.tar.gz.sha256"
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-macos
+          path: dist/*
+          if-no-files-found: error
+
+  windows:
+    runs-on: windows-2022
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Install UCRT64 release toolchain
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          path-type: inherit
+          install: >-
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-llvm
+            mingw-w64-ucrt-x86_64-clang
+
+      - name: Verify version and configure
+        run: |
+          version="$(cat VERSION)"
+          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          test "$tag" = "v$version"
+          cmake -S . -B build-release -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=/ucrt64/bin/clang.exe \
+            -DCMAKE_CXX_COMPILER=/ucrt64/bin/clang++.exe \
+            -DLUNA_STRICT_WARNINGS=ON \
+            -DLLVM_DIR=/ucrt64/lib/cmake/llvm
+
+      - name: Build and test
+        run: |
+          export PATH="/ucrt64/bin:$PATH"
+          export LUNA_CXX=/ucrt64/bin/clang++.exe
+          cmake --build build-release --parallel --verbose
+          ctest --test-dir build-release -LE hardware --output-on-failure
+
+      - name: Stage Windows UCRT64 archive
+        run: |
+          version="$(cat VERSION)"
+          package="luna-$version-windows-ucrt64-x86_64"
+          cmake --install build-release --prefix "$PWD/stage/$package"
+          ldd "stage/$package/bin/luna.exe" \
+            | awk '/=> \\/ucrt64\\// {print $3} /^\\/ucrt64\\// {print $1}' \
+            | sort -u > runtime-dlls.txt
+          while IFS= read -r library; do
+            test -f "$library" && cp -L "$library" "stage/$package/bin/"
+          done < runtime-dlls.txt
+          {
+            echo "Luna $version prebuilt Alpha package"
+            echo "Target: Windows x86_64, MSYS2 UCRT64"
+            echo "Bundled compiler dependencies: UCRT64 DLL closure reported by ldd"
+            echo "AOT requirement: a compatible MSYS2 UCRT64 LLVM clang++ linker driver"
+            echo "Support scope: JIT/check are packaged; CUDA/ROCm require host drivers and runtimes"
+            echo "Source commit: $GITHUB_SHA"
+          } > "stage/$package/RELEASE-MANIFEST.txt"
+          mkdir -p dist
+          (
+            cd stage
+            cmake -E tar cf "../dist/$package.zip" --format=zip "$package"
+          )
+          (
+            cd dist
+            sha256sum "$package.zip" > "$package.zip.sha256"
+          )
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-windows
+          path: dist/*
+          if-no-files-found: error
+
+  publish:
+    needs: [linux, macos, windows]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          path: dist
+          merge-multiple: true
+
+      - name: Publish prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version="$(cat VERSION)"
+          tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
+          test "$tag" = "v$version"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            echo "release $tag already exists; tagged releases are immutable"
+            exit 1
+          fi
+          gh release create "$tag" dist/* \
+            --prerelease \
+            --title "Luna $version" \
+            --generate-notes

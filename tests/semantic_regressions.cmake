@@ -134,6 +134,7 @@ expect_success("comparison operators" "tests/fixtures/comparison_operators.luna"
 expect_success_without("logical short-circuit" "tests/fixtures/logical_short_circuit.luna" "Program exited with code: 42" "99")
 expect_success("signature and auto inference" "examples/inference.luna" "Program exited with code: 42")
 expect_success("generic monomorphization" "examples/generic.luna" "Program exited with code: 99")
+expect_success("generic body cloning" "tests/fixtures/generic_body_cloning.luna" "Program exited with code: 42")
 expect_success("compile-time reflection" "examples/compile_time.luna" "Program exited with code: 46")
 expect_success("structural type equivalence" "tests/fixtures/structural_type_equivalence.luna" "Program exited with code: 41")
 expect_success("type domains and stable identity reflection" "tests/fixtures/type_domains_reflection.luna" "Program exited with code: 42")

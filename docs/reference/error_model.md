@@ -1,27 +1,29 @@
-# Luna 0.2 Alpha 错误模型契约
+# Luna 0.2 Alpha Error-Model Contract
 
-> 文档类别：语言契约与状态参考
-> 适用版本：Luna 0.2.0-alpha
-> 状态：核心语义 Frozen for Alpha；adapter/API 部分 Implemented Experimental 或 Planned
-> 规范性：核心语义规范；状态表中的内部布局和计划能力非规范
-> 首次实现核对：`d0ab31c`（2026-07-31）
+> Document category: language contract and status reference
+> Applies to: Luna 0.2.0-alpha
+> Status: core semantics Frozen for Alpha; adapter/API portions are Implemented Experimental or Planned
+> Normative status: core semantics are normative; internal layout and planned capabilities in the status table are non-normative
+> Initial implementation audit: `d0ab31c` (2026-07-31)
 
-本文给出 0.2 Alpha 可以依赖的错误语义，并把尚未完成的标准库/外部 adapter 与
-核心模型分开。设计理由见[架构决策 D005/D006](../decisions.md)。
+This document defines the error semantics that 0.2 Alpha may rely on, separating unfinished
+standard-library/external adapters from the core model. See
+[architecture decisions D005/D006](../decisions.md) for rationale.
 
-## 1. 失败分类
+## 1. Failure categories
 
-Luna 只在本基线中定义两类失败：
+This baseline defines only two kinds of failure:
 
-- 可恢复失败：普通值 `Result<T, E>`；
-- 不可恢复进程失败：`panic(message)`。
+- recoverable failure: an ordinary `Result<T, E>` value;
+- non-recoverable process failure: `panic(message)`.
 
-错误处理不引入异常展开、隐式 handler、effect row、运行时错误类型注册表或全局
-`Error` 基类。fragment/slot 是独立的结构化控制模型；错误不会隐式穿过该边界。
+Error handling does not introduce exception unwinding, implicit handlers, effect rows, a
+runtime error-type registry, or a global `Error` base class. Fragments and slots are a
+separate structured-control model; errors do not cross that boundary implicitly.
 
 ## 2. `Result<T, E>`
 
-`Result<T, E>` 是 Value 域、结构身份的编译器内置 tagged union：
+`Result<T, E>` is a Value-domain, structural-identity compiler builtin tagged union:
 
 ```luna
 Ok(value)
@@ -30,81 +32,87 @@ Ok::<T, E>(value)
 Err::<T, E>(error)
 ```
 
-当前还提供 `is_ok`、`is_err`、`unwrap`、`unwrap_err` 和穷尽 `match`。这些名称是
-0.2 Alpha 表面，不代表所有 helper 永久保留为编译器 builtin。
+The current surface also provides `is_ok`, `is_err`, `unwrap`, `unwrap_err`, and
+exhaustive `match`. These names are part of the 0.2 Alpha surface, not a promise that
+every helper remains a compiler builtin forever.
 
-语言契约是：
+The contract is:
 
-- 结果只拥有当前 tag 对应的载荷；
-- usage 是 `T` 和 `E` usage 的上确界；
-- Copy Result 可以普通匹配；
-- move-only Result 必须使用 `match move` 才能转移载荷；
-- 清理必须先读取 tag，并且只清理活动载荷一次；
-- `unwrap`/`unwrap_err` 的 variant 不匹配属于 panic，不是常规错误恢复。
+- a result owns only the payload selected by its current tag;
+- usage is the upper bound of the usage of `T` and `E`;
+- a Copy Result may be matched normally;
+- a move-only Result requires `match move` to transfer its payload;
+- cleanup must read the tag and clean only the active payload once;
+- a mismatched `unwrap`/`unwrap_err` variant is a panic, not recoverable failure.
 
-当前 inline ADT v1 布局是编译器/MoonIR Alpha ABI，不是 C FFI 或永久跨版本 ABI。
+The current inline ADT v1 layout is compiler/MoonIR Alpha ABI, not C FFI or permanent
+cross-version ABI.
 
 ## 3. `?`
 
-`value?` 必须满足：
+`value?` requires:
 
-1. `value` 为 `Result<T, E>`；
-2. 当前普通函数返回 `Result<U, F>`；
-3. `E == F`，或存在唯一的直接 `impl From<E> for F`。
+1. `value` is `Result<T, E>`;
+2. the current ordinary function returns `Result<U, F>`;
+3. `E == F`, or there is one unique direct `impl From<E> for F`.
 
-成功路径产生 `T`。错误路径必须：
+The success path produces `T`. The error path must:
 
-1. 取得活动的 `E`；
-2. 执行当前作用域与显式 `return` 相同的清理；
-3. 必要时调用已静态选择的 `From::from`；
-4. 按外层 `Result<U, F>` 重新构造 `Err`；
-5. 返回当前函数。
+1. obtain the active `E`;
+2. perform the same cleanup as explicit `return` for the current scope;
+3. invoke the statically selected `From::from`, if needed;
+4. construct `Err` in the outer `Result<U, F>`;
+5. return from the current function.
 
-不得因为两个 Result 看起来具有相同位表示而复用内层容器。不得在运行时搜索转换，
-也不得自动搜索多跳转换链。
+An inner container must not be reused because two Results appear to have the same bit
+representation. Conversion must not be searched at runtime, and multi-hop conversion chains
+must not be found automatically.
 
-`?` 当前不得用于 fragment。fragment 的 `return`/`abort` 与宿主函数的返回和清理
-所有者不同，必须显式匹配 Result 后选择 fragment 控制行为。
+`?` currently cannot be used in fragments. Fragment `return`/`abort` and host-function
+return/cleanup ownership differ; code must explicitly match Result and choose fragment
+control behavior.
 
 ## 4. `From<Source>`
 
-冻结原则是“转换静态、唯一、可审计”。0.2 当前实现进一步限制为：
+The frozen principle is “static, unique, auditable conversion.” The current 0.2
+implementation restricts it further:
 
-- Source/Target 都是具体类型；
-- 只有一个非泛型 `from(Source) -> Target`；
-- 只做一跳精确 TypeId 查找；
-- move-only Source 必须通过拥有参数接收；
-- coherence/orphan 要求 impl package 拥有 trait、Source 或 Target 中相应的合法
-  身份边界。
+- Source and Target are concrete types;
+- there is one non-generic `from(Source) -> Target`;
+- lookup is one-hop and exact by TypeId;
+- a move-only Source must be received by an owning parameter;
+- coherence/orphan rules require the impl package to own the trait, Source, or Target at
+  the relevant legal identity boundary.
 
-泛型 `From` 和额外显式调用语法仍是实验性后续工作。它们可以扩展表面，但不得把
-转换改成隐式运行时分派。
+Generic `From` and additional explicit-call syntax remain experimental follow-up work. They
+may extend the surface, but must not turn conversion into implicit runtime dispatch.
 
-## 5. `panic` 与 `never`
+## 5. `panic` and `never`
 
-0.2 Alpha 的 `panic(message)`：
+In 0.2 Alpha, `panic(message)`:
 
-- 接受 `string` 或 `cstr`；
-- 向 Runtime stderr console 写入诊断并 flush；
-- 调用进程 abort；
-- 产生 `never`，LLVM 终点为 `unreachable`；
-- 不展开语言栈，也不保证运行局部 Drop。
+- accepts `string` or `cstr`;
+- writes a diagnostic to the Runtime stderr console and flushes;
+- aborts the process;
+- produces `never`, with an LLVM `unreachable` terminator;
+- does not unwind the language stack or guarantee local Drop during unwinding.
 
-需要可预测资源释放的失败必须使用 `Result`。未来可以在新的 task/runtime 边界增加
-隔离策略，但不得把当前进程 abort 静默改成异常展开或可恢复控制转移。
+Failures requiring predictable resource cleanup must use `Result`. A future task/runtime
+boundary may add isolation, but the current process abort must not silently become exception
+unwinding or recoverable control transfer.
 
-## 6. 标准错误分层
+## 6. Standard error layers
 
-Core/Std 不定义吞掉所有信息的单一错误枚举：
+Core/Std do not define one information-destroying universal error enum:
 
-- Core：参数、边界、UTF、布局、分配等 host-independent 值错误；
-- Std：I/O、路径、网络等 host 错误；
-- 边界：FFI、Runtime、GPU 和插件错误。
+- Core: host-independent value errors such as arguments, bounds, UTF, layout, and allocation;
+- Std: host errors such as I/O, paths, and networking;
+- boundary: FFI, Runtime, GPU, and plugin errors.
 
-库 API 应返回最窄的具体错误。应用可定义自己的聚合 enum，并用精确静态 `From`
-接入 `?`。
+Library APIs should return the narrowest concrete error. Applications may define an aggregate
+enum and connect it to `?` using precise static `From`.
 
-`org.luna.core` 当前已物化：
+`org.luna.core` currently materializes:
 
 - `ErrorCode`
 - `InvalidArgumentError`
@@ -113,44 +121,46 @@ Core/Std 不定义吞掉所有信息的单一错误枚举：
 - `LayoutError`
 - `AllocError`
 
-它们是标准库声明的名义 enum，不是新的 `TypeKind`。variant 顺序在 0.2 inline ADT
-基线中固定；新增 variant 必须追加并记录兼容性影响。
+These are nominal enums declared by the standard library, not new `TypeKind` values.
+Variant order is fixed by the 0.2 inline ADT baseline; new variants must be appended and
+their compatibility impact recorded.
 
-## 7. C/Runtime 边界
+## 7. C/Runtime boundary
 
-Luna `Result`、enum、`string`、`rc` 和 `arc` 不得直接作为当前 C ABI 类型。安全
-adapter 应：
+Luna `Result`, enums, `string`, `rc`, and `arc` must not be current C ABI types.
+A safe adapter should:
 
-1. 调用 raw C/Runtime API；
-2. 在状态被覆盖前捕获 status/errno；
-3. 保存稳定 domain/code；
-4. 必要时复制诊断文本；
-5. 返回普通 Luna `Result<T, BoundaryError>`。
+1. call the raw C/Runtime API;
+2. capture status/errno before it is overwritten;
+3. save stable domain/code fields;
+4. copy diagnostic text when needed;
+5. return an ordinary Luna `Result<T, BoundaryError>`.
 
-Runtime ABI v1 已提供 caller-owned `domain/code/message` 快照。机器控制必须使用
-domain/code；message 只是可选诊断，分配失败时可以省略。旧 `last_error` 借用指针
-只用于兼容，不得存入长期错误值。
+Runtime ABI v1 provides a caller-owned `domain/code/message` snapshot. Machine control must
+use domain/code; message is optional diagnostic text and may be omitted if allocation
+fails. The legacy borrowed `last_error` pointer is compatibility-only and must not be stored
+in a long-lived error value.
 
-## 8. 状态矩阵
+## 8. Status matrix
 
-| 能力 | 状态 | 承诺 |
+| Capability | Status | Commitment |
 |---|---|---|
-| `Result<T, E>` 语义 | Frozen for Alpha | 普通值、活动载荷、usage/cleanup 规则 |
-| `Ok`/`Err`/match | Frozen for Alpha | 当前构造和穷尽匹配行为 |
-| `?` 清理后传播 | Frozen for Alpha | 静态直接转换，不跨 fragment |
-| `panic` 进程 abort | Frozen for Alpha | 0.2 内不展开栈 |
-| `never` bottom type | Frozen for Alpha | 发散表达式可满足普通值位置 |
-| 具体 `From` | Implemented Experimental | 一跳、非泛型、唯一静态 impl |
-| Result inline ADT v1 | Internal Alpha ABI | 编译器/MoonIR 内部，不是 C ABI |
-| Core 值错误 | Implemented Experimental | 名义 enum，variant 顺序受 0.2 约束 |
-| Runtime 快照 ABI v1 | Frozen ABI v1 | C-compatible status/domain/code/message snapshot |
-| Luna Runtime/FFI adapter | Planned | 尚未作为完整语言层 API 交付 |
-| 错误 source 链 | Planned | 不要求全局装箱或动态基类 |
-| task-local panic/capture | Planned | 不属于 0.2 语义 |
+| `Result<T, E>` semantics | Frozen for Alpha | Ordinary values, active payload, usage/cleanup rules |
+| `Ok`/`Err`/match | Frozen for Alpha | Current construction and exhaustive matching |
+| `?` propagation after cleanup | Frozen for Alpha | Static direct conversion; not across fragments |
+| `panic` process abort | Frozen for Alpha | No unwinding in 0.2 |
+| `never` bottom type | Frozen for Alpha | Diverging expressions satisfy ordinary value positions |
+| Concrete `From` | Implemented Experimental | One-hop, non-generic, unique static impl |
+| Result inline ADT v1 | Internal Alpha ABI | Compiler/MoonIR internal; not C ABI |
+| Core value errors | Implemented Experimental | Nominal enums; variant order constrained by 0.2 |
+| Runtime snapshot ABI v1 | Frozen ABI v1 | C-compatible status/domain/code/message snapshot |
+| Luna Runtime/FFI adapter | Planned | Not yet delivered as a complete language-layer API |
+| Error source chain | Planned | No requirement for global boxing or dynamic base class |
+| Task-local panic/capture | Planned | Outside 0.2 semantics |
 
-## 9. 回归证据
+## 9. Regression evidence
 
-当前模型由以下回归覆盖：
+The current model is covered by:
 
 - `tests/result_error_aot.cmake`
 - `tests/result_extended_aot.cmake`
@@ -161,28 +171,30 @@ domain/code；message 只是可选诊断，分配失败时可以省略。旧 `la
 - `tests/runtime_gpu_error_test.cpp`
 - `tests/jit_aot_extended_parity.cmake`
 
-新增错误能力必须同时覆盖成功、失败、move-only 清理、JIT/AOT 一致性和外部 ABI
-边界；只增加语法正例不满足契约要求。
+New error capabilities must cover success, failure, move-only cleanup, JIT/AOT parity, and
+external ABI boundaries. Adding only a syntax-positive test is insufficient.
 
-## 10. 编译器诊断编号
+## 10. Compiler diagnostic codes
 
-诊断采用 `error[阶段/编号]`，例如：
+Diagnostics use `error[stage/code]`, for example:
 
 ```text
 error[ownership/OWN0001]: use after move of 'buffer'
 ```
 
-编号可用于编辑器、CI 和文档检索；消息、源码片段和 `help:` 可以继续改进。
+Codes support editors, CI, and documentation lookup; messages, source snippets, and
+`help:` text may continue to improve.
 
-| 前缀 | 阶段 | 代表性编号 |
+| Prefix | Stage | Representative codes |
 |---|---|---|
-| `LEX` | 词法 | `LEX0001`：非法字符 |
-| `PAR` | 解析 | `PAR0001`：缺少期望的语法元素 |
-| `PKG` | 包加载 | `PKG0001`：输入不可读；`PKG0003`：包名不一致 |
-| `SEM` | 类型/语义 | `SEM0001`：未定义名称；`SEM0002`：类型约束；`SEM0003`：缺失返回；`SEM0101`：C ABI |
-| `TRT` | trait | `TRT0001`：trait 约束错误 |
-| `OWN` | 所有权 | `OWN0001`：move 后使用；`OWN0002`：free 后使用；`OWN0003`：借用冲突；`OWN0004`：linear 未消费；`OWN0101`：GPU in-flight；`OWN0201`：控制流状态不一致 |
-| `CGN` | 代码生成 | `CGN0001`：无效宿主 IR；`CGN0101`：CUDA；`CGN0102`：ROCm |
-| `DRV` | 驱动/AOT | `DRV0001`：runtime 缺失；`DRV0002`：native linker 失败 |
+| `LEX` | Lexing | `LEX0001`: invalid character |
+| `PAR` | Parsing | `PAR0001`: missing expected syntax element |
+| `PKG` | Package loading | `PKG0001`: unreadable input; `PKG0003`: package-name mismatch |
+| `SEM` | Type/semantic analysis | `SEM0001`: undefined name; `SEM0002`: type constraint; `SEM0003`: missing return; `SEM0101`: C ABI |
+| `TRT` | Trait | `TRT0001`: trait constraint error |
+| `OWN` | Ownership | `OWN0001`: use after move; `OWN0002`: use after free; `OWN0003`: borrow conflict; `OWN0004`: linear value not consumed; `OWN0101`: GPU in-flight; `OWN0201`: control-flow state mismatch |
+| `CGN` | Code generation | `CGN0001`: invalid host IR; `CGN0101`: CUDA; `CGN0102`: ROCm |
+| `DRV` | Driver/AOT | `DRV0001`: runtime missing; `DRV0002`: native linker failure |
 
-每个阶段的 `9999` 是通用兜底码。新增公开细分类必须同时添加回归并更新本表。
+Each stage's `9999` is a generic fallback code. New public subcodes must add regressions
+and update this table.

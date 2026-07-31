@@ -53,6 +53,7 @@ add_executable(luna
     src/driver/CommandLine.cpp
     src/driver/CompilerPipeline.cpp
     src/driver/Driver.cpp
+    src/driver/Repl.cpp
     src/core/TypeRelations.cpp
     src/core/TypeLayout.cpp
     src/lexer/Lexer.cpp
@@ -151,22 +152,6 @@ endif()
 # export every compiler symbol merely to make in-process JIT work: that policy
 # is unreliable on Windows and unnecessarily enlarges the host symbol surface.
 
-# Keep a build-tree compatibility name for existing Alpha scripts.  The
-# installed and documented driver is `luna`; the old `llvm-demo` name is not
-# part of the new project identity.
-if(WIN32)
-    add_custom_command(TARGET luna POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "$<TARGET_FILE:luna>" "$<TARGET_FILE_DIR:luna>/llvm-demo$<TARGET_FILE_SUFFIX:luna>"
-        VERBATIM)
-else()
-    add_custom_command(TARGET luna POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E rm -f "$<TARGET_FILE_DIR:luna>/llvm-demo"
-        COMMAND ${CMAKE_COMMAND} -E create_symlink
-            "$<TARGET_FILE:luna>" "$<TARGET_FILE_DIR:luna>/llvm-demo"
-        VERBATIM)
-endif()
-
 install(TARGETS luna runtime
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
@@ -191,6 +176,19 @@ if(BUILD_TESTING)
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/semantic_regressions.cmake
+    )
+    add_test(
+        NAME luna.repl-smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/repl_smoke.cmake
+    )
+    add_test(
+        NAME luna.file-guide-inventory
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/file_guide_inventory.cmake
     )
     add_test(
         NAME luna.package-export-abi

@@ -1,170 +1,176 @@
-# Luna 0.2 Alpha 内置类型清单
+# Luna 0.2 Alpha Builtin Type Inventory
 
-> 文档类别：Alpha 参考与实现状态矩阵
-> 适用版本：Luna 0.2.0-alpha
-> 状态：Active；各项稳定性见表格
-> 规范性：源码拼写、类型域和 usage 规则规范；布局数字为 Internal Alpha ABI
-> 首次实现核对：`d0ab31c`（2026-07-31）
+> Document category: Alpha reference and implementation-status matrix
+> Applies to: Luna 0.2.0-alpha
+> Status: Active; stability is labeled per table entry
+> Normative status: source spelling, type domains, and usage rules are normative; layout numbers are Internal Alpha ABI
+> Initial implementation audit: `d0ab31c` (2026-07-31)
 
-本文是当前类型清点的权威列表。它不把 `TypeKind` 等同于用户可见类型，并明确区分
-编译器内置、用户声明、标准库声明、Compiler recipe 和 Sema 内部状态。
+This is the authoritative inventory of current types. It does not equate `TypeKind` with
+user-visible types, and distinguishes compiler builtins, user declarations, standard-library
+declarations, Compiler recipes, and Sema-only state.
 
-## 1. 布局口径
+## 1. Layout convention
 
-下表中的大小/对齐来自当前 64 位编译器/MoonIR Alpha 布局引擎：
+Sizes and alignments below come from the current 64-bit compiler/MoonIR Alpha layout engine:
 
-- 它不是所有目标平台的永久承诺；
-- 它不是允许穿过 C ABI 的充分条件；
-- `type_size::<T>()` 当前使用这一口径；
-- `unit`/`never` 的值大小为 0，但对齐查询返回 1；
-- pointer-represented 不表示可以与任意 C 指针互换。
+- they are not a permanent promise for every target;
+- they are not sufficient for crossing the C ABI;
+- `type_size::<T>()` currently uses this convention;
+- `unit`/`never` have value size 0, while alignment queries return 1;
+- pointer-represented does not mean interchangeable with an arbitrary C pointer.
 
-## 2. 源码可见原子内置类型
+## 2. Source-visible atomic builtins
 
-| 拼写 | 域/身份 | 默认 usage | 当前大小/对齐 | 当前语义与状态 |
+| Spelling | Domain/identity | Default usage | Size/alignment | Current semantics and status |
 |---|---|---:|---:|---|
-| `i8` | Value/Builtin | Copy | 1/1 | 有符号 8 位整数；Frozen for Alpha |
-| `i16` | Value/Builtin | Copy | 2/2 | 有符号 16 位整数；Frozen for Alpha |
-| `i32` | Value/Builtin | Copy | 4/4 | 有符号 32 位整数；整数默认字面量；Frozen for Alpha |
-| `i64` | Value/Builtin | Copy | 8/8 | 有符号 64 位整数；Frozen for Alpha |
-| `u8` | Value/Builtin | Copy | 1/1 | 无符号 8 位整数；Frozen for Alpha |
-| `u16` | Value/Builtin | Copy | 2/2 | 无符号 16 位整数；Frozen for Alpha |
-| `u32` | Value/Builtin | Copy | 4/4 | 无符号 32 位整数；Frozen for Alpha |
-| `u64` | Value/Builtin | Copy | 8/8 | 无符号 64 位整数；Frozen for Alpha |
-| `usize` | Value/Builtin | Copy | 8/8 | 当前 64 位无符号大小类型；非 64 位策略未冻结 |
-| `isize` | Value/Builtin | Copy | 8/8 | 当前 64 位有符号大小类型；非 64 位策略未冻结 |
-| `f32` | Value/Builtin | Copy | 4/4 | IEEE 后端浮点表面；Frozen for Alpha |
-| `f64` | Value/Builtin | Copy | 8/8 | 浮点默认字面量；Frozen for Alpha |
-| `bool` | Value/Builtin | Copy | 1/1 | 条件与逻辑类型；当前不开放为 C FFI 类型 |
-| `string` | Value/Builtin | Affine | 8/8 | 拥有、pointer-represented 字符串；格式化 API 未冻结 |
-| `cstr` | Value/Builtin | Copy | 8/8 | C 风格字符串指针边界；不拥有目标字节 |
-| `unit` | Value/Builtin | Copy | 0/1 | 无有意义返回值；Frozen for Alpha |
-| `never` | Value/Builtin | Copy | 0/1 | 不可构造 bottom type；Frozen for Alpha |
-| `event` | Value/Builtin | Linear | 4/4 | launch 完成事件；必须 await/转移；异构表面 Experimental |
+| `i8` | Value/Builtin | Copy | 1/1 | Signed 8-bit integer; Frozen for Alpha |
+| `i16` | Value/Builtin | Copy | 2/2 | Signed 16-bit integer; Frozen for Alpha |
+| `i32` | Value/Builtin | Copy | 4/4 | Signed 32-bit integer and default integer literal; Frozen for Alpha |
+| `i64` | Value/Builtin | Copy | 8/8 | Signed 64-bit integer; Frozen for Alpha |
+| `u8` | Value/Builtin | Copy | 1/1 | Unsigned 8-bit integer; Frozen for Alpha |
+| `u16` | Value/Builtin | Copy | 2/2 | Unsigned 16-bit integer; Frozen for Alpha |
+| `u32` | Value/Builtin | Copy | 4/4 | Unsigned 32-bit integer; Frozen for Alpha |
+| `u64` | Value/Builtin | Copy | 8/8 | Unsigned 64-bit integer; Frozen for Alpha |
+| `usize` | Value/Builtin | Copy | 8/8 | Current 64-bit unsigned size type; non-64-bit policy is not frozen |
+| `isize` | Value/Builtin | Copy | 8/8 | Current 64-bit signed size type; non-64-bit policy is not frozen |
+| `f32` | Value/Builtin | Copy | 4/4 | IEEE backend floating-point surface; Frozen for Alpha |
+| `f64` | Value/Builtin | Copy | 8/8 | Default floating-point literal; Frozen for Alpha |
+| `bool` | Value/Builtin | Copy | 1/1 | Condition and logical type; not currently open as a C FFI type |
+| `string` | Value/Builtin | Affine | 8/8 | Owned, pointer-represented string; formatting API is not frozen |
+| `cstr` | Value/Builtin | Copy | 8/8 | C-style string-pointer boundary; does not own target bytes |
+| `unit` | Value/Builtin | Copy | 0/1 | No meaningful return value; Frozen for Alpha |
+| `never` | Value/Builtin | Copy | 0/1 | Unconstructible bottom type; Frozen for Alpha |
+| `event` | Value/Builtin | Linear | 4/4 | Launch-completion event; must be awaited/transferred; heterogeneous surface Experimental |
 
-`event` 虽可被类型解析器识别，正常值来源是 `launch`；用户不能构造一个有效设备
-事件常量。
+Although `event` is recognized by the type parser, normal values come from `launch`;
+users cannot construct a valid device-event constant.
 
-## 3. 源码可见类型构造器
+## 3. Source-visible type constructors
 
-| 拼写 | 域/身份 | 形成规则 | 默认 usage | 当前表示/状态 |
+| Spelling | Domain/identity | Formation | Default usage | Current representation/status |
 |---|---|---|---|---|
-| `raw<T>` | Value/Structural builtin constructor | 恰好一个 `T` | Copy，可由显式契约改为 Linear owner | 8 字节裸指针；FFI 支持 |
-| `&T` | Value/Structural | 一个 `T` | Copy handle；SharedBorrow relation | 8 字节；loan 受检查 |
-| `&mut T` | Value/Structural | 一个 `T` | Copy handle；MutableBorrow relation | 8 字节；独占 loan |
-| `rc<T>` | Value/Structural builtin constructor | 恰好一个 `T` | Affine | 8 字节引用计数句柄；`clone` 显式 retain |
-| `arc<T>` | Value/Structural builtin constructor | 恰好一个 `T` | Affine | 8 字节原子引用计数句柄；`clone` 显式 retain |
-| `array<T, N>` | Value/Structural | 一个 `T` 和非负编译期整数 `N` | 由 `T` 决定 | 内联 `N * size(T)`；Frozen core |
-| `slice<T>` | Value/Structural | 恰好一个 `T` | Copy handle + 来源 shared loan | 16 字节 `{data,length}`；当前只读 |
-| `Result<T, E>` | Value/Structural | 恰好两个载荷类型 | `join(usage(T), usage(E))` | inline ADT v1；核心语义 Frozen |
-| `device_buffer<T>` | Value/Structural builtin constructor | 恰好一个元素类型 | Linear | 8 字节句柄；当前操作只稳定支持 `i32` |
-| `(P...) -> R` | Value/Structural | 参数序列和返回类型 | Copy function value；contract 属于 shape | 8 字节代码/闭包入口表示；closure env 未冻结 |
-| `affine T` | 非独立类型 | 只用于 usage contract | Affine | TypeId 仍为 `T` |
-| `linear T` | 非独立类型 | 只用于 usage contract | Linear | TypeId 仍为 `T` |
+| `raw<T>` | Value/Structural builtin constructor | Exactly one `T` | Copy; explicit contract may make it a Linear owner | 8-byte raw pointer; FFI supported |
+| `&T` | Value/Structural | One `T` | Copy handle; SharedBorrow relation | 8 bytes; loan checked |
+| `&mut T` | Value/Structural | One `T` | Copy handle; MutableBorrow relation | 8 bytes; exclusive loan |
+| `rc<T>` | Value/Structural builtin constructor | Exactly one `T` | Affine | 8-byte reference-counted handle; `clone` explicitly retains |
+| `arc<T>` | Value/Structural builtin constructor | Exactly one `T` | Affine | 8-byte atomic reference-counted handle; `clone` explicitly retains |
+| `array<T, N>` | Value/Structural | One `T` and non-negative compile-time integer `N` | Derived from `T` | Inline `N * size(T)`; Frozen core |
+| `slice<T>` | Value/Structural | Exactly one `T` | Copy handle plus source shared loan | 16-byte `{data,length}`; currently read-only |
+| `Result<T, E>` | Value/Structural | Exactly two payload types | `join(usage(T), usage(E))` | Inline ADT v1; core semantics Frozen |
+| `device_buffer<T>` | Value/Structural builtin constructor | Exactly one element type | Linear | 8-byte handle; device operations currently stable mainly for `i32` |
+| `(P...) -> R` | Value/Structural | Parameter sequence and return type | Copy function value; contract is part of shape | 8-byte code/closure-entry representation; closure environment not frozen |
+| `affine T` | Not an independent type | Usage contract only | Affine | TypeId remains `T` |
+| `linear T` | Not an independent type | Usage contract only | Linear | TypeId remains `T` |
 
-当前 `raw<T>` 不携带 allocator domain。只有外部声明的 `linear raw<T>` 返回契约表达
-拥有义务；释放者匹配仍由 FFI 声明者负责。
+`raw<T>` does not carry an allocator domain. Only an externally declared
+`linear raw<T>` return contract expresses an ownership obligation; the FFI declarer
+remains responsible for matching release.
 
-## 4. 声明形成的类型
+## 4. Declaration-formed types
 
-| 来源 | 域/身份 | 默认 usage | 当前表示/状态 |
+| Source | Domain/identity | Default usage | Current representation/status |
 |---|---|---|---|
-| `struct` | Value/Structural | Affine | pointer-represented product；字段 shape 决定身份 |
-| `nominal struct` | Value/Nominal | Affine | pointer-represented；声明身份不可擦除 |
-| `enum` | Value/Structural | 载荷 usage 上确界 | inline ADT v1 |
-| `nominal enum` | Value/Nominal | 载荷 usage 上确界 | inline ADT v1 + 声明身份 |
-| `trait` | Compiler/Nominal | 不作为普通运行时值 | 静态解析行为契约 |
-| `meta` schema | Meta/MetaSchema | 编译期值 | 默认无普通运行时表示 |
-| type parameter/`Self` | Compiler/CompilerIntrinsic | 由实例化类型决定 | MoonIR 前必须实例化或合法保留为模板事实 |
-| slot type | Value/Structural control contract | 不作为普通 owning data；内部 handle 默认为 Copy | host-only、Once/Many 属于 shape |
-| fragment type | Value/Structural control contract | 不作为普通 owning data；内部 handle 默认为 Copy | host-only、interceptor/context 属于 shape |
+| `struct` | Value/Structural | Affine | Pointer-represented product; fields determine shape identity |
+| `nominal struct` | Value/Nominal | Affine | Pointer-represented; declaration identity cannot be erased |
+| `enum` | Value/Structural | Upper bound of payload usage | Inline ADT v1 |
+| `nominal enum` | Value/Nominal | Upper bound of payload usage | Inline ADT v1 plus declaration identity |
+| `trait` | Compiler/Nominal | Not an ordinary runtime value | Static resolution contract |
+| `meta` schema | Meta/MetaSchema | Compile-time value | No ordinary runtime representation by default |
+| type parameter/`Self` | Compiler/CompilerIntrinsic | Determined by instantiated type | Must be instantiated or legally retained as template fact before MoonIR |
+| slot type | Value/Structural control contract | Not ordinary owning data; internal handle defaults Copy | Host-only; Once/Many is part of shape |
+| fragment type | Value/Structural control contract | Not ordinary owning data; internal handle defaults Copy | Host-only; interceptor/context is part of shape |
 
-Product 的默认 Affine 来自其独占 heap 表示。结构相同的默认 struct 可以具有相同
-TypeId；名义 product 即使布局相同也不同。
+Default product Affine usage comes from its exclusive heap representation. Structs with equal
+shape may share a TypeId; nominal products remain distinct even with equal layout.
 
-## 5. 编译期可见的编译器内在类型
+## 5. Compiler intrinsic types visible at compile time
 
-| 拼写/内部名称 | 域/身份 | 用户可写 | 运行时 | 状态 |
+| Spelling/internal name | Domain/identity | User-writable | Runtime | Status |
 |---|---|---|---|---|
-| `metadata_view<M>` | Compiler/CompilerIntrinsic | 是，必须一个 Meta schema 参数 | 默认擦除 | Implemented Experimental |
-| `declaration_view<T>` | Compiler/CompilerIntrinsic | 是，0 或 1 个 callable 参数 | 默认擦除 | Implemented Experimental |
-| `declaration_ref<T>` | Compiler/CompilerIntrinsic | 是，0 或 1 个 callable 参数 | 默认擦除 | Implemented Experimental |
-| compiler Iterator recipe | Compiler/CompilerIntrinsic | 不能作为公开命名类型构造 | 不形成稳定 iterator ABI | Implemented Experimental |
-| anonymous `Record` | Value/Structural internal form | 当前无独立源码语法 | pointer-represented | Internal |
+| `metadata_view<M>` | Compiler/CompilerIntrinsic | Yes, one Meta schema argument required | Erased by default | Implemented Experimental |
+| `declaration_view<T>` | Compiler/CompilerIntrinsic | Yes, 0 or 1 callable argument | Erased by default | Implemented Experimental |
+| `declaration_ref<T>` | Compiler/CompilerIntrinsic | Yes, 0 or 1 callable argument | Erased by default | Implemented Experimental |
+| compiler Iterator recipe | Compiler/CompilerIntrinsic | Not a public named type constructor | No stable iterator ABI | Implemented Experimental |
+| anonymous `Record` | Value/Structural internal form | No separate source syntax currently | Pointer-represented | Internal |
 
-`declaration_view` 是集合式静态选择视图；`declaration_ref` 是已解析单一声明引用。
-两者都不是可以传给普通 FFI 或长期存储的反射对象。
+`declaration_view` is a set-valued static-selection view; `declaration_ref` is a
+resolved single-declaration reference. Neither is a reflection object suitable for ordinary
+FFI or long-term storage.
 
-## 6. 纯 Sema/MoonIR 前内部状态
+## 6. Sema/MoonIR-preparation internal state
 
-| 内部项 | 域/身份 | 含义 | MoonIR |
+| Internal item | Domain/identity | Meaning | MoonIR |
 |---|---|---|---|
-| `InferenceVar` | Inference/Inference | 尚未求解的约束变量 | 必须拒绝 |
-| `Unknown` | Error/Error | 诊断恢复占位 | 必须拒绝 |
-| 源码 `auto` | 不是类型 | 请求创建 InferenceVar | 不直接出现 |
+| `InferenceVar` | Inference/Inference | Unresolved constraint variable | Must reject |
+| `Unknown` | Error/Error | Diagnostic-recovery placeholder | Must reject |
+| Source `auto` | Not a type | Requests an InferenceVar | Does not appear directly |
 
-错误恢复时把缺失类型暂时写作 `i32` 只是为了继续报告更多诊断，不赋予错误程序
-有效的 `i32` 语义。
+Temporarily writing a missing type as `i32` during recovery only permits more diagnostics;
+it does not give the erroneous program valid semantics.
 
-## 7. 标准库声明类型
+## 7. Standard-library declaration types
 
-以下类型/trait 由 `org.luna.core` 声明，不是编译器内置类型身份：
+These types/traits are declared by `org.luna.core`; they do not have compiler-builtin
+type identity:
 
-| 名称 | 实际身份 | 编译器特殊协作 |
+| Name | Actual identity | Compiler cooperation |
 |---|---|---|
-| `option::Option<T>` | 名义 enum | `for` 协议验证唯一 Core Option variant |
-| Core error enums | 名义 enum | 使用通用 enum/Drop/匹配规则 |
-| `iter::Iterator<Item>` | 名义 trait | `for` 静态解析唯一 Core trait |
-| `IntoIterator<Item, Iter>` | 名义 trait | 隐式、唯一静态转换 |
-| `FromIterator<Item, Builder>` | 名义 trait | `collect` 静态 builder 协议 |
-| `Map/Filter/Take` | 名义 enum adapter | 可与编译器融合 recipe 对应 |
+| `option::Option<T>` | Nominal enum | `for` protocol verifies the unique Core Option variant |
+| Core error enums | Nominal enum | Use generic enum/Drop/matching rules |
+| `iter::Iterator<Item>` | Nominal trait | Unique Core trait for static `for` resolution |
+| `IntoIterator<Item, Iter>` | Nominal trait | Implicit, unique static conversion |
+| `FromIterator<Item, Builder>` | Nominal trait | Static builder protocol for `collect` |
+| `Map/Filter/Take` | Nominal enum adapters | May correspond to compiler fusion recipes |
 
-同形状、同方法名的用户 trait 不等于 Core trait。package/module/nominal identity 是
-协议选择的一部分。
+A user trait with the same shape and method names is not a Core trait. Package/module/nominal
+identity is part of protocol selection.
 
-## 8. 当前边界矩阵
+## 8. Current boundary matrix
 
-| 类别 | 普通 host | C FFI | kernel | constexpr/反射 |
+| Category | Ordinary host | C FFI | Kernel | Constexpr/reflection |
 |---|---:|---:|---:|---:|
-| integers/floats | 是 | 是 | 受支持标量 | 是 |
-| `bool` | 是 | 否 | 结构化条件 | 是 |
-| `string` | 是 | 否 | 否 | 字面量/编译期字符串 |
-| `cstr` | 是 | 是 | 否 | 有限 |
-| `raw<T>` | 是 | 是 | 不作为安全 device memory | 有限 |
-| references | 是 | 仅受支持标量引用 | buffer borrow | 作为类型可反射 |
-| product/enum/Result | 是 | 否 | 当前否 | 类型反射 |
-| array/slice | 是 | 否 | 当前 kernel ABI 否 | 类型/常量信息 |
-| rc/arc | 是 | 否 | 否 | 只反射类型 |
-| device buffer/event | 是 | 否 | 通过专用 ABI | 否 |
-| Meta/Compiler views | 编译期 | 否 | 否 | 是 |
+| integers/floats | Yes | Yes | Supported scalars | Yes |
+| `bool` | Yes | No | Structured conditions | Yes |
+| `string` | Yes | No | No | Literal/compile-time string |
+| `cstr` | Yes | Yes | No | Limited |
+| `raw<T>` | Yes | Yes | Not safe device memory | Limited |
+| references | Yes | Supported scalar references only | Buffer borrow | Reflectable as a type |
+| product/enum/Result | Yes | No | Currently no | Type reflection |
+| array/slice | Yes | No | Current kernel ABI no | Type/constant information |
+| rc/arc | Yes | No | No | Type reflection only |
+| device buffer/event | Yes | No | Dedicated ABI | No |
+| Meta/Compiler views | Compile time | No | No | Yes |
 
-本矩阵描述 0.2 当前允许集合，不暗示未来永远拒绝某类边界。
+This matrix describes the set allowed in 0.2; it does not promise that future versions will
+always reject a category at a given boundary.
 
-## 9. 已知缺口
+## 9. Known gaps
 
-- 内置类型尚未由集中 registry 驱动，Parser/Sema/布局/边界集合可能发生漂移；
-- `usize/isize` 的目标相关语义尚未与非 64 位平台冻结；
-- 整数常量按参数宽度生成时缺少完整范围诊断；
-- 高于 8 字节对齐的 inline ADT 载荷策略未冻结；
-- closure environment 和跨函数 Iterator adapter Drop 布局尚未交付；
-- `string` 的公开格式化、编码和标准库 API 尚未冻结；
-- `device_buffer<T>` 的类型构造已泛化，但当前设备操作仍主要固定为 `i32`；
-- callable ownership shape 需要更完整的赋值/统一负例矩阵。
-- 参数化 Value 容器对 Meta/Compiler 类型实参的统一 well-formedness 拒绝矩阵仍需
-  补齐。
+- builtin types are not yet driven by a centralized registry, so Parser/Sema/layout/boundary sets may drift;
+- target-dependent `usize/isize` semantics are not frozen beyond the 64-bit model;
+- integer-constant width selection lacks complete range diagnostics;
+- inline ADT payload strategy above 8-byte alignment is not frozen;
+- closure environment and cross-function Iterator-adapter Drop layout are not delivered;
+- public formatting, encoding, and standard-library APIs for `string` are not frozen;
+- `device_buffer<T>` formation is generic, but current device operations remain mainly fixed to `i32`;
+- callable ownership shape needs a fuller assignment/unification negative matrix;
+- unified well-formedness rejection for Meta/Compiler arguments in parameterized Value
+  containers still needs to be completed.
 
-这些缺口必须作为实现或规范工作处理，不能通过从清单中删除对应类型来隐藏。
+These gaps must be handled as implementation or specification work; they must not be hidden
+by removing the affected type from the inventory.
 
-## 10. 证据入口
+## 10. Evidence entry points
 
-- 类型身份：`tests/fixtures/type_relations.luna`
-- 类型域：`tests/fixtures/type_domains_reflection.luna`
-- 结构/名义关系：`tests/fixtures/structural_*.luna`
-- 所有权：`tests/fixtures/ownership_*.luna`
-- array/slice：`tests/fixtures/safe_arrays.luna`、`slice_*.luna`
-- Result/enum：`tests/fixtures/result_*.luna`、`enum_match*.luna`
-- rc/arc：`tests/fixtures/rc_arc.luna`
-- FFI：`tests/ffi_aot.cmake`
-- kernel/event：`tests/gpu_target_split.cmake`、`tests/moon_cost_boundaries.cmake`
-- Core 类型：`tests/core_surface.cmake`
-- MoonIR 类型拒绝：`tests/semantic_regressions.cmake` 和 Verifier 回归
+- type identity: `tests/fixtures/type_relations.luna`
+- type domains: `tests/fixtures/type_domains_reflection.luna`
+- structural/nominal relations: `tests/fixtures/structural_*.luna`
+- ownership: `tests/fixtures/ownership_*.luna`
+- array/slice: `tests/fixtures/safe_arrays.luna`, `tests/fixtures/slice_*.luna`
+- Result/errors: `tests/fixtures/result_*.luna`
+- builtins and layout: `tests/builtin_types_test.cpp`, `tests/type_size_test.cpp`
+- MoonIR boundary: `tests/moonir_verifier_test.cpp`
+
+When a row changes status, update this table, the semantic baseline, the relevant tests, and
+the changelog together.

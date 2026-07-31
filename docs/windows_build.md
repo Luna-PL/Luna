@@ -1,11 +1,11 @@
-# Windows 构建
+# Windows Build
 
-Luna 的 Windows CI 使用 GitHub Actions 的 `windows-2022` runner 和 MSYS2
-UCRT64 工具链。这个组合提供原生 Windows 可执行文件，同时保留 CMake、Ninja
-和 Clang/LLVM 的一致命令行行为。
+Luna's Windows CI uses the GitHub Actions `windows-2022` runner and the MSYS2 UCRT64
+toolchain. This combination provides native Windows executables while preserving consistent
+command-line behavior for CMake, Ninja, and Clang/LLVM.
 
-本地构建建议安装 [MSYS2](https://www.msys2.org/)，打开 **UCRT64** shell，
-然后执行：
+For a local build, install [MSYS2](https://www.msys2.org/), open the **UCRT64** shell, and
+run:
 
 ```sh
 pacman -Syu
@@ -24,11 +24,12 @@ cmake --build build --parallel
 ctest --test-dir build -LE hardware --output-on-failure
 ```
 
-Windows AOT 输出带 `.exe` 后缀；构建树中的兼容名称为 `llvm-demo.exe`，正式
-命令仍然是 `luna.exe`。运行时动态加载层使用 Windows 原生 `LoadLibrary` /
-`GetProcAddress`，因此不依赖 `dlopen` 或 `libdl`。CUDA 后端查找
-`nvcuda.dll`；ROCm 后端查找 `amdhip64.dll`，两者都只有在显式选择对应后端
-时才会加载。
+Windows AOT output uses the `.exe` suffix, and compiler drivers in both the build tree and
+installation tree use only `luna.exe`. The runtime dynamic-loading layer uses the native
+Windows `LoadLibrary`/`GetProcAddress` APIs, so it does not depend on `dlopen` or
+`libdl`. The CUDA backend looks for `nvcuda.dll`; the ROCm backend looks for
+`amdhip64.dll`. Neither is loaded unless its backend is selected explicitly.
 
-Alpha 的 Windows CI 只验证 CPU、JIT/AOT、FFI、插件 ABI 和模拟器回归；GPU
-硬件仍需分别安装厂商驱动和运行时，不作为默认 CI 门槛。
+Alpha Windows CI verifies only CPU, JIT/AOT, FFI, plugin ABI, and simulator regressions.
+GPU hardware still requires the vendor driver and runtime to be installed separately and is
+not a default CI gate.

@@ -1,39 +1,43 @@
-# 迭代、管道与容器边界
+# Iteration, Pipelines, and Container Boundaries
 
-Luna 当前的目标是“动态扩展 + 有限控制流增强 + 系统语言性能”。迭代机制因此采用
-惰性、可融合的普通控制流模型，不引入完整代数效应，也不建立独立的 effect summary。
-实现与安全事实继续由编译器推导到只读 `sysmeta`。
+Luna currently targets dynamic extensibility, limited control-flow enhancement, and systems
+performance. Iteration therefore uses an ordinary lazy, fusible control-flow model. It does
+not introduce full algebraic effects or an independent effect summary; the compiler derives
+implementation and safety facts into read-only `sysmeta`.
 
-## 数组与借用切片
+## Arrays and borrowed slices
 
-`array<T, N>` 是定长、内联存储的值类型，`N` 必须是编译期非负整数。数组字面量
-推导元素类型和长度，所有元素必须具有同一类型：
+`array<T, N>` is a fixed-length, inline-storage value type, with `N` a non-negative
+compile-time integer. Array literals infer element type and length, and all elements must
+share one type:
 
 ```luna
 let values: array<i32, 4> = [10, 20, 30, 40];
 values[1] = values[0] + 5;
 ```
 
-索引只接受整数。常量越界在编译期拒绝；动态越界由运行时检查并终止，不能形成未定义
-的越界访问。
+Indexing accepts integers only. Constant out-of-bounds access is rejected at compile time;
+dynamic out-of-bounds access is checked at runtime and terminates rather than becoming
+undefined access.
 
-`values[start..end]` 创建只读 `slice<T>`，等价于
-`slice(borrow values, start, end)`。切片是 `{data, length}` 的非拥有借用视图，
-使用半开区间并要求 `start <= end <= length`。切片存活期间来源数组不能写入，切片
-索引也执行动态边界检查。当前稳定表面没有 `slice_mut<T>`；`raw<T>` 和
-`device_buffer<T>` 不会隐式变成数组或切片。
+`values[start..end]` creates a read-only `slice<T>`, equivalent to
+`slice(borrow values, start, end)`. A slice is a non-owning `{data, length}` borrowed
+view over a half-open range, requiring `start <= end <= length`. The source array cannot
+be written while the slice lives, and slice indexing also performs dynamic bounds checks.
+The stable surface has no `slice_mut<T>`; `raw<T>` and `device_buffer<T>` do not
+implicitly become arrays or slices.
 
-## 当前可用表面
+## Current surface
 
-数组和切片提供以下入口：
+Arrays and slices provide:
 
 ```luna
 values.iter()       // Iterator<&T>
 values.iter_mut()   // Iterator<&mut T>
-values.into_iter()  // Iterator<T>，消费数组时按值转移元素
+values.into_iter()  // Iterator<T>, transfers elements by value
 ```
 
-整数半开区间使用 `range(start, end)`。惰性适配器包括：
+Integer half-open ranges use `range(start, end)`. Lazy adapters include:
 
 ```luna
 iterator.map(fn(T) -> U)
@@ -41,7 +45,7 @@ iterator.filter(fn(T) -> bool)
 iterator.take(count)
 ```
 
-终结操作包括：
+Terminal operations include:
 
 ```luna
 iterator.fold(initial, fn(Acc, T) -> Acc)
@@ -50,16 +54,17 @@ iterator.count()
 iterator.collect::<Target>()
 ```
 
-`for item in iterator { ... }` 也是终结点。直接遍历数组按值产生元素；直接遍历切片按
-共享引用产生元素。`range` 是半开区间，所以上界不包含在结果中。
+`for item in iterator { ... }` is also terminal. Direct array iteration yields values;
+direct slice iteration yields shared references. `range` is half-open, so its upper bound is
+excluded.
 
-用户类型可实现 Core 协议并直接进入 `for`：
+A user type can implement the Core protocol and enter `for` directly:
 
 ```luna
 impl core::iter::Iterator<i32> for Counter {
     fn next(iterator: &mut Counter)
         -> core::option::Option<i32> {
-        // 返回 Some(item) 或 None
+        // Return Some(item) or None
     }
 }
 
@@ -67,15 +72,16 @@ let iterator = new Counter(...);
 for item in iterator { ... }
 ```
 
-普通成员调用使用静态 trait 分派，所以 `iterator.next()` 和
-`(move collection).into_iter()` 都解析到唯一的具体 impl symbol，没有 vtable。
-`for item in collection` 会在 collection 本身不实现 Core `Iterator` 时，静态查找
-唯一的 Core `IntoIterator` impl，消费局部 collection，并且只调用一次
-`into_iter`。编译器持有转换产生的隐藏 iterator 状态，正常遇到 `None` 或从函数
-提前 `return` 时都会执行相应清理。协议源目前必须是局部绑定。
+Ordinary member calls use static trait dispatch, so `iterator.next()` and
+`(move collection).into_iter()` resolve to the unique concrete impl symbol without a
+vtable. When a collection does not implement Core `Iterator`, `for item in collection`
+statically finds the unique Core `IntoIterator` impl, consumes the local collection, and
+calls `into_iter` once. The compiler owns the hidden iterator state created by the
+conversion; it performs the corresponding cleanup on normal `None` or function early
+return. The protocol source must currently be a local binding.
 
-`collect::<Target>()` 静态选择目标类型唯一的 Core `FromIterator<Item, Builder>`
-impl。协议不是接收一个可逃逸的 iterator 对象，而是：
+`collect::<Target>()` statically selects the target type's unique Core
+`FromIterator<Item, Builder>` impl:
 
 ```luna
 impl core::iter::FromIterator<i32, SumBuilder> for CollectedSum {
@@ -94,85 +100,98 @@ impl core::iter::FromIterator<i32, SumBuilder> for CollectedSum {
 }
 ```
 
-编译器在融合循环前调用一次 `begin`，对每个通过 adapter 的元素调用一次 `push`，
-最后调用一次 `finish`。目标类型必须用 turbofish 显式给出；Sema 会检查精确的 Core
-trait identity、Item 一致性、完整方法集和 affine 所有权契约，不使用 vtable。
+Before fusing the loop, the compiler calls `begin` once, `push` once per element that
+passes the adapters, and `finish` once at the end. The target type must be explicit with
+turbofish syntax. Sema checks exact Core trait identity, Item consistency, the complete
+method set, and the affine ownership contract; no vtable is used.
 
-## 实现模型
+## Implementation model
 
-适配器链在前端形成编译器域的临时 iterator recipe。MoonIR 保留已验证的源、适配器
-顺序、元素输入输出类型和借用模式；LLVM lowering 将整条链融合为一个循环。它不会为
-`map` 或 `filter` 建立中间数组，不依赖 `Vec`，也不调用 iterator runtime ABI。
+An adapter chain forms a temporary compiler-domain iterator recipe in the frontend. MoonIR
+retains the verified source, adapter order, input/output element types, and borrow mode;
+LLVM lowering fuses the chain into one loop. It creates no intermediate array for `map` or
+`filter`, does not depend on `Vec`, and does not call an iterator Runtime ABI.
 
-无捕获 recipe 现在可绑定到局部变量。绑定时按源代码顺序
-立即求值源、lambda 函数指针和 `take` 参数，并在栈上保存源指针/Copy 快照、索引、
-边界及 adapter 状态。绑定值可由 `for`、`fold`、`for_each`、`count` 或 `collect`
-消费，也可
-在消费表达式中继续追加 adapter；整个链仍静态展开为一个循环，不分配 heap，不使用
-vtable 或 iterator runtime ABI。
+A capture-free recipe may currently be bound to a local. At binding time it evaluates the
+source, lambda function pointer, and `take` argument in source order, then stores source
+pointers/Copy snapshots, indices, bounds, and adapter state on the stack. A binding may be
+consumed by `for`, `fold`, `for_each`, `count`, or `collect`, and adapters may be
+appended in the consuming expression; the whole chain still expands statically to one loop,
+with no heap allocation, vtable, or iterator Runtime ABI.
 
-这种 binding 是 affine、single-consumption 的局部值，当前不能返回、传参或跨 ABI。
-借用型 binding 将源 loan 保持到词法作用域结束；Copy `into_iter` 在绑定点建立值
-快照。move-only `into_iter` 在绑定点把源所有权转入隐藏栈状态，并为每个数组元素
-保存初始化位。终结消费、`for` 中提前 `return`、普通函数提前 `return` 以及从未
-消费就离开作用域，都会只清理仍初始化的元素。
+This binding is an affine, single-consumption local and cannot currently be returned, passed,
+or sent across an ABI. Borrow bindings keep the source loan until lexical scope end; a Copy
+`into_iter` binding takes a value snapshot at binding time. A move-only `into_iter` binding
+moves source ownership into hidden stack state and records initialization bits for each array
+element. Terminal consumption, early return from `for` or an ordinary function, and leaving
+scope without consumption clean only elements that remain initialized.
 
-源表达式、适配器参数和终结参数按从左到右的源代码顺序求值。`filter` 跳过元素，
-`take` 只计算流经它的元素，因此适配器顺序具有通常的惰性管道含义。
+Source expressions, adapter arguments, and terminal arguments are evaluated left to right.
+`filter` skips elements and `take` evaluates only elements that pass through it, so
+adapter order has ordinary lazy-pipeline meaning.
 
-## 所有权
+## Ownership
 
-- `iter()` 在消费期间持有共享借用。
-- `iter_mut()` 在完整 `for` 循环期间持有独占可变借用。
-- 用户 Core Iterator 的状态在完整循环期间持有独占可变借用，`next` 只能通过已
-  解析的 `&mut Self` 协议入口推进。
-- 用户协议允许 move-only `Item`。`Some` tag 是该轮的初始化状态；元素绑定在每次
-  成功迭代后重新初始化。正常走到循环体末尾时执行一次 `Drop`，函数 `return` 等
-  提前退出路径由路径敏感 cleanup 执行一次 `Drop`，移动走的元素不再清理。
-- 数组递归继承元素的 Copy/affine/linear 与 Drop 属性。构造 move-only 数组时每个
-  元素必须显式 `move`；直接消费数组或调用 `into_iter()` 后由隐藏数组快照和逐元素
-  初始化位记录所有权。已交付的槽位不再由数组清理，`take` 留下的尾部以及函数提前
-  `return` 时尚未交付的槽位会恰好清理一次。隐藏 linear 状态仍被拒绝。
-- `filter` 可处理 move-only 元素，但 predicate 必须共享借用该元素；被拒绝的元素
-  立即清理。`take` 可处理 move-only 元素，达到上限时清理当前元素，并在循环退出后
-  清理尚未读取的源槽位。
-- lambda 函数体现在使用与普通函数一致的路径敏感所有权检查。owning affine 参数会
-  在 fallthrough 和每条 `return` 路径清理，也可通过 `-> affine T` 返回契约继续
-  转移；未消费的 linear 参数会被拒绝。
-- `map` 可消费 move-only 输入，但 transform 参数必须显式 owning；它可以产生 Copy
-  或 move-only 输出。输出随后被 `filter`/`take` 拒绝、交给 `for`，或通过另一个
-  owning adapter 时都有明确所有权。
-- `for_each` action 与 `fold` reducer 可接收 move-only item，但相应参数必须显式
-  owning。`count` 会在计数后直接清理 move-only item。
-- `fold` 支持 affine move-only 累加器：局部初值必须显式 `move`，reducer 必须
-  owning 接收旧累加器并返回 replacement 的所有权。编译器在每轮调用前清除
-  accumulator initialized bit，写回新值后重新置位，最后把结果转移给调用者并清除
-  状态。忽略 move-only fold 结果会被拒绝。linear 累加器暂不隐藏在该状态中。
-- `fold`/`for_each`/`count` 终结表达式会消费 move-only 局部数组源，在 MoonIR 中
-  携带唯一的隐藏 recipe 状态，并在产生结果前清理尚未交付的槽位。终结后再次使用
-  源会被判定为 use-after-move；linear 源不能隐藏在该状态中。
-- `collect` 使用相同的终结 recipe/drop-state。每个通过管道的 item 的所有权转移给
-  `FromIterator::push`；`take` 截断、`filter` 拒绝以及源尾部仍按原规则恰好清理
-  一次。builder 只存在于当前函数的隐藏栈槽，`finish` 消费它并把 affine 结果交给
-  调用者；忽略该结果会被所有权检查拒绝。
-- 适配器 lambda 当前必须无捕获；引用外层局部变量会得到明确诊断，直到 closure
-  environment 布局完成。设备 kernel 中的管道尚未开放。
-- materialized recipe 是 affine 单次消费值；第二次 `for` 或终结调用是
-  use-after-move。`iter_mut()` binding 在整个词法生命周期保持独占源 loan；
-  Copy `into_iter()` binding 则与绑定后的源修改相互独立。拥有 move-only 数组的
-  binding 在创建时使原源成为 moved；隐藏的 `[N x i1]` Drop 状态在交付元素前清除
-  对应位，并在消费结束或任意作用域退出路径清理尾部。
+- `iter()` holds a shared borrow during consumption.
+- `iter_mut()` holds an exclusive mutable borrow for the complete `for` loop.
+- A user Core Iterator state holds an exclusive mutable borrow for the complete loop;
+  `next` advances it only through the resolved `&mut Self` protocol entry.
+- A user protocol may have move-only `Item`. The `Some` tag is the initialization state
+  for that iteration, and the item binding is reinitialized on each successful iteration.
+  Normal loop fallthrough drops it once; early returns use path-sensitive cleanup once, and a
+  moved-out item is not cleaned again.
+- Arrays recursively inherit element Copy/affine/linear and Drop properties. Constructing a
+  move-only array requires explicit `move` for each element. Direct array consumption or
+  `into_iter()` records ownership in a hidden array snapshot and per-element initialization
+  bits. Delivered slots are not cleaned by the array; the tail left by `take`, and
+  undelivered slots on early return, are cleaned exactly once. Hidden linear state remains
+  rejected.
+- `filter` accepts move-only elements, but its predicate must borrow each element; rejected
+  elements are cleaned immediately. `take` accepts move-only elements; at its limit it
+  cleans the current element and then cleans unread source slots when the loop exits.
+- Lambda bodies use the same path-sensitive ownership checks as ordinary functions. An
+  owning affine parameter is cleaned on fallthrough and every return path, or transferred
+  under a `-> affine T` return contract; an unconsumed linear parameter is rejected.
+- `map` may consume move-only input, but its transform parameter must be explicitly owning.
+  It may produce Copy or move-only output. Output ownership is explicit when `filter`/`take`
+  rejects it, `for` receives it, or another owning adapter consumes it.
+- `for_each` actions and `fold` reducers may receive move-only items, but their parameters
+  must be explicitly owning. `count` directly cleans move-only items after counting.
+- `fold` supports an affine move-only accumulator: the local initial value must be explicitly
+  moved, the reducer owns the old accumulator and returns replacement ownership. The compiler
+  clears the accumulator initialization bit before each call, sets it again after writing the
+  replacement, then transfers the final result and clears state. Ignoring a move-only fold
+  result is rejected. Linear accumulators are not hidden in this state yet.
+- `fold`/`for_each`/`count` consume a move-only local array source with one hidden recipe
+  state in MoonIR, cleaning undelivered slots before producing a result. Reusing the source
+  afterward is use-after-move; linear sources cannot be hidden in this state.
+- `collect` uses the same terminal recipe/drop state. Each pipeline item transfers ownership
+  to `FromIterator::push`; `take`, `filter`, and the remaining source tail each clean
+  exactly once. The builder exists only in a hidden stack slot in the current function;
+  `finish` consumes it and gives an affine result to the caller. Ignoring that result is
+  rejected by ownership checking.
+- Adapter lambdas must currently be capture-free; references to outer locals receive a clear
+  diagnostic until closure-environment layout is complete. Pipelines are not open in device
+  kernels.
+- A materialized recipe is an affine, single-consumption value; a second `for` or terminal
+  call is use-after-move. An `iter_mut()` binding retains an exclusive source loan for its
+  lexical lifetime, while a Copy `into_iter()` binding is independent of later source
+  mutation. Creating a move-only array binding moves the original source; hidden
+  `[N x i1]` Drop state clears delivered bits and cleans the tail on consumption or any scope
+  exit.
 
-这些约束是阶段性安全边界，不是最终的 Iterator 抽象能力。
+These constraints are staged safety boundaries, not the final Iterator abstraction.
 
-## 容器是否是 builtin
+## Is a container a builtin?
 
-迭代协议不要求动态容器成为 builtin。固定数组和借用切片仍是语言基础类型，因为其
-长度、布局、边界检查和借用关系直接参与类型检查与代码生成。未来的 `Vec<T>`、链表、
-哈希表及用户容器应位于 Core/标准库，通过稳定的 `IntoIterator`/`Iterator` trait
-接入；编译器只保留必要的内建入口和优化识别。
+The iteration protocol does not require dynamic containers to become builtins. Fixed arrays
+and borrowed slices remain language fundamentals because length, layout, bounds checks, and
+borrow relations participate directly in type checking and code generation. Future `Vec<T>`,
+lists, hash maps, and user containers should live in Core/standard library and connect through
+stable `IntoIterator`/`Iterator` traits; the compiler should retain only necessary builtin
+entry points and optimization recognition.
 
-目前已物化稳定核心声明：
+The following stable Core declarations are materialized:
 
 - `org.luna.core::option::Option`
 - `org.luna.core::iter::Iterator`
@@ -180,43 +199,52 @@ vtable 或 iterator runtime ABI。
 - `org.luna.core::iter::FromIterator`
 - `org.luna.core::iter::{Map, Filter, Take}`
 
-当前编译器 recipe 不通过运行时反复调用 `next() -> Option<T>`，因为静态已知链可以
-直接融合。局部物化只保存静态展开所需的栈状态，并不自动改写成 Core `Map`/`Filter`/
-`Take` enum 或 trait 调用。Core `Iterator::next(&mut Self) -> Option<Item>` 仍定义
-用户协议；跨函数、跨 package 的 adapter 值最终应使用这些稳定 Core 类型。
+The current compiler recipe does not repeatedly call `next() -> Option<T>` at runtime,
+because a statically known chain can be fused directly. Local materialization stores only
+the stack state needed for static expansion; it does not rewrite itself into Core
+`Map`/`Filter`/`Take` enums or trait calls. Core
+`Iterator::next(&mut Self) -> Option<Item>` still defines the user protocol; cross-function
+and cross-package adapter values should eventually use these stable Core types.
 
-用户协议路径现已接入：Sema 只识别具有稳定 package identity 的
-`org.luna.core::iter::Iterator`，验证 `next(&mut Self) -> Option<Item>`，
-并把唯一的静态 `next` symbol、iterator 类型、Option 类型和 variant index
-写入 MoonIR。LLVM 每轮调用一次 `next`，按 `None`/`Some` tag 分支。一个形状相同、
-同样名为 `next` 的其他 trait 不会被误认为迭代协议。
+The user-protocol path is connected: Sema recognizes only the stable package identity
+`org.luna.core::iter::Iterator), validates `next(&mut Self) -> Option<Item>`, and writes
+the unique static `next` symbol, iterator type, Option type, and variant index to MoonIR.
+LLVM calls `next` once per iteration and branches on `None`/`Some`. A same-shaped trait
+with a method also named `next` is not mistaken for the iteration protocol.
 
-这条路径与 compiler recipe 有意并存：已知数组、切片和 range 继续融合；普通用户
-状态机使用协议调用。Core `IntoIterator` 已可通过静态成员调用生成 iterator，
-并且 `for` 会在源不直接实现 Core `Iterator` 时隐式插入唯一的静态转换。Sema 将
-转换 symbol、输入类型、隐藏状态名和清理事实写入 MoonIR，LLVM 不再重复 trait 查找。
-Core `FromIterator` 也已接入 compiler recipe，但采用 `begin/push/finish` builder
-协议，因此不要求先把 recipe 转成跨 ABI `Iter`。MoonIR 保存目标和 builder 类型及
-三个唯一 impl symbol；LLVM 仍生成单循环且不建立中间容器。
+This path intentionally coexists with compiler recipes: known arrays, slices, and ranges keep
+fusing, while ordinary user state machines use protocol calls. Core `IntoIterator` can
+produce an iterator through static member calls, and `for` inserts the unique static
+conversion when the source does not directly implement Core `Iterator`. Sema writes the
+conversion symbol, input type, hidden state name, and cleanup facts to MoonIR; LLVM does not
+repeat trait lookup. Core `FromIterator` is also connected to compiler recipes through the
+`begin/push/finish` builder protocol, so the recipe need not become a cross-ABI `Iter`.
+MoonIR stores target and builder types and the three unique impl symbols; LLVM still emits one
+loop with no intermediate container.
 
-当前 `FromIterator` impl 必须是 concrete impl；泛型 impl 要等 impl specialization
-进入 coherence 后开放。Item、builder 和 target 目前不得为 linear，且
-`collect` 仍只消费当前的局部 compiler recipe。动态 `Vec<T>` 等容器仍应由标准库
-提供自己的 builder 和存储策略，而不是升级为 builtin。
+Current `FromIterator` impls must be concrete; generic impls await coherence support for
+impl specialization. Item, builder, and target may not currently be linear, and `collect`
+consumes only a local compiler recipe. Dynamic containers such as `Vec<T>` should be
+provided by the standard library with their own builder and storage strategy, rather than
+becoming builtins.
 
-## 与效应和 sysmeta 的关系
+## Relation to effects and sysmeta
 
-迭代管道是普通、有限、结构化控制流，不是 continuation handler，也没有恢复或多次
-恢复语义，因此不应被建模成代数效应。当前 recipe 的 host-only 能力是编译器推导的
-`sysmeta` 事实。后续若开放设备 lowering、可暂停迭代器或协程适配器，编译器应继续
-推导 `maySuspend`、存储和 ABI 事实，而不是要求用户维护平行的 effect summary。
+An iteration pipeline is ordinary, finite, structured control flow, not a continuation
+handler, and has no resume or multi-resume semantics. It should not be modeled as an
+algebraic effect. The current host-only recipe is compiler-derived `sysmeta` fact. If device
+lowering, suspendable iterators, or coroutine adapters are opened later, the compiler should
+continue deriving `maySuspend`, storage, and ABI facts rather than asking users to maintain
+a parallel effect summary.
 
-## 后续演进顺序
+## Evolution order
 
-1. 把当前编译器内部的 materialized Drop 状态映射到稳定 Core inline adapter
-   布局，随后才允许 adapter 作为普通值跨函数或 package 边界。
-2. 完成 closure environment 的所有权、借用和 Drop 布局后允许捕获式
-   `map`/`filter`。
-3. 在 coherence 支持 impl specialization 后开放泛型 `FromIterator` impl，并由
-   标准库动态容器实现实际 builder。
-4. 最后再与无栈协程对接异步迭代，并由 `sysmeta` 推导暂停和 frame 需求。
+1. Map the current compiler-internal materialized Drop state to a stable Core inline-adapter
+   layout before allowing adapters as ordinary values across function or package boundaries.
+2. Complete ownership, borrow, and Drop layout for closure environments before allowing
+   capturing `map`/`filter`.
+3. Open generic `FromIterator` impls after coherence supports impl specialization, with
+   standard-library dynamic containers providing actual builders.
+4. Only then connect asynchronous iteration to stackless coroutines, with `sysmeta`
+  deriving suspension and frame requirements.
+  deriving suspension and frame requirements.

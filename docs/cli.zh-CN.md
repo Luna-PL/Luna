@@ -55,8 +55,26 @@ luna build <文件或package> [-O0|-O2|-O3] [选项]
 luna repl
 ```
 
-当前 REPL 会把每行输入包装到临时 `main` 中并通过 JIT 运行。它仍是实验性工具，
-尚不是能够持久保留声明的完整交互环境。
+Alpha REPL 只承诺以下经过测试的有限范围：
+
+```text
+= 20 + 22
+:decl fn twice(value: i32) -> i32 { return value + value; }
+= twice(21)
+print(7)
+:reset
+:quit
+```
+
+- `= <表达式>` 求值一个结果类型必须为 `i32` 的表达式；
+- `:decl <声明>` 校验并持久保存一条完整的单行声明；后续输入会连同这些声明重新编译；
+- 其他输入作为临时 `main` 中的一条语句执行；
+- `:help` 显示本契约，`:reset` 清除声明，`:quit` 退出；`exit` 作为
+  `:quit` 的兼容写法保留。
+
+它的状态是 **Implemented Experimental**，不是持久运行时：不支持多行输入；局部
+变量、堆值、JIT 全局状态和运行时状态都不会跨输入保留。无法写成单行的声明应放入
+源码文件并使用 `luna run`。
 
 ## 常用选项
 

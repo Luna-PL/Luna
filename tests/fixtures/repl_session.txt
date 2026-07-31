@@ -1,0 +1,6 @@
+:help
+:decl fn twice(value: i32) -> i32 { return value + value; }
+= twice(21)
+print(7)
+:reset
+:quit
