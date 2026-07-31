@@ -97,14 +97,15 @@ bool splitTomlAssignment(const std::string& line, std::string& key, std::string&
     return false;
 }
 
-void manifestError(std::vector<std::string>& errors, const fs::path& path,
+void manifestError(std::vector<diagnostic::Diagnostic>& errors,
+                   const fs::path& path,
                    int line, const std::string& message, const std::string& hint) {
     errors.push_back(diagnostic::format(
         "package", message, path.string(), line, 1, hint));
 }
 
 bool parsePackageManifest(const fs::path& path, PackageManifest& manifest,
-                          std::vector<std::string>& errors) {
+                          std::vector<diagnostic::Diagnostic>& errors) {
     std::ifstream file(path);
     if (!file) return false;
     manifest = {};
@@ -161,7 +162,7 @@ bool parsePackageManifest(const fs::path& path, PackageManifest& manifest,
 }
 
 bool parseWorkspace(const fs::path& path, std::vector<std::string>& members,
-                    std::vector<std::string>& errors) {
+                    std::vector<diagnostic::Diagnostic>& errors) {
     std::ifstream file(path);
     if (!file) return false;
     std::string section, raw;
@@ -197,7 +198,7 @@ bool parseWorkspace(const fs::path& path, std::vector<std::string>& members,
 }
 
 bool parseLock(const fs::path& path, std::vector<ResolvedPackage>& packages,
-               std::vector<std::string>& errors) {
+               std::vector<diagnostic::Diagnostic>& errors) {
     std::ifstream file(path);
     if (!file) return false;
     std::string raw;
@@ -263,7 +264,7 @@ fs::path findWorkspace(const fs::path& start) {
 }
 
 bool readSource(const fs::path& path, std::string& source,
-                std::vector<std::string>& errors) {
+                std::vector<diagnostic::Diagnostic>& errors) {
     std::ifstream file(path);
     if (!file) {
         errors.push_back(diagnostic::format(
@@ -280,7 +281,7 @@ bool readSource(const fs::path& path, std::string& source,
 bool parseSource(const fs::path& path,
                  const luna::macro::MacroProcessor& macroProcessor,
                  std::unique_ptr<Program>& program,
-                 std::vector<std::string>& errors) {
+                 std::vector<diagnostic::Diagnostic>& errors) {
     std::string source;
     if (!readSource(path, source, errors)) return false;
 
@@ -302,7 +303,7 @@ bool parseSource(const fs::path& path,
 bool collectManifestSources(const fs::path& packageRoot,
                             const PackageManifest& manifest,
                             std::vector<fs::path>& files,
-                            std::vector<std::string>& errors) {
+                            std::vector<diagnostic::Diagnostic>& errors) {
     std::error_code ec;
     for (const auto& sourceRoot : manifest.sources) {
         const fs::path relative(sourceRoot);
@@ -354,7 +355,7 @@ PackageManager::PackageManager(luna::macro::MacroProcessor macroProcessor)
 
 bool PackageManager::load(const PackageRequest& request, LoadedPackage& result,
                           PackageGraph& graph,
-                          std::vector<std::string>& errors) const {
+                          std::vector<diagnostic::Diagnostic>& errors) const {
     result = {};
     graph = {};
     std::error_code ec;

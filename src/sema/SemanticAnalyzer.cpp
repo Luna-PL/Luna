@@ -6974,7 +6974,8 @@ void SemanticAnalyzer::materializeInferredTypes(Program* program) {
         }
         if (auto* v = dynamic_cast<VariantConstructExpr*>(expr)) {
             v->constructedType = resolved(v->constructedType);
-            for (auto& a : v->args) visitExpr(a.get()); return;
+            for (auto& a : v->args) visitExpr(a.get());
+            return;
         }
         if (auto* a = dynamic_cast<AssignExpr*>(expr)) { visitExpr(a->lhs.get()); visitExpr(a->rhs.get()); return; }
         if (auto* f = dynamic_cast<FieldAccessExpr*>(expr)) { visitExpr(f->object.get()); return; }

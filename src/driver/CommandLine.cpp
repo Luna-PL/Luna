@@ -144,10 +144,27 @@ CommandLineParseResult parseCommandLine(int argc, char* argv[]) {
             options.moonIrOutput = argv[++i];
         } else if (option.rfind("--emit-moonir=", 0) == 0) {
             options.moonIrOutput = option.substr(14);
+        } else if (option == "--message-format" && i + 1 < argc) {
+            const std::string format = argv[++i];
+            if (format != "json")
+                return failure("Unsupported message format: " + format, false);
+            options.messageFormat = MessageFormat::Json;
+        } else if (option.rfind("--message-format=", 0) == 0) {
+            const std::string format = option.substr(17);
+            if (format != "json")
+                return failure("Unsupported message format: " + format, false);
+            options.messageFormat = MessageFormat::Json;
         } else {
             return failure("Unknown option: " + option, true);
         }
     }
+
+    if (options.messageFormat == MessageFormat::Json && command != "check")
+        return failure("--message-format=json is currently supported only by `check`",
+                       false);
+    if (options.messageFormat == MessageFormat::Json && options.printMoonCostReport)
+        return failure("--moon-cost-report cannot be combined with JSON diagnostics",
+                       false);
 
     return {std::move(options), "", false};
 }

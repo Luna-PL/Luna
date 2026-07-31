@@ -14,7 +14,7 @@ std::string publicDeclarationName(const Decl* declaration,
 } // namespace
 
 bool PackageLoader::load(const std::string& path, LoadedPackage& result,
-                         std::vector<std::string>& errors) {
+                         std::vector<diagnostic::Diagnostic>& errors) {
     PackageManager manager;
     PackageGraph graph;
     return manager.load({path}, result, graph, errors);

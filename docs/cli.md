@@ -22,11 +22,19 @@ All forms print the compiler release version.
 
 ```sh
 luna check <file-or-package> [--emit-moonir <path>]
+           [--message-format=json]
 ```
 
 `check` runs lexing, parsing, semantic analysis, trait checking, ownership
 checking, MoonIR lowering, optimization and verification. It does not invoke
 LLVM code generation, making it the normal command for library packages.
+
+`--message-format=json` switches the command to `luna.diagnostic` JSONL version
+1 for editor and CI integration. The stdout stream contains exactly one
+`hello`, zero or more `diagnostic` records, and one `summary`; stderr remains
+empty. Disk-backed locations use absolute paths and UTF-8 byte offsets with an
+exclusive end. Exit status is `0` for no errors, `1` for reported diagnostics,
+and `2` for command/protocol misuse. This option is currently check-only.
 
 ### JIT run
 
@@ -89,6 +97,7 @@ one line should be placed in a source file and run with `luna run`.
 | `--opt O2` | `run`, `build` | Long form of the optimization option; `--opt=O2` is also accepted. |
 | `--link <library>` | `run`, `build` | Load a JIT shared library or add an AOT linker dependency. Repeatable. |
 | `--emit-moonir <path>` | `check`, `run`, `build` | Write verified, optimized textual MoonIR. |
+| `--message-format=json` | `check` | Emit `luna.diagnostic` JSONL version 1. |
 | `--moon-cost-report` | `run`, `build` | Print explicit runtime, dynamic, instantiation and kernel cost decisions. |
 | `--gpu-target <list>` | `run`, `build` | Generate requested device code objects. Accepts comma-separated targets. |
 | `--reserve-kernel-runtime` | `run`, `build` | Retain kernel runtime capability even without a reachable launch. |

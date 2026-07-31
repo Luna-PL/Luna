@@ -1,5 +1,7 @@
 #pragma once
 
+#include "diagnostics/Diagnostic.h"
+
 #include "MoonIR.h"
 
 #include <memory>
@@ -26,7 +28,7 @@ public:
     std::unique_ptr<Module> lower(const Program& program,
                                   const SymbolTable& symbols,
                                   bool reserveKernelRuntime = false);
-    const std::vector<std::string>& errors() const { return mErrors; }
+    const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
 private:
     SourceLocation locationOf(const ASTNode* node) const;
@@ -52,7 +54,7 @@ private:
     Module* mModule = nullptr;
     bool mReserveKernelRuntime = false;
     std::unordered_set<std::string> mRequiredKernelSymbols;
-    std::vector<std::string> mErrors;
+    std::vector<diagnostic::Diagnostic> mErrors;
 };
 
 } // namespace moon

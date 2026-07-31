@@ -1,5 +1,7 @@
 #pragma once
 
+#include "diagnostics/Diagnostic.h"
+
 #include "TypeSystem.h"
 #include "SymbolTable.h"
 #include "../parser/AST.h"
@@ -14,7 +16,7 @@ public:
     OwnershipChecker();
 
     bool check(Program* program, SymbolTable& symTable);
-    const std::vector<std::string>& errors() const { return mErrors; }
+    const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
 private:
     enum class OwnState { Valid, Moved, Freed };
@@ -142,7 +144,7 @@ private:
     // This gives references a lexical lifetime and releases them before the
     // source variable can be automatically freed.
     std::vector<std::vector<Loan>> mLoansInScope;
-    std::vector<std::string> mErrors;
+    std::vector<diagnostic::Diagnostic> mErrors;
     SymbolTable* mSymTable = nullptr;
     std::string mDiagnosticFile;
     int mDiagnosticLine = 0;

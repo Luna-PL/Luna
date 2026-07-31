@@ -1,6 +1,7 @@
 #pragma once
 
 #include "codegen/CodeGenerator.h"
+#include "diagnostics/Diagnostic.h"
 
 #include <memory>
 #include <string>
@@ -28,7 +29,7 @@ public:
     const moon::Module& moonModule() const;
     CodeGenerator& codeGenerator();
     const std::string& declaredPackageName() const;
-    const std::vector<std::string>& errors() const;
+    const std::vector<diagnostic::Diagnostic>& errors() const;
     const std::string& errorStage() const;
 
 private:
@@ -36,7 +37,7 @@ private:
         Program* program, const CompilerPipelineOptions& options,
         std::string moduleName);
     void reset(const CompilerPipelineOptions& options);
-    bool fail(const std::vector<std::string>& errors,
+    bool fail(const std::vector<diagnostic::Diagnostic>& errors,
               std::string stage = {});
 
     LunaOptimizationLevel mOptimizationLevel = LunaOptimizationLevel::O0;
@@ -44,7 +45,7 @@ private:
     std::string mDeclaredPackageName;
     std::unique_ptr<moon::Module> mMoonModule;
     std::unique_ptr<CodeGenerator> mCodeGenerator;
-    std::vector<std::string> mErrors;
+    std::vector<diagnostic::Diagnostic> mErrors;
     std::string mErrorStage;
 };
 

@@ -187,3 +187,14 @@ error[ownership/OWN0001]: use after move of 'buffer'
 
 每个阶段的 `9999` 是通用兜底码。新增公开细分类必须同时添加回归并更新本表。
 
+## 11. 结构化编译器诊断
+
+`luna check --message-format=json` 已实现 `luna.diagnostic` JSONL version 1。
+协议顺序为 `hello`、零条或多条 `diagnostic`，最后一条 `summary`。诊断包含稳定的
+severity、phase、code、message、可选 primary span、label、note 和 fix。当前渲染的
+`help:` 会作为 note 输出；结构化 fix 字段已经保留，但尚不生成编辑。
+
+磁盘文件的 primary span 使用规范化绝对路径、必填 UTF-8 byte offset、exclusive
+end，以及从 1 开始的 line/column 展示辅助值。没有磁盘位置的诊断使用
+`primary: null`。hello 会标识长期不变的语言版本、编译器源码 commit、构建 target
+和协议 capability，因此工具无需只靠 `0.2.0-alpha` 推断编译器身份。

@@ -8,6 +8,11 @@
 
 namespace luna::driver {
 
+enum class MessageFormat {
+    Human,
+    Json,
+};
+
 struct CommandLineOptions {
     std::string command;
     std::string inputPath;
@@ -16,6 +21,7 @@ struct CommandLineOptions {
     std::string aotCompiler;
     std::string moonIrOutput;
     LunaGpuTargetConfig gpuTargets;
+    MessageFormat messageFormat = MessageFormat::Human;
     bool printMoonCostReport = false;
     bool reserveKernelRuntime = false;
     LunaOptimizationLevel optimizationLevel = LunaOptimizationLevel::O0;

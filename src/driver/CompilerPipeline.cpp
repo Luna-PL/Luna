@@ -19,7 +19,7 @@ bool CompilerPipeline::compileToMoonIR(
     reset(options);
 
     LoadedPackage loaded;
-    std::vector<std::string> packageErrors;
+    std::vector<diagnostic::Diagnostic> packageErrors;
     if (!PackageLoader::load(options.inputPath, loaded, packageErrors))
         return fail(packageErrors);
     auto* program = loaded.program.get();
@@ -124,7 +124,7 @@ const std::string& CompilerPipeline::declaredPackageName() const {
     return mDeclaredPackageName;
 }
 
-const std::vector<std::string>& CompilerPipeline::errors() const {
+const std::vector<diagnostic::Diagnostic>& CompilerPipeline::errors() const {
     return mErrors;
 }
 
@@ -132,7 +132,7 @@ const std::string& CompilerPipeline::errorStage() const {
     return mErrorStage;
 }
 
-bool CompilerPipeline::fail(const std::vector<std::string>& errors,
+bool CompilerPipeline::fail(const std::vector<diagnostic::Diagnostic>& errors,
                             std::string stage) {
     mErrors = errors;
     mErrorStage = std::move(stage);

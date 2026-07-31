@@ -131,7 +131,7 @@ obligation，不能重新推导所有权。
 | `src/core/TypeRelations.cpp` | 类型关系实现 |
 | `src/core/TypeLayout.h` | Alpha 固定布局查询接口 |
 | `src/core/TypeLayout.cpp` | 类型 size/alignment/layout 实现 |
-| `src/diagnostics/Diagnostic.h` | 统一诊断格式和源码位置展示 |
+| `src/diagnostics/Diagnostic.h` | 统一结构化诊断记录、人类渲染、JSONL 序列化和源码位置展示 |
 | `src/lexer/Token.h` | token kind 与 token 数据 |
 | `src/lexer/Lexer.h` | lexer 接口 |
 | `src/lexer/Lexer.cpp` | 源码字符到 token 与词法诊断 |
@@ -539,6 +539,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/aot_runtime_boundary.cmake`
 - `tests/control_flow_aot.cmake`
 - `tests/core_surface.cmake`
+- `tests/diagnostic_protocol.cmake`
 - `tests/external_fragment_dispatch.cmake`
 - `tests/ffi_aot.cmake`
 - `tests/file_guide_inventory.cmake`

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "diagnostics/Diagnostic.h"
+
 #include "TypeSystem.h"
 #include "SymbolTable.h"
 #include "../instantiation/Instantiator.h"
@@ -34,7 +36,7 @@ public:
     SemanticAnalyzer();
 
     bool analyze(Program* program);
-    const std::vector<std::string>& errors() const { return mErrors; }
+    const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
     SymbolTable& symTable() { return mSymTable; }
 
 private:
@@ -214,7 +216,7 @@ private:
     std::vector<std::unique_ptr<FunctionDecl>> mGeneratedInstances;
     luna::instantiation::Instantiator mInstantiator;
     std::unordered_map<std::string, FunctionDecl*> mInstantiatedFunctions;
-    std::vector<std::string> mErrors;
+    std::vector<diagnostic::Diagnostic> mErrors;
     Program* mProgram = nullptr;
     std::string mCurrentPackageId;
     std::string mCurrentModulePath;

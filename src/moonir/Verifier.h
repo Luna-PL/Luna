@@ -1,5 +1,7 @@
 #pragma once
 
+#include "diagnostics/Diagnostic.h"
+
 #include "MoonIR.h"
 
 #include <string>
@@ -11,7 +13,7 @@ namespace moon {
 class Verifier {
 public:
     bool verify(const Module& module);
-    const std::vector<std::string>& errors() const { return mErrors; }
+    const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
 private:
     void verifyDeclaration(const Decl& declaration, const Module& module);
@@ -26,7 +28,7 @@ private:
                     const std::string& context, bool allowTypeParameter = false);
     void error(const SourceLocation& location, const std::string& message);
 
-    std::vector<std::string> mErrors;
+    std::vector<diagnostic::Diagnostic> mErrors;
     std::unordered_set<std::string> mVerifiedTypeIds;
     bool mAllowTypeParameters = false;
 };

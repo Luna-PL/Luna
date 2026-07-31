@@ -1,5 +1,7 @@
 #pragma once
 
+#include "diagnostics/Diagnostic.h"
+
 #include "CGHelpers.h"
 #include "../moonir/MoonIR.h"
 #include <llvm/IR/LLVMContext.h>
@@ -46,7 +48,7 @@ public:
     // AOT: emit object file
     bool emitObjectFile(const std::string& outputPath);
 
-    const std::vector<std::string>& errors() const { return mErrors; }
+    const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
 private:
     struct ContinuationFrame {
@@ -179,7 +181,7 @@ private:
     // module bundle accepted by HIP's Module API.
     std::unordered_map<std::string, std::string> mKernelHSACO;
 
-    std::vector<std::string> mErrors;
+    std::vector<diagnostic::Diagnostic> mErrors;
     // Keep O0 as the Alpha default.  Experimental source constructs such as
     // dynamic fragments can opt in to the standard LLVM speed pipelines once
     // their behavior is covered by parity tests.

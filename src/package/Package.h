@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../parser/AST.h"
+#include "diagnostics/Diagnostic.h"
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -50,7 +51,7 @@ struct LoadedPackage {
 class PackageLoader {
 public:
     static bool load(const std::string& path, LoadedPackage& result,
-                     std::vector<std::string>& errors);
+                     std::vector<diagnostic::Diagnostic>& errors);
 
     // Returns the package's explicit public surface. Declarations not marked
     // with `export` are intentionally absent from this interface.

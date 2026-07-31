@@ -17,6 +17,18 @@ if(NOT TARGET LLVM)
 endif()
 include(CTest)
 
+execute_process(
+    COMMAND git rev-parse --verify HEAD
+    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+    RESULT_VARIABLE LUNA_GIT_RESULT
+    OUTPUT_VARIABLE LUNA_GIT_COMMIT
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+    ERROR_QUIET
+)
+if(NOT LUNA_GIT_RESULT EQUAL 0)
+    set(LUNA_GIT_COMMIT "unknown")
+endif()
+
 option(LUNA_ENABLE_ROCM_SMOKE "Run ROCm JIT/AOT smoke tests on a configured AMD GPU" OFF)
 option(LUNA_ENABLE_ROCM_BENCHMARK "Run the large Luna versus C++23/HIP ROCm comparison" OFF)
 option(LUNA_ENABLE_CPU_BENCHMARK "Run common Luna versus C++23 CPU benchmarks" OFF)
@@ -133,6 +145,7 @@ target_compile_definitions(luna PRIVATE
     __STDC_FORMAT_MACROS
     __STDC_LIMIT_MACROS
     LUNA_DL_LIBRARY="${CMAKE_DL_LIBS}"
+    LUNA_COMPILER_COMMIT="${LUNA_GIT_COMMIT}"
     BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}"
 )
 
@@ -176,6 +189,13 @@ if(BUILD_TESTING)
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/semantic_regressions.cmake
+    )
+    add_test(
+        NAME luna.diagnostic-protocol-v1
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/diagnostic_protocol.cmake
     )
     add_test(
         NAME luna.repl-smoke

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "diagnostics/Diagnostic.h"
+
 #include "MoonIR.h"
 
 #include <string>
@@ -30,12 +32,12 @@ struct OptimizationRequest {
 class Optimizer {
 public:
     bool run(Module& module, const OptimizationRequest& request = {});
-    const std::vector<std::string>& errors() const { return mErrors; }
+    const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
 private:
     void canonicalize(Module& module);
 
-    std::vector<std::string> mErrors;
+    std::vector<diagnostic::Diagnostic> mErrors;
 };
 
 } // namespace moon

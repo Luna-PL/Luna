@@ -8,7 +8,7 @@ MacroProcessor::MacroProcessor(ExpansionLimits limits)
     : mLimits(limits) {}
 
 bool MacroProcessor::process(const SourceUnit& input, Expansion& output,
-                             std::vector<std::string>& errors) const {
+                             std::vector<diagnostic::Diagnostic>& errors) const {
     output = {};
     if (input.source.size() > mLimits.maxGeneratedBytes) {
         errors.push_back(diagnostic::format(

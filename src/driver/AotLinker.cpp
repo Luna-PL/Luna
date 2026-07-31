@@ -19,7 +19,7 @@
 namespace luna::driver {
 namespace {
 
-void printErrors(const std::vector<std::string>& errors) {
+void printErrors(const std::vector<diagnostic::Diagnostic>& errors) {
     for (const auto& error : errors) std::cerr << error << "\n";
 }
 

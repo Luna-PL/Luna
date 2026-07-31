@@ -2,6 +2,7 @@
 
 #include "AST.h"
 #include "../lexer/Token.h"
+#include "diagnostics/Diagnostic.h"
 #include <memory>
 #include <string>
 #include <vector>
@@ -12,7 +13,7 @@ public:
                     std::string source = "");
 
     std::unique_ptr<Program> parse();
-    const std::vector<std::string>& errors() const { return mErrors; }
+    const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
 private:
     std::unique_ptr<Decl> parseDeclaration();
@@ -101,5 +102,5 @@ private:
     int mPos = 0;
     std::string mSourceName;
     std::string mSource;
-    std::vector<std::string> mErrors;
+    std::vector<diagnostic::Diagnostic> mErrors;
 };

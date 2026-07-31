@@ -1,5 +1,7 @@
 #pragma once
 
+#include "diagnostics/Diagnostic.h"
+
 #include "Package.h"
 #include "../macro/MacroProcessor.h"
 
@@ -31,7 +33,8 @@ public:
         luna::macro::MacroProcessor macroProcessor = luna::macro::MacroProcessor());
 
     bool load(const PackageRequest& request, LoadedPackage& result,
-              PackageGraph& graph, std::vector<std::string>& errors) const;
+              PackageGraph& graph,
+              std::vector<diagnostic::Diagnostic>& errors) const;
 
 private:
     luna::macro::MacroProcessor mMacroProcessor;

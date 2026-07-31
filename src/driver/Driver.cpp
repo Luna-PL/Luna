@@ -9,6 +9,7 @@
 #include "package/Package.h"
 #include "diagnostics/Diagnostic.h"
 #include <llvm/Support/DynamicLibrary.h>
+#include <llvm/TargetParser/Host.h>
 
 #include <iostream>
 #include <cstdio>
@@ -18,11 +19,52 @@
 
 namespace luna::driver {
 
-static void printErrors(const std::vector<std::string>& errors, const char* stage = nullptr) {
+#ifndef LUNA_COMPILER_COMMIT
+#define LUNA_COMPILER_COMMIT "unknown"
+#endif
+
+static void printErrors(const std::vector<diagnostic::Diagnostic>& errors,
+                        const char* stage = nullptr) {
     for (auto& e : errors) {
         if (stage) std::cerr << "error[" << stage << "]: ";
         std::cerr << e << "\n";
     }
+}
+
+static void printJsonHello() {
+    std::cout
+        << "{\"protocol\":\"luna.diagnostic\",\"version\":1,"
+        << "\"kind\":\"hello\",\"language_version\":\""
+        << diagnostic::jsonEscape(LUNA_VERSION_STRING)
+        << "\",\"compiler_commit\":\""
+        << diagnostic::jsonEscape(LUNA_COMPILER_COMMIT)
+        << "\",\"build_target\":\""
+        << diagnostic::jsonEscape(llvm::sys::getDefaultTargetTriple())
+        << "\",\"capabilities\":[\"byte-spans\"]}\n";
+}
+
+static void printJsonDiagnostics(
+    const std::vector<diagnostic::Diagnostic>& diagnostics) {
+    for (const auto& diagnostic : diagnostics)
+        std::cout << diagnostic::toJson(diagnostic) << '\n';
+}
+
+static void printJsonSummary(size_t errors) {
+    std::cout << "{\"protocol\":\"luna.diagnostic\",\"version\":1,"
+              << "\"kind\":\"summary\",\"errors\":" << errors
+              << ",\"warnings\":0,\"success\":"
+              << (errors == 0 ? "true" : "false") << "}\n";
+}
+
+static bool requestsJsonDiagnostics(int argc, char* argv[]) {
+    for (int index = 1; index < argc; ++index) {
+        const std::string argument = argv[index];
+        if (argument == "--message-format=json") return true;
+        if (argument == "--message-format" && index + 1 < argc &&
+            std::string(argv[index + 1]) == "json")
+            return true;
+    }
+    return false;
 }
 
 static void printUsage() {
@@ -34,7 +76,8 @@ static void printUsage() {
 
 Usage:
   luna --version            Print the compiler version
-  luna check  <file-or-package> [--emit-moonir <path>]  Verify through MoonIR
+  luna check  <file-or-package> [--emit-moonir <path>]
+                   [--message-format=json]  Verify through MoonIR
   luna run    <file-or-package> [-O0|-O2|-O3] [--link <shared-library>]
                    [--gpu-target <target[,target...]>]  JIT-compile and execute
   luna build  <file-or-package> [-O0|-O2|-O3] [--link <library-or-name>]
@@ -96,6 +139,15 @@ int run(int argc, char* argv[]) {
 
     auto parseResult = parseCommandLine(argc, argv);
     if (!parseResult.options) {
+        if (requestsJsonDiagnostics(argc, argv)) {
+            printJsonHello();
+            const auto invocationError = diagnostic::format(
+                "driver", parseResult.error, "", 0, 0,
+                "run `luna` without arguments to view supported commands");
+            printJsonDiagnostics({invocationError});
+            printJsonSummary(1);
+            return 2;
+        }
         std::cerr << parseResult.error << "\n";
         if (parseResult.showUsage) printUsage();
         return 1;
@@ -110,11 +162,21 @@ int run(int argc, char* argv[]) {
     auto& printMoonCostReport = options.printMoonCostReport;
     auto& reserveKernelRuntime = options.reserveKernelRuntime;
     auto& optimizationLevel = options.optimizationLevel;
+    const bool jsonDiagnostics = options.messageFormat == MessageFormat::Json;
+
+    if (jsonDiagnostics) printJsonHello();
 
     if (cmd != "build" && (!runtimeLibrary.empty() || !aotCompiler.empty())) {
-        std::cerr << diagnostic::format(
+        const auto invocationError = diagnostic::format(
             "driver", "AOT linker options are only valid with `build`",
-            "", 0, 0, "use `luna build ... --runtime-lib <path> --cc <compiler>") << "\n";
+            "", 0, 0,
+            "use `luna build ... --runtime-lib <path> --cc <compiler>");
+        if (jsonDiagnostics) {
+            printJsonDiagnostics({invocationError});
+            printJsonSummary(1);
+            return 2;
+        }
+        std::cerr << invocationError << "\n";
         return 1;
     }
 
@@ -124,10 +186,15 @@ int run(int argc, char* argv[]) {
             optimizationLevel,
             reserveKernelRuntime,
             cmd == "build"})) {
-        printErrors(
-            pipeline.errors(),
-            pipeline.errorStage().empty()
-                ? nullptr : pipeline.errorStage().c_str());
+        if (jsonDiagnostics) {
+            printJsonDiagnostics(pipeline.errors());
+            printJsonSummary(pipeline.errors().size());
+        } else {
+            printErrors(
+                pipeline.errors(),
+                pipeline.errorStage().empty()
+                    ? nullptr : pipeline.errorStage().c_str());
+        }
         return 1;
     }
 
@@ -135,9 +202,16 @@ int run(int argc, char* argv[]) {
     if (!moonIrOutput.empty()) {
         std::ofstream output(moonIrOutput);
         if (!output) {
-            std::cerr << diagnostic::format(
+            const auto outputError = diagnostic::format(
                 "driver", "cannot write MoonIR file '" + moonIrOutput + "'",
-                moonIrOutput, 0, 0, "check the output directory and permissions") << "\n";
+                moonIrOutput, 0, 0,
+                "check the output directory and permissions");
+            if (jsonDiagnostics) {
+                printJsonDiagnostics({outputError});
+                printJsonSummary(1);
+            } else {
+                std::cerr << outputError << "\n";
+            }
             return 1;
         }
         moonPrinter.print(pipeline.moonModule(), output);
@@ -148,7 +222,10 @@ int run(int argc, char* argv[]) {
     // Library packages deliberately have no main function. `check` validates
     // the complete frontend -> MoonIR boundary without manufacturing an
     // executable entry point or paying LLVM code-generation costs.
-    if (cmd == "check") return 0;
+    if (cmd == "check") {
+        if (jsonDiagnostics) printJsonSummary(0);
+        return 0;
+    }
 
     if (!pipeline.generateCode(std::move(gpuTargets))) {
         printErrors(pipeline.errors());

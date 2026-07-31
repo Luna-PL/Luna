@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Token.h"
+#include "diagnostics/Diagnostic.h"
 #include <vector>
 #include <string>
 
@@ -9,7 +10,7 @@ public:
     explicit Lexer(std::string source, std::string sourceName = "<input>");
 
     std::vector<Token> tokenize();
-    const std::vector<std::string>& errors() const { return mErrors; }
+    const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
 private:
     void skipWhitespace();
@@ -33,5 +34,5 @@ private:
     int mCol = 1;
     int mStartLine = 1;
     int mStartCol = 1;
-    std::vector<std::string> mErrors;
+    std::vector<diagnostic::Diagnostic> mErrors;
 };

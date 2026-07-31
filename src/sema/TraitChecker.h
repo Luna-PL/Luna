@@ -1,5 +1,7 @@
 #pragma once
 
+#include "diagnostics/Diagnostic.h"
+
 #include "TypeSystem.h"
 #include "../parser/AST.h"
 #include <string>
@@ -11,7 +13,7 @@ public:
     TraitChecker();
 
     bool check(Program* program);
-    const std::vector<std::string>& errors() const { return mErrors; }
+    const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
     // Query whether a type satisfies a trait
     bool satisfies(const TypePtr& type, const std::string& traitName) const;
@@ -36,7 +38,7 @@ private:
 
     void error(const std::string& msg);
 
-    std::vector<std::string> mErrors;
+    std::vector<diagnostic::Diagnostic> mErrors;
     std::string mDiagnosticFile;
     int mDiagnosticLine = 0;
     int mDiagnosticCol = 0;

@@ -198,3 +198,17 @@ Codes support editors, CI, and documentation lookup; messages, source snippets, 
 
 Each stage's `9999` is a generic fallback code. New public subcodes must add regressions
 and update this table.
+
+## 11. Structured compiler diagnostics
+
+`luna check --message-format=json` implements `luna.diagnostic` JSONL version 1.
+The protocol sequence is `hello`, zero or more `diagnostic` records, then
+`summary`. A diagnostic carries stable severity, phase, code, message, optional
+primary span, labels, notes, and fixes. Current rendered `help:` text is exposed
+as a note; structured fixes are reserved but not yet produced.
+
+Disk-backed primary spans use normalized absolute paths, required UTF-8 byte
+offsets, an exclusive end, and one-based line/column display aids. Diagnostics
+without a disk location use `primary: null`. The hello record identifies the
+long-lived language version, compiler source commit, build target, and protocol
+capabilities so tools need not infer compiler identity from `0.2.0-alpha` alone.

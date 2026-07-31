@@ -1,5 +1,7 @@
 #pragma once
 
+#include "diagnostics/Diagnostic.h"
+
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -30,7 +32,7 @@ public:
     explicit MacroProcessor(ExpansionLimits limits = {});
 
     bool process(const SourceUnit& input, Expansion& output,
-                 std::vector<std::string>& errors) const;
+                 std::vector<diagnostic::Diagnostic>& errors) const;
 
     const ExpansionLimits& limits() const { return mLimits; }
 
