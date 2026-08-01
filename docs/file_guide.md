@@ -96,7 +96,8 @@ script-defined special inputs.
 - Core files own ownership, sysmeta, type identity, type relations, and layout.
 - Lexer/parser files own tokens, AST, parsing, and syntax recovery.
 - Sema files own names, types, generics, constexpr, traits, ownership, borrowing, and typed AST.
-- Tooling files own versioned in-memory source documents and editor position conversion.
+- Tooling files own versioned in-memory source documents, editor position
+  conversion, and retained read-only frontend analysis snapshots.
 - Selector and instantiation files own candidate selection and generic-instance state.
 - MoonIR files own lowering, verification, optimization, and deterministic printing.
 - Codegen files are split by module, function, statement, expression, cleanup, execution,
@@ -350,6 +351,12 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/sema/TypeSystem.h`
 - `src/tooling/SourceManager.cpp`
 - `src/tooling/SourceManager.h`
+- `src/tooling/AnalysisSnapshot.cpp`
+- `src/tooling/AnalysisSnapshot.h`
+- `src/tooling/ReferenceIndex.cpp`
+- `src/tooling/ReferenceIndex.h`
+- `src/tooling/SymbolIndex.cpp`
+- `src/tooling/SymbolIndex.h`
 - `stdlib/core/luna.package`
 - `stdlib/core/src/error.luna`
 - `stdlib/core/src/iter.luna`
@@ -360,6 +367,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `stdlib/std/luna.package`
 - `stdlib/std/src/io.luna`
 - `tests/aot_runtime_boundary.cmake`
+- `tests/analysis_protocol.cmake`
+- `tests/analysis_snapshot_test.cpp`
 - `tests/control_flow_aot.cmake`
 - `tests/core_surface.cmake`
 - `tests/diagnostic_protocol.cmake`

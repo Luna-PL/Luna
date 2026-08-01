@@ -236,7 +236,10 @@ std::unique_ptr<MetaDecl> Parser::parseMetaDecl() {
         addError("expected a metadata type name after `meta`");
         return nullptr;
     }
-    declaration->name = mTokens[mPos - 1].lexeme;
+    const auto& nameToken = mTokens[mPos - 1];
+    declaration->name = nameToken.lexeme;
+    declaration->nameLine = nameToken.line;
+    declaration->nameCol = nameToken.col;
     consume(TokenKind::LBrace, "Expected '{' for metadata schema body");
     while (!check(TokenKind::RBrace) && !isAtEnd()) {
         if (!match(TokenKind::Identifier)) {
@@ -261,7 +264,10 @@ std::unique_ptr<ConstraintDecl> Parser::parseConstraintDecl() {
         addError("expected a constraint name after `constraint`");
         return nullptr;
     }
-    declaration->name = mTokens[mPos - 1].lexeme;
+    const auto& nameToken = mTokens[mPos - 1];
+    declaration->name = nameToken.lexeme;
+    declaration->nameLine = nameToken.line;
+    declaration->nameCol = nameToken.col;
     declaration->typeParams = parseTypeParamList();
     if (declaration->typeParams.empty())
         addError("constraint '" + declaration->name +
@@ -284,7 +290,10 @@ std::unique_ptr<FragmentDecl> Parser::parseFragmentDecl(FragmentKind kind) {
                  "write `fragment name { ... }` or `fragment name(value) { ... }`");
         return nullptr;
     }
-    decl->name = mTokens[mPos - 1].lexeme;
+    const auto& nameToken = mTokens[mPos - 1];
+    decl->name = nameToken.lexeme;
+    decl->nameLine = nameToken.line;
+    decl->nameCol = nameToken.col;
     if (match(TokenKind::LParen)) {
         decl->params = parseParams();
         consume(TokenKind::RParen, "Expected ')' after fragment parameters");
@@ -307,7 +316,13 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(bool isTraitMethod,
     decl->abi = std::move(abi);
 
     if (match(TokenKind::Identifier)) {
-        decl->name = mTokens[mPos - 1].lexeme;
+        const auto& nameToken = mTokens[mPos - 1];
+        decl->name = nameToken.lexeme;
+        decl->nameLine = nameToken.line;
+        decl->nameCol = nameToken.col;
+        decl->sourcePath = mSourceName;
+        decl->line = nameToken.line;
+        decl->col = nameToken.col;
     } else {
         // Trait methods may have operator-style names; for simplicity just require IDENT
         addError("expected a function name, found " + diagnostic::quotedToken(peek().lexeme));
@@ -358,7 +373,10 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl() {
         addError("Expected struct name");
         return nullptr;
     }
-    decl->name = mTokens[mPos - 1].lexeme;
+    const auto& nameToken = mTokens[mPos - 1];
+    decl->name = nameToken.lexeme;
+    decl->nameLine = nameToken.line;
+    decl->nameCol = nameToken.col;
     decl->typeParams = parseTypeParamList();
     consume(TokenKind::LBrace, "Expected '{' for struct body");
 
@@ -384,7 +402,10 @@ std::unique_ptr<EnumDecl> Parser::parseEnumDecl() {
         addError("Expected enum name");
         return nullptr;
     }
-    decl->name = mTokens[mPos - 1].lexeme;
+    const auto& nameToken = mTokens[mPos - 1];
+    decl->name = nameToken.lexeme;
+    decl->nameLine = nameToken.line;
+    decl->nameCol = nameToken.col;
     decl->typeParams = parseTypeParamList();
     consume(TokenKind::LBrace, "Expected '{' for enum body");
 
@@ -421,7 +442,10 @@ std::unique_ptr<TraitDecl> Parser::parseTraitDecl() {
         addError("Expected trait name");
         return nullptr;
     }
-    decl->name = mTokens[mPos - 1].lexeme;
+    const auto& nameToken = mTokens[mPos - 1];
+    decl->name = nameToken.lexeme;
+    decl->nameLine = nameToken.line;
+    decl->nameCol = nameToken.col;
     decl->typeParams = parseTypeParamList();
     consume(TokenKind::LBrace, "Expected '{' for trait body");
 

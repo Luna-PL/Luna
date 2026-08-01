@@ -181,6 +181,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
     mInstantiator.reset();
     mInstantiatedFunctions.clear();
     mInferenceRoots.clear();
+    mDeclarationReferences.clear();
     mIteratorStateCounter = 0;
     mTraits.clear();
     mTraitTypeParams.clear();
@@ -2886,12 +2887,15 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
             error("undefined name '" + id->name + "'", id->line, id->col);
             return TyUnknown;
         }
-        if (sym->kind == SymbolKind::Function)
+        if (sym->kind == SymbolKind::Function) {
+            if (family != mFunctionFamilies.end() && family->second.size() == 1)
+                recordFunctionReference(id, family->second.front());
             return Type::makeFunction(sym->paramTypes,
                                       sym->returnType ? sym->returnType : TyUnit,
                                       sym->paramContracts,
                                       {luna::ownership::Relation::Owned,
                                        sym->returnUsage});
+        }
         return sym->type ? resolved(sym->type) : TyUnknown;
     }
     if (auto* selection = dynamic_cast<SelectExpr*>(expr))
@@ -4062,10 +4066,12 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
                   " with selector(...)`", call->line, call->col);
             return TyUnknown;
         }
-        if (family != mFunctionFamilies.end() && family->second.size() == 1) {
+        if (sym && sym->kind == SymbolKind::Function &&
+            family != mFunctionFamilies.end() && family->second.size() == 1) {
             auto* declaration = family->second.front();
             call->resolvedSymbolName = declaration->generatedSymbolName.empty()
                 ? declaration->name : declaration->generatedSymbolName;
+            recordFunctionReference(id, declaration);
         }
     }
 
@@ -4281,6 +4287,21 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
     call->returnUsage = sym->returnUsage;
     call->resultType = sym->returnType ? sym->returnType : TyUnit;
     return call->resultType;
+}
+
+void SemanticAnalyzer::recordFunctionReference(
+    const IdentifierExpr* identifier, const FunctionDecl* declaration) {
+    if (!identifier || !declaration || identifier->sourcePath.empty() ||
+        identifier->line <= 0 || identifier->col <= 0)
+        return;
+    mDeclarationReferences.push_back({
+        identifier->sourcePath,
+        identifier->line,
+        identifier->col,
+        identifier->name.size(),
+        declaration->generatedSymbolName.empty()
+            ? declaration->name : declaration->generatedSymbolName,
+    });
 }
 
 TypePtr SemanticAnalyzer::analyzeMemberCall(

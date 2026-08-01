@@ -13,6 +13,14 @@
 #include <optional>
 #include <variant>
 
+struct ResolvedDeclarationReference {
+    std::string sourcePath;
+    int line = 0;
+    int column = 0;
+    size_t byteLength = 0;
+    std::string targetLinkageName;
+};
+
 struct TypeAST;
 struct Program;
 struct Expr;
@@ -38,6 +46,10 @@ public:
     bool analyze(Program* program);
     const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
     SymbolTable& symTable() { return mSymTable; }
+    const SymbolTable& symTable() const { return mSymTable; }
+    const std::vector<ResolvedDeclarationReference>& declarationReferences() const {
+        return mDeclarationReferences;
+    }
 
 private:
     using ConstValue = std::variant<int64_t, double, bool, std::string>;
@@ -168,6 +180,8 @@ private:
                                      bool diagnoseVisibility = true);
     SymbolInfo* lookupSymbol(const std::string& name);
     TypePtr lookupDeclaredType(const std::string& name);
+    void recordFunctionReference(const IdentifierExpr* identifier,
+                                 const FunctionDecl* declaration);
 
     SymbolTable mSymTable;
     std::unordered_map<std::string, MetaDecl*> mMetadataSchemas;
@@ -217,6 +231,7 @@ private:
     luna::instantiation::Instantiator mInstantiator;
     std::unordered_map<std::string, FunctionDecl*> mInstantiatedFunctions;
     std::vector<diagnostic::Diagnostic> mErrors;
+    std::vector<ResolvedDeclarationReference> mDeclarationReferences;
     Program* mProgram = nullptr;
     std::string mCurrentPackageId;
     std::string mCurrentModulePath;

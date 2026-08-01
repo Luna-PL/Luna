@@ -95,7 +95,8 @@ CommandLineParseResult failure(std::string error, bool showUsage) {
 
 CommandLineParseResult parseCommandLine(int argc, char* argv[]) {
     const std::string command = argv[1];
-    if (command != "run" && command != "build" && command != "check")
+    if (command != "run" && command != "build" && command != "check" &&
+        command != "analyze")
         return failure("Unknown command: " + command, true);
     if (argc < 3)
         return failure("Error: Missing file argument", true);
@@ -159,9 +160,13 @@ CommandLineParseResult parseCommandLine(int argc, char* argv[]) {
         }
     }
 
-    if (options.messageFormat == MessageFormat::Json && command != "check")
-        return failure("--message-format=json is currently supported only by `check`",
-                       false);
+    if (options.messageFormat == MessageFormat::Json && command != "check" &&
+        command != "analyze")
+        return failure(
+            "--message-format=json is currently supported only by `check` and `analyze`",
+            false);
+    if (command == "analyze" && options.messageFormat != MessageFormat::Json)
+        return failure("`analyze` requires --message-format=json", false);
     if (options.messageFormat == MessageFormat::Json && options.printMoonCostReport)
         return failure("--moon-cost-report cannot be combined with JSON diagnostics",
                        false);

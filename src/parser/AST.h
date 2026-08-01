@@ -465,6 +465,11 @@ struct IdentPattern : Pattern {
 
 // ─── Declarations ────────────────────────────────────────────────────
 struct Decl : ASTNode {
+    // The declaration location starts at its first modifier/keyword. Tooling
+    // keeps the identifier selection separately so navigation lands on the
+    // source name even for exported or metadata-attached declarations.
+    int nameLine = 0;
+    int nameCol = 0;
     // Every declaration keeps its owning Package ID independently from its
     // module path. The package loader fills this field before semantic
     // analysis, including for declarations loaded from dependencies.

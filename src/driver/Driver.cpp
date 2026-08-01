@@ -5,6 +5,7 @@
 #include "driver/Repl.h"
 #include "moonir/Printer.h"
 #include "runtime/Runtime.h"
+#include "tooling/AnalysisSnapshot.h"
 #include "Version.h"
 #include "package/Package.h"
 #include "diagnostics/Diagnostic.h"
@@ -56,7 +57,80 @@ static void printJsonSummary(size_t errors) {
               << (errors == 0 ? "true" : "false") << "}\n";
 }
 
-static bool requestsJsonDiagnostics(int argc, char* argv[]) {
+static void printAnalysisHello() {
+    std::cout
+        << "{\"protocol\":\"luna.analysis\",\"version\":1,"
+        << "\"kind\":\"hello\",\"language_version\":\""
+        << diagnostic::jsonEscape(LUNA_VERSION_STRING)
+        << "\",\"compiler_commit\":\""
+        << diagnostic::jsonEscape(LUNA_COMPILER_COMMIT)
+        << "\",\"build_target\":\""
+        << diagnostic::jsonEscape(llvm::sys::getDefaultTargetTriple())
+        << "\",\"capabilities\":[\"declarations\",\"call-references\"]}\n";
+}
+
+static bool printAnalysisSymbol(const tooling::IndexedSymbol& symbol) {
+    const auto startByte = diagnostic::byteOffsetFromFile(
+        symbol.selection.path, symbol.selection.line, symbol.selection.column);
+    if (!startByte) return false;
+    const size_t endByte = *startByte + symbol.selection.byteLength;
+    std::cout
+        << "{\"protocol\":\"luna.analysis\",\"version\":1,"
+        << "\"kind\":\"symbol\",\"id\":\""
+        << diagnostic::jsonEscape(symbol.id) << "\",\"name\":\""
+        << diagnostic::jsonEscape(symbol.name) << "\",\"qualified_name\":\""
+        << diagnostic::jsonEscape(symbol.qualifiedName) << "\",\"package_id\":\""
+        << diagnostic::jsonEscape(symbol.packageId) << "\",\"module_path\":\""
+        << diagnostic::jsonEscape(symbol.modulePath) << "\",\"linkage_name\":\""
+        << diagnostic::jsonEscape(symbol.linkageName) << "\",\"symbol_kind\":\""
+        << tooling::indexedSymbolKindName(symbol.kind) << "\",\"signature\":\""
+        << diagnostic::jsonEscape(symbol.signature) << "\",\"selection\":{"
+        << "\"path\":\""
+        << diagnostic::jsonEscape(diagnostic::normalizedPath(symbol.selection.path))
+        << "\",\"start\":{\"byte\":" << *startByte
+        << ",\"line\":" << symbol.selection.line
+        << ",\"column\":" << symbol.selection.column
+        << "},\"end\":{\"byte\":" << endByte
+        << ",\"line\":" << symbol.selection.line
+        << ",\"column\":"
+        << symbol.selection.column + static_cast<int>(symbol.selection.byteLength)
+        << "}},\"exported\":" << (symbol.exported ? "true" : "false")
+        << ",\"external\":" << (symbol.external ? "true" : "false") << "}\n";
+    return true;
+}
+
+static bool printAnalysisReference(const tooling::IndexedReference& reference) {
+    const auto startByte = diagnostic::byteOffsetFromFile(
+        reference.source.path, reference.source.line, reference.source.column);
+    if (!startByte) return false;
+    const size_t endByte = *startByte + reference.source.byteLength;
+    std::cout
+        << "{\"protocol\":\"luna.analysis\",\"version\":1,"
+        << "\"kind\":\"reference\",\"target_id\":\""
+        << diagnostic::jsonEscape(reference.targetId) << "\",\"source\":{"
+        << "\"path\":\""
+        << diagnostic::jsonEscape(diagnostic::normalizedPath(reference.source.path))
+        << "\",\"start\":{\"byte\":" << *startByte
+        << ",\"line\":" << reference.source.line
+        << ",\"column\":" << reference.source.column
+        << "},\"end\":{\"byte\":" << endByte
+        << ",\"line\":" << reference.source.line
+        << ",\"column\":"
+        << reference.source.column + static_cast<int>(reference.source.byteLength)
+        << "}}}\n";
+    return true;
+}
+
+static void printAnalysisSummary(size_t symbols, size_t references,
+                                 bool complete) {
+    std::cout << "{\"protocol\":\"luna.analysis\",\"version\":1,"
+              << "\"kind\":\"summary\",\"symbols\":" << symbols
+              << ",\"references\":" << references
+              << ",\"complete\":" << (complete ? "true" : "false")
+              << "}\n";
+}
+
+static bool requestsJsonOutput(int argc, char* argv[]) {
     for (int index = 1; index < argc; ++index) {
         const std::string argument = argv[index];
         if (argument == "--message-format=json") return true;
@@ -78,6 +152,8 @@ Usage:
   luna --version            Print the compiler version
   luna check  <file-or-package> [--emit-moonir <path>]
                    [--message-format=json]  Verify through MoonIR
+  luna analyze <file-or-package> --message-format=json
+                                      Emit a declaration snapshot
   luna run    <file-or-package> [-O0|-O2|-O3] [--link <shared-library>]
                    [--gpu-target <target[,target...]>]  JIT-compile and execute
   luna build  <file-or-package> [-O0|-O2|-O3] [--link <library-or-name>]
@@ -139,13 +215,18 @@ int run(int argc, char* argv[]) {
 
     auto parseResult = parseCommandLine(argc, argv);
     if (!parseResult.options) {
-        if (requestsJsonDiagnostics(argc, argv)) {
-            printJsonHello();
-            const auto invocationError = diagnostic::format(
-                "driver", parseResult.error, "", 0, 0,
-                "run `luna` without arguments to view supported commands");
-            printJsonDiagnostics({invocationError});
-            printJsonSummary(1);
+        if (requestsJsonOutput(argc, argv)) {
+            if (argc > 1 && std::string(argv[1]) == "analyze") {
+                printAnalysisHello();
+                printAnalysisSummary(0, 0, false);
+            } else {
+                printJsonHello();
+                const auto invocationError = diagnostic::format(
+                    "driver", parseResult.error, "", 0, 0,
+                    "run `luna` without arguments to view supported commands");
+                printJsonDiagnostics({invocationError});
+                printJsonSummary(1);
+            }
             return 2;
         }
         std::cerr << parseResult.error << "\n";
@@ -162,9 +243,34 @@ int run(int argc, char* argv[]) {
     auto& printMoonCostReport = options.printMoonCostReport;
     auto& reserveKernelRuntime = options.reserveKernelRuntime;
     auto& optimizationLevel = options.optimizationLevel;
-    const bool jsonDiagnostics = options.messageFormat == MessageFormat::Json;
+    const bool jsonDiagnostics =
+        options.messageFormat == MessageFormat::Json && cmd == "check";
 
     if (jsonDiagnostics) printJsonHello();
+
+    if (cmd == "analyze") {
+        printAnalysisHello();
+        auto snapshot = tooling::AnalysisSnapshot::analyzePath(filePath);
+        size_t emitted = 0;
+        size_t emittedReferences = 0;
+        bool locationsComplete = true;
+        for (const auto& symbol : snapshot.symbolIndex().declarations()) {
+            if (printAnalysisSymbol(symbol))
+                ++emitted;
+            else
+                locationsComplete = false;
+        }
+        for (const auto& reference : snapshot.referenceIndex().references()) {
+            if (printAnalysisReference(reference))
+                ++emittedReferences;
+            else
+                locationsComplete = false;
+        }
+        printAnalysisSummary(
+            emitted, emittedReferences,
+            snapshot.success() && locationsComplete);
+        return snapshot.success() && locationsComplete ? 0 : 1;
+    }
 
     if (cmd != "build" && (!runtimeLibrary.empty() || !aotCompiler.empty())) {
         const auto invocationError = diagnostic::format(

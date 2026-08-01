@@ -1,14 +1,8 @@
 #include "driver/CompilerPipeline.h"
 
-#include "lexer/Lexer.h"
 #include "moonir/Lowering.h"
 #include "moonir/Optimizer.h"
 #include "moonir/Verifier.h"
-#include "package/Package.h"
-#include "parser/Parser.h"
-#include "sema/OwnershipChecker.h"
-#include "sema/SemanticAnalyzer.h"
-#include "sema/TraitChecker.h"
 
 #include <utility>
 
@@ -18,14 +12,16 @@ bool CompilerPipeline::compileToMoonIR(
     const CompilerPipelineOptions& options) {
     reset(options);
 
-    LoadedPackage loaded;
-    std::vector<diagnostic::Diagnostic> packageErrors;
-    if (!PackageLoader::load(options.inputPath, loaded, packageErrors))
-        return fail(packageErrors);
-    auto* program = loaded.program.get();
+    auto snapshot = luna::tooling::AnalysisSnapshot::analyzePath(
+        options.inputPath);
+    mAnalysisSnapshot =
+        std::make_unique<luna::tooling::AnalysisSnapshot>(std::move(snapshot));
+    if (!mAnalysisSnapshot->success())
+        return fail(mAnalysisSnapshot->errors(), mAnalysisSnapshot->errorStage());
+    auto* program = mAnalysisSnapshot->program();
     mDeclaredPackageName = program->packageName;
-    return compileProgram(
-        program, options,
+    return lowerAnalyzedProgram(
+        options,
         mDeclaredPackageName.empty()
             ? options.inputPath : mDeclaredPackageName);
 }
@@ -35,44 +31,37 @@ bool CompilerPipeline::compileSourceToMoonIR(
     const CompilerPipelineOptions& options) {
     reset(options);
 
-    Lexer lexer(source, virtualPath);
-    auto tokens = lexer.tokenize();
-    if (!lexer.errors().empty()) return fail(lexer.errors(), "lexer");
-
-    Parser parser(std::move(tokens), virtualPath, source);
-    auto program = parser.parse();
-    if (!parser.errors().empty()) return fail(parser.errors(), "parser");
+    auto snapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        source, virtualPath);
+    mAnalysisSnapshot =
+        std::make_unique<luna::tooling::AnalysisSnapshot>(std::move(snapshot));
+    if (!mAnalysisSnapshot->success())
+        return fail(mAnalysisSnapshot->errors(), mAnalysisSnapshot->errorStage());
+    auto* program = mAnalysisSnapshot->program();
     mDeclaredPackageName = program->packageName;
-    return compileProgram(program.get(), options, virtualPath);
+    return lowerAnalyzedProgram(options, virtualPath);
 }
 
 void CompilerPipeline::reset(const CompilerPipelineOptions& options) {
     mOptimizationLevel = options.optimizationLevel;
     mModuleName.clear();
     mDeclaredPackageName.clear();
-    mMoonModule.reset();
     mCodeGenerator.reset();
+    mMoonModule.reset();
+    mAnalysisSnapshot.reset();
     mErrors.clear();
     mErrorStage.clear();
 }
 
-bool CompilerPipeline::compileProgram(
-    Program* program, const CompilerPipelineOptions& options,
-    std::string moduleName) {
+bool CompilerPipeline::lowerAnalyzedProgram(
+    const CompilerPipelineOptions& options, std::string moduleName) {
     mModuleName = std::move(moduleName);
-
-    SemanticAnalyzer sema;
-    if (!sema.analyze(program)) return fail(sema.errors());
-
-    TraitChecker traits;
-    if (!traits.check(program)) return fail(traits.errors());
-
-    OwnershipChecker owner;
-    if (!owner.check(program, sema.symTable())) return fail(owner.errors());
+    auto* program = mAnalysisSnapshot->program();
 
     moon::LunaLowerer lowerer;
     mMoonModule = lowerer.lower(
-        *program, sema.symTable(), options.reserveKernelRuntime);
+        *program, *mAnalysisSnapshot->symbolTable(),
+        options.reserveKernelRuntime);
     if (!lowerer.errors().empty())
         return fail(lowerer.errors(), "moon-lower");
 
@@ -130,6 +119,11 @@ const std::vector<diagnostic::Diagnostic>& CompilerPipeline::errors() const {
 
 const std::string& CompilerPipeline::errorStage() const {
     return mErrorStage;
+}
+
+const luna::tooling::AnalysisSnapshot&
+CompilerPipeline::analysisSnapshot() const {
+    return *mAnalysisSnapshot;
 }
 
 bool CompilerPipeline::fail(const std::vector<diagnostic::Diagnostic>& errors,

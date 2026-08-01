@@ -47,6 +47,18 @@
 - Decoupled the installed-tree AOT smoke linker from the compiler used to
   build Luna, allowing GCC-hosted builds to validate textual LLVM IR with a
   separately discovered or configured Clang driver.
+- Added a retained frontend analysis snapshot for tooling consumers and routed
+  the production compiler pipeline through the same package, semantic, trait,
+  and ownership result without changing MoonIR or code-generation behavior.
+- Added a deterministic read-only declaration index with versioned Symbol IDs,
+  typed signatures, package/module identity, visibility, and source-name
+  locations for language-server consumers.
+- Added the `luna.analysis` v1 JSONL declaration producer and `luna analyze`
+  command, including stable symbol records, byte-exact selections, partial
+  snapshot summaries, and an end-to-end protocol regression.
+- Added compiler-resolved direct-call references mapped to stable Symbol IDs;
+  the analysis protocol now exposes the first definition-safe reference class
+  without relying on source-name matching.
 
 ## 0.1.0-alpha — Development baseline
 

@@ -83,13 +83,7 @@ add_executable(source-manager-test
 )
 target_include_directories(source-manager-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-add_executable(luna
-    src/main.cpp
-    src/driver/AotLinker.cpp
-    src/driver/CommandLine.cpp
-    src/driver/CompilerPipeline.cpp
-    src/driver/Driver.cpp
-    src/driver/Repl.cpp
+add_library(luna-frontend OBJECT
     src/core/TypeRelations.cpp
     src/core/TypeLayout.cpp
     src/lexer/Lexer.cpp
@@ -101,6 +95,29 @@ add_executable(luna
     src/sema/OwnershipChecker.cpp
     src/selector/Selector.cpp
     src/instantiation/Instantiator.cpp
+    src/macro/MacroProcessor.cpp
+    src/package/Package.cpp
+    src/package/PackageManager.cpp
+    src/tooling/AnalysisSnapshot.cpp
+    src/tooling/ReferenceIndex.cpp
+    src/tooling/SymbolIndex.cpp
+)
+target_include_directories(luna-frontend PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(analysis-snapshot-test
+    tests/analysis_snapshot_test.cpp
+    $<TARGET_OBJECTS:luna-frontend>
+)
+target_include_directories(analysis-snapshot-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(luna
+    src/main.cpp
+    src/driver/AotLinker.cpp
+    src/driver/CommandLine.cpp
+    src/driver/CompilerPipeline.cpp
+    src/driver/Driver.cpp
+    src/driver/Repl.cpp
+    $<TARGET_OBJECTS:luna-frontend>
     src/moonir/MoonIR.cpp
     src/moonir/Lowering.cpp
     src/moonir/Verifier.cpp
@@ -120,9 +137,6 @@ add_executable(luna
     src/codegen/CodeGeneratorRuntimeDescriptors.cpp
     src/codegen/CodeGeneratorStatements.cpp
     src/runtime/Runtime.cpp
-    src/macro/MacroProcessor.cpp
-    src/package/Package.cpp
-    src/package/PackageManager.cpp
 )
 
 if(LUNA_STRICT_WARNINGS)
@@ -134,6 +148,8 @@ if(LUNA_STRICT_WARNINGS)
         luna-fragment-plugin-fixture
         fragment-plugin-test
         source-manager-test
+        luna-frontend
+        analysis-snapshot-test
         luna
     )
     foreach(target IN LISTS luna_warning_targets)
@@ -151,13 +167,18 @@ if(LUNA_ENABLE_SANITIZERS)
         message(FATAL_ERROR
             "LUNA_ENABLE_SANITIZERS requires Clang or GCC")
     endif()
-    # `luna` embeds Runtime.cpp for JIT symbol resolution, so instrumenting
-    # this target covers the compiler and its in-process runtime without
-    # contaminating the installed AOT runtime archive with sanitizer symbols.
-    target_compile_options(luna PRIVATE
+    # `luna` embeds Runtime.cpp for JIT symbol resolution. Instrument the
+    # shared frontend objects and both consumers without contaminating the
+    # installed AOT runtime archive with sanitizer symbols.
+    foreach(target IN ITEMS luna luna-frontend analysis-snapshot-test)
+        target_compile_options(${target} PRIVATE
+            -fsanitize=address,undefined
+            -fno-omit-frame-pointer)
+    endforeach()
+    target_link_options(luna PRIVATE
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
-    target_link_options(luna PRIVATE
+    target_link_options(analysis-snapshot-test PRIVATE
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
 endif()
@@ -205,6 +226,11 @@ install(DIRECTORY stdlib/ DESTINATION ${CMAKE_INSTALL_DATADIR}/luna/stdlib)
 
 if(BUILD_TESTING)
     add_test(
+        NAME luna.analysis-snapshot
+        COMMAND $<TARGET_FILE:analysis-snapshot-test>
+            ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    add_test(
         NAME luna.source-manager
         COMMAND $<TARGET_FILE:source-manager-test>
     )
@@ -225,6 +251,13 @@ if(BUILD_TESTING)
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/diagnostic_protocol.cmake
+    )
+    add_test(
+        NAME luna.analysis-protocol-v1
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/analysis_protocol.cmake
     )
     add_test(
         NAME luna.repl-smoke

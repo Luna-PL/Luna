@@ -219,8 +219,14 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 
 | 文件 | 主要职责 |
 |---|---|
+| `src/tooling/AnalysisSnapshot.h` | 可保留 typed AST、package graph、symbol table 与诊断的只读分析快照 |
+| `src/tooling/AnalysisSnapshot.cpp` | package/内存源码的 Parser、Sema、Trait 与 Ownership 前端编排 |
+| `src/tooling/ReferenceIndex.h` | 编译器已解析声明引用的只读索引接口 |
+| `src/tooling/ReferenceIndex.cpp` | 语义引用目标到稳定 SymbolId 的映射、排序与去重 |
 | `src/tooling/SourceManager.h` | 版本化内存文档与 UTF-16 position 接口 |
 | `src/tooling/SourceManager.cpp` | UTF-8 byte offset、行索引和 LSP UTF-16 position 转换 |
+| `src/tooling/SymbolIndex.h` | 稳定 SymbolId、声明元数据与只读查询接口 |
+| `src/tooling/SymbolIndex.cpp` | typed AST 声明、签名、package/module 身份和源码位置索引 |
 
 ## 6. 标准库、文档、示例与基准
 
@@ -314,6 +320,8 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/runtime_gpu_error_test.cpp` | GPU/runtime 错误快照行为 |
 | `tests/fragment_plugin_fixture.cpp` | 测试用外部插件共享库 |
 | `tests/fragment_plugin_test.cpp` | 插件 ABI 装载/调用边界 |
+| `tests/analysis_protocol.cmake` | `luna.analysis` v1 JSONL envelope、声明记录与 byte span 回归 |
+| `tests/analysis_snapshot_test.cpp` | 内存/路径分析、部分失败状态与 frontend 生命周期回归 |
 | `tests/source_manager_test.cpp` | 内存文档版本、Unicode 和 CRLF 回归 |
 | `tests/fixtures/*.luna` | 单主题源码输入；断言必须留在调用它的 CMake 脚本 |
 | `tests/fixtures/repl_session.txt` | REPL 标准输入 transcript |
@@ -541,6 +549,12 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/sema/TypeSystem.h`
 - `src/tooling/SourceManager.cpp`
 - `src/tooling/SourceManager.h`
+- `src/tooling/AnalysisSnapshot.cpp`
+- `src/tooling/AnalysisSnapshot.h`
+- `src/tooling/ReferenceIndex.cpp`
+- `src/tooling/ReferenceIndex.h`
+- `src/tooling/SymbolIndex.cpp`
+- `src/tooling/SymbolIndex.h`
 - `stdlib/core/luna.package`
 - `stdlib/core/src/error.luna`
 - `stdlib/core/src/iter.luna`
@@ -551,6 +565,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `stdlib/std/luna.package`
 - `stdlib/std/src/io.luna`
 - `tests/aot_runtime_boundary.cmake`
+- `tests/analysis_protocol.cmake`
+- `tests/analysis_snapshot_test.cpp`
 - `tests/control_flow_aot.cmake`
 - `tests/core_surface.cmake`
 - `tests/diagnostic_protocol.cmake`
