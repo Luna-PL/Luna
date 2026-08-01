@@ -17,7 +17,9 @@ bool PackageLoader::load(const std::string& path, LoadedPackage& result,
                          std::vector<diagnostic::Diagnostic>& errors) {
     PackageManager manager;
     PackageGraph graph;
-    return manager.load({path}, result, graph, errors);
+    PackageRequest request;
+    request.inputPath = path;
+    return manager.load(request, result, graph, errors);
 }
 
 std::vector<PackageExport> PackageLoader::exports(const Program* program) {

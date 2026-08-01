@@ -20,6 +20,7 @@ struct CommandLineOptions {
     std::string runtimeLibrary;
     std::string aotCompiler;
     std::string moonIrOutput;
+    std::string overlayPath;
     LunaGpuTargetConfig gpuTargets;
     MessageFormat messageFormat = MessageFormat::Human;
     bool printMoonCostReport = false;

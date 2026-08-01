@@ -15,6 +15,7 @@
 #include <iostream>
 #include <cstdio>
 #include <fstream>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -66,12 +67,45 @@ static void printAnalysisHello() {
         << diagnostic::jsonEscape(LUNA_COMPILER_COMMIT)
         << "\",\"build_target\":\""
         << diagnostic::jsonEscape(llvm::sys::getDefaultTargetTriple())
-        << "\",\"capabilities\":[\"declarations\",\"call-references\"]}\n";
+        << "\",\"capabilities\":[\"declarations\",\"call-references\","
+        << "\"method-references\",\"type-references\","
+        << "\"trait-references\","
+        << "\"single-document-overlay\"]}\n";
 }
 
-static bool printAnalysisSymbol(const tooling::IndexedSymbol& symbol) {
-    const auto startByte = diagnostic::byteOffsetFromFile(
-        symbol.selection.path, symbol.selection.line, symbol.selection.column);
+static std::optional<size_t> byteOffsetFromSource(
+    const std::string& source, int line, int column) {
+    if (line <= 0 || column <= 0) return std::nullopt;
+    size_t offset = 0;
+    int currentLine = 1;
+    while (currentLine < line && offset < source.size()) {
+        if (source[offset++] == '\n') ++currentLine;
+    }
+    if (currentLine != line) return std::nullopt;
+    const size_t columnOffset = static_cast<size_t>(column - 1);
+    if (columnOffset > source.size() - offset) return std::nullopt;
+    for (size_t index = 0; index < columnOffset; ++index)
+        if (source[offset + index] == '\n') return std::nullopt;
+    return offset + columnOffset;
+}
+
+static std::optional<size_t> analysisByteOffset(
+    const tooling::SymbolSourceLocation& location,
+    const std::string& overlayPath, const std::string& overlaySource) {
+    if (!overlayPath.empty() &&
+        diagnostic::normalizedPath(location.path) ==
+            diagnostic::normalizedPath(overlayPath))
+        return byteOffsetFromSource(
+            overlaySource, location.line, location.column);
+    return diagnostic::byteOffsetFromFile(
+        location.path, location.line, location.column);
+}
+
+static bool printAnalysisSymbol(
+    const tooling::IndexedSymbol& symbol, const std::string& overlayPath,
+    const std::string& overlaySource) {
+    const auto startByte = analysisByteOffset(
+        symbol.selection, overlayPath, overlaySource);
     if (!startByte) return false;
     const size_t endByte = *startByte + symbol.selection.byteLength;
     std::cout
@@ -99,9 +133,11 @@ static bool printAnalysisSymbol(const tooling::IndexedSymbol& symbol) {
     return true;
 }
 
-static bool printAnalysisReference(const tooling::IndexedReference& reference) {
-    const auto startByte = diagnostic::byteOffsetFromFile(
-        reference.source.path, reference.source.line, reference.source.column);
+static bool printAnalysisReference(
+    const tooling::IndexedReference& reference, const std::string& overlayPath,
+    const std::string& overlaySource) {
+    const auto startByte = analysisByteOffset(
+        reference.source, overlayPath, overlaySource);
     if (!startByte) return false;
     const size_t endByte = *startByte + reference.source.byteLength;
     std::cout
@@ -153,7 +189,8 @@ Usage:
   luna check  <file-or-package> [--emit-moonir <path>]
                    [--message-format=json]  Verify through MoonIR
   luna analyze <file-or-package> --message-format=json
-                                      Emit a declaration snapshot
+                   [--overlay <document>]  Emit a semantic snapshot;
+                                           overlay source is read from stdin
   luna run    <file-or-package> [-O0|-O2|-O3] [--link <shared-library>]
                    [--gpu-target <target[,target...]>]  JIT-compile and execute
   luna build  <file-or-package> [-O0|-O2|-O3] [--link <library-or-name>]
@@ -239,6 +276,7 @@ int run(int argc, char* argv[]) {
     auto& runtimeLibrary = options.runtimeLibrary;
     auto& aotCompiler = options.aotCompiler;
     auto& moonIrOutput = options.moonIrOutput;
+    auto& overlayPath = options.overlayPath;
     auto& gpuTargets = options.gpuTargets;
     auto& printMoonCostReport = options.printMoonCostReport;
     auto& reserveKernelRuntime = options.reserveKernelRuntime;
@@ -250,18 +288,32 @@ int run(int argc, char* argv[]) {
 
     if (cmd == "analyze") {
         printAnalysisHello();
-        auto snapshot = tooling::AnalysisSnapshot::analyzePath(filePath);
+        std::string overlaySource;
+        if (!overlayPath.empty()) {
+            std::ostringstream input;
+            input << std::cin.rdbuf();
+            if (std::cin.bad()) {
+                printAnalysisSummary(0, 0, false);
+                return 2;
+            }
+            overlaySource = input.str();
+        }
+        auto snapshot = overlayPath.empty()
+            ? tooling::AnalysisSnapshot::analyzePath(filePath)
+            : tooling::AnalysisSnapshot::analyzePathWithOverlay(
+                filePath, overlayPath, overlaySource);
         size_t emitted = 0;
         size_t emittedReferences = 0;
         bool locationsComplete = true;
         for (const auto& symbol : snapshot.symbolIndex().declarations()) {
-            if (printAnalysisSymbol(symbol))
+            if (printAnalysisSymbol(symbol, overlayPath, overlaySource))
                 ++emitted;
             else
                 locationsComplete = false;
         }
         for (const auto& reference : snapshot.referenceIndex().references()) {
-            if (printAnalysisReference(reference))
+            if (printAnalysisReference(
+                    reference, overlayPath, overlaySource))
                 ++emittedReferences;
             else
                 locationsComplete = false;

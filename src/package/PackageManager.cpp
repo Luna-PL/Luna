@@ -281,9 +281,13 @@ bool readSource(const fs::path& path, std::string& source,
 bool parseSource(const fs::path& path,
                  const luna::macro::MacroProcessor& macroProcessor,
                  std::unique_ptr<Program>& program,
-                 std::vector<diagnostic::Diagnostic>& errors) {
+                 std::vector<diagnostic::Diagnostic>& errors,
+                 const std::string* overlaySource = nullptr) {
     std::string source;
-    if (!readSource(path, source, errors)) return false;
+    if (overlaySource)
+        source = *overlaySource;
+    else if (!readSource(path, source, errors))
+        return false;
 
     luna::macro::Expansion expansion;
     if (!macroProcessor.process({path.string(), std::move(source)}, expansion, errors))
@@ -408,10 +412,38 @@ bool PackageManager::load(const PackageRequest& request, LoadedPackage& result,
     std::set<std::string> modules;
     std::unordered_map<std::string, PackageUse> usesByAlias;
 
+    std::unordered_map<std::string, const std::string*> overlays;
+    std::set<std::string> sourcePaths;
+    for (const auto& file : files)
+        sourcePaths.insert(fs::absolute(file, ec).lexically_normal().string());
+    for (const auto& overlay : request.overlays) {
+        const std::string path = fs::absolute(overlay.path, ec)
+            .lexically_normal().string();
+        if (!sourcePaths.count(path)) {
+            errors.push_back(diagnostic::format(
+                "package", "overlay path is not a source of the selected package: '" +
+                    overlay.path + "'", overlay.path, 0, 0,
+                "select the package containing the overlaid document"));
+            return false;
+        }
+        if (!overlays.emplace(path, &overlay.source).second) {
+            errors.push_back(diagnostic::format(
+                "package", "duplicate source overlay: '" + overlay.path + "'",
+                overlay.path, 0, 0,
+                "provide at most one overlay for each source path"));
+            return false;
+        }
+    }
+
     bool success = true;
     for (const auto& file : files) {
         std::unique_ptr<Program> sourceProgram;
-        if (!parseSource(file, mMacroProcessor, sourceProgram, errors)) {
+        const auto overlay = overlays.find(
+            fs::absolute(file, ec).lexically_normal().string());
+        const std::string* overlaySource = overlay == overlays.end()
+            ? nullptr : overlay->second;
+        if (!parseSource(
+                file, mMacroProcessor, sourceProgram, errors, overlaySource)) {
             success = false;
             continue;
         }

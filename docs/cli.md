@@ -34,7 +34,23 @@ LLVM code generation, making it the normal command for library packages.
 `hello`, zero or more `diagnostic` records, and one `summary`; stderr remains
 empty. Disk-backed locations use absolute paths and UTF-8 byte offsets with an
 exclusive end. Exit status is `0` for no errors, `1` for reported diagnostics,
-and `2` for command/protocol misuse. This option is currently check-only.
+and `2` for command/protocol misuse.
+
+### Analyze
+
+```sh
+luna analyze <file-or-package> --message-format=json
+luna analyze <file-or-package> --message-format=json \
+    --overlay <document> < current-buffer.luna
+```
+
+`analyze` emits a compiler-owned `luna.analysis` version 1 semantic snapshot:
+one `hello`, declarations, resolved direct-function and user trait-method
+calls plus user type-syntax and trait reference records, and one `summary`. With
+`--overlay`, stdin replaces exactly one existing source file in the selected
+root package without writing a temporary file. Other package files and
+dependencies follow normal resolution. The first overlay transport is
+deliberately single-document; clients must check the advertised capability.
 
 ### JIT run
 
@@ -97,7 +113,8 @@ one line should be placed in a source file and run with `luna run`.
 | `--opt O2` | `run`, `build` | Long form of the optimization option; `--opt=O2` is also accepted. |
 | `--link <library>` | `run`, `build` | Load a JIT shared library or add an AOT linker dependency. Repeatable. |
 | `--emit-moonir <path>` | `check`, `run`, `build` | Write verified, optimized textual MoonIR. |
-| `--message-format=json` | `check` | Emit `luna.diagnostic` JSONL version 1. |
+| `--message-format=json` | `check`, `analyze` | Emit the command's versioned JSONL protocol. |
+| `--overlay <document>` | `analyze` | Read one in-memory source replacement from stdin. |
 | `--moon-cost-report` | `run`, `build` | Print explicit runtime, dynamic, instantiation and kernel cost decisions. |
 | `--gpu-target <list>` | `run`, `build` | Generate requested device code objects. Accepts comma-separated targets. |
 | `--reserve-kernel-runtime` | `run`, `build` | Retain kernel runtime capability even without a reachable launch. |

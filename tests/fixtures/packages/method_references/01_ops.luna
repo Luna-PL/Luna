@@ -1,0 +1,14 @@
+package org.luna.method_references;
+module operations;
+
+export nominal struct Counter {
+    value: i32;
+}
+
+export trait Increment {
+    fn increment(value: i32) -> i32;
+}
+
+impl Increment for i32 {
+    fn increment(value: i32) -> i32 { return value + 1; }
+}

@@ -27,6 +27,9 @@ public:
     AnalysisSnapshot& operator=(const AnalysisSnapshot&) = delete;
 
     static AnalysisSnapshot analyzePath(const std::string& inputPath);
+    static AnalysisSnapshot analyzePathWithOverlay(
+        const std::string& inputPath, const std::string& documentPath,
+        const std::string& source);
     static AnalysisSnapshot analyzeSource(
         const std::string& source, const std::string& documentId);
 

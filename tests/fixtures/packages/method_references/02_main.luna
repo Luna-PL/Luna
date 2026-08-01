@@ -1,0 +1,12 @@
+package org.luna.method_references;
+module application;
+
+fn increment(value: i32) -> i32 { return value + 100; }
+
+fn keep(affine value: operations::Counter) -> affine operations::Counter {
+    return value;
+}
+
+fn main() -> i32 {
+    return 41.increment();
+}

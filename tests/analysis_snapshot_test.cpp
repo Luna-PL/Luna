@@ -2,6 +2,7 @@
 
 #include "sema/SymbolTable.h"
 
+#include <algorithm>
 #include <iostream>
 #include <string>
 
@@ -84,6 +85,82 @@ int main(int argc, char* argv[]) {
                 "Symbol ID changed across equivalent snapshots"))
         return 3;
 
+    const std::string namedTypeSource =
+        "package org.luna.test;\n"
+        "module api;\n"
+        "nominal struct Box { value: i32; }\n"
+        "fn keep(affine value: Box) -> affine Box { return value; }\n";
+    auto namedTypes = luna::tooling::AnalysisSnapshot::analyzeSource(
+        namedTypeSource, "file:///workspace/types.luna");
+    const auto boxes = namedTypes.symbolIndex().findByName("Box");
+    if (!expect(namedTypes.success(), "named type analysis failed") ||
+        !expect(boxes.size() == 1 &&
+                    boxes.front()->kind ==
+                        luna::tooling::IndexedSymbolKind::Struct,
+                "named struct was not indexed") ||
+        !expect(namedTypes.referenceIndex().references().size() == 2,
+                "named type reference inventory is incorrect") ||
+        !expect(std::all_of(
+                    namedTypes.referenceIndex().references().begin(),
+                    namedTypes.referenceIndex().references().end(),
+                    [&](const auto& reference) {
+                        return reference.targetId == boxes.front()->id &&
+                            reference.source.line == 4 &&
+                            reference.source.byteLength == 3;
+                    }),
+                "named type did not resolve to the struct Symbol ID") ||
+        !expect(namedTypes.referenceIndex().references()[0].source.column == 23 &&
+                    namedTypes.referenceIndex().references()[1].source.column == 38,
+                "named type source spans are not exact"))
+        return 12;
+
+    const std::string methodSource =
+        "package org.luna.test;\n"
+        "module api;\n"
+        "trait Transform {\n"
+        "    fn transform(value: i32) -> i32;\n"
+        "}\n"
+        "impl Transform for i32 {\n"
+        "    fn transform(value: i32) -> i32 { return value + 2; }\n"
+        "}\n"
+        "fn main() -> i32 {\n"
+        "    return 8.transform();\n"
+        "}\n";
+    auto methodCall = luna::tooling::AnalysisSnapshot::analyzeSource(
+        methodSource, "file:///workspace/method.luna");
+    const auto methods = methodCall.symbolIndex().findByName("transform");
+    const auto traits = methodCall.symbolIndex().findByName("Transform");
+    const auto methodReference = std::find_if(
+        methodCall.referenceIndex().references().begin(),
+        methodCall.referenceIndex().references().end(),
+        [&](const auto& reference) {
+            return !methods.empty() && reference.targetId == methods.front()->id;
+        });
+    const auto traitReference = std::find_if(
+        methodCall.referenceIndex().references().begin(),
+        methodCall.referenceIndex().references().end(),
+        [&](const auto& reference) {
+            return !traits.empty() && reference.targetId == traits.front()->id;
+        });
+    if (!expect(methodCall.success(), "trait method analysis failed") ||
+        !expect(methods.size() == 1 &&
+                    methods.front()->kind ==
+                        luna::tooling::IndexedSymbolKind::Method,
+                "implemented method was not indexed") ||
+        !expect(traits.size() == 1,
+                "trait declaration was not indexed") ||
+        !expect(methodReference != methodCall.referenceIndex().references().end() &&
+                    methodReference->source.line == 10 &&
+                    methodReference->source.column == 14 &&
+                    methodReference->source.byteLength == 9,
+                "member call did not resolve to the method Symbol ID") ||
+        !expect(traitReference != methodCall.referenceIndex().references().end() &&
+                    traitReference->source.line == 6 &&
+                    traitReference->source.column == 6 &&
+                    traitReference->source.byteLength == 9,
+                "impl trait did not resolve to the trait Symbol ID"))
+        return 10;
+
     auto semanticFailure = luna::tooling::AnalysisSnapshot::analyzeSource(
         "fn main() -> i32 { return missing; }\n",
         "file:///workspace/semantic_error.luna");
@@ -151,6 +228,66 @@ int main(int argc, char* argv[]) {
                         "02_main.luna") != std::string::npos,
                 "cross-file call did not resolve to its declaration Symbol ID"))
         return 8;
+
+    const std::string methodPackagePath =
+        std::string(argv[1]) + "/tests/fixtures/packages/method_references";
+    auto methodPackage =
+        luna::tooling::AnalysisSnapshot::analyzePath(methodPackagePath);
+    const auto packageMethods =
+        methodPackage.symbolIndex().findByName("increment");
+    const auto counters = methodPackage.symbolIndex().findByName("Counter");
+    const luna::tooling::IndexedSymbol* implementedMethod = nullptr;
+    for (const auto* symbol : packageMethods) {
+        if (symbol->kind == luna::tooling::IndexedSymbolKind::Method)
+            implementedMethod = symbol;
+    }
+    const auto packageMethodReference = std::find_if(
+        methodPackage.referenceIndex().references().begin(),
+        methodPackage.referenceIndex().references().end(),
+        [&](const auto& reference) {
+            return implementedMethod && reference.targetId == implementedMethod->id;
+        });
+    const auto crossFileTypeReferences = std::count_if(
+        methodPackage.referenceIndex().references().begin(),
+        methodPackage.referenceIndex().references().end(),
+        [&](const auto& reference) {
+            return counters.size() == 1 &&
+                reference.targetId == counters.front()->id &&
+                reference.source.path.find("02_main.luna") != std::string::npos;
+        });
+    if (!expect(methodPackage.success(),
+                "cross-file trait method analysis failed") ||
+        !expect(packageMethods.size() == 2 && implementedMethod != nullptr,
+                "method/function name collision was not indexed") ||
+        !expect(packageMethodReference !=
+                    methodPackage.referenceIndex().references().end() &&
+                    packageMethodReference->source.path.find(
+                        "02_main.luna") != std::string::npos,
+                "cross-file member call resolved by name instead of method identity") ||
+        !expect(counters.size() == 1 && crossFileTypeReferences == 2,
+                "qualified cross-file type did not resolve to its Symbol ID"))
+        return 11;
+
+    const std::string overlaidDocument = multiModulePath + "/02_main.luna";
+    const std::string overlaySource =
+        "package org.luna.module_headers;\n"
+        "module application;\n"
+        "using org.luna.std as std;\n"
+        "fn unsaved_value() -> i32 { return 7; }\n"
+        "fn main() -> i32 { return unsaved_value(); }\n";
+    auto overlaid = luna::tooling::AnalysisSnapshot::analyzePathWithOverlay(
+        multiModulePath, overlaidDocument, overlaySource);
+    const auto unsavedValues =
+        overlaid.symbolIndex().findByName("unsaved_value");
+    if (!expect(overlaid.success(), "package overlay analysis failed") ||
+        !expect(unsavedValues.size() == 1 &&
+                    unsavedValues.front()->modulePath == "application",
+                "overlay declaration lost its package/module identity") ||
+        !expect(overlaid.referenceIndex().references().size() == 1 &&
+                    overlaid.referenceIndex().references().front().targetId ==
+                        unsavedValues.front()->id,
+                "overlay call did not resolve against in-memory source"))
+        return 9;
 
     return 0;
 }

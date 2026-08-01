@@ -59,6 +59,15 @@
 - Added compiler-resolved direct-call references mapped to stable Symbol IDs;
   the analysis protocol now exposes the first definition-safe reference class
   without relying on source-name matching.
+- Added compiler-resolved user trait-method references with exact member-name
+  spans, mapped to the selected impl method's stable Symbol ID and advertised
+  independently through the `method-references` capability.
+- Added resolved user type and trait references for type syntax, impls, and
+  bounds, advertised independently through `type-references` and
+  `trait-references` and consumed by language-server definition requests.
+- Added package-aware single-document source overlays to `luna analyze` via
+  stdin, preserving package/module identity and computing protocol byte spans
+  against the in-memory UTF-8 snapshot rather than stale disk contents.
 
 ## 0.1.0-alpha — Development baseline
 

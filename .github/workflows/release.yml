@@ -56,14 +56,66 @@ jobs:
           version="$(cat VERSION)"
           package="luna-$version-linux-x86_64"
           cmake --install build-release --prefix "$PWD/stage/$package"
-          llvm_library="$(ldd "stage/$package/bin/luna" | awk '/libLLVM/{print $3; exit}')"
-          test -n "$llvm_library"
-          cp -L "$llvm_library" "stage/$package/lib/"
+
+          # A prebuilt compiler needs the complete non-glibc DT_NEEDED closure,
+          # not only libLLVM. In particular, Ubuntu's libLLVM depends on
+          # libedit and libz3, which are not present in a clean installation.
+          ldd "stage/$package/bin/luna" > linux-runtime-dependencies.txt
+          if grep -q 'not found' linux-runtime-dependencies.txt; then
+            cat linux-runtime-dependencies.txt
+            exit 1
+          fi
+          awk '
+            $2 == "=>" && $3 ~ /^\// { print $3 }
+            $1 ~ /^\// { print $1 }
+          ' linux-runtime-dependencies.txt | sort -u |
+          while IFS= read -r library; do
+            case "$(basename "$library")" in
+              ld-linux-x86-64.so.2|libc.so.6|libdl.so.2|libm.so.6|\
+              libpthread.so.0|libresolv.so.2|librt.so.1|libutil.so.1)
+                continue
+                ;;
+            esac
+            cp -L "$library" "stage/$package/lib/$(basename "$library")"
+          done
+
+          # shellcheck disable=SC2016 # $ORIGIN is a dynamic-loader token.
           patchelf --set-rpath '$ORIGIN/../lib' "stage/$package/bin/luna"
+          # shellcheck disable=SC2016 # $ORIGIN is a dynamic-loader token.
+          find "stage/$package/lib" -maxdepth 1 -type f -name '*.so*' \
+            -exec patchelf --set-rpath '$ORIGIN' {} \;
+
+          # Fail if a non-glibc dependency still resolves outside the package.
+          package_root="$(realpath "stage/$package")"
+          ldd "stage/$package/bin/luna" > packaged-linux-dependencies.txt
+          if grep -q 'not found' packaged-linux-dependencies.txt; then
+            cat packaged-linux-dependencies.txt
+            exit 1
+          fi
+          while read -r soname resolved; do
+            case "$(basename "$soname")" in
+              ld-linux-x86-64.so.2|libc.so.6|libdl.so.2|libm.so.6|\
+              libpthread.so.0|libresolv.so.2|librt.so.1|libutil.so.1)
+                continue
+                ;;
+            esac
+            case "$resolved" in
+              "$package_root"/*) ;;
+              *)
+                echo "$soname resolves outside the package: $resolved" >&2
+                exit 1
+                ;;
+            esac
+          done < <(awk '$2 == "=>" { print $1, $3 }' packaged-linux-dependencies.txt)
+
+          bundled_libraries="$(
+            find "stage/$package/lib" -maxdepth 1 -type f -name '*.so*' \
+              -printf '%f\n' | sort | paste -sd, -
+          )"
           {
             echo "Luna $version prebuilt Alpha package"
             echo "Target: Ubuntu 24.04 x86_64 (glibc)"
-            echo "Bundled compiler dependency: $(basename "$llvm_library")"
+            echo "Bundled compiler dependency closure: $bundled_libraries"
             echo "AOT requirement: a compatible LLVM 22 clang++ linker driver"
             echo "Support scope: JIT/check are packaged; CUDA/ROCm require host drivers and runtimes"
             echo "Source commit: $GITHUB_SHA"
@@ -78,6 +130,22 @@ jobs:
             cd dist
             sha256sum "$package.tar.gz" > "$package.tar.gz.sha256"
           )
+
+      - name: Verify Linux archive in clean Ubuntu 24.04
+        run: |
+          version="$(cat VERSION)"
+          package="luna-$version-linux-x86_64"
+          (cd dist && sha256sum -c "$package.tar.gz.sha256")
+          cmake -E remove_directory package-verify
+          cmake -E make_directory package-verify
+          (cd package-verify && cmake -E tar xzf "../dist/$package.tar.gz")
+          version_output="$(
+            docker run --rm --network none \
+              --volume "$PWD/package-verify/$package:/opt/luna:ro" \
+              ubuntu:24.04 \
+              /opt/luna/bin/luna --version
+          )"
+          test "$version_output" = "Luna $version"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -154,6 +222,40 @@ jobs:
             shasum -a 256 "$package.tar.gz" > "$package.tar.gz.sha256"
           )
 
+      - name: Verify macOS archive
+        shell: bash
+        run: |
+          version="$(cat VERSION)"
+          architecture="$(uname -m)"
+          package="luna-$version-macos-$architecture"
+          (cd dist && shasum -a 256 -c "$package.tar.gz.sha256")
+          cmake -E remove_directory package-verify
+          cmake -E make_directory package-verify
+          (cd package-verify && cmake -E tar xzf "../dist/$package.tar.gz")
+
+          binaries=("package-verify/$package/bin/luna")
+          while IFS= read -r library; do
+            binaries+=("$library")
+          done < <(find "package-verify/$package/lib" -type f -name '*.dylib' | sort)
+          for binary in "${binaries[@]}"; do
+            while IFS= read -r dependency; do
+              case "$dependency" in
+                @executable_path/../lib/*|@loader_path/*|/usr/lib/*|/System/Library/*)
+                  ;;
+                *)
+                  echo "$binary has an unpackaged dependency: $dependency" >&2
+                  exit 1
+                  ;;
+              esac
+            done < <(otool -L "$binary" | tail -n +2 | awk '{print $1}')
+          done
+
+          version_output="$(
+            env -i PATH=/usr/bin:/bin \
+              "package-verify/$package/bin/luna" --version
+          )"
+          test "$version_output" = "Luna $version"
+
       - uses: actions/upload-artifact@v4
         with:
           name: release-macos
@@ -212,6 +314,12 @@ jobs:
           while IFS= read -r library; do
             test -f "$library" && cp -L "$library" "stage/$package/bin/"
           done < runtime-dlls.txt
+          ldd "stage/$package/bin/luna.exe" > packaged-windows-dependencies.txt
+          if grep -Eiq '(^|[\\/])ucrt64[\\/]' packaged-windows-dependencies.txt; then
+            cat packaged-windows-dependencies.txt
+            echo "a UCRT64 dependency still resolves outside the package" >&2
+            exit 1
+          fi
           {
             echo "Luna $version prebuilt Alpha package"
             echo "Target: Windows x86_64, MSYS2 UCRT64"
@@ -229,6 +337,33 @@ jobs:
             cd dist
             sha256sum "$package.zip" > "$package.zip.sha256"
           )
+
+      - name: Verify Windows archive
+        shell: pwsh
+        run: |
+          $version = (Get-Content VERSION -Raw).Trim()
+          $package = "luna-$version-windows-ucrt64-x86_64"
+          $archive = Join-Path $PWD "dist/$package.zip"
+          $expectedHash = ((Get-Content "${archive}.sha256" -Raw) -split '\s+')[0]
+          $actualHash = (Get-FileHash -Algorithm SHA256 $archive).Hash
+          if ($actualHash -ne $expectedHash) {
+            throw "SHA-256 mismatch for $archive"
+          }
+
+          $verifyRoot = Join-Path $PWD "package-verify"
+          if (Test-Path $verifyRoot) {
+            Remove-Item -Recurse -Force $verifyRoot
+          }
+          Expand-Archive -Path $archive -DestinationPath $verifyRoot
+
+          # Restrict PATH to Windows itself. All UCRT64 compiler DLLs must be
+          # found beside luna.exe in the extracted archive.
+          $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
+          $luna = Join-Path $verifyRoot "$package/bin/luna.exe"
+          $versionOutput = (& $luna --version | Out-String).Trim()
+          if ($LASTEXITCODE -ne 0 -or $versionOutput -ne "Luna $version") {
+            throw "packaged luna failed isolated startup: $versionOutput"
+          }
 
       - uses: actions/upload-artifact@v4
         with:

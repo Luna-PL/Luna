@@ -180,8 +180,9 @@ private:
                                      bool diagnoseVisibility = true);
     SymbolInfo* lookupSymbol(const std::string& name);
     TypePtr lookupDeclaredType(const std::string& name);
-    void recordFunctionReference(const IdentifierExpr* identifier,
-                                 const FunctionDecl* declaration);
+    void recordDeclarationReference(const ASTNode* source,
+                                    size_t byteLength,
+                                    const Decl* declaration);
 
     SymbolTable mSymTable;
     std::unordered_map<std::string, MetaDecl*> mMetadataSchemas;

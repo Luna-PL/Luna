@@ -220,7 +220,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | 文件 | 主要职责 |
 |---|---|
 | `src/tooling/AnalysisSnapshot.h` | 可保留 typed AST、package graph、symbol table 与诊断的只读分析快照 |
-| `src/tooling/AnalysisSnapshot.cpp` | package/内存源码的 Parser、Sema、Trait 与 Ownership 前端编排 |
+| `src/tooling/AnalysisSnapshot.cpp` | package/内存 overlay 源码的 Parser、Sema、Trait 与 Ownership 前端编排 |
 | `src/tooling/ReferenceIndex.h` | 编译器已解析声明引用的只读索引接口 |
 | `src/tooling/ReferenceIndex.cpp` | 语义引用目标到稳定 SymbolId 的映射、排序与去重 |
 | `src/tooling/SourceManager.h` | 版本化内存文档与 UTF-16 position 接口 |
@@ -683,6 +683,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/packages/mismatched_package/02_second.luna`
 - `tests/fixtures/packages/module_headers/01_math.luna`
 - `tests/fixtures/packages/module_headers/02_main.luna`
+- `tests/fixtures/packages/method_references/01_ops.luna`
+- `tests/fixtures/packages/method_references/02_main.luna`
 - `tests/fixtures/packages/multiple_parse_errors/01_first.luna`
 - `tests/fixtures/packages/multiple_parse_errors/02_second.luna`
 - `tests/fixtures/packages/self_using/01_main.luna`

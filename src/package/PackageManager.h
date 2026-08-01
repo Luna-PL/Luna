@@ -10,6 +10,11 @@
 
 struct PackageRequest {
     std::string inputPath;
+    struct SourceOverlay {
+        std::string path;
+        std::string source;
+    };
+    std::vector<SourceOverlay> overlays;
 };
 
 struct PackageGraph {

@@ -41,8 +41,31 @@ AnalysisSnapshot AnalysisSnapshot::analyzePath(const std::string& inputPath) {
     PackageManager manager;
     LoadedPackage loaded;
     std::vector<diagnostic::Diagnostic> errors;
+    PackageRequest request;
+    request.inputPath = inputPath;
     const bool loadedSuccessfully = manager.load(
-        {inputPath}, loaded, snapshot.mPackageGraph, errors);
+        request, loaded, snapshot.mPackageGraph, errors);
+    snapshot.mProgram = std::move(loaded.program);
+    if (!loadedSuccessfully) {
+        snapshot.fail(errors);
+        return snapshot;
+    }
+    snapshot.analyzeProgram();
+    return snapshot;
+}
+
+AnalysisSnapshot AnalysisSnapshot::analyzePathWithOverlay(
+    const std::string& inputPath, const std::string& documentPath,
+    const std::string& source) {
+    AnalysisSnapshot snapshot;
+    PackageManager manager;
+    LoadedPackage loaded;
+    std::vector<diagnostic::Diagnostic> errors;
+    PackageRequest request;
+    request.inputPath = inputPath;
+    request.overlays.push_back({documentPath, source});
+    const bool loadedSuccessfully = manager.load(
+        request, loaded, snapshot.mPackageGraph, errors);
     snapshot.mProgram = std::move(loaded.program);
     if (!loadedSuccessfully) {
         snapshot.fail(errors);

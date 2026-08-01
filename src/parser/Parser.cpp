@@ -1085,7 +1085,11 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
                 addError("Expected field name after '.'");
                 break;
             }
-            access->field = mTokens[mPos - 1].lexeme;
+            const auto& fieldToken = mTokens[mPos - 1];
+            access->sourcePath = mSourceName;
+            access->line = fieldToken.line;
+            access->col = fieldToken.col;
+            access->field = fieldToken.lexeme;
             expr = std::move(access);
         } else if (match(TokenKind::LBracket)) {
             auto first = parseExpr();

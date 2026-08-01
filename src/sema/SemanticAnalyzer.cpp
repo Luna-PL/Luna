@@ -2088,6 +2088,7 @@ std::string SemanticAnalyzer::resolveTraitRef(TraitRef& trait, const ASTNode* us
     }
     if (!selected) return "";
     trait.resolvedTraitId = traitIdentity(selected);
+    recordDeclarationReference(&trait, trait.name.size(), selected);
     return trait.resolvedTraitId;
 }
 
@@ -2889,7 +2890,8 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
         }
         if (sym->kind == SymbolKind::Function) {
             if (family != mFunctionFamilies.end() && family->second.size() == 1)
-                recordFunctionReference(id, family->second.front());
+                recordDeclarationReference(id, id->name.size(),
+                                           family->second.front());
             return Type::makeFunction(sym->paramTypes,
                                       sym->returnType ? sym->returnType : TyUnit,
                                       sym->paramContracts,
@@ -4071,7 +4073,7 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
             auto* declaration = family->second.front();
             call->resolvedSymbolName = declaration->generatedSymbolName.empty()
                 ? declaration->name : declaration->generatedSymbolName;
-            recordFunctionReference(id, declaration);
+            recordDeclarationReference(id, id->name.size(), declaration);
         }
     }
 
@@ -4289,18 +4291,38 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
     return call->resultType;
 }
 
-void SemanticAnalyzer::recordFunctionReference(
-    const IdentifierExpr* identifier, const FunctionDecl* declaration) {
-    if (!identifier || !declaration || identifier->sourcePath.empty() ||
-        identifier->line <= 0 || identifier->col <= 0)
+void SemanticAnalyzer::recordDeclarationReference(
+    const ASTNode* source, size_t byteLength,
+    const Decl* declaration) {
+    if (!source || !declaration || source->sourcePath.empty() ||
+        source->line <= 0 || source->col <= 0 || byteLength == 0)
         return;
+    std::string linkageName = declaration->generatedSymbolName;
+    if (linkageName.empty()) {
+        std::string name;
+        if (const auto* function = dynamic_cast<const FunctionDecl*>(declaration))
+            name = function->name;
+        else if (const auto* structure = dynamic_cast<const StructDecl*>(declaration))
+            name = structure->name;
+        else if (const auto* enumeration = dynamic_cast<const EnumDecl*>(declaration))
+            name = enumeration->name;
+        else if (const auto* trait = dynamic_cast<const TraitDecl*>(declaration))
+            name = trait->name;
+        else if (const auto* metadata = dynamic_cast<const MetaDecl*>(declaration))
+            name = metadata->name;
+        else
+            return;
+        linkageName = qualifiedDeclarationKey(
+            declaration->packageId.empty() ? std::string("main")
+                                           : declaration->packageId,
+            declaration->modulePath, name);
+    }
     mDeclarationReferences.push_back({
-        identifier->sourcePath,
-        identifier->line,
-        identifier->col,
-        identifier->name.size(),
-        declaration->generatedSymbolName.empty()
-            ? declaration->name : declaration->generatedSymbolName,
+        source->sourcePath,
+        source->line,
+        source->col,
+        byteLength,
+        std::move(linkageName),
     });
 }
 
@@ -4401,6 +4423,8 @@ TypePtr SemanticAnalyzer::analyzeMemberCall(
               " explicit argument(s)", call->line, call->col);
         return TyUnknown;
     }
+
+    recordDeclarationReference(member, member->field.size(), method);
 
     std::unique_ptr<FieldAccessExpr> ownedMember(
         static_cast<FieldAccessExpr*>(call->callee.release()));
@@ -6710,6 +6734,11 @@ TypePtr SemanticAnalyzer::resolveTypeAST(const TypeAST* ast,
         }
         if (auto metadata = lookupDeclaredType(named->name);
             metadata && metadata->kind == TypeKind::Metadata) {
+            const auto declaration = mQualifiedDeclarations.find(
+                sourceDeclarationKey(named->name, false));
+            if (declaration != mQualifiedDeclarations.end())
+                recordDeclarationReference(
+                    named, named->name.size(), declaration->second);
             return metadata;
         }
 
@@ -6718,6 +6747,10 @@ TypePtr SemanticAnalyzer::resolveTypeAST(const TypeAST* ast,
         auto nominal = mDeclaredTypes.find(typeKey);
         if (nominal != mDeclaredTypes.end()) nominalType = nominal->second;
         if (nominalType) {
+            const auto declaration = mQualifiedDeclarations.find(typeKey);
+            if (declaration != mQualifiedDeclarations.end())
+                recordDeclarationReference(
+                    named, named->name.size(), declaration->second);
             TypeVec args;
             for (auto& arg : named->typeArgs)
                 args.push_back(resolveTypeAST(arg.get(), bindings));

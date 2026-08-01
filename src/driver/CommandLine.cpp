@@ -155,6 +155,10 @@ CommandLineParseResult parseCommandLine(int argc, char* argv[]) {
             if (format != "json")
                 return failure("Unsupported message format: " + format, false);
             options.messageFormat = MessageFormat::Json;
+        } else if (option == "--overlay" && i + 1 < argc) {
+            options.overlayPath = argv[++i];
+        } else if (option.rfind("--overlay=", 0) == 0) {
+            options.overlayPath = option.substr(10);
         } else {
             return failure("Unknown option: " + option, true);
         }
@@ -167,6 +171,8 @@ CommandLineParseResult parseCommandLine(int argc, char* argv[]) {
             false);
     if (command == "analyze" && options.messageFormat != MessageFormat::Json)
         return failure("`analyze` requires --message-format=json", false);
+    if (!options.overlayPath.empty() && command != "analyze")
+        return failure("--overlay is supported only by `analyze`", false);
     if (options.messageFormat == MessageFormat::Json && options.printMoonCostReport)
         return failure("--moon-cost-report cannot be combined with JSON diagnostics",
                        false);

@@ -1,5 +1,31 @@
-if(NOT DEFINED LUNA_EXECUTABLE OR NOT DEFINED LUNA_SOURCE_DIR)
-    message(FATAL_ERROR "LUNA_EXECUTABLE and LUNA_SOURCE_DIR are required")
+if(NOT DEFINED LUNA_EXECUTABLE OR NOT DEFINED LUNA_SOURCE_DIR OR
+   NOT DEFINED LUNA_BINARY_DIR)
+    message(FATAL_ERROR
+        "LUNA_EXECUTABLE, LUNA_SOURCE_DIR, and LUNA_BINARY_DIR are required")
+endif()
+
+set(overlay_input "${LUNA_BINARY_DIR}/analysis-overlay-input.luna")
+file(WRITE "${overlay_input}"
+    "// 月 overlay shifts UTF-8 bytes\n"
+    "fn unsaved_value() -> i32 { return 9; }\n"
+    "fn main() -> i32 { return unsaved_value(); }\n")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" analyze
+            "${LUNA_SOURCE_DIR}/examples/minimal.luna"
+            --message-format=json
+            --overlay "${LUNA_SOURCE_DIR}/examples/minimal.luna"
+    INPUT_FILE "${overlay_input}"
+    RESULT_VARIABLE overlay_result
+    OUTPUT_VARIABLE overlay_output
+    ERROR_VARIABLE overlay_error
+)
+file(REMOVE "${overlay_input}")
+if(NOT overlay_result EQUAL 0 OR NOT overlay_error STREQUAL "" OR
+   NOT overlay_output MATCHES "single-document-overlay" OR
+   NOT overlay_output MATCHES "unsaved_value" OR
+   NOT overlay_output MATCHES "\\\"kind\\\":\\\"reference\\\"")
+    message(FATAL_ERROR
+        "analysis overlay invocation failed\n${overlay_output}\n${overlay_error}")
 endif()
 
 execute_process(
@@ -13,6 +39,11 @@ execute_process(
 if(NOT analysis_result EQUAL 0 OR NOT analysis_error STREQUAL "")
     message(FATAL_ERROR
         "analysis protocol invocation failed\n${analysis_output}\n${analysis_error}")
+endif()
+if(NOT analysis_output MATCHES "type-references" OR
+   NOT analysis_output MATCHES "trait-references")
+    message(FATAL_ERROR
+        "analysis reference capabilities are missing\n${analysis_output}")
 endif()
 
 string(REPLACE "\n" ";" records "${analysis_output}")
