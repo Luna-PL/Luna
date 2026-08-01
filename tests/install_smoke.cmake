@@ -1,9 +1,10 @@
 if(NOT DEFINED LUNA_BINARY_DIR OR
+   NOT DEFINED LUNA_VERSION OR
    NOT DEFINED LUNA_AOT_COMPILER OR
    NOT DEFINED LUNA_RUNTIME_FILE)
     message(FATAL_ERROR
-        "install smoke requires the build directory, AOT compiler, and "
-        "runtime archive name")
+        "install smoke requires the build directory, Luna version, "
+        "AOT compiler, and runtime archive name")
 endif()
 
 foreach(required
@@ -66,8 +67,9 @@ execute_process(
     OUTPUT_VARIABLE version_output
     ERROR_VARIABLE version_error
 )
+string(STRIP "${version_output}" reported_version)
 if(NOT version_result EQUAL 0 OR
-   NOT version_output MATCHES "^Luna 0\\.2\\.0-alpha")
+   NOT "${reported_version}" STREQUAL "Luna ${LUNA_VERSION}")
     message(FATAL_ERROR
         "installed driver reported an unexpected version.\n"
         "Result: ${version_result}\n${version_output}\n${version_error}")

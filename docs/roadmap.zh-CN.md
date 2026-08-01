@@ -1,7 +1,7 @@
 # Luna roadmap / Luna 路线图
 
 > 文档类别：项目路线图
-> 适用版本：0.2.0-alpha 长期维护期
+> 适用版本：0.2.1 长期维护期
 > 状态：Planned
 > 规范性：非规范
 > 更新：2026-07-31
@@ -12,7 +12,7 @@ current compiler support.
 
 ## English summary
 
-Luna is entering a long-lived `0.2.0-alpha` line with no scheduled Beta or
+Luna is entering a long-lived `0.2.1` line with no scheduled Beta or
 language-version bump. Near-term work prioritizes diagnostics, editor/build/
 package integration, distribution, reproducibility, testing and developer
 tools. Language changes are limited to correctness, safety, documented contract
@@ -23,7 +23,7 @@ and remote dependency resolution are not active development goals.
 
 ## 当前项目状态
 
-- `0.2.0-alpha` 是长期维护版本线；升级不会由时间自动触发。
+- `0.2.1` 是长期维护版本线；升级不会由时间自动触发。
 - 当前开发主线是工具链，不是继续扩大语言表面。
 - 同版本构建以源码 commit、发布 manifest 和校验和标识。
 - Beta 或新语言版本必须另行决策，并重新执行语义基线与迁移审查。

@@ -1,7 +1,7 @@
 # Luna Repository File and Responsibility Guide
 
 > Document category: implementation note / project policy
-> Applies to: Luna 0.2.0-alpha
+> Applies to: Luna 0.2.1
 > Status: Internal
 > Normative status: normative
 > Implementation audit: pending this change (2026-07-31)

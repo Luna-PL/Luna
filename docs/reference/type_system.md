@@ -1,7 +1,7 @@
 # Luna 0.2 Alpha Type-System Reference
 
 > Document category: language contract and Alpha reference
-> Applies to: Luna 0.2.0-alpha
+> Applies to: Luna 0.2.1
 > Status: core model Frozen for Alpha; individual surfaces are labeled by section
 > Normative status: type domains, identity, relations, usage, and formation rules are normative; internal layout is not public ABI
 > Initial implementation audit: `d0ab31c` (2026-07-31)

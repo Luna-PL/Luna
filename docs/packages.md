@@ -85,7 +85,7 @@ version = "1.0.0"
 sources = ["src"]
 
 [dependencies]
-"org.luna.std" = "0.2.0-alpha"
+"org.luna.std" = "0.2.1"
 ```
 
 `sources` must be a relative file or directory inside the package directory; absolute paths
@@ -107,7 +107,7 @@ system library paths.
 # luna.lock (tool-generated and canonically sorted by Package ID)
 [[package]]
 id = "org.luna.std"
-version = "0.2.0-alpha"
+version = "0.2.1"
 source = "workspace:std"
 hash = "..."
 ```

@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0-alpha — Unreleased
+## 0.2.1 — Prerelease
 
 - Established the A0 documentation contract, 0.2 Alpha semantic baseline,
   exhaustive built-in/internal type inventory, and a frozen error-model
@@ -38,7 +38,7 @@
   CTest gate that rejects unregistered files.
 - Removed the final legacy build-tree compatibility executable/symlink; build,
   install, documentation and release surfaces now use only `luna`.
-- Declared `0.2.0-alpha` a long-lived maintenance line with no scheduled Beta
+- Declared `0.2.1` a long-lived maintenance line with no scheduled Beta
   or language-version bump, and shifted near-term development toward
   diagnostics, editor/build/package integration, distribution and reliability.
 - Added a bounded O3 four-way unroll hint for medium-sized straight-line,

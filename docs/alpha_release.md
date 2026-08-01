@@ -1,16 +1,16 @@
-# Luna 0.2.0-alpha Release Notes
+# Luna 0.2.1 Prerelease Notes
 
 > Document type: Release notes
-> Applies to: Luna 0.2.0-alpha
+> Applies to: Luna 0.2.1
 > Status: Implemented Experimental
 > Normativity: Partially normative
-> Implementation checked: Pending confirmation on the 0.2.0-alpha release commit (2026-07-31)
+> Implementation checked: Pending confirmation on the 0.2.1 release commit (2026-08-01)
 
 [简体中文版本](alpha_release.zh-CN.md)
 
 ## Position
 
-Luna Alpha 0.2.0 is a compiler prototype for language experiments and internal
+Luna 0.2.1 is a prerelease compiler prototype for language experiments and internal
 projects on Linux, macOS and Windows. The stable core is validated by native CI
 on all three platforms; Windows uses the MSYS2 UCRT64 toolchain. The stable core
 includes multi-file packages with explicit exports, verified MoonIR, basic
@@ -25,15 +25,15 @@ see [heterogeneous compute](heterogeneous_compute.md).
 
 ## Long-term maintenance status
 
-`0.2.0-alpha` is the current long-term maintenance line, not a short transition
+`0.2.1` is the current long-term maintenance line, not a short transition
 label leading to a near-term Beta. There is no scheduled Beta, `0.3`, or language
-version upgrade. The public version string remains `0.2.0-alpha`; different
+version upgrade. The public version string remains `0.2.1`; different
 builds and toolchain snapshots are identified by source commit, release manifest
 and checksum. The version string alone does not prove that two binaries are
 identical.
 
 Tagged prerelease artifacts are immutable. The release workflow will not replace
-an existing `v0.2.0-alpha` Release. Later same-version development snapshots must
+an existing `v0.2.1` Release. Later same-version development snapshots must
 carry a commit identity and must not silently replace published archives.
 
 Near-term development focuses on the toolchain:
@@ -86,15 +86,15 @@ stable core implicitly through toolchain work.
 
 ## Prebuilt packages
 
-The `v0.2.0-alpha` tag triggers the release workflow. The workflow uploads the
+The `v0.2.1` tag triggers the release workflow. The workflow uploads the
 following archives with SHA-256 files only after the platform's complete
 non-hardware CTest suite passes:
 
 | Archive | Support scope |
 |---|---|
-| `luna-0.2.0-alpha-linux-x86_64.tar.gz` | Ubuntu 24.04, x86_64, glibc |
-| `luna-0.2.0-alpha-macos-<arch>.tar.gz` | macOS 14; `<arch>` is the runner architecture |
-| `luna-0.2.0-alpha-windows-ucrt64-x86_64.zip` | Windows x86_64, MSYS2 UCRT64 |
+| `luna-0.2.1-linux-x86_64.tar.gz` | Ubuntu 24.04, x86_64, glibc |
+| `luna-0.2.1-macos-<arch>.tar.gz` | macOS 14; `<arch>` is the runner architecture |
+| `luna-0.2.1-windows-ucrt64-x86_64.zip` | Windows x86_64, MSYS2 UCRT64 |
 
 Archives contain `luna`, the static Luna Runtime, public Runtime ABI headers,
 the standard library, documentation and LLVM dynamic libraries required by the
@@ -114,7 +114,7 @@ These are prebuilt compiler distributions, not fully self-contained native SDKs:
 ## Upgrade commitment
 
 Alpha error codes and safety semantics should remain compatible; experimental
-features may still change. Leaving the `0.2.0-alpha` long-term line requires a
+features may still change. Leaving the `0.2.1` long-term line requires a
 separate version decision, semantic-baseline review, migration notes and the full
 release gate. It is not triggered automatically by elapsed time or toolchain
 completion. Every semantic change must add positive and negative examples plus
@@ -122,7 +122,7 @@ migration guidance.
 
 ## Release checklist
 
-- [x] Version metadata and `luna --version` agree on `0.2.0-alpha`.
+- [x] Version metadata and `luna --version` agree on `0.2.1`.
 - [x] Native Linux C++17/C++23, macOS and Windows UCRT64 CI cover the stable core.
 - [x] Linux-owned targets use strict warnings and full ASan/UBSan non-hardware regression.
 - [x] Non-hardware CTest covers semantics, packages, FFI, ownership, CPS, optimization and plugin ABI.
@@ -131,7 +131,7 @@ migration guidance.
 - [x] Build outputs are ignored and historical `build-cpp23` artifacts were removed.
 - [x] MIT / Apache-2.0 licenses ship with installation results.
 - [x] The release workflow builds, tests, packages and checksums all three targets.
-- [ ] The three packaging jobs and publish job pass for the `v0.2.0-alpha` tag.
+- [ ] The three packaging jobs and publish job pass for the `v0.2.1` tag.
 - [ ] The three prerelease archives and checksum files pass download verification.
 
 The release host must repeat the install-tree JIT/AOT checks. AOT must pass a

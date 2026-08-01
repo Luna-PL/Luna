@@ -2,7 +2,7 @@
 
 [English](features.md) | [简体中文](features.zh-CN.md)
 
-This page is a map of the implemented 0.2.0-alpha language surface. It explains
+This page is a map of the implemented 0.2.1 language surface. It explains
 where each feature belongs in the architecture and points to the detailed
 reference or design document. Experimental status and current limitations are
 listed in the [Alpha release notes](alpha_release.md).

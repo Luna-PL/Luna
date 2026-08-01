@@ -80,7 +80,7 @@ version = "1.0.0"
 sources = ["src"]
 
 [dependencies]
-"org.luna.std" = "0.2.0-alpha"
+"org.luna.std" = "0.2.1"
 ```
 
 `sources` 必须是 package 目录内的相对文件或目录，不允许绝对路径或 `..`
@@ -101,7 +101,7 @@ PackageManager 从当前 package 向上查找最近的 `luna.workspace`，再读
 # luna.lock（工具生成并按 Package ID 规范排序）
 [[package]]
 id = "org.luna.std"
-version = "0.2.0-alpha"
+version = "0.2.1"
 source = "workspace:std"
 hash = "..."
 ```

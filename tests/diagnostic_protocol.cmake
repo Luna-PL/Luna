@@ -6,6 +6,8 @@ endif()
 if(NOT DEFINED LUNA_SOURCE_DIR)
     message(FATAL_ERROR "LUNA_SOURCE_DIR must point at the source tree")
 endif()
+file(READ "${LUNA_SOURCE_DIR}/VERSION" expected_language_version)
+string(STRIP "${expected_language_version}" expected_language_version)
 
 function(json_records transcript output)
     string(REPLACE "\r\n" "\n" normalized "${transcript}")
@@ -50,7 +52,7 @@ string(JSON diagnostic_byte GET "${diagnostic}" primary start byte)
 string(JSON summary_kind GET "${summary}" kind)
 string(JSON summary_success GET "${summary}" success)
 if(NOT hello_kind STREQUAL "hello" OR
-   NOT hello_language STREQUAL "0.2.0-alpha" OR
+   NOT "${hello_language}" STREQUAL "${expected_language_version}" OR
    NOT diagnostic_kind STREQUAL "diagnostic" OR
    NOT diagnostic_code STREQUAL "PAR0001" OR
    diagnostic_byte LESS 0 OR

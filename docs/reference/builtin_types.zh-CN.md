@@ -1,7 +1,7 @@
 # Luna 0.2 Alpha 内置类型清单
 
 > 文档类别：Alpha 参考与实现状态矩阵
-> 适用版本：Luna 0.2.0-alpha
+> 适用版本：Luna 0.2.1
 > 状态：Active；各项稳定性见表格
 > 规范性：源码拼写、类型域和 usage 规则规范；布局数字为 Internal Alpha ABI
 > 首次实现核对：`d0ab31c`（2026-07-31）

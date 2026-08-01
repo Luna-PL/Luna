@@ -1,7 +1,7 @@
 # Luna 仓库文件与职责指南
 
 > 文档类别：实现说明 / 项目规范
-> 适用版本：Luna 0.2.0-alpha
+> 适用版本：Luna 0.2.1
 > 状态：Internal
 > 规范性：规范
 > 实现核对：待本次提交确认（2026-07-31）
@@ -268,7 +268,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `docs/roadmap.md` | 未实现能力和阶段计划 |
 | `docs/luna_0.3_evolution_audit.md` | Luna 0.3 模型收敛与 slot/fragment 重构设计审计 |
 | `docs/luna_0.3_evolution_audit.zh-CN.md` | Luna 0.3 设计审计的中文对应版本 |
-| `docs/alpha_release.md` | 0.2.0-alpha 支持范围、限制和发布门 |
+| `docs/alpha_release.md` | 0.2.1 支持范围、限制和发布门 |
 | `docs/alpha_release.zh-CN.md` | Alpha 发布说明的中文对应版本 |
 | `docs/features.md` | 英文已实现功能导航 |
 | `docs/features.zh-CN.md` | 中文已实现功能导航 |

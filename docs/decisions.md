@@ -1,7 +1,7 @@
 # Luna 0.2 Alpha Architecture Decisions
 
 > Document category: adopted design decisions
-> Applies to: Luna 0.2.0-alpha
+> Applies to: Luna 0.2.1
 > Status: Active
 > Normative status: non-normative rationale record; current behavior follows the [Alpha semantic reference](reference/README.md)
 > Implementation audit: 2026-07-31

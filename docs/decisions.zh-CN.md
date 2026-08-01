@@ -1,7 +1,7 @@
 # Luna 0.2 Alpha 架构决策
 
 > 文档类别：已采用设计决策
-> 适用版本：Luna 0.2.0-alpha
+> 适用版本：Luna 0.2.1
 > 状态：Active
 > 规范性：非规范理由记录；当前行为以 [Alpha 语义参考](reference/README.md) 为准
 > 实现核对：2026-07-31

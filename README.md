@@ -1,4 +1,4 @@
-# Luna 0.2.0-alpha
+# Luna 0.2.1
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -11,7 +11,7 @@ the [Luna-PL](https://github.com/Luna-PL) organization. Its compiler preserves
 language semantics in verified MoonIR before lowering to LLVM for JIT or AOT
 compilation.
 
-The project is entering a long-lived `0.2.0-alpha` maintenance line for
+The project is entering a long-lived `0.2.1` maintenance line for
 language research and internal experiments. There is no scheduled Beta or
 language-version bump. Near-term development is focused on the toolchain:
 diagnostics, editor/build/package integration, distribution, reproducibility

@@ -3,9 +3,9 @@
 [English](luna_0.3_evolution_audit.md) | 简体中文
 
 > 文档类别：RFC / 实现审计
-> 适用版本：以 Luna 0.2.0-alpha 为审计基线，讨论候选 Luna 0.3.0
+> 适用版本：以 Luna 0.2.1 为审计基线，讨论候选 Luna 0.3.0
 > 状态：Draft
-> 规范性：非规范；本文不改变 0.2.0-alpha 语言契约
+> 规范性：非规范；本文不改变 0.2.1 语言契约
 > 实现核对：`8d461d4`（2026-08-01）
 
 ## 1. 范围与结论
@@ -34,7 +34,7 @@ Runtime Descriptor 和 external fragment plugin ABI。没有修改实现、测�
 7. 默认结构类型改为默认名义类型是版本级破坏性变更，必须由 package language version/edition 隔离。
 
 因此本审计给出的决策是：**批准继续设计，不批准立即大规模重写**。未来 1～2 周继续
-0.2.0-alpha 生态链建设；0.3 只允许 RFC、迁移样例和只读/测试清点工作。
+0.2.1 生态链建设；0.3 只允许 RFC、迁移样例和只读/测试清点工作。
 
 ## 2. 当前实现审计
 
@@ -491,7 +491,7 @@ descriptor、MoonIR control ops 和 module lifetime 足以成为其稳定输入�
 
 ## 6. 现有边界与迭代后边界
 
-| 维度 | 0.2.0-alpha 当前 | 候选 0.3.0 |
+| 维度 | 0.2.1 当前 | 候选 0.3.0 |
 |---|---|---|
 | 阶段 | CompileTime/Runtime/Dynamic retention | Compile-time/Runtime；运行时行为由值、descriptor、builtins 决定 |
 | 类型默认 | named struct/enum 默认结构 | named struct/enum 默认名义；结构关系按需 |
@@ -626,7 +626,7 @@ descriptor、MoonIR control ops 和 module lifetime 足以成为其稳定输入�
 - Rc/Arc 容器迁移尚无 Drop/allocator/thread-safety 证明；
 - 为了表达 service/provider 而让 slot 成为值或增加全局 replace 状态。
 
-## 9. 近期建议（继续 0.2.0-alpha）
+## 9. 近期建议（继续 0.2.1）
 
 未来 1～2 周继续生态链计划，不做 0.3 实现。允许的准备工作只有：
 

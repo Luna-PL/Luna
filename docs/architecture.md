@@ -1,7 +1,7 @@
 # Luna 0.2 Alpha Architecture
 
 > Document category: architecture note
-> Applies to: Luna 0.2.0-alpha
+> Applies to: Luna 0.2.1
 > Status: Active
 > Normative status: non-normative; language behavior follows the Alpha semantic reference
 > Implementation audit: 2026-07-31

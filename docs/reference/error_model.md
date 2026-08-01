@@ -1,7 +1,7 @@
 # Luna 0.2 Alpha Error-Model Contract
 
 > Document category: language contract and status reference
-> Applies to: Luna 0.2.0-alpha
+> Applies to: Luna 0.2.1
 > Status: core semantics Frozen for Alpha; adapter/API portions are Implemented Experimental or Planned
 > Normative status: core semantics are normative; internal layout and planned capabilities in the status table are non-normative
 > Initial implementation audit: `d0ab31c` (2026-07-31)
@@ -211,4 +211,4 @@ Disk-backed primary spans use normalized absolute paths, required UTF-8 byte
 offsets, an exclusive end, and one-based line/column display aids. Diagnostics
 without a disk location use `primary: null`. The hello record identifies the
 long-lived language version, compiler source commit, build target, and protocol
-capabilities so tools need not infer compiler identity from `0.2.0-alpha` alone.
+capabilities so tools need not infer compiler identity from `0.2.1` alone.

@@ -1,4 +1,4 @@
-# Luna 0.2.0-alpha
+# Luna 0.2.1
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -10,7 +10,7 @@ Luna 是由 GitHub 组织 [Luna-PL](https://github.com/Luna-PL) 维护的、基�
 LLVM 的实验性系统编程语言。编译器首先把 Luna 源程序降级到经过验证的
 MoonIR，在保留语言语义和安全边界后，再统一对接 LLVM JIT 与 AOT。
 
-项目将进入长期维护的 `0.2.0-alpha` 版本线，目前没有预定的 Beta 或语言版本升级。
+项目将进入长期维护的 `0.2.1` 版本线，目前没有预定的 Beta 或语言版本升级。
 近期开发重心转向工具链，包括诊断、编辑器/构建/package 集成、分发、可复现性与
 可靠性。语言层工作只处理正确性、安全性和已记录契约缺口；实验性语法仍可在该边界
 内调整。准确支持范围和限制见[Alpha 发布说明](docs/alpha_release.zh-CN.md)。

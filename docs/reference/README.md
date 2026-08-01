@@ -1,7 +1,7 @@
 # Luna 0.2 Alpha Semantic Reference
 
 > Document category: reference entry point
-> Applies to: Luna 0.2.0-alpha
+> Applies to: Luna 0.2.1
 > Status: Active
 > Normative status: this page defines navigation only; each subdocument declares its own status
 > Initial implementation audit: `d0ab31c` (2026-07-31)

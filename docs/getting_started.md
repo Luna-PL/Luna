@@ -3,7 +3,7 @@
 [English](getting_started.md) | [简体中文](getting_started.zh-CN.md)
 
 This guide takes a new contributor from a source checkout to a checked, JIT-run
-and AOT-built Luna program. Luna 0.2.0-alpha currently supports Linux, macOS and
+and AOT-built Luna program. Luna 0.2.1 currently supports Linux, macOS and
 Windows; it is a research compiler rather than a production release.
 
 ## 1. Prerequisites

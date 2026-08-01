@@ -4,4 +4,4 @@ version = "1.0.0"
 sources = ["src"]
 
 [dependencies]
-"org.luna.core" = "0.2.0-alpha"
+"org.luna.core" = "0.2.1"

@@ -1,11 +1,11 @@
 [[package]]
 id = "org.luna.examples.showcase.foundation"
-version = "0.2.0-alpha"
+version = "0.2.1"
 source = "workspace:foundation"
-hash = "showcase-foundation-0.2.0-alpha"
+hash = "showcase-foundation-0.2.1"
 
 [[package]]
 id = "org.luna.examples.showcase.app"
-version = "0.2.0-alpha"
+version = "0.2.1"
 source = "workspace:app"
-hash = "showcase-app-0.2.0-alpha"
+hash = "showcase-app-0.2.1"

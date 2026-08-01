@@ -1,7 +1,7 @@
 # Luna 0.2 Alpha Semantic Baseline
 
 > Document category: language contract
-> Applies to: Luna 0.2.0-alpha
+> Applies to: Luna 0.2.1
 > Status: Frozen for Alpha
 > Normative status: normative, but limited to the type, ownership, and error boundaries listed here
 > Initial implementation audit: `d0ab31c` (2026-07-31)
@@ -130,7 +130,7 @@ responsibilities.
 
 ## 5. Not frozen by this baseline
 
-The following remain adjustable during the `0.2.0-alpha` maintenance line, but changes
+The following remain adjustable during the `0.2.1` maintenance line, but changes
 must be labeled under the documentation rules:
 
 - cross-version public FFI layout for Result/enums;

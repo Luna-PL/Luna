@@ -1,7 +1,7 @@
 # Luna 0.2 Alpha 错误模型契约
 
 > 文档类别：语言契约与状态参考
-> 适用版本：Luna 0.2.0-alpha
+> 适用版本：Luna 0.2.1
 > 状态：核心语义 Frozen for Alpha；adapter/API 部分 Implemented Experimental 或 Planned
 > 规范性：核心语义规范；状态表中的内部布局和计划能力非规范
 > 首次实现核对：`d0ab31c`（2026-07-31）
@@ -197,4 +197,4 @@ severity、phase、code、message、可选 primary span、label、note 和 fix�
 磁盘文件的 primary span 使用规范化绝对路径、必填 UTF-8 byte offset、exclusive
 end，以及从 1 开始的 line/column 展示辅助值。没有磁盘位置的诊断使用
 `primary: null`。hello 会标识长期不变的语言版本、编译器源码 commit、构建 target
-和协议 capability，因此工具无需只靠 `0.2.0-alpha` 推断编译器身份。
+和协议 capability，因此工具无需只靠 `0.2.1` 推断编译器身份。

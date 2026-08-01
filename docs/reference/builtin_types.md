@@ -1,7 +1,7 @@
 # Luna 0.2 Alpha Builtin Type Inventory
 
 > Document category: Alpha reference and implementation-status matrix
-> Applies to: Luna 0.2.0-alpha
+> Applies to: Luna 0.2.1
 > Status: Active; stability is labeled per table entry
 > Normative status: source spelling, type domains, and usage rules are normative; layout numbers are Internal Alpha ABI
 > Initial implementation audit: `d0ab31c` (2026-07-31)

@@ -1,6 +1,6 @@
 # Luna full showcase
 
-This workspace is the executable integration example for Luna 0.2.0-alpha.
+This workspace is the executable integration example for Luna 0.2.1.
 It deliberately uses two packages and several modules instead of placing every
 feature in one source file.
 

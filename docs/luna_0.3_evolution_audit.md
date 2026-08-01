@@ -3,9 +3,9 @@
 English | [简体中文](luna_0.3_evolution_audit.zh-CN.md)
 
 > Document category: RFC / implementation audit
-> Applies to: Luna 0.2.0-alpha as the audited baseline; candidate Luna 0.3.0
+> Applies to: Luna 0.2.1 as the audited baseline; candidate Luna 0.3.0
 > Status: Draft
-> Normative status: Non-normative; this document does not change the 0.2.0-alpha contract
+> Normative status: Non-normative; this document does not change the 0.2.1 contract
 > Implementation checked: `8d461d4` (2026-08-01)
 
 ## 1. Scope and decision
@@ -38,7 +38,7 @@ gates:
 7. Switching the type default is a version-level breaking change and needs a package language version or edition.
 
 The decision is therefore: continue design, but do not begin a large-scale
-implementation. The next one or two weeks remain focused on the 0.2.0-alpha
+implementation. The next one or two weeks remain focused on the 0.2.1
 ecosystem. Only RFC, migration-corpus, and audit work should prepare 0.3.
 
 ## 2. Current implementation audit
@@ -351,7 +351,7 @@ Slots never become ordinary values.
 
 ## 6. Before and after
 
-| Dimension | Current 0.2.0-alpha | Candidate 0.3.0 |
+| Dimension | Current 0.2.1 | Candidate 0.3.0 |
 |---|---|---|
 | Phases | CompileTime/Runtime/Dynamic retention | Compile-time/Runtime; values, descriptors, and builtins determine runtime behavior |
 | Type default | named structs/enums structural | named structs/enums nominal; shape relations on demand |
@@ -396,7 +396,7 @@ runtime descriptor; 0.2 packages change identity without selecting 0.3 mode;
 resource containers lack Drop/allocator/thread-safety proofs; or service/provider
 work requires first-class slots or global replacement state.
 
-## 9. Near-term 0.2.0-alpha work
+## 9. Near-term 0.2.1 work
 
 For the next one or two weeks, continue ecosystem work and do not implement 0.3.
 Only review the open semantic decisions, collect migration fixtures, document

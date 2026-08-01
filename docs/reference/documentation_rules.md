@@ -1,7 +1,7 @@
 # Luna Documentation Recording Rules
 
 > Document category: project policy
-> Applies to: Luna 0.2.0-alpha and later documentation
+> Applies to: Luna 0.2.1 and later documentation
 > Status: Frozen for Alpha
 > Normative status: normative
 > Initial implementation audit: `d0ab31c` (2026-07-31)

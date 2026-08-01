@@ -1,6 +1,6 @@
 # Runtime ABI v1 与分配域
 
-Luna 0.2.0-alpha 开始把语言基础能力与原始 C FFI 分离。编译器生成的
+Luna 0.2.1 开始把语言基础能力与原始 C FFI 分离。编译器生成的
 `new`、路径敏感自动清理、显式 `free` 与语言 `print` 只调用 Luna
 Runtime ABI，不再直接解析 `malloc/free/printf`。公开的 C 兼容头文件为
 `runtime/RuntimeABI.h`。

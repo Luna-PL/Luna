@@ -1,7 +1,7 @@
 # Luna Roadmap
 
 > Document category: project roadmap
-> Applies to: 0.2.0-alpha long-term maintenance line
+> Applies to: 0.2.1 long-term maintenance line
 > Status: Planned
 > Normative status: non-normative
 > Updated: 2026-07-31
@@ -11,7 +11,7 @@ support.
 
 ## Project status
 
-- The 0.2.0-alpha line is maintained long term; upgrades do not happen automatically with time.
+- The 0.2.1 line is maintained long term; upgrades do not happen automatically with time.
 - The active development line is tooling, not expansion of the language surface.
 - Same-version builds are identified by source commit, release manifest, and checksums.
 - Beta or a new language version requires a separate decision and a fresh semantic-baseline and

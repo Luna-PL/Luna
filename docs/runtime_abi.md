@@ -1,6 +1,6 @@
 # Runtime ABI v1 and Allocation Domains
 
-Starting with Luna 0.2.0-alpha, language facilities are separated from raw C FFI. Compiler-
+Starting with Luna 0.2.1, language facilities are separated from raw C FFI. Compiler-
 generated `new`, path-sensitive automatic cleanup, explicit `free`, and language `print`
 call only the Luna Runtime ABI; they no longer resolve `malloc/free/printf` directly. The
 public C-compatible header is `runtime/RuntimeABI.h`.

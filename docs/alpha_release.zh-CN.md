@@ -1,28 +1,28 @@
-# Luna 0.2.0-alpha 发布说明
+# Luna 0.2.1 预发布说明
 
 > 文档类别：发布说明
-> 适用版本：Luna 0.2.0-alpha
+> 适用版本：Luna 0.2.1
 > 状态：Implemented Experimental
 > 规范性：部分规范
-> 实现核对：待 0.2.0-alpha 发布提交确认（2026-07-31）
+> 实现核对：待 0.2.1 发布提交确认（2026-08-01）
 
 [English version](alpha_release.md)
 
 ## 定位
 
-Luna Alpha 0.2.0 是用于语言试验和内部项目的 Linux/macOS/Windows 编译器原型。三个平台的稳定核心均由 CI 工作流验证；Windows 使用 MSYS2 UCRT64 工具链。稳定核心包括多文件包与显式导出、验证后的 MoonIR、基础函数/泛型/ADT、线性所有权与借用、Runtime ABI v1、显式 C FFI、JIT/AOT、`-O0/-O2/-O3`，以及 CPU 模拟器上的初始异构 ABI。
+Luna 0.2.1 是用于语言试验和内部项目的 Linux/macOS/Windows 预发布编译器原型。三个平台的稳定核心均由 CI 工作流验证；Windows 使用 MSYS2 UCRT64 工具链。稳定核心包括多文件包与显式导出、验证后的 MoonIR、基础函数/泛型/ADT、线性所有权与借用、Runtime ABI v1、显式 C FFI、JIT/AOT、`-O0/-O2/-O3`，以及 CPU 模拟器上的初始异构 ABI。
 
 默认回归覆盖语义负例、包、导出 ABI、FFI、控制流清理、JIT/AOT 一致性、优化、运行时边界和 CPU GPU 模拟器。硬件 ROCm 冒烟测试为可选项，见 [heterogeneous_compute.md](heterogeneous_compute.md)。
 
 ## 长期维护状态
 
-`0.2.0-alpha` 是当前长期维护版本线，不是通往近期 Beta 的短暂过渡标签。目前没有
+`0.2.1` 是当前长期维护版本线，不是通往近期 Beta 的短暂过渡标签。目前没有
 预定的 Beta、`0.3` 或语言版本升级日期。公开版本字符串继续保持
-`0.2.0-alpha`，不同构建和工具链快照以源码 commit、发布 manifest 和校验和区分，
+`0.2.1`，不同构建和工具链快照以源码 commit、发布 manifest 和校验和区分，
 不能仅凭相同版本字符串认定二进制完全相同。
 
 带 tag 的正式 prerelease 产物保持不可变；发布工作流不会覆盖已经存在的
-`v0.2.0-alpha` Release。后续同版本开发快照必须以 commit 标识，不能静默替换
+`v0.2.1` Release。后续同版本开发快照必须以 commit 标识，不能静默替换
 已发布归档。
 
 近期开发资源转向工具链：
@@ -56,14 +56,14 @@ Luna Alpha 0.2.0 是用于语言试验和内部项目的 Linux/macOS/Windows 编
 
 ## 预编译包
 
-Git tag `v0.2.0-alpha` 触发发布工作流；工作流只有在对应平台完整非硬件 CTest
+Git tag `v0.2.1` 触发发布工作流；工作流只有在对应平台完整非硬件 CTest
 通过后才上传以下带 SHA-256 校验文件的归档：
 
 | 归档 | 支持范围 |
 |---|---|
-| `luna-0.2.0-alpha-linux-x86_64.tar.gz` | Ubuntu 24.04、x86_64、glibc |
-| `luna-0.2.0-alpha-macos-<arch>.tar.gz` | macOS 14；`<arch>` 是发布 runner 的实际架构 |
-| `luna-0.2.0-alpha-windows-ucrt64-x86_64.zip` | Windows x86_64、MSYS2 UCRT64 |
+| `luna-0.2.1-linux-x86_64.tar.gz` | Ubuntu 24.04、x86_64、glibc |
+| `luna-0.2.1-macos-<arch>.tar.gz` | macOS 14；`<arch>` 是发布 runner 的实际架构 |
+| `luna-0.2.1-windows-ucrt64-x86_64.zip` | Windows x86_64、MSYS2 UCRT64 |
 
 归档包含 `luna`、静态 Luna Runtime、公开 Runtime ABI 头、标准库、文档和编译器
 运行所需的 LLVM 动态库（Windows 包含 UCRT64 动态依赖闭包）。每个归档根目录的
@@ -81,13 +81,13 @@ Git tag `v0.2.0-alpha` 触发发布工作流；工作流只有在对应平台完
 ## 升级承诺
 
 Alpha 稳定核心的错误码和安全语义将尽量保持兼容；实验性能力仍可能调整。退出
-`0.2.0-alpha` 长期版本线必须经过单独的版本决策、语义基线复核、迁移说明和完整
+`0.2.1` 长期版本线必须经过单独的版本决策、语义基线复核、迁移说明和完整
 发布门，不由时间经过或工具链功能完成自动触发。每次语义变化都必须添加正例、负例
 与迁移说明。
 
 ## 发布检查清单
 
-- [x] 版本元数据与 `luna --version` 统一为 `0.2.0-alpha`。
+- [x] 版本元数据与 `luna --version` 统一为 `0.2.1`。
 - [x] Linux C++17/C++23、macOS 和 Windows UCRT64 原生 CI 覆盖稳定核心。
 - [x] Linux 自有 target 使用严格警告，并执行完整 ASan/UBSan 非硬件回归。
 - [x] 非硬件 CTest 覆盖语义、包、FFI、所有权、CPS、优化和外部插件 ABI。
@@ -96,7 +96,7 @@ Alpha 稳定核心的错误码和安全语义将尽量保持兼容；实验性�
 - [x] 构建产物已忽略，历史 `build-cpp23` 工作树产物已删除。
 - [x] MIT / Apache-2.0 双许可证随安装结果发布。
 - [x] Release workflow 构建、测试、打包三个目标并生成 SHA-256 文件。
-- [ ] `v0.2.0-alpha` tag 上三个打包 job 与 publish job 实际通过。
+- [ ] `v0.2.1` tag 上三个打包 job 与 publish job 实际通过。
 - [ ] GitHub prerelease 的三份归档及校验文件完成下载复验。
 
 发布机最终确认：
