@@ -71,6 +71,9 @@
 - Added stable child Symbol IDs for struct fields and enum variants, exact
   references for field access, variant construction, and qualified match
   patterns, and the `field-references`/`enum-variant-references` capabilities.
+- Added a deliberately limited Luna 0.2.x package rename in `luna-lsp`, using
+  complete analysis snapshots for functions, methods, named types, traits,
+  fields, and enum variants without committing to the planned 0.3 syntax.
 - Added package-aware single-document source overlays to `luna analyze` via
   stdin, preserving package/module identity and computing protocol byte spans
   against the in-memory UTF-8 snapshot rather than stale disk contents.
