@@ -15,6 +15,24 @@ if(NOT TARGET LLVM)
         "This LLVM installation does not export the monolithic LLVM target. "
         "Set LLVM_DIR to the matching LLVM CMake package or install LLVM development files.")
 endif()
+
+# Luna emits textual LLVM IR for AOT builds, so the native link driver must
+# understand LLVM IR even when Luna itself is compiled with GCC. Keep this
+# tool separate from CMAKE_CXX_COMPILER and make it overridable for packaged
+# or cross-toolchain test environments.
+if(NOT DEFINED LUNA_AOT_COMPILER)
+    find_program(LUNA_AOT_COMPILER
+        NAMES clang++-${LLVM_VERSION_MAJOR} clang++
+        HINTS ${LLVM_TOOLS_BINARY_DIR}
+    )
+endif()
+set(LUNA_AOT_COMPILER "${LUNA_AOT_COMPILER}" CACHE FILEPATH
+    "Clang-compatible driver used by Luna AOT integration tests")
+if(NOT LUNA_AOT_COMPILER)
+    message(FATAL_ERROR
+        "Luna AOT tests require clang++. Set LUNA_AOT_COMPILER to a "
+        "Clang-compatible driver for the configured LLVM installation.")
+endif()
 include(CTest)
 
 execute_process(
@@ -58,6 +76,12 @@ target_include_directories(luna-fragment-plugin-fixture PRIVATE ${CMAKE_CURRENT_
 add_executable(fragment-plugin-test tests/fragment_plugin_test.cpp)
 target_include_directories(fragment-plugin-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(fragment-plugin-test PRIVATE runtime)
+
+add_executable(source-manager-test
+    tests/source_manager_test.cpp
+    src/tooling/SourceManager.cpp
+)
+target_include_directories(source-manager-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 add_executable(luna
     src/main.cpp
@@ -109,6 +133,7 @@ if(LUNA_STRICT_WARNINGS)
         runtime-gpu-error-test
         luna-fragment-plugin-fixture
         fragment-plugin-test
+        source-manager-test
         luna
     )
     foreach(target IN LISTS luna_warning_targets)
@@ -179,6 +204,10 @@ install(DIRECTORY examples/full_showcase/
 install(DIRECTORY stdlib/ DESTINATION ${CMAKE_INSTALL_DATADIR}/luna/stdlib)
 
 if(BUILD_TESTING)
+    add_test(
+        NAME luna.source-manager
+        COMMAND $<TARGET_FILE:source-manager-test>
+    )
     add_test(
         NAME luna.runtime-abi-v1
         COMMAND $<TARGET_FILE:runtime-abi-test>
@@ -353,7 +382,7 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -DLUNA_BUILD_CONFIG=$<CONFIG>
-            -DLUNA_AOT_COMPILER=${CMAKE_CXX_COMPILER}
+            -DLUNA_AOT_COMPILER=${LUNA_AOT_COMPILER}
             -DLUNA_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
             -DLUNA_RUNTIME_FILE=$<TARGET_FILE_NAME:runtime>
             -DLUNA_INSTALL_BINDIR=${CMAKE_INSTALL_BINDIR}

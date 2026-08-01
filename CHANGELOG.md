@@ -44,6 +44,9 @@
 - Added a bounded O3 four-way unroll hint for medium-sized straight-line,
   call-free while loops, with positive reduction coverage and a nested-loop
   exclusion regression.
+- Decoupled the installed-tree AOT smoke linker from the compiler used to
+  build Luna, allowing GCC-hosted builds to validate textual LLVM IR with a
+  separately discovered or configured Clang driver.
 
 ## 0.1.0-alpha — Development baseline
 

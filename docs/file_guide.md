@@ -96,6 +96,7 @@ script-defined special inputs.
 - Core files own ownership, sysmeta, type identity, type relations, and layout.
 - Lexer/parser files own tokens, AST, parsing, and syntax recovery.
 - Sema files own names, types, generics, constexpr, traits, ownership, borrowing, and typed AST.
+- Tooling files own versioned in-memory source documents and editor position conversion.
 - Selector and instantiation files own candidate selection and generic-instance state.
 - MoonIR files own lowering, verification, optimization, and deterministic printing.
 - Codegen files are split by module, function, statement, expression, cleanup, execution,
@@ -118,6 +119,10 @@ The documentation migration is complete for the current reference, architecture,
 testing, runtime ABI, package, iterator, standard-library, compile-time, fragment,
 heterogeneous-compute, and versioning documents. Only the transitional getting-started entry
 remains outside the canonical pair.
+
+The paired Luna 0.3 evolution audit records the current model-convergence and
+slot/fragment refactoring assessment. It is a design audit, not part of the
+0.2 normative reference or the active implementation roadmap.
 
 Examples demonstrate one topic per file; full_showcase is the combined Alpha example and
 slot_plugins demonstrates plugin use. Benchmark runners are responsible for reproducible
@@ -189,6 +194,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `docs/heterogeneous_compute.zh-CN.md`
 - `docs/iterators.md`
 - `docs/iterators.zh-CN.md`
+- `docs/luna_0.3_evolution_audit.md`
+- `docs/luna_0.3_evolution_audit.zh-CN.md`
 - `docs/packages.md`
 - `docs/packages.zh-CN.md`
 - `docs/reference/README.md`
@@ -341,6 +348,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/sema/TraitChecker.h`
 - `src/sema/TypeSystem.cpp`
 - `src/sema/TypeSystem.h`
+- `src/tooling/SourceManager.cpp`
+- `src/tooling/SourceManager.h`
 - `stdlib/core/luna.package`
 - `stdlib/core/src/error.luna`
 - `stdlib/core/src/iter.luna`
@@ -553,6 +562,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/runtime_abi_test.cpp`
 - `tests/runtime_gpu_error_test.cpp`
 - `tests/semantic_regressions.cmake`
+- `tests/source_manager_test.cpp`
 - `tests/stable_core_parity.cmake`
 - `tests/structured_cps_abi.cmake`
 - `tools/benchmark_heterogeneous.sh`

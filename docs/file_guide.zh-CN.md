@@ -215,6 +215,13 @@ obligation，不能重新推导所有权。
 ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容器或 LLVM 类型不得泄漏
 到两个公开 C ABI 头中。
 
+### 5.7 tooling
+
+| 文件 | 主要职责 |
+|---|---|
+| `src/tooling/SourceManager.h` | 版本化内存文档与 UTF-16 position 接口 |
+| `src/tooling/SourceManager.cpp` | UTF-8 byte offset、行索引和 LSP UTF-16 position 转换 |
+
 ## 6. 标准库、文档、示例与基准
 
 ### 6.0 双语迁移状态
@@ -253,6 +260,8 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `docs/architecture.md` | 阶段关系、数据流和关键不变量 |
 | `docs/decisions.md` | 已采用设计的压缩理由 |
 | `docs/roadmap.md` | 未实现能力和阶段计划 |
+| `docs/luna_0.3_evolution_audit.md` | Luna 0.3 模型收敛与 slot/fragment 重构设计审计 |
+| `docs/luna_0.3_evolution_audit.zh-CN.md` | Luna 0.3 设计审计的中文对应版本 |
 | `docs/alpha_release.md` | 0.2.0-alpha 支持范围、限制和发布门 |
 | `docs/alpha_release.zh-CN.md` | Alpha 发布说明的中文对应版本 |
 | `docs/features.md` | 英文已实现功能导航 |
@@ -305,6 +314,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/runtime_gpu_error_test.cpp` | GPU/runtime 错误快照行为 |
 | `tests/fragment_plugin_fixture.cpp` | 测试用外部插件共享库 |
 | `tests/fragment_plugin_test.cpp` | 插件 ABI 装载/调用边界 |
+| `tests/source_manager_test.cpp` | 内存文档版本、Unicode 和 CRLF 回归 |
 | `tests/fixtures/*.luna` | 单主题源码输入；断言必须留在调用它的 CMake 脚本 |
 | `tests/fixtures/repl_session.txt` | REPL 标准输入 transcript |
 | `tests/fixtures/packages/**` | 文件顺序、package header、export 和聚合诊断输入 |
@@ -375,6 +385,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `docs/heterogeneous_compute.zh-CN.md`
 - `docs/iterators.md`
 - `docs/iterators.zh-CN.md`
+- `docs/luna_0.3_evolution_audit.md`
+- `docs/luna_0.3_evolution_audit.zh-CN.md`
 - `docs/packages.md`
 - `docs/packages.zh-CN.md`
 - `docs/reference/README.md`
@@ -527,6 +539,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/sema/TraitChecker.h`
 - `src/sema/TypeSystem.cpp`
 - `src/sema/TypeSystem.h`
+- `src/tooling/SourceManager.cpp`
+- `src/tooling/SourceManager.h`
 - `stdlib/core/luna.package`
 - `stdlib/core/src/error.luna`
 - `stdlib/core/src/iter.luna`
@@ -739,6 +753,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/runtime_abi_test.cpp`
 - `tests/runtime_gpu_error_test.cpp`
 - `tests/semantic_regressions.cmake`
+- `tests/source_manager_test.cpp`
 - `tests/stable_core_parity.cmake`
 - `tests/structured_cps_abi.cmake`
 - `tools/benchmark_heterogeneous.sh`
