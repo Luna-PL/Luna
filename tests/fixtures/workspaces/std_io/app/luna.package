@@ -1,0 +1,7 @@
+[package]
+id = "org.luna.fixture.std_io"
+version = "1.0.0"
+sources = ["src"]
+
+[dependencies]
+"org.luna.std" = "0.2.1"

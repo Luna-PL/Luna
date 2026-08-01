@@ -141,6 +141,11 @@ use domain/code; message is optional diagnostic text and may be omitted if alloc
 fails. The legacy borrowed `last_error` pointer is compatibility-only and must not be stored
 in a long-lived error value.
 
+Fallible Global Luna allocation uses the separate caller-owned `LunaAllocErrorV1`. It
+contains only stable kind, requested size, and alignment fields and therefore can represent
+invalid layout, overflow, or OOM without allocating the error itself. The Sys layer keeps
+that ABI record raw; the safe Alloc layer maps it to Core `LayoutError`/`AllocError`.
+
 ## 8. Status matrix
 
 | Capability | Status | Commitment |

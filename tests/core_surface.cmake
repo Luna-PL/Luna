@@ -11,7 +11,7 @@ file(COPY "${LUNA_SOURCE_DIR}/stdlib/" DESTINATION "${workspace}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/core_surface_app/"
      DESTINATION "${workspace}/app")
 file(WRITE "${workspace}/luna.workspace"
-"[workspace]\nmembers = [\"core\", \"std\", \"app\"]\n")
+"[workspace]\nmembers = [\"core\", \"sys\", \"alloc\", \"std\", \"app\"]\n")
 file(APPEND "${workspace}/luna.lock"
 "\n[[package]]\nid = \"org.luna.fixture.core_surface\"\nversion = \"1.0.0\"\nsource = \"workspace:app\"\nhash = \"fixture-core-surface-v1\"\n")
 

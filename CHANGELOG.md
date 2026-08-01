@@ -2,6 +2,27 @@
 
 ## 0.2.1 — Prerelease
 
+- Defined the 0.3-oriented standard-library package graph and minimum IO, file,
+  Vec, String, concrete-error, and supporting Core surfaces, with explicit
+  resource prerequisites and a staged implementation boundary.
+- Completed the standard-library Stage A foundation: centralized legacy 0.2
+  and canonical 0.3 Core protocol identities, added Sys/Alloc package
+  skeletons, specified borrowed byte/text views, and appended compatible
+  console-input and filesystem capabilities to Runtime ABI v1.
+- Added the explicit native application-host profile for generated JIT/AOT
+  entry points, with stdin, UTF-8 paths, opaque filesystem handles, partial
+  I/O, metadata, seek/sync, structured errors, and embedding-host precedence.
+- Added fixed Runtime I/O forwarding entries and real `org.luna.sys::console`
+  / `fs` raw modules, keeping service-table layouts and native descriptors out
+  of future safe standard-library code.
+- Added checked array layouts and caller-owned fallible allocator ABI entries,
+  with allocation-free errors, zero-size allocation semantics, transactional
+  realloc failure, JIT bindings, a raw `org.luna.sys::alloc` bridge, and strict
+  plus sanitizer regressions.
+- Added a deliberately temporary 0.2.1 `std::io` surface for cstr/i32
+  stdout/stderr output, flush, raw byte I/O, bounded lossy line input, and
+  fallback-based i32 parsing; unsupported builtin `print` payloads are now
+  rejected instead of being lowered as accidental pointers.
 - Established the A0 documentation contract, 0.2 Alpha semantic baseline,
   exhaustive built-in/internal type inventory, and a frozen error-model
   reference that separates language guarantees from implementation ABI and

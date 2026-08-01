@@ -177,7 +177,7 @@ or reference material:
 - [Fragments and slots](docs/fragments.md)
 - [Runtime ABI and C FFI](docs/runtime_abi.md)
 - [Heterogeneous compute](docs/heterogeneous_compute.md)
-- [Standard-library skeleton](docs/standard_library.md)
+- [Standard-library design](docs/standard_library.md)
 - [Testing](docs/testing.md)
 - [Performance benchmarks](docs/benchmarks.md)
 - [Roadmap](docs/roadmap.md)

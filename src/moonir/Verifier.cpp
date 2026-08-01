@@ -179,15 +179,24 @@ bool Verifier::verify(const Module& module) {
             error({}, "type '" + type.id.value +
                       "' uses an unsupported sysmeta schema");
         if (type.kind == TypeKind::Rc &&
-            type.sysmeta.resource.management !=
-                luna::sysmeta::ResourceManagement::Rc)
+            (type.sysmeta.resource.management !=
+                 luna::sysmeta::ResourceManagement::Rc ||
+             type.sysmeta.resource.releaseDomain !=
+                 luna::sysmeta::ReleaseDomain::LunaGlobal))
             error({}, "rc type '" + type.id.value +
                       "' has inconsistent resource sysmeta");
         if (type.kind == TypeKind::Arc &&
-            type.sysmeta.resource.management !=
-                luna::sysmeta::ResourceManagement::Arc)
+            (type.sysmeta.resource.management !=
+                 luna::sysmeta::ResourceManagement::Arc ||
+             type.sysmeta.resource.releaseDomain !=
+                 luna::sysmeta::ReleaseDomain::LunaGlobal))
             error({}, "arc type '" + type.id.value +
                       "' has inconsistent resource sysmeta");
+        if (type.kind == TypeKind::DeviceBuffer &&
+            type.sysmeta.resource.releaseDomain !=
+                luna::sysmeta::ReleaseDomain::Device)
+            error({}, "device_buffer type '" + type.id.value +
+                      "' has inconsistent release-domain sysmeta");
         if (type.kind == TypeKind::Result) {
             if (type.referencedTypeIds.size() != 2) {
                 error({}, "Result type '" + type.id.value +

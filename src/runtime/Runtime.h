@@ -13,6 +13,7 @@ extern "C" {
 // The descriptor and every nested service table must remain alive for the
 // process lifetime. Passing nullptr restores nothing and is rejected.
 int rt_install_host_services_v1(const LunaHostServicesV1* services);
+int rt_install_application_host_services_v1();
 const LunaHostServicesV1* rt_host_services_v1();
 int rt_runtime_error_snapshot_v1(uint32_t domain,
                                  LunaRuntimeErrorSnapshotV1* snapshot,
@@ -43,6 +44,18 @@ void  rt_free(void* ptr);
 // buffering behavior identical across ELF, Mach-O, and MinGW/UCRT.
 void  rt_print_i32(int32_t value);
 void  rt_print_cstr(const char* value);
+// Temporary 0.2 standard-library adapters. They intentionally avoid claiming
+// the future Display/FromStr/owned-String contracts and will be replaced by
+// the 0.3 safe IO layer. `read_line_lossy` returns thread-local storage valid
+// until the next call on the same thread, truncates at 4095 bytes, and maps
+// EOF and host failure to an empty string.
+int rt_compat_console_write_cstr_0_2(uint32_t stream, const char* value,
+                                    int32_t newline);
+int rt_compat_console_write_i32_0_2(uint32_t stream, int32_t value,
+                                   int32_t newline);
+int rt_compat_console_flush_0_2(uint32_t stream);
+const char* rt_compat_console_read_line_lossy_0_2();
+int32_t rt_compat_parse_i32_or_0_2(const char* text, int32_t fallback);
 // Generated safe array accesses call this before forming a GEP. It never
 // returns on failure, preventing undefined behaviour from out-of-bounds IR.
 int32_t rt_array_index_or_abort(int32_t index, size_t length);

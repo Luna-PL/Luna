@@ -57,7 +57,9 @@ option(LUNA_ENABLE_SANITIZERS
 set(LUNA_ROCM_SMOKE_ARCH "gfx1101" CACHE STRING
     "AMDGPU architecture used by the opt-in ROCm smoke test")
 
-add_library(runtime STATIC src/runtime/Runtime.cpp)
+add_library(runtime STATIC
+    src/runtime/ApplicationHostServices.cpp
+    src/runtime/Runtime.cpp)
 
 add_library(runtime-abi-c-compile OBJECT tests/runtime_abi_c_compile.c)
 target_include_directories(runtime-abi-c-compile PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -65,6 +67,24 @@ target_include_directories(runtime-abi-c-compile PRIVATE ${CMAKE_CURRENT_SOURCE_
 add_executable(runtime-abi-test tests/runtime_abi_test.cpp)
 target_include_directories(runtime-abi-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(runtime-abi-test PRIVATE runtime)
+
+add_executable(runtime-allocation-abi-test
+    tests/runtime_allocation_abi_test.cpp)
+target_include_directories(runtime-allocation-abi-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(runtime-allocation-abi-test PRIVATE runtime)
+
+add_executable(runtime-filesystem-abi-test
+    tests/runtime_filesystem_abi_test.cpp)
+target_include_directories(runtime-filesystem-abi-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(runtime-filesystem-abi-test PRIVATE runtime)
+
+add_executable(runtime-application-host-test
+    tests/runtime_application_host_test.cpp)
+target_include_directories(runtime-application-host-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(runtime-application-host-test PRIVATE runtime)
 
 add_executable(runtime-gpu-error-test tests/runtime_gpu_error_test.cpp)
 target_include_directories(runtime-gpu-error-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -82,6 +102,10 @@ add_executable(source-manager-test
     src/tooling/SourceManager.cpp
 )
 target_include_directories(source-manager-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(core-contracts-test tests/core_contracts_test.cpp)
+target_include_directories(core-contracts-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 add_library(luna-frontend OBJECT
     src/core/TypeRelations.cpp
@@ -136,6 +160,7 @@ add_executable(luna
     src/codegen/CodeGeneratorRangeAnalysis.cpp
     src/codegen/CodeGeneratorRuntimeDescriptors.cpp
     src/codegen/CodeGeneratorStatements.cpp
+    src/runtime/ApplicationHostServices.cpp
     src/runtime/Runtime.cpp
 )
 
@@ -144,10 +169,14 @@ if(LUNA_STRICT_WARNINGS)
         runtime
         runtime-abi-c-compile
         runtime-abi-test
+        runtime-allocation-abi-test
+        runtime-filesystem-abi-test
+        runtime-application-host-test
         runtime-gpu-error-test
         luna-fragment-plugin-fixture
         fragment-plugin-test
         source-manager-test
+        core-contracts-test
         luna-frontend
         analysis-snapshot-test
         luna
@@ -235,8 +264,32 @@ if(BUILD_TESTING)
         COMMAND $<TARGET_FILE:source-manager-test>
     )
     add_test(
+        NAME luna.core-contracts
+        COMMAND $<TARGET_FILE:core-contracts-test>
+    )
+    add_test(
         NAME luna.runtime-abi-v1
         COMMAND $<TARGET_FILE:runtime-abi-test>
+    )
+    add_test(
+        NAME luna.runtime-allocation-abi-v1
+        COMMAND $<TARGET_FILE:runtime-allocation-abi-test>
+    )
+    add_test(
+        NAME luna.runtime-filesystem-abi-v1
+        COMMAND $<TARGET_FILE:runtime-filesystem-abi-test>
+    )
+    add_test(
+        NAME luna.runtime-application-host-v1
+        COMMAND $<TARGET_FILE:runtime-application-host-test>
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/result_basic.luna
+    )
+    add_test(
+        NAME luna.std-io-smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/std_io_smoke.cmake
     )
     add_test(
         NAME luna.semantic-regressions

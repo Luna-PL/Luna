@@ -4310,7 +4310,17 @@ TypePtr SemanticAnalyzer::analyzeCall(CallExpr* call) {
 
     // Built-in print is polymorphic but has no user AST to monomorphize.
     if (!sym->typeParams.empty() && !sym->genericDecl) {
-        for (auto& arg : call->args) analyzeExpr(arg.get());
+        for (auto& arg : call->args) {
+            const TypePtr argumentType = resolved(analyzeExpr(arg.get()));
+            if (id && id->name == "print" &&
+                argumentType->kind != TypeKind::I32 &&
+                argumentType->kind != TypeKind::String &&
+                argumentType->kind != TypeKind::CStr) {
+                error("temporary print supports only i32, string, or cstr; "
+                      "got " + argumentType->toString(),
+                      call->line, call->col);
+            }
+        }
         return sym->returnType ? sym->returnType : TyUnit;
     }
 

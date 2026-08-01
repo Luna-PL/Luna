@@ -1,0 +1,2 @@
+[workspace]
+members = ["../../../../stdlib/core", "../../../../stdlib/sys", "../../../../stdlib/alloc", "../../../../stdlib/std", "app"]

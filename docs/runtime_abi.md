@@ -22,6 +22,27 @@ void* rt_realloc(void* pointer, size_t old_size, size_t new_size,
 void  rt_dealloc(void* pointer, size_t size, size_t alignment);
 ```
 
+Owning library containers use the recoverable companion boundary instead:
+
+```c
+int rt_checked_array_layout_v1(size_t element_size, size_t element_count,
+                               size_t alignment, size_t* byte_size,
+                               LunaAllocErrorV1* error);
+int rt_try_alloc_v1(size_t size, size_t alignment, void** allocation,
+                    LunaAllocErrorV1* error);
+int rt_try_realloc_v1(void* pointer, size_t old_size, size_t new_size,
+                      size_t alignment, void** replacement,
+                      LunaAllocErrorV1* error);
+```
+
+These entries report invalid alignment, array-size overflow, and out-of-memory through a
+caller-owned, allocation-free `LunaAllocErrorV1`. A zero-size allocation succeeds with a
+null output and does not call the host allocator. Positive-size reallocation is
+transactional: on allocation failure the original allocation remains valid and is written
+back to `replacement`. `new_size == 0` is rejected; the caller must destroy initialized
+elements and call `rt_dealloc` explicitly. `org.luna.sys::alloc` contains the raw Luna FFI
+bridge. Mapping this record into `core::AllocError` belongs in the future safe Alloc adapter.
+
 The compiler carries the same exact layout through allocation and every cleanup path, so a
 custom allocator does not need a hidden header on each object. `rt_malloc/rt_free` remain
 compatibility entries for already-generated Alpha IR; new IR does not use them.
@@ -58,7 +79,62 @@ machine fields and omit text, not panic, and must not store the volatile pointer
 legacy `last_error` entries remain for Alpha compatibility; new adapters should use the
 snapshot interface and copy immediately after a failing call.
 
-## Four resource domains that must not be mixed
+## Console input and filesystem services
+
+Runtime ABI v1 extends its original output-only console and host-services structures only
+at their tails. `LUNA_CONSOLE_V1_OUTPUT_SIZE` and
+`LUNA_HOST_SERVICES_V1_BASE_SIZE` name the previously published prefixes. A host that
+advertises only the older capabilities may continue to pass those prefix sizes; a host that
+advertises `LUNA_HOST_CAP_CONSOLE_INPUT` or `LUNA_HOST_CAP_FILESYSTEM` must provide the
+complete extended table. The default runtime currently advertises neither new capability.
+Compiler-generated application `main` functions explicitly call
+`rt_install_application_host_services_v1` before other Runtime operations. That application
+profile adds native stdin and filesystem services for ordinary JIT and AOT executables. It
+does not replace a service table already supplied by an embedding host; a library/module with
+no application entry point does not acquire the capabilities implicitly.
+
+Console input uses the same `LunaConsoleV1` table as output. `read` may complete with fewer
+bytes than requested; success with `bytes_read == 0` is EOF. A recoverable operation failure
+returns `LUNA_RUNTIME_STATUS_IO_ERROR` and fills the caller-owned `LunaIoErrorV1`. The
+callback does not allocate or return a process-global diagnostic pointer.
+
+`LunaFileSystemV1` provides synchronous open/read/write/seek/flush/sync/close/metadata and
+basic path operations. Its contract is:
+
+- paths are valid UTF-8 pointer-plus-length views and are not NUL-terminated C strings;
+- an adapter that calls an API requiring a C string rejects embedded NUL as `INVALID_INPUT`;
+- handles are opaque unsigned values, and zero is always invalid;
+- successful read/write may be partial, and a successful zero-byte read is EOF;
+- a recoverable host failure returns `LUNA_RUNTIME_STATUS_IO_ERROR` and initializes the
+  supplied `LunaIoErrorV1`; error identity is `kind/operation/raw_code`, with no mandatory
+  allocated message; other Runtime statuses denote ABI/caller contract failures;
+- out parameters other than the error record are consumed only after a successful status;
+- the host owns handle implementation details, while the safe Std adapter owns close policy.
+
+The native application profile validates UTF-8 and embedded NUL before path conversion,
+uses opaque registry IDs rather than exposing native descriptors, and consumes a handle on
+the first close attempt even if the platform close reports an error. `flush` drains only
+library buffering; the descriptor-based application profile has none. `sync` is the explicit
+durability operation.
+
+Sys bindings call the fixed `rt_console_*_v1`, `rt_file_*_v1`, and
+`rt_path_metadata_v1` forwarding entries. They do not load or dereference the host tables
+themselves. Runtime checks the installed capability on each forwarding call; absence becomes
+an allocation-free `LUNA_IO_ERROR_UNSUPPORTED`, while authorized calls retain the host's
+opaque context and handle domain.
+
+Handle metadata and path metadata are separate operations; a safe `File::metadata` never
+depends on retaining the path used to open the file. The raw ABI deliberately does not promise
+`read_exact`, `write_all`, text decoding, recursive directory creation, or best-effort Drop.
+Those policies belong in Std and are built by
+repeating these partial operations while handling `INTERRUPTED` explicitly.
+
+The non-v1 `rt_compat_console_*_0_2` helpers are an intentionally temporary adapter for the
+0.2.1 `std::io` module. They provide cstr/i32 formatting and bounded line input without
+freezing the future owned String or formatting traits. They are declared in `Runtime.h`, not
+the stable public `RuntimeABI.h`, and may be replaced when the explicit 0.3 mode lands.
+
+## Five resource domains that must not be mixed
 
 1. **Luna host heap**: uses `rt_alloc/rt_dealloc`; layout is determined by MoonIR/compiler.
 2. **Foreign/C resources**: released by the capability supplied by the creating library.
@@ -70,6 +146,9 @@ snapshot interface and copy immediately after a failing call.
 4. **Executable memory**: `LunaExecutableMemoryV1` reserves a W^X contract of
    `reserve -> write -> seal -> execute -> release`. The default runtime does not declare
    this capability; a future MoonRuntime/hotspot JIT must obtain explicit host authorization.
+5. **Host service handles**: filesystem and later process/clock resources are opaque values
+   created and released by the same installed host service. They are neither Luna pointers nor
+   raw C resources that user code may close through an unrelated API.
 
 ## C FFI boundary
 
@@ -104,7 +183,9 @@ process, while AOT uses the system linker; both paths have `puts`/`free` regress
 
 `LunaHostServicesV1` is validated with `magic`, `abi_version`, `struct_size`, and
 capability bits. v1 may append fields only at the end of the structure, and consumers must
-check `struct_size`. `LunaRuntimeModuleContextV1` is reserved for verified Moon
+check the minimum prefix needed by every advertised capability rather than requiring the
+latest known structure size. Nested tables follow the same rule. `LunaRuntimeModuleContextV1`
+is reserved for verified Moon
 containers and a future plugin ABI v2, allowing dynamic modules to use an authorized
 service table rather than relying on accidentally visible process C symbols. The current
 external fragment ABI v1 remains unchanged and will not be extended silently.
@@ -115,5 +196,7 @@ external fragment ABI v1 remains unchanged and will not be extended silently.
 - An ordinary allocation is one fixed `rt_alloc` boundary. The default allocator takes a
   direct Runtime fast path; an installed host allocator uses the replaceable service table.
   Neither path embeds a capability or hidden allocation header in every language object.
+- Recoverable containers use `rt_try_alloc_v1`/`rt_try_realloc_v1`; failure neither aborts
+  nor consumes an existing positive-size allocation.
 - Executable memory, GPU, dynamic selection, and dynamic apply are independent capabilities;
   linking `libruntime` does not enable them automatically.

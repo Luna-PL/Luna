@@ -1,0 +1,77 @@
+package org.luna.sys;
+module alloc;
+
+// Raw, library-internal Global Luna allocator bridge. `error` points to a
+// caller-owned LunaAllocErrorV1. The out-pointer form keeps allocation failure
+// distinct from a valid zero-size result and makes realloc transactional.
+extern "C" fn runtime_checked_array_layout(
+    element_size: usize,
+    element_count: usize,
+    alignment: usize,
+    byte_size: raw<usize>,
+    error: raw<u8>
+) -> i32 as "rt_checked_array_layout_v1";
+
+extern "C" fn runtime_try_alloc(
+    size: usize,
+    alignment: usize,
+    allocation: raw<raw<u8> >,
+    error: raw<u8>
+) -> i32 as "rt_try_alloc_v1";
+
+extern "C" fn runtime_try_realloc(
+    pointer: raw<u8>,
+    old_size: usize,
+    new_size: usize,
+    alignment: usize,
+    replacement: raw<raw<u8> >,
+    error: raw<u8>
+) -> i32 as "rt_try_realloc_v1";
+
+extern "C" fn runtime_dealloc(
+    linear pointer: raw<u8>,
+    size: usize,
+    alignment: usize
+) as "rt_dealloc";
+
+export fn checked_array_layout(
+    element_size: usize,
+    element_count: usize,
+    alignment: usize,
+    byte_size: raw<usize>,
+    error: raw<u8>
+) -> i32 {
+    return runtime_checked_array_layout(
+        element_size, element_count, alignment, byte_size, error
+    );
+}
+
+export fn try_allocate(
+    size: usize,
+    alignment: usize,
+    allocation: raw<raw<u8> >,
+    error: raw<u8>
+) -> i32 {
+    return runtime_try_alloc(size, alignment, allocation, error);
+}
+
+export fn try_reallocate(
+    pointer: raw<u8>,
+    old_size: usize,
+    new_size: usize,
+    alignment: usize,
+    replacement: raw<raw<u8> >,
+    error: raw<u8>
+) -> i32 {
+    return runtime_try_realloc(
+        pointer, old_size, new_size, alignment, replacement, error
+    );
+}
+
+export fn deallocate(
+    linear pointer: raw<u8>,
+    size: usize,
+    alignment: usize
+) -> unit {
+    runtime_dealloc(move pointer, size, alignment);
+}

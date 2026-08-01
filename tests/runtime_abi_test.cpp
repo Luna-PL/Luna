@@ -57,8 +57,8 @@ int main() {
         LUNA_RUNTIME_ABI_V1, sizeof(LunaAllocatorV1), &host,
         allocate, reallocate, deallocate};
     const LunaConsoleV1 console{
-        LUNA_RUNTIME_ABI_V1, sizeof(LunaConsoleV1), &host,
-        writeConsole, flushConsole};
+        LUNA_RUNTIME_ABI_V1, LUNA_CONSOLE_V1_OUTPUT_SIZE, &host,
+        writeConsole, flushConsole, nullptr};
     const LunaHostServicesV1 services{
         LUNA_HOST_SERVICES_MAGIC_V1,
         LUNA_RUNTIME_ABI_V1,
@@ -68,18 +68,46 @@ int main() {
         &allocator,
         &console,
         nullptr,
+        nullptr,
     };
 
     LunaHostServicesV1 truncated = services;
-    truncated.struct_size = sizeof(LunaHostServicesV1) - 1;
+    truncated.struct_size = LUNA_HOST_SERVICES_V1_BASE_SIZE - 1;
     if (rt_install_host_services_v1(&truncated) !=
         LUNA_RUNTIME_STATUS_INVALID_ARGUMENT) {
         std::cerr << "truncated host-service descriptor was accepted\n";
         return 1;
     }
 
-    if (rt_install_host_services_v1(&services) != LUNA_RUNTIME_STATUS_OK) {
+    LunaHostServicesV1 invalidFilesystem = services;
+    invalidFilesystem.capabilities |= LUNA_HOST_CAP_FILESYSTEM;
+    if (rt_install_host_services_v1(&invalidFilesystem) !=
+        LUNA_RUNTIME_STATUS_INVALID_ARGUMENT) {
+        std::cerr << "missing filesystem service was accepted\n";
+        return 1;
+    }
+
+    LunaHostServicesV1 invalidConsoleInput = services;
+    invalidConsoleInput.capabilities |= LUNA_HOST_CAP_CONSOLE_INPUT;
+    if (rt_install_host_services_v1(&invalidConsoleInput) !=
+        LUNA_RUNTIME_STATUS_INVALID_ARGUMENT) {
+        std::cerr << "truncated output-only console was accepted as input capable\n";
+        return 1;
+    }
+
+    // A host compiled against the original output/allocator-only v1 prefix
+    // remains valid after service pointers are appended to the descriptor.
+    LunaHostServicesV1 compatiblePrefix = services;
+    compatiblePrefix.struct_size = LUNA_HOST_SERVICES_V1_BASE_SIZE;
+
+    if (rt_install_host_services_v1(&compatiblePrefix) !=
+        LUNA_RUNTIME_STATUS_OK) {
         std::cerr << "could not install host services before activation\n";
+        return 1;
+    }
+    if (rt_install_application_host_services_v1() !=
+        LUNA_RUNTIME_STATUS_ALREADY_ACTIVE) {
+        std::cerr << "application profile replaced an embedding host\n";
         return 1;
     }
 
@@ -108,9 +136,19 @@ int main() {
     }
 
     const auto* active = rt_host_services_v1();
-    if (active != &services || active->executable_memory != nullptr ||
+    if (active != &compatiblePrefix || active->executable_memory != nullptr ||
         (active->capabilities & LUNA_HOST_CAP_EXECUTABLE_MEMORY) != 0) {
         std::cerr << "active host-service descriptor is inconsistent\n";
+        return 1;
+    }
+    LunaFileHandleV1 unavailableHandle = LUNA_INVALID_FILE_HANDLE_V1;
+    LunaIoErrorV1 ioError{};
+    if (rt_file_open_v1("x", 1, LUNA_FILE_OPEN_READ,
+                        &unavailableHandle, &ioError) !=
+            LUNA_RUNTIME_STATUS_IO_ERROR ||
+        ioError.kind != LUNA_IO_ERROR_UNSUPPORTED ||
+        ioError.operation != LUNA_IO_OPERATION_OPEN) {
+        std::cerr << "missing filesystem capability was not recoverable\n";
         return 1;
     }
     if (rt_install_host_services_v1(&services) != LUNA_RUNTIME_STATUS_ALREADY_ACTIVE) {

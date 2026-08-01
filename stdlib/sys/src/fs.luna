@@ -1,0 +1,123 @@
+package org.luna.sys;
+module fs;
+
+// Raw, library-internal filesystem bridge. Path bytes are explicit-length
+// UTF-8. `error` and `metadata` are caller-owned Runtime ABI records. Handles
+// are opaque IDs and must be closed exactly once through this module.
+extern "C" fn runtime_file_open(
+    path: raw<u8>, path_size: usize, flags: i32,
+    handle: raw<u64>, error: raw<u8>
+) -> i32 as "rt_file_open_v1";
+
+extern "C" fn runtime_file_read(
+    handle: u64, bytes: raw<u8>, byte_capacity: usize,
+    bytes_read: raw<usize>, error: raw<u8>
+) -> i32 as "rt_file_read_v1";
+
+extern "C" fn runtime_file_write(
+    handle: u64, bytes: raw<u8>, byte_count: usize,
+    bytes_written: raw<usize>, error: raw<u8>
+) -> i32 as "rt_file_write_v1";
+
+extern "C" fn runtime_file_seek(
+    handle: u64, offset: i64, whence: i32,
+    position: raw<u64>, error: raw<u8>
+) -> i32 as "rt_file_seek_v1";
+
+extern "C" fn runtime_file_flush(
+    handle: u64, error: raw<u8>
+) -> i32 as "rt_file_flush_v1";
+
+extern "C" fn runtime_file_sync(
+    handle: u64, error: raw<u8>
+) -> i32 as "rt_file_sync_v1";
+
+extern "C" fn runtime_file_close(
+    handle: u64, error: raw<u8>
+) -> i32 as "rt_file_close_v1";
+
+extern "C" fn runtime_file_metadata(
+    handle: u64, metadata: raw<u8>, error: raw<u8>
+) -> i32 as "rt_file_metadata_v1";
+
+extern "C" fn runtime_path_metadata(
+    path: raw<u8>, path_size: usize,
+    metadata: raw<u8>, error: raw<u8>
+) -> i32 as "rt_path_metadata_v1";
+
+extern "C" fn runtime_remove_file(
+    path: raw<u8>, path_size: usize, error: raw<u8>
+) -> i32 as "rt_remove_file_v1";
+
+extern "C" fn runtime_create_directory(
+    path: raw<u8>, path_size: usize, error: raw<u8>
+) -> i32 as "rt_create_directory_v1";
+
+export fn open(
+    path: raw<u8>, path_size: usize, flags: i32,
+    handle: raw<u64>, error: raw<u8>
+) -> i32 {
+    return runtime_file_open(path, path_size, flags, handle, error);
+}
+
+export fn read(
+    handle: u64, bytes: raw<u8>, byte_capacity: usize,
+    bytes_read: raw<usize>, error: raw<u8>
+) -> i32 {
+    return runtime_file_read(
+        handle, bytes, byte_capacity, bytes_read, error
+    );
+}
+
+export fn write(
+    handle: u64, bytes: raw<u8>, byte_count: usize,
+    bytes_written: raw<usize>, error: raw<u8>
+) -> i32 {
+    return runtime_file_write(
+        handle, bytes, byte_count, bytes_written, error
+    );
+}
+
+export fn seek(
+    handle: u64, offset: i64, whence: i32,
+    position: raw<u64>, error: raw<u8>
+) -> i32 {
+    return runtime_file_seek(handle, offset, whence, position, error);
+}
+
+export fn flush(handle: u64, error: raw<u8>) -> i32 {
+    return runtime_file_flush(handle, error);
+}
+
+export fn sync(handle: u64, error: raw<u8>) -> i32 {
+    return runtime_file_sync(handle, error);
+}
+
+export fn close(handle: u64, error: raw<u8>) -> i32 {
+    return runtime_file_close(handle, error);
+}
+
+export fn metadata(
+    handle: u64, value: raw<u8>, error: raw<u8>
+) -> i32 {
+    return runtime_file_metadata(handle, value, error);
+}
+
+export fn path_metadata(
+    path: raw<u8>, path_size: usize,
+    value: raw<u8>, error: raw<u8>
+) -> i32 {
+    return runtime_path_metadata(path, path_size, value, error);
+}
+
+export fn remove_file(
+    path: raw<u8>, path_size: usize, error: raw<u8>
+) -> i32 {
+    return runtime_remove_file(path, path_size, error);
+}
+
+export fn create_directory(
+    path: raw<u8>, path_size: usize, error: raw<u8>
+) -> i32 {
+    return runtime_create_directory(path, path_size, error);
+}

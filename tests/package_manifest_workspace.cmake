@@ -67,6 +67,8 @@ endif()
 
 foreach(library IN ITEMS
         "${LUNA_SOURCE_DIR}/stdlib/core"
+        "${LUNA_SOURCE_DIR}/stdlib/sys"
+        "${LUNA_SOURCE_DIR}/stdlib/alloc"
         "${LUNA_SOURCE_DIR}/stdlib/std")
     execute_process(
         COMMAND "${LUNA_EXECUTABLE}" check "${library}"

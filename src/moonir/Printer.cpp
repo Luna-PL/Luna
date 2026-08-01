@@ -57,7 +57,13 @@ void Printer::print(const Module& module, std::ostream& out) const {
             out << " nominal @" << type.nominalDeclarationId;
         out << " resource "
             << luna::sysmeta::resourceManagementName(
-                type.sysmeta.resource.management);
+                type.sysmeta.resource.management)
+            << " release_domain "
+            << luna::sysmeta::releaseDomainName(
+                type.sysmeta.resource.releaseDomain)
+            << " init_tracking "
+            << (type.sysmeta.resource.tracksElementInitialization
+                    ? "tracked" : "none");
         out << " abi_size " << type.valueSize
             << " abi_align " << type.valueAlignment;
         if (!type.abiLayout.empty())
@@ -100,6 +106,12 @@ void Printer::print(const Module& module, std::ostream& out) const {
             << " resource "
             << luna::sysmeta::resourceManagementName(
                 record.sysmeta.resource.management)
+            << " release_domain "
+            << luna::sysmeta::releaseDomainName(
+                record.sysmeta.resource.releaseDomain)
+            << " init_tracking "
+            << (record.sysmeta.resource.tracksElementInitialization
+                    ? "tracked" : "none")
             << " params " << record.sysmeta.resource.parameters.size()
             << "\n";
         for (const auto& metadata : record.metadata) {

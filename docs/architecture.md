@@ -30,12 +30,17 @@ in the roadmap.
 | Compiler | Parsing, type and trait checking, ownership proof, MoonIR, LLVM lowering | General Runtime policy |
 | Core | Minimal compiler-recognized language protocols and builtin surface | Platform services and container policy |
 | Standard Library | Replaceable types, algorithms, errors, and platform adapters | Implicit changes to language semantics |
-| Runtime | Versioned ABI for allocation, output, GPU, plugins, and error snapshots | Complete language reflection |
+| Runtime | Versioned ABI for allocation, console/filesystem host I/O, GPU, plugins, and error snapshots | Complete language reflection |
 | Dynamic | Explicit runtime discovery, selection, and plugin-extension boundary | Default participation in ordinary programs |
 
 Runtime and Dynamic are capability layers, not an object model automatically attached to every
 value. Ordinary programs should not pay for registries, descriptors, or dynamic dispatch when
 they do not use those capabilities.
+
+The Runtime's built-in default remains minimal. A compiler-generated application entry
+explicitly requests the native stdin/filesystem profile; an embedding host's previously
+installed service table has precedence. Library modules do not acquire host capabilities by
+being linked.
 
 ## Compilation pipeline
 

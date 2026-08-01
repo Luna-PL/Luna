@@ -1,0 +1,20 @@
+package org.luna.fixture.std_io;
+module application;
+
+using org.luna.std as std;
+
+fn main() -> i32 {
+    if std::io::stdout_write_text("std-io: ") != 0 { return 1; }
+    let line = std::io::read_line_lossy();
+    if std::io::stdout_write_line(line) != 0 { return 2; }
+    let value = std::io::parse_i32_or(line, -1);
+    if value != 41 { return 3; }
+    if std::io::parse_i32_or("invalid", 17) != 17 { return 8; }
+    if std::io::parse_i32_or("2147483648", 19) != 19 { return 9; }
+    if std::io::parse_i32_or("  -7  ", 0) != -7 { return 10; }
+    if std::io::stdout_write_i32_line(value + 1) != 0 { return 4; }
+    if std::io::stderr_write_line("std-io-stderr") != 0 { return 5; }
+    if std::io::stdout_flush() != 0 { return 6; }
+    if std::io::stderr_flush() != 0 { return 7; }
+    return 42;
+}

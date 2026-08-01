@@ -95,12 +95,42 @@ int CodeGenerator::jitRun() {
     bindRuntime("rt_shared_dealloc", &rt_shared_dealloc);
     bindRuntime("rt_panic_cstr", &rt_panic_cstr);
     bindRuntime("rt_host_services_v1", &rt_host_services_v1);
+    bindRuntime("rt_install_application_host_services_v1",
+                &rt_install_application_host_services_v1);
+    bindRuntime("rt_checked_array_layout_v1",
+                &rt_checked_array_layout_v1);
+    bindRuntime("rt_try_alloc_v1", &rt_try_alloc_v1);
+    bindRuntime("rt_try_realloc_v1", &rt_try_realloc_v1);
+    bindRuntime("rt_console_write_v1", &rt_console_write_v1);
+    bindRuntime("rt_console_flush_v1", &rt_console_flush_v1);
+    bindRuntime("rt_console_read_v1", &rt_console_read_v1);
+    bindRuntime("rt_file_open_v1", &rt_file_open_v1);
+    bindRuntime("rt_file_read_v1", &rt_file_read_v1);
+    bindRuntime("rt_file_write_v1", &rt_file_write_v1);
+    bindRuntime("rt_file_seek_v1", &rt_file_seek_v1);
+    bindRuntime("rt_file_flush_v1", &rt_file_flush_v1);
+    bindRuntime("rt_file_sync_v1", &rt_file_sync_v1);
+    bindRuntime("rt_file_close_v1", &rt_file_close_v1);
+    bindRuntime("rt_file_metadata_v1", &rt_file_metadata_v1);
+    bindRuntime("rt_path_metadata_v1", &rt_path_metadata_v1);
+    bindRuntime("rt_remove_file_v1", &rt_remove_file_v1);
+    bindRuntime("rt_create_directory_v1", &rt_create_directory_v1);
     bindRuntime("rt_runtime_error_snapshot_v1",
                 &rt_runtime_error_snapshot_v1);
     bindRuntime("rt_malloc", &rt_malloc);
     bindRuntime("rt_free", &rt_free);
     bindRuntime("rt_print_i32", &rt_print_i32);
     bindRuntime("rt_print_cstr", &rt_print_cstr);
+    bindRuntime("rt_compat_console_write_cstr_0_2",
+                &rt_compat_console_write_cstr_0_2);
+    bindRuntime("rt_compat_console_write_i32_0_2",
+                &rt_compat_console_write_i32_0_2);
+    bindRuntime("rt_compat_console_flush_0_2",
+                &rt_compat_console_flush_0_2);
+    bindRuntime("rt_compat_console_read_line_lossy_0_2",
+                &rt_compat_console_read_line_lossy_0_2);
+    bindRuntime("rt_compat_parse_i32_or_0_2",
+                &rt_compat_parse_i32_or_0_2);
     bindRuntime("rt_array_index_or_abort", &rt_array_index_or_abort);
     bindRuntime("rt_dynamic_fragment_select", &rt_dynamic_fragment_select);
     bindRuntime("rt_dynamic_fragment_matches", &rt_dynamic_fragment_matches);

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "CoreContracts.h"
 #include "Ownership.h"
 
 #include <cstdint>
@@ -12,21 +13,38 @@ namespace luna::sysmeta {
 // in the future, but it can never construct, attach, or override these facts.
 // Keep it typed so safety decisions never depend on user-controlled strings.
 inline constexpr uint16_t SchemaMajor = 1;
-inline constexpr uint16_t SchemaMinor = 0;
-inline constexpr const char* DropTraitId = "luna.compiler.Drop";
-inline constexpr const char* DropMethodName = "drop";
-inline constexpr const char* FromTraitId = "luna.compiler.From";
-inline constexpr const char* FromMethodName = "from";
-inline constexpr const char* OptionTypeId = "org.luna.core::option::Option";
+inline constexpr uint16_t SchemaMinor = 1;
+inline constexpr const char* DropTraitId =
+    luna::core_contracts::legacy_0_2::DropTraitId;
+inline constexpr const char* DropMethodName =
+    luna::core_contracts::DropMethodName;
+inline constexpr const char* FromTraitId =
+    luna::core_contracts::legacy_0_2::FromTraitId;
+inline constexpr const char* FromMethodName =
+    luna::core_contracts::FromMethodName;
+inline constexpr const char* OptionTypeId =
+    luna::core_contracts::canonical_0_3::OptionTypeId;
 inline constexpr const char* IteratorTraitId =
-    "org.luna.core::iter::Iterator";
+    luna::core_contracts::canonical_0_3::IteratorTraitId;
 inline constexpr const char* IntoIteratorTraitId =
-    "org.luna.core::iter::IntoIterator";
+    luna::core_contracts::canonical_0_3::IntoIteratorTraitId;
 inline constexpr const char* FromIteratorTraitId =
-    "org.luna.core::iter::FromIterator";
-inline constexpr const char* FromIteratorBeginMethodName = "begin";
-inline constexpr const char* FromIteratorPushMethodName = "push";
-inline constexpr const char* FromIteratorFinishMethodName = "finish";
+    luna::core_contracts::canonical_0_3::FromIteratorTraitId;
+inline constexpr const char* FromIteratorBeginMethodName =
+    luna::core_contracts::FromIteratorBeginMethodName;
+inline constexpr const char* FromIteratorPushMethodName =
+    luna::core_contracts::FromIteratorPushMethodName;
+inline constexpr const char* FromIteratorFinishMethodName =
+    luna::core_contracts::FromIteratorFinishMethodName;
+
+// These are recorded now so a future explicit 0.3 mode can switch identity
+// without inventing another spelling or silently changing 0.2 packages.
+inline constexpr const char* CanonicalDropTraitId =
+    luna::core_contracts::canonical_0_3::DropTraitId;
+inline constexpr const char* CanonicalFromTraitId =
+    luna::core_contracts::canonical_0_3::FromTraitId;
+inline constexpr const char* CanonicalResultTypeId =
+    luna::core_contracts::canonical_0_3::ResultTypeId;
 
 enum class ControlForm : uint8_t {
     Plain,
@@ -60,6 +78,15 @@ enum class ResourceManagement : uint8_t {
     Arc,
 };
 
+enum class ReleaseDomain : uint8_t {
+    None,
+    LunaGlobal,
+    Foreign,
+    Device,
+    Executable,
+    HostService,
+};
+
 struct ControlFacts {
     ControlForm form = ControlForm::Plain;
     Cardinality cardinality = Cardinality::None;
@@ -73,7 +100,9 @@ struct ResourceFacts {
     std::vector<luna::ownership::Contract> parameters;
     luna::ownership::Contract result;
     ResourceManagement management = ResourceManagement::Value;
+    ReleaseDomain releaseDomain = ReleaseDomain::None;
     bool needsDrop = false;
+    bool tracksElementInitialization = false;
 };
 
 struct CapabilityFacts {
@@ -125,6 +154,18 @@ inline constexpr const char* continuationStorageName(
         case ContinuationStorage::None: return "none";
         case ContinuationStorage::ScopedStack: return "scoped_stack";
         case ContinuationStorage::PersistentFrame: return "persistent_frame";
+    }
+    return "invalid";
+}
+
+inline constexpr const char* releaseDomainName(ReleaseDomain domain) {
+    switch (domain) {
+        case ReleaseDomain::None: return "none";
+        case ReleaseDomain::LunaGlobal: return "luna_global";
+        case ReleaseDomain::Foreign: return "foreign";
+        case ReleaseDomain::Device: return "device";
+        case ReleaseDomain::Executable: return "executable";
+        case ReleaseDomain::HostService: return "host_service";
     }
     return "invalid";
 }

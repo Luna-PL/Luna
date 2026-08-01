@@ -1,0 +1,91 @@
+package org.luna.sys;
+module console;
+
+// Raw, library-internal bridge. `error` points to caller-owned storage for a
+// LunaIoErrorV1 and `bytes_read` points to usize storage. Safe slice and Result
+// adaptation belongs to org.luna.std after the explicit 0.3 language mode.
+extern "C" fn runtime_console_write(
+    stream: i32,
+    bytes: raw<u8>,
+    byte_count: usize,
+    error: raw<u8>
+) -> i32 as "rt_console_write_v1";
+
+extern "C" fn runtime_console_flush(
+    stream: i32,
+    error: raw<u8>
+) -> i32 as "rt_console_flush_v1";
+
+extern "C" fn runtime_console_read(
+    bytes: raw<u8>,
+    byte_capacity: usize,
+    bytes_read: raw<usize>,
+    error: raw<u8>
+) -> i32 as "rt_console_read_v1";
+
+// Explicitly temporary 0.2 convenience adapters used by std::io. They avoid
+// pretending that borrowed cstr is the future owned String API.
+extern "C" fn runtime_compat_write_text(
+    stream: i32, text: cstr, newline: i32
+) -> i32 as "rt_compat_console_write_cstr_0_2";
+
+extern "C" fn runtime_compat_write_i32(
+    stream: i32, value: i32, newline: i32
+) -> i32 as "rt_compat_console_write_i32_0_2";
+
+extern "C" fn runtime_compat_flush(
+    stream: i32
+) -> i32 as "rt_compat_console_flush_0_2";
+
+extern "C" fn runtime_compat_read_line_lossy()
+    -> cstr as "rt_compat_console_read_line_lossy_0_2";
+
+extern "C" fn runtime_compat_parse_i32_or(
+    text: cstr, fallback: i32
+) -> i32 as "rt_compat_parse_i32_or_0_2";
+
+export fn write(
+    stream: i32,
+    bytes: raw<u8>,
+    byte_count: usize,
+    error: raw<u8>
+) -> i32 {
+    return runtime_console_write(stream, bytes, byte_count, error);
+}
+
+export fn flush(stream: i32, error: raw<u8>) -> i32 {
+    return runtime_console_flush(stream, error);
+}
+
+export fn read(
+    bytes: raw<u8>,
+    byte_capacity: usize,
+    bytes_read: raw<usize>,
+    error: raw<u8>
+) -> i32 {
+    return runtime_console_read(bytes, byte_capacity, bytes_read, error);
+}
+
+export fn compat_write_text(
+    stream: i32, text: cstr, newline: i32
+) -> i32 {
+    return runtime_compat_write_text(stream, text, newline);
+}
+
+export fn compat_write_i32(
+    stream: i32, value: i32, newline: i32
+) -> i32 {
+    return runtime_compat_write_i32(stream, value, newline);
+}
+
+export fn compat_flush(stream: i32) -> i32 {
+    return runtime_compat_flush(stream);
+}
+
+export fn compat_read_line_lossy() -> cstr {
+    return runtime_compat_read_line_lossy();
+}
+
+export fn compat_parse_i32_or(text: cstr, fallback: i32) -> i32 {
+    return runtime_compat_parse_i32_or(text, fallback);
+}

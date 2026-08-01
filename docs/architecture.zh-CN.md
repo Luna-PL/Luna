@@ -27,11 +27,15 @@
 | Compiler | 解析、类型与 trait 检查、所有权证明、MoonIR、LLVM 降低 | 通用运行时策略 |
 | Core | 编译器认可的最小语言协议和内建表面 | 平台服务和容器策略 |
 | Standard Library | 可替换的类型、算法、错误和平台 adapter | 隐式改变语言语义 |
-| Runtime | 分配、输出、GPU、插件和错误快照的版本化 ABI | 完整语言反射 |
+| Runtime | 分配、console/filesystem host I/O、GPU、插件和错误快照的版本化 ABI | 完整语言反射 |
 | Dynamic | 显式的运行时发现、选择和插件扩展边界 | 默认进入普通程序 |
 
 “Runtime”和“Dynamic”是能力层级，不是所有值自动拥有的对象模型。普通程序没有
 使用对应能力时，不应为 registry、descriptor 或动态分派付费。
+
+Runtime 内建默认保持最小。编译器生成的 application entry 会显式请求 native
+stdin/filesystem profile；embedding host 已安装的 service table 具有优先权。library module
+不会仅因被链接就取得 host capability。
 
 ## 编译管线
 
@@ -88,4 +92,3 @@ Metadata 是声明附加数据和选择协议的扩展点；普通 metadata 不�
 - “实际改了什么”：根目录 `CHANGELOG.md`。
 
 历史 Draft 和交接记录不保留在活动文档树中；需要追溯时使用 Git 历史。
-

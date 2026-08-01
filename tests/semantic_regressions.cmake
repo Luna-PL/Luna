@@ -307,3 +307,4 @@ expect_error("enum match rejects duplicate variants" "tests/fixtures/enum_match_
 expect_error("enum match checks payload arity" "tests/fixtures/enum_match_arity_invalid.luna" "variant 'Number' expects 1 payload binding(s), got 2")
 expect_success("Result supports nested and aggregate payloads" "tests/fixtures/result_payload_abi_invalid.luna" "41\n24\nProgram exited with code: 30")
 expect_error("panic requires a text message" "tests/fixtures/panic_message_type_invalid.luna" "panic message must be string or cstr")
+expect_error("temporary print rejects unsupported values" "tests/fixtures/print_unsupported_type_invalid.luna" "temporary print supports only i32, string, or cstr")

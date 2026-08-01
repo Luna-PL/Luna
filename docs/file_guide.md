@@ -288,6 +288,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/codegen/CodeGeneratorRangeAnalysis.h`
 - `src/codegen/CodeGeneratorRuntimeDescriptors.cpp`
 - `src/codegen/CodeGeneratorStatements.cpp`
+- `src/core/CoreContracts.h`
 - `src/core/Ownership.h`
 - `src/core/SysMeta.h`
 - `src/core/TypeIdentity.h`
@@ -333,6 +334,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/parser/Parser.cpp`
 - `src/parser/Parser.h`
 - `src/runtime/FragmentPluginABI.h`
+- `src/runtime/ApplicationHostServices.cpp`
+- `src/runtime/ApplicationHostServices.h`
 - `src/runtime/Runtime.cpp`
 - `src/runtime/Runtime.h`
 - `src/runtime/RuntimeABI.h`
@@ -362,6 +365,13 @@ Git internals, and ignored generated artifacts are excluded.
 - `stdlib/core/src/iter.luna`
 - `stdlib/core/src/option.luna`
 - `stdlib/core/src/prelude.luna`
+- `stdlib/sys/luna.package`
+- `stdlib/sys/src/alloc.luna`
+- `stdlib/sys/src/console.luna`
+- `stdlib/sys/src/fs.luna`
+- `stdlib/sys/src/prelude.luna`
+- `stdlib/alloc/luna.package`
+- `stdlib/alloc/src/prelude.luna`
 - `stdlib/luna.lock`
 - `stdlib/luna.workspace`
 - `stdlib/std/luna.package`
@@ -370,6 +380,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/analysis_protocol.cmake`
 - `tests/analysis_snapshot_test.cpp`
 - `tests/control_flow_aot.cmake`
+- `tests/core_contracts_test.cpp`
 - `tests/core_surface.cmake`
 - `tests/diagnostic_protocol.cmake`
 - `tests/external_fragment_dispatch.cmake`
@@ -494,6 +505,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/packages/self_using/01_main.luna`
 - `tests/fixtures/panic.luna`
 - `tests/fixtures/panic_message_type_invalid.luna`
+- `tests/fixtures/print_unsupported_type_invalid.luna`
 - `tests/fixtures/parse_missing_binding_name.luna`
 - `tests/fixtures/parse_multiple_declarations_invalid.luna`
 - `tests/fixtures/rc_arc.luna`
@@ -546,6 +558,11 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/workspaces/local/core/src/core.luna`
 - `tests/fixtures/workspaces/local/luna.lock`
 - `tests/fixtures/workspaces/local/luna.workspace`
+- `tests/fixtures/workspaces/std_io/app/luna.package`
+- `tests/fixtures/workspaces/std_io/app/src/main.luna`
+- `tests/fixtures/workspaces/std_io/luna.lock`
+- `tests/fixtures/workspaces/std_io/luna.workspace`
+- `tests/fixtures/workspaces/std_io/stdin.txt`
 - `tests/fragment_lowering_abi.cmake`
 - `tests/fragment_plugin_fixture.cpp`
 - `tests/fragment_plugin_test.cpp`
@@ -573,10 +590,14 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/rocm_smoke.cmake`
 - `tests/runtime_abi_c_compile.c`
 - `tests/runtime_abi_test.cpp`
+- `tests/runtime_allocation_abi_test.cpp`
+- `tests/runtime_application_host_test.cpp`
+- `tests/runtime_filesystem_abi_test.cpp`
 - `tests/runtime_gpu_error_test.cpp`
 - `tests/semantic_regressions.cmake`
 - `tests/source_manager_test.cpp`
 - `tests/stable_core_parity.cmake`
+- `tests/std_io_smoke.cmake`
 - `tests/structured_cps_abi.cmake`
 - `tools/benchmark_heterogeneous.sh`
 <!-- FILE_INVENTORY_END -->

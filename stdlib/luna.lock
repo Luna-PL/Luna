@@ -5,6 +5,18 @@ source = "workspace:core"
 hash = "workspace-unpublished-core"
 
 [[package]]
+id = "org.luna.sys"
+version = "0.2.1"
+source = "workspace:sys"
+hash = "workspace-unpublished-sys"
+
+[[package]]
+id = "org.luna.alloc"
+version = "0.2.1"
+source = "workspace:alloc"
+hash = "workspace-unpublished-alloc"
+
+[[package]]
 id = "org.luna.std"
 version = "0.2.1"
 source = "workspace:std"

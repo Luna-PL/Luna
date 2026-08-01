@@ -131,6 +131,11 @@ Runtime ABI v1 已提供 caller-owned `domain/code/message` 快照。机器控�
 domain/code；message 只是可选诊断，分配失败时可以省略。旧 `last_error` 借用指针
 只用于兼容，不得存入长期错误值。
 
+可失败的 Global Luna 分配使用独立的 caller-owned `LunaAllocErrorV1`。它只保留
+稳定的 kind、requested size 和 alignment 字段，因此可以在不分配错误本身的情况下
+表示非法 layout、overflow 或 OOM。Sys 层保留原始 ABI record，安全 Alloc 层再将其
+映射为 Core `LayoutError`/`AllocError`。
+
 ## 8. 状态矩阵
 
 | 能力 | 状态 | 承诺 |

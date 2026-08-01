@@ -163,7 +163,7 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
 - [Fragment 与 slot](docs/fragments.md)
 - [Runtime ABI 与 C FFI](docs/runtime_abi.md)
 - [异构计算](docs/heterogeneous_compute.md)
-- [标准库雏形](docs/standard_library.md)
+- [标准库设计](docs/standard_library.zh-CN.md)
 - [测试与回归](docs/testing.md)
 - [性能基准](docs/benchmarks.zh-CN.md)
 - [演进路线图](docs/roadmap.md)

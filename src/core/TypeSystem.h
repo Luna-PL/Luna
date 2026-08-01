@@ -191,6 +191,8 @@ struct Type {
         t->inner = std::move(inner);
         t->sysmeta.resource.management =
             luna::sysmeta::ResourceManagement::Rc;
+        t->sysmeta.resource.releaseDomain =
+            luna::sysmeta::ReleaseDomain::LunaGlobal;
         return t;
     }
     static TypePtr makeArc(TypePtr inner) {
@@ -199,12 +201,16 @@ struct Type {
         t->inner = std::move(inner);
         t->sysmeta.resource.management =
             luna::sysmeta::ResourceManagement::Arc;
+        t->sysmeta.resource.releaseDomain =
+            luna::sysmeta::ReleaseDomain::LunaGlobal;
         return t;
     }
     static TypePtr makeDeviceBuffer(TypePtr element) {
         auto t = std::make_shared<Type>();
         t->kind = TypeKind::DeviceBuffer;
         t->inner = std::move(element);
+        t->sysmeta.resource.releaseDomain =
+            luna::sysmeta::ReleaseDomain::Device;
         return t;
     }
     static TypePtr makeArray(TypePtr element, uint64_t length) {

@@ -1,0 +1,9 @@
+nominal struct Message {
+    code: i32;
+}
+
+fn main() -> i32 {
+    let message = new Message(7);
+    print(message);
+    return 0;
+}
