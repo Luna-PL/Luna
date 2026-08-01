@@ -114,6 +114,56 @@ int main(int argc, char* argv[]) {
                 "named type source spans are not exact"))
         return 12;
 
+    const std::string memberSource =
+        "package org.luna.test;\n"
+        "module api;\n"
+        "struct Box { value: i32; }\n"
+        "enum Choice { Some(i32); None; }\n"
+        "fn read(box: Box) -> i32 { return box.value; }\n"
+        "fn choose() -> i32 {\n"
+        "  let choice = Choice::Some(1);\n"
+        "  match choice {\n"
+        "    Choice::Some(value) => { return value; },\n"
+        "    Choice::None => { return 0; }\n"
+        "  }\n"
+        "}\n";
+    auto members = luna::tooling::AnalysisSnapshot::analyzeSource(
+        memberSource, "file:///workspace/members.luna");
+    const auto fields = members.symbolIndex().findByName("value");
+    const auto someVariants = members.symbolIndex().findByName("Some");
+    const auto noneVariants = members.symbolIndex().findByName("None");
+    const auto choices = members.symbolIndex().findByName("Choice");
+    const auto countReferences = [&](const luna::tooling::IndexedSymbol* symbol) {
+        return std::count_if(
+            members.referenceIndex().references().begin(),
+            members.referenceIndex().references().end(),
+            [&](const auto& reference) {
+                return symbol && reference.targetId == symbol->id;
+            });
+    };
+    if (!expect(members.success(), "member reference analysis failed") ||
+        !expect(fields.size() == 1 &&
+                    fields.front()->kind ==
+                        luna::tooling::IndexedSymbolKind::Field &&
+                    fields.front()->selection.line == 3 &&
+                    fields.front()->selection.column == 14,
+                "struct field declaration was not indexed exactly") ||
+        !expect(someVariants.size() == 1 && noneVariants.size() == 1 &&
+                    someVariants.front()->kind ==
+                        luna::tooling::IndexedSymbolKind::EnumVariant &&
+                    someVariants.front()->signature == "Some(i32)" &&
+                    noneVariants.front()->signature == "None()",
+                "enum variant declarations were not indexed") ||
+        !expect(countReferences(fields.front()) == 1,
+                "field access did not resolve to its field Symbol ID") ||
+        !expect(countReferences(someVariants.front()) == 2 &&
+                    countReferences(noneVariants.front()) == 1,
+                "enum construction/match references are incomplete") ||
+        !expect(choices.size() == 1 &&
+                    countReferences(choices.front()) == 3,
+                "enum owner references are incomplete"))
+        return 14;
+
     const std::string methodSource =
         "package org.luna.test;\n"
         "module api;\n"
@@ -268,6 +318,64 @@ int main(int argc, char* argv[]) {
                 "qualified cross-file type did not resolve to its Symbol ID"))
         return 11;
 
+    const std::string memberPackagePath =
+        std::string(argv[1]) + "/tests/fixtures/packages/member_references";
+    const std::string memberMainPath = memberPackagePath + "/02_main.luna";
+    const std::string memberOverlay =
+        "package org.luna.member_references;\n"
+        "module application;\n"
+        "// unsaved moon: 月\n"
+        "fn read(box: models::Box) -> i32 { return box.value; }\n"
+        "fn choose() -> i32 {\n"
+        "  let choice = models::Choice::Some(1);\n"
+        "  match choice {\n"
+        "    models::Choice::Some(value) => { return value; },\n"
+        "    models::Choice::None => { return 0; }\n"
+        "  }\n"
+        "}\n";
+    auto memberPackage =
+        luna::tooling::AnalysisSnapshot::analyzePathWithOverlay(
+            memberPackagePath, memberMainPath, memberOverlay);
+    const auto packageFields = memberPackage.symbolIndex().findByName("value");
+    const auto packageVariants = memberPackage.symbolIndex().findByName("Some");
+    const luna::tooling::IndexedSymbol* boxField = nullptr;
+    const luna::tooling::IndexedSymbol* choiceSome = nullptr;
+    for (const auto* symbol : packageFields)
+        if (symbol->qualifiedName.find("Box::value") != std::string::npos &&
+            symbol->qualifiedName.find("OtherBox") == std::string::npos)
+            boxField = symbol;
+    for (const auto* symbol : packageVariants)
+        if (symbol->qualifiedName.find("Choice::Some") != std::string::npos &&
+            symbol->qualifiedName.find("OtherChoice") == std::string::npos)
+            choiceSome = symbol;
+    const auto packageReferenceCount =
+        [&](const luna::tooling::IndexedSymbol* symbol) {
+            return std::count_if(
+                memberPackage.referenceIndex().references().begin(),
+                memberPackage.referenceIndex().references().end(),
+                [&](const auto& reference) {
+                    return symbol && reference.targetId == symbol->id;
+                });
+        };
+    if (!expect(memberPackage.success(),
+                "cross-file member overlay analysis failed") ||
+        !expect(packageFields.size() == 2 && boxField != nullptr,
+                "same-named fields lost their parent identity") ||
+        !expect(packageVariants.size() == 2 && choiceSome != nullptr,
+                "same-named variants lost their parent identity") ||
+        !expect(packageReferenceCount(boxField) == 1 &&
+                    packageReferenceCount(choiceSome) == 2,
+                "cross-file member references resolved by source name") ||
+        !expect(std::all_of(
+                    memberPackage.referenceIndex().references().begin(),
+                    memberPackage.referenceIndex().references().end(),
+                    [&](const auto& reference) {
+                        return reference.source.path != memberMainPath ||
+                            reference.source.line >= 4;
+                    }),
+                "member overlay references used stale disk spans"))
+        return 15;
+
     const std::string overlaidDocument = multiModulePath + "/02_main.luna";
     const std::string overlaySource =
         "package org.luna.module_headers;\n"
@@ -288,6 +396,38 @@ int main(int argc, char* argv[]) {
                         unsavedValues.front()->id,
                 "overlay call did not resolve against in-memory source"))
         return 9;
+
+    const std::string overlaidMath = multiModulePath + "/01_math.luna";
+    const std::string mathOverlaySource =
+        "package org.luna.module_headers;\n"
+        "module math::integer;\n"
+        "using org.luna.std as std;\n"
+        "// 月 multi-file declaration\n"
+        "export fn moon_answer() -> i32 { return 42; }\n";
+    const std::string mainOverlaySource =
+        "package org.luna.module_headers;\n"
+        "module application;\n"
+        "using org.luna.std as std;\n"
+        "fn main() -> i32 { return math::integer::moon_answer(); }\n";
+    auto multiOverlaid = luna::tooling::AnalysisSnapshot::analyzePathWithOverlays(
+        multiModulePath,
+        {{overlaidMath, mathOverlaySource},
+         {overlaidDocument, mainOverlaySource}});
+    const auto moonAnswers =
+        multiOverlaid.symbolIndex().findByName("moon_answer");
+    if (!expect(multiOverlaid.success(),
+                "multi-document package overlay analysis failed") ||
+        !expect(moonAnswers.size() == 1 &&
+                    moonAnswers.front()->selection.path.find("01_math.luna") !=
+                        std::string::npos,
+                "first overlay declaration was not analyzed") ||
+        !expect(multiOverlaid.referenceIndex().references().size() == 1 &&
+                    multiOverlaid.referenceIndex().references().front().targetId ==
+                        moonAnswers.front()->id &&
+                    multiOverlaid.referenceIndex().references().front().source.path.find(
+                        "02_main.luna") != std::string::npos,
+                "second overlay did not resolve against the first overlay"))
+        return 13;
 
     return 0;
 }

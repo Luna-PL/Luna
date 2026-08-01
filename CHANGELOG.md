@@ -65,9 +65,18 @@
 - Added resolved user type and trait references for type syntax, impls, and
   bounds, advertised independently through `type-references` and
   `trait-references` and consumed by language-server definition requests.
+- Advertised reverse package reference queries through the explicit
+  `package-references` capability, using stable Symbol IDs across declaration
+  selections and all emitted reference classes.
+- Added stable child Symbol IDs for struct fields and enum variants, exact
+  references for field access, variant construction, and qualified match
+  patterns, and the `field-references`/`enum-variant-references` capabilities.
 - Added package-aware single-document source overlays to `luna analyze` via
   stdin, preserving package/module identity and computing protocol byte spans
   against the in-memory UTF-8 snapshot rather than stale disk contents.
+- Added versioned `luna.overlay` JSON stdin envelopes for atomic multi-document
+  package analysis, while retaining the original single-document `--overlay`
+  transport for compatible tooling clients.
 
 ## 0.1.0-alpha — Development baseline
 

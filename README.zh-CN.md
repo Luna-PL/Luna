@@ -106,7 +106,7 @@ package 目录：
 |---|---|
 | `luna --version` | 输出编译器版本。 |
 | `luna check <输入>` | 验证源码直到 MoonIR，不生成机器码。 |
-| `luna analyze <输入> --message-format=json` | 输出语义工具快照，可从 stdin 读取一个源码 overlay。 |
+| `luna analyze <输入> --message-format=json` | 输出语义工具快照，可从 stdin 读取一个或多个源码 overlay。 |
 | `luna run <输入> [-O0\|-O2\|-O3]` | 使用 JIT 编译并运行程序。 |
 | `luna build <输入> [-O0\|-O2\|-O3]` | 生成 LLVM IR、链接 Runtime ABI，并输出本机可执行文件。 |
 | `luna repl` | 启动有限 Alpha REPL（`=`、`:decl`、单行语句）。 |

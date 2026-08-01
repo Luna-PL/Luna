@@ -67,6 +67,11 @@ struct Type {
     luna::types::TypeDomain domain = luna::types::TypeDomain::Value;
     luna::types::IdentityMode identityMode = luna::types::IdentityMode::Structural;
     std::string name;
+    // Source declaration provenance used by tooling member identities. It is
+    // deliberately excluded from language-level type equality: structural
+    // compatibility remains structural, while a value that came from a named
+    // declaration can still navigate to that declaration's fields.
+    std::string declarationLinkageName;
     // A non-empty nominalId is the identity of a declaration. Two named
     // structs with identical fields therefore remain incompatible. Record
     // types leave it empty and compare structurally.

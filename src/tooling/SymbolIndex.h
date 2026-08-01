@@ -19,6 +19,8 @@ enum class IndexedSymbolKind {
     Trait,
     Metadata,
     Constraint,
+    Field,
+    EnumVariant,
 };
 
 struct SymbolSourceLocation {

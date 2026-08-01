@@ -57,13 +57,20 @@ AnalysisSnapshot AnalysisSnapshot::analyzePath(const std::string& inputPath) {
 AnalysisSnapshot AnalysisSnapshot::analyzePathWithOverlay(
     const std::string& inputPath, const std::string& documentPath,
     const std::string& source) {
+    return analyzePathWithOverlays(
+        inputPath, {{documentPath, source}});
+}
+
+AnalysisSnapshot AnalysisSnapshot::analyzePathWithOverlays(
+    const std::string& inputPath,
+    const std::vector<PackageRequest::SourceOverlay>& overlays) {
     AnalysisSnapshot snapshot;
     PackageManager manager;
     LoadedPackage loaded;
     std::vector<diagnostic::Diagnostic> errors;
     PackageRequest request;
     request.inputPath = inputPath;
-    request.overlays.push_back({documentPath, source});
+    request.overlays = overlays;
     const bool loadedSuccessfully = manager.load(
         request, loaded, snapshot.mPackageGraph, errors);
     snapshot.mProgram = std::move(loaded.program);

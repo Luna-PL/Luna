@@ -183,6 +183,9 @@ private:
     void recordDeclarationReference(const ASTNode* source,
                                     size_t byteLength,
                                     const Decl* declaration);
+    void recordResolvedReference(const std::string& sourcePath,
+                                 int line, int column, size_t byteLength,
+                                 std::string targetLinkageName);
 
     SymbolTable mSymTable;
     std::unordered_map<std::string, MetaDecl*> mMetadataSchemas;

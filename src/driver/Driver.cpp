@@ -10,6 +10,7 @@
 #include "package/Package.h"
 #include "diagnostics/Diagnostic.h"
 #include <llvm/Support/DynamicLibrary.h>
+#include <llvm/Support/JSON.h>
 #include <llvm/TargetParser/Host.h>
 
 #include <iostream>
@@ -20,6 +21,8 @@
 #include <vector>
 
 namespace luna::driver {
+
+using SourceOverlays = std::vector<PackageRequest::SourceOverlay>;
 
 #ifndef LUNA_COMPILER_COMMIT
 #define LUNA_COMPILER_COMMIT "unknown"
@@ -69,8 +72,43 @@ static void printAnalysisHello() {
         << diagnostic::jsonEscape(llvm::sys::getDefaultTargetTriple())
         << "\",\"capabilities\":[\"declarations\",\"call-references\","
         << "\"method-references\",\"type-references\","
-        << "\"trait-references\","
-        << "\"single-document-overlay\"]}\n";
+        << "\"trait-references\",\"package-references\","
+        << "\"field-references\",\"enum-variant-references\","
+        << "\"single-document-overlay\","
+        << "\"multi-document-overlay\"]}\n";
+}
+
+static std::optional<SourceOverlays> parseAnalysisOverlays(
+    const std::string& input, std::string& error) {
+    auto parsed = llvm::json::parse(input);
+    if (!parsed) {
+        error = "invalid overlay JSON: " + llvm::toString(parsed.takeError());
+        return std::nullopt;
+    }
+    const auto* envelope = parsed->getAsObject();
+    if (!envelope || envelope->getString("protocol") != "luna.overlay" ||
+        envelope->getInteger("version") != 1) {
+        error = "overlay stdin must be a luna.overlay version 1 object";
+        return std::nullopt;
+    }
+    const auto* records = envelope->getArray("overlays");
+    if (!records || records->empty()) {
+        error = "overlay stdin must contain a non-empty overlays array";
+        return std::nullopt;
+    }
+    SourceOverlays overlays;
+    overlays.reserve(records->size());
+    for (const auto& record : *records) {
+        const auto* object = record.getAsObject();
+        const auto path = object ? object->getString("path") : std::nullopt;
+        const auto text = object ? object->getString("text") : std::nullopt;
+        if (!path || path->empty() || !text) {
+            error = "each overlay must contain non-empty path and string text fields";
+            return std::nullopt;
+        }
+        overlays.push_back({path->str(), text->str()});
+    }
+    return overlays;
 }
 
 static std::optional<size_t> byteOffsetFromSource(
@@ -91,21 +129,21 @@ static std::optional<size_t> byteOffsetFromSource(
 
 static std::optional<size_t> analysisByteOffset(
     const tooling::SymbolSourceLocation& location,
-    const std::string& overlayPath, const std::string& overlaySource) {
-    if (!overlayPath.empty() &&
-        diagnostic::normalizedPath(location.path) ==
-            diagnostic::normalizedPath(overlayPath))
-        return byteOffsetFromSource(
-            overlaySource, location.line, location.column);
+    const SourceOverlays& overlays) {
+    const std::string normalizedLocation =
+        diagnostic::normalizedPath(location.path);
+    for (const auto& overlay : overlays) {
+        if (normalizedLocation == diagnostic::normalizedPath(overlay.path))
+            return byteOffsetFromSource(
+                overlay.source, location.line, location.column);
+    }
     return diagnostic::byteOffsetFromFile(
         location.path, location.line, location.column);
 }
 
 static bool printAnalysisSymbol(
-    const tooling::IndexedSymbol& symbol, const std::string& overlayPath,
-    const std::string& overlaySource) {
-    const auto startByte = analysisByteOffset(
-        symbol.selection, overlayPath, overlaySource);
+    const tooling::IndexedSymbol& symbol, const SourceOverlays& overlays) {
+    const auto startByte = analysisByteOffset(symbol.selection, overlays);
     if (!startByte) return false;
     const size_t endByte = *startByte + symbol.selection.byteLength;
     std::cout
@@ -134,10 +172,9 @@ static bool printAnalysisSymbol(
 }
 
 static bool printAnalysisReference(
-    const tooling::IndexedReference& reference, const std::string& overlayPath,
-    const std::string& overlaySource) {
-    const auto startByte = analysisByteOffset(
-        reference.source, overlayPath, overlaySource);
+    const tooling::IndexedReference& reference,
+    const SourceOverlays& overlays) {
+    const auto startByte = analysisByteOffset(reference.source, overlays);
     if (!startByte) return false;
     const size_t endByte = *startByte + reference.source.byteLength;
     std::cout
@@ -189,7 +226,8 @@ Usage:
   luna check  <file-or-package> [--emit-moonir <path>]
                    [--message-format=json]  Verify through MoonIR
   luna analyze <file-or-package> --message-format=json
-                   [--overlay <document>]  Emit a semantic snapshot;
+                   [--overlay <document> | --overlays-from-stdin]
+                                           Emit a semantic snapshot;
                                            overlay source is read from stdin
   luna run    <file-or-package> [-O0|-O2|-O3] [--link <shared-library>]
                    [--gpu-target <target[,target...]>]  JIT-compile and execute
@@ -277,6 +315,7 @@ int run(int argc, char* argv[]) {
     auto& aotCompiler = options.aotCompiler;
     auto& moonIrOutput = options.moonIrOutput;
     auto& overlayPath = options.overlayPath;
+    const bool overlaysFromStdin = options.overlaysFromStdin;
     auto& gpuTargets = options.gpuTargets;
     auto& printMoonCostReport = options.printMoonCostReport;
     auto& reserveKernelRuntime = options.reserveKernelRuntime;
@@ -288,32 +327,43 @@ int run(int argc, char* argv[]) {
 
     if (cmd == "analyze") {
         printAnalysisHello();
-        std::string overlaySource;
-        if (!overlayPath.empty()) {
+        SourceOverlays overlays;
+        if (!overlayPath.empty() || overlaysFromStdin) {
             std::ostringstream input;
             input << std::cin.rdbuf();
             if (std::cin.bad()) {
+                std::cerr << "failed to read analysis overlay stdin\n";
                 printAnalysisSummary(0, 0, false);
                 return 2;
             }
-            overlaySource = input.str();
+            if (overlaysFromStdin) {
+                std::string overlayError;
+                auto parsed = parseAnalysisOverlays(input.str(), overlayError);
+                if (!parsed) {
+                    std::cerr << overlayError << '\n';
+                    printAnalysisSummary(0, 0, false);
+                    return 2;
+                }
+                overlays = std::move(*parsed);
+            } else {
+                overlays.push_back({overlayPath, input.str()});
+            }
         }
-        auto snapshot = overlayPath.empty()
+        auto snapshot = overlays.empty()
             ? tooling::AnalysisSnapshot::analyzePath(filePath)
-            : tooling::AnalysisSnapshot::analyzePathWithOverlay(
-                filePath, overlayPath, overlaySource);
+            : tooling::AnalysisSnapshot::analyzePathWithOverlays(
+                filePath, overlays);
         size_t emitted = 0;
         size_t emittedReferences = 0;
         bool locationsComplete = true;
         for (const auto& symbol : snapshot.symbolIndex().declarations()) {
-            if (printAnalysisSymbol(symbol, overlayPath, overlaySource))
+            if (printAnalysisSymbol(symbol, overlays))
                 ++emitted;
             else
                 locationsComplete = false;
         }
         for (const auto& reference : snapshot.referenceIndex().references()) {
-            if (printAnalysisReference(
-                    reference, overlayPath, overlaySource))
+            if (printAnalysisReference(reference, overlays))
                 ++emittedReferences;
             else
                 locationsComplete = false;

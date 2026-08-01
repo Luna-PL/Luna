@@ -21,6 +21,7 @@ struct CommandLineOptions {
     std::string aotCompiler;
     std::string moonIrOutput;
     std::string overlayPath;
+    bool overlaysFromStdin = false;
     LunaGpuTargetConfig gpuTargets;
     MessageFormat messageFormat = MessageFormat::Human;
     bool printMoonCostReport = false;

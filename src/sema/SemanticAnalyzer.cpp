@@ -297,6 +297,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
             if (!mDeclaredTypes.count(sourceKey)) {
                 auto type = Type::makeStruct(s->name, {}, s->isNominal
                     ? nominalDeclarationIdentity(program, "struct", identity, s) : "");
+                type->declarationLinkageName = identity;
                 type->typeParams = s->typeParams;
                 mDeclaredTypes[identity] = type;
                 mDeclaredTypes[sourceKey] = type;
@@ -312,6 +313,7 @@ bool SemanticAnalyzer::analyze(Program* program) {
             if (!mDeclaredTypes.count(sourceKey)) {
                 auto type = Type::makeEnum(e->name, {}, e->isNominal
                     ? nominalDeclarationIdentity(program, "enum", identity, e) : "");
+                type->declarationLinkageName = identity;
                 type->typeParams = e->typeParams;
                 mDeclaredTypes[identity] = type;
                 mDeclaredTypes[sourceKey] = type;
@@ -501,6 +503,7 @@ void SemanticAnalyzer::declareMeta(MetaDecl* decl) {
         nominalDeclarationIdentity(mProgram, "meta", schemaSymbol, decl),
         std::move(fields));
     metadataType->name = decl->name;
+    metadataType->declarationLinkageName = schemaSymbol;
     mMetadataSchemas[sourceKey] = decl;
     mSymTable.defineType(sourceKey, metadataType);
     mSymTable.defineType(schemaSymbol, metadataType);
@@ -696,6 +699,7 @@ void SemanticAnalyzer::declareStruct(StructDecl* decl) {
             ? nominalDeclarationIdentity(mProgram, "struct", identity, decl) : "");
         mDeclaredTypes[identity] = declared;
     }
+    declared->declarationLinkageName = identity;
     declared->typeParams = decl->typeParams;
     declared->fields.clear();
     mDeclaredTypes[identity] = declared;
@@ -734,6 +738,7 @@ void SemanticAnalyzer::declareEnum(EnumDecl* decl) {
             ? nominalDeclarationIdentity(mProgram, "enum", identity, decl) : "");
         mDeclaredTypes[identity] = declared;
     }
+    declared->declarationLinkageName = identity;
     declared->typeParams = decl->typeParams;
     declared->variants.clear();
     mDeclaredTypes[identity] = declared;
@@ -747,8 +752,12 @@ void SemanticAnalyzer::declareEnum(EnumDecl* decl) {
     for (auto& variant : decl->variants) {
         TypeVariant typedVariant;
         typedVariant.name = variant.name;
-        for (auto& field : variant.fields)
-            typedVariant.fields.push_back(resolveTypeAST(field.get(), bindings));
+        variant.inferredFields.clear();
+        for (auto& field : variant.fields) {
+            auto resolvedField = resolveTypeAST(field.get(), bindings);
+            variant.inferredFields.push_back(resolvedField);
+            typedVariant.fields.push_back(std::move(resolvedField));
+        }
         declared->variants.push_back(std::move(typedVariant));
     }
     if (!decl->isNominal && luna::types::isRecursiveShape(declared))
@@ -2395,6 +2404,19 @@ TypePtr SemanticAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
             }
             arm.variantIndex = selected->physicalIndex;
             arm.bindingTypes = selected->fields;
+            if (matched->kind == TypeKind::Enum &&
+                !matched->declarationLinkageName.empty()) {
+                if (!arm.typeQualifier.empty())
+                    recordResolvedReference(
+                        arm.sourcePath, arm.qualifierLine, arm.qualifierCol,
+                        arm.typeQualifier.size(),
+                        matched->declarationLinkageName);
+                recordResolvedReference(
+                    arm.sourcePath, arm.line, arm.col,
+                    arm.variantName.size(),
+                    matched->declarationLinkageName + "::variant::" +
+                        arm.variantName);
+            }
 
             mSymTable.enterScope();
             std::unordered_set<std::string> seenBindings;
@@ -3012,6 +3034,17 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
                   variant->variantName + "'");
             return TyUnknown;
         }
+        const std::string enumLinkage =
+            nominalIt->second->declarationLinkageName;
+        if (!enumLinkage.empty()) {
+            recordResolvedReference(
+                variant->typeSourcePath, variant->typeLine, variant->typeCol,
+                variant->typeName.size(), enumLinkage);
+            recordResolvedReference(
+                variant->sourcePath, variant->line, variant->col,
+                variant->variantName.size(),
+                enumLinkage + "::variant::" + variant->variantName);
+        }
         if (selected->fields.size() != variant->args.size()) {
             error("Variant '" + variant->variantName + "' expects " +
                   std::to_string(selected->fields.size()) + " arguments");
@@ -3050,7 +3083,14 @@ TypePtr SemanticAnalyzer::analyzeExpr(Expr* expr) {
             return TyUnknown;
         }
         for (auto& field : objectType->fields) {
-            if (field.name == fa->field) return field.type;
+            if (field.name == fa->field) {
+                if (!objectType->declarationLinkageName.empty())
+                    recordResolvedReference(
+                        fa->sourcePath, fa->line, fa->col, fa->field.size(),
+                        objectType->declarationLinkageName + "::field::" +
+                            fa->field);
+                return field.type;
+            }
         }
         error("Type '" + objectType->toString() + "' has no field '" + fa->field + "'");
         return TyUnknown;
@@ -4317,12 +4357,18 @@ void SemanticAnalyzer::recordDeclarationReference(
                                            : declaration->packageId,
             declaration->modulePath, name);
     }
+    recordResolvedReference(source->sourcePath, source->line, source->col,
+                            byteLength, std::move(linkageName));
+}
+
+void SemanticAnalyzer::recordResolvedReference(
+    const std::string& sourcePath, int line, int column, size_t byteLength,
+    std::string targetLinkageName) {
+    if (sourcePath.empty() || line <= 0 || column <= 0 || byteLength == 0 ||
+        targetLinkageName.empty())
+        return;
     mDeclarationReferences.push_back({
-        source->sourcePath,
-        source->line,
-        source->col,
-        byteLength,
-        std::move(linkageName),
+        sourcePath, line, column, byteLength, std::move(targetLinkageName),
     });
 }
 
@@ -6203,6 +6249,9 @@ private:
         if (auto* expr = dynamic_cast<const VariantConstructExpr*>(src)) {
             auto clone = std::make_unique<VariantConstructExpr>();
             clone->typeName = expr->typeName;
+            clone->typeSourcePath = expr->typeSourcePath;
+            clone->typeLine = expr->typeLine;
+            clone->typeCol = expr->typeCol;
             clone->variantName = expr->variantName;
             for (const auto& type : expr->typeArgs)
                 clone->typeArgs.push_back(cloneType(type.get()));
@@ -6388,6 +6437,8 @@ private:
                 arm.line = sourceArm.line;
                 arm.col = sourceArm.col;
                 arm.typeQualifier = sourceArm.typeQualifier;
+                arm.qualifierLine = sourceArm.qualifierLine;
+                arm.qualifierCol = sourceArm.qualifierCol;
                 arm.variantName = sourceArm.variantName;
                 arm.bindings = sourceArm.bindings;
                 arm.variantIndex = sourceArm.variantIndex;

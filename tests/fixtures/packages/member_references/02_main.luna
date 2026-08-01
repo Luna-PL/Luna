@@ -1,0 +1,14 @@
+package org.luna.member_references;
+module application;
+
+fn read(box: models::Box) -> i32 {
+    return box.value;
+}
+
+fn choose() -> i32 {
+    let choice = models::Choice::Some(1);
+    match choice {
+        models::Choice::Some(value) => { return value; },
+        models::Choice::None => { return 0; }
+    }
+}

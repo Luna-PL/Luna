@@ -30,6 +30,9 @@ public:
     static AnalysisSnapshot analyzePathWithOverlay(
         const std::string& inputPath, const std::string& documentPath,
         const std::string& source);
+    static AnalysisSnapshot analyzePathWithOverlays(
+        const std::string& inputPath,
+        const std::vector<PackageRequest::SourceOverlay>& overlays);
     static AnalysisSnapshot analyzeSource(
         const std::string& source, const std::string& documentId);
 

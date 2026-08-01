@@ -140,6 +140,8 @@ struct IfStmt : Stmt {
 
 struct MatchArm : ASTNode {
     std::string typeQualifier;
+    int qualifierLine = 0;
+    int qualifierCol = 0;
     std::string variantName;
     std::vector<std::string> bindings;
     size_t variantIndex = 0;
@@ -340,6 +342,9 @@ struct LaunchExpr : Expr {
 
 struct VariantConstructExpr : Expr {
     std::string typeName;
+    std::string typeSourcePath;
+    int typeLine = 0;
+    int typeCol = 0;
     std::string variantName;
     std::vector<std::unique_ptr<TypeAST>> typeArgs;
     std::vector<std::unique_ptr<Expr>> args;
@@ -496,6 +501,9 @@ struct Decl : ASTNode {
 
 struct Param {
     std::string name;
+    std::string sourcePath;
+    int nameLine = 0;
+    int nameCol = 0;
     bool isLinear = false;
     luna::ownership::Usage usage = luna::ownership::Usage::Copy;
     bool hasExplicitUsage = false;
@@ -552,7 +560,11 @@ struct StructDecl : Decl {
 struct EnumDecl : Decl {
     struct Variant {
         std::string name;
+        std::string sourcePath;
+        int nameLine = 0;
+        int nameCol = 0;
         std::vector<std::unique_ptr<TypeAST>> fields;
+        TypeVec inferredFields;
     };
     std::string name;
     bool isNominal = false;

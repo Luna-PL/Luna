@@ -386,7 +386,11 @@ std::unique_ptr<StructDecl> Parser::parseStructDecl() {
             break;
         }
         Param field;
-        field.name = mTokens[mPos - 1].lexeme;
+        const auto& fieldToken = mTokens[mPos - 1];
+        field.name = fieldToken.lexeme;
+        field.sourcePath = mSourceName;
+        field.nameLine = fieldToken.line;
+        field.nameCol = fieldToken.col;
         consume(TokenKind::Colon, "Expected ':' after field name");
         field.type = parseType();
         consume(TokenKind::SemiColon, "Expected ';' after field type");
@@ -416,7 +420,11 @@ std::unique_ptr<EnumDecl> Parser::parseEnumDecl() {
             continue;
         }
         EnumDecl::Variant variant;
-        variant.name = mTokens[mPos - 1].lexeme;
+        const auto& variantToken = mTokens[mPos - 1];
+        variant.name = variantToken.lexeme;
+        variant.sourcePath = mSourceName;
+        variant.nameLine = variantToken.line;
+        variant.nameCol = variantToken.col;
         if (match(TokenKind::LParen)) {
             if (!check(TokenKind::RParen)) {
                 do {
@@ -807,23 +815,26 @@ std::unique_ptr<Stmt> Parser::parseMatchStmt() {
         }
         MatchArm arm;
         const Token first = mTokens[mPos - 1];
-        arm.sourcePath = mSourceName;
-        arm.line = first.line;
-        arm.col = first.col;
-        std::vector<std::string> path{first.lexeme};
+        std::vector<Token> path{first};
         while (match(TokenKind::ColonColon)) {
             if (!match(TokenKind::Identifier)) {
                 addError("Expected a variant name after '::' in match pattern");
                 break;
             }
-            path.push_back(mTokens[mPos - 1].lexeme);
+            path.push_back(mTokens[mPos - 1]);
         }
-        arm.variantName = path.back();
+        const auto& variantToken = path.back();
+        arm.sourcePath = mSourceName;
+        arm.line = variantToken.line;
+        arm.col = variantToken.col;
+        arm.variantName = variantToken.lexeme;
         if (path.size() > 1) {
+            arm.qualifierLine = first.line;
+            arm.qualifierCol = first.col;
             for (size_t index = 0; index + 1 < path.size(); ++index) {
                 if (!arm.typeQualifier.empty())
                     arm.typeQualifier += "::";
-                arm.typeQualifier += path[index];
+                arm.typeQualifier += path[index].lexeme;
             }
         }
         if (match(TokenKind::LParen)) {
@@ -1115,8 +1126,9 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
             // Generic call: id::<T>(args), or ADT constructor:
             // Option::<i32>::Some(1) / Option::None().
             std::string ownerName;
-            if (auto* owner = dynamic_cast<IdentifierExpr*>(expr.get()))
-                ownerName = owner->name;
+            const auto* ownerLocation = dynamic_cast<IdentifierExpr*>(expr.get());
+            if (ownerLocation)
+                ownerName = ownerLocation->name;
             std::vector<std::unique_ptr<TypeAST>> typeArgs;
             bool hadTypeArgs = match(TokenKind::Lt);
             if (hadTypeArgs) {
@@ -1133,25 +1145,32 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
             // against package and module namespaces. Enum constructors keep
             // their established UpperCamelCase terminal spelling.
             if (!hadTypeArgs && check(TokenKind::Identifier)) {
-                std::vector<std::string> members;
+                std::vector<Token> members;
                 do {
                     if (!match(TokenKind::Identifier)) break;
-                    members.push_back(mTokens[mPos - 1].lexeme);
+                    members.push_back(mTokens[mPos - 1]);
                     if (!(check(TokenKind::ColonColon) &&
                           peekAhead(1).kind == TokenKind::Identifier))
                         break;
                     advance();
                 } while (true);
                 const bool isVariantConstructor = !members.empty() &&
-                    !members.back().empty() &&
-                    members.back().front() >= 'A' && members.back().front() <= 'Z' &&
+                    !members.back().lexeme.empty() &&
+                    members.back().lexeme.front() >= 'A' &&
+                    members.back().lexeme.front() <= 'Z' &&
                     check(TokenKind::LParen);
                 if (isVariantConstructor) {
                     auto variant = std::make_unique<VariantConstructExpr>();
                     variant->typeName = ownerName;
                     for (size_t index = 0; index + 1 < members.size(); ++index)
-                        variant->typeName += "::" + members[index];
-                    variant->variantName = members.back();
+                        variant->typeName += "::" + members[index].lexeme;
+                    variant->typeSourcePath = ownerLocation->sourcePath;
+                    variant->typeLine = ownerLocation->line;
+                    variant->typeCol = ownerLocation->col;
+                    variant->variantName = members.back().lexeme;
+                    variant->sourcePath = mSourceName;
+                    variant->line = members.back().line;
+                    variant->col = members.back().col;
                     consume(TokenKind::LParen, "Expected '(' after enum variant");
                     if (!check(TokenKind::RParen)) variant->args = parseArgs();
                     consume(TokenKind::RParen, "Expected ')' after enum variant arguments");
@@ -1160,7 +1179,7 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
                 } else {
                     if (auto* owner = dynamic_cast<IdentifierExpr*>(expr.get())) {
                         for (const auto& member : members)
-                            owner->name += "::" + member;
+                            owner->name += "::" + member.lexeme;
                     } else {
                         addError("qualified paths require an identifier owner");
                     }
@@ -1173,13 +1192,22 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
             if (isVariant) {
                 auto variant = std::make_unique<VariantConstructExpr>();
                 variant->typeName = ownerName;
+                if (ownerLocation) {
+                    variant->typeSourcePath = ownerLocation->sourcePath;
+                    variant->typeLine = ownerLocation->line;
+                    variant->typeCol = ownerLocation->col;
+                }
                 variant->typeArgs = std::move(typeArgs);
                 if (!match(TokenKind::Identifier)) {
                     addError("Expected enum variant name after '::'");
                     expr = std::move(variant);
                     continue;
                 }
-                variant->variantName = mTokens[mPos - 1].lexeme;
+                const auto& variantToken = mTokens[mPos - 1];
+                variant->variantName = variantToken.lexeme;
+                variant->sourcePath = mSourceName;
+                variant->line = variantToken.line;
+                variant->col = variantToken.col;
                 consume(TokenKind::LParen, "Expected '(' after enum variant");
                 if (!check(TokenKind::RParen)) variant->args = parseArgs();
                 consume(TokenKind::RParen, "Expected ')' after enum variant arguments");

@@ -116,7 +116,7 @@ directory containing `luna.package`:
 |---|---|
 | `luna --version` | Print the compiler version. |
 | `luna check <input>` | Verify source through MoonIR without generating machine code. |
-| `luna analyze <input> --message-format=json` | Emit a semantic tooling snapshot; optionally read one source overlay from stdin. |
+| `luna analyze <input> --message-format=json` | Emit a semantic tooling snapshot; optionally read one or more source overlays from stdin. |
 | `luna run <input> [-O0\|-O2\|-O3]` | JIT-compile and execute a program. |
 | `luna build <input> [-O0\|-O2\|-O3]` | Emit LLVM IR, link the Runtime ABI, and produce a native executable. |
 | `luna repl` | Start the limited Alpha REPL (`=`, `:decl`, single-line statements). |

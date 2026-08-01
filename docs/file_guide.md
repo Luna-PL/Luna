@@ -487,6 +487,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/packages/module_headers/02_main.luna`
 - `tests/fixtures/packages/method_references/01_ops.luna`
 - `tests/fixtures/packages/method_references/02_main.luna`
+- `tests/fixtures/packages/member_references/01_models.luna`
+- `tests/fixtures/packages/member_references/02_main.luna`
 - `tests/fixtures/packages/multiple_parse_errors/01_first.luna`
 - `tests/fixtures/packages/multiple_parse_errors/02_second.luna`
 - `tests/fixtures/packages/self_using/01_main.luna`

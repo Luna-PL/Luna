@@ -159,6 +159,8 @@ CommandLineParseResult parseCommandLine(int argc, char* argv[]) {
             options.overlayPath = argv[++i];
         } else if (option.rfind("--overlay=", 0) == 0) {
             options.overlayPath = option.substr(10);
+        } else if (option == "--overlays-from-stdin") {
+            options.overlaysFromStdin = true;
         } else {
             return failure("Unknown option: " + option, true);
         }
@@ -173,6 +175,12 @@ CommandLineParseResult parseCommandLine(int argc, char* argv[]) {
         return failure("`analyze` requires --message-format=json", false);
     if (!options.overlayPath.empty() && command != "analyze")
         return failure("--overlay is supported only by `analyze`", false);
+    if (options.overlaysFromStdin && command != "analyze")
+        return failure(
+            "--overlays-from-stdin is supported only by `analyze`", false);
+    if (options.overlaysFromStdin && !options.overlayPath.empty())
+        return failure(
+            "--overlay and --overlays-from-stdin cannot be combined", false);
     if (options.messageFormat == MessageFormat::Json && options.printMoonCostReport)
         return failure("--moon-cost-report cannot be combined with JSON diagnostics",
                        false);

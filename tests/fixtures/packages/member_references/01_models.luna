@@ -1,0 +1,20 @@
+package org.luna.member_references;
+module models;
+
+export struct Box {
+    value: i32;
+}
+
+export struct OtherBox {
+    value: i32;
+}
+
+export enum Choice {
+    Some(i32);
+    None;
+}
+
+export enum OtherChoice {
+    Some(i32);
+    None;
+}

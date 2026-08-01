@@ -98,6 +98,25 @@ IndexedSymbol commonSymbol(const Decl& declaration, std::string name,
     return symbol;
 }
 
+IndexedSymbol childSymbol(const Decl& parent, std::string parentName,
+                          std::string name, IndexedSymbolKind kind,
+                          std::string signature,
+                          SymbolSourceLocation selection,
+                          const char* linkageComponent) {
+    auto symbol = commonSymbol(parent, std::move(parentName), kind,
+                               std::move(signature));
+    const std::string parentQualified = symbol.qualifiedName;
+    const std::string parentLinkage = parent.generatedSymbolName.empty()
+        ? parentQualified : parent.generatedSymbolName;
+    symbol.name = std::move(name);
+    symbol.qualifiedName = parentQualified + "::" + symbol.name;
+    symbol.linkageName = parentLinkage + "::" + linkageComponent + "::" +
+        symbol.name;
+    symbol.selection = std::move(selection);
+    symbol.id = symbolId(symbol);
+    return symbol;
+}
+
 } // namespace
 
 const char* indexedSymbolKindName(IndexedSymbolKind kind) {
@@ -111,6 +130,8 @@ const char* indexedSymbolKindName(IndexedSymbolKind kind) {
         case IndexedSymbolKind::Trait: return "trait";
         case IndexedSymbolKind::Metadata: return "metadata";
         case IndexedSymbolKind::Constraint: return "constraint";
+        case IndexedSymbolKind::Field: return "field";
+        case IndexedSymbolKind::EnumVariant: return "enum-variant";
     }
     return "unknown";
 }
@@ -142,12 +163,36 @@ SymbolIndex SymbolIndex::build(const Program& program) {
                 *structure, structure->name, IndexedSymbolKind::Struct,
                 "struct " + structure->name +
                     typeParameters(structure->typeParams)));
+            for (const auto& field : structure->fields) {
+                index.add(childSymbol(
+                    *structure, structure->name, field.name,
+                    IndexedSymbolKind::Field,
+                    field.name + ": " + typeName(field.inferredType),
+                    {field.sourcePath, field.nameLine, field.nameCol,
+                     field.name.size()},
+                    "field"));
+            }
         } else if (const auto* enumeration =
                        dynamic_cast<const EnumDecl*>(declaration)) {
             index.add(commonSymbol(
                 *enumeration, enumeration->name, IndexedSymbolKind::Enum,
                 "enum " + enumeration->name +
                     typeParameters(enumeration->typeParams)));
+            for (const auto& variant : enumeration->variants) {
+                std::string signature = variant.name + "(";
+                for (size_t index = 0; index < variant.inferredFields.size();
+                     ++index) {
+                    if (index) signature += ", ";
+                    signature += typeName(variant.inferredFields[index]);
+                }
+                signature += ")";
+                index.add(childSymbol(
+                    *enumeration, enumeration->name, variant.name,
+                    IndexedSymbolKind::EnumVariant, std::move(signature),
+                    {variant.sourcePath, variant.nameLine, variant.nameCol,
+                     variant.name.size()},
+                    "variant"));
+            }
         } else if (const auto* trait =
                        dynamic_cast<const TraitDecl*>(declaration)) {
             index.add(commonSymbol(

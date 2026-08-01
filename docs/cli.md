@@ -42,15 +42,33 @@ and `2` for command/protocol misuse.
 luna analyze <file-or-package> --message-format=json
 luna analyze <file-or-package> --message-format=json \
     --overlay <document> < current-buffer.luna
+luna analyze <file-or-package> --message-format=json \
+    --overlays-from-stdin < overlays.json
 ```
 
 `analyze` emits a compiler-owned `luna.analysis` version 1 semantic snapshot:
 one `hello`, declarations, resolved direct-function and user trait-method
-calls plus user type-syntax and trait reference records, and one `summary`. With
-`--overlay`, stdin replaces exactly one existing source file in the selected
-root package without writing a temporary file. Other package files and
-dependencies follow normal resolution. The first overlay transport is
-deliberately single-document; clients must check the advertised capability.
+calls, user type-syntax and trait references, struct field accesses, and enum
+variant construction/match records, followed by one `summary`. With
+`--overlay` retains the original transport in which stdin replaces one existing
+source file. `--overlays-from-stdin` reads a `luna.overlay` version 1 JSON object:
+
+```json
+{
+  "protocol": "luna.overlay",
+  "version": 1,
+  "overlays": [
+    {"path": "/workspace/src/api.luna", "text": "..."},
+    {"path": "/workspace/src/main.luna", "text": "..."}
+  ]
+}
+```
+
+All listed files atomically replace existing sources in the selected root
+package without temporary files. Duplicate, foreign, or dependency paths are
+rejected. Other files and dependencies follow normal resolution. Clients must
+check `single-document-overlay` or `multi-document-overlay` before selecting a
+transport.
 
 ### JIT run
 
@@ -115,6 +133,7 @@ one line should be placed in a source file and run with `luna run`.
 | `--emit-moonir <path>` | `check`, `run`, `build` | Write verified, optimized textual MoonIR. |
 | `--message-format=json` | `check`, `analyze` | Emit the command's versioned JSONL protocol. |
 | `--overlay <document>` | `analyze` | Read one in-memory source replacement from stdin. |
+| `--overlays-from-stdin` | `analyze` | Read a versioned multi-document overlay JSON object from stdin. |
 | `--moon-cost-report` | `run`, `build` | Print explicit runtime, dynamic, instantiation and kernel cost decisions. |
 | `--gpu-target <list>` | `run`, `build` | Generate requested device code objects. Accepts comma-separated targets. |
 | `--reserve-kernel-runtime` | `run`, `build` | Retain kernel runtime capability even without a reachable launch. |

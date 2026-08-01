@@ -30,6 +30,33 @@ if(NOT overlay_result EQUAL 0 OR NOT overlay_error STREQUAL "" OR
         "analysis overlay invocation failed\n${overlay_output}\n${overlay_error}")
 endif()
 
+set(multi_overlay_input "${LUNA_BINARY_DIR}/analysis-multi-overlay-input.json")
+set(multi_overlay_root
+    "${LUNA_SOURCE_DIR}/tests/fixtures/packages/module_headers")
+file(WRITE "${multi_overlay_input}"
+    "{\"protocol\":\"luna.overlay\",\"version\":1,\"overlays\":["
+    "{\"path\":\"${multi_overlay_root}/01_math.luna\","
+    "\"text\":\"package org.luna.module_headers;\\nmodule math::integer;\\nusing org.luna.std as std;\\n// 月\\nexport fn moon_answer() -> i32 { return 42; }\\n\"},"
+    "{\"path\":\"${multi_overlay_root}/02_main.luna\","
+    "\"text\":\"package org.luna.module_headers;\\nmodule application;\\nusing org.luna.std as std;\\nfn main() -> i32 { return math::integer::moon_answer(); }\\n\"}]}\n")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" analyze "${multi_overlay_root}"
+            --message-format=json --overlays-from-stdin
+    INPUT_FILE "${multi_overlay_input}"
+    RESULT_VARIABLE multi_overlay_result
+    OUTPUT_VARIABLE multi_overlay_output
+    ERROR_VARIABLE multi_overlay_error
+)
+file(REMOVE "${multi_overlay_input}")
+if(NOT multi_overlay_result EQUAL 0 OR
+   NOT multi_overlay_error STREQUAL "" OR
+   NOT multi_overlay_output MATCHES "multi-document-overlay" OR
+   NOT multi_overlay_output MATCHES "moon_answer" OR
+   NOT multi_overlay_output MATCHES "\\\"complete\\\":true")
+    message(FATAL_ERROR
+        "multi-document analysis overlay failed\n${multi_overlay_output}\n${multi_overlay_error}")
+endif()
+
 execute_process(
     COMMAND "${LUNA_EXECUTABLE}" analyze
             "${LUNA_SOURCE_DIR}/examples/generic.luna"
@@ -43,7 +70,10 @@ if(NOT analysis_result EQUAL 0 OR NOT analysis_error STREQUAL "")
         "analysis protocol invocation failed\n${analysis_output}\n${analysis_error}")
 endif()
 if(NOT analysis_output MATCHES "type-references" OR
-   NOT analysis_output MATCHES "trait-references")
+   NOT analysis_output MATCHES "trait-references" OR
+   NOT analysis_output MATCHES "package-references" OR
+   NOT analysis_output MATCHES "field-references" OR
+   NOT analysis_output MATCHES "enum-variant-references")
     message(FATAL_ERROR
         "analysis reference capabilities are missing\n${analysis_output}")
 endif()

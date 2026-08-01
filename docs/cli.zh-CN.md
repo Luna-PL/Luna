@@ -40,13 +40,31 @@ exclusive end。退出码 `0` 表示无错误，`1` 表示已报告诊断，`2` 
 luna analyze <文件或package> --message-format=json
 luna analyze <文件或package> --message-format=json \
     --overlay <文档> < current-buffer.luna
+luna analyze <文件或package> --message-format=json \
+    --overlays-from-stdin < overlays.json
 ```
 
 `analyze` 输出编译器拥有的 `luna.analysis` version 1 语义快照：一条 `hello`、声明、
-已解析的直接函数、trait method、用户类型语法和 trait 引用记录，以及一条
+已解析的直接函数、trait method、用户类型语法、trait、struct 字段访问、
+enum variant 构造与 match 引用记录，以及一条
 `summary`。使用 `--overlay` 时，stdin 会在内存中替换所选根
-package 内一个已存在的源码文件，不写临时文件；其他 package 文件和依赖仍走正常解析。
-首版 overlay 传输明确只支持单文档，客户端必须检查广告的 capability。
+package 内一个已存在的源码文件，不写临时文件。`--overlays-from-stdin` 读取
+`luna.overlay` version 1 JSON 对象：
+
+```json
+{
+  "protocol": "luna.overlay",
+  "version": 1,
+  "overlays": [
+    {"path": "/workspace/src/api.luna", "text": "..."},
+    {"path": "/workspace/src/main.luna", "text": "..."}
+  ]
+}
+```
+
+列出的文件会原子替换所选根 package 中已存在的源码，不写临时文件；重复路径、外部路径或
+依赖 package 路径会被拒绝。其他文件和依赖仍走正常解析。客户端必须在选择传输前检查
+`single-document-overlay` 或 `multi-document-overlay` capability。
 
 ### JIT 运行
 
@@ -107,6 +125,7 @@ print(7)
 | `--emit-moonir <路径>` | `check`, `run`, `build` | 输出经过验证和优化的文本 MoonIR。 |
 | `--message-format=json` | `check`、`analyze` | 输出对应命令的 versioned JSONL 协议。 |
 | `--overlay <文档>` | `analyze` | 从 stdin 读取一个内存源码替换。 |
+| `--overlays-from-stdin` | `analyze` | 从 stdin 读取带版本的多文档 overlay JSON 对象。 |
 | `--moon-cost-report` | `run`, `build` | 输出运行时、动态绑定、泛型实例和 kernel 的显式成本。 |
 | `--gpu-target <列表>` | `run`, `build` | 为逗号分隔的目标生成设备代码。 |
 | `--reserve-kernel-runtime` | `run`, `build` | 即使没有可达 launch，也保留 kernel runtime 能力。 |
