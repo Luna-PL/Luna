@@ -379,6 +379,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/aot_runtime_boundary.cmake`
 - `tests/analysis_protocol.cmake`
 - `tests/analysis_snapshot_test.cpp`
+- `tests/compiler_identity.cmake`
 - `tests/control_flow_aot.cmake`
 - `tests/core_contracts_test.cpp`
 - `tests/core_surface.cmake`

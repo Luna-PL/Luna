@@ -35,15 +35,55 @@ if(NOT LUNA_AOT_COMPILER)
 endif()
 include(CTest)
 
-execute_process(
-    COMMAND git rev-parse --verify HEAD
-    WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
-    RESULT_VARIABLE LUNA_GIT_RESULT
-    OUTPUT_VARIABLE LUNA_GIT_COMMIT
-    OUTPUT_STRIP_TRAILING_WHITESPACE
-    ERROR_QUIET
-)
-if(NOT LUNA_GIT_RESULT EQUAL 0)
+find_package(Git QUIET)
+if(Git_FOUND)
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" rev-parse --verify HEAD
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        RESULT_VARIABLE LUNA_GIT_RESULT
+        OUTPUT_VARIABLE LUNA_GIT_COMMIT
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+
+    # A normal commit updates refs/heads/<branch>, not .git/HEAD. Register both
+    # resolved Git paths so `cmake --build` refreshes the embedded identity
+    # after either a branch commit or a detached-HEAD checkout.
+    execute_process(
+        COMMAND "${GIT_EXECUTABLE}" symbolic-ref --quiet HEAD
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        RESULT_VARIABLE LUNA_GIT_REF_RESULT
+        OUTPUT_VARIABLE LUNA_GIT_REF
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        ERROR_QUIET
+    )
+    set(LUNA_GIT_WATCH_PATHS HEAD)
+    if(LUNA_GIT_REF_RESULT EQUAL 0 AND NOT LUNA_GIT_REF STREQUAL "")
+        list(APPEND LUNA_GIT_WATCH_PATHS "${LUNA_GIT_REF}")
+    endif()
+    foreach(LUNA_GIT_WATCH_PATH IN LISTS LUNA_GIT_WATCH_PATHS)
+        execute_process(
+            COMMAND "${GIT_EXECUTABLE}" rev-parse --git-path
+                    "${LUNA_GIT_WATCH_PATH}"
+            WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+            RESULT_VARIABLE LUNA_GIT_PATH_RESULT
+            OUTPUT_VARIABLE LUNA_GIT_PATH
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+            ERROR_QUIET
+        )
+        if(LUNA_GIT_PATH_RESULT EQUAL 0 AND NOT LUNA_GIT_PATH STREQUAL "")
+            get_filename_component(LUNA_GIT_PATH "${LUNA_GIT_PATH}"
+                ABSOLUTE BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+            if(EXISTS "${LUNA_GIT_PATH}")
+                set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+                    "${LUNA_GIT_PATH}")
+            endif()
+        endif()
+    endforeach()
+else()
+    set(LUNA_GIT_RESULT 1)
+endif()
+if(NOT LUNA_GIT_RESULT EQUAL 0 OR LUNA_GIT_COMMIT STREQUAL "")
     set(LUNA_GIT_COMMIT "unknown")
 endif()
 
@@ -305,6 +345,14 @@ if(BUILD_TESTING)
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/diagnostic_protocol.cmake
     )
+    add_test(
+        NAME luna.compiler-identity
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/compiler_identity.cmake
+    )
+    set_tests_properties(luna.compiler-identity PROPERTIES LABELS "release")
     add_test(
         NAME luna.analysis-protocol-v1
         COMMAND ${CMAKE_COMMAND}

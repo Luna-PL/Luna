@@ -103,6 +103,10 @@ runtime、公开 ABI 头文件、标准库 workspace 与语义参考文档均已
 安装树完成 `--version`、`check`、JIT 和显式 runtime/compiler 的 AOT
 构建与运行。该测试带 `release` 和 `install` label，是发布包布局的自动化门禁。
 
+`luna.compiler-identity` 会比较源码仓库当前 commit 与编译器 structured analysis hello
+报告的 commit。CMake 同时监视 Git HEAD 与当前 branch ref，因此普通增量构建会在提交
+后刷新该身份，不会静默发布带旧 build stamp 的二进制。
+
 `luna.runtime-gpu-error-state` 验证 CPU 模拟器下 event 的成功与无效状态 ABI；`luna.gpu-error-boundary-abi` 检查 AOT IR 中 `await` 的失败分支会调用统一 GPU 错误终止入口，保证 CUDA/ROCm 的 launch 或同步失败不会静默继续执行。
 前者同时检查 Runtime error snapshot 的稳定 GPU domain/code、两阶段消息复制和
 旧 `last_error` 兼容，并确保一次 operation error 不会反向污染已成功的 backend

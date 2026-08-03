@@ -142,6 +142,11 @@ semantic-reference documents. It then uses only the installation tree for `--ver
 `check`, JIT, and explicit Runtime/compiler AOT build-and-run checks. With `release` and
 `install` labels, it is an automated gate for release-package layout.
 
+`luna.compiler-identity` compares the source repository's current commit with the commit
+reported by the compiler's structured analysis hello. The CMake project watches both Git
+HEAD and the active branch ref, so an ordinary incremental build refreshes this identity
+after a commit instead of silently publishing a stale build stamp.
+
 `luna.runtime-gpu-error-state` verifies successful and invalid event ABI states on the CPU
 simulator. `luna.gpu-error-boundary-abi` checks that an `await` failure branch in AOT IR
 calls the unified GPU-error termination entry, so CUDA/ROCm launch or synchronization
