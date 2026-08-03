@@ -154,6 +154,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `README.md`
 - `README.zh-CN.md`
 - `VERSION`
+- `ecosystem.lock.json`
 - `benchmarks/cpp23_allocation_support.cpp`
 - `benchmarks/cpp23_cpu_suite.cpp`
 - `benchmarks/cpp23_hip_vector.cpp`
@@ -182,6 +183,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `docs/compile_time.zh-CN.md`
 - `docs/decisions.md`
 - `docs/decisions.zh-CN.md`
+- `docs/ecosystem_release.md`
+- `docs/ecosystem_release.zh-CN.md`
 - `docs/features.md`
 - `docs/features.zh-CN.md`
 - `docs/file_guide.md`
@@ -601,4 +604,5 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/std_io_smoke.cmake`
 - `tests/structured_cps_abi.cmake`
 - `tools/benchmark_heterogeneous.sh`
+- `tools/verify_ecosystem_lock.cmake`
 <!-- FILE_INVENTORY_END -->

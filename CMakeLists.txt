@@ -353,6 +353,18 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/compiler_identity.cmake
     )
     set_tests_properties(luna.compiler-identity PROPERTIES LABELS "release")
+    if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Lunax/.git" AND
+       EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/toolchain/.git")
+        add_test(
+            NAME luna.ecosystem-lock
+            COMMAND ${CMAKE_COMMAND}
+                -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+                -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+                -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_ecosystem_lock.cmake
+        )
+        set_tests_properties(luna.ecosystem-lock PROPERTIES
+            LABELS "integration;release")
+    endif()
     add_test(
         NAME luna.analysis-protocol-v1
         COMMAND ${CMAKE_COMMAND}

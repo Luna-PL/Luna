@@ -4,6 +4,8 @@
 
 - Made the embedded compiler commit follow Git HEAD/ref changes during incremental
   builds and added a release-gated identity regression that rejects stale binaries.
+- Added an immutable cross-repository ecosystem candidate lock and verifier for exact
+  LunaToolchain/Lunax commits, protocol compatibility, and compiler source identity.
 - Defined the 0.3-oriented standard-library package graph and minimum IO, file,
   Vec, String, concrete-error, and supporting Core surfaces, with explicit
   resource prerequisites and a staged implementation boundary.

@@ -179,6 +179,7 @@ or reference material:
 - [Heterogeneous compute](docs/heterogeneous_compute.md)
 - [Standard-library design](docs/standard_library.md)
 - [Testing](docs/testing.md)
+- [Ecosystem release snapshot](docs/ecosystem_release.md)
 - [Performance benchmarks](docs/benchmarks.md)
 - [Roadmap](docs/roadmap.md)
 
