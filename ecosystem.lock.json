@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "snapshot": "luna-0.2.1-tooling-candidate.5",
+  "snapshot": "luna-0.2.1-tooling-candidate.6",
   "status": "candidate",
   "components": {
     "luna": {
@@ -42,8 +42,21 @@
     },
     "lunax": {
       "repository": "https://github.com/Luna-PL/Lunax.git",
-      "commit": "2fef8e06af3867040d74e7c4f5867636f81ee6f2",
+      "commit": "9cf45b9e1283df62b09b69f2f2b8094ad66bfc94",
       "version": "0.1.0",
+      "compatible_luna_release_tag": "v0.2.1",
+      "backend_abi": 1,
+      "release_tier": "mvp-prerelease",
+      "published_platforms": ["ubuntu-24.04-x86_64"],
+      "release_verification": {
+        "workflow": "release.yml",
+        "status": "pending-remote-conformance",
+        "verified_locally": [
+          "metadata",
+          "transactional-install",
+          "staged-package"
+        ]
+      },
       "production_ready": false
     }
   },
