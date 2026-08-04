@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "snapshot": "luna-0.2.1-tooling-candidate.6",
+  "snapshot": "luna-0.2.1-tooling-candidate.7",
   "status": "candidate",
   "components": {
     "luna": {
@@ -35,8 +35,14 @@
         },
         "consumer_verification": {
           "workflow": "published-release.yml",
-          "status": "pending-remote-three-platform-run",
-          "verified_locally": "linux-x86_64"
+          "status": "passed",
+          "run": "https://github.com/Luna-PL/toolchains/actions/runs/30913733610",
+          "completed_at": "2026-08-04T13:25:48Z",
+          "verified_platforms": [
+            "linux-x86_64",
+            "macos-arm64",
+            "windows-x86_64"
+          ]
         }
       }
     },
@@ -50,12 +56,25 @@
       "published_platforms": ["ubuntu-24.04-x86_64"],
       "release_verification": {
         "workflow": "release.yml",
-        "status": "pending-remote-conformance",
-        "verified_locally": [
-          "metadata",
-          "transactional-install",
-          "staged-package"
-        ]
+        "status": "passed",
+        "run": "https://github.com/Luna-PL/Lunax/actions/runs/30913978030",
+        "completed_at": "2026-08-04T13:33:18Z",
+        "preflight_conformance_run": "https://github.com/Luna-PL/Lunax/actions/runs/30913736588"
+      },
+      "published_release": {
+        "tag": "v0.1.0",
+        "commit": "9cf45b9e1283df62b09b69f2f2b8094ad66bfc94",
+        "url": "https://github.com/Luna-PL/Lunax/releases/tag/v0.1.0",
+        "published_at": "2026-08-04T13:33:15Z",
+        "prerelease": true,
+        "artifacts": {
+          "lunax-0.1.0-ubuntu-24.04-x86_64.tar.gz": "33436b1035b78af57e68a46210c17c6873d4b5956c6a8ddb2d8a450094a04194",
+          "lunax-0.1.0-ubuntu-24.04-x86_64.tar.gz.sha256": "40fd50813b81beb0a2aa41f3c9ed200921b5b235283d921a86b5bd1a1149afd5"
+        },
+        "consumer_verification": {
+          "status": "passed",
+          "platform": "ubuntu-24.04-x86_64"
+        }
       },
       "production_ready": false
     }
