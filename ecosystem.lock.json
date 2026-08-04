@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "snapshot": "luna-0.2.1-tooling-candidate.4",
+  "snapshot": "luna-0.2.1-tooling-candidate.5",
   "status": "candidate",
   "components": {
     "luna": {
@@ -13,9 +13,32 @@
     },
     "toolchain": {
       "repository": "https://github.com/Luna-PL/toolchains.git",
-      "commit": "5a6651c3749dfde222d9d15b5c66330cbb61f2d2",
+      "commit": "36afb456c981cb4e2946bd1cfdd1691ef5550400",
       "version": "0.1.1",
-      "compatible_luna_release_tag": "v0.2.1"
+      "compatible_luna_release_tag": "v0.2.1",
+      "published_release": {
+        "tag": "v0.1.1",
+        "commit": "5a6651c3749dfde222d9d15b5c66330cbb61f2d2",
+        "url": "https://github.com/Luna-PL/toolchains/releases/tag/v0.1.1",
+        "published_at": "2026-08-03T17:47:21Z",
+        "checksum_manifest": {
+          "asset": "SHA256SUMS",
+          "sha256": "8f9d19c303a0d63e1f74a13e9f763415b52db0e3b64606994ba3f9fd1a2bf371"
+        },
+        "artifacts": {
+          "luna-language-v0.1.1-darwin-arm64.vsix": "1c2cecfbba48189bb55b609fdbcf50efe1642d214f49fbcdab6a23dc25fbbe47",
+          "luna-language-v0.1.1-linux-x64.vsix": "135913f8e319fe0d6e9c3396875dfcf472226ba556e61e766dc4f9a8bead953c",
+          "luna-language-v0.1.1-win32-x64.vsix": "36d83bcbbeee01108614fc0fbef834faf3f0d8a0790660c9ada5bd6b74450bdb",
+          "luna-toolchain-0.1.1-linux-x86_64.tar.gz": "c52a33f7be595c91a703bd10303de7b38cea54c9a14ec77a099752d502aa25ae",
+          "luna-toolchain-0.1.1-macos-arm64.tar.gz": "047b59b1d69a769c7152e7696c42942299ced925f66549789ea733bc81e094b3",
+          "luna-toolchain-0.1.1-windows-x86_64.zip": "a48fb96ecde26591bd10df3c2570d9c6dd477d19615857400793473282e5b7a5"
+        },
+        "consumer_verification": {
+          "workflow": "published-release.yml",
+          "status": "pending-remote-three-platform-run",
+          "verified_locally": "linux-x86_64"
+        }
+      }
     },
     "lunax": {
       "repository": "https://github.com/Luna-PL/Lunax.git",

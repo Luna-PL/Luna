@@ -3,6 +3,10 @@
 `ecosystem.lock.json` 是连接 Luna、LunaToolchain 与 Lunax 三个独立仓库的权威候选
 快照。Luna 组件由“包含该 lock 文件的 commit”标识；子组件使用精确 Git commit。
 语言版本、诊断协议和分析协议与各组件 package 版本分别记录。
+对于已经发布的子组件，`commit` 跟踪当前验证源码，`published_release.commit` 则记录公开
+制品所对应的不可变 commit。快照同时保留 release URL、发布时间、checksum manifest 摘要
+以及每个制品的摘要作为证据。只有干净 runner 下载、校验、解包并运行所有受支持平台的
+package 后，consumer verification 才会从 pending 升级。
 
 当 `release.publish` 为 false 时，该快照仍是 candidate。升级为可发布状态前，必须通过
 根仓库平台门禁、toolchain 强制真实编译器集成、Lunax 事务安装集成，以及所有发布产物

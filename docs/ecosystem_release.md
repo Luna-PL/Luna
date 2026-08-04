@@ -4,6 +4,11 @@
 independent Luna, LunaToolchain, and Lunax repositories. The Luna component is the commit
 containing the lock file; child components use exact Git commits. Language, diagnostic, and
 analysis protocol versions are recorded separately from component package versions.
+For a released child component, `commit` tracks the current verification source while
+`published_release.commit` records the immutable commit behind the public artifacts. Release
+URLs, publication time, the checksum manifest digest, and every artifact digest are retained as
+evidence. Consumer verification remains explicitly pending until clean runners have downloaded,
+checked, extracted, and executed all supported platform packages.
 
 The snapshot remains a candidate while `release.publish` is false. Promotion requires the
 root platform gates, mandatory real-compiler toolchain integration, Lunax transactional-install
