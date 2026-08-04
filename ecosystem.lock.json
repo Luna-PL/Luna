@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "snapshot": "luna-0.2.1-tooling-candidate.7",
+  "snapshot": "luna-0.2.1-tooling-candidate.8",
   "status": "candidate",
   "components": {
     "luna": {
@@ -48,7 +48,7 @@
     },
     "lunax": {
       "repository": "https://github.com/Luna-PL/Lunax.git",
-      "commit": "9cf45b9e1283df62b09b69f2f2b8094ad66bfc94",
+      "commit": "b9f3e3cfc728cfaab1200058ba845aeceabd84b2",
       "version": "0.1.0",
       "compatible_luna_release_tag": "v0.2.1",
       "backend_abi": 1,
@@ -59,7 +59,8 @@
         "status": "passed",
         "run": "https://github.com/Luna-PL/Lunax/actions/runs/30913978030",
         "completed_at": "2026-08-04T13:33:18Z",
-        "preflight_conformance_run": "https://github.com/Luna-PL/Lunax/actions/runs/30913736588"
+        "preflight_conformance_run": "https://github.com/Luna-PL/Lunax/actions/runs/30913736588",
+        "current_source_ci_run": "https://github.com/Luna-PL/Lunax/actions/runs/30916584775"
       },
       "published_release": {
         "tag": "v0.1.0",
@@ -73,7 +74,10 @@
         },
         "consumer_verification": {
           "status": "passed",
-          "platform": "ubuntu-24.04-x86_64"
+          "platform": "ubuntu-24.04-x86_64",
+          "workflow": "published-release.yml",
+          "run": "https://github.com/Luna-PL/Lunax/actions/runs/30916687791",
+          "completed_at": "2026-08-04T14:00:41Z"
         }
       },
       "production_ready": false
