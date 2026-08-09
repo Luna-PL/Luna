@@ -1,0 +1,12 @@
+struct LayoutDependent<T> {
+    marker: i32;
+    value: T;
+}
+
+impl<T> Drop for LayoutDependent<T> {
+    fn drop(value: &mut LayoutDependent<T>) -> unit {}
+}
+
+fn main() -> i32 {
+    return 0;
+}

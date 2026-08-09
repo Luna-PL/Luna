@@ -14,9 +14,9 @@ namespace luna::sysmeta {
 // in the future, but it can never construct, attach, or override these facts.
 // Keep it typed so safety decisions never depend on user-controlled strings.
 inline constexpr uint16_t SchemaMajor = 1;
-inline constexpr uint16_t SchemaMinor = 2;
+inline constexpr uint16_t SchemaMinor = 3;
 inline constexpr const char* DropTraitId =
-    luna::core_contracts::legacy_0_2::DropTraitId;
+    luna::core_contracts::canonical_0_3::DropTraitId;
 inline constexpr const char* DropMethodName =
     luna::core_contracts::DropMethodName;
 inline constexpr const char* FromTraitId =
@@ -40,8 +40,6 @@ inline constexpr const char* FromIteratorFinishMethodName =
 
 // These are recorded so the clean-break 0.3 implementation can switch once
 // without inventing another spelling or retaining a language-mode branch.
-inline constexpr const char* CanonicalDropTraitId =
-    luna::core_contracts::canonical_0_3::DropTraitId;
 inline constexpr const char* CanonicalFromTraitId =
     luna::core_contracts::canonical_0_3::FromTraitId;
 inline constexpr const char* CanonicalResultTypeId =
@@ -75,8 +73,6 @@ enum class Forwarding : uint8_t {
 enum class ResourceManagement : uint8_t {
     Value,
     Unique,
-    Rc,
-    Arc,
 };
 
 enum class ReleaseDomain : uint8_t {
@@ -86,6 +82,13 @@ enum class ReleaseDomain : uint8_t {
     Device,
     Executable,
     HostService,
+};
+
+enum class ResourceLifetime : uint8_t {
+    Value,
+    Lexical,
+    Borrowed,
+    Explicit,
 };
 
 struct IdentityFacts {
@@ -110,6 +113,14 @@ struct ResourceFacts {
     luna::ownership::Contract result;
     ResourceManagement management = ResourceManagement::Value;
     ReleaseDomain releaseDomain = ReleaseDomain::None;
+    ResourceLifetime lifetime = ResourceLifetime::Value;
+    luna::ownership::Relation relation =
+        luna::ownership::Relation::Owned;
+    luna::ownership::Usage usage = luna::ownership::Usage::Copy;
+    luna::ownership::CleanupAction cleanup =
+        luna::ownership::CleanupAction::None;
+    bool cleanupRequired = false;
+    bool recursiveCleanup = false;
     bool needsDrop = false;
     bool tracksElementInitialization = false;
 };
@@ -180,6 +191,17 @@ inline constexpr const char* releaseDomainName(ReleaseDomain domain) {
     return "invalid";
 }
 
+inline constexpr const char* resourceLifetimeName(
+    ResourceLifetime lifetime) {
+    switch (lifetime) {
+        case ResourceLifetime::Value: return "value";
+        case ResourceLifetime::Lexical: return "lexical";
+        case ResourceLifetime::Borrowed: return "borrowed";
+        case ResourceLifetime::Explicit: return "explicit";
+    }
+    return "invalid";
+}
+
 inline constexpr const char* forwardingName(Forwarding forwarding) {
     switch (forwarding) {
         case Forwarding::None: return "none";
@@ -194,8 +216,6 @@ inline constexpr const char* resourceManagementName(
     switch (management) {
         case ResourceManagement::Value: return "value";
         case ResourceManagement::Unique: return "unique";
-        case ResourceManagement::Rc: return "rc";
-        case ResourceManagement::Arc: return "arc";
     }
     return "invalid";
 }

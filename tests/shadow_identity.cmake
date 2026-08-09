@@ -65,7 +65,7 @@ if(NOT around_contract STREQUAL reject_contract)
         "same-shaped context contracts did not share one shadow ContractId")
 endif()
 
-string(FIND "${first_moon}" "moon.sysmeta v1.2" sysmeta_at)
+string(FIND "${first_moon}" "moon.sysmeta v1.3" sysmeta_at)
 if(sysmeta_at EQUAL -1)
     message(FATAL_ERROR "MoonIR did not carry the identity-aware sysmeta schema")
 endif()

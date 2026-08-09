@@ -11,6 +11,26 @@
 
 namespace moon {
 
+void Verifier::verifyCleanupAction(
+    luna::ownership::CleanupAction action,
+    const luna::types::TypeId& typeId,
+    const SourceLocation& location,
+    const std::string& context,
+    const Module& module) {
+    const auto* type = module.findType(typeId);
+    if (!type) return;
+    if (!type->sysmeta.resource.cleanupRequired &&
+        action != luna::ownership::CleanupAction::Deallocate)
+        error(location, context + " targets a type with no cleanup obligation");
+    if (type->sysmeta.resource.cleanupRequired &&
+        action != type->sysmeta.resource.cleanup)
+        error(location, context + " uses cleanup action '" +
+              std::string(luna::ownership::cleanupActionName(action)) +
+              "' but its frozen ResourceContract requires '" +
+              std::string(luna::ownership::cleanupActionName(
+                  type->sysmeta.resource.cleanup)) + "'");
+}
+
 namespace {
 
 bool isGeneric(const FunctionDecl& function) {
@@ -201,20 +221,6 @@ bool Verifier::verify(const Module& module) {
         if (type.sysmeta.schemaMajor != luna::sysmeta::SchemaMajor)
             error({}, "type '" + type.id.value +
                       "' uses an unsupported sysmeta schema");
-        if (type.kind == TypeKind::Rc &&
-            (type.sysmeta.resource.management !=
-                 luna::sysmeta::ResourceManagement::Rc ||
-             type.sysmeta.resource.releaseDomain !=
-                 luna::sysmeta::ReleaseDomain::LunaGlobal))
-            error({}, "rc type '" + type.id.value +
-                      "' has inconsistent resource sysmeta");
-        if (type.kind == TypeKind::Arc &&
-            (type.sysmeta.resource.management !=
-                 luna::sysmeta::ResourceManagement::Arc ||
-             type.sysmeta.resource.releaseDomain !=
-                 luna::sysmeta::ReleaseDomain::LunaGlobal))
-            error({}, "arc type '" + type.id.value +
-                      "' has inconsistent resource sysmeta");
         if (type.kind == TypeKind::DeviceBuffer &&
             type.sysmeta.resource.releaseDomain !=
                 luna::sysmeta::ReleaseDomain::Device)
@@ -230,6 +236,37 @@ bool Verifier::verify(const Module& module) {
             !type.sysmeta.abi.dropGlueSymbol.empty())
             error({}, "type '" + type.id.value +
                       "' has inconsistent Drop sysmeta");
+        if (type.sysmeta.resource.cleanupRequired !=
+            (type.sysmeta.resource.cleanup !=
+             luna::ownership::CleanupAction::None))
+            error({}, "type '" + type.id.value +
+                      "' has inconsistent Resource cleanup sysmeta");
+        if (type.sysmeta.resource.cleanupRequired &&
+            type.sysmeta.resource.usage ==
+                luna::ownership::Usage::Copy)
+            error({}, "type '" + type.id.value +
+                      "' has cleanup obligations but Copy usage");
+        if (type.sysmeta.resource.recursiveCleanup &&
+            !type.sysmeta.resource.cleanupRequired)
+            error({}, "type '" + type.id.value +
+                      "' has recursive cleanup without a cleanup obligation");
+        if (type.kind == TypeKind::Reference &&
+            (type.sysmeta.resource.lifetime !=
+                 luna::sysmeta::ResourceLifetime::Borrowed ||
+             type.sysmeta.resource.relation ==
+                 luna::ownership::Relation::Owned))
+            error({}, "reference type '" + type.id.value +
+                      "' has inconsistent borrowed Resource lifetime");
+        if (type.sysmeta.resource.lifetime ==
+                luna::sysmeta::ResourceLifetime::Borrowed &&
+            type.kind != TypeKind::Reference)
+            error({}, "non-reference type '" + type.id.value +
+                      "' claims a borrowed Resource lifetime");
+        if (type.sysmeta.resource.cleanupRequired &&
+            type.sysmeta.resource.lifetime ==
+                luna::sysmeta::ResourceLifetime::Value)
+            error({}, "type '" + type.id.value +
+                      "' has cleanup obligations but value lifetime");
     }
     for (const auto& type : module.typeTable) {
         for (const auto& referenced : type.referencedTypeIds) {
@@ -492,13 +529,17 @@ void Verifier::verifyDeclaration(const Decl& declaration, const Module& module) 
                    "implementation target", !implementation->typeParams.empty());
         for (const auto& method : implementation->methods) {
             if (!method) error(implementation->location, "implementation contains a null method");
-            else verifyFunction(*method, module);
+            else verifyFunction(
+                *method, module,
+                !implementation->typeParams.empty());
         }
     }
 }
 
-void Verifier::verifyFunction(const FunctionDecl& function, const Module& module) {
-    const bool generic = isGeneric(function);
+void Verifier::verifyFunction(
+    const FunctionDecl& function, const Module& module,
+    bool inheritsTypeParameters) {
+    const bool generic = isGeneric(function) || inheritsTypeParameters;
     const bool previousAllowance = mAllowTypeParameters;
     mAllowTypeParameters = generic;
     if (function.name.empty()) error(function.location, "function has no source name");
@@ -633,6 +674,10 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
             if (cleanup.typeId.empty() || !module.findType(cleanup.typeId))
                 error(ret->location, "return cleanup for place '" + cleanup.place +
                       "' references no frozen type in '" + owner + "'");
+            else
+                verifyCleanupAction(
+                    cleanup.action, cleanup.typeId, ret->location,
+                    "return cleanup for '" + cleanup.place + "'", module);
         }
     } else if (auto* expression = dynamic_cast<const ExprStmt*>(stmt)) {
         verifyExpr(expression->expr.get(), module, owner);
@@ -770,6 +815,11 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
         verifyBlock(loop->body.get(), module, owner);
     } else if (auto* release = dynamic_cast<const FreeStmt*>(stmt)) {
         verifyExpr(release->operand.get(), module, owner);
+        if (release->operand && release->operand->type)
+            verifyCleanupAction(
+                release->action,
+                luna::types::typeId(release->operand->type),
+                release->location, "free operation", module);
     } else if (auto* slot = dynamic_cast<const SlotInvokeStmt*>(stmt)) {
         for (const auto& argument : slot->args)
             verifyExpr(argument.get(), module, owner);
@@ -791,6 +841,10 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
             if (cleanup.typeId.empty() || !module.findType(cleanup.typeId))
                 error(abort->location, "abort cleanup for place '" + cleanup.place +
                       "' references no frozen type in '" + owner + "'");
+            else
+                verifyCleanupAction(
+                    cleanup.action, cleanup.typeId, abort->location,
+                    "abort cleanup for '" + cleanup.place + "'", module);
         }
     } else if (auto* await = dynamic_cast<const AwaitStmt*>(stmt)) {
         verifyExpr(await->event.get(), module, owner);
@@ -1006,6 +1060,12 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
                 error(propagation->location,
                       "error propagation cleanup for '" + cleanup.place +
                       "' references no frozen type in '" + owner + "'");
+            else
+                verifyCleanupAction(
+                    cleanup.action, cleanup.typeId,
+                    propagation->location,
+                    "error propagation cleanup for '" + cleanup.place + "'",
+                    module);
         }
     } else if (auto* move = dynamic_cast<const MoveExpr*>(expr)) {
         verifyExpr(move->operand.get(), module, owner);

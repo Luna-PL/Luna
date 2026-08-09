@@ -159,7 +159,7 @@ struct Param {
 
 struct CleanupObligation {
     std::string place;
-    luna::ownership::CleanupAction action = luna::ownership::CleanupAction::Drop;
+    luna::ownership::CleanupAction action = luna::ownership::CleanupAction::None;
     luna::types::TypeId typeId;
 };
 

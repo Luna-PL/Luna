@@ -1,0 +1,8 @@
+package org.luna.core;
+module resource;
+
+// Clone is an explicit ownership-duplication protocol. Implementations may
+// share backing storage, but they must return a fresh affine owner.
+export trait Clone {
+    fn clone(value: &Self) -> affine Self;
+}

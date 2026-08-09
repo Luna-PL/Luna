@@ -53,7 +53,7 @@ and remote dependency resolution are not active development goals.
 
 ## 非近期语言工作
 
-- 完成 `From`、Drop、递归类型和泛型边界的明确规则。
+- 完成剩余 `From`、部分移动初始化和泛型特化边界；递归泛型 Drop 合约已实现。
 - 继续补齐 Place、部分移动、借用和控制流合并负例。
 - 保持 `Result`/`?` 为显式可恢复失败，panic 保持 abort 边界，除非另有完整 RFC。
 - 将标准库类型和编译器内置类型持续分离。
@@ -63,7 +63,8 @@ and remote dependency resolution are not active development goals.
 
 - 在 `core`、`alloc/host`、`sys` 之间建立明确依赖方向。
 - 用安全 adapter 包装 Runtime status、GPU error、errno 和 foreign resource。
-- 通用堆拥有容器必须等待 Drop、allocator domain 和异常路径清理闭合。
+- 普通 Core Rc/Arc 已覆盖 Drop 和 allocator-domain cleanup；Vec/Box 等通用拥有
+  容器仍必须等待 element initialization tracking、mutable-view 失效和可恢复失败路径闭合。
 - 扩大 C struct/union 和 callback FFI 前先定义布局、生命周期和线程边界。
 
 ## 异构计算

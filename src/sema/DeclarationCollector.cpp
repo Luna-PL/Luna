@@ -383,6 +383,9 @@ void DeclarationCollector::declareTrait(TraitDecl* decl) {
 }
 
 void DeclarationCollector::declareImpl(ImplDecl* decl) {
+    std::unordered_map<std::string, TypePtr> implBindings;
+    for (const auto& parameter : decl->typeParams)
+        implBindings[parameter] = Type::makeTypeParam(parameter);
     const std::string traitId = mContext.resolveTraitRef(decl->trait, decl);
     if (traitId.empty()) return;
     const auto coreFromIterator =
@@ -390,7 +393,8 @@ void DeclarationCollector::declareImpl(ImplDecl* decl) {
     const bool isCoreFromIteratorTrait =
         coreFromIterator != mContext.mTraits.end() &&
         traitId == mContext.traitIdentity(coreFromIterator->second);
-    const TypePtr targetType = mContext.resolveTypeAST(decl->targetType.get(), {});
+    const TypePtr targetType = mContext.resolveTypeAST(
+        decl->targetType.get(), implBindings);
     const std::string targetId = mContext.typeIdentity(targetType);
     decl->resolvedTargetTypeId = targetId;
     const std::string implPackage =
@@ -408,7 +412,10 @@ void DeclarationCollector::declareImpl(ImplDecl* decl) {
         method->generatedSymbolName = symbol;
         SymbolInfo info;
         info.kind = SymbolKind::Function;
-        info.returnType = mContext.declaredType(method->returnType.get(), {});
+        info.typeParams = method->typeParams;
+        info.genericDecl = method->typeParams.empty() ? nullptr : method;
+        info.returnType = mContext.declaredType(
+            method->returnType.get(), implBindings);
         method->inferredReturnType = info.returnType;
         info.returnsLinear = method->returnsLinear;
         method->returnUsage = method->returnsLinear
@@ -416,7 +423,8 @@ void DeclarationCollector::declareImpl(ImplDecl* decl) {
             : defaultUsageForType(info.returnType);
         info.returnUsage = method->returnUsage;
         for (auto& parameter : method->params) {
-            parameter.inferredType = mContext.declaredType(parameter.type.get(), {});
+            parameter.inferredType = mContext.declaredType(
+                parameter.type.get(), implBindings);
             const bool explicitUsage =
                 parameter.hasExplicitUsage || parameter.isLinear ||
                 dynamic_cast<LinearTypeAST*>(parameter.type.get()) ||
@@ -505,7 +513,7 @@ void DeclarationCollector::declareImpl(ImplDecl* decl) {
     decl->trait.resolvedTypeArgs.clear();
     for (auto& argument : decl->trait.typeArgs)
         decl->trait.resolvedTypeArgs.push_back(
-            mContext.resolveTypeAST(argument.get(), {}));
+            mContext.resolveTypeAST(argument.get(), implBindings));
 
     if (isCoreFromIteratorTrait &&
         !decl->typeParams.empty()) {
@@ -548,6 +556,12 @@ void DeclarationCollector::declareImpl(ImplDecl* decl) {
                   method->line, method->col);
             continue;
         }
+        // Ordinary generic impl methods use the same monomorphization path as
+        // generic free functions. Drop remains one representation-stable
+        // erased finalizer until generic Drop bodies gain their own witness
+        // specialization path.
+        if (traitId != luna::sysmeta::DropTraitId)
+            method->typeParams = decl->typeParams;
         methods[method->name] = method.get();
         registerMethod(
             method.get(),

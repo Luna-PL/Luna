@@ -73,8 +73,6 @@ const char* kindName(TypeKind kind) {
         case TypeKind::Trait: return "trait";
         case TypeKind::TypeParam: return "type_param";
         case TypeKind::Reference: return "reference";
-        case TypeKind::Rc: return "rc";
-        case TypeKind::Arc: return "arc";
         case TypeKind::Function: return "function";
         case TypeKind::Slot: return "slot";
         case TypeKind::Fragment: return "fragment";
@@ -142,8 +140,6 @@ std::string canonicalShapeImpl(
             appendType(type->inner);
             break;
         case TypeKind::RawPointer:
-        case TypeKind::Rc:
-        case TypeKind::Arc:
         case TypeKind::DeviceBuffer:
         case TypeKind::Slice:
         case TypeKind::MetadataView:

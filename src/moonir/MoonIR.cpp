@@ -64,6 +64,12 @@ std::string canonicalContract(const DeclarationRecord& declaration) {
     appendOwnershipContract(result, facts.resource.result);
     appendEnum(result, facts.resource.management);
     appendEnum(result, facts.resource.releaseDomain);
+    appendEnum(result, facts.resource.lifetime);
+    appendEnum(result, facts.resource.relation);
+    appendEnum(result, facts.resource.usage);
+    appendEnum(result, facts.resource.cleanup);
+    appendBool(result, facts.resource.cleanupRequired);
+    appendBool(result, facts.resource.recursiveCleanup);
     appendBool(result, facts.resource.needsDrop);
     appendBool(result, facts.resource.tracksElementInitialization);
 
@@ -126,6 +132,13 @@ void Module::registerType(const TypePtr& type) {
     record.identityMode = type->identityMode;
     record.kind = type->kind;
     record.sysmeta = type->sysmeta;
+    const auto resource = resourceContractForType(type);
+    record.sysmeta.resource.usage = resource.usage;
+    record.sysmeta.resource.cleanup = resource.cleanup;
+    record.sysmeta.resource.cleanupRequired = resource.cleanupRequired;
+    record.sysmeta.resource.recursiveCleanup = resource.recursiveCleanup;
+    record.sysmeta.resource.lifetime = resource.lifetime;
+    record.sysmeta.resource.relation = resource.relation;
     record.displayName = type->toString();
     record.nominalDeclarationId = type->nominalId;
     record.canonicalType = canonicalTypeValue;

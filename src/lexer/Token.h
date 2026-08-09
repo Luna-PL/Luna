@@ -5,7 +5,7 @@
 
 enum class TokenKind {
     // Keywords
-    Fn, Let, Const, Constexpr, New, Rc, Arc, Move, Borrow, Copy, Affine, Linear, Mut, Free, Extern, Auto, Return,
+    Fn, Let, Const, Constexpr, New, Move, Borrow, Copy, Affine, Linear, Mut, Free, Extern, Auto, Return,
     Fragment, Interceptor, Context, Many, Slot, Resume, Abort, Apply, Default,
     Meta, Constraint, Select, With, Runtime, Dynamic, Kernel, Launch, Await,
     Trait, Impl, Where, Struct, Enum, Package, Module, Using, As, Export, If, Else, Match, While, For,
@@ -54,7 +54,6 @@ const std::unordered_map<std::string, TokenKind> KEYWORDS = {
     {"kernel", TokenKind::Kernel}, {"launch", TokenKind::Launch},
     {"await", TokenKind::Await},
     {"new",    TokenKind::New},    {"move",   TokenKind::Move},
-    {"rc",     TokenKind::Rc},     {"arc",    TokenKind::Arc},
     {"borrow", TokenKind::Borrow}, {"copy", TokenKind::Copy},
     {"affine", TokenKind::Affine},
     {"linear", TokenKind::Linear},
@@ -100,8 +99,6 @@ inline std::string tokenKindName(TokenKind k) {
         case TokenKind::Launch: return "launch";
         case TokenKind::Await: return "await";
         case TokenKind::New: return "new";
-        case TokenKind::Rc: return "rc";
-        case TokenKind::Arc: return "arc";
         case TokenKind::Move: return "move";
         case TokenKind::Borrow: return "borrow";
         case TokenKind::Copy: return "copy";

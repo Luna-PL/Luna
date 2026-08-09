@@ -30,7 +30,7 @@ collection catalog. Those features require independent lifetime, ABI, and portab
 The intended package graph is acyclic:
 
 ```text
-org.luna.core                         # no dependencies, no host services
+org.luna.core                         # no package dependencies; shared-cell Runtime ABI only
        ^       ^
        |       |
 org.luna.sys  |                       # raw Runtime/OS boundary; library-internal
@@ -44,7 +44,7 @@ org.luna.std                           # Core + Alloc + Sys host services
 
 In dependency notation:
 
-- `core`: no dependencies;
+- `core`: no package dependencies; Rc/Arc call only the fixed Luna shared-cell Runtime ABI;
 - `sys -> core`;
 - `alloc -> core + sys`;
 - `std -> core + alloc + sys`.
@@ -67,13 +67,13 @@ stdlib/
 
 | Package | Initial modules | Responsibility |
 |---|---|---|
-| Core | `prelude`, `option`, `result`, `error`, `convert`, `cmp`, `iter`, `resource` | Host-independent values and semantic protocols |
+| Core | `prelude`, `option`, `result`, `error`, `convert`, `cmp`, `iter`, `resource`, `Rc`, `Arc` | Values/protocols plus shared containers in the fixed Luna Runtime allocation domain |
 | Sys | `alloc`, `console`, `fs`, later `env`/`clock` | Versioned raw Runtime ABI imports and platform status |
-| Alloc | `boxed`, `vec`, `string`, later `rc`/`arc` | Luna-owned heap values and allocation failure |
+| Alloc | `boxed`, `vec`, `string` | Luna-owned heap values and allocation failure |
 | Std | `io`, `fs`, `path`, `fmt`, `env`, `process`, `time` | Safe host-facing APIs |
 
-The initial prelude should remain small: `Option`, `Result`, `From`/`TryFrom`, `Drop`, and
-iterator traits. It should not silently import filesystem, console, process, or networking
+The initial prelude should remain small: `Option`, `Result`, `From`/`TryFrom`, `Drop`, `Clone`,
+iterator traits, and optional ordinary `rc(value)`/`arc(value)` helpers. It should not silently import filesystem, console, process, or networking
 operations. `Vec` and `String` may be re-exported by a future `std::prelude`, but their
 canonical identities remain in `org.luna.alloc`.
 
@@ -176,11 +176,13 @@ General `Vec<T>` implementation starts only after these contracts exist:
 6. release-domain facts in the resource contract;
 7. fallible iterator collection semantics.
 
-Prerequisites 4 through 6 now exist: Runtime ABI v1 exposes checked array layouts,
+Prerequisites 1 and 4 through 6 now exist: generic nominal instances have compiler-derived
+recursive Drop and exact-once field cleanup; Runtime ABI v1 exposes checked array layouts,
 allocation-free `LunaAllocErrorV1`, transactional fallible allocation/reallocation, and the
 Global Luna release-domain fact; `org.luna.sys::alloc` forwards them without decoding host
-tables. Prerequisites 1 through 3 and 7 intentionally remain at the 0.3 language boundary,
-so this 0.2.1 work does not guess the owning-container syntax that 0.3 will replace.
+tables. Prerequisites 2, 3, and 7 intentionally remain at the 0.3 language boundary,
+Core `Rc<T>`/`Arc<T>` are complete as the first ordinary owned-container vertical slice that
+does not require element move-out; `Vec<T>` still waits for the remaining prerequisites.
 
 Until then, fixed `array<T, N>` and borrowed `slice<T>` remain the safe container baseline.
 
@@ -305,8 +307,9 @@ The following are needed, but not all belong in the first implementation slice:
 
 1. **Core traits:** `Drop`, `Clone`, `Default`, `From`, `TryFrom`, `Eq`, `Ord`, `Hash`, and
    iterator protocols. Compiler cooperation must use exact Core identities.
-2. **Owned resources:** `Box<T>` alongside Vec; migrate current intrinsic Rc/Arc only after
-   allocator and thread-safety facts are expressible.
+2. **Owned resources:** ordinary Core `Rc<T>`/`Arc<T>` now exist; `Box<T>` is still needed
+   alongside Vec. Cross-thread Arc entry points must wait for compiler-derived thread-safety
+   sysmeta.
 3. **Collections:** `HashMap`/`HashSet` after Vec, String, Eq, Hash, and panic/failure cleanup
    are stable. A deque is a later specialization, not a prerequisite.
 4. **Host utilities:** `env`, `process`, and monotonic `time` after their Runtime capabilities
@@ -324,8 +327,8 @@ the first usable IO/Vec/error surface.
 
 ### Stage A: contracts and package skeleton
 
-- implemented: central exact 0.3 Core identities for Result, From, Drop, iterators, and
-  resources, staged beside the effective 0.2 identities for the one-time compiler switch;
+- implemented: central exact 0.3 Core identities for Result, From, Drop, Clone, iterators, and
+  resources; the compiler has switched once and retains no 0.2 language branch;
 - implemented: `org.luna.sys` and `org.luna.alloc` dependency skeletons;
 - implemented: append-only console-input and filesystem Runtime ABI capability contracts,
   including compatibility with previously published v1 prefixes;
@@ -344,6 +347,8 @@ surface.
 
 - implemented as a temporary 0.2.1 adapter: explicitly typed stdout/stderr text and i32
   writes, flush, raw byte I/O, lossy line input, and fallback-based i32 parsing;
+- implemented: ordinary nominal `Rc<T>`/`Arc<T>`, explicit `Clone`, recursive Drop callbacks,
+  and Runtime ABI v1 retain/release;
 - `IoError` and allocation-free error mapping;
 - `Box<T>`, `Vec<T>`, and `String` over the Global Luna allocator;
 - `try_push`, `try_reserve`, `write_all`, and basic whole-file helpers;
@@ -360,7 +365,6 @@ surface.
 ### Stage D: broader library
 
 - HashMap/HashSet and richer text/path support;
-- Rc/Arc migration from compiler intrinsics;
 - networking, concurrency, and async only after separate designs.
 
 ## 10. Acceptance criteria

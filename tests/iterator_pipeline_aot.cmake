@@ -51,8 +51,8 @@ endif()
 
 file(READ "${ir_path}" generated_ir)
 string(FIND "${generated_ir}" "call ptr @rt_alloc" heap_alloc_at)
-string(FIND "${generated_ir}" "call ptr @rt_rc_alloc" rc_alloc_at)
-string(FIND "${generated_ir}" "call ptr @rt_arc_alloc" arc_alloc_at)
+string(FIND "${generated_ir}" "call ptr @rt_rc_allocate_v1" rc_alloc_at)
+string(FIND "${generated_ir}" "call ptr @rt_arc_allocate_v1" arc_alloc_at)
 string(FIND "${generated_ir}" "@rt_iterator" runtime_iterator_at)
 if(NOT heap_alloc_at EQUAL -1 OR NOT rc_alloc_at EQUAL -1 OR
    NOT arc_alloc_at EQUAL -1 OR NOT runtime_iterator_at EQUAL -1)

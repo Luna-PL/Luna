@@ -13,6 +13,7 @@ using moon::ImplDecl;
 bool CodeGenerator::generate(moon::Module* program) {
     mProgram = program;
     mFunctions.clear();
+    mDropCallbacks.clear();
     mFragments.clear();
     mSlotDefaults.clear();
     mApplyScopes.clear();

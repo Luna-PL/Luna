@@ -44,6 +44,25 @@ size 溢出和 OOM。零 size 分配成功返回 null，且不调用 host alloca
 不需要为每个对象添加隐藏头。`rt_malloc/rt_free` 仅为已经生成的 Alpha IR
 保留兼容；新 IR 不使用它们。
 
+## Core 共享单元
+
+普通 Core `Rc<T>`/`Arc<T>` 通过以下 Runtime ABI v1 入口实现计数：
+
+```c
+typedef void (*LunaDropCallbackV1)(void* value_storage);
+void* rt_rc_allocate_v1(int32_t size, int32_t alignment, LunaDropCallbackV1 drop);
+void  rt_rc_retain_v1(void* pointer);
+void  rt_rc_release_v1(void* pointer);
+void* rt_arc_allocate_v1(int32_t size, int32_t alignment, LunaDropCallbackV1 drop);
+void  rt_arc_retain_v1(void* pointer);
+void  rt_arc_release_v1(void* pointer);
+```
+
+Rc 计数为非原子，Arc retain 使用 relaxed atomic，最后一次 release 使用
+acquire-release 并且只调用一次 `drop`，然后将整个共享单元交还同一 Luna
+allocator domain。callback 只销毁已初始化 payload，不释放外层单元。这些
+入口是 Core 库的底层边界；编译器没有 Rc/Arc TypeKind 或专用 cleanup node。
+
 不可恢复错误调用 `rt_panic_cstr`。该入口通过已安装 console 的 stderr 写入
 诊断并 flush，随后 abort；它不执行语言栈展开或局部 Drop。可恢复错误应使用
 `Result<T, E>`，由生成代码在提前返回前执行路径敏感清理。

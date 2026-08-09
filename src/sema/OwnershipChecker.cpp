@@ -4,30 +4,6 @@
 #include <algorithm>
 #include <unordered_set>
 
-static luna::ownership::CleanupAction cleanupActionFor(const TypePtr& type) {
-    if (!type) return luna::ownership::CleanupAction::Deallocate;
-    if (type->kind == TypeKind::Result)
-        return luna::ownership::CleanupAction::ResultDrop;
-    if (type->kind == TypeKind::Enum)
-        return luna::ownership::CleanupAction::EnumDrop;
-    if (type->kind == TypeKind::Array)
-        return luna::ownership::CleanupAction::ArrayDrop;
-    if (type->kind == TypeKind::Record)
-        return luna::ownership::CleanupAction::RecordDrop;
-    switch (type->sysmeta.resource.management) {
-        case luna::sysmeta::ResourceManagement::Rc:
-            return luna::ownership::CleanupAction::RcRelease;
-        case luna::sysmeta::ResourceManagement::Arc:
-            return luna::ownership::CleanupAction::ArcRelease;
-        case luna::sysmeta::ResourceManagement::Value:
-        case luna::sysmeta::ResourceManagement::Unique:
-            return type->sysmeta.resource.needsDrop
-                ? luna::ownership::CleanupAction::Drop
-                : luna::ownership::CleanupAction::Deallocate;
-    }
-    return luna::ownership::CleanupAction::Deallocate;
-}
-
 OwnershipChecker::OwnershipChecker() {
     enterScope();
 }
@@ -92,7 +68,7 @@ bool OwnershipChecker::checkFunction(FunctionDecl* decl) {
         // parameter must be consumed before exit.
         mScopes.back()[param.name].isHeapAllocated =
             contract.relation == luna::ownership::Relation::Owned &&
-            type && type->isHeapType();
+            typeRequiresCleanup(type);
     }
 
     FlowResult bodyResult;
@@ -112,7 +88,7 @@ bool OwnershipChecker::checkFunction(FunctionDecl* decl) {
             auto freeStmt = std::make_unique<FreeStmt>();
             freeStmt->operand = std::make_unique<IdentifierExpr>(name);
             auto* variable = lookup(name);
-            freeStmt->action = cleanupActionFor(
+            freeStmt->action = cleanupActionForType(
                 variable ? variable->type : nullptr);
             decl->body->stmts.push_back(std::move(freeStmt));
         }
@@ -199,7 +175,7 @@ bool OwnershipChecker::checkLambda(LambdaExpr* lambda) {
         mScopes.back()[param.name].isHeapAllocated =
             contract.relation ==
                 luna::ownership::Relation::Owned &&
-            type && type->isHeapType();
+            typeRequiresCleanup(type);
     }
 
     FlowResult bodyResult;
@@ -218,7 +194,7 @@ bool OwnershipChecker::checkLambda(LambdaExpr* lambda) {
             cleanup->operand =
                 std::make_unique<IdentifierExpr>(name);
             auto* variable = lookup(name);
-            cleanup->action = cleanupActionFor(
+            cleanup->action = cleanupActionForType(
                 variable ? variable->type : nullptr);
             lambda->body->stmts.push_back(
                 std::move(cleanup));
@@ -293,7 +269,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
         auto freeStmt = std::make_unique<FreeStmt>();
         freeStmt->operand = std::make_unique<IdentifierExpr>(name);
         auto* variable = lookup(name);
-        freeStmt->action = cleanupActionFor(
+        freeStmt->action = cleanupActionForType(
             variable ? variable->type : nullptr);
         freeStmts.push_back(std::move(freeStmt));
     }
@@ -472,7 +448,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkFragment(
         bool isReference = type && type->kind == TypeKind::Reference;
         const auto usage = param.isLinear ? luna::ownership::Usage::Linear
                                          : param.usage;
-        define(param.name, type, type && type->isHeapType(), usage,
+        define(param.name, type, typeRequiresCleanup(type), usage,
                param.relation, isReference, isReference && type->isMutable);
     }
     FlowResult body = fragment->body ? checkBlock(fragment->body.get()) : FlowResult{};
@@ -796,7 +772,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
             for (const auto& place : abort->autoFrees) {
                 auto* variable = lookup(place);
                 abort->cleanups.push_back({
-                    place, cleanupActionFor(variable ? variable->type : nullptr),
+                    place, cleanupActionForType(variable ? variable->type : nullptr),
                     variable ? variable->type : nullptr});
             }
         }
@@ -951,7 +927,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
             }
             if (luna::ownership::isMoveOnly(
                     call->returnUsage) &&
-                type && type->isHeapType())
+                typeRequiresCleanup(type))
                 isHeap = true;
         }
         if (auto* call = dynamic_cast<CallExpr*>(let->initializer.get())) {
@@ -993,7 +969,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
         }
 
         const bool borrowedCallResult = dynamic_cast<CallExpr*>(let->initializer.get()) &&
-            usage == luna::ownership::Usage::Copy && type && type->isHeapType();
+            usage == luna::ownership::Usage::Copy && typeRequiresCleanup(type);
         const auto relation = isReference
             ? (isMutableReference ? luna::ownership::Relation::MutableBorrow
                                   : luna::ownership::Relation::SharedBorrow)
@@ -1109,7 +1085,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                 for (const auto& place : ret->autoFrees) {
                     auto* variable = lookup(place);
                 ret->cleanups.push_back({
-                        place, cleanupActionFor(variable ? variable->type : nullptr),
+                        place, cleanupActionForType(variable ? variable->type : nullptr),
                         variable ? variable->type : nullptr});
                 }
                 CheckerState exit = captureState();
@@ -1129,7 +1105,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
             for (const auto& place : ret->autoFrees) {
                 auto* variable = lookup(place);
                 ret->cleanups.push_back({
-                    place, cleanupActionFor(variable ? variable->type : nullptr),
+                    place, cleanupActionForType(variable ? variable->type : nullptr),
                     variable ? variable->type : nullptr});
             }
         }
@@ -1223,7 +1199,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                     cleanup->operand =
                         std::make_unique<IdentifierExpr>(name);
                     auto* variable = lookup(name);
-                    cleanup->action = cleanupActionFor(
+                    cleanup->action = cleanupActionForType(
                         variable ? variable->type : nullptr);
                     arm.body->stmts.push_back(std::move(cleanup));
                 }
@@ -1449,7 +1425,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                 return false;
             }
             define(loop->protocolStateName, stateType,
-                   stateType && stateType->isHeapType(),
+                   typeRequiresCleanup(stateType),
                    stateUsage);
             auto* state = lookup(
                 loop->protocolStateName);
@@ -1457,7 +1433,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                 state && state->isHeapAllocated;
             if (loop->protocolStateNeedsCleanup)
                 loop->protocolStateCleanup =
-                    cleanupActionFor(state->type);
+                    cleanupActionForType(state->type);
         }
         define(loop->varName,
                loop->elementType ? loop->elementType : TyI32,
@@ -1481,7 +1457,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                         std::make_unique<IdentifierExpr>(
                             loop->varName);
                     cleanup->action =
-                        cleanupActionFor(item->type);
+                        cleanupActionForType(item->type);
                     loop->body->stmts.push_back(
                         std::move(cleanup));
                 }
@@ -1529,7 +1505,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
             return false;
         }
         if (!consume(var, "free")) return false;
-        freeStmt->action = cleanupActionFor(var->type);
+        freeStmt->action = cleanupActionForType(var->type);
         var->state = OwnState::Freed;
         return true;
     }
@@ -1585,7 +1561,7 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
             auto* variable = lookup(place);
             propagation->cleanups.push_back({
                 place,
-                cleanupActionFor(variable ? variable->type : nullptr),
+                cleanupActionForType(variable ? variable->type : nullptr),
                 variable ? variable->type : nullptr
             });
         }
@@ -2233,7 +2209,7 @@ void OwnershipChecker::define(const std::string& name, TypePtr type, bool isHeap
     info.name = name;
     info.type = type;
     info.isHeapAllocated = relation == luna::ownership::Relation::Owned &&
-        (isHeap || (type && type->isHeapType()));
+        (isHeap || typeRequiresCleanup(type));
     info.usage = (isDeviceBuffer(type) || isEvent(type))
         ? luna::ownership::Usage::Linear
         : (usage == luna::ownership::Usage::Copy && info.isHeapAllocated

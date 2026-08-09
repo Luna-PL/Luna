@@ -66,8 +66,8 @@ Current `luna.semantic-regressions` covers:
   statements;
 - GPU in-flight buffers, unawaited events, and event-release requirements before early return;
 - basic, versioned, and move-event heterogeneous computation on the CPU simulator;
-- `Drop`, explicit `rc`/`arc` cloning and final release, and active-payload cleanup for
-  both Result variants;
+- recursive/generic `Drop`, rejection of old `rc new`/`arc new` syntax, and active-payload
+  cleanup for both Result variants;
 - Result construction/discrimination/unwrapping, successful and error early returns through
   `?`, error-path cleanup, fragment-boundary rejection, and abort-style panic.
 
@@ -94,6 +94,10 @@ and is outside the default test set.
 
 Every semantic or diagnostic fix should add a minimal positive or negative example and assert
 stable output or key diagnostic text in `tests/semantic_regressions.cmake`.
+
+`luna.rc-arc-core` uses the real Core package to verify JIT/AOT behavior, explicit trait/member
+clone, implicit-copy rejection, exact-once last-handle release, nested payload Drop, ordinary
+nominal MoonIR facts, and LLVM Runtime ABI v1 calls.
 
 `luna.package-export-abi` is an independent AOT ABI test: it verifies that exported
 package functions are external symbols in LLVM IR while non-exported functions are

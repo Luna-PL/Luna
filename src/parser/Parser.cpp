@@ -307,7 +307,7 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(bool isTraitMethod,
     decl->isKernel = isKernel;
     decl->abi = std::move(abi);
 
-    if (match(TokenKind::Identifier)) {
+    if (match(TokenKind::Identifier) || match(TokenKind::New)) {
         const auto& nameToken = mTokens[mPos - 1];
         decl->name = nameToken.lexeme;
         decl->nameLine = nameToken.line;
@@ -1074,10 +1074,14 @@ std::unique_ptr<Expr> Parser::parseUnary() {
         }
         return parseSelectExpr(true);
     }
-    if (match(TokenKind::Minus) || match(TokenKind::Not) || match(TokenKind::Tilde) ||
-        match(TokenKind::Star)) {
+    if (match(TokenKind::Minus) || match(TokenKind::Not) || match(TokenKind::Tilde)) {
         auto expr = std::make_unique<UnaryExpr>();
         expr->op = mTokens[mPos - 1].kind;
+        expr->operand = parseUnary();
+        return expr;
+    }
+    if (match(TokenKind::Star)) {
+        auto expr = std::make_unique<DerefExpr>();
         expr->operand = parseUnary();
         return expr;
     }
@@ -1103,6 +1107,15 @@ std::unique_ptr<Expr> Parser::parseUnary() {
 
 std::unique_ptr<Expr> Parser::parsePostfix() {
     auto expr = parsePrimary();
+
+    const auto isQualifiedValueName = [&]() {
+        return check(TokenKind::Identifier) || check(TokenKind::New);
+    };
+    const auto consumeQualifiedValueName = [&]() {
+        if (!isQualifiedValueName()) return false;
+        advance();
+        return true;
+    };
 
     while (true) {
         if (!mStopBeforeBlockBrace && check(TokenKind::LBrace)) {
@@ -1187,13 +1200,14 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
             // This lets semantic analysis resolve `alias::module::symbol`
             // against package and module namespaces. Enum constructors keep
             // their established UpperCamelCase terminal spelling.
-            if (!hadTypeArgs && check(TokenKind::Identifier)) {
+            if (!hadTypeArgs && isQualifiedValueName()) {
                 std::vector<Token> members;
                 do {
-                    if (!match(TokenKind::Identifier)) break;
+                    if (!consumeQualifiedValueName()) break;
                     members.push_back(mTokens[mPos - 1]);
                     if (!(check(TokenKind::ColonColon) &&
-                          peekAhead(1).kind == TokenKind::Identifier))
+                          (peekAhead(1).kind == TokenKind::Identifier ||
+                           peekAhead(1).kind == TokenKind::New)))
                         break;
                     advance();
                 } while (true);
@@ -1362,24 +1376,12 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         }
         return iexpr;
     }
-    HeapStorageKind heapStorage = HeapStorageKind::Unique;
-    bool isHeapAllocation = false;
-    if (match(TokenKind::Rc)) {
-        heapStorage = HeapStorageKind::Rc;
-        consume(TokenKind::New, "Expected 'new' after 'rc'");
-        isHeapAllocation = true;
-    } else if (match(TokenKind::Arc)) {
-        heapStorage = HeapStorageKind::Arc;
-        consume(TokenKind::New, "Expected 'new' after 'arc'");
-        isHeapAllocation = true;
-    } else if (match(TokenKind::New)) {
-        isHeapAllocation = true;
-    }
+    const bool isHeapAllocation = match(TokenKind::New);
     if (isHeapAllocation) {
         auto type = parseType();
         consume(TokenKind::LParen, "Expected '(' after type in new expression");
         auto alloc = std::make_unique<HeapAllocExpr>();
-        alloc->storage = heapStorage;
+        alloc->storage = HeapStorageKind::Unique;
         alloc->allocatedTypeAST = std::move(type);
         auto init = std::make_unique<CallExpr>();
         // Build a synthetic call: new T(args) → call T(args)
@@ -1559,17 +1561,6 @@ std::unique_ptr<TypeAST> Parser::parseType() {
     }
     if (match(TokenKind::Auto)) {
         return std::make_unique<NamedTypeAST>("auto");
-    }
-    if (check(TokenKind::Rc) || check(TokenKind::Arc)) {
-        const Token wrapper = advance();
-        auto named = std::make_unique<NamedTypeAST>(wrapper.lexeme);
-        named->sourcePath = mSourceName;
-        named->line = wrapper.line;
-        named->col = wrapper.col;
-        consume(TokenKind::Lt, "Expected '<' after shared ownership type");
-        named->typeArgs.push_back(parseType());
-        consume(TokenKind::Gt, "Expected '>' after shared ownership element type");
-        return named;
     }
     // Built-in type keywords
     if (check(TokenKind::TyI32) || check(TokenKind::TyI64) ||

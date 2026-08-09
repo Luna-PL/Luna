@@ -26,8 +26,6 @@ llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
         case TypeKind::String:
         case TypeKind::CStr:
         case TypeKind::RawPointer:
-        case TypeKind::Rc:
-        case TypeKind::Arc:
         case TypeKind::DeviceBuffer:
         case TypeKind::Metadata:
         case TypeKind::MetadataView:
@@ -95,9 +93,7 @@ uint64_t typeSize(const TypePtr& type) {
         case TypeKind::String:
         case TypeKind::CStr: return 8; // pointer size
         case TypeKind::Reference:
-        case TypeKind::RawPointer:
-        case TypeKind::Rc:
-        case TypeKind::Arc: return 8;
+        case TypeKind::RawPointer: return 8;
         case TypeKind::DeviceBuffer:
         case TypeKind::Metadata:
         case TypeKind::MetadataView:
@@ -108,9 +104,7 @@ uint64_t typeSize(const TypePtr& type) {
         case TypeKind::Slice: return 16;
         case TypeKind::Event: return 4;
         case TypeKind::Struct: {
-            uint64_t size = 0;
-            for (auto& field : type->fields) size += typeSize(field.type);
-            return size == 0 ? 8 : size;
+            return luna::layout::productStorageSize(type);
         }
         case TypeKind::Record:
             return luna::layout::valueSize(type);
@@ -138,6 +132,7 @@ uint64_t typeAlignment(const TypePtr& type) {
         case TypeKind::Event: return 4;
         case TypeKind::Array: return typeAlignment(type->inner);
         case TypeKind::Struct:
+            return luna::layout::productStorageAlignment(type);
         case TypeKind::Record: {
             uint64_t alignment = 1;
             for (const auto& field : type->fields)

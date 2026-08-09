@@ -74,7 +74,6 @@ uint64_t valueSizeImpl(const TypePtr& type,
         case TypeKind::USize: case TypeKind::ISize: case TypeKind::F64:
         case TypeKind::String: case TypeKind::CStr:
         case TypeKind::RawPointer: case TypeKind::Reference:
-        case TypeKind::Rc: case TypeKind::Arc:
         case TypeKind::Struct:
         case TypeKind::DeviceBuffer: case TypeKind::Iterator:
         case TypeKind::Metadata: case TypeKind::MetadataView:
@@ -139,6 +138,38 @@ uint64_t valueSize(const TypePtr& type) {
 uint64_t valueAlignment(const TypePtr& type) {
     std::unordered_set<const Type*> active;
     return valueAlignmentImpl(type, active);
+}
+
+uint64_t productStorageAlignment(const TypePtr& type) {
+    if (!type || type->kind != TypeKind::Struct) return 1;
+    uint64_t alignment = 1;
+    for (const auto& field : type->fields)
+        alignment = std::max(alignment, valueAlignment(field.type));
+    return alignment;
+}
+
+uint64_t productFieldOffset(const TypePtr& type, size_t fieldIndex) {
+    if (!type || type->kind != TypeKind::Struct) return 0;
+    uint64_t offset = 0;
+    for (size_t index = 0;
+         index < fieldIndex && index < type->fields.size(); ++index) {
+        offset = alignTo(
+            offset, valueAlignment(type->fields[index].type));
+        offset += valueSize(type->fields[index].type);
+    }
+    if (fieldIndex < type->fields.size())
+        offset = alignTo(
+            offset, valueAlignment(type->fields[fieldIndex].type));
+    return offset;
+}
+
+uint64_t productStorageSize(const TypePtr& type) {
+    if (!type || type->kind != TypeKind::Struct) return 0;
+    if (type->fields.empty()) return 1;
+    const size_t last = type->fields.size() - 1;
+    const uint64_t end = productFieldOffset(type, last) +
+        valueSize(type->fields[last].type);
+    return alignTo(end, productStorageAlignment(type));
 }
 
 uint64_t variantFieldOffset(const TypeVariant& variant, size_t fieldIndex) {

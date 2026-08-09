@@ -47,6 +47,26 @@ The compiler carries the same exact layout through allocation and every cleanup 
 custom allocator does not need a hidden header on each object. `rt_malloc/rt_free` remain
 compatibility entries for already-generated Alpha IR; new IR does not use them.
 
+## Core shared cells
+
+Ordinary Core `Rc<T>`/`Arc<T>` implement counting through these Runtime ABI v1 entries:
+
+```c
+typedef void (*LunaDropCallbackV1)(void* value_storage);
+void* rt_rc_allocate_v1(int32_t size, int32_t alignment, LunaDropCallbackV1 drop);
+void  rt_rc_retain_v1(void* pointer);
+void  rt_rc_release_v1(void* pointer);
+void* rt_arc_allocate_v1(int32_t size, int32_t alignment, LunaDropCallbackV1 drop);
+void  rt_arc_retain_v1(void* pointer);
+void  rt_arc_release_v1(void* pointer);
+```
+
+Rc counts are non-atomic. Arc retain is relaxed atomic; the final release uses
+acquire-release, invokes `drop` exactly once, and then returns the whole shared cell to the
+same Luna allocator domain. The callback destroys only the initialized payload and does not
+free the surrounding cell. These calls are a low-level Core-library boundary; the compiler
+has no Rc/Arc TypeKind or dedicated cleanup node.
+
 Non-recoverable errors call `rt_panic_cstr`. This writes the diagnostic to stderr through
 the installed console, flushes, and aborts; it does not unwind the language stack or perform
 local Drop. Recoverable errors should use `Result<T, E>`; generated code performs

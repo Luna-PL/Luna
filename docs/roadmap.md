@@ -44,7 +44,8 @@ The implementation order and completion gates are now defined by the
 
 ## Non-near-term language work
 
-- Define clearer rules for From, Drop, recursive types, and generic boundaries.
+- Complete the remaining From, partial-move initialization, and generic-specialization boundaries;
+  recursive generic Drop contracts are implemented.
 - Add more negative coverage for Places, partial moves, borrowing, and control-flow merging.
 - Keep Result and ? as explicit recoverable failure and panic as an abort boundary unless a complete RFC changes it.
 - Continue separating standard-library types from compiler builtins.
@@ -54,8 +55,9 @@ The implementation order and completion gates are now defined by the
 
 - Establish clear dependency direction among core, alloc/host, and sys.
 - Wrap Runtime status, GPU errors, errno, and foreign resources in safe adapters.
-- Wait for complete Drop, allocator-domain, and exceptional-path cleanup rules before adding general
-  heap-owning containers.
+- Ordinary Core Rc/Arc now exercise Drop and allocator-domain cleanup; gate Vec/Box and other
+  general owning containers on element initialization tracking, mutable-view invalidation, and
+  recoverable exceptional-path cleanup.
 - Define layout, lifetime, and threading boundaries before expanding C struct/union and callback FFI.
 
 ## Heterogeneous compute

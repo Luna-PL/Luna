@@ -86,14 +86,14 @@ ABI 约束。
 raw<T>
 &T
 &mut T
-rc<T>
-arc<T>
 array<T, N>
 slice<T>
 Result<T, E>
 device_buffer<T>
 (P1, P2, ...) -> R
 ```
+
+Core `Rc<T>`/`Arc<T>` 是标准库名义类型，不在此内置构造器列表中。
 
 `affine T` 和 `linear T` 可以出现在绑定、参数、返回和 callable contract 位置，
 但修饰的是 usage，不是 `T` 的 TypeId。
@@ -269,13 +269,25 @@ constexpr 行为。
 
 - 独占 product/string：Drop/Deallocate；
 - 匿名 record：递归清理其拥有型字段；纯 Copy record 不产生清理；
-- `rc<T>`：RcRelease；
-- `arc<T>`：ArcRelease；
+- Core `Rc<T>`/`Arc<T>`：作为普通名义 Drop 容器清理；retain/release
+  策略封装在可信 Core/Runtime 中，不是 compiler cleanup kind；
 - Result/enum：读取 tag 后只清理活动载荷；
 - array：按仍初始化元素执行 ArrayDrop；
 - event：必须 await 或合法转移；
 - device buffer：必须显式释放或合法转移；
 - 借用、裸 Copy 指针、标量：不释放来源资源。
+
+编译器会为每个冻结类型派生 typed ResourceContract：owned relation、固有 usage、cleanup
+action、lifetime、resource-management strategy、release domain，以及 cleanup 是否递归。MoonIR 只记录
+最终 contract，源码 metadata 不能构造或弱化它。`Drop::drop(&mut T) -> unit` 是不可失败的
+就地 finalizer；随后由编译器递归清理拥有型字段，再释放外层 allocation。该顺序同样适用于
+泛型名义实例，且不依赖声明顺序。
+在泛型 Drop body 尚未 monomorphize 前，泛型自定义 Drop impl 的 target layout 必须保持
+representation-stable；inline type-parameter-dependent storage 会被拒绝。
+
+`Rc<T>`/`Arc<T>` 不是源码内置类型构造器，也没有专用 ResourceManagement
+枚举。它们的 handle 因普通 `Drop` 合约而为 Affine，所有权复制通过
+Core `Clone` 显式完成。
 
 组合 usage 使用 `Linear > Affine > Copy`。该规则不能因某条常见路径只使用 Copy
 variant 而放宽。
@@ -298,6 +310,8 @@ enum/Result 使用 8 字节 tag storage 和 8 字节对齐 payload。该指针�
 
 这些数字不得自动推广到 32 位目标、跨版本 Moon 容器或 C ABI。`type_size` 当前
 报告的是第 2 层事实。
+`type_size::<T>()`/`type_alignment::<T>()` 报告值槽布局；因此
+pointer-represented 具名 product 是 8/8，而不是字段内联大小之和。
 
 ## 11. 边界
 

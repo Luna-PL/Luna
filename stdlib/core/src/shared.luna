@@ -1,0 +1,45 @@
+package org.luna.core;
+
+// Ordinary nominal shared-owner handles. Their allocator and count policy is
+// library code; the type system sees only affine resource-bearing structs.
+export struct Rc<T> {
+    pointer: raw<T>;
+}
+
+export struct Arc<T> {
+    pointer: raw<T>;
+}
+
+impl<T> Drop for Rc<T> {
+    fn drop(value: &mut Rc<T>) -> unit {
+        shared_runtime::rc_release(
+            pointer_cast::<u8>(value.pointer)
+        );
+    }
+}
+
+impl<T> Drop for Arc<T> {
+    fn drop(value: &mut Arc<T>) -> unit {
+        shared_runtime::arc_release(
+            pointer_cast::<u8>(value.pointer)
+        );
+    }
+}
+
+impl<T> resource::Clone for Rc<T> {
+    fn clone(value: &Rc<T>) -> affine Rc<T> {
+        shared_runtime::rc_retain(
+            pointer_cast::<u8>(value.pointer)
+        );
+        return new Rc<T>(value.pointer);
+    }
+}
+
+impl<T> resource::Clone for Arc<T> {
+    fn clone(value: &Arc<T>) -> affine Arc<T> {
+        shared_runtime::arc_retain(
+            pointer_cast::<u8>(value.pointer)
+        );
+        return new Arc<T>(value.pointer);
+    }
+}

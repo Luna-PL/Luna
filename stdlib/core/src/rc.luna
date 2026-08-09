@@ -1,0 +1,20 @@
+package org.luna.core;
+module Rc;
+
+export fn new<T>(affine value: T) -> affine Rc<T> {
+    let erased = shared_runtime::rc_allocate(
+        type_size::<T>(),
+        type_alignment::<T>(),
+        drop_callback::<T>()
+    );
+    let storage: raw<T> = pointer_cast::<T>(erased);
+    *storage = move value;
+    return new Rc<T>(storage);
+}
+
+export fn clone<T>(value: &Rc<T>) -> affine Rc<T> {
+    shared_runtime::rc_retain(
+        pointer_cast::<u8>(value.pointer)
+    );
+    return new Rc<T>(value.pointer);
+}

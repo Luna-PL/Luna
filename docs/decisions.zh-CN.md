@@ -83,7 +83,8 @@ Moon 容器、签名验证、独立 MoonRuntime 装载和热点 JIT 尚未成为
 **边界**
 
 多次执行的 context、循环和 GPU in-flight 状态必须证明每条路径具有一致的 usage
-与 loan 状态。通用堆拥有容器仍等待完整 Drop 协议。
+与 loan 状态。泛型递归 Drop 已完成；通用堆拥有容器仍等待稳定的 element move-out/
+initialization tracking 与 mutable-view 失效规则。
 
 ## D005：`Result`、`?` 与 abort 型 `panic`
 

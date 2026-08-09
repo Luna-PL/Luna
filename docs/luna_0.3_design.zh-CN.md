@@ -274,7 +274,7 @@ relation 与 usage 正交，因此 borrow binding 也取得该默认值，但仍
 类型/initializer 固有要求中更强的一方，形成最终 contract。MoonIR 保留这些可验证的
 per-binding contract，但绝不包含 usage-scope 节点或运行时操作。
 
-### C011：Rc/Arc 迁移为容器（Confirmed direction）
+### C011：Rc/Arc 迁移为容器（Confirmed, implemented）
 
 `Rc<T>`/`Arc<T>` 迁移为普通名义库容器，通过最小 Resource/Drop protocol 表达引用
 计数、clone、cleanup、allocator domain 和必要的线程安全事实。0.3 编译器删除对应
@@ -287,6 +287,13 @@ TypeKind、Parser、Sema 和 codegen 特判，不保留 0.2 intrinsic lowering�
 是普通库容器，循环由程序使用 Weak 打破，不提供 tracing cycle collector。Drop 必须
 infallible；Rc 使用非原子计数且不跨线程共享，Arc 使用原子计数，并要求 payload
 满足编译器推导的线程安全 sysmeta。
+
+实现边界（2026-08-09）：引用计数策略是可信 Core/Runtime 的库内实现，
+不是 compiler Resource kind。编译器只看到普通名义 struct、`Clone`、`Drop`、Affine
+handle 和 Global Luna release domain。当前语言没有跨线程传递或共享入口，因此 Arc
+payload 的 thread-safety 判定尚不可观测；任何未来并发 API 在引入可达路径时必须
+先加入 compiler-derived sysmeta 门，不得依赖用户 metadata。这是 `NP001` 的前置条件，
+不恢复 Rc/Arc TypeKind。
 
 ## 5. 单层 MoonIR
 
@@ -464,7 +471,7 @@ capability，其中只包含经审计的引用和服务；五个 analyzer 不再
 shadow identity 实施完成记录（2026-08-09）：TypeId、ShapeId、SymbolId、ContractId 与
 AbiLayoutId 已成为互不混用的 C++ 类型。canonical MoonIR type record 现在携带可重算的
 Type/Shape/ABI-layout payload，declaration record 携带可重算的 Symbol/Contract payload；
-sysmeta schema 1.2 增加封闭的 identity namespace 来投影这些 ID。verifier 会拒绝 payload
+sysmeta schema 1.2 首次增加封闭的 identity namespace 来投影这些 ID。verifier 会拒绝 payload
 不一致和不同 payload 的 hash collision；确定性测试证明相同 contract 共享 ContractId，
 不同 declaration 保持不同 SymbolId。LLVM codegen 继续消费原字段，完整 JIT/AOT suite
 没有变化。因此优先级第 5 项已通过完成门。
@@ -490,6 +497,34 @@ Sema 会拒绝。Copy 类型的裸 allocation 不会被隐式提升为 affine；
 和运行时操作均不进入 lowering。嵌套/覆盖/binder/lambda 正例、linearity 与 weakening 反例、
 JIT/AOT 行为及全部 48 项测试均通过。因此优先级第 7 项已通过完成门。下一项是第 8 项：
 完成通用 Resource/Drop contract 与递归 cleanup 路径。
+
+Resource/Drop 实施完成记录（2026-08-09）：`Drop` 现直接解析为规范
+`org.luna.core::resource::Drop` identity，不存在 legacy language 分支。编译器为每个冻结
+类型派生一个 typed ResourceContract，其中包含 relation、usage、cleanup strategy、lifetime、
+management/release domain 与 recursive-cleanup facts；sysmeta schema 1.3 和 MoonIR verifier 会携带并验证该
+contract。源码 `Drop::drop(&mut T) -> unit` 是不可失败的就地 finalizer：其后由编译器递归
+清理仍拥有的字段，最后才按实际 allocation strategy 释放外层 storage。因此具名 product、
+匿名 record、array、Result/enum 的活动 payload、shared payload 与泛型名义实例统一使用
+同一递归 cleanup 实现。泛型 Drop impl 的 type parameter 按 impl parameter 解析；在 Drop
+body 尚未 monomorphize 前，其 target layout 必须 representation-stable，inline
+type-parameter-dependent storage 会被拒绝。Drop contract 在普通 body 之前注册，所以语义与声明顺序无关。具名 product storage 的字段
+offset 现按实际 value size/alignment 计算，包括 pointer-represented nominal field。递归、
+泛型、声明顺序正例以及 signature/Copy 弱化反例均通过 JIT/AOT 与完整测试。因此优先级
+第 8 项已通过完成门；下一项是第 9 项：实现普通 Core `Rc`/`Arc` 容器并删除其 compiler
+special kind。
+
+Rc/Arc 容器实施完成记录（2026-08-09）：`Rc<T>`/`Arc<T>` 现由
+`org.luna.core` 声明为普通泛型名义 struct，`Rc::new`/`Arc::new`、prelude
+`rc`/`arc` 与 `resource::Clone` 都是普通库函数/trait。共享单元使用 Runtime
+ABI v1 分配、非原子/atomic retain-release 以及 compiler 生成的 type-erased Drop
+callback，最后一个 handle 精确一次清理 payload。parser token、TypeKind、Sema/
+codegen cleanup、`clone` intrinsic 与旧 Runtime 入口已删除；`rc new`/`arc new` 只在
+冻结的 0.2 corpus 中由旧编译器重放，0.3 明确拒绝。JIT/AOT、嵌套 Drop、
+显式 clone、隐式复制拒绝、MoonIR 普通 nominal 与 LLVM Runtime ABI 证据均通过；
+完整 50 项 CTest、strict-warning 构建与资源路径 ASan/UBSan 均通过。
+当前具名 product 仍为指针表示，因而 handle wrapper 的 inline/transparent ABI 优化
+不在本次语义迁移中假定完成。因此优先级第 9 项已通过完成门；下一项是
+第 10 项：原地将现有 MoonIR 重构为 table-referenced canonical IR。
 
 | 顺序 | 优先级 | 工作 | 完成门 |
 |---:|---|---|---|

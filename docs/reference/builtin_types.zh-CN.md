@@ -52,8 +52,6 @@
 | `raw<T>` | Value/Structural builtin constructor | 恰好一个 `T` | Copy，可由显式契约改为 Linear owner | 8 字节裸指针；FFI 支持 |
 | `&T` | Value/Structural | 一个 `T` | Copy handle；SharedBorrow relation | 8 字节；loan 受检查 |
 | `&mut T` | Value/Structural | 一个 `T` | Copy handle；MutableBorrow relation | 8 字节；独占 loan |
-| `rc<T>` | Value/Structural builtin constructor | 恰好一个 `T` | Affine | 8 字节引用计数句柄；`clone` 显式 retain |
-| `arc<T>` | Value/Structural builtin constructor | 恰好一个 `T` | Affine | 8 字节原子引用计数句柄；`clone` 显式 retain |
 | `array<T, N>` | Value/Structural | 一个 `T` 和非负编译期整数 `N` | 由 `T` 决定 | 内联 `N * size(T)`；Frozen core |
 | `slice<T>` | Value/Structural | 恰好一个 `T` | Copy handle + 来源 shared loan | 16 字节 `{data,length}`；当前只读 |
 | `Result<T, E>` | Value/Structural | 恰好两个载荷类型 | `join(usage(T), usage(E))` | inline ADT v1；核心语义 Frozen |
@@ -116,6 +114,8 @@
 | `IntoIterator<Item, Iter>` | 名义 trait | 隐式、唯一静态转换 |
 | `FromIterator<Item, Builder>` | 名义 trait | `collect` 静态 builder 协议 |
 | `Map/Filter/Take` | 名义 enum adapter | 可与编译器融合 recipe 对应 |
+| `resource::Clone` | 名义 trait | 普通静态 trait/method 解析；无 `clone` intrinsic |
+| `Rc<T>` / `Arc<T>` | 名义 struct | 仅使用通用 generic/Drop/trait 规则；计数策略属于 Core/Runtime |
 
 同形状、同方法名的用户 trait 不等于 Core trait。package/module/nominal identity 是
 协议选择的一部分。
@@ -132,7 +132,7 @@
 | references | 是 | 仅受支持标量引用 | buffer borrow | 作为类型可反射 |
 | product/enum/Result | 是 | 否 | 当前否 | 类型反射 |
 | array/slice | 是 | 否 | 当前 kernel ABI 否 | 类型/常量信息 |
-| rc/arc | 是 | 否 | 否 | 只反射类型 |
+| Core `Rc`/`Arc` | 是 | 否 | 否 | 作为普通名义类型反射 |
 | device buffer/event | 是 | 否 | 通过专用 ABI | 否 |
 | Meta/Compiler views | 编译期 | 否 | 否 | 是 |
 
@@ -161,7 +161,7 @@
 - 所有权：`tests/fixtures/ownership_*.luna`
 - array/slice：`tests/fixtures/safe_arrays.luna`、`slice_*.luna`
 - Result/enum：`tests/fixtures/result_*.luna`、`enum_match*.luna`
-- rc/arc：`tests/fixtures/rc_arc.luna`
+- Core Rc/Arc：`tests/rc_arc_core.cmake` 与 `tests/fixtures/rc_arc_core_app/`
 - FFI：`tests/ffi_aot.cmake`
 - kernel/event：`tests/gpu_target_split.cmake`、`tests/moon_cost_boundaries.cmake`
 - Core 类型：`tests/core_surface.cmake`

@@ -1,0 +1,13 @@
+struct Resource {
+    marker: i32;
+}
+
+impl Drop for Resource {
+    fn drop(resource: &mut Resource) -> i32 {
+        return resource.marker;
+    }
+}
+
+fn main() -> i32 {
+    return 0;
+}

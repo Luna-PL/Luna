@@ -89,14 +89,15 @@ Current source syntax can form:
 raw<T>
 &T
 &mut T
-rc<T>
-arc<T>
 array<T, N>
 slice<T>
 Result<T, E>
 device_buffer<T>
 (P1, P2, ...) -> R
 ```
+
+Core `Rc<T>`/`Arc<T>` are standard-library nominal types, not builtin constructors in this
+list.
 
 `affine T` and `linear T` may occur in bindings, parameters, returns, and callable
 contracts. They qualify usage, not the TypeId of `T`.
@@ -285,13 +286,26 @@ Cleanup responsibility comes from owned-value usage and resource-management stra
 
 - exclusive product/string: Drop/Deallocate;
 - anonymous record: recursively clean only owned fields; a Copy-only record has no cleanup;
-- `rc<T>`: RcRelease;
-- `arc<T>`: ArcRelease;
+- Core `Rc<T>`/`Arc<T>`: ordinary nominal Drop-container cleanup; retain/release policy is
+  encapsulated by trusted Core/Runtime code, not a compiler cleanup kind;
 - Result/enum: inspect the tag, then clean only the active payload;
 - array: ArrayDrop for elements that remain initialized;
 - event: must be awaited or legally transferred;
 - device buffer: must be explicitly released or legally transferred;
 - borrow, raw Copy pointer, and scalar: do not release the source resource.
+
+The compiler derives a typed ResourceContract for every frozen type: owned relation, inherent
+usage, cleanup action, lifetime, resource-management strategy, release domain, and whether cleanup is
+recursive. MoonIR records only this final contract. Source metadata cannot construct or weaken
+it. `Drop::drop(&mut T) -> unit` is an in-place, infallible finalizer; compiler-derived cleanup
+then recursively destroys owned fields before the outer allocation is released. This ordering
+also applies to generic nominal instances and is independent of declaration order.
+Until generic Drop bodies are monomorphized, a generic custom Drop impl must have a
+representation-stable target layout; inline type-parameter-dependent storage is rejected.
+
+`Rc<T>` and `Arc<T>` are neither source builtin type constructors nor special
+ResourceManagement enum cases. Their handles are Affine because of their ordinary `Drop`
+contract, and ownership duplication is explicit through Core `Clone`.
 
 Compound usage follows `Linear > Affine > Copy`. A common path that uses only a Copy
 variant cannot weaken this rule.
@@ -315,6 +329,8 @@ The pointer representation is an implementation checkpoint, not a language-level
 
 These numbers must not be generalized to 32-bit targets, cross-version Moon containers, or
 the C ABI. `type_size` currently reports facts from layer 2.
+`type_size::<T>()` and `type_alignment::<T>()` report value-slot layout; a
+pointer-represented named product is therefore 8/8, not the sum of its source fields.
 
 ## 11. Boundaries
 

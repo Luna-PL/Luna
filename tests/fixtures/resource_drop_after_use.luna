@@ -1,0 +1,16 @@
+enum Signal {
+    Empty;
+    Ready(i32);
+}
+
+fn main() -> i32 {
+    let signal = Signal::Ready(1);
+    return 0;
+}
+
+// The contract must apply independently of declaration order.
+impl Drop for Signal {
+    fn drop(signal: &mut Signal) -> unit {
+        print(51);
+    }
+}

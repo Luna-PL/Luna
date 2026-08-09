@@ -12,6 +12,55 @@
 #include <iomanip>
 #include <set>
 #include <sstream>
+#include <unordered_set>
+
+namespace {
+
+bool hasLayoutDependentTypeParameter(
+    const TypePtr& type,
+    std::unordered_set<const Type*>& active) {
+    if (!type || !active.insert(type.get()).second) return false;
+    bool dependent = type->kind == TypeKind::TypeParam;
+    if (!dependent && type->kind == TypeKind::Array)
+        dependent = hasLayoutDependentTypeParameter(type->inner, active);
+    if (!dependent && type->kind == TypeKind::Record)
+        for (const auto& field : type->fields)
+            dependent = dependent ||
+                hasLayoutDependentTypeParameter(field.type, active);
+    if (!dependent && type->kind == TypeKind::Enum)
+        for (const auto& variant : type->variants)
+            for (const auto& field : variant.fields)
+                dependent = dependent ||
+                    hasLayoutDependentTypeParameter(field, active);
+    if (!dependent && type->kind == TypeKind::Result)
+        for (const auto& argument : type->typeArgs)
+            dependent = dependent ||
+                hasLayoutDependentTypeParameter(argument, active);
+    // Pointer-represented nominal products, references, raw pointers, shared
+    // handles, slices, and device handles are representation barriers.
+    active.erase(type.get());
+    return dependent;
+}
+
+bool genericDropLayoutDependsOnParameter(const TypePtr& target) {
+    if (!target) return false;
+    std::unordered_set<const Type*> active;
+    if (target->kind == TypeKind::Struct) {
+        for (const auto& field : target->fields)
+            if (hasLayoutDependentTypeParameter(field.type, active))
+                return true;
+        return false;
+    }
+    if (target->kind == TypeKind::Enum) {
+        for (const auto& variant : target->variants)
+            for (const auto& field : variant.fields)
+                if (hasLayoutDependentTypeParameter(field, active))
+                    return true;
+    }
+    return false;
+}
+
+} // namespace
 
 luna::ownership::Usage BodyAnalyzer::inherentUsageForInitializer(
     Expr* initializer, const TypePtr& type) {
@@ -613,6 +662,15 @@ void BodyAnalyzer::analyzeImpl(ImplDecl* decl) {
         if (dropIt != implementation.end()) drop = dropIt->second;
         const TypePtr target = mContext.resolveTypeAST(decl->targetType.get(), typeBindings);
         bool valid = drop != nullptr;
+        if (!decl->typeParams.empty() &&
+            genericDropLayoutDependsOnParameter(target)) {
+            mContext.error(
+                "generic Drop target has type-parameter-dependent storage "
+                "layout; use representation-stable nominal or pointer "
+                "indirection until Drop bodies are monomorphized",
+                decl->line, decl->col);
+            valid = false;
+        }
         if (drop && !drop->typeParams.empty()) {
             mContext.error("Drop::drop may not be generic", drop->line, drop->col);
             valid = false;
@@ -639,7 +697,10 @@ void BodyAnalyzer::analyzeImpl(ImplDecl* decl) {
         if (valid) {
             const std::string targetId = mContext.typeIdentity(target);
             for (auto& [_, declared] : mContext.mDeclaredTypes) {
-                if (declared && mContext.typeIdentity(declared) == targetId) {
+                if (declared &&
+                    (mContext.typeIdentity(declared) == targetId ||
+                     (!declared->nominalId.empty() &&
+                      declared->nominalId == target->nominalId))) {
                     declared->sysmeta.resource.needsDrop = true;
                     declared->sysmeta.abi.dropGlueSymbol =
                         drop->generatedSymbolName;
@@ -733,7 +794,7 @@ TypePtr BodyAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
         info.kind = SymbolKind::Variable;
         info.type = declaredType;
         info.isConst = ls->isConst;
-        info.isHeapAllocated = isHeap || declaredType->isHeapType();
+        info.isHeapAllocated = isHeap || typeRequiresCleanup(declaredType);
         if (auto* reflected =
                 dynamic_cast<CallExpr*>(ls->initializer.get());
             reflected && !reflected->compileTimeDeclarationId.empty())
@@ -1737,9 +1798,6 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
         TypePtr objectType = mContext.resolved(analyzeExpr(fa->object.get()));
         if (objectType->kind == TypeKind::Reference && objectType->inner)
             objectType = mContext.resolved(objectType->inner);
-        if ((objectType->kind == TypeKind::Rc ||
-             objectType->kind == TypeKind::Arc) && objectType->inner)
-            objectType = mContext.resolved(objectType->inner);
         if (objectType->kind != TypeKind::Struct &&
             objectType->kind != TypeKind::Record &&
             objectType->kind != TypeKind::Metadata) {
@@ -1847,17 +1905,7 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
                               "primitive allocation initializer");
             }
         }
-        switch (ha->storage) {
-            case HeapStorageKind::Unique:
-                ha->resultType = ha->allocatedType;
-                break;
-            case HeapStorageKind::Rc:
-                ha->resultType = Type::makeRc(ha->allocatedType);
-                break;
-            case HeapStorageKind::Arc:
-                ha->resultType = Type::makeArc(ha->allocatedType);
-                break;
-        }
+        ha->resultType = ha->allocatedType;
         return ha->resultType;
     }
     if (auto* mv = dynamic_cast<MoveExpr*>(expr)) {
@@ -1869,8 +1917,19 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
     }
     if (auto* dr = dynamic_cast<DerefExpr*>(expr)) {
         TypePtr op = mContext.resolved(analyzeExpr(dr->operand.get()));
-        if (op->kind == TypeKind::Reference && op->inner) return op->inner;
-        mContext.error("Cannot dereference non-reference type");
+        if (op->kind == TypeKind::InferenceVar) {
+            auto inner = mContext.mConstraints.fresh();
+            mContext.constrain(
+                op, Type::makeReference(inner), "dereference operand");
+            dr->resultType = inner;
+            return inner;
+        }
+        if ((op->kind == TypeKind::Reference ||
+             op->kind == TypeKind::RawPointer) && op->inner) {
+            dr->resultType = mContext.resolved(op->inner);
+            return dr->resultType;
+        }
+        mContext.error("Cannot dereference non-reference or non-raw-pointer type");
         return TyUnknown;
     }
     if (auto* ad = dynamic_cast<AddrOfExpr*>(expr)) {
@@ -2407,6 +2466,41 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
         return selected->returnType;
     }
     if (id) {
+        if (id->name == "pointer_cast") {
+            if (call->typeArgASTs.size() != 1 || call->args.size() != 1) {
+                mContext.error(
+                    "pointer_cast expects one target type argument and one raw pointer",
+                    call->line, call->col);
+                return TyUnknown;
+            }
+            TypePtr source = mContext.resolved(
+                analyzeExpr(call->args.front().get()));
+            if (source->kind != TypeKind::RawPointer) {
+                mContext.error("pointer_cast source must be raw<T>, got " +
+                      source->toString(), call->line, call->col);
+                return TyUnknown;
+            }
+            TypePtr target = mContext.resolved(
+                mContext.resolveTypeAST(call->typeArgASTs.front().get(), {}));
+            call->typeArgs = {target};
+            call->intrinsicType = target;
+            call->resultType = Type::makeRawPointer(target);
+            return call->resultType;
+        }
+        if (id->name == "drop_callback") {
+            if (call->typeArgASTs.size() != 1 || !call->args.empty()) {
+                mContext.error(
+                    "drop_callback expects one type argument and no values",
+                    call->line, call->col);
+                return TyUnknown;
+            }
+            TypePtr target = mContext.resolved(
+                mContext.resolveTypeAST(call->typeArgASTs.front().get(), {}));
+            call->typeArgs = {target};
+            call->intrinsicType = target;
+            call->resultType = Type::makeRawPointer(TyU8);
+            return call->resultType;
+        }
         if (id->name == "range") {
             if (call->args.size() != 2) {
                 mContext.error("range expects start and end integer values",
@@ -2490,22 +2584,6 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
             call->intrinsicType = TyNever;
             call->resultType = TyNever;
             return TyNever;
-        }
-        if (id->name == "clone") {
-            if (call->args.size() != 1) {
-                mContext.error("clone expects exactly one rc<T> or arc<T> handle",
-                      call->line, call->col);
-                return TyUnknown;
-            }
-            TypePtr handle = mContext.resolved(analyzeExpr(call->args.front().get()));
-            if (handle->kind != TypeKind::Rc && handle->kind != TypeKind::Arc) {
-                mContext.error("clone is only defined for rc<T> and arc<T>, got " +
-                      handle->toString(), call->line, call->col);
-                return TyUnknown;
-            }
-            call->returnUsage = luna::ownership::Usage::Affine;
-            call->typeArgs = {handle};
-            return handle;
         }
         if (id->name == "declaration_of" ||
             id->name == "declaration_id" ||
@@ -2635,7 +2713,7 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
     if (id && (id->name == "type_of" || id->name == "type_kind" ||
                id->name == "type_id" || id->name == "type_shape" ||
                id->name == "type_domain" || id->name == "type_nominal" ||
-               id->name == "type_size" ||
+               id->name == "type_size" || id->name == "type_alignment" ||
                id->name == "type_field_count" || id->name == "type_field_name" ||
                id->name == "type_field_type" || id->name == "type_variant_count" ||
                id->name == "type_variant_name" || id->name == "type_variant_field_count" ||
@@ -3074,6 +3152,7 @@ TypePtr BodyAnalyzer::analyzeMemberCall(
         std::string traitId;
         FunctionDecl* method = nullptr;
         TypePtr receiverType;
+        TypeVec implArguments;
     };
     std::vector<Candidate> candidates;
     for (const auto& [traitId, targets] : mContext.mImpls) {
@@ -3098,7 +3177,106 @@ TypePtr BodyAnalyzer::analyzeMemberCall(
                 mContext.resolved(expected->inner), target);
         if (acceptsReceiver)
             candidates.push_back(
-                {traitId, method->second, expected});
+                {traitId, method->second, expected, {}});
+    }
+
+    const auto matchImplPattern = [&](const TypePtr& patternRoot,
+                                      const TypePtr& actualRoot,
+                                      const std::vector<std::string>& parameters,
+                                      std::unordered_map<std::string, TypePtr>& bindings) {
+        std::function<bool(const TypePtr&, const TypePtr&)> match =
+            [&](const TypePtr& patternValue,
+                const TypePtr& actualValue) -> bool {
+                const TypePtr pattern = mContext.resolved(patternValue);
+                const TypePtr actual = mContext.resolved(actualValue);
+                if (!pattern || !actual) return false;
+                if (pattern->kind == TypeKind::TypeParam &&
+                    std::find(parameters.begin(), parameters.end(),
+                              pattern->name) != parameters.end()) {
+                    auto existing = bindings.find(pattern->name);
+                    if (existing == bindings.end()) {
+                        bindings[pattern->name] = actual;
+                        return true;
+                    }
+                    return luna::types::sameType(existing->second, actual);
+                }
+                if (pattern->kind != actual->kind ||
+                    pattern->isMutable != actual->isMutable ||
+                    pattern->arrayLength != actual->arrayLength)
+                    return false;
+                if (!pattern->nominalId.empty() &&
+                    pattern->nominalId != actual->nominalId)
+                    return false;
+                if (pattern->typeArgs.size() != actual->typeArgs.size())
+                    return false;
+                for (size_t index = 0; index < pattern->typeArgs.size(); ++index)
+                    if (!match(pattern->typeArgs[index], actual->typeArgs[index]))
+                        return false;
+                if (static_cast<bool>(pattern->inner) !=
+                    static_cast<bool>(actual->inner))
+                    return false;
+                return !pattern->inner || match(pattern->inner, actual->inner);
+            };
+        return match(patternRoot, actualRoot);
+    };
+
+    // Exact impl lookup above remains the fast path. Generic impls are
+    // ordinary templates: match their target nominal pattern, then route the
+    // selected method through the existing function monomorphizer.
+    if (mContext.mProgram) {
+        for (const auto& declaration : mContext.mProgram->declarations) {
+            auto* implementation = dynamic_cast<ImplDecl*>(declaration.get());
+            if (!implementation || implementation->typeParams.empty() ||
+                implementation->trait.resolvedTraitId.empty())
+                continue;
+            const std::string traitId =
+                implementation->trait.resolvedTraitId;
+            if (traitId == luna::sysmeta::DropTraitId ||
+                traitId == luna::sysmeta::FromTraitId)
+                continue;
+            std::unordered_map<std::string, TypePtr> patternBindings;
+            for (const auto& parameter : implementation->typeParams)
+                patternBindings[parameter] = Type::makeTypeParam(parameter);
+            TypePtr pattern = mContext.resolved(mContext.resolveTypeAST(
+                implementation->targetType.get(), patternBindings));
+            std::unordered_map<std::string, TypePtr> concreteBindings;
+            if (!matchImplPattern(pattern, target,
+                                  implementation->typeParams,
+                                  concreteBindings))
+                continue;
+            auto method = std::find_if(
+                implementation->methods.begin(), implementation->methods.end(),
+                [&](const std::unique_ptr<FunctionDecl>& candidate) {
+                    return candidate && candidate->name == methodName;
+                });
+            if (method == implementation->methods.end() ||
+                !*method || (*method)->params.empty())
+                continue;
+            TypeVec arguments;
+            bool complete = true;
+            for (const auto& parameter : implementation->typeParams) {
+                auto found = concreteBindings.find(parameter);
+                if (found == concreteBindings.end()) {
+                    complete = false;
+                    break;
+                }
+                arguments.push_back(found->second);
+            }
+            if (!complete) continue;
+            TypePtr expected = substituteNominalType(
+                mContext.resolved((*method)->params.front().inferredType),
+                concreteBindings);
+            bool acceptsReceiver =
+                luna::types::sameType(expected, receiver) ||
+                luna::types::sameType(expected, target);
+            if (expected->kind == TypeKind::Reference && expected->inner)
+                acceptsReceiver = luna::types::sameType(
+                    mContext.resolved(expected->inner), target);
+            if (acceptsReceiver)
+                candidates.push_back(
+                    {traitId, method->get(), expected,
+                     std::move(arguments)});
+        }
     }
 
     if (candidates.empty()) {
@@ -3121,7 +3299,31 @@ TypePtr BodyAnalyzer::analyzeMemberCall(
     }
 
     auto selected = candidates.front();
-    FunctionDecl* method = selected.method;
+    FunctionDecl* sourceMethod = selected.method;
+    FunctionDecl* method = sourceMethod;
+    if (!selected.implArguments.empty()) {
+        method = mContext.monomorphize(
+            sourceMethod, selected.implArguments);
+        if (method && mContext.mProgram) {
+            const bool newlyCreated =
+                !mContext.mGeneratedInstances.empty() &&
+                mContext.mGeneratedInstances.back().get() == method;
+            if (newlyCreated) {
+                mContext.mProgram->declarations.push_back(
+                    std::move(mContext.mGeneratedInstances.back()));
+                const std::string savedPackage = mContext.mCurrentPackageId;
+                const std::string savedModule = mContext.mCurrentModulePath;
+                mContext.setDeclarationContext(method);
+                mContext.declareFunction(method);
+                analyzeFunction(method);
+                mContext.mCurrentPackageId = savedPackage;
+                mContext.mCurrentModulePath = savedModule;
+            }
+            selected.receiverType = mContext.resolved(
+                method->params.front().inferredType);
+        }
+        if (!method) return TyUnknown;
+    }
     if (call->args.size() + 1 != method->params.size()) {
         mContext.error("trait method '" + methodName + "' expects " +
               std::to_string(method->params.size() - 1) +
@@ -3129,7 +3331,8 @@ TypePtr BodyAnalyzer::analyzeMemberCall(
         return TyUnknown;
     }
 
-    mContext.recordDeclarationReference(member, member->field.size(), method);
+    mContext.recordDeclarationReference(
+        member, member->field.size(), sourceMethod);
 
     std::unique_ptr<FieldAccessExpr> ownedMember(
         static_cast<FieldAccessExpr*>(call->callee.release()));

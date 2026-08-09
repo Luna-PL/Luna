@@ -94,7 +94,8 @@ borrows that own no resource.
 **Boundary**
 
 Multi-execution contexts, loops, and GPU in-flight state must prove consistent usage and loan
-state on every path. General heap-owning containers still await a complete Drop protocol.
+state on every path. Generic recursive Drop is complete; general heap-owning containers still
+await stable element move-out/initialization tracking and mutable-view invalidation rules.
 
 ## D005: `Result`, `?`, and abort-style `panic`
 

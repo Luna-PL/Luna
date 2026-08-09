@@ -1,0 +1,20 @@
+package org.luna.core;
+module Arc;
+
+export fn new<T>(affine value: T) -> affine Arc<T> {
+    let erased = shared_runtime::arc_allocate(
+        type_size::<T>(),
+        type_alignment::<T>(),
+        drop_callback::<T>()
+    );
+    let storage: raw<T> = pointer_cast::<T>(erased);
+    *storage = move value;
+    return new Arc<T>(storage);
+}
+
+export fn clone<T>(value: &Arc<T>) -> affine Arc<T> {
+    shared_runtime::arc_retain(
+        pointer_cast::<u8>(value.pointer)
+    );
+    return new Arc<T>(value.pointer);
+}

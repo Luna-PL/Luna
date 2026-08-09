@@ -40,7 +40,7 @@ int main() {
 
     using namespace luna::core_contracts;
     if (luna::sysmeta::SchemaMajor != 1 ||
-        luna::sysmeta::SchemaMinor != 2 ||
+        luna::sysmeta::SchemaMinor != 3 ||
         !equal(PackageId, "org.luna.core") ||
         !equal(canonical_0_3::ResultTypeId,
                "org.luna.core::result::Result") ||
@@ -72,10 +72,10 @@ int main() {
         return 1;
     }
     if (!equal(luna::sysmeta::DropTraitId,
-               legacy_0_2::DropTraitId) ||
+               canonical_0_3::DropTraitId) ||
         !equal(luna::sysmeta::FromTraitId,
                legacy_0_2::FromTraitId)) {
-        std::cerr << "0.2 compiler-trait compatibility identity changed\n";
+        std::cerr << "active compiler-trait identity is inconsistent\n";
         return 1;
     }
     if (equal(legacy_0_2::DropTraitId,
@@ -94,6 +94,15 @@ int main() {
         !equal(GlobalAllocatorDomainId,
                "org.luna.alloc::global::Global")) {
         std::cerr << "global allocator domain contract is inconsistent\n";
+        return 1;
+    }
+    if (!equal(luna::sysmeta::resourceLifetimeName(
+                   luna::sysmeta::ResourceLifetime::Lexical),
+               "lexical") ||
+        !equal(luna::sysmeta::resourceLifetimeName(
+                   luna::sysmeta::ResourceLifetime::Explicit),
+               "explicit")) {
+        std::cerr << "resource lifetime contract is inconsistent\n";
         return 1;
     }
     return 0;

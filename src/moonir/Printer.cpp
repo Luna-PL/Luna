@@ -62,6 +62,21 @@ void Printer::print(const Module& module, std::ostream& out) const {
             << " release_domain "
             << luna::sysmeta::releaseDomainName(
                 type.sysmeta.resource.releaseDomain)
+            << " lifetime "
+            << luna::sysmeta::resourceLifetimeName(
+                type.sysmeta.resource.lifetime)
+            << " relation "
+            << luna::ownership::relationName(
+                type.sysmeta.resource.relation)
+            << " usage "
+            << luna::ownership::usageName(
+                type.sysmeta.resource.usage)
+            << " cleanup "
+            << luna::ownership::cleanupActionName(
+                type.sysmeta.resource.cleanup)
+            << " recursive "
+            << (type.sysmeta.resource.recursiveCleanup
+                    ? "yes" : "no")
             << " init_tracking "
             << (type.sysmeta.resource.tracksElementInitialization
                     ? "tracked" : "none");

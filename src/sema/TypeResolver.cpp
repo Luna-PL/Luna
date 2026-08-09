@@ -320,6 +320,7 @@ private:
         if (auto* expr = dynamic_cast<const DerefExpr*>(src)) {
             auto clone = std::make_unique<DerefExpr>();
             clone->operand = cloneExpr(expr->operand.get());
+            clone->resultType = substitute(expr->resultType);
             return located(std::move(clone), src);
         }
         if (auto* expr = dynamic_cast<const AddrOfExpr*>(src)) {
@@ -742,16 +743,6 @@ TypePtr TypeResolver::resolveTypeAST(const TypeAST* ast,
                 resolveTypeAST(named->typeArgs[0].get(), bindings),
                 resolveTypeAST(named->typeArgs[1].get(), bindings));
         }
-        if (named->name == "rc" || named->name == "arc") {
-            if (named->typeArgs.size() != 1) {
-                mContext.error(named->name + "<T> requires exactly one type argument");
-                return TyUnknown;
-            }
-            TypePtr element =
-                resolveTypeAST(named->typeArgs.front().get(), bindings);
-            return named->name == "rc"
-                ? Type::makeRc(element) : Type::makeArc(element);
-        }
         if (named->name == "device_buffer") {
             if (named->typeArgs.size() != 1) {
                 mContext.error("device_buffer<T> requires exactly one element type");
@@ -886,11 +877,29 @@ TypePtr TypeResolver::declaredType(const TypeAST* ast,
     if (auto* named = dynamic_cast<const NamedTypeAST*>(ast)) {
         if (named->name == "auto") return mContext.mConstraints.fresh();
     }
-    return resolveTypeAST(ast, bindings);
+    return resolved(resolveTypeAST(ast, bindings));
 }
 
 TypePtr TypeResolver::resolved(const TypePtr& type) {
-    return mContext.mConstraints.resolve(type);
+    TypePtr result = mContext.mConstraints.resolve(type);
+    if (!result || result->nominalId.empty()) return result;
+
+    // Generic nominal instances can be created while declarations are being
+    // collected, before a later Drop impl is validated. Refresh only the
+    // compiler-derived resource/drop facts from the owning declaration so a
+    // cached Rc<T>-shaped instance cannot retain a stale Copy contract.
+    for (const auto& [_, declaration] : mContext.mDeclaredTypes) {
+        if (!declaration || declaration.get() == result.get() ||
+            declaration->nominalId != result->nominalId)
+            continue;
+        if (declaration->sysmeta.resource.needsDrop) {
+            result->sysmeta.resource = declaration->sysmeta.resource;
+            result->sysmeta.abi.dropGlueSymbol =
+                declaration->sysmeta.abi.dropGlueSymbol;
+            break;
+        }
+    }
+    return result;
 }
 
 bool TypeResolver::constrain(const TypePtr& actual, const TypePtr& expected,
@@ -967,12 +976,6 @@ std::unique_ptr<TypeAST> TypeResolver::typeToAST(const TypePtr& type) {
         auto raw = std::make_unique<NamedTypeAST>("raw");
         raw->typeArgs.push_back(typeToAST(t->inner));
         return raw;
-    }
-    if (t->kind == TypeKind::Rc || t->kind == TypeKind::Arc) {
-        auto shared = std::make_unique<NamedTypeAST>(
-            t->kind == TypeKind::Rc ? "rc" : "arc");
-        shared->typeArgs.push_back(typeToAST(t->inner));
-        return shared;
     }
     if (t->kind == TypeKind::Result && t->typeArgs.size() == 2) {
         auto result = std::make_unique<NamedTypeAST>("Result");
@@ -1078,7 +1081,11 @@ void TypeResolver::materializeInferredTypes(Program* program) {
         if (auto* h = dynamic_cast<HeapAllocExpr*>(expr)) { visitExpr(h->initializer.get()); return; }
         if (auto* m = dynamic_cast<MoveExpr*>(expr)) { visitExpr(m->operand.get()); return; }
         if (auto* b = dynamic_cast<BorrowExpr*>(expr)) { visitExpr(b->operand.get()); return; }
-        if (auto* d = dynamic_cast<DerefExpr*>(expr)) { visitExpr(d->operand.get()); return; }
+        if (auto* d = dynamic_cast<DerefExpr*>(expr)) {
+            d->resultType = resolved(d->resultType);
+            visitExpr(d->operand.get());
+            return;
+        }
         if (auto* a = dynamic_cast<AddrOfExpr*>(expr)) { visitExpr(a->operand.get()); return; }
         if (auto* t = dynamic_cast<TryExpr*>(expr)) {
             visitExpr(t->operand.get());

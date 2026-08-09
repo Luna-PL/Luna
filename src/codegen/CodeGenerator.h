@@ -129,8 +129,11 @@ private:
                                    const TypePtr& resultType);
     llvm::Value* unpackResultPayload(llvm::Value* bits, const TypePtr& type,
                                      uint64_t byteOffset = 0);
+    void emitResourceContentsCleanup(llvm::Value* value, const TypePtr& type,
+                                     const std::string& label);
     void emitOwnedPayloadCleanup(llvm::Value* value, const TypePtr& type,
                                  const std::string& label);
+    llvm::Function* getOrCreateDropCallback(const TypePtr& type);
     bool emitKernelPTX(moon::FunctionDecl* kernel);
     bool emitKernelHSACO(moon::FunctionDecl* kernel);
 
@@ -163,6 +166,7 @@ private:
     llvm::Function* mCurrentFunc = nullptr;
     bool mCurrentFunctionIsKernel = false;
     std::unordered_map<std::string, llvm::Function*> mFunctions;
+    std::unordered_map<std::string, llvm::Function*> mDropCallbacks;
     std::unordered_map<std::string, moon::FragmentDecl*> mFragments;
     std::unordered_map<std::string, moon::FragmentDecl*> mSlotDefaults;
     std::vector<std::unordered_map<std::string, moon::FragmentDecl*>> mApplyScopes;

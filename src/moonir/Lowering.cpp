@@ -287,10 +287,7 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
                     value->type = TyUnit;
             }
             if (mModule) mModule->registerType(call->intrinsicType);
-        } else if (!call->typeArgs.empty() &&
-            (call->typeArgs.front()->kind == TypeKind::Rc ||
-             call->typeArgs.front()->kind == TypeKind::Arc))
-            value->type = call->typeArgs.front();
+        }
         result = std::move(value);
     } else if (auto* launch = dynamic_cast<const ::LaunchExpr*>(expression)) {
         auto value = std::make_unique<moon::LaunchExpr>();
@@ -320,9 +317,6 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         value->type = field->resultType;
         TypePtr objectType = value->object ? value->object->type : nullptr;
         if (objectType && objectType->kind == TypeKind::Reference)
-            objectType = objectType->inner;
-        if (objectType && (objectType->kind == TypeKind::Rc ||
-                           objectType->kind == TypeKind::Arc))
             objectType = objectType->inner;
         if (objectType) {
             for (const auto& candidate : objectType->fields) {
@@ -396,6 +390,7 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
     } else if (auto* dereference = dynamic_cast<const ::DerefExpr*>(expression)) {
         auto value = std::make_unique<moon::DerefExpr>();
         value->operand = lowerExpr(dereference->operand.get());
+        value->type = dereference->resultType;
         result = std::move(value);
     } else if (auto* address = dynamic_cast<const ::AddrOfExpr*>(expression)) {
         auto value = std::make_unique<moon::AddrOfExpr>();

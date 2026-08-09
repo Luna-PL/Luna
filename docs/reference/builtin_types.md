@@ -53,8 +53,6 @@ users cannot construct a valid device-event constant.
 | `raw<T>` | Value/Structural builtin constructor | Exactly one `T` | Copy; explicit contract may make it a Linear owner | 8-byte raw pointer; FFI supported |
 | `&T` | Value/Structural | One `T` | Copy handle; SharedBorrow relation | 8 bytes; loan checked |
 | `&mut T` | Value/Structural | One `T` | Copy handle; MutableBorrow relation | 8 bytes; exclusive loan |
-| `rc<T>` | Value/Structural builtin constructor | Exactly one `T` | Affine | 8-byte reference-counted handle; `clone` explicitly retains |
-| `arc<T>` | Value/Structural builtin constructor | Exactly one `T` | Affine | 8-byte atomic reference-counted handle; `clone` explicitly retains |
 | `array<T, N>` | Value/Structural | One `T` and non-negative compile-time integer `N` | Derived from `T` | Inline `N * size(T)`; Frozen core |
 | `slice<T>` | Value/Structural | Exactly one `T` | Copy handle plus source shared loan | 16-byte `{data,length}`; currently read-only |
 | `Result<T, E>` | Value/Structural | Exactly two payload types | `join(usage(T), usage(E))` | Inline ADT v1; core semantics Frozen |
@@ -120,6 +118,8 @@ type identity:
 | `IntoIterator<Item, Iter>` | Nominal trait | Implicit, unique static conversion |
 | `FromIterator<Item, Builder>` | Nominal trait | Static builder protocol for `collect` |
 | `Map/Filter/Take` | Nominal enum adapters | May correspond to compiler fusion recipes |
+| `resource::Clone` | Nominal trait | Ordinary static trait/method resolution; no `clone` intrinsic |
+| `Rc<T>` / `Arc<T>` | Nominal structs | Generic/Drop/trait rules only; counting policy belongs to Core/Runtime |
 
 A user trait with the same shape and method names is not a Core trait. Package/module/nominal
 identity is part of protocol selection.
@@ -136,7 +136,7 @@ identity is part of protocol selection.
 | references | Yes | Supported scalar references only | Buffer borrow | Reflectable as a type |
 | product/enum/Result | Yes | No | Currently no | Type reflection |
 | array/slice | Yes | No | Current kernel ABI no | Type/constant information |
-| rc/arc | Yes | No | No | Type reflection only |
+| Core `Rc`/`Arc` | Yes | No | No | Reflected as ordinary nominal types |
 | device buffer/event | Yes | No | Dedicated ABI | No |
 | Meta/Compiler views | Compile time | No | No | Yes |
 
@@ -169,6 +169,7 @@ by removing the affected type from the inventory.
 - Result/errors: `tests/fixtures/result_*.luna`
 - builtins and layout: `tests/builtin_types_test.cpp`, `tests/type_size_test.cpp`
 - MoonIR boundary: `tests/moonir_verifier_test.cpp`
+- Core Rc/Arc: `tests/rc_arc_core.cmake`, `tests/fixtures/rc_arc_core_app/`
 
 When a row changes status, update this table, the semantic baseline, the relevant tests, and
 the changelog together.

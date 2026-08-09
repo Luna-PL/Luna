@@ -20,6 +20,12 @@ uint64_t alignTo(uint64_t value, uint64_t alignment);
 uint64_t valueSize(const TypePtr& type);
 uint64_t valueAlignment(const TypePtr& type);
 
+// Size/alignment of the heap payload behind a pointer-represented nominal
+// product, plus declaration-order field offsets within that payload.
+uint64_t productStorageSize(const TypePtr& type);
+uint64_t productStorageAlignment(const TypePtr& type);
+uint64_t productFieldOffset(const TypePtr& type, size_t fieldIndex);
+
 uint64_t variantFieldOffset(const TypeVariant& variant, size_t fieldIndex);
 uint64_t variantPayloadSize(const TypeVariant& variant);
 uint64_t enumPayloadSize(const TypePtr& type);

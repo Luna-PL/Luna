@@ -5,8 +5,6 @@
 
 enum class HeapStorageKind : uint8_t {
     Unique,
-    Rc,
-    Arc,
 };
 
 namespace luna::ownership {
@@ -85,10 +83,10 @@ inline constexpr std::string_view usageName(Usage usage) {
 }
 
 enum class CleanupAction : uint8_t {
+    None,
     Drop,
     Deallocate,
-    RcRelease,
-    ArcRelease,
+    DeviceRelease,
     ResultDrop,
     EnumDrop,
     ArrayDrop,
@@ -97,10 +95,10 @@ enum class CleanupAction : uint8_t {
 
 inline constexpr std::string_view cleanupActionName(CleanupAction action) {
     switch (action) {
+        case CleanupAction::None: return "none";
         case CleanupAction::Drop: return "drop";
         case CleanupAction::Deallocate: return "deallocate";
-        case CleanupAction::RcRelease: return "rc_release";
-        case CleanupAction::ArcRelease: return "arc_release";
+        case CleanupAction::DeviceRelease: return "device_release";
         case CleanupAction::ResultDrop: return "result_drop";
         case CleanupAction::EnumDrop: return "enum_drop";
         case CleanupAction::ArrayDrop: return "array_drop";

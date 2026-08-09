@@ -15,6 +15,14 @@ struct TestAllocator {
     size_t deallocateCalls = 0;
 };
 
+int sharedDropCalls = 0;
+int sharedDropSum = 0;
+
+void dropSharedI32(void* storage) {
+    ++sharedDropCalls;
+    sharedDropSum += *static_cast<int32_t*>(storage);
+}
+
 void* allocate(void* context, size_t size, size_t) {
     auto& allocator = *static_cast<TestAllocator*>(context);
     ++allocator.allocateCalls;
@@ -169,6 +177,54 @@ int main() {
     rt_dealloc(memory, 64, 8);
     if (state.deallocateCalls != 2) {
         std::cerr << "successful allocations were not released exactly once\n";
+        return 1;
+    }
+
+    void* rc = rt_rc_allocate_v1(
+        sizeof(int32_t), alignof(int32_t), dropSharedI32);
+    if (!rc || reinterpret_cast<uintptr_t>(rc) % alignof(int32_t) != 0) {
+        std::cerr << "Rc shared cell allocation lost its payload alignment\n";
+        return 1;
+    }
+    *static_cast<int32_t*>(rc) = 17;
+    rt_rc_retain_v1(rc);
+    rt_rc_release_v1(rc);
+    if (sharedDropCalls != 0 || state.deallocateCalls != 2) {
+        std::cerr << "Rc released a retained shared cell too early\n";
+        return 1;
+    }
+    rt_rc_release_v1(rc);
+    if (sharedDropCalls != 1 || sharedDropSum != 17 ||
+        state.deallocateCalls != 3) {
+        std::cerr << "Rc final release did not drop and deallocate exactly once\n";
+        return 1;
+    }
+
+    void* arc = rt_arc_allocate_v1(
+        sizeof(int32_t), alignof(int32_t), dropSharedI32);
+    if (!arc || reinterpret_cast<uintptr_t>(arc) % alignof(int32_t) != 0) {
+        std::cerr << "Arc shared cell allocation lost its payload alignment\n";
+        return 1;
+    }
+    *static_cast<int32_t*>(arc) = 25;
+    rt_arc_retain_v1(arc);
+    rt_arc_release_v1(arc);
+    if (sharedDropCalls != 1 || state.deallocateCalls != 3) {
+        std::cerr << "Arc released a retained shared cell too early\n";
+        return 1;
+    }
+    rt_arc_release_v1(arc);
+    if (sharedDropCalls != 2 || sharedDropSum != 42 ||
+        state.deallocateCalls != 4) {
+        std::cerr << "Arc final release did not drop and deallocate exactly once\n";
+        return 1;
+    }
+
+    const size_t callsBeforeInvalidShared = state.allocateCalls;
+    if (rt_rc_allocate_v1(-1, 8, dropSharedI32) != nullptr ||
+        rt_arc_allocate_v1(4, 3, dropSharedI32) != nullptr ||
+        state.allocateCalls != callsBeforeInvalidShared) {
+        std::cerr << "invalid shared-cell layout reached the host allocator\n";
         return 1;
     }
     return 0;

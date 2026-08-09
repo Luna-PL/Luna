@@ -1,0 +1,47 @@
+package org.luna.fixture.rc_arc_core;
+module application;
+using org.luna.core as core;
+
+struct SharedResource {
+    value: i32;
+    marker: i32;
+}
+
+impl Drop for SharedResource {
+    fn drop(value: &mut SharedResource) -> unit {
+        print(value.marker);
+    }
+}
+
+fn rc_case() -> i32 {
+    let owner = core::Rc::new(new SharedResource(7, 99));
+    let duplicate = owner.clone();
+    print((*owner.pointer).value);
+    print((*duplicate.pointer).value);
+    return 1;
+}
+
+fn arc_case() -> i32 {
+    let owner = core::Arc::new(new SharedResource(8, 199));
+    let duplicate = core::Arc::clone(borrow owner);
+    print((*owner.pointer).value);
+    print((*duplicate.pointer).value);
+    return 1;
+}
+
+fn nested_case() -> i32 {
+    let inner = core::Rc::new(new SharedResource(9, 299));
+    let outer = core::prelude::rc(move inner);
+    print((*(*outer.pointer).pointer).value);
+    return 1;
+}
+
+fn main() -> i32 {
+    let first = rc_case();
+    let second = arc_case();
+    let third = nested_case();
+    if first + second + third == 3 {
+        return 42;
+    }
+    return 0;
+}

@@ -29,7 +29,7 @@ lifetime、ABI 和可移植性工作。
 目标 package graph 必须无环：
 
 ```text
-org.luna.core                         # 无依赖，无 host service
+org.luna.core                         # 无 package 依赖；仅共享单元 Runtime ABI
        ^       ^
        |       |
 org.luna.sys  |                       # 原始 Runtime/OS 边界，仅标准库内部
@@ -43,7 +43,7 @@ org.luna.std                           # Core + Alloc + Sys host service
 
 用依赖表示：
 
-- `core`：无依赖；
+- `core`：无 package 依赖；`Rc`/`Arc` 只调用固定的 Luna 共享单元 Runtime ABI；
 - `sys -> core`；
 - `alloc -> core + sys`；
 - `std -> core + alloc + sys`。
@@ -66,12 +66,13 @@ stdlib/
 
 | Package | 首批 module | 职责 |
 |---|---|---|
-| Core | `prelude`、`option`、`result`、`error`、`convert`、`cmp`、`iter`、`resource` | 无 host 依赖值与语义协议 |
+| Core | `prelude`、`option`、`result`、`error`、`convert`、`cmp`、`iter`、`resource`、`Rc`、`Arc` | 值/语义协议与使用固定 Luna Runtime 分配域的共享容器 |
 | Sys | `alloc`、`console`、`fs`，后续 `env`/`clock` | 版本化 Runtime ABI import 与平台 status |
-| Alloc | `boxed`、`vec`、`string`，后续 `rc`/`arc` | Luna 拥有堆值与分配失败 |
+| Alloc | `boxed`、`vec`、`string` | Luna 拥有堆值与分配失败 |
 | Std | `io`、`fs`、`path`、`fmt`、`env`、`process`、`time` | 安全 host-facing API |
 
-初始 prelude 保持小型：`Option`、`Result`、`From`/`TryFrom`、`Drop` 和 iterator trait。
+初始 prelude 保持小型：`Option`、`Result`、`From`/`TryFrom`、`Drop`、`Clone`、iterator
+trait 以及可选的 `rc(value)`/`arc(value)` 普通 helper。
 不默认导入文件系统、console、process 或网络操作。未来 `std::prelude` 可重导出 `Vec`
 和 `String`，但它们的规范身份仍属于 `org.luna.alloc`。
 
@@ -166,10 +167,12 @@ truncate / clear
 6. resource contract 中的 release-domain 事实；
 7. 可失败 iterator collection 语义。
 
-前置 4–6 现已具备：Runtime ABI v1 提供 checked array layout、无需分配的
+前置 1 与 4–6 现已具备：泛型名义实例已有编译器派生的递归 Drop 与 exact-once 字段
+cleanup；Runtime ABI v1 提供 checked array layout、无需分配的
 `LunaAllocErrorV1`、事务式可失败 alloc/realloc 和 Global Luna release-domain 事实；
-`org.luna.sys::alloc` 负责转发，不解析 host table。前置 1–3 与 7 刻意留在 0.3
-language boundary，因此本轮 0.2.1 工作不会猜测将被 0.3 替换的拥有型容器语法。
+`org.luna.sys::alloc` 负责转发，不解析 host table。前置 2、3 与 7 刻意留在 0.3
+language boundary。Core `Rc<T>`/`Arc<T>` 已作为不依赖 element move-out 的第一个
+普通拥有型容器纵向切片完成；`Vec<T>` 仍等待其余前置。
 
 在此之前，定长 `array<T, N>` 和借用 `slice<T>` 仍是安全容器基线。
 
@@ -282,8 +285,8 @@ handle 不得作为 Luna heap pointer 暴露。
 
 1. **Core trait：** `Drop`、`Clone`、`Default`、`From`、`TryFrom`、`Eq`、`Ord`、`Hash` 和 iterator
    protocol。编译器合作必须使用精确 Core 身份。
-2. **拥有 resource：** 在 Vec 之外还需要 `Box<T>`；当前 intrinsic Rc/Arc 只在 allocator 和
-   thread-safety 事实可表达后迁移。
+2. **拥有 resource：** 已有普通 Core `Rc<T>`/`Arc<T>`；在 Vec 之外仍需要
+   `Box<T>`。Arc 的跨线程入口必须等待 compiler-derived thread-safety sysmeta。
 3. **Collection：** `HashMap`/`HashSet` 等 Vec、String、Eq、Hash 和 panic/failure cleanup 稳定后再做。
    deque 是后续专用化，不是前置。
 4. **Host utility：** `env`、`process` 和 monotonic `time` 在各自 Runtime capability 版本化后加入。
@@ -299,8 +302,8 @@ package 或 milestone。它们不得阻塞第一个可用 IO/Vec/error surface�
 
 ### Stage A：契约与 package skeleton
 
-- 已实现：集中定义 Result、From、Drop、iterator 与 resource 的精确 0.3 Core 身份；与当前
-  生效的 0.2 身份并列 staging，供编译器一次性切换；
+- 已实现：集中定义 Result、From、Drop、Clone、iterator 与 resource 的精确
+  0.3 Core 身份；编译器已一次性切换，不保留 0.2 language branch；
 - 已实现：`org.luna.sys` 与 `org.luna.alloc` dependency skeleton；
 - 已实现：append-only console-input 与 filesystem Runtime ABI capability 合约，并兼容已发布的
   v1 结构前缀；
@@ -317,6 +320,8 @@ service table。以下 safe Luna API 仍等待 0.3 language surface 的一次性
 
 - 已作为临时 0.2.1 adapter 实现：明确类型的 stdout/stderr text 与 i32 write、flush、
   raw byte I/O、lossy line input 和 fallback-based i32 parse；
+- 已实现：普通名义 `Rc<T>`/`Arc<T>`、显式 `Clone`、递归 Drop callback 与
+  Runtime ABI v1 retain/release；
 - `IoError` 与不分配错误映射；
 - 在 Global Luna allocator 上实现 `Box<T>`、`Vec<T>` 和 `String`；
 - `try_push`、`try_reserve`、`write_all` 和基本整文件 helper；
@@ -333,7 +338,6 @@ service table。以下 safe Luna API 仍等待 0.3 language surface 的一次性
 ### Stage D：更广标准库
 
 - HashMap/HashSet 与更完整 text/path support；
-- Rc/Arc 从 compiler intrinsic 迁移；
 - 网络、并发与 async 只在独立设计后加入。
 
 ## 10. 验收标准

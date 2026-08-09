@@ -1,0 +1,29 @@
+package org.luna.core;
+module shared_runtime;
+
+// Private trusted-runtime bridge used by the ordinary Rc/Arc containers.
+// The callback is compiler-produced type-erased Drop glue for one stored
+// Luna value. Runtime invokes it exactly once before freeing the shared cell.
+extern "C" fn rc_allocate(
+    size: i32,
+    alignment: i32,
+    drop: raw<u8>
+) -> raw<u8> as "rt_rc_allocate_v1";
+
+extern "C" fn rc_retain(pointer: raw<u8>)
+    as "rt_rc_retain_v1";
+
+extern "C" fn rc_release(pointer: raw<u8>)
+    as "rt_rc_release_v1";
+
+extern "C" fn arc_allocate(
+    size: i32,
+    alignment: i32,
+    drop: raw<u8>
+) -> raw<u8> as "rt_arc_allocate_v1";
+
+extern "C" fn arc_retain(pointer: raw<u8>)
+    as "rt_arc_retain_v1";
+
+extern "C" fn arc_release(pointer: raw<u8>)
+    as "rt_arc_release_v1";

@@ -21,6 +21,16 @@
 - Split Sema behind component-scoped capabilities and introduced distinct
   shadow TypeId, ShapeId, SymbolId, ContractId, and AbiLayoutId identities plus
   verified sysmeta projections.
+- Added compiler-derived generic Resource/Drop contracts, recursive exact-once
+  cleanup for named/anonymous/array/active-ADT payloads, and Runtime-callable
+  type-erased Drop glue.
+- Replaced compiler-special `rc new`/`arc new`, Rc/Arc TypeKinds, cleanup nodes,
+  and legacy Runtime entries with ordinary nominal Core `Rc<T>`/`Arc<T>`,
+  explicit `Clone`, and Runtime ABI v1 shared cells; 0.3 now rejects the old
+  syntax instead of desugaring it.
+- Made `type_size::<T>()` report the actual value-slot ABI and added
+  `type_alignment::<T>()`, so generic library storage uses the same layout as
+  MoonIR/codegen.
 - Reclassified the published toolchain/Lunax ecosystem lock as a frozen 0.2.1
   migration baseline; it is no longer a release-compatibility claim for the
   in-progress 0.3 compiler.

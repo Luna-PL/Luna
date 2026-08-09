@@ -1,0 +1,34 @@
+struct Leaf {
+    marker: i32;
+}
+
+impl Drop for Leaf {
+    fn drop(leaf: &mut Leaf) -> unit {
+        print(leaf.marker);
+    }
+}
+
+struct Wrapper<T> {
+    wrapper_marker: i32;
+    witness: Witness<T>;
+    value: Leaf;
+}
+
+struct Witness<T> {
+    value: T;
+}
+
+impl<T> Drop for Wrapper<T> {
+    fn drop(wrapper: &mut Wrapper<T>) -> unit {
+        print(wrapper.wrapper_marker);
+    }
+}
+
+fn main() -> i32 {
+    let witness = new Witness<i32>(7);
+    let wrapper = new Wrapper<i32>(
+        41,
+        move witness,
+        move new Leaf(42));
+    return 0;
+}

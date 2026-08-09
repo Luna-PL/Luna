@@ -24,12 +24,22 @@
 
 namespace {
 
+using AtomicSharedCounter = std::atomic<uint64_t>;
+
+union SharedCounter {
+    uint64_t rc;
+    AtomicSharedCounter arc;
+
+    SharedCounter() : rc(0) {}
+    ~SharedCounter() {}
+};
+
 struct SharedAllocationHeader {
     void* allocation = nullptr;
     size_t allocationSize = 0;
     size_t allocationAlignment = 0;
-    uint64_t rcCount = 1;
-    std::atomic<uint64_t> arcCount{1};
+    SharedCounter count;
+    LunaDropCallbackV1 drop = nullptr;
 };
 
 SharedAllocationHeader* sharedHeader(void* pointer) {
@@ -1012,7 +1022,8 @@ void rt_dealloc(void* pointer, size_t size, size_t alignment) {
         services->allocator->context, pointer, size, alignment);
 }
 
-static void* sharedAlloc(size_t size, size_t alignment) {
+static void* sharedAlloc(size_t size, size_t alignment,
+                         LunaDropCallbackV1 drop, bool atomic) {
     if (!isValidAlignment(alignment)) return nullptr;
     const size_t effectiveAlignment =
         std::max(alignment, alignof(SharedAllocationHeader));
@@ -1032,48 +1043,64 @@ static void* sharedAlloc(size_t size, size_t alignment) {
     header->allocation = allocation;
     header->allocationSize = total;
     header->allocationAlignment = effectiveAlignment;
+    header->drop = drop;
+    if (atomic)
+        new (&header->count.arc) std::atomic<uint64_t>(1);
+    else
+        header->count.rc = 1;
     return reinterpret_cast<void*>(payload);
 }
 
-void* rt_rc_alloc(size_t size, size_t alignment) {
-    return sharedAlloc(size, alignment);
-}
-
-void rt_rc_retain(void* pointer) {
-    if (pointer) ++sharedHeader(pointer)->rcCount;
-}
-
-int32_t rt_rc_release(void* pointer) {
-    if (!pointer) return 0;
-    auto* header = sharedHeader(pointer);
-    if (header->rcCount == 0) return 0;
-    return --header->rcCount == 0 ? 1 : 0;
-}
-
-void* rt_arc_alloc(size_t size, size_t alignment) {
-    return sharedAlloc(size, alignment);
-}
-
-void rt_arc_retain(void* pointer) {
-    if (pointer)
-        sharedHeader(pointer)->arcCount.fetch_add(
-            1, std::memory_order_relaxed);
-}
-
-int32_t rt_arc_release(void* pointer) {
-    if (!pointer) return 0;
-    return sharedHeader(pointer)->arcCount.fetch_sub(
-        1, std::memory_order_acq_rel) == 1 ? 1 : 0;
-}
-
-void rt_shared_dealloc(void* pointer) {
+static void sharedDealloc(void* pointer, bool atomic) {
     if (!pointer) return;
     auto* header = sharedHeader(pointer);
     void* allocation = header->allocation;
     const size_t size = header->allocationSize;
     const size_t alignment = header->allocationAlignment;
+    if (atomic) header->count.arc.~AtomicSharedCounter();
     header->~SharedAllocationHeader();
     rt_dealloc(allocation, size, alignment);
+}
+
+void* rt_rc_allocate_v1(int32_t size, int32_t alignment,
+                        LunaDropCallbackV1 drop) {
+    if (size < 0 || alignment <= 0) return nullptr;
+    return sharedAlloc(static_cast<size_t>(size),
+                       static_cast<size_t>(alignment), drop, false);
+}
+
+void rt_rc_retain_v1(void* pointer) {
+    if (pointer) ++sharedHeader(pointer)->count.rc;
+}
+
+void rt_rc_release_v1(void* pointer) {
+    if (!pointer) return;
+    auto* header = sharedHeader(pointer);
+    if (header->count.rc == 0 || --header->count.rc != 0) return;
+    if (header->drop) header->drop(pointer);
+    sharedDealloc(pointer, false);
+}
+
+void* rt_arc_allocate_v1(int32_t size, int32_t alignment,
+                         LunaDropCallbackV1 drop) {
+    if (size < 0 || alignment <= 0) return nullptr;
+    return sharedAlloc(static_cast<size_t>(size),
+                       static_cast<size_t>(alignment), drop, true);
+}
+
+void rt_arc_retain_v1(void* pointer) {
+    if (pointer)
+        sharedHeader(pointer)->count.arc.fetch_add(
+            1, std::memory_order_relaxed);
+}
+
+void rt_arc_release_v1(void* pointer) {
+    if (!pointer) return;
+    auto* header = sharedHeader(pointer);
+    if (header->count.arc.fetch_sub(
+            1, std::memory_order_acq_rel) != 1) return;
+    if (header->drop) header->drop(pointer);
+    sharedDealloc(pointer, true);
 }
 
 void rt_panic_cstr(const char* message) {

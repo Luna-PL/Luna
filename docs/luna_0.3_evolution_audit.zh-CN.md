@@ -297,9 +297,15 @@ resource protocol 提供 layout、clone/retain、Drop 和 allocator-domain facts
 - Core generic nominal container 的可靠 codegen；
 - `Clone`/retain 的静态 trait 或 intrinsic boundary；
 - allocator domain 与 thread-safety sysmeta；
-- 0.2 `rc new` / `arc new` 的兼容 lowering。
+- 0.2 `rc new` / `arc new` 的明确拒绝证据与独立旧编译器迁移 corpus。
 
 不要把 `Rc`/`Arc` 从 TypeKind 删除与 slot/runtime ABI 重构放在同一提交中。
+
+实施状态（2026-08-09）：上述切换已单独完成。Rc/Arc 是 Core 普通名义容器，
+共享计数和 allocator policy 封装在可信 Core/Runtime，而非继续作为 sysmeta
+ResourceManagement kind。通用 Drop callback、显式 Clone、release domain、JIT/AOT 与旧语法
+拒绝证据已具备。当前无跨线程 API；首个此类 API 必须先为 Arc payload 增加
+compiler-derived thread-safety gate。
 
 ### 3.4 Symbol Query：从“选一个函数”变成 typed symbol set
 

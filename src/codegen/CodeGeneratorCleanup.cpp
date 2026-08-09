@@ -1,8 +1,48 @@
 #include "CodeGenerator.h"
 #include "../core/TypeLayout.h"
+#include "../core/TypeRelations.h"
 #include "../runtime/RuntimeABI.h"
 
 #include <algorithm>
+
+llvm::Function* CodeGenerator::getOrCreateDropCallback(
+    const TypePtr& type) {
+    const std::string typeId = luna::types::typeId(type).value;
+    auto existing = mDropCallbacks.find(typeId);
+    if (existing != mDropCallbacks.end()) return existing->second;
+
+    const std::string symbol = "__luna_drop_callback_" +
+        std::to_string(luna::identity::stableIdentityHash(typeId));
+    auto* callbackType = llvm::FunctionType::get(
+        mHelpers->voidTy(), {mHelpers->ptrTy()}, false);
+    auto* callback = llvm::Function::Create(
+        callbackType, llvm::Function::InternalLinkage,
+        symbol, mModule.get());
+    mDropCallbacks[typeId] = callback;
+
+    const auto savedInsertionPoint = mBuilder->saveIP();
+    auto* savedFunction = mCurrentFunc;
+    const bool savedKernel = mCurrentFunctionIsKernel;
+    auto* entry = llvm::BasicBlock::Create(*mCtx, "entry", callback);
+    mBuilder->SetInsertPoint(entry);
+    mCurrentFunc = callback;
+    mCurrentFunctionIsKernel = false;
+
+    if (type && type->kind != TypeKind::Unit &&
+        type->kind != TypeKind::Never) {
+        llvm::Value* stored = mBuilder->CreateLoad(
+            mHelpers->toLLVMType(type), callback->getArg(0),
+            "stored.value");
+        emitOwnedPayloadCleanup(stored, type, "erased.value");
+    }
+    if (!mBuilder->GetInsertBlock()->getTerminator())
+        mBuilder->CreateRetVoid();
+
+    mCurrentFunc = savedFunction;
+    mCurrentFunctionIsKernel = savedKernel;
+    mBuilder->restoreIP(savedInsertionPoint);
+    return callback;
+}
 
 void CodeGenerator::emitLunaDeallocation(llvm::Value* pointer, const TypePtr& type) {
     auto rtDealloc = mModule->getOrInsertFunction(
@@ -67,11 +107,65 @@ llvm::Value* CodeGenerator::unpackResultPayload(
     return mBuilder->CreateLoad(target, fieldStorage, "result.payload");
 }
 
-void CodeGenerator::emitOwnedPayloadCleanup(
+void CodeGenerator::emitResourceContentsCleanup(
     llvm::Value* value, const TypePtr& type, const std::string& label) {
-    if (!value || !type ||
-        defaultUsageForType(type) == luna::ownership::Usage::Copy)
+    if (!value || !type) return;
+
+    // Source Drop finalizes the value in place. Compiler-derived recursive
+    // cleanup then destroys every still-owned field exactly once.
+    if (type->sysmeta.resource.needsDrop) {
+        const std::string& symbol = type->sysmeta.abi.dropGlueSymbol;
+        auto drop = mFunctions.find(symbol);
+        if (symbol.empty() || drop == mFunctions.end()) {
+            error("resource '" + label +
+                  "' has no compiler-validated Drop implementation");
+            return;
+        }
+        llvm::Value* address = value;
+        llvm::AllocaInst* storage = nullptr;
+        if (!value->getType()->isPointerTy()) {
+            storage = createEntryBlockAlloca(
+                mCurrentFunc, value->getType(), label + ".drop.storage");
+            mBuilder->CreateStore(value, storage);
+            address = storage;
+        }
+        mBuilder->CreateCall(drop->second, {
+            coerceCallArgument(
+                address,
+                drop->second->getFunctionType()->getParamType(0))
+        });
+        if (storage)
+            value = mBuilder->CreateLoad(
+                storage->getAllocatedType(), storage,
+                label + ".drop.value");
+    }
+
+    if (type->kind == TypeKind::Struct) {
+        if (!value->getType()->isPointerTy()) {
+            error("named product '" + label +
+                  "' has no pointer storage for recursive cleanup");
+            return;
+        }
+        for (size_t index = 0; index < type->fields.size(); ++index) {
+            const auto& field = type->fields[index];
+            const uint64_t offset =
+                luna::layout::productFieldOffset(type, index);
+            llvm::Value* fieldPointer = value;
+            if (offset != 0)
+                fieldPointer = mBuilder->CreateGEP(
+                    llvm::Type::getInt8Ty(*mCtx), value,
+                    llvm::ConstantInt::get(
+                        mHelpers->sizeTy(), offset),
+                    label + ".field.pointer");
+            llvm::Value* fieldValue = mBuilder->CreateLoad(
+                mHelpers->toLLVMType(field.type), fieldPointer,
+                label + "." + field.name);
+            emitOwnedPayloadCleanup(
+                fieldValue, field.type,
+                label + "." + field.name);
+        }
         return;
+    }
     if (type->kind == TypeKind::Array &&
         type->inner) {
         for (uint64_t index = 0;
@@ -169,60 +263,32 @@ void CodeGenerator::emitOwnedPayloadCleanup(
         mBuilder->SetInsertPoint(continueBlock);
         return;
     }
-    if (type->kind == TypeKind::Rc || type->kind == TypeKind::Arc) {
-        const bool atomic = type->kind == TypeKind::Arc;
+}
+
+void CodeGenerator::emitOwnedPayloadCleanup(
+    llvm::Value* value, const TypePtr& type, const std::string& label) {
+    if (!value || !type || !typeRequiresCleanup(type)) return;
+
+    if (type->kind == TypeKind::DeviceBuffer) {
         auto release = mModule->getOrInsertFunction(
-            atomic ? "rt_arc_release" : "rt_rc_release",
-            mHelpers->i32Ty(), mHelpers->ptrTy());
-        auto* lastCount = mBuilder->CreateCall(
-            release, {coerceCallArgument(value, mHelpers->ptrTy())},
-            label + ".last");
-        auto* last = mBuilder->CreateICmpNE(
-            lastCount, llvm::ConstantInt::get(mHelpers->i32Ty(), 0));
-        auto* finalBlock = llvm::BasicBlock::Create(
-            *mCtx, label + ".final", mCurrentFunc);
-        auto* continueBlock = llvm::BasicBlock::Create(
-            *mCtx, label + ".released", mCurrentFunc);
-        mBuilder->CreateCondBr(last, finalBlock, continueBlock);
-        mBuilder->SetInsertPoint(finalBlock);
-        TypePtr payload = type->inner;
-        if (payload && payload->sysmeta.resource.needsDrop) {
-            const std::string& symbol = payload->sysmeta.abi.dropGlueSymbol;
-            auto drop = mFunctions.find(symbol);
-            if (symbol.empty() || drop == mFunctions.end()) {
-                error("shared Result payload has no compiler-validated drop glue");
-            } else {
-                mBuilder->CreateCall(drop->second, {
-                    coerceCallArgument(
-                        value, drop->second->getFunctionType()->getParamType(0))
-                });
-            }
-        }
-        auto deallocate = mModule->getOrInsertFunction(
-            "rt_shared_dealloc", mHelpers->voidTy(), mHelpers->ptrTy());
+            "rt_gpu_free", mHelpers->voidTy(), mHelpers->ptrTy());
         mBuilder->CreateCall(
-            deallocate, {coerceCallArgument(value, mHelpers->ptrTy())});
-        mBuilder->CreateBr(continueBlock);
-        mBuilder->SetInsertPoint(continueBlock);
+            release, {coerceCallArgument(value, mHelpers->ptrTy())});
+        return;
+    }
+    if (type->kind == TypeKind::Array ||
+        type->kind == TypeKind::Record ||
+        type->kind == TypeKind::Result ||
+        type->kind == TypeKind::Enum) {
+        emitResourceContentsCleanup(value, type, label);
         return;
     }
     if (!value->getType()->isPointerTy()) {
-        error("move-only Result payload '" + type->toString() +
-              "' is not representable by the initial cleanup ABI");
+        error("owned resource '" + type->toString() +
+              "' is not representable by the cleanup ABI");
         return;
     }
-    if (type->sysmeta.resource.needsDrop) {
-        const std::string& symbol = type->sysmeta.abi.dropGlueSymbol;
-        auto drop = mFunctions.find(symbol);
-        if (symbol.empty() || drop == mFunctions.end()) {
-            error("Result payload has no compiler-validated drop glue");
-        } else {
-            mBuilder->CreateCall(drop->second, {
-                coerceCallArgument(
-                    value, drop->second->getFunctionType()->getParamType(0))
-            });
-        }
-    }
+    emitResourceContentsCleanup(value, type, label);
     emitLunaDeallocation(value, type);
 }
 
@@ -340,30 +406,7 @@ void CodeGenerator::emitCleanup(
                   "' has no validated Result type");
             return;
         }
-        llvm::Value* isOk =
-            mBuilder->CreateExtractValue(pointer, {0}, place + ".is_ok");
-        llvm::Value* bits =
-            mBuilder->CreateExtractValue(pointer, {1}, place + ".payload");
-        auto* okBlock = llvm::BasicBlock::Create(
-            *mCtx, place + ".drop_ok", mCurrentFunc);
-        auto* errorBlock = llvm::BasicBlock::Create(
-            *mCtx, place + ".drop_err", mCurrentFunc);
-        auto* continueBlock = llvm::BasicBlock::Create(
-            *mCtx, place + ".dropped", mCurrentFunc);
-        mBuilder->CreateCondBr(isOk, okBlock, errorBlock);
-        mBuilder->SetInsertPoint(okBlock);
-        emitOwnedPayloadCleanup(
-            unpackResultPayload(bits, type->typeArgs[0]),
-            type->typeArgs[0], place + ".ok");
-        if (!mBuilder->GetInsertBlock()->getTerminator())
-            mBuilder->CreateBr(continueBlock);
-        mBuilder->SetInsertPoint(errorBlock);
-        emitOwnedPayloadCleanup(
-            unpackResultPayload(bits, type->typeArgs[1]),
-            type->typeArgs[1], place + ".err");
-        if (!mBuilder->GetInsertBlock()->getTerminator())
-            mBuilder->CreateBr(continueBlock);
-        mBuilder->SetInsertPoint(continueBlock);
+        emitOwnedPayloadCleanup(pointer, type, place + ".result");
         return;
     }
     if (action == luna::ownership::CleanupAction::EnumDrop) {
@@ -447,64 +490,18 @@ void CodeGenerator::emitCleanup(
         emitOwnedPayloadCleanup(pointer, type, place + ".record");
         return;
     }
-    if (!pointer->getType()->isPointerTy()) return;
-    if (action == luna::ownership::CleanupAction::RcRelease ||
-        action == luna::ownership::CleanupAction::ArcRelease) {
-        const bool atomic =
-            action == luna::ownership::CleanupAction::ArcRelease;
-        auto release = mModule->getOrInsertFunction(
-            atomic ? "rt_arc_release" : "rt_rc_release",
-            mHelpers->i32Ty(), mHelpers->ptrTy());
-        auto* isLastCount = mBuilder->CreateCall(
-            release, {mBuilder->CreateBitCast(pointer, mHelpers->ptrTy())},
-            atomic ? "arc.last" : "rc.last");
-        auto* isLast = mBuilder->CreateICmpNE(
-            isLastCount, llvm::ConstantInt::get(mHelpers->i32Ty(), 0));
-        auto* finalBlock = llvm::BasicBlock::Create(
-            *mCtx, atomic ? "arc.final" : "rc.final", mCurrentFunc);
-        auto* continueBlock = llvm::BasicBlock::Create(
-            *mCtx, atomic ? "arc.released" : "rc.released", mCurrentFunc);
-        mBuilder->CreateCondBr(isLast, finalBlock, continueBlock);
-        mBuilder->SetInsertPoint(finalBlock);
-
-        TypePtr payload = type &&
-            (type->kind == TypeKind::Rc || type->kind == TypeKind::Arc)
-            ? type->inner : nullptr;
-        if (payload && payload->sysmeta.resource.needsDrop) {
-            const std::string& symbol = payload->sysmeta.abi.dropGlueSymbol;
-            auto drop = mFunctions.find(symbol);
-            if (symbol.empty() || drop == mFunctions.end()) {
-                error("final shared cleanup for '" + place +
-                      "' has no compiler-validated payload drop glue");
-            } else {
-                mBuilder->CreateCall(drop->second, {
-                    coerceCallArgument(pointer,
-                        drop->second->getFunctionType()->getParamType(0))
-                });
-            }
-        }
-        auto deallocate = mModule->getOrInsertFunction(
-            "rt_shared_dealloc", mHelpers->voidTy(), mHelpers->ptrTy());
-        mBuilder->CreateCall(deallocate, {
-            mBuilder->CreateBitCast(pointer, mHelpers->ptrTy())
-        });
-        mBuilder->CreateBr(continueBlock);
-        mBuilder->SetInsertPoint(continueBlock);
+    if (action == luna::ownership::CleanupAction::DeviceRelease) {
+        emitOwnedPayloadCleanup(pointer, type, place + ".device");
         return;
     }
     if (action == luna::ownership::CleanupAction::Drop) {
-        const std::string symbol = type
-            ? type->sysmeta.abi.dropGlueSymbol : std::string{};
-        auto drop = mFunctions.find(symbol);
-        if (symbol.empty() || drop == mFunctions.end()) {
-            error("drop cleanup for '" + place +
-                  "' has no compiler-validated drop glue");
-            return;
-        }
-        mBuilder->CreateCall(drop->second, {
-            coerceCallArgument(pointer,
-                drop->second->getFunctionType()->getParamType(0))
-        });
+        emitOwnedPayloadCleanup(pointer, type, place + ".resource");
+        return;
     }
+    if (action == luna::ownership::CleanupAction::None) {
+        error("cleanup for '" + place + "' has no Resource action");
+        return;
+    }
+    if (!pointer->getType()->isPointerTy()) return;
     emitLunaDeallocation(pointer, type);
 }

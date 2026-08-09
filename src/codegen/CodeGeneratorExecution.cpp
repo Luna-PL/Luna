@@ -86,13 +86,12 @@ int CodeGenerator::jitRun() {
     bindRuntime("rt_alloc", &rt_alloc);
     bindRuntime("rt_realloc", &rt_realloc);
     bindRuntime("rt_dealloc", &rt_dealloc);
-    bindRuntime("rt_rc_alloc", &rt_rc_alloc);
-    bindRuntime("rt_rc_retain", &rt_rc_retain);
-    bindRuntime("rt_rc_release", &rt_rc_release);
-    bindRuntime("rt_arc_alloc", &rt_arc_alloc);
-    bindRuntime("rt_arc_retain", &rt_arc_retain);
-    bindRuntime("rt_arc_release", &rt_arc_release);
-    bindRuntime("rt_shared_dealloc", &rt_shared_dealloc);
+    bindRuntime("rt_rc_allocate_v1", &rt_rc_allocate_v1);
+    bindRuntime("rt_rc_retain_v1", &rt_rc_retain_v1);
+    bindRuntime("rt_rc_release_v1", &rt_rc_release_v1);
+    bindRuntime("rt_arc_allocate_v1", &rt_arc_allocate_v1);
+    bindRuntime("rt_arc_retain_v1", &rt_arc_retain_v1);
+    bindRuntime("rt_arc_release_v1", &rt_arc_release_v1);
     bindRuntime("rt_panic_cstr", &rt_panic_cstr);
     bindRuntime("rt_host_services_v1", &rt_host_services_v1);
     bindRuntime("rt_install_application_host_services_v1",

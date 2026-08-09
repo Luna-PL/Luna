@@ -301,7 +301,7 @@ Sema then computes the final contract as the stronger of that default and the ty
 inherent requirement. MoonIR retains those final per-binding contracts for verification, but
 never contains a usage-scope node or runtime operation.
 
-### C011: Rc/Arc migrate to containers (Confirmed direction)
+### C011: Rc/Arc migrate to containers (Confirmed, implemented)
 
 `Rc<T>` and `Arc<T>` migrate to ordinary nominal library containers. A minimal Resource/Drop
 protocol expresses reference counting, cloning, cleanup, allocator domains, and required
@@ -317,6 +317,14 @@ explicit clone. `Weak` is an ordinary library container; programs break cycles w
 tracing cycle collector is provided. Drop is infallible. Rc uses non-atomic counting and is not
 shared across threads; Arc uses atomic counting and requires compiler-derived thread-safety
 sysmeta for its payload.
+
+Implementation boundary (2026-08-09): reference-counting policy is trusted Core/Runtime library
+implementation, not a compiler Resource kind. The compiler sees only ordinary nominal structs,
+`Clone`, `Drop`, Affine handles, and the Global Luna release domain. The language currently has
+no cross-thread transfer or sharing entry point, so Arc payload thread-safety admission is not
+yet observable. Any future concurrency API must add a compiler-derived sysmeta gate before it
+creates such a path and must not trust user metadata. This is a prerequisite of `NP001`; it does
+not restore Rc/Arc TypeKinds.
 
 ## 5. One-layer MoonIR
 
@@ -515,7 +523,7 @@ and sysmeta without changing current code generation.
 Shadow-identity implementation completion (2026-08-09): TypeId, ShapeId, SymbolId, ContractId,
 and AbiLayoutId are distinct C++ types. Canonical MoonIR type records now carry recomputable
 Type/Shape/ABI-layout payloads, declaration records carry recomputable Symbol/Contract payloads,
-and sysmeta schema 1.2 has a closed identity namespace projecting those IDs. The verifier rejects
+and sysmeta schema 1.2 introduced a closed identity namespace projecting those IDs. The verifier rejects
 payload mismatches and cross-payload hash collisions; deterministic tests prove that equal
 contracts share ContractId while distinct declarations retain distinct SymbolId. LLVM codegen
 continues to consume the old fields and the full JIT/AOT suite is unchanged. Priority item 5 has
@@ -547,6 +555,37 @@ operation survives lowering. Positive nesting/override/binder/lambda evidence, n
 linearity and weakening evidence, JIT/AOT behavior, and the full 48-test suite pass.
 Priority item 7 has therefore passed its completion gate. The next implementation item is 8: complete
 the generic Resource/Drop contracts and recursive cleanup paths.
+
+Resource/Drop implementation completion (2026-08-09): `Drop` now resolves directly to the
+canonical `org.luna.core::resource::Drop` identity with no legacy language branch. The compiler
+derives one typed ResourceContract per frozen type containing relation, usage, cleanup strategy,
+lifetime, management/release domain, and recursive-cleanup facts; sysmeta schema 1.3 and the MoonIR
+verifier carry and validate that contract. A source `Drop::drop(&mut T) -> unit` is an
+infallible in-place finalizer: compiler-owned field recursion runs afterwards, then the outer
+storage is released by its allocation strategy. Named products, anonymous records, arrays,
+active Result/enum payloads, shared payloads, and generic nominal instances therefore use one
+recursive cleanup implementation. Generic Drop impl type parameters are resolved as impl
+parameters; until Drop bodies are monomorphized, such impls require a representation-stable
+target layout and reject inline type-parameter-dependent storage. Drop contracts are registered
+before ordinary bodies so declaration order is irrelevant. Named-product storage now computes field offsets from actual value size/alignment,
+including pointer-represented nominal fields. Positive recursive/generic/declaration-order
+evidence and negative signature/Copy-weakening evidence pass with JIT/AOT and the full suite.
+Priority item 8 has passed its completion gate. The next implementation item is 9: ordinary
+Core `Rc`/`Arc` containers and removal of their compiler-special kinds.
+
+Rc/Arc-container implementation completion (2026-08-09): `Rc<T>` and `Arc<T>` are now ordinary
+generic nominal structs declared by `org.luna.core`. `Rc::new`/`Arc::new`, the prelude `rc`/`arc`
+helpers, and `resource::Clone` are ordinary library functions/traits. Shared cells use Runtime
+ABI v1 allocation, non-atomic/atomic retain-release, and compiler-produced type-erased Drop
+callbacks so the last handle cleans the payload exactly once. Parser tokens, TypeKinds,
+Sema/codegen cleanup paths, the `clone` intrinsic, and old Runtime entry points have been deleted.
+`rc new`/`arc new` remains only in the frozen 0.2 corpus for replay by the old compiler and is
+explicitly rejected by 0.3. JIT/AOT, nested Drop, explicit clone, implicit-copy rejection,
+ordinary-nominal MoonIR, and LLVM Runtime-ABI evidence pass, together with the full 50-test
+CTest suite, the strict-warning build, and resource-path ASan/UBSan checks. Named products remain
+pointer-represented, so transparent/inline handle-wrapper ABI optimization is not claimed by
+this semantic migration. Priority item 9 has therefore passed its completion gate. The next
+item is 10: refactor the existing MoonIR in place into table-referenced canonical IR.
 
 | Order | Priority | Work | Completion gate |
 |---:|---|---|---|

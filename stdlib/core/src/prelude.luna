@@ -1,8 +1,30 @@
 package org.luna.core;
 module prelude;
 
-// The first core package intentionally contains no compiler/runtime imports.
-// Its surface will grow only from operations that work in a no-host setting.
+// Prelude exports only ordinary Luna functions. Shared ownership delegates to
+// Core's private trusted-runtime bridge without adding source-language syntax.
 export fn identity<T>(value: T) -> T {
     return value;
+}
+
+export fn rc<T>(affine value: T) -> affine Rc<T> {
+    let erased = shared_runtime::rc_allocate(
+        type_size::<T>(),
+        type_alignment::<T>(),
+        drop_callback::<T>()
+    );
+    let storage: raw<T> = pointer_cast::<T>(erased);
+    *storage = move value;
+    return new Rc<T>(storage);
+}
+
+export fn arc<T>(affine value: T) -> affine Arc<T> {
+    let erased = shared_runtime::arc_allocate(
+        type_size::<T>(),
+        type_alignment::<T>(),
+        drop_callback::<T>()
+    );
+    let storage: raw<T> = pointer_cast::<T>(erased);
+    *storage = move value;
+    return new Arc<T>(storage);
 }

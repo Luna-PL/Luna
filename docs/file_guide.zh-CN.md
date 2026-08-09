@@ -272,6 +272,11 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `stdlib/luna.workspace` | 随发行版安装的标准库 workspace |
 | `stdlib/luna.lock` | 标准库精确本地依赖图 |
 | `stdlib/core/luna.package` | `org.luna.core` manifest |
+| `stdlib/core/src/resource.luna` | Core `Clone` 资源协议 |
+| `stdlib/core/src/shared.luna` | 普通名义 `Rc<T>`/`Arc<T>` 及 Drop/Clone impl |
+| `stdlib/core/src/rc.luna` | `Rc::new`/`Rc::clone` 模块表面 |
+| `stdlib/core/src/arc.luna` | `Arc::new`/`Arc::clone` 模块表面 |
+| `stdlib/core/src/shared_runtime.luna` | 私有 Runtime ABI v1 共享单元 bridge |
 | `stdlib/core/src/prelude.luna` | 核心预导入声明 |
 | `stdlib/core/src/error.luna` | 核心错误协议 |
 | `stdlib/core/src/option.luna` | 核心 Option ADT |
@@ -602,10 +607,15 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/tooling/SymbolIndex.cpp`
 - `src/tooling/SymbolIndex.h`
 - `stdlib/core/luna.package`
+- `stdlib/core/src/arc.luna`
 - `stdlib/core/src/error.luna`
 - `stdlib/core/src/iter.luna`
 - `stdlib/core/src/option.luna`
 - `stdlib/core/src/prelude.luna`
+- `stdlib/core/src/rc.luna`
+- `stdlib/core/src/resource.luna`
+- `stdlib/core/src/shared.luna`
+- `stdlib/core/src/shared_runtime.luna`
 - `stdlib/luna.lock`
 - `stdlib/luna.workspace`
 - `stdlib/std/luna.package`
@@ -751,11 +761,19 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/parse_missing_binding_name.luna`
 - `tests/fixtures/parse_multiple_declarations_invalid.luna`
 - `tests/fixtures/rc_arc.luna`
+- `tests/fixtures/rc_arc_core_app/luna.package`
+- `tests/fixtures/rc_arc_core_app/src/main.luna`
 - `tests/fixtures/rc_implicit_copy_invalid.luna`
 - `tests/fixtures/recursive_structural_type_invalid.luna`
 - `tests/fixtures/record_block_context.luna`
 - `tests/fixtures/reflection_index_out_of_range.luna`
 - `tests/fixtures/repl_session.txt`
+- `tests/fixtures/resource_drop_after_use.luna`
+- `tests/fixtures/resource_drop_copy_weaken_invalid.luna`
+- `tests/fixtures/resource_drop_signature_invalid.luna`
+- `tests/fixtures/resource_generic_drop.luna`
+- `tests/fixtures/resource_generic_drop_layout_invalid.luna`
+- `tests/fixtures/resource_recursive_named.luna`
 - `tests/fixtures/result_ambiguous_constructor_invalid.luna`
 - `tests/fixtures/result_basic.luna`
 - `tests/fixtures/result_from_borrowed_source_invalid.luna`
@@ -825,7 +843,9 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/package_export_abi.cmake`
 - `tests/package_manifest_workspace.cmake`
 - `tests/package_module_model.cmake`
+- `tests/rc_arc_core.cmake`
 - `tests/repl_smoke.cmake`
+- `tests/resource_drop_aot.cmake`
 - `tests/result_error_aot.cmake`
 - `tests/result_extended_aot.cmake`
 - `tests/return_cleanup_abi.cmake`

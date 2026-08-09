@@ -60,7 +60,8 @@ bool SemanticContext::analyze(Program* program) {
     mTraitMethods[luna::sysmeta::DropTraitId] = {
         {luna::sysmeta::DropMethodName, nullptr}
     };
-    mTraitOwners[luna::sysmeta::DropTraitId] = "luna.compiler";
+    mTraitOwners[luna::sysmeta::DropTraitId] =
+        luna::core_contracts::PackageId;
     mTraitMethods[luna::sysmeta::FromTraitId] = {
         {luna::sysmeta::FromMethodName, nullptr}
     };
@@ -240,15 +241,27 @@ bool SemanticContext::analyze(Program* program) {
             analyzeTrait(t);
         }
     }
-    // Pass 2b: analyze all ordinary bodies.
+    // Pass 2b: validate implementation contracts before ordinary bodies.
+    // Drop changes the inherent ResourceContract of its nominal family, so
+    // function semantics must not depend on whether an impl appeared before
+    // or after the function in source order.
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         auto& decl = program->declarations[i];
+        if (auto* implementation = dynamic_cast<ImplDecl*>(decl.get())) {
+            setDeclarationContext(implementation);
+            setDiagnosticLocation(implementation);
+            analyzeImpl(implementation);
+        }
+    }
+    // Pass 2c: analyze all remaining ordinary bodies.
+    for (size_t i = 0; i < sourceDeclarationCount; ++i) {
+        auto& decl = program->declarations[i];
+        if (dynamic_cast<ImplDecl*>(decl.get())) continue;
         setDeclarationContext(decl.get());
         setDiagnosticLocation(decl.get());
         if (auto* f = dynamic_cast<FunctionDecl*>(decl.get())) analyzeFunction(f);
         else if (auto* s = dynamic_cast<StructDecl*>(decl.get())) analyzeStruct(s);
         else if (auto* e = dynamic_cast<EnumDecl*>(decl.get())) analyzeEnum(e);
-        else if (auto* i = dynamic_cast<ImplDecl*>(decl.get())) analyzeImpl(i);
         else if (auto* m = dynamic_cast<MetaDecl*>(decl.get())) analyzeMeta(m);
         else if (auto* c = dynamic_cast<ConstraintDecl*>(decl.get()))
             analyzeConstraint(c);

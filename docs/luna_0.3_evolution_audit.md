@@ -221,6 +221,13 @@ be Core nominal containers behind a minimal compiler-recognized resource
 protocol. Generic Drop glue, recursive layout, Clone/retain, allocator domain, and
 thread-safety facts must exist before intrinsic TypeKinds are deleted in the single 0.3 switch.
 
+Implementation status (2026-08-09): that switch is complete as an isolated change. Rc/Arc are
+ordinary Core nominal containers; trusted Core/Runtime encapsulates shared counting and
+allocator policy rather than preserving a sysmeta ResourceManagement kind. Generic Drop
+callbacks, explicit Clone, release-domain, JIT/AOT, and old-syntax rejection evidence exist.
+There is currently no cross-thread API; the first such API must add a compiler-derived
+thread-safety gate for Arc payloads before exposing a transfer or sharing path.
+
 ### 3.3 Symbol Query
 
 Query should produce a typed set before applying an explicit cardinality

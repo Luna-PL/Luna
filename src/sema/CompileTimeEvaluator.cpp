@@ -6,6 +6,7 @@
 #include "../parser/AST.h"
 #include "../selector/Selector.h"
 #include <cmath>
+#include <unordered_set>
 #include <utility>
 
 TypePtr CompileTimeEvaluator::analyzeReflectionCall(CallExpr* call, const std::string& name) {
@@ -52,8 +53,6 @@ TypePtr CompileTimeEvaluator::analyzeReflectionCall(CallExpr* call, const std::s
             case TypeKind::Bool: return std::string("bool");
             case TypeKind::String: case TypeKind::CStr: return std::string("string");
             case TypeKind::RawPointer: return std::string("raw_pointer");
-            case TypeKind::Rc: return std::string("rc");
-            case TypeKind::Arc: return std::string("arc");
             case TypeKind::Reference: return std::string("reference");
             case TypeKind::Function: return std::string("function");
             case TypeKind::Struct: return std::string("struct");
@@ -66,33 +65,27 @@ TypePtr CompileTimeEvaluator::analyzeReflectionCall(CallExpr* call, const std::s
             default: return std::string("unknown");
         }
     };
-    std::function<int64_t(const TypePtr&)> typeSize = [&](const TypePtr& t) -> int64_t {
-        switch (t->kind) {
-            case TypeKind::I8: case TypeKind::U8: case TypeKind::Bool: return 1;
-            case TypeKind::I16: case TypeKind::U16: return 2;
-            case TypeKind::I32: case TypeKind::U32: case TypeKind::F32: return 4;
-            case TypeKind::I64: case TypeKind::U64: case TypeKind::USize: case TypeKind::ISize:
-            case TypeKind::F64: case TypeKind::String: case TypeKind::CStr:
-            case TypeKind::RawPointer: case TypeKind::Reference:
-            case TypeKind::Rc: case TypeKind::Arc: return 8;
-            case TypeKind::Array:
-                return static_cast<int64_t>(t->arrayLength) *
-                    typeSize(t->inner);
-            case TypeKind::Slice: return 16;
-            case TypeKind::Struct: {
-                int64_t total = 0;
-                for (const auto& field : t->fields) total += typeSize(field.type);
-                return total == 0 ? 8 : total;
-            }
-            case TypeKind::Record:
-                return static_cast<int64_t>(
-                    luna::layout::valueSize(t));
-            case TypeKind::Enum:
-            case TypeKind::Result:
-                return static_cast<int64_t>(
-                    luna::layout::valueSize(t));
-            default: return 0;
-        }
+    const auto containsTypeParameter = [](const TypePtr& root) {
+        std::unordered_set<const Type*> active;
+        std::function<bool(const TypePtr&)> visit =
+            [&](const TypePtr& current) -> bool {
+                if (!current || !active.insert(current.get()).second)
+                    return false;
+                if (current->kind == TypeKind::TypeParam) return true;
+                if (visit(current->inner) || visit(current->returnType))
+                    return true;
+                for (const auto& item : current->typeArgs)
+                    if (visit(item)) return true;
+                for (const auto& item : current->paramTypes)
+                    if (visit(item)) return true;
+                for (const auto& field : current->fields)
+                    if (visit(field.type)) return true;
+                for (const auto& variant : current->variants)
+                    for (const auto& field : variant.fields)
+                        if (visit(field)) return true;
+                return false;
+            };
+        return visit(root);
     };
     auto constIndex = [&]() -> std::optional<size_t> {
         if (call->args.size() != 1) {
@@ -124,7 +117,18 @@ TypePtr CompileTimeEvaluator::analyzeReflectionCall(CallExpr* call, const std::s
         }
     }
     else if (name == "type_nominal") call->compileTimeValue = type->nominalId;
-    else if (name == "type_size") call->compileTimeValue = typeSize(type);
+    else if (name == "type_size") {
+        // Generic templates are analyzed before instantiation. Leave layout
+        // reflection unfrozen until their concrete clone is analyzed.
+        if (!containsTypeParameter(type))
+            call->compileTimeValue = static_cast<int64_t>(
+                luna::layout::valueSize(type));
+    }
+    else if (name == "type_alignment") {
+        if (!containsTypeParameter(type))
+            call->compileTimeValue = static_cast<int64_t>(
+                luna::layout::valueAlignment(type));
+    }
     else if (name == "type_is_struct") call->compileTimeValue = type->kind == TypeKind::Struct;
     else if (name == "type_is_enum") call->compileTimeValue = type->kind == TypeKind::Enum;
     else if (name == "type_is_nominal") call->compileTimeValue = !type->nominalId.empty();
@@ -165,7 +169,8 @@ TypePtr CompileTimeEvaluator::analyzeReflectionCall(CallExpr* call, const std::s
             : std::variant<int64_t, double, bool, std::string>(static_cast<int64_t>(type->variants[*index].fields.size()));
     }
 
-    if (name == "type_size" || name == "type_field_count" || name == "type_variant_count" ||
+    if (name == "type_size" || name == "type_alignment" ||
+        name == "type_field_count" || name == "type_variant_count" ||
         name == "type_variant_field_count") return TyI32;
     if (name == "type_is_struct" || name == "type_is_enum" ||
         name == "type_is_nominal" || name == "type_is_structural" ||
@@ -578,42 +583,10 @@ CompileTimeEvaluator::evaluateConstraintExpr(
         return luna::types::typeId(type).value;
     if (callee->name == "type_shape")
         return luna::types::shapeId(type).value;
-    if (callee->name == "type_size") {
-        std::function<int64_t(const TypePtr&)> sizeOf =
-            [&](const TypePtr& item) -> int64_t {
-            switch (item->kind) {
-                case TypeKind::I8: case TypeKind::U8:
-                case TypeKind::Bool: return 1;
-                case TypeKind::I16: case TypeKind::U16: return 2;
-                case TypeKind::I32: case TypeKind::U32:
-                case TypeKind::F32: return 4;
-                case TypeKind::I64: case TypeKind::U64:
-                case TypeKind::USize: case TypeKind::ISize:
-                case TypeKind::F64: case TypeKind::String:
-                case TypeKind::CStr: case TypeKind::RawPointer:
-                case TypeKind::Reference: case TypeKind::Rc:
-                case TypeKind::Arc: return 8;
-                case TypeKind::Array:
-                    return static_cast<int64_t>(item->arrayLength) *
-                        sizeOf(item->inner);
-                case TypeKind::Struct: {
-                    int64_t total = 0;
-                    for (const auto& field : item->fields)
-                        total += sizeOf(field.type);
-                    return total;
-                }
-                case TypeKind::Record:
-                    return static_cast<int64_t>(
-                        luna::layout::valueSize(item));
-                case TypeKind::Enum:
-                case TypeKind::Result:
-                    return static_cast<int64_t>(
-                        luna::layout::valueSize(item));
-                default: return 0;
-            }
-        };
-        return sizeOf(type);
-    }
+    if (callee->name == "type_size")
+        return static_cast<int64_t>(luna::layout::valueSize(type));
+    if (callee->name == "type_alignment")
+        return static_cast<int64_t>(luna::layout::valueAlignment(type));
     return std::nullopt;
 }
 

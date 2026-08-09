@@ -22,7 +22,7 @@ enum class ContinuationKind { Interceptor, Context };
 enum class TypeKind {
     I8, I16, I32, I64, U8, U16, U32, U64, USize, ISize,
     F32, F64, Bool, String, CStr, RawPointer, Unit, Never,
-    Struct, Record, Enum, Result, Trait, TypeParam, Reference, Rc, Arc,
+    Struct, Record, Enum, Result, Trait, TypeParam, Reference,
     Function, Slot, Fragment, Iterator,
     DeviceBuffer, Event, Array, Slice,
     Metadata, MetadataView, DeclarationView, DeclarationRef,
@@ -62,6 +62,26 @@ struct TypeVariant {
     std::string name;
     TypeVec fields;
 };
+
+struct ResourceContract {
+    luna::ownership::Relation relation = luna::ownership::Relation::Owned;
+    luna::ownership::Usage usage = luna::ownership::Usage::Copy;
+    luna::ownership::CleanupAction cleanup =
+        luna::ownership::CleanupAction::None;
+    luna::sysmeta::ResourceManagement management =
+        luna::sysmeta::ResourceManagement::Value;
+    luna::sysmeta::ReleaseDomain releaseDomain =
+        luna::sysmeta::ReleaseDomain::None;
+    luna::sysmeta::ResourceLifetime lifetime =
+        luna::sysmeta::ResourceLifetime::Value;
+    bool cleanupRequired = false;
+    bool recursiveCleanup = false;
+};
+
+inline bool typeRequiresCleanup(const TypePtr& type);
+inline luna::ownership::CleanupAction cleanupActionForType(
+    const TypePtr& type);
+inline ResourceContract resourceContractForType(const TypePtr& type);
 
 struct Type {
     TypeKind kind;
@@ -104,6 +124,12 @@ struct Type {
         auto t = std::make_shared<Type>();
         t->kind = k;
         t->identityMode = luna::types::IdentityMode::Builtin;
+        if (k == TypeKind::String) {
+            t->sysmeta.resource.management =
+                luna::sysmeta::ResourceManagement::Unique;
+            t->sysmeta.resource.releaseDomain =
+                luna::sysmeta::ReleaseDomain::LunaGlobal;
+        }
         return t;
     }
     static TypePtr makeStruct(const std::string& n,
@@ -116,6 +142,10 @@ struct Type {
             ? luna::types::IdentityMode::Structural
             : luna::types::IdentityMode::Nominal;
         t->fields = std::move(fields);
+        t->sysmeta.resource.management =
+            luna::sysmeta::ResourceManagement::Unique;
+        t->sysmeta.resource.releaseDomain =
+            luna::sysmeta::ReleaseDomain::LunaGlobal;
         return t;
     }
     static TypePtr makeRecord(std::vector<TypeField> fields) {
@@ -189,30 +219,12 @@ struct Type {
         t->kind = TypeKind::RawPointer; t->inner = std::move(inner);
         return t;
     }
-    static TypePtr makeRc(TypePtr inner) {
-        auto t = std::make_shared<Type>();
-        t->kind = TypeKind::Rc;
-        t->inner = std::move(inner);
-        t->sysmeta.resource.management =
-            luna::sysmeta::ResourceManagement::Rc;
-        t->sysmeta.resource.releaseDomain =
-            luna::sysmeta::ReleaseDomain::LunaGlobal;
-        return t;
-    }
-    static TypePtr makeArc(TypePtr inner) {
-        auto t = std::make_shared<Type>();
-        t->kind = TypeKind::Arc;
-        t->inner = std::move(inner);
-        t->sysmeta.resource.management =
-            luna::sysmeta::ResourceManagement::Arc;
-        t->sysmeta.resource.releaseDomain =
-            luna::sysmeta::ReleaseDomain::LunaGlobal;
-        return t;
-    }
     static TypePtr makeDeviceBuffer(TypePtr element) {
         auto t = std::make_shared<Type>();
         t->kind = TypeKind::DeviceBuffer;
         t->inner = std::move(element);
+        t->sysmeta.resource.management =
+            luna::sysmeta::ResourceManagement::Unique;
         t->sysmeta.resource.releaseDomain =
             luna::sysmeta::ReleaseDomain::Device;
         return t;
@@ -367,6 +379,7 @@ struct Type {
         std::unordered_set<const Type*> active;
         std::function<bool(const Type*)> visit = [&](const Type* type) {
             if (!type || !active.insert(type).second) return false;
+            if (type->sysmeta.resource.needsDrop) return true;
             if (type->kind == TypeKind::Result) {
                 for (const auto& argument : type->typeArgs)
                     if (argument && visit(argument.get())) return true;
@@ -387,9 +400,7 @@ struct Type {
             }
             return type->kind == TypeKind::String ||
                    type->kind == TypeKind::Struct ||
-                   type->kind == TypeKind::DeviceBuffer ||
-                   type->kind == TypeKind::Rc ||
-                   type->kind == TypeKind::Arc;
+                   type->kind == TypeKind::DeviceBuffer;
         };
         return visit(this);
     }
@@ -413,10 +424,6 @@ struct Type {
             case TypeKind::CStr: return "cstr";
             case TypeKind::RawPointer:
                 return "raw<" + (inner ? inner->toString() : "?") + ">";
-            case TypeKind::Rc:
-                return "rc<" + (inner ? inner->toString() : "?") + ">";
-            case TypeKind::Arc:
-                return "arc<" + (inner ? inner->toString() : "?") + ">";
             case TypeKind::DeviceBuffer:
                 return "device_buffer<" + (inner ? inner->toString() : "?") + ">";
             case TypeKind::Array:
@@ -497,8 +504,12 @@ inline luna::ownership::Usage defaultUsageForType(const TypePtr& type) {
         if (item->kind == TypeKind::Result ||
             item->kind == TypeKind::Enum ||
             item->kind == TypeKind::Array ||
-            item->kind == TypeKind::Record) {
-            auto usage = luna::ownership::Usage::Copy;
+            item->kind == TypeKind::Record ||
+            item->kind == TypeKind::Struct) {
+            auto usage = item->kind == TypeKind::Struct ||
+                    item->sysmeta.resource.needsDrop
+                ? luna::ownership::Usage::Affine
+                : luna::ownership::Usage::Copy;
             std::vector<TypePtr> payloads;
             if (item->kind == TypeKind::Result)
                 payloads = item->typeArgs;
@@ -507,7 +518,8 @@ inline luna::ownership::Usage defaultUsageForType(const TypePtr& type) {
                     payloads.insert(
                         payloads.end(),
                         variant.fields.begin(), variant.fields.end());
-            else if (item->kind == TypeKind::Record)
+            else if (item->kind == TypeKind::Record ||
+                     item->kind == TypeKind::Struct)
                 for (const auto& field : item->fields)
                     payloads.push_back(field.type);
             else
@@ -525,6 +537,8 @@ inline luna::ownership::Usage defaultUsageForType(const TypePtr& type) {
             return usage;
         }
         active.erase(item.get());
+        if (item->sysmeta.resource.needsDrop)
+            return luna::ownership::Usage::Affine;
         if (item->kind == TypeKind::Event ||
             item->kind == TypeKind::DeviceBuffer)
             return luna::ownership::Usage::Linear;
@@ -535,6 +549,123 @@ inline luna::ownership::Usage defaultUsageForType(const TypePtr& type) {
         return luna::ownership::Usage::Copy;
     };
     return visit(type);
+}
+
+inline bool typeRequiresCleanup(const TypePtr& type) {
+    std::unordered_set<const Type*> active;
+    std::function<bool(const TypePtr&)> visit =
+        [&](const TypePtr& item) -> bool {
+        if (!item || !active.insert(item.get()).second) return false;
+        if (item->sysmeta.resource.needsDrop) {
+            active.erase(item.get());
+            return true;
+        }
+        switch (item->kind) {
+            case TypeKind::String:
+            case TypeKind::Struct:
+            case TypeKind::DeviceBuffer:
+                active.erase(item.get());
+                return true;
+            case TypeKind::Result:
+                for (const auto& argument : item->typeArgs)
+                    if (visit(argument)) {
+                        active.erase(item.get());
+                        return true;
+                    }
+                break;
+            case TypeKind::Enum:
+                for (const auto& variant : item->variants)
+                    for (const auto& field : variant.fields)
+                        if (visit(field)) {
+                            active.erase(item.get());
+                            return true;
+                        }
+                break;
+            case TypeKind::Array:
+                if (visit(item->inner)) {
+                    active.erase(item.get());
+                    return true;
+                }
+                break;
+            case TypeKind::Record:
+                for (const auto& field : item->fields)
+                    if (visit(field.type)) {
+                        active.erase(item.get());
+                        return true;
+                    }
+                break;
+            default:
+                break;
+        }
+        active.erase(item.get());
+        return false;
+    };
+    return visit(type);
+}
+
+inline bool typeHasRecursiveCleanup(const TypePtr& type) {
+    if (!type) return false;
+    if (type->kind == TypeKind::Result)
+        for (const auto& argument : type->typeArgs)
+            if (typeRequiresCleanup(argument)) return true;
+    if (type->kind == TypeKind::Enum)
+        for (const auto& variant : type->variants)
+            for (const auto& field : variant.fields)
+                if (typeRequiresCleanup(field)) return true;
+    if (type->kind == TypeKind::Array)
+        return typeRequiresCleanup(type->inner);
+    if (type->kind == TypeKind::Record ||
+        type->kind == TypeKind::Struct)
+        for (const auto& field : type->fields)
+            if (typeRequiresCleanup(field.type)) return true;
+    return false;
+}
+
+inline luna::ownership::CleanupAction cleanupActionForType(
+    const TypePtr& type) {
+    using luna::ownership::CleanupAction;
+    // A cleanup obligation may come from an owning allocation even when the
+    // stored value is otherwise Copy (for example `new i32`). In that case
+    // the binding contract still releases the allocation directly.
+    if (!type || !typeRequiresCleanup(type))
+        return CleanupAction::Deallocate;
+    if (type->kind == TypeKind::Result) return CleanupAction::ResultDrop;
+    if (type->kind == TypeKind::Enum) return CleanupAction::EnumDrop;
+    if (type->kind == TypeKind::Array) return CleanupAction::ArrayDrop;
+    if (type->kind == TypeKind::Record) return CleanupAction::RecordDrop;
+    if (type->kind == TypeKind::DeviceBuffer)
+        return CleanupAction::DeviceRelease;
+    return type->sysmeta.resource.needsDrop ||
+            typeHasRecursiveCleanup(type)
+        ? CleanupAction::Drop
+        : CleanupAction::Deallocate;
+}
+
+inline ResourceContract resourceContractForType(const TypePtr& type) {
+    ResourceContract contract;
+    if (!type) return contract;
+    const bool cleanupRequired = typeRequiresCleanup(type);
+    contract.relation = type->kind == TypeKind::Reference
+        ? (type->isMutable
+            ? luna::ownership::Relation::MutableBorrow
+            : luna::ownership::Relation::SharedBorrow)
+        : luna::ownership::Relation::Owned;
+    contract.usage = defaultUsageForType(type);
+    contract.cleanup = cleanupRequired
+        ? cleanupActionForType(type)
+        : luna::ownership::CleanupAction::None;
+    contract.management = type->sysmeta.resource.management;
+    contract.releaseDomain = type->sysmeta.resource.releaseDomain;
+    if (type->kind == TypeKind::Reference)
+        contract.lifetime = luna::sysmeta::ResourceLifetime::Borrowed;
+    else if (type->kind == TypeKind::Event ||
+             type->kind == TypeKind::DeviceBuffer)
+        contract.lifetime = luna::sysmeta::ResourceLifetime::Explicit;
+    else if (cleanupRequired)
+        contract.lifetime = luna::sysmeta::ResourceLifetime::Lexical;
+    contract.cleanupRequired = cleanupRequired;
+    contract.recursiveCleanup = typeHasRecursiveCleanup(type);
+    return contract;
 }
 
 inline luna::ownership::Contract parameterContractFor(

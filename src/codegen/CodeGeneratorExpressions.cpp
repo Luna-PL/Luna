@@ -354,9 +354,8 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
                     error("named struct literal field is absent from its type");
                     continue;
                 }
-                uint64_t offset = 0;
-                for (size_t prior = 0; prior < index; ++prior)
-                    offset += typeSize(record->type->fields[prior].type);
+                const uint64_t offset =
+                    luna::layout::productFieldOffset(record->type, index);
                 llvm::Value* fieldPointer = pointer;
                 if (offset != 0)
                     fieldPointer = mBuilder->CreateGEP(
@@ -407,9 +406,6 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             objectType->kind == TypeKind::Reference;
         if (objectType && objectType->kind == TypeKind::Reference)
             objectType = objectType->inner;
-        if (objectType && (objectType->kind == TypeKind::Rc ||
-                           objectType->kind == TypeKind::Arc))
-            objectType = objectType->inner;
         size_t index = fieldIndex(objectType, field->field);
         if (!objectType || index == static_cast<size_t>(-1))
             return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
@@ -418,9 +414,8 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         if (objectType->kind == TypeKind::Record && !isReference)
             return mBuilder->CreateExtractValue(
                 object, {static_cast<unsigned>(index)}, field->field);
-        uint64_t offset = 0;
-        for (size_t i = 0; i < index; ++i)
-            offset += typeSize(objectType->fields[i].type);
+        const uint64_t offset =
+            luna::layout::productFieldOffset(objectType, index);
         auto* bytePtr = mBuilder->CreateGEP(
             llvm::Type::getInt8Ty(*mCtx), object,
             llvm::ConstantInt::get(mHelpers->sizeTy(), offset), "fieldptr");
@@ -481,6 +476,17 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             error("iterator adapters are ephemeral and must end in `for`, "
                   "`fold`, `for_each`, `count`, or `collect`");
             return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+        }
+        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
+            calleeId && calleeId->name == "pointer_cast" &&
+            call->args.size() == 1) {
+            return coerceCallArgument(
+                generateExpr(call->args.front().get()), mHelpers->ptrTy());
+        }
+        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
+            calleeId && calleeId->name == "drop_callback" &&
+            call->args.empty() && !call->typeArgs.empty()) {
+            return getOrCreateDropCallback(call->typeArgs.front());
         }
         if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
             calleeId && (calleeId->name == "Ok" || calleeId->name == "Err") &&
@@ -552,19 +558,6 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             });
             mBuilder->CreateUnreachable();
             return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
-        }
-        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
-            calleeId && calleeId->name == "clone" && call->args.size() == 1) {
-            llvm::Value* handle = generateExpr(call->args.front().get());
-            const bool atomic = call->type &&
-                call->type->kind == TypeKind::Arc;
-            auto retain = mModule->getOrInsertFunction(
-                atomic ? "rt_arc_retain" : "rt_rc_retain",
-                mHelpers->voidTy(), mHelpers->ptrTy());
-            mBuilder->CreateCall(retain, {
-                coerceCallArgument(handle, mHelpers->ptrTy())
-            });
-            return handle;
         }
         if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get()); calleeId && calleeId->name == "slice" && call->args.size() == 3) {
             auto* source = generateExpr(call->args[0].get());
@@ -765,13 +758,8 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         auto* sizeVal = llvm::ConstantInt::get(mHelpers->sizeTy(), sz);
         auto* alignmentVal = llvm::ConstantInt::get(
             mHelpers->sizeTy(), typeAlignment(ha->allocatedType));
-        const char* allocationSymbol = "rt_alloc";
-        if (ha->storage == HeapStorageKind::Rc)
-            allocationSymbol = "rt_rc_alloc";
-        else if (ha->storage == HeapStorageKind::Arc)
-            allocationSymbol = "rt_arc_alloc";
         auto rtAlloc = mModule->getOrInsertFunction(
-            allocationSymbol, mHelpers->ptrTy(),
+            "rt_alloc", mHelpers->ptrTy(),
             mHelpers->sizeTy(), mHelpers->sizeTy());
         llvm::Value* ptr = mBuilder->CreateCall(
             rtAlloc, {sizeVal, alignmentVal}, "heapalloc");
@@ -782,12 +770,17 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             for (size_t i = 0; i < initCall->args.size(); ++i) {
                 auto& arg = initCall->args[i];
                 llvm::Value* argVal = generateExpr(arg.get());
-                if (i > 0 && ha->allocatedType &&
-                    (ha->allocatedType->kind == TypeKind::Struct ||
-                     ha->allocatedType->kind == TypeKind::Record)) {
+                if (ha->allocatedType &&
+                    ha->allocatedType->kind == TypeKind::Struct)
+                    offset = luna::layout::productFieldOffset(
+                        ha->allocatedType, i);
+                else if (i > 0 && ha->allocatedType &&
+                         ha->allocatedType->kind == TypeKind::Record) {
                     offset = 0;
-                    for (size_t j = 0; j < i && j < ha->allocatedType->fields.size(); ++j)
-                        offset += typeSize(ha->allocatedType->fields[j].type);
+                    for (size_t j = 0;
+                         j < i && j < ha->allocatedType->fields.size(); ++j)
+                        offset += luna::layout::valueSize(
+                            ha->allocatedType->fields[j].type);
                 }
                 auto* basePtr = ptr;
                 if (offset != 0)
@@ -926,10 +919,6 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             if (objectType &&
                 objectType->kind == TypeKind::Reference)
                 objectType = objectType->inner;
-            if (objectType &&
-                (objectType->kind == TypeKind::Rc ||
-                 objectType->kind == TypeKind::Arc))
-                objectType = objectType->inner;
             const size_t index =
                 fieldIndex(objectType, field->field);
             if (objectType &&
@@ -977,12 +966,8 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
                 }
                 llvm::Value* object =
                     generateExpr(field->object.get());
-                uint64_t offset = 0;
-                for (size_t fieldIndex = 0;
-                     fieldIndex < index; ++fieldIndex)
-                    offset += typeSize(
-                        objectType->fields[
-                            fieldIndex].type);
+                const uint64_t offset =
+                    luna::layout::productFieldOffset(objectType, index);
                 llvm::Value* pointer =
                     mBuilder->CreateGEP(
                         llvm::Type::getInt8Ty(*mCtx),
@@ -1110,7 +1095,10 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
     if (auto* dr = dynamic_cast<DerefExpr*>(expr)) {
         llvm::Value* op = generateExpr(dr->operand.get());
         auto* ptr = mBuilder->CreateBitCast(op, llvm::PointerType::get(*mCtx, 0));
-        return mBuilder->CreateLoad(mHelpers->i32Ty(), ptr, "deref");
+        llvm::Type* valueType = dr->type
+            ? mHelpers->toLLVMType(dr->type)
+            : mHelpers->i32Ty();
+        return mBuilder->CreateLoad(valueType, ptr, "deref");
     }
     if (auto* ad = dynamic_cast<AddrOfExpr*>(expr)) {
         if (auto* id = dynamic_cast<IdentifierExpr*>(ad->operand.get())) {

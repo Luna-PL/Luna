@@ -32,6 +32,7 @@ normal compile-time strings, integers, or booleans:
 | `type_domain::<T>()` | `value`, `meta`, or `compiler` |
 | `type_nominal::<T>()` | Nominal declaration identity, or an empty string |
 | `type_size::<T>()` | Static layout size in bytes |
+| `type_alignment::<T>()` | Static value alignment in bytes |
 | `type_is_struct::<T>()`, `type_is_enum::<T>()`, `type_is_nominal::<T>()`, `type_is_structural::<T>()`, `type_is_meta::<T>()`, `type_is_reference::<T>()` | Type predicates |
 | `type_same::<A, B>()` / `type_same_shape::<A, B>()` | Exact semantic identity / structural-shape relation |
 | `type_abi_compatible::<A, B>()` | Conservative target-independent ABI compatibility precursor |
@@ -42,6 +43,12 @@ normal compile-time strings, integers, or booleans:
 
 The compiler emits diagnostics for non-constant `const` initializers, invalid reflection
 targets, and out-of-range reflection indexes.
+
+`pointer_cast::<T>(raw<U>) -> raw<T>` and `drop_callback::<T>() -> raw<u8>` are low-level
+compiler builtins used by trusted Core containers. The former changes only a raw pointer's
+static pointee type. The latter returns type-erased cleanup glue that destroys one initialized
+`T` value in place; it does not deallocate the surrounding storage. Neither operation adds a
+runtime safety mode or an `unsafe {}` language block.
 
 ## Named constraints
 

@@ -444,6 +444,14 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/core_surface.cmake
     )
     add_test(
+        NAME luna.rc-arc-core
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/rc_arc_core.cmake
+    )
+    add_test(
         NAME luna.full-showcase
         COMMAND ${CMAKE_COMMAND}
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
@@ -457,6 +465,14 @@ if(BUILD_TESTING)
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/return_cleanup_abi.cmake
+    )
+    add_test(
+        NAME luna.resource-drop-aot
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/resource_drop_aot.cmake
     )
     add_test(
         NAME luna.result-error-aot

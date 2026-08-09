@@ -34,6 +34,7 @@ results are normal compile-time strings, integers, or booleans:
 | `type_domain::<T>()` | `value`, `meta`, or `compiler` |
 | `type_nominal::<T>()` | Nominal declaration identity, or an empty string |
 | `type_size::<T>()` | Static layout size in bytes |
+| `type_alignment::<T>()` | Static value alignment in bytes |
 | `type_is_struct::<T>()`, `type_is_enum::<T>()`, `type_is_nominal::<T>()`, `type_is_structural::<T>()`, `type_is_meta::<T>()`, `type_is_reference::<T>()` | Type predicates |
 | `type_same::<A, B>()` / `type_same_shape::<A, B>()` | Exact semantic identity / structural-shape relation |
 | `type_abi_compatible::<A, B>()` | Conservative target-independent ABI compatibility precursor |
@@ -44,6 +45,11 @@ results are normal compile-time strings, integers, or booleans:
 
 The compiler emits diagnostics for non-constant `const` initializers, invalid
 reflection targets, and out-of-range reflection indexes.
+
+`pointer_cast::<T>(raw<U>) -> raw<T>` 和 `drop_callback::<T>() -> raw<u8>` 是供可信
+Core 容器使用的底层 compiler builtin。前者只改变裸指针的静态 pointee 类型；
+后者返回就地销毁一个已初始化 `T` 的 type-erased cleanup glue，不释放外层
+storage。两者都不引入运行时安全模式或 `unsafe {}` 语法。
 
 ## Named constraints
 
@@ -95,4 +101,3 @@ The optional callable type disambiguates ordinary overloads. The resulting
 `declaration_ref<T>` exists only during compilation and is erased after its
 static queries are folded. If name and signature still leave an open
 declaration family, use a static selector instead.
-

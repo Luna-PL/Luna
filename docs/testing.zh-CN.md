@@ -53,7 +53,8 @@ ORC 生成的入口函数没有 Clang UBSan 的函数类型前缀元数据，故
 - 线性资源的路径敏感所有权：`if` 的双路径消费/单路径泄漏、提前 `return` 的终止路径、循环零次/多次执行边界，以及不可达语句。
 - GPU in-flight buffer、未 `await` event 与 event 在提前返回前的释放要求。
 - CPU 模拟器下的基础、版本化和 move-event 异构计算。
-- `Drop`、`rc`/`arc` 的显式克隆和最终释放，以及 Result 两个 variant 的活动载荷清理。
+- 递归/泛型 `Drop`、旧 `rc new`/`arc new` 语法拒绝，以及 Result 两个 variant
+  的活动载荷清理。
 - `Result` 构造/判别/解包、`?` 的成功与错误提前返回、错误路径 cleanup、fragment 边界拒绝和 abort 型 panic。
 
 ROCm 与 CUDA 的实机测试不包含在默认 CTest 中：默认测试必须在无 GPU 的 CI 主机上运行。ROCm 冒烟测试在具备 AMD GPU 的主机上额外执行：
@@ -73,6 +74,10 @@ CPU 对照基准可通过 `-DLUNA_ENABLE_CPU_BENCHMARK=ON` 启用，详情见
 设置 `-DLUNA_ENABLE_ROCM_BENCHMARK=ON` 会额外注册 `luna.rocm-cpp23-comparison`：它用 16,777,216 个元素、十轮变换对照 Luna AOT 与 C++23/HIP，并校验两者结果。它带 `benchmark` label，不在默认测试集内。
 
 每次修复语义或诊断问题时，应同时添加一个最小正例或负例，并在 `tests/semantic_regressions.cmake` 中断言稳定的输出或关键诊断文本。
+
+`luna.rc-arc-core` 在真实 Core package 上同时验证 JIT/AOT、显式 trait/member
+clone、隐式复制拒绝、最后 handle 精确一次释放、嵌套 payload Drop、MoonIR
+普通 nominal 事实以及 LLVM Runtime ABI v1 调用。
 
 `luna.package-export-abi` 是独立的 AOT ABI 测试：它确认 package 中带有 `export` 的函数在 LLVM IR 中为外部符号，而未导出的函数为 `internal`。测试在结束时删除自身生成的 `.ll` 与可执行文件。
 

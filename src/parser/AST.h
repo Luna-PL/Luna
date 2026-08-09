@@ -134,7 +134,7 @@ struct LetStmt : Stmt {
 // semantics.
 struct CleanupObligation {
     std::string place;
-    luna::ownership::CleanupAction action = luna::ownership::CleanupAction::Drop;
+    luna::ownership::CleanupAction action = luna::ownership::CleanupAction::None;
     TypePtr type;
 };
 
@@ -412,7 +412,7 @@ struct HeapAllocExpr : Expr {
     std::unique_ptr<Expr> initializer; // CallExpr to construct
     std::unique_ptr<TypeAST> allocatedTypeAST;
     TypePtr allocatedType;             // Set during sema
-    TypePtr resultType;                // Unique T, rc<T>, or arc<T>
+    TypePtr resultType;                // owning pointer-represented T
     HeapStorageKind storage = HeapStorageKind::Unique;
 };
 
@@ -438,6 +438,9 @@ struct BorrowExpr : Expr {
 
 struct DerefExpr : Expr {
     std::unique_ptr<Expr> operand;
+    // Sema records the pointee type so MoonIR/codegen never has to guess an
+    // i32 load for a typed reference or raw pointer.
+    TypePtr resultType;
 };
 
 struct AddrOfExpr : Expr {
