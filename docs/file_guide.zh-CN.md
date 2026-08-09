@@ -95,6 +95,7 @@ obligation，不能重新推导所有权。
 | `.github/workflows/macos-ci.yml` | macOS 稳定核心门禁 | 不声明其他 macOS 版本兼容 |
 | `.github/workflows/windows-ci.yml` | Windows MSYS2 UCRT64 门禁 | 不代表 MSVC/MSVCRT 支持 |
 | `.github/workflows/release.yml` | tag 校验、三平台预编译包、校验和及 prerelease | 不绕过平台测试直接发布 |
+| `.github/workflows/release-evidence.yml` | 核对 lock 指定的公开 release 元数据与资产摘要 | 不创建或修改 release |
 
 ## 5. 生产源码逐文件职责
 
@@ -342,6 +343,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 <!-- FILE_INVENTORY_BEGIN -->
 - `.github/workflows/linux-ci.yml`
 - `.github/workflows/macos-ci.yml`
+- `.github/workflows/release-evidence.yml`
 - `.github/workflows/release.yml`
 - `.github/workflows/windows-ci.yml`
 - `.gitignore`
@@ -775,4 +777,5 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/stable_core_parity.cmake`
 - `tests/structured_cps_abi.cmake`
 - `tools/benchmark_heterogeneous.sh`
+- `tools/verify_release_evidence.js`
 <!-- FILE_INVENTORY_END -->

@@ -87,7 +87,8 @@ script-defined special inputs.
 - CHANGELOG.md records user-visible changes and migration; it does not replace references.
 - README.md is the English project entry; README.zh-CN.md is its Chinese counterpart.
 - CI workflows own platform gates; release.yml owns tag checks, prebuilt packages, checksums,
-  and prerelease publication.
+  and prerelease publication. release-evidence.yml independently checks locked public release
+  metadata and asset digests.
 
 ## 5. Source responsibility boundaries
 
@@ -144,6 +145,7 @@ Git internals, and ignored generated artifacts are excluded.
 <!-- FILE_INVENTORY_BEGIN -->
 - `.github/workflows/linux-ci.yml`
 - `.github/workflows/macos-ci.yml`
+- `.github/workflows/release-evidence.yml`
 - `.github/workflows/release.yml`
 - `.github/workflows/windows-ci.yml`
 - `.gitignore`
@@ -605,4 +607,5 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/structured_cps_abi.cmake`
 - `tools/benchmark_heterogeneous.sh`
 - `tools/verify_ecosystem_lock.cmake`
+- `tools/verify_release_evidence.js`
 <!-- FILE_INVENTORY_END -->
