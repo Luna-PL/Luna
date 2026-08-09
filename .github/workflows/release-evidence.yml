@@ -26,10 +26,8 @@ jobs:
         include:
           - component: toolchain
             repository: Luna-PL/toolchains
-            checksum_pattern: SHA256SUMS
           - component: lunax
             repository: Luna-PL/Lunax
-            checksum_pattern: "*.sha256"
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
@@ -50,19 +48,22 @@ jobs:
           COMPONENT: ${{ matrix.component }}
           REPOSITORY: ${{ matrix.repository }}
           TAG: ${{ steps.release.outputs.tag }}
-          CHECKSUM_PATTERN: ${{ matrix.checksum_pattern }}
         run: |
           evidence_directory="release-evidence/$COMPONENT"
-          mkdir -p "$evidence_directory/checksums" "$evidence_directory/assets"
+          mkdir -p "$evidence_directory/assets"
           gh release view "$TAG" --repo "$REPOSITORY" \
             --json assets,isDraft,isPrerelease,publishedAt,tagName,url \
             > "$evidence_directory/release.json"
           gh api "repos/$REPOSITORY/git/ref/tags/$TAG" --jq .object.sha \
             > "$evidence_directory/tag-sha.txt"
-          gh release download "$TAG" --repo "$REPOSITORY" \
-            --pattern "$CHECKSUM_PATTERN" --dir "$evidence_directory/checksums"
-          gh release download "$TAG" --repo "$REPOSITORY" \
-            --dir "$evidence_directory/assets"
+          while IFS= read -r asset_url; do
+            asset_name="${asset_url##*/}"
+            curl --fail --location --silent --show-error \
+              --retry 5 --retry-all-errors --retry-delay 2 \
+              --connect-timeout 20 --max-time 180 \
+              --output "$evidence_directory/assets/$asset_name" \
+              "$asset_url"
+          done < <(jq -r '.assets[].url' "$evidence_directory/release.json")
 
       - name: Verify release evidence against ecosystem lock
         env:
@@ -73,7 +74,7 @@ jobs:
             "$COMPONENT" \
             "release-evidence/$COMPONENT/release.json" \
             "release-evidence/$COMPONENT/tag-sha.txt" \
-            "release-evidence/$COMPONENT/checksums"
+            "release-evidence/$COMPONENT/assets"
 
       - name: Verify artifact attestations
         env:
