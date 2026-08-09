@@ -26,4 +26,6 @@ commit；它不执行网络访问或修改操作。
 `Release evidence` workflow 是对应的联网门禁。它通过 `gh` 获取 lock 指定的每个 release，
 核对 release URL、发布时间、状态和 tag commit，要求资产名称集合完全一致，将 GitHub 提供
 的资产摘要与 lock 对比，并使用下载的 checksum 文件复核所记录的制品。任何不一致都会
-阻止候选升级；该门禁通过前，不得把 release 证据人工复制进 lock。
+阻止候选升级。它还要求每项资产的 GitHub/Sigstore attestation 均由对应组件的 release
+workflow 在 GitHub 托管 runner 上签发；该门禁通过前，不得把 release 证据人工复制进
+lock。

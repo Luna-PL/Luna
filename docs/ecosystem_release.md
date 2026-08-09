@@ -29,5 +29,7 @@ and the compiler's self-reported source commit. It performs no network or mutati
 The `Release evidence` workflow is the network-backed companion gate. It fetches each locked
 release with `gh`, confirms the release URL, timestamp, status, and tag commit, requires an exact
 asset-name set, compares GitHub's asset digests with the lock, and validates the downloaded
-checksum files against the recorded artifacts. A mismatch blocks promotion; release evidence
-must never be copied into the lock without this gate passing.
+checksum files against the recorded artifacts. It also requires every asset's GitHub/Sigstore
+attestation to be signed by that component's release workflow on a GitHub-hosted runner. A
+mismatch blocks promotion; release evidence must never be copied into the lock without this
+gate passing.

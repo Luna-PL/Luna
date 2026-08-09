@@ -41,7 +41,9 @@ jobs:
           COMPONENT: ${{ matrix.component }}
         run: |
           tag="$(node -e 'const lock=require("./ecosystem.lock.json"); process.stdout.write(lock.components[process.env.COMPONENT].published_release.tag)')"
+          signer_workflow="$(node -e 'const lock=require("./ecosystem.lock.json"); process.stdout.write(lock.components[process.env.COMPONENT].published_release.artifact_attestations.signer_workflow)')"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "signer_workflow=$signer_workflow" >> "$GITHUB_OUTPUT"
 
       - name: Download immutable release evidence
         env:
@@ -51,7 +53,7 @@ jobs:
           CHECKSUM_PATTERN: ${{ matrix.checksum_pattern }}
         run: |
           evidence_directory="release-evidence/$COMPONENT"
-          mkdir -p "$evidence_directory/checksums"
+          mkdir -p "$evidence_directory/checksums" "$evidence_directory/assets"
           gh release view "$TAG" --repo "$REPOSITORY" \
             --json assets,isDraft,isPrerelease,publishedAt,tagName,url \
             > "$evidence_directory/release.json"
@@ -59,6 +61,8 @@ jobs:
             > "$evidence_directory/tag-sha.txt"
           gh release download "$TAG" --repo "$REPOSITORY" \
             --pattern "$CHECKSUM_PATTERN" --dir "$evidence_directory/checksums"
+          gh release download "$TAG" --repo "$REPOSITORY" \
+            --dir "$evidence_directory/assets"
 
       - name: Verify release evidence against ecosystem lock
         env:
@@ -70,3 +74,16 @@ jobs:
             "release-evidence/$COMPONENT/release.json" \
             "release-evidence/$COMPONENT/tag-sha.txt" \
             "release-evidence/$COMPONENT/checksums"
+
+      - name: Verify artifact attestations
+        env:
+          COMPONENT: ${{ matrix.component }}
+          REPOSITORY: ${{ matrix.repository }}
+          SIGNER_WORKFLOW: ${{ steps.release.outputs.signer_workflow }}
+        run: |
+          while IFS= read -r -d '' asset; do
+            gh attestation verify "$asset" \
+              --repo "$REPOSITORY" \
+              --signer-workflow "$SIGNER_WORKFLOW" \
+              --deny-self-hosted-runners
+          done < <(find "release-evidence/$COMPONENT/assets" -type f -print0)

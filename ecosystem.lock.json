@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "snapshot": "luna-0.2.1-tooling-candidate.10",
+  "snapshot": "luna-0.2.1-tooling-candidate.11",
   "status": "candidate",
   "components": {
     "luna": {
@@ -13,43 +13,48 @@
     },
     "toolchain": {
       "repository": "https://github.com/Luna-PL/toolchains.git",
-      "commit": "36afb456c981cb4e2946bd1cfdd1691ef5550400",
-      "version": "0.1.1",
+      "commit": "71b6d7878af049b3f2ccd903120e6f2ef88ce878",
+      "version": "0.1.2",
       "compatible_luna_release_tag": "v0.2.1",
       "published_release": {
-        "tag": "v0.1.1",
-        "commit": "5a6651c3749dfde222d9d15b5c66330cbb61f2d2",
-        "url": "https://github.com/Luna-PL/toolchains/releases/tag/v0.1.1",
-        "published_at": "2026-08-03T17:47:21Z",
+        "tag": "v0.1.2",
+        "commit": "71b6d7878af049b3f2ccd903120e6f2ef88ce878",
+        "url": "https://github.com/Luna-PL/toolchains/releases/tag/v0.1.2",
+        "published_at": "2026-08-09T08:35:33Z",
         "checksum_manifest": {
           "asset": "SHA256SUMS",
-          "sha256": "8f9d19fa46f61f574a3c094d7496e1124b40d643cd658796b4238ffcd2741a3f"
+          "sha256": "d6cc98603d6eb0d1b1ad24905186b49b58acc95cd57c1a2cff7ab102b3b10aa4"
         },
         "artifacts": {
-          "luna-language-v0.1.1-darwin-arm64.vsix": "1c2cecf73835b7a1b44efb2ec8d6909f4b6b39c6a434adc4a17455491151e07a",
-          "luna-language-v0.1.1-linux-x64.vsix": "135913f8e319fe0d6e9c3396875dfcf472226ba556e61e766dc4f9a8bead953c",
-          "luna-language-v0.1.1-win32-x64.vsix": "36d83bfc1e697fa2fb9b7da5869bbced72a6f69e1e8e7e3e92464872095f3c16",
-          "luna-toolchain-0.1.1-linux-x86_64.tar.gz": "c52a33f7be595c91a703bd10303de7b38cea54c9a14ec77a099752d502aa25ae",
-          "luna-toolchain-0.1.1-macos-arm64.tar.gz": "047b5931349c73a9ff1e446e140773196493015d29a5c732b8cfc1da024717ca",
-          "luna-toolchain-0.1.1-windows-x86_64.zip": "a48fb90bae4ba9943ecd8ea2c9acad826e73a84d9d083a66355c155bc493f45d"
+          "luna-language-v0.1.2-darwin-arm64.vsix": "76613d40141b28ca286ad11967730183f84ce55652d0ceffe3b8094bf38ea7fc",
+          "luna-language-v0.1.2-linux-x64.vsix": "21512c64fe2bb83bd285af1aa9afc692c559922fa09250d094b45dbdaacae996",
+          "luna-language-v0.1.2-win32-x64.vsix": "379f77e0599427a7244d87a010e5eeb6fddfb4cae0a40c40f1b3cb9c9469c198",
+          "luna-toolchain-0.1.2-linux-x86_64.tar.gz": "763f723940049e0806416353d502d3bc81306ad29a3d2e17b3ea7c27e9c8b448",
+          "luna-toolchain-0.1.2-macos-arm64.tar.gz": "a74f86b391a67d53e429faed6bf35544a2306fb14355a7d53caf95998af69043",
+          "luna-toolchain-0.1.2-windows-x86_64.zip": "e3bb95909418cc98423c29593fe3dfea1da3c6e12bf7918d5bbc651919df2192"
         },
         "consumer_verification": {
           "workflow": "published-release.yml",
           "status": "passed",
-          "run": "https://github.com/Luna-PL/toolchains/actions/runs/30913733610",
-          "completed_at": "2026-08-04T13:25:48Z",
+          "run": "https://github.com/Luna-PL/toolchains/actions/runs/31303925363",
+          "completed_at": "2026-08-09T08:37:07Z",
           "verified_platforms": [
             "linux-x86_64",
             "macos-arm64",
             "windows-x86_64"
           ]
+        },
+        "artifact_attestations": {
+          "status": "passed",
+          "signer_workflow": "Luna-PL/toolchains/.github/workflows/release.yml",
+          "verification_run": "https://github.com/Luna-PL/toolchains/actions/runs/31303925363"
         }
       }
     },
     "lunax": {
       "repository": "https://github.com/Luna-PL/Lunax.git",
-      "commit": "94a8cf36a105a2964f85c18afae0b198215e789c",
-      "version": "0.1.1",
+      "commit": "8631285d5eb690a05ec8a09fd753b58e2c78cc0c",
+      "version": "0.1.2",
       "compatible_luna_release_tag": "v0.2.1",
       "backend_abi": 1,
       "release_tier": "mvp-prerelease",
@@ -57,28 +62,33 @@
       "release_verification": {
         "workflow": "release.yml",
         "status": "passed",
-        "run": "https://github.com/Luna-PL/Lunax/actions/runs/31302037306",
-        "completed_at": "2026-08-09T07:54:11Z",
-        "current_source_ci_run": "https://github.com/Luna-PL/Lunax/actions/runs/31301951430"
+        "run": "https://github.com/Luna-PL/Lunax/actions/runs/31303694437",
+        "completed_at": "2026-08-09T08:35:39Z",
+        "current_source_ci_run": "https://github.com/Luna-PL/Lunax/actions/runs/31303694281"
       },
       "published_release": {
-        "tag": "v0.1.1",
-        "commit": "02cafa57ace3ec1eabeb7b4dbdf20d8a41ad5f11",
-        "url": "https://github.com/Luna-PL/Lunax/releases/tag/v0.1.1",
-        "published_at": "2026-08-09T07:54:08Z",
+        "tag": "v0.1.2",
+        "commit": "8631285d5eb690a05ec8a09fd753b58e2c78cc0c",
+        "url": "https://github.com/Luna-PL/Lunax/releases/tag/v0.1.2",
+        "published_at": "2026-08-09T08:35:37Z",
         "prerelease": true,
         "artifacts": {
-          "lunax-0.1.1-ubuntu-24.04-x86_64.tar.gz": "e59295ea60638cd1a00274b43843cad3d8a9386f482398fdf8770f0b393dd2ac",
-          "lunax-0.1.1-ubuntu-24.04-x86_64.tar.gz.sha256": "f13a8a677ade2c35efb230f4010df30bc5a5828300d68c4761dcfd60e5fb7db0",
-          "lunax_0.1.1_amd64.deb": "c2d64c002c072e8e03638c23e3502c8180988548142023acd743a7c857603af3",
-          "lunax_0.1.1_amd64.deb.sha256": "38b975887d9891761d33e54b315156e400b1ddb21e96e206f990bada6cec502e"
+          "lunax-0.1.2-ubuntu-24.04-x86_64.tar.gz": "723d48cdbc05dfcd5fcf6152a05e59329f466377a568b910cffcec3081a55f00",
+          "lunax-0.1.2-ubuntu-24.04-x86_64.tar.gz.sha256": "28fc19b41a0259b3c0e45ca4f36b591f2f29d3754dd17cf5f475fa4b863c305c",
+          "lunax_0.1.2_amd64.deb": "957538025e9b95c63922583b1ce367761e97f7f7ce390f5820980303dfc366d5",
+          "lunax_0.1.2_amd64.deb.sha256": "95407092e2a046c7fab115d2f61e19c9d0bf408050936c45b20cea21cea8b445"
         },
         "consumer_verification": {
           "status": "passed",
           "platform": "ubuntu-24.04-x86_64",
           "workflow": "published-release.yml",
-          "run": "https://github.com/Luna-PL/Lunax/actions/runs/31302250014",
-          "completed_at": "2026-08-09T07:54:52Z"
+          "run": "https://github.com/Luna-PL/Lunax/actions/runs/31303926562",
+          "completed_at": "2026-08-09T08:36:58Z"
+        },
+        "artifact_attestations": {
+          "status": "passed",
+          "signer_workflow": "Luna-PL/Lunax/.github/workflows/release.yml",
+          "verification_run": "https://github.com/Luna-PL/Lunax/actions/runs/31303926562"
         }
       },
       "production_ready": false
@@ -87,6 +97,7 @@
   "integrity": {
     "algorithm": "sha256",
     "release_artifacts_require_checksums": true,
+    "release_artifacts_require_attestations": true,
     "mutable_artifacts_forbidden": true
   },
   "release": {
@@ -96,7 +107,8 @@
       "toolchain-compiler-integration-ci",
       "lunax-transactional-install-ci",
       "artifact-checksum-verification",
-      "release-evidence-ci"
+      "release-evidence-ci",
+      "artifact-attestation-verification"
     ]
   }
 }
