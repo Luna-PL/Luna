@@ -122,9 +122,11 @@ testing, runtime ABI, package, iterator, standard-library, compile-time, fragmen
 heterogeneous-compute, and versioning documents. Only the transitional getting-started entry
 remains outside the canonical pair.
 
-The paired Luna 0.3 evolution audit records the current model-convergence and
-slot/fragment refactoring assessment. It is a design audit, not part of the
-0.2 normative reference or the active implementation roadmap.
+The paired Luna 0.3 overall design draft is the umbrella RFC for the clean-break language,
+artifact, trust-boundary, resource, single-layer MoonIR, and evolution direction. The paired
+Luna 0.3 evolution audit remains a subordinate historical model-convergence and slot/fragment
+assessment. Both are design records, not part of the 0.2 normative reference or a claim of
+implementation.
 
 Examples demonstrate one topic per file; full_showcase is the combined Alpha example and
 slot_plugins demonstrates plugin use. Benchmark runners are responsible for reproducible
@@ -200,6 +202,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `docs/heterogeneous_compute.zh-CN.md`
 - `docs/iterators.md`
 - `docs/iterators.zh-CN.md`
+- `docs/luna_0.3_design.md`
+- `docs/luna_0.3_design.zh-CN.md`
 - `docs/luna_0.3_evolution_audit.md`
 - `docs/luna_0.3_evolution_audit.zh-CN.md`
 - `docs/packages.md`

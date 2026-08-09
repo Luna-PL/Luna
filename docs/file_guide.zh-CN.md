@@ -267,8 +267,10 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `docs/architecture.md` | 阶段关系、数据流和关键不变量 |
 | `docs/decisions.md` | 已采用设计的压缩理由 |
 | `docs/roadmap.md` | 未实现能力和阶段计划 |
-| `docs/luna_0.3_evolution_audit.md` | Luna 0.3 模型收敛与 slot/fragment 重构设计审计 |
-| `docs/luna_0.3_evolution_audit.zh-CN.md` | Luna 0.3 设计审计的中文对应版本 |
+| `docs/luna_0.3_design.md` | Luna 0.3 总体设计草案与已确认/待决边界 |
+| `docs/luna_0.3_design.zh-CN.md` | Luna 0.3 总体设计草案的中文对应版本 |
+| `docs/luna_0.3_evolution_audit.md` | 受总体设计约束的 Luna 0.3 slot/fragment 历史审计 |
+| `docs/luna_0.3_evolution_audit.zh-CN.md` | Luna 0.3 历史审计的中文对应版本 |
 | `docs/alpha_release.md` | 0.2.1 支持范围、限制和发布门 |
 | `docs/alpha_release.zh-CN.md` | Alpha 发布说明的中文对应版本 |
 | `docs/features.md` | 英文已实现功能导航 |
@@ -395,6 +397,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `docs/heterogeneous_compute.zh-CN.md`
 - `docs/iterators.md`
 - `docs/iterators.zh-CN.md`
+- `docs/luna_0.3_design.md`
+- `docs/luna_0.3_design.zh-CN.md`
 - `docs/luna_0.3_evolution_audit.md`
 - `docs/luna_0.3_evolution_audit.zh-CN.md`
 - `docs/packages.md`

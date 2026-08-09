@@ -174,6 +174,7 @@ or reference material:
 - [Metadata and selectors](docs/versioning.md)
 - [Architecture](docs/architecture.md)
 - [Architecture decisions](docs/decisions.md)
+- [Luna 0.3 overall design draft](docs/luna_0.3_design.md)
 - [Fragments and slots](docs/fragments.md)
 - [Runtime ABI and C FFI](docs/runtime_abi.md)
 - [Heterogeneous compute](docs/heterogeneous_compute.md)

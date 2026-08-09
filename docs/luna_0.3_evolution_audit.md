@@ -4,9 +4,25 @@ English | [简体中文](luna_0.3_evolution_audit.zh-CN.md)
 
 > Document category: RFC / implementation audit
 > Applies to: Luna 0.2.1 as the audited baseline; candidate Luna 0.3.0
-> Status: Draft
-> Normative status: Non-normative; this document does not change the 0.2.1 contract
+> Status: Historical Draft; design recommendations partly superseded
+> Normative status: Non-normative; subordinate to the [Luna 0.3 overall design](luna_0.3_design.md)
 > Implementation checked: `8d461d4` (2026-08-01)
+
+## 0. Supersession notice
+
+This file remains useful as a dated implementation audit of Slot/Fragment in 0.2.1. Its design
+recommendations are not an independent 0.3 authority. Where it conflicts with the overall
+design, the overall design governs. In particular:
+
+- 0.3 is a clean break and has no package `language`, edition, compatibility mode, migration
+  window, or legacy compiler branch;
+- Luna does not introduce an effect mechanism. References below to effect sets, effect bits,
+  effect contracts, or effect compatibility are superseded by compiler-derived, read-only,
+  typed sysmeta where such facts are actually needed;
+- compatibility lowering for old Rc/Arc or Slot/Fragment syntax is not part of the 0.3
+  compiler; old source uses the old compiler;
+- implementation order and release gates come from the overall design, while unresolved
+  Slot/Fragment semantics remain `TBD-SF*` rather than approved mechanisms.
 
 ## 1. Scope and decision
 

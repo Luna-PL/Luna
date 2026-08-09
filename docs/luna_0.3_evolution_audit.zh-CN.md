@@ -4,9 +4,21 @@
 
 > 文档类别：RFC / 实现审计
 > 适用版本：以 Luna 0.2.1 为审计基线，讨论候选 Luna 0.3.0
-> 状态：Draft
-> 规范性：非规范；本文不改变 0.2.1 语言契约
+> 状态：历史 Draft；其中的设计建议已被部分取代
+> 规范性：非规范；受 [Luna 0.3 总体设计](luna_0.3_design.zh-CN.md)约束
 > 实现核对：`8d461d4`（2026-08-01）
+
+## 0. 取代说明
+
+本文仍可作为 0.2.1 Slot/Fragment 实现状态的定时审计使用，但其中的设计建议不是
+独立的 0.3 决策来源。与总体设计冲突时，以总体设计为准。尤其是：
+
+- 0.3 明确断代，不加入 package `language`、edition、兼容模式、迁移窗口或旧编译器分支；
+- Luna 不引入 effect 机制。下文的 effect set、effect bits、effect contract 或 effect
+  compatibility 等表述已被取代；确实需要的事实由编译器推导为只读、强类型 sysmeta；
+- 0.3 编译器不提供旧 Rc/Arc 或 Slot/Fragment 语法的兼容 lowering；旧源码使用旧编译器；
+- 实现顺序和发布门以总体设计为准；未决 Slot/Fragment 语义保留为 `TBD-SF*`，不视为
+  已批准的语言机制。
 
 ## 1. 范围与结论
 
