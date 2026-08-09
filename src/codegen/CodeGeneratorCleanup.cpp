@@ -86,6 +86,17 @@ void CodeGenerator::emitOwnedPayloadCleanup(
                     std::to_string(index));
         return;
     }
+    if (type->kind == TypeKind::Record) {
+        for (size_t index = 0; index < type->fields.size(); ++index)
+            emitOwnedPayloadCleanup(
+                mBuilder->CreateExtractValue(
+                    value,
+                    {static_cast<unsigned>(index)},
+                    label + ".field"),
+                type->fields[index].type,
+                label + "." + type->fields[index].name);
+        return;
+    }
     if (type->kind == TypeKind::Result && type->typeArgs.size() == 2) {
         llvm::Value* isOk =
             mBuilder->CreateExtractValue(value, {0}, label + ".is_ok");
@@ -425,6 +436,15 @@ void CodeGenerator::emitCleanup(
                 mBuilder->CreateBr(continueBlock);
             mBuilder->SetInsertPoint(continueBlock);
         }
+        return;
+    }
+    if (action == luna::ownership::CleanupAction::RecordDrop) {
+        if (!type || type->kind != TypeKind::Record) {
+            error("record cleanup for '" + place +
+                  "' has no validated record type");
+            return;
+        }
+        emitOwnedPayloadCleanup(pointer, type, place + ".record");
         return;
     }
     if (!pointer->getType()->isPointerTy()) return;

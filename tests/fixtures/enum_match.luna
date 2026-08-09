@@ -1,4 +1,4 @@
-nominal enum Message {
+enum Message {
     Empty;
     Number(i32);
     Pair(i32, i32);

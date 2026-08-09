@@ -1,14 +1,14 @@
 # Luna 仓库文件与职责指南
 
 > 文档类别：实现说明 / 项目规范
-> 适用版本：Luna 0.2.1
+> 适用版本：Luna 0.3.0 开发期
 > 状态：Internal
 > 规范性：规范
 > 实现核对：待本次提交确认（2026-07-31）
 
 本文是 Luna 仓库物理目录和文件职责的唯一权威索引。它回答“代码或文档应该放到
-哪里”，不重新定义语言语义；语言契约仍以
-[0.2 Alpha 语义基线](reference/semantic_baseline_0.2.md)和对应参考文档为准。
+哪里”，不重新定义语言语义；语言契约以当前参考文档和 0.3 总体设计为准。
+[0.2 Alpha 语义基线](reference/semantic_baseline_0.2.md)只作为冻结的迁移证据保留。
 
 ## 1. 使用规则
 
@@ -126,6 +126,7 @@ obligation，不能重新推导所有权。
 |---|---|
 | `src/core/Ownership.h` | relation、usage、contract 和 cleanup action 基础模型 |
 | `src/core/SysMeta.h` | 编译器派生 sysmeta facts |
+| `src/core/StableIdentity.h` | Type/Symbol/Contract/Shape/ABI layout 的强类型稳定 ID 与域分离 hash |
 | `src/core/TypeIdentity.h` | TypeId/ShapeId 域和身份接口 |
 | `src/core/TypeSystem.h` | 目标无关 canonical `Type` 数据模型 |
 | `src/core/TypeRelations.h` | 类型等价、形状和身份关系接口 |
@@ -290,6 +291,8 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `docs/luna_0.3_design.zh-CN.md` | Luna 0.3 总体设计草案的中文对应版本 |
 | `docs/luna_0.3_evolution_audit.md` | 受总体设计约束的 Luna 0.3 slot/fragment 历史审计 |
 | `docs/luna_0.3_evolution_audit.zh-CN.md` | Luna 0.3 历史审计的中文对应版本 |
+| `docs/migration_0.2_to_0.3.md` | 0.2 至 0.3 破坏性变化登记和旧编译器迁移 corpus |
+| `docs/migration_0.2_to_0.3.zh-CN.md` | 0.2 至 0.3 迁移记录的中文对应版本 |
 | `docs/alpha_release.md` | 0.2.1 支持范围、限制和发布门 |
 | `docs/alpha_release.zh-CN.md` | Alpha 发布说明的中文对应版本 |
 | `docs/features.md` | 英文已实现功能导航 |
@@ -420,6 +423,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `docs/luna_0.3_design.zh-CN.md`
 - `docs/luna_0.3_evolution_audit.md`
 - `docs/luna_0.3_evolution_audit.zh-CN.md`
+- `docs/migration_0.2_to_0.3.md`
+- `docs/migration_0.2_to_0.3.zh-CN.md`
 - `docs/packages.md`
 - `docs/packages.zh-CN.md`
 - `docs/reference/README.md`
@@ -513,6 +518,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/codegen/CodeGeneratorStatements.cpp`
 - `src/core/Ownership.h`
 - `src/core/SysMeta.h`
+- `src/core/StableIdentity.h`
 - `src/core/TypeIdentity.h`
 - `src/core/TypeLayout.cpp`
 - `src/core/TypeLayout.h`
@@ -613,8 +619,15 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/external_fragment_dispatch.cmake`
 - `tests/ffi_aot.cmake`
 - `tests/file_guide_inventory.cmake`
+- `tests/luna_0_3_design_contract.cmake`
+- `tests/migration_0_2_baseline.cmake`
+- `tests/shadow_identity.cmake`
 - `tests/fixtures/aot_runtime_boundary.luna`
 - `tests/fixtures/apply_contract_checked_eagerly_invalid.luna`
+- `tests/fixtures/anonymous_record_duplicate_invalid.luna`
+- `tests/fixtures/anonymous_record_owned_field.luna`
+- `tests/fixtures/anonymous_record_partial_move_invalid.luna`
+- `tests/fixtures/anonymous_records.luna`
 - `tests/fixtures/array_move_element_invalid.luna`
 - `tests/fixtures/comparison_non_numeric_invalid.luna`
 - `tests/fixtures/comparison_operators.luna`
@@ -658,6 +671,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/heterogeneous_bulk_transfer_invalid.luna`
 - `tests/fixtures/interceptor_resume_invalid.luna`
 - `tests/fixtures/invalid_export.luna`
+- `tests/fixtures/inline_where_not_satisfied_invalid.luna`
 - `tests/fixtures/iterator_count_move_only_invalid.luna`
 - `tests/fixtures/iterator_filter_move_only_owning_invalid.luna`
 - `tests/fixtures/iterator_fold_accumulator_borrow_invalid.luna`
@@ -688,6 +702,9 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/legacy_fragment_invalid.luna`
 - `tests/fixtures/logical_short_circuit.luna`
 - `tests/fixtures/missing_return_invalid.luna`
+- `tests/fixtures/named_record_construction.luna`
+- `tests/fixtures/named_record_missing_field_invalid.luna`
+- `tests/fixtures/named_record_unknown_field_invalid.luna`
 - `tests/fixtures/never_return_value_invalid.luna`
 - `tests/fixtures/never_type.luna`
 - `tests/fixtures/nominal_modifier_invalid.luna`
@@ -708,6 +725,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/ownership_return_path_leaks_invalid.luna`
 - `tests/fixtures/ownership_return_path_valid.luna`
 - `tests/fixtures/ownership_unreachable_after_return.luna`
+- `tests/fixtures/post_let_usage_invalid.luna`
 - `tests/fixtures/package_using_missing_alias_invalid.luna`
 - `tests/fixtures/packages/alias_collision/01_first.luna`
 - `tests/fixtures/packages/alias_collision/02_second.luna`
@@ -735,6 +753,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/rc_arc.luna`
 - `tests/fixtures/rc_implicit_copy_invalid.luna`
 - `tests/fixtures/recursive_structural_type_invalid.luna`
+- `tests/fixtures/record_block_context.luna`
 - `tests/fixtures/reflection_index_out_of_range.luna`
 - `tests/fixtures/repl_session.txt`
 - `tests/fixtures/result_ambiguous_constructor_invalid.luna`
@@ -774,6 +793,11 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/structural_type_equivalence.luna`
 - `tests/fixtures/type_domains_reflection.luna`
 - `tests/fixtures/type_relations.luna`
+- `tests/fixtures/usage_block_linear_unconsumed_invalid.luna`
+- `tests/fixtures/usage_block_loop_unconsumed_invalid.luna`
+- `tests/fixtures/usage_block_pattern_unconsumed_invalid.luna`
+- `tests/fixtures/usage_blocks.luna`
+- `tests/fixtures/usage_contract_weaken_invalid.luna`
 - `tests/fixtures/versioned_fragment_contract_change_invalid.luna`
 - `tests/fixtures/workspaces/local/app/luna.package`
 - `tests/fixtures/workspaces/local/app/src/main.luna`

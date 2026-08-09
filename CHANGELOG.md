@@ -1,5 +1,30 @@
 # Changelog
 
+## 0.3.0 — Development
+
+- Began the clean-break 0.3 language line with no `language=`, edition, or
+  structural-default compatibility mode; the frozen 0.2.1 compiler remains
+  the migration tool for old source.
+- Made every named struct and enum nominal by default, removed the redundant
+  `nominal` keyword/modifier, and kept explicit `type_same_shape` queries for
+  structural relations.
+- Added keyword-free anonymous record types and values, explicit named
+  `Target { field: value }` construction, canonical field identity/layout,
+  source-ordered evaluation, recursive owned-field cleanup, and grammar-context
+  separation from statement blocks.
+- Added C++-style constrained parameters and inline `where` predicates as
+  frontend sugar over the existing compile-time constraint evaluator, without
+  an effect mechanism or a MoonIR node.
+- Added zero-cost `affine {}`/`linear {}` binding-default blocks and explicit
+  `copy let` overrides. Sema fixes local, pattern, and loop usage contracts,
+  rejects weakening, and erases the lexical policy before MoonIR.
+- Split Sema behind component-scoped capabilities and introduced distinct
+  shadow TypeId, ShapeId, SymbolId, ContractId, and AbiLayoutId identities plus
+  verified sysmeta projections.
+- Reclassified the published toolchain/Lunax ecosystem lock as a frozen 0.2.1
+  migration baseline; it is no longer a release-compatibility claim for the
+  in-progress 0.3 compiler.
+
 ## 0.2.1 — Prerelease
 
 - Made the embedded compiler commit follow Git HEAD/ref changes during incremental

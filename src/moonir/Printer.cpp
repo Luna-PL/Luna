@@ -50,6 +50,7 @@ void Printer::print(const Module& module, std::ostream& out) const {
     for (const auto& type : module.typeTable) {
         out << "  moon.type @" << type.id.value
             << " shape @" << type.shapeId.value
+            << " abi_layout @" << type.abiLayoutId.value
             << " domain " << typeDomainName(type.domain)
             << " identity " << identityModeName(type.identityMode)
             << " spelling \"" << type.displayName << '"';
@@ -85,6 +86,8 @@ void Printer::print(const Module& module, std::ostream& out) const {
 
     for (const auto& record : module.declarationTable) {
         out << "  moon.decl @" << record.id << " family @" << record.familyId
+            << " symbol @" << record.symbolId.value
+            << " contract @" << record.contractId.value
             << " kind " << declarationKindName(record.kind)
             << " retention " << retentionName(record.retention);
         if (!record.linkageName.empty()) out << " linkage \"" << record.linkageName << '"';

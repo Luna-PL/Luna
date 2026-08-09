@@ -6,8 +6,8 @@
 > and I/O adapters remain proposed
 
 The standard library stays in the main repository until the package, resource,
-Moon-container, and Runtime ABI contracts are stable. The 0.2.1 sources remain a
-compatibility baseline; new owning-container APIs target the explicit 0.3 language mode.
+Moon-container, and Runtime ABI contracts are stable. The 0.2.1 sources remain a historical
+migration baseline; new owning-container APIs target the clean-break 0.3 compiler.
 API sketches in this document describe semantics, not frozen 0.3 spelling.
 
 ## 1. Goals and non-goals
@@ -325,8 +325,7 @@ the first usable IO/Vec/error surface.
 ### Stage A: contracts and package skeleton
 
 - implemented: central exact 0.3 Core identities for Result, From, Drop, iterators, and
-  resources, while preserving the effective 0.2 compiler identities until an explicit 0.3
-  language mode exists;
+  resources, staged beside the effective 0.2 identities for the one-time compiler switch;
 - implemented: `org.luna.sys` and `org.luna.alloc` dependency skeletons;
 - implemented: append-only console-input and filesystem Runtime ABI capability contracts,
   including compatibility with previously published v1 prefixes;

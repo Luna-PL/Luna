@@ -2,7 +2,7 @@
 
 > 文档类别：已采用设计决策
 > 适用版本：Luna 0.2.1
-> 状态：Active
+> 状态：冻结的 0.2 理由基线；与 0.3 总体设计冲突处已被取代
 > 规范性：非规范理由记录；当前行为以 [Alpha 语义参考](reference/README.md) 为准
 > 实现核对：2026-07-31
 
@@ -48,11 +48,14 @@ Moon 容器、签名验证、独立 MoonRuntime 装载和热点 JIT 尚未成为
 
 ## D003：类型域、结构形状与名义身份
 
+> 0.3 更新：关系分离仍然有效，但具名 struct/enum 现在默认名义。见 0.3 总体设计的 C008/TY002。
+
 **决定**
 
 - 区分 Value、Meta、Compiler/Inference/Error 等类型域。
 - TypeId 表示语言身份，ShapeId 表示结构形状，ABI compatibility 是第三种关系。
-- struct/enum 默认可按结构形成身份；显式 nominal 声明保留声明来源。
+- 具名 struct/enum 默认具有名义声明身份；结构比较是显式 ShapeId/constraint relation；
+  `nominal` 在 0.3 中不是声明修饰符。
 - 类型、布局和所有权是不同维度。
 
 **理由**
@@ -144,4 +147,3 @@ Moon 容器、签名验证、独立 MoonRuntime 装载和热点 JIT 尚未成为
 
 新决策只有在实现、测试和参考文档同步后才能加入本文件。被推翻的决定直接修改当前
 摘要并在 `CHANGELOG.md` 记录迁移；详细讨论过程留在 Git 历史，不重新建立历史文档树。
-

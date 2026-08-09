@@ -1,0 +1,60 @@
+enum Choice {
+    None;
+    Some(i32);
+}
+
+fn main() -> i32 {
+    affine {
+        // Ordinary nested blocks inherit the affine default.
+        let dropped = 1;
+        {
+            let inherited = 2;
+            move inherited;
+        }
+
+        // A nested usage block replaces the inherited default.
+        linear {
+            let strict = 3;
+            move strict;
+
+            // Usage and borrow relation are orthogonal: moving the reference
+            // handle consumes it without transferring ownership of `source`.
+            copy let source = 9;
+            let view = borrow source;
+            move view;
+
+            // Explicit binding contracts replace the block default.
+            copy let repeated = 4;
+            print(repeated + repeated);
+            affine let relaxed = 5;
+
+            // A bare allocation of a Copy type keeps the explicit C-like
+            // contract when the block default is overridden.
+            copy let manual = new i32(10);
+            free manual;
+
+            // Pattern and loop bindings receive the current default.
+            copy let choice = Choice::Some(6);
+            match choice {
+                Choice::None => {},
+                Choice::Some(item) => { move item; }
+            }
+            for item in [7, 8] {
+                move item;
+            }
+
+            // Lambda parameters and locals restart from the Copy default.
+            let compute = fn() -> i32 {
+                let local = 21;
+                return local + local;
+            };
+            copy let answer = compute();
+            print(answer);
+            move compute;
+        }
+    }
+
+    // Leaving a usage block restores the surrounding Copy default.
+    let ordinary = 21;
+    return ordinary + ordinary;
+}

@@ -33,4 +33,11 @@ private:
         BodyContextAccess::FromIteratorImplementation;
 
     BodyContextAccess mContext;
+
+    luna::ownership::Usage inherentUsageForInitializer(
+        Expr* initializer, const TypePtr& type);
+    luna::ownership::Usage finalizeBindingUsage(
+        const std::string& name, const TypePtr& type, Expr* initializer,
+        luna::ownership::Usage requested, bool isExplicit,
+        int line, int column);
 };

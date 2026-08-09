@@ -1,0 +1,15 @@
+enum Choice {
+    None;
+    Some(i32);
+}
+
+fn main() -> i32 {
+    linear {
+        copy let choice = Choice::Some(1);
+        match choice {
+            Choice::None => {},
+            Choice::Some(item) => {}
+        }
+    }
+    return 0;
+}

@@ -48,6 +48,24 @@ inline constexpr bool mustConsume(Usage usage) {
     return usage == Usage::Linear;
 }
 
+inline constexpr uint8_t usageStrength(Usage usage) {
+    switch (usage) {
+        case Usage::Copy: return 0;
+        case Usage::Affine: return 1;
+        case Usage::Linear: return 2;
+    }
+    return 0;
+}
+
+inline constexpr bool satisfiesUsageRequirement(
+    Usage requested, Usage required) {
+    return usageStrength(requested) >= usageStrength(required);
+}
+
+inline constexpr Usage strongerUsage(Usage left, Usage right) {
+    return usageStrength(left) >= usageStrength(right) ? left : right;
+}
+
 inline constexpr std::string_view relationName(Relation relation) {
     switch (relation) {
         case Relation::Owned: return "owned";
@@ -74,6 +92,7 @@ enum class CleanupAction : uint8_t {
     ResultDrop,
     EnumDrop,
     ArrayDrop,
+    RecordDrop,
 };
 
 inline constexpr std::string_view cleanupActionName(CleanupAction action) {
@@ -85,6 +104,7 @@ inline constexpr std::string_view cleanupActionName(CleanupAction action) {
         case CleanupAction::ResultDrop: return "result_drop";
         case CleanupAction::EnumDrop: return "enum_drop";
         case CleanupAction::ArrayDrop: return "array_drop";
+        case CleanupAction::RecordDrop: return "record_drop";
     }
     return "invalid";
 }

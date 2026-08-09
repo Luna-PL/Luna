@@ -2,7 +2,7 @@
 
 > Document category: adopted design decisions
 > Applies to: Luna 0.2.1
-> Status: Active
+> Status: Frozen 0.2 rationale baseline; superseded where the 0.3 overall design differs
 > Normative status: non-normative rationale record; current behavior follows the [Alpha semantic reference](reference/README.md)
 > Implementation audit: 2026-07-31
 
@@ -55,13 +55,16 @@ remain planned capabilities.
 
 ## D003: Type domains, structural shape, and nominal identity
 
+> 0.3 update: the relation split remains valid, but named structs/enums are now nominal by
+> default. See C008/TY002 in the 0.3 overall design.
+
 **Decision**
 
 - Distinguish Value, Meta, Compiler/Inference/Error, and related type domains.
 - TypeId is language identity, ShapeId is structural shape, and ABI compatibility is a third
   relation.
-- Structs/enums may form structural identity by default; explicit nominal declarations retain
-  declaration origin.
+- Named structs/enums have nominal declaration identity by default. Structural comparison is an
+  explicit ShapeId/constraint relation; `nominal` is not a declaration modifier in 0.3.
 - Type, layout, and ownership are separate dimensions.
 
 **Rationale**

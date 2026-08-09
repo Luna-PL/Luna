@@ -1,4 +1,4 @@
-nominal struct SourceErrorResource {
+struct SourceErrorResource {
     marker: i32;
 }
 

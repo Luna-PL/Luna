@@ -1,8 +1,8 @@
-# Luna 0.2 Alpha 内置类型清单
+# Luna 0.3 开发期内置类型清单
 
-> 文档类别：Alpha 参考与实现状态矩阵
-> 适用版本：Luna 0.2.1
-> 状态：Active；各项稳定性见表格
+> 文档类别：开发期参考与实现状态矩阵
+> 适用版本：Luna 0.3.0 候选版
+> 状态：活跃开发；各项稳定性见表格
 > 规范性：源码拼写、类型域和 usage 规则规范；布局数字为 Internal Alpha ABI
 > 首次实现核对：`d0ab31c`（2026-07-31）
 
@@ -69,18 +69,16 @@
 
 | 来源 | 域/身份 | 默认 usage | 当前表示/状态 |
 |---|---|---|---|
-| `struct` | Value/Structural | Affine | pointer-represented product；字段 shape 决定身份 |
-| `nominal struct` | Value/Nominal | Affine | pointer-represented；声明身份不可擦除 |
-| `enum` | Value/Structural | 载荷 usage 上确界 | inline ADT v1 |
-| `nominal enum` | Value/Nominal | 载荷 usage 上确界 | inline ADT v1 + 声明身份 |
+| `struct` | Value/Nominal | Affine | pointer-represented product；声明身份不可擦除 |
+| `enum` | Value/Nominal | 载荷 usage 上确界 | inline ADT v1 + 声明身份 |
 | `trait` | Compiler/Nominal | 不作为普通运行时值 | 静态解析行为契约 |
 | `meta` schema | Meta/MetaSchema | 编译期值 | 默认无普通运行时表示 |
 | type parameter/`Self` | Compiler/CompilerIntrinsic | 由实例化类型决定 | MoonIR 前必须实例化或合法保留为模板事实 |
 | slot type | Value/Structural control contract | 不作为普通 owning data；内部 handle 默认为 Copy | host-only、Once/Many 属于 shape |
 | fragment type | Value/Structural control contract | 不作为普通 owning data；内部 handle 默认为 Copy | host-only、interceptor/context 属于 shape |
 
-Product 的默认 Affine 来自其独占 heap 表示。结构相同的默认 struct 可以具有相同
-TypeId；名义 product 即使布局相同也不同。
+具名 product 的默认 Affine 目前来自其独占 heap 表示。不同具名 product 即使
+`type_same_shape` 为真，TypeId 也始终不同。
 
 ## 5. 编译期可见的编译器内在类型
 
@@ -90,7 +88,7 @@ TypeId；名义 product 即使布局相同也不同。
 | `declaration_view<T>` | Compiler/CompilerIntrinsic | 是，0 或 1 个 callable 参数 | 默认擦除 | Implemented Experimental |
 | `declaration_ref<T>` | Compiler/CompilerIntrinsic | 是，0 或 1 个 callable 参数 | 默认擦除 | Implemented Experimental |
 | compiler Iterator recipe | Compiler/CompilerIntrinsic | 不能作为公开命名类型构造 | 不形成稳定 iterator ABI | Implemented Experimental |
-| anonymous `Record` | Value/Structural internal form | 当前无独立源码语法 | pointer-represented | Internal |
+| `{ x: T, y: U }` record | Value/Structural | 可写；不使用 `record` 关键字 | 内联、按字段名规范化 aggregate | 0.3 开发期已实现 |
 
 `declaration_view` 是集合式静态选择视图；`declaration_ref` 是已解析单一声明引用。
 两者都不是可以传给普通 FFI 或长期存储的反射对象。
@@ -168,4 +166,3 @@ TypeId；名义 product 即使布局相同也不同。
 - kernel/event：`tests/gpu_target_split.cmake`、`tests/moon_cost_boundaries.cmake`
 - Core 类型：`tests/core_surface.cmake`
 - MoonIR 类型拒绝：`tests/semantic_regressions.cmake` 和 Verifier 回归
-

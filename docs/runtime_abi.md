@@ -132,7 +132,7 @@ repeating these partial operations while handling `INTERRUPTED` explicitly.
 The non-v1 `rt_compat_console_*_0_2` helpers are an intentionally temporary adapter for the
 0.2.1 `std::io` module. They provide cstr/i32 formatting and bounded line input without
 freezing the future owned String or formatting traits. They are declared in `Runtime.h`, not
-the stable public `RuntimeABI.h`, and may be replaced when the explicit 0.3 mode lands.
+the stable public `RuntimeABI.h`, and are removed by the one-time 0.3 implementation switch.
 
 ## Five resource domains that must not be mixed
 

@@ -2,9 +2,10 @@
 
 [English](features.md) | [简体中文](features.zh-CN.md)
 
-本文是 Luna 0.2.1 已实现语言表面的导航图。每节只解释该能力在整体架构中的
+本文是 Luna 0.3 开发期已实现语言表面的导航图。每节只解释该能力在整体架构中的
 位置，并链接到具体参考或设计文档。实验性状态和已知限制见
-[Alpha 发布说明](alpha_release.zh-CN.md)。
+[0.3 总体设计](luna_0.3_design.zh-CN.md)；
+[0.2.1 发布说明](alpha_release.zh-CN.md)是历史基线。
 
 ## 经过验证的编译管线
 
@@ -18,23 +19,28 @@ MoonIR 未来还将作为可移植 Moon 容器和 MoonRuntime 的语言级安全
 
 ## 类型、泛型与 trait
 
-结构体和枚举默认采用结构化身份，`nominal` 显式创建名义边界。语义类型身份不会
-和目标平台物理布局混为一谈。泛型按实际需要实例化，普通静态 trait 在编译期
+具名结构体和枚举默认采用名义身份；匿名 `{ field: Type }` record 保持结构化。
+`type_same_shape` 检查 shape 但不擦除声明身份，`Target { field: value }` 用于显式具名构造。
+泛型按实际需要实例化，普通静态 trait 在编译期
 解析，不需要 vtable 或运行时 trait 查找。
-具名 `constraint` 谓词提供独立的 C++ concept 风格边界：用户可以组合编译期
-类型命题，编译器在泛型实例化点完成证明，constraint 不进入 MoonIR。
+具名 `constraint` 谓词提供 C++ concept 风格边界：受约束参数、具名
+`where Constraint<T>` 和 inline `where` 谓词都组合编译期类型命题，并在泛型实例化点完成证明，不进入 MoonIR。
 
 规范参考：[完整类型系统](reference/type_system.md)和
 [内置类型清单](reference/builtin_types.md)。设计理由见
-[架构决策 D003/D004](decisions.md)。
+[0.3 C008/TY002 设计](luna_0.3_design.zh-CN.md#c008具名类型默认名义confirmed)与历史架构决策 D004。
 
 ## 所有权与显式成本
 
 Luna 将所有权关系和使用次数分开：值可以是拥有、共享借用或可变借用，同时具有
 copy、affine 或 linear 使用约束。`move`、`borrow`、路径敏感清理和线性 kernel
 event 会被检查器及 MoonIR 明确记录。
+`affine {}` / `linear {}` 为新 binding 设置零成本词法 default；显式
+`copy let` / `affine let` / `linear let` contract 可覆盖 default，但不能弱化固有
+Resource 要求。只有最终 binding contract 进入 MoonIR。
 
-具体设计：[架构决策 D004](decisions.md)。
+具体设计：[架构决策 D004](decisions.md)与
+[0.3 C009/C010](luna_0.3_design.zh-CN.md#c010linear--affineconfirmed)。
 
 ## 错误与 panic
 
@@ -93,7 +99,7 @@ Package ID 使用反向 DNS 名称，是版本和依赖单元；module 使用 `:
 ## 结构化 fragment
 
 `interceptor`、`context`、`slot`、`resume`、`abort` 和 `apply` 用于表达结构化
-控制效果。静态路径直接结构化降级；动态路径必须显式声明，并只保留运行时分派
+控制流与扩展性。静态路径直接结构化降级；动态路径必须显式声明，并只保留运行时分派
 所需的 descriptor。
 
 具体说明：[Fragment、slot 与插件](fragments.md)。

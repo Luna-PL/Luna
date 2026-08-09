@@ -1,4 +1,4 @@
-nominal struct Message {
+struct Message {
     code: i32;
 }
 

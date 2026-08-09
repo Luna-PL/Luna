@@ -1,13 +1,13 @@
-# Luna 0.2 Alpha Semantic Reference
+# Luna Semantic Reference
 
 > Document category: reference entry point
-> Applies to: Luna 0.2.1
+> Applies to: Luna 0.3.0 development, with an explicitly frozen 0.2 baseline
 > Status: Active
 > Normative status: this page defines navigation only; each subdocument declares its own status
 > Initial implementation audit: `d0ab31c` (2026-07-31)
 
-This directory contains the semantic baseline and itemized language reference for Luna 0.2
-Alpha. It separates language commitments, the current implementation, internal
+This directory contains the current itemized language reference and the frozen Luna 0.2
+Alpha migration baseline. It separates language commitments, the current implementation, internal
 representation, and future plans so that an incidental compiler implementation is not
 mistaken for a permanent language rule.
 
@@ -15,14 +15,13 @@ mistaken for a permanent language rule.
 
 1. [Documentation recording rules](documentation_rules.md): document categories, status,
    normative scope, and change rules;
-2. [0.2 Alpha semantic baseline](semantic_baseline_0.2.md): the core decisions frozen by
-   A0 and the boundaries that remain open;
-3. [Type-system reference](type_system.md): type domains, identity, relations, inference,
+2. [Type-system reference](type_system.md): current type domains, identity, relations, inference,
    ownership, and layout model;
-4. [Builtin type inventory](builtin_types.md): the authoritative inventory of source-level
+3. [Builtin type inventory](builtin_types.md): the authoritative inventory of source-level
    builtins, compiler intrinsics, and internal types;
-5. [Error-model contract](error_model.md): `Result`, `?`, `panic`, and Runtime/FFI
+4. [Error-model contract](error_model.md): `Result`, `?`, `panic`, and Runtime/FFI
    error boundaries.
+5. [0.2 Alpha semantic baseline](semantic_baseline_0.2.md): frozen migration evidence;
 
 Additional rationale and implementation notes:
 

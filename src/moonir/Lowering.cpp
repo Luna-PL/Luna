@@ -317,6 +317,21 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         auto value = std::make_unique<moon::FieldAccessExpr>();
         value->object = lowerExpr(field->object.get());
         value->field = field->field;
+        value->type = field->resultType;
+        TypePtr objectType = value->object ? value->object->type : nullptr;
+        if (objectType && objectType->kind == TypeKind::Reference)
+            objectType = objectType->inner;
+        if (objectType && (objectType->kind == TypeKind::Rc ||
+                           objectType->kind == TypeKind::Arc))
+            objectType = objectType->inner;
+        if (objectType) {
+            for (const auto& candidate : objectType->fields) {
+                if (candidate.name == field->field) {
+                    value->type = candidate.type;
+                    break;
+                }
+            }
+        }
         result = std::move(value);
     } else if (auto* index = dynamic_cast<const ::IndexExpr*>(expression)) {
         auto value = std::make_unique<moon::IndexExpr>();
@@ -329,6 +344,16 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
             value->elements.push_back(lowerExpr(element.get()));
         value->elementType = array->elementType;
         value->type = Type::makeArray(array->elementType, array->elements.size());
+        result = std::move(value);
+    } else if (auto* record = dynamic_cast<const ::RecordLiteralExpr*>(expression)) {
+        auto value = std::make_unique<moon::RecordLiteralExpr>();
+        for (const auto& field : record->fields) {
+            moon::RecordLiteralExpr::Field loweredField;
+            loweredField.name = field.name;
+            loweredField.value = lowerExpr(field.value.get());
+            value->fields.push_back(std::move(loweredField));
+        }
+        value->type = record->recordType;
         result = std::move(value);
     } else if (auto* allocation = dynamic_cast<const ::HeapAllocExpr*>(expression)) {
         auto value = std::make_unique<moon::HeapAllocExpr>();
@@ -549,6 +574,7 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
             arm.variantIndex = static_cast<uint32_t>(sourceArm.variantIndex);
             arm.bindings = sourceArm.bindings;
             arm.bindingTypes = sourceArm.bindingTypes;
+            arm.bindingUsages = sourceArm.bindingUsages;
             for (const auto& type : arm.bindingTypes)
                 if (mModule) mModule->registerType(type);
             arm.body = lowerBlock(sourceArm.body.get());
@@ -563,6 +589,7 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
     } else if (auto* loop = dynamic_cast<const ::ForStmt*>(statement)) {
         auto value = std::make_unique<moon::ForStmt>();
         value->varName = loop->varName;
+        value->bindingUsage = loop->bindingUsage;
         value->iterable = lowerExpr(loop->iterable.get());
         value->body = lowerBlock(loop->body.get());
         value->elementType = loop->elementType;
@@ -899,6 +926,7 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
                 ? metadata->name : metadata->generatedSymbolName);
         record.familyId = declarationIdentity(
             metadata, mModule->name, "meta", metadata->name);
+        record.symbolId = luna::identity::symbolIdFromCanonical(record.id);
         record.sourceName = metadata->name;
         record.linkageName = metadata->generatedSymbolName;
         record.kind = DeclarationKind::MetadataSchema;
@@ -908,6 +936,11 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         record.location = locationOf(metadata);
         record.type = mSymbols ? mSymbols->lookupType(schemaSymbol) : nullptr;
         mModule->registerType(record.type);
+        record.canonicalContract = moon::canonicalContract(record);
+        record.contractId = luna::identity::contractIdFromCanonical(
+            record.canonicalContract);
+        record.sysmeta.identity.symbol = record.symbolId;
+        record.sysmeta.identity.contract = record.contractId;
         mModule->declarationTable.push_back(std::move(record));
         return nullptr;
     }
@@ -927,6 +960,8 @@ Retention LunaLowerer::lowerRetention(RetentionKind retention) const {
 
 void LunaLowerer::lowerCommonDeclaration(const ::Decl* source,
                                          moon::Decl& target) {
+    target.symbolId = luna::identity::symbolIdFromCanonical(
+        target.declarationId);
     target.packageId = source->packageId.empty() ? mModule->name : source->packageId;
     target.modulePath = source->modulePath;
     target.retention = lowerRetention(source->retention);
@@ -969,6 +1004,8 @@ TypePtr LunaLowerer::inferredExprType(const ::Expr* expression) const {
         return variant->constructedType;
     if (auto* array = dynamic_cast<const ::ArrayLiteralExpr*>(expression))
         return Type::makeArray(array->elementType, array->elements.size());
+    if (auto* record = dynamic_cast<const ::RecordLiteralExpr*>(expression))
+        return record->recordType;
     if (auto* allocation = dynamic_cast<const ::HeapAllocExpr*>(expression))
         return allocation->resultType
             ? allocation->resultType
@@ -983,6 +1020,7 @@ void LunaLowerer::addDeclarationRecord(const moon::Decl& declaration,
     DeclarationRecord record;
     record.id = declaration.declarationId;
     record.familyId = declaration.familyId;
+    record.symbolId = luna::identity::symbolIdFromCanonical(record.id);
     record.sourceName = declaration.name;
     record.linkageName = declaration.generatedSymbolName;
     record.kind = kind;
@@ -996,6 +1034,11 @@ void LunaLowerer::addDeclarationRecord(const moon::Decl& declaration,
             record.type->kind == TypeKind::Fragment)
             record.sysmeta.control = record.type->sysmeta.control;
     }
+    record.canonicalContract = moon::canonicalContract(record);
+    record.contractId = luna::identity::contractIdFromCanonical(
+        record.canonicalContract);
+    record.sysmeta.identity.symbol = record.symbolId;
+    record.sysmeta.identity.contract = record.contractId;
     record.location = declaration.location;
     mModule->declarationTable.push_back(std::move(record));
 }

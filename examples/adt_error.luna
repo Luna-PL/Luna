@@ -1,8 +1,8 @@
-nominal struct Point {
+struct Point {
     x: i32;
 }
 
-nominal struct Pixel {
+struct Pixel {
     x: i32;
 }
 

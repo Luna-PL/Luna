@@ -1,10 +1,10 @@
-# Luna 0.2 Alpha 类型系统参考
+# Luna 0.3 开发期类型系统参考
 
-> 文档类别：语言契约与 Alpha 参考
-> 适用版本：Luna 0.2.1
-> 状态：核心模型 Frozen for Alpha；具体表面按章节标注
+> 文档类别：语言契约与开发期参考
+> 适用版本：Luna 0.3.0 候选版
+> 状态：活跃开发；具体表面按章节标注
 > 规范性：类型域、身份、关系、usage 和形成规则规范；内部布局部分非公共 ABI
-> 首次实现核对：`d0ab31c`（2026-07-31）
+> 0.3 名义类型/record 实现检查点：2026-08-09
 
 本文定义 Luna 当前类型系统的共同词汇和规则。所有源码类型的逐项状态见
 [内置类型清单](builtin_types.md)。设计理由见
@@ -40,22 +40,22 @@ Luna 对一个值至少回答四个不同问题：
 | 模式 | 典型来源 | 身份规则 |
 |---|---|---|
 | Builtin | `i32`、`bool`、`never` | 由语言内置种类和参数确定 |
-| Structural | 默认 `struct`、默认 `enum`、`Result`、函数 | 由完整结构形状确定 |
-| Nominal | `nominal struct/enum`、trait | 由 package/module 声明身份确定 |
+| Structural | 匿名 record、`Result`、函数 | 由完整的规范结构形状确定 |
+| Nominal | 具名 `struct`/`enum`、trait | 由 package/module 声明身份确定 |
 | MetaSchema | `meta` schema | 始终具有 schema 声明身份 |
 | CompilerIntrinsic | 视图、type parameter、Iterator recipe | 由编译器契约确定，不是普通用户布局 |
 | Inference/Error | Sema 状态 | 不形成可发布类型身份 |
 
 ### 3.1 TypeId
 
-`TypeId` 表示语义类型身份。默认结构类型的 TypeId 来自其规范结构；名义类型的
-TypeId 包含声明身份和泛型实参。
+`TypeId` 表示语义类型身份。匿名结构类型的 TypeId 来自其规范结构；所有具名
+struct/enum 的 TypeId 包含声明身份和泛型实参。
 
 ### 3.2 ShapeId
 
 `ShapeId` 描述结构形状。它包括：
 
-- 字段/variant 名称和顺序；
+- 字段/variant 名称和规范顺序；
 - 字段和载荷类型；
 - 泛型实例参数；
 - 引用的共享/可变类别；
@@ -98,17 +98,24 @@ device_buffer<T>
 `affine T` 和 `linear T` 可以出现在绑定、参数、返回和 callable contract 位置，
 但修饰的是 usage，不是 `T` 的 TypeId。
 
+`affine { ... }` / `linear { ... }` 为新建 local、match pattern 与 loop binding 提供
+词法 default。普通嵌套 block 继承 default，嵌套 usage block 替换它，lambda body 从 Copy
+重新开始。`copy let` / `affine let` / `linear let` 是显式 local 覆盖。Sema 将
+default 与类型/initializer 固有要求合并，拒绝显式弱化，并且只向 MoonIR 输出最终
+per-binding contract；不存在 usage-scope 运行时状态。
+
 ### 4.3 用户声明类型
 
-- `struct`：默认结构 product；
-- `nominal struct`：名义 product；
-- `enum`：默认结构 sum；
-- `nominal enum`：名义 sum；
+- `struct`：具名名义 product；
+- `enum`：具名名义 sum；
+- `{ x: T, y: U }`：匿名结构 record 类型；
 - `trait`：始终声明身份；
 - `meta`：始终 MetaSchema 身份。
 
-源码目前没有独立 `record` 声明语法。`TypeKind::Record` 是编译器内部的匿名结构
-product 表示，不能据此声称语言已经提供 record literal/type 语法。
+匿名 record 故意不使用 `record` 关键字。字段必须唯一，identity 和 layout 按字段名
+规范化；`{ y: value, x: other }` 仍按源码顺序求值。`Point { x: value, y: other }`
+显式构造具名 product，`{ x: point.x, y: point.y }` 显式投影为匿名 record。这些形式
+之间以及不同具名声明之间都不发生隐式转换。
 
 ### 4.4 控制和编译期类型
 
@@ -121,6 +128,19 @@ slot、fragment、Metadata view、declaration view/ref 和编译器 Iterator rec
 
 命名类型先解析当前类型参数和 `Self`，再解析 package/module 可见声明，最后匹配
 内置名称。泛型实例必须提供声明要求的实参；实参参与最终类型身份。
+
+具名 `constraint` 声明仍是编译期 proposition 机制。下列函数写法都归一为 constraint
+检查，不会形成 effect 或运行时 contract：
+
+```luna
+fn first<Cartesian T>(value: T) -> i32 { ... }
+fn second<T>(value: T) -> i32 where Cartesian<T> { ... }
+fn third<T>(value: T) -> i32
+where type_same_shape::<T, { x: i32, y: i32 }>() { ... }
+```
+
+inline 形式是匿名前端谓词，没有声明身份，且在 MoonIR 之前擦除。`where T: Tagged`
+这样的 trait bound 仍是行为要求，不是结构 constraint。
 
 ### 5.2 引用
 
@@ -213,7 +233,7 @@ Sema 使用 Inference 域变量收集约束：
 - `&& || !` 要求 `bool`；
 - `== !=` 要求两个操作数可统一，结果为 `bool`。
 
-0.2 不承诺一般性的隐式数值提升。需要新增转换时必须先定义溢出、截断、符号和
+Luna 不承诺一般性的隐式数值提升。需要新增转换时必须先定义溢出、截断、符号和
 constexpr 行为。
 
 ## 8. relation 与 usage
@@ -248,6 +268,7 @@ constexpr 行为。
 清理责任来自拥有值的 usage 和资源管理方式：
 
 - 独占 product/string：Drop/Deallocate；
+- 匿名 record：递归清理其拥有型字段；纯 Copy record 不产生清理；
 - `rc<T>`：RcRelease；
 - `arc<T>`：ArcRelease；
 - Result/enum：读取 tag 后只清理活动载荷；
@@ -259,16 +280,20 @@ constexpr 行为。
 组合 usage 使用 `Linear > Affine > Copy`。该规则不能因某条常见路径只使用 Copy
 variant 而放宽。
 
+当前 record 实现允许移动整个 record。在 record 字段初始化位能够证明其余字段只清理
+一次之前，从匿名 record 中部分移出拥有型字段会被拒绝。
+
 ## 10. 当前布局层
 
 布局分为三层：
 
 1. **语言语义**：字段/variant 顺序、活动载荷和身份边界；
-2. **0.2 编译器/MoonIR Alpha ABI**：当前 64 位值大小、对齐和 inline ADT v1；
+2. **当前编译器/MoonIR 开发期 ABI**：当前 64 位值大小、对齐和 inline ADT v1；
 3. **公共 Runtime/C FFI ABI**：只包含显式版本化并允许穿过边界的类型。
 
-当前 product 类型是 pointer-represented；array 和 slice 内联；enum/Result 使用
-8 字节 tag storage 和 8 字节对齐 payload。具体数字见
+当前具名 product 仍是 pointer-represented；匿名 record、array 和 slice 内联；
+enum/Result 使用 8 字节 tag storage 和 8 字节对齐 payload。该指针表示只是
+实现检查点，不是语言层承诺。具体数字见
 [内置类型清单](builtin_types.md)。
 
 这些数字不得自动推广到 32 位目标、跨版本 Moon 容器或 C ABI。`type_size` 当前
@@ -316,6 +341,5 @@ constexpr 当前处理标量字面量、不可变绑定、受支持表达式和�
 | 可信类型表 | MoonIR/Verifier |
 | 机器表示 | CGHelpers/CodeGenerator |
 
-后续代码拆分应围绕这些责任进行，并逐步建立集中内置类型注册表。重构前后必须保持
-本参考和[0.2 Alpha 语义基线](semantic_baseline_0.2.md)不变。
-
+后续代码拆分应围绕这些责任进行，并逐步建立集中内置类型注册表。已冻结的
+[0.2 Alpha 语义基线](semantic_baseline_0.2.md)仅作为迁移证据，不是 0.3 编译器的兼容模式。

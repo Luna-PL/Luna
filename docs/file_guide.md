@@ -1,14 +1,15 @@
 # Luna Repository File and Responsibility Guide
 
 > Document category: implementation note / project policy
-> Applies to: Luna 0.2.1
+> Applies to: Luna 0.3.0 development
 > Status: Internal
 > Normative status: normative
 > Implementation audit: pending this change (2026-07-31)
 
 This is the authoritative index of physical repository directories and file responsibilities.
 It answers where code and documentation belong without redefining language semantics. Language
-contracts remain defined by the 0.2 Alpha semantic baseline and its reference documents.
+contracts remain defined by the active reference documents and 0.3 overall design. The
+0.2 Alpha semantic baseline is retained only as frozen migration evidence.
 
 ## 1. Usage rules
 
@@ -131,7 +132,8 @@ The paired Luna 0.3 overall design draft is the umbrella RFC for the clean-break
 artifact, trust-boundary, resource, single-layer MoonIR, and evolution direction. The paired
 Luna 0.3 evolution audit remains a subordinate historical model-convergence and slot/fragment
 assessment. Both are design records, not part of the 0.2 normative reference or a claim of
-implementation.
+implementation. The paired 0.2-to-0.3 migration record owns the breaking-change register and
+the independently replayable final 0.2 corpus; it does not add a compatibility path.
 
 Examples demonstrate one topic per file; full_showcase is the combined Alpha example and
 slot_plugins demonstrates plugin use. Benchmark runners are responsible for reproducible
@@ -211,6 +213,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `docs/luna_0.3_design.zh-CN.md`
 - `docs/luna_0.3_evolution_audit.md`
 - `docs/luna_0.3_evolution_audit.zh-CN.md`
+- `docs/migration_0.2_to_0.3.md`
+- `docs/migration_0.2_to_0.3.zh-CN.md`
 - `docs/packages.md`
 - `docs/packages.zh-CN.md`
 - `docs/reference/README.md`
@@ -305,6 +309,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/core/CoreContracts.h`
 - `src/core/Ownership.h`
 - `src/core/SysMeta.h`
+- `src/core/StableIdentity.h`
 - `src/core/TypeIdentity.h`
 - `src/core/TypeLayout.cpp`
 - `src/core/TypeLayout.h`
@@ -416,8 +421,15 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/external_fragment_dispatch.cmake`
 - `tests/ffi_aot.cmake`
 - `tests/file_guide_inventory.cmake`
+- `tests/luna_0_3_design_contract.cmake`
+- `tests/migration_0_2_baseline.cmake`
+- `tests/shadow_identity.cmake`
 - `tests/fixtures/aot_runtime_boundary.luna`
 - `tests/fixtures/apply_contract_checked_eagerly_invalid.luna`
+- `tests/fixtures/anonymous_record_duplicate_invalid.luna`
+- `tests/fixtures/anonymous_record_owned_field.luna`
+- `tests/fixtures/anonymous_record_partial_move_invalid.luna`
+- `tests/fixtures/anonymous_records.luna`
 - `tests/fixtures/array_move_element_invalid.luna`
 - `tests/fixtures/comparison_non_numeric_invalid.luna`
 - `tests/fixtures/comparison_operators.luna`
@@ -461,6 +473,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/heterogeneous_bulk_transfer_invalid.luna`
 - `tests/fixtures/interceptor_resume_invalid.luna`
 - `tests/fixtures/invalid_export.luna`
+- `tests/fixtures/inline_where_not_satisfied_invalid.luna`
 - `tests/fixtures/iterator_count_move_only_invalid.luna`
 - `tests/fixtures/iterator_filter_move_only_owning_invalid.luna`
 - `tests/fixtures/iterator_fold_accumulator_borrow_invalid.luna`
@@ -491,6 +504,9 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/legacy_fragment_invalid.luna`
 - `tests/fixtures/logical_short_circuit.luna`
 - `tests/fixtures/missing_return_invalid.luna`
+- `tests/fixtures/named_record_construction.luna`
+- `tests/fixtures/named_record_missing_field_invalid.luna`
+- `tests/fixtures/named_record_unknown_field_invalid.luna`
 - `tests/fixtures/never_return_value_invalid.luna`
 - `tests/fixtures/never_type.luna`
 - `tests/fixtures/nominal_modifier_invalid.luna`
@@ -511,6 +527,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/ownership_return_path_leaks_invalid.luna`
 - `tests/fixtures/ownership_return_path_valid.luna`
 - `tests/fixtures/ownership_unreachable_after_return.luna`
+- `tests/fixtures/post_let_usage_invalid.luna`
 - `tests/fixtures/package_using_missing_alias_invalid.luna`
 - `tests/fixtures/packages/alias_collision/01_first.luna`
 - `tests/fixtures/packages/alias_collision/02_second.luna`
@@ -541,6 +558,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/rc_arc.luna`
 - `tests/fixtures/rc_implicit_copy_invalid.luna`
 - `tests/fixtures/recursive_structural_type_invalid.luna`
+- `tests/fixtures/record_block_context.luna`
 - `tests/fixtures/reflection_index_out_of_range.luna`
 - `tests/fixtures/repl_session.txt`
 - `tests/fixtures/result_ambiguous_constructor_invalid.luna`
@@ -580,6 +598,11 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/structural_type_equivalence.luna`
 - `tests/fixtures/type_domains_reflection.luna`
 - `tests/fixtures/type_relations.luna`
+- `tests/fixtures/usage_block_linear_unconsumed_invalid.luna`
+- `tests/fixtures/usage_block_loop_unconsumed_invalid.luna`
+- `tests/fixtures/usage_block_pattern_unconsumed_invalid.luna`
+- `tests/fixtures/usage_blocks.luna`
+- `tests/fixtures/usage_contract_weaken_invalid.luna`
 - `tests/fixtures/versioned_fragment_contract_change_invalid.luna`
 - `tests/fixtures/workspaces/local/app/luna.package`
 - `tests/fixtures/workspaces/local/app/src/main.luna`

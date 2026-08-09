@@ -30,6 +30,7 @@ private:
 
     std::vector<diagnostic::Diagnostic> mErrors;
     std::unordered_set<std::string> mVerifiedTypeIds;
+    std::unordered_set<const Type*> mActiveTypeNodes;
     bool mAllowTypeParameters = false;
 };
 

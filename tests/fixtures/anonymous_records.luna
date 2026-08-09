@@ -1,0 +1,34 @@
+constraint Cartesian<T> =
+    type_same_shape::<T, { x: i32, y: i32 }>();
+
+fn mark(value: i32) -> i32 {
+    print(value);
+    return value;
+}
+
+fn make_point() -> { x: i32, y: i32 } {
+    // Source evaluation order is y, x; the resulting record identity and
+    // layout are canonicalized to x, y.
+    return { y: mark(1), x: mark(40) };
+}
+
+fn constrained_sum<Cartesian T>(value: T) -> i32 {
+    return 21;
+}
+
+fn inline_sum<T>(value: T) -> i32
+where type_same_shape::<T, { y: i32, x: i32 }>() {
+    return 21;
+}
+
+fn main() -> i32 {
+    const let padded_size = type_size::<{ small: u8, wide: i64 }>();
+    let point: { y: i32, x: i32 } = make_point();
+    point.y += 1;
+    let answer = point.x + point.y;
+    if padded_size == 16 &&
+       answer == constrained_sum(point) + inline_sum(point) {
+        return answer;
+    }
+    return 0;
+}

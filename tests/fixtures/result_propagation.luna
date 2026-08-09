@@ -1,4 +1,4 @@
-nominal struct ErrorPathResource {
+struct ErrorPathResource {
     value: i32;
 }
 

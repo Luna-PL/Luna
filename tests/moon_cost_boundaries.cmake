@@ -14,6 +14,9 @@ file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/selector_user_logic.luna" DESTINATI
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/concepts.luna" DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/generic_instance_reuse.luna" DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/structural_generic_instance_reuse.luna" DESTINATION "${work_dir}")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/anonymous_records.luna" DESTINATION "${work_dir}")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/anonymous_record_owned_field.luna" DESTINATION "${work_dir}")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/usage_blocks.luna" DESTINATION "${work_dir}")
 
 function(build_case source moon_file)
     execute_process(
@@ -121,13 +124,49 @@ build_case("${structural_generic_source}" "${work_dir}/structural-generic.moonir
 string(REGEX MATCHALL "\\[generic_instantiation\\]" structural_generic_costs "${last_output}")
 list(LENGTH structural_generic_costs structural_generic_cost_count)
 file(READ "${work_dir}/structural-generic.moonir" structural_generic_moon)
-string(REGEX MATCHALL "identity structural spelling \"(First|Second)\"" structural_type_entries "${structural_generic_moon}")
-list(LENGTH structural_type_entries structural_type_entry_count)
-if(NOT structural_generic_cost_count EQUAL 1 OR
-   NOT structural_type_entry_count EQUAL 1)
+string(REGEX MATCHALL "identity nominal spelling \"(First|Second)\"" nominal_type_entries "${structural_generic_moon}")
+list(LENGTH nominal_type_entries nominal_type_entry_count)
+if(NOT structural_generic_cost_count EQUAL 2 OR
+   NOT nominal_type_entry_count EQUAL 2)
     file(REMOVE_RECURSE "${work_dir}")
     message(FATAL_ERROR
-        "equal structural types did not share one TypeId/generic instance\n${structural_generic_moon}")
+        "distinct named types did not retain distinct TypeIds/generic instances\n${structural_generic_moon}")
+endif()
+
+set(copy_record_source "${work_dir}/anonymous_records.luna")
+build_case("${copy_record_source}" "${work_dir}/copy-record.moonir")
+file(READ "${copy_record_source}.ll" copy_record_ir)
+file(READ "${work_dir}/copy-record.moonir" copy_record_moon)
+string(FIND "${copy_record_ir}" "rt_dealloc" copy_record_cleanup)
+string(FIND "${copy_record_moon}" "Cartesian" copy_record_constraint)
+if(NOT copy_record_cleanup EQUAL -1 OR
+   NOT copy_record_constraint EQUAL -1)
+    file(REMOVE_RECURSE "${work_dir}")
+    message(FATAL_ERROR
+        "Copy-only record or erased constraint paid a runtime cost\n${copy_record_ir}\n${copy_record_moon}")
+endif()
+
+set(owned_record_source "${work_dir}/anonymous_record_owned_field.luna")
+build_case("${owned_record_source}" "${work_dir}/owned-record.moonir")
+file(READ "${owned_record_source}.ll" owned_record_ir)
+string(FIND "${owned_record_ir}" "rt_dealloc" owned_record_cleanup)
+if(owned_record_cleanup EQUAL -1)
+    file(REMOVE_RECURSE "${work_dir}")
+    message(FATAL_ERROR
+        "record with an owned field lost its recursive cleanup")
+endif()
+
+set(usage_block_source "${work_dir}/usage_blocks.luna")
+build_case("${usage_block_source}" "${work_dir}/usage-blocks.moonir")
+file(READ "${usage_block_source}.ll" usage_block_ir)
+file(READ "${work_dir}/usage-blocks.moonir" usage_block_moon)
+string(FIND "${usage_block_ir}" "usage_scope" usage_scope_llvm)
+string(FIND "${usage_block_moon}" "usage_scope" usage_scope_moon)
+if(NOT usage_scope_llvm EQUAL -1 OR
+   NOT usage_scope_moon EQUAL -1)
+    file(REMOVE_RECURSE "${work_dir}")
+    message(FATAL_ERROR
+        "usage-block sugar leaked a scope construct into generated artifacts")
 endif()
 
 file(REMOVE_RECURSE "${work_dir}")

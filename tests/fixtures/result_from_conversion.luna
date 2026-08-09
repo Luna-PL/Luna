@@ -1,4 +1,4 @@
-nominal enum ConvertedError {
+enum ConvertedError {
     Message(cstr);
 }
 

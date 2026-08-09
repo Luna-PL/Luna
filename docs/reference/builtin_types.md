@@ -1,8 +1,8 @@
-# Luna 0.2 Alpha Builtin Type Inventory
+# Luna 0.3 Development Builtin Type Inventory
 
-> Document category: Alpha reference and implementation-status matrix
-> Applies to: Luna 0.2.1
-> Status: Active; stability is labeled per table entry
+> Document category: development reference and implementation-status matrix
+> Applies to: candidate Luna 0.3.0
+> Status: Active development; stability is labeled per table entry
 > Normative status: source spelling, type domains, and usage rules are normative; layout numbers are Internal Alpha ABI
 > Initial implementation audit: `d0ab31c` (2026-07-31)
 
@@ -71,18 +71,16 @@ remains responsible for matching release.
 
 | Source | Domain/identity | Default usage | Current representation/status |
 |---|---|---|---|
-| `struct` | Value/Structural | Affine | Pointer-represented product; fields determine shape identity |
-| `nominal struct` | Value/Nominal | Affine | Pointer-represented; declaration identity cannot be erased |
-| `enum` | Value/Structural | Upper bound of payload usage | Inline ADT v1 |
-| `nominal enum` | Value/Nominal | Upper bound of payload usage | Inline ADT v1 plus declaration identity |
+| `struct` | Value/Nominal | Affine | Pointer-represented product; declaration identity cannot be erased |
+| `enum` | Value/Nominal | Upper bound of payload usage | Inline ADT v1 plus declaration identity |
 | `trait` | Compiler/Nominal | Not an ordinary runtime value | Static resolution contract |
 | `meta` schema | Meta/MetaSchema | Compile-time value | No ordinary runtime representation by default |
 | type parameter/`Self` | Compiler/CompilerIntrinsic | Determined by instantiated type | Must be instantiated or legally retained as template fact before MoonIR |
 | slot type | Value/Structural control contract | Not ordinary owning data; internal handle defaults Copy | Host-only; Once/Many is part of shape |
 | fragment type | Value/Structural control contract | Not ordinary owning data; internal handle defaults Copy | Host-only; interceptor/context is part of shape |
 
-Default product Affine usage comes from its exclusive heap representation. Structs with equal
-shape may share a TypeId; nominal products remain distinct even with equal layout.
+Named-product Affine usage currently comes from its exclusive heap representation. Distinct named
+products always have distinct TypeIds even when `type_same_shape` reports equal shapes.
 
 ## 5. Compiler intrinsic types visible at compile time
 
@@ -92,7 +90,7 @@ shape may share a TypeId; nominal products remain distinct even with equal layou
 | `declaration_view<T>` | Compiler/CompilerIntrinsic | Yes, 0 or 1 callable argument | Erased by default | Implemented Experimental |
 | `declaration_ref<T>` | Compiler/CompilerIntrinsic | Yes, 0 or 1 callable argument | Erased by default | Implemented Experimental |
 | compiler Iterator recipe | Compiler/CompilerIntrinsic | Not a public named type constructor | No stable iterator ABI | Implemented Experimental |
-| anonymous `Record` | Value/Structural internal form | No separate source syntax currently | Pointer-represented | Internal |
+| `{ x: T, y: U }` record | Value/Structural | Yes; no `record` keyword | Inline, name-canonicalized aggregate | Implemented 0.3 development |
 
 `declaration_view` is a set-valued static-selection view; `declaration_ref` is a
 resolved single-declaration reference. Neither is a reflection object suitable for ordinary

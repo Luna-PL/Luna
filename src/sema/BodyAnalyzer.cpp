@@ -13,6 +13,45 @@
 #include <set>
 #include <sstream>
 
+luna::ownership::Usage BodyAnalyzer::inherentUsageForInitializer(
+    Expr* initializer, const TypePtr& type) {
+    auto usage = defaultUsageForType(mContext.resolved(type));
+    if (auto* call = dynamic_cast<CallExpr*>(initializer)) {
+        auto callUsage = call->returnsLinear
+            ? luna::ownership::Usage::Linear
+            : call->returnUsage;
+        usage = luna::ownership::strongerUsage(usage, callUsage);
+    }
+    if (auto* moved = dynamic_cast<MoveExpr*>(initializer)) {
+        if (auto* identifier =
+                dynamic_cast<IdentifierExpr*>(moved->operand.get())) {
+            if (auto* source = mContext.lookupSymbol(identifier->name))
+                usage = luna::ownership::strongerUsage(
+                    usage, source->usage);
+        }
+    }
+    return usage;
+}
+
+luna::ownership::Usage BodyAnalyzer::finalizeBindingUsage(
+    const std::string& name, const TypePtr& type, Expr* initializer,
+    luna::ownership::Usage requested, bool isExplicit,
+    int line, int column) {
+    const auto inherent =
+        inherentUsageForInitializer(initializer, type);
+    if (isExplicit &&
+        !luna::ownership::satisfiesUsageRequirement(
+            requested, inherent)) {
+        mContext.error(
+            "binding '" + name + "' declares " +
+                std::string(luna::ownership::usageName(requested)) +
+                " usage, but its type or initializer requires at least " +
+                std::string(luna::ownership::usageName(inherent)),
+            line, column);
+    }
+    return luna::ownership::strongerUsage(requested, inherent);
+}
+
 void BodyAnalyzer::analyzeFunction(FunctionDecl* decl) {
     TypePtr savedReturn = mContext.mCurrentReturnType;
     bool savedInFunction = mContext.mInFunction;
@@ -86,6 +125,20 @@ void BodyAnalyzer::analyzeFunction(FunctionDecl* decl) {
         p.inferredType = info.type;
         info.isHeapAllocated = false;
         mContext.mSymTable.define(p.name, info);
+    }
+
+    for (auto& clause : decl->whereClauses) {
+        if (clause.kind != WhereClause::Kind::ConstraintExpression)
+            continue;
+        TypePtr predicate = mContext.resolved(
+            analyzeExpr(clause.constraintExpression.get()));
+        if (predicate->kind != TypeKind::Bool &&
+            predicate->kind != TypeKind::InferenceVar)
+            mContext.error("inline where predicate must have type bool",
+                  clause.constraintExpression
+                      ? clause.constraintExpression->line : decl->line,
+                  clause.constraintExpression
+                      ? clause.constraintExpression->col : decl->col);
     }
 
     if (decl->isKernel) {
@@ -769,12 +822,40 @@ TypePtr BodyAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
             }
             ls->materializesIteratorRecipe = supported;
         }
-        if (ls->isLinear || dynamic_cast<LinearTypeAST*>(ls->typeAnnotation.get()))
-            ls->usage = luna::ownership::Usage::Linear;
-        else if (dynamic_cast<AffineTypeAST*>(ls->typeAnnotation.get()))
-            ls->usage = luna::ownership::Usage::Affine;
-        else if (ls->usage == luna::ownership::Usage::Copy)
-            ls->usage = defaultUsageForType(finalType);
+        const bool annotationLinear =
+            dynamic_cast<LinearTypeAST*>(
+                ls->typeAnnotation.get()) != nullptr;
+        const bool annotationAffine =
+            dynamic_cast<AffineTypeAST*>(
+                ls->typeAnnotation.get()) != nullptr;
+        const bool hasAnnotationUsage =
+            annotationLinear || annotationAffine;
+        const auto annotationUsage = annotationLinear
+            ? luna::ownership::Usage::Linear
+            : luna::ownership::Usage::Affine;
+        if (ls->hasExplicitUsage && hasAnnotationUsage &&
+            ls->usage != annotationUsage) {
+            mContext.error(
+                "binding '" + ls->name +
+                    "' has conflicting explicit usage contracts",
+                ls->line, ls->col);
+        }
+        const bool hasExplicitUsage =
+            ls->hasExplicitUsage || hasAnnotationUsage;
+        auto requestedUsage = ls->hasExplicitUsage
+            ? ls->usage
+            : (hasAnnotationUsage
+                   ? annotationUsage
+                   : (ls->hasInheritedUsage
+                          ? ls->inheritedUsage
+                          : defaultUsageForType(finalType)));
+        ls->usage = finalizeBindingUsage(
+            ls->name, finalType, ls->initializer.get(),
+            requestedUsage, hasExplicitUsage,
+            ls->line, ls->col);
+        ls->usageResolved = true;
+        ls->isLinear =
+            ls->usage == luna::ownership::Usage::Linear;
         info.usage = ls->usage;
         info.isLinear = info.usage == luna::ownership::Usage::Linear;
         mContext.mSymTable.define(ls->name, info);
@@ -900,6 +981,19 @@ TypePtr BodyAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
             }
             arm.variantIndex = selected->physicalIndex;
             arm.bindingTypes = selected->fields;
+            arm.bindingUsages.clear();
+            for (size_t index = 0;
+                 index < arm.bindingTypes.size(); ++index) {
+                const auto blockDefault =
+                    index < arm.bindingUsageDefaults.size()
+                        ? arm.bindingUsageDefaults[index]
+                        : luna::ownership::Usage::Copy;
+                arm.bindingUsages.push_back(
+                    luna::ownership::strongerUsage(
+                        blockDefault,
+                        defaultUsageForType(
+                            arm.bindingTypes[index])));
+            }
             if (matched->kind == TypeKind::Enum &&
                 !matched->declarationLinkageName.empty()) {
                 if (!arm.typeQualifier.empty())
@@ -928,7 +1022,10 @@ TypePtr BodyAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
                 binding.kind = SymbolKind::Variable;
                 binding.type = arm.bindingTypes[index];
                 binding.usage =
-                    defaultUsageForType(arm.bindingTypes[index]);
+                    index < arm.bindingUsages.size()
+                        ? arm.bindingUsages[index]
+                        : defaultUsageForType(
+                              arm.bindingTypes[index]);
                 binding.isLinear =
                     binding.usage == luna::ownership::Usage::Linear;
                 mContext.mSymTable.define(arm.bindings[index], binding);
@@ -1312,11 +1409,17 @@ TypePtr BodyAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
             }
         }
         fs->elementType = element;
+        fs->bindingUsage =
+            luna::ownership::strongerUsage(
+                fs->hasInheritedUsage
+                    ? fs->inheritedUsage
+                    : luna::ownership::Usage::Copy,
+                defaultUsageForType(element));
         mContext.mSymTable.enterScope();
         SymbolInfo vi;
         vi.kind = SymbolKind::Variable;
         vi.type = element;
-        vi.usage = defaultUsageForType(element);
+        vi.usage = fs->bindingUsage;
         vi.isLinear = vi.usage == luna::ownership::Usage::Linear;
         mContext.mSymTable.define(fs->varName, vi);
         analyzeBlock(fs->body.get(), expectedReturn);
@@ -1424,6 +1527,67 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
     }
     if (auto* selection = dynamic_cast<SelectExpr*>(expr))
         return analyzeSelect(selection);
+    if (auto* record = dynamic_cast<RecordLiteralExpr*>(expr)) {
+        std::vector<std::pair<RecordLiteralExpr::Field*, TypePtr>> fields;
+        fields.reserve(record->fields.size());
+        std::set<std::string> names;
+        for (auto& field : record->fields) {
+            if (!names.insert(field.name).second) {
+                mContext.error("duplicate record field '" + field.name + "'",
+                               field.line, field.col);
+            }
+            fields.push_back({&field, analyzeExpr(field.value.get())});
+        }
+        if (record->targetType) {
+            record->recordType = mContext.resolved(
+                mContext.resolveTypeAST(record->targetType.get(), {}));
+            if (!record->recordType ||
+                record->recordType->kind != TypeKind::Struct) {
+                mContext.error(
+                    "named record construction requires a struct type",
+                    record->line, record->col);
+                return TyUnknown;
+            }
+            std::set<std::string> initialized;
+            for (auto& entry : fields) {
+                auto* field = entry.first;
+                const auto& type = entry.second;
+                auto declared = std::find_if(
+                    record->recordType->fields.begin(),
+                    record->recordType->fields.end(),
+                    [&](const TypeField& candidate) {
+                        return candidate.name == field->name;
+                    });
+                if (declared == record->recordType->fields.end()) {
+                    mContext.error(
+                        "struct '" + record->recordType->toString() +
+                            "' has no field '" + field->name + "'",
+                        field->line, field->col);
+                    continue;
+                }
+                initialized.insert(field->name);
+                mContext.constrain(
+                    type, declared->type,
+                    "field '" + field->name + "' initializer");
+            }
+            for (const auto& declared : record->recordType->fields) {
+                if (initialized.find(declared.name) == initialized.end())
+                    mContext.error(
+                        "named construction of '" +
+                            record->recordType->toString() +
+                            "' is missing field '" + declared.name + "'",
+                        record->line, record->col);
+            }
+            return record->recordType;
+        }
+        std::vector<TypeField> structuralFields;
+        structuralFields.reserve(fields.size());
+        for (auto& entry : fields)
+            structuralFields.push_back(
+                {entry.first->name, std::move(entry.second)});
+        record->recordType = Type::makeRecord(std::move(structuralFields));
+        return record->recordType;
+    }
     if (auto* bin = dynamic_cast<BinaryExpr*>(expr)) {
         TypePtr lhsType = analyzeExpr(bin->lhs.get());
         TypePtr rhsType = analyzeExpr(bin->rhs.get());
@@ -1584,12 +1748,13 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
         }
         for (auto& field : objectType->fields) {
             if (field.name == fa->field) {
+                fa->resultType = mContext.resolved(field.type);
                 if (!objectType->declarationLinkageName.empty())
                     mContext.recordResolvedReference(
                         fa->sourcePath, fa->line, fa->col, fa->field.size(),
                         objectType->declarationLinkageName + "::field::" +
                             fa->field);
-                return field.type;
+                return fa->resultType;
             }
         }
         mContext.error("Type '" + objectType->toString() + "' has no field '" + fa->field + "'");
@@ -2763,6 +2928,28 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
                     mContext.error("Type '" + mContext.typeIdentity(concrete->second) +
                           "' does not satisfy trait '" +
                           displayTraitRef(clause.trait) + "'");
+                continue;
+            }
+
+            if (clause.kind == WhereClause::Kind::ConstraintExpression) {
+                std::vector<std::string> activeConstraints;
+                auto value = mContext.evaluateConstraintExpr(
+                    clause.constraintExpression.get(),
+                    constraintBindings, activeConstraints);
+                if (!value) {
+                    mContext.error(
+                        "inline where predicate is not compile-time evaluable",
+                        call->line, call->col);
+                } else if (auto* satisfied = std::get_if<bool>(&*value)) {
+                    if (!*satisfied)
+                        mContext.error(
+                            "inline where predicate is not satisfied",
+                            call->line, call->col);
+                } else {
+                    mContext.error(
+                        "inline where predicate must evaluate to bool",
+                        call->line, call->col);
+                }
                 continue;
             }
 

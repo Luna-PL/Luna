@@ -1,0 +1,10 @@
+struct Resource {
+    value: i32;
+}
+
+fn main() -> i32 {
+    // The record is inline, but its owned field still receives recursive
+    // cleanup on the return path.
+    let record = { resource: move new Resource(42) };
+    return record.resource.value;
+}

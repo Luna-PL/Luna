@@ -1,0 +1,8 @@
+fn requires_pair<T>(value: T) -> i32
+where type_same_shape::<T, { x: i32, y: i32 }>() {
+    return 0;
+}
+
+fn main() -> i32 {
+    return requires_pair(42);
+}

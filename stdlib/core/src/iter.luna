@@ -21,15 +21,15 @@ export trait FromIterator<Item, Builder> {
     fn finish(affine builder: Builder) -> affine Self;
 }
 
-export nominal enum Map<I, F> {
+export enum Map<I, F> {
     Adapter(I, F);
 }
 
-export nominal enum Filter<I, P> {
+export enum Filter<I, P> {
     Adapter(I, P);
 }
 
-export nominal enum Take<I> {
+export enum Take<I> {
     Adapter(I, usize);
 }
 

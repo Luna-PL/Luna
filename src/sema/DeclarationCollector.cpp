@@ -15,6 +15,8 @@ void DeclarationCollector::declareFunction(FunctionDecl* decl) {
         bindings[tp] = Type::makeTypeParam(tp);
     }
     for (auto& clause : decl->whereClauses) {
+        if (clause.kind == WhereClause::Kind::ConstraintExpression)
+            continue;
         if (clause.kind == WhereClause::Kind::TraitBound) {
             mContext.resolveTraitRef(clause.trait, decl);
             continue;
@@ -292,8 +294,10 @@ void DeclarationCollector::declareStruct(StructDecl* decl) {
         ? decl->name : decl->generatedSymbolName;
     auto declared = mContext.mDeclaredTypes[identity];
     if (!declared) {
-        declared = Type::makeStruct(decl->name, {}, decl->isNominal
-            ? nominalDeclarationIdentity(mContext.mProgram, "struct", identity, decl) : "");
+        declared = Type::makeStruct(
+            decl->name, {},
+            nominalDeclarationIdentity(
+                mContext.mProgram, "struct", identity, decl));
         mContext.mDeclaredTypes[identity] = declared;
     }
     declared->declarationLinkageName = identity;
@@ -321,9 +325,6 @@ void DeclarationCollector::declareStruct(StructDecl* decl) {
         field.inferredType = typedField.type;
         declared->fields.push_back(std::move(typedField));
     }
-    if (!decl->isNominal && luna::types::isRecursiveShape(declared))
-        mContext.error("recursive structural type '" + decl->name + "' requires `nominal`",
-              decl->line, decl->col);
 }
 
 void DeclarationCollector::declareEnum(EnumDecl* decl) {
@@ -331,8 +332,10 @@ void DeclarationCollector::declareEnum(EnumDecl* decl) {
         ? decl->name : decl->generatedSymbolName;
     auto declared = mContext.mDeclaredTypes[identity];
     if (!declared) {
-        declared = Type::makeEnum(decl->name, {}, decl->isNominal
-            ? nominalDeclarationIdentity(mContext.mProgram, "enum", identity, decl) : "");
+        declared = Type::makeEnum(
+            decl->name, {},
+            nominalDeclarationIdentity(
+                mContext.mProgram, "enum", identity, decl));
         mContext.mDeclaredTypes[identity] = declared;
     }
     declared->declarationLinkageName = identity;
@@ -357,9 +360,6 @@ void DeclarationCollector::declareEnum(EnumDecl* decl) {
         }
         declared->variants.push_back(std::move(typedVariant));
     }
-    if (!decl->isNominal && luna::types::isRecursiveShape(declared))
-        mContext.error("recursive structural type '" + decl->name + "' requires `nominal`",
-              decl->line, decl->col);
 }
 
 void DeclarationCollector::declareTrait(TraitDecl* decl) {

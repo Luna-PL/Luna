@@ -1,4 +1,4 @@
-nominal struct Resource {
+struct Resource {
     value: i32;
 }
 

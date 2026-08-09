@@ -121,6 +121,14 @@ std::optional<bool> BodyContextAccess::evaluateConstraint(
     return mOwner.evaluateConstraint(name, arguments, active);
 }
 
+std::optional<BodyContextAccess::ConstValue>
+BodyContextAccess::evaluateConstraintExpr(
+    Expr* expr,
+    const std::unordered_map<std::string, TypePtr>& bindings,
+    std::vector<std::string>& active) {
+    return mOwner.evaluateConstraintExpr(expr, bindings, active);
+}
+
 std::optional<std::string> BodyContextAccess::evaluateSelectorFunction(
     FunctionDecl* function,
     const luna::selector::DeclarationView& view,

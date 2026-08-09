@@ -1,6 +1,8 @@
 #include "Parser.h"
 #include "../diagnostics/Diagnostic.h"
 
+#include <unordered_set>
+
 Parser::Parser(std::vector<Token> tokens, std::string sourceName, std::string source)
     : mTokens(std::move(tokens)), mSourceName(std::move(sourceName)), mSource(std::move(source)) {}
 
@@ -125,7 +127,6 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
     bool isConstexpr = false;
     bool isExtern = false;
     bool isKernel = false;
-    bool isNominal = false;
     RetentionKind retention = RetentionKind::CompileTime;
     std::vector<Decl::MetadataAttachment> metadata;
     bool consumedModifier = true;
@@ -135,7 +136,6 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
         else if (match(TokenKind::Constexpr)) { isConstexpr = true; consumedModifier = true; }
         else if (match(TokenKind::Extern)) { isExtern = true; consumedModifier = true; }
         else if (match(TokenKind::Kernel)) { isKernel = true; consumedModifier = true; }
-        else if (match(TokenKind::Nominal)) { isNominal = true; consumedModifier = true; }
         else if (match(TokenKind::Runtime)) {
             consumedModifier = true;
             if (check(TokenKind::At))
@@ -172,7 +172,7 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
     else if (match(TokenKind::Meta)) decl = parseMetaDecl();
     else if (match(TokenKind::Constraint)) decl = parseConstraintDecl();
     else {
-        if (isExported || isExtern || isConstexpr || isKernel || isNominal) {
+        if (isExported || isExtern || isConstexpr || isKernel) {
             addError("expected a declaration after `export`, found " +
                      diagnostic::quotedToken(peek().lexeme),
                      "only `fn`, `interceptor`, `context`, `struct`, `enum`, "
@@ -186,14 +186,6 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
         return nullptr;
     }
     if (decl) {
-        if (auto* structure = dynamic_cast<StructDecl*>(decl.get())) {
-            structure->isNominal = isNominal;
-        } else if (auto* enumeration = dynamic_cast<EnumDecl*>(decl.get())) {
-            enumeration->isNominal = isNominal;
-        } else if (isNominal) {
-            addError("`nominal` can only modify a struct or enum declaration",
-                     "remove `nominal` or apply it to `struct`/`enum`");
-        }
         // A runtime-visible attachment needs a descriptor to live on. Keep
         // that implication local to the attached declaration so one schema
         // does not make every use of it pay a runtime cost.
@@ -329,7 +321,7 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(bool isTraitMethod,
         return nullptr;
     }
 
-    decl->typeParams = parseTypeParamList();
+    decl->typeParams = parseTypeParamList(&decl->whereClauses);
     consume(TokenKind::LParen, "Expected '(' after function name");
     decl->params = parseParams();
     consume(TokenKind::RParen, "Expected ')' after parameters");
@@ -352,7 +344,9 @@ std::unique_ptr<FunctionDecl> Parser::parseFunctionDecl(bool isTraitMethod,
         }
     }
 
-    decl->whereClauses = parseWhereClause();
+    auto trailingWhereClauses = parseWhereClause();
+    for (auto& clause : trailingWhereClauses)
+        decl->whereClauses.push_back(std::move(clause));
 
     if (isTraitMethod) {
         consume(TokenKind::SemiColon, "Expected ';' after trait method signature");
@@ -537,15 +531,44 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         return stmt;
     };
     if (match(TokenKind::Linear)) {
+        if (check(TokenKind::LBrace)) {
+            const auto savedDefault = mUsageDefault;
+            mUsageDefault = luna::ownership::Usage::Linear;
+            auto block = parseBlock();
+            mUsageDefault = savedDefault;
+            return stamp(std::move(block));
+        }
         if (match(TokenKind::Let))
-            return stamp(parseLetStmt(luna::ownership::Usage::Linear));
-        addError("Expected 'let' after 'linear'");
+            return stamp(parseLetStmt(
+                luna::ownership::Usage::Linear, false, true));
+        addError("expected `let` or `{` after `linear`",
+                 "write `linear let name = value;` or `linear { ... }`");
+        synchronizeStatement();
         return nullptr;
     }
     if (match(TokenKind::Affine)) {
+        if (check(TokenKind::LBrace)) {
+            const auto savedDefault = mUsageDefault;
+            mUsageDefault = luna::ownership::Usage::Affine;
+            auto block = parseBlock();
+            mUsageDefault = savedDefault;
+            return stamp(std::move(block));
+        }
         if (match(TokenKind::Let))
-            return stamp(parseLetStmt(luna::ownership::Usage::Affine));
-        addError("Expected 'let' after 'affine'");
+            return stamp(parseLetStmt(
+                luna::ownership::Usage::Affine, false, true));
+        addError("expected `let` or `{` after `affine`",
+                 "write `affine let name = value;` or `affine { ... }`");
+        synchronizeStatement();
+        return nullptr;
+    }
+    if (match(TokenKind::Copy)) {
+        if (match(TokenKind::Let))
+            return stamp(parseLetStmt(
+                luna::ownership::Usage::Copy, false, true));
+        addError("expected `let` after `copy`",
+                 "write `copy let name = value;`");
+        synchronizeStatement();
         return nullptr;
     }
     if (match(TokenKind::Const)) {
@@ -577,7 +600,7 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
     if (match(TokenKind::Match)) return stamp(parseMatchStmt());
     if (match(TokenKind::While)) return stamp(parseWhileStmt());
     if (match(TokenKind::For)) return stamp(parseForStmt());
-    if (match(TokenKind::LBrace)) return stamp(parseBlock());
+    if (check(TokenKind::LBrace)) return stamp(parseBlock());
     if (isNamedSlotInvocationStart()) return stamp(parseNamedSlotInvokeStmt());
     if (check(TokenKind::Identifier) && peekAhead(1).kind == TokenKind::Eq) {
         // Assignment statement (lhs = expr ;) — handled in parseExprStmt via parseExpr
@@ -740,19 +763,17 @@ std::unique_ptr<Stmt> Parser::parseNamedSlotInvokeStmt() {
     return stmt;
 }
 
-std::unique_ptr<Stmt> Parser::parseLetStmt(luna::ownership::Usage usage, bool isConst) {
+std::unique_ptr<Stmt> Parser::parseLetStmt(
+    luna::ownership::Usage usage, bool isConst, bool hasExplicitUsage) {
     auto stmt = std::make_unique<LetStmt>();
     stmt->usage = usage;
-    stmt->hasExplicitUsage = usage != luna::ownership::Usage::Copy;
+    stmt->hasExplicitUsage = hasExplicitUsage;
     stmt->isLinear = usage == luna::ownership::Usage::Linear;
     stmt->isConst = isConst;
-    if (match(TokenKind::Linear)) {
-        stmt->usage = luna::ownership::Usage::Linear;
-        stmt->hasExplicitUsage = true;
-        stmt->isLinear = true;
-    } else if (match(TokenKind::Affine)) {
-        stmt->usage = luna::ownership::Usage::Affine;
-        stmt->hasExplicitUsage = true;
+    if (!hasExplicitUsage &&
+        mUsageDefault != luna::ownership::Usage::Copy) {
+        stmt->hasInheritedUsage = true;
+        stmt->inheritedUsage = mUsageDefault;
     }
     if (!match(TokenKind::Identifier)) {
         addError("Expected variable name after 'let'");
@@ -789,7 +810,7 @@ std::unique_ptr<Stmt> Parser::parseReturnStmt() {
 
 std::unique_ptr<Stmt> Parser::parseIfStmt() {
     auto stmt = std::make_unique<IfStmt>();
-    stmt->cond = parseExpr();
+    stmt->cond = parseExprBeforeBlock();
     stmt->thenBlock = parseBlock();
     if (match(TokenKind::Else)) {
         if (check(TokenKind::If)) {
@@ -804,7 +825,7 @@ std::unique_ptr<Stmt> Parser::parseIfStmt() {
 std::unique_ptr<Stmt> Parser::parseMatchStmt() {
     const Token start = mTokens[mPos - 1];
     auto statement = std::make_unique<MatchStmt>();
-    statement->scrutinee = parseExpr();
+    statement->scrutinee = parseExprBeforeBlock();
     consume(TokenKind::LBrace, "Expected '{' after match value");
 
     while (!check(TokenKind::RBrace) && !isAtEnd()) {
@@ -847,6 +868,8 @@ std::unique_ptr<Stmt> Parser::parseMatchStmt() {
                     }
                     arm.bindings.push_back(
                         mTokens[mPos - 1].lexeme);
+                    arm.bindingUsageDefaults.push_back(
+                        mUsageDefault);
                 } while (match(TokenKind::Comma));
             }
             consume(TokenKind::RParen,
@@ -868,7 +891,7 @@ std::unique_ptr<Stmt> Parser::parseMatchStmt() {
 
 std::unique_ptr<Stmt> Parser::parseWhileStmt() {
     auto stmt = std::make_unique<WhileStmt>();
-    stmt->cond = parseExpr();
+    stmt->cond = parseExprBeforeBlock();
     stmt->body = parseBlock();
     return stmt;
 }
@@ -880,12 +903,16 @@ std::unique_ptr<Stmt> Parser::parseForStmt() {
         return nullptr;
     }
     stmt->varName = mTokens[mPos - 1].lexeme;
+    if (mUsageDefault != luna::ownership::Usage::Copy) {
+        stmt->hasInheritedUsage = true;
+        stmt->inheritedUsage = mUsageDefault;
+    }
     if (!check(TokenKind::Identifier) || mTokens[mPos].lexeme != "in") {
         addError("Expected 'in' in for-loop");
         return nullptr;
     }
     advance(); // consume "in" (it's an identifier, not a keyword)
-    stmt->iterable = parseExpr();
+    stmt->iterable = parseExprBeforeBlock();
     stmt->body = parseBlock();
     return stmt;
 }
@@ -901,6 +928,14 @@ std::unique_ptr<Stmt> Parser::parseExprStmt() {
 
 std::unique_ptr<Expr> Parser::parseExpr() {
     return parseAssignment();
+}
+
+std::unique_ptr<Expr> Parser::parseExprBeforeBlock() {
+    const bool saved = mStopBeforeBlockBrace;
+    mStopBeforeBlockBrace = true;
+    auto expression = parseExpr();
+    mStopBeforeBlockBrace = saved;
+    return expression;
 }
 
 std::unique_ptr<Expr> Parser::parseAssignment() {
@@ -1070,7 +1105,15 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
     auto expr = parsePrimary();
 
     while (true) {
-        if (match(TokenKind::LParen)) {
+        if (!mStopBeforeBlockBrace && check(TokenKind::LBrace)) {
+            auto* target = dynamic_cast<IdentifierExpr*>(expr.get());
+            if (!target) break;
+            auto targetType = std::make_unique<NamedTypeAST>(target->name);
+            targetType->sourcePath = target->sourcePath;
+            targetType->line = target->line;
+            targetType->col = target->col;
+            expr = parseRecordLiteral(std::move(targetType));
+        } else if (match(TokenKind::LParen)) {
             auto call = std::make_unique<CallExpr>();
             call->callee = std::move(expr);
             if (!check(TokenKind::RParen)) {
@@ -1282,6 +1325,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         node->sourcePath = mSourceName; node->line = token.line; node->col = token.col;
         return node;
     }
+    if (check(TokenKind::LBrace)) return parseRecordLiteral();
     if (match(TokenKind::Identifier)) {
         const Token& token = mTokens[mPos - 1];
         auto node = std::make_unique<IdentifierExpr>(token.lexeme);
@@ -1290,13 +1334,13 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     }
     if (match(TokenKind::If)) {
         auto iexpr = std::make_unique<IfExpr>();
-        iexpr->cond = parseExpr();
+        iexpr->cond = parseExprBeforeBlock();
         iexpr->thenExpr = std::make_unique<BlockExpr>(parseBlock());
         if (match(TokenKind::Else)) {
             if (check(TokenKind::If)) {
                 auto innerIf = std::make_unique<IfExpr>();
                 advance(); // consume 'if'
-                innerIf->cond = parseExpr();
+                innerIf->cond = parseExprBeforeBlock();
                 innerIf->thenExpr = std::make_unique<BlockExpr>(parseBlock());
                 if (match(TokenKind::Else)) {
                     if (check(TokenKind::If)) {
@@ -1376,6 +1420,38 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     return std::make_unique<IntLiteralExpr>(0); // error recovery
 }
 
+std::unique_ptr<RecordLiteralExpr> Parser::parseRecordLiteral(
+    std::unique_ptr<TypeAST> targetType) {
+    const Token start = consume(TokenKind::LBrace,
+                                "Expected '{' for record literal");
+    auto record = std::make_unique<RecordLiteralExpr>();
+    record->sourcePath = mSourceName;
+    record->line = start.line;
+    record->col = start.col;
+    record->targetType = std::move(targetType);
+    std::unordered_set<std::string> names;
+    while (!check(TokenKind::RBrace) && !isAtEnd()) {
+        if (!match(TokenKind::Identifier)) {
+            addError("Expected field name in record literal");
+            break;
+        }
+        const Token fieldToken = mTokens[mPos - 1];
+        RecordLiteralExpr::Field field;
+        field.name = fieldToken.lexeme;
+        field.sourcePath = mSourceName;
+        field.line = fieldToken.line;
+        field.col = fieldToken.col;
+        if (!names.insert(field.name).second)
+            addError("duplicate record field '" + field.name + "'");
+        consume(TokenKind::Colon, "Expected ':' after record field name");
+        field.value = parseExpr();
+        record->fields.push_back(std::move(field));
+        if (!match(TokenKind::Comma)) break;
+    }
+    consume(TokenKind::RBrace, "Expected '}' after record literal");
+    return record;
+}
+
 std::unique_ptr<SelectExpr> Parser::parseSelectExpr(bool isDynamic,
                                                     bool selectAlreadyConsumed) {
     (void)selectAlreadyConsumed;
@@ -1436,13 +1512,16 @@ std::unique_ptr<Expr> Parser::parseLambda() {
         lambda->returnType = parseType();
     }
 
+    const auto savedDefault = mUsageDefault;
+    mUsageDefault = luna::ownership::Usage::Copy;
     lambda->body = parseBlock();
+    mUsageDefault = savedDefault;
     return lambda;
 }
 
 std::unique_ptr<Expr> Parser::parseIfExpr() {
     auto expr = std::make_unique<IfExpr>();
-    expr->cond = parseExpr();
+    expr->cond = parseExprBeforeBlock();
     expr->thenExpr = std::make_unique<BlockExpr>(parseBlock());
     consume(TokenKind::Else, "If-expression requires 'else'");
     if (check(TokenKind::If)) {
@@ -1468,6 +1547,7 @@ std::unique_ptr<TypeAST> Parser::parseType() {
         auto ref = std::make_unique<RefTypeAST>(parseType(), isMutable);
         return ref;
     }
+    if (check(TokenKind::LBrace)) return parseRecordType();
     // Closure type: (ParamType, ...) -> ReturnType. `fn` remains reserved
     // for lambda expressions and function declarations.
     if (check(TokenKind::LParen)) {
@@ -1533,6 +1613,36 @@ std::unique_ptr<TypeAST> Parser::parseType() {
     return std::make_unique<NamedTypeAST>("i32"); // error recovery
 }
 
+std::unique_ptr<RecordTypeAST> Parser::parseRecordType() {
+    const Token start = consume(TokenKind::LBrace,
+                                "Expected '{' for record type");
+    auto record = std::make_unique<RecordTypeAST>();
+    record->sourcePath = mSourceName;
+    record->line = start.line;
+    record->col = start.col;
+    std::unordered_set<std::string> names;
+    while (!check(TokenKind::RBrace) && !isAtEnd()) {
+        if (!match(TokenKind::Identifier)) {
+            addError("Expected field name in record type");
+            break;
+        }
+        const Token fieldToken = mTokens[mPos - 1];
+        RecordTypeAST::Field field;
+        field.name = fieldToken.lexeme;
+        field.sourcePath = mSourceName;
+        field.line = fieldToken.line;
+        field.col = fieldToken.col;
+        if (!names.insert(field.name).second)
+            addError("duplicate record field '" + field.name + "'");
+        consume(TokenKind::Colon, "Expected ':' after record field name");
+        field.type = parseType();
+        record->fields.push_back(std::move(field));
+        if (!match(TokenKind::Comma)) break;
+    }
+    consume(TokenKind::RBrace, "Expected '}' after record type");
+    return record;
+}
+
 std::unique_ptr<TypeAST> Parser::parseFunctionType() {
     consume(TokenKind::LParen, "Expected '(' in closure type");
     auto ft = std::make_unique<FunctionTypeAST>();
@@ -1592,7 +1702,8 @@ std::vector<std::unique_ptr<Expr>> Parser::parseArgs() {
     return args;
 }
 
-std::vector<std::string> Parser::parseTypeParamList() {
+std::vector<std::string> Parser::parseTypeParamList(
+    std::vector<WhereClause>* constrainedParameters) {
     std::vector<std::string> params;
     if (match(TokenKind::Lt)) {
         do {
@@ -1600,7 +1711,29 @@ std::vector<std::string> Parser::parseTypeParamList() {
                 addError("Expected type parameter name");
                 break;
             }
-            params.push_back(mTokens[mPos - 1].lexeme);
+            std::string first = mTokens[mPos - 1].lexeme;
+            parseQualifiedNameTail(first);
+            if (check(TokenKind::Identifier)) {
+                const Token parameter = advance();
+                params.push_back(parameter.lexeme);
+                if (!constrainedParameters) {
+                    addError("constrained type parameters are only valid on functions");
+                    continue;
+                }
+                WhereClause clause;
+                clause.kind = WhereClause::Kind::Constraint;
+                clause.constraintName = std::move(first);
+                auto argument = std::make_unique<NamedTypeAST>(parameter.lexeme);
+                argument->sourcePath = mSourceName;
+                argument->line = parameter.line;
+                argument->col = parameter.col;
+                clause.constraintTypeArgs.push_back(std::move(argument));
+                constrainedParameters->push_back(std::move(clause));
+            } else {
+                if (first.find("::") != std::string::npos)
+                    addError("A type parameter name cannot be qualified");
+                params.push_back(std::move(first));
+            }
         } while (match(TokenKind::Comma));
         consume(TokenKind::Gt, "Expected '>' after type parameters");
     }
@@ -1611,13 +1744,12 @@ std::vector<WhereClause> Parser::parseWhereClause() {
     std::vector<WhereClause> clauses;
     if (match(TokenKind::Where)) {
         do {
-            if (!match(TokenKind::Identifier)) {
-                addError("Expected type parameter name in where clause");
-                break;
-            }
-            const Token first = mTokens[mPos - 1];
             WhereClause clause;
-            if (match(TokenKind::Colon)) {
+            if (check(TokenKind::Identifier) &&
+                peekAhead(1).kind == TokenKind::Colon &&
+                peekAhead(2).kind == TokenKind::Identifier) {
+                const Token first = advance();
+                advance(); // ':'
                 clause.kind = WhereClause::Kind::TraitBound;
                 clause.typeParam = first.lexeme;
                 if (!match(TokenKind::Identifier)) {
@@ -1626,8 +1758,27 @@ std::vector<WhereClause> Parser::parseWhereClause() {
                 }
                 clause.trait = parseTraitRef(mTokens[mPos - 1]);
             } else {
+                int cursor = mPos;
+                bool namedConstraint = cursor < static_cast<int>(mTokens.size()) &&
+                    mTokens[cursor].kind == TokenKind::Identifier;
+                if (namedConstraint) {
+                    ++cursor;
+                    while (cursor + 1 < static_cast<int>(mTokens.size()) &&
+                           mTokens[cursor].kind == TokenKind::ColonColon &&
+                           mTokens[cursor + 1].kind == TokenKind::Identifier)
+                        cursor += 2;
+                    namedConstraint = cursor < static_cast<int>(mTokens.size()) &&
+                        mTokens[cursor].kind == TokenKind::Lt;
+                }
+                if (!namedConstraint) {
+                    clause.kind = WhereClause::Kind::ConstraintExpression;
+                    clause.constraintExpression = parseExpr();
+                    clauses.push_back(std::move(clause));
+                    continue;
+                }
                 clause.kind = WhereClause::Kind::Constraint;
-                clause.constraintName = first.lexeme;
+                advance();
+                clause.constraintName = mTokens[mPos - 1].lexeme;
                 parseQualifiedNameTail(clause.constraintName);
                 consume(TokenKind::Lt,
                         "Expected '<' after constraint name in where clause");
@@ -1758,7 +1909,6 @@ void Parser::synchronizeDeclaration() {
             case TokenKind::Context:
             case TokenKind::Struct:
             case TokenKind::Enum:
-            case TokenKind::Nominal:
             case TokenKind::Trait:
             case TokenKind::Impl:
             case TokenKind::Meta:

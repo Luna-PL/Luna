@@ -2,10 +2,11 @@
 
 [English](features.md) | [简体中文](features.zh-CN.md)
 
-This page is a map of the implemented 0.2.1 language surface. It explains
+This page is a map of the implemented 0.3 development language surface. It explains
 where each feature belongs in the architecture and points to the detailed
 reference or design document. Experimental status and current limitations are
-listed in the [Alpha release notes](alpha_release.md).
+tracked in the [0.3 overall design](luna_0.3_design.md). The
+[0.2.1 release notes](alpha_release.md) are a historical baseline.
 
 ## Verified compilation pipeline
 
@@ -22,17 +23,20 @@ Detailed design: [Architecture decisions D001/D002](decisions.md).
 
 ## Types, generics and traits
 
-Structs and enums are structural by default. `nominal` creates an explicit
-identity boundary without conflating semantic identity with physical layout.
+Named structs and enums are nominal by default. Anonymous `{ field: Type }`
+records remain structural, and `type_same_shape` tests shape without erasing
+declaration identity. `Target { field: value }` is explicit named construction.
 Generics are instantiated for concrete uses, and ordinary static traits are
 resolved at compile time without a vtable or runtime trait lookup.
-Named `constraint` predicates provide a separate C++-concept-style boundary:
-they compose compile-time type propositions and are discharged at generic
-instantiation sites without entering MoonIR.
+Named `constraint` predicates provide a C++-concept-style boundary. Constrained
+parameters, named `where Constraint<T>`, and inline `where` predicates compose
+compile-time type propositions and are discharged at generic instantiation
+sites without entering MoonIR.
 
 Normative reference: [Type system](reference/type_system.md) and
 [built-in type inventory](reference/builtin_types.md). Rationale:
-[architecture decisions D003/D004](decisions.md).
+[0.3 C008/TY002 design](luna_0.3_design.md#c008-named-types-are-nominal-by-default-confirmed)
+and historical architecture decision D004.
 
 ## Ownership and explicit cost
 
@@ -40,8 +44,13 @@ Luna separates ownership relation from usage cardinality. Values may be owned,
 shared-borrowed or mutably borrowed, while their use may be copy, affine or
 linear. `move`, `borrow`, path-sensitive cleanup and linear kernel events make
 resource transitions visible to both the checker and MoonIR.
+`affine {}` and `linear {}` set zero-cost lexical defaults for new bindings;
+explicit `copy let`/`affine let`/`linear let` contracts override the default without
+weakening an inherent resource requirement. Only the resulting binding contracts reach
+MoonIR.
 
-Detailed design: [Architecture decision D004](decisions.md).
+Detailed design: [Architecture decision D004](decisions.md) and
+[0.3 C009/C010](luna_0.3_design.md#c010-linear--and-affine-confirmed).
 
 ## Errors and panic
 
@@ -113,7 +122,7 @@ Detailed guide: [Packages and modules](packages.md).
 ## Structured fragments
 
 `interceptor`, `context`, `slot`, `resume`, `abort` and `apply` model structured
-control effects. Static paths use direct structured lowering; dynamic paths are
+control flow and extensibility. Static paths use direct structured lowering; dynamic paths are
 explicit and retain only the descriptors needed for runtime dispatch.
 
 Detailed guide: [Fragments, slots and plugins](fragments.md).

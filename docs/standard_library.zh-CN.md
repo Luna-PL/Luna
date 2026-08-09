@@ -6,7 +6,7 @@
 > adapter 仍是 Proposed
 
 在 package、resource、Moon container 和 Runtime ABI 契约稳定前，标准库继续位于主仓库。
-0.2.1 源码作为兼容基线保留；新的拥有型容器 API 面向显式 0.3 language mode。
+0.2.1 源码只作为历史迁移基线保留；新的拥有型容器 API 面向 clean-break 0.3 编译器。
 本文中的 API 草图定义语义，不冻结最终 0.3 拼写。
 
 ## 1. 目标与非目标
@@ -299,8 +299,8 @@ package 或 milestone。它们不得阻塞第一个可用 IO/Vec/error surface�
 
 ### Stage A：契约与 package skeleton
 
-- 已实现：集中定义 Result、From、Drop、iterator 与 resource 的精确 0.3 Core 身份；在显式
-  0.3 language mode 存在前，继续保留编译器当前生效的 0.2 身份；
+- 已实现：集中定义 Result、From、Drop、iterator 与 resource 的精确 0.3 Core 身份；与当前
+  生效的 0.2 身份并列 staging，供编译器一次性切换；
 - 已实现：`org.luna.sys` 与 `org.luna.alloc` dependency skeleton；
 - 已实现：append-only console-input 与 filesystem Runtime ABI capability 合约，并兼容已发布的
   v1 结构前缀；
@@ -313,7 +313,7 @@ native application-host substrate 已实现：generated JIT/AOT entry 会在不�
 结构化错误、metadata、seek、sync 与 exact-once close。可恢复 allocator substrate 也已实现，
 包含 overflow 检查、无分配错误、zero-size 语义和失败保持 realloc。`org.luna.sys` 已拥有
 raw `console`、`fs` 和 `alloc` forwarding wrapper，Luna library code 不需要解析 C
-service table。以下 safe Luna API 仍等待显式 0.3 language surface。
+service table。以下 safe Luna API 仍等待 0.3 language surface 的一次性落地。
 
 - 已作为临时 0.2.1 adapter 实现：明确类型的 stdout/stderr text 与 i32 write、flush、
   raw byte I/O、lossy line input 和 fallback-based i32 parse；

@@ -5,8 +5,8 @@ English | [简体中文](luna_0.3_design.zh-CN.md)
 > Document category: RFC / overall design
 > Applies to: candidate Luna 0.3.0
 > Status: Draft
-> Normative status: non-normative; this records confirmed directions and pending placeholders and does not change the current 0.2.1 contract
-> Implementation audit: design record based on `bf8d73e` (2026-08-09)
+> Normative status: non-normative RFC; implementation-completion records identify the portions already active in the 0.3 development compiler
+> Final 0.2 implementation checkpoint: `a188d87a6f10d7fa67582389a0a0b915f3741401` (2026-08-09)
 
 This document is the umbrella design for Luna 0.3. The existing
 [Slot/Fragment refactoring audit](luna_0.3_evolution_audit.md) is a topic audit governed by
@@ -20,6 +20,36 @@ The document uses these states:
 
 All example syntax is Draft. This document does not claim compiler support until the
 implementation, tests, references, and changelog have been updated together.
+
+### Frozen decision boundary (2026-08-09)
+
+Confirmed IDs in this document are implementation authority. The following four IDs are the
+complete unresolved set; an implementation must not choose their answers implicitly. A newly
+discovered ambiguity must receive a stable `TBD-*` ID here before dependent code is written.
+
+| ID | Decision still required | Blocks | Does not block |
+|---|---|---|---|
+| `TBD-M005` | binary magic, integer encoding, sections, alignment, compression, and signature details | serialized Moon format conformance, parser, signer, and final `-t moon` output | in-memory canonical MoonIR tables, structural verifier rules, or deterministic model tests |
+| `TBD-EV004` | pinned/switchable/initializer/activation source and API spelling | the public evolution API and its final source/runtime bindings | generation identity, module leases, staging invariants, or internal state-machine tests |
+| `TBD-Q004` | `.all()` order and explicit ordering API | public `.all()` semantics and its ABI | Symbol Catalog, typed query sets, `.one()`, or `.optional()` |
+| `TBD-SF006` | module Slot/Fragment syntax and precise single-shot control interactions | new Slot/Fragment parsing, control semantics, and public runtime-apply surface | shadow SlotId/ContractId, descriptor schema, or legacy-corpus capture |
+
+No Proposed decisions are currently registered. A new Proposed item must be labeled and added
+to this boundary before it can influence an implementation.
+
+The normative vocabulary for this draft is:
+
+| Term | Meaning and excluded interpretation |
+|---|---|
+| compile-time / runtime | the only language phases; “dynamic” is explanatory prose only |
+| sysmeta | compiler-derived, read-only typed facts; never an effect mechanism or user metadata |
+| user `meta` | policy/application metadata; never evidence for safety |
+| artifact target | the output level selected by `-t`; never a language mode or semantic version selector |
+| Moon Container / Luna Native / Foreign C FFI | safe-after-local-verification / trusted-by-proof / unsafe foreign implementation boundaries |
+| relation / usage | ownership relation and Copy/Affine/Linear consumption discipline; orthogonal axes |
+| slot / RuntimeFragmentRef | a second-class control symbol / a typed runtime value; they are not ordinary functions |
+| MoonIR | one canonical backend IR with in-memory and serialized forms, not two semantic IRs |
+| unchecked operation | a possible narrow primitive-specific check omission; never a general `unsafe {}` scope |
 
 ## 1. Position and fundamental principles
 
@@ -105,9 +135,55 @@ Foreign C FFI artifact when Luna consumes it.
 only the artifact level and does not encode static/shared linkage. `main` and the export surface
 participate in validity checks and never silently change `-t`.
 
-`TBD-T003`: freeze suffixes, manifest package-kind spelling, and platform linkage details for
-the three targets. These are artifact-format details and do not change the language or trust
-semantics above.
+`T003` (Confirmed): an artifact-producing `luna build` requires a `luna.package`; standalone
+files remain valid inputs to `check`, `run`, and `analyze`. The manifest requires exactly one
+of `kind = "application"` or `kind = "library"`. It has no language/edition field and 0.3.0
+adds no linkage setting. `-t` is accepted only by `build`, while `-o` may replace the complete
+default output path. Diagnostic `--emit-moonir` remains separate from a sealed `-t moon`
+artifact.
+
+The 0.3.0 target/package matrix is fixed:
+
+| Package kind | `-t native` | `-t moon` | `-t cffi` |
+|---|---|---|---|
+| `application` | platform executable; exactly one package `main` | `.moon` with exactly one `main` entry | invalid |
+| `library` | trusted loadable shared library; no `main` | `.moon` library; no `main` | C ABI shared library plus generated C header; no `main` |
+
+Native and CFFI library outputs use the platform's ordinary shared-library convention:
+`lib<name>.so` on ELF platforms, `lib<name>.dylib` on macOS, and `<name>.dll` plus the required
+import `.lib` on Windows. Native applications use the platform executable convention. Both
+Moon package kinds use `<name>.moon`; the manifest entry distinguishes their entrypoint rule.
+`<name>` defaults to the final component of the Package ID. Without `-o`, outputs go under
+`<package-root>/build/<target>/`.
+
+0.3.0 deliberately has no distributable machine-code static-library artifact. Static-first
+applications compose dependencies from source or canonical MoonIR before producing the final
+application; this avoids adding archive-proof and duplicate-linkage policy to the MVP. A Luna
+Native shared library carries its proof in a platform binary section. The proof section is
+excluded canonically from its own digest calculation, while the proof binds all other loadable
+code/data and typed descriptors. Removing or corrupting the section makes the Native loader
+reject the artifact; no proof sidecar is searched.
+
+`-t cffi` exports only functions explicitly declared `export "C" fn`; ordinary `export fn`
+retains the Luna typed ABI and is therefore invalid in a CFFI library's public surface. Every
+C export must use the closed C-ABI-safe type subset and the generated `<name>.h` declares the
+compiler-selected link symbol, so metadata/module name isolation cannot disagree with the
+binary. At least one C export is required. This explicit ABI spelling is retained because it
+keeps source ABI independent of `-t`, not as a compatibility mode.
+
+A Moon package declares authorized host imports in one flat manifest section:
+
+```toml
+[host-imports]
+"io::write" = "org.luna.host.console.write"
+```
+
+The key is a package-local, module-qualified `extern "C"` declaration name and the value is a
+stable host capability ID. The compiler derives the typed ContractId from that declaration;
+users do not write or override it. `-t moon` rejects an undeclared foreign dependency, a listed
+declaration whose derived contract is not representable as a typed host import, duplicate link
+symbols with different contracts, and every path/library name in this section. MoonRuntime host
+policy maps the import identity, ContractId, and capability to an implementation.
 
 ### C007: Three trust boundaries (Confirmed)
 
@@ -152,15 +228,38 @@ user annotations beyond the ABI and explicit foreign contract.
 - anonymous records, tuples, function shapes, and explicit shape relations may remain
   structural;
 - TypeId, ShapeId, AbiLayoutId, and ContractId remain distinct;
-- 0.3 has no compiler mode for the 0.2 structural default.
+- 0.3 has no compiler mode for the 0.2 structural default;
+- `nominal` is not a keyword or declaration modifier in 0.3: `struct` and
+  `enum` already state all required identity semantics.
 
 `TY001` (Confirmed): anonymous records, tuples, and function shapes remain structural. Named
 types do not convert structurally merely because layouts match. Shape constraints may test
 structural relations but never erase TypeId; conversion between named types requires explicit
 construction or projection.
 
-`TBD-TY002`: freeze exact source spelling for anonymous records, shape constraints, and explicit
-construction/projection.
+`TY002` (Confirmed): anonymous records do not use a `record` keyword. Their type and value
+spellings are `{ x: i32, y: i32 }` and `{ x: 1, y: 2 }`. `Point { x: value.x,
+y: value.y }` explicitly constructs a named value, while `{ x: point.x, y: point.y }`
+explicitly projects a value to an anonymous record. A named value and an anonymous record, or
+two differently named values, never convert implicitly merely because their fields match.
+
+Record field names must be unique. Initializers execute in source order, but field identity,
+ShapeId, TypeId, and physical layout use one canonical name order so reordering source fields
+cannot change the structural type or ABI. Grammar context distinguishes records from blocks:
+`{ ... }` is a block where a block is required and a record where an expression or type is
+required. A statement-leading brace remains a block; a standalone record expression can be
+parenthesized. 0.3 does not add unrestricted bare block expressions, which would make these
+forms ambiguous.
+
+Named `constraint` declarations remain the only user-visible compile-time proposition
+mechanism. A C++-concept-style constrained parameter, a named `where Constraint<T>` clause,
+and an inline `where` predicate are normalized to the same constraint predicate during
+frontend analysis. The inline form is an anonymous, lambda-like spelling: it has no public
+SymbolId, does not enter the Symbol Catalog, and is erased before MoonIR. A structural condition
+uses the existing type-relation predicates, for example
+`type_same_shape::<T, { x: f64, y: f64 }>()`; `where` does not introduce a separate
+ShapeConstraint, effect, runtime contract, or TypeKind. Trait behavior bounds retain their
+distinct trait semantics even when `where` carries their surface spelling.
 
 ### C009: Relation and usage remain orthogonal (Confirmed)
 
@@ -168,13 +267,13 @@ Ownership relation continues to describe owned/shared borrow/mutable borrow, whi
 continues to describe Copy/Affine/Linear. `affine` and `linear` modify a binding contract and
 do not change TypeId.
 
-### C010: `linear {}` and `affine {}` (Confirmed direction)
+### C010: `linear {}` and `affine {}` (Confirmed)
 
 Block syntax is pure sugar: variables declared in the block default to the corresponding
 usage. Sema fixes the final usage of every binding, and MoonIR carries no usage-block node, so
 the construct has no runtime cost.
 
-Draft example:
+Example:
 
 ```luna
 linear {
@@ -188,12 +287,19 @@ linear {
 `US001` (Confirmed): explicit overrides are `copy let`, `affine let`, and `linear let`. An
 explicit binding contract replaces the block default and may select any usage permitted by the
 type/Resource contract, but it cannot weaken that contract's inherent requirement.
+The weaker explicit spelling is rejected rather than silently promoted. `copy {}` is not a
+usage-block form, and post-`let` qualifier spellings are not retained.
 
 `US002` (Confirmed): ordinary nested blocks inherit the current usage default and nested
 `linear {}`/`affine {}` blocks override it. The default applies to new local, pattern, and loop
 bindings. Borrow relation remains orthogonal to usage, so a borrowed binding receives the
 default while still obeying the borrow checker. Lambda and local-function parameters restart
 from the Copy default; captures retain the captured binding's existing contract.
+
+Implementation rule: the parser propagates only the lexical default to each affected binder.
+Sema then computes the final contract as the stronger of that default and the type/initializer's
+inherent requirement. MoonIR retains those final per-binding contracts for verification, but
+never contains a usage-scope node or runtime operation.
 
 ### C011: Rc/Arc migrate to containers (Confirmed direction)
 
@@ -398,6 +504,49 @@ place. `BodyAnalyzer`, `DeclarationCollector`, `TypeResolver`, `ControlAnalyzer`
 distinct context capability containing only its audited references and services; the analyzers
 are no longer friends of `SemanticContext`. No authoritative catalog is copied and no component
 owns another component. C015 and `SEMA001` have therefore passed their implementation gate.
+
+Planning-gate completion (2026-08-09): the then-five-item unresolved register, confirmed `T003`, and
+normative terminology above are exhaustive and guarded by `luna.0.3-design-contract`. The final
+0.2 migration corpus contains ten representative cases, is pinned to the checkpoint above, and
+has been independently replayed by that compiler. Priority items 2, 3, and 4 have therefore
+passed their completion gates. The next implementation item is 5: introduce shadow identities
+and sysmeta without changing current code generation.
+
+Shadow-identity implementation completion (2026-08-09): TypeId, ShapeId, SymbolId, ContractId,
+and AbiLayoutId are distinct C++ types. Canonical MoonIR type records now carry recomputable
+Type/Shape/ABI-layout payloads, declaration records carry recomputable Symbol/Contract payloads,
+and sysmeta schema 1.2 has a closed identity namespace projecting those IDs. The verifier rejects
+payload mismatches and cross-payload hash collisions; deterministic tests prove that equal
+contracts share ContractId while distinct declarations retain distinct SymbolId. LLVM codegen
+continues to consume the old fields and the full JIT/AOT suite is unchanged. Priority item 5 has
+therefore passed its completion gate.
+
+Nominal-default implementation completion (2026-08-09): every named struct/enum now receives a
+declaration TypeId, and the old source-default structural branch and redundant `nominal`
+modifier/keyword have been deleted without adding a language/edition switch. Anonymous
+`{ field: Type }` and `{ field: value }` records are inline
+structural aggregates; `Target { field: value }` is checked as explicit named construction, and
+field evaluation order is independent from canonical identity/layout order. C++-style
+`<Constraint T>`, named `where Constraint<T>`, and inline `where predicate` all use the existing
+compile-time constraint evaluator; the inline spelling has no symbol or MoonIR node. Positive,
+negative, package-qualified, reflection, identity, layout, MoonIR-verifier, JIT, and AOT evidence
+passes all 48 registered tests. Priority item 6 has therefore passed its completion gate. Named
+products still use the current pointer representation as an implementation detail; this phase
+does not claim an inline named-product layout redesign. The next implementation item is 7:
+usage-block sugar and final binding contracts.
+
+Usage-block implementation completion (2026-08-09): `affine {}` and `linear {}` now propagate
+lexical defaults to local, enum-pattern, and `for` bindings; ordinary blocks inherit, nested
+usage blocks override, and lambda bodies restart from Copy. Prefix `copy let`, `affine let`, and
+`linear let` contracts replace the block default, while Sema rejects an explicit contract that
+weakens a type/Resource, moved-source, or function-result requirement. A bare allocation of a
+Copy type does not acquire an implicit affine contract: Luna retains its explicit-safety,
+C-like default. The frontend
+records only final per-binding usage in verified MoonIR; no usage-scope construct or runtime
+operation survives lowering. Positive nesting/override/binder/lambda evidence, negative
+linearity and weakening evidence, JIT/AOT behavior, and the full 48-test suite pass.
+Priority item 7 has therefore passed its completion gate. The next implementation item is 8: complete
+the generic Resource/Drop contracts and recursive cleanup paths.
 
 | Order | Priority | Work | Completion gate |
 |---:|---|---|---|

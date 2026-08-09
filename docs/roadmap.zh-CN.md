@@ -1,14 +1,13 @@
-# Luna roadmap / Luna 路线图
+# Luna 0.2.1 路线图（已取代）
 
 > 文档类别：项目路线图
-> 适用版本：0.2.1 长期维护期
-> 状态：Planned
+> 适用版本：冻结的 0.2.1 规划历史
+> 状态：已由 `luna_0.3_design.zh-CN.md` 取代
 > 规范性：非规范
-> 更新：2026-07-31
+> 取代日期：2026-08-09
 
-This is the single active roadmap. The Chinese sections are authoritative;
-English readers can use the summary below. Planned syntax is not a statement of
-current compiler support.
+本文仅保留原 0.2.1 路线图作为迁移背景，不再是活跃计划。当前实现顺序与完成门见
+[Luna 0.3 总体设计](luna_0.3_design.zh-CN.md)。
 
 ## English summary
 
@@ -103,4 +102,3 @@ package 解析没有当前排期，必须作为未来独立设计，不得通过
 - 类型、所有权、错误和 ABI 影响；
 - 正例、负例及 JIT/AOT 或硬件证据；
 - 文档权威来源和迁移策略。
-

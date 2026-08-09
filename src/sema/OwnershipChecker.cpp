@@ -12,6 +12,8 @@ static luna::ownership::CleanupAction cleanupActionFor(const TypePtr& type) {
         return luna::ownership::CleanupAction::EnumDrop;
     if (type->kind == TypeKind::Array)
         return luna::ownership::CleanupAction::ArrayDrop;
+    if (type->kind == TypeKind::Record)
+        return luna::ownership::CleanupAction::RecordDrop;
     switch (type->sysmeta.resource.management) {
         case luna::sysmeta::ResourceManagement::Rc:
             return luna::ownership::CleanupAction::RcRelease;
@@ -930,15 +932,23 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
             dynamic_cast<HeapAllocExpr*>(
                 let->initializer.get()) != nullptr ||
             let->materializedIteratorOwnsSource;
-        luna::ownership::Usage usage = let->hasExplicitUsage
-            ? let->usage : defaultUsageForType(type);
+        luna::ownership::Usage usage = let->usageResolved
+            ? let->usage
+            : (let->hasExplicitUsage
+                   ? let->usage : defaultUsageForType(type));
         const auto annotatedUsage = usageFromTypeAST(let->typeAnnotation.get());
-        if (annotatedUsage != luna::ownership::Usage::Copy) usage = annotatedUsage;
-        if (auto* call = dynamic_cast<CallExpr*>(let->initializer.get())) {
-            if (call->returnUsage != luna::ownership::Usage::Copy)
-                usage = call->returnUsage;
-            else if (call->returnsLinear)
-                usage = luna::ownership::Usage::Linear;
+        if (!let->usageResolved &&
+            annotatedUsage != luna::ownership::Usage::Copy)
+            usage = annotatedUsage;
+        if (auto* call =
+                dynamic_cast<CallExpr*>(let->initializer.get())) {
+            if (!let->usageResolved) {
+                if (call->returnUsage !=
+                    luna::ownership::Usage::Copy)
+                    usage = call->returnUsage;
+                else if (call->returnsLinear)
+                    usage = luna::ownership::Usage::Linear;
+            }
             if (luna::ownership::isMoveOnly(
                     call->returnUsage) &&
                 type && type->isHeapType())
@@ -955,7 +965,10 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
 
         if (movedSource) {
             isHeap = isHeap || movedSource->isHeapAllocated;
-            usage = movedSource->usage;
+            usage = let->usageResolved
+                ? luna::ownership::strongerUsage(
+                      usage, movedSource->usage)
+                : movedSource->usage;
             isReference = isReference || movedSource->isReference;
             isMutableReference = isMutableReference || movedSource->isMutableReference;
             if (!type || type == TyUnknown) type = movedSource->type;
@@ -1184,7 +1197,10 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                  index < arm.bindings.size() &&
                  index < arm.bindingTypes.size(); ++index) {
                 const auto usage =
-                    defaultUsageForType(arm.bindingTypes[index]);
+                    index < arm.bindingUsages.size()
+                        ? arm.bindingUsages[index]
+                        : defaultUsageForType(
+                              arm.bindingTypes[index]);
                 define(arm.bindings[index], arm.bindingTypes[index],
                        false, usage);
             }
@@ -1443,7 +1459,9 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                 loop->protocolStateCleanup =
                     cleanupActionFor(state->type);
         }
-        define(loop->varName, loop->elementType ? loop->elementType : TyI32, false);
+        define(loop->varName,
+               loop->elementType ? loop->elementType : TyI32,
+               false, loop->bindingUsage);
         FlowResult bodyResult = checkBlock(loop->body.get());
         CheckerState after = captureState();
         if (bodyResult.ok && bodyResult.fallsThrough) {
@@ -1828,6 +1846,29 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
         }
         return true;
     }
+    if (auto* record = dynamic_cast<RecordLiteralExpr*>(expr)) {
+        for (auto& field : record->fields) {
+            TypePtr fieldType;
+            if (record->recordType) {
+                for (const auto& candidate : record->recordType->fields) {
+                    if (candidate.name == field.name) {
+                        fieldType = candidate.type;
+                        break;
+                    }
+                }
+            }
+            if (fieldType &&
+                luna::ownership::isMoveOnly(
+                    defaultUsageForType(fieldType)) &&
+                !dynamic_cast<MoveExpr*>(field.value.get())) {
+                error("move-only record field '" + field.name +
+                      "' must be moved explicitly");
+                return false;
+            }
+            if (!checkExpr(field.value.get())) return false;
+        }
+        return true;
+    }
     if (auto* array = dynamic_cast<ArrayLiteralExpr*>(expr)) {
         for (auto& element : array->elements) {
             if (array->elementType &&
@@ -2092,7 +2133,20 @@ bool OwnershipChecker::consume(const Place& place, const std::string& action) {
     if (!place.components.empty() &&
         defaultUsageForType(typeOfPlace(place)) == luna::ownership::Usage::Copy)
         return true;
-    if (var->relation != luna::ownership::Relation::Owned) {
+    if (!place.components.empty() && var->type &&
+        var->type->kind == TypeKind::Record) {
+        error("partial move from anonymous record '" + place.root +
+              "' is not yet supported; move the whole record");
+        return false;
+    }
+    // A reference binding owns no referent, but its local handle still has a
+    // usage contract. Moving that complete handle consumes the binding while
+    // the lexical loan remains attached to the source scope. Projections or
+    // unqualified borrowed views of heap-shaped values cannot use this path.
+    const bool consumesReferenceHandle =
+        var->isReference && place.components.empty();
+    if (var->relation != luna::ownership::Relation::Owned &&
+        !consumesReferenceHandle) {
         error("Cannot " + action + " borrowed place '" + renderPlace(place) +
               "'; declare an owning affine or linear parameter to transfer it");
         return false;

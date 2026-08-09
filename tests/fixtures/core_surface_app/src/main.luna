@@ -2,7 +2,7 @@ package org.luna.fixture.core_surface;
 module application;
 using org.luna.core as core;
 
-nominal struct Counter {
+struct Counter {
     value: i32;
 }
 
@@ -17,7 +17,7 @@ impl core::iter::Iterator<i32> for Counter {
     }
 }
 
-nominal struct Bag {
+struct Bag {
     value: i32;
 }
 
@@ -28,12 +28,12 @@ impl core::iter::IntoIterator<i32, Counter> for Bag {
     }
 }
 
-nominal struct TemporarySource {
+struct TemporarySource {
     value: i32;
     drop_marker: i32;
 }
 
-nominal struct TemporaryIterator {
+struct TemporaryIterator {
     value: i32;
     drop_marker: i32;
 }
@@ -74,7 +74,7 @@ fn return_from_implicit_loop() -> i32 {
     return 0;
 }
 
-nominal struct Resource {
+struct Resource {
     marker: i32;
 }
 
@@ -84,7 +84,7 @@ impl Drop for Resource {
     }
 }
 
-nominal struct ResourceIterator {
+struct ResourceIterator {
     remaining: i32;
 }
 
@@ -110,11 +110,11 @@ fn return_from_resource_loop() -> i32 {
     return 0;
 }
 
-nominal struct SumBuilder {
+struct SumBuilder {
     total: i32;
 }
 
-nominal struct CollectedSum {
+struct CollectedSum {
     total: i32;
 }
 
@@ -133,11 +133,11 @@ impl core::iter::FromIterator<i32, SumBuilder> for CollectedSum {
     }
 }
 
-nominal struct ResourceSumBuilder {
+struct ResourceSumBuilder {
     total: i32;
 }
 
-nominal struct CollectedResources {
+struct CollectedResources {
     total: i32;
 }
 

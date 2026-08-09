@@ -74,6 +74,21 @@ private:
 
     std::unique_ptr<TypeAST> cloneType(const TypeAST* src) {
         if (!src) return nullptr;
+        if (auto* type = dynamic_cast<const RecordTypeAST*>(src)) {
+            auto clone = std::make_unique<RecordTypeAST>();
+            clone->resolvedType = substitute(type->resolvedType);
+            for (const auto& field : type->fields) {
+                RecordTypeAST::Field clonedField;
+                clonedField.name = field.name;
+                clonedField.type = cloneType(field.type.get());
+                clonedField.sourcePath = field.sourcePath;
+                clonedField.line = field.line;
+                clonedField.col = field.col;
+                if (!clonedField.type) return nullptr;
+                clone->fields.push_back(std::move(clonedField));
+            }
+            return located(std::move(clone), src);
+        }
         if (auto* type = dynamic_cast<const NamedTypeAST*>(src)) {
             auto clone = std::make_unique<NamedTypeAST>(type->name);
             clone->arrayLength = type->arrayLength;
@@ -233,6 +248,7 @@ private:
             auto clone = std::make_unique<FieldAccessExpr>();
             clone->object = cloneExpr(expr->object.get());
             clone->field = expr->field;
+            clone->resultType = substitute(expr->resultType);
             return located(std::move(clone), src);
         }
         if (auto* expr = dynamic_cast<const IndexExpr*>(src)) {
@@ -246,6 +262,22 @@ private:
             for (const auto& element : expr->elements)
                 clone->elements.push_back(cloneExpr(element.get()));
             clone->elementType = substitute(expr->elementType);
+            return located(std::move(clone), src);
+        }
+        if (auto* expr = dynamic_cast<const RecordLiteralExpr*>(src)) {
+            auto clone = std::make_unique<RecordLiteralExpr>();
+            clone->recordType = substitute(expr->recordType);
+            clone->targetType = cloneType(expr->targetType.get());
+            for (const auto& field : expr->fields) {
+                RecordLiteralExpr::Field clonedField;
+                clonedField.name = field.name;
+                clonedField.value = cloneExpr(field.value.get());
+                clonedField.sourcePath = field.sourcePath;
+                clonedField.line = field.line;
+                clonedField.col = field.col;
+                if (!clonedField.value) return nullptr;
+                clone->fields.push_back(std::move(clonedField));
+            }
             return located(std::move(clone), src);
         }
         if (auto* expr = dynamic_cast<const HeapAllocExpr*>(src)) {
@@ -363,6 +395,9 @@ private:
             clone->isLinear = statement->isLinear;
             clone->usage = statement->usage;
             clone->hasExplicitUsage = statement->hasExplicitUsage;
+            clone->hasInheritedUsage = statement->hasInheritedUsage;
+            clone->inheritedUsage = statement->inheritedUsage;
+            clone->usageResolved = statement->usageResolved;
             clone->typeAnnotation =
                 cloneType(statement->typeAnnotation.get());
             clone->initializer =
@@ -410,6 +445,9 @@ private:
                 arm.qualifierCol = sourceArm.qualifierCol;
                 arm.variantName = sourceArm.variantName;
                 arm.bindings = sourceArm.bindings;
+                arm.bindingUsageDefaults =
+                    sourceArm.bindingUsageDefaults;
+                arm.bindingUsages = sourceArm.bindingUsages;
                 arm.variantIndex = sourceArm.variantIndex;
                 for (const auto& type : sourceArm.bindingTypes)
                     arm.bindingTypes.push_back(substitute(type));
@@ -427,6 +465,11 @@ private:
         if (auto* statement = dynamic_cast<const ForStmt*>(src)) {
             auto clone = std::make_unique<ForStmt>();
             clone->varName = statement->varName;
+            clone->hasInheritedUsage =
+                statement->hasInheritedUsage;
+            clone->inheritedUsage =
+                statement->inheritedUsage;
+            clone->bindingUsage = statement->bindingUsage;
             clone->iterable = cloneExpr(statement->iterable.get());
             clone->body = cloneBlock(statement->body.get());
             clone->elementType = substitute(statement->elementType);
@@ -642,6 +685,17 @@ FunctionDecl* TypeResolver::monomorphize(FunctionDecl* generic, const TypeVec& c
 TypePtr TypeResolver::resolveTypeAST(const TypeAST* ast,
     const std::unordered_map<std::string, TypePtr>& bindings) {
     if (!ast) return TyUnit;
+    if (auto* record = dynamic_cast<const RecordTypeAST*>(ast)) {
+        if (record->resolvedType) return record->resolvedType;
+        std::vector<TypeField> fields;
+        fields.reserve(record->fields.size());
+        for (const auto& field : record->fields)
+            fields.push_back({
+                field.name, resolveTypeAST(field.type.get(), bindings)});
+        auto resolvedRecord = Type::makeRecord(std::move(fields));
+        const_cast<RecordTypeAST*>(record)->resolvedType = resolvedRecord;
+        return resolvedRecord;
+    }
     if (auto* named = dynamic_cast<const NamedTypeAST*>(ast)) {
         // Monomorphization may materialize an already-resolved nominal type
         // into an AST annotation. Preserve that exact identity instead of
@@ -896,6 +950,17 @@ std::unique_ptr<TypeAST> TypeResolver::typeToAST(const TypePtr& type) {
     auto t = resolved(type);
     if (!t || t->kind == TypeKind::Unknown || t->kind == TypeKind::InferenceVar)
         return std::make_unique<NamedTypeAST>("i32");
+    if (t->kind == TypeKind::Record) {
+        auto record = std::make_unique<RecordTypeAST>();
+        record->resolvedType = t;
+        for (const auto& field : t->fields) {
+            RecordTypeAST::Field astField;
+            astField.name = field.name;
+            astField.type = typeToAST(field.type);
+            record->fields.push_back(std::move(astField));
+        }
+        return record;
+    }
     if (t->kind == TypeKind::Reference)
         return std::make_unique<RefTypeAST>(typeToAST(t->inner), t->isMutable);
     if (t->kind == TypeKind::RawPointer) {

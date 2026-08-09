@@ -1,22 +1,22 @@
-# Luna 0.2 Alpha Architecture
+# Luna 0.3 Development Architecture
 
 > Document category: architecture note
-> Applies to: Luna 0.2.1
+> Applies to: Luna 0.3.0 development
 > Status: Active
-> Normative status: non-normative; language behavior follows the Alpha semantic reference
-> Implementation audit: 2026-07-31
+> Normative status: non-normative; language behavior follows the current semantic reference and 0.3 design
+> Implementation audit: 2026-08-09
 
 This document describes the current system layers, compilation pipeline, and component
-boundaries. Adopted rationale is collected in architecture decisions, and planned capabilities
-in the roadmap.
+boundaries. The active rationale and implementation gates are collected in the
+[0.3 overall design](luna_0.3_design.md); the older architecture decisions remain a 0.2 rationale baseline.
 
 ## Design principles
 
 - **Static first**: work that can be proved and removed at compile time is not deferred to runtime.
 - **Pay for what you use**: Runtime, Reflection, Registry, Dynamic, and GPU capabilities must
   be explicitly reached by a program.
-- **Structural type first**: structural identity is the default relation; nominal identity must
-  be retained explicitly.
+- **Stable named identity, explicit shape**: named declarations are nominal by default;
+  anonymous records and explicit ShapeId relations retain structural programming.
 - **Ownership and usage are orthogonal**: Owned/Borrow describes relation, while
   Copy/Affine/Linear describes consumption count.
 - **Lowest capable layer**: place each policy in the lowest layer that can implement it safely.
@@ -62,7 +62,7 @@ MoonIR and share host optimization levels and Runtime ABI.
 
 This document defines stage relationships and data flow. The repository file and responsibility
 guide defines the responsibility, permitted dependencies, and forbidden boundaries of every
-physical directory and file. Refactoring files alone must not change the semantic baseline.
+physical directory and file. Refactoring files alone must not cross the current Confirmed/TBD boundary.
 
 ## Key identities
 

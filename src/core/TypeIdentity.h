@@ -1,8 +1,9 @@
 #pragma once
 
+#include "StableIdentity.h"
+
 #include <cstdint>
 #include <memory>
-#include <string>
 
 struct Type;
 using TypePtr = std::shared_ptr<Type>;
@@ -27,20 +28,7 @@ enum class IdentityMode : uint8_t {
     Error,
 };
 
-struct TypeId {
-    std::string value;
-
-    bool empty() const { return value.empty(); }
-    bool operator==(const TypeId& other) const { return value == other.value; }
-    bool operator!=(const TypeId& other) const { return !(*this == other); }
-};
-
-struct ShapeId {
-    std::string value;
-
-    bool empty() const { return value.empty(); }
-    bool operator==(const ShapeId& other) const { return value == other.value; }
-    bool operator!=(const ShapeId& other) const { return !(*this == other); }
-};
+using TypeId = luna::identity::TypeId;
+using ShapeId = luna::identity::ShapeId;
 
 } // namespace luna::types

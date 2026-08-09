@@ -29,6 +29,13 @@ uint64_t valueAlignmentImpl(const TypePtr& type,
             return 4;
         case TypeKind::Array:
             return valueAlignmentImpl(type->inner, active);
+        case TypeKind::Record: {
+            uint64_t alignment = 1;
+            for (const auto& field : type->fields)
+                alignment = std::max(
+                    alignment, valueAlignmentImpl(field.type, active));
+            return alignment;
+        }
         case TypeKind::Unit: case TypeKind::Never:
             return 1;
         case TypeKind::Slice: case TypeKind::Result: case TypeKind::Enum:
@@ -68,12 +75,27 @@ uint64_t valueSizeImpl(const TypePtr& type,
         case TypeKind::String: case TypeKind::CStr:
         case TypeKind::RawPointer: case TypeKind::Reference:
         case TypeKind::Rc: case TypeKind::Arc:
-        case TypeKind::Struct: case TypeKind::Record:
+        case TypeKind::Struct:
         case TypeKind::DeviceBuffer: case TypeKind::Iterator:
         case TypeKind::Metadata: case TypeKind::MetadataView:
         case TypeKind::DeclarationView: case TypeKind::DeclarationRef:
         case TypeKind::Function:
             return 8;
+        case TypeKind::Record: {
+            if (!active.insert(type.get()).second)
+                return 0;
+            uint64_t offset = 0;
+            uint64_t maximumAlignment = 1;
+            for (const auto& field : type->fields) {
+                const uint64_t alignment =
+                    valueAlignmentImpl(field.type, active);
+                maximumAlignment = std::max(maximumAlignment, alignment);
+                offset = alignTo(offset, alignment);
+                offset += valueSizeImpl(field.type, active);
+            }
+            active.erase(type.get());
+            return alignTo(offset, maximumAlignment);
+        }
         case TypeKind::Unit: case TypeKind::Never:
             return 0;
         case TypeKind::Slice:

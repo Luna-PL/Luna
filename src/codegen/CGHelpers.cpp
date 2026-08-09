@@ -2,6 +2,7 @@
 #include "../core/TypeLayout.h"
 
 #include <algorithm>
+#include <vector>
 
 CGHelpers::CGHelpers(llvm::LLVMContext& ctx) : mCtx(ctx) {}
 
@@ -60,8 +61,14 @@ llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
         case TypeKind::Reference:
             return ptrTy();
         case TypeKind::Struct:
-        case TypeKind::Record:
             return ptrTy();
+        case TypeKind::Record: {
+            std::vector<llvm::Type*> fields;
+            fields.reserve(type->fields.size());
+            for (const auto& field : type->fields)
+                fields.push_back(toLLVMType(field.type));
+            return llvm::StructType::get(mCtx, fields);
+        }
         case TypeKind::Function:
             return ptrTy(); // function pointers are opaque ptrs
         default:
@@ -100,12 +107,13 @@ uint64_t typeSize(const TypePtr& type) {
         case TypeKind::Array: return type->arrayLength * typeSize(type->inner);
         case TypeKind::Slice: return 16;
         case TypeKind::Event: return 4;
-        case TypeKind::Struct:
-        case TypeKind::Record: {
+        case TypeKind::Struct: {
             uint64_t size = 0;
             for (auto& field : type->fields) size += typeSize(field.type);
             return size == 0 ? 8 : size;
         }
+        case TypeKind::Record:
+            return luna::layout::valueSize(type);
         case TypeKind::Enum:
             return luna::layout::valueSize(type);
         case TypeKind::Result: {

@@ -40,7 +40,7 @@ private:
     std::unique_ptr<Stmt> parseStatement();
     std::unique_ptr<Stmt> parseLetStmt(
         luna::ownership::Usage usage = luna::ownership::Usage::Copy,
-        bool isConst = false);
+        bool isConst = false, bool hasExplicitUsage = false);
     std::unique_ptr<Stmt> parseReturnStmt();
     std::unique_ptr<Stmt> parseIfStmt();
     std::unique_ptr<Stmt> parseMatchStmt();
@@ -70,6 +70,9 @@ private:
     std::unique_ptr<Expr> parseUnary();
     std::unique_ptr<Expr> parsePostfix();
     std::unique_ptr<Expr> parsePrimary();
+    std::unique_ptr<Expr> parseExprBeforeBlock();
+    std::unique_ptr<RecordLiteralExpr> parseRecordLiteral(
+        std::unique_ptr<TypeAST> targetType = nullptr);
     std::unique_ptr<Expr> parseIfExpr();
     std::unique_ptr<Expr> parseLambda();
     std::unique_ptr<Expr> parseLaunchExpr();
@@ -77,10 +80,12 @@ private:
                                                 bool selectAlreadyConsumed = true);
 
     std::unique_ptr<TypeAST> parseType();
+    std::unique_ptr<RecordTypeAST> parseRecordType();
     std::unique_ptr<TypeAST> parseFunctionType();
     std::vector<Param> parseParams();
     std::vector<std::unique_ptr<Expr>> parseArgs();
-    std::vector<std::string> parseTypeParamList();
+    std::vector<std::string> parseTypeParamList(
+        std::vector<WhereClause>* constrainedParameters = nullptr);
     std::vector<WhereClause> parseWhereClause();
     TraitRef parseTraitRef(const Token& nameToken);
     Decl::MetadataAttachment parseMetadataAttachment(RetentionKind retention);
@@ -103,4 +108,6 @@ private:
     std::string mSourceName;
     std::string mSource;
     std::vector<diagnostic::Diagnostic> mErrors;
+    bool mStopBeforeBlockBrace = false;
+    luna::ownership::Usage mUsageDefault = luna::ownership::Usage::Copy;
 };

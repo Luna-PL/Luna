@@ -1,0 +1,10 @@
+struct Resource {
+    value: i32;
+}
+
+fn main() -> i32 {
+    let record = { resource: move new Resource(42) };
+    let extracted = move record.resource;
+    free(move extracted);
+    return 0;
+}

@@ -1,20 +1,20 @@
-# Luna 0.2 Alpha 架构
+# Luna 0.3 开发期架构
 
 > 文档类别：架构说明
-> 适用版本：Luna 0.2.1
+> 适用版本：Luna 0.3.0 开发期
 > 状态：Active
-> 规范性：非规范；语言行为以 [Alpha 语义参考](reference/README.md) 为准
-> 实现核对：2026-07-31
+> 规范性：非规范；语言行为以当前语义参考与 0.3 设计为准
+> 实现核对：2026-08-09
 
-本文只描述当前系统的层级、编译管线和组件边界。已经采用的设计理由集中在
-[架构决策](decisions.md)，计划能力集中在[路线图](roadmap.md)。
+本文只描述当前系统的层级、编译管线和组件边界。活跃设计理由与实现完成门集中在
+[0.3 总体设计](luna_0.3_design.zh-CN.md)；旧架构决策仅作为 0.2 理由基线。
 
 ## 设计原则
 
 - **Static first**：能在编译期证明和消除的工作不推迟到运行时。
 - **Pay for what you use**：Runtime、Reflection、Registry、Dynamic 和 GPU
   能力都必须由可达程序显式触发。
-- **Structural type first**：结构身份是默认关系；名义身份必须显式保留。
+- **稳定具名身份、显式 shape**：具名声明默认名义；匿名 record 与显式 ShapeId 关系保留结构化编程。
 - **Ownership 与 usage 正交**：Owned/Borrow 描述关系，Copy/Affine/Linear
   描述使用次数。
 - **Lowest capable layer**：策略尽量放在能够安全实现它的最低层。
@@ -55,8 +55,7 @@ AOT 消费同一份已检查 MoonIR，并共享宿主优化级别与 runtime ABI
 ## 主要组件
 
 阶段关系和数据流由本文定义；每个物理目录、文件的职责、允许依赖和禁止边界统一见
-[仓库文件与职责指南](file_guide.md)。只重构文件不应改变
-[语义基线](reference/semantic_baseline_0.2.md)。
+[仓库文件与职责指南](file_guide.md)。只重构文件不应跨越当前 Confirmed/TBD 边界。
 
 ## 关键身份
 

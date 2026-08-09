@@ -1,0 +1,8 @@
+fn main() -> i32 {
+    linear {
+        {
+            let token = 1;
+        }
+    }
+    return 0;
+}

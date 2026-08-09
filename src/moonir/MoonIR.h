@@ -110,6 +110,7 @@ struct MetadataInstance {
 struct TypeRecord {
     luna::types::TypeId id;
     luna::types::ShapeId shapeId;
+    luna::identity::AbiLayoutId abiLayoutId;
     luna::types::TypeDomain domain = luna::types::TypeDomain::Value;
     luna::types::IdentityMode identityMode = luna::types::IdentityMode::Structural;
     TypeKind kind = TypeKind::Unknown;
@@ -118,6 +119,7 @@ struct TypeRecord {
     std::string nominalDeclarationId;
     std::string canonicalType;
     std::string canonicalShape;
+    std::string canonicalAbiLayout;
     uint32_t layoutAbiVersion = 0;
     uint64_t valueSize = 0;
     uint64_t valueAlignment = 1;
@@ -131,6 +133,8 @@ struct TypeRecord {
 struct DeclarationRecord {
     std::string id;
     std::string familyId;
+    luna::identity::SymbolId symbolId;
+    luna::identity::ContractId contractId;
     std::string sourceName;
     std::string linkageName;
     DeclarationKind kind = DeclarationKind::Function;
@@ -138,8 +142,12 @@ struct DeclarationRecord {
     std::vector<MetadataInstance> metadata;
     TypePtr type;
     luna::sysmeta::Facts sysmeta;
+    std::string canonicalContract;
     SourceLocation location;
 };
+
+std::string canonicalAbiLayout(const TypeRecord& type);
+std::string canonicalContract(const DeclarationRecord& declaration);
 
 struct Param {
     std::string name;
@@ -198,6 +206,7 @@ struct MatchArm : Node {
     uint32_t variantIndex = 0;
     std::vector<std::string> bindings;
     TypeVec bindingTypes;
+    std::vector<luna::ownership::Usage> bindingUsages;
     std::unique_ptr<BlockStmt> body;
 };
 
@@ -214,6 +223,8 @@ struct WhileStmt : Stmt {
 
 struct ForStmt : Stmt {
     std::string varName;
+    luna::ownership::Usage bindingUsage =
+        luna::ownership::Usage::Copy;
     std::unique_ptr<Expr> iterable;
     std::unique_ptr<BlockStmt> body;
     TypePtr elementType;
@@ -389,6 +400,16 @@ struct ArrayLiteralExpr : Expr {
     TypePtr elementType;
 };
 
+struct RecordLiteralExpr : Expr {
+    struct Field {
+        std::string name;
+        std::unique_ptr<Expr> value;
+    };
+    // Source order is retained for evaluation; `type->fields` owns canonical
+    // identity/layout order.
+    std::vector<Field> fields;
+};
+
 struct HeapAllocExpr : Expr {
     std::unique_ptr<Expr> initializer;
     TypePtr allocatedType;
@@ -454,6 +475,7 @@ struct Decl : Node {
     std::string packageId;
     std::string declarationId;
     std::string familyId;
+    luna::identity::SymbolId symbolId;
     std::string name;
     std::string generatedSymbolName;
     std::string modulePath;

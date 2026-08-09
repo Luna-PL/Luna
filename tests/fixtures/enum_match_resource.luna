@@ -1,4 +1,4 @@
-nominal struct Resource {
+struct Resource {
     marker: i32;
 }
 
@@ -8,7 +8,7 @@ impl Drop for Resource {
     }
 }
 
-nominal enum ResourceChoice {
+enum ResourceChoice {
     Empty;
     Item(Resource);
 }

@@ -1,4 +1,4 @@
-nominal struct Accumulator {
+struct Accumulator {
     value: i32;
 }
 

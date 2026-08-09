@@ -1,11 +1,11 @@
 package org.luna.fixture.core;
 module alternate;
 
-export nominal struct PublicBox {
+export struct PublicBox {
     alternative: i32;
 }
 
-export nominal enum PublicOption {
+export enum PublicOption {
     Different;
 }
 

@@ -1,13 +1,14 @@
-# Luna Roadmap
+# Luna 0.2.1 Roadmap (Superseded)
 
 > Document category: project roadmap
-> Applies to: 0.2.1 long-term maintenance line
-> Status: Planned
+> Applies to: frozen 0.2.1 planning history
+> Status: Superseded by `luna_0.3_design.md`
 > Normative status: non-normative
-> Updated: 2026-07-31
+> Superseded: 2026-08-09
 
-This is the single active roadmap. Planned syntax is not a statement of current compiler
-support.
+This file preserves the former 0.2.1 roadmap as migration context. It is not the active plan.
+The implementation order and completion gates are now defined by the
+[Luna 0.3 overall design](luna_0.3_design.md).
 
 ## Project status
 

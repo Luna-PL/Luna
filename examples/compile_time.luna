@@ -4,12 +4,12 @@ constexpr fn pow2(n: i32) -> i32 {
     else { return 2 * pow2(n - 1); }
 }
 
-nominal struct Point {
+struct Point {
     x: i32;
     y: i64;
 }
 
-nominal enum Choice {
+enum Choice {
     Left(i32);
     Right;
 }

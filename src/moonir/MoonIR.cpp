@@ -7,6 +7,78 @@
 
 namespace moon {
 
+namespace {
+
+void appendIdentityPart(std::string& output, const std::string& part) {
+    output += std::to_string(part.size());
+    output += ':';
+    output += part;
+    output += ';';
+}
+
+template <typename Enum>
+void appendEnum(std::string& output, Enum value) {
+    appendIdentityPart(
+        output, std::to_string(static_cast<unsigned>(value)));
+}
+
+void appendBool(std::string& output, bool value) {
+    appendIdentityPart(output, value ? "1" : "0");
+}
+
+void appendOwnershipContract(
+    std::string& output, const luna::ownership::Contract& contract) {
+    appendEnum(output, contract.relation);
+    appendEnum(output, contract.usage);
+}
+
+} // namespace
+
+std::string canonicalAbiLayout(const TypeRecord& type) {
+    std::string result = "luna.abi-layout.v1;";
+    appendIdentityPart(result, std::to_string(type.layoutAbiVersion));
+    appendIdentityPart(result, std::to_string(type.valueSize));
+    appendIdentityPart(result, std::to_string(type.valueAlignment));
+    appendIdentityPart(result, type.abiLayout);
+    return result;
+}
+
+std::string canonicalContract(const DeclarationRecord& declaration) {
+    std::string result = "luna.contract.v1;";
+    appendEnum(result, declaration.kind);
+    appendIdentityPart(result, declaration.type
+        ? luna::types::typeId(declaration.type).value : std::string{});
+
+    const auto& facts = declaration.sysmeta;
+    appendEnum(result, facts.control.form);
+    appendEnum(result, facts.control.cardinality);
+    appendEnum(result, facts.control.storage);
+    appendEnum(result, facts.control.forwarding);
+    appendBool(result, facts.control.abortPermitted);
+    appendBool(result, facts.control.replayValidated);
+
+    appendIdentityPart(
+        result, std::to_string(facts.resource.parameters.size()));
+    for (const auto& parameter : facts.resource.parameters)
+        appendOwnershipContract(result, parameter);
+    appendOwnershipContract(result, facts.resource.result);
+    appendEnum(result, facts.resource.management);
+    appendEnum(result, facts.resource.releaseDomain);
+    appendBool(result, facts.resource.needsDrop);
+    appendBool(result, facts.resource.tracksElementInitialization);
+
+    appendBool(result, facts.capability.hostOnly);
+    appendBool(result, facts.capability.runtimeRetained);
+    appendBool(result, facts.capability.dynamicDispatch);
+    appendBool(result, facts.capability.ffi);
+    appendBool(result, facts.capability.gpu);
+    appendBool(result, facts.capability.maySuspend);
+    appendBool(result, facts.abi.stableBoundary);
+    appendBool(result, facts.abi.persistentFrameRequired);
+    appendIdentityPart(result, facts.abi.dropGlueSymbol);
+    return result;
+}
+
 void Module::rebuildIndexes() {
     typesById.clear();
     for (size_t index = 0; index < typeTable.size(); ++index)
@@ -67,6 +139,12 @@ void Module::registerType(const TypePtr& type) {
         record.abiLayout =
             luna::layout::inlineAdtLayoutSignature(type);
     }
+    record.canonicalAbiLayout = canonicalAbiLayout(record);
+    record.abiLayoutId = luna::identity::abiLayoutIdFromCanonical(
+        record.canonicalAbiLayout);
+    record.sysmeta.identity.type = record.id;
+    record.sysmeta.identity.shape = record.shapeId;
+    record.sysmeta.identity.abiLayout = record.abiLayoutId;
     const auto addReference = [&](const TypePtr& referenced) {
         if (referenced) record.referencedTypeIds.push_back(luna::types::typeId(referenced));
     };

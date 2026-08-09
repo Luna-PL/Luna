@@ -1,0 +1,10 @@
+fn main() -> i32 {
+    let answer = 0;
+    {
+        answer = 42;
+    }
+    // A record used as a standalone expression is parenthesized so the
+    // statement-leading brace remains unambiguously a block.
+    ({ value: answer });
+    return answer;
+}

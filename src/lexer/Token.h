@@ -5,9 +5,9 @@
 
 enum class TokenKind {
     // Keywords
-    Fn, Let, Const, Constexpr, New, Rc, Arc, Move, Borrow, Affine, Linear, Mut, Free, Extern, Auto, Return,
+    Fn, Let, Const, Constexpr, New, Rc, Arc, Move, Borrow, Copy, Affine, Linear, Mut, Free, Extern, Auto, Return,
     Fragment, Interceptor, Context, Many, Slot, Resume, Abort, Apply, Default,
-    Meta, Constraint, Select, With, Runtime, Dynamic, Nominal, Kernel, Launch, Await,
+    Meta, Constraint, Select, With, Runtime, Dynamic, Kernel, Launch, Await,
     Trait, Impl, Where, Struct, Enum, Package, Module, Using, As, Export, If, Else, Match, While, For,
     True, False, Self,
     // Built-in types (parsed as keywords for type annotations)
@@ -50,12 +50,13 @@ const std::unordered_map<std::string, TokenKind> KEYWORDS = {
     {"meta", TokenKind::Meta}, {"constraint", TokenKind::Constraint},
     {"select", TokenKind::Select},
     {"with", TokenKind::With}, {"runtime", TokenKind::Runtime},
-    {"dynamic", TokenKind::Dynamic}, {"nominal", TokenKind::Nominal},
+    {"dynamic", TokenKind::Dynamic},
     {"kernel", TokenKind::Kernel}, {"launch", TokenKind::Launch},
     {"await", TokenKind::Await},
     {"new",    TokenKind::New},    {"move",   TokenKind::Move},
     {"rc",     TokenKind::Rc},     {"arc",    TokenKind::Arc},
-    {"borrow", TokenKind::Borrow}, {"affine", TokenKind::Affine},
+    {"borrow", TokenKind::Borrow}, {"copy", TokenKind::Copy},
+    {"affine", TokenKind::Affine},
     {"linear", TokenKind::Linear},
     {"mut",    TokenKind::Mut},    {"free",   TokenKind::Free},
     {"extern", TokenKind::Extern}, {"auto",   TokenKind::Auto},
@@ -95,7 +96,6 @@ inline std::string tokenKindName(TokenKind k) {
         case TokenKind::With: return "with";
         case TokenKind::Runtime: return "runtime";
         case TokenKind::Dynamic: return "dynamic";
-        case TokenKind::Nominal: return "nominal";
         case TokenKind::Kernel: return "kernel";
         case TokenKind::Launch: return "launch";
         case TokenKind::Await: return "await";
@@ -104,6 +104,7 @@ inline std::string tokenKindName(TokenKind k) {
         case TokenKind::Arc: return "arc";
         case TokenKind::Move: return "move";
         case TokenKind::Borrow: return "borrow";
+        case TokenKind::Copy: return "copy";
         case TokenKind::Affine: return "affine";
         case TokenKind::Linear: return "linear";
         case TokenKind::Mut: return "mut";

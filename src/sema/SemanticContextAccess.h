@@ -70,6 +70,10 @@ public:
     std::optional<bool> evaluateConstraint(
         const std::string& name, const TypeVec& arguments,
         std::vector<std::string>& active);
+    std::optional<ConstValue> evaluateConstraintExpr(
+        Expr* expr,
+        const std::unordered_map<std::string, TypePtr>& bindings,
+        std::vector<std::string>& active);
     std::optional<std::string> evaluateSelectorFunction(
         FunctionDecl* function,
         const luna::selector::DeclarationView& view,

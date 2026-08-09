@@ -76,6 +76,7 @@ bool validSeparatedName(const std::string& value, const std::string& separator,
 bool Verifier::verify(const Module& module) {
     mErrors.clear();
     mVerifiedTypeIds.clear();
+    mActiveTypeNodes.clear();
     if (module.formatMajor != FormatMajor) {
         error({}, "unsupported MoonIR major version " +
                   std::to_string(module.formatMajor));
@@ -108,6 +109,8 @@ bool Verifier::verify(const Module& module) {
             error({}, "package alias '" + use.alias + "' identifies multiple packages");
     }
 
+    std::unordered_map<std::string, std::string> shapePayloads;
+    std::unordered_map<std::string, std::string> abiLayoutPayloads;
     for (const auto& type : module.typeTable) {
         if (type.id.empty()) {
             error({}, "type table entry has no stable TypeId");
@@ -119,6 +122,26 @@ bool Verifier::verify(const Module& module) {
             error({}, "TypeId payload mismatch for '" + type.id.value + "'");
         if (luna::types::shapeIdFromCanonical(type.canonicalShape) != type.shapeId)
             error({}, "ShapeId payload mismatch for type '" + type.id.value + "'");
+        auto [shape, insertedShape] = shapePayloads.emplace(
+            type.shapeId.value, type.canonicalShape);
+        if (!insertedShape && shape->second != type.canonicalShape)
+            error({}, "colliding ShapeId '" + type.shapeId.value + "'");
+        if (canonicalAbiLayout(type) != type.canonicalAbiLayout)
+            error({}, "ABI layout payload mismatch for type '" + type.id.value + "'");
+        if (luna::identity::abiLayoutIdFromCanonical(
+                type.canonicalAbiLayout) != type.abiLayoutId)
+            error({}, "AbiLayoutId payload mismatch for type '" +
+                      type.id.value + "'");
+        auto [layout, insertedLayout] = abiLayoutPayloads.emplace(
+            type.abiLayoutId.value, type.canonicalAbiLayout);
+        if (!insertedLayout && layout->second != type.canonicalAbiLayout)
+            error({}, "colliding AbiLayoutId '" +
+                      type.abiLayoutId.value + "'");
+        if (type.sysmeta.identity.type != type.id ||
+            type.sysmeta.identity.shape != type.shapeId ||
+            type.sysmeta.identity.abiLayout != type.abiLayoutId)
+            error({}, "type '" + type.id.value +
+                      "' has inconsistent identity sysmeta");
         if (type.domain == luna::types::TypeDomain::Inference ||
             type.domain == luna::types::TypeDomain::Error ||
             type.identityMode == luna::types::IdentityMode::Inference ||
@@ -242,6 +265,8 @@ bool Verifier::verify(const Module& module) {
 
     std::unordered_set<std::string> declarationIds;
     std::unordered_set<std::string> linkageNames;
+    std::unordered_set<std::string> symbolIds;
+    std::unordered_map<std::string, std::string> contractPayloads;
     std::unordered_map<std::string, const DeclarationRecord*> recordsById;
     for (const auto& record : module.declarationTable) {
         if (record.id.empty()) error(record.location, "declaration table entry has no id");
@@ -250,6 +275,30 @@ bool Verifier::verify(const Module& module) {
         } else {
             recordsById.emplace(record.id, &record);
         }
+        if (luna::identity::symbolIdFromCanonical(record.id) !=
+            record.symbolId)
+            error(record.location, "SymbolId payload mismatch for declaration '" +
+                                   record.id + "'");
+        else if (!symbolIds.insert(record.symbolId.value).second)
+            error(record.location, "duplicate or colliding SymbolId '" +
+                                   record.symbolId.value + "'");
+        if (canonicalContract(record) != record.canonicalContract)
+            error(record.location, "contract payload mismatch for declaration '" +
+                                   record.id + "'");
+        if (luna::identity::contractIdFromCanonical(
+                record.canonicalContract) != record.contractId)
+            error(record.location, "ContractId payload mismatch for declaration '" +
+                                   record.id + "'");
+        auto [contract, insertedContract] = contractPayloads.emplace(
+            record.contractId.value, record.canonicalContract);
+        if (!insertedContract &&
+            contract->second != record.canonicalContract)
+            error(record.location, "colliding ContractId '" +
+                                   record.contractId.value + "'");
+        if (record.sysmeta.identity.symbol != record.symbolId ||
+            record.sysmeta.identity.contract != record.contractId)
+            error(record.location, "declaration '" + record.id +
+                                   "' has inconsistent identity sysmeta");
         if (!record.linkageName.empty() &&
             !linkageNames.insert(record.linkageName).second)
             error(record.location, "duplicate linkage identity '" +
@@ -356,6 +405,9 @@ bool Verifier::verify(const Module& module) {
                                          "' is absent from the declaration table");
         } else {
             const auto& linkage = declaration->generatedSymbolName;
+            if (declaration->symbolId != record->second->symbolId)
+                error(declaration->location, "declaration table SymbolId mismatch for '" +
+                                             declaration->declarationId + "'");
             if (record->second->linkageName != linkage)
                 error(declaration->location, "declaration table linkage mismatch for '" +
                                              declaration->declarationId + "'");
@@ -504,6 +556,19 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
         if (let->name.empty()) error(let->location, "binding has no name in '" + owner + "'");
         verifyType(let->type, let->location, "binding '" + let->name + "'");
         verifyExpr(let->initializer.get(), module, owner);
+        auto requiredUsage = defaultUsageForType(let->type);
+        if (auto* call = dynamic_cast<const CallExpr*>(
+                let->initializer.get())) {
+            const auto callUsage = call->returnsLinear
+                ? luna::ownership::Usage::Linear
+                : call->returnUsage;
+            requiredUsage = luna::ownership::strongerUsage(
+                requiredUsage, callUsage);
+        }
+        if (!luna::ownership::satisfiesUsageRequirement(
+                let->usage, requiredUsage))
+            error(let->location, "binding '" + let->name +
+                  "' weakens its required usage contract in '" + owner + "'");
         if (let->isLinear != (let->usage == luna::ownership::Usage::Linear))
             error(let->location, "binding '" + let->name +
                   "' has inconsistent linear compatibility flag");
@@ -601,6 +666,9 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
             if (arm.bindings.size() != arm.bindingTypes.size())
                 error(arm.location, "match arm binding/type arity mismatch in '" +
                       owner + "'");
+            if (arm.bindings.size() != arm.bindingUsages.size())
+                error(arm.location, "match arm binding/usage arity mismatch in '" +
+                      owner + "'");
             TypeVec expectedFields;
             if (match->matchedType &&
                 match->matchedType->kind == TypeKind::Enum &&
@@ -629,6 +697,13 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
                         expectedFields[index]))
                     error(arm.location, "match binding type disagrees with "
                           "its frozen variant payload in '" + owner + "'");
+                if (index < arm.bindingUsages.size() &&
+                    !luna::ownership::satisfiesUsageRequirement(
+                        arm.bindingUsages[index],
+                        defaultUsageForType(
+                            arm.bindingTypes[index])))
+                    error(arm.location, "match binding weakens its required "
+                          "usage contract in '" + owner + "'");
             }
             for (const auto& type : arm.bindingTypes)
                 verifyType(type, arm.location, "match binding type");
@@ -641,6 +716,11 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
         verifyExpr(loop->iterable.get(), module, owner);
         verifyType(loop->elementType, loop->location,
                    "for-loop element type");
+        if (!luna::ownership::satisfiesUsageRequirement(
+                loop->bindingUsage,
+                defaultUsageForType(loop->elementType)))
+            error(loop->location, "for-loop binding weakens its required "
+                  "usage contract in '" + owner + "'");
         if (!loop->protocolNextSymbol.empty()) {
             verifyType(loop->protocolIteratorType, loop->location,
                        "iterator protocol state type");
@@ -868,6 +948,20 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
         verifyType(array->elementType, array->location, "array element");
         for (const auto& element : array->elements)
             verifyExpr(element.get(), module, owner);
+    } else if (auto* record = dynamic_cast<const RecordLiteralExpr*>(expr)) {
+        verifyType(record->type, record->location, "record literal");
+        if (!record->type ||
+            (record->type->kind != TypeKind::Record &&
+             record->type->kind != TypeKind::Struct))
+            error(record->location,
+                  "record literal has neither a structural record nor named struct type");
+        std::unordered_set<std::string> names;
+        for (const auto& field : record->fields) {
+            if (field.name.empty() || !names.insert(field.name).second)
+                error(record->location,
+                      "record literal contains an empty or duplicate field");
+            verifyExpr(field.value.get(), module, owner);
+        }
     } else if (auto* allocation = dynamic_cast<const HeapAllocExpr*>(expr)) {
         verifyType(allocation->allocatedType, allocation->location, "heap allocation");
         verifyExpr(allocation->initializer.get(), module, owner);
@@ -942,6 +1036,8 @@ void Verifier::verifyType(const TypePtr& type, const SourceLocation& location,
         error(location, context + " has no resolved type");
         return;
     }
+    if (!mActiveTypeNodes.insert(type.get()).second)
+        return;
     const auto stableId = luna::types::typeId(type);
     if (!mVerifiedTypeIds.count(stableId.value))
         error(location, context + " references type '" + stableId.value +
@@ -965,6 +1061,7 @@ void Verifier::verifyType(const TypePtr& type, const SourceLocation& location,
     for (const auto& variant : type->variants)
         for (const auto& field : variant.fields)
             verifyType(field, location, context + "::" + variant.name, allowTypeParameter);
+    mActiveTypeNodes.erase(type.get());
 }
 
 void Verifier::error(const SourceLocation& location, const std::string& message) {

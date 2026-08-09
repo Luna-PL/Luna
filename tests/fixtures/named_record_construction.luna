@@ -1,0 +1,27 @@
+struct Point {
+    x: i32;
+    y: i32;
+}
+
+fn project(point: Point) -> { x: i32, y: i32 } {
+    return { y: point.y, x: point.x };
+}
+
+fn mark(value: i32) -> i32 {
+    print(value);
+    return value;
+}
+
+// `nominal` is not a 0.3 keyword: named declarations are nominal without a
+// modifier, so the spelling is available to ordinary identifiers.
+fn nominal(value: i32) -> i32 {
+    return value;
+}
+
+fn main() -> i32 {
+    // Initializers are evaluated in source order and matched by field name,
+    // independently of declaration order.
+    let point = Point { y: mark(2), x: nominal(mark(40)) };
+    let projected = project(point);
+    return projected.x + projected.y;
+}

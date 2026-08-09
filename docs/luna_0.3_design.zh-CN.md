@@ -5,8 +5,8 @@
 > 文档类别：RFC / 总体设计
 > 适用版本：候选 Luna 0.3.0
 > 状态：Draft
-> 规范性：非规范；本文记录已确认方向与待决占位，不改变 0.2.1 当前契约
-> 实现核对：设计记录，基于 `bf8d73e`（2026-08-09）
+> 规范性：非规范 RFC；实现完成记录会标出已在 0.3 开发期编译器生效的部分
+> 最终 0.2 实现检查点：`a188d87a6f10d7fa67582389a0a0b915f3741401`（2026-08-09）
 
 本文是 Luna 0.3 的总纲。现有
 [Slot/Fragment 重构审计](luna_0.3_evolution_audit.zh-CN.md)是受本文约束的专题审计，
@@ -20,6 +20,34 @@
 
 所有计划语法都只是 Draft。实现、测试、参考文档和变更日志同步完成前，本文不声明
 编译器已经支持这些能力。
+
+### 已冻结的决定边界（2026-08-09）
+
+本文的 Confirmed ID 是实现授权。下列四个 ID 是完整的未决集合；实现不得隐式替它们
+选择答案。后续发现的新歧义必须先在此获得稳定 `TBD-*` ID，之后才能编写依赖代码。
+
+| ID | 尚需决定 | 阻塞 | 不阻塞 |
+|---|---|---|---|
+| `TBD-M005` | binary magic、整数编码、section、alignment、压缩和签名细节 | Moon 序列化格式 conformance、parser、signer 和最终 `-t moon` 输出 | 内存 canonical MoonIR table、结构 verifier 规则或确定性 model 测试 |
+| `TBD-EV004` | pinned/switchable/initializer/activation 的源码与 API 拼写 | 公开 evolution API 及最终源码/runtime binding | generation identity、module lease、staging invariant 或内部状态机测试 |
+| `TBD-Q004` | `.all()` 顺序和显式排序 API | 公开 `.all()` 语义及其 ABI | Symbol Catalog、typed query set、`.one()` 或 `.optional()` |
+| `TBD-SF006` | module Slot/Fragment 语法和 single-shot control 的精确交互 | 新 Slot/Fragment parsing、control semantics 与公开 runtime-apply surface | shadow SlotId/ContractId、descriptor schema 或旧版 corpus 固化 |
+
+当前没有登记 Proposed 决定。新的 Proposed 项必须明确标记并加入本边界，才能影响实现。
+
+本草案使用以下规范术语：
+
+| 术语 | 含义及排除项 |
+|---|---|
+| compile-time / runtime | 仅有的语言阶段；“动态”只作为解释性文字 |
+| sysmeta | 编译器推导、只读、强类型的事实；不是 effect 机制或 user metadata |
+| user `meta` | 策略/应用 metadata；不得作为安全证据 |
+| artifact target | `-t` 选择的产物级别；不是 language mode 或语义版本选择器 |
+| Moon Container / Luna Native / Foreign C FFI | 本地验证后安全 / 由证明建立信任 / unsafe foreign implementation 三种边界 |
+| relation / usage | ownership relation 与 Copy/Affine/Linear 消耗纪律；两者正交 |
+| slot / RuntimeFragmentRef | 二等 control symbol / typed runtime value；都不等同普通函数 |
+| MoonIR | 同时具有内存和序列化形式的单一 canonical backend IR，不是两个语义 IR |
+| unchecked operation | 未来可能出现的窄粒度 primitive-specific 省略检查；绝不是通用 `unsafe {}` scope |
 
 ## 1. 定位与基本原则
 
@@ -97,8 +125,51 @@ container-stable 或 user-queryable；只有验证、装载和绑定所需的事
 级别，不再编码 static/shared 等链接形态。`main` 和 export surface 参与合法性检查，
 不静默改变 `-t`。
 
-`TBD-T003`：冻结三个目标的文件后缀、manifest package-kind 拼写和平台链接细节；这些
-是产物格式细节，不改变上述语言与信任语义。
+`T003`（Confirmed）：产生正式产物的 `luna build` 必须以 `luna.package` 为输入；standalone
+file 仍可用于 `check`、`run` 和 `analyze`。manifest 必须且只能选择
+`kind = "application"` 或 `kind = "library"`；不含 language/edition 字段，0.3.0 也不增加
+linkage 配置。只有 `build` 接受 `-t`，`-o` 可以覆盖完整默认输出路径。用于诊断的
+`--emit-moonir` 与 sealed `-t moon` 产物保持分离。
+
+0.3.0 的 target/package 矩阵固定如下：
+
+| Package kind | `-t native` | `-t moon` | `-t cffi` |
+|---|---|---|---|
+| `application` | 平台 executable；package 恰有一个 `main` | 带恰好一个 `main` entry 的 `.moon` | 非法 |
+| `library` | trusted、可装载 shared library；无 `main` | 无 `main` 的 `.moon` library | C ABI shared library + 生成的 C header；无 `main` |
+
+Native/CFFI library 使用平台普通 shared-library 约定：ELF 平台为 `lib<name>.so`，macOS
+为 `lib<name>.dylib`，Windows 为 `<name>.dll` 以及所需 import `.lib`。Native application
+使用平台 executable 约定。两类 Moon package 都使用 `<name>.moon`，由 manifest entry
+区分 entrypoint 规则。`<name>` 默认取 Package ID 最后一段；未给 `-o` 时输出位于
+`<package-root>/build/<target>/`。
+
+0.3.0 有意不提供可分发的 machine-code static-library 产物。静态优先的 application
+从源码或 canonical MoonIR 组合 dependency 后生成最终 application，避免在 MVP 同时
+引入 archive proof 与重复链接策略。Luna Native shared library 将证明嵌入平台 binary
+section；计算自身 digest 时按规范排除 proof section，而证明绑定其余所有 loadable
+code/data 与 typed descriptor。section 缺失或损坏时 Native loader 必须拒绝，不搜索
+proof sidecar。
+
+`-t cffi` 只导出显式声明为 `export "C" fn` 的函数；普通 `export fn` 保持 Luna typed
+ABI，因此出现在 CFFI library public surface 时非法。每个 C export 必须属于封闭的
+C-ABI-safe 类型子集，生成的 `<name>.h` 声明编译器选定的真实 link symbol，避免
+metadata/module identity 与 binary 不一致。至少需要一个 C export。保留显式 ABI
+拼写是为了让 source ABI 与 `-t` 正交，不是兼容模式。
+
+Moon package 在一个扁平 manifest section 中声明获准的 host import：
+
+```toml
+[host-imports]
+"io::write" = "org.luna.host.console.write"
+```
+
+key 是 package-local、module-qualified 的 `extern "C"` declaration name，value 是稳定
+host capability ID。编译器从 declaration 推导 typed ContractId，用户不书写或覆盖它。
+`-t moon` 必须拒绝未声明的 foreign dependency、无法表示为 typed host import 的已列
+declaration、contract 不同却 link symbol 相同的重复项，以及该 section 中的任何
+path/library name。MoonRuntime host policy 根据 import identity、ContractId 与 capability
+绑定实现。
 
 ### C007：三种信任边界（Confirmed）
 
@@ -138,25 +209,45 @@ lifetime 保证。
 - trait、metadata schema 和具名运行时 contract 始终具有声明身份；
 - anonymous record、tuple、function shape 和显式 shape relation 可以继续结构化；
 - TypeId、ShapeId、AbiLayoutId 和 ContractId 必须分开；
-- 0.3 不保留 0.2 默认结构语义的编译模式。
+- 0.3 不保留 0.2 默认结构语义的编译模式；
+- `nominal` 在 0.3 中不是关键字或声明修饰符：`struct` 与 `enum` 已经表达全部所需的
+  identity 语义。
 
 `TY001`（Confirmed）：匿名 record/tuple/function shape 保持结构化；具名类型即使 layout
 相同也不发生隐式结构转换。shape constraint 可以检查结构关系，但不会抹除 TypeId；
 具名类型之间必须显式构造或投影。
 
-`TBD-TY002`：冻结匿名 record、shape constraint 和显式构造/投影的具体源码拼写。
+`TY002`（Confirmed）：匿名 record 不使用 `record` 关键字。类型和值分别写作
+`{ x: i32, y: i32 }` 与 `{ x: 1, y: 2 }`。`Point { x: value.x,
+y: value.y }` 显式构造具名值，`{ x: point.x, y: point.y }` 显式投影为匿名 record。
+具名值与匿名 record、两个不同的具名值之间，都不会仅因字段相同而隐式转换。
+
+record 字段名必须唯一。initializer 按源码顺序执行，但字段 identity、ShapeId、TypeId
+与物理布局统一使用按名称规范化的顺序，因此字段书写顺序不能改变结构类型或 ABI。
+grammar context 区分 record 与 block：要求 block 的位置把 `{ ... }` 解释为 block，要求
+expression/type 的位置解释为 record。statement 开头的 `{` 仍优先开始 block；需要独立
+record expression 时可以加括号。0.3 不增加不受限制的裸 block expression，以免重新产生
+歧义。
+
+具名 `constraint` declaration 仍是唯一公开的编译期 proposition 机制。C++ concept 风格的
+constrained parameter、具名 `where Constraint<T>` clause 与 inline `where` predicate 都在
+frontend analysis 中归一化为同一 constraint predicate。inline form 是类似 lambda 的匿名
+拼写：没有公开 SymbolId，不进入 Symbol Catalog，并在 MoonIR 前擦除。结构条件使用既有
+type-relation predicate，例如 `type_same_shape::<T, { x: f64, y: f64 }>()`；`where` 不引入
+独立 ShapeConstraint、effect、runtime contract 或 TypeKind。trait behavior bound 即使也由
+`where` 承载表面拼写，仍保留独立的 trait 语义。
 
 ### C009：relation 与 usage 正交（Confirmed）
 
 Ownership relation 继续表示 owned/shared borrow/mutable borrow，usage 继续表示
 Copy/Affine/Linear。`affine`/`linear` 修饰 binding contract，不改变 TypeId。
 
-### C010：`linear {}` / `affine {}`（Confirmed direction）
+### C010：`linear {}` / `affine {}`（Confirmed）
 
 块状语法是纯语法糖：块内新声明变量默认使用对应 usage。Sema 固化每个 binding 的
 最终 usage 后，MoonIR 不保留 usage block 节点，因此没有运行时成本。
 
-Draft 示例：
+示例：
 
 ```luna
 linear {
@@ -170,12 +261,18 @@ linear {
 `US001`（Confirmed）：显式覆盖语法为 `copy let`、`affine let` 和 `linear let`。显式
 binding contract 替换 block default，可以选择类型/Resource contract 允许的任一
 usage，但不能弱化其固有要求。
+显式写出的较弱 contract 会直接拒绝，而不是静默提升。`copy {}` 不是 usage
+block 形式，也不保留 qualifier 写在 `let` 之后的语法。
 
 `US002`（Confirmed）：普通嵌套块继承当前 usage default，嵌套 `linear {}`/
 `affine {}` 覆盖它。默认适用于块内新建的 local、pattern 和 loop binding；borrow
 relation 与 usage 正交，因此 borrow binding 也取得该默认值，但仍受 borrow checker
 约束。lambda/局部函数参数从 Copy default 重新开始，capture 保留被捕获 binding 的
 既有 contract。
+
+实现规则：parser 只把词法范围的 default 传到受影响 binder；Sema 取该 default 与
+类型/initializer 固有要求中更强的一方，形成最终 contract。MoonIR 保留这些可验证的
+per-binding contract，但绝不包含 usage-scope 节点或运行时操作。
 
 ### C011：Rc/Arc 迁移为容器（Confirmed direction）
 
@@ -357,6 +454,42 @@ type/trait catalog、推导状态、诊断和 declaration reference，组件不�
 capability，其中只包含经审计的引用和服务；五个 analyzer 不再是 `SemanticContext`
 的 friend。没有复制权威 catalog，也不存在组件之间的持有关系。因此 C015 与
 `SEMA001` 已通过实现完成门。
+
+计划门完成记录（2026-08-09）：当时的五项未决登记、已确认 `T003` 与规范术语是穷尽
+集合，并由 `luna.0.3-design-contract` 守护。最终 0.2 迁移 corpus 包含十个代表性
+案例，固定到上述检查点，并已由该编译器独立重放。因此优先级第 2、3、4 项已经通过
+完成门；下一项实现工作是第 5 项：在不改变当前 codegen 的前提下引入 shadow identity
+与 sysmeta。
+
+shadow identity 实施完成记录（2026-08-09）：TypeId、ShapeId、SymbolId、ContractId 与
+AbiLayoutId 已成为互不混用的 C++ 类型。canonical MoonIR type record 现在携带可重算的
+Type/Shape/ABI-layout payload，declaration record 携带可重算的 Symbol/Contract payload；
+sysmeta schema 1.2 增加封闭的 identity namespace 来投影这些 ID。verifier 会拒绝 payload
+不一致和不同 payload 的 hash collision；确定性测试证明相同 contract 共享 ContractId，
+不同 declaration 保持不同 SymbolId。LLVM codegen 继续消费原字段，完整 JIT/AOT suite
+没有变化。因此优先级第 5 项已通过完成门。
+
+名义默认实施完成记录（2026-08-09）：所有具名 struct/enum 现在都获得声明
+TypeId；旧的源码默认结构分支与冗余的 `nominal` modifier/keyword 已删除，
+且没有增加 language/edition 开关。匿名
+`{ field: Type }` 和 `{ field: value }` record 是内联结构 aggregate；
+`Target { field: value }` 按显式具名构造检查，字段求值顺序与规范 identity/layout
+顺序独立。C++ 风格 `<Constraint T>`、具名 `where Constraint<T>` 和 inline
+`where predicate` 都使用已有编译期 constraint evaluator；inline 写法没有 symbol，也没有
+MoonIR node。正例、负例、package 限定名、reflection、identity、layout、MoonIR verifier、JIT 与 AOT
+证据已通过全部 48 项注册测试。因此优先级第 6 项已通过完成门。具名 product 仍使用
+当前指针表示这一实现细节；本阶段不声称已完成具名 product 内联布局重设计。下一项实现工作是
+第 7 项：usage block 糖与最终 binding contract。
+
+usage block 实施完成记录（2026-08-09）：`affine {}` / `linear {}` 现会把词法 default
+传给 local、enum pattern 与 `for` binding；普通 block 继承，嵌套 usage block 覆盖，lambda body
+从 Copy 重新开始。前置 `copy let` / `affine let` / `linear let` contract 替换 block
+default；显式 contract 若弱化类型/Resource、moved source 或 function result 的要求，
+Sema 会拒绝。Copy 类型的裸 allocation 不会被隐式提升为 affine；Luna 保留显式安全、
+类 C 的默认语义。frontend 只把最终 per-binding usage 记入可验证 MoonIR；usage-scope construct
+和运行时操作均不进入 lowering。嵌套/覆盖/binder/lambda 正例、linearity 与 weakening 反例、
+JIT/AOT 行为及全部 48 项测试均通过。因此优先级第 7 项已通过完成门。下一项是第 8 项：
+完成通用 Resource/Drop contract 与递归 cleanup 路径。
 
 | 顺序 | 优先级 | 工作 | 完成门 |
 |---:|---|---|---|

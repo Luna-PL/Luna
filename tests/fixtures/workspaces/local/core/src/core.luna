@@ -1,11 +1,11 @@
 package org.luna.fixture.core;
 module values;
 
-export nominal struct PublicBox {
+export struct PublicBox {
     value: i32;
 }
 
-export nominal enum PublicOption {
+export enum PublicOption {
     None;
     Some(i32);
 }

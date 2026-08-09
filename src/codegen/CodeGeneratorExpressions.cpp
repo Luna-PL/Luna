@@ -28,6 +28,7 @@ using moon::LambdaExpr;
 using moon::LaunchExpr;
 using moon::MoveExpr;
 using moon::Operator;
+using moon::RecordLiteralExpr;
 using moon::StringLiteralExpr;
 using moon::TryExpr;
 using moon::UnaryExpr;
@@ -327,12 +328,83 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         return mBuilder->CreateInsertValue(
             result, payload, {1}, "enum.value");
     }
+    if (auto* record = dynamic_cast<RecordLiteralExpr*>(expr)) {
+        if (!record->type ||
+            (record->type->kind != TypeKind::Record &&
+             record->type->kind != TypeKind::Struct)) {
+            error("record literal has no validated product type");
+            return llvm::PoisonValue::get(mHelpers->i32Ty());
+        }
+        if (record->type->kind == TypeKind::Struct) {
+            auto rtAlloc = mModule->getOrInsertFunction(
+                "rt_alloc", mHelpers->ptrTy(),
+                mHelpers->sizeTy(), mHelpers->sizeTy());
+            llvm::Value* pointer = mBuilder->CreateCall(
+                rtAlloc,
+                {llvm::ConstantInt::get(
+                     mHelpers->sizeTy(), typeSize(record->type)),
+                 llvm::ConstantInt::get(
+                     mHelpers->sizeTy(), typeAlignment(record->type))},
+                "struct.literal");
+            for (auto& field : record->fields) {
+                // Evaluate in source order, but place by declaration field.
+                llvm::Value* fieldValue = generateExpr(field.value.get());
+                const size_t index = fieldIndex(record->type, field.name);
+                if (index == static_cast<size_t>(-1)) {
+                    error("named struct literal field is absent from its type");
+                    continue;
+                }
+                uint64_t offset = 0;
+                for (size_t prior = 0; prior < index; ++prior)
+                    offset += typeSize(record->type->fields[prior].type);
+                llvm::Value* fieldPointer = pointer;
+                if (offset != 0)
+                    fieldPointer = mBuilder->CreateGEP(
+                        llvm::Type::getInt8Ty(*mCtx), pointer,
+                        llvm::ConstantInt::get(
+                            mHelpers->sizeTy(), offset),
+                        "struct.literal.field");
+                fieldValue = coerceCallArgument(
+                    fieldValue,
+                    mHelpers->toLLVMType(record->type->fields[index].type));
+                mBuilder->CreateStore(fieldValue, fieldPointer);
+            }
+            return pointer;
+        }
+        auto* recordLLVM = llvm::dyn_cast<llvm::StructType>(
+            mHelpers->toLLVMType(record->type));
+        if (!recordLLVM) {
+            error("record literal did not lower to an inline aggregate");
+            return llvm::PoisonValue::get(mHelpers->i32Ty());
+        }
+        llvm::Value* result = llvm::UndefValue::get(recordLLVM);
+        for (auto& field : record->fields) {
+            // Generate in source order, then place the value at its canonical
+            // name-sorted index.
+            llvm::Value* fieldValue = generateExpr(field.value.get());
+            const size_t index = fieldIndex(record->type, field.name);
+            if (index == static_cast<size_t>(-1)) {
+                error("record literal field is absent from its canonical type");
+                continue;
+            }
+            fieldValue = coerceCallArgument(
+                fieldValue, recordLLVM->getElementType(index));
+            result = mBuilder->CreateInsertValue(
+                result, fieldValue,
+                {static_cast<unsigned>(index)}, "record.field");
+        }
+        return result;
+    }
     if (auto* field = dynamic_cast<FieldAccessExpr*>(expr)) {
         TypePtr objectType;
         if (auto* id = dynamic_cast<IdentifierExpr*>(field->object.get())) {
             auto it = mLocalTypes.find(id->name);
             if (it != mLocalTypes.end()) objectType = it->second;
         }
+        if (!objectType && field->object)
+            objectType = field->object->type;
+        const bool isReference = objectType &&
+            objectType->kind == TypeKind::Reference;
         if (objectType && objectType->kind == TypeKind::Reference)
             objectType = objectType->inner;
         if (objectType && (objectType->kind == TypeKind::Rc ||
@@ -343,6 +415,9 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
 
         llvm::Value* object = generateExpr(field->object.get());
+        if (objectType->kind == TypeKind::Record && !isReference)
+            return mBuilder->CreateExtractValue(
+                object, {static_cast<unsigned>(index)}, field->field);
         uint64_t offset = 0;
         for (size_t i = 0; i < index; ++i)
             offset += typeSize(objectType->fields[i].type);
@@ -859,6 +934,47 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
                 fieldIndex(objectType, field->field);
             if (objectType &&
                 index != static_cast<size_t>(-1)) {
+                if (objectType->kind == TypeKind::Record) {
+                    auto* objectId = dynamic_cast<IdentifierExpr*>(
+                        field->object.get());
+                    auto local = objectId
+                        ? mLocals.find(objectId->name) : mLocals.end();
+                    if (local == mLocals.end()) {
+                        error("record field assignment requires a local record binding");
+                        return rhs;
+                    }
+                    auto* pointer = mBuilder->CreateStructGEP(
+                        local->second->getAllocatedType(), local->second,
+                        static_cast<unsigned>(index), "record.field.assign.ptr");
+                    auto* valueType = mHelpers->toLLVMType(
+                        objectType->fields[index].type);
+                    llvm::Value* result = coerceCallArgument(rhs, valueType);
+                    if (as->op != Operator::Assign) {
+                        llvm::Value* previous = mBuilder->CreateLoad(
+                            valueType, pointer, "record.field.old");
+                        switch (as->op) {
+                            case Operator::AddAssign:
+                                result = valueType->isFloatingPointTy()
+                                    ? mBuilder->CreateFAdd(previous, result)
+                                    : mBuilder->CreateAdd(previous, result); break;
+                            case Operator::SubtractAssign:
+                                result = valueType->isFloatingPointTy()
+                                    ? mBuilder->CreateFSub(previous, result)
+                                    : mBuilder->CreateSub(previous, result); break;
+                            case Operator::MultiplyAssign:
+                                result = valueType->isFloatingPointTy()
+                                    ? mBuilder->CreateFMul(previous, result)
+                                    : mBuilder->CreateMul(previous, result); break;
+                            case Operator::DivideAssign:
+                                result = valueType->isFloatingPointTy()
+                                    ? mBuilder->CreateFDiv(previous, result)
+                                    : mBuilder->CreateSDiv(previous, result); break;
+                            default: break;
+                        }
+                    }
+                    mBuilder->CreateStore(result, pointer);
+                    return result;
+                }
                 llvm::Value* object =
                     generateExpr(field->object.get());
                 uint64_t offset = 0;

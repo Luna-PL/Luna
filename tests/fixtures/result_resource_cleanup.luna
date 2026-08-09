@@ -1,4 +1,4 @@
-nominal struct ResultResource {
+struct ResultResource {
     marker: i32;
 }
 

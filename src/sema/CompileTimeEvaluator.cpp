@@ -79,11 +79,14 @@ TypePtr CompileTimeEvaluator::analyzeReflectionCall(CallExpr* call, const std::s
                 return static_cast<int64_t>(t->arrayLength) *
                     typeSize(t->inner);
             case TypeKind::Slice: return 16;
-            case TypeKind::Struct: case TypeKind::Record: {
+            case TypeKind::Struct: {
                 int64_t total = 0;
                 for (const auto& field : t->fields) total += typeSize(field.type);
                 return total == 0 ? 8 : total;
             }
+            case TypeKind::Record:
+                return static_cast<int64_t>(
+                    luna::layout::valueSize(t));
             case TypeKind::Enum:
             case TypeKind::Result:
                 return static_cast<int64_t>(
@@ -593,12 +596,15 @@ CompileTimeEvaluator::evaluateConstraintExpr(
                 case TypeKind::Array:
                     return static_cast<int64_t>(item->arrayLength) *
                         sizeOf(item->inner);
-                case TypeKind::Struct: case TypeKind::Record: {
+                case TypeKind::Struct: {
                     int64_t total = 0;
                     for (const auto& field : item->fields)
                         total += sizeOf(field.type);
                     return total;
                 }
+                case TypeKind::Record:
+                    return static_cast<int64_t>(
+                        luna::layout::valueSize(item));
                 case TypeKind::Enum:
                 case TypeKind::Result:
                     return static_cast<int64_t>(

@@ -14,10 +14,10 @@ fn main() -> i32 {
     let generic = showcase::algorithms::identity::<i32>(inferred);
     let flowed = showcase::algorithms::control_flow(generic);
 
-    // Structural and nominal ADTs, qualified constructors and static traits.
-    let pixel = new showcase::data::model::Pixel(12);
-    let structural = showcase::data::model::read_point(pixel);
-    let counter = new showcase::data::model::Counter(structural);
+    // Nominal ADTs, qualified constructors and static traits.
+    let point = showcase::data::model::Point { value: 12 };
+    let point_value = showcase::data::model::read_point(point);
+    let counter = showcase::data::model::Counter { value: point_value };
     let retained = showcase::data::model::keep(move counter);
     let choice = showcase::data::model::StructuralChoice::Some(1);
     let command = showcase::data::model::Command::Add(1);
@@ -60,6 +60,8 @@ fn main() -> i32 {
 
     // Reflection is compile-time data and therefore adds no runtime registry.
     const let is_nominal = type_is_nominal::<showcase::data::model::Counter>();
+    const let same_shape = type_same_shape::<showcase::data::model::Point,
+                                            showcase::data::model::Pixel>();
     const let field_count = type_field_count::<showcase::data::model::Counter>();
 
     // Reachable kernel code runs through the CPU simulator by default. Device
@@ -74,7 +76,7 @@ fn main() -> i32 {
 
     print(type_id::<showcase::data::model::Counter>());
     print(answer);
-    if is_nominal && field_count == 1 {
+    if is_nominal && same_shape && field_count == 1 {
         return answer;
     }
     return 1;

@@ -1,4 +1,4 @@
-# Luna 0.2.1
+# Luna 0.3.0 开发版
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -10,21 +10,22 @@ Luna 是由 GitHub 组织 [Luna-PL](https://github.com/Luna-PL) 维护的、基�
 LLVM 的实验性系统编程语言。编译器首先把 Luna 源程序降级到经过验证的
 MoonIR，在保留语言语义和安全边界后，再统一对接 LLVM JIT 与 AOT。
 
-项目将进入长期维护的 `0.2.1` 版本线，目前没有预定的 Beta 或语言版本升级。
-近期开发重心转向工具链，包括诊断、编辑器/构建/package 集成、分发、可复现性与
-可靠性。语言层工作只处理正确性、安全性和已记录契约缺口；实验性语法仍可在该边界
-内调整。准确支持范围和限制见[Alpha 发布说明](docs/alpha_release.zh-CN.md)。
+项目现已开始实施 clean-break `0.3.0` 主线。0.3 编译器不保留 `language=`
+或 edition 兼容模式；依赖 0.2.1 语义的源码应使用冻结的 0.2.1 编译器。
+当前设计仍是草案，实现按完成门分阶段推进。详见
+[0.3 总体设计](docs/luna_0.3_design.zh-CN.md)与
+[0.2 到 0.3 迁移指南](docs/migration_0.2_to_0.3.zh-CN.md)。
 
 ## 主要特性
 
 Luna 将静态、无额外运行时开销的语言机制，与需要显式选择的运行时/动态能力区分开来：
 
 - 统一且经过验证的 `Luna -> MoonIR -> LLVM IR` JIT/AOT 编译路径；
-- 默认结构化类型、显式名义身份、ADT、泛型和静态解析的 trait；
+- 具名类型默认名义、匿名 record 结构化、ADT、受约束泛型和静态解析的 trait；
 - 仿射/线性所有权、`move`、共享/可变借用和自动清理；
 - 一等 Metadata、编译期 selector，以及显式 `runtime` / `dynamic` 保留和分派；
 - 反向 DNS Package ID、`::` module 路径、workspace、lockfile、别名和显式导出；
-- 结构化的 `interceptor`、`context`、`slot` 和 `apply` 控制效果；
+- 结构化的 `interceptor`、`context`、`slot` 和 `apply` 控制流/扩展构造；
 - 带版本的 Runtime ABI 和显式 C FFI 边界；
 - 仅为可达 kernel 付费，并提供 CPU 模拟器及 CUDA/ROCm 代码生成路径。
 
@@ -143,7 +144,7 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
 5. 改进 benchmark、profiling、MoonIR 检查和开发者审计工具；
 6. 修复语言正确性或安全缺陷，但不主动扩大当前语言表面。
 
-详细阶段、稳定性承诺和长期计划见[统一路线图](docs/roadmap.md)。
+详细实现顺序与完成门见[0.3 总体设计](docs/luna_0.3_design.zh-CN.md#9-实现优先级)。
 
 ## 文档
 
@@ -168,7 +169,7 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
 - [测试与回归](docs/testing.md)
 - [生态发布快照](docs/ecosystem_release.zh-CN.md)
 - [性能基准](docs/benchmarks.zh-CN.md)
-- [演进路线图](docs/roadmap.md)
+- [0.3 总体设计与实现优先级](docs/luna_0.3_design.zh-CN.md)
 
 ## 许可证
 

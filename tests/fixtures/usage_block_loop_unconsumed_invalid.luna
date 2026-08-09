@@ -1,0 +1,6 @@
+fn main() -> i32 {
+    linear {
+        for item in [1, 2] {}
+    }
+    return 0;
+}

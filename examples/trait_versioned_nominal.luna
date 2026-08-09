@@ -1,7 +1,7 @@
 meta api_revision { value: i32; }
 
 @api_revision(1)
-nominal struct Box { value: i32; }
+struct Box { value: i32; }
 
 @api_revision(1)
 trait Tagged {

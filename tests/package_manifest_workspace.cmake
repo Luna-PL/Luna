@@ -137,7 +137,7 @@ endif()
 file(REMOVE_RECURSE "${invalid_workspace}")
 file(COPY "${workspace}/" DESTINATION "${invalid_workspace}")
 file(WRITE "${invalid_workspace}/app/src/main.luna"
-"package org.luna.fixture.app;\nmodule application;\nusing org.luna.fixture.core as core;\n\nnominal struct AppValue { value: i32; }\n\nimpl core::values::Describe for AppValue {\n}\n\nfn main() -> i32 { return 0; }\n")
+"package org.luna.fixture.app;\nmodule application;\nusing org.luna.fixture.core as core;\n\nstruct AppValue { value: i32; }\n\nimpl core::values::Describe for AppValue {\n}\n\nfn main() -> i32 { return 0; }\n")
 execute_process(
     COMMAND "${LUNA_EXECUTABLE}" check "${invalid_workspace}/app"
     RESULT_VARIABLE local_target_result

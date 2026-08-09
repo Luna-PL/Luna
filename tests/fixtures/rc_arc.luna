@@ -1,4 +1,4 @@
-nominal struct SharedResource {
+struct SharedResource {
     value: i32;
 }
 

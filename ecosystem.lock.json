@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "snapshot": "luna-0.2.1-tooling-candidate.11",
-  "status": "candidate",
+  "status": "frozen-0.2.1-baseline",
   "components": {
     "luna": {
       "repository": "https://github.com/Luna-PL/Luna.git",

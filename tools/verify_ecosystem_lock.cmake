@@ -96,8 +96,9 @@ if(DEFINED LUNA_EXECUTABLE AND EXISTS "${LUNA_EXECUTABLE}")
     if(NOT actual_language_version STREQUAL locked_language_version OR
        NOT actual_compiler_commit STREQUAL luna_head)
         message(FATAL_ERROR
-            "Luna binary does not match manifest-containing commit: "
-            "binary=${actual_compiler_commit}, source=${luna_head}")
+            "Luna binary is incompatible with this ecosystem lock: "
+            "language binary=${actual_language_version}, lock=${locked_language_version}; "
+            "commit binary=${actual_compiler_commit}, source=${luna_head}")
     endif()
 endif()
 

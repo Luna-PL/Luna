@@ -88,7 +88,7 @@ int main(int argc, char* argv[]) {
     const std::string namedTypeSource =
         "package org.luna.test;\n"
         "module api;\n"
-        "nominal struct Box { value: i32; }\n"
+        "struct Box { value: i32; }\n"
         "fn keep(affine value: Box) -> affine Box { return value; }\n";
     auto namedTypes = luna::tooling::AnalysisSnapshot::analyzeSource(
         namedTypeSource, "file:///workspace/types.luna");

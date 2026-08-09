@@ -1,10 +1,10 @@
-# Luna 0.2 Alpha Type-System Reference
+# Luna 0.3 Development Type-System Reference
 
-> Document category: language contract and Alpha reference
-> Applies to: Luna 0.2.1
-> Status: core model Frozen for Alpha; individual surfaces are labeled by section
+> Document category: language contract and development reference
+> Applies to: candidate Luna 0.3.0
+> Status: Active development; individual surfaces are labeled by section
 > Normative status: type domains, identity, relations, usage, and formation rules are normative; internal layout is not public ABI
-> Initial implementation audit: `d0ab31c` (2026-07-31)
+> 0.3 nominal/record implementation checkpoint: 2026-08-09
 
 This document defines the common vocabulary and rules of Luna's current type system. See the
 [builtin type inventory](builtin_types.md) for the status of every source type. See
@@ -41,22 +41,22 @@ struct is still a different type.
 | Mode | Typical source | Identity rule |
 |---|---|---|
 | Builtin | `i32`, `bool`, `never` | Determined by builtin kind and parameters |
-| Structural | Default `struct`, default `enum`, `Result`, functions | Determined by complete structural shape |
-| Nominal | `nominal struct/enum`, traits | Determined by package/module declaration identity |
+| Structural | Anonymous records, `Result`, functions | Determined by complete canonical structural shape |
+| Nominal | Named `struct`/`enum`, traits | Determined by package/module declaration identity |
 | MetaSchema | `meta` schema | Always has schema declaration identity |
 | CompilerIntrinsic | Views, type parameters, Iterator recipes | Determined by compiler contract, not ordinary user layout |
 | Inference/Error | Sema state | Does not form a publishable type identity |
 
 ### 3.1 TypeId
 
-`TypeId` is semantic type identity. A default structural type derives its TypeId from its
-canonical structure; a nominal type includes declaration identity and generic arguments.
+`TypeId` is semantic type identity. An anonymous structural type derives its TypeId from its
+canonical structure; every named struct/enum includes declaration identity and generic arguments.
 
 ### 3.2 ShapeId
 
 `ShapeId` describes structural shape, including:
 
-- field/variant names and order;
+- field/variant names and canonical order;
 - field and payload types;
 - generic instantiation arguments;
 - shared/mutable reference categories;
@@ -101,18 +101,26 @@ device_buffer<T>
 `affine T` and `linear T` may occur in bindings, parameters, returns, and callable
 contracts. They qualify usage, not the TypeId of `T`.
 
+`affine { ... }` and `linear { ... }` provide lexical defaults for new local,
+match-pattern, and loop bindings. Ordinary nested blocks inherit the default; a nested usage
+block replaces it; lambda bodies restart from Copy. `copy let`, `affine let`, and `linear let`
+are explicit local overrides. Sema combines a default with the inherent type/initializer
+requirement, rejects an explicit weakening, and emits only final per-binding contracts to
+MoonIR. There is no usage-scope runtime state.
+
 ### 4.3 User-declared types
 
-- `struct`: default structural product;
-- `nominal struct`: nominal product;
-- `enum`: default structural sum;
-- `nominal enum`: nominal sum;
+- `struct`: nominal named product;
+- `enum`: nominal named sum;
+- `{ x: T, y: U }`: anonymous structural record type;
 - `trait`: always declaration identity;
 - `meta`: always MetaSchema identity.
 
-The source language currently has no separate `record` declaration syntax.
-`TypeKind::Record` is the compiler's internal anonymous structural-product form; it must
-not be used to claim that record literals or record types are already a language feature.
+Anonymous records deliberately have no `record` keyword. Their fields are unique and are
+canonicalized by field name for identity and layout. `{ y: value, x: other }` still evaluates
+initializers in source order. `Point { x: value, y: other }` explicitly constructs a named
+product, while `{ x: point.x, y: point.y }` explicitly projects to an anonymous record. No
+implicit conversion exists between these forms or between differently named declarations.
 
 ### 4.4 Control and compile-time types
 
@@ -127,6 +135,20 @@ storable data.
 A named type first resolves current type parameters and `Self`, then package/module-visible
 declarations, and finally builtin names. Generic instantiations must provide the arguments
 required by the declaration; those arguments participate in final type identity.
+
+Named `constraint` declarations remain the compile-time proposition mechanism. These function
+forms normalize to constraint checking and do not create an effect or runtime contract:
+
+```luna
+fn first<Cartesian T>(value: T) -> i32 { ... }
+fn second<T>(value: T) -> i32 where Cartesian<T> { ... }
+fn third<T>(value: T) -> i32
+where type_same_shape::<T, { x: i32, y: i32 }>() { ... }
+```
+
+The inline form is an anonymous frontend predicate. It has no declaration identity and is erased
+before MoonIR. Trait bounds such as `where T: Tagged` remain behavior requirements rather than
+structural constraints.
 
 ### 5.2 References
 
@@ -226,7 +248,7 @@ These are contextual literal-representation rules, not:
 - `&& || !` require `bool`;
 - `== !=` require operands that can unify and produce `bool`.
 
-0.2 makes no general implicit numeric-promotion promise. A new conversion must first
+Luna makes no general implicit numeric-promotion promise. A new conversion must first
 define overflow, truncation, signedness, and constexpr behavior.
 
 ## 8. Relation and usage
@@ -262,6 +284,7 @@ Copy, but loan lifetimes remain checked.
 Cleanup responsibility comes from owned-value usage and resource-management strategy:
 
 - exclusive product/string: Drop/Deallocate;
+- anonymous record: recursively clean only owned fields; a Copy-only record has no cleanup;
 - `rc<T>`: RcRelease;
 - `arc<T>`: ArcRelease;
 - Result/enum: inspect the tag, then clean only the active payload;
@@ -273,16 +296,21 @@ Cleanup responsibility comes from owned-value usage and resource-management stra
 Compound usage follows `Linear > Affine > Copy`. A common path that uses only a Copy
 variant cannot weaken this rule.
 
+The current record implementation accepts whole-record moves. Moving an owned field out of an
+anonymous record is rejected until record field-initialization flags can prove that remaining
+fields are cleaned exactly once.
+
 ## 10. Current layout layers
 
 Layout has three layers:
 
 1. **Language semantics**: field/variant order, active payload, and identity boundaries;
-2. **0.2 compiler/MoonIR Alpha ABI**: current 64-bit size, alignment, and inline ADT v1;
+2. **Current compiler/MoonIR development ABI**: current 64-bit size, alignment, and inline ADT v1;
 3. **Public Runtime/C FFI ABI**: only explicitly versioned types permitted across the boundary.
 
-Current product types are pointer-represented; arrays and slices are inline; enum/Result
-use 8-byte tag storage and an 8-byte-aligned payload. See the
+Named product types remain pointer-represented in the current implementation; anonymous records,
+arrays, and slices are inline; enum/Result use 8-byte tag storage and an 8-byte-aligned payload.
+The pointer representation is an implementation checkpoint, not a language-level promise. See the
 [builtin type inventory](builtin_types.md) for exact numbers.
 
 These numbers must not be generalized to 32-bit targets, cross-version Moon containers, or
@@ -335,5 +363,6 @@ automatically become a cross-function ABI.
 | Machine representation | CGHelpers/CodeGenerator |
 
 Future code separation should follow these responsibilities and gradually establish a
-centralized builtin-type registry. Refactoring must preserve this reference and the
-[0.2 Alpha semantic baseline](semantic_baseline_0.2.md).
+centralized builtin-type registry. The frozen
+[0.2 Alpha semantic baseline](semantic_baseline_0.2.md) remains migration evidence, not a
+compatibility mode in the 0.3 compiler.

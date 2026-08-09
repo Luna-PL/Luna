@@ -1,4 +1,4 @@
-nominal enum Signal {
+enum Signal {
     Stop;
     Number(i32);
 }

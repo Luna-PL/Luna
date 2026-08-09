@@ -17,8 +17,8 @@
 - Luna 不引入 effect 机制。下文的 effect set、effect bits、effect contract 或 effect
   compatibility 等表述已被取代；确实需要的事实由编译器推导为只读、强类型 sysmeta；
 - 0.3 编译器不提供旧 Rc/Arc 或 Slot/Fragment 语法的兼容 lowering；旧源码使用旧编译器；
-- 实现顺序和发布门以总体设计为准；未决 Slot/Fragment 语义保留为 `TBD-SF*`，不视为
-  已批准的语言机制。
+- 实现顺序和发布门以总体设计为准；未决 Slot/Fragment 源码/控制细节保留为
+  `TBD-SF006`，不视为已批准的语言机制。
 
 ## 1. 范围与结论
 
@@ -26,7 +26,8 @@
 Runtime Descriptor 和 external fragment plugin ABI。没有修改实现、测试、版本、路线图
 或现有规范。
 
-结论是**方向有条件成立，而且目标模型比当前 0.2 模型更一致**：
+下述历史方向促成了当前设计，而且比被审计的 0.2 模型更一致；其当前批准状态只由
+总体设计决定：
 
 - 将阶段收敛为 compile-time/runtime，删除独立 `dynamic` 阶段和源码修饰语是合理的；
 - 静态实体默认擦除、只为显式或可证明的运行时使用付费，与现有 static-first 原则一致；
@@ -39,14 +40,14 @@ Runtime Descriptor 和 external fragment plugin ABI。没有修改实现、测�
 
 1. 当前 slot 是函数体内的 `SlotDeclStmt`，不是模块声明，无法拥有可导出的稳定 `SlotId`；
 2. 当前 slot/fragment 返回固定为 `unit`，草案中的 `-> Response` 尚无控制语义；
-3. 当前没有正式 effect contract，只有 ownership/control facts 和零散 capability flags；
+3. Luna 没有 effect 机制；所需 ownership/control/ABI 事实必须成为编译器推导的 sysmeta；
 4. 当前 runtime fragment 不是可保存的 typed reference，内部 fragment 也没有稳定 runtime entry；
 5. 当前 plugin contract 是由名称和 `Type::toString()` 拼出的字符串，不是完整、可验证的 ContractId；
 6. “Type、Resource、Query、Composition”适合作为四个语言轴，不应被实现为四种互斥根对象；
-7. 默认结构类型改为默认名义类型是版本级破坏性变更，必须由 package language version/edition 隔离。
+7. 默认结构类型改为默认名义类型是版本级破坏性变更；0.3 一次性断代，不保留 language version/edition 分支。
 
-因此本审计给出的决策是：**批准继续设计，不批准立即大规模重写**。未来 1～2 周继续
-0.2.1 生态链建设；0.3 只允许 RFC、迁移样例和只读/测试清点工作。
+这是本审计当时的暂停结论，目前已被取代：实现只能依照总体设计中的 Confirmed/TBD
+门禁与优先顺序推进。
 
 ## 2. 当前实现审计
 
@@ -93,8 +94,8 @@ SlotInfo
 └── structural TypePtr
 ```
 
-它缺少 `SlotId`、`ContractId`、返回类型、正式 effect set、visibility、package/module
-ownership 和 ABI contract。`FragmentDecl::structuralType` 则描述可复用 fragment 的参数
+它缺少 `SlotId`、`ContractId`、返回类型、完整的编译器派生 control/resource sysmeta、
+visibility、package/module ownership 和 ABI contract。`FragmentDecl::structuralType` 则描述可复用 fragment 的参数
 前缀和控制类别，不保存目标 slot identity。
 
 当前“slot 始终二等”的意图也没有完全成为 Sema 不变量：普通 identifier 分析会把任意
@@ -111,7 +112,7 @@ fallback。这是当前实现缺口，0.3 应通过实体类别和 verifier 禁�
 | parameter types | 有，使用 `TypePtr`/TypeId shape |
 | return type | 结构上有字段，所有实际 slot 固定为 `unit` |
 | ownership | 参数 contract 已检查；result contract 实际为空/Copy Unit |
-| effects | 没有正式 effect set；只有 ownership 路径检查和 capability bits |
+| 派生 sysmeta | 没有完整 control/resource/host 事实集合 |
 | continuation | interceptor/context、once/many、forwarding、abort 已部分表达 |
 | ABI | external plugin 使用临时字符串；没有正式 slot ABI record |
 | retention | local `isDynamic` 控制 dynamic apply；不形成 runtime slot descriptor |
@@ -158,7 +159,7 @@ Parser RetentionKind {CompileTime, Runtime, Dynamic}
 
 通用 runtime descriptor 当前只编码 descriptor version、declaration/family/linkage identity、
 kind、retention、retained metadata 和可选 entry。它没有序列化完整 type/sysmeta/ownership/
-effect/ABI contract。
+control/resource/ABI contract。
 
 更重要的是，descriptor emitter 只从 `mFunctions` 查找 entry，而 fragment 从不被声明为
 独立 LLVM function。因此 runtime-retained fragment 虽然可以获得通用 declaration
@@ -227,7 +228,7 @@ external plugin v1 的边界是：
 - 不接收 Luna continuation，不支持 `resume()`、context、many、capture；
 - 动态库保持到进程结束，没有 unload/reclamation；
 - contract 字符串由 `slot name + kind + cardinality + Type::toString()` 构成；
-- contract 没有覆盖 package `SlotId`、ownership relation/usage、return、effect set、
+- contract 没有覆盖 package `SlotId`、ownership relation/usage、return、派生 sysmeta、
   target layout ABI 或 continuation ABI。
 
 所以草案中的 runtime fragment query、保存/传递、typed reference、stable entry、lexical
@@ -347,7 +348,7 @@ slot/fragment 适合表达受限控制位置和 handler，不应承担普通依�
 2. `slot (...) -> R` 的 R 是 handler 返回、continuation 返回、还是整个 apply expression 返回；
 3. interceptor/context 是否继续作为源码关键字，或成为 `fragment` 的 control sysmeta；
 4. fragment 是否名义绑定一个 SlotId，还是只满足可复用结构 ContractId；
-5. effect set 的最小闭集和兼容关系；
+5. 必需的编译器派生 control/resource/host sysmeta 及兼容关系；
 6. once/many、abort、return、`?` 和 cleanup 的交互；
 7. runtime fragment reference 的 Copy/Affine 规则和 module lease；
 8. runtime context 的 continuation ABI；首个 0.3 runtime ABI 建议只支持 single-shot interceptor。
@@ -390,7 +391,7 @@ RuntimeSlotDescriptor
 │   ├── ownership relation
 │   └── usage
 ├── RuntimeResultContract
-├── EffectSetId / typed effect bits
+├── 必需的 control/resource/host sysmeta
 ├── control form + cardinality + abort/forwarding rules
 ├── CallAbiId
 └── ContinuationAbiId            # none for ABI that cannot expose continuation
@@ -405,7 +406,7 @@ RuntimeFragmentDescriptor
 ├── target SlotId                # 防止同形 slot 被意外互换
 ├── ContractId
 ├── stable entry
-├── capability/effect flags
+├── 编译器推导的 capability/control flags
 ├── CallAbiId / ContinuationAbiId
 └── owner ModuleId + lifetime policy
 
@@ -414,7 +415,7 @@ RuntimeFragmentRef<S>
 └── ModuleLease                  # ref 存活时 entry 不得回收
 ```
 
-`ContractId` 必须覆盖 parameter/result TypeId、ownership、effects、control/cardinality 和
+`ContractId` 必须覆盖 parameter/result TypeId、ownership、派生 control/resource 事实、control/cardinality 和
 ABI projections；不能只覆盖类型拼写。`SlotId` 与 `ContractId` 必须同时验证：前者回答
 “是不是同一个具名控制位置”，后者回答“契约是否兼容”。ID 不能只信任短 hash；MoonIR
 和 loader 应能比较或重新计算 canonical payload。
@@ -451,7 +452,7 @@ compatibility checker、ownership checker 和 cleanup verifier。
 contract check
 -> continuation region formation
 -> handler composition
--> ownership/effect verification
+-> ownership/derived-sysmeta verification
 -> MoonIR optimization
 -> direct CFG/codegen
 ```
@@ -466,8 +467,8 @@ typed ref check
 -> deterministic cleanup + module lease release
 ```
 
-源码 `apply` 应优先要求显式 block。0.2 的“无 block，作用到当前 scope 末尾”可以在
-迁移期 desugar，但不应继续扩展为 global remove/replace。
+源码 `apply` 应要求显式 block。0.3 编译器不 desugar 0.2 的“无 block，作用到当前
+scope 末尾”形式；独立迁移工具可以改写它，但不得扩展为 global remove/replace。
 
 ## 5. Luna 0.3 迭代目标与非目标
 
@@ -477,18 +478,18 @@ typed ref check
 2. 统一 Symbol Catalog 与 typed query，至少完整支持 compile-time symbols；
 3. runtime_symbols 只暴露 descriptor-backed typed references；
 4. sysmeta/meta 查询职责正式分离，安全判定不依赖用户字符串；
-5. package language version/edition 隔离默认名义类型变化；
-6. ResourceContract 成为统一 ownership/lifetime 接口，Box/Rc/Arc 容器迁移有兼容桥；
+5. 一次性切换 named type 默认名义规则，不保留 language mode；
+6. ResourceContract 成为统一 ownership/lifetime 接口，Box/Rc/Arc 成为普通容器；
 7. 模块级 SlotDecl、完整 SlotContract、稳定 SlotId/ContractId；
 8. 静态 apply 在 MoonIR 中完成组合并保持零 runtime descriptor/dispatch 成本；
 9. runtime descriptor v2、typed RuntimeFragmentRef 和 lexical runtime apply；
 10. 首版 runtime apply 至少稳定支持 host-only、single-shot interceptor；
-11. 0.2 dynamic syntax 有明确诊断和迁移工具，不静默改变含义；
+11. 0.2 dynamic syntax 有明确拒绝诊断和独立迁移指引，不静默改变含义；
 12. JIT/AOT、plugin、ownership、cost boundary 和 ABI 都有正负回归。
 
 ### 5.2 不作为 0.3.0 发布门
 
-- 完整 Moon Container、hotspot JIT、PGO、去优化和热替换；
+- 可移植/跨 target Moon Container、hotspot JIT、PGO、去优化和热替换；
 - external runtime context、multi-shot continuation ABI；
 - 全局 remove/replace/weaving；
 - 任意 native function pointer 作为 fragment；
@@ -498,8 +499,9 @@ typed ref check
 - 所有 symbol kind 的开放式 runtime reflection；
 - 把 slot 变成普通值。
 
-Moon Container 应在普通 Runtime 能正确执行 runtime apply 之后单独迭代。0.3 只需让
-descriptor、MoonIR control ops 和 module lifetime 足以成为其稳定输入。
+0.3 必须包含 host-specific Moon Container MVP，用于装载 sealed、verified canonical
+MoonIR 并完成最小 evolution loop。可移植容器格式、跨 target 执行与高级优化应在普通
+Runtime 能正确执行 runtime apply 之后单独迭代。
 
 ## 6. 现有边界与迭代后边界
 
@@ -518,110 +520,22 @@ descriptor、MoonIR control ops 和 module lifetime 足以成为其稳定输入�
 | runtime apply | finite linked candidates + name branch | typed RuntimeFragmentRef + scoped handler frame |
 | plugin | v1 C interceptor，process lifetime | v1 adapter；v2 descriptor/ref/lease，context 后续 |
 | runtime descriptor | generic declaration record，contract 不完整 | common header + kind-specific typed descriptor |
-| Moon Container | 尚未实现 | 非 0.3 发布门；消费已验证 MoonIR/descriptor |
+| Moon Container | 尚未实现 | host-specific MVP，承载 sealed、verified canonical MoonIR |
 
-## 7. 分阶段、可回滚的提交计划
+## 7. 已被取代的实施顺序
 
-每个阶段必须是独立提交组，保留上一条路径直到 parity tests 通过；不得在一个提交中
-同时改变源码语义、MoonIR format 和 Runtime ABI。
+早期 R0-R10 顺序混合了兼容模式、新旧并行路径，并把 Moon Container 推迟到后续版本。
+这些建议已被总体设计第 9 节取代。当前有效顺序有意不同：
 
-### R0：设计冻结（当前 0.2 周期，只写文档）
+1. 冻结 Confirmed/TBD 登记表并保存最终 0.2 迁移 corpus；
+2. 冻结产物拼写，在不改变 codegen 的前提下增加 shadow identity/contract；
+3. 一次性切换默认名义规则和 resource contract，并删除旧生产路径；
+4. 原地重构单一 MoonIR，再加入 serializer/parser/verifier 与产物目标；
+5. 只有在相应源码/API/wire TBD 冻结后，才实现 Symbol Query、Runtime loading 和最小
+   evolution loop。
 
-- 决定第 4.1 节八个语义问题；
-- 建立 0.2 migration corpus 和预期 0.3 结果；
-- 为 language version/edition 写独立 RFC；
-- 不改变 parser 或运行时行为。
-
-回滚：删除 Draft 文档即可，无产物影响。
-
-### R1：只加 shadow identity/contract 模型
-
-- 增加 `SymbolId`、`SlotId`、`ContractId`、typed `SlotContract`；
-- 从现有 SlotInfo/Type 派生并比对，不改变 codegen；
-- Verifier 检查 canonical payload 与 digest；
-- 保留旧 `isDynamic` 和旧 contract string。
-
-回滚：删除 shadow records，旧路径完全不变。
-
-### R2：修复二等实体边界
-
-- 将 Slot/Fragment contract 移出普通 Value domain，或增加明确 non-value entity class；
-- Sema 拒绝赋值、返回、普通参数、容器存储；
-- 引入单独 `RuntimeFragmentRef` value kind，但暂不执行 runtime apply；
-- 补齐 frontend/MoonIR negative matrix。
-
-回滚：兼容 flag 恢复旧 Sema；不触碰 ABI。
-
-### R3：MoonIR 静态 composition
-
-- 引入 SlotDecl record、continuation region、static apply/control ops；
-- 新 MoonIR pass 完成 handler composition；
-- codegen 新旧路径并行，做 JIT/AOT/LLVM parity；
-- 新路径稳定后删除 codegen 的 AST-like scope lookup。
-
-回滚：切回旧 lowering；源码与 Runtime ABI 未变。
-
-### R4：compile_symbols 统一查询
-
-- 建立统一 Symbol Catalog，接入 function/type/trait/impl/slot/fragment/meta；
-- 先实现 compile-time typed set、sysmeta/meta predicates 和 explicit cardinality；
-- 旧 `select family with selector` desugar 到新 catalog；
-- 静态结果保持完全擦除。
-
-回滚：旧 selector engine 仍可独立工作。
-
-### R5：language version 与默认名义迁移
-
-- manifest 增加显式 language version/edition；
-- 0.2 模式保持结构默认，0.3 模式采用名义默认；
-- 提供 TypeId/ShapeId 和 generic-instantiation 差异诊断；
-- 不与 Rc/Arc 或 slot ABI 改动混合。
-
-回滚：选择 0.2 language mode；包身份不变。
-
-### R6：Resource 容器桥接
-
-- 先引入 Core `Box/Rc/Arc` 名义容器和 resource protocol；
-- 旧 `rc new`/`arc new` desugar 到 Core 构造；
-- parity 后逐步删除 TypeKind/Sema/codegen 特判；
-- 保持 Runtime allocator/retain/release ABI adapter。
-
-回滚：desugar 切回旧 intrinsic 类型。
-
-### R7：Runtime Descriptor v2 与 runtime_symbols
-
-- 先生成 v2 slot/fragment/type/contract descriptors，不执行 apply；
-- registry loader 验证 header、canonical identities、ABI、module ownership；
-- runtime_symbols 返回 typed refs，生命周期由 ModuleLease 保护；
-- v1 descriptor/plugin 保持并行兼容。
-
-回滚：runtime query 禁用，v1 仍可用。
-
-### R8：统一 runtime apply
-
-- 首先只支持 host-only、single-shot interceptor；
-- apply operand type 决定 static/runtime lowering，无 `dynamic apply`；
-- descriptor validation、handler frame、cleanup、错误快照和 lease release 全覆盖；
-- external plugin v1 通过 adapter 进入受限 v2 fragment capability。
-
-回滚：禁用 RuntimeFragmentRef apply，保留 static path 和 v1 adapter。
-
-### R9：删除 compatibility surface
-
-- 只有 migration telemetry、文档和测试显示不再需要后，才删除 Dynamic retention、
-  `dynamic select/apply/slot` parser 分支和旧 MoonIR fields；
-- bump MoonIR format/Runtime ABI 时保留明确版本拒绝；
-- 更新语义基线、参考、CHANGELOG 和双语文档。
-
-回滚：此阶段不可用简单代码回滚恢复已发布 ABI，必须在发布前完成兼容窗口验证。
-
-### R10：Moon Container（独立项目）
-
-- MoonIR serialization/loading/reverification；
-- runtime apply devirtualization、specialization、profile recompilation；
-- deoptimization、module versioning 和 code reclamation。
-
-它不应阻塞普通 Runtime 的正确 runtime apply，也不应与 R8 合并提交。
+发布前的回滚依靠版本控制。0.3 编译器不保留 0.2 mode、兼容 flag、并行 lowering 或
+迁移窗口。Git 历史中的 R 编号不构成当前实现授权。
 
 ## 8. 验收门与暂停条件
 
@@ -632,21 +546,19 @@ descriptor、MoonIR control ops 和 module lifetime 足以成为其稳定输入�
 - runtime fragment ref 没有 module lifetime 证明；
 - runtime descriptor 仍依赖 `Type::toString()` 或用户 metadata 做安全判断；
 - public slot descriptor 由闭世界使用分析隐式决定；
-- runtime apply 的所有权结果依赖“当前候选集合恰好相同”，而不是 contract effect；
+- runtime apply 的所有权结果依赖“当前候选集合恰好相同”，而不是声明 contract 与派生 sysmeta；
 - static apply 需要 runtime descriptor 才能通过 verifier；
-- 默认名义迁移会改变未选择 0.3 language mode 的 0.2 package；
+- 默认名义 identity 在断代规则下仍然不确定或不稳定；
 - Rc/Arc 容器迁移尚无 Drop/allocator/thread-safety 证明；
 - 为了表达 service/provider 而让 slot 成为值或增加全局 replace 状态。
 
-## 9. 近期建议（继续 0.2.1）
+## 9. 当前准备门
 
-未来 1～2 周继续生态链计划，不做 0.3 实现。允许的准备工作只有：
+0.3 实现可以按总体设计推进，但开始每一项工作前必须满足三项条件：
 
-1. 评审并冻结第 4.1 节的语义问题；
-2. 收集现有 slot/fragment/select/ownership/plugin fixtures 作为迁移 corpus；
-3. 为 formatter/LSP/文档工具整理只读 symbol inventory 接口需求，但不改变语言；
-4. 继续 0.2 diagnostics、package、build/test、发布和编辑器生态工作；
-5. 0.3 代码放在明确的后续分支/里程碑，不混入 0.2 修复提交。
+1. 总体设计中的 Confirmed/TBD 登记表已经冻结，且相关 TBD 已在实现前关闭；
+2. 最终 0.2 编译器与迁移 corpus 可独立运行，破坏性变化已有逐项记录；
+3. 实现遵循单一路径，不通过兼容分支或猜测未决语义来绕过设计决定。
 
-最终建议：保留草案的核心原则，但把 0.3 定义为“语义核与边界收敛版本”，不是一次性
-交付完整 Moon Container、通用 runtime reflection 和所有 continuation ABI 的动态系统版本。
+0.3 的范围包含最小 host-specific Moon Container，但不包含可移植通用容器、开放式
+runtime reflection 或全部 continuation ABI。后者只有在语义核与安全边界稳定后才继续。

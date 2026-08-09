@@ -7,6 +7,7 @@
 #include "SysMeta.h"
 
 #include <memory>
+#include <algorithm>
 #include <string>
 #include <vector>
 #include <unordered_map>
@@ -68,9 +69,8 @@ struct Type {
     luna::types::IdentityMode identityMode = luna::types::IdentityMode::Structural;
     std::string name;
     // Source declaration provenance used by tooling member identities. It is
-    // deliberately excluded from language-level type equality: structural
-    // compatibility remains structural, while a value that came from a named
-    // declaration can still navigate to that declaration's fields.
+    // deliberately excluded from language-level type equality. Named types
+    // use nominalId; anonymous structural values use their canonical shape.
     std::string declarationLinkageName;
     // A non-empty nominalId is the identity of a declaration. Two named
     // structs with identical fields therefore remain incompatible. Record
@@ -119,6 +119,10 @@ struct Type {
         return t;
     }
     static TypePtr makeRecord(std::vector<TypeField> fields) {
+        std::sort(fields.begin(), fields.end(),
+                  [](const TypeField& lhs, const TypeField& rhs) {
+                      return lhs.name < rhs.name;
+                  });
         auto t = std::make_shared<Type>();
         t->kind = TypeKind::Record;
         t->identityMode = luna::types::IdentityMode::Structural;
@@ -376,9 +380,13 @@ struct Type {
             }
             if (type->kind == TypeKind::Array)
                 return visit(type->inner.get());
+            if (type->kind == TypeKind::Record) {
+                for (const auto& field : type->fields)
+                    if (field.type && visit(field.type.get())) return true;
+                return false;
+            }
             return type->kind == TypeKind::String ||
                    type->kind == TypeKind::Struct ||
-                   type->kind == TypeKind::Record ||
                    type->kind == TypeKind::DeviceBuffer ||
                    type->kind == TypeKind::Rc ||
                    type->kind == TypeKind::Arc;
@@ -425,8 +433,18 @@ struct Type {
                 return "declaration_ref<" + (inner ? inner->toString() : "_") + ">";
             case TypeKind::Unit: return "unit";
             case TypeKind::Never: return "never";
+            case TypeKind::Record: {
+                std::string result = "{";
+                for (size_t index = 0; index < fields.size(); ++index) {
+                    if (index) result += ", ";
+                    result += fields[index].name + ": " +
+                        (fields[index].type
+                            ? fields[index].type->toString() : "?");
+                }
+                result += "}";
+                return result;
+            }
             case TypeKind::Struct:
-            case TypeKind::Record:
             case TypeKind::Enum: {
                 std::string result = name;
                 if (!typeArgs.empty()) {
@@ -478,7 +496,8 @@ inline luna::ownership::Usage defaultUsageForType(const TypePtr& type) {
             return luna::ownership::Usage::Copy;
         if (item->kind == TypeKind::Result ||
             item->kind == TypeKind::Enum ||
-            item->kind == TypeKind::Array) {
+            item->kind == TypeKind::Array ||
+            item->kind == TypeKind::Record) {
             auto usage = luna::ownership::Usage::Copy;
             std::vector<TypePtr> payloads;
             if (item->kind == TypeKind::Result)
@@ -488,6 +507,9 @@ inline luna::ownership::Usage defaultUsageForType(const TypePtr& type) {
                     payloads.insert(
                         payloads.end(),
                         variant.fields.begin(), variant.fields.end());
+            else if (item->kind == TypeKind::Record)
+                for (const auto& field : item->fields)
+                    payloads.push_back(field.type);
             else
                 payloads.push_back(item->inner);
             for (const auto& payload : payloads) {

@@ -3,7 +3,7 @@
 [English](getting_started.md) | [简体中文](getting_started.zh-CN.md)
 
 本文从源码构建开始，带领新贡献者完成 Luna 程序的检查、JIT 运行和 AOT 构建。
-Luna Alpha 支持 Linux、macOS 和 Windows，但目前仍是研究型编译器，而非生产版本。
+Luna 0.3 开发版支持 Linux、macOS 和 Windows，但目前仍是研究型编译器，而非生产版本。
 
 ## 1. 准备工具链
 

@@ -118,7 +118,7 @@ Drop。这些 policy 属于 Std，由其重复 partial operation 并显式处理
 非 v1 的 `rt_compat_console_*_0_2` helper 是专为 0.2.1 `std::io` 提供的临时 adapter。
 它们在不冻结未来 owned String 与 formatting trait 的前提下提供 cstr/i32 formatting 和
 有界 line input。这些符号声明于 `Runtime.h`，不属于稳定的公开 `RuntimeABI.h`，
-显式 0.3 mode 落地后可被替换。
+并将在一次性的 0.3 实现切换中删除。
 
 ## 五个不可混用的资源域
 

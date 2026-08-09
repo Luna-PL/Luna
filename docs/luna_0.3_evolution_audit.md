@@ -21,8 +21,8 @@ design, the overall design governs. In particular:
   typed sysmeta where such facts are actually needed;
 - compatibility lowering for old Rc/Arc or Slot/Fragment syntax is not part of the 0.3
   compiler; old source uses the old compiler;
-- implementation order and release gates come from the overall design, while unresolved
-  Slot/Fragment semantics remain `TBD-SF*` rather than approved mechanisms.
+- implementation order and release gates come from the overall design, while the unresolved
+  Slot/Fragment source/control details remain `TBD-SF006`, not an approved mechanism.
 
 ## 1. Scope and decision
 
@@ -30,8 +30,8 @@ This read-only audit covered Parser, AST, Sema, Ownership, MoonIR, Verifier, LLV
 lowering, Runtime Descriptors, and the external fragment plugin ABI. It changed
 no implementation, test, version, roadmap, or existing specification.
 
-The proposed direction is conditionally approved and is more coherent than the
-current 0.2 model:
+The historical direction below motivated the current design and is more coherent than the
+audited 0.2 model. Its current approval state comes only from the overall design:
 
 - converge phases to compile-time and runtime, removing a separate `dynamic`
   phase and source modifier;
@@ -47,15 +47,14 @@ gates:
 
 1. A current slot is a function-local `SlotDeclStmt`, not an exportable module declaration.
 2. Current slot and fragment results are fixed to `unit`; `slot (...) -> Response` has no defined control semantics.
-3. There is no formal effect contract, only ownership/control facts and scattered capability flags.
+3. There is no effect mechanism; required ownership/control/ABI facts must become compiler-derived sysmeta.
 4. A current runtime fragment is not a storable typed reference and has no stable internal fragment entry.
 5. The plugin contract is an ad-hoc string, not a complete verifiable ContractId.
 6. Type, Resource, Query, and Composition should be language axes, not four mutually exclusive root object kinds.
-7. Switching the type default is a version-level breaking change and needs a package language version or edition.
+7. Switching the type default is a version-level breaking change; 0.3 makes that break once and keeps no language-version or edition branch.
 
-The decision is therefore: continue design, but do not begin a large-scale
-implementation. The next one or two weeks remain focused on the 0.2.1
-ecosystem. Only RFC, migration-corpus, and audit work should prepare 0.3.
+That was the audit's historical stop decision. It is superseded: current implementation may
+proceed only in the order and within the Confirmed/TBD gates in the overall design.
 
 ## 2. Current implementation audit
 
@@ -87,7 +86,7 @@ Value domain even though the language does not intend them to be ordinary data.
 `src/sema/SemanticAnalyzer.h:241` stores slots in a private lexical `SlotInfo`
 with a local name, parameters/contracts, default fragment, control category,
 implicit-capture state, `isDynamic`, and a structural TypePtr. It has no SlotId,
-ContractId, formal effects, visibility, package/module owner, or ABI record.
+ContractId, complete derived control/resource sysmeta, visibility, package/module owner, or ABI record.
 
 The second-class restriction is not fully enforced: generic identifier analysis
 can return a slot or fragment TypePtr because these entities share the general
@@ -101,7 +100,7 @@ representation. Luna 0.3 should forbid this leak rather than materialize slots.
 | Identity | local string only; no package/module SlotId |
 | Parameters | typed and ownership-checked |
 | Result | represented structurally but fixed to Copy Unit |
-| Effects | no formal effect set |
+| Derived sysmeta | no complete control/resource/host fact set |
 | Continuation | interceptor/context, once/many, forwarding, and abort are partially represented |
 | ABI | provisional plugin string only |
 | Retention | local isDynamic controls dispatch; no runtime slot descriptor |
@@ -187,8 +186,8 @@ Three facilities are currently conflated:
 Plugin v1 is host-only and single-shot, cannot receive a Luna continuation,
 cannot resume, capture, or implement context/many, and keeps its library loaded
 for process lifetime. Its contract string omits SlotId, ownership, result,
-formal effects, layout ABI, and continuation ABI. It is a useful compatibility
-adapter, not the proposed RuntimeFragmentRef model.
+derived control/resource facts, layout ABI, and continuation ABI. It is a useful
+description of the 0.2 boundary, not the proposed RuntimeFragmentRef model.
 
 ## 3. Recommended converged model
 
@@ -212,17 +211,15 @@ ideas, while Symbol connects facts that are not themselves types.
 
 ### 3.2 Type and Resource
 
-Named structs/enums should become nominal by default in a package that explicitly
-selects the 0.3 language mode. Anonymous records, callable shapes, shape
-constraints, and explicit `same_shape` relations can provide structural use
-without immediately adding a `structural` keyword. A 0.2 package must retain its
-old TypeIds under a newer compiler.
+Named structs/enums become nominal by default in the 0.3 compiler. Anonymous records, callable
+shapes, shape constraints, and explicit `same_shape` relations can provide structural use
+without adding a compatibility mode. A 0.2 package retains its old TypeIds by using the 0.2
+compiler.
 
 Relation and usage remain orthogonal and do not change TypeId. Box/Rc/Arc should
 be Core nominal containers behind a minimal compiler-recognized resource
-protocol. Generic Drop glue, recursive layout, Clone/retain, allocator domain,
-thread-safety facts, and a compatibility lowering for `rc new`/`arc new` must
-exist before deleting intrinsic TypeKinds.
+protocol. Generic Drop glue, recursive layout, Clone/retain, allocator domain, and
+thread-safety facts must exist before intrinsic TypeKinds are deleted in the single 0.3 switch.
 
 ### 3.3 Symbol Query
 
@@ -257,7 +254,7 @@ must not be smuggled through RuntimeFragmentRef.
 ## 4. Candidate Slot/Fragment boundary
 
 The design must first freeze slot result semantics, control source spelling,
-nominal versus structural fragment targeting, a formal effect set, all
+nominal versus structural fragment targeting, required derived sysmeta, all
 resume/abort/return/cleanup interactions, RuntimeFragmentRef ownership, and the
 continuation ABI. The initial runtime ABI should support only host-only,
 single-shot interceptors.
@@ -288,7 +285,7 @@ RuntimeSlotDescriptor
 ├── parameter_count and RuntimeParameterContract[]
 │   └── TypeId, AbiLayoutId, ownership relation, usage
 ├── RuntimeResultContract
-├── EffectSetId / typed effect bits
+├── required control/resource/host sysmeta
 ├── control form, cardinality, abort and forwarding rules
 ├── CallAbiId
 └── ContinuationAbiId
@@ -298,14 +295,14 @@ RuntimeFragmentDescriptor
 ├── target SlotId
 ├── ContractId
 ├── stable entry
-├── capability/effect flags
+├── compiler-derived capability/control flags
 ├── CallAbiId / ContinuationAbiId
 └── owner ModuleId and lifetime policy
 
 RuntimeFragmentRef<S> { descriptor handle, ModuleLease }
 ```
 
-ContractId must cover parameter/result TypeIds, ownership, effects, control,
+ContractId must cover parameter/result TypeIds, ownership, derived control/resource facts,
 cardinality, and ABI projections. SlotId and ContractId are both checked: one
 proves target identity, the other compatibility. A short hash alone is not a
 trust boundary; loaders must compare or recompute canonical payloads.
@@ -335,12 +332,12 @@ apply.static  SlotId, FragmentId, continuation.region
 apply.runtime SlotId, RuntimeFragmentRef, continuation.region
 ```
 
-Static and runtime forms share SlotContract, ownership, effect, and cleanup
+Static and runtime forms share SlotContract, ownership, derived sysmeta, and cleanup
 verification. The operand type determines lowering; there is no dynamic source
 modifier. Runtime apply validates SlotId, ContractId, and ABI, establishes a
 scoped frame, executes the continuation, performs deterministic cleanup, and
-releases its module lease. The existing blockless 0.2 form may desugar during
-migration but must not evolve into global remove/replace.
+releases its module lease. The 0.3 compiler does not desugar the blockless 0.2 form; an external
+migration tool may rewrite it, and it must not evolve into global remove/replace.
 
 ## 5. Luna 0.3 delivery boundary
 
@@ -350,16 +347,16 @@ Luna 0.3 should deliver:
 2. unified Symbol Catalog and typed query, complete for compile-time symbols;
 3. descriptor-backed runtime_symbols typed references;
 4. formal sysmeta/meta authority separation;
-5. package language version isolation for nominal-by-default types;
-6. unified ResourceContract and a compatible Box/Rc/Arc container migration;
+5. one clean switch to nominal-by-default named types, with no language mode;
+6. unified ResourceContract and ordinary Box/Rc/Arc containers;
 7. module SlotDecl, complete SlotContract, SlotId, and ContractId;
 8. verified MoonIR static composition with zero runtime retention cost;
 9. descriptor v2, RuntimeFragmentRef, and lexical runtime apply;
 10. a stable host-only single-shot interceptor runtime boundary;
-11. diagnostics and migration for 0.2 dynamic syntax;
+11. explicit rejection diagnostics and external migration guidance for 0.2 dynamic syntax;
 12. JIT/AOT, plugin, ownership, cost, and ABI regression gates.
 
-The following are not 0.3 release gates: complete Moon Container optimization,
+The following are not 0.3 release gates: portable/cross-target Moon Containers and advanced container optimization,
 external contexts or multi-shot continuation ABI, global weaving/replacement,
 arbitrary native pointers, full unload/reload policy, service/provider keywords,
 general runtime trait objects, or open runtime reflection over every symbol kind.
@@ -382,24 +379,24 @@ Slots never become ordinary values.
 | Runtime apply | finite linked names and branches | typed RuntimeFragmentRef and scoped handler frame |
 | Plugin | v1 C interceptor, process lifetime | v1 adapter; v2 descriptor/ref/lease; context later |
 | Descriptor | incomplete generic declaration record | common header plus kind-specific typed descriptors |
-| Moon Container | not implemented | separate follow-up consuming verified MoonIR/descriptors |
+| Moon Container | not implemented | host-specific MVP carrying sealed, verified canonical MoonIR |
 
-## 7. Reversible implementation sequence
+## 7. Superseded implementation sequence
 
-Each group must be independently reviewable and keep the previous path until
-parity tests pass.
+The earlier R0-R10 sequence mixed compatibility modes, parallel old/new paths, and a deferred
+Moon Container. Those recommendations are superseded by section 9 of the overall design. The
+active ordering is intentionally different:
 
-- **R0, design freeze:** decide all control, effect, lifetime, identity, and language-version questions; documentation only.
-- **R1, shadow identities/contracts:** derive SlotId/ContractId/SlotContract alongside current fields and verify canonical payloads; no behavior change.
-- **R2, second-class enforcement:** prevent Slot/Fragment contracts from entering ordinary values; add RuntimeFragmentRef as a separate value kind without execution.
-- **R3, MoonIR static composition:** add SlotDecl records, continuation regions, static apply ops, and a composition pass; run old/new codegen in parity.
-- **R4, compile_symbols:** build a unified catalog and typed sets; desugar old static select; preserve full erasure.
-- **R5, language version and nominal default:** keep 0.2 structural behavior under 0.2 mode and enable nominal default only under explicit 0.3 mode.
-- **R6, resource bridge:** introduce Core Box/Rc/Arc and desugar old syntax before deleting intrinsic special cases.
-- **R7, descriptor v2/runtime_symbols:** emit and validate typed descriptors and module leases without enabling runtime apply; retain v1 in parallel.
-- **R8, runtime apply:** initially enable only host-only single-shot interceptors; adapt plugin v1 through the restricted capability.
-- **R9, compatibility removal:** remove Dynamic syntax/fields only after the migration window; update baselines and versioned rejection paths.
-- **R10, Moon Container:** separately add serialization, loading/reverification, devirtualization, recompilation, deoptimization, versioning, and reclamation.
+1. freeze the Confirmed/TBD register and capture the final 0.2 migration corpus;
+2. freeze artifact spellings and add shadow identities/contracts without changing codegen;
+3. make one nominal-default and resource-contract switch, deleting the old production paths;
+4. refactor the single MoonIR in place, then add its serializer/parser/verifier and artifact targets;
+5. add Symbol Query, Runtime loading, and the minimum evolution loop only after their respective
+   TBD source/API or wire decisions are frozen.
+
+Rollback uses version control before release. The 0.3 compiler does not retain a 0.2 mode,
+compatibility flag, parallel lowering, or migration window. Historical R-number references in Git
+history do not define current implementation authority.
 
 ## 8. Stop conditions
 
@@ -407,19 +404,18 @@ Pause implementation if slot result semantics are not specified; identity and
 compatibility IDs remain conflated; RuntimeFragmentRef lacks a module-lifetime
 proof; descriptors rely on Type::toString or user metadata for safety; public
 slot ABI is inferred from closed-world use; runtime ownership correctness relies
-on the current candidate set instead of a contract effect; static apply needs a
-runtime descriptor; 0.2 packages change identity without selecting 0.3 mode;
+on the current candidate set instead of a declared contract and derived sysmeta; static apply needs a
+runtime descriptor; 0.3 nominal identity is not deterministic under the clean-break rules;
 resource containers lack Drop/allocator/thread-safety proofs; or service/provider
 work requires first-class slots or global replacement state.
 
-## 9. Near-term 0.2.1 work
+## 9. Current preparation gate
 
-For the next one or two weeks, continue ecosystem work and do not implement 0.3.
-Only review the open semantic decisions, collect migration fixtures, document
-read-only symbol inventory needs for formatter/LSP tooling, and continue 0.2
-diagnostics, package, build/test, release, and editor work. Any future 0.3 code
-belongs in an explicit later branch or milestone rather than mixed into 0.2 fixes.
+The active preparation work is to freeze the overall design's exact TBD register, preserve an
+independently runnable 0.2 compiler and migration corpus, and enumerate every breaking change.
+0.3 implementation may then proceed in the overall design's priority order. A capability must
+not be implemented by guessing through its unresolved TBD.
 
-The recommended scope for 0.3 is a semantic-kernel and boundary convergence
-release, not a simultaneous delivery of a complete Moon Container, general
-runtime reflection, and every continuation ABI.
+The intended 0.3 scope remains semantic-kernel and boundary convergence, including the minimum
+host-specific Moon Container needed by the confirmed artifact/trust model, but not general
+runtime reflection, portable containers, or every continuation ABI.

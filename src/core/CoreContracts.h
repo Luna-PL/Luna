@@ -1,9 +1,9 @@
 #pragma once
 
 // Compiler-known standard-library identities live here rather than being
-// scattered through Sema. Luna 0.2 keeps its two legacy compiler traits for
-// source compatibility; an explicit 0.3 language mode will select the
-// canonical Core identities below.
+// scattered through Sema. The final 0.2 checkpoint used the legacy compiler
+// identities below; the clean-break 0.3 implementation switches once to the
+// canonical Core identities without a language-mode branch.
 namespace luna::core_contracts {
 
 inline constexpr const char* PackageId = "org.luna.core";

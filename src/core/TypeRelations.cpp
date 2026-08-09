@@ -2,6 +2,7 @@
 
 #include "TypeSystem.h"
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
 #include <unordered_map>
@@ -113,11 +114,20 @@ std::string canonicalShapeImpl(
     switch (type->kind) {
         case TypeKind::Struct:
         case TypeKind::Record:
-            for (const auto& field : type->fields) {
-                appendPart(result, field.name);
-                appendType(field.type);
+        case TypeKind::Metadata: {
+            std::vector<const TypeField*> fields;
+            fields.reserve(type->fields.size());
+            for (const auto& field : type->fields) fields.push_back(&field);
+            std::sort(fields.begin(), fields.end(),
+                      [](const TypeField* lhs, const TypeField* rhs) {
+                          return lhs->name < rhs->name;
+                      });
+            for (const auto* field : fields) {
+                appendPart(result, field->name);
+                appendType(field->type);
             }
             break;
+        }
         case TypeKind::Enum:
             for (const auto& variant : type->variants) {
                 appendPart(result, variant.name);
@@ -168,13 +178,6 @@ std::string canonicalShapeImpl(
             appendPart(result, std::string(luna::ownership::relationName(type->returnContract.relation)));
             appendPart(result, std::string(luna::ownership::usageName(type->returnContract.usage)));
             appendType(type->returnType);
-            break;
-        case TypeKind::Metadata:
-            // sameShape intentionally ignores schema identity.
-            for (const auto& field : type->fields) {
-                appendPart(result, field.name);
-                appendType(field.type);
-            }
             break;
         case TypeKind::TypeParam:
             appendPart(result, type->name);

@@ -163,8 +163,9 @@ bool SemanticContext::analyze(Program* program) {
             const std::string sourceKey = qualifiedDeclarationKey(
                 mCurrentPackageId, mCurrentModulePath, s->name);
             if (!mDeclaredTypes.count(sourceKey)) {
-                auto type = Type::makeStruct(s->name, {}, s->isNominal
-                    ? nominalDeclarationIdentity(program, "struct", identity, s) : "");
+                auto type = Type::makeStruct(
+                    s->name, {},
+                    nominalDeclarationIdentity(program, "struct", identity, s));
                 type->declarationLinkageName = identity;
                 type->typeParams = s->typeParams;
                 mDeclaredTypes[identity] = type;
@@ -179,8 +180,9 @@ bool SemanticContext::analyze(Program* program) {
             const std::string sourceKey = qualifiedDeclarationKey(
                 mCurrentPackageId, mCurrentModulePath, e->name);
             if (!mDeclaredTypes.count(sourceKey)) {
-                auto type = Type::makeEnum(e->name, {}, e->isNominal
-                    ? nominalDeclarationIdentity(program, "enum", identity, e) : "");
+                auto type = Type::makeEnum(
+                    e->name, {},
+                    nominalDeclarationIdentity(program, "enum", identity, e));
                 type->declarationLinkageName = identity;
                 type->typeParams = e->typeParams;
                 mDeclaredTypes[identity] = type;

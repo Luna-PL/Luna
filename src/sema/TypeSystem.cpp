@@ -5,6 +5,15 @@ TypePtr resolveType(const TypeAST* ast,
                     const std::unordered_map<std::string, TypePtr>& typeBindings) {
     if (!ast) return TyUnit;
 
+    if (auto record = dynamic_cast<const RecordTypeAST*>(ast)) {
+        std::vector<TypeField> fields;
+        fields.reserve(record->fields.size());
+        for (const auto& field : record->fields)
+            fields.push_back({
+                field.name, resolveType(field.type.get(), typeBindings)});
+        return Type::makeRecord(std::move(fields));
+    }
+
     auto named = dynamic_cast<const NamedTypeAST*>(ast);
     if (named) {
         auto it = typeBindings.find(named->name);

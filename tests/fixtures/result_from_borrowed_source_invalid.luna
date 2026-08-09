@@ -1,4 +1,4 @@
-nominal struct BorrowedSourceError {
+struct BorrowedSourceError {
     marker: i32;
 }
 

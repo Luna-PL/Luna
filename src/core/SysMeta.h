@@ -2,6 +2,7 @@
 
 #include "CoreContracts.h"
 #include "Ownership.h"
+#include "StableIdentity.h"
 
 #include <cstdint>
 #include <string>
@@ -13,7 +14,7 @@ namespace luna::sysmeta {
 // in the future, but it can never construct, attach, or override these facts.
 // Keep it typed so safety decisions never depend on user-controlled strings.
 inline constexpr uint16_t SchemaMajor = 1;
-inline constexpr uint16_t SchemaMinor = 1;
+inline constexpr uint16_t SchemaMinor = 2;
 inline constexpr const char* DropTraitId =
     luna::core_contracts::legacy_0_2::DropTraitId;
 inline constexpr const char* DropMethodName =
@@ -37,8 +38,8 @@ inline constexpr const char* FromIteratorPushMethodName =
 inline constexpr const char* FromIteratorFinishMethodName =
     luna::core_contracts::FromIteratorFinishMethodName;
 
-// These are recorded now so a future explicit 0.3 mode can switch identity
-// without inventing another spelling or silently changing 0.2 packages.
+// These are recorded so the clean-break 0.3 implementation can switch once
+// without inventing another spelling or retaining a language-mode branch.
 inline constexpr const char* CanonicalDropTraitId =
     luna::core_contracts::canonical_0_3::DropTraitId;
 inline constexpr const char* CanonicalFromTraitId =
@@ -87,6 +88,14 @@ enum class ReleaseDomain : uint8_t {
     HostService,
 };
 
+struct IdentityFacts {
+    luna::identity::TypeId type;
+    luna::identity::ShapeId shape;
+    luna::identity::SymbolId symbol;
+    luna::identity::ContractId contract;
+    luna::identity::AbiLayoutId abiLayout;
+};
+
 struct ControlFacts {
     ControlForm form = ControlForm::Plain;
     Cardinality cardinality = Cardinality::None;
@@ -123,6 +132,7 @@ struct AbiFacts {
 struct Facts {
     uint16_t schemaMajor = SchemaMajor;
     uint16_t schemaMinor = SchemaMinor;
+    IdentityFacts identity;
     ControlFacts control;
     ResourceFacts resource;
     CapabilityFacts capability;

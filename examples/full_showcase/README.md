@@ -1,6 +1,6 @@
 # Luna full showcase
 
-This workspace is the executable integration example for Luna 0.2.1.
+This workspace is the executable integration example for Luna 0.3.0 development.
 It deliberately uses two packages and several modules instead of placing every
 feature in one source file.
 
@@ -26,7 +26,8 @@ LUNA_GPU_BACKEND=sim ./examples/full_showcase/app/org.luna.examples.showcase.app
 The successful process exit code is `42`. The example covers the currently
 implemented positive language surface: manifests/workspaces/locks, packages,
 modules/submodules, aliases and exports; signature/local inference, constexpr
-and generics; structural and nominal structs/enums; static traits; compile-time reflection; metadata with
+and generics; nominal named structs/enums, explicit shape relations, and
+anonymous records; static traits; compile-time reflection; metadata with
 static/dynamic selection and runtime retention; closures; arrays and slices;
 ownership, affine values, move/borrow and linear kernel events; fragments,
 slots, static/dynamic apply and continuations; C ABI declarations; and a

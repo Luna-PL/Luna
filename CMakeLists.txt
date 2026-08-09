@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(Luna VERSION 0.2.1 LANGUAGES C CXX)
+project(Luna VERSION 0.3.0 LANGUAGES C CXX)
 
 include(GNUInstallDirs)
 
@@ -363,14 +363,13 @@ if(BUILD_TESTING)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Lunax/.git" AND
        EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/toolchain/.git")
         add_test(
-            NAME luna.ecosystem-lock
+            NAME luna.ecosystem-0.2-lock
             COMMAND ${CMAKE_COMMAND}
-                -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
                 -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_ecosystem_lock.cmake
         )
-        set_tests_properties(luna.ecosystem-lock PROPERTIES
-            LABELS "integration;release")
+        set_tests_properties(luna.ecosystem-0.2-lock PROPERTIES
+            LABELS "integration")
     endif()
     add_test(
         NAME luna.analysis-protocol-v1
@@ -392,6 +391,26 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/file_guide_inventory.cmake
+    )
+    add_test(
+        NAME luna.0.3-design-contract
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/luna_0_3_design_contract.cmake
+    )
+    add_test(
+        NAME luna.migration-0.2-manifest
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/migration_0_2_baseline.cmake
+    )
+    add_test(
+        NAME luna.shadow-identity
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/shadow_identity.cmake
     )
     add_test(
         NAME luna.package-export-abi

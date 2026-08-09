@@ -3,7 +3,7 @@ module error;
 
 // Stable, host-independent Core error identities. Numeric variant order is
 // part of the frozen inline ADT ABI; new cases must be appended.
-export nominal enum ErrorCode {
+export enum ErrorCode {
     InvalidArgument;
     OutOfBounds;
     InvalidUtf8;
@@ -11,27 +11,27 @@ export nominal enum ErrorCode {
     OutOfMemory;
 }
 
-export nominal enum InvalidArgumentError {
+export enum InvalidArgumentError {
     InvalidArgument(i32);
 }
 
-export nominal enum BoundsError {
+export enum BoundsError {
     Empty;
     OutOfBounds(usize, usize);
 }
 
-export nominal enum UtfError {
+export enum UtfError {
     InvalidByte(usize, u8);
     Truncated(usize);
     InvalidScalar(u32);
 }
 
-export nominal enum LayoutError {
+export enum LayoutError {
     SizeOverflow;
     InvalidAlignment(usize);
 }
 
-export nominal enum AllocError {
+export enum AllocError {
     InvalidLayout(LayoutError);
     OutOfMemory(usize, usize);
 }

@@ -1,4 +1,4 @@
-# Luna 0.2.1
+# Luna 0.3.0 Development
 
 [English](README.md) | [简体中文](README.zh-CN.md)
 
@@ -11,15 +11,12 @@ the [Luna-PL](https://github.com/Luna-PL) organization. Its compiler preserves
 language semantics in verified MoonIR before lowering to LLVM for JIT or AOT
 compilation.
 
-The project is entering a long-lived `0.2.1` maintenance line for
-language research and internal experiments. There is no scheduled Beta or
-language-version bump. Near-term development is focused on the toolchain:
-diagnostics, editor/build/package integration, distribution, reproducibility
-and reliability. Language work is limited to correctness, safety and closing
-documented contract gaps; experimental syntax may still change within that
-boundary.
-[Read the Alpha release notes](docs/alpha_release.md) for the precise support
-boundary and known limitations.
+The project is now implementing a clean-break `0.3.0` line. The 0.3 compiler
+does not carry a `language=` or edition compatibility mode; source that depends
+on 0.2.1 semantics should use the frozen 0.2.1 compiler. The design remains a
+draft and the implementation is advancing in gated phases.
+[Read the 0.3 overall design](docs/luna_0.3_design.md) and
+[migration guide](docs/migration_0.2_to_0.3.md).
 
 ## Key features
 
@@ -27,11 +24,11 @@ Luna combines static, zero-overhead language mechanisms with explicitly
 opt-in runtime and dynamic capabilities:
 
 - verified `Luna -> MoonIR -> LLVM IR` compilation for both JIT and AOT;
-- structural types by default, explicit nominal identity, ADTs, generics and statically resolved traits;
+- nominal named types, structural anonymous records, ADTs, constrained generics and statically resolved traits;
 - affine/linear ownership, `move`, shared/mutable borrowing and automatic cleanup;
 - first-class Metadata, compile-time selectors, and explicit `runtime` / `dynamic` retention and dispatch;
 - reverse-DNS Package IDs, `::` module paths, workspaces, lockfiles, aliases and explicit exports;
-- structured `interceptor`, `context`, `slot` and `apply` control effects;
+- structured `interceptor`, `context`, `slot` and `apply` control-flow/extension constructs;
 - a versioned Runtime ABI and an explicit C FFI boundary;
 - reachable-only kernels with a CPU simulator and CUDA/ROCm code-generation paths.
 
@@ -156,7 +153,7 @@ language baseline:
 6. fix language correctness or safety defects without expanding the active
    language surface.
 
-See the [single active roadmap](docs/roadmap.md).
+See the [0.3 implementation priorities](docs/luna_0.3_design.md#9-implementation-priority).
 
 ## Documentation
 
@@ -182,7 +179,7 @@ or reference material:
 - [Testing](docs/testing.md)
 - [Ecosystem release snapshot](docs/ecosystem_release.md)
 - [Performance benchmarks](docs/benchmarks.md)
-- [Roadmap](docs/roadmap.md)
+- [0.3 overall design and implementation priorities](docs/luna_0.3_design.md)
 
 ## License
 

@@ -38,12 +38,13 @@ struct TraitRef : ASTNode {
 };
 
 struct WhereClause {
-    enum class Kind { TraitBound, Constraint };
+    enum class Kind { TraitBound, Constraint, ConstraintExpression };
     Kind kind = Kind::TraitBound;
     std::string typeParam;
     TraitRef trait;
     std::string constraintName;
     std::vector<std::unique_ptr<TypeAST>> constraintTypeArgs;
+    std::unique_ptr<Expr> constraintExpression;
 
     WhereClause() = default;
     WhereClause(WhereClause&&) noexcept = default;
@@ -82,6 +83,17 @@ struct FunctionTypeAST : TypeAST {
     std::vector<std::unique_ptr<TypeAST>> paramTypes;
     std::unique_ptr<TypeAST> returnType;
 };
+struct RecordTypeAST : TypeAST {
+    struct Field {
+        std::string name;
+        std::unique_ptr<TypeAST> type;
+        std::string sourcePath;
+        int line = 0;
+        int col = 0;
+    };
+    std::vector<Field> fields;
+    TypePtr resolvedType;
+};
 
 // ─── Statements ──────────────────────────────────────────────────────
 struct Stmt : ASTNode {};
@@ -96,6 +108,13 @@ struct LetStmt : Stmt {
     bool isLinear = false;
     luna::ownership::Usage usage = luna::ownership::Usage::Copy;
     bool hasExplicitUsage = false;
+    // A usage block supplies a declaration default without pretending that
+    // every binding contained an explicit modifier. Sema combines this with
+    // the type/initializer's inherent lower bound and records `usage` as the
+    // final contract before ownership checking and MoonIR lowering.
+    bool hasInheritedUsage = false;
+    luna::ownership::Usage inheritedUsage = luna::ownership::Usage::Copy;
+    bool usageResolved = false;
     std::unique_ptr<TypeAST> typeAnnotation; // optional
     std::unique_ptr<Expr> initializer;
     // The typed frontend records every binding's canonical type for MoonIR
@@ -144,6 +163,8 @@ struct MatchArm : ASTNode {
     int qualifierCol = 0;
     std::string variantName;
     std::vector<std::string> bindings;
+    std::vector<luna::ownership::Usage> bindingUsageDefaults;
+    std::vector<luna::ownership::Usage> bindingUsages;
     size_t variantIndex = 0;
     TypeVec bindingTypes;
     std::unique_ptr<BlockStmt> body;
@@ -162,6 +183,9 @@ struct WhileStmt : Stmt {
 
 struct ForStmt : Stmt {
     std::string varName;
+    bool hasInheritedUsage = false;
+    luna::ownership::Usage inheritedUsage = luna::ownership::Usage::Copy;
+    luna::ownership::Usage bindingUsage = luna::ownership::Usage::Copy;
     std::unique_ptr<Expr> iterable;
     std::unique_ptr<BlockStmt> body;
     TypePtr elementType;
@@ -354,6 +378,7 @@ struct VariantConstructExpr : Expr {
 struct FieldAccessExpr : Expr {
     std::unique_ptr<Expr> object;
     std::string field;
+    TypePtr resultType;
 };
 
 struct IndexExpr : Expr {
@@ -364,6 +389,23 @@ struct IndexExpr : Expr {
 struct ArrayLiteralExpr : Expr {
     std::vector<std::unique_ptr<Expr>> elements;
     TypePtr elementType;
+};
+
+struct RecordLiteralExpr : Expr {
+    struct Field {
+        std::string name;
+        std::unique_ptr<Expr> value;
+        std::string sourcePath;
+        int line = 0;
+        int col = 0;
+    };
+    // Retain source order for evaluation. `recordType->fields` is canonicalized
+    // by name and therefore owns identity/layout order independently.
+    std::vector<Field> fields;
+    // Null for an anonymous structural record. A named target represents the
+    // explicit `Point { x: value }` construction form.
+    std::unique_ptr<TypeAST> targetType;
+    TypePtr recordType;
 };
 
 struct HeapAllocExpr : Expr {
@@ -549,7 +591,6 @@ struct FragmentDecl : Decl {
 
 struct StructDecl : Decl {
     std::string name;
-    bool isNominal = false;
     std::vector<std::string> typeParams;
     std::vector<Param> fields;
 };
@@ -567,7 +608,6 @@ struct EnumDecl : Decl {
         TypeVec inferredFields;
     };
     std::string name;
-    bool isNominal = false;
     std::vector<std::string> typeParams;
     std::vector<Variant> variants;
 };
