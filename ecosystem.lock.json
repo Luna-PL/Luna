@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "snapshot": "luna-0.2.1-tooling-candidate.8",
+  "snapshot": "luna-0.2.1-tooling-candidate.9",
   "status": "candidate",
   "components": {
     "luna": {
@@ -48,8 +48,8 @@
     },
     "lunax": {
       "repository": "https://github.com/Luna-PL/Lunax.git",
-      "commit": "b9f3e3cfc728cfaab1200058ba845aeceabd84b2",
-      "version": "0.1.0",
+      "commit": "94a8cf36a105a2964f85c18afae0b198215e789c",
+      "version": "0.1.1",
       "compatible_luna_release_tag": "v0.2.1",
       "backend_abi": 1,
       "release_tier": "mvp-prerelease",
@@ -57,27 +57,28 @@
       "release_verification": {
         "workflow": "release.yml",
         "status": "passed",
-        "run": "https://github.com/Luna-PL/Lunax/actions/runs/30913978030",
-        "completed_at": "2026-08-04T13:33:18Z",
-        "preflight_conformance_run": "https://github.com/Luna-PL/Lunax/actions/runs/30913736588",
-        "current_source_ci_run": "https://github.com/Luna-PL/Lunax/actions/runs/30916584775"
+        "run": "https://github.com/Luna-PL/Lunax/actions/runs/31302037306",
+        "completed_at": "2026-08-09T07:54:11Z",
+        "current_source_ci_run": "https://github.com/Luna-PL/Lunax/actions/runs/31301951430"
       },
       "published_release": {
-        "tag": "v0.1.0",
-        "commit": "9cf45b9e1283df62b09b69f2f2b8094ad66bfc94",
-        "url": "https://github.com/Luna-PL/Lunax/releases/tag/v0.1.0",
-        "published_at": "2026-08-04T13:33:15Z",
+        "tag": "v0.1.1",
+        "commit": "02cafa57ace3ec1eabeb7b4dbdf20d8a41ad5f11",
+        "url": "https://github.com/Luna-PL/Lunax/releases/tag/v0.1.1",
+        "published_at": "2026-08-09T07:54:08Z",
         "prerelease": true,
         "artifacts": {
-          "lunax-0.1.0-ubuntu-24.04-x86_64.tar.gz": "33436b1035b78af57e68a46210c17c6873d4b5956c6a8ddb2d8a450094a04194",
-          "lunax-0.1.0-ubuntu-24.04-x86_64.tar.gz.sha256": "40fd50813b81beb0a2aa41f3c9ed200921b5b235283d921a86b5bd1a1149afd5"
+          "lunax-0.1.1-ubuntu-24.04-x86_64.tar.gz": "e59295ea60638cd1a00274b43843cad3d8a9386f482398fdf8770f0b393dd2ac",
+          "lunax-0.1.1-ubuntu-24.04-x86_64.tar.gz.sha256": "f13a8a677ade2c35efb230f4010df30bc5a5828300d68c4761dcfd60e5fb7db0",
+          "lunax_0.1.1_amd64.deb": "c2d64c002c072e8e03638c23e3502c8180988548142023acd743a7c857603af3",
+          "lunax_0.1.1_amd64.deb.sha256": "38b975887d9891761d33e54b315156e400b1ddb21e96e206f990bada6cec502e"
         },
         "consumer_verification": {
           "status": "passed",
           "platform": "ubuntu-24.04-x86_64",
           "workflow": "published-release.yml",
-          "run": "https://github.com/Luna-PL/Lunax/actions/runs/30916687791",
-          "completed_at": "2026-08-04T14:00:41Z"
+          "run": "https://github.com/Luna-PL/Lunax/actions/runs/31302250014",
+          "completed_at": "2026-08-09T07:54:52Z"
         }
       },
       "production_ready": false
