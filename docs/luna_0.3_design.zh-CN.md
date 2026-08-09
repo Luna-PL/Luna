@@ -351,6 +351,13 @@ type/trait catalog、推导状态、诊断和 declaration reference，组件不�
 窄接口协作且不相互持有。首个重构提交前只需把该边界落成具体 C++ API，不再重新决定
 职责划分或创建第二套 catalog。
 
+实施完成记录（2026-08-09）：facade 与唯一持有状态的 context 已落地；
+`BodyAnalyzer`、`DeclarationCollector`、`TypeResolver`、`ControlAnalyzer` 和
+`CompileTimeEvaluator` 已在语义等价前提下抽取。每个组件现在接收独立的 context
+capability，其中只包含经审计的引用和服务；五个 analyzer 不再是 `SemanticContext`
+的 friend。没有复制权威 catalog，也不存在组件之间的持有关系。因此 C015 与
+`SEMA001` 已通过实现完成门。
+
 | 顺序 | 优先级 | 工作 | 完成门 |
 |---:|---|---|---|
 | 1 | P0 | 语义等价地拆分 Sema，并在改动前固化现有回归基线 | Semantic/MoonIR/diagnostic/codegen 证据不变；tooling facade 不变 |

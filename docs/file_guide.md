@@ -105,9 +105,14 @@ script-defined special inputs.
   fragments, GPU, iterators, range analysis, descriptors, and helper concerns.
 - Runtime files own versioned C ABIs and host/GPU/plugin services.
 
-SemanticAnalyzer remains a large stage implementation. New semantic subsystems must establish a
-narrow interface before splitting translation units; splitting only to reduce line count is not
-sufficient.
+SemanticAnalyzer is the stable tooling/compiler facade. SemanticContext is the single internal
+owner of semantic state, cross-component orchestration, and shared services. BodyAnalyzer,
+DeclarationCollector, ControlAnalyzer,
+TypeResolver, and CompileTimeEvaluator are the extracted components;
+SemanticContextAccess provides a distinct capability for each component, and
+SemanticAnalysisSupport holds their shared pure helpers. New semantic subsystems depend on
+context/core through a scoped capability and must not create duplicate catalogs; splitting only
+to reduce line count remains insufficient.
 
 ## 6. Documentation, examples, and tests
 
@@ -350,15 +355,30 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/runtime/RuntimeABI.h`
 - `src/selector/Selector.cpp`
 - `src/selector/Selector.h`
+- `src/sema/BodyAnalyzer.cpp`
+- `src/sema/BodyAnalyzer.h`
+- `src/sema/CompileTimeEvaluator.cpp`
+- `src/sema/CompileTimeEvaluator.h`
+- `src/sema/ControlAnalyzer.cpp`
+- `src/sema/ControlAnalyzer.h`
+- `src/sema/DeclarationCollector.cpp`
+- `src/sema/DeclarationCollector.h`
 - `src/sema/Inference.h`
 - `src/sema/OwnershipChecker.cpp`
 - `src/sema/OwnershipChecker.h`
+- `src/sema/SemanticAnalysisSupport.h`
 - `src/sema/SemanticAnalyzer.cpp`
 - `src/sema/SemanticAnalyzer.h`
+- `src/sema/SemanticContext.cpp`
+- `src/sema/SemanticContext.h`
+- `src/sema/SemanticContextAccess.cpp`
+- `src/sema/SemanticContextAccess.h`
 - `src/sema/SymbolTable.cpp`
 - `src/sema/SymbolTable.h`
 - `src/sema/TraitChecker.cpp`
 - `src/sema/TraitChecker.h`
+- `src/sema/TypeResolver.cpp`
+- `src/sema/TypeResolver.h`
 - `src/sema/TypeSystem.cpp`
 - `src/sema/TypeSystem.h`
 - `src/tooling/SourceManager.cpp`

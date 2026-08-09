@@ -155,6 +155,13 @@ add_library(luna-frontend OBJECT
     src/sema/TypeSystem.cpp
     src/sema/SymbolTable.cpp
     src/sema/SemanticAnalyzer.cpp
+    src/sema/BodyAnalyzer.cpp
+    src/sema/CompileTimeEvaluator.cpp
+    src/sema/ControlAnalyzer.cpp
+    src/sema/DeclarationCollector.cpp
+    src/sema/SemanticContext.cpp
+    src/sema/SemanticContextAccess.cpp
+    src/sema/TypeResolver.cpp
     src/sema/TraitChecker.cpp
     src/sema/OwnershipChecker.cpp
     src/selector/Selector.cpp

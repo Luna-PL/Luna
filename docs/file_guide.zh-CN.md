@@ -149,10 +149,25 @@ obligation，不能重新推导所有权。
 | `src/sema/Inference.h` | 局部类型推断数据结构/算法 |
 | `src/sema/SymbolTable.h` | scope、symbol kind 和 symbol info 接口 |
 | `src/sema/SymbolTable.cpp` | 词法 scope 与名字绑定实现 |
-| `src/sema/SemanticAnalyzer.h` | 主语义分析阶段状态和接口 |
-| `src/sema/SemanticAnalyzer.cpp` | 名字/类型/泛型/constexpr/控制流语义及 typed AST 物化 |
+| `src/sema/BodyAnalyzer.h` | 函数体语义分析组件的窄接口 |
+| `src/sema/BodyAnalyzer.cpp` | statement、expression、call、iterator 和 device/launch 语义 |
+| `src/sema/CompileTimeEvaluator.h` | 编译期求值组件的窄接口 |
+| `src/sema/CompileTimeEvaluator.cpp` | const、constraint、selector 与 reflection/sysmeta 编译期求值 |
+| `src/sema/ControlAnalyzer.h` | Slot/Fragment/apply 控制分析组件的窄接口 |
+| `src/sema/ControlAnalyzer.cpp` | 控制契约、候选作用域和 fragment 路径一致性分析 |
+| `src/sema/DeclarationCollector.h` | 声明收集/注册组件的窄接口 |
+| `src/sema/DeclarationCollector.cpp` | 声明、metadata、FFI 和初始 trait/impl contract 注册 |
+| `src/sema/SemanticAnalysisSupport.h` | Sema 组件共享且无可变状态的纯辅助函数 |
+| `src/sema/SemanticAnalyzer.h` | tooling/compiler 使用的稳定语义分析 facade |
+| `src/sema/SemanticAnalyzer.cpp` | facade 生命周期和对内部 context 的窄委托 |
+| `src/sema/SemanticContext.h` | 当前唯一内部语义状态、catalog 和组件抽取接口 |
+| `src/sema/SemanticContext.cpp` | 语义编排、跨组件委托和唯一共享状态服务 |
+| `src/sema/SemanticContextAccess.h` | 五个组件各自可访问的状态和服务 capability |
+| `src/sema/SemanticContextAccess.cpp` | capability 引用绑定及受限服务转发 |
 | `src/sema/TraitChecker.h` | trait coherence/check 阶段接口 |
 | `src/sema/TraitChecker.cpp` | trait 定义、impl 与约束一致性检查 |
+| `src/sema/TypeResolver.h` | 类型解析、约束与泛型实例化组件的窄接口 |
+| `src/sema/TypeResolver.cpp` | 类型 AST 解析、约束求解、推断物化与单态化 |
 | `src/sema/OwnershipChecker.h` | ownership/borrow 阶段接口与 place 状态 |
 | `src/sema/OwnershipChecker.cpp` | path-sensitive move、borrow、cleanup 检查 |
 | `src/selector/Selector.h` | selector 候选、请求和结果模型 |
@@ -162,8 +177,12 @@ obligation，不能重新推导所有权。
 | `src/macro/MacroProcessor.h` | 宏处理组件接口 |
 | `src/macro/MacroProcessor.cpp` | 当前宏处理实现；只实现已记录能力 |
 
-`SemanticAnalyzer.cpp` 当前仍是较大的阶段实现文件。新增独立语义子系统时应先建立
-窄接口再拆出翻译单元；不得只为减少行数制造互相访问内部状态的文件。
+`SemanticAnalyzer` 已成为稳定 facade，`SemanticContext` 是拆分期间唯一的内部状态
+所有者，`BodyAnalyzer`、`DeclarationCollector`、`ControlAnalyzer`、`TypeResolver`
+和 `CompileTimeEvaluator` 是已抽取的粗粒度组件，共享纯辅助函数进入
+`SemanticAnalysisSupport`。`SemanticContextAccess` 为每个组件提供独立 capability；
+后续组件只能通过对应 capability 依赖 context/core，不能复制 catalog；不得只为减少
+行数制造互相访问内部状态的翻译单元。
 
 ### 5.4 MoonIR
 
@@ -542,15 +561,30 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/runtime/RuntimeABI.h`
 - `src/selector/Selector.cpp`
 - `src/selector/Selector.h`
+- `src/sema/BodyAnalyzer.cpp`
+- `src/sema/BodyAnalyzer.h`
+- `src/sema/CompileTimeEvaluator.cpp`
+- `src/sema/CompileTimeEvaluator.h`
+- `src/sema/ControlAnalyzer.cpp`
+- `src/sema/ControlAnalyzer.h`
+- `src/sema/DeclarationCollector.cpp`
+- `src/sema/DeclarationCollector.h`
 - `src/sema/Inference.h`
 - `src/sema/OwnershipChecker.cpp`
 - `src/sema/OwnershipChecker.h`
+- `src/sema/SemanticAnalysisSupport.h`
 - `src/sema/SemanticAnalyzer.cpp`
 - `src/sema/SemanticAnalyzer.h`
+- `src/sema/SemanticContext.cpp`
+- `src/sema/SemanticContext.h`
+- `src/sema/SemanticContextAccess.cpp`
+- `src/sema/SemanticContextAccess.h`
 - `src/sema/SymbolTable.cpp`
 - `src/sema/SymbolTable.h`
 - `src/sema/TraitChecker.cpp`
 - `src/sema/TraitChecker.h`
+- `src/sema/TypeResolver.cpp`
+- `src/sema/TypeResolver.h`
 - `src/sema/TypeSystem.cpp`
 - `src/sema/TypeSystem.h`
 - `src/tooling/SourceManager.cpp`

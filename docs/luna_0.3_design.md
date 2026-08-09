@@ -392,6 +392,13 @@ cooperate through narrow interfaces and do not own one another. Before the first
 commit this boundary only needs concrete C++ APIs; responsibility boundaries and the rule
 against a second authoritative catalog are no longer open decisions.
 
+Implementation completion (2026-08-09): the facade and the single state-owning context are in
+place. `BodyAnalyzer`, `DeclarationCollector`, `TypeResolver`, `ControlAnalyzer`, and
+`CompileTimeEvaluator` have been extracted with semantic parity. Each component now receives a
+distinct context capability containing only its audited references and services; the analyzers
+are no longer friends of `SemanticContext`. No authoritative catalog is copied and no component
+owns another component. C015 and `SEMA001` have therefore passed their implementation gate.
+
 | Order | Priority | Work | Completion gate |
 |---:|---|---|---|
 | 1 | P0 | split Sema with semantic parity, freezing the current regression baseline first | semantic/MoonIR/diagnostic/codegen evidence and tooling facade remain unchanged |
