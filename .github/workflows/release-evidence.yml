@@ -1,0 +1,72 @@
+name: Release evidence
+
+on:
+  push:
+    paths:
+      - ecosystem.lock.json
+      - tools/verify_release_evidence.js
+      - .github/workflows/release-evidence.yml
+  pull_request:
+    paths:
+      - ecosystem.lock.json
+      - tools/verify_release_evidence.js
+      - .github/workflows/release-evidence.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: ${{ matrix.component }}
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: toolchain
+            repository: Luna-PL/toolchains
+            checksum_pattern: SHA256SUMS
+          - component: lunax
+            repository: Luna-PL/Lunax
+            checksum_pattern: "*.sha256"
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve locked release tag
+        id: release
+        env:
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          tag="$(node -e 'const lock=require("./ecosystem.lock.json"); process.stdout.write(lock.components[process.env.COMPONENT].published_release.tag)')"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+      - name: Download immutable release evidence
+        env:
+          COMPONENT: ${{ matrix.component }}
+          REPOSITORY: ${{ matrix.repository }}
+          TAG: ${{ steps.release.outputs.tag }}
+          CHECKSUM_PATTERN: ${{ matrix.checksum_pattern }}
+        run: |
+          evidence_directory="release-evidence/$COMPONENT"
+          mkdir -p "$evidence_directory/checksums"
+          gh release view "$TAG" --repo "$REPOSITORY" \
+            --json assets,isDraft,isPrerelease,publishedAt,tagName,url \
+            > "$evidence_directory/release.json"
+          gh api "repos/$REPOSITORY/git/ref/tags/$TAG" --jq .object.sha \
+            > "$evidence_directory/tag-sha.txt"
+          gh release download "$TAG" --repo "$REPOSITORY" \
+            --pattern "$CHECKSUM_PATTERN" --dir "$evidence_directory/checksums"
+
+      - name: Verify release evidence against ecosystem lock
+        env:
+          COMPONENT: ${{ matrix.component }}
+        run: |
+          node tools/verify_release_evidence.js \
+            ecosystem.lock.json \
+            "$COMPONENT" \
+            "release-evidence/$COMPONENT/release.json" \
+            "release-evidence/$COMPONENT/tag-sha.txt" \
+            "release-evidence/$COMPONENT/checksums"

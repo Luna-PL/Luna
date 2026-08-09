@@ -25,3 +25,9 @@ cmake -DLUNA_SOURCE_DIR="$PWD" \
 
 The verifier checks child commits and clean worktrees, component versions and compatibility,
 and the compiler's self-reported source commit. It performs no network or mutation operations.
+
+The `Release evidence` workflow is the network-backed companion gate. It fetches each locked
+release with `gh`, confirms the release URL, timestamp, status, and tag commit, requires an exact
+asset-name set, compares GitHub's asset digests with the lock, and validates the downloaded
+checksum files against the recorded artifacts. A mismatch blocks promotion; release evidence
+must never be copied into the lock without this gate passing.

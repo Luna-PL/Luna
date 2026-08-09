@@ -22,3 +22,8 @@ cmake -DLUNA_SOURCE_DIR="$PWD" \
 
 验证器检查子仓库 commit 与 clean worktree、组件版本与兼容声明，以及编译器自报源码
 commit；它不执行网络访问或修改操作。
+
+`Release evidence` workflow 是对应的联网门禁。它通过 `gh` 获取 lock 指定的每个 release，
+核对 release URL、发布时间、状态和 tag commit，要求资产名称集合完全一致，将 GitHub 提供
+的资产摘要与 lock 对比，并使用下载的 checksum 文件复核所记录的制品。任何不一致都会
+阻止候选升级；该门禁通过前，不得把 release 证据人工复制进 lock。

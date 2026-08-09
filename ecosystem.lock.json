@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "snapshot": "luna-0.2.1-tooling-candidate.9",
+  "snapshot": "luna-0.2.1-tooling-candidate.10",
   "status": "candidate",
   "components": {
     "luna": {
@@ -23,15 +23,15 @@
         "published_at": "2026-08-03T17:47:21Z",
         "checksum_manifest": {
           "asset": "SHA256SUMS",
-          "sha256": "8f9d19c303a0d63e1f74a13e9f763415b52db0e3b64606994ba3f9fd1a2bf371"
+          "sha256": "8f9d19fa46f61f574a3c094d7496e1124b40d643cd658796b4238ffcd2741a3f"
         },
         "artifacts": {
-          "luna-language-v0.1.1-darwin-arm64.vsix": "1c2cecfbba48189bb55b609fdbcf50efe1642d214f49fbcdab6a23dc25fbbe47",
+          "luna-language-v0.1.1-darwin-arm64.vsix": "1c2cecf73835b7a1b44efb2ec8d6909f4b6b39c6a434adc4a17455491151e07a",
           "luna-language-v0.1.1-linux-x64.vsix": "135913f8e319fe0d6e9c3396875dfcf472226ba556e61e766dc4f9a8bead953c",
-          "luna-language-v0.1.1-win32-x64.vsix": "36d83bcbbeee01108614fc0fbef834faf3f0d8a0790660c9ada5bd6b74450bdb",
+          "luna-language-v0.1.1-win32-x64.vsix": "36d83bfc1e697fa2fb9b7da5869bbced72a6f69e1e8e7e3e92464872095f3c16",
           "luna-toolchain-0.1.1-linux-x86_64.tar.gz": "c52a33f7be595c91a703bd10303de7b38cea54c9a14ec77a099752d502aa25ae",
-          "luna-toolchain-0.1.1-macos-arm64.tar.gz": "047b59b1d69a769c7152e7696c42942299ced925f66549789ea733bc81e094b3",
-          "luna-toolchain-0.1.1-windows-x86_64.zip": "a48fb96ecde26591bd10df3c2570d9c6dd477d19615857400793473282e5b7a5"
+          "luna-toolchain-0.1.1-macos-arm64.tar.gz": "047b5931349c73a9ff1e446e140773196493015d29a5c732b8cfc1da024717ca",
+          "luna-toolchain-0.1.1-windows-x86_64.zip": "a48fb90bae4ba9943ecd8ea2c9acad826e73a84d9d083a66355c155bc493f45d"
         },
         "consumer_verification": {
           "workflow": "published-release.yml",
@@ -95,7 +95,8 @@
       "root-platform-ci",
       "toolchain-compiler-integration-ci",
       "lunax-transactional-install-ci",
-      "artifact-checksum-verification"
+      "artifact-checksum-verification",
+      "release-evidence-ci"
     ]
   }
 }
