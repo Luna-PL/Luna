@@ -669,10 +669,19 @@ fixed a lowering defect where explicit `linear T`/`affine T` lambda returns bypa
 nominal identity. A usage wrapper remains only a binding contract, while the inner `T` now retains
 its actual TypeId instead of degrading to a same-named placeholder.
 
-Item 10 is not complete as a whole. The next construction work uses those bodies to expand
-capture-free `map`/`filter`; slice-length projection, materialized recipes, and
-move-only array element-initialization/cleanup state remain explicit following boundaries. It then
-normalizes the remaining control-flow expressions, slot, and fragment paths, atomically replaces
+Using those lambda CFGs, capture-free `map`/`filter` over Copy items and Copy callable contracts now
+enter the same canonical expansion. The source and each callable/`take` argument evaluate once in
+source order in loop init; `map` becomes an ordinary typed-local call plus result local, while
+`filter` becomes a bool call and
+branch whose rejection edge enters the shared index-increment backedge. Adapter order therefore
+controls which items consume a `take` counter, with no intermediate container and no iterator IR
+operation. The verifier additionally matches local-call arguments/results and let initializer/local
+types, so the expanded graph no longer relies on the recipe's frontend trust.
+
+Item 10 is not complete as a whole. Slice-length projection, materialized recipes, capturing closure
+environments, and non-Copy item/callable per-element ownership state remain explicit following
+boundaries. The remaining work then normalizes control-flow expressions, slot, and fragment paths,
+atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured
 execution is deleted and the full verifier/codegen regression gate passes does the item-level gate
 pass; serializer/parser work remains item 11.

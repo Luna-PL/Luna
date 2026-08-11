@@ -583,6 +583,7 @@ shared/mutable/consuming source mode 与 `take`）会展开为普通 source/inde
 local、索引取 item、比较、赋值、branch 和 backedge；没有新增 iterator terminator 或不透明
 recipe operation，verifier 会拒绝 sealed CFG 中未展开的 recipe。builder 不会与旧 body
 并列挂接：sealed executable 在任何阶段都不能同时具有两套执行含义。
+
 无捕获 lambda 的子阶段也已完成：lambda expression 仅作为闭包值节点，其
 structured body 在构造时被消费为一份独立、以 `Lambda` region 为根的
 canonical CFG。这不是双层 IR：父函数与 lambda 分别只有一张 CFG，闭包值
@@ -594,8 +595,17 @@ closure environment layout 实现前拒绝局部捕获，该子阶段同样明�
 identity 的 lowering 缺陷；usage wrapper 现在仍只是 binding contract，内层
 `T` 的 TypeId 不再被退化为同名 placeholder。
 
-第 10 项尚未整体完成。下一步据此展开无捕获 `map`/`filter`；
-slice-length projection、materialized recipe 及 move-only array 的逐元素
+基于该 lambda CFG，Copy item 与 Copy callable contract 的无捕获
+`map`/`filter` 现也已进入同一 canonical 展开。source 与每个 callable/`take`
+参数按源码顺序在 loop init
+求值一次；`map` 成为普通 typed-local call 及结果 local，`filter` 成为 bool
+call 与 branch，拒绝边直接进入统一 index increment/backedge。因此
+`filter`/`take` 的先后顺序会决定哪些元素消耗 counter，不建立中间容器、
+不新增 iterator IR operation。verifier 额外核对 local callable 的参数/结果
+类型及 let initializer/local 类型，所以展开后不再依赖 recipe 上的前端信任。
+
+第 10 项尚未整体完成。slice-length projection、materialized recipe、捕获式
+closure environment，以及 non-Copy item/callable contract 的逐元素
 初始化/cleanup 状态仍是明确的后续边界。随后规范化其余控制流表达式、slot 和 fragment
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；

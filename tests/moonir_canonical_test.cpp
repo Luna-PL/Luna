@@ -80,6 +80,23 @@ int main() {
         {luna::ownership::Relation::Owned,
          luna::ownership::Usage::Copy});
     const auto lambdaTypeId = module.registerType(lambdaType);
+    auto predicateType = Type::makeFunction(
+        {TyI32}, TyBool,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Copy});
+    const auto predicateTypeId = module.registerType(predicateType);
+    auto moveMapType = Type::makeFunction(
+        {TyI32}, TyString,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Affine});
+    const auto moveMapTypeId = module.registerType(moveMapType);
+    auto moveMapIterator = Type::makeIterator(
+        TyString, IteratorMode::Range, rangeIterator);
+    const auto moveMapIteratorId = module.registerType(moveMapIterator);
     auto choiceType = Type::makeEnum(
         "Choice", {{"None", {}}, {"Some", {TyI32}}},
         "canonical.test::Choice");
@@ -626,6 +643,209 @@ int main() {
     if (!cfgVerifier.verify(*lambdaCfg, module))
         return fail("restored canonical lambda CFG did not verify");
 
+    const auto makeRecipeLambda = [&](moon::TypeRef closureType,
+                                      moon::TypeRef returnType,
+                                      bool predicate) {
+        auto value = std::make_unique<moon::LambdaExpr>();
+        value->type = closureType;
+        value->closureType = closureType;
+        value->returnType = returnType;
+        moon::Param parameter;
+        parameter.name = "input";
+        parameter.type = i32Id;
+        value->params.push_back(parameter);
+        value->body = std::make_unique<moon::BlockStmt>();
+        auto returned = std::make_unique<moon::ReturnStmt>();
+        if (predicate) {
+            auto accepted = std::make_unique<moon::BoolLiteralExpr>();
+            accepted->value = true;
+            accepted->type = boolId;
+            returned->value = std::move(accepted);
+        } else {
+            auto input = std::make_unique<moon::IdentifierExpr>();
+            input->name = "input";
+            input->type = i32Id;
+            returned->value = std::move(input);
+        }
+        value->body->stmts.push_back(std::move(returned));
+        return value;
+    };
+
+    auto pipelineStructured = std::make_unique<moon::BlockStmt>();
+    auto pipelineLoop = std::make_unique<moon::ForStmt>();
+    pipelineLoop->varName = "mapped";
+    pipelineLoop->elementType = i32Id;
+    pipelineLoop->bindingUsage = luna::ownership::Usage::Copy;
+    auto pipelineRange = std::make_unique<moon::CallExpr>();
+    pipelineRange->iteratorOp = IteratorOp::Range;
+    pipelineRange->iteratorInputType = i32Id;
+    pipelineRange->iteratorOutputType = i32Id;
+    pipelineRange->type = rangeId;
+    auto pipelineRangeCallee = std::make_unique<moon::IdentifierExpr>();
+    pipelineRangeCallee->name = "range";
+    pipelineRange->callee = std::move(pipelineRangeCallee);
+    auto pipelineStart = std::make_unique<moon::IntLiteralExpr>();
+    pipelineStart->value = 0;
+    pipelineStart->type = i32Id;
+    auto pipelineEnd = std::make_unique<moon::IntLiteralExpr>();
+    pipelineEnd->value = 4;
+    pipelineEnd->type = i32Id;
+    pipelineRange->args.push_back(std::move(pipelineStart));
+    pipelineRange->args.push_back(std::move(pipelineEnd));
+
+    auto pipelineMap = std::make_unique<moon::CallExpr>();
+    pipelineMap->iteratorOp = IteratorOp::Map;
+    pipelineMap->iteratorInputType = i32Id;
+    pipelineMap->iteratorOutputType = i32Id;
+    pipelineMap->type = rangeId;
+    auto pipelineMapMember = std::make_unique<moon::FieldAccessExpr>();
+    pipelineMapMember->field = "map";
+    pipelineMapMember->object = std::move(pipelineRange);
+    pipelineMap->callee = std::move(pipelineMapMember);
+    pipelineMap->args.push_back(makeRecipeLambda(
+        lambdaTypeId, i32Id, false));
+
+    auto pipelineFilter = std::make_unique<moon::CallExpr>();
+    pipelineFilter->iteratorOp = IteratorOp::Filter;
+    pipelineFilter->iteratorInputType = i32Id;
+    pipelineFilter->iteratorOutputType = i32Id;
+    pipelineFilter->type = rangeId;
+    auto pipelineFilterMember = std::make_unique<moon::FieldAccessExpr>();
+    pipelineFilterMember->field = "filter";
+    pipelineFilterMember->object = std::move(pipelineMap);
+    pipelineFilter->callee = std::move(pipelineFilterMember);
+    pipelineFilter->args.push_back(makeRecipeLambda(
+        predicateTypeId, boolId, true));
+
+    auto pipelineTake = std::make_unique<moon::CallExpr>();
+    pipelineTake->iteratorOp = IteratorOp::Take;
+    pipelineTake->iteratorInputType = i32Id;
+    pipelineTake->iteratorOutputType = i32Id;
+    pipelineTake->type = rangeId;
+    auto pipelineTakeMember = std::make_unique<moon::FieldAccessExpr>();
+    pipelineTakeMember->field = "take";
+    pipelineTakeMember->object = std::move(pipelineFilter);
+    pipelineTake->callee = std::move(pipelineTakeMember);
+    auto pipelineCount = std::make_unique<moon::IntLiteralExpr>();
+    pipelineCount->value = 2;
+    pipelineCount->type = i32Id;
+    pipelineTake->args.push_back(std::move(pipelineCount));
+    pipelineLoop->iterable = std::move(pipelineTake);
+    pipelineLoop->body = std::make_unique<moon::BlockStmt>();
+    auto pipelineUse = std::make_unique<moon::ExprStmt>();
+    auto pipelineItem = std::make_unique<moon::IdentifierExpr>();
+    pipelineItem->name = "mapped";
+    pipelineItem->type = i32Id;
+    pipelineUse->expr = std::move(pipelineItem);
+    pipelineLoop->body->stmts.push_back(std::move(pipelineUse));
+    pipelineStructured->stmts.push_back(std::move(pipelineLoop));
+
+    auto pipelineCfg = cfgBuilder.build(
+        std::move(pipelineStructured), {},
+        moon::RegionKind::Function, module);
+    moon::CallExpr* mapInvocation = nullptr;
+    moon::CallExpr* filterInvocation = nullptr;
+    size_t canonicalAdapterLambdas = 0;
+    if (pipelineCfg) {
+        for (auto& block : pipelineCfg->blocks) {
+            for (auto& operation : block.operations) {
+                auto* declaration = dynamic_cast<moon::LetStmt*>(operation.get());
+                if (!declaration) continue;
+                if (auto* adapter = dynamic_cast<moon::LambdaExpr*>(
+                        declaration->initializer.get())) {
+                    if (!adapter->body && adapter->controlFlow)
+                        ++canonicalAdapterLambdas;
+                } else if (auto* invocation = dynamic_cast<moon::CallExpr*>(
+                               declaration->initializer.get())) {
+                    if (invocation->type == i32Id)
+                        mapInvocation = invocation;
+                }
+            }
+            if (auto* invocation = dynamic_cast<moon::CallExpr*>(
+                    block.terminator.operand.get());
+                invocation && invocation->type == boolId)
+                filterInvocation = invocation;
+        }
+    }
+    if (!pipelineCfg || !cfgVerifier.verify(*pipelineCfg, module) ||
+        pipelineCfg->blocks.size() != 11 ||
+        pipelineCfg->locals.size() != 8 ||
+        canonicalAdapterLambdas != 2 || !mapInvocation ||
+        !filterInvocation ||
+        mapInvocation->iteratorOp != IteratorOp::None ||
+        filterInvocation->iteratorOp != IteratorOp::None)
+        return fail("map/filter/take recipe did not expand to ordinary canonical CFG");
+    mapInvocation->type = boolId;
+    if (cfgVerifier.verify(*pipelineCfg, module))
+        return fail("CFG verifier accepted a forged local closure call signature");
+    mapInvocation->type = i32Id;
+    mapInvocation->returnUsage = luna::ownership::Usage::Affine;
+    if (cfgVerifier.verify(*pipelineCfg, module))
+        return fail("CFG verifier accepted a forged local closure result contract");
+    mapInvocation->returnUsage = luna::ownership::Usage::Copy;
+    if (!cfgVerifier.verify(*pipelineCfg, module))
+        return fail("restored map/filter canonical CFG did not verify");
+
+    auto moveMapStructured = std::make_unique<moon::BlockStmt>();
+    auto moveMapLoop = std::make_unique<moon::ForStmt>();
+    moveMapLoop->varName = "owned";
+    moveMapLoop->elementType = stringId;
+    moveMapLoop->bindingUsage = luna::ownership::Usage::Affine;
+    auto moveMapRange = std::make_unique<moon::CallExpr>();
+    moveMapRange->iteratorOp = IteratorOp::Range;
+    moveMapRange->iteratorInputType = i32Id;
+    moveMapRange->iteratorOutputType = i32Id;
+    moveMapRange->type = rangeId;
+    auto moveMapRangeCallee = std::make_unique<moon::IdentifierExpr>();
+    moveMapRangeCallee->name = "range";
+    moveMapRange->callee = std::move(moveMapRangeCallee);
+    auto moveMapStart = std::make_unique<moon::IntLiteralExpr>();
+    moveMapStart->value = 0;
+    moveMapStart->type = i32Id;
+    auto moveMapEnd = std::make_unique<moon::IntLiteralExpr>();
+    moveMapEnd->value = 1;
+    moveMapEnd->type = i32Id;
+    moveMapRange->args.push_back(std::move(moveMapStart));
+    moveMapRange->args.push_back(std::move(moveMapEnd));
+    auto moveMapCall = std::make_unique<moon::CallExpr>();
+    moveMapCall->iteratorOp = IteratorOp::Map;
+    moveMapCall->iteratorInputType = i32Id;
+    moveMapCall->iteratorOutputType = stringId;
+    moveMapCall->type = moveMapIteratorId;
+    auto moveMapMember = std::make_unique<moon::FieldAccessExpr>();
+    moveMapMember->field = "map";
+    moveMapMember->object = std::move(moveMapRange);
+    moveMapCall->callee = std::move(moveMapMember);
+    auto moveMapLambda = std::make_unique<moon::LambdaExpr>();
+    moveMapLambda->type = moveMapTypeId;
+    moveMapLambda->closureType = moveMapTypeId;
+    moveMapLambda->returnType = stringId;
+    moon::Param moveMapParameter;
+    moveMapParameter.name = "input";
+    moveMapParameter.type = i32Id;
+    moveMapLambda->params.push_back(moveMapParameter);
+    moveMapLambda->body = std::make_unique<moon::BlockStmt>();
+    auto moveMapReturn = std::make_unique<moon::ReturnStmt>();
+    auto moveMapValue = std::make_unique<moon::StringLiteralExpr>();
+    moveMapValue->value = "owned";
+    moveMapValue->type = stringId;
+    moveMapReturn->value = std::move(moveMapValue);
+    moveMapLambda->body->stmts.push_back(std::move(moveMapReturn));
+    moveMapCall->args.push_back(std::move(moveMapLambda));
+    moveMapLoop->iterable = std::move(moveMapCall);
+    moveMapLoop->body = std::make_unique<moon::BlockStmt>();
+    moveMapStructured->stmts.push_back(std::move(moveMapLoop));
+    if (cfgBuilder.build(
+            std::move(moveMapStructured), {},
+            moon::RegionKind::Function, module))
+        return fail("CFG builder accepted move-only map output without cleanup state");
+    bool diagnosedMoveMap = false;
+    for (const auto& message : cfgBuilder.errors())
+        if (message.find("non-Copy map/filter") != std::string::npos)
+            diagnosedMoveMap = true;
+    if (!diagnosedMoveMap)
+        return fail("CFG builder did not preserve the move-only map boundary");
+
     // The sealed payload must not observe later mutations of the frontend
     // object from which it was frozen.
     product->fields.clear();
@@ -659,6 +879,9 @@ int main() {
     reverse.registerType(TyString);
     reverse.registerType(TyBool);
     reverse.registerType(lambdaType);
+    reverse.registerType(predicateType);
+    reverse.registerType(moveMapType);
+    reverse.registerType(moveMapIterator);
     reverse.registerType(Type::makeEnum(
         "Choice", {{"None", {}}, {"Some", {TyI32}}},
         "canonical.test::Choice"));

@@ -735,9 +735,45 @@ bool ControlFlowBuilder::parseIteratorRecipe(
     }
     if (call->iteratorOp == IteratorOp::Map ||
         call->iteratorOp == IteratorOp::Filter) {
-        error(location,
-              "map/filter recipes require canonical lambda bodies in the next subphase");
-        return false;
+        if (call->args.size() != 1 || !member->object) {
+            error(location,
+                  "iterator map/filter adapter has an invalid canonical shape");
+            return false;
+        }
+        auto receiver = std::move(member->object);
+        auto callable = std::move(call->args.front());
+        const TypeRef inputType = call->iteratorInputType;
+        const TypeRef outputType = call->iteratorOutputType;
+        if (!parseIteratorRecipe(std::move(receiver), plan, location))
+            return false;
+        if (inputType != plan.itemType || outputType.empty()) {
+            error(location,
+                  "iterator map/filter adapter disagrees with its canonical item type");
+            return false;
+        }
+        auto* lambda = dynamic_cast<LambdaExpr*>(callable.get());
+        const auto* closure = mModule->findType(callable->type);
+        TypeRef expectedResult = outputType;
+        if (call->iteratorOp == IteratorOp::Filter)
+            for (const auto& type : mModule->typeTable)
+                if (type.kind == TypeKind::Bool) expectedResult = type.id;
+        if ((lambda &&
+             (lambda->body || !lambda->controlFlow ||
+              !lambda->captures.empty() ||
+              callable->type != lambda->closureType)) ||
+            !closure || closure->kind != TypeKind::Function ||
+            closure->parameterTypeIds != TypeRefVec{inputType} ||
+            closure->returnTypeId != expectedResult ||
+            (call->iteratorOp == IteratorOp::Filter &&
+             outputType != inputType)) {
+            error(location,
+                  "iterator map/filter requires one canonical capture-free callable");
+            return false;
+        }
+        plan.steps.push_back({call->iteratorOp, std::move(callable),
+                              inputType, outputType});
+        plan.itemType = outputType;
+        return true;
     }
     error(location, "unsupported compiler iterator recipe operation");
     return false;
@@ -771,8 +807,7 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     if (plan.mode == IteratorMode::Range) {
         if (!plan.rangeStart || !plan.rangeEnd ||
             plan.rangeStart->type != indexType ||
-            plan.rangeEnd->type != indexType ||
-            plan.itemType != indexType) {
+            plan.rangeEnd->type != indexType) {
             error(statement->location,
                   "range recipe must be normalized to i32 start/end/item values");
             return std::nullopt;
@@ -799,16 +834,68 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
             return std::nullopt;
         }
     }
+    const TypeRef sourceItemType = plan.steps.empty()
+        ? plan.itemType : plan.steps.front().inputType;
+    if (plan.mode == IteratorMode::Range) {
+        if (sourceItemType != indexType) {
+            error(statement->location,
+                  "range recipe adapter input is not canonical i32");
+            return std::nullopt;
+        }
+    } else {
+        const auto* frozenSource = mModule->findType(plan.sourceType);
+        const auto* frozenItem = mModule->findType(sourceItemType);
+        const bool consumingItem = frozenSource &&
+            sourceItemType == frozenSource->innerTypeId;
+        const bool borrowedItem = frozenSource && frozenItem &&
+            frozenItem->kind == TypeKind::Reference &&
+            frozenItem->innerTypeId == frozenSource->innerTypeId &&
+            frozenItem->isMutable == (plan.mode == IteratorMode::Mutable);
+        if ((plan.mode == IteratorMode::Consuming && !consumingItem) ||
+            ((plan.mode == IteratorMode::Shared ||
+              plan.mode == IteratorMode::Mutable) && !borrowedItem)) {
+            error(statement->location,
+                  "iterator recipe source mode disagrees with its first item type");
+            return std::nullopt;
+        }
+    }
     if (plan.itemType != statement->elementType) {
         error(statement->location,
               "iterator recipe item type disagrees with its for binding");
         return std::nullopt;
     }
     for (const auto& step : plan.steps) {
-        if (step.op != IteratorOp::Take || !step.argument ||
-            step.argument->type != indexType) {
+        if (step.op == IteratorOp::Take) {
+            if (!step.argument || step.argument->type != indexType) {
+                error(statement->location,
+                      "iterator take count must be normalized to i32");
+                return std::nullopt;
+            }
+            continue;
+        }
+        if (step.op != IteratorOp::Map && step.op != IteratorOp::Filter) {
             error(statement->location,
-                  "iterator take count must be normalized to i32");
+                  "iterator recipe contains an unsupported canonical adapter");
+            return std::nullopt;
+        }
+        const auto* input = mModule->findType(step.inputType);
+        const auto* output = mModule->findType(step.outputType);
+        const auto* callable = step.argument
+            ? mModule->findType(step.argument->type) : nullptr;
+        if (!step.argument || !input || !output ||
+            !callable || callable->kind != TypeKind::Function ||
+            callable->parameterContracts.size() != 1 ||
+            callable->parameterContracts.front().usage !=
+                luna::ownership::Usage::Copy ||
+            callable->returnContract.usage !=
+                luna::ownership::Usage::Copy ||
+            input->sysmeta.resource.usage !=
+                luna::ownership::Usage::Copy ||
+            output->sysmeta.resource.usage !=
+                luna::ownership::Usage::Copy) {
+            error(statement->location,
+                  "non-Copy map/filter item or callable contract requires "
+                  "canonical per-item ownership state");
             return std::nullopt;
         }
     }
@@ -897,11 +984,17 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         "$for.index." + identity, indexType, std::move(initial));
     const LocalId limitLocal = addBinding(
         "$for.limit." + identity, indexType, std::move(limit));
-    std::vector<LocalId> takeLocals;
+    std::vector<LocalId> adapterLocals;
     for (size_t stepIndex = 0; stepIndex < plan.steps.size(); ++stepIndex) {
-        takeLocals.push_back(addBinding(
-            "$for.take." + identity + "." + std::to_string(stepIndex),
-            indexType, std::move(plan.steps[stepIndex].argument)));
+        auto& step = plan.steps[stepIndex];
+        const char* adapterName = step.op == IteratorOp::Map
+            ? "map" : (step.op == IteratorOp::Filter ? "filter" : "take");
+        const TypeRef adapterType = step.op == IteratorOp::Take
+            ? indexType : step.argument->type;
+        adapterLocals.push_back(addBinding(
+            "$for." + std::string(adapterName) + "." + identity + "." +
+                std::to_string(stepIndex),
+            adapterType, std::move(step.argument)));
     }
 
     const BlockId condition = addBlock(
@@ -916,6 +1009,14 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     const BlockId bodyEntry = addBlock(
         bodyRegion, bodyScope, statement->location);
     const BlockId exit = addBlock(region, scope, statement->location);
+    const bool hasFilter = std::any_of(
+        plan.steps.begin(), plan.steps.end(), [](const auto& step) {
+            return step.op == IteratorOp::Filter;
+        });
+    BlockId increment;
+    if (hasFilter)
+        increment = addBlock(
+            loopRegion, loopScope, statement->location);
 
     Terminator conditionTerminator;
     conditionTerminator.kind = TerminatorKind::Branch;
@@ -933,6 +1034,43 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         std::move(conditionTerminator);
 
     mBindings.emplace_back();
+    const auto addBodyBinding = [&](BlockId block, const std::string& name,
+                                    const TypeRef& type,
+                                    luna::ownership::Usage usage,
+                                    std::unique_ptr<Expr> initializer) {
+        const LocalId local = addLocal(
+            bodyScope, LocalKind::Binding, name, type, usage);
+        auto declaration = std::make_unique<LetStmt>();
+        declaration->location = statement->location;
+        declaration->name = name;
+        declaration->local = local;
+        declaration->isLinear =
+            usage == luna::ownership::Usage::Linear;
+        declaration->usage = usage;
+        declaration->type = type;
+        declaration->initializer = std::move(initializer);
+        mGraph->blocks[block.value].operations.push_back(
+            std::move(declaration));
+        return local;
+    };
+    const auto invokeAdapter = [&](LocalId callable, LocalId argument,
+                                   const TypeRef& resultType) {
+        auto call = std::make_unique<CallExpr>();
+        call->location = statement->location;
+        call->callee = identifier(callable);
+        call->args.push_back(identifier(argument));
+        call->type = resultType;
+        if (!callable.empty() && callable.value < mGraph->locals.size()) {
+            const auto* signature = mModule->findType(
+                mGraph->locals[callable.value].type);
+            if (signature && signature->kind == TypeKind::Function)
+                call->returnUsage = signature->returnContract.usage;
+        }
+        call->returnsLinear =
+            call->returnUsage == luna::ownership::Usage::Linear;
+        return call;
+    };
+
     std::unique_ptr<Expr> itemValue;
     if (plan.mode == IteratorMode::Range) {
         itemValue = identifier(indexLocal);
@@ -947,68 +1085,99 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
             auto borrowed = std::make_unique<BorrowExpr>();
             borrowed->location = statement->location;
             borrowed->isMutable = plan.mode == IteratorMode::Mutable;
-            borrowed->type = statement->elementType;
+            borrowed->type = sourceItemType;
             borrowed->operand = std::move(element);
             itemValue = std::move(borrowed);
         } else {
             itemValue = std::move(element);
         }
     }
-    const LocalId itemLocal = addLocal(
-        bodyScope, LocalKind::Binding, statement->varName,
-        statement->elementType, statement->bindingUsage);
-    auto item = std::make_unique<LetStmt>();
-    item->location = statement->location;
-    item->name = statement->varName;
-    item->local = itemLocal;
-    item->isLinear =
-        statement->bindingUsage == luna::ownership::Usage::Linear;
-    item->usage = statement->bindingUsage;
-    item->type = statement->elementType;
-    item->initializer = std::move(itemValue);
-    mGraph->blocks[bodyEntry.value].operations.push_back(std::move(item));
+    const bool hasValueAdapter = std::any_of(
+        plan.steps.begin(), plan.steps.end(), [](const auto& step) {
+            return step.op == IteratorOp::Map ||
+                step.op == IteratorOp::Filter;
+        });
+    LocalId currentItem;
+    if (hasValueAdapter) {
+        currentItem = addBodyBinding(
+            bodyEntry, "$for.item." + identity + ".source",
+            sourceItemType, luna::ownership::Usage::Copy,
+            std::move(itemValue));
+    } else {
+        currentItem = addBodyBinding(
+            bodyEntry, statement->varName, statement->elementType,
+            statement->bindingUsage, std::move(itemValue));
+    }
 
     OpenBlock bodyStart{bodyEntry, {}};
-    for (size_t stepIndex = 0; stepIndex < takeLocals.size(); ++stepIndex) {
-        const BlockId takeCondition = addBlock(
-            bodyRegion, bodyScope, statement->location);
-        const BlockId takeAccepted = addBlock(
-            bodyRegion, bodyScope, statement->location);
-        connectJump(bodyStart, takeCondition);
+    bool hasBranchingAdapter = false;
+    for (size_t stepIndex = 0; stepIndex < plan.steps.size(); ++stepIndex) {
+        const auto& step = plan.steps[stepIndex];
+        if (step.op == IteratorOp::Map) {
+            auto mapped = invokeAdapter(
+                adapterLocals[stepIndex], currentItem, step.outputType);
+            currentItem = addBodyBinding(
+                bodyStart.block,
+                "$for.item." + identity + "." +
+                    std::to_string(stepIndex),
+                step.outputType, luna::ownership::Usage::Copy,
+                std::move(mapped));
+            continue;
+        }
 
-        Terminator takeTerminator;
-        takeTerminator.kind = TerminatorKind::Branch;
-        takeTerminator.location = statement->location;
-        auto canTake = std::make_unique<BinaryExpr>();
-        canTake->location = statement->location;
-        canTake->lhs = identifier(takeLocals[stepIndex]);
-        canTake->op = Operator::Greater;
-        canTake->rhs = integer(0);
-        canTake->type = boolType;
-        takeTerminator.operand = std::move(canTake);
-        takeTerminator.primary.target = takeAccepted;
-        takeTerminator.secondary.target = exit;
-        mGraph->blocks[takeCondition.value].terminator =
-            std::move(takeTerminator);
+        hasBranchingAdapter = true;
+        const BlockId adapterCondition = addBlock(
+            bodyRegion, bodyScope, statement->location);
+        const BlockId adapterAccepted = addBlock(
+            bodyRegion, bodyScope, statement->location);
+        connectJump(bodyStart, adapterCondition);
 
-        auto decrement = std::make_unique<ExprStmt>();
-        decrement->location = statement->location;
-        auto assignment = std::make_unique<AssignExpr>();
-        assignment->location = statement->location;
-        assignment->op = Operator::SubtractAssign;
-        assignment->lhs = identifier(takeLocals[stepIndex]);
-        assignment->rhs = integer(1);
-        assignment->type = indexType;
-        decrement->expr = std::move(assignment);
-        mGraph->blocks[takeAccepted.value].operations.push_back(
-            std::move(decrement));
-        bodyStart = OpenBlock{takeAccepted, {}};
+        Terminator adapterTerminator;
+        adapterTerminator.kind = TerminatorKind::Branch;
+        adapterTerminator.location = statement->location;
+        adapterTerminator.primary.target = adapterAccepted;
+        if (step.op == IteratorOp::Filter) {
+            adapterTerminator.operand = invokeAdapter(
+                adapterLocals[stepIndex], currentItem, boolType);
+            adapterTerminator.secondary.target = increment;
+        } else {
+            auto canTake = std::make_unique<BinaryExpr>();
+            canTake->location = statement->location;
+            canTake->lhs = identifier(adapterLocals[stepIndex]);
+            canTake->op = Operator::Greater;
+            canTake->rhs = integer(0);
+            canTake->type = boolType;
+            adapterTerminator.operand = std::move(canTake);
+            adapterTerminator.secondary.target = exit;
+        }
+        mGraph->blocks[adapterCondition.value].terminator =
+            std::move(adapterTerminator);
+
+        if (step.op == IteratorOp::Take) {
+            auto decrement = std::make_unique<ExprStmt>();
+            decrement->location = statement->location;
+            auto assignment = std::make_unique<AssignExpr>();
+            assignment->location = statement->location;
+            assignment->op = Operator::SubtractAssign;
+            assignment->lhs = identifier(adapterLocals[stepIndex]);
+            assignment->rhs = integer(1);
+            assignment->type = indexType;
+            decrement->expr = std::move(assignment);
+            mGraph->blocks[adapterAccepted.value].operations.push_back(
+                std::move(decrement));
+        }
+        bodyStart = OpenBlock{adapterAccepted, {}};
     }
+
+    if (hasValueAdapter)
+        addBodyBinding(
+            bodyStart.block, statement->varName, statement->elementType,
+            statement->bindingUsage, identifier(currentItem));
 
     std::optional<OpenBlock> bodyExit;
     if (!statement->body) {
         error(statement->location, "for-loop has no canonical body");
-    } else if (takeLocals.empty()) {
+    } else if (!hasBranchingAdapter) {
         bodyExit = lowerSequence(
             statement->body->stmts, bodyStart, bodyRegion, bodyScope);
     } else {
@@ -1022,9 +1191,12 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     mBindings.pop_back();
 
     if (bodyExit) {
-        const BlockId increment = addBlock(
-            loopRegion, loopScope, statement->location);
+        if (increment.empty())
+            increment = addBlock(
+                loopRegion, loopScope, statement->location);
         connectJump(*bodyExit, increment);
+    }
+    if (!increment.empty()) {
         auto advance = std::make_unique<ExprStmt>();
         advance->location = statement->location;
         auto assignment = std::make_unique<AssignExpr>();

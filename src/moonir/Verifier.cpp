@@ -413,7 +413,7 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         return false;
     };
     std::function<void(const Expr*, const BasicBlock&)> scanGraphExpr;
-    scanGraphExpr = [this, &graph, &localVisibleFrom, &scanGraphExpr](
+    scanGraphExpr = [this, &graph, &module, &localVisibleFrom, &scanGraphExpr](
         const Expr* expression, const BasicBlock& block) {
         if (!expression) return;
         if (const auto* identifier =
@@ -451,6 +451,38 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             if (call->iteratorOp != IteratorOp::None)
                 error(call->location,
                       "sealed CFG contains an unexpanded iterator recipe");
+            if (const auto* callee = dynamic_cast<const IdentifierExpr*>(
+                    call->callee.get());
+                callee && !callee->local.empty()) {
+                const auto* signature = module.findType(callee->type);
+                if (!signature || signature->kind != TypeKind::Function) {
+                    error(call->location,
+                          "local call target has no frozen function signature");
+                } else {
+                    if (signature->parameterTypeIds.size() !=
+                        call->args.size())
+                        error(call->location,
+                              "local call argument arity disagrees with its signature");
+                    const size_t comparable = std::min(
+                        signature->parameterTypeIds.size(), call->args.size());
+                    for (size_t index = 0; index < comparable; ++index)
+                        if (!call->args[index] ||
+                            call->args[index]->type !=
+                                signature->parameterTypeIds[index])
+                            error(call->location,
+                                  "local call argument type disagrees with its signature");
+                    if (call->type != signature->returnTypeId)
+                        error(call->location,
+                              "local call result type disagrees with its signature");
+                    if (call->returnUsage !=
+                            signature->returnContract.usage ||
+                        call->returnsLinear !=
+                            (signature->returnContract.usage ==
+                             luna::ownership::Usage::Linear))
+                        error(call->location,
+                              "local call result contract disagrees with its signature");
+                }
+            }
             scanGraphExpr(call->callee.get(), block);
             for (const auto& argument : call->args)
                 scanGraphExpr(argument.get(), block);
@@ -549,6 +581,10 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                         local->usage != declaration->usage)
                         error(declaration->location,
                               "let operation disagrees with its local-table row");
+                    if (!declaration->initializer ||
+                        declaration->initializer->type != declaration->type)
+                        error(declaration->location,
+                              "let initializer type disagrees with its canonical local");
                 }
                 verifyStmt(operation.get(), module, "CFG operation");
                 scanGraphExpr(declaration->initializer.get(), block);
