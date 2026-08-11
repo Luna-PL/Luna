@@ -698,10 +698,20 @@ consumption, copying that cursor, or path-inconsistent consumption is rejected b
 ownership dataflow. No Iterator-typed local, recipe metadata, runtime token, allocation, or new ABI remains in
 the sealed graph.
 
-Item 10 is not complete as a whole. Materialized terminal expressions (`fold`, `for_each`, `count`,
-and `collect`), capturing closure environments, and non-Copy item/callable per-element ownership
-state remain explicit following boundaries. The remaining work then normalizes other control-flow
-expressions, slot, and fragment paths,
+The first materialized terminal slice is also complete. `count` and a Copy-accumulator `fold`
+continue from erased recipe state as ordinary loops with outer result locals, while an
+expression-statement `for_each` emits an ordinary body call. Adapters appended at the terminal are
+evaluated once before terminal arguments. This slice permits a value-producing terminal directly as
+an initializer or return value, and as the sole argument of a direct ordinary call; `for_each` is
+accepted as an expression statement. Wider expression sibling hoisting is deliberately deferred so
+evaluation order is never guessed.
+
+Item 10 is not complete as a whole. Non-materialized terminals, `collect` builder ownership state,
+affine fold accumulators, general expression sibling hoisting, capturing closure environments, and
+non-Copy item/callable per-element ownership state remain explicit following boundaries. `collect`
+specifically awaits ordinary CFG representation of the affine FromIterator builder, mutable push
+borrow, cleanup path, and consuming finish transfer; no runtime iterator object is introduced as a
+shortcut. The remaining work then normalizes other control-flow expressions, slot, and fragment paths,
 atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured
 execution is deleted and the full verifier/codegen regression gate passes does the item-level gate

@@ -131,8 +131,12 @@ with no heap allocation, vtable, or iterator Runtime ABI.
 For canonical `for` construction, the materialized Iterator binding is erased at that binding
 point into ordinary source/index/limit/adapter locals. The index is also the affine
 single-consumption witness and is moved into the eventual loop; this adds no separate runtime
-token. Materialized terminal expressions remain on the legacy structured path until their
-control-flow-expression canonicalization subphase.
+token. Materialized `count` and Copy-accumulator `fold` terminals now continue from that state as
+ordinary loops with outer result locals; expression-statement `for_each` emits an ordinary call in
+the loop body. Adapters appended at the terminal are evaluated once before terminal arguments.
+This first expression slice accepts a value-producing terminal as a direct initializer or return,
+or as the sole argument of a direct ordinary call; `for_each` is accepted as an expression
+statement. It therefore never reorders an earlier sibling operand.
 
 This binding is an affine, single-consumption local and cannot currently be returned, passed,
 or sent across an ABI. Borrow bindings keep the source loan until lexical scope end; a Copy
@@ -140,6 +144,12 @@ or sent across an ABI. Borrow bindings keep the source loan until lexical scope 
 moves source ownership into hidden stack state and records initialization bits for each array
 element. Terminal consumption, early return from `for` or an ordinary function, and leaving
 scope without consumption clean only elements that remain initialized.
+
+Non-materialized terminals, general expression sibling hoisting, affine fold accumulators, and
+`collect` remain explicit canonical-CFG boundaries. In particular, `collect` will not cross that
+boundary until its affine `FromIterator` builder, mutable `push` borrow, cleanup path, and consuming
+`finish` transfer can all be represented as ordinary verified state; no hidden iterator runtime
+object is used as a shortcut.
 
 Source expressions, adapter arguments, and terminal arguments are evaluated left to right.
 `filter` skips elements and `take` evaluates only elements that pass through it, so

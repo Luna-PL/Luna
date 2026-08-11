@@ -82,6 +82,7 @@ int main() {
     const auto usizeId = module.registerType(TyUSize);
     const auto stringId = module.registerType(TyString);
     const auto boolId = module.registerType(TyBool);
+    const auto unitId = module.registerType(TyUnit);
     auto lambdaType = Type::makeFunction(
         {TyI32}, TyI32,
         {{luna::ownership::Relation::Owned,
@@ -96,6 +97,22 @@ int main() {
         {luna::ownership::Relation::Owned,
          luna::ownership::Usage::Copy});
     const auto predicateTypeId = module.registerType(predicateType);
+    auto reducerType = Type::makeFunction(
+        {TyI32, TyI32}, TyI32,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy},
+         {luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Copy});
+    const auto reducerTypeId = module.registerType(reducerType);
+    auto actionType = Type::makeFunction(
+        {TyI32}, TyUnit,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Copy});
+    const auto actionTypeId = module.registerType(actionType);
     auto moveMapType = Type::makeFunction(
         {TyI32}, TyString,
         {{luna::ownership::Relation::Owned,
@@ -545,10 +562,10 @@ int main() {
         recipeCfg->blocks[8].terminator.primary.target != moon::BlockId{2})
         return fail("range/take recipe did not expand to canonical CFG operations");
 
-    const auto makeMaterializedRangeProgram = [&](size_t loopCount) {
-        auto structured = std::make_unique<moon::BlockStmt>();
+    const auto makeMaterializedRangeBinding =
+        [&](const std::string& name, bool withTake = true) {
         auto binding = std::make_unique<moon::LetStmt>();
-        binding->name = "pending";
+        binding->name = name;
         binding->type = rangeId;
         binding->usage = luna::ownership::Usage::Affine;
         binding->materializesIteratorRecipe = true;
@@ -568,6 +585,10 @@ int main() {
         end->type = i32Id;
         source->args.push_back(std::move(start));
         source->args.push_back(std::move(end));
+        if (!withTake) {
+            binding->initializer = std::move(source);
+            return binding;
+        }
         auto take = std::make_unique<moon::CallExpr>();
         take->iteratorOp = IteratorOp::Take;
         take->iteratorInputType = i32Id;
@@ -582,7 +603,12 @@ int main() {
         count->type = i32Id;
         take->args.push_back(std::move(count));
         binding->initializer = std::move(take);
-        structured->stmts.push_back(std::move(binding));
+        return binding;
+    };
+    const auto makeMaterializedRangeProgram = [&](size_t loopCount) {
+        auto structured = std::make_unique<moon::BlockStmt>();
+        structured->stmts.push_back(
+            makeMaterializedRangeBinding("pending"));
         for (size_t loopIndex = 0; loopIndex < loopCount; ++loopIndex) {
             auto loop = std::make_unique<moon::ForStmt>();
             loop->varName = "materializedValue" +
@@ -659,6 +685,203 @@ int main() {
     if (!reusedMaterializedCfg ||
         cfgVerifier.verify(*reusedMaterializedCfg, module))
         return fail("CFG verifier accepted repeated materialized recipe consumption");
+
+    const auto makeTerminal = [&](const std::string& recipeName, IteratorOp op,
+            const moon::TypeRef& resultType,
+            const moon::TypeRef& outputType) {
+        auto call = std::make_unique<moon::CallExpr>();
+        call->iteratorOp = op;
+        call->iteratorInputType = i32Id;
+        call->iteratorOutputType = outputType;
+        call->type = resultType;
+        auto member = std::make_unique<moon::FieldAccessExpr>();
+        auto recipe = std::make_unique<moon::IdentifierExpr>();
+        recipe->name = recipeName;
+        recipe->type = rangeId;
+        member->object = std::move(recipe);
+        member->field = op == IteratorOp::Fold
+            ? "fold"
+            : (op == IteratorOp::ForEach
+                   ? "for_each"
+                   : (op == IteratorOp::Collect ? "collect" : "count"));
+        call->callee = std::move(member);
+        return call;
+    };
+
+    auto countStructured = std::make_unique<moon::BlockStmt>();
+    countStructured->stmts.push_back(
+        makeMaterializedRangeBinding("countPending"));
+    auto countUse = std::make_unique<moon::ExprStmt>();
+    auto sinkCall = std::make_unique<moon::CallExpr>();
+    auto sink = std::make_unique<moon::IdentifierExpr>();
+    sink->name = "sink";
+    sink->type = actionTypeId;
+    sinkCall->callee = std::move(sink);
+    sinkCall->type = unitId;
+    sinkCall->args.push_back(makeTerminal(
+        "countPending", IteratorOp::Count, i32Id, i32Id));
+    countUse->expr = std::move(sinkCall);
+    countStructured->stmts.push_back(std::move(countUse));
+    moon::Param sinkParameter;
+    sinkParameter.name = "sink";
+    sinkParameter.type = actionTypeId;
+    auto countCfg = cfgBuilder.build(
+        std::move(countStructured), {sinkParameter},
+        moon::RegionKind::Function, module);
+    bool countResultReachedSink = false;
+    if (countCfg)
+        for (const auto& block : countCfg->blocks)
+            for (const auto& operation : block.operations)
+                if (const auto* expression =
+                        dynamic_cast<const moon::ExprStmt*>(operation.get()))
+                    if (const auto* call = dynamic_cast<const moon::CallExpr*>(
+                            expression->expr.get());
+                        call && call->iteratorOp == IteratorOp::None &&
+                        call->args.size() == 1)
+                        if (const auto* argument =
+                                dynamic_cast<const moon::IdentifierExpr*>(
+                                    call->args.front().get()))
+                            countResultReachedSink = argument->name.rfind(
+                                "$terminal.count.", 0) == 0;
+    if (!countCfg || !cfgVerifier.verify(*countCfg, module) ||
+        !countResultReachedSink)
+        return fail("materialized count did not normalize before its outer call");
+
+    auto foldStructured = std::make_unique<moon::BlockStmt>();
+    foldStructured->stmts.push_back(
+        makeMaterializedRangeBinding("foldPending"));
+    auto foldBinding = std::make_unique<moon::LetStmt>();
+    foldBinding->name = "folded";
+    foldBinding->type = i32Id;
+    foldBinding->usage = luna::ownership::Usage::Copy;
+    auto transform = std::make_unique<moon::CallExpr>();
+    transform->iteratorOp = IteratorOp::Map;
+    transform->iteratorInputType = i32Id;
+    transform->iteratorOutputType = i32Id;
+    transform->type = rangeId;
+    auto transformMember = std::make_unique<moon::FieldAccessExpr>();
+    transformMember->field = "map";
+    auto foldRecipe = std::make_unique<moon::IdentifierExpr>();
+    foldRecipe->name = "foldPending";
+    foldRecipe->type = rangeId;
+    transformMember->object = std::move(foldRecipe);
+    transform->callee = std::move(transformMember);
+    auto transformFunction = std::make_unique<moon::IdentifierExpr>();
+    transformFunction->name = "transform";
+    transformFunction->type = lambdaTypeId;
+    transform->args.push_back(std::move(transformFunction));
+    auto foldTerminal = std::make_unique<moon::CallExpr>();
+    foldTerminal->iteratorOp = IteratorOp::Fold;
+    foldTerminal->iteratorInputType = i32Id;
+    foldTerminal->iteratorOutputType = i32Id;
+    foldTerminal->type = i32Id;
+    auto foldMember = std::make_unique<moon::FieldAccessExpr>();
+    foldMember->field = "fold";
+    foldMember->object = std::move(transform);
+    foldTerminal->callee = std::move(foldMember);
+    auto initial = std::make_unique<moon::IntLiteralExpr>();
+    initial->value = 0;
+    initial->type = i32Id;
+    foldTerminal->args.push_back(std::move(initial));
+    auto reducer = std::make_unique<moon::IdentifierExpr>();
+    reducer->name = "reducer";
+    reducer->type = reducerTypeId;
+    foldTerminal->args.push_back(std::move(reducer));
+    foldBinding->initializer = std::move(foldTerminal);
+    foldStructured->stmts.push_back(std::move(foldBinding));
+    moon::Param transformParameter;
+    transformParameter.name = "transform";
+    transformParameter.type = lambdaTypeId;
+    moon::Param reducerParameter;
+    reducerParameter.name = "reducer";
+    reducerParameter.type = reducerTypeId;
+    auto foldCfg = cfgBuilder.build(
+        std::move(foldStructured),
+        {transformParameter, reducerParameter},
+        moon::RegionKind::Function, module);
+    bool foldedReadsAccumulator = false;
+    size_t adapterOrder = static_cast<size_t>(-1);
+    size_t accumulatorOrder = static_cast<size_t>(-1);
+    size_t reducerOrder = static_cast<size_t>(-1);
+    if (foldCfg)
+        for (const auto& block : foldCfg->blocks)
+            for (size_t operationIndex = 0;
+                 operationIndex < block.operations.size(); ++operationIndex) {
+                const auto& operation = block.operations[operationIndex];
+                if (const auto* declaration =
+                        dynamic_cast<const moon::LetStmt*>(operation.get());
+                    declaration && declaration->name.rfind(
+                        "$terminal.adapter.", 0) == 0)
+                    adapterOrder = operationIndex;
+                else if (declaration && declaration->name.rfind(
+                             "$terminal.fold.", 0) == 0)
+                    accumulatorOrder = operationIndex;
+                else if (declaration && declaration->name.rfind(
+                             "$terminal.reducer.", 0) == 0)
+                    reducerOrder = operationIndex;
+                else if (declaration && declaration->name == "folded")
+                    if (const auto* value =
+                            dynamic_cast<const moon::IdentifierExpr*>(
+                                declaration->initializer.get()))
+                        foldedReadsAccumulator = value->name.rfind(
+                            "$terminal.fold.", 0) == 0;
+            }
+    if (!foldCfg || !cfgVerifier.verify(*foldCfg, module) ||
+        !foldedReadsAccumulator ||
+        !(adapterOrder < accumulatorOrder &&
+          accumulatorOrder < reducerOrder))
+        return fail("materialized Copy fold did not normalize to accumulator CFG");
+
+    auto forEachStructured = std::make_unique<moon::BlockStmt>();
+    forEachStructured->stmts.push_back(
+        makeMaterializedRangeBinding("forEachPending", false));
+    auto forEachUse = std::make_unique<moon::ExprStmt>();
+    auto forEachTerminal = makeTerminal(
+        "forEachPending", IteratorOp::ForEach, unitId, unitId);
+    auto action = std::make_unique<moon::IdentifierExpr>();
+    action->name = "action";
+    action->type = actionTypeId;
+    forEachTerminal->args.push_back(std::move(action));
+    forEachUse->expr = std::move(forEachTerminal);
+    forEachStructured->stmts.push_back(std::move(forEachUse));
+    moon::Param actionParameter;
+    actionParameter.name = "action";
+    actionParameter.type = actionTypeId;
+    auto forEachCfg = cfgBuilder.build(
+        std::move(forEachStructured), {actionParameter},
+        moon::RegionKind::Function, module);
+    bool retainedForEachTerminal = false;
+    if (forEachCfg)
+        for (const auto& block : forEachCfg->blocks)
+            for (const auto& operation : block.operations)
+                if (const auto* expression =
+                        dynamic_cast<const moon::ExprStmt*>(operation.get()))
+                    if (const auto* call = dynamic_cast<const moon::CallExpr*>(
+                            expression->expr.get()))
+                        retainedForEachTerminal = retainedForEachTerminal ||
+                            call->iteratorOp == IteratorOp::ForEach;
+    if (!forEachCfg || !cfgVerifier.verify(*forEachCfg, module) ||
+        retainedForEachTerminal)
+        return fail("materialized for_each did not normalize to loop body calls");
+
+    auto collectBoundary = std::make_unique<moon::BlockStmt>();
+    collectBoundary->stmts.push_back(
+        makeMaterializedRangeBinding("collectPending", false));
+    auto collectUse = std::make_unique<moon::ExprStmt>();
+    collectUse->expr = makeTerminal(
+        "collectPending", IteratorOp::Collect, productId, productId);
+    collectBoundary->stmts.push_back(std::move(collectUse));
+    if (cfgBuilder.build(
+            std::move(collectBoundary), {},
+            moon::RegionKind::Function, module))
+        return fail("materialized collect crossed its builder-state boundary");
+    bool reportedCollectBoundary = false;
+    for (const auto& message : cfgBuilder.errors())
+        reportedCollectBoundary = reportedCollectBoundary ||
+            message.find("collect awaits canonical builder ownership state") !=
+                std::string::npos;
+    if (!reportedCollectBoundary)
+        return fail("materialized collect boundary was not explicit");
 
     const auto* shortIteratorType = module.findType(shortId);
     const auto* sharedIteratorType = module.findType(sharedId);
@@ -1159,8 +1382,11 @@ int main() {
     reverse.registerType(TyUSize);
     reverse.registerType(TyString);
     reverse.registerType(TyBool);
+    reverse.registerType(TyUnit);
     reverse.registerType(lambdaType);
     reverse.registerType(predicateType);
+    reverse.registerType(reducerType);
+    reverse.registerType(actionType);
     reverse.registerType(moveMapType);
     reverse.registerType(moveMapIterator);
     reverse.registerType(Type::makeEnum(

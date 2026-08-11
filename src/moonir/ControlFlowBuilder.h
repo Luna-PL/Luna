@@ -111,6 +111,13 @@ private:
     std::optional<OpenBlock> lowerIteratorRecipeFor(
         std::unique_ptr<ForStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
+    std::optional<OpenBlock> normalizeMaterializedIteratorTerminal(
+        std::unique_ptr<Expr>& expression, OpenBlock current,
+        RegionId region, ScopeId scope, bool discardUnitResult);
+    std::optional<OpenBlock> lowerMaterializedIteratorTerminal(
+        std::unique_ptr<CallExpr> terminal, OpenBlock current,
+        RegionId region, ScopeId scope, bool discardUnitResult,
+        std::unique_ptr<Expr>& replacement);
     std::optional<OpenBlock> lowerMatch(
         std::unique_ptr<MatchStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
@@ -150,6 +157,7 @@ private:
     std::unordered_map<uint32_t, CleanupId> mCleanupByLocal;
     std::vector<std::string> mErrors;
     bool mBindingIteratorRecipe = false;
+    uint64_t mTerminalCounter = 0;
 };
 
 } // namespace moon

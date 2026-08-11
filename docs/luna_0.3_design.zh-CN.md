@@ -622,9 +622,18 @@ move 进循环，因而它同时成为零额外状态的单次消费凭证。第
 消费不一致都会被 canonical CFG ownership dataflow 拒绝。sealed graph 中不保留 Iterator-typed local、recipe metadata、
 runtime token、allocation 或新 ABI。
 
-第 10 项尚未整体完成。materialized terminal expression（`fold`/`for_each`/`count`/`collect`）、
-捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup 状态仍是明确的
-后续边界。随后规范化其余控制流表达式、slot 和 fragment
+首个 materialized terminal 子阶段也已完成。`count` 与 Copy accumulator `fold` 会从已擦除的
+recipe 状态继续展开为带外层结果 local 的普通循环，而 expression-statement `for_each`
+会生成普通的循环体 call。在 terminal 上追加的 adapter 会在 terminal 参数之前求值一次。
+该子阶段接受作为直接 initializer/return value 的有值 terminal，以及直接普通 call
+的唯一参数；`for_each` 只接受 expression statement 位置。更广泛的 expression sibling
+hoisting 被明确延后，因而不会猜测或重排求值顺序。
+
+第 10 项尚未整体完成。non-materialized terminal、`collect` builder ownership state、affine fold
+accumulator、通用 expression sibling hoisting、捕获式 closure environment，以及 non-Copy
+item/callable contract 的逐元素初始化/cleanup 状态仍是明确的后续边界。`collect` 特别需要
+affine FromIterator builder、mutable push borrow、cleanup path 与 consuming finish transfer 都以普通 CFG
+状态表示；不会引入 runtime iterator object 作为捷径。随后规范化其余控制流表达式、slot 和 fragment
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
 serializer/parser 仍属于第 11 项。

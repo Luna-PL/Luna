@@ -120,14 +120,23 @@ vtable 或 iterator runtime ABI。
 
 对 canonical `for` 构造而言，materialized Iterator binding 会在绑定点被擦除为普通的
 source/index/limit/adapter locals。index 同时是 affine 单次消费凭证，并在最终循环中通过
-move 转移；这不增加独立 runtime token。materialized terminal expression 在其控制流表达式
-canonicalization 子阶段前仍使用旧 structured path。
+move 转移；这不增加独立 runtime token。materialized `count` 和 Copy accumulator
+`fold` 现在会从该状态继续展开为带外层结果 local 的普通循环；表达式语句位置的
+`for_each` 会在循环体生成普通 call。在 terminal 上追加的 adapter 会在 terminal 参数之前
+求值一次。这个首个表达式子阶段接受作为直接 initializer/return 的有值 terminal，
+或将其作为直接普通 call 的唯一参数；`for_each` 只接受 expression statement 位置。
+因而它不会重排更早的 sibling operand。
 
 这种 binding 是 affine、single-consumption 的局部值，当前不能返回、传参或跨 ABI。
 借用型 binding 将源 loan 保持到词法作用域结束；Copy `into_iter` 在绑定点建立值
 快照。move-only `into_iter` 在绑定点把源所有权转入隐藏栈状态，并为每个数组元素
 保存初始化位。终结消费、`for` 中提前 `return`、普通函数提前 `return` 以及从未
 消费就离开作用域，都会只清理仍初始化的元素。
+
+non-materialized terminal、通用 expression sibling hoisting、affine fold accumulator 和 `collect`
+仍是明确的 canonical-CFG 边界。其中 `collect` 必须等 affine `FromIterator` builder、可变
+`push` borrow、cleanup path 与 consuming `finish` transfer 都能表示为普通且可验证的状态后
+才会跨过该边界；不会用隐藏 iterator runtime object 作为捷径。
 
 源表达式、适配器参数和终结参数按从左到右的源代码顺序求值。`filter` 跳过元素，
 `take` 只计算流经它的元素，因此适配器顺序具有通常的惰性管道含义。

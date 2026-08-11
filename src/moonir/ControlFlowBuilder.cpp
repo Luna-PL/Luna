@@ -15,6 +15,7 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     mMaterializedIterators.clear();
     mCleanupByLocal.clear();
     mBindingIteratorRecipe = false;
+    mTerminalCounter = 0;
     mModule = &module;
     if (!root) {
         error({}, "cannot build a canonical CFG from a missing body");
@@ -233,6 +234,10 @@ ControlFlowBuilder::lowerStatement(
                 return std::nullopt;
             return current;
         }
+        auto normalized = normalizeMaterializedIteratorTerminal(
+            declaration->initializer, current, region, scope, false);
+        if (!normalized) return std::nullopt;
+        current = std::move(*normalized);
         if (!bindExpr(declaration->initializer.get())) return std::nullopt;
         declaration->local = addLocal(
             scope, LocalKind::Binding, declaration->name,
@@ -242,6 +247,11 @@ ControlFlowBuilder::lowerStatement(
         return current;
     }
     if (auto* expression = dynamic_cast<ExprStmt*>(statement.get())) {
+        auto normalized = normalizeMaterializedIteratorTerminal(
+            expression->expr, current, region, scope, true);
+        if (!normalized) return std::nullopt;
+        current = std::move(*normalized);
+        if (!expression->expr) return current;
         if (!bindExpr(expression->expr.get())) return std::nullopt;
         mGraph->blocks[current.block.value].operations.push_back(
             std::move(statement));
@@ -274,6 +284,10 @@ ControlFlowBuilder::lowerStatement(
         return current;
     }
     if (auto* returned = dynamic_cast<ReturnStmt*>(statement.get())) {
+        auto normalized = normalizeMaterializedIteratorTerminal(
+            returned->value, current, region, scope, false);
+        if (!normalized) return std::nullopt;
+        current = std::move(*normalized);
         if (!bindExpr(returned->value.get())) return std::nullopt;
         auto cleanups = lowerCleanupObligations(returned->cleanups, scope);
         cleanups.insert(cleanups.end(), current.cleanups.begin(),
@@ -1515,6 +1529,306 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     mGraph->regions[loopRegion.value].exit = exit;
     popBindings();
     return OpenBlock{exit, {}};
+}
+
+std::optional<ControlFlowBuilder::OpenBlock>
+ControlFlowBuilder::normalizeMaterializedIteratorTerminal(
+    std::unique_ptr<Expr>& expression, OpenBlock current,
+    RegionId region, ScopeId scope, bool discardUnitResult) {
+    if (!expression) return current;
+    auto* call = dynamic_cast<CallExpr*>(expression.get());
+    if (!call) return current;
+    const bool terminal =
+        call->iteratorOp == IteratorOp::Fold ||
+        call->iteratorOp == IteratorOp::ForEach ||
+        call->iteratorOp == IteratorOp::Count ||
+        call->iteratorOp == IteratorOp::Collect;
+    if (terminal) {
+        std::unique_ptr<CallExpr> owned(
+            static_cast<CallExpr*>(expression.release()));
+        return lowerMaterializedIteratorTerminal(
+            std::move(owned), std::move(current), region, scope,
+            discardUnitResult, expression);
+    }
+
+    // This first control-flow-expression slice deliberately permits a
+    // terminal below only a single, direct call argument. There is no earlier
+    // value operand to hoist, so left-to-right source evaluation is unchanged.
+    // General sibling hoisting belongs to the later expression-normalization
+    // subphase.
+    if (call->iteratorOp == IteratorOp::None && call->args.size() == 1 &&
+        dynamic_cast<IdentifierExpr*>(call->callee.get()))
+        return normalizeMaterializedIteratorTerminal(
+            call->args.front(), std::move(current), region, scope, false);
+    return current;
+}
+
+std::optional<ControlFlowBuilder::OpenBlock>
+ControlFlowBuilder::lowerMaterializedIteratorTerminal(
+    std::unique_ptr<CallExpr> terminal, OpenBlock current,
+    RegionId region, ScopeId scope, bool discardUnitResult,
+    std::unique_ptr<Expr>& replacement) {
+    if (!terminal) return std::nullopt;
+    auto* member = dynamic_cast<FieldAccessExpr*>(terminal->callee.get());
+    if (!member) {
+        error(terminal->location,
+              "iterator terminal has no canonical recipe receiver");
+        return std::nullopt;
+    }
+    if (!terminal->iteratorRecipeStateName.empty() ||
+        !terminal->iteratorRecipeSourceType.empty()) {
+        error(terminal->location,
+              "move-only iterator terminal requires projected source cleanup state");
+        return std::nullopt;
+    }
+
+    IteratorRecipePlan plan;
+    if (!parseIteratorRecipe(
+            std::move(member->object), plan, terminal->location))
+        return std::nullopt;
+    if (!plan.materialized) {
+        error(terminal->location,
+              "non-materialized iterator terminal awaits general expression normalization");
+        return std::nullopt;
+    }
+    if (!bindIteratorRecipe(plan) ||
+        !validateIteratorRecipe(
+            plan, terminal->iteratorInputType, terminal->location))
+        return std::nullopt;
+
+    TypeRef i32Type;
+    TypeRef unitType;
+    for (const auto& type : mModule->typeTable) {
+        if (type.kind == TypeKind::I32) i32Type = type.id;
+        if (type.kind == TypeKind::Unit) unitType = type.id;
+    }
+    const uint64_t terminalIndex = mTerminalCounter++;
+    const std::string identity = std::to_string(terminalIndex);
+    const auto identifier = [this, &terminal](LocalId local) {
+        auto value = std::make_unique<IdentifierExpr>();
+        value->location = terminal->location;
+        if (!local.empty() && local.value < mGraph->locals.size()) {
+            const auto& record = mGraph->locals[local.value];
+            value->name = record.name;
+            value->local = local;
+            value->type = record.type;
+        }
+        return value;
+    };
+    const auto integer = [&terminal](int64_t value, const TypeRef& type) {
+        auto literal = std::make_unique<IntLiteralExpr>();
+        literal->location = terminal->location;
+        literal->value = value;
+        literal->type = type;
+        return literal;
+    };
+    const auto addBinding = [this, &terminal, current, scope](
+        const std::string& name, const TypeRef& type,
+        std::unique_ptr<Expr> initializer) {
+        const LocalId local = addLocal(
+            scope, LocalKind::Binding, name, type,
+            luna::ownership::Usage::Copy);
+        auto declaration = std::make_unique<LetStmt>();
+        declaration->location = terminal->location;
+        declaration->name = name;
+        declaration->local = local;
+        declaration->usage = luna::ownership::Usage::Copy;
+        declaration->type = type;
+        declaration->initializer = std::move(initializer);
+        mGraph->blocks[current.block.value].operations.push_back(
+            std::move(declaration));
+        return local;
+    };
+
+    // Adapters appended to an already materialized recipe are evaluated now,
+    // before terminal arguments, and become ordinary locals. Existing adapter
+    // locals retain their original binding-time values.
+    for (size_t index = 0; index < plan.steps.size(); ++index) {
+        auto& step = plan.steps[index];
+        if (!step.argument) continue;
+        const TypeRef argumentType = step.argument->type;
+        step.argumentLocal = addBinding(
+            "$terminal.adapter." + identity + "." +
+                std::to_string(index),
+            argumentType, std::move(step.argument));
+    }
+
+    MaterializedIteratorRecipe recipe;
+    recipe.mode = plan.mode;
+    recipe.source = plan.materializedSource;
+    recipe.sourceType = plan.sourceType;
+    recipe.index = plan.materializedIndex;
+    recipe.limit = plan.materializedLimit;
+    recipe.itemType = plan.itemType;
+    for (const auto& step : plan.steps) {
+        if (step.argumentLocal.empty()) {
+            error(terminal->location,
+                  "materialized terminal adapter has no canonical local state");
+            return std::nullopt;
+        }
+        recipe.steps.push_back({
+            step.op, step.argumentLocal, step.inputType, step.outputType});
+    }
+    const std::string recipeName = "$terminal.recipe." + identity;
+    mMaterializedIterators.back().emplace(recipeName, std::move(recipe));
+
+    auto loop = std::make_unique<ForStmt>();
+    loop->location = terminal->location;
+    loop->varName = "$terminal.item." + identity;
+    loop->bindingUsage = luna::ownership::Usage::Copy;
+    loop->elementType = terminal->iteratorInputType;
+    auto iterable = std::make_unique<IdentifierExpr>();
+    iterable->location = terminal->location;
+    iterable->name = recipeName;
+    loop->iterable = std::move(iterable);
+    loop->body = std::make_unique<BlockStmt>();
+    loop->body->location = terminal->location;
+
+    LocalId resultLocal;
+    if (terminal->iteratorOp == IteratorOp::Count) {
+        if (!terminal->args.empty() || i32Type.empty() ||
+            terminal->type != i32Type ||
+            terminal->iteratorOutputType != i32Type ||
+            terminal->returnUsage != luna::ownership::Usage::Copy ||
+            terminal->returnsLinear) {
+            error(terminal->location,
+                  "materialized count has no canonical i32 contract");
+            return std::nullopt;
+        }
+        resultLocal = addBinding(
+            "$terminal.count." + identity, i32Type,
+            integer(0, i32Type));
+        auto increment = std::make_unique<ExprStmt>();
+        increment->location = terminal->location;
+        auto assignment = std::make_unique<AssignExpr>();
+        assignment->location = terminal->location;
+        assignment->op = Operator::AddAssign;
+        assignment->lhs = identifier(resultLocal);
+        assignment->rhs = integer(1, i32Type);
+        assignment->type = i32Type;
+        increment->expr = std::move(assignment);
+        loop->body->stmts.push_back(std::move(increment));
+    } else if (terminal->iteratorOp == IteratorOp::Fold) {
+        const auto* accumulatorType = mModule->findType(terminal->type);
+        if (terminal->args.size() != 2 || !accumulatorType ||
+            accumulatorType->sysmeta.resource.usage !=
+                luna::ownership::Usage::Copy ||
+            terminal->iteratorOutputType != terminal->type ||
+            terminal->returnUsage != luna::ownership::Usage::Copy ||
+            terminal->returnsLinear) {
+            error(terminal->location,
+                  "canonical materialized fold currently requires a Copy accumulator");
+            return std::nullopt;
+        }
+        if (!bindExpr(terminal->args[0].get()) ||
+            !bindExpr(terminal->args[1].get()))
+            return std::nullopt;
+        const auto* reducerType = mModule->findType(
+            terminal->args[1]->type);
+        if (terminal->args[0]->type != terminal->type ||
+            !reducerType || reducerType->kind != TypeKind::Function ||
+            reducerType->parameterTypeIds != TypeRefVec{
+                terminal->type, terminal->iteratorInputType} ||
+            reducerType->returnTypeId != terminal->type ||
+            reducerType->parameterContracts.size() != 2 ||
+            reducerType->parameterContracts[0].usage !=
+                luna::ownership::Usage::Copy ||
+            reducerType->parameterContracts[1].usage !=
+                luna::ownership::Usage::Copy ||
+            reducerType->returnContract.usage !=
+                luna::ownership::Usage::Copy) {
+            error(terminal->location,
+                  "materialized fold reducer disagrees with its Copy terminal contract");
+            return std::nullopt;
+        }
+        resultLocal = addBinding(
+            "$terminal.fold." + identity, terminal->type,
+            std::move(terminal->args[0]));
+        const TypeRef reducerTypeId = terminal->args[1]->type;
+        const LocalId reducer = addBinding(
+            "$terminal.reducer." + identity,
+            reducerTypeId, std::move(terminal->args[1]));
+        auto reduce = std::make_unique<ExprStmt>();
+        reduce->location = terminal->location;
+        auto assignment = std::make_unique<AssignExpr>();
+        assignment->location = terminal->location;
+        assignment->op = Operator::Assign;
+        assignment->lhs = identifier(resultLocal);
+        auto call = std::make_unique<CallExpr>();
+        call->location = terminal->location;
+        call->callee = identifier(reducer);
+        call->args.push_back(identifier(resultLocal));
+        auto item = std::make_unique<IdentifierExpr>();
+        item->location = terminal->location;
+        item->name = loop->varName;
+        item->type = terminal->iteratorInputType;
+        call->args.push_back(std::move(item));
+        call->type = terminal->type;
+        call->returnUsage = luna::ownership::Usage::Copy;
+        assignment->rhs = std::move(call);
+        assignment->type = terminal->type;
+        reduce->expr = std::move(assignment);
+        loop->body->stmts.push_back(std::move(reduce));
+    } else if (terminal->iteratorOp == IteratorOp::ForEach) {
+        if (!discardUnitResult) {
+            error(terminal->location,
+                  "materialized for_each is canonical only as an expression statement");
+            return std::nullopt;
+        }
+        if (terminal->args.size() != 1 || unitType.empty() ||
+            terminal->type != unitType ||
+            terminal->iteratorOutputType != unitType ||
+            terminal->returnUsage != luna::ownership::Usage::Copy ||
+            terminal->returnsLinear ||
+            !bindExpr(terminal->args[0].get())) {
+            error(terminal->location,
+                  "materialized for_each has no canonical action contract");
+            return std::nullopt;
+        }
+        const auto* actionType = mModule->findType(
+            terminal->args[0]->type);
+        if (!actionType || actionType->kind != TypeKind::Function ||
+            actionType->parameterTypeIds !=
+                TypeRefVec{terminal->iteratorInputType} ||
+            actionType->returnTypeId != unitType ||
+            actionType->parameterContracts.size() != 1 ||
+            actionType->parameterContracts[0].usage !=
+                luna::ownership::Usage::Copy ||
+            actionType->returnContract.usage !=
+                luna::ownership::Usage::Copy) {
+            error(terminal->location,
+                  "materialized for_each action disagrees with its Copy terminal contract");
+            return std::nullopt;
+        }
+        const TypeRef actionTypeId = terminal->args[0]->type;
+        const LocalId action = addBinding(
+            "$terminal.action." + identity,
+            actionTypeId, std::move(terminal->args[0]));
+        auto invoke = std::make_unique<ExprStmt>();
+        invoke->location = terminal->location;
+        auto call = std::make_unique<CallExpr>();
+        call->location = terminal->location;
+        call->callee = identifier(action);
+        auto item = std::make_unique<IdentifierExpr>();
+        item->location = terminal->location;
+        item->name = loop->varName;
+        item->type = terminal->iteratorInputType;
+        call->args.push_back(std::move(item));
+        call->type = unitType;
+        call->returnUsage = luna::ownership::Usage::Copy;
+        invoke->expr = std::move(call);
+        loop->body->stmts.push_back(std::move(invoke));
+    } else {
+        error(terminal->location,
+              "materialized collect awaits canonical builder ownership state");
+        return std::nullopt;
+    }
+
+    auto lowered = lowerIteratorRecipeFor(
+        std::move(loop), std::move(current), region, scope);
+    if (!lowered) return std::nullopt;
+    if (!resultLocal.empty()) replacement = identifier(resultLocal);
+    return lowered;
 }
 
 std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerMatch(
