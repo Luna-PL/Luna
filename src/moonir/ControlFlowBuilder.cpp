@@ -280,6 +280,11 @@ ControlFlowBuilder::lowerStatement(
             static_cast<WhileStmt*>(statement.release()));
         return lowerWhile(std::move(owned), std::move(current), region, scope);
     }
+    if (dynamic_cast<ForStmt*>(statement.get())) {
+        std::unique_ptr<ForStmt> owned(
+            static_cast<ForStmt*>(statement.release()));
+        return lowerFor(std::move(owned), std::move(current), region, scope);
+    }
     if (dynamic_cast<MatchStmt*>(statement.get())) {
         std::unique_ptr<MatchStmt> owned(
             static_cast<MatchStmt*>(statement.release()));
@@ -400,6 +405,242 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerWhile(
     if (body.exit) connectJump(*body.exit, condition);
     mGraph->regions[body.region.value].exit = condition;
     mGraph->regions[loopRegion.value].exit = exit;
+    return OpenBlock{exit, {}};
+}
+
+std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerFor(
+    std::unique_ptr<ForStmt> statement, OpenBlock current,
+    RegionId region, ScopeId scope) {
+    if (!bindExpr(statement->iterable.get())) return std::nullopt;
+    if (statement->protocolNext.empty()) {
+        error(statement->location,
+              "compiler iterator recipes require the later canonical for-loop subphase");
+        return std::nullopt;
+    }
+
+    const auto* nextDeclaration = mModule->findDeclaration(
+        statement->protocolNext);
+    const auto* nextType = nextDeclaration
+        ? mModule->findType(nextDeclaration->type) : nullptr;
+    const auto* optionType = mModule->findType(
+        statement->protocolOptionType);
+    const auto* iteratorType = mModule->findType(
+        statement->protocolIteratorType);
+    if (!nextDeclaration || nextDeclaration->kind != DeclarationKind::Function ||
+        !nextType || nextType->kind != TypeKind::Function ||
+        nextType->parameterTypeIds.size() != 1 ||
+        nextType->returnTypeId != statement->protocolOptionType) {
+        error(statement->location,
+              "for-loop Iterator::next witness has no canonical unary function contract");
+        return std::nullopt;
+    }
+    const auto* receiverType = mModule->findType(
+        nextType->parameterTypeIds.front());
+    if (!receiverType || receiverType->kind != TypeKind::Reference ||
+        !receiverType->isMutable ||
+        receiverType->innerTypeId != statement->protocolIteratorType ||
+        !iteratorType) {
+        error(statement->location,
+              "for-loop Iterator::next witness does not take &mut iterator state");
+        return std::nullopt;
+    }
+    if (!optionType || optionType->kind != TypeKind::Enum ||
+        optionType->variants.size() != 2 ||
+        statement->protocolNoneVariant >= optionType->variants.size() ||
+        statement->protocolSomeVariant >= optionType->variants.size() ||
+        statement->protocolNoneVariant == statement->protocolSomeVariant ||
+        !optionType->variants[statement->protocolNoneVariant].fields.empty() ||
+        optionType->variants[statement->protocolSomeVariant].fields !=
+            TypeRefVec{statement->elementType}) {
+        error(statement->location,
+              "for-loop protocol Option witness has no canonical None/Some<T> shape");
+        return std::nullopt;
+    }
+
+    const RegionId loopRegion = addRegion(
+        region, RegionKind::Loop, statement->location);
+    const ScopeId loopScope = addScope(
+        scope, loopRegion, statement->location);
+    mBindings.emplace_back();
+
+    BlockId start;
+    LocalId stateLocal;
+    std::string stateName;
+    if (!statement->protocolInto.empty()) {
+        const auto* intoDeclaration = mModule->findDeclaration(
+            statement->protocolInto);
+        const auto* intoType = intoDeclaration
+            ? mModule->findType(intoDeclaration->type) : nullptr;
+        if (!intoDeclaration ||
+            intoDeclaration->kind != DeclarationKind::Function ||
+            !intoType || intoType->kind != TypeKind::Function ||
+            intoType->parameterTypeIds !=
+                TypeRefVec{statement->protocolInputType} ||
+            intoType->returnTypeId != statement->protocolIteratorType ||
+            statement->protocolStateName.empty() ||
+            !statement->iterable ||
+            statement->iterable->type != statement->protocolInputType) {
+            error(statement->location,
+                  "for-loop IntoIterator witness has no canonical state conversion contract");
+            mBindings.pop_back();
+            return std::nullopt;
+        }
+        const bool cleanupRequired =
+            iteratorType->sysmeta.resource.cleanupRequired;
+        if (statement->protocolStateNeedsCleanup != cleanupRequired ||
+            (cleanupRequired && statement->protocolStateCleanup !=
+                iteratorType->sysmeta.resource.cleanup)) {
+            error(statement->location,
+                  "for-loop hidden iterator state disagrees with frozen cleanup facts");
+            mBindings.pop_back();
+            return std::nullopt;
+        }
+
+        start = addBlock(loopRegion, loopScope, statement->location);
+        stateName = statement->protocolStateName;
+        const auto stateUsage = iteratorType->sysmeta.resource.usage;
+        stateLocal = addLocal(
+            loopScope, LocalKind::Binding, stateName,
+            statement->protocolIteratorType, stateUsage);
+
+        auto conversion = std::make_unique<CallExpr>();
+        conversion->location = statement->location;
+        conversion->calleeRef = statement->protocolInto;
+        conversion->type = statement->protocolIteratorType;
+        conversion->returnUsage = intoType->returnContract.usage;
+        conversion->returnsLinear =
+            conversion->returnUsage == luna::ownership::Usage::Linear;
+        auto conversionCallee = std::make_unique<IdentifierExpr>();
+        conversionCallee->location = statement->location;
+        conversionCallee->name = intoDeclaration->sourceName;
+        conversionCallee->declaration = statement->protocolInto;
+        conversionCallee->type = intoDeclaration->type;
+        conversion->callee = std::move(conversionCallee);
+        if (dynamic_cast<MoveExpr*>(statement->iterable.get())) {
+            conversion->args.push_back(std::move(statement->iterable));
+        } else {
+            auto moved = std::make_unique<MoveExpr>();
+            moved->location = statement->location;
+            moved->type = statement->protocolInputType;
+            moved->operand = std::move(statement->iterable);
+            conversion->args.push_back(std::move(moved));
+        }
+
+        auto state = std::make_unique<LetStmt>();
+        state->location = statement->location;
+        state->name = stateName;
+        state->local = stateLocal;
+        state->isLinear = stateUsage == luna::ownership::Usage::Linear;
+        state->usage = stateUsage;
+        state->type = statement->protocolIteratorType;
+        state->initializer = std::move(conversion);
+        mGraph->blocks[start.value].operations.push_back(std::move(state));
+    } else {
+        auto* state = dynamic_cast<IdentifierExpr*>(statement->iterable.get());
+        if (!state || state->local.empty() ||
+            state->type != statement->protocolIteratorType ||
+            !statement->protocolStateName.empty() ||
+            statement->protocolStateNeedsCleanup) {
+            error(statement->location,
+                  "direct Iterator for-loop requires one borrowed canonical local state");
+            mBindings.pop_back();
+            return std::nullopt;
+        }
+        stateLocal = state->local;
+        stateName = state->name;
+    }
+
+    const BlockId condition = addBlock(
+        loopRegion, loopScope, statement->location);
+    if (!start.empty()) {
+        connectJump(OpenBlock{start, {}}, condition);
+        connectJump(current, start);
+    } else {
+        connectJump(current, condition);
+    }
+
+    const RegionId bodyRegion = addRegion(
+        loopRegion, RegionKind::MatchArm, statement->location);
+    const ScopeId bodyScope = addScope(
+        loopScope, bodyRegion, statement->location);
+    const BlockId bodyEntry = addBlock(
+        bodyRegion, bodyScope, statement->location);
+    mBindings.emplace_back();
+    const LocalId itemLocal = addLocal(
+        bodyScope, LocalKind::Pattern, statement->varName,
+        statement->elementType, statement->bindingUsage);
+    auto bodyExit = statement->body
+        ? lowerSequence(statement->body->stmts, OpenBlock{bodyEntry, {}},
+                        bodyRegion, bodyScope)
+        : std::optional<OpenBlock>{};
+    if (!statement->body)
+        error(statement->location, "for-loop has no canonical body");
+    mBindings.pop_back();
+
+    const BlockId exit = addBlock(region, scope, statement->location);
+    const BlockId invalid = addBlock(
+        loopRegion, loopScope, statement->location);
+    auto& invalidTerminator = mGraph->blocks[invalid.value].terminator;
+    invalidTerminator.kind = TerminatorKind::Unreachable;
+    invalidTerminator.location = statement->location;
+
+    auto state = std::make_unique<IdentifierExpr>();
+    state->location = statement->location;
+    state->name = stateName;
+    state->local = stateLocal;
+    state->type = statement->protocolIteratorType;
+    auto receiver = std::make_unique<BorrowExpr>();
+    receiver->location = statement->location;
+    receiver->isMutable = true;
+    receiver->type = nextType->parameterTypeIds.front();
+    receiver->operand = std::move(state);
+    auto next = std::make_unique<CallExpr>();
+    next->location = statement->location;
+    next->calleeRef = statement->protocolNext;
+    next->type = statement->protocolOptionType;
+    next->returnUsage = nextType->returnContract.usage;
+    next->returnsLinear =
+        next->returnUsage == luna::ownership::Usage::Linear;
+    auto nextCallee = std::make_unique<IdentifierExpr>();
+    nextCallee->location = statement->location;
+    nextCallee->name = nextDeclaration->sourceName;
+    nextCallee->declaration = statement->protocolNext;
+    nextCallee->type = nextDeclaration->type;
+    next->callee = std::move(nextCallee);
+    next->args.push_back(std::move(receiver));
+
+    Terminator terminator;
+    terminator.kind = TerminatorKind::Switch;
+    terminator.location = statement->location;
+    terminator.operand = std::move(next);
+    terminator.switchType = statement->protocolOptionType;
+    terminator.primary.target = invalid;
+    SwitchEdge none;
+    none.tag = statement->protocolNoneVariant;
+    none.edge.target = exit;
+    std::vector<CleanupId> loopCleanups;
+    if (auto cleanup = mCleanupByLocal.find(stateLocal.value);
+        cleanup != mCleanupByLocal.end() &&
+        mGraph->locals[stateLocal.value].scope == loopScope)
+        loopCleanups.push_back(cleanup->second);
+    none.edge.cleanups = canonicalCleanupOrder(
+        loopCleanups, loopScope, scope);
+    SwitchEdge some;
+    some.tag = statement->protocolSomeVariant;
+    some.edge.target = bodyEntry;
+    some.bindings.push_back(itemLocal);
+    terminator.cases.push_back(std::move(none));
+    terminator.cases.push_back(std::move(some));
+    std::sort(terminator.cases.begin(), terminator.cases.end(),
+              [](const SwitchEdge& lhs, const SwitchEdge& rhs) {
+        return lhs.tag < rhs.tag;
+    });
+    mGraph->blocks[condition.value].terminator = std::move(terminator);
+
+    if (bodyExit) connectJump(*bodyExit, condition);
+    mGraph->regions[bodyRegion.value].exit = condition;
+    mGraph->regions[loopRegion.value].exit = exit;
+    mBindings.pop_back();
     return OpenBlock{exit, {}};
 }
 

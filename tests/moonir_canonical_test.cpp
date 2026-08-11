@@ -290,6 +290,166 @@ int main() {
     if (cfgVerifier.verify(*movedCfg, module))
         return fail("CFG verifier accepted cleanup of a moved source place");
 
+    moon::Module protocolModule;
+    protocolModule.name = "canonical.iterator";
+    auto iteratorState = Type::makeStruct(
+        "IteratorState", {{"position", TyI32}},
+        "canonical.iterator::IteratorState");
+    auto iteratorReceiver = Type::makeReference(iteratorState, true);
+    auto iteratorOption = Type::makeEnum(
+        "Option", {{"None", {}}, {"Some", {TyI32}}},
+        "canonical.iterator::Option<i32>");
+    auto iteratorNextType = Type::makeFunction(
+        {iteratorReceiver}, iteratorOption,
+        {{luna::ownership::Relation::MutableBorrow,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Copy});
+    auto intoIteratorType = Type::makeFunction(
+        {TyI32}, iteratorState,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Affine});
+    const auto iteratorStateId = protocolModule.registerType(iteratorState);
+    const auto iteratorOptionId = protocolModule.registerType(iteratorOption);
+    const auto iteratorNextTypeId = protocolModule.registerType(iteratorNextType);
+    const auto intoIteratorTypeId = protocolModule.registerType(intoIteratorType);
+    const auto protocolI32Id = protocolModule.registerType(TyI32);
+    moon::DeclarationRecord nextRecord;
+    nextRecord.id = "canonical.iterator::fn::next";
+    nextRecord.familyId = nextRecord.id;
+    nextRecord.symbolId = luna::identity::symbolIdFromCanonical(nextRecord.id);
+    nextRecord.sourceName = "next";
+    nextRecord.linkageName = "canonical_iterator_next";
+    nextRecord.kind = moon::DeclarationKind::Function;
+    nextRecord.type = iteratorNextTypeId;
+    nextRecord.sysmeta = iteratorNextType->sysmeta;
+    protocolModule.declarationTable.push_back(std::move(nextRecord));
+    moon::DeclarationRecord intoRecord;
+    intoRecord.id = "canonical.iterator::fn::into";
+    intoRecord.familyId = intoRecord.id;
+    intoRecord.symbolId = luna::identity::symbolIdFromCanonical(intoRecord.id);
+    intoRecord.sourceName = "into";
+    intoRecord.linkageName = "canonical_iterator_into";
+    intoRecord.kind = moon::DeclarationKind::Function;
+    intoRecord.type = intoIteratorTypeId;
+    intoRecord.sysmeta = intoIteratorType->sysmeta;
+    protocolModule.declarationTable.push_back(std::move(intoRecord));
+    protocolModule.sealTypeTable();
+    const auto* sealedNext = protocolModule.findDeclarationById(
+        "canonical.iterator::fn::next");
+    if (!sealedNext)
+        return fail("iterator protocol fixture lost its declaration row");
+    const auto* sealedInto = protocolModule.findDeclarationById(
+        "canonical.iterator::fn::into");
+    if (!sealedInto)
+        return fail("IntoIterator fixture lost its declaration row");
+
+    auto protocolStructured = std::make_unique<moon::BlockStmt>();
+    auto protocolLoop = std::make_unique<moon::ForStmt>();
+    protocolLoop->varName = "item";
+    protocolLoop->bindingUsage = luna::ownership::Usage::Copy;
+    protocolLoop->elementType = protocolI32Id;
+    protocolLoop->protocolNext = {
+        sealedNext->symbolId, sealedNext->contractId};
+    protocolLoop->protocolIteratorType = iteratorStateId;
+    protocolLoop->protocolOptionType = iteratorOptionId;
+    protocolLoop->protocolNoneVariant = 0;
+    protocolLoop->protocolSomeVariant = 1;
+    auto iteratorIdentifier = std::make_unique<moon::IdentifierExpr>();
+    iteratorIdentifier->name = "iterator";
+    iteratorIdentifier->type = iteratorStateId;
+    protocolLoop->iterable = std::move(iteratorIdentifier);
+    protocolLoop->body = std::make_unique<moon::BlockStmt>();
+    auto itemUse = std::make_unique<moon::ExprStmt>();
+    auto itemIdentifier = std::make_unique<moon::IdentifierExpr>();
+    itemIdentifier->name = "item";
+    itemIdentifier->type = protocolI32Id;
+    itemUse->expr = std::move(itemIdentifier);
+    protocolLoop->body->stmts.push_back(std::move(itemUse));
+    protocolStructured->stmts.push_back(std::move(protocolLoop));
+    auto iteratorCleanup = std::make_unique<moon::FreeStmt>();
+    iteratorCleanup->isImplicit = true;
+    iteratorCleanup->action = cleanupActionForType(iteratorState);
+    auto cleanedIterator = std::make_unique<moon::IdentifierExpr>();
+    cleanedIterator->name = "iterator";
+    cleanedIterator->type = iteratorStateId;
+    iteratorCleanup->operand = std::move(cleanedIterator);
+    protocolStructured->stmts.push_back(std::move(iteratorCleanup));
+    moon::Param iteratorParameter;
+    iteratorParameter.name = "iterator";
+    iteratorParameter.type = iteratorStateId;
+    iteratorParameter.usage = luna::ownership::Usage::Affine;
+    auto protocolCfg = cfgBuilder.build(
+        std::move(protocolStructured), {iteratorParameter},
+        moon::RegionKind::Function, protocolModule);
+    const bool protocolVerified = protocolCfg &&
+        cfgVerifier.verify(*protocolCfg, protocolModule);
+    if (!protocolVerified ||
+        protocolCfg->blocks.size() != 5 || protocolCfg->locals.size() != 2 ||
+        protocolCfg->blocks[1].terminator.kind !=
+            moon::TerminatorKind::Switch ||
+        protocolCfg->blocks[2].terminator.kind !=
+            moon::TerminatorKind::Jump ||
+        protocolCfg->blocks[2].terminator.primary.target != moon::BlockId{1}) {
+        for (const auto& error : cfgBuilder.errors())
+            std::cerr << error << '\n';
+        for (const auto& error : cfgVerifier.errors())
+            std::cerr << error << '\n';
+        if (protocolCfg)
+            std::cerr << "blocks=" << protocolCfg->blocks.size()
+                      << " locals=" << protocolCfg->locals.size() << '\n';
+        return fail("protocol for-loop did not normalize to switch/backedge CFG");
+    }
+    auto& protocolCases = protocolCfg->blocks[1].terminator.cases;
+    if (protocolCases.size() != 2 ||
+        protocolCases[1].bindings !=
+            std::vector<moon::LocalId>{moon::LocalId{1}})
+        return fail("protocol for-loop lost its per-iteration pattern local");
+    protocolCases[1].bindings.clear();
+    if (cfgVerifier.verify(*protocolCfg, protocolModule))
+        return fail("CFG verifier accepted a missing iterator item binding");
+
+    auto intoStructured = std::make_unique<moon::BlockStmt>();
+    auto intoLoop = std::make_unique<moon::ForStmt>();
+    intoLoop->varName = "item";
+    intoLoop->bindingUsage = luna::ownership::Usage::Copy;
+    intoLoop->elementType = protocolI32Id;
+    intoLoop->protocolNext = {
+        sealedNext->symbolId, sealedNext->contractId};
+    intoLoop->protocolIteratorType = iteratorStateId;
+    intoLoop->protocolOptionType = iteratorOptionId;
+    intoLoop->protocolNoneVariant = 0;
+    intoLoop->protocolSomeVariant = 1;
+    intoLoop->protocolInto = {
+        sealedInto->symbolId, sealedInto->contractId};
+    intoLoop->protocolInputType = protocolI32Id;
+    intoLoop->protocolStateName = "$iterator.state";
+    intoLoop->protocolStateNeedsCleanup = true;
+    intoLoop->protocolStateCleanup = cleanupActionForType(iteratorState);
+    auto sourceIdentifier = std::make_unique<moon::IdentifierExpr>();
+    sourceIdentifier->name = "source";
+    sourceIdentifier->type = protocolI32Id;
+    intoLoop->iterable = std::move(sourceIdentifier);
+    intoLoop->body = std::make_unique<moon::BlockStmt>();
+    intoStructured->stmts.push_back(std::move(intoLoop));
+    moon::Param sourceParameter;
+    sourceParameter.name = "source";
+    sourceParameter.type = protocolI32Id;
+    auto intoCfg = cfgBuilder.build(
+        std::move(intoStructured), {sourceParameter},
+        moon::RegionKind::Function, protocolModule);
+    if (!intoCfg || !cfgVerifier.verify(*intoCfg, protocolModule) ||
+        intoCfg->blocks.size() != 6 || intoCfg->locals.size() != 3 ||
+        intoCfg->cleanups.size() != 1 ||
+        intoCfg->blocks[2].terminator.cases[0].edge.cleanups !=
+            std::vector<moon::CleanupId>{moon::CleanupId{0}})
+        return fail("IntoIterator state did not receive a canonical exit cleanup");
+    intoCfg->blocks[2].terminator.cases[0].edge.cleanups.clear();
+    if (cfgVerifier.verify(*intoCfg, protocolModule))
+        return fail("CFG verifier accepted a leaked IntoIterator state");
+
     // The sealed payload must not observe later mutations of the frontend
     // object from which it was frozen.
     product->fields.clear();

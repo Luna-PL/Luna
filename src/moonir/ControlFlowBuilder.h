@@ -64,6 +64,9 @@ private:
     std::optional<OpenBlock> lowerWhile(
         std::unique_ptr<WhileStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
+    std::optional<OpenBlock> lowerFor(
+        std::unique_ptr<ForStmt> statement,
+        OpenBlock current, RegionId region, ScopeId scope);
     std::optional<OpenBlock> lowerMatch(
         std::unique_ptr<MatchStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
