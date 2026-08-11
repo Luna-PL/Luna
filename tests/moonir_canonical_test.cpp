@@ -763,6 +763,59 @@ int main() {
         call->callee = std::move(member);
         return call;
     };
+    const auto makeDirectRangeTerminal = [&](
+            IteratorOp op, const moon::TypeRef& resultType,
+            const moon::TypeRef& outputType, bool withTake) {
+        auto range = std::make_unique<moon::CallExpr>();
+        range->iteratorOp = IteratorOp::Range;
+        range->iteratorInputType = i32Id;
+        range->iteratorOutputType = i32Id;
+        range->type = rangeId;
+        auto rangeCallee = std::make_unique<moon::IdentifierExpr>();
+        rangeCallee->name = "range";
+        range->callee = std::move(rangeCallee);
+        auto start = std::make_unique<moon::IntLiteralExpr>();
+        start->value = 1;
+        start->type = i32Id;
+        auto end = std::make_unique<moon::IntLiteralExpr>();
+        end->value = 5;
+        end->type = i32Id;
+        range->args.push_back(std::move(start));
+        range->args.push_back(std::move(end));
+
+        std::unique_ptr<moon::Expr> recipe = std::move(range);
+        if (withTake) {
+            auto take = std::make_unique<moon::CallExpr>();
+            take->iteratorOp = IteratorOp::Take;
+            take->iteratorInputType = i32Id;
+            take->iteratorOutputType = i32Id;
+            take->type = rangeId;
+            auto takeMember = std::make_unique<moon::FieldAccessExpr>();
+            takeMember->field = "take";
+            takeMember->object = std::move(recipe);
+            take->callee = std::move(takeMember);
+            auto count = std::make_unique<moon::IntLiteralExpr>();
+            count->value = 3;
+            count->type = i32Id;
+            take->args.push_back(std::move(count));
+            recipe = std::move(take);
+        }
+
+        auto terminal = std::make_unique<moon::CallExpr>();
+        terminal->iteratorOp = op;
+        terminal->iteratorInputType = i32Id;
+        terminal->iteratorOutputType = outputType;
+        terminal->type = resultType;
+        auto member = std::make_unique<moon::FieldAccessExpr>();
+        member->object = std::move(recipe);
+        member->field = op == IteratorOp::Fold
+            ? "fold"
+            : (op == IteratorOp::ForEach
+                   ? "for_each"
+                   : (op == IteratorOp::Collect ? "collect" : "count"));
+        terminal->callee = std::move(member);
+        return terminal;
+    };
 
     auto countStructured = std::make_unique<moon::BlockStmt>();
     countStructured->stmts.push_back(
@@ -888,6 +941,131 @@ int main() {
           accumulatorOrder < reducerOrder))
         return fail("materialized Copy fold did not normalize to accumulator CFG");
 
+    auto directFoldStructured = std::make_unique<moon::BlockStmt>();
+    auto directFoldUse = std::make_unique<moon::ExprStmt>();
+    auto directFoldSink = std::make_unique<moon::CallExpr>();
+    auto directSink = std::make_unique<moon::IdentifierExpr>();
+    directSink->name = "sink";
+    directSink->type = actionTypeId;
+    directFoldSink->callee = std::move(directSink);
+    directFoldSink->type = unitId;
+    auto directFold = makeDirectRangeTerminal(
+        IteratorOp::Fold, i32Id, i32Id, true);
+    auto directInitial = std::make_unique<moon::IntLiteralExpr>();
+    directInitial->value = 0;
+    directInitial->type = i32Id;
+    directFold->args.push_back(std::move(directInitial));
+    auto directReducer = std::make_unique<moon::IdentifierExpr>();
+    directReducer->name = "reducer";
+    directReducer->type = reducerTypeId;
+    directFold->args.push_back(std::move(directReducer));
+    directFoldSink->args.push_back(std::move(directFold));
+    directFoldUse->expr = std::move(directFoldSink);
+    directFoldStructured->stmts.push_back(std::move(directFoldUse));
+    auto directFoldCfg = cfgBuilder.build(
+        std::move(directFoldStructured),
+        {sinkParameter, reducerParameter},
+        moon::RegionKind::Function, module);
+    size_t directCursorOrder = static_cast<size_t>(-1);
+    size_t directLimitOrder = static_cast<size_t>(-1);
+    size_t directAdapterOrder = static_cast<size_t>(-1);
+    size_t directAccumulatorOrder = static_cast<size_t>(-1);
+    size_t directReducerOrder = static_cast<size_t>(-1);
+    bool directFoldReachedSink = false;
+    if (directFoldCfg) {
+        const auto& entry = directFoldCfg->blocks.front();
+        for (size_t index = 0; index < entry.operations.size(); ++index)
+            if (const auto* declaration = dynamic_cast<const moon::LetStmt*>(
+                    entry.operations[index].get())) {
+                if (declaration->name.rfind("$terminal.cursor.", 0) == 0)
+                    directCursorOrder = index;
+                else if (declaration->name.rfind(
+                             "$terminal.limit.", 0) == 0)
+                    directLimitOrder = index;
+                else if (declaration->name.rfind(
+                             "$terminal.adapter.", 0) == 0)
+                    directAdapterOrder = index;
+                else if (declaration->name.rfind(
+                             "$terminal.fold.", 0) == 0)
+                    directAccumulatorOrder = index;
+                else if (declaration->name.rfind(
+                             "$terminal.reducer.", 0) == 0)
+                    directReducerOrder = index;
+            }
+        for (const auto& block : directFoldCfg->blocks)
+            for (const auto& operation : block.operations)
+                if (const auto* expression =
+                        dynamic_cast<const moon::ExprStmt*>(operation.get()))
+                    if (const auto* call =
+                            dynamic_cast<const moon::CallExpr*>(
+                                expression->expr.get());
+                        call && call->args.size() == 1)
+                        if (const auto* argument =
+                                dynamic_cast<const moon::IdentifierExpr*>(
+                                    call->args.front().get()))
+                            directFoldReachedSink = argument->name.rfind(
+                                "$terminal.fold.", 0) == 0;
+    }
+    if (!directFoldCfg ||
+        !cfgVerifier.verify(*directFoldCfg, module) ||
+        !directFoldReachedSink ||
+        !(directCursorOrder < directLimitOrder &&
+          directLimitOrder < directAdapterOrder &&
+          directAdapterOrder < directAccumulatorOrder &&
+          directAccumulatorOrder < directReducerOrder))
+        return fail("direct Copy fold did not preserve receiver/terminal evaluation order");
+
+    auto directCountStructured = std::make_unique<moon::BlockStmt>();
+    auto directCountReturn = std::make_unique<moon::ReturnStmt>();
+    directCountReturn->value = makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false);
+    directCountStructured->stmts.push_back(
+        std::move(directCountReturn));
+    auto directCountCfg = cfgBuilder.build(
+        std::move(directCountStructured), {},
+        moon::RegionKind::Function, module);
+    bool directCountReachedReturn = false;
+    if (directCountCfg)
+        for (const auto& block : directCountCfg->blocks)
+            if (block.terminator.kind == moon::TerminatorKind::Return)
+                if (const auto* value =
+                        dynamic_cast<const moon::IdentifierExpr*>(
+                            block.terminator.operand.get()))
+                    directCountReachedReturn = value->name.rfind(
+                        "$terminal.count.", 0) == 0;
+    if (!directCountCfg ||
+        !cfgVerifier.verify(*directCountCfg, module) ||
+        !directCountReachedReturn)
+        return fail("direct count did not normalize before return");
+
+    auto siblingBoundary = std::make_unique<moon::BlockStmt>();
+    auto siblingUse = std::make_unique<moon::ExprStmt>();
+    auto siblingCall = std::make_unique<moon::CallExpr>();
+    auto siblingReducer = std::make_unique<moon::IdentifierExpr>();
+    siblingReducer->name = "reducer";
+    siblingReducer->type = reducerTypeId;
+    siblingCall->callee = std::move(siblingReducer);
+    siblingCall->type = i32Id;
+    auto earlierSibling = std::make_unique<moon::IntLiteralExpr>();
+    earlierSibling->value = 9;
+    earlierSibling->type = i32Id;
+    siblingCall->args.push_back(std::move(earlierSibling));
+    siblingCall->args.push_back(makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false));
+    siblingUse->expr = std::move(siblingCall);
+    siblingBoundary->stmts.push_back(std::move(siblingUse));
+    if (cfgBuilder.build(
+            std::move(siblingBoundary), {reducerParameter},
+            moon::RegionKind::Function, module))
+        return fail("general sibling terminal crossed its explicit CFG boundary");
+    bool diagnosedSiblingBoundary = false;
+    for (const auto& message : cfgBuilder.errors())
+        diagnosedSiblingBoundary = diagnosedSiblingBoundary ||
+            message.find("iterator recipe must be expanded") !=
+                std::string::npos;
+    if (!diagnosedSiblingBoundary)
+        return fail("general sibling terminal boundary lost its diagnostic");
+
     auto forEachStructured = std::make_unique<moon::BlockStmt>();
     forEachStructured->stmts.push_back(
         makeMaterializedRangeBinding("forEachPending", false));
@@ -919,6 +1097,45 @@ int main() {
     if (!forEachCfg || !cfgVerifier.verify(*forEachCfg, module) ||
         retainedForEachTerminal)
         return fail("materialized for_each did not normalize to loop body calls");
+
+    auto directForEachStructured = std::make_unique<moon::BlockStmt>();
+    auto directForEachUse = std::make_unique<moon::ExprStmt>();
+    auto directForEach = makeDirectRangeTerminal(
+        IteratorOp::ForEach, unitId, unitId, true);
+    auto directAction = std::make_unique<moon::IdentifierExpr>();
+    directAction->name = "action";
+    directAction->type = actionTypeId;
+    directForEach->args.push_back(std::move(directAction));
+    directForEachUse->expr = std::move(directForEach);
+    directForEachStructured->stmts.push_back(
+        std::move(directForEachUse));
+    auto directForEachCfg = cfgBuilder.build(
+        std::move(directForEachStructured), {actionParameter},
+        moon::RegionKind::Function, module);
+    bool retainedDirectForEachTerminal = false;
+    bool directForEachActionLocal = false;
+    if (directForEachCfg)
+        for (const auto& block : directForEachCfg->blocks)
+            for (const auto& operation : block.operations) {
+                if (const auto* declaration =
+                        dynamic_cast<const moon::LetStmt*>(operation.get()))
+                    directForEachActionLocal =
+                        directForEachActionLocal ||
+                        declaration->name.rfind(
+                            "$terminal.action.", 0) == 0;
+                if (const auto* expression =
+                        dynamic_cast<const moon::ExprStmt*>(operation.get()))
+                    if (const auto* call =
+                            dynamic_cast<const moon::CallExpr*>(
+                                expression->expr.get()))
+                        retainedDirectForEachTerminal =
+                            retainedDirectForEachTerminal ||
+                            call->iteratorOp == IteratorOp::ForEach;
+            }
+    if (!directForEachCfg ||
+        !cfgVerifier.verify(*directForEachCfg, module) ||
+        !directForEachActionLocal || retainedDirectForEachTerminal)
+        return fail("direct for_each did not normalize to body calls");
 
     auto collectStructured = std::make_unique<moon::BlockStmt>();
     collectStructured->stmts.push_back(
@@ -1056,6 +1273,65 @@ int main() {
     loweredPush->type = savedPushResultType;
     if (!cfgVerifier.verify(*collectCfg, protocolModule))
         return fail("restored collect push signature did not verify");
+
+    auto directCollectStructured = std::make_unique<moon::BlockStmt>();
+    auto directCollectBinding = std::make_unique<moon::LetStmt>();
+    directCollectBinding->name = "directCollected";
+    directCollectBinding->type = collectedId;
+    directCollectBinding->usage = luna::ownership::Usage::Affine;
+    auto directCollect = makeDirectRangeTerminal(
+        IteratorOp::Collect, collectedId, collectedId, true);
+    directCollect->returnUsage = luna::ownership::Usage::Affine;
+    directCollect->iteratorCollectTargetType = collectedId;
+    directCollect->iteratorCollectBuilderType = iteratorStateId;
+    directCollect->iteratorCollectBegin = {
+        sealedCollectBegin->symbolId, sealedCollectBegin->contractId};
+    directCollect->iteratorCollectPush = {
+        sealedCollectPush->symbolId, sealedCollectPush->contractId};
+    directCollect->iteratorCollectFinish = {
+        sealedCollectFinish->symbolId, sealedCollectFinish->contractId};
+    directCollectBinding->initializer = std::move(directCollect);
+    directCollectStructured->stmts.push_back(
+        std::move(directCollectBinding));
+    auto directCollectCleanup = std::make_unique<moon::FreeStmt>();
+    directCollectCleanup->isImplicit = true;
+    directCollectCleanup->action = cleanupActionForType(collected);
+    auto directCollectedIdentifier =
+        std::make_unique<moon::IdentifierExpr>();
+    directCollectedIdentifier->name = "directCollected";
+    directCollectedIdentifier->type = collectedId;
+    directCollectCleanup->operand = std::move(
+        directCollectedIdentifier);
+    directCollectStructured->stmts.push_back(
+        std::move(directCollectCleanup));
+    auto directCollectCfg = cfgBuilder.build(
+        std::move(directCollectStructured), {},
+        moon::RegionKind::Function, protocolModule);
+    bool directCollectCursor = false;
+    bool directCollectBuilder = false;
+    bool directCollectResult = false;
+    bool directCollectRetainedIterator = false;
+    if (directCollectCfg)
+        for (const auto& local : directCollectCfg->locals) {
+            directCollectCursor = directCollectCursor ||
+                local.name.rfind("$terminal.cursor.", 0) == 0;
+            directCollectBuilder = directCollectBuilder ||
+                local.name.rfind(
+                    "$terminal.collect.builder.", 0) == 0;
+            directCollectResult = directCollectResult ||
+                local.name.rfind(
+                    "$terminal.collect.result.", 0) == 0;
+            const auto* type = protocolModule.findType(local.type);
+            directCollectRetainedIterator =
+                directCollectRetainedIterator ||
+                (type && type->kind == TypeKind::Iterator);
+        }
+    if (!directCollectCfg ||
+        !cfgVerifier.verify(*directCollectCfg, protocolModule) ||
+        !directCollectCursor || !directCollectBuilder ||
+        !directCollectResult || directCollectRetainedIterator ||
+        directCollectCfg->cleanups.size() != 3)
+        return fail("direct collect did not erase to affine builder CFG state");
 
     const auto* shortIteratorType = module.findType(shortId);
     const auto* sharedIteratorType = module.findType(sharedId);

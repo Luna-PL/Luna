@@ -145,6 +145,13 @@ validates the frozen `FromIterator` witnesses, initializes one synthetic affine 
 the source-level consumer. Existing ownership/cleanup dataflow proves both transfers; this adds no
 iterator object, ownership flag, allocation, or ABI state.
 
+The same terminal expansion now accepts a non-materialized Copy-item recipe in those direct
+expression positions. It first evaluates and stores the source/start, bound, and adapter arguments
+in source order, then evaluates `fold`/`for_each` arguments or initializes the `collect` builder,
+and finally enters the ordinary loop. This preserves receiver-before-argument evaluation while
+reusing the materialized recipe path; the temporary cursor is the affine single-consumption
+witness rather than a runtime iterator token.
+
 This binding is an affine, single-consumption local and cannot currently be returned, passed,
 or sent across an ABI. Borrow bindings keep the source loan until lexical scope end; a Copy
 `into_iter` binding takes a value snapshot at binding time. A move-only `into_iter` binding
@@ -152,8 +159,9 @@ moves source ownership into hidden stack state and records initialization bits f
 element. Terminal consumption, early return from `for` or an ordinary function, and leaving
 scope without consumption clean only elements that remain initialized.
 
-Non-materialized terminals, general expression sibling hoisting, affine fold accumulators, and
-non-Copy item/callable per-element ownership remain explicit canonical-CFG boundaries.
+Terminals nested after an earlier sibling operand, general expression sibling hoisting, affine fold
+accumulators, and non-Copy item/callable per-element ownership remain explicit canonical-CFG
+boundaries.
 
 Source expressions, adapter arguments, and terminal arguments are evaluated left to right.
 `filter` skips elements and `take` evaluates only elements that pass through it, so

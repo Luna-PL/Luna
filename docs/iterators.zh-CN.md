@@ -133,14 +133,21 @@ move 转移；这不增加独立 runtime token。materialized `count` 和 Copy a
 第二个 synthetic affine local 在结果 move 给源码 consumer 前持有 finish 结果。既有
 ownership/cleanup dataflow 证明两次 transfer；不增加 iterator object、ownership flag、allocation 或 ABI 状态。
 
+同一 terminal 展开现在也接受上述直接表达式位置中 non-materialized 的 Copy-item recipe。
+它先按源码顺序求值并保存 source/start、bound 与 adapter argument，再求值
+`fold`/`for_each` argument 或初始化 `collect` builder，最后进入普通循环。这样在复用
+materialized recipe 路径的同时保留 receiver-before-argument 求值顺序；临时 cursor 是
+affine 单次消费凭证，不是 runtime iterator token。
+
 这种 binding 是 affine、single-consumption 的局部值，当前不能返回、传参或跨 ABI。
 借用型 binding 将源 loan 保持到词法作用域结束；Copy `into_iter` 在绑定点建立值
 快照。move-only `into_iter` 在绑定点把源所有权转入隐藏栈状态，并为每个数组元素
 保存初始化位。终结消费、`for` 中提前 `return`、普通函数提前 `return` 以及从未
 消费就离开作用域，都会只清理仍初始化的元素。
 
-non-materialized terminal、通用 expression sibling hoisting、affine fold accumulator，以及 non-Copy
-item/callable 的逐元素所有权状态仍是明确的 canonical-CFG 边界。
+位于更早 sibling operand 之后的 terminal、通用 expression sibling hoisting、affine fold
+accumulator，以及 non-Copy item/callable 的逐元素所有权状态仍是明确的
+canonical-CFG 边界。
 
 源表达式、适配器参数和终结参数按从左到右的源代码顺序求值。`filter` 跳过元素，
 `take` 只计算流经它的元素，因此适配器顺序具有通常的惰性管道含义。

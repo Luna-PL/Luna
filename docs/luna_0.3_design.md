@@ -717,10 +717,18 @@ new ABI state. The independent verifier now also checks declaration-backed call 
 including an explicit borrow argument's relation, while synthetic ownership dataflow requires the
 finish transfer; forged shared builder borrows or copied finish state are rejected.
 
-Item 10 is not complete as a whole. Non-materialized terminals, affine fold accumulators, general
-expression sibling hoisting, capturing closure environments, and non-Copy item/callable per-element
-ownership state remain explicit following boundaries. The remaining work then normalizes other
-control-flow expressions, slot, and fragment paths, atomically replaces
+The direct non-materialized Copy-terminal subphase is complete as well. In a direct initializer or
+return, or as the sole argument of a direct ordinary call, receiver source/start and bound values
+and adapter arguments are materialized in source order before terminal arguments. The resulting
+ordinary state then enters exactly the same terminal expansion described above. This covers direct
+`count`, Copy `fold`, expression-statement `for_each`, and affine-builder `collect` without adding a
+second lowering. A terminal after any earlier sibling operand remains rejected so construction
+does not guess how to hoist or reorder that operand.
+
+Item 10 is not complete as a whole. Affine fold accumulators, general expression sibling hoisting,
+capturing closure environments, and non-Copy item/callable per-element ownership state remain
+explicit following boundaries. The remaining work then normalizes other control-flow expressions,
+slot, and fragment paths, atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured
 execution is deleted and the full verifier/codegen regression gate passes does the item-level gate
 pass; serializer/parser work remains item 11.

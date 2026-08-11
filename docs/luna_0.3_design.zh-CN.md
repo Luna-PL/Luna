@@ -639,9 +639,16 @@ synthetic local，再显式 move 给源码中的 initializer、return 或直接 
 核对 declaration-backed call 签名（包括显式 borrow argument 的 relation），而 synthetic
 ownership dataflow 要求 finish transfer；伪造的 shared builder borrow 或 finish 处的拷贝都会被拒绝。
 
-第 10 项尚未整体完成。non-materialized terminal、affine fold accumulator、通用
-expression sibling hoisting、捕获式 closure environment，以及 non-Copy item/callable contract
-的逐元素初始化/cleanup 状态仍是明确的后续边界。随后规范化其余控制流表达式、slot 和 fragment
+直接 non-materialized Copy-terminal 子阶段也已完成。在直接 initializer/return 位置，
+或作为直接普通 call 的唯一参数时，receiver 的 source/start、bound 与 adapter argument
+会按源码顺序在 terminal argument 之前物化，随后普通状态进入上述同一 terminal 展开。
+这覆盖直接 `count`、Copy `fold`、expression-statement `for_each` 和 affine-builder `collect`，
+不增加第二套 lowering。任何位于更早 sibling operand 之后的 terminal 仍会被拒绝，
+因而构造器不会猜测 hoisting 或重排该 operand。
+
+第 10 项尚未整体完成。affine fold accumulator、通用 expression sibling hoisting、
+捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup 状态
+仍是明确的后续边界。随后规范化其余控制流表达式、slot 和 fragment
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
 serializer/parser 仍属于第 11 项。

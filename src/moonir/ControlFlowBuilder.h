@@ -111,10 +111,10 @@ private:
     std::optional<OpenBlock> lowerIteratorRecipeFor(
         std::unique_ptr<ForStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
-    std::optional<OpenBlock> normalizeMaterializedIteratorTerminal(
+    std::optional<OpenBlock> normalizeIteratorTerminal(
         std::unique_ptr<Expr>& expression, OpenBlock current,
         RegionId region, ScopeId scope, bool discardUnitResult);
-    std::optional<OpenBlock> lowerMaterializedIteratorTerminal(
+    std::optional<OpenBlock> lowerIteratorTerminal(
         std::unique_ptr<CallExpr> terminal, OpenBlock current,
         RegionId region, ScopeId scope, bool discardUnitResult,
         std::unique_ptr<Expr>& replacement);
