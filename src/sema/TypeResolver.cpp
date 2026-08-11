@@ -168,9 +168,11 @@ private:
         if (auto* expr = dynamic_cast<const BoolLiteralExpr*>(src))
             return located(
                 std::make_unique<BoolLiteralExpr>(expr->value), src);
-        if (auto* expr = dynamic_cast<const IdentifierExpr*>(src))
-            return located(
-                std::make_unique<IdentifierExpr>(expr->name), src);
+        if (auto* expr = dynamic_cast<const IdentifierExpr*>(src)) {
+            auto clone = std::make_unique<IdentifierExpr>(expr->name);
+            clone->resolvedSymbolName = expr->resolvedSymbolName;
+            return located(std::move(clone), src);
+        }
         if (auto* expr = dynamic_cast<const BinaryExpr*>(src)) {
             auto clone = std::make_unique<BinaryExpr>();
             clone->lhs = cloneExpr(expr->lhs.get());

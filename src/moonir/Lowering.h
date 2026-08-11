@@ -49,13 +49,28 @@ private:
     TypePtr inferredExprType(const ::Expr* expression) const;
     void addDeclarationRecord(const moon::Decl& declaration,
                               DeclarationKind kind, TypePtr type);
+    void deferDeclarationRef(DeclarationRef& target,
+                             std::string lookup,
+                             const ASTNode* source,
+                             std::string context,
+                             bool lookupById = false);
+    void resolveDeclarationReferences();
     void error(const ASTNode* node, const std::string& message);
+
+    struct PendingDeclarationRef {
+        DeclarationRef* target = nullptr;
+        std::string lookup;
+        const ASTNode* source = nullptr;
+        std::string context;
+        bool lookupById = false;
+    };
 
     const Program* mProgram = nullptr;
     const SymbolTable* mSymbols = nullptr;
     Module* mModule = nullptr;
     bool mReserveKernelRuntime = false;
     std::unordered_set<std::string> mRequiredKernelSymbols;
+    std::vector<PendingDeclarationRef> mPendingDeclarationRefs;
     std::vector<diagnostic::Diagnostic> mErrors;
 };
 

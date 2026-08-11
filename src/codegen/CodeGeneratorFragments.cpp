@@ -100,11 +100,8 @@ void CodeGenerator::generateSlotInvoke(SlotInvokeStmt* slot, llvm::Function* fun
             break;
         }
     }
-    if (!fragment && !slot->defaultFragment.empty()) {
-        const std::string& key = slot->resolvedDefaultFragmentName.empty()
-            ? slot->defaultFragment : slot->resolvedDefaultFragmentName;
-        auto found = mFragments.find(key);
-        if (found != mFragments.end()) fragment = found->second;
+    if (!fragment && !slot->defaultFragmentRef.empty()) {
+        fragment = resolveFragment(slot->defaultFragmentRef);
     }
     if (!fragment) {
         auto fallback = mSlotDefaults.find(slot->name);

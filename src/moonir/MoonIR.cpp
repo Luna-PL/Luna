@@ -80,7 +80,8 @@ std::string canonicalContract(const DeclarationRecord& declaration) {
     appendBool(result, facts.capability.maySuspend);
     appendBool(result, facts.abi.stableBoundary);
     appendBool(result, facts.abi.persistentFrameRequired);
-    appendIdentityPart(result, facts.abi.dropGlueSymbol);
+    appendIdentityPart(result, declaration.dropGlue.symbol.value);
+    appendIdentityPart(result, declaration.dropGlue.contract.value);
     return result;
 }
 
@@ -88,6 +89,16 @@ void Module::rebuildIndexes() {
     typesById.clear();
     for (size_t index = 0; index < typeTable.size(); ++index)
         typesById[typeTable[index].id.value] = index;
+    declarationRecordsById.clear();
+    declarationRecordsBySymbol.clear();
+    declarationRecordsByLinkage.clear();
+    for (size_t index = 0; index < declarationTable.size(); ++index) {
+        const auto& declaration = declarationTable[index];
+        declarationRecordsById[declaration.id] = index;
+        declarationRecordsBySymbol[declaration.symbolId.value] = index;
+        if (!declaration.linkageName.empty())
+            declarationRecordsByLinkage[declaration.linkageName] = index;
+    }
     declarationsById.clear();
     functionsBySymbol.clear();
     fragmentsBySymbol.clear();
@@ -319,6 +330,40 @@ const TypeRecord* Module::findType(const TypeRef& id) const {
     auto found = typesById.find(id.value);
     if (found == typesById.end() || found->second >= typeTable.size()) return nullptr;
     return &typeTable[found->second];
+}
+
+const DeclarationRecord* Module::findDeclaration(
+    const SymbolRef& symbol) const {
+    auto found = declarationRecordsBySymbol.find(symbol.value);
+    if (found == declarationRecordsBySymbol.end() ||
+        found->second >= declarationTable.size())
+        return nullptr;
+    return &declarationTable[found->second];
+}
+
+const DeclarationRecord* Module::findDeclaration(
+    const DeclarationRef& reference) const {
+    const auto* declaration = findDeclaration(reference.symbol);
+    return declaration && declaration->contractId == reference.contract
+        ? declaration : nullptr;
+}
+
+const DeclarationRecord* Module::findDeclarationById(
+    const std::string& id) const {
+    auto found = declarationRecordsById.find(id);
+    if (found == declarationRecordsById.end() ||
+        found->second >= declarationTable.size())
+        return nullptr;
+    return &declarationTable[found->second];
+}
+
+const DeclarationRecord* Module::findDeclarationByLinkage(
+    const std::string& linkage) const {
+    auto found = declarationRecordsByLinkage.find(linkage);
+    if (found == declarationRecordsByLinkage.end() ||
+        found->second >= declarationTable.size())
+        return nullptr;
+    return &declarationTable[found->second];
 }
 
 TypePtr TypeMaterializer::materialize(const TypeRef& reference) {

@@ -54,6 +54,7 @@ std::unique_ptr<Module> LunaLowerer::lower(const Program& program,
     mSymbols = &symbols;
     mReserveKernelRuntime = reserveKernelRuntime;
     mRequiredKernelSymbols.clear();
+    mPendingDeclarationRefs.clear();
     auto module = std::make_unique<Module>();
     mModule = module.get();
     module->name = program.packageName.empty() ? "main" : program.packageName;
@@ -73,6 +74,44 @@ std::unique_ptr<Module> LunaLowerer::lower(const Program& program,
         }
         auto lowered = lowerDecl(declaration.get());
         if (lowered) module->declarations.push_back(std::move(lowered));
+    }
+
+    // Compiler-owned intrinsic traits intentionally have no source
+    // declaration. Canonical MoonIR still gives each referenced trait a
+    // normal declaration-table row instead of retaining an ad-hoc name.
+    const std::pair<const char*, const char*> intrinsicTraits[] = {
+        {luna::sysmeta::DropTraitId, "Drop"},
+        {luna::sysmeta::FromTraitId, "From"},
+    };
+    for (const auto& intrinsicTrait : intrinsicTraits) {
+        const char* traitId = intrinsicTrait.first;
+        const char* sourceName = intrinsicTrait.second;
+        const bool needed = std::any_of(
+            mPendingDeclarationRefs.begin(), mPendingDeclarationRefs.end(),
+            [traitId](const PendingDeclarationRef& pending) {
+                return pending.lookupById && pending.lookup == traitId;
+            });
+        const bool present = std::any_of(
+            module->declarationTable.begin(), module->declarationTable.end(),
+            [traitId](const DeclarationRecord& declaration) {
+                return declaration.id == traitId;
+            });
+        if (!needed || present) continue;
+        TypePtr traitType = Type::makeTrait(sourceName);
+        traitType->nominalId = traitId;
+        DeclarationRecord record;
+        record.id = traitId;
+        record.familyId = record.id;
+        record.symbolId = luna::identity::symbolIdFromCanonical(record.id);
+        record.sourceName = sourceName;
+        record.kind = DeclarationKind::Trait;
+        record.type = typeRef(traitType);
+        record.canonicalContract = canonicalContract(record);
+        record.contractId = luna::identity::contractIdFromCanonical(
+            record.canonicalContract);
+        record.sysmeta.identity.symbol = record.symbolId;
+        record.sysmeta.identity.contract = record.contractId;
+        module->declarationTable.push_back(std::move(record));
     }
 
     for (auto& declaration : module->declarations) {
@@ -107,11 +146,13 @@ std::unique_ptr<Module> LunaLowerer::lower(const Program& program,
         });
     }
     module->sealTypeTable();
+    resolveDeclarationReferences();
     mModule = nullptr;
     mSymbols = nullptr;
     mProgram = nullptr;
     mReserveKernelRuntime = false;
     mRequiredKernelSymbols.clear();
+    mPendingDeclarationRefs.clear();
     return module;
 }
 
@@ -228,6 +269,9 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
     } else if (auto* identifier = dynamic_cast<const ::IdentifierExpr*>(expression)) {
         auto value = std::make_unique<moon::IdentifierExpr>();
         value->name = identifier->name;
+        deferDeclarationRef(
+            value->declaration, identifier->resolvedSymbolName,
+            identifier, "declaration-valued identifier");
         result = std::move(value);
     } else if (auto* binary = dynamic_cast<const ::BinaryExpr*>(expression)) {
         auto value = std::make_unique<moon::BinaryExpr>();
@@ -248,7 +292,15 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         for (const auto& argument : call->args)
             value->args.push_back(lowerExpr(argument.get()));
         value->typeArgs = typeRefs(call->typeArgs);
-        value->resolvedSymbolName = call->resolvedSymbolName;
+        deferDeclarationRef(value->calleeRef, call->resolvedSymbolName,
+                            call, "call target");
+        if (!call->resolvedSymbolName.empty()) {
+            if (auto* callee = dynamic_cast<moon::IdentifierExpr*>(
+                    value->callee.get()))
+                deferDeclarationRef(
+                    callee->declaration, call->resolvedSymbolName,
+                    call, "resolved call identifier");
+        }
         value->returnsLinear = call->returnsLinear;
         value->returnUsage = call->returnUsage;
         value->intrinsicType = typeRef(call->intrinsicType);
@@ -263,12 +315,18 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
             typeRef(call->iteratorCollectTargetType);
         value->iteratorCollectBuilderType =
             typeRef(call->iteratorCollectBuilderType);
-        value->iteratorCollectBeginSymbol =
-            call->iteratorCollectBeginSymbol;
-        value->iteratorCollectPushSymbol =
-            call->iteratorCollectPushSymbol;
-        value->iteratorCollectFinishSymbol =
-            call->iteratorCollectFinishSymbol;
+        deferDeclarationRef(
+            value->iteratorCollectBegin,
+            call->iteratorCollectBeginSymbol,
+            call, "FromIterator begin witness");
+        deferDeclarationRef(
+            value->iteratorCollectPush,
+            call->iteratorCollectPushSymbol,
+            call, "FromIterator push witness");
+        deferDeclarationRef(
+            value->iteratorCollectFinish,
+            call->iteratorCollectFinishSymbol,
+            call, "FromIterator finish witness");
         value->compileTimeValue = call->compileTimeValue;
         if (call->resultType) {
             value->type = typeRef(call->resultType);
@@ -293,14 +351,15 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
     } else if (auto* launch = dynamic_cast<const ::LaunchExpr*>(expression)) {
         auto value = std::make_unique<moon::LaunchExpr>();
         value->kernelName = launch->kernelName;
-        value->resolvedKernelName = launch->resolvedKernelName;
+        deferDeclarationRef(value->kernelRef, launch->resolvedKernelName,
+                            launch, "kernel target");
         value->threads = lowerExpr(launch->threads.get());
         for (const auto& argument : launch->args)
             value->args.push_back(lowerExpr(argument.get()));
         value->inFlightResources = launch->inFlightResources;
         value->type = typeRef(TyEvent);
         mModule->features.kernel = true;
-        mRequiredKernelSymbols.insert(value->resolvedKernelName);
+        mRequiredKernelSymbols.insert(launch->resolvedKernelName);
         result = std::move(value);
     } else if (auto* variant = dynamic_cast<const ::VariantConstructExpr*>(expression)) {
         auto value = std::make_unique<moon::VariantConstructExpr>();
@@ -369,7 +428,10 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         value->valueType = typeRef(propagation->valueType);
         value->errorType = typeRef(propagation->errorType);
         value->propagatedErrorType = typeRef(propagation->propagatedErrorType);
-        value->errorConversionSymbol = propagation->errorConversionSymbol;
+        deferDeclarationRef(
+            value->errorConversion,
+            propagation->errorConversionSymbol,
+            propagation, "From error conversion");
         value->type = value->valueType;
         for (const auto& cleanup : propagation->cleanups) {
             moon::CleanupObligation lowered;
@@ -434,7 +496,10 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         if (selection->isDynamic) {
             auto value = std::make_unique<moon::DynamicSelectExpr>();
             value->familyId = selection->resolvedFamilyId;
-            value->selectorDeclarationId = selection->resolvedSelectorDeclarationId;
+            deferDeclarationRef(
+                value->selector,
+                selection->resolvedSelectorDeclarationId,
+                selection, "dynamic selector", true);
             value->metadataSchemaId = selection->dynamicMetadataSchemaId;
             value->type = typeRef(selection->selectedType);
             for (const auto& binding : selection->dynamicFilterArguments) {
@@ -475,13 +540,18 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
                 literal->location = locationOf(selection);
                 value->filterArguments.push_back(std::move(literal));
             }
+            value->candidates.reserve(selection->dynamicCandidates.size());
             for (const auto& source : selection->dynamicCandidates) {
                 DynamicSelectCandidate candidate;
-                candidate.declarationId = source.declarationId;
-                candidate.linkageName = source.symbolName;
                 candidate.metadataValues = source.metadataValues;
                 value->candidates.push_back(std::move(candidate));
             }
+            for (size_t index = 0;
+                 index < selection->dynamicCandidates.size(); ++index)
+                deferDeclarationRef(
+                    value->candidates[index].declaration,
+                    selection->dynamicCandidates[index].declarationId,
+                    selection, "dynamic select candidate", true);
             mModule->features.runtime = true;
             mModule->features.dynamicSelect = true;
             mModule->costs.push_back({CostKind::DynamicBinding,
@@ -492,6 +562,9 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         } else {
             auto value = std::make_unique<moon::IdentifierExpr>();
             value->name = selection->resolvedSymbolName;
+            deferDeclarationRef(
+                value->declaration, selection->resolvedSymbolName,
+                selection, "statically selected declaration");
             value->type = typeRef(selection->selectedType);
             result = std::move(value);
         }
@@ -584,14 +657,16 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         value->iterable = lowerExpr(loop->iterable.get());
         value->body = lowerBlock(loop->body.get());
         value->elementType = typeRef(loop->elementType);
-        value->protocolNextSymbol = loop->protocolNextSymbol;
+        deferDeclarationRef(value->protocolNext, loop->protocolNextSymbol,
+                            loop, "Iterator::next protocol witness");
         value->protocolIteratorType = typeRef(loop->protocolIteratorType);
         value->protocolOptionType = typeRef(loop->protocolOptionType);
         value->protocolNoneVariant =
             static_cast<uint32_t>(loop->protocolNoneVariant);
         value->protocolSomeVariant =
             static_cast<uint32_t>(loop->protocolSomeVariant);
-        value->protocolIntoSymbol = loop->protocolIntoSymbol;
+        deferDeclarationRef(value->protocolInto, loop->protocolIntoSymbol,
+                            loop, "IntoIterator protocol witness");
         value->protocolInputType = typeRef(loop->protocolInputType);
         value->protocolStateName = loop->protocolStateName;
         value->protocolStateNeedsCleanup =
@@ -617,7 +692,10 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         for (const auto& parameter : slot->params)
             value->params.push_back(lowerParam(parameter));
         value->defaultFragment = slot->defaultFragment;
-        value->resolvedDefaultFragmentName = slot->resolvedDefaultFragmentName;
+        deferDeclarationRef(
+            value->defaultFragmentRef,
+            slot->resolvedDefaultFragmentName,
+            slot, "slot default fragment");
         value->structuralType = typeRef(slot->structuralType);
         result = std::move(value);
     } else if (auto* slot = dynamic_cast<const ::SlotInvokeStmt*>(statement)) {
@@ -629,7 +707,14 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
             ? moon::FragmentCardinality::Once : moon::FragmentCardinality::Many;
         value->isDynamic = slot->isDynamic;
         value->usesDynamicDispatch = slot->usesDynamicDispatch;
-        value->resolvedDynamicFragmentNames = slot->resolvedDynamicFragmentNames;
+        value->dynamicFragmentRefs.resize(
+            slot->resolvedDynamicFragmentNames.size());
+        for (size_t index = 0;
+             index < slot->resolvedDynamicFragmentNames.size(); ++index)
+            deferDeclarationRef(
+                value->dynamicFragmentRefs[index],
+                slot->resolvedDynamicFragmentNames[index],
+                slot, "dynamic slot fragment candidate");
         for (const auto& argument : slot->args)
             value->args.push_back(lowerExpr(argument.get()));
         value->continuation = lowerBlock(slot->continuation.get());
@@ -638,7 +723,10 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
             value->interfaceParams.push_back(lowerParam(parameter));
         value->resolvedParamNames = slot->resolvedParamNames;
         value->defaultFragment = slot->defaultFragment;
-        value->resolvedDefaultFragmentName = slot->resolvedDefaultFragmentName;
+        deferDeclarationRef(
+            value->defaultFragmentRef,
+            slot->resolvedDefaultFragmentName,
+            slot, "slot invocation default fragment");
         value->structuralType = typeRef(slot->structuralType);
         if (slot->usesDynamicDispatch) {
             mModule->features.runtime = true;
@@ -671,8 +759,18 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         value->fragmentName = apply->fragmentName;
         value->isDynamic = apply->isDynamic;
         value->alternativeFragmentNames = apply->alternativeFragmentNames;
-        value->resolvedAlternativeFragmentNames = apply->resolvedAlternativeFragmentNames;
-        value->resolvedFragmentName = apply->resolvedFragmentName;
+        value->alternativeFragmentRefs.resize(
+            apply->resolvedAlternativeFragmentNames.size());
+        for (size_t index = 0;
+             index < apply->resolvedAlternativeFragmentNames.size(); ++index)
+            deferDeclarationRef(
+                value->alternativeFragmentRefs[index],
+                apply->resolvedAlternativeFragmentNames[index],
+                apply, "dynamic apply fragment candidate");
+        deferDeclarationRef(
+            value->fragmentRef,
+            apply->resolvedFragmentName,
+            apply, "apply fragment");
         value->body = lowerBlock(apply->body.get());
         if (apply->isDynamic) {
             mModule->features.runtime = true;
@@ -882,16 +980,21 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         auto result = std::make_unique<moon::ImplDecl>();
         result->location = locationOf(implementation);
         result->name = "impl";
-        result->resolvedTraitId = implementation->trait.resolvedTraitId;
-        result->resolvedTargetTypeId = implementation->resolvedTargetTypeId;
+        const std::string resolvedTraitId =
+            implementation->trait.resolvedTraitId;
+        const std::string resolvedTargetTypeId =
+            implementation->resolvedTargetTypeId;
         result->generatedSymbolName = implementation->generatedSymbolName.empty()
-            ? result->resolvedTraitId + "__for__" + result->resolvedTargetTypeId
+            ? resolvedTraitId + "__for__" + resolvedTargetTypeId
             : implementation->generatedSymbolName;
         result->familyId = declarationIdentity(
-            implementation, mModule->name, "impl", result->resolvedTraitId);
+            implementation, mModule->name, "impl", resolvedTraitId);
         result->declarationId = declarationIdentity(
             implementation, mModule->name, "impl", result->generatedSymbolName);
         result->typeParams = implementation->typeParams;
+        deferDeclarationRef(
+            result->traitRef, resolvedTraitId,
+            implementation, "implementation trait", true);
         const TypePtr targetType = lowerType(implementation->targetType.get());
         result->targetType = typeRef(targetType);
         for (const auto& method : implementation->methods)
@@ -1032,6 +1135,80 @@ void LunaLowerer::addDeclarationRecord(const moon::Decl& declaration,
     record.sysmeta.identity.contract = record.contractId;
     record.location = declaration.location;
     mModule->declarationTable.push_back(std::move(record));
+}
+
+void LunaLowerer::deferDeclarationRef(
+    DeclarationRef& target,
+    std::string lookup,
+    const ASTNode* source,
+    std::string context,
+    bool lookupById) {
+    if (lookup.empty()) return;
+    mPendingDeclarationRefs.push_back({
+        &target, std::move(lookup), source, std::move(context), lookupById});
+}
+
+void LunaLowerer::resolveDeclarationReferences() {
+    if (!mModule) return;
+    mModule->rebuildIndexes();
+
+    // Drop glue belongs to the frozen type/declaration contract, not to an
+    // opaque backend linkage string. Resolve it first because declaration
+    // ContractIds include the expected drop implementation.
+    for (auto& type : mModule->typeTable) {
+        const std::string linkage = type.sysmeta.abi.dropGlueSymbol;
+        type.sysmeta.abi.dropGlueSymbol.clear();
+        if (linkage.empty()) continue;
+        const auto* declaration =
+            mModule->findDeclarationByLinkage(linkage);
+        if (!declaration) {
+            error(nullptr, "type '" + type.displayName +
+                           "' references missing Drop glue declaration '" +
+                           linkage + "'");
+            continue;
+        }
+        type.dropGlue = {declaration->symbolId, declaration->contractId};
+    }
+
+    for (auto& declaration : mModule->declarationTable) {
+        if (const auto* type = mModule->findType(declaration.type))
+            declaration.dropGlue = type->dropGlue;
+        declaration.sysmeta.abi.dropGlueSymbol.clear();
+        declaration.canonicalContract = canonicalContract(declaration);
+        declaration.contractId = luna::identity::contractIdFromCanonical(
+            declaration.canonicalContract);
+        declaration.sysmeta.identity.contract = declaration.contractId;
+    }
+    mModule->rebuildIndexes();
+
+    for (const auto& pending : mPendingDeclarationRefs) {
+        if (!pending.target) continue;
+        const auto* declaration = pending.lookupById
+            ? mModule->findDeclarationById(pending.lookup)
+            : mModule->findDeclarationByLinkage(pending.lookup);
+        if (!declaration) {
+            error(pending.source, pending.context +
+                  " references missing MoonIR declaration '" +
+                  pending.lookup + "'");
+            continue;
+        }
+        *pending.target = {
+            declaration->symbolId, declaration->contractId};
+    }
+
+    const auto finalizeExecutable = [&](auto&& self, moon::Decl& declaration)
+        -> void {
+        const auto* record = mModule->findDeclaration(declaration.symbolId);
+        if (record) declaration.contractId = record->contractId;
+        declaration.sysmeta.abi.dropGlueSymbol.clear();
+        if (auto* implementation =
+                dynamic_cast<moon::ImplDecl*>(&declaration))
+            for (auto& method : implementation->methods)
+                if (method) self(self, *method);
+    };
+    for (auto& declaration : mModule->declarations)
+        if (declaration) finalizeExecutable(
+            finalizeExecutable, *declaration);
 }
 
 void LunaLowerer::error(const ASTNode* node, const std::string& message) {

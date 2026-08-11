@@ -59,8 +59,10 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             auto* alloca = it->second;
             return mBuilder->CreateLoad(alloca->getAllocatedType(), alloca, id->name);
         }
-        auto function = mFunctions.find(id->name);
-        if (function != mFunctions.end()) return function->second;
+        if (id->declaration.complete()) {
+            if (auto* function = resolveFunction(id->declaration))
+                return function;
+        }
         return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
     }
     if (auto* selection = dynamic_cast<DynamicSelectExpr*>(expr)) {
@@ -123,13 +125,14 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
                 }
                 matches = mBuilder->CreateAnd(matches, equal, "dynamic.meta.all");
             }
-            auto function = mFunctions.find(candidate.linkageName);
-            if (function == mFunctions.end()) {
-                error("dynamic select candidate '" + candidate.linkageName +
+            llvm::Function* function = resolveFunction(candidate.declaration);
+            if (!function) {
+                error("dynamic select candidate '" +
+                      candidate.declaration.symbol.value +
                       "' has no generated function");
                 return llvm::ConstantPointerNull::get(opaquePointerType);
             }
-            selected = mBuilder->CreateSelect(matches, function->second, selected,
+            selected = mBuilder->CreateSelect(matches, function, selected,
                                               "dynamic.selected");
             matchCount = mBuilder->CreateAdd(
                 matchCount, mBuilder->CreateZExt(matches, mHelpers->i32Ty()),
@@ -601,7 +604,8 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         // Device built-ins use the runtime boundary on the host. Kernel bodies
         // retain direct element operations so that the same LLVM function can
         // be cloned to PTX; the CPU simulator invokes that host form directly.
-        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
+        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(
+                call->callee.get())) {
             if (calleeId->name == "gpu_alloc_i32" && call->args.size() == 1) {
                 auto alloc = mModule->getOrInsertFunction(
                     "rt_gpu_alloc_i32", mHelpers->ptrTy(), mHelpers->sizeTy());
@@ -694,14 +698,11 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             }
         }
 
-        // Try direct function call by name
-        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
-            llvm::Function* callee = nullptr;
-            const std::string& symbolName = call->resolvedSymbolName.empty()
-                ? calleeId->name : call->resolvedSymbolName;
-            auto functionIt = mFunctions.find(symbolName);
-            if (functionIt != mFunctions.end()) callee = functionIt->second;
-            else callee = mModule->getFunction(symbolName);
+        // Global calls are resolved only through the verified declaration
+        // table. Source names never act as a backend lookup fallback.
+        if (dynamic_cast<IdentifierExpr*>(call->callee.get())) {
+            llvm::Function* callee = call->calleeRef.complete()
+                ? resolveFunction(call->calleeRef) : nullptr;
             if (callee) {
                 
                 std::vector<llvm::Value*> args;
@@ -736,6 +737,12 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             if ((!callableType || callableType->kind != TypeKind::Function) &&
                 localType != mLocalTypes.end())
                 callableType = localType->second;
+            if (call->calleeRef.empty() &&
+                mLocals.find(calleeId->name) == mLocals.end()) {
+                error("call target '" + calleeId->name +
+                      "' has neither a local value nor a verified DeclarationRef");
+                return llvm::PoisonValue::get(mHelpers->i32Ty());
+            }
         }
         if (callableType && callableType->kind == TypeKind::Function) {
             llvm::Value* functionPointer = generateExpr(call->callee.get());
@@ -815,18 +822,18 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         llvm::Value* errorValue =
             unpackResultPayload(
                 errorBits, resolveType(propagation->errorType));
-        if (!propagation->errorConversionSymbol.empty()) {
-            auto conversion =
-                mFunctions.find(propagation->errorConversionSymbol);
-            if (conversion == mFunctions.end()) {
+        if (!propagation->errorConversion.empty()) {
+            llvm::Function* conversion = resolveFunction(
+                propagation->errorConversion);
+            if (!conversion) {
                 error("error propagation references unknown From conversion '" +
-                      propagation->errorConversionSymbol + "'");
+                      propagation->errorConversion.symbol.value + "'");
             } else {
                 errorValue = mBuilder->CreateCall(
-                    conversion->second,
+                    conversion,
                     {coerceCallArgument(
                         errorValue,
-                        conversion->second->getFunctionType()->getParamType(0))},
+                        conversion->getFunctionType()->getParamType(0))},
                     "try.converted_error");
             }
         }

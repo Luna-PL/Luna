@@ -17,6 +17,28 @@ TypePtr CodeGenerator::resolveType(const moon::TypeRef& reference) {
         ? mTypeMaterializer->materialize(reference) : nullptr;
 }
 
+const moon::DeclarationRecord* CodeGenerator::resolveDeclaration(
+    const moon::DeclarationRef& reference) const {
+    return mProgram ? mProgram->findDeclaration(reference) : nullptr;
+}
+
+llvm::Function* CodeGenerator::resolveFunction(
+    const moon::DeclarationRef& reference) const {
+    const auto* declaration = resolveDeclaration(reference);
+    if (!declaration) return nullptr;
+    auto found = mFunctions.find(declaration->linkageName);
+    if (found != mFunctions.end()) return found->second;
+    return mModule ? mModule->getFunction(declaration->linkageName) : nullptr;
+}
+
+moon::FragmentDecl* CodeGenerator::resolveFragment(
+    const moon::DeclarationRef& reference) const {
+    const auto* declaration = resolveDeclaration(reference);
+    if (!declaration) return nullptr;
+    auto found = mFragments.find(declaration->linkageName);
+    return found == mFragments.end() ? nullptr : found->second;
+}
+
 TypePtr CodeGenerator::allocationTypeForExpr(moon::Expr* expr) {
     if (!expr) return nullptr;
     if (auto* move = dynamic_cast<moon::MoveExpr*>(expr))

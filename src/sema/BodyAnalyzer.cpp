@@ -1575,9 +1575,15 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
             return TyUnknown;
         }
         if (sym->kind == SymbolKind::Function) {
-            if (family != mContext.mFunctionFamilies.end() && family->second.size() == 1)
+            if (family != mContext.mFunctionFamilies.end() && family->second.size() == 1) {
+                const auto* declaration = family->second.front();
+                id->resolvedSymbolName =
+                    declaration->generatedSymbolName.empty()
+                        ? declaration->name
+                        : declaration->generatedSymbolName;
                 mContext.recordDeclarationReference(id, id->name.size(),
-                                           family->second.front());
+                                                   declaration);
+            }
             return Type::makeFunction(sym->paramTypes,
                                       sym->returnType ? sym->returnType : TyUnit,
                                       sym->paramContracts,
@@ -2858,6 +2864,7 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
             auto* declaration = family->second.front();
             call->resolvedSymbolName = declaration->generatedSymbolName.empty()
                 ? declaration->name : declaration->generatedSymbolName;
+            id->resolvedSymbolName = call->resolvedSymbolName;
             mContext.recordDeclarationReference(id, id->name.size(), declaration);
         }
     }
@@ -3354,11 +3361,12 @@ TypePtr BodyAnalyzer::analyzeMemberCall(
     callee->sourcePath = call->sourcePath;
     callee->line = call->line;
     callee->col = call->col;
-    call->callee = std::move(callee);
     call->resolvedSymbolName =
         method->generatedSymbolName.empty()
             ? method->name
             : method->generatedSymbolName;
+    callee->resolvedSymbolName = call->resolvedSymbolName;
+    call->callee = std::move(callee);
 
     for (size_t index = 0;
          index < call->args.size(); ++index) {

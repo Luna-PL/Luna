@@ -303,6 +303,9 @@ struct BoolLiteralExpr : Expr {
 
 struct IdentifierExpr : Expr {
     std::string name;
+    // Non-empty only when semantic analysis resolved this value expression
+    // to a declaration rather than a local binding.
+    std::string resolvedSymbolName;
     explicit IdentifierExpr(std::string n) : name(std::move(n)) {}
 };
 

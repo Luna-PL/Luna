@@ -31,6 +31,44 @@ void Verifier::verifyCleanupAction(
                   type->sysmeta.resource.cleanup)) + "'");
 }
 
+const DeclarationRecord* Verifier::verifyDeclarationRef(
+    const DeclarationRef& reference,
+    const SourceLocation& location,
+    const std::string& context,
+    const Module& module,
+    DeclarationKind expectedKind) {
+    if (!reference.complete()) {
+        error(location, context +
+              " has no complete SymbolId/ContractId table reference");
+        return nullptr;
+    }
+    const DeclarationRecord* declaration = nullptr;
+    for (const auto& candidate : module.declarationTable) {
+        if (candidate.symbolId == reference.symbol) {
+            declaration = &candidate;
+            break;
+        }
+    }
+    if (!declaration) {
+        error(location, context + " references missing SymbolId '" +
+              reference.symbol.value + "'");
+        return nullptr;
+    }
+    if (declaration->contractId != reference.contract) {
+        error(location, context + " expects ContractId '" +
+              reference.contract.value + "' but declaration '" +
+              declaration->id + "' provides '" +
+              declaration->contractId.value + "'");
+        return nullptr;
+    }
+    if (declaration->kind != expectedKind) {
+        error(location, context + " references declaration '" +
+              declaration->id + "' of the wrong kind");
+        return nullptr;
+    }
+    return declaration;
+}
+
 namespace {
 
 bool isGeneric(const FunctionDecl& function) {
@@ -239,10 +277,16 @@ bool Verifier::verify(const Module& module) {
                           "' must reference exactly value and error payload types");
             }
         }
-        if (type.sysmeta.resource.needsDrop !=
-            !type.sysmeta.abi.dropGlueSymbol.empty())
+        if (!type.sysmeta.abi.dropGlueSymbol.empty())
+            error({}, "type '" + type.id.value +
+                      "' retains a linkage-string Drop reference");
+        if (type.sysmeta.resource.needsDrop != type.dropGlue.complete())
             error({}, "type '" + type.id.value +
                       "' has inconsistent Drop sysmeta");
+        if (!type.dropGlue.empty())
+            verifyDeclarationRef(
+                type.dropGlue, {}, "Drop glue for type '" +
+                type.id.value + "'", module, DeclarationKind::Function);
         if (type.sysmeta.resource.cleanupRequired !=
             (type.sysmeta.resource.cleanup !=
              luna::ownership::CleanupAction::None))
@@ -413,6 +457,14 @@ bool Verifier::verify(const Module& module) {
         if (record.sysmeta.schemaMajor != luna::sysmeta::SchemaMajor)
             error(record.location, "declaration '" + record.id +
                                    "' uses an unsupported sysmeta schema");
+        if (!record.sysmeta.abi.dropGlueSymbol.empty())
+            error(record.location, "declaration '" + record.id +
+                                   "' retains a linkage-string Drop reference");
+        if (!record.dropGlue.empty())
+            verifyDeclarationRef(
+                record.dropGlue, record.location,
+                "Drop glue for declaration '" + record.id + "'",
+                module, DeclarationKind::Function);
         if (record.sysmeta.capability.dynamicDispatch &&
             !module.features.dynamicApply)
             error(record.location, "declaration '" + record.id +
@@ -433,6 +485,9 @@ bool Verifier::verify(const Module& module) {
                     recordType->parameterTypeIds.size())
                 error(record.location, "declaration '" + record.id +
                                        "' sysmeta parameter contract count does not match its type");
+            if (recordType && record.dropGlue != recordType->dropGlue)
+                error(record.location, "declaration '" + record.id +
+                                       "' Drop reference differs from its frozen type");
             const size_t contractCount = std::min(
                 record.sysmeta.resource.parameters.size(),
                 recordType ? recordType->parameterContracts.size() : size_t{0});
@@ -515,6 +570,9 @@ bool Verifier::verify(const Module& module) {
             if (declaration->symbolId != record->second->symbolId)
                 error(declaration->location, "declaration table SymbolId mismatch for '" +
                                              declaration->declarationId + "'");
+            if (declaration->contractId != record->second->contractId)
+                error(declaration->location, "declaration table ContractId mismatch for '" +
+                                             declaration->declarationId + "'");
             if (record->second->linkageName != linkage)
                 error(declaration->location, "declaration table linkage mismatch for '" +
                                              declaration->declarationId + "'");
@@ -548,6 +606,9 @@ void Verifier::verifyDeclaration(const Decl& declaration, const Module& module) 
     if (!validSeparatedName(declaration.modulePath, "::", true))
         error(declaration.location, "declaration has invalid module path '" +
                                     declaration.modulePath + "'");
+    if (!declaration.sysmeta.abi.dropGlueSymbol.empty())
+        error(declaration.location,
+              "executable declaration retains a linkage-string Drop reference");
     if (auto* function = dynamic_cast<const FunctionDecl*>(&declaration)) {
         verifyFunction(*function, module);
         return;
@@ -594,10 +655,9 @@ void Verifier::verifyDeclaration(const Decl& declaration, const Module& module) 
         return;
     }
     if (auto* implementation = dynamic_cast<const ImplDecl*>(&declaration)) {
-        if (implementation->resolvedTraitId.empty())
-            error(implementation->location, "implementation has no resolved trait id");
-        if (implementation->resolvedTargetTypeId.empty())
-            error(implementation->location, "implementation has no resolved target type id");
+        verifyDeclarationRef(
+            implementation->traitRef, implementation->location,
+            "implementation trait", module, DeclarationKind::Trait);
         verifyType(implementation->targetType, implementation->location,
                    "implementation target", module,
                    !implementation->typeParams.empty());
@@ -840,7 +900,11 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
                 frozenUsage(module, loop->elementType)))
             error(loop->location, "for-loop binding weakens its required "
                   "usage contract in '" + owner + "'");
-        if (!loop->protocolNextSymbol.empty()) {
+        if (!loop->protocolNext.empty()) {
+            verifyDeclarationRef(
+                loop->protocolNext, loop->location,
+                "Iterator::next protocol witness", module,
+                DeclarationKind::Function);
             verifyType(loop->protocolIteratorType, loop->location,
                        "iterator protocol state type", module);
             verifyType(loop->protocolOptionType, loop->location,
@@ -859,7 +923,11 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
                     error(loop->location,
                           "iterator protocol for-loop has invalid Option variants");
             }
-            if (!loop->protocolIntoSymbol.empty()) {
+            if (!loop->protocolInto.empty()) {
+                verifyDeclarationRef(
+                    loop->protocolInto, loop->location,
+                    "IntoIterator protocol witness", module,
+                    DeclarationKind::Function);
                 verifyType(loop->protocolInputType,
                            loop->location,
                            "IntoIterator protocol input type", module);
@@ -897,13 +965,51 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
                 release->action,
                 release->operand->type,
                 release->location, "free operation", module);
+    } else if (auto* slot = dynamic_cast<const SlotDeclStmt*>(stmt)) {
+        verifyType(slot->structuralType, slot->location,
+                   "slot '" + slot->name + "' structural contract", module);
+        if (!slot->defaultFragment.empty() ||
+            !slot->defaultFragmentRef.empty())
+            verifyDeclarationRef(
+                slot->defaultFragmentRef, slot->location,
+                "default fragment for slot '" + slot->name + "'", module,
+                DeclarationKind::Fragment);
     } else if (auto* slot = dynamic_cast<const SlotInvokeStmt*>(stmt)) {
         for (const auto& argument : slot->args)
             verifyExpr(argument.get(), module, owner);
+        verifyType(slot->structuralType, slot->location,
+                   "slot invocation '" + slot->name + "' contract", module);
+        if (!slot->defaultFragment.empty() ||
+            !slot->defaultFragmentRef.empty())
+            verifyDeclarationRef(
+                slot->defaultFragmentRef, slot->location,
+                "default fragment for slot invocation '" +
+                slot->name + "'", module, DeclarationKind::Fragment);
+        for (const auto& candidate : slot->dynamicFragmentRefs)
+            verifyDeclarationRef(
+                candidate, slot->location,
+                "dynamic fragment candidate for slot '" +
+                slot->name + "'", module, DeclarationKind::Fragment);
         verifyBlock(slot->continuation.get(), module, owner);
         if (slot->usesDynamicDispatch && !module.features.dynamicApply)
             error(slot->location, "dynamic slot dispatch is present without dynamic apply capability");
     } else if (auto* apply = dynamic_cast<const ApplyStmt*>(stmt)) {
+        verifyDeclarationRef(
+            apply->fragmentRef, apply->location,
+            "fragment bound by apply for slot '" + apply->slotName + "'",
+            module, DeclarationKind::Fragment);
+        std::unordered_set<std::string> fragmentSymbols{
+            apply->fragmentRef.symbol.value};
+        for (const auto& candidate : apply->alternativeFragmentRefs) {
+            verifyDeclarationRef(
+                candidate, apply->location,
+                "dynamic apply fragment candidate for slot '" +
+                apply->slotName + "'", module, DeclarationKind::Fragment);
+            if (!fragmentSymbols.insert(candidate.symbol.value).second)
+                error(apply->location,
+                      "dynamic apply repeats fragment SymbolId '" +
+                      candidate.symbol.value + "'");
+        }
         if (apply->isDynamic && !module.features.dynamicApply)
             error(apply->location, "dynamic apply is present without dynamic apply capability");
         if (apply->body) verifyBlock(apply->body.get(), module, owner);
@@ -943,38 +1049,41 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
         const auto* selectionType = module.findType(selection->type);
         if (!selectionType || selectionType->kind != TypeKind::Function)
             error(selection->location, "dynamic select must produce a callable type");
-        if (selection->familyId.empty() || selection->selectorDeclarationId.empty() ||
+        if (selection->familyId.empty() || selection->selector.empty() ||
             selection->metadataSchemaId.empty())
             error(selection->location, "dynamic select has an incomplete binding identity");
+        else
+            verifyDeclarationRef(
+                selection->selector, selection->location,
+                "dynamic selector", module, DeclarationKind::Function);
         if (selection->filterArguments.empty() || selection->candidates.empty())
             error(selection->location, "dynamic select has an empty filter or candidate set");
         for (const auto& argument : selection->filterArguments)
             verifyExpr(argument.get(), module, owner);
         std::unordered_set<std::string> candidateIds;
         for (const auto& candidate : selection->candidates) {
-            if (candidate.declarationId.empty() || candidate.linkageName.empty())
-                error(selection->location, "dynamic select candidate has no stable identity");
-            else if (!candidateIds.insert(candidate.declarationId).second)
+            if (!candidate.declaration.complete())
+                error(selection->location,
+                      "dynamic select candidate has no stable declaration reference");
+            else if (!candidateIds.insert(
+                         candidate.declaration.symbol.value).second)
                 error(selection->location, "dynamic select contains duplicate candidate '" +
-                                           candidate.declarationId + "'");
+                                           candidate.declaration.symbol.value + "'");
             if (candidate.metadataValues.size() != selection->filterArguments.size())
                 error(selection->location, "dynamic select candidate metadata shape mismatch");
-            const DeclarationRecord* record = nullptr;
-            for (const auto& item : module.declarationTable) {
-                if (item.id == candidate.declarationId) {
-                    record = &item;
-                    break;
-                }
-            }
+            const DeclarationRecord* record = verifyDeclarationRef(
+                candidate.declaration, selection->location,
+                "dynamic select candidate", module,
+                DeclarationKind::Function);
             if (!record || record->retention == Retention::CompileTime) {
                 error(selection->location, "dynamic select candidate '" +
-                      candidate.declarationId + "' has no runtime descriptor");
+                      candidate.declaration.symbol.value +
+                      "' has no runtime descriptor");
                 continue;
             }
-            if (record->linkageName != candidate.linkageName ||
-                record->familyId != selection->familyId)
+            if (record->familyId != selection->familyId)
                 error(selection->location, "dynamic select candidate '" +
-                                           candidate.declarationId +
+                                           candidate.declaration.symbol.value +
                                            "' does not match its declared linkage/family");
             bool retainedMetadata = false;
             for (const auto& metadata : record->metadata) {
@@ -987,9 +1096,15 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
             }
             if (!retainedMetadata)
                 error(selection->location, "dynamic select candidate '" +
-                      candidate.declarationId +
+                      candidate.declaration.symbol.value +
                       "' does not retain the inspected metadata at runtime");
         }
+    } else if (auto* identifier = dynamic_cast<const IdentifierExpr*>(expr)) {
+        if (!identifier->declaration.empty())
+            verifyDeclarationRef(
+                identifier->declaration, identifier->location,
+                "declaration-valued identifier '" + identifier->name + "'",
+                module, DeclarationKind::Function);
     } else if (auto* binary = dynamic_cast<const BinaryExpr*>(expr)) {
         verifyExpr(binary->lhs.get(), module, owner);
         verifyExpr(binary->rhs.get(), module, owner);
@@ -999,6 +1114,18 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
         verifyExpr(call->callee.get(), module, owner);
         for (const auto& argument : call->args)
             verifyExpr(argument.get(), module, owner);
+        if (!call->calleeRef.empty())
+            verifyDeclarationRef(
+                call->calleeRef, call->location,
+                "direct call target", module, DeclarationKind::Function);
+        if (const auto* identifier = dynamic_cast<const IdentifierExpr*>(
+                call->callee.get());
+            identifier &&
+            (!call->calleeRef.empty() || !identifier->declaration.empty())) {
+            if (call->calleeRef != identifier->declaration)
+                error(call->location,
+                      "direct call and callee identifier disagree on their DeclarationRef");
+        }
         if (!call->intrinsicType.empty())
             verifyType(call->intrinsicType, call->location,
                        "intrinsic call type witness", module);
@@ -1029,12 +1156,26 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
                     call->iteratorCollectBuilderType,
                     call->location,
                     "iterator collect builder", module);
-                if (call->iteratorCollectBeginSymbol.empty() ||
-                    call->iteratorCollectPushSymbol.empty() ||
-                    call->iteratorCollectFinishSymbol.empty())
+                if (!call->iteratorCollectBegin.complete() ||
+                    !call->iteratorCollectPush.complete() ||
+                    !call->iteratorCollectFinish.complete())
                     error(call->location,
                           "iterator collect has an incomplete "
                           "FromIterator protocol witness");
+                else {
+                    verifyDeclarationRef(
+                        call->iteratorCollectBegin, call->location,
+                        "FromIterator begin witness", module,
+                        DeclarationKind::Function);
+                    verifyDeclarationRef(
+                        call->iteratorCollectPush, call->location,
+                        "FromIterator push witness", module,
+                        DeclarationKind::Function);
+                    verifyDeclarationRef(
+                        call->iteratorCollectFinish, call->location,
+                        "FromIterator finish witness", module,
+                        DeclarationKind::Function);
+                }
             }
             if (!call->iteratorRecipeStateName.empty()) {
                 if (!terminal)
@@ -1064,8 +1205,14 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
     } else if (auto* launch = dynamic_cast<const LaunchExpr*>(expr)) {
         if (!module.features.kernel)
             error(launch->location, "kernel launch is present without kernel capability");
-        if (launch->resolvedKernelName.empty())
+        const auto* kernel = verifyDeclarationRef(
+            launch->kernelRef, launch->location,
+            "kernel launch target", module, DeclarationKind::Function);
+        if (!kernel)
             error(launch->location, "kernel launch has no resolved declaration identity");
+        else if (!kernel->sysmeta.capability.gpu)
+            error(launch->location,
+                  "kernel launch target is not GPU-capable");
         verifyExpr(launch->threads.get(), module, owner);
         for (const auto& argument : launch->args)
             verifyExpr(argument.get(), module, owner);
@@ -1126,10 +1273,20 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
             propagatedResultType->typeArgumentIds.size() != 2)
             error(propagation->location,
                   "error propagation has no validated enclosing Result<T, E> type");
-        if (propagation->errorType != propagation->propagatedErrorType &&
-            propagation->errorConversionSymbol.empty())
+        if (propagation->errorType != propagation->propagatedErrorType) {
+            if (propagation->errorConversion.empty())
+                error(propagation->location,
+                      "error propagation changes error type without a static From conversion");
+            else
+                verifyDeclarationRef(
+                    propagation->errorConversion,
+                    propagation->location,
+                    "error propagation From conversion", module,
+                    DeclarationKind::Function);
+        } else if (!propagation->errorConversion.empty()) {
             error(propagation->location,
-                  "error propagation changes error type without a static From conversion");
+                  "error propagation carries an unnecessary From conversion");
+        }
         std::unordered_set<std::string> cleanupPlaces;
         for (const auto& cleanup : propagation->cleanups) {
             if (cleanup.place.empty())

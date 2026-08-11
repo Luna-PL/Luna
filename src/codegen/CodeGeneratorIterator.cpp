@@ -680,19 +680,12 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
     }
 
     if (call->iteratorOp == IteratorOp::Collect) {
-        const auto findProtocolFunction =
-            [&](const std::string& symbol) -> llvm::Function* {
-                const auto known = mFunctions.find(symbol);
-                if (known != mFunctions.end())
-                    return known->second;
-                return mModule->getFunction(symbol);
-            };
-        llvm::Function* begin = findProtocolFunction(
-            call->iteratorCollectBeginSymbol);
-        llvm::Function* push = findProtocolFunction(
-            call->iteratorCollectPushSymbol);
-        llvm::Function* finish = findProtocolFunction(
-            call->iteratorCollectFinishSymbol);
+        llvm::Function* begin = resolveFunction(
+            call->iteratorCollectBegin);
+        llvm::Function* push = resolveFunction(
+            call->iteratorCollectPush);
+        llvm::Function* finish = resolveFunction(
+            call->iteratorCollectFinish);
         const TypePtr builderTypeWitness = resolveType(
             call->iteratorCollectBuilderType);
         const TypePtr targetTypeWitness = resolveType(

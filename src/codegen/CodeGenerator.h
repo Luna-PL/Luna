@@ -121,6 +121,12 @@ private:
                                       llvm::Function* func);
     llvm::Value* coerceCallArgument(llvm::Value* value, llvm::Type* target);
     TypePtr resolveType(const moon::TypeRef& reference);
+    const moon::DeclarationRecord* resolveDeclaration(
+        const moon::DeclarationRef& reference) const;
+    llvm::Function* resolveFunction(
+        const moon::DeclarationRef& reference) const;
+    moon::FragmentDecl* resolveFragment(
+        const moon::DeclarationRef& reference) const;
     TypePtr allocationTypeForExpr(moon::Expr* expr);
     void emitLunaDeallocation(llvm::Value* pointer, const TypePtr& type);
     void emitCleanup(const std::string& place,

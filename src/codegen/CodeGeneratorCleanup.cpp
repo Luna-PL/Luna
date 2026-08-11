@@ -114,9 +114,11 @@ void CodeGenerator::emitResourceContentsCleanup(
     // Source Drop finalizes the value in place. Compiler-derived recursive
     // cleanup then destroys every still-owned field exactly once.
     if (type->sysmeta.resource.needsDrop) {
-        const std::string& symbol = type->sysmeta.abi.dropGlueSymbol;
-        auto drop = mFunctions.find(symbol);
-        if (symbol.empty() || drop == mFunctions.end()) {
+        const auto* frozenType = mProgram
+            ? mProgram->findType(luna::types::typeId(type)) : nullptr;
+        llvm::Function* drop = frozenType
+            ? resolveFunction(frozenType->dropGlue) : nullptr;
+        if (!drop) {
             error("resource '" + label +
                   "' has no compiler-validated Drop implementation");
             return;
@@ -129,10 +131,10 @@ void CodeGenerator::emitResourceContentsCleanup(
             mBuilder->CreateStore(value, storage);
             address = storage;
         }
-        mBuilder->CreateCall(drop->second, {
+        mBuilder->CreateCall(drop, {
             coerceCallArgument(
                 address,
-                drop->second->getFunctionType()->getParamType(0))
+                drop->getFunctionType()->getParamType(0))
         });
         if (storage)
             value = mBuilder->CreateLoad(

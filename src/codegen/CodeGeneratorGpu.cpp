@@ -668,12 +668,11 @@ void CodeGenerator::emitGpuOperationFailureCheck(llvm::Value* operationSucceeded
 }
 
 llvm::Value* CodeGenerator::generateLaunch(LaunchExpr* launch) {
-    llvm::Function* callee = nullptr;
-    const std::string& symbol = launch->resolvedKernelName.empty()
-        ? launch->kernelName : launch->resolvedKernelName;
-    auto known = mFunctions.find(symbol);
-    if (known != mFunctions.end()) callee = known->second;
-    else callee = mModule->getFunction(symbol);
+    const auto* kernelDeclaration = resolveDeclaration(
+        launch->kernelRef);
+    const std::string symbol = kernelDeclaration
+        ? kernelDeclaration->linkageName : std::string{};
+    llvm::Function* callee = resolveFunction(launch->kernelRef);
     if (!callee || !mCurrentFunc) {
         error("cannot lower launch of unknown kernel '" + launch->kernelName + "'");
         return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);

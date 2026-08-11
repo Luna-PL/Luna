@@ -587,8 +587,8 @@ pointer-represented, so transparent/inline handle-wrapper ABI optimization is no
 this semantic migration. Priority item 9 has therefore passed its completion gate. The next
 item is 10: refactor the existing MoonIR in place into table-referenced canonical IR.
 
-The first subphase of item 10 is complete. Metadata, declaration, signature, and operation nodes
-in sealed MoonIR now carry only `TypeId`; the complete type structure is frozen in the single type
+The first two subphases of item 10 are complete. The type subphase makes metadata, declaration,
+signature, and operation nodes in sealed MoonIR carry only `TypeId`; the complete type structure is frozen in the single type
 table. The LLVM backend uses an external, disposable materializer to reconstruct and cache backend
 types by `TypeId`, without retaining or reading frontend `TypePtr`. The MoonIR verifier also
 reconstructs only from frozen records and recomputes TypeId, ShapeId, layout, and every structural
@@ -597,13 +597,21 @@ fixed two identity bugs previously hidden by process-local pointers: Iterator re
 now participate in stable shape/type identity, while sealing merges nominal forward placeholders
 and then normalizes ShapeId and layout from the closed frozen type graph instead of accepting an
 arbitrary frontend placeholder graph. Independent materialization, registration-order determinism,
-tamper rejection, and full JIT/AOT
-regression evidence cover this boundary.
+tamper rejection, and full JIT/AOT regression evidence cover this boundary.
 
-Item 10 is not complete as a whole. The next subphase must replace internal symbol/contract uses in
-executable nodes with table references, then M001 must convert the current AST-like nested control
-flow in place into CFG plus region/scope/cleanup tables within the same MoonIR. Only after both are
-complete does the canonical table-referenced IR gate pass; serializer/parser work remains item 11.
+The symbol/contract subphase makes direct calls, function values, trait implementations,
+Iterator/FromIterator protocol witnesses, kernels, `From` conversions, dynamic selection, and
+fragment binding uniformly carry `DeclarationRef { SymbolId, ContractId }`. Linkage names are now
+declaration-table payload only: the verifier proves that each use names an existing declaration of
+the right kind with the expected ContractId, and the backend resolves linkage from that verified
+row. Drop glue uses the same stable reference instead of entering sealed IR as a raw symbol string.
+Compiler-owned `Drop`/`From` traits without source declarations receive ordinary synthetic table
+rows when referenced, avoiding verifier exceptions. These checks remain compilation/load/binding
+work and do not enter an ordinary call hot path.
+
+Item 10 is not complete as a whole. The next subphase is the M001 in-place conversion of the current
+AST-like nested control flow into CFG plus region/scope/cleanup tables within the same MoonIR. Only
+then does the item-level gate pass; serializer/parser work remains item 11.
 
 | Order | Priority | Work | Completion gate |
 |---:|---|---|---|

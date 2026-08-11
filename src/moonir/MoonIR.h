@@ -20,6 +20,27 @@ inline constexpr uint32_t FormatMinor = 3;
 // frontend object.
 using TypeRef = luna::types::TypeId;
 using TypeRefVec = std::vector<TypeRef>;
+using SymbolRef = luna::identity::SymbolId;
+using ContractRef = luna::identity::ContractId;
+
+// Every executable reference names both the declaration and the semantic
+// contract expected by the use site. Linkage names are declaration-table
+// payload, not executable-node references.
+struct DeclarationRef {
+    SymbolRef symbol;
+    ContractRef contract;
+
+    bool empty() const { return symbol.empty() && contract.empty(); }
+    bool complete() const { return !symbol.empty() && !contract.empty(); }
+    bool operator==(const DeclarationRef& other) const {
+        return symbol == other.symbol && contract == other.contract;
+    }
+    bool operator!=(const DeclarationRef& other) const {
+        return !(*this == other);
+    }
+};
+
+using DeclarationRefVec = std::vector<DeclarationRef>;
 
 struct SourceLocation {
     std::string path;
@@ -158,6 +179,7 @@ struct TypeRecord {
     uint64_t valueSize = 0;
     uint64_t valueAlignment = 1;
     std::string abiLayout;
+    DeclarationRef dropGlue;
     // Immediate graph edges make the frozen table independently traversable;
     // Moon readers never need a frontend-owned Type pointer to discover the
     // complete closed type graph.
@@ -176,6 +198,7 @@ struct DeclarationRecord {
     std::vector<MetadataInstance> metadata;
     TypeRef type;
     luna::sysmeta::Facts sysmeta;
+    DeclarationRef dropGlue;
     std::string canonicalContract;
     SourceLocation location;
 };
@@ -262,12 +285,12 @@ struct ForStmt : Stmt {
     std::unique_ptr<Expr> iterable;
     std::unique_ptr<BlockStmt> body;
     TypeRef elementType;
-    std::string protocolNextSymbol;
+    DeclarationRef protocolNext;
     TypeRef protocolIteratorType;
     TypeRef protocolOptionType;
     uint32_t protocolNoneVariant = 0;
     uint32_t protocolSomeVariant = 0;
-    std::string protocolIntoSymbol;
+    DeclarationRef protocolInto;
     TypeRef protocolInputType;
     std::string protocolStateName;
     bool protocolStateNeedsCleanup = false;
@@ -290,7 +313,7 @@ struct SlotDeclStmt : Stmt {
     bool isDynamic = false;
     std::vector<Param> params;
     std::string defaultFragment;
-    std::string resolvedDefaultFragmentName;
+    DeclarationRef defaultFragmentRef;
     TypeRef structuralType;
 };
 
@@ -300,14 +323,14 @@ struct SlotInvokeStmt : Stmt {
     FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
     bool isDynamic = false;
     bool usesDynamicDispatch = false;
-    std::vector<std::string> resolvedDynamicFragmentNames;
+    DeclarationRefVec dynamicFragmentRefs;
     std::vector<std::unique_ptr<Expr>> args;
     std::unique_ptr<BlockStmt> continuation;
     bool isImplicitCapture = false;
     std::vector<Param> interfaceParams;
     std::vector<std::string> resolvedParamNames;
     std::string defaultFragment;
-    std::string resolvedDefaultFragmentName;
+    DeclarationRef defaultFragmentRef;
     TypeRef structuralType;
 };
 
@@ -326,8 +349,8 @@ struct ApplyStmt : Stmt {
     std::string fragmentName;
     bool isDynamic = false;
     std::vector<std::string> alternativeFragmentNames;
-    std::vector<std::string> resolvedAlternativeFragmentNames;
-    std::string resolvedFragmentName;
+    DeclarationRefVec alternativeFragmentRefs;
+    DeclarationRef fragmentRef;
     std::unique_ptr<BlockStmt> body;
 };
 
@@ -353,6 +376,7 @@ struct BoolLiteralExpr : Expr {
 
 struct IdentifierExpr : Expr {
     std::string name;
+    DeclarationRef declaration;
 };
 
 struct BinaryExpr : Expr {
@@ -370,7 +394,7 @@ struct CallExpr : Expr {
     std::unique_ptr<Expr> callee;
     std::vector<std::unique_ptr<Expr>> args;
     TypeRefVec typeArgs;
-    std::string resolvedSymbolName;
+    DeclarationRef calleeRef;
     bool returnsLinear = false;
     luna::ownership::Usage returnUsage = luna::ownership::Usage::Copy;
     TypeRef intrinsicType;
@@ -381,15 +405,14 @@ struct CallExpr : Expr {
     TypeRef iteratorRecipeSourceType;
     TypeRef iteratorCollectTargetType;
     TypeRef iteratorCollectBuilderType;
-    std::string iteratorCollectBeginSymbol;
-    std::string iteratorCollectPushSymbol;
-    std::string iteratorCollectFinishSymbol;
+    DeclarationRef iteratorCollectBegin;
+    DeclarationRef iteratorCollectPush;
+    DeclarationRef iteratorCollectFinish;
     std::optional<ConstantValue> compileTimeValue;
 };
 
 struct DynamicSelectCandidate {
-    std::string declarationId;
-    std::string linkageName;
+    DeclarationRef declaration;
     std::vector<ConstantValue> metadataValues;
 };
 
@@ -398,7 +421,7 @@ struct DynamicSelectCandidate {
 // backend or future MoonRuntime can validate the operation before execution.
 struct DynamicSelectExpr : Expr {
     std::string familyId;
-    std::string selectorDeclarationId;
+    DeclarationRef selector;
     std::string metadataSchemaId;
     std::vector<std::unique_ptr<Expr>> filterArguments;
     std::vector<DynamicSelectCandidate> candidates;
@@ -406,7 +429,7 @@ struct DynamicSelectExpr : Expr {
 
 struct LaunchExpr : Expr {
     std::string kernelName;
-    std::string resolvedKernelName;
+    DeclarationRef kernelRef;
     std::unique_ptr<Expr> threads;
     std::vector<std::unique_ptr<Expr>> args;
     std::vector<std::pair<std::string, bool>> inFlightResources;
@@ -457,7 +480,7 @@ struct TryExpr : Expr {
     TypeRef valueType;
     TypeRef errorType;
     TypeRef propagatedErrorType;
-    std::string errorConversionSymbol;
+    DeclarationRef errorConversion;
     std::vector<CleanupObligation> cleanups;
 };
 
@@ -510,6 +533,7 @@ struct Decl : Node {
     std::string declarationId;
     std::string familyId;
     luna::identity::SymbolId symbolId;
+    luna::identity::ContractId contractId;
     std::string name;
     std::string generatedSymbolName;
     std::string modulePath;
@@ -577,8 +601,7 @@ struct TraitDecl : Decl {
 
 struct ImplDecl : Decl {
     std::vector<std::string> typeParams;
-    std::string resolvedTraitId;
-    std::string resolvedTargetTypeId;
+    DeclarationRef traitRef;
     TypeRef targetType;
     std::vector<std::unique_ptr<FunctionDecl>> methods;
 };
@@ -632,6 +655,9 @@ struct Module {
 
     std::unordered_map<std::string, Decl*> declarationsById;
     std::unordered_map<std::string, size_t> typesById;
+    std::unordered_map<std::string, size_t> declarationRecordsById;
+    std::unordered_map<std::string, size_t> declarationRecordsBySymbol;
+    std::unordered_map<std::string, size_t> declarationRecordsByLinkage;
     std::unordered_map<std::string, FunctionDecl*> functionsBySymbol;
     std::unordered_map<std::string, FragmentDecl*> fragmentsBySymbol;
 
@@ -639,6 +665,14 @@ struct Module {
     TypeRef registerType(const TypePtr& type);
     void sealTypeTable();
     const TypeRecord* findType(const TypeRef& id) const;
+    const DeclarationRecord* findDeclaration(
+        const SymbolRef& symbol) const;
+    const DeclarationRecord* findDeclaration(
+        const DeclarationRef& reference) const;
+    const DeclarationRecord* findDeclarationById(
+        const std::string& id) const;
+    const DeclarationRecord* findDeclarationByLinkage(
+        const std::string& linkage) const;
 };
 
 // Backends may materialize their preferred Type graph from canonical records.

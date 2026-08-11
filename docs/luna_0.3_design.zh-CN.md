@@ -526,7 +526,7 @@ codegen cleanup、`clone` intrinsic 与旧 Runtime 入口已删除；`rc new`/`a
 不在本次语义迁移中假定完成。因此优先级第 9 项已通过完成门；下一项是
 第 10 项：原地将现有 MoonIR 重构为 table-referenced canonical IR。
 
-第 10 项的第一子阶段已经完成：sealed MoonIR 的 metadata、声明、签名及操作节点只保存
+第 10 项的前两个子阶段已经完成。类型子阶段使 sealed MoonIR 的 metadata、声明、签名及操作节点只保存
 `TypeId`，完整类型结构被冻结在唯一 type table 中；LLVM backend 使用格式外、可丢弃的
 materializer 从该表按 `TypeId` 重建并缓存后端类型，不保留或读取 frontend `TypePtr`。
 MoonIR verifier 同样只从冻结记录重建类型，并重算 TypeId、ShapeId、layout 及全部结构引用，
@@ -534,12 +534,19 @@ MoonIR verifier 同样只从冻结记录重建类型，并重算 TypeId、ShapeI
 被进程内指针身份掩盖的身份缺陷：Iterator recipe 的 source 参数现在进入稳定 shape/type
 identity；seal 会合并 nominal forward placeholder，再从闭合的冻结类型图规范化 ShapeId
 和 layout，不再接受任意 frontend placeholder 的临时字段图。独立 materialization、
-注册顺序确定性、篡改拒绝及完整 JIT/AOT
-回归已有测试证据。
+注册顺序确定性、篡改拒绝及完整 JIT/AOT 回归已有测试证据。
 
-第 10 项尚未整体完成：下一子阶段需要把可执行节点中的内部 symbol/contract 引用统一为
-table reference；随后按 M001 把当前 AST-like 嵌套控制流原地改为同一 MoonIR 内的 CFG、
-region/scope/cleanup table。二者完成后才通过“table-referenced canonical IR”的整体完成门；
+symbol/contract 子阶段使直接调用、函数值、trait impl、Iterator/FromIterator
+协议、kernel、`From` 转换、dynamic select 和 fragment binding 统一保存
+`DeclarationRef { SymbolId, ContractId }`。linkage name 只是 declaration table payload；verifier
+检查使用点的 SymbolId 存在、声明 kind 正确且 ContractId 匹配，backend 在验证后
+才由声明表解析 linkage。Drop glue 也使用该稳定引用，不再进入 sealed IR
+作为裸字符串符号。没有源码声明的 compiler-owned `Drop`/`From` trait 在被引用时
+会获得普通的合成声明表行，因而不需要 verifier 特殊旁路。这些匹配仍只发生在
+编译/装载或 binding 建立时，不进入普通调用热路径。
+
+第 10 项尚未整体完成：下一子阶段按 M001 把当前 AST-like 嵌套控制流原地改为
+同一 MoonIR 内的 CFG、region/scope/cleanup table。完成后才通过整体完成门；
 serializer/parser 仍属于第 11 项。
 
 | 顺序 | 优先级 | 工作 | 完成门 |

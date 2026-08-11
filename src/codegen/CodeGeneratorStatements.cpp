@@ -146,14 +146,12 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         return;
     }
     if (auto* slot = dynamic_cast<SlotDeclStmt*>(stmt)) {
-        if (!slot->defaultFragment.empty()) {
-            const std::string& key = slot->resolvedDefaultFragmentName.empty()
-                ? slot->defaultFragment : slot->resolvedDefaultFragmentName;
-            auto fragment = mFragments.find(key);
-            if (fragment == mFragments.end())
+        if (!slot->defaultFragmentRef.empty()) {
+            auto* fragment = resolveFragment(slot->defaultFragmentRef);
+            if (!fragment)
                 error("unknown default fragment '" + slot->defaultFragment + "' for slot '" + slot->name + "'");
             else
-                mSlotDefaults[slot->name] = fragment->second;
+                mSlotDefaults[slot->name] = fragment;
         }
         return;
     }
@@ -162,33 +160,32 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         return;
     }
     if (auto* apply = dynamic_cast<ApplyStmt*>(stmt)) {
-        const std::string& key = apply->resolvedFragmentName.empty()
-            ? apply->fragmentName : apply->resolvedFragmentName;
-        auto fragment = mFragments.find(key);
-        if (fragment == mFragments.end()) {
+        auto* fragment = resolveFragment(apply->fragmentRef);
+        if (!fragment) {
             error("unknown fragment '" + apply->fragmentName + "' in apply");
             return;
         }
         if (apply->isDynamic) {
-            std::vector<FragmentDecl*> candidates{fragment->second};
-            for (const auto& resolved : apply->resolvedAlternativeFragmentNames) {
-                auto alternative = mFragments.find(resolved);
-                if (alternative == mFragments.end()) {
-                    error("unknown dynamic fragment candidate '" + resolved + "'");
+            std::vector<FragmentDecl*> candidates{fragment};
+            for (const auto& reference : apply->alternativeFragmentRefs) {
+                auto* alternative = resolveFragment(reference);
+                if (!alternative) {
+                    error("unknown dynamic fragment candidate '" +
+                          reference.symbol.value + "'");
                     return;
                 }
-                candidates.push_back(alternative->second);
+                candidates.push_back(alternative);
             }
             if (apply->body) {
                 mApplyScopes.emplace_back();
                 mDynamicApplyScopes.emplace_back();
-                mApplyScopes.back()[apply->slotName] = fragment->second;
+                mApplyScopes.back()[apply->slotName] = fragment;
                 mDynamicApplyScopes.back()[apply->slotName] = std::move(candidates);
                 generateBlock(apply->body.get(), func);
                 mDynamicApplyScopes.pop_back();
                 mApplyScopes.pop_back();
             } else if (!mApplyScopes.empty()) {
-                mApplyScopes.back()[apply->slotName] = fragment->second;
+                mApplyScopes.back()[apply->slotName] = fragment;
                 if (mDynamicApplyScopes.empty()) mDynamicApplyScopes.emplace_back();
                 mDynamicApplyScopes.back()[apply->slotName] = std::move(candidates);
             }
@@ -196,11 +193,11 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         }
         if (apply->body) {
             mApplyScopes.emplace_back();
-            mApplyScopes.back()[apply->slotName] = fragment->second;
+            mApplyScopes.back()[apply->slotName] = fragment;
             generateBlock(apply->body.get(), func);
             mApplyScopes.pop_back();
         } else if (!mApplyScopes.empty()) {
-            mApplyScopes.back()[apply->slotName] = fragment->second;
+            mApplyScopes.back()[apply->slotName] = fragment;
         }
         return;
     }
@@ -465,18 +462,18 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         return;
     }
     if (auto* fs = dynamic_cast<ForStmt*>(stmt)) {
-        if (!fs->protocolNextSymbol.empty()) {
+        if (!fs->protocolNext.empty()) {
             auto* sourceName =
                 dynamic_cast<IdentifierExpr*>(
                     fs->iterable.get());
             auto sourceLocal = sourceName
                 ? mLocals.find(sourceName->name)
                 : mLocals.end();
-            auto nextFunction =
-                mFunctions.find(fs->protocolNextSymbol);
+            llvm::Function* nextFunction =
+                resolveFunction(fs->protocolNext);
             if (!sourceName ||
                 sourceLocal == mLocals.end() ||
-                nextFunction == mFunctions.end()) {
+                !nextFunction) {
                 error("for-loop Core Iterator protocol references "
                       "unmaterialized state or next method");
                 return;
@@ -487,22 +484,19 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
             auto* loopVariable = createEntryBlockAlloca(
                 func, mHelpers->toLLVMType(elementType),
                 fs->varName);
-            llvm::Function* next =
-                nextFunction->second;
+            llvm::Function* next = nextFunction;
             llvm::AllocaInst* stateStorage = nullptr;
 
-            if (!fs->protocolIntoSymbol.empty()) {
-                auto intoFunction =
-                    mFunctions.find(
-                        fs->protocolIntoSymbol);
-                if (intoFunction == mFunctions.end() ||
-                    intoFunction->second->arg_size() != 1) {
+            if (!fs->protocolInto.empty()) {
+                llvm::Function* intoFunction =
+                    resolveFunction(fs->protocolInto);
+                if (!intoFunction ||
+                    intoFunction->arg_size() != 1) {
                     error("for-loop Core IntoIterator protocol "
                           "references an invalid conversion method");
                     return;
                 }
-                llvm::Function* into =
-                    intoFunction->second;
+                llvm::Function* into = intoFunction;
                 llvm::Value* source =
                     generateExpr(fs->iterable.get());
                 source = coerceCallArgument(
@@ -636,7 +630,7 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
             mBuilder->CreateUnreachable();
 
             mBuilder->SetInsertPoint(noneBlock);
-            if (!fs->protocolIntoSymbol.empty()) {
+            if (!fs->protocolInto.empty()) {
                 if (fs->protocolStateNeedsCleanup)
                     emitCleanup(
                         fs->protocolStateName,

@@ -31,6 +31,12 @@ private:
         const SourceLocation& location,
         const std::string& context,
         const Module& module);
+    const DeclarationRecord* verifyDeclarationRef(
+        const DeclarationRef& reference,
+        const SourceLocation& location,
+        const std::string& context,
+        const Module& module,
+        DeclarationKind expectedKind);
     void verifyType(const TypeRef& type, const SourceLocation& location,
                     const std::string& context, const Module& module,
                     bool allowTypeParameter = false);
