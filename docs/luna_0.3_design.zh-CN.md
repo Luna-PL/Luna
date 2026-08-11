@@ -337,6 +337,31 @@ canonical MoonIR；LLVM backend 消费同一种 MoonIR。
 同一 IR 内的显式 lexical region/scope/cleanup table 表达 continuation 和资源边界。
 region table 不是第二套控制 IR，也不得拥有与 CFG 竞争的执行语义。
 
+`M001-A`（Confirmed）：0.3 首版 canonical CFG 采用 typed-local form，而不要求 MoonIR
+本身成为 SSA。参数、源码 binding 与 lowering 生成的临时量统一由稳定 `LocalId` 引用；
+名称只保留用于诊断。LLVM backend 可以继续通过 mem2reg 和后续优化获得 SSA 性能，Moon
+格式不承担 phi 构造与两套 value discipline 的维护成本。
+
+`M001-B`（Confirmed）：一个 executable body 只包含一张 CFG block table，以及 region、
+scope、local、cleanup table。`BlockId`、`RegionId`、`ScopeId`、`LocalId`、`CleanupId`
+都是对应规范表的零基索引，sealed 后不得重排或留下悬空引用。block 只含无控制转移的
+operation 和恰好一个 terminator；jump、conditional branch、switch、return、resume、
+abort 与 unreachable 覆盖 0.3 的控制出口。`if`/`match`/loop、`?`、block expression 和
+slot/fragment continuation 必须在 sealing 前正规化为这些 block/edge，不能作为嵌套执行
+节点进入容器。lambda 拥有独立 CFG body，不在外层 expression 中嵌入另一种 body 语义。
+
+`M001-C`（Confirmed）：region 只记录 function/lambda/fragment/continuation/lexical/loop/
+match-arm/apply 的结构归属与入口，不决定执行；successor edge 才是唯一控制语义。
+scope table 记录词法 parent、所属 region 及其 local/cleanup 集合。cleanup table 使用
+`LocalId + TypeRef + CleanupAction` 描述已由 Sema 证明的义务；每条离开 scope 的 edge
+按实际执行顺序显式列出 cleanup references。verifier 从 scope parent 链独立重算应退出
+的 scope 与逆声明序 cleanup，拒绝遗漏、重复、越域和错误 action。普通 fallthrough、
+return、`?` failure、fragment abort/resume 均使用同一 edge-cleanup 规则。
+
+`M001-D`（Confirmed）：迁移完成后的 `FunctionDecl`/`FragmentDecl`/lambda 只能拥有 canonical
+CFG body，不保留 structured-body fallback 或格式兼容开关。构建期 builder 可以暂存源码
+结构，但 module sealing 必须原子删除它；verifier 和 codegen 只接受 CFG。
+
 `M002`（Confirmed）：0.3 Moon Container 只接受完全实例化的 MoonIR；generic recipe
 留在编译器输入侧，不进入首版不可信容器格式。
 

@@ -3,6 +3,7 @@
 #include "../core/TypeSystem.h"
 
 #include <cstdint>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <string>
@@ -41,6 +42,61 @@ struct DeclarationRef {
 };
 
 using DeclarationRefVec = std::vector<DeclarationRef>;
+
+inline constexpr uint32_t InvalidTableIndex =
+    std::numeric_limits<uint32_t>::max();
+
+template <typename Tag>
+struct TableRef {
+    uint32_t value = InvalidTableIndex;
+
+    bool empty() const { return value == InvalidTableIndex; }
+    bool operator==(const TableRef& other) const {
+        return value == other.value;
+    }
+    bool operator!=(const TableRef& other) const {
+        return !(*this == other);
+    }
+};
+
+struct BlockTag;
+struct RegionTag;
+struct ScopeTag;
+struct LocalTag;
+struct CleanupTag;
+using BlockId = TableRef<BlockTag>;
+using RegionId = TableRef<RegionTag>;
+using ScopeId = TableRef<ScopeTag>;
+using LocalId = TableRef<LocalTag>;
+using CleanupId = TableRef<CleanupTag>;
+
+enum class RegionKind : uint8_t {
+    Function,
+    Lambda,
+    Fragment,
+    Continuation,
+    Lexical,
+    Loop,
+    MatchArm,
+    Apply,
+};
+
+enum class LocalKind : uint8_t {
+    Parameter,
+    Binding,
+    Synthetic,
+};
+
+enum class TerminatorKind : uint8_t {
+    Invalid,
+    Jump,
+    Branch,
+    Switch,
+    Return,
+    Resume,
+    Abort,
+    Unreachable,
+};
 
 struct SourceLocation {
     std::string path;
@@ -527,6 +583,99 @@ struct AssignExpr : Expr {
     std::unique_ptr<Expr> rhs;
 };
 
+// Canonical control-flow tables are intentionally local-based rather than
+// SSA-based. Table indices are the serialized identities; source names are
+// diagnostic payload only. Regions and scopes describe structure and
+// ownership, while successor edges remain the sole execution semantics.
+struct LocalRecord {
+    LocalId id;
+    ScopeId scope;
+    LocalKind kind = LocalKind::Binding;
+    std::string name;
+    TypeRef type;
+    luna::ownership::Usage usage = luna::ownership::Usage::Copy;
+    luna::ownership::Relation relation = luna::ownership::Relation::Owned;
+};
+
+struct CleanupRecord {
+    CleanupId id;
+    ScopeId scope;
+    LocalId local;
+    TypeRef type;
+    luna::ownership::CleanupAction action =
+        luna::ownership::CleanupAction::None;
+};
+
+struct ControlEdge {
+    BlockId target;
+    // Canonical execution order, normally reverse declaration order for
+    // every lexical scope exited by this edge.
+    std::vector<CleanupId> cleanups;
+};
+
+struct SwitchEdge {
+    uint32_t tag = 0;
+    ControlEdge edge;
+};
+
+struct Terminator : Node {
+    TerminatorKind kind = TerminatorKind::Invalid;
+    // Branch condition, switch scrutinee, or return value. Jump/resume/abort/
+    // unreachable leave this empty.
+    std::unique_ptr<Expr> operand;
+    ControlEdge primary;
+    ControlEdge secondary;
+    std::vector<SwitchEdge> cases;
+    std::vector<CleanupId> exitCleanups;
+};
+
+struct BasicBlock : Node {
+    BlockId id;
+    RegionId region;
+    ScopeId scope;
+    std::vector<std::unique_ptr<Stmt>> operations;
+    Terminator terminator;
+};
+
+struct RegionRecord {
+    RegionId id;
+    RegionId parent;
+    RegionKind kind = RegionKind::Lexical;
+    ScopeId scope;
+    BlockId entry;
+    BlockId exit;
+    std::vector<BlockId> blocks;
+    SourceLocation location;
+};
+
+struct ScopeRecord {
+    ScopeId id;
+    ScopeId parent;
+    RegionId region;
+    std::vector<LocalId> locals;
+    // Declaration order. An exiting edge executes these in reverse order.
+    std::vector<CleanupId> cleanups;
+    SourceLocation location;
+};
+
+struct ControlFlowGraph {
+    bool sealed = false;
+    BlockId entry;
+    RegionId rootRegion;
+    ScopeId rootScope;
+    std::vector<BasicBlock> blocks;
+    std::vector<RegionRecord> regions;
+    std::vector<ScopeRecord> scopes;
+    std::vector<LocalRecord> locals;
+    std::vector<CleanupRecord> cleanups;
+
+    const BasicBlock* findBlock(BlockId id) const;
+    const RegionRecord* findRegion(RegionId id) const;
+    const ScopeRecord* findScope(ScopeId id) const;
+    const LocalRecord* findLocal(LocalId id) const;
+    const CleanupRecord* findCleanup(CleanupId id) const;
+};
+
 struct Decl : Node {
     virtual ~Decl() = default;
     std::string packageId;
@@ -692,6 +841,8 @@ const char* retentionName(Retention retention);
 const char* declarationKindName(DeclarationKind kind);
 const char* costKindName(CostKind kind);
 const char* operatorName(Operator op);
+const char* regionKindName(RegionKind kind);
+const char* terminatorKindName(TerminatorKind kind);
 const char* typeDomainName(luna::types::TypeDomain domain);
 const char* identityModeName(luna::types::IdentityMode mode);
 

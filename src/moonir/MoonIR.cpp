@@ -332,6 +332,36 @@ const TypeRecord* Module::findType(const TypeRef& id) const {
     return &typeTable[found->second];
 }
 
+const BasicBlock* ControlFlowGraph::findBlock(BlockId id) const {
+    return !id.empty() && id.value < blocks.size() &&
+                   blocks[id.value].id == id
+        ? &blocks[id.value] : nullptr;
+}
+
+const RegionRecord* ControlFlowGraph::findRegion(RegionId id) const {
+    return !id.empty() && id.value < regions.size() &&
+                   regions[id.value].id == id
+        ? &regions[id.value] : nullptr;
+}
+
+const ScopeRecord* ControlFlowGraph::findScope(ScopeId id) const {
+    return !id.empty() && id.value < scopes.size() &&
+                   scopes[id.value].id == id
+        ? &scopes[id.value] : nullptr;
+}
+
+const LocalRecord* ControlFlowGraph::findLocal(LocalId id) const {
+    return !id.empty() && id.value < locals.size() &&
+                   locals[id.value].id == id
+        ? &locals[id.value] : nullptr;
+}
+
+const CleanupRecord* ControlFlowGraph::findCleanup(CleanupId id) const {
+    return !id.empty() && id.value < cleanups.size() &&
+                   cleanups[id.value].id == id
+        ? &cleanups[id.value] : nullptr;
+}
+
 const DeclarationRecord* Module::findDeclaration(
     const SymbolRef& symbol) const {
     auto found = declarationRecordsBySymbol.find(symbol.value);
@@ -483,6 +513,34 @@ const char* operatorName(Operator op) {
         case Operator::BitNot: return "bit_not";
         case Operator::Dereference: return "deref";
         case Operator::Negate: return "neg";
+    }
+    return "unknown";
+}
+
+const char* regionKindName(RegionKind kind) {
+    switch (kind) {
+        case RegionKind::Function: return "function";
+        case RegionKind::Lambda: return "lambda";
+        case RegionKind::Fragment: return "fragment";
+        case RegionKind::Continuation: return "continuation";
+        case RegionKind::Lexical: return "lexical";
+        case RegionKind::Loop: return "loop";
+        case RegionKind::MatchArm: return "match_arm";
+        case RegionKind::Apply: return "apply";
+    }
+    return "unknown";
+}
+
+const char* terminatorKindName(TerminatorKind kind) {
+    switch (kind) {
+        case TerminatorKind::Invalid: return "invalid";
+        case TerminatorKind::Jump: return "jump";
+        case TerminatorKind::Branch: return "branch";
+        case TerminatorKind::Switch: return "switch";
+        case TerminatorKind::Return: return "return";
+        case TerminatorKind::Resume: return "resume";
+        case TerminatorKind::Abort: return "abort";
+        case TerminatorKind::Unreachable: return "unreachable";
     }
     return "unknown";
 }

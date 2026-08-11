@@ -372,6 +372,36 @@ objects may exist in a builder, but they must not form a second semantic IR.
 uses explicit lexical region/scope/cleanup tables in that same IR for continuations and resource
 boundaries. Region tables are not a second control IR and have no competing execution semantics.
 
+`M001-A` (Confirmed): the first 0.3 canonical CFG uses typed-local form rather than requiring
+MoonIR itself to be SSA. Parameters, source bindings, and lowering-generated temporaries are all
+referenced by stable `LocalId`s; names survive only for diagnostics. The LLVM backend may still
+obtain SSA performance through mem2reg and later optimization, while the Moon format avoids phi
+construction and a second value discipline.
+
+`M001-B` (Confirmed): an executable body contains one CFG block table plus region, scope, local,
+and cleanup tables. `BlockId`, `RegionId`, `ScopeId`, `LocalId`, and `CleanupId` are zero-based
+indices into their canonical tables and may neither be reordered nor dangle after sealing. A
+block contains only operations that cannot transfer control and exactly one terminator. Jump,
+conditional branch, switch, return, resume, abort, and unreachable cover the 0.3 exits. `if`,
+`match`, loops, `?`, block expressions, and slot/fragment continuations must be normalized to
+these blocks and edges before sealing; they cannot enter a container as nested executable nodes.
+A lambda owns an independent CFG body rather than embedding a second body semantics in an outer
+expression.
+
+`M001-C` (Confirmed): regions record only the structural ownership and entry of function,
+lambda, fragment, continuation, lexical, loop, match-arm, and apply regions; successor edges
+remain the sole control semantics. A scope records its lexical parent, owning region, locals, and
+cleanup set. A cleanup row uses `LocalId + TypeRef + CleanupAction` to describe an obligation
+already proved by Sema, while every scope-exiting edge explicitly lists cleanup references in
+execution order. The verifier independently recomputes exited scopes and reverse-declaration
+cleanup order and rejects omissions, duplicates, out-of-scope references, and wrong actions.
+Ordinary fallthrough, return, `?` failure, and fragment abort/resume use the same edge rule.
+
+`M001-D` (Confirmed): after migration, `FunctionDecl`, `FragmentDecl`, and lambda bodies can own
+only canonical CFG bodies; there is no structured-body fallback or format compatibility flag.
+A construction builder may temporarily retain source structure, but module sealing atomically
+removes it, and both verifier and codegen accept only the CFG.
+
 `M002` (Confirmed): a 0.3 Moon Container accepts only fully instantiated MoonIR. Generic recipes
 remain on the compiler-input side and do not enter the first untrusted container format.
 

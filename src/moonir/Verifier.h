@@ -13,6 +13,7 @@ namespace moon {
 class Verifier {
 public:
     bool verify(const Module& module);
+    bool verify(const ControlFlowGraph& graph, const Module& module);
     const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
 private:

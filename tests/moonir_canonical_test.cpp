@@ -14,6 +14,8 @@ static_assert(std::is_same_v<decltype(moon::CallExpr::calleeRef), moon::Declarat
 static_assert(std::is_same_v<decltype(moon::ForStmt::protocolNext), moon::DeclarationRef>);
 static_assert(std::is_same_v<decltype(moon::LaunchExpr::kernelRef), moon::DeclarationRef>);
 static_assert(std::is_same_v<decltype(moon::TryExpr::errorConversion), moon::DeclarationRef>);
+static_assert(!std::is_same_v<moon::BlockId, moon::ScopeId>);
+static_assert(!std::is_same_v<moon::LocalId, moon::CleanupId>);
 static_assert(std::is_same_v<decltype(moon::FunctionDecl::returnType), moon::TypeRef>);
 static_assert(std::is_same_v<decltype(moon::StructDecl::type), moon::TypeRef>);
 
@@ -27,6 +29,23 @@ int fail(const char* message) {
 } // namespace
 
 int main() {
+    moon::ControlFlowGraph cfg;
+    cfg.entry = moon::BlockId{0};
+    cfg.rootRegion = moon::RegionId{0};
+    cfg.rootScope = moon::ScopeId{0};
+    cfg.blocks.emplace_back();
+    cfg.blocks.back().id = cfg.entry;
+    cfg.blocks.back().region = cfg.rootRegion;
+    cfg.blocks.back().scope = cfg.rootScope;
+    cfg.blocks.back().terminator.kind = moon::TerminatorKind::Return;
+    cfg.regions.push_back({cfg.rootRegion, {}, moon::RegionKind::Function,
+                           cfg.rootScope, cfg.entry, {}, {cfg.entry}, {}});
+    cfg.scopes.push_back({cfg.rootScope, {}, cfg.rootRegion, {}, {}, {}});
+    if (!cfg.findBlock(cfg.entry) || !cfg.findRegion(cfg.rootRegion) ||
+        !cfg.findScope(cfg.rootScope) ||
+        cfg.findBlock(moon::BlockId{1}))
+        return fail("canonical CFG table references are not index-stable");
+
     auto shortArray = Type::makeArray(TyI32, 2);
     auto longArray = Type::makeArray(TyI32, 5);
     auto shortIterator = Type::makeIterator(
@@ -44,6 +63,7 @@ int main() {
     auto product = Type::makeStruct(
         "Snapshot", {{"value", TyI32}}, "canonical.test::Snapshot");
     const auto productId = module.registerType(product);
+    const auto stringId = module.registerType(TyString);
     auto forward = Type::makeStruct(
         "Forward", {}, "canonical.test::Forward");
     auto completedForward = Type::makeStruct(
@@ -52,6 +72,57 @@ int main() {
     if (module.registerType(completedForward) != forwardId)
         return fail("completed nominal declaration changed its stable TypeId");
     module.sealTypeTable();
+    cfg.sealed = true;
+    moon::Verifier cfgVerifier;
+    if (!cfgVerifier.verify(cfg, module))
+        return fail("canonical CFG foundation failed independent verification");
+    cfg.blocks.front().id = moon::BlockId{1};
+    if (cfgVerifier.verify(cfg, module))
+        return fail("CFG verifier accepted a forged canonical block index");
+    cfg.blocks.front().id = cfg.entry;
+
+    moon::ControlFlowGraph cleanupCfg;
+    cleanupCfg.sealed = true;
+    cleanupCfg.entry = moon::BlockId{0};
+    cleanupCfg.rootRegion = moon::RegionId{0};
+    cleanupCfg.rootScope = moon::ScopeId{0};
+    cleanupCfg.blocks.resize(3);
+    for (uint32_t index = 0; index < cleanupCfg.blocks.size(); ++index)
+        cleanupCfg.blocks[index].id = moon::BlockId{index};
+    cleanupCfg.blocks[0].region = moon::RegionId{0};
+    cleanupCfg.blocks[0].scope = moon::ScopeId{0};
+    cleanupCfg.blocks[0].terminator.kind = moon::TerminatorKind::Jump;
+    cleanupCfg.blocks[0].terminator.primary.target = moon::BlockId{1};
+    cleanupCfg.blocks[1].region = moon::RegionId{1};
+    cleanupCfg.blocks[1].scope = moon::ScopeId{1};
+    cleanupCfg.blocks[1].terminator.kind = moon::TerminatorKind::Jump;
+    cleanupCfg.blocks[1].terminator.primary.target = moon::BlockId{2};
+    cleanupCfg.blocks[1].terminator.primary.cleanups = {moon::CleanupId{0}};
+    cleanupCfg.blocks[2].region = moon::RegionId{0};
+    cleanupCfg.blocks[2].scope = moon::ScopeId{0};
+    cleanupCfg.blocks[2].terminator.kind = moon::TerminatorKind::Return;
+    cleanupCfg.regions.push_back({moon::RegionId{0}, {},
+        moon::RegionKind::Function, moon::ScopeId{0}, moon::BlockId{0}, {},
+        {moon::BlockId{0}, moon::BlockId{2}}, {}});
+    cleanupCfg.regions.push_back({moon::RegionId{1}, moon::RegionId{0},
+        moon::RegionKind::Lexical, moon::ScopeId{1}, moon::BlockId{1},
+        moon::BlockId{2}, {moon::BlockId{1}}, {}});
+    cleanupCfg.scopes.push_back({moon::ScopeId{0}, {}, moon::RegionId{0},
+                                 {}, {}, {}});
+    cleanupCfg.scopes.push_back({moon::ScopeId{1}, moon::ScopeId{0},
+        moon::RegionId{1}, {moon::LocalId{0}}, {moon::CleanupId{0}}, {}});
+    cleanupCfg.locals.push_back({moon::LocalId{0}, moon::ScopeId{1},
+        moon::LocalKind::Binding, "owned", stringId,
+        luna::ownership::Usage::Affine,
+        luna::ownership::Relation::Owned});
+    cleanupCfg.cleanups.push_back({moon::CleanupId{0}, moon::ScopeId{1},
+        moon::LocalId{0}, stringId,
+        luna::ownership::CleanupAction::Deallocate});
+    if (!cfgVerifier.verify(cleanupCfg, module))
+        return fail("CFG verifier rejected a canonical scope-exit cleanup edge");
+    cleanupCfg.blocks[1].terminator.primary.cleanups.clear();
+    if (cfgVerifier.verify(cleanupCfg, module))
+        return fail("CFG verifier accepted an omitted scope-exit cleanup");
 
     // The sealed payload must not observe later mutations of the frontend
     // object from which it was frozen.
@@ -81,6 +152,7 @@ int main() {
     reverse.registerType(shortIterator);
     reverse.registerType(Type::makeStruct(
         "Snapshot", {{"value", TyI32}}, "canonical.test::Snapshot"));
+    reverse.registerType(TyString);
     reverse.registerType(completedForward);
     reverse.registerType(forward);
     reverse.sealTypeTable();

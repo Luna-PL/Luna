@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <functional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -137,6 +138,370 @@ bool validSeparatedName(const std::string& value, const std::string& separator,
 }
 
 } // namespace
+
+bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
+    mErrors.clear();
+    mVerifiedTypeIds.clear();
+    mActiveTypeIds.clear();
+    if (!module.typeTableSealed)
+        error({}, "MoonIR type table must be sealed before CFG verification");
+    if (!graph.sealed)
+        error({}, "MoonIR CFG must be sealed before verification");
+    if (graph.blocks.empty() || graph.regions.empty() || graph.scopes.empty())
+        error({}, "MoonIR CFG is missing a required canonical table");
+
+    const auto checkIndexTable = [this](
+        const auto& table, const std::string& name) {
+        for (size_t index = 0; index < table.size(); ++index) {
+            if (table[index].id.empty() || table[index].id.value != index)
+                error({}, name + " table row " + std::to_string(index) +
+                          " does not carry its canonical index");
+        }
+    };
+    checkIndexTable(graph.blocks, "block");
+    checkIndexTable(graph.regions, "region");
+    checkIndexTable(graph.scopes, "scope");
+    checkIndexTable(graph.locals, "local");
+    checkIndexTable(graph.cleanups, "cleanup");
+
+    const auto* entry = graph.findBlock(graph.entry);
+    const auto* rootRegion = graph.findRegion(graph.rootRegion);
+    const auto* rootScope = graph.findScope(graph.rootScope);
+    if (!entry) error({}, "CFG entry does not reference a canonical block");
+    if (!rootRegion) error({}, "CFG root does not reference a canonical region");
+    if (!rootScope) error({}, "CFG root does not reference a canonical scope");
+    if (rootRegion && !rootRegion->parent.empty())
+        error(rootRegion->location, "CFG root region has a parent");
+    if (rootScope && !rootScope->parent.empty())
+        error(rootScope->location, "CFG root scope has a parent");
+    if (entry && (entry->region != graph.rootRegion ||
+                  entry->scope != graph.rootScope))
+        error(entry->location,
+              "CFG entry is outside the root region or root scope");
+
+    const auto verifyParentChains = [this](
+        size_t size, const auto& find,
+        const auto& parentOf, const std::string& name) {
+        for (uint32_t index = 0; index < size; ++index) {
+            std::unordered_set<uint32_t> seen;
+            auto current = find(index);
+            while (current) {
+                const auto parent = parentOf(*current);
+                if (parent.empty()) break;
+                if (!seen.insert(parent.value).second) {
+                    error({}, name + " parent chain contains a cycle at row " +
+                              std::to_string(index));
+                    break;
+                }
+                current = find(parent.value);
+                if (!current) {
+                    error({}, name + " parent chain references a missing row from " +
+                              std::to_string(index));
+                    break;
+                }
+            }
+        }
+    };
+    verifyParentChains(
+        graph.regions.size(),
+        [&graph](uint32_t index) -> const RegionRecord* {
+            return graph.findRegion(RegionId{index});
+        },
+        [](const RegionRecord& region) { return region.parent; }, "region");
+    verifyParentChains(
+        graph.scopes.size(),
+        [&graph](uint32_t index) -> const ScopeRecord* {
+            return graph.findScope(ScopeId{index});
+        },
+        [](const ScopeRecord& scope) { return scope.parent; }, "scope");
+
+    std::vector<uint32_t> blockOwners(graph.blocks.size(), 0);
+    for (const auto& region : graph.regions) {
+        if (!graph.findScope(region.scope))
+            error(region.location, "region references a missing lexical scope");
+        if (!graph.findBlock(region.entry))
+            error(region.location, "region references a missing entry block");
+        else if (std::find(region.blocks.begin(), region.blocks.end(),
+                           region.entry) == region.blocks.end())
+            error(region.location,
+                  "region entry is not a direct member of the region");
+        if (!region.exit.empty() && !graph.findBlock(region.exit))
+            error(region.location, "region references a missing exit block");
+        std::unordered_set<uint32_t> members;
+        for (const auto blockId : region.blocks) {
+            const auto* block = graph.findBlock(blockId);
+            if (!block) {
+                error(region.location, "region contains a missing block");
+                continue;
+            }
+            if (!members.insert(blockId.value).second)
+                error(region.location, "region repeats block " +
+                                       std::to_string(blockId.value));
+            if (block->region != region.id)
+                error(block->location, "block region reference disagrees with its owner row");
+            ++blockOwners[blockId.value];
+        }
+    }
+    for (size_t index = 0; index < blockOwners.size(); ++index)
+        if (blockOwners[index] != 1)
+            error(graph.blocks[index].location,
+                  "block " + std::to_string(index) +
+                  " must belong to exactly one direct region");
+
+    std::vector<uint32_t> localOwners(graph.locals.size(), 0);
+    std::vector<uint32_t> cleanupOwners(graph.cleanups.size(), 0);
+    for (const auto& scope : graph.scopes) {
+        if (!graph.findRegion(scope.region))
+            error(scope.location, "scope references a missing region");
+        std::unordered_set<uint32_t> members;
+        for (const auto localId : scope.locals) {
+            const auto* local = graph.findLocal(localId);
+            if (!local) {
+                error(scope.location, "scope contains a missing local");
+                continue;
+            }
+            if (!members.insert(localId.value).second)
+                error(scope.location, "scope repeats local " +
+                                      std::to_string(localId.value));
+            if (local->scope != scope.id)
+                error(scope.location, "local scope reference disagrees with its owner row");
+            ++localOwners[localId.value];
+        }
+        members.clear();
+        for (const auto cleanupId : scope.cleanups) {
+            const auto* cleanup = graph.findCleanup(cleanupId);
+            if (!cleanup) {
+                error(scope.location, "scope contains a missing cleanup");
+                continue;
+            }
+            if (!members.insert(cleanupId.value).second)
+                error(scope.location, "scope repeats cleanup " +
+                                      std::to_string(cleanupId.value));
+            if (cleanup->scope != scope.id)
+                error(scope.location, "cleanup scope reference disagrees with its owner row");
+            ++cleanupOwners[cleanupId.value];
+        }
+    }
+    for (const auto& region : graph.regions) {
+        if (region.id != graph.rootRegion && region.parent.empty())
+            error(region.location, "non-root region has no parent");
+    }
+    for (const auto& scope : graph.scopes) {
+        if (scope.id != graph.rootScope && scope.parent.empty())
+            error(scope.location, "non-root scope has no parent");
+    }
+    for (size_t index = 0; index < graph.locals.size(); ++index) {
+        const auto& local = graph.locals[index];
+        if (localOwners[index] != 1)
+            error({}, "local " + std::to_string(index) +
+                      " must belong to exactly one scope");
+        const auto* type = module.findType(local.type);
+        if (!type)
+            error({}, "local " + std::to_string(index) +
+                      " references a missing frozen type");
+        else if (!luna::ownership::satisfiesUsageRequirement(
+                     local.usage, type->sysmeta.resource.usage))
+            error({}, "local " + std::to_string(index) +
+                      " weakens its frozen usage requirement");
+    }
+    for (size_t index = 0; index < graph.cleanups.size(); ++index) {
+        const auto& cleanup = graph.cleanups[index];
+        if (cleanupOwners[index] != 1)
+            error({}, "cleanup " + std::to_string(index) +
+                      " must belong to exactly one scope");
+        const auto* local = graph.findLocal(cleanup.local);
+        if (!local)
+            error({}, "cleanup " + std::to_string(index) +
+                      " references a missing local");
+        else {
+            if (local->scope != cleanup.scope)
+                error({}, "cleanup " + std::to_string(index) +
+                          " targets a local owned by another scope");
+            if (local->type != cleanup.type)
+                error({}, "cleanup " + std::to_string(index) +
+                          " type disagrees with its local");
+        }
+        const auto* cleanupType = module.findType(cleanup.type);
+        if (cleanupType && !cleanupType->sysmeta.resource.cleanupRequired)
+            error({}, "cleanup " + std::to_string(index) +
+                      " targets a type with no cleanup obligation");
+        verifyCleanupAction(
+            cleanup.action, cleanup.type, {},
+            "cleanup " + std::to_string(index), module);
+    }
+
+    const auto expectedCleanups = [&graph](
+        ScopeId source, ScopeId target) {
+        std::unordered_set<uint32_t> targetAncestors;
+        for (const ScopeRecord* scope = graph.findScope(target); scope;) {
+            targetAncestors.insert(scope->id.value);
+            scope = graph.findScope(scope->parent);
+        }
+        std::vector<CleanupId> result;
+        std::unordered_set<uint32_t> visited;
+        for (const ScopeRecord* scope = graph.findScope(source); scope;) {
+            if (!visited.insert(scope->id.value).second ||
+                targetAncestors.count(scope->id.value))
+                break;
+            result.insert(result.end(), scope->cleanups.rbegin(),
+                          scope->cleanups.rend());
+            scope = graph.findScope(scope->parent);
+        }
+        return result;
+    };
+    const auto expectedExitCleanups = [&graph](ScopeId source) {
+        std::vector<CleanupId> result;
+        std::unordered_set<uint32_t> visited;
+        for (const ScopeRecord* scope = graph.findScope(source); scope;) {
+            if (!visited.insert(scope->id.value).second) break;
+            result.insert(result.end(), scope->cleanups.rbegin(),
+                          scope->cleanups.rend());
+            scope = graph.findScope(scope->parent);
+        }
+        return result;
+    };
+    const auto verifyEdge = [this, &graph, &expectedCleanups](
+        const BasicBlock& source, const ControlEdge& edge,
+        const std::string& context) {
+        const auto* target = graph.findBlock(edge.target);
+        if (!target) {
+            error(source.location, context + " references a missing target block");
+            return;
+        }
+        if (edge.cleanups != expectedCleanups(source.scope, target->scope))
+            error(source.location, context +
+                  " does not carry the canonical scope-exit cleanup sequence");
+    };
+
+    std::vector<std::vector<BlockId>> successors(graph.blocks.size());
+    for (const auto& block : graph.blocks) {
+        const auto* scope = graph.findScope(block.scope);
+        if (!graph.findRegion(block.region) || !scope)
+            error(block.location, "block references a missing region or scope");
+        else if (scope->region != block.region)
+            error(block.location, "block scope belongs to another region");
+        const auto appendSuccessor = [&](const ControlEdge& edge) {
+            if (!edge.target.empty()) successors[block.id.value].push_back(edge.target);
+        };
+        const auto rejectOperand = [&]() {
+            if (block.terminator.operand)
+                error(block.terminator.location,
+                      "terminator unexpectedly carries an operand");
+        };
+        const auto rejectSecondaryCasesAndExit = [&]() {
+            if (!block.terminator.secondary.target.empty() ||
+                !block.terminator.secondary.cleanups.empty() ||
+                !block.terminator.cases.empty() ||
+                !block.terminator.exitCleanups.empty())
+                error(block.terminator.location,
+                      "terminator carries fields outside its canonical shape");
+        };
+        switch (block.terminator.kind) {
+            case TerminatorKind::Invalid:
+                error(block.terminator.location, "block has no terminator");
+                break;
+            case TerminatorKind::Jump:
+                rejectOperand();
+                verifyEdge(block, block.terminator.primary, "jump edge");
+                appendSuccessor(block.terminator.primary);
+                rejectSecondaryCasesAndExit();
+                break;
+            case TerminatorKind::Branch:
+                if (!block.terminator.operand)
+                    error(block.terminator.location,
+                          "branch terminator has no condition");
+                else
+                    verifyExpr(block.terminator.operand.get(), module, "CFG branch");
+                verifyEdge(block, block.terminator.primary, "true edge");
+                verifyEdge(block, block.terminator.secondary, "false edge");
+                appendSuccessor(block.terminator.primary);
+                appendSuccessor(block.terminator.secondary);
+                if (!block.terminator.cases.empty() ||
+                    !block.terminator.exitCleanups.empty())
+                    error(block.terminator.location,
+                          "branch terminator carries non-branch fields");
+                break;
+            case TerminatorKind::Switch: {
+                if (!block.terminator.operand)
+                    error(block.terminator.location,
+                          "switch terminator has no scrutinee");
+                else
+                    verifyExpr(block.terminator.operand.get(), module, "CFG switch");
+                verifyEdge(block, block.terminator.primary, "switch default edge");
+                appendSuccessor(block.terminator.primary);
+                std::unordered_set<uint32_t> tags;
+                for (const auto& item : block.terminator.cases) {
+                    if (!tags.insert(item.tag).second)
+                        error(block.terminator.location,
+                              "switch terminator repeats a case tag");
+                    verifyEdge(block, item.edge, "switch case edge");
+                    appendSuccessor(item.edge);
+                }
+                if (!block.terminator.secondary.target.empty() ||
+                    !block.terminator.secondary.cleanups.empty() ||
+                    !block.terminator.exitCleanups.empty())
+                    error(block.terminator.location,
+                          "switch terminator carries non-switch fields");
+                break;
+            }
+            case TerminatorKind::Return:
+                if (block.terminator.operand)
+                    verifyExpr(block.terminator.operand.get(), module, "CFG return");
+                if (!block.terminator.primary.target.empty() ||
+                    !block.terminator.primary.cleanups.empty() ||
+                    !block.terminator.secondary.target.empty() ||
+                    !block.terminator.secondary.cleanups.empty() ||
+                    !block.terminator.cases.empty())
+                    error(block.terminator.location,
+                          "return terminator carries successor fields");
+                if (block.terminator.exitCleanups !=
+                    expectedExitCleanups(block.scope))
+                    error(block.terminator.location,
+                          "return terminator does not clean every exited scope");
+                break;
+            case TerminatorKind::Resume:
+            case TerminatorKind::Abort:
+                rejectOperand();
+                verifyEdge(
+                    block, block.terminator.primary,
+                    block.terminator.kind == TerminatorKind::Resume
+                        ? "resume edge" : "abort edge");
+                appendSuccessor(block.terminator.primary);
+                rejectSecondaryCasesAndExit();
+                break;
+            case TerminatorKind::Unreachable:
+                rejectOperand();
+                if (!block.terminator.primary.target.empty() ||
+                    !block.terminator.primary.cleanups.empty())
+                    error(block.terminator.location,
+                          "unreachable terminator carries a successor");
+                rejectSecondaryCasesAndExit();
+                break;
+        }
+    }
+
+    if (entry) {
+        std::vector<bool> reachable(graph.blocks.size(), false);
+        std::vector<BlockId> worklist{graph.entry};
+        while (!worklist.empty()) {
+            const BlockId current = worklist.back();
+            worklist.pop_back();
+            if (current.empty() || current.value >= reachable.size() ||
+                reachable[current.value])
+                continue;
+            reachable[current.value] = true;
+            for (const auto successor : successors[current.value])
+                worklist.push_back(successor);
+        }
+        for (size_t index = 0; index < reachable.size(); ++index)
+            if (!reachable[index])
+                error(graph.blocks[index].location,
+                      "sealed CFG contains unreachable block " +
+                          std::to_string(index));
+    }
+
+    return mErrors.empty();
+}
 
 bool Verifier::verify(const Module& module) {
     mErrors.clear();
