@@ -502,6 +502,7 @@ private:
             auto clone = std::make_unique<FreeStmt>();
             clone->operand = cloneExpr(statement->operand.get());
             clone->action = statement->action;
+            clone->isImplicit = statement->isImplicit;
             return located(std::move(clone), src);
         }
         if (auto* statement = dynamic_cast<const SlotDeclStmt*>(src)) {

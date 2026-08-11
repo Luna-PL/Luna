@@ -1,4 +1,5 @@
 #include "moonir/MoonIR.h"
+#include "moonir/ControlFlowBuilder.h"
 #include "moonir/Verifier.h"
 
 #include <iostream>
@@ -63,7 +64,13 @@ int main() {
     auto product = Type::makeStruct(
         "Snapshot", {{"value", TyI32}}, "canonical.test::Snapshot");
     const auto productId = module.registerType(product);
+    const auto i32Id = module.registerType(TyI32);
     const auto stringId = module.registerType(TyString);
+    const auto boolId = module.registerType(TyBool);
+    auto choiceType = Type::makeEnum(
+        "Choice", {{"None", {}}, {"Some", {TyI32}}},
+        "canonical.test::Choice");
+    const auto choiceId = module.registerType(choiceType);
     auto forward = Type::makeStruct(
         "Forward", {}, "canonical.test::Forward");
     auto completedForward = Type::makeStruct(
@@ -95,6 +102,16 @@ int main() {
     cleanupCfg.blocks[0].terminator.primary.target = moon::BlockId{1};
     cleanupCfg.blocks[1].region = moon::RegionId{1};
     cleanupCfg.blocks[1].scope = moon::ScopeId{1};
+    auto cleanupBinding = std::make_unique<moon::LetStmt>();
+    cleanupBinding->name = "owned";
+    cleanupBinding->local = moon::LocalId{0};
+    cleanupBinding->usage = luna::ownership::Usage::Affine;
+    cleanupBinding->type = stringId;
+    auto cleanupValue = std::make_unique<moon::StringLiteralExpr>();
+    cleanupValue->value = "owned";
+    cleanupValue->type = stringId;
+    cleanupBinding->initializer = std::move(cleanupValue);
+    cleanupCfg.blocks[1].operations.push_back(std::move(cleanupBinding));
     cleanupCfg.blocks[1].terminator.kind = moon::TerminatorKind::Jump;
     cleanupCfg.blocks[1].terminator.primary.target = moon::BlockId{2};
     cleanupCfg.blocks[1].terminator.primary.cleanups = {moon::CleanupId{0}};
@@ -116,13 +133,162 @@ int main() {
         luna::ownership::Usage::Affine,
         luna::ownership::Relation::Owned});
     cleanupCfg.cleanups.push_back({moon::CleanupId{0}, moon::ScopeId{1},
-        moon::LocalId{0}, stringId,
+        {moon::LocalId{0}, {}}, stringId,
         luna::ownership::CleanupAction::Deallocate});
     if (!cfgVerifier.verify(cleanupCfg, module))
         return fail("CFG verifier rejected a canonical scope-exit cleanup edge");
     cleanupCfg.blocks[1].terminator.primary.cleanups.clear();
     if (cfgVerifier.verify(cleanupCfg, module))
         return fail("CFG verifier accepted an omitted scope-exit cleanup");
+
+    auto structured = std::make_unique<moon::BlockStmt>();
+    auto binding = std::make_unique<moon::LetStmt>();
+    binding->name = "owned";
+    binding->usage = luna::ownership::Usage::Affine;
+    binding->type = stringId;
+    auto text = std::make_unique<moon::StringLiteralExpr>();
+    text->value = "cfg";
+    text->type = stringId;
+    binding->initializer = std::move(text);
+    structured->stmts.push_back(std::move(binding));
+    auto use = std::make_unique<moon::ExprStmt>();
+    auto usedIdentifier = std::make_unique<moon::IdentifierExpr>();
+    usedIdentifier->name = "owned";
+    usedIdentifier->type = stringId;
+    use->expr = std::move(usedIdentifier);
+    structured->stmts.push_back(std::move(use));
+    auto branch = std::make_unique<moon::IfStmt>();
+    auto condition = std::make_unique<moon::BoolLiteralExpr>();
+    condition->value = true;
+    condition->type = boolId;
+    branch->cond = std::move(condition);
+    branch->thenBlock = std::make_unique<moon::BlockStmt>();
+    branch->elseBranch = std::make_unique<moon::BlockStmt>();
+    structured->stmts.push_back(std::move(branch));
+    auto loop = std::make_unique<moon::WhileStmt>();
+    auto loopCondition = std::make_unique<moon::BoolLiteralExpr>();
+    loopCondition->value = false;
+    loopCondition->type = boolId;
+    loop->cond = std::move(loopCondition);
+    loop->body = std::make_unique<moon::BlockStmt>();
+    structured->stmts.push_back(std::move(loop));
+    auto match = std::make_unique<moon::MatchStmt>();
+    match->matchedType = choiceId;
+    auto selected = std::make_unique<moon::VariantConstructExpr>();
+    selected->typeName = "Choice";
+    selected->variantName = "Some";
+    selected->constructedType = choiceId;
+    selected->type = choiceId;
+    auto selectedValue = std::make_unique<moon::IntLiteralExpr>();
+    selectedValue->value = 7;
+    selectedValue->type = i32Id;
+    selected->args.push_back(std::move(selectedValue));
+    match->scrutinee = std::move(selected);
+    moon::MatchArm noneArm;
+    noneArm.variantName = "None";
+    noneArm.variantIndex = 0;
+    noneArm.body = std::make_unique<moon::BlockStmt>();
+    match->arms.push_back(std::move(noneArm));
+    moon::MatchArm someArm;
+    someArm.variantName = "Some";
+    someArm.variantIndex = 1;
+    someArm.bindings = {"value"};
+    someArm.bindingTypes = {i32Id};
+    someArm.bindingUsages = {luna::ownership::Usage::Copy};
+    someArm.body = std::make_unique<moon::BlockStmt>();
+    auto patternUse = std::make_unique<moon::ExprStmt>();
+    auto patternIdentifier = std::make_unique<moon::IdentifierExpr>();
+    patternIdentifier->name = "value";
+    patternIdentifier->type = i32Id;
+    patternUse->expr = std::move(patternIdentifier);
+    someArm.body->stmts.push_back(std::move(patternUse));
+    match->arms.push_back(std::move(someArm));
+    structured->stmts.push_back(std::move(match));
+    auto implicitCleanup = std::make_unique<moon::FreeStmt>();
+    implicitCleanup->isImplicit = true;
+    implicitCleanup->action = luna::ownership::CleanupAction::Deallocate;
+    auto cleanedIdentifier = std::make_unique<moon::IdentifierExpr>();
+    cleanedIdentifier->name = "owned";
+    cleanedIdentifier->type = stringId;
+    implicitCleanup->operand = std::move(cleanedIdentifier);
+    structured->stmts.push_back(std::move(implicitCleanup));
+
+    moon::ControlFlowBuilder cfgBuilder;
+    auto loweredCfg = cfgBuilder.build(
+        std::move(structured), {}, moon::RegionKind::Function, module);
+    if (!loweredCfg || !cfgVerifier.verify(*loweredCfg, module))
+        return fail("structured if/fallthrough cleanup did not become canonical CFG");
+    if (loweredCfg->blocks.size() != 11 || loweredCfg->cleanups.size() != 1 ||
+        loweredCfg->blocks.front().operations.size() != 2 ||
+        loweredCfg->blocks.back().terminator.kind !=
+            moon::TerminatorKind::Return)
+        return fail("canonical CFG builder retained structured control or cleanup operations");
+    auto* loweredUse = dynamic_cast<moon::ExprStmt*>(
+        loweredCfg->blocks.front().operations[1].get());
+    auto* loweredUseId = loweredUse
+        ? dynamic_cast<moon::IdentifierExpr*>(loweredUse->expr.get()) : nullptr;
+    if (!loweredUseId || loweredUseId->local != moon::LocalId{0})
+        return fail("canonical CFG builder did not bind a stable LocalId");
+    loweredUseId->local = moon::LocalId{99};
+    if (cfgVerifier.verify(*loweredCfg, module))
+        return fail("CFG verifier accepted a forged LocalId use");
+    loweredUseId->local = {};
+    if (cfgVerifier.verify(*loweredCfg, module))
+        return fail("CFG verifier accepted an unresolved local identifier");
+    loweredUseId->local = moon::LocalId{0};
+
+    auto unresolvedStructured = std::make_unique<moon::BlockStmt>();
+    auto unresolvedUse = std::make_unique<moon::ExprStmt>();
+    auto unresolvedIdentifier = std::make_unique<moon::IdentifierExpr>();
+    unresolvedIdentifier->name = "missing";
+    unresolvedIdentifier->type = i32Id;
+    unresolvedUse->expr = std::move(unresolvedIdentifier);
+    unresolvedStructured->stmts.push_back(std::move(unresolvedUse));
+    if (cfgBuilder.build(
+            std::move(unresolvedStructured), {},
+            moon::RegionKind::Function, module))
+        return fail("CFG builder accepted an unresolved local identifier");
+
+    auto movedStructured = std::make_unique<moon::BlockStmt>();
+    auto sourceBinding = std::make_unique<moon::LetStmt>();
+    sourceBinding->name = "source";
+    sourceBinding->usage = luna::ownership::Usage::Affine;
+    sourceBinding->type = stringId;
+    auto sourceValue = std::make_unique<moon::StringLiteralExpr>();
+    sourceValue->value = "move";
+    sourceValue->type = stringId;
+    sourceBinding->initializer = std::move(sourceValue);
+    movedStructured->stmts.push_back(std::move(sourceBinding));
+    auto destinationBinding = std::make_unique<moon::LetStmt>();
+    destinationBinding->name = "destination";
+    destinationBinding->usage = luna::ownership::Usage::Affine;
+    destinationBinding->type = stringId;
+    auto movedValue = std::make_unique<moon::MoveExpr>();
+    auto movedIdentifier = std::make_unique<moon::IdentifierExpr>();
+    movedIdentifier->name = "source";
+    movedIdentifier->type = stringId;
+    movedValue->operand = std::move(movedIdentifier);
+    movedValue->type = stringId;
+    destinationBinding->initializer = std::move(movedValue);
+    movedStructured->stmts.push_back(std::move(destinationBinding));
+    auto destinationCleanup = std::make_unique<moon::FreeStmt>();
+    destinationCleanup->isImplicit = true;
+    destinationCleanup->action = luna::ownership::CleanupAction::Deallocate;
+    auto destinationIdentifier = std::make_unique<moon::IdentifierExpr>();
+    destinationIdentifier->name = "destination";
+    destinationIdentifier->type = stringId;
+    destinationCleanup->operand = std::move(destinationIdentifier);
+    movedStructured->stmts.push_back(std::move(destinationCleanup));
+    auto movedCfg = cfgBuilder.build(
+        std::move(movedStructured), {}, moon::RegionKind::Function, module);
+    if (!movedCfg || !cfgVerifier.verify(*movedCfg, module) ||
+        movedCfg->cleanups.size() != 2 ||
+        movedCfg->blocks.front().terminator.exitCleanups !=
+            std::vector<moon::CleanupId>{moon::CleanupId{1}})
+        return fail("CFG cleanup dataflow lost a whole-place move transfer");
+    movedCfg->blocks.front().terminator.exitCleanups = {moon::CleanupId{0}};
+    if (cfgVerifier.verify(*movedCfg, module))
+        return fail("CFG verifier accepted cleanup of a moved source place");
 
     // The sealed payload must not observe later mutations of the frontend
     // object from which it was frozen.
@@ -153,6 +319,10 @@ int main() {
     reverse.registerType(Type::makeStruct(
         "Snapshot", {{"value", TyI32}}, "canonical.test::Snapshot"));
     reverse.registerType(TyString);
+    reverse.registerType(TyBool);
+    reverse.registerType(Type::makeEnum(
+        "Choice", {{"None", {}}, {"Some", {TyI32}}},
+        "canonical.test::Choice"));
     reverse.registerType(completedForward);
     reverse.registerType(forward);
     reverse.sealTypeTable();

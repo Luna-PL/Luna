@@ -84,6 +84,7 @@ enum class RegionKind : uint8_t {
 enum class LocalKind : uint8_t {
     Parameter,
     Binding,
+    Pattern,
     Synthetic,
 };
 
@@ -96,6 +97,36 @@ enum class TerminatorKind : uint8_t {
     Resume,
     Abort,
     Unreachable,
+};
+
+enum class ProjectionKind : uint8_t {
+    Field,
+    ConstantIndex,
+    DynamicIndex,
+    Dereference,
+};
+
+struct PlaceProjection {
+    ProjectionKind kind = ProjectionKind::Field;
+    // Canonical field ordinal or constant element index.
+    uint64_t index = 0;
+    // Dynamic indices are first materialized as canonical locals.
+    LocalId dynamicIndex;
+
+    bool operator==(const PlaceProjection& other) const {
+        return kind == other.kind && index == other.index &&
+               dynamicIndex == other.dynamicIndex;
+    }
+};
+
+struct PlaceRef {
+    LocalId root;
+    std::vector<PlaceProjection> projections;
+
+    bool empty() const { return root.empty(); }
+    bool operator==(const PlaceRef& other) const {
+        return root == other.root && projections == other.projections;
+    }
 };
 
 struct SourceLocation {
@@ -288,6 +319,7 @@ struct BlockStmt : Stmt {
 
 struct LetStmt : Stmt {
     std::string name;
+    LocalId local;
     bool isConst = false;
     bool isLinear = false;
     luna::ownership::Usage usage = luna::ownership::Usage::Copy;
@@ -360,6 +392,7 @@ struct FreeStmt : Stmt {
     std::unique_ptr<Expr> operand;
     luna::ownership::CleanupAction action =
         luna::ownership::CleanupAction::Deallocate;
+    bool isImplicit = false;
 };
 
 struct SlotDeclStmt : Stmt {
@@ -432,6 +465,7 @@ struct BoolLiteralExpr : Expr {
 
 struct IdentifierExpr : Expr {
     std::string name;
+    LocalId local;
     DeclarationRef declaration;
 };
 
@@ -600,7 +634,7 @@ struct LocalRecord {
 struct CleanupRecord {
     CleanupId id;
     ScopeId scope;
-    LocalId local;
+    PlaceRef place;
     TypeRef type;
     luna::ownership::CleanupAction action =
         luna::ownership::CleanupAction::None;
@@ -616,6 +650,7 @@ struct ControlEdge {
 struct SwitchEdge {
     uint32_t tag = 0;
     ControlEdge edge;
+    std::vector<LocalId> bindings;
 };
 
 struct Terminator : Node {
@@ -623,6 +658,7 @@ struct Terminator : Node {
     // Branch condition, switch scrutinee, or return value. Jump/resume/abort/
     // unreachable leave this empty.
     std::unique_ptr<Expr> operand;
+    TypeRef switchType;
     ControlEdge primary;
     ControlEdge secondary;
     std::vector<SwitchEdge> cases;

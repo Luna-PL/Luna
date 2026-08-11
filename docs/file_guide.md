@@ -335,6 +335,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/macro/MacroProcessor.cpp`
 - `src/macro/MacroProcessor.h`
 - `src/main.cpp`
+- `src/moonir/ControlFlowBuilder.cpp`
+- `src/moonir/ControlFlowBuilder.h`
 - `src/moonir/Lowering.cpp`
 - `src/moonir/Lowering.h`
 - `src/moonir/MoonIR.cpp`

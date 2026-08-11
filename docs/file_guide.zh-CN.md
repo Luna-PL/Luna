@@ -191,6 +191,8 @@ obligation，不能重新推导所有权。
 |---|---|
 | `src/moonir/MoonIR.h` | MoonIR module、function、instruction、type table 和 cost 模型 |
 | `src/moonir/MoonIR.cpp` | MoonIR 数据结构的非内联实现 |
+| `src/moonir/ControlFlowBuilder.h` | construction-only structured body 到 canonical CFG 的转换接口 |
+| `src/moonir/ControlFlowBuilder.cpp` | 消费暂态 structured body，分配稳定 local/scope/block 并生成唯一 CFG |
 | `src/moonir/Lowering.h` | typed AST 到 MoonIR 的 lowering 接口 |
 | `src/moonir/Lowering.cpp` | 消费 typed facts 生成 MoonIR；不得重新推断语义 |
 | `src/moonir/Verifier.h` | MoonIR verifier 接口 |
@@ -549,6 +551,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/macro/MacroProcessor.cpp`
 - `src/macro/MacroProcessor.h`
 - `src/main.cpp`
+- `src/moonir/ControlFlowBuilder.cpp`
+- `src/moonir/ControlFlowBuilder.h`
 - `src/moonir/Lowering.cpp`
 - `src/moonir/Lowering.h`
 - `src/moonir/MoonIR.cpp`

@@ -352,11 +352,13 @@ slot/fragment continuation 必须在 sealing 前正规化为这些 block/edge，
 
 `M001-C`（Confirmed）：region 只记录 function/lambda/fragment/continuation/lexical/loop/
 match-arm/apply 的结构归属与入口，不决定执行；successor edge 才是唯一控制语义。
-scope table 记录词法 parent、所属 region 及其 local/cleanup 集合。cleanup table 使用
-`LocalId + TypeRef + CleanupAction` 描述已由 Sema 证明的义务；每条离开 scope 的 edge
-按实际执行顺序显式列出 cleanup references。verifier 从 scope parent 链独立重算应退出
-的 scope 与逆声明序 cleanup，拒绝遗漏、重复、越域和错误 action。普通 fallthrough、
-return、`?` failure、fragment abort/resume 均使用同一 edge-cleanup 规则。
+scope table 记录词法 parent、所属 region 及其 local/cleanup 集合。cleanup table 使用稳定
+`PlaceRef { root: LocalId, projections } + TypeRef + CleanupAction` 描述可能义务；field、
+constant/dynamic index 与 dereference projection 均不得退回源码字符串。每条离开 scope
+的 edge 按实际执行顺序显式列出仍 active 的 cleanup references。verifier 结合 scope parent
+链与 CFG 中的初始化、move、显式 free/transfer 状态，独立重算应退出 scope 的 active
+cleanup 及其逆声明序，拒绝遗漏、重复、越域、已 move place 和错误 action。普通
+fallthrough、return、`?` failure、fragment abort/resume 均使用同一 edge-cleanup 规则。
 
 `M001-D`（Confirmed）：迁移完成后的 `FunctionDecl`/`FragmentDecl`/lambda 只能拥有 canonical
 CFG body，不保留 structured-body fallback 或格式兼容开关。构建期 builder 可以暂存源码
@@ -570,8 +572,16 @@ symbol/contract 子阶段使直接调用、函数值、trait impl、Iterator/Fro
 会获得普通的合成声明表行，因而不需要 verifier 特殊旁路。这些匹配仍只发生在
 编译/装载或 binding 建立时，不进入普通调用热路径。
 
-第 10 项尚未整体完成：下一子阶段按 M001 把当前 AST-like 嵌套控制流原地改为
-同一 MoonIR 内的 CFG、region/scope/cleanup table。完成后才通过整体完成门；
+M001 子阶段现已完成 table 与构造基础。稳定的 block、region、scope、local、cleanup
+及 projected-place 引用共同定义单一 typed-local CFG；结构 verifier 检查 table 归属、
+terminator 形状、词法可见性、local 定义、switch binding，以及跨边的路径敏感 cleanup
+状态。construction-only builder 会消费临时 structured body，并为普通语句、词法块、
+`if`/`else`、`while` 和 `match` 产生该 CFG。它不会与旧 body 并列挂接：sealed
+executable 在任何阶段都不能同时具有两套执行含义。
+
+第 10 项尚未整体完成。下一步构造工作会规范化 `for`、控制流表达式、lambda、slot
+和 fragment 路径，再原子替换 structured executable body，并让 backend 消费同一 CFG。
+只有删除 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
 serializer/parser 仍属于第 11 项。
 
 | 顺序 | 优先级 | 工作 | 完成门 |

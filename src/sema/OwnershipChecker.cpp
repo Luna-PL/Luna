@@ -86,6 +86,7 @@ bool OwnershipChecker::checkFunction(FunctionDecl* decl) {
     if (decl->body && bodyResult.fallsThrough) {
         for (auto& name : collectFreesAtScopeExit()) {
             auto freeStmt = std::make_unique<FreeStmt>();
+            freeStmt->isImplicit = true;
             freeStmt->operand = std::make_unique<IdentifierExpr>(name);
             auto* variable = lookup(name);
             freeStmt->action = cleanupActionForType(
@@ -191,6 +192,7 @@ bool OwnershipChecker::checkLambda(LambdaExpr* lambda) {
              collectFreesAtScopeExit()) {
             auto cleanup =
                 std::make_unique<FreeStmt>();
+            cleanup->isImplicit = true;
             cleanup->operand =
                 std::make_unique<IdentifierExpr>(name);
             auto* variable = lookup(name);
@@ -267,6 +269,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
     std::vector<std::unique_ptr<Stmt>> freeStmts;
     for (const auto& name : frees) {
         auto freeStmt = std::make_unique<FreeStmt>();
+        freeStmt->isImplicit = true;
         freeStmt->operand = std::make_unique<IdentifierExpr>(name);
         auto* variable = lookup(name);
         freeStmt->action = cleanupActionForType(
@@ -283,6 +286,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
         for (const auto& freeStmt : freeStmts) {
             auto* original = dynamic_cast<FreeStmt*>(freeStmt.get());
             auto copy = std::make_unique<FreeStmt>();
+            copy->isImplicit = true;
             copy->action = original ? original->action
                                     : luna::ownership::CleanupAction::Deallocate;
             if (original && original->operand) {
@@ -1196,6 +1200,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                 }
                 for (const auto& name : collectFreesAtScopeExit()) {
                     auto cleanup = std::make_unique<FreeStmt>();
+                    cleanup->isImplicit = true;
                     cleanup->operand =
                         std::make_unique<IdentifierExpr>(name);
                     auto* variable = lookup(name);
@@ -1453,6 +1458,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
                     // `next`.  Its normal-path cleanup therefore belongs at
                     // the end of the loop body, not after the complete loop.
                     auto cleanup = std::make_unique<FreeStmt>();
+                    cleanup->isImplicit = true;
                     cleanup->operand =
                         std::make_unique<IdentifierExpr>(
                             loop->varName);

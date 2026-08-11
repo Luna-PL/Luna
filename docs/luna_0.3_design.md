@@ -391,10 +391,14 @@ expression.
 `M001-C` (Confirmed): regions record only the structural ownership and entry of function,
 lambda, fragment, continuation, lexical, loop, match-arm, and apply regions; successor edges
 remain the sole control semantics. A scope records its lexical parent, owning region, locals, and
-cleanup set. A cleanup row uses `LocalId + TypeRef + CleanupAction` to describe an obligation
-already proved by Sema, while every scope-exiting edge explicitly lists cleanup references in
-execution order. The verifier independently recomputes exited scopes and reverse-declaration
-cleanup order and rejects omissions, duplicates, out-of-scope references, and wrong actions.
+cleanup set. A cleanup row uses a stable
+`PlaceRef { root: LocalId, projections } + TypeRef + CleanupAction` to describe a possible
+obligation; field, constant/dynamic index, and dereference projections may never fall back to
+source strings. Every scope-exiting edge explicitly lists still-active cleanup references in
+execution order. The verifier combines the scope-parent chain with initialization, move,
+explicit-free, and transfer state derived from CFG operations, then independently recomputes the
+active reverse-declaration cleanup order. It rejects omissions, duplicates, out-of-scope or
+already-moved places, and wrong actions.
 Ordinary fallthrough, return, `?` failure, and fragment abort/resume use the same edge rule.
 
 `M001-D` (Confirmed): after migration, `FunctionDecl`, `FragmentDecl`, and lambda bodies can own
@@ -639,9 +643,19 @@ Compiler-owned `Drop`/`From` traits without source declarations receive ordinary
 rows when referenced, avoiding verifier exceptions. These checks remain compilation/load/binding
 work and do not enter an ordinary call hot path.
 
-Item 10 is not complete as a whole. The next subphase is the M001 in-place conversion of the current
-AST-like nested control flow into CFG plus region/scope/cleanup tables within the same MoonIR. Only
-then does the item-level gate pass; serializer/parser work remains item 11.
+The M001 subphase now has its table and construction foundation. Stable block, region, scope,
+local, cleanup, and projected-place references define one typed-local CFG model; the structural
+verifier checks table ownership, terminator shape, lexical visibility, local definitions, switch
+bindings, and path-sensitive cleanup state across edges. A construction-only builder consumes the
+transient structured body and produces this CFG for ordinary statements, lexical blocks,
+`if`/`else`, `while`, and `match`. It is deliberately not attached beside the old body: a sealed
+executable must never acquire two execution meanings.
+
+Item 10 is not complete as a whole. The next construction work normalizes `for`, control-flow
+expressions, lambda, slot, and fragment paths, then atomically replaces structured executable
+bodies and moves the backend to the same CFG. Only after structured execution is deleted and the
+full verifier/codegen regression gate passes does the item-level gate pass; serializer/parser work
+remains item 11.
 
 | Order | Priority | Work | Completion gate |
 |---:|---|---|---|

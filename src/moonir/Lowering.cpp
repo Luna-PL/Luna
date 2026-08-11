@@ -680,6 +680,7 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         auto value = std::make_unique<moon::FreeStmt>();
         value->operand = lowerExpr(release->operand.get());
         value->action = release->action;
+        value->isImplicit = release->isImplicit;
         result = std::move(value);
     } else if (auto* slot = dynamic_cast<const ::SlotDeclStmt*>(statement)) {
         auto value = std::make_unique<moon::SlotDeclStmt>();

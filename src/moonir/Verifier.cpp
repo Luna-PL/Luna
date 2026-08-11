@@ -309,7 +309,7 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         if (cleanupOwners[index] != 1)
             error({}, "cleanup " + std::to_string(index) +
                       " must belong to exactly one scope");
-        const auto* local = graph.findLocal(cleanup.local);
+        const auto* local = graph.findLocal(cleanup.place.root);
         if (!local)
             error({}, "cleanup " + std::to_string(index) +
                       " references a missing local");
@@ -317,9 +317,62 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             if (local->scope != cleanup.scope)
                 error({}, "cleanup " + std::to_string(index) +
                           " targets a local owned by another scope");
-            if (local->type != cleanup.type)
+            TypeRef projectedType = local->type;
+            bool validProjection = true;
+            for (const auto& projection : cleanup.place.projections) {
+                const auto* projected = module.findType(projectedType);
+                if (!projected) {
+                    validProjection = false;
+                    break;
+                }
+                switch (projection.kind) {
+                    case ProjectionKind::Field:
+                        if (projection.index >= projected->fields.size()) {
+                            validProjection = false;
+                        } else {
+                            projectedType = projected->fields[
+                                static_cast<size_t>(projection.index)].type;
+                        }
+                        break;
+                    case ProjectionKind::ConstantIndex:
+                        if ((projected->kind != TypeKind::Array &&
+                             projected->kind != TypeKind::Slice) ||
+                            (projected->kind == TypeKind::Array &&
+                             projection.index >= projected->arrayLength)) {
+                            validProjection = false;
+                        } else {
+                            projectedType = projected->innerTypeId;
+                        }
+                        break;
+                    case ProjectionKind::DynamicIndex: {
+                        const auto* indexLocal = graph.findLocal(
+                            projection.dynamicIndex);
+                        if ((projected->kind != TypeKind::Array &&
+                             projected->kind != TypeKind::Slice) ||
+                            !indexLocal) {
+                            validProjection = false;
+                        } else {
+                            projectedType = projected->innerTypeId;
+                        }
+                        break;
+                    }
+                    case ProjectionKind::Dereference:
+                        if (projected->kind != TypeKind::Reference &&
+                            projected->kind != TypeKind::RawPointer) {
+                            validProjection = false;
+                        } else {
+                            projectedType = projected->innerTypeId;
+                        }
+                        break;
+                }
+                if (!validProjection) break;
+            }
+            if (!validProjection)
                 error({}, "cleanup " + std::to_string(index) +
-                          " type disagrees with its local");
+                          " has an invalid canonical place projection");
+            else if (projectedType != cleanup.type)
+                error({}, "cleanup " + std::to_string(index) +
+                          " type disagrees with its projected place");
         }
         const auto* cleanupType = module.findType(cleanup.type);
         if (cleanupType && !cleanupType->sysmeta.resource.cleanupRequired)
@@ -330,37 +383,7 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             "cleanup " + std::to_string(index), module);
     }
 
-    const auto expectedCleanups = [&graph](
-        ScopeId source, ScopeId target) {
-        std::unordered_set<uint32_t> targetAncestors;
-        for (const ScopeRecord* scope = graph.findScope(target); scope;) {
-            targetAncestors.insert(scope->id.value);
-            scope = graph.findScope(scope->parent);
-        }
-        std::vector<CleanupId> result;
-        std::unordered_set<uint32_t> visited;
-        for (const ScopeRecord* scope = graph.findScope(source); scope;) {
-            if (!visited.insert(scope->id.value).second ||
-                targetAncestors.count(scope->id.value))
-                break;
-            result.insert(result.end(), scope->cleanups.rbegin(),
-                          scope->cleanups.rend());
-            scope = graph.findScope(scope->parent);
-        }
-        return result;
-    };
-    const auto expectedExitCleanups = [&graph](ScopeId source) {
-        std::vector<CleanupId> result;
-        std::unordered_set<uint32_t> visited;
-        for (const ScopeRecord* scope = graph.findScope(source); scope;) {
-            if (!visited.insert(scope->id.value).second) break;
-            result.insert(result.end(), scope->cleanups.rbegin(),
-                          scope->cleanups.rend());
-            scope = graph.findScope(scope->parent);
-        }
-        return result;
-    };
-    const auto verifyEdge = [this, &graph, &expectedCleanups](
+    const auto verifyEdge = [this, &graph](
         const BasicBlock& source, const ControlEdge& edge,
         const std::string& context) {
         const auto* target = graph.findBlock(edge.target);
@@ -368,11 +391,129 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             error(source.location, context + " references a missing target block");
             return;
         }
-        if (edge.cleanups != expectedCleanups(source.scope, target->scope))
-            error(source.location, context +
-                  " does not carry the canonical scope-exit cleanup sequence");
+        std::unordered_set<uint32_t> seen;
+        for (const auto cleanup : edge.cleanups) {
+            if (!graph.findCleanup(cleanup))
+                error(source.location, context +
+                      " references a missing cleanup row");
+            else if (!seen.insert(cleanup.value).second)
+                error(source.location, context +
+                      " repeats a cleanup row");
+        }
     };
 
+    const auto localVisibleFrom = [&graph](
+        ScopeId localScope, ScopeId useScope) {
+        std::unordered_set<uint32_t> visited;
+        for (const ScopeRecord* scope = graph.findScope(useScope); scope;
+             scope = graph.findScope(scope->parent)) {
+            if (!visited.insert(scope->id.value).second) break;
+            if (scope->id == localScope) return true;
+        }
+        return false;
+    };
+    std::function<void(const Expr*, const BasicBlock&)> scanGraphExpr;
+    scanGraphExpr = [this, &graph, &localVisibleFrom, &scanGraphExpr](
+        const Expr* expression, const BasicBlock& block) {
+        if (!expression) return;
+        if (const auto* identifier =
+                dynamic_cast<const IdentifierExpr*>(expression)) {
+            if (!identifier->local.empty()) {
+                const auto* local = graph.findLocal(identifier->local);
+                if (!local)
+                    error(identifier->location,
+                          "identifier references a missing LocalId");
+                else {
+                    if (!identifier->declaration.empty())
+                        error(identifier->location,
+                              "identifier carries both LocalId and DeclarationRef");
+                    if (identifier->type != local->type)
+                        error(identifier->location,
+                              "identifier type disagrees with its canonical local");
+                    if (!localVisibleFrom(local->scope, block.scope))
+                        error(identifier->location,
+                              "identifier references a local outside its lexical scope");
+                }
+            } else if (identifier->declaration.empty()) {
+                error(identifier->location,
+                      "identifier has no canonical LocalId or DeclarationRef");
+            }
+            return;
+        }
+        if (const auto* binary = dynamic_cast<const BinaryExpr*>(expression)) {
+            scanGraphExpr(binary->lhs.get(), block);
+            scanGraphExpr(binary->rhs.get(), block);
+        } else if (const auto* unary =
+                       dynamic_cast<const UnaryExpr*>(expression)) {
+            scanGraphExpr(unary->operand.get(), block);
+        } else if (const auto* call =
+                       dynamic_cast<const CallExpr*>(expression)) {
+            scanGraphExpr(call->callee.get(), block);
+            for (const auto& argument : call->args)
+                scanGraphExpr(argument.get(), block);
+        } else if (const auto* selection =
+                       dynamic_cast<const DynamicSelectExpr*>(expression)) {
+            for (const auto& argument : selection->filterArguments)
+                scanGraphExpr(argument.get(), block);
+        } else if (const auto* launch =
+                       dynamic_cast<const LaunchExpr*>(expression)) {
+            scanGraphExpr(launch->threads.get(), block);
+            for (const auto& argument : launch->args)
+                scanGraphExpr(argument.get(), block);
+        } else if (const auto* variant =
+                       dynamic_cast<const VariantConstructExpr*>(expression)) {
+            for (const auto& argument : variant->args)
+                scanGraphExpr(argument.get(), block);
+        } else if (const auto* field =
+                       dynamic_cast<const FieldAccessExpr*>(expression)) {
+            scanGraphExpr(field->object.get(), block);
+        } else if (const auto* index =
+                       dynamic_cast<const IndexExpr*>(expression)) {
+            scanGraphExpr(index->object.get(), block);
+            scanGraphExpr(index->index.get(), block);
+        } else if (const auto* array =
+                       dynamic_cast<const ArrayLiteralExpr*>(expression)) {
+            for (const auto& element : array->elements)
+                scanGraphExpr(element.get(), block);
+        } else if (const auto* record =
+                       dynamic_cast<const RecordLiteralExpr*>(expression)) {
+            for (const auto& field : record->fields)
+                scanGraphExpr(field.value.get(), block);
+        } else if (const auto* allocation =
+                       dynamic_cast<const HeapAllocExpr*>(expression)) {
+            scanGraphExpr(allocation->initializer.get(), block);
+        } else if (dynamic_cast<const TryExpr*>(expression) ||
+                   dynamic_cast<const BlockExpr*>(expression) ||
+                   dynamic_cast<const IfExpr*>(expression) ||
+                   dynamic_cast<const LambdaExpr*>(expression)) {
+            error(expression->location,
+                  "sealed CFG contains a nested control-flow expression");
+        } else if (const auto* move =
+                       dynamic_cast<const MoveExpr*>(expression)) {
+            scanGraphExpr(move->operand.get(), block);
+        } else if (const auto* borrow =
+                       dynamic_cast<const BorrowExpr*>(expression)) {
+            scanGraphExpr(borrow->operand.get(), block);
+        } else if (const auto* dereference =
+                       dynamic_cast<const DerefExpr*>(expression)) {
+            scanGraphExpr(dereference->operand.get(), block);
+        } else if (const auto* address =
+                       dynamic_cast<const AddrOfExpr*>(expression)) {
+            scanGraphExpr(address->operand.get(), block);
+        } else if (const auto* assignment =
+                       dynamic_cast<const AssignExpr*>(expression)) {
+            scanGraphExpr(assignment->lhs.get(), block);
+            scanGraphExpr(assignment->rhs.get(), block);
+        }
+    };
+    const auto verifyGraphExpr = [this, &module, &scanGraphExpr](
+        const Expr* expression, const BasicBlock& block,
+        const std::string& context) {
+        verifyExpr(expression, module, context);
+        scanGraphExpr(expression, block);
+    };
+
+    std::vector<uint32_t> localDefinitions(graph.locals.size(), 0);
     std::vector<std::vector<BlockId>> successors(graph.blocks.size());
     for (const auto& block : graph.blocks) {
         const auto* scope = graph.findScope(block.scope);
@@ -380,6 +521,49 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             error(block.location, "block references a missing region or scope");
         else if (scope->region != block.region)
             error(block.location, "block scope belongs to another region");
+        for (const auto& operation : block.operations) {
+            if (!operation) {
+                error(block.location, "CFG block contains a null operation");
+                continue;
+            }
+            if (const auto* declaration =
+                    dynamic_cast<const LetStmt*>(operation.get())) {
+                const auto* local = graph.findLocal(declaration->local);
+                if (!local) {
+                    error(declaration->location,
+                          "let operation has no canonical LocalId");
+                } else {
+                    ++localDefinitions[local->id.value];
+                    if (local->kind != LocalKind::Binding ||
+                        local->scope != block.scope ||
+                        local->name != declaration->name ||
+                        local->type != declaration->type ||
+                        local->usage != declaration->usage)
+                        error(declaration->location,
+                              "let operation disagrees with its local-table row");
+                }
+                verifyStmt(operation.get(), module, "CFG operation");
+                scanGraphExpr(declaration->initializer.get(), block);
+            } else if (const auto* expression =
+                           dynamic_cast<const ExprStmt*>(operation.get())) {
+                verifyStmt(operation.get(), module, "CFG operation");
+                scanGraphExpr(expression->expr.get(), block);
+            } else if (const auto* release =
+                           dynamic_cast<const FreeStmt*>(operation.get())) {
+                if (release->isImplicit)
+                    error(release->location,
+                          "implicit lexical cleanup remains a CFG operation");
+                verifyStmt(operation.get(), module, "CFG operation");
+                scanGraphExpr(release->operand.get(), block);
+            } else if (const auto* await =
+                           dynamic_cast<const AwaitStmt*>(operation.get())) {
+                verifyStmt(operation.get(), module, "CFG operation");
+                scanGraphExpr(await->event.get(), block);
+            } else {
+                error(operation->location,
+                      "sealed CFG contains a structured control operation");
+            }
+        }
         const auto appendSuccessor = [&](const ControlEdge& edge) {
             if (!edge.target.empty()) successors[block.id.value].push_back(edge.target);
         };
@@ -402,6 +586,9 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 break;
             case TerminatorKind::Jump:
                 rejectOperand();
+                if (!block.terminator.switchType.empty())
+                    error(block.terminator.location,
+                          "jump terminator carries a switch type");
                 verifyEdge(block, block.terminator.primary, "jump edge");
                 appendSuccessor(block.terminator.primary);
                 rejectSecondaryCasesAndExit();
@@ -411,7 +598,18 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                     error(block.terminator.location,
                           "branch terminator has no condition");
                 else
-                    verifyExpr(block.terminator.operand.get(), module, "CFG branch");
+                    verifyGraphExpr(
+                        block.terminator.operand.get(), block, "CFG branch");
+                if (block.terminator.operand) {
+                    const auto* conditionType = module.findType(
+                        block.terminator.operand->type);
+                    if (!conditionType || conditionType->kind != TypeKind::Bool)
+                        error(block.terminator.location,
+                              "branch condition is not bool");
+                }
+                if (!block.terminator.switchType.empty())
+                    error(block.terminator.location,
+                          "branch terminator carries a switch type");
                 verifyEdge(block, block.terminator.primary, "true edge");
                 verifyEdge(block, block.terminator.secondary, "false edge");
                 appendSuccessor(block.terminator.primary);
@@ -426,7 +624,26 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                     error(block.terminator.location,
                           "switch terminator has no scrutinee");
                 else
-                    verifyExpr(block.terminator.operand.get(), module, "CFG switch");
+                    verifyGraphExpr(
+                        block.terminator.operand.get(), block, "CFG switch");
+                verifyType(block.terminator.switchType,
+                           block.terminator.location,
+                           "CFG switch type witness", module);
+                const auto* switchType = module.findType(
+                    block.terminator.switchType);
+                if (!switchType ||
+                    (switchType->kind != TypeKind::Enum &&
+                     switchType->kind != TypeKind::Result))
+                    error(block.terminator.location,
+                          "CFG switch has no enum or Result type witness");
+                if (block.terminator.operand &&
+                    block.terminator.operand->type !=
+                        block.terminator.switchType)
+                    error(block.terminator.location,
+                          "CFG switch operand disagrees with its type witness");
+                if (block.terminator.cases.empty())
+                    error(block.terminator.location,
+                          "CFG switch has no cases");
                 verifyEdge(block, block.terminator.primary, "switch default edge");
                 appendSuccessor(block.terminator.primary);
                 std::unordered_set<uint32_t> tags;
@@ -436,6 +653,40 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                               "switch terminator repeats a case tag");
                     verifyEdge(block, item.edge, "switch case edge");
                     appendSuccessor(item.edge);
+                    const auto* target = graph.findBlock(item.edge.target);
+                    std::vector<TypeRef> expectedBindings;
+                    if (switchType && switchType->kind == TypeKind::Enum &&
+                        item.tag < switchType->variants.size()) {
+                        expectedBindings = switchType->variants[item.tag].fields;
+                    } else if (switchType &&
+                               switchType->kind == TypeKind::Result &&
+                               switchType->typeArgumentIds.size() == 2 &&
+                               item.tag < 2) {
+                        expectedBindings.push_back(
+                            switchType->typeArgumentIds[item.tag == 1 ? 0 : 1]);
+                    } else if (switchType) {
+                        error(block.terminator.location,
+                              "switch case tag is outside its frozen type");
+                    }
+                    if (item.bindings.size() != expectedBindings.size())
+                        error(block.terminator.location,
+                              "switch case binding arity disagrees with its frozen variant");
+                    const size_t comparable = std::min(
+                        item.bindings.size(), expectedBindings.size());
+                    for (size_t index = 0; index < comparable; ++index) {
+                        const auto* local = graph.findLocal(item.bindings[index]);
+                        if (!local) {
+                            error(block.terminator.location,
+                                  "switch case references a missing pattern LocalId");
+                            continue;
+                        }
+                        ++localDefinitions[local->id.value];
+                        if (!target || local->kind != LocalKind::Pattern ||
+                            local->scope != target->scope ||
+                            local->type != expectedBindings[index])
+                            error(block.terminator.location,
+                                  "switch case pattern local disagrees with its target scope or type");
+                    }
                 }
                 if (!block.terminator.secondary.target.empty() ||
                     !block.terminator.secondary.cleanups.empty() ||
@@ -446,7 +697,8 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             }
             case TerminatorKind::Return:
                 if (block.terminator.operand)
-                    verifyExpr(block.terminator.operand.get(), module, "CFG return");
+                    verifyGraphExpr(
+                        block.terminator.operand.get(), block, "CFG return");
                 if (!block.terminator.primary.target.empty() ||
                     !block.terminator.primary.cleanups.empty() ||
                     !block.terminator.secondary.target.empty() ||
@@ -454,14 +706,16 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                     !block.terminator.cases.empty())
                     error(block.terminator.location,
                           "return terminator carries successor fields");
-                if (block.terminator.exitCleanups !=
-                    expectedExitCleanups(block.scope))
+                if (!block.terminator.switchType.empty())
                     error(block.terminator.location,
-                          "return terminator does not clean every exited scope");
+                          "return terminator carries a switch type");
                 break;
             case TerminatorKind::Resume:
             case TerminatorKind::Abort:
                 rejectOperand();
+                if (!block.terminator.switchType.empty())
+                    error(block.terminator.location,
+                          "resume/abort terminator carries a switch type");
                 verifyEdge(
                     block, block.terminator.primary,
                     block.terminator.kind == TerminatorKind::Resume
@@ -471,12 +725,377 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 break;
             case TerminatorKind::Unreachable:
                 rejectOperand();
+                if (!block.terminator.switchType.empty())
+                    error(block.terminator.location,
+                          "unreachable terminator carries a switch type");
                 if (!block.terminator.primary.target.empty() ||
                     !block.terminator.primary.cleanups.empty())
                     error(block.terminator.location,
                           "unreachable terminator carries a successor");
                 rejectSecondaryCasesAndExit();
                 break;
+        }
+    }
+
+    for (size_t index = 0; index < graph.locals.size(); ++index) {
+        const auto kind = graph.locals[index].kind;
+        const uint32_t expected =
+            (kind == LocalKind::Binding || kind == LocalKind::Pattern)
+                ? 1u : 0u;
+        if (localDefinitions[index] != expected)
+            error({}, "local " + std::to_string(index) + " has " +
+                      std::to_string(localDefinitions[index]) +
+                      " definitions; expected " + std::to_string(expected));
+    }
+
+    // Cleanup validity is path-sensitive. Scope tables enumerate possible
+    // obligations, while this dataflow reconstructs which places are active
+    // after initialization, move, explicit free, and return transfer.
+    using CleanupState = std::vector<uint8_t>;
+    std::vector<std::vector<CleanupId>> cleanupsByLocal(graph.locals.size());
+    for (const auto& cleanup : graph.cleanups) {
+        if (!cleanup.place.root.empty() &&
+            cleanup.place.root.value < cleanupsByLocal.size())
+            cleanupsByLocal[cleanup.place.root.value].push_back(cleanup.id);
+    }
+    const auto activateLocal = [this, &graph, &cleanupsByLocal](
+        LocalId local, CleanupState& state, const SourceLocation& location,
+        const std::string& context) {
+        if (local.empty() || local.value >= cleanupsByLocal.size()) return;
+        for (const auto cleanup : cleanupsByLocal[local.value]) {
+            if (cleanup.value >= state.size()) continue;
+            if (state[cleanup.value])
+                error(location, context + " reinitializes active local '" +
+                      graph.locals[local.value].name + "'");
+            state[cleanup.value] = 1;
+        }
+    };
+    std::function<std::optional<PlaceRef>(const Expr*)> placeOf;
+    placeOf = [&graph, &module, &placeOf](
+        const Expr* expression) -> std::optional<PlaceRef> {
+        if (!expression) return std::nullopt;
+        if (const auto* identifier =
+                dynamic_cast<const IdentifierExpr*>(expression)) {
+            if (identifier->local.empty()) return std::nullopt;
+            return PlaceRef{identifier->local, {}};
+        }
+        if (const auto* field =
+                dynamic_cast<const FieldAccessExpr*>(expression)) {
+            auto place = placeOf(field->object.get());
+            const auto* objectType = field->object
+                ? module.findType(field->object->type) : nullptr;
+            if (!place || !objectType) return std::nullopt;
+            for (size_t index = 0; index < objectType->fields.size(); ++index) {
+                if (objectType->fields[index].name == field->field) {
+                    place->projections.push_back({
+                        ProjectionKind::Field,
+                        static_cast<uint64_t>(index), {}});
+                    return place;
+                }
+            }
+            return std::nullopt;
+        }
+        if (const auto* index = dynamic_cast<const IndexExpr*>(expression)) {
+            auto place = placeOf(index->object.get());
+            if (!place) return std::nullopt;
+            if (const auto* constant =
+                    dynamic_cast<const IntLiteralExpr*>(index->index.get());
+                constant && constant->value >= 0) {
+                place->projections.push_back({
+                    ProjectionKind::ConstantIndex,
+                    static_cast<uint64_t>(constant->value), {}});
+                return place;
+            }
+            if (const auto* dynamic =
+                    dynamic_cast<const IdentifierExpr*>(index->index.get());
+                dynamic && !dynamic->local.empty()) {
+                place->projections.push_back({
+                    ProjectionKind::DynamicIndex, 0, dynamic->local});
+                return place;
+            }
+            return std::nullopt;
+        }
+        if (const auto* dereference =
+                dynamic_cast<const DerefExpr*>(expression)) {
+            auto place = placeOf(dereference->operand.get());
+            if (place)
+                place->projections.push_back({
+                    ProjectionKind::Dereference, 0, {}});
+            return place;
+        }
+        if (const auto* unary = dynamic_cast<const UnaryExpr*>(expression);
+            unary && unary->op == Operator::Dereference) {
+            auto place = placeOf(unary->operand.get());
+            if (place)
+                place->projections.push_back({
+                    ProjectionKind::Dereference, 0, {}});
+            return place;
+        }
+        return std::nullopt;
+    };
+    const auto projectionPrefix = [](const PlaceRef& prefix,
+                                     const PlaceRef& value) {
+        return prefix.root == value.root &&
+            prefix.projections.size() <= value.projections.size() &&
+            std::equal(prefix.projections.begin(), prefix.projections.end(),
+                       value.projections.begin());
+    };
+    const auto consumePlace = [this, &graph, &cleanupsByLocal,
+                               &projectionPrefix](
+        const PlaceRef& place, CleanupState& state,
+        const SourceLocation& location, const std::string& context) {
+        if (place.root.empty() || place.root.value >= cleanupsByLocal.size())
+            return;
+        bool consumed = false;
+        for (const auto cleanupId : cleanupsByLocal[place.root.value]) {
+            if (cleanupId.value >= state.size() || !state[cleanupId.value])
+                continue;
+            const auto& cleanup = graph.cleanups[cleanupId.value];
+            if (place.projections.empty() ||
+                projectionPrefix(place, cleanup.place)) {
+                state[cleanupId.value] = 0;
+                consumed = true;
+            } else if (cleanup.place.projections.empty()) {
+                error(location, context + " partially consumes local '" +
+                      graph.locals[place.root.value].name +
+                      "' without projected cleanup rows");
+            }
+        }
+        if (!consumed && !cleanupsByLocal[place.root.value].empty())
+            error(location, context + " consumes an inactive place rooted at '" +
+                  graph.locals[place.root.value].name + "'");
+    };
+    std::function<void(const Expr*, CleanupState&)> transferExpr;
+    transferExpr = [&transferExpr, &placeOf, &consumePlace](
+        const Expr* expression, CleanupState& state) {
+        if (!expression) return;
+        if (const auto* move = dynamic_cast<const MoveExpr*>(expression)) {
+            transferExpr(move->operand.get(), state);
+            if (auto place = placeOf(move->operand.get()))
+                consumePlace(*place, state, move->location, "move");
+            return;
+        }
+        if (const auto* binary = dynamic_cast<const BinaryExpr*>(expression)) {
+            transferExpr(binary->lhs.get(), state);
+            transferExpr(binary->rhs.get(), state);
+        } else if (const auto* unary =
+                       dynamic_cast<const UnaryExpr*>(expression)) {
+            transferExpr(unary->operand.get(), state);
+        } else if (const auto* call =
+                       dynamic_cast<const CallExpr*>(expression)) {
+            transferExpr(call->callee.get(), state);
+            for (const auto& argument : call->args)
+                transferExpr(argument.get(), state);
+        } else if (const auto* selection =
+                       dynamic_cast<const DynamicSelectExpr*>(expression)) {
+            for (const auto& argument : selection->filterArguments)
+                transferExpr(argument.get(), state);
+        } else if (const auto* launch =
+                       dynamic_cast<const LaunchExpr*>(expression)) {
+            transferExpr(launch->threads.get(), state);
+            for (const auto& argument : launch->args)
+                transferExpr(argument.get(), state);
+        } else if (const auto* variant =
+                       dynamic_cast<const VariantConstructExpr*>(expression)) {
+            for (const auto& argument : variant->args)
+                transferExpr(argument.get(), state);
+        } else if (const auto* field =
+                       dynamic_cast<const FieldAccessExpr*>(expression)) {
+            transferExpr(field->object.get(), state);
+        } else if (const auto* index =
+                       dynamic_cast<const IndexExpr*>(expression)) {
+            transferExpr(index->object.get(), state);
+            transferExpr(index->index.get(), state);
+        } else if (const auto* array =
+                       dynamic_cast<const ArrayLiteralExpr*>(expression)) {
+            for (const auto& element : array->elements)
+                transferExpr(element.get(), state);
+        } else if (const auto* record =
+                       dynamic_cast<const RecordLiteralExpr*>(expression)) {
+            for (const auto& field : record->fields)
+                transferExpr(field.value.get(), state);
+        } else if (const auto* allocation =
+                       dynamic_cast<const HeapAllocExpr*>(expression)) {
+            transferExpr(allocation->initializer.get(), state);
+        } else if (const auto* borrow =
+                       dynamic_cast<const BorrowExpr*>(expression)) {
+            transferExpr(borrow->operand.get(), state);
+        } else if (const auto* dereference =
+                       dynamic_cast<const DerefExpr*>(expression)) {
+            transferExpr(dereference->operand.get(), state);
+        } else if (const auto* address =
+                       dynamic_cast<const AddrOfExpr*>(expression)) {
+            transferExpr(address->operand.get(), state);
+        } else if (const auto* assignment =
+                       dynamic_cast<const AssignExpr*>(expression)) {
+            transferExpr(assignment->lhs.get(), state);
+            transferExpr(assignment->rhs.get(), state);
+        }
+    };
+    const auto expectedActiveCleanups = [&graph](
+        const CleanupState& state, ScopeId source,
+        std::optional<ScopeId> target) {
+        std::unordered_set<uint32_t> targetAncestors;
+        if (target) {
+            for (const ScopeRecord* scope = graph.findScope(*target); scope;
+                 scope = graph.findScope(scope->parent))
+                targetAncestors.insert(scope->id.value);
+        }
+        std::vector<CleanupId> result;
+        std::unordered_set<uint32_t> visited;
+        for (const ScopeRecord* scope = graph.findScope(source); scope;
+             scope = graph.findScope(scope->parent)) {
+            if (!visited.insert(scope->id.value).second ||
+                targetAncestors.count(scope->id.value))
+                break;
+            for (auto cleanup = scope->cleanups.rbegin();
+                 cleanup != scope->cleanups.rend(); ++cleanup)
+                if (cleanup->value < state.size() && state[cleanup->value])
+                    result.push_back(*cleanup);
+        }
+        return result;
+    };
+    const auto applyCleanupEdge = [this, &graph, &expectedActiveCleanups](
+        const BasicBlock& source, const std::vector<CleanupId>& actual,
+        std::optional<ScopeId> target, CleanupState& state,
+        const std::string& context) {
+        const auto expected = expectedActiveCleanups(state, source.scope, target);
+        if (actual != expected) {
+            error(source.terminator.location,
+                  context + " does not match active place cleanup state");
+            return;
+        }
+        for (const auto cleanup : actual)
+            if (cleanup.value < state.size()) state[cleanup.value] = 0;
+    };
+
+    if (entry) {
+        std::vector<std::optional<CleanupState>> incoming(graph.blocks.size());
+        CleanupState entryState(graph.cleanups.size(), 0);
+        for (const auto& local : graph.locals) {
+            if (local.kind == LocalKind::Parameter) {
+                if (local.scope != graph.rootScope)
+                    error({}, "parameter local is outside the CFG root scope");
+                activateLocal(local.id, entryState, {}, "parameter entry");
+            }
+        }
+        incoming[graph.entry.value] = entryState;
+        std::vector<BlockId> worklist{graph.entry};
+        const auto propagate = [this, &incoming, &worklist](
+            BlockId target, const CleanupState& state,
+            const SourceLocation& location) {
+            if (target.empty() || target.value >= incoming.size()) return;
+            if (!incoming[target.value]) {
+                incoming[target.value] = state;
+                worklist.push_back(target);
+            } else if (*incoming[target.value] != state) {
+                error(location,
+                      "CFG predecessors disagree on active cleanup state");
+            }
+        };
+        while (!worklist.empty()) {
+            const BlockId blockId = worklist.back();
+            worklist.pop_back();
+            const auto& block = graph.blocks[blockId.value];
+            CleanupState state = *incoming[blockId.value];
+            for (const auto& operation : block.operations) {
+                if (const auto* declaration =
+                        dynamic_cast<const LetStmt*>(operation.get())) {
+                    transferExpr(declaration->initializer.get(), state);
+                    activateLocal(declaration->local, state,
+                                  declaration->location, "let operation");
+                } else if (const auto* expression =
+                               dynamic_cast<const ExprStmt*>(operation.get())) {
+                    transferExpr(expression->expr.get(), state);
+                } else if (const auto* release =
+                               dynamic_cast<const FreeStmt*>(operation.get())) {
+                    transferExpr(release->operand.get(), state);
+                    if (auto place = placeOf(release->operand.get()))
+                        consumePlace(*place, state, release->location,
+                                     "explicit free");
+                } else if (const auto* await =
+                               dynamic_cast<const AwaitStmt*>(operation.get())) {
+                    transferExpr(await->event.get(), state);
+                    if (auto place = placeOf(await->event.get()))
+                        consumePlace(*place, state, await->location, "await");
+                }
+            }
+
+            const auto propagateEdge = [&](const ControlEdge& edge,
+                                           CleanupState edgeState,
+                                           const std::string& context) {
+                const auto* target = graph.findBlock(edge.target);
+                if (!target) return;
+                applyCleanupEdge(block, edge.cleanups, target->scope,
+                                 edgeState, context);
+                propagate(edge.target, edgeState, block.terminator.location);
+            };
+            switch (block.terminator.kind) {
+                case TerminatorKind::Jump:
+                    propagateEdge(block.terminator.primary, state,
+                                  "jump edge cleanup");
+                    break;
+                case TerminatorKind::Branch:
+                    transferExpr(block.terminator.operand.get(), state);
+                    propagateEdge(block.terminator.primary, state,
+                                  "true edge cleanup");
+                    propagateEdge(block.terminator.secondary, state,
+                                  "false edge cleanup");
+                    break;
+                case TerminatorKind::Switch:
+                    transferExpr(block.terminator.operand.get(), state);
+                    propagateEdge(block.terminator.primary, state,
+                                  "switch default cleanup");
+                    for (const auto& item : block.terminator.cases) {
+                        CleanupState caseState = state;
+                        const auto* target = graph.findBlock(item.edge.target);
+                        if (!target) continue;
+                        applyCleanupEdge(block, item.edge.cleanups,
+                                         target->scope, caseState,
+                                         "switch case cleanup");
+                        for (const auto local : item.bindings)
+                            activateLocal(local, caseState,
+                                          block.terminator.location,
+                                          "match pattern");
+                        propagate(item.edge.target, caseState,
+                                  block.terminator.location);
+                    }
+                    break;
+                case TerminatorKind::Return: {
+                    transferExpr(block.terminator.operand.get(), state);
+                    if (block.terminator.operand &&
+                        !dynamic_cast<const MoveExpr*>(
+                            block.terminator.operand.get())) {
+                        if (auto place = placeOf(
+                                block.terminator.operand.get())) {
+                            const auto* local = graph.findLocal(place->root);
+                            const auto* type = local
+                                ? module.findType(local->type) : nullptr;
+                            if (local &&
+                                (luna::ownership::isMoveOnly(local->usage) ||
+                                 (type && type->sysmeta.resource.cleanupRequired)))
+                                consumePlace(*place, state,
+                                             block.terminator.location,
+                                             "return transfer");
+                        }
+                    }
+                    applyCleanupEdge(block, block.terminator.exitCleanups,
+                                     std::nullopt, state,
+                                     "return cleanup");
+                    break;
+                }
+                case TerminatorKind::Resume:
+                    propagateEdge(block.terminator.primary, state,
+                                  "resume edge cleanup");
+                    break;
+                case TerminatorKind::Abort:
+                    propagateEdge(block.terminator.primary, state,
+                                  "abort edge cleanup");
+                    break;
+                case TerminatorKind::Invalid:
+                case TerminatorKind::Unreachable:
+                    break;
+            }
         }
     }
 
