@@ -725,10 +725,18 @@ ordinary state then enters exactly the same terminal expansion described above. 
 second lowering. A terminal after any earlier sibling operand remains rejected so construction
 does not guess how to hoist or reorder that operand.
 
-Item 10 is not complete as a whole. Affine fold accumulators, general expression sibling hoisting,
-capturing closure environments, and non-Copy item/callable per-element ownership state remain
-explicit following boundaries. The remaining work then normalizes other control-flow expressions,
-slot, and fragment paths, atomically replaces
+The affine-accumulator `fold` subphase is now complete. One synthetic affine local owns the initial
+value, is moved into the reducer on every iteration, and is reinitialized by that reducer's affine
+return in the same transfer assignment. The independent ownership dataflow rejects a copied
+accumulator, replacement without prior consumption, or a copied final result; the source-level
+consumer receives an explicit move. Normal loop backedges and the zero-iteration exit therefore
+agree on one active cleanup obligation without adding an initialized bit, runtime ownership flag,
+or second accumulator. Linear accumulators remain outside this hidden terminal state.
+
+Item 10 is not complete as a whole. General expression sibling hoisting, capturing closure
+environments, and non-Copy item/callable per-element ownership state remain explicit following
+boundaries. The remaining work then normalizes other control-flow expressions, slot, and fragment
+paths, atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured
 execution is deleted and the full verifier/codegen regression gate passes does the item-level gate
 pass; serializer/parser work remains item 11.

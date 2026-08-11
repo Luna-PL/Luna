@@ -446,7 +446,8 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             }
         };
     std::function<void(const Expr*, const BasicBlock&)> scanGraphExpr;
-    scanGraphExpr = [this, &module, &scanGraphIdentifier, &scanGraphExpr](
+    scanGraphExpr = [this, &graph, &module, &scanGraphIdentifier,
+                     &scanGraphExpr](
         const Expr* expression, const BasicBlock& block) {
         if (!expression) return;
         if (const auto* identifier =
@@ -588,7 +589,23 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             scanGraphExpr(address->operand.get(), block);
         } else if (const auto* assignment =
                        dynamic_cast<const AssignExpr*>(expression)) {
-            scanGraphExpr(assignment->lhs.get(), block);
+            // A synthetic move-only local may be used as the destination of
+            // a transfer assignment without reading its old value. The
+            // ownership dataflow below still requires the RHS to consume the
+            // active value before this destination can be reinitialized.
+            if (const auto* destination =
+                    dynamic_cast<const IdentifierExpr*>(
+                        assignment->lhs.get());
+                assignment->op == Operator::Assign && destination &&
+                !destination->local.empty()) {
+                const auto* local = graph.findLocal(destination->local);
+                scanGraphIdentifier(
+                    *destination, block,
+                    local && local->kind == LocalKind::Synthetic &&
+                        luna::ownership::isMoveOnly(local->usage));
+            } else {
+                scanGraphExpr(assignment->lhs.get(), block);
+            }
             scanGraphExpr(assignment->rhs.get(), block);
         }
     };
@@ -992,7 +1009,8 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                   graph.locals[place.root.value].name + "'");
     };
     std::function<void(const Expr*, CleanupState&)> transferExpr;
-    transferExpr = [&transferExpr, &placeOf, &consumePlace](
+    transferExpr = [&transferExpr, &placeOf, &consumePlace,
+                    &activateLocal, &graph](
         const Expr* expression, CleanupState& state) {
         if (!expression) return;
         if (const auto* move = dynamic_cast<const MoveExpr*>(expression)) {
@@ -1057,6 +1075,24 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             transferExpr(address->operand.get(), state);
         } else if (const auto* assignment =
                        dynamic_cast<const AssignExpr*>(expression)) {
+            if (assignment->op == Operator::Assign) {
+                auto destination = placeOf(assignment->lhs.get());
+                const auto* local = destination &&
+                        destination->projections.empty()
+                    ? graph.findLocal(destination->root) : nullptr;
+                if (local && local->kind == LocalKind::Synthetic &&
+                    luna::ownership::isMoveOnly(local->usage)) {
+                    // The RHS is evaluated first by Luna assignment. It must
+                    // consume the current value, otherwise activation reports
+                    // an overwrite of active affine state. Successful return
+                    // then reinitializes the same compile-time-tracked slot.
+                    transferExpr(assignment->rhs.get(), state);
+                    activateLocal(
+                        destination->root, state, assignment->location,
+                        "transfer assignment");
+                    return;
+                }
+            }
             transferExpr(assignment->lhs.get(), state);
             transferExpr(assignment->rhs.get(), state);
         }

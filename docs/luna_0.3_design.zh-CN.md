@@ -646,9 +646,16 @@ ownership dataflow 要求 finish transfer；伪造的 shared builder borrow 或 
 不增加第二套 lowering。任何位于更早 sibling operand 之后的 terminal 仍会被拒绝，
 因而构造器不会猜测 hoisting 或重排该 operand。
 
-第 10 项尚未整体完成。affine fold accumulator、通用 expression sibling hoisting、
-捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup 状态
-仍是明确的后续边界。随后规范化其余控制流表达式、slot 和 fragment
+affine-accumulator `fold` 子阶段现在也已完成。一个 synthetic affine local 持有初值，
+每轮都被 move 给 reducer，并在同一次 transfer assignment 中由 reducer 的 affine 返回值
+重新初始化。独立 ownership dataflow 会拒绝复制 accumulator、未先消费就替换，或复制最终
+结果；源码 consumer 接收显式 move。普通循环回边与零次迭代出口因此都保持唯一 active
+cleanup obligation，不增加 initialized bit、runtime ownership flag 或第二个 accumulator。
+linear accumulator 仍不进入这种隐藏 terminal state。
+
+第 10 项尚未整体完成。通用 expression sibling hoisting、捕获式 closure environment，
+以及 non-Copy item/callable contract 的逐元素初始化/cleanup 状态仍是明确的后续边界。
+随后规范化其余控制流表达式、slot 和 fragment
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
 serializer/parser 仍属于第 11 项。

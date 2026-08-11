@@ -1772,14 +1772,16 @@ ControlFlowBuilder::lowerIteratorTerminal(
         loop->body->stmts.push_back(std::move(increment));
     } else if (terminal->iteratorOp == IteratorOp::Fold) {
         const auto* accumulatorType = mModule->findType(terminal->type);
+        const auto accumulatorUsage = accumulatorType
+            ? accumulatorType->sysmeta.resource.usage
+            : luna::ownership::Usage::Copy;
         if (terminal->args.size() != 2 || !accumulatorType ||
-            accumulatorType->sysmeta.resource.usage !=
-                luna::ownership::Usage::Copy ||
+            accumulatorUsage == luna::ownership::Usage::Linear ||
             terminal->iteratorOutputType != terminal->type ||
-            terminal->returnUsage != luna::ownership::Usage::Copy ||
+            terminal->returnUsage != accumulatorUsage ||
             terminal->returnsLinear) {
             error(terminal->location,
-                  "canonical fold currently requires a Copy accumulator");
+                  "canonical fold requires a Copy or affine accumulator");
             return std::nullopt;
         }
         if (!bindExpr(terminal->args[0].get()) ||
@@ -1793,19 +1795,29 @@ ControlFlowBuilder::lowerIteratorTerminal(
                 terminal->type, terminal->iteratorInputType} ||
             reducerType->returnTypeId != terminal->type ||
             reducerType->parameterContracts.size() != 2 ||
+            reducerType->parameterContracts[0].relation !=
+                luna::ownership::Relation::Owned ||
             reducerType->parameterContracts[0].usage !=
-                luna::ownership::Usage::Copy ||
+                accumulatorUsage ||
+            reducerType->parameterContracts[1].relation !=
+                luna::ownership::Relation::Owned ||
             reducerType->parameterContracts[1].usage !=
                 luna::ownership::Usage::Copy ||
+            reducerType->returnContract.relation !=
+                luna::ownership::Relation::Owned ||
             reducerType->returnContract.usage !=
-                luna::ownership::Usage::Copy) {
+                accumulatorUsage) {
             error(terminal->location,
-                  "fold reducer disagrees with its Copy terminal contract");
+                  "fold reducer disagrees with its accumulator "
+                  "ownership contract");
             return std::nullopt;
         }
-        resultLocal = addBinding(
-            "$terminal.fold." + identity, terminal->type,
-            std::move(terminal->args[0]));
+        resultLocal = addBindingAt(
+            current.block, "$terminal.fold." + identity,
+            terminal->type, accumulatorUsage,
+            std::move(terminal->args[0]),
+            accumulatorUsage == luna::ownership::Usage::Affine
+                ? LocalKind::Synthetic : LocalKind::Binding);
         const TypeRef reducerTypeId = terminal->args[1]->type;
         const LocalId reducer = addBinding(
             "$terminal.reducer." + identity,
@@ -1819,14 +1831,22 @@ ControlFlowBuilder::lowerIteratorTerminal(
         auto call = std::make_unique<CallExpr>();
         call->location = terminal->location;
         call->callee = identifier(reducer);
-        call->args.push_back(identifier(resultLocal));
+        if (accumulatorUsage == luna::ownership::Usage::Affine) {
+            auto transfer = std::make_unique<MoveExpr>();
+            transfer->location = terminal->location;
+            transfer->type = terminal->type;
+            transfer->operand = identifier(resultLocal);
+            call->args.push_back(std::move(transfer));
+        } else {
+            call->args.push_back(identifier(resultLocal));
+        }
         auto item = std::make_unique<IdentifierExpr>();
         item->location = terminal->location;
         item->name = loop->varName;
         item->type = terminal->iteratorInputType;
         call->args.push_back(std::move(item));
         call->type = terminal->type;
-        call->returnUsage = luna::ownership::Usage::Copy;
+        call->returnUsage = accumulatorUsage;
         assignment->rhs = std::move(call);
         assignment->type = terminal->type;
         reduce->expr = std::move(assignment);
@@ -2043,7 +2063,18 @@ ControlFlowBuilder::lowerIteratorTerminal(
     auto lowered = lowerIteratorRecipeFor(
         std::move(loop), std::move(current), region, scope);
     if (!lowered) return std::nullopt;
-    if (!resultLocal.empty()) replacement = identifier(resultLocal);
+    if (!resultLocal.empty()) {
+        const auto* result = mGraph->findLocal(resultLocal);
+        if (result && luna::ownership::isMoveOnly(result->usage)) {
+            auto transfer = std::make_unique<MoveExpr>();
+            transfer->location = terminal->location;
+            transfer->type = result->type;
+            transfer->operand = identifier(resultLocal);
+            replacement = std::move(transfer);
+        } else {
+            replacement = identifier(resultLocal);
+        }
+    }
     return lowered;
 }
 

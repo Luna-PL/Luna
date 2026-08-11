@@ -139,15 +139,22 @@ ownership/cleanup dataflow 证明两次 transfer；不增加 iterator object、o
 materialized recipe 路径的同时保留 receiver-before-argument 求值顺序；临时 cursor 是
 affine 单次消费凭证，不是 runtime iterator token。
 
+affine `fold` accumulator 现在也在同一 CFG 中只使用一个外层 synthetic local。初始化会
+激活其普通 cleanup obligation；每轮循环执行 `reducer(move accumulator, item)`，返回的
+affine 值通过一次 transfer assignment 重新初始化同一个 local，最终 consumer 接收
+`move accumulator`。canonical ownership dataflow 要求每次重新初始化前都已 move，并证明
+包括零次迭代路径在内的最终 transfer，因而不需要 runtime initialized flag 或额外
+accumulator。linear accumulator 仍被拒绝，因为 terminal expression 不应隐藏必须显式
+履行的消费义务。
+
 这种 binding 是 affine、single-consumption 的局部值，当前不能返回、传参或跨 ABI。
 借用型 binding 将源 loan 保持到词法作用域结束；Copy `into_iter` 在绑定点建立值
 快照。move-only `into_iter` 在绑定点把源所有权转入隐藏栈状态，并为每个数组元素
 保存初始化位。终结消费、`for` 中提前 `return`、普通函数提前 `return` 以及从未
 消费就离开作用域，都会只清理仍初始化的元素。
 
-位于更早 sibling operand 之后的 terminal、通用 expression sibling hoisting、affine fold
-accumulator，以及 non-Copy item/callable 的逐元素所有权状态仍是明确的
-canonical-CFG 边界。
+位于更早 sibling operand 之后的 terminal、通用 expression sibling hoisting，以及
+non-Copy item/callable 的逐元素所有权状态仍是明确的 canonical-CFG 边界。
 
 源表达式、适配器参数和终结参数按从左到右的源代码顺序求值。`filter` 跳过元素，
 `take` 只计算流经它的元素，因此适配器顺序具有通常的惰性管道含义。

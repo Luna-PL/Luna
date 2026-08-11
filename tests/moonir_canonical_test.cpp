@@ -106,6 +106,16 @@ int main() {
         {luna::ownership::Relation::Owned,
          luna::ownership::Usage::Copy});
     const auto reducerTypeId = module.registerType(reducerType);
+    auto affineReducerType = Type::makeFunction(
+        {TyString, TyI32}, TyString,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Affine},
+         {luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Affine});
+    const auto affineReducerTypeId = module.registerType(
+        affineReducerType);
     auto actionType = Type::makeFunction(
         {TyI32}, TyUnit,
         {{luna::ownership::Relation::Owned,
@@ -1015,6 +1025,146 @@ int main() {
           directAccumulatorOrder < directReducerOrder))
         return fail("direct Copy fold did not preserve receiver/terminal evaluation order");
 
+    auto affineFoldStructured = std::make_unique<moon::BlockStmt>();
+    auto affineFoldBinding = std::make_unique<moon::LetStmt>();
+    affineFoldBinding->name = "affineFolded";
+    affineFoldBinding->type = stringId;
+    affineFoldBinding->usage = luna::ownership::Usage::Affine;
+    auto affineFold = makeDirectRangeTerminal(
+        IteratorOp::Fold, stringId, stringId, true);
+    affineFold->returnUsage = luna::ownership::Usage::Affine;
+    auto affineInitial = std::make_unique<moon::StringLiteralExpr>();
+    affineInitial->value = "seed";
+    affineInitial->type = stringId;
+    affineFold->args.push_back(std::move(affineInitial));
+    auto affineReducer = std::make_unique<moon::IdentifierExpr>();
+    affineReducer->name = "affineReducer";
+    affineReducer->type = affineReducerTypeId;
+    affineFold->args.push_back(std::move(affineReducer));
+    affineFoldBinding->initializer = std::move(affineFold);
+    affineFoldStructured->stmts.push_back(
+        std::move(affineFoldBinding));
+    auto affineFoldCleanup = std::make_unique<moon::FreeStmt>();
+    affineFoldCleanup->isImplicit = true;
+    affineFoldCleanup->action = cleanupActionForType(TyString);
+    auto affineFoldedIdentifier =
+        std::make_unique<moon::IdentifierExpr>();
+    affineFoldedIdentifier->name = "affineFolded";
+    affineFoldedIdentifier->type = stringId;
+    affineFoldCleanup->operand = std::move(
+        affineFoldedIdentifier);
+    affineFoldStructured->stmts.push_back(
+        std::move(affineFoldCleanup));
+    moon::Param affineReducerParameter;
+    affineReducerParameter.name = "affineReducer";
+    affineReducerParameter.type = affineReducerTypeId;
+    auto affineFoldCfg = cfgBuilder.build(
+        std::move(affineFoldStructured),
+        {affineReducerParameter},
+        moon::RegionKind::Function, module);
+    moon::LocalRecord* affineAccumulator = nullptr;
+    moon::LetStmt* affineDestination = nullptr;
+    moon::MoveExpr* affineFinalTransfer = nullptr;
+    moon::AssignExpr* affineReplacement = nullptr;
+    moon::CallExpr* affineReducerCall = nullptr;
+    if (affineFoldCfg) {
+        for (auto& local : affineFoldCfg->locals)
+            if (local.name.rfind("$terminal.fold.", 0) == 0)
+                affineAccumulator = &local;
+        for (auto& block : affineFoldCfg->blocks)
+            for (auto& operation : block.operations) {
+                if (auto* declaration = dynamic_cast<moon::LetStmt*>(
+                        operation.get());
+                    declaration && declaration->name == "affineFolded")
+                    affineDestination = declaration;
+                if (auto* expression = dynamic_cast<moon::ExprStmt*>(
+                        operation.get()))
+                    if (auto* assignment = dynamic_cast<moon::AssignExpr*>(
+                            expression->expr.get());
+                        assignment &&
+                        assignment->op == moon::Operator::Assign) {
+                        auto* call = dynamic_cast<moon::CallExpr*>(
+                            assignment->rhs.get());
+                        if (call && call->type == stringId) {
+                            affineReplacement = assignment;
+                            affineReducerCall = call;
+                        }
+                    }
+            }
+    }
+    affineFinalTransfer = affineDestination
+        ? dynamic_cast<moon::MoveExpr*>(
+              affineDestination->initializer.get())
+        : nullptr;
+    auto* affineAccumulatorMove = affineReducerCall &&
+            !affineReducerCall->args.empty()
+        ? dynamic_cast<moon::MoveExpr*>(
+              affineReducerCall->args.front().get())
+        : nullptr;
+    auto* movedAffineAccumulator = affineAccumulatorMove
+        ? dynamic_cast<moon::IdentifierExpr*>(
+              affineAccumulatorMove->operand.get())
+        : nullptr;
+    auto* finalAffineAccumulator = affineFinalTransfer
+        ? dynamic_cast<moon::IdentifierExpr*>(
+              affineFinalTransfer->operand.get())
+        : nullptr;
+    if (!affineFoldCfg ||
+        !cfgVerifier.verify(*affineFoldCfg, module) ||
+        !affineAccumulator ||
+        affineAccumulator->kind != moon::LocalKind::Synthetic ||
+        affineAccumulator->usage != luna::ownership::Usage::Affine ||
+        !affineReplacement || !affineReducerCall ||
+        affineReducerCall->returnUsage !=
+            luna::ownership::Usage::Affine ||
+        !movedAffineAccumulator || !finalAffineAccumulator ||
+        movedAffineAccumulator->local != affineAccumulator->id ||
+        finalAffineAccumulator->local != affineAccumulator->id ||
+        affineFoldCfg->cleanups.size() != 2)
+        return fail("affine fold did not normalize to a transfer/reinitialize CFG cycle");
+
+    auto savedAffineArgument = std::move(
+        affineReducerCall->args.front());
+    auto copiedAffineAccumulator =
+        std::make_unique<moon::IdentifierExpr>();
+    copiedAffineAccumulator->name = affineAccumulator->name;
+    copiedAffineAccumulator->local = affineAccumulator->id;
+    copiedAffineAccumulator->type = affineAccumulator->type;
+    affineReducerCall->args.front() = std::move(
+        copiedAffineAccumulator);
+    if (cfgVerifier.verify(*affineFoldCfg, module))
+        return fail("CFG verifier accepted a copied affine fold accumulator");
+    auto activeOverwrite = std::make_unique<moon::StringLiteralExpr>();
+    activeOverwrite->value = "replacement";
+    activeOverwrite->type = stringId;
+    affineReducerCall->args.front() = std::move(activeOverwrite);
+    if (cfgVerifier.verify(*affineFoldCfg, module))
+        return fail(
+            "CFG verifier accepted overwrite of an active affine fold accumulator");
+    affineReducerCall->args.front() = std::move(savedAffineArgument);
+    if (!cfgVerifier.verify(*affineFoldCfg, module))
+        return fail("restored affine fold accumulator transfer did not verify");
+
+    if (!affineDestination)
+        return fail("affine fold destination disappeared from canonical CFG");
+    auto savedDestinationInitializer = std::move(
+        affineDestination->initializer);
+    auto copiedFinalResult = std::make_unique<moon::IdentifierExpr>();
+    copiedFinalResult->name = affineAccumulator->name;
+    copiedFinalResult->local = affineAccumulator->id;
+    copiedFinalResult->type = affineAccumulator->type;
+    affineDestination->initializer = std::move(copiedFinalResult);
+    if (cfgVerifier.verify(*affineFoldCfg, module))
+        return fail("CFG verifier accepted a copied affine fold result");
+    affineDestination->initializer = std::move(
+        savedDestinationInitializer);
+    affineFinalTransfer = dynamic_cast<moon::MoveExpr*>(
+        affineDestination->initializer.get());
+    if (!affineFinalTransfer)
+        return fail("affine fold final transfer was not restored");
+    if (!cfgVerifier.verify(*affineFoldCfg, module))
+        return fail("restored affine fold result transfer did not verify");
+
     auto directCountStructured = std::make_unique<moon::BlockStmt>();
     auto directCountReturn = std::make_unique<moon::ReturnStmt>();
     directCountReturn->value = makeDirectRangeTerminal(
@@ -1836,6 +1986,7 @@ int main() {
     reverse.registerType(lambdaType);
     reverse.registerType(predicateType);
     reverse.registerType(reducerType);
+    reverse.registerType(affineReducerType);
     reverse.registerType(actionType);
     reverse.registerType(moveMapType);
     reverse.registerType(moveMapIterator);
