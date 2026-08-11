@@ -3504,6 +3504,13 @@ TypePtr BodyAnalyzer::analyzeIteratorCall(
                   receiver->toString(), call->line, call->col);
             return TyUnknown;
         }
+        if (receiver->kind == TypeKind::Slice && name != "iter") {
+            mContext.error("`" + name +
+                  "` requires an owning array receiver; slice<T> is a "
+                  "read-only shared view",
+                  call->line, call->col);
+            return TyUnknown;
+        }
         TypePtr element = receiver->inner;
         IteratorMode mode = IteratorMode::Shared;
         IteratorOp op = IteratorOp::Iter;

@@ -29,6 +29,7 @@ using moon::LaunchExpr;
 using moon::MoveExpr;
 using moon::Operator;
 using moon::RecordLiteralExpr;
+using moon::SliceLengthExpr;
 using moon::StringLiteralExpr;
 using moon::TryExpr;
 using moon::UnaryExpr;
@@ -437,6 +438,12 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             result = mBuilder->CreateInsertValue(result, generateExpr(array->elements[i].get()),
                                                   {static_cast<unsigned>(i)}, "array.init");
         return result;
+    }
+    if (auto* length = dynamic_cast<SliceLengthExpr*>(expr)) {
+        auto* slice = generateExpr(length->slice.get());
+        auto* rawLength = mBuilder->CreateExtractValue(
+            slice, {1}, "slice.length");
+        return rawLength;
     }
     if (auto* index = dynamic_cast<IndexExpr*>(expr)) {
         auto* id = dynamic_cast<IdentifierExpr*>(index->object.get());

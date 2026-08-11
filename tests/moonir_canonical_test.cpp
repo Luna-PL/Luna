@@ -57,6 +57,11 @@ int main() {
         TyI32, IteratorMode::Range);
     auto sharedIterator = Type::makeIterator(
         Type::makeReference(TyI32), IteratorMode::Shared, shortArray);
+    auto slice = Type::makeSlice(TyI32);
+    auto sharedSliceIterator = Type::makeIterator(
+        Type::makeReference(TyI32), IteratorMode::Shared, slice);
+    auto mutableSliceIterator = Type::makeIterator(
+        Type::makeReference(TyI32, true), IteratorMode::Mutable, slice);
 
     moon::Module module;
     module.name = "canonical.test";
@@ -64,6 +69,9 @@ int main() {
     const auto longId = module.registerType(longIterator);
     const auto rangeId = module.registerType(rangeIterator);
     const auto sharedId = module.registerType(sharedIterator);
+    const auto sliceId = module.registerType(slice);
+    const auto sharedSliceId = module.registerType(sharedSliceIterator);
+    const auto mutableSliceId = module.registerType(mutableSliceIterator);
     if (shortId == longId)
         return fail("backend-significant iterator sources collapsed to one TypeId");
 
@@ -71,6 +79,7 @@ int main() {
         "Snapshot", {{"value", TyI32}}, "canonical.test::Snapshot");
     const auto productId = module.registerType(product);
     const auto i32Id = module.registerType(TyI32);
+    const auto usizeId = module.registerType(TyUSize);
     const auto stringId = module.registerType(TyString);
     const auto boolId = module.registerType(TyBool);
     auto lambdaType = Type::makeFunction(
@@ -579,6 +588,109 @@ int main() {
         !dynamic_cast<moon::BorrowExpr*>(sharedItem->initializer.get()))
         return fail("shared array recipe lost its canonical indexed borrow");
 
+    const auto* sharedSliceType = module.findType(sharedSliceId);
+    const auto* mutableSliceType = module.findType(mutableSliceId);
+    if (!sharedSliceType || sharedSliceType->innerTypeId.empty() ||
+        !mutableSliceType || mutableSliceType->innerTypeId.empty())
+        return fail("slice iterator fixtures lost their frozen item types");
+    auto sliceStructured = std::make_unique<moon::BlockStmt>();
+    auto sliceLoop = std::make_unique<moon::ForStmt>();
+    sliceLoop->varName = "sliceElement";
+    sliceLoop->bindingUsage = luna::ownership::Usage::Copy;
+    sliceLoop->elementType = sharedSliceType->innerTypeId;
+    auto sliceIdentifier = std::make_unique<moon::IdentifierExpr>();
+    sliceIdentifier->name = "view";
+    sliceIdentifier->type = sliceId;
+    sliceLoop->iterable = std::move(sliceIdentifier);
+    sliceLoop->body = std::make_unique<moon::BlockStmt>();
+    sliceStructured->stmts.push_back(std::move(sliceLoop));
+    moon::Param sliceParameter;
+    sliceParameter.name = "view";
+    sliceParameter.type = sliceId;
+    sliceParameter.relation = luna::ownership::Relation::SharedBorrow;
+    auto sliceCfg = cfgBuilder.build(
+        std::move(sliceStructured), {sliceParameter},
+        moon::RegionKind::Function, module);
+    auto* sliceLimitBinding = sliceCfg && sliceCfg->blocks.size() > 1 &&
+            sliceCfg->blocks[1].operations.size() > 1
+        ? dynamic_cast<moon::LetStmt*>(
+              sliceCfg->blocks[1].operations[1].get())
+        : nullptr;
+    auto* sliceLength = sliceLimitBinding
+        ? dynamic_cast<moon::SliceLengthExpr*>(
+              sliceLimitBinding->initializer.get())
+        : nullptr;
+    auto* sliceItem = sliceCfg && sliceCfg->blocks.size() > 3 &&
+            !sliceCfg->blocks[3].operations.empty()
+        ? dynamic_cast<moon::LetStmt*>(
+              sliceCfg->blocks[3].operations.front().get())
+        : nullptr;
+    auto* sliceBorrow = sliceItem
+        ? dynamic_cast<moon::BorrowExpr*>(sliceItem->initializer.get())
+        : nullptr;
+    auto* sliceIndex = sliceBorrow
+        ? dynamic_cast<moon::IndexExpr*>(sliceBorrow->operand.get())
+        : nullptr;
+    auto* sliceLengthSource = sliceLength
+        ? dynamic_cast<moon::IdentifierExpr*>(sliceLength->slice.get())
+        : nullptr;
+    auto* sliceIndexSource = sliceIndex
+        ? dynamic_cast<moon::IdentifierExpr*>(sliceIndex->object.get())
+        : nullptr;
+    if (!sliceCfg || !cfgVerifier.verify(*sliceCfg, module) ||
+        sliceCfg->blocks.size() != 6 || sliceCfg->locals.size() != 4 ||
+        sliceCfg->blocks[1].operations.size() != 2 || !sliceLength ||
+        !sliceLengthSource || sliceLengthSource->local != moon::LocalId{0} ||
+        !sliceBorrow || !sliceIndex || !sliceIndexSource ||
+        sliceIndexSource->local != moon::LocalId{0})
+        return fail("shared slice recipe lost its canonical length/index projections");
+
+    sliceLength->type = boolId;
+    if (cfgVerifier.verify(*sliceCfg, module))
+        return fail("CFG verifier accepted a non-usize slice length projection");
+    sliceLength->type = usizeId;
+    auto savedSliceOperand = std::move(sliceLength->slice);
+    auto invalidSliceOperand = std::make_unique<moon::IntLiteralExpr>();
+    invalidSliceOperand->value = 1;
+    invalidSliceOperand->type = i32Id;
+    sliceLength->slice = std::move(invalidSliceOperand);
+    if (cfgVerifier.verify(*sliceCfg, module))
+        return fail("CFG verifier accepted a non-slice length operand");
+    sliceLength->slice = std::move(savedSliceOperand);
+    if (!cfgVerifier.verify(*sliceCfg, module))
+        return fail("restored canonical slice recipe did not verify");
+
+    auto mutableSliceStructured = std::make_unique<moon::BlockStmt>();
+    auto mutableSliceLoop = std::make_unique<moon::ForStmt>();
+    mutableSliceLoop->varName = "mutableElement";
+    mutableSliceLoop->bindingUsage = luna::ownership::Usage::Copy;
+    mutableSliceLoop->elementType = mutableSliceType->innerTypeId;
+    auto mutableIter = std::make_unique<moon::CallExpr>();
+    mutableIter->iteratorOp = IteratorOp::IterMut;
+    mutableIter->iteratorInputType = i32Id;
+    mutableIter->iteratorOutputType = mutableSliceType->innerTypeId;
+    mutableIter->type = mutableSliceId;
+    auto mutableMember = std::make_unique<moon::FieldAccessExpr>();
+    mutableMember->field = "iter_mut";
+    auto mutableSource = std::make_unique<moon::IdentifierExpr>();
+    mutableSource->name = "view";
+    mutableSource->type = sliceId;
+    mutableMember->object = std::move(mutableSource);
+    mutableIter->callee = std::move(mutableMember);
+    mutableSliceLoop->iterable = std::move(mutableIter);
+    mutableSliceLoop->body = std::make_unique<moon::BlockStmt>();
+    mutableSliceStructured->stmts.push_back(std::move(mutableSliceLoop));
+    if (cfgBuilder.build(
+            std::move(mutableSliceStructured), {sliceParameter},
+            moon::RegionKind::Function, module))
+        return fail("CFG builder accepted mutable iteration over a read-only slice");
+    bool diagnosedMutableSlice = false;
+    for (const auto& message : cfgBuilder.errors())
+        if (message.find("require shared iteration") != std::string::npos)
+            diagnosedMutableSlice = true;
+    if (!diagnosedMutableSlice)
+        return fail("CFG builder did not preserve the read-only slice boundary");
+
     auto lambdaStructured = std::make_unique<moon::BlockStmt>();
     auto lambdaStatement = std::make_unique<moon::ExprStmt>();
     auto lambda = std::make_unique<moon::LambdaExpr>();
@@ -873,9 +985,13 @@ int main() {
     reverse.registerType(longIterator);
     reverse.registerType(shortIterator);
     reverse.registerType(sharedIterator);
+    reverse.registerType(mutableSliceIterator);
+    reverse.registerType(slice);
+    reverse.registerType(sharedSliceIterator);
     reverse.registerType(rangeIterator);
     reverse.registerType(Type::makeStruct(
         "Snapshot", {{"value", TyI32}}, "canonical.test::Snapshot"));
+    reverse.registerType(TyUSize);
     reverse.registerType(TyString);
     reverse.registerType(TyBool);
     reverse.registerType(lambdaType);

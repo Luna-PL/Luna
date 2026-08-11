@@ -678,9 +678,19 @@ controls which items consume a `take` counter, with no intermediate container an
 operation. The verifier additionally matches local-call arguments/results and let initializer/local
 types, so the expanded graph no longer relies on the recipe's frontend trust.
 
-Item 10 is not complete as a whole. Slice-length projection, materialized recipes, capturing closure
-environments, and non-Copy item/callable per-element ownership state remain explicit following
-boundaries. The remaining work then normalizes control-flow expressions, slot, and fragment paths,
+The slice-bound subphase is now complete as well. A slice recipe evaluates its source exactly once,
+materializes its runtime bound once in loop init, and uses the same ordinary indexed-borrow CFG as a
+shared array recipe. The bound is represented by `SliceLengthExpr`, a fundamental slice projection,
+not an iterator operation or terminator. It preserves the slice ABI's `usize` length instead of
+canonizing the old backend's narrowing to `i32`; the slice loop index therefore also uses `usize`,
+while the existing source-level `take` count remains `i32`. The verifier independently requires a
+frozen slice operand and a `usize` result. Because the stable language surface has only read-only
+slices, Sema and canonical construction accept direct/shared slice iteration and reject mutable or
+consuming slice recipes.
+
+Item 10 is not complete as a whole. Materialized recipes, capturing closure environments, and
+non-Copy item/callable per-element ownership state remain explicit following boundaries. The
+remaining work then normalizes control-flow expressions, slot, and fragment paths,
 atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured
 execution is deleted and the full verifier/codegen regression gate passes does the item-level gate

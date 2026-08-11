@@ -25,13 +25,16 @@ values[1] = values[0] + 5;
 
 ## 当前可用表面
 
-数组和切片提供以下入口：
+array 提供全部三种所有权模式：
 
 ```luna
 values.iter()       // Iterator<&T>
 values.iter_mut()   // Iterator<&mut T>
 values.into_iter()  // Iterator<T>，消费数组时按值转移元素
 ```
+
+只读 slice 仅提供 `view.iter() -> Iterator<&T>` 和直接的共享迭代。它不能产生可变引用，
+也不能转移元素所有权；这两类操作要求 owning array receiver。
 
 整数半开区间使用 `range(start, end)`。惰性适配器包括：
 
@@ -103,6 +106,10 @@ trait identity、Item 一致性、完整方法集和 affine 所有权契约，�
 适配器链在前端形成编译器域的临时 iterator recipe。MoonIR 保留已验证的源、适配器
 顺序、元素输入输出类型和借用模式；LLVM lowering 将整条链融合为一个循环。它不会为
 `map` 或 `filter` 建立中间数组，不依赖 `Vec`，也不调用 iterator runtime ABI。
+
+在 canonical CFG 构造中，array 提供编译期常量上界，slice 则在 loop init 中提供一个
+经验证的 `usize` `SliceLengthExpr`。该节点是 slice 的基本投影而非 iterator operation；
+source 与它的运行时上界都只求值一次。
 
 无捕获 recipe 现在可绑定到局部变量。绑定时按源代码顺序
 立即求值源、lambda 函数指针和 `take` 参数，并在栈上保存源指针/Copy 快照、索引、
@@ -220,4 +227,3 @@ Core `FromIterator` 也已接入 compiler recipe，但采用 `begin/push/finish`
 3. 在 coherence 支持 impl specialization 后开放泛型 `FromIterator` impl，并由
    标准库动态容器实现实际 builder。
 4. 最后再与无栈协程对接异步迭代，并由 `sysmeta` 推导暂停和 frame 需求。
-

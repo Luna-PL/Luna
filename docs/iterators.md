@@ -29,13 +29,17 @@ implicitly become arrays or slices.
 
 ## Current surface
 
-Arrays and slices provide:
+Arrays provide all three ownership modes:
 
 ```luna
 values.iter()       // Iterator<&T>
 values.iter_mut()   // Iterator<&mut T>
 values.into_iter()  // Iterator<T>, transfers elements by value
 ```
+
+Read-only slices provide only `view.iter() -> Iterator<&T>` and direct shared iteration.
+They cannot create mutable references or transfer ownership of elements; those operations require
+an owning array receiver.
 
 Integer half-open ranges use `range(start, end)`. Lazy adapters include:
 
@@ -111,6 +115,11 @@ An adapter chain forms a temporary compiler-domain iterator recipe in the fronte
 retains the verified source, adapter order, input/output element types, and borrow mode;
 LLVM lowering fuses the chain into one loop. It creates no intermediate array for `map` or
 `filter`, does not depend on `Vec`, and does not call an iterator Runtime ABI.
+
+In canonical CFG construction an array contributes a compile-time constant bound, while a slice
+contributes one verified `usize` `SliceLengthExpr` in loop initialization. This node is a basic
+slice projection rather than an iterator operation; the source and its runtime bound are each
+evaluated once.
 
 A capture-free recipe may currently be bound to a local. At binding time it evaluates the
 source, lambda function pointer, and `take` argument in source order, then stores source

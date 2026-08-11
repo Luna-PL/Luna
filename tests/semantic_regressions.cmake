@@ -196,6 +196,8 @@ expect_success("Result drops only its active resource payload" "tests/fixtures/r
 expect_success("formal never type and diverging calls" "tests/fixtures/never_type.luna" "never\n0\nProgram exited with code: 42")
 expect_success("fused iterator pipelines and mutable iteration" "tests/fixtures/iterator_pipeline.luna" "14\n20\n30\n40\n3\n1\n2\n3\n4\n5\n6\n7\n70\n8\n9\n90\n11\n15\nProgram exited with code: 14")
 expect_success("borrowed slice iteration" "tests/fixtures/iterator_slice.luna" "20\n30\n40\nProgram exited with code: 3")
+expect_error("read-only slice rejects mutable iteration" "tests/fixtures/iterator_slice_mut_invalid.luna" "`iter_mut` requires an owning array receiver")
+expect_error("read-only slice rejects consuming iteration" "tests/fixtures/iterator_slice_into_invalid.luna" "`into_iter` requires an owning array receiver")
 expect_success("move-only consuming arrays keep per-element drop state" "tests/fixtures/iterator_move_only_array.luna" "131\n231\n141\n142\n1\n143\n1\n151\n151\n161\n161\n171\n171\n181\n182\n184\n184")
 expect_runtime_failure("explicit panic" "tests/fixtures/panic.luna" "Luna panic: intentional panic")
 expect_runtime_failure("unwrap failure panics" "tests/fixtures/result_unwrap_panic.luna" "Luna panic: called unwrap on Err")

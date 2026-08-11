@@ -543,6 +543,13 @@ struct IndexExpr : Expr {
     std::unique_ptr<Expr> index;
 };
 
+// A fundamental projection of the runtime length carried by a slice value.
+// This is not an iterator operation: canonical CFG construction also uses it
+// wherever a slice bound cannot be represented by an array-length constant.
+struct SliceLengthExpr : Expr {
+    std::unique_ptr<Expr> slice;
+};
+
 struct ArrayLiteralExpr : Expr {
     std::vector<std::unique_ptr<Expr>> elements;
     TypeRef elementType;

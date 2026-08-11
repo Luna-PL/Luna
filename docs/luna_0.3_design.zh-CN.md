@@ -604,9 +604,18 @@ call 与 branch，拒绝边直接进入统一 index increment/backedge。因此
 不新增 iterator IR operation。verifier 额外核对 local callable 的参数/结果
 类型及 let initializer/local 类型，所以展开后不再依赖 recipe 上的前端信任。
 
-第 10 项尚未整体完成。slice-length projection、materialized recipe、捕获式
-closure environment，以及 non-Copy item/callable contract 的逐元素
-初始化/cleanup 状态仍是明确的后续边界。随后规范化其余控制流表达式、slot 和 fragment
+
+slice bound 子阶段也已完成。slice recipe 的 source 只求值一次，运行时上界只在
+loop init 物化一次，并与 shared array recipe 一样使用普通的索引借用 CFG。上界使用
+`SliceLengthExpr` 表示；它是 slice 的基本投影，不是 iterator operation 或 terminator。
+该投影保留 slice ABI 的 `usize` 长度，没有把旧 backend 缩窄为 `i32` 的行为固化进
+canonical IR；slice 循环索引因此也使用 `usize`，而现有源语言 `take` 计数仍为 `i32`。
+verifier 独立要求操作数是冻结 slice、结果是 `usize`。由于当前稳定语言表面只有只读 slice，
+Sema 与 canonical 构造都接受直接/shared slice 迭代，并拒绝 mutable 或 consuming slice recipe。
+
+第 10 项尚未整体完成。materialized recipe、捕获式 closure environment，以及
+non-Copy item/callable contract 的逐元素初始化/cleanup 状态仍是明确的后续边界。随后规范化
+其余控制流表达式、slot 和 fragment
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
 serializer/parser 仍属于第 11 项。

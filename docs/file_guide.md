@@ -502,6 +502,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/iterator_mut_borrow_conflict_invalid.luna`
 - `tests/fixtures/iterator_pipeline.luna`
 - `tests/fixtures/iterator_slice.luna`
+- `tests/fixtures/iterator_slice_into_invalid.luna`
+- `tests/fixtures/iterator_slice_mut_invalid.luna`
 - `tests/fixtures/iterator_terminal_use_after_invalid.luna`
 - `tests/fixtures/jit_aot_parity.luna`
 - `tests/fixtures/kernel_host_effects_invalid.luna`

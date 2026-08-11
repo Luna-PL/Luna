@@ -795,9 +795,11 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
 
     TypeRef boolType;
     TypeRef indexType;
+    TypeRef sizeType;
     for (const auto& type : mModule->typeTable) {
         if (type.kind == TypeKind::Bool) boolType = type.id;
         if (type.kind == TypeKind::I32) indexType = type.id;
+        if (type.kind == TypeKind::USize) sizeType = type.id;
     }
     if (boolType.empty() || indexType.empty()) {
         error(statement->location,
@@ -814,25 +816,36 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         }
     } else {
         const auto* sourceType = mModule->findType(plan.sourceType);
-        if (!sourceType || sourceType->kind == TypeKind::Slice) {
-            error(statement->location,
-                  "slice recipes require a canonical length projection in the next subphase");
-            return std::nullopt;
-        }
-        if (sourceType->kind != TypeKind::Array ||
+        if (!sourceType ||
+            (sourceType->kind != TypeKind::Array &&
+             sourceType->kind != TypeKind::Slice) ||
             sourceType->innerTypeId.empty()) {
             error(statement->location,
-                  "iterator recipe source is not a frozen array");
+                  "iterator recipe source is not a frozen array or slice");
+            return std::nullopt;
+        }
+        if (sourceType->kind == TypeKind::Slice &&
+            plan.mode != IteratorMode::Shared) {
+            error(statement->location,
+                  "read-only slice recipes require shared iteration");
+            return std::nullopt;
+        }
+        if (sourceType->kind == TypeKind::Slice && sizeType.empty()) {
+            error(statement->location,
+                  "slice recipe requires a frozen usize compiler type");
             return std::nullopt;
         }
         const auto* elementType = mModule->findType(sourceType->innerTypeId);
-        if (plan.mode == IteratorMode::Consuming &&
+        if (sourceType->kind == TypeKind::Array &&
+            plan.mode == IteratorMode::Consuming &&
             (!elementType || elementType->sysmeta.resource.usage !=
                 luna::ownership::Usage::Copy)) {
             error(statement->location,
                   "move-only consuming arrays require projected canonical cleanup state");
             return std::nullopt;
         }
+        if (sourceType->kind == TypeKind::Slice && plan.itemType.empty())
+            plan.itemType = statement->elementType;
     }
     const TypeRef sourceItemType = plan.steps.empty()
         ? plan.itemType : plan.steps.front().inputType;
@@ -940,11 +953,11 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         }
         return value;
     };
-    const auto integer = [&statement, &indexType](int64_t value) {
+    const auto integer = [&statement](int64_t value, const TypeRef& type) {
         auto literal = std::make_unique<IntLiteralExpr>();
         literal->location = statement->location;
         literal->value = value;
-        literal->type = indexType;
+        literal->type = type;
         return literal;
     };
 
@@ -973,17 +986,30 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
 
     std::unique_ptr<Expr> initial;
     std::unique_ptr<Expr> limit;
+    const TypeRef loopIndexType = sourceType &&
+            sourceType->kind == TypeKind::Slice
+        ? sizeType : indexType;
     if (plan.mode == IteratorMode::Range) {
         initial = std::move(plan.rangeStart);
         limit = std::move(plan.rangeEnd);
     } else {
-        initial = integer(0);
-        limit = integer(static_cast<int64_t>(sourceType->arrayLength));
+        initial = integer(0, loopIndexType);
+        if (sourceType->kind == TypeKind::Slice) {
+            auto length = std::make_unique<SliceLengthExpr>();
+            length->location = statement->location;
+            length->slice = identifier(sourceLocal);
+            length->type = sizeType;
+            limit = std::move(length);
+        } else {
+            limit = integer(
+                static_cast<int64_t>(sourceType->arrayLength),
+                loopIndexType);
+        }
     }
     const LocalId indexLocal = addBinding(
-        "$for.index." + identity, indexType, std::move(initial));
+        "$for.index." + identity, loopIndexType, std::move(initial));
     const LocalId limitLocal = addBinding(
-        "$for.limit." + identity, indexType, std::move(limit));
+        "$for.limit." + identity, loopIndexType, std::move(limit));
     std::vector<LocalId> adapterLocals;
     for (size_t stepIndex = 0; stepIndex < plan.steps.size(); ++stepIndex) {
         auto& step = plan.steps[stepIndex];
@@ -1145,7 +1171,7 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
             canTake->location = statement->location;
             canTake->lhs = identifier(adapterLocals[stepIndex]);
             canTake->op = Operator::Greater;
-            canTake->rhs = integer(0);
+            canTake->rhs = integer(0, indexType);
             canTake->type = boolType;
             adapterTerminator.operand = std::move(canTake);
             adapterTerminator.secondary.target = exit;
@@ -1160,7 +1186,7 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
             assignment->location = statement->location;
             assignment->op = Operator::SubtractAssign;
             assignment->lhs = identifier(adapterLocals[stepIndex]);
-            assignment->rhs = integer(1);
+            assignment->rhs = integer(1, indexType);
             assignment->type = indexType;
             decrement->expr = std::move(assignment);
             mGraph->blocks[adapterAccepted.value].operations.push_back(
@@ -1203,8 +1229,8 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         assignment->location = statement->location;
         assignment->op = Operator::AddAssign;
         assignment->lhs = identifier(indexLocal);
-        assignment->rhs = integer(1);
-        assignment->type = indexType;
+        assignment->rhs = integer(1, loopIndexType);
+        assignment->type = loopIndexType;
         advance->expr = std::move(assignment);
         mGraph->blocks[increment.value].operations.push_back(
             std::move(advance));
@@ -1357,6 +1383,8 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
         return bindExpr(field->object.get());
     if (auto* index = dynamic_cast<IndexExpr*>(expression))
         return bindExpr(index->object.get()) && bindExpr(index->index.get());
+    if (auto* length = dynamic_cast<SliceLengthExpr*>(expression))
+        return bindExpr(length->slice.get());
     if (auto* array = dynamic_cast<ArrayLiteralExpr*>(expression)) {
         for (auto& element : array->elements)
             if (!bindExpr(element.get())) return false;

@@ -506,6 +506,9 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                        dynamic_cast<const IndexExpr*>(expression)) {
             scanGraphExpr(index->object.get(), block);
             scanGraphExpr(index->index.get(), block);
+        } else if (const auto* length =
+                       dynamic_cast<const SliceLengthExpr*>(expression)) {
+            scanGraphExpr(length->slice.get(), block);
         } else if (const auto* array =
                        dynamic_cast<const ArrayLiteralExpr*>(expression)) {
             for (const auto& element : array->elements)
@@ -950,6 +953,9 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                        dynamic_cast<const IndexExpr*>(expression)) {
             transferExpr(index->object.get(), state);
             transferExpr(index->index.get(), state);
+        } else if (const auto* length =
+                       dynamic_cast<const SliceLengthExpr*>(expression)) {
+            transferExpr(length->slice.get(), state);
         } else if (const auto* array =
                        dynamic_cast<const ArrayLiteralExpr*>(expression)) {
             for (const auto& element : array->elements)
@@ -2254,6 +2260,19 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
     } else if (auto* index = dynamic_cast<const IndexExpr*>(expr)) {
         verifyExpr(index->object.get(), module, owner);
         verifyExpr(index->index.get(), module, owner);
+    } else if (auto* length = dynamic_cast<const SliceLengthExpr*>(expr)) {
+        verifyExpr(length->slice.get(), module, owner);
+        verifyType(length->type, length->location,
+                   "slice length result", module);
+        const auto* resultType = module.findType(length->type);
+        const auto* sliceType = length->slice
+            ? module.findType(length->slice->type) : nullptr;
+        if (!resultType || resultType->kind != TypeKind::USize)
+            error(length->location,
+                  "slice length projection does not produce canonical usize");
+        if (!sliceType || sliceType->kind != TypeKind::Slice)
+            error(length->location,
+                  "slice length projection operand is not a frozen slice");
     } else if (auto* array = dynamic_cast<const ArrayLiteralExpr*>(expr)) {
         verifyType(array->elementType, array->location, "array element", module);
         for (const auto& element : array->elements)
