@@ -657,8 +657,20 @@ iterator terminator or opaque recipe operation is added, and the verifier reject
 recipe in a sealed CFG. The builder is deliberately not attached beside the old body: a sealed
 executable must never acquire two execution meanings.
 
-Item 10 is not complete as a whole. The next construction work gives lambda bodies canonical CFGs,
-then uses them to expand `map`/`filter`; slice-length projection, materialized recipes, and
+The capture-free lambda subphase is also complete. A lambda expression remains a closure-value
+node, while construction consumes its structured body into an independent canonical CFG rooted at
+a `Lambda` region. This is not a second IR layer: the parent function and lambda each have exactly
+one CFG, and the closure value merely refers to the lambda executable. The verifier recursively
+checks that child graph, matches the closure type, parameter contracts, and parameter locals, and
+rejects simultaneous body/CFG ownership. Sema already rejects local capture until closure-
+environment layout exists; canonical construction likewise rejects `captures`, so this step does
+not introduce an implicit or partial closure ABI. Signature consistency checking also exposed and
+fixed a lowering defect where explicit `linear T`/`affine T` lambda returns bypassed the resolved
+nominal identity. A usage wrapper remains only a binding contract, while the inner `T` now retains
+its actual TypeId instead of degrading to a same-named placeholder.
+
+Item 10 is not complete as a whole. The next construction work uses those bodies to expand
+capture-free `map`/`filter`; slice-length projection, materialized recipes, and
 move-only array element-initialization/cleanup state remain explicit following boundaries. It then
 normalizes the remaining control-flow expressions, slot, and fragment paths, atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured

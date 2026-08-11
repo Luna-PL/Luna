@@ -39,7 +39,7 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     mBindings.emplace_back();
     for (const auto& parameter : parameters)
         addLocal(rootScope, LocalKind::Parameter, parameter.name,
-                 parameter.type, parameter.usage);
+                 parameter.type, parameter.usage, parameter.relation);
 
     auto open = lowerSequence(
         root->stmts, OpenBlock{entry, {}}, rootRegion, rootScope);
@@ -102,7 +102,8 @@ BlockId ControlFlowBuilder::addBlock(
 
 LocalId ControlFlowBuilder::addLocal(
     ScopeId scope, LocalKind kind, const std::string& name,
-    const TypeRef& type, luna::ownership::Usage usage) {
+    const TypeRef& type, luna::ownership::Usage usage,
+    std::optional<luna::ownership::Relation> relation) {
     if (name.empty()) {
         error(mGraph->scopes[scope.value].location,
               "canonical local has no diagnostic name");
@@ -126,8 +127,11 @@ LocalId ControlFlowBuilder::addLocal(
     record.name = name;
     record.type = type;
     record.usage = usage;
-    if (const auto* frozen = mModule->findType(type))
+    if (relation) {
+        record.relation = *relation;
+    } else if (const auto* frozen = mModule->findType(type)) {
         record.relation = frozen->sysmeta.resource.relation;
+    }
     mGraph->locals.push_back(std::move(record));
     mGraph->scopes[scope.value].locals.push_back(id);
     mBindings.back()[name] = id;
@@ -1193,10 +1197,32 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
     }
     if (auto* allocation = dynamic_cast<HeapAllocExpr*>(expression))
         return bindExpr(allocation->initializer.get());
+    if (auto* lambda = dynamic_cast<LambdaExpr*>(expression)) {
+        if (!lambda->captures.empty()) {
+            error(lambda->location,
+                  "capturing lambda requires a closure environment ABI");
+            return false;
+        }
+        if (!lambda->body || lambda->controlFlow) {
+            error(lambda->location,
+                  "lambda entering CFG construction must have exactly one structured body");
+            return false;
+        }
+        ControlFlowBuilder nestedBuilder;
+        auto graph = nestedBuilder.build(
+            std::move(lambda->body), lambda->params,
+            RegionKind::Lambda, *mModule);
+        if (!graph) {
+            for (const auto& nestedError : nestedBuilder.errors())
+                mErrors.push_back("lambda CFG: " + nestedError);
+            return false;
+        }
+        lambda->controlFlow = std::move(graph);
+        return true;
+    }
     if (dynamic_cast<TryExpr*>(expression) ||
         dynamic_cast<BlockExpr*>(expression) ||
-        dynamic_cast<IfExpr*>(expression) ||
-        dynamic_cast<LambdaExpr*>(expression)) {
+        dynamic_cast<IfExpr*>(expression)) {
         error(expression->location,
               "control-flow expression must be normalized in a later CFG subphase");
         return false;

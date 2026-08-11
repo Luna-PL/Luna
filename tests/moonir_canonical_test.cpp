@@ -73,6 +73,13 @@ int main() {
     const auto i32Id = module.registerType(TyI32);
     const auto stringId = module.registerType(TyString);
     const auto boolId = module.registerType(TyBool);
+    auto lambdaType = Type::makeFunction(
+        {TyI32}, TyI32,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Copy});
+    const auto lambdaTypeId = module.registerType(lambdaType);
     auto choiceType = Type::makeEnum(
         "Choice", {{"None", {}}, {"Some", {TyI32}}},
         "canonical.test::Choice");
@@ -555,6 +562,70 @@ int main() {
         !dynamic_cast<moon::BorrowExpr*>(sharedItem->initializer.get()))
         return fail("shared array recipe lost its canonical indexed borrow");
 
+    auto lambdaStructured = std::make_unique<moon::BlockStmt>();
+    auto lambdaStatement = std::make_unique<moon::ExprStmt>();
+    auto lambda = std::make_unique<moon::LambdaExpr>();
+    lambda->type = lambdaTypeId;
+    lambda->closureType = lambdaTypeId;
+    lambda->returnType = i32Id;
+    moon::Param lambdaParameter;
+    lambdaParameter.name = "input";
+    lambdaParameter.type = i32Id;
+    lambda->params.push_back(lambdaParameter);
+    lambda->body = std::make_unique<moon::BlockStmt>();
+    auto lambdaReturn = std::make_unique<moon::ReturnStmt>();
+    auto lambdaResult = std::make_unique<moon::IdentifierExpr>();
+    lambdaResult->name = "input";
+    lambdaResult->type = i32Id;
+    lambdaReturn->value = std::move(lambdaResult);
+    lambda->body->stmts.push_back(std::move(lambdaReturn));
+    auto* canonicalLambda = lambda.get();
+    lambdaStatement->expr = std::move(lambda);
+    lambdaStructured->stmts.push_back(std::move(lambdaStatement));
+    auto lambdaCfg = cfgBuilder.build(
+        std::move(lambdaStructured), {},
+        moon::RegionKind::Function, module);
+    const auto* lambdaRoot = lambdaCfg && canonicalLambda->controlFlow
+        ? canonicalLambda->controlFlow->findRegion(
+              canonicalLambda->controlFlow->rootRegion)
+        : nullptr;
+    if (!lambdaCfg || !cfgVerifier.verify(*lambdaCfg, module) ||
+        canonicalLambda->body || !canonicalLambda->controlFlow ||
+        !lambdaRoot || lambdaRoot->kind != moon::RegionKind::Lambda ||
+        canonicalLambda->controlFlow->locals.size() != 1 ||
+        canonicalLambda->controlFlow->locals.front().kind !=
+            moon::LocalKind::Parameter)
+        return fail("lambda body did not become an independent canonical CFG");
+    auto* lambdaReturnId = canonicalLambda->controlFlow->blocks.empty()
+        ? nullptr
+        : dynamic_cast<moon::IdentifierExpr*>(
+              canonicalLambda->controlFlow->blocks.front()
+                  .terminator.operand.get());
+    if (!lambdaReturnId || lambdaReturnId->local != moon::LocalId{0})
+        return fail("lambda canonical CFG did not bind its parameter LocalId");
+    lambdaReturnId->local = moon::LocalId{99};
+    if (cfgVerifier.verify(*lambdaCfg, module))
+        return fail("parent CFG verifier accepted an invalid nested lambda CFG");
+    lambdaReturnId->local = moon::LocalId{0};
+    canonicalLambda->body = std::make_unique<moon::BlockStmt>();
+    if (cfgVerifier.verify(*lambdaCfg, module))
+        return fail("CFG verifier accepted dual lambda execution bodies");
+    canonicalLambda->body.reset();
+    canonicalLambda->captures.push_back("outer");
+    if (cfgVerifier.verify(*lambdaCfg, module))
+        return fail("CFG verifier accepted a lambda without a capture layout");
+    canonicalLambda->captures.clear();
+    canonicalLambda->controlFlow->regions[
+        canonicalLambda->controlFlow->rootRegion.value].kind =
+            moon::RegionKind::Function;
+    if (cfgVerifier.verify(*lambdaCfg, module))
+        return fail("CFG verifier accepted a non-lambda nested root region");
+    canonicalLambda->controlFlow->regions[
+        canonicalLambda->controlFlow->rootRegion.value].kind =
+            moon::RegionKind::Lambda;
+    if (!cfgVerifier.verify(*lambdaCfg, module))
+        return fail("restored canonical lambda CFG did not verify");
+
     // The sealed payload must not observe later mutations of the frontend
     // object from which it was frozen.
     product->fields.clear();
@@ -587,6 +658,7 @@ int main() {
         "Snapshot", {{"value", TyI32}}, "canonical.test::Snapshot"));
     reverse.registerType(TyString);
     reverse.registerType(TyBool);
+    reverse.registerType(lambdaType);
     reverse.registerType(Type::makeEnum(
         "Choice", {{"None", {}}, {"Some", {TyI32}}},
         "canonical.test::Choice"));

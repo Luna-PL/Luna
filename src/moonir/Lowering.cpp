@@ -166,6 +166,13 @@ TypePtr LunaLowerer::lowerType(const TypeAST* type) const {
         if (mModule) mModule->registerType(TyUnit);
         return TyUnit;
     }
+    // Usage wrappers are binding contracts, not distinct runtime types. Keep
+    // the resolved nominal identity of their inner type instead of sending the
+    // wrapper through the context-free fallback resolver.
+    if (const auto* linear = dynamic_cast<const LinearTypeAST*>(type))
+        return lowerType(linear->inner.get());
+    if (const auto* affine = dynamic_cast<const AffineTypeAST*>(type))
+        return lowerType(affine->inner.get());
     TypePtr result;
     if (auto* named = dynamic_cast<const NamedTypeAST*>(type)) {
         if (named->resolvedType) result = named->resolvedType;

@@ -310,6 +310,7 @@ struct CleanupObligation {
 struct Expr;
 struct Stmt;
 struct BlockStmt;
+struct ControlFlowGraph;
 
 struct Stmt : Node {};
 
@@ -603,9 +604,14 @@ struct IfExpr : Expr {
 };
 
 struct LambdaExpr : Expr {
+    ~LambdaExpr() override;
+
     std::vector<Param> params;
     TypeRef returnType;
+    // Construction-only structured input. Canonical CFG construction consumes
+    // this body and leaves exactly one executable meaning in controlFlow.
     std::unique_ptr<BlockStmt> body;
+    std::unique_ptr<ControlFlowGraph> controlFlow;
     TypeRef closureType;
     std::vector<std::string> captures;
     std::string identitySuffix;

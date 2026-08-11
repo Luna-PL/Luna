@@ -583,9 +583,19 @@ shared/mutable/consuming source mode 与 `take`）会展开为普通 source/inde
 local、索引取 item、比较、赋值、branch 和 backedge；没有新增 iterator terminator 或不透明
 recipe operation，verifier 会拒绝 sealed CFG 中未展开的 recipe。builder 不会与旧 body
 并列挂接：sealed executable 在任何阶段都不能同时具有两套执行含义。
+无捕获 lambda 的子阶段也已完成：lambda expression 仅作为闭包值节点，其
+structured body 在构造时被消费为一份独立、以 `Lambda` region 为根的
+canonical CFG。这不是双层 IR：父函数与 lambda 分别只有一张 CFG，闭包值
+仅引用 lambda 的可执行体。verifier 会递归验证子图，核对闭包类型、参数
+contract 与 parameter local，并拒绝 body/CFG 并存。由于当前 Sema 原本就在
+closure environment layout 实现前拒绝局部捕获，该子阶段同样明确拒绝
+`captures`，没有引入隐式或不完整的闭包 ABI。签名一致性检查同时暴露并
+修复了 `linear T`/`affine T` 显式 lambda 返回类型绕过已解析 nominal
+identity 的 lowering 缺陷；usage wrapper 现在仍只是 binding contract，内层
+`T` 的 TypeId 不再被退化为同名 placeholder。
 
-第 10 项尚未整体完成。下一步先让 lambda body 拥有 canonical CFG，再据此展开
-`map`/`filter`；slice-length projection、materialized recipe 及 move-only array 的逐元素
+第 10 项尚未整体完成。下一步据此展开无捕获 `map`/`filter`；
+slice-length projection、materialized recipe 及 move-only array 的逐元素
 初始化/cleanup 状态仍是明确的后续边界。随后规范化其余控制流表达式、slot 和 fragment
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；

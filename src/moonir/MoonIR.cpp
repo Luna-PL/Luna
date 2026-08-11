@@ -34,6 +34,8 @@ void appendOwnershipContract(
 
 } // namespace
 
+LambdaExpr::~LambdaExpr() = default;
+
 std::string canonicalAbiLayout(const TypeRecord& type) {
     std::string result = "luna.abi-layout.v1;";
     appendIdentityPart(result, std::to_string(type.layoutAbiVersion));

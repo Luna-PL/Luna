@@ -61,7 +61,9 @@ private:
                      const SourceLocation& location);
     LocalId addLocal(ScopeId scope, LocalKind kind,
                      const std::string& name, const TypeRef& type,
-                     luna::ownership::Usage usage);
+                     luna::ownership::Usage usage,
+                     std::optional<luna::ownership::Relation> relation =
+                         std::nullopt);
     CleanupId addCleanup(LocalId local, const TypeRef& type,
                          luna::ownership::CleanupAction action);
 

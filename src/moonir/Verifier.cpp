@@ -485,10 +485,15 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         } else if (const auto* allocation =
                        dynamic_cast<const HeapAllocExpr*>(expression)) {
             scanGraphExpr(allocation->initializer.get(), block);
+        } else if (const auto* lambda =
+                       dynamic_cast<const LambdaExpr*>(expression)) {
+            if (lambda->body || !lambda->controlFlow)
+                error(lambda->location,
+                      "sealed CFG lambda does not exclusively own a canonical CFG body");
+            return;
         } else if (dynamic_cast<const TryExpr*>(expression) ||
                    dynamic_cast<const BlockExpr*>(expression) ||
-                   dynamic_cast<const IfExpr*>(expression) ||
-                   dynamic_cast<const LambdaExpr*>(expression)) {
+                   dynamic_cast<const IfExpr*>(expression)) {
             error(expression->location,
                   "sealed CFG contains a nested control-flow expression");
         } else if (const auto* move =
@@ -2311,7 +2316,94 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
     } else if (auto* lambda = dynamic_cast<const LambdaExpr*>(expr)) {
         verifyType(lambda->returnType, lambda->location,
                    "lambda return type", module);
-        verifyBlock(lambda->body.get(), module, owner);
+        verifyType(lambda->closureType, lambda->location,
+                   "lambda closure type", module);
+        if (lambda->type != lambda->closureType)
+            error(lambda->location,
+                  "lambda expression type disagrees with its closure type");
+        const auto* closure = module.findType(lambda->closureType);
+        if (!closure || closure->kind != TypeKind::Function) {
+            error(lambda->location,
+                  "lambda closure type is not a frozen function type");
+        } else {
+            if (closure->parameterTypeIds.size() != lambda->params.size() ||
+                closure->parameterContracts.size() != lambda->params.size())
+                error(lambda->location,
+                      "lambda parameter list disagrees with its closure type");
+            const size_t comparable = std::min(
+                lambda->params.size(), closure->parameterTypeIds.size());
+            for (size_t index = 0; index < comparable; ++index) {
+                if (lambda->params[index].type !=
+                    closure->parameterTypeIds[index])
+                    error(lambda->location,
+                          "lambda parameter type disagrees with its closure type");
+                if (index < closure->parameterContracts.size() &&
+                    (lambda->params[index].relation !=
+                         closure->parameterContracts[index].relation ||
+                     lambda->params[index].usage !=
+                         closure->parameterContracts[index].usage))
+                    error(lambda->location,
+                          "lambda parameter contract disagrees with its closure type");
+            }
+            if (closure->returnTypeId != lambda->returnType)
+                error(lambda->location,
+                      "lambda return type disagrees with its closure type");
+        }
+        std::unordered_set<std::string> parameterNames;
+        for (const auto& parameter : lambda->params) {
+            if (parameter.name.empty() ||
+                !parameterNames.insert(parameter.name).second)
+                error(lambda->location,
+                      "lambda contains an empty or duplicate parameter name");
+            verifyType(parameter.type, lambda->location,
+                       "lambda parameter '" + parameter.name + "'", module);
+            if (parameter.isLinear !=
+                (parameter.usage == luna::ownership::Usage::Linear))
+                error(lambda->location,
+                      "lambda parameter has an inconsistent linear compatibility flag");
+        }
+        if (!lambda->captures.empty())
+            error(lambda->location,
+                  "lambda capture has no canonical closure environment layout");
+        if (static_cast<bool>(lambda->body) ==
+            static_cast<bool>(lambda->controlFlow)) {
+            error(lambda->location,
+                  "lambda must own exactly one structured or canonical body");
+        } else if (lambda->body) {
+            verifyBlock(lambda->body.get(), module, owner);
+        } else {
+            const auto* root = lambda->controlFlow->findRegion(
+                lambda->controlFlow->rootRegion);
+            if (!root || root->kind != RegionKind::Lambda)
+                error(lambda->location,
+                      "lambda canonical body has no lambda root region");
+
+            std::vector<const LocalRecord*> parameters;
+            for (const auto& local : lambda->controlFlow->locals)
+                if (local.kind == LocalKind::Parameter)
+                    parameters.push_back(&local);
+            if (parameters.size() != lambda->params.size()) {
+                error(lambda->location,
+                      "lambda canonical body parameter table has the wrong arity");
+            } else {
+                for (size_t index = 0; index < parameters.size(); ++index) {
+                    const auto& expected = lambda->params[index];
+                    const auto& actual = *parameters[index];
+                    if (actual.scope != lambda->controlFlow->rootScope ||
+                        actual.name != expected.name ||
+                        actual.type != expected.type ||
+                        actual.usage != expected.usage ||
+                        actual.relation != expected.relation)
+                        error(lambda->location,
+                              "lambda canonical parameter disagrees with its signature");
+                }
+            }
+
+            Verifier nestedVerifier;
+            if (!nestedVerifier.verify(*lambda->controlFlow, module))
+                mErrors.insert(mErrors.end(), nestedVerifier.errors().begin(),
+                               nestedVerifier.errors().end());
+        }
     } else if (auto* assignment = dynamic_cast<const AssignExpr*>(expr)) {
         verifyExpr(assignment->lhs.get(), module, owner);
         verifyExpr(assignment->rhs.get(), module, owner);
