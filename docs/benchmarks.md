@@ -38,16 +38,31 @@ alternates run order, reports mean/median/p95 and verifies identical checksums.
 These are small scalar/L1 workloads; they do not represent realistic
 applications, memory bandwidth, concurrency, I/O or allocation architecture.
 
-The 2026-07-23 Ryzen 5 7500F / Clang 22 baseline placed seven of eight
-non-allocation workloads between `0.97x` and `1.09x` of C++23; reduction was
-`1.27x`. Its former `4.39x` allocation result is retired: Luna retained real
-`rt_alloc/rt_dealloc` calls while Clang eliminated the C++ `new/delete` pair.
-The current allocation workload initializes an allocation on both sides and
-keeps the C++ allocator adapter in a separate translation unit, so ordinary
-non-LTO builds execute both allocation paths. Its checksum keeps the common
-initializer source live because Alpha unique heap values are ownership tokens,
-not directly dereferenceable values. Record a new baseline before using that
-row for comparisons.
+The current recorded CPU sample was taken on 2026-08-11 from Luna commit
+`6838788`, on Arch Linux `7.0.14-arch1-1`, Ryzen 5 7500F, and Clang 22.1.6.
+Both paths used `-O3`; the runner used two warmups and ten alternating measured
+runs. CPU frequency and core placement were not pinned. Values below are
+`average / median / p95` wall milliseconds, including process startup:
+
+| Workload | Luna AOT | C++23 | Median Luna/C++23 |
+|---|---:|---:|---:|
+| arithmetic | 4.237 / 4.189 / 4.494 | 4.297 / 4.238 / 4.652 | 0.99x |
+| branch | 26.275 / 26.002 / 28.783 | 25.997 / 26.047 / 26.686 | 1.00x |
+| calls | 4.235 / 4.210 / 4.399 | 4.279 / 4.224 / 4.669 | 1.00x |
+| fixed array | 9.315 / 9.278 / 9.918 | 9.349 / 9.201 / 10.200 | 1.01x |
+| allocation | 15.366 / 15.257 / 16.041 | 5.860 / 5.747 / 6.880 | 2.65x |
+| bitmix | 35.975 / 35.879 / 38.263 | 36.086 / 36.218 / 36.852 | 0.99x |
+| reduction | 9.147 / 8.982 / 10.024 | 10.686 / 10.805 / 11.109 | 0.83x |
+| array scan | 13.182 / 13.096 / 13.644 | 15.038 / 15.081 / 15.665 | 0.87x |
+| nested loops | 4.667 / 4.651 / 4.840 | 4.316 / 4.256 / 4.700 | 1.09x |
+
+The old `4.39x` allocation row is retired. The current workload initializes an
+allocation on both sides and keeps the C++ allocator adapter in a separate
+translation unit, so ordinary non-LTO builds execute both allocation paths.
+Its checksum keeps the common initializer source live because current Luna
+unique heap values are ownership tokens, not directly dereferenceable values.
+The remaining Runtime ABI and abstraction differences still make this a trend
+detector rather than an allocator ranking.
 
 ## Heterogeneous and ROCm comparison
 
@@ -69,7 +84,7 @@ cmake -S . -B build \
   -DLUNA_ROCM_SMOKE_ARCH=gfx1101 \
   -DLUNA_ENABLE_ROCM_BENCHMARK=ON
 cmake --build build
-LUNA_BENCH_ITERATIONS=20 \
+LUNA_BENCH_ITERATIONS=20 LUNA_BENCH_WARMUPS=2 \
   ctest --test-dir build -L benchmark --output-on-failure
 ```
 
@@ -78,10 +93,21 @@ launch/await lifecycle. The `stream` path is retained as a throughput reference.
 Wall time includes process startup, HIP initialization, module loading and
 synchronization; `LUNA_GPU_PROFILE=1` reports device-event kernel time.
 
-On the recorded RX 7800 XT/gfx1101 run after hidden kernarg/SGPR cleanup, Luna
-reported a `1.438 ms` average kernel time versus `1.681 ms` for C++23 awaited,
-while AOT wall time was `55.765 ms` versus `54.569 ms`. This single-device
-result confirms the descriptor fix but is not a general performance claim.
+The current recorded GPU sample was taken on 2026-08-11 from Luna commit
+`6838788`, on RX 7800 XT/gfx1101 with ROCm 7.2.4 (HIP 7.2.53211). Each
+implementation received two unmeasured warmups before 20 measured processes;
+reported values are arithmetic means:
+
+| Path | AOT wall | Device-event kernel |
+|---|---:|---:|
+| Luna | 56.773 ms | 1.424 ms |
+| C++23/HIP stream | 55.938 ms | 1.622 ms |
+| C++23/HIP awaited | 56.272 ms | 1.708 ms |
+
+The warmups matter: an excluded cold Luna process took about 330 ms while
+initializing/cache-populating the ROCm path. This single-device result shows
+similar end-to-end wall time and a lower measured kernel interval for this one
+workload; it is not a general GPU performance claim.
 
 ## Contribution rules
 

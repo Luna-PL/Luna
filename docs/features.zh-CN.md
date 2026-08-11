@@ -12,8 +12,9 @@
 Luna 源码先经过类型、trait 和所有权检查，再降级到 MoonIR。MoonIR 在优化前后
 都会验证；LLVM JIT 与 AOT 统一消费 MoonIR，不再分别读取 Luna AST。
 
-MoonIR 未来还将作为可移植 Moon 容器和 MoonRuntime 的语言级安全边界。容器加载、
-验证和 hotspot runtime 目前属于已预留但尚未完整交付的接口。
+MoonIR 还将作为 0.3 host-specific Moon Container 与 MoonRuntime loading 的语言级
+安全边界。serializer、loader 和 evolution runtime 尚未成为已完成的发布能力；
+portable cross-target container 已明确延后到 0.3 之后。
 
 具体设计：[架构决策 D001/D002](decisions.md)。
 
@@ -70,21 +71,24 @@ Core 提供具有稳定 package identity 的 `Option`、`Iterator`、`IntoIterat
 初始化位，`filter`/`take` 会清理拒绝项，`map` 可从 Copy 输入产生 move-only
 输出，也可通过显式 owning 参数消费 move-only 输入。lambda 函数体已进入路径敏感
 所有权检查，`fold`/`for_each`/`count` 会持有 move-only 终结 recipe 的隐藏状态。
-affine move-only fold 累加器现使用独立 replacement 初始化位并把最终值转移给
-调用者。linear 累加器与捕获式 closure environment 仍是后续边界。
+当前 structured LLVM path 对 move-only affine fold accumulator 使用初始化位；已完成的
+canonical-CFG replacement 则用一个 synthetic local 静态证明 move、重新初始化和最终
+transfer，不需要 runtime flag，但该 CFG 尚未成为唯一 backend body。linear accumulator
+与捕获式 closure environment 仍是后续边界。
 无捕获 recipe（包括拥有 move-only 数组源的 recipe）现可物化为 affine、单次消费
 的局部栈值。owning recipe 使用逐元素初始化位，在消费、丢弃和提前返回路径恰好清理
 剩余元素，同时保持静态融合且不引入 iterator runtime allocation。
 
 具体说明：[迭代、管道与容器边界](iterators.md)。
 
-## Metadata 与动态能力
+## Metadata 与 runtime 能力
 
 Metadata schema 是一等声明。静态 `select` 会在真实、可遍历的声明与 metadata
 视图上执行普通用户函数，并在编译期完成。对象已经可由名称和签名确定时，可以
-直接做静态声明反射，不需要 Metadata 或 Select。只有使用 `runtime` 才保留
-运行时可见信息，`dynamic select` / `dynamic apply` 则显式承担运行时绑定成本。
-普通编译期 Metadata 不会被悄悄带入运行时。
+直接做静态声明反射，不需要 Metadata 或 Select。只有使用 `runtime` 才保留运行时
+可见信息，普通编译期 Metadata 不会被悄悄带入运行时。0.3 phase 模型只有
+compile-time 与 runtime；开发编译器里仍存在的旧 `dynamic select` / `dynamic apply`
+是等待已冻结 runtime query/Slot replacement 的 0.2 过渡实现，不是第三个 phase 或兼容承诺。
 
 具体说明：[Metadata 与 selector](versioning.md)。
 
@@ -98,9 +102,10 @@ Package ID 使用反向 DNS 名称，是版本和依赖单元；module 使用 `:
 
 ## 结构化 fragment
 
-`interceptor`、`context`、`slot`、`resume`、`abort` 和 `apply` 用于表达结构化
-控制流与扩展性。静态路径直接结构化降级；动态路径必须显式声明，并只保留运行时分派
-所需的 descriptor。
+`interceptor`、`context`、`slot`、`resume`、`abort` 和 `apply` 当前用于表达结构化
+控制流与扩展性。现有 function-local 源码形式是正在迁移的实现，不是最终 0.3 表面。
+已确认的目标使用 module-level 二等 Slot identity、名义 Fragment target 和经过验证的
+MoonIR composition；确切声明/control 拼写仍是 `TBD-SF006`。
 
 具体说明：[Fragment、slot 与插件](fragments.md)。
 
@@ -121,8 +126,9 @@ CUDA/ROCm target 生成设备代码。`launch` 返回线性 event，`await` 完�
 
 ## 编译期能力与集合
 
-Alpha 已包含 `const`、`constexpr`、编译期类型反射、安全定长数组、索引和借用
-切片。堆拥有通用容器和格式化标准 I/O 仍属于后续路线。
+开发编译器已包含 `const`、`constexpr`、编译期类型反射、安全定长数组、索引和借用
+切片。堆拥有通用容器和最终格式化标准 I/O 仍属于后续路线；临时、类型明确的
+`std::io` console 表面已经可用。
 
 具体说明：[编译期能力](compile_time.md)、[数组、切片与迭代](iterators.md)和
 [标准库雏形](standard_library.md)。

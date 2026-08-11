@@ -6,60 +6,74 @@
 [![macOS CI](https://github.com/Luna-PL/Luna/actions/workflows/macos-ci.yml/badge.svg)](https://github.com/Luna-PL/Luna/actions/workflows/macos-ci.yml)
 [![Windows CI](https://github.com/Luna-PL/Luna/actions/workflows/windows-ci.yml/badge.svg)](https://github.com/Luna-PL/Luna/actions/workflows/windows-ci.yml)
 
-Luna is an experimental LLVM-backed systems programming language developed by
-the [Luna-PL](https://github.com/Luna-PL) organization. Its compiler preserves
-language semantics in verified MoonIR before lowering to LLVM for JIT or AOT
-compilation.
+Luna is an experimental, static-first systems programming language developed by
+the [Luna-PL](https://github.com/Luna-PL) organization. It targets high
+performance without charging for unused capabilities: ordinary code is AOT/JIT
+compiled through LLVM, while ownership, runtime binding and future evolution
+support are explicit choices. The compiler preserves language semantics in
+verified MoonIR before LLVM lowering.
 
-The project is now implementing a clean-break `0.3.0` line. The 0.3 compiler
+The project is implementing a clean-break `0.3.0` line. The 0.3 compiler
 does not carry a `language=` or edition compatibility mode; source that depends
 on 0.2.1 semantics should use the frozen 0.2.1 compiler. The design remains a
 draft and the implementation is advancing in gated phases.
 [Read the 0.3 overall design](docs/luna_0.3_design.md) and
 [migration guide](docs/migration_0.2_to_0.3.md).
 
-## Key features
+## Current development surface
 
 Luna combines static, zero-overhead language mechanisms with explicitly
-opt-in runtime and dynamic capabilities:
+opt-in runtime capabilities:
 
 - verified `Luna -> MoonIR -> LLVM IR` compilation for both JIT and AOT;
 - nominal named types, structural anonymous records, ADTs, constrained generics and statically resolved traits;
 - affine/linear ownership, `move`, shared/mutable borrowing and automatic cleanup;
-- first-class Metadata, compile-time selectors, and explicit `runtime` / `dynamic` retention and dispatch;
+- first-class Metadata, compile-time selectors, and explicit runtime visibility;
 - reverse-DNS Package IDs, `::` module paths, workspaces, lockfiles, aliases and explicit exports;
-- structured `interceptor`, `context`, `slot` and `apply` control-flow/extension constructs;
+- experimental structured `interceptor`, `context`, `slot` and `apply` control-flow/extension constructs;
 - a versioned Runtime ABI and an explicit C FFI boundary;
 - reachable-only kernels with a CPU simulator and CUDA/ROCm code-generation paths.
+
+The 0.3 migration has completed the Sema split, nominal named-type default,
+usage blocks, generic Resource/Drop contracts, and library-owned `Rc`/`Arc`.
+The current implementation phase is converting the single MoonIR in place to
+canonical tables and CFG. That CFG already covers ordinary control flow and a
+growing fused-iterator subset, but it is not yet the sole executable backend
+body. The final Slot/Fragment surface, Moon Container serialization/loading,
+evolution runtime, trusted native proof format, and `-t moon`/`-t cffi`
+artifacts are not implemented release features. Legacy `dynamic` source forms
+that remain in the development compiler are migration input, not the 0.3
+phase model or a compatibility promise.
 
 [Explore the feature overview](docs/features.md), or open the [complete executable showcase](examples/full_showcase/README.md).
 
 ## CPU microbenchmark snapshot
 
-On the local Ryzen 5 7500F validation host, Luna AOT and Clang C++23 were both
-built with LLVM/Clang 22.1.6 at `-O3`. The table reports median end-to-end
-execution time over 10 measured runs after two warmups; lower is better, and
-`Luna/C++23` is a time ratio.
+On 2026-08-11 at commit `6838788`, the local Ryzen 5 7500F validation host ran
+Luna AOT and Clang C++23 with LLVM/Clang 22.1.6 at `-O3`. The table reports
+median end-to-end execution time over 10 measured runs after two warmups;
+lower is better, and `Luna/C++23` is a time ratio.
 
 | Workload | Luna AOT | C++23 | Luna/C++23 |
 |---|---:|---:|---:|
-| Integer recurrence | 4.127 ms | 4.066 ms | 1.02x |
-| Branch-heavy loop | 25.665 ms | 26.248 ms | 0.98x |
-| Inlineable calls | 4.005 ms | 3.950 ms | 1.01x |
-| Safe fixed array | 8.811 ms | 9.086 ms | 0.97x |
-| Bit mixing | 35.232 ms | 35.711 ms | 0.99x |
-| Four-chain reduction | 13.761 ms | 10.851 ms | 1.27x |
-| Stateful array scan | 14.192 ms | 14.577 ms | 0.97x |
-| Nested loops | 4.489 ms | 4.137 ms | 1.09x |
-| Allocation boundary† | 15.320 ms | 3.490 ms | 4.39x |
+| Integer recurrence | 4.189 ms | 4.238 ms | 0.99x |
+| Branch-heavy loop | 26.002 ms | 26.047 ms | 1.00x |
+| Inlineable calls | 4.210 ms | 4.224 ms | 1.00x |
+| Safe fixed array | 9.278 ms | 9.201 ms | 1.01x |
+| Bit mixing | 35.879 ms | 36.218 ms | 0.99x |
+| Four-chain reduction | 8.982 ms | 10.805 ms | 0.83x |
+| Stateful array scan | 13.096 ms | 15.081 ms | 0.87x |
+| Nested loops | 4.651 ms | 4.256 ms | 1.09x |
+| Allocation boundary† | 15.257 ms | 5.747 ms | 2.65x |
 
 > **Important:** these are highly idealized microbenchmarks. They cannot
 > establish the performance gap in real applications. Both paths share the
-> LLVM backend family, process startup is included, CPU frequency was not
-> pinned, and the tiny working sets do not represent application memory,
-> concurrency, I/O or latency behavior. †Clang eliminates the C++ `new/delete`
-> pair in the allocation case while Luna deliberately retains its Runtime ABI
-> allocation, so that row is not an allocator ranking.
+> LLVM backend family, process startup is included, and the tiny working sets
+> do not represent application memory,
+> concurrency, I/O or latency behavior. CPU frequency and core placement were
+> not pinned. †The current allocation workload forces both allocation paths to
+> execute, but Luna Runtime ABI ownership and the separate C++ allocator adapter
+> are still different abstractions, so that row is not an allocator ranking.
 
 [Read the workload definitions, caveats and CPU/GPU reproduction steps](docs/benchmarks.md).
 
@@ -84,8 +98,10 @@ native executable:
 ./hello
 ```
 
-`print` is currently the minimal language/runtime output operation; the future
-formatted API will live in `std::io`. Continue with the [English getting-started guide](docs/getting_started.md).
+`print` is currently the minimal language/runtime output operation. A temporary,
+typed `std::io` package already exposes console reads/writes, flush and basic
+integer parsing; the final `Read`/`Write`/formatting surface remains design work.
+Continue with the [English getting-started guide](docs/getting_started.md).
 
 ## Build from source
 
@@ -120,6 +136,8 @@ directory containing `luna.package`:
 
 The driver also exposes explicit linker, runtime, MoonIR, cost-report and GPU target options.
 Runtime backend selection is separate from code-object generation.
+The confirmed 0.3 `-t native|moon|cffi` artifact selector is not yet a driver
+option; current `build` produces the native development artifact only.
 See the [compiler command reference](docs/cli.md) for commands, options, environment variables and examples.
 Repository contributors should use the [file and responsibility guide](docs/file_guide.md)
 before adding or moving implementation files.
@@ -142,16 +160,19 @@ See the [testing guide](docs/testing.md) and [heterogeneous-compute guide](docs/
 
 ## Next evolution
 
-The immediate direction is toolchain development on the existing Alpha
-language baseline:
+The immediate work follows the 0.3 completion gates rather than the frozen 0.2
+Alpha roadmap:
 
-1. improve diagnostics, source mapping and machine-readable output;
-2. add formatter, language-server and editor integration;
-3. complete build/test/package/workspace workflows and local caching;
-4. harden installation, prebuilt distribution and reproducible builds;
-5. improve benchmark, profiling, MoonIR inspection and developer-audit tools;
-6. fix language correctness or safety defects without expanding the active
-   language surface.
+1. finish canonical single-layer MoonIR CFG normalization, then make it the
+   sole backend body and delete the structured executable path;
+2. freeze and implement Moon serialization/verification plus the
+   `-t native|moon|cffi` artifact interface;
+3. implement the trusted Luna-native proof boundary and the minimal Moon
+   staging/activation runtime without adding ordinary-call hot-path cost;
+4. converge Slot/Fragment and runtime query surfaces after their remaining
+   syntax/ordering decisions are frozen;
+5. update formatter, LSP, packaging, benchmarks and release gates against only
+   the final 0.3 semantics.
 
 See the [0.3 implementation priorities](docs/luna_0.3_design.md#9-implementation-priority).
 

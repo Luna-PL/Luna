@@ -35,13 +35,28 @@ LUNA_CPU_ITERATIONS=10 LUNA_CPU_WARMUPS=2 \
 交替运行顺序，报告 mean/median/p95，并验证 checksum 一致。这些都是小型标量/L1
 工作负载，不能代表真实应用、内存带宽、并发、I/O 或真实分配架构。
 
-2026-07-23 的 Ryzen 5 7500F / Clang 22 基线中，八项非分配 workload 有七项位于
-C++23 的 `0.97x–1.09x`，归约为 `1.27x`。分配项为 `4.39x`，因为 Luna 保留真实
-`rt_alloc/rt_dealloc`，Clang 则删除了 C++ `new/delete`；该结果现已废弃。当前分配
-workload 在两端都初始化分配，并将 C++ allocator adapter 放在独立翻译单元中，
-因此普通非 LTO 构建会真实执行两端分配路径。由于 Alpha 的 unique heap value 是
-ownership token，不能直接解引用，checksum 使用两端共同的 initializer source 保持
-计算存活。使用该项进行比较前应先记录新基线。
+当前 CPU 样本于 2026-08-11 在 Luna commit `6838788` 上记录，环境为 Arch Linux
+`7.0.14-arch1-1`、Ryzen 5 7500F 和 Clang 22.1.6。两端均使用 `-O3`；runner 先
+预热两次，再交替采样十次。CPU 频率和核心位置没有固定。下表数值为包含进程启动的
+wall 毫秒 `average / median / p95`：
+
+| Workload | Luna AOT | C++23 | Median Luna/C++23 |
+|---|---:|---:|---:|
+| arithmetic | 4.237 / 4.189 / 4.494 | 4.297 / 4.238 / 4.652 | 0.99x |
+| branch | 26.275 / 26.002 / 28.783 | 25.997 / 26.047 / 26.686 | 1.00x |
+| calls | 4.235 / 4.210 / 4.399 | 4.279 / 4.224 / 4.669 | 1.00x |
+| fixed array | 9.315 / 9.278 / 9.918 | 9.349 / 9.201 / 10.200 | 1.01x |
+| allocation | 15.366 / 15.257 / 16.041 | 5.860 / 5.747 / 6.880 | 2.65x |
+| bitmix | 35.975 / 35.879 / 38.263 | 36.086 / 36.218 / 36.852 | 0.99x |
+| reduction | 9.147 / 8.982 / 10.024 | 10.686 / 10.805 / 11.109 | 0.83x |
+| array scan | 13.182 / 13.096 / 13.644 | 15.038 / 15.081 / 15.665 | 0.87x |
+| nested loops | 4.667 / 4.651 / 4.840 | 4.316 / 4.256 / 4.700 | 1.09x |
+
+旧 `4.39x` allocation 行已经废弃。当前 workload 在两端都初始化分配，并将 C++
+allocator adapter 放在独立翻译单元中，因此普通非 LTO 构建会真实执行两条分配路径。
+由于当前 Luna unique heap value 是 ownership token、不能直接解引用，checksum 使用
+共同的 initializer source 保持计算存活。剩余 Runtime ABI 与抽象差异意味着该项仍只能
+观察趋势，不能作为 allocator 排名。
 
 ## 异构与 ROCm 对照
 
@@ -62,7 +77,7 @@ cmake -S . -B build \
   -DLUNA_ROCM_SMOKE_ARCH=gfx1101 \
   -DLUNA_ENABLE_ROCM_BENCHMARK=ON
 cmake --build build
-LUNA_BENCH_ITERATIONS=20 \
+LUNA_BENCH_ITERATIONS=20 LUNA_BENCH_WARMUPS=2 \
   ctest --test-dir build -L benchmark --output-on-failure
 ```
 
@@ -70,9 +85,19 @@ Luna 应主要和生命周期相同的 C++ `awaited` 路径比较，`stream` 只
 参考。wall time 包含进程、HIP 初始化、module 加载和同步；
 `LUNA_GPU_PROFILE=1` 单独报告 device-event kernel time。
 
-在已记录的 RX 7800 XT/gfx1101 descriptor 修复后样本中，Luna kernel 平均
-`1.438 ms`，C++23 awaited 为 `1.681 ms`；AOT wall 分别为 `55.765 ms` 和
-`54.569 ms`。这一单设备结果验证了 hidden kernarg/SGPR 修复，不构成通用性能声明。
+当前 GPU 样本于 2026-08-11 在 Luna commit `6838788` 上记录，设备为 RX 7800 XT /
+gfx1101，使用 ROCm 7.2.4（HIP 7.2.53211）。每个实现先进行两次不计入结果的预热，
+再运行 20 个测量进程；下表为算术平均值：
+
+| 路径 | AOT wall | Device-event kernel |
+|---|---:|---:|
+| Luna | 56.773 ms | 1.424 ms |
+| C++23/HIP stream | 55.938 ms | 1.622 ms |
+| C++23/HIP awaited | 56.272 ms | 1.708 ms |
+
+预热不可省略：一次被排除的 Luna 冷启动进程在初始化/填充 ROCm cache 时约为
+330 ms。这一单设备结果只说明该 workload 的端到端 wall 接近，且 Luna 测得的 kernel
+区间较低；它不构成通用 GPU 性能声明。
 
 ## 提交规则
 

@@ -15,9 +15,10 @@ lowered to MoonIR. MoonIR is verified both before and after MoonIR optimization;
 LLVM JIT and AOT consume that same representation rather than reading the Luna
 AST independently.
 
-MoonIR is intended to preserve language-level safety and dynamic contracts for
-future portable Moon containers and MoonRuntime loading. The container loader
-and hotspot runtime are reserved interfaces, not completed release features.
+MoonIR is intended to preserve language-level safety and runtime contracts for
+the 0.3 host-specific Moon Container and MoonRuntime loading. The serializer,
+loader and evolution runtime are not completed release features; portable
+cross-target containers are explicitly deferred beyond 0.3.
 
 Detailed design: [Architecture decisions D001/D002](decisions.md).
 
@@ -86,11 +87,13 @@ owns its hidden state. Consuming move-only arrays use per-element initialization
 bits; `filter`/`take` clean rejected items, and `map` may produce move-only
 outputs or consume move-only inputs through an explicit owning parameter.
 Lambda bodies now receive path-sensitive ownership checking, while
-`fold`/`for_each`/`count` own hidden move-only terminal recipe state. Move-only
-affine fold accumulators use an explicit replacement initialization bit and
-transfer the final value to the caller. Linear accumulators and captured
-closure environments remain staged boundaries. No-capture recipes, including
-recipes that own move-only array sources, can now materialize as affine,
+`fold`/`for_each`/`count` own hidden move-only terminal recipe state. The current
+structured LLVM path uses an initialization bit for a move-only affine fold
+accumulator. Its completed canonical-CFG replacement instead proves
+move/reinitialization/final transfer statically with one synthetic local and no
+runtime flag; that CFG is not yet the sole backend body. Linear accumulators and
+captured closure environments remain staged boundaries. No-capture recipes,
+including recipes that own move-only array sources, can now materialize as affine,
 single-consumption local stack values. Owning recipes carry per-element
 initialization bits so consumption, abandonment and early returns close each
 remaining item exactly once while retaining fused lowering and zero iterator
@@ -99,14 +102,17 @@ runtime allocation.
 Detailed design and current limits: [Iteration, pipelines and container
 boundaries](iterators.md).
 
-## Metadata and dynamic capability
+## Metadata and runtime capability
 
 Metadata schemas are first-class declarations. Static `select` executes an
 ordinary user function over real iterable declaration/metadata views and is
 resolved at compile time. Known declarations can instead use direct static
-reflection without metadata or selection. Runtime visibility must be requested with `runtime`, while
-`dynamic select` and `dynamic apply` explicitly opt into runtime binding costs.
-Compile-time-only metadata is not silently retained.
+reflection without metadata or selection. Runtime visibility must be requested
+with `runtime`; compile-time-only metadata is not silently retained. The 0.3
+phase model has compile-time and runtime only. Legacy `dynamic select` and
+`dynamic apply` forms still present in the development compiler are transitional
+0.2 implementation surface pending the frozen runtime query/Slot replacements,
+not a third phase or compatibility commitment.
 
 Detailed guide: [Metadata and selectors](versioning.md).
 
@@ -121,9 +127,12 @@ Detailed guide: [Packages and modules](packages.md).
 
 ## Structured fragments
 
-`interceptor`, `context`, `slot`, `resume`, `abort` and `apply` model structured
-control flow and extensibility. Static paths use direct structured lowering; dynamic paths are
-explicit and retain only the descriptors needed for runtime dispatch.
+`interceptor`, `context`, `slot`, `resume`, `abort` and `apply` currently model
+structured control flow and extensibility. Their current function-local source
+forms are the implementation being migrated, not the final 0.3 surface. The
+confirmed destination uses module-level second-class Slot identity, nominal
+Fragment targets and verified MoonIR composition; exact declaration/control
+spelling remains `TBD-SF006`.
 
 Detailed guide: [Fragments, slots and plugins](fragments.md).
 
@@ -146,9 +155,10 @@ Detailed guide: [Heterogeneous compute](heterogeneous_compute.md).
 
 ## Compile-time facilities and collections
 
-The Alpha includes `const`, `constexpr`, compile-time type reflection, safe
-fixed arrays, indexing and borrowed slices. Heap-owned general collections and
-the formatted standard I/O layer remain roadmap work.
+The development compiler includes `const`, `constexpr`, compile-time type
+reflection, safe fixed arrays, indexing and borrowed slices. Heap-owned general
+collections and the final formatted standard I/O layer remain roadmap work; a
+temporary typed `std::io` console surface is already available.
 
 Detailed guides: [Compile-time facilities](compile_time.md),
 [arrays, slices and iteration pipelines](iterators.md), and

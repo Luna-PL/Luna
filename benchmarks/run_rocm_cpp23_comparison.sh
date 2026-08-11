@@ -9,6 +9,7 @@ source_root="${2:?missing source root}"
 hipcc_bin="${HIPCC:-hipcc}"
 architecture="${LUNA_ROCM_ARCH:-gfx1101}"
 iterations="${LUNA_BENCH_ITERATIONS:-3}"
+warmups="${LUNA_BENCH_WARMUPS:-1}"
 optimization="${LUNA_BENCH_OPT_LEVEL:--O2}"
 source="${source_root}/benchmarks/luna_gpu_vector.luna"
 cpp_source="${source_root}/benchmarks/cpp23_hip_vector.cpp"
@@ -25,6 +26,10 @@ trap cleanup EXIT
 
 if ! [[ "${iterations}" =~ ^[1-9][0-9]*$ ]]; then
     echo "LUNA_BENCH_ITERATIONS must be a positive integer" >&2
+    exit 2
+fi
+if ! [[ "${warmups}" =~ ^[0-9]+$ ]]; then
+    echo "LUNA_BENCH_WARMUPS must be a non-negative integer" >&2
     exit 2
 fi
 case "${optimization}" in
@@ -104,7 +109,14 @@ echo "  elements:   16777216 (64 MiB)"
 echo "  passes:     10 transform passes + initialization"
 echo "  architecture: ${architecture}"
 echo "  iterations: ${iterations}"
+echo "  warmups per implementation: ${warmups}"
 echo "  Luna optimization: ${optimization} (device codegen: aggressive)"
+
+for ((warmup = 0; warmup < warmups; ++warmup)); do
+    run_luna >/dev/null
+    run_cpp23 stream >/dev/null
+    run_cpp23 awaited >/dev/null
+done
 
 for ((iteration = 1; iteration <= iterations; ++iteration)); do
     luna_report="$(run_luna)"

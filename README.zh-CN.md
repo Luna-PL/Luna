@@ -6,54 +6,64 @@
 [![macOS CI](https://github.com/Luna-PL/Luna/actions/workflows/macos-ci.yml/badge.svg)](https://github.com/Luna-PL/Luna/actions/workflows/macos-ci.yml)
 [![Windows CI](https://github.com/Luna-PL/Luna/actions/workflows/windows-ci.yml/badge.svg)](https://github.com/Luna-PL/Luna/actions/workflows/windows-ci.yml)
 
-Luna 是由 GitHub 组织 [Luna-PL](https://github.com/Luna-PL) 维护的、基于
-LLVM 的实验性系统编程语言。编译器首先把 Luna 源程序降级到经过验证的
-MoonIR，在保留语言语义和安全边界后，再统一对接 LLVM JIT 与 AOT。
+Luna 是由 GitHub 组织 [Luna-PL](https://github.com/Luna-PL) 维护的、静态为主的
+实验性系统编程语言。它追求高性能且不为未使用的能力付费：普通代码通过 LLVM
+进行 AOT/JIT 编译，所有权、运行时绑定和未来的进化支持都是显式选择。编译器会在
+LLVM lowering 前用经过验证的 MoonIR 保存语言语义和安全边界。
 
-项目现已开始实施 clean-break `0.3.0` 主线。0.3 编译器不保留 `language=`
+项目正在实施 clean-break `0.3.0` 主线。0.3 编译器不保留 `language=`
 或 edition 兼容模式；依赖 0.2.1 语义的源码应使用冻结的 0.2.1 编译器。
 当前设计仍是草案，实现按完成门分阶段推进。详见
 [0.3 总体设计](docs/luna_0.3_design.zh-CN.md)与
 [0.2 到 0.3 迁移指南](docs/migration_0.2_to_0.3.zh-CN.md)。
 
-## 主要特性
+## 当前开发版能力
 
-Luna 将静态、无额外运行时开销的语言机制，与需要显式选择的运行时/动态能力区分开来：
+Luna 将静态、无额外运行时开销的语言机制，与需要显式选择的运行时能力区分开来：
 
 - 统一且经过验证的 `Luna -> MoonIR -> LLVM IR` JIT/AOT 编译路径；
 - 具名类型默认名义、匿名 record 结构化、ADT、受约束泛型和静态解析的 trait；
 - 仿射/线性所有权、`move`、共享/可变借用和自动清理；
-- 一等 Metadata、编译期 selector，以及显式 `runtime` / `dynamic` 保留和分派；
+- 一等 Metadata、编译期 selector，以及显式 runtime 可见性；
 - 反向 DNS Package ID、`::` module 路径、workspace、lockfile、别名和显式导出；
-- 结构化的 `interceptor`、`context`、`slot` 和 `apply` 控制流/扩展构造；
+- 实验性的 `interceptor`、`context`、`slot` 和 `apply` 结构化控制流/扩展构造；
 - 带版本的 Runtime ABI 和显式 C FFI 边界；
 - 仅为可达 kernel 付费，并提供 CPU 模拟器及 CUDA/ROCm 代码生成路径。
+
+0.3 迁移已经完成 Sema 拆分、具名类型默认名义化、usage block、通用
+Resource/Drop contract，以及由库拥有的 `Rc`/`Arc`。当前阶段正在原地把唯一 MoonIR
+转换为 canonical table 与 CFG；该 CFG 已覆盖普通控制流和逐步扩展的融合 iterator
+子集，但尚未成为唯一的 backend executable body。最终 Slot/Fragment 表面、Moon
+Container 序列化/加载、进化 runtime、可信 Luna native 证明格式，以及
+`-t moon`/`-t cffi` 产物都还不是已实现的发布能力。开发编译器里暂存的旧
+`dynamic` 源码形式只是迁移输入，不属于 0.3 phase 模型，也不构成兼容承诺。
 
 可以先阅读[主要特性概览](docs/features.zh-CN.md)，或直接查看[可编译运行的完整示例](examples/full_showcase/README.md)。
 
 ## CPU 微基准快照
 
-在本地 Ryzen 5 7500F 验证设备上，Luna AOT 与 Clang C++23 均使用
-LLVM/Clang 22.1.6 和 `-O3`。下表是在两次预热后采样 10 次所得的端到端执行时间
-中位数；数值越低越好，`Luna/C++23` 是耗时比。
+2026-08-11 在 commit `6838788` 上，本地 Ryzen 5 7500F 验证设备使用
+LLVM/Clang 22.1.6 和 `-O3` 运行 Luna AOT 与 Clang C++23。下表是在两次预热后
+采样 10 次所得的端到端执行时间中位数；数值越低越好，`Luna/C++23` 是耗时比。
 
 | 工作负载 | Luna AOT | C++23 | Luna/C++23 |
 |---|---:|---:|---:|
-| 整数递推 | 4.127 ms | 4.066 ms | 1.02x |
-| 高分支循环 | 25.665 ms | 26.248 ms | 0.98x |
-| 可内联调用 | 4.005 ms | 3.950 ms | 1.01x |
-| 安全定长数组 | 8.811 ms | 9.086 ms | 0.97x |
-| 位混合 | 35.232 ms | 35.711 ms | 0.99x |
-| 四链归约 | 13.761 ms | 10.851 ms | 1.27x |
-| 有状态数组扫描 | 14.192 ms | 14.577 ms | 0.97x |
-| 嵌套循环 | 4.489 ms | 4.137 ms | 1.09x |
-| 分配边界† | 15.320 ms | 3.490 ms | 4.39x |
+| 整数递推 | 4.189 ms | 4.238 ms | 0.99x |
+| 高分支循环 | 26.002 ms | 26.047 ms | 1.00x |
+| 可内联调用 | 4.210 ms | 4.224 ms | 1.00x |
+| 安全定长数组 | 9.278 ms | 9.201 ms | 1.01x |
+| 位混合 | 35.879 ms | 36.218 ms | 0.99x |
+| 四链归约 | 8.982 ms | 10.805 ms | 0.83x |
+| 有状态数组扫描 | 13.096 ms | 15.081 ms | 0.87x |
+| 嵌套循环 | 4.651 ms | 4.256 ms | 1.09x |
+| 分配边界† | 15.257 ms | 5.747 ms | 2.65x |
 
 > **重要：这些性能对比是高度理想化的微基准，无法说明实际项目中的性能差距。**
 > 两条路径使用同一 LLVM 后端家族，计时包含进程启动，测试没有固定 CPU 频率，
-> 很小的工作集也无法代表真实应用的内存、并发、I/O 或延迟行为。†分配用例中
-> Clang 消除了 C++ 的 `new/delete`，而 Luna 有意保留 Runtime ABI 分配，所以该行
-> 不能作为分配器排名。
+> 很小的工作集也无法代表真实应用的内存、并发、I/O 或延迟行为；测试没有固定
+> CPU 频率或核心位置。†当前分配 workload 会强制两条分配路径真实执行，但 Luna
+> Runtime ABI 所有权与独立 C++ allocator adapter 仍是不同抽象，所以该行不能作为
+> 分配器排名。
 
 [查看 CPU/GPU 工作负载、限制与复现步骤](docs/benchmarks.zh-CN.md)。
 
@@ -77,8 +87,9 @@ fn main() -> i32 {
 ./hello
 ```
 
-`print` 当前仍是语言/运行时提供的最小输出操作；未来的泛型格式化接口将位于
-`std::io`。接下来请阅读[中文快速入门](docs/getting_started.md)。
+`print` 当前仍是语言/运行时提供的最小输出操作。临时且类型明确的 `std::io`
+package 已提供 console 读写、flush 和基本整数解析；最终 `Read`/`Write`/formatting
+表面仍在设计中。接下来请阅读[中文快速入门](docs/getting_started.md)。
 
 ## 从源码构建
 
@@ -115,6 +126,8 @@ package 目录：
 驱动还提供显式链接、运行时库、MoonIR 导出、成本报告和 GPU target 选项。
 运行时后端选择与设备代码生成是两个独立决策。完整参数、环境变量和示例见
 [编译器命令参考](docs/cli.zh-CN.md)。
+已确认的 0.3 `-t native|moon|cffi` 产物 selector 尚未成为 driver 选项；当前
+`build` 只产生 native 开发产物。
 新增或移动实现文件前，请先查阅[仓库文件与职责指南](docs/file_guide.md)。
 
 ## 平台与测试状态
@@ -135,14 +148,15 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
 
 ## 下一步演进
 
-近期在现有 Alpha 语言基线上发展工具链：
+近期工作遵循 0.3 完成门，而不是冻结的 0.2 Alpha roadmap：
 
-1. 改进诊断、源码映射和机器可读输出；
-2. 增加 formatter、language server 与编辑器集成；
-3. 完善 build/test/package/workspace 工作流和本地缓存；
-4. 加固安装、预编译分发和可复现构建；
-5. 改进 benchmark、profiling、MoonIR 检查和开发者审计工具；
-6. 修复语言正确性或安全缺陷，但不主动扩大当前语言表面。
+1. 完成 canonical 单层 MoonIR CFG 规范化，使其成为唯一 backend body，并删除
+   structured executable path；
+2. 冻结并实现 Moon 序列化/验证及 `-t native|moon|cffi` 产物接口；
+3. 实现可信 Luna native 证明边界和最小 Moon staging/activation runtime，且不向
+   普通调用热路径增加成本；
+4. 在剩余语法/顺序决策冻结后，收敛 Slot/Fragment 和 runtime query 表面；
+5. 让 formatter、LSP、package、benchmark 和 release gate 只面向最终 0.3 语义。
 
 详细实现顺序与完成门见[0.3 总体设计](docs/luna_0.3_design.zh-CN.md#9-实现优先级)。
 
