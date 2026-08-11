@@ -111,10 +111,10 @@ method set, and the affine ownership contract; no vtable is used.
 
 ## Implementation model
 
-An adapter chain forms a temporary compiler-domain iterator recipe in the frontend. MoonIR
-retains the verified source, adapter order, input/output element types, and borrow mode;
-LLVM lowering fuses the chain into one loop. It creates no intermediate array for `map` or
-`filter`, does not depend on `Vec`, and does not call an iterator Runtime ABI.
+An adapter chain forms a temporary compiler-domain iterator recipe in the frontend. During
+canonical CFG construction, a `for` consumer expands its verified source, adapter order,
+input/output element types, and borrow mode into one ordinary loop. It creates no intermediate
+array for `map` or `filter`, does not depend on `Vec`, and does not call an iterator Runtime ABI.
 
 In canonical CFG construction an array contributes a compile-time constant bound, while a slice
 contributes one verified `usize` `SliceLengthExpr` in loop initialization. This node is a basic
@@ -127,6 +127,12 @@ pointers/Copy snapshots, indices, bounds, and adapter state on the stack. A bind
 consumed by `for`, `fold`, `for_each`, `count`, or `collect`, and adapters may be
 appended in the consuming expression; the whole chain still expands statically to one loop,
 with no heap allocation, vtable, or iterator Runtime ABI.
+
+For canonical `for` construction, the materialized Iterator binding is erased at that binding
+point into ordinary source/index/limit/adapter locals. The index is also the affine
+single-consumption witness and is moved into the eventual loop; this adds no separate runtime
+token. Materialized terminal expressions remain on the legacy structured path until their
+control-flow-expression canonicalization subphase.
 
 This binding is an affine, single-consumption local and cannot currently be returned, passed,
 or sent across an ABI. Borrow bindings keep the source loan until lexical scope end; a Copy

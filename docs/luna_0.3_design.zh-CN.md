@@ -613,9 +613,18 @@ canonical IR；slice 循环索引因此也使用 `usize`，而现有源语言 `t
 verifier 独立要求操作数是冻结 slice、结果是 `usize`。由于当前稳定语言表面只有只读 slice，
 Sema 与 canonical 构造都接受直接/shared slice 迭代，并拒绝 mutable 或 consuming slice recipe。
 
-第 10 项尚未整体完成。materialized recipe、捕获式 closure environment，以及
-non-Copy item/callable contract 的逐元素初始化/cleanup 状态仍是明确的后续边界。随后规范化
-其余控制流表达式、slot 和 fragment
+
+materialized recipe 的第一个子阶段已完成 `for` 消费路径。绑定 range、借用 array/slice 或
+consuming Copy array 时，现在会立即产生普通 source/index/limit/adapter locals，compiler-domain
+Iterator binding 本身会被擦除。consuming Copy array 在绑定点建立快照，source 与 adapter 参数
+保留原有的从左到右求值顺序。既有 index local 被强化为 affine synthetic local，并在消费时
+move 进循环，因而它同时成为零额外状态的单次消费凭证。第二次消费、复制该 cursor 或路径间
+消费不一致都会被 canonical CFG ownership dataflow 拒绝。sealed graph 中不保留 Iterator-typed local、recipe metadata、
+runtime token、allocation 或新 ABI。
+
+第 10 项尚未整体完成。materialized terminal expression（`fold`/`for_each`/`count`/`collect`）、
+捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup 状态仍是明确的
+后续边界。随后规范化其余控制流表达式、slot 和 fragment
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
 serializer/parser 仍属于第 11 项。

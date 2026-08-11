@@ -12,6 +12,7 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     const Module& module) {
     mErrors.clear();
     mBindings.clear();
+    mMaterializedIterators.clear();
     mCleanupByLocal.clear();
     mBindingIteratorRecipe = false;
     mModule = &module;
@@ -36,7 +37,7 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     graph->rootScope = rootScope;
     graph->entry = entry;
 
-    mBindings.emplace_back();
+    pushBindings();
     for (const auto& parameter : parameters)
         addLocal(rootScope, LocalKind::Parameter, parameter.name,
                  parameter.type, parameter.usage, parameter.relation);
@@ -50,7 +51,7 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
         terminator.exitCleanups = canonicalCleanupOrder(
             open->cleanups, rootScope, std::nullopt);
     }
-    mBindings.pop_back();
+    popBindings();
 
     canonicalizeCleanupTable();
     graph->sealed = mErrors.empty();
@@ -114,7 +115,9 @@ LocalId ControlFlowBuilder::addLocal(
               "local '" + name + "' references a missing frozen type");
         return {};
     }
-    if (mBindings.back().count(name)) {
+    if (mBindings.back().count(name) ||
+        (!mMaterializedIterators.empty() &&
+         mMaterializedIterators.back().count(name))) {
         error(mGraph->scopes[scope.value].location,
               "duplicate local '" + name + "' in one canonical scope");
         return {};
@@ -181,11 +184,11 @@ ControlFlowBuilder::BuiltBlock ControlFlowBuilder::lowerNestedBlock(
     result.region = addRegion(parentRegion, kind, block->location);
     result.scope = addScope(parentScope, result.region, block->location);
     result.entry = addBlock(result.region, result.scope, block->location);
-    mBindings.emplace_back();
+    pushBindings();
     result.exit = lowerSequence(
         block->stmts, OpenBlock{result.entry, {}},
         result.region, result.scope);
-    mBindings.pop_back();
+    popBindings();
     return result;
 }
 
@@ -222,6 +225,14 @@ ControlFlowBuilder::lowerStatement(
         return std::nullopt;
     }
     if (auto* declaration = dynamic_cast<LetStmt*>(statement.get())) {
+        if (declaration->materializesIteratorRecipe) {
+            std::unique_ptr<LetStmt> owned(
+                static_cast<LetStmt*>(statement.release()));
+            if (!materializeIteratorRecipe(
+                    std::move(owned), current, scope))
+                return std::nullopt;
+            return current;
+        }
         if (!bindExpr(declaration->initializer.get())) return std::nullopt;
         declaration->local = addLocal(
             scope, LocalKind::Binding, declaration->name,
@@ -390,15 +401,15 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerWhile(
         loopRegion, loopScope, statement->location);
     connectJump(current, condition);
 
-    mBindings.emplace_back();
+    pushBindings();
     if (!bindExpr(statement->cond.get())) {
-        mBindings.pop_back();
+        popBindings();
         return std::nullopt;
     }
     auto body = lowerNestedBlock(
         std::move(statement->body), loopRegion, loopScope,
         RegionKind::Lexical);
-    mBindings.pop_back();
+    popBindings();
 
     const BlockId exit = addBlock(region, scope, statement->location);
     auto& terminator = mGraph->blocks[condition.value].terminator;
@@ -416,14 +427,15 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerWhile(
 std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerFor(
     std::unique_ptr<ForStmt> statement, OpenBlock current,
     RegionId region, ScopeId scope) {
-    const bool previousRecipeAllowance = mBindingIteratorRecipe;
-    mBindingIteratorRecipe = statement->protocolNext.empty();
-    const bool bound = bindExpr(statement->iterable.get());
-    mBindingIteratorRecipe = previousRecipeAllowance;
-    if (!bound) return std::nullopt;
     if (statement->protocolNext.empty())
         return lowerIteratorRecipeFor(
             std::move(statement), std::move(current), region, scope);
+
+    const bool previousRecipeAllowance = mBindingIteratorRecipe;
+    mBindingIteratorRecipe = false;
+    const bool bound = bindExpr(statement->iterable.get());
+    mBindingIteratorRecipe = previousRecipeAllowance;
+    if (!bound) return std::nullopt;
 
     const auto* nextDeclaration = mModule->findDeclaration(
         statement->protocolNext);
@@ -468,7 +480,7 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerFor(
         region, RegionKind::Loop, statement->location);
     const ScopeId loopScope = addScope(
         scope, loopRegion, statement->location);
-    mBindings.emplace_back();
+    pushBindings();
 
     BlockId start;
     LocalId stateLocal;
@@ -489,7 +501,7 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerFor(
             statement->iterable->type != statement->protocolInputType) {
             error(statement->location,
                   "for-loop IntoIterator witness has no canonical state conversion contract");
-            mBindings.pop_back();
+            popBindings();
             return std::nullopt;
         }
         const bool cleanupRequired =
@@ -499,7 +511,7 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerFor(
                 iteratorType->sysmeta.resource.cleanup)) {
             error(statement->location,
                   "for-loop hidden iterator state disagrees with frozen cleanup facts");
-            mBindings.pop_back();
+            popBindings();
             return std::nullopt;
         }
 
@@ -550,7 +562,7 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerFor(
             statement->protocolStateNeedsCleanup) {
             error(statement->location,
                   "direct Iterator for-loop requires one borrowed canonical local state");
-            mBindings.pop_back();
+            popBindings();
             return std::nullopt;
         }
         stateLocal = state->local;
@@ -572,7 +584,7 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerFor(
         loopScope, bodyRegion, statement->location);
     const BlockId bodyEntry = addBlock(
         bodyRegion, bodyScope, statement->location);
-    mBindings.emplace_back();
+    pushBindings();
     const LocalId itemLocal = addLocal(
         bodyScope, LocalKind::Pattern, statement->varName,
         statement->elementType, statement->bindingUsage);
@@ -582,7 +594,7 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerFor(
         : std::optional<OpenBlock>{};
     if (!statement->body)
         error(statement->location, "for-loop has no canonical body");
-    mBindings.pop_back();
+    popBindings();
 
     const BlockId exit = addBlock(region, scope, statement->location);
     const BlockId invalid = addBlock(
@@ -647,7 +659,7 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerFor(
     if (bodyExit) connectJump(*bodyExit, condition);
     mGraph->regions[bodyRegion.value].exit = condition;
     mGraph->regions[loopRegion.value].exit = exit;
-    mBindings.pop_back();
+    popBindings();
     return OpenBlock{exit, {}};
 }
 
@@ -660,6 +672,28 @@ bool ControlFlowBuilder::parseIteratorRecipe(
     }
     auto* call = dynamic_cast<CallExpr*>(expression.get());
     if (!call) {
+        if (const auto* identifier =
+                dynamic_cast<const IdentifierExpr*>(expression.get())) {
+            if (const auto* materialized =
+                    lookupMaterializedIterator(identifier->name)) {
+                plan.mode = materialized->mode;
+                plan.sourceType = materialized->sourceType;
+                plan.itemType = materialized->itemType;
+                plan.materialized = true;
+                plan.materializedSource = materialized->source;
+                plan.materializedIndex = materialized->index;
+                plan.materializedLimit = materialized->limit;
+                for (const auto& step : materialized->steps) {
+                    IteratorRecipeStep copied;
+                    copied.op = step.op;
+                    copied.argumentLocal = step.argument;
+                    copied.inputType = step.inputType;
+                    copied.outputType = step.outputType;
+                    plan.steps.push_back(std::move(copied));
+                }
+                return true;
+            }
+        }
         const auto* sourceType = mModule->findType(expression->type);
         if (!sourceType ||
             (sourceType->kind != TypeKind::Array &&
@@ -729,7 +763,8 @@ bool ControlFlowBuilder::parseIteratorRecipe(
             return false;
         }
         plan.steps.push_back({
-            IteratorOp::Take, std::move(argument), inputType, outputType});
+            IteratorOp::Take, std::move(argument), {},
+            inputType, outputType});
         plan.itemType = outputType;
         return true;
     }
@@ -751,17 +786,12 @@ bool ControlFlowBuilder::parseIteratorRecipe(
                   "iterator map/filter adapter disagrees with its canonical item type");
             return false;
         }
-        auto* lambda = dynamic_cast<LambdaExpr*>(callable.get());
         const auto* closure = mModule->findType(callable->type);
         TypeRef expectedResult = outputType;
         if (call->iteratorOp == IteratorOp::Filter)
             for (const auto& type : mModule->typeTable)
                 if (type.kind == TypeKind::Bool) expectedResult = type.id;
-        if ((lambda &&
-             (lambda->body || !lambda->controlFlow ||
-              !lambda->captures.empty() ||
-              callable->type != lambda->closureType)) ||
-            !closure || closure->kind != TypeKind::Function ||
+        if (!closure || closure->kind != TypeKind::Function ||
             closure->parameterTypeIds != TypeRefVec{inputType} ||
             closure->returnTypeId != expectedResult ||
             (call->iteratorOp == IteratorOp::Filter &&
@@ -770,13 +800,340 @@ bool ControlFlowBuilder::parseIteratorRecipe(
                   "iterator map/filter requires one canonical capture-free callable");
             return false;
         }
-        plan.steps.push_back({call->iteratorOp, std::move(callable),
+        plan.steps.push_back({call->iteratorOp, std::move(callable), {},
                               inputType, outputType});
         plan.itemType = outputType;
         return true;
     }
     error(location, "unsupported compiler iterator recipe operation");
     return false;
+}
+
+bool ControlFlowBuilder::bindIteratorRecipe(IteratorRecipePlan& plan) {
+    const bool previousRecipeAllowance = mBindingIteratorRecipe;
+    mBindingIteratorRecipe = true;
+    bool valid = true;
+    if (!plan.materialized) {
+        if (plan.mode == IteratorMode::Range) {
+            valid = bindExpr(plan.rangeStart.get()) &&
+                bindExpr(plan.rangeEnd.get());
+        } else {
+            valid = bindExpr(plan.source.get());
+        }
+    }
+    for (auto& step : plan.steps)
+        if (step.argument && !bindExpr(step.argument.get())) valid = false;
+    mBindingIteratorRecipe = previousRecipeAllowance;
+    return valid;
+}
+
+bool ControlFlowBuilder::validateIteratorRecipe(
+    IteratorRecipePlan& plan, const TypeRef& expectedItem,
+    const SourceLocation& location) {
+    TypeRef indexType;
+    TypeRef sizeType;
+    for (const auto& type : mModule->typeTable) {
+        if (type.kind == TypeKind::I32) indexType = type.id;
+        if (type.kind == TypeKind::USize) sizeType = type.id;
+    }
+    if (indexType.empty()) {
+        error(location, "iterator recipe requires a frozen i32 compiler type");
+        return false;
+    }
+    if (plan.mode == IteratorMode::Range) {
+        if (plan.materialized) {
+            const auto* initial = mGraph->findLocal(plan.materializedIndex);
+            const auto* limit = mGraph->findLocal(plan.materializedLimit);
+            if (!initial || !limit || initial->type != indexType ||
+                limit->type != indexType) {
+                error(location,
+                      "materialized range has no canonical i32 cursor state");
+                return false;
+            }
+        } else if (!plan.rangeStart || !plan.rangeEnd ||
+                   plan.rangeStart->type != indexType ||
+                   plan.rangeEnd->type != indexType) {
+            error(location,
+                  "range recipe must be normalized to i32 start/end/item values");
+            return false;
+        }
+    } else {
+        const auto* sourceType = mModule->findType(plan.sourceType);
+        if (!sourceType ||
+            (sourceType->kind != TypeKind::Array &&
+             sourceType->kind != TypeKind::Slice) ||
+            sourceType->innerTypeId.empty()) {
+            error(location,
+                  "iterator recipe source is not a frozen array or slice");
+            return false;
+        }
+        if (sourceType->kind == TypeKind::Slice &&
+            plan.mode != IteratorMode::Shared) {
+            error(location, "read-only slice recipes require shared iteration");
+            return false;
+        }
+        if (sourceType->kind == TypeKind::Slice && sizeType.empty()) {
+            error(location, "slice recipe requires a frozen usize compiler type");
+            return false;
+        }
+        const auto* elementType = mModule->findType(sourceType->innerTypeId);
+        if (sourceType->kind == TypeKind::Array &&
+            plan.mode == IteratorMode::Consuming &&
+            (!elementType || elementType->sysmeta.resource.usage !=
+                luna::ownership::Usage::Copy)) {
+            error(location,
+                  "move-only consuming arrays require projected canonical cleanup state");
+            return false;
+        }
+        if (sourceType->kind == TypeKind::Slice && plan.itemType.empty())
+            plan.itemType = expectedItem;
+        if (plan.materialized) {
+            const auto* source = mGraph->findLocal(plan.materializedSource);
+            if (!source || source->type != plan.sourceType) {
+                error(location,
+                      "materialized iterator has no canonical source local");
+                return false;
+            }
+        }
+    }
+
+    const TypeRef sourceItemType = plan.steps.empty()
+        ? plan.itemType : plan.steps.front().inputType;
+    if (plan.mode == IteratorMode::Range) {
+        if (sourceItemType != indexType) {
+            error(location, "range recipe adapter input is not canonical i32");
+            return false;
+        }
+    } else {
+        const auto* frozenSource = mModule->findType(plan.sourceType);
+        const auto* frozenItem = mModule->findType(sourceItemType);
+        const bool consumingItem = frozenSource &&
+            sourceItemType == frozenSource->innerTypeId;
+        const bool borrowedItem = frozenSource && frozenItem &&
+            frozenItem->kind == TypeKind::Reference &&
+            frozenItem->innerTypeId == frozenSource->innerTypeId &&
+            frozenItem->isMutable == (plan.mode == IteratorMode::Mutable);
+        if ((plan.mode == IteratorMode::Consuming && !consumingItem) ||
+            ((plan.mode == IteratorMode::Shared ||
+              plan.mode == IteratorMode::Mutable) && !borrowedItem)) {
+            error(location,
+                  "iterator recipe source mode disagrees with its first item type");
+            return false;
+        }
+    }
+    if (plan.itemType != expectedItem) {
+        error(location,
+              "iterator recipe item type disagrees with its consumer binding");
+        return false;
+    }
+
+    for (const auto& step : plan.steps) {
+        const auto* argumentLocal = mGraph->findLocal(step.argumentLocal);
+        const TypeRef argumentType = step.argument
+            ? step.argument->type
+            : (argumentLocal ? argumentLocal->type : TypeRef{});
+        if ((step.argument != nullptr) == !step.argumentLocal.empty()) {
+            error(location,
+                  "iterator adapter has ambiguous materialized argument state");
+            return false;
+        }
+        if (step.op == IteratorOp::Take) {
+            if (argumentType != indexType) {
+                error(location,
+                      "iterator take count must be normalized to i32");
+                return false;
+            }
+            continue;
+        }
+        if (step.op != IteratorOp::Map && step.op != IteratorOp::Filter) {
+            error(location,
+                  "iterator recipe contains an unsupported canonical adapter");
+            return false;
+        }
+        const auto* input = mModule->findType(step.inputType);
+        const auto* output = mModule->findType(step.outputType);
+        const auto* callable = mModule->findType(argumentType);
+        const auto* lambda = step.argument
+            ? dynamic_cast<const LambdaExpr*>(step.argument.get()) : nullptr;
+        if (!input || !output || !callable ||
+            callable->kind != TypeKind::Function ||
+            (lambda &&
+             (lambda->body || !lambda->controlFlow ||
+              !lambda->captures.empty() ||
+              argumentType != lambda->closureType)) ||
+            callable->parameterContracts.size() != 1 ||
+            callable->parameterContracts.front().usage !=
+                luna::ownership::Usage::Copy ||
+            callable->returnContract.usage != luna::ownership::Usage::Copy ||
+            input->sysmeta.resource.usage != luna::ownership::Usage::Copy ||
+            output->sysmeta.resource.usage != luna::ownership::Usage::Copy) {
+            error(location,
+                  "non-Copy map/filter item or callable contract requires "
+                  "canonical per-item ownership state");
+            return false;
+        }
+    }
+    return true;
+}
+
+bool ControlFlowBuilder::materializeIteratorRecipe(
+    std::unique_ptr<LetStmt> declaration, OpenBlock current,
+    ScopeId scope) {
+    if (!declaration || declaration->name.empty()) {
+        error(declaration ? declaration->location : SourceLocation{},
+              "materialized iterator binding has no canonical name");
+        return false;
+    }
+    if (mBindings.empty() || mMaterializedIterators.empty() ||
+        mBindings.back().count(declaration->name) ||
+        mMaterializedIterators.back().count(declaration->name)) {
+        error(declaration->location,
+              "duplicate local '" + declaration->name +
+              "' in one canonical scope");
+        return false;
+    }
+    const auto* iteratorType = mModule->findType(declaration->type);
+    if (!iteratorType || iteratorType->kind != TypeKind::Iterator ||
+        iteratorType->innerTypeId.empty()) {
+        error(declaration->location,
+              "materialized iterator binding has no frozen iterator contract");
+        return false;
+    }
+    if (declaration->materializedIteratorOwnsSource ||
+        !declaration->materializedIteratorSourceType.empty()) {
+        error(declaration->location,
+              "move-only materialized recipe requires projected source cleanup state");
+        return false;
+    }
+
+    IteratorRecipePlan plan;
+    if (!parseIteratorRecipe(
+            std::move(declaration->initializer), plan,
+            declaration->location))
+        return false;
+    if (plan.materialized) {
+        error(declaration->location,
+              "materialized iterator binding cannot wrap existing recipe state");
+        return false;
+    }
+    if (!bindIteratorRecipe(plan) ||
+        !validateIteratorRecipe(
+            plan, iteratorType->innerTypeId, declaration->location))
+        return false;
+
+    TypeRef indexType;
+    TypeRef sizeType;
+    for (const auto& type : mModule->typeTable) {
+        if (type.kind == TypeKind::I32) indexType = type.id;
+        if (type.kind == TypeKind::USize) sizeType = type.id;
+    }
+    const auto identifier = [this, &declaration](LocalId local) {
+        auto value = std::make_unique<IdentifierExpr>();
+        value->location = declaration->location;
+        if (!local.empty() && local.value < mGraph->locals.size()) {
+            const auto& record = mGraph->locals[local.value];
+            value->name = record.name;
+            value->local = local;
+            value->type = record.type;
+        }
+        return value;
+    };
+    const auto integer = [&declaration](int64_t value, const TypeRef& type) {
+        auto literal = std::make_unique<IntLiteralExpr>();
+        literal->location = declaration->location;
+        literal->value = value;
+        literal->type = type;
+        return literal;
+    };
+    const auto addStateBinding = [this, &declaration, current, scope](
+        const std::string& name, const TypeRef& type,
+        luna::ownership::Usage usage, std::unique_ptr<Expr> initializer,
+        LocalKind kind = LocalKind::Binding) {
+        const LocalId local = addLocal(
+            scope, kind, name, type, usage);
+        auto state = std::make_unique<LetStmt>();
+        state->location = declaration->location;
+        state->name = name;
+        state->local = local;
+        state->isLinear = usage == luna::ownership::Usage::Linear;
+        state->usage = usage;
+        state->type = type;
+        state->initializer = std::move(initializer);
+        mGraph->blocks[current.block.value].operations.push_back(
+            std::move(state));
+        return local;
+    };
+
+    MaterializedIteratorRecipe materialized;
+    materialized.mode = plan.mode;
+    materialized.sourceType = plan.sourceType;
+    materialized.itemType = plan.itemType;
+    const TypeRecord* sourceType = nullptr;
+    if (plan.mode != IteratorMode::Range) {
+        sourceType = mModule->findType(plan.sourceType);
+        auto* sourceIdentifier = dynamic_cast<IdentifierExpr*>(
+            plan.source.get());
+        if (plan.mode != IteratorMode::Consuming) {
+            if (!sourceIdentifier || sourceIdentifier->local.empty()) {
+                error(declaration->location,
+                      "borrowed materialized recipe requires a canonical source local");
+                return false;
+            }
+            materialized.source = sourceIdentifier->local;
+        } else {
+            materialized.source = addStateBinding(
+                "$recipe." + declaration->name + ".source",
+                plan.sourceType, luna::ownership::Usage::Copy,
+                std::move(plan.source));
+        }
+    }
+
+    const TypeRef loopIndexType = sourceType &&
+            sourceType->kind == TypeKind::Slice
+        ? sizeType : indexType;
+    std::unique_ptr<Expr> initial;
+    std::unique_ptr<Expr> limit;
+    if (plan.mode == IteratorMode::Range) {
+        initial = std::move(plan.rangeStart);
+        limit = std::move(plan.rangeEnd);
+    } else {
+        initial = integer(0, loopIndexType);
+        if (sourceType->kind == TypeKind::Slice) {
+            auto length = std::make_unique<SliceLengthExpr>();
+            length->location = declaration->location;
+            length->slice = identifier(materialized.source);
+            length->type = sizeType;
+            limit = std::move(length);
+        } else {
+            limit = integer(
+                static_cast<int64_t>(sourceType->arrayLength),
+                loopIndexType);
+        }
+    }
+    materialized.index = addStateBinding(
+        "$recipe." + declaration->name + ".index",
+        loopIndexType, luna::ownership::Usage::Affine,
+        std::move(initial), LocalKind::Synthetic);
+    materialized.limit = addStateBinding(
+        "$recipe." + declaration->name + ".limit",
+        loopIndexType, luna::ownership::Usage::Copy,
+        std::move(limit));
+
+    for (size_t stepIndex = 0; stepIndex < plan.steps.size(); ++stepIndex) {
+        auto& step = plan.steps[stepIndex];
+        const TypeRef argumentType = step.op == IteratorOp::Take
+            ? indexType : step.argument->type;
+        const LocalId argument = addStateBinding(
+            "$recipe." + declaration->name + ".step." +
+                std::to_string(stepIndex),
+            argumentType, luna::ownership::Usage::Copy,
+            std::move(step.argument));
+        materialized.steps.push_back({
+            step.op, argument, step.inputType, step.outputType});
+    }
+    mMaterializedIterators.back().emplace(
+        declaration->name, std::move(materialized));
+    return true;
 }
 
 std::optional<ControlFlowBuilder::OpenBlock>
@@ -793,6 +1150,11 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         return std::nullopt;
     }
 
+    if (!bindIteratorRecipe(plan) ||
+        !validateIteratorRecipe(
+            plan, statement->elementType, statement->location))
+        return std::nullopt;
+
     TypeRef boolType;
     TypeRef indexType;
     TypeRef sizeType;
@@ -806,112 +1168,8 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
               "iterator recipe requires frozen bool and i32 compiler types");
         return std::nullopt;
     }
-    if (plan.mode == IteratorMode::Range) {
-        if (!plan.rangeStart || !plan.rangeEnd ||
-            plan.rangeStart->type != indexType ||
-            plan.rangeEnd->type != indexType) {
-            error(statement->location,
-                  "range recipe must be normalized to i32 start/end/item values");
-            return std::nullopt;
-        }
-    } else {
-        const auto* sourceType = mModule->findType(plan.sourceType);
-        if (!sourceType ||
-            (sourceType->kind != TypeKind::Array &&
-             sourceType->kind != TypeKind::Slice) ||
-            sourceType->innerTypeId.empty()) {
-            error(statement->location,
-                  "iterator recipe source is not a frozen array or slice");
-            return std::nullopt;
-        }
-        if (sourceType->kind == TypeKind::Slice &&
-            plan.mode != IteratorMode::Shared) {
-            error(statement->location,
-                  "read-only slice recipes require shared iteration");
-            return std::nullopt;
-        }
-        if (sourceType->kind == TypeKind::Slice && sizeType.empty()) {
-            error(statement->location,
-                  "slice recipe requires a frozen usize compiler type");
-            return std::nullopt;
-        }
-        const auto* elementType = mModule->findType(sourceType->innerTypeId);
-        if (sourceType->kind == TypeKind::Array &&
-            plan.mode == IteratorMode::Consuming &&
-            (!elementType || elementType->sysmeta.resource.usage !=
-                luna::ownership::Usage::Copy)) {
-            error(statement->location,
-                  "move-only consuming arrays require projected canonical cleanup state");
-            return std::nullopt;
-        }
-        if (sourceType->kind == TypeKind::Slice && plan.itemType.empty())
-            plan.itemType = statement->elementType;
-    }
     const TypeRef sourceItemType = plan.steps.empty()
         ? plan.itemType : plan.steps.front().inputType;
-    if (plan.mode == IteratorMode::Range) {
-        if (sourceItemType != indexType) {
-            error(statement->location,
-                  "range recipe adapter input is not canonical i32");
-            return std::nullopt;
-        }
-    } else {
-        const auto* frozenSource = mModule->findType(plan.sourceType);
-        const auto* frozenItem = mModule->findType(sourceItemType);
-        const bool consumingItem = frozenSource &&
-            sourceItemType == frozenSource->innerTypeId;
-        const bool borrowedItem = frozenSource && frozenItem &&
-            frozenItem->kind == TypeKind::Reference &&
-            frozenItem->innerTypeId == frozenSource->innerTypeId &&
-            frozenItem->isMutable == (plan.mode == IteratorMode::Mutable);
-        if ((plan.mode == IteratorMode::Consuming && !consumingItem) ||
-            ((plan.mode == IteratorMode::Shared ||
-              plan.mode == IteratorMode::Mutable) && !borrowedItem)) {
-            error(statement->location,
-                  "iterator recipe source mode disagrees with its first item type");
-            return std::nullopt;
-        }
-    }
-    if (plan.itemType != statement->elementType) {
-        error(statement->location,
-              "iterator recipe item type disagrees with its for binding");
-        return std::nullopt;
-    }
-    for (const auto& step : plan.steps) {
-        if (step.op == IteratorOp::Take) {
-            if (!step.argument || step.argument->type != indexType) {
-                error(statement->location,
-                      "iterator take count must be normalized to i32");
-                return std::nullopt;
-            }
-            continue;
-        }
-        if (step.op != IteratorOp::Map && step.op != IteratorOp::Filter) {
-            error(statement->location,
-                  "iterator recipe contains an unsupported canonical adapter");
-            return std::nullopt;
-        }
-        const auto* input = mModule->findType(step.inputType);
-        const auto* output = mModule->findType(step.outputType);
-        const auto* callable = step.argument
-            ? mModule->findType(step.argument->type) : nullptr;
-        if (!step.argument || !input || !output ||
-            !callable || callable->kind != TypeKind::Function ||
-            callable->parameterContracts.size() != 1 ||
-            callable->parameterContracts.front().usage !=
-                luna::ownership::Usage::Copy ||
-            callable->returnContract.usage !=
-                luna::ownership::Usage::Copy ||
-            input->sysmeta.resource.usage !=
-                luna::ownership::Usage::Copy ||
-            output->sysmeta.resource.usage !=
-                luna::ownership::Usage::Copy) {
-            error(statement->location,
-                  "non-Copy map/filter item or callable contract requires "
-                  "canonical per-item ownership state");
-            return std::nullopt;
-        }
-    }
 
     const RegionId loopRegion = addRegion(
         region, RegionKind::Loop, statement->location);
@@ -919,7 +1177,7 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         scope, loopRegion, statement->location);
     const BlockId init = addBlock(
         loopRegion, loopScope, statement->location);
-    mBindings.emplace_back();
+    pushBindings();
     const std::string identity = std::to_string(loopRegion.value);
 
     const auto addBinding = [&](const std::string& name, const TypeRef& type,
@@ -965,22 +1223,28 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     const TypeRecord* sourceType = nullptr;
     if (plan.mode != IteratorMode::Range) {
         sourceType = mModule->findType(plan.sourceType);
-        auto* sourceIdentifier = dynamic_cast<IdentifierExpr*>(plan.source.get());
-        const bool snapshot = plan.mode == IteratorMode::Consuming;
-        if (!snapshot && sourceIdentifier && !sourceIdentifier->local.empty()) {
-            sourceLocal = sourceIdentifier->local;
-            plan.source.reset();
+        if (plan.materialized) {
+            sourceLocal = plan.materializedSource;
         } else {
-            const auto* frozen = mModule->findType(plan.sourceType);
-            if (!frozen || frozen->sysmeta.resource.cleanupRequired) {
-                error(statement->location,
-                      "temporary iterator source requires unsupported synthetic cleanup");
-                mBindings.pop_back();
-                return std::nullopt;
+            auto* sourceIdentifier = dynamic_cast<IdentifierExpr*>(
+                plan.source.get());
+            const bool snapshot = plan.mode == IteratorMode::Consuming;
+            if (!snapshot && sourceIdentifier &&
+                !sourceIdentifier->local.empty()) {
+                sourceLocal = sourceIdentifier->local;
+                plan.source.reset();
+            } else {
+                const auto* frozen = mModule->findType(plan.sourceType);
+                if (!frozen || frozen->sysmeta.resource.cleanupRequired) {
+                    error(statement->location,
+                          "temporary iterator source requires unsupported synthetic cleanup");
+                    popBindings();
+                    return std::nullopt;
+                }
+                sourceLocal = addBinding(
+                    "$for.source." + identity, plan.sourceType,
+                    std::move(plan.source));
             }
-            sourceLocal = addBinding(
-                "$for.source." + identity, plan.sourceType,
-                std::move(plan.source));
         }
     }
 
@@ -989,7 +1253,14 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     const TypeRef loopIndexType = sourceType &&
             sourceType->kind == TypeKind::Slice
         ? sizeType : indexType;
-    if (plan.mode == IteratorMode::Range) {
+    if (plan.materialized) {
+        auto transfer = std::make_unique<MoveExpr>();
+        transfer->location = statement->location;
+        transfer->operand = identifier(plan.materializedIndex);
+        transfer->type = loopIndexType;
+        initial = std::move(transfer);
+        limit = identifier(plan.materializedLimit);
+    } else if (plan.mode == IteratorMode::Range) {
         initial = std::move(plan.rangeStart);
         limit = std::move(plan.rangeEnd);
     } else {
@@ -1015,12 +1286,16 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         auto& step = plan.steps[stepIndex];
         const char* adapterName = step.op == IteratorOp::Map
             ? "map" : (step.op == IteratorOp::Filter ? "filter" : "take");
-        const TypeRef adapterType = step.op == IteratorOp::Take
-            ? indexType : step.argument->type;
-        adapterLocals.push_back(addBinding(
-            "$for." + std::string(adapterName) + "." + identity + "." +
-                std::to_string(stepIndex),
-            adapterType, std::move(step.argument)));
+        if (!step.argumentLocal.empty()) {
+            adapterLocals.push_back(step.argumentLocal);
+        } else {
+            const TypeRef adapterType = step.op == IteratorOp::Take
+                ? indexType : step.argument->type;
+            adapterLocals.push_back(addBinding(
+                "$for." + std::string(adapterName) + "." + identity + "." +
+                    std::to_string(stepIndex),
+                adapterType, std::move(step.argument)));
+        }
     }
 
     const BlockId condition = addBlock(
@@ -1059,7 +1334,7 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     mGraph->blocks[condition.value].terminator =
         std::move(conditionTerminator);
 
-    mBindings.emplace_back();
+    pushBindings();
     const auto addBodyBinding = [&](BlockId block, const std::string& name,
                                     const TypeRef& type,
                                     luna::ownership::Usage usage,
@@ -1214,7 +1489,7 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
             statement->body->stmts, OpenBlock{userBody, {}},
             bodyRegion, bodyScope);
     }
-    mBindings.pop_back();
+    popBindings();
 
     if (bodyExit) {
         if (increment.empty())
@@ -1238,7 +1513,7 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         mGraph->regions[bodyRegion.value].exit = increment;
     }
     mGraph->regions[loopRegion.value].exit = exit;
-    mBindings.pop_back();
+    popBindings();
     return OpenBlock{exit, {}};
 }
 
@@ -1268,7 +1543,7 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerMatch(
         built.entry = addBlock(built.region, armScope, arm.location);
         built.edge.tag = arm.variantIndex;
         built.edge.edge.target = built.entry;
-        mBindings.emplace_back();
+        pushBindings();
         if (arm.bindings.size() != arm.bindingTypes.size() ||
             arm.bindings.size() != arm.bindingUsages.size()) {
             error(arm.location,
@@ -1290,7 +1565,7 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerMatch(
                 arm.body->stmts, OpenBlock{built.entry, {}},
                 built.region, armScope);
         }
-        mBindings.pop_back();
+        popBindings();
         arms.push_back(std::move(built));
     }
 
@@ -1442,11 +1717,39 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
 }
 
 LocalId ControlFlowBuilder::lookupLocal(const std::string& name) const {
-    for (auto scope = mBindings.rbegin(); scope != mBindings.rend(); ++scope) {
-        auto found = scope->find(name);
-        if (found != scope->end()) return found->second;
+    for (size_t depth = mBindings.size(); depth > 0; --depth) {
+        const auto& bindings = mBindings[depth - 1];
+        if (auto found = bindings.find(name); found != bindings.end())
+            return found->second;
+        if (depth <= mMaterializedIterators.size() &&
+            mMaterializedIterators[depth - 1].count(name))
+            return {};
     }
     return {};
+}
+
+const ControlFlowBuilder::MaterializedIteratorRecipe*
+ControlFlowBuilder::lookupMaterializedIterator(
+    const std::string& name) const {
+    for (size_t depth = mMaterializedIterators.size(); depth > 0; --depth) {
+        if (depth <= mBindings.size() &&
+            mBindings[depth - 1].count(name))
+            return nullptr;
+        const auto& recipes = mMaterializedIterators[depth - 1];
+        if (auto found = recipes.find(name); found != recipes.end())
+            return &found->second;
+    }
+    return nullptr;
+}
+
+void ControlFlowBuilder::pushBindings() {
+    mBindings.emplace_back();
+    mMaterializedIterators.emplace_back();
+}
+
+void ControlFlowBuilder::popBindings() {
+    if (!mBindings.empty()) mBindings.pop_back();
+    if (!mMaterializedIterators.empty()) mMaterializedIterators.pop_back();
 }
 
 void ControlFlowBuilder::connectJump(

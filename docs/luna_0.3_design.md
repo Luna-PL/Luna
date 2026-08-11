@@ -688,9 +688,20 @@ frozen slice operand and a `usize` result. Because the stable language surface h
 slices, Sema and canonical construction accept direct/shared slice iteration and reject mutable or
 consuming slice recipes.
 
-Item 10 is not complete as a whole. Materialized recipes, capturing closure environments, and
-non-Copy item/callable per-element ownership state remain explicit following boundaries. The
-remaining work then normalizes control-flow expressions, slot, and fragment paths,
+The first materialized-recipe subphase is complete for `for` consumption. Binding a range, borrowed
+array/slice, or consuming Copy array now immediately produces ordinary source/index/limit/adapter
+locals; the compiler-domain Iterator binding itself is erased. A consuming Copy array is snapshotted
+at the binding point, and source plus adapter arguments retain their original left-to-right
+evaluation order. The existing index local is strengthened to an affine synthetic local and moved
+into the consuming loop, so it doubles as the zero-extra-state single-consumption witness. A second
+consumption, copying that cursor, or path-inconsistent consumption is rejected by canonical CFG
+ownership dataflow. No Iterator-typed local, recipe metadata, runtime token, allocation, or new ABI remains in
+the sealed graph.
+
+Item 10 is not complete as a whole. Materialized terminal expressions (`fold`, `for_each`, `count`,
+and `collect`), capturing closure environments, and non-Copy item/callable per-element ownership
+state remain explicit following boundaries. The remaining work then normalizes other control-flow
+expressions, slot, and fragment paths,
 atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured
 execution is deleted and the full verifier/codegen regression gate passes does the item-level gate

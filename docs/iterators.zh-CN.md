@@ -103,8 +103,8 @@ trait identity、Item 一致性、完整方法集和 affine 所有权契约，�
 
 ## 实现模型
 
-适配器链在前端形成编译器域的临时 iterator recipe。MoonIR 保留已验证的源、适配器
-顺序、元素输入输出类型和借用模式；LLVM lowering 将整条链融合为一个循环。它不会为
+适配器链在前端形成编译器域的临时 iterator recipe。在 canonical CFG 构造中，`for` consumer 会把
+已验证的源、适配器顺序、元素输入输出类型和借用模式展开为一个普通循环。它不会为
 `map` 或 `filter` 建立中间数组，不依赖 `Vec`，也不调用 iterator runtime ABI。
 
 在 canonical CFG 构造中，array 提供编译期常量上界，slice 则在 loop init 中提供一个
@@ -117,6 +117,11 @@ source 与它的运行时上界都只求值一次。
 消费，也可
 在消费表达式中继续追加 adapter；整个链仍静态展开为一个循环，不分配 heap，不使用
 vtable 或 iterator runtime ABI。
+
+对 canonical `for` 构造而言，materialized Iterator binding 会在绑定点被擦除为普通的
+source/index/limit/adapter locals。index 同时是 affine 单次消费凭证，并在最终循环中通过
+move 转移；这不增加独立 runtime token。materialized terminal expression 在其控制流表达式
+canonicalization 子阶段前仍使用旧 structured path。
 
 这种 binding 是 affine、single-consumption 的局部值，当前不能返回、传参或跨 ABI。
 借用型 binding 将源 loan 保持到词法作用域结束；Copy `into_iter` 在绑定点建立值

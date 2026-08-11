@@ -593,6 +593,11 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         if (let->inferredType &&
             let->inferredType->kind == TypeKind::DeclarationRef)
             return nullptr;
+        if (let->materializesIteratorRecipe) {
+            (void)typeRef(TyI32);
+            (void)typeRef(TyUSize);
+            (void)typeRef(TyBool);
+        }
         auto value = std::make_unique<moon::LetStmt>();
         value->name = let->name;
         value->isConst = let->isConst;
@@ -659,11 +664,12 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         result = std::move(value);
     } else if (auto* loop = dynamic_cast<const ::ForStmt*>(statement)) {
         auto value = std::make_unique<moon::ForStmt>();
-        // Canonical compiler-recipe loops synthesize an i32 cursor and bool
-        // branch condition after declaration references are resolved. Freeze
-        // those pay-for-use compiler types before the module type table seals.
+        // Canonical compiler-recipe loops synthesize an i32/usize cursor and
+        // bool branch condition after declaration references are resolved.
+        // Freeze those pay-for-use compiler types before the type table seals.
         if (loop->protocolNextSymbol.empty()) {
             (void)typeRef(TyI32);
+            (void)typeRef(TyUSize);
             (void)typeRef(TyBool);
         }
         value->varName = loop->varName;

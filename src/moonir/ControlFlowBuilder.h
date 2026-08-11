@@ -39,6 +39,7 @@ private:
     struct IteratorRecipeStep {
         IteratorOp op = IteratorOp::None;
         std::unique_ptr<Expr> argument;
+        LocalId argumentLocal;
         TypeRef inputType;
         TypeRef outputType;
     };
@@ -51,6 +52,27 @@ private:
         std::unique_ptr<Expr> rangeEnd;
         TypeRef itemType;
         std::vector<IteratorRecipeStep> steps;
+        bool materialized = false;
+        LocalId materializedSource;
+        LocalId materializedIndex;
+        LocalId materializedLimit;
+    };
+
+    struct MaterializedIteratorStep {
+        IteratorOp op = IteratorOp::None;
+        LocalId argument;
+        TypeRef inputType;
+        TypeRef outputType;
+    };
+
+    struct MaterializedIteratorRecipe {
+        IteratorMode mode = IteratorMode::Copy;
+        LocalId source;
+        TypeRef sourceType;
+        LocalId index;
+        LocalId limit;
+        TypeRef itemType;
+        std::vector<MaterializedIteratorStep> steps;
     };
 
     RegionId addRegion(RegionId parent, RegionKind kind,
@@ -98,7 +120,18 @@ private:
         std::unique_ptr<Expr> expression,
         IteratorRecipePlan& plan,
         const SourceLocation& location);
+    bool validateIteratorRecipe(
+        IteratorRecipePlan& plan, const TypeRef& expectedItem,
+        const SourceLocation& location);
+    bool bindIteratorRecipe(IteratorRecipePlan& plan);
+    bool materializeIteratorRecipe(
+        std::unique_ptr<LetStmt> declaration, OpenBlock current,
+        ScopeId scope);
     LocalId lookupLocal(const std::string& name) const;
+    const MaterializedIteratorRecipe* lookupMaterializedIterator(
+        const std::string& name) const;
+    void pushBindings();
+    void popBindings();
     void connectJump(const OpenBlock& source, BlockId target);
     std::vector<CleanupId> lowerCleanupObligations(
         const std::vector<CleanupObligation>& obligations,
@@ -112,6 +145,8 @@ private:
     const Module* mModule = nullptr;
     ControlFlowGraph* mGraph = nullptr;
     std::vector<std::unordered_map<std::string, LocalId>> mBindings;
+    std::vector<std::unordered_map<std::string, MaterializedIteratorRecipe>>
+        mMaterializedIterators;
     std::unordered_map<uint32_t, CleanupId> mCleanupByLocal;
     std::vector<std::string> mErrors;
     bool mBindingIteratorRecipe = false;

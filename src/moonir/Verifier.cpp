@@ -299,6 +299,9 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         if (!type)
             error({}, "local " + std::to_string(index) +
                       " references a missing frozen type");
+        else if (type->kind == TypeKind::Iterator)
+            error({}, "sealed CFG retains compiler iterator recipe local " +
+                      std::to_string(index));
         else if (!luna::ownership::satisfiesUsageRequirement(
                      local.usage, type->sysmeta.resource.usage))
             error({}, "local " + std::to_string(index) +
@@ -412,32 +415,43 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         }
         return false;
     };
+    const auto scanGraphIdentifier =
+        [this, &graph, &localVisibleFrom](const IdentifierExpr& identifier,
+                                         const BasicBlock& block,
+                                         bool allowSyntheticTransfer) {
+            if (!identifier.local.empty()) {
+                const auto* local = graph.findLocal(identifier.local);
+                if (!local) {
+                    error(identifier.location,
+                          "identifier references a missing LocalId");
+                    return;
+                }
+                if (!identifier.declaration.empty())
+                    error(identifier.location,
+                          "identifier carries both LocalId and DeclarationRef");
+                if (identifier.type != local->type)
+                    error(identifier.location,
+                          "identifier type disagrees with its canonical local");
+                if (!localVisibleFrom(local->scope, block.scope))
+                    error(identifier.location,
+                          "identifier references a local outside its lexical scope");
+                if (local->kind == LocalKind::Synthetic &&
+                    luna::ownership::isMoveOnly(local->usage) &&
+                    !allowSyntheticTransfer)
+                    error(identifier.location,
+                          "synthetic affine local is read without transfer");
+            } else if (identifier.declaration.empty()) {
+                error(identifier.location,
+                      "identifier has no canonical LocalId or DeclarationRef");
+            }
+        };
     std::function<void(const Expr*, const BasicBlock&)> scanGraphExpr;
-    scanGraphExpr = [this, &graph, &module, &localVisibleFrom, &scanGraphExpr](
+    scanGraphExpr = [this, &module, &scanGraphIdentifier, &scanGraphExpr](
         const Expr* expression, const BasicBlock& block) {
         if (!expression) return;
         if (const auto* identifier =
                 dynamic_cast<const IdentifierExpr*>(expression)) {
-            if (!identifier->local.empty()) {
-                const auto* local = graph.findLocal(identifier->local);
-                if (!local)
-                    error(identifier->location,
-                          "identifier references a missing LocalId");
-                else {
-                    if (!identifier->declaration.empty())
-                        error(identifier->location,
-                              "identifier carries both LocalId and DeclarationRef");
-                    if (identifier->type != local->type)
-                        error(identifier->location,
-                              "identifier type disagrees with its canonical local");
-                    if (!localVisibleFrom(local->scope, block.scope))
-                        error(identifier->location,
-                              "identifier references a local outside its lexical scope");
-                }
-            } else if (identifier->declaration.empty()) {
-                error(identifier->location,
-                      "identifier has no canonical LocalId or DeclarationRef");
-            }
+            scanGraphIdentifier(*identifier, block, false);
             return;
         }
         if (const auto* binary = dynamic_cast<const BinaryExpr*>(expression)) {
@@ -533,7 +547,11 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                   "sealed CFG contains a nested control-flow expression");
         } else if (const auto* move =
                        dynamic_cast<const MoveExpr*>(expression)) {
-            scanGraphExpr(move->operand.get(), block);
+            if (const auto* identifier = dynamic_cast<const IdentifierExpr*>(
+                    move->operand.get()))
+                scanGraphIdentifier(*identifier, block, true);
+            else
+                scanGraphExpr(move->operand.get(), block);
         } else if (const auto* borrow =
                        dynamic_cast<const BorrowExpr*>(expression)) {
             scanGraphExpr(borrow->operand.get(), block);
@@ -577,7 +595,8 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                           "let operation has no canonical LocalId");
                 } else {
                     ++localDefinitions[local->id.value];
-                    if (local->kind != LocalKind::Binding ||
+                    if ((local->kind != LocalKind::Binding &&
+                         local->kind != LocalKind::Synthetic) ||
                         local->scope != block.scope ||
                         local->name != declaration->name ||
                         local->type != declaration->type ||
@@ -589,6 +608,11 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                         error(declaration->location,
                               "let initializer type disagrees with its canonical local");
                 }
+                if (declaration->materializesIteratorRecipe ||
+                    declaration->materializedIteratorOwnsSource ||
+                    !declaration->materializedIteratorSourceType.empty())
+                    error(declaration->location,
+                          "sealed CFG retains materialized iterator recipe metadata");
                 verifyStmt(operation.get(), module, "CFG operation");
                 scanGraphExpr(declaration->initializer.get(), block);
             } else if (const auto* expression =
@@ -787,7 +811,8 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
     for (size_t index = 0; index < graph.locals.size(); ++index) {
         const auto kind = graph.locals[index].kind;
         const uint32_t expected =
-            (kind == LocalKind::Binding || kind == LocalKind::Pattern)
+            (kind == LocalKind::Binding || kind == LocalKind::Pattern ||
+             kind == LocalKind::Synthetic)
                 ? 1u : 0u;
         if (localDefinitions[index] != expected)
             error({}, "local " + std::to_string(index) + " has " +
@@ -795,9 +820,11 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                       " definitions; expected " + std::to_string(expected));
     }
 
-    // Cleanup validity is path-sensitive. Scope tables enumerate possible
-    // obligations, while this dataflow reconstructs which places are active
-    // after initialization, move, explicit free, and return transfer.
+    // Canonical ownership state is path-sensitive. Scope tables enumerate
+    // possible cleanup obligations; synthetic move-only locals append
+    // compile-time-only marker bits to the same dataflow, without adding a
+    // runtime token. The state reconstructs which places remain active after
+    // initialization, move, explicit free, and return transfer.
     using CleanupState = std::vector<uint8_t>;
     std::vector<std::vector<CleanupId>> cleanupsByLocal(graph.locals.size());
     for (const auto& cleanup : graph.cleanups) {
@@ -805,7 +832,15 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             cleanup.place.root.value < cleanupsByLocal.size())
             cleanupsByLocal[cleanup.place.root.value].push_back(cleanup.id);
     }
-    const auto activateLocal = [this, &graph, &cleanupsByLocal](
+    const size_t noMarker = graph.cleanups.size() + graph.locals.size();
+    std::vector<size_t> markerStateByLocal(graph.locals.size(), noMarker);
+    size_t stateSize = graph.cleanups.size();
+    for (const auto& local : graph.locals)
+        if (local.kind == LocalKind::Synthetic &&
+            luna::ownership::isMoveOnly(local.usage))
+            markerStateByLocal[local.id.value] = stateSize++;
+    const auto activateLocal = [this, &graph, &cleanupsByLocal,
+                                &markerStateByLocal, noMarker](
         LocalId local, CleanupState& state, const SourceLocation& location,
         const std::string& context) {
         if (local.empty() || local.value >= cleanupsByLocal.size()) return;
@@ -815,6 +850,13 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 error(location, context + " reinitializes active local '" +
                       graph.locals[local.value].name + "'");
             state[cleanup.value] = 1;
+        }
+        const size_t marker = markerStateByLocal[local.value];
+        if (marker != noMarker && marker < state.size()) {
+            if (state[marker])
+                error(location, context + " reinitializes active local '" +
+                      graph.locals[local.value].name + "'");
+            state[marker] = 1;
         }
     };
     std::function<std::optional<PlaceRef>(const Expr*)> placeOf;
@@ -888,12 +930,24 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                        value.projections.begin());
     };
     const auto consumePlace = [this, &graph, &cleanupsByLocal,
+                               &markerStateByLocal, noMarker,
                                &projectionPrefix](
         const PlaceRef& place, CleanupState& state,
         const SourceLocation& location, const std::string& context) {
         if (place.root.empty() || place.root.value >= cleanupsByLocal.size())
             return;
         bool consumed = false;
+        const size_t marker = markerStateByLocal[place.root.value];
+        if (marker != noMarker && place.projections.empty()) {
+            if (marker >= state.size() || !state[marker])
+                error(location, context +
+                      " consumes inactive synthetic affine local '" +
+                      graph.locals[place.root.value].name + "'");
+            else {
+                state[marker] = 0;
+                consumed = true;
+            }
+        }
         for (const auto cleanupId : cleanupsByLocal[place.root.value]) {
             if (cleanupId.value >= state.size() || !state[cleanupId.value])
                 continue;
@@ -1021,7 +1075,7 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
 
     if (entry) {
         std::vector<std::optional<CleanupState>> incoming(graph.blocks.size());
-        CleanupState entryState(graph.cleanups.size(), 0);
+        CleanupState entryState(stateSize, 0);
         for (const auto& local : graph.locals) {
             if (local.kind == LocalKind::Parameter) {
                 if (local.scope != graph.rootScope)
@@ -1031,16 +1085,24 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         }
         incoming[graph.entry.value] = entryState;
         std::vector<BlockId> worklist{graph.entry};
-        const auto propagate = [this, &incoming, &worklist](
-            BlockId target, const CleanupState& state,
+        const auto propagate = [this, &graph, &markerStateByLocal, noMarker,
+                                &localVisibleFrom, &incoming, &worklist](
+            BlockId target, CleanupState state,
             const SourceLocation& location) {
-            if (target.empty() || target.value >= incoming.size()) return;
+            const auto* targetBlock = graph.findBlock(target);
+            if (!targetBlock || target.value >= incoming.size()) return;
+            for (const auto& local : graph.locals) {
+                const size_t marker = markerStateByLocal[local.id.value];
+                if (marker != noMarker && marker < state.size() &&
+                    !localVisibleFrom(local.scope, targetBlock->scope))
+                    state[marker] = 0;
+            }
             if (!incoming[target.value]) {
-                incoming[target.value] = state;
+                incoming[target.value] = std::move(state);
                 worklist.push_back(target);
             } else if (*incoming[target.value] != state) {
                 error(location,
-                      "CFG predecessors disagree on active cleanup state");
+                      "CFG predecessors disagree on active ownership state");
             }
         };
         while (!worklist.empty()) {

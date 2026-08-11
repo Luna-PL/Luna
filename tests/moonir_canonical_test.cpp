@@ -545,12 +545,180 @@ int main() {
         recipeCfg->blocks[8].terminator.primary.target != moon::BlockId{2})
         return fail("range/take recipe did not expand to canonical CFG operations");
 
+    const auto makeMaterializedRangeProgram = [&](size_t loopCount) {
+        auto structured = std::make_unique<moon::BlockStmt>();
+        auto binding = std::make_unique<moon::LetStmt>();
+        binding->name = "pending";
+        binding->type = rangeId;
+        binding->usage = luna::ownership::Usage::Affine;
+        binding->materializesIteratorRecipe = true;
+        auto source = std::make_unique<moon::CallExpr>();
+        source->iteratorOp = IteratorOp::Range;
+        source->iteratorInputType = i32Id;
+        source->iteratorOutputType = i32Id;
+        source->type = rangeId;
+        auto sourceCallee = std::make_unique<moon::IdentifierExpr>();
+        sourceCallee->name = "range";
+        source->callee = std::move(sourceCallee);
+        auto start = std::make_unique<moon::IntLiteralExpr>();
+        start->value = 1;
+        start->type = i32Id;
+        auto end = std::make_unique<moon::IntLiteralExpr>();
+        end->value = 5;
+        end->type = i32Id;
+        source->args.push_back(std::move(start));
+        source->args.push_back(std::move(end));
+        auto take = std::make_unique<moon::CallExpr>();
+        take->iteratorOp = IteratorOp::Take;
+        take->iteratorInputType = i32Id;
+        take->iteratorOutputType = i32Id;
+        take->type = rangeId;
+        auto takeMember = std::make_unique<moon::FieldAccessExpr>();
+        takeMember->field = "take";
+        takeMember->object = std::move(source);
+        take->callee = std::move(takeMember);
+        auto count = std::make_unique<moon::IntLiteralExpr>();
+        count->value = 2;
+        count->type = i32Id;
+        take->args.push_back(std::move(count));
+        binding->initializer = std::move(take);
+        structured->stmts.push_back(std::move(binding));
+        for (size_t loopIndex = 0; loopIndex < loopCount; ++loopIndex) {
+            auto loop = std::make_unique<moon::ForStmt>();
+            loop->varName = "materializedValue" +
+                std::to_string(loopIndex);
+            loop->bindingUsage = luna::ownership::Usage::Copy;
+            loop->elementType = i32Id;
+            auto pending = std::make_unique<moon::IdentifierExpr>();
+            pending->name = "pending";
+            pending->type = rangeId;
+            loop->iterable = std::move(pending);
+            loop->body = std::make_unique<moon::BlockStmt>();
+            structured->stmts.push_back(std::move(loop));
+        }
+        return structured;
+    };
+    auto materializedCfg = cfgBuilder.build(
+        makeMaterializedRangeProgram(1), {},
+        moon::RegionKind::Function, module);
+    auto* materializedCursor = materializedCfg &&
+            !materializedCfg->blocks.empty() &&
+            !materializedCfg->blocks[0].operations.empty()
+        ? dynamic_cast<moon::LetStmt*>(
+              materializedCfg->blocks[0].operations[0].get())
+        : nullptr;
+    auto* transferredCursor = materializedCfg &&
+            materializedCfg->blocks.size() > 1 &&
+            !materializedCfg->blocks[1].operations.empty()
+        ? dynamic_cast<moon::LetStmt*>(
+              materializedCfg->blocks[1].operations[0].get())
+        : nullptr;
+    auto* cursorMove = transferredCursor
+        ? dynamic_cast<moon::MoveExpr*>(
+              transferredCursor->initializer.get())
+        : nullptr;
+    auto* movedCursor = cursorMove
+        ? dynamic_cast<moon::IdentifierExpr*>(cursorMove->operand.get())
+        : nullptr;
+    bool retainedIteratorLocal = false;
+    if (materializedCfg)
+        for (const auto& local : materializedCfg->locals) {
+            const auto* type = module.findType(local.type);
+            retainedIteratorLocal = retainedIteratorLocal ||
+                (type && type->kind == TypeKind::Iterator);
+        }
+    if (!materializedCfg || !cfgVerifier.verify(*materializedCfg, module) ||
+        materializedCfg->blocks.size() != 9 ||
+        materializedCfg->locals.size() != 6 ||
+        materializedCfg->blocks[0].operations.size() != 3 ||
+        materializedCfg->blocks[1].operations.size() != 2 ||
+        !materializedCursor ||
+        materializedCursor->usage != luna::ownership::Usage::Affine ||
+        materializedCfg->locals[materializedCursor->local.value].kind !=
+            moon::LocalKind::Synthetic ||
+        !cursorMove || !movedCursor ||
+        movedCursor->local != materializedCursor->local ||
+        retainedIteratorLocal)
+        return fail("materialized range did not erase to affine ordinary CFG state");
+
+    auto savedCursorTransfer = std::move(transferredCursor->initializer);
+    auto invalidCursorRead = std::make_unique<moon::IdentifierExpr>();
+    invalidCursorRead->name = movedCursor->name;
+    invalidCursorRead->local = movedCursor->local;
+    invalidCursorRead->type = movedCursor->type;
+    transferredCursor->initializer = std::move(invalidCursorRead);
+    if (cfgVerifier.verify(*materializedCfg, module))
+        return fail("CFG verifier accepted a copied materialized cursor");
+    transferredCursor->initializer = std::move(savedCursorTransfer);
+    if (!cfgVerifier.verify(*materializedCfg, module))
+        return fail("restored materialized range CFG did not verify");
+
+    auto reusedMaterializedCfg = cfgBuilder.build(
+        makeMaterializedRangeProgram(2), {},
+        moon::RegionKind::Function, module);
+    if (!reusedMaterializedCfg ||
+        cfgVerifier.verify(*reusedMaterializedCfg, module))
+        return fail("CFG verifier accepted repeated materialized recipe consumption");
+
     const auto* shortIteratorType = module.findType(shortId);
     const auto* sharedIteratorType = module.findType(sharedId);
     if (!shortIteratorType || shortIteratorType->typeArgumentIds.empty() ||
         !sharedIteratorType || sharedIteratorType->innerTypeId.empty())
         return fail("array iterator fixtures lost their frozen type witnesses");
     const auto arrayId = shortIteratorType->typeArgumentIds.front();
+    moon::Param arrayParameter;
+    arrayParameter.name = "values";
+    arrayParameter.type = arrayId;
+
+    auto snapshotStructured = std::make_unique<moon::BlockStmt>();
+    auto snapshotBinding = std::make_unique<moon::LetStmt>();
+    snapshotBinding->name = "snapshot";
+    snapshotBinding->type = shortId;
+    snapshotBinding->usage = luna::ownership::Usage::Affine;
+    snapshotBinding->materializesIteratorRecipe = true;
+    auto into = std::make_unique<moon::CallExpr>();
+    into->iteratorOp = IteratorOp::IntoIter;
+    into->iteratorInputType = i32Id;
+    into->iteratorOutputType = i32Id;
+    into->type = shortId;
+    auto intoMember = std::make_unique<moon::FieldAccessExpr>();
+    intoMember->field = "into_iter";
+    auto snapshotSource = std::make_unique<moon::IdentifierExpr>();
+    snapshotSource->name = "values";
+    snapshotSource->type = arrayId;
+    intoMember->object = std::move(snapshotSource);
+    into->callee = std::move(intoMember);
+    snapshotBinding->initializer = std::move(into);
+    snapshotStructured->stmts.push_back(std::move(snapshotBinding));
+    auto snapshotLoop = std::make_unique<moon::ForStmt>();
+    snapshotLoop->varName = "snapshotValue";
+    snapshotLoop->elementType = i32Id;
+    snapshotLoop->bindingUsage = luna::ownership::Usage::Copy;
+    auto snapshotRecipe = std::make_unique<moon::IdentifierExpr>();
+    snapshotRecipe->name = "snapshot";
+    snapshotRecipe->type = shortId;
+    snapshotLoop->iterable = std::move(snapshotRecipe);
+    snapshotLoop->body = std::make_unique<moon::BlockStmt>();
+    snapshotStructured->stmts.push_back(std::move(snapshotLoop));
+    auto snapshotCfg = cfgBuilder.build(
+        std::move(snapshotStructured), {arrayParameter},
+        moon::RegionKind::Function, module);
+    auto* snapshotSourceBinding = snapshotCfg &&
+            !snapshotCfg->blocks.empty() &&
+            !snapshotCfg->blocks[0].operations.empty()
+        ? dynamic_cast<moon::LetStmt*>(
+              snapshotCfg->blocks[0].operations[0].get())
+        : nullptr;
+    auto* snapshotSourceRead = snapshotSourceBinding
+        ? dynamic_cast<moon::IdentifierExpr*>(
+              snapshotSourceBinding->initializer.get())
+        : nullptr;
+    if (!snapshotCfg || !cfgVerifier.verify(*snapshotCfg, module) ||
+        snapshotCfg->locals.size() != 7 || !snapshotSourceBinding ||
+        snapshotSourceBinding->type != arrayId || !snapshotSourceRead ||
+        snapshotSourceRead->local != moon::LocalId{0})
+        return fail("materialized Copy array did not snapshot its source at binding");
+
     auto sharedStructured = std::make_unique<moon::BlockStmt>();
     auto sharedLoop = std::make_unique<moon::ForStmt>();
     sharedLoop->varName = "element";
@@ -571,9 +739,6 @@ int main() {
     sharedLoop->iterable = std::move(iterCall);
     sharedLoop->body = std::make_unique<moon::BlockStmt>();
     sharedStructured->stmts.push_back(std::move(sharedLoop));
-    moon::Param arrayParameter;
-    arrayParameter.name = "values";
-    arrayParameter.type = arrayId;
     auto sharedCfg = cfgBuilder.build(
         std::move(sharedStructured), {arrayParameter},
         moon::RegionKind::Function, module);
