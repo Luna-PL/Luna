@@ -650,14 +650,20 @@ bindings, and path-sensitive cleanup state across edges. A construction-only bui
 transient structured body and produces this CFG for ordinary statements, lexical blocks,
 `if`/`else`, `while`, `match`, and protocol-backed `for`. Direct `Iterator` and implicit
 `IntoIterator` both become an ordinary call plus `Switch`/backedge graph; hidden converted state is
-initialized once and cleaned on the `None` exit edge. It is deliberately not attached beside the
-old body: a sealed executable must never acquire two execution meanings.
+initialized once and cleaned on the `None` exit edge. Compiler-fused range and Copy-array recipes,
+including shared/mutable/consuming source modes and `take`, expand into ordinary source/index/limit/
+counter locals, indexed item construction, comparisons, assignments, branches, and backedges. No
+iterator terminator or opaque recipe operation is added, and the verifier rejects an unexpanded
+recipe in a sealed CFG. The builder is deliberately not attached beside the old body: a sealed
+executable must never acquire two execution meanings.
 
-Item 10 is not complete as a whole. The next construction work completes compiler-fused iterator
-recipe `for`, then normalizes control-flow expressions, lambda, slot, and fragment paths. It will
-then atomically replace structured executable bodies and move the backend to the same CFG. Only
-after structured execution is deleted and the full verifier/codegen regression gate passes does
-the item-level gate pass; serializer/parser work remains item 11.
+Item 10 is not complete as a whole. The next construction work gives lambda bodies canonical CFGs,
+then uses them to expand `map`/`filter`; slice-length projection, materialized recipes, and
+move-only array element-initialization/cleanup state remain explicit following boundaries. It then
+normalizes the remaining control-flow expressions, slot, and fragment paths, atomically replaces
+structured executable bodies, and moves the backend to the same CFG. Only after structured
+execution is deleted and the full verifier/codegen regression gate passes does the item-level gate
+pass; serializer/parser work remains item 11.
 
 | Order | Priority | Work | Completion gate |
 |---:|---|---|---|

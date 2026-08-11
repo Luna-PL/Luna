@@ -53,11 +53,17 @@ int main() {
         TyI32, IteratorMode::Consuming, shortArray);
     auto longIterator = Type::makeIterator(
         TyI32, IteratorMode::Consuming, longArray);
+    auto rangeIterator = Type::makeIterator(
+        TyI32, IteratorMode::Range);
+    auto sharedIterator = Type::makeIterator(
+        Type::makeReference(TyI32), IteratorMode::Shared, shortArray);
 
     moon::Module module;
     module.name = "canonical.test";
     const auto shortId = module.registerType(shortIterator);
     const auto longId = module.registerType(longIterator);
+    const auto rangeId = module.registerType(rangeIterator);
+    const auto sharedId = module.registerType(sharedIterator);
     if (shortId == longId)
         return fail("backend-significant iterator sources collapsed to one TypeId");
 
@@ -450,6 +456,105 @@ int main() {
     if (cfgVerifier.verify(*intoCfg, protocolModule))
         return fail("CFG verifier accepted a leaked IntoIterator state");
 
+    auto recipeStructured = std::make_unique<moon::BlockStmt>();
+    auto recipeLoop = std::make_unique<moon::ForStmt>();
+    recipeLoop->varName = "value";
+    recipeLoop->bindingUsage = luna::ownership::Usage::Copy;
+    recipeLoop->elementType = i32Id;
+    auto rangeCall = std::make_unique<moon::CallExpr>();
+    rangeCall->iteratorOp = IteratorOp::Range;
+    rangeCall->iteratorInputType = i32Id;
+    rangeCall->iteratorOutputType = i32Id;
+    rangeCall->type = rangeId;
+    auto rangeCallee = std::make_unique<moon::IdentifierExpr>();
+    rangeCallee->name = "range";
+    rangeCall->callee = std::move(rangeCallee);
+    auto rangeStart = std::make_unique<moon::IntLiteralExpr>();
+    rangeStart->value = 0;
+    rangeStart->type = i32Id;
+    auto rangeEnd = std::make_unique<moon::IntLiteralExpr>();
+    rangeEnd->value = 4;
+    rangeEnd->type = i32Id;
+    rangeCall->args.push_back(std::move(rangeStart));
+    rangeCall->args.push_back(std::move(rangeEnd));
+    auto takeCall = std::make_unique<moon::CallExpr>();
+    takeCall->iteratorOp = IteratorOp::Take;
+    takeCall->iteratorInputType = i32Id;
+    takeCall->iteratorOutputType = i32Id;
+    takeCall->type = rangeId;
+    auto takeMember = std::make_unique<moon::FieldAccessExpr>();
+    takeMember->field = "take";
+    takeMember->object = std::move(rangeCall);
+    takeCall->callee = std::move(takeMember);
+    auto takeCount = std::make_unique<moon::IntLiteralExpr>();
+    takeCount->value = 2;
+    takeCount->type = i32Id;
+    takeCall->args.push_back(std::move(takeCount));
+    recipeLoop->iterable = std::move(takeCall);
+    recipeLoop->body = std::make_unique<moon::BlockStmt>();
+    auto recipeUse = std::make_unique<moon::ExprStmt>();
+    auto recipeIdentifier = std::make_unique<moon::IdentifierExpr>();
+    recipeIdentifier->name = "value";
+    recipeIdentifier->type = i32Id;
+    recipeUse->expr = std::move(recipeIdentifier);
+    recipeLoop->body->stmts.push_back(std::move(recipeUse));
+    recipeStructured->stmts.push_back(std::move(recipeLoop));
+    auto recipeCfg = cfgBuilder.build(
+        std::move(recipeStructured), {},
+        moon::RegionKind::Function, module);
+    if (!recipeCfg || !cfgVerifier.verify(*recipeCfg, module) ||
+        recipeCfg->blocks.size() != 9 || recipeCfg->locals.size() != 4 ||
+        recipeCfg->blocks[1].operations.size() != 3 ||
+        recipeCfg->blocks[2].terminator.kind !=
+            moon::TerminatorKind::Branch ||
+        recipeCfg->blocks[5].terminator.kind !=
+            moon::TerminatorKind::Branch ||
+        recipeCfg->blocks[8].terminator.primary.target != moon::BlockId{2})
+        return fail("range/take recipe did not expand to canonical CFG operations");
+
+    const auto* shortIteratorType = module.findType(shortId);
+    const auto* sharedIteratorType = module.findType(sharedId);
+    if (!shortIteratorType || shortIteratorType->typeArgumentIds.empty() ||
+        !sharedIteratorType || sharedIteratorType->innerTypeId.empty())
+        return fail("array iterator fixtures lost their frozen type witnesses");
+    const auto arrayId = shortIteratorType->typeArgumentIds.front();
+    auto sharedStructured = std::make_unique<moon::BlockStmt>();
+    auto sharedLoop = std::make_unique<moon::ForStmt>();
+    sharedLoop->varName = "element";
+    sharedLoop->bindingUsage = luna::ownership::Usage::Copy;
+    sharedLoop->elementType = sharedIteratorType->innerTypeId;
+    auto iterCall = std::make_unique<moon::CallExpr>();
+    iterCall->iteratorOp = IteratorOp::Iter;
+    iterCall->iteratorInputType = i32Id;
+    iterCall->iteratorOutputType = sharedIteratorType->innerTypeId;
+    iterCall->type = sharedId;
+    auto iterMember = std::make_unique<moon::FieldAccessExpr>();
+    iterMember->field = "iter";
+    auto arrayIdentifier = std::make_unique<moon::IdentifierExpr>();
+    arrayIdentifier->name = "values";
+    arrayIdentifier->type = arrayId;
+    iterMember->object = std::move(arrayIdentifier);
+    iterCall->callee = std::move(iterMember);
+    sharedLoop->iterable = std::move(iterCall);
+    sharedLoop->body = std::make_unique<moon::BlockStmt>();
+    sharedStructured->stmts.push_back(std::move(sharedLoop));
+    moon::Param arrayParameter;
+    arrayParameter.name = "values";
+    arrayParameter.type = arrayId;
+    auto sharedCfg = cfgBuilder.build(
+        std::move(sharedStructured), {arrayParameter},
+        moon::RegionKind::Function, module);
+    auto* sharedItem = sharedCfg && sharedCfg->blocks.size() > 3 &&
+            !sharedCfg->blocks[3].operations.empty()
+        ? dynamic_cast<moon::LetStmt*>(
+              sharedCfg->blocks[3].operations.front().get())
+        : nullptr;
+    if (!sharedCfg || !cfgVerifier.verify(*sharedCfg, module) ||
+        sharedCfg->blocks.size() != 6 || sharedCfg->locals.size() != 4 ||
+        !sharedItem ||
+        !dynamic_cast<moon::BorrowExpr*>(sharedItem->initializer.get()))
+        return fail("shared array recipe lost its canonical indexed borrow");
+
     // The sealed payload must not observe later mutations of the frontend
     // object from which it was frozen.
     product->fields.clear();
@@ -476,6 +581,8 @@ int main() {
     reverse.name = module.name;
     reverse.registerType(longIterator);
     reverse.registerType(shortIterator);
+    reverse.registerType(sharedIterator);
+    reverse.registerType(rangeIterator);
     reverse.registerType(Type::makeStruct(
         "Snapshot", {{"value", TyI32}}, "canonical.test::Snapshot"));
     reverse.registerType(TyString);

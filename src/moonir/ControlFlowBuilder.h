@@ -36,6 +36,23 @@ private:
         std::optional<OpenBlock> exit;
     };
 
+    struct IteratorRecipeStep {
+        IteratorOp op = IteratorOp::None;
+        std::unique_ptr<Expr> argument;
+        TypeRef inputType;
+        TypeRef outputType;
+    };
+
+    struct IteratorRecipePlan {
+        IteratorMode mode = IteratorMode::Copy;
+        std::unique_ptr<Expr> source;
+        TypeRef sourceType;
+        std::unique_ptr<Expr> rangeStart;
+        std::unique_ptr<Expr> rangeEnd;
+        TypeRef itemType;
+        std::vector<IteratorRecipeStep> steps;
+    };
+
     RegionId addRegion(RegionId parent, RegionKind kind,
                        const SourceLocation& location);
     ScopeId addScope(ScopeId parent, RegionId region,
@@ -67,11 +84,18 @@ private:
     std::optional<OpenBlock> lowerFor(
         std::unique_ptr<ForStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
+    std::optional<OpenBlock> lowerIteratorRecipeFor(
+        std::unique_ptr<ForStmt> statement,
+        OpenBlock current, RegionId region, ScopeId scope);
     std::optional<OpenBlock> lowerMatch(
         std::unique_ptr<MatchStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
 
     bool bindExpr(Expr* expression);
+    bool parseIteratorRecipe(
+        std::unique_ptr<Expr> expression,
+        IteratorRecipePlan& plan,
+        const SourceLocation& location);
     LocalId lookupLocal(const std::string& name) const;
     void connectJump(const OpenBlock& source, BlockId target);
     std::vector<CleanupId> lowerCleanupObligations(
@@ -88,6 +112,7 @@ private:
     std::vector<std::unordered_map<std::string, LocalId>> mBindings;
     std::unordered_map<uint32_t, CleanupId> mCleanupByLocal;
     std::vector<std::string> mErrors;
+    bool mBindingIteratorRecipe = false;
 };
 
 } // namespace moon

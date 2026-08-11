@@ -578,13 +578,18 @@ terminator 形状、词法可见性、local 定义、switch binding，以及跨�
 状态。construction-only builder 会消费临时 structured body，并为普通语句、词法块、
 `if`/`else`、`while`、`match` 和 protocol-backed `for` 产生该 CFG。直接 `Iterator`
 与隐式 `IntoIterator` 都会成为普通 call 加 `Switch`/backedge；转换所得 hidden state
-只初始化一次，并在 `None` 退出边清理。builder 不会与旧 body 并列挂接：sealed executable
-在任何阶段都不能同时具有两套执行含义。
+只初始化一次，并在 `None` 退出边清理。compiler-fused range 和 Copy-array recipe（包括
+shared/mutable/consuming source mode 与 `take`）会展开为普通 source/index/limit/counter
+local、索引取 item、比较、赋值、branch 和 backedge；没有新增 iterator terminator 或不透明
+recipe operation，verifier 会拒绝 sealed CFG 中未展开的 recipe。builder 不会与旧 body
+并列挂接：sealed executable 在任何阶段都不能同时具有两套执行含义。
 
-第 10 项尚未整体完成。下一步构造工作先补全 compiler-fused iterator recipe `for`，
-再规范化控制流表达式、lambda、slot 和 fragment 路径；之后原子替换 structured
-executable body，并让 backend 消费同一 CFG。只有删除 structured 执行路径且完整
-verifier/codegen 回归门通过后，本项才算完成；serializer/parser 仍属于第 11 项。
+第 10 项尚未整体完成。下一步先让 lambda body 拥有 canonical CFG，再据此展开
+`map`/`filter`；slice-length projection、materialized recipe 及 move-only array 的逐元素
+初始化/cleanup 状态仍是明确的后续边界。随后规范化其余控制流表达式、slot 和 fragment
+路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
+structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
+serializer/parser 仍属于第 11 项。
 
 | 顺序 | 优先级 | 工作 | 完成门 |
 |---:|---|---|---|

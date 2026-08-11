@@ -652,6 +652,13 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         result = std::move(value);
     } else if (auto* loop = dynamic_cast<const ::ForStmt*>(statement)) {
         auto value = std::make_unique<moon::ForStmt>();
+        // Canonical compiler-recipe loops synthesize an i32 cursor and bool
+        // branch condition after declaration references are resolved. Freeze
+        // those pay-for-use compiler types before the module type table seals.
+        if (loop->protocolNextSymbol.empty()) {
+            (void)typeRef(TyI32);
+            (void)typeRef(TyBool);
+        }
         value->varName = loop->varName;
         value->bindingUsage = loop->bindingUsage;
         value->iterable = lowerExpr(loop->iterable.get());

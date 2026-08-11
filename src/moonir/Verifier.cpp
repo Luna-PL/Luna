@@ -448,6 +448,9 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             scanGraphExpr(unary->operand.get(), block);
         } else if (const auto* call =
                        dynamic_cast<const CallExpr*>(expression)) {
+            if (call->iteratorOp != IteratorOp::None)
+                error(call->location,
+                      "sealed CFG contains an unexpanded iterator recipe");
             scanGraphExpr(call->callee.get(), block);
             for (const auto& argument : call->args)
                 scanGraphExpr(argument.get(), block);
