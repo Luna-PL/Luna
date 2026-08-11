@@ -706,13 +706,21 @@ an initializer or return value, and as the sole argument of a direct ordinary ca
 accepted as an expression statement. Wider expression sibling hoisting is deliberately deferred so
 evaluation order is never guessed.
 
-Item 10 is not complete as a whole. Non-materialized terminals, `collect` builder ownership state,
-affine fold accumulators, general expression sibling hoisting, capturing closure environments, and
-non-Copy item/callable per-element ownership state remain explicit following boundaries. `collect`
-specifically awaits ordinary CFG representation of the affine FromIterator builder, mutable push
-borrow, cleanup path, and consuming finish transfer; no runtime iterator object is introduced as a
-shortcut. The remaining work then normalizes other control-flow expressions, slot, and fragment paths,
-atomically replaces
+The materialized `collect` subphase is now complete too. Construction first validates the three
+frozen `FromIterator` declaration signatures, then lowers `begin()` to one synthetic affine builder
+local. Every loop-body `push` receives an explicit mutable borrow of that same local, and every
+normal recipe exit converges before `finish(move builder)`. The affine finish result is held by a
+second synthetic local and explicitly moved to the source-level initializer, return, or direct-call
+consumer. Existing cleanup dataflow therefore activates the builder/result obligations exactly
+once and deactivates them on each transfer, without a runtime iterator object, ownership flag, or
+new ABI state. The independent verifier now also checks declaration-backed call signatures,
+including an explicit borrow argument's relation, while synthetic ownership dataflow requires the
+finish transfer; forged shared builder borrows or copied finish state are rejected.
+
+Item 10 is not complete as a whole. Non-materialized terminals, affine fold accumulators, general
+expression sibling hoisting, capturing closure environments, and non-Copy item/callable per-element
+ownership state remain explicit following boundaries. The remaining work then normalizes other
+control-flow expressions, slot, and fragment paths, atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured
 execution is deleted and the full verifier/codegen regression gate passes does the item-level gate
 pass; serializer/parser work remains item 11.

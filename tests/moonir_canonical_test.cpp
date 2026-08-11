@@ -367,11 +367,43 @@ int main() {
           luna::ownership::Usage::Copy}},
         {luna::ownership::Relation::Owned,
          luna::ownership::Usage::Affine});
+    auto collected = Type::makeStruct(
+        "Collected", {{"total", TyI32}},
+        "canonical.iterator::Collected");
+    auto collectBuilderReceiver = Type::makeReference(
+        iteratorState, true);
+    auto collectBeginType = Type::makeFunction(
+        {}, iteratorState, {},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Affine});
+    auto collectPushType = Type::makeFunction(
+        {collectBuilderReceiver, TyI32}, TyUnit,
+        {{luna::ownership::Relation::MutableBorrow,
+          luna::ownership::Usage::Copy},
+         {luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Affine}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Copy});
+    auto collectFinishType = Type::makeFunction(
+        {iteratorState}, collected,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Affine}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Affine});
     const auto iteratorStateId = protocolModule.registerType(iteratorState);
     const auto iteratorOptionId = protocolModule.registerType(iteratorOption);
     const auto iteratorNextTypeId = protocolModule.registerType(iteratorNextType);
     const auto intoIteratorTypeId = protocolModule.registerType(intoIteratorType);
     const auto protocolI32Id = protocolModule.registerType(TyI32);
+    const auto protocolRangeId = protocolModule.registerType(rangeIterator);
+    const auto collectedId = protocolModule.registerType(collected);
+    const auto collectBeginTypeId = protocolModule.registerType(
+        collectBeginType);
+    const auto collectPushTypeId = protocolModule.registerType(
+        collectPushType);
+    const auto collectFinishTypeId = protocolModule.registerType(
+        collectFinishType);
+    protocolModule.registerType(TyBool);
     moon::DeclarationRecord nextRecord;
     nextRecord.id = "canonical.iterator::fn::next";
     nextRecord.familyId = nextRecord.id;
@@ -392,6 +424,21 @@ int main() {
     intoRecord.type = intoIteratorTypeId;
     intoRecord.sysmeta = intoIteratorType->sysmeta;
     protocolModule.declarationTable.push_back(std::move(intoRecord));
+    const auto addCollectDeclaration = [&](
+        const std::string& name, const moon::TypeRef& type) {
+        moon::DeclarationRecord record;
+        record.id = "canonical.iterator::fn::" + name;
+        record.familyId = record.id;
+        record.symbolId = luna::identity::symbolIdFromCanonical(record.id);
+        record.sourceName = name;
+        record.linkageName = "canonical_iterator_" + name;
+        record.kind = moon::DeclarationKind::Function;
+        record.type = type;
+        protocolModule.declarationTable.push_back(std::move(record));
+    };
+    addCollectDeclaration("collect_begin", collectBeginTypeId);
+    addCollectDeclaration("collect_push", collectPushTypeId);
+    addCollectDeclaration("collect_finish", collectFinishTypeId);
     protocolModule.sealTypeTable();
     const auto* sealedNext = protocolModule.findDeclarationById(
         "canonical.iterator::fn::next");
@@ -401,6 +448,15 @@ int main() {
         "canonical.iterator::fn::into");
     if (!sealedInto)
         return fail("IntoIterator fixture lost its declaration row");
+    const auto* sealedCollectBegin = protocolModule.findDeclarationById(
+        "canonical.iterator::fn::collect_begin");
+    const auto* sealedCollectPush = protocolModule.findDeclarationById(
+        "canonical.iterator::fn::collect_push");
+    const auto* sealedCollectFinish = protocolModule.findDeclarationById(
+        "canonical.iterator::fn::collect_finish");
+    if (!sealedCollectBegin || !sealedCollectPush || !sealedCollectFinish ||
+        protocolRangeId != rangeId || protocolI32Id != i32Id)
+        return fail("collect protocol fixture lost its frozen witness rows");
 
     auto protocolStructured = std::make_unique<moon::BlockStmt>();
     auto protocolLoop = std::make_unique<moon::ForStmt>();
@@ -864,24 +920,142 @@ int main() {
         retainedForEachTerminal)
         return fail("materialized for_each did not normalize to loop body calls");
 
-    auto collectBoundary = std::make_unique<moon::BlockStmt>();
-    collectBoundary->stmts.push_back(
+    auto collectStructured = std::make_unique<moon::BlockStmt>();
+    collectStructured->stmts.push_back(
         makeMaterializedRangeBinding("collectPending", false));
-    auto collectUse = std::make_unique<moon::ExprStmt>();
-    collectUse->expr = makeTerminal(
-        "collectPending", IteratorOp::Collect, productId, productId);
-    collectBoundary->stmts.push_back(std::move(collectUse));
-    if (cfgBuilder.build(
-            std::move(collectBoundary), {},
-            moon::RegionKind::Function, module))
-        return fail("materialized collect crossed its builder-state boundary");
-    bool reportedCollectBoundary = false;
-    for (const auto& message : cfgBuilder.errors())
-        reportedCollectBoundary = reportedCollectBoundary ||
-            message.find("collect awaits canonical builder ownership state") !=
-                std::string::npos;
-    if (!reportedCollectBoundary)
-        return fail("materialized collect boundary was not explicit");
+    auto collectBinding = std::make_unique<moon::LetStmt>();
+    collectBinding->name = "collected";
+    collectBinding->type = collectedId;
+    collectBinding->usage = luna::ownership::Usage::Affine;
+    auto collectTerminal = makeTerminal(
+        "collectPending", IteratorOp::Collect,
+        collectedId, collectedId);
+    collectTerminal->returnUsage = luna::ownership::Usage::Affine;
+    collectTerminal->iteratorCollectTargetType = collectedId;
+    collectTerminal->iteratorCollectBuilderType = iteratorStateId;
+    collectTerminal->iteratorCollectBegin = {
+        sealedCollectBegin->symbolId, sealedCollectBegin->contractId};
+    collectTerminal->iteratorCollectPush = {
+        sealedCollectPush->symbolId, sealedCollectPush->contractId};
+    collectTerminal->iteratorCollectFinish = {
+        sealedCollectFinish->symbolId, sealedCollectFinish->contractId};
+    collectBinding->initializer = std::move(collectTerminal);
+    collectStructured->stmts.push_back(std::move(collectBinding));
+    auto collectCleanup = std::make_unique<moon::FreeStmt>();
+    collectCleanup->isImplicit = true;
+    collectCleanup->action = cleanupActionForType(collected);
+    auto collectedIdentifier = std::make_unique<moon::IdentifierExpr>();
+    collectedIdentifier->name = "collected";
+    collectedIdentifier->type = collectedId;
+    collectCleanup->operand = std::move(collectedIdentifier);
+    collectStructured->stmts.push_back(std::move(collectCleanup));
+    auto collectCfg = cfgBuilder.build(
+        std::move(collectStructured), {},
+        moon::RegionKind::Function, protocolModule);
+    moon::LocalId collectBuilderLocal;
+    moon::LocalId collectResultLocal;
+    moon::CallExpr* loweredPush = nullptr;
+    moon::CallExpr* loweredFinish = nullptr;
+    moon::LetStmt* loweredUserCollect = nullptr;
+    bool retainedCollectTerminal = false;
+    if (collectCfg)
+        for (auto& block : collectCfg->blocks)
+            for (auto& operation : block.operations) {
+                if (auto* declaration = dynamic_cast<moon::LetStmt*>(
+                        operation.get())) {
+                    if (declaration->name.rfind(
+                            "$terminal.collect.builder.", 0) == 0)
+                        collectBuilderLocal = declaration->local;
+                    else if (declaration->name.rfind(
+                                 "$terminal.collect.result.", 0) == 0) {
+                        collectResultLocal = declaration->local;
+                        loweredFinish = dynamic_cast<moon::CallExpr*>(
+                            declaration->initializer.get());
+                    } else if (declaration->name == "collected") {
+                        loweredUserCollect = declaration;
+                    }
+                } else if (auto* expression = dynamic_cast<moon::ExprStmt*>(
+                               operation.get())) {
+                    auto* call = dynamic_cast<moon::CallExpr*>(
+                        expression->expr.get());
+                    retainedCollectTerminal = retainedCollectTerminal ||
+                        (call && call->iteratorOp == IteratorOp::Collect);
+                    if (call && call->calleeRef ==
+                            moon::DeclarationRef{
+                                sealedCollectPush->symbolId,
+                                sealedCollectPush->contractId})
+                        loweredPush = call;
+                }
+            }
+    auto* builderBorrow = loweredPush && loweredPush->args.size() == 2
+        ? dynamic_cast<moon::BorrowExpr*>(loweredPush->args[0].get())
+        : nullptr;
+    auto* borrowedBuilder = builderBorrow
+        ? dynamic_cast<moon::IdentifierExpr*>(
+              builderBorrow->operand.get())
+        : nullptr;
+    auto* finishMove = loweredFinish && loweredFinish->args.size() == 1
+        ? dynamic_cast<moon::MoveExpr*>(loweredFinish->args[0].get())
+        : nullptr;
+    auto* finishedBuilder = finishMove
+        ? dynamic_cast<moon::IdentifierExpr*>(finishMove->operand.get())
+        : nullptr;
+    auto* resultMove = loweredUserCollect
+        ? dynamic_cast<moon::MoveExpr*>(
+              loweredUserCollect->initializer.get())
+        : nullptr;
+    auto* transferredResult = resultMove
+        ? dynamic_cast<moon::IdentifierExpr*>(resultMove->operand.get())
+        : nullptr;
+    if (!collectCfg || !cfgVerifier.verify(*collectCfg, protocolModule) ||
+        collectBuilderLocal.empty() || collectResultLocal.empty() ||
+        !builderBorrow || !builderBorrow->isMutable || !borrowedBuilder ||
+        borrowedBuilder->local != collectBuilderLocal ||
+        !finishMove || !finishedBuilder ||
+        finishedBuilder->local != collectBuilderLocal ||
+        !resultMove || !transferredResult ||
+        transferredResult->local != collectResultLocal ||
+        retainedCollectTerminal || collectCfg->cleanups.size() != 3) {
+        for (const auto& error : cfgBuilder.errors())
+            std::cerr << error << '\n';
+        for (const auto& error : cfgVerifier.errors())
+            std::cerr << error << '\n';
+        if (collectCfg)
+            std::cerr << "collect blocks=" << collectCfg->blocks.size()
+                      << " locals=" << collectCfg->locals.size()
+                      << " cleanups=" << collectCfg->cleanups.size()
+                      << " builder=" << collectBuilderLocal.value
+                      << " result=" << collectResultLocal.value
+                      << " push=" << (loweredPush != nullptr)
+                      << " finish=" << (loweredFinish != nullptr)
+                      << " user=" << (loweredUserCollect != nullptr)
+                      << '\n';
+        return fail("materialized collect did not lower through affine builder ownership state");
+    }
+    builderBorrow->isMutable = false;
+    if (cfgVerifier.verify(*collectCfg, protocolModule))
+        return fail("CFG verifier accepted a forged shared collect builder borrow");
+    builderBorrow->isMutable = true;
+    if (!cfgVerifier.verify(*collectCfg, protocolModule))
+        return fail("restored materialized collect CFG did not verify");
+    auto savedFinishTransfer = std::move(loweredFinish->args[0]);
+    auto copiedBuilder = std::make_unique<moon::IdentifierExpr>();
+    copiedBuilder->name = finishedBuilder->name;
+    copiedBuilder->local = finishedBuilder->local;
+    copiedBuilder->type = finishedBuilder->type;
+    loweredFinish->args[0] = std::move(copiedBuilder);
+    if (cfgVerifier.verify(*collectCfg, protocolModule))
+        return fail("CFG verifier accepted a copied collect builder at finish");
+    loweredFinish->args[0] = std::move(savedFinishTransfer);
+    if (!cfgVerifier.verify(*collectCfg, protocolModule))
+        return fail("restored collect builder transfer did not verify");
+    const auto savedPushResultType = loweredPush->type;
+    loweredPush->type = protocolI32Id;
+    if (cfgVerifier.verify(*collectCfg, protocolModule))
+        return fail("CFG verifier accepted a forged collect push signature");
+    loweredPush->type = savedPushResultType;
+    if (!cfgVerifier.verify(*collectCfg, protocolModule))
+        return fail("restored collect push signature did not verify");
 
     const auto* shortIteratorType = module.findType(shortId);
     const auto* sharedIteratorType = module.findType(sharedId);

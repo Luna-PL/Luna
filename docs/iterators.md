@@ -138,6 +138,13 @@ This first expression slice accepts a value-producing terminal as a direct initi
 or as the sole argument of a direct ordinary call; `for_each` is accepted as an expression
 statement. It therefore never reorders an earlier sibling operand.
 
+Materialized `collect` over these Copy-item recipes now uses the same ordinary CFG. The compiler
+validates the frozen `FromIterator` witnesses, initializes one synthetic affine builder with
+`begin()`, passes `&mut builder` to each `push`, and converges normal recipe exits before
+`finish(move builder)`. A second synthetic affine local owns the finish result until it is moved to
+the source-level consumer. Existing ownership/cleanup dataflow proves both transfers; this adds no
+iterator object, ownership flag, allocation, or ABI state.
+
 This binding is an affine, single-consumption local and cannot currently be returned, passed,
 or sent across an ABI. Borrow bindings keep the source loan until lexical scope end; a Copy
 `into_iter` binding takes a value snapshot at binding time. A move-only `into_iter` binding
@@ -146,10 +153,7 @@ element. Terminal consumption, early return from `for` or an ordinary function, 
 scope without consumption clean only elements that remain initialized.
 
 Non-materialized terminals, general expression sibling hoisting, affine fold accumulators, and
-`collect` remain explicit canonical-CFG boundaries. In particular, `collect` will not cross that
-boundary until its affine `FromIterator` builder, mutable `push` borrow, cleanup path, and consuming
-`finish` transfer can all be represented as ordinary verified state; no hidden iterator runtime
-object is used as a shortcut.
+non-Copy item/callable per-element ownership remain explicit canonical-CFG boundaries.
 
 Source expressions, adapter arguments, and terminal arguments are evaluated left to right.
 `filter` skips elements and `take` evaluates only elements that pass through it, so

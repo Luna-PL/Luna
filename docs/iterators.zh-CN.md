@@ -127,16 +127,20 @@ move 转移；这不增加独立 runtime token。materialized `count` 和 Copy a
 或将其作为直接普通 call 的唯一参数；`for_each` 只接受 expression statement 位置。
 因而它不会重排更早的 sibling operand。
 
+这些 Copy-item recipe 的 materialized `collect` 现在也使用同一普通 CFG。编译器会核对
+冻结的 `FromIterator` witness，以 `begin()` 初始化唯一的 synthetic affine builder，每次
+`push` 都接收 `&mut builder`，正常 recipe 退出路径在 `finish(move builder)` 前汇合。
+第二个 synthetic affine local 在结果 move 给源码 consumer 前持有 finish 结果。既有
+ownership/cleanup dataflow 证明两次 transfer；不增加 iterator object、ownership flag、allocation 或 ABI 状态。
+
 这种 binding 是 affine、single-consumption 的局部值，当前不能返回、传参或跨 ABI。
 借用型 binding 将源 loan 保持到词法作用域结束；Copy `into_iter` 在绑定点建立值
 快照。move-only `into_iter` 在绑定点把源所有权转入隐藏栈状态，并为每个数组元素
 保存初始化位。终结消费、`for` 中提前 `return`、普通函数提前 `return` 以及从未
 消费就离开作用域，都会只清理仍初始化的元素。
 
-non-materialized terminal、通用 expression sibling hoisting、affine fold accumulator 和 `collect`
-仍是明确的 canonical-CFG 边界。其中 `collect` 必须等 affine `FromIterator` builder、可变
-`push` borrow、cleanup path 与 consuming `finish` transfer 都能表示为普通且可验证的状态后
-才会跨过该边界；不会用隐藏 iterator runtime object 作为捷径。
+non-materialized terminal、通用 expression sibling hoisting、affine fold accumulator，以及 non-Copy
+item/callable 的逐元素所有权状态仍是明确的 canonical-CFG 边界。
 
 源表达式、适配器参数和终结参数按从左到右的源代码顺序求值。`filter` 跳过元素，
 `take` 只计算流经它的元素，因此适配器顺序具有通常的惰性管道含义。

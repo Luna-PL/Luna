@@ -465,37 +465,58 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             if (call->iteratorOp != IteratorOp::None)
                 error(call->location,
                       "sealed CFG contains an unexpanded iterator recipe");
-            if (const auto* callee = dynamic_cast<const IdentifierExpr*>(
-                    call->callee.get());
-                callee && !callee->local.empty()) {
-                const auto* signature = module.findType(callee->type);
-                if (!signature || signature->kind != TypeKind::Function) {
+            const TypeRecord* signature = nullptr;
+            const auto* callee = dynamic_cast<const IdentifierExpr*>(
+                call->callee.get());
+            const bool hasFrozenCallee =
+                (callee && !callee->local.empty()) ||
+                !call->calleeRef.empty();
+            if (callee && !callee->local.empty()) {
+                signature = module.findType(callee->type);
+            } else if (!call->calleeRef.empty()) {
+                const auto* declaration = module.findDeclaration(
+                    call->calleeRef);
+                signature = declaration
+                    ? module.findType(declaration->type) : nullptr;
+            }
+            if (hasFrozenCallee &&
+                (!signature || signature->kind != TypeKind::Function)) {
+                error(call->location,
+                      "call target has no frozen function signature");
+            } else if (signature) {
+                if (signature->parameterTypeIds.size() !=
+                    call->args.size())
                     error(call->location,
-                          "local call target has no frozen function signature");
-                } else {
-                    if (signature->parameterTypeIds.size() !=
-                        call->args.size())
+                          "call argument arity disagrees with its signature");
+                const size_t comparable = std::min(
+                    signature->parameterTypeIds.size(), call->args.size());
+                for (size_t index = 0; index < comparable; ++index)
+                    if (!call->args[index] ||
+                        call->args[index]->type !=
+                            signature->parameterTypeIds[index])
                         error(call->location,
-                              "local call argument arity disagrees with its signature");
-                    const size_t comparable = std::min(
-                        signature->parameterTypeIds.size(), call->args.size());
-                    for (size_t index = 0; index < comparable; ++index)
-                        if (!call->args[index] ||
-                            call->args[index]->type !=
-                                signature->parameterTypeIds[index])
-                            error(call->location,
-                                  "local call argument type disagrees with its signature");
-                    if (call->type != signature->returnTypeId)
+                              "call argument type disagrees with its signature");
+                    else if (const auto* borrow =
+                                 dynamic_cast<const BorrowExpr*>(
+                                     call->args[index].get());
+                             borrow &&
+                             (index >= signature->parameterContracts.size() ||
+                              signature->parameterContracts[index].relation !=
+                                  (borrow->isMutable
+                                       ? luna::ownership::Relation::MutableBorrow
+                                       : luna::ownership::Relation::SharedBorrow)))
                         error(call->location,
-                              "local call result type disagrees with its signature");
-                    if (call->returnUsage !=
-                            signature->returnContract.usage ||
-                        call->returnsLinear !=
-                            (signature->returnContract.usage ==
-                             luna::ownership::Usage::Linear))
-                        error(call->location,
-                              "local call result contract disagrees with its signature");
-                }
+                              "call borrow argument disagrees with its signature contract");
+                if (call->type != signature->returnTypeId)
+                    error(call->location,
+                          "call result type disagrees with its signature");
+                if (call->returnUsage !=
+                        signature->returnContract.usage ||
+                    call->returnsLinear !=
+                        (signature->returnContract.usage ==
+                         luna::ownership::Usage::Linear))
+                    error(call->location,
+                          "call result contract disagrees with its signature");
             }
             scanGraphExpr(call->callee.get(), block);
             for (const auto& argument : call->args)
@@ -554,7 +575,11 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 scanGraphExpr(move->operand.get(), block);
         } else if (const auto* borrow =
                        dynamic_cast<const BorrowExpr*>(expression)) {
-            scanGraphExpr(borrow->operand.get(), block);
+            if (const auto* identifier = dynamic_cast<const IdentifierExpr*>(
+                    borrow->operand.get()))
+                scanGraphIdentifier(*identifier, block, true);
+            else
+                scanGraphExpr(borrow->operand.get(), block);
         } else if (const auto* dereference =
                        dynamic_cast<const DerefExpr*>(expression)) {
             scanGraphExpr(dereference->operand.get(), block);

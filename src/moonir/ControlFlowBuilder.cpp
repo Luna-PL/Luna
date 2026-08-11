@@ -1622,22 +1622,30 @@ ControlFlowBuilder::lowerMaterializedIteratorTerminal(
         literal->type = type;
         return literal;
     };
-    const auto addBinding = [this, &terminal, current, scope](
-        const std::string& name, const TypeRef& type,
-        std::unique_ptr<Expr> initializer) {
+    const auto addBindingAt = [this, &terminal, scope](
+        BlockId block, const std::string& name, const TypeRef& type,
+        luna::ownership::Usage usage, std::unique_ptr<Expr> initializer,
+        LocalKind kind = LocalKind::Binding) {
         const LocalId local = addLocal(
-            scope, LocalKind::Binding, name, type,
-            luna::ownership::Usage::Copy);
+            scope, kind, name, type, usage);
         auto declaration = std::make_unique<LetStmt>();
         declaration->location = terminal->location;
         declaration->name = name;
         declaration->local = local;
-        declaration->usage = luna::ownership::Usage::Copy;
+        declaration->isLinear = usage == luna::ownership::Usage::Linear;
+        declaration->usage = usage;
         declaration->type = type;
         declaration->initializer = std::move(initializer);
-        mGraph->blocks[current.block.value].operations.push_back(
+        mGraph->blocks[block.value].operations.push_back(
             std::move(declaration));
         return local;
+    };
+    const auto addBinding = [&addBindingAt, &current](
+        const std::string& name, const TypeRef& type,
+        std::unique_ptr<Expr> initializer) {
+        return addBindingAt(
+            current.block, name, type, luna::ownership::Usage::Copy,
+            std::move(initializer));
     };
 
     // Adapters appended to an already materialized recipe are evaluated now,
@@ -1818,9 +1826,163 @@ ControlFlowBuilder::lowerMaterializedIteratorTerminal(
         call->returnUsage = luna::ownership::Usage::Copy;
         invoke->expr = std::move(call);
         loop->body->stmts.push_back(std::move(invoke));
+    } else if (terminal->iteratorOp == IteratorOp::Collect) {
+        const auto* builderType = mModule->findType(
+            terminal->iteratorCollectBuilderType);
+        const auto* targetType = mModule->findType(
+            terminal->iteratorCollectTargetType);
+        const auto* beginDeclaration = mModule->findDeclaration(
+            terminal->iteratorCollectBegin);
+        const auto* pushDeclaration = mModule->findDeclaration(
+            terminal->iteratorCollectPush);
+        const auto* finishDeclaration = mModule->findDeclaration(
+            terminal->iteratorCollectFinish);
+        const auto* beginType = beginDeclaration
+            ? mModule->findType(beginDeclaration->type) : nullptr;
+        const auto* pushType = pushDeclaration
+            ? mModule->findType(pushDeclaration->type) : nullptr;
+        const auto* finishType = finishDeclaration
+            ? mModule->findType(finishDeclaration->type) : nullptr;
+        const auto* builderBorrow = pushType &&
+                !pushType->parameterTypeIds.empty()
+            ? mModule->findType(pushType->parameterTypeIds.front())
+            : nullptr;
+        const luna::ownership::Contract ownedAffine{
+            luna::ownership::Relation::Owned,
+            luna::ownership::Usage::Affine};
+        const luna::ownership::Contract mutableBorrow{
+            luna::ownership::Relation::MutableBorrow,
+            luna::ownership::Usage::Copy};
+        const luna::ownership::Contract ownedCopy{
+            luna::ownership::Relation::Owned,
+            luna::ownership::Usage::Copy};
+        const bool declarationsAreFunctions =
+            beginDeclaration && pushDeclaration && finishDeclaration &&
+            beginDeclaration->kind == DeclarationKind::Function &&
+            pushDeclaration->kind == DeclarationKind::Function &&
+            finishDeclaration->kind == DeclarationKind::Function;
+        const bool canonicalBegin = beginType &&
+            beginType->kind == TypeKind::Function &&
+            beginType->parameterTypeIds.empty() &&
+            beginType->parameterContracts.empty() &&
+            beginType->returnTypeId == terminal->iteratorCollectBuilderType &&
+            beginType->returnContract == ownedAffine;
+        const bool canonicalPush = pushType &&
+            pushType->kind == TypeKind::Function &&
+            pushType->parameterTypeIds.size() == 2 &&
+            pushType->parameterTypeIds[1] == terminal->iteratorInputType &&
+            pushType->parameterContracts ==
+                std::vector<luna::ownership::Contract>{
+                    mutableBorrow, ownedAffine} &&
+            pushType->returnTypeId == unitType &&
+            pushType->returnContract == ownedCopy &&
+            builderBorrow && builderBorrow->kind == TypeKind::Reference &&
+            builderBorrow->isMutable &&
+            builderBorrow->innerTypeId ==
+                terminal->iteratorCollectBuilderType;
+        const bool canonicalFinish = finishType &&
+            finishType->kind == TypeKind::Function &&
+            finishType->parameterTypeIds == TypeRefVec{
+                terminal->iteratorCollectBuilderType} &&
+            finishType->parameterContracts ==
+                std::vector<luna::ownership::Contract>{ownedAffine} &&
+            finishType->returnTypeId == terminal->iteratorCollectTargetType &&
+            finishType->returnContract == ownedAffine;
+        if (discardUnitResult || !terminal->args.empty() || unitType.empty() ||
+            !builderType || !targetType || !declarationsAreFunctions ||
+            !canonicalBegin || !canonicalPush || !canonicalFinish ||
+            terminal->type != terminal->iteratorCollectTargetType ||
+            terminal->iteratorOutputType !=
+                terminal->iteratorCollectTargetType ||
+            terminal->returnUsage != luna::ownership::Usage::Affine ||
+            terminal->returnsLinear ||
+            builderType->domain != luna::types::TypeDomain::Value ||
+            targetType->domain != luna::types::TypeDomain::Value ||
+            builderType->sysmeta.resource.usage ==
+                luna::ownership::Usage::Linear ||
+            targetType->sysmeta.resource.usage ==
+                luna::ownership::Usage::Linear) {
+            error(terminal->location,
+                  "materialized collect has no canonical affine "
+                  "FromIterator builder contract");
+            return std::nullopt;
+        }
+
+        const auto directCall = [&terminal](
+            const DeclarationRef& reference,
+            const DeclarationRecord& declaration,
+            const TypeRecord& signature) {
+            auto call = std::make_unique<CallExpr>();
+            call->location = terminal->location;
+            call->calleeRef = reference;
+            call->type = signature.returnTypeId;
+            call->returnUsage = signature.returnContract.usage;
+            call->returnsLinear =
+                call->returnUsage == luna::ownership::Usage::Linear;
+            auto callee = std::make_unique<IdentifierExpr>();
+            callee->location = terminal->location;
+            callee->name = declaration.sourceName;
+            callee->declaration = reference;
+            callee->type = declaration.type;
+            call->callee = std::move(callee);
+            return call;
+        };
+
+        auto begin = directCall(
+            terminal->iteratorCollectBegin,
+            *beginDeclaration, *beginType);
+        const LocalId builder = addBindingAt(
+            current.block, "$terminal.collect.builder." + identity,
+            terminal->iteratorCollectBuilderType,
+            luna::ownership::Usage::Affine, std::move(begin),
+            LocalKind::Synthetic);
+
+        auto push = directCall(
+            terminal->iteratorCollectPush,
+            *pushDeclaration, *pushType);
+        auto borrowedBuilder = std::make_unique<BorrowExpr>();
+        borrowedBuilder->location = terminal->location;
+        borrowedBuilder->isMutable = true;
+        borrowedBuilder->type = pushType->parameterTypeIds.front();
+        borrowedBuilder->operand = identifier(builder);
+        push->args.push_back(std::move(borrowedBuilder));
+        auto item = std::make_unique<IdentifierExpr>();
+        item->location = terminal->location;
+        item->name = loop->varName;
+        item->type = terminal->iteratorInputType;
+        push->args.push_back(std::move(item));
+        auto pushStatement = std::make_unique<ExprStmt>();
+        pushStatement->location = terminal->location;
+        pushStatement->expr = std::move(push);
+        loop->body->stmts.push_back(std::move(pushStatement));
+
+        auto lowered = lowerIteratorRecipeFor(
+            std::move(loop), std::move(current), region, scope);
+        if (!lowered) return std::nullopt;
+
+        auto finish = directCall(
+            terminal->iteratorCollectFinish,
+            *finishDeclaration, *finishType);
+        auto movedBuilder = std::make_unique<MoveExpr>();
+        movedBuilder->location = terminal->location;
+        movedBuilder->type = terminal->iteratorCollectBuilderType;
+        movedBuilder->operand = identifier(builder);
+        finish->args.push_back(std::move(movedBuilder));
+        resultLocal = addBindingAt(
+            lowered->block, "$terminal.collect.result." + identity,
+            terminal->iteratorCollectTargetType,
+            luna::ownership::Usage::Affine, std::move(finish),
+            LocalKind::Synthetic);
+
+        auto transfer = std::make_unique<MoveExpr>();
+        transfer->location = terminal->location;
+        transfer->type = terminal->iteratorCollectTargetType;
+        transfer->operand = identifier(resultLocal);
+        replacement = std::move(transfer);
+        return lowered;
     } else {
         error(terminal->location,
-              "materialized collect awaits canonical builder ownership state");
+              "unsupported materialized iterator terminal operation");
         return std::nullopt;
     }
 

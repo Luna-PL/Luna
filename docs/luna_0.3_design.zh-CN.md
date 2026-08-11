@@ -629,11 +629,19 @@ recipe 状态继续展开为带外层结果 local 的普通循环，而 expressi
 的唯一参数；`for_each` 只接受 expression statement 位置。更广泛的 expression sibling
 hoisting 被明确延后，因而不会猜测或重排求值顺序。
 
-第 10 项尚未整体完成。non-materialized terminal、`collect` builder ownership state、affine fold
-accumulator、通用 expression sibling hoisting、捕获式 closure environment，以及 non-Copy
-item/callable contract 的逐元素初始化/cleanup 状态仍是明确的后续边界。`collect` 特别需要
-affine FromIterator builder、mutable push borrow、cleanup path 与 consuming finish transfer 都以普通 CFG
-状态表示；不会引入 runtime iterator object 作为捷径。随后规范化其余控制流表达式、slot 和 fragment
+materialized `collect` 子阶段也已完成。构造器首先核对三个冻结的
+`FromIterator` declaration 签名，再把 `begin()` 降低为唯一的 synthetic affine
+builder local。每次循环体 `push` 都显式取该 local 的 mutable borrow，所有正常 recipe
+退出路径都在 `finish(move builder)` 前汇合。affine finish 结果先进入第二个
+synthetic local，再显式 move 给源码中的 initializer、return 或直接 call consumer。
+因此既有 cleanup dataflow 会各自只激活一次 builder/result obligation，并在 transfer 时
+注销；不需要 runtime iterator object、ownership flag 或新 ABI 状态。独立 verifier 现在也会
+核对 declaration-backed call 签名（包括显式 borrow argument 的 relation），而 synthetic
+ownership dataflow 要求 finish transfer；伪造的 shared builder borrow 或 finish 处的拷贝都会被拒绝。
+
+第 10 项尚未整体完成。non-materialized terminal、affine fold accumulator、通用
+expression sibling hoisting、捕获式 closure environment，以及 non-Copy item/callable contract
+的逐元素初始化/cleanup 状态仍是明确的后续边界。随后规范化其余控制流表达式、slot 和 fragment
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
 serializer/parser 仍属于第 11 项。
