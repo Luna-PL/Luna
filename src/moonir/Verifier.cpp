@@ -902,7 +902,7 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         }
     };
     std::function<std::optional<PlaceRef>(const Expr*)> placeOf;
-    placeOf = [&graph, &module, &placeOf](
+    placeOf = [&module, &placeOf](
         const Expr* expression) -> std::optional<PlaceRef> {
         if (!expression) return std::nullopt;
         if (const auto* identifier =
@@ -1120,7 +1120,7 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         }
         return result;
     };
-    const auto applyCleanupEdge = [this, &graph, &expectedActiveCleanups](
+    const auto applyCleanupEdge = [this,&expectedActiveCleanups](
         const BasicBlock& source, const std::vector<CleanupId>& actual,
         std::optional<ScopeId> target, CleanupState& state,
         const std::string& context) {
