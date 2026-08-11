@@ -644,6 +644,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/jit_aot_parity.cmake`
 - `tests/jit_runtime_symbols.cmake`
 - `tests/moon_cost_boundaries.cmake`
+- `tests/moonir_canonical_test.cpp`
 - `tests/optimization_pipeline.cmake`
 - `tests/package_export_abi.cmake`
 - `tests/package_manifest_workspace.cmake`

@@ -55,7 +55,7 @@ bool isIntegerMetadataType(TypeKind kind) {
     }
 }
 
-bool metadataConstantMatches(const ConstantValue& value, const TypePtr& type) {
+bool metadataConstantMatches(const ConstantValue& value, const TypeRecord* type) {
     if (!type) return false;
     if (std::holds_alternative<int64_t>(value))
         return isIntegerMetadataType(type->kind);
@@ -66,6 +66,13 @@ bool metadataConstantMatches(const ConstantValue& value, const TypePtr& type) {
     if (std::holds_alternative<std::string>(value))
         return type->kind == TypeKind::String || type->kind == TypeKind::CStr;
     return false;
+}
+
+luna::ownership::Usage frozenUsage(
+    const Module& module, const TypeRef& reference) {
+    const auto* type = module.findType(reference);
+    return type ? type->sysmeta.resource.usage
+                : luna::ownership::Usage::Copy;
 }
 
 bool validIdentifier(const std::string& value) {
@@ -96,7 +103,7 @@ bool validSeparatedName(const std::string& value, const std::string& separator,
 bool Verifier::verify(const Module& module) {
     mErrors.clear();
     mVerifiedTypeIds.clear();
-    mActiveTypeNodes.clear();
+    mActiveTypeIds.clear();
     if (module.formatMajor != FormatMajor) {
         error({}, "unsupported MoonIR major version " +
                   std::to_string(module.formatMajor));
@@ -269,11 +276,70 @@ bool Verifier::verify(const Module& module) {
                       "' has cleanup obligations but value lifetime");
     }
     for (const auto& type : module.typeTable) {
+        std::vector<TypeRef> structuralReferences;
+        const auto appendReference = [&](const TypeRef& reference) {
+            if (!reference.empty()) structuralReferences.push_back(reference);
+        };
+        appendReference(type.innerTypeId);
+        appendReference(type.returnTypeId);
+        for (const auto& reference : type.typeArgumentIds)
+            appendReference(reference);
+        for (const auto& reference : type.parameterTypeIds)
+            appendReference(reference);
+        for (const auto& field : type.fields)
+            appendReference(field.type);
+        for (const auto& variant : type.variants)
+            for (const auto& field : variant.fields)
+                appendReference(field);
+        if (structuralReferences != type.referencedTypeIds)
+            error({}, "frozen type '" + type.id.value +
+                      "' has a reference index inconsistent with its payload");
         for (const auto& referenced : type.referencedTypeIds) {
             if (!module.findType(referenced))
                 error({}, "frozen type '" + type.id.value +
                       "' references missing type '" + referenced.value + "'");
         }
+    }
+
+    // Reconstruct from frozen records only, then recompute every identity.
+    // This proves the verifier does not rely on the frontend Type objects that
+    // happened to exist while the module was built.
+    TypeMaterializer materializer(module);
+    for (const auto& type : module.typeTable) {
+        const TypePtr restored = materializer.materialize(type.id);
+        if (!restored) {
+            error({}, "cannot materialize frozen type '" + type.id.value + "'");
+            continue;
+        }
+        if (luna::types::canonicalType(restored) != type.canonicalType ||
+            luna::types::typeId(restored) != type.id)
+            error({}, "frozen payload does not reproduce TypeId '" +
+                      type.id.value + "'");
+        const auto restoredShape = luna::types::canonicalShape(restored);
+        if (restoredShape != type.canonicalShape ||
+            luna::types::shapeId(restored) != type.shapeId)
+            error({}, "frozen payload does not reproduce ShapeId for type '" +
+                      type.id.value + "' (" + type.displayName +
+                      ")");
+        if (luna::layout::valueSize(restored) != type.valueSize ||
+            luna::layout::valueAlignment(restored) != type.valueAlignment)
+            error({}, "frozen payload does not reproduce layout for type '" +
+                      type.id.value + "'");
+        if ((type.kind == TypeKind::Enum || type.kind == TypeKind::Result) &&
+            luna::layout::inlineAdtLayoutSignature(restored) != type.abiLayout)
+            error({}, "frozen payload does not reproduce inline ADT layout for type '" +
+                      type.id.value + "'");
+        const auto resource = resourceContractForType(restored);
+        if (resource.usage != type.sysmeta.resource.usage ||
+            resource.cleanup != type.sysmeta.resource.cleanup ||
+            resource.cleanupRequired !=
+                type.sysmeta.resource.cleanupRequired ||
+            resource.recursiveCleanup !=
+                type.sysmeta.resource.recursiveCleanup ||
+            resource.lifetime != type.sysmeta.resource.lifetime ||
+            resource.relation != type.sysmeta.resource.relation)
+            error({}, "frozen payload does not reproduce Resource contract for type '" +
+                      type.id.value + "'");
     }
 
     std::unordered_set<std::string> schemaIds;
@@ -296,7 +362,8 @@ bool Verifier::verify(const Module& module) {
                 error(schema.location, "metadata schema '" + schema.name +
                                        "' contains duplicate field '" + field.name + "'");
             verifyType(field.type, schema.location,
-                       "metadata field '" + schema.name + "." + field.name + "'");
+                       "metadata field '" + schema.name + "." + field.name + "'",
+                       module);
         }
     }
 
@@ -354,28 +421,29 @@ bool Verifier::verify(const Module& module) {
             (record.retention != Retention::CompileTime))
             error(record.location, "declaration '" + record.id +
                                    "' has inconsistent runtime-retention sysmeta");
-        if (record.type) {
-            const auto stableType = luna::types::typeId(record.type);
-            if (!mVerifiedTypeIds.count(stableType.value))
+        if (!record.type.empty()) {
+            const auto* recordType = module.findType(record.type);
+            if (!recordType)
                 error(record.location, "declaration '" + record.id +
                                        "' references a type absent from the type table");
-            if ((record.type->kind == TypeKind::Function ||
-                 record.type->kind == TypeKind::Slot ||
-                 record.type->kind == TypeKind::Fragment) &&
+            else if ((recordType->kind == TypeKind::Function ||
+                      recordType->kind == TypeKind::Slot ||
+                      recordType->kind == TypeKind::Fragment) &&
                 record.sysmeta.resource.parameters.size() !=
-                    record.type->paramTypes.size())
+                    recordType->parameterTypeIds.size())
                 error(record.location, "declaration '" + record.id +
                                        "' sysmeta parameter contract count does not match its type");
             const size_t contractCount = std::min(
                 record.sysmeta.resource.parameters.size(),
-                record.type->paramContracts.size());
+                recordType ? recordType->parameterContracts.size() : size_t{0});
             for (size_t index = 0; index < contractCount; ++index) {
                 if (record.sysmeta.resource.parameters[index] !=
-                    record.type->paramContracts[index])
+                    recordType->parameterContracts[index])
                     error(record.location, "declaration '" + record.id +
                                            "' sysmeta ownership contract differs from its type");
             }
-            if (record.sysmeta.resource.result != record.type->returnContract)
+            if (recordType &&
+                record.sysmeta.resource.result != recordType->returnContract)
                 error(record.location, "declaration '" + record.id +
                                        "' sysmeta result contract differs from its type");
         }
@@ -409,7 +477,9 @@ bool Verifier::verify(const Module& module) {
                 }
                 const size_t comparable = std::min(metadata.values.size(), fields.size());
                 for (size_t index = 0; index < comparable; ++index) {
-                    if (!metadataConstantMatches(metadata.values[index], fields[index].type))
+                    if (!metadataConstantMatches(
+                            metadata.values[index],
+                            module.findType(fields[index].type)))
                         error(metadata.location, "metadata value for field '" +
                                                  fields[index].name +
                                                  "' does not match its schema type");
@@ -486,37 +556,40 @@ void Verifier::verifyDeclaration(const Decl& declaration, const Module& module) 
         if (!fragment->body)
             error(fragment->location, "fragment '" + fragment->name + "' has no body");
         verifyType(fragment->structuralType, fragment->location,
-                   "fragment '" + fragment->name + "' structural type");
+                   "fragment '" + fragment->name + "' structural type", module);
         for (const auto& parameter : fragment->params)
             verifyType(parameter.type, fragment->location,
-                       "fragment parameter '" + parameter.name + "'");
+                       "fragment parameter '" + parameter.name + "'", module);
         verifyBlock(fragment->body.get(), module, fragment->name);
         return;
     }
     if (auto* structure = dynamic_cast<const StructDecl*>(&declaration)) {
         verifyType(structure->type, structure->location,
-                   "struct '" + structure->name + "'", !structure->typeParams.empty());
+                   "struct '" + structure->name + "'", module,
+                   !structure->typeParams.empty());
         for (const auto& field : structure->fields)
             verifyType(field.type, structure->location,
                        "field '" + structure->name + "." + field.name + "'",
+                       module,
                        !structure->typeParams.empty());
         return;
     }
     if (auto* enumeration = dynamic_cast<const EnumDecl*>(&declaration)) {
         verifyType(enumeration->type, enumeration->location,
-                   "enum '" + enumeration->name + "'", !enumeration->typeParams.empty());
+                   "enum '" + enumeration->name + "'", module,
+                   !enumeration->typeParams.empty());
         return;
     }
     if (auto* trait = dynamic_cast<const TraitDecl*>(&declaration)) {
         verifyType(trait->type, trait->location,
-                   "trait '" + trait->name + "'", true);
+                   "trait '" + trait->name + "'", module, true);
         for (const auto& method : trait->methods) {
             for (const auto& parameter : method.params)
                 verifyType(parameter.type, trait->location,
                            "trait method parameter '" + method.name + "." +
-                               parameter.name + "'", true);
+                               parameter.name + "'", module, true);
             verifyType(method.returnType, trait->location,
-                       "trait method return '" + method.name + "'", true);
+                       "trait method return '" + method.name + "'", module, true);
         }
         return;
     }
@@ -526,7 +599,8 @@ void Verifier::verifyDeclaration(const Decl& declaration, const Module& module) 
         if (implementation->resolvedTargetTypeId.empty())
             error(implementation->location, "implementation has no resolved target type id");
         verifyType(implementation->targetType, implementation->location,
-                   "implementation target", !implementation->typeParams.empty());
+                   "implementation target", module,
+                   !implementation->typeParams.empty());
         for (const auto& method : implementation->methods) {
             if (!method) error(implementation->location, "implementation contains a null method");
             else verifyFunction(
@@ -547,7 +621,8 @@ void Verifier::verifyFunction(
         error(function.location, "function '" + function.name + "' has no linkage identity");
     for (const auto& parameter : function.params) {
         verifyType(parameter.type, function.location,
-                   "parameter '" + function.name + "." + parameter.name + "'", generic);
+                   "parameter '" + function.name + "." + parameter.name + "'",
+                   module, generic);
         if (parameter.isLinear !=
             (parameter.usage == luna::ownership::Usage::Linear))
             error(function.location, "parameter '" + function.name + "." +
@@ -558,7 +633,7 @@ void Verifier::verifyFunction(
                   parameter.name + "' must use copy cardinality");
     }
     verifyType(function.returnType, function.location,
-               "return type of '" + function.name + "'", generic);
+               "return type of '" + function.name + "'", module, generic);
     if (!function.isExtern && !function.body)
         error(function.location, "function '" + function.name + "' has no body");
     if (function.returnsLinear !=
@@ -568,8 +643,8 @@ void Verifier::verifyFunction(
     if (function.isKernel && function.isCodegenReachable && !module.features.kernel)
         error(function.location, "kernel '" + function.name +
                                  "' is present without the kernel feature");
-    if (function.isKernel && function.returnType &&
-        function.returnType->kind != TypeKind::Unit)
+    const auto* returnType = module.findType(function.returnType);
+    if (function.isKernel && returnType && returnType->kind != TypeKind::Unit)
         error(function.location, "kernel '" + function.name + "' must return unit");
     if (function.body) verifyBlock(function.body.get(), module, function.name);
     mAllowTypeParameters = previousAllowance;
@@ -595,9 +670,12 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
         verifyBlock(block, module, owner);
     } else if (auto* let = dynamic_cast<const LetStmt*>(stmt)) {
         if (let->name.empty()) error(let->location, "binding has no name in '" + owner + "'");
-        verifyType(let->type, let->location, "binding '" + let->name + "'");
+        verifyType(let->type, let->location, "binding '" + let->name + "'", module);
         verifyExpr(let->initializer.get(), module, owner);
-        auto requiredUsage = defaultUsageForType(let->type);
+        const auto* bindingType = module.findType(let->type);
+        auto requiredUsage = bindingType
+            ? bindingType->sysmeta.resource.usage
+            : luna::ownership::Usage::Copy;
         if (auto* call = dynamic_cast<const CallExpr*>(
                 let->initializer.get())) {
             const auto callUsage = call->returnsLinear
@@ -614,8 +692,7 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
             error(let->location, "binding '" + let->name +
                   "' has inconsistent linear compatibility flag");
         if (let->materializesIteratorRecipe) {
-            if (!let->type ||
-                let->type->kind != TypeKind::Iterator)
+            if (!bindingType || bindingType->kind != TypeKind::Iterator)
                 error(let->location,
                       "materialized iterator binding '" +
                       let->name +
@@ -636,28 +713,30 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
                 verifyType(
                     let->materializedIteratorSourceType,
                     let->location,
-                    "materialized iterator source");
-                const TypePtr source =
-                    let->materializedIteratorSourceType;
+                    "materialized iterator source", module);
+                const auto* source = module.findType(
+                    let->materializedIteratorSourceType);
+                const auto* sourceElement = source
+                    ? module.findType(source->innerTypeId) : nullptr;
                 if (!source ||
                     source->kind != TypeKind::Array ||
-                    !source->inner ||
-                    defaultUsageForType(source->inner) ==
+                    !sourceElement ||
+                    sourceElement->sysmeta.resource.usage ==
                         luna::ownership::Usage::Copy ||
                     luna::ownership::mustConsume(
-                        defaultUsageForType(source)))
+                        source->sysmeta.resource.usage))
                     error(let->location,
                           "owning materialized iterator '" +
                           let->name +
                           "' has no affine move-only array source");
-            } else if (let->materializedIteratorSourceType) {
+            } else if (!let->materializedIteratorSourceType.empty()) {
                 error(let->location,
                       "non-owning materialized iterator '" +
                       let->name +
                       "' carries an owning source witness");
             }
         } else if (let->materializedIteratorOwnsSource ||
-                   let->materializedIteratorSourceType) {
+                   !let->materializedIteratorSourceType.empty()) {
             error(let->location,
                   "ordinary binding '" + let->name +
                   "' carries materialized iterator source state");
@@ -688,15 +767,14 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
             verifyStmt(conditional->elseBranch.get(), module, owner);
     } else if (auto* match = dynamic_cast<const MatchStmt*>(stmt)) {
         verifyExpr(match->scrutinee.get(), module, owner);
-        verifyType(match->matchedType, match->location, "match type");
+        verifyType(match->matchedType, match->location, "match type", module);
         if (match->arms.empty())
             error(match->location, "match in '" + owner + "' has no arms");
+        const auto* matchedType = module.findType(match->matchedType);
         const size_t expectedVariantCount =
-            match->matchedType &&
-                    match->matchedType->kind == TypeKind::Result
+            matchedType && matchedType->kind == TypeKind::Result
                 ? 2
-                : (match->matchedType
-                    ? match->matchedType->variants.size() : 0);
+                : (matchedType ? matchedType->variants.size() : 0);
         if (match->arms.size() != expectedVariantCount)
             error(match->location, "match in '" + owner +
                   "' is not exhaustive in frozen MoonIR");
@@ -714,21 +792,20 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
             if (arm.bindings.size() != arm.bindingUsages.size())
                 error(arm.location, "match arm binding/usage arity mismatch in '" +
                       owner + "'");
-            TypeVec expectedFields;
-            if (match->matchedType &&
-                match->matchedType->kind == TypeKind::Enum &&
+            TypeRefVec expectedFields;
+            if (matchedType && matchedType->kind == TypeKind::Enum &&
                 arm.variantIndex <
-                    match->matchedType->variants.size()) {
+                    matchedType->variants.size()) {
                 expectedFields =
-                    match->matchedType->variants[
+                    matchedType->variants[
                         arm.variantIndex].fields;
-            } else if (match->matchedType &&
-                       match->matchedType->kind ==
+            } else if (matchedType &&
+                       matchedType->kind ==
                            TypeKind::Result &&
-                       match->matchedType->typeArgs.size() == 2 &&
+                       matchedType->typeArgumentIds.size() == 2 &&
                        arm.variantIndex < 2) {
                 expectedFields.push_back(
-                    match->matchedType->typeArgs[
+                    matchedType->typeArgumentIds[
                         arm.variantIndex == 1 ? 0 : 1]);
             }
             if (arm.bindingTypes.size() != expectedFields.size())
@@ -737,21 +814,18 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
             const size_t comparable = std::min(
                 arm.bindingTypes.size(), expectedFields.size());
             for (size_t index = 0; index < comparable; ++index) {
-                if (!luna::types::sameType(
-                        arm.bindingTypes[index],
-                        expectedFields[index]))
+                if (arm.bindingTypes[index] != expectedFields[index])
                     error(arm.location, "match binding type disagrees with "
                           "its frozen variant payload in '" + owner + "'");
                 if (index < arm.bindingUsages.size() &&
                     !luna::ownership::satisfiesUsageRequirement(
                         arm.bindingUsages[index],
-                        defaultUsageForType(
-                            arm.bindingTypes[index])))
+                        frozenUsage(module, arm.bindingTypes[index])))
                     error(arm.location, "match binding weakens its required "
                           "usage contract in '" + owner + "'");
             }
             for (const auto& type : arm.bindingTypes)
-                verifyType(type, arm.location, "match binding type");
+                verifyType(type, arm.location, "match binding type", module);
             verifyBlock(arm.body.get(), module, owner);
         }
     } else if (auto* loop = dynamic_cast<const WhileStmt*>(stmt)) {
@@ -760,24 +834,24 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
     } else if (auto* loop = dynamic_cast<const ForStmt*>(stmt)) {
         verifyExpr(loop->iterable.get(), module, owner);
         verifyType(loop->elementType, loop->location,
-                   "for-loop element type");
+                   "for-loop element type", module);
         if (!luna::ownership::satisfiesUsageRequirement(
                 loop->bindingUsage,
-                defaultUsageForType(loop->elementType)))
+                frozenUsage(module, loop->elementType)))
             error(loop->location, "for-loop binding weakens its required "
                   "usage contract in '" + owner + "'");
         if (!loop->protocolNextSymbol.empty()) {
             verifyType(loop->protocolIteratorType, loop->location,
-                       "iterator protocol state type");
+                       "iterator protocol state type", module);
             verifyType(loop->protocolOptionType, loop->location,
-                       "iterator protocol option type");
-            if (!loop->protocolOptionType ||
-                loop->protocolOptionType->kind != TypeKind::Enum) {
+                       "iterator protocol option type", module);
+            const auto* optionType = module.findType(loop->protocolOptionType);
+            if (!optionType || optionType->kind != TypeKind::Enum) {
                 error(loop->location,
                       "iterator protocol for-loop requires an enum Option type");
             } else {
                 const auto variantCount =
-                    loop->protocolOptionType->variants.size();
+                    optionType->variants.size();
                 if (loop->protocolNoneVariant >= variantCount ||
                     loop->protocolSomeVariant >= variantCount ||
                     loop->protocolNoneVariant ==
@@ -788,7 +862,7 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
             if (!loop->protocolIntoSymbol.empty()) {
                 verifyType(loop->protocolInputType,
                            loop->location,
-                           "IntoIterator protocol input type");
+                           "IntoIterator protocol input type", module);
                 if (loop->protocolStateName.empty())
                     error(loop->location,
                           "IntoIterator protocol for-loop has no hidden "
@@ -802,12 +876,15 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
         if (!loop->recipeStateName.empty()) {
             verifyType(loop->recipeSourceType,
                        loop->location,
-                       "consuming recipe source type");
-            if (!loop->recipeSourceType ||
-                loop->recipeSourceType->kind !=
+                       "consuming recipe source type", module);
+            const auto* recipeSource = module.findType(loop->recipeSourceType);
+            const auto* recipeElement = recipeSource
+                ? module.findType(recipeSource->innerTypeId) : nullptr;
+            if (!recipeSource ||
+                recipeSource->kind !=
                     TypeKind::Array ||
-                defaultUsageForType(
-                    loop->recipeSourceType->inner) ==
+                !recipeElement ||
+                recipeElement->sysmeta.resource.usage ==
                     luna::ownership::Usage::Copy)
                 error(loop->location,
                       "consuming recipe state must own a move-only array");
@@ -815,10 +892,10 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
         verifyBlock(loop->body.get(), module, owner);
     } else if (auto* release = dynamic_cast<const FreeStmt*>(stmt)) {
         verifyExpr(release->operand.get(), module, owner);
-        if (release->operand && release->operand->type)
+        if (release->operand && !release->operand->type.empty())
             verifyCleanupAction(
                 release->action,
-                luna::types::typeId(release->operand->type),
+                release->operand->type,
                 release->location, "free operation", module);
     } else if (auto* slot = dynamic_cast<const SlotInvokeStmt*>(stmt)) {
         for (const auto& argument : slot->args)
@@ -861,8 +938,10 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
         if (!module.features.dynamicSelect || !module.features.runtime)
             error(selection->location,
                   "dynamic select expression is present without runtime dynamic-select capability");
-        verifyType(selection->type, selection->location, "dynamic select callable type");
-        if (!selection->type || selection->type->kind != TypeKind::Function)
+        verifyType(selection->type, selection->location,
+                   "dynamic select callable type", module);
+        const auto* selectionType = module.findType(selection->type);
+        if (!selectionType || selectionType->kind != TypeKind::Function)
             error(selection->location, "dynamic select must produce a callable type");
         if (selection->familyId.empty() || selection->selectorDeclarationId.empty() ||
             selection->metadataSchemaId.empty())
@@ -920,15 +999,16 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
         verifyExpr(call->callee.get(), module, owner);
         for (const auto& argument : call->args)
             verifyExpr(argument.get(), module, owner);
-        if (call->intrinsicType)
+        if (!call->intrinsicType.empty())
             verifyType(call->intrinsicType, call->location,
-                       "intrinsic call type witness");
+                       "intrinsic call type witness", module);
         if (call->iteratorOp != IteratorOp::None) {
             verifyType(call->iteratorInputType, call->location,
-                       "iterator operation input");
+                       "iterator operation input", module);
             verifyType(call->iteratorOutputType, call->location,
-                       "iterator operation output");
-            if (!call->type)
+                       "iterator operation output", module);
+            const auto* callType = module.findType(call->type);
+            if (!callType)
                 error(call->location,
                       "iterator operation has no result type");
             const bool terminal =
@@ -937,19 +1017,18 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
                 call->iteratorOp == IteratorOp::Count ||
                 call->iteratorOp == IteratorOp::Collect;
             if (!terminal &&
-                (!call->type ||
-                 call->type->kind != TypeKind::Iterator))
+                (!callType || callType->kind != TypeKind::Iterator))
                 error(call->location,
                       "iterator adapter does not produce an iterator recipe");
             if (call->iteratorOp == IteratorOp::Collect) {
                 verifyType(
                     call->iteratorCollectTargetType,
                     call->location,
-                    "iterator collect target");
+                    "iterator collect target", module);
                 verifyType(
                     call->iteratorCollectBuilderType,
                     call->location,
-                    "iterator collect builder");
+                    "iterator collect builder", module);
                 if (call->iteratorCollectBeginSymbol.empty() ||
                     call->iteratorCollectPushSymbol.empty() ||
                     call->iteratorCollectFinishSymbol.empty())
@@ -964,13 +1043,15 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
                 verifyType(
                     call->iteratorRecipeSourceType,
                     call->location,
-                    "iterator terminal recipe source");
-                if (!call->iteratorRecipeSourceType ||
-                    call->iteratorRecipeSourceType->kind !=
+                    "iterator terminal recipe source", module);
+                const auto* recipeSource = module.findType(
+                    call->iteratorRecipeSourceType);
+                const auto* recipeElement = recipeSource
+                    ? module.findType(recipeSource->innerTypeId) : nullptr;
+                if (!recipeSource || recipeSource->kind !=
                         TypeKind::Array ||
-                    !call->iteratorRecipeSourceType->inner ||
-                    defaultUsageForType(
-                        call->iteratorRecipeSourceType->inner) ==
+                    !recipeElement ||
+                    recipeElement->sysmeta.resource.usage ==
                         luna::ownership::Usage::Copy)
                     error(call->location,
                           "iterator terminal recipe state does not own a move-only array");
@@ -990,7 +1071,7 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
             verifyExpr(argument.get(), module, owner);
     } else if (auto* variant = dynamic_cast<const VariantConstructExpr*>(expr)) {
         verifyType(variant->constructedType, variant->location,
-                   "constructed enum '" + variant->typeName + "'");
+                   "constructed enum '" + variant->typeName + "'", module);
         for (const auto& argument : variant->args)
             verifyExpr(argument.get(), module, owner);
     } else if (auto* field = dynamic_cast<const FieldAccessExpr*>(expr)) {
@@ -999,14 +1080,15 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
         verifyExpr(index->object.get(), module, owner);
         verifyExpr(index->index.get(), module, owner);
     } else if (auto* array = dynamic_cast<const ArrayLiteralExpr*>(expr)) {
-        verifyType(array->elementType, array->location, "array element");
+        verifyType(array->elementType, array->location, "array element", module);
         for (const auto& element : array->elements)
             verifyExpr(element.get(), module, owner);
     } else if (auto* record = dynamic_cast<const RecordLiteralExpr*>(expr)) {
-        verifyType(record->type, record->location, "record literal");
-        if (!record->type ||
-            (record->type->kind != TypeKind::Record &&
-             record->type->kind != TypeKind::Struct))
+        verifyType(record->type, record->location, "record literal", module);
+        const auto* recordType = module.findType(record->type);
+        if (!recordType ||
+            (recordType->kind != TypeKind::Record &&
+             recordType->kind != TypeKind::Struct))
             error(record->location,
                   "record literal has neither a structural record nor named struct type");
         std::unordered_set<std::string> names;
@@ -1017,33 +1099,34 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
             verifyExpr(field.value.get(), module, owner);
         }
     } else if (auto* allocation = dynamic_cast<const HeapAllocExpr*>(expr)) {
-        verifyType(allocation->allocatedType, allocation->location, "heap allocation");
+        verifyType(allocation->allocatedType, allocation->location,
+                   "heap allocation", module);
         verifyExpr(allocation->initializer.get(), module, owner);
     } else if (auto* propagation = dynamic_cast<const TryExpr*>(expr)) {
         verifyExpr(propagation->operand.get(), module, owner);
         verifyType(propagation->resultType, propagation->location,
-                   "error propagation Result");
+                   "error propagation Result", module);
         verifyType(propagation->propagatedResultType, propagation->location,
-                   "propagated Result");
+                   "propagated Result", module);
         verifyType(propagation->valueType, propagation->location,
-                   "error propagation value");
+                   "error propagation value", module);
         verifyType(propagation->errorType, propagation->location,
-                   "error propagation error");
+                   "error propagation error", module);
         verifyType(propagation->propagatedErrorType, propagation->location,
-                   "propagated error");
-        if (!propagation->resultType ||
-            propagation->resultType->kind != TypeKind::Result ||
-            propagation->resultType->typeArgs.size() != 2)
+                   "propagated error", module);
+        const auto* resultType = module.findType(propagation->resultType);
+        const auto* propagatedResultType = module.findType(
+            propagation->propagatedResultType);
+        if (!resultType || resultType->kind != TypeKind::Result ||
+            resultType->typeArgumentIds.size() != 2)
             error(propagation->location,
                   "error propagation has no validated Result<T, E> type");
-        if (!propagation->propagatedResultType ||
-            propagation->propagatedResultType->kind != TypeKind::Result ||
-            propagation->propagatedResultType->typeArgs.size() != 2)
+        if (!propagatedResultType ||
+            propagatedResultType->kind != TypeKind::Result ||
+            propagatedResultType->typeArgumentIds.size() != 2)
             error(propagation->location,
                   "error propagation has no validated enclosing Result<T, E> type");
-        if (!luna::types::sameType(
-                propagation->errorType,
-                propagation->propagatedErrorType) &&
+        if (propagation->errorType != propagation->propagatedErrorType &&
             propagation->errorConversionSymbol.empty())
             error(propagation->location,
                   "error propagation changes error type without a static From conversion");
@@ -1082,7 +1165,8 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
         verifyExpr(conditional->thenExpr.get(), module, owner);
         verifyExpr(conditional->elseExpr.get(), module, owner);
     } else if (auto* lambda = dynamic_cast<const LambdaExpr*>(expr)) {
-        verifyType(lambda->returnType, lambda->location, "lambda return type");
+        verifyType(lambda->returnType, lambda->location,
+                   "lambda return type", module);
         verifyBlock(lambda->body.get(), module, owner);
     } else if (auto* assignment = dynamic_cast<const AssignExpr*>(expr)) {
         verifyExpr(assignment->lhs.get(), module, owner);
@@ -1090,18 +1174,22 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
     }
 }
 
-void Verifier::verifyType(const TypePtr& type, const SourceLocation& location,
-                          const std::string& context, bool allowTypeParameter) {
-    if (!type) {
+void Verifier::verifyType(const TypeRef& reference,
+                          const SourceLocation& location,
+                          const std::string& context,
+                          const Module& module,
+                          bool allowTypeParameter) {
+    if (reference.empty()) {
         error(location, context + " has no resolved type");
         return;
     }
-    if (!mActiveTypeNodes.insert(type.get()).second)
-        return;
-    const auto stableId = luna::types::typeId(type);
-    if (!mVerifiedTypeIds.count(stableId.value))
-        error(location, context + " references type '" + stableId.value +
+    const auto* type = module.findType(reference);
+    if (!type) {
+        error(location, context + " references type '" + reference.value +
                         "' absent from the MoonIR type table");
+        return;
+    }
+    if (!mActiveTypeIds.insert(reference.value).second) return;
     if (type->domain == luna::types::TypeDomain::Inference ||
         type->domain == luna::types::TypeDomain::Error)
         error(location, context + " contains a non-materialized Sema type");
@@ -1110,18 +1198,24 @@ void Verifier::verifyType(const TypePtr& type, const SourceLocation& location,
     if (type->kind == TypeKind::TypeParam &&
         !allowTypeParameter && !mAllowTypeParameters)
         error(location, context + " contains a type parameter outside a generic recipe");
-    if (type->inner) verifyType(type->inner, location, context, allowTypeParameter);
-    for (const auto& argument : type->typeArgs)
-        verifyType(argument, location, context, allowTypeParameter);
-    for (const auto& parameter : type->paramTypes)
-        verifyType(parameter, location, context, allowTypeParameter);
-    if (type->returnType) verifyType(type->returnType, location, context, allowTypeParameter);
+    if (!type->innerTypeId.empty())
+        verifyType(type->innerTypeId, location, context, module,
+                   allowTypeParameter);
+    for (const auto& argument : type->typeArgumentIds)
+        verifyType(argument, location, context, module, allowTypeParameter);
+    for (const auto& parameter : type->parameterTypeIds)
+        verifyType(parameter, location, context, module, allowTypeParameter);
+    if (!type->returnTypeId.empty())
+        verifyType(type->returnTypeId, location, context, module,
+                   allowTypeParameter);
     for (const auto& field : type->fields)
-        verifyType(field.type, location, context + "." + field.name, allowTypeParameter);
+        verifyType(field.type, location, context + "." + field.name, module,
+                   allowTypeParameter);
     for (const auto& variant : type->variants)
         for (const auto& field : variant.fields)
-            verifyType(field, location, context + "::" + variant.name, allowTypeParameter);
-    mActiveTypeNodes.erase(type.get());
+            verifyType(field, location, context + "::" + variant.name, module,
+                       allowTypeParameter);
+    mActiveTypeIds.erase(reference.value);
 }
 
 void Verifier::error(const SourceLocation& location, const std::string& message) {

@@ -147,9 +147,16 @@ std::string canonicalShapeImpl(
         case TypeKind::DeclarationRef:
         case TypeKind::Iterator:
             appendType(type->inner);
-            if (type->kind == TypeKind::Iterator)
+            if (type->kind == TypeKind::Iterator) {
                 appendPart(result, std::to_string(
                     static_cast<unsigned>(type->iteratorMode)));
+                // Iterator recipes may carry a representation-bearing source
+                // type in typeArgs. Process-local Type pointer identity used
+                // to distinguish these accidentally; canonical MoonIR must
+                // make every backend-significant edge part of stable shape.
+                for (const auto& argument : type->typeArgs)
+                    appendType(argument);
+            }
             break;
         case TypeKind::Array:
             appendPart(result, std::to_string(type->arrayLength));
@@ -213,6 +220,8 @@ std::string canonicalIdentityImpl(const TypePtr& type) {
              type->kind == TypeKind::DeclarationView ||
              type->kind == TypeKind::DeclarationRef) && type->inner)
             appendPart(result, canonicalIdentityImpl(type->inner));
+        if (type->kind == TypeKind::Iterator)
+            appendPart(result, canonicalShape(type));
         return result;
     }
     appendPart(result, canonicalShape(type));

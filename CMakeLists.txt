@@ -181,6 +181,15 @@ add_executable(analysis-snapshot-test
 )
 target_include_directories(analysis-snapshot-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+add_executable(moonir-canonical-test
+    tests/moonir_canonical_test.cpp
+    src/moonir/MoonIR.cpp
+    src/moonir/Verifier.cpp
+    $<TARGET_OBJECTS:luna-frontend>
+)
+target_include_directories(moonir-canonical-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 add_executable(luna
     src/main.cpp
     src/driver/AotLinker.cpp
@@ -226,6 +235,7 @@ if(LUNA_STRICT_WARNINGS)
         core-contracts-test
         luna-frontend
         analysis-snapshot-test
+        moonir-canonical-test
         luna
     )
     foreach(target IN LISTS luna_warning_targets)
@@ -246,7 +256,8 @@ if(LUNA_ENABLE_SANITIZERS)
     # `luna` embeds Runtime.cpp for JIT symbol resolution. Instrument the
     # shared frontend objects and both consumers without contaminating the
     # installed AOT runtime archive with sanitizer symbols.
-    foreach(target IN ITEMS luna luna-frontend analysis-snapshot-test)
+    foreach(target IN ITEMS
+            luna luna-frontend analysis-snapshot-test moonir-canonical-test)
         target_compile_options(${target} PRIVATE
             -fsanitize=address,undefined
             -fno-omit-frame-pointer)
@@ -255,6 +266,9 @@ if(LUNA_ENABLE_SANITIZERS)
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
     target_link_options(analysis-snapshot-test PRIVATE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer)
+    target_link_options(moonir-canonical-test PRIVATE
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
 endif()
@@ -305,6 +319,10 @@ if(BUILD_TESTING)
         NAME luna.analysis-snapshot
         COMMAND $<TARGET_FILE:analysis-snapshot-test>
             ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+    add_test(
+        NAME luna.moonir-canonical
+        COMMAND $<TARGET_FILE:moonir-canonical-test>
     )
     add_test(
         NAME luna.source-manager

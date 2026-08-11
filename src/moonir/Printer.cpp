@@ -7,8 +7,9 @@ namespace moon {
 
 namespace {
 
-std::string typeName(const TypePtr& type) {
-    return type ? type->toString() : "<missing>";
+std::string typeName(const Module& module, const TypeRef& reference) {
+    const auto* type = module.findType(reference);
+    return type ? type->displayName : "<missing>";
 }
 
 void printLocation(const SourceLocation& location, std::ostream& out) {
@@ -92,7 +93,7 @@ void Printer::print(const Module& module, std::ostream& out) const {
         for (size_t index = 0; index < schema.fields.size(); ++index) {
             if (index) out << ", ";
             out << schema.fields[index].name << ": "
-                << typeName(schema.fields[index].type);
+                << typeName(module, schema.fields[index].type);
         }
         out << "}";
         printLocation(schema.location, out);
@@ -106,7 +107,8 @@ void Printer::print(const Module& module, std::ostream& out) const {
             << " kind " << declarationKindName(record.kind)
             << " retention " << retentionName(record.retention);
         if (!record.linkageName.empty()) out << " linkage \"" << record.linkageName << '"';
-        if (record.type) out << " : " << typeName(record.type);
+        if (!record.type.empty())
+            out << " : " << typeName(module, record.type);
         printLocation(record.location, out);
         out << "\n";
         out << "    moon.sysmeta v" << record.sysmeta.schemaMajor << '.'
@@ -151,10 +153,10 @@ void Printer::print(const Module& module, std::ostream& out) const {
                 out << luna::ownership::relationName(function->params[index].relation)
                     << ' ' << luna::ownership::usageName(function->params[index].usage)
                     << ' ' << function->params[index].name << ": "
-                    << typeName(function->params[index].type);
+                    << typeName(module, function->params[index].type);
             }
             out << ") -> owned " << luna::ownership::usageName(function->returnUsage)
-                << ' ' << typeName(function->returnType);
+                << ' ' << typeName(module, function->returnType);
             if (function->isKernel) out << " kernel";
             if (function->isKernel && !function->isCodegenReachable)
                 out << " deferred_recipe";
@@ -167,7 +169,7 @@ void Printer::print(const Module& module, std::ostream& out) const {
             out << "  moon.fragment @" << fragment->declarationId << " symbol \""
                 << (fragment->generatedSymbolName.empty()
                         ? fragment->name : fragment->generatedSymbolName)
-                << "\" : " << typeName(fragment->structuralType);
+                << "\" : " << typeName(module, fragment->structuralType);
             printLocation(fragment->location, out);
             out << "\n";
         }

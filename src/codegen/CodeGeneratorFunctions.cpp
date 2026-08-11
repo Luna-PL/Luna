@@ -12,8 +12,9 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
         ? functionIt->second : mModule->getFunction(internalName);
     if (!func) return;
 
-    llvm::Type* retLLVMType = decl->returnType
-        ? mHelpers->toLLVMType(decl->returnType)
+    const TypePtr returnType = resolveType(decl->returnType);
+    llvm::Type* retLLVMType = returnType
+        ? mHelpers->toLLVMType(returnType)
         : mHelpers->voidTy();
 
     if (!decl->body || decl->isExtern) return;
@@ -78,7 +79,7 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
         auto* alloca = createEntryBlockAlloca(func, argVal->getType(), p.name);
         mBuilder->CreateStore(argVal, alloca);
         mLocals[p.name] = alloca;
-        mLocalTypes[p.name] = p.type;
+        mLocalTypes[p.name] = resolveType(p.type);
     }
 
     generateBlock(decl->body.get(), func);

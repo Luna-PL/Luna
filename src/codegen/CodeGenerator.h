@@ -120,7 +120,8 @@ private:
     void emitGpuOperationFailureCheck(llvm::Value* operationSucceeded,
                                       llvm::Function* func);
     llvm::Value* coerceCallArgument(llvm::Value* value, llvm::Type* target);
-    TypePtr allocationTypeForExpr(moon::Expr* expr) const;
+    TypePtr resolveType(const moon::TypeRef& reference);
+    TypePtr allocationTypeForExpr(moon::Expr* expr);
     void emitLunaDeallocation(llvm::Value* pointer, const TypePtr& type);
     void emitCleanup(const std::string& place,
                      luna::ownership::CleanupAction action);
@@ -151,6 +152,7 @@ private:
     std::unique_ptr<CGHelpers> mHelpers;
 
     moon::Module* mProgram = nullptr;
+    std::unique_ptr<moon::TypeMaterializer> mTypeMaterializer;
 
     // Current state
     std::unordered_map<std::string, llvm::AllocaInst*> mLocals;

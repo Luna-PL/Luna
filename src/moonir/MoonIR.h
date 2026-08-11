@@ -15,6 +15,12 @@ namespace moon {
 inline constexpr uint32_t FormatMajor = 0;
 inline constexpr uint32_t FormatMinor = 3;
 
+// Every semantic type edge in sealed MoonIR is a stable table reference.
+// An empty reference represents the absence of a type, never an unresolved
+// frontend object.
+using TypeRef = luna::types::TypeId;
+using TypeRefVec = std::vector<TypeRef>;
+
 struct SourceLocation {
     std::string path;
     int line = 0;
@@ -87,7 +93,7 @@ using ConstantValue = std::variant<int64_t, double, bool, std::string>;
 
 struct MetadataField {
     std::string name;
-    TypePtr type;
+    TypeRef type;
 };
 
 struct MetadataSchema {
@@ -104,9 +110,20 @@ struct MetadataInstance {
     SourceLocation location;
 };
 
-// Serialized MoonIR refers to immutable type-table entries rather than
-// frontend-owned Type pointers. TypePtr remains on operation nodes during the
-// migration, but every reachable resolved type must have one verified entry.
+struct TypeFieldRecord {
+    std::string name;
+    TypeRef type;
+};
+
+struct TypeVariantRecord {
+    std::string name;
+    TypeRefVec fields;
+};
+
+// This is the complete, pointer-free type payload used by both in-memory
+// sealed MoonIR and its future serialized form. `referencedTypeIds` is a
+// canonical traversal index; the named edge fields preserve enough structure
+// for an independent reader or backend to reconstruct the type graph.
 struct TypeRecord {
     luna::types::TypeId id;
     luna::types::ShapeId shapeId;
@@ -116,7 +133,24 @@ struct TypeRecord {
     TypeKind kind = TypeKind::Unknown;
     luna::sysmeta::Facts sysmeta;
     std::string displayName;
+    std::string sourceName;
+    std::string declarationLinkageName;
     std::string nominalDeclarationId;
+    std::vector<std::string> typeParameterNames;
+    TypeRefVec typeArgumentIds;
+    TypeRef innerTypeId;
+    uint64_t arrayLength = 0;
+    bool isMutable = false;
+    TypeRefVec parameterTypeIds;
+    TypeRef returnTypeId;
+    std::vector<luna::ownership::Contract> parameterContracts;
+    luna::ownership::Contract returnContract;
+    bool isMultiShot = false;
+    ContinuationKind continuationKind = ContinuationKind::Context;
+    IteratorMode iteratorMode = IteratorMode::Copy;
+    std::vector<TypeFieldRecord> fields;
+    std::vector<TypeVariantRecord> variants;
+    int inferenceId = -1;
     std::string canonicalType;
     std::string canonicalShape;
     std::string canonicalAbiLayout;
@@ -140,7 +174,7 @@ struct DeclarationRecord {
     DeclarationKind kind = DeclarationKind::Function;
     Retention retention = Retention::CompileTime;
     std::vector<MetadataInstance> metadata;
-    TypePtr type;
+    TypeRef type;
     luna::sysmeta::Facts sysmeta;
     std::string canonicalContract;
     SourceLocation location;
@@ -154,7 +188,7 @@ struct Param {
     bool isLinear = false;
     luna::ownership::Usage usage = luna::ownership::Usage::Copy;
     luna::ownership::Relation relation = luna::ownership::Relation::Owned;
-    TypePtr type;
+    TypeRef type;
 };
 
 struct CleanupObligation {
@@ -178,11 +212,11 @@ struct LetStmt : Stmt {
     bool isConst = false;
     bool isLinear = false;
     luna::ownership::Usage usage = luna::ownership::Usage::Copy;
-    TypePtr type;
+    TypeRef type;
     std::unique_ptr<Expr> initializer;
     bool materializesIteratorRecipe = false;
     bool materializedIteratorOwnsSource = false;
-    TypePtr materializedIteratorSourceType;
+    TypeRef materializedIteratorSourceType;
 };
 
 struct ReturnStmt : Stmt {
@@ -205,14 +239,14 @@ struct MatchArm : Node {
     std::string variantName;
     uint32_t variantIndex = 0;
     std::vector<std::string> bindings;
-    TypeVec bindingTypes;
+    TypeRefVec bindingTypes;
     std::vector<luna::ownership::Usage> bindingUsages;
     std::unique_ptr<BlockStmt> body;
 };
 
 struct MatchStmt : Stmt {
     std::unique_ptr<Expr> scrutinee;
-    TypePtr matchedType;
+    TypeRef matchedType;
     std::vector<MatchArm> arms;
 };
 
@@ -227,20 +261,20 @@ struct ForStmt : Stmt {
         luna::ownership::Usage::Copy;
     std::unique_ptr<Expr> iterable;
     std::unique_ptr<BlockStmt> body;
-    TypePtr elementType;
+    TypeRef elementType;
     std::string protocolNextSymbol;
-    TypePtr protocolIteratorType;
-    TypePtr protocolOptionType;
+    TypeRef protocolIteratorType;
+    TypeRef protocolOptionType;
     uint32_t protocolNoneVariant = 0;
     uint32_t protocolSomeVariant = 0;
     std::string protocolIntoSymbol;
-    TypePtr protocolInputType;
+    TypeRef protocolInputType;
     std::string protocolStateName;
     bool protocolStateNeedsCleanup = false;
     luna::ownership::CleanupAction protocolStateCleanup =
         luna::ownership::CleanupAction::Deallocate;
     std::string recipeStateName;
-    TypePtr recipeSourceType;
+    TypeRef recipeSourceType;
 };
 
 struct FreeStmt : Stmt {
@@ -257,7 +291,7 @@ struct SlotDeclStmt : Stmt {
     std::vector<Param> params;
     std::string defaultFragment;
     std::string resolvedDefaultFragmentName;
-    TypePtr structuralType;
+    TypeRef structuralType;
 };
 
 struct SlotInvokeStmt : Stmt {
@@ -274,7 +308,7 @@ struct SlotInvokeStmt : Stmt {
     std::vector<std::string> resolvedParamNames;
     std::string defaultFragment;
     std::string resolvedDefaultFragmentName;
-    TypePtr structuralType;
+    TypeRef structuralType;
 };
 
 struct ResumeStmt : Stmt {};
@@ -298,7 +332,7 @@ struct ApplyStmt : Stmt {
 };
 
 struct Expr : Node {
-    TypePtr type;
+    TypeRef type;
 };
 
 struct IntLiteralExpr : Expr {
@@ -335,18 +369,18 @@ struct UnaryExpr : Expr {
 struct CallExpr : Expr {
     std::unique_ptr<Expr> callee;
     std::vector<std::unique_ptr<Expr>> args;
-    TypeVec typeArgs;
+    TypeRefVec typeArgs;
     std::string resolvedSymbolName;
     bool returnsLinear = false;
     luna::ownership::Usage returnUsage = luna::ownership::Usage::Copy;
-    TypePtr intrinsicType;
-    TypePtr iteratorInputType;
-    TypePtr iteratorOutputType;
+    TypeRef intrinsicType;
+    TypeRef iteratorInputType;
+    TypeRef iteratorOutputType;
     IteratorOp iteratorOp = IteratorOp::None;
     std::string iteratorRecipeStateName;
-    TypePtr iteratorRecipeSourceType;
-    TypePtr iteratorCollectTargetType;
-    TypePtr iteratorCollectBuilderType;
+    TypeRef iteratorRecipeSourceType;
+    TypeRef iteratorCollectTargetType;
+    TypeRef iteratorCollectBuilderType;
     std::string iteratorCollectBeginSymbol;
     std::string iteratorCollectPushSymbol;
     std::string iteratorCollectFinishSymbol;
@@ -382,7 +416,7 @@ struct VariantConstructExpr : Expr {
     std::string typeName;
     std::string variantName;
     std::vector<std::unique_ptr<Expr>> args;
-    TypePtr constructedType;
+    TypeRef constructedType;
 };
 
 struct FieldAccessExpr : Expr {
@@ -397,7 +431,7 @@ struct IndexExpr : Expr {
 
 struct ArrayLiteralExpr : Expr {
     std::vector<std::unique_ptr<Expr>> elements;
-    TypePtr elementType;
+    TypeRef elementType;
 };
 
 struct RecordLiteralExpr : Expr {
@@ -412,17 +446,17 @@ struct RecordLiteralExpr : Expr {
 
 struct HeapAllocExpr : Expr {
     std::unique_ptr<Expr> initializer;
-    TypePtr allocatedType;
+    TypeRef allocatedType;
     HeapStorageKind storage = HeapStorageKind::Unique;
 };
 
 struct TryExpr : Expr {
     std::unique_ptr<Expr> operand;
-    TypePtr resultType;
-    TypePtr propagatedResultType;
-    TypePtr valueType;
-    TypePtr errorType;
-    TypePtr propagatedErrorType;
+    TypeRef resultType;
+    TypeRef propagatedResultType;
+    TypeRef valueType;
+    TypeRef errorType;
+    TypeRef propagatedErrorType;
     std::string errorConversionSymbol;
     std::vector<CleanupObligation> cleanups;
 };
@@ -457,9 +491,9 @@ struct IfExpr : Expr {
 
 struct LambdaExpr : Expr {
     std::vector<Param> params;
-    TypePtr returnType;
+    TypeRef returnType;
     std::unique_ptr<BlockStmt> body;
-    TypePtr closureType;
+    TypeRef closureType;
     std::vector<std::string> captures;
     std::string identitySuffix;
 };
@@ -497,12 +531,12 @@ struct FunctionDecl : Decl {
     std::string linkName;
     std::vector<std::string> typeParams;
     std::vector<Param> params;
-    TypePtr returnType;
+    TypeRef returnType;
     bool returnsLinear = false;
     luna::ownership::Usage returnUsage = luna::ownership::Usage::Copy;
     std::unique_ptr<BlockStmt> body;
     bool isTemplateInstance = false;
-    TypeVec concreteTypeArgs;
+    TypeRefVec concreteTypeArgs;
 };
 
 struct FragmentDecl : Decl {
@@ -510,42 +544,42 @@ struct FragmentDecl : Decl {
     FragmentCardinality cardinality = FragmentCardinality::Once;
     std::vector<Param> params;
     std::unique_ptr<BlockStmt> body;
-    TypePtr structuralType;
+    TypeRef structuralType;
 };
 
 struct StructDecl : Decl {
     std::vector<std::string> typeParams;
     std::vector<Param> fields;
-    TypePtr type;
+    TypeRef type;
 };
 
 struct EnumDecl : Decl {
     struct Variant {
         std::string name;
-        TypeVec fields;
+        TypeRefVec fields;
     };
     std::vector<std::string> typeParams;
     std::vector<Variant> variants;
-    TypePtr type;
+    TypeRef type;
 };
 
 struct TraitDecl : Decl {
     struct MethodSig {
         std::string name;
         std::vector<Param> params;
-        TypePtr returnType;
+        TypeRef returnType;
     };
     std::vector<std::string> typeParams;
     std::vector<Param> traitParams;
     std::vector<MethodSig> methods;
-    TypePtr type;
+    TypeRef type;
 };
 
 struct ImplDecl : Decl {
     std::vector<std::string> typeParams;
     std::string resolvedTraitId;
     std::string resolvedTargetTypeId;
-    TypePtr targetType;
+    TypeRef targetType;
     std::vector<std::unique_ptr<FunctionDecl>> methods;
 };
 
@@ -602,9 +636,22 @@ struct Module {
     std::unordered_map<std::string, FragmentDecl*> fragmentsBySymbol;
 
     void rebuildIndexes();
-    void registerType(const TypePtr& type);
+    TypeRef registerType(const TypePtr& type);
     void sealTypeTable();
-    const TypeRecord* findType(const luna::types::TypeId& id) const;
+    const TypeRecord* findType(const TypeRef& id) const;
+};
+
+// Backends may materialize their preferred Type graph from canonical records.
+// This cache is deliberately external to Module: it is neither serialized nor
+// consulted by the verifier and contains no frontend-owned Type object.
+class TypeMaterializer {
+public:
+    explicit TypeMaterializer(const Module& module) : mModule(module) {}
+    TypePtr materialize(const TypeRef& reference);
+
+private:
+    const Module& mModule;
+    std::unordered_map<std::string, TypePtr> mCache;
 };
 
 const char* retentionName(Retention retention);

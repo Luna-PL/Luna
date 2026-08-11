@@ -259,24 +259,24 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         }
     }
     if (auto* variant = dynamic_cast<VariantConstructExpr*>(expr)) {
-        if (!variant->constructedType ||
-            variant->constructedType->kind != TypeKind::Enum) {
+        const TypePtr constructedType = resolveType(variant->constructedType);
+        if (!constructedType || constructedType->kind != TypeKind::Enum) {
             error("enum construction has no validated inline ADT type");
             return llvm::PoisonValue::get(mHelpers->i32Ty());
         }
         size_t variantIndex = 0;
         const TypeVariant* selected = nullptr;
-        for (; variantIndex < variant->constructedType->variants.size();
+        for (; variantIndex < constructedType->variants.size();
              ++variantIndex) {
-            if (variant->constructedType->variants[variantIndex].name ==
+            if (constructedType->variants[variantIndex].name ==
                 variant->variantName) {
                 selected =
-                    &variant->constructedType->variants[variantIndex];
+                    &constructedType->variants[variantIndex];
                 break;
             }
         }
         auto* enumLLVM = llvm::dyn_cast<llvm::StructType>(
-            mHelpers->toLLVMType(variant->constructedType));
+            mHelpers->toLLVMType(constructedType));
         if (!selected || !enumLLVM || enumLLVM->getNumElements() != 2) {
             error("enum variant has no validated inline ADT layout");
             return llvm::PoisonValue::get(mHelpers->i32Ty());
@@ -329,33 +329,34 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             result, payload, {1}, "enum.value");
     }
     if (auto* record = dynamic_cast<RecordLiteralExpr*>(expr)) {
-        if (!record->type ||
-            (record->type->kind != TypeKind::Record &&
-             record->type->kind != TypeKind::Struct)) {
+        const TypePtr recordType = resolveType(record->type);
+        if (!recordType ||
+            (recordType->kind != TypeKind::Record &&
+             recordType->kind != TypeKind::Struct)) {
             error("record literal has no validated product type");
             return llvm::PoisonValue::get(mHelpers->i32Ty());
         }
-        if (record->type->kind == TypeKind::Struct) {
+        if (recordType->kind == TypeKind::Struct) {
             auto rtAlloc = mModule->getOrInsertFunction(
                 "rt_alloc", mHelpers->ptrTy(),
                 mHelpers->sizeTy(), mHelpers->sizeTy());
             llvm::Value* pointer = mBuilder->CreateCall(
                 rtAlloc,
                 {llvm::ConstantInt::get(
-                     mHelpers->sizeTy(), typeSize(record->type)),
+                     mHelpers->sizeTy(), typeSize(recordType)),
                  llvm::ConstantInt::get(
-                     mHelpers->sizeTy(), typeAlignment(record->type))},
+                     mHelpers->sizeTy(), typeAlignment(recordType))},
                 "struct.literal");
             for (auto& field : record->fields) {
                 // Evaluate in source order, but place by declaration field.
                 llvm::Value* fieldValue = generateExpr(field.value.get());
-                const size_t index = fieldIndex(record->type, field.name);
+                const size_t index = fieldIndex(recordType, field.name);
                 if (index == static_cast<size_t>(-1)) {
                     error("named struct literal field is absent from its type");
                     continue;
                 }
                 const uint64_t offset =
-                    luna::layout::productFieldOffset(record->type, index);
+                    luna::layout::productFieldOffset(recordType, index);
                 llvm::Value* fieldPointer = pointer;
                 if (offset != 0)
                     fieldPointer = mBuilder->CreateGEP(
@@ -365,13 +366,13 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
                         "struct.literal.field");
                 fieldValue = coerceCallArgument(
                     fieldValue,
-                    mHelpers->toLLVMType(record->type->fields[index].type));
+                    mHelpers->toLLVMType(recordType->fields[index].type));
                 mBuilder->CreateStore(fieldValue, fieldPointer);
             }
             return pointer;
         }
         auto* recordLLVM = llvm::dyn_cast<llvm::StructType>(
-            mHelpers->toLLVMType(record->type));
+            mHelpers->toLLVMType(recordType));
         if (!recordLLVM) {
             error("record literal did not lower to an inline aggregate");
             return llvm::PoisonValue::get(mHelpers->i32Ty());
@@ -381,7 +382,7 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             // Generate in source order, then place the value at its canonical
             // name-sorted index.
             llvm::Value* fieldValue = generateExpr(field.value.get());
-            const size_t index = fieldIndex(record->type, field.name);
+            const size_t index = fieldIndex(recordType, field.name);
             if (index == static_cast<size_t>(-1)) {
                 error("record literal field is absent from its canonical type");
                 continue;
@@ -401,7 +402,7 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             if (it != mLocalTypes.end()) objectType = it->second;
         }
         if (!objectType && field->object)
-            objectType = field->object->type;
+            objectType = resolveType(field->object->type);
         const bool isReference = objectType &&
             objectType->kind == TypeKind::Reference;
         if (objectType && objectType->kind == TypeKind::Reference)
@@ -425,7 +426,8 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         return mBuilder->CreateLoad(fieldType, typedPtr, field->field);
     }
     if (auto* array = dynamic_cast<ArrayLiteralExpr*>(expr)) {
-        TypePtr arrayType = Type::makeArray(array->elementType, array->elements.size());
+        TypePtr arrayType = Type::makeArray(
+            resolveType(array->elementType), array->elements.size());
         auto* llvmArray = llvm::cast<llvm::ArrayType>(mHelpers->toLLVMType(arrayType));
         llvm::Value* result = llvm::UndefValue::get(llvmArray);
         for (size_t i = 0; i < array->elements.size(); ++i)
@@ -467,6 +469,7 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
     }
     if (auto* launch = dynamic_cast<LaunchExpr*>(expr)) return generateLaunch(launch);
     if (auto* call = dynamic_cast<CallExpr*>(expr)) {
+        const TypePtr intrinsicType = resolveType(call->intrinsicType);
         if (call->iteratorOp == IteratorOp::Fold ||
             call->iteratorOp == IteratorOp::ForEach ||
             call->iteratorOp == IteratorOp::Count ||
@@ -486,20 +489,20 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
             calleeId && calleeId->name == "drop_callback" &&
             call->args.empty() && !call->typeArgs.empty()) {
-            return getOrCreateDropCallback(call->typeArgs.front());
+            return getOrCreateDropCallback(resolveType(call->typeArgs.front()));
         }
         if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
             calleeId && (calleeId->name == "Ok" || calleeId->name == "Err") &&
-            call->args.size() == 1 && call->intrinsicType &&
-            call->intrinsicType->kind == TypeKind::Result) {
+            call->args.size() == 1 && intrinsicType &&
+            intrinsicType->kind == TypeKind::Result) {
             const bool isOk = calleeId->name == "Ok";
-            TypePtr payloadType = call->intrinsicType->typeArgs[
+            TypePtr payloadType = intrinsicType->typeArgs[
                 isOk ? 0 : 1];
             llvm::Value* payload = generateExpr(call->args.front().get());
             llvm::Value* bits = packResultPayload(
-                payload, payloadType, call->intrinsicType);
+                payload, payloadType, intrinsicType);
             llvm::Value* result = llvm::UndefValue::get(
-                mHelpers->toLLVMType(call->intrinsicType));
+                mHelpers->toLLVMType(intrinsicType));
             result = mBuilder->CreateInsertValue(
                 result, llvm::ConstantInt::get(mHelpers->boolTy(), isOk ? 1 : 0),
                 {0}, isOk ? "ok.tag" : "err.tag");
@@ -519,8 +522,8 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
             calleeId && (calleeId->name == "unwrap" ||
                          calleeId->name == "unwrap_err") &&
-            call->args.size() == 1 && call->intrinsicType &&
-            call->intrinsicType->kind == TypeKind::Result) {
+            call->args.size() == 1 && intrinsicType &&
+            intrinsicType->kind == TypeKind::Result) {
             llvm::Value* result = generateExpr(call->args.front().get());
             llvm::Value* isOk =
                 mBuilder->CreateExtractValue(result, {0}, "result.tag");
@@ -545,7 +548,7 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             llvm::Value* bits =
                 mBuilder->CreateExtractValue(result, {1}, "result.payload");
             return unpackResultPayload(
-                bits, call->intrinsicType->typeArgs[wantOk ? 0 : 1]);
+                bits, intrinsicType->typeArgs[wantOk ? 0 : 1]);
         }
         if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
             calleeId && calleeId->name == "panic" &&
@@ -713,7 +716,8 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
                 auto* emitted = mBuilder->CreateCall(
                     callee, args,
                     callee->getReturnType()->isVoidTy() ? "" : "calltmp");
-                if (call->type && call->type->kind == TypeKind::Never) {
+                const TypePtr callType = resolveType(call->type);
+                if (callType && callType->kind == TypeKind::Never) {
                     mBuilder->CreateUnreachable();
                     return llvm::PoisonValue::get(mHelpers->i32Ty());
                 }
@@ -725,7 +729,8 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         // Every non-direct callable uses its resolved MoonIR function type.
         // This covers closures, statically selected bindings, and dynamic
         // selector results without baking an i32-only ABI into LLVM lowering.
-        TypePtr callableType = call->callee ? call->callee->type : nullptr;
+        TypePtr callableType = call->callee
+            ? resolveType(call->callee->type) : nullptr;
         if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
             auto localType = mLocalTypes.find(calleeId->name);
             if ((!callableType || callableType->kind != TypeKind::Function) &&
@@ -754,10 +759,11 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
     }
     if (auto* ha = dynamic_cast<HeapAllocExpr*>(expr)) {
-        uint64_t sz = typeSize(ha->allocatedType);
+        const TypePtr allocatedType = resolveType(ha->allocatedType);
+        uint64_t sz = typeSize(allocatedType);
         auto* sizeVal = llvm::ConstantInt::get(mHelpers->sizeTy(), sz);
         auto* alignmentVal = llvm::ConstantInt::get(
-            mHelpers->sizeTy(), typeAlignment(ha->allocatedType));
+            mHelpers->sizeTy(), typeAlignment(allocatedType));
         auto rtAlloc = mModule->getOrInsertFunction(
             "rt_alloc", mHelpers->ptrTy(),
             mHelpers->sizeTy(), mHelpers->sizeTy());
@@ -770,17 +776,17 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             for (size_t i = 0; i < initCall->args.size(); ++i) {
                 auto& arg = initCall->args[i];
                 llvm::Value* argVal = generateExpr(arg.get());
-                if (ha->allocatedType &&
-                    ha->allocatedType->kind == TypeKind::Struct)
+                if (allocatedType &&
+                    allocatedType->kind == TypeKind::Struct)
                     offset = luna::layout::productFieldOffset(
-                        ha->allocatedType, i);
-                else if (i > 0 && ha->allocatedType &&
-                         ha->allocatedType->kind == TypeKind::Record) {
+                        allocatedType, i);
+                else if (i > 0 && allocatedType &&
+                         allocatedType->kind == TypeKind::Record) {
                     offset = 0;
                     for (size_t j = 0;
-                         j < i && j < ha->allocatedType->fields.size(); ++j)
+                         j < i && j < allocatedType->fields.size(); ++j)
                         offset += luna::layout::valueSize(
-                            ha->allocatedType->fields[j].type);
+                            allocatedType->fields[j].type);
                 }
                 auto* basePtr = ptr;
                 if (offset != 0)
@@ -807,7 +813,8 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         llvm::Value* errorBits =
             mBuilder->CreateExtractValue(result, {1}, "try.error.bits");
         llvm::Value* errorValue =
-            unpackResultPayload(errorBits, propagation->errorType);
+            unpackResultPayload(
+                errorBits, resolveType(propagation->errorType));
         if (!propagation->errorConversionSymbol.empty()) {
             auto conversion =
                 mFunctions.find(propagation->errorConversionSymbol);
@@ -823,10 +830,14 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
                     "try.converted_error");
             }
         }
-        TypePtr propagatedResult = propagation->propagatedResultType
-            ? propagation->propagatedResultType : propagation->resultType;
-        TypePtr propagatedError = propagation->propagatedErrorType
-            ? propagation->propagatedErrorType : propagation->errorType;
+        TypePtr propagatedResult = resolveType(
+            propagation->propagatedResultType.empty()
+                ? propagation->resultType
+                : propagation->propagatedResultType);
+        TypePtr propagatedError = resolveType(
+            propagation->propagatedErrorType.empty()
+                ? propagation->errorType
+                : propagation->propagatedErrorType);
         llvm::Value* propagatedBits = packResultPayload(
             errorValue, propagatedError, propagatedResult);
         llvm::Value* propagatedValue = llvm::UndefValue::get(
@@ -843,7 +854,7 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         mBuilder->SetInsertPoint(success);
         llvm::Value* bits =
             mBuilder->CreateExtractValue(result, {1}, "try.value");
-        return unpackResultPayload(bits, propagation->valueType);
+        return unpackResultPayload(bits, resolveType(propagation->valueType));
     }
     if (auto* as = dynamic_cast<AssignExpr*>(expr)) {
         llvm::Value* rhs = generateExpr(as->rhs.get());
@@ -1095,8 +1106,9 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
     if (auto* dr = dynamic_cast<DerefExpr*>(expr)) {
         llvm::Value* op = generateExpr(dr->operand.get());
         auto* ptr = mBuilder->CreateBitCast(op, llvm::PointerType::get(*mCtx, 0));
-        llvm::Type* valueType = dr->type
-            ? mHelpers->toLLVMType(dr->type)
+        const TypePtr dereferencedType = resolveType(dr->type);
+        llvm::Type* valueType = dereferencedType
+            ? mHelpers->toLLVMType(dereferencedType)
             : mHelpers->i32Ty();
         return mBuilder->CreateLoad(valueType, ptr, "deref");
     }
@@ -1116,9 +1128,10 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         // Build LLVM function for lambda
         std::vector<llvm::Type*> paramTypes;
         for (auto& p : le->params)
-            paramTypes.push_back(mHelpers->toLLVMType(p.type));
-        llvm::Type* retTy = le->returnType
-            ? mHelpers->toLLVMType(le->returnType) : mHelpers->i32Ty();
+            paramTypes.push_back(mHelpers->toLLVMType(resolveType(p.type)));
+        const TypePtr lambdaReturnType = resolveType(le->returnType);
+        llvm::Type* retTy = lambdaReturnType
+            ? mHelpers->toLLVMType(lambdaReturnType) : mHelpers->i32Ty();
         auto funcTy = llvm::FunctionType::get(retTy, paramTypes, false);
         auto func = llvm::Function::Create(
             funcTy, llvm::Function::InternalLinkage, lambdaName, mModule.get());
@@ -1154,7 +1167,8 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             auto* alloca = createEntryBlockAlloca(func, arg.getType(), le->params[idx].name);
             mBuilder->CreateStore(&arg, alloca);
             mLocals[le->params[idx].name] = alloca;
-            mLocalTypes[le->params[idx].name] = le->params[idx].type;
+            mLocalTypes[le->params[idx].name] =
+                resolveType(le->params[idx].type);
             idx++;
         }
 

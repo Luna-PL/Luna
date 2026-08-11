@@ -526,6 +526,22 @@ codegen cleanup、`clone` intrinsic 与旧 Runtime 入口已删除；`rc new`/`a
 不在本次语义迁移中假定完成。因此优先级第 9 项已通过完成门；下一项是
 第 10 项：原地将现有 MoonIR 重构为 table-referenced canonical IR。
 
+第 10 项的第一子阶段已经完成：sealed MoonIR 的 metadata、声明、签名及操作节点只保存
+`TypeId`，完整类型结构被冻结在唯一 type table 中；LLVM backend 使用格式外、可丢弃的
+materializer 从该表按 `TypeId` 重建并缓存后端类型，不保留或读取 frontend `TypePtr`。
+MoonIR verifier 同样只从冻结记录重建类型，并重算 TypeId、ShapeId、layout 及全部结构引用，
+所以该变化没有程序运行时成本，成本只发生在编译/装载验证阶段。迁移同时修复了两个原先
+被进程内指针身份掩盖的身份缺陷：Iterator recipe 的 source 参数现在进入稳定 shape/type
+identity；seal 会合并 nominal forward placeholder，再从闭合的冻结类型图规范化 ShapeId
+和 layout，不再接受任意 frontend placeholder 的临时字段图。独立 materialization、
+注册顺序确定性、篡改拒绝及完整 JIT/AOT
+回归已有测试证据。
+
+第 10 项尚未整体完成：下一子阶段需要把可执行节点中的内部 symbol/contract 引用统一为
+table reference；随后按 M001 把当前 AST-like 嵌套控制流原地改为同一 MoonIR 内的 CFG、
+region/scope/cleanup table。二者完成后才通过“table-referenced canonical IR”的整体完成门；
+serializer/parser 仍属于第 11 项。
+
 | 顺序 | 优先级 | 工作 | 完成门 |
 |---:|---|---|---|
 | 1 | P0 | 语义等价地拆分 Sema，并在改动前固化现有回归基线 | Semantic/MoonIR/diagnostic/codegen 证据不变；tooling facade 不变 |

@@ -9,7 +9,7 @@ bool CodeGenerator::buildIteratorPlan(Expr* expr, IteratorPlan& plan) {
     if (!expr) return false;
     auto* call = dynamic_cast<CallExpr*>(expr);
     if (!call) {
-        TypePtr sourceType = expr->type;
+        TypePtr sourceType = resolveType(expr->type);
         if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
             auto materialized =
                 mMaterializedIterators.find(
@@ -52,16 +52,17 @@ bool CodeGenerator::buildIteratorPlan(Expr* expr, IteratorPlan& plan) {
         call->iteratorOp == IteratorOp::IterMut ||
         call->iteratorOp == IteratorOp::IntoIter) {
         plan.source = member->object.get();
-        if (call->type && call->type->kind == TypeKind::Iterator &&
-            !call->type->typeArgs.empty())
-            plan.sourceType = call->type->typeArgs.front();
+        const TypePtr callType = resolveType(call->type);
+        if (callType && callType->kind == TypeKind::Iterator &&
+            !callType->typeArgs.empty())
+            plan.sourceType = callType->typeArgs.front();
         if (!plan.sourceType) {
             if (auto* id = dynamic_cast<IdentifierExpr*>(plan.source)) {
                 auto found = mLocalTypes.find(id->name);
                 if (found != mLocalTypes.end()) plan.sourceType = found->second;
             }
         }
-        plan.itemType = call->iteratorOutputType;
+        plan.itemType = resolveType(call->iteratorOutputType);
         plan.mode = call->iteratorOp == IteratorOp::Iter
             ? IteratorMode::Shared
             : (call->iteratorOp == IteratorOp::IterMut
@@ -79,10 +80,10 @@ bool CodeGenerator::buildIteratorPlan(Expr* expr, IteratorPlan& plan) {
         plan.steps.push_back({
             call->iteratorOp,
             call->args.front().get(),
-            call->iteratorInputType,
-            call->iteratorOutputType
+            resolveType(call->iteratorInputType),
+            resolveType(call->iteratorOutputType)
         });
-        plan.itemType = call->iteratorOutputType;
+        plan.itemType = resolveType(call->iteratorOutputType);
         return true;
     }
     return false;
@@ -579,12 +580,15 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
         llvm::AllocaInst* accumulatorInitialized =
             nullptr;
         llvm::Value* reducer = nullptr;
+        const TypePtr iteratorOutputType = resolveType(
+            call->iteratorOutputType);
+        const TypePtr iteratorInputType = resolveType(
+            call->iteratorInputType);
         const bool ownsAccumulator =
-            defaultUsageForType(
-                call->iteratorOutputType) !=
+            defaultUsageForType(iteratorOutputType) !=
             luna::ownership::Usage::Copy;
-        auto* accumulatorType = mHelpers->toLLVMType(call->iteratorOutputType);
-        auto* itemType = mHelpers->toLLVMType(call->iteratorInputType);
+        auto* accumulatorType = mHelpers->toLLVMType(iteratorOutputType);
+        auto* itemType = mHelpers->toLLVMType(iteratorInputType);
         auto* reducerType = llvm::FunctionType::get(
             accumulatorType, {accumulatorType, itemType}, false);
         emitIteratorPipeline(plan, [&](llvm::Value* item) {
@@ -636,7 +640,8 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
 
     if (call->iteratorOp == IteratorOp::ForEach) {
         llvm::Value* action = nullptr;
-        auto* itemType = mHelpers->toLLVMType(call->iteratorInputType);
+        auto* itemType = mHelpers->toLLVMType(
+            resolveType(call->iteratorInputType));
         auto* actionType = llvm::FunctionType::get(
             mHelpers->voidTy(), {itemType}, false);
         emitIteratorPipeline(plan, [&](llvm::Value* item) {
@@ -688,26 +693,28 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
             call->iteratorCollectPushSymbol);
         llvm::Function* finish = findProtocolFunction(
             call->iteratorCollectFinishSymbol);
+        const TypePtr builderTypeWitness = resolveType(
+            call->iteratorCollectBuilderType);
+        const TypePtr targetTypeWitness = resolveType(
+            call->iteratorCollectTargetType);
         if (!begin || !push || !finish ||
             begin->arg_size() != 0 ||
             push->arg_size() != 2 ||
             finish->arg_size() != 1 ||
-            !call->iteratorCollectBuilderType ||
-            !call->iteratorCollectTargetType) {
+            !builderTypeWitness || !targetTypeWitness) {
             error("collect has an invalid lowered FromIterator protocol");
             return llvm::PoisonValue::get(
-                mHelpers->toLLVMType(call->type));
+                mHelpers->toLLVMType(resolveType(call->type)));
         }
 
         llvm::AllocaInst* builderStorage = nullptr;
         llvm::Type* builderType =
-            mHelpers->toLLVMType(
-                call->iteratorCollectBuilderType);
+            mHelpers->toLLVMType(builderTypeWitness);
         emitIteratorPipeline(plan, [&](llvm::Value* item) {
             llvm::Value* builderArgument = nullptr;
-            if (call->iteratorCollectBuilderType->kind ==
+            if (builderTypeWitness->kind ==
                     TypeKind::Struct ||
-                call->iteratorCollectBuilderType->kind ==
+                builderTypeWitness->kind ==
                     TypeKind::Record) {
                 builderArgument = mBuilder->CreateLoad(
                     builderType, builderStorage,

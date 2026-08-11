@@ -12,7 +12,12 @@ llvm::Value* CodeGenerator::coerceCallArgument(llvm::Value* value, llvm::Type* t
     return value;
 }
 
-TypePtr CodeGenerator::allocationTypeForExpr(moon::Expr* expr) const {
+TypePtr CodeGenerator::resolveType(const moon::TypeRef& reference) {
+    return mTypeMaterializer
+        ? mTypeMaterializer->materialize(reference) : nullptr;
+}
+
+TypePtr CodeGenerator::allocationTypeForExpr(moon::Expr* expr) {
     if (!expr) return nullptr;
     if (auto* move = dynamic_cast<moon::MoveExpr*>(expr))
         return allocationTypeForExpr(move->operand.get());
@@ -22,7 +27,7 @@ TypePtr CodeGenerator::allocationTypeForExpr(moon::Expr* expr) const {
         auto found = mLocalTypes.find(id->name);
         if (found != mLocalTypes.end()) return found->second;
     }
-    return expr->type;
+    return resolveType(expr->type);
 }
 
 llvm::AllocaInst* CodeGenerator::createEntryBlockAlloca(

@@ -33,6 +33,8 @@ public:
 private:
     SourceLocation locationOf(const ASTNode* node) const;
     TypePtr lowerType(const TypeAST* type) const;
+    TypeRef typeRef(const TypePtr& type) const;
+    TypeRefVec typeRefs(const TypeVec& types) const;
     TypePtr parameterType(const ::Param& parameter) const;
     Param lowerParam(const ::Param& parameter) const;
     Operator lowerOperator(int tokenKind, const ASTNode* node);

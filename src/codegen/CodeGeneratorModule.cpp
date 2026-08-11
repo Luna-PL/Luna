@@ -12,6 +12,7 @@ using moon::ImplDecl;
 
 bool CodeGenerator::generate(moon::Module* program) {
     mProgram = program;
+    mTypeMaterializer = std::make_unique<moon::TypeMaterializer>(*program);
     mFunctions.clear();
     mDropCallbacks.clear();
     mFragments.clear();
@@ -35,10 +36,11 @@ bool CodeGenerator::generate(moon::Module* program) {
         if (!f->typeParams.empty() && !f->isTemplateInstance) return;
         std::vector<llvm::Type*> paramLLVMTypes;
         for (auto& p : f->params) {
-            paramLLVMTypes.push_back(mHelpers->toLLVMType(p.type));
+            paramLLVMTypes.push_back(mHelpers->toLLVMType(resolveType(p.type)));
         }
-        llvm::Type* retLLVMType = f->returnType
-            ? mHelpers->toLLVMType(f->returnType)
+        const TypePtr returnType = resolveType(f->returnType);
+        llvm::Type* retLLVMType = returnType
+            ? mHelpers->toLLVMType(returnType)
             : mHelpers->voidTy();
         auto funcType = llvm::FunctionType::get(retLLVMType, paramLLVMTypes, false);
         // A package's ABI is its explicit export list. `main` remains visible
@@ -53,7 +55,7 @@ bool CodeGenerator::generate(moon::Module* program) {
         const std::string symbolName = f->linkName.empty() ? internalName : f->linkName;
         auto* function = llvm::Function::Create(
             funcType, linkage, symbolName, mModule.get());
-        if (f->returnType && f->returnType->kind == TypeKind::Never)
+        if (returnType && returnType->kind == TypeKind::Never)
             function->addFnAttr(llvm::Attribute::NoReturn);
         mFunctions[internalName] = function;
         if (internalName == f->name) mFunctions[f->name] = function;

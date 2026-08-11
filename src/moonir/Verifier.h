@@ -31,13 +31,14 @@ private:
         const SourceLocation& location,
         const std::string& context,
         const Module& module);
-    void verifyType(const TypePtr& type, const SourceLocation& location,
-                    const std::string& context, bool allowTypeParameter = false);
+    void verifyType(const TypeRef& type, const SourceLocation& location,
+                    const std::string& context, const Module& module,
+                    bool allowTypeParameter = false);
     void error(const SourceLocation& location, const std::string& message);
 
     std::vector<diagnostic::Diagnostic> mErrors;
     std::unordered_set<std::string> mVerifiedTypeIds;
-    std::unordered_set<const Type*> mActiveTypeNodes;
+    std::unordered_set<std::string> mActiveTypeIds;
     bool mAllowTypeParameters = false;
 };
 

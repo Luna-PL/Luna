@@ -46,8 +46,7 @@ std::string canonicalAbiLayout(const TypeRecord& type) {
 std::string canonicalContract(const DeclarationRecord& declaration) {
     std::string result = "luna.contract.v1;";
     appendEnum(result, declaration.kind);
-    appendIdentityPart(result, declaration.type
-        ? luna::types::typeId(declaration.type).value : std::string{});
+    appendIdentityPart(result, declaration.type.value);
 
     const auto& facts = declaration.sysmeta;
     appendEnum(result, facts.control.form);
@@ -114,16 +113,12 @@ void Module::rebuildIndexes() {
     }
 }
 
-void Module::registerType(const TypePtr& type) {
-    if (!type) return;
+TypeRef Module::registerType(const TypePtr& type) {
+    if (!type) return {};
     if (typeTableSealed)
         throw std::logic_error("cannot register a type after the MoonIR type table is sealed");
     const auto canonicalTypeValue = luna::types::canonicalType(type);
     const auto id = luna::types::typeId(type);
-    for (const auto& existing : typeTable) {
-        if (existing.id == id && existing.canonicalType == canonicalTypeValue)
-            return;
-    }
 
     TypeRecord record;
     record.id = id;
@@ -140,7 +135,18 @@ void Module::registerType(const TypePtr& type) {
     record.sysmeta.resource.lifetime = resource.lifetime;
     record.sysmeta.resource.relation = resource.relation;
     record.displayName = type->toString();
+    record.sourceName = type->name;
+    record.declarationLinkageName = type->declarationLinkageName;
     record.nominalDeclarationId = type->nominalId;
+    record.typeParameterNames = type->typeParams;
+    record.arrayLength = type->arrayLength;
+    record.isMutable = type->isMutable;
+    record.parameterContracts = type->paramContracts;
+    record.returnContract = type->returnContract;
+    record.isMultiShot = type->isMultiShot;
+    record.continuationKind = type->continuationKind;
+    record.iteratorMode = type->iteratorMode;
+    record.inferenceId = type->inferenceId;
     record.canonicalType = canonicalTypeValue;
     record.canonicalShape = luna::types::canonicalShape(type);
     record.valueSize = luna::layout::valueSize(type);
@@ -161,6 +167,24 @@ void Module::registerType(const TypePtr& type) {
     const auto addReference = [&](const TypePtr& referenced) {
         if (referenced) record.referencedTypeIds.push_back(luna::types::typeId(referenced));
     };
+    const auto referenceOf = [&](const TypePtr& referenced) {
+        return referenced ? luna::types::typeId(referenced) : TypeRef{};
+    };
+    record.innerTypeId = referenceOf(type->inner);
+    record.returnTypeId = referenceOf(type->returnType);
+    for (const auto& argument : type->typeArgs)
+        record.typeArgumentIds.push_back(referenceOf(argument));
+    for (const auto& parameter : type->paramTypes)
+        record.parameterTypeIds.push_back(referenceOf(parameter));
+    for (const auto& field : type->fields)
+        record.fields.push_back({field.name, referenceOf(field.type)});
+    for (const auto& variant : type->variants) {
+        TypeVariantRecord frozen;
+        frozen.name = variant.name;
+        for (const auto& field : variant.fields)
+            frozen.fields.push_back(referenceOf(field));
+        record.variants.push_back(std::move(frozen));
+    }
     addReference(type->inner);
     addReference(type->returnType);
     for (const auto& argument : type->typeArgs) addReference(argument);
@@ -168,6 +192,44 @@ void Module::registerType(const TypePtr& type) {
     for (const auto& field : type->fields) addReference(field.type);
     for (const auto& variant : type->variants)
         for (const auto& field : variant.fields) addReference(field);
+
+    const auto payloadRank = [](const TypeRecord& candidate) {
+        size_t rank = candidate.typeArgumentIds.size() +
+            candidate.parameterTypeIds.size() + candidate.fields.size();
+        if (!candidate.innerTypeId.empty()) ++rank;
+        if (!candidate.returnTypeId.empty()) ++rank;
+        for (const auto& variant : candidate.variants)
+            rank += 1 + variant.fields.size();
+        return rank;
+    };
+    for (auto& existing : typeTable) {
+        if (existing.id != id) continue;
+        if (existing.canonicalType != canonicalTypeValue)
+            throw std::logic_error(
+                "colliding canonical payloads for MoonIR TypeId '" +
+                id.value + "'");
+        if (existing.canonicalShape == record.canonicalShape) return id;
+        const size_t existingRank = payloadRank(existing);
+        const size_t candidateRank = payloadRank(record);
+        if (candidateRank < existingRank) return id;
+        if (candidateRank == existingRank)
+            throw std::logic_error(
+                "conflicting frozen payloads for MoonIR TypeId '" +
+                id.value + "'");
+
+        // A nominal forward placeholder and its completed declaration share
+        // one TypeId. Prefer the strictly richer payload regardless of
+        // registration order, then close any newly exposed graph edges.
+        existing = std::move(record);
+        registerType(type->inner);
+        registerType(type->returnType);
+        for (const auto& argument : type->typeArgs) registerType(argument);
+        for (const auto& parameter : type->paramTypes) registerType(parameter);
+        for (const auto& field : type->fields) registerType(field.type);
+        for (const auto& variant : type->variants)
+            for (const auto& field : variant.fields) registerType(field);
+        return id;
+    }
     typeTable.push_back(std::move(record));
 
     registerType(type->inner);
@@ -177,6 +239,7 @@ void Module::registerType(const TypePtr& type) {
     for (const auto& field : type->fields) registerType(field.type);
     for (const auto& variant : type->variants)
         for (const auto& field : variant.fields) registerType(field);
+    return id;
 }
 
 void Module::sealTypeTable() {
@@ -187,12 +250,122 @@ void Module::sealTypeTable() {
               });
     typeTableSealed = true;
     rebuildIndexes();
+
+    // Forward nominal placeholders may be distinct frontend objects from
+    // their completed declarations. Normalize every derived identity/layout
+    // from the closed frozen graph, never from that construction topology.
+    TypeMaterializer materializer(*this);
+    for (auto& record : typeTable) {
+        const TypePtr restored = materializer.materialize(record.id);
+        if (!restored || luna::types::canonicalType(restored) !=
+                record.canonicalType ||
+            luna::types::typeId(restored) != record.id)
+            throw std::logic_error(
+                "frozen MoonIR payload changes TypeId '" +
+                record.id.value + "' during sealing");
+
+        record.canonicalShape = luna::types::canonicalShape(restored);
+        record.shapeId = luna::types::shapeId(restored);
+        record.valueSize = luna::layout::valueSize(restored);
+        record.valueAlignment = luna::layout::valueAlignment(restored);
+        record.layoutAbiVersion = 0;
+        record.abiLayout.clear();
+        if (record.kind == TypeKind::Enum ||
+            record.kind == TypeKind::Result) {
+            record.layoutAbiVersion = luna::layout::InlineAdtAbiVersion;
+            record.abiLayout =
+                luna::layout::inlineAdtLayoutSignature(restored);
+        }
+        record.canonicalAbiLayout = canonicalAbiLayout(record);
+        record.abiLayoutId = luna::identity::abiLayoutIdFromCanonical(
+            record.canonicalAbiLayout);
+        const auto resource = resourceContractForType(restored);
+        record.sysmeta.resource.usage = resource.usage;
+        record.sysmeta.resource.cleanup = resource.cleanup;
+        record.sysmeta.resource.cleanupRequired = resource.cleanupRequired;
+        record.sysmeta.resource.recursiveCleanup = resource.recursiveCleanup;
+        record.sysmeta.resource.lifetime = resource.lifetime;
+        record.sysmeta.resource.relation = resource.relation;
+        record.sysmeta.identity.type = record.id;
+        record.sysmeta.identity.shape = record.shapeId;
+        record.sysmeta.identity.abiLayout = record.abiLayoutId;
+    }
+
+    // Declaration contracts are part of the same sealed snapshot. A
+    // declaration may have been lowered while one of its nominal children
+    // was still a forward placeholder, so refresh the type-derived portions
+    // after the type graph has reached its canonical closed form.
+    for (auto& declaration : declarationTable) {
+        if (const auto* type = findType(declaration.type)) {
+            declaration.sysmeta.resource = type->sysmeta.resource;
+            if (type->kind == TypeKind::Slot ||
+                type->kind == TypeKind::Fragment)
+                declaration.sysmeta.control = type->sysmeta.control;
+        }
+        declaration.canonicalContract = canonicalContract(declaration);
+        declaration.contractId = luna::identity::contractIdFromCanonical(
+            declaration.canonicalContract);
+        declaration.sysmeta.identity.symbol = declaration.symbolId;
+        declaration.sysmeta.identity.contract = declaration.contractId;
+    }
 }
 
-const TypeRecord* Module::findType(const luna::types::TypeId& id) const {
+const TypeRecord* Module::findType(const TypeRef& id) const {
+    if (!typeTableSealed) {
+        for (const auto& type : typeTable)
+            if (type.id == id) return &type;
+        return nullptr;
+    }
     auto found = typesById.find(id.value);
     if (found == typesById.end() || found->second >= typeTable.size()) return nullptr;
     return &typeTable[found->second];
+}
+
+TypePtr TypeMaterializer::materialize(const TypeRef& reference) {
+    if (reference.empty()) return nullptr;
+    if (auto found = mCache.find(reference.value); found != mCache.end())
+        return found->second;
+    const auto* record = mModule.findType(reference);
+    if (!record) return nullptr;
+
+    // Publish the skeleton before following graph edges so recursive nominal
+    // types resolve to the same backend object without frontend pointer
+    // identity participating in the process.
+    auto result = std::make_shared<Type>();
+    mCache.emplace(reference.value, result);
+    result->kind = record->kind;
+    result->domain = record->domain;
+    result->identityMode = record->identityMode;
+    result->name = record->sourceName;
+    result->declarationLinkageName = record->declarationLinkageName;
+    result->nominalId = record->nominalDeclarationId;
+    result->typeParams = record->typeParameterNames;
+    result->arrayLength = record->arrayLength;
+    result->isMutable = record->isMutable;
+    result->paramContracts = record->parameterContracts;
+    result->returnContract = record->returnContract;
+    result->sysmeta = record->sysmeta;
+    result->isMultiShot = record->isMultiShot;
+    result->continuationKind = record->continuationKind;
+    result->iteratorMode = record->iteratorMode;
+    result->inferenceId = record->inferenceId;
+
+    result->inner = materialize(record->innerTypeId);
+    result->returnType = materialize(record->returnTypeId);
+    for (const auto& argument : record->typeArgumentIds)
+        result->typeArgs.push_back(materialize(argument));
+    for (const auto& parameter : record->parameterTypeIds)
+        result->paramTypes.push_back(materialize(parameter));
+    for (const auto& field : record->fields)
+        result->fields.push_back({field.name, materialize(field.type)});
+    for (const auto& variant : record->variants) {
+        TypeVariant restored;
+        restored.name = variant.name;
+        for (const auto& field : variant.fields)
+            restored.fields.push_back(materialize(field));
+        result->variants.push_back(std::move(restored));
+    }
+    return result;
 }
 
 const char* retentionName(Retention retention) {

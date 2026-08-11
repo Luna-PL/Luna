@@ -201,12 +201,13 @@ void CodeGenerator::generateDynamicFragmentDispatch(
     }
 }
 
-static std::string externalFragmentContract(const SlotInvokeStmt* slot) {
+static std::string externalFragmentContract(
+    const SlotInvokeStmt* slot, moon::TypeMaterializer& types) {
     std::string contract = "luna.slot." + slot->name + ".";
     contract += slot->acceptedKind == FragmentKind::Interceptor ? "interceptor" : "context";
     contract += slot->acceptedCardinality == FragmentCardinality::Many ? ".many" : ".once";
-    if (slot->structuralType) {
-        for (const auto& parameter : slot->structuralType->paramTypes)
+    if (const TypePtr structuralType = types.materialize(slot->structuralType)) {
+        for (const auto& parameter : structuralType->paramTypes)
             contract += "." + (parameter ? parameter->toString() : "unknown");
     }
     return contract + ".v1";
@@ -215,7 +216,9 @@ static std::string externalFragmentContract(const SlotInvokeStmt* slot) {
 std::array<llvm::Value*, 4> CodeGenerator::generateExternalFragmentInvocation(
     SlotInvokeStmt* slot, llvm::Function* func, llvm::Value* selected) {
     auto* slotName = mBuilder->CreateGlobalString(slot->name, "external.slot");
-    auto* contract = mBuilder->CreateGlobalString(externalFragmentContract(slot), "external.contract");
+    auto* contract = mBuilder->CreateGlobalString(
+        externalFragmentContract(slot, *mTypeMaterializer),
+        "external.contract");
     auto* invocationType = llvm::StructType::get(
         *mCtx, {mHelpers->i32Ty(), mHelpers->ptrTy(), mHelpers->sizeTy()});
     auto* invocationStorage = createEntryBlockAlloca(func, invocationType, "external.invocation");
@@ -267,7 +270,7 @@ void CodeGenerator::generateFragmentInline(FragmentDecl* fragment, SlotInvokeStm
         TypePtr type;
         if (i < slot->args.size()) {
             value = generateExpr(slot->args[i].get());
-            type = fragment->params[i].type;
+            type = resolveType(fragment->params[i].type);
         } else if (i < slot->resolvedParamNames.size()) {
             auto outer = mLocals.find(slot->resolvedParamNames[i]);
             if (outer != mLocals.end()) {

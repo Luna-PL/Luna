@@ -112,7 +112,7 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
                         mHelpers->ptrTy())),
                 token);
             mLocals[ls->name] = token;
-            mLocalTypes[ls->name] = ls->type;
+            mLocalTypes[ls->name] = resolveType(ls->type);
             mLocalKnownUpperBounds.erase(ls->name);
             return;
         }
@@ -126,8 +126,8 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
             mBuilder->CreateStore(initVal, varPtr);
             mLocals[ls->name] = varPtr;
             if (auto* heap = dynamic_cast<HeapAllocExpr*>(ls->initializer.get()))
-                mLocalTypes[ls->name] = heap->type
-                    ? heap->type : heap->allocatedType;
+                mLocalTypes[ls->name] = resolveType(
+                    heap->type.empty() ? heap->allocatedType : heap->type);
         } else {
             valType = initVal->getType();
             if (valType->isVoidTy()) valType = mHelpers->i32Ty();
@@ -137,7 +137,8 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
             // Inferred aggregate types (notably array literals) have no AST
             // annotation. Semantic analysis has already canonicalised them in
             // the symbol table; preserve that information for GEP lowering.
-            if (ls->type) mLocalTypes[ls->name] = ls->type;
+            if (!ls->type.empty())
+                mLocalTypes[ls->name] = resolveType(ls->type);
         }
         if (auto upperBound = luna::codegen::knownArrayIndexUpperBound(
                 ls->initializer.get(), mLocalKnownUpperBounds))
@@ -347,9 +348,10 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         return;
     }
     if (auto* match = dynamic_cast<MatchStmt*>(stmt)) {
-        if (!match->matchedType ||
-            (match->matchedType->kind != TypeKind::Enum &&
-             match->matchedType->kind != TypeKind::Result)) {
+        const TypePtr matchedType = resolveType(match->matchedType);
+        if (!matchedType ||
+            (matchedType->kind != TypeKind::Enum &&
+             matchedType->kind != TypeKind::Result)) {
             error("match has no validated enum type");
             return;
         }
@@ -386,10 +388,10 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
             mLocalKnownUpperBounds = outerBounds;
 
             const TypeVariant* enumVariant = nullptr;
-            if (match->matchedType->kind == TypeKind::Enum &&
-                arm.variantIndex < match->matchedType->variants.size())
+            if (matchedType->kind == TypeKind::Enum &&
+                arm.variantIndex < matchedType->variants.size())
                 enumVariant =
-                    &match->matchedType->variants[arm.variantIndex];
+                    &matchedType->variants[arm.variantIndex];
             for (size_t index = 0;
                  index < arm.bindings.size() &&
                  index < arm.bindingTypes.size(); ++index) {
@@ -398,14 +400,15 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
                     offset = luna::layout::variantFieldOffset(
                         *enumVariant, index);
                 llvm::Value* fieldValue = unpackResultPayload(
-                    payload, arm.bindingTypes[index], offset);
+                    payload, resolveType(arm.bindingTypes[index]), offset);
                 auto* storage = createEntryBlockAlloca(
-                    func, mHelpers->toLLVMType(arm.bindingTypes[index]),
+                    func, mHelpers->toLLVMType(
+                        resolveType(arm.bindingTypes[index])),
                     arm.bindings[index]);
                 mBuilder->CreateStore(fieldValue, storage);
                 mLocals[arm.bindings[index]] = storage;
                 mLocalTypes[arm.bindings[index]] =
-                    arm.bindingTypes[index];
+                    resolveType(arm.bindingTypes[index]);
                 mLocalKnownUpperBounds.erase(arm.bindings[index]);
             }
             generateBlock(arm.body.get(), func);
@@ -479,8 +482,8 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
                 return;
             }
 
-            TypePtr elementType = fs->elementType
-                ? fs->elementType : TyI32;
+            TypePtr elementType = fs->elementType.empty()
+                ? TyI32 : resolveType(fs->elementType);
             auto* loopVariable = createEntryBlockAlloca(
                 func, mHelpers->toLLVMType(elementType),
                 fs->varName);
@@ -512,7 +515,7 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
                         "iterator.into_state");
                 llvm::Type* stateType =
                     mHelpers->toLLVMType(
-                        fs->protocolIteratorType);
+                        resolveType(fs->protocolIteratorType));
                 stateStorage = createEntryBlockAlloca(
                     func, stateType,
                     fs->protocolStateName);
@@ -522,7 +525,7 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
                 mLocals[fs->protocolStateName] =
                     stateStorage;
                 mLocalTypes[fs->protocolStateName] =
-                    fs->protocolIteratorType;
+                    resolveType(fs->protocolIteratorType);
                 mLocalKnownUpperBounds.erase(
                     fs->protocolStateName);
             } else {
@@ -561,10 +564,12 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
 
             mBuilder->SetInsertPoint(nextBlock);
             llvm::Value* receiver = stateStorage;
-            if (fs->protocolIteratorType &&
-                (fs->protocolIteratorType->kind ==
+            const TypePtr protocolIteratorType = resolveType(
+                fs->protocolIteratorType);
+            if (protocolIteratorType &&
+                (protocolIteratorType->kind ==
                      TypeKind::Struct ||
-                 fs->protocolIteratorType->kind ==
+                 protocolIteratorType->kind ==
                      TypeKind::Record))
                 receiver = mBuilder->CreateLoad(
                     stateStorage->getAllocatedType(),
@@ -666,7 +671,8 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
         }
         plan.ownedStateName =
             fs->recipeStateName;
-        TypePtr elementType = fs->elementType ? fs->elementType : plan.itemType;
+        TypePtr elementType = fs->elementType.empty()
+            ? plan.itemType : resolveType(fs->elementType);
         auto* loopVariable = createEntryBlockAlloca(
             func, mHelpers->toLLVMType(elementType), fs->varName);
 
