@@ -4152,6 +4152,66 @@ fn main() -> i32 {
     if (cfgCodegen.jitRun() != 42)
         return fail("canonical CFG JIT did not preserve branch/local semantics");
 
+    const std::string cfgCleanupCodegenSource = R"luna(
+package canonical.cleanup_codegen;
+
+fn release(affine value: string) -> i32 {
+    return 7;
+}
+
+fn branch_release(flag: bool) -> i32 {
+    if flag {
+        let value = "temporary";
+        value;
+    }
+    return 3;
+}
+)luna";
+    auto cfgCleanupSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            cfgCleanupCodegenSource, "<canonical-cleanup-codegen>");
+    if (!cfgCleanupSnapshot.success())
+        return fail("frontend rejected the canonical cleanup codegen source");
+    moon::LunaLowerer cfgCleanupLowerer;
+    auto cfgCleanupModule = cfgCleanupLowerer.lower(
+        *cfgCleanupSnapshot.program(), *cfgCleanupSnapshot.symbolTable());
+    moon::Sealer cfgCleanupSealer;
+    if (!cfgCleanupLowerer.errors().empty() ||
+        !cfgCleanupSealer.sealFunctionBodies(*cfgCleanupModule) ||
+        !verifier.verify(*cfgCleanupModule))
+        return fail("canonical cleanup codegen fixture did not seal and verify");
+    const moon::FunctionDecl* cleanupFunction = nullptr;
+    const moon::FunctionDecl* branchCleanupFunction = nullptr;
+    for (const auto& declaration : cfgCleanupModule->declarations) {
+        const auto* function = dynamic_cast<const moon::FunctionDecl*>(
+            declaration.get());
+        if (function && function->name == "release") {
+            cleanupFunction = function;
+        } else if (function && function->name == "branch_release") {
+            branchCleanupFunction = function;
+        }
+    }
+    bool hasReturnCleanup = false;
+    bool hasBranchCleanup = false;
+    if (cleanupFunction && cleanupFunction->controlFlow)
+        for (const auto& block : cleanupFunction->controlFlow->blocks)
+            hasReturnCleanup = hasReturnCleanup ||
+                (block.terminator.kind == moon::TerminatorKind::Return &&
+                 !block.terminator.exitCleanups.empty());
+    if (branchCleanupFunction && branchCleanupFunction->controlFlow)
+        for (const auto& block : branchCleanupFunction->controlFlow->blocks)
+            hasBranchCleanup = hasBranchCleanup ||
+                !block.terminator.primary.cleanups.empty() ||
+                !block.terminator.secondary.cleanups.empty();
+    if (!hasReturnCleanup || !hasBranchCleanup)
+        return fail("cleanup codegen fixture has no canonical cleanup edge");
+    CodeGenerator cfgCleanupCodegen("canonical.cleanup_codegen");
+    if (!cfgCleanupCodegen.generate(cfgCleanupModule.get())) {
+        for (const auto& diagnostic : cfgCleanupCodegen.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("LLVM backend rejected a canonical root cleanup edge");
+    }
+
     moon::Module compositionModule;
     compositionModule.name = "canonical.composition";
     const auto compositionUnit = compositionModule.registerType(TyUnit);

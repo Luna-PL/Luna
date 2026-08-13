@@ -107,6 +107,9 @@ runtime-apply failure preserves the original module unchanged.
 The same test then sends a sealed, cleanup-free function through the LLVM backend and ORC JIT.
 Its nested scope intentionally shadows a local name; the result of 42 proves canonical storage is
 keyed by `LocalId` while Jump/Branch/Return preserve source control semantics.
+An additional generate-only module requires a root parameter cleanup on return and a lexical
+cleanup on a branch edge, exercising ordered cleanup emission without executing a deliberately
+synthetic owned-string fixture.
 
 The canonical table fixtures also cover cursor-guarded cleanup for sequentially consumed
 move-only arrays. Tamper cases reject mixed guarded/unguarded cleanup, duplicate element coverage,

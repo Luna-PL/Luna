@@ -62,17 +62,45 @@ void CodeGenerator::generateControlFlowBody(
     if (!mBuilder->GetInsertBlock()->getTerminator())
         mBuilder->CreateBr(blocks[graph.entry.value]);
 
-    const auto emitEdge = [this, &blocks](
-        const moon::ControlEdge& edge, const std::string& context) {
-        if (!edge.cleanups.empty()) {
-            error(context + " cleanup lowering is not implemented");
-            return;
+    const auto emitCleanups = [this, &graph](
+        const std::vector<moon::CleanupId>& cleanups,
+        const std::string& context) {
+        for (const auto cleanup : cleanups) {
+            const auto* record = graph.findCleanup(cleanup);
+            if (!record) {
+                error(context + " references no canonical cleanup row");
+                continue;
+            }
+            emitCanonicalCleanup(*record);
         }
+    };
+    const auto emitEdge = [this, &blocks, &emitCleanups](
+        const moon::ControlEdge& edge, const std::string& context) {
         if (edge.target.empty() || edge.target.value >= blocks.size()) {
             error(context + " references no LLVM block");
             return;
         }
+        emitCleanups(edge.cleanups, context);
         mBuilder->CreateBr(blocks[edge.target.value]);
+    };
+    const auto edgeTarget = [this, func, &blocks, &emitCleanups](
+        const moon::ControlEdge& edge,
+        const std::string& context) -> llvm::BasicBlock* {
+        if (edge.target.empty() || edge.target.value >= blocks.size()) {
+            error(context + " references no LLVM block");
+            return nullptr;
+        }
+        if (edge.cleanups.empty()) return blocks[edge.target.value];
+
+        const auto saved = mBuilder->saveIP();
+        auto* cleanupBlock = llvm::BasicBlock::Create(
+            *mCtx, context, func);
+        mBuilder->SetInsertPoint(cleanupBlock);
+        emitCleanups(edge.cleanups, context);
+        if (!mBuilder->GetInsertBlock()->getTerminator())
+            mBuilder->CreateBr(blocks[edge.target.value]);
+        mBuilder->restoreIP(saved);
+        return cleanupBlock;
     };
 
     for (auto& block : graph.blocks) {
@@ -111,34 +139,27 @@ void CodeGenerator::generateControlFlowBody(
                 emitEdge(terminator.primary, "canonical jump edge");
                 break;
             case moon::TerminatorKind::Branch: {
-                if (!terminator.primary.cleanups.empty() ||
-                    !terminator.secondary.cleanups.empty()) {
-                    error("canonical branch cleanup lowering is not implemented");
-                    break;
-                }
                 llvm::Value* condition = generateExpr(
                     terminator.operand.get());
-                if (!condition || terminator.primary.target.empty() ||
-                    terminator.secondary.target.empty() ||
-                    terminator.primary.target.value >= blocks.size() ||
-                    terminator.secondary.target.value >= blocks.size()) {
+                auto* primary = edgeTarget(
+                    terminator.primary, "cfg.edge.true.cleanup");
+                auto* secondary = edgeTarget(
+                    terminator.secondary, "cfg.edge.false.cleanup");
+                if (!condition || !primary || !secondary) {
                     error("canonical branch has no LLVM condition or target");
                     break;
                 }
-                mBuilder->CreateCondBr(
-                    condition, blocks[terminator.primary.target.value],
-                    blocks[terminator.secondary.target.value]);
+                mBuilder->CreateCondBr(condition, primary, secondary);
                 break;
             }
             case moon::TerminatorKind::Return: {
-                if (!terminator.exitCleanups.empty()) {
-                    error("canonical return cleanup lowering is not implemented");
-                    break;
-                }
                 llvm::Type* returnType = func->getReturnType();
                 if (returnType->isVoidTy()) {
                     if (terminator.operand)
                         (void)generateExpr(terminator.operand.get());
+                    emitCleanups(
+                        terminator.exitCleanups,
+                        "canonical return cleanup");
                     if (!mBuilder->GetInsertBlock()->getTerminator())
                         mBuilder->CreateRetVoid();
                 } else {
@@ -148,6 +169,9 @@ void CodeGenerator::generateControlFlowBody(
                         error("canonical non-void return has no value");
                         break;
                     }
+                    emitCleanups(
+                        terminator.exitCleanups,
+                        "canonical return cleanup");
                     mBuilder->CreateRet(
                         coerceCallArgument(value, returnType));
                 }

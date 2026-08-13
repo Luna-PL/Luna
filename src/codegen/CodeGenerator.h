@@ -134,6 +134,7 @@ private:
     void emitLunaDeallocation(llvm::Value* pointer, const TypePtr& type);
     void emitCleanup(const std::string& place,
                      luna::ownership::CleanupAction action);
+    void emitCanonicalCleanup(const moon::CleanupRecord& cleanup);
     void emitMaterializedIteratorCleanup(const std::string& name);
     llvm::Value* packResultPayload(llvm::Value* value, const TypePtr& type,
                                    const TypePtr& resultType);

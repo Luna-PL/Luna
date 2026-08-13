@@ -675,7 +675,11 @@ maps parameters by the verified parameter table, emits non-control operations, a
 from the block table. A source-to-JIT fixture with lexical shadowing returns 42 and proves that two
 locals with the same diagnostic name retain distinct storage. This is the same function codegen
 entry selecting one exclusive body representation during migration, not a second compiler backend.
-`Switch`, cleanup edges, allocation operations, and the wider expression surface currently fail
+Root, unguarded value cleanups now lower on jump, branch, return, resume, and abort edges in the
+exact verifier-approved order. Branches receive edge-specific cleanup blocks, while a return value
+is evaluated before its exit cleanups, preserving Luna evaluation order. The fixture covers both a
+root parameter return cleanup and a lexical fallthrough cleanup. `Switch`, projected/guarded and
+raw-allocation cleanups, allocation operations, and the wider expression surface currently fail
 closed; the production sealer therefore remains disconnected until those paths and runtime
 composition are complete.
 

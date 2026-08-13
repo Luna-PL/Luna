@@ -599,8 +599,12 @@ body 的 function，backend 按 `LocalId` 分配 typed-local storage，按已验
 `Branch`、无 cleanup `Return`、`Resume`、`Abort` 和 `Unreachable`。一个含词法
 shadowing 的 source-to-JIT fixture 返回 42，证明诊断名相同的两个 local 仍使用不同存储。
 这是同一 function codegen entry 在迁移期选择一份互斥 body representation，不是第二个
-compiler backend。`Switch`、cleanup edge、allocation operation 与更广的 expression surface
-当前均 fail closed；在这些路径和 runtime composition 闭合前，production sealer 仍不接线。
+compiler backend。root、unguarded value cleanup 现已在 jump、branch、return、resume 和
+abort edge 上按 verifier 确认的精确顺序 lowering。branch 使用专用 edge cleanup block，
+return value 则在 exit cleanup 前求值，保留 Luna 求值顺序。fixture 同时覆盖 root
+parameter return cleanup 与词法 fallthrough cleanup。`Switch`、projected/guarded 及 raw-allocation
+cleanup、allocation operation 与更广的 expression surface 当前仍 fail closed；在这些路径和
+runtime composition 闭合前，production sealer 仍不接线。
 
 无捕获 lambda 的子阶段也已完成：lambda expression 仅作为闭包值节点，其
 structured body 在构造时被消费为一份独立、以 `Lambda` region 为根的

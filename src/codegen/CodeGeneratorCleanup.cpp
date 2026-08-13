@@ -507,3 +507,80 @@ void CodeGenerator::emitCleanup(
     if (!pointer->getType()->isPointerTy()) return;
     emitLunaDeallocation(pointer, type);
 }
+
+void CodeGenerator::emitCanonicalCleanup(
+    const moon::CleanupRecord& cleanup) {
+    if (cleanup.place.root.empty() ||
+        cleanup.place.root.value >= mCanonicalLocals.size() ||
+        !mCanonicalLocals[cleanup.place.root.value]) {
+        error("canonical cleanup references no LLVM local storage");
+        return;
+    }
+    if (!cleanup.place.projections.empty() || cleanup.guard) {
+        error("projected or guarded canonical cleanup lowering is not implemented");
+        return;
+    }
+    if (cleanup.kind == moon::CleanupKind::Allocation) {
+        error("canonical allocation cleanup lowering is not implemented");
+        return;
+    }
+
+    TypePtr type = resolveType(cleanup.type);
+    if (!type) {
+        error("canonical cleanup has no materialized type");
+        return;
+    }
+    const auto root = cleanup.place.root.value;
+    llvm::Value* value = mBuilder->CreateLoad(
+        mCanonicalLocals[root]->getAllocatedType(),
+        mCanonicalLocals[root],
+        "local." + std::to_string(root) + ".cleanup");
+    const std::string label =
+        "local." + std::to_string(root) + ".cleanup";
+    switch (cleanup.action) {
+        case luna::ownership::CleanupAction::ResultDrop:
+            if (type->kind != TypeKind::Result) {
+                error("canonical Result cleanup has a non-Result type");
+                return;
+            }
+            emitOwnedPayloadCleanup(value, type, label + ".result");
+            return;
+        case luna::ownership::CleanupAction::EnumDrop:
+            if (type->kind != TypeKind::Enum) {
+                error("canonical enum cleanup has a non-enum type");
+                return;
+            }
+            emitOwnedPayloadCleanup(value, type, label + ".enum");
+            return;
+        case luna::ownership::CleanupAction::ArrayDrop:
+            if (type->kind != TypeKind::Array) {
+                error("canonical array cleanup has a non-array type");
+                return;
+            }
+            emitOwnedPayloadCleanup(value, type, label + ".array");
+            return;
+        case luna::ownership::CleanupAction::RecordDrop:
+            if (type->kind != TypeKind::Record) {
+                error("canonical record cleanup has a non-record type");
+                return;
+            }
+            emitOwnedPayloadCleanup(value, type, label + ".record");
+            return;
+        case luna::ownership::CleanupAction::DeviceRelease:
+            emitOwnedPayloadCleanup(value, type, label + ".device");
+            return;
+        case luna::ownership::CleanupAction::Drop:
+            emitOwnedPayloadCleanup(value, type, label + ".resource");
+            return;
+        case luna::ownership::CleanupAction::Deallocate:
+            if (!value->getType()->isPointerTy()) {
+                error("canonical deallocation cleanup has no pointer value");
+                return;
+            }
+            emitLunaDeallocation(value, type);
+            return;
+        case luna::ownership::CleanupAction::None:
+            error("canonical cleanup has no Resource action");
+            return;
+    }
+}
