@@ -733,11 +733,13 @@ consumer receives an explicit move. Normal loop backedges and the zero-iteration
 agree on one active cleanup obligation without adding an initialized bit, runtime ownership flag,
 or second accumulator. Linear accumulators remain outside this hidden terminal state.
 
-The first eager-expression slice of Copy sibling hoisting is now complete. Ordinary-call callee and
+The eager-expression ordered-operand slice is now complete. Ordinary-call callee and
 arguments, non-short-circuit binary operands, index operands, array and variant elements,
 dynamic-select filters, and launch operands are scanned in source order. When a later operand
-expands into an iterator-terminal CFG, each earlier non-unit Copy value is first stored in an
-ordinary synthetic local and the parent expression reads it by LocalId. A callee load or
+expands into an iterator-terminal CFG, each earlier Copy value is first stored in an ordinary
+synthetic local and the parent expression reads it by LocalId. A non-trivial earlier `unit`
+expression is instead emitted exactly once as an ordinary `ExprStmt`, and the parent receives a
+zero-sized `UnitExpr`; it therefore needs neither a synthetic local nor runtime state. A callee load or
 side-effecting earlier call therefore cannot drift past the terminal loop, and no runtime tag or
 ownership flag is introduced. The independent verifier checks the resulting let/local/type
 references. The same ordered lowering now accepts a cleanup-free Affine value produced by an
@@ -752,9 +754,9 @@ initialized flag is required. An explicitly transferred Linear sibling is accept
 recursive scan proves that no remaining operand contains a `TryExpr`, `BlockExpr`, or `IfExpr` that
 may leave before the parent consumes it. Its synthetic Linear local is tracked by the verifier's
 compile-time ownership marker and read through exactly one generated `MoveExpr`; unlike Affine, it
-has no cleanup fallback on an early exit. Linear siblings across a potential early exit and unit
-siblings remain explicitly rejected: the first is an exactly-once usage violation, while the second
-still requires a dedicated eager statement form. Neither is copied or reordered implicitly.
+has no cleanup fallback on an early exit. Linear siblings across a potential early exit remain
+explicitly rejected because they violate the exactly-once usage contract; they are never copied or
+reordered implicitly.
 Short-circuit operands follow the conditional CFG normalization below.
 
 Anonymous structural records are now distinguished from allocating products. Their inline value
@@ -817,14 +819,13 @@ deactivates compile-time affine markers before the next header entry and the dec
 them on the next execution. This models source-level repeated evaluation without a runtime
 initialized flag, and an ordinary condition still keeps the previous compact single-block shape.
 
-Item 10 is not complete as a whole. Unit-valued eager expression siblings, capturing closure
-environments, and non-Copy item/callable per-element ownership state remain explicit following
-boundaries. Linear hoisting across a potential early exit remains invalid by its exactly-once
-contract rather than a deferred lowering feature. The remaining work then normalizes slot and fragment
-paths, atomically replaces
-structured executable bodies, and moves the backend to the same CFG. Only after structured
-execution is deleted and the full verifier/codegen regression gate passes does the item-level gate
-pass; serializer/parser work remains item 11.
+Item 10 is not complete as a whole. Capturing closure environments and non-Copy item/callable
+per-element ownership state remain explicit boundaries. Linear hoisting across a potential early
+exit remains invalid by its exactly-once contract rather than a deferred lowering feature. The
+remaining work then normalizes slot and fragment paths, atomically replaces structured executable
+bodies, and moves the backend to the same CFG. Only after structured execution is deleted and the
+full verifier/codegen regression gate passes does the item-level gate pass; serializer/parser work
+remains item 11.
 
 | Order | Priority | Work | Completion gate |
 |---:|---|---|---|

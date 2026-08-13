@@ -2380,10 +2380,12 @@ ControlFlowBuilder::normalizeOrderedOperands(
         }
 
         // A later control-flow operand must not move evaluation of any
-        // preceding value across its new CFG. Each eager value is frozen into
-        // a synthetic local in source order. Copy values are read normally;
-        // affine values are explicitly transferred once, while their cleanup
-        // rows remain visible to any early exit until the parent is emitted.
+        // preceding value across its new CFG. Each eager value is sequenced
+        // in source order. Non-trivial unit expressions become ordinary
+        // statements; other values are frozen into synthetic locals. Copy
+        // values are read normally; affine values are explicitly transferred
+        // once, while their cleanup rows remain visible to any early exit
+        // until the parent is emitted.
         for (size_t previous = 0; previous < index; ++previous) {
             auto* earlier = operands[previous];
             if (earlier &&
@@ -2702,9 +2704,18 @@ bool ControlFlowBuilder::hoistOrderedOperand(
         }
     }
     if (type->kind == TypeKind::Unit) {
-        error(expression->location,
-              "expression sibling hoisting requires a non-unit value");
-        return false;
+        const auto location = expression->location;
+        auto statement = std::make_unique<ExprStmt>();
+        statement->location = location;
+        statement->expr = std::move(expression);
+        mGraph->blocks[current.block.value].operations.push_back(
+            std::move(statement));
+
+        auto unit = std::make_unique<UnitExpr>();
+        unit->location = location;
+        unit->type = type->id;
+        expression = std::move(unit);
+        return true;
     }
     if (usage == luna::ownership::Usage::Linear && !allowLinear) {
         error(expression->location,

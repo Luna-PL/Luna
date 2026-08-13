@@ -654,10 +654,12 @@ affine-accumulator `fold` 子阶段现在也已完成。一个 synthetic affine 
 cleanup obligation，不增加 initialized bit、runtime ownership flag 或第二个 accumulator。
 linear accumulator 仍不进入这种隐藏 terminal state。
 
-Copy expression sibling-hoisting 子阶段现已完成首个 eager-expression 覆盖。普通 call 的
+eager-expression 的有序 operand 子阶段现已完成。普通 call 的
 callee/argument、非短路 binary、index、array、variant、dynamic-select filter 与 launch
 operand 都会按源码顺序扫描；一旦后续 operand 展开为 iterator terminal CFG，较早的
-非 unit Copy 值会先进入普通 synthetic local，原表达式再通过该 LocalId 读取。因此
+普通 Copy 值会先进入 synthetic local，原表达式再通过该 LocalId 读取。
+非平凡的较早 `unit` 表达式则会作为普通 `ExprStmt` 恰好执行一次，父表达式中用
+零大小 `UnitExpr` 占位，因而无需 synthetic local 或任何运行时状态。因此
 callee load 或有副作用的 earlier call 不会被推迟到 terminal 循环之后，也不增加运行时
 tag/ownership flag。独立 verifier 会检查这些 let/local/type 引用。同一有序 lowering
 现也允许由 Affine-returning call 或显式 `move` 生成的无 cleanup Affine 值：其
@@ -672,8 +674,7 @@ cleanup，因而不需要 runtime initialized flag。显式转移的 Linear sibl
 `BlockExpr` 或 `IfExpr` 时才可 hoist。其 synthetic Linear local 由 verifier 的
 纯编译期 ownership marker 跟踪，并通过唯一的生成 `MoveExpr` 读取；与 Affine
 不同，Linear 在 early exit 上没有 cleanup 退路。跨越潜在 early exit 的 Linear
-sibling 与 unit sibling 仍被明确拒绝：前者违反恰好一次消费约束，后者仍需专用的
-eager statement 形式；它们都不会被隐式复制或重排。
+sibling 仍被明确拒绝，因为它违反恰好一次消费约束；它不会被隐式复制或重排。
 短路 operand 则进入下文的 conditional CFG 规范化。
 
 匿名 structural record 现已与会分配的 product 区分。其 inline 值构造没有 allocation
@@ -729,8 +730,8 @@ loop 的 header 同时是初始 edge 与 body backedge 的目标；每次经过 
 声明时重新激活。这在不增加 runtime initialized flag 的情况下表达了源语言的
 重复求值；普通 condition 仍保持原有的紧凑单 block 形态。
 
-第 10 项尚未整体完成。unit-valued eager expression sibling、捕获式 closure
-environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup 状态仍是明确的后续边界。
+第 10 项尚未整体完成。捕获式 closure environment 与 non-Copy
+item/callable contract 的逐元素初始化/cleanup 状态仍是明确的后续边界。
 跨越潜在 early exit 的 Linear hoisting 因违反恰好一次约束而保持非法，它不是延后的
 lowering 功能。
 随后规范化 slot 和 fragment

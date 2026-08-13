@@ -155,6 +155,16 @@ int main() {
         {luna::ownership::Relation::Owned,
          luna::ownership::Usage::Copy});
     const auto unitConsumerTypeId = module.registerType(unitConsumerType);
+    auto unitOrderedConsumerType = Type::makeFunction(
+        {TyUnit, TyI32}, TyUnit,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy},
+         {luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Copy});
+    const auto unitOrderedConsumerTypeId = module.registerType(
+        unitOrderedConsumerType);
     auto moveMapType = Type::makeFunction(
         {TyI32}, TyString,
         {{luna::ownership::Relation::Owned,
@@ -1687,6 +1697,72 @@ int main() {
         !hoistedSiblingCallee || !siblingTerminalReachedCall)
         return fail(
             "Copy call sibling did not hoist before its terminal CFG");
+
+    auto unitSiblingBoundary = std::make_unique<moon::BlockStmt>();
+    auto unitSiblingUse = std::make_unique<moon::ExprStmt>();
+    auto unitSiblingCall = std::make_unique<moon::CallExpr>();
+    unitSiblingCall->type = unitId;
+    auto unitSiblingConsumer = std::make_unique<moon::IdentifierExpr>();
+    unitSiblingConsumer->name = "unitOrderedConsumer";
+    unitSiblingConsumer->type = unitOrderedConsumerTypeId;
+    unitSiblingCall->callee = std::move(unitSiblingConsumer);
+    auto earlierUnitCall = std::make_unique<moon::CallExpr>();
+    earlierUnitCall->type = unitId;
+    auto earlierUnitAction = std::make_unique<moon::IdentifierExpr>();
+    earlierUnitAction->name = "action";
+    earlierUnitAction->type = actionTypeId;
+    earlierUnitCall->callee = std::move(earlierUnitAction);
+    auto earlierUnitArgument = std::make_unique<moon::IntLiteralExpr>();
+    earlierUnitArgument->value = 7;
+    earlierUnitArgument->type = i32Id;
+    earlierUnitCall->args.push_back(std::move(earlierUnitArgument));
+    unitSiblingCall->args.push_back(std::move(earlierUnitCall));
+    unitSiblingCall->args.push_back(makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false));
+    unitSiblingUse->expr = std::move(unitSiblingCall);
+    unitSiblingBoundary->stmts.push_back(std::move(unitSiblingUse));
+    moon::Param unitOrderedConsumerParameter;
+    unitOrderedConsumerParameter.name = "unitOrderedConsumer";
+    unitOrderedConsumerParameter.type = unitOrderedConsumerTypeId;
+    moon::Param unitSiblingActionParameter;
+    unitSiblingActionParameter.name = "action";
+    unitSiblingActionParameter.type = actionTypeId;
+    auto unitSiblingCfg = cfgBuilder.build(
+        std::move(unitSiblingBoundary),
+        {unitOrderedConsumerParameter, unitSiblingActionParameter},
+        moon::RegionKind::Function, module);
+    size_t sequencedUnitCalls = 0;
+    bool unitPlaceholderReachedParent = false;
+    if (unitSiblingCfg)
+        for (const auto& block : unitSiblingCfg->blocks)
+            for (const auto& operation : block.operations) {
+                const auto* statement =
+                    dynamic_cast<const moon::ExprStmt*>(operation.get());
+                const auto* call = statement
+                    ? dynamic_cast<const moon::CallExpr*>(
+                          statement->expr.get())
+                    : nullptr;
+                if (!call) continue;
+                const auto* callee =
+                    dynamic_cast<const moon::IdentifierExpr*>(
+                        call->callee.get());
+                if (callee && callee->name == "action")
+                    ++sequencedUnitCalls;
+                if (call->args.size() != 2) continue;
+                const auto* result =
+                    dynamic_cast<const moon::IdentifierExpr*>(
+                        call->args[1].get());
+                unitPlaceholderReachedParent =
+                    dynamic_cast<const moon::UnitExpr*>(
+                        call->args[0].get()) &&
+                    result && result->name.rfind(
+                        "$terminal.count.", 0) == 0;
+            }
+    if (!unitSiblingCfg ||
+        !cfgVerifier.verify(*unitSiblingCfg, module) ||
+        sequencedUnitCalls != 1 || !unitPlaceholderReachedParent)
+        return fail(
+            "unit sibling did not sequence once before its terminal CFG");
 
     auto binarySiblingBoundary = std::make_unique<moon::BlockStmt>();
     auto binaryReturn = std::make_unique<moon::ReturnStmt>();
@@ -3398,6 +3474,7 @@ int main() {
     reverse.registerType(affineValueProducerType);
     reverse.registerType(actionType);
     reverse.registerType(unitConsumerType);
+    reverse.registerType(unitOrderedConsumerType);
     reverse.registerType(moveMapType);
     reverse.registerType(moveMapIterator);
     reverse.registerType(inlineProduct);
