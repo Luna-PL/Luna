@@ -303,10 +303,15 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             error({}, "sealed CFG retains compiler iterator recipe local " +
                       std::to_string(index));
         else if (local.kind != LocalKind::Allocation &&
+                 local.relation == luna::ownership::Relation::Owned &&
                  !luna::ownership::satisfiesUsageRequirement(
                      local.usage, type->sysmeta.resource.usage))
             error({}, "local " + std::to_string(index) +
                       " weakens its frozen usage requirement");
+        else if (local.relation != luna::ownership::Relation::Owned &&
+                 local.usage != luna::ownership::Usage::Copy)
+            error({}, "borrowed local " + std::to_string(index) +
+                      " does not use copy cardinality");
         if (local.kind == LocalKind::Allocation &&
             (local.usage != luna::ownership::Usage::Affine ||
              local.relation != luna::ownership::Relation::Owned))
@@ -326,6 +331,9 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             if (local->scope != cleanup.scope)
                 error({}, "cleanup " + std::to_string(index) +
                           " targets a local owned by another scope");
+            if (local->relation != luna::ownership::Relation::Owned)
+                error({}, "cleanup " + std::to_string(index) +
+                          " targets a borrowed local");
             TypeRef projectedType = local->type;
             bool validProjection = true;
             for (const auto& projection : cleanup.place.projections) {

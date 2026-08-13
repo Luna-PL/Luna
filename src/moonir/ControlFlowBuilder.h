@@ -165,7 +165,7 @@ private:
     bool validateIteratorRecipe(
         IteratorRecipePlan& plan, const TypeRef& expectedItem,
         const SourceLocation& location,
-        bool allowAffineFinalMap = false);
+        bool allowAffineItems = false);
     bool bindIteratorRecipe(IteratorRecipePlan& plan);
     bool materializeIteratorRecipe(
         std::unique_ptr<LetStmt> declaration, OpenBlock current,

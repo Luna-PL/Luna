@@ -144,6 +144,8 @@ LocalId ControlFlowBuilder::addLocal(
     mBindings.back()[name] = id;
     if (const auto* frozen = mModule->findType(type);
         inferTypeCleanup && frozen &&
+        mGraph->locals[id.value].relation ==
+            luna::ownership::Relation::Owned &&
         frozen->sysmeta.resource.cleanupRequired)
         addCleanup(id, type, frozen->sysmeta.resource.cleanup);
     return id;
@@ -926,7 +928,7 @@ bool ControlFlowBuilder::bindIteratorRecipe(IteratorRecipePlan& plan) {
 
 bool ControlFlowBuilder::validateIteratorRecipe(
     IteratorRecipePlan& plan, const TypeRef& expectedItem,
-    const SourceLocation& location, bool allowAffineFinalMap) {
+    const SourceLocation& location, bool allowAffineItems) {
     TypeRef indexType;
     TypeRef sizeType;
     for (const auto& type : mModule->typeTable) {
@@ -1024,8 +1026,8 @@ bool ControlFlowBuilder::validateIteratorRecipe(
         return false;
     }
 
-    for (size_t stepIndex = 0; stepIndex < plan.steps.size(); ++stepIndex) {
-        const auto& step = plan.steps[stepIndex];
+    TypeRef currentItemType = sourceItemType;
+    for (const auto& step : plan.steps) {
         const auto* argumentLocal = mGraph->findLocal(step.argumentLocal);
         const TypeRef argumentType = step.argument
             ? step.argument->type
@@ -1036,11 +1038,20 @@ bool ControlFlowBuilder::validateIteratorRecipe(
             return false;
         }
         if (step.op == IteratorOp::Take) {
-            if (argumentType != indexType) {
+            const auto* input = mModule->findType(step.inputType);
+            if (argumentType != indexType || !input ||
+                step.inputType != currentItemType ||
+                step.outputType != step.inputType ||
+                (input->sysmeta.resource.usage !=
+                     luna::ownership::Usage::Copy &&
+                 (!allowAffineItems ||
+                  input->sysmeta.resource.usage !=
+                      luna::ownership::Usage::Affine))) {
                 error(location,
-                      "iterator take count must be normalized to i32");
+                      "iterator take requires canonical item and i32 count state");
                 return false;
             }
+            currentItemType = step.outputType;
             continue;
         }
         if (step.op != IteratorOp::Map && step.op != IteratorOp::Filter) {
@@ -1053,36 +1064,55 @@ bool ControlFlowBuilder::validateIteratorRecipe(
         const auto* callable = mModule->findType(argumentType);
         const auto* lambda = step.argument
             ? dynamic_cast<const LambdaExpr*>(step.argument.get()) : nullptr;
-        const bool copyOutput = output && callable &&
+        const bool commonCallable = input && output && callable &&
+            step.inputType == currentItemType &&
+            callable->kind == TypeKind::Function &&
+            (!lambda ||
+             (!lambda->body && lambda->controlFlow &&
+              lambda->captures.empty() &&
+              argumentType == lambda->closureType)) &&
+            callable->parameterContracts.size() == 1;
+        const bool copyPath = commonCallable &&
+            callable->parameterContracts.front().usage ==
+                luna::ownership::Usage::Copy &&
+            input->sysmeta.resource.usage ==
+                luna::ownership::Usage::Copy &&
             output->sysmeta.resource.usage ==
                 luna::ownership::Usage::Copy &&
             callable->returnContract.usage ==
                 luna::ownership::Usage::Copy;
-        const bool affineFinalMap = allowAffineFinalMap &&
+        const bool affineMap = allowAffineItems && commonCallable &&
             step.op == IteratorOp::Map &&
-            stepIndex + 1 == plan.steps.size() && output && callable &&
+            callable->parameterContracts.front().usage ==
+                luna::ownership::Usage::Copy &&
+            input->sysmeta.resource.usage ==
+                luna::ownership::Usage::Copy &&
             output->sysmeta.resource.usage ==
                 luna::ownership::Usage::Affine &&
             callable->returnContract.relation ==
                 luna::ownership::Relation::Owned &&
             callable->returnContract.usage ==
                 luna::ownership::Usage::Affine;
-        if (!input || !output || !callable ||
-            callable->kind != TypeKind::Function ||
-            (lambda &&
-             (lambda->body || !lambda->controlFlow ||
-              !lambda->captures.empty() ||
-              argumentType != lambda->closureType)) ||
-            callable->parameterContracts.size() != 1 ||
-            callable->parameterContracts.front().usage !=
-                luna::ownership::Usage::Copy ||
-            input->sysmeta.resource.usage != luna::ownership::Usage::Copy ||
-            (!copyOutput && !affineFinalMap)) {
+        const bool affineFilter = allowAffineItems && commonCallable &&
+            step.op == IteratorOp::Filter &&
+            step.outputType == step.inputType &&
+            input->sysmeta.resource.usage ==
+                luna::ownership::Usage::Affine &&
+            output->sysmeta.resource.usage ==
+                luna::ownership::Usage::Affine &&
+            callable->parameterContracts.front().relation ==
+                luna::ownership::Relation::SharedBorrow &&
+            callable->parameterContracts.front().usage ==
+                luna::ownership::Usage::Copy &&
+            callable->returnContract.usage ==
+                luna::ownership::Usage::Copy;
+        if (!copyPath && !affineMap && !affineFilter) {
             error(location,
                   "non-Copy map/filter item or callable contract requires "
                   "canonical per-item ownership state");
             return false;
         }
+        currentItemType = step.outputType;
     }
     return true;
 }
@@ -1471,14 +1501,41 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         auto call = std::make_unique<CallExpr>();
         call->location = statement->location;
         call->callee = identifier(callable);
-        call->args.push_back(identifier(argument));
+        std::unique_ptr<Expr> argumentValue = identifier(argument);
         call->type = resultType;
         if (!callable.empty() && callable.value < mGraph->locals.size()) {
             const auto* signature = mModule->findType(
                 mGraph->locals[callable.value].type);
-            if (signature && signature->kind == TypeKind::Function)
+            if (signature && signature->kind == TypeKind::Function) {
                 call->returnUsage = signature->returnContract.usage;
+                if (!signature->parameterContracts.empty()) {
+                    const auto relation =
+                        signature->parameterContracts.front().relation;
+                    if (relation ==
+                            luna::ownership::Relation::SharedBorrow ||
+                        relation ==
+                            luna::ownership::Relation::MutableBorrow) {
+                        auto borrowed = std::make_unique<BorrowExpr>();
+                        borrowed->location = statement->location;
+                        borrowed->isMutable = relation ==
+                            luna::ownership::Relation::MutableBorrow;
+                        borrowed->type = argumentValue->type;
+                        borrowed->operand = std::move(argumentValue);
+                        argumentValue = std::move(borrowed);
+                    } else if (!argument.empty() &&
+                               argument.value < mGraph->locals.size() &&
+                               luna::ownership::isMoveOnly(
+                                   mGraph->locals[argument.value].usage)) {
+                        auto transfer = std::make_unique<MoveExpr>();
+                        transfer->location = statement->location;
+                        transfer->type = argumentValue->type;
+                        transfer->operand = std::move(argumentValue);
+                        argumentValue = std::move(transfer);
+                    }
+                }
+            }
         }
+        call->args.push_back(std::move(argumentValue));
         call->returnsLinear =
             call->returnUsage == luna::ownership::Usage::Linear;
         return call;
@@ -1566,6 +1623,15 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
             canTake->type = boolType;
             adapterTerminator.operand = std::move(canTake);
             adapterTerminator.secondary.target = exit;
+        }
+        if (const auto cleanup = mCleanupByLocal.find(currentItem.value);
+            cleanup != mCleanupByLocal.end()) {
+            const auto* rejected = mGraph->findBlock(
+                adapterTerminator.secondary.target);
+            if (rejected)
+                adapterTerminator.secondary.cleanups =
+                    canonicalCleanupOrder(
+                        {cleanup->second}, bodyScope, rejected->scope);
         }
         mGraph->blocks[adapterCondition.value].terminator =
             std::move(adapterTerminator);

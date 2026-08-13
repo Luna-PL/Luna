@@ -172,6 +172,14 @@ int main() {
         {luna::ownership::Relation::Owned,
          luna::ownership::Usage::Affine});
     const auto moveMapTypeId = module.registerType(moveMapType);
+    auto affinePredicateType = Type::makeFunction(
+        {TyString}, TyBool,
+        {{luna::ownership::Relation::SharedBorrow,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Copy});
+    const auto affinePredicateTypeId = module.registerType(
+        affinePredicateType);
     auto moveMapIterator = Type::makeIterator(
         TyString, IteratorMode::Range, rangeIterator);
     const auto moveMapIteratorId = module.registerType(moveMapIterator);
@@ -3411,7 +3419,50 @@ int main() {
     moveMapReturn->value = std::move(moveMapValue);
     moveMapLambda->body->stmts.push_back(std::move(moveMapReturn));
     moveMapCall->args.push_back(std::move(moveMapLambda));
-    moveMapLoop->iterable = std::move(moveMapCall);
+
+    auto moveFilterCall = std::make_unique<moon::CallExpr>();
+    moveFilterCall->iteratorOp = IteratorOp::Filter;
+    moveFilterCall->iteratorInputType = stringId;
+    moveFilterCall->iteratorOutputType = stringId;
+    moveFilterCall->type = moveMapIteratorId;
+    auto moveFilterMember = std::make_unique<moon::FieldAccessExpr>();
+    moveFilterMember->field = "filter";
+    moveFilterMember->object = std::move(moveMapCall);
+    moveFilterCall->callee = std::move(moveFilterMember);
+    auto moveFilterLambda = std::make_unique<moon::LambdaExpr>();
+    moveFilterLambda->type = affinePredicateTypeId;
+    moveFilterLambda->closureType = affinePredicateTypeId;
+    moveFilterLambda->returnType = boolId;
+    moon::Param moveFilterParameter;
+    moveFilterParameter.name = "value";
+    moveFilterParameter.type = stringId;
+    moveFilterParameter.relation =
+        luna::ownership::Relation::SharedBorrow;
+    moveFilterParameter.usage = luna::ownership::Usage::Copy;
+    moveFilterLambda->params.push_back(moveFilterParameter);
+    moveFilterLambda->body = std::make_unique<moon::BlockStmt>();
+    auto moveFilterReturn = std::make_unique<moon::ReturnStmt>();
+    auto moveFilterAccepted = std::make_unique<moon::BoolLiteralExpr>();
+    moveFilterAccepted->value = true;
+    moveFilterAccepted->type = boolId;
+    moveFilterReturn->value = std::move(moveFilterAccepted);
+    moveFilterLambda->body->stmts.push_back(
+        std::move(moveFilterReturn));
+    moveFilterCall->args.push_back(std::move(moveFilterLambda));
+    auto moveTakeCall = std::make_unique<moon::CallExpr>();
+    moveTakeCall->iteratorOp = IteratorOp::Take;
+    moveTakeCall->iteratorInputType = stringId;
+    moveTakeCall->iteratorOutputType = stringId;
+    moveTakeCall->type = moveMapIteratorId;
+    auto moveTakeMember = std::make_unique<moon::FieldAccessExpr>();
+    moveTakeMember->field = "take";
+    moveTakeMember->object = std::move(moveFilterCall);
+    moveTakeCall->callee = std::move(moveTakeMember);
+    auto moveTakeCount = std::make_unique<moon::IntLiteralExpr>();
+    moveTakeCount->value = 1;
+    moveTakeCount->type = i32Id;
+    moveTakeCall->args.push_back(std::move(moveTakeCount));
+    moveMapLoop->iterable = std::move(moveTakeCall);
     moveMapLoop->body = std::make_unique<moon::BlockStmt>();
     auto moveMapCleanup = std::make_unique<moon::FreeStmt>();
     moveMapCleanup->isImplicit = true;
@@ -3429,14 +3480,21 @@ int main() {
         moon::RegionKind::Function, module);
     moon::LetStmt* moveMapTemporary = nullptr;
     moon::LetStmt* moveMapBinding = nullptr;
+    moon::CallExpr* moveFilterInvocation = nullptr;
+    moon::LambdaExpr* moveFilterCanonicalLambda = nullptr;
     moon::CleanupId moveMapTemporaryCleanup;
     moon::CleanupId moveMapBindingCleanup;
     if (moveMapCfg) {
-        for (auto& block : moveMapCfg->blocks)
+        for (auto& block : moveMapCfg->blocks) {
             for (auto& operation : block.operations) {
                 auto* declaration =
                     dynamic_cast<moon::LetStmt*>(operation.get());
                 if (!declaration) continue;
+                if (auto* lambda = dynamic_cast<moon::LambdaExpr*>(
+                        declaration->initializer.get());
+                    lambda &&
+                    lambda->closureType == affinePredicateTypeId)
+                    moveFilterCanonicalLambda = lambda;
                 if (declaration->name == "owned")
                     moveMapBinding = declaration;
                 else if (declaration->name.rfind(
@@ -3444,6 +3502,11 @@ int main() {
                          declaration->type == stringId)
                     moveMapTemporary = declaration;
             }
+            auto* invocation = dynamic_cast<moon::CallExpr*>(
+                block.terminator.operand.get());
+            if (invocation && invocation->type == boolId)
+                moveFilterInvocation = invocation;
+        }
         for (const auto& cleanup : moveMapCfg->cleanups) {
             if (moveMapTemporary &&
                 cleanup.place.root == moveMapTemporary->local)
@@ -3461,16 +3524,37 @@ int main() {
         ? dynamic_cast<moon::IdentifierExpr*>(
               moveMapTransfer->operand.get())
         : nullptr;
+    auto* moveFilterBorrow = moveFilterInvocation &&
+            moveFilterInvocation->args.size() == 1
+        ? dynamic_cast<moon::BorrowExpr*>(
+              moveFilterInvocation->args.front().get())
+        : nullptr;
+    auto* moveFilterBorrowSource = moveFilterBorrow
+        ? dynamic_cast<moon::IdentifierExpr*>(
+              moveFilterBorrow->operand.get())
+        : nullptr;
     std::vector<moon::CleanupId>* moveMapCleanupEdge = nullptr;
+    std::vector<moon::CleanupId>* moveFilterCleanupEdge = nullptr;
+    std::vector<moon::CleanupId>* moveTakeCleanupEdge = nullptr;
     size_t temporaryCleanupEdges = 0;
     size_t bindingCleanupEdges = 0;
     if (moveMapCfg)
         for (auto& block : moveMapCfg->blocks) {
+            const auto* branchCall = dynamic_cast<moon::CallExpr*>(
+                block.terminator.operand.get());
+            const auto* branchBinary = dynamic_cast<moon::BinaryExpr*>(
+                block.terminator.operand.get());
             const auto inspectEdge = [&](
                 std::vector<moon::CleanupId>& cleanups) {
                 for (const auto cleanup : cleanups) {
-                    if (cleanup == moveMapTemporaryCleanup)
+                    if (cleanup == moveMapTemporaryCleanup) {
                         ++temporaryCleanupEdges;
+                        if (branchCall && branchCall->type == boolId)
+                            moveFilterCleanupEdge = &cleanups;
+                        if (branchBinary &&
+                            branchBinary->op == moon::Operator::Greater)
+                            moveTakeCleanupEdge = &cleanups;
+                    }
                     if (cleanup == moveMapBindingCleanup) {
                         ++bindingCleanupEdges;
                         moveMapCleanupEdge = &cleanups;
@@ -3486,6 +3570,11 @@ int main() {
     const auto* moveMapTemporaryLocal = moveMapCfg && moveMapTemporary
         ? moveMapCfg->findLocal(moveMapTemporary->local)
         : nullptr;
+    auto* borrowedFilterParameter = moveFilterCanonicalLambda &&
+            moveFilterCanonicalLambda->controlFlow &&
+            !moveFilterCanonicalLambda->controlFlow->locals.empty()
+        ? &moveFilterCanonicalLambda->controlFlow->locals.front()
+        : nullptr;
     if (!moveMapCfg || !cfgVerifier.verify(*moveMapCfg, module) ||
         !moveMapTemporaryLocal ||
         moveMapTemporaryLocal->kind != moon::LocalKind::Synthetic ||
@@ -3493,11 +3582,29 @@ int main() {
             luna::ownership::Usage::Affine ||
         !moveMapTransferSource ||
         moveMapTransferSource->local != moveMapTemporary->local ||
+        !moveFilterBorrow || moveFilterBorrow->isMutable ||
+        !moveFilterBorrowSource ||
+        moveFilterBorrowSource->local != moveMapTemporary->local ||
+        !borrowedFilterParameter ||
+        borrowedFilterParameter->relation !=
+            luna::ownership::Relation::SharedBorrow ||
+        borrowedFilterParameter->usage !=
+            luna::ownership::Usage::Copy ||
+        !moveFilterCanonicalLambda->controlFlow->cleanups.empty() ||
         moveMapTemporaryCleanup.empty() || moveMapBindingCleanup.empty() ||
-        temporaryCleanupEdges != 0 || bindingCleanupEdges != 1 ||
-        !moveMapCleanupEdge)
+        temporaryCleanupEdges != 2 || bindingCleanupEdges != 1 ||
+        !moveFilterCleanupEdge || !moveTakeCleanupEdge ||
+        !moveMapCleanupEdge) {
+        for (const auto& error : cfgVerifier.errors())
+            std::cerr << error << '\n';
         return fail(
-            "affine final map output did not transfer into per-iteration cleanup state");
+            "affine map/filter item did not preserve per-iteration cleanup state");
+    }
+
+    borrowedFilterParameter->usage = luna::ownership::Usage::Affine;
+    if (cfgVerifier.verify(*moveMapCfg, module))
+        return fail("CFG verifier accepted affine cardinality on a borrowed local");
+    borrowedFilterParameter->usage = luna::ownership::Usage::Copy;
 
     auto savedMoveMapTransfer = std::move(moveMapBinding->initializer);
     auto copiedMoveMapResult = std::make_unique<moon::IdentifierExpr>();
@@ -3508,6 +3615,18 @@ int main() {
     if (cfgVerifier.verify(*moveMapCfg, module))
         return fail("CFG verifier accepted a copied affine map result");
     moveMapBinding->initializer = std::move(savedMoveMapTransfer);
+
+    auto savedMoveFilterCleanupEdge = *moveFilterCleanupEdge;
+    moveFilterCleanupEdge->clear();
+    if (cfgVerifier.verify(*moveMapCfg, module))
+        return fail("CFG verifier accepted a missing affine filter rejection cleanup");
+    *moveFilterCleanupEdge = std::move(savedMoveFilterCleanupEdge);
+
+    auto savedMoveTakeCleanupEdge = *moveTakeCleanupEdge;
+    moveTakeCleanupEdge->clear();
+    if (cfgVerifier.verify(*moveMapCfg, module))
+        return fail("CFG verifier accepted a missing affine take rejection cleanup");
+    *moveTakeCleanupEdge = std::move(savedMoveTakeCleanupEdge);
 
     auto savedMoveMapCleanupEdge = *moveMapCleanupEdge;
     moveMapCleanupEdge->clear();
@@ -3568,6 +3687,7 @@ int main() {
     reverse.registerType(unitConsumerType);
     reverse.registerType(unitOrderedConsumerType);
     reverse.registerType(moveMapType);
+    reverse.registerType(affinePredicateType);
     reverse.registerType(moveMapIterator);
     reverse.registerType(inlineProduct);
     reverse.registerType(Type::makeEnum(

@@ -678,14 +678,17 @@ controls which items consume a `take` counter, with no intermediate container an
 operation. The verifier additionally matches local-call arguments/results and let initializer/local
 types, so the expanded graph no longer relies on the recipe's frontend trust.
 
-The first non-Copy per-item slice is complete for a direct `for` whose final adapter is `map`.
-Its input and callable parameter remain Copy, while the callable returns an owned Affine value.
-That result initializes a synthetic Affine local and is explicitly moved into the source-visible
-iteration binding. Normal body fallthrough releases the binding on the existing cleanup edge;
-an early return uses the existing return cleanup set. The verifier independently rejects a copied
-map result or a missing body-exit cleanup, so this adds no runtime initialized bit. A move-only item
-crossing a later adapter, a non-Copy callable/environment, materialized recipe state, and iterator
-terminals remain outside this slice.
+The first non-Copy per-item slice is complete for a direct `for` whose `map` turns a Copy input into
+an owned Affine value. That result initializes a synthetic Affine local. Later `filter` predicates
+read it through an explicit `SharedBorrow`, while `take` preserves it unchanged. A rejection or
+exhaustion edge releases the temporary before leaving the per-iteration scope; an accepted item is
+explicitly moved into the source-visible iteration binding. Normal body fallthrough releases that
+binding on the existing cleanup edge, and an early return uses the existing return cleanup set.
+The verifier independently rejects a copied map result or any missing rejection/body-exit cleanup,
+so this adds no runtime initialized bit. This also fixes the underlying relation rule: a borrowed
+local has Copy cardinality and owns no cleanup even when its underlying type is Affine. Feeding a
+move-only item into a later owning `map`, a non-Copy callable/environment, materialized recipe
+state, and iterator terminals remain outside this slice.
 
 The slice-bound subphase is now complete as well. A slice recipe evaluates its source exactly once,
 materializes its runtime bound once in loop init, and uses the same ordinary indexed-borrow CFG as a
