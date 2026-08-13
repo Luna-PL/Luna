@@ -456,6 +456,10 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             return;
         }
         if (const auto* binary = dynamic_cast<const BinaryExpr*>(expression)) {
+            if (binary->op == Operator::LogicalAnd ||
+                binary->op == Operator::LogicalOr)
+                error(binary->location,
+                      "sealed CFG contains a short-circuit expression");
             scanGraphExpr(binary->lhs.get(), block);
             scanGraphExpr(binary->rhs.get(), block);
         } else if (const auto* unary =

@@ -659,9 +659,10 @@ callee/argument、非短路 binary、index、array、variant、dynamic-select fi
 operand 都会按源码顺序扫描；一旦后续 operand 展开为 iterator terminal CFG，较早的
 非 unit Copy 值会先进入普通 synthetic local，原表达式再通过该 LocalId 读取。因此
 callee load 或有副作用的 earlier call 不会被推迟到 terminal 循环之后，也不增加运行时
-tag/ownership flag。独立 verifier 会检查这些 let/local/type 引用。move-only 或 unit sibling、
-短路 RHS、record/heap allocation-sensitive initializer 仍被明确拒绝，等待分别具有 transfer、
-conditional CFG 和 allocation-order 语义的子阶段；它们不会被隐式复制或重排。
+tag/ownership flag。独立 verifier 会检查这些 let/local/type 引用。move-only 或 unit sibling
+以及 record/heap allocation-sensitive initializer 仍被明确拒绝，等待 transfer 和
+allocation-order 语义的子阶段；它们不会被隐式复制或重排。短路 operand
+则进入下文的 conditional CFG 规范化。
 
 当前 Luna block 语法的第一个 conditional-expression 切片也已完成。由于 block 尚无
 tail value，`BlockExpr` 和 block-style `IfExpr` 在语义上都是 `unit`；CFG 构建会消费
@@ -679,7 +680,14 @@ verifier 仍会拒绝 sealed graph 中的任何 `BlockExpr` 或 `IfExpr`。若�
 验证 operand 消费、转换、传播返回和 cleanup，不需要 exception runtime 或隐藏 success flag。
 `ResultConstructExpr` 只是数据；sealed CFG 仍拒绝任何残留 `TryExpr`。
 
-第 10 项尚未整体完成。上述 short-circuit/allocation-aware 与 non-Copy expression hoisting、
+短路表达式规范化现已完成。`&&` 与 `||` 各使用一个普通 synthetic Copy `bool`
+local，分别初始化为 `false` 与 `true`，再在短路路径上跳过右 operand。只有
+必需路径会求值并写入右 operand，随后两条继续路径合流。右 operand 内部的
+嵌套控制流也只在该 conditional path 上规范化，因而没有操作会跨过语言的
+求值边界被 hoist。这不增加 runtime ownership flag 或第二套控制表示；状态只是
+普通布尔值，独立 verifier 会拒绝 sealed CFG 中任何残留的短路 `BinaryExpr`。
+
+第 10 项尚未整体完成。上述 allocation-aware 与 non-Copy expression hoisting、
 捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup
 状态仍是明确的后续边界。
 随后规范化其余控制流表达式、slot 和 fragment

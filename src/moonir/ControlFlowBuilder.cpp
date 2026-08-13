@@ -1533,6 +1533,101 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
 }
 
 std::optional<ControlFlowBuilder::OpenBlock>
+ControlFlowBuilder::lowerShortCircuitExpression(
+    std::unique_ptr<BinaryExpr> expression, OpenBlock current,
+    RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement) {
+    if (!expression || !expression->lhs || !expression->rhs ||
+        (expression->op != Operator::LogicalAnd &&
+         expression->op != Operator::LogicalOr)) {
+        error(expression ? expression->location : SourceLocation{},
+              "short-circuit expression has an invalid canonical shape");
+        return std::nullopt;
+    }
+    const auto* resultType = mModule->findType(expression->type);
+    if (!resultType || resultType->kind != TypeKind::Bool ||
+        expression->lhs->type != expression->type ||
+        expression->rhs->type != expression->type) {
+        error(expression->location,
+              "short-circuit expression must have frozen bool operands");
+        return std::nullopt;
+    }
+
+    auto lhs = normalizeControlFlowExpression(
+        expression->lhs, std::move(current), region, scope, false);
+    if (!lhs) return std::nullopt;
+    current = std::move(*lhs);
+    if (!bindExpr(expression->lhs.get())) return std::nullopt;
+
+    const std::string name =
+        "$short-circuit." + std::to_string(mExpressionCounter++);
+    const LocalId result = addLocal(
+        scope, LocalKind::Synthetic, name, expression->type,
+        luna::ownership::Usage::Copy);
+    if (result.empty()) return std::nullopt;
+
+    auto initial = std::make_unique<BoolLiteralExpr>();
+    initial->location = expression->location;
+    initial->value = expression->op == Operator::LogicalOr;
+    initial->type = expression->type;
+    auto declaration = std::make_unique<LetStmt>();
+    declaration->location = expression->location;
+    declaration->name = name;
+    declaration->local = result;
+    declaration->usage = luna::ownership::Usage::Copy;
+    declaration->type = expression->type;
+    declaration->initializer = std::move(initial);
+    mGraph->blocks[current.block.value].operations.push_back(
+        std::move(declaration));
+
+    const BlockId rhsEntry = addBlock(
+        region, scope, expression->rhs->location);
+    const BlockId merge = addBlock(
+        region, scope, expression->location);
+    auto& branch = mGraph->blocks[current.block.value].terminator;
+    branch.kind = TerminatorKind::Branch;
+    branch.location = expression->location;
+    branch.operand = std::move(expression->lhs);
+    if (expression->op == Operator::LogicalAnd) {
+        branch.primary.target = rhsEntry;
+        branch.secondary.target = merge;
+    } else {
+        branch.primary.target = merge;
+        branch.secondary.target = rhsEntry;
+    }
+
+    auto rhs = normalizeControlFlowExpression(
+        expression->rhs, OpenBlock{rhsEntry, {}}, region, scope, false);
+    if (rhs) {
+        if (!bindExpr(expression->rhs.get())) return std::nullopt;
+        auto destination = std::make_unique<IdentifierExpr>();
+        destination->location = expression->location;
+        destination->name = name;
+        destination->local = result;
+        destination->type = expression->type;
+        auto assignment = std::make_unique<AssignExpr>();
+        assignment->location = expression->location;
+        assignment->op = Operator::Assign;
+        assignment->lhs = std::move(destination);
+        assignment->rhs = std::move(expression->rhs);
+        assignment->type = expression->type;
+        auto statement = std::make_unique<ExprStmt>();
+        statement->location = expression->location;
+        statement->expr = std::move(assignment);
+        mGraph->blocks[rhs->block.value].operations.push_back(
+            std::move(statement));
+        connectJump(*rhs, merge);
+    }
+
+    auto value = std::make_unique<IdentifierExpr>();
+    value->location = expression->location;
+    value->name = name;
+    value->local = result;
+    value->type = expression->type;
+    replacement = std::move(value);
+    return OpenBlock{merge, {}};
+}
+
+std::optional<ControlFlowBuilder::OpenBlock>
 ControlFlowBuilder::lowerTryExpression(
     std::unique_ptr<TryExpr> expression, OpenBlock current,
     RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement) {
@@ -1847,6 +1942,15 @@ ControlFlowBuilder::normalizeControlFlowExpression(
             std::move(owned), std::move(current), region, scope,
             expression);
     }
+    if (auto* binary = dynamic_cast<BinaryExpr*>(expression.get());
+        binary && (binary->op == Operator::LogicalAnd ||
+                   binary->op == Operator::LogicalOr)) {
+        std::unique_ptr<BinaryExpr> owned(
+            static_cast<BinaryExpr*>(expression.release()));
+        return lowerShortCircuitExpression(
+            std::move(owned), std::move(current), region, scope,
+            expression);
+    }
     auto* call = dynamic_cast<CallExpr*>(expression.get());
     if (call && containsIteratorTerminal(call) &&
         (call->iteratorOp == IteratorOp::Fold ||
@@ -1870,19 +1974,6 @@ ControlFlowBuilder::normalizeControlFlowExpression(
             operands, std::move(current), region, scope);
     }
     if (auto* binary = dynamic_cast<BinaryExpr*>(expression.get())) {
-        if (binary->op == Operator::LogicalAnd ||
-            binary->op == Operator::LogicalOr) {
-            auto normalized = normalizeControlFlowExpression(
-                binary->lhs, std::move(current), region, scope, false);
-            if (!normalized) return std::nullopt;
-            if (containsPendingControlFlow(binary->rhs.get())) {
-                error(binary->rhs->location,
-                      "control flow in a short-circuit operand requires "
-                      "conditional expression CFG normalization");
-                return std::nullopt;
-            }
-            return normalized;
-        }
         return normalizeOrderedOperands(
             {&binary->lhs, &binary->rhs}, std::move(current),
             region, scope);
@@ -2108,9 +2199,13 @@ bool ControlFlowBuilder::containsPendingControlFlow(
             if (containsPendingControlFlow(argument.get())) return true;
         return false;
     }
-    if (const auto* binary = dynamic_cast<const BinaryExpr*>(expression))
+    if (const auto* binary = dynamic_cast<const BinaryExpr*>(expression)) {
+        if (binary->op == Operator::LogicalAnd ||
+            binary->op == Operator::LogicalOr)
+            return true;
         return containsPendingControlFlow(binary->lhs.get()) ||
             containsPendingControlFlow(binary->rhs.get());
+    }
     if (const auto* unary = dynamic_cast<const UnaryExpr*>(expression))
         return containsPendingControlFlow(unary->operand.get());
     if (const auto* selection =

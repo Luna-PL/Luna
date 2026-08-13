@@ -1661,18 +1661,60 @@ int main() {
     shortCircuitUse->expr = std::move(shortCircuit);
     shortCircuitBoundary->stmts.push_back(
         std::move(shortCircuitUse));
-    if (cfgBuilder.build(
-            std::move(shortCircuitBoundary), {},
-            moon::RegionKind::Function, module))
+    auto shortCircuitCfg = cfgBuilder.build(
+        std::move(shortCircuitBoundary), {},
+        moon::RegionKind::Function, module);
+    moon::LetStmt* shortCircuitState = nullptr;
+    moon::AssignExpr* shortCircuitAssignment = nullptr;
+    if (shortCircuitCfg) {
+        for (auto& block : shortCircuitCfg->blocks) {
+            for (auto& operation : block.operations) {
+                if (auto* declaration = dynamic_cast<moon::LetStmt*>(
+                        operation.get());
+                    declaration && declaration->name.rfind(
+                        "$short-circuit.", 0) == 0)
+                    shortCircuitState = declaration;
+                if (auto* statement = dynamic_cast<moon::ExprStmt*>(
+                        operation.get()))
+                    if (auto* assignment = dynamic_cast<moon::AssignExpr*>(
+                            statement->expr.get());
+                        assignment && assignment->lhs)
+                        if (auto* destination =
+                                dynamic_cast<moon::IdentifierExpr*>(
+                                    assignment->lhs.get());
+                            destination && destination->name.rfind(
+                                "$short-circuit.", 0) == 0)
+                            shortCircuitAssignment = assignment;
+            }
+        }
+    }
+    if (!shortCircuitCfg ||
+        !cfgVerifier.verify(*shortCircuitCfg, module) ||
+        !shortCircuitState || !shortCircuitAssignment)
         return fail(
-            "iterator terminal was hoisted out of a short-circuit operand");
-    bool diagnosedShortCircuit = false;
-    for (const auto& message : cfgBuilder.errors())
-        diagnosedShortCircuit = diagnosedShortCircuit ||
-            message.find("short-circuit operand") != std::string::npos;
-    if (!diagnosedShortCircuit)
+            "short-circuit terminal did not become conditional CFG");
+    auto preservedShortCircuitRhs = std::move(
+        shortCircuitAssignment->rhs);
+    auto forgedShortCircuit = std::make_unique<moon::BinaryExpr>();
+    forgedShortCircuit->op = moon::Operator::LogicalOr;
+    forgedShortCircuit->type = boolId;
+    auto forgedLeft = std::make_unique<moon::BoolLiteralExpr>();
+    forgedLeft->value = false;
+    forgedLeft->type = boolId;
+    forgedShortCircuit->lhs = std::move(forgedLeft);
+    auto forgedRight = std::make_unique<moon::BoolLiteralExpr>();
+    forgedRight->value = true;
+    forgedRight->type = boolId;
+    forgedShortCircuit->rhs = std::move(forgedRight);
+    shortCircuitAssignment->rhs = std::move(forgedShortCircuit);
+    if (cfgVerifier.verify(*shortCircuitCfg, module))
         return fail(
-            "short-circuit terminal lost its conditional-CFG boundary");
+            "CFG verifier accepted a residual short-circuit expression");
+    shortCircuitAssignment->rhs = std::move(
+        preservedShortCircuitRhs);
+    if (!cfgVerifier.verify(*shortCircuitCfg, module))
+        return fail(
+            "restored short-circuit CFG did not verify");
 
     auto recordTerminalBoundary = std::make_unique<moon::BlockStmt>();
     auto recordTerminalBinding = std::make_unique<moon::LetStmt>();

@@ -740,9 +740,9 @@ expands into an iterator-terminal CFG, each earlier non-unit Copy value is first
 ordinary synthetic local and the parent expression reads it by LocalId. A callee load or
 side-effecting earlier call therefore cannot drift past the terminal loop, and no runtime tag or
 ownership flag is introduced. The independent verifier checks the resulting let/local/type
-references. Move-only or unit siblings, short-circuit right operands, and record/heap
-allocation-sensitive initializers remain explicitly rejected until transfer, conditional-CFG, and
-allocation-order semantics exist; they are never copied or reordered implicitly.
+references. Move-only or unit siblings and record/heap allocation-sensitive initializers remain
+explicitly rejected until transfer and allocation-order semantics exist; they are never copied or
+reordered implicitly. Short-circuit operands follow the conditional CFG normalization below.
 
 The first conditional-expression slice is now complete for Luna's current block syntax. Because a
 block has no tail value, both `BlockExpr` and block-style `IfExpr` are semantically `unit`; CFG
@@ -763,7 +763,16 @@ consumption, conversion, propagated return, and cleanup without an exception run
 success flag. `ResultConstructExpr` is data only; sealed CFG still rejects every residual
 `TryExpr`.
 
-Item 10 is not complete as a whole. Short-circuit/allocation-aware and non-Copy expression hoisting,
+Short-circuit expression normalization is now complete. `&&` and `||` each use one ordinary
+synthetic Copy `bool` local, initialized to `false` and `true` respectively, then branch around the
+right operand on the short-circuit path. Only the required path evaluates and assigns the right
+operand before both continuing paths converge. Nested control flow in that operand is normalized
+on the same conditional path, so no operation can be hoisted across the language's evaluation
+boundary. This adds no runtime ownership flag or second control representation; the state is an
+ordinary boolean value and the independent verifier rejects every residual short-circuit
+`BinaryExpr` in a sealed CFG.
+
+Item 10 is not complete as a whole. Allocation-aware and non-Copy expression hoisting,
 capturing closure environments, and non-Copy item/callable per-element ownership state remain
 explicit following boundaries. The remaining work then normalizes the other control-flow expressions, slot, and fragment
 paths, atomically replaces
