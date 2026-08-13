@@ -4185,11 +4185,21 @@ context passthrough(value: i32) {
     resume();
 }
 
+context lexical_capture {
+    outer;
+    resume();
+}
+
 fn main() -> i32 {
     let outer = 7;
     slot context hook(value: i32) default passthrough;
     hook(outer) {
         outer;
+    }
+    apply captured(lexical_capture) {
+        slot context captured {
+            outer;
+        }
     }
     return 0;
 }
@@ -4217,6 +4227,7 @@ fn main() -> i32 {
     }
     moon::FunctionDecl* integrationMain = nullptr;
     const moon::FragmentDecl* integrationFragment = nullptr;
+    const moon::FragmentDecl* integrationCaptureFragment = nullptr;
     for (auto& declaration : integrationModule->declarations) {
         if (auto* function = dynamic_cast<moon::FunctionDecl*>(
                 declaration.get());
@@ -4226,11 +4237,18 @@ fn main() -> i32 {
                 declaration.get());
             fragment && fragment->name == "passthrough")
             integrationFragment = fragment;
+        if (auto* fragment = dynamic_cast<moon::FragmentDecl*>(
+                declaration.get());
+            fragment && fragment->name == "lexical_capture")
+            integrationCaptureFragment = fragment;
     }
     if (!integrationMain || !integrationMain->body ||
-        !integrationFragment || !integrationFragment->body)
+        !integrationFragment || !integrationFragment->body ||
+        !integrationCaptureFragment || !integrationCaptureFragment->body)
         return fail("lowered integration module lost main or its default fragment");
     const auto* integrationFragmentBody = integrationFragment->body.get();
+    const auto* integrationCaptureBody =
+        integrationCaptureFragment->body.get();
     moon::ControlFlowBuilder integrationBuilder;
     auto integrationCfg = integrationBuilder.build(
         std::move(integrationMain->body), integrationMain->params,
@@ -4249,7 +4267,9 @@ fn main() -> i32 {
     size_t integrationFragmentRegions = 0;
     size_t integrationContinuationRegions = 0;
     size_t integrationResumeEdges = 0;
-    moon::IdentifierExpr* capturedOuter = nullptr;
+    size_t fragmentOuterCaptures = 0;
+    size_t continuationOuterCaptures = 0;
+    bool captureEscapedRoot = false;
     for (const auto& composedRegion : integrationCfg->regions) {
         integrationApplyRegions +=
             composedRegion.kind == moon::RegionKind::Apply;
@@ -4261,26 +4281,104 @@ fn main() -> i32 {
     for (auto& block : integrationCfg->blocks) {
         integrationResumeEdges +=
             block.terminator.kind == moon::TerminatorKind::Resume;
-        if (integrationCfg->regions[block.region.value].kind !=
-                moon::RegionKind::Continuation)
-            continue;
         for (auto& operation : block.operations) {
             auto* effect = dynamic_cast<moon::ExprStmt*>(operation.get());
-            if (effect)
-                capturedOuter = dynamic_cast<moon::IdentifierExpr*>(
-                    effect->expr.get());
+            auto* identifier = effect
+                ? dynamic_cast<moon::IdentifierExpr*>(effect->expr.get())
+                : nullptr;
+            if (!identifier || identifier->name != "outer") continue;
+            if (identifier->local.empty() ||
+                integrationCfg->locals[identifier->local.value].name !=
+                    "outer" ||
+                integrationCfg->locals[identifier->local.value].scope !=
+                    integrationCfg->rootScope)
+                captureEscapedRoot = true;
+            const auto kind =
+                integrationCfg->regions[block.region.value].kind;
+            fragmentOuterCaptures += kind == moon::RegionKind::Fragment;
+            continuationOuterCaptures +=
+                kind == moon::RegionKind::Continuation;
         }
     }
-    if (integrationApplyRegions != 1 ||
-        integrationFragmentRegions != 1 ||
-        integrationContinuationRegions != 1 ||
-        integrationResumeEdges != 1 || !capturedOuter ||
-        capturedOuter->local.empty() ||
-        integrationCfg->locals[capturedOuter->local.value].name != "outer" ||
-        integrationCfg->locals[capturedOuter->local.value].scope !=
-            integrationCfg->rootScope ||
-        integrationFragment->body.get() != integrationFragmentBody)
+    if (integrationApplyRegions != 2 ||
+        integrationFragmentRegions != 2 ||
+        integrationContinuationRegions != 2 ||
+        integrationResumeEdges != 2 ||
+        fragmentOuterCaptures != 1 ||
+        continuationOuterCaptures != 2 || captureEscapedRoot ||
+        integrationFragment->body.get() != integrationFragmentBody ||
+        integrationCaptureFragment->body.get() != integrationCaptureBody)
         return fail("frontend-to-CFG composition lost its default, capture, or construction body");
+
+    const std::string loweredRuntimeCompositionSource = R"luna(
+package canonical.runtime_boundary;
+
+runtime context trace(value: i32) {
+    value;
+    resume();
+}
+
+fn dynamic_entry() -> i32 {
+    dynamic slot context pipeline(value: i32);
+    dynamic apply pipeline(trace) {
+        pipeline(1) {
+            2;
+        }
+    }
+    return 0;
+}
+)luna";
+    auto runtimeCompositionSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            loweredRuntimeCompositionSource,
+            "<canonical-runtime-composition>");
+    if (!runtimeCompositionSnapshot.success()) {
+        for (const auto& diagnostic : runtimeCompositionSnapshot.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("frontend rejected the canonical runtime-boundary source");
+    }
+    moon::LunaLowerer runtimeIntegrationLowerer;
+    auto runtimeIntegrationModule = runtimeIntegrationLowerer.lower(
+        *runtimeCompositionSnapshot.program(),
+        *runtimeCompositionSnapshot.symbolTable());
+    if (!runtimeIntegrationLowerer.errors().empty()) {
+        for (const auto& diagnostic : runtimeIntegrationLowerer.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("MoonIR lowering rejected the runtime-boundary source");
+    }
+    if (!verifier.verify(*runtimeIntegrationModule)) {
+        for (const auto& diagnostic : verifier.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("runtime-boundary module failed structured verification");
+    }
+    moon::FunctionDecl* dynamicEntry = nullptr;
+    for (auto& declaration : runtimeIntegrationModule->declarations) {
+        auto* function = dynamic_cast<moon::FunctionDecl*>(declaration.get());
+        if (function && function->name == "dynamic_entry") {
+            dynamicEntry = function;
+            break;
+        }
+    }
+    if (!dynamicEntry || !dynamicEntry->body)
+        return fail("runtime-boundary module lost its entry body");
+    moon::ControlFlowBuilder runtimeBoundaryBuilder;
+    if (runtimeBoundaryBuilder.build(
+            std::move(dynamicEntry->body), dynamicEntry->params,
+            moon::RegionKind::Function, *runtimeIntegrationModule))
+        return fail("canonical static CFG accepted a lowered runtime apply");
+    const bool diagnosedRuntimeBoundary = std::any_of(
+        runtimeBoundaryBuilder.errors().begin(),
+        runtimeBoundaryBuilder.errors().end(),
+        [](const std::string& error) {
+            return error.find(
+                       "runtime slot composition is outside the static canonical CFG slice") !=
+                       std::string::npos ||
+                error.find(
+                    "runtime apply is outside the static canonical CFG slice") !=
+                    std::string::npos;
+        });
+    if (!diagnosedRuntimeBoundary)
+        return fail("canonical CFG did not diagnose its runtime-apply boundary");
 
     const auto reverseIterator = reverse.typesById.find(shortId.value);
     if (reverseIterator == reverse.typesById.end())

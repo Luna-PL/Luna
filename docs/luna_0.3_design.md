@@ -879,7 +879,9 @@ frozen TypeRef from its resolved LocalId. A non-empty conflicting TypeRef is lef
 independent verifier to reject. The integration gate runs source parsing and Sema, Luna lowering,
 structured verification, CFG construction, then CFG verification, and checks the default
 fragment, lexical capture, resume edge, region topology, and preservation of the declaration's
-construction body. Multi-shot and runtime apply remain later slices.
+construction body. The same source-level gate covers an explicit static `apply`; a separately
+lowered dynamic composition is accepted by the frontend but must be rejected at this static CFG
+boundary. Multi-shot and runtime apply remain later slices.
 
 Item 10 is not complete as a whole. Capturing closure environments and the remaining non-Copy
 item/callable per-element ownership transitions remain explicit boundaries. Linear hoisting across

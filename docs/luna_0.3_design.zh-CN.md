@@ -779,7 +779,9 @@ runtime state。绑定 local 时，如果 identifier 的 construction form 没�
 从已解析 LocalId 的冻结 TypeRef 补齐；若非空 TypeRef 与 local 冲突，则保留冲突并由独立 verifier 拒绝。
 集成门禁依次执行源码 parsing 与 Sema、Luna lowering、structured verification、CFG construction 和 CFG
 verification，并检查 default fragment、词法 capture、resume edge、region topology，以及 declaration
-construction body 未被消费。multi-shot 与 runtime apply 仍属后续切片。
+construction body 未被消费。同一源码级门禁还覆盖显式 static `apply`；另一份 dynamic composition
+源码可以通过 frontend 与 Lowering，但必须在该 static CFG 边界被拒绝。multi-shot 与 runtime apply
+仍属后续切片。
 
 第 10 项尚未整体完成。捕获式 closure environment 与其余 non-Copy
 item/callable 逐元素 ownership 转移仍是明确的后续边界。
