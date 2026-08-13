@@ -184,6 +184,7 @@ target_include_directories(analysis-snapshot-test PRIVATE ${CMAKE_CURRENT_SOURCE
 add_executable(moonir-canonical-test
     tests/moonir_canonical_test.cpp
     src/moonir/ControlFlowBuilder.cpp
+    src/moonir/Lowering.cpp
     src/moonir/MoonIR.cpp
     src/moonir/Verifier.cpp
     $<TARGET_OBJECTS:luna-frontend>

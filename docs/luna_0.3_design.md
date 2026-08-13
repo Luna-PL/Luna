@@ -868,7 +868,18 @@ contract. Borrowed bindings therefore own no cleanup and do not consume their so
 owned move-only binding still requires the existing explicit transfer and activates exactly one
 cleanup obligation. Forging both a binding row and its Let relation cannot bypass the region-level
 contract check. This extends the typed-local model rather than adding a fragment-only parameter
-operation. Multi-shot and runtime apply remain later slices.
+operation.
+
+The production frontend-to-construction bridge now exercises the same path as the hand-built
+canonical fixtures. A direct invocation of a slot default synthesizes a construction-only `Apply`
+region because no source `apply` block exists to own the Fragment/Continuation pair; this region
+erases with static composition and is neither a source construct nor runtime state. During local
+binding, an identifier whose construction form has no redundant expression TypeRef inherits the
+frozen TypeRef from its resolved LocalId. A non-empty conflicting TypeRef is left intact for the
+independent verifier to reject. The integration gate runs source parsing and Sema, Luna lowering,
+structured verification, CFG construction, then CFG verification, and checks the default
+fragment, lexical capture, resume edge, region topology, and preservation of the declaration's
+construction body. Multi-shot and runtime apply remain later slices.
 
 Item 10 is not complete as a whole. Capturing closure environments and the remaining non-Copy
 item/callable per-element ownership transitions remain explicit boundaries. Linear hoisting across

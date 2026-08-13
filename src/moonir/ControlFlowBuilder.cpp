@@ -4054,11 +4054,13 @@ ControlFlowBuilder::lowerSlotInvoke(
     }
 
     DeclarationRef fragmentReference;
+    bool boundByStaticApply = false;
     for (size_t depth = mStaticApplyScopes.size(); depth > 0; --depth) {
         const auto& bindings = mStaticApplyScopes[depth - 1];
         if (auto found = bindings.find(statement->name);
             found != bindings.end()) {
             fragmentReference = found->second;
+            boundByStaticApply = true;
             break;
         }
     }
@@ -4120,6 +4122,29 @@ ControlFlowBuilder::lowerSlotInvoke(
               "static fragment body cannot be cloned before canonical construction");
         return std::nullopt;
     }
+
+    // An explicit source apply already owns the composition region. A slot
+    // default has the same static control contract without source-level apply
+    // syntax, so materialize its application boundary here. This keeps every
+    // Fragment/Continuation pair under one independently verifiable Apply
+    // region without retaining a runtime descriptor or another language
+    // concept.
+    RegionId invocationRegion = region;
+    ScopeId invocationScope = scope;
+    OpenBlock invocationCurrent = current;
+    RegionId implicitApplyRegion;
+    if (!boundByStaticApply) {
+        implicitApplyRegion = addRegion(
+            region, RegionKind::Apply, statement->location);
+        invocationScope = addScope(
+            scope, implicitApplyRegion, statement->location);
+        const BlockId entry = addBlock(
+            implicitApplyRegion, invocationScope, statement->location);
+        connectJump(current, entry);
+        invocationRegion = implicitApplyRegion;
+        invocationCurrent = OpenBlock{entry, current.cleanups};
+    }
+
     std::vector<std::unique_ptr<Stmt>> parameterBindings;
     parameterBindings.reserve(fragment->params.size());
     for (size_t index = 0; index < fragment->params.size(); ++index) {
@@ -4144,12 +4169,12 @@ ControlFlowBuilder::lowerSlotInvoke(
         parameterBindings.push_back(std::move(binding));
     }
     const BlockId invocationExit = addBlock(
-        region, scope, statement->location);
+        invocationRegion, invocationScope, statement->location);
     const RegionId fragmentRegion = addRegion(
-        region, RegionKind::Fragment, fragmentBody->location);
+        invocationRegion, RegionKind::Fragment, fragmentBody->location);
     mGraph->regions[fragmentRegion.value].fragment = fragmentReference;
     const ScopeId fragmentScope = addScope(
-        scope, fragmentRegion, fragmentBody->location);
+        invocationScope, fragmentRegion, fragmentBody->location);
     const BlockId fragmentEntry = addBlock(
         fragmentRegion, fragmentScope, fragmentBody->location);
     const size_t outerBindingDepth = mBindings.size();
@@ -4181,11 +4206,12 @@ ControlFlowBuilder::lowerSlotInvoke(
     mFragmentContexts.pop_back();
     popBindings();
     mGraph->regions[fragmentRegion.value].exit = invocationExit;
-    connectJump(current, fragmentEntry);
+    connectJump(invocationCurrent, fragmentEntry);
 
     if (fragmentOpen && fragment->kind == FragmentKind::Interceptor) {
         auto continuation = lowerNestedBlock(
-            std::move(statement->continuation), region, scope,
+            std::move(statement->continuation), invocationRegion,
+            invocationScope,
             RegionKind::Continuation);
         auto& terminator =
             mGraph->blocks[fragmentOpen->block.value].terminator;
@@ -4204,9 +4230,15 @@ ControlFlowBuilder::lowerSlotInvoke(
         terminator.location = statement->location;
         terminator.primary.target = invocationExit;
         terminator.primary.cleanups = canonicalCleanupOrder(
-            fragmentOpen->cleanups, fragmentScope, scope);
+            fragmentOpen->cleanups, fragmentScope, invocationScope);
     }
-    return OpenBlock{invocationExit, {}};
+    if (implicitApplyRegion.empty())
+        return OpenBlock{invocationExit, {}};
+
+    const BlockId exit = addBlock(region, scope, statement->location);
+    connectJump(OpenBlock{invocationExit, {}}, exit);
+    mGraph->regions[implicitApplyRegion.value].exit = exit;
+    return OpenBlock{exit, {}};
 }
 
 std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerResume(
@@ -4289,6 +4321,10 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
                           "' has no canonical local or declaration reference");
                 return false;
             }
+            const TypeRef localType =
+                mGraph->locals[identifier->local.value].type;
+            if (identifier->type.empty())
+                identifier->type = localType;
         }
         return true;
     }

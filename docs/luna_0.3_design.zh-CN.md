@@ -770,7 +770,16 @@ fragment parameter 现使用携带显式最终 relation 的普通 canonical Let/
 Copy/Affine/Linear usage 与冻结 fragment contract 匹配。因而 borrowed binding 不拥有 cleanup、
 不消费 source；owned move-only binding 仍要求已有的显式 transfer，并且只激活一个 cleanup obligation。
 即使同时伪造 binding row 和 Let relation，也无法绕过 region-level contract check。这是对 typed-local
-model 的扩展，不会增加 fragment-only parameter operation。multi-shot 与 runtime apply 仍属后续切片。
+model 的扩展，不会增加 fragment-only parameter operation。
+
+真实 frontend 到 construction bridge 现已与手工 canonical fixture 走同一路径。直接调用 slot default
+时，由于源码中不存在负责容纳 Fragment/Continuation 对的 `apply` block，构建器会合成一个仅在
+construction 阶段存在的 `Apply` region；它随静态 composition 一同擦除，既不是新的源码构造，也不是
+runtime state。绑定 local 时，如果 identifier 的 construction form 没有冗余 expression TypeRef，构建器会
+从已解析 LocalId 的冻结 TypeRef 补齐；若非空 TypeRef 与 local 冲突，则保留冲突并由独立 verifier 拒绝。
+集成门禁依次执行源码 parsing 与 Sema、Luna lowering、structured verification、CFG construction 和 CFG
+verification，并检查 default fragment、词法 capture、resume edge、region topology，以及 declaration
+construction body 未被消费。multi-shot 与 runtime apply 仍属后续切片。
 
 第 10 项尚未整体完成。捕获式 closure environment 与其余 non-Copy
 item/callable 逐元素 ownership 转移仍是明确的后续边界。

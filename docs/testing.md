@@ -95,6 +95,11 @@ and is outside the default test set.
 Every semantic or diagnostic fix should add a minimal positive or negative example and assert
 stable output or key diagnostic text in `tests/semantic_regressions.cmake`.
 
+`luna.moonir-canonical` covers both forged table-level fixtures and a real frontend integration
+path. Its default-fragment case runs source parsing and Sema through Luna lowering before building
+and independently verifying the canonical CFG. It checks the construction-only implicit `Apply`
+region, context `Resume`, lexical LocalId capture, and preservation of the reusable fragment body.
+
 `luna.rc-arc-core` uses the real Core package to verify JIT/AOT behavior, explicit trait/member
 clone, implicit-copy rejection, exact-once last-handle release, nested payload Drop, ordinary
 nominal MoonIR facts, and LLVM Runtime ABI v1 calls.

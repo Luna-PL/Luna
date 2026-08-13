@@ -1,6 +1,9 @@
 #include "moonir/MoonIR.h"
 #include "moonir/ControlFlowBuilder.h"
+#include "moonir/Lowering.h"
 #include "moonir/Verifier.h"
+#include "sema/SymbolTable.h"
+#include "tooling/AnalysisSnapshot.h"
 
 #include <algorithm>
 #include <iostream>
@@ -4174,6 +4177,110 @@ int main() {
             std::move(blocklessBody), {}, moon::RegionKind::Function,
             compositionModule))
         return fail("canonical builder accepted legacy blockless apply");
+
+    const std::string loweredCompositionSource = R"luna(
+package canonical.integration;
+
+context passthrough(value: i32) {
+    resume();
+}
+
+fn main() -> i32 {
+    let outer = 7;
+    slot context hook(value: i32) default passthrough;
+    hook(outer) {
+        outer;
+    }
+    return 0;
+}
+)luna";
+    auto compositionSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            loweredCompositionSource, "<canonical-composition>");
+    if (!compositionSnapshot.success()) {
+        for (const auto& diagnostic : compositionSnapshot.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("frontend rejected canonical default-fragment integration source");
+    }
+    moon::LunaLowerer integrationLowerer;
+    auto integrationModule = integrationLowerer.lower(
+        *compositionSnapshot.program(), *compositionSnapshot.symbolTable());
+    if (!integrationLowerer.errors().empty()) {
+        for (const auto& diagnostic : integrationLowerer.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("MoonIR lowering rejected canonical default-fragment source");
+    }
+    if (!verifier.verify(*integrationModule)) {
+        for (const auto& diagnostic : verifier.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("lowered default-fragment module failed structured verification");
+    }
+    moon::FunctionDecl* integrationMain = nullptr;
+    const moon::FragmentDecl* integrationFragment = nullptr;
+    for (auto& declaration : integrationModule->declarations) {
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get());
+            function && function->name == "main")
+            integrationMain = function;
+        if (auto* fragment = dynamic_cast<moon::FragmentDecl*>(
+                declaration.get());
+            fragment && fragment->name == "passthrough")
+            integrationFragment = fragment;
+    }
+    if (!integrationMain || !integrationMain->body ||
+        !integrationFragment || !integrationFragment->body)
+        return fail("lowered integration module lost main or its default fragment");
+    const auto* integrationFragmentBody = integrationFragment->body.get();
+    moon::ControlFlowBuilder integrationBuilder;
+    auto integrationCfg = integrationBuilder.build(
+        std::move(integrationMain->body), integrationMain->params,
+        moon::RegionKind::Function, *integrationModule);
+    if (!integrationCfg) {
+        for (const auto& error : integrationBuilder.errors())
+            std::cerr << error << '\n';
+        return fail("lowered default fragment did not enter canonical CFG construction");
+    }
+    if (!cfgVerifier.verify(*integrationCfg, *integrationModule)) {
+        for (const auto& diagnostic : cfgVerifier.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("lowered default fragment failed canonical CFG verification");
+    }
+    size_t integrationApplyRegions = 0;
+    size_t integrationFragmentRegions = 0;
+    size_t integrationContinuationRegions = 0;
+    size_t integrationResumeEdges = 0;
+    moon::IdentifierExpr* capturedOuter = nullptr;
+    for (const auto& composedRegion : integrationCfg->regions) {
+        integrationApplyRegions +=
+            composedRegion.kind == moon::RegionKind::Apply;
+        integrationFragmentRegions +=
+            composedRegion.kind == moon::RegionKind::Fragment;
+        integrationContinuationRegions +=
+            composedRegion.kind == moon::RegionKind::Continuation;
+    }
+    for (auto& block : integrationCfg->blocks) {
+        integrationResumeEdges +=
+            block.terminator.kind == moon::TerminatorKind::Resume;
+        if (integrationCfg->regions[block.region.value].kind !=
+                moon::RegionKind::Continuation)
+            continue;
+        for (auto& operation : block.operations) {
+            auto* effect = dynamic_cast<moon::ExprStmt*>(operation.get());
+            if (effect)
+                capturedOuter = dynamic_cast<moon::IdentifierExpr*>(
+                    effect->expr.get());
+        }
+    }
+    if (integrationApplyRegions != 1 ||
+        integrationFragmentRegions != 1 ||
+        integrationContinuationRegions != 1 ||
+        integrationResumeEdges != 1 || !capturedOuter ||
+        capturedOuter->local.empty() ||
+        integrationCfg->locals[capturedOuter->local.value].name != "outer" ||
+        integrationCfg->locals[capturedOuter->local.value].scope !=
+            integrationCfg->rootScope ||
+        integrationFragment->body.get() != integrationFragmentBody)
+        return fail("frontend-to-CFG composition lost its default, capture, or construction body");
 
     const auto reverseIterator = reverse.typesById.find(shortId.value);
     if (reverseIterator == reverse.typesById.end())
