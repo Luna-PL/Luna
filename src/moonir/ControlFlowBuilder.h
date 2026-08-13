@@ -85,9 +85,11 @@ private:
                      const std::string& name, const TypeRef& type,
                      luna::ownership::Usage usage,
                      std::optional<luna::ownership::Relation> relation =
-                         std::nullopt);
+                         std::nullopt,
+                     bool inferTypeCleanup = true);
     CleanupId addCleanup(LocalId local, const TypeRef& type,
-                         luna::ownership::CleanupAction action);
+                         luna::ownership::CleanupAction action,
+                         CleanupKind kind = CleanupKind::Value);
 
     BuiltBlock lowerNestedBlock(std::unique_ptr<BlockStmt> block,
                                 RegionId parentRegion,
@@ -126,6 +128,18 @@ private:
     std::optional<OpenBlock> lowerShortCircuitExpression(
         std::unique_ptr<BinaryExpr> expression, OpenBlock current,
         RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement);
+    std::optional<OpenBlock> lowerRecordAllocation(
+        std::unique_ptr<RecordLiteralExpr> expression, OpenBlock current,
+        RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement);
+    std::optional<OpenBlock> lowerHeapAllocation(
+        std::unique_ptr<HeapAllocExpr> expression, OpenBlock current,
+        RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement);
+    std::optional<OpenBlock> lowerAllocationElements(
+        const SourceLocation& location, const TypeRef& resultType,
+        const TypeRef& allocatedType, HeapStorageKind storage,
+        std::vector<InitAllocationExpr::Element> elements,
+        OpenBlock current, RegionId region, ScopeId scope,
+        std::unique_ptr<Expr>& replacement);
     std::optional<OpenBlock> normalizeOrderedOperands(
         const std::vector<std::unique_ptr<Expr>*>& operands,
         OpenBlock current, RegionId region, ScopeId scope);

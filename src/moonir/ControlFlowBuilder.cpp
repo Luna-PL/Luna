@@ -107,7 +107,8 @@ BlockId ControlFlowBuilder::addBlock(
 LocalId ControlFlowBuilder::addLocal(
     ScopeId scope, LocalKind kind, const std::string& name,
     const TypeRef& type, luna::ownership::Usage usage,
-    std::optional<luna::ownership::Relation> relation) {
+    std::optional<luna::ownership::Relation> relation,
+    bool inferTypeCleanup) {
     if (name.empty()) {
         error(mGraph->scopes[scope.value].location,
               "canonical local has no diagnostic name");
@@ -142,14 +143,15 @@ LocalId ControlFlowBuilder::addLocal(
     mGraph->scopes[scope.value].locals.push_back(id);
     mBindings.back()[name] = id;
     if (const auto* frozen = mModule->findType(type);
-        frozen && frozen->sysmeta.resource.cleanupRequired)
+        inferTypeCleanup && frozen &&
+        frozen->sysmeta.resource.cleanupRequired)
         addCleanup(id, type, frozen->sysmeta.resource.cleanup);
     return id;
 }
 
 CleanupId ControlFlowBuilder::addCleanup(
     LocalId local, const TypeRef& type,
-    luna::ownership::CleanupAction action) {
+    luna::ownership::CleanupAction action, CleanupKind kind) {
     if (local.empty() || local.value >= mGraph->locals.size()) {
         error({}, "cleanup references an unresolved canonical local");
         return {};
@@ -157,7 +159,8 @@ CleanupId ControlFlowBuilder::addCleanup(
     if (auto found = mCleanupByLocal.find(local.value);
         found != mCleanupByLocal.end()) {
         const auto& existing = mGraph->cleanups[found->second.value];
-        if (existing.type != type || existing.action != action)
+        if (existing.type != type || existing.action != action ||
+            existing.kind != kind)
             error({}, "local '" + mGraph->locals[local.value].name +
                       "' has inconsistent cleanup obligations");
         return found->second;
@@ -169,6 +172,7 @@ CleanupId ControlFlowBuilder::addCleanup(
     cleanup.scope = localRecord.scope;
     cleanup.place.root = local;
     cleanup.type = type;
+    cleanup.kind = kind;
     cleanup.action = action;
     mGraph->cleanups.push_back(cleanup);
     mGraph->scopes[cleanup.scope.value].cleanups.push_back(id);
@@ -244,6 +248,15 @@ ControlFlowBuilder::lowerStatement(
         declaration->local = addLocal(
             scope, LocalKind::Binding, declaration->name,
             declaration->type, declaration->usage);
+        if (dynamic_cast<InitAllocationExpr*>(
+                declaration->initializer.get())) {
+            const auto* type = mModule->findType(declaration->type);
+            if (type && !type->sysmeta.resource.cleanupRequired)
+                addCleanup(
+                    declaration->local, declaration->type,
+                    luna::ownership::CleanupAction::Deallocate,
+                    CleanupKind::Allocation);
+        }
         mGraph->blocks[current.block.value].operations.push_back(
             std::move(statement));
         return current;
@@ -274,8 +287,16 @@ ControlFlowBuilder::lowerStatement(
             return std::nullopt;
         }
         const auto& local = mGraph->locals[identifier->local.value];
+        const auto* cleanupType = mModule->findType(local.type);
+        const CleanupKind cleanupKind =
+            cleanupType && !cleanupType->sysmeta.resource.cleanupRequired &&
+                release->action ==
+                    luna::ownership::CleanupAction::Deallocate
+            ? CleanupKind::Allocation
+            : CleanupKind::Value;
         const CleanupId cleanup = addCleanup(
-            identifier->local, local.type, release->action);
+            identifier->local, local.type, release->action,
+            cleanupKind);
         if (!cleanup.empty()) current.cleanups.push_back(cleanup);
         return current;
     }
@@ -1689,6 +1710,180 @@ ControlFlowBuilder::lowerShortCircuitExpression(
 }
 
 std::optional<ControlFlowBuilder::OpenBlock>
+ControlFlowBuilder::lowerAllocationElements(
+    const SourceLocation& location, const TypeRef& resultType,
+    const TypeRef& allocatedType, HeapStorageKind storage,
+    std::vector<InitAllocationExpr::Element> elements,
+    OpenBlock current, RegionId region, ScopeId scope,
+    std::unique_ptr<Expr>& replacement) {
+    const auto* allocated = mModule->findType(allocatedType);
+    const auto* result = mModule->findType(resultType);
+    if (!allocated || !result || resultType != allocatedType) {
+        error(location,
+              "allocation result disagrees with its frozen allocated type");
+        return std::nullopt;
+    }
+    if (storage != HeapStorageKind::Unique) {
+        error(location,
+              "canonical allocation supports only unique storage");
+        return std::nullopt;
+    }
+    std::unordered_set<uint32_t> indices;
+    for (const auto& element : elements) {
+        if (!element.value || !indices.insert(element.index).second) {
+            error(location,
+                  "allocation initializer contains a missing or duplicate element");
+            return std::nullopt;
+        }
+        TypeRef expected;
+        if (allocated->kind == TypeKind::Struct ||
+            allocated->kind == TypeKind::Record) {
+            if (element.index >= allocated->fields.size()) {
+                error(location,
+                      "allocation initializer element is outside its frozen product type");
+                return std::nullopt;
+            }
+            expected = allocated->fields[element.index].type;
+        } else if (element.index == 0) {
+            expected = allocatedType;
+        } else {
+            error(location,
+                  "scalar allocation has a nonzero initializer index");
+            return std::nullopt;
+        }
+        if (element.value->type != expected) {
+            error(element.value->location,
+                  "allocation initializer element disagrees with its frozen layout type");
+            return std::nullopt;
+        }
+    }
+    const size_t expectedCount =
+        allocated->kind == TypeKind::Struct ||
+            allocated->kind == TypeKind::Record
+        ? allocated->fields.size() : 1;
+    if (elements.size() != expectedCount) {
+        error(location,
+              "allocation initializer does not cover its frozen layout");
+        return std::nullopt;
+    }
+
+    const std::string name =
+        "$allocation.raw." + std::to_string(mExpressionCounter++);
+    const LocalId allocation = addLocal(
+        scope, LocalKind::Allocation, name, allocatedType,
+        luna::ownership::Usage::Affine,
+        luna::ownership::Relation::Owned, false);
+    if (allocation.empty()) return std::nullopt;
+    const CleanupId rawCleanup = addCleanup(
+        allocation, allocatedType,
+        luna::ownership::CleanupAction::Deallocate,
+        CleanupKind::Allocation);
+    if (rawCleanup.empty()) return std::nullopt;
+
+    auto allocate = std::make_unique<AllocateStmt>();
+    allocate->location = location;
+    allocate->local = allocation;
+    allocate->allocatedType = allocatedType;
+    allocate->storage = storage;
+    mGraph->blocks[current.block.value].operations.push_back(
+        std::move(allocate));
+
+    const size_t cleanupDepth = mActiveExpressionCleanups.size();
+    mActiveExpressionCleanups.push_back(rawCleanup);
+    std::vector<std::unique_ptr<Expr>*> operands;
+    operands.reserve(elements.size());
+    for (auto& element : elements) operands.push_back(&element.value);
+    auto normalized = normalizeOrderedOperands(
+        operands, std::move(current), region, scope);
+    mActiveExpressionCleanups.resize(cleanupDepth);
+    if (!normalized) return std::nullopt;
+
+    auto initialized = std::make_unique<InitAllocationExpr>();
+    initialized->location = location;
+    initialized->type = resultType;
+    initialized->allocation = allocation;
+    initialized->allocatedType = allocatedType;
+    initialized->storage = storage;
+    initialized->elements = std::move(elements);
+    replacement = std::move(initialized);
+    return normalized;
+}
+
+std::optional<ControlFlowBuilder::OpenBlock>
+ControlFlowBuilder::lowerRecordAllocation(
+    std::unique_ptr<RecordLiteralExpr> expression, OpenBlock current,
+    RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement) {
+    if (!expression) return std::nullopt;
+    const auto* type = mModule->findType(expression->type);
+    if (!type || type->kind != TypeKind::Struct) {
+        error(expression->location,
+              "allocating record initializer has no frozen named struct type");
+        return std::nullopt;
+    }
+    std::vector<InitAllocationExpr::Element> elements;
+    elements.reserve(expression->fields.size());
+    std::unordered_set<uint32_t> indices;
+    for (auto& field : expression->fields) {
+        size_t index = type->fields.size();
+        for (size_t candidate = 0; candidate < type->fields.size();
+             ++candidate)
+            if (type->fields[candidate].name == field.name) {
+                index = candidate;
+                break;
+            }
+        if (index >= type->fields.size() ||
+            !indices.insert(static_cast<uint32_t>(index)).second) {
+            error(expression->location,
+                  "allocating struct initializer has an unknown or duplicate field");
+            return std::nullopt;
+        }
+        InitAllocationExpr::Element element;
+        element.index = static_cast<uint32_t>(index);
+        element.value = std::move(field.value);
+        elements.push_back(std::move(element));
+    }
+    if (elements.size() != type->fields.size()) {
+        error(expression->location,
+              "allocating struct initializer is missing a frozen field");
+        return std::nullopt;
+    }
+    return lowerAllocationElements(
+        expression->location, expression->type, expression->type,
+        HeapStorageKind::Unique, std::move(elements),
+        std::move(current), region, scope, replacement);
+}
+
+std::optional<ControlFlowBuilder::OpenBlock>
+ControlFlowBuilder::lowerHeapAllocation(
+    std::unique_ptr<HeapAllocExpr> expression, OpenBlock current,
+    RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement) {
+    if (!expression || !expression->initializer) {
+        error(expression ? expression->location : SourceLocation{},
+              "heap allocation has no initializer");
+        return std::nullopt;
+    }
+    auto* call = dynamic_cast<CallExpr*>(expression->initializer.get());
+    if (!call) {
+        error(expression->location,
+              "heap allocation initializer is not a constructor call");
+        return std::nullopt;
+    }
+    std::vector<InitAllocationExpr::Element> elements;
+    elements.reserve(call->args.size());
+    for (size_t index = 0; index < call->args.size(); ++index) {
+        InitAllocationExpr::Element element;
+        element.index = static_cast<uint32_t>(index);
+        element.value = std::move(call->args[index]);
+        elements.push_back(std::move(element));
+    }
+    return lowerAllocationElements(
+        expression->location, expression->type,
+        expression->allocatedType, expression->storage,
+        std::move(elements), std::move(current), region, scope,
+        replacement);
+}
+
+std::optional<ControlFlowBuilder::OpenBlock>
 ControlFlowBuilder::lowerTryExpression(
     std::unique_ptr<TryExpr> expression, OpenBlock current,
     RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement) {
@@ -2015,6 +2210,33 @@ ControlFlowBuilder::normalizeControlFlowExpression(
             std::move(owned), std::move(current), region, scope,
             expression);
     }
+    if (auto* record = dynamic_cast<RecordLiteralExpr*>(expression.get())) {
+        const auto* type = mModule->findType(record->type);
+        if (type && type->kind == TypeKind::Struct) {
+            if (discardUnitResult) {
+                error(record->location,
+                      "owning struct allocation result cannot be discarded");
+                return std::nullopt;
+            }
+            std::unique_ptr<RecordLiteralExpr> owned(
+                static_cast<RecordLiteralExpr*>(expression.release()));
+            return lowerRecordAllocation(
+                std::move(owned), std::move(current), region, scope,
+                expression);
+        }
+    }
+    if (dynamic_cast<HeapAllocExpr*>(expression.get())) {
+        if (discardUnitResult) {
+            error(expression->location,
+                  "owning heap allocation result cannot be discarded");
+            return std::nullopt;
+        }
+        std::unique_ptr<HeapAllocExpr> owned(
+            static_cast<HeapAllocExpr*>(expression.release()));
+        return lowerHeapAllocation(
+            std::move(owned), std::move(current), region, scope,
+            expression);
+    }
     auto* call = dynamic_cast<CallExpr*>(expression.get());
     if (call && containsIteratorTerminal(call) &&
         (call->iteratorOp == IteratorOp::Fold ||
@@ -2080,23 +2302,9 @@ ControlFlowBuilder::normalizeControlFlowExpression(
             return normalizeOrderedOperands(
                 operands, std::move(current), region, scope);
         }
-        for (const auto& field : record->fields) {
-            if (!containsPendingControlFlow(field.value.get())) continue;
-            error(field.value->location,
-                  "control flow in an allocating struct initializer requires "
-                  "allocation-aware expression CFG normalization");
-            return std::nullopt;
-        }
-        return current;
-    }
-    if (auto* allocation = dynamic_cast<HeapAllocExpr*>(expression.get())) {
-        if (containsPendingControlFlow(allocation->initializer.get())) {
-            error(allocation->initializer->location,
-                  "control flow in a heap initializer requires "
-                  "allocation-aware expression CFG normalization");
-            return std::nullopt;
-        }
-        return current;
+        error(record->location,
+              "allocating struct initializer escaped canonical allocation lowering");
+        return std::nullopt;
     }
     if (auto* selection =
             dynamic_cast<DynamicSelectExpr*>(expression.get())) {
@@ -2345,12 +2553,13 @@ bool ControlFlowBuilder::containsPendingControlFlow(
         return false;
     }
     if (const auto* record = dynamic_cast<const RecordLiteralExpr*>(expression)) {
+        const auto* type = mModule ? mModule->findType(record->type) : nullptr;
+        if (type && type->kind == TypeKind::Struct) return true;
         for (const auto& field : record->fields)
             if (containsPendingControlFlow(field.value.get())) return true;
         return false;
     }
-    if (const auto* allocation = dynamic_cast<const HeapAllocExpr*>(expression))
-        return containsPendingControlFlow(allocation->initializer.get());
+    if (dynamic_cast<const HeapAllocExpr*>(expression)) return true;
     if (const auto* move = dynamic_cast<const MoveExpr*>(expression))
         return containsPendingControlFlow(move->operand.get());
     if (const auto* borrow = dynamic_cast<const BorrowExpr*>(expression))
@@ -2477,6 +2686,10 @@ bool ControlFlowBuilder::hoistOrderedOperand(
             usage, call->returnUsage);
         explicitFreshTransfer = luna::ownership::isMoveOnly(
             call->returnUsage);
+    } else if (dynamic_cast<const InitAllocationExpr*>(expression.get())) {
+        usage = luna::ownership::strongerUsage(
+            usage, luna::ownership::Usage::Affine);
+        explicitFreshTransfer = true;
     } else if (const auto* transfer =
                    dynamic_cast<const MoveExpr*>(expression.get())) {
         explicitFreshTransfer = true;
@@ -2511,6 +2724,12 @@ bool ControlFlowBuilder::hoistOrderedOperand(
         scope, LocalKind::Synthetic, name, expression->type,
         usage);
     if (local.empty()) return false;
+    if (dynamic_cast<InitAllocationExpr*>(expression.get()) &&
+        !type->sysmeta.resource.cleanupRequired)
+        addCleanup(
+            local, expression->type,
+            luna::ownership::CleanupAction::Deallocate,
+            CleanupKind::Allocation);
 
     auto declaration = std::make_unique<LetStmt>();
     declaration->location = expression->location;
@@ -3227,6 +3446,11 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
     }
     if (auto* allocation = dynamic_cast<HeapAllocExpr*>(expression))
         return bindExpr(allocation->initializer.get());
+    if (auto* initialized = dynamic_cast<InitAllocationExpr*>(expression)) {
+        for (auto& element : initialized->elements)
+            if (!bindExpr(element.value.get())) return false;
+        return true;
+    }
     if (auto* lambda = dynamic_cast<LambdaExpr*>(expression)) {
         if (!lambda->captures.empty()) {
             error(lambda->location,
@@ -3334,8 +3558,15 @@ std::vector<CleanupId> ControlFlowBuilder::lowerCleanupObligations(
         }
         const TypeRef type = obligation.typeId.empty()
             ? mGraph->locals[local.value].type : obligation.typeId;
+        const auto* cleanupType = mModule->findType(type);
+        const CleanupKind cleanupKind =
+            cleanupType && !cleanupType->sysmeta.resource.cleanupRequired &&
+                obligation.action ==
+                    luna::ownership::CleanupAction::Deallocate
+            ? CleanupKind::Allocation
+            : CleanupKind::Value;
         const CleanupId cleanup = addCleanup(
-            local, type, obligation.action);
+            local, type, obligation.action, cleanupKind);
         if (!cleanup.empty()) result.push_back(cleanup);
     }
     return canonicalCleanupOrder(result, sourceScope, std::nullopt);

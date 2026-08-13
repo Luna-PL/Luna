@@ -752,19 +752,29 @@ initialized flag is required. An explicitly transferred Linear sibling is accept
 recursive scan proves that no remaining operand contains a `TryExpr`, `BlockExpr`, or `IfExpr` that
 may leave before the parent consumes it. Its synthetic Linear local is tracked by the verifier's
 compile-time ownership marker and read through exactly one generated `MoveExpr`; unlike Affine, it
-has no cleanup fallback on an early exit. Linear siblings across a potential early exit, unit
-siblings, and allocating struct/heap initializers remain explicitly rejected until their path and
-allocation-order semantics exist; they are never copied or reordered implicitly. Short-circuit
-operands follow the conditional CFG normalization below.
+has no cleanup fallback on an early exit. Linear siblings across a potential early exit and unit
+siblings remain explicitly rejected: the first is an exactly-once usage violation, while the second
+still requires a dedicated eager statement form. Neither is copied or reordered implicitly.
+Short-circuit operands follow the conditional CFG normalization below.
 
 Anonymous structural records are now distinguished from allocating products. Their inline value
 construction has no allocation boundary, so field expressions use the same source-ordered operand
 normalization as arrays and variants; a terminal field becomes an ordinary result-local reference
-inside the final `RecordLiteralExpr`. A named struct literal still allocates before evaluating and
-storing its fields in the current ABI, and `HeapAllocExpr` likewise allocates before its initializer.
-Both remain rejected when an initializer contains control flow until allocation itself is an
-explicit canonical operation. Moving either initializer ahead of allocation would be observably
-incorrect rather than an optimization.
+inside the final `RecordLiteralExpr`.
+
+The allocation-aware construction subphase is now complete for unique named-struct and explicit
+heap allocation. `AllocateStmt` first defines an owned Affine allocation LocalId whose
+`CleanupKind::Allocation` row releases backing storage even when the stored type itself is Copy.
+Initializers then evaluate in source order through the ordinary operand normalization. Values that
+must survive later control flow live in synthetic locals; an early `?` or structured return cleans
+those evaluated values in reverse order and then releases the raw allocation. Only after every
+initializer succeeds does `InitAllocationExpr` consume the raw identity and transfer the values into
+their frozen field ordinals. A binding then owns exactly one final value or allocation cleanup.
+Consequently partial initialization needs no runtime initialized bit and never invokes Drop on an
+uninitialized field. The independent verifier rejects a missing/raw cleanup of the wrong kind, an
+unknown allocation LocalId, a layout/type mismatch, or any sealed legacy `HeapAllocExpr` or
+allocating `RecordLiteralExpr`. Discarding an owning allocation result is rejected rather than
+leaked. Other storage kinds remain outside the current single `Unique` storage model.
 
 The first conditional-expression slice is now complete for Luna's current block syntax. Because a
 block has no tail value, both `BlockExpr` and block-style `IfExpr` are semantically `unit`; CFG
@@ -807,10 +817,10 @@ deactivates compile-time affine markers before the next header entry and the dec
 them on the next execution. This models source-level repeated evaluation without a runtime
 initialized flag, and an ordinary condition still keeps the previous compact single-block shape.
 
-Item 10 is not complete as a whole. Allocating struct/heap initialization plus Linear expression
-hoisting across potential early exits,
-capturing closure environments, and non-Copy item/callable per-element ownership state remain
-explicit following boundaries. The remaining work then normalizes slot and fragment
+Item 10 is not complete as a whole. Unit-valued eager expression siblings, capturing closure
+environments, and non-Copy item/callable per-element ownership state remain explicit following
+boundaries. Linear hoisting across a potential early exit remains invalid by its exactly-once
+contract rather than a deferred lowering feature. The remaining work then normalizes slot and fragment
 paths, atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured
 execution is deleted and the full verifier/codegen regression gate passes does the item-level gate

@@ -86,6 +86,12 @@ enum class LocalKind : uint8_t {
     Binding,
     Pattern,
     Synthetic,
+    Allocation,
+};
+
+enum class CleanupKind : uint8_t {
+    Value,
+    Allocation,
 };
 
 enum class TerminatorKind : uint8_t {
@@ -329,6 +335,15 @@ struct LetStmt : Stmt {
     bool materializesIteratorRecipe = false;
     bool materializedIteratorOwnsSource = false;
     TypeRef materializedIteratorSourceType;
+};
+
+// Defines one raw owning allocation. The storage has no initialized value
+// yet, so only its backing allocation cleanup is active. InitAllocationExpr
+// later consumes this identity after every initializer has succeeded.
+struct AllocateStmt : Stmt {
+    LocalId local;
+    TypeRef allocatedType;
+    HeapStorageKind storage = HeapStorageKind::Unique;
 };
 
 struct ReturnStmt : Stmt {
@@ -583,6 +598,20 @@ struct HeapAllocExpr : Expr {
     HeapStorageKind storage = HeapStorageKind::Unique;
 };
 
+// Atomically commits already-evaluated initializer values into raw allocated
+// storage and returns the initialized owning value. `index` is the frozen
+// product field ordinal, or zero for scalar allocation.
+struct InitAllocationExpr : Expr {
+    struct Element {
+        uint32_t index = 0;
+        std::unique_ptr<Expr> value;
+    };
+    LocalId allocation;
+    TypeRef allocatedType;
+    HeapStorageKind storage = HeapStorageKind::Unique;
+    std::vector<Element> elements;
+};
+
 struct TryExpr : Expr {
     std::unique_ptr<Expr> operand;
     TypeRef resultType;
@@ -661,6 +690,7 @@ struct CleanupRecord {
     ScopeId scope;
     PlaceRef place;
     TypeRef type;
+    CleanupKind kind = CleanupKind::Value;
     luna::ownership::CleanupAction action =
         luna::ownership::CleanupAction::None;
 };

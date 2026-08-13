@@ -79,6 +79,10 @@ int main() {
     auto product = Type::makeStruct(
         "Snapshot", {{"value", TyI32}}, "canonical.test::Snapshot");
     const auto productId = module.registerType(product);
+    auto ownedProduct = Type::makeStruct(
+        "OwnedSnapshot", {{"owned", TyString}, {"value", TyI32}},
+        "canonical.test::OwnedSnapshot");
+    const auto ownedProductId = module.registerType(ownedProduct);
     auto inlineProduct = Type::makeRecord({{"value", TyI32}});
     const auto inlineProductId = module.registerType(inlineProduct);
     const auto i32Id = module.registerType(TyI32);
@@ -228,6 +232,7 @@ int main() {
         luna::ownership::Relation::Owned});
     cleanupCfg.cleanups.push_back({moon::CleanupId{0}, moon::ScopeId{1},
         {moon::LocalId{0}, {}}, stringId,
+        moon::CleanupKind::Value,
         luna::ownership::CleanupAction::Deallocate});
     if (!cfgVerifier.verify(cleanupCfg, module))
         return fail("CFG verifier rejected a canonical scope-exit cleanup edge");
@@ -2325,6 +2330,8 @@ int main() {
     auto recordTerminalBinding = std::make_unique<moon::LetStmt>();
     recordTerminalBinding->name = "snapshot";
     recordTerminalBinding->type = productId;
+    recordTerminalBinding->usage =
+        module.findType(productId)->sysmeta.resource.usage;
     auto recordTerminal = std::make_unique<moon::RecordLiteralExpr>();
     recordTerminal->type = productId;
     moon::RecordLiteralExpr::Field valueField;
@@ -2335,19 +2342,282 @@ int main() {
     recordTerminalBinding->initializer = std::move(recordTerminal);
     recordTerminalBoundary->stmts.push_back(
         std::move(recordTerminalBinding));
+    auto recordTerminalRelease = std::make_unique<moon::FreeStmt>();
+    recordTerminalRelease->isImplicit = true;
+    recordTerminalRelease->action =
+        luna::ownership::CleanupAction::Deallocate;
+    auto recordTerminalResult = std::make_unique<moon::IdentifierExpr>();
+    recordTerminalResult->name = "snapshot";
+    recordTerminalResult->type = productId;
+    recordTerminalRelease->operand = std::move(recordTerminalResult);
+    recordTerminalBoundary->stmts.push_back(
+        std::move(recordTerminalRelease));
+    auto recordTerminalCfg = cfgBuilder.build(
+        std::move(recordTerminalBoundary), {},
+        moon::RegionKind::Function, module);
+    const moon::AllocateStmt* recordAllocation = nullptr;
+    const moon::InitAllocationExpr* recordInitialization = nullptr;
+    bool retainedAllocatingRecord = false;
+    if (recordTerminalCfg)
+        for (const auto& block : recordTerminalCfg->blocks)
+            for (const auto& operation : block.operations) {
+                if (const auto* allocation =
+                        dynamic_cast<const moon::AllocateStmt*>(
+                            operation.get()))
+                    recordAllocation = allocation;
+                const auto* declaration =
+                    dynamic_cast<const moon::LetStmt*>(operation.get());
+                if (!declaration) continue;
+                retainedAllocatingRecord = retainedAllocatingRecord ||
+                    dynamic_cast<const moon::RecordLiteralExpr*>(
+                        declaration->initializer.get());
+                if (declaration->name == "snapshot")
+                    recordInitialization =
+                        dynamic_cast<const moon::InitAllocationExpr*>(
+                            declaration->initializer.get());
+            }
+    const auto* recordInitializedField =
+        recordInitialization && !recordInitialization->elements.empty()
+        ? dynamic_cast<const moon::IdentifierExpr*>(
+              recordInitialization->elements.front().value.get())
+        : nullptr;
+    if (!recordTerminalCfg ||
+        !cfgVerifier.verify(*recordTerminalCfg, module) ||
+        !recordAllocation || !recordInitialization ||
+        recordInitialization->allocation != recordAllocation->local ||
+        !recordInitializedField ||
+        recordInitializedField->name.rfind("$terminal.count.", 0) != 0 ||
+        retainedAllocatingRecord)
+        return fail(
+            "allocating record did not preserve allocation-before-terminal order");
+
+    auto ownedRecordBoundary = std::make_unique<moon::BlockStmt>();
+    auto ownedRecordBinding = std::make_unique<moon::LetStmt>();
+    ownedRecordBinding->name = "ownedSnapshot";
+    ownedRecordBinding->type = ownedProductId;
+    ownedRecordBinding->usage =
+        module.findType(ownedProductId)->sysmeta.resource.usage;
+    auto ownedRecord = std::make_unique<moon::RecordLiteralExpr>();
+    ownedRecord->type = ownedProductId;
+    moon::RecordLiteralExpr::Field ownedField;
+    ownedField.name = "owned";
+    auto ownedFieldMove = std::make_unique<moon::MoveExpr>();
+    ownedFieldMove->type = stringId;
+    auto ownedFieldSource = std::make_unique<moon::IdentifierExpr>();
+    ownedFieldSource->name = "affineValue";
+    ownedFieldSource->type = stringId;
+    ownedFieldMove->operand = std::move(ownedFieldSource);
+    ownedField.value = std::move(ownedFieldMove);
+    ownedRecord->fields.push_back(std::move(ownedField));
+    moon::RecordLiteralExpr::Field fallibleField;
+    fallibleField.name = "value";
+    auto ownedRecordTry = std::make_unique<moon::TryExpr>();
+    ownedRecordTry->type = i32Id;
+    ownedRecordTry->resultType = resultI32BoolId;
+    ownedRecordTry->propagatedResultType = resultI32BoolId;
+    ownedRecordTry->valueType = i32Id;
+    ownedRecordTry->errorType = boolId;
+    ownedRecordTry->propagatedErrorType = boolId;
+    auto ownedRecordInput = std::make_unique<moon::IdentifierExpr>();
+    ownedRecordInput->name = "input";
+    ownedRecordInput->type = resultI32BoolId;
+    ownedRecordTry->operand = std::move(ownedRecordInput);
+    fallibleField.value = std::move(ownedRecordTry);
+    ownedRecord->fields.push_back(std::move(fallibleField));
+    ownedRecordBinding->initializer = std::move(ownedRecord);
+    ownedRecordBoundary->stmts.push_back(
+        std::move(ownedRecordBinding));
+    auto ownedRecordRelease = std::make_unique<moon::FreeStmt>();
+    ownedRecordRelease->isImplicit = true;
+    ownedRecordRelease->action = cleanupActionForType(ownedProduct);
+    auto ownedRecordResult = std::make_unique<moon::IdentifierExpr>();
+    ownedRecordResult->name = "ownedSnapshot";
+    ownedRecordResult->type = ownedProductId;
+    ownedRecordRelease->operand = std::move(ownedRecordResult);
+    ownedRecordBoundary->stmts.push_back(
+        std::move(ownedRecordRelease));
+    auto ownedRecordCfg = cfgBuilder.build(
+        std::move(ownedRecordBoundary),
+        {affineValueParameter, tryParameter},
+        moon::RegionKind::Function, module);
+    moon::CleanupId ownedRecordRawCleanup;
+    moon::CleanupId ownedRecordValueCleanup;
+    const moon::Terminator* ownedRecordFailure = nullptr;
+    if (ownedRecordCfg) {
+        for (const auto& cleanup : ownedRecordCfg->cleanups) {
+            const auto* local = ownedRecordCfg->findLocal(
+                cleanup.place.root);
+            if (local && local->kind == moon::LocalKind::Allocation)
+                ownedRecordRawCleanup = cleanup.id;
+            if (local && local->name.rfind(
+                    "$expression.hoist.", 0) == 0)
+                ownedRecordValueCleanup = cleanup.id;
+        }
+        for (const auto& block : ownedRecordCfg->blocks) {
+            const auto* propagated =
+                dynamic_cast<const moon::ResultConstructExpr*>(
+                    block.terminator.operand.get());
+            if (block.terminator.kind == moon::TerminatorKind::Return &&
+                propagated && !propagated->isOk)
+                ownedRecordFailure = &block.terminator;
+        }
+    }
+    const auto rawCleanupPosition = ownedRecordFailure
+        ? std::find(ownedRecordFailure->exitCleanups.begin(),
+                    ownedRecordFailure->exitCleanups.end(),
+                    ownedRecordRawCleanup)
+        : std::vector<moon::CleanupId>::const_iterator{};
+    const auto valueCleanupPosition = ownedRecordFailure
+        ? std::find(ownedRecordFailure->exitCleanups.begin(),
+                    ownedRecordFailure->exitCleanups.end(),
+                    ownedRecordValueCleanup)
+        : std::vector<moon::CleanupId>::const_iterator{};
+    if (!ownedRecordCfg ||
+        !cfgVerifier.verify(*ownedRecordCfg, module) ||
+        ownedRecordRawCleanup.empty() ||
+        ownedRecordValueCleanup.empty() || !ownedRecordFailure ||
+        rawCleanupPosition == ownedRecordFailure->exitCleanups.end() ||
+        valueCleanupPosition == ownedRecordFailure->exitCleanups.end() ||
+        valueCleanupPosition > rawCleanupPosition)
+        return fail(
+            "partial struct initialization did not clean value before raw storage");
+
+    auto heapTryBoundary = std::make_unique<moon::BlockStmt>();
+    auto heapTryBinding = std::make_unique<moon::LetStmt>();
+    heapTryBinding->name = "heapTryValue";
+    heapTryBinding->type = i32Id;
+    auto heapTry = std::make_unique<moon::HeapAllocExpr>();
+    heapTry->type = i32Id;
+    heapTry->allocatedType = i32Id;
+    auto heapTryConstructor = std::make_unique<moon::CallExpr>();
+    auto heapTryCallee = std::make_unique<moon::IdentifierExpr>();
+    heapTryCallee->name = "i32";
+    heapTryConstructor->callee = std::move(heapTryCallee);
+    auto heapTryPropagation = std::make_unique<moon::TryExpr>();
+    heapTryPropagation->type = i32Id;
+    heapTryPropagation->resultType = resultI32BoolId;
+    heapTryPropagation->propagatedResultType = resultI32BoolId;
+    heapTryPropagation->valueType = i32Id;
+    heapTryPropagation->errorType = boolId;
+    heapTryPropagation->propagatedErrorType = boolId;
+    auto heapTryInput = std::make_unique<moon::IdentifierExpr>();
+    heapTryInput->name = "input";
+    heapTryInput->type = resultI32BoolId;
+    heapTryPropagation->operand = std::move(heapTryInput);
+    heapTryConstructor->args.push_back(std::move(heapTryPropagation));
+    heapTry->initializer = std::move(heapTryConstructor);
+    heapTryBinding->initializer = std::move(heapTry);
+    heapTryBoundary->stmts.push_back(std::move(heapTryBinding));
+    auto heapTryRelease = std::make_unique<moon::FreeStmt>();
+    heapTryRelease->isImplicit = true;
+    heapTryRelease->action =
+        luna::ownership::CleanupAction::Deallocate;
+    auto heapTryResult = std::make_unique<moon::IdentifierExpr>();
+    heapTryResult->name = "heapTryValue";
+    heapTryResult->type = i32Id;
+    heapTryRelease->operand = std::move(heapTryResult);
+    heapTryBoundary->stmts.push_back(std::move(heapTryRelease));
+    auto heapTryCfg = cfgBuilder.build(
+        std::move(heapTryBoundary), {tryParameter},
+        moon::RegionKind::Function, module);
+    const moon::LocalRecord* heapRawLocal = nullptr;
+    moon::CleanupId heapRawCleanup;
+    moon::Terminator* heapFailure = nullptr;
+    moon::InitAllocationExpr* heapInitialization = nullptr;
+    if (heapTryCfg) {
+        for (const auto& local : heapTryCfg->locals)
+            if (local.kind == moon::LocalKind::Allocation)
+                heapRawLocal = &local;
+        if (heapRawLocal)
+            for (const auto& cleanup : heapTryCfg->cleanups)
+                if (cleanup.place.root == heapRawLocal->id &&
+                    cleanup.kind == moon::CleanupKind::Allocation) {
+                    heapRawCleanup = cleanup.id;
+                    break;
+                }
+        for (auto& block : heapTryCfg->blocks) {
+            for (auto& operation : block.operations) {
+                auto* declaration =
+                    dynamic_cast<moon::LetStmt*>(operation.get());
+                if (declaration && declaration->name == "heapTryValue")
+                    heapInitialization =
+                        dynamic_cast<moon::InitAllocationExpr*>(
+                            declaration->initializer.get());
+            }
+            const auto* propagated =
+                dynamic_cast<const moon::ResultConstructExpr*>(
+                    block.terminator.operand.get());
+            if (block.terminator.kind == moon::TerminatorKind::Return &&
+                propagated && !propagated->isOk)
+                heapFailure = &block.terminator;
+        }
+    }
+    if (!heapTryCfg || !cfgVerifier.verify(*heapTryCfg, module) ||
+        !heapRawLocal || heapRawCleanup.empty() || !heapFailure ||
+        !heapInitialization ||
+        std::find(heapFailure->exitCleanups.begin(),
+                  heapFailure->exitCleanups.end(), heapRawCleanup) ==
+            heapFailure->exitCleanups.end())
+        return fail(
+            "heap initializer early exit did not release raw allocation");
+    const auto preservedHeapFailureCleanups = heapFailure->exitCleanups;
+    heapFailure->exitCleanups.erase(
+        std::remove(heapFailure->exitCleanups.begin(),
+                    heapFailure->exitCleanups.end(), heapRawCleanup),
+        heapFailure->exitCleanups.end());
+    if (cfgVerifier.verify(*heapTryCfg, module))
+        return fail(
+            "CFG verifier accepted a leaking heap initializer failure edge");
+    heapFailure->exitCleanups = preservedHeapFailureCleanups;
+    if (!cfgVerifier.verify(*heapTryCfg, module))
+        return fail(
+            "restored heap initializer cleanup CFG did not verify");
+    const auto preservedHeapAllocation = heapInitialization->allocation;
+    heapInitialization->allocation = moon::LocalId{999};
+    if (cfgVerifier.verify(*heapTryCfg, module))
+        return fail(
+            "CFG verifier accepted an initialization with no allocation identity");
+    heapInitialization->allocation = preservedHeapAllocation;
+    auto& heapRawCleanupRecord =
+        heapTryCfg->cleanups[heapRawCleanup.value];
+    heapRawCleanupRecord.kind = moon::CleanupKind::Value;
+    if (cfgVerifier.verify(*heapTryCfg, module))
+        return fail(
+            "CFG verifier accepted raw storage with a value cleanup");
+    heapRawCleanupRecord.kind = moon::CleanupKind::Allocation;
+    if (!cfgVerifier.verify(*heapTryCfg, module))
+        return fail(
+            "restored heap allocation identity did not verify");
+
+    auto discardedAllocationBoundary =
+        std::make_unique<moon::BlockStmt>();
+    auto discardedAllocationUse = std::make_unique<moon::ExprStmt>();
+    auto discardedAllocation = std::make_unique<moon::HeapAllocExpr>();
+    discardedAllocation->type = i32Id;
+    discardedAllocation->allocatedType = i32Id;
+    auto discardedConstructor = std::make_unique<moon::CallExpr>();
+    auto discardedCallee = std::make_unique<moon::IdentifierExpr>();
+    discardedCallee->name = "i32";
+    discardedConstructor->callee = std::move(discardedCallee);
+    auto discardedValue = std::make_unique<moon::IntLiteralExpr>();
+    discardedValue->value = 1;
+    discardedValue->type = i32Id;
+    discardedConstructor->args.push_back(std::move(discardedValue));
+    discardedAllocation->initializer = std::move(discardedConstructor);
+    discardedAllocationUse->expr = std::move(discardedAllocation);
+    discardedAllocationBoundary->stmts.push_back(
+        std::move(discardedAllocationUse));
     if (cfgBuilder.build(
-            std::move(recordTerminalBoundary), {},
+            std::move(discardedAllocationBoundary), {},
             moon::RegionKind::Function, module))
-        return fail(
-            "iterator terminal crossed a record allocation boundary");
-    bool diagnosedRecordTerminal = false;
+        return fail("CFG builder accepted a discarded owning allocation");
+    bool diagnosedDiscardedAllocation = false;
     for (const auto& message : cfgBuilder.errors())
-        diagnosedRecordTerminal = diagnosedRecordTerminal ||
-            message.find("allocation-aware expression CFG") !=
+        diagnosedDiscardedAllocation = diagnosedDiscardedAllocation ||
+            message.find("allocation result cannot be discarded") !=
                 std::string::npos;
-    if (!diagnosedRecordTerminal)
-        return fail(
-            "record terminal lost its allocation-order boundary");
+    if (!diagnosedDiscardedAllocation)
+        return fail("discarded allocation lost its ownership diagnostic");
 
     auto forEachStructured = std::make_unique<moon::BlockStmt>();
     forEachStructured->stmts.push_back(
@@ -3112,6 +3382,9 @@ int main() {
     reverse.registerType(rangeIterator);
     reverse.registerType(Type::makeStruct(
         "Snapshot", {{"value", TyI32}}, "canonical.test::Snapshot"));
+    reverse.registerType(Type::makeStruct(
+        "OwnedSnapshot", {{"owned", TyString}, {"value", TyI32}},
+        "canonical.test::OwnedSnapshot"));
     reverse.registerType(TyUSize);
     reverse.registerType(TyString);
     reverse.registerType(TyBool);

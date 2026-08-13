@@ -302,10 +302,16 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         else if (type->kind == TypeKind::Iterator)
             error({}, "sealed CFG retains compiler iterator recipe local " +
                       std::to_string(index));
-        else if (!luna::ownership::satisfiesUsageRequirement(
+        else if (local.kind != LocalKind::Allocation &&
+                 !luna::ownership::satisfiesUsageRequirement(
                      local.usage, type->sysmeta.resource.usage))
             error({}, "local " + std::to_string(index) +
                       " weakens its frozen usage requirement");
+        if (local.kind == LocalKind::Allocation &&
+            (local.usage != luna::ownership::Usage::Affine ||
+             local.relation != luna::ownership::Relation::Owned))
+            error({}, "raw allocation local " + std::to_string(index) +
+                      " is not an owned affine identity");
     }
     for (size_t index = 0; index < graph.cleanups.size(); ++index) {
         const auto& cleanup = graph.cleanups[index];
@@ -378,12 +384,32 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                           " type disagrees with its projected place");
         }
         const auto* cleanupType = module.findType(cleanup.type);
-        if (cleanupType && !cleanupType->sysmeta.resource.cleanupRequired)
-            error({}, "cleanup " + std::to_string(index) +
-                      " targets a type with no cleanup obligation");
-        verifyCleanupAction(
-            cleanup.action, cleanup.type, {},
-            "cleanup " + std::to_string(index), module);
+        if (cleanup.kind == CleanupKind::Allocation) {
+            if (!cleanup.place.projections.empty())
+                error({}, "allocation cleanup " + std::to_string(index) +
+                          " targets a projected place");
+            if (cleanup.action !=
+                luna::ownership::CleanupAction::Deallocate)
+                error({}, "allocation cleanup " + std::to_string(index) +
+                          " does not deallocate backing storage");
+            if (local && local->kind == LocalKind::Allocation &&
+                cleanup.place.root != local->id)
+                error({}, "raw allocation cleanup " +
+                          std::to_string(index) +
+                          " disagrees with its allocation identity");
+        } else {
+            if (local && local->kind == LocalKind::Allocation)
+                error({}, "raw allocation local " +
+                          std::to_string(local->id.value) +
+                          " carries a value cleanup");
+            if (cleanupType &&
+                !cleanupType->sysmeta.resource.cleanupRequired)
+                error({}, "value cleanup " + std::to_string(index) +
+                          " targets a type with no cleanup obligation");
+            verifyCleanupAction(
+                cleanup.action, cleanup.type, {},
+                "value cleanup " + std::to_string(index), module);
+        }
     }
 
     const auto verifyEdge = [this, &graph](
@@ -446,8 +472,8 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             }
         };
     std::function<void(const Expr*, const BasicBlock&)> scanGraphExpr;
-    scanGraphExpr = [this, &graph, &module, &scanGraphIdentifier,
-                     &scanGraphExpr](
+    scanGraphExpr = [this, &graph, &module, &localVisibleFrom,
+                     &scanGraphIdentifier, &scanGraphExpr](
         const Expr* expression, const BasicBlock& block) {
         if (!expression) return;
         if (const auto* identifier =
@@ -558,11 +584,31 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 scanGraphExpr(element.get(), block);
         } else if (const auto* record =
                        dynamic_cast<const RecordLiteralExpr*>(expression)) {
+            const auto* recordType = module.findType(record->type);
+            if (recordType && recordType->kind == TypeKind::Struct)
+                error(record->location,
+                      "sealed CFG retains implicit named-struct allocation");
             for (const auto& field : record->fields)
                 scanGraphExpr(field.value.get(), block);
+        } else if (const auto* initialized =
+                       dynamic_cast<const InitAllocationExpr*>(expression)) {
+            const auto* allocation = graph.findLocal(
+                initialized->allocation);
+            if (!allocation) {
+                error(initialized->location,
+                      "allocation initialization references a missing LocalId");
+            } else if (allocation->kind != LocalKind::Allocation ||
+                       allocation->type != initialized->allocatedType ||
+                       !localVisibleFrom(allocation->scope, block.scope)) {
+                error(initialized->location,
+                      "allocation initialization disagrees with its raw allocation local");
+            }
+            for (const auto& element : initialized->elements)
+                scanGraphExpr(element.value.get(), block);
         } else if (const auto* allocation =
                        dynamic_cast<const HeapAllocExpr*>(expression)) {
-            scanGraphExpr(allocation->initializer.get(), block);
+            error(allocation->location,
+                  "sealed CFG retains implicit heap allocation");
         } else if (const auto* lambda =
                        dynamic_cast<const LambdaExpr*>(expression)) {
             if (lambda->body || !lambda->controlFlow)
@@ -664,6 +710,53 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                           "sealed CFG retains materialized iterator recipe metadata");
                 verifyStmt(operation.get(), module, "CFG operation");
                 scanGraphExpr(declaration->initializer.get(), block);
+                if (dynamic_cast<const InitAllocationExpr*>(
+                        declaration->initializer.get())) {
+                    const auto* type = module.findType(declaration->type);
+                    const CleanupKind expectedKind =
+                        type && type->sysmeta.resource.cleanupRequired
+                        ? CleanupKind::Value
+                        : CleanupKind::Allocation;
+                    size_t cleanupCount = 0;
+                    for (const auto& cleanup : graph.cleanups)
+                        if (cleanup.place.root == declaration->local &&
+                            cleanup.kind == expectedKind)
+                            ++cleanupCount;
+                    if (cleanupCount != 1)
+                        error(declaration->location,
+                              "initialized allocation binding does not own exactly one final cleanup");
+                }
+            } else if (const auto* allocation =
+                           dynamic_cast<const AllocateStmt*>(operation.get())) {
+                const auto* local = graph.findLocal(allocation->local);
+                if (!local) {
+                    error(allocation->location,
+                          "allocate operation has no canonical LocalId");
+                } else {
+                    ++localDefinitions[local->id.value];
+                    if (local->kind != LocalKind::Allocation ||
+                        local->scope != block.scope ||
+                        local->type != allocation->allocatedType ||
+                        local->usage != luna::ownership::Usage::Affine ||
+                        local->relation !=
+                            luna::ownership::Relation::Owned)
+                        error(allocation->location,
+                              "allocate operation disagrees with its local-table row");
+                }
+                verifyType(allocation->allocatedType,
+                           allocation->location,
+                           "raw allocation", module);
+                if (allocation->storage != HeapStorageKind::Unique)
+                    error(allocation->location,
+                          "canonical allocation uses unsupported storage");
+                size_t cleanupCount = 0;
+                for (const auto& cleanup : graph.cleanups)
+                    if (cleanup.place.root == allocation->local &&
+                        cleanup.kind == CleanupKind::Allocation)
+                        ++cleanupCount;
+                if (cleanupCount != 1)
+                    error(allocation->location,
+                          "raw allocation does not own exactly one backing-storage cleanup");
             } else if (const auto* expression =
                            dynamic_cast<const ExprStmt*>(operation.get())) {
                 verifyStmt(operation.get(), module, "CFG operation");
@@ -861,7 +954,8 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         const auto kind = graph.locals[index].kind;
         const uint32_t expected =
             (kind == LocalKind::Binding || kind == LocalKind::Pattern ||
-             kind == LocalKind::Synthetic)
+             kind == LocalKind::Synthetic ||
+             kind == LocalKind::Allocation)
                 ? 1u : 0u;
         if (localDefinitions[index] != expected)
             error({}, "local " + std::to_string(index) + " has " +
@@ -1071,6 +1165,13 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                        dynamic_cast<const RecordLiteralExpr*>(expression)) {
             for (const auto& field : record->fields)
                 transferExpr(field.value.get(), state);
+        } else if (const auto* initialized =
+                       dynamic_cast<const InitAllocationExpr*>(expression)) {
+            for (const auto& element : initialized->elements)
+                transferExpr(element.value.get(), state);
+            consumePlace(
+                PlaceRef{initialized->allocation, {}}, state,
+                initialized->location, "allocation initialization");
         } else if (const auto* allocation =
                        dynamic_cast<const HeapAllocExpr*>(expression)) {
             transferExpr(allocation->initializer.get(), state);
@@ -1187,6 +1288,12 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                     transferExpr(declaration->initializer.get(), state);
                     activateLocal(declaration->local, state,
                                   declaration->location, "let operation");
+                } else if (const auto* allocation =
+                               dynamic_cast<const AllocateStmt*>(
+                                   operation.get())) {
+                    activateLocal(allocation->local, state,
+                                  allocation->location,
+                                  "allocate operation");
                 } else if (const auto* expression =
                                dynamic_cast<const ExprStmt*>(operation.get())) {
                     transferExpr(expression->expr.get(), state);
@@ -2447,6 +2554,54 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
                       "record literal contains an empty or duplicate field");
             verifyExpr(field.value.get(), module, owner);
         }
+    } else if (auto* initialized =
+                   dynamic_cast<const InitAllocationExpr*>(expr)) {
+        verifyType(initialized->type, initialized->location,
+                   "initialized allocation result", module);
+        verifyType(initialized->allocatedType, initialized->location,
+                   "initialized allocation storage", module);
+        const auto* allocated = module.findType(
+            initialized->allocatedType);
+        if (!allocated || initialized->type != initialized->allocatedType)
+            error(initialized->location,
+                  "initialized allocation result disagrees with its storage type");
+        if (initialized->storage != HeapStorageKind::Unique)
+            error(initialized->location,
+                  "initialized allocation uses unsupported storage");
+        std::unordered_set<uint32_t> indices;
+        for (const auto& element : initialized->elements) {
+            if (!indices.insert(element.index).second)
+                error(initialized->location,
+                      "initialized allocation repeats an element index");
+            verifyExpr(element.value.get(), module, owner);
+            if (!allocated || !element.value) continue;
+            TypeRef expected;
+            if (allocated->kind == TypeKind::Struct ||
+                allocated->kind == TypeKind::Record) {
+                if (element.index >= allocated->fields.size()) {
+                    error(initialized->location,
+                          "initialized allocation element is outside its product type");
+                    continue;
+                }
+                expected = allocated->fields[element.index].type;
+            } else if (element.index == 0) {
+                expected = initialized->allocatedType;
+            } else {
+                error(initialized->location,
+                      "scalar allocation has a nonzero initializer index");
+                continue;
+            }
+            if (element.value->type != expected)
+                error(initialized->location,
+                      "initialized allocation element type disagrees with frozen layout");
+        }
+        const size_t expectedCount = allocated &&
+                (allocated->kind == TypeKind::Struct ||
+                 allocated->kind == TypeKind::Record)
+            ? allocated->fields.size() : 1;
+        if (initialized->elements.size() != expectedCount)
+            error(initialized->location,
+                  "initialized allocation does not cover its frozen layout");
     } else if (auto* allocation = dynamic_cast<const HeapAllocExpr*>(expr)) {
         verifyType(allocation->allocatedType, allocation->location,
                    "heap allocation", module);

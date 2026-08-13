@@ -672,17 +672,26 @@ cleanup，因而不需要 runtime initialized flag。显式转移的 Linear sibl
 `BlockExpr` 或 `IfExpr` 时才可 hoist。其 synthetic Linear local 由 verifier 的
 纯编译期 ownership marker 跟踪，并通过唯一的生成 `MoveExpr` 读取；与 Affine
 不同，Linear 在 early exit 上没有 cleanup 退路。跨越潜在 early exit 的 Linear
-sibling、unit sibling 以及 allocating struct/heap initializer 仍被明确拒绝，等待完整的
-逐路径与 allocation-order 语义；它们不会被隐式复制或重排。
+sibling 与 unit sibling 仍被明确拒绝：前者违反恰好一次消费约束，后者仍需专用的
+eager statement 形式；它们都不会被隐式复制或重排。
 短路 operand 则进入下文的 conditional CFG 规范化。
 
 匿名 structural record 现已与会分配的 product 区分。其 inline 值构造没有 allocation
 boundary，因而字段表达式使用与 array、variant 相同的源码有序 operand 规范化；
-terminal 字段会在最终 `RecordLiteralExpr` 中成为普通 result-local 引用。当前 ABI 下，
-命名 struct literal 仍先分配再求值并存储字段，`HeapAllocExpr` 也仍先分配再执行
-initializer。在 allocation 本身成为显式 canonical operation 之前，两者的 initializer
-若包含控制流仍会被拒绝。把这些 initializer 提前到 allocation 之前会改变可观察语义，
-不能当作优化。
+terminal 字段会在最终 `RecordLiteralExpr` 中成为普通 result-local 引用。
+
+面向 allocation 的构建子阶段现已完成 unique named-struct 与显式 heap allocation。
+`AllocateStmt` 首先定义一个 owned Affine allocation LocalId；其
+`CleanupKind::Allocation` row 即使在存储类型本身是 Copy 时也会释放 backing storage。
+initializer 随后通过普通的 operand 规范化按源码顺序求值。必须跨越后续控制流的值
+保存在 synthetic local 中；提前的 `?` 或结构化 return 会逆序清理这些已求值的值，
+然后释放 raw allocation。只有当所有 initializer 都成功后，`InitAllocationExpr` 才消费
+raw identity，并把各值转移到冻结的字段序号中；binding 随后只持有一个最终 value
+或 allocation cleanup。因而部分初始化无需 runtime initialized bit，也绝不会对未初始化字段
+执行 Drop。独立 verifier 会拒绝缺失或种类错误的 raw cleanup、不存在的 allocation
+LocalId、layout/type 不匹配，以及 sealed graph 中任何遗留的 `HeapAllocExpr` 或会分配的
+`RecordLiteralExpr`。丢弃 owning allocation result 会被拒绝而非泄漏。其他 storage kind 仍不在
+当前唯一的 `Unique` storage model 中。
 
 当前 Luna block 语法的第一个 conditional-expression 切片也已完成。由于 block 尚无
 tail value，`BlockExpr` 和 block-style `IfExpr` 在语义上都是 `unit`；CFG 构建会消费
@@ -720,10 +729,10 @@ loop 的 header 同时是初始 edge 与 body backedge 的目标；每次经过 
 声明时重新激活。这在不增加 runtime initialized flag 的情况下表达了源语言的
 重复求值；普通 condition 仍保持原有的紧凑单 block 形态。
 
-第 10 项尚未整体完成。上述 allocating struct/heap initialization、跨越潜在
-early exit 的 Linear expression hoisting、
-捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup
-状态仍是明确的后续边界。
+第 10 项尚未整体完成。unit-valued eager expression sibling、捕获式 closure
+environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup 状态仍是明确的后续边界。
+跨越潜在 early exit 的 Linear hoisting 因违反恰好一次约束而保持非法，它不是延后的
+lowering 功能。
 随后规范化 slot 和 fragment
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
