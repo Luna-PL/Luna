@@ -671,10 +671,18 @@ tail value，`BlockExpr` 和 block-style `IfExpr` 在语义上都是 `unit`；CF
 verifier 仍会拒绝 sealed graph 中的任何 `BlockExpr` 或 `IfExpr`。若未来设计 tail value，
 则必须显式引入 synthetic result local；0.3 实现不会自行推定这种值语义。
 
+`TryExpr` 规范化作为下一个 conditional 切片也已完成。operand 只求值一次，并成为
+基于冻结 Result ABI（`Err = 0`、`Ok = 1`）的普通 `Switch`。成功 payload 是唯一继续
+路径上的 pattern local。失败路径会按需调用静态解析的 owned `From` witness，构造普通
+`ResultConstructExpr`，在 return edge 上执行源码推导的 cleanup 集合，并以 `Return`
+终止。move-only Result/error payload 使用显式 transfer，因而独立 ownership dataflow 可以
+验证 operand 消费、转换、传播返回和 cleanup，不需要 exception runtime 或隐藏 success flag。
+`ResultConstructExpr` 只是数据；sealed CFG 仍拒绝任何残留 `TryExpr`。
+
 第 10 项尚未整体完成。上述 short-circuit/allocation-aware 与 non-Copy expression hoisting、
 捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup
 状态仍是明确的后续边界。
-随后规范化 `TryExpr` 及其余控制流表达式、slot 和 fragment
+随后规范化其余控制流表达式、slot 和 fragment
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
 serializer/parser 仍属于第 11 项。

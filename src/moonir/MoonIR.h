@@ -538,6 +538,13 @@ struct VariantConstructExpr : Expr {
     TypeRef constructedType;
 };
 
+// Ordinary Result data construction used after `?` has become explicit CFG.
+// Err is tag 0 and Ok is tag 1, matching the frozen Result ABI and Switch.
+struct ResultConstructExpr : Expr {
+    bool isOk = false;
+    std::unique_ptr<Expr> payload;
+};
+
 struct FieldAccessExpr : Expr {
     std::unique_ptr<Expr> object;
     std::string field;

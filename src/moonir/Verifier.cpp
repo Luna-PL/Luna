@@ -535,6 +535,9 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                        dynamic_cast<const VariantConstructExpr*>(expression)) {
             for (const auto& argument : variant->args)
                 scanGraphExpr(argument.get(), block);
+        } else if (const auto* result =
+                       dynamic_cast<const ResultConstructExpr*>(expression)) {
+            scanGraphExpr(result->payload.get(), block);
         } else if (const auto* field =
                        dynamic_cast<const FieldAccessExpr*>(expression)) {
             scanGraphExpr(field->object.get(), block);
@@ -1043,6 +1046,9 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                        dynamic_cast<const VariantConstructExpr*>(expression)) {
             for (const auto& argument : variant->args)
                 transferExpr(argument.get(), state);
+        } else if (const auto* result =
+                       dynamic_cast<const ResultConstructExpr*>(expression)) {
+            transferExpr(result->payload.get(), state);
         } else if (const auto* field =
                        dynamic_cast<const FieldAccessExpr*>(expression)) {
             transferExpr(field->object.get(), state);
@@ -2384,6 +2390,22 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
                    "constructed enum '" + variant->typeName + "'", module);
         for (const auto& argument : variant->args)
             verifyExpr(argument.get(), module, owner);
+    } else if (auto* result =
+                   dynamic_cast<const ResultConstructExpr*>(expr)) {
+        verifyType(result->type, result->location,
+                   "constructed Result", module);
+        verifyExpr(result->payload.get(), module, owner);
+        const auto* resultType = module.findType(result->type);
+        if (!resultType || resultType->kind != TypeKind::Result ||
+            resultType->typeArgumentIds.size() != 2) {
+            error(result->location,
+                  "Result construction has no frozen Result<T, E> type");
+        } else if (!result->payload ||
+                   result->payload->type != resultType->typeArgumentIds[
+                       result->isOk ? 0 : 1]) {
+            error(result->location,
+                  "Result construction payload disagrees with its tag");
+        }
     } else if (auto* field = dynamic_cast<const FieldAccessExpr*>(expr)) {
         verifyExpr(field->object.get(), module, owner);
     } else if (auto* index = dynamic_cast<const IndexExpr*>(expr)) {

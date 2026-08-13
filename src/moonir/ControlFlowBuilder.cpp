@@ -1533,6 +1533,183 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
 }
 
 std::optional<ControlFlowBuilder::OpenBlock>
+ControlFlowBuilder::lowerTryExpression(
+    std::unique_ptr<TryExpr> expression, OpenBlock current,
+    RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement) {
+    if (!expression || !expression->operand) {
+        error(expression ? expression->location : SourceLocation{},
+              "error propagation has no operand");
+        return std::nullopt;
+    }
+
+    auto operand = normalizeControlFlowExpression(
+        expression->operand, std::move(current), region, scope, false);
+    if (!operand) return std::nullopt;
+    current = std::move(*operand);
+    if (!bindExpr(expression->operand.get())) return std::nullopt;
+
+    const auto* sourceResult = mModule->findType(expression->resultType);
+    const auto* targetResult = mModule->findType(
+        expression->propagatedResultType);
+    const auto* valueType = mModule->findType(expression->valueType);
+    const auto* errorType = mModule->findType(expression->errorType);
+    const auto* targetErrorType = mModule->findType(
+        expression->propagatedErrorType);
+    if (!sourceResult || sourceResult->kind != TypeKind::Result ||
+        sourceResult->typeArgumentIds.size() != 2 ||
+        sourceResult->typeArgumentIds[0] != expression->valueType ||
+        sourceResult->typeArgumentIds[1] != expression->errorType ||
+        !targetResult || targetResult->kind != TypeKind::Result ||
+        targetResult->typeArgumentIds.size() != 2 ||
+        targetResult->typeArgumentIds[1] !=
+            expression->propagatedErrorType ||
+        !valueType || !errorType || !targetErrorType ||
+        expression->operand->type != expression->resultType ||
+        expression->type != expression->valueType) {
+        error(expression->location,
+              "error propagation disagrees with its frozen Result types");
+        return std::nullopt;
+    }
+
+    const DeclarationRecord* conversion = nullptr;
+    const TypeRecord* conversionType = nullptr;
+    if (expression->errorType == expression->propagatedErrorType) {
+        if (!expression->errorConversion.empty()) {
+            error(expression->location,
+                  "error propagation has an unnecessary From conversion");
+            return std::nullopt;
+        }
+    } else {
+        conversion = mModule->findDeclaration(expression->errorConversion);
+        conversionType = conversion
+            ? mModule->findType(conversion->type) : nullptr;
+        if (!conversion || conversion->kind != DeclarationKind::Function ||
+            !conversionType || conversionType->kind != TypeKind::Function ||
+            conversionType->parameterTypeIds !=
+                TypeRefVec{expression->errorType} ||
+            conversionType->returnTypeId !=
+                expression->propagatedErrorType ||
+            conversionType->parameterContracts.size() != 1 ||
+            conversionType->parameterContracts.front().relation !=
+                luna::ownership::Relation::Owned ||
+            conversionType->returnContract.relation !=
+                luna::ownership::Relation::Owned) {
+            error(expression->location,
+                  "error propagation From witness has no canonical owned conversion contract");
+            return std::nullopt;
+        }
+    }
+
+    const std::string identity =
+        std::to_string(mExpressionCounter++);
+    const auto usageOf = [](const TypeRecord* type) {
+        return type
+            ? type->sysmeta.resource.usage
+            : luna::ownership::Usage::Copy;
+    };
+    const LocalId successLocal = addLocal(
+        scope, LocalKind::Pattern, "$try.value." + identity,
+        expression->valueType, usageOf(valueType));
+    const LocalId errorLocal = addLocal(
+        scope, LocalKind::Pattern, "$try.error." + identity,
+        expression->errorType, usageOf(errorType));
+    if (successLocal.empty() || errorLocal.empty())
+        return std::nullopt;
+
+    const BlockId success = addBlock(region, scope, expression->location);
+    const BlockId failure = addBlock(region, scope, expression->location);
+    const BlockId invalid = addBlock(region, scope, expression->location);
+    auto& invalidTerminator = mGraph->blocks[invalid.value].terminator;
+    invalidTerminator.kind = TerminatorKind::Unreachable;
+    invalidTerminator.location = expression->location;
+
+    const auto identifier = [this, &expression](LocalId local) {
+        auto value = std::make_unique<IdentifierExpr>();
+        value->location = expression->location;
+        if (!local.empty() && local.value < mGraph->locals.size()) {
+            const auto& record = mGraph->locals[local.value];
+            value->name = record.name;
+            value->local = local;
+            value->type = record.type;
+        }
+        return value;
+    };
+    const auto transferIfNeeded = [&expression, &usageOf](
+        std::unique_ptr<Expr> value, const TypeRecord* type) {
+        if (!type || !luna::ownership::isMoveOnly(usageOf(type)))
+            return value;
+        auto transfer = std::make_unique<MoveExpr>();
+        transfer->location = expression->location;
+        transfer->type = type->id;
+        transfer->operand = std::move(value);
+        return std::unique_ptr<Expr>(std::move(transfer));
+    };
+
+    std::unique_ptr<Expr> propagatedError = transferIfNeeded(
+        identifier(errorLocal), errorType);
+    if (conversion && conversionType) {
+        auto call = std::make_unique<CallExpr>();
+        call->location = expression->location;
+        call->calleeRef = expression->errorConversion;
+        call->type = expression->propagatedErrorType;
+        call->returnUsage = conversionType->returnContract.usage;
+        call->returnsLinear =
+            call->returnUsage == luna::ownership::Usage::Linear;
+        auto callee = std::make_unique<IdentifierExpr>();
+        callee->location = expression->location;
+        callee->name = conversion->sourceName;
+        callee->declaration = expression->errorConversion;
+        callee->type = conversion->type;
+        call->callee = std::move(callee);
+        call->args.push_back(std::move(propagatedError));
+        propagatedError = std::move(call);
+    }
+
+    auto propagatedResult = std::make_unique<ResultConstructExpr>();
+    propagatedResult->location = expression->location;
+    propagatedResult->isOk = false;
+    propagatedResult->payload = std::move(propagatedError);
+    propagatedResult->type = expression->propagatedResultType;
+    if (!bindExpr(propagatedResult.get())) return std::nullopt;
+
+    auto failureCleanups = lowerCleanupObligations(
+        expression->cleanups, scope);
+    failureCleanups.insert(
+        failureCleanups.end(), current.cleanups.begin(),
+        current.cleanups.end());
+    auto& failureTerminator = mGraph->blocks[failure.value].terminator;
+    failureTerminator.kind = TerminatorKind::Return;
+    failureTerminator.location = expression->location;
+    failureTerminator.operand = std::move(propagatedResult);
+    failureTerminator.exitCleanups = canonicalCleanupOrder(
+        failureCleanups, scope, std::nullopt);
+
+    Terminator switchTerminator;
+    switchTerminator.kind = TerminatorKind::Switch;
+    switchTerminator.location = expression->location;
+    switchTerminator.operand = transferIfNeeded(
+        std::move(expression->operand), sourceResult);
+    switchTerminator.switchType = expression->resultType;
+    switchTerminator.primary.target = invalid;
+    SwitchEdge errorEdge;
+    errorEdge.tag = 0;
+    errorEdge.edge.target = failure;
+    errorEdge.bindings.push_back(errorLocal);
+    switchTerminator.cases.push_back(std::move(errorEdge));
+    SwitchEdge successEdge;
+    successEdge.tag = 1;
+    successEdge.edge.target = success;
+    successEdge.bindings.push_back(successLocal);
+    switchTerminator.cases.push_back(std::move(successEdge));
+    mGraph->blocks[current.block.value].terminator =
+        std::move(switchTerminator);
+
+    replacement = transferIfNeeded(
+        identifier(successLocal), valueType);
+    return OpenBlock{success, {}};
+}
+
+std::optional<ControlFlowBuilder::OpenBlock>
 ControlFlowBuilder::lowerBlockExpression(
     std::unique_ptr<BlockExpr> expression, OpenBlock current,
     RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement) {
@@ -1649,6 +1826,13 @@ ControlFlowBuilder::normalizeControlFlowExpression(
     std::unique_ptr<Expr>& expression, OpenBlock current,
     RegionId region, ScopeId scope, bool discardUnitResult) {
     if (!expression) return current;
+    if (dynamic_cast<TryExpr*>(expression.get())) {
+        std::unique_ptr<TryExpr> owned(
+            static_cast<TryExpr*>(expression.release()));
+        return lowerTryExpression(
+            std::move(owned), std::move(current), region, scope,
+            expression);
+    }
     if (dynamic_cast<BlockExpr*>(expression.get())) {
         std::unique_ptr<BlockExpr> owned(
             static_cast<BlockExpr*>(expression.release()));
@@ -1863,6 +2047,9 @@ bool ControlFlowBuilder::containsIteratorTerminal(
             if (containsIteratorTerminal(argument.get())) return true;
         return false;
     }
+    if (const auto* result =
+            dynamic_cast<const ResultConstructExpr*>(expression))
+        return containsIteratorTerminal(result->payload.get());
     if (const auto* field =
             dynamic_cast<const FieldAccessExpr*>(expression))
         return containsIteratorTerminal(field->object.get());
@@ -1944,6 +2131,9 @@ bool ControlFlowBuilder::containsPendingControlFlow(
             if (containsPendingControlFlow(argument.get())) return true;
         return false;
     }
+    if (const auto* result =
+            dynamic_cast<const ResultConstructExpr*>(expression))
+        return containsPendingControlFlow(result->payload.get());
     if (const auto* field = dynamic_cast<const FieldAccessExpr*>(expression))
         return containsPendingControlFlow(field->object.get());
     if (const auto* index = dynamic_cast<const IndexExpr*>(expression))
@@ -2688,6 +2878,8 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
             if (!bindExpr(argument.get())) return false;
         return true;
     }
+    if (auto* result = dynamic_cast<ResultConstructExpr*>(expression))
+        return bindExpr(result->payload.get());
     if (auto* field = dynamic_cast<FieldAccessExpr*>(expression))
         return bindExpr(field->object.get());
     if (auto* index = dynamic_cast<IndexExpr*>(expression))

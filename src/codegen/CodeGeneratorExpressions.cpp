@@ -29,6 +29,7 @@ using moon::LaunchExpr;
 using moon::MoveExpr;
 using moon::Operator;
 using moon::RecordLiteralExpr;
+using moon::ResultConstructExpr;
 using moon::SliceLengthExpr;
 using moon::StringLiteralExpr;
 using moon::TryExpr;
@@ -337,6 +338,28 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             {0}, "enum.tag");
         return mBuilder->CreateInsertValue(
             result, payload, {1}, "enum.value");
+    }
+    if (auto* result = dynamic_cast<ResultConstructExpr*>(expr)) {
+        const TypePtr resultType = resolveType(result->type);
+        if (!resultType || resultType->kind != TypeKind::Result ||
+            resultType->typeArgs.size() != 2 || !result->payload) {
+            error("Result construction has no validated payload contract");
+            return llvm::PoisonValue::get(mHelpers->i32Ty());
+        }
+        const TypePtr payloadType =
+            resultType->typeArgs[result->isOk ? 0 : 1];
+        llvm::Value* payload = generateExpr(result->payload.get());
+        llvm::Value* bits = packResultPayload(
+            payload, payloadType, resultType);
+        llvm::Value* value = llvm::UndefValue::get(
+            mHelpers->toLLVMType(resultType));
+        value = mBuilder->CreateInsertValue(
+            value,
+            llvm::ConstantInt::get(
+                mHelpers->boolTy(), result->isOk ? 1 : 0),
+            {0}, result->isOk ? "ok.tag" : "err.tag");
+        return mBuilder->CreateInsertValue(
+            value, bits, {1}, result->isOk ? "ok.value" : "err.value");
     }
     if (auto* record = dynamic_cast<RecordLiteralExpr*>(expr)) {
         const TypePtr recordType = resolveType(record->type);

@@ -753,9 +753,19 @@ and therefore does not add a second control IR. The verifier still rejects any s
 retains `BlockExpr` or `IfExpr`. A future tail-value design would require an explicit synthetic
 result local, but that value semantics is not inferred by the 0.3 implementation.
 
+`TryExpr` normalization is now complete as the next conditional slice. The operand is evaluated
+once and becomes an ordinary `Switch` over the frozen Result ABI (`Err = 0`, `Ok = 1`). Its success
+payload is a pattern local on the only continuing path. The failure path optionally invokes the
+statically resolved owned `From` witness, builds an ordinary `ResultConstructExpr`, executes the
+source-derived cleanup set on the return edge, and terminates with `Return`. Move-only Result/error
+payloads use explicit transfers, so the independent ownership dataflow verifies operand
+consumption, conversion, propagated return, and cleanup without an exception runtime or hidden
+success flag. `ResultConstructExpr` is data only; sealed CFG still rejects every residual
+`TryExpr`.
+
 Item 10 is not complete as a whole. Short-circuit/allocation-aware and non-Copy expression hoisting,
 capturing closure environments, and non-Copy item/callable per-element ownership state remain
-explicit following boundaries. The remaining work then normalizes `TryExpr` and other control-flow expressions, slot, and fragment
+explicit following boundaries. The remaining work then normalizes the other control-flow expressions, slot, and fragment
 paths, atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured
 execution is deleted and the full verifier/codegen regression gate passes does the item-level gate

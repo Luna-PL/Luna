@@ -83,6 +83,8 @@ int main() {
     const auto stringId = module.registerType(TyString);
     const auto boolId = module.registerType(TyBool);
     const auto unitId = module.registerType(TyUnit);
+    auto resultI32Bool = Type::makeResult(TyI32, TyBool);
+    const auto resultI32BoolId = module.registerType(resultI32Bool);
     auto lambdaType = Type::makeFunction(
         {TyI32}, TyI32,
         {{luna::ownership::Relation::Owned,
@@ -437,6 +439,169 @@ int main() {
             moon::RegionKind::Function, module))
         return fail(
             "CFG builder accepted a non-unit block-style if expression");
+
+    auto tryRoot = std::make_unique<moon::BlockStmt>();
+    auto tryBinding = std::make_unique<moon::LetStmt>();
+    tryBinding->name = "unwrapped";
+    tryBinding->type = i32Id;
+    auto propagation = std::make_unique<moon::TryExpr>();
+    propagation->type = i32Id;
+    propagation->resultType = resultI32BoolId;
+    propagation->propagatedResultType = resultI32BoolId;
+    propagation->valueType = i32Id;
+    propagation->errorType = boolId;
+    propagation->propagatedErrorType = boolId;
+    auto tryOperand = std::make_unique<moon::IdentifierExpr>();
+    tryOperand->name = "input";
+    tryOperand->type = resultI32BoolId;
+    propagation->operand = std::move(tryOperand);
+    tryBinding->initializer = std::move(propagation);
+    tryRoot->stmts.push_back(std::move(tryBinding));
+    moon::Param tryParameter;
+    tryParameter.name = "input";
+    tryParameter.type = resultI32BoolId;
+    auto tryCfg = cfgBuilder.build(
+        std::move(tryRoot), {tryParameter},
+        moon::RegionKind::Function, module);
+    moon::ResultConstructExpr* propagatedResult = nullptr;
+    size_t trySwitches = 0;
+    if (tryCfg) {
+        for (auto& block : tryCfg->blocks) {
+            if (block.terminator.kind == moon::TerminatorKind::Switch)
+                ++trySwitches;
+            if (block.terminator.kind == moon::TerminatorKind::Return)
+                if (auto* result =
+                        dynamic_cast<moon::ResultConstructExpr*>(
+                            block.terminator.operand.get()))
+                    propagatedResult = result;
+        }
+    }
+    if (!tryCfg || !cfgVerifier.verify(*tryCfg, module) ||
+        trySwitches != 1 || !propagatedResult ||
+        propagatedResult->isOk)
+        return fail(
+            "Try expression did not become Result switch and early return CFG");
+    propagatedResult->isOk = true;
+    if (cfgVerifier.verify(*tryCfg, module))
+        return fail(
+            "CFG verifier accepted a Result tag/payload mismatch");
+    propagatedResult->isOk = false;
+    if (!cfgVerifier.verify(*tryCfg, module))
+        return fail(
+            "restored Try expression CFG did not verify");
+
+    moon::Module convertedTryModule;
+    convertedTryModule.name = "canonical.try";
+    const auto convertedI32Id = convertedTryModule.registerType(TyI32);
+    const auto convertedBoolId = convertedTryModule.registerType(TyBool);
+    const auto convertedStringId = convertedTryModule.registerType(TyString);
+    auto sourceResultType = Type::makeResult(TyI32, TyString);
+    auto targetResultType = Type::makeResult(TyI32, TyBool);
+    const auto sourceResultId = convertedTryModule.registerType(
+        sourceResultType);
+    const auto targetResultId = convertedTryModule.registerType(
+        targetResultType);
+    auto fromType = Type::makeFunction(
+        {TyString}, TyBool,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Affine}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Copy});
+    const auto fromTypeId = convertedTryModule.registerType(fromType);
+    moon::DeclarationRecord fromRecord;
+    fromRecord.id = "canonical.try::fn::from_string";
+    fromRecord.familyId = fromRecord.id;
+    fromRecord.symbolId = luna::identity::symbolIdFromCanonical(
+        fromRecord.id);
+    fromRecord.sourceName = "from_string";
+    fromRecord.linkageName = "from_string";
+    fromRecord.kind = moon::DeclarationKind::Function;
+    fromRecord.type = fromTypeId;
+    fromRecord.sysmeta = fromType->sysmeta;
+    convertedTryModule.declarationTable.push_back(
+        std::move(fromRecord));
+    convertedTryModule.sealTypeTable();
+    const auto* frozenFrom = convertedTryModule.findDeclarationById(
+        "canonical.try::fn::from_string");
+    if (!frozenFrom)
+        return fail("converted Try fixture lost its From witness");
+    const moon::DeclarationRef fromRef{
+        frozenFrom->symbolId, frozenFrom->contractId};
+
+    auto convertedTryRoot = std::make_unique<moon::BlockStmt>();
+    auto convertedTryBinding = std::make_unique<moon::LetStmt>();
+    convertedTryBinding->name = "converted";
+    convertedTryBinding->type = convertedI32Id;
+    auto convertedPropagation = std::make_unique<moon::TryExpr>();
+    convertedPropagation->type = convertedI32Id;
+    convertedPropagation->resultType = sourceResultId;
+    convertedPropagation->propagatedResultType = targetResultId;
+    convertedPropagation->valueType = convertedI32Id;
+    convertedPropagation->errorType = convertedStringId;
+    convertedPropagation->propagatedErrorType = convertedBoolId;
+    convertedPropagation->errorConversion = fromRef;
+    convertedPropagation->cleanups.push_back({
+        "outer", luna::ownership::CleanupAction::Deallocate,
+        convertedStringId});
+    auto convertedOperand = std::make_unique<moon::IdentifierExpr>();
+    convertedOperand->name = "fallible";
+    convertedOperand->type = sourceResultId;
+    convertedPropagation->operand = std::move(convertedOperand);
+    convertedTryBinding->initializer = std::move(convertedPropagation);
+    convertedTryRoot->stmts.push_back(std::move(convertedTryBinding));
+    auto outerCleanup = std::make_unique<moon::FreeStmt>();
+    outerCleanup->isImplicit = true;
+    outerCleanup->action = luna::ownership::CleanupAction::Deallocate;
+    auto outerCleanupOperand = std::make_unique<moon::IdentifierExpr>();
+    outerCleanupOperand->name = "outer";
+    outerCleanupOperand->type = convertedStringId;
+    outerCleanup->operand = std::move(outerCleanupOperand);
+    convertedTryRoot->stmts.push_back(std::move(outerCleanup));
+    moon::Param fallibleParameter;
+    fallibleParameter.name = "fallible";
+    fallibleParameter.type = sourceResultId;
+    fallibleParameter.usage = convertedTryModule.findType(
+        sourceResultId)->sysmeta.resource.usage;
+    moon::Param outerParameter;
+    outerParameter.name = "outer";
+    outerParameter.type = convertedStringId;
+    outerParameter.usage = luna::ownership::Usage::Affine;
+    auto convertedTryCfg = cfgBuilder.build(
+        std::move(convertedTryRoot),
+        {fallibleParameter, outerParameter},
+        moon::RegionKind::Function, convertedTryModule);
+    moon::Terminator* convertedFailure = nullptr;
+    moon::CallExpr* convertedCall = nullptr;
+    if (convertedTryCfg) {
+        for (auto& block : convertedTryCfg->blocks) {
+            auto* result = dynamic_cast<moon::ResultConstructExpr*>(
+                block.terminator.operand.get());
+            if (!result) continue;
+            convertedFailure = &block.terminator;
+            convertedCall = dynamic_cast<moon::CallExpr*>(
+                result->payload.get());
+        }
+    }
+    if (!convertedTryCfg) {
+        for (const auto& message : cfgBuilder.errors())
+            std::cerr << message << '\n';
+        return fail(
+            "converted Try did not build canonical CFG");
+    }
+    if (!cfgVerifier.verify(*convertedTryCfg, convertedTryModule)) {
+        for (const auto& message : cfgVerifier.errors())
+            std::cerr << message << '\n';
+        return fail("converted Try CFG did not verify");
+    }
+    if (!convertedFailure || !convertedCall ||
+        convertedCall->calleeRef != fromRef ||
+        convertedFailure->exitCleanups.size() != 1)
+        return fail(
+            "converted Try did not preserve From and cleanup evidence");
+    convertedFailure->exitCleanups.clear();
+    if (cfgVerifier.verify(*convertedTryCfg, convertedTryModule))
+        return fail(
+            "CFG verifier accepted a converted Try without return cleanup");
 
     auto unresolvedStructured = std::make_unique<moon::BlockStmt>();
     auto unresolvedUse = std::make_unique<moon::ExprStmt>();
@@ -2304,6 +2469,7 @@ int main() {
     reverse.registerType(TyString);
     reverse.registerType(TyBool);
     reverse.registerType(TyUnit);
+    reverse.registerType(resultI32Bool);
     reverse.registerType(lambdaType);
     reverse.registerType(predicateType);
     reverse.registerType(reducerType);

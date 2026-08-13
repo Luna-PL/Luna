@@ -120,6 +120,9 @@ private:
     std::optional<OpenBlock> lowerIfExpression(
         std::unique_ptr<IfExpr> expression, OpenBlock current,
         RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement);
+    std::optional<OpenBlock> lowerTryExpression(
+        std::unique_ptr<TryExpr> expression, OpenBlock current,
+        RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement);
     std::optional<OpenBlock> normalizeOrderedOperands(
         const std::vector<std::unique_ptr<Expr>*>& operands,
         OpenBlock current, RegionId region, ScopeId scope);
