@@ -105,6 +105,9 @@ boundary and be rejected rather than silently composed as a static candidate.
 The canonical table fixtures also cover cursor-guarded cleanup for sequentially consumed
 move-only arrays. Tamper cases reject mixed guarded/unguarded cleanup, duplicate element coverage,
 and a guard that names a value local instead of its same-scope synthetic integer cursor.
+The direct consuming-loop fixture additionally checks the atomic dynamic element transfer, cursor
+reuse, exhaustion cleanup, early-return cleanup, a missing transfer witness, and an omitted unread
+tail element.
 
 `luna.rc-arc-core` uses the real Core package to verify JIT/AOT behavior, explicit trait/member
 clone, implicit-copy rejection, exact-once last-handle release, nested payload Drop, ordinary

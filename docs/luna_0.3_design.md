@@ -703,6 +703,19 @@ deterministically. This commits the verifiable state representation but does not
 builder's move-only consuming-array rejection; cursor updates and every early-exit edge must be
 generated together in the following slice.
 
+That first generation slice is now complete for a direct, non-materialized `for` over a
+cleanup-bearing Affine array. The guarded `nextUnread` state reuses the loop index itself, so the
+successful path adds no state word beyond the cursor already required by Copy-array iteration. A
+dynamically indexed `MoveExpr` atomically transfers `source[index]` and advances that same cursor to
+`index + 1`; the bottom backedge therefore does not increment it again. Exhaustion cleans the
+guarded unread tail, filter/take plumbing can retain the current item's ordinary cleanup, and a
+function/fragment return or abort receives both the current frontend obligations and the guarded
+tail. The verifier requires a zero initializer, the same local as dynamic index and cleanup cursor,
+complete guards, immutable cursor access outside the atomic transfer, and exact cleanup sets on
+normal and early exits. The direct fixture independently rejects a missing transfer witness or one
+omitted tail cleanup. Linear elements, materialized move-only sources, and terminal consumption
+remain later slices.
+
 The slice-bound subphase is now complete as well. A slice recipe evaluates its source exactly once,
 materializes its runtime bound once in loop init, and uses the same ordinary indexed-borrow CFG as a
 shared array recipe. The bound is represented by `SliceLengthExpr`, a fundamental slice projection,

@@ -198,6 +198,7 @@ std::unique_ptr<Expr> cloneStructuredExpr(const Expr* source) {
     if (const auto* value = dynamic_cast<const MoveExpr*>(source)) {
         auto result = clonedNode(value);
         result->operand = cloneStructuredExpr(value->operand.get());
+        result->nextUnread = value->nextUnread;
         return result;
     }
     if (const auto* value = dynamic_cast<const BorrowExpr*>(source)) {
@@ -786,6 +787,9 @@ ControlFlowBuilder::lowerStatement(
         auto cleanups = lowerCleanupObligations(abort->cleanups, scope);
         cleanups.insert(cleanups.end(), current.cleanups.begin(),
                         current.cleanups.end());
+        cleanups.insert(cleanups.end(),
+                        mActiveExpressionCleanups.begin(),
+                        mActiveExpressionCleanups.end());
         const BlockId exit = mFragmentContexts.back().exit;
         auto& terminator = mGraph->blocks[current.block.value].terminator;
         terminator.kind = TerminatorKind::Abort;
@@ -1452,8 +1456,13 @@ bool ControlFlowBuilder::validateIteratorRecipe(
         const auto* elementType = mModule->findType(sourceType->innerTypeId);
         if (sourceType->kind == TypeKind::Array &&
             plan.mode == IteratorMode::Consuming &&
-            (!elementType || elementType->sysmeta.resource.usage !=
-                luna::ownership::Usage::Copy)) {
+            (!elementType ||
+             (elementType->sysmeta.resource.usage !=
+                  luna::ownership::Usage::Copy &&
+              (!allowAffineItems || plan.materialized ||
+               elementType->sysmeta.resource.usage !=
+                   luna::ownership::Usage::Affine ||
+               !elementType->sysmeta.resource.cleanupRequired)))) {
             error(location,
                   "move-only consuming arrays require projected canonical cleanup state");
             return false;
@@ -1818,13 +1827,16 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     const std::string identity = std::to_string(loopRegion.value);
 
     const auto addBinding = [&](const std::string& name, const TypeRef& type,
-                                std::unique_ptr<Expr> initializer) {
+                                std::unique_ptr<Expr> initializer,
+                                LocalKind kind = LocalKind::Binding,
+                                bool inferTypeCleanup = true) {
         const auto* frozen = mModule->findType(type);
         const auto usage = frozen
             ? frozen->sysmeta.resource.usage
             : luna::ownership::Usage::Copy;
         const LocalId local = addLocal(
-            loopScope, LocalKind::Binding, name, type, usage);
+            loopScope, kind, name, type, usage,
+            std::nullopt, inferTypeCleanup);
         auto declaration = std::make_unique<LetStmt>();
         declaration->location = statement->location;
         declaration->name = name;
@@ -1858,6 +1870,9 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     };
 
     LocalId sourceLocal;
+    LocalId nextUnreadLocal;
+    std::vector<CleanupId> sourceTailCleanups;
+    bool guardedConsumingSource = false;
     const TypeRecord* sourceType = nullptr;
     if (plan.mode != IteratorMode::Range) {
         sourceType = mModule->findType(plan.sourceType);
@@ -1873,7 +1888,17 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
                 plan.source.reset();
             } else {
                 const auto* frozen = mModule->findType(plan.sourceType);
-                if (!frozen || frozen->sysmeta.resource.cleanupRequired) {
+                const auto* element = frozen &&
+                        frozen->kind == TypeKind::Array
+                    ? mModule->findType(frozen->innerTypeId) : nullptr;
+                guardedConsumingSource = frozen && element &&
+                    plan.mode == IteratorMode::Consuming &&
+                    element->sysmeta.resource.usage ==
+                        luna::ownership::Usage::Affine &&
+                    element->sysmeta.resource.cleanupRequired;
+                if (!frozen ||
+                    (frozen->sysmeta.resource.cleanupRequired &&
+                     !guardedConsumingSource)) {
                     error(statement->location,
                           "temporary iterator source requires unsupported synthetic cleanup");
                     popBindings();
@@ -1881,7 +1906,8 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
                 }
                 sourceLocal = addBinding(
                     "$for.source." + identity, plan.sourceType,
-                    std::move(plan.source));
+                    std::move(plan.source), LocalKind::Binding,
+                    !guardedConsumingSource);
             }
         }
     }
@@ -1916,9 +1942,34 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         }
     }
     const LocalId indexLocal = addBinding(
-        "$for.index." + identity, loopIndexType, std::move(initial));
+        "$for.index." + identity, loopIndexType, std::move(initial),
+        guardedConsumingSource
+            ? LocalKind::Synthetic : LocalKind::Binding);
     const LocalId limitLocal = addBinding(
         "$for.limit." + identity, loopIndexType, std::move(limit));
+    if (guardedConsumingSource) {
+        nextUnreadLocal = indexLocal;
+        const auto* elementType = mModule->findType(
+            sourceType->innerTypeId);
+        for (uint64_t element = 0;
+             element < sourceType->arrayLength; ++element) {
+            const CleanupId cleanup{
+                static_cast<uint32_t>(mGraph->cleanups.size())};
+            CleanupRecord record;
+            record.id = cleanup;
+            record.scope = loopScope;
+            record.place.root = sourceLocal;
+            record.place.projections.push_back({
+                ProjectionKind::ConstantIndex, element, {}});
+            record.type = sourceType->innerTypeId;
+            record.kind = CleanupKind::Value;
+            record.action = elementType->sysmeta.resource.cleanup;
+            record.guard = CleanupGuard{nextUnreadLocal, element};
+            mGraph->cleanups.push_back(std::move(record));
+            mGraph->scopes[loopScope.value].cleanups.push_back(cleanup);
+            sourceTailCleanups.push_back(cleanup);
+        }
+    }
     std::vector<LocalId> adapterLocals;
     for (size_t stepIndex = 0; stepIndex < plan.steps.size(); ++stepIndex) {
         auto& step = plan.steps[stepIndex];
@@ -1969,6 +2020,8 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     conditionTerminator.operand = std::move(hasItem);
     conditionTerminator.primary.target = bodyEntry;
     conditionTerminator.secondary.target = exit;
+    conditionTerminator.secondary.cleanups = canonicalCleanupOrder(
+        sourceTailCleanups, loopScope, scope);
     mGraph->blocks[condition.value].terminator =
         std::move(conditionTerminator);
 
@@ -2057,7 +2110,16 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
             borrowed->operand = std::move(element);
             itemValue = std::move(borrowed);
         } else {
-            itemValue = std::move(element);
+            if (guardedConsumingSource) {
+                auto transfer = std::make_unique<MoveExpr>();
+                transfer->location = statement->location;
+                transfer->type = sourceItemType;
+                transfer->operand = std::move(element);
+                transfer->nextUnread = nextUnreadLocal;
+                itemValue = std::move(transfer);
+            } else {
+                itemValue = std::move(element);
+            }
         }
     }
     const bool hasValueAdapter = std::any_of(
@@ -2067,10 +2129,14 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         });
     LocalId currentItem;
     if (hasValueAdapter) {
+        const auto* itemType = mModule->findType(sourceItemType);
+        const auto itemUsage = itemType
+            ? itemType->sysmeta.resource.usage
+            : luna::ownership::Usage::Copy;
         currentItem = addBodyBinding(
             bodyEntry, "$for.item." + identity + ".source",
-            sourceItemType, luna::ownership::Usage::Copy,
-            std::move(itemValue));
+            sourceItemType, itemUsage,
+            std::move(itemValue), LocalKind::Synthetic);
     } else {
         currentItem = addBodyBinding(
             bodyEntry, statement->varName, statement->elementType,
@@ -2122,15 +2188,20 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
             adapterTerminator.operand = std::move(canTake);
             adapterTerminator.secondary.target = exit;
         }
+        std::vector<CleanupId> rejectedCleanups;
         if (const auto cleanup = mCleanupByLocal.find(currentItem.value);
-            cleanup != mCleanupByLocal.end()) {
-            const auto* rejected = mGraph->findBlock(
+            cleanup != mCleanupByLocal.end())
+            rejectedCleanups.push_back(cleanup->second);
+        if (adapterTerminator.secondary.target == exit)
+            rejectedCleanups.insert(
+                rejectedCleanups.end(), sourceTailCleanups.begin(),
+                sourceTailCleanups.end());
+        if (const auto* rejected = mGraph->findBlock(
                 adapterTerminator.secondary.target);
-            if (rejected)
-                adapterTerminator.secondary.cleanups =
-                    canonicalCleanupOrder(
-                        {cleanup->second}, bodyScope, rejected->scope);
-        }
+            rejected && !rejectedCleanups.empty())
+            adapterTerminator.secondary.cleanups =
+                canonicalCleanupOrder(
+                    rejectedCleanups, bodyScope, rejected->scope);
         mGraph->blocks[adapterCondition.value].terminator =
             std::move(adapterTerminator);
 
@@ -2165,6 +2236,10 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
             statement->bindingUsage, std::move(finalItem));
     }
 
+    const size_t activeCleanupDepth = mActiveExpressionCleanups.size();
+    mActiveExpressionCleanups.insert(
+        mActiveExpressionCleanups.end(), sourceTailCleanups.begin(),
+        sourceTailCleanups.end());
     std::optional<OpenBlock> bodyExit;
     if (!statement->body) {
         error(statement->location, "for-loop has no canonical body");
@@ -2179,6 +2254,7 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
             statement->body->stmts, OpenBlock{userBody, {}},
             bodyRegion, bodyScope);
     }
+    mActiveExpressionCleanups.resize(activeCleanupDepth);
     popBindings();
 
     if (bodyExit) {
@@ -2188,17 +2264,19 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         connectJump(*bodyExit, increment);
     }
     if (!increment.empty()) {
-        auto advance = std::make_unique<ExprStmt>();
-        advance->location = statement->location;
-        auto assignment = std::make_unique<AssignExpr>();
-        assignment->location = statement->location;
-        assignment->op = Operator::AddAssign;
-        assignment->lhs = identifier(indexLocal);
-        assignment->rhs = integer(1, loopIndexType);
-        assignment->type = loopIndexType;
-        advance->expr = std::move(assignment);
-        mGraph->blocks[increment.value].operations.push_back(
-            std::move(advance));
+        if (!guardedConsumingSource) {
+            auto advance = std::make_unique<ExprStmt>();
+            advance->location = statement->location;
+            auto assignment = std::make_unique<AssignExpr>();
+            assignment->location = statement->location;
+            assignment->op = Operator::AddAssign;
+            assignment->lhs = identifier(indexLocal);
+            assignment->rhs = integer(1, loopIndexType);
+            assignment->type = loopIndexType;
+            advance->expr = std::move(assignment);
+            mGraph->blocks[increment.value].operations.push_back(
+                std::move(advance));
+        }
         connectJump(OpenBlock{increment, {}}, condition);
         mGraph->regions[bodyRegion.value].exit = increment;
     }
@@ -4530,12 +4608,10 @@ std::vector<CleanupId> ControlFlowBuilder::canonicalCleanupOrder(
     for (const ScopeRecord* scope = mGraph->findScope(sourceScope); scope;
          scope = mGraph->findScope(scope->parent)) {
         if (targetAncestors.count(scope->id.value)) break;
-        for (auto local = scope->locals.rbegin(); local != scope->locals.rend(); ++local) {
-            auto cleanup = mCleanupByLocal.find(local->value);
-            if (cleanup != mCleanupByLocal.end() &&
-                activeSet.count(cleanup->second.value))
-                result.push_back(cleanup->second);
-        }
+        for (auto cleanup = scope->cleanups.rbegin();
+             cleanup != scope->cleanups.rend(); ++cleanup)
+            if (activeSet.count(cleanup->value))
+                result.push_back(*cleanup);
     }
     return result;
 }

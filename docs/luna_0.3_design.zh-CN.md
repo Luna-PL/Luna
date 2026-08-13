@@ -627,6 +627,17 @@ whole-array 或 unguarded cleanup 混用。cleanup table 现也会对 projected 
 这一步只提交可验证的状态表示，builder 仍未放宽 move-only consuming-array 拒绝；
 cursor update 与所有 early-exit edge 必须在下一切片同时生成。
 
+首个生成切片现已完成，范围是直接、非 materialized 的 `for`，其源是携带 cleanup 的
+Affine array。guarded `nextUnread` 直接复用 loop index，因而成功路径相比 Copy-array
+iteration 不增加额外状态 word。动态索引 `MoveExpr` 原子地转移 `source[index]`，并将
+同一 cursor 推进到 `index + 1`；因此底部 backedge 不会再次自增。穷尽边清理 guarded
+unread tail，filter/take 基础路径可保留当前 item 的普通 cleanup，function/fragment 的
+return 或 abort 则同时携带当前 frontend obligation 与 guarded tail。verifier 要求 cursor
+从 0 初始化，动态 index、cleanup cursor 与原子 transfer 使用同一 local，guard 完整，
+且 cursor 在该 transfer 之外不得被普通赋值或可变借用，正常/提前退出边的 cleanup set
+必须精确。直接 fixture 会独立拒绝缺失 transfer witness 或少一个 tail cleanup。Linear
+element、materialized move-only source 与 terminal consumption 仍属后续切片。
+
 
 slice bound 子阶段也已完成。slice recipe 的 source 只求值一次，运行时上界只在
 loop init 物化一次，并与 shared array recipe 一样使用普通的索引借用 CFG。上界使用

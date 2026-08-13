@@ -629,6 +629,10 @@ struct TryExpr : Expr {
 
 struct MoveExpr : Expr {
     std::unique_ptr<Expr> operand;
+    // Non-empty only for a canonical sequential transfer from a dynamically
+    // indexed array element. The transfer atomically sets nextUnread to
+    // index + 1, matching the guarded tail cleanup owned by the source array.
+    LocalId nextUnread;
 };
 
 struct BorrowExpr : Expr {

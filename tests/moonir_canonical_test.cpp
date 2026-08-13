@@ -363,6 +363,19 @@ int main() {
     guardedCleanupCfg.cleanups[1].guard->nextUnread = moon::LocalId{1};
     if (!cfgVerifier.verify(guardedCleanupCfg, module))
         return fail("restored guarded array cleanup state no longer verifies");
+    auto* guardedCursorDefinition = dynamic_cast<moon::LetStmt*>(
+        guardedCleanupCfg.blocks.front().operations[1].get());
+    auto* guardedCursorInitializer = guardedCursorDefinition
+        ? dynamic_cast<moon::IntLiteralExpr*>(
+              guardedCursorDefinition->initializer.get()) : nullptr;
+    if (!guardedCursorInitializer)
+        return fail("guarded array fixture lost its cursor initializer");
+    guardedCursorInitializer->value = 1;
+    if (cfgVerifier.verify(guardedCleanupCfg, module))
+        return fail("CFG verifier accepted a nonzero guarded array cursor");
+    guardedCursorInitializer->value = 0;
+    if (!cfgVerifier.verify(guardedCleanupCfg, module))
+        return fail("restored guarded cursor initializer no longer verifies");
 
     auto structured = std::make_unique<moon::BlockStmt>();
     auto binding = std::make_unique<moon::LetStmt>();
@@ -459,6 +472,126 @@ int main() {
     if (cfgVerifier.verify(*loweredCfg, module))
         return fail("CFG verifier accepted an unresolved local identifier");
     loweredUseId->local = moon::LocalId{0};
+
+    moon::Param guardedArrayParameter;
+    guardedArrayParameter.name = "values";
+    guardedArrayParameter.usage = luna::ownership::Usage::Affine;
+    guardedArrayParameter.relation = luna::ownership::Relation::Owned;
+    guardedArrayParameter.type = guardedArrayId;
+    auto guardedLoopBody = std::make_unique<moon::BlockStmt>();
+    auto guardedLoop = std::make_unique<moon::ForStmt>();
+    guardedLoop->varName = "value";
+    guardedLoop->elementType = stringId;
+    guardedLoop->bindingUsage = luna::ownership::Usage::Affine;
+    auto guardedSourceMove = std::make_unique<moon::MoveExpr>();
+    guardedSourceMove->type = guardedArrayId;
+    auto guardedSourceIdentifier =
+        std::make_unique<moon::IdentifierExpr>();
+    guardedSourceIdentifier->name = "values";
+    guardedSourceIdentifier->type = guardedArrayId;
+    guardedSourceMove->operand = std::move(guardedSourceIdentifier);
+    guardedLoop->iterable = std::move(guardedSourceMove);
+    guardedLoop->body = std::make_unique<moon::BlockStmt>();
+    auto guardedEarlyReturn = std::make_unique<moon::IfStmt>();
+    auto guardedEarlyReturnCondition =
+        std::make_unique<moon::BoolLiteralExpr>();
+    guardedEarlyReturnCondition->value = false;
+    guardedEarlyReturnCondition->type = boolId;
+    guardedEarlyReturn->cond = std::move(guardedEarlyReturnCondition);
+    guardedEarlyReturn->thenBlock = std::make_unique<moon::BlockStmt>();
+    auto guardedLoopReturn = std::make_unique<moon::ReturnStmt>();
+    guardedLoopReturn->cleanups.push_back({
+        "value", luna::ownership::CleanupAction::Deallocate, stringId});
+    guardedEarlyReturn->thenBlock->stmts.push_back(
+        std::move(guardedLoopReturn));
+    guardedLoop->body->stmts.push_back(
+        std::move(guardedEarlyReturn));
+    auto guardedItemCleanup = std::make_unique<moon::FreeStmt>();
+    guardedItemCleanup->isImplicit = true;
+    guardedItemCleanup->action =
+        luna::ownership::CleanupAction::Deallocate;
+    auto guardedItemIdentifier =
+        std::make_unique<moon::IdentifierExpr>();
+    guardedItemIdentifier->name = "value";
+    guardedItemIdentifier->type = stringId;
+    guardedItemCleanup->operand = std::move(guardedItemIdentifier);
+    guardedLoop->body->stmts.push_back(std::move(guardedItemCleanup));
+    guardedLoopBody->stmts.push_back(std::move(guardedLoop));
+    auto guardedLoopCfg = cfgBuilder.build(
+        std::move(guardedLoopBody), {guardedArrayParameter},
+        moon::RegionKind::Function, module);
+    moon::MoveExpr* guardedElementTransfer = nullptr;
+    moon::LocalId guardedNextUnread;
+    std::vector<moon::CleanupId> guardedTailCleanups;
+    std::vector<moon::CleanupId>* guardedExhaustionCleanups = nullptr;
+    std::vector<moon::CleanupId>* guardedReturnCleanups = nullptr;
+    if (guardedLoopCfg) {
+        for (const auto& cleanup : guardedLoopCfg->cleanups) {
+            if (!cleanup.guard) continue;
+            guardedTailCleanups.push_back(cleanup.id);
+            guardedNextUnread = cleanup.guard->nextUnread;
+        }
+        for (auto& block : guardedLoopCfg->blocks) {
+            for (auto& operation : block.operations) {
+                auto* declaration = dynamic_cast<moon::LetStmt*>(
+                    operation.get());
+                auto* transfer = declaration
+                    ? dynamic_cast<moon::MoveExpr*>(
+                          declaration->initializer.get()) : nullptr;
+                if (transfer && !transfer->nextUnread.empty())
+                    guardedElementTransfer = transfer;
+            }
+            const auto* condition = dynamic_cast<moon::BinaryExpr*>(
+                block.terminator.operand.get());
+            if (condition && condition->op == moon::Operator::Less)
+                guardedExhaustionCleanups =
+                    &block.terminator.secondary.cleanups;
+            if (block.terminator.kind == moon::TerminatorKind::Return &&
+                !block.terminator.exitCleanups.empty())
+                guardedReturnCleanups =
+                    &block.terminator.exitCleanups;
+        }
+    }
+    std::sort(guardedTailCleanups.begin(), guardedTailCleanups.end(),
+              [](moon::CleanupId lhs, moon::CleanupId rhs) {
+        return lhs.value < rhs.value;
+    });
+    auto sortedExhaustionCleanups = guardedExhaustionCleanups
+        ? *guardedExhaustionCleanups
+        : std::vector<moon::CleanupId>{};
+    std::sort(sortedExhaustionCleanups.begin(),
+              sortedExhaustionCleanups.end(),
+              [](moon::CleanupId lhs, moon::CleanupId rhs) {
+        return lhs.value < rhs.value;
+    });
+    const bool returnClosesTail = guardedReturnCleanups &&
+        std::all_of(
+            guardedTailCleanups.begin(), guardedTailCleanups.end(),
+            [&](moon::CleanupId cleanup) {
+                return std::find(
+                    guardedReturnCleanups->begin(),
+                    guardedReturnCleanups->end(), cleanup) !=
+                    guardedReturnCleanups->end();
+            });
+    if (!guardedLoopCfg ||
+        !cfgVerifier.verify(*guardedLoopCfg, module) ||
+        guardedNextUnread.empty() || !guardedElementTransfer ||
+        guardedElementTransfer->nextUnread != guardedNextUnread ||
+        guardedTailCleanups.size() != 2 ||
+        sortedExhaustionCleanups != guardedTailCleanups ||
+        !returnClosesTail)
+        return fail("move-only array loop did not lower to guarded tail cleanup state");
+    guardedElementTransfer->nextUnread = {};
+    if (cfgVerifier.verify(*guardedLoopCfg, module))
+        return fail("CFG verifier accepted an unguarded dynamic element move");
+    guardedElementTransfer->nextUnread = guardedNextUnread;
+    const auto savedGuardedExhaustion = *guardedExhaustionCleanups;
+    guardedExhaustionCleanups->pop_back();
+    if (cfgVerifier.verify(*guardedLoopCfg, module))
+        return fail("CFG verifier accepted an unread array-tail leak");
+    *guardedExhaustionCleanups = savedGuardedExhaustion;
+    if (!cfgVerifier.verify(*guardedLoopCfg, module))
+        return fail("restored guarded consuming-array CFG no longer verifies");
 
     auto standaloneBlockRoot = std::make_unique<moon::BlockStmt>();
     auto standaloneBlockUse = std::make_unique<moon::ExprStmt>();

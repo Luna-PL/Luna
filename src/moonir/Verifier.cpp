@@ -370,6 +370,7 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
     };
     std::unordered_map<uint32_t, GuardedArrayState> guardedArrays;
     std::unordered_set<uint32_t> unguardedCleanupRoots;
+    std::unordered_set<uint32_t> guardedCursorIds;
     for (size_t index = 0; index < graph.cleanups.size(); ++index) {
         const auto& cleanup = graph.cleanups[index];
         if (cleanupOwners[index] != 1)
@@ -471,6 +472,7 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                  cursorType->kind != TypeKind::USize))
                 error({}, "guarded cleanup " + std::to_string(index) +
                           " has no canonical next-unread cursor");
+            if (cursor) guardedCursorIds.insert(cursor->id.value);
             if (cleanup.kind != CleanupKind::Value)
                 error({}, "guarded cleanup " + std::to_string(index) +
                           " is not a value cleanup");
@@ -623,7 +625,8 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         };
     std::function<void(const Expr*, const BasicBlock&)> scanGraphExpr;
     scanGraphExpr = [this, &graph, &module, &localVisibleFrom,
-                     &scanGraphIdentifier, &scanGraphExpr](
+                     &guardedCursorIds, &scanGraphIdentifier,
+                     &scanGraphExpr](
         const Expr* expression, const BasicBlock& block) {
         if (!expression) return;
         if (const auto* identifier =
@@ -772,6 +775,45 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                   "sealed CFG contains a nested control-flow expression");
         } else if (const auto* move =
                        dynamic_cast<const MoveExpr*>(expression)) {
+            if (!move->nextUnread.empty()) {
+                const auto* indexed = dynamic_cast<const IndexExpr*>(
+                    move->operand.get());
+                const auto* source = indexed
+                    ? dynamic_cast<const IdentifierExpr*>(
+                          indexed->object.get()) : nullptr;
+                const auto* index = indexed
+                    ? dynamic_cast<const IdentifierExpr*>(
+                          indexed->index.get()) : nullptr;
+                const auto* sourceLocal = source
+                    ? graph.findLocal(source->local) : nullptr;
+                const auto* indexLocal = index
+                    ? graph.findLocal(index->local) : nullptr;
+                const auto* cursor = graph.findLocal(move->nextUnread);
+                const auto* sourceType = sourceLocal
+                    ? module.findType(sourceLocal->type) : nullptr;
+                size_t guardedElements = 0;
+                bool matchingGuards = sourceLocal && sourceType && cursor &&
+                    indexLocal && sourceType->kind == TypeKind::Array &&
+                    sourceType->innerTypeId == move->type &&
+                    indexLocal->id == move->nextUnread &&
+                    cursor->type == indexLocal->type &&
+                    cursor->scope == sourceLocal->scope &&
+                    localVisibleFrom(cursor->scope, block.scope);
+                if (sourceLocal) {
+                    for (const auto& cleanup : graph.cleanups) {
+                        if (cleanup.place.root != sourceLocal->id) continue;
+                        if (!cleanup.guard ||
+                            cleanup.guard->nextUnread != cursor->id)
+                            matchingGuards = false;
+                        else
+                            ++guardedElements;
+                    }
+                }
+                if (!matchingGuards || !sourceType ||
+                    guardedElements != sourceType->arrayLength)
+                    error(move->location,
+                          "array element transfer has no matching guarded tail state");
+            }
             if (const auto* identifier = dynamic_cast<const IdentifierExpr*>(
                     move->operand.get()))
                 scanGraphIdentifier(*identifier, block, true);
@@ -779,6 +821,15 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 scanGraphExpr(move->operand.get(), block);
         } else if (const auto* borrow =
                        dynamic_cast<const BorrowExpr*>(expression)) {
+            if (borrow->isMutable) {
+                const auto* identifier =
+                    dynamic_cast<const IdentifierExpr*>(
+                        borrow->operand.get());
+                if (identifier && !identifier->local.empty() &&
+                    guardedCursorIds.count(identifier->local.value))
+                    error(borrow->location,
+                          "guarded array cursor is mutably borrowed");
+            }
             if (const auto* identifier = dynamic_cast<const IdentifierExpr*>(
                     borrow->operand.get()))
                 scanGraphIdentifier(*identifier, block, true);
@@ -789,9 +840,27 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             scanGraphExpr(dereference->operand.get(), block);
         } else if (const auto* address =
                        dynamic_cast<const AddrOfExpr*>(expression)) {
+            if (address->isMutable) {
+                const auto* identifier =
+                    dynamic_cast<const IdentifierExpr*>(
+                        address->operand.get());
+                if (identifier && !identifier->local.empty() &&
+                    guardedCursorIds.count(identifier->local.value))
+                    error(address->location,
+                          "guarded array cursor address is mutable");
+            }
             scanGraphExpr(address->operand.get(), block);
         } else if (const auto* assignment =
                        dynamic_cast<const AssignExpr*>(expression)) {
+            const auto* assignedIdentifier =
+                dynamic_cast<const IdentifierExpr*>(
+                    assignment->lhs.get());
+            if (assignedIdentifier &&
+                !assignedIdentifier->local.empty() &&
+                guardedCursorIds.count(
+                    assignedIdentifier->local.value))
+                error(assignment->location,
+                      "guarded array cursor is assigned outside its element transfer");
             // A synthetic move-only local may be used as the destination of
             // a transfer assignment without reading its old value. The
             // ownership dataflow below still requires the RHS to consume the
@@ -854,6 +923,14 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                         declaration->initializer->type != declaration->type)
                         error(declaration->location,
                               "let initializer type disagrees with its canonical local");
+                    if (guardedCursorIds.count(local->id.value)) {
+                        const auto* zero =
+                            dynamic_cast<const IntLiteralExpr*>(
+                                declaration->initializer.get());
+                        if (!zero || zero->value != 0)
+                            error(declaration->location,
+                                  "guarded array cursor is not initialized to zero");
+                    }
                 }
                 if (declaration->materializesIteratorRecipe ||
                     declaration->materializedIteratorOwnsSource ||
@@ -1313,9 +1390,31 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                                &markerStateByLocal, noMarker,
                                &projectionPrefix](
         const PlaceRef& place, CleanupState& state,
-        const SourceLocation& location, const std::string& context) {
+        const SourceLocation& location, const std::string& context,
+        LocalId guardedCursor = {}) {
         if (place.root.empty() || place.root.value >= cleanupsByLocal.size())
             return;
+        if (!guardedCursor.empty()) {
+            bool matched = !cleanupsByLocal[place.root.value].empty();
+            for (const auto cleanupId : cleanupsByLocal[place.root.value]) {
+                if (cleanupId.value >= state.size()) {
+                    matched = false;
+                    continue;
+                }
+                const auto& cleanup = graph.cleanups[cleanupId.value];
+                if (!cleanup.guard ||
+                    cleanup.guard->nextUnread != guardedCursor) {
+                    matched = false;
+                } else if (!state[cleanupId.value]) {
+                    error(location, context +
+                          " consumes an inactive guarded array tail");
+                }
+            }
+            if (!matched)
+                error(location, context +
+                      " has no active guarded array tail");
+            return;
+        }
         bool consumed = false;
         const size_t marker = markerStateByLocal[place.root.value];
         if (marker != noMarker && place.projections.empty()) {
@@ -1354,7 +1453,8 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         if (const auto* move = dynamic_cast<const MoveExpr*>(expression)) {
             transferExpr(move->operand.get(), state);
             if (auto place = placeOf(move->operand.get()))
-                consumePlace(*place, state, move->location, "move");
+                consumePlace(*place, state, move->location, "move",
+                             move->nextUnread);
             return;
         }
         if (const auto* binary = dynamic_cast<const BinaryExpr*>(expression)) {
