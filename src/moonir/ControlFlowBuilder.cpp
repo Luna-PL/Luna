@@ -1081,7 +1081,7 @@ bool ControlFlowBuilder::validateIteratorRecipe(
                 luna::ownership::Usage::Copy &&
             callable->returnContract.usage ==
                 luna::ownership::Usage::Copy;
-        const bool affineMap = allowAffineItems && commonCallable &&
+        const bool copyToAffineMap = allowAffineItems && commonCallable &&
             step.op == IteratorOp::Map &&
             callable->parameterContracts.front().usage ==
                 luna::ownership::Usage::Copy &&
@@ -1093,6 +1093,26 @@ bool ControlFlowBuilder::validateIteratorRecipe(
                 luna::ownership::Relation::Owned &&
             callable->returnContract.usage ==
                 luna::ownership::Usage::Affine;
+        const bool affineMapOutput = output && callable &&
+            ((output->sysmeta.resource.usage ==
+                  luna::ownership::Usage::Copy &&
+              callable->returnContract.usage ==
+                  luna::ownership::Usage::Copy) ||
+             (output->sysmeta.resource.usage ==
+                  luna::ownership::Usage::Affine &&
+              callable->returnContract.relation ==
+                  luna::ownership::Relation::Owned &&
+              callable->returnContract.usage ==
+                  luna::ownership::Usage::Affine));
+        const bool affineOwningMap = allowAffineItems &&
+            commonCallable && step.op == IteratorOp::Map &&
+            input->sysmeta.resource.usage ==
+                luna::ownership::Usage::Affine &&
+            callable->parameterContracts.front().relation ==
+                luna::ownership::Relation::Owned &&
+            callable->parameterContracts.front().usage ==
+                luna::ownership::Usage::Affine &&
+            affineMapOutput;
         const bool affineFilter = allowAffineItems && commonCallable &&
             step.op == IteratorOp::Filter &&
             step.outputType == step.inputType &&
@@ -1106,7 +1126,8 @@ bool ControlFlowBuilder::validateIteratorRecipe(
                 luna::ownership::Usage::Copy &&
             callable->returnContract.usage ==
                 luna::ownership::Usage::Copy;
-        if (!copyPath && !affineMap && !affineFilter) {
+        if (!copyPath && !copyToAffineMap &&
+            !affineOwningMap && !affineFilter) {
             error(location,
                   "non-Copy map/filter item or callable contract requires "
                   "canonical per-item ownership state");

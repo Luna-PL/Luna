@@ -682,13 +682,15 @@ The first non-Copy per-item slice is complete for a direct `for` whose `map` tur
 an owned Affine value. That result initializes a synthetic Affine local. Later `filter` predicates
 read it through an explicit `SharedBorrow`, while `take` preserves it unchanged. A rejection or
 exhaustion edge releases the temporary before leaving the per-iteration scope; an accepted item is
-explicitly moved into the source-visible iteration binding. Normal body fallthrough releases that
-binding on the existing cleanup edge, and an early return uses the existing return cleanup set.
-The verifier independently rejects a copied map result or any missing rejection/body-exit cleanup,
-so this adds no runtime initialized bit. This also fixes the underlying relation rule: a borrowed
-local has Copy cardinality and owns no cleanup even when its underlying type is Affine. Feeding a
-move-only item into a later owning `map`, a non-Copy callable/environment, materialized recipe
-state, and iterator terminals remain outside this slice.
+either explicitly moved into a later owning `map` or, at the end of the adapter chain, into the
+source-visible iteration binding. An owning map consumes the old synthetic local and atomically
+activates its Copy or Affine replacement in the ordinary result `LetStmt`. Normal body fallthrough
+releases the final binding on the existing cleanup edge, and an early return uses the existing
+return cleanup set. The verifier independently rejects a copied map input/result or any missing
+rejection/body-exit cleanup, so this adds no runtime initialized bit. This also fixes the underlying
+relation rule: a borrowed local has Copy cardinality and owns no cleanup even when its underlying
+type is Affine. Move-only consuming source arrays, Linear per-item state, a non-Copy callable or
+closure environment, materialized recipe state, and iterator terminals remain outside this slice.
 
 The slice-bound subphase is now complete as well. A slice recipe evaluates its source exactly once,
 materializes its runtime bound once in loop init, and uses the same ordinary indexed-borrow CFG as a

@@ -607,13 +607,15 @@ call 与 branch，拒绝边直接进入统一 index increment/backedge。因此
 第一个 non-Copy 逐元素切片已完成，范围是在直接 `for` 中由 `map` 把 Copy 输入
 变换为 owned Affine 值。该结果先初始化一个 synthetic Affine local；后续 `filter`
 predicate 通过显式 `SharedBorrow` 读取它，`take` 则保持该值不变。拒绝或耗尽边在离开
-逐轮 scope 前释放 temporary；接受的 item 显式 move 到源码可见的迭代 binding。
-普通 body fallthrough 在现有 cleanup edge 上释放该 binding，early return 使用现有
-return cleanup set。verifier 会独立拒绝复制 map 结果，以及任一缺失的 rejection/body-exit
-cleanup，因而不增加 runtime initialized bit。这也修正了底层 relation 规则：borrowed local
-使用 Copy cardinality，即使底层类型是 Affine 也不拥有 cleanup。把 move-only item 传给后续
-owning `map`、non-Copy callable/environment、materialized recipe 状态与 iterator terminal
-仍不在该切片内。
+逐轮 scope 前释放 temporary；接受的 item 可以显式 move 给后续 owning `map`；该 map
+消费旧 synthetic local，并在普通
+结果 `LetStmt` 中原子激活 Copy 或 Affine replacement。adapter chain 结束时，最终 item 再显式
+move 到源码可见的迭代 binding。普通 body fallthrough 在现有 cleanup edge 上释放该 binding，
+early return 使用现有 return cleanup set。verifier 会独立拒绝复制 map input/result，以及任一
+缺失的 rejection/body-exit cleanup，因而不增加 runtime initialized bit。这也修正了底层
+relation 规则：borrowed local 使用 Copy cardinality，即使底层类型是 Affine 也不拥有 cleanup。
+move-only consuming source array、Linear 逐元素状态、non-Copy callable 或 closure environment、materialized recipe
+状态与 iterator terminal 仍不在该切片内。
 
 
 slice bound 子阶段也已完成。slice recipe 的 source 只求值一次，运行时上界只在
