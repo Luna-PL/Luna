@@ -772,9 +772,16 @@ boundary. This adds no runtime ownership flag or second control representation; 
 ordinary boolean value and the independent verifier rejects every residual short-circuit
 `BinaryExpr` in a sealed CFG.
 
+One-shot statement discriminants now use the same expression normalization. An `if` condition is
+fully normalized before its `Branch`, and a `match` scrutinee before its `Switch`; iterator
+terminals and nested conditional expressions therefore cannot survive inside either terminator
+operand or be evaluated after an arm begins. Repeated loop conditions remain a separate boundary:
+their synthetic initialization and ownership state must be reconstructed on every backedge rather
+than reused from a one-shot lowering.
+
 Item 10 is not complete as a whole. Allocation-aware and non-Copy expression hoisting,
 capturing closure environments, and non-Copy item/callable per-element ownership state remain
-explicit following boundaries. The remaining work then normalizes the other control-flow expressions, slot, and fragment
+explicit following boundaries. The remaining work then normalizes repeated control-flow expressions, slot, and fragment
 paths, atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured
 execution is deleted and the full verifier/codegen regression gate passes does the item-level gate

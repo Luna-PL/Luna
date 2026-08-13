@@ -345,6 +345,10 @@ ControlFlowBuilder::lowerStatement(
 std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerIf(
     std::unique_ptr<IfStmt> statement, OpenBlock current,
     RegionId region, ScopeId scope) {
+    auto condition = normalizeControlFlowExpression(
+        statement->cond, std::move(current), region, scope, false);
+    if (!condition) return std::nullopt;
+    current = std::move(*condition);
     if (!bindExpr(statement->cond.get())) return std::nullopt;
     auto thenBody = lowerNestedBlock(
         std::move(statement->thenBlock), region, scope,
@@ -2839,6 +2843,10 @@ ControlFlowBuilder::lowerIteratorTerminal(
 std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerMatch(
     std::unique_ptr<MatchStmt> statement, OpenBlock current,
     RegionId region, ScopeId scope) {
+    auto scrutinee = normalizeControlFlowExpression(
+        statement->scrutinee, std::move(current), region, scope, false);
+    if (!scrutinee) return std::nullopt;
+    current = std::move(*scrutinee);
     if (!bindExpr(statement->scrutinee.get())) return std::nullopt;
     if (statement->arms.empty()) {
         error(statement->location, "match has no canonical switch cases");

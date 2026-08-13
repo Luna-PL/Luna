@@ -1127,6 +1127,70 @@ int main() {
         return terminal;
     };
 
+    auto statementConditionRoot = std::make_unique<moon::BlockStmt>();
+    auto statementCondition = std::make_unique<moon::IfStmt>();
+    auto terminalCondition = std::make_unique<moon::BinaryExpr>();
+    terminalCondition->op = moon::Operator::Greater;
+    terminalCondition->type = boolId;
+    terminalCondition->lhs = makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false);
+    auto conditionZero = std::make_unique<moon::IntLiteralExpr>();
+    conditionZero->value = 0;
+    conditionZero->type = i32Id;
+    terminalCondition->rhs = std::move(conditionZero);
+    statementCondition->cond = std::move(terminalCondition);
+    statementCondition->thenBlock =
+        std::make_unique<moon::BlockStmt>();
+    statementCondition->elseBranch =
+        std::make_unique<moon::BlockStmt>();
+    statementConditionRoot->stmts.push_back(
+        std::move(statementCondition));
+    auto statementConditionCfg = cfgBuilder.build(
+        std::move(statementConditionRoot), {},
+        moon::RegionKind::Function, module);
+    if (!statementConditionCfg ||
+        !cfgVerifier.verify(*statementConditionCfg, module))
+        return fail(
+            "if statement condition did not normalize before branching");
+
+    auto statementScrutineeRoot = std::make_unique<moon::BlockStmt>();
+    auto statementScrutinee = std::make_unique<moon::MatchStmt>();
+    statementScrutinee->matchedType = choiceId;
+    auto terminalVariant =
+        std::make_unique<moon::VariantConstructExpr>();
+    terminalVariant->typeName = "Choice";
+    terminalVariant->variantName = "Some";
+    terminalVariant->constructedType = choiceId;
+    terminalVariant->type = choiceId;
+    terminalVariant->args.push_back(makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false));
+    statementScrutinee->scrutinee = std::move(terminalVariant);
+    moon::MatchArm statementNoneArm;
+    statementNoneArm.variantName = "None";
+    statementNoneArm.variantIndex = 0;
+    statementNoneArm.body = std::make_unique<moon::BlockStmt>();
+    statementScrutinee->arms.push_back(
+        std::move(statementNoneArm));
+    moon::MatchArm statementSomeArm;
+    statementSomeArm.variantName = "Some";
+    statementSomeArm.variantIndex = 1;
+    statementSomeArm.bindings = {"item"};
+    statementSomeArm.bindingTypes = {i32Id};
+    statementSomeArm.bindingUsages = {
+        luna::ownership::Usage::Copy};
+    statementSomeArm.body = std::make_unique<moon::BlockStmt>();
+    statementScrutinee->arms.push_back(
+        std::move(statementSomeArm));
+    statementScrutineeRoot->stmts.push_back(
+        std::move(statementScrutinee));
+    auto statementScrutineeCfg = cfgBuilder.build(
+        std::move(statementScrutineeRoot), {},
+        moon::RegionKind::Function, module);
+    if (!statementScrutineeCfg ||
+        !cfgVerifier.verify(*statementScrutineeCfg, module))
+        return fail(
+            "match statement scrutinee did not normalize before switching");
+
     auto countStructured = std::make_unique<moon::BlockStmt>();
     countStructured->stmts.push_back(
         makeMaterializedRangeBinding("countPending"));
