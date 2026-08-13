@@ -3413,17 +3413,109 @@ int main() {
     moveMapCall->args.push_back(std::move(moveMapLambda));
     moveMapLoop->iterable = std::move(moveMapCall);
     moveMapLoop->body = std::make_unique<moon::BlockStmt>();
+    auto moveMapCleanup = std::make_unique<moon::FreeStmt>();
+    moveMapCleanup->isImplicit = true;
+    moveMapCleanup->action =
+        luna::ownership::CleanupAction::Deallocate;
+    auto moveMapCleanupTarget =
+        std::make_unique<moon::IdentifierExpr>();
+    moveMapCleanupTarget->name = "owned";
+    moveMapCleanupTarget->type = stringId;
+    moveMapCleanup->operand = std::move(moveMapCleanupTarget);
+    moveMapLoop->body->stmts.push_back(std::move(moveMapCleanup));
     moveMapStructured->stmts.push_back(std::move(moveMapLoop));
-    if (cfgBuilder.build(
-            std::move(moveMapStructured), {},
-            moon::RegionKind::Function, module))
-        return fail("CFG builder accepted move-only map output without cleanup state");
-    bool diagnosedMoveMap = false;
-    for (const auto& message : cfgBuilder.errors())
-        if (message.find("non-Copy map/filter") != std::string::npos)
-            diagnosedMoveMap = true;
-    if (!diagnosedMoveMap)
-        return fail("CFG builder did not preserve the move-only map boundary");
+    auto moveMapCfg = cfgBuilder.build(
+        std::move(moveMapStructured), {},
+        moon::RegionKind::Function, module);
+    moon::LetStmt* moveMapTemporary = nullptr;
+    moon::LetStmt* moveMapBinding = nullptr;
+    moon::CleanupId moveMapTemporaryCleanup;
+    moon::CleanupId moveMapBindingCleanup;
+    if (moveMapCfg) {
+        for (auto& block : moveMapCfg->blocks)
+            for (auto& operation : block.operations) {
+                auto* declaration =
+                    dynamic_cast<moon::LetStmt*>(operation.get());
+                if (!declaration) continue;
+                if (declaration->name == "owned")
+                    moveMapBinding = declaration;
+                else if (declaration->name.rfind(
+                             "$for.item.", 0) == 0 &&
+                         declaration->type == stringId)
+                    moveMapTemporary = declaration;
+            }
+        for (const auto& cleanup : moveMapCfg->cleanups) {
+            if (moveMapTemporary &&
+                cleanup.place.root == moveMapTemporary->local)
+                moveMapTemporaryCleanup = cleanup.id;
+            if (moveMapBinding &&
+                cleanup.place.root == moveMapBinding->local)
+                moveMapBindingCleanup = cleanup.id;
+        }
+    }
+    auto* moveMapTransfer = moveMapBinding
+        ? dynamic_cast<moon::MoveExpr*>(
+              moveMapBinding->initializer.get())
+        : nullptr;
+    auto* moveMapTransferSource = moveMapTransfer
+        ? dynamic_cast<moon::IdentifierExpr*>(
+              moveMapTransfer->operand.get())
+        : nullptr;
+    std::vector<moon::CleanupId>* moveMapCleanupEdge = nullptr;
+    size_t temporaryCleanupEdges = 0;
+    size_t bindingCleanupEdges = 0;
+    if (moveMapCfg)
+        for (auto& block : moveMapCfg->blocks) {
+            const auto inspectEdge = [&](
+                std::vector<moon::CleanupId>& cleanups) {
+                for (const auto cleanup : cleanups) {
+                    if (cleanup == moveMapTemporaryCleanup)
+                        ++temporaryCleanupEdges;
+                    if (cleanup == moveMapBindingCleanup) {
+                        ++bindingCleanupEdges;
+                        moveMapCleanupEdge = &cleanups;
+                    }
+                }
+            };
+            inspectEdge(block.terminator.primary.cleanups);
+            inspectEdge(block.terminator.secondary.cleanups);
+            for (auto& item : block.terminator.cases)
+                inspectEdge(item.edge.cleanups);
+            inspectEdge(block.terminator.exitCleanups);
+        }
+    const auto* moveMapTemporaryLocal = moveMapCfg && moveMapTemporary
+        ? moveMapCfg->findLocal(moveMapTemporary->local)
+        : nullptr;
+    if (!moveMapCfg || !cfgVerifier.verify(*moveMapCfg, module) ||
+        !moveMapTemporaryLocal ||
+        moveMapTemporaryLocal->kind != moon::LocalKind::Synthetic ||
+        moveMapTemporaryLocal->usage !=
+            luna::ownership::Usage::Affine ||
+        !moveMapTransferSource ||
+        moveMapTransferSource->local != moveMapTemporary->local ||
+        moveMapTemporaryCleanup.empty() || moveMapBindingCleanup.empty() ||
+        temporaryCleanupEdges != 0 || bindingCleanupEdges != 1 ||
+        !moveMapCleanupEdge)
+        return fail(
+            "affine final map output did not transfer into per-iteration cleanup state");
+
+    auto savedMoveMapTransfer = std::move(moveMapBinding->initializer);
+    auto copiedMoveMapResult = std::make_unique<moon::IdentifierExpr>();
+    copiedMoveMapResult->name = moveMapTemporary->name;
+    copiedMoveMapResult->local = moveMapTemporary->local;
+    copiedMoveMapResult->type = moveMapTemporary->type;
+    moveMapBinding->initializer = std::move(copiedMoveMapResult);
+    if (cfgVerifier.verify(*moveMapCfg, module))
+        return fail("CFG verifier accepted a copied affine map result");
+    moveMapBinding->initializer = std::move(savedMoveMapTransfer);
+
+    auto savedMoveMapCleanupEdge = *moveMapCleanupEdge;
+    moveMapCleanupEdge->clear();
+    if (cfgVerifier.verify(*moveMapCfg, module))
+        return fail("CFG verifier accepted a missing affine map body cleanup");
+    *moveMapCleanupEdge = std::move(savedMoveMapCleanupEdge);
+    if (!cfgVerifier.verify(*moveMapCfg, module))
+        return fail("restored affine final map CFG did not verify");
 
     // The sealed payload must not observe later mutations of the frontend
     // object from which it was frozen.

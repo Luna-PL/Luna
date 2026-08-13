@@ -926,7 +926,7 @@ bool ControlFlowBuilder::bindIteratorRecipe(IteratorRecipePlan& plan) {
 
 bool ControlFlowBuilder::validateIteratorRecipe(
     IteratorRecipePlan& plan, const TypeRef& expectedItem,
-    const SourceLocation& location) {
+    const SourceLocation& location, bool allowAffineFinalMap) {
     TypeRef indexType;
     TypeRef sizeType;
     for (const auto& type : mModule->typeTable) {
@@ -1024,7 +1024,8 @@ bool ControlFlowBuilder::validateIteratorRecipe(
         return false;
     }
 
-    for (const auto& step : plan.steps) {
+    for (size_t stepIndex = 0; stepIndex < plan.steps.size(); ++stepIndex) {
+        const auto& step = plan.steps[stepIndex];
         const auto* argumentLocal = mGraph->findLocal(step.argumentLocal);
         const TypeRef argumentType = step.argument
             ? step.argument->type
@@ -1052,6 +1053,20 @@ bool ControlFlowBuilder::validateIteratorRecipe(
         const auto* callable = mModule->findType(argumentType);
         const auto* lambda = step.argument
             ? dynamic_cast<const LambdaExpr*>(step.argument.get()) : nullptr;
+        const bool copyOutput = output && callable &&
+            output->sysmeta.resource.usage ==
+                luna::ownership::Usage::Copy &&
+            callable->returnContract.usage ==
+                luna::ownership::Usage::Copy;
+        const bool affineFinalMap = allowAffineFinalMap &&
+            step.op == IteratorOp::Map &&
+            stepIndex + 1 == plan.steps.size() && output && callable &&
+            output->sysmeta.resource.usage ==
+                luna::ownership::Usage::Affine &&
+            callable->returnContract.relation ==
+                luna::ownership::Relation::Owned &&
+            callable->returnContract.usage ==
+                luna::ownership::Usage::Affine;
         if (!input || !output || !callable ||
             callable->kind != TypeKind::Function ||
             (lambda &&
@@ -1061,9 +1076,8 @@ bool ControlFlowBuilder::validateIteratorRecipe(
             callable->parameterContracts.size() != 1 ||
             callable->parameterContracts.front().usage !=
                 luna::ownership::Usage::Copy ||
-            callable->returnContract.usage != luna::ownership::Usage::Copy ||
             input->sysmeta.resource.usage != luna::ownership::Usage::Copy ||
-            output->sysmeta.resource.usage != luna::ownership::Usage::Copy) {
+            (!copyOutput && !affineFinalMap)) {
             error(location,
                   "non-Copy map/filter item or callable contract requires "
                   "canonical per-item ownership state");
@@ -1249,7 +1263,7 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
 
     if (!bindIteratorRecipe(plan) ||
         !validateIteratorRecipe(
-            plan, statement->elementType, statement->location))
+            plan, statement->elementType, statement->location, true))
         return std::nullopt;
 
     TypeRef boolType;
@@ -1435,9 +1449,10 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     const auto addBodyBinding = [&](BlockId block, const std::string& name,
                                     const TypeRef& type,
                                     luna::ownership::Usage usage,
-                                    std::unique_ptr<Expr> initializer) {
+                                    std::unique_ptr<Expr> initializer,
+                                    LocalKind kind = LocalKind::Binding) {
         const LocalId local = addLocal(
-            bodyScope, LocalKind::Binding, name, type, usage);
+            bodyScope, kind, name, type, usage);
         auto declaration = std::make_unique<LetStmt>();
         declaration->location = statement->location;
         declaration->name = name;
@@ -1514,12 +1529,16 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         if (step.op == IteratorOp::Map) {
             auto mapped = invokeAdapter(
                 adapterLocals[stepIndex], currentItem, step.outputType);
+            const auto* mappedType = mModule->findType(step.outputType);
+            const auto mappedUsage = mappedType
+                ? mappedType->sysmeta.resource.usage
+                : luna::ownership::Usage::Copy;
             currentItem = addBodyBinding(
                 bodyStart.block,
                 "$for.item." + identity + "." +
                     std::to_string(stepIndex),
-                step.outputType, luna::ownership::Usage::Copy,
-                std::move(mapped));
+                step.outputType, mappedUsage, std::move(mapped),
+                LocalKind::Synthetic);
             continue;
         }
 
@@ -1567,10 +1586,20 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         bodyStart = OpenBlock{adapterAccepted, {}};
     }
 
-    if (hasValueAdapter)
+    if (hasValueAdapter) {
+        std::unique_ptr<Expr> finalItem = identifier(currentItem);
+        const auto* itemLocal = mGraph->findLocal(currentItem);
+        if (itemLocal && luna::ownership::isMoveOnly(itemLocal->usage)) {
+            auto transfer = std::make_unique<MoveExpr>();
+            transfer->location = statement->location;
+            transfer->type = statement->elementType;
+            transfer->operand = std::move(finalItem);
+            finalItem = std::move(transfer);
+        }
         addBodyBinding(
             bodyStart.block, statement->varName, statement->elementType,
-            statement->bindingUsage, identifier(currentItem));
+            statement->bindingUsage, std::move(finalItem));
+    }
 
     std::optional<OpenBlock> bodyExit;
     if (!statement->body) {

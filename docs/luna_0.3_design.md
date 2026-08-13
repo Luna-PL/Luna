@@ -678,6 +678,15 @@ controls which items consume a `take` counter, with no intermediate container an
 operation. The verifier additionally matches local-call arguments/results and let initializer/local
 types, so the expanded graph no longer relies on the recipe's frontend trust.
 
+The first non-Copy per-item slice is complete for a direct `for` whose final adapter is `map`.
+Its input and callable parameter remain Copy, while the callable returns an owned Affine value.
+That result initializes a synthetic Affine local and is explicitly moved into the source-visible
+iteration binding. Normal body fallthrough releases the binding on the existing cleanup edge;
+an early return uses the existing return cleanup set. The verifier independently rejects a copied
+map result or a missing body-exit cleanup, so this adds no runtime initialized bit. A move-only item
+crossing a later adapter, a non-Copy callable/environment, materialized recipe state, and iterator
+terminals remain outside this slice.
+
 The slice-bound subphase is now complete as well. A slice recipe evaluates its source exactly once,
 materializes its runtime bound once in loop init, and uses the same ordinary indexed-borrow CFG as a
 shared array recipe. The bound is represented by `SliceLengthExpr`, a fundamental slice projection,
@@ -819,11 +828,11 @@ deactivates compile-time affine markers before the next header entry and the dec
 them on the next execution. This models source-level repeated evaluation without a runtime
 initialized flag, and an ordinary condition still keeps the previous compact single-block shape.
 
-Item 10 is not complete as a whole. Capturing closure environments and non-Copy item/callable
-per-element ownership state remain explicit boundaries. Linear hoisting across a potential early
-exit remains invalid by its exactly-once contract rather than a deferred lowering feature. The
-remaining work then normalizes slot and fragment paths, atomically replaces structured executable
-bodies, and moves the backend to the same CFG. Only after structured execution is deleted and the
+Item 10 is not complete as a whole. Capturing closure environments and the remaining non-Copy
+item/callable per-element ownership transitions remain explicit boundaries. Linear hoisting across
+a potential early exit remains invalid by its exactly-once contract rather than a deferred lowering
+feature. The remaining work then normalizes slot and fragment paths, atomically replaces structured
+executable bodies, and moves the backend to the same CFG. Only after structured execution is deleted and the
 full verifier/codegen regression gate passes does the item-level gate pass; serializer/parser work
 remains item 11.
 

@@ -548,7 +548,7 @@ callback，最后一个 handle 精确一次清理 payload。parser token、TypeK
 codegen cleanup、`clone` intrinsic 与旧 Runtime 入口已删除；`rc new`/`arc new` 只在
 冻结的 0.2 corpus 中由旧编译器重放，0.3 明确拒绝。JIT/AOT、嵌套 Drop、
 显式 clone、隐式复制拒绝、MoonIR 普通 nominal 与 LLVM Runtime ABI 证据均通过；
-完整 50 项 CTest、strict-warning 构建与资源路径 ASan/UBSan 均通过。
+完整 51 项 CTest、strict-warning 构建与资源路径 ASan/UBSan 均通过。
 当前具名 product 仍为指针表示，因而 handle wrapper 的 inline/transparent ABI 优化
 不在本次语义迁移中假定完成。因此优先级第 9 项已通过完成门；下一项是
 第 10 项：原地将现有 MoonIR 重构为 table-referenced canonical IR。
@@ -603,6 +603,14 @@ call 与 branch，拒绝边直接进入统一 index increment/backedge。因此
 `filter`/`take` 的先后顺序会决定哪些元素消耗 counter，不建立中间容器、
 不新增 iterator IR operation。verifier 额外核对 local callable 的参数/结果
 类型及 let initializer/local 类型，所以展开后不再依赖 recipe 上的前端信任。
+
+第一个 non-Copy 逐元素切片已完成，范围是最后一个 adapter 为 `map` 的直接
+`for`。输入与 callable parameter 仍为 Copy，callable 则返回 owned Affine 值。该结果先
+初始化一个 synthetic Affine local，然后显式 move 到源码可见的迭代 binding。普通 body
+fallthrough 在现有 cleanup edge 上释放该 binding，early return 使用现有 return cleanup set。
+verifier 会独立拒绝复制 map 结果或缺失 body-exit cleanup，因而不增加 runtime initialized
+bit。move-only item 跨越后续 adapter、non-Copy callable/environment、materialized recipe 状态
+与 iterator terminal 仍不在该切片内。
 
 
 slice bound 子阶段也已完成。slice recipe 的 source 只求值一次，运行时上界只在
@@ -730,8 +738,8 @@ loop 的 header 同时是初始 edge 与 body backedge 的目标；每次经过 
 声明时重新激活。这在不增加 runtime initialized flag 的情况下表达了源语言的
 重复求值；普通 condition 仍保持原有的紧凑单 block 形态。
 
-第 10 项尚未整体完成。捕获式 closure environment 与 non-Copy
-item/callable contract 的逐元素初始化/cleanup 状态仍是明确的后续边界。
+第 10 项尚未整体完成。捕获式 closure environment 与其余 non-Copy
+item/callable 逐元素 ownership 转移仍是明确的后续边界。
 跨越潜在 early exit 的 Linear hoisting 因违反恰好一次约束而保持非法，它不是延后的
 lowering 功能。
 随后规范化 slot 和 fragment
