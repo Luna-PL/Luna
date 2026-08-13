@@ -859,8 +859,16 @@ fallthrough is an implicit `Abort`, and explicit fragment `return`/`abort()` bot
 continuation through the fragment exit. The verifier rejects forged fragment identities, an
 ordinary context jump into a continuation, a continuation escape through a non-exit edge, or a
 continuation reference to fragment-local state. This graph requires no heap continuation, runtime
-descriptor, dispatch, or ownership flag. Multi-shot, borrowed fragment-parameter bindings, and
-runtime apply remain later slices.
+descriptor, dispatch, or ownership flag.
+
+Fragment parameters now use ordinary canonical Let/local bindings with an explicit final relation.
+The Fragment region records their ordered LocalIds, and the verifier matches each TypeRef,
+SharedBorrow/MutableBorrow/Owned relation, and Copy/Affine/Linear usage against the frozen fragment
+contract. Borrowed bindings therefore own no cleanup and do not consume their source, while an
+owned move-only binding still requires the existing explicit transfer and activates exactly one
+cleanup obligation. Forging both a binding row and its Let relation cannot bypass the region-level
+contract check. This extends the typed-local model rather than adding a fragment-only parameter
+operation. Multi-shot and runtime apply remain later slices.
 
 Item 10 is not complete as a whole. Capturing closure environments and the remaining non-Copy
 item/callable per-element ownership transitions remain explicit boundaries. Linear hoisting across

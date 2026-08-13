@@ -763,7 +763,14 @@ continuation 中的名称仍绑定到调用环境。continuation 内的 `return`
 正常落尾是隐式 `Abort`，fragment 内的显式 `return`/`abort()` 则都经 fragment exit 跳过 continuation。
 verifier 会拒绝伪造的 fragment identity、以普通 context jump 绕过 `Resume`、continuation 通过非 exit edge
 逃逸，以及 continuation 引用 fragment-local state。该图不需要 heap continuation、runtime descriptor、dispatch 或
-ownership flag。multi-shot、borrowed fragment parameter binding 与 runtime apply 仍属后续切片。
+ownership flag。
+
+fragment parameter 现使用携带显式最终 relation 的普通 canonical Let/local binding。Fragment region
+记录其有序 LocalId，verifier 会将每个 TypeRef、SharedBorrow/MutableBorrow/Owned relation 及
+Copy/Affine/Linear usage 与冻结 fragment contract 匹配。因而 borrowed binding 不拥有 cleanup、
+不消费 source；owned move-only binding 仍要求已有的显式 transfer，并且只激活一个 cleanup obligation。
+即使同时伪造 binding row 和 Let relation，也无法绕过 region-level contract check。这是对 typed-local
+model 的扩展，不会增加 fragment-only parameter operation。multi-shot 与 runtime apply 仍属后续切片。
 
 第 10 项尚未整体完成。捕获式 closure environment 与其余 non-Copy
 item/callable 逐元素 ownership 转移仍是明确的后续边界。

@@ -330,6 +330,10 @@ struct LetStmt : Stmt {
     bool isConst = false;
     bool isLinear = false;
     luna::ownership::Usage usage = luna::ownership::Usage::Copy;
+    // Construction may omit this and derive it from the frozen type. A
+    // canonical operation always records the final local relation explicitly;
+    // fragment parameter bindings use it to distinguish views from transfers.
+    std::optional<luna::ownership::Relation> relation;
     TypeRef type;
     std::unique_ptr<Expr> initializer;
     bool materializesIteratorRecipe = false;
@@ -741,6 +745,9 @@ struct RegionRecord {
     // the nominal identity and frozen interceptor/context + once/many
     // contract; regions do not duplicate that semantic payload.
     DeclarationRef fragment;
+    // Ordered entry bindings for a Fragment region. Their type, relation and
+    // usage must match the frozen fragment parameter contract.
+    std::vector<LocalId> parameters;
 };
 
 struct ScopeRecord {

@@ -226,12 +226,41 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 region.fragment);
             const auto* fragmentType = declaration
                 ? module.findType(declaration->type) : nullptr;
-            if (!fragmentType || fragmentType->kind != TypeKind::Fragment)
+            if (!fragmentType || fragmentType->kind != TypeKind::Fragment) {
                 error(region.location,
                       "canonical fragment region has no frozen fragment contract");
+            } else {
+                if (region.parameters.size() !=
+                        fragmentType->parameterTypeIds.size() ||
+                    region.parameters.size() !=
+                        fragmentType->parameterContracts.size())
+                    error(region.location,
+                          "canonical fragment region parameter arity disagrees with its contract");
+                const size_t comparable = std::min(
+                    region.parameters.size(),
+                    std::min(fragmentType->parameterTypeIds.size(),
+                             fragmentType->parameterContracts.size()));
+                for (size_t index = 0; index < comparable; ++index) {
+                    const auto* local = graph.findLocal(
+                        region.parameters[index]);
+                    const auto& contract =
+                        fragmentType->parameterContracts[index];
+                    if (!local || local->scope != region.scope ||
+                        local->kind != LocalKind::Binding ||
+                        local->type !=
+                            fragmentType->parameterTypeIds[index] ||
+                        local->relation != contract.relation ||
+                        local->usage != contract.usage)
+                        error(region.location,
+                              "canonical fragment parameter binding disagrees with its frozen contract");
+                }
+            }
         } else if (!region.fragment.empty()) {
             error(region.location,
                   "non-fragment region carries a fragment declaration reference");
+        } else if (!region.parameters.empty()) {
+            error(region.location,
+                  "non-fragment region carries fragment parameter bindings");
         }
         if (!graph.findScope(region.scope))
             error(region.location, "region references a missing lexical scope");
@@ -749,7 +778,9 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                         local->scope != block.scope ||
                         local->name != declaration->name ||
                         local->type != declaration->type ||
-                        local->usage != declaration->usage)
+                        local->usage != declaration->usage ||
+                        !declaration->relation ||
+                        local->relation != *declaration->relation)
                         error(declaration->location,
                               "let operation disagrees with its local-table row");
                     if (!declaration->initializer ||

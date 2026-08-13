@@ -264,6 +264,7 @@ std::unique_ptr<Stmt> cloneStructuredStmt(const Stmt* source) {
         result->isConst = statement->isConst;
         result->isLinear = statement->isLinear;
         result->usage = statement->usage;
+        result->relation = statement->relation;
         result->type = statement->type;
         result->initializer = cloneStructuredExpr(statement->initializer.get());
         result->materializesIteratorRecipe = statement->materializesIteratorRecipe;
@@ -657,7 +658,11 @@ ControlFlowBuilder::lowerStatement(
         if (!bindExpr(declaration->initializer.get())) return std::nullopt;
         declaration->local = addLocal(
             scope, LocalKind::Binding, declaration->name,
-            declaration->type, declaration->usage);
+            declaration->type, declaration->usage,
+            declaration->relation);
+        if (!declaration->local.empty())
+            declaration->relation =
+                mGraph->locals[declaration->local.value].relation;
         if (dynamic_cast<InitAllocationExpr*>(
                 declaration->initializer.get())) {
             const auto* type = mModule->findType(declaration->type);
@@ -1118,6 +1123,7 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerFor(
         state->local = stateLocal;
         state->isLinear = stateUsage == luna::ownership::Usage::Linear;
         state->usage = stateUsage;
+        state->relation = mGraph->locals[stateLocal.value].relation;
         state->type = statement->protocolIteratorType;
         state->initializer = std::move(conversion);
         mGraph->blocks[start.value].operations.push_back(std::move(state));
@@ -1687,6 +1693,7 @@ bool ControlFlowBuilder::materializeIteratorRecipe(
         state->local = local;
         state->isLinear = usage == luna::ownership::Usage::Linear;
         state->usage = usage;
+        state->relation = mGraph->locals[local.value].relation;
         state->type = type;
         state->initializer = std::move(initializer);
         mGraph->blocks[current.block.value].operations.push_back(
@@ -1824,6 +1831,7 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         declaration->local = local;
         declaration->isLinear = usage == luna::ownership::Usage::Linear;
         declaration->usage = usage;
+        declaration->relation = mGraph->locals[local.value].relation;
         declaration->type = type;
         declaration->initializer = std::move(initializer);
         mGraph->blocks[init.value].operations.push_back(
@@ -1979,6 +1987,7 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         declaration->isLinear =
             usage == luna::ownership::Usage::Linear;
         declaration->usage = usage;
+        declaration->relation = mGraph->locals[local.value].relation;
         declaration->type = type;
         declaration->initializer = std::move(initializer);
         mGraph->blocks[block.value].operations.push_back(
@@ -2240,6 +2249,7 @@ ControlFlowBuilder::lowerShortCircuitExpression(
     declaration->name = name;
     declaration->local = result;
     declaration->usage = luna::ownership::Usage::Copy;
+    declaration->relation = mGraph->locals[result.value].relation;
     declaration->type = expression->type;
     declaration->initializer = std::move(initial);
     mGraph->blocks[current.block.value].operations.push_back(
@@ -3333,6 +3343,7 @@ bool ControlFlowBuilder::hoistOrderedOperand(
     declaration->isLinear =
         usage == luna::ownership::Usage::Linear;
     declaration->usage = usage;
+    declaration->relation = mGraph->locals[local.value].relation;
     declaration->type = expression->type;
     declaration->initializer = std::move(expression);
     mGraph->blocks[current.block.value].operations.push_back(
@@ -3433,6 +3444,7 @@ ControlFlowBuilder::lowerIteratorTerminal(
         declaration->local = local;
         declaration->isLinear = usage == luna::ownership::Usage::Linear;
         declaration->usage = usage;
+        declaration->relation = mGraph->locals[local.value].relation;
         declaration->type = type;
         declaration->initializer = std::move(initializer);
         mGraph->blocks[block.value].operations.push_back(
@@ -4102,14 +4114,6 @@ ControlFlowBuilder::lowerSlotInvoke(
               "slot invocation cannot materialize the fragment parameter contract");
         return std::nullopt;
     }
-    for (const auto& parameter : fragment->params) {
-        if (parameter.relation != luna::ownership::Relation::Owned) {
-            error(statement->location,
-                  "borrowed fragment parameters require canonical relation-bearing bindings");
-            return std::nullopt;
-        }
-    }
-
     auto fragmentBody = cloneStructuredBlock(fragment->body.get());
     if (!fragmentBody) {
         error(statement->location,
@@ -4126,6 +4130,7 @@ ControlFlowBuilder::lowerSlotInvoke(
         binding->isLinear =
             parameter.usage == luna::ownership::Usage::Linear;
         binding->usage = parameter.usage;
+        binding->relation = parameter.relation;
         binding->type = parameter.type;
         if (index < statement->args.size()) {
             binding->initializer = std::move(statement->args[index]);
@@ -4138,12 +4143,6 @@ ControlFlowBuilder::lowerSlotInvoke(
         }
         parameterBindings.push_back(std::move(binding));
     }
-    parameterBindings.insert(
-        parameterBindings.end(),
-        std::make_move_iterator(fragmentBody->stmts.begin()),
-        std::make_move_iterator(fragmentBody->stmts.end()));
-    fragmentBody->stmts = std::move(parameterBindings);
-
     const BlockId invocationExit = addBlock(
         region, scope, statement->location);
     const RegionId fragmentRegion = addRegion(
@@ -4158,9 +4157,27 @@ ControlFlowBuilder::lowerSlotInvoke(
     mFragmentContexts.push_back({
         invocationExit, fragment->kind, statement->continuation.get(),
         outerBindingDepth});
-    auto fragmentOpen = lowerSequence(
-        fragmentBody->stmts, OpenBlock{fragmentEntry, {}},
-        fragmentRegion, fragmentScope);
+    std::optional<OpenBlock> fragmentOpen = OpenBlock{fragmentEntry, {}};
+    for (auto& binding : parameterBindings) {
+        if (!fragmentOpen) break;
+        const auto* parameter = static_cast<LetStmt*>(binding.get());
+        const std::string name = parameter->name;
+        fragmentOpen = lowerStatement(
+            std::move(binding), std::move(*fragmentOpen),
+            fragmentRegion, fragmentScope);
+        const LocalId local = lookupLocal(name);
+        if (local.empty()) {
+            error(statement->location,
+                  "fragment parameter has no canonical entry binding");
+            fragmentOpen = std::nullopt;
+            break;
+        }
+        mGraph->regions[fragmentRegion.value].parameters.push_back(local);
+    }
+    if (fragmentOpen)
+        fragmentOpen = lowerSequence(
+            fragmentBody->stmts, std::move(*fragmentOpen),
+            fragmentRegion, fragmentScope);
     mFragmentContexts.pop_back();
     popBindings();
     mGraph->regions[fragmentRegion.value].exit = invocationExit;

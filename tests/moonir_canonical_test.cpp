@@ -41,7 +41,7 @@ int main() {
     cfg.blocks.back().scope = cfg.rootScope;
     cfg.blocks.back().terminator.kind = moon::TerminatorKind::Return;
     cfg.regions.push_back({cfg.rootRegion, {}, moon::RegionKind::Function,
-                           cfg.rootScope, cfg.entry, {}, {cfg.entry}, {}, {}});
+                           cfg.rootScope, cfg.entry, {}, {cfg.entry}, {}, {}, {}});
     cfg.scopes.push_back({cfg.rootScope, {}, cfg.rootRegion, {}, {}, {}});
     if (!cfg.findBlock(cfg.entry) || !cfg.findRegion(cfg.rootRegion) ||
         !cfg.findScope(cfg.rootScope) ||
@@ -230,6 +230,7 @@ int main() {
     cleanupBinding->name = "owned";
     cleanupBinding->local = moon::LocalId{0};
     cleanupBinding->usage = luna::ownership::Usage::Affine;
+    cleanupBinding->relation = luna::ownership::Relation::Owned;
     cleanupBinding->type = stringId;
     auto cleanupValue = std::make_unique<moon::StringLiteralExpr>();
     cleanupValue->value = "owned";
@@ -244,10 +245,10 @@ int main() {
     cleanupCfg.blocks[2].terminator.kind = moon::TerminatorKind::Return;
     cleanupCfg.regions.push_back({moon::RegionId{0}, {},
         moon::RegionKind::Function, moon::ScopeId{0}, moon::BlockId{0}, {},
-        {moon::BlockId{0}, moon::BlockId{2}}, {}, {}});
+        {moon::BlockId{0}, moon::BlockId{2}}, {}, {}, {}});
     cleanupCfg.regions.push_back({moon::RegionId{1}, moon::RegionId{0},
         moon::RegionKind::Lexical, moon::ScopeId{1}, moon::BlockId{1},
-        moon::BlockId{2}, {moon::BlockId{1}}, {}, {}});
+        moon::BlockId{2}, {moon::BlockId{1}}, {}, {}, {}});
     cleanupCfg.scopes.push_back({moon::ScopeId{0}, {}, moon::RegionId{0},
                                  {}, {}, {}});
     cleanupCfg.scopes.push_back({moon::ScopeId{1}, moon::ScopeId{0},
@@ -462,9 +463,14 @@ int main() {
         std::move(argumentControlRoot), {unitConsumerParameter},
         moon::RegionKind::Function, module);
     if (!argumentControlCfg ||
-        !cfgVerifier.verify(*argumentControlCfg, module))
+        !cfgVerifier.verify(*argumentControlCfg, module)) {
+        for (const auto& message : cfgBuilder.errors())
+            std::cerr << message << '\n';
+        for (const auto& message : cfgVerifier.errors())
+            std::cerr << message << '\n';
         return fail(
             "if expression argument did not preserve ordered CFG evaluation");
+    }
 
     auto invalidIfRoot = std::make_unique<moon::BlockStmt>();
     auto invalidIfUse = std::make_unique<moon::ExprStmt>();
@@ -3814,8 +3820,13 @@ int main() {
     compositionModule.name = "canonical.composition";
     const auto compositionUnit = compositionModule.registerType(TyUnit);
     const auto compositionI32 = compositionModule.registerType(TyI32);
+    const auto sharedI32Type = Type::makeReference(TyI32);
+    const auto sharedI32TypeId =
+        compositionModule.registerType(sharedI32Type);
     const auto interceptorType = Type::makeFragment(
-        {}, TyUnit, false, ContinuationKind::Interceptor);
+        {sharedI32Type}, TyUnit, false, ContinuationKind::Interceptor,
+        {{luna::ownership::Relation::SharedBorrow,
+          luna::ownership::Usage::Copy}});
     const auto interceptorTypeId =
         compositionModule.registerType(interceptorType);
     const std::string interceptorId =
@@ -3842,6 +3853,9 @@ int main() {
     interceptor->kind = moon::FragmentKind::Interceptor;
     interceptor->cardinality = moon::FragmentCardinality::Once;
     interceptor->structuralType = interceptorTypeId;
+    interceptor->params.push_back({
+        "view", false, luna::ownership::Usage::Copy,
+        luna::ownership::Relation::SharedBorrow, sharedI32TypeId});
     interceptor->body = std::make_unique<moon::BlockStmt>();
     auto guardedReturn = std::make_unique<moon::IfStmt>();
     auto returnCondition = std::make_unique<moon::BoolLiteralExpr>();
@@ -3931,6 +3945,14 @@ int main() {
         sealedContext->symbolId, sealedContext->contractId};
 
     auto compositionBody = std::make_unique<moon::BlockStmt>();
+    auto borrowedSource = std::make_unique<moon::LetStmt>();
+    borrowedSource->name = "source";
+    borrowedSource->type = compositionI32;
+    auto borrowedValue = std::make_unique<moon::IntLiteralExpr>();
+    borrowedValue->value = 7;
+    borrowedValue->type = compositionI32;
+    borrowedSource->initializer = std::move(borrowedValue);
+    compositionBody->stmts.push_back(std::move(borrowedSource));
     auto staticApply = std::make_unique<moon::ApplyStmt>();
     staticApply->slotName = "hook";
     staticApply->fragmentName = "guard";
@@ -3940,6 +3962,13 @@ int main() {
     slotInvocation->name = "hook";
     slotInvocation->acceptedKind = moon::FragmentKind::Interceptor;
     slotInvocation->acceptedCardinality = moon::FragmentCardinality::Once;
+    auto sharedArgument = std::make_unique<moon::BorrowExpr>();
+    sharedArgument->type = sharedI32TypeId;
+    auto sharedSource = std::make_unique<moon::IdentifierExpr>();
+    sharedSource->name = "source";
+    sharedSource->type = compositionI32;
+    sharedArgument->operand = std::move(sharedSource);
+    slotInvocation->args.push_back(std::move(sharedArgument));
     slotInvocation->continuation = std::make_unique<moon::BlockStmt>();
     auto continuationEffect = std::make_unique<moon::ExprStmt>();
     auto continuationUnit = std::make_unique<moon::UnitExpr>();
@@ -3958,6 +3987,8 @@ int main() {
     size_t continuationRegions = 0;
     size_t resumeEdges = 0;
     size_t abortEdges = 0;
+    const moon::LocalRecord* borrowedFragmentLocal = nullptr;
+    bool borrowedFragmentCleanup = false;
     for (const auto& region : compositionCfg
              ? compositionCfg->regions
              : std::vector<moon::RegionRecord>{}) {
@@ -3966,6 +3997,12 @@ int main() {
         continuationRegions += region.kind == moon::RegionKind::Continuation;
     }
     if (compositionCfg) {
+        for (const auto& local : compositionCfg->locals)
+            if (local.name == "view") borrowedFragmentLocal = &local;
+        if (borrowedFragmentLocal)
+            for (const auto& cleanup : compositionCfg->cleanups)
+                borrowedFragmentCleanup = borrowedFragmentCleanup ||
+                    cleanup.place.root == borrowedFragmentLocal->id;
         for (const auto& block : compositionCfg->blocks) {
             resumeEdges +=
                 block.terminator.kind == moon::TerminatorKind::Resume;
@@ -3977,8 +4014,35 @@ int main() {
         !cfgVerifier.verify(*compositionCfg, compositionModule) ||
         applyRegions != 1 || fragmentRegions != 1 ||
         continuationRegions != 1 || resumeEdges != 0 || abortEdges != 1 ||
+        !borrowedFragmentLocal ||
+        borrowedFragmentLocal->relation !=
+            luna::ownership::Relation::SharedBorrow ||
+        borrowedFragmentCleanup ||
         executableInterceptor->body.get() != interceptorBody)
         return fail("static interceptor did not compose into canonical CFG regions and edges");
+    moon::LetStmt* borrowedFragmentDefinition = nullptr;
+    for (auto& block : compositionCfg->blocks)
+        for (auto& operation : block.operations)
+            if (auto* declaration = dynamic_cast<moon::LetStmt*>(
+                    operation.get());
+                declaration && borrowedFragmentLocal &&
+                declaration->local == borrowedFragmentLocal->id)
+                borrowedFragmentDefinition = declaration;
+    if (!borrowedFragmentDefinition)
+        return fail("static composition lost its fragment parameter definition");
+    const auto borrowedFragmentId = borrowedFragmentLocal->id;
+    compositionCfg->locals[borrowedFragmentId.value].relation =
+        luna::ownership::Relation::Owned;
+    borrowedFragmentDefinition->relation =
+        luna::ownership::Relation::Owned;
+    if (cfgVerifier.verify(*compositionCfg, compositionModule))
+        return fail("CFG verifier accepted a forged fragment parameter relation");
+    compositionCfg->locals[borrowedFragmentId.value].relation =
+        luna::ownership::Relation::SharedBorrow;
+    borrowedFragmentDefinition->relation =
+        luna::ownership::Relation::SharedBorrow;
+    if (!cfgVerifier.verify(*compositionCfg, compositionModule))
+        return fail("restored fragment parameter relation no longer verifies");
     moon::BlockId interceptorContinuationEntry;
     for (const auto& composedRegion : compositionCfg->regions)
         if (composedRegion.kind == moon::RegionKind::Continuation)
