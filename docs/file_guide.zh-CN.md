@@ -215,6 +215,7 @@ obligation，不能重新推导所有权。
 | `src/codegen/CodeGeneratorStatements.cpp` | block/statement/control-flow lowering |
 | `src/codegen/CodeGeneratorExpressions.cpp` | 普通 expression/value lowering |
 | `src/codegen/CodeGeneratorCleanup.cpp` | cleanup、ADT payload、共享/数组资源释放 |
+| `src/codegen/CodeGeneratorControlFlow.cpp` | canonical typed-local CFG 的 LLVM block/local/terminator lowering |
 | `src/codegen/CodeGeneratorExecution.cpp` | LLVM 生命周期、ORC JIT、AOT IR 输出 |
 | `src/codegen/CodeGeneratorFragments.cpp` | slot、continuation、fragment 与插件 dispatch |
 | `src/codegen/CodeGeneratorGpu.cpp` | GPU target、buffer ABI、launch 与 code object |
@@ -514,6 +515,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/codegen/CodeGenerator.cpp`
 - `src/codegen/CodeGenerator.h`
 - `src/codegen/CodeGeneratorCleanup.cpp`
+- `src/codegen/CodeGeneratorControlFlow.cpp`
 - `src/codegen/CodeGeneratorExecution.cpp`
 - `src/codegen/CodeGeneratorExpressions.cpp`
 - `src/codegen/CodeGeneratorFragments.cpp`

@@ -3,6 +3,7 @@
 #include "moonir/Lowering.h"
 #include "moonir/Sealer.h"
 #include "moonir/Verifier.h"
+#include "codegen/CodeGenerator.h"
 #include "sema/SymbolTable.h"
 #include "tooling/AnalysisSnapshot.h"
 
@@ -4106,6 +4107,50 @@ fn increment(value: i32) -> i32 {
     sealedParameter->relation = luna::ownership::Relation::Owned;
     if (!verifier.verify(*sealableModule))
         return fail("restored canonical function signature no longer verifies");
+
+    const std::string cfgCodegenSource = R"luna(
+package canonical.codegen;
+
+fn main() -> i32 {
+    let value = 40;
+    if value == 40 {
+        let value = 41;
+        return value + 1;
+    }
+    return 0;
+}
+)luna";
+    auto cfgCodegenSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        cfgCodegenSource, "<canonical-codegen>");
+    if (!cfgCodegenSnapshot.success())
+        return fail("frontend rejected the canonical codegen source");
+    moon::LunaLowerer cfgCodegenLowerer;
+    auto cfgCodegenModule = cfgCodegenLowerer.lower(
+        *cfgCodegenSnapshot.program(), *cfgCodegenSnapshot.symbolTable());
+    moon::Sealer cfgCodegenSealer;
+    const bool cfgCodegenSealed =
+        cfgCodegenSealer.sealFunctionBodies(*cfgCodegenModule);
+    const bool cfgCodegenVerified =
+        cfgCodegenSealed && verifier.verify(*cfgCodegenModule);
+    if (!cfgCodegenLowerer.errors().empty() ||
+        !cfgCodegenSealed || !cfgCodegenVerified) {
+        for (const auto& diagnostic : cfgCodegenLowerer.errors())
+            std::cerr << diagnostic << '\n';
+        for (const auto& error : cfgCodegenSealer.errors())
+            std::cerr << error << '\n';
+        if (cfgCodegenSealed)
+            for (const auto& diagnostic : verifier.errors())
+                std::cerr << diagnostic << '\n';
+        return fail("canonical codegen fixture did not seal and verify");
+    }
+    CodeGenerator cfgCodegen("canonical.codegen");
+    if (!cfgCodegen.generate(cfgCodegenModule.get())) {
+        for (const auto& diagnostic : cfgCodegen.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("LLVM backend rejected the initial canonical CFG slice");
+    }
+    if (cfgCodegen.jitRun() != 42)
+        return fail("canonical CFG JIT did not preserve branch/local semantics");
 
     moon::Module compositionModule;
     compositionModule.name = "canonical.composition";

@@ -285,6 +285,20 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         value->lhs = lowerExpr(binary->lhs.get());
         value->op = lowerOperator(static_cast<int>(binary->op), binary);
         value->rhs = lowerExpr(binary->rhs.get());
+        switch (value->op) {
+            case Operator::Equal:
+            case Operator::NotEqual:
+            case Operator::Less:
+            case Operator::LessEqual:
+            case Operator::Greater:
+            case Operator::GreaterEqual:
+            case Operator::LogicalAnd:
+            case Operator::LogicalOr:
+                value->type = typeRef(TyBool);
+                break;
+            default:
+                break;
+        }
         result = std::move(value);
     } else if (auto* unary = dynamic_cast<const ::UnaryExpr*>(expression)) {
         auto value = std::make_unique<moon::UnaryExpr>();
@@ -292,6 +306,8 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         else if (unary->op == TokenKind::Star) value->op = Operator::Dereference;
         else value->op = lowerOperator(static_cast<int>(unary->op), unary);
         value->operand = lowerExpr(unary->operand.get());
+        if (value->op == Operator::LogicalNot)
+            value->type = typeRef(TyBool);
         result = std::move(value);
     } else if (auto* call = dynamic_cast<const ::CallExpr*>(expression)) {
         auto value = std::make_unique<moon::CallExpr>();

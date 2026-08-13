@@ -668,6 +668,17 @@ are reconstructed from LocalId operands and the sealed type table without overwr
 non-empty type. This sealer is not yet invoked by the production pipeline: fragment/runtime
 composition and LLVM CFG consumption must close before the one-way module switch.
 
+The first LLVM-consumption slice is now executable but remains outside the production pipeline.
+For an exclusively CFG-backed function, the backend allocates typed-local storage by `LocalId`,
+maps parameters by the verified parameter table, emits non-control operations, and translates
+`Jump`, cleanup-free `Branch`, cleanup-free `Return`, `Resume`, `Abort`, and `Unreachable` directly
+from the block table. A source-to-JIT fixture with lexical shadowing returns 42 and proves that two
+locals with the same diagnostic name retain distinct storage. This is the same function codegen
+entry selecting one exclusive body representation during migration, not a second compiler backend.
+`Switch`, cleanup edges, allocation operations, and the wider expression surface currently fail
+closed; the production sealer therefore remains disconnected until those paths and runtime
+composition are complete.
+
 The capture-free lambda subphase is also complete. A lambda expression remains a closure-value
 node, while construction consumes its structured body into an independent canonical CFG rooted at
 a `Lambda` region. This is not a second IR layer: the parent function and lambda each have exactly

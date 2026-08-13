@@ -295,6 +295,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/codegen/CodeGenerator.cpp`
 - `src/codegen/CodeGenerator.h`
 - `src/codegen/CodeGeneratorCleanup.cpp`
+- `src/codegen/CodeGeneratorControlFlow.cpp`
 - `src/codegen/CodeGeneratorExecution.cpp`
 - `src/codegen/CodeGeneratorExpressions.cpp`
 - `src/codegen/CodeGeneratorFragments.cpp`

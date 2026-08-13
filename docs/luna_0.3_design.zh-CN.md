@@ -593,6 +593,15 @@ CFG；module verifier 会拒绝缺失 body、body/CFG 并存、root kind 漂移�
 sealed type table 补齐，但非空冲突类型绝不被覆盖。该 sealer 尚未接入 production pipeline：
 必须先闭合 fragment/runtime composition 与 LLVM CFG consumption，之后才进行单向模块切换。
 
+首个 LLVM consumption 切片现已可执行，但仍未接入 production pipeline。对仅持有 CFG
+body 的 function，backend 按 `LocalId` 分配 typed-local storage，按已验证 parameter table
+映射参数，生成非控制 operation，并直接从 block table 翻译 `Jump`、无 cleanup
+`Branch`、无 cleanup `Return`、`Resume`、`Abort` 和 `Unreachable`。一个含词法
+shadowing 的 source-to-JIT fixture 返回 42，证明诊断名相同的两个 local 仍使用不同存储。
+这是同一 function codegen entry 在迁移期选择一份互斥 body representation，不是第二个
+compiler backend。`Switch`、cleanup edge、allocation operation 与更广的 expression surface
+当前均 fail closed；在这些路径和 runtime composition 闭合前，production sealer 仍不接线。
+
 无捕获 lambda 的子阶段也已完成：lambda expression 仅作为闭包值节点，其
 structured body 在构造时被消费为一份独立、以 `Lambda` region 为根的
 canonical CFG。这不是双层 IR：父函数与 lambda 分别只有一张 CFG，闭包值

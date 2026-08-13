@@ -94,6 +94,9 @@ private:
     };
 
     void generateFunctionBody(moon::FunctionDecl* decl);
+    void generateControlFlowBody(
+        moon::ControlFlowGraph& graph, llvm::Function* func,
+        llvm::BasicBlock* abiEntry);
     void generateStmt(moon::Stmt* stmt, llvm::Function* func = nullptr);
     void generateBlock(moon::BlockStmt* block, llvm::Function* func);
     void generateStructuredContinuation(moon::BlockStmt* continuation, llvm::Function* func);
@@ -163,6 +166,10 @@ private:
     // Current state
     std::unordered_map<std::string, llvm::AllocaInst*> mLocals;
     std::unordered_map<std::string, TypePtr> mLocalTypes;
+    // Canonical bodies are keyed exclusively by LocalId. Diagnostic names
+    // may shadow and are never backend identities.
+    std::vector<llvm::AllocaInst*> mCanonicalLocals;
+    std::vector<TypePtr> mCanonicalLocalTypes;
     // Hidden consuming-array iterator states use one initialization bit per
     // element. ArrayDrop consults these bits on normal and early exits.
     std::unordered_map<std::string, llvm::AllocaInst*> mArrayDropFlags;

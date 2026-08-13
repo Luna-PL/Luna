@@ -188,10 +188,32 @@ add_executable(moonir-canonical-test
     src/moonir/MoonIR.cpp
     src/moonir/Sealer.cpp
     src/moonir/Verifier.cpp
+    src/codegen/CGHelpers.cpp
+    src/codegen/CodeGenerator.cpp
+    src/codegen/CodeGeneratorCleanup.cpp
+    src/codegen/CodeGeneratorControlFlow.cpp
+    src/codegen/CodeGeneratorExecution.cpp
+    src/codegen/CodeGeneratorExpressions.cpp
+    src/codegen/CodeGeneratorFragments.cpp
+    src/codegen/CodeGeneratorFunctions.cpp
+    src/codegen/CodeGeneratorGpu.cpp
+    src/codegen/CodeGeneratorIterator.cpp
+    src/codegen/CodeGeneratorModule.cpp
+    src/codegen/CodeGeneratorRangeAnalysis.cpp
+    src/codegen/CodeGeneratorRuntimeDescriptors.cpp
+    src/codegen/CodeGeneratorStatements.cpp
+    src/runtime/ApplicationHostServices.cpp
+    src/runtime/Runtime.cpp
     $<TARGET_OBJECTS:luna-frontend>
 )
 target_include_directories(moonir-canonical-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(moonir-canonical-test SYSTEM PRIVATE
+    ${LLVM_INCLUDE_DIRS})
+target_link_libraries(moonir-canonical-test PRIVATE LLVM)
+if(CMAKE_DL_LIBS AND NOT WIN32)
+    target_link_libraries(moonir-canonical-test PRIVATE ${CMAKE_DL_LIBS})
+endif()
 
 add_executable(luna
     src/main.cpp
@@ -211,6 +233,7 @@ add_executable(luna
     src/codegen/CGHelpers.cpp
     src/codegen/CodeGenerator.cpp
     src/codegen/CodeGeneratorCleanup.cpp
+    src/codegen/CodeGeneratorControlFlow.cpp
     src/codegen/CodeGeneratorExecution.cpp
     src/codegen/CodeGeneratorExpressions.cpp
     src/codegen/CodeGeneratorFragments.cpp

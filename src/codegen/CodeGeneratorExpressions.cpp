@@ -62,6 +62,16 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
     }
     if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
+        if (!id->local.empty() &&
+            id->local.value < mCanonicalLocals.size() &&
+            mCanonicalLocals[id->local.value]) {
+            auto* alloca = mCanonicalLocals[id->local.value];
+            return mBuilder->CreateLoad(
+                alloca->getAllocatedType(), alloca,
+                id->name.empty()
+                    ? "local." + std::to_string(id->local.value)
+                    : id->name);
+        }
         auto it = mLocals.find(id->name);
         if (it != mLocals.end()) {
             auto* alloca = it->second;
