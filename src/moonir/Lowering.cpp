@@ -1127,6 +1127,9 @@ TypePtr LunaLowerer::inferredExprType(const ::Expr* expression) const {
             ? allocation->resultType
             : Type::makeRawPointer(allocation->allocatedType);
     if (dynamic_cast<const ::LaunchExpr*>(expression)) return TyEvent;
+    if (dynamic_cast<const ::BlockExpr*>(expression) ||
+        dynamic_cast<const ::IfExpr*>(expression))
+        return TyUnit;
     return nullptr;
 }
 

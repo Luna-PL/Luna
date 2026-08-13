@@ -111,13 +111,20 @@ private:
     std::optional<OpenBlock> lowerIteratorRecipeFor(
         std::unique_ptr<ForStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
-    std::optional<OpenBlock> normalizeIteratorTerminal(
+    std::optional<OpenBlock> normalizeControlFlowExpression(
         std::unique_ptr<Expr>& expression, OpenBlock current,
         RegionId region, ScopeId scope, bool discardUnitResult);
+    std::optional<OpenBlock> lowerBlockExpression(
+        std::unique_ptr<BlockExpr> expression, OpenBlock current,
+        RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement);
+    std::optional<OpenBlock> lowerIfExpression(
+        std::unique_ptr<IfExpr> expression, OpenBlock current,
+        RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement);
     std::optional<OpenBlock> normalizeOrderedOperands(
         const std::vector<std::unique_ptr<Expr>*>& operands,
         OpenBlock current, RegionId region, ScopeId scope);
     bool containsIteratorTerminal(const Expr* expression) const;
+    bool containsPendingControlFlow(const Expr* expression) const;
     bool hoistCopyOperand(std::unique_ptr<Expr>& expression,
                           OpenBlock& current, ScopeId scope);
     std::optional<OpenBlock> lowerIteratorTerminal(

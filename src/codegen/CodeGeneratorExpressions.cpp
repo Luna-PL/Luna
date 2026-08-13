@@ -33,6 +33,7 @@ using moon::SliceLengthExpr;
 using moon::StringLiteralExpr;
 using moon::TryExpr;
 using moon::UnaryExpr;
+using moon::UnitExpr;
 using moon::VariantConstructExpr;
 
 // ─── Expression generation ─────────────────────────────────────────
@@ -53,6 +54,11 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
     }
     if (auto* bl = dynamic_cast<BoolLiteralExpr*>(expr)) {
         return llvm::ConstantInt::get(mHelpers->boolTy(), bl->value ? 1 : 0);
+    }
+    if (dynamic_cast<UnitExpr*>(expr)) {
+        // Unit has no runtime payload. Keep the legacy structured backend's
+        // expression API total until canonical CFG becomes its only input.
+        return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
     }
     if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
         auto it = mLocals.find(id->name);

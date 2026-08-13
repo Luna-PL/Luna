@@ -2197,7 +2197,13 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
         error({}, "null expression in '" + owner + "'");
         return;
     }
-    if (auto* selection = dynamic_cast<const DynamicSelectExpr*>(expr)) {
+    if (auto* unit = dynamic_cast<const UnitExpr*>(expr)) {
+        verifyType(unit->type, unit->location, "unit expression", module);
+        const auto* type = module.findType(unit->type);
+        if (!type || type->kind != TypeKind::Unit)
+            error(unit->location,
+                  "canonical unit expression does not have unit type");
+    } else if (auto* selection = dynamic_cast<const DynamicSelectExpr*>(expr)) {
         if (!module.features.dynamicSelect || !module.features.runtime)
             error(selection->location,
                   "dynamic select expression is present without runtime dynamic-select capability");

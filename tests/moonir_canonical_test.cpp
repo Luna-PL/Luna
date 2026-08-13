@@ -123,6 +123,13 @@ int main() {
         {luna::ownership::Relation::Owned,
          luna::ownership::Usage::Copy});
     const auto actionTypeId = module.registerType(actionType);
+    auto unitConsumerType = Type::makeFunction(
+        {TyUnit}, TyUnit,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Copy});
+    const auto unitConsumerTypeId = module.registerType(unitConsumerType);
     auto moveMapType = Type::makeFunction(
         {TyI32}, TyString,
         {{luna::ownership::Relation::Owned,
@@ -302,6 +309,134 @@ int main() {
     if (cfgVerifier.verify(*loweredCfg, module))
         return fail("CFG verifier accepted an unresolved local identifier");
     loweredUseId->local = moon::LocalId{0};
+
+    auto standaloneBlockRoot = std::make_unique<moon::BlockStmt>();
+    auto standaloneBlockUse = std::make_unique<moon::ExprStmt>();
+    auto standaloneBlock = std::make_unique<moon::BlockExpr>();
+    standaloneBlock->type = unitId;
+    standaloneBlock->block = std::make_unique<moon::BlockStmt>();
+    standaloneBlockUse->expr = std::move(standaloneBlock);
+    standaloneBlockRoot->stmts.push_back(std::move(standaloneBlockUse));
+    auto standaloneBlockCfg = cfgBuilder.build(
+        std::move(standaloneBlockRoot), {},
+        moon::RegionKind::Function, module);
+    if (!standaloneBlockCfg ||
+        !cfgVerifier.verify(*standaloneBlockCfg, module))
+        return fail(
+            "unit block expression did not expand into lexical CFG");
+
+    auto ifExpressionRoot = std::make_unique<moon::BlockStmt>();
+    auto ifExpressionUse = std::make_unique<moon::ExprStmt>();
+    auto ifExpression = std::make_unique<moon::IfExpr>();
+    ifExpression->type = unitId;
+    auto outerCondition = std::make_unique<moon::BoolLiteralExpr>();
+    outerCondition->value = true;
+    outerCondition->type = boolId;
+    ifExpression->cond = std::move(outerCondition);
+    auto outerThen = std::make_unique<moon::BlockExpr>();
+    outerThen->type = unitId;
+    outerThen->block = std::make_unique<moon::BlockStmt>();
+    ifExpression->thenExpr = std::move(outerThen);
+    auto nestedIf = std::make_unique<moon::IfExpr>();
+    nestedIf->type = unitId;
+    auto nestedCondition = std::make_unique<moon::BoolLiteralExpr>();
+    nestedCondition->value = false;
+    nestedCondition->type = boolId;
+    nestedIf->cond = std::move(nestedCondition);
+    auto nestedThen = std::make_unique<moon::BlockExpr>();
+    nestedThen->type = unitId;
+    nestedThen->block = std::make_unique<moon::BlockStmt>();
+    nestedIf->thenExpr = std::move(nestedThen);
+    auto nestedElse = std::make_unique<moon::BlockExpr>();
+    nestedElse->type = unitId;
+    nestedElse->block = std::make_unique<moon::BlockStmt>();
+    nestedIf->elseExpr = std::move(nestedElse);
+    ifExpression->elseExpr = std::move(nestedIf);
+    ifExpressionUse->expr = std::move(ifExpression);
+    ifExpressionRoot->stmts.push_back(std::move(ifExpressionUse));
+    auto ifExpressionCfg = cfgBuilder.build(
+        std::move(ifExpressionRoot), {},
+        moon::RegionKind::Function, module);
+    size_t expressionBranches = 0;
+    size_t unitResults = 0;
+    if (ifExpressionCfg) {
+        for (const auto& block : ifExpressionCfg->blocks) {
+            if (block.terminator.kind == moon::TerminatorKind::Branch)
+                ++expressionBranches;
+            for (const auto& operation : block.operations) {
+                const auto* statement =
+                    dynamic_cast<const moon::ExprStmt*>(operation.get());
+                if (statement &&
+                    dynamic_cast<const moon::UnitExpr*>(statement->expr.get()))
+                    ++unitResults;
+            }
+        }
+    }
+    if (!ifExpressionCfg ||
+        !cfgVerifier.verify(*ifExpressionCfg, module) ||
+        expressionBranches != 2 || unitResults != 1)
+        return fail(
+            "nested unit if expression did not become canonical branch CFG");
+
+    auto argumentControlRoot = std::make_unique<moon::BlockStmt>();
+    auto argumentControlUse = std::make_unique<moon::ExprStmt>();
+    auto argumentControlCall = std::make_unique<moon::CallExpr>();
+    argumentControlCall->type = unitId;
+    auto argumentConsumer = std::make_unique<moon::IdentifierExpr>();
+    argumentConsumer->name = "unitConsumer";
+    argumentConsumer->type = unitConsumerTypeId;
+    argumentControlCall->callee = std::move(argumentConsumer);
+    auto argumentIf = std::make_unique<moon::IfExpr>();
+    argumentIf->type = unitId;
+    auto argumentCondition = std::make_unique<moon::BoolLiteralExpr>();
+    argumentCondition->value = true;
+    argumentCondition->type = boolId;
+    argumentIf->cond = std::move(argumentCondition);
+    auto argumentThen = std::make_unique<moon::BlockExpr>();
+    argumentThen->type = unitId;
+    argumentThen->block = std::make_unique<moon::BlockStmt>();
+    argumentIf->thenExpr = std::move(argumentThen);
+    auto argumentElse = std::make_unique<moon::BlockExpr>();
+    argumentElse->type = unitId;
+    argumentElse->block = std::make_unique<moon::BlockStmt>();
+    argumentIf->elseExpr = std::move(argumentElse);
+    argumentControlCall->args.push_back(std::move(argumentIf));
+    argumentControlUse->expr = std::move(argumentControlCall);
+    argumentControlRoot->stmts.push_back(std::move(argumentControlUse));
+    moon::Param unitConsumerParameter;
+    unitConsumerParameter.name = "unitConsumer";
+    unitConsumerParameter.type = unitConsumerTypeId;
+    auto argumentControlCfg = cfgBuilder.build(
+        std::move(argumentControlRoot), {unitConsumerParameter},
+        moon::RegionKind::Function, module);
+    if (!argumentControlCfg ||
+        !cfgVerifier.verify(*argumentControlCfg, module))
+        return fail(
+            "if expression argument did not preserve ordered CFG evaluation");
+
+    auto invalidIfRoot = std::make_unique<moon::BlockStmt>();
+    auto invalidIfUse = std::make_unique<moon::ExprStmt>();
+    auto invalidIf = std::make_unique<moon::IfExpr>();
+    invalidIf->type = i32Id;
+    auto invalidCondition = std::make_unique<moon::BoolLiteralExpr>();
+    invalidCondition->value = true;
+    invalidCondition->type = boolId;
+    invalidIf->cond = std::move(invalidCondition);
+    auto invalidThen = std::make_unique<moon::BlockExpr>();
+    invalidThen->type = i32Id;
+    invalidThen->block = std::make_unique<moon::BlockStmt>();
+    invalidIf->thenExpr = std::move(invalidThen);
+    auto invalidElse = std::make_unique<moon::BlockExpr>();
+    invalidElse->type = i32Id;
+    invalidElse->block = std::make_unique<moon::BlockStmt>();
+    invalidIf->elseExpr = std::move(invalidElse);
+    invalidIfUse->expr = std::move(invalidIf);
+    invalidIfRoot->stmts.push_back(std::move(invalidIfUse));
+    if (cfgBuilder.build(
+            std::move(invalidIfRoot), {},
+            moon::RegionKind::Function, module))
+        return fail(
+            "CFG builder accepted a non-unit block-style if expression");
 
     auto unresolvedStructured = std::make_unique<moon::BlockStmt>();
     auto unresolvedUse = std::make_unique<moon::ExprStmt>();
@@ -2174,6 +2309,7 @@ int main() {
     reverse.registerType(reducerType);
     reverse.registerType(affineReducerType);
     reverse.registerType(actionType);
+    reverse.registerType(unitConsumerType);
     reverse.registerType(moveMapType);
     reverse.registerType(moveMapIterator);
     reverse.registerType(Type::makeEnum(

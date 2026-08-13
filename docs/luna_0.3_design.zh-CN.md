@@ -663,10 +663,18 @@ tag/ownership flag。独立 verifier 会检查这些 let/local/type 引用。mov
 短路 RHS、record/heap allocation-sensitive initializer 仍被明确拒绝，等待分别具有 transfer、
 conditional CFG 和 allocation-order 语义的子阶段；它们不会被隐式复制或重排。
 
-第 10 项尚未整体完成。上述 conditional/allocation-aware 与 non-Copy expression hoisting、
+当前 Luna block 语法的第一个 conditional-expression 切片也已完成。由于 block 尚无
+tail value，`BlockExpr` 和 block-style `IfExpr` 在语义上都是 `unit`；CFG 构建会消费
+其 structured block，产生 lexical region 和普通 branch/jump edge，然后用零大小
+`UnitExpr` 替换已完成的表达式。嵌套 `else if` 和位于有序 operand 位置的 `if`
+使用同一路径。`UnitExpr` 不持有 body 或 successor，因而不会引入第二层控制 IR。
+verifier 仍会拒绝 sealed graph 中的任何 `BlockExpr` 或 `IfExpr`。若未来设计 tail value，
+则必须显式引入 synthetic result local；0.3 实现不会自行推定这种值语义。
+
+第 10 项尚未整体完成。上述 short-circuit/allocation-aware 与 non-Copy expression hoisting、
 捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup
 状态仍是明确的后续边界。
-随后规范化其余控制流表达式、slot 和 fragment
+随后规范化 `TryExpr` 及其余控制流表达式、slot 和 fragment
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
 serializer/parser 仍属于第 11 项。

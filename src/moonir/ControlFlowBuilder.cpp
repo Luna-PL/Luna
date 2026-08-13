@@ -235,7 +235,7 @@ ControlFlowBuilder::lowerStatement(
                 return std::nullopt;
             return current;
         }
-        auto normalized = normalizeIteratorTerminal(
+        auto normalized = normalizeControlFlowExpression(
             declaration->initializer, current, region, scope, false);
         if (!normalized) return std::nullopt;
         current = std::move(*normalized);
@@ -248,7 +248,7 @@ ControlFlowBuilder::lowerStatement(
         return current;
     }
     if (auto* expression = dynamic_cast<ExprStmt*>(statement.get())) {
-        auto normalized = normalizeIteratorTerminal(
+        auto normalized = normalizeControlFlowExpression(
             expression->expr, current, region, scope, true);
         if (!normalized) return std::nullopt;
         current = std::move(*normalized);
@@ -285,7 +285,7 @@ ControlFlowBuilder::lowerStatement(
         return current;
     }
     if (auto* returned = dynamic_cast<ReturnStmt*>(statement.get())) {
-        auto normalized = normalizeIteratorTerminal(
+        auto normalized = normalizeControlFlowExpression(
             returned->value, current, region, scope, false);
         if (!normalized) return std::nullopt;
         current = std::move(*normalized);
@@ -1533,10 +1533,136 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
 }
 
 std::optional<ControlFlowBuilder::OpenBlock>
-ControlFlowBuilder::normalizeIteratorTerminal(
+ControlFlowBuilder::lowerBlockExpression(
+    std::unique_ptr<BlockExpr> expression, OpenBlock current,
+    RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement) {
+    if (!expression || !expression->block) {
+        error(expression ? expression->location : SourceLocation{},
+              "block expression has no structured body");
+        return std::nullopt;
+    }
+    const auto* resultType = mModule->findType(expression->type);
+    if (!resultType || resultType->kind != TypeKind::Unit) {
+        error(expression->location,
+              "block expression must have the frozen unit type");
+        return std::nullopt;
+    }
+
+    const SourceLocation location = expression->location;
+    auto body = lowerNestedBlock(
+        std::move(expression->block), region, scope,
+        RegionKind::Lexical);
+    connectJump(current, body.entry);
+    if (!body.exit) return std::nullopt;
+
+    const BlockId continuation = addBlock(region, scope, location);
+    connectJump(*body.exit, continuation);
+    mGraph->regions[body.region.value].exit = continuation;
+
+    auto unit = std::make_unique<UnitExpr>();
+    unit->location = location;
+    unit->type = expression->type;
+    replacement = std::move(unit);
+    return OpenBlock{continuation, {}};
+}
+
+std::optional<ControlFlowBuilder::OpenBlock>
+ControlFlowBuilder::lowerIfExpression(
+    std::unique_ptr<IfExpr> expression, OpenBlock current,
+    RegionId region, ScopeId scope, std::unique_ptr<Expr>& replacement) {
+    if (!expression || !expression->cond || !expression->thenExpr ||
+        !expression->elseExpr) {
+        error(expression ? expression->location : SourceLocation{},
+              "if expression has an incomplete canonical shape");
+        return std::nullopt;
+    }
+    const auto* resultType = mModule->findType(expression->type);
+    if (!resultType || resultType->kind != TypeKind::Unit ||
+        expression->thenExpr->type != expression->type ||
+        expression->elseExpr->type != expression->type) {
+        error(expression->location,
+              "block-style if expression must have unit-typed branches");
+        return std::nullopt;
+    }
+
+    auto condition = normalizeControlFlowExpression(
+        expression->cond, std::move(current), region, scope, false);
+    if (!condition) return std::nullopt;
+    current = std::move(*condition);
+    if (!bindExpr(expression->cond.get())) return std::nullopt;
+
+    struct BuiltArm {
+        BlockId entry;
+        std::optional<OpenBlock> exit;
+    };
+    const auto lowerArm = [this, region, scope](
+        std::unique_ptr<Expr> arm) -> BuiltArm {
+        BuiltArm built;
+        if (!arm) {
+            error({}, "if expression has a null branch");
+            return built;
+        }
+        const SourceLocation location = arm->location;
+        built.entry = addBlock(region, scope, location);
+        built.exit = normalizeControlFlowExpression(
+            arm, OpenBlock{built.entry, {}}, region, scope, true);
+        if (!built.exit || !arm || dynamic_cast<UnitExpr*>(arm.get()))
+            return built;
+        if (!bindExpr(arm.get())) {
+            built.exit = std::nullopt;
+            return built;
+        }
+        auto statement = std::make_unique<ExprStmt>();
+        statement->location = location;
+        statement->expr = std::move(arm);
+        mGraph->blocks[built.exit->block.value].operations.push_back(
+            std::move(statement));
+        return built;
+    };
+
+    auto thenArm = lowerArm(std::move(expression->thenExpr));
+    auto elseArm = lowerArm(std::move(expression->elseExpr));
+    if (thenArm.entry.empty() || elseArm.entry.empty())
+        return std::nullopt;
+
+    auto& terminator = mGraph->blocks[current.block.value].terminator;
+    terminator.kind = TerminatorKind::Branch;
+    terminator.location = expression->location;
+    terminator.operand = std::move(expression->cond);
+    terminator.primary.target = thenArm.entry;
+    terminator.secondary.target = elseArm.entry;
+
+    if (!thenArm.exit && !elseArm.exit) return std::nullopt;
+    const BlockId merge = addBlock(region, scope, expression->location);
+    if (thenArm.exit) connectJump(*thenArm.exit, merge);
+    if (elseArm.exit) connectJump(*elseArm.exit, merge);
+
+    auto unit = std::make_unique<UnitExpr>();
+    unit->location = expression->location;
+    unit->type = expression->type;
+    replacement = std::move(unit);
+    return OpenBlock{merge, {}};
+}
+
+std::optional<ControlFlowBuilder::OpenBlock>
+ControlFlowBuilder::normalizeControlFlowExpression(
     std::unique_ptr<Expr>& expression, OpenBlock current,
     RegionId region, ScopeId scope, bool discardUnitResult) {
     if (!expression) return current;
+    if (dynamic_cast<BlockExpr*>(expression.get())) {
+        std::unique_ptr<BlockExpr> owned(
+            static_cast<BlockExpr*>(expression.release()));
+        return lowerBlockExpression(
+            std::move(owned), std::move(current), region, scope,
+            expression);
+    }
+    if (dynamic_cast<IfExpr*>(expression.get())) {
+        std::unique_ptr<IfExpr> owned(
+            static_cast<IfExpr*>(expression.release()));
+        return lowerIfExpression(
+            std::move(owned), std::move(current), region, scope,
+            expression);
+    }
     auto* call = dynamic_cast<CallExpr*>(expression.get());
     if (call && containsIteratorTerminal(call) &&
         (call->iteratorOp == IteratorOp::Fold ||
@@ -1562,12 +1688,12 @@ ControlFlowBuilder::normalizeIteratorTerminal(
     if (auto* binary = dynamic_cast<BinaryExpr*>(expression.get())) {
         if (binary->op == Operator::LogicalAnd ||
             binary->op == Operator::LogicalOr) {
-            auto normalized = normalizeIteratorTerminal(
+            auto normalized = normalizeControlFlowExpression(
                 binary->lhs, std::move(current), region, scope, false);
             if (!normalized) return std::nullopt;
-            if (containsIteratorTerminal(binary->rhs.get())) {
+            if (containsPendingControlFlow(binary->rhs.get())) {
                 error(binary->rhs->location,
-                      "iterator terminal in a short-circuit operand requires "
+                      "control flow in a short-circuit operand requires "
                       "conditional expression CFG normalization");
                 return std::nullopt;
             }
@@ -1578,17 +1704,17 @@ ControlFlowBuilder::normalizeIteratorTerminal(
             region, scope);
     }
     if (auto* unary = dynamic_cast<UnaryExpr*>(expression.get()))
-        return normalizeIteratorTerminal(
+        return normalizeControlFlowExpression(
             unary->operand, std::move(current), region, scope, false);
     if (auto* field = dynamic_cast<FieldAccessExpr*>(expression.get()))
-        return normalizeIteratorTerminal(
+        return normalizeControlFlowExpression(
             field->object, std::move(current), region, scope, false);
     if (auto* index = dynamic_cast<IndexExpr*>(expression.get()))
         return normalizeOrderedOperands(
             {&index->object, &index->index}, std::move(current),
             region, scope);
     if (auto* length = dynamic_cast<SliceLengthExpr*>(expression.get()))
-        return normalizeIteratorTerminal(
+        return normalizeControlFlowExpression(
             length->slice, std::move(current), region, scope, false);
     if (auto* array = dynamic_cast<ArrayLiteralExpr*>(expression.get())) {
         std::vector<std::unique_ptr<Expr>*> operands;
@@ -1600,18 +1726,18 @@ ControlFlowBuilder::normalizeIteratorTerminal(
     }
     if (auto* record = dynamic_cast<RecordLiteralExpr*>(expression.get())) {
         for (const auto& field : record->fields) {
-            if (!containsIteratorTerminal(field.value.get())) continue;
+            if (!containsPendingControlFlow(field.value.get())) continue;
             error(field.value->location,
-                  "iterator terminal in a record initializer requires "
+                  "control flow in a record initializer requires "
                   "allocation-aware expression CFG normalization");
             return std::nullopt;
         }
         return current;
     }
     if (auto* allocation = dynamic_cast<HeapAllocExpr*>(expression.get())) {
-        if (containsIteratorTerminal(allocation->initializer.get())) {
+        if (containsPendingControlFlow(allocation->initializer.get())) {
             error(allocation->initializer->location,
-                  "iterator terminal in a heap initializer requires "
+                  "control flow in a heap initializer requires "
                   "allocation-aware expression CFG normalization");
             return std::nullopt;
         }
@@ -1645,16 +1771,16 @@ ControlFlowBuilder::normalizeIteratorTerminal(
             operands, std::move(current), region, scope);
     }
     if (auto* move = dynamic_cast<MoveExpr*>(expression.get()))
-        return normalizeIteratorTerminal(
+        return normalizeControlFlowExpression(
             move->operand, std::move(current), region, scope, false);
     if (auto* borrow = dynamic_cast<BorrowExpr*>(expression.get()))
-        return normalizeIteratorTerminal(
+        return normalizeControlFlowExpression(
             borrow->operand, std::move(current), region, scope, false);
     if (auto* dereference = dynamic_cast<DerefExpr*>(expression.get()))
-        return normalizeIteratorTerminal(
+        return normalizeControlFlowExpression(
             dereference->operand, std::move(current), region, scope, false);
     if (auto* address = dynamic_cast<AddrOfExpr*>(expression.get()))
-        return normalizeIteratorTerminal(
+        return normalizeControlFlowExpression(
             address->operand, std::move(current), region, scope, false);
     if (auto* assignment = dynamic_cast<AssignExpr*>(expression.get())) {
         if (containsIteratorTerminal(assignment->lhs.get())) {
@@ -1662,7 +1788,7 @@ ControlFlowBuilder::normalizeIteratorTerminal(
                   "iterator terminal cannot form an assignment destination");
             return std::nullopt;
         }
-        return normalizeIteratorTerminal(
+        return normalizeControlFlowExpression(
             assignment->rhs, std::move(current), region, scope, false);
     }
     return current;
@@ -1674,7 +1800,7 @@ ControlFlowBuilder::normalizeOrderedOperands(
     OpenBlock current, RegionId region, ScopeId scope) {
     for (size_t index = 0; index < operands.size(); ++index) {
         auto* operand = operands[index];
-        if (!operand || !containsIteratorTerminal(operand->get())) continue;
+        if (!operand || !containsPendingControlFlow(operand->get())) continue;
 
         // A later control-flow operand must not move evaluation of any
         // preceding value across its new CFG. Copy operands are frozen into
@@ -1687,13 +1813,13 @@ ControlFlowBuilder::normalizeOrderedOperands(
                 return std::nullopt;
         }
 
-        auto normalized = normalizeIteratorTerminal(
+        auto normalized = normalizeControlFlowExpression(
             *operand, std::move(current), region, scope, false);
         if (!normalized) return std::nullopt;
         current = std::move(*normalized);
-        if (containsIteratorTerminal(operand->get())) {
+        if (containsPendingControlFlow(operand->get())) {
             error((*operand)->location,
-                  "iterator terminal remains in an unsupported expression position");
+                  "control-flow expression remains in an unsupported position");
             return std::nullopt;
         }
     }
@@ -1777,6 +1903,80 @@ bool ControlFlowBuilder::containsIteratorTerminal(
     return false;
 }
 
+bool ControlFlowBuilder::containsPendingControlFlow(
+    const Expr* expression) const {
+    if (!expression) return false;
+    if (dynamic_cast<const TryExpr*>(expression) ||
+        dynamic_cast<const BlockExpr*>(expression) ||
+        dynamic_cast<const IfExpr*>(expression))
+        return true;
+    if (const auto* call = dynamic_cast<const CallExpr*>(expression)) {
+        if (call->iteratorOp == IteratorOp::Fold ||
+            call->iteratorOp == IteratorOp::ForEach ||
+            call->iteratorOp == IteratorOp::Count ||
+            call->iteratorOp == IteratorOp::Collect)
+            return true;
+        if (containsPendingControlFlow(call->callee.get())) return true;
+        for (const auto& argument : call->args)
+            if (containsPendingControlFlow(argument.get())) return true;
+        return false;
+    }
+    if (const auto* binary = dynamic_cast<const BinaryExpr*>(expression))
+        return containsPendingControlFlow(binary->lhs.get()) ||
+            containsPendingControlFlow(binary->rhs.get());
+    if (const auto* unary = dynamic_cast<const UnaryExpr*>(expression))
+        return containsPendingControlFlow(unary->operand.get());
+    if (const auto* selection =
+            dynamic_cast<const DynamicSelectExpr*>(expression)) {
+        for (const auto& argument : selection->filterArguments)
+            if (containsPendingControlFlow(argument.get())) return true;
+        return false;
+    }
+    if (const auto* launch = dynamic_cast<const LaunchExpr*>(expression)) {
+        if (containsPendingControlFlow(launch->threads.get())) return true;
+        for (const auto& argument : launch->args)
+            if (containsPendingControlFlow(argument.get())) return true;
+        return false;
+    }
+    if (const auto* variant =
+            dynamic_cast<const VariantConstructExpr*>(expression)) {
+        for (const auto& argument : variant->args)
+            if (containsPendingControlFlow(argument.get())) return true;
+        return false;
+    }
+    if (const auto* field = dynamic_cast<const FieldAccessExpr*>(expression))
+        return containsPendingControlFlow(field->object.get());
+    if (const auto* index = dynamic_cast<const IndexExpr*>(expression))
+        return containsPendingControlFlow(index->object.get()) ||
+            containsPendingControlFlow(index->index.get());
+    if (const auto* length = dynamic_cast<const SliceLengthExpr*>(expression))
+        return containsPendingControlFlow(length->slice.get());
+    if (const auto* array = dynamic_cast<const ArrayLiteralExpr*>(expression)) {
+        for (const auto& element : array->elements)
+            if (containsPendingControlFlow(element.get())) return true;
+        return false;
+    }
+    if (const auto* record = dynamic_cast<const RecordLiteralExpr*>(expression)) {
+        for (const auto& field : record->fields)
+            if (containsPendingControlFlow(field.value.get())) return true;
+        return false;
+    }
+    if (const auto* allocation = dynamic_cast<const HeapAllocExpr*>(expression))
+        return containsPendingControlFlow(allocation->initializer.get());
+    if (const auto* move = dynamic_cast<const MoveExpr*>(expression))
+        return containsPendingControlFlow(move->operand.get());
+    if (const auto* borrow = dynamic_cast<const BorrowExpr*>(expression))
+        return containsPendingControlFlow(borrow->operand.get());
+    if (const auto* dereference = dynamic_cast<const DerefExpr*>(expression))
+        return containsPendingControlFlow(dereference->operand.get());
+    if (const auto* address = dynamic_cast<const AddrOfExpr*>(expression))
+        return containsPendingControlFlow(address->operand.get());
+    if (const auto* assignment = dynamic_cast<const AssignExpr*>(expression))
+        return containsPendingControlFlow(assignment->lhs.get()) ||
+            containsPendingControlFlow(assignment->rhs.get());
+    return false;
+}
+
 bool ControlFlowBuilder::hoistCopyOperand(
     std::unique_ptr<Expr>& expression, OpenBlock& current,
     ScopeId scope) {
@@ -1784,7 +1984,8 @@ bool ControlFlowBuilder::hoistCopyOperand(
     if (dynamic_cast<IntLiteralExpr*>(expression.get()) ||
         dynamic_cast<FloatLiteralExpr*>(expression.get()) ||
         dynamic_cast<StringLiteralExpr*>(expression.get()) ||
-        dynamic_cast<BoolLiteralExpr*>(expression.get()))
+        dynamic_cast<BoolLiteralExpr*>(expression.get()) ||
+        dynamic_cast<UnitExpr*>(expression.get()))
         return true;
 
     if (!bindExpr(expression.get())) return false;

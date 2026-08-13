@@ -464,6 +464,11 @@ struct BoolLiteralExpr : Expr {
     bool value = false;
 };
 
+// Canonical zero-sized value produced after a unit-valued control expression
+// has been expanded into CFG blocks. It carries no execution semantics of its
+// own; the surrounding edges already encode those effects.
+struct UnitExpr : Expr {};
+
 struct IdentifierExpr : Expr {
     std::string name;
     LocalId local;

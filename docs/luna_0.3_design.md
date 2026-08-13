@@ -744,9 +744,18 @@ references. Move-only or unit siblings, short-circuit right operands, and record
 allocation-sensitive initializers remain explicitly rejected until transfer, conditional-CFG, and
 allocation-order semantics exist; they are never copied or reordered implicitly.
 
-Item 10 is not complete as a whole. Conditional/allocation-aware and non-Copy expression hoisting,
+The first conditional-expression slice is now complete for Luna's current block syntax. Because a
+block has no tail value, both `BlockExpr` and block-style `IfExpr` are semantically `unit`; CFG
+construction consumes their structured blocks, emits lexical regions plus ordinary branch/jump
+edges, and replaces the completed expression with a zero-sized `UnitExpr`. Nested `else if` and an
+`if` used in an ordered operand position follow the same path. `UnitExpr` owns no body or successor
+and therefore does not add a second control IR. The verifier still rejects any sealed graph that
+retains `BlockExpr` or `IfExpr`. A future tail-value design would require an explicit synthetic
+result local, but that value semantics is not inferred by the 0.3 implementation.
+
+Item 10 is not complete as a whole. Short-circuit/allocation-aware and non-Copy expression hoisting,
 capturing closure environments, and non-Copy item/callable per-element ownership state remain
-explicit following boundaries. The remaining work then normalizes other control-flow expressions, slot, and fragment
+explicit following boundaries. The remaining work then normalizes `TryExpr` and other control-flow expressions, slot, and fragment
 paths, atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured
 execution is deleted and the full verifier/codegen regression gate passes does the item-level gate
