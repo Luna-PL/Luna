@@ -14,6 +14,7 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     mBindings.clear();
     mMaterializedIterators.clear();
     mCleanupByLocal.clear();
+    mActiveExpressionCleanups.clear();
     mBindingIteratorRecipe = false;
     mTerminalCounter = 0;
     mExpressionCounter = 0;
@@ -293,6 +294,9 @@ ControlFlowBuilder::lowerStatement(
         auto cleanups = lowerCleanupObligations(returned->cleanups, scope);
         cleanups.insert(cleanups.end(), current.cleanups.begin(),
                         current.cleanups.end());
+        cleanups.insert(cleanups.end(),
+                        mActiveExpressionCleanups.begin(),
+                        mActiveExpressionCleanups.end());
         auto& terminator = mGraph->blocks[current.block.value].terminator;
         terminator.kind = TerminatorKind::Return;
         terminator.location = returned->location;
@@ -1829,6 +1833,9 @@ ControlFlowBuilder::lowerTryExpression(
     failureCleanups.insert(
         failureCleanups.end(), current.cleanups.begin(),
         current.cleanups.end());
+    failureCleanups.insert(
+        failureCleanups.end(), mActiveExpressionCleanups.begin(),
+        mActiveExpressionCleanups.end());
     auto& failureTerminator = mGraph->blocks[failure.value].terminator;
     failureTerminator.kind = TerminatorKind::Return;
     failureTerminator.location = expression->location;
@@ -2146,42 +2153,43 @@ std::optional<ControlFlowBuilder::OpenBlock>
 ControlFlowBuilder::normalizeOrderedOperands(
     const std::vector<std::unique_ptr<Expr>*>& operands,
     OpenBlock current, RegionId region, ScopeId scope) {
+    const size_t cleanupDepth = mActiveExpressionCleanups.size();
+    const auto restoreCleanupDepth = [this, cleanupDepth] {
+        mActiveExpressionCleanups.resize(cleanupDepth);
+    };
     for (size_t index = 0; index < operands.size(); ++index) {
         auto* operand = operands[index];
         if (!operand || !containsPendingControlFlow(operand->get())) continue;
 
-        bool allowCleanupBearing = true;
-        for (size_t following = index; following < operands.size();
-             ++following) {
-            const auto* candidate = operands[following];
-            if (candidate && containsPotentialEarlyExit(candidate->get())) {
-                allowCleanupBearing = false;
-                break;
-            }
-        }
-
         // A later control-flow operand must not move evaluation of any
         // preceding value across its new CFG. Each eager value is frozen into
         // a synthetic local in source order. Copy values are read normally;
-        // cleanup-free affine values are explicitly transferred once.
+        // affine values are explicitly transferred once, while their cleanup
+        // rows remain visible to any early exit until the parent is emitted.
         for (size_t previous = 0; previous < index; ++previous) {
             auto* earlier = operands[previous];
             if (earlier &&
-                !hoistOrderedOperand(
-                    *earlier, current, scope, allowCleanupBearing))
+                !hoistOrderedOperand(*earlier, current, scope)) {
+                restoreCleanupDepth();
                 return std::nullopt;
+            }
         }
 
         auto normalized = normalizeControlFlowExpression(
             *operand, std::move(current), region, scope, false);
-        if (!normalized) return std::nullopt;
+        if (!normalized) {
+            restoreCleanupDepth();
+            return std::nullopt;
+        }
         current = std::move(*normalized);
         if (containsPendingControlFlow(operand->get())) {
             error((*operand)->location,
                   "control-flow expression remains in an unsupported position");
+            restoreCleanupDepth();
             return std::nullopt;
         }
     }
+    restoreCleanupDepth();
     return current;
 }
 
@@ -2346,81 +2354,9 @@ bool ControlFlowBuilder::containsPendingControlFlow(
     return false;
 }
 
-bool ControlFlowBuilder::containsPotentialEarlyExit(
-    const Expr* expression) const {
-    if (!expression) return false;
-    if (dynamic_cast<const TryExpr*>(expression) ||
-        dynamic_cast<const BlockExpr*>(expression) ||
-        dynamic_cast<const IfExpr*>(expression))
-        return true;
-    if (const auto* call = dynamic_cast<const CallExpr*>(expression)) {
-        if (containsPotentialEarlyExit(call->callee.get())) return true;
-        for (const auto& argument : call->args)
-            if (containsPotentialEarlyExit(argument.get())) return true;
-        return false;
-    }
-    if (const auto* binary = dynamic_cast<const BinaryExpr*>(expression))
-        return containsPotentialEarlyExit(binary->lhs.get()) ||
-            containsPotentialEarlyExit(binary->rhs.get());
-    if (const auto* unary = dynamic_cast<const UnaryExpr*>(expression))
-        return containsPotentialEarlyExit(unary->operand.get());
-    if (const auto* selection =
-            dynamic_cast<const DynamicSelectExpr*>(expression)) {
-        for (const auto& argument : selection->filterArguments)
-            if (containsPotentialEarlyExit(argument.get())) return true;
-        return false;
-    }
-    if (const auto* launch = dynamic_cast<const LaunchExpr*>(expression)) {
-        if (containsPotentialEarlyExit(launch->threads.get())) return true;
-        for (const auto& argument : launch->args)
-            if (containsPotentialEarlyExit(argument.get())) return true;
-        return false;
-    }
-    if (const auto* variant =
-            dynamic_cast<const VariantConstructExpr*>(expression)) {
-        for (const auto& argument : variant->args)
-            if (containsPotentialEarlyExit(argument.get())) return true;
-        return false;
-    }
-    if (const auto* result =
-            dynamic_cast<const ResultConstructExpr*>(expression))
-        return containsPotentialEarlyExit(result->payload.get());
-    if (const auto* field = dynamic_cast<const FieldAccessExpr*>(expression))
-        return containsPotentialEarlyExit(field->object.get());
-    if (const auto* index = dynamic_cast<const IndexExpr*>(expression))
-        return containsPotentialEarlyExit(index->object.get()) ||
-            containsPotentialEarlyExit(index->index.get());
-    if (const auto* length = dynamic_cast<const SliceLengthExpr*>(expression))
-        return containsPotentialEarlyExit(length->slice.get());
-    if (const auto* array = dynamic_cast<const ArrayLiteralExpr*>(expression)) {
-        for (const auto& element : array->elements)
-            if (containsPotentialEarlyExit(element.get())) return true;
-        return false;
-    }
-    if (const auto* record = dynamic_cast<const RecordLiteralExpr*>(expression)) {
-        for (const auto& field : record->fields)
-            if (containsPotentialEarlyExit(field.value.get())) return true;
-        return false;
-    }
-    if (const auto* allocation = dynamic_cast<const HeapAllocExpr*>(expression))
-        return containsPotentialEarlyExit(allocation->initializer.get());
-    if (const auto* move = dynamic_cast<const MoveExpr*>(expression))
-        return containsPotentialEarlyExit(move->operand.get());
-    if (const auto* borrow = dynamic_cast<const BorrowExpr*>(expression))
-        return containsPotentialEarlyExit(borrow->operand.get());
-    if (const auto* dereference = dynamic_cast<const DerefExpr*>(expression))
-        return containsPotentialEarlyExit(dereference->operand.get());
-    if (const auto* address = dynamic_cast<const AddrOfExpr*>(expression))
-        return containsPotentialEarlyExit(address->operand.get());
-    if (const auto* assignment = dynamic_cast<const AssignExpr*>(expression))
-        return containsPotentialEarlyExit(assignment->lhs.get()) ||
-            containsPotentialEarlyExit(assignment->rhs.get());
-    return false;
-}
-
 bool ControlFlowBuilder::hoistOrderedOperand(
     std::unique_ptr<Expr>& expression, OpenBlock& current,
-    ScopeId scope, bool allowCleanupBearing) {
+    ScopeId scope) {
     if (!expression) return true;
     if (dynamic_cast<IntLiteralExpr*>(expression.get()) ||
         dynamic_cast<FloatLiteralExpr*>(expression.get()) ||
@@ -2479,12 +2415,6 @@ bool ControlFlowBuilder::hoistOrderedOperand(
               "expression sibling hoisting does not yet support linear state");
         return false;
     }
-    if (type->sysmeta.resource.cleanupRequired &&
-        !allowCleanupBearing) {
-        error(expression->location,
-              "cleanup-bearing expression sibling may cross an early-exit CFG path");
-        return false;
-    }
     if (luna::ownership::isMoveOnly(usage) &&
         !explicitFreshTransfer) {
         error(expression->location,
@@ -2510,6 +2440,15 @@ bool ControlFlowBuilder::hoistOrderedOperand(
     declaration->initializer = std::move(expression);
     mGraph->blocks[current.block.value].operations.push_back(
         std::move(declaration));
+    if (type->sysmeta.resource.cleanupRequired) {
+        const auto cleanup = mCleanupByLocal.find(local.value);
+        if (cleanup == mCleanupByLocal.end()) {
+            error(expression->location,
+                  "cleanup-bearing expression sibling has no canonical cleanup row");
+            return false;
+        }
+        mActiveExpressionCleanups.push_back(cleanup->second);
+    }
 
     auto identifier = std::make_unique<IdentifierExpr>();
     identifier->location =

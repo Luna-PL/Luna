@@ -131,10 +131,8 @@ private:
         OpenBlock current, RegionId region, ScopeId scope);
     bool containsIteratorTerminal(const Expr* expression) const;
     bool containsPendingControlFlow(const Expr* expression) const;
-    bool containsPotentialEarlyExit(const Expr* expression) const;
     bool hoistOrderedOperand(std::unique_ptr<Expr>& expression,
-                             OpenBlock& current, ScopeId scope,
-                             bool allowCleanupBearing);
+                             OpenBlock& current, ScopeId scope);
     std::optional<OpenBlock> lowerIteratorTerminal(
         std::unique_ptr<CallExpr> terminal, OpenBlock current,
         RegionId region, ScopeId scope, bool discardUnitResult,
@@ -176,6 +174,11 @@ private:
     std::vector<std::unordered_map<std::string, MaterializedIteratorRecipe>>
         mMaterializedIterators;
     std::unordered_map<uint32_t, CleanupId> mCleanupByLocal;
+    // Cleanup-bearing synthetic operands are active from their generated let
+    // until the parent expression consumes them. Structured early exits built
+    // in that interval must carry these obligations even though the frontend
+    // could not name compiler-generated locals.
+    std::vector<CleanupId> mActiveExpressionCleanups;
     std::vector<std::string> mErrors;
     bool mBindingIteratorRecipe = false;
     uint64_t mTerminalCounter = 0;

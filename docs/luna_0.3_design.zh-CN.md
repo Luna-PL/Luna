@@ -663,12 +663,13 @@ tag/ownership flag。独立 verifier 会检查这些 let/local/type 引用。同
 现也允许由 Affine-returning call 或显式 `move` 生成的无 cleanup Affine 值：其
 synthetic local 使用 Affine contract，父表达式通过唯一的生成 `MoveExpr` 读取，
 verifier 会拒绝伪造的 Copy 读取。带 cleanup 义务且显式转移的 Affine 值，
-在余下 operand 都不可能离开当前函数时也可以 hoist：它的普通 cleanup row
-在展开的 CFG 中保持 active，随后由父表达式中生成的 `MoveExpr` 消费。
-构建期递归扫描会在 `TryExpr`、`BlockExpr` 或 `IfExpr` 之前保守拒绝此类
-hoist，因而不需要 runtime initialized flag。Linear sibling、可能跨越 early exit
-的 cleanup-bearing sibling、unit sibling 以及 allocating struct/heap initializer 仍被明确
-拒绝，等待逐路径消费与 allocation-order 语义；它们不会被隐式复制或重排。
+现也可以跨越后续控制流。构建 bridge 会在父表达式尚未发射时记录其
+synthetic cleanup row 为 active；在此期间构建的 `TryExpr` 失败路径或结构化
+`return` 会把它纳入普通 `Return.exitCleanups`，成功路径则到达父表达式中
+生成的 `MoveExpr` 并消费它。独立 ownership dataflow 会拒绝缺失的 early-exit
+cleanup，因而不需要 runtime initialized flag。Linear sibling、unit sibling 以及
+allocating struct/heap initializer 仍被明确拒绝，等待逐路径的恰好一次消费证明与
+allocation-order 语义；它们不会被隐式复制或重排。
 短路 operand 则进入下文的 conditional CFG 规范化。
 
 匿名 structural record 现已与会分配的 product 区分。其 inline 值构造没有 allocation
@@ -715,8 +716,8 @@ loop 的 header 同时是初始 edge 与 body backedge 的目标；每次经过 
 声明时重新激活。这在不增加 runtime initialized flag 的情况下表达了源语言的
 重复求值；普通 condition 仍保持原有的紧凑单 block 形态。
 
-第 10 项尚未整体完成。上述 allocating struct/heap initialization、Linear 以及跨越
-early-exit 的 cleanup-bearing expression hoisting、
+第 10 项尚未整体完成。上述 allocating struct/heap initialization、Linear
+expression hoisting、
 捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup
 状态仍是明确的后续边界。
 随后规范化 slot 和 fragment

@@ -2,6 +2,7 @@
 #include "moonir/ControlFlowBuilder.h"
 #include "moonir/Verifier.h"
 
+#include <algorithm>
 #include <iostream>
 #include <type_traits>
 
@@ -1895,7 +1896,10 @@ int main() {
             "cleanup-bearing affine sibling did not survive a non-exiting terminal CFG");
 
     auto cleanupExitBoundary = std::make_unique<moon::BlockStmt>();
-    auto cleanupExitUse = std::make_unique<moon::ExprStmt>();
+    auto cleanupExitBinding = std::make_unique<moon::LetStmt>();
+    cleanupExitBinding->name = "cleanupTryCombined";
+    cleanupExitBinding->type = stringId;
+    cleanupExitBinding->usage = luna::ownership::Usage::Affine;
     auto cleanupExitCall = std::make_unique<moon::CallExpr>();
     auto cleanupExitReducer = std::make_unique<moon::IdentifierExpr>();
     cleanupExitReducer->name = "affineReducer";
@@ -1922,22 +1926,131 @@ int main() {
     cleanupExitInput->type = resultI32BoolId;
     cleanupExitTry->operand = std::move(cleanupExitInput);
     cleanupExitCall->args.push_back(std::move(cleanupExitTry));
-    cleanupExitUse->expr = std::move(cleanupExitCall);
-    cleanupExitBoundary->stmts.push_back(std::move(cleanupExitUse));
-    if (cfgBuilder.build(
-            std::move(cleanupExitBoundary),
-            {affineReducerParameter, affineValueParameter, tryParameter},
-            moon::RegionKind::Function, module))
+    cleanupExitBinding->initializer = std::move(cleanupExitCall);
+    cleanupExitBoundary->stmts.push_back(
+        std::move(cleanupExitBinding));
+    auto cleanupExitRelease = std::make_unique<moon::FreeStmt>();
+    cleanupExitRelease->isImplicit = true;
+    cleanupExitRelease->action = cleanupActionForType(TyString);
+    auto cleanupExitResult = std::make_unique<moon::IdentifierExpr>();
+    cleanupExitResult->name = "cleanupTryCombined";
+    cleanupExitResult->type = stringId;
+    cleanupExitRelease->operand = std::move(cleanupExitResult);
+    cleanupExitBoundary->stmts.push_back(
+        std::move(cleanupExitRelease));
+    auto cleanupExitCfg = cfgBuilder.build(
+        std::move(cleanupExitBoundary),
+        {affineReducerParameter, affineValueParameter, tryParameter},
+        moon::RegionKind::Function, module);
+    const moon::LocalRecord* cleanupExitState = nullptr;
+    moon::CleanupId cleanupExitId;
+    moon::Terminator* cleanupExitFailure = nullptr;
+    if (cleanupExitCfg) {
+        for (const auto& local : cleanupExitCfg->locals)
+            if (local.name.rfind("$expression.hoist.", 0) == 0)
+                cleanupExitState = &local;
+        if (cleanupExitState)
+            for (const auto& cleanup : cleanupExitCfg->cleanups)
+                if (cleanup.place.root == cleanupExitState->id) {
+                    cleanupExitId = cleanup.id;
+                    break;
+                }
+        for (auto& block : cleanupExitCfg->blocks) {
+            auto* propagated =
+                dynamic_cast<moon::ResultConstructExpr*>(
+                    block.terminator.operand.get());
+            if (block.terminator.kind == moon::TerminatorKind::Return &&
+                propagated && !propagated->isOk)
+                cleanupExitFailure = &block.terminator;
+        }
+    }
+    if (!cleanupExitCfg ||
+        !cfgVerifier.verify(*cleanupExitCfg, module) ||
+        !cleanupExitState || cleanupExitId.empty() ||
+        !cleanupExitFailure ||
+        std::find(cleanupExitFailure->exitCleanups.begin(),
+                  cleanupExitFailure->exitCleanups.end(),
+                  cleanupExitId) ==
+            cleanupExitFailure->exitCleanups.end())
         return fail(
-            "cleanup-bearing affine sibling crossed an early-exit CFG path");
-    bool diagnosedCleanupExit = false;
-    for (const auto& message : cfgBuilder.errors())
-        diagnosedCleanupExit = diagnosedCleanupExit ||
-            message.find("may cross an early-exit CFG path") !=
-                std::string::npos;
-    if (!diagnosedCleanupExit)
+            "Try failure did not clean an active affine expression sibling");
+    const auto preservedCleanupExit = cleanupExitFailure->exitCleanups;
+    cleanupExitFailure->exitCleanups.erase(
+        std::remove(cleanupExitFailure->exitCleanups.begin(),
+                    cleanupExitFailure->exitCleanups.end(),
+                    cleanupExitId),
+        cleanupExitFailure->exitCleanups.end());
+    if (cfgVerifier.verify(*cleanupExitCfg, module))
         return fail(
-            "cleanup-bearing affine sibling lost its early-exit boundary");
+            "CFG verifier accepted a Try edge without its affine sibling cleanup");
+    cleanupExitFailure->exitCleanups = preservedCleanupExit;
+    if (!cfgVerifier.verify(*cleanupExitCfg, module))
+        return fail(
+            "restored affine Try cleanup CFG did not verify");
+
+    auto cleanupReturnBoundary = std::make_unique<moon::BlockStmt>();
+    auto cleanupReturnUse = std::make_unique<moon::ExprStmt>();
+    auto cleanupReturnCall = std::make_unique<moon::CallExpr>();
+    auto cleanupReturnReducer = std::make_unique<moon::IdentifierExpr>();
+    cleanupReturnReducer->name = "affineReducer";
+    cleanupReturnReducer->type = affineReducerTypeId;
+    cleanupReturnCall->callee = std::move(cleanupReturnReducer);
+    cleanupReturnCall->type = stringId;
+    cleanupReturnCall->returnUsage = luna::ownership::Usage::Affine;
+    auto cleanupReturnMove = std::make_unique<moon::MoveExpr>();
+    cleanupReturnMove->type = stringId;
+    auto cleanupReturnSource = std::make_unique<moon::IdentifierExpr>();
+    cleanupReturnSource->name = "affineValue";
+    cleanupReturnSource->type = stringId;
+    cleanupReturnMove->operand = std::move(cleanupReturnSource);
+    cleanupReturnCall->args.push_back(std::move(cleanupReturnMove));
+    auto cleanupReturnBlock = std::make_unique<moon::BlockExpr>();
+    cleanupReturnBlock->type = unitId;
+    cleanupReturnBlock->block = std::make_unique<moon::BlockStmt>();
+    auto cleanupReturn = std::make_unique<moon::ReturnStmt>();
+    auto cleanupReturnValue = std::make_unique<moon::BoolLiteralExpr>();
+    cleanupReturnValue->value = false;
+    cleanupReturnValue->type = boolId;
+    cleanupReturn->value = std::move(cleanupReturnValue);
+    cleanupReturnBlock->block->stmts.push_back(
+        std::move(cleanupReturn));
+    cleanupReturnCall->args.push_back(std::move(cleanupReturnBlock));
+    cleanupReturnUse->expr = std::move(cleanupReturnCall);
+    cleanupReturnBoundary->stmts.push_back(
+        std::move(cleanupReturnUse));
+    auto cleanupReturnCfg = cfgBuilder.build(
+        std::move(cleanupReturnBoundary),
+        {affineReducerParameter, affineValueParameter},
+        moon::RegionKind::Function, module);
+    const moon::LocalRecord* cleanupReturnState = nullptr;
+    moon::CleanupId cleanupReturnId;
+    const moon::Terminator* cleanupReturnTerminator = nullptr;
+    if (cleanupReturnCfg) {
+        for (const auto& local : cleanupReturnCfg->locals)
+            if (local.name.rfind("$expression.hoist.", 0) == 0)
+                cleanupReturnState = &local;
+        if (cleanupReturnState)
+            for (const auto& cleanup : cleanupReturnCfg->cleanups)
+                if (cleanup.place.root == cleanupReturnState->id) {
+                    cleanupReturnId = cleanup.id;
+                    break;
+                }
+        for (const auto& block : cleanupReturnCfg->blocks)
+            if (block.terminator.kind == moon::TerminatorKind::Return &&
+                dynamic_cast<const moon::BoolLiteralExpr*>(
+                    block.terminator.operand.get()))
+                cleanupReturnTerminator = &block.terminator;
+    }
+    if (!cleanupReturnCfg ||
+        !cfgVerifier.verify(*cleanupReturnCfg, module) ||
+        !cleanupReturnState || cleanupReturnId.empty() ||
+        !cleanupReturnTerminator ||
+        std::find(cleanupReturnTerminator->exitCleanups.begin(),
+                  cleanupReturnTerminator->exitCleanups.end(),
+                  cleanupReturnId) ==
+            cleanupReturnTerminator->exitCleanups.end())
+        return fail(
+            "block return did not clean an active affine expression sibling");
 
     auto affineSiblingBoundary = std::make_unique<moon::BlockStmt>();
     auto affineSiblingUse = std::make_unique<moon::ExprStmt>();
