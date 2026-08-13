@@ -118,6 +118,12 @@ int main() {
          luna::ownership::Usage::Affine});
     const auto affineReducerTypeId = module.registerType(
         affineReducerType);
+    auto affineValueProducerType = Type::makeFunction(
+        {}, TyI32, {},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Affine});
+    const auto affineValueProducerTypeId = module.registerType(
+        affineValueProducerType);
     auto actionType = Type::makeFunction(
         {TyI32}, TyUnit,
         {{luna::ownership::Relation::Owned,
@@ -1725,6 +1731,86 @@ int main() {
         return fail(
             "Copy binary sibling did not preserve evaluation order across terminal CFG");
 
+    auto affineOrderedBoundary = std::make_unique<moon::BlockStmt>();
+    auto affineOrderedUse = std::make_unique<moon::ExprStmt>();
+    auto affineOrderedCall = std::make_unique<moon::CallExpr>();
+    auto affineOrderedReducer = std::make_unique<moon::IdentifierExpr>();
+    affineOrderedReducer->name = "reducer";
+    affineOrderedReducer->type = reducerTypeId;
+    affineOrderedCall->callee = std::move(affineOrderedReducer);
+    affineOrderedCall->type = i32Id;
+    auto producedAffine = std::make_unique<moon::CallExpr>();
+    auto affineProducer = std::make_unique<moon::IdentifierExpr>();
+    affineProducer->name = "affineProducer";
+    affineProducer->type = affineValueProducerTypeId;
+    producedAffine->callee = std::move(affineProducer);
+    producedAffine->type = i32Id;
+    producedAffine->returnUsage = luna::ownership::Usage::Affine;
+    affineOrderedCall->args.push_back(std::move(producedAffine));
+    affineOrderedCall->args.push_back(makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false));
+    affineOrderedUse->expr = std::move(affineOrderedCall);
+    affineOrderedBoundary->stmts.push_back(
+        std::move(affineOrderedUse));
+    moon::Param affineProducerParameter;
+    affineProducerParameter.name = "affineProducer";
+    affineProducerParameter.type = affineValueProducerTypeId;
+    auto affineOrderedCfg = cfgBuilder.build(
+        std::move(affineOrderedBoundary),
+        {reducerParameter, affineProducerParameter},
+        moon::RegionKind::Function, module);
+    moon::LetStmt* affineOrderedState = nullptr;
+    moon::CallExpr* affineOrderedConsumer = nullptr;
+    moon::MoveExpr* affineOrderedTransfer = nullptr;
+    if (affineOrderedCfg)
+        for (auto& block : affineOrderedCfg->blocks)
+            for (auto& operation : block.operations) {
+                if (auto* declaration =
+                        dynamic_cast<moon::LetStmt*>(
+                            operation.get());
+                    declaration && declaration->name.rfind(
+                        "$expression.hoist.", 0) == 0 &&
+                    declaration->usage ==
+                        luna::ownership::Usage::Affine)
+                    affineOrderedState = declaration;
+                auto* statement =
+                    dynamic_cast<moon::ExprStmt*>(operation.get());
+                auto* call = statement
+                    ? dynamic_cast<moon::CallExpr*>(
+                          statement->expr.get())
+                    : nullptr;
+                if (call && call->args.size() == 2) {
+                    affineOrderedConsumer = call;
+                    affineOrderedTransfer =
+                        dynamic_cast<moon::MoveExpr*>(
+                            call->args.front().get());
+                }
+            }
+    const auto* affineOrderedIdentifier = affineOrderedTransfer
+        ? dynamic_cast<const moon::IdentifierExpr*>(
+              affineOrderedTransfer->operand.get())
+        : nullptr;
+    if (!affineOrderedCfg ||
+        !cfgVerifier.verify(*affineOrderedCfg, module) ||
+        !affineOrderedState || !affineOrderedIdentifier ||
+        affineOrderedIdentifier->local != affineOrderedState->local)
+        return fail(
+            "cleanup-free affine sibling did not transfer once across terminal CFG");
+    auto preservedAffineTransfer = std::move(
+        affineOrderedConsumer->args.front());
+    affineOrderedConsumer->args.front() = std::move(
+        affineOrderedTransfer->operand);
+    if (cfgVerifier.verify(*affineOrderedCfg, module))
+        return fail(
+            "CFG verifier accepted a copied affine expression sibling");
+    affineOrderedTransfer->operand = std::move(
+        affineOrderedConsumer->args.front());
+    affineOrderedConsumer->args.front() = std::move(
+        preservedAffineTransfer);
+    if (!cfgVerifier.verify(*affineOrderedCfg, module))
+        return fail(
+            "restored affine expression sibling CFG did not verify");
+
     auto affineSiblingBoundary = std::make_unique<moon::BlockStmt>();
     auto affineSiblingUse = std::make_unique<moon::ExprStmt>();
     auto affineSiblingCall = std::make_unique<moon::CallExpr>();
@@ -1756,7 +1842,7 @@ int main() {
     bool diagnosedAffineSibling = false;
     for (const auto& message : cfgBuilder.errors())
         diagnosedAffineSibling = diagnosedAffineSibling ||
-            message.find("requires a non-unit Copy value") !=
+            message.find("linear or cleanup-bearing state") !=
                 std::string::npos;
     if (!diagnosedAffineSibling)
         return fail(
@@ -2639,6 +2725,7 @@ int main() {
     reverse.registerType(predicateType);
     reverse.registerType(reducerType);
     reverse.registerType(affineReducerType);
+    reverse.registerType(affineValueProducerType);
     reverse.registerType(actionType);
     reverse.registerType(unitConsumerType);
     reverse.registerType(moveMapType);

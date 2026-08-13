@@ -740,9 +740,12 @@ expands into an iterator-terminal CFG, each earlier non-unit Copy value is first
 ordinary synthetic local and the parent expression reads it by LocalId. A callee load or
 side-effecting earlier call therefore cannot drift past the terminal loop, and no runtime tag or
 ownership flag is introduced. The independent verifier checks the resulting let/local/type
-references. Move-only or unit siblings and record/heap allocation-sensitive initializers remain
-explicitly rejected until transfer and allocation-order semantics exist; they are never copied or
-reordered implicitly. Short-circuit operands follow the conditional CFG normalization below.
+references. The same ordered lowering now accepts a cleanup-free Affine value produced by an
+Affine-returning call or explicit `move`: its synthetic local has Affine usage and the parent reads
+it through exactly one generated `MoveExpr`. The verifier rejects a forged Copy read. Linear and
+cleanup-bearing siblings, unit siblings, and record/heap allocation-sensitive initializers remain
+explicitly rejected until exit cleanup and allocation-order semantics exist; they are never copied
+or reordered implicitly. Short-circuit operands follow the conditional CFG normalization below.
 
 The first conditional-expression slice is now complete for Luna's current block syntax. Because a
 block has no tail value, both `BlockExpr` and block-style `IfExpr` are semantically `unit`; CFG
@@ -785,7 +788,7 @@ deactivates compile-time affine markers before the next header entry and the dec
 them on the next execution. This models source-level repeated evaluation without a runtime
 initialized flag, and an ordinary condition still keeps the previous compact single-block shape.
 
-Item 10 is not complete as a whole. Allocation-aware and non-Copy expression hoisting,
+Item 10 is not complete as a whole. Allocation-aware plus Linear/cleanup-bearing expression hoisting,
 capturing closure environments, and non-Copy item/callable per-element ownership state remain
 explicit following boundaries. The remaining work then normalizes slot and fragment
 paths, atomically replaces

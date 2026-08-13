@@ -659,8 +659,11 @@ callee/argument、非短路 binary、index、array、variant、dynamic-select fi
 operand 都会按源码顺序扫描；一旦后续 operand 展开为 iterator terminal CFG，较早的
 非 unit Copy 值会先进入普通 synthetic local，原表达式再通过该 LocalId 读取。因此
 callee load 或有副作用的 earlier call 不会被推迟到 terminal 循环之后，也不增加运行时
-tag/ownership flag。独立 verifier 会检查这些 let/local/type 引用。move-only 或 unit sibling
-以及 record/heap allocation-sensitive initializer 仍被明确拒绝，等待 transfer 和
+tag/ownership flag。独立 verifier 会检查这些 let/local/type 引用。同一有序 lowering
+现也允许由 Affine-returning call 或显式 `move` 生成的无 cleanup Affine 值：其
+synthetic local 使用 Affine contract，父表达式通过唯一的生成 `MoveExpr` 读取，
+verifier 会拒绝伪造的 Copy 读取。Linear 和 cleanup-bearing sibling、unit sibling
+以及 record/heap allocation-sensitive initializer 仍被明确拒绝，等待 exit cleanup 和
 allocation-order 语义的子阶段；它们不会被隐式复制或重排。短路 operand
 则进入下文的 conditional CFG 规范化。
 
@@ -700,7 +703,7 @@ loop 的 header 同时是初始 edge 与 body backedge 的目标；每次经过 
 声明时重新激活。这在不增加 runtime initialized flag 的情况下表达了源语言的
 重复求值；普通 condition 仍保持原有的紧凑单 block 形态。
 
-第 10 项尚未整体完成。上述 allocation-aware 与 non-Copy expression hoisting、
+第 10 项尚未整体完成。上述 allocation-aware 与 Linear/cleanup-bearing expression hoisting、
 捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup
 状态仍是明确的后续边界。
 随后规范化 slot 和 fragment

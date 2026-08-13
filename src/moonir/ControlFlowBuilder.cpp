@@ -2135,13 +2135,13 @@ ControlFlowBuilder::normalizeOrderedOperands(
         if (!operand || !containsPendingControlFlow(operand->get())) continue;
 
         // A later control-flow operand must not move evaluation of any
-        // preceding value across its new CFG. Copy operands are frozen into
-        // synthetic locals in source order; move-only hoisting remains an
-        // explicit later ownership subphase.
+        // preceding value across its new CFG. Each eager value is frozen into
+        // a synthetic local in source order. Copy values are read normally;
+        // cleanup-free affine values are explicitly transferred once.
         for (size_t previous = 0; previous < index; ++previous) {
             auto* earlier = operands[previous];
             if (earlier &&
-                !hoistCopyOperand(*earlier, current, scope))
+                !hoistOrderedOperand(*earlier, current, scope))
                 return std::nullopt;
         }
 
@@ -2319,7 +2319,7 @@ bool ControlFlowBuilder::containsPendingControlFlow(
     return false;
 }
 
-bool ControlFlowBuilder::hoistCopyOperand(
+bool ControlFlowBuilder::hoistOrderedOperand(
     std::unique_ptr<Expr>& expression, OpenBlock& current,
     ScopeId scope) {
     if (!expression) return true;
@@ -2337,6 +2337,14 @@ bool ControlFlowBuilder::hoistCopyOperand(
         const auto* local = mGraph->findLocal(identifier->local);
         if (local && local->kind == LocalKind::Synthetic) return true;
     }
+    if (const auto* transfer =
+            dynamic_cast<const MoveExpr*>(expression.get())) {
+        const auto* identifier = dynamic_cast<const IdentifierExpr*>(
+            transfer->operand.get());
+        const auto* local = identifier
+            ? mGraph->findLocal(identifier->local) : nullptr;
+        if (local && local->kind == LocalKind::Synthetic) return true;
+    }
 
     const auto* type = mModule->findType(expression->type);
     if (!type) {
@@ -2344,10 +2352,39 @@ bool ControlFlowBuilder::hoistCopyOperand(
               "expression sibling has no frozen type for CFG hoisting");
         return false;
     }
-    if (type->kind == TypeKind::Unit ||
-        type->sysmeta.resource.usage != luna::ownership::Usage::Copy) {
+    auto usage = type->sysmeta.resource.usage;
+    bool explicitFreshTransfer = false;
+    if (const auto* call = dynamic_cast<const CallExpr*>(expression.get())) {
+        usage = luna::ownership::strongerUsage(
+            usage, call->returnUsage);
+        explicitFreshTransfer = luna::ownership::isMoveOnly(
+            call->returnUsage);
+    } else if (const auto* transfer =
+                   dynamic_cast<const MoveExpr*>(expression.get())) {
+        explicitFreshTransfer = true;
+        if (const auto* identifier =
+                dynamic_cast<const IdentifierExpr*>(
+                    transfer->operand.get())) {
+            if (const auto* local = mGraph->findLocal(identifier->local))
+                usage = luna::ownership::strongerUsage(
+                    usage, local->usage);
+        }
+    }
+    if (type->kind == TypeKind::Unit) {
         error(expression->location,
-              "expression sibling hoisting currently requires a non-unit Copy value");
+              "expression sibling hoisting requires a non-unit value");
+        return false;
+    }
+    if (usage == luna::ownership::Usage::Linear ||
+        type->sysmeta.resource.cleanupRequired) {
+        error(expression->location,
+              "expression sibling hoisting does not yet support linear or cleanup-bearing state");
+        return false;
+    }
+    if (luna::ownership::isMoveOnly(usage) &&
+        !explicitFreshTransfer) {
+        error(expression->location,
+              "move-only expression sibling hoisting requires an explicit transfer");
         return false;
     }
 
@@ -2355,26 +2392,36 @@ bool ControlFlowBuilder::hoistCopyOperand(
         "$expression.hoist." + std::to_string(mExpressionCounter++);
     const LocalId local = addLocal(
         scope, LocalKind::Synthetic, name, expression->type,
-        luna::ownership::Usage::Copy);
+        usage);
     if (local.empty()) return false;
 
     auto declaration = std::make_unique<LetStmt>();
     declaration->location = expression->location;
     declaration->name = name;
     declaration->local = local;
-    declaration->usage = luna::ownership::Usage::Copy;
+    declaration->isLinear =
+        usage == luna::ownership::Usage::Linear;
+    declaration->usage = usage;
     declaration->type = expression->type;
     declaration->initializer = std::move(expression);
     mGraph->blocks[current.block.value].operations.push_back(
         std::move(declaration));
 
-    auto replacement = std::make_unique<IdentifierExpr>();
-    replacement->location =
+    auto identifier = std::make_unique<IdentifierExpr>();
+    identifier->location =
         mGraph->blocks[current.block.value].location;
-    replacement->name = name;
-    replacement->local = local;
-    replacement->type = type->id;
-    expression = std::move(replacement);
+    identifier->name = name;
+    identifier->local = local;
+    identifier->type = type->id;
+    if (luna::ownership::isMoveOnly(usage)) {
+        auto transfer = std::make_unique<MoveExpr>();
+        transfer->location = identifier->location;
+        transfer->type = type->id;
+        transfer->operand = std::move(identifier);
+        expression = std::move(transfer);
+    } else {
+        expression = std::move(identifier);
+    }
     return true;
 }
 
