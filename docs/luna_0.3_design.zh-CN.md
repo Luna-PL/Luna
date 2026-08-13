@@ -743,6 +743,19 @@ loop 的 header 同时是初始 edge 与 body backedge 的目标；每次经过 
 声明时重新激活。这在不增加 runtime initialized flag 的情况下表达了源语言的
 重复求值；普通 condition 仍保持原有的紧凑单 block 形态。
 
+第一个 slot/fragment 子阶段现已完成 static single-shot interceptor。带显式词法体的
+`apply { ... }` 在构建期解析其 `DeclarationRef` 并形成 `Apply` region；每个被调用的
+interceptor 由 construction body 克隆进 `Fragment` region，slot body 则形成同一 Apply 下的
+`Continuation` region。interceptor 正常结束以经验证的 `Resume` edge 进入 continuation
+entry；`abort()` 以 `Abort` edge 进入 fragment exit，fragment 内的 `return` 则变为携带
+cleanup 的普通 jump 进入同一 exit，因而两者都不会执行 continuation。continuation 内的
+return 仍是外层函数的 `Return`。verifier 会独立要求 resume 进入同一 Apply 的兄弟
+continuation，abort 进入其所在 fragment 的 exit。因此 static composition 不保留 descriptor、
+selector、function pointer、heap continuation 或 runtime dispatch state。声明体只由构建桥克隆，
+仍可供其他静态调用点使用；sealed graph 中不会保留第二个执行语义。该边界拒绝无 block
+apply，因为 0.3 要求显式词法体。context/resume、multi-shot、borrowed fragment parameter
+binding 与 runtime apply 仍属后续切片。
+
 第 10 项尚未整体完成。捕获式 closure environment 与其余 non-Copy
 item/callable 逐元素 ownership 转移仍是明确的后续边界。
 跨越潜在 early exit 的 Linear hoisting 因违反恰好一次约束而保持非法，它不是延后的

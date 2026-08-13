@@ -3809,6 +3809,155 @@ int main() {
         return fail("canonical type-only module failed independent verification");
     if (!verifier.verify(reverse))
         return fail("reverse-order canonical module failed independent verification");
+
+    moon::Module compositionModule;
+    compositionModule.name = "canonical.composition";
+    const auto compositionUnit = compositionModule.registerType(TyUnit);
+    const auto interceptorType = Type::makeFragment(
+        {}, TyUnit, false, ContinuationKind::Interceptor);
+    const auto interceptorTypeId =
+        compositionModule.registerType(interceptorType);
+    const std::string interceptorId =
+        "canonical.composition::fragment::guard";
+    moon::DeclarationRecord interceptorRecord;
+    interceptorRecord.id = interceptorId;
+    interceptorRecord.familyId = interceptorId;
+    interceptorRecord.symbolId =
+        luna::identity::symbolIdFromCanonical(interceptorId);
+    interceptorRecord.sourceName = "guard";
+    interceptorRecord.linkageName = "guard";
+    interceptorRecord.kind = moon::DeclarationKind::Fragment;
+    interceptorRecord.type = interceptorTypeId;
+    interceptorRecord.sysmeta = interceptorType->sysmeta;
+    compositionModule.declarationTable.push_back(interceptorRecord);
+
+    auto interceptor = std::make_unique<moon::FragmentDecl>();
+    interceptor->packageId = compositionModule.name;
+    interceptor->declarationId = interceptorId;
+    interceptor->familyId = interceptorId;
+    interceptor->symbolId = interceptorRecord.symbolId;
+    interceptor->name = "guard";
+    interceptor->generatedSymbolName = "guard";
+    interceptor->kind = moon::FragmentKind::Interceptor;
+    interceptor->cardinality = moon::FragmentCardinality::Once;
+    interceptor->structuralType = interceptorTypeId;
+    interceptor->body = std::make_unique<moon::BlockStmt>();
+    auto guardedReturn = std::make_unique<moon::IfStmt>();
+    auto returnCondition = std::make_unique<moon::BoolLiteralExpr>();
+    returnCondition->value = false;
+    returnCondition->type = compositionModule.registerType(TyBool);
+    guardedReturn->cond = std::move(returnCondition);
+    guardedReturn->thenBlock = std::make_unique<moon::BlockStmt>();
+    guardedReturn->thenBlock->stmts.push_back(
+        std::make_unique<moon::ReturnStmt>());
+    interceptor->body->stmts.push_back(std::move(guardedReturn));
+    auto guardedAbort = std::make_unique<moon::IfStmt>();
+    auto abortCondition = std::make_unique<moon::BoolLiteralExpr>();
+    abortCondition->value = true;
+    abortCondition->type = compositionModule.registerType(TyBool);
+    guardedAbort->cond = std::move(abortCondition);
+    guardedAbort->thenBlock = std::make_unique<moon::BlockStmt>();
+    guardedAbort->thenBlock->stmts.push_back(
+        std::make_unique<moon::AbortStmt>());
+    interceptor->body->stmts.push_back(std::move(guardedAbort));
+    auto* interceptorBody = interceptor->body.get();
+    compositionModule.declarations.push_back(std::move(interceptor));
+    compositionModule.sealTypeTable();
+    const auto* sealedInterceptor =
+        compositionModule.findDeclarationById(interceptorId);
+    if (!sealedInterceptor)
+        return fail("static composition lost its fragment declaration row");
+    auto* executableInterceptor = static_cast<moon::FragmentDecl*>(
+        compositionModule.declarations.front().get());
+    executableInterceptor->contractId = sealedInterceptor->contractId;
+    executableInterceptor->sysmeta = sealedInterceptor->sysmeta;
+    compositionModule.rebuildIndexes();
+    const moon::DeclarationRef interceptorRef{
+        sealedInterceptor->symbolId, sealedInterceptor->contractId};
+
+    auto compositionBody = std::make_unique<moon::BlockStmt>();
+    auto staticApply = std::make_unique<moon::ApplyStmt>();
+    staticApply->slotName = "hook";
+    staticApply->fragmentName = "guard";
+    staticApply->fragmentRef = interceptorRef;
+    staticApply->body = std::make_unique<moon::BlockStmt>();
+    auto slotInvocation = std::make_unique<moon::SlotInvokeStmt>();
+    slotInvocation->name = "hook";
+    slotInvocation->acceptedKind = moon::FragmentKind::Interceptor;
+    slotInvocation->acceptedCardinality = moon::FragmentCardinality::Once;
+    slotInvocation->continuation = std::make_unique<moon::BlockStmt>();
+    auto continuationEffect = std::make_unique<moon::ExprStmt>();
+    auto continuationUnit = std::make_unique<moon::UnitExpr>();
+    continuationUnit->type = compositionUnit;
+    continuationEffect->expr = std::move(continuationUnit);
+    slotInvocation->continuation->stmts.push_back(
+        std::move(continuationEffect));
+    staticApply->body->stmts.push_back(std::move(slotInvocation));
+    compositionBody->stmts.push_back(std::move(staticApply));
+
+    auto compositionCfg = cfgBuilder.build(
+        std::move(compositionBody), {}, moon::RegionKind::Function,
+        compositionModule);
+    size_t applyRegions = 0;
+    size_t fragmentRegions = 0;
+    size_t continuationRegions = 0;
+    size_t resumeEdges = 0;
+    size_t abortEdges = 0;
+    for (const auto& region : compositionCfg
+             ? compositionCfg->regions
+             : std::vector<moon::RegionRecord>{}) {
+        applyRegions += region.kind == moon::RegionKind::Apply;
+        fragmentRegions += region.kind == moon::RegionKind::Fragment;
+        continuationRegions += region.kind == moon::RegionKind::Continuation;
+    }
+    if (compositionCfg) {
+        for (const auto& block : compositionCfg->blocks) {
+            resumeEdges +=
+                block.terminator.kind == moon::TerminatorKind::Resume;
+            abortEdges +=
+                block.terminator.kind == moon::TerminatorKind::Abort;
+        }
+    }
+    if (!compositionCfg ||
+        !cfgVerifier.verify(*compositionCfg, compositionModule) ||
+        applyRegions != 1 || fragmentRegions != 1 ||
+        continuationRegions != 1 || resumeEdges != 1 || abortEdges != 1 ||
+        executableInterceptor->body.get() != interceptorBody)
+        return fail("static interceptor did not compose into canonical CFG regions and edges");
+    moon::Terminator* composedResume = nullptr;
+    moon::Terminator* composedAbort = nullptr;
+    for (auto& block : compositionCfg->blocks) {
+        if (block.terminator.kind == moon::TerminatorKind::Resume)
+            composedResume = &block.terminator;
+        if (block.terminator.kind == moon::TerminatorKind::Abort)
+            composedAbort = &block.terminator;
+    }
+    if (!composedResume || !composedAbort)
+        return fail("static composition lost a control terminator");
+    const auto continuationEntry = composedResume->primary.target;
+    const auto fragmentExit = composedAbort->primary.target;
+    composedResume->primary.target = fragmentExit;
+    if (cfgVerifier.verify(*compositionCfg, compositionModule))
+        return fail("CFG verifier accepted resume into the fragment exit");
+    composedResume->primary.target = continuationEntry;
+    composedAbort->primary.target = continuationEntry;
+    if (cfgVerifier.verify(*compositionCfg, compositionModule))
+        return fail("CFG verifier accepted abort into the continuation");
+    composedAbort->primary.target = fragmentExit;
+    if (!cfgVerifier.verify(*compositionCfg, compositionModule))
+        return fail("restored static composition no longer verifies");
+
+    auto blocklessBody = std::make_unique<moon::BlockStmt>();
+    auto blocklessApply = std::make_unique<moon::ApplyStmt>();
+    blocklessApply->slotName = "hook";
+    blocklessApply->fragmentName = "guard";
+    blocklessApply->fragmentRef = interceptorRef;
+    blocklessBody->stmts.push_back(std::move(blocklessApply));
+    if (cfgBuilder.build(
+            std::move(blocklessBody), {}, moon::RegionKind::Function,
+            compositionModule))
+        return fail("canonical builder accepted legacy blockless apply");
+
     const auto reverseIterator = reverse.typesById.find(shortId.value);
     if (reverseIterator == reverse.typesById.end())
         return fail("sealed type index lost the iterator type");

@@ -1,9 +1,414 @@
 #include "ControlFlowBuilder.h"
 
 #include <algorithm>
+#include <iterator>
+#include <type_traits>
 #include <unordered_set>
 
 namespace moon {
+
+namespace {
+
+template <typename T>
+std::unique_ptr<T> clonedNode(const T* source) {
+    if (!source) return nullptr;
+    auto result = std::make_unique<T>();
+    result->location = source->location;
+    if constexpr (std::is_base_of_v<Expr, T>) result->type = source->type;
+    return result;
+}
+
+std::unique_ptr<Expr> cloneStructuredExpr(const Expr* source);
+std::unique_ptr<Stmt> cloneStructuredStmt(const Stmt* source);
+
+std::unique_ptr<BlockStmt> cloneStructuredBlock(const BlockStmt* source) {
+    if (!source) return nullptr;
+    auto result = clonedNode(source);
+    for (const auto& statement : source->stmts) {
+        auto cloned = cloneStructuredStmt(statement.get());
+        if (!cloned) return nullptr;
+        result->stmts.push_back(std::move(cloned));
+    }
+    return result;
+}
+
+std::unique_ptr<Expr> cloneStructuredExpr(const Expr* source) {
+    if (!source) return nullptr;
+    if (const auto* value = dynamic_cast<const IntLiteralExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->value = value->value;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const FloatLiteralExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->value = value->value;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const StringLiteralExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->value = value->value;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const BoolLiteralExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->value = value->value;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const UnitExpr*>(source))
+        return clonedNode(value);
+    if (const auto* value = dynamic_cast<const IdentifierExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->name = value->name;
+        result->local = value->local;
+        result->declaration = value->declaration;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const BinaryExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->lhs = cloneStructuredExpr(value->lhs.get());
+        result->op = value->op;
+        result->rhs = cloneStructuredExpr(value->rhs.get());
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const UnaryExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->op = value->op;
+        result->operand = cloneStructuredExpr(value->operand.get());
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const CallExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->callee = cloneStructuredExpr(value->callee.get());
+        for (const auto& argument : value->args)
+            result->args.push_back(cloneStructuredExpr(argument.get()));
+        result->typeArgs = value->typeArgs;
+        result->calleeRef = value->calleeRef;
+        result->returnsLinear = value->returnsLinear;
+        result->returnUsage = value->returnUsage;
+        result->intrinsicType = value->intrinsicType;
+        result->iteratorInputType = value->iteratorInputType;
+        result->iteratorOutputType = value->iteratorOutputType;
+        result->iteratorOp = value->iteratorOp;
+        result->iteratorRecipeStateName = value->iteratorRecipeStateName;
+        result->iteratorRecipeSourceType = value->iteratorRecipeSourceType;
+        result->iteratorCollectTargetType = value->iteratorCollectTargetType;
+        result->iteratorCollectBuilderType = value->iteratorCollectBuilderType;
+        result->iteratorCollectBegin = value->iteratorCollectBegin;
+        result->iteratorCollectPush = value->iteratorCollectPush;
+        result->iteratorCollectFinish = value->iteratorCollectFinish;
+        result->compileTimeValue = value->compileTimeValue;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const DynamicSelectExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->familyId = value->familyId;
+        result->selector = value->selector;
+        result->metadataSchemaId = value->metadataSchemaId;
+        for (const auto& argument : value->filterArguments)
+            result->filterArguments.push_back(
+                cloneStructuredExpr(argument.get()));
+        result->candidates = value->candidates;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const LaunchExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->kernelName = value->kernelName;
+        result->kernelRef = value->kernelRef;
+        result->threads = cloneStructuredExpr(value->threads.get());
+        for (const auto& argument : value->args)
+            result->args.push_back(cloneStructuredExpr(argument.get()));
+        result->inFlightResources = value->inFlightResources;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const VariantConstructExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->typeName = value->typeName;
+        result->variantName = value->variantName;
+        for (const auto& argument : value->args)
+            result->args.push_back(cloneStructuredExpr(argument.get()));
+        result->constructedType = value->constructedType;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const ResultConstructExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->isOk = value->isOk;
+        result->payload = cloneStructuredExpr(value->payload.get());
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const FieldAccessExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->object = cloneStructuredExpr(value->object.get());
+        result->field = value->field;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const IndexExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->object = cloneStructuredExpr(value->object.get());
+        result->index = cloneStructuredExpr(value->index.get());
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const SliceLengthExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->slice = cloneStructuredExpr(value->slice.get());
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const ArrayLiteralExpr*>(source)) {
+        auto result = clonedNode(value);
+        for (const auto& element : value->elements)
+            result->elements.push_back(cloneStructuredExpr(element.get()));
+        result->elementType = value->elementType;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const RecordLiteralExpr*>(source)) {
+        auto result = clonedNode(value);
+        for (const auto& field : value->fields)
+            result->fields.push_back(
+                {field.name, cloneStructuredExpr(field.value.get())});
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const HeapAllocExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->initializer = cloneStructuredExpr(value->initializer.get());
+        result->allocatedType = value->allocatedType;
+        result->storage = value->storage;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const InitAllocationExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->allocation = value->allocation;
+        result->allocatedType = value->allocatedType;
+        result->storage = value->storage;
+        for (const auto& element : value->elements)
+            result->elements.push_back(
+                {element.index, cloneStructuredExpr(element.value.get())});
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const TryExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->operand = cloneStructuredExpr(value->operand.get());
+        result->resultType = value->resultType;
+        result->propagatedResultType = value->propagatedResultType;
+        result->valueType = value->valueType;
+        result->errorType = value->errorType;
+        result->propagatedErrorType = value->propagatedErrorType;
+        result->errorConversion = value->errorConversion;
+        result->cleanups = value->cleanups;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const MoveExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->operand = cloneStructuredExpr(value->operand.get());
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const BorrowExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->isMutable = value->isMutable;
+        result->operand = cloneStructuredExpr(value->operand.get());
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const DerefExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->operand = cloneStructuredExpr(value->operand.get());
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const AddrOfExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->isMutable = value->isMutable;
+        result->operand = cloneStructuredExpr(value->operand.get());
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const BlockExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->block = cloneStructuredBlock(value->block.get());
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const IfExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->cond = cloneStructuredExpr(value->cond.get());
+        result->thenExpr = cloneStructuredExpr(value->thenExpr.get());
+        result->elseExpr = cloneStructuredExpr(value->elseExpr.get());
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const LambdaExpr*>(source)) {
+        // Composition precedes canonical lambda construction. Importing an
+        // already-built child graph would require table remapping and is
+        // intentionally not a structured clone operation.
+        if (value->controlFlow) return nullptr;
+        auto result = clonedNode(value);
+        result->params = value->params;
+        result->returnType = value->returnType;
+        result->body = cloneStructuredBlock(value->body.get());
+        result->closureType = value->closureType;
+        result->captures = value->captures;
+        result->identitySuffix = value->identitySuffix;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const AssignExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->op = value->op;
+        result->lhs = cloneStructuredExpr(value->lhs.get());
+        result->rhs = cloneStructuredExpr(value->rhs.get());
+        return result;
+    }
+    return nullptr;
+}
+
+std::unique_ptr<Stmt> cloneStructuredStmt(const Stmt* source) {
+    if (!source) return nullptr;
+    if (const auto* statement = dynamic_cast<const BlockStmt*>(source))
+        return cloneStructuredBlock(statement);
+    if (const auto* statement = dynamic_cast<const LetStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->name = statement->name;
+        result->local = statement->local;
+        result->isConst = statement->isConst;
+        result->isLinear = statement->isLinear;
+        result->usage = statement->usage;
+        result->type = statement->type;
+        result->initializer = cloneStructuredExpr(statement->initializer.get());
+        result->materializesIteratorRecipe = statement->materializesIteratorRecipe;
+        result->materializedIteratorOwnsSource =
+            statement->materializedIteratorOwnsSource;
+        result->materializedIteratorSourceType =
+            statement->materializedIteratorSourceType;
+        return result;
+    }
+    if (const auto* statement = dynamic_cast<const AllocateStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->local = statement->local;
+        result->allocatedType = statement->allocatedType;
+        result->storage = statement->storage;
+        return result;
+    }
+    if (const auto* statement = dynamic_cast<const ReturnStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->value = cloneStructuredExpr(statement->value.get());
+        result->autoFrees = statement->autoFrees;
+        result->cleanups = statement->cleanups;
+        return result;
+    }
+    if (const auto* statement = dynamic_cast<const ExprStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->expr = cloneStructuredExpr(statement->expr.get());
+        return result;
+    }
+    if (const auto* statement = dynamic_cast<const IfStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->cond = cloneStructuredExpr(statement->cond.get());
+        result->thenBlock = cloneStructuredBlock(statement->thenBlock.get());
+        result->elseBranch = cloneStructuredStmt(statement->elseBranch.get());
+        return result;
+    }
+    if (const auto* statement = dynamic_cast<const MatchStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->scrutinee = cloneStructuredExpr(statement->scrutinee.get());
+        result->matchedType = statement->matchedType;
+        for (const auto& arm : statement->arms) {
+            MatchArm cloned;
+            cloned.location = arm.location;
+            cloned.variantName = arm.variantName;
+            cloned.variantIndex = arm.variantIndex;
+            cloned.bindings = arm.bindings;
+            cloned.bindingTypes = arm.bindingTypes;
+            cloned.bindingUsages = arm.bindingUsages;
+            cloned.body = cloneStructuredBlock(arm.body.get());
+            result->arms.push_back(std::move(cloned));
+        }
+        return result;
+    }
+    if (const auto* statement = dynamic_cast<const WhileStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->cond = cloneStructuredExpr(statement->cond.get());
+        result->body = cloneStructuredBlock(statement->body.get());
+        return result;
+    }
+    if (const auto* statement = dynamic_cast<const ForStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->varName = statement->varName;
+        result->bindingUsage = statement->bindingUsage;
+        result->iterable = cloneStructuredExpr(statement->iterable.get());
+        result->body = cloneStructuredBlock(statement->body.get());
+        result->elementType = statement->elementType;
+        result->protocolNext = statement->protocolNext;
+        result->protocolIteratorType = statement->protocolIteratorType;
+        result->protocolOptionType = statement->protocolOptionType;
+        result->protocolNoneVariant = statement->protocolNoneVariant;
+        result->protocolSomeVariant = statement->protocolSomeVariant;
+        result->protocolInto = statement->protocolInto;
+        result->protocolInputType = statement->protocolInputType;
+        result->protocolStateName = statement->protocolStateName;
+        result->protocolStateNeedsCleanup = statement->protocolStateNeedsCleanup;
+        result->protocolStateCleanup = statement->protocolStateCleanup;
+        result->recipeStateName = statement->recipeStateName;
+        result->recipeSourceType = statement->recipeSourceType;
+        return result;
+    }
+    if (const auto* statement = dynamic_cast<const FreeStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->operand = cloneStructuredExpr(statement->operand.get());
+        result->action = statement->action;
+        result->isImplicit = statement->isImplicit;
+        return result;
+    }
+    if (const auto* statement = dynamic_cast<const SlotDeclStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->name = statement->name;
+        result->acceptedKind = statement->acceptedKind;
+        result->acceptedCardinality = statement->acceptedCardinality;
+        result->isDynamic = statement->isDynamic;
+        result->params = statement->params;
+        result->defaultFragment = statement->defaultFragment;
+        result->defaultFragmentRef = statement->defaultFragmentRef;
+        result->structuralType = statement->structuralType;
+        return result;
+    }
+    if (const auto* statement = dynamic_cast<const SlotInvokeStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->name = statement->name;
+        result->acceptedKind = statement->acceptedKind;
+        result->acceptedCardinality = statement->acceptedCardinality;
+        result->isDynamic = statement->isDynamic;
+        result->usesDynamicDispatch = statement->usesDynamicDispatch;
+        result->dynamicFragmentRefs = statement->dynamicFragmentRefs;
+        for (const auto& argument : statement->args)
+            result->args.push_back(cloneStructuredExpr(argument.get()));
+        result->continuation = cloneStructuredBlock(statement->continuation.get());
+        result->isImplicitCapture = statement->isImplicitCapture;
+        result->interfaceParams = statement->interfaceParams;
+        result->resolvedParamNames = statement->resolvedParamNames;
+        result->defaultFragment = statement->defaultFragment;
+        result->defaultFragmentRef = statement->defaultFragmentRef;
+        result->structuralType = statement->structuralType;
+        return result;
+    }
+    if (const auto* statement = dynamic_cast<const ResumeStmt*>(source))
+        return clonedNode(statement);
+    if (const auto* statement = dynamic_cast<const AbortStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->autoFrees = statement->autoFrees;
+        result->cleanups = statement->cleanups;
+        return result;
+    }
+    if (const auto* statement = dynamic_cast<const AwaitStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->event = cloneStructuredExpr(statement->event.get());
+        return result;
+    }
+    if (const auto* statement = dynamic_cast<const ApplyStmt*>(source)) {
+        auto result = clonedNode(statement);
+        result->slotName = statement->slotName;
+        result->fragmentName = statement->fragmentName;
+        result->isDynamic = statement->isDynamic;
+        result->alternativeFragmentNames = statement->alternativeFragmentNames;
+        result->alternativeFragmentRefs = statement->alternativeFragmentRefs;
+        result->fragmentRef = statement->fragmentRef;
+        result->body = cloneStructuredBlock(statement->body.get());
+        return result;
+    }
+    return nullptr;
+}
+
+} // namespace
 
 std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     std::unique_ptr<BlockStmt> root,
@@ -13,6 +418,9 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     mErrors.clear();
     mBindings.clear();
     mMaterializedIterators.clear();
+    mSlotDefaults.clear();
+    mStaticApplyScopes.clear();
+    mFragmentExits.clear();
     mCleanupByLocal.clear();
     mActiveExpressionCleanups.clear();
     mBindingIteratorRecipe = false;
@@ -321,11 +729,70 @@ ControlFlowBuilder::lowerStatement(
                         mActiveExpressionCleanups.begin(),
                         mActiveExpressionCleanups.end());
         auto& terminator = mGraph->blocks[current.block.value].terminator;
+        if (!mFragmentExits.empty()) {
+            if (returned->value) {
+                error(returned->location,
+                      "0.3 fragment return must not carry a value");
+                return std::nullopt;
+            }
+            const BlockId exit = mFragmentExits.back();
+            terminator.kind = TerminatorKind::Jump;
+            terminator.location = returned->location;
+            terminator.primary.target = exit;
+            terminator.primary.cleanups = canonicalCleanupOrder(
+                cleanups, scope, mGraph->blocks[exit.value].scope);
+            return std::nullopt;
+        }
         terminator.kind = TerminatorKind::Return;
         terminator.location = returned->location;
         terminator.operand = std::move(returned->value);
         terminator.exitCleanups = canonicalCleanupOrder(
             cleanups, scope, std::nullopt);
+        return std::nullopt;
+    }
+    if (auto* slot = dynamic_cast<SlotDeclStmt*>(statement.get())) {
+        if (slot->isDynamic) {
+            error(slot->location,
+                  "runtime slot composition is outside the static canonical CFG slice");
+            return std::nullopt;
+        }
+        if (!slot->defaultFragmentRef.empty())
+            mSlotDefaults.back()[slot->name] = slot->defaultFragmentRef;
+        return current;
+    }
+    if (dynamic_cast<SlotInvokeStmt*>(statement.get())) {
+        std::unique_ptr<SlotInvokeStmt> owned(
+            static_cast<SlotInvokeStmt*>(statement.release()));
+        return lowerSlotInvoke(
+            std::move(owned), std::move(current), region, scope);
+    }
+    if (dynamic_cast<ApplyStmt*>(statement.get())) {
+        std::unique_ptr<ApplyStmt> owned(
+            static_cast<ApplyStmt*>(statement.release()));
+        return lowerApply(
+            std::move(owned), std::move(current), region, scope);
+    }
+    if (auto* abort = dynamic_cast<AbortStmt*>(statement.get())) {
+        if (mFragmentExits.empty()) {
+            error(abort->location,
+                  "abort() has no active canonical fragment boundary");
+            return std::nullopt;
+        }
+        auto cleanups = lowerCleanupObligations(abort->cleanups, scope);
+        cleanups.insert(cleanups.end(), current.cleanups.begin(),
+                        current.cleanups.end());
+        const BlockId exit = mFragmentExits.back();
+        auto& terminator = mGraph->blocks[current.block.value].terminator;
+        terminator.kind = TerminatorKind::Abort;
+        terminator.location = abort->location;
+        terminator.primary.target = exit;
+        terminator.primary.cleanups = canonicalCleanupOrder(
+            cleanups, scope, mGraph->blocks[exit.value].scope);
+        return std::nullopt;
+    }
+    if (auto* resume = dynamic_cast<ResumeStmt*>(statement.get())) {
+        error(resume->location,
+              "context resume composition belongs to the next canonical continuation slice");
         return std::nullopt;
     }
     if (dynamic_cast<IfStmt*>(statement.get())) {
@@ -3501,6 +3968,222 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerMatch(
         : std::nullopt;
 }
 
+std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerApply(
+    std::unique_ptr<ApplyStmt> statement, OpenBlock current,
+    RegionId region, ScopeId scope) {
+    if (statement->isDynamic ||
+        !statement->alternativeFragmentRefs.empty()) {
+        error(statement->location,
+              "runtime apply is outside the static canonical CFG slice");
+        return std::nullopt;
+    }
+    if (!statement->body) {
+        error(statement->location,
+              "0.3 apply requires an explicit lexical body");
+        return std::nullopt;
+    }
+    if (!resolveFragment(statement->fragmentRef)) {
+        error(statement->location,
+              "static apply references a missing canonical fragment");
+        return std::nullopt;
+    }
+
+    mStaticApplyScopes.emplace_back();
+    mStaticApplyScopes.back()[statement->slotName] = statement->fragmentRef;
+    auto body = lowerNestedBlock(
+        std::move(statement->body), region, scope, RegionKind::Apply);
+    mStaticApplyScopes.pop_back();
+    connectJump(current, body.entry);
+    if (!body.exit) return std::nullopt;
+
+    const BlockId continuation = addBlock(
+        region, scope,
+        mGraph->blocks[body.exit->block.value].location);
+    connectJump(*body.exit, continuation);
+    mGraph->regions[body.region.value].exit = continuation;
+    return OpenBlock{continuation, {}};
+}
+
+const FragmentDecl* ControlFlowBuilder::resolveFragment(
+    const DeclarationRef& reference) const {
+    if (!mModule || !reference.complete()) return nullptr;
+    const auto* record = mModule->findDeclaration(reference);
+    if (!record || record->kind != DeclarationKind::Fragment) return nullptr;
+    for (const auto& declaration : mModule->declarations) {
+        const auto* fragment = dynamic_cast<const FragmentDecl*>(
+            declaration.get());
+        if (fragment && fragment->symbolId == reference.symbol &&
+            fragment->contractId == reference.contract)
+            return fragment;
+    }
+    return nullptr;
+}
+
+std::optional<ControlFlowBuilder::OpenBlock>
+ControlFlowBuilder::lowerSlotInvoke(
+    std::unique_ptr<SlotInvokeStmt> statement, OpenBlock current,
+    RegionId region, ScopeId scope) {
+    if (statement->isDynamic || statement->usesDynamicDispatch ||
+        !statement->dynamicFragmentRefs.empty()) {
+        error(statement->location,
+              "runtime slot invocation is outside the static canonical CFG slice");
+        return std::nullopt;
+    }
+    if (statement->acceptedCardinality != FragmentCardinality::Once) {
+        error(statement->location,
+              "multi-shot slot invocation is not part of the 0.3 canonical static boundary");
+        return std::nullopt;
+    }
+    if (!statement->continuation) {
+        error(statement->location,
+              "slot invocation has no lexical continuation body");
+        return std::nullopt;
+    }
+
+    DeclarationRef fragmentReference;
+    for (size_t depth = mStaticApplyScopes.size(); depth > 0; --depth) {
+        const auto& bindings = mStaticApplyScopes[depth - 1];
+        if (auto found = bindings.find(statement->name);
+            found != bindings.end()) {
+            fragmentReference = found->second;
+            break;
+        }
+    }
+    if (fragmentReference.empty())
+        fragmentReference = statement->defaultFragmentRef;
+    if (fragmentReference.empty()) {
+        for (size_t depth = mSlotDefaults.size(); depth > 0; --depth) {
+            const auto& defaults = mSlotDefaults[depth - 1];
+            if (auto found = defaults.find(statement->name);
+                found != defaults.end()) {
+                fragmentReference = found->second;
+                break;
+            }
+        }
+    }
+
+    const auto buildUnmodifiedContinuation = [&]()
+        -> std::optional<OpenBlock> {
+        auto continuation = lowerNestedBlock(
+            std::move(statement->continuation), region, scope,
+            RegionKind::Continuation);
+        connectJump(current, continuation.entry);
+        if (!continuation.exit) return std::nullopt;
+        const BlockId exit = addBlock(
+            region, scope,
+            mGraph->blocks[continuation.exit->block.value].location);
+        connectJump(*continuation.exit, exit);
+        mGraph->regions[continuation.region.value].exit = exit;
+        return OpenBlock{exit, {}};
+    };
+    if (fragmentReference.empty()) return buildUnmodifiedContinuation();
+
+    const FragmentDecl* fragment = resolveFragment(fragmentReference);
+    if (!fragment) {
+        error(statement->location,
+              "slot invocation references a missing canonical fragment");
+        return std::nullopt;
+    }
+    if (fragment->kind != statement->acceptedKind ||
+        fragment->cardinality != statement->acceptedCardinality) {
+        error(statement->location,
+              "slot invocation and fragment control contracts disagree");
+        return std::nullopt;
+    }
+    if (fragment->kind != FragmentKind::Interceptor) {
+        error(statement->location,
+              "static context composition belongs to the next canonical continuation slice");
+        return std::nullopt;
+    }
+    if (!fragment->body) {
+        error(statement->location,
+              "static fragment has no structured construction body");
+        return std::nullopt;
+    }
+    if (fragment->params.size() != statement->args.size() &&
+        fragment->params.size() != statement->resolvedParamNames.size()) {
+        error(statement->location,
+              "slot invocation cannot materialize the fragment parameter contract");
+        return std::nullopt;
+    }
+    for (const auto& parameter : fragment->params) {
+        if (parameter.relation != luna::ownership::Relation::Owned) {
+            error(statement->location,
+                  "borrowed fragment parameters require canonical relation-bearing bindings");
+            return std::nullopt;
+        }
+    }
+
+    auto fragmentBody = cloneStructuredBlock(fragment->body.get());
+    if (!fragmentBody) {
+        error(statement->location,
+              "static fragment body cannot be cloned before canonical construction");
+        return std::nullopt;
+    }
+    std::vector<std::unique_ptr<Stmt>> parameterBindings;
+    parameterBindings.reserve(fragment->params.size());
+    for (size_t index = 0; index < fragment->params.size(); ++index) {
+        const auto& parameter = fragment->params[index];
+        auto binding = std::make_unique<LetStmt>();
+        binding->location = statement->location;
+        binding->name = parameter.name;
+        binding->isLinear =
+            parameter.usage == luna::ownership::Usage::Linear;
+        binding->usage = parameter.usage;
+        binding->type = parameter.type;
+        if (index < statement->args.size()) {
+            binding->initializer = std::move(statement->args[index]);
+        } else {
+            auto capture = std::make_unique<IdentifierExpr>();
+            capture->location = statement->location;
+            capture->name = statement->resolvedParamNames[index];
+            capture->type = parameter.type;
+            binding->initializer = std::move(capture);
+        }
+        parameterBindings.push_back(std::move(binding));
+    }
+    parameterBindings.insert(
+        parameterBindings.end(),
+        std::make_move_iterator(fragmentBody->stmts.begin()),
+        std::make_move_iterator(fragmentBody->stmts.end()));
+    fragmentBody->stmts = std::move(parameterBindings);
+
+    const BlockId invocationExit = addBlock(
+        region, scope, statement->location);
+    const RegionId fragmentRegion = addRegion(
+        region, RegionKind::Fragment, fragmentBody->location);
+    const ScopeId fragmentScope = addScope(
+        scope, fragmentRegion, fragmentBody->location);
+    const BlockId fragmentEntry = addBlock(
+        fragmentRegion, fragmentScope, fragmentBody->location);
+    pushBindings();
+    mFragmentExits.push_back(invocationExit);
+    auto fragmentOpen = lowerSequence(
+        fragmentBody->stmts, OpenBlock{fragmentEntry, {}},
+        fragmentRegion, fragmentScope);
+    mFragmentExits.pop_back();
+    popBindings();
+    mGraph->regions[fragmentRegion.value].exit = invocationExit;
+    connectJump(current, fragmentEntry);
+
+    if (fragmentOpen) {
+        auto continuation = lowerNestedBlock(
+            std::move(statement->continuation), region, scope,
+            RegionKind::Continuation);
+        auto& terminator =
+            mGraph->blocks[fragmentOpen->block.value].terminator;
+        terminator.kind = TerminatorKind::Resume;
+        terminator.location = statement->location;
+        terminator.primary.target = continuation.entry;
+        terminator.primary.cleanups = canonicalCleanupOrder(
+            fragmentOpen->cleanups, fragmentScope, continuation.scope);
+        if (continuation.exit)
+            connectJump(*continuation.exit, invocationExit);
+        mGraph->regions[continuation.region.value].exit = invocationExit;
+    }
+    return OpenBlock{invocationExit, {}};
+}
+
 bool ControlFlowBuilder::bindExpr(Expr* expression) {
     if (!expression) return true;
     if (auto* identifier = dynamic_cast<IdentifierExpr*>(expression)) {
@@ -3651,11 +4334,13 @@ ControlFlowBuilder::lookupMaterializedIterator(
 void ControlFlowBuilder::pushBindings() {
     mBindings.emplace_back();
     mMaterializedIterators.emplace_back();
+    mSlotDefaults.emplace_back();
 }
 
 void ControlFlowBuilder::popBindings() {
     if (!mBindings.empty()) mBindings.pop_back();
     if (!mMaterializedIterators.empty()) mMaterializedIterators.pop_back();
+    if (!mSlotDefaults.empty()) mSlotDefaults.pop_back();
 }
 
 void ControlFlowBuilder::connectJump(

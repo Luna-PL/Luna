@@ -439,6 +439,17 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         }
     };
 
+    const auto enclosingRegion = [&graph](
+        RegionId start, RegionKind kind) -> const RegionRecord* {
+        std::unordered_set<uint32_t> visited;
+        for (const RegionRecord* region = graph.findRegion(start); region;
+             region = graph.findRegion(region->parent)) {
+            if (!visited.insert(region->id.value).second) break;
+            if (region->kind == kind) return region;
+        }
+        return nullptr;
+    };
+
     const auto localVisibleFrom = [&graph](
         ScopeId localScope, ScopeId useScope) {
         std::unordered_set<uint32_t> visited;
@@ -941,6 +952,38 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                     block, block.terminator.primary,
                     block.terminator.kind == TerminatorKind::Resume
                         ? "resume edge" : "abort edge");
+                if (const auto* fragment = enclosingRegion(
+                        block.region, RegionKind::Fragment)) {
+                    const auto* target = graph.findBlock(
+                        block.terminator.primary.target);
+                    if (block.terminator.kind == TerminatorKind::Abort) {
+                        if (fragment->exit.empty() ||
+                            block.terminator.primary.target != fragment->exit)
+                            error(block.terminator.location,
+                                  "abort edge does not target its enclosing fragment exit");
+                    } else if (target) {
+                        const auto* continuation = graph.findRegion(
+                            target->region);
+                        const auto* fragmentApply = enclosingRegion(
+                            fragment->id, RegionKind::Apply);
+                        const auto* continuationApply = continuation
+                            ? enclosingRegion(
+                                  continuation->id, RegionKind::Apply)
+                            : nullptr;
+                        if (!continuation ||
+                            continuation->kind != RegionKind::Continuation ||
+                            continuation->entry != target->id ||
+                            !fragmentApply || !continuationApply ||
+                            fragmentApply->id != continuationApply->id)
+                            error(block.terminator.location,
+                                  "resume edge does not enter the sibling continuation of its apply region");
+                    }
+                } else {
+                    error(block.terminator.location,
+                          block.terminator.kind == TerminatorKind::Resume
+                              ? "resume terminator is outside a fragment region"
+                              : "abort terminator is outside a fragment region");
+                }
                 appendSuccessor(block.terminator.primary);
                 rejectSecondaryCasesAndExit();
                 break;

@@ -156,6 +156,14 @@ private:
     std::optional<OpenBlock> lowerMatch(
         std::unique_ptr<MatchStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
+    std::optional<OpenBlock> lowerApply(
+        std::unique_ptr<ApplyStmt> statement,
+        OpenBlock current, RegionId region, ScopeId scope);
+    std::optional<OpenBlock> lowerSlotInvoke(
+        std::unique_ptr<SlotInvokeStmt> statement,
+        OpenBlock current, RegionId region, ScopeId scope);
+    const FragmentDecl* resolveFragment(
+        const DeclarationRef& reference) const;
 
     bool bindExpr(Expr* expression);
     bool parseIteratorRecipe(
@@ -190,6 +198,14 @@ private:
     std::vector<std::unordered_map<std::string, LocalId>> mBindings;
     std::vector<std::unordered_map<std::string, MaterializedIteratorRecipe>>
         mMaterializedIterators;
+    std::vector<std::unordered_map<std::string, DeclarationRef>>
+        mSlotDefaults;
+    std::vector<std::unordered_map<std::string, DeclarationRef>>
+        mStaticApplyScopes;
+    // Active only while a cloned static fragment body is being composed into
+    // its invocation graph. A source `return` or `abort` exits that fragment,
+    // not the enclosing Luna function.
+    std::vector<BlockId> mFragmentExits;
     std::unordered_map<uint32_t, CleanupId> mCleanupByLocal;
     // Cleanup-bearing synthetic operands are active from their generated let
     // until the parent expression consumes them. Structured early exits built
