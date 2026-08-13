@@ -1204,17 +1204,203 @@ int main() {
         IteratorOp::Count, i32Id, i32Id, false));
     siblingUse->expr = std::move(siblingCall);
     siblingBoundary->stmts.push_back(std::move(siblingUse));
+    auto siblingCfg = cfgBuilder.build(
+        std::move(siblingBoundary), {reducerParameter},
+        moon::RegionKind::Function, module);
+    bool hoistedSiblingCallee = false;
+    bool siblingTerminalReachedCall = false;
+    if (siblingCfg)
+        for (const auto& block : siblingCfg->blocks)
+            for (const auto& operation : block.operations) {
+                if (const auto* declaration =
+                        dynamic_cast<const moon::LetStmt*>(
+                            operation.get());
+                    declaration && declaration->name.rfind(
+                        "$expression.hoist.", 0) == 0) {
+                    const auto* source =
+                        dynamic_cast<const moon::IdentifierExpr*>(
+                            declaration->initializer.get());
+                    hoistedSiblingCallee = hoistedSiblingCallee ||
+                        (source && source->name == "reducer");
+                }
+                const auto* expression =
+                    dynamic_cast<const moon::ExprStmt*>(operation.get());
+                const auto* call = expression
+                    ? dynamic_cast<const moon::CallExpr*>(
+                          expression->expr.get())
+                    : nullptr;
+                if (!call || call->args.size() != 2) continue;
+                const auto* result =
+                    dynamic_cast<const moon::IdentifierExpr*>(
+                        call->args[1].get());
+                siblingTerminalReachedCall = result &&
+                    result->name.rfind("$terminal.count.", 0) == 0;
+            }
+    if (!siblingCfg || !cfgVerifier.verify(*siblingCfg, module) ||
+        !hoistedSiblingCallee || !siblingTerminalReachedCall)
+        return fail(
+            "Copy call sibling did not hoist before its terminal CFG");
+
+    auto binarySiblingBoundary = std::make_unique<moon::BlockStmt>();
+    auto binaryReturn = std::make_unique<moon::ReturnStmt>();
+    auto binary = std::make_unique<moon::BinaryExpr>();
+    binary->op = moon::Operator::Add;
+    binary->type = i32Id;
+    auto earlierCall = std::make_unique<moon::CallExpr>();
+    auto earlierReducer = std::make_unique<moon::IdentifierExpr>();
+    earlierReducer->name = "reducer";
+    earlierReducer->type = reducerTypeId;
+    earlierCall->callee = std::move(earlierReducer);
+    earlierCall->type = i32Id;
+    for (int64_t value : {2, 3}) {
+        auto argument = std::make_unique<moon::IntLiteralExpr>();
+        argument->value = value;
+        argument->type = i32Id;
+        earlierCall->args.push_back(std::move(argument));
+    }
+    binary->lhs = std::move(earlierCall);
+    binary->rhs = makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false);
+    binaryReturn->value = std::move(binary);
+    binarySiblingBoundary->stmts.push_back(std::move(binaryReturn));
+    auto binarySiblingCfg = cfgBuilder.build(
+        std::move(binarySiblingBoundary), {reducerParameter},
+        moon::RegionKind::Function, module);
+    bool hoistedBinarySibling = false;
+    bool returnedNormalizedBinary = false;
+    if (binarySiblingCfg)
+        for (const auto& block : binarySiblingCfg->blocks) {
+            for (const auto& operation : block.operations)
+                if (const auto* declaration =
+                        dynamic_cast<const moon::LetStmt*>(
+                            operation.get());
+                    declaration && declaration->name.rfind(
+                        "$expression.hoist.", 0) == 0)
+                    hoistedBinarySibling =
+                        dynamic_cast<const moon::CallExpr*>(
+                            declaration->initializer.get()) != nullptr;
+            if (block.terminator.kind != moon::TerminatorKind::Return)
+                continue;
+            const auto* returned =
+                dynamic_cast<const moon::BinaryExpr*>(
+                    block.terminator.operand.get());
+            const auto* lhs = returned
+                ? dynamic_cast<const moon::IdentifierExpr*>(
+                      returned->lhs.get())
+                : nullptr;
+            const auto* rhs = returned
+                ? dynamic_cast<const moon::IdentifierExpr*>(
+                      returned->rhs.get())
+                : nullptr;
+            returnedNormalizedBinary = lhs && rhs &&
+                lhs->name.rfind("$expression.hoist.", 0) == 0 &&
+                rhs->name.rfind("$terminal.count.", 0) == 0;
+        }
+    if (!binarySiblingCfg ||
+        !cfgVerifier.verify(*binarySiblingCfg, module) ||
+        !hoistedBinarySibling || !returnedNormalizedBinary)
+        return fail(
+            "Copy binary sibling did not preserve evaluation order across terminal CFG");
+
+    auto affineSiblingBoundary = std::make_unique<moon::BlockStmt>();
+    auto affineSiblingUse = std::make_unique<moon::ExprStmt>();
+    auto affineSiblingCall = std::make_unique<moon::CallExpr>();
+    auto affineSiblingReducer = std::make_unique<moon::IdentifierExpr>();
+    affineSiblingReducer->name = "affineReducer";
+    affineSiblingReducer->type = affineReducerTypeId;
+    affineSiblingCall->callee = std::move(affineSiblingReducer);
+    affineSiblingCall->type = stringId;
+    affineSiblingCall->returnUsage = luna::ownership::Usage::Affine;
+    auto affineEarlierSibling = std::make_unique<moon::IdentifierExpr>();
+    affineEarlierSibling->name = "affineValue";
+    affineEarlierSibling->type = stringId;
+    affineSiblingCall->args.push_back(std::move(affineEarlierSibling));
+    affineSiblingCall->args.push_back(makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false));
+    affineSiblingUse->expr = std::move(affineSiblingCall);
+    affineSiblingBoundary->stmts.push_back(
+        std::move(affineSiblingUse));
+    moon::Param affineValueParameter;
+    affineValueParameter.name = "affineValue";
+    affineValueParameter.type = stringId;
+    affineValueParameter.usage = luna::ownership::Usage::Affine;
     if (cfgBuilder.build(
-            std::move(siblingBoundary), {reducerParameter},
+            std::move(affineSiblingBoundary),
+            {affineReducerParameter, affineValueParameter},
             moon::RegionKind::Function, module))
-        return fail("general sibling terminal crossed its explicit CFG boundary");
-    bool diagnosedSiblingBoundary = false;
+        return fail(
+            "move-only expression sibling entered Copy-only CFG hoisting");
+    bool diagnosedAffineSibling = false;
     for (const auto& message : cfgBuilder.errors())
-        diagnosedSiblingBoundary = diagnosedSiblingBoundary ||
-            message.find("iterator recipe must be expanded") !=
+        diagnosedAffineSibling = diagnosedAffineSibling ||
+            message.find("requires a non-unit Copy value") !=
                 std::string::npos;
-    if (!diagnosedSiblingBoundary)
-        return fail("general sibling terminal boundary lost its diagnostic");
+    if (!diagnosedAffineSibling)
+        return fail(
+            "move-only expression sibling lost its explicit hoisting boundary");
+
+    auto shortCircuitBoundary = std::make_unique<moon::BlockStmt>();
+    auto shortCircuitUse = std::make_unique<moon::ExprStmt>();
+    auto shortCircuit = std::make_unique<moon::BinaryExpr>();
+    shortCircuit->op = moon::Operator::LogicalAnd;
+    shortCircuit->type = boolId;
+    auto shortCircuitLeft = std::make_unique<moon::BoolLiteralExpr>();
+    shortCircuitLeft->value = true;
+    shortCircuitLeft->type = boolId;
+    shortCircuit->lhs = std::move(shortCircuitLeft);
+    auto shortCircuitRight = std::make_unique<moon::BinaryExpr>();
+    shortCircuitRight->op = moon::Operator::Greater;
+    shortCircuitRight->type = boolId;
+    shortCircuitRight->lhs = makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false);
+    auto zero = std::make_unique<moon::IntLiteralExpr>();
+    zero->value = 0;
+    zero->type = i32Id;
+    shortCircuitRight->rhs = std::move(zero);
+    shortCircuit->rhs = std::move(shortCircuitRight);
+    shortCircuitUse->expr = std::move(shortCircuit);
+    shortCircuitBoundary->stmts.push_back(
+        std::move(shortCircuitUse));
+    if (cfgBuilder.build(
+            std::move(shortCircuitBoundary), {},
+            moon::RegionKind::Function, module))
+        return fail(
+            "iterator terminal was hoisted out of a short-circuit operand");
+    bool diagnosedShortCircuit = false;
+    for (const auto& message : cfgBuilder.errors())
+        diagnosedShortCircuit = diagnosedShortCircuit ||
+            message.find("short-circuit operand") != std::string::npos;
+    if (!diagnosedShortCircuit)
+        return fail(
+            "short-circuit terminal lost its conditional-CFG boundary");
+
+    auto recordTerminalBoundary = std::make_unique<moon::BlockStmt>();
+    auto recordTerminalBinding = std::make_unique<moon::LetStmt>();
+    recordTerminalBinding->name = "snapshot";
+    recordTerminalBinding->type = productId;
+    auto recordTerminal = std::make_unique<moon::RecordLiteralExpr>();
+    recordTerminal->type = productId;
+    moon::RecordLiteralExpr::Field valueField;
+    valueField.name = "value";
+    valueField.value = makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false);
+    recordTerminal->fields.push_back(std::move(valueField));
+    recordTerminalBinding->initializer = std::move(recordTerminal);
+    recordTerminalBoundary->stmts.push_back(
+        std::move(recordTerminalBinding));
+    if (cfgBuilder.build(
+            std::move(recordTerminalBoundary), {},
+            moon::RegionKind::Function, module))
+        return fail(
+            "iterator terminal crossed a record allocation boundary");
+    bool diagnosedRecordTerminal = false;
+    for (const auto& message : cfgBuilder.errors())
+        diagnosedRecordTerminal = diagnosedRecordTerminal ||
+            message.find("allocation-aware expression CFG") !=
+                std::string::npos;
+    if (!diagnosedRecordTerminal)
+        return fail(
+            "record terminal lost its allocation-order boundary");
 
     auto forEachStructured = std::make_unique<moon::BlockStmt>();
     forEachStructured->stmts.push_back(

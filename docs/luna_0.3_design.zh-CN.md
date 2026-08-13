@@ -627,7 +627,8 @@ recipe 状态继续展开为带外层结果 local 的普通循环，而 expressi
 会生成普通的循环体 call。在 terminal 上追加的 adapter 会在 terminal 参数之前求值一次。
 该子阶段接受作为直接 initializer/return value 的有值 terminal，以及直接普通 call
 的唯一参数；`for_each` 只接受 expression statement 位置。更广泛的 expression sibling
-hoisting 被明确延后，因而不会猜测或重排求值顺序。
+hoisting 在该子阶段被明确延后，因而当时不会猜测或重排求值顺序；后文记录了其首个
+eager Copy 覆盖。
 
 materialized `collect` 子阶段也已完成。构造器首先核对三个冻结的
 `FromIterator` declaration 签名，再把 `begin()` 降低为唯一的 synthetic affine
@@ -643,8 +644,8 @@ ownership dataflow 要求 finish transfer；伪造的 shared builder borrow 或 
 或作为直接普通 call 的唯一参数时，receiver 的 source/start、bound 与 adapter argument
 会按源码顺序在 terminal argument 之前物化，随后普通状态进入上述同一 terminal 展开。
 这覆盖直接 `count`、Copy `fold`、expression-statement `for_each` 和 affine-builder `collect`，
-不增加第二套 lowering。任何位于更早 sibling operand 之后的 terminal 仍会被拒绝，
-因而构造器不会猜测 hoisting 或重排该 operand。
+不增加第二套 lowering。该直接切片最初仍拒绝位于更早 sibling operand 之后的 terminal；
+下面的 Copy operand-hoisting 子阶段现已取代这一临时边界。
 
 affine-accumulator `fold` 子阶段现在也已完成。一个 synthetic affine local 持有初值，
 每轮都被 move 给 reducer，并在同一次 transfer assignment 中由 reducer 的 affine 返回值
@@ -653,8 +654,18 @@ affine-accumulator `fold` 子阶段现在也已完成。一个 synthetic affine 
 cleanup obligation，不增加 initialized bit、runtime ownership flag 或第二个 accumulator。
 linear accumulator 仍不进入这种隐藏 terminal state。
 
-第 10 项尚未整体完成。通用 expression sibling hoisting、捕获式 closure environment，
-以及 non-Copy item/callable contract 的逐元素初始化/cleanup 状态仍是明确的后续边界。
+Copy expression sibling-hoisting 子阶段现已完成首个 eager-expression 覆盖。普通 call 的
+callee/argument、非短路 binary、index、array、variant、dynamic-select filter 与 launch
+operand 都会按源码顺序扫描；一旦后续 operand 展开为 iterator terminal CFG，较早的
+非 unit Copy 值会先进入普通 synthetic local，原表达式再通过该 LocalId 读取。因此
+callee load 或有副作用的 earlier call 不会被推迟到 terminal 循环之后，也不增加运行时
+tag/ownership flag。独立 verifier 会检查这些 let/local/type 引用。move-only 或 unit sibling、
+短路 RHS、record/heap allocation-sensitive initializer 仍被明确拒绝，等待分别具有 transfer、
+conditional CFG 和 allocation-order 语义的子阶段；它们不会被隐式复制或重排。
+
+第 10 项尚未整体完成。上述 conditional/allocation-aware 与 non-Copy expression hoisting、
+捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup
+状态仍是明确的后续边界。
 随后规范化其余控制流表达式、slot 和 fragment
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；

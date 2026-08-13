@@ -16,6 +16,7 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     mCleanupByLocal.clear();
     mBindingIteratorRecipe = false;
     mTerminalCounter = 0;
+    mExpressionCounter = 0;
     mModule = &module;
     if (!root) {
         error({}, "cannot build a canonical CFG from a missing body");
@@ -1537,13 +1538,11 @@ ControlFlowBuilder::normalizeIteratorTerminal(
     RegionId region, ScopeId scope, bool discardUnitResult) {
     if (!expression) return current;
     auto* call = dynamic_cast<CallExpr*>(expression.get());
-    if (!call) return current;
-    const bool terminal =
-        call->iteratorOp == IteratorOp::Fold ||
-        call->iteratorOp == IteratorOp::ForEach ||
-        call->iteratorOp == IteratorOp::Count ||
-        call->iteratorOp == IteratorOp::Collect;
-    if (terminal) {
+    if (call && containsIteratorTerminal(call) &&
+        (call->iteratorOp == IteratorOp::Fold ||
+         call->iteratorOp == IteratorOp::ForEach ||
+         call->iteratorOp == IteratorOp::Count ||
+         call->iteratorOp == IteratorOp::Collect)) {
         std::unique_ptr<CallExpr> owned(
             static_cast<CallExpr*>(expression.release()));
         return lowerIteratorTerminal(
@@ -1551,16 +1550,289 @@ ControlFlowBuilder::normalizeIteratorTerminal(
             discardUnitResult, expression);
     }
 
-    // This first control-flow-expression slice deliberately permits a
-    // terminal below only a single, direct call argument. There is no earlier
-    // value operand to hoist, so left-to-right source evaluation is unchanged.
-    // General sibling hoisting belongs to the later expression-normalization
-    // subphase.
-    if (call->iteratorOp == IteratorOp::None && call->args.size() == 1 &&
-        dynamic_cast<IdentifierExpr*>(call->callee.get()))
+    if (call && call->iteratorOp == IteratorOp::None) {
+        std::vector<std::unique_ptr<Expr>*> operands;
+        operands.reserve(call->args.size() + 1);
+        operands.push_back(&call->callee);
+        for (auto& argument : call->args)
+            operands.push_back(&argument);
+        return normalizeOrderedOperands(
+            operands, std::move(current), region, scope);
+    }
+    if (auto* binary = dynamic_cast<BinaryExpr*>(expression.get())) {
+        if (binary->op == Operator::LogicalAnd ||
+            binary->op == Operator::LogicalOr) {
+            auto normalized = normalizeIteratorTerminal(
+                binary->lhs, std::move(current), region, scope, false);
+            if (!normalized) return std::nullopt;
+            if (containsIteratorTerminal(binary->rhs.get())) {
+                error(binary->rhs->location,
+                      "iterator terminal in a short-circuit operand requires "
+                      "conditional expression CFG normalization");
+                return std::nullopt;
+            }
+            return normalized;
+        }
+        return normalizeOrderedOperands(
+            {&binary->lhs, &binary->rhs}, std::move(current),
+            region, scope);
+    }
+    if (auto* unary = dynamic_cast<UnaryExpr*>(expression.get()))
         return normalizeIteratorTerminal(
-            call->args.front(), std::move(current), region, scope, false);
+            unary->operand, std::move(current), region, scope, false);
+    if (auto* field = dynamic_cast<FieldAccessExpr*>(expression.get()))
+        return normalizeIteratorTerminal(
+            field->object, std::move(current), region, scope, false);
+    if (auto* index = dynamic_cast<IndexExpr*>(expression.get()))
+        return normalizeOrderedOperands(
+            {&index->object, &index->index}, std::move(current),
+            region, scope);
+    if (auto* length = dynamic_cast<SliceLengthExpr*>(expression.get()))
+        return normalizeIteratorTerminal(
+            length->slice, std::move(current), region, scope, false);
+    if (auto* array = dynamic_cast<ArrayLiteralExpr*>(expression.get())) {
+        std::vector<std::unique_ptr<Expr>*> operands;
+        operands.reserve(array->elements.size());
+        for (auto& element : array->elements)
+            operands.push_back(&element);
+        return normalizeOrderedOperands(
+            operands, std::move(current), region, scope);
+    }
+    if (auto* record = dynamic_cast<RecordLiteralExpr*>(expression.get())) {
+        for (const auto& field : record->fields) {
+            if (!containsIteratorTerminal(field.value.get())) continue;
+            error(field.value->location,
+                  "iterator terminal in a record initializer requires "
+                  "allocation-aware expression CFG normalization");
+            return std::nullopt;
+        }
+        return current;
+    }
+    if (auto* allocation = dynamic_cast<HeapAllocExpr*>(expression.get())) {
+        if (containsIteratorTerminal(allocation->initializer.get())) {
+            error(allocation->initializer->location,
+                  "iterator terminal in a heap initializer requires "
+                  "allocation-aware expression CFG normalization");
+            return std::nullopt;
+        }
+        return current;
+    }
+    if (auto* selection =
+            dynamic_cast<DynamicSelectExpr*>(expression.get())) {
+        std::vector<std::unique_ptr<Expr>*> operands;
+        operands.reserve(selection->filterArguments.size());
+        for (auto& argument : selection->filterArguments)
+            operands.push_back(&argument);
+        return normalizeOrderedOperands(
+            operands, std::move(current), region, scope);
+    }
+    if (auto* launch = dynamic_cast<LaunchExpr*>(expression.get())) {
+        std::vector<std::unique_ptr<Expr>*> operands;
+        operands.reserve(launch->args.size() + 1);
+        operands.push_back(&launch->threads);
+        for (auto& argument : launch->args)
+            operands.push_back(&argument);
+        return normalizeOrderedOperands(
+            operands, std::move(current), region, scope);
+    }
+    if (auto* variant =
+            dynamic_cast<VariantConstructExpr*>(expression.get())) {
+        std::vector<std::unique_ptr<Expr>*> operands;
+        operands.reserve(variant->args.size());
+        for (auto& argument : variant->args)
+            operands.push_back(&argument);
+        return normalizeOrderedOperands(
+            operands, std::move(current), region, scope);
+    }
+    if (auto* move = dynamic_cast<MoveExpr*>(expression.get()))
+        return normalizeIteratorTerminal(
+            move->operand, std::move(current), region, scope, false);
+    if (auto* borrow = dynamic_cast<BorrowExpr*>(expression.get()))
+        return normalizeIteratorTerminal(
+            borrow->operand, std::move(current), region, scope, false);
+    if (auto* dereference = dynamic_cast<DerefExpr*>(expression.get()))
+        return normalizeIteratorTerminal(
+            dereference->operand, std::move(current), region, scope, false);
+    if (auto* address = dynamic_cast<AddrOfExpr*>(expression.get()))
+        return normalizeIteratorTerminal(
+            address->operand, std::move(current), region, scope, false);
+    if (auto* assignment = dynamic_cast<AssignExpr*>(expression.get())) {
+        if (containsIteratorTerminal(assignment->lhs.get())) {
+            error(assignment->lhs->location,
+                  "iterator terminal cannot form an assignment destination");
+            return std::nullopt;
+        }
+        return normalizeIteratorTerminal(
+            assignment->rhs, std::move(current), region, scope, false);
+    }
     return current;
+}
+
+std::optional<ControlFlowBuilder::OpenBlock>
+ControlFlowBuilder::normalizeOrderedOperands(
+    const std::vector<std::unique_ptr<Expr>*>& operands,
+    OpenBlock current, RegionId region, ScopeId scope) {
+    for (size_t index = 0; index < operands.size(); ++index) {
+        auto* operand = operands[index];
+        if (!operand || !containsIteratorTerminal(operand->get())) continue;
+
+        // A later control-flow operand must not move evaluation of any
+        // preceding value across its new CFG. Copy operands are frozen into
+        // synthetic locals in source order; move-only hoisting remains an
+        // explicit later ownership subphase.
+        for (size_t previous = 0; previous < index; ++previous) {
+            auto* earlier = operands[previous];
+            if (earlier &&
+                !hoistCopyOperand(*earlier, current, scope))
+                return std::nullopt;
+        }
+
+        auto normalized = normalizeIteratorTerminal(
+            *operand, std::move(current), region, scope, false);
+        if (!normalized) return std::nullopt;
+        current = std::move(*normalized);
+        if (containsIteratorTerminal(operand->get())) {
+            error((*operand)->location,
+                  "iterator terminal remains in an unsupported expression position");
+            return std::nullopt;
+        }
+    }
+    return current;
+}
+
+bool ControlFlowBuilder::containsIteratorTerminal(
+    const Expr* expression) const {
+    if (!expression) return false;
+    if (const auto* call = dynamic_cast<const CallExpr*>(expression)) {
+        if (call->iteratorOp == IteratorOp::Fold ||
+            call->iteratorOp == IteratorOp::ForEach ||
+            call->iteratorOp == IteratorOp::Count ||
+            call->iteratorOp == IteratorOp::Collect)
+            return true;
+        if (containsIteratorTerminal(call->callee.get())) return true;
+        for (const auto& argument : call->args)
+            if (containsIteratorTerminal(argument.get())) return true;
+        return false;
+    }
+    if (const auto* binary = dynamic_cast<const BinaryExpr*>(expression))
+        return containsIteratorTerminal(binary->lhs.get()) ||
+            containsIteratorTerminal(binary->rhs.get());
+    if (const auto* unary = dynamic_cast<const UnaryExpr*>(expression))
+        return containsIteratorTerminal(unary->operand.get());
+    if (const auto* selection =
+            dynamic_cast<const DynamicSelectExpr*>(expression)) {
+        for (const auto& argument : selection->filterArguments)
+            if (containsIteratorTerminal(argument.get())) return true;
+        return false;
+    }
+    if (const auto* launch = dynamic_cast<const LaunchExpr*>(expression)) {
+        if (containsIteratorTerminal(launch->threads.get())) return true;
+        for (const auto& argument : launch->args)
+            if (containsIteratorTerminal(argument.get())) return true;
+        return false;
+    }
+    if (const auto* variant =
+            dynamic_cast<const VariantConstructExpr*>(expression)) {
+        for (const auto& argument : variant->args)
+            if (containsIteratorTerminal(argument.get())) return true;
+        return false;
+    }
+    if (const auto* field =
+            dynamic_cast<const FieldAccessExpr*>(expression))
+        return containsIteratorTerminal(field->object.get());
+    if (const auto* index = dynamic_cast<const IndexExpr*>(expression))
+        return containsIteratorTerminal(index->object.get()) ||
+            containsIteratorTerminal(index->index.get());
+    if (const auto* length =
+            dynamic_cast<const SliceLengthExpr*>(expression))
+        return containsIteratorTerminal(length->slice.get());
+    if (const auto* array =
+            dynamic_cast<const ArrayLiteralExpr*>(expression)) {
+        for (const auto& element : array->elements)
+            if (containsIteratorTerminal(element.get())) return true;
+        return false;
+    }
+    if (const auto* record =
+            dynamic_cast<const RecordLiteralExpr*>(expression)) {
+        for (const auto& field : record->fields)
+            if (containsIteratorTerminal(field.value.get())) return true;
+        return false;
+    }
+    if (const auto* allocation =
+            dynamic_cast<const HeapAllocExpr*>(expression))
+        return containsIteratorTerminal(allocation->initializer.get());
+    if (const auto* move = dynamic_cast<const MoveExpr*>(expression))
+        return containsIteratorTerminal(move->operand.get());
+    if (const auto* borrow = dynamic_cast<const BorrowExpr*>(expression))
+        return containsIteratorTerminal(borrow->operand.get());
+    if (const auto* dereference =
+            dynamic_cast<const DerefExpr*>(expression))
+        return containsIteratorTerminal(dereference->operand.get());
+    if (const auto* address = dynamic_cast<const AddrOfExpr*>(expression))
+        return containsIteratorTerminal(address->operand.get());
+    if (const auto* assignment =
+            dynamic_cast<const AssignExpr*>(expression))
+        return containsIteratorTerminal(assignment->lhs.get()) ||
+            containsIteratorTerminal(assignment->rhs.get());
+    return false;
+}
+
+bool ControlFlowBuilder::hoistCopyOperand(
+    std::unique_ptr<Expr>& expression, OpenBlock& current,
+    ScopeId scope) {
+    if (!expression) return true;
+    if (dynamic_cast<IntLiteralExpr*>(expression.get()) ||
+        dynamic_cast<FloatLiteralExpr*>(expression.get()) ||
+        dynamic_cast<StringLiteralExpr*>(expression.get()) ||
+        dynamic_cast<BoolLiteralExpr*>(expression.get()))
+        return true;
+
+    if (!bindExpr(expression.get())) return false;
+    if (const auto* identifier =
+            dynamic_cast<const IdentifierExpr*>(expression.get())) {
+        if (!identifier->declaration.empty()) return true;
+        const auto* local = mGraph->findLocal(identifier->local);
+        if (local && local->kind == LocalKind::Synthetic) return true;
+    }
+
+    const auto* type = mModule->findType(expression->type);
+    if (!type) {
+        error(expression->location,
+              "expression sibling has no frozen type for CFG hoisting");
+        return false;
+    }
+    if (type->kind == TypeKind::Unit ||
+        type->sysmeta.resource.usage != luna::ownership::Usage::Copy) {
+        error(expression->location,
+              "expression sibling hoisting currently requires a non-unit Copy value");
+        return false;
+    }
+
+    const std::string name =
+        "$expression.hoist." + std::to_string(mExpressionCounter++);
+    const LocalId local = addLocal(
+        scope, LocalKind::Synthetic, name, expression->type,
+        luna::ownership::Usage::Copy);
+    if (local.empty()) return false;
+
+    auto declaration = std::make_unique<LetStmt>();
+    declaration->location = expression->location;
+    declaration->name = name;
+    declaration->local = local;
+    declaration->usage = luna::ownership::Usage::Copy;
+    declaration->type = expression->type;
+    declaration->initializer = std::move(expression);
+    mGraph->blocks[current.block.value].operations.push_back(
+        std::move(declaration));
+
+    auto replacement = std::make_unique<IdentifierExpr>();
+    replacement->location =
+        mGraph->blocks[current.block.value].location;
+    replacement->name = name;
+    replacement->local = local;
+    replacement->type = type->id;
+    expression = std::move(replacement);
+    return true;
 }
 
 std::optional<ControlFlowBuilder::OpenBlock>

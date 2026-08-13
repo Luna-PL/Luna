@@ -703,8 +703,8 @@ continue from erased recipe state as ordinary loops with outer result locals, wh
 expression-statement `for_each` emits an ordinary body call. Adapters appended at the terminal are
 evaluated once before terminal arguments. This slice permits a value-producing terminal directly as
 an initializer or return value, and as the sole argument of a direct ordinary call; `for_each` is
-accepted as an expression statement. Wider expression sibling hoisting is deliberately deferred so
-evaluation order is never guessed.
+accepted as an expression statement. Wider expression sibling hoisting was deliberately deferred in
+that slice so evaluation order was never guessed; its first eager-Copy coverage is recorded below.
 
 The materialized `collect` subphase is now complete too. Construction first validates the three
 frozen `FromIterator` declaration signatures, then lowers `begin()` to one synthetic affine builder
@@ -722,8 +722,8 @@ return, or as the sole argument of a direct ordinary call, receiver source/start
 and adapter arguments are materialized in source order before terminal arguments. The resulting
 ordinary state then enters exactly the same terminal expansion described above. This covers direct
 `count`, Copy `fold`, expression-statement `for_each`, and affine-builder `collect` without adding a
-second lowering. A terminal after any earlier sibling operand remains rejected so construction
-does not guess how to hoist or reorder that operand.
+second lowering. This direct slice initially rejected a terminal after any earlier sibling operand;
+the Copy operand-hoisting subphase below now supersedes that temporary boundary.
 
 The affine-accumulator `fold` subphase is now complete. One synthetic affine local owns the initial
 value, is moved into the reducer on every iteration, and is reinitialized by that reducer's affine
@@ -733,9 +733,20 @@ consumer receives an explicit move. Normal loop backedges and the zero-iteration
 agree on one active cleanup obligation without adding an initialized bit, runtime ownership flag,
 or second accumulator. Linear accumulators remain outside this hidden terminal state.
 
-Item 10 is not complete as a whole. General expression sibling hoisting, capturing closure
-environments, and non-Copy item/callable per-element ownership state remain explicit following
-boundaries. The remaining work then normalizes other control-flow expressions, slot, and fragment
+The first eager-expression slice of Copy sibling hoisting is now complete. Ordinary-call callee and
+arguments, non-short-circuit binary operands, index operands, array and variant elements,
+dynamic-select filters, and launch operands are scanned in source order. When a later operand
+expands into an iterator-terminal CFG, each earlier non-unit Copy value is first stored in an
+ordinary synthetic local and the parent expression reads it by LocalId. A callee load or
+side-effecting earlier call therefore cannot drift past the terminal loop, and no runtime tag or
+ownership flag is introduced. The independent verifier checks the resulting let/local/type
+references. Move-only or unit siblings, short-circuit right operands, and record/heap
+allocation-sensitive initializers remain explicitly rejected until transfer, conditional-CFG, and
+allocation-order semantics exist; they are never copied or reordered implicitly.
+
+Item 10 is not complete as a whole. Conditional/allocation-aware and non-Copy expression hoisting,
+capturing closure environments, and non-Copy item/callable per-element ownership state remain
+explicit following boundaries. The remaining work then normalizes other control-flow expressions, slot, and fragment
 paths, atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured
 execution is deleted and the full verifier/codegen regression gate passes does the item-level gate

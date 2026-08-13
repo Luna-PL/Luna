@@ -114,6 +114,12 @@ private:
     std::optional<OpenBlock> normalizeIteratorTerminal(
         std::unique_ptr<Expr>& expression, OpenBlock current,
         RegionId region, ScopeId scope, bool discardUnitResult);
+    std::optional<OpenBlock> normalizeOrderedOperands(
+        const std::vector<std::unique_ptr<Expr>*>& operands,
+        OpenBlock current, RegionId region, ScopeId scope);
+    bool containsIteratorTerminal(const Expr* expression) const;
+    bool hoistCopyOperand(std::unique_ptr<Expr>& expression,
+                          OpenBlock& current, ScopeId scope);
     std::optional<OpenBlock> lowerIteratorTerminal(
         std::unique_ptr<CallExpr> terminal, OpenBlock current,
         RegionId region, ScopeId scope, bool discardUnitResult,
@@ -158,6 +164,7 @@ private:
     std::vector<std::string> mErrors;
     bool mBindingIteratorRecipe = false;
     uint64_t mTerminalCounter = 0;
+    uint64_t mExpressionCounter = 0;
 };
 
 } // namespace moon
