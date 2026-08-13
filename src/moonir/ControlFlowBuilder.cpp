@@ -420,7 +420,7 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     mMaterializedIterators.clear();
     mSlotDefaults.clear();
     mStaticApplyScopes.clear();
-    mFragmentExits.clear();
+    mFragmentContexts.clear();
     mCleanupByLocal.clear();
     mActiveExpressionCleanups.clear();
     mBindingIteratorRecipe = false;
@@ -729,13 +729,13 @@ ControlFlowBuilder::lowerStatement(
                         mActiveExpressionCleanups.begin(),
                         mActiveExpressionCleanups.end());
         auto& terminator = mGraph->blocks[current.block.value].terminator;
-        if (!mFragmentExits.empty()) {
+        if (!mFragmentContexts.empty()) {
             if (returned->value) {
                 error(returned->location,
                       "0.3 fragment return must not carry a value");
                 return std::nullopt;
             }
-            const BlockId exit = mFragmentExits.back();
+            const BlockId exit = mFragmentContexts.back().exit;
             terminator.kind = TerminatorKind::Jump;
             terminator.location = returned->location;
             terminator.primary.target = exit;
@@ -773,7 +773,7 @@ ControlFlowBuilder::lowerStatement(
             std::move(owned), std::move(current), region, scope);
     }
     if (auto* abort = dynamic_cast<AbortStmt*>(statement.get())) {
-        if (mFragmentExits.empty()) {
+        if (mFragmentContexts.empty()) {
             error(abort->location,
                   "abort() has no active canonical fragment boundary");
             return std::nullopt;
@@ -781,7 +781,7 @@ ControlFlowBuilder::lowerStatement(
         auto cleanups = lowerCleanupObligations(abort->cleanups, scope);
         cleanups.insert(cleanups.end(), current.cleanups.begin(),
                         current.cleanups.end());
-        const BlockId exit = mFragmentExits.back();
+        const BlockId exit = mFragmentContexts.back().exit;
         auto& terminator = mGraph->blocks[current.block.value].terminator;
         terminator.kind = TerminatorKind::Abort;
         terminator.location = abort->location;
@@ -790,10 +790,11 @@ ControlFlowBuilder::lowerStatement(
             cleanups, scope, mGraph->blocks[exit.value].scope);
         return std::nullopt;
     }
-    if (auto* resume = dynamic_cast<ResumeStmt*>(statement.get())) {
-        error(resume->location,
-              "context resume composition belongs to the next canonical continuation slice");
-        return std::nullopt;
+    if (dynamic_cast<ResumeStmt*>(statement.get())) {
+        std::unique_ptr<ResumeStmt> owned(
+            static_cast<ResumeStmt*>(statement.release()));
+        return lowerResume(
+            std::move(owned), std::move(current), region, scope);
     }
     if (dynamic_cast<IfStmt*>(statement.get())) {
         std::unique_ptr<IfStmt> owned(
@@ -4090,11 +4091,6 @@ ControlFlowBuilder::lowerSlotInvoke(
               "slot invocation and fragment control contracts disagree");
         return std::nullopt;
     }
-    if (fragment->kind != FragmentKind::Interceptor) {
-        error(statement->location,
-              "static context composition belongs to the next canonical continuation slice");
-        return std::nullopt;
-    }
     if (!fragment->body) {
         error(statement->location,
               "static fragment has no structured construction body");
@@ -4152,27 +4148,31 @@ ControlFlowBuilder::lowerSlotInvoke(
         region, scope, statement->location);
     const RegionId fragmentRegion = addRegion(
         region, RegionKind::Fragment, fragmentBody->location);
+    mGraph->regions[fragmentRegion.value].fragment = fragmentReference;
     const ScopeId fragmentScope = addScope(
         scope, fragmentRegion, fragmentBody->location);
     const BlockId fragmentEntry = addBlock(
         fragmentRegion, fragmentScope, fragmentBody->location);
+    const size_t outerBindingDepth = mBindings.size();
     pushBindings();
-    mFragmentExits.push_back(invocationExit);
+    mFragmentContexts.push_back({
+        invocationExit, fragment->kind, statement->continuation.get(),
+        outerBindingDepth});
     auto fragmentOpen = lowerSequence(
         fragmentBody->stmts, OpenBlock{fragmentEntry, {}},
         fragmentRegion, fragmentScope);
-    mFragmentExits.pop_back();
+    mFragmentContexts.pop_back();
     popBindings();
     mGraph->regions[fragmentRegion.value].exit = invocationExit;
     connectJump(current, fragmentEntry);
 
-    if (fragmentOpen) {
+    if (fragmentOpen && fragment->kind == FragmentKind::Interceptor) {
         auto continuation = lowerNestedBlock(
             std::move(statement->continuation), region, scope,
             RegionKind::Continuation);
         auto& terminator =
             mGraph->blocks[fragmentOpen->block.value].terminator;
-        terminator.kind = TerminatorKind::Resume;
+        terminator.kind = TerminatorKind::Jump;
         terminator.location = statement->location;
         terminator.primary.target = continuation.entry;
         terminator.primary.cleanups = canonicalCleanupOrder(
@@ -4180,8 +4180,85 @@ ControlFlowBuilder::lowerSlotInvoke(
         if (continuation.exit)
             connectJump(*continuation.exit, invocationExit);
         mGraph->regions[continuation.region.value].exit = invocationExit;
+    } else if (fragmentOpen) {
+        auto& terminator =
+            mGraph->blocks[fragmentOpen->block.value].terminator;
+        terminator.kind = TerminatorKind::Abort;
+        terminator.location = statement->location;
+        terminator.primary.target = invocationExit;
+        terminator.primary.cleanups = canonicalCleanupOrder(
+            fragmentOpen->cleanups, fragmentScope, scope);
     }
     return OpenBlock{invocationExit, {}};
+}
+
+std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerResume(
+    std::unique_ptr<ResumeStmt> statement, OpenBlock current,
+    RegionId region, ScopeId scope) {
+    if (mFragmentContexts.empty() ||
+        mFragmentContexts.back().kind != FragmentKind::Context ||
+        !mFragmentContexts.back().continuation) {
+        error(statement->location,
+              "resume() has no active canonical context continuation");
+        return std::nullopt;
+    }
+    const FragmentContext active = mFragmentContexts.back();
+    auto continuationBody = cloneStructuredBlock(active.continuation);
+    if (!continuationBody) {
+        error(statement->location,
+              "context continuation cannot be cloned before canonical construction");
+        return std::nullopt;
+    }
+
+    using BindingMap = std::unordered_map<std::string, LocalId>;
+    using IteratorMap = std::unordered_map<
+        std::string, MaterializedIteratorRecipe>;
+    using DefaultMap = std::unordered_map<std::string, DeclarationRef>;
+    std::vector<BindingMap> fragmentBindings;
+    std::vector<IteratorMap> fragmentIterators;
+    std::vector<DefaultMap> fragmentDefaults;
+    for (size_t index = active.outerBindingDepth;
+         index < mBindings.size(); ++index) {
+        fragmentBindings.push_back(std::move(mBindings[index]));
+        fragmentIterators.push_back(std::move(mMaterializedIterators[index]));
+        fragmentDefaults.push_back(std::move(mSlotDefaults[index]));
+    }
+    mBindings.resize(active.outerBindingDepth);
+    mMaterializedIterators.resize(active.outerBindingDepth);
+    mSlotDefaults.resize(active.outerBindingDepth);
+    auto fragmentContexts = std::move(mFragmentContexts);
+    mFragmentContexts.clear();
+
+    auto continuation = lowerNestedBlock(
+        std::move(continuationBody), region, scope,
+        RegionKind::Continuation);
+
+    mFragmentContexts = std::move(fragmentContexts);
+    mBindings.insert(
+        mBindings.end(),
+        std::make_move_iterator(fragmentBindings.begin()),
+        std::make_move_iterator(fragmentBindings.end()));
+    mMaterializedIterators.insert(
+        mMaterializedIterators.end(),
+        std::make_move_iterator(fragmentIterators.begin()),
+        std::make_move_iterator(fragmentIterators.end()));
+    mSlotDefaults.insert(
+        mSlotDefaults.end(),
+        std::make_move_iterator(fragmentDefaults.begin()),
+        std::make_move_iterator(fragmentDefaults.end()));
+
+    auto& terminator = mGraph->blocks[current.block.value].terminator;
+    terminator.kind = TerminatorKind::Resume;
+    terminator.location = statement->location;
+    terminator.primary.target = continuation.entry;
+    terminator.primary.cleanups = canonicalCleanupOrder(
+        current.cleanups, scope, continuation.scope);
+    if (!continuation.exit) return std::nullopt;
+
+    const BlockId resumed = addBlock(region, scope, statement->location);
+    connectJump(*continuation.exit, resumed);
+    mGraph->regions[continuation.region.value].exit = resumed;
+    return OpenBlock{resumed, current.cleanups};
 }
 
 bool ControlFlowBuilder::bindExpr(Expr* expression) {

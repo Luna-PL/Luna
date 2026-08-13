@@ -36,6 +36,16 @@ private:
         std::optional<OpenBlock> exit;
     };
 
+    struct FragmentContext {
+        BlockId exit;
+        FragmentKind kind = FragmentKind::Interceptor;
+        const BlockStmt* continuation = nullptr;
+        // Binding scopes at or below this depth belong to the fragment. A
+        // context continuation retains their lifetime but must resolve names
+        // only in the invoking lexical environment.
+        size_t outerBindingDepth = 0;
+    };
+
     struct IteratorRecipeStep {
         IteratorOp op = IteratorOp::None;
         std::unique_ptr<Expr> argument;
@@ -162,6 +172,9 @@ private:
     std::optional<OpenBlock> lowerSlotInvoke(
         std::unique_ptr<SlotInvokeStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
+    std::optional<OpenBlock> lowerResume(
+        std::unique_ptr<ResumeStmt> statement,
+        OpenBlock current, RegionId region, ScopeId scope);
     const FragmentDecl* resolveFragment(
         const DeclarationRef& reference) const;
 
@@ -205,7 +218,7 @@ private:
     // Active only while a cloned static fragment body is being composed into
     // its invocation graph. A source `return` or `abort` exits that fragment,
     // not the enclosing Luna function.
-    std::vector<BlockId> mFragmentExits;
+    std::vector<FragmentContext> mFragmentContexts;
     std::unordered_map<uint32_t, CleanupId> mCleanupByLocal;
     // Cleanup-bearing synthetic operands are active from their generated let
     // until the parent expression consumes them. Structured early exits built

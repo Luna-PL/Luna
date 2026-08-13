@@ -837,16 +837,30 @@ The first slot/fragment subphase is complete for static single-shot interceptors
 `apply { ... }` resolves its `DeclarationRef` during construction and becomes an `Apply` region;
 each invoked interceptor is cloned from its construction body into a `Fragment` region, while the
 slot body becomes a sibling `Continuation` region. Normal interceptor fallthrough uses a verified
-`Resume` edge to the continuation entry. `abort()` uses an `Abort` edge to the fragment exit, and a
+ordinary `Jump` to the continuation entry; `Resume` remains exclusive to an explicit context
+resume point. `abort()` uses an `Abort` edge to the fragment exit, and a
 fragment-local `return` becomes an ordinary cleanup-bearing jump to that same exit, so neither can
 enter the continuation. A return inside the continuation remains the enclosing function's
-`Return`. The verifier independently requires every resume to enter the sibling continuation of
-the same Apply region and every abort to target its enclosing fragment exit. Static composition
+`Return`. Every Fragment region carries its stable declaration/contract reference. The verifier
+independently requires automatic forwarding only under an interceptor contract, every resume only
+under a context contract and into the continuation of the same Apply, and every abort to target its
+enclosing fragment exit. Static composition
 therefore retains no descriptor, selector, function pointer, heap continuation, or runtime dispatch
 state. The declaration body is cloned only by the construction bridge and remains available for
 other static call sites; it is not a second executable meaning in the sealed graph. Blockless apply
-is rejected at this boundary because 0.3 requires an explicit lexical body. Context/resume,
-multi-shot, borrowed fragment-parameter bindings, and runtime apply remain later slices.
+is rejected at this boundary because 0.3 requires an explicit lexical body.
+
+Static single-shot contexts now use the same composition rather than a separate CPS operation.
+Each source `resume()` has a `Resume` terminator entering a retained lexical `Continuation` region;
+normal continuation completion jumps back to the statement following that resume. Fragment locals
+remain live across the edge but are not lexically visible inside the continuation, whose names bind
+to the invoking environment. A continuation `return` is the outer function `Return`, a context
+fallthrough is an implicit `Abort`, and explicit fragment `return`/`abort()` both skip the
+continuation through the fragment exit. The verifier rejects forged fragment identities, an
+ordinary context jump into a continuation, a continuation escape through a non-exit edge, or a
+continuation reference to fragment-local state. This graph requires no heap continuation, runtime
+descriptor, dispatch, or ownership flag. Multi-shot, borrowed fragment-parameter bindings, and
+runtime apply remain later slices.
 
 Item 10 is not complete as a whole. Capturing closure environments and the remaining non-Copy
 item/callable per-element ownership transitions remain explicit boundaries. Linear hoisting across

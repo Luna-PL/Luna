@@ -41,7 +41,7 @@ int main() {
     cfg.blocks.back().scope = cfg.rootScope;
     cfg.blocks.back().terminator.kind = moon::TerminatorKind::Return;
     cfg.regions.push_back({cfg.rootRegion, {}, moon::RegionKind::Function,
-                           cfg.rootScope, cfg.entry, {}, {cfg.entry}, {}});
+                           cfg.rootScope, cfg.entry, {}, {cfg.entry}, {}, {}});
     cfg.scopes.push_back({cfg.rootScope, {}, cfg.rootRegion, {}, {}, {}});
     if (!cfg.findBlock(cfg.entry) || !cfg.findRegion(cfg.rootRegion) ||
         !cfg.findScope(cfg.rootScope) ||
@@ -244,10 +244,10 @@ int main() {
     cleanupCfg.blocks[2].terminator.kind = moon::TerminatorKind::Return;
     cleanupCfg.regions.push_back({moon::RegionId{0}, {},
         moon::RegionKind::Function, moon::ScopeId{0}, moon::BlockId{0}, {},
-        {moon::BlockId{0}, moon::BlockId{2}}, {}});
+        {moon::BlockId{0}, moon::BlockId{2}}, {}, {}});
     cleanupCfg.regions.push_back({moon::RegionId{1}, moon::RegionId{0},
         moon::RegionKind::Lexical, moon::ScopeId{1}, moon::BlockId{1},
-        moon::BlockId{2}, {moon::BlockId{1}}, {}});
+        moon::BlockId{2}, {moon::BlockId{1}}, {}, {}});
     cleanupCfg.scopes.push_back({moon::ScopeId{0}, {}, moon::RegionId{0},
                                  {}, {}, {}});
     cleanupCfg.scopes.push_back({moon::ScopeId{1}, moon::ScopeId{0},
@@ -3813,6 +3813,7 @@ int main() {
     moon::Module compositionModule;
     compositionModule.name = "canonical.composition";
     const auto compositionUnit = compositionModule.registerType(TyUnit);
+    const auto compositionI32 = compositionModule.registerType(TyI32);
     const auto interceptorType = Type::makeFragment(
         {}, TyUnit, false, ContinuationKind::Interceptor);
     const auto interceptorTypeId =
@@ -3862,6 +3863,50 @@ int main() {
     interceptor->body->stmts.push_back(std::move(guardedAbort));
     auto* interceptorBody = interceptor->body.get();
     compositionModule.declarations.push_back(std::move(interceptor));
+
+    const auto contextType = Type::makeFragment(
+        {}, TyUnit, false, ContinuationKind::Context);
+    const auto contextTypeId = compositionModule.registerType(contextType);
+    const std::string contextId =
+        "canonical.composition::fragment::around";
+    moon::DeclarationRecord contextRecord;
+    contextRecord.id = contextId;
+    contextRecord.familyId = contextId;
+    contextRecord.symbolId =
+        luna::identity::symbolIdFromCanonical(contextId);
+    contextRecord.sourceName = "around";
+    contextRecord.linkageName = "around";
+    contextRecord.kind = moon::DeclarationKind::Fragment;
+    contextRecord.type = contextTypeId;
+    contextRecord.sysmeta = contextType->sysmeta;
+    compositionModule.declarationTable.push_back(contextRecord);
+    auto context = std::make_unique<moon::FragmentDecl>();
+    context->packageId = compositionModule.name;
+    context->declarationId = contextId;
+    context->familyId = contextId;
+    context->symbolId = contextRecord.symbolId;
+    context->name = "around";
+    context->generatedSymbolName = "around";
+    context->kind = moon::FragmentKind::Context;
+    context->cardinality = moon::FragmentCardinality::Once;
+    context->structuralType = contextTypeId;
+    context->body = std::make_unique<moon::BlockStmt>();
+    auto shadow = std::make_unique<moon::LetStmt>();
+    shadow->name = "value";
+    shadow->type = compositionI32;
+    auto shadowValue = std::make_unique<moon::IntLiteralExpr>();
+    shadowValue->value = 2;
+    shadowValue->type = compositionI32;
+    shadow->initializer = std::move(shadowValue);
+    context->body->stmts.push_back(std::move(shadow));
+    context->body->stmts.push_back(std::make_unique<moon::ResumeStmt>());
+    auto postResumeEffect = std::make_unique<moon::ExprStmt>();
+    auto postResumeUnit = std::make_unique<moon::UnitExpr>();
+    postResumeUnit->type = compositionUnit;
+    postResumeEffect->expr = std::move(postResumeUnit);
+    context->body->stmts.push_back(std::move(postResumeEffect));
+    auto* contextBody = context->body.get();
+    compositionModule.declarations.push_back(std::move(context));
     compositionModule.sealTypeTable();
     const auto* sealedInterceptor =
         compositionModule.findDeclarationById(interceptorId);
@@ -3871,9 +3916,19 @@ int main() {
         compositionModule.declarations.front().get());
     executableInterceptor->contractId = sealedInterceptor->contractId;
     executableInterceptor->sysmeta = sealedInterceptor->sysmeta;
+    const auto* sealedContext =
+        compositionModule.findDeclarationById(contextId);
+    if (!sealedContext)
+        return fail("static composition lost its context declaration row");
+    auto* executableContext = static_cast<moon::FragmentDecl*>(
+        compositionModule.declarations[1].get());
+    executableContext->contractId = sealedContext->contractId;
+    executableContext->sysmeta = sealedContext->sysmeta;
     compositionModule.rebuildIndexes();
     const moon::DeclarationRef interceptorRef{
         sealedInterceptor->symbolId, sealedInterceptor->contractId};
+    const moon::DeclarationRef contextRef{
+        sealedContext->symbolId, sealedContext->contractId};
 
     auto compositionBody = std::make_unique<moon::BlockStmt>();
     auto staticApply = std::make_unique<moon::ApplyStmt>();
@@ -3921,31 +3976,129 @@ int main() {
     if (!compositionCfg ||
         !cfgVerifier.verify(*compositionCfg, compositionModule) ||
         applyRegions != 1 || fragmentRegions != 1 ||
-        continuationRegions != 1 || resumeEdges != 1 || abortEdges != 1 ||
+        continuationRegions != 1 || resumeEdges != 0 || abortEdges != 1 ||
         executableInterceptor->body.get() != interceptorBody)
         return fail("static interceptor did not compose into canonical CFG regions and edges");
-    moon::Terminator* composedResume = nullptr;
+    moon::BlockId interceptorContinuationEntry;
+    for (const auto& composedRegion : compositionCfg->regions)
+        if (composedRegion.kind == moon::RegionKind::Continuation)
+            interceptorContinuationEntry = composedRegion.entry;
+    moon::Terminator* automaticForward = nullptr;
     moon::Terminator* composedAbort = nullptr;
     for (auto& block : compositionCfg->blocks) {
-        if (block.terminator.kind == moon::TerminatorKind::Resume)
-            composedResume = &block.terminator;
+        if (block.terminator.kind == moon::TerminatorKind::Jump &&
+            block.terminator.primary.target == interceptorContinuationEntry)
+            automaticForward = &block.terminator;
         if (block.terminator.kind == moon::TerminatorKind::Abort)
             composedAbort = &block.terminator;
     }
-    if (!composedResume || !composedAbort)
+    if (!automaticForward || !composedAbort)
         return fail("static composition lost a control terminator");
-    const auto continuationEntry = composedResume->primary.target;
     const auto fragmentExit = composedAbort->primary.target;
-    composedResume->primary.target = fragmentExit;
+    automaticForward->kind = moon::TerminatorKind::Resume;
     if (cfgVerifier.verify(*compositionCfg, compositionModule))
-        return fail("CFG verifier accepted resume into the fragment exit");
-    composedResume->primary.target = continuationEntry;
-    composedAbort->primary.target = continuationEntry;
+        return fail("CFG verifier accepted explicit resume in an interceptor");
+    automaticForward->kind = moon::TerminatorKind::Jump;
+    composedAbort->primary.target = interceptorContinuationEntry;
     if (cfgVerifier.verify(*compositionCfg, compositionModule))
         return fail("CFG verifier accepted abort into the continuation");
     composedAbort->primary.target = fragmentExit;
     if (!cfgVerifier.verify(*compositionCfg, compositionModule))
         return fail("restored static composition no longer verifies");
+
+    auto contextCompositionBody = std::make_unique<moon::BlockStmt>();
+    auto outerValue = std::make_unique<moon::LetStmt>();
+    outerValue->name = "value";
+    outerValue->type = compositionI32;
+    auto outerInitializer = std::make_unique<moon::IntLiteralExpr>();
+    outerInitializer->value = 1;
+    outerInitializer->type = compositionI32;
+    outerValue->initializer = std::move(outerInitializer);
+    contextCompositionBody->stmts.push_back(std::move(outerValue));
+    auto contextApply = std::make_unique<moon::ApplyStmt>();
+    contextApply->slotName = "hook";
+    contextApply->fragmentName = "around";
+    contextApply->fragmentRef = contextRef;
+    contextApply->body = std::make_unique<moon::BlockStmt>();
+    auto contextInvocation = std::make_unique<moon::SlotInvokeStmt>();
+    contextInvocation->name = "hook";
+    contextInvocation->acceptedKind = moon::FragmentKind::Context;
+    contextInvocation->acceptedCardinality = moon::FragmentCardinality::Once;
+    contextInvocation->continuation = std::make_unique<moon::BlockStmt>();
+    auto outerUse = std::make_unique<moon::ExprStmt>();
+    auto outerIdentifier = std::make_unique<moon::IdentifierExpr>();
+    outerIdentifier->name = "value";
+    outerIdentifier->type = compositionI32;
+    outerUse->expr = std::move(outerIdentifier);
+    contextInvocation->continuation->stmts.push_back(
+        std::move(outerUse));
+    contextApply->body->stmts.push_back(std::move(contextInvocation));
+    contextCompositionBody->stmts.push_back(std::move(contextApply));
+
+    auto contextCfg = cfgBuilder.build(
+        std::move(contextCompositionBody), {},
+        moon::RegionKind::Function, compositionModule);
+    moon::RegionRecord* contextRegion = nullptr;
+    moon::Terminator* contextResume = nullptr;
+    moon::Terminator* contextAbort = nullptr;
+    moon::IdentifierExpr* continuationIdentifier = nullptr;
+    if (contextCfg) {
+        for (auto& composedRegion : contextCfg->regions)
+            if (composedRegion.kind == moon::RegionKind::Fragment)
+                contextRegion = &composedRegion;
+        for (auto& block : contextCfg->blocks) {
+            if (block.terminator.kind == moon::TerminatorKind::Resume)
+                contextResume = &block.terminator;
+            if (block.terminator.kind == moon::TerminatorKind::Abort)
+                contextAbort = &block.terminator;
+            if (contextCfg->regions[block.region.value].kind ==
+                    moon::RegionKind::Continuation) {
+                for (auto& operation : block.operations) {
+                    auto* effect = dynamic_cast<moon::ExprStmt*>(
+                        operation.get());
+                    if (effect)
+                        continuationIdentifier =
+                            dynamic_cast<moon::IdentifierExpr*>(
+                                effect->expr.get());
+                }
+            }
+        }
+    }
+    if (!contextCfg ||
+        !cfgVerifier.verify(*contextCfg, compositionModule) ||
+        !contextRegion || !contextResume || !contextAbort ||
+        !continuationIdentifier || continuationIdentifier->local.empty() ||
+        contextCfg->locals[continuationIdentifier->local.value].scope !=
+            contextCfg->rootScope ||
+        executableContext->body.get() != contextBody)
+        return fail("static context did not preserve its stack continuation boundary");
+
+    moon::LocalId fragmentShadow;
+    for (const auto& local : contextCfg->locals)
+        if (local.name == "value" && local.scope != contextCfg->rootScope)
+            fragmentShadow = local.id;
+    if (fragmentShadow.empty())
+        return fail("context composition lost its fragment-local shadow");
+    const auto outerLocal = continuationIdentifier->local;
+    continuationIdentifier->local = fragmentShadow;
+    if (cfgVerifier.verify(*contextCfg, compositionModule))
+        return fail("CFG verifier exposed fragment-local state to its continuation");
+    continuationIdentifier->local = outerLocal;
+    const auto contextContinuationEntry = contextResume->primary.target;
+    contextResume->primary.target = contextAbort->primary.target;
+    if (cfgVerifier.verify(*contextCfg, compositionModule))
+        return fail("CFG verifier accepted context resume into the fragment exit");
+    contextResume->primary.target = contextContinuationEntry;
+    contextResume->kind = moon::TerminatorKind::Jump;
+    if (cfgVerifier.verify(*contextCfg, compositionModule))
+        return fail("CFG verifier accepted ordinary context jump into a continuation");
+    contextResume->kind = moon::TerminatorKind::Resume;
+    contextRegion->fragment = interceptorRef;
+    if (cfgVerifier.verify(*contextCfg, compositionModule))
+        return fail("CFG verifier accepted context control under an interceptor contract");
+    contextRegion->fragment = contextRef;
+    if (!cfgVerifier.verify(*contextCfg, compositionModule))
+        return fail("restored static context no longer verifies");
 
     auto blocklessBody = std::make_unique<moon::BlockStmt>();
     auto blocklessApply = std::make_unique<moon::ApplyStmt>();

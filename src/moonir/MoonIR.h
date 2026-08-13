@@ -737,6 +737,10 @@ struct RegionRecord {
     BlockId exit;
     std::vector<BlockId> blocks;
     SourceLocation location;
+    // Present only for an inlined Fragment region. The declaration table owns
+    // the nominal identity and frozen interceptor/context + once/many
+    // contract; regions do not duplicate that semantic payload.
+    DeclarationRef fragment;
 };
 
 struct ScopeRecord {

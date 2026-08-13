@@ -746,15 +746,24 @@ loop 的 header 同时是初始 edge 与 body backedge 的目标；每次经过 
 第一个 slot/fragment 子阶段现已完成 static single-shot interceptor。带显式词法体的
 `apply { ... }` 在构建期解析其 `DeclarationRef` 并形成 `Apply` region；每个被调用的
 interceptor 由 construction body 克隆进 `Fragment` region，slot body 则形成同一 Apply 下的
-`Continuation` region。interceptor 正常结束以经验证的 `Resume` edge 进入 continuation
-entry；`abort()` 以 `Abort` edge 进入 fragment exit，fragment 内的 `return` 则变为携带
+`Continuation` region。interceptor 正常结束以经验证的普通 `Jump` 进入 continuation
+entry；`Resume` 只保留给 context 的显式 resume point。`abort()` 以 `Abort` edge 进入 fragment exit，fragment 内的 `return` 则变为携带
 cleanup 的普通 jump 进入同一 exit，因而两者都不会执行 continuation。continuation 内的
-return 仍是外层函数的 `Return`。verifier 会独立要求 resume 进入同一 Apply 的兄弟
-continuation，abort 进入其所在 fragment 的 exit。因此 static composition 不保留 descriptor、
+return 仍是外层函数的 `Return`。每个 Fragment region 携带稳定的 declaration/contract reference。
+verifier 会独立要求自动转发只出现在 interceptor contract 下，resume 只出现在 context contract 下并进入
+同一 Apply 的 continuation，abort 进入其所在 fragment 的 exit。因此 static composition 不保留 descriptor、
 selector、function pointer、heap continuation 或 runtime dispatch state。声明体只由构建桥克隆，
 仍可供其他静态调用点使用；sealed graph 中不会保留第二个执行语义。该边界拒绝无 block
-apply，因为 0.3 要求显式词法体。context/resume、multi-shot、borrowed fragment parameter
-binding 与 runtime apply 仍属后续切片。
+apply，因为 0.3 要求显式词法体。
+
+static single-shot context 现也使用同一 composition，而不是另一种 CPS operation。每个源码
+`resume()` 以 `Resume` terminator 进入保持词法生命期的 `Continuation` region；continuation
+正常结束后跳回该 resume 之后的语句。fragment local 在该边上保持存活，但在 continuation 内不可见；
+continuation 中的名称仍绑定到调用环境。continuation 内的 `return` 是外层函数 `Return`，context
+正常落尾是隐式 `Abort`，fragment 内的显式 `return`/`abort()` 则都经 fragment exit 跳过 continuation。
+verifier 会拒绝伪造的 fragment identity、以普通 context jump 绕过 `Resume`、continuation 通过非 exit edge
+逃逸，以及 continuation 引用 fragment-local state。该图不需要 heap continuation、runtime descriptor、dispatch 或
+ownership flag。multi-shot、borrowed fragment parameter binding 与 runtime apply 仍属后续切片。
 
 第 10 项尚未整体完成。捕获式 closure environment 与其余 non-Copy
 item/callable 逐元素 ownership 转移仍是明确的后续边界。

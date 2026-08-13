@@ -217,6 +217,22 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
 
     std::vector<uint32_t> blockOwners(graph.blocks.size(), 0);
     for (const auto& region : graph.regions) {
+        if (region.kind == RegionKind::Fragment) {
+            verifyDeclarationRef(
+                region.fragment, region.location,
+                "canonical fragment region", module,
+                DeclarationKind::Fragment);
+            const auto* declaration = module.findDeclaration(
+                region.fragment);
+            const auto* fragmentType = declaration
+                ? module.findType(declaration->type) : nullptr;
+            if (!fragmentType || fragmentType->kind != TypeKind::Fragment)
+                error(region.location,
+                      "canonical fragment region has no frozen fragment contract");
+        } else if (!region.fragment.empty()) {
+            error(region.location,
+                  "non-fragment region carries a fragment declaration reference");
+        }
         if (!graph.findScope(region.scope))
             error(region.location, "region references a missing lexical scope");
         if (!graph.findBlock(region.entry))
@@ -460,10 +476,19 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         }
         return false;
     };
+    const auto scopeWithin = [&graph](ScopeId scope, ScopeId ancestor) {
+        std::unordered_set<uint32_t> visited;
+        for (const ScopeRecord* current = graph.findScope(scope); current;
+             current = graph.findScope(current->parent)) {
+            if (!visited.insert(current->id.value).second) break;
+            if (current->id == ancestor) return true;
+        }
+        return false;
+    };
     const auto scanGraphIdentifier =
-        [this, &graph, &localVisibleFrom](const IdentifierExpr& identifier,
-                                         const BasicBlock& block,
-                                         bool allowSyntheticTransfer) {
+        [this, &graph, &enclosingRegion, &localVisibleFrom, &scopeWithin](
+            const IdentifierExpr& identifier, const BasicBlock& block,
+            bool allowSyntheticTransfer) {
             if (!identifier.local.empty()) {
                 const auto* local = graph.findLocal(identifier.local);
                 if (!local) {
@@ -480,6 +505,16 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 if (!localVisibleFrom(local->scope, block.scope))
                     error(identifier.location,
                           "identifier references a local outside its lexical scope");
+                if (const auto* continuation = enclosingRegion(
+                        block.region, RegionKind::Continuation)) {
+                    const auto* fragment = enclosingRegion(
+                        continuation->parent, RegionKind::Fragment);
+                    if (fragment &&
+                        scopeWithin(local->scope, fragment->scope) &&
+                        !scopeWithin(local->scope, continuation->scope))
+                        error(identifier.location,
+                              "context continuation references fragment-local state");
+                }
                 if (local->kind == LocalKind::Synthetic &&
                     luna::ownership::isMoveOnly(local->usage) &&
                     !allowSyntheticTransfer)
@@ -822,6 +857,50 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                     error(block.terminator.location,
                           "jump terminator carries a switch type");
                 verifyEdge(block, block.terminator.primary, "jump edge");
+                if (const auto* target = graph.findBlock(
+                        block.terminator.primary.target)) {
+                    const auto* sourceContinuation = enclosingRegion(
+                        block.region, RegionKind::Continuation);
+                    const auto* targetContinuation = enclosingRegion(
+                        target->region, RegionKind::Continuation);
+                    if (sourceContinuation &&
+                        (!targetContinuation ||
+                         targetContinuation->id != sourceContinuation->id)) {
+                        if (sourceContinuation->exit.empty() ||
+                            target->id != sourceContinuation->exit)
+                            error(block.terminator.location,
+                                  "jump escapes a continuation through a non-exit edge");
+                    } else if (!sourceContinuation) {
+                        const auto* sourceFragment = enclosingRegion(
+                            block.region, RegionKind::Fragment);
+                        const auto* targetFragment = enclosingRegion(
+                            target->region, RegionKind::Fragment);
+                        if (sourceFragment && targetContinuation) {
+                            const auto* declaration = module.findDeclaration(
+                                sourceFragment->fragment);
+                            const auto* contract = declaration
+                                ? module.findType(declaration->type) : nullptr;
+                            const auto* fragmentApply = enclosingRegion(
+                                sourceFragment->id, RegionKind::Apply);
+                            const auto* continuationApply = enclosingRegion(
+                                targetContinuation->id, RegionKind::Apply);
+                            if (!contract ||
+                                contract->continuationKind !=
+                                    ContinuationKind::Interceptor ||
+                                !fragmentApply || !continuationApply ||
+                                fragmentApply->id != continuationApply->id)
+                                error(block.terminator.location,
+                                      "ordinary jump enters a continuation outside interceptor forwarding");
+                        } else if (sourceFragment &&
+                                   (!targetFragment ||
+                                    targetFragment->id != sourceFragment->id) &&
+                                   (sourceFragment->exit.empty() ||
+                                    target->id != sourceFragment->exit)) {
+                            error(block.terminator.location,
+                                  "jump escapes a fragment through a non-exit edge");
+                        }
+                    }
+                }
                 appendSuccessor(block.terminator.primary);
                 rejectSecondaryCasesAndExit();
                 break;
@@ -954,6 +1033,10 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                         ? "resume edge" : "abort edge");
                 if (const auto* fragment = enclosingRegion(
                         block.region, RegionKind::Fragment)) {
+                    const auto* declaration = module.findDeclaration(
+                        fragment->fragment);
+                    const auto* fragmentType = declaration
+                        ? module.findType(declaration->type) : nullptr;
                     const auto* target = graph.findBlock(
                         block.terminator.primary.target);
                     if (block.terminator.kind == TerminatorKind::Abort) {
@@ -962,6 +1045,11 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                             error(block.terminator.location,
                                   "abort edge does not target its enclosing fragment exit");
                     } else if (target) {
+                        if (!fragmentType ||
+                            fragmentType->continuationKind !=
+                                ContinuationKind::Context)
+                            error(block.terminator.location,
+                                  "resume terminator is not owned by a context fragment");
                         const auto* continuation = graph.findRegion(
                             target->region);
                         const auto* fragmentApply = enclosingRegion(
@@ -1943,6 +2031,20 @@ void Verifier::verifyDeclaration(const Decl& declaration, const Module& module) 
             error(fragment->location, "fragment '" + fragment->name + "' has no body");
         verifyType(fragment->structuralType, fragment->location,
                    "fragment '" + fragment->name + "' structural type", module);
+        const auto* contract = module.findType(fragment->structuralType);
+        if (!contract || contract->kind != TypeKind::Fragment) {
+            error(fragment->location,
+                  "fragment declaration has no frozen fragment contract");
+        } else {
+            const auto expectedKind = fragment->kind == FragmentKind::Interceptor
+                ? ContinuationKind::Interceptor
+                : ContinuationKind::Context;
+            if (contract->continuationKind != expectedKind ||
+                contract->isMultiShot !=
+                    (fragment->cardinality == FragmentCardinality::Many))
+                error(fragment->location,
+                      "fragment declaration disagrees with its frozen control contract");
+        }
         for (const auto& parameter : fragment->params)
             verifyType(parameter.type, fragment->location,
                        "fragment parameter '" + parameter.name + "'", module);
