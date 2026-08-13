@@ -748,10 +748,14 @@ The construction bridge records its synthetic cleanup row as active until the pa
 emitted. Any `TryExpr` failure or structured `return` built in that interval includes the row in its
 ordinary `Return.exitCleanups`; the successful path reaches the generated parent `MoveExpr`, which
 consumes it. The independent ownership dataflow rejects an omitted early-exit cleanup, so no runtime
-initialized flag is required. Linear siblings, unit siblings, and allocating struct/heap
-initializers remain explicitly rejected until their exactly-once path proof and allocation-order
-semantics exist; they are never copied or reordered implicitly. Short-circuit operands follow the
-conditional CFG normalization below.
+initialized flag is required. An explicitly transferred Linear sibling is accepted only when a
+recursive scan proves that no remaining operand contains a `TryExpr`, `BlockExpr`, or `IfExpr` that
+may leave before the parent consumes it. Its synthetic Linear local is tracked by the verifier's
+compile-time ownership marker and read through exactly one generated `MoveExpr`; unlike Affine, it
+has no cleanup fallback on an early exit. Linear siblings across a potential early exit, unit
+siblings, and allocating struct/heap initializers remain explicitly rejected until their path and
+allocation-order semantics exist; they are never copied or reordered implicitly. Short-circuit
+operands follow the conditional CFG normalization below.
 
 Anonymous structural records are now distinguished from allocating products. Their inline value
 construction has no allocation boundary, so field expressions use the same source-ordered operand
@@ -804,7 +808,7 @@ them on the next execution. This models source-level repeated evaluation without
 initialized flag, and an ordinary condition still keeps the previous compact single-block shape.
 
 Item 10 is not complete as a whole. Allocating struct/heap initialization plus Linear expression
-hoisting,
+hoisting across potential early exits,
 capturing closure environments, and non-Copy item/callable per-element ownership state remain
 explicit following boundaries. The remaining work then normalizes slot and fragment
 paths, atomically replaces

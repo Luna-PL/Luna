@@ -2161,6 +2161,16 @@ ControlFlowBuilder::normalizeOrderedOperands(
         auto* operand = operands[index];
         if (!operand || !containsPendingControlFlow(operand->get())) continue;
 
+        bool allowLinear = true;
+        for (size_t following = index; following < operands.size();
+             ++following) {
+            const auto* candidate = operands[following];
+            if (candidate && containsPotentialEarlyExit(candidate->get())) {
+                allowLinear = false;
+                break;
+            }
+        }
+
         // A later control-flow operand must not move evaluation of any
         // preceding value across its new CFG. Each eager value is frozen into
         // a synthetic local in source order. Copy values are read normally;
@@ -2169,7 +2179,8 @@ ControlFlowBuilder::normalizeOrderedOperands(
         for (size_t previous = 0; previous < index; ++previous) {
             auto* earlier = operands[previous];
             if (earlier &&
-                !hoistOrderedOperand(*earlier, current, scope)) {
+                !hoistOrderedOperand(
+                    *earlier, current, scope, allowLinear)) {
                 restoreCleanupDepth();
                 return std::nullopt;
             }
@@ -2354,9 +2365,81 @@ bool ControlFlowBuilder::containsPendingControlFlow(
     return false;
 }
 
+bool ControlFlowBuilder::containsPotentialEarlyExit(
+    const Expr* expression) const {
+    if (!expression) return false;
+    if (dynamic_cast<const TryExpr*>(expression) ||
+        dynamic_cast<const BlockExpr*>(expression) ||
+        dynamic_cast<const IfExpr*>(expression))
+        return true;
+    if (const auto* call = dynamic_cast<const CallExpr*>(expression)) {
+        if (containsPotentialEarlyExit(call->callee.get())) return true;
+        for (const auto& argument : call->args)
+            if (containsPotentialEarlyExit(argument.get())) return true;
+        return false;
+    }
+    if (const auto* binary = dynamic_cast<const BinaryExpr*>(expression))
+        return containsPotentialEarlyExit(binary->lhs.get()) ||
+            containsPotentialEarlyExit(binary->rhs.get());
+    if (const auto* unary = dynamic_cast<const UnaryExpr*>(expression))
+        return containsPotentialEarlyExit(unary->operand.get());
+    if (const auto* selection =
+            dynamic_cast<const DynamicSelectExpr*>(expression)) {
+        for (const auto& argument : selection->filterArguments)
+            if (containsPotentialEarlyExit(argument.get())) return true;
+        return false;
+    }
+    if (const auto* launch = dynamic_cast<const LaunchExpr*>(expression)) {
+        if (containsPotentialEarlyExit(launch->threads.get())) return true;
+        for (const auto& argument : launch->args)
+            if (containsPotentialEarlyExit(argument.get())) return true;
+        return false;
+    }
+    if (const auto* variant =
+            dynamic_cast<const VariantConstructExpr*>(expression)) {
+        for (const auto& argument : variant->args)
+            if (containsPotentialEarlyExit(argument.get())) return true;
+        return false;
+    }
+    if (const auto* result =
+            dynamic_cast<const ResultConstructExpr*>(expression))
+        return containsPotentialEarlyExit(result->payload.get());
+    if (const auto* field = dynamic_cast<const FieldAccessExpr*>(expression))
+        return containsPotentialEarlyExit(field->object.get());
+    if (const auto* index = dynamic_cast<const IndexExpr*>(expression))
+        return containsPotentialEarlyExit(index->object.get()) ||
+            containsPotentialEarlyExit(index->index.get());
+    if (const auto* length = dynamic_cast<const SliceLengthExpr*>(expression))
+        return containsPotentialEarlyExit(length->slice.get());
+    if (const auto* array = dynamic_cast<const ArrayLiteralExpr*>(expression)) {
+        for (const auto& element : array->elements)
+            if (containsPotentialEarlyExit(element.get())) return true;
+        return false;
+    }
+    if (const auto* record = dynamic_cast<const RecordLiteralExpr*>(expression)) {
+        for (const auto& field : record->fields)
+            if (containsPotentialEarlyExit(field.value.get())) return true;
+        return false;
+    }
+    if (const auto* allocation = dynamic_cast<const HeapAllocExpr*>(expression))
+        return containsPotentialEarlyExit(allocation->initializer.get());
+    if (const auto* move = dynamic_cast<const MoveExpr*>(expression))
+        return containsPotentialEarlyExit(move->operand.get());
+    if (const auto* borrow = dynamic_cast<const BorrowExpr*>(expression))
+        return containsPotentialEarlyExit(borrow->operand.get());
+    if (const auto* dereference = dynamic_cast<const DerefExpr*>(expression))
+        return containsPotentialEarlyExit(dereference->operand.get());
+    if (const auto* address = dynamic_cast<const AddrOfExpr*>(expression))
+        return containsPotentialEarlyExit(address->operand.get());
+    if (const auto* assignment = dynamic_cast<const AssignExpr*>(expression))
+        return containsPotentialEarlyExit(assignment->lhs.get()) ||
+            containsPotentialEarlyExit(assignment->rhs.get());
+    return false;
+}
+
 bool ControlFlowBuilder::hoistOrderedOperand(
     std::unique_ptr<Expr>& expression, OpenBlock& current,
-    ScopeId scope) {
+    ScopeId scope, bool allowLinear) {
     if (!expression) return true;
     if (dynamic_cast<IntLiteralExpr*>(expression.get()) ||
         dynamic_cast<FloatLiteralExpr*>(expression.get()) ||
@@ -2410,9 +2493,9 @@ bool ControlFlowBuilder::hoistOrderedOperand(
               "expression sibling hoisting requires a non-unit value");
         return false;
     }
-    if (usage == luna::ownership::Usage::Linear) {
+    if (usage == luna::ownership::Usage::Linear && !allowLinear) {
         error(expression->location,
-              "expression sibling hoisting does not yet support linear state");
+              "linear expression sibling may cross an early-exit CFG path");
         return false;
     }
     if (luna::ownership::isMoveOnly(usage) &&

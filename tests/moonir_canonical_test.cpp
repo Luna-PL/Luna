@@ -121,6 +121,16 @@ int main() {
          luna::ownership::Usage::Affine});
     const auto affineReducerTypeId = module.registerType(
         affineReducerType);
+    auto linearReducerType = Type::makeFunction(
+        {TyI32, TyI32}, TyI32,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Linear},
+         {luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Copy});
+    const auto linearReducerTypeId = module.registerType(
+        linearReducerType);
     auto affineValueProducerType = Type::makeFunction(
         {}, TyI32, {},
         {luna::ownership::Relation::Owned,
@@ -2052,6 +2062,114 @@ int main() {
         return fail(
             "block return did not clean an active affine expression sibling");
 
+    moon::Param linearReducerParameter;
+    linearReducerParameter.name = "linearReducer";
+    linearReducerParameter.type = linearReducerTypeId;
+    moon::Param linearValueParameter;
+    linearValueParameter.name = "linearValue";
+    linearValueParameter.type = i32Id;
+    linearValueParameter.usage = luna::ownership::Usage::Linear;
+    auto linearOrderedBoundary = std::make_unique<moon::BlockStmt>();
+    auto linearOrderedUse = std::make_unique<moon::ExprStmt>();
+    auto linearOrderedCall = std::make_unique<moon::CallExpr>();
+    auto linearOrderedReducer = std::make_unique<moon::IdentifierExpr>();
+    linearOrderedReducer->name = "linearReducer";
+    linearOrderedReducer->type = linearReducerTypeId;
+    linearOrderedCall->callee = std::move(linearOrderedReducer);
+    linearOrderedCall->type = i32Id;
+    auto linearOrderedMove = std::make_unique<moon::MoveExpr>();
+    linearOrderedMove->type = i32Id;
+    auto linearOrderedSource = std::make_unique<moon::IdentifierExpr>();
+    linearOrderedSource->name = "linearValue";
+    linearOrderedSource->type = i32Id;
+    linearOrderedMove->operand = std::move(linearOrderedSource);
+    linearOrderedCall->args.push_back(std::move(linearOrderedMove));
+    linearOrderedCall->args.push_back(makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false));
+    linearOrderedUse->expr = std::move(linearOrderedCall);
+    linearOrderedBoundary->stmts.push_back(
+        std::move(linearOrderedUse));
+    auto linearOrderedCfg = cfgBuilder.build(
+        std::move(linearOrderedBoundary),
+        {linearReducerParameter, linearValueParameter},
+        moon::RegionKind::Function, module);
+    const moon::LocalRecord* linearOrderedState = nullptr;
+    const moon::MoveExpr* linearOrderedTransfer = nullptr;
+    if (linearOrderedCfg) {
+        for (const auto& local : linearOrderedCfg->locals)
+            if (local.name.rfind("$expression.hoist.", 0) == 0)
+                linearOrderedState = &local;
+        for (const auto& block : linearOrderedCfg->blocks)
+            for (const auto& operation : block.operations) {
+                const auto* statement =
+                    dynamic_cast<const moon::ExprStmt*>(operation.get());
+                const auto* call = statement
+                    ? dynamic_cast<const moon::CallExpr*>(
+                          statement->expr.get())
+                    : nullptr;
+                if (call && call->args.size() == 2)
+                    linearOrderedTransfer =
+                        dynamic_cast<const moon::MoveExpr*>(
+                            call->args.front().get());
+            }
+    }
+    const auto* linearOrderedIdentifier = linearOrderedTransfer
+        ? dynamic_cast<const moon::IdentifierExpr*>(
+              linearOrderedTransfer->operand.get())
+        : nullptr;
+    if (!linearOrderedCfg ||
+        !cfgVerifier.verify(*linearOrderedCfg, module) ||
+        !linearOrderedState ||
+        linearOrderedState->usage != luna::ownership::Usage::Linear ||
+        !linearOrderedIdentifier ||
+        linearOrderedIdentifier->local != linearOrderedState->id)
+        return fail(
+            "linear sibling did not transfer exactly once across a non-exiting CFG");
+
+    auto linearExitBoundary = std::make_unique<moon::BlockStmt>();
+    auto linearExitUse = std::make_unique<moon::ExprStmt>();
+    auto linearExitCall = std::make_unique<moon::CallExpr>();
+    auto linearExitReducer = std::make_unique<moon::IdentifierExpr>();
+    linearExitReducer->name = "linearReducer";
+    linearExitReducer->type = linearReducerTypeId;
+    linearExitCall->callee = std::move(linearExitReducer);
+    linearExitCall->type = i32Id;
+    auto linearExitMove = std::make_unique<moon::MoveExpr>();
+    linearExitMove->type = i32Id;
+    auto linearExitSource = std::make_unique<moon::IdentifierExpr>();
+    linearExitSource->name = "linearValue";
+    linearExitSource->type = i32Id;
+    linearExitMove->operand = std::move(linearExitSource);
+    linearExitCall->args.push_back(std::move(linearExitMove));
+    auto linearExitTry = std::make_unique<moon::TryExpr>();
+    linearExitTry->type = i32Id;
+    linearExitTry->resultType = resultI32BoolId;
+    linearExitTry->propagatedResultType = resultI32BoolId;
+    linearExitTry->valueType = i32Id;
+    linearExitTry->errorType = boolId;
+    linearExitTry->propagatedErrorType = boolId;
+    auto linearExitInput = std::make_unique<moon::IdentifierExpr>();
+    linearExitInput->name = "input";
+    linearExitInput->type = resultI32BoolId;
+    linearExitTry->operand = std::move(linearExitInput);
+    linearExitCall->args.push_back(std::move(linearExitTry));
+    linearExitUse->expr = std::move(linearExitCall);
+    linearExitBoundary->stmts.push_back(std::move(linearExitUse));
+    if (cfgBuilder.build(
+            std::move(linearExitBoundary),
+            {linearReducerParameter, linearValueParameter, tryParameter},
+            moon::RegionKind::Function, module))
+        return fail(
+            "linear sibling crossed an early-exit CFG path");
+    bool diagnosedLinearExit = false;
+    for (const auto& message : cfgBuilder.errors())
+        diagnosedLinearExit = diagnosedLinearExit ||
+            message.find("linear expression sibling may cross an early-exit") !=
+                std::string::npos;
+    if (!diagnosedLinearExit)
+        return fail(
+            "linear sibling lost its early-exit diagnostic");
+
     auto affineSiblingBoundary = std::make_unique<moon::BlockStmt>();
     auto affineSiblingUse = std::make_unique<moon::ExprStmt>();
     auto affineSiblingCall = std::make_unique<moon::CallExpr>();
@@ -3003,6 +3121,7 @@ int main() {
     reverse.registerType(predicateType);
     reverse.registerType(reducerType);
     reverse.registerType(affineReducerType);
+    reverse.registerType(linearReducerType);
     reverse.registerType(affineValueProducerType);
     reverse.registerType(actionType);
     reverse.registerType(unitConsumerType);

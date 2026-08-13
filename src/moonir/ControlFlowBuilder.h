@@ -131,8 +131,10 @@ private:
         OpenBlock current, RegionId region, ScopeId scope);
     bool containsIteratorTerminal(const Expr* expression) const;
     bool containsPendingControlFlow(const Expr* expression) const;
+    bool containsPotentialEarlyExit(const Expr* expression) const;
     bool hoistOrderedOperand(std::unique_ptr<Expr>& expression,
-                             OpenBlock& current, ScopeId scope);
+                             OpenBlock& current, ScopeId scope,
+                             bool allowLinear);
     std::optional<OpenBlock> lowerIteratorTerminal(
         std::unique_ptr<CallExpr> terminal, OpenBlock current,
         RegionId region, ScopeId scope, bool discardUnitResult,

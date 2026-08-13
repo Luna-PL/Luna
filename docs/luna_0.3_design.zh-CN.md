@@ -667,9 +667,13 @@ verifier 会拒绝伪造的 Copy 读取。带 cleanup 义务且显式转移的 A
 synthetic cleanup row 为 active；在此期间构建的 `TryExpr` 失败路径或结构化
 `return` 会把它纳入普通 `Return.exitCleanups`，成功路径则到达父表达式中
 生成的 `MoveExpr` 并消费它。独立 ownership dataflow 会拒绝缺失的 early-exit
-cleanup，因而不需要 runtime initialized flag。Linear sibling、unit sibling 以及
-allocating struct/heap initializer 仍被明确拒绝，等待逐路径的恰好一次消费证明与
-allocation-order 语义；它们不会被隐式复制或重排。
+cleanup，因而不需要 runtime initialized flag。显式转移的 Linear sibling 只在
+递归扫描证明余下 operand 不含可在父表达式消费它之前退出的 `TryExpr`、
+`BlockExpr` 或 `IfExpr` 时才可 hoist。其 synthetic Linear local 由 verifier 的
+纯编译期 ownership marker 跟踪，并通过唯一的生成 `MoveExpr` 读取；与 Affine
+不同，Linear 在 early exit 上没有 cleanup 退路。跨越潜在 early exit 的 Linear
+sibling、unit sibling 以及 allocating struct/heap initializer 仍被明确拒绝，等待完整的
+逐路径与 allocation-order 语义；它们不会被隐式复制或重排。
 短路 operand 则进入下文的 conditional CFG 规范化。
 
 匿名 structural record 现已与会分配的 product 区分。其 inline 值构造没有 allocation
@@ -716,8 +720,8 @@ loop 的 header 同时是初始 edge 与 body backedge 的目标；每次经过 
 声明时重新激活。这在不增加 runtime initialized flag 的情况下表达了源语言的
 重复求值；普通 condition 仍保持原有的紧凑单 block 形态。
 
-第 10 项尚未整体完成。上述 allocating struct/heap initialization、Linear
-expression hoisting、
+第 10 项尚未整体完成。上述 allocating struct/heap initialization、跨越潜在
+early exit 的 Linear expression hoisting、
 捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup
 状态仍是明确的后续边界。
 随后规范化 slot 和 fragment
