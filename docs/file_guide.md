@@ -345,6 +345,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/moonir/Optimizer.h`
 - `src/moonir/Printer.cpp`
 - `src/moonir/Printer.h`
+- `src/moonir/Sealer.cpp`
+- `src/moonir/Sealer.h`
 - `src/moonir/Verifier.cpp`
 - `src/moonir/Verifier.h`
 - `src/package/Package.cpp`

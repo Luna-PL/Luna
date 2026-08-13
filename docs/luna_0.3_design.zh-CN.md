@@ -584,6 +584,15 @@ local、索引取 item、比较、赋值、branch 和 backedge；没有新增 it
 recipe operation，verifier 会拒绝 sealed CFG 中未展开的 recipe。builder 不会与旧 body
 并列挂接：sealed executable 在任何阶段都不能同时具有两套执行含义。
 
+首个 declaration-level sealing 切片现已覆盖 concrete function body。sealer 会从不消费
+原 body 的副本构造全部候选 CFG，逐一独立验证，并只在全部成功后一次性提交整个候选集。
+因此任一函数失败都不会改变任何 structured body；runtime-apply 边界已作为显式 rollback
+fixture。成功封存会删除 function structured body，只安装一份以 `Function` region 为根的
+CFG；module verifier 会拒绝缺失 body、body/CFG 并存、root kind 漂移或 parameter table
+与签名不一致。construction payload 中省略的冗余 operand type 可由 LocalId operand 与
+sealed type table 补齐，但非空冲突类型绝不被覆盖。该 sealer 尚未接入 production pipeline：
+必须先闭合 fragment/runtime composition 与 LLVM CFG consumption，之后才进行单向模块切换。
+
 无捕获 lambda 的子阶段也已完成：lambda expression 仅作为闭包值节点，其
 structured body 在构造时被消费为一份独立、以 `Lambda` region 为根的
 canonical CFG。这不是双层 IR：父函数与 lambda 分别只有一张 CFG，闭包值

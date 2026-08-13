@@ -100,7 +100,10 @@ path. Its default-fragment case runs source parsing and Sema through Luna loweri
 and independently verifying the canonical CFG. It checks the construction-only implicit `Apply`,
 an explicit static `apply`, context `Resume`, lexical LocalId capture, and preservation of reusable
 fragment bodies. A separately lowered dynamic-apply program must reach the declared static CFG
-boundary and be rejected rather than silently composed as a static candidate.
+boundary and be rejected rather than silently composed as a static candidate. The function sealer
+fixture additionally proves transactional replacement: a valid lowered function loses its
+structured body and verifies with one CFG, simultaneous representations are rejected, and a
+runtime-apply failure preserves the original module unchanged.
 
 The canonical table fixtures also cover cursor-guarded cleanup for sequentially consumed
 move-only arrays. Tamper cases reject mixed guarded/unguarded cleanup, duplicate element coverage,

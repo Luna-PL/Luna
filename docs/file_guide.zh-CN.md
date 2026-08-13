@@ -195,6 +195,8 @@ obligation，不能重新推导所有权。
 | `src/moonir/ControlFlowBuilder.cpp` | 消费暂态 structured body，分配稳定 local/scope/block 并生成唯一 CFG |
 | `src/moonir/Lowering.h` | typed AST 到 MoonIR 的 lowering 接口 |
 | `src/moonir/Lowering.cpp` | 消费 typed facts 生成 MoonIR；不得重新推断语义 |
+| `src/moonir/Sealer.h` | concrete executable body 原子封存接口 |
+| `src/moonir/Sealer.cpp` | 先构造并验证全部候选 CFG，再一次性替换 structured function body |
 | `src/moonir/Verifier.h` | MoonIR verifier 接口 |
 | `src/moonir/Verifier.cpp` | 结构、类型、cleanup、control-flow 不变量验证 |
 | `src/moonir/Optimizer.h` | 目标无关 MoonIR 优化接口 |
@@ -561,6 +563,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/moonir/Optimizer.h`
 - `src/moonir/Printer.cpp`
 - `src/moonir/Printer.h`
+- `src/moonir/Sealer.cpp`
+- `src/moonir/Sealer.h`
 - `src/moonir/Verifier.cpp`
 - `src/moonir/Verifier.h`
 - `src/package/Package.cpp`

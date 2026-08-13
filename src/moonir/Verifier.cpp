@@ -2319,8 +2319,15 @@ void Verifier::verifyFunction(
     }
     verifyType(function.returnType, function.location,
                "return type of '" + function.name + "'", module, generic);
-    if (!function.isExtern && !function.body)
-        error(function.location, "function '" + function.name + "' has no body");
+    if (function.isExtern) {
+        if (function.body || function.controlFlow)
+            error(function.location, "extern function '" + function.name +
+                  "' carries an executable body");
+    } else if (static_cast<bool>(function.body) ==
+               static_cast<bool>(function.controlFlow)) {
+        error(function.location, "function '" + function.name +
+              "' must own exactly one structured or canonical body");
+    }
     if (function.returnsLinear !=
         (function.returnUsage == luna::ownership::Usage::Linear))
         error(function.location, "function '" + function.name +
@@ -2331,7 +2338,41 @@ void Verifier::verifyFunction(
     const auto* returnType = module.findType(function.returnType);
     if (function.isKernel && returnType && returnType->kind != TypeKind::Unit)
         error(function.location, "kernel '" + function.name + "' must return unit");
-    if (function.body) verifyBlock(function.body.get(), module, function.name);
+    if (function.body) {
+        verifyBlock(function.body.get(), module, function.name);
+    } else if (function.controlFlow) {
+        const auto* root = function.controlFlow->findRegion(
+            function.controlFlow->rootRegion);
+        if (!root || root->kind != RegionKind::Function)
+            error(function.location,
+                  "function canonical body has no function root region");
+
+        std::vector<const LocalRecord*> parameters;
+        for (const auto& local : function.controlFlow->locals)
+            if (local.kind == LocalKind::Parameter)
+                parameters.push_back(&local);
+        if (parameters.size() != function.params.size()) {
+            error(function.location,
+                  "function canonical body parameter table has the wrong arity");
+        } else {
+            for (size_t index = 0; index < parameters.size(); ++index) {
+                const auto& expected = function.params[index];
+                const auto& actual = *parameters[index];
+                if (actual.scope != function.controlFlow->rootScope ||
+                    actual.name != expected.name ||
+                    actual.type != expected.type ||
+                    actual.usage != expected.usage ||
+                    actual.relation != expected.relation)
+                    error(function.location,
+                          "function canonical parameter disagrees with its signature");
+            }
+        }
+
+        Verifier nestedVerifier;
+        if (!nestedVerifier.verify(*function.controlFlow, module))
+            mErrors.insert(mErrors.end(), nestedVerifier.errors().begin(),
+                           nestedVerifier.errors().end());
+    }
     mAllowTypeParameters = previousAllowance;
 }
 

@@ -1,6 +1,7 @@
 #include "moonir/MoonIR.h"
 #include "moonir/ControlFlowBuilder.h"
 #include "moonir/Lowering.h"
+#include "moonir/Sealer.h"
 #include "moonir/Verifier.h"
 #include "sema/SymbolTable.h"
 #include "tooling/AnalysisSnapshot.h"
@@ -4047,6 +4048,65 @@ int main() {
     if (!verifier.verify(reverse))
         return fail("reverse-order canonical module failed independent verification");
 
+    const std::string sealableFunctionSource = R"luna(
+package canonical.sealer;
+
+fn increment(value: i32) -> i32 {
+    let result = value + 1;
+    return result;
+}
+)luna";
+    auto sealableSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        sealableFunctionSource, "<canonical-sealer>");
+    if (!sealableSnapshot.success())
+        return fail("frontend rejected the canonical sealer source");
+    moon::LunaLowerer sealableLowerer;
+    auto sealableModule = sealableLowerer.lower(
+        *sealableSnapshot.program(), *sealableSnapshot.symbolTable());
+    if (!sealableLowerer.errors().empty() ||
+        !verifier.verify(*sealableModule))
+        return fail("structured sealer input did not verify");
+    moon::FunctionDecl* sealableFunction = nullptr;
+    for (auto& declaration : sealableModule->declarations) {
+        auto* function = dynamic_cast<moon::FunctionDecl*>(
+            declaration.get());
+        if (function && function->name == "increment") {
+            sealableFunction = function;
+            break;
+        }
+    }
+    if (!sealableFunction || !sealableFunction->body ||
+        sealableFunction->controlFlow)
+        return fail("sealer input does not own exactly one construction body");
+    moon::Sealer sealer;
+    if (!sealer.sealFunctionBodies(*sealableModule)) {
+        for (const auto& error : sealer.errors()) std::cerr << error << '\n';
+        return fail("atomic function sealing rejected a canonical source body");
+    }
+    if (sealableFunction->body || !sealableFunction->controlFlow ||
+        !verifier.verify(*sealableModule))
+        return fail("atomic function sealing did not install one verified CFG body");
+    sealableFunction->body = std::make_unique<moon::BlockStmt>();
+    if (verifier.verify(*sealableModule))
+        return fail("module verifier accepted simultaneous function bodies");
+    sealableFunction->body.reset();
+    if (!verifier.verify(*sealableModule))
+        return fail("restored sealed function module no longer verifies");
+    auto sealedParameter = std::find_if(
+        sealableFunction->controlFlow->locals.begin(),
+        sealableFunction->controlFlow->locals.end(),
+        [](const moon::LocalRecord& local) {
+            return local.kind == moon::LocalKind::Parameter;
+        });
+    if (sealedParameter == sealableFunction->controlFlow->locals.end())
+        return fail("sealed function lost its canonical parameter");
+    sealedParameter->relation = luna::ownership::Relation::SharedBorrow;
+    if (verifier.verify(*sealableModule))
+        return fail("module verifier accepted a CFG/signature parameter mismatch");
+    sealedParameter->relation = luna::ownership::Relation::Owned;
+    if (!verifier.verify(*sealableModule))
+        return fail("restored canonical function signature no longer verifies");
+
     moon::Module compositionModule;
     compositionModule.name = "canonical.composition";
     const auto compositionUnit = compositionModule.registerType(TyUnit);
@@ -4546,6 +4606,10 @@ runtime context trace(value: i32) {
     resume();
 }
 
+fn stable_entry() -> i32 {
+    return 1;
+}
+
 fn dynamic_entry() -> i32 {
     dynamic slot context pipeline(value: i32);
     dynamic apply pipeline(trace) {
@@ -4580,23 +4644,27 @@ fn dynamic_entry() -> i32 {
         return fail("runtime-boundary module failed structured verification");
     }
     moon::FunctionDecl* dynamicEntry = nullptr;
+    moon::FunctionDecl* stableEntry = nullptr;
     for (auto& declaration : runtimeIntegrationModule->declarations) {
         auto* function = dynamic_cast<moon::FunctionDecl*>(declaration.get());
         if (function && function->name == "dynamic_entry") {
             dynamicEntry = function;
-            break;
+        } else if (function && function->name == "stable_entry") {
+            stableEntry = function;
         }
     }
-    if (!dynamicEntry || !dynamicEntry->body)
+    if (!dynamicEntry || !dynamicEntry->body ||
+        !stableEntry || !stableEntry->body)
         return fail("runtime-boundary module lost its entry body");
-    moon::ControlFlowBuilder runtimeBoundaryBuilder;
-    if (runtimeBoundaryBuilder.build(
-            std::move(dynamicEntry->body), dynamicEntry->params,
-            moon::RegionKind::Function, *runtimeIntegrationModule))
-        return fail("canonical static CFG accepted a lowered runtime apply");
+    const auto* dynamicConstructionBody = dynamicEntry->body.get();
+    const auto* stableConstructionBody = stableEntry->body.get();
+    moon::Sealer runtimeBoundarySealer;
+    if (runtimeBoundarySealer.sealFunctionBodies(
+            *runtimeIntegrationModule))
+        return fail("canonical function sealing accepted a lowered runtime apply");
     const bool diagnosedRuntimeBoundary = std::any_of(
-        runtimeBoundaryBuilder.errors().begin(),
-        runtimeBoundaryBuilder.errors().end(),
+        runtimeBoundarySealer.errors().begin(),
+        runtimeBoundarySealer.errors().end(),
         [](const std::string& error) {
             return error.find(
                        "runtime slot composition is outside the static canonical CFG slice") !=
@@ -4607,6 +4675,13 @@ fn dynamic_entry() -> i32 {
         });
     if (!diagnosedRuntimeBoundary)
         return fail("canonical CFG did not diagnose its runtime-apply boundary");
+    if (dynamicEntry->body.get() != dynamicConstructionBody ||
+        dynamicEntry->controlFlow ||
+        stableEntry->body.get() != stableConstructionBody ||
+        stableEntry->controlFlow)
+        return fail("failed module sealing partially consumed its function set");
+    if (!verifier.verify(*runtimeIntegrationModule))
+        return fail("failed atomic sealing changed the structured module");
 
     const auto reverseIterator = reverse.typesById.find(shortId.value);
     if (reverseIterator == reverse.typesById.end())

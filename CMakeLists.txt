@@ -186,6 +186,7 @@ add_executable(moonir-canonical-test
     src/moonir/ControlFlowBuilder.cpp
     src/moonir/Lowering.cpp
     src/moonir/MoonIR.cpp
+    src/moonir/Sealer.cpp
     src/moonir/Verifier.cpp
     $<TARGET_OBJECTS:luna-frontend>
 )
@@ -206,6 +207,7 @@ add_executable(luna
     src/moonir/Verifier.cpp
     src/moonir/Optimizer.cpp
     src/moonir/Printer.cpp
+    src/moonir/Sealer.cpp
     src/codegen/CGHelpers.cpp
     src/codegen/CodeGenerator.cpp
     src/codegen/CodeGeneratorCleanup.cpp

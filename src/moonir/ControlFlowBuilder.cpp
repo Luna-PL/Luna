@@ -413,6 +413,15 @@ std::unique_ptr<Stmt> cloneStructuredStmt(const Stmt* source) {
 } // namespace
 
 std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
+    const BlockStmt& root,
+    const std::vector<Param>& parameters,
+    RegionKind rootKind,
+    const Module& module) {
+    return build(
+        cloneStructuredBlock(&root), parameters, rootKind, module);
+}
+
+std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     std::unique_ptr<BlockStmt> root,
     const std::vector<Param>& parameters,
     RegionKind rootKind,
@@ -4406,10 +4415,57 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
         }
         return true;
     }
-    if (auto* binary = dynamic_cast<BinaryExpr*>(expression))
-        return bindExpr(binary->lhs.get()) && bindExpr(binary->rhs.get());
-    if (auto* unary = dynamic_cast<UnaryExpr*>(expression))
-        return bindExpr(unary->operand.get());
+    if (auto* binary = dynamic_cast<BinaryExpr*>(expression)) {
+        if (!bindExpr(binary->lhs.get()) ||
+            !bindExpr(binary->rhs.get()))
+            return false;
+        if (binary->type.empty()) {
+            switch (binary->op) {
+                case Operator::Equal:
+                case Operator::NotEqual:
+                case Operator::Less:
+                case Operator::LessEqual:
+                case Operator::Greater:
+                case Operator::GreaterEqual:
+                case Operator::LogicalAnd:
+                case Operator::LogicalOr:
+                    for (const auto& type : mModule->typeTable)
+                        if (type.kind == TypeKind::Bool) {
+                            binary->type = type.id;
+                            break;
+                        }
+                    break;
+                default:
+                    if (binary->lhs)
+                        binary->type = binary->lhs->type;
+                    break;
+            }
+        }
+        return true;
+    }
+    if (auto* unary = dynamic_cast<UnaryExpr*>(expression)) {
+        if (!bindExpr(unary->operand.get())) return false;
+        if (unary->type.empty()) {
+            if (unary->op == Operator::LogicalNot) {
+                for (const auto& type : mModule->typeTable)
+                    if (type.kind == TypeKind::Bool) {
+                        unary->type = type.id;
+                        break;
+                    }
+            } else if (unary->op == Operator::Dereference &&
+                       unary->operand) {
+                const auto* operandType = mModule->findType(
+                    unary->operand->type);
+                if (operandType &&
+                    (operandType->kind == TypeKind::Reference ||
+                     operandType->kind == TypeKind::RawPointer))
+                    unary->type = operandType->innerTypeId;
+            } else if (unary->operand) {
+                unary->type = unary->operand->type;
+            }
+        }
+        return true;
+    }
     if (auto* call = dynamic_cast<CallExpr*>(expression)) {
         if (call->iteratorOp != IteratorOp::None &&
             !mBindingIteratorRecipe) {
@@ -4446,10 +4502,38 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
     }
     if (auto* result = dynamic_cast<ResultConstructExpr*>(expression))
         return bindExpr(result->payload.get());
-    if (auto* field = dynamic_cast<FieldAccessExpr*>(expression))
-        return bindExpr(field->object.get());
-    if (auto* index = dynamic_cast<IndexExpr*>(expression))
-        return bindExpr(index->object.get()) && bindExpr(index->index.get());
+    if (auto* field = dynamic_cast<FieldAccessExpr*>(expression)) {
+        if (!bindExpr(field->object.get())) return false;
+        if (field->type.empty() && field->object) {
+            const auto* objectType = mModule->findType(
+                field->object->type);
+            if (objectType && objectType->kind == TypeKind::Reference)
+                objectType = mModule->findType(objectType->innerTypeId);
+            if (objectType)
+                for (const auto& candidate : objectType->fields)
+                    if (candidate.name == field->field) {
+                        field->type = candidate.type;
+                        break;
+                    }
+        }
+        return true;
+    }
+    if (auto* index = dynamic_cast<IndexExpr*>(expression)) {
+        if (!bindExpr(index->object.get()) ||
+            !bindExpr(index->index.get()))
+            return false;
+        if (index->type.empty() && index->object) {
+            const auto* objectType = mModule->findType(
+                index->object->type);
+            if (objectType && objectType->kind == TypeKind::Reference)
+                objectType = mModule->findType(objectType->innerTypeId);
+            if (objectType &&
+                (objectType->kind == TypeKind::Array ||
+                 objectType->kind == TypeKind::Slice))
+                index->type = objectType->innerTypeId;
+        }
+        return true;
+    }
     if (auto* length = dynamic_cast<SliceLengthExpr*>(expression))
         return bindExpr(length->slice.get());
     if (auto* array = dynamic_cast<ArrayLiteralExpr*>(expression)) {
@@ -4499,17 +4583,56 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
               "control-flow expression must be normalized in a later CFG subphase");
         return false;
     }
-    if (auto* move = dynamic_cast<MoveExpr*>(expression))
-        return bindExpr(move->operand.get());
-    if (auto* borrow = dynamic_cast<BorrowExpr*>(expression))
-        return bindExpr(borrow->operand.get());
-    if (auto* dereference = dynamic_cast<DerefExpr*>(expression))
-        return bindExpr(dereference->operand.get());
-    if (auto* address = dynamic_cast<AddrOfExpr*>(expression))
-        return bindExpr(address->operand.get());
-    if (auto* assignment = dynamic_cast<AssignExpr*>(expression))
-        return bindExpr(assignment->lhs.get()) &&
-               bindExpr(assignment->rhs.get());
+    if (auto* move = dynamic_cast<MoveExpr*>(expression)) {
+        if (!bindExpr(move->operand.get())) return false;
+        if (move->type.empty() && move->operand)
+            move->type = move->operand->type;
+        return true;
+    }
+    if (auto* borrow = dynamic_cast<BorrowExpr*>(expression)) {
+        if (!bindExpr(borrow->operand.get())) return false;
+        if (borrow->type.empty() && borrow->operand)
+            for (const auto& type : mModule->typeTable)
+                if (type.kind == TypeKind::Reference &&
+                    type.isMutable == borrow->isMutable &&
+                    type.innerTypeId == borrow->operand->type) {
+                    borrow->type = type.id;
+                    break;
+                }
+        return true;
+    }
+    if (auto* dereference = dynamic_cast<DerefExpr*>(expression)) {
+        if (!bindExpr(dereference->operand.get())) return false;
+        if (dereference->type.empty() && dereference->operand) {
+            const auto* operandType = mModule->findType(
+                dereference->operand->type);
+            if (operandType &&
+                (operandType->kind == TypeKind::Reference ||
+                 operandType->kind == TypeKind::RawPointer))
+                dereference->type = operandType->innerTypeId;
+        }
+        return true;
+    }
+    if (auto* address = dynamic_cast<AddrOfExpr*>(expression)) {
+        if (!bindExpr(address->operand.get())) return false;
+        if (address->type.empty() && address->operand)
+            for (const auto& type : mModule->typeTable)
+                if (type.kind == TypeKind::Reference &&
+                    type.isMutable == address->isMutable &&
+                    type.innerTypeId == address->operand->type) {
+                    address->type = type.id;
+                    break;
+                }
+        return true;
+    }
+    if (auto* assignment = dynamic_cast<AssignExpr*>(expression)) {
+        if (!bindExpr(assignment->lhs.get()) ||
+            !bindExpr(assignment->rhs.get()))
+            return false;
+        if (assignment->type.empty() && assignment->lhs)
+            assignment->type = assignment->lhs->type;
+        return true;
+    }
     return true;
 }
 

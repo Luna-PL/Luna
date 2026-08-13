@@ -824,7 +824,10 @@ struct FunctionDecl : Decl {
     TypeRef returnType;
     bool returnsLinear = false;
     luna::ownership::Usage returnUsage = luna::ownership::Usage::Copy;
+    // Construction owns a structured body. Sealing atomically replaces it
+    // with the sole executable CFG; the two representations may never coexist.
     std::unique_ptr<BlockStmt> body;
+    std::unique_ptr<ControlFlowGraph> controlFlow;
     bool isTemplateInstance = false;
     TypeRefVec concreteTypeArgs;
 };

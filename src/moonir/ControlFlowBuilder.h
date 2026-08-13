@@ -15,6 +15,15 @@ namespace moon {
 // consumed and never becomes part of a sealed Module.
 class ControlFlowBuilder {
 public:
+    // Non-consuming construction is used by the atomic module sealer: all
+    // candidate graphs are built and verified before any source body is
+    // removed from its declaration.
+    std::unique_ptr<ControlFlowGraph> build(
+        const BlockStmt& root,
+        const std::vector<Param>& parameters,
+        RegionKind rootKind,
+        const Module& module);
+
     std::unique_ptr<ControlFlowGraph> build(
         std::unique_ptr<BlockStmt> root,
         const std::vector<Param>& parameters,

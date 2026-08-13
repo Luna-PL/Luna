@@ -657,6 +657,17 @@ iterator terminator or opaque recipe operation is added, and the verifier reject
 recipe in a sealed CFG. The builder is deliberately not attached beside the old body: a sealed
 executable must never acquire two execution meanings.
 
+The first declaration-level sealing slice is now in place for concrete function bodies. The
+sealer builds every candidate graph from a non-consuming copy, independently verifies it, and
+commits the whole candidate set only after all graphs succeed. A failed function therefore leaves
+every structured body untouched; the runtime-apply boundary is an explicit rollback fixture.
+Successful sealing removes the function's structured body and installs one `Function`-rooted CFG,
+and module verification rejects missing bodies, simultaneous body/CFG ownership, root-kind drift,
+or parameter-table disagreement. Frozen operand types omitted as redundant construction payload
+are reconstructed from LocalId operands and the sealed type table without overwriting a conflicting
+non-empty type. This sealer is not yet invoked by the production pipeline: fragment/runtime
+composition and LLVM CFG consumption must close before the one-way module switch.
+
 The capture-free lambda subphase is also complete. A lambda expression remains a closure-value
 node, while construction consumes its structured body into an independent canonical CFG rooted at
 a `Lambda` region. This is not a second IR layer: the parent function and lambda each have exactly
