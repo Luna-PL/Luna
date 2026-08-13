@@ -66,6 +66,7 @@ int main() {
         Type::makeReference(TyI32), IteratorMode::Shared, slice);
     auto mutableSliceIterator = Type::makeIterator(
         Type::makeReference(TyI32, true), IteratorMode::Mutable, slice);
+    auto guardedArray = Type::makeArray(TyString, 2);
 
     moon::Module module;
     module.name = "canonical.test";
@@ -91,6 +92,7 @@ int main() {
     const auto i32Id = module.registerType(TyI32);
     const auto usizeId = module.registerType(TyUSize);
     const auto stringId = module.registerType(TyString);
+    const auto guardedArrayId = module.registerType(guardedArray);
     const auto boolId = module.registerType(TyBool);
     const auto unitId = module.registerType(TyUnit);
     auto resultI32Bool = Type::makeResult(TyI32, TyBool);
@@ -263,12 +265,104 @@ int main() {
     cleanupCfg.cleanups.push_back({moon::CleanupId{0}, moon::ScopeId{1},
         {moon::LocalId{0}, {}}, stringId,
         moon::CleanupKind::Value,
-        luna::ownership::CleanupAction::Deallocate});
+        luna::ownership::CleanupAction::Deallocate, {}});
     if (!cfgVerifier.verify(cleanupCfg, module))
         return fail("CFG verifier rejected a canonical scope-exit cleanup edge");
     cleanupCfg.blocks[1].terminator.primary.cleanups.clear();
     if (cfgVerifier.verify(cleanupCfg, module))
         return fail("CFG verifier accepted an omitted scope-exit cleanup");
+
+    moon::ControlFlowGraph guardedCleanupCfg;
+    guardedCleanupCfg.sealed = true;
+    guardedCleanupCfg.entry = moon::BlockId{0};
+    guardedCleanupCfg.rootRegion = moon::RegionId{0};
+    guardedCleanupCfg.rootScope = moon::ScopeId{0};
+    guardedCleanupCfg.blocks.emplace_back();
+    guardedCleanupCfg.blocks.back().id = moon::BlockId{0};
+    guardedCleanupCfg.blocks.back().region = moon::RegionId{0};
+    guardedCleanupCfg.blocks.back().scope = moon::ScopeId{0};
+    guardedCleanupCfg.blocks.back().terminator.kind =
+        moon::TerminatorKind::Return;
+    guardedCleanupCfg.blocks.back().terminator.exitCleanups = {
+        moon::CleanupId{1}, moon::CleanupId{0}};
+    guardedCleanupCfg.regions.push_back({
+        moon::RegionId{0}, {}, moon::RegionKind::Function,
+        moon::ScopeId{0}, moon::BlockId{0}, {}, {moon::BlockId{0}},
+        {}, {}, {}});
+    guardedCleanupCfg.scopes.push_back({
+        moon::ScopeId{0}, {}, moon::RegionId{0},
+        {moon::LocalId{0}, moon::LocalId{1}},
+        {moon::CleanupId{0}, moon::CleanupId{1}}, {}});
+    guardedCleanupCfg.locals.push_back({
+        moon::LocalId{0}, moon::ScopeId{0}, moon::LocalKind::Binding,
+        "source", guardedArrayId, luna::ownership::Usage::Affine,
+        luna::ownership::Relation::Owned});
+    guardedCleanupCfg.locals.push_back({
+        moon::LocalId{1}, moon::ScopeId{0}, moon::LocalKind::Synthetic,
+        "$source.next-unread", i32Id, luna::ownership::Usage::Copy,
+        luna::ownership::Relation::Owned});
+    auto guardedSource = std::make_unique<moon::LetStmt>();
+    guardedSource->name = "source";
+    guardedSource->local = moon::LocalId{0};
+    guardedSource->usage = luna::ownership::Usage::Affine;
+    guardedSource->relation = luna::ownership::Relation::Owned;
+    guardedSource->type = guardedArrayId;
+    auto guardedArrayValue = std::make_unique<moon::ArrayLiteralExpr>();
+    guardedArrayValue->type = guardedArrayId;
+    guardedArrayValue->elementType = stringId;
+    for (const char* value : {"first", "second"}) {
+        auto element = std::make_unique<moon::StringLiteralExpr>();
+        element->value = value;
+        element->type = stringId;
+        guardedArrayValue->elements.push_back(std::move(element));
+    }
+    guardedSource->initializer = std::move(guardedArrayValue);
+    guardedCleanupCfg.blocks.back().operations.push_back(
+        std::move(guardedSource));
+    auto guardedCursor = std::make_unique<moon::LetStmt>();
+    guardedCursor->name = "$source.next-unread";
+    guardedCursor->local = moon::LocalId{1};
+    guardedCursor->usage = luna::ownership::Usage::Copy;
+    guardedCursor->relation = luna::ownership::Relation::Owned;
+    guardedCursor->type = i32Id;
+    auto guardedCursorValue = std::make_unique<moon::IntLiteralExpr>();
+    guardedCursorValue->value = 0;
+    guardedCursorValue->type = i32Id;
+    guardedCursor->initializer = std::move(guardedCursorValue);
+    guardedCleanupCfg.blocks.back().operations.push_back(
+        std::move(guardedCursor));
+    for (uint64_t element = 0; element < 2; ++element) {
+        moon::CleanupRecord cleanup;
+        cleanup.id = moon::CleanupId{static_cast<uint32_t>(element)};
+        cleanup.scope = moon::ScopeId{0};
+        cleanup.place.root = moon::LocalId{0};
+        cleanup.place.projections.push_back({
+            moon::ProjectionKind::ConstantIndex, element, {}});
+        cleanup.type = stringId;
+        cleanup.kind = moon::CleanupKind::Value;
+        cleanup.action = luna::ownership::CleanupAction::Deallocate;
+        cleanup.guard = moon::CleanupGuard{moon::LocalId{1}, element};
+        guardedCleanupCfg.cleanups.push_back(std::move(cleanup));
+    }
+    if (!cfgVerifier.verify(guardedCleanupCfg, module))
+        return fail("CFG verifier rejected canonical guarded array cleanup state");
+    guardedCleanupCfg.cleanups[1].guard.reset();
+    if (cfgVerifier.verify(guardedCleanupCfg, module))
+        return fail("CFG verifier accepted mixed guarded and unguarded array cleanup");
+    guardedCleanupCfg.cleanups[1].guard =
+        moon::CleanupGuard{moon::LocalId{1}, 1};
+    guardedCleanupCfg.cleanups[1].guard->elementIndex = 0;
+    guardedCleanupCfg.cleanups[1].place.projections.front().index = 0;
+    if (cfgVerifier.verify(guardedCleanupCfg, module))
+        return fail("CFG verifier accepted duplicate guarded array state");
+    guardedCleanupCfg.cleanups[1].guard->elementIndex = 1;
+    guardedCleanupCfg.cleanups[1].place.projections.front().index = 1;
+    guardedCleanupCfg.cleanups[1].guard->nextUnread = moon::LocalId{0};
+    if (cfgVerifier.verify(guardedCleanupCfg, module))
+        return fail("CFG verifier accepted a non-cursor cleanup guard");
+    guardedCleanupCfg.cleanups[1].guard->nextUnread = moon::LocalId{1};
+    if (!cfgVerifier.verify(guardedCleanupCfg, module))
+        return fail("restored guarded array cleanup state no longer verifies");
 
     auto structured = std::make_unique<moon::BlockStmt>();
     auto binding = std::make_unique<moon::LetStmt>();
@@ -3779,6 +3873,7 @@ int main() {
         "canonical.test::OwnedSnapshot"));
     reverse.registerType(TyUSize);
     reverse.registerType(TyString);
+    reverse.registerType(guardedArray);
     reverse.registerType(TyBool);
     reverse.registerType(TyUnit);
     reverse.registerType(resultI32Bool);

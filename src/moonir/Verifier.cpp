@@ -363,6 +363,13 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             error({}, "raw allocation local " + std::to_string(index) +
                       " is not an owned affine identity");
     }
+    struct GuardedArrayState {
+        LocalId nextUnread;
+        uint64_t length = 0;
+        std::unordered_set<uint64_t> elements;
+    };
+    std::unordered_map<uint32_t, GuardedArrayState> guardedArrays;
+    std::unordered_set<uint32_t> unguardedCleanupRoots;
     for (size_t index = 0; index < graph.cleanups.size(); ++index) {
         const auto& cleanup = graph.cleanups[index];
         if (cleanupOwners[index] != 1)
@@ -437,6 +444,54 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                           " type disagrees with its projected place");
         }
         const auto* cleanupType = module.findType(cleanup.type);
+        if (cleanup.guard) {
+            const auto* cursor = graph.findLocal(
+                cleanup.guard->nextUnread);
+            const auto* cursorType = cursor
+                ? module.findType(cursor->type) : nullptr;
+            const auto* rootType = local
+                ? module.findType(local->type) : nullptr;
+            const bool constantElement =
+                cleanup.place.projections.size() == 1 &&
+                cleanup.place.projections.front().kind ==
+                    ProjectionKind::ConstantIndex;
+            if (!local || !rootType || rootType->kind != TypeKind::Array ||
+                !constantElement ||
+                cleanup.place.projections.front().index !=
+                    cleanup.guard->elementIndex ||
+                cleanup.guard->elementIndex >= rootType->arrayLength)
+                error({}, "guarded cleanup " + std::to_string(index) +
+                          " is not one constant array element");
+            if (!cursor || cursor->scope != cleanup.scope ||
+                cursor->kind != LocalKind::Synthetic ||
+                cursor->relation != luna::ownership::Relation::Owned ||
+                cursor->usage != luna::ownership::Usage::Copy ||
+                !cursorType ||
+                (cursorType->kind != TypeKind::I32 &&
+                 cursorType->kind != TypeKind::USize))
+                error({}, "guarded cleanup " + std::to_string(index) +
+                          " has no canonical next-unread cursor");
+            if (cleanup.kind != CleanupKind::Value)
+                error({}, "guarded cleanup " + std::to_string(index) +
+                          " is not a value cleanup");
+            if (local && rootType && rootType->kind == TypeKind::Array) {
+                auto& state = guardedArrays[local->id.value];
+                if (state.nextUnread.empty()) {
+                    state.nextUnread = cleanup.guard->nextUnread;
+                    state.length = rootType->arrayLength;
+                } else if (state.nextUnread !=
+                           cleanup.guard->nextUnread) {
+                    error({}, "guarded array cleanup rows use different cursors");
+                }
+                if (!state.elements.insert(
+                        cleanup.guard->elementIndex).second)
+                    error({}, "guarded array cleanup repeats element " +
+                              std::to_string(
+                                  cleanup.guard->elementIndex));
+            }
+        } else if (local) {
+            unguardedCleanupRoots.insert(local->id.value);
+        }
         if (cleanup.kind == CleanupKind::Allocation) {
             if (!cleanup.place.projections.empty())
                 error({}, "allocation cleanup " + std::to_string(index) +
@@ -463,6 +518,18 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 cleanup.action, cleanup.type, {},
                 "value cleanup " + std::to_string(index), module);
         }
+    }
+    for (auto& [root, state] : guardedArrays) {
+        if (unguardedCleanupRoots.count(root))
+            error({}, "guarded array state also carries an unguarded cleanup");
+        if (state.elements.size() != state.length)
+            error({}, "guarded array cleanup does not cover every element");
+        for (uint64_t element = 0; element < state.length; ++element)
+            if (!state.elements.count(element)) {
+                error({}, "guarded array cleanup omits element " +
+                          std::to_string(element));
+                break;
+            }
     }
 
     const auto verifyEdge = [this, &graph](

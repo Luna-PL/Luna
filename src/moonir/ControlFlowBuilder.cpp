@@ -4543,11 +4543,46 @@ std::vector<CleanupId> ControlFlowBuilder::canonicalCleanupOrder(
 void ControlFlowBuilder::canonicalizeCleanupTable() {
     std::vector<uint32_t> order(mGraph->cleanups.size());
     for (uint32_t index = 0; index < order.size(); ++index) order[index] = index;
-    std::sort(order.begin(), order.end(), [this](uint32_t lhs, uint32_t rhs) {
+    const auto projectionLess = [](
+        const PlaceProjection& left, const PlaceProjection& right) {
+        if (left.kind != right.kind)
+            return static_cast<uint8_t>(left.kind) <
+                static_cast<uint8_t>(right.kind);
+        if (left.index != right.index) return left.index < right.index;
+        return left.dynamicIndex.value < right.dynamicIndex.value;
+    };
+    std::sort(order.begin(), order.end(),
+              [this, &projectionLess](uint32_t lhs, uint32_t rhs) {
         const auto& left = mGraph->cleanups[lhs];
         const auto& right = mGraph->cleanups[rhs];
         if (left.scope != right.scope) return left.scope.value < right.scope.value;
-        return left.place.root.value < right.place.root.value;
+        if (left.place.root != right.place.root)
+            return left.place.root.value < right.place.root.value;
+        if (left.place.projections != right.place.projections)
+            return std::lexicographical_compare(
+                left.place.projections.begin(),
+                left.place.projections.end(),
+                right.place.projections.begin(),
+                right.place.projections.end(), projectionLess);
+        if (left.kind != right.kind)
+            return static_cast<uint8_t>(left.kind) <
+                static_cast<uint8_t>(right.kind);
+        if (left.action != right.action)
+            return static_cast<uint8_t>(left.action) <
+                static_cast<uint8_t>(right.action);
+        if (left.type != right.type)
+            return left.type.value < right.type.value;
+        if (left.guard.has_value() != right.guard.has_value())
+            return !left.guard.has_value();
+        if (left.guard && right.guard) {
+            if (left.guard->nextUnread != right.guard->nextUnread)
+                return left.guard->nextUnread.value <
+                    right.guard->nextUnread.value;
+            if (left.guard->elementIndex != right.guard->elementIndex)
+                return left.guard->elementIndex <
+                    right.guard->elementIndex;
+        }
+        return lhs < rhs;
     });
     std::vector<uint32_t> remap(order.size());
     std::vector<CleanupRecord> canonical;
@@ -4567,9 +4602,8 @@ void ControlFlowBuilder::canonicalizeCleanupTable() {
     for (auto& scope : mGraph->scopes) {
         rewrite(scope.cleanups);
         std::sort(scope.cleanups.begin(), scope.cleanups.end(),
-                  [this](CleanupId lhs, CleanupId rhs) {
-            return mGraph->cleanups[lhs.value].place.root.value <
-                   mGraph->cleanups[rhs.value].place.root.value;
+                  [](CleanupId lhs, CleanupId rhs) {
+            return lhs.value < rhs.value;
         });
     }
     for (auto& block : mGraph->blocks) {

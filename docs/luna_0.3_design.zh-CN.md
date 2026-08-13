@@ -617,6 +617,16 @@ relation 规则：borrowed local 使用 Copy cardinality，即使底层类型是
 move-only consuming source array、Linear 逐元素状态、non-Copy callable 或 closure environment、materialized recipe
 状态与 iterator terminal 仍不在该切片内。
 
+下一个 consuming-source 切片所需的 guarded-array cleanup 基础现已冻结。canonical CFG
+不沿用 structured backend 的 `[N x i1]` initialization bitmap，而是记录一个 synthetic Copy
+整数 `nextUnread` cursor，并为每个 array element 记录一行 constant-index cleanup。仅当
+`nextUnread <= i` 时才清理元素 `i`；因此 unread tail 只需一个 runtime word，guard
+检查也只出现在 cleanup exit。verifier 强制要求 owned frozen array、同一 scope 的
+synthetic 整数 cursor、每个元素恰好一个 guard、所有 guard 共用一个 cursor，且禁止与
+whole-array 或 unguarded cleanup 混用。cleanup table 现也会对 projected place 做确定性排序。
+这一步只提交可验证的状态表示，builder 仍未放宽 move-only consuming-array 拒绝；
+cursor update 与所有 early-exit edge 必须在下一切片同时生成。
+
 
 slice bound 子阶段也已完成。slice recipe 的 source 只求值一次，运行时上界只在
 loop init 物化一次，并与 shared array recipe 一样使用普通的索引借用 CFG。上界使用

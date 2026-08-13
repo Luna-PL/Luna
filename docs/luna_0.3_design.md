@@ -692,6 +692,17 @@ relation rule: a borrowed local has Copy cardinality and owns no cleanup even wh
 type is Affine. Move-only consuming source arrays, Linear per-item state, a non-Copy callable or
 closure environment, materialized recipe state, and iterator terminals remain outside this slice.
 
+The guarded-array cleanup foundation is now frozen for the next consuming-source slice. Instead of
+the structured backend's `[N x i1]` initialization bitmap, canonical CFG records one synthetic Copy
+integer `nextUnread` cursor and a constant-index cleanup row for every array element. Element `i`
+is cleaned only when `nextUnread <= i`; the cursor therefore represents the unread tail with one
+runtime word, while guard checks occur only on cleanup exits. The verifier requires an owned frozen
+array, a same-scope synthetic integer cursor, one guard per element, one shared cursor, and no mixed
+whole-array or unguarded cleanup. Cleanup-table canonicalization now orders projected places
+deterministically. This commits the verifiable state representation but does not yet relax the
+builder's move-only consuming-array rejection; cursor updates and every early-exit edge must be
+generated together in the following slice.
+
 The slice-bound subphase is now complete as well. A slice recipe evaluates its source exactly once,
 materializes its runtime bound once in loop init, and uses the same ordinary indexed-borrow CFG as a
 shared array recipe. The bound is represented by `SliceLengthExpr`, a fundamental slice projection,

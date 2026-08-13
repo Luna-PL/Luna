@@ -689,6 +689,16 @@ struct LocalRecord {
     luna::ownership::Relation relation = luna::ownership::Relation::Owned;
 };
 
+// A sequential consuming-array state needs one runtime cursor rather than an
+// initialization bit for every element. A guarded cleanup for element i runs
+// only when nextUnread <= i. The verifier requires a complete constant-index
+// cleanup set sharing one cursor, so this cannot be used as an arbitrary
+// conditional destructor.
+struct CleanupGuard {
+    LocalId nextUnread;
+    uint64_t elementIndex = 0;
+};
+
 struct CleanupRecord {
     CleanupId id;
     ScopeId scope;
@@ -697,6 +707,7 @@ struct CleanupRecord {
     CleanupKind kind = CleanupKind::Value;
     luna::ownership::CleanupAction action =
         luna::ownership::CleanupAction::None;
+    std::optional<CleanupGuard> guard;
 };
 
 struct ControlEdge {

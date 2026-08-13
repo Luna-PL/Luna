@@ -102,6 +102,10 @@ an explicit static `apply`, context `Resume`, lexical LocalId capture, and prese
 fragment bodies. A separately lowered dynamic-apply program must reach the declared static CFG
 boundary and be rejected rather than silently composed as a static candidate.
 
+The canonical table fixtures also cover cursor-guarded cleanup for sequentially consumed
+move-only arrays. Tamper cases reject mixed guarded/unguarded cleanup, duplicate element coverage,
+and a guard that names a value local instead of its same-scope synthetic integer cursor.
+
 `luna.rc-arc-core` uses the real Core package to verify JIT/AOT behavior, explicit trait/member
 clone, implicit-copy rejection, exact-once last-handle release, nested payload Drop, ordinary
 nominal MoonIR facts, and LLVM Runtime ABI v1 calls.
