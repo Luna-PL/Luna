@@ -1813,6 +1813,132 @@ int main() {
         return fail(
             "restored affine expression sibling CFG did not verify");
 
+    moon::Param affineValueParameter;
+    affineValueParameter.name = "affineValue";
+    affineValueParameter.type = stringId;
+    affineValueParameter.usage = luna::ownership::Usage::Affine;
+    auto cleanupAffineBoundary = std::make_unique<moon::BlockStmt>();
+    auto cleanupAffineBinding = std::make_unique<moon::LetStmt>();
+    cleanupAffineBinding->name = "cleanupCombined";
+    cleanupAffineBinding->type = stringId;
+    cleanupAffineBinding->usage = luna::ownership::Usage::Affine;
+    auto cleanupAffineCall = std::make_unique<moon::CallExpr>();
+    auto cleanupAffineReducer = std::make_unique<moon::IdentifierExpr>();
+    cleanupAffineReducer->name = "affineReducer";
+    cleanupAffineReducer->type = affineReducerTypeId;
+    cleanupAffineCall->callee = std::move(cleanupAffineReducer);
+    cleanupAffineCall->type = stringId;
+    cleanupAffineCall->returnUsage = luna::ownership::Usage::Affine;
+    auto movedAffineValue = std::make_unique<moon::MoveExpr>();
+    movedAffineValue->type = stringId;
+    auto cleanupAffineSource = std::make_unique<moon::IdentifierExpr>();
+    cleanupAffineSource->name = "affineValue";
+    cleanupAffineSource->type = stringId;
+    movedAffineValue->operand = std::move(cleanupAffineSource);
+    cleanupAffineCall->args.push_back(std::move(movedAffineValue));
+    cleanupAffineCall->args.push_back(makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false));
+    cleanupAffineBinding->initializer = std::move(cleanupAffineCall);
+    cleanupAffineBoundary->stmts.push_back(
+        std::move(cleanupAffineBinding));
+    auto cleanupAffineRelease = std::make_unique<moon::FreeStmt>();
+    cleanupAffineRelease->isImplicit = true;
+    cleanupAffineRelease->action = cleanupActionForType(TyString);
+    auto cleanupAffineResult = std::make_unique<moon::IdentifierExpr>();
+    cleanupAffineResult->name = "cleanupCombined";
+    cleanupAffineResult->type = stringId;
+    cleanupAffineRelease->operand = std::move(cleanupAffineResult);
+    cleanupAffineBoundary->stmts.push_back(
+        std::move(cleanupAffineRelease));
+    auto cleanupAffineCfg = cfgBuilder.build(
+        std::move(cleanupAffineBoundary),
+        {affineReducerParameter, affineValueParameter},
+        moon::RegionKind::Function, module);
+    const moon::LocalRecord* cleanupAffineState = nullptr;
+    bool cleanupAffineTransferred = false;
+    if (cleanupAffineCfg) {
+        for (const auto& local : cleanupAffineCfg->locals)
+            if (local.name.rfind("$expression.hoist.", 0) == 0)
+                cleanupAffineState = &local;
+        for (const auto& block : cleanupAffineCfg->blocks)
+            for (const auto& operation : block.operations) {
+                const auto* declaration =
+                    dynamic_cast<const moon::LetStmt*>(operation.get());
+                const auto* call = declaration &&
+                        declaration->name == "cleanupCombined"
+                    ? dynamic_cast<const moon::CallExpr*>(
+                          declaration->initializer.get())
+                    : nullptr;
+                const auto* transfer = call && !call->args.empty()
+                    ? dynamic_cast<const moon::MoveExpr*>(
+                          call->args.front().get())
+                    : nullptr;
+                const auto* identifier = transfer
+                    ? dynamic_cast<const moon::IdentifierExpr*>(
+                          transfer->operand.get())
+                    : nullptr;
+                cleanupAffineTransferred = cleanupAffineTransferred ||
+                    (cleanupAffineState && identifier &&
+                     identifier->local == cleanupAffineState->id);
+            }
+    }
+    bool cleanupAffineTracked = false;
+    if (cleanupAffineCfg && cleanupAffineState)
+        for (const auto& cleanup : cleanupAffineCfg->cleanups)
+            cleanupAffineTracked = cleanupAffineTracked ||
+                cleanup.place.root == cleanupAffineState->id;
+    if (!cleanupAffineCfg ||
+        !cfgVerifier.verify(*cleanupAffineCfg, module) ||
+        !cleanupAffineState || !cleanupAffineTransferred ||
+        !cleanupAffineTracked)
+        return fail(
+            "cleanup-bearing affine sibling did not survive a non-exiting terminal CFG");
+
+    auto cleanupExitBoundary = std::make_unique<moon::BlockStmt>();
+    auto cleanupExitUse = std::make_unique<moon::ExprStmt>();
+    auto cleanupExitCall = std::make_unique<moon::CallExpr>();
+    auto cleanupExitReducer = std::make_unique<moon::IdentifierExpr>();
+    cleanupExitReducer->name = "affineReducer";
+    cleanupExitReducer->type = affineReducerTypeId;
+    cleanupExitCall->callee = std::move(cleanupExitReducer);
+    cleanupExitCall->type = stringId;
+    cleanupExitCall->returnUsage = luna::ownership::Usage::Affine;
+    auto cleanupExitMove = std::make_unique<moon::MoveExpr>();
+    cleanupExitMove->type = stringId;
+    auto cleanupExitSource = std::make_unique<moon::IdentifierExpr>();
+    cleanupExitSource->name = "affineValue";
+    cleanupExitSource->type = stringId;
+    cleanupExitMove->operand = std::move(cleanupExitSource);
+    cleanupExitCall->args.push_back(std::move(cleanupExitMove));
+    auto cleanupExitTry = std::make_unique<moon::TryExpr>();
+    cleanupExitTry->type = i32Id;
+    cleanupExitTry->resultType = resultI32BoolId;
+    cleanupExitTry->propagatedResultType = resultI32BoolId;
+    cleanupExitTry->valueType = i32Id;
+    cleanupExitTry->errorType = boolId;
+    cleanupExitTry->propagatedErrorType = boolId;
+    auto cleanupExitInput = std::make_unique<moon::IdentifierExpr>();
+    cleanupExitInput->name = "input";
+    cleanupExitInput->type = resultI32BoolId;
+    cleanupExitTry->operand = std::move(cleanupExitInput);
+    cleanupExitCall->args.push_back(std::move(cleanupExitTry));
+    cleanupExitUse->expr = std::move(cleanupExitCall);
+    cleanupExitBoundary->stmts.push_back(std::move(cleanupExitUse));
+    if (cfgBuilder.build(
+            std::move(cleanupExitBoundary),
+            {affineReducerParameter, affineValueParameter, tryParameter},
+            moon::RegionKind::Function, module))
+        return fail(
+            "cleanup-bearing affine sibling crossed an early-exit CFG path");
+    bool diagnosedCleanupExit = false;
+    for (const auto& message : cfgBuilder.errors())
+        diagnosedCleanupExit = diagnosedCleanupExit ||
+            message.find("may cross an early-exit CFG path") !=
+                std::string::npos;
+    if (!diagnosedCleanupExit)
+        return fail(
+            "cleanup-bearing affine sibling lost its early-exit boundary");
+
     auto affineSiblingBoundary = std::make_unique<moon::BlockStmt>();
     auto affineSiblingUse = std::make_unique<moon::ExprStmt>();
     auto affineSiblingCall = std::make_unique<moon::CallExpr>();
@@ -1831,10 +1957,6 @@ int main() {
     affineSiblingUse->expr = std::move(affineSiblingCall);
     affineSiblingBoundary->stmts.push_back(
         std::move(affineSiblingUse));
-    moon::Param affineValueParameter;
-    affineValueParameter.name = "affineValue";
-    affineValueParameter.type = stringId;
-    affineValueParameter.usage = luna::ownership::Usage::Affine;
     if (cfgBuilder.build(
             std::move(affineSiblingBoundary),
             {affineReducerParameter, affineValueParameter},
@@ -1844,7 +1966,7 @@ int main() {
     bool diagnosedAffineSibling = false;
     for (const auto& message : cfgBuilder.errors())
         diagnosedAffineSibling = diagnosedAffineSibling ||
-            message.find("linear or cleanup-bearing state") !=
+            message.find("requires an explicit transfer") !=
                 std::string::npos;
     if (!diagnosedAffineSibling)
         return fail(

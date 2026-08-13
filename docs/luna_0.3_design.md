@@ -742,10 +742,15 @@ side-effecting earlier call therefore cannot drift past the terminal loop, and n
 ownership flag is introduced. The independent verifier checks the resulting let/local/type
 references. The same ordered lowering now accepts a cleanup-free Affine value produced by an
 Affine-returning call or explicit `move`: its synthetic local has Affine usage and the parent reads
-it through exactly one generated `MoveExpr`. The verifier rejects a forged Copy read. Linear and
-cleanup-bearing siblings, unit siblings, and allocating struct/heap initializers remain
-explicitly rejected until exit cleanup and allocation-order semantics exist; they are never copied
-or reordered implicitly. Short-circuit operands follow the conditional CFG normalization below.
+it through exactly one generated `MoveExpr`. The verifier rejects a forged Copy read. A
+cleanup-bearing Affine value with an explicit transfer is also accepted when no remaining operand
+can leave the current function: its ordinary cleanup row remains active across the expanded CFG,
+then the generated `MoveExpr` consumes it in the parent expression. A recursive construction-time
+scan conservatively rejects this hoist before `TryExpr`, `BlockExpr`, or `IfExpr`, so no runtime
+initialized flag is required. Linear siblings, cleanup-bearing siblings that may cross an early
+exit, unit siblings, and allocating struct/heap initializers remain explicitly rejected until their
+path-sensitive consumption and allocation-order semantics exist; they are never copied or reordered
+implicitly. Short-circuit operands follow the conditional CFG normalization below.
 
 Anonymous structural records are now distinguished from allocating products. Their inline value
 construction has no allocation boundary, so field expressions use the same source-ordered operand
@@ -797,7 +802,8 @@ deactivates compile-time affine markers before the next header entry and the dec
 them on the next execution. This models source-level repeated evaluation without a runtime
 initialized flag, and an ordinary condition still keeps the previous compact single-block shape.
 
-Item 10 is not complete as a whole. Allocating struct/heap initialization plus Linear/cleanup-bearing expression hoisting,
+Item 10 is not complete as a whole. Allocating struct/heap initialization plus Linear and
+early-exit cleanup-bearing expression hoisting,
 capturing closure environments, and non-Copy item/callable per-element ownership state remain
 explicit following boundaries. The remaining work then normalizes slot and fragment
 paths, atomically replaces
