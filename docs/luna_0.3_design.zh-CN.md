@@ -690,14 +690,20 @@ local，分别初始化为 `false` 与 `true`，再在短路路径上跳过右 o
 只求值一次的语句判别值现在也使用同一表达式规范化。`if` condition 会在
 `Branch` 之前完整规范化，`match` scrutinee 会在 `Switch` 之前完整规范化；
 iterator terminal 和嵌套 conditional expression 因而不会残留在这两种
-terminator operand 中，也不会被延迟到 arm 开始之后求值。重复求值的 loop
-condition 仍是独立边界：其 synthetic 初始化和 ownership 状态必须在每条
-backedge 上重建，不能直接复用 one-shot lowering。
+terminator operand 中，也不会被延迟到 arm 开始之后求值。
+
+重复求值的 `while` condition 现也已规范化，且不会复用 one-shot state。属于
+loop 的 header 同时是初始 edge 与 body backedge 的目标；每次经过 header 都会
+进入一个子 condition-evaluation scope。terminal、短路及其他 synthetic local 只存活于
+该 scope，并在 body 和 exit edge 上都变为不可见。canonical ownership dataflow
+因此会在下一次进入 header 前停用 compile-time affine marker，并在下一次执行
+声明时重新激活。这在不增加 runtime initialized flag 的情况下表达了源语言的
+重复求值；普通 condition 仍保持原有的紧凑单 block 形态。
 
 第 10 项尚未整体完成。上述 allocation-aware 与 non-Copy expression hoisting、
 捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup
 状态仍是明确的后续边界。
-随后规范化其余重复控制流表达式、slot 和 fragment
+随后规范化 slot 和 fragment
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
 serializer/parser 仍属于第 11 项。

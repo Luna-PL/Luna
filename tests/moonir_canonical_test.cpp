@@ -1191,6 +1191,65 @@ int main() {
         return fail(
             "match statement scrutinee did not normalize before switching");
 
+    auto repeatedConditionRoot = std::make_unique<moon::BlockStmt>();
+    auto repeatedConditionLoop = std::make_unique<moon::WhileStmt>();
+    auto repeatedCondition = std::make_unique<moon::BinaryExpr>();
+    repeatedCondition->op = moon::Operator::Greater;
+    repeatedCondition->type = boolId;
+    repeatedCondition->lhs = makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false);
+    auto repeatedZero = std::make_unique<moon::IntLiteralExpr>();
+    repeatedZero->value = 0;
+    repeatedZero->type = i32Id;
+    repeatedCondition->rhs = std::move(repeatedZero);
+    repeatedConditionLoop->cond = std::move(repeatedCondition);
+    repeatedConditionLoop->body =
+        std::make_unique<moon::BlockStmt>();
+    repeatedConditionRoot->stmts.push_back(
+        std::move(repeatedConditionLoop));
+    auto repeatedConditionCfg = cfgBuilder.build(
+        std::move(repeatedConditionRoot), {},
+        moon::RegionKind::Function, module);
+    const moon::RegionRecord* repeatedOuterLoop = nullptr;
+    const moon::LocalRecord* repeatedCursor = nullptr;
+    size_t repeatedHeaderPredecessors = 0;
+    if (repeatedConditionCfg) {
+        for (const auto& candidate : repeatedConditionCfg->regions)
+            if (!repeatedOuterLoop &&
+                candidate.kind == moon::RegionKind::Loop)
+                repeatedOuterLoop = &candidate;
+        for (const auto& local : repeatedConditionCfg->locals)
+            if (local.name.rfind("$terminal.cursor.", 0) == 0)
+                repeatedCursor = &local;
+        if (repeatedOuterLoop)
+            for (const auto& block : repeatedConditionCfg->blocks)
+                if (block.terminator.kind ==
+                        moon::TerminatorKind::Jump &&
+                    block.terminator.primary.target ==
+                        repeatedOuterLoop->entry)
+                    ++repeatedHeaderPredecessors;
+    }
+    const auto* repeatedCursorScope = repeatedConditionCfg &&
+            repeatedCursor
+        ? repeatedConditionCfg->findScope(repeatedCursor->scope)
+        : nullptr;
+    const auto* repeatedEvaluationRegion = repeatedConditionCfg &&
+            repeatedCursorScope
+        ? repeatedConditionCfg->findRegion(
+              repeatedCursorScope->region)
+        : nullptr;
+    if (!repeatedConditionCfg ||
+        !cfgVerifier.verify(*repeatedConditionCfg, module) ||
+        !repeatedOuterLoop || !repeatedCursorScope ||
+        !repeatedEvaluationRegion ||
+        repeatedEvaluationRegion->kind !=
+            moon::RegionKind::Lexical ||
+        repeatedEvaluationRegion->parent != repeatedOuterLoop->id ||
+        repeatedCursorScope->parent != repeatedOuterLoop->scope ||
+        repeatedHeaderPredecessors != 2)
+        return fail(
+            "repeated while condition did not rebuild synthetic state through its loop header");
+
     auto countStructured = std::make_unique<moon::BlockStmt>();
     countStructured->stmts.push_back(
         makeMaterializedRangeBinding("countPending"));

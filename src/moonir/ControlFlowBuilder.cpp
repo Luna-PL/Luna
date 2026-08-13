@@ -416,29 +416,82 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerWhile(
         region, RegionKind::Loop, statement->location);
     const ScopeId loopScope = addScope(
         scope, loopRegion, statement->location);
-    const BlockId condition = addBlock(
-        loopRegion, loopScope, statement->location);
-    connectJump(current, condition);
-
     pushBindings();
-    if (!bindExpr(statement->cond.get())) {
+
+    BlockId conditionEntry;
+    OpenBlock condition;
+    const bool expandsCondition = containsPendingControlFlow(
+        statement->cond.get());
+    if (expandsCondition) {
+        // The loop header is deliberately outside the evaluation scope. A
+        // backedge first leaves the prior condition/body state, then enters a
+        // fresh execution of the condition and reactivates its synthetic
+        // locals. No runtime initialized bit is needed.
+        const BlockId header = addBlock(
+            loopRegion, loopScope, statement->location);
+        connectJump(current, header);
+        const RegionId evaluationRegion = addRegion(
+            loopRegion, RegionKind::Lexical, statement->location);
+        const ScopeId evaluationScope = addScope(
+            loopScope, evaluationRegion, statement->location);
+        conditionEntry = addBlock(
+            evaluationRegion, evaluationScope, statement->location);
+        connectJump(OpenBlock{header, {}}, conditionEntry);
+
+        pushBindings();
+        auto normalized = normalizeControlFlowExpression(
+            statement->cond, OpenBlock{conditionEntry, {}},
+            evaluationRegion, evaluationScope, false);
+        if (!normalized) {
+            popBindings();
+            popBindings();
+            return std::nullopt;
+        }
+        condition = std::move(*normalized);
+        if (!bindExpr(statement->cond.get())) {
+            popBindings();
+            popBindings();
+            return std::nullopt;
+        }
         popBindings();
-        return std::nullopt;
+    } else {
+        conditionEntry = addBlock(
+            loopRegion, loopScope, statement->location);
+        connectJump(current, conditionEntry);
+        condition = OpenBlock{conditionEntry, {}};
+        if (!bindExpr(statement->cond.get())) {
+            popBindings();
+            return std::nullopt;
+        }
     }
+
     auto body = lowerNestedBlock(
         std::move(statement->body), loopRegion, loopScope,
         RegionKind::Lexical);
     popBindings();
 
     const BlockId exit = addBlock(region, scope, statement->location);
-    auto& terminator = mGraph->blocks[condition.value].terminator;
+    auto& terminator = mGraph->blocks[condition.block.value].terminator;
     terminator.kind = TerminatorKind::Branch;
     terminator.location = statement->location;
     terminator.operand = std::move(statement->cond);
     terminator.primary.target = body.entry;
     terminator.secondary.target = exit;
-    if (body.exit) connectJump(*body.exit, condition);
-    mGraph->regions[body.region.value].exit = condition;
+    if (expandsCondition) {
+        terminator.primary.cleanups = canonicalCleanupOrder(
+            condition.cleanups,
+            mGraph->blocks[condition.block.value].scope,
+            mGraph->blocks[body.entry.value].scope);
+        terminator.secondary.cleanups = canonicalCleanupOrder(
+            condition.cleanups,
+            mGraph->blocks[condition.block.value].scope,
+            mGraph->blocks[exit.value].scope);
+    }
+    const BlockId backedge = expandsCondition
+        ? mGraph->regions[loopRegion.value].entry
+        : conditionEntry;
+    if (body.exit) connectJump(*body.exit, backedge);
+    mGraph->regions[body.region.value].exit = backedge;
     mGraph->regions[loopRegion.value].exit = exit;
     return OpenBlock{exit, {}};
 }

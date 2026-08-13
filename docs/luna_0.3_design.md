@@ -775,13 +775,19 @@ ordinary boolean value and the independent verifier rejects every residual short
 One-shot statement discriminants now use the same expression normalization. An `if` condition is
 fully normalized before its `Branch`, and a `match` scrutinee before its `Switch`; iterator
 terminals and nested conditional expressions therefore cannot survive inside either terminator
-operand or be evaluated after an arm begins. Repeated loop conditions remain a separate boundary:
-their synthetic initialization and ownership state must be reconstructed on every backedge rather
-than reused from a one-shot lowering.
+operand or be evaluated after an arm begins.
+
+Repeated `while` conditions are now normalized without reusing one-shot state. A loop-owned header
+is the target of both the initial edge and the body backedge. It enters a child condition-evaluation
+scope on every trip; terminal, short-circuit, and other synthetic locals live only in that scope,
+then become invisible on both the body and exit edges. Canonical ownership dataflow consequently
+deactivates compile-time affine markers before the next header entry and the declarations reactivate
+them on the next execution. This models source-level repeated evaluation without a runtime
+initialized flag, and an ordinary condition still keeps the previous compact single-block shape.
 
 Item 10 is not complete as a whole. Allocation-aware and non-Copy expression hoisting,
 capturing closure environments, and non-Copy item/callable per-element ownership state remain
-explicit following boundaries. The remaining work then normalizes repeated control-flow expressions, slot, and fragment
+explicit following boundaries. The remaining work then normalizes slot and fragment
 paths, atomically replaces
 structured executable bodies, and moves the backend to the same CFG. Only after structured
 execution is deleted and the full verifier/codegen regression gate passes does the item-level gate
