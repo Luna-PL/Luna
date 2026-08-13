@@ -78,6 +78,8 @@ int main() {
     auto product = Type::makeStruct(
         "Snapshot", {{"value", TyI32}}, "canonical.test::Snapshot");
     const auto productId = module.registerType(product);
+    auto inlineProduct = Type::makeRecord({{"value", TyI32}});
+    const auto inlineProductId = module.registerType(inlineProduct);
     const auto i32Id = module.registerType(TyI32);
     const auto usizeId = module.registerType(TyUSize);
     const auto stringId = module.registerType(TyString);
@@ -1925,6 +1927,47 @@ int main() {
         return fail(
             "restored short-circuit CFG did not verify");
 
+    auto inlineRecordBoundary = std::make_unique<moon::BlockStmt>();
+    auto inlineRecordBinding = std::make_unique<moon::LetStmt>();
+    inlineRecordBinding->name = "inlineSnapshot";
+    inlineRecordBinding->type = inlineProductId;
+    auto inlineRecord = std::make_unique<moon::RecordLiteralExpr>();
+    inlineRecord->type = inlineProductId;
+    moon::RecordLiteralExpr::Field inlineValueField;
+    inlineValueField.name = "value";
+    inlineValueField.value = makeDirectRangeTerminal(
+        IteratorOp::Count, i32Id, i32Id, false);
+    inlineRecord->fields.push_back(std::move(inlineValueField));
+    inlineRecordBinding->initializer = std::move(inlineRecord);
+    inlineRecordBoundary->stmts.push_back(
+        std::move(inlineRecordBinding));
+    auto inlineRecordCfg = cfgBuilder.build(
+        std::move(inlineRecordBoundary), {},
+        moon::RegionKind::Function, module);
+    bool normalizedInlineField = false;
+    if (inlineRecordCfg)
+        for (const auto& block : inlineRecordCfg->blocks)
+            for (const auto& operation : block.operations) {
+                const auto* declaration =
+                    dynamic_cast<const moon::LetStmt*>(operation.get());
+                const auto* value = declaration
+                    ? dynamic_cast<const moon::RecordLiteralExpr*>(
+                          declaration->initializer.get())
+                    : nullptr;
+                const auto* field = value && !value->fields.empty()
+                    ? dynamic_cast<const moon::IdentifierExpr*>(
+                          value->fields.front().value.get())
+                    : nullptr;
+                normalizedInlineField = normalizedInlineField ||
+                    (field && field->name.rfind(
+                        "$terminal.count.", 0) == 0);
+            }
+    if (!inlineRecordCfg ||
+        !cfgVerifier.verify(*inlineRecordCfg, module) ||
+        !normalizedInlineField)
+        return fail(
+            "inline record field did not preserve ordered CFG evaluation");
+
     auto recordTerminalBoundary = std::make_unique<moon::BlockStmt>();
     auto recordTerminalBinding = std::make_unique<moon::LetStmt>();
     recordTerminalBinding->name = "snapshot";
@@ -2730,6 +2773,7 @@ int main() {
     reverse.registerType(unitConsumerType);
     reverse.registerType(moveMapType);
     reverse.registerType(moveMapIterator);
+    reverse.registerType(inlineProduct);
     reverse.registerType(Type::makeEnum(
         "Choice", {{"None", {}}, {"Some", {TyI32}}},
         "canonical.test::Choice"));

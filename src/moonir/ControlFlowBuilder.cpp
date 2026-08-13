@@ -2057,10 +2057,26 @@ ControlFlowBuilder::normalizeControlFlowExpression(
             operands, std::move(current), region, scope);
     }
     if (auto* record = dynamic_cast<RecordLiteralExpr*>(expression.get())) {
+        const auto* recordType = mModule->findType(record->type);
+        if (!recordType ||
+            (recordType->kind != TypeKind::Record &&
+             recordType->kind != TypeKind::Struct)) {
+            error(record->location,
+                  "record initializer has no frozen product type");
+            return std::nullopt;
+        }
+        if (recordType->kind == TypeKind::Record) {
+            std::vector<std::unique_ptr<Expr>*> operands;
+            operands.reserve(record->fields.size());
+            for (auto& field : record->fields)
+                operands.push_back(&field.value);
+            return normalizeOrderedOperands(
+                operands, std::move(current), region, scope);
+        }
         for (const auto& field : record->fields) {
             if (!containsPendingControlFlow(field.value.get())) continue;
             error(field.value->location,
-                  "control flow in a record initializer requires "
+                  "control flow in an allocating struct initializer requires "
                   "allocation-aware expression CFG normalization");
             return std::nullopt;
         }

@@ -663,9 +663,17 @@ tag/ownership flag。独立 verifier 会检查这些 let/local/type 引用。同
 现也允许由 Affine-returning call 或显式 `move` 生成的无 cleanup Affine 值：其
 synthetic local 使用 Affine contract，父表达式通过唯一的生成 `MoveExpr` 读取，
 verifier 会拒绝伪造的 Copy 读取。Linear 和 cleanup-bearing sibling、unit sibling
-以及 record/heap allocation-sensitive initializer 仍被明确拒绝，等待 exit cleanup 和
+以及 allocating struct/heap initializer 仍被明确拒绝，等待 exit cleanup 和
 allocation-order 语义的子阶段；它们不会被隐式复制或重排。短路 operand
 则进入下文的 conditional CFG 规范化。
+
+匿名 structural record 现已与会分配的 product 区分。其 inline 值构造没有 allocation
+boundary，因而字段表达式使用与 array、variant 相同的源码有序 operand 规范化；
+terminal 字段会在最终 `RecordLiteralExpr` 中成为普通 result-local 引用。当前 ABI 下，
+命名 struct literal 仍先分配再求值并存储字段，`HeapAllocExpr` 也仍先分配再执行
+initializer。在 allocation 本身成为显式 canonical operation 之前，两者的 initializer
+若包含控制流仍会被拒绝。把这些 initializer 提前到 allocation 之前会改变可观察语义，
+不能当作优化。
 
 当前 Luna block 语法的第一个 conditional-expression 切片也已完成。由于 block 尚无
 tail value，`BlockExpr` 和 block-style `IfExpr` 在语义上都是 `unit`；CFG 构建会消费
@@ -703,7 +711,7 @@ loop 的 header 同时是初始 edge 与 body backedge 的目标；每次经过 
 声明时重新激活。这在不增加 runtime initialized flag 的情况下表达了源语言的
 重复求值；普通 condition 仍保持原有的紧凑单 block 形态。
 
-第 10 项尚未整体完成。上述 allocation-aware 与 Linear/cleanup-bearing expression hoisting、
+第 10 项尚未整体完成。上述 allocating struct/heap initialization 与 Linear/cleanup-bearing expression hoisting、
 捕获式 closure environment，以及 non-Copy item/callable contract 的逐元素初始化/cleanup
 状态仍是明确的后续边界。
 随后规范化 slot 和 fragment
