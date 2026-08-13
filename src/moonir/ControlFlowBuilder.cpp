@@ -3014,6 +3014,10 @@ ControlFlowBuilder::normalizeControlFlowExpression(
         return normalizeOrderedOperands(
             operands, std::move(current), region, scope);
     }
+    if (auto* result =
+            dynamic_cast<ResultConstructExpr*>(expression.get()))
+        return normalizeControlFlowExpression(
+            result->payload, std::move(current), region, scope, false);
     if (auto* move = dynamic_cast<MoveExpr*>(expression.get()))
         return normalizeControlFlowExpression(
             move->operand, std::move(current), region, scope, false);

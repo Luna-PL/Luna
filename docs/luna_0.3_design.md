@@ -671,14 +671,18 @@ composition and LLVM CFG consumption must close before the one-way module switch
 The first LLVM-consumption slice is now executable but remains outside the production pipeline.
 For an exclusively CFG-backed function, the backend allocates typed-local storage by `LocalId`,
 maps parameters by the verified parameter table, emits non-control operations, and translates
-`Jump`, cleanup-free `Branch`, cleanup-free `Return`, `Resume`, `Abort`, and `Unreachable` directly
-from the block table. A source-to-JIT fixture with lexical shadowing returns 42 and proves that two
-locals with the same diagnostic name retain distinct storage. This is the same function codegen
-entry selecting one exclusive body representation during migration, not a second compiler backend.
-Root, unguarded value cleanups now lower on jump, branch, return, resume, and abort edges in the
+`Jump`, `Branch`, `Return`, `Switch`, `Resume`, `Abort`, and `Unreachable` directly from the block
+table. `Switch` reads the frozen enum/Result tag once, extracts payload fields with the frozen ABI
+layout, and installs pattern bindings by `LocalId` only after the case-edge cleanups. Source-level
+`Ok`/`Err` construction is normalized to the data-only `ResultConstructExpr`, rather than retained
+as an unresolved intrinsic call. Source-to-JIT fixtures with lexical shadowing and enum/Result
+matches both return 42: they prove that duplicate diagnostic names retain distinct storage and
+that three pattern locals receive the active payloads. This is the same function codegen entry
+selecting one exclusive body representation during migration, not a second compiler backend.
+Root, unguarded value cleanups now lower on jump, branch, switch, return, resume, and abort edges in the
 exact verifier-approved order. Branches receive edge-specific cleanup blocks, while a return value
 is evaluated before its exit cleanups, preserving Luna evaluation order. The fixture covers both a
-root parameter return cleanup and a lexical fallthrough cleanup. `Switch`, projected/guarded and
+root parameter return cleanup and a lexical fallthrough cleanup. Projected/guarded and
 raw-allocation cleanups, allocation operations, and the wider expression surface currently fail
 closed; the production sealer therefore remains disconnected until those paths and runtime
 composition are complete.

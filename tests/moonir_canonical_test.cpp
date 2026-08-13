@@ -4152,6 +4152,90 @@ fn main() -> i32 {
     if (cfgCodegen.jitRun() != 42)
         return fail("canonical CFG JIT did not preserve branch/local semantics");
 
+    const std::string cfgSwitchCodegenSource = R"luna(
+package canonical.switch_codegen;
+
+enum Choice {
+    None;
+    Some(i32);
+}
+
+fn inspect_choice(value: Choice) -> i32 {
+    match value {
+        Choice::None => {
+            return 0;
+        },
+        Choice::Some(number) => {
+            return number;
+        }
+    }
+}
+
+fn inspect_result(value: Result<i32, i32>) -> i32 {
+    match value {
+        Ok(number) => {
+            return number;
+        },
+        Err(error) => {
+            return error;
+        }
+    }
+}
+
+fn main() -> i32 {
+    return inspect_choice(Choice::Some(19))
+        + inspect_result(Ok::<i32, i32>(23));
+}
+)luna";
+    auto cfgSwitchSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            cfgSwitchCodegenSource, "<canonical-switch-codegen>");
+    if (!cfgSwitchSnapshot.success())
+        return fail("frontend rejected the canonical switch codegen source");
+    moon::LunaLowerer cfgSwitchLowerer;
+    auto cfgSwitchModule = cfgSwitchLowerer.lower(
+        *cfgSwitchSnapshot.program(), *cfgSwitchSnapshot.symbolTable());
+    moon::Sealer cfgSwitchSealer;
+    const bool cfgSwitchSealed =
+        cfgSwitchSealer.sealFunctionBodies(*cfgSwitchModule);
+    const bool cfgSwitchVerified =
+        cfgSwitchSealed && verifier.verify(*cfgSwitchModule);
+    if (!cfgSwitchLowerer.errors().empty() ||
+        !cfgSwitchSealed || !cfgSwitchVerified) {
+        for (const auto& diagnostic : cfgSwitchLowerer.errors())
+            std::cerr << diagnostic << '\n';
+        for (const auto& error : cfgSwitchSealer.errors())
+            std::cerr << error << '\n';
+        if (cfgSwitchSealed)
+            for (const auto& diagnostic : verifier.errors())
+                std::cerr << diagnostic << '\n';
+        return fail("canonical switch codegen fixture did not seal and verify");
+    }
+    size_t switchCount = 0;
+    size_t bindingCount = 0;
+    for (const auto& declaration : cfgSwitchModule->declarations) {
+        const auto* function = dynamic_cast<const moon::FunctionDecl*>(
+            declaration.get());
+        if (!function || !function->controlFlow) continue;
+        for (const auto& block : function->controlFlow->blocks) {
+            if (block.terminator.kind != moon::TerminatorKind::Switch)
+                continue;
+            ++switchCount;
+            for (const auto& item : block.terminator.cases)
+                bindingCount += item.bindings.size();
+        }
+    }
+    if (switchCount != 2 || bindingCount != 3)
+        return fail("canonical switch fixture lost enum/Result pattern bindings");
+    CodeGenerator cfgSwitchCodegen("canonical.switch_codegen");
+    if (!cfgSwitchCodegen.generate(cfgSwitchModule.get())) {
+        for (const auto& diagnostic : cfgSwitchCodegen.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("LLVM backend rejected canonical enum/Result switches");
+    }
+    if (cfgSwitchCodegen.jitRun() != 42)
+        return fail("canonical switch JIT did not preserve payload bindings");
+
     const std::string cfgCleanupCodegenSource = R"luna(
 package canonical.cleanup_codegen;
 

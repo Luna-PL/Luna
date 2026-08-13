@@ -107,6 +107,9 @@ runtime-apply failure preserves the original module unchanged.
 The same test then sends a sealed, cleanup-free function through the LLVM backend and ORC JIT.
 Its nested scope intentionally shadows a local name; the result of 42 proves canonical storage is
 keyed by `LocalId` while Jump/Branch/Return preserve source control semantics.
+Another source-to-JIT module constructs and matches both an enum and `Result<i32, i32>`. It checks
+that source `Ok` becomes a data-only canonical constructor, both matches become `Switch`, all three
+payload bindings retain their pattern `LocalId`, and enum/Result ABI unpacking returns 42.
 An additional generate-only module requires a root parameter cleanup on return and a lexical
 cleanup on a branch edge, exercising ordered cleanup emission without executing a deliberately
 synthetic owned-string fixture.

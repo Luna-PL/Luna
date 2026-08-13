@@ -310,6 +310,23 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
             value->type = typeRef(TyBool);
         result = std::move(value);
     } else if (auto* call = dynamic_cast<const ::CallExpr*>(expression)) {
+        if (const auto* callee = dynamic_cast<const ::IdentifierExpr*>(
+                call->callee.get());
+            callee &&
+            (callee->name == "Ok" || callee->name == "Err") &&
+            call->args.size() == 1 && call->intrinsicType) {
+            auto value = std::make_unique<moon::ResultConstructExpr>();
+            value->location = locationOf(expression);
+            value->type = typeRef(call->intrinsicType);
+            value->isOk = callee->name == "Ok";
+            value->payload = lowerExpr(call->args.front().get());
+            const size_t payloadIndex = value->isOk ? 0 : 1;
+            if (value->payload && value->payload->type.empty() &&
+                call->intrinsicType->typeArgs.size() == 2)
+                value->payload->type = typeRef(
+                    call->intrinsicType->typeArgs[payloadIndex]);
+            return value;
+        }
         auto value = std::make_unique<moon::CallExpr>();
         value->callee = lowerExpr(call->callee.get());
         for (const auto& argument : call->args)

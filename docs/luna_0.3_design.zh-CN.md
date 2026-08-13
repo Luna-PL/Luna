@@ -595,14 +595,18 @@ sealed type table 补齐，但非空冲突类型绝不被覆盖。该 sealer 尚
 
 首个 LLVM consumption 切片现已可执行，但仍未接入 production pipeline。对仅持有 CFG
 body 的 function，backend 按 `LocalId` 分配 typed-local storage，按已验证 parameter table
-映射参数，生成非控制 operation，并直接从 block table 翻译 `Jump`、无 cleanup
-`Branch`、无 cleanup `Return`、`Resume`、`Abort` 和 `Unreachable`。一个含词法
-shadowing 的 source-to-JIT fixture 返回 42，证明诊断名相同的两个 local 仍使用不同存储。
-这是同一 function codegen entry 在迁移期选择一份互斥 body representation，不是第二个
-compiler backend。root、unguarded value cleanup 现已在 jump、branch、return、resume 和
+映射参数，生成非控制 operation，并直接从 block table 翻译 `Jump`、`Branch`、
+`Return`、`Switch`、`Resume`、`Abort` 和 `Unreachable`。`Switch` 只读取一次冻结的
+enum/Result tag，按冻结 ABI layout 提取 payload field，并在 case-edge cleanup 之后
+才按 `LocalId` 写入 pattern binding。源码 `Ok`/`Err` 构造会规范化为纯数据的
+`ResultConstructExpr`，不保留为无声明 intrinsic call。包含词法 shadowing 与
+enum/Result match 的 source-to-JIT fixture 都返回 42：它们证明诊断名相同的 local
+使用不同存储，且三个 pattern local 收到了活动 payload。这是同一 function codegen
+entry 在迁移期选择一份互斥 body representation，不是第二个 compiler backend。
+root、unguarded value cleanup 现已在 jump、branch、switch、return、resume 和
 abort edge 上按 verifier 确认的精确顺序 lowering。branch 使用专用 edge cleanup block，
 return value 则在 exit cleanup 前求值，保留 Luna 求值顺序。fixture 同时覆盖 root
-parameter return cleanup 与词法 fallthrough cleanup。`Switch`、projected/guarded 及 raw-allocation
+parameter return cleanup 与词法 fallthrough cleanup。projected/guarded 及 raw-allocation
 cleanup、allocation operation 与更广的 expression surface 当前仍 fail closed；在这些路径和
 runtime composition 闭合前，production sealer 仍不接线。
 

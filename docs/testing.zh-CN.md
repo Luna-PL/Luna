@@ -75,6 +75,15 @@ CPU 对照基准可通过 `-DLUNA_ENABLE_CPU_BENCHMARK=ON` 启用，详情见
 
 每次修复语义或诊断问题时，应同时添加一个最小正例或负例，并在 `tests/semantic_regressions.cmake` 中断言稳定的输出或关键诊断文本。
 
+`luna.moonir-canonical` 同时覆盖伪造的 table-level fixture 与真实 frontend 集成路径。
+其 function sealer fixture 证明了原子替换：有效 function 的 structured body 被唯一 CFG 取代，
+而任一候选构建失败会保留整个原 module。词法 shadowing 的 source-to-JIT 案例返回
+42，证明 canonical local storage 只使用 `LocalId`。另一个 source-to-JIT module 构造并匹配
+enum 与 `Result<i32, i32>`：它确认源码 `Ok` 成为纯数据 canonical constructor，两个
+match 都成为 `Switch`，三个 payload binding 保留 pattern `LocalId`，且按冻结 ABI 解包后
+返回 42。generate-only 案例则覆盖 return 的 root parameter cleanup 与 branch edge 的
+词法 cleanup。
+
 `luna.rc-arc-core` 在真实 Core package 上同时验证 JIT/AOT、显式 trait/member
 clone、隐式复制拒绝、最后 handle 精确一次释放、嵌套 payload Drop、MoonIR
 普通 nominal 事实以及 LLVM Runtime ABI v1 调用。

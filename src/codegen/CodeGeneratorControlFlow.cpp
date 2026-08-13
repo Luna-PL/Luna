@@ -1,4 +1,5 @@
 #include "CodeGenerator.h"
+#include "../core/TypeLayout.h"
 
 #include <llvm/IR/Constants.h>
 
@@ -187,8 +188,146 @@ void CodeGenerator::generateControlFlowBody(
                 mBuilder->CreateUnreachable();
                 break;
             case moon::TerminatorKind::Switch:
-                error("canonical switch lowering is not implemented");
+            {
+                const TypePtr switchType = resolveType(
+                    terminator.switchType);
+                if (!switchType ||
+                    (switchType->kind != TypeKind::Enum &&
+                     switchType->kind != TypeKind::Result)) {
+                    error("canonical switch has no LLVM sum type");
+                    break;
+                }
+                llvm::Value* value = generateExpr(
+                    terminator.operand.get());
+                auto* aggregateType = value
+                    ? llvm::dyn_cast<llvm::StructType>(value->getType())
+                    : nullptr;
+                if (!aggregateType || aggregateType->getNumElements() != 2) {
+                    error("canonical switch operand has no tagged-union layout");
+                    break;
+                }
+                llvm::Value* tag = mBuilder->CreateExtractValue(
+                    value, {0}, "cfg.switch.tag");
+                llvm::Value* payload = mBuilder->CreateExtractValue(
+                    value, {1}, "cfg.switch.payload");
+                auto* tagType = llvm::dyn_cast<llvm::IntegerType>(
+                    tag->getType());
+                if (!tagType) {
+                    error("canonical switch tag is not an integer");
+                    break;
+                }
+
+                struct PreparedCase {
+                    const moon::SwitchEdge* source = nullptr;
+                    std::vector<TypePtr> bindingTypes;
+                    std::vector<uint64_t> bindingOffsets;
+                };
+                std::vector<PreparedCase> prepared;
+                prepared.reserve(terminator.cases.size());
+                for (const auto& item : terminator.cases) {
+                    PreparedCase current;
+                    current.source = &item;
+                    if (switchType->kind == TypeKind::Enum &&
+                        item.tag < switchType->variants.size()) {
+                        const auto& variant =
+                            switchType->variants[item.tag];
+                        current.bindingTypes = variant.fields;
+                        current.bindingOffsets.reserve(
+                            variant.fields.size());
+                        for (size_t index = 0;
+                             index < variant.fields.size(); ++index)
+                            current.bindingOffsets.push_back(
+                                luna::layout::variantFieldOffset(
+                                    variant, index));
+                    } else if (switchType->kind == TypeKind::Result &&
+                               switchType->typeArgs.size() == 2 &&
+                               item.tag < 2) {
+                        current.bindingTypes.push_back(
+                            switchType->typeArgs[
+                                item.tag == 1 ? 0 : 1]);
+                        current.bindingOffsets.push_back(0);
+                    } else {
+                        error("canonical switch case is outside its sum type");
+                    }
+                    if (current.bindingTypes.size() !=
+                        item.bindings.size()) {
+                        error("canonical switch binding arity disagrees with its case");
+                    }
+                    prepared.push_back(std::move(current));
+                }
+
+                auto* defaultTarget = edgeTarget(
+                    terminator.primary, "cfg.switch.default.cleanup");
+                if (!defaultTarget) {
+                    error("canonical switch has no LLVM default target");
+                    break;
+                }
+                const auto dispatchPoint = mBuilder->saveIP();
+                std::vector<llvm::BasicBlock*> caseTargets;
+                caseTargets.reserve(prepared.size());
+                for (const auto& item : prepared) {
+                    if (!item.source) {
+                        caseTargets.push_back(nullptr);
+                        continue;
+                    }
+                    const auto& edge = item.source->edge;
+                    if (edge.target.empty() ||
+                        edge.target.value >= blocks.size()) {
+                        error("canonical switch case references no LLVM block");
+                        caseTargets.push_back(nullptr);
+                        continue;
+                    }
+                    if (edge.cleanups.empty() &&
+                        item.source->bindings.empty()) {
+                        caseTargets.push_back(blocks[edge.target.value]);
+                        continue;
+                    }
+                    auto* bridge = llvm::BasicBlock::Create(
+                        *mCtx,
+                        "cfg.switch.case." +
+                            std::to_string(item.source->tag),
+                        func);
+                    caseTargets.push_back(bridge);
+                    mBuilder->SetInsertPoint(bridge);
+                    emitCleanups(
+                        edge.cleanups, "canonical switch case cleanup");
+                    const size_t comparable = std::min(
+                        item.bindingTypes.size(),
+                        item.source->bindings.size());
+                    for (size_t index = 0; index < comparable; ++index) {
+                        const auto local = item.source->bindings[index];
+                        if (local.empty() ||
+                            local.value >= mCanonicalLocals.size() ||
+                            !mCanonicalLocals[local.value]) {
+                            error("canonical switch binding has no LLVM local storage");
+                            continue;
+                        }
+                        auto* storage = mCanonicalLocals[local.value];
+                        llvm::Value* field = unpackResultPayload(
+                            payload, item.bindingTypes[index],
+                            item.bindingOffsets[index]);
+                        mBuilder->CreateStore(
+                            coerceCallArgument(
+                                field,
+                                storage->getAllocatedType()),
+                            storage);
+                    }
+                    if (!mBuilder->GetInsertBlock()->getTerminator())
+                        mBuilder->CreateBr(blocks[edge.target.value]);
+                }
+                mBuilder->restoreIP(dispatchPoint);
+                auto* dispatch = mBuilder->CreateSwitch(
+                    tag, defaultTarget, prepared.size());
+                for (size_t index = 0; index < prepared.size(); ++index) {
+                    if (!prepared[index].source || !caseTargets[index])
+                        continue;
+                    dispatch->addCase(
+                        llvm::ConstantInt::get(
+                            tagType, prepared[index].source->tag),
+                        caseTargets[index]);
+                }
                 break;
+            }
             case moon::TerminatorKind::Invalid:
                 error("canonical block has no terminator");
                 break;
