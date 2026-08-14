@@ -68,6 +68,26 @@ function(expect_success_with_env name source environment expected)
     endif()
 endfunction()
 
+function(expect_runtime_failure_with_env name source environment expected)
+    execute_process(
+        COMMAND "${CMAKE_COMMAND}" -E env "${environment}"
+                "${LUNA_EXECUTABLE}" run "${LUNA_SOURCE_DIR}/${source}"
+        RESULT_VARIABLE result
+        OUTPUT_VARIABLE command_output
+        ERROR_VARIABLE command_error
+    )
+    set(transcript "${command_output}\n${command_error}")
+    string(FIND "${transcript}" "error[" compiler_error)
+    string(FIND "${transcript}" "${expected}" expected_at)
+    if("${result}" STREQUAL "0" OR NOT compiler_error EQUAL -1 OR expected_at EQUAL -1)
+        message(FATAL_ERROR
+            "${name} did not terminate at the expected runtime failure boundary.\n"
+            "Expected text: ${expected}\n"
+            "Process result: ${result}\n"
+            "Transcript:\n${transcript}")
+    endif()
+endfunction()
+
 function(expect_runtime_failure name source expected)
     run_luna("${source}" transcript result)
     string(FIND "${transcript}" "error[" compiler_error)
@@ -153,6 +173,7 @@ expect_success("context retains a private linear guard" "tests/fixtures/context_
 expect_success("context abort preserves untouched outer resource" "tests/fixtures/context_abort_preserves_outer_resource.luna" "42")
 expect_success("dynamic fragments default selection" "tests/fixtures/dynamic_fragments.luna" "41")
 expect_success_with_env("dynamic fragments runtime selection" "tests/fixtures/dynamic_fragments.luna" "LUNA_FRAGMENT_PIPELINE=audit" "43")
+expect_runtime_failure_with_env("dynamic context rejects external plugin fallback" "tests/fixtures/dynamic_fragments.luna" "LUNA_FRAGMENT_PIPELINE=missing" "dynamic fragment selection")
 expect_success("metadata selector" "examples/versioning.luna" "Program exited with code: 20")
 expect_success("user-defined selector traversal" "tests/fixtures/selector_user_logic.luna" "Program exited with code: 30")
 expect_success("named compile-time concepts" "tests/fixtures/concepts.luna" "Program exited with code: 42")
@@ -303,7 +324,16 @@ expect_error("move-only fold initial value requires move" "tests/fixtures/iterat
 expect_error("move-only fold reducer owns accumulator" "tests/fixtures/iterator_fold_accumulator_borrow_invalid.luna" "fold reducer must own a move-only accumulator")
 expect_error("fold does not hide a linear accumulator" "tests/fixtures/iterator_fold_accumulator_linear_invalid.luna" "linear fold accumulator cannot be hidden")
 expect_error("move-only fold result requires an owner" "tests/fixtures/iterator_fold_accumulator_ignored_invalid.luna" "all move-only results require an explicit owner")
-expect_error("lambda capture awaits an environment layout" "tests/fixtures/lambda_capture_invalid.luna" "lambda capture of local 'captured' is reserved")
+expect_success("lambda copies a Copy capture" "tests/fixtures/lambda_capture_copy.luna" "Program exited with code: 42")
+expect_success("lambda preserves every Copy capture" "tests/fixtures/lambda_capture_multiple.luna" "Program exited with code: 42")
+expect_error("lambda rejects an affine capture" "tests/fixtures/lambda_capture_affine_invalid.luna" "lambda capture of 'captured' requires a Copy binding")
+expect_error("lambda rejects a borrowed capture" "tests/fixtures/lambda_capture_borrowed_invalid.luna" "lambda capture of borrowed binding 'left' is not yet supported")
+expect_success("lambda propagates a transitive capture" "tests/fixtures/lambda_nested_transitive_capture.luna" "Program exited with code: 42")
+expect_success("lambda propagates a partial capture set" "tests/fixtures/lambda_nested_partial_capture.luna" "Program exited with code: 21")
+expect_success("lambda combines parameter and transitive capture" "tests/fixtures/lambda_nested_parameter_capture.luna" "Program exited with code: 9")
+expect_success("lambda preserves outer binding after shadowing" "tests/fixtures/lambda_capture_shadow.luna" "Program exited with code: 5")
+expect_success("lambda parameter shadows an outer capture" "tests/fixtures/lambda_capture_param_shadow.luna" "Program exited with code: 42")
+expect_success("lambda return values stay callable closures" "tests/fixtures/lambda_return_closure.luna" "Program exited with code: 42")
 expect_error("lambda linear parameters must be consumed" "tests/fixtures/lambda_linear_parameter_invalid.luna" "Linear variable 'value' was not consumed")
 expect_error("returning path leaks linear resource" "tests/fixtures/ownership_return_path_leaks_invalid.luna" "Linear variable 'buffer' was not consumed before returning")
 expect_error("safe array static bounds" "tests/fixtures/safe_array_static_bounds_invalid.luna" "array index 2 is outside array length 2")

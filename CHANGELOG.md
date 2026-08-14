@@ -2,6 +2,45 @@
 
 ## 0.3.0 — Development
 
+- Implemented the Copy-only closure-environment slice (C016 CL001-CL009):
+  capture-free `Function` values keep the 8-byte bare code pointer ABI, while
+  a capturing lambda becomes a layout-bearing `Closure` type with an inline
+  `{ code, env_fields... }` environment. Sema derives the free-variable set in
+  first-reference order, rejects Affine/Linear and borrowed captures with an
+  explicit diagnostic, and records the capture list in canonical name order.
+  MoonIR gains `MakeClosure` and `EnvLoad` nodes; the verifier checks capture
+  list/environment agreement, environment parameter identity, EnvLoad field
+  bounds, and non-Copy capture fields; canonical CFG construction declares the
+  environment parameter local and rewrites capture reads into EnvLoad; both
+  JIT and AOT lower the closure call through a hidden environment parameter.
+  Nested lambdas propagate their transitive free variables to enclosing
+  lambdas, Sealer cloning preserves `MakeClosure`/`EnvLoad` nodes, and closure
+  calls carry their resolved result type through lowering so the canonical
+  verifier can check them. Copy-capture, multi-capture, nested/partial/
+  parameter capture, capture shadowing (block and parameter), closure return
+  values, and affine/borrowed-capture rejection all pass as semantic
+  regressions and JIT/AOT parity fixtures under the full 51-test suite, the
+  strict-warning build, and ASan/UBSan.
+- Extended the LLVM CFG consumer with projected/guarded cleanup, canonical
+  allocation/free handling, pointer-backed allocation locals, LocalId-based
+  array access, guarded non-Copy cursor advancement, and projection-aware
+  return-transfer verification; strict audit coverage remains green at 51/51
+  tests. Production CFG sealing stays disconnected, and
+  fragment/runtime composition remains deferred until upstream non-Copy
+  match/loop sealing gaps are resolved.
+- Continued the strict CFG audit through non-Copy match/loop sealing: fixed
+  Copy projections being mistaken for whole-value moves, recovered delayed
+  iterator source types, and lowered direct affine-array recipes through
+  synthetic ownership transfer into guarded projected cleanup.
+- Extended the same guarded ownership path to move-only materialized iterator
+  recipes, including affine source state, synthetic transfer into the loop, and
+  projected tail cleanup; audit-only AOT execution now covers both direct and
+  materialized affine array loops.
+- Kept the external fragment-plugin ABI interceptor-only at the dynamic dispatch
+  boundary: unknown selections for dynamic context or multi-shot slots now
+  terminate through the explicit unknown-fragment runtime error instead of
+  falling through to the plugin ABI.
+
 - Began the clean-break 0.3 language line with no `language=`, edition, or
   structural-default compatibility mode; the frozen 0.2.1 compiler remains
   the migration tool for old source.

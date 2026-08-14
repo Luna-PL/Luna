@@ -1,0 +1,11 @@
+fn main() -> i32 {
+    let captured = 5;
+    let outer = fn() -> i32 {
+        {
+            let captured = 10;
+            let ignored = captured;
+        }
+        return captured;
+    };
+    return outer();
+}

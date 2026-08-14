@@ -1,0 +1,9 @@
+fn main() -> i32 {
+    let first = 10;
+    let second = 20;
+    let third = 12;
+    let read = fn() -> i32 {
+        return first + second + third;
+    };
+    return read();
+}

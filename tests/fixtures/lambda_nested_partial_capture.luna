@@ -1,0 +1,11 @@
+fn main() -> i32 {
+    let first = 10;
+    let second = 1;
+    let outer = fn() -> i32 {
+        let inner = fn() -> i32 {
+            return first + second;
+        };
+        return inner() + first;
+    };
+    return outer();
+}

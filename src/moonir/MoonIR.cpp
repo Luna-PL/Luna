@@ -191,6 +191,8 @@ TypeRef Module::registerType(const TypePtr& type) {
         record.parameterTypeIds.push_back(referenceOf(parameter));
     for (const auto& field : type->fields)
         record.fields.push_back({field.name, referenceOf(field.type)});
+    for (const auto& field : type->capturedFields)
+        record.capturedFields.push_back({field.name, referenceOf(field.type)});
     for (const auto& variant : type->variants) {
         TypeVariantRecord frozen;
         frozen.name = variant.name;
@@ -203,12 +205,14 @@ TypeRef Module::registerType(const TypePtr& type) {
     for (const auto& argument : type->typeArgs) addReference(argument);
     for (const auto& parameter : type->paramTypes) addReference(parameter);
     for (const auto& field : type->fields) addReference(field.type);
+    for (const auto& field : type->capturedFields) addReference(field.type);
     for (const auto& variant : type->variants)
         for (const auto& field : variant.fields) addReference(field);
 
     const auto payloadRank = [](const TypeRecord& candidate) {
         size_t rank = candidate.typeArgumentIds.size() +
-            candidate.parameterTypeIds.size() + candidate.fields.size();
+            candidate.parameterTypeIds.size() + candidate.fields.size() +
+            candidate.capturedFields.size();
         if (!candidate.innerTypeId.empty()) ++rank;
         if (!candidate.returnTypeId.empty()) ++rank;
         for (const auto& variant : candidate.variants)
@@ -239,6 +243,8 @@ TypeRef Module::registerType(const TypePtr& type) {
         for (const auto& argument : type->typeArgs) registerType(argument);
         for (const auto& parameter : type->paramTypes) registerType(parameter);
         for (const auto& field : type->fields) registerType(field.type);
+        for (const auto& field : type->capturedFields)
+            registerType(field.type);
         for (const auto& variant : type->variants)
             for (const auto& field : variant.fields) registerType(field);
         return id;
@@ -435,6 +441,9 @@ TypePtr TypeMaterializer::materialize(const TypeRef& reference) {
         result->paramTypes.push_back(materialize(parameter));
     for (const auto& field : record->fields)
         result->fields.push_back({field.name, materialize(field.type)});
+    for (const auto& field : record->capturedFields)
+        result->capturedFields.push_back(
+            {field.name, materialize(field.type)});
     for (const auto& variant : record->variants) {
         TypeVariant restored;
         restored.name = variant.name;

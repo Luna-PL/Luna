@@ -664,7 +664,9 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                     ? module.findType(declaration->type) : nullptr;
             }
             if (hasFrozenCallee &&
-                (!signature || signature->kind != TypeKind::Function)) {
+                (!signature ||
+                 (signature->kind != TypeKind::Function &&
+                  signature->kind != TypeKind::Closure))) {
                 error(call->location,
                       "call target has no frozen function signature");
             } else if (signature) {
@@ -768,6 +770,38 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 error(lambda->location,
                       "sealed CFG lambda does not exclusively own a canonical CFG body");
             return;
+        } else if (const auto* closure =
+                       dynamic_cast<const MakeClosureExpr*>(expression)) {
+            const auto* closureType = module.findType(closure->type);
+            if (!closureType || closureType->kind != TypeKind::Closure)
+                error(closure->location,
+                      "sealed CFG closure construction has no Closure type");
+            for (const auto& captured : closure->capturedValues)
+                scanGraphExpr(captured.get(), block);
+        } else if (const auto* envLoad =
+                       dynamic_cast<const EnvLoadExpr*>(expression)) {
+            const auto* local = graph.findLocal(envLoad->envLocal);
+            if (!local) {
+                error(envLoad->location,
+                      "environment load references a missing local");
+            } else {
+                const auto* closureType = module.findType(local->type);
+                if (local->kind != LocalKind::Parameter ||
+                    !closureType || closureType->kind != TypeKind::Closure)
+                    error(envLoad->location,
+                          "environment load does not reference a Closure parameter");
+                else if (envLoad->fieldIndex >=
+                         closureType->capturedFields.size())
+                    error(envLoad->location,
+                          "environment load field is outside its closure environment");
+                else if (envLoad->type !=
+                         closureType->capturedFields[envLoad->fieldIndex].type)
+                    error(envLoad->location,
+                          "environment load type disagrees with its environment field");
+                if (!localVisibleFrom(local->scope, block.scope))
+                    error(envLoad->location,
+                          "environment load references a local outside its lexical scope");
+            }
         } else if (dynamic_cast<const TryExpr*>(expression) ||
                    dynamic_cast<const BlockExpr*>(expression) ||
                    dynamic_cast<const IfExpr*>(expression)) {
@@ -1695,12 +1729,12 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                             block.terminator.operand.get())) {
                         if (auto place = placeOf(
                                 block.terminator.operand.get())) {
-                            const auto* local = graph.findLocal(place->root);
-                            const auto* type = local
-                                ? module.findType(local->type) : nullptr;
-                            if (local &&
-                                (luna::ownership::isMoveOnly(local->usage) ||
-                                 (type && type->sysmeta.resource.cleanupRequired)))
+                            const auto* returnedType = module.findType(
+                                block.terminator.operand->type);
+                            if (returnedType &&
+                                (luna::ownership::isMoveOnly(
+                                     returnedType->sysmeta.resource.usage) ||
+                                 returnedType->sysmeta.resource.cleanupRequired))
                                 consumePlace(*place, state,
                                              block.terminator.location,
                                              "return transfer");
@@ -1942,6 +1976,8 @@ bool Verifier::verify(const Module& module) {
         for (const auto& reference : type.parameterTypeIds)
             appendReference(reference);
         for (const auto& field : type.fields)
+            appendReference(field.type);
+        for (const auto& field : type.capturedFields)
             appendReference(field.type);
         for (const auto& variant : type.variants)
             for (const auto& field : variant.fields)
@@ -3079,9 +3115,11 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
             error(lambda->location,
                   "lambda expression type disagrees with its closure type");
         const auto* closure = module.findType(lambda->closureType);
-        if (!closure || closure->kind != TypeKind::Function) {
+        if (!closure ||
+            (closure->kind != TypeKind::Function &&
+             closure->kind != TypeKind::Closure)) {
             error(lambda->location,
-                  "lambda closure type is not a frozen function type");
+                  "lambda closure type is not a frozen function or closure type");
         } else {
             if (closure->parameterTypeIds.size() != lambda->params.size() ||
                 closure->parameterContracts.size() != lambda->params.size())
@@ -3105,6 +3143,29 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
             if (closure->returnTypeId != lambda->returnType)
                 error(lambda->location,
                       "lambda return type disagrees with its closure type");
+            if (closure->kind == TypeKind::Closure) {
+                if (closure->capturedFields.size() !=
+                    lambda->captures.size())
+                    error(lambda->location,
+                          "lambda capture list disagrees with its closure environment");
+                const size_t comparableCaptures = std::min(
+                    closure->capturedFields.size(),
+                    lambda->captures.size());
+                for (size_t index = 0; index < comparableCaptures; ++index)
+                    if (lambda->captures[index] !=
+                        closure->capturedFields[index].name)
+                        error(lambda->location,
+                              "lambda capture name disagrees with its closure environment");
+                if (lambda->envParamName.empty())
+                    error(lambda->location,
+                          "capturing lambda has no environment parameter name");
+            } else if (!lambda->captures.empty()) {
+                error(lambda->location,
+                      "capture-free lambda records captures");
+            } else if (!lambda->envParamName.empty()) {
+                error(lambda->location,
+                      "capture-free lambda declares an environment parameter");
+            }
         }
         std::unordered_set<std::string> parameterNames;
         for (const auto& parameter : lambda->params) {
@@ -3119,7 +3180,8 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
                 error(lambda->location,
                       "lambda parameter has an inconsistent linear compatibility flag");
         }
-        if (!lambda->captures.empty())
+        if (!lambda->captures.empty() &&
+            (!closure || closure->kind != TypeKind::Closure))
             error(lambda->location,
                   "lambda capture has no canonical closure environment layout");
         if (static_cast<bool>(lambda->body) ==
@@ -3139,13 +3201,28 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
             for (const auto& local : lambda->controlFlow->locals)
                 if (local.kind == LocalKind::Parameter)
                     parameters.push_back(&local);
-            if (parameters.size() != lambda->params.size()) {
+            const bool hasEnvironment =
+                !lambda->envParamName.empty();
+            const size_t expectedArity =
+                lambda->params.size() + (hasEnvironment ? 1 : 0);
+            if (parameters.size() != expectedArity) {
                 error(lambda->location,
                       "lambda canonical body parameter table has the wrong arity");
             } else {
-                for (size_t index = 0; index < parameters.size(); ++index) {
+                size_t offset = 0;
+                if (hasEnvironment) {
+                    const auto& actual = *parameters[0];
+                    if (actual.scope != lambda->controlFlow->rootScope ||
+                        actual.name != lambda->envParamName ||
+                        actual.type != lambda->closureType)
+                        error(lambda->location,
+                              "lambda canonical environment parameter disagrees with its closure type");
+                    offset = 1;
+                }
+                for (size_t index = 0;
+                     index < lambda->params.size(); ++index) {
                     const auto& expected = lambda->params[index];
-                    const auto& actual = *parameters[index];
+                    const auto& actual = *parameters[index + offset];
                     if (actual.scope != lambda->controlFlow->rootScope ||
                         actual.name != expected.name ||
                         actual.type != expected.type ||
@@ -3161,6 +3238,61 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
                 mErrors.insert(mErrors.end(), nestedVerifier.errors().begin(),
                                nestedVerifier.errors().end());
         }
+    } else if (auto* closureExpr =
+                   dynamic_cast<const MakeClosureExpr*>(expr)) {
+        verifyType(closureExpr->type, closureExpr->location,
+                   "closure construction type", module);
+        const auto* closureType = module.findType(closureExpr->type);
+        if (!closureType || closureType->kind != TypeKind::Closure)
+            error(closureExpr->location,
+                  "closure construction has no frozen closure type");
+        if (!closureExpr->lambda)
+            error(closureExpr->location,
+                  "closure construction has no lambda executable");
+        else {
+            if (closureExpr->lambda->closureType != closureExpr->type)
+                error(closureExpr->location,
+                      "closure construction type disagrees with its lambda type");
+            verifyExpr(closureExpr->lambda.get(), module, owner);
+        }
+        if (closureType &&
+            closureType->capturedFields.size() !=
+                closureExpr->capturedValues.size())
+            error(closureExpr->location,
+                  "closure environment arity disagrees with its closure type");
+        const size_t comparableValues = std::min(
+            closureType ? closureType->capturedFields.size() : 0,
+            closureExpr->capturedValues.size());
+        for (size_t index = 0; index < comparableValues; ++index) {
+            const auto& value = closureExpr->capturedValues[index];
+            if (!value) {
+                error(closureExpr->location,
+                      "closure captured value is null");
+                continue;
+            }
+            verifyExpr(value.get(), module, owner);
+            if (closureType &&
+                value->type !=
+                    closureType->capturedFields[index].type)
+                error(value->location,
+                      "closure captured value type disagrees with its environment field");
+            if (closureType &&
+                dynamic_cast<const IdentifierExpr*>(value.get()) &&
+                static_cast<const IdentifierExpr*>(value.get())->name !=
+                    closureType->capturedFields[index].name)
+                error(value->location,
+                      "closure captured value name disagrees with its environment field");
+            if (!dynamic_cast<const IdentifierExpr*>(value.get()) &&
+                !dynamic_cast<const EnvLoadExpr*>(value.get()))
+                error(value->location,
+                      "closure captured value is not a local read");
+        }
+    } else if (auto* envLoad = dynamic_cast<const EnvLoadExpr*>(expr)) {
+        verifyType(envLoad->type, envLoad->location,
+                   "environment load type", module);
+        if (envLoad->envLocal.empty())
+            error(envLoad->location,
+                  "environment load has no environment local");
     } else if (auto* assignment = dynamic_cast<const AssignExpr*>(expr)) {
         verifyExpr(assignment->lhs.get(), module, owner);
         verifyExpr(assignment->rhs.get(), module, owner);
@@ -3204,6 +3336,18 @@ void Verifier::verifyType(const TypeRef& reference,
     for (const auto& field : type->fields)
         verifyType(field.type, location, context + "." + field.name, module,
                    allowTypeParameter);
+    for (const auto& field : type->capturedFields) {
+        verifyType(field.type, location,
+                   context + ".capture." + field.name, module,
+                   allowTypeParameter);
+        const auto* capturedType = module.findType(field.type);
+        if (capturedType &&
+            (capturedType->sysmeta.resource.usage !=
+                 luna::ownership::Usage::Copy ||
+             capturedType->sysmeta.resource.cleanupRequired))
+            error(location,
+                  context + " has a non-Copy or cleanup-bearing capture field");
+    }
     for (const auto& variant : type->variants)
         for (const auto& field : variant.fields)
             verifyType(field, location, context + "::" + variant.name, module,

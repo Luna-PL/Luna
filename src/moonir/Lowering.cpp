@@ -525,7 +525,30 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         value->closureType = typeRef(lambda->closureType);
         value->type = value->closureType;
         value->captures = lambda->captures;
-        result = std::move(value);
+        value->envParamName = lambda->envParamName;
+        if (lambda->captures.empty()) {
+            result = std::move(value);
+        } else {
+            auto closure = std::make_unique<moon::MakeClosureExpr>();
+            closure->type = value->closureType;
+            for (const auto& capture : lambda->captures) {
+                auto reference = std::make_unique<moon::IdentifierExpr>();
+                reference->name = capture;
+                TypePtr captureType;
+                if (lambda->closureType)
+                    for (const auto& field :
+                         lambda->closureType->capturedFields)
+                        if (field.name == capture) {
+                            captureType = field.type;
+                            break;
+                        }
+                reference->type = typeRef(captureType);
+                closure->capturedValues.push_back(
+                    std::move(reference));
+            }
+            closure->lambda = std::move(value);
+            result = std::move(closure);
+        }
     } else if (auto* assignment = dynamic_cast<const ::AssignExpr*>(expression)) {
         auto value = std::make_unique<moon::AssignExpr>();
         value->op = lowerOperator(static_cast<int>(assignment->op), assignment);

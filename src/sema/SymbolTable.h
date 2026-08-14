@@ -48,6 +48,11 @@ public:
     SymbolInfo* lookup(const std::string& name);
     SymbolInfo* lookupLinkage(const std::string& name);
     bool hasInCurrentScope(const std::string& name) const;
+    size_t depth() const { return mScopes.size(); }
+    // Zero-based scope depth at which the name is defined, or SIZE_MAX.
+    // Closure capture analysis uses this to separate lambda-local bindings
+    // from enclosing-scope free variables.
+    size_t lookupDepth(const std::string& name) const;
 
     // Types: store the resolved TypePtr for user-defined types/traits
     void defineType(const std::string& name, TypePtr type);

@@ -1,0 +1,16 @@
+fn make_adder(base: i32) -> i32 {
+    let captured = base;
+    let inner = fn(value: i32) -> i32 {
+        return captured + value;
+    };
+    return inner(1);
+}
+
+fn main() -> i32 {
+    let offset = 41;
+    let add_offset = fn(value: i32) -> i32 {
+        return offset + value;
+    };
+    let from_fn = make_adder(add_offset(0));
+    return from_fn;
+}

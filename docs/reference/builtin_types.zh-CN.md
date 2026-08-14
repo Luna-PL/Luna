@@ -144,7 +144,7 @@
 - `usize/isize` 的目标相关语义尚未与非 64 位平台冻结；
 - 整数常量按参数宽度生成时缺少完整范围诊断；
 - 高于 8 字节对齐的 inline ADT 载荷策略未冻结；
-- closure environment 和跨函数 Iterator adapter Drop 布局尚未交付；
+- non-Copy closure environment 和跨函数 Iterator adapter Drop 布局尚未交付；Copy-only closure environment 已按 C016 交付；
 - `string` 的公开格式化、编码和标准库 API 尚未冻结；
 - `device_buffer<T>` 的类型构造已泛化，但当前设备操作仍主要固定为 `i32`；
 - callable ownership shape 需要更完整的赋值/统一负例矩阵。

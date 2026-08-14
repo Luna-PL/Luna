@@ -159,9 +159,10 @@ private:
     size_t mCurrentFragmentScopeBase = 0;
     size_t mCurrentFragmentApplyBase = 0;
     size_t mCurrentFragmentSlotBase = 0;
-    // Closures do not yet have an environment layout.  While checking a
-    // lambda, names from enclosing local scopes are kept here so an attempted
-    // capture is diagnosed instead of silently compiling as an unresolved
-    // function/global reference.
-    std::unordered_set<std::string> mUnavailableLambdaCaptures;
+    // While checking a lambda, Copy locals from enclosing scopes are kept
+    // here as capture candidates: they are registered as value copies in the
+    // lambda scope so the body reads the captured copy. Affine/Linear entries
+    // are diagnosed (C016 CL005); borrowed captures are diagnosed too.
+    std::unordered_map<std::string, luna::ownership::Usage>
+        mUnavailableLambdaCaptures;
 };

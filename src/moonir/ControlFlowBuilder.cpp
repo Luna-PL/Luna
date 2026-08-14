@@ -230,6 +230,26 @@ std::unique_ptr<Expr> cloneStructuredExpr(const Expr* source) {
         result->elseExpr = cloneStructuredExpr(value->elseExpr.get());
         return result;
     }
+    if (const auto* value = dynamic_cast<const EnvLoadExpr*>(source)) {
+        auto result = clonedNode(value);
+        result->envLocal = value->envLocal;
+        result->fieldIndex = value->fieldIndex;
+        return result;
+    }
+    if (const auto* value = dynamic_cast<const MakeClosureExpr*>(source)) {
+        if (!value->lambda || value->lambda->controlFlow) return nullptr;
+        auto clonedLambda = cloneStructuredExpr(value->lambda.get());
+        if (!clonedLambda) return nullptr;
+        auto result = clonedNode(value);
+        result->lambda = std::unique_ptr<LambdaExpr>(
+            static_cast<LambdaExpr*>(clonedLambda.release()));
+        for (const auto& captured : value->capturedValues) {
+            auto clonedCaptured = cloneStructuredExpr(captured.get());
+            if (captured && !clonedCaptured) return nullptr;
+            result->capturedValues.push_back(std::move(clonedCaptured));
+        }
+        return result;
+    }
     if (const auto* value = dynamic_cast<const LambdaExpr*>(source)) {
         // Composition precedes canonical lambda construction. Importing an
         // already-built child graph would require table remapping and is
@@ -242,6 +262,7 @@ std::unique_ptr<Expr> cloneStructuredExpr(const Expr* source) {
         result->closureType = value->closureType;
         result->captures = value->captures;
         result->identitySuffix = value->identitySuffix;
+        result->envParamName = value->envParamName;
         return result;
     }
     if (const auto* value = dynamic_cast<const AssignExpr*>(source)) {
@@ -410,6 +431,255 @@ std::unique_ptr<Stmt> cloneStructuredStmt(const Stmt* source) {
     return nullptr;
 }
 
+// In-place rewrite of capture reads inside a capturing lambda body: every
+// IdentifierExpr naming a capture becomes an EnvLoad from the synthetic
+// environment parameter (C016 CL009). Capture names arrive in canonical
+// captured-field order, so the identifier position is the field index.
+std::unique_ptr<Stmt> rewriteCaptureReadsStmt(
+    std::unique_ptr<Stmt> stmt,
+    const std::vector<std::string>& captures,
+    const LocalId& envLocal,
+    const TypeRef& closureType,
+    const Module& module);
+
+std::unique_ptr<Expr> rewriteCaptureReadsExpr(
+    std::unique_ptr<Expr> expr,
+    const std::vector<std::string>& captures,
+    const LocalId& envLocal,
+    const TypeRef& closureType,
+    const Module& module) {
+    if (!expr) return nullptr;
+    if (auto* identifier = dynamic_cast<IdentifierExpr*>(expr.get())) {
+        if (identifier->declaration.empty()) {
+            const auto found = std::find(
+                captures.begin(), captures.end(), identifier->name);
+            if (found != captures.end()) {
+                const size_t fieldIndex =
+                    static_cast<size_t>(found - captures.begin());
+                auto load = std::make_unique<EnvLoadExpr>();
+                load->envLocal = envLocal;
+                load->fieldIndex = fieldIndex;
+                load->type = identifier->type;
+                load->location = identifier->location;
+                if (load->type.empty()) {
+                    const auto* closure = module.findType(closureType);
+                    if (closure &&
+                        fieldIndex < closure->capturedFields.size())
+                        load->type =
+                            closure->capturedFields[fieldIndex].type;
+                }
+                return load;
+            }
+        }
+        return expr;
+    }
+    const auto rewriteChildren = [&](std::vector<std::unique_ptr<Expr>>& children) {
+        for (auto& child : children)
+            child = rewriteCaptureReadsExpr(
+                std::move(child), captures, envLocal, closureType, module);
+    };
+    if (auto* binary = dynamic_cast<BinaryExpr*>(expr.get())) {
+        binary->lhs = rewriteCaptureReadsExpr(
+            std::move(binary->lhs), captures, envLocal, closureType, module);
+        binary->rhs = rewriteCaptureReadsExpr(
+            std::move(binary->rhs), captures, envLocal, closureType, module);
+    } else if (auto* unary = dynamic_cast<UnaryExpr*>(expr.get())) {
+        unary->operand = rewriteCaptureReadsExpr(
+            std::move(unary->operand), captures, envLocal, closureType, module);
+    } else if (auto* call = dynamic_cast<CallExpr*>(expr.get())) {
+        call->callee = rewriteCaptureReadsExpr(
+            std::move(call->callee), captures, envLocal, closureType, module);
+        rewriteChildren(call->args);
+    } else if (auto* closure =
+                   dynamic_cast<MakeClosureExpr*>(expr.get())) {
+        for (auto& captured : closure->capturedValues)
+            captured = rewriteCaptureReadsExpr(
+                std::move(captured), captures, envLocal, closureType, module);
+    } else if (auto* select = dynamic_cast<DynamicSelectExpr*>(expr.get())) {
+        rewriteChildren(select->filterArguments);
+    } else if (auto* launch = dynamic_cast<LaunchExpr*>(expr.get())) {
+        launch->threads = rewriteCaptureReadsExpr(
+            std::move(launch->threads), captures, envLocal, closureType, module);
+        rewriteChildren(launch->args);
+    } else if (auto* variant = dynamic_cast<VariantConstructExpr*>(expr.get())) {
+        rewriteChildren(variant->args);
+    } else if (auto* result = dynamic_cast<ResultConstructExpr*>(expr.get())) {
+        result->payload = rewriteCaptureReadsExpr(
+            std::move(result->payload), captures, envLocal, closureType, module);
+    } else if (auto* field = dynamic_cast<FieldAccessExpr*>(expr.get())) {
+        field->object = rewriteCaptureReadsExpr(
+            std::move(field->object), captures, envLocal, closureType, module);
+    } else if (auto* index = dynamic_cast<IndexExpr*>(expr.get())) {
+        index->object = rewriteCaptureReadsExpr(
+            std::move(index->object), captures, envLocal, closureType, module);
+        index->index = rewriteCaptureReadsExpr(
+            std::move(index->index), captures, envLocal, closureType, module);
+    } else if (auto* slice = dynamic_cast<SliceLengthExpr*>(expr.get())) {
+        slice->slice = rewriteCaptureReadsExpr(
+            std::move(slice->slice), captures, envLocal, closureType, module);
+    } else if (auto* array = dynamic_cast<ArrayLiteralExpr*>(expr.get())) {
+        rewriteChildren(array->elements);
+    } else if (auto* record = dynamic_cast<RecordLiteralExpr*>(expr.get())) {
+        for (auto& field : record->fields)
+            field.value = rewriteCaptureReadsExpr(
+                std::move(field.value), captures, envLocal, closureType, module);
+    } else if (auto* alloc = dynamic_cast<HeapAllocExpr*>(expr.get())) {
+        alloc->initializer = rewriteCaptureReadsExpr(
+            std::move(alloc->initializer), captures, envLocal, closureType, module);
+    } else if (auto* init = dynamic_cast<InitAllocationExpr*>(expr.get())) {
+        for (auto& element : init->elements)
+            element.value = rewriteCaptureReadsExpr(
+                std::move(element.value), captures, envLocal, closureType, module);
+    } else if (auto* attempt = dynamic_cast<TryExpr*>(expr.get())) {
+        attempt->operand = rewriteCaptureReadsExpr(
+            std::move(attempt->operand), captures, envLocal, closureType, module);
+    } else if (auto* move = dynamic_cast<MoveExpr*>(expr.get())) {
+        move->operand = rewriteCaptureReadsExpr(
+            std::move(move->operand), captures, envLocal, closureType, module);
+    } else if (auto* borrow = dynamic_cast<BorrowExpr*>(expr.get())) {
+        borrow->operand = rewriteCaptureReadsExpr(
+            std::move(borrow->operand), captures, envLocal, closureType, module);
+    } else if (auto* deref = dynamic_cast<DerefExpr*>(expr.get())) {
+        deref->operand = rewriteCaptureReadsExpr(
+            std::move(deref->operand), captures, envLocal, closureType, module);
+    } else if (auto* address = dynamic_cast<AddrOfExpr*>(expr.get())) {
+        address->operand = rewriteCaptureReadsExpr(
+            std::move(address->operand), captures, envLocal, closureType, module);
+    } else if (auto* block = dynamic_cast<BlockExpr*>(expr.get())) {
+        if (block->block) {
+            auto activeCaptures = captures;
+            for (auto& statement : block->block->stmts) {
+                statement = rewriteCaptureReadsStmt(
+                    std::move(statement), activeCaptures, envLocal,
+                    closureType, module);
+                if (const auto* declaration =
+                        dynamic_cast<const LetStmt*>(statement.get()))
+                    activeCaptures.erase(
+                        std::remove(activeCaptures.begin(),
+                                    activeCaptures.end(), declaration->name),
+                        activeCaptures.end());
+            }
+        }
+    } else if (auto* conditional = dynamic_cast<IfExpr*>(expr.get())) {
+        conditional->cond = rewriteCaptureReadsExpr(
+            std::move(conditional->cond), captures, envLocal, closureType, module);
+        conditional->thenExpr = rewriteCaptureReadsExpr(
+            std::move(conditional->thenExpr), captures, envLocal, closureType, module);
+        conditional->elseExpr = rewriteCaptureReadsExpr(
+            std::move(conditional->elseExpr), captures, envLocal, closureType, module);
+    } else if (auto* assignment = dynamic_cast<AssignExpr*>(expr.get())) {
+        assignment->lhs = rewriteCaptureReadsExpr(
+            std::move(assignment->lhs), captures, envLocal, closureType, module);
+        assignment->rhs = rewriteCaptureReadsExpr(
+            std::move(assignment->rhs), captures, envLocal, closureType, module);
+    }
+    return expr;
+}
+
+std::unique_ptr<Stmt> rewriteCaptureReadsStmt(
+    std::unique_ptr<Stmt> stmt,
+    const std::vector<std::string>& captures,
+    const LocalId& envLocal,
+    const TypeRef& closureType,
+    const Module& module) {
+    if (!stmt) return nullptr;
+    if (auto* block = dynamic_cast<BlockStmt*>(stmt.get())) {
+        auto activeCaptures = captures;
+        for (auto& statement : block->stmts) {
+            statement = rewriteCaptureReadsStmt(
+                std::move(statement), activeCaptures, envLocal, closureType,
+                module);
+            if (const auto* declaration =
+                    dynamic_cast<const LetStmt*>(statement.get()))
+                activeCaptures.erase(
+                    std::remove(activeCaptures.begin(),
+                                activeCaptures.end(), declaration->name),
+                    activeCaptures.end());
+        }
+        return stmt;
+    }
+    if (auto* declaration = dynamic_cast<LetStmt*>(stmt.get())) {
+        declaration->initializer = rewriteCaptureReadsExpr(
+            std::move(declaration->initializer), captures, envLocal,
+            closureType, module);
+        return stmt;
+    }
+    if (auto* returned = dynamic_cast<ReturnStmt*>(stmt.get())) {
+        returned->value = rewriteCaptureReadsExpr(
+            std::move(returned->value), captures, envLocal, closureType, module);
+        return stmt;
+    }
+    if (auto* expression = dynamic_cast<ExprStmt*>(stmt.get())) {
+        expression->expr = rewriteCaptureReadsExpr(
+            std::move(expression->expr), captures, envLocal, closureType, module);
+        return stmt;
+    }
+    if (auto* conditional = dynamic_cast<IfStmt*>(stmt.get())) {
+        conditional->cond = rewriteCaptureReadsExpr(
+            std::move(conditional->cond), captures, envLocal, closureType, module);
+        for (auto& statement : conditional->thenBlock->stmts)
+            statement = rewriteCaptureReadsStmt(
+                std::move(statement), captures, envLocal, closureType, module);
+        if (conditional->elseBranch)
+            conditional->elseBranch = rewriteCaptureReadsStmt(
+                std::move(conditional->elseBranch), captures, envLocal,
+                closureType, module);
+        return stmt;
+    }
+    if (auto* match = dynamic_cast<MatchStmt*>(stmt.get())) {
+        match->scrutinee = rewriteCaptureReadsExpr(
+            std::move(match->scrutinee), captures, envLocal, closureType, module);
+        for (auto& arm : match->arms)
+            for (auto& statement : arm.body->stmts)
+                statement = rewriteCaptureReadsStmt(
+                    std::move(statement), captures, envLocal, closureType, module);
+        return stmt;
+    }
+    if (auto* loop = dynamic_cast<WhileStmt*>(stmt.get())) {
+        loop->cond = rewriteCaptureReadsExpr(
+            std::move(loop->cond), captures, envLocal, closureType, module);
+        for (auto& statement : loop->body->stmts)
+            statement = rewriteCaptureReadsStmt(
+                std::move(statement), captures, envLocal, closureType, module);
+        return stmt;
+    }
+    if (auto* loop = dynamic_cast<ForStmt*>(stmt.get())) {
+        loop->iterable = rewriteCaptureReadsExpr(
+            std::move(loop->iterable), captures, envLocal, closureType, module);
+        for (auto& statement : loop->body->stmts)
+            statement = rewriteCaptureReadsStmt(
+                std::move(statement), captures, envLocal, closureType, module);
+        return stmt;
+    }
+    if (auto* freeStmt = dynamic_cast<FreeStmt*>(stmt.get())) {
+        freeStmt->operand = rewriteCaptureReadsExpr(
+            std::move(freeStmt->operand), captures, envLocal, closureType, module);
+        return stmt;
+    }
+    if (auto* invoke = dynamic_cast<SlotInvokeStmt*>(stmt.get())) {
+        for (auto& argument : invoke->args)
+            argument = rewriteCaptureReadsExpr(
+                std::move(argument), captures, envLocal, closureType, module);
+        if (invoke->continuation)
+            for (auto& statement : invoke->continuation->stmts)
+                statement = rewriteCaptureReadsStmt(
+                    std::move(statement), captures, envLocal, closureType, module);
+        return stmt;
+    }
+    if (auto* awaitStmt = dynamic_cast<AwaitStmt*>(stmt.get())) {
+        awaitStmt->event = rewriteCaptureReadsExpr(
+            std::move(awaitStmt->event), captures, envLocal, closureType, module);
+        return stmt;
+    }
+    if (auto* apply = dynamic_cast<ApplyStmt*>(stmt.get())) {
+        for (auto& statement : apply->body->stmts)
+            statement = rewriteCaptureReadsStmt(
+                std::move(statement), captures, envLocal, closureType, module);
+        return stmt;
+    }
+    return stmt;
+}
+
 } // namespace
 
 std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
@@ -460,9 +730,26 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     graph->entry = entry;
 
     pushBindings();
+    if (!mCaptureEnvParamName.empty()) {
+        mCaptureEnvLocal = addLocal(
+            rootScope, LocalKind::Parameter, mCaptureEnvParamName,
+            mCaptureClosureType, luna::ownership::Usage::Copy,
+            luna::ownership::Relation::Owned);
+        if (mCaptureEnvLocal.empty()) {
+            mGraph = nullptr;
+            mModule = nullptr;
+            return nullptr;
+        }
+    }
     for (const auto& parameter : parameters)
         addLocal(rootScope, LocalKind::Parameter, parameter.name,
                  parameter.type, parameter.usage, parameter.relation);
+    if (!mCaptureEnvParamName.empty()) {
+        for (auto& statement : root->stmts)
+            statement = rewriteCaptureReadsStmt(
+                std::move(statement), mCaptureNames, mCaptureEnvLocal,
+                mCaptureClosureType, module);
+    }
 
     auto open = lowerSequence(
         root->stmts, OpenBlock{entry, {}}, rootRegion, rootScope);
@@ -1266,6 +1553,7 @@ bool ControlFlowBuilder::parseIteratorRecipe(
                 plan.sourceType = materialized->sourceType;
                 plan.itemType = materialized->itemType;
                 plan.materialized = true;
+                plan.materializedOwnsSource = materialized->ownsSource;
                 plan.materializedSource = materialized->source;
                 plan.materializedIndex = materialized->index;
                 plan.materializedLimit = materialized->limit;
@@ -1311,6 +1599,23 @@ bool ControlFlowBuilder::parseIteratorRecipe(
         return true;
     }
 
+    std::function<TypeRef(const Expr*)> sourceTypeOf =
+        [this, &sourceTypeOf](const Expr* expression) -> TypeRef {
+        if (!expression) return {};
+        if (!expression->type.empty()) return expression->type;
+        if (const auto* identifier = dynamic_cast<const IdentifierExpr*>(
+                expression)) {
+            const LocalId local = lookupLocal(identifier->name);
+            if (!local.empty() && local.value < mGraph->locals.size())
+                return mGraph->locals[local.value].type;
+        }
+        if (const auto* move = dynamic_cast<const MoveExpr*>(expression))
+            return sourceTypeOf(move->operand.get());
+        if (const auto* borrow = dynamic_cast<const BorrowExpr*>(expression))
+            return sourceTypeOf(borrow->operand.get());
+        return {};
+    };
+
     auto* member = dynamic_cast<FieldAccessExpr*>(call->callee.get());
     if (!member) {
         error(location, "iterator recipe call has no canonical receiver");
@@ -1323,7 +1628,7 @@ bool ControlFlowBuilder::parseIteratorRecipe(
             error(location, "iterator source adapter has an invalid canonical shape");
             return false;
         }
-        plan.sourceType = member->object->type;
+        plan.sourceType = sourceTypeOf(member->object.get());
         plan.source = std::move(member->object);
         plan.mode = call->iteratorOp == IteratorOp::Iter
             ? IteratorMode::Shared
@@ -1468,7 +1773,8 @@ bool ControlFlowBuilder::validateIteratorRecipe(
             (!elementType ||
              (elementType->sysmeta.resource.usage !=
                   luna::ownership::Usage::Copy &&
-              (!allowAffineItems || plan.materialized ||
+              (!allowAffineItems ||
+               (plan.materialized && !plan.materializedOwnsSource) ||
                elementType->sysmeta.resource.usage !=
                    luna::ownership::Usage::Affine ||
                !elementType->sysmeta.resource.cleanupRequired)))) {
@@ -1653,13 +1959,6 @@ bool ControlFlowBuilder::materializeIteratorRecipe(
               "materialized iterator binding has no frozen iterator contract");
         return false;
     }
-    if (declaration->materializedIteratorOwnsSource ||
-        !declaration->materializedIteratorSourceType.empty()) {
-        error(declaration->location,
-              "move-only materialized recipe requires projected source cleanup state");
-        return false;
-    }
-
     IteratorRecipePlan plan;
     if (!parseIteratorRecipe(
             std::move(declaration->initializer), plan,
@@ -1672,7 +1971,8 @@ bool ControlFlowBuilder::materializeIteratorRecipe(
     }
     if (!bindIteratorRecipe(plan) ||
         !validateIteratorRecipe(
-            plan, iteratorType->innerTypeId, declaration->location))
+            plan, iteratorType->innerTypeId, declaration->location,
+            declaration->materializedIteratorOwnsSource))
         return false;
 
     TypeRef indexType;
@@ -1702,9 +2002,11 @@ bool ControlFlowBuilder::materializeIteratorRecipe(
     const auto addStateBinding = [this, &declaration, current, scope](
         const std::string& name, const TypeRef& type,
         luna::ownership::Usage usage, std::unique_ptr<Expr> initializer,
-        LocalKind kind = LocalKind::Binding) {
+        LocalKind kind = LocalKind::Binding,
+        bool inferTypeCleanup = true) {
         const LocalId local = addLocal(
-            scope, kind, name, type, usage);
+            scope, kind, name, type, usage, std::nullopt,
+            inferTypeCleanup);
         auto state = std::make_unique<LetStmt>();
         state->location = declaration->location;
         state->name = name;
@@ -1723,6 +2025,7 @@ bool ControlFlowBuilder::materializeIteratorRecipe(
     materialized.mode = plan.mode;
     materialized.sourceType = plan.sourceType;
     materialized.itemType = plan.itemType;
+    materialized.ownsSource = declaration->materializedIteratorOwnsSource;
     const TypeRecord* sourceType = nullptr;
     if (plan.mode != IteratorMode::Range) {
         sourceType = mModule->findType(plan.sourceType);
@@ -1736,10 +2039,23 @@ bool ControlFlowBuilder::materializeIteratorRecipe(
             }
             materialized.source = sourceIdentifier->local;
         } else {
+            auto sourceInitializer = std::move(plan.source);
+            const auto sourceUsage = declaration->materializedIteratorOwnsSource
+                ? mModule->findType(plan.sourceType)->sysmeta.resource.usage
+                : luna::ownership::Usage::Copy;
+            if (declaration->materializedIteratorOwnsSource &&
+                dynamic_cast<IdentifierExpr*>(sourceInitializer.get())) {
+                auto transfer = std::make_unique<MoveExpr>();
+                transfer->location = declaration->location;
+                transfer->type = plan.sourceType;
+                transfer->operand = std::move(sourceInitializer);
+                sourceInitializer = std::move(transfer);
+            }
             materialized.source = addStateBinding(
                 "$recipe." + declaration->name + ".source",
-                plan.sourceType, luna::ownership::Usage::Copy,
-                std::move(plan.source));
+                plan.sourceType, sourceUsage, std::move(sourceInitializer),
+                LocalKind::Binding,
+                !declaration->materializedIteratorOwnsSource);
         }
     }
 
@@ -1799,12 +2115,6 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     if (!parseIteratorRecipe(
             std::move(statement->iterable), plan, statement->location))
         return std::nullopt;
-    if (!statement->recipeStateName.empty()) {
-        error(statement->location,
-              "move-only iterator recipe state requires projected array cleanup");
-        return std::nullopt;
-    }
-
     if (!bindIteratorRecipe(plan) ||
         !validateIteratorRecipe(
             plan, statement->elementType, statement->location, true))
@@ -1890,21 +2200,26 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         } else {
             auto* sourceIdentifier = dynamic_cast<IdentifierExpr*>(
                 plan.source.get());
+            if (!sourceIdentifier) {
+                if (auto* move = dynamic_cast<MoveExpr*>(plan.source.get()))
+                    sourceIdentifier = dynamic_cast<IdentifierExpr*>(
+                        move->operand.get());
+            }
             const bool snapshot = plan.mode == IteratorMode::Consuming;
+            const auto* frozen = mModule->findType(plan.sourceType);
+            const auto* element = frozen &&
+                    frozen->kind == TypeKind::Array
+                ? mModule->findType(frozen->innerTypeId) : nullptr;
+            guardedConsumingSource = frozen && element &&
+                plan.mode == IteratorMode::Consuming &&
+                element->sysmeta.resource.usage ==
+                    luna::ownership::Usage::Affine &&
+                element->sysmeta.resource.cleanupRequired;
             if (!snapshot && sourceIdentifier &&
                 !sourceIdentifier->local.empty()) {
                 sourceLocal = sourceIdentifier->local;
                 plan.source.reset();
             } else {
-                const auto* frozen = mModule->findType(plan.sourceType);
-                const auto* element = frozen &&
-                        frozen->kind == TypeKind::Array
-                    ? mModule->findType(frozen->innerTypeId) : nullptr;
-                guardedConsumingSource = frozen && element &&
-                    plan.mode == IteratorMode::Consuming &&
-                    element->sysmeta.resource.usage ==
-                        luna::ownership::Usage::Affine &&
-                    element->sysmeta.resource.cleanupRequired;
                 if (!frozen ||
                     (frozen->sysmeta.resource.cleanupRequired &&
                      !guardedConsumingSource)) {
@@ -1913,12 +2228,28 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
                     popBindings();
                     return std::nullopt;
                 }
+                auto sourceInitializer = std::move(plan.source);
+                if (guardedConsumingSource &&
+                    dynamic_cast<IdentifierExpr*>(sourceInitializer.get())) {
+                    auto transfer = std::make_unique<MoveExpr>();
+                    transfer->location = statement->location;
+                    transfer->type = plan.sourceType;
+                    transfer->operand = std::move(sourceInitializer);
+                    sourceInitializer = std::move(transfer);
+                }
                 sourceLocal = addBinding(
                     "$for.source." + identity, plan.sourceType,
-                    std::move(plan.source), LocalKind::Binding,
+                    std::move(sourceInitializer), LocalKind::Binding,
                     !guardedConsumingSource);
             }
         }
+    }
+    if (!statement->recipeStateName.empty() &&
+        !guardedConsumingSource) {
+        error(statement->location,
+              "move-only iterator recipe state requires a direct affine array source");
+        popBindings();
+        return std::nullopt;
     }
 
     std::unique_ptr<Expr> initial;
@@ -4557,18 +4888,26 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
             if (!bindExpr(element.value.get())) return false;
         return true;
     }
+    if (auto* closure = dynamic_cast<MakeClosureExpr*>(expression)) {
+        for (auto& value : closure->capturedValues)
+            if (!bindExpr(value.get())) return false;
+        if (closure->lambda)
+            return bindExpr(closure->lambda.get());
+        error(closure->location,
+              "closure construction has no lambda executable");
+        return false;
+    }
     if (auto* lambda = dynamic_cast<LambdaExpr*>(expression)) {
-        if (!lambda->captures.empty()) {
-            error(lambda->location,
-                  "capturing lambda requires a closure environment ABI");
-            return false;
-        }
         if (!lambda->body || lambda->controlFlow) {
             error(lambda->location,
                   "lambda entering CFG construction must have exactly one structured body");
             return false;
         }
         ControlFlowBuilder nestedBuilder;
+        if (!lambda->captures.empty())
+            nestedBuilder.setCaptureEnvironment(
+                lambda->captures, lambda->closureType,
+                lambda->envParamName);
         auto graph = nestedBuilder.build(
             std::move(lambda->body), lambda->params,
             RegionKind::Lambda, *mModule);
@@ -4635,6 +4974,43 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
             return false;
         if (assignment->type.empty() && assignment->lhs)
             assignment->type = assignment->lhs->type;
+        return true;
+    }
+    if (auto* envLoad = dynamic_cast<EnvLoadExpr*>(expression)) {
+        if (envLoad->envLocal.empty()) {
+            error(envLoad->location,
+                  "environment load has no environment local");
+            return false;
+        }
+        if (envLoad->envLocal.value >= mGraph->locals.size()) {
+            error(envLoad->location,
+                  "environment load references a missing local");
+            return false;
+        }
+        const auto& envLocal = mGraph->locals[envLoad->envLocal.value];
+        if (envLocal.kind != LocalKind::Parameter) {
+            error(envLoad->location,
+                  "environment load does not reference an environment parameter");
+            return false;
+        }
+        const auto* closure = mModule->findType(envLocal.type);
+        if (!closure || closure->kind != TypeKind::Closure) {
+            error(envLoad->location,
+                  "environment parameter does not have a frozen closure type");
+            return false;
+        }
+        if (envLoad->fieldIndex >= closure->capturedFields.size()) {
+            error(envLoad->location,
+                  "environment load field is outside its closure environment");
+            return false;
+        }
+        if (envLoad->type.empty())
+            envLoad->type =
+                closure->capturedFields[envLoad->fieldIndex].type;
+        if (envLoad->type !=
+            closure->capturedFields[envLoad->fieldIndex].type)
+            error(envLoad->location,
+                  "environment load type disagrees with its environment field");
         return true;
     }
     return true;

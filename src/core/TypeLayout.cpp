@@ -36,6 +36,13 @@ uint64_t valueAlignmentImpl(const TypePtr& type,
                     alignment, valueAlignmentImpl(field.type, active));
             return alignment;
         }
+        case TypeKind::Closure: {
+            uint64_t alignment = 8;
+            for (const auto& field : type->capturedFields)
+                alignment = std::max(
+                    alignment, valueAlignmentImpl(field.type, active));
+            return alignment;
+        }
         case TypeKind::Unit: case TypeKind::Never:
             return 1;
         case TypeKind::Slice: case TypeKind::Result: case TypeKind::Enum:
@@ -86,6 +93,21 @@ uint64_t valueSizeImpl(const TypePtr& type,
             uint64_t offset = 0;
             uint64_t maximumAlignment = 1;
             for (const auto& field : type->fields) {
+                const uint64_t alignment =
+                    valueAlignmentImpl(field.type, active);
+                maximumAlignment = std::max(maximumAlignment, alignment);
+                offset = alignTo(offset, alignment);
+                offset += valueSizeImpl(field.type, active);
+            }
+            active.erase(type.get());
+            return alignTo(offset, maximumAlignment);
+        }
+        case TypeKind::Closure: {
+            if (!active.insert(type.get()).second)
+                return 0;
+            uint64_t offset = 8;
+            uint64_t maximumAlignment = 8;
+            for (const auto& field : type->capturedFields) {
                 const uint64_t alignment =
                     valueAlignmentImpl(field.type, active);
                 maximumAlignment = std::max(maximumAlignment, alignment);

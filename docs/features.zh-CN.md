@@ -74,7 +74,7 @@ Core 提供具有稳定 package identity 的 `Option`、`Iterator`、`IntoIterat
 当前 structured LLVM path 对 move-only affine fold accumulator 使用初始化位；已完成的
 canonical-CFG replacement 则用一个 synthetic local 静态证明 move、重新初始化和最终
 transfer，不需要 runtime flag，但该 CFG 尚未成为唯一 backend body。linear accumulator
-与捕获式 closure environment 仍是后续边界。
+与 non-Copy 捕获式 closure environment 仍是后续边界；Copy-only 捕获切片已按 `C016` 交付。
 无捕获 recipe（包括拥有 move-only 数组源的 recipe）现可物化为 affine、单次消费
 的局部栈值。owning recipe 使用逐元素初始化位，在消费、丢弃和提前返回路径恰好清理
 剩余元素，同时保持静态融合且不引入 iterator runtime allocation。

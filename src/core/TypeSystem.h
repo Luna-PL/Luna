@@ -23,7 +23,7 @@ enum class TypeKind {
     I8, I16, I32, I64, U8, U16, U32, U64, USize, ISize,
     F32, F64, Bool, String, CStr, RawPointer, Unit, Never,
     Struct, Record, Enum, Result, Trait, TypeParam, Reference,
-    Function, Slot, Fragment, Iterator,
+    Function, Closure, Slot, Fragment, Iterator,
     DeviceBuffer, Event, Array, Slice,
     Metadata, MetadataView, DeclarationView, DeclarationRef,
     InferenceVar,
@@ -102,12 +102,16 @@ struct Type {
     TypePtr inner;                // for Reference, RawPointer, and DeviceBuffer
     uint64_t arrayLength = 0;     // for Array; part of the structural type
     bool isMutable = false;       // for Reference
-    TypeVec paramTypes;          // for Function params
-    TypePtr returnType;          // for Function return
+    TypeVec paramTypes;          // for Function/Closure params
+    TypePtr returnType;          // for Function/Closure return
     // Callable ownership is part of its language-level shape. A backend may
     // erase this from the machine ABI only after MoonIR verification.
     std::vector<luna::ownership::Contract> paramContracts;
     luna::ownership::Contract returnContract;
+    // Canonical capture environment for Closure. Fields are kept in canonical
+    // name order and participate in the structural type identity, value size,
+    // and ABI layout (C016 CL002/CL004).
+    std::vector<TypeField> capturedFields;
     // Compiler-derived, read-only semantic facts. This replaces a separate
     // user-visible effect summary without turning sysmeta into user metadata.
     luna::sysmeta::Facts sysmeta;
@@ -291,6 +295,28 @@ struct Type {
         t->sysmeta.resource.result = t->returnContract;
         return t;
     }
+    static TypePtr makeClosure(
+        TypeVec params, TypePtr ret,
+        std::vector<luna::ownership::Contract> contracts = {},
+        luna::ownership::Contract resultContract = {},
+        std::vector<TypeField> captures = {}) {
+        std::sort(captures.begin(), captures.end(),
+                  [](const TypeField& lhs, const TypeField& rhs) {
+                      return lhs.name < rhs.name;
+                  });
+        auto t = std::make_shared<Type>();
+        t->kind = TypeKind::Closure;
+        t->paramTypes = std::move(params);
+        t->returnType = std::move(ret);
+        t->paramContracts = std::move(contracts);
+        if (t->paramContracts.empty())
+            t->paramContracts.resize(t->paramTypes.size());
+        t->returnContract = resultContract;
+        t->capturedFields = std::move(captures);
+        t->sysmeta.resource.parameters = t->paramContracts;
+        t->sysmeta.resource.result = t->returnContract;
+        return t;
+    }
     static TypePtr makeSlot(
         TypeVec params, TypePtr ret = nullptr, bool multiShot = false,
         ContinuationKind behavior = ContinuationKind::Context,
@@ -398,6 +424,11 @@ struct Type {
                     if (field.type && visit(field.type.get())) return true;
                 return false;
             }
+            if (type->kind == TypeKind::Closure) {
+                for (const auto& field : type->capturedFields)
+                    if (field.type && visit(field.type.get())) return true;
+                return false;
+            }
             return type->kind == TypeKind::String ||
                    type->kind == TypeKind::Struct ||
                    type->kind == TypeKind::DeviceBuffer;
@@ -476,6 +507,7 @@ struct Type {
                 return isMutable ? "&mut " + (inner ? inner->toString() : "?")
                                   : "&" + (inner ? inner->toString() : "?");
             case TypeKind::Function: return "fn(...)";
+            case TypeKind::Closure: return "closure(...)";
             case TypeKind::Slot: return
                 std::string(continuationKind == ContinuationKind::Interceptor
                                 ? "slot interceptor(" : "slot context(") +
@@ -594,6 +626,13 @@ inline bool typeRequiresCleanup(const TypePtr& type) {
                         return true;
                     }
                 break;
+            case TypeKind::Closure:
+                for (const auto& field : item->capturedFields)
+                    if (visit(field.type)) {
+                        active.erase(item.get());
+                        return true;
+                    }
+                break;
             default:
                 break;
         }
@@ -617,6 +656,9 @@ inline bool typeHasRecursiveCleanup(const TypePtr& type) {
     if (type->kind == TypeKind::Record ||
         type->kind == TypeKind::Struct)
         for (const auto& field : type->fields)
+            if (typeRequiresCleanup(field.type)) return true;
+    if (type->kind == TypeKind::Closure)
+        for (const auto& field : type->capturedFields)
             if (typeRequiresCleanup(field.type)) return true;
     return false;
 }

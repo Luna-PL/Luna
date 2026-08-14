@@ -153,6 +153,26 @@ void CodeGenerator::generateDynamicFragmentDispatch(
         mBuilder->SetInsertPoint(nextBlock);
     }
 
+    // The v1 external ABI is deliberately limited to host-only single-shot
+    // interceptors. Dynamic context/multi-shot slots may still dispatch among
+    // statically linked candidates, but an unknown runtime name must not fall
+    // through to the interceptor-only plugin ABI.
+    if (slot->acceptedKind != FragmentKind::Interceptor ||
+        slot->acceptedCardinality != FragmentCardinality::Once) {
+        auto reportUnknown = mModule->getOrInsertFunction(
+            "rt_dynamic_fragment_report_unknown_and_abort",
+            mHelpers->voidTy(), mHelpers->ptrTy(), mHelpers->ptrTy());
+        mBuilder->CreateCall(reportUnknown, {slotName, selected});
+        mBuilder->CreateUnreachable();
+        if (reachesMerge) {
+            merge->insertInto(func, nullptr);
+            mBuilder->SetInsertPoint(merge);
+        } else {
+            delete merge;
+        }
+        return;
+    }
+
     // A name not present in the statically linked candidate set may still be
     // supplied by an external v1 plugin.  The plugin path is intentionally a
     // separate ABI: it receives only explicit argument addresses and returns

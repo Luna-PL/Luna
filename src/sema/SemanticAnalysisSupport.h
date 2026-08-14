@@ -170,6 +170,10 @@ inline TypePtr substituteNominalType(
     for (const auto& field : type->fields)
         result->fields.push_back(
             {field.name, substituteNominalType(field.type, bindings)});
+    result->capturedFields.clear();
+    for (const auto& field : type->capturedFields)
+        result->capturedFields.push_back(
+            {field.name, substituteNominalType(field.type, bindings)});
     result->variants.clear();
     for (const auto& variant : type->variants) {
         TypeVariant copied;

@@ -132,9 +132,13 @@ TypePtr ConstraintSolver::resolve(const TypePtr& type) {
          type->kind == TypeKind::Iterator) && type->inner)
         type->inner = resolve(type->inner);
     else if (type->kind == TypeKind::Function || type->kind == TypeKind::Slot ||
-             type->kind == TypeKind::Fragment) {
+             type->kind == TypeKind::Fragment ||
+             type->kind == TypeKind::Closure) {
         for (auto& param : type->paramTypes) param = resolve(param);
         type->returnType = resolve(type->returnType);
+        if (type->kind == TypeKind::Closure)
+            for (auto& field : type->capturedFields)
+                field.type = resolve(field.type);
     } else if (type->kind == TypeKind::Record || type->kind == TypeKind::Struct) {
         for (auto& field : type->fields) field.type = resolve(field.type);
     } else if (type->kind == TypeKind::Enum) {
@@ -158,9 +162,13 @@ bool ConstraintSolver::contains(const TypePtr& type, int id) {
         resolved->kind == TypeKind::Iterator)
         return contains(resolved->inner, id);
     if (resolved->kind == TypeKind::Function || resolved->kind == TypeKind::Slot ||
-        resolved->kind == TypeKind::Fragment) {
+        resolved->kind == TypeKind::Fragment ||
+        resolved->kind == TypeKind::Closure) {
         for (auto& p : resolved->paramTypes)
             if (contains(p, id)) return true;
+        if (resolved->kind == TypeKind::Closure)
+            for (const auto& field : resolved->capturedFields)
+                if (contains(field.type, id)) return true;
         return contains(resolved->returnType, id);
     }
     if (resolved->kind == TypeKind::Record) {

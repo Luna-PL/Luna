@@ -92,7 +92,8 @@ structured LLVM path uses an initialization bit for a move-only affine fold
 accumulator. Its completed canonical-CFG replacement instead proves
 move/reinitialization/final transfer statically with one synthetic local and no
 runtime flag; that CFG is not yet the sole backend body. Linear accumulators and
-captured closure environments remain staged boundaries. No-capture recipes,
+non-Copy closure captures remain staged boundaries; the Copy-only closure ABI and
+capture slice are implemented under `C016`. No-capture recipes,
 including recipes that own move-only array sources, can now materialize as affine,
 single-consumption local stack values. Owning recipes carry per-element
 initialization bits so consumption, abandonment and early returns close each

@@ -1574,6 +1574,17 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
             mContext.error("undefined name '" + id->name + "'", id->line, id->col);
             return TyUnknown;
         }
+        if (!mCaptureFrames.empty() &&
+            sym->kind == SymbolKind::Variable) {
+            auto& frame = mCaptureFrames.back();
+            if (mContext.mSymTable.lookupDepth(id->name) <
+                frame.lambdaScopeDepth) {
+                if (std::find(frame.captures.begin(),
+                              frame.captures.end(),
+                              id->name) == frame.captures.end())
+                    frame.captures.push_back(id->name);
+            }
+        }
         if (sym->kind == SymbolKind::Function) {
             if (family != mContext.mFunctionFamilies.end() && family->second.size() == 1) {
                 const auto* declaration = family->second.front();
@@ -1950,6 +1961,9 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
             mContext.mCurrentFunctionReturnsLinear;
         auto savedReturnUsage =
             mContext.mCurrentFunctionReturnUsage;
+        const size_t lambdaScopeDepth =
+            mContext.mSymTable.depth();
+        mCaptureFrames.push_back({lambdaScopeDepth, {}});
         mContext.mSymTable.enterScope();
         for (auto& p : le->params) {
             TypePtr pt = p.inferredType ? p.inferredType : mContext.declaredType(p.type.get(), {});
@@ -1998,6 +2012,24 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
             savedReturnUsage;
         mContext.mSawReturn = savedSawReturn;
 
+        CaptureFrame frame = std::move(mCaptureFrames.back());
+        mCaptureFrames.pop_back();
+        if (!mCaptureFrames.empty()) {
+            auto& enclosing = mCaptureFrames.back();
+            for (const auto& name : frame.captures) {
+                const auto* symbol = mContext.lookupSymbol(name);
+                if (!symbol || symbol->kind != SymbolKind::Variable)
+                    continue;
+                if (mContext.mSymTable.lookupDepth(name) >=
+                    enclosing.lambdaScopeDepth)
+                    continue;
+                if (std::find(enclosing.captures.begin(),
+                              enclosing.captures.end(), name) ==
+                    enclosing.captures.end())
+                    enclosing.captures.push_back(name);
+            }
+        }
+
         // Build closure function type: fn(ParamTypes) -> ReturnType
         TypeVec paramTypes;
         std::vector<luna::ownership::Contract> paramContracts;
@@ -2006,12 +2038,76 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
             paramContracts.push_back({p.relation, p.usage});
         }
         TypePtr retType = bodyRet;
-        le->closureType = Type::makeFunction(
-            paramTypes, retType, std::move(paramContracts),
-            {luna::ownership::Relation::Owned, returnUsage});
 
-        // Capture analysis: scan body for free variables from enclosing scopes
-        // (simplified: just note lambda for codegen, captures resolved later)
+        // Capture resolution: every recorded free variable must be a Copy
+        // local. Affine/Linear and borrowed captures are later slices
+        // (C016 CL005); function references are not captures.
+        std::vector<std::string> captures;
+        std::vector<TypeField> captureFields;
+        bool captureError = false;
+        for (const auto& name : frame.captures) {
+            const auto* symbol = mContext.lookupSymbol(name);
+            if (!symbol || symbol->kind != SymbolKind::Variable)
+                continue;
+            if (symbol->usage != luna::ownership::Usage::Copy) {
+                mContext.error(
+                    "lambda capture of '" + name + "' requires a Copy "
+                    "binding; Affine and Linear captures are not yet "
+                    "supported (C016 CL005)", le->line, le->col);
+                captureError = true;
+                continue;
+            }
+            if (symbol->type &&
+                symbol->type->kind == TypeKind::Reference) {
+                mContext.error(
+                    "lambda capture of borrowed binding '" + name +
+                    "' is not yet supported (C016 CL005)", le->line, le->col);
+                captureError = true;
+                continue;
+            }
+            captures.push_back(name);
+            captureFields.push_back({name, symbol->type});
+        }
+        // CL009 requires one canonical capture order shared by Sema, the
+        // builder, and the verifier. `Type::makeClosure` keeps fields in
+        // name order, so the capture list must use the same order here.
+        std::vector<size_t> captureOrder(captureFields.size());
+        for (size_t index = 0; index < captureOrder.size(); ++index)
+            captureOrder[index] = index;
+        std::stable_sort(captureOrder.begin(), captureOrder.end(),
+                         [&](size_t lhs, size_t rhs) {
+                             return captureFields[lhs].name <
+                                    captureFields[rhs].name;
+                         });
+        std::vector<std::string> orderedCaptures;
+        std::vector<TypeField> orderedFields;
+        orderedCaptures.reserve(captureOrder.size());
+        orderedFields.reserve(captureOrder.size());
+        for (const size_t index : captureOrder) {
+            orderedCaptures.push_back(captures[index]);
+            orderedFields.push_back(std::move(captureFields[index]));
+        }
+        captures = std::move(orderedCaptures);
+        captureFields = std::move(orderedFields);
+        if (!captureError) {
+            le->captures = captures;
+            le->envParamName = captures.empty()
+                ? "" : "$closure.env";
+            if (captures.empty()) {
+                le->closureType = Type::makeFunction(
+                    paramTypes, retType, std::move(paramContracts),
+                    {luna::ownership::Relation::Owned, returnUsage});
+            } else {
+                le->closureType = Type::makeClosure(
+                    paramTypes, retType, std::move(paramContracts),
+                    {luna::ownership::Relation::Owned, returnUsage},
+                    std::move(captureFields));
+            }
+        } else {
+            le->closureType = Type::makeFunction(
+                paramTypes, retType, std::move(paramContracts),
+                {luna::ownership::Relation::Owned, returnUsage});
+        }
         return le->closureType;
     }
     if (auto* as = dynamic_cast<AssignExpr*>(expr)) {
@@ -2874,7 +2970,8 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
     // solved by the arguments at its call sites.
     if (!sym) {
         TypePtr calleeType = analyzeExpr(call->callee.get());
-        if (calleeType->kind != TypeKind::Function) {
+        if (calleeType->kind != TypeKind::Function &&
+            calleeType->kind != TypeKind::Closure) {
             mContext.error("Expression is not callable");
             return TyUnknown;
         }
@@ -2884,11 +2981,13 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
         }
         for (size_t i = 0; i < call->args.size(); ++i)
             constrainArgument(call->args[i].get(), calleeType->paramTypes[i], "call argument");
-        return calleeType->returnType;
+        call->resultType = calleeType->returnType;
+        return call->resultType;
     }
 
     if (sym->kind == SymbolKind::Variable && sym->type &&
-        mContext.resolved(sym->type)->kind == TypeKind::Function) {
+        (mContext.resolved(sym->type)->kind == TypeKind::Function ||
+         mContext.resolved(sym->type)->kind == TypeKind::Closure)) {
         auto fn = mContext.resolved(sym->type);
         if (fn->paramTypes.size() != call->args.size()) {
             mContext.error("Argument count mismatch in closure call");
@@ -2896,7 +2995,8 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
         }
         for (size_t i = 0; i < call->args.size(); ++i)
             constrainArgument(call->args[i].get(), fn->paramTypes[i], "closure call argument");
-        return fn->returnType;
+        call->resultType = fn->returnType;
+        return call->resultType;
     }
     if (sym->kind != SymbolKind::Function) {
         mContext.error("'" + id->name + "' is not callable");

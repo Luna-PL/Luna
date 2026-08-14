@@ -34,6 +34,16 @@ private:
 
     BodyContextAccess mContext;
 
+    // Active while analyzing a lambda body. Free-variable references from
+    // scopes outside the lambda's own scope are recorded as captures in
+    // first-reference order; the lambda analysis then builds the Closure type
+    // from them (C016 CL003/CL009).
+    struct CaptureFrame {
+        size_t lambdaScopeDepth = 0;
+        std::vector<std::string> captures;
+    };
+    std::vector<CaptureFrame> mCaptureFrames;
+
     luna::ownership::Usage inherentUsageForInitializer(
         Expr* initializer, const TypePtr& type);
     luna::ownership::Usage finalizeBindingUsage(

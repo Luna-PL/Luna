@@ -126,10 +126,10 @@ bool OwnershipChecker::checkLambda(LambdaExpr* lambda) {
         mCurrentFragmentSlotBase;
 
     mUnavailableLambdaCaptures =
-        savedUnavailableCaptures;
+        std::move(savedUnavailableCaptures);
     for (const auto& scope : savedScopes)
-        for (const auto& [name, _] : scope)
-            mUnavailableLambdaCaptures.insert(name);
+        for (const auto& [name, info] : scope)
+            mUnavailableLambdaCaptures[name] = info.usage;
 
     mScopes.clear();
     mLoansInScope.clear();
@@ -177,6 +177,42 @@ bool OwnershipChecker::checkLambda(LambdaExpr* lambda) {
             contract.relation ==
                 luna::ownership::Relation::Owned &&
             typeRequiresCleanup(type);
+    }
+
+    // Copy captures become ordinary value copies inside the lambda scope:
+    // reads and writes target the captured copy, not the outer binding
+    // (C016 CL003). Affine/Linear captures fail below with a diagnostic.
+    for (const auto& capture : lambda->captures) {
+        const auto found = mUnavailableLambdaCaptures.find(capture);
+        if (found == mUnavailableLambdaCaptures.end()) continue;
+        if (found->second != luna::ownership::Usage::Copy) {
+            error("lambda capture of '" + capture +
+                  "' requires a Copy binding; Affine and Linear captures "
+                  "are not yet supported (C016 CL005)",
+                  lambda->line, lambda->col);
+            return false;
+        }
+        VarInfo copy;
+        copy.name = capture;
+        copy.usage = luna::ownership::Usage::Copy;
+        copy.relation = luna::ownership::Relation::Owned;
+        for (auto it = savedScopes.rbegin();
+             it != savedScopes.rend(); ++it) {
+            const auto foundOuter = it->find(capture);
+            if (foundOuter != it->end()) {
+                copy.type = foundOuter->second.type;
+                if (copy.type &&
+                    copy.type->kind == TypeKind::Reference) {
+                    error("lambda capture of borrowed binding '" +
+                          capture + "' is not yet supported "
+                          "(C016 CL005)",
+                          lambda->line, lambda->col);
+                    return false;
+                }
+                break;
+            }
+        }
+        mScopes.back()[capture] = std::move(copy);
     }
 
     FlowResult bodyResult;
@@ -1591,12 +1627,13 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
     if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
         auto* var = lookup(id->name);
         if (!var) {
-            if (mUnavailableLambdaCaptures.count(
-                    id->name)) {
-                error("lambda capture of local '" +
-                      id->name +
-                      "' is reserved until closure "
-                      "environment layout is implemented",
+            const auto captured =
+                mUnavailableLambdaCaptures.find(id->name);
+            if (captured != mUnavailableLambdaCaptures.end() &&
+                captured->second != luna::ownership::Usage::Copy) {
+                error("lambda capture of '" + id->name +
+                      "' requires a Copy binding; Affine and Linear "
+                      "captures are not yet supported (C016 CL005)",
                       id->line, id->col);
                 return false;
             }

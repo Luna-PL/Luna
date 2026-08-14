@@ -30,6 +30,19 @@ public:
         RegionKind rootKind,
         const Module& module);
 
+    // Capturing lambdas set this before build(): the lambda CFG then declares
+    // the synthetic environment parameter local and rewrites capture reads to
+    // EnvLoad operations (C016 CL009).
+    void setCaptureEnvironment(
+        const std::vector<std::string>& captures,
+        const TypeRef& closureType,
+        const std::string& envParamName) {
+        mCaptureNames = captures;
+        mCaptureClosureType = closureType;
+        mCaptureEnvParamName = envParamName;
+        mCaptureEnvLocal = {};
+    }
+
     const std::vector<std::string>& errors() const { return mErrors; }
 
 private:
@@ -72,6 +85,7 @@ private:
         TypeRef itemType;
         std::vector<IteratorRecipeStep> steps;
         bool materialized = false;
+        bool materializedOwnsSource = false;
         LocalId materializedSource;
         LocalId materializedIndex;
         LocalId materializedLimit;
@@ -91,6 +105,7 @@ private:
         LocalId index;
         LocalId limit;
         TypeRef itemType;
+        bool ownsSource = false;
         std::vector<MaterializedIteratorStep> steps;
     };
 
@@ -217,6 +232,10 @@ private:
 
     const Module* mModule = nullptr;
     ControlFlowGraph* mGraph = nullptr;
+    std::vector<std::string> mCaptureNames;
+    TypeRef mCaptureClosureType;
+    std::string mCaptureEnvParamName;
+    LocalId mCaptureEnvLocal;
     std::vector<std::unordered_map<std::string, LocalId>> mBindings;
     std::vector<std::unordered_map<std::string, MaterializedIteratorRecipe>>
         mMaterializedIterators;

@@ -57,7 +57,7 @@ users cannot construct a valid device-event constant.
 | `slice<T>` | Value/Structural | Exactly one `T` | Copy handle plus source shared loan | 16-byte `{data,length}`; currently read-only |
 | `Result<T, E>` | Value/Structural | Exactly two payload types | `join(usage(T), usage(E))` | Inline ADT v1; core semantics Frozen |
 | `device_buffer<T>` | Value/Structural builtin constructor | Exactly one element type | Linear | 8-byte handle; device operations currently stable mainly for `i32` |
-| `(P...) -> R` | Value/Structural | Parameter sequence and return type | Copy function value; contract is part of shape | 8-byte code/closure-entry representation; closure environment not frozen |
+| `(P...) -> R` | Value/Structural | Parameter sequence and return type | Copy function value; contract is part of shape | 8-byte code pointer for capture-free functions; Copy-only captured closures use the C016 inline environment representation |
 | `affine T` | Not an independent type | Usage contract only | Affine | TypeId remains `T` |
 | `linear T` | Not an independent type | Usage contract only | Linear | TypeId remains `T` |
 
@@ -149,7 +149,7 @@ always reject a category at a given boundary.
 - target-dependent `usize/isize` semantics are not frozen beyond the 64-bit model;
 - integer-constant width selection lacks complete range diagnostics;
 - inline ADT payload strategy above 8-byte alignment is not frozen;
-- closure environment and cross-function Iterator-adapter Drop layout are not delivered;
+- non-Copy closure environments and cross-function Iterator-adapter Drop layout are not delivered; Copy-only closure environments are delivered under C016;
 - public formatting, encoding, and standard-library APIs for `string` are not frozen;
 - `device_buffer<T>` formation is generic, but current device operations remain mainly fixed to `i32`;
 - callable ownership shape needs a fuller assignment/unification negative matrix;

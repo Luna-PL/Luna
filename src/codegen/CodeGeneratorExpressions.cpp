@@ -17,12 +17,14 @@ using moon::BorrowExpr;
 using moon::CallExpr;
 using moon::DerefExpr;
 using moon::DynamicSelectExpr;
+using moon::EnvLoadExpr;
 using moon::Expr;
 using moon::FieldAccessExpr;
 using moon::FloatLiteralExpr;
 using moon::HeapAllocExpr;
 using moon::IdentifierExpr;
 using moon::IndexExpr;
+using moon::InitAllocationExpr;
 using moon::IntLiteralExpr;
 using moon::LambdaExpr;
 using moon::LaunchExpr;
@@ -486,35 +488,60 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
     }
     if (auto* index = dynamic_cast<IndexExpr*>(expr)) {
         auto* id = dynamic_cast<IdentifierExpr*>(index->object.get());
-        if (!id || !mLocals.count(id->name)) {
-            error("safe array indexing currently requires a local array binding");
+        llvm::AllocaInst* storage = nullptr;
+        TypePtr arrayType;
+        if (id && !id->local.empty() &&
+            id->local.value < mCanonicalLocals.size() &&
+            mCanonicalLocals[id->local.value]) {
+            storage = mCanonicalLocals[id->local.value];
+            arrayType = id->local.value < mCanonicalLocalTypes.size()
+                ? mCanonicalLocalTypes[id->local.value] : resolveType(id->type);
+        } else if (id && mLocals.count(id->name)) {
+            storage = mLocals[id->name];
+            arrayType = mLocalTypes[id->name];
+        }
+        if (!storage || !arrayType ||
+            (arrayType->kind != TypeKind::Array &&
+             arrayType->kind != TypeKind::Slice)) {
+            error("safe array indexing requires a canonical local array binding");
             return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
         }
-        TypePtr arrayType = mLocalTypes[id->name];
-        if (!arrayType || (arrayType->kind != TypeKind::Array && arrayType->kind != TypeKind::Slice))
-            return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
         if (arrayType->kind == TypeKind::Slice) {
-            auto* slice = generateExpr(index->object.get());
-            auto* length = mBuilder->CreateExtractValue(slice, {1}, "slice.length");
-            auto* checked = mBuilder->CreateCall(mModule->getOrInsertFunction("rt_array_index_or_abort", mHelpers->i32Ty(), mHelpers->i32Ty(), mHelpers->sizeTy()), {coerceCallArgument(generateExpr(index->index.get()), mHelpers->i32Ty()), length}, "slice.index");
-            auto* data = mBuilder->CreateExtractValue(slice, {0}, "slice.data");
-            auto* ptr = mBuilder->CreateGEP(mHelpers->toLLVMType(arrayType->inner), data, checked, "slice.element");
-            return mBuilder->CreateLoad(mHelpers->toLLVMType(arrayType->inner), ptr, "slice.load");
+            auto slice = mBuilder->CreateLoad(
+                storage->getAllocatedType(), storage, "slice.value");
+            auto* length = mBuilder->CreateExtractValue(
+                slice, {1}, "slice.length");
+            auto* checked = mBuilder->CreateCall(
+                mModule->getOrInsertFunction(
+                    "rt_array_index_or_abort", mHelpers->i32Ty(),
+                    mHelpers->i32Ty(), mHelpers->sizeTy()),
+                {coerceCallArgument(
+                     generateExpr(index->index.get()), mHelpers->i32Ty()),
+                 length},
+                "slice.index");
+            auto* data = mBuilder->CreateExtractValue(
+                slice, {0}, "slice.data");
+            auto* ptr = mBuilder->CreateGEP(
+                mHelpers->toLLVMType(arrayType->inner), data, checked,
+                "slice.element");
+            return mBuilder->CreateLoad(
+                mHelpers->toLLVMType(arrayType->inner), ptr, "slice.load");
         }
         auto* rawIndex = coerceCallArgument(
             generateExpr(index->index.get()), mHelpers->i32Ty());
-        llvm::Value* checked = rawIndex;
-        if (!luna::codegen::isProvablySafeArrayIndex(
-                index->index.get(), arrayType->arrayLength,
-                mLocalKnownUpperBounds))
-            checked = mBuilder->CreateCall(mModule->getOrInsertFunction(
-                "rt_array_index_or_abort", mHelpers->i32Ty(), mHelpers->i32Ty(), mHelpers->sizeTy()),
-                {rawIndex, llvm::ConstantInt::get(mHelpers->sizeTy(), arrayType->arrayLength)},
-                "array.index");
+        auto* checked = mBuilder->CreateCall(
+            mModule->getOrInsertFunction(
+                "rt_array_index_or_abort", mHelpers->i32Ty(),
+                mHelpers->i32Ty(), mHelpers->sizeTy()),
+            {rawIndex, llvm::ConstantInt::get(
+                      mHelpers->sizeTy(), arrayType->arrayLength)},
+            "array.index");
         auto* elementPtr = mBuilder->CreateInBoundsGEP(
-            mLocals[id->name]->getAllocatedType(), mLocals[id->name],
-            {llvm::ConstantInt::get(mHelpers->i32Ty(), 0), checked}, "array.element");
-        return mBuilder->CreateLoad(mHelpers->toLLVMType(arrayType->inner), elementPtr, "array.load");
+            storage->getAllocatedType(), storage,
+            {llvm::ConstantInt::get(mHelpers->i32Ty(), 0), checked},
+            "array.element");
+        return mBuilder->CreateLoad(
+            mHelpers->toLLVMType(arrayType->inner), elementPtr, "array.load");
     }
     if (auto* launch = dynamic_cast<LaunchExpr*>(expr)) return generateLaunch(launch);
     if (auto* call = dynamic_cast<CallExpr*>(expr)) {
@@ -780,7 +807,9 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             ? resolveType(call->callee->type) : nullptr;
         if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
             auto localType = mLocalTypes.find(calleeId->name);
-            if ((!callableType || callableType->kind != TypeKind::Function) &&
+            if ((!callableType ||
+                 (callableType->kind != TypeKind::Function &&
+                  callableType->kind != TypeKind::Closure)) &&
                 localType != mLocalTypes.end())
                 callableType = localType->second;
             if (call->calleeRef.empty() &&
@@ -809,7 +838,91 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
                 functionType, functionPointer, arguments,
                 returnType->isVoidTy() ? "" : "indirect.call");
         }
+        if (callableType && callableType->kind == TypeKind::Closure) {
+            llvm::Value* closureValue = generateExpr(call->callee.get());
+            llvm::Type* closureType = mHelpers->toLLVMType(callableType);
+            auto* closureStorage = createEntryBlockAlloca(
+                mCurrentFunc, closureType, "closure.call");
+            mBuilder->CreateStore(closureValue, closureStorage);
+            llvm::Value* codePointer = mBuilder->CreateLoad(
+                mHelpers->ptrTy(),
+                mBuilder->CreateStructGEP(
+                    closureType, closureStorage, 0),
+                "closure.call.code");
+            llvm::Value* environmentPointer = closureStorage;
+            std::vector<llvm::Type*> parameterTypes;
+            std::vector<llvm::Value*> arguments;
+            parameterTypes.push_back(mHelpers->ptrTy());
+            arguments.push_back(environmentPointer);
+            for (size_t index = 0; index < callableType->paramTypes.size(); ++index)
+                parameterTypes.push_back(mHelpers->toLLVMType(callableType->paramTypes[index]));
+            for (size_t index = 0; index < call->args.size(); ++index) {
+                llvm::Value* argument = generateExpr(call->args[index].get());
+                if (index + 1 < parameterTypes.size())
+                    argument = coerceCallArgument(argument, parameterTypes[index + 1]);
+                arguments.push_back(argument);
+            }
+            auto* returnType = mHelpers->toLLVMType(callableType->returnType);
+            auto* functionType = llvm::FunctionType::get(
+                returnType, parameterTypes, false);
+            return mBuilder->CreateCall(
+                functionType, codePointer, arguments,
+                returnType->isVoidTy() ? "" : "closure.call");
+        }
         return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+    }
+    if (auto* initialized = dynamic_cast<InitAllocationExpr*>(expr)) {
+        if (initialized->allocation.empty() ||
+            initialized->allocation.value >= mCanonicalLocals.size() ||
+            !mCanonicalLocals[initialized->allocation.value]) {
+            error("canonical allocation initialization has no storage");
+            return llvm::PoisonValue::get(mHelpers->ptrTy());
+        }
+        auto pointer = mBuilder->CreateLoad(
+            mCanonicalLocals[initialized->allocation.value]->getAllocatedType(),
+            mCanonicalLocals[initialized->allocation.value],
+            "canonical.allocation.value");
+        auto allocatedType = resolveType(initialized->allocatedType);
+        if (!allocatedType) {
+            error("canonical allocation initialization has no materialized type");
+            return llvm::PoisonValue::get(mHelpers->ptrTy());
+        }
+        for (const auto& element : initialized->elements) {
+            auto value = generateExpr(element.value.get());
+            llvm::Value* destination = pointer;
+            TypePtr fieldType = allocatedType;
+            if (allocatedType->kind == TypeKind::Struct ||
+                allocatedType->kind == TypeKind::Record) {
+                if (element.index >= allocatedType->fields.size()) {
+                    error("canonical allocation initializer field is outside its type");
+                    continue;
+                }
+                fieldType = allocatedType->fields[element.index].type;
+                uint64_t offset = 0;
+                for (size_t fieldIndex = 0; fieldIndex < element.index; ++fieldIndex) {
+                    offset = luna::layout::alignTo(
+                        offset, luna::layout::valueAlignment(
+                            allocatedType->fields[fieldIndex].type));
+                    offset += luna::layout::valueSize(
+                        allocatedType->fields[fieldIndex].type);
+                }
+                offset = luna::layout::alignTo(
+                    offset, luna::layout::valueAlignment(
+                        allocatedType->fields[element.index].type));
+                if (offset != 0)
+                    destination = mBuilder->CreateGEP(
+                        llvm::Type::getInt8Ty(*mCtx), pointer,
+                        llvm::ConstantInt::get(mHelpers->sizeTy(), offset),
+                        "canonical.allocation.field");
+            } else if (element.index != 0) {
+                error("canonical scalar allocation initializer has a nonzero index");
+                continue;
+            }
+            mBuilder->CreateStore(
+                coerceCallArgument(value, mHelpers->toLLVMType(fieldType)),
+                destination);
+        }
+        return pointer;
     }
     if (auto* ha = dynamic_cast<HeapAllocExpr*>(expr)) {
         const TypePtr allocatedType = resolveType(ha->allocatedType);
@@ -949,23 +1062,35 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         }
         if (auto* index = dynamic_cast<IndexExpr*>(as->lhs.get())) {
             auto* id = dynamic_cast<IdentifierExpr*>(index->object.get());
-            if (id && mLocals.count(id->name) && mLocalTypes[id->name] &&
-                mLocalTypes[id->name]->kind == TypeKind::Array) {
-                TypePtr arrayType = mLocalTypes[id->name];
+            llvm::AllocaInst* storage = nullptr;
+            TypePtr arrayType;
+            if (id && !id->local.empty() &&
+                id->local.value < mCanonicalLocals.size() &&
+                mCanonicalLocals[id->local.value]) {
+                storage = mCanonicalLocals[id->local.value];
+                arrayType = id->local.value < mCanonicalLocalTypes.size()
+                    ? mCanonicalLocalTypes[id->local.value] : resolveType(id->type);
+            } else if (id && mLocals.count(id->name)) {
+                storage = mLocals[id->name];
+                arrayType = mLocalTypes[id->name];
+            }
+            if (storage && arrayType && arrayType->kind == TypeKind::Array) {
                 auto* rawIndex = coerceCallArgument(
                     generateExpr(index->index.get()), mHelpers->i32Ty());
-                llvm::Value* checked = rawIndex;
-                if (!luna::codegen::isProvablySafeArrayIndex(
-                        index->index.get(), arrayType->arrayLength,
-                        mLocalKnownUpperBounds))
-                    checked = mBuilder->CreateCall(mModule->getOrInsertFunction(
-                        "rt_array_index_or_abort", mHelpers->i32Ty(), mHelpers->i32Ty(), mHelpers->sizeTy()),
-                        {rawIndex, llvm::ConstantInt::get(mHelpers->sizeTy(), arrayType->arrayLength)},
-                        "array.index");
+                auto* checked = mBuilder->CreateCall(
+                    mModule->getOrInsertFunction(
+                        "rt_array_index_or_abort", mHelpers->i32Ty(),
+                        mHelpers->i32Ty(), mHelpers->sizeTy()),
+                    {rawIndex, llvm::ConstantInt::get(
+                              mHelpers->sizeTy(), arrayType->arrayLength)},
+                    "array.index");
                 auto* elementPtr = mBuilder->CreateInBoundsGEP(
-                    mLocals[id->name]->getAllocatedType(), mLocals[id->name],
-                    {llvm::ConstantInt::get(mHelpers->i32Ty(), 0), checked}, "array.element");
-                mBuilder->CreateStore(rhs, elementPtr);
+                    storage->getAllocatedType(), storage,
+                    {llvm::ConstantInt::get(mHelpers->i32Ty(), 0), checked},
+                    "array.element");
+                mBuilder->CreateStore(
+                    coerceCallArgument(rhs,
+                        mHelpers->toLLVMType(arrayType->inner)), elementPtr);
                 return rhs;
             }
         }
@@ -1095,50 +1220,71 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
             }
         }
         if (auto* id = dynamic_cast<IdentifierExpr*>(as->lhs.get())) {
-            auto it = mLocals.find(id->name);
-            if (it != mLocals.end()) {
-                llvm::Value* result = rhs;
+            llvm::AllocaInst* storage = nullptr;
+            if (!id->local.empty() &&
+                id->local.value < mCanonicalLocals.size())
+                storage = mCanonicalLocals[id->local.value];
+            if (!storage) {
+                auto it = mLocals.find(id->name);
+                if (it != mLocals.end()) storage = it->second;
+            }
+            if (storage) {
+                llvm::Value* result = coerceCallArgument(
+                    rhs, storage->getAllocatedType());
                 if (as->op != Operator::Assign) {
                     llvm::Value* lhs = mBuilder->CreateLoad(
-                        it->second->getAllocatedType(), it->second, id->name + ".old");
+                        storage->getAllocatedType(), storage, id->name + ".old");
                     switch (as->op) {
                         case Operator::AddAssign:
                             result = lhs->getType()->isFloatingPointTy()
-                                ? mBuilder->CreateFAdd(lhs, rhs, "addeqtmp")
-                                : mBuilder->CreateAdd(lhs, rhs, "addeqtmp"); break;
+                                ? mBuilder->CreateFAdd(lhs, result, "addeqtmp")
+                                : mBuilder->CreateAdd(lhs, result, "addeqtmp"); break;
                         case Operator::SubtractAssign:
                             result = lhs->getType()->isFloatingPointTy()
-                                ? mBuilder->CreateFSub(lhs, rhs, "subeqtmp")
-                                : mBuilder->CreateSub(lhs, rhs, "subeqtmp"); break;
+                                ? mBuilder->CreateFSub(lhs, result, "subeqtmp")
+                                : mBuilder->CreateSub(lhs, result, "subeqtmp"); break;
                         case Operator::MultiplyAssign:
                             result = lhs->getType()->isFloatingPointTy()
-                                ? mBuilder->CreateFMul(lhs, rhs, "muleqtmp")
-                                : mBuilder->CreateMul(lhs, rhs, "muleqtmp"); break;
+                                ? mBuilder->CreateFMul(lhs, result, "muleqtmp")
+                                : mBuilder->CreateMul(lhs, result, "muleqtmp"); break;
                         case Operator::DivideAssign:
                             result = lhs->getType()->isFloatingPointTy()
-                                ? mBuilder->CreateFDiv(lhs, rhs, "diveqtmp")
-                                : mBuilder->CreateSDiv(lhs, rhs, "diveqtmp"); break;
+                                ? mBuilder->CreateFDiv(lhs, result, "diveqtmp")
+                                : mBuilder->CreateSDiv(lhs, result, "diveqtmp"); break;
                         case Operator::RemainderAssign:
                             result = lhs->getType()->isFloatingPointTy()
-                                ? mBuilder->CreateFRem(lhs, rhs, "remeqtmp")
-                                : mBuilder->CreateSRem(lhs, rhs, "remeqtmp"); break;
-                        case Operator::BitAndAssign: result = mBuilder->CreateAnd(lhs, rhs, "andeqtmp"); break;
-                        case Operator::BitOrAssign: result = mBuilder->CreateOr(lhs, rhs, "oreqtmp"); break;
-                        case Operator::BitXorAssign: result = mBuilder->CreateXor(lhs, rhs, "xoreqtmp"); break;
-                        case Operator::ShiftLeftAssign: result = mBuilder->CreateShl(lhs, rhs, "shleqtmp"); break;
-                        case Operator::ShiftRightAssign: result = mBuilder->CreateAShr(lhs, rhs, "shreqtmp"); break;
+                                ? mBuilder->CreateFRem(lhs, result, "remeqtmp")
+                                : mBuilder->CreateSRem(lhs, result, "remeqtmp"); break;
+                        case Operator::BitAndAssign: result = mBuilder->CreateAnd(lhs, result, "andeqtmp"); break;
+                        case Operator::BitOrAssign: result = mBuilder->CreateOr(lhs, result, "oreqtmp"); break;
+                        case Operator::BitXorAssign: result = mBuilder->CreateXor(lhs, result, "oreqtmp"); break;
+                        case Operator::ShiftLeftAssign: result = mBuilder->CreateShl(lhs, result, "shleqtmp"); break;
+                        case Operator::ShiftRightAssign: result = mBuilder->CreateAShr(lhs, result, "shreqtmp"); break;
                         default: break;
                     }
                 }
-                mBuilder->CreateStore(result, it->second);
-                mLocalKnownUpperBounds.erase(id->name);
+                mBuilder->CreateStore(result, storage);
+                if (id->name.size()) mLocalKnownUpperBounds.erase(id->name);
                 return result;
             }
         }
         return rhs;
     }
     if (auto* mv = dynamic_cast<MoveExpr*>(expr)) {
-        return generateExpr(mv->operand.get());
+        llvm::Value* value = generateExpr(mv->operand.get());
+        if (!mv->nextUnread.empty() &&
+            mv->nextUnread.value < mCanonicalLocals.size() &&
+            mCanonicalLocals[mv->nextUnread.value]) {
+            auto* cursorStorage = mCanonicalLocals[mv->nextUnread.value];
+            auto* cursor = mBuilder->CreateLoad(
+                cursorStorage->getAllocatedType(), cursorStorage,
+                "guarded.cursor");
+            auto* next = mBuilder->CreateAdd(
+                cursor, llvm::ConstantInt::get(cursor->getType(), 1),
+                "guarded.cursor.next");
+            mBuilder->CreateStore(next, cursorStorage);
+        }
+        return value;
     }
     if (auto* bw = dynamic_cast<BorrowExpr*>(expr)) {
         if (auto* id = dynamic_cast<IdentifierExpr*>(bw->operand.get())) {
@@ -1200,6 +1346,8 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         auto savedUpperBounds = std::move(mLocalKnownUpperBounds);
         auto savedContinuationFrames = std::move(mContinuationFrames);
         const unsigned savedContinuationFrameCounter = mContinuationFrameCounter;
+        auto savedCanonicalLocals = std::move(mCanonicalLocals);
+        auto savedCanonicalLocalTypes = std::move(mCanonicalLocalTypes);
         auto savedIP = mBuilder->saveIP();
         mLocals.clear();
         mLocalTypes.clear();
@@ -1213,19 +1361,22 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         auto entryBB = llvm::BasicBlock::Create(*mCtx, "entry", func);
         mBuilder->SetInsertPoint(entryBB);
 
-        // Allocate params
-        size_t idx = 0;
-        for (auto& arg : func->args()) {
-            arg.setName(le->params[idx].name);
-            auto* alloca = createEntryBlockAlloca(func, arg.getType(), le->params[idx].name);
-            mBuilder->CreateStore(&arg, alloca);
-            mLocals[le->params[idx].name] = alloca;
-            mLocalTypes[le->params[idx].name] =
-                resolveType(le->params[idx].type);
-            idx++;
+        if (le->controlFlow) {
+            generateControlFlowBody(*le->controlFlow, func, entryBB);
+        } else {
+            size_t idx = 0;
+            for (auto& arg : func->args()) {
+                arg.setName(le->params[idx].name);
+                auto* alloca = createEntryBlockAlloca(
+                    func, arg.getType(), le->params[idx].name);
+                mBuilder->CreateStore(&arg, alloca);
+                mLocals[le->params[idx].name] = alloca;
+                mLocalTypes[le->params[idx].name] =
+                    resolveType(le->params[idx].type);
+                idx++;
+            }
+            if (le->body) generateBlock(le->body.get(), func);
         }
-
-        if (le->body) generateBlock(le->body.get(), func);
         if (!mBuilder->GetInsertBlock()->getTerminator()) {
             if (retTy->isVoidTy()) mBuilder->CreateRetVoid();
             else mBuilder->CreateRet(llvm::Constant::getNullValue(retTy));
@@ -1242,9 +1393,165 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         mLocalKnownUpperBounds = std::move(savedUpperBounds);
         mContinuationFrames = std::move(savedContinuationFrames);
         mContinuationFrameCounter = savedContinuationFrameCounter;
+        mCanonicalLocals = std::move(savedCanonicalLocals);
+        mCanonicalLocalTypes = std::move(savedCanonicalLocalTypes);
         mBuilder->restoreIP(savedIP);
         return func;
     }
+    if (auto* envLoad = dynamic_cast<EnvLoadExpr*>(expr)) {
+        if (envLoad->envLocal.empty() ||
+            envLoad->envLocal.value >= mCanonicalLocals.size() ||
+            !mCanonicalLocals[envLoad->envLocal.value]) {
+            error("environment load has no canonical local storage");
+            return llvm::PoisonValue::get(mHelpers->i32Ty());
+        }
+        const TypePtr closureType =
+            mCanonicalLocalTypes[envLoad->envLocal.value];
+        if (!closureType || closureType->kind != TypeKind::Closure ||
+            envLoad->fieldIndex >= closureType->capturedFields.size()) {
+            error("environment load is not bound to a valid closure field");
+            return llvm::PoisonValue::get(mHelpers->i32Ty());
+        }
+        const TypePtr fieldType =
+            closureType->capturedFields[envLoad->fieldIndex].type;
+        auto* closureLLVMType = mHelpers->toLLVMType(closureType);
+        auto* fieldPointer = mBuilder->CreateStructGEP(
+            closureLLVMType,
+            mCanonicalLocals[envLoad->envLocal.value],
+            envLoad->fieldIndex + 1);
+        return mBuilder->CreateLoad(
+            mHelpers->toLLVMType(fieldType), fieldPointer, "env.load");
+    }
+    if (auto* closure = dynamic_cast<moon::MakeClosureExpr*>(expr)) {
+        auto* le = closure->lambda.get();
+        static int lambdaCount = 0;
+        std::string lambdaName = "__lambda_" + std::to_string(lambdaCount++);
+        if (!le->identitySuffix.empty()) lambdaName += "__" + le->identitySuffix;
 
-    return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+        const TypePtr closureType = resolveType(closure->type);
+        std::vector<llvm::Type*> paramTypes;
+        paramTypes.push_back(mHelpers->ptrTy());
+        for (auto& p : le->params)
+            paramTypes.push_back(mHelpers->toLLVMType(resolveType(p.type)));
+        const TypePtr lambdaReturnType = resolveType(le->returnType);
+        llvm::Type* retTy = lambdaReturnType
+            ? mHelpers->toLLVMType(lambdaReturnType) : mHelpers->i32Ty();
+        auto funcTy = llvm::FunctionType::get(retTy, paramTypes, false);
+        auto func = llvm::Function::Create(
+            funcTy, llvm::Function::InternalLinkage, lambdaName, mModule.get());
+
+        auto savedFunc = mCurrentFunc;
+        auto savedLocals = std::move(mLocals);
+        auto savedLocalTypes = std::move(mLocalTypes);
+        auto savedArrayDropFlags =
+            std::move(mArrayDropFlags);
+        auto savedMaterializedIterators =
+            std::move(mMaterializedIterators);
+        auto savedUpperBounds = std::move(mLocalKnownUpperBounds);
+        auto savedContinuationFrames = std::move(mContinuationFrames);
+        const unsigned savedContinuationFrameCounter = mContinuationFrameCounter;
+        auto savedCanonicalLocals = std::move(mCanonicalLocals);
+        auto savedCanonicalLocalTypes = std::move(mCanonicalLocalTypes);
+        auto savedIP = mBuilder->saveIP();
+        mLocals.clear();
+        mLocalTypes.clear();
+        mArrayDropFlags.clear();
+        mMaterializedIterators.clear();
+        mLocalKnownUpperBounds.clear();
+        mContinuationFrames.clear();
+        mContinuationFrameCounter = 0;
+        mCurrentFunc = func;
+
+        auto entryBB = llvm::BasicBlock::Create(*mCtx, "entry", func);
+        mBuilder->SetInsertPoint(entryBB);
+
+        llvm::Value* environmentPointer = nullptr;
+        size_t idx = 0;
+        for (auto& arg : func->args()) {
+            if (idx == 0) {
+                environmentPointer = &arg;
+                ++idx;
+                continue;
+            }
+            const size_t paramIndex = idx - 1;
+            arg.setName(le->params[paramIndex].name);
+            auto* alloca = createEntryBlockAlloca(
+                func, arg.getType(), le->params[paramIndex].name);
+            mBuilder->CreateStore(&arg, alloca);
+            mLocals[le->params[paramIndex].name] = alloca;
+            mLocalTypes[le->params[paramIndex].name] =
+                resolveType(le->params[paramIndex].type);
+            ++idx;
+        }
+
+        llvm::Type* closureLLVMType = mHelpers->toLLVMType(closureType);
+        if (le->controlFlow) {
+            generateControlFlowBody(*le->controlFlow, func, entryBB);
+        } else {
+            for (size_t fieldIndex = 0;
+                 fieldIndex < closure->capturedValues.size(); ++fieldIndex) {
+                auto* reference = dynamic_cast<IdentifierExpr*>(
+                    closure->capturedValues[fieldIndex].get());
+                if (!reference) continue;
+                TypePtr fieldType;
+                if (closureType &&
+                    fieldIndex < closureType->capturedFields.size())
+                    fieldType = closureType->capturedFields[fieldIndex].type;
+                if (!fieldType) fieldType = resolveType(reference->type);
+                auto* fieldPointer = mBuilder->CreateStructGEP(
+                    closureLLVMType, environmentPointer, fieldIndex + 1);
+                auto* loaded = mBuilder->CreateLoad(
+                    mHelpers->toLLVMType(fieldType), fieldPointer,
+                    reference->name);
+                auto* alloca = createEntryBlockAlloca(
+                    func, mHelpers->toLLVMType(fieldType), reference->name);
+                mBuilder->CreateStore(loaded, alloca);
+                mLocals[reference->name] = alloca;
+                mLocalTypes[reference->name] = fieldType;
+            }
+            if (le->body) generateBlock(le->body.get(), func);
+        }
+        if (!mBuilder->GetInsertBlock()->getTerminator()) {
+            if (retTy->isVoidTy()) mBuilder->CreateRetVoid();
+            else mBuilder->CreateRet(llvm::Constant::getNullValue(retTy));
+        }
+
+        mCurrentFunc = savedFunc;
+        mLocals = std::move(savedLocals);
+        mLocalTypes = std::move(savedLocalTypes);
+        mArrayDropFlags =
+            std::move(savedArrayDropFlags);
+        mMaterializedIterators =
+            std::move(savedMaterializedIterators);
+        mLocalKnownUpperBounds = std::move(savedUpperBounds);
+        mContinuationFrames = std::move(savedContinuationFrames);
+        mContinuationFrameCounter = savedContinuationFrameCounter;
+        mCanonicalLocals = std::move(savedCanonicalLocals);
+        mCanonicalLocalTypes = std::move(savedCanonicalLocalTypes);
+        mBuilder->restoreIP(savedIP);
+
+        auto* closureStorage = mBuilder->CreateAlloca(closureLLVMType);
+        mBuilder->CreateStore(
+            func, mBuilder->CreateStructGEP(
+                closureLLVMType, closureStorage, 0));
+        for (size_t fieldIndex = 0;
+             fieldIndex < closure->capturedValues.size(); ++fieldIndex) {
+            llvm::Value* value =
+                generateExpr(closure->capturedValues[fieldIndex].get());
+            TypePtr fieldType;
+            if (closureType &&
+                fieldIndex < closureType->capturedFields.size())
+                fieldType = closureType->capturedFields[fieldIndex].type;
+            auto* fieldPointer = mBuilder->CreateStructGEP(
+                closureLLVMType, closureStorage, fieldIndex + 1);
+            if (fieldType)
+                value = coerceCallArgument(
+                    value, mHelpers->toLLVMType(fieldType));
+            mBuilder->CreateStore(value, fieldPointer);
+        }
+        return mBuilder->CreateLoad(closureLLVMType, closureStorage, "closure.value");
+    }
+
+    error("codegen has no LLVM lowering for this expression kind");
+    return llvm::PoisonValue::get(mHelpers->i32Ty());
 }

@@ -423,6 +423,65 @@ requires a fuzz corpus.
 alignment, compression, and signature algorithms without changing the M001-M004 semantic
 boundaries.
 
+### C016: Closure environment ABI (Confirmed)
+
+Capturing closures extend the capture-free lambda subphase without altering its shipped ABI.
+The capture-free `Function` value remains an 8-byte code pointer; only a lambda that actually
+captures becomes a layout-bearing `Closure` value. This keeps the "pay for use" boundary exact:
+a lambda that captures nothing does not pay for an environment pointer or a hidden argument.
+
+`CL001` (Confirmed): the capture-free `Function` type, its 8-byte value size, its opaque code
+pointer ABI, and its indirect-call convention are unchanged. A capturing closure does not add a
+hidden environment argument to capture-free calls and does not promote a capture-free lambda to
+a fat pointer.
+
+`CL002` (Confirmed): a capturing closure has a distinct `TypeKind::Closure` type whose
+environment layout is part of canonical type identity. The environment is a canonical,
+independently recomputable product of captured-field records (field name, `TypeRef`, relation,
+usage), so the verifier and a future Moon Container reader can reconstruct it from the frozen
+type table without frontend pointers. `typeSize`, alignment, copy/move, and drop behavior are
+derived from that product layout.
+
+`CL003` (Confirmed): captures are by-value and never implicit references. A captured binding
+retains its existing contract (`US002`): a Copy binding contributes a copy, an Affine or Linear
+binding contributes a move. 0.3 has no capture-list syntax; the free-variable set is derived
+from the lambda body by the frontend and independently cross-checked by the verifier.
+
+`CL004` (Confirmed): the closure value uses an inline environment `{ code_ptr, env_fields... }`,
+not a `{ code_ptr, env_ptr }` fat pointer. Inline environments make a Copy-only closure
+naturally Copy (copying the value copies the environment fields) and avoid the ownership,
+aliasing, and clone semantics a heap environment pointer would force onto the first slice.
+
+`CL005` (Confirmed): the first slice supports Copy-only captures. Capturing an Affine or Linear
+binding is rejected by both Sema and the MoonIR verifier, with an explicit diagnostic, until
+move construction, partial-initialization cleanup, closure movement, and exactly-once
+destruction are implemented and tested. Capturing a borrowed binding (a `Reference`-typed local)
+is rejected by Sema with an explicit diagnostic for the same reason: an implicit environment
+reference would silently outlive its loan. A closure whose environment owns non-Copy state is a
+later slice, not an implicit behavior.
+
+`CL006` (Confirmed): closure cleanup reuses the named-product recursive drop path. The
+environment is lowered as a canonical product with recursive field cleanup, and the closure
+drop delegates to that product's `dropGlue`. There is no separate closure-allocation or
+closure-deallocation protocol in the inline slice.
+
+`CL007` (Confirmed): MoonIR gains two explicit nodes. `MakeClosure` constructs a canonical
+closure value from the lambda's code identity plus the materialized captured values. `EnvLoad`
+reads a typed environment field from the closure's implicit environment parameter. `LambdaExpr`
+retains the lambda executable identity and references its canonical closure/environment type
+but does not hide environment construction inside the node.
+
+`CL008` (Confirmed): the closure model is identical for structured and canonical-CFG emission.
+Until the production sealer atomically replaces structured bodies (the Item 10 one-way switch),
+capture support is implemented and tested on the representation the production backend actually
+emits; the disconnected CFG path must not diverge from it. Capture-set ordering is derived from
+one canonical rule shared by the builder and the verifier, not two independent derivations.
+
+`CL009` (Confirmed): the builder resolves captures through an explicit capture phase that
+identifies free references, verifies they are legal initialized captures, assigns deterministic
+field indices, emits `MakeClosure`, and rewrites captured reads inside the lambda to `EnvLoad`.
+A lambda CFG may not read an enclosing local directly.
+
 ## 6. Runtime validation and evolution
 
 ### C013: Validation stays off ordinary call hot paths (Confirmed principle)
@@ -937,11 +996,24 @@ construction body. The same source-level gate covers an explicit static `apply`;
 lowered dynamic composition is accepted by the frontend but must be rejected at this static CFG
 boundary. Multi-shot and runtime apply remain later slices.
 
-Item 10 is not complete as a whole. Capturing closure environments and the remaining non-Copy
-item/callable per-element ownership transitions remain explicit boundaries. Linear hoisting across
-a potential early exit remains invalid by its exactly-once contract rather than a deferred lowering
-feature. The remaining work then normalizes slot and fragment paths, atomically replaces structured
-executable bodies, and moves the backend to the same CFG. Only after structured execution is deleted and the
+Item 10 is not complete as a whole. Capturing closure environments (frozen as `C016`) and the
+remaining non-Copy item/callable per-element ownership transitions remain explicit boundaries.
+Linear hoisting across a potential early exit remains invalid by its exactly-once contract rather
+than a deferred lowering feature. The remaining work then normalizes slot and fragment paths,
+atomically replaces structured executable bodies, and moves the backend to the same CFG.
+
+Copy-only closure capture implementation completion (2026-08-14): the `C016 CL001`-`CL009`
+slice is active. Capture-free `Function` values keep the 8-byte bare code pointer ABI; a
+capturing lambda becomes a layout-bearing `Closure` type whose environment fields participate
+in canonical type identity, value size, and ABI layout. Sema derives the free-variable set in
+first-reference order and rejects Affine/Linear and borrowed captures with an explicit
+diagnostic. MoonIR carries `MakeClosure` and `EnvLoad` nodes; the verifier checks the capture
+list against the environment layout, the environment parameter identity, and every EnvLoad
+field bound. Canonical CFG construction declares the environment parameter local and rewrites
+capture reads into EnvLoad, so structured and CFG paths share one closure model. JIT and AOT
+execute captured closures through a hidden environment pointer; positive Copy-capture,
+negative Affine/Linear-capture, and canonical-CFG evidence pass with the full 51-test suite,
+the strict-warning build, and ASan/UBSan. Non-Copy captures remain the next closure slice. Only after structured execution is deleted and the
 full verifier/codegen regression gate passes does the item-level gate pass; serializer/parser work
 remains item 11.
 

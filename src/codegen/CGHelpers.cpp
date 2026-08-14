@@ -69,6 +69,14 @@ llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
         }
         case TypeKind::Function:
             return ptrTy(); // function pointers are opaque ptrs
+        case TypeKind::Closure: {
+            std::vector<llvm::Type*> fields;
+            fields.reserve(1 + type->capturedFields.size());
+            fields.push_back(ptrTy());
+            for (const auto& field : type->capturedFields)
+                fields.push_back(toLLVMType(field.type));
+            return llvm::StructType::get(mCtx, fields);
+        }
         default:
             return i32Ty(); // fallback
     }
@@ -108,6 +116,8 @@ uint64_t typeSize(const TypePtr& type) {
         }
         case TypeKind::Record:
             return luna::layout::valueSize(type);
+        case TypeKind::Closure:
+            return luna::layout::valueSize(type);
         case TypeKind::Enum:
             return luna::layout::valueSize(type);
         case TypeKind::Result: {
@@ -136,6 +146,12 @@ uint64_t typeAlignment(const TypePtr& type) {
         case TypeKind::Record: {
             uint64_t alignment = 1;
             for (const auto& field : type->fields)
+                alignment = std::max(alignment, typeAlignment(field.type));
+            return alignment;
+        }
+        case TypeKind::Closure: {
+            uint64_t alignment = 8;
+            for (const auto& field : type->capturedFields)
                 alignment = std::max(alignment, typeAlignment(field.type));
             return alignment;
         }

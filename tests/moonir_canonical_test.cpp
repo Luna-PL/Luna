@@ -106,6 +106,14 @@ int main() {
         {luna::ownership::Relation::Owned,
          luna::ownership::Usage::Copy});
     const auto lambdaTypeId = module.registerType(lambdaType);
+    auto closureType = Type::makeClosure(
+        {TyI32}, TyI32,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Copy},
+        {{"offset", TyI32}});
+    const auto closureTypeId = module.registerType(closureType);
     auto predicateType = Type::makeFunction(
         {TyI32}, TyBool,
         {{luna::ownership::Relation::Owned,
@@ -485,6 +493,8 @@ int main() {
     guardedLoop->varName = "value";
     guardedLoop->elementType = stringId;
     guardedLoop->bindingUsage = luna::ownership::Usage::Affine;
+    guardedLoop->recipeStateName = "$for.recipe.values";
+    guardedLoop->recipeSourceType = guardedArrayId;
     auto guardedSourceMove = std::make_unique<moon::MoveExpr>();
     guardedSourceMove->type = guardedArrayId;
     auto guardedSourceIdentifier =
@@ -3476,6 +3486,94 @@ int main() {
     if (!cfgVerifier.verify(*lambdaCfg, module))
         return fail("restored canonical lambda CFG did not verify");
 
+    auto capturedStructured = std::make_unique<moon::BlockStmt>();
+    auto offsetBinding = std::make_unique<moon::LetStmt>();
+    offsetBinding->name = "offset";
+    offsetBinding->type = i32Id;
+    offsetBinding->usage = luna::ownership::Usage::Copy;
+    auto offsetLiteral = std::make_unique<moon::IntLiteralExpr>();
+    offsetLiteral->value = 41;
+    offsetLiteral->type = i32Id;
+    offsetBinding->initializer = std::move(offsetLiteral);
+    capturedStructured->stmts.push_back(std::move(offsetBinding));
+    auto capturedStatement = std::make_unique<moon::ExprStmt>();
+    auto capturedMake = std::make_unique<moon::MakeClosureExpr>();
+    capturedMake->type = closureTypeId;
+    auto capturedLambda = std::make_unique<moon::LambdaExpr>();
+    capturedLambda->type = closureTypeId;
+    capturedLambda->closureType = closureTypeId;
+    capturedLambda->returnType = i32Id;
+    capturedLambda->captures.push_back("offset");
+    capturedLambda->envParamName = "$closure.env";
+    moon::Param capturedParameter;
+    capturedParameter.name = "input";
+    capturedParameter.type = i32Id;
+    capturedLambda->params.push_back(capturedParameter);
+    capturedLambda->body = std::make_unique<moon::BlockStmt>();
+    auto capturedReturn = std::make_unique<moon::ReturnStmt>();
+    auto capturedAdd = std::make_unique<moon::BinaryExpr>();
+    capturedAdd->op = moon::Operator::Add;
+    auto capturedOffset = std::make_unique<moon::IdentifierExpr>();
+    capturedOffset->name = "offset";
+    capturedOffset->type = i32Id;
+    auto capturedInput = std::make_unique<moon::IdentifierExpr>();
+    capturedInput->name = "input";
+    capturedInput->type = i32Id;
+    capturedAdd->lhs = std::move(capturedOffset);
+    capturedAdd->rhs = std::move(capturedInput);
+    capturedReturn->value = std::move(capturedAdd);
+    capturedLambda->body->stmts.push_back(std::move(capturedReturn));
+    auto* capturedCanonicalLambda = capturedLambda.get();
+    capturedMake->lambda = std::move(capturedLambda);
+    auto capturedValueReference = std::make_unique<moon::IdentifierExpr>();
+    capturedValueReference->name = "offset";
+    capturedValueReference->type = i32Id;
+    capturedMake->capturedValues.push_back(
+        std::move(capturedValueReference));
+    capturedStatement->expr = std::move(capturedMake);
+    capturedStructured->stmts.push_back(std::move(capturedStatement));
+    auto capturedCfg = cfgBuilder.build(
+        std::move(capturedStructured), {},
+        moon::RegionKind::Function, module);
+    const auto* capturedRoot =
+        capturedCfg && capturedCanonicalLambda->controlFlow
+            ? capturedCanonicalLambda->controlFlow->findRegion(
+                  capturedCanonicalLambda->controlFlow->rootRegion)
+            : nullptr;
+    size_t capturedParameterCount = 0;
+    bool capturedEnvParameter = false;
+    if (capturedCfg && capturedCanonicalLambda->controlFlow)
+        for (const auto& local : capturedCanonicalLambda->controlFlow->locals)
+            if (local.kind == moon::LocalKind::Parameter) {
+                ++capturedParameterCount;
+                if (local.name == "$closure.env")
+                    capturedEnvParameter = true;
+            }
+    if (!capturedCfg || !cfgVerifier.verify(*capturedCfg, module) ||
+        capturedCanonicalLambda->body ||
+        !capturedCanonicalLambda->controlFlow ||
+        !capturedRoot ||
+        capturedRoot->kind != moon::RegionKind::Lambda ||
+        capturedParameterCount != 2 || !capturedEnvParameter)
+        return fail("capturing lambda did not become a verified canonical CFG with an environment parameter");
+    bool capturedEnvLoad = false;
+    for (const auto& block : capturedCanonicalLambda->controlFlow->blocks)
+        if (auto* returned = dynamic_cast<moon::BinaryExpr*>(
+                block.terminator.operand.get()))
+            if (dynamic_cast<moon::EnvLoadExpr*>(
+                    returned->lhs.get())) {
+                const auto* envLoad = dynamic_cast<moon::EnvLoadExpr*>(
+                    returned->lhs.get());
+                capturedEnvLoad = envLoad &&
+                    !envLoad->envLocal.empty() &&
+                    envLoad->fieldIndex == 0;
+            }
+    if (!capturedEnvLoad)
+        return fail("capturing lambda did not rewrite its capture read into an environment load");
+    if (capturedCanonicalLambda->captures.empty() ||
+        capturedCanonicalLambda->envParamName.empty())
+        return fail("capturing lambda lost its capture record or environment parameter name");
+
     const auto makeRecipeLambda = [&](moon::TypeRef closureType,
                                       moon::TypeRef returnType,
                                       bool predicate) {
@@ -4013,6 +4111,7 @@ int main() {
     reverse.registerType(TyUnit);
     reverse.registerType(resultI32Bool);
     reverse.registerType(lambdaType);
+    reverse.registerType(closureType);
     reverse.registerType(predicateType);
     reverse.registerType(reducerType);
     reverse.registerType(affineReducerType);
@@ -4107,6 +4206,103 @@ fn increment(value: i32) -> i32 {
     sealedParameter->relation = luna::ownership::Relation::Owned;
     if (!verifier.verify(*sealableModule))
         return fail("restored canonical function signature no longer verifies");
+
+    const std::string closureSealerSource = R"luna(
+fn main() -> i32 {
+    let captured = 21;
+    let outer = fn() -> i32 {
+        let inner = fn() -> i32 {
+            return captured * 2;
+        };
+        return inner();
+    };
+    return outer();
+}
+)luna";
+    auto closureSealerSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        closureSealerSource, "<closure-sealer>");
+    if (!closureSealerSnapshot.success())
+        return fail("frontend rejected the closure sealer source");
+    moon::LunaLowerer closureSealerLowerer;
+    auto closureSealerModule = closureSealerLowerer.lower(
+        *closureSealerSnapshot.program(),
+        *closureSealerSnapshot.symbolTable());
+    moon::Sealer closureSealer;
+    if (!closureSealerLowerer.errors().empty() ||
+        !closureSealer.sealFunctionBodies(*closureSealerModule) ||
+        !verifier.verify(*closureSealerModule)) {
+        for (const auto& diagnostic : closureSealerLowerer.errors())
+            std::cerr << diagnostic << '\n';
+        for (const auto& error : closureSealer.errors())
+            std::cerr << error << '\n';
+        return fail("closure-bearing function did not survive Sealer cloning");
+    }
+    const moon::MakeClosureExpr* sealedOuterClosure = nullptr;
+    const moon::LambdaExpr* sealedOuterLambda = nullptr;
+    const moon::MakeClosureExpr* sealedInnerClosure = nullptr;
+    for (const auto& declaration : closureSealerModule->declarations) {
+        const auto* function = dynamic_cast<const moon::FunctionDecl*>(
+            declaration.get());
+        if (!function || function->name != "main" ||
+            !function->controlFlow)
+            continue;
+        for (const auto& block : function->controlFlow->blocks) {
+            for (const auto& operation : block.operations) {
+                const auto* let = dynamic_cast<const moon::LetStmt*>(
+                    operation.get());
+                if (!let || !let->initializer) continue;
+                if (const auto* closure = dynamic_cast<
+                        const moon::MakeClosureExpr*>(
+                        let->initializer.get())) {
+                    sealedOuterClosure = closure;
+                    sealedOuterLambda = closure->lambda.get();
+                }
+            }
+        }
+    }
+    if (!sealedOuterClosure || !sealedOuterLambda ||
+        !sealedOuterLambda->controlFlow)
+        return fail("sealed function dropped its outer closure construction");
+    for (const auto& block : sealedOuterLambda->controlFlow->blocks) {
+        for (const auto& operation : block.operations) {
+            const auto* let = dynamic_cast<const moon::LetStmt*>(
+                operation.get());
+            if (!let || !let->initializer) continue;
+            if (const auto* closure = dynamic_cast<
+                    const moon::MakeClosureExpr*>(
+                    let->initializer.get()))
+                sealedInnerClosure = closure;
+        }
+    }
+    if (!sealedInnerClosure || !sealedInnerClosure->lambda ||
+        !sealedInnerClosure->lambda->controlFlow)
+        return fail("sealed function dropped its nested closure construction");
+    bool sealedEnvLoad = false;
+    for (const auto& block : sealedInnerClosure->lambda->controlFlow->blocks) {
+        for (const auto& operation : block.operations) {
+            if (dynamic_cast<const moon::EnvLoadExpr*>(
+                    operation.get()))
+                sealedEnvLoad = true;
+        }
+        if (block.terminator.operand &&
+            dynamic_cast<const moon::EnvLoadExpr*>(
+                block.terminator.operand.get()))
+            sealedEnvLoad = true;
+        if (auto* binary = dynamic_cast<const moon::BinaryExpr*>(
+                block.terminator.operand.get())) {
+            if (dynamic_cast<const moon::EnvLoadExpr*>(
+                    binary->lhs.get()) ||
+                dynamic_cast<const moon::EnvLoadExpr*>(
+                    binary->rhs.get()))
+                sealedEnvLoad = true;
+        }
+    }
+    if (!sealedEnvLoad)
+        return fail("sealed nested closure lost its environment load");
+    if (sealedInnerClosure->capturedValues.size() != 1 ||
+        !dynamic_cast<const moon::EnvLoadExpr*>(
+            sealedInnerClosure->capturedValues.front().get()))
+        return fail("sealed nested closure did not rewrite its transitive capture into an environment load");
 
     const std::string cfgCodegenSource = R"luna(
 package canonical.codegen;

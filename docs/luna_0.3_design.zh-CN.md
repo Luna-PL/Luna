@@ -379,6 +379,55 @@ section length 和解析资源上限。manifest、type、symbol、contract、cod
 `TBD-M005`：冻结 binary magic、整数编码、section number、alignment、压缩和签名算法
 等线格式细节；不得改变 M001-M004 的语义边界。
 
+### C016：闭包环境 ABI（Confirmed）
+
+捕获式闭包扩展 capture-free lambda 子阶段，但不改变其已发布的 ABI。capture-free
+`Function` 值保持 8 字节代码指针；只有真正发生捕获的 lambda 才成为携带布局的
+`Closure` 值。这使「pay for use」边界精确：不捕获任何东西的 lambda 不为环境指针或
+隐藏参数付出代价。
+
+`CL001`（Confirmed）：capture-free `Function` 类型、其 8 字节 value size、其不透明
+代码指针 ABI 及其间接调用约定均不变。捕获式闭包不给 capture-free 调用添加隐藏环境
+参数，也不把 capture-free lambda 升级为 fat pointer。
+
+`CL002`（Confirmed）：捕获式闭包拥有独立的 `TypeKind::Closure` 类型，其环境布局属于
+canonical 类型身份的一部分。环境是一个 canonical、可独立重算的捕获字段 product
+（字段名、`TypeRef`、relation、usage），verifier 和未来的 Moon Container reader 可
+仅凭 frozen 类型表重建它，无需 frontend 指针。`typeSize`、alignment、copy/move 和
+drop 行为均由该 product 布局推导。
+
+`CL003`（Confirmed）：捕获是按值的，永不隐式引用。被捕获的 binding 保留其既有契约
+（`US002`）：Copy binding 贡献一份副本，Affine 或 Linear binding 贡献一次 move。0.3 无
+捕获列表语法；自由变量集由 frontend 从 lambda 体推导，并由 verifier 独立交叉校验。
+
+`CL004`（Confirmed）：闭包值采用内联环境 `{ code_ptr, env_fields... }`，而非
+`{ code_ptr, env_ptr }` fat pointer。内联环境使 Copy-only 闭包天然可 Copy（复制值即
+复制环境字段），并避免堆环境指针在首切片强加的所有权、别名和 clone 语义。
+
+`CL005`（Confirmed）：首切片仅支持 Copy-only 捕获。捕获 Affine 或 Linear binding 由
+Sema 与 MoonIR verifier 双重拒绝并给出显式诊断，直到 move 构造、部分初始化清理、闭包
+移动和 exactly-once 析构实现并通过测试。捕获借用 binding（`Reference` 类型的局部变量）
+同样由 Sema 显式诊断拒绝，原因相同：隐式环境引用会让闭包静默地越过其借用期限存活。
+环境持有非 Copy 状态的闭包是后续切片，而非隐式行为。
+
+`CL006`（Confirmed）：闭包清理复用 named-product 递归 drop 路径。环境被降级为带递归
+字段清理的 canonical product，闭包 drop 委托给该 product 的 `dropGlue`。内联切片中无
+独立的闭包分配/释放协议。
+
+`CL007`（Confirmed）：MoonIR 新增两个显式节点。`MakeClosure` 从 lambda 的代码身份加
+物化的捕获值构造 canonical 闭包值。`EnvLoad` 从闭包的隐式环境参数读取一个类型化环境
+字段。`LambdaExpr` 保留 lambda 可执行身份并引用其 canonical 闭包/环境类型，但不把环境
+构造隐藏在节点内部。
+
+`CL008`（Confirmed）：闭包模型在结构化发射与 canonical-CFG 发射中完全一致。在生产
+sealer 原子替换结构化 body 之前（Item 10 的 one-way switch），捕获支持在生产后端
+实际发射的表示上实现并测试；断开的 CFG 路径不得与其分歧。捕获集顺序由 builder 与
+verifier 共享的单一 canonical 规则推导，而非两处独立推导。
+
+`CL009`（Confirmed）：builder 通过显式捕获阶段解析捕获：识别自由引用、验证其为合法的
+已初始化捕获、分配确定性字段索引、发射 `MakeClosure`，并将 lambda 内部的捕获读取改写
+为 `EnvLoad`。lambda CFG 不得直接读取外层 local。
+
 ## 6. 运行时验证与进化
 
 ### C013：验证不进入普通调用热路径（Confirmed principle）
@@ -830,7 +879,7 @@ construction body 未被消费。同一源码级门禁还覆盖显式 static `ap
 源码可以通过 frontend 与 Lowering，但必须在该 static CFG 边界被拒绝。multi-shot 与 runtime apply
 仍属后续切片。
 
-第 10 项尚未整体完成。捕获式 closure environment 与其余 non-Copy
+第 10 项尚未整体完成。捕获式 closure environment（已冻结为 `C016`）与其余 non-Copy
 item/callable 逐元素 ownership 转移仍是明确的后续边界。
 跨越潜在 early exit 的 Linear hoisting 因违反恰好一次约束而保持非法，它不是延后的
 lowering 功能。
@@ -838,6 +887,16 @@ lowering 功能。
 路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
 structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
 serializer/parser 仍属于第 11 项。
+
+Copy-only 闭包捕获实现完成（2026-08-14）：`C016 CL001`-`CL009` 切片已激活。capture-free
+`Function` 值保持 8 字节裸代码指针 ABI；捕获式 lambda 成为携带布局的 `Closure` 类型，其
+环境字段参与 canonical 类型身份、value size 与 ABI 布局。Sema 按首次引用顺序推导自由
+变量集，并以显式诊断拒绝 Affine/Linear 与借用捕获。MoonIR 携带 `MakeClosure` 与
+`EnvLoad` 节点；verifier 检查捕获列表与环境布局的一致性、环境参数身份以及每个 EnvLoad
+的字段边界。canonical CFG 构造声明环境参数 local 并把捕获读取改写为 EnvLoad，因此
+structured 与 CFG 两条路径共享同一闭包模型。JIT 与 AOT 通过隐藏环境指针执行捕获式
+闭包；正向 Copy 捕获、负向 Affine/Linear 捕获与 canonical-CFG 证据通过完整 51 测试
+套件、strict-warning 构建和 ASan/UBSan。non-Copy 捕获是下一个闭包切片。
 
 | 顺序 | 优先级 | 工作 | 完成门 |
 |---:|---|---|---|

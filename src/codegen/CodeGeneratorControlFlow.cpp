@@ -3,6 +3,9 @@
 
 #include <llvm/IR/Constants.h>
 
+#include <functional>
+#include <unordered_set>
+
 namespace {
 
 std::string localName(const moon::LocalRecord& local) {
@@ -16,10 +19,23 @@ void CodeGenerator::generateControlFlowBody(
     llvm::BasicBlock* abiEntry) {
     mCanonicalLocals.assign(graph.locals.size(), nullptr);
     mCanonicalLocalTypes.assign(graph.locals.size(), nullptr);
+    std::unordered_set<uint32_t> pointerBackedLocals;
+    for (const auto& block : graph.blocks) {
+        for (const auto& operation : block.operations) {
+            const auto* declaration =
+                dynamic_cast<const moon::LetStmt*>(operation.get());
+            if (declaration && !declaration->local.empty() &&
+                dynamic_cast<const moon::InitAllocationExpr*>(
+                    declaration->initializer.get()))
+                pointerBackedLocals.insert(declaration->local.value);
+        }
+    }
     for (const auto& local : graph.locals) {
         TypePtr type = resolveType(local.type);
-        llvm::Type* llvmType = type
-            ? mHelpers->toLLVMType(type) : nullptr;
+        llvm::Type* llvmType = local.kind == moon::LocalKind::Allocation ||
+                pointerBackedLocals.count(local.id.value)
+            ? mHelpers->ptrTy()
+            : (type ? mHelpers->toLLVMType(type) : nullptr);
         if (!llvmType || llvmType->isVoidTy()) {
             error("canonical local '" + local.name +
                   "' has no storable LLVM type");
@@ -104,6 +120,78 @@ void CodeGenerator::generateControlFlowBody(
         return cleanupBlock;
     };
 
+    std::function<std::optional<moon::PlaceRef>(moon::Expr*)> placeOf;
+    placeOf = [&placeOf, this](moon::Expr* expression)
+        -> std::optional<moon::PlaceRef> {
+        if (!expression) return std::nullopt;
+        if (auto* identifier = dynamic_cast<moon::IdentifierExpr*>(expression)) {
+            if (!identifier->local.empty())
+                return moon::PlaceRef{identifier->local, {}};
+            return std::nullopt;
+        }
+        if (auto* field = dynamic_cast<moon::FieldAccessExpr*>(expression)) {
+            auto place = placeOf(field->object.get());
+            auto objectType = field->object
+                ? resolveType(field->object->type) : nullptr;
+            if (!place || !objectType) return std::nullopt;
+            for (size_t index = 0; index < objectType->fields.size(); ++index) {
+                if (objectType->fields[index].name == field->field) {
+                    place->projections.push_back({
+                        moon::ProjectionKind::Field,
+                        static_cast<uint64_t>(index), {}});
+                    return place;
+                }
+            }
+            return std::nullopt;
+        }
+        if (auto* index = dynamic_cast<moon::IndexExpr*>(expression)) {
+            auto place = placeOf(index->object.get());
+            if (!place) return std::nullopt;
+            if (auto* constant = dynamic_cast<moon::IntLiteralExpr*>(
+                    index->index.get()); constant && constant->value >= 0) {
+                place->projections.push_back({
+                    moon::ProjectionKind::ConstantIndex,
+                    static_cast<uint64_t>(constant->value), {}});
+                return place;
+            }
+            if (auto* dynamic = dynamic_cast<moon::IdentifierExpr*>(
+                    index->index.get()); dynamic && !dynamic->local.empty()) {
+                place->projections.push_back({
+                    moon::ProjectionKind::DynamicIndex, 0, dynamic->local});
+                return place;
+            }
+            return std::nullopt;
+        }
+        if (auto* dereference = dynamic_cast<moon::DerefExpr*>(expression)) {
+            auto place = placeOf(dereference->operand.get());
+            if (place)
+                place->projections.push_back({
+                    moon::ProjectionKind::Dereference, 0, {}});
+            return place;
+        }
+        return std::nullopt;
+    };
+    const auto emitCanonicalFree = [this, &graph, &placeOf](
+        const moon::FreeStmt& release) {
+        const auto place = placeOf(release.operand.get());
+        if (!place) {
+            error("canonical free has no resolvable PlaceRef");
+            return;
+        }
+        const moon::CleanupRecord* selected = nullptr;
+        for (const auto& cleanup : graph.cleanups) {
+            if (cleanup.place == *place && cleanup.action == release.action) {
+                selected = &cleanup;
+                break;
+            }
+        }
+        if (!selected) {
+            error("canonical free has no matching cleanup row");
+            return;
+        }
+        emitCanonicalCleanup(*selected);
+    };
+
     for (auto& block : graph.blocks) {
         mBuilder->SetInsertPoint(blocks[block.id.value]);
         for (auto& operation : block.operations) {
@@ -123,6 +211,38 @@ void CodeGenerator::generateControlFlowBody(
                 mBuilder->CreateStore(
                     coerceCallArgument(value, storage->getAllocatedType()),
                     storage);
+            } else if (auto* release =
+                           dynamic_cast<moon::FreeStmt*>(operation.get())) {
+                if (release->isImplicit) {
+                    error("implicit lexical cleanup remains a canonical operation");
+                    continue;
+                }
+                emitCanonicalFree(*release);
+            } else if (auto* allocation =
+                           dynamic_cast<moon::AllocateStmt*>(operation.get())) {
+                if (allocation->local.empty() ||
+                    allocation->local.value >= mCanonicalLocals.size() ||
+                    !mCanonicalLocals[allocation->local.value]) {
+                    error("canonical allocation has no LLVM local storage");
+                    continue;
+                }
+                auto rtAlloc = mModule->getOrInsertFunction(
+                    "rt_alloc", mHelpers->ptrTy(), mHelpers->sizeTy(),
+                    mHelpers->sizeTy());
+                auto type = resolveType(allocation->allocatedType);
+                auto pointer = mBuilder->CreateCall(
+                    rtAlloc,
+                    {llvm::ConstantInt::get(
+                         mHelpers->sizeTy(), typeSize(type)),
+                     llvm::ConstantInt::get(
+                         mHelpers->sizeTy(), typeAlignment(type))},
+                    "canonical.allocation");
+                mBuilder->CreateStore(
+                    coerceCallArgument(
+                        pointer,
+                        mCanonicalLocals[allocation->local.value]
+                            ->getAllocatedType()),
+                    mCanonicalLocals[allocation->local.value]);
             } else if (auto* expression =
                            dynamic_cast<moon::ExprStmt*>(
                                operation.get())) {

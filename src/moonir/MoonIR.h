@@ -263,6 +263,7 @@ struct TypeRecord {
     ContinuationKind continuationKind = ContinuationKind::Context;
     IteratorMode iteratorMode = IteratorMode::Copy;
     std::vector<TypeFieldRecord> fields;
+    std::vector<TypeFieldRecord> capturedFields;
     std::vector<TypeVariantRecord> variants;
     int inferenceId = -1;
     std::string canonicalType;
@@ -671,6 +672,28 @@ struct LambdaExpr : Expr {
     TypeRef closureType;
     std::vector<std::string> captures;
     std::string identitySuffix;
+    // Synthetic environment parameter of a capturing lambda. Non-empty only
+    // when the lambda captures; canonical construction declares it as a
+    // Parameter local whose type is the closure type (C016 CL007).
+    std::string envParamName;
+};
+
+// Constructs a canonical closure value from a lambda executable plus the
+// materialized captured environment values (C016 CL007). The lambda retains
+// its own body/CFG; the closure value is { code, env_fields... }.
+struct MakeClosureExpr : Expr {
+    std::unique_ptr<LambdaExpr> lambda;
+    // Captured environment values in canonical captured-field order. In the
+    // structured representation these are identifier references; canonical
+    // construction binds them to LocalIds before sealing.
+    std::vector<std::unique_ptr<Expr>> capturedValues;
+};
+
+// Reads a typed environment field from the closure's implicit environment
+// parameter (C016 CL007). `fieldIndex` is the canonical captured-field ordinal.
+struct EnvLoadExpr : Expr {
+    LocalId envLocal;
+    uint64_t fieldIndex = 0;
 };
 
 struct AssignExpr : Expr {

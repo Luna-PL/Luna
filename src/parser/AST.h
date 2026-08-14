@@ -474,6 +474,9 @@ struct LambdaExpr : Expr {
     // Set during sema (closure analysis)
     TypePtr closureType;
     std::vector<std::string> captures;
+    // Synthetic environment parameter name; non-empty only for capturing
+    // lambdas (C016 CL007).
+    std::string envParamName;
 };
 
 struct AssignExpr : Expr {

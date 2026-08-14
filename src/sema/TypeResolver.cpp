@@ -352,6 +352,7 @@ private:
             clone->body = cloneBlock(expr->body.get());
             clone->closureType = substitute(expr->closureType);
             clone->captures = expr->captures;
+            clone->envParamName = expr->envParamName;
             return located(std::move(clone), src);
         }
         if (auto* expr = dynamic_cast<const AssignExpr*>(src)) {
@@ -1010,6 +1011,11 @@ std::unique_ptr<TypeAST> TypeResolver::typeToAST(const TypePtr& type) {
         fn->returnType = typeToAST(t->returnType);
         return fn;
     }
+    if (t->kind == TypeKind::Closure) {
+        auto named = std::make_unique<NamedTypeAST>(t->toString());
+        named->resolvedType = t;
+        return named;
+    }
     if (t->kind == TypeKind::Struct || t->kind == TypeKind::Enum) {
         auto named = std::make_unique<NamedTypeAST>(t->name);
         named->resolvedType = t;
@@ -1043,7 +1049,8 @@ void TypeResolver::materializeInferredTypes(Program* program) {
             checkUnresolved(l->closureType, "lambda type");
             l->closureType = resolved(l->closureType);
             if (needsConcreteAnnotation(l->returnType) && l->closureType &&
-                l->closureType->kind == TypeKind::Function)
+                (l->closureType->kind == TypeKind::Function ||
+                 l->closureType->kind == TypeKind::Closure))
                 l->returnType = typeToAST(l->closureType->returnType);
             visitBlock(l->body.get());
             return;

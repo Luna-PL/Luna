@@ -38,6 +38,13 @@ SymbolInfo* SymbolTable::lookup(const std::string& name) {
     return nullptr;
 }
 
+size_t SymbolTable::lookupDepth(const std::string& name) const {
+    for (size_t depth = mScopes.size(); depth > 0; --depth) {
+        if (mScopes[depth - 1].count(name)) return depth - 1;
+    }
+    return static_cast<size_t>(-1);
+}
+
 SymbolInfo* SymbolTable::lookupLinkage(const std::string& name) {
     auto found = mLinkageSymbols.find(name);
     return found == mLinkageSymbols.end() ? nullptr : &found->second;

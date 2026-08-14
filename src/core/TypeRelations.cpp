@@ -74,6 +74,7 @@ const char* kindName(TypeKind kind) {
         case TypeKind::TypeParam: return "type_param";
         case TypeKind::Reference: return "reference";
         case TypeKind::Function: return "function";
+        case TypeKind::Closure: return "closure";
         case TypeKind::Slot: return "slot";
         case TypeKind::Fragment: return "fragment";
         case TypeKind::Iterator: return "iterator";
@@ -165,6 +166,7 @@ std::string canonicalShapeImpl(
         case TypeKind::Function:
         case TypeKind::Slot:
         case TypeKind::Fragment:
+        case TypeKind::Closure:
             if (type->kind == TypeKind::Slot || type->kind == TypeKind::Fragment) {
                 appendPart(result, type->isMultiShot ? "many" : "once");
                 appendPart(result,
@@ -181,6 +183,12 @@ std::string canonicalShapeImpl(
             appendPart(result, std::string(luna::ownership::relationName(type->returnContract.relation)));
             appendPart(result, std::string(luna::ownership::usageName(type->returnContract.usage)));
             appendType(type->returnType);
+            if (type->kind == TypeKind::Closure) {
+                for (const auto& field : type->capturedFields) {
+                    appendPart(result, field.name);
+                    appendType(field.type);
+                }
+            }
             break;
         case TypeKind::TypeParam:
             appendPart(result, type->name);

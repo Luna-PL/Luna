@@ -728,6 +728,11 @@ void CodeGenerator::generateStmt(Stmt* stmt, llvm::Function* func) {
 }
 
 void CodeGenerator::generateBlock(BlockStmt* block, llvm::Function* func) {
+    const auto savedLocals = mLocals;
+    const auto savedLocalTypes = mLocalTypes;
+    const auto savedKnownBounds = mLocalKnownUpperBounds;
+    const auto savedArrayDropFlags = mArrayDropFlags;
+    const auto savedMaterializedIterators = mMaterializedIterators;
     mApplyScopes.emplace_back();
     mDynamicApplyScopes.emplace_back();
     for (auto& stmt : block->stmts) {
@@ -736,4 +741,9 @@ void CodeGenerator::generateBlock(BlockStmt* block, llvm::Function* func) {
     }
     mApplyScopes.pop_back();
     mDynamicApplyScopes.pop_back();
+    mLocals = savedLocals;
+    mLocalTypes = savedLocalTypes;
+    mLocalKnownUpperBounds = savedKnownBounds;
+    mArrayDropFlags = savedArrayDropFlags;
+    mMaterializedIterators = savedMaterializedIterators;
 }
