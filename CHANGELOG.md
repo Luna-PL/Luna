@@ -2,6 +2,20 @@
 
 ## 0.3.0 — Development
 
+- Extended the benchmark surface to 20 CPU workloads and a heterogeneous
+  scale sweep. New CPU dimensions (divmod, chase, stream read/write/copy,
+  saxpy, sort, hash, find, recursion, rotate) separate scalar compute from
+  memory behavior, latency chains and vectorization; input arrays are shared
+  bit-for-bit between Luna and C++23 through `tools/gen_cpu_bench_sources.py`.
+  The heterogeneous suite generates 8 MiB-1 GiB kernels with 1x/4x/16x
+  compute-intensity variants, transfer roundtrips and launch-overhead
+  microbenchmarks (`tools/gen_heterogeneous_scale.py` +
+  `benchmarks/run_heterogeneous_scale.sh`), and `cpp23_hip_vector.cpp` now
+  takes the same parameters from argv while keeping the legacy 64 MiB/29524
+  contract. Gap attribution ships as `tools/benchmark_analyze.sh` (LLVM
+  IR/asm static comparison, vectorization remarks, startup decomposition,
+  optional llvm-mca) and `tools/benchmark_probe.py` (getrusage resource
+  sampling, optional perf stat).
 - Implemented the Copy-only closure-environment slice (C016 CL001-CL009):
   capture-free `Function` values keep the 8-byte bare code pointer ABI, while
   a capturing lambda becomes a layout-bearing `Closure` type with an inline
