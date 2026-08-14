@@ -168,6 +168,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `ecosystem.lock.json`
 - `benchmarks/cpp23_allocation_support.cpp`
 - `benchmarks/cpp23_cpu_suite.cpp`
+- `benchmarks/cpp23_cpu_suite_extended.cpp`
 - `benchmarks/cpp23_hip_vector.cpp`
 - `benchmarks/luna_cpu_allocation.luna`
 - `benchmarks/luna_cpu_arithmetic.luna`
@@ -176,11 +177,24 @@ Git internals, and ignored generated artifacts are excluded.
 - `benchmarks/luna_cpu_bitmix.luna`
 - `benchmarks/luna_cpu_branch.luna`
 - `benchmarks/luna_cpu_calls.luna`
+- `benchmarks/luna_cpu_chase.luna`
+- `benchmarks/luna_cpu_divmod.luna`
+- `benchmarks/luna_cpu_find.luna`
+- `benchmarks/luna_cpu_hash.luna`
 - `benchmarks/luna_cpu_nested.luna`
+- `benchmarks/luna_cpu_recursion.luna`
 - `benchmarks/luna_cpu_reduction.luna`
+- `benchmarks/luna_cpu_rotate.luna`
+- `benchmarks/luna_cpu_saxpy.luna`
+- `benchmarks/luna_cpu_sort.luna`
+- `benchmarks/luna_cpu_stream_copy.luna`
+- `benchmarks/luna_cpu_stream_read.luna`
+- `benchmarks/luna_cpu_stream_write.luna`
 - `benchmarks/luna_gpu_vector.luna`
 - `benchmarks/run_basic_benchmark.sh`
 - `benchmarks/run_cpu_comparison.sh`
+- `benchmarks/run_cpu_suite_extended.sh`
+- `benchmarks/run_heterogeneous_scale.sh`
 - `benchmarks/run_rocm_cpp23_comparison.sh`
 - `docs/alpha_release.md`
 - `docs/alpha_release.zh-CN.md`
@@ -685,7 +699,11 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/stable_core_parity.cmake`
 - `tests/std_io_smoke.cmake`
 - `tests/structured_cps_abi.cmake`
+- `tools/benchmark_analyze.sh`
 - `tools/benchmark_heterogeneous.sh`
+- `tools/benchmark_probe.py`
+- `tools/gen_cpu_bench_sources.py`
+- `tools/gen_heterogeneous_scale.py`
 - `tools/verify_ecosystem_lock.cmake`
 - `tools/verify_release_evidence.js`
 <!-- FILE_INVENTORY_END -->
