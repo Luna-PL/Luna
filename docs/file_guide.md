@@ -485,6 +485,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/invalid_export.luna`
 - `tests/fixtures/inline_where_not_satisfied_invalid.luna`
 - `tests/fixtures/iterator_count_move_only_invalid.luna`
+- `tests/fixtures/iterator_closure_callback.luna`
 - `tests/fixtures/iterator_filter_move_only_owning_invalid.luna`
 - `tests/fixtures/iterator_fold_accumulator_borrow_invalid.luna`
 - `tests/fixtures/iterator_fold_accumulator_ignored_invalid.luna`

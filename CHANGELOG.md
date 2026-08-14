@@ -21,6 +21,17 @@
   values, and affine/borrowed-capture rejection all pass as semantic
   regressions and JIT/AOT parity fixtures under the full 51-test suite, the
   strict-warning build, and ASan/UBSan.
+- Hardened recursive analysis against pathological nesting: structured-body
+  cloning and capture rewriting in canonical CFG construction enforce a
+  maximum nesting depth instead of overflowing the stack, and the parser
+  rejects grouped expressions deeper than its nesting limit with a clean
+  diagnostic. Iterator adapters now accept capturing closures in addition to
+  plain functions (map/filter/fold/for_each lower the closure call through its
+  environment), and the adapter diagnostic distinguishes a non-callable
+  argument from an arity mismatch. A transient moon-verify failure observed
+  during QA did not reproduce across 50+ reruns; type identity uses
+  deterministic FNV-1a hashing and ordered traversal, so no non-determinism
+  source was found and the observation is recorded without a code change.
 - Extended the LLVM CFG consumer with projected/guarded cleanup, canonical
   allocation/free handling, pointer-backed allocation locals, LocalId-based
   array access, guarded non-Copy cursor advancement, and projection-aware

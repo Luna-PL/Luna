@@ -116,6 +116,11 @@ private:
                               const std::function<void(llvm::Value*)>& consume,
                               const std::function<void()>& prepareTerminal = {});
     llvm::Value* generateIteratorTerminal(moon::CallExpr* call);
+    llvm::Value* emitCallableInvocation(llvm::Value* callable,
+                                        const TypePtr& callableType,
+                                        llvm::ArrayRef<llvm::Value*> arguments,
+                                        llvm::Type* returnType,
+                                        const std::string& name);
     llvm::Value* generateLaunch(moon::LaunchExpr* launch);
     llvm::Value* generateDeviceBufferPointer(moon::Expr* expr);
     llvm::Value* generateHostRawPointer(moon::Expr* expr);

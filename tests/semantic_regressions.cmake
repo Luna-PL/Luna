@@ -216,6 +216,7 @@ expect_success("From consumes and cleans a move-only source error" "tests/fixtur
 expect_success("Result drops only its active resource payload" "tests/fixtures/result_resource_cleanup.luna" "81\n82")
 expect_success("formal never type and diverging calls" "tests/fixtures/never_type.luna" "never\n0\nProgram exited with code: 42")
 expect_success("fused iterator pipelines and mutable iteration" "tests/fixtures/iterator_pipeline.luna" "14\n20\n30\n40\n3\n1\n2\n3\n4\n5\n6\n7\n70\n8\n9\n90\n11\n15\nProgram exited with code: 14")
+expect_success("iterator adapters accept capturing closures" "tests/fixtures/iterator_closure_callback.luna" "Program exited with code: 14")
 expect_success("borrowed slice iteration" "tests/fixtures/iterator_slice.luna" "20\n30\n40\nProgram exited with code: 3")
 expect_error("read-only slice rejects mutable iteration" "tests/fixtures/iterator_slice_mut_invalid.luna" "`iter_mut` requires an owning array receiver")
 expect_error("read-only slice rejects consuming iteration" "tests/fixtures/iterator_slice_into_invalid.luna" "`into_iter` requires an owning array receiver")

@@ -3639,11 +3639,18 @@ TypePtr BodyAnalyzer::analyzeIteratorCall(
     auto callable = [&](size_t argumentIndex, size_t parameterCount,
                         const std::string& context) -> TypePtr {
         TypePtr type = mContext.resolved(analyzeExpr(call->args[argumentIndex].get()));
-        if (type->kind != TypeKind::Function ||
-            type->paramTypes.size() != parameterCount) {
+        if (type->kind != TypeKind::Function &&
+            type->kind != TypeKind::Closure) {
+            mContext.error(context + " requires a callable function or "
+                  "closure, got " + type->toString(),
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        if (type->paramTypes.size() != parameterCount) {
             mContext.error(context + " requires a callable with " +
                   std::to_string(parameterCount) + " parameter" +
-                  (parameterCount == 1 ? "" : "s"),
+                  (parameterCount == 1 ? "" : "s") + ", got " +
+                  std::to_string(type->paramTypes.size()),
                   call->line, call->col);
             return TyUnknown;
         }
@@ -3653,7 +3660,8 @@ TypePtr BodyAnalyzer::analyzeIteratorCall(
     if (name == "map") {
         if (!requireCount(1)) return TyUnknown;
         TypePtr transform = callable(0, 1, "iterator map");
-        if (transform->kind != TypeKind::Function) return TyUnknown;
+        if (transform->kind != TypeKind::Function &&
+            transform->kind != TypeKind::Closure) return TyUnknown;
         mContext.constrain(item, transform->paramTypes[0], "iterator map input");
         TypePtr output = mContext.resolved(transform->returnType);
         if (defaultUsageForType(item) !=
@@ -3672,7 +3680,8 @@ TypePtr BodyAnalyzer::analyzeIteratorCall(
     if (name == "filter") {
         if (!requireCount(1)) return TyUnknown;
         TypePtr predicate = callable(0, 1, "iterator filter");
-        if (predicate->kind != TypeKind::Function) return TyUnknown;
+        if (predicate->kind != TypeKind::Function &&
+            predicate->kind != TypeKind::Closure) return TyUnknown;
         mContext.constrain(item, predicate->paramTypes[0], "iterator filter input");
         mContext.requireBool(predicate->returnType, "iterator filter predicate");
         if (defaultUsageForType(item) !=
@@ -3701,7 +3710,8 @@ TypePtr BodyAnalyzer::analyzeIteratorCall(
         if (!requireCount(2)) return TyUnknown;
         TypePtr accumulator = mContext.resolved(analyzeExpr(call->args[0].get()));
         TypePtr reducer = callable(1, 2, "iterator fold");
-        if (reducer->kind != TypeKind::Function) return TyUnknown;
+        if (reducer->kind != TypeKind::Function &&
+            reducer->kind != TypeKind::Closure) return TyUnknown;
         mContext.constrain(accumulator, reducer->paramTypes[0],
                   "iterator fold accumulator");
         mContext.constrain(item, reducer->paramTypes[1], "iterator fold item");
@@ -3750,7 +3760,8 @@ TypePtr BodyAnalyzer::analyzeIteratorCall(
     if (name == "for_each") {
         if (!requireCount(1)) return TyUnknown;
         TypePtr action = callable(0, 1, "iterator for_each");
-        if (action->kind != TypeKind::Function) return TyUnknown;
+        if (action->kind != TypeKind::Function &&
+            action->kind != TypeKind::Closure) return TyUnknown;
         mContext.constrain(item, action->paramTypes[0], "iterator for_each item");
         mContext.constrain(action->returnType, TyUnit, "iterator for_each result");
         if (defaultUsageForType(item) !=

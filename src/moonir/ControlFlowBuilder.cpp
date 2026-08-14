@@ -9,6 +9,22 @@ namespace moon {
 
 namespace {
 
+constexpr size_t kMaxStructureDepth = 4096;
+thread_local size_t gStructureDepth = 0;
+thread_local bool gStructureExceeded = false;
+
+class StructureDepthGuard {
+public:
+    StructureDepthGuard() {
+        if (gStructureDepth >= kMaxStructureDepth)
+            gStructureExceeded = true;
+        ++gStructureDepth;
+    }
+    ~StructureDepthGuard() { --gStructureDepth; }
+    StructureDepthGuard(const StructureDepthGuard&) = delete;
+    StructureDepthGuard& operator=(const StructureDepthGuard&) = delete;
+};
+
 template <typename T>
 std::unique_ptr<T> clonedNode(const T* source) {
     if (!source) return nullptr;
@@ -23,6 +39,8 @@ std::unique_ptr<Stmt> cloneStructuredStmt(const Stmt* source);
 
 std::unique_ptr<BlockStmt> cloneStructuredBlock(const BlockStmt* source) {
     if (!source) return nullptr;
+    if (gStructureExceeded) return nullptr;
+    StructureDepthGuard depthGuard;
     auto result = clonedNode(source);
     for (const auto& statement : source->stmts) {
         auto cloned = cloneStructuredStmt(statement.get());
@@ -34,6 +52,8 @@ std::unique_ptr<BlockStmt> cloneStructuredBlock(const BlockStmt* source) {
 
 std::unique_ptr<Expr> cloneStructuredExpr(const Expr* source) {
     if (!source) return nullptr;
+    if (gStructureExceeded) return nullptr;
+    StructureDepthGuard depthGuard;
     if (const auto* value = dynamic_cast<const IntLiteralExpr*>(source)) {
         auto result = clonedNode(value);
         result->value = value->value;
@@ -277,6 +297,8 @@ std::unique_ptr<Expr> cloneStructuredExpr(const Expr* source) {
 
 std::unique_ptr<Stmt> cloneStructuredStmt(const Stmt* source) {
     if (!source) return nullptr;
+    if (gStructureExceeded) return nullptr;
+    StructureDepthGuard depthGuard;
     if (const auto* statement = dynamic_cast<const BlockStmt*>(source))
         return cloneStructuredBlock(statement);
     if (const auto* statement = dynamic_cast<const LetStmt*>(source)) {
@@ -449,6 +471,8 @@ std::unique_ptr<Expr> rewriteCaptureReadsExpr(
     const TypeRef& closureType,
     const Module& module) {
     if (!expr) return nullptr;
+    if (gStructureExceeded) return expr;
+    StructureDepthGuard depthGuard;
     if (auto* identifier = dynamic_cast<IdentifierExpr*>(expr.get())) {
         if (identifier->declaration.empty()) {
             const auto found = std::find(
@@ -583,6 +607,8 @@ std::unique_ptr<Stmt> rewriteCaptureReadsStmt(
     const TypeRef& closureType,
     const Module& module) {
     if (!stmt) return nullptr;
+    if (gStructureExceeded) return stmt;
+    StructureDepthGuard depthGuard;
     if (auto* block = dynamic_cast<BlockStmt*>(stmt.get())) {
         auto activeCaptures = captures;
         for (auto& statement : block->stmts) {
@@ -687,8 +713,17 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     const std::vector<Param>& parameters,
     RegionKind rootKind,
     const Module& module) {
+    gStructureExceeded = false;
+    auto cloned = cloneStructuredBlock(&root);
+    if (!cloned) {
+        error(root.location,
+              gStructureExceeded
+                  ? "structured body exceeds the maximum nesting depth"
+                  : "cannot clone the structured body");
+        return nullptr;
+    }
     return build(
-        cloneStructuredBlock(&root), parameters, rootKind, module);
+        std::move(cloned), parameters, rootKind, module);
 }
 
 std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
@@ -696,6 +731,7 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     const std::vector<Param>& parameters,
     RegionKind rootKind,
     const Module& module) {
+    gStructureExceeded = false;
     mErrors.clear();
     mBindings.clear();
     mMaterializedIterators.clear();
@@ -749,6 +785,13 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
             statement = rewriteCaptureReadsStmt(
                 std::move(statement), mCaptureNames, mCaptureEnvLocal,
                 mCaptureClosureType, module);
+        if (gStructureExceeded) {
+            error(root->location,
+                  "lambda capture rewrite exceeds the maximum nesting depth");
+            mGraph = nullptr;
+            mModule = nullptr;
+            return nullptr;
+        }
     }
 
     auto open = lowerSequence(

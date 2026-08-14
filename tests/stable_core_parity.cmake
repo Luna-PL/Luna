@@ -109,6 +109,7 @@ check_file("nested transitive closure capture" "tests/fixtures/lambda_nested_tra
 check_file("nested partial closure capture" "tests/fixtures/lambda_nested_partial_capture.luna")
 check_file("nested parameter closure capture" "tests/fixtures/lambda_nested_parameter_capture.luna")
 check_file("closure return value" "tests/fixtures/lambda_return_closure.luna")
+check_file("iterator adapters accept capturing closures" "tests/fixtures/iterator_closure_callback.luna")
 check_file("ADT lowering" "examples/adt.luna")
 check_file("metadata selection" "examples/versioning.luna")
 check_file("dynamic metadata selection" "examples/dynamic_select.luna")

@@ -1,0 +1,12 @@
+fn main() -> i32 {
+    let offset = 1;
+    let values = [1, 2, 3, 4];
+    let total = values.iter().map(fn(value: &i32) -> i32 {
+        return *value + offset;
+    }).filter(fn(value: i32) -> bool {
+        return value > offset;
+    }).fold(0, fn(acc: i32, value: i32) -> i32 {
+        return acc + value;
+    });
+    return total;
+}

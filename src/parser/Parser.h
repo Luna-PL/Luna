@@ -105,6 +105,7 @@ private:
 
     std::vector<Token> mTokens;
     int mPos = 0;
+    int mNestingDepth = 0;
     std::string mSourceName;
     std::string mSource;
     std::vector<diagnostic::Diagnostic> mErrors;

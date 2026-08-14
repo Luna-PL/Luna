@@ -451,19 +451,20 @@ void CodeGenerator::emitIteratorPipeline(
         if (step.description.op == IteratorOp::Map) {
             auto* input = mHelpers->toLLVMType(step.description.inputType);
             auto* output = mHelpers->toLLVMType(step.description.outputType);
-            auto* callableType = llvm::FunctionType::get(output, {input}, false);
-            item = mBuilder->CreateCall(
-                callableType, step.value,
-                {coerceCallArgument(item, input)}, "iter.map");
+            const TypePtr callableType = step.description.argument
+                ? resolveType(step.description.argument->type) : nullptr;
+            item = emitCallableInvocation(
+                step.value, callableType, {coerceCallArgument(item, input)},
+                output, "iter.map");
             currentItemType =
                 step.description.outputType;
         } else if (step.description.op == IteratorOp::Filter) {
             auto* input = mHelpers->toLLVMType(step.description.inputType);
-            auto* callableType = llvm::FunctionType::get(
-                mHelpers->boolTy(), {input}, false);
-            auto* accepted = mBuilder->CreateCall(
-                callableType, step.value,
-                {coerceCallArgument(item, input)}, "iter.filter");
+            const TypePtr callableType = step.description.argument
+                ? resolveType(step.description.argument->type) : nullptr;
+            auto* accepted = emitCallableInvocation(
+                step.value, callableType, {coerceCallArgument(item, input)},
+                mHelpers->boolTy(), "iter.filter");
             auto* acceptedBlock = llvm::BasicBlock::Create(
                 *mCtx, "iter.filter.accept", mCurrentFunc);
             if (defaultUsageForType(
@@ -580,6 +581,7 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
         llvm::AllocaInst* accumulatorInitialized =
             nullptr;
         llvm::Value* reducer = nullptr;
+        TypePtr reducerType = nullptr;
         const TypePtr iteratorOutputType = resolveType(
             call->iteratorOutputType);
         const TypePtr iteratorInputType = resolveType(
@@ -589,8 +591,6 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
             luna::ownership::Usage::Copy;
         auto* accumulatorType = mHelpers->toLLVMType(iteratorOutputType);
         auto* itemType = mHelpers->toLLVMType(iteratorInputType);
-        auto* reducerType = llvm::FunctionType::get(
-            accumulatorType, {accumulatorType, itemType}, false);
         emitIteratorPipeline(plan, [&](llvm::Value* item) {
             auto* current = mBuilder->CreateLoad(
                 accumulatorType, accumulator, "iter.fold.current");
@@ -599,10 +599,10 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
                     llvm::ConstantInt::getFalse(
                         *mCtx),
                     accumulatorInitialized);
-            auto* reduced = mBuilder->CreateCall(
-                reducerType, reducer,
+            auto* reduced = emitCallableInvocation(
+                reducer, reducerType,
                 {current, coerceCallArgument(item, itemType)},
-                "iter.fold.value");
+                accumulatorType, "iter.fold.value");
             mBuilder->CreateStore(reduced, accumulator);
             if (accumulatorInitialized)
                 mBuilder->CreateStore(
@@ -627,6 +627,7 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
                     accumulatorInitialized);
             }
             reducer = generateExpr(call->args[1].get());
+            reducerType = resolveType(call->args[1]->type);
         });
         finishOwnedRecipe();
         llvm::Value* result = mBuilder->CreateLoad(
@@ -640,15 +641,16 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
 
     if (call->iteratorOp == IteratorOp::ForEach) {
         llvm::Value* action = nullptr;
+        TypePtr actionType = nullptr;
         auto* itemType = mHelpers->toLLVMType(
             resolveType(call->iteratorInputType));
-        auto* actionType = llvm::FunctionType::get(
-            mHelpers->voidTy(), {itemType}, false);
         emitIteratorPipeline(plan, [&](llvm::Value* item) {
-            mBuilder->CreateCall(
-                actionType, action, {coerceCallArgument(item, itemType)});
+            emitCallableInvocation(
+                action, actionType, {coerceCallArgument(item, itemType)},
+                mHelpers->voidTy(), "iter.for_each");
         }, [&] {
             action = generateExpr(call->args[0].get());
+            actionType = resolveType(call->args[0]->type);
         });
         finishOwnedRecipe();
         return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
@@ -750,4 +752,61 @@ llvm::Value* CodeGenerator::generateIteratorTerminal(CallExpr* call) {
 
     error("non-terminal iterator recipe reached value code generation");
     return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
+}
+
+llvm::Value* CodeGenerator::emitCallableInvocation(
+    llvm::Value* callable, const TypePtr& callableType,
+    llvm::ArrayRef<llvm::Value*> arguments, llvm::Type* returnType,
+    const std::string& name) {
+    if (callableType && callableType->kind == TypeKind::Closure) {
+        llvm::Type* closureType = mHelpers->toLLVMType(callableType);
+        auto* closureStorage = createEntryBlockAlloca(
+            mCurrentFunc, closureType, name + ".closure");
+        mBuilder->CreateStore(callable, closureStorage);
+        llvm::Value* codePointer = mBuilder->CreateLoad(
+            mHelpers->ptrTy(),
+            mBuilder->CreateStructGEP(
+                closureType, closureStorage, 0),
+            name + ".code");
+        llvm::Value* environmentPointer = closureStorage;
+        std::vector<llvm::Type*> parameterTypes;
+        std::vector<llvm::Value*> callArguments;
+        parameterTypes.push_back(mHelpers->ptrTy());
+        callArguments.push_back(environmentPointer);
+        for (size_t index = 0;
+             index < arguments.size(); ++index) {
+            const TypePtr parameterType =
+                index < callableType->paramTypes.size()
+                    ? callableType->paramTypes[index]
+                    : nullptr;
+            llvm::Type* targetType = parameterType
+                ? mHelpers->toLLVMType(parameterType)
+                : (index + 1 < parameterTypes.size()
+                       ? parameterTypes[index + 1]
+                       : nullptr);
+            parameterTypes.push_back(
+                targetType ? targetType
+                           : arguments[index]->getType());
+            callArguments.push_back(
+                targetType ? coerceCallArgument(
+                                 arguments[index], targetType)
+                           : arguments[index]);
+        }
+        auto* functionType = llvm::FunctionType::get(
+            returnType, parameterTypes, false);
+        return mBuilder->CreateCall(
+            functionType, codePointer, callArguments,
+            returnType->isVoidTy() ? "" : name);
+    }
+    std::vector<llvm::Type*> parameterTypes;
+    std::vector<llvm::Value*> callArguments;
+    for (auto* argument : arguments) {
+        parameterTypes.push_back(argument->getType());
+        callArguments.push_back(argument);
+    }
+    auto* functionType = llvm::FunctionType::get(
+        returnType, parameterTypes, false);
+    return mBuilder->CreateCall(
+        functionType, callable, callArguments,
+        returnType->isVoidTy() ? "" : name);
 }

@@ -3,6 +3,12 @@
 
 #include <unordered_set>
 
+namespace {
+
+constexpr int kMaxParseNestingDepth = 256;
+
+} // namespace
+
 Parser::Parser(std::vector<Token> tokens, std::string sourceName, std::string source)
     : mTokens(std::move(tokens)), mSourceName(std::move(sourceName)), mSource(std::move(source)) {}
 
@@ -1397,7 +1403,13 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
         return alloc;
     }
     if (match(TokenKind::LParen)) {
+        if (++mNestingDepth > kMaxParseNestingDepth) {
+            addError("expression nesting exceeds the parser depth limit");
+            --mNestingDepth;
+            return std::make_unique<IntLiteralExpr>(0);
+        }
         auto expr = parseExpr();
+        --mNestingDepth;
         consume(TokenKind::RParen, "Expected ')' after grouped expression");
         return expr;
     }
