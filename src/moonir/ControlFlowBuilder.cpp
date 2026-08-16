@@ -2875,6 +2875,26 @@ ControlFlowBuilder::lowerAllocationElements(
                   "scalar allocation has a nonzero initializer index");
             return std::nullopt;
         }
+        if (element.value->type.empty()) {
+            // The structured backend defers type resolution to codegen.
+            // Resolve inline from the expression structure so the canonical
+            // path has typed elements before the frozen-layout check.
+            std::function<TypeRef(Expr*)> resolveType = [&](Expr* e) -> TypeRef {
+                if (!e) return {};
+                if (!e->type.empty()) return e->type;
+                if (auto* move = dynamic_cast<MoveExpr*>(e))
+                    return resolveType(move->operand.get());
+                if (auto* id = dynamic_cast<IdentifierExpr*>(e)) {
+                    if (!id->name.empty()) {
+                        const LocalId local = lookupLocal(id->name);
+                        if (!local.empty() && local.value < mGraph->locals.size())
+                            return mGraph->locals[local.value].type;
+                    }
+                }
+                return {};
+            };
+            element.value->type = resolveType(element.value.get());
+        }
         if (element.value->type != expected) {
             error(element.value->location,
                   "allocation initializer element disagrees with its frozen layout type");
@@ -5038,8 +5058,20 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
             if (!bindExpr(field.value.get())) return false;
         return true;
     }
-    if (auto* allocation = dynamic_cast<HeapAllocExpr*>(expression))
-        return bindExpr(allocation->initializer.get());
+    if (auto* allocation = dynamic_cast<HeapAllocExpr*>(expression)) {
+        // The HeapAllocExpr initializer is a constructor CallExpr whose
+        // callee names a struct type, not a function. Bind only the
+        // arguments, not the callee, so the canonical path does not reject
+        // the type name as an unresolved identifier.
+        if (auto* call = dynamic_cast<CallExpr*>(
+                allocation->initializer.get())) {
+            for (auto& arg : call->args)
+                if (!bindExpr(arg.get())) return false;
+        } else if (allocation->initializer) {
+            return bindExpr(allocation->initializer.get());
+        }
+        return true;
+    }
     if (auto* initialized = dynamic_cast<InitAllocationExpr*>(expression)) {
         for (auto& element : initialized->elements)
             if (!bindExpr(element.value.get())) return false;

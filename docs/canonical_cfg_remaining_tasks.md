@@ -4,7 +4,7 @@
 > All items below are 0.3 item-10 canonical-CFG switchover work.
 > Default path (structured body) remains production; `LUNA_SEAL_CANONICAL=1` gates the canonical path.
 
-## Sealer coverage: 81/93 valid programs pass (87%)
+## Sealer coverage: 82/93 valid programs pass (88%)
 
 ## Remaining tasks (by priority)
 
@@ -17,8 +17,10 @@
    - **Remaining**: none (FFI let-initializer was a string/cstr coercion).
 
 2. **"allocation initializer element disagrees with its frozen layout type"**
-   - Affects: resource_generic_drop, resource_recursive_named.
-   - Fix direction: allocation initializer element type resolution in canonical CFG.
+   - **Fixed**: `lowerAllocationElements` now resolves element types inline
+     from expression structure (MoveExpr → operand, IdentifierExpr → local
+     table) before the frozen-layout check. `bindExpr` for `HeapAllocExpr`
+     now binds only constructor call arguments, not the struct-type callee.
 
 3. **"call argument type disagrees with its signature"**
    - **Fixed**: integer-to-integer coercion, string/cstr coercion, and
