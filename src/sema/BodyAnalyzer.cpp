@@ -713,67 +713,277 @@ void BodyAnalyzer::analyzeImpl(ImplDecl* decl) {
 }
 
 
-TypePtr BodyAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
-    mContext.setDiagnosticLocation(stmt);
-    if (auto* bs = dynamic_cast<BlockStmt*>(stmt)) return analyzeBlock(bs, expectedReturn);
+TypePtr BodyAnalyzer::analyzeMatchStmt(MatchStmt* match, TypePtr expectedReturn) {
+        TypePtr matched = mContext.resolved(analyzeExpr(match->scrutinee.get()));
+        match->matchedType = matched;
 
-    // A device kernel is deliberately a small DeviceMemory-only sublanguage.
-    // The source-level continuation constructs are host control flow: lowering
-    // them into SIMT code would require a per-lane continuation runtime and
-    // could not preserve their resume semantics. Likewise, awaiting, freeing,
-    // and host allocation are host-side synchronization/resource effects.
-    // Keep this boundary in semantic analysis, before code generation can
-    // accidentally inline a fragment or emit a host runtime call into HSACO.
-    if (mContext.mInKernel) {
-        const char* construct = nullptr;
-        if (dynamic_cast<SlotDeclStmt*>(stmt)) construct = "slot declaration";
-        else if (dynamic_cast<SlotInvokeStmt*>(stmt)) construct = "slot invocation";
-        else if (dynamic_cast<ApplyStmt*>(stmt)) construct = "apply binding";
-        else if (dynamic_cast<ResumeStmt*>(stmt)) construct = "resume()";
-        else if (dynamic_cast<AbortStmt*>(stmt)) construct = "abort()";
-        else if (dynamic_cast<AwaitStmt*>(stmt)) construct = "await";
-        else if (dynamic_cast<FreeStmt*>(stmt)) construct = "free";
-        if (construct) {
-            mContext.error("kernel body may not use " + std::string(construct) +
-                  "; device kernels support only DeviceMemory operations and structured scalar control flow",
-                  stmt->line, stmt->col);
+        struct VariantView {
+            std::string name;
+            size_t physicalIndex = 0;
+            TypeVec fields;
+        };
+        std::vector<VariantView> variants;
+        if (matched && matched->kind == TypeKind::Enum) {
+            for (size_t index = 0; index < matched->variants.size(); ++index)
+                variants.push_back({
+                    matched->variants[index].name, index,
+                    matched->variants[index].fields});
+        } else if (matched && matched->kind == TypeKind::Result &&
+                   matched->typeArgs.size() == 2) {
+            // Result's frozen ABI uses false/0 for Err and true/1 for Ok.
+            variants.push_back({"Err", 0, {matched->typeArgs[1]}});
+            variants.push_back({"Ok", 1, {matched->typeArgs[0]}});
+        } else {
+            mContext.error("match requires an enum or Result value",
+                  match->line, match->col);
             return TyUnit;
         }
-    }
-    if (auto* slot = dynamic_cast<SlotDeclStmt*>(stmt)) {
-        mContext.analyzeSlotDecl(slot);
+
+        std::unordered_set<std::string> seenVariants;
+        for (auto& arm : match->arms) {
+            const auto selected = std::find_if(
+                variants.begin(), variants.end(),
+                [&](const VariantView& variant) {
+                    return variant.name == arm.variantName;
+                });
+            if (selected == variants.end()) {
+                mContext.error("unknown variant '" + arm.variantName +
+                      "' in match on '" + matched->toString() + "'",
+                      arm.line, arm.col);
+                continue;
+            }
+            std::string qualifierName = arm.typeQualifier;
+            const size_t qualifierSeparator =
+                qualifierName.rfind("::");
+            if (qualifierSeparator != std::string::npos)
+                qualifierName =
+                    qualifierName.substr(qualifierSeparator + 2);
+            if (!arm.typeQualifier.empty() &&
+                qualifierName != matched->name &&
+                arm.typeQualifier != matched->toString()) {
+                mContext.error("match pattern qualifier '" + arm.typeQualifier +
+                      "' does not name matched type '" +
+                      matched->toString() + "'", arm.line, arm.col);
+            }
+            if (!seenVariants.insert(arm.variantName).second)
+                mContext.error("duplicate match arm for variant '" +
+                      arm.variantName + "'", arm.line, arm.col);
+            if (arm.bindings.size() != selected->fields.size()) {
+                mContext.error("variant '" + arm.variantName + "' expects " +
+                      std::to_string(selected->fields.size()) +
+                      " payload binding(s), got " +
+                      std::to_string(arm.bindings.size()),
+                      arm.line, arm.col);
+            }
+            arm.variantIndex = selected->physicalIndex;
+            arm.bindingTypes = selected->fields;
+            arm.bindingUsages.clear();
+            for (size_t index = 0;
+                 index < arm.bindingTypes.size(); ++index) {
+                const auto blockDefault =
+                    index < arm.bindingUsageDefaults.size()
+                        ? arm.bindingUsageDefaults[index]
+                        : luna::ownership::Usage::Copy;
+                arm.bindingUsages.push_back(
+                    luna::ownership::strongerUsage(
+                        blockDefault,
+                        defaultUsageForType(
+                            arm.bindingTypes[index])));
+            }
+            if (matched->kind == TypeKind::Enum &&
+                !matched->declarationLinkageName.empty()) {
+                if (!arm.typeQualifier.empty())
+                    mContext.recordResolvedReference(
+                        arm.sourcePath, arm.qualifierLine, arm.qualifierCol,
+                        arm.typeQualifier.size(),
+                        matched->declarationLinkageName);
+                mContext.recordResolvedReference(
+                    arm.sourcePath, arm.line, arm.col,
+                    arm.variantName.size(),
+                    matched->declarationLinkageName + "::variant::" +
+                        arm.variantName);
+            }
+
+            mContext.mSymTable.enterScope();
+            std::unordered_set<std::string> seenBindings;
+            const size_t count =
+                std::min(arm.bindings.size(), arm.bindingTypes.size());
+            for (size_t index = 0; index < count; ++index) {
+                if (!seenBindings.insert(arm.bindings[index]).second) {
+                    mContext.error("duplicate payload binding '" +
+                          arm.bindings[index] + "'", arm.line, arm.col);
+                    continue;
+                }
+                SymbolInfo binding;
+                binding.kind = SymbolKind::Variable;
+                binding.type = arm.bindingTypes[index];
+                binding.usage =
+                    index < arm.bindingUsages.size()
+                        ? arm.bindingUsages[index]
+                        : defaultUsageForType(
+                              arm.bindingTypes[index]);
+                binding.isLinear =
+                    binding.usage == luna::ownership::Usage::Linear;
+                mContext.mSymTable.define(arm.bindings[index], binding);
+            }
+            analyzeBlock(arm.body.get(), expectedReturn);
+            mContext.mSymTable.exitScope();
+        }
+
+        if (seenVariants.size() != variants.size()) {
+            std::string missing;
+            for (const auto& variant : variants) {
+                if (seenVariants.count(variant.name)) continue;
+                if (!missing.empty()) missing += ", ";
+                missing += variant.name;
+            }
+            if (matched->kind == TypeKind::Result) {
+                mContext.error("Result match must contain exactly one `Ok` arm "
+                      "and one `Err` arm", match->line, match->col);
+            } else {
+                mContext.error("match on '" + matched->toString() +
+                      "' is not exhaustive; missing variant(s): " +
+                      missing, match->line, match->col);
+            }
+        }
         return TyUnit;
-    }
-    if (auto* slot = dynamic_cast<SlotInvokeStmt*>(stmt)) {
-        mContext.analyzeSlotInvoke(slot, expectedReturn);
-        return TyUnit;
-    }
-    if (auto* apply = dynamic_cast<ApplyStmt*>(stmt)) {
-        mContext.analyzeApply(apply, expectedReturn);
-        return TyUnit;
-    }
-    if (dynamic_cast<ResumeStmt*>(stmt)) {
-        if (!mContext.mCurrentFragmentDecl)
-            mContext.error("`resume()` may only appear inside a fragment", stmt->line, stmt->col);
-        else if (mContext.mCurrentFragmentDecl &&
-                 mContext.mCurrentFragmentDecl->kind == FragmentKind::Interceptor)
-            mContext.error("`resume()` is not allowed in an interceptor; normal completion forwards automatically",
-                  stmt->line, stmt->col);
-        return TyUnit;
-    }
-    if (dynamic_cast<AbortStmt*>(stmt)) {
-        if (!mContext.mCurrentFragmentDecl)
-            mContext.error("`abort()` may only appear inside an interceptor or context", stmt->line, stmt->col);
-        return TyUnit;
-    }
-    if (auto* await = dynamic_cast<AwaitStmt*>(stmt)) {
-        TypePtr eventType = mContext.resolved(analyzeExpr(await->event.get()));
-        if (eventType->kind != TypeKind::Event)
-            mContext.error("`await` requires a launch event, got " + eventType->toString(),
-                  await->line, await->col);
-        return TyUnit;
-    }
-    if (auto* ls = dynamic_cast<LetStmt*>(stmt)) {
+}
+
+TypePtr BodyAnalyzer::analyzeRecordLiteralExpr(RecordLiteralExpr* record) {
+        std::vector<std::pair<RecordLiteralExpr::Field*, TypePtr>> fields;
+        fields.reserve(record->fields.size());
+        std::set<std::string> names;
+        for (auto& field : record->fields) {
+            if (!names.insert(field.name).second) {
+                mContext.error("duplicate record field '" + field.name + "'",
+                               field.line, field.col);
+            }
+            fields.push_back({&field, analyzeExpr(field.value.get())});
+        }
+        if (record->targetType) {
+            record->recordType = mContext.resolved(
+                mContext.resolveTypeAST(record->targetType.get(), {}));
+            if (!record->recordType ||
+                record->recordType->kind != TypeKind::Struct) {
+                mContext.error(
+                    "named record construction requires a struct type",
+                    record->line, record->col);
+                return TyUnknown;
+            }
+            std::set<std::string> initialized;
+            for (auto& entry : fields) {
+                auto* field = entry.first;
+                const auto& type = entry.second;
+                auto declared = std::find_if(
+                    record->recordType->fields.begin(),
+                    record->recordType->fields.end(),
+                    [&](const TypeField& candidate) {
+                        return candidate.name == field->name;
+                    });
+                if (declared == record->recordType->fields.end()) {
+                    mContext.error(
+                        "struct '" + record->recordType->toString() +
+                            "' has no field '" + field->name + "'",
+                        field->line, field->col);
+                    continue;
+                }
+                initialized.insert(field->name);
+                mContext.constrain(
+                    type, declared->type,
+                    "field '" + field->name + "' initializer");
+            }
+            for (const auto& declared : record->recordType->fields) {
+                if (initialized.find(declared.name) == initialized.end())
+                    mContext.error(
+                        "named construction of '" +
+                            record->recordType->toString() +
+                            "' is missing field '" + declared.name + "'",
+                        record->line, record->col);
+            }
+            return record->recordType;
+        }
+        std::vector<TypeField> structuralFields;
+        structuralFields.reserve(fields.size());
+        for (auto& entry : fields)
+            structuralFields.push_back(
+                {entry.first->name, std::move(entry.second)});
+        record->recordType = Type::makeRecord(std::move(structuralFields));
+        return record->recordType;
+}
+
+TypePtr BodyAnalyzer::analyzeVariantConstructExpr(VariantConstructExpr* variant) {
+        auto nominalIt = mContext.mDeclaredTypes.find(mContext.sourceDeclarationKey(variant->typeName));
+        if (nominalIt == mContext.mDeclaredTypes.end() ||
+            nominalIt->second->kind != TypeKind::Enum) {
+            mContext.error("'" + variant->typeName + "' is not an enum type");
+            return TyUnknown;
+        }
+
+        TypeVec typeArgs;
+        for (auto& arg : variant->typeArgs)
+            typeArgs.push_back(mContext.resolveTypeAST(arg.get(), {}));
+        if (typeArgs.empty()) {
+            for (size_t i = 0; i < nominalIt->second->typeParams.size(); ++i)
+                typeArgs.push_back(mContext.mConstraints.fresh());
+        } else if (typeArgs.size() != nominalIt->second->typeParams.size()) {
+            mContext.error("Enum '" + variant->typeName + "' expects " +
+                  std::to_string(nominalIt->second->typeParams.size()) +
+                  " type arguments");
+        }
+
+        auto constructed = mContext.instantiateNominal(nominalIt->second, typeArgs);
+        variant->constructedType = constructed;
+        mContext.mInferenceRoots.emplace_back(constructed,
+                                     "type arguments of '" + variant->typeName +
+                                     "::" + variant->variantName + "'");
+        const TypeVariant* selected = nullptr;
+        for (auto& candidate : constructed->variants) {
+            if (candidate.name == variant->variantName) {
+                selected = &candidate;
+                break;
+            }
+        }
+        if (!selected) {
+            mContext.error("Enum '" + variant->typeName + "' has no variant '" +
+                  variant->variantName + "'");
+            return TyUnknown;
+        }
+        const std::string enumLinkage =
+            nominalIt->second->declarationLinkageName;
+        if (!enumLinkage.empty()) {
+            mContext.recordResolvedReference(
+                variant->typeSourcePath, variant->typeLine, variant->typeCol,
+                variant->typeName.size(), enumLinkage);
+            mContext.recordResolvedReference(
+                variant->sourcePath, variant->line, variant->col,
+                variant->variantName.size(),
+                enumLinkage + "::variant::" + variant->variantName);
+        }
+        if (selected->fields.size() != variant->args.size()) {
+            mContext.error("Variant '" + variant->variantName + "' expects " +
+                  std::to_string(selected->fields.size()) + " arguments");
+            return constructed;
+        }
+        for (size_t i = 0; i < variant->args.size(); ++i) {
+            TypePtr actual = analyzeExpr(variant->args[i].get());
+            const TypePtr expected = mContext.resolved(selected->fields[i]);
+            // Literals are representationally polymorphic at a statically
+            // known enum field, matching call and FFI argument behavior.
+            if (dynamic_cast<IntLiteralExpr*>(
+                    variant->args[i].get()) &&
+                isNumericType(expected))
+                continue;
+            if (dynamic_cast<StringLiteralExpr*>(
+                    variant->args[i].get()) &&
+                expected->kind == TypeKind::CStr)
+                continue;
+            mContext.constrain(actual, expected, "enum variant argument");
+        }
+        return constructed;
+}
+
+TypePtr BodyAnalyzer::analyzeLetStmt(LetStmt* ls, TypePtr expectedReturn) {
+    (void)expectedReturn;
         TypePtr rhsType = analyzeExpr(ls->initializer.get());
 
         // Check if rhs is a HeapAllocExpr — mark as heap allocated
@@ -936,190 +1146,9 @@ TypePtr BodyAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
             }
         }
         return TyUnit;
-    }
-    if (auto* rs = dynamic_cast<ReturnStmt*>(stmt)) {
-        mContext.mSawReturn = true;
-        if (rs->value) {
-            TypePtr valueType = analyzeExpr(rs->value.get());
-            if (!(dynamic_cast<StringLiteralExpr*>(rs->value.get()) &&
-                  mContext.resolved(mContext.mCurrentReturnType)->kind == TypeKind::CStr))
-                mContext.constrain(valueType, mContext.mCurrentReturnType, "return statement");
-            luna::ownership::Usage returningUsage = luna::ownership::Usage::Copy;
-            if (auto* call = dynamic_cast<CallExpr*>(rs->value.get())) {
-                returningUsage = call->returnsLinear
-                    ? luna::ownership::Usage::Linear : call->returnUsage;
-            } else if (auto* id = dynamic_cast<IdentifierExpr*>(rs->value.get())) {
-                if (auto* symbol = mContext.mSymTable.lookup(id->name))
-                    returningUsage = symbol->isLinear
-                        ? luna::ownership::Usage::Linear : symbol->usage;
-            }
-            if (returningUsage == luna::ownership::Usage::Linear &&
-                mContext.mCurrentFunctionReturnUsage != luna::ownership::Usage::Linear) {
-                mContext.error("returning a linear value requires a linear function return contract",
-                      rs->line, rs->col);
-            } else if (returningUsage != luna::ownership::Usage::Linear &&
-                       mContext.mCurrentFunctionReturnUsage == luna::ownership::Usage::Linear) {
-                mContext.error("function declared with `-> linear raw<T>` must return an owning value",
-                      rs->line, rs->col);
-            } else if (returningUsage == luna::ownership::Usage::Affine &&
-                       mContext.mCurrentFunctionReturnUsage == luna::ownership::Usage::Copy) {
-                mContext.error("returning an affine value requires an affine function return contract",
-                      rs->line, rs->col);
-            }
-        } else {
-            mContext.constrain(TyUnit, mContext.mCurrentReturnType, "unit return statement");
-        }
-        return TyUnit;
-    }
-    if (auto* is = dynamic_cast<IfStmt*>(stmt)) {
-        TypePtr condType = analyzeExpr(is->cond.get());
-        mContext.requireBool(condType, "if condition");
-        analyzeBlock(is->thenBlock.get(), expectedReturn);
-        if (is->elseBranch) analyzeStmt(is->elseBranch.get(), expectedReturn);
-        return TyUnit;
-    }
-    if (auto* match = dynamic_cast<MatchStmt*>(stmt)) {
-        TypePtr matched = mContext.resolved(analyzeExpr(match->scrutinee.get()));
-        match->matchedType = matched;
+}
 
-        struct VariantView {
-            std::string name;
-            size_t physicalIndex = 0;
-            TypeVec fields;
-        };
-        std::vector<VariantView> variants;
-        if (matched && matched->kind == TypeKind::Enum) {
-            for (size_t index = 0; index < matched->variants.size(); ++index)
-                variants.push_back({
-                    matched->variants[index].name, index,
-                    matched->variants[index].fields});
-        } else if (matched && matched->kind == TypeKind::Result &&
-                   matched->typeArgs.size() == 2) {
-            // Result's frozen ABI uses false/0 for Err and true/1 for Ok.
-            variants.push_back({"Err", 0, {matched->typeArgs[1]}});
-            variants.push_back({"Ok", 1, {matched->typeArgs[0]}});
-        } else {
-            mContext.error("match requires an enum or Result value",
-                  match->line, match->col);
-            return TyUnit;
-        }
-
-        std::unordered_set<std::string> seenVariants;
-        for (auto& arm : match->arms) {
-            const auto selected = std::find_if(
-                variants.begin(), variants.end(),
-                [&](const VariantView& variant) {
-                    return variant.name == arm.variantName;
-                });
-            if (selected == variants.end()) {
-                mContext.error("unknown variant '" + arm.variantName +
-                      "' in match on '" + matched->toString() + "'",
-                      arm.line, arm.col);
-                continue;
-            }
-            std::string qualifierName = arm.typeQualifier;
-            const size_t qualifierSeparator =
-                qualifierName.rfind("::");
-            if (qualifierSeparator != std::string::npos)
-                qualifierName =
-                    qualifierName.substr(qualifierSeparator + 2);
-            if (!arm.typeQualifier.empty() &&
-                qualifierName != matched->name &&
-                arm.typeQualifier != matched->toString()) {
-                mContext.error("match pattern qualifier '" + arm.typeQualifier +
-                      "' does not name matched type '" +
-                      matched->toString() + "'", arm.line, arm.col);
-            }
-            if (!seenVariants.insert(arm.variantName).second)
-                mContext.error("duplicate match arm for variant '" +
-                      arm.variantName + "'", arm.line, arm.col);
-            if (arm.bindings.size() != selected->fields.size()) {
-                mContext.error("variant '" + arm.variantName + "' expects " +
-                      std::to_string(selected->fields.size()) +
-                      " payload binding(s), got " +
-                      std::to_string(arm.bindings.size()),
-                      arm.line, arm.col);
-            }
-            arm.variantIndex = selected->physicalIndex;
-            arm.bindingTypes = selected->fields;
-            arm.bindingUsages.clear();
-            for (size_t index = 0;
-                 index < arm.bindingTypes.size(); ++index) {
-                const auto blockDefault =
-                    index < arm.bindingUsageDefaults.size()
-                        ? arm.bindingUsageDefaults[index]
-                        : luna::ownership::Usage::Copy;
-                arm.bindingUsages.push_back(
-                    luna::ownership::strongerUsage(
-                        blockDefault,
-                        defaultUsageForType(
-                            arm.bindingTypes[index])));
-            }
-            if (matched->kind == TypeKind::Enum &&
-                !matched->declarationLinkageName.empty()) {
-                if (!arm.typeQualifier.empty())
-                    mContext.recordResolvedReference(
-                        arm.sourcePath, arm.qualifierLine, arm.qualifierCol,
-                        arm.typeQualifier.size(),
-                        matched->declarationLinkageName);
-                mContext.recordResolvedReference(
-                    arm.sourcePath, arm.line, arm.col,
-                    arm.variantName.size(),
-                    matched->declarationLinkageName + "::variant::" +
-                        arm.variantName);
-            }
-
-            mContext.mSymTable.enterScope();
-            std::unordered_set<std::string> seenBindings;
-            const size_t count =
-                std::min(arm.bindings.size(), arm.bindingTypes.size());
-            for (size_t index = 0; index < count; ++index) {
-                if (!seenBindings.insert(arm.bindings[index]).second) {
-                    mContext.error("duplicate payload binding '" +
-                          arm.bindings[index] + "'", arm.line, arm.col);
-                    continue;
-                }
-                SymbolInfo binding;
-                binding.kind = SymbolKind::Variable;
-                binding.type = arm.bindingTypes[index];
-                binding.usage =
-                    index < arm.bindingUsages.size()
-                        ? arm.bindingUsages[index]
-                        : defaultUsageForType(
-                              arm.bindingTypes[index]);
-                binding.isLinear =
-                    binding.usage == luna::ownership::Usage::Linear;
-                mContext.mSymTable.define(arm.bindings[index], binding);
-            }
-            analyzeBlock(arm.body.get(), expectedReturn);
-            mContext.mSymTable.exitScope();
-        }
-
-        if (seenVariants.size() != variants.size()) {
-            std::string missing;
-            for (const auto& variant : variants) {
-                if (seenVariants.count(variant.name)) continue;
-                if (!missing.empty()) missing += ", ";
-                missing += variant.name;
-            }
-            if (matched->kind == TypeKind::Result) {
-                mContext.error("Result match must contain exactly one `Ok` arm "
-                      "and one `Err` arm", match->line, match->col);
-            } else {
-                mContext.error("match on '" + matched->toString() +
-                      "' is not exhaustive; missing variant(s): " +
-                      missing, match->line, match->col);
-            }
-        }
-        return TyUnit;
-    }
-    if (auto* ws = dynamic_cast<WhileStmt*>(stmt)) {
-        TypePtr condType = analyzeExpr(ws->cond.get());
-        mContext.requireBool(condType, "while condition");
-        analyzeBlock(ws->body.get(), expectedReturn);
-        return TyUnit;
-    }
-    if (auto* fs = dynamic_cast<ForStmt*>(stmt)) {
+TypePtr BodyAnalyzer::analyzeForStmt(ForStmt* fs, TypePtr expectedReturn) {
         TypePtr iterable = mContext.resolved(analyzeExpr(fs->iterable.get()));
         TypePtr element = TyI32;
         fs->protocolNextSymbol.clear();
@@ -1486,356 +1515,9 @@ TypePtr BodyAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
         analyzeBlock(fs->body.get(), expectedReturn);
         mContext.mSymTable.exitScope();
         return TyUnit;
-    }
-    if (auto* es = dynamic_cast<ExprStmt*>(stmt)) {
-        return analyzeExpr(es->expr.get());
-    }
-    if (auto* fs = dynamic_cast<FreeStmt*>(stmt)) {
-        analyzeExpr(fs->operand.get());
-        return TyUnit;
-    }
-    return TyUnit;
 }
 
-
-TypePtr BodyAnalyzer::analyzeBlock(BlockStmt* block, TypePtr expectedReturn) {
-    mContext.mSymTable.enterScope();
-    mContext.enterConstScope();
-    mContext.enterSlotScope();
-    for (auto& stmt : block->stmts) {
-        analyzeStmt(stmt.get(), expectedReturn);
-    }
-    mContext.mSymTable.exitScope();
-    mContext.exitConstScope();
-    mContext.exitSlotScope();
-    return TyUnit;
-}
-
-
-bool BodyAnalyzer::statementAlwaysReturns(const Stmt* stmt) const {
-    if (!stmt) return false;
-    if (dynamic_cast<const ReturnStmt*>(stmt)) return true;
-    if (auto* expression = dynamic_cast<const ExprStmt*>(stmt)) {
-        if (auto* call = dynamic_cast<const CallExpr*>(expression->expr.get())) {
-            if ((call->resultType &&
-                 call->resultType->kind == TypeKind::Never) ||
-                (call->intrinsicType &&
-                 call->intrinsicType->kind == TypeKind::Never))
-                return true;
-        }
-    }
-    if (auto* block = dynamic_cast<const BlockStmt*>(stmt)) return blockAlwaysReturns(block);
-    if (auto* conditional = dynamic_cast<const IfStmt*>(stmt)) {
-        return conditional->elseBranch &&
-               blockAlwaysReturns(conditional->thenBlock.get()) &&
-               statementAlwaysReturns(conditional->elseBranch.get());
-    }
-    if (auto* match = dynamic_cast<const MatchStmt*>(stmt)) {
-        return !match->arms.empty() &&
-               std::all_of(match->arms.begin(), match->arms.end(),
-                           [&](const MatchArm& arm) {
-                               return blockAlwaysReturns(arm.body.get());
-                           });
-    }
-    if (auto* apply = dynamic_cast<const ApplyStmt*>(stmt))
-        return apply->body && blockAlwaysReturns(apply->body.get());
-    return false;
-}
-
-
-bool BodyAnalyzer::blockAlwaysReturns(const BlockStmt* block) const {
-    if (!block) return false;
-    for (const auto& stmt : block->stmts) {
-        if (statementAlwaysReturns(stmt.get())) return true;
-    }
-    return false;
-}
-
-// ─── Expression analysis ───────────────────────────────────────────
-
-
-TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
-    mContext.setDiagnosticLocation(expr);
-    if (dynamic_cast<IntLiteralExpr*>(expr)) return TyI32;
-    if (dynamic_cast<FloatLiteralExpr*>(expr)) return TyF64;
-    if (dynamic_cast<StringLiteralExpr*>(expr)) return TyString;
-    if (dynamic_cast<BoolLiteralExpr*>(expr)) return TyBool;
-    if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
-        const std::string declarationKey = mContext.sourceDeclarationKey(id->name);
-        auto family = mContext.mFunctionFamilies.find(declarationKey);
-        if (family != mContext.mFunctionFamilies.end() && family->second.size() > 1) {
-            mContext.error("declaration family '" + id->name +
-                  "' is ambiguous; use `select " + id->name +
-                  " with selector(...)`", id->line, id->col);
-            return TyUnknown;
-        }
-        auto* sym = mContext.lookupSymbol(id->name);
-        if (!sym) {
-            mContext.error("undefined name '" + id->name + "'", id->line, id->col);
-            return TyUnknown;
-        }
-        if (!mCaptureFrames.empty() &&
-            sym->kind == SymbolKind::Variable) {
-            auto& frame = mCaptureFrames.back();
-            if (mContext.mSymTable.lookupDepth(id->name) <
-                frame.lambdaScopeDepth) {
-                if (std::find(frame.captures.begin(),
-                              frame.captures.end(),
-                              id->name) == frame.captures.end())
-                    frame.captures.push_back(id->name);
-            }
-        }
-        if (sym->kind == SymbolKind::Function) {
-            if (family != mContext.mFunctionFamilies.end() && family->second.size() == 1) {
-                const auto* declaration = family->second.front();
-                id->resolvedSymbolName =
-                    declaration->generatedSymbolName.empty()
-                        ? declaration->name
-                        : declaration->generatedSymbolName;
-                mContext.recordDeclarationReference(id, id->name.size(),
-                                                   declaration);
-            }
-            return Type::makeFunction(sym->paramTypes,
-                                      sym->returnType ? sym->returnType : TyUnit,
-                                      sym->paramContracts,
-                                      {luna::ownership::Relation::Owned,
-                                       sym->returnUsage});
-        }
-        return sym->type ? mContext.resolved(sym->type) : TyUnknown;
-    }
-    if (auto* selection = dynamic_cast<SelectExpr*>(expr))
-        return analyzeSelect(selection);
-    if (auto* record = dynamic_cast<RecordLiteralExpr*>(expr)) {
-        std::vector<std::pair<RecordLiteralExpr::Field*, TypePtr>> fields;
-        fields.reserve(record->fields.size());
-        std::set<std::string> names;
-        for (auto& field : record->fields) {
-            if (!names.insert(field.name).second) {
-                mContext.error("duplicate record field '" + field.name + "'",
-                               field.line, field.col);
-            }
-            fields.push_back({&field, analyzeExpr(field.value.get())});
-        }
-        if (record->targetType) {
-            record->recordType = mContext.resolved(
-                mContext.resolveTypeAST(record->targetType.get(), {}));
-            if (!record->recordType ||
-                record->recordType->kind != TypeKind::Struct) {
-                mContext.error(
-                    "named record construction requires a struct type",
-                    record->line, record->col);
-                return TyUnknown;
-            }
-            std::set<std::string> initialized;
-            for (auto& entry : fields) {
-                auto* field = entry.first;
-                const auto& type = entry.second;
-                auto declared = std::find_if(
-                    record->recordType->fields.begin(),
-                    record->recordType->fields.end(),
-                    [&](const TypeField& candidate) {
-                        return candidate.name == field->name;
-                    });
-                if (declared == record->recordType->fields.end()) {
-                    mContext.error(
-                        "struct '" + record->recordType->toString() +
-                            "' has no field '" + field->name + "'",
-                        field->line, field->col);
-                    continue;
-                }
-                initialized.insert(field->name);
-                mContext.constrain(
-                    type, declared->type,
-                    "field '" + field->name + "' initializer");
-            }
-            for (const auto& declared : record->recordType->fields) {
-                if (initialized.find(declared.name) == initialized.end())
-                    mContext.error(
-                        "named construction of '" +
-                            record->recordType->toString() +
-                            "' is missing field '" + declared.name + "'",
-                        record->line, record->col);
-            }
-            return record->recordType;
-        }
-        std::vector<TypeField> structuralFields;
-        structuralFields.reserve(fields.size());
-        for (auto& entry : fields)
-            structuralFields.push_back(
-                {entry.first->name, std::move(entry.second)});
-        record->recordType = Type::makeRecord(std::move(structuralFields));
-        return record->recordType;
-    }
-    if (auto* bin = dynamic_cast<BinaryExpr*>(expr)) {
-        TypePtr lhsType = analyzeExpr(bin->lhs.get());
-        TypePtr rhsType = analyzeExpr(bin->rhs.get());
-        switch (bin->op) {
-            case TokenKind::Plus:
-            case TokenKind::Minus:
-            case TokenKind::Star:
-            case TokenKind::Slash:
-            case TokenKind::Percent:
-                mContext.requireNumeric(lhsType, "left operand of arithmetic expression");
-                mContext.requireNumeric(rhsType, "right operand of arithmetic expression");
-                mContext.constrain(lhsType, rhsType, "arithmetic operands");
-                return mContext.resolved(lhsType);
-            case TokenKind::Ampersand:
-            case TokenKind::BitOr:
-            case TokenKind::BitXor:
-                mContext.requireInteger(lhsType, "left operand of bitwise expression");
-                mContext.requireInteger(rhsType, "right operand of bitwise expression");
-                if ((mContext.resolved(lhsType)->kind == TypeKind::InferenceVar || isIntegerType(mContext.resolved(lhsType))) &&
-                    (mContext.resolved(rhsType)->kind == TypeKind::InferenceVar || isIntegerType(mContext.resolved(rhsType))))
-                    mContext.constrain(lhsType, rhsType, "bitwise operands");
-                return mContext.resolved(lhsType);
-            case TokenKind::ShiftLeft:
-            case TokenKind::ShiftRight:
-                mContext.requireInteger(lhsType, "left operand of shift expression");
-                mContext.requireInteger(rhsType, "shift count");
-                return mContext.resolved(lhsType);
-            case TokenKind::EqEq:
-            case TokenKind::Neq:
-                mContext.constrain(lhsType, rhsType, "equality operands");
-                return TyBool;
-            case TokenKind::Lt:
-            case TokenKind::LtEq:
-            case TokenKind::Gt:
-            case TokenKind::GtEq:
-                mContext.requireNumeric(lhsType, "left operand of comparison expression");
-                mContext.requireNumeric(rhsType, "right operand of comparison expression");
-                mContext.constrain(lhsType, rhsType, "comparison operands");
-                return TyBool;
-            case TokenKind::AndAnd:
-            case TokenKind::OrOr:
-                mContext.requireBool(lhsType, "left operand of logical expression");
-                mContext.requireBool(rhsType, "right operand of logical expression");
-                return TyBool;
-            default: return TyUnknown;
-        }
-    }
-    if (auto* un = dynamic_cast<UnaryExpr*>(expr)) {
-        TypePtr opType = analyzeExpr(un->operand.get());
-        switch (un->op) {
-            case TokenKind::Minus:
-                mContext.requireNumeric(opType, "unary '-' operand");
-                return opType;
-            case TokenKind::Not:
-                mContext.requireBool(opType, "'!' operand");
-                return TyBool;
-            case TokenKind::Tilde:
-                mContext.requireInteger(opType, "'~' operand");
-                return opType;
-            case TokenKind::Star: {
-                auto resolvedOp = mContext.resolved(opType);
-                if (resolvedOp->kind == TypeKind::InferenceVar) {
-                    auto inner = mContext.mConstraints.fresh();
-                    mContext.constrain(opType, Type::makeReference(inner), "dereference operand");
-                    return inner;
-                }
-                if (resolvedOp->kind == TypeKind::Reference) return resolvedOp->inner;
-                mContext.error("Cannot dereference non-reference type");
-                return TyUnknown;
-            }
-            default: return TyUnknown;
-        }
-    }
-    if (auto* variant = dynamic_cast<VariantConstructExpr*>(expr)) {
-        auto nominalIt = mContext.mDeclaredTypes.find(mContext.sourceDeclarationKey(variant->typeName));
-        if (nominalIt == mContext.mDeclaredTypes.end() ||
-            nominalIt->second->kind != TypeKind::Enum) {
-            mContext.error("'" + variant->typeName + "' is not an enum type");
-            return TyUnknown;
-        }
-
-        TypeVec typeArgs;
-        for (auto& arg : variant->typeArgs)
-            typeArgs.push_back(mContext.resolveTypeAST(arg.get(), {}));
-        if (typeArgs.empty()) {
-            for (size_t i = 0; i < nominalIt->second->typeParams.size(); ++i)
-                typeArgs.push_back(mContext.mConstraints.fresh());
-        } else if (typeArgs.size() != nominalIt->second->typeParams.size()) {
-            mContext.error("Enum '" + variant->typeName + "' expects " +
-                  std::to_string(nominalIt->second->typeParams.size()) +
-                  " type arguments");
-        }
-
-        auto constructed = mContext.instantiateNominal(nominalIt->second, typeArgs);
-        variant->constructedType = constructed;
-        mContext.mInferenceRoots.emplace_back(constructed,
-                                     "type arguments of '" + variant->typeName +
-                                     "::" + variant->variantName + "'");
-        const TypeVariant* selected = nullptr;
-        for (auto& candidate : constructed->variants) {
-            if (candidate.name == variant->variantName) {
-                selected = &candidate;
-                break;
-            }
-        }
-        if (!selected) {
-            mContext.error("Enum '" + variant->typeName + "' has no variant '" +
-                  variant->variantName + "'");
-            return TyUnknown;
-        }
-        const std::string enumLinkage =
-            nominalIt->second->declarationLinkageName;
-        if (!enumLinkage.empty()) {
-            mContext.recordResolvedReference(
-                variant->typeSourcePath, variant->typeLine, variant->typeCol,
-                variant->typeName.size(), enumLinkage);
-            mContext.recordResolvedReference(
-                variant->sourcePath, variant->line, variant->col,
-                variant->variantName.size(),
-                enumLinkage + "::variant::" + variant->variantName);
-        }
-        if (selected->fields.size() != variant->args.size()) {
-            mContext.error("Variant '" + variant->variantName + "' expects " +
-                  std::to_string(selected->fields.size()) + " arguments");
-            return constructed;
-        }
-        for (size_t i = 0; i < variant->args.size(); ++i) {
-            TypePtr actual = analyzeExpr(variant->args[i].get());
-            const TypePtr expected = mContext.resolved(selected->fields[i]);
-            // Literals are representationally polymorphic at a statically
-            // known enum field, matching call and FFI argument behavior.
-            if (dynamic_cast<IntLiteralExpr*>(
-                    variant->args[i].get()) &&
-                isNumericType(expected))
-                continue;
-            if (dynamic_cast<StringLiteralExpr*>(
-                    variant->args[i].get()) &&
-                expected->kind == TypeKind::CStr)
-                continue;
-            mContext.constrain(actual, expected, "enum variant argument");
-        }
-        return constructed;
-    }
-    if (auto* launch = dynamic_cast<LaunchExpr*>(expr)) return analyzeLaunch(launch);
-    if (auto* call = dynamic_cast<CallExpr*>(expr)) return analyzeCall(call);
-    if (auto* fa = dynamic_cast<FieldAccessExpr*>(expr)) {
-        TypePtr objectType = mContext.resolved(analyzeExpr(fa->object.get()));
-        if (objectType->kind == TypeKind::Reference && objectType->inner)
-            objectType = mContext.resolved(objectType->inner);
-        if (objectType->kind != TypeKind::Struct &&
-            objectType->kind != TypeKind::Record &&
-            objectType->kind != TypeKind::Metadata) {
-            mContext.error("Field access requires a product type, got " + objectType->toString());
-            return TyUnknown;
-        }
-        for (auto& field : objectType->fields) {
-            if (field.name == fa->field) {
-                fa->resultType = mContext.resolved(field.type);
-                if (!objectType->declarationLinkageName.empty())
-                    mContext.recordResolvedReference(
-                        fa->sourcePath, fa->line, fa->col, fa->field.size(),
-                        objectType->declarationLinkageName + "::field::" +
-                            fa->field);
-                return fa->resultType;
-            }
-        }
-        mContext.error("Type '" + objectType->toString() + "' has no field '" + fa->field + "'");
-        return TyUnknown;
-    }
-    if (auto* propagation = dynamic_cast<TryExpr*>(expr)) {
+TypePtr BodyAnalyzer::analyzeTryExpr(TryExpr* propagation) {
         if (mContext.mCurrentFragmentDecl) {
             mContext.error("`?` may not propagate across a fragment/slot boundary; "
                   "handle the Result explicitly inside the fragment",
@@ -1884,76 +1566,9 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
         propagation->errorType = sourceError;
         propagation->propagatedErrorType = targetError;
         return propagation->valueType;
-    }
-    if (auto* ha = dynamic_cast<HeapAllocExpr*>(expr)) {
-        if (mContext.mInKernel) {
-            mContext.error("kernel body may not allocate heap memory with `new`; allocate device memory on the host and pass a borrowed device_buffer parameter",
-                  ha->line, ha->col);
-            return TyUnknown;
-        }
-        ha->allocatedType = ha->allocatedTypeAST
-            ? mContext.resolveTypeAST(ha->allocatedTypeAST.get(), {}) : TyUnknown;
-        if (auto* initCall = dynamic_cast<CallExpr*>(ha->initializer.get())) {
-            TypeVec argumentTypes;
-            for (auto& arg : initCall->args)
-                argumentTypes.push_back(analyzeExpr(arg.get()));
-            if (ha->allocatedType->kind == TypeKind::Struct ||
-                ha->allocatedType->kind == TypeKind::Record) {
-                if (initCall->args.size() != ha->allocatedType->fields.size()) {
-                    mContext.error("Constructor for '" + ha->allocatedType->toString() +
-                          "' expects " + std::to_string(ha->allocatedType->fields.size()) +
-                          " field values");
-                } else {
-                    for (size_t i = 0; i < initCall->args.size(); ++i)
-                        mContext.constrain(argumentTypes[i],
-                                  ha->allocatedType->fields[i].type,
-                                  "field '" + ha->allocatedType->fields[i].name + "' initializer");
-                }
-            } else if (ha->allocatedType->kind == TypeKind::I32 ||
-                       ha->allocatedType->kind == TypeKind::I64 ||
-                       ha->allocatedType->kind == TypeKind::F32 ||
-                       ha->allocatedType->kind == TypeKind::F64 ||
-                       ha->allocatedType->kind == TypeKind::Bool ||
-                       ha->allocatedType->kind == TypeKind::String) {
-                if (argumentTypes.size() != 1)
-                    mContext.error("Primitive allocation requires exactly one initializer");
-                else
-                    mContext.constrain(argumentTypes[0], ha->allocatedType,
-                              "primitive allocation initializer");
-            }
-        }
-        ha->resultType = ha->allocatedType;
-        return ha->resultType;
-    }
-    if (auto* mv = dynamic_cast<MoveExpr*>(expr)) {
-        return analyzeExpr(mv->operand.get());
-    }
-    if (auto* bw = dynamic_cast<BorrowExpr*>(expr)) {
-        TypePtr inner = analyzeExpr(bw->operand.get());
-        return Type::makeReference(inner, bw->isMutable);
-    }
-    if (auto* dr = dynamic_cast<DerefExpr*>(expr)) {
-        TypePtr op = mContext.resolved(analyzeExpr(dr->operand.get()));
-        if (op->kind == TypeKind::InferenceVar) {
-            auto inner = mContext.mConstraints.fresh();
-            mContext.constrain(
-                op, Type::makeReference(inner), "dereference operand");
-            dr->resultType = inner;
-            return inner;
-        }
-        if ((op->kind == TypeKind::Reference ||
-             op->kind == TypeKind::RawPointer) && op->inner) {
-            dr->resultType = mContext.resolved(op->inner);
-            return dr->resultType;
-        }
-        mContext.error("Cannot dereference non-reference or non-raw-pointer type");
-        return TyUnknown;
-    }
-    if (auto* ad = dynamic_cast<AddrOfExpr*>(expr)) {
-        TypePtr op = analyzeExpr(ad->operand.get());
-        return Type::makeReference(op, ad->isMutable);
-    }
-    if (auto* le = dynamic_cast<LambdaExpr*>(expr)) {
+}
+
+TypePtr BodyAnalyzer::analyzeLambdaExpr(LambdaExpr* le) {
         // Analyze lambda: enter new scope, register params, analyze body
         TypePtr savedReturn = mContext.mCurrentReturnType;
         bool savedSawReturn = mContext.mSawReturn;
@@ -2103,7 +1718,414 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
                 {luna::ownership::Relation::Owned, returnUsage});
         }
         return le->closureType;
+}
+
+TypePtr BodyAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
+    mContext.setDiagnosticLocation(stmt);
+    if (auto* bs = dynamic_cast<BlockStmt*>(stmt)) return analyzeBlock(bs, expectedReturn);
+
+    // A device kernel is deliberately a small DeviceMemory-only sublanguage.
+    // The source-level continuation constructs are host control flow: lowering
+    // them into SIMT code would require a per-lane continuation runtime and
+    // could not preserve their resume semantics. Likewise, awaiting, freeing,
+    // and host allocation are host-side synchronization/resource effects.
+    // Keep this boundary in semantic analysis, before code generation can
+    // accidentally inline a fragment or emit a host runtime call into HSACO.
+    if (mContext.mInKernel) {
+        const char* construct = nullptr;
+        if (dynamic_cast<SlotDeclStmt*>(stmt)) construct = "slot declaration";
+        else if (dynamic_cast<SlotInvokeStmt*>(stmt)) construct = "slot invocation";
+        else if (dynamic_cast<ApplyStmt*>(stmt)) construct = "apply binding";
+        else if (dynamic_cast<ResumeStmt*>(stmt)) construct = "resume()";
+        else if (dynamic_cast<AbortStmt*>(stmt)) construct = "abort()";
+        else if (dynamic_cast<AwaitStmt*>(stmt)) construct = "await";
+        else if (dynamic_cast<FreeStmt*>(stmt)) construct = "free";
+        if (construct) {
+            mContext.error("kernel body may not use " + std::string(construct) +
+                  "; device kernels support only DeviceMemory operations and structured scalar control flow",
+                  stmt->line, stmt->col);
+            return TyUnit;
+        }
     }
+    if (auto* slot = dynamic_cast<SlotDeclStmt*>(stmt)) {
+        mContext.analyzeSlotDecl(slot);
+        return TyUnit;
+    }
+    if (auto* slot = dynamic_cast<SlotInvokeStmt*>(stmt)) {
+        mContext.analyzeSlotInvoke(slot, expectedReturn);
+        return TyUnit;
+    }
+    if (auto* apply = dynamic_cast<ApplyStmt*>(stmt)) {
+        mContext.analyzeApply(apply, expectedReturn);
+        return TyUnit;
+    }
+    if (dynamic_cast<ResumeStmt*>(stmt)) {
+        if (!mContext.mCurrentFragmentDecl)
+            mContext.error("`resume()` may only appear inside a fragment", stmt->line, stmt->col);
+        else if (mContext.mCurrentFragmentDecl &&
+                 mContext.mCurrentFragmentDecl->kind == FragmentKind::Interceptor)
+            mContext.error("`resume()` is not allowed in an interceptor; normal completion forwards automatically",
+                  stmt->line, stmt->col);
+        return TyUnit;
+    }
+    if (dynamic_cast<AbortStmt*>(stmt)) {
+        if (!mContext.mCurrentFragmentDecl)
+            mContext.error("`abort()` may only appear inside an interceptor or context", stmt->line, stmt->col);
+        return TyUnit;
+    }
+    if (auto* await = dynamic_cast<AwaitStmt*>(stmt)) {
+        TypePtr eventType = mContext.resolved(analyzeExpr(await->event.get()));
+        if (eventType->kind != TypeKind::Event)
+            mContext.error("`await` requires a launch event, got " + eventType->toString(),
+                  await->line, await->col);
+        return TyUnit;
+    }
+    if (auto* ls = dynamic_cast<LetStmt*>(stmt))
+        return analyzeLetStmt(ls, expectedReturn);
+    if (auto* rs = dynamic_cast<ReturnStmt*>(stmt)) {
+        mContext.mSawReturn = true;
+        if (rs->value) {
+            TypePtr valueType = analyzeExpr(rs->value.get());
+            if (!(dynamic_cast<StringLiteralExpr*>(rs->value.get()) &&
+                  mContext.resolved(mContext.mCurrentReturnType)->kind == TypeKind::CStr))
+                mContext.constrain(valueType, mContext.mCurrentReturnType, "return statement");
+            luna::ownership::Usage returningUsage = luna::ownership::Usage::Copy;
+            if (auto* call = dynamic_cast<CallExpr*>(rs->value.get())) {
+                returningUsage = call->returnsLinear
+                    ? luna::ownership::Usage::Linear : call->returnUsage;
+            } else if (auto* id = dynamic_cast<IdentifierExpr*>(rs->value.get())) {
+                if (auto* symbol = mContext.mSymTable.lookup(id->name))
+                    returningUsage = symbol->isLinear
+                        ? luna::ownership::Usage::Linear : symbol->usage;
+            }
+            if (returningUsage == luna::ownership::Usage::Linear &&
+                mContext.mCurrentFunctionReturnUsage != luna::ownership::Usage::Linear) {
+                mContext.error("returning a linear value requires a linear function return contract",
+                      rs->line, rs->col);
+            } else if (returningUsage != luna::ownership::Usage::Linear &&
+                       mContext.mCurrentFunctionReturnUsage == luna::ownership::Usage::Linear) {
+                mContext.error("function declared with `-> linear raw<T>` must return an owning value",
+                      rs->line, rs->col);
+            } else if (returningUsage == luna::ownership::Usage::Affine &&
+                       mContext.mCurrentFunctionReturnUsage == luna::ownership::Usage::Copy) {
+                mContext.error("returning an affine value requires an affine function return contract",
+                      rs->line, rs->col);
+            }
+        } else {
+            mContext.constrain(TyUnit, mContext.mCurrentReturnType, "unit return statement");
+        }
+        return TyUnit;
+    }
+    if (auto* is = dynamic_cast<IfStmt*>(stmt)) {
+        TypePtr condType = analyzeExpr(is->cond.get());
+        mContext.requireBool(condType, "if condition");
+        analyzeBlock(is->thenBlock.get(), expectedReturn);
+        if (is->elseBranch) analyzeStmt(is->elseBranch.get(), expectedReturn);
+        return TyUnit;
+    }
+    if (auto* match = dynamic_cast<MatchStmt*>(stmt))
+        return analyzeMatchStmt(match, expectedReturn);
+    if (auto* ws = dynamic_cast<WhileStmt*>(stmt)) {
+        TypePtr condType = analyzeExpr(ws->cond.get());
+        mContext.requireBool(condType, "while condition");
+        analyzeBlock(ws->body.get(), expectedReturn);
+        return TyUnit;
+    }
+    if (auto* fs = dynamic_cast<ForStmt*>(stmt))
+        return analyzeForStmt(fs, expectedReturn);
+    if (auto* es = dynamic_cast<ExprStmt*>(stmt)) {
+        return analyzeExpr(es->expr.get());
+    }
+    if (auto* fs = dynamic_cast<FreeStmt*>(stmt)) {
+        analyzeExpr(fs->operand.get());
+        return TyUnit;
+    }
+    return TyUnit;
+}
+
+
+TypePtr BodyAnalyzer::analyzeBlock(BlockStmt* block, TypePtr expectedReturn) {
+    mContext.mSymTable.enterScope();
+    mContext.enterConstScope();
+    mContext.enterSlotScope();
+    for (auto& stmt : block->stmts) {
+        analyzeStmt(stmt.get(), expectedReturn);
+    }
+    mContext.mSymTable.exitScope();
+    mContext.exitConstScope();
+    mContext.exitSlotScope();
+    return TyUnit;
+}
+
+
+bool BodyAnalyzer::statementAlwaysReturns(const Stmt* stmt) const {
+    if (!stmt) return false;
+    if (dynamic_cast<const ReturnStmt*>(stmt)) return true;
+    if (auto* expression = dynamic_cast<const ExprStmt*>(stmt)) {
+        if (auto* call = dynamic_cast<const CallExpr*>(expression->expr.get())) {
+            if ((call->resultType &&
+                 call->resultType->kind == TypeKind::Never) ||
+                (call->intrinsicType &&
+                 call->intrinsicType->kind == TypeKind::Never))
+                return true;
+        }
+    }
+    if (auto* block = dynamic_cast<const BlockStmt*>(stmt)) return blockAlwaysReturns(block);
+    if (auto* conditional = dynamic_cast<const IfStmt*>(stmt)) {
+        return conditional->elseBranch &&
+               blockAlwaysReturns(conditional->thenBlock.get()) &&
+               statementAlwaysReturns(conditional->elseBranch.get());
+    }
+    if (auto* match = dynamic_cast<const MatchStmt*>(stmt)) {
+        return !match->arms.empty() &&
+               std::all_of(match->arms.begin(), match->arms.end(),
+                           [&](const MatchArm& arm) {
+                               return blockAlwaysReturns(arm.body.get());
+                           });
+    }
+    if (auto* apply = dynamic_cast<const ApplyStmt*>(stmt))
+        return apply->body && blockAlwaysReturns(apply->body.get());
+    return false;
+}
+
+
+bool BodyAnalyzer::blockAlwaysReturns(const BlockStmt* block) const {
+    if (!block) return false;
+    for (const auto& stmt : block->stmts) {
+        if (statementAlwaysReturns(stmt.get())) return true;
+    }
+    return false;
+}
+
+// ─── Expression analysis ───────────────────────────────────────────
+
+
+TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
+    mContext.setDiagnosticLocation(expr);
+    if (dynamic_cast<IntLiteralExpr*>(expr)) return TyI32;
+    if (dynamic_cast<FloatLiteralExpr*>(expr)) return TyF64;
+    if (dynamic_cast<StringLiteralExpr*>(expr)) return TyString;
+    if (dynamic_cast<BoolLiteralExpr*>(expr)) return TyBool;
+    if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
+        const std::string declarationKey = mContext.sourceDeclarationKey(id->name);
+        auto family = mContext.mFunctionFamilies.find(declarationKey);
+        if (family != mContext.mFunctionFamilies.end() && family->second.size() > 1) {
+            mContext.error("declaration family '" + id->name +
+                  "' is ambiguous; use `select " + id->name +
+                  " with selector(...)`", id->line, id->col);
+            return TyUnknown;
+        }
+        auto* sym = mContext.lookupSymbol(id->name);
+        if (!sym) {
+            mContext.error("undefined name '" + id->name + "'", id->line, id->col);
+            return TyUnknown;
+        }
+        if (!mCaptureFrames.empty() &&
+            sym->kind == SymbolKind::Variable) {
+            auto& frame = mCaptureFrames.back();
+            if (mContext.mSymTable.lookupDepth(id->name) <
+                frame.lambdaScopeDepth) {
+                if (std::find(frame.captures.begin(),
+                              frame.captures.end(),
+                              id->name) == frame.captures.end())
+                    frame.captures.push_back(id->name);
+            }
+        }
+        if (sym->kind == SymbolKind::Function) {
+            if (family != mContext.mFunctionFamilies.end() && family->second.size() == 1) {
+                const auto* declaration = family->second.front();
+                id->resolvedSymbolName =
+                    declaration->generatedSymbolName.empty()
+                        ? declaration->name
+                        : declaration->generatedSymbolName;
+                mContext.recordDeclarationReference(id, id->name.size(),
+                                                   declaration);
+            }
+            return Type::makeFunction(sym->paramTypes,
+                                      sym->returnType ? sym->returnType : TyUnit,
+                                      sym->paramContracts,
+                                      {luna::ownership::Relation::Owned,
+                                       sym->returnUsage});
+        }
+        return sym->type ? mContext.resolved(sym->type) : TyUnknown;
+    }
+    if (auto* selection = dynamic_cast<SelectExpr*>(expr))
+        return analyzeSelect(selection);
+    if (auto* record = dynamic_cast<RecordLiteralExpr*>(expr))
+        return analyzeRecordLiteralExpr(record);
+    if (auto* bin = dynamic_cast<BinaryExpr*>(expr)) {
+        TypePtr lhsType = analyzeExpr(bin->lhs.get());
+        TypePtr rhsType = analyzeExpr(bin->rhs.get());
+        switch (bin->op) {
+            case TokenKind::Plus:
+            case TokenKind::Minus:
+            case TokenKind::Star:
+            case TokenKind::Slash:
+            case TokenKind::Percent:
+                mContext.requireNumeric(lhsType, "left operand of arithmetic expression");
+                mContext.requireNumeric(rhsType, "right operand of arithmetic expression");
+                mContext.constrain(lhsType, rhsType, "arithmetic operands");
+                return mContext.resolved(lhsType);
+            case TokenKind::Ampersand:
+            case TokenKind::BitOr:
+            case TokenKind::BitXor:
+                mContext.requireInteger(lhsType, "left operand of bitwise expression");
+                mContext.requireInteger(rhsType, "right operand of bitwise expression");
+                if ((mContext.resolved(lhsType)->kind == TypeKind::InferenceVar || isIntegerType(mContext.resolved(lhsType))) &&
+                    (mContext.resolved(rhsType)->kind == TypeKind::InferenceVar || isIntegerType(mContext.resolved(rhsType))))
+                    mContext.constrain(lhsType, rhsType, "bitwise operands");
+                return mContext.resolved(lhsType);
+            case TokenKind::ShiftLeft:
+            case TokenKind::ShiftRight:
+                mContext.requireInteger(lhsType, "left operand of shift expression");
+                mContext.requireInteger(rhsType, "shift count");
+                return mContext.resolved(lhsType);
+            case TokenKind::EqEq:
+            case TokenKind::Neq:
+                mContext.constrain(lhsType, rhsType, "equality operands");
+                return TyBool;
+            case TokenKind::Lt:
+            case TokenKind::LtEq:
+            case TokenKind::Gt:
+            case TokenKind::GtEq:
+                mContext.requireNumeric(lhsType, "left operand of comparison expression");
+                mContext.requireNumeric(rhsType, "right operand of comparison expression");
+                mContext.constrain(lhsType, rhsType, "comparison operands");
+                return TyBool;
+            case TokenKind::AndAnd:
+            case TokenKind::OrOr:
+                mContext.requireBool(lhsType, "left operand of logical expression");
+                mContext.requireBool(rhsType, "right operand of logical expression");
+                return TyBool;
+            default: return TyUnknown;
+        }
+    }
+    if (auto* un = dynamic_cast<UnaryExpr*>(expr)) {
+        TypePtr opType = analyzeExpr(un->operand.get());
+        switch (un->op) {
+            case TokenKind::Minus:
+                mContext.requireNumeric(opType, "unary '-' operand");
+                return opType;
+            case TokenKind::Not:
+                mContext.requireBool(opType, "'!' operand");
+                return TyBool;
+            case TokenKind::Tilde:
+                mContext.requireInteger(opType, "'~' operand");
+                return opType;
+            case TokenKind::Star: {
+                auto resolvedOp = mContext.resolved(opType);
+                if (resolvedOp->kind == TypeKind::InferenceVar) {
+                    auto inner = mContext.mConstraints.fresh();
+                    mContext.constrain(opType, Type::makeReference(inner), "dereference operand");
+                    return inner;
+                }
+                if (resolvedOp->kind == TypeKind::Reference) return resolvedOp->inner;
+                mContext.error("Cannot dereference non-reference type");
+                return TyUnknown;
+            }
+            default: return TyUnknown;
+        }
+    }
+    if (auto* variant = dynamic_cast<VariantConstructExpr*>(expr))
+        return analyzeVariantConstructExpr(variant);
+    if (auto* launch = dynamic_cast<LaunchExpr*>(expr)) return analyzeLaunch(launch);
+    if (auto* call = dynamic_cast<CallExpr*>(expr)) return analyzeCall(call);
+    if (auto* fa = dynamic_cast<FieldAccessExpr*>(expr)) {
+        TypePtr objectType = mContext.resolved(analyzeExpr(fa->object.get()));
+        if (objectType->kind == TypeKind::Reference && objectType->inner)
+            objectType = mContext.resolved(objectType->inner);
+        if (objectType->kind != TypeKind::Struct &&
+            objectType->kind != TypeKind::Record &&
+            objectType->kind != TypeKind::Metadata) {
+            mContext.error("Field access requires a product type, got " + objectType->toString());
+            return TyUnknown;
+        }
+        for (auto& field : objectType->fields) {
+            if (field.name == fa->field) {
+                fa->resultType = mContext.resolved(field.type);
+                if (!objectType->declarationLinkageName.empty())
+                    mContext.recordResolvedReference(
+                        fa->sourcePath, fa->line, fa->col, fa->field.size(),
+                        objectType->declarationLinkageName + "::field::" +
+                            fa->field);
+                return fa->resultType;
+            }
+        }
+        mContext.error("Type '" + objectType->toString() + "' has no field '" + fa->field + "'");
+        return TyUnknown;
+    }
+    if (auto* propagation = dynamic_cast<TryExpr*>(expr))
+        return analyzeTryExpr(propagation);
+    if (auto* ha = dynamic_cast<HeapAllocExpr*>(expr)) {
+        if (mContext.mInKernel) {
+            mContext.error("kernel body may not allocate heap memory with `new`; allocate device memory on the host and pass a borrowed device_buffer parameter",
+                  ha->line, ha->col);
+            return TyUnknown;
+        }
+        ha->allocatedType = ha->allocatedTypeAST
+            ? mContext.resolveTypeAST(ha->allocatedTypeAST.get(), {}) : TyUnknown;
+        if (auto* initCall = dynamic_cast<CallExpr*>(ha->initializer.get())) {
+            TypeVec argumentTypes;
+            for (auto& arg : initCall->args)
+                argumentTypes.push_back(analyzeExpr(arg.get()));
+            if (ha->allocatedType->kind == TypeKind::Struct ||
+                ha->allocatedType->kind == TypeKind::Record) {
+                if (initCall->args.size() != ha->allocatedType->fields.size()) {
+                    mContext.error("Constructor for '" + ha->allocatedType->toString() +
+                          "' expects " + std::to_string(ha->allocatedType->fields.size()) +
+                          " field values");
+                } else {
+                    for (size_t i = 0; i < initCall->args.size(); ++i)
+                        mContext.constrain(argumentTypes[i],
+                                  ha->allocatedType->fields[i].type,
+                                  "field '" + ha->allocatedType->fields[i].name + "' initializer");
+                }
+            } else if (ha->allocatedType->kind == TypeKind::I32 ||
+                       ha->allocatedType->kind == TypeKind::I64 ||
+                       ha->allocatedType->kind == TypeKind::F32 ||
+                       ha->allocatedType->kind == TypeKind::F64 ||
+                       ha->allocatedType->kind == TypeKind::Bool ||
+                       ha->allocatedType->kind == TypeKind::String) {
+                if (argumentTypes.size() != 1)
+                    mContext.error("Primitive allocation requires exactly one initializer");
+                else
+                    mContext.constrain(argumentTypes[0], ha->allocatedType,
+                              "primitive allocation initializer");
+            }
+        }
+        ha->resultType = ha->allocatedType;
+        return ha->resultType;
+    }
+    if (auto* mv = dynamic_cast<MoveExpr*>(expr)) {
+        return analyzeExpr(mv->operand.get());
+    }
+    if (auto* bw = dynamic_cast<BorrowExpr*>(expr)) {
+        TypePtr inner = analyzeExpr(bw->operand.get());
+        return Type::makeReference(inner, bw->isMutable);
+    }
+    if (auto* dr = dynamic_cast<DerefExpr*>(expr)) {
+        TypePtr op = mContext.resolved(analyzeExpr(dr->operand.get()));
+        if (op->kind == TypeKind::InferenceVar) {
+            auto inner = mContext.mConstraints.fresh();
+            mContext.constrain(
+                op, Type::makeReference(inner), "dereference operand");
+            dr->resultType = inner;
+            return inner;
+        }
+        if ((op->kind == TypeKind::Reference ||
+             op->kind == TypeKind::RawPointer) && op->inner) {
+            dr->resultType = mContext.resolved(op->inner);
+            return dr->resultType;
+        }
+        mContext.error("Cannot dereference non-reference or non-raw-pointer type");
+        return TyUnknown;
+    }
+    if (auto* ad = dynamic_cast<AddrOfExpr*>(expr)) {
+        TypePtr op = analyzeExpr(ad->operand.get());
+        return Type::makeReference(op, ad->isMutable);
+    }
+    if (auto* le = dynamic_cast<LambdaExpr*>(expr))
+        return analyzeLambdaExpr(le);
     if (auto* as = dynamic_cast<AssignExpr*>(expr)) {
         TypePtr rhs = analyzeExpr(as->rhs.get());
         TypePtr lhs = analyzeExpr(as->lhs.get());
@@ -2542,26 +2564,7 @@ TypePtr BodyAnalyzer::analyzeSelect(SelectExpr* selection) {
 }
 
 
-TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
-    auto* id = dynamic_cast<IdentifierExpr*>(call->callee.get());
-    if (auto* member = dynamic_cast<FieldAccessExpr*>(call->callee.get()))
-        return analyzeMemberCall(call, member);
-    if (auto* selection = dynamic_cast<SelectExpr*>(call->callee.get())) {
-        auto selected = mContext.resolved(analyzeSelect(selection));
-        if (selected->kind != TypeKind::Function) return TyUnknown;
-        if (selected->paramTypes.size() != call->args.size()) {
-            mContext.error("Argument count mismatch for selected declaration family '" +
-                  selection->targetName + "'", call->line, call->col);
-            return TyUnknown;
-        }
-        for (size_t index = 0; index < call->args.size(); ++index)
-            mContext.constrain(analyzeExpr(call->args[index].get()), selected->paramTypes[index],
-                      "selected call argument " + std::to_string(index + 1));
-        call->resolvedSymbolName = selection->resolvedSymbolName;
-        call->resultType = selected->returnType;
-        return selected->returnType;
-    }
-    if (id) {
+TypePtr BodyAnalyzer::analyzeIntrinsicCall(CallExpr* call, IdentifierExpr* id) {
         if (id->name == "pointer_cast") {
             if (call->typeArgASTs.size() != 1 || call->args.size() != 1) {
                 mContext.error(
@@ -2805,6 +2808,31 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
             }
             return TyBool;
         }
+    return nullptr;
+}
+
+TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
+    auto* id = dynamic_cast<IdentifierExpr*>(call->callee.get());
+    if (auto* member = dynamic_cast<FieldAccessExpr*>(call->callee.get()))
+        return analyzeMemberCall(call, member);
+    if (auto* selection = dynamic_cast<SelectExpr*>(call->callee.get())) {
+        auto selected = mContext.resolved(analyzeSelect(selection));
+        if (selected->kind != TypeKind::Function) return TyUnknown;
+        if (selected->paramTypes.size() != call->args.size()) {
+            mContext.error("Argument count mismatch for selected declaration family '" +
+                  selection->targetName + "'", call->line, call->col);
+            return TyUnknown;
+        }
+        for (size_t index = 0; index < call->args.size(); ++index)
+            mContext.constrain(analyzeExpr(call->args[index].get()), selected->paramTypes[index],
+                      "selected call argument " + std::to_string(index + 1));
+        call->resolvedSymbolName = selection->resolvedSymbolName;
+        call->resultType = selected->returnType;
+        return selected->returnType;
+    }
+    if (id) {
+        if (auto result = analyzeIntrinsicCall(call, id))
+            return result;
     }
     if (id && (id->name == "type_of" || id->name == "type_kind" ||
                id->name == "type_id" || id->name == "type_shape" ||

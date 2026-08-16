@@ -79,6 +79,17 @@ private:
     FlowResult checkBlock(BlockStmt* block);
     FlowResult checkStmt(Stmt* stmt);
     bool checkExpr(Expr* expr);
+    // Large checkStmt branches split out for readability; behavior unchanged.
+    FlowResult checkLetStmt(LetStmt* stmt);
+    FlowResult checkForStmt(ForStmt* stmt);
+    FlowResult checkReturnStmt(ReturnStmt* stmt);
+    FlowResult checkMatchStmt(MatchStmt* stmt);
+    FlowResult checkAbortStmt(AbortStmt* stmt);
+    // Large checkExpr branches split out for readability.
+    bool checkCallExpr(CallExpr* call);
+    bool checkVariantConstruct(VariantConstructExpr* expr);
+    bool checkRecordLiteral(RecordLiteralExpr* expr);
+    bool checkLaunchExpr(LaunchExpr* launch);
     FlowResult checkSlotInvoke(SlotInvokeStmt* slot);
     FlowResult checkFragment(FragmentDecl* fragment, SlotInvokeStmt* slot, bool multiShot);
     bool continuationConsumesCapturedState(const std::vector<std::unordered_map<std::string, VarInfo>>& before) const;
