@@ -2,6 +2,22 @@
 
 ## 0.3.0 — Development
 
+- Fixed intrinsic call type resolution for Sealer canonicalization: the
+  `slice`, `gpu_*`, and `type_*` reflection intrinsics previously returned
+  their result type from Sema without storing it in `call->resultType`, so
+  MoonIR lowering produced CallExpr nodes with empty types. The canonical
+  verifier then rejected `let` bindings initialized by these calls with "let
+  initializer type disagrees with its canonical local". Sema now sets
+  `call->resultType` for `slice`, `gpu_alloc_i32`, `gpu_free`,
+  `gpu_copy_from_host_i32`, `gpu_copy_to_host_i32`, `gpu_load_i32`,
+  `gpu_store_i32`, and all `type_*` reflection intrinsics (in
+  `CompileTimeEvaluator::analyzeReflectionCall`), matching the pattern
+  already used by `pointer_cast`, `drop_callback`, and `range`. Additionally,
+  `MoveExpr` now carries its operand's type in MoonIR lowering, fixing
+  "call argument type disagrees" for move-qualified call arguments.
+  Sealer coverage on valid programs rose from 63/93 (68%) to 73/93 (78%).
+  New canonical tests cover slice intrinsic and reflection call
+  canonicalization end-to-end.
 - Connected the Sealer to the production compiler pipeline behind an
   environment-variable gate: when `LUNA_SEAL_CANONICAL=1` is set,
   `CompilerPipeline` calls `Sealer::sealFunctionBodies` after MoonIR

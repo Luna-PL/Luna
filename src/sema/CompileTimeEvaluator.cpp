@@ -26,7 +26,8 @@ TypePtr CompileTimeEvaluator::analyzeReflectionCall(CallExpr* call, const std::s
             call->compileTimeValue = luna::types::sameShape(lhs, rhs);
         else
             call->compileTimeValue = luna::types::isAbiCompatible(lhs, rhs);
-        return TyBool;
+        call->resultType = TyBool;
+        return call->resultType;
     }
 
     TypePtr type;
@@ -171,11 +172,18 @@ TypePtr CompileTimeEvaluator::analyzeReflectionCall(CallExpr* call, const std::s
 
     if (name == "type_size" || name == "type_alignment" ||
         name == "type_field_count" || name == "type_variant_count" ||
-        name == "type_variant_field_count") return TyI32;
+        name == "type_variant_field_count") {
+        call->resultType = TyI32;
+        return call->resultType;
+    }
     if (name == "type_is_struct" || name == "type_is_enum" ||
         name == "type_is_nominal" || name == "type_is_structural" ||
-        name == "type_is_meta" || name == "type_is_reference") return TyBool;
-    return TyString;
+        name == "type_is_meta" || name == "type_is_reference") {
+        call->resultType = TyBool;
+        return call->resultType;
+    }
+    call->resultType = TyString;
+    return call->resultType;
 }
 
 TypePtr CompileTimeEvaluator::analyzeDeclarationReflectionCall(

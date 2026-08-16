@@ -5398,5 +5398,38 @@ fn main() -> i32 {
             return fail("pipeline sealing gate did not produce a canonical CFG");
     }
 
+    // Intrinsic call type resolution: a `slice` intrinsic call produces a
+    // Slice-typed result. The MoonIR lowering must set the CallExpr type from
+    // the Sema-inferred type so the canonical verifier's let-initializer type
+    // check passes.
+    const std::string sliceSource = R"luna(
+fn main() -> i32 {
+    let values = [10, 20, 30, 40];
+    let middle = slice(borrow values, 1, 3);
+    return middle[1];
+}
+)luna";
+    auto sliceSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        sliceSource, "<slice-sealer>");
+    if (!sliceSnapshot.success())
+        return fail("frontend rejected the slice sealer source");
+    moon::LunaLowerer sliceLowerer;
+    auto sliceModule = sliceLowerer.lower(
+        *sliceSnapshot.program(), *sliceSnapshot.symbolTable());
+    if (!sliceLowerer.errors().empty()) {
+        for (const auto& diagnostic : sliceLowerer.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("MoonIR lowering rejected the slice sealer source");
+    }
+    moon::Sealer sliceSealer;
+    if (!sliceSealer.sealFunctionBodies(*sliceModule) ||
+        !verifier.verify(*sliceModule)) {
+        for (const auto& error : sliceSealer.errors())
+            std::cerr << error << '\n';
+        for (const auto& diagnostic : verifier.errors())
+            std::cerr << diagnostic.message << '\n';
+        return fail("slice intrinsic program did not survive Sealer canonicalization");
+    }
+
     return 0;
 }
