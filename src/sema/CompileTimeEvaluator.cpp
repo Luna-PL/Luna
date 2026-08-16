@@ -258,7 +258,8 @@ TypePtr CompileTimeEvaluator::analyzeDeclarationReflectionCall(
         call->compileTimeDeclarationId = nominalDeclarationIdentity(
             mContext.mProgram, "fn", symbol, selected);
         call->resolvedSymbolName = symbol;
-        return Type::makeDeclarationRef(selectedType);
+        call->resultType = Type::makeDeclarationRef(selectedType);
+        return call->resultType;
     }
 
     if (call->args.size() != 1) {
@@ -292,7 +293,8 @@ TypePtr CompileTimeEvaluator::analyzeDeclarationReflectionCall(
                     luna::types::typeId(reference->inner).value;
         }
     }
-    return TyString;
+    call->resultType = TyString;
+    return call->resultType;
 }
 
 void CompileTimeEvaluator::enterConstScope() { mContext.mConstScopes.emplace_back(); }
