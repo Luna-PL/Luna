@@ -61,7 +61,15 @@
 
 4. **slot/fragment canonicalization** — context_*, fragments, dynamic_fragments, external_fragment_dispatch all fail. Design doc lists this as a separate slice.
 
-5. **materialized recipe full state** — iterator_materialized, iterator_materialized_move_only, iterator_move_only_array fail on move-only consuming source cleanup state.
+5. **materialized recipe full state** — iterator_materialized_move_only and
+   iterator_move_only_array fail on multiple design-gated boundaries:
+   - "move-only consuming arrays require projected canonical cleanup state"
+   - "move-only iterator terminal requires projected source cleanup state"
+   - "cleanup for '$for.recipe.*' has no canonical local"
+   These require implementing guarded array cleanup state (design doc
+   §784-793) in the canonical CFG, which is a dedicated slice.
+   **Partial fix**: `lowerCleanupObligations` now skips materialized
+   iterator binding names, fixing `return_before_consuming`.
 
 6. **move-only iterator terminals** — for_each_move_only, fold_move_only require projected source cleanup state.
 

@@ -5244,6 +5244,13 @@ std::vector<CleanupId> ControlFlowBuilder::lowerCleanupObligations(
     for (const auto& obligation : obligations) {
         LocalId local = lookupLocal(obligation.place);
         if (local.empty()) {
+            // A cleanup obligation for a materialized iterator binding has
+            // no canonical local (the binding is registered in
+            // mMaterializedIterators, not mBindings). Its cleanup is handled
+            // by the source/index/limit state locals; skip the obligation.
+            if (!mMaterializedIterators.empty() &&
+                mMaterializedIterators.back().count(obligation.place))
+                continue;
             // A cleanup obligation for a captured binding has no canonical
             // local (the capture was rewritten to an EnvLoad). The closure
             // value (environment parameter) owns the cleanup, so redirect
