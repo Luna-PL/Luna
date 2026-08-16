@@ -1120,6 +1120,13 @@ TypePtr BodyAnalyzer::analyzeLetStmt(LetStmt* ls, TypePtr expectedReturn) {
                    : (ls->hasInheritedUsage
                           ? ls->inheritedUsage
                           : defaultUsageForType(finalType)));
+        // Usage blocks (linear {}, affine {}) are syntactic sugar that only
+        // constrain newly declared owning bindings. Borrowed bindings
+        // (references) always keep Copy cardinality regardless of the
+        // surrounding block default.
+        if (finalType && finalType->kind == TypeKind::Reference &&
+            !hasExplicitUsage)
+            requestedUsage = luna::ownership::Usage::Copy;
         ls->usage = finalizeBindingUsage(
             ls->name, finalType, ls->initializer.get(),
             requestedUsage, hasExplicitUsage,

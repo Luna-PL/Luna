@@ -2278,10 +2278,15 @@ void OwnershipChecker::define(const std::string& name, TypePtr type, bool isHeap
     info.type = type;
     info.isHeapAllocated = relation == luna::ownership::Relation::Owned &&
         (isHeap || typeRequiresCleanup(type));
+    // Usage blocks (linear {}, affine {}) are syntactic sugar that only
+    // constrain newly declared owning bindings. Borrowed bindings (references)
+    // always keep Copy cardinality regardless of the surrounding block.
     info.usage = (isDeviceBuffer(type) || isEvent(type))
         ? luna::ownership::Usage::Linear
-        : (usage == luna::ownership::Usage::Copy && info.isHeapAllocated
-            ? luna::ownership::Usage::Affine : usage);
+        : (relation != luna::ownership::Relation::Owned
+            ? luna::ownership::Usage::Copy
+            : (usage == luna::ownership::Usage::Copy && info.isHeapAllocated
+                ? luna::ownership::Usage::Affine : usage));
     info.relation = relation;
     info.isReference = isReference;
     info.isMutableReference = isMutableReference;
