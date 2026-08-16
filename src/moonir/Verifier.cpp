@@ -139,17 +139,7 @@ bool validSeparatedName(const std::string& value, const std::string& separator,
 
 } // namespace
 
-bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
-    mErrors.clear();
-    mVerifiedTypeIds.clear();
-    mActiveTypeIds.clear();
-    if (!module.typeTableSealed)
-        error({}, "MoonIR type table must be sealed before CFG verification");
-    if (!graph.sealed)
-        error({}, "MoonIR CFG must be sealed before verification");
-    if (graph.blocks.empty() || graph.regions.empty() || graph.scopes.empty())
-        error({}, "MoonIR CFG is missing a required canonical table");
-
+void Verifier::verifyCanonicalTables(const ControlFlowGraph& graph) {
     const auto checkIndexTable = [this](
         const auto& table, const std::string& name) {
         for (size_t index = 0; index < table.size(); ++index) {
@@ -214,7 +204,9 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             return graph.findScope(ScopeId{index});
         },
         [](const ScopeRecord& scope) { return scope.parent; }, "scope");
+}
 
+void Verifier::verifyRegions(const ControlFlowGraph& graph, const Module& module) {
     std::vector<uint32_t> blockOwners(graph.blocks.size(), 0);
     for (const auto& region : graph.regions) {
         if (region.kind == RegionKind::Fragment) {
@@ -292,6 +284,25 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             error(graph.blocks[index].location,
                   "block " + std::to_string(index) +
                   " must belong to exactly one direct region");
+}
+
+bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
+    mErrors.clear();
+    mVerifiedTypeIds.clear();
+    mActiveTypeIds.clear();
+    if (!module.typeTableSealed)
+        error({}, "MoonIR type table must be sealed before CFG verification");
+    if (!graph.sealed)
+        error({}, "MoonIR CFG must be sealed before verification");
+    if (graph.blocks.empty() || graph.regions.empty() || graph.scopes.empty())
+        error({}, "MoonIR CFG is missing a required canonical table");
+
+    verifyCanonicalTables(graph);
+
+    const auto* entry = graph.findBlock(graph.entry);
+
+    verifyRegions(graph, module);
+
 
     std::vector<uint32_t> localOwners(graph.locals.size(), 0);
     std::vector<uint32_t> cleanupOwners(graph.cleanups.size(), 0);

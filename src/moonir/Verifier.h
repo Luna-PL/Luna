@@ -41,6 +41,11 @@ private:
     void verifyType(const TypeRef& type, const SourceLocation& location,
                     const std::string& context, const Module& module,
                     bool allowTypeParameter = false);
+    // CFG structural invariants: canonical index tables, root anchors, and
+    // parent-chain acyclicity. Split out from verify(CFG) for readability.
+    void verifyCanonicalTables(const ControlFlowGraph& graph);
+    // Region structure and block ownership verification.
+    void verifyRegions(const ControlFlowGraph& graph, const Module& module);
     void error(const SourceLocation& location, const std::string& message);
 
     std::vector<diagnostic::Diagnostic> mErrors;
