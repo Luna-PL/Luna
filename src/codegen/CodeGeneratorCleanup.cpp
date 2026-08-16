@@ -193,6 +193,21 @@ void CodeGenerator::emitResourceContentsCleanup(
                 label + "." + type->fields[index].name);
         return;
     }
+    if (type->kind == TypeKind::Closure) {
+        // A closure value is { code_ptr, env_field1, env_field2, ... }.
+        // Field 0 is the bare code pointer (no cleanup). Each environment
+        // field starts at index 1 and is recursively cleaned when it owns
+        // a cleanup-bearing value (C016 CL010).
+        for (size_t index = 0; index < type->capturedFields.size(); ++index)
+            emitOwnedPayloadCleanup(
+                mBuilder->CreateExtractValue(
+                    value,
+                    {static_cast<unsigned>(index + 1)},
+                    label + ".env"),
+                type->capturedFields[index].type,
+                label + "." + type->capturedFields[index].name);
+        return;
+    }
     if (type->kind == TypeKind::Result && type->typeArgs.size() == 2) {
         llvm::Value* isOk =
             mBuilder->CreateExtractValue(value, {0}, label + ".is_ok");
@@ -271,6 +286,13 @@ void CodeGenerator::emitOwnedPayloadCleanup(
     llvm::Value* value, const TypePtr& type, const std::string& label) {
     if (!value || !type || !typeRequiresCleanup(type)) return;
 
+    // String literals are pointers to immutable global constants; they own
+    // no heap allocation and must not be passed to rt_dealloc. Until the
+    // standard library introduces owned, heap-allocated text, string cleanup
+    // is a no-op.
+    if (type->kind == TypeKind::String || type->kind == TypeKind::CStr)
+        return;
+
     if (type->kind == TypeKind::DeviceBuffer) {
         auto release = mModule->getOrInsertFunction(
             "rt_gpu_free", mHelpers->voidTy(), mHelpers->ptrTy());
@@ -281,7 +303,8 @@ void CodeGenerator::emitOwnedPayloadCleanup(
     if (type->kind == TypeKind::Array ||
         type->kind == TypeKind::Record ||
         type->kind == TypeKind::Result ||
-        type->kind == TypeKind::Enum) {
+        type->kind == TypeKind::Enum ||
+        type->kind == TypeKind::Closure) {
         emitResourceContentsCleanup(value, type, label);
         return;
     }
@@ -401,6 +424,12 @@ void CodeGenerator::emitCleanup(
     TypePtr type;
     auto typed = mLocalTypes.find(place);
     if (typed != mLocalTypes.end()) type = typed->second;
+    // String/cstr literals are immutable global constants and own no heap
+    // allocation. Until the standard library introduces owned text, their
+    // cleanup is a no-op (see emitOwnedPayloadCleanup).
+    if (type && (type->kind == TypeKind::String ||
+                 type->kind == TypeKind::CStr))
+        return;
     if (action == luna::ownership::CleanupAction::ResultDrop) {
         if (!type || type->kind != TypeKind::Result ||
             type->typeArgs.size() != 2) {

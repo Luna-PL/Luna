@@ -537,7 +537,8 @@ inline luna::ownership::Usage defaultUsageForType(const TypePtr& type) {
             item->kind == TypeKind::Enum ||
             item->kind == TypeKind::Array ||
             item->kind == TypeKind::Record ||
-            item->kind == TypeKind::Struct) {
+            item->kind == TypeKind::Struct ||
+            item->kind == TypeKind::Closure) {
             auto usage = item->kind == TypeKind::Struct ||
                     item->sysmeta.resource.needsDrop
                 ? luna::ownership::Usage::Affine
@@ -553,6 +554,9 @@ inline luna::ownership::Usage defaultUsageForType(const TypePtr& type) {
             else if (item->kind == TypeKind::Record ||
                      item->kind == TypeKind::Struct)
                 for (const auto& field : item->fields)
+                    payloads.push_back(field.type);
+            else if (item->kind == TypeKind::Closure)
+                for (const auto& field : item->capturedFields)
                     payloads.push_back(field.type);
             else
                 payloads.push_back(item->inner);

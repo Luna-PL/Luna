@@ -28,4 +28,12 @@ install_manifest.txt
 /tests/fixtures/**/fragment_contracts
 /tests/fixtures/**/control_flow_valid
 /tests/fixtures/**/ffi_aot
+
+# Agent/tooling workspaces that must never enter the tracked inventory.
+/.dsh/
+/.dsh-backup/
+/.dsh-mirror/
+/.npm-cache/
+/.pnpm-home/
+
 .DS_Store

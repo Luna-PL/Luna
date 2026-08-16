@@ -410,6 +410,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `docs/architecture.zh-CN.md`
 - `docs/benchmarks.md`
 - `docs/benchmarks.zh-CN.md`
+- `docs/canonical_cfg_remaining_tasks.md`
 - `docs/cli.md`
 - `docs/cli.zh-CN.md`
 - `docs/compile_time.md`
@@ -719,6 +720,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/kernel_host_effects_invalid.luna`
 - `tests/fixtures/kernel_unused.luna`
 - `tests/fixtures/lambda_capture_copy.luna`
+- `tests/fixtures/lambda_capture_affine_move.luna`
+- `tests/fixtures/lambda_capture_affine_use_after_move.luna`
 - `tests/fixtures/lambda_capture_affine_invalid.luna`
 - `tests/fixtures/lambda_capture_borrowed_invalid.luna`
 - `tests/fixtures/lambda_capture_multiple.luna`

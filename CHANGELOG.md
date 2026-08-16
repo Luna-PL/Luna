@@ -2,6 +2,89 @@
 
 ## 0.3.0 — Development
 
+- Connected the Sealer to the production compiler pipeline behind an
+  environment-variable gate: when `LUNA_SEAL_CANONICAL=1` is set,
+  `CompilerPipeline` calls `Sealer::sealFunctionBodies` after MoonIR
+  verification and before optimization, converting structured function bodies
+  into canonical CFGs. The gate defaults to off, preserving the structured-body
+  backend for all existing tests. Sealer failures produce clear "moon-seal"
+  stage diagnostics. This is the first step toward the item-10 production
+  switchover: it enables incremental testing of the canonical CFG path on real
+  programs without committing to the one-way module switch. A new canonical
+  test exercises the pipeline gate end-to-end and verifies that a sealed
+  module contains canonical CFGs.
+- Enabled Sealer canonicalization of iterator terminals with closure
+  callbacks: `for_each` and `fold` terminals previously required their
+  callable to be `TypeKind::Function`, rejecting `TypeKind::Closure` (lambda
+  callbacks) with "for_each action disagrees with its Copy terminal contract"
+  / "fold reducer disagrees with its accumulator ownership contract". Both
+  terminal checks now accept Closure alongside Function, matching the
+  map/filter adapter relaxation. New Sealer tests cover for_each and fold
+  with lambda callbacks end-to-end.
+- Enabled Sealer canonicalization of programs using compiler intrinsics: calls
+  to `print`, `panic`, `slice`, `new`, `free`, `clone`, `type_*` reflection
+  builtins, `Ok`/`Err`/`is_ok`/`is_err`/`unwrap`/`unwrap_err` result builtins,
+  `pointer_cast`/`drop_callback` FFI builtins, and `gpu_*` heterogeneous
+  compute builtins previously failed canonical CFG construction with
+  "identifier has no canonical local or declaration reference" because these
+  builtins have no MoonIR declaration table row. `ControlFlowBuilder::bindExpr`
+  now skips the local/declaration lookup for CallExpr callees whose names match
+  the known compiler-intrinsic set, and the canonical verifier's
+  `scanGraphIdentifier` likewise skips the DeclarationRef requirement for
+  intrinsic identifiers. The intrinsic sets are kept synchronized between
+  ControlFlowBuilder and Verifier. This unblocks Sealer canonicalization for
+  the majority of production programs that use `print` for output.
+- Enabled Sealer canonicalization of iterator adapters with capturing closures:
+  map/filter adapters that capture Copy locals (e.g. `map(fn(x: &i32) -> i32
+  { return *x + offset; })`) were previously rejected in the canonical CFG
+  with "iterator map/filter requires one canonical capture-free callable".
+  Two restrictions are relaxed: `parseIteratorRecipe` now accepts Closure
+  types (not just Function) for the callable, and `validateIteratorRecipe`'s
+  `commonCallable` check allows Copy-capture closures alongside capture-free
+  functions. A new Sealer test covers end-to-end canonicalization of a
+  capturing-closure map pipeline.
+- Enabled Sealer canonicalization of Copy-array for-each loops: a simple
+  `for v in array_binding` previously failed canonical CFG construction
+  with "materialized iterator recipes require the later canonical subphase"
+  because the MoonIR IdentifierExpr for the array source lacked an inline
+  type (lowering does not always set it), so `parseIteratorRecipe` could
+  not determine the source kind. The parser now resolves the source type
+  from the canonical local table when the identifier's type is empty,
+  letting direct Copy-array for-each enter the consuming-array recipe path
+  and produce a verified canonical CFG. A new Sealer test covers
+  end-to-end canonicalization of a Copy-array for-each with accumulation.
+- Closed the canonical-CFG gap for Non-Copy closure capture (C016 CL010):
+  the Sealer can now build a verified canonical CFG for a lambda that
+  captures an Affine or Linear binding. Three interacting fixes were
+  required. (1) The environment parameter's usage is now derived from the
+  closure type's frozen resource usage instead of being hardcoded to Copy,
+  so an Affine closure environment does not weaken its frozen usage
+  requirement. (2) When the implicit FreeStmt for a captured binding is
+  rewritten to an EnvLoad operand, canonical construction redirects the
+  cleanup to the environment parameter's own cleanup obligation instead of
+  reporting "implicit cleanup does not reference a canonical local"; the
+  return-path cleanup obligations for captured bindings are similarly
+  redirected, and the environment parameter's cleanup is explicitly added
+  to every return edge. (3) The canonical verifier's path-sensitive
+  transfer function now models MakeClosureExpr: each captured value is
+  consumed (its cleanup state deactivated) when it moves into the closure
+  environment, matching the OwnershipChecker's outer-binding consumption.
+  A new Sealer test covers an Affine (string) capture end-to-end through
+  canonical CFG construction and verification.
+- Implemented Non-Copy closure capture (C016 CL010): a capturing lambda can
+  now move an Affine or Linear outer binding into its closure environment.
+  Sema records each capture's original usage, registers it as an owned local
+  inside the lambda scope, and consumes the outer binding so it is
+  unavailable after the closure is constructed. `defaultUsageForType` now
+  treats a Closure with Non-Copy captured fields as Affine. The MoonIR
+  verifier no longer rejects non-Copy or cleanup-bearing capture fields.
+  Codegen recursively cleans closure environment fields through a new
+  Closure case in `emitResourceContentsCleanup`. A pre-existing defect
+  where string/cstr literals were passed to `rt_dealloc` during scope-exit
+  cleanup is fixed: string and cstr cleanup is now a no-op, since string
+  literals are immutable global constants. Positive Affine move capture,
+  negative use-after-move, and the full 51-test suite pass under the
+  strict-warning build and ASan/UBSan.
 - Extended the benchmark surface to 20 CPU workloads and a heterogeneous
   scale sweep. New CPU dimensions (divmod, chase, stream read/write/copy,
   saxpy, sort, hash, find, recursion, rotate) separate scalar compute from

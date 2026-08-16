@@ -179,30 +179,25 @@ bool OwnershipChecker::checkLambda(LambdaExpr* lambda) {
             typeRequiresCleanup(type);
     }
 
-    // Copy captures become ordinary value copies inside the lambda scope:
-    // reads and writes target the captured copy, not the outer binding
-    // (C016 CL003). Affine/Linear captures fail below with a diagnostic.
+    // Captures become owned locals inside the lambda scope. Copy captures
+    // are value copies (C016 CL003); Affine/Linear captures are moved into
+    // the environment, so they keep their outer usage and cleanup obligation
+    // (C016 CL010). Borrowed (Reference) captures remain a later slice.
     for (const auto& capture : lambda->captures) {
         const auto found = mUnavailableLambdaCaptures.find(capture);
         if (found == mUnavailableLambdaCaptures.end()) continue;
-        if (found->second != luna::ownership::Usage::Copy) {
-            error("lambda capture of '" + capture +
-                  "' requires a Copy binding; Affine and Linear captures "
-                  "are not yet supported (C016 CL005)",
-                  lambda->line, lambda->col);
-            return false;
-        }
-        VarInfo copy;
-        copy.name = capture;
-        copy.usage = luna::ownership::Usage::Copy;
-        copy.relation = luna::ownership::Relation::Owned;
+        VarInfo info;
+        info.name = capture;
+        info.usage = found->second;
+        info.relation = luna::ownership::Relation::Owned;
         for (auto it = savedScopes.rbegin();
              it != savedScopes.rend(); ++it) {
             const auto foundOuter = it->find(capture);
             if (foundOuter != it->end()) {
-                copy.type = foundOuter->second.type;
-                if (copy.type &&
-                    copy.type->kind == TypeKind::Reference) {
+                info.type = foundOuter->second.type;
+                info.isHeapAllocated = foundOuter->second.isHeapAllocated;
+                if (info.type &&
+                    info.type->kind == TypeKind::Reference) {
                     error("lambda capture of borrowed binding '" +
                           capture + "' is not yet supported "
                           "(C016 CL005)",
@@ -212,7 +207,7 @@ bool OwnershipChecker::checkLambda(LambdaExpr* lambda) {
                 break;
             }
         }
-        mScopes.back()[capture] = std::move(copy);
+        mScopes.back()[capture] = std::move(info);
     }
 
     FlowResult bodyResult;
@@ -1559,8 +1554,21 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
     if (!expr) return true;
     setDiagnosticLocation(expr);
     if (auto* lambda =
-            dynamic_cast<LambdaExpr*>(expr))
-        return checkLambda(lambda);
+            dynamic_cast<LambdaExpr*>(expr)) {
+        if (!checkLambda(lambda)) return false;
+        // Affine/Linear captures move the outer binding into the closure
+        // environment (C016 CL010). Copy captures do not consume their
+        // source. Consume each move-only capture in the enclosing scope so
+        // the outer binding is unavailable after this expression.
+        for (const auto& capture : lambda->captures) {
+            auto* source = lookup(capture);
+            if (!source) continue;
+            if (source->usage == luna::ownership::Usage::Copy) continue;
+            if (!consume({capture, {}}, "closure capture"))
+                return false;
+        }
+        return true;
+    }
     if (auto* selection = dynamic_cast<SelectExpr*>(expr)) {
         for (auto& arg : selection->selectorArgs) {
             if (!checkExpr(arg.get())) return false;
@@ -1627,16 +1635,6 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
     if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
         auto* var = lookup(id->name);
         if (!var) {
-            const auto captured =
-                mUnavailableLambdaCaptures.find(id->name);
-            if (captured != mUnavailableLambdaCaptures.end() &&
-                captured->second != luna::ownership::Usage::Copy) {
-                error("lambda capture of '" + id->name +
-                      "' requires a Copy binding; Affine and Linear "
-                      "captures are not yet supported (C016 CL005)",
-                      id->line, id->col);
-                return false;
-            }
             return true; // functions are resolved by semantic analysis
         }
         if (!isPlaceAvailable({id->name, {}}, "use")) return false;
