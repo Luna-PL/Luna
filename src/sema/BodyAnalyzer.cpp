@@ -2768,8 +2768,9 @@ TypePtr BodyAnalyzer::analyzeIntrinsicCall(CallExpr* call, IdentifierExpr* id) {
                     call->compileTimeValue = attached;
                 }
             }
-            return id->name == "metadata"
+            call->resultType = id->name == "metadata"
                 ? Type::makeMetadataView(metadataType) : TyBool;
+            return call->resultType;
         }
         auto* symbol = mContext.lookupSymbol(id->name);
         if (symbol && symbol->kind == SymbolKind::Metadata) {

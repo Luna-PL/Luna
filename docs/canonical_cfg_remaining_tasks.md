@@ -75,7 +75,7 @@
 
 7. **heterogeneous compute** — gpu intrinsics now resolve, but heterogeneous example programs fail on kernel/launch CFG construction.
 
-8. **reflection/compile-time** — compile_time, type_relations, type_domains_reflection now pass. static_declaration_reflection still fails (declaration_of intrinsic doesn't set call->resultType for DeclarationRef return type).
+8. **reflection/compile-time** — compile_time, type_relations, type_domains_reflection now pass. static_declaration_reflection still fails: `declaration_of` now sets `call->resultType`, but `let known = declaration_of(...)` creates a DeclarationRef-typed binding that appears in MoonIR as an IdentifierExpr with no local or declaration ref. The DeclarationRef value should be compile-time erased (not appear in MoonIR at all). This requires the DeclarationRef downgrade design change (confirmed by project owner: downgrade from compiler-intrinsic to stdlib/core type that only exists at compile time). **Partially done**: `declaration_of`, `declaration_id`, `declaration_signature`, `metadata`, and `declaration_has_metadata` now set `call->resultType`.
 
 ### P2 — Cleanup
 
