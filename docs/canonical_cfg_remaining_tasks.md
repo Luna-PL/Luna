@@ -4,7 +4,7 @@
 > All items below are 0.3 item-10 canonical-CFG switchover work.
 > Default path (structured body) remains production; `LUNA_SEAL_CANONICAL=1` gates the canonical path.
 
-## Sealer coverage: 76/93 valid programs pass (82%)
+## Sealer coverage: 77/93 valid programs pass (83%)
 
 ## Remaining tasks (by priority)
 
@@ -21,14 +21,15 @@
    - Fix direction: allocation initializer element type resolution in canonical CFG.
 
 3. **"call argument type disagrees with its signature"**
-   - **Partially fixed**: integer-to-integer coercion and string/cstr coercion
-     now allowed in canonical verifier. FFI programs pass.
-   - Remaining: structural_generic_instance_reuse only. Root cause: two
-     nominal structs with identical field layout (`First { value: i32 }` and
-     `Second { value: i32 }`) passed to the same generic function produce a
-     TypeId collision in the MoonIR type table during dual instantiation.
-     Single instantiation works; dual instantiation triggers the mismatch.
-     This is a type-table registration ordering issue, not a coercion gap.
+   - **Fixed**: integer-to-integer coercion, string/cstr coercion, and
+     nominal TypeId propagation through composite types (Function, Closure,
+     Array, Reference, RawPointer, Record, Result, Enum, DeviceBuffer) now
+     work in the canonical verifier. The root cause was
+     `canonicalIdentityImpl` falling back to `canonicalShape` for structural
+     composite types, which erased nominal child distinctions (fn(First) vs
+     fn(Second) collided on TypeId). Now `canonicalIdentityImpl` recursively
+     uses identity for composite children, and Closure identity includes
+     capturedFields.
 
 ### P1 — Feature gaps (designated later slices)
 

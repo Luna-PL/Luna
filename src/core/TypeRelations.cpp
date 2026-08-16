@@ -232,6 +232,73 @@ std::string canonicalIdentityImpl(const TypePtr& type) {
             appendPart(result, canonicalShape(type));
         return result;
     }
+    // Structural composite types (Function, Closure, Slot, Fragment, Array,
+    // Record, Result, Enum, Reference, RawPointer, DeviceBuffer, Slice) fall
+    // through to here. Their identity must distinguish nominal children:
+    // fn(First) and fn(Second) are different types even when First and Second
+    // share the same structural shape. Use canonicalIdentityImpl for the
+    // composite's children so nominal TypeIds propagate into the parent.
+    if (type->kind == TypeKind::Function ||
+        type->kind == TypeKind::Closure) {
+        for (size_t index = 0; index < type->paramTypes.size(); ++index) {
+            const luna::ownership::Contract contract =
+                index < type->paramContracts.size()
+                    ? type->paramContracts[index] : luna::ownership::Contract{};
+            appendPart(result, std::string(luna::ownership::relationName(contract.relation)));
+            appendPart(result, std::string(luna::ownership::usageName(contract.usage)));
+            appendPart(result, canonicalIdentityImpl(type->paramTypes[index]));
+        }
+        appendPart(result, std::string(luna::ownership::relationName(
+            type->returnContract.relation)));
+        appendPart(result, std::string(luna::ownership::usageName(
+            type->returnContract.usage)));
+        appendPart(result, canonicalIdentityImpl(type->returnType));
+        if (type->kind == TypeKind::Closure) {
+            for (const auto& field : type->capturedFields) {
+                appendPart(result, field.name);
+                appendPart(result, canonicalIdentityImpl(field.type));
+            }
+        }
+        return result;
+    }
+    if (type->kind == TypeKind::Array && type->inner) {
+        appendPart(result, std::to_string(type->arrayLength));
+        appendPart(result, canonicalIdentityImpl(type->inner));
+        return result;
+    }
+    if (type->kind == TypeKind::Reference && type->inner) {
+        appendPart(result, type->isMutable ? "mutable" : "shared");
+        appendPart(result, canonicalIdentityImpl(type->inner));
+        return result;
+    }
+    if (type->kind == TypeKind::RawPointer && type->inner) {
+        appendPart(result, canonicalIdentityImpl(type->inner));
+        return result;
+    }
+    if (type->kind == TypeKind::Record) {
+        for (const auto& field : type->fields) {
+            appendPart(result, field.name);
+            appendPart(result, canonicalIdentityImpl(field.type));
+        }
+        return result;
+    }
+    if (type->kind == TypeKind::Result) {
+        for (const auto& argument : type->typeArgs)
+            appendPart(result, canonicalIdentityImpl(argument));
+        return result;
+    }
+    if (type->kind == TypeKind::Enum) {
+        for (const auto& variant : type->variants) {
+            appendPart(result, variant.name);
+            for (const auto& field : variant.fields)
+                appendPart(result, canonicalIdentityImpl(field));
+        }
+        return result;
+    }
+    if (type->kind == TypeKind::DeviceBuffer && type->inner) {
+        appendPart(result, canonicalIdentityImpl(type->inner));
+        return result;
+    }
     appendPart(result, canonicalShape(type));
     return result;
 }
