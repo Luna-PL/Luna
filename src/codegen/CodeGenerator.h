@@ -108,6 +108,41 @@ private:
     std::array<llvm::Value*, 4> generateExternalFragmentInvocation(
         moon::SlotInvokeStmt* slot, llvm::Function* func, llvm::Value* selected);
     llvm::Value* generateExpr(moon::Expr* expr);
+    // Literal expression emitters. Split out from generateExpr so each AST
+    // node has one home; behavior is unchanged.
+    llvm::Value* generateIntLiteral(moon::IntLiteralExpr* expr);
+    llvm::Value* generateFloatLiteral(moon::FloatLiteralExpr* expr);
+    llvm::Value* generateStringLiteral(moon::StringLiteralExpr* expr);
+    llvm::Value* generateBoolLiteral(moon::BoolLiteralExpr* expr);
+    llvm::Value* generateUnitLiteral(moon::UnitExpr* expr);
+    llvm::Value* generateArrayLiteral(moon::ArrayLiteralExpr* expr);
+    // Value-access expression emitters.
+    llvm::Value* generateIdentifier(moon::IdentifierExpr* expr);
+    llvm::Value* generateDynamicSelect(moon::DynamicSelectExpr* expr);
+    llvm::Value* generateFieldAccess(moon::FieldAccessExpr* expr);
+    llvm::Value* generateSliceLength(moon::SliceLengthExpr* expr);
+    llvm::Value* generateIndex(moon::IndexExpr* expr);
+    // Arithmetic expression emitters.
+    llvm::Value* generateBinary(moon::BinaryExpr* expr);
+    llvm::Value* generateUnary(moon::UnaryExpr* expr);
+    // Construct expression emitters.
+    llvm::Value* generateVariantConstruct(moon::VariantConstructExpr* expr);
+    llvm::Value* generateResultConstruct(moon::ResultConstructExpr* expr);
+    llvm::Value* generateRecordLiteral(moon::RecordLiteralExpr* expr);
+    llvm::Value* generateInitAllocation(moon::InitAllocationExpr* expr);
+    llvm::Value* generateHeapAlloc(moon::HeapAllocExpr* expr);
+    // Call/launch expression emitters.
+    llvm::Value* generateCall(moon::CallExpr* expr);
+    // Control-flow and ownership expression emitters.
+    llvm::Value* generateTry(moon::TryExpr* expr);
+    llvm::Value* generateAssign(moon::AssignExpr* expr);
+    llvm::Value* generateMove(moon::MoveExpr* expr);
+    llvm::Value* generateBorrow(moon::BorrowExpr* expr);
+    llvm::Value* generateDeref(moon::DerefExpr* expr);
+    llvm::Value* generateAddrOf(moon::AddrOfExpr* expr);
+    llvm::Value* generateLambda(moon::LambdaExpr* expr);
+    llvm::Value* generateEnvLoad(moon::EnvLoadExpr* expr);
+    llvm::Value* generateMakeClosure(moon::MakeClosureExpr* expr);
     bool buildIteratorPlan(moon::Expr* expr, IteratorPlan& plan);
     bool materializeIteratorBinding(
         const std::string& name,
