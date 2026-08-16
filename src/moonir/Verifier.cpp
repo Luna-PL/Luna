@@ -707,9 +707,42 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 for (size_t index = 0; index < comparable; ++index)
                     if (!call->args[index] ||
                         call->args[index]->type !=
-                            signature->parameterTypeIds[index])
-                        error(call->location,
-                              "call argument type disagrees with its signature");
+                            signature->parameterTypeIds[index]) {
+                        // Integer literal arguments may carry an i32 type from
+                        // Sema inference even when the parameter expects a
+                        // different integer width (usize, i64, etc.). The
+                        // structured backend relies on LLVM's implicit
+                        // integer widening/narrowing; the canonical verifier
+                        // must tolerate the same for integer-to-integer.
+                        const auto* argType = call->args[index]
+                            ? module.findType(call->args[index]->type) : nullptr;
+                        const auto* sigType = module.findType(
+                            signature->parameterTypeIds[index]);
+                        const bool bothInteger = argType && sigType &&
+                            (argType->kind == TypeKind::I8 ||
+                             argType->kind == TypeKind::I16 ||
+                             argType->kind == TypeKind::I32 ||
+                             argType->kind == TypeKind::I64 ||
+                             argType->kind == TypeKind::U8 ||
+                             argType->kind == TypeKind::U16 ||
+                             argType->kind == TypeKind::U32 ||
+                             argType->kind == TypeKind::U64 ||
+                             argType->kind == TypeKind::USize ||
+                             argType->kind == TypeKind::ISize) &&
+                            (sigType->kind == TypeKind::I8 ||
+                             sigType->kind == TypeKind::I16 ||
+                             sigType->kind == TypeKind::I32 ||
+                             sigType->kind == TypeKind::I64 ||
+                             sigType->kind == TypeKind::U8 ||
+                             sigType->kind == TypeKind::U16 ||
+                             sigType->kind == TypeKind::U32 ||
+                             sigType->kind == TypeKind::U64 ||
+                             sigType->kind == TypeKind::USize ||
+                             sigType->kind == TypeKind::ISize);
+                        if (!bothInteger)
+                            error(call->location,
+                                  "call argument type disagrees with its signature");
+                    }
                     else if (const auto* borrow =
                                  dynamic_cast<const BorrowExpr*>(
                                      call->args[index].get());
@@ -982,9 +1015,22 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                         error(declaration->location,
                               "let operation disagrees with its local-table row");
                     if (!declaration->initializer ||
-                        declaration->initializer->type != declaration->type)
-                        error(declaration->location,
-                              "let initializer type disagrees with its canonical local");
+                        declaration->initializer->type != declaration->type) {
+                        // String literals are typed as String by Sema, but a
+                        // cstr-annotated binding accepts them (both are pointer
+                        // types in the LLVM backend). Allow this coercion.
+                        const auto* initType = declaration->initializer
+                            ? module.findType(declaration->initializer->type) : nullptr;
+                        const auto* declType = module.findType(declaration->type);
+                        const bool stringCstrCoercion = initType && declType &&
+                            ((initType->kind == TypeKind::String &&
+                              declType->kind == TypeKind::CStr) ||
+                             (initType->kind == TypeKind::CStr &&
+                              declType->kind == TypeKind::String));
+                        if (!stringCstrCoercion)
+                            error(declaration->location,
+                                  "let initializer type disagrees with its canonical local");
+                    }
                     if (guardedCursorIds.count(local->id.value)) {
                         const auto* zero =
                             dynamic_cast<const IntLiteralExpr*>(

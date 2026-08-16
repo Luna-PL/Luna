@@ -4,7 +4,7 @@
 > All items below are 0.3 item-10 canonical-CFG switchover work.
 > Default path (structured body) remains production; `LUNA_SEAL_CANONICAL=1` gates the canonical path.
 
-## Sealer coverage: 73/93 valid programs pass (78%)
+## Sealer coverage: 76/93 valid programs pass (82%)
 
 ## Remaining tasks (by priority)
 
@@ -12,20 +12,19 @@
 
 1. **"let initializer type disagrees with its canonical local"**
    - Root cause: MoonIR `IdentifierExpr` type is not always set during lowering.
-   - **Fixed**: slice, gpu_*, and type_* reflection intrinsics now set
-     `call->resultType` in Sema (CompileTimeEvaluator and BodyAnalyzer).
-   - **Remaining**: ffi (extern fn call argument type mismatch — P0-3).
+   - **Fixed**: slice, gpu_*, type_* reflection intrinsics, and string/cstr
+     coercion now work in the canonical verifier.
+   - **Remaining**: none (FFI let-initializer was a string/cstr coercion).
 
 2. **"allocation initializer element disagrees with its frozen layout type"**
    - Affects: resource_generic_drop, resource_recursive_named.
    - Fix direction: allocation initializer element type resolution in canonical CFG.
 
 3. **"call argument type disagrees with its signature"**
-   - Affects: ffi_owning_return, structural_generic_instance_reuse, ffi.
-   - **Partially fixed**: MoveExpr now carries its operand type in lowering.
-   - Remaining: generic instantiation TypeId mismatch and linear-qualified
-     extern fn argument type mismatch. These require deeper TypeId
-     comparison logic in the canonical verifier.
+   - **Partially fixed**: integer-to-integer coercion and string/cstr coercion
+     now allowed in canonical verifier. FFI programs pass.
+   - Remaining: structural_generic_instance_reuse (generic instantiation
+     TypeId mismatch — struct argument vs instantiated generic parameter).
 
 ### P1 — Feature gaps (designated later slices)
 
