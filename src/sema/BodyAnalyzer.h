@@ -50,4 +50,17 @@ private:
         const std::string& name, const TypePtr& type, Expr* initializer,
         luna::ownership::Usage requested, bool isExplicit,
         int line, int column);
+
+    // Large analyzeStmt/analyzeExpr branches split out for readability;
+    // behavior unchanged.
+    TypePtr analyzeLetStmt(LetStmt* stmt, TypePtr expectedReturn);
+    TypePtr analyzeMatchStmt(MatchStmt* stmt, TypePtr expectedReturn);
+    TypePtr analyzeForStmt(ForStmt* stmt, TypePtr expectedReturn);
+    TypePtr analyzeLambdaExpr(LambdaExpr* expr);
+    TypePtr analyzeVariantConstructExpr(VariantConstructExpr* expr);
+    TypePtr analyzeRecordLiteralExpr(RecordLiteralExpr* expr);
+    TypePtr analyzeTryExpr(TryExpr* expr);
+    // Intrinsic/builtin call handling split out from analyzeCall.
+    // Returns nullptr if the call is not a recognized intrinsic.
+    TypePtr analyzeIntrinsicCall(CallExpr* call, IdentifierExpr* id);
 };
