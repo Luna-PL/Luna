@@ -4,7 +4,7 @@
 > All items below are 0.3 item-10 canonical-CFG switchover work.
 > Default path (structured body) remains production; `LUNA_SEAL_CANONICAL=1` gates the canonical path.
 
-## Sealer coverage: 77/93 valid programs pass (83%)
+## Sealer coverage: 81/93 valid programs pass (87%)
 
 ## Remaining tasks (by priority)
 
@@ -41,7 +41,7 @@
 
 7. **heterogeneous compute** — gpu intrinsics now resolve, but heterogeneous example programs fail on kernel/launch CFG construction.
 
-8. **reflection/compile-time** — compile_time, type_relations, type_domains_reflection, static_declaration_reflection fail on unresolved reflection intrinsics that should be compile-time erased.
+8. **reflection/compile-time** — compile_time, type_relations, type_domains_reflection now pass. static_declaration_reflection still fails (declaration_of intrinsic doesn't set call->resultType for DeclarationRef return type).
 
 ### P2 — Cleanup
 
