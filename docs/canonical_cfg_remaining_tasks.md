@@ -4,9 +4,33 @@
 > All items below are 0.3 item-10 canonical-CFG switchover work.
 > Default path (structured body) remains production; `LUNA_SEAL_CANONICAL=1` gates the canonical path.
 
-## Sealer coverage: 84/93 valid programs pass (90%)
+## Sealer coverage: 85/93 valid programs pass (91%)
 
 ## Remaining tasks (by priority)
+
+### Design decisions (confirmed by project owner)
+
+- **`linear {}` / `affine {}` usage blocks are syntactic sugar**: they only
+  constrain the usage of *newly declared* bindings within the block. Borrowed
+  bindings (references) are unaffected — a `&T` inside a `linear {}` block
+  remains Copy cardinality. The canonical verifier's check
+  `relation != Owned → usage == Copy` is correct and should not be relaxed.
+  The `usage_blocks` fixture tests this sugar on borrowed bindings; if it
+  fails, the fixture or the OwnershipChecker needs adjustment, not the
+  canonical verifier.
+
+- **`DeclarationRef` type should be downgraded from compiler-intrinsic to a
+  stdlib/core type**: `declaration_of`, `declaration_id`, `declaration_name`,
+  etc. should not be compiler builtins. Instead, a `Declaration` type should
+  exist as a core or stdlib type that only exists at compile time (erased
+  before runtime). This is a larger design change and does not need to be
+  fully completed in this session. For now, `static_declaration_reflection`
+  remains a known gap.
+
+- **Unreachable CFG blocks from context/fragment should be avoided at
+  construction time**, not tolerated by the verifier. The CFG builder should
+  not create blocks that become unreachable after a `return` from a context
+  continuation. This is part of the slot/fragment canonicalization slice.
 
 ### P0 — Blockers for production switchover
 
