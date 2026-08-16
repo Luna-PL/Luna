@@ -2,6 +2,19 @@
 
 ## 0.3.0 — Development
 
+- Fixed nominal TypeId propagation through composite types in
+  `canonicalIdentityImpl`: structural composite types (Function, Closure,
+  Array, Reference, RawPointer, Record, Result, Enum, DeviceBuffer)
+  previously fell back to `canonicalShape` for their identity, which erased
+  nominal child distinctions. Two functions `fn(First)` and `fn(Second)`
+  collided on the same TypeId even though `First` and `Second` are distinct
+  nominal types, causing "conflicting frozen payloads" or "call argument
+  type disagrees" in the canonical verifier. `canonicalIdentityImpl` now
+  recursively uses identity for composite children, and Closure identity
+  includes capturedFields. This matches the language design: named types are
+  nominal by default, and a composite type's identity must distinguish
+  nominal children even when their structural shapes coincide. Sealer
+  coverage on valid programs rose from 76/93 (82%) to 77/93 (83%).
 - Fixed intrinsic call type resolution for Sealer canonicalization: the
   `slice`, `gpu_*`, and `type_*` reflection intrinsics previously returned
   their result type from Sema without storing it in `call->resultType`, so
