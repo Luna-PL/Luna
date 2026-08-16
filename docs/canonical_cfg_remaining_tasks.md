@@ -23,8 +23,12 @@
 3. **"call argument type disagrees with its signature"**
    - **Partially fixed**: integer-to-integer coercion and string/cstr coercion
      now allowed in canonical verifier. FFI programs pass.
-   - Remaining: structural_generic_instance_reuse (generic instantiation
-     TypeId mismatch — struct argument vs instantiated generic parameter).
+   - Remaining: structural_generic_instance_reuse only. Root cause: two
+     nominal structs with identical field layout (`First { value: i32 }` and
+     `Second { value: i32 }`) passed to the same generic function produce a
+     TypeId collision in the MoonIR type table during dual instantiation.
+     Single instantiation works; dual instantiation triggers the mismatch.
+     This is a type-table registration ordering issue, not a coercion gap.
 
 ### P1 — Feature gaps (designated later slices)
 
