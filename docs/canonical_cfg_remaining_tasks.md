@@ -4,7 +4,7 @@
 > All items below are 0.3 item-10 canonical-CFG switchover work.
 > Default path (structured body) remains production; `LUNA_SEAL_CANONICAL=1` gates the canonical path.
 
-## Sealer coverage: 85/93 valid programs pass (91%)
+## Sealer coverage: 86/93 valid programs pass (93%)
 
 ## Remaining tasks (by priority)
 
@@ -79,7 +79,11 @@
 
 - **String/CStr cleanup no-op**: `typeRequiresCleanup(String)=true` but string literals are global constants. Cleanup is a no-op in `emitOwnedPayloadCleanup` and `emitCleanup`. When the stdlib introduces heap-allocated text, this must be revisited.
 - **Dead loads at -O0**: String cleanup early-return generates unused `CreateLoad` instructions. Harmless; eliminated at `-O2+`.
-- **Canonical path duplicate intrinsic sets**: `ControlFlowBuilder::bindExpr` and `Verifier::scanGraphIdentifier` maintain separate `unordered_set<string>` of intrinsic names. These must be kept in sync manually. A future refactor should extract a single shared constant.
+- **Canonical path duplicate intrinsic sets**: **Fixed**. The intrinsic name
+  sets in `ControlFlowBuilder::bindExpr`, `Verifier::scanGraphIdentifier`,
+  and `hoistOrderedOperand` are now unified into a single shared function
+  `moon::isCompilerIntrinsicName()` declared in `MoonIR.h` and defined in
+  `MoonIR.cpp`.
 - **env-var gate TOCTOU**: `std::getenv` is called once and the result is checked immediately. No security impact (compiler flag, not auth), but a race could theoretically flip the value between read and use. Acceptable for a development gate.
 
 ## Completed slices (this session)

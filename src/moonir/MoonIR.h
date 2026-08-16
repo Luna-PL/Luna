@@ -989,4 +989,10 @@ const char* terminatorKindName(TerminatorKind kind);
 const char* typeDomainName(luna::types::TypeDomain domain);
 const char* identityModeName(luna::types::IdentityMode mode);
 
+// The complete set of compiler intrinsic names that have no MoonIR
+// declaration table row. Shared by the ControlFlowBuilder and Verifier so
+// the canonical path does not reject intrinsic callees as unresolved
+// identifiers. Keeping this in one place prevents drift.
+bool isCompilerIntrinsicName(const std::string& name);
+
 } // namespace moon
