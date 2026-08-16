@@ -14,10 +14,11 @@
   `CompileTimeEvaluator::analyzeReflectionCall`), matching the pattern
   already used by `pointer_cast`, `drop_callback`, and `range`. Additionally,
   `MoveExpr` now carries its operand's type in MoonIR lowering, fixing
-  "call argument type disagrees" for move-qualified call arguments.
-  Sealer coverage on valid programs rose from 63/93 (68%) to 73/93 (78%).
-  New canonical tests cover slice intrinsic and reflection call
-  canonicalization end-to-end.
+  "call argument type disagrees" for move-qualified call arguments. The
+  canonical verifier now tolerates integer-to-integer coercion (i32 literal
+  to usize/i64 parameter) and string/cstr coercion, matching the structured
+  backend's implicit conversions. Sealer coverage on valid programs rose
+  from 63/93 (68%) to 76/93 (82%).
 - Connected the Sealer to the production compiler pipeline behind an
   environment-variable gate: when `LUNA_SEAL_CANONICAL=1` is set,
   `CompilerPipeline` calls `Sealer::sealFunctionBodies` after MoonIR
