@@ -619,8 +619,25 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                     error(identifier.location,
                           "synthetic affine local is read without transfer");
             } else if (identifier.declaration.empty()) {
-                error(identifier.location,
-                      "identifier has no canonical LocalId or DeclarationRef");
+                // Compiler intrinsics (print, panic, slice, etc.) have no
+                // declaration table row. Their callee identifiers appear in
+                // sealed CFG CallExprs without a LocalId or DeclarationRef.
+                static const std::unordered_set<std::string> compilerIntrinsics = {
+                    "print", "panic", "slice", "new", "free", "clone",
+                    "type_size", "type_alignment", "type_field_count",
+                    "type_field_name", "type_field_type", "type_variant_count",
+                    "type_variant_name", "type_is_struct", "type_is_enum",
+                    "type_is_result", "type_is_array", "type_is_closure",
+                    "type_is_reference", "type_is_optional",
+                    "is_ok", "is_err", "unwrap", "unwrap_err",
+                    "Ok", "Err", "pointer_cast", "drop_callback",
+                    "gpu_alloc_i32", "gpu_copy_from_host_i32",
+                    "gpu_copy_to_host_i32", "gpu_free",
+                    "gpu_load_i32", "gpu_store_i32",
+                };
+                if (!compilerIntrinsics.count(identifier.name))
+                    error(identifier.location,
+                          "identifier has no canonical LocalId or DeclarationRef");
             }
         };
     std::function<void(const Expr*, const BasicBlock&)> scanGraphExpr;
@@ -1546,6 +1563,16 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         } else if (const auto* allocation =
                        dynamic_cast<const HeapAllocExpr*>(expression)) {
             transferExpr(allocation->initializer.get(), state);
+        } else if (const auto* closure =
+                       dynamic_cast<const MakeClosureExpr*>(expression)) {
+            // Each captured value is moved into the closure environment and
+            // its cleanup obligation transfers to the closure value (C016 CL010).
+            for (const auto& value : closure->capturedValues) {
+                transferExpr(value.get(), state);
+                if (auto place = placeOf(value.get()))
+                    consumePlace(*place, state, value->location,
+                                 "closure capture");
+            }
         } else if (const auto* borrow =
                        dynamic_cast<const BorrowExpr*>(expression)) {
             transferExpr(borrow->operand.get(), state);
@@ -3340,13 +3367,6 @@ void Verifier::verifyType(const TypeRef& reference,
         verifyType(field.type, location,
                    context + ".capture." + field.name, module,
                    allowTypeParameter);
-        const auto* capturedType = module.findType(field.type);
-        if (capturedType &&
-            (capturedType->sysmeta.resource.usage !=
-                 luna::ownership::Usage::Copy ||
-             capturedType->sysmeta.resource.cleanupRequired))
-            error(location,
-                  context + " has a non-Copy or cleanup-bearing capture field");
     }
     for (const auto& variant : type->variants)
         for (const auto& field : variant.fields)

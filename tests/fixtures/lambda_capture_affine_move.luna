@@ -1,0 +1,8 @@
+fn main() -> i32 {
+    let captured = "luna";
+    let read = fn() -> i32 {
+        print(captured);
+        return 1;
+    };
+    return read();
+}

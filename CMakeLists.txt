@@ -204,6 +204,8 @@ add_executable(moonir-canonical-test
     src/codegen/CodeGeneratorStatements.cpp
     src/runtime/ApplicationHostServices.cpp
     src/runtime/Runtime.cpp
+    src/driver/CompilerPipeline.cpp
+    src/moonir/Optimizer.cpp
     $<TARGET_OBJECTS:luna-frontend>
 )
 target_include_directories(moonir-canonical-test

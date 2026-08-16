@@ -2,8 +2,10 @@
 
 #include "moonir/Lowering.h"
 #include "moonir/Optimizer.h"
+#include "moonir/Sealer.h"
 #include "moonir/Verifier.h"
 
+#include <cstdlib>
 #include <utility>
 
 namespace luna::driver {
@@ -68,6 +70,30 @@ bool CompilerPipeline::lowerAnalyzedProgram(
     moon::Verifier verifier;
     if (!verifier.verify(*mMoonModule))
         return fail(verifier.errors(), "moon-verify");
+
+    // Optional canonical sealing gate (C016 / item 10). When
+    // LUNA_SEAL_CANONICAL=1 is set, the Sealer converts structured function
+    // bodies into canonical CFGs before optimization. This is an incremental
+    // testing path: the structured-body backend remains the default until the
+    // canonical path covers the full program surface.
+    if (const char* sealEnv = std::getenv("LUNA_SEAL_CANONICAL")) {
+        if (sealEnv[0] == '1' && sealEnv[1] == '\0') {
+            moon::Sealer sealer;
+            if (!sealer.sealFunctionBodies(*mMoonModule)) {
+                std::vector<diagnostic::Diagnostic> sealErrors;
+                for (const auto& message : sealer.errors()) {
+                    diagnostic::Diagnostic diag;
+                    diag.phase = "moon-seal";
+                    diag.code = diagnostic::errorCode("moon", message);
+                    diag.message = message;
+                    sealErrors.push_back(std::move(diag));
+                }
+                return fail(sealErrors, "moon-seal");
+            }
+            if (!verifier.verify(*mMoonModule))
+                return fail(verifier.errors(), "moon-verify");
+        }
+    }
 
     moon::OptimizationLevel moonOptimizationLevel =
         moon::OptimizationLevel::None;

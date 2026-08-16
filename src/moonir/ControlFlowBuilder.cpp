@@ -767,9 +767,15 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
 
     pushBindings();
     if (!mCaptureEnvParamName.empty()) {
+        // The environment parameter's usage must match the closure type's
+        // inherent usage. A closure with Non-Copy captured fields is Affine,
+        // and the environment parameter cannot weaken that (C016 CL010).
+        luna::ownership::Usage envUsage = luna::ownership::Usage::Copy;
+        if (const auto* closureType = mModule->findType(mCaptureClosureType))
+            envUsage = closureType->sysmeta.resource.usage;
         mCaptureEnvLocal = addLocal(
             rootScope, LocalKind::Parameter, mCaptureEnvParamName,
-            mCaptureClosureType, luna::ownership::Usage::Copy,
+            mCaptureClosureType, envUsage,
             luna::ownership::Relation::Owned);
         if (mCaptureEnvLocal.empty()) {
             mGraph = nullptr;
@@ -1034,6 +1040,29 @@ ControlFlowBuilder::lowerStatement(
                 std::move(statement));
             return current;
         }
+        // After capture-read rewriting, an implicit FreeStmt for a captured
+        // binding has an EnvLoadExpr operand. The captured binding's cleanup
+        // is owned by the closure value (the environment parameter), not by
+        // the lambda function. Redirect the cleanup to the environment
+        // parameter's own cleanup obligation (C016 CL010).
+        auto* envLoad = dynamic_cast<EnvLoadExpr*>(release->operand.get());
+        if (envLoad) {
+            if (mCaptureEnvLocal.empty())
+                return current; // no environment parameter to clean
+            const auto* closureType =
+                mModule->findType(mGraph->locals[
+                    mCaptureEnvLocal.value].type);
+            if (!closureType ||
+                !closureType->sysmeta.resource.cleanupRequired)
+                return current;
+            const CleanupId cleanup = addCleanup(
+                mCaptureEnvLocal,
+                mGraph->locals[mCaptureEnvLocal.value].type,
+                closureType->sysmeta.resource.cleanup,
+                CleanupKind::Value);
+            if (!cleanup.empty()) current.cleanups.push_back(cleanup);
+            return current;
+        }
         auto* identifier = dynamic_cast<IdentifierExpr*>(
             release->operand.get());
         if (!identifier || identifier->local.empty()) {
@@ -1068,6 +1097,23 @@ ControlFlowBuilder::lowerStatement(
         current = std::move(*normalized);
         if (!bindExpr(returned->value.get())) return std::nullopt;
         auto cleanups = lowerCleanupObligations(returned->cleanups, scope);
+        // The closure environment parameter is an owned local whose cleanup
+        // must run on every exit edge, including return. It is not in the
+        // structured return-cleanup list because the OwnershipChecker does not
+        // know about the synthetic environment parameter (C016 CL010).
+        if (!mCaptureEnvLocal.empty()) {
+            const auto* closureType = mModule->findType(
+                mGraph->locals[mCaptureEnvLocal.value].type);
+            if (closureType &&
+                closureType->sysmeta.resource.cleanupRequired) {
+                const CleanupId envCleanup = addCleanup(
+                    mCaptureEnvLocal,
+                    mGraph->locals[mCaptureEnvLocal.value].type,
+                    closureType->sysmeta.resource.cleanup,
+                    CleanupKind::Value);
+                if (!envCleanup.empty()) cleanups.push_back(envCleanup);
+            }
+        }
         cleanups.insert(cleanups.end(), current.cleanups.begin(),
                         current.cleanups.end());
         cleanups.insert(cleanups.end(),
@@ -1611,6 +1657,18 @@ bool ControlFlowBuilder::parseIteratorRecipe(
                 return true;
             }
         }
+        // Resolve the source type from the canonical local table when the
+        // MoonIR identifier lacks an inline type (lowering does not always
+        // set it). This lets a direct `for v in array_binding` enter the
+        // canonical recipe path without hitting the materialized-recipe gate.
+        if (const auto* identifier =
+                dynamic_cast<const IdentifierExpr*>(expression.get())) {
+            if (expression->type.empty() && !identifier->name.empty()) {
+                const LocalId local = lookupLocal(identifier->name);
+                if (!local.empty() && local.value < mGraph->locals.size())
+                    expression->type = mGraph->locals[local.value].type;
+            }
+        }
         const auto* sourceType = mModule->findType(expression->type);
         if (!sourceType ||
             (sourceType->kind != TypeKind::Array &&
@@ -1725,13 +1783,15 @@ bool ControlFlowBuilder::parseIteratorRecipe(
         if (call->iteratorOp == IteratorOp::Filter)
             for (const auto& type : mModule->typeTable)
                 if (type.kind == TypeKind::Bool) expectedResult = type.id;
-        if (!closure || closure->kind != TypeKind::Function ||
+        if (!closure ||
+            (closure->kind != TypeKind::Function &&
+             closure->kind != TypeKind::Closure) ||
             closure->parameterTypeIds != TypeRefVec{inputType} ||
             closure->returnTypeId != expectedResult ||
             (call->iteratorOp == IteratorOp::Filter &&
              outputType != inputType)) {
             error(location,
-                  "iterator map/filter requires one canonical capture-free callable");
+                  "iterator map/filter requires one canonical callable");
             return false;
         }
         plan.steps.push_back({call->iteratorOp, std::move(callable), {},
@@ -1905,13 +1965,22 @@ bool ControlFlowBuilder::validateIteratorRecipe(
         const auto* callable = mModule->findType(argumentType);
         const auto* lambda = step.argument
             ? dynamic_cast<const LambdaExpr*>(step.argument.get()) : nullptr;
+        // A capture-free callable is a Function type. A Copy-capture closure
+        // is a Closure type whose environment fields are all Copy. Both are
+        // acceptable as canonical map/filter adapters (C016 CL010 extends
+        // closure capture to iterator recipes).
+        const bool copyCaptureClosure = lambda && callable &&
+            callable->kind == TypeKind::Closure &&
+            !lambda->captures.empty() &&
+            argumentType == lambda->closureType;
         const bool commonCallable = input && output && callable &&
             step.inputType == currentItemType &&
-            callable->kind == TypeKind::Function &&
+            (callable->kind == TypeKind::Function ||
+             callable->kind == TypeKind::Closure) &&
             (!lambda ||
              (!lambda->body && lambda->controlFlow &&
-              lambda->captures.empty() &&
-              argumentType == lambda->closureType)) &&
+              argumentType == lambda->closureType &&
+              (lambda->captures.empty() || copyCaptureClosure))) &&
             callable->parameterContracts.size() == 1;
         const bool copyPath = commonCallable &&
             callable->parameterContracts.front().usage ==
@@ -4069,7 +4138,9 @@ ControlFlowBuilder::lowerIteratorTerminal(
         const auto* reducerType = mModule->findType(
             terminal->args[1]->type);
         if (terminal->args[0]->type != terminal->type ||
-            !reducerType || reducerType->kind != TypeKind::Function ||
+            !reducerType ||
+            (reducerType->kind != TypeKind::Function &&
+             reducerType->kind != TypeKind::Closure) ||
             reducerType->parameterTypeIds != TypeRefVec{
                 terminal->type, terminal->iteratorInputType} ||
             reducerType->returnTypeId != terminal->type ||
@@ -4148,7 +4219,9 @@ ControlFlowBuilder::lowerIteratorTerminal(
         }
         const auto* actionType = mModule->findType(
             terminal->args[0]->type);
-        if (!actionType || actionType->kind != TypeKind::Function ||
+        if (!actionType ||
+            (actionType->kind != TypeKind::Function &&
+             actionType->kind != TypeKind::Closure) ||
             actionType->parameterTypeIds !=
                 TypeRefVec{terminal->iteratorInputType} ||
             actionType->returnTypeId != unitType ||
@@ -4855,8 +4928,32 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
             if (auto* member = dynamic_cast<FieldAccessExpr*>(call->callee.get())) {
                 if (!bindExpr(member->object.get())) return false;
             }
-        } else if (!bindExpr(call->callee.get())) {
-            return false;
+        } else {
+            // Compiler intrinsics (print, panic, slice, type_size, etc.)
+            // have no declaration table row. Skip the local/declaration
+            // lookup for their callee identifier so the canonical CFG does
+            // not reject them.
+            const auto isCompilerIntrinsic = [](const Expr* callee) {
+                const auto* id = dynamic_cast<const IdentifierExpr*>(callee);
+                if (!id || !id->declaration.empty()) return false;
+                static const std::unordered_set<std::string> intrinsics = {
+                    "print", "panic", "slice", "new", "free", "clone",
+                    "type_size", "type_alignment", "type_field_count",
+                    "type_field_name", "type_field_type", "type_variant_count",
+                    "type_variant_name", "type_is_struct", "type_is_enum",
+                    "type_is_result", "type_is_array", "type_is_closure",
+                    "type_is_reference", "type_is_optional",
+                    "is_ok", "is_err", "unwrap", "unwrap_err",
+                    "Ok", "Err", "pointer_cast", "drop_callback",
+                    "gpu_alloc_i32", "gpu_copy_from_host_i32",
+                    "gpu_copy_to_host_i32", "gpu_free",
+                    "gpu_load_i32", "gpu_store_i32",
+                };
+                return intrinsics.count(id->name) > 0;
+            };
+            if (!isCompilerIntrinsic(call->callee.get())) {
+                if (!bindExpr(call->callee.get())) return false;
+            }
         }
         for (auto& argument : call->args)
             if (!bindExpr(argument.get())) return false;
@@ -5116,8 +5213,28 @@ std::vector<CleanupId> ControlFlowBuilder::lowerCleanupObligations(
     ScopeId sourceScope) {
     std::vector<CleanupId> result;
     for (const auto& obligation : obligations) {
-        const LocalId local = lookupLocal(obligation.place);
+        LocalId local = lookupLocal(obligation.place);
         if (local.empty()) {
+            // A cleanup obligation for a captured binding has no canonical
+            // local (the capture was rewritten to an EnvLoad). The closure
+            // value (environment parameter) owns the cleanup, so redirect
+            // to the environment parameter's cleanup (C016 CL010).
+            if (!mCaptureEnvLocal.empty() &&
+                std::find(mCaptureNames.begin(), mCaptureNames.end(),
+                          obligation.place) != mCaptureNames.end()) {
+                const auto* closureType = mModule->findType(
+                    mGraph->locals[mCaptureEnvLocal.value].type);
+                if (closureType &&
+                    closureType->sysmeta.resource.cleanupRequired) {
+                    const CleanupId cleanup = addCleanup(
+                        mCaptureEnvLocal,
+                        mGraph->locals[mCaptureEnvLocal.value].type,
+                        closureType->sysmeta.resource.cleanup,
+                        CleanupKind::Value);
+                    if (!cleanup.empty()) result.push_back(cleanup);
+                }
+                continue;
+            }
             error({}, "cleanup for '" + obligation.place +
                       "' has no canonical local");
             continue;

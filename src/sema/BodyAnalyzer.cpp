@@ -2039,9 +2039,11 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
         }
         TypePtr retType = bodyRet;
 
-        // Capture resolution: every recorded free variable must be a Copy
-        // local. Affine/Linear and borrowed captures are later slices
-        // (C016 CL005); function references are not captures.
+        // Capture resolution: recorded free variables become closure
+        // environment fields. Copy captures copy by value; Affine/Linear
+        // captures move the outer binding into the environment (C016 CL010).
+        // Borrowed (Reference) captures remain a later slice. Function
+        // references are not captures.
         std::vector<std::string> captures;
         std::vector<TypeField> captureFields;
         bool captureError = false;
@@ -2049,14 +2051,6 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
             const auto* symbol = mContext.lookupSymbol(name);
             if (!symbol || symbol->kind != SymbolKind::Variable)
                 continue;
-            if (symbol->usage != luna::ownership::Usage::Copy) {
-                mContext.error(
-                    "lambda capture of '" + name + "' requires a Copy "
-                    "binding; Affine and Linear captures are not yet "
-                    "supported (C016 CL005)", le->line, le->col);
-                captureError = true;
-                continue;
-            }
             if (symbol->type &&
                 symbol->type->kind == TypeKind::Reference) {
                 mContext.error(
