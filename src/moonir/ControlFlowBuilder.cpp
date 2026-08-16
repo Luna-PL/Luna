@@ -4938,13 +4938,30 @@ bool ControlFlowBuilder::bindExpr(Expr* expression) {
                 if (!id || !id->declaration.empty()) return false;
                 static const std::unordered_set<std::string> intrinsics = {
                     "print", "panic", "slice", "new", "free", "clone",
-                    "type_size", "type_alignment", "type_field_count",
-                    "type_field_name", "type_field_type", "type_variant_count",
-                    "type_variant_name", "type_is_struct", "type_is_enum",
-                    "type_is_result", "type_is_array", "type_is_closure",
-                    "type_is_reference", "type_is_optional",
+                    "range", "metadata", "select_unique",
+                    // Type reflection intrinsics
+                    "type_of", "type_kind", "type_id", "type_shape",
+                    "type_domain", "type_nominal",
+                    "type_size", "type_alignment",
+                    "type_field_count", "type_field_name", "type_field_type",
+                    "type_variant_count", "type_variant_name",
+                    "type_variant_field_count",
+                    "type_is_struct", "type_is_enum",
+                    "type_is_nominal", "type_is_meta", "type_is_structural",
+                    "type_is_reference", "type_is_result", "type_is_array",
+                    "type_is_closure", "type_is_optional",
+                    "type_same", "type_same_shape", "type_abi_compatible",
+                    // Declaration reflection intrinsics
+                    "declaration_id", "declaration_name", "declaration_module",
+                    "declaration_package", "declaration_at", "declaration_count",
+                    "declaration_of", "declaration_signature",
+                    "declaration_has_metadata",
+                    // Result/variant intrinsics
                     "is_ok", "is_err", "unwrap", "unwrap_err",
-                    "Ok", "Err", "pointer_cast", "drop_callback",
+                    "Ok", "Err",
+                    // FFI intrinsics
+                    "pointer_cast", "drop_callback",
+                    // GPU intrinsics
                     "gpu_alloc_i32", "gpu_copy_from_host_i32",
                     "gpu_copy_to_host_i32", "gpu_free",
                     "gpu_load_i32", "gpu_store_i32",
