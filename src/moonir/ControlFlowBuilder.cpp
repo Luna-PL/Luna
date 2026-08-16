@@ -967,8 +967,10 @@ ControlFlowBuilder::lowerSequence(
             continue;
         }
         if (!open) {
-            error(statement->location,
-                  "structured body contains a statement after a terminating path");
+            // Statements after a terminating path (return/abort/break) are
+            // unreachable dead code. The structured backend silently skips
+            // them; the canonical CFG must do the same rather than rejecting
+            // the program.
             break;
         }
         open = lowerStatement(std::move(statement), std::move(*open),
