@@ -2856,7 +2856,8 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
         }
         mContext.requireInteger(analyzeExpr(call->args[1].get()), "slice start");
         mContext.requireInteger(analyzeExpr(call->args[2].get()), "slice end");
-        return Type::makeSlice(source->inner->inner);
+        call->resultType = Type::makeSlice(source->inner->inner);
+        return call->resultType;
     }
     if (id && (id->name == "gpu_alloc_i32" || id->name == "gpu_load_i32" ||
                id->name == "gpu_store_i32" || id->name == "gpu_free" ||
@@ -2875,7 +2876,8 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
             if (mContext.mInKernel)
                 mContext.error("'gpu_alloc_i32' is a host operation and cannot run inside a kernel", call->line, call->col);
             mContext.requireInteger(analyzeExpr(call->args[0].get()), "gpu_alloc_i32 element count");
-            return Type::makeDeviceBuffer(TyI32);
+            call->resultType = Type::makeDeviceBuffer(TyI32);
+            return call->resultType;
         }
         if (id->name == "gpu_free") {
             if (!requireCount(1)) return TyUnknown;
@@ -2886,7 +2888,8 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
                       call->line, call->col);
             mContext.constrain(analyzeExpr(call->args[0].get()), Type::makeDeviceBuffer(TyI32),
                       "gpu_free buffer");
-            return TyUnit;
+            call->resultType = TyUnit;
+            return call->resultType;
         }
         if (id->name == "gpu_copy_from_host_i32" || id->name == "gpu_copy_to_host_i32") {
             if (!requireCount(3)) return TyUnknown;
@@ -2919,7 +2922,8 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
             if (auto* literal = dynamic_cast<IntLiteralExpr*>(call->args[2].get()); literal && literal->value < 0)
                 mContext.error("'" + id->name + "' requires a non-negative element count",
                       literal->line, literal->col);
-            return TyUnit;
+            call->resultType = TyUnit;
+            return call->resultType;
         }
         const bool isStore = id->name == "gpu_store_i32";
         if (!requireCount(isStore ? 3 : 2)) return TyUnknown;
@@ -2946,7 +2950,8 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
         mContext.requireInteger(analyzeExpr(call->args[1].get()), std::string("index argument of '") + id->name + "'");
         if (isStore) mContext.constrain(analyzeExpr(call->args[2].get()), TyI32,
                                "value argument of 'gpu_store_i32'");
-        return isStore ? TyUnit : TyI32;
+        call->resultType = isStore ? TyUnit : TyI32;
+        return call->resultType;
     }
     if (mContext.mInKernel && id) {
         mContext.error("kernel body may only call device built-ins (`gpu_load_i32` and `gpu_store_i32`) in the initial ABI",

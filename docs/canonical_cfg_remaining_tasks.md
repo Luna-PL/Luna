@@ -4,7 +4,7 @@
 > All items below are 0.3 item-10 canonical-CFG switchover work.
 > Default path (structured body) remains production; `LUNA_SEAL_CANONICAL=1` gates the canonical path.
 
-## Sealer coverage: 63/93 valid programs pass (68%)
+## Sealer coverage: 73/93 valid programs pass (78%)
 
 ## Remaining tasks (by priority)
 
@@ -12,16 +12,20 @@
 
 1. **"let initializer type disagrees with its canonical local"**
    - Root cause: MoonIR `IdentifierExpr` type is not always set during lowering.
-   - Affects: anonymous_records, slice_borrow, slice_empty_tail, ffi, structural_generic_instance_reuse, and others.
-   - Fix direction: systematically resolve identifier types from the local table in `bindExpr` before the verifier checks them.
+   - **Fixed**: slice, gpu_*, and type_* reflection intrinsics now set
+     `call->resultType` in Sema (CompileTimeEvaluator and BodyAnalyzer).
+   - **Remaining**: ffi (extern fn call argument type mismatch — P0-3).
 
 2. **"allocation initializer element disagrees with its frozen layout type"**
    - Affects: resource_generic_drop, resource_recursive_named.
    - Fix direction: allocation initializer element type resolution in canonical CFG.
 
 3. **"call argument type disagrees with its signature"**
-   - Affects: ffi_owning_return, structural_generic_instance_reuse.
-   - Fix direction: signature argument type resolution for intrinsic calls in canonical verifier.
+   - Affects: ffi_owning_return, structural_generic_instance_reuse, ffi.
+   - **Partially fixed**: MoveExpr now carries its operand type in lowering.
+   - Remaining: generic instantiation TypeId mismatch and linear-qualified
+     extern fn argument type mismatch. These require deeper TypeId
+     comparison logic in the canonical verifier.
 
 ### P1 — Feature gaps (designated later slices)
 

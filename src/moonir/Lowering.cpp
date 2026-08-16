@@ -486,6 +486,11 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
     } else if (auto* move = dynamic_cast<const ::MoveExpr*>(expression)) {
         auto value = std::make_unique<moon::MoveExpr>();
         value->operand = lowerExpr(move->operand.get());
+        // A move preserves the operand's type; the canonical verifier checks
+        // call-argument types against function signatures, so the MoveExpr
+        // must carry its result type.
+        if (value->operand)
+            value->type = value->operand->type;
         result = std::move(value);
     } else if (auto* borrow = dynamic_cast<const ::BorrowExpr*>(expression)) {
         auto value = std::make_unique<moon::BorrowExpr>();
