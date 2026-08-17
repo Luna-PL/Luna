@@ -2947,6 +2947,32 @@ ControlFlowBuilder::lowerAllocationElements(
                             return mGraph->locals[local.value].type;
                     }
                 }
+                if (auto* binary = dynamic_cast<BinaryExpr*>(e)) {
+                    auto t = resolveType(binary->lhs.get());
+                    if (!t.empty()) return t;
+                    return resolveType(binary->rhs.get());
+                }
+                if (auto* field = dynamic_cast<FieldAccessExpr*>(e)) {
+                    auto objectType = resolveType(field->object.get());
+                    if (!objectType.empty()) {
+                        const auto* ot = mModule->findType(objectType);
+                        if (ot) {
+                            if (ot->kind == TypeKind::Reference)
+                                ot = mModule->findType(ot->innerTypeId);
+                            if (ot)
+                                for (const auto& f : ot->fields)
+                                    if (f.name == field->field) return f.type;
+                        }
+                    }
+                }
+                if (auto* envLoad = dynamic_cast<EnvLoadExpr*>(e)) {
+                    if (envLoad->fieldIndex < mGraph->locals.size()) {
+                        const auto& envLocal = mGraph->locals[envLoad->envLocal.value];
+                        const auto* closureType = mModule->findType(envLocal.type);
+                        if (closureType && envLoad->fieldIndex < closureType->capturedFields.size())
+                            return closureType->capturedFields[envLoad->fieldIndex].type;
+                    }
+                }
                 return {};
             };
             element.value->type = resolveType(element.value.get());
