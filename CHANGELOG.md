@@ -2,6 +2,17 @@
 
 ## 0.3.0 — Development
 
+- Added AwaitStmt handling to canonical CFG codegen. The canonical
+  generateControlFlowBody handled LetStmt, FreeStmt, AllocateStmt, and
+  ExprStmt operations but not AwaitStmt, so heterogeneous programs with
+  `await done;` failed with "canonical CFG operation is outside the
+  initial LLVM slice". generateControlFlowBody now emits the
+  rt_gpu_await_event call and GPU failure check for AwaitStmt, matching
+  the structured path. heterogeneous, heterogeneous_move_event, and
+  heterogeneous_versioned now run correctly under
+  LUNA_SEAL_CANONICAL=1. Canonical scan improves from 38 to 41 fully
+  successful runs; codegen errors drop from 6 to 3.
+
 - Fixed canonical closure environment parameter loading in
   generateControlFlowBody. A capturing closure's env parameter arrives as
   a pointer to the env struct ({ptr, i32}), but the canonical local is

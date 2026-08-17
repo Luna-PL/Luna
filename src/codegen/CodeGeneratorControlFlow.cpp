@@ -258,6 +258,23 @@ void CodeGenerator::generateControlFlowBody(
                            dynamic_cast<moon::ExprStmt*>(
                                operation.get())) {
                 (void)generateExpr(expression->expr.get());
+            } else if (auto* await =
+                           dynamic_cast<moon::AwaitStmt*>(
+                               operation.get())) {
+                // The simulator completes a launch before returning its
+                // event. A device launch or synchronization can fail, so
+                // await is the explicit runtime error boundary.
+                if (await->event) {
+                    auto* event = coerceCallArgument(
+                        generateExpr(await->event.get()),
+                        mHelpers->i32Ty());
+                    auto wait = mModule->getOrInsertFunction(
+                        "rt_gpu_await_event", mHelpers->i32Ty(),
+                        mHelpers->i32Ty());
+                    auto* completed = mBuilder->CreateCall(
+                        wait, {event}, "gpu.awaited");
+                    emitGpuOperationFailureCheck(completed, func);
+                }
             } else {
                 error("canonical CFG operation is outside the initial LLVM slice");
             }
