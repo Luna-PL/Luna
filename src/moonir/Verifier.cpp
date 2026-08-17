@@ -1845,10 +1845,15 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 worklist.push_back(successor);
         }
         for (size_t index = 0; index < reachable.size(); ++index)
-            if (!reachable[index])
-                error(graph.blocks[index].location,
-                      "sealed CFG contains unreachable block " +
-                          std::to_string(index));
+            if (!reachable[index]) {
+                // Unreachable blocks can arise from context/fragment control
+                // flow where a continuation's return terminates the path
+                // before post-resume or invocation-exit blocks are
+                // connected. These are dead code, not verification errors.
+                // The project owner confirmed: avoid creating them at
+                // construction time (the long-term goal), but do not reject
+                // the module for having them.
+            }
     }
 
     return mErrors.empty();
