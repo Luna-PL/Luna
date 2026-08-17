@@ -99,6 +99,22 @@
 
 10. **Remove env-var gate** — flip default to sealed, remove the `LUNA_SEAL_CANONICAL` check.
 
+### Canonical-path codegen status (2026-08-17 scan)
+
+A full scan of 94 valid fixtures under `LUNA_SEAL_CANONICAL=1` shows:
+- 36 fully successful runs (exit 0)
+- 43 seal-OK with nonzero exit (by-design: panic, error codes, etc.)
+- 6 codegen/seal errors: fragments (NP004), dynamic_fragments (NP004),
+  heterogeneous* (kernel/launch codegen), inference (dereference coercion)
+- 9 crashes: panic/result_unwrap_panic (by-design abort), iterator_*/slice_*
+  (SIGSEGV — canonical iterator/slice codegen gap)
+
+The `generateCall` local-callable fix resolved the largest category
+("call target has neither a local value nor a verified DeclarationRef"),
+unblocking closures, lambdas, usage blocks, dynamic select, versioning, and
+trait versioning. Remaining codegen gaps are iterator/slice lowering and
+heterogeneous kernel/launch, both designated slices.
+
 ## Known issues (non-security, design-boundary)
 
 - **String/CStr cleanup no-op**: `typeRequiresCleanup(String)=true` but string literals are global constants. Cleanup is a no-op in `emitOwnedPayloadCleanup` and `emitCleanup`. When the stdlib introduces heap-allocated text, this must be revisited.

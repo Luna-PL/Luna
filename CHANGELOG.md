@@ -2,6 +2,18 @@
 
 ## 0.3.0 — Development
 
+- Resolved canonical-CFG local callables in codegen generateCall. The
+  canonical CFG seals function bodies into ControlFlowGraphs whose local
+  bindings use LocalId references, not the structured-path name map
+  (mLocals). generateCall previously checked only calleeRef and mLocals,
+  rejecting a sealed CFG CallExpr whose callee carried a LocalId but no
+  calleeRef and no mLocals entry. It now falls back to mCanonicalLocals /
+  mCanonicalLocalTypes and the rejection guard accepts a structured local,
+  canonical local, or verified declaration. Closures, lambda captures,
+  usage blocks, dynamic select, versioning, and trait versioning programs
+  now run under LUNA_SEAL_CANONICAL=1. The canonical scan improves from 33
+  to 36 fully successful runs; codegen errors drop from 28 to 6.
+
 - Connected the canonical CFG to dynamic single-shot interceptor apply
   (SF005). A dynamic slot interceptor declaration with a dynamic apply
   carrying a finite candidate set now seals into a verified canonical CFG
