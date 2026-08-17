@@ -4,7 +4,7 @@
 > All items below are 0.3 item-10 canonical-CFG switchover work.
 > Default path (structured body) remains production; `LUNA_SEAL_CANONICAL=1` gates the canonical path.
 
-## Sealer coverage: 87/93 valid programs pass (94%)
+## Sealer coverage: 89/93 valid programs pass (96%)
 
 ## Remaining tasks (by priority)
 

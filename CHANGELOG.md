@@ -2,6 +2,24 @@
 
 ## 0.3.0 — Development
 
+- Completed the materialized recipe full state slice for the canonical CFG.
+  Guarded array cleanup state (design doc S784-806) now extends from the
+  direct-for path to materialized consuming for-loops, all terminal kinds
+  (count/for_each/fold), and inline consuming terminals over move-only
+  arrays. The materialized for-loop reuses a fresh Copy cursor in the loop
+  scope (initialized to zero) while the source local stays in the recipe's
+  outer scope; two verifier scope checks are relaxed, guarded-tail-only, to
+  accept a child-scope cleanup/cursor targeting a parent-scope owning source.
+  A count terminal now emits an implicit per-iteration drop for move-only
+  items it does not consume. An unconsumed materialized iterator binding
+  drops its owning source array whole at scope exit. Terminal for_each/fold
+  contracts accept affine item parameters, passing items as MoveExpr. The
+  allocation-initializer type resolver now recurses through BinaryExpr,
+  FieldAccessExpr, and EnvLoadExpr. Canonical Sealer coverage on valid
+  programs rose from 87/93 (94%) to 89/93 (96%). The 51-test CTest suite,
+  moonir-canonical-test, and every iterator_*_invalid negative fixture
+  remain green under the gate.
+
 - Fixed nominal TypeId propagation through composite types in
   `canonicalIdentityImpl`: structural composite types (Function, Closure,
   Array, Reference, RawPointer, Record, Result, Enum, DeviceBuffer)
