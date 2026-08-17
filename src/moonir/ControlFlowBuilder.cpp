@@ -740,6 +740,7 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     mFragmentContexts.clear();
     mCleanupByLocal.clear();
     mActiveExpressionCleanups.clear();
+    mGuardedConsumingRecipeNames.clear();
     mBindingIteratorRecipe = false;
     mTerminalCounter = 0;
     mExpressionCounter = 0;
@@ -2694,6 +2695,8 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     mActiveExpressionCleanups.insert(
         mActiveExpressionCleanups.end(), sourceTailCleanups.begin(),
         sourceTailCleanups.end());
+    if (guardedConsumingSource && !statement->recipeStateName.empty())
+        mGuardedConsumingRecipeNames.insert(statement->recipeStateName);
     std::optional<OpenBlock> bodyExit;
     if (!statement->body) {
         error(statement->location, "for-loop has no canonical body");
@@ -2709,6 +2712,8 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
             bodyRegion, bodyScope);
     }
     mActiveExpressionCleanups.resize(activeCleanupDepth);
+    if (guardedConsumingSource && !statement->recipeStateName.empty())
+        mGuardedConsumingRecipeNames.erase(statement->recipeStateName);
     popBindings();
 
     if (bodyExit) {
@@ -5250,6 +5255,8 @@ std::vector<CleanupId> ControlFlowBuilder::lowerCleanupObligations(
             // by the source/index/limit state locals; skip the obligation.
             if (!mMaterializedIterators.empty() &&
                 mMaterializedIterators.back().count(obligation.place))
+                continue;
+            if (mGuardedConsumingRecipeNames.count(obligation.place))
                 continue;
             // A cleanup obligation for a captured binding has no canonical
             // local (the capture was rewritten to an EnvLoad). The closure

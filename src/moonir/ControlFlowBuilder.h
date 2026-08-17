@@ -6,6 +6,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace moon {
@@ -253,6 +254,14 @@ private:
     // in that interval must carry these obligations even though the frontend
     // could not name compiler-generated locals.
     std::vector<CleanupId> mActiveExpressionCleanups;
+    // Recipe-state names of guarded consuming for-loops currently being
+    // lowered. The frontend records each as a cleanup obligation on return/
+    // abort edges, but the obligation has no canonical local: every element is
+    // moved out by a canonical MoveExpr whose cleanup is the per-element
+    // guarded tail already attached to the exit edge through
+    // mActiveExpressionCleanups. Such obligations are skipped in
+    // lowerCleanupObligations.
+    std::unordered_set<std::string> mGuardedConsumingRecipeNames;
     std::vector<std::string> mErrors;
     bool mBindingIteratorRecipe = false;
     uint64_t mTerminalCounter = 0;
