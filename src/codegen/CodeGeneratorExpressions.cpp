@@ -1461,6 +1461,27 @@ llvm::Value* CodeGenerator::generateBorrow(BorrowExpr* bw) {
                     {llvm::ConstantInt::get(mHelpers->i32Ty(), 0), checked},
                     "borrow.array.element");
             }
+            // For a slice source ({ ptr, i64 }), load the slice value,
+            // extract its data pointer and length, bounds-check the index,
+            // and return the element pointer without loading the element.
+            if (storage && arrayType && arrayType->kind == TypeKind::Slice) {
+                auto* sliceValue = mBuilder->CreateLoad(
+                    storage->getAllocatedType(), storage, "borrow.slice.value");
+                auto* length = mBuilder->CreateExtractValue(
+                    sliceValue, {1}, "borrow.slice.length");
+                auto* rawIndex = coerceCallArgument(
+                    generateExpr(idx->index.get()), mHelpers->i32Ty());
+                auto* checked = mBuilder->CreateCall(
+                    mModule->getOrInsertFunction(
+                        "rt_array_index_or_abort", mHelpers->i32Ty(),
+                        mHelpers->i32Ty(), mHelpers->sizeTy()),
+                    {rawIndex, length}, "borrow.slice.index");
+                auto* data = mBuilder->CreateExtractValue(
+                    sliceValue, {0}, "borrow.slice.data");
+                return mBuilder->CreateGEP(
+                    mHelpers->toLLVMType(arrayType->inner), data, checked,
+                    "borrow.slice.element");
+            }
         }
         return generateExpr(bw->operand.get());
 }
