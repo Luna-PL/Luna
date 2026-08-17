@@ -5265,8 +5265,10 @@ std::vector<CleanupId> ControlFlowBuilder::lowerCleanupObligations(
             // no canonical local (the binding is registered in
             // mMaterializedIterators, not mBindings). Its cleanup is handled
             // by the source/index/limit state locals; skip the obligation.
-            if (!mMaterializedIterators.empty() &&
-                mMaterializedIterators.back().count(obligation.place))
+            // Walk the full binding stack, not just the innermost level: the
+            // recipe may be registered in an outer scope while a return or
+            // abort inside a nested loop lowers its obligation.
+            if (lookupMaterializedIterator(obligation.place))
                 continue;
             if (mGuardedConsumingRecipeNames.count(obligation.place))
                 continue;
