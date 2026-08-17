@@ -1398,6 +1398,59 @@ llvm::Value* CodeGenerator::generateBorrow(BorrowExpr* bw) {
                         id->name + ".borrowed_object");
                 return it->second;
             }
+            // Canonical CFG path: locals are indexed by LocalId, not name.
+            if (!id->local.empty() &&
+                id->local.value < mCanonicalLocals.size() &&
+                mCanonicalLocals[id->local.value]) {
+                auto* alloca = mCanonicalLocals[id->local.value];
+                if (id->local.value < mCanonicalLocalTypes.size() &&
+                    mCanonicalLocalTypes[id->local.value] &&
+                    (mCanonicalLocalTypes[id->local.value]->kind ==
+                         TypeKind::Struct ||
+                     mCanonicalLocalTypes[id->local.value]->kind ==
+                         TypeKind::Record))
+                    return mBuilder->CreateLoad(
+                        alloca->getAllocatedType(), alloca,
+                        id->name.empty()
+                            ? "local." + std::to_string(id->local.value) +
+                              ".borrowed_object"
+                            : id->name + ".borrowed_object");
+                return alloca;
+            }
+        }
+        // A BorrowExpr wrapping an IndexExpr borrows a specific array
+        // element. Return the element pointer (GEP) rather than loading
+        // the value, so the borrowed reference is the address of the
+        // element inside the source array.
+        if (auto* idx = dynamic_cast<IndexExpr*>(bw->operand.get())) {
+            auto* id = dynamic_cast<IdentifierExpr*>(idx->object.get());
+            llvm::AllocaInst* storage = nullptr;
+            TypePtr arrayType;
+            if (id && !id->local.empty() &&
+                id->local.value < mCanonicalLocals.size() &&
+                mCanonicalLocals[id->local.value]) {
+                storage = mCanonicalLocals[id->local.value];
+                arrayType = id->local.value < mCanonicalLocalTypes.size()
+                    ? mCanonicalLocalTypes[id->local.value] : resolveType(id->type);
+            } else if (id && mLocals.count(id->name)) {
+                storage = mLocals[id->name];
+                arrayType = mLocalTypes[id->name];
+            }
+            if (storage && arrayType && arrayType->kind == TypeKind::Array) {
+                auto* rawIndex = coerceCallArgument(
+                    generateExpr(idx->index.get()), mHelpers->i32Ty());
+                auto* checked = mBuilder->CreateCall(
+                    mModule->getOrInsertFunction(
+                        "rt_array_index_or_abort", mHelpers->i32Ty(),
+                        mHelpers->i32Ty(), mHelpers->sizeTy()),
+                    {rawIndex, llvm::ConstantInt::get(
+                              mHelpers->sizeTy(), arrayType->arrayLength)},
+                    "borrow.array.index");
+                return mBuilder->CreateInBoundsGEP(
+                    storage->getAllocatedType(), storage,
+                    {llvm::ConstantInt::get(mHelpers->i32Ty(), 0), checked},
+                    "borrow.array.element");
+            }
         }
         return generateExpr(bw->operand.get());
 }
