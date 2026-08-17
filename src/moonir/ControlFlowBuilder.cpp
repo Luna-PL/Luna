@@ -4058,6 +4058,7 @@ ControlFlowBuilder::lowerIteratorTerminal(
         recipe.source = plan.materializedSource;
         recipe.index = plan.materializedIndex;
         recipe.limit = plan.materializedLimit;
+        recipe.ownsSource = plan.materializedOwnsSource;
     } else {
         const TypeRecord* sourceType = nullptr;
         if (plan.mode != IteratorMode::Range) {
@@ -4142,7 +4143,16 @@ ControlFlowBuilder::lowerIteratorTerminal(
     auto loop = std::make_unique<ForStmt>();
     loop->location = terminal->location;
     loop->varName = "$terminal.item." + identity;
-    loop->bindingUsage = luna::ownership::Usage::Copy;
+    {
+        const auto* terminalItemType = mModule->findType(
+            terminal->iteratorInputType);
+        loop->bindingUsage = (terminalItemType &&
+            terminalItemType->sysmeta.resource.usage ==
+                luna::ownership::Usage::Affine &&
+            terminalItemType->sysmeta.resource.cleanupRequired)
+            ? luna::ownership::Usage::Affine
+            : luna::ownership::Usage::Copy;
+    }
     loop->elementType = terminal->iteratorInputType;
     auto iterable = std::make_unique<IdentifierExpr>();
     iterable->location = terminal->location;
@@ -4274,6 +4284,12 @@ ControlFlowBuilder::lowerIteratorTerminal(
                   "for_each has no canonical action contract");
             return std::nullopt;
         }
+        const auto* itemType = mModule->findType(
+            terminal->iteratorInputType);
+        const bool moveOnlyItem = itemType &&
+            itemType->sysmeta.resource.usage ==
+                luna::ownership::Usage::Affine &&
+            itemType->sysmeta.resource.cleanupRequired;
         const auto* actionType = mModule->findType(
             terminal->args[0]->type);
         if (!actionType ||
@@ -4283,8 +4299,11 @@ ControlFlowBuilder::lowerIteratorTerminal(
                 TypeRefVec{terminal->iteratorInputType} ||
             actionType->returnTypeId != unitType ||
             actionType->parameterContracts.size() != 1 ||
-            actionType->parameterContracts[0].usage !=
-                luna::ownership::Usage::Copy ||
+            (actionType->parameterContracts[0].usage !=
+                luna::ownership::Usage::Copy &&
+             !(moveOnlyItem &&
+               actionType->parameterContracts[0].usage ==
+                   luna::ownership::Usage::Affine)) ||
             actionType->returnContract.usage !=
                 luna::ownership::Usage::Copy) {
             error(terminal->location,
@@ -4304,7 +4323,15 @@ ControlFlowBuilder::lowerIteratorTerminal(
         item->location = terminal->location;
         item->name = loop->varName;
         item->type = terminal->iteratorInputType;
-        call->args.push_back(std::move(item));
+        if (moveOnlyItem) {
+            auto transfer = std::make_unique<MoveExpr>();
+            transfer->location = terminal->location;
+            transfer->type = terminal->iteratorInputType;
+            transfer->operand = std::move(item);
+            call->args.push_back(std::move(transfer));
+        } else {
+            call->args.push_back(std::move(item));
+        }
         call->type = unitType;
         call->returnUsage = luna::ownership::Usage::Copy;
         invoke->expr = std::move(call);
