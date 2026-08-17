@@ -197,6 +197,10 @@ private:
     std::optional<OpenBlock> lowerSlotInvoke(
         std::unique_ptr<SlotInvokeStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
+    std::optional<OpenBlock> lowerDynamicSlotInvoke(
+        std::unique_ptr<SlotInvokeStmt> statement, OpenBlock current,
+        RegionId region, ScopeId scope,
+        std::vector<DeclarationRef> candidates);
     std::optional<OpenBlock> lowerResume(
         std::unique_ptr<ResumeStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
@@ -244,6 +248,11 @@ private:
         mSlotDefaults;
     std::vector<std::unordered_map<std::string, DeclarationRef>>
         mStaticApplyScopes;
+    // Dynamic apply scopes: slot name -> candidate fragment DeclarationRefs.
+    // Populated by lowerApply when the apply carries a finite candidate set;
+    // consumed by lowerSlotInvoke to resolve dynamic dispatch candidates.
+    std::vector<std::unordered_map<std::string, std::vector<DeclarationRef>>>
+        mDynamicApplyScopes;
     // Active only while a cloned static fragment body is being composed into
     // its invocation graph. A source `return` or `abort` exits that fragment,
     // not the enclosing Luna function.

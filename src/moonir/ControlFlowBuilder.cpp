@@ -737,6 +737,7 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     mMaterializedIterators.clear();
     mSlotDefaults.clear();
     mStaticApplyScopes.clear();
+    mDynamicApplyScopes.clear();
     mFragmentContexts.clear();
     mCleanupByLocal.clear();
     mActiveExpressionCleanups.clear();
@@ -1173,9 +1174,19 @@ ControlFlowBuilder::lowerStatement(
     }
     if (auto* slot = dynamic_cast<SlotDeclStmt*>(statement.get())) {
         if (slot->isDynamic) {
-            error(slot->location,
-                  "runtime slot composition is outside the static canonical CFG slice");
-            return std::nullopt;
+            // SF005: the first runtime path supports only single-shot
+            // interceptors. Runtime context/multi-shot is deferred (NP004).
+            if (slot->acceptedKind != FragmentKind::Interceptor ||
+                slot->acceptedCardinality != FragmentCardinality::Once) {
+                error(slot->location,
+                      "runtime context or multi-shot slot composition is "
+                      "outside the 0.3 canonical static boundary "
+                      "(deferred: NP004)");
+                return std::nullopt;
+            }
+            // A dynamic single-shot interceptor slot declares no static
+            // default; its candidates arrive via a dynamic apply scope.
+            return current;
         }
         if (!slot->defaultFragmentRef.empty())
             mSlotDefaults.back()[slot->name] = slot->defaultFragmentRef;
@@ -4709,28 +4720,48 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerMatch(
 std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerApply(
     std::unique_ptr<ApplyStmt> statement, OpenBlock current,
     RegionId region, ScopeId scope) {
-    if (statement->isDynamic ||
-        !statement->alternativeFragmentRefs.empty()) {
-        error(statement->location,
-              "runtime apply is outside the static canonical CFG slice");
-        return std::nullopt;
-    }
     if (!statement->body) {
         error(statement->location,
               "0.3 apply requires an explicit lexical body");
         return std::nullopt;
     }
-    if (!resolveFragment(statement->fragmentRef)) {
-        error(statement->location,
-              "static apply references a missing canonical fragment");
-        return std::nullopt;
+    // A dynamic apply carries a finite candidate set. The primary fragmentRef
+    // is the first candidate (fallback); alternativeFragmentRefs are the rest.
+    // The slot invocation inside the body resolves candidates from the dynamic
+    // apply scope instead of a single static binding.
+    const bool isDynamic = statement->isDynamic ||
+        !statement->alternativeFragmentRefs.empty();
+    if (!isDynamic) {
+        if (!resolveFragment(statement->fragmentRef)) {
+            error(statement->location,
+                  "static apply references a missing canonical fragment");
+            return std::nullopt;
+        }
+    } else {
+        if (statement->alternativeFragmentRefs.empty() &&
+            statement->fragmentRef.empty()) {
+            error(statement->location,
+                  "dynamic apply has no fragment candidates");
+            return std::nullopt;
+        }
     }
 
     mStaticApplyScopes.emplace_back();
-    mStaticApplyScopes.back()[statement->slotName] = statement->fragmentRef;
+    if (!isDynamic)
+        mStaticApplyScopes.back()[statement->slotName] = statement->fragmentRef;
+    if (isDynamic) {
+        mDynamicApplyScopes.emplace_back();
+        std::vector<DeclarationRef> candidates;
+        if (!statement->fragmentRef.empty())
+            candidates.push_back(statement->fragmentRef);
+        for (const auto& alt : statement->alternativeFragmentRefs)
+            candidates.push_back(alt);
+        mDynamicApplyScopes.back()[statement->slotName] = std::move(candidates);
+    }
     auto body = lowerNestedBlock(
         std::move(statement->body), region, scope, RegionKind::Apply);
     mStaticApplyScopes.pop_back();
+    if (isDynamic) mDynamicApplyScopes.pop_back();
     connectJump(current, body.entry);
     if (!body.exit) return std::nullopt;
 
@@ -4761,12 +4792,6 @@ std::optional<ControlFlowBuilder::OpenBlock>
 ControlFlowBuilder::lowerSlotInvoke(
     std::unique_ptr<SlotInvokeStmt> statement, OpenBlock current,
     RegionId region, ScopeId scope) {
-    if (statement->isDynamic || statement->usesDynamicDispatch ||
-        !statement->dynamicFragmentRefs.empty()) {
-        error(statement->location,
-              "runtime slot invocation is outside the static canonical CFG slice");
-        return std::nullopt;
-    }
     if (statement->acceptedCardinality != FragmentCardinality::Once) {
         error(statement->location,
               "multi-shot slot invocation is not part of the 0.3 canonical static boundary");
@@ -4776,6 +4801,32 @@ ControlFlowBuilder::lowerSlotInvoke(
         error(statement->location,
               "slot invocation has no lexical continuation body");
         return std::nullopt;
+    }
+
+    // Resolve dynamic dispatch candidates from the enclosing dynamic apply
+    // scope, or from the statement's own dynamicFragmentRefs.
+    std::vector<DeclarationRef> dynamicCandidates;
+    for (size_t depth = mDynamicApplyScopes.size(); depth > 0; --depth) {
+        const auto& scopes = mDynamicApplyScopes[depth - 1];
+        if (auto found = scopes.find(statement->name);
+            found != scopes.end()) {
+            dynamicCandidates = found->second;
+            break;
+        }
+    }
+    if (statement->isDynamic || statement->usesDynamicDispatch ||
+        !statement->dynamicFragmentRefs.empty() ||
+        !dynamicCandidates.empty()) {
+        if (!statement->dynamicFragmentRefs.empty())
+            dynamicCandidates = statement->dynamicFragmentRefs;
+        if (dynamicCandidates.empty()) {
+            error(statement->location,
+                  "dynamic slot invocation has no resolved fragment candidates");
+            return std::nullopt;
+        }
+        return lowerDynamicSlotInvoke(
+            std::move(statement), std::move(current), region, scope,
+            std::move(dynamicCandidates));
     }
 
     DeclarationRef fragmentReference;
@@ -4957,6 +5008,351 @@ ControlFlowBuilder::lowerSlotInvoke(
         terminator.primary.cleanups = canonicalCleanupOrder(
             fragmentOpen->cleanups, fragmentScope, invocationScope);
     }
+    if (implicitApplyRegion.empty())
+        return OpenBlock{invocationExit, {}};
+
+    const BlockId exit = addBlock(region, scope, statement->location);
+    connectJump(OpenBlock{invocationExit, {}}, exit);
+    mGraph->regions[implicitApplyRegion.value].exit = exit;
+    return OpenBlock{exit, {}};
+}
+
+std::optional<ControlFlowBuilder::OpenBlock>
+ControlFlowBuilder::lowerDynamicSlotInvoke(
+    std::unique_ptr<SlotInvokeStmt> statement, OpenBlock current,
+    RegionId region, ScopeId scope,
+    std::vector<DeclarationRef> candidates) {
+    // SF005: the first runtime path supports only single-shot interceptors.
+    // Runtime context/multi-shot continuation ABI is deferred (NP004).
+    if (statement->acceptedKind != FragmentKind::Interceptor ||
+        statement->acceptedCardinality != FragmentCardinality::Once) {
+        error(statement->location,
+              "runtime context or multi-shot slot invocation is outside "
+              "the 0.3 canonical static boundary (deferred: NP004)");
+        return std::nullopt;
+    }
+    if (candidates.empty()) {
+        error(statement->location,
+              "dynamic slot invocation has no fragment candidates");
+        return std::nullopt;
+    }
+
+    // Resolve the frozen compiler types needed for runtime dispatch calls.
+    // Lowering pre-registers CStr, I32, and Bool when the module uses
+    // dynamic apply. The dispatch intrinsics (rt_dynamic_fragment_select,
+    // _matches) take string-literal name arguments and return a cstr name
+    // or i32 flag. The intrinsic calls have no frozen callee, so the
+    // verifier skips their argument/result signature checks.
+    TypeRef cstrType;
+    TypeRef i32Type;
+    TypeRef boolType;
+    for (const auto& type : mModule->typeTable) {
+        if (type.kind == TypeKind::CStr) cstrType = type.id;
+        if (type.kind == TypeKind::I32) i32Type = type.id;
+        if (type.kind == TypeKind::Bool) boolType = type.id;
+    }
+    if (cstrType.empty() || i32Type.empty() || boolType.empty()) {
+        error(statement->location,
+              "dynamic dispatch requires frozen cstr, i32, and bool compiler types");
+        return std::nullopt;
+    }
+
+    // Validate every candidate is a single-shot interceptor with a body and
+    // a matching parameter contract.
+    struct ResolvedCandidate {
+        const FragmentDecl* fragment;
+        DeclarationRef reference;
+    };
+    std::vector<ResolvedCandidate> resolved;
+    for (const auto& candidateRef : candidates) {
+        const auto* fragment = resolveFragment(candidateRef);
+        if (!fragment) {
+            error(statement->location,
+                  "dynamic slot invocation references a missing canonical fragment");
+            return std::nullopt;
+        }
+        if (fragment->kind != FragmentKind::Interceptor ||
+            fragment->cardinality != FragmentCardinality::Once) {
+            error(statement->location,
+                  "dynamic slot candidate must be a single-shot interceptor");
+            return std::nullopt;
+        }
+        if (!fragment->body) {
+            error(statement->location,
+                  "dynamic slot candidate has no structured construction body");
+            return std::nullopt;
+        }
+        if (fragment->params.size() != statement->args.size() &&
+            fragment->params.size() != statement->resolvedParamNames.size()) {
+            error(statement->location,
+                  "dynamic slot candidate parameter contract disagrees with invocation");
+            return std::nullopt;
+        }
+        resolved.push_back({fragment, candidateRef});
+    }
+
+    // The apply region owns the dispatch, candidate fragments, and the
+    // single shared continuation. If the source already has an explicit
+    // dynamic apply, it owns this region; otherwise materialize an implicit
+    // one (same as the static default-fragment path).
+    RegionId invocationRegion = region;
+    ScopeId invocationScope = scope;
+    OpenBlock invocationCurrent = current;
+    RegionId implicitApplyRegion;
+    const bool boundByDynamicApply = !mDynamicApplyScopes.empty();
+    if (!boundByDynamicApply) {
+        implicitApplyRegion = addRegion(
+            region, RegionKind::Apply, statement->location);
+        invocationScope = addScope(
+            scope, implicitApplyRegion, statement->location);
+        const BlockId entry = addBlock(
+            implicitApplyRegion, invocationScope, statement->location);
+        connectJump(current, entry);
+        invocationRegion = implicitApplyRegion;
+        invocationCurrent = OpenBlock{entry, current.cleanups};
+    }
+
+    const BlockId invocationExit = addBlock(
+        invocationRegion, invocationScope, statement->location);
+
+    // Lower the continuation once. Every matched interceptor candidate
+    // forwards into its entry; the continuation exit reaches invocationExit.
+    auto continuation = lowerNestedBlock(
+        std::move(statement->continuation), invocationRegion,
+        invocationScope, RegionKind::Continuation);
+    if (!continuation.exit) return std::nullopt;
+    connectJump(*continuation.exit, invocationExit);
+    mGraph->regions[continuation.region.value].exit = invocationExit;
+
+    // Helper: build a CallExpr to a compiler intrinsic with string-literal
+    // arguments. The intrinsic callee is a bare IdentifierExpr (no local,
+    // no declaration) so bindExpr and the verifier recognize it as a
+    // compiler intrinsic and skip the declaration lookup.
+    const auto intrinsicCall = [this, &statement](
+        const std::string& name,
+        const std::vector<std::string>& argValues,
+        const TypeRef& resultType) -> std::unique_ptr<CallExpr> {
+        auto call = std::make_unique<CallExpr>();
+        call->location = statement->location;
+        call->type = resultType;
+        auto callee = std::make_unique<IdentifierExpr>();
+        callee->name = name;
+        callee->location = statement->location;
+        call->callee = std::move(callee);
+        for (const auto& value : argValues) {
+            auto literal = std::make_unique<StringLiteralExpr>();
+            literal->value = value;
+            literal->location = statement->location;
+            literal->type = TypeRef{}; // cstr coercion handled by verifier
+            call->args.push_back(std::move(literal));
+        }
+        return call;
+    };
+
+    // Helper: build a LetStmt that stores an expression into a fresh local.
+    const auto storeExpr = [this, &statement, &invocationScope, &invocationRegion](
+        const std::string& name, const TypeRef& type,
+        std::unique_ptr<Expr> initializer) -> std::pair<LocalId, BlockId> {
+        const LocalId local = addLocal(
+            invocationScope, LocalKind::Synthetic, name, type,
+            luna::ownership::Usage::Copy, std::nullopt,
+            /*inferTypeCleanup=*/false);
+        auto decl = std::make_unique<LetStmt>();
+        decl->location = statement->location;
+        decl->name = name;
+        decl->local = local;
+        decl->isLinear = false;
+        decl->usage = luna::ownership::Usage::Copy;
+        decl->relation = mGraph->locals[local.value].relation;
+        decl->type = type;
+        decl->initializer = std::move(initializer);
+        const BlockId block = addBlock(
+            invocationRegion, invocationScope, statement->location);
+        mGraph->blocks[block.value].operations.push_back(std::move(decl));
+        return {local, block};
+    };
+
+    // Helper: build an IdentifierExpr referencing a canonical local.
+    const auto localRef = [this, &statement](
+        LocalId local) -> std::unique_ptr<IdentifierExpr> {
+        auto id = std::make_unique<IdentifierExpr>();
+        id->location = statement->location;
+        if (!local.empty() && local.value < mGraph->locals.size()) {
+            const auto& record = mGraph->locals[local.value];
+            id->name = record.name;
+            id->local = local;
+            id->type = record.type;
+        }
+        return id;
+    };
+
+    // 1. Call rt_dynamic_fragment_select(slotName, fallbackName) -> cstr.
+    //    The first candidate is the fallback.
+    const auto [selectedLocal, selectBlock] = storeExpr(
+        "$dynamic.selected", cstrType,
+        intrinsicCall("rt_dynamic_fragment_select",
+            {statement->name, resolved.front().fragment->name}, cstrType));
+    connectJump(invocationCurrent, selectBlock);
+
+    // 2. For each candidate: call rt_dynamic_fragment_matches(selected,
+    //    candidateName) -> i32, compare != 0 -> bool, Branch to the
+    //    candidate's fragment body or the next candidate's dispatch block.
+    BlockId dispatchCurrent = selectBlock;
+    for (size_t index = 0; index < resolved.size(); ++index) {
+        const auto& [fragment, fragmentRef] = resolved[index];
+
+        // matches = rt_dynamic_fragment_matches(selected, candidateName)
+        auto matchesCall = intrinsicCall(
+            "rt_dynamic_fragment_matches", {}, i32Type);
+        matchesCall->args.push_back(localRef(selectedLocal));
+        auto candidateName = std::make_unique<StringLiteralExpr>();
+        candidateName->value = fragment->name;
+        candidateName->location = statement->location;
+        matchesCall->args.push_back(std::move(candidateName));
+
+        const auto [matchesLocal, matchesBlock] = storeExpr(
+            "$dynamic.matches" + std::to_string(index), i32Type,
+            std::move(matchesCall));
+        connectJump(OpenBlock{dispatchCurrent, {}}, matchesBlock);
+
+        // isMatch = matches != 0
+        auto condition = std::make_unique<BinaryExpr>();
+        condition->location = statement->location;
+        condition->lhs = localRef(matchesLocal);
+        condition->op = Operator::NotEqual;
+        auto zero = std::make_unique<IntLiteralExpr>();
+        zero->value = 0;
+        zero->location = statement->location;
+        zero->type = i32Type;
+        condition->rhs = std::move(zero);
+        condition->type = boolType;
+
+        // Clone the candidate fragment body into a Fragment region.
+        auto fragmentBody = cloneStructuredBlock(fragment->body.get());
+        if (!fragmentBody) {
+            error(statement->location,
+                  "dynamic slot candidate body cannot be cloned before canonical construction");
+            return std::nullopt;
+        }
+        const RegionId fragmentRegion = addRegion(
+            invocationRegion, RegionKind::Fragment, fragmentBody->location);
+        mGraph->regions[fragmentRegion.value].fragment = fragmentRef;
+        const ScopeId fragmentScope = addScope(
+            invocationScope, fragmentRegion, fragmentBody->location);
+        const BlockId fragmentEntry = addBlock(
+            fragmentRegion, fragmentScope, fragmentBody->location);
+
+        // Materialize fragment parameter bindings.
+        std::vector<std::unique_ptr<Stmt>> parameterBindings;
+        parameterBindings.reserve(fragment->params.size());
+        for (size_t pi = 0; pi < fragment->params.size(); ++pi) {
+            const auto& parameter = fragment->params[pi];
+            auto binding = std::make_unique<LetStmt>();
+            binding->location = statement->location;
+            binding->name = parameter.name;
+            binding->isLinear =
+                parameter.usage == luna::ownership::Usage::Linear;
+            binding->usage = parameter.usage;
+            binding->relation = parameter.relation;
+            binding->type = parameter.type;
+            if (pi < statement->args.size()) {
+                binding->initializer =
+                    cloneStructuredExpr(statement->args[pi].get());
+            } else {
+                auto capture = std::make_unique<IdentifierExpr>();
+                capture->name = statement->resolvedParamNames[pi];
+                capture->location = statement->location;
+                capture->type = parameter.type;
+                binding->initializer = std::move(capture);
+            }
+            parameterBindings.push_back(std::move(binding));
+        }
+
+        const size_t outerBindingDepth = mBindings.size();
+        pushBindings();
+        mFragmentContexts.push_back({
+            invocationExit, fragment->kind, nullptr,
+            outerBindingDepth});
+        std::optional<OpenBlock> fragmentOpen = OpenBlock{fragmentEntry, {}};
+        for (auto& binding : parameterBindings) {
+            if (!fragmentOpen) break;
+            const auto* parameter = static_cast<LetStmt*>(binding.get());
+            const std::string name = parameter->name;
+            fragmentOpen = lowerStatement(
+                std::move(binding), std::move(*fragmentOpen),
+                fragmentRegion, fragmentScope);
+            const LocalId local = lookupLocal(name);
+            if (local.empty()) {
+                error(statement->location,
+                      "dynamic fragment parameter has no canonical entry binding");
+                fragmentOpen = std::nullopt;
+                break;
+            }
+            mGraph->regions[fragmentRegion.value].parameters.push_back(local);
+        }
+        if (fragmentOpen)
+            fragmentOpen = lowerSequence(
+                fragmentBody->stmts, std::move(*fragmentOpen),
+                fragmentRegion, fragmentScope);
+        mFragmentContexts.pop_back();
+        popBindings();
+        mGraph->regions[fragmentRegion.value].exit = invocationExit;
+
+        // The fragment's open block forwards to the continuation (interceptor).
+        if (fragmentOpen) {
+            auto& terminator =
+                mGraph->blocks[fragmentOpen->block.value].terminator;
+            terminator.kind = TerminatorKind::Jump;
+            terminator.location = statement->location;
+            terminator.primary.target = continuation.entry;
+            terminator.primary.cleanups = canonicalCleanupOrder(
+                fragmentOpen->cleanups, fragmentScope, continuation.scope);
+        }
+
+        // Branch on the match condition: true -> fragment entry,
+        // false -> next candidate dispatch (or unknown-abort).
+        BlockId nextBlock;
+        if (index + 1 < resolved.size()) {
+            nextBlock = addBlock(
+                invocationRegion, invocationScope, statement->location);
+        } else {
+            // Final fallback: call rt_dynamic_fragment_report_unknown_and_abort.
+            nextBlock = addBlock(
+                invocationRegion, invocationScope, statement->location);
+            auto abortCall = std::make_unique<CallExpr>();
+            abortCall->location = statement->location;
+            abortCall->type = TypeRef{}; // void
+            auto abortCallee = std::make_unique<IdentifierExpr>();
+            abortCallee->name = "rt_dynamic_fragment_report_unknown_and_abort";
+            abortCallee->location = statement->location;
+            abortCall->callee = std::move(abortCallee);
+            abortCall->args.push_back(localRef(selectedLocal));
+            auto slotNameLit = std::make_unique<StringLiteralExpr>();
+            slotNameLit->value = statement->name;
+            slotNameLit->location = statement->location;
+            abortCall->args.push_back(std::move(slotNameLit));
+            auto abortStmt = std::make_unique<ExprStmt>();
+            abortStmt->location = statement->location;
+            abortStmt->expr = std::move(abortCall);
+            mGraph->blocks[nextBlock.value].operations.push_back(
+                std::move(abortStmt));
+            auto& abortTerm =
+                mGraph->blocks[nextBlock.value].terminator;
+            abortTerm.kind = TerminatorKind::Unreachable;
+            abortTerm.location = statement->location;
+        }
+
+        auto& branchTerm =
+            mGraph->blocks[matchesBlock.value].terminator;
+        branchTerm.kind = TerminatorKind::Branch;
+        branchTerm.location = statement->location;
+        branchTerm.operand = std::move(condition);
+        branchTerm.primary.target = fragmentEntry;
+        branchTerm.secondary.target = nextBlock;
+
+        dispatchCurrent = nextBlock;
+    }
+
     if (implicitApplyRegion.empty())
         return OpenBlock{invocationExit, {}};
 

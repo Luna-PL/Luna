@@ -604,6 +604,9 @@ bool isCompilerIntrinsicName(const std::string& name) {
         "gpu_alloc_i32", "gpu_copy_from_host_i32",
         "gpu_copy_to_host_i32", "gpu_free",
         "gpu_load_i32", "gpu_store_i32",
+        "rt_dynamic_fragment_select",
+        "rt_dynamic_fragment_matches",
+        "rt_dynamic_fragment_report_unknown_and_abort",
     };
     return names.count(name) > 0;
 }
