@@ -1037,6 +1037,33 @@ ControlFlowBuilder::lowerStatement(
         return current;
     }
     if (auto* release = dynamic_cast<FreeStmt*>(statement.get())) {
+        // An implicit scope-exit FreeStmt for a materialized iterator binding
+        // fires only when the iterator was never consumed: a consumed iterator
+        // is fully accounted for by its for-loop / terminal guarded tail and
+        // emits no FreeStmt. Clean the owning source array as a whole via its
+        // type's cleanup action, which drops every unconsumed element.
+        if (release->isImplicit) {
+            auto* id = dynamic_cast<IdentifierExpr*>(
+                release->operand.get());
+            if (id && id->declaration.empty()) {
+                const auto* recipe =
+                    lookupMaterializedIterator(id->name);
+                if (recipe && recipe->ownsSource) {
+                    const auto* sourceType =
+                        mModule->findType(recipe->sourceType);
+                    if (sourceType &&
+                        sourceType->sysmeta.resource.cleanupRequired) {
+                        const CleanupId cleanup = addCleanup(
+                            recipe->source, recipe->sourceType,
+                            sourceType->sysmeta.resource.cleanup,
+                            CleanupKind::Value);
+                        if (!cleanup.empty())
+                            current.cleanups.push_back(cleanup);
+                    }
+                    return current;
+                }
+            }
+        }
         if (!bindExpr(release->operand.get())) return std::nullopt;
         if (!release->isImplicit) {
             mGraph->blocks[current.block.value].operations.push_back(
