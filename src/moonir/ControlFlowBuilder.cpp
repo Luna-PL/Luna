@@ -4006,13 +4006,6 @@ ControlFlowBuilder::lowerIteratorTerminal(
               "iterator terminal has no canonical recipe receiver");
         return std::nullopt;
     }
-    if (!terminal->iteratorRecipeStateName.empty() ||
-        !terminal->iteratorRecipeSourceType.empty()) {
-        error(terminal->location,
-              "move-only iterator terminal requires projected source cleanup state");
-        return std::nullopt;
-    }
-
     IteratorRecipePlan plan;
     if (!parseIteratorRecipe(
             std::move(member->object), plan, terminal->location))
@@ -4053,9 +4046,11 @@ ControlFlowBuilder::lowerIteratorTerminal(
     const auto addBindingAt = [this, &terminal, scope](
         BlockId block, const std::string& name, const TypeRef& type,
         luna::ownership::Usage usage, std::unique_ptr<Expr> initializer,
-        LocalKind kind = LocalKind::Binding) {
+        LocalKind kind = LocalKind::Binding,
+        bool inferTypeCleanup = true) {
         const LocalId local = addLocal(
-            scope, kind, name, type, usage);
+            scope, kind, name, type, usage, std::nullopt,
+            inferTypeCleanup);
         auto declaration = std::make_unique<LetStmt>();
         declaration->location = terminal->location;
         declaration->name = name;
@@ -4097,18 +4092,43 @@ ControlFlowBuilder::lowerIteratorTerminal(
                 recipe.source = sourceIdentifier->local;
                 plan.source.reset();
             } else {
-                if (!sourceType ||
-                    sourceType->sysmeta.resource.cleanupRequired ||
-                    sourceType->sysmeta.resource.usage !=
-                        luna::ownership::Usage::Copy) {
+                const auto* sourceElement = sourceType
+                    ? mModule->findType(sourceType->innerTypeId) : nullptr;
+                const bool guardedConsuming = sourceType && sourceElement &&
+                    plan.mode == IteratorMode::Consuming &&
+                    sourceElement->sysmeta.resource.usage ==
+                        luna::ownership::Usage::Affine &&
+                    sourceElement->sysmeta.resource.cleanupRequired;
+                if (!guardedConsuming &&
+                    (!sourceType ||
+                     sourceType->sysmeta.resource.cleanupRequired ||
+                     sourceType->sysmeta.resource.usage !=
+                         luna::ownership::Usage::Copy)) {
                     error(terminal->location,
                           "temporary terminal source requires unsupported "
                           "canonical ownership state");
                     return std::nullopt;
                 }
-                recipe.source = addBinding(
-                    "$terminal.source." + identity,
-                    plan.sourceType, std::move(plan.source));
+                auto sourceInitializer = std::move(plan.source);
+                if (guardedConsuming &&
+                    dynamic_cast<IdentifierExpr*>(sourceInitializer.get())) {
+                    auto transfer = std::make_unique<MoveExpr>();
+                    transfer->location = terminal->location;
+                    transfer->type = plan.sourceType;
+                    transfer->operand = std::move(sourceInitializer);
+                    sourceInitializer = std::move(transfer);
+                }
+                recipe.source = addBindingAt(
+                    current.block, "$terminal.source." + identity,
+                    plan.sourceType,
+                    guardedConsuming
+                        ? luna::ownership::Usage::Affine
+                        : luna::ownership::Usage::Copy,
+                    std::move(sourceInitializer),
+                    LocalKind::Binding,
+                    !guardedConsuming);
+                if (guardedConsuming)
+                    recipe.ownsSource = true;
             }
         }
 
