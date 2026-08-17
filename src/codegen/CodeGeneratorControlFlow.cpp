@@ -56,13 +56,24 @@ void CodeGenerator::generateControlFlowBody(
             ++parameterIndex;
             continue;
         }
-        auto* argument = func->getArg(
+        llvm::Value* argument = func->getArg(
             static_cast<unsigned>(parameterIndex++));
+        auto* storage = mCanonicalLocals[local.id.value];
+        auto* storageType = storage->getAllocatedType();
+        // A closure environment parameter arrives as a pointer to the env
+        // struct ({ptr, i32}), but the canonical local is typed as the
+        // Closure struct value. Load the struct from the pointer so the
+        // store matches the alloca type.
+        if (argument->getType()->isPointerTy() &&
+            storageType->isStructTy() &&
+            argument->getType() != storageType) {
+            argument = mBuilder->CreateLoad(
+                storageType, argument,
+                "closure.env.param");
+        }
         mBuilder->CreateStore(
-            coerceCallArgument(
-                argument,
-                mCanonicalLocals[local.id.value]->getAllocatedType()),
-            mCanonicalLocals[local.id.value]);
+            coerceCallArgument(argument, storageType),
+            storage);
     }
     if (parameterIndex != func->arg_size())
         error("canonical parameter table has the wrong LLVM arity");
