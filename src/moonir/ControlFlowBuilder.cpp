@@ -4187,6 +4187,13 @@ ControlFlowBuilder::lowerIteratorTerminal(
     const std::string recipeName = "$terminal.recipe." + identity;
     mMaterializedIterators.back().emplace(recipeName, std::move(recipe));
 
+    const auto* terminalItemType = mModule->findType(
+        terminal->iteratorInputType);
+    const bool moveOnlyItem = terminalItemType &&
+        terminalItemType->sysmeta.resource.usage ==
+            luna::ownership::Usage::Affine &&
+        terminalItemType->sysmeta.resource.cleanupRequired;
+
     auto loop = std::make_unique<ForStmt>();
     loop->location = terminal->location;
     loop->varName = "$terminal.item." + identity;
@@ -4232,6 +4239,24 @@ ControlFlowBuilder::lowerIteratorTerminal(
         assignment->type = i32Type;
         increment->expr = std::move(assignment);
         loop->body->stmts.push_back(std::move(increment));
+        // A count terminal does not consume its item. A move-only item
+        // moved out of the source by the for-loop transfer must be dropped
+        // each iteration so it does not leak.
+        if (moveOnlyItem) {
+            auto drop = std::make_unique<FreeStmt>();
+            drop->isImplicit = true;
+            drop->location = terminal->location;
+            auto item = std::make_unique<IdentifierExpr>();
+            item->location = terminal->location;
+            item->name = loop->varName;
+            item->type = terminal->iteratorInputType;
+            drop->operand = std::move(item);
+            const auto* itemType = mModule->findType(
+                terminal->iteratorInputType);
+            if (itemType)
+                drop->action = itemType->sysmeta.resource.cleanup;
+            loop->body->stmts.push_back(std::move(drop));
+        }
     } else if (terminal->iteratorOp == IteratorOp::Fold) {
         const auto* accumulatorType = mModule->findType(terminal->type);
         const auto accumulatorUsage = accumulatorType
@@ -4265,8 +4290,11 @@ ControlFlowBuilder::lowerIteratorTerminal(
                 accumulatorUsage ||
             reducerType->parameterContracts[1].relation !=
                 luna::ownership::Relation::Owned ||
-            reducerType->parameterContracts[1].usage !=
-                luna::ownership::Usage::Copy ||
+            (reducerType->parameterContracts[1].usage !=
+                luna::ownership::Usage::Copy &&
+             !(moveOnlyItem &&
+               reducerType->parameterContracts[1].usage ==
+                   luna::ownership::Usage::Affine)) ||
             reducerType->returnContract.relation !=
                 luna::ownership::Relation::Owned ||
             reducerType->returnContract.usage !=
@@ -4308,7 +4336,15 @@ ControlFlowBuilder::lowerIteratorTerminal(
         item->location = terminal->location;
         item->name = loop->varName;
         item->type = terminal->iteratorInputType;
-        call->args.push_back(std::move(item));
+        if (moveOnlyItem) {
+            auto transfer = std::make_unique<MoveExpr>();
+            transfer->location = terminal->location;
+            transfer->type = terminal->iteratorInputType;
+            transfer->operand = std::move(item);
+            call->args.push_back(std::move(transfer));
+        } else {
+            call->args.push_back(std::move(item));
+        }
         call->type = terminal->type;
         call->returnUsage = accumulatorUsage;
         assignment->rhs = std::move(call);
@@ -4331,12 +4367,6 @@ ControlFlowBuilder::lowerIteratorTerminal(
                   "for_each has no canonical action contract");
             return std::nullopt;
         }
-        const auto* itemType = mModule->findType(
-            terminal->iteratorInputType);
-        const bool moveOnlyItem = itemType &&
-            itemType->sysmeta.resource.usage ==
-                luna::ownership::Usage::Affine &&
-            itemType->sysmeta.resource.cleanupRequired;
         const auto* actionType = mModule->findType(
             terminal->args[0]->type);
         if (!actionType ||
