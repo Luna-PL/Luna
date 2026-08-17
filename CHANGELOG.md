@@ -2,6 +2,20 @@
 
 ## 0.3.0 — Development
 
+- Resolved canonical-CFG borrowed locals in generateBorrow. The BorrowExpr
+  codegen resolved borrowed locals only through the structured-path name map
+  (mLocals/mLocalTypes); under LUNA_SEAL_CANONICAL=1 the canonical CFG uses
+  LocalId-indexed tables (mCanonicalLocals/mCanonicalLocalTypes). A borrowed
+  IdentifierExpr carrying a LocalId but no mLocals entry fell through to
+  generateExpr, loading the value instead of returning the address, causing a
+  type mismatch and SIGSEGV for iterator map/filter adapters that take &i32.
+  generateBorrow now falls back to canonical local tables and handles
+  BorrowExpr wrapping IndexExpr by emitting the GEP element pointer.
+  iterator_materialized now runs correctly under the canonical gate; remaining
+  iterator-pipeline cases no longer crash (adapter logical correctness is a
+  separate issue). Canonical scan improves from 37 to 38 fully successful runs;
+  crashes drop from 7 to 5.
+
 - Resolved canonical-CFG local callables in codegen generateCall. The
   canonical CFG seals function bodies into ControlFlowGraphs whose local
   bindings use LocalId references, not the structured-path name map
