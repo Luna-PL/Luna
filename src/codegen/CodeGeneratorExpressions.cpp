@@ -1403,18 +1403,28 @@ llvm::Value* CodeGenerator::generateBorrow(BorrowExpr* bw) {
                 id->local.value < mCanonicalLocals.size() &&
                 mCanonicalLocals[id->local.value]) {
                 auto* alloca = mCanonicalLocals[id->local.value];
-                if (id->local.value < mCanonicalLocalTypes.size() &&
-                    mCanonicalLocalTypes[id->local.value] &&
-                    (mCanonicalLocalTypes[id->local.value]->kind ==
-                         TypeKind::Struct ||
-                     mCanonicalLocalTypes[id->local.value]->kind ==
-                         TypeKind::Record))
+                auto localType = id->local.value < mCanonicalLocalTypes.size()
+                    ? mCanonicalLocalTypes[id->local.value] : nullptr;
+                if (localType &&
+                    (localType->kind == TypeKind::Struct ||
+                     localType->kind == TypeKind::Record))
                     return mBuilder->CreateLoad(
                         alloca->getAllocatedType(), alloca,
                         id->name.empty()
                             ? "local." + std::to_string(id->local.value) +
                               ".borrowed_object"
                             : id->name + ".borrowed_object");
+                // A reference-typed local (&i32) already stores a pointer.
+                // Borrowing it returns the stored pointer, not the alloca
+                // address, so the adapter receives the element address
+                // directly rather than a pointer-to-pointer.
+                if (localType && localType->kind == TypeKind::Reference)
+                    return mBuilder->CreateLoad(
+                        alloca->getAllocatedType(), alloca,
+                        id->name.empty()
+                            ? "local." + std::to_string(id->local.value) +
+                              ".ref"
+                            : id->name + ".ref");
                 return alloca;
             }
         }
