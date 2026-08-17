@@ -2,6 +2,16 @@
 
 ## 0.3.0 — Development
 
+- Extended generateBorrow to handle slice-typed sources. A BorrowExpr wrapping
+  an IndexExpr into a slice source previously only handled Array types,
+  falling through to generateIndex (which loads the element value) for Slice
+  sources. This caused a type mismatch (storing i32 into a ptr alloca) and
+  SIGSEGV for slice-iteration patterns like `for value in slice { print(*value); }`.
+  generateBorrow now loads the slice value, extracts its data pointer and
+  length, bounds-checks the index, and returns the GEP element pointer.
+  iterator_slice now produces the correct result (3) matching the structured
+  path. Canonical scan crashes drop from 5 to 4.
+
 - Resolved canonical-CFG borrowed locals in generateBorrow. The BorrowExpr
   codegen resolved borrowed locals only through the structured-path name map
   (mLocals/mLocalTypes); under LUNA_SEAL_CANONICAL=1 the canonical CFG uses
