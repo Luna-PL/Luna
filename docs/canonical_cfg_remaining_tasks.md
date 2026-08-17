@@ -102,18 +102,20 @@
 ### Canonical-path codegen status (2026-08-17 scan)
 
 A full scan of 94 valid fixtures under `LUNA_SEAL_CANONICAL=1` shows:
-- 36 fully successful runs (exit 0)
-- 43 seal-OK with nonzero exit (by-design: panic, error codes, etc.)
+- 37 fully successful runs (exit 0)
+- 44 seal-OK with nonzero exit (by-design: panic, error codes, etc.)
 - 6 codegen/seal errors: fragments (NP004), dynamic_fragments (NP004),
   heterogeneous* (kernel/launch codegen), inference (dereference coercion)
-- 9 crashes: panic/result_unwrap_panic (by-design abort), iterator_*/slice_*
-  (SIGSEGV — canonical iterator/slice codegen gap)
+- 7 crashes: panic/result_unwrap_panic (by-design abort), iterator_*
+  (SIGSEGV — canonical iterator-recipe codegen gap)
 
 The `generateCall` local-callable fix resolved the largest category
 ("call target has neither a local value nor a verified DeclarationRef"),
 unblocking closures, lambdas, usage blocks, dynamic select, versioning, and
-trait versioning. Remaining codegen gaps are iterator/slice lowering and
-heterogeneous kernel/launch, both designated slices.
+trait versioning. The slice codegen fix resolved the null TypePtr SEGV for
+slice_borrow and slice_empty_tail. Remaining codegen gaps are
+iterator-recipe lowering (map/filter/take/fold/for_each pipelines crash at
+JIT execution) and heterogeneous kernel/launch, both designated slices.
 
 ## Known issues (non-security, design-boundary)
 
