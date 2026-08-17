@@ -99,23 +99,26 @@
 
 10. **Remove env-var gate** — flip default to sealed, remove the `LUNA_SEAL_CANONICAL` check.
 
-### Canonical-path codegen status (2026-08-17 scan)
+### Canonical-path codegen status (2026-08-18 scan)
 
 A full scan of 94 valid fixtures under `LUNA_SEAL_CANONICAL=1` shows:
-- 37 fully successful runs (exit 0)
-- 44 seal-OK with nonzero exit (by-design: panic, error codes, etc.)
+- 38 fully successful runs (exit 0)
+- 45 seal-OK with nonzero exit (by-design: panic, error codes, etc.)
 - 6 codegen/seal errors: fragments (NP004), dynamic_fragments (NP004),
   heterogeneous* (kernel/launch codegen), inference (dereference coercion)
-- 7 crashes: panic/result_unwrap_panic (by-design abort), iterator_*
-  (SIGSEGV — canonical iterator-recipe codegen gap)
+- 5 crashes: panic/result_unwrap_panic (by-design abort), iterator_*
+  (adapter logical correctness — no longer SIGSEGV but produces wrong values)
 
 The `generateCall` local-callable fix resolved the largest category
 ("call target has neither a local value nor a verified DeclarationRef"),
 unblocking closures, lambdas, usage blocks, dynamic select, versioning, and
 trait versioning. The slice codegen fix resolved the null TypePtr SEGV for
-slice_borrow and slice_empty_tail. Remaining codegen gaps are
-iterator-recipe lowering (map/filter/take/fold/for_each pipelines crash at
-JIT execution) and heterogeneous kernel/launch, both designated slices.
+slice_borrow and slice_empty_tail. The generateBorrow fix resolved the
+canonical-local borrow path (LocalId-indexed tables) and the BorrowExpr-
+wrapping-IndexExpr case (GEP element pointer), eliminating the iterator
+SIGSEGVs. Remaining gaps: iterator-adapter logical correctness (map/filter
+accumulation produces wrong values — separate issue) and heterogeneous
+kernel/launch, both designated slices.
 
 ## Known issues (non-security, design-boundary)
 
