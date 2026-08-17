@@ -965,8 +965,27 @@ llvm::Value* CodeGenerator::generateCall(CallExpr* call) {
                   callableType->kind != TypeKind::Closure)) &&
                 localType != mLocalTypes.end())
                 callableType = localType->second;
-            if (call->calleeRef.empty() &&
-                mLocals.find(calleeId->name) == mLocals.end()) {
+            // The canonical CFG path binds locals through LocalId, not the
+            // structured-path mLocals name map. Fall back to the canonical
+            // local table when the structured map has no entry.
+            if ((!callableType ||
+                 (callableType->kind != TypeKind::Function &&
+                  callableType->kind != TypeKind::Closure)) &&
+                !calleeId->local.empty() &&
+                calleeId->local.value < mCanonicalLocalTypes.size())
+                callableType = mCanonicalLocalTypes[calleeId->local.value];
+            // Reject only when neither the structured name map, the canonical
+            // local table, nor a verified declaration can resolve the callee.
+            const bool hasStructuredLocal =
+                mLocals.find(calleeId->name) != mLocals.end();
+            const bool hasCanonicalLocal =
+                !calleeId->local.empty() &&
+                calleeId->local.value < mCanonicalLocals.size() &&
+                mCanonicalLocals[calleeId->local.value];
+            const bool hasDeclaration =
+                call->calleeRef.complete() ||
+                calleeId->declaration.complete();
+            if (!hasStructuredLocal && !hasCanonicalLocal && !hasDeclaration) {
                 error("call target '" + calleeId->name +
                       "' has neither a local value nor a verified DeclarationRef");
                 return llvm::PoisonValue::get(mHelpers->i32Ty());
