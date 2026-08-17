@@ -310,6 +310,34 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
             value->type = typeRef(TyBool);
         result = std::move(value);
     } else if (auto* call = dynamic_cast<const ::CallExpr*>(expression)) {
+        // A call with a folded compile-time value (declaration_id/signature,
+        // type_*, declaration_has_metadata, etc.) is erased to a literal so it
+        // does not reach MoonIR as a call referencing compile-time-only
+        // operands (e.g. a DeclarationRef binding that has no runtime local).
+        if (call->compileTimeValue) {
+            if (auto* integer = std::get_if<int64_t>(&*call->compileTimeValue)) {
+                auto value = std::make_unique<moon::IntLiteralExpr>();
+                value->value = *integer;
+                value->type = typeRef(TyI32);
+                result = std::move(value);
+            } else if (auto* boolean = std::get_if<bool>(&*call->compileTimeValue)) {
+                auto value = std::make_unique<moon::BoolLiteralExpr>();
+                value->value = *boolean;
+                value->type = typeRef(TyBool);
+                result = std::move(value);
+            } else if (auto* str = std::get_if<std::string>(&*call->compileTimeValue)) {
+                auto value = std::make_unique<moon::StringLiteralExpr>();
+                value->value = *str;
+                value->type = typeRef(TyString);
+                result = std::move(value);
+            } else if (auto* floating = std::get_if<double>(&*call->compileTimeValue)) {
+                auto value = std::make_unique<moon::FloatLiteralExpr>();
+                value->value = *floating;
+                value->type = typeRef(TyF64);
+                result = std::move(value);
+            }
+            if (result) return result;
+        }
         if (const auto* callee = dynamic_cast<const ::IdentifierExpr*>(
                 call->callee.get());
             callee &&
