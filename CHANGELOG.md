@@ -2,6 +2,8 @@
 
 ## 0.3.0 — Development
 
+- Folded compile-time-valued reflection calls into MoonIR literals at lowering time. A DeclarationRef let binding is already skipped by lowering, but a reflection call referencing it reached sealed IR as a CallExpr with no canonical local. Lowering now folds any call whose compileTimeValue is set into the corresponding literal. static_declaration_reflection now seals; coverage 89/93 to 90/93.
+
 - Completed the materialized recipe full state slice for the canonical CFG.
   Guarded array cleanup state (design doc S784-806) now extends from the
   direct-for path to materialized consuming for-loops, all terminal kinds
