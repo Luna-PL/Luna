@@ -755,20 +755,38 @@ llvm::Value* CodeGenerator::generateCall(CallExpr* call) {
             auto* source = generateExpr(call->args[0].get());
             auto* start = coerceCallArgument(generateExpr(call->args[1].get()), mHelpers->i32Ty());
             auto* end = coerceCallArgument(generateExpr(call->args[2].get()), mHelpers->i32Ty());
-            // Semantic analysis guarantees a borrowed local array. Its extent is recovered from that binding.
+            // Semantic analysis guarantees a borrowed local array. Its extent is
+            // recovered from that binding. The structured path uses the name map
+            // (mLocalTypes/mLocals); the canonical CFG path uses LocalId-indexed
+            // tables (mCanonicalLocalTypes/mCanonicalLocals).
             uint64_t length = 0;
-            if (auto* b = dynamic_cast<BorrowExpr*>(call->args[0].get())) if (auto* id = dynamic_cast<IdentifierExpr*>(b->operand.get())) length = mLocalTypes[id->name]->arrayLength;
+            llvm::AllocaInst* sourceAlloca = nullptr;
+            if (auto* b = dynamic_cast<BorrowExpr*>(call->args[0].get())) {
+                if (auto* id = dynamic_cast<IdentifierExpr*>(b->operand.get())) {
+                    auto structuredType = mLocalTypes.find(id->name);
+                    if (structuredType != mLocalTypes.end() && structuredType->second)
+                        length = structuredType->second->arrayLength;
+                    else if (!id->local.empty() &&
+                             id->local.value < mCanonicalLocalTypes.size() &&
+                             mCanonicalLocalTypes[id->local.value])
+                        length = mCanonicalLocalTypes[id->local.value]->arrayLength;
+                    auto structuredLocal = mLocals.find(id->name);
+                    if (structuredLocal != mLocals.end())
+                        sourceAlloca = structuredLocal->second;
+                    else if (!id->local.empty() &&
+                             id->local.value < mCanonicalLocals.size())
+                        sourceAlloca = mCanonicalLocals[id->local.value];
+                }
+            }
             auto* checkedStart = mBuilder->CreateCall(mModule->getOrInsertFunction("rt_array_index_or_abort", mHelpers->i32Ty(), mHelpers->i32Ty(), mHelpers->sizeTy()), {start, llvm::ConstantInt::get(mHelpers->sizeTy(), length + 1)}, "slice.start");
             auto* checkedEnd = mBuilder->CreateCall(mModule->getOrInsertFunction("rt_array_index_or_abort", mHelpers->i32Ty(), mHelpers->i32Ty(), mHelpers->sizeTy()), {end, llvm::ConstantInt::get(mHelpers->sizeTy(), length + 1)}, "slice.end");
             auto* valid = mBuilder->CreateICmpSLE(checkedStart, checkedEnd, "slice.order");
             auto* ok = llvm::BasicBlock::Create(*mCtx, "slice.ok", mCurrentFunc); auto* bad = llvm::BasicBlock::Create(*mCtx, "slice.bad", mCurrentFunc);
             mBuilder->CreateCondBr(valid, ok, bad); mBuilder->SetInsertPoint(bad); mBuilder->CreateCall(mModule->getOrInsertFunction("abort", mHelpers->voidTy())); mBuilder->CreateUnreachable(); mBuilder->SetInsertPoint(ok);
             llvm::Value* data = source;
-            if (auto* b = dynamic_cast<BorrowExpr*>(call->args[0].get())) {
-                if (auto* id = dynamic_cast<IdentifierExpr*>(b->operand.get()); id && mLocals.count(id->name))
-                    data = mBuilder->CreateInBoundsGEP(mLocals[id->name]->getAllocatedType(), mLocals[id->name],
-                        {llvm::ConstantInt::get(mHelpers->i32Ty(), 0), checkedStart}, "slice.data");
-            }
+            if (sourceAlloca)
+                data = mBuilder->CreateInBoundsGEP(sourceAlloca->getAllocatedType(), sourceAlloca,
+                    {llvm::ConstantInt::get(mHelpers->i32Ty(), 0), checkedStart}, "slice.data");
             auto* sliceTy = llvm::StructType::get(*mCtx, {mHelpers->ptrTy(), mHelpers->sizeTy()}); llvm::Value* value = llvm::UndefValue::get(sliceTy);
             value = mBuilder->CreateInsertValue(value, data, {0}); return mBuilder->CreateInsertValue(value, mBuilder->CreateSExtOrTrunc(mBuilder->CreateSub(checkedEnd, checkedStart), mHelpers->sizeTy()), {1});
         }
