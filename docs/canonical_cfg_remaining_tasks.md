@@ -4,7 +4,7 @@
 > All items below are 0.3 item-10 canonical-CFG switchover work.
 > Default path (structured body) remains production; `LUNA_SEAL_CANONICAL=1` gates the canonical path.
 
-## Sealer coverage: 89/93 valid programs pass (96%)
+## Sealer coverage: 90/93 valid programs pass (97%)
 
 ## Remaining tasks (by priority)
 
@@ -59,9 +59,9 @@
 
 ### P1 — Feature gaps (designated later slices)
 
-4. **slot/fragment canonicalization** — dynamic_fragments, external_fragment_dispatch, fragments still fail (runtime slot/multi-shot fail-closed). context_continuation_return_valid now passes (unreachable blocks from context resume+return are tolerated).
+4. **slot/fragment canonicalization** — dynamic_fragments, external_fragment_dispatch, examples/fragments still fail (runtime slot/multi-shot fail-closed). Gated on TBD-SF006 (module Slot/Fragment syntax and precise single-shot control interactions).
 
-5. **materialized recipe full state** — iterator_materialized_move_only and
+5. **materialized recipe full state** — RESOLVED. Both iterator_materialized_move_only and
    iterator_move_only_array fail on multiple design-gated boundaries:
    - "move-only consuming arrays require projected canonical cleanup state"
    - "move-only iterator terminal requires projected source cleanup state"
