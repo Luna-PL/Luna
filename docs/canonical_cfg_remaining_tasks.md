@@ -4,7 +4,7 @@
 > All items below are 0.3 item-10 canonical-CFG switchover work.
 > Default path (structured body) remains production; `LUNA_SEAL_CANONICAL=1` gates the canonical path.
 
-## Sealer coverage: 86/93 valid programs pass (93%)
+## Sealer coverage: 87/93 valid programs pass (94%)
 
 ## Remaining tasks (by priority)
 
@@ -59,7 +59,7 @@
 
 ### P1 — Feature gaps (designated later slices)
 
-4. **slot/fragment canonicalization** — context_*, fragments, dynamic_fragments, external_fragment_dispatch all fail. Design doc lists this as a separate slice.
+4. **slot/fragment canonicalization** — dynamic_fragments, external_fragment_dispatch, fragments still fail (runtime slot/multi-shot fail-closed). context_continuation_return_valid now passes (unreachable blocks from context resume+return are tolerated).
 
 5. **materialized recipe full state** — iterator_materialized_move_only and
    iterator_move_only_array fail on multiple design-gated boundaries:
