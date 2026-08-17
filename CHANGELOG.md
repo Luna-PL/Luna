@@ -2,6 +2,19 @@
 
 ## 0.3.0 — Development
 
+- Fixed canonical closure environment parameter loading in
+  generateControlFlowBody. A capturing closure's env parameter arrives as
+  a pointer to the env struct ({ptr, i32}), but the canonical local is
+  typed as the Closure struct value. The parameter store previously wrote
+  the pointer directly into the struct alloca, leaving the captured-field
+  half uninitialized and producing garbage values. generateControlFlowBody
+  now loads the struct from the env pointer before storing it. Capturing
+  closures in iterator adapters (map/filter with captures, for_each) now
+  produce correct results under LUNA_SEAL_CANONICAL=1. All remaining
+  canonical-path crashes are now by-design aborts (panic,
+  result_unwrap_panic, reflection_index_out_of_range) or the known
+  heterogeneous bulk-transfer GPU gap.
+
 - Extended generateBorrow to handle slice-typed sources. A BorrowExpr wrapping
   an IndexExpr into a slice source previously only handled Array types,
   falling through to generateIndex (which loads the element value) for Slice
