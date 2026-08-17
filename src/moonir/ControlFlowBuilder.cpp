@@ -2312,6 +2312,18 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         sourceType = mModule->findType(plan.sourceType);
         if (plan.materialized) {
             sourceLocal = plan.materializedSource;
+            if (plan.mode == IteratorMode::Consuming &&
+                plan.materializedOwnsSource) {
+                const auto* frozen = mModule->findType(plan.sourceType);
+                const auto* element = frozen &&
+                        frozen->kind == TypeKind::Array
+                    ? mModule->findType(frozen->innerTypeId) : nullptr;
+                if (element &&
+                    element->sysmeta.resource.usage ==
+                        luna::ownership::Usage::Affine &&
+                    element->sysmeta.resource.cleanupRequired)
+                    guardedConsumingSource = true;
+            }
         } else {
             auto* sourceIdentifier = dynamic_cast<IdentifierExpr*>(
                 plan.source.get());
@@ -3970,7 +3982,7 @@ ControlFlowBuilder::lowerIteratorTerminal(
         return std::nullopt;
     if (!bindIteratorRecipe(plan) ||
         !validateIteratorRecipe(
-            plan, terminal->iteratorInputType, terminal->location))
+            plan, terminal->iteratorInputType, terminal->location, true))
         return std::nullopt;
 
     TypeRef i32Type;
