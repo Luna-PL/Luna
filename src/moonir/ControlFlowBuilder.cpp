@@ -2385,11 +2385,21 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
             sourceType->kind == TypeKind::Slice
         ? sizeType : indexType;
     if (plan.materialized) {
-        auto transfer = std::make_unique<MoveExpr>();
-        transfer->location = statement->location;
-        transfer->operand = identifier(plan.materializedIndex);
-        transfer->type = loopIndexType;
-        initial = std::move(transfer);
+        if (guardedConsumingSource) {
+            // The materialized recipe owns its source in an outer scope; the
+            // for-loop's guarded cursor is a fresh Copy synthetic local in
+            // loopScope initialized to zero, so the guarded tail cleanup and
+            // cursor share loopScope (matching the verifier's cursor-scope
+            // rule) while the source local stays in the recipe's scope. The
+            // recipe's own index local is left for the recipe to manage.
+            initial = integer(0, loopIndexType);
+        } else {
+            auto transfer = std::make_unique<MoveExpr>();
+            transfer->location = statement->location;
+            transfer->operand = identifier(plan.materializedIndex);
+            transfer->type = loopIndexType;
+            initial = std::move(transfer);
+        }
         limit = identifier(plan.materializedLimit);
     } else if (plan.mode == IteratorMode::Range) {
         initial = std::move(plan.rangeStart);

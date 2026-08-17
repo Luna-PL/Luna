@@ -392,9 +392,26 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             error({}, "cleanup " + std::to_string(index) +
                       " references a missing local");
         else {
-            if (local->scope != cleanup.scope)
-                error({}, "cleanup " + std::to_string(index) +
-                          " targets a local owned by another scope");
+            if (local->scope != cleanup.scope) {
+                // A guarded array tail cleanup for a materialized consuming
+                // source lives in the for-loop's (child) scope while the source
+                // local lives in the recipe's outer scope. The tail is cleaned
+                // when the child scope exits, before the outer scope, so a
+                // guarded cleanup in a descendant scope of the source local is
+                // sound. Unguarded cleanups still require the same scope.
+                bool guardedDescendantScope = false;
+                if (cleanup.guard) {
+                    for (const auto* scope = graph.findScope(cleanup.scope);
+                         scope; scope = graph.findScope(scope->parent))
+                        if (scope->id == local->scope) {
+                            guardedDescendantScope = true;
+                            break;
+                        }
+                }
+                if (!guardedDescendantScope)
+                    error({}, "cleanup " + std::to_string(index) +
+                              " targets a local owned by another scope");
+            }
             if (local->relation != luna::ownership::Relation::Owned)
                 error({}, "cleanup " + std::to_string(index) +
                           " targets a borrowed local");
@@ -879,7 +896,8 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                     sourceType->innerTypeId == move->type &&
                     indexLocal->id == move->nextUnread &&
                     cursor->type == indexLocal->type &&
-                    cursor->scope == sourceLocal->scope &&
+                    (cursor->scope == sourceLocal->scope ||
+                     localVisibleFrom(sourceLocal->scope, cursor->scope)) &&
                     localVisibleFrom(cursor->scope, block.scope);
                 if (sourceLocal) {
                     for (const auto& cleanup : graph.cleanups) {
