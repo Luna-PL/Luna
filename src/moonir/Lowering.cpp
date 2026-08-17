@@ -841,6 +841,9 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         if (slot->usesDynamicDispatch) {
             mModule->features.runtime = true;
             mModule->features.dynamicApply = true;
+            mModule->registerType(TyCStr);
+            mModule->registerType(TyI32);
+            mModule->registerType(TyBool);
         }
         result = std::move(value);
     } else if (dynamic_cast<const ::ResumeStmt*>(statement)) {
@@ -887,6 +890,14 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
             mModule->features.dynamicApply = true;
             mModule->costs.push_back({CostKind::DynamicBinding, apply->slotName,
                                       "dynamic apply operation", locationOf(apply)});
+            // Dynamic fragment dispatch (rt_dynamic_fragment_select/matches)
+            // uses string-literal name arguments and returns cstr/i32. A
+            // program that uses dynamic apply but no string literals would
+            // otherwise lack the frozen CStr/I32/Bool rows the canonical
+            // CFG builder resolves from the type table.
+            mModule->registerType(TyCStr);
+            mModule->registerType(TyI32);
+            mModule->registerType(TyBool);
         }
         result = std::move(value);
     } else {

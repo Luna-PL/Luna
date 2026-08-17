@@ -4,7 +4,7 @@
 > All items below are 0.3 item-10 canonical-CFG switchover work.
 > Default path (structured body) remains production; `LUNA_SEAL_CANONICAL=1` gates the canonical path.
 
-## Sealer coverage: 90/93 valid programs pass (97%)
+## Sealer coverage: 91/93 valid programs pass (98%)
 
 ## Remaining tasks (by priority)
 
@@ -59,7 +59,23 @@
 
 ### P1 — Feature gaps (designated later slices)
 
-4. **slot/fragment canonicalization** — dynamic_fragments, external_fragment_dispatch, examples/fragments still fail (runtime slot/multi-shot fail-closed). Gated on TBD-SF006 (module Slot/Fragment syntax and precise single-shot control interactions).
+4. **slot/fragment canonicalization** — PARTIALLY RESOLVED (single-shot interceptor).
+   The canonical CFG now seals a dynamic single-shot interceptor apply: each
+   candidate fragment body is cloned into its own Fragment region, the runtime
+   selects among them via `rt_dynamic_fragment_select` /
+   `rt_dynamic_fragment_matches`, matched interceptors forward to a shared
+   Continuation region, and an unknown runtime name calls
+   `rt_dynamic_fragment_report_unknown_and_abort`. The dynamic apply scope
+   (`mDynamicApplyScopes`) tracks candidate sets; `lowerDynamicSlotInvoke`
+   builds the dispatch graph. Runtime context and multi-shot slot composition
+   remain fail-closed with a clear NP004 diagnostic. The
+   `moonir_canonical_test` runtime-boundary test was updated: context/multi-
+   shot is still rejected, and a new positive test verifies the interceptor
+   path seals with 2 Fragment + 1 Continuation regions.
+   **Remaining**: external_fragment_dispatch (uses `runtime interceptor` +
+   external plugin ABI), dynamic_fragments (uses `dynamic slot context` with
+   `resume()` — NP004 deferred), examples/fragments (multi-shot `context
+   many` — NP004 deferred). Gated on TBD-SF006 for the remaining surface.
 
 5. **materialized recipe full state** — RESOLVED. Both iterator_materialized_move_only and
    iterator_move_only_array fail on multiple design-gated boundaries:

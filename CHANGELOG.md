@@ -2,6 +2,26 @@
 
 ## 0.3.0 — Development
 
+- Connected the canonical CFG to dynamic single-shot interceptor apply
+  (SF005). A dynamic slot interceptor declaration with a dynamic apply
+  carrying a finite candidate set now seals into a verified canonical CFG
+  instead of being fail-closed. Each candidate fragment body is cloned
+  into its own Fragment region; the runtime selects among statically
+  linked candidates via rt_dynamic_fragment_select /
+  rt_dynamic_fragment_matches, a matched interceptor forwards to a shared
+  Continuation region, and an unknown runtime name calls
+  rt_dynamic_fragment_report_unknown_and_abort. lowerApply records
+  candidate sets in a new mDynamicApplyScopes stack;
+  lowerDynamicSlotInvoke builds the dispatch graph with Branch
+  terminators on per-candidate match results. Runtime context and
+  multi-shot slot composition remain fail-closed with a clear NP004
+  diagnostic. The moonir_canonical_test runtime-boundary test was
+  updated: context/multi-shot is still rejected, and a new positive test
+  verifies the interceptor path seals with 2 Fragment + 1 Continuation
+  regions. Sealer coverage on valid programs rose from 90/93 (97%) to
+  91/93 (98%). The 51-test CTest suite, strict-warning build, and
+  ASan/UBSan build all remain green.
+
 - Folded compile-time-valued reflection calls into MoonIR literals at lowering time. A DeclarationRef let binding is already skipped by lowering, but a reflection call referencing it reached sealed IR as a CallExpr with no canonical local. Lowering now folds any call whose compileTimeValue is set into the corresponding literal. static_declaration_reflection now seals; coverage 89/93 to 90/93.
 
 - Completed the materialized recipe full state slice for the canonical CFG.

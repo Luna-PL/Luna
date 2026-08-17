@@ -884,6 +884,46 @@ llvm::Value* CodeGenerator::generateCall(CallExpr* call) {
             }
         }
 
+        // Runtime fragment dispatch intrinsics emitted by the canonical CFG
+        // builder for dynamic single-shot interceptor apply. These have no
+        // MoonIR declaration row; resolve them directly to their runtime ABI.
+        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
+            if (calleeId->name == "rt_dynamic_fragment_select" &&
+                call->args.size() == 2) {
+                auto fn = mModule->getOrInsertFunction(
+                    "rt_dynamic_fragment_select",
+                    mHelpers->ptrTy(), mHelpers->ptrTy(), mHelpers->ptrTy());
+                std::vector<llvm::Value*> args;
+                for (auto& arg : call->args)
+                    args.push_back(coerceCallArgument(
+                        generateExpr(arg.get()), mHelpers->ptrTy()));
+                return mBuilder->CreateCall(fn, args, "dynamic.fragment.select");
+            }
+            if (calleeId->name == "rt_dynamic_fragment_matches" &&
+                call->args.size() == 2) {
+                auto fn = mModule->getOrInsertFunction(
+                    "rt_dynamic_fragment_matches",
+                    mHelpers->i32Ty(), mHelpers->ptrTy(), mHelpers->ptrTy());
+                std::vector<llvm::Value*> args;
+                for (auto& arg : call->args)
+                    args.push_back(coerceCallArgument(
+                        generateExpr(arg.get()), mHelpers->ptrTy()));
+                return mBuilder->CreateCall(fn, args, "dynamic.fragment.matches");
+            }
+            if (calleeId->name == "rt_dynamic_fragment_report_unknown_and_abort") {
+                auto fn = mModule->getOrInsertFunction(
+                    "rt_dynamic_fragment_report_unknown_and_abort",
+                    mHelpers->voidTy(), mHelpers->ptrTy(), mHelpers->ptrTy());
+                std::vector<llvm::Value*> args;
+                for (auto& arg : call->args)
+                    args.push_back(coerceCallArgument(
+                        generateExpr(arg.get()), mHelpers->ptrTy()));
+                mBuilder->CreateCall(fn, args);
+                mBuilder->CreateUnreachable();
+                return llvm::PoisonValue::get(mHelpers->i32Ty());
+            }
+        }
+
         // Global calls are resolved only through the verified declaration
         // table. Source names never act as a backend lookup fallback.
         if (dynamic_cast<IdentifierExpr*>(call->callee.get())) {

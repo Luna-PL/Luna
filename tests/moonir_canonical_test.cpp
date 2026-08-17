@@ -5058,7 +5058,8 @@ fn dynamic_entry() -> i32 {
                        "runtime slot composition is outside the static canonical CFG slice") !=
                        std::string::npos ||
                 error.find(
-                    "runtime apply is outside the static canonical CFG slice") !=
+                    "runtime context or multi-shot slot composition is "
+                    "outside the 0.3 canonical static boundary") !=
                     std::string::npos;
         });
     if (!diagnosedRuntimeBoundary)
@@ -5070,6 +5071,78 @@ fn dynamic_entry() -> i32 {
         return fail("failed module sealing partially consumed its function set");
     if (!verifier.verify(*runtimeIntegrationModule))
         return fail("failed atomic sealing changed the structured module");
+
+    // Positive: a single-shot interceptor dynamic apply must seal into a
+    // verified canonical CFG. The runtime selects among statically linked
+    // candidates via rt_dynamic_fragment_select/matches; each candidate body
+    // is cloned into its own Fragment region and forwards to the continuation.
+    const std::string dynamicInterceptorSource = R"luna(
+package canonical.dynamic_interceptor;
+
+runtime interceptor trace(value: i32) {
+    print(value + 1);
+}
+
+runtime interceptor audit(value: i32) {
+    print(value + 2);
+}
+
+fn main() -> i32 {
+    dynamic slot interceptor pipeline(value: i32);
+    dynamic apply pipeline(trace, audit) {
+        pipeline(41) {
+            print(42);
+        }
+    }
+    return 0;
+}
+)luna";
+    auto interceptorSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            dynamicInterceptorSource,
+            "<canonical-dynamic-interceptor>");
+    if (!interceptorSnapshot.success()) {
+        for (const auto& diagnostic : interceptorSnapshot.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("frontend rejected the dynamic interceptor source");
+    }
+    moon::LunaLowerer interceptorLowerer;
+    auto interceptorModule = interceptorLowerer.lower(
+        *interceptorSnapshot.program(),
+        *interceptorSnapshot.symbolTable());
+    if (!interceptorLowerer.errors().empty()) {
+        for (const auto& diagnostic : interceptorLowerer.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("MoonIR lowering rejected the dynamic interceptor source");
+    }
+    if (!verifier.verify(*interceptorModule))
+        return fail("dynamic interceptor module failed structured verification");
+    moon::FunctionDecl* interceptorMain = nullptr;
+    for (auto& declaration : interceptorModule->declarations) {
+        auto* function = dynamic_cast<moon::FunctionDecl*>(declaration.get());
+        if (function && function->name == "main")
+            interceptorMain = function;
+    }
+    if (!interceptorMain || !interceptorMain->body)
+        return fail("dynamic interceptor module lost its main body");
+    moon::Sealer interceptorSealer;
+    if (!interceptorSealer.sealFunctionBodies(*interceptorModule)) {
+        for (const auto& diagnostic : interceptorSealer.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("canonical sealing rejected a valid dynamic interceptor apply");
+    }
+    if (!interceptorMain->controlFlow)
+        return fail("dynamic interceptor main was not sealed to a canonical CFG");
+    size_t interceptorFragmentRegions = 0;
+    size_t interceptorContinuationRegions = 0;
+    for (const auto& region : interceptorMain->controlFlow->regions) {
+        if (region.kind == moon::RegionKind::Fragment) ++interceptorFragmentRegions;
+        if (region.kind == moon::RegionKind::Continuation) ++interceptorContinuationRegions;
+    }
+    if (interceptorFragmentRegions != 2)
+        return fail("dynamic interceptor apply did not materialize 2 candidate Fragment regions");
+    if (interceptorContinuationRegions != 1)
+        return fail("dynamic interceptor apply did not materialize 1 shared Continuation region");
 
     const auto reverseIterator = reverse.typesById.find(shortId.value);
     if (reverseIterator == reverse.typesById.end())
