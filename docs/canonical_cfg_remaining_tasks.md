@@ -103,14 +103,16 @@
    `LUNA_SEAL_CANONICAL=1` produces 4 failures:
    - **NP004-deferred features (2)**: semantic-regressions (fragments
      multi-shot), full-showcase (runtime context) — expect NP004 features
-   - **Sealer gaps (2)**: core-surface (into_iter local usage / jump edge
-     cleanup / ownership state), iterator-materialized-move-only-aot (JIT
-     output divergence — move-only iterator element ordering) — require
-     move-only iterator cleanup state (P1 #5/#6)
+   - **Move-only iterator cleanup state (2)**: core-surface (main: jump edge
+     cleanup state + ownership state divergence after into_iter loops),
+     iterator-materialized-move-only-aot (JIT output divergence — move-only
+     iterator element ordering) — require projected canonical cleanup state
+     for move-only iterators (design doc §784-793, P1 #5/#6)
 
-   The external-fragment-dispatch test was fixed by adding the external v1
-   plugin fallback (rt_fragment_plugin_invoke) to the canonical dynamic slot
-   dispatch. The 5 IR-pattern-check failures were resolved by guarding
+   The into_iter parameter usage sealer gap was fixed by strengthening Owned
+   parameter usage to the frozen type's resource requirement. The
+   external-fragment-dispatch test was fixed by adding the external v1 plugin
+   fallback. The 5 IR-pattern-check failures were resolved by guarding
    structured-path IR pattern checks. std-io-smoke was fixed by accepting
    string/cstr coercion in the canonical verifier. The gate cannot be
    flipped to default-on until these 4 tests pass. The output-parity scan
