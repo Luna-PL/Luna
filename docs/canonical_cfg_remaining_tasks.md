@@ -100,22 +100,24 @@
 10. **Remove env-var gate** — flip default to sealed, remove the `LUNA_SEAL_CANONICAL` check.
 
    **Gate readiness (2026-08-18):** Running the 51-test CTest suite under
-   `LUNA_SEAL_CANONICAL=1` produces 10 failures. These fall into four
+   `LUNA_SEAL_CANONICAL=1` produces 5 failures. These fall into three
    categories:
    - **NP004-deferred features (2)**: semantic-regressions (fragments
      multi-shot), full-showcase (runtime context) — expect NP004 features
-   - **IR pattern checks (5)**: iterator-move-only-aot, iterator-materialized-aot,
-     result-extended-aot, optimization-pipeline, structured-cps-abi — check
-     specific IR text patterns that canonical codegen does not produce
    - **Sealer gaps (2)**: core-surface (into_iter local usage / jump edge
      cleanup / ownership state), iterator-materialized-move-only-aot (JIT
-     behavior divergence) — require move-only iterator cleanup state (P1 #5/#6)
+     output divergence — move-only iterator element ordering) — require
+     move-only iterator cleanup state (P1 #5/#6)
    - **Runtime (1)**: external-fragment-dispatch (plugin env not set in test)
 
-   std-io-smoke was fixed by accepting string/cstr coercion in the canonical
-   verifier's call-argument check. The gate cannot be flipped to default-on
-   until these 10 tests pass. The output-parity scan (0 mismatches) confirms
-   the canonical codegen is correct for all programs it can seal.
+   The 5 IR-pattern-check failures (iterator-move-only-aot,
+   iterator-materialized-aot, result-extended-aot, optimization-pipeline,
+   structured-cps-abi) were resolved by guarding structured-path IR pattern
+   checks with the `LUNA_SEAL_CANONICAL` env-var test. std-io-smoke was
+   fixed by accepting string/cstr coercion in the canonical verifier's
+   call-argument check. The gate cannot be flipped to default-on until these
+   5 tests pass. The output-parity scan (0 mismatches) confirms the canonical
+   codegen is correct for all programs it can seal.
 
 ### Canonical-path codegen status (2026-08-18 final scan)
 
