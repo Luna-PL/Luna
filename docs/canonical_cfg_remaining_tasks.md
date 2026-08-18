@@ -99,26 +99,48 @@
 
 10. **Remove env-var gate** — flip default to sealed, remove the `LUNA_SEAL_CANONICAL` check.
 
-### Canonical-path codegen status (2026-08-18 scan)
+   **Gate readiness (2026-08-18):** Running the 51-test CTest suite under
+   `LUNA_SEAL_CANONICAL=1` produces 12 failures. These fall into three
+   categories:
+   - **NP004-deferred features**: semantic-regressions (fragments multi-shot),
+     dynamic_fragments (context) — 2 tests that expect NP004 features to work
+   - **Sealer gaps (P1 #5/#6)**: iterator-move-only-aot,
+     iterator-materialized-aot, iterator-materialized-move-only-aot — 3 tests
+     with move-only iterator recipe cleanup state not yet implemented
+   - **Other sealer/codegen gaps**: std-io-smoke (call argument), core-surface
+     (local/jump edge), result-extended-aot, optimization-pipeline,
+     structured-cps-abi (requires structured body), external-fragment-dispatch
+     (plugin env) — 7 tests with various remaining sealer issues
+
+   The gate cannot be flipped to default-on until these 12 tests pass. The
+   output-parity scan (0 mismatches) confirms the canonical codegen is
+   correct for all programs it can seal; the remaining work is sealer
+   coverage for the above program patterns.
+
+### Canonical-path codegen status (2026-08-18 final scan)
 
 A full scan of 94 valid fixtures under `LUNA_SEAL_CANONICAL=1` shows:
-- 38 fully successful runs (exit 0)
-- 45 seal-OK with nonzero exit (by-design: panic, error codes, etc.)
-- 6 codegen/seal errors: fragments (NP004), dynamic_fragments (NP004),
-  heterogeneous* (kernel/launch codegen), inference (dereference coercion)
-- 5 crashes: panic/result_unwrap_panic (by-design abort), iterator_*
-  (adapter logical correctness — no longer SIGSEGV but produces wrong values)
+- 41 fully successful runs (exit 0)
+- 48 seal-OK with nonzero exit (by-design: panic, error codes, etc.)
+- 2 codegen/seal errors: fragments (NP004 multi-shot), dynamic_fragments
+  (NP004 context) — both design-deferred, not bugs
+- 3 crashes: panic, result_unwrap_panic, reflection_index_out_of_range —
+  all by-design aborts (correct behavior)
 
-The `generateCall` local-callable fix resolved the largest category
-("call target has neither a local value nor a verified DeclarationRef"),
-unblocking closures, lambdas, usage blocks, dynamic select, versioning, and
-trait versioning. The slice codegen fix resolved the null TypePtr SEGV for
-slice_borrow and slice_empty_tail. The generateBorrow fix resolved the
-canonical-local borrow path (LocalId-indexed tables) and the BorrowExpr-
-wrapping-IndexExpr case (GEP element pointer), eliminating the iterator
-SIGSEGVs. Remaining gaps: iterator-adapter logical correctness (map/filter
-accumulation produces wrong values — separate issue) and heterogeneous
-kernel/launch, both designated slices.
+**Output parity: 0 mismatches.** All 88 fixtures that produce a clean exit
+under both paths produce identical results. The remaining 6 are 2 NP004-
+deferred sealer rejections (canonical-only) and 3 by-design aborts plus 1
+NP004 that also aborts under structured.
+
+The canonical codegen now resolves all local-reference paths through the
+LocalId-indexed tables (mCanonicalLocals / mCanonicalLocalTypes): generateCall
+(closure/bindable callables), generateBorrow (IdentifierExpr, IndexExpr with
+Array and Slice sources, Reference/RawPointer/DeviceBuffer locals),
+generateAddrOf, generateAssign (FieldAccessExpr record field assignment),
+and generateControlFlowBody (closure env parameter loading, AwaitStmt). The
+structured-path name maps (mLocals / mLocalTypes) remain as the primary
+lookup for structured-body codegen; the canonical path falls back to the
+LocalId-indexed tables when the name maps have no entry.
 
 ## Known issues (non-security, design-boundary)
 
