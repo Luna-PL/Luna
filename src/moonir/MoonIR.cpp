@@ -607,6 +607,8 @@ bool isCompilerIntrinsicName(const std::string& name) {
         "rt_dynamic_fragment_select",
         "rt_dynamic_fragment_matches",
         "rt_dynamic_fragment_report_unknown_and_abort",
+        "rt_canonical_fragment_plugin_fallback",
+        "rt_fragment_plugin_report_error_and_abort",
     };
     return names.count(name) > 0;
 }

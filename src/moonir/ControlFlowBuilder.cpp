@@ -5316,30 +5316,127 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
             nextBlock = addBlock(
                 invocationRegion, invocationScope, statement->location);
         } else {
-            // Final fallback: call rt_dynamic_fragment_report_unknown_and_abort.
+            // Final fallback: no statically linked candidate matched. Try
+            // the external v1 plugin ABI before aborting. The codegen
+            // intrinsic rt_canonical_fragment_plugin_fallback builds the
+            // invocation struct and calls rt_fragment_plugin_invoke.
+            // Result: 0 = continue (enter continuation), 1 = abort (skip
+            // continuation), other = error (report and abort).
             nextBlock = addBlock(
                 invocationRegion, invocationScope, statement->location);
-            auto abortCall = std::make_unique<CallExpr>();
-            abortCall->location = statement->location;
-            abortCall->type = TypeRef{}; // void
-            auto abortCallee = std::make_unique<IdentifierExpr>();
-            abortCallee->name = "rt_dynamic_fragment_report_unknown_and_abort";
-            abortCallee->location = statement->location;
-            abortCall->callee = std::move(abortCallee);
+            auto pluginCall = std::make_unique<CallExpr>();
+            pluginCall->location = statement->location;
+            pluginCall->type = i32Type;
+            auto pluginCallee = std::make_unique<IdentifierExpr>();
+            pluginCallee->name = "rt_canonical_fragment_plugin_fallback";
+            pluginCallee->location = statement->location;
+            pluginCall->callee = std::move(pluginCallee);
             auto slotNameLit = std::make_unique<StringLiteralExpr>();
             slotNameLit->value = statement->name;
             slotNameLit->location = statement->location;
-            abortCall->args.push_back(std::move(slotNameLit));
-            abortCall->args.push_back(localRef(selectedLocal));
+            pluginCall->args.push_back(std::move(slotNameLit));
+            pluginCall->args.push_back(localRef(selectedLocal));
+            // Build the contract hash string matching
+            // externalFragmentContract: luna.slot.<name>.<kind>.<card>.<types>.v1
+            std::string contractStr = "luna.slot." + statement->name + ".";
+            contractStr += statement->acceptedKind == FragmentKind::Interceptor
+                ? "interceptor" : "context";
+            contractStr += statement->acceptedCardinality == FragmentCardinality::Many
+                ? ".many" : ".once";
+            if (const auto* structuralType = mModule->findType(
+                    statement->structuralType)) {
+                for (const auto& paramType : structuralType->parameterTypeIds) {
+                    if (const auto* param = mModule->findType(paramType))
+                        contractStr += "." + param->displayName;
+                    else
+                        contractStr += ".unknown";
+                }
+            }
+            contractStr += ".v1";
+            auto contractLit = std::make_unique<StringLiteralExpr>();
+            contractLit->value = contractStr;
+            contractLit->location = statement->location;
+            pluginCall->args.push_back(std::move(contractLit));
+            for (const auto& arg : statement->args)
+                pluginCall->args.push_back(cloneStructuredExpr(arg.get()));
+            auto pluginStmt = std::make_unique<LetStmt>();
+            pluginStmt->location = statement->location;
+            pluginStmt->name = "$dynamic.plugin.result";
+            pluginStmt->isLinear = false;
+            pluginStmt->usage = luna::ownership::Usage::Copy;
+            pluginStmt->relation = luna::ownership::Relation::Owned;
+            pluginStmt->type = i32Type;
+            pluginStmt->initializer = std::move(pluginCall);
+            const LocalId pluginResult = addLocal(
+                invocationScope, LocalKind::Synthetic,
+                "$dynamic.plugin.result", i32Type,
+                luna::ownership::Usage::Copy, std::nullopt,
+                /*inferTypeCleanup=*/false);
+            pluginStmt->local = pluginResult;
+            pluginStmt->relation =
+                mGraph->locals[pluginResult.value].relation;
+            mGraph->blocks[nextBlock.value].operations.push_back(
+                std::move(pluginStmt));
+
+            // Branch on plugin result: continue (0) -> continuation,
+            // abort (1) -> invocation exit, other -> error+abort.
+            const BlockId abortBlock = addBlock(
+                invocationRegion, invocationScope, statement->location);
+            auto& abortTerm =
+                mGraph->blocks[abortBlock.value].terminator;
+            abortTerm.kind = TerminatorKind::Unreachable;
+            abortTerm.location = statement->location;
+            auto abortCall = std::make_unique<CallExpr>();
+            abortCall->location = statement->location;
+            abortCall->type = TypeRef{};
+            auto abortCallee = std::make_unique<IdentifierExpr>();
+            abortCallee->name = "rt_fragment_plugin_report_error_and_abort";
+            abortCallee->location = statement->location;
+            abortCall->callee = std::move(abortCallee);
             auto abortStmt = std::make_unique<ExprStmt>();
             abortStmt->location = statement->location;
             abortStmt->expr = std::move(abortCall);
-            mGraph->blocks[nextBlock.value].operations.push_back(
+            mGraph->blocks[abortBlock.value].operations.push_back(
                 std::move(abortStmt));
-            auto& abortTerm =
+
+            auto cond = std::make_unique<BinaryExpr>();
+            cond->location = statement->location;
+            cond->lhs = localRef(pluginResult);
+            cond->op = Operator::Equal;
+            auto zero = std::make_unique<IntLiteralExpr>();
+            zero->value = 0;
+            zero->location = statement->location;
+            zero->type = i32Type;
+            cond->rhs = std::move(zero);
+            cond->type = boolType;
+
+            auto& pluginTerm =
                 mGraph->blocks[nextBlock.value].terminator;
-            abortTerm.kind = TerminatorKind::Unreachable;
-            abortTerm.location = statement->location;
+            pluginTerm.kind = TerminatorKind::Branch;
+            pluginTerm.location = statement->location;
+            pluginTerm.operand = std::move(cond);
+            pluginTerm.primary.target = continuation.entry;
+            // Secondary: check abort (1) vs error (other).
+            const BlockId checkAbort = addBlock(
+                invocationRegion, invocationScope, statement->location);
+            auto cond2 = std::make_unique<BinaryExpr>();
+            cond2->location = statement->location;
+            cond2->lhs = localRef(pluginResult);
+            cond2->op = Operator::Equal;
+            auto one = std::make_unique<IntLiteralExpr>();
+            one->value = 1;
+            one->location = statement->location;
+            one->type = i32Type;
+            cond2->rhs = std::move(one);
+            cond2->type = boolType;
+            auto& checkAbortTerm =
+                mGraph->blocks[checkAbort.value].terminator;
+            checkAbortTerm.kind = TerminatorKind::Branch;
+            checkAbortTerm.location = statement->location;
+            checkAbortTerm.operand = std::move(cond2);
+            checkAbortTerm.primary.target = invocationExit;
+            checkAbortTerm.secondary.target = abortBlock;
+            pluginTerm.secondary.target = checkAbort;
         }
 
         auto& branchTerm =
