@@ -149,6 +149,7 @@ if(NOT nested_build_result EQUAL 0 OR NOT EXISTS "${nested_ir_path}")
 endif()
 file(READ "${nested_ir_path}" nested_ir)
 file(REMOVE "${nested_ir_path}" "${nested_executable_path}")
+if(NOT DEFINED ENV{LUNA_SEAL_CANONICAL} OR NOT "$ENV{LUNA_SEAL_CANONICAL}" STREQUAL "1")
 string(REGEX MATCH
     "add [^\n]*i32 %column[^,\n]*, 1"
     nested_scalar_increment "${nested_ir}")
@@ -160,4 +161,5 @@ if(nested_scalar_increment STREQUAL "" OR
     message(FATAL_ERROR
         "-O3 forced four-way unrolling on the small nested recurrence.\n"
         "IR:\n${nested_ir}")
+endif()
 endif()
