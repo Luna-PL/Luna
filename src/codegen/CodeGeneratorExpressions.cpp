@@ -940,6 +940,73 @@ llvm::Value* CodeGenerator::generateCall(CallExpr* call) {
                 mBuilder->CreateUnreachable();
                 return llvm::PoisonValue::get(mHelpers->i32Ty());
             }
+            // Canonical dynamic slot dispatch: external v1 plugin fallback.
+            // Args: slot_name (str), selected_name (str), slot args...
+            // Builds a LunaFragmentInvocationV1 struct and calls
+            // rt_fragment_plugin_invoke. Returns its i32 result.
+            if (calleeId->name == "rt_canonical_fragment_plugin_fallback" &&
+                call->args.size() >= 3) {
+                auto* slotName = coerceCallArgument(
+                    generateExpr(call->args[0].get()), mHelpers->ptrTy());
+                auto* selected = coerceCallArgument(
+                    generateExpr(call->args[1].get()), mHelpers->ptrTy());
+                auto* contract = coerceCallArgument(
+                    generateExpr(call->args[2].get()), mHelpers->ptrTy());
+                // Build the invocation struct: {i32 abi_version, ptr args, usize arg_count}
+                auto* invocationType = llvm::StructType::get(
+                    *mCtx, {mHelpers->i32Ty(), mHelpers->ptrTy(), mHelpers->sizeTy()});
+                auto* invocationStorage = createEntryBlockAlloca(
+                    mCurrentFunc, invocationType, "plugin.invocation");
+                const size_t numArgs = call->args.size() - 3;
+                llvm::Value* argArray = llvm::ConstantPointerNull::get(
+                    llvm::cast<llvm::PointerType>(mHelpers->ptrTy()));
+                if (numArgs > 0) {
+                    auto* arrayType = llvm::ArrayType::get(mHelpers->ptrTy(), numArgs);
+                    auto* arrayStorage = createEntryBlockAlloca(
+                        mCurrentFunc, arrayType, "plugin.args");
+                    for (size_t i = 0; i < numArgs; ++i) {
+                        auto* value = generateExpr(call->args[i + 3].get());
+                        auto* valueStorage = createEntryBlockAlloca(
+                            mCurrentFunc, value->getType(), "plugin.arg");
+                        mBuilder->CreateStore(value, valueStorage);
+                        auto* element = mBuilder->CreateInBoundsGEP(
+                            arrayType, arrayStorage,
+                            {llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
+                             llvm::ConstantInt::get(mHelpers->i32Ty(), i)},
+                            "plugin.arg.ptr");
+                        mBuilder->CreateStore(valueStorage, element);
+                    }
+                    argArray = mBuilder->CreateInBoundsGEP(
+                        arrayType, arrayStorage,
+                        {llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
+                         llvm::ConstantInt::get(mHelpers->i32Ty(), 0)},
+                        "plugin.args.ptr");
+                }
+                mBuilder->CreateStore(
+                    llvm::ConstantInt::get(mHelpers->i32Ty(), 1), // ABI_V1
+                    mBuilder->CreateStructGEP(invocationType, invocationStorage, 0));
+                mBuilder->CreateStore(
+                    argArray,
+                    mBuilder->CreateStructGEP(invocationType, invocationStorage, 1));
+                mBuilder->CreateStore(
+                    llvm::ConstantInt::get(mHelpers->sizeTy(), numArgs),
+                    mBuilder->CreateStructGEP(invocationType, invocationStorage, 2));
+                auto invoke = mModule->getOrInsertFunction(
+                    "rt_fragment_plugin_invoke", mHelpers->i32Ty(),
+                    mHelpers->ptrTy(), mHelpers->ptrTy(), mHelpers->ptrTy(),
+                    mHelpers->ptrTy());
+                return mBuilder->CreateCall(invoke,
+                    {slotName, selected, contract, invocationStorage},
+                    "plugin.action");
+            }
+            if (calleeId->name == "rt_fragment_plugin_report_error_and_abort") {
+                auto fn = mModule->getOrInsertFunction(
+                    "rt_fragment_plugin_report_error_and_abort",
+                    mHelpers->voidTy());
+                mBuilder->CreateCall(fn);
+                mBuilder->CreateUnreachable();
+                return llvm::PoisonValue::get(mHelpers->i32Ty());
+            }
         }
 
         // Global calls are resolved only through the verified declaration
