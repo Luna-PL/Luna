@@ -5326,11 +5326,11 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
             abortCallee->name = "rt_dynamic_fragment_report_unknown_and_abort";
             abortCallee->location = statement->location;
             abortCall->callee = std::move(abortCallee);
-            abortCall->args.push_back(localRef(selectedLocal));
             auto slotNameLit = std::make_unique<StringLiteralExpr>();
             slotNameLit->value = statement->name;
             slotNameLit->location = statement->location;
             abortCall->args.push_back(std::move(slotNameLit));
+            abortCall->args.push_back(localRef(selectedLocal));
             auto abortStmt = std::make_unique<ExprStmt>();
             abortStmt->location = statement->location;
             abortStmt->expr = std::move(abortCall);
