@@ -743,7 +743,15 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                              sigType->kind == TypeKind::U64 ||
                              sigType->kind == TypeKind::USize ||
                              sigType->kind == TypeKind::ISize);
-                        if (!bothInteger)
+                        // The structured backend tolerates String/CStr
+                        // coercion (both are pointer types in LLVM). The
+                        // canonical verifier must accept the same.
+                        const bool stringCstrCoercion = argType && sigType &&
+                            ((argType->kind == TypeKind::String &&
+                              sigType->kind == TypeKind::CStr) ||
+                             (argType->kind == TypeKind::CStr &&
+                              sigType->kind == TypeKind::String));
+                        if (!bothInteger && !stringCstrCoercion)
                             error(call->location,
                                   "call argument type disagrees with its signature");
                     }
