@@ -785,9 +785,24 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
             return nullptr;
         }
     }
-    for (const auto& parameter : parameters)
+    for (const auto& parameter : parameters) {
+        auto usage = parameter.usage;
+        auto relation = parameter.relation;
+        // A trait-method instance may carry a Copy usage for an Owned
+        // parameter whose frozen type requires Affine/Linear. Strengthen
+        // the parameter usage to meet the frozen type's requirement so the
+        // canonical verifier's usage check does not reject a valid program.
+        if (relation != luna::ownership::Relation::SharedBorrow &&
+            relation != luna::ownership::Relation::MutableBorrow) {
+            if (const auto* frozen = mModule->findType(parameter.type)) {
+                if (!luna::ownership::satisfiesUsageRequirement(
+                        usage, frozen->sysmeta.resource.usage))
+                    usage = frozen->sysmeta.resource.usage;
+            }
+        }
         addLocal(rootScope, LocalKind::Parameter, parameter.name,
-                 parameter.type, parameter.usage, parameter.relation);
+                 parameter.type, usage, relation);
+    }
     if (!mCaptureEnvParamName.empty()) {
         for (auto& statement : root->stmts)
             statement = rewriteCaptureReadsStmt(
