@@ -1414,11 +1414,15 @@ llvm::Value* CodeGenerator::generateBorrow(BorrowExpr* bw) {
                             ? "local." + std::to_string(id->local.value) +
                               ".borrowed_object"
                             : id->name + ".borrowed_object");
-                // A reference-typed local (&i32) already stores a pointer.
-                // Borrowing it returns the stored pointer, not the alloca
-                // address, so the adapter receives the element address
-                // directly rather than a pointer-to-pointer.
-                if (localType && localType->kind == TypeKind::Reference)
+                // A pointer-typed local (&i32, raw<T>, device_buffer<T>)
+                // already stores a pointer. Borrowing it returns the stored
+                // pointer, not the alloca address, so the callee receives
+                // the element address directly rather than a pointer-to-
+                // pointer.
+                if (localType &&
+                    (localType->kind == TypeKind::Reference ||
+                     localType->kind == TypeKind::RawPointer ||
+                     localType->kind == TypeKind::DeviceBuffer))
                     return mBuilder->CreateLoad(
                         alloca->getAllocatedType(), alloca,
                         id->name.empty()
