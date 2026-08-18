@@ -1500,6 +1500,11 @@ llvm::Value* CodeGenerator::generateAddrOf(AddrOfExpr* ad) {
         if (auto* id = dynamic_cast<IdentifierExpr*>(ad->operand.get())) {
             auto it = mLocals.find(id->name);
             if (it != mLocals.end()) return it->second;
+            // Canonical CFG path: locals are indexed by LocalId, not name.
+            if (!id->local.empty() &&
+                id->local.value < mCanonicalLocals.size() &&
+                mCanonicalLocals[id->local.value])
+                return mCanonicalLocals[id->local.value];
         }
         return generateExpr(ad->operand.get());
 }
