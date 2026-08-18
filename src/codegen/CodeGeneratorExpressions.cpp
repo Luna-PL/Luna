@@ -1195,31 +1195,34 @@ llvm::Value* CodeGenerator::generateAssign(AssignExpr* as) {
                 dynamic_cast<FieldAccessExpr*>(
                     as->lhs.get())) {
             TypePtr objectType;
+            llvm::AllocaInst* objectStorage = nullptr;
             if (auto* id =
                     dynamic_cast<IdentifierExpr*>(
                         field->object.get())) {
                 auto type = mLocalTypes.find(id->name);
                 if (type != mLocalTypes.end())
                     objectType = type->second;
+                auto local = mLocals.find(id->name);
+                if (local != mLocals.end())
+                    objectStorage = local->second;
+                // Canonical CFG path: locals are indexed by LocalId.
+                if (!objectType && !id->local.empty() &&
+                    id->local.value < mCanonicalLocalTypes.size())
+                    objectType = mCanonicalLocalTypes[id->local.value];
+                if (!objectStorage && !id->local.empty() &&
+                    id->local.value < mCanonicalLocals.size())
+                    objectStorage = mCanonicalLocals[id->local.value];
             }
             if (objectType &&
                 objectType->kind == TypeKind::Reference)
                 objectType = objectType->inner;
             const size_t index =
                 fieldIndex(objectType, field->field);
-            if (objectType &&
+            if (objectType && objectStorage &&
                 index != static_cast<size_t>(-1)) {
                 if (objectType->kind == TypeKind::Record) {
-                    auto* objectId = dynamic_cast<IdentifierExpr*>(
-                        field->object.get());
-                    auto local = objectId
-                        ? mLocals.find(objectId->name) : mLocals.end();
-                    if (local == mLocals.end()) {
-                        error("record field assignment requires a local record binding");
-                        return rhs;
-                    }
                     auto* pointer = mBuilder->CreateStructGEP(
-                        local->second->getAllocatedType(), local->second,
+                        objectStorage->getAllocatedType(), objectStorage,
                         static_cast<unsigned>(index), "record.field.assign.ptr");
                     auto* valueType = mHelpers->toLLVMType(
                         objectType->fields[index].type);
