@@ -5434,18 +5434,20 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerResume(
 bool ControlFlowBuilder::bindExpr(Expr* expression) {
     if (!expression) return true;
     if (auto* identifier = dynamic_cast<IdentifierExpr*>(expression)) {
-        if (identifier->declaration.empty()) {
-            identifier->local = lookupLocal(identifier->name);
-            if (identifier->local.empty()) {
+        if (identifier->local.empty()) {
+            const LocalId local = lookupLocal(identifier->name);
+            if (!local.empty()) {
+                identifier->local = local;
+                const TypeRef localType =
+                    mGraph->locals[local.value].type;
+                if (identifier->type.empty())
+                    identifier->type = localType;
+            } else if (identifier->declaration.empty()) {
                 error(identifier->location,
                       "identifier '" + identifier->name +
                           "' has no canonical local or declaration reference");
                 return false;
             }
-            const TypeRef localType =
-                mGraph->locals[identifier->local.value].type;
-            if (identifier->type.empty())
-                identifier->type = localType;
         }
         return true;
     }
