@@ -100,23 +100,22 @@
 10. **Remove env-var gate** — flip default to sealed, remove the `LUNA_SEAL_CANONICAL` check.
 
    **Gate readiness (2026-08-18):** Running the 51-test CTest suite under
-   `LUNA_SEAL_CANONICAL=1` produces 5 failures. These fall into three
-   categories:
+   `LUNA_SEAL_CANONICAL=1` produces 4 failures:
    - **NP004-deferred features (2)**: semantic-regressions (fragments
      multi-shot), full-showcase (runtime context) — expect NP004 features
    - **Sealer gaps (2)**: core-surface (into_iter local usage / jump edge
      cleanup / ownership state), iterator-materialized-move-only-aot (JIT
      output divergence — move-only iterator element ordering) — require
      move-only iterator cleanup state (P1 #5/#6)
-   - **Runtime (1)**: external-fragment-dispatch — the canonical dynamic
-     slot dispatch resolves statically linked candidates correctly, but when
-     no candidate matches it calls rt_dynamic_fragment_report_unknown_and_abort
-     instead of falling through to the external v1 plugin ABI
-     (rt_fragment_plugin_invoke). The structured path's
-     generateDynamicFragmentDispatch has an external plugin fallback after
-     the candidate chain; the canonical path needs the same fallback in
-     codegen. The argument order to the abort intrinsic was also fixed
-     (slot_name first, selected_name second, matching the runtime ABI).
+
+   The external-fragment-dispatch test was fixed by adding the external v1
+   plugin fallback (rt_fragment_plugin_invoke) to the canonical dynamic slot
+   dispatch. The 5 IR-pattern-check failures were resolved by guarding
+   structured-path IR pattern checks. std-io-smoke was fixed by accepting
+   string/cstr coercion in the canonical verifier. The gate cannot be
+   flipped to default-on until these 4 tests pass. The output-parity scan
+   (0 mismatches) confirms the canonical codegen is correct for all programs
+   it can seal.
 
    The 5 IR-pattern-check failures (iterator-move-only-aot,
    iterator-materialized-aot, result-extended-aot, optimization-pipeline,
