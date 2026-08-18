@@ -108,7 +108,15 @@
      cleanup / ownership state), iterator-materialized-move-only-aot (JIT
      output divergence — move-only iterator element ordering) — require
      move-only iterator cleanup state (P1 #5/#6)
-   - **Runtime (1)**: external-fragment-dispatch (plugin env not set in test)
+   - **Runtime (1)**: external-fragment-dispatch — the canonical dynamic
+     slot dispatch resolves statically linked candidates correctly, but when
+     no candidate matches it calls rt_dynamic_fragment_report_unknown_and_abort
+     instead of falling through to the external v1 plugin ABI
+     (rt_fragment_plugin_invoke). The structured path's
+     generateDynamicFragmentDispatch has an external plugin fallback after
+     the candidate chain; the canonical path needs the same fallback in
+     codegen. The argument order to the abort intrinsic was also fixed
+     (slot_name first, selected_name second, matching the runtime ABI).
 
    The 5 IR-pattern-check failures (iterator-move-only-aot,
    iterator-materialized-aot, result-extended-aot, optimization-pipeline,
