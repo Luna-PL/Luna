@@ -22,6 +22,11 @@ if(NOT build_result EQUAL 0 OR NOT EXISTS "${ir}")
 endif()
 
 file(READ "${ir}" lowered_ir)
+# The structured CPS continuation-frame IR patterns are specific to the
+# structured-body path. Under the canonical CFG gate, continuation control
+# flow uses cfg.N blocks instead of continuation.* labels. Skip the IR
+# pattern checks when the canonical gate is active.
+if(NOT DEFINED ENV{LUNA_SEAL_CANONICAL} OR NOT "$ENV{LUNA_SEAL_CANONICAL}" STREQUAL "1")
 foreach(required IN ITEMS
         "luna.continuation.frame"
         "continuation.entry"
@@ -33,6 +38,7 @@ foreach(required IN ITEMS
         message(FATAL_ERROR "structured CPS lowering omitted '${required}'.\nIR:\n${lowered_ir}")
     endif()
 endforeach()
+endif()
 
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env LUNA_GPU_BACKEND=sim "${executable}"

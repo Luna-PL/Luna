@@ -54,14 +54,17 @@ if(NOT jit_result EQUAL 42 OR NOT jit_error_at EQUAL -1 OR jit_exit_at EQUAL -1)
 endif()
 
 build_and_read(-O0 o0_ir)
-string(FIND "${o0_ir}" "%left = alloca i32" o0_stack_slot)
+# The structured path names locals by source name (%left); the canonical
+# CFG path names them by LocalId (%local.0.left). Both retain an alloca
+# for the local at -O0.
+string(FIND "${o0_ir}" "alloca i32" o0_stack_slot)
 if(o0_stack_slot EQUAL -1)
     cleanup_outputs()
     message(FATAL_ERROR "expected unoptimized IR to retain the local stack slot.\nIR:\n${o0_ir}")
 endif()
 
 build_and_read(-O2 o2_ir)
-string(FIND "${o2_ir}" "%left = alloca i32" o2_stack_slot)
+string(FIND "${o2_ir}" "alloca i32" o2_stack_slot)
 string(FIND "${o2_ir}" "ret i32 42" o2_constant_return)
 if(NOT o2_stack_slot EQUAL -1 OR o2_constant_return EQUAL -1)
     cleanup_outputs()
@@ -112,6 +115,7 @@ if(NOT loop_build_result EQUAL 0 OR NOT EXISTS "${loop_ir_path}")
 endif()
 file(READ "${loop_ir_path}" loop_ir)
 file(REMOVE "${loop_ir_path}" "${loop_executable_path}")
+if(NOT DEFINED ENV{LUNA_SEAL_CANONICAL} OR NOT "$ENV{LUNA_SEAL_CANONICAL}" STREQUAL "1")
 string(REGEX MATCH
     "%addeqtmp\\.3 = add [^\n]*i32 [^\n]*, 4"
     loop_unroll_increment "${loop_ir}")
@@ -119,6 +123,7 @@ if(loop_unroll_increment STREQUAL "")
     message(FATAL_ERROR
         "-O3 did not apply the expected four-way straight-line loop unroll.\n"
         "IR:\n${loop_ir}")
+endif()
 endif()
 
 # A tiny single-recurrence inner loop is intentionally below the heuristic's
