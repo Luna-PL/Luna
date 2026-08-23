@@ -143,7 +143,7 @@ static int buildMoonContainer(
         outputPath = outputOverride;
     } else {
         outputPath = fs::path(pipeline.analysisSnapshot().packageRootPath()) /
-            "build" / manifest.targetTriple / (artifactName + ".moon");
+            "build" / "moon" / (artifactName + ".moon");
     }
     std::error_code filesystemError;
     if (!outputPath.parent_path().empty())
@@ -748,6 +748,23 @@ int run(int argc, char* argv[]) {
         return 1;
     }
 
+    if (cmd == "build") {
+        namespace fs = std::filesystem;
+        const fs::path packagePath(filePath);
+        std::error_code filesystemError;
+        if (!fs::is_directory(packagePath, filesystemError) ||
+            !fs::is_regular_file(
+                packagePath / "luna.package", filesystemError)) {
+            std::cerr << diagnostic::format(
+                "driver",
+                "formal artifact builds require a package directory with luna.package",
+                filePath, 0, 0,
+                "use standalone files with `check`, `run`, or `analyze`; pass a package directory to `build`")
+                      << "\n";
+            return 1;
+        }
+    }
+
     CompilerPipeline pipeline;
     if (!pipeline.compileToMoonIR({
             filePath,
@@ -800,6 +817,14 @@ int run(int argc, char* argv[]) {
 
     if (cmd == "build") {
         const auto& package = pipeline.analysisSnapshot().packageManifest();
+        if (package.kind == PackageKind::Unspecified) {
+            std::cerr << diagnostic::format(
+                "driver", "formal artifact builds require an explicit package kind",
+                filePath, 0, 0,
+                "set kind = \"application\" or kind = \"library\" in luna.package")
+                      << "\n";
+            return 1;
+        }
         if (artifactTarget == ArtifactTarget::Cffi) {
             std::vector<const moon::FunctionDecl*> exports;
             std::string cffiError;
@@ -813,15 +838,33 @@ int run(int argc, char* argv[]) {
                           << "\n";
                 return 1;
             }
-        } else if (artifactTarget == ArtifactTarget::Native &&
-                   package.kind == PackageKind::Library) {
-            std::cerr << diagnostic::format(
-                "driver",
-                "trusted Native library proof emission is not implemented",
-                filePath, 0, 0,
-                "use -t cffi for a foreign C ABI library or -t moon for a verified container")
-                      << "\n";
-            return 1;
+        } else if (artifactTarget == ArtifactTarget::Native) {
+            if (package.kind == PackageKind::Library) {
+                std::cerr << diagnostic::format(
+                    "driver",
+                    "trusted Native library proof emission is not implemented",
+                    filePath, 0, 0,
+                    "use -t cffi for a foreign C ABI library or -t moon for a verified container")
+                          << "\n";
+                return 1;
+            }
+            size_t mainCount = 0;
+            for (const auto& declaration : pipeline.moonModule().declarations) {
+                const auto* function = dynamic_cast<const moon::FunctionDecl*>(
+                    declaration.get());
+                if (function && function->packageId == package.id &&
+                    function->name == "main")
+                    ++mainCount;
+            }
+            if (mainCount != 1) {
+                std::cerr << diagnostic::format(
+                    "driver",
+                    "Native application must contain exactly one package main",
+                    filePath, 0, 0,
+                    "define exactly one `fn main() -> i32` in the root package")
+                          << "\n";
+                return 1;
+            }
         }
     }
 
@@ -846,17 +889,30 @@ int run(int argc, char* argv[]) {
             pipeline, cg, filePath, linkLibraries, runtimeLibrary,
             aotCompiler, outputPath, optimizationLevel);
 
-    if (cmd == "build")
+    if (cmd == "build") {
+        std::string nativeOutputPath = outputPath;
+        if (nativeOutputPath.empty()) {
+            const auto& package = pipeline.analysisSnapshot().packageManifest();
+            std::filesystem::path artifactPath =
+                std::filesystem::path(
+                    pipeline.analysisSnapshot().packageRootPath()) /
+                "build" / "native" / packageArtifactName(package.id);
+#ifdef _WIN32
+            artifactPath += ".exe";
+#endif
+            nativeOutputPath = artifactPath.string();
+        }
         return AotLinker::build(cg, {
             filePath,
             pipeline.declaredPackageName(),
             linkLibraries,
             runtimeLibrary,
             aotCompiler,
-            outputPath,
+            nativeOutputPath,
             optimizationLevel,
             AotArtifactKind::Executable,
         });
+    }
 
     std::cerr << "Unknown command: " << cmd << "\n";
     printUsage();

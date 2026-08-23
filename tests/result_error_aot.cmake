@@ -9,11 +9,10 @@ if(NOT DEFINED LUNA_SOURCE_DIR)
 endif()
 
 set(source_path "${LUNA_SOURCE_DIR}/tests/fixtures/result_propagation.luna")
-set(ir_path "${source_path}.ll")
-set(executable_path "${LUNA_SOURCE_DIR}/tests/fixtures/result_propagation")
-if(WIN32)
-    set(executable_path "${executable_path}.exe")
-endif()
+include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
+luna_stage_aot_application("${source_path}" "result_error_aot")
+set(ir_path "${LUNA_AOT_IR_PATH}")
+set(executable_path "${LUNA_AOT_EXECUTABLE_PATH}")
 
 function(cleanup_outputs)
     file(REMOVE "${ir_path}" "${executable_path}")
@@ -36,7 +35,7 @@ if(NOT jit_result EQUAL 0 OR jit_output_at EQUAL -1 OR NOT "${jit_error}" STREQU
 endif()
 
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" build "${source_path}"
+    COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}"
     RESULT_VARIABLE build_result
     OUTPUT_VARIABLE build_output
     ERROR_VARIABLE build_error

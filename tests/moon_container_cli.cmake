@@ -34,6 +34,21 @@ if(NOT magic_hex STREQUAL "894d4f4f4e0d0a1a")
     message(FATAL_ERROR "-t moon output has the wrong container magic")
 endif()
 
+set(default_package "${work_dir}/default-package")
+file(COPY "${package_dir}/" DESTINATION "${default_package}")
+set(default_output
+    "${default_package}/build/moon/application_kind.moon")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${default_package}" -t moon
+    RESULT_VARIABLE default_result
+    OUTPUT_VARIABLE default_stdout
+    ERROR_VARIABLE default_stderr)
+if(NOT default_result EQUAL 0 OR NOT EXISTS "${default_output}")
+    message(FATAL_ERROR
+        "-t moon did not use build/moon default output.\n"
+        "${default_stdout}\n${default_stderr}")
+endif()
+
 set(invalid_output "${work_dir}/standalone.moon")
 execute_process(
     COMMAND "${LUNA_EXECUTABLE}" build
@@ -42,7 +57,7 @@ execute_process(
     OUTPUT_VARIABLE invalid_stdout
     ERROR_VARIABLE invalid_stderr)
 if(invalid_result EQUAL 0 OR EXISTS "${invalid_output}" OR
-   NOT invalid_stderr MATCHES "requires a package directory")
+   NOT invalid_stderr MATCHES "formal artifact builds require a package directory")
     message(FATAL_ERROR
         "-t moon accepted standalone source\nstdout:\n${invalid_stdout}\nstderr:\n${invalid_stderr}")
 endif()

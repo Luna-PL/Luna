@@ -31,7 +31,7 @@ ctest --test-dir build -LE hardware --output-on-failure
 
 ## 3. 编写并运行程序
 
-新建 `hello.luna`：
+新建 `hello/src/main.luna`：
 
 ```luna
 fn main() -> i32 {
@@ -43,19 +43,30 @@ fn main() -> i32 {
 依次验证 MoonIR、JIT 和 AOT：
 
 ```sh
-./build/luna check hello.luna
-./build/luna run hello.luna -O2
-./build/luna build hello.luna -O2
-./hello
+./build/luna check hello/src/main.luna
+./build/luna run hello/src/main.luna -O2
+./build/luna build hello -O2
+./hello/build/native/hello
+```
+
+在构建产物前新建 `hello/luna.package`：
+
+```toml
+[package]
+id = "org.example.hello"
+version = "1.0.0"
+kind = "application"
+sources = ["src"]
 ```
 
 `check` 在验证后的 MoonIR 处停止，适合没有 `main` 的库 package；`run` 使用
-LLVM JIT；`build` 会生成 `hello.luna.ll` 和本机可执行文件（Windows 为
-`hello.exe`）。完整参数见[编译器命令参考](cli.zh-CN.md)。
+LLVM JIT；正式 `build` 只接受 manifest package，并把 Native 文本 IR 与 executable
+生成到 `build/native`。完整参数见[编译器命令参考](cli.zh-CN.md)。
 
 ## 4. 单文件与 package
 
-独立 `.luna` 文件不要求 manifest。输入目录中存在 `luna.package` 时，驱动会启用
+独立 `.luna` 文件用于 `check`、`run` 或 `analyze` 时不要求 manifest；产物
+`build` 只接受 package。输入目录中存在 `luna.package` 时，驱动会启用
 package 解析，读取最近的 workspace/lockfile，并递归装载声明的本地依赖：
 
 ```sh
@@ -86,7 +97,7 @@ sudo cmake --install build --prefix /opt/luna
 已安装的驱动在 AOT 构建时应显式指定运行时库和链接器，避免依赖原始构建目录：
 
 ```sh
-/opt/luna/bin/luna build app.luna \
+/opt/luna/bin/luna build path/to/application-package \
   --runtime-lib /opt/luna/lib/libruntime.a \
   --cc "$(command -v clang++)"
 ```

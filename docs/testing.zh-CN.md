@@ -48,7 +48,10 @@ concrete function 和两条边的 call chain，证明 dead declaration 会消失
 `luna.cffi-artifact` 从真实 library package 生成平台共享库与 C header，
 再用系统 C 编译器以 strict C11 模式编译并运行一个独立消费者。
 它同时验证 application、零 C 导出、普通 Luna export、standalone build
-和未证明 Native library 都失败且不产生主产物。
+和未证明 Native library 都失败且不产生主产物。同一 target matrix 还要求
+Native application 使用 `build/native`，拒绝 standalone Native build 和缺失
+manifest kind，并真实执行 package 产物。旧单文件 AOT 回归通过
+`aot_package_fixture.cmake` 暂存 application package，不在生产 driver 中增加绕过开关。
 
 Moon Container 的 coverage-guided fuzzing 是可选门禁，需要 Clang/libFuzzer：
 

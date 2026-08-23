@@ -78,6 +78,19 @@ int AotLinker::build(CodeGenerator& codeGenerator, AotLinkOptions options) {
         artifactPath += ".exe";
 #endif
 
+    std::error_code filesystemError;
+    if (!artifactPath.parent_path().empty())
+        fs::create_directories(artifactPath.parent_path(), filesystemError);
+    if (filesystemError) {
+        std::cerr << diagnostic::format(
+            "driver",
+            "cannot create AOT output directory: " +
+                filesystemError.message(),
+            artifactPath.parent_path().string(), 0, 0,
+            "check the output path permissions") << "\n";
+        return 1;
+    }
+
     std::cout << "Emitting LLVM IR: " << irPath.string() << "\n";
     if (!codeGenerator.emitObjectFile(irPath.string())) {
         printErrors(codeGenerator.errors());

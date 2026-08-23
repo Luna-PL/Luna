@@ -63,7 +63,11 @@ an integer literal forged with a boolean type.
 library package, then uses the system C compiler in strict C11 mode to compile
 and run an independent consumer. It also requires application, empty-C-export,
 ordinary Luna export, standalone-build, and unproved Native-library cases to
-fail without producing the primary artifact.
+fail without producing the primary artifact. The same target-matrix test
+requires Native applications to use `build/native`, rejects standalone Native
+builds and missing manifest kinds, and executes the resulting package artifact.
+Legacy single-file AOT regressions use `aot_package_fixture.cmake` to stage
+temporary application packages without creating a production bypass.
 
 Moon Container coverage-guided fuzzing is opt-in and requires Clang/libFuzzer:
 

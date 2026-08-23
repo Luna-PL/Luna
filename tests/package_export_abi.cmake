@@ -12,11 +12,11 @@ endif()
 
 set(work_dir "${LUNA_BINARY_DIR}/package-export-abi")
 set(package_dir "${work_dir}/exported_package")
-set(ir_path "${package_dir}/exported_package.ll")
-set(executable_path "${package_dir}/exported_package")
+set(executable_path "${package_dir}/build/native/exported_package")
 if(WIN32)
     set(executable_path "${executable_path}.exe")
 endif()
+set(ir_path "${executable_path}.ll")
 
 function(cleanup_package_outputs)
     file(REMOVE_RECURSE "${work_dir}")

@@ -185,9 +185,10 @@ bool parsePackageManifest(const fs::path& path, PackageManifest& manifest,
         if (!ok && errors.empty())
             manifestError(errors, path, lineNumber, "invalid TOML value", "strings must be quoted");
     }
-    if (manifest.id.empty() || manifest.version.empty() || manifest.sources.empty()) {
+    if (manifest.id.empty() || manifest.version.empty() ||
+        manifest.kind == PackageKind::Unspecified || manifest.sources.empty()) {
         manifestError(errors, path, 0, "incomplete package manifest",
-                      "[package] requires id, version, and a non-empty sources array");
+                      "[package] requires id, version, kind, and a non-empty sources array");
         ok = false;
     }
     return ok;

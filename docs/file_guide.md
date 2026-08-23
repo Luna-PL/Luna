@@ -462,6 +462,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/aot_runtime_boundary.cmake`
 - `tests/analysis_protocol.cmake`
 - `tests/analysis_snapshot_test.cpp`
+- `tests/aot_package_fixture.cmake`
 - `tests/compiler_identity.cmake`
 - `tests/control_flow_aot.cmake`
 - `tests/core_contracts_test.cpp`
@@ -612,6 +613,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/packages/duplicate_version/03_main.luna`
 - `tests/fixtures/packages/exported_package/01_math.luna`
 - `tests/fixtures/packages/exported_package/02_main.luna`
+- `tests/fixtures/packages/exported_package/luna.package`
 - `tests/fixtures/packages/package_kind_application/luna.package`
 - `tests/fixtures/packages/package_kind_application/src/main.luna`
 - `tests/fixtures/packages/package_kind_invalid/luna.package`

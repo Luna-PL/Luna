@@ -28,7 +28,7 @@ ctest --test-dir build --output-on-failure
 ```sh
 ./build/luna check hello.luna
 ./build/luna run hello.luna -O2
-./build/luna build hello.luna -O2
+./build/luna build path/to/hello-package -O2
 ```
 
 examples/*.luna 有很多可读示例（basic / closure / adt / ffi / trait_versioning 等），是观察整条流水线的廉价入口。
@@ -41,8 +41,8 @@ examples/*.luna 有很多可读示例（basic / closure / adt / ffi / trait_vers
 
 AOT 会生成文本 LLVM IR。可直接：
 ```sh
-./build/luna build examples/basic.luna -O2
-head examples/basic.luna.ll   # 示例自带 .ll
+./build/luna build path/to/basic-package -O2
+head path/to/basic-package/build/native/basic_package.ll
 ```
 
 LLVM IR 使用带名字的值（%n / @func），对得上 codegen 里每条 CreateXxx 调用，正好验证手册讲的映射。

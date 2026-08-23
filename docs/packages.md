@@ -82,13 +82,16 @@ minimal TOML schema:
 [package]
 id = "com.example.application"
 version = "1.0.0"
+kind = "application"
 sources = ["src"]
 
 [dependencies]
 "org.luna.std" = "0.2.1"
 ```
 
-`sources` must be a relative file or directory inside the package directory; absolute paths
+`kind` is required and must be `"application"` or `"library"`. An application must
+define exactly one package-root `main`; a library must not define one. `sources` must be a
+relative file or directory inside the package directory; absolute paths
 and `..` escapes are not allowed. `.luna` files in directories are enumerated recursively
 and sorted by path. Every source `using` must have a corresponding `[dependencies]` entry.
 

@@ -11,10 +11,9 @@ file(REMOVE_RECURSE "${work_dir}")
 file(MAKE_DIRECTORY "${work_dir}" "${dump_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/examples/heterogeneous.luna" DESTINATION "${work_dir}")
 set(source "${work_dir}/heterogeneous.luna")
-set(executable "${work_dir}/heterogeneous")
-if(WIN32)
-    set(executable "${executable}.exe")
-endif()
+include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
+luna_stage_aot_application("${source}" "gpu_target_split")
+set(executable "${LUNA_AOT_EXECUTABLE_PATH}")
 
 # LUNA_GPU_BACKEND belongs to the program being executed. It must not cause
 # the compiler to emit a vendor code object when --gpu-target is absent.
@@ -22,7 +21,7 @@ execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env
             LUNA_GPU_BACKEND=rocm
             LUNA_GPU_DUMP_HSACO=${dump_dir}
-            "${LUNA_EXECUTABLE}" build "${source}" -O2
+            "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}" -O2
     RESULT_VARIABLE build_result
     OUTPUT_VARIABLE build_output
     ERROR_VARIABLE build_error
@@ -51,7 +50,7 @@ if(NOT run_result EQUAL 0 OR result_at EQUAL -1)
 endif()
 
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" build "${source}"
+    COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}"
             --gpu-target=rocm:gfx1101,rocm:gfx1030
     RESULT_VARIABLE conflict_result
     OUTPUT_VARIABLE conflict_output

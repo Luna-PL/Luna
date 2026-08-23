@@ -77,12 +77,15 @@ schema：
 [package]
 id = "com.example.application"
 version = "1.0.0"
+kind = "application"
 sources = ["src"]
 
 [dependencies]
 "org.luna.std" = "0.2.1"
 ```
 
+`kind` 是必填字段，只能是 `"application"` 或 `"library"`。application
+必须在 package root 中定义且仅定义一个 `main`，library 不得定义 `main`。
 `sources` 必须是 package 目录内的相对文件或目录，不允许绝对路径或 `..`
 逃逸。目录中的 `.luna` 文件递归枚举并按路径排序。源码里每个 `using`
 都必须有对应 `[dependencies]` 项。
@@ -141,4 +144,3 @@ package 内部。`export` 是 ABI 承诺，不是单纯的名称解析标记。�
 函数、结构体、枚举、trait、`interceptor` 与 `context` 均可导出。`extern`
 函数不能同时导出。Metadata/Selector 的公开接口规则见
 [versioning.md](versioning.md)。
-

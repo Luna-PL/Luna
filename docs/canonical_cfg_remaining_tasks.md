@@ -136,9 +136,10 @@
   surface. It emits a platform shared library and a sealed-MoonIR-derived C
   header; a strict C11 consumer compiles, links, and executes against the real
   symbols. Application, standalone, ordinary Luna export, empty export, and
-  Native-library downgrade cases fail closed. Native library proof emission,
-  the corresponding loader, formal-package-only Native build enforcement, and
-  final default Native output migration remain open; item 12 is not closed.
+  Native-library downgrade cases fail closed. T003 formal-package-only build
+  enforcement and the `build/native`, `build/moon`, and `build/cffi` default
+  output split are complete. Native library proof emission and the
+  corresponding loader remain open; item 12 is not closed.
 
 The canonical codegen now resolves all local-reference paths through the
 LocalId-indexed tables (mCanonicalLocals / mCanonicalLocalTypes): generateCall

@@ -44,7 +44,7 @@ execute_process(
     ERROR_VARIABLE aot_build_error
 )
 set(aot_executable
-    "${workspace}/app/org.luna.fixture.core_surface")
+    "${workspace}/app/build/native/core_surface")
 if(WIN32)
     string(APPEND aot_executable ".exe")
 endif()
