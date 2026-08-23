@@ -82,18 +82,21 @@ luna run <file-or-package> [-O0|-O2|-O3] [options]
 ### Artifact build
 
 ```sh
-luna build <file-or-package> [-O0|-O2|-O3] [options]
+luna build <package> [-O0|-O2|-O3] [options]
 ```
 
-`-t native` is the default. For a file input, `build app.luna` writes
-`app.luna.ll` and `app`. For a package
-directory, it writes `<package-id>.ll` and `<package-id>` inside that directory.
-Windows adds `.exe` to the executable.
+Formal artifact builds require a directory containing `luna.package`; its
+manifest must explicitly select `kind = "application"` or `kind = "library"`.
+Standalone files remain valid for `check`, `run`, and `analyze`, but `build`
+rejects them. `-t native` is the default. A Native application writes
+`<package-root>/build/native/<last-package-component>` plus sibling textual
+LLVM IR; Windows adds `.exe` to the executable. Native libraries fail closed
+until proof-section emission and loading are implemented.
 
 `luna build <package-directory> -t moon` requires an explicit manifest `kind`
 and emits a self-verified, host-specific `.moon`. `-o` overrides the path;
 otherwise the output is
-`<package-root>/build/<host-target>/<last-package-component>.moon`.
+`<package-root>/build/moon/<last-package-component>.moon`.
 Applications require exactly one package `main`, libraries require none, and
 standalone sources and native linker/GPU artifact options are rejected. Generic
 recipes may remain in compiler input, but only concrete instances are emitted;
@@ -223,7 +226,7 @@ LUNA_GPU_BACKEND=sim luna run examples/full_showcase/app -O2 \
 Build an installed compiler's AOT executable reproducibly:
 
 ```sh
-luna build app.luna -O2 \
+luna build path/to/application-package -O2 \
   --runtime-lib /opt/luna/lib/libruntime.a \
   --cc /usr/bin/clang++ \
   --link m

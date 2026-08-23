@@ -29,6 +29,8 @@ if(NOT LUNA_LLVM_READOBJ)
     return()
 endif()
 set(source "${LUNA_SOURCE_DIR}/benchmarks/luna_gpu_vector.luna")
+include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
+luna_stage_aot_application("${source}" "rocm_isa_abi")
 set(dump_dir "${CMAKE_CURRENT_BINARY_DIR}/luna-rocm-isa")
 file(REMOVE_RECURSE "${dump_dir}")
 file(MAKE_DIRECTORY "${dump_dir}")
@@ -39,7 +41,7 @@ execute_process(
         # execution backend is therefore harmless for this AOT-only step.
         LUNA_GPU_BACKEND=invalid-backend
         LUNA_GPU_DUMP_HSACO=${dump_dir}
-        "${LUNA_EXECUTABLE}" build "${source}" -O3
+        "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}" -O3
         --gpu-target=rocm:gfx1101
     RESULT_VARIABLE build_result
     OUTPUT_VARIABLE build_output
@@ -91,8 +93,5 @@ foreach(hsaco IN LISTS hsaco_files)
     endif()
 endforeach()
 
-file(REMOVE
-    "${LUNA_SOURCE_DIR}/benchmarks/luna_gpu_vector.luna.ll"
-    "${LUNA_SOURCE_DIR}/benchmarks/luna_gpu_vector"
-)
+file(REMOVE_RECURSE "${LUNA_AOT_PACKAGE_DIR}")
 file(REMOVE_RECURSE "${dump_dir}")

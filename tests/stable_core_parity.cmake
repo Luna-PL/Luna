@@ -14,6 +14,7 @@ endif()
 set(work_dir "${LUNA_BINARY_DIR}/stable-core-parity")
 file(REMOVE_RECURSE "${work_dir}")
 file(MAKE_DIRECTORY "${work_dir}")
+include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
 
 set(LUNA_EXE_SUFFIX "")
 if(WIN32)
@@ -90,9 +91,11 @@ function(check_file name relative_path)
     set(input_path "${case_dir}/${source_name}")
     get_filename_component(source_dir "${input_path}" DIRECTORY)
     get_filename_component(source_stem "${input_path}" NAME_WE)
+    luna_stage_aot_application("${input_path}" "stable_${case_id}")
     foreach(level IN ITEMS -O0 -O2 -O3)
-        check_parity("${name}" "${input_path}" "${input_path}.ll"
-                     "${source_dir}/${source_stem}${LUNA_EXE_SUFFIX}" "${level}")
+        check_parity("${name}" "${LUNA_AOT_PACKAGE_DIR}"
+                     "${LUNA_AOT_IR_PATH}"
+                     "${LUNA_AOT_EXECUTABLE_PATH}" "${level}")
     endforeach()
 endfunction()
 
@@ -124,7 +127,7 @@ file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/exported_package"
 set(package_dir "${work_dir}/exported_package")
 foreach(level IN ITEMS -O0 -O2 -O3)
     check_parity("multi-file exported package" "${package_dir}"
-                 "${package_dir}/exported_package.ll"
-                 "${package_dir}/exported_package${LUNA_EXE_SUFFIX}" "${level}")
+                 "${package_dir}/build/native/exported_package${LUNA_EXE_SUFFIX}.ll"
+                 "${package_dir}/build/native/exported_package${LUNA_EXE_SUFFIX}" "${level}")
 endforeach()
 file(REMOVE_RECURSE "${work_dir}")

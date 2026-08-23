@@ -80,13 +80,22 @@ fn main() -> i32 {
 }
 ```
 
-保存为 `hello.luna` 后，可以检查 MoonIR、使用 JIT 运行，或者生成本机可执行文件：
+保存为 `hello/src/main.luna`。standalone 文件可以直接 `check` 或 `run`；正式产物
+还需要 `hello/luna.package`：
+
+```toml
+[package]
+id = "org.example.hello"
+version = "1.0.0"
+kind = "application"
+sources = ["src"]
+```
 
 ```sh
-./build/luna check hello.luna
-./build/luna run hello.luna -O2
-./build/luna build hello.luna -O2
-./hello
+./build/luna check hello/src/main.luna
+./build/luna run hello/src/main.luna -O2
+./build/luna build hello -O2
+./hello/build/native/hello
 ```
 
 `print` 当前仍是语言/运行时提供的最小输出操作。临时且类型明确的 `std::io`
@@ -122,7 +131,7 @@ package 目录：
 | `luna check <输入>` | 验证源码直到 MoonIR，不生成机器码。 |
 | `luna analyze <输入> --message-format=json` | 输出语义工具快照，可从 stdin 读取一个或多个源码 overlay。 |
 | `luna run <输入> [-O0\|-O2\|-O3]` | 使用 JIT 编译并运行程序。 |
-| `luna build <输入> [-O0\|-O2\|-O3] [-t native\|moon\|cffi]` | 生成所选的 native、Moon Container 或 CFFI 产物。 |
+| `luna build <package> [-O0\|-O2\|-O3] [-t native\|moon\|cffi]` | 生成所选的 native、Moon Container 或 CFFI 产物。 |
 | `luna repl` | 启动有限 Alpha REPL（`=`、`:decl`、单行语句）。 |
 
 驱动还提供显式链接、运行时库、MoonIR 导出、成本报告和 GPU target 选项。
@@ -152,8 +161,8 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
 
 近期工作遵循 0.3 完成门，而不是冻结的 0.2 Alpha roadmap：
 
-1. 收敛 formal package build 与平台输出约定，完成 Native application/library 产物边界；
-2. 实现可信 Luna native 证明边界和最小 Moon staging/activation runtime，且不向
+1. 实现可信 Luna native proof section、trust record 和 loader；
+2. 实现最小 Moon staging/activation runtime，且不向
    普通调用热路径增加成本；
 3. 在剩余语法/顺序决策冻结后，收敛 Slot/Fragment 和 runtime query 表面；
 4. 让 formatter、LSP、package、benchmark 和 release gate 只面向最终 0.3 语义。

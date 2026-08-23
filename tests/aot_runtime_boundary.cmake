@@ -13,11 +13,10 @@ if(NOT DEFINED LUNA_RUNTIME_LIBRARY OR NOT EXISTS "${LUNA_RUNTIME_LIBRARY}")
 endif()
 
 set(source_path "${LUNA_SOURCE_DIR}/tests/fixtures/aot_runtime_boundary.luna")
-set(ir_path "${source_path}.ll")
-set(executable_path "${LUNA_SOURCE_DIR}/tests/fixtures/aot_runtime_boundary")
-if(WIN32)
-    set(executable_path "${executable_path}.exe")
-endif()
+include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
+luna_stage_aot_application("${source_path}" "aot_runtime_boundary")
+set(ir_path "${LUNA_AOT_IR_PATH}")
+set(executable_path "${LUNA_AOT_EXECUTABLE_PATH}")
 set(missing_runtime "${LUNA_SOURCE_DIR}/tests/fixtures/not-a-runtime.a")
 
 function(cleanup_outputs)
@@ -26,7 +25,7 @@ endfunction()
 
 cleanup_outputs()
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" build "${source_path}"
+    COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}"
             --runtime-lib "${LUNA_RUNTIME_LIBRARY}" --cc clang++
     RESULT_VARIABLE build_result
     OUTPUT_VARIABLE build_output
@@ -55,7 +54,7 @@ endif()
 
 cleanup_outputs()
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" build "${source_path}"
+    COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}"
             --runtime-lib "${LUNA_RUNTIME_LIBRARY}" --cc clang++
             --reserve-kernel-runtime
     RESULT_VARIABLE reserved_build_result
@@ -88,7 +87,8 @@ endif()
 
 cleanup_outputs()
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" build "${source_path}" --runtime-lib "${missing_runtime}"
+    COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}"
+            --runtime-lib "${missing_runtime}"
     RESULT_VARIABLE missing_result
     OUTPUT_VARIABLE missing_output
     ERROR_VARIABLE missing_error

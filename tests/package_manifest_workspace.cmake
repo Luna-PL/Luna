@@ -42,7 +42,7 @@ execute_process(
     OUTPUT_VARIABLE aot_build_output
     ERROR_VARIABLE aot_build_error
 )
-set(aot_executable "${aot_workspace}/app/org.luna.fixture.app")
+set(aot_executable "${aot_workspace}/app/build/native/app")
 if(WIN32)
     string(APPEND aot_executable ".exe")
 endif()
@@ -103,7 +103,7 @@ endif()
 file(REMOVE_RECURSE "${invalid_workspace}")
 file(COPY "${workspace}/" DESTINATION "${invalid_workspace}")
 file(WRITE "${invalid_workspace}/app/luna.package"
-"[package]\nid = \"org.luna.fixture.app\"\nversion = \"1.0.0\"\nsources = [\"src\"]\n\n[dependencies]\n")
+"[package]\nid = \"org.luna.fixture.app\"\nversion = \"1.0.0\"\nkind = \"application\"\nsources = [\"src\"]\n\n[dependencies]\n")
 execute_process(
     COMMAND "${LUNA_EXECUTABLE}" check "${invalid_workspace}/app"
     RESULT_VARIABLE undeclared_result

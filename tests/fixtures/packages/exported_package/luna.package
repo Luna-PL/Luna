@@ -1,0 +1,5 @@
+[package]
+id = "exported_package"
+version = "1.0.0"
+kind = "application"
+sources = ["01_math.luna", "02_main.luna"]

@@ -13,14 +13,13 @@ file(REMOVE_RECURSE "${work_dir}")
 file(MAKE_DIRECTORY "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/examples/heterogeneous.luna" DESTINATION "${work_dir}")
 set(source "${work_dir}/heterogeneous.luna")
-set(ir "${source}.ll")
-set(executable "${work_dir}/heterogeneous")
-if(WIN32)
-    set(executable "${executable}.exe")
-endif()
+include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
+luna_stage_aot_application("${source}" "gpu_error_boundary")
+set(ir "${LUNA_AOT_IR_PATH}")
+set(executable "${LUNA_AOT_EXECUTABLE_PATH}")
 
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" build "${source}" -O2
+    COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}" -O2
     RESULT_VARIABLE build_result
     OUTPUT_VARIABLE build_output
     ERROR_VARIABLE build_error

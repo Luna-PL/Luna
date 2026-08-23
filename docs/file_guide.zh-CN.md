@@ -638,6 +638,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/aot_runtime_boundary.cmake`
 - `tests/analysis_protocol.cmake`
 - `tests/analysis_snapshot_test.cpp`
+- `tests/aot_package_fixture.cmake`
 - `tests/control_flow_aot.cmake`
 - `tests/core_surface.cmake`
 - `tests/diagnostic_protocol.cmake`
@@ -784,6 +785,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/packages/duplicate_version/03_main.luna`
 - `tests/fixtures/packages/exported_package/01_math.luna`
 - `tests/fixtures/packages/exported_package/02_main.luna`
+- `tests/fixtures/packages/exported_package/luna.package`
 - `tests/fixtures/packages/package_kind_application/luna.package`
 - `tests/fixtures/packages/package_kind_application/src/main.luna`
 - `tests/fixtures/packages/package_kind_invalid/luna.package`

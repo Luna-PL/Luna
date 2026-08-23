@@ -21,7 +21,7 @@ source: src/driver/AotLinker.cpp
 ## 这个文件做什么
 
 `AotLinker::build` 负责“最后一步”，流程如下：
-1. 根据 `inputPath`（目录或文件）推导 IR 文件路径与产物路径，`outputPath` 可覆盖。
+1. 接收 Driver 已按 package target 选定的产物路径，并以同路径加 `.ll` 作为文本 IR 路径。
 2. 调用 `codeGenerator.emitObjectFile(irPath)` 写出 `.ll` 文件；失败则打印错误并返回 1。
 3. 确定运行时库：可用 `LUNA_RUNTIME_LIB` 环境变量或默认 `BUILD_DIR/libruntime.a`；不存在则报错。
 4. 确定后端编译器：`LUNA_CXX` 环境变量或默认 `clang++`。
@@ -39,7 +39,8 @@ source: src/driver/AotLinker.cpp
 
 来源于 `AotLinker.h`：
 - `enum class AotArtifactKind { Executable, SharedLibrary }`——决定链接产物类型；
-- `struct AotLinkOptions`——包含 `kind`、`outputPath`、`objectPath`、`runtimes`、`cxx`、`cxxFlags`、`lldFlags`、`useLld`、`verbose` 等字段。
+- `struct AotLinkOptions`——包含 input/package 身份、链接库、runtime archive、
+  compiler、完整输出路径、优化级别和 `AotArtifactKind`。
 
 ## 关键函数·方法
 

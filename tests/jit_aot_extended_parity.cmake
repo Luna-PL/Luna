@@ -15,6 +15,7 @@ file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/exported_package"
      DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/examples/heterogeneous.luna"
      DESTINATION "${work_dir}")
+include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
 
 set(LUNA_EXE_SUFFIX "")
 if(WIN32)
@@ -72,13 +73,15 @@ set(package_dir "${work_dir}/exported_package")
 check_parity(
     "multi-file package"
     "${package_dir}"
-    "${package_dir}/exported_package.ll"
-    "${package_dir}/exported_package${LUNA_EXE_SUFFIX}")
+    "${package_dir}/build/native/exported_package${LUNA_EXE_SUFFIX}.ll"
+    "${package_dir}/build/native/exported_package${LUNA_EXE_SUFFIX}")
 
 set(heterogeneous_source "${work_dir}/heterogeneous.luna")
+luna_stage_aot_application(
+    "${heterogeneous_source}" "jit_extended_heterogeneous")
 check_parity(
     "heterogeneous simulator"
-    "${heterogeneous_source}"
-    "${heterogeneous_source}.ll"
-    "${work_dir}/heterogeneous${LUNA_EXE_SUFFIX}")
+    "${LUNA_AOT_PACKAGE_DIR}"
+    "${LUNA_AOT_IR_PATH}"
+    "${LUNA_AOT_EXECUTABLE_PATH}")
 file(REMOVE_RECURSE "${work_dir}")

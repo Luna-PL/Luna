@@ -38,7 +38,7 @@ execute_process(
     OUTPUT_VARIABLE build_output
     ERROR_VARIABLE build_error
 )
-set(aot_executable "${workspace}/app/org.luna.fixture.rc_arc_core")
+set(aot_executable "${workspace}/app/build/native/rc_arc_core")
 if(WIN32)
     string(APPEND aot_executable ".exe")
 endif()
@@ -75,7 +75,11 @@ if(NOT old_rc_kind EQUAL -1 OR NOT old_arc_kind EQUAL -1 OR
         "${moon_text}")
 endif()
 
-set(generated_ir "${workspace}/app/org.luna.fixture.rc_arc_core.ll")
+set(generated_executable "${workspace}/app/build/native/rc_arc_core")
+if(WIN32)
+    string(APPEND generated_executable ".exe")
+endif()
+set(generated_ir "${generated_executable}.ll")
 file(READ "${generated_ir}" llvm_text)
 string(FIND "${llvm_text}" "@rt_rc_allocate_v1" rc_runtime)
 string(FIND "${llvm_text}" "@rt_arc_allocate_v1" arc_runtime)

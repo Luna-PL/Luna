@@ -93,14 +93,22 @@ fn main() -> i32 {
 }
 ```
 
-Save it as `hello.luna`, then check it, run it through the JIT, or build a
-native executable:
+Save it as `hello/src/main.luna`. Standalone files can be checked or run; a
+formal artifact additionally needs `hello/luna.package`:
+
+```toml
+[package]
+id = "org.example.hello"
+version = "1.0.0"
+kind = "application"
+sources = ["src"]
+```
 
 ```sh
-./build/luna check hello.luna
-./build/luna run hello.luna -O2
-./build/luna build hello.luna -O2
-./hello
+./build/luna check hello/src/main.luna
+./build/luna run hello/src/main.luna -O2
+./build/luna build hello -O2
+./hello/build/native/hello
 ```
 
 `print` is currently the minimal language/runtime output operation. A temporary,
@@ -136,7 +144,7 @@ directory containing `luna.package`:
 | `luna check <input>` | Verify source through MoonIR without generating machine code. |
 | `luna analyze <input> --message-format=json` | Emit a semantic tooling snapshot; optionally read one or more source overlays from stdin. |
 | `luna run <input> [-O0\|-O2\|-O3]` | JIT-compile and execute a program. |
-| `luna build <input> [-O0\|-O2\|-O3] [-t native\|moon\|cffi]` | Produce the selected native, Moon Container, or CFFI artifact. |
+| `luna build <package> [-O0\|-O2\|-O3] [-t native\|moon\|cffi]` | Produce the selected native, Moon Container, or CFFI artifact. |
 | `luna repl` | Start the limited Alpha REPL (`=`, `:decl`, single-line statements). |
 
 The driver also exposes explicit linker, runtime, MoonIR, cost-report and GPU target options.
@@ -169,9 +177,8 @@ See the [testing guide](docs/testing.md) and [heterogeneous-compute guide](docs/
 The immediate work follows the 0.3 completion gates rather than the frozen 0.2
 Alpha roadmap:
 
-1. converge formal package builds and platform output conventions, completing
-   the Native application/library artifact boundary;
-2. implement the trusted Luna-native proof boundary and the minimal Moon
+1. implement the trusted Luna-native proof section, trust records, and loader;
+2. implement the minimal Moon
    staging/activation runtime without adding ordinary-call hot-path cost;
 3. converge Slot/Fragment and runtime query surfaces after their remaining
    syntax/ordering decisions are frozen;

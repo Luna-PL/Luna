@@ -6,12 +6,14 @@ if(NOT DEFINED LUNA_SOURCE_DIR)
 endif()
 
 set(source "${LUNA_SOURCE_DIR}/tests/fixtures/context_continuation_return_valid.luna")
-set(ir "${source}.ll")
-set(executable "${LUNA_SOURCE_DIR}/tests/fixtures/context_continuation_return_valid")
+include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
+luna_stage_aot_application("${source}" "structured_cps_abi")
+set(ir "${LUNA_AOT_IR_PATH}")
+set(executable "${LUNA_AOT_EXECUTABLE_PATH}")
 file(REMOVE "${ir}" "${executable}")
 
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" build "${source}" -O0
+    COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}" -O0
     RESULT_VARIABLE build_result
     OUTPUT_VARIABLE build_output
     ERROR_VARIABLE build_error

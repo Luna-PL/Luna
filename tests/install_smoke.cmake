@@ -82,6 +82,15 @@ file(WRITE "${source}"
 "    print(\"installed-luna-smoke\");\n"
 "    return 0;\n"
 "}\n")
+set(aot_package "${work}/aot-package")
+file(MAKE_DIRECTORY "${aot_package}/src")
+file(COPY "${source}" DESTINATION "${aot_package}/src")
+file(WRITE "${aot_package}/luna.package"
+"[package]\n"
+"id = \"org.luna.fixture.install_smoke\"\n"
+"version = \"1.0.0\"\n"
+"kind = \"application\"\n"
+"sources = [\"src\"]\n")
 
 execute_process(
     COMMAND "${installed_luna}" check "${source}"
@@ -109,7 +118,7 @@ if(NOT jit_result EQUAL 0 OR
 endif()
 
 execute_process(
-    COMMAND "${installed_luna}" build "${source}" -O2
+    COMMAND "${installed_luna}" build "${aot_package}" -O2
             --runtime-lib "${installed_runtime}"
             --cc "${LUNA_AOT_COMPILER}"
     RESULT_VARIABLE aot_build_result
@@ -117,7 +126,7 @@ execute_process(
     ERROR_VARIABLE aot_build_error
 )
 set(aot_executable
-    "${work}/install_smoke${LUNA_EXECUTABLE_SUFFIX}")
+    "${aot_package}/build/native/install_smoke${LUNA_EXECUTABLE_SUFFIX}")
 if(NOT aot_build_result EQUAL 0 OR
    NOT EXISTS "${aot_executable}")
     message(FATAL_ERROR

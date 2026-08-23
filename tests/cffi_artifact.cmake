@@ -87,6 +87,43 @@ if(NOT WIN32)
     endif()
 endif()
 
+# The Native application side of T003 uses the same manifest kind but a
+# different artifact boundary and default directory.
+set(native_package "${work_dir}/package_kind_application")
+set(native_output
+    "${native_package}/build/native/application_kind")
+if(WIN32)
+    string(APPEND native_output ".exe")
+endif()
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${native_package}" -t native
+    RESULT_VARIABLE native_result
+    OUTPUT_VARIABLE native_stdout
+    ERROR_VARIABLE native_stderr)
+if(NOT native_result EQUAL 0 OR NOT EXISTS "${native_output}" OR
+   EXISTS "${native_package}/org.luna.fixture.application_kind")
+    message(FATAL_ERROR
+        "Native application did not use build/native package output.\n"
+        "${native_stdout}\n${native_stderr}")
+endif()
+execute_process(
+    COMMAND "${native_output}"
+    RESULT_VARIABLE native_run_result
+    OUTPUT_VARIABLE native_run_stdout
+    ERROR_VARIABLE native_run_stderr)
+if(NOT native_run_result EQUAL 0)
+    message(FATAL_ERROR
+        "default Native package artifact did not execute.\n"
+        "${native_run_stdout}\n${native_run_stderr}")
+endif()
+
+set(unspecified_package "${work_dir}/package_kind_unspecified")
+file(COPY "${native_package}/" DESTINATION "${unspecified_package}")
+file(READ "${unspecified_package}/luna.package" unspecified_manifest)
+string(REPLACE "kind = \"application\"\n" ""
+       unspecified_manifest "${unspecified_manifest}")
+file(WRITE "${unspecified_package}/luna.package" "${unspecified_manifest}")
+
 function(expect_target_failure name package target diagnostic)
     set(output_path "${work_dir}/${name}.artifact")
     file(REMOVE "${output_path}" "${output_path}.ll")
@@ -119,7 +156,13 @@ expect_target_failure(
     "contains non-C export")
 expect_target_failure(
     cffi_standalone "${package_dir}/src/api.luna" cffi
-    "requires a package directory")
+    "formal artifact builds require a package directory")
+expect_target_failure(
+    native_standalone "${native_package}/src/main.luna" native
+    "formal artifact builds require a package directory")
+expect_target_failure(
+    native_unspecified_kind "${unspecified_package}" native
+    "requires id, version, kind")
 expect_target_failure(
     native_library "${package_dir}" native
     "Native library proof emission is not implemented")

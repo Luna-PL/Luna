@@ -7,12 +7,10 @@ endif()
 
 set(source_path
     "${LUNA_SOURCE_DIR}/tests/fixtures/iterator_move_only_array.luna")
-set(ir_path "${source_path}.ll")
-set(executable_path
-    "${LUNA_SOURCE_DIR}/tests/fixtures/iterator_move_only_array")
-if(WIN32)
-    string(APPEND executable_path ".exe")
-endif()
+include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
+luna_stage_aot_application("${source_path}" "iterator_move_only_aot")
+set(ir_path "${LUNA_AOT_IR_PATH}")
+set(executable_path "${LUNA_AOT_EXECUTABLE_PATH}")
 set(expected_output
     "61\n62\n71\n71\n72\n72\n81\n81\n82\n83\n91\n92\n91\n101\n102\n102\n103\n121\n122\n122\n123\n131\n231\n141\n142\n1\n143\n1\n151\n151\n161\n161\n171\n171\n181\n182\n184\n184\n")
 
@@ -35,7 +33,7 @@ if(NOT jit_result EQUAL 0 OR
 endif()
 
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" build "${source_path}" -O0
+    COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}" -O0
     RESULT_VARIABLE build_result
     OUTPUT_VARIABLE build_output
     ERROR_VARIABLE build_error

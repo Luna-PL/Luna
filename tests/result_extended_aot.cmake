@@ -7,6 +7,7 @@ endif()
 if(NOT DEFINED LUNA_SOURCE_DIR)
     message(FATAL_ERROR "LUNA_SOURCE_DIR must point at the source tree")
 endif()
+include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
 
 set(LUNA_EXE_SUFFIX "")
 if(WIN32)
@@ -15,9 +16,9 @@ endif()
 
 function(check_result_fixture stem expected_output expected_ir)
     set(source_path "${LUNA_SOURCE_DIR}/tests/fixtures/${stem}.luna")
-    set(ir_path "${source_path}.ll")
-    set(executable_path
-        "${LUNA_SOURCE_DIR}/tests/fixtures/${stem}${LUNA_EXE_SUFFIX}")
+    luna_stage_aot_application("${source_path}" "${stem}_aot")
+    set(ir_path "${LUNA_AOT_IR_PATH}")
+    set(executable_path "${LUNA_AOT_EXECUTABLE_PATH}")
     file(REMOVE "${ir_path}" "${executable_path}")
 
     execute_process(
@@ -37,7 +38,7 @@ function(check_result_fixture stem expected_output expected_ir)
     endif()
 
     execute_process(
-        COMMAND "${LUNA_EXECUTABLE}" build "${source_path}"
+        COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}"
         RESULT_VARIABLE build_result
         OUTPUT_VARIABLE build_output
         ERROR_VARIABLE build_error
@@ -99,12 +100,12 @@ check_result_fixture(
 # separately because a nonzero source-language main result is expected.
 set(generic_source
     "${LUNA_SOURCE_DIR}/tests/fixtures/result_payload_abi_invalid.luna")
-set(generic_ir "${generic_source}.ll")
-set(generic_executable
-    "${LUNA_SOURCE_DIR}/tests/fixtures/result_payload_abi_invalid${LUNA_EXE_SUFFIX}")
+luna_stage_aot_application("${generic_source}" "result_payload_abi_aot")
+set(generic_ir "${LUNA_AOT_IR_PATH}")
+set(generic_executable "${LUNA_AOT_EXECUTABLE_PATH}")
 file(REMOVE "${generic_ir}" "${generic_executable}")
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" build "${generic_source}"
+    COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}"
     RESULT_VARIABLE generic_build_result
     OUTPUT_VARIABLE generic_build_output
     ERROR_VARIABLE generic_build_error

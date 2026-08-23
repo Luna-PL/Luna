@@ -78,15 +78,18 @@ luna run <文件或package> [-O0|-O2|-O3] [选项]
 ### 产物构建
 
 ```sh
-luna build <文件或package> [-O0|-O2|-O3] [选项]
+luna build <package> [-O0|-O2|-O3] [选项]
 ```
 
-`-t native` 是默认目标。文件输入 `build app.luna` 会生成 `app.luna.ll` 和 `app`；package 目录会在目录
-中生成 `<package-id>.ll` 和 `<package-id>`。Windows 可执行文件带 `.exe` 后缀。
+正式产物构建必须输入包含 `luna.package` 的目录，manifest 必须显式选择
+`kind = "application"` 或 `kind = "library"`。standalone 文件仍可用于 `check`、
+`run` 和 `analyze`，但 `build` 会拒绝。`-t native` 是默认目标；Native
+application 生成 `<package-root>/build/native/<package末段>` 及同目录文本 LLVM IR，
+Windows executable 带 `.exe` 后缀。Native library 在 proof section 与 loader 完成前失败关闭。
 
 `luna build <package目录> -t moon` 要求 manifest 显式声明 `kind`，并生成经过
 自验证的 host-specific `.moon`。`-o` 可覆盖路径；否则输出为
-`<package-root>/build/<host-target>/<package末段>.moon`。application 必须恰有一个
+`<package-root>/build/moon/<package末段>.moon`。application 必须恰有一个
 package `main`，library 不得有 `main`；standalone source 和 native linker/GPU artifact
 选项会被拒绝。编译器输入可保留 generic recipe，但容器只写入 concrete
 instance；作为 export 或 entrypoint 的 generic recipe 会被拒绝。
@@ -203,7 +206,7 @@ LUNA_GPU_BACKEND=sim luna run examples/full_showcase/app -O2 \
 使用安装后的编译器进行可复现 AOT 构建：
 
 ```sh
-luna build app.luna -O2 \
+luna build path/to/application-package -O2 \
   --runtime-lib /opt/luna/lib/libruntime.a \
   --cc /usr/bin/clang++ \
   --link m

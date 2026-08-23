@@ -8,13 +8,13 @@ endif()
 if(NOT DEFINED LUNA_SOURCE_DIR)
     message(FATAL_ERROR "LUNA_SOURCE_DIR must point at the source tree")
 endif()
+include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
 
 set(source_path "${LUNA_SOURCE_DIR}/tests/fixtures/optimization_constant_fold.luna")
-set(ir_path "${source_path}.ll")
-set(executable_path "${LUNA_SOURCE_DIR}/tests/fixtures/optimization_constant_fold")
-if(WIN32)
-    set(executable_path "${executable_path}.exe")
-endif()
+luna_stage_aot_application("${source_path}" "optimization_constant_fold")
+set(ir_path "${LUNA_AOT_IR_PATH}")
+set(executable_path "${LUNA_AOT_EXECUTABLE_PATH}")
+set(package_path "${LUNA_AOT_PACKAGE_DIR}")
 
 function(cleanup_outputs)
     file(REMOVE "${ir_path}" "${executable_path}")
@@ -23,7 +23,7 @@ endfunction()
 function(build_and_read level output_var)
     cleanup_outputs()
     execute_process(
-        COMMAND "${LUNA_EXECUTABLE}" build "${source_path}" "${level}"
+        COMMAND "${LUNA_EXECUTABLE}" build "${package_path}" "${level}"
         RESULT_VARIABLE build_result
         OUTPUT_VARIABLE build_output
         ERROR_VARIABLE build_error
@@ -95,14 +95,13 @@ endif()
 # O3 unroll hint. The reduction workload keeps the recurrence live and makes
 # the selected count directly visible in optimized IR.
 set(loop_source_path "${LUNA_SOURCE_DIR}/benchmarks/luna_cpu_reduction.luna")
-set(loop_ir_path "${loop_source_path}.ll")
-set(loop_executable_path "${LUNA_SOURCE_DIR}/benchmarks/luna_cpu_reduction")
-if(WIN32)
-    set(loop_executable_path "${loop_executable_path}.exe")
-endif()
+luna_stage_aot_application("${loop_source_path}" "optimization_reduction")
+set(loop_ir_path "${LUNA_AOT_IR_PATH}")
+set(loop_executable_path "${LUNA_AOT_EXECUTABLE_PATH}")
+set(loop_package_path "${LUNA_AOT_PACKAGE_DIR}")
 file(REMOVE "${loop_ir_path}" "${loop_executable_path}")
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" build "${loop_source_path}" -O3
+    COMMAND "${LUNA_EXECUTABLE}" build "${loop_package_path}" -O3
     RESULT_VARIABLE loop_build_result
     OUTPUT_VARIABLE loop_build_output
     ERROR_VARIABLE loop_build_error
@@ -127,14 +126,13 @@ endif()
 # A tiny single-recurrence inner loop is intentionally below the heuristic's
 # lower bound: forcing it to four-way unroll lengthens the dependency chain.
 set(nested_source_path "${LUNA_SOURCE_DIR}/benchmarks/luna_cpu_nested.luna")
-set(nested_ir_path "${nested_source_path}.ll")
-set(nested_executable_path "${LUNA_SOURCE_DIR}/benchmarks/luna_cpu_nested")
-if(WIN32)
-    set(nested_executable_path "${nested_executable_path}.exe")
-endif()
+luna_stage_aot_application("${nested_source_path}" "optimization_nested")
+set(nested_ir_path "${LUNA_AOT_IR_PATH}")
+set(nested_executable_path "${LUNA_AOT_EXECUTABLE_PATH}")
+set(nested_package_path "${LUNA_AOT_PACKAGE_DIR}")
 file(REMOVE "${nested_ir_path}" "${nested_executable_path}")
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" build "${nested_source_path}" -O3
+    COMMAND "${LUNA_EXECUTABLE}" build "${nested_package_path}" -O3
     RESULT_VARIABLE nested_build_result
     OUTPUT_VARIABLE nested_build_output
     ERROR_VARIABLE nested_build_error

@@ -18,11 +18,10 @@ file(REMOVE_RECURSE "${work_dir}")
 file(MAKE_DIRECTORY "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/examples/heterogeneous.luna" DESTINATION "${work_dir}")
 set(source "${work_dir}/heterogeneous.luna")
-set(ir "${source}.ll")
-set(executable "${work_dir}/heterogeneous")
-if(WIN32)
-    set(executable "${executable}.exe")
-endif()
+include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
+luna_stage_aot_application("${source}" "rocm_smoke")
+set(ir "${LUNA_AOT_IR_PATH}")
+set(executable "${LUNA_AOT_EXECUTABLE_PATH}")
 
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env LUNA_GPU_BACKEND=rocm
@@ -41,7 +40,7 @@ endif()
 
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env LUNA_GPU_BACKEND=rocm
-            "${LUNA_EXECUTABLE}" build "${source}" -O2
+            "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}" -O2
             "--gpu-target=${gpu_target}"
     RESULT_VARIABLE build_result
     OUTPUT_VARIABLE build_output

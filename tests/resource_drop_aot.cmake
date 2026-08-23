@@ -10,20 +10,19 @@ endif()
 
 set(work_dir "${LUNA_BINARY_DIR}/resource_drop_aot")
 set(source "${work_dir}/resource_generic_drop.luna")
-set(ir "${source}.ll")
-set(executable "${work_dir}/resource_generic_drop")
-if(WIN32)
-    set(executable "${executable}.exe")
-endif()
 
 file(MAKE_DIRECTORY "${work_dir}")
 file(COPY_FILE
     "${LUNA_SOURCE_DIR}/tests/fixtures/resource_generic_drop.luna"
     "${source}" ONLY_IF_DIFFERENT)
+include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
+luna_stage_aot_application("${source}" "resource_drop_aot")
+set(ir "${LUNA_AOT_IR_PATH}")
+set(executable "${LUNA_AOT_EXECUTABLE_PATH}")
 file(REMOVE "${ir}" "${executable}")
 
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" build "${source}"
+    COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}"
     RESULT_VARIABLE build_result
     OUTPUT_VARIABLE build_output
     ERROR_VARIABLE build_error)

@@ -2,6 +2,14 @@
 
 ## 0.3.0 — Development
 
+- Enforced the confirmed T003 formal-build boundary. Artifact-producing
+  `luna build` now requires a directory with `luna.package` and an explicit
+  application/library kind; standalone files remain available to `check`,
+  `run`, and `analyze`. Native applications emit under `build/native`, Moon
+  Containers under `build/moon`, and CFFI libraries under `build/cffi`, with
+  `-o` retaining full-path override semantics. Legacy single-file AOT tests
+  now stage temporary application packages instead of weakening the driver.
+
 - Implemented the first fail-closed CFFI artifact slice. `luna build <package>
   -t cffi` now accepts only manifest-declared library packages with a non-empty
   surface made exclusively of `export "C" fn`, emits the platform shared

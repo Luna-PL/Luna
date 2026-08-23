@@ -39,7 +39,7 @@ are opt-in and documented in [Testing](testing.md).
 
 ## 3. Write and run a program
 
-Create `hello.luna`:
+Create `hello/src/main.luna`:
 
 ```luna
 fn main() -> i32 {
@@ -51,22 +51,34 @@ fn main() -> i32 {
 Then exercise each compiler boundary:
 
 ```sh
-./build/luna check hello.luna
-./build/luna run hello.luna -O2
-./build/luna build hello.luna -O2
-./hello
+./build/luna check hello/src/main.luna
+./build/luna run hello/src/main.luna -O2
+./build/luna build hello -O2
+./hello/build/native/hello
+```
+
+Add `hello/luna.package` before the artifact build:
+
+```toml
+[package]
+id = "org.example.hello"
+version = "1.0.0"
+kind = "application"
+sources = ["src"]
 ```
 
 `check` stops after verified MoonIR and is therefore suitable for library
-packages without a `main`. `run` uses LLVM JIT. `build` writes `hello.luna.ll`,
-links Luna's Runtime ABI and creates `hello` (`hello.exe` on Windows).
+packages without a `main`. `run` uses LLVM JIT. Formal `build` requires a
+manifest package, writes textual LLVM IR under `build/native`, links Luna's
+Runtime ABI, and creates the package-named executable there.
 
 For a multi-package program using most implemented language features, run the
 [full showcase](../examples/full_showcase/README.md).
 
 ## 4. Standalone files and packages
 
-A standalone `.luna` file needs no manifest. When the input is a directory
+A standalone `.luna` file needs no manifest for `check`, `run`, or `analyze`;
+artifact-producing `build` is package-only. When the input is a directory
 containing `luna.package`, the driver activates package resolution, reads the
 nearest workspace and lockfile, and recursively loads declared local
 dependencies.
@@ -92,7 +104,7 @@ headers, standard-library skeleton, licenses and documentation. An installed
 driver should receive explicit AOT toolchain paths:
 
 ```sh
-.local/luna/bin/luna build hello.luna -O2 \
+.local/luna/bin/luna build hello -O2 \
   --runtime-lib "$PWD/.local/luna/lib/libruntime.a" \
   --cc "$(command -v clang++)"
 ```

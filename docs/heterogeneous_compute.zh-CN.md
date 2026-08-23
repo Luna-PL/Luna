@@ -123,11 +123,11 @@ For deployment, embed the target while building and select it only while
 running:
 
 ```sh
-./build/luna build examples/heterogeneous.luna --gpu-target=cuda:sm_52
-LUNA_GPU_BACKEND=cuda ./examples/heterogeneous
+./build/luna build examples/full_showcase/app --gpu-target=cuda:sm_52
+LUNA_GPU_BACKEND=cuda ./examples/full_showcase/app/build/native/app
 
-./build/luna build examples/heterogeneous.luna --gpu-target=rocm:gfx1101
-LUNA_GPU_BACKEND=rocm ./examples/heterogeneous
+./build/luna build examples/full_showcase/app --gpu-target=rocm:gfx1101
+LUNA_GPU_BACKEND=rocm ./examples/full_showcase/app/build/native/app
 ```
 
 An AOT binary does not synthesize a missing target at runtime. Selecting ROCm
@@ -161,4 +161,3 @@ rejected for literals and fails at runtime for dynamic values.
 The valid and invalid examples are in `examples/heterogeneous*.luna`.
 Benchmark methodology and the JIT/AOT sampling script are in
 [performance benchmark guide](benchmarks.md).
-
