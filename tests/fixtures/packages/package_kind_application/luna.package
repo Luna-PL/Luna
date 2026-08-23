@@ -1,0 +1,8 @@
+[package]
+id = "org.luna.fixture.application_kind"
+version = "1.0.0"
+kind = "application"
+sources = ["src"]
+
+[host-imports]
+"puts" = "org.luna.host.console.write"

@@ -1,0 +1,19 @@
+package org.luna.fixture.application_kind;
+
+extern "C" fn puts(message: cstr) -> i32;
+
+fn identity<T>(value: T) -> T {
+    return value;
+}
+
+fn forward(value: i32) -> i32 {
+    return identity(value);
+}
+
+fn dead_concrete() -> i32 {
+    return 99;
+}
+
+fn main() -> i32 {
+    return forward(0);
+}

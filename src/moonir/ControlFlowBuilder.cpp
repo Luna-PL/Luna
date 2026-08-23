@@ -736,6 +736,7 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     mBindings.clear();
     mMaterializedIterators.clear();
     mSlotDefaults.clear();
+    mLexicalDynamicApplies.clear();
     mStaticApplyScopes.clear();
     mDynamicApplyScopes.clear();
     mFragmentContexts.clear();
@@ -1065,6 +1066,13 @@ ControlFlowBuilder::lowerStatement(
                 const auto* recipe =
                     lookupMaterializedIterator(id->name);
                 if (recipe && recipe->ownsSource) {
+                    if (!recipe->sourceTailCleanups.empty()) {
+                        current.cleanups.insert(
+                            current.cleanups.end(),
+                            recipe->sourceTailCleanups.begin(),
+                            recipe->sourceTailCleanups.end());
+                        return current;
+                    }
                     const auto* sourceType =
                         mModule->findType(recipe->sourceType);
                     if (sourceType &&
@@ -1189,18 +1197,8 @@ ControlFlowBuilder::lowerStatement(
     }
     if (auto* slot = dynamic_cast<SlotDeclStmt*>(statement.get())) {
         if (slot->isDynamic) {
-            // SF005: the first runtime path supports only single-shot
-            // interceptors. Runtime context/multi-shot is deferred (NP004).
-            if (slot->acceptedKind != FragmentKind::Interceptor ||
-                slot->acceptedCardinality != FragmentCardinality::Once) {
-                error(slot->location,
-                      "runtime context or multi-shot slot composition is "
-                      "outside the 0.3 canonical static boundary "
-                      "(deferred: NP004)");
-                return std::nullopt;
-            }
-            // A dynamic single-shot interceptor slot declares no static
-            // default; its candidates arrive via a dynamic apply scope.
+            // Dynamic slots declare no static default; their finite,
+            // type-checked candidate set arrives through a dynamic apply.
             return current;
         }
         if (!slot->defaultFragmentRef.empty())
@@ -1698,6 +1696,7 @@ bool ControlFlowBuilder::parseIteratorRecipe(
                 plan.sourceType = materialized->sourceType;
                 plan.itemType = materialized->itemType;
                 plan.materialized = true;
+                plan.materializedName = identifier->name;
                 plan.materializedOwnsSource = materialized->ownsSource;
                 plan.materializedSource = materialized->source;
                 plan.materializedIndex = materialized->index;
@@ -2258,6 +2257,39 @@ bool ControlFlowBuilder::materializeIteratorRecipe(
         loopIndexType, luna::ownership::Usage::Copy,
         std::move(limit));
 
+    const auto* materializedElement = sourceType &&
+            sourceType->kind == TypeKind::Array
+        ? mModule->findType(sourceType->innerTypeId) : nullptr;
+    if (materialized.ownsSource && materializedElement &&
+        materializedElement->sysmeta.resource.usage ==
+            luna::ownership::Usage::Affine &&
+        materializedElement->sysmeta.resource.cleanupRequired) {
+        materialized.nextUnread = addStateBinding(
+            "$recipe." + declaration->name + ".next-unread",
+            loopIndexType, luna::ownership::Usage::Copy,
+            integer(0, loopIndexType), LocalKind::Synthetic);
+        for (uint64_t element = 0;
+             element < sourceType->arrayLength; ++element) {
+            const CleanupId cleanup{
+                static_cast<uint32_t>(mGraph->cleanups.size())};
+            CleanupRecord record;
+            record.id = cleanup;
+            record.scope = scope;
+            record.place.root = materialized.source;
+            record.place.projections.push_back({
+                ProjectionKind::ConstantIndex, element, {}});
+            record.type = sourceType->innerTypeId;
+            record.kind = CleanupKind::Value;
+            record.action =
+                materializedElement->sysmeta.resource.cleanup;
+            record.guard = CleanupGuard{
+                materialized.nextUnread, element};
+            mGraph->cleanups.push_back(std::move(record));
+            mGraph->scopes[scope.value].cleanups.push_back(cleanup);
+            materialized.sourceTailCleanups.push_back(cleanup);
+        }
+    }
+
     for (size_t stepIndex = 0; stepIndex < plan.steps.size(); ++stepIndex) {
         auto& step = plan.steps[stepIndex];
         const TypeRef argumentType = step.op == IteratorOp::Take
@@ -2364,7 +2396,6 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     if (plan.mode != IteratorMode::Range) {
         sourceType = mModule->findType(plan.sourceType);
         if (plan.materialized) {
-            sourceLocal = plan.materializedSource;
             if (plan.mode == IteratorMode::Consuming &&
                 plan.materializedOwnsSource) {
                 const auto* frozen = mModule->findType(plan.sourceType);
@@ -2376,6 +2407,17 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
                         luna::ownership::Usage::Affine &&
                     element->sysmeta.resource.cleanupRequired)
                     guardedConsumingSource = true;
+            }
+            if (guardedConsumingSource) {
+                auto transfer = std::make_unique<MoveExpr>();
+                transfer->location = statement->location;
+                transfer->type = plan.sourceType;
+                transfer->operand = identifier(plan.materializedSource);
+                sourceLocal = addBinding(
+                    "$for.source." + identity, plan.sourceType,
+                    std::move(transfer), LocalKind::Binding, false);
+            } else {
+                sourceLocal = plan.materializedSource;
             }
         } else {
             auto* sourceIdentifier = dynamic_cast<IdentifierExpr*>(
@@ -2772,6 +2814,8 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
         sourceTailCleanups.end());
     if (guardedConsumingSource && !statement->recipeStateName.empty())
         mGuardedConsumingRecipeNames.insert(statement->recipeStateName);
+    if (guardedConsumingSource && !plan.materializedName.empty())
+        mGuardedConsumingRecipeNames.insert(plan.materializedName);
     std::optional<OpenBlock> bodyExit;
     if (!statement->body) {
         error(statement->location, "for-loop has no canonical body");
@@ -2789,6 +2833,8 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
     mActiveExpressionCleanups.resize(activeCleanupDepth);
     if (guardedConsumingSource && !statement->recipeStateName.empty())
         mGuardedConsumingRecipeNames.erase(statement->recipeStateName);
+    if (guardedConsumingSource && !plan.materializedName.empty())
+        mGuardedConsumingRecipeNames.erase(plan.materializedName);
     popBindings();
 
     if (bodyExit) {
@@ -2831,9 +2877,7 @@ ControlFlowBuilder::lowerShortCircuitExpression(
         return std::nullopt;
     }
     const auto* resultType = mModule->findType(expression->type);
-    if (!resultType || resultType->kind != TypeKind::Bool ||
-        expression->lhs->type != expression->type ||
-        expression->rhs->type != expression->type) {
+    if (!resultType || resultType->kind != TypeKind::Bool) {
         error(expression->location,
               "short-circuit expression must have frozen bool operands");
         return std::nullopt;
@@ -2844,6 +2888,11 @@ ControlFlowBuilder::lowerShortCircuitExpression(
     if (!lhs) return std::nullopt;
     current = std::move(*lhs);
     if (!bindExpr(expression->lhs.get())) return std::nullopt;
+    if (expression->lhs->type != expression->type) {
+        error(expression->lhs->location,
+              "short-circuit expression must have frozen bool operands");
+        return std::nullopt;
+    }
 
     const std::string name =
         "$short-circuit." + std::to_string(mExpressionCounter++);
@@ -2887,6 +2936,11 @@ ControlFlowBuilder::lowerShortCircuitExpression(
         expression->rhs, OpenBlock{rhsEntry, {}}, region, scope, false);
     if (rhs) {
         if (!bindExpr(expression->rhs.get())) return std::nullopt;
+        if (expression->rhs->type != expression->type) {
+            error(expression->rhs->location,
+                  "short-circuit expression must have frozen bool operands");
+            return std::nullopt;
+        }
         auto destination = std::make_unique<IdentifierExpr>();
         destination->location = expression->location;
         destination->name = name;
@@ -4589,7 +4643,15 @@ ControlFlowBuilder::lowerIteratorTerminal(
         item->location = terminal->location;
         item->name = loop->varName;
         item->type = terminal->iteratorInputType;
-        push->args.push_back(std::move(item));
+        if (moveOnlyItem) {
+            auto transfer = std::make_unique<MoveExpr>();
+            transfer->location = terminal->location;
+            transfer->type = terminal->iteratorInputType;
+            transfer->operand = std::move(item);
+            push->args.push_back(std::move(transfer));
+        } else {
+            push->args.push_back(std::move(item));
+        }
         auto pushStatement = std::make_unique<ExprStmt>();
         pushStatement->location = terminal->location;
         pushStatement->expr = std::move(push);
@@ -4735,11 +4797,6 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerMatch(
 std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerApply(
     std::unique_ptr<ApplyStmt> statement, OpenBlock current,
     RegionId region, ScopeId scope) {
-    if (!statement->body) {
-        error(statement->location,
-              "0.3 apply requires an explicit lexical body");
-        return std::nullopt;
-    }
     // A dynamic apply carries a finite candidate set. The primary fragmentRef
     // is the first candidate (fallback); alternativeFragmentRefs are the rest.
     // The slot invocation inside the body resolves candidates from the dynamic
@@ -4759,6 +4816,24 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerApply(
                   "dynamic apply has no fragment candidates");
             return std::nullopt;
         }
+    }
+
+    // Statement-form apply lasts through the remainder of the current
+    // lexical scope. Keep it in a binding-parallel map so leaving a nested
+    // scope restores the previous apply automatically.
+    if (!statement->body) {
+        if (isDynamic) {
+            std::vector<DeclarationRef> candidates;
+            if (!statement->fragmentRef.empty())
+                candidates.push_back(statement->fragmentRef);
+            for (const auto& alternative : statement->alternativeFragmentRefs)
+                candidates.push_back(alternative);
+            mLexicalDynamicApplies.back()[statement->slotName] =
+                std::move(candidates);
+        } else {
+            mSlotDefaults.back()[statement->slotName] = statement->fragmentRef;
+        }
+        return current;
     }
 
     mStaticApplyScopes.emplace_back();
@@ -4807,11 +4882,6 @@ std::optional<ControlFlowBuilder::OpenBlock>
 ControlFlowBuilder::lowerSlotInvoke(
     std::unique_ptr<SlotInvokeStmt> statement, OpenBlock current,
     RegionId region, ScopeId scope) {
-    if (statement->acceptedCardinality != FragmentCardinality::Once) {
-        error(statement->location,
-              "multi-shot slot invocation is not part of the 0.3 canonical static boundary");
-        return std::nullopt;
-    }
     if (!statement->continuation) {
         error(statement->location,
               "slot invocation has no lexical continuation body");
@@ -4827,6 +4897,16 @@ ControlFlowBuilder::lowerSlotInvoke(
             found != scopes.end()) {
             dynamicCandidates = found->second;
             break;
+        }
+    }
+    if (dynamicCandidates.empty()) {
+        for (size_t depth = mLexicalDynamicApplies.size(); depth > 0; --depth) {
+            const auto& scopes = mLexicalDynamicApplies[depth - 1];
+            if (auto found = scopes.find(statement->name);
+                found != scopes.end()) {
+                dynamicCandidates = found->second;
+                break;
+            }
         }
     }
     if (statement->isDynamic || statement->usesDynamicDispatch ||
@@ -5037,15 +5117,6 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
     std::unique_ptr<SlotInvokeStmt> statement, OpenBlock current,
     RegionId region, ScopeId scope,
     std::vector<DeclarationRef> candidates) {
-    // SF005: the first runtime path supports only single-shot interceptors.
-    // Runtime context/multi-shot continuation ABI is deferred (NP004).
-    if (statement->acceptedKind != FragmentKind::Interceptor ||
-        statement->acceptedCardinality != FragmentCardinality::Once) {
-        error(statement->location,
-              "runtime context or multi-shot slot invocation is outside "
-              "the 0.3 canonical static boundary (deferred: NP004)");
-        return std::nullopt;
-    }
     if (candidates.empty()) {
         error(statement->location,
               "dynamic slot invocation has no fragment candidates");
@@ -5072,8 +5143,8 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
         return std::nullopt;
     }
 
-    // Validate every candidate is a single-shot interceptor with a body and
-    // a matching parameter contract.
+    // Validate every candidate has the slot's frozen control contract, a
+    // construction body, and a matching parameter contract.
     struct ResolvedCandidate {
         const FragmentDecl* fragment;
         DeclarationRef reference;
@@ -5086,10 +5157,10 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
                   "dynamic slot invocation references a missing canonical fragment");
             return std::nullopt;
         }
-        if (fragment->kind != FragmentKind::Interceptor ||
-            fragment->cardinality != FragmentCardinality::Once) {
+        if (fragment->kind != statement->acceptedKind ||
+            fragment->cardinality != statement->acceptedCardinality) {
             error(statement->location,
-                  "dynamic slot candidate must be a single-shot interceptor");
+                  "dynamic slot candidate control contract disagrees with invocation");
             return std::nullopt;
         }
         if (!fragment->body) {
@@ -5130,20 +5201,26 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
     const BlockId invocationExit = addBlock(
         invocationRegion, invocationScope, statement->location);
 
-    // Lower the continuation once. Every matched interceptor candidate
-    // forwards into its entry; the continuation exit reaches invocationExit.
-    auto continuation = lowerNestedBlock(
-        std::move(statement->continuation), invocationRegion,
-        invocationScope, RegionKind::Continuation);
-    if (!continuation.exit) return std::nullopt;
-    connectJump(*continuation.exit, invocationExit);
-    mGraph->regions[continuation.region.value].exit = invocationExit;
+    // Interceptors share one continuation because each candidate forwards
+    // exactly once. Contexts retain the structured continuation template;
+    // each resume() clones it into an independent Continuation region, which
+    // also gives multi-shot contexts a fresh canonical CFG path per replay.
+    std::optional<BuiltBlock> interceptorContinuation;
+    if (statement->acceptedKind == FragmentKind::Interceptor) {
+        interceptorContinuation = lowerNestedBlock(
+            std::move(statement->continuation), invocationRegion,
+            invocationScope, RegionKind::Continuation);
+        if (!interceptorContinuation->exit) return std::nullopt;
+        connectJump(*interceptorContinuation->exit, invocationExit);
+        mGraph->regions[interceptorContinuation->region.value].exit =
+            invocationExit;
+    }
 
     // Helper: build a CallExpr to a compiler intrinsic with string-literal
     // arguments. The intrinsic callee is a bare IdentifierExpr (no local,
     // no declaration) so bindExpr and the verifier recognize it as a
     // compiler intrinsic and skip the declaration lookup.
-    const auto intrinsicCall = [this, &statement](
+    const auto intrinsicCall = [&statement, cstrType](
         const std::string& name,
         const std::vector<std::string>& argValues,
         const TypeRef& resultType) -> std::unique_ptr<CallExpr> {
@@ -5158,7 +5235,7 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
             auto literal = std::make_unique<StringLiteralExpr>();
             literal->value = value;
             literal->location = statement->location;
-            literal->type = TypeRef{}; // cstr coercion handled by verifier
+            literal->type = cstrType;
             call->args.push_back(std::move(literal));
         }
         return call;
@@ -5223,6 +5300,7 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
         auto candidateName = std::make_unique<StringLiteralExpr>();
         candidateName->value = fragment->name;
         candidateName->location = statement->location;
+        candidateName->type = cstrType;
         matchesCall->args.push_back(std::move(candidateName));
 
         const auto [matchesLocal, matchesBlock] = storeExpr(
@@ -5286,7 +5364,9 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
         const size_t outerBindingDepth = mBindings.size();
         pushBindings();
         mFragmentContexts.push_back({
-            invocationExit, fragment->kind, nullptr,
+            invocationExit, fragment->kind,
+            fragment->kind == FragmentKind::Context
+                ? statement->continuation.get() : nullptr,
             outerBindingDepth});
         std::optional<OpenBlock> fragmentOpen = OpenBlock{fragmentEntry, {}};
         for (auto& binding : parameterBindings) {
@@ -5313,32 +5393,65 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
         popBindings();
         mGraph->regions[fragmentRegion.value].exit = invocationExit;
 
-        // The fragment's open block forwards to the continuation (interceptor).
+        // An interceptor forwards automatically. A context reaching the end
+        // without another resume implicitly aborts the retained continuation.
         if (fragmentOpen) {
             auto& terminator =
                 mGraph->blocks[fragmentOpen->block.value].terminator;
-            terminator.kind = TerminatorKind::Jump;
             terminator.location = statement->location;
-            terminator.primary.target = continuation.entry;
-            terminator.primary.cleanups = canonicalCleanupOrder(
-                fragmentOpen->cleanups, fragmentScope, continuation.scope);
+            if (fragment->kind == FragmentKind::Interceptor) {
+                terminator.kind = TerminatorKind::Jump;
+                terminator.primary.target = interceptorContinuation->entry;
+                terminator.primary.cleanups = canonicalCleanupOrder(
+                    fragmentOpen->cleanups, fragmentScope,
+                    interceptorContinuation->scope);
+            } else {
+                terminator.kind = TerminatorKind::Abort;
+                terminator.primary.target = invocationExit;
+                terminator.primary.cleanups = canonicalCleanupOrder(
+                    fragmentOpen->cleanups, fragmentScope, invocationScope);
+            }
         }
 
         // Branch on the match condition: true -> fragment entry,
         // false -> next candidate dispatch (or unknown-abort).
         BlockId nextBlock;
         if (index + 1 < resolved.size()) {
-            nextBlock = addBlock(
-                invocationRegion, invocationScope, statement->location);
+          nextBlock =
+              addBlock(invocationRegion, invocationScope, statement->location);
         } else {
-            // Final fallback: no statically linked candidate matched. Try
-            // the external v1 plugin ABI before aborting. The codegen
-            // intrinsic rt_canonical_fragment_plugin_fallback builds the
-            // invocation struct and calls rt_fragment_plugin_invoke.
-            // Result: 0 = continue (enter continuation), 1 = abort (skip
-            // continuation), other = error (report and abort).
-            nextBlock = addBlock(
-                invocationRegion, invocationScope, statement->location);
+          // Final fallback: an external v1 plugin may handle only a
+          // single-shot interceptor. Context and multi-shot dispatch are
+          // restricted to the finite statically linked candidate set.
+          nextBlock =
+              addBlock(invocationRegion, invocationScope, statement->location);
+          if (statement->acceptedKind != FragmentKind::Interceptor ||
+              statement->acceptedCardinality != FragmentCardinality::Once) {
+            auto unknownCall = std::make_unique<CallExpr>();
+            unknownCall->location = statement->location;
+            auto unknownCallee = std::make_unique<IdentifierExpr>();
+            unknownCallee->name =
+                "rt_dynamic_fragment_report_unknown_and_abort";
+            unknownCallee->location = statement->location;
+            unknownCall->callee = std::move(unknownCallee);
+            auto slotName = std::make_unique<StringLiteralExpr>();
+            slotName->value = statement->name;
+            slotName->location = statement->location;
+            slotName->type = cstrType;
+            unknownCall->args.push_back(std::move(slotName));
+            unknownCall->args.push_back(localRef(selectedLocal));
+            auto unknownStmt = std::make_unique<ExprStmt>();
+            unknownStmt->location = statement->location;
+            unknownStmt->expr = std::move(unknownCall);
+            mGraph->blocks[nextBlock.value].operations.push_back(
+                std::move(unknownStmt));
+            auto& unknownTerm = mGraph->blocks[nextBlock.value].terminator;
+            unknownTerm.kind = TerminatorKind::Unreachable;
+            unknownTerm.location = statement->location;
+          } else {
+            // The codegen intrinsic builds the invocation struct and calls
+            // rt_fragment_plugin_invoke. Result: 0 = continue, 1 = abort,
+            // other = report an ABI error and abort.
             auto pluginCall = std::make_unique<CallExpr>();
             pluginCall->location = statement->location;
             pluginCall->type = i32Type;
@@ -5349,31 +5462,37 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
             auto slotNameLit = std::make_unique<StringLiteralExpr>();
             slotNameLit->value = statement->name;
             slotNameLit->location = statement->location;
+            slotNameLit->type = cstrType;
             pluginCall->args.push_back(std::move(slotNameLit));
             pluginCall->args.push_back(localRef(selectedLocal));
             // Build the contract hash string matching
-            // externalFragmentContract: luna.slot.<name>.<kind>.<card>.<types>.v1
+            // externalFragmentContract:
+            // luna.slot.<name>.<kind>.<card>.<types>.v1
             std::string contractStr = "luna.slot." + statement->name + ".";
             contractStr += statement->acceptedKind == FragmentKind::Interceptor
-                ? "interceptor" : "context";
-            contractStr += statement->acceptedCardinality == FragmentCardinality::Many
-                ? ".many" : ".once";
-            if (const auto* structuralType = mModule->findType(
-                    statement->structuralType)) {
-                for (const auto& paramType : structuralType->parameterTypeIds) {
-                    if (const auto* param = mModule->findType(paramType))
-                        contractStr += "." + param->displayName;
-                    else
-                        contractStr += ".unknown";
-                }
+                               ? "interceptor"
+                               : "context";
+            contractStr +=
+                statement->acceptedCardinality == FragmentCardinality::Many
+                    ? ".many"
+                    : ".once";
+            if (const auto* structuralType =
+                    mModule->findType(statement->structuralType)) {
+              for (const auto& paramType : structuralType->parameterTypeIds) {
+                if (const auto* param = mModule->findType(paramType))
+                  contractStr += "." + param->displayName;
+                else
+                  contractStr += ".unknown";
+              }
             }
             contractStr += ".v1";
             auto contractLit = std::make_unique<StringLiteralExpr>();
             contractLit->value = contractStr;
             contractLit->location = statement->location;
+            contractLit->type = cstrType;
             pluginCall->args.push_back(std::move(contractLit));
             for (const auto& arg : statement->args)
-                pluginCall->args.push_back(cloneStructuredExpr(arg.get()));
+              pluginCall->args.push_back(cloneStructuredExpr(arg.get()));
             auto pluginStmt = std::make_unique<LetStmt>();
             pluginStmt->location = statement->location;
             pluginStmt->name = "$dynamic.plugin.result";
@@ -5383,13 +5502,11 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
             pluginStmt->type = i32Type;
             pluginStmt->initializer = std::move(pluginCall);
             const LocalId pluginResult = addLocal(
-                invocationScope, LocalKind::Synthetic,
-                "$dynamic.plugin.result", i32Type,
-                luna::ownership::Usage::Copy, std::nullopt,
+                invocationScope, LocalKind::Synthetic, "$dynamic.plugin.result",
+                i32Type, luna::ownership::Usage::Copy, std::nullopt,
                 /*inferTypeCleanup=*/false);
             pluginStmt->local = pluginResult;
-            pluginStmt->relation =
-                mGraph->locals[pluginResult.value].relation;
+            pluginStmt->relation = mGraph->locals[pluginResult.value].relation;
             mGraph->blocks[nextBlock.value].operations.push_back(
                 std::move(pluginStmt));
 
@@ -5397,8 +5514,7 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
             // abort (1) -> invocation exit, other -> error+abort.
             const BlockId abortBlock = addBlock(
                 invocationRegion, invocationScope, statement->location);
-            auto& abortTerm =
-                mGraph->blocks[abortBlock.value].terminator;
+            auto& abortTerm = mGraph->blocks[abortBlock.value].terminator;
             abortTerm.kind = TerminatorKind::Unreachable;
             abortTerm.location = statement->location;
             auto abortCall = std::make_unique<CallExpr>();
@@ -5425,12 +5541,11 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
             cond->rhs = std::move(zero);
             cond->type = boolType;
 
-            auto& pluginTerm =
-                mGraph->blocks[nextBlock.value].terminator;
+            auto& pluginTerm = mGraph->blocks[nextBlock.value].terminator;
             pluginTerm.kind = TerminatorKind::Branch;
             pluginTerm.location = statement->location;
             pluginTerm.operand = std::move(cond);
-            pluginTerm.primary.target = continuation.entry;
+            pluginTerm.primary.target = interceptorContinuation->entry;
             // Secondary: check abort (1) vs error (other).
             const BlockId checkAbort = addBlock(
                 invocationRegion, invocationScope, statement->location);
@@ -5444,18 +5559,17 @@ ControlFlowBuilder::lowerDynamicSlotInvoke(
             one->type = i32Type;
             cond2->rhs = std::move(one);
             cond2->type = boolType;
-            auto& checkAbortTerm =
-                mGraph->blocks[checkAbort.value].terminator;
+            auto& checkAbortTerm = mGraph->blocks[checkAbort.value].terminator;
             checkAbortTerm.kind = TerminatorKind::Branch;
             checkAbortTerm.location = statement->location;
             checkAbortTerm.operand = std::move(cond2);
             checkAbortTerm.primary.target = invocationExit;
             checkAbortTerm.secondary.target = abortBlock;
             pluginTerm.secondary.target = checkAbort;
+          }
         }
 
-        auto& branchTerm =
-            mGraph->blocks[matchesBlock.value].terminator;
+        auto &branchTerm = mGraph->blocks[matchesBlock.value].terminator;
         branchTerm.kind = TerminatorKind::Branch;
         branchTerm.location = statement->location;
         branchTerm.operand = std::move(condition);
@@ -5496,18 +5610,24 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerResume(
     using IteratorMap = std::unordered_map<
         std::string, MaterializedIteratorRecipe>;
     using DefaultMap = std::unordered_map<std::string, DeclarationRef>;
+    using DynamicApplyMap = std::unordered_map<
+        std::string, std::vector<DeclarationRef>>;
     std::vector<BindingMap> fragmentBindings;
     std::vector<IteratorMap> fragmentIterators;
     std::vector<DefaultMap> fragmentDefaults;
+    std::vector<DynamicApplyMap> fragmentDynamicApplies;
     for (size_t index = active.outerBindingDepth;
          index < mBindings.size(); ++index) {
         fragmentBindings.push_back(std::move(mBindings[index]));
         fragmentIterators.push_back(std::move(mMaterializedIterators[index]));
         fragmentDefaults.push_back(std::move(mSlotDefaults[index]));
+        fragmentDynamicApplies.push_back(
+            std::move(mLexicalDynamicApplies[index]));
     }
     mBindings.resize(active.outerBindingDepth);
     mMaterializedIterators.resize(active.outerBindingDepth);
     mSlotDefaults.resize(active.outerBindingDepth);
+    mLexicalDynamicApplies.resize(active.outerBindingDepth);
     auto fragmentContexts = std::move(mFragmentContexts);
     mFragmentContexts.clear();
 
@@ -5528,6 +5648,10 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerResume(
         mSlotDefaults.end(),
         std::make_move_iterator(fragmentDefaults.begin()),
         std::make_move_iterator(fragmentDefaults.end()));
+    mLexicalDynamicApplies.insert(
+        mLexicalDynamicApplies.end(),
+        std::make_move_iterator(fragmentDynamicApplies.begin()),
+        std::make_move_iterator(fragmentDynamicApplies.end()));
 
     auto& terminator = mGraph->blocks[current.block.value].terminator;
     terminator.kind = TerminatorKind::Resume;
@@ -5882,12 +6006,14 @@ void ControlFlowBuilder::pushBindings() {
     mBindings.emplace_back();
     mMaterializedIterators.emplace_back();
     mSlotDefaults.emplace_back();
+    mLexicalDynamicApplies.emplace_back();
 }
 
 void ControlFlowBuilder::popBindings() {
     if (!mBindings.empty()) mBindings.pop_back();
     if (!mMaterializedIterators.empty()) mMaterializedIterators.pop_back();
     if (!mSlotDefaults.empty()) mSlotDefaults.pop_back();
+    if (!mLexicalDynamicApplies.empty()) mLexicalDynamicApplies.pop_back();
 }
 
 void ControlFlowBuilder::connectJump(
@@ -5918,10 +6044,28 @@ std::vector<CleanupId> ControlFlowBuilder::lowerCleanupObligations(
             // Walk the full binding stack, not just the innermost level: the
             // recipe may be registered in an outer scope while a return or
             // abort inside a nested loop lowers its obligation.
-            if (lookupMaterializedIterator(obligation.place))
-                continue;
             if (mGuardedConsumingRecipeNames.count(obligation.place))
                 continue;
+            if (const auto* recipe =
+                    lookupMaterializedIterator(obligation.place)) {
+                if (!recipe->sourceTailCleanups.empty()) {
+                    result.insert(
+                        result.end(), recipe->sourceTailCleanups.begin(),
+                        recipe->sourceTailCleanups.end());
+                } else if (recipe->ownsSource) {
+                    const auto* sourceType =
+                        mModule->findType(recipe->sourceType);
+                    if (sourceType &&
+                        sourceType->sysmeta.resource.cleanupRequired) {
+                        const CleanupId cleanup = addCleanup(
+                            recipe->source, recipe->sourceType,
+                            sourceType->sysmeta.resource.cleanup,
+                            CleanupKind::Value);
+                        if (!cleanup.empty()) result.push_back(cleanup);
+                    }
+                }
+                continue;
+            }
             // A cleanup obligation for a captured binding has no canonical
             // local (the capture was rewritten to an EnvLoad). The closure
             // value (environment parameter) owns the cleanup, so redirect
@@ -5975,13 +6119,57 @@ std::vector<CleanupId> ControlFlowBuilder::canonicalCleanupOrder(
             targetAncestors.insert(scope->id.value);
     }
     std::vector<CleanupId> result;
+    const auto normalizeGuardedArrayTail = [this, &result](size_t begin) {
+        size_t groupBegin = begin;
+        while (groupBegin < result.size()) {
+            const auto* first = mGraph->findCleanup(result[groupBegin]);
+            const bool isGuardedElement = first && first->guard &&
+                first->place.projections.size() == 1 &&
+                first->place.projections.front().kind ==
+                    ProjectionKind::ConstantIndex &&
+                first->place.projections.front().index ==
+                    first->guard->elementIndex;
+            if (!isGuardedElement) {
+                ++groupBegin;
+                continue;
+            }
+            size_t groupEnd = groupBegin + 1;
+            uint64_t previousIndex = first->guard->elementIndex;
+            while (groupEnd < result.size()) {
+                const auto* next = mGraph->findCleanup(result[groupEnd]);
+                if (!next || !next->guard ||
+                    next->place.root != first->place.root ||
+                    next->guard->nextUnread != first->guard->nextUnread ||
+                    next->place.projections.size() != 1 ||
+                    next->place.projections.front().kind !=
+                        ProjectionKind::ConstantIndex ||
+                    next->place.projections.front().index !=
+                        next->guard->elementIndex ||
+                    next->guard->elementIndex + 1 != previousIndex)
+                    break;
+                previousIndex = next->guard->elementIndex;
+                ++groupEnd;
+            }
+            // Locals leave a scope in reverse declaration order, but the
+            // projected elements of one owning array follow ArrayDrop's
+            // source order. The guarded rows are registered by ascending
+            // element index, so the reverse scope walk must restore that
+            // order within this single aggregate cleanup group.
+            std::reverse(
+                result.begin() + static_cast<std::ptrdiff_t>(groupBegin),
+                result.begin() + static_cast<std::ptrdiff_t>(groupEnd));
+            groupBegin = groupEnd;
+        }
+    };
     for (const ScopeRecord* scope = mGraph->findScope(sourceScope); scope;
          scope = mGraph->findScope(scope->parent)) {
         if (targetAncestors.count(scope->id.value)) break;
+        const size_t scopeBegin = result.size();
         for (auto cleanup = scope->cleanups.rbegin();
              cleanup != scope->cleanups.rend(); ++cleanup)
             if (activeSet.count(cleanup->value))
                 result.push_back(*cleanup);
+        normalizeGuardedArrayTail(scopeBegin);
     }
     return result;
 }

@@ -67,8 +67,8 @@ context many replay {
 ```
 
 `context many` is rejected when replay would consume, free, mutably borrow, or
-otherwise invalidate captured linear state. Dynamic runtime selection currently
-accepts only single-shot declarations.
+otherwise invalidate captured linear state. Dynamic runtime selection supports
+the same rule over a finite set of statically linked candidates.
 
 ## Slot contracts
 

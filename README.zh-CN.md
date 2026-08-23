@@ -31,11 +31,13 @@ Luna 将静态、无额外运行时开销的语言机制，与需要显式选择
 - 仅为可达 kernel 付费，并提供 CPU 模拟器及 CUDA/ROCm 代码生成路径。
 
 0.3 迁移已经完成 Sema 拆分、具名类型默认名义化、usage block、通用
-Resource/Drop contract，以及由库拥有的 `Rc`/`Arc`。当前阶段正在原地把唯一 MoonIR
-转换为 canonical table 与 CFG；该 CFG 已覆盖普通控制流和逐步扩展的融合 iterator
-子集，但尚未成为唯一的 backend executable body。最终 Slot/Fragment 表面、Moon
-Container 序列化/加载、进化 runtime、可信 Luna native 证明格式，以及
-`-t moon`/`-t cffi` 产物都还不是已实现的发布能力。开发编译器里暂存的旧
+Resource/Drop contract，以及由库拥有的 `Rc`/`Arc`。唯一 MoonIR 现在无条件把可执行函数体
+seal 为 canonical table 与 CFG；当前受支持表面已通过完整 56 项门禁，
+包括 move-only iterator 的逐元素清理。有限静态链接的 runtime context 与 replay-safe multi-shot 已可 canonical 执行；
+持久外部插件 continuation callback 仍不在 plugin ABI v1 内。host-specific Moon
+Container 已支持确定性序列化、原子验证装载和 `luna build <package> -t moon`；
+`-t cffi` 已可生成 C ABI 共享库与头文件，并由真实 C 消费者门禁验证。进化 runtime 和
+可信 Luna native 证明格式仍未实现。开发编译器里暂存的旧
 `dynamic` 源码形式只是迁移输入，不属于 0.3 phase 模型，也不构成兼容承诺。
 
 可以先阅读[主要特性概览](docs/features.zh-CN.md)，或直接查看[可编译运行的完整示例](examples/full_showcase/README.md)。
@@ -120,14 +122,14 @@ package 目录：
 | `luna check <输入>` | 验证源码直到 MoonIR，不生成机器码。 |
 | `luna analyze <输入> --message-format=json` | 输出语义工具快照，可从 stdin 读取一个或多个源码 overlay。 |
 | `luna run <输入> [-O0\|-O2\|-O3]` | 使用 JIT 编译并运行程序。 |
-| `luna build <输入> [-O0\|-O2\|-O3]` | 生成 LLVM IR、链接 Runtime ABI，并输出本机可执行文件。 |
+| `luna build <输入> [-O0\|-O2\|-O3] [-t native\|moon\|cffi]` | 生成所选的 native、Moon Container 或 CFFI 产物。 |
 | `luna repl` | 启动有限 Alpha REPL（`=`、`:decl`、单行语句）。 |
 
 驱动还提供显式链接、运行时库、MoonIR 导出、成本报告和 GPU target 选项。
 运行时后端选择与设备代码生成是两个独立决策。完整参数、环境变量和示例见
 [编译器命令参考](docs/cli.zh-CN.md)。
-已确认的 0.3 `-t native|moon|cffi` 产物 selector 尚未成为 driver 选项；当前
-`build` 只产生 native 开发产物。
+0.3 `-t native|moon|cffi` 产物 selector 已成为 driver 选项。Native library 会在
+证明段实现前明确拒绝，不会降级为无证明产物。
 新增或移动实现文件前，请先查阅[仓库文件与职责指南](docs/file_guide.md)。
 
 ## 平台与测试状态
@@ -150,13 +152,11 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
 
 近期工作遵循 0.3 完成门，而不是冻结的 0.2 Alpha roadmap：
 
-1. 完成 canonical 单层 MoonIR CFG 规范化，使其成为唯一 backend body，并删除
-   structured executable path；
-2. 冻结并实现 Moon 序列化/验证及 `-t native|moon|cffi` 产物接口；
-3. 实现可信 Luna native 证明边界和最小 Moon staging/activation runtime，且不向
+1. 收敛 formal package build 与平台输出约定，完成 Native application/library 产物边界；
+2. 实现可信 Luna native 证明边界和最小 Moon staging/activation runtime，且不向
    普通调用热路径增加成本；
-4. 在剩余语法/顺序决策冻结后，收敛 Slot/Fragment 和 runtime query 表面；
-5. 让 formatter、LSP、package、benchmark 和 release gate 只面向最终 0.3 语义。
+3. 在剩余语法/顺序决策冻结后，收敛 Slot/Fragment 和 runtime query 表面；
+4. 让 formatter、LSP、package、benchmark 和 release gate 只面向最终 0.3 语义。
 
 详细实现顺序与完成门见[0.3 总体设计](docs/luna_0.3_design.zh-CN.md#9-实现优先级)。
 

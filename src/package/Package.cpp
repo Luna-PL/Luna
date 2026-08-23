@@ -13,6 +13,15 @@ std::string publicDeclarationName(const Decl* declaration,
 
 } // namespace
 
+const char* packageKindName(PackageKind kind) {
+    switch (kind) {
+        case PackageKind::Application: return "application";
+        case PackageKind::Library: return "library";
+        case PackageKind::Unspecified: return "unspecified";
+    }
+    return "unspecified";
+}
+
 bool PackageLoader::load(const std::string& path, LoadedPackage& result,
                          std::vector<diagnostic::Diagnostic>& errors) {
     PackageManager manager;

@@ -15,10 +15,16 @@ lowered to MoonIR. MoonIR is verified both before and after MoonIR optimization;
 LLVM JIT and AOT consume that same representation rather than reading the Luna
 AST independently.
 
-MoonIR is intended to preserve language-level safety and runtime contracts for
-the 0.3 host-specific Moon Container and MoonRuntime loading. The serializer,
-loader and evolution runtime are not completed release features; portable
-cross-target containers are explicitly deferred beyond 0.3.
+MoonIR preserves language-level safety and runtime contracts for the 0.3
+host-specific Moon Container. Its serializer and atomic verified loader are
+implemented, and `luna build <package> -t moon` emits a self-verified `.moon`.
+The encoder projects generic compiler input to concrete types and monomorphized
+functions; unresolved recipes never cross the container trust boundary. An
+entry/export/host-interface/runtime-retention reachability closure then removes
+unused concrete code and model rows while retaining direct/dynamic callees,
+Drop glue, metadata, fragments, and their type dependencies.
+The evolution runtime is not complete; portable cross-target containers are
+explicitly deferred beyond 0.3.
 
 Detailed design: [Architecture decisions D001/D002](decisions.md).
 
@@ -91,9 +97,9 @@ Lambda bodies now receive path-sensitive ownership checking, while
 structured LLVM path uses an initialization bit for a move-only affine fold
 accumulator. Its completed canonical-CFG replacement instead proves
 move/reinitialization/final transfer statically with one synthetic local and no
-runtime flag; that CFG is not yet the sole backend body. Linear accumulators and
-non-Copy closure captures remain staged boundaries; the Copy-only closure ABI and
-capture slice are implemented under `C016`. No-capture recipes,
+runtime flag; that CFG is not yet the sole backend body. Linear accumulators remain
+a staged boundary. `C016` closure environments support Copy capture and explicit
+Affine/Linear move capture; borrowed capture remains rejected. No-capture recipes,
 including recipes that own move-only array sources, can now materialize as affine,
 single-consumption local stack values. Owning recipes carry per-element
 initialization bits so consumption, abandonment and early returns close each

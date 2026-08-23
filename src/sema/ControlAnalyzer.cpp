@@ -186,9 +186,6 @@ void ControlAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedRe
         FragmentDecl* contract = nullptr;
         for (auto* candidate : *dynamicFragments) {
             if (!candidate) continue;
-            if (candidate->cardinality == FragmentCardinality::Many)
-                mContext.error("dynamic apply currently rejects explicitly multi-shot context '" +
-                      candidate->name + "'", stmt->line, stmt->col);
             if (candidate->kind != active.acceptedKind ||
                 candidate->cardinality != active.acceptedCardinality)
                 mContext.error("dynamic candidate '" + candidate->name +

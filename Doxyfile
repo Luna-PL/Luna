@@ -1,0 +1,31 @@
+# Luna Doxygen 配置
+# 纪律：本文件只读取并索引 src/ 的现有注释，绝不修改任何源码。
+# 运行：doxygen Doxyfile    生成到 docs/doxy/html
+
+PROJECT_NAME           = "Luna"
+PROJECT_NUMBER         = 0.3.0
+PROJECT_BRIEF          = "Luna systems language compiler (reader reference)"
+OUTPUT_DIRECTORY       = docs/doxy
+OUTPUT_LANGUAGE        = Chinese
+
+INPUT                  = src
+RECURSIVE              = YES
+EXCLUDE_PATTERNS       = */build/*
+
+EXTRACT_ALL            = YES
+EXTRACT_PRIVATE        = NO
+EXTRACT_STATIC         = NO
+EXTRACT_COMMENTS       = YES
+
+GENERATE_TREEVIEW       = YES
+DISABLE_INDEX           = NO
+FULL_SIDEBAR            = YES
+SOURCE_BROWSER          = YES
+JAVADOC_AUTOBRIEF       = YES
+QT_AUTOBRIEF            = YES
+GENERATE_HTML           = YES
+GENERATE_LATEX          = NO
+GENERATE_XML            = NO
+SHOW_NAMESPACES         = YES
+SEARCHENGINE            = YES
+WARN_AS_ERROR           = NO

@@ -924,6 +924,31 @@ struct CostItem {
     SourceLocation location;
 };
 
+enum class ImportKind : uint8_t { Package, Host };
+
+struct ImportRecord {
+    ImportKind kind = ImportKind::Package;
+    std::string ownerPackageId;
+    std::string localName;
+    std::string packageId;
+    std::string alias;
+    std::string capabilityId;
+    std::string linkSymbol;
+    std::string abi;
+    DeclarationRef declaration;
+    TypeRef type;
+    SourceLocation location;
+};
+
+struct ExportRecord {
+    std::string name;
+    DeclarationRef declaration;
+    TypeRef type;
+    DeclarationKind kind = DeclarationKind::Function;
+    std::string abi;
+    SourceLocation location;
+};
+
 struct Module {
     uint32_t formatMajor = FormatMajor;
     uint32_t formatMinor = FormatMinor;
@@ -942,6 +967,8 @@ struct Module {
     bool typeTableSealed = false;
     std::vector<MetadataSchema> metadataSchemas;
     std::vector<DeclarationRecord> declarationTable;
+    std::vector<ImportRecord> imports;
+    std::vector<ExportRecord> exports;
     std::vector<std::unique_ptr<Decl>> declarations;
     std::vector<CostItem> costs;
 

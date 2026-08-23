@@ -22,22 +22,14 @@ if(NOT build_result EQUAL 0 OR NOT EXISTS "${ir}")
 endif()
 
 file(READ "${ir}" lowered_ir)
-# The structured CPS continuation-frame IR patterns are specific to the
-# structured-body path. Under the canonical CFG gate, continuation control
-# flow uses cfg.N blocks instead of continuation.* labels. Skip the IR
-# pattern checks when the canonical gate is active.
-if(NOT DEFINED ENV{LUNA_SEAL_CANONICAL} OR NOT "$ENV{LUNA_SEAL_CANONICAL}" STREQUAL "1")
-foreach(required IN ITEMS
-        "luna.continuation.frame"
-        "continuation.entry"
-        "continuation.return.dispatch"
-        "continuation.return")
-    string(FIND "${lowered_ir}" "${required}" found)
-    if(found EQUAL -1)
-        file(REMOVE "${ir}" "${executable}")
-        message(FATAL_ERROR "structured CPS lowering omitted '${required}'.\nIR:\n${lowered_ir}")
-    endif()
-endforeach()
+# Production continuation control flow is canonical CFG, not the retired
+# structured stack-frame lowering.
+string(FIND "${lowered_ir}" "cfg." canonical_cfg_at)
+string(FIND "${lowered_ir}" "luna.continuation.frame" structured_frame_at)
+if(canonical_cfg_at EQUAL -1 OR NOT structured_frame_at EQUAL -1)
+    file(REMOVE "${ir}" "${executable}")
+    message(FATAL_ERROR
+        "continuation return did not use sole canonical CFG lowering.\nIR:\n${lowered_ir}")
 endif()
 
 execute_process(

@@ -1,0 +1,7 @@
+fn into_iter(value: i32) -> i32 {
+    return value + 1;
+}
+
+fn main() -> i32 {
+    return into_iter(41);
+}

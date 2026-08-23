@@ -4,7 +4,6 @@ endif()
 
 set(expected_tbd_ids
     TBD-EV004
-    TBD-M005
     TBD-Q004
     TBD-SF006
 )
@@ -44,6 +43,7 @@ foreach(required_text IN ITEMS
         "No Proposed decisions are currently registered"
         "no `language = \"0.2\"`, edition, or compatibility mode is added"
         "`T003` (Confirmed): an artifact-producing `luna build` requires a `luna.package`"
+        "`M005` (Confirmed, 2026-08-20): the 0.3 Moon Container uses the 8-byte magic"
         "`TY002` (Confirmed): anonymous records do not use a `record` keyword"
         "Priority item 6 has therefore passed its completion gate"
         "`US001` (Confirmed): explicit overrides are `copy let`, `affine let`, and `linear let`"
@@ -63,6 +63,7 @@ foreach(required_text IN ITEMS
         "当前没有登记 Proposed 决定"
         "不增加 `language = \"0.2\"`、edition 或兼容模式"
         "`T003`（Confirmed）：产生正式产物的 `luna build` 必须以 `luna.package` 为输入"
+        "`M005`（Confirmed，2026-08-20）：0.3 Moon Container 使用 8 字节 magic"
         "`TY002`（Confirmed）：匿名 record 不使用 `record` 关键字"
         "因此优先级第 6 项已通过完成门"
         "`US001`（Confirmed）：显式覆盖语法为 `copy let`、`affine let` 和 `linear let`"

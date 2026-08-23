@@ -23,12 +23,11 @@
 
 ### 已冻结的决定边界（2026-08-09）
 
-本文的 Confirmed ID 是实现授权。下列四个 ID 是完整的未决集合；实现不得隐式替它们
+本文的 Confirmed ID 是实现授权。下列三个 ID 是完整的未决集合；实现不得隐式替它们
 选择答案。后续发现的新歧义必须先在此获得稳定 `TBD-*` ID，之后才能编写依赖代码。
 
 | ID | 尚需决定 | 阻塞 | 不阻塞 |
 |---|---|---|---|
-| `TBD-M005` | binary magic、整数编码、section、alignment、压缩和签名细节 | Moon 序列化格式 conformance、parser、signer 和最终 `-t moon` 输出 | 内存 canonical MoonIR table、结构 verifier 规则或确定性 model 测试 |
 | `TBD-EV004` | pinned/switchable/initializer/activation 的源码与 API 拼写 | 公开 evolution API 及最终源码/runtime binding | generation identity、module lease、staging invariant 或内部状态机测试 |
 | `TBD-Q004` | `.all()` 顺序和显式排序 API | 公开 `.all()` 语义及其 ABI | Symbol Catalog、typed query set、`.one()` 或 `.optional()` |
 | `TBD-SF006` | module Slot/Fragment 语法和 single-shot control 的精确交互 | 新 Slot/Fragment parsing、control semantics 与公开 runtime-apply surface | shadow SlotId/ContractId、descriptor schema 或旧版 corpus 固化 |
@@ -364,8 +363,15 @@ fallthrough、return、`?` failure、fragment abort/resume 均使用同一 edge-
 CFG body，不保留 structured-body fallback 或格式兼容开关。构建期 builder 可以暂存源码
 结构，但 module sealing 必须原子删除它；verifier 和 codegen 只接受 CFG。
 
-`M002`（Confirmed）：0.3 Moon Container 只接受完全实例化的 MoonIR；generic recipe
-留在编译器输入侧，不进入首版不可信容器格式。
+`M002`（Confirmed）：0.3 Moon Container 只接受完全实例化的 MoonIR。编码前
+编译器会导出 concrete projection：排除 `TypeParam`、inference/unknown type、传递
+依赖它们的 type，以及 generic declaration/function recipe，但保留具体实例
+和它们的 runtime interface。导出的 generic recipe 会被拒绝，因为静默删除公开
+API 不安全；open-world 泛型库需要后续 recipe 格式。concrete projection 同时
+是 reachability-closed：application entrypoint、library export、typed host import 和显式
+runtime-retained declaration 是根；direct call、dynamic candidate、Drop glue、fragment region、
+metadata schema 和冻结 type edge 构成传递闭包。不可达的 concrete function/declaration/type
+不进入容器；package dependency import 仍作为 manifest-level interface fact 保留。
 
 `M003`（Confirmed）：0.3 MVP 的 Moon Container 是 host-specific，manifest 必须声明
 target triple 和 data layout。跨目标 portable container 与 target-specific device code
@@ -376,8 +382,130 @@ section length 和解析资源上限。manifest、type、symbol、contract、cod
 和必要 sysmeta 是必需 section；debug/source/device data 是可选 section。内容摘要覆盖
 规范化的非签名 section，parser/verifier 必须有 fuzz corpus。
 
-`TBD-M005`：冻结 binary magic、整数编码、section number、alignment、压缩和签名算法
-等线格式细节；不得改变 M001-M004 的语义边界。
+`M005`（Confirmed，2026-08-20）：0.3 Moon Container 使用 8 字节 magic
+`89 4D 4F 4F 4E 0D 0A 1A`。所有多字节整数均为 little-endian 固定宽度：table index、
+枚举、计数与 UTF-8 字符串 byte length 使用 `u32`，file offset 与 section length 使用
+`u64`；signed integer literal 使用 two's-complement `i64`，floating literal 使用 IEEE-754
+binary64 的原始 `u64` 位模式。section ID 固定且按升序出现，必需 section 为 manifest、
+type、symbol、contract、code、imports、exports 与 sysmeta；ID 高位标记 optional section，
+未知必需 section、重复 ID、乱序或重叠 section 均拒绝。section 起点按 8 字节对齐，所有
+padding byte 必须为零。
+
+0.3 不支持 payload compression；compression flag 非零即拒绝，避免同一模型存在多个规范
+编码及 parser 承担 decompression bomb。container digest 使用 SHA-256，覆盖规范 header、
+directory 和除 digest/signature 外的 section payload。0.3 Moon Container 不定义签名
+section；其安全性来自本地 verifier，真实性签名留给后续格式版本，并且不得与 Luna Native
+proof 混淆。未知 optional section 可以跳过，但 emitter 不产生未知 section。reader 默认
+上限为 64 个 section、1 GiB container、16 MiB 单字符串、`2^24` 个 table row 和 256 层
+嵌套；host policy 只能进一步收紧。上述选择不得改变 M001-M004 的语义边界。
+
+0.3 canonical header 固定为 80 bytes：magic `[0,8)`，format major/minor `[8,16)`，
+header size/flags/section count/reserved `[16,32)`，directory offset/file size `[32,48)`，
+SHA-256 `[48,80)`。计算摘要时 digest 字段视为全零。directory 紧随 header；每项固定
+32 bytes，依次为 `id:u32`、`flags:u32`、`offset:u64`、`storedLength:u64`、
+`decodedLength:u64`。0.3 的 flags 必须为零且两个 length 必须相等。最后一个 section
+payload 结束即为 file size，不允许 trailing data。
+
+`M005-A`（Confirmed，2026-08-20）：payload 的递归基本编码为 `str = u32 byte
+length + valid UTF-8 bytes`、`vec<T> = u32 row count + T...`、`bool = u32(0|1)`；
+enum 也使用 `u32` 且 reader 必须拒绝越界值。stable TypeId/ShapeId/
+SymbolId/ContractId/AbiLayoutId 和 `DeclarationRef` 直接使用 `str`，不依赖
+emitter 内部指针或容器外的 symbol table。
+
+manifest payload 按以下顺序固定：`packageId:str`、`packageVersion:str`、
+`packageKind:u32`（application=1, library=2）、`targetTriple:str`、
+`dataLayout:str`、`entrySymbol:str`、`entryContract:str`、`featureBits:u32`。
+feature bit 0..5 依次为 runtime、dynamic reflection、dynamic apply、dynamic select、
+kernel 和 reserved kernel runtime，其他 bit 必须为零。application 必须有完整
+entry reference，library 必须没有 entry reference。
+
+type payload 以 `vec<TypeRecord>` 开始，并按 TypeId UTF-8 byte 序严格递增。
+`TypeRecord` 字段顺序固定为：三个 identity，domain/identity-mode/kind，
+sysmeta，display/source/linkage/nominal 四个名称，type-parameter names，
+type arguments，inner type，array length，mutability，parameter types，return type，
+parameter/return ownership contracts，multi-shot，continuation kind，iterator mode，fields，
+captured fields，variants，`inferenceId:i64`，three canonical payload strings，
+layout ABI version/size/alignment/signature，drop-glue `DeclarationRef`，以及 immediate
+referenced TypeIds。field 是 `name:str + type:str`，variant 是 `name:str + vec<type:str>`，
+ownership contract 是 `relation:u32 + usage:u32`。
+
+sysmeta 在 TypeRecord 内依次编码 schema major/minor（各 `u32`）、五个
+identity string、control 的四个 enum 和两个 bool、resource parameter contracts/
+result contract/management/release-domain/lifetime/relation/usage/cleanup 及四个 bool、
+capability 六个 bool，最后是 ABI 的两个 bool 和 drop-glue symbol string。解码必须
+先完成边界、UTF-8、资源上限、enum/bool 和 canonical order 检查，然后才能
+构建 sealed Module index 并交给 MoonIR verifier。
+
+`M005-B`（Confirmed，2026-08-20）：declaration model 规范化为三个以
+SymbolId 严格递增的 section，不重复存储整条 DeclarationRecord。symbol row 为
+`symbol/id/family/source/linkage:str`、`kind/retention:u32`、`type:str`和 source
+location（`path:str + line:i64 + column:i64`）。contract row 为 `symbol:str`、
+`ContractId:str`、完整 typed sysmeta facts、drop-glue `DeclarationRef` 与
+`canonicalContract:str`。
+
+sysmeta section 先编码按 schema ID 递增的 metadata schema rows（id/name、typed
+fields、location），再编码与 symbol/contract 具有相同 SymbolId key set 的 declaration
+metadata rows。metadata instance 保留 schema ID、按声明顺序的 constant values、
+retention 和 location；constant 使用 `tag:u32 + payload`，tag 0..3 依次为
+`i64`、IEEE-754 raw `u64`、`bool`、`str`。reader 必须要求三个 declaration
+key set 完全相同，重算 SymbolId/ContractId/canonical contract，并仅在全部成功后
+原子发布 declaration table 和 metadata schema index。
+
+`M005-C`（Confirmed，2026-08-20）：imports section 是 canonical `ImportRecord`
+rows，排序 key 为 kind/owner/local-name/package/alias。package row 只保存 owner
+Package ID、dependency Package ID、alias 和 location；host row 只保存 owner、
+module-qualified local declaration name、capability ID、link symbol、`C` ABI、typed
+`DeclarationRef`、TypeId 和 location。package-only 与 host-only 字段不得混用。
+
+exports section 按 public name/Declaration SymbolId 递增，每行保存 public name、
+typed `DeclarationRef`、TypeId、declaration kind、可选 `C` ABI 和 location。只有
+root package 的显式 export 进入该表，dependency export 仅用于编译时解析。
+verifier 必须解析每个 typed reference，比对 TypeId/kind，拒绝同 link symbol
+不同 ContractId 的 host imports，且不允许容器使用 path/library name 代替
+capability ID。
+
+`M005-D`（Confirmed，2026-08-20）：code section 不序列化 C++ RTTI/class name，
+而使用显式非零 `u32` opcode。canonical block operation 仅有 Let=1、
+Allocate=2、Expression=3、Free=4、Await=5；structured Return/If/Match/
+While/For/Slot/Apply/Resume/Abort 必须已转换为 CFG terminator、edge 和 region。
+
+expression opcode 固定为 Integer=1、Floating=2、String=3、Boolean=4、
+Unit=5、Identifier=6、Binary=7、Unary=8、Call=9、DynamicSelect=10、
+Launch=11、VariantConstruct=12、ResultConstruct=13、FieldAccess=14、
+Index=15、SliceLength=16、ArrayLiteral=17、RecordLiteral=18、HeapAllocate=19、
+InitializeAllocation=20、Move=21、Borrow=22、Dereference=23、AddressOf=24、
+Lambda=25、MakeClosure=26、EnvironmentLoad=27、Assign=28。未知、0 或
+structured-only tag 均拒绝。每次进入 nested expression/lambda CFG 都消耗一层
+reader depth budget，默认最多 256 层。
+
+`M005-E`（Confirmed，2026-08-20）：code payload 以按 SymbolId 递增的
+function rows 开始，每行保存声明表可独立重建不了的 executable facts：
+package/module identity、source/generated name、kernel/reachability/extern/constexpr/selector flags、
+ABI/link name、type parameters、typed parameter contracts、return contract、template concrete
+arguments、location，以及 optional sealed CFG。extern function 必须没有 CFG，其他
+concrete function 必须有 CFG；generic recipe 不进入 0.3 container。
+
+CFG 固定编码 entry/root-region/root-scope，然后依次为 block、region、scope、
+local 和 cleanup tables。每张表的 `TableRef:u32` 必须等于当前 row ordinal，
+`0xffffffff` 是唯一 empty ref。block 保存 region/scope、tagged operations 和一个
+terminator；terminator 使用现有 TerminatorKind `u32` 并显式保存 operand、switch
+type、primary/secondary edges、switch cases 和 exit cleanups。reader 先检查 table shape/
+resource/depth，再交给 CFG verifier 检查可达性、scope/region 关系与 cleanup 不变量。
+
+实施完成记录（2026-08-22）：八个 required section 已具有固定宽度 canonical codec；
+完整容器 reader 在 SHA/目录检查后原子解码 type、declaration、interface 和 code，且只在
+MoonIR Verifier 成功后发布 Module。独立 Python oracle 已直接解析实际 container/code
+bytes；生产 frontend 产物经过 encode/decode 后由 LLVM JIT 重放并保持结果。encoder
+会导出并验证 concrete projection，因此 package 可以包含 generic recipe，但只有
+已实例化代码和可达的 concrete type/declaration row 进入文件。loader 在发布前
+会独立重建同一闭包，防止经过认证的 code 携带缺失 runtime TypeRef 绕过 verifier。driver 已开放
+`luna build <package> -t moon [-o path]`，并拒绝 standalone、作为 export 或 entrypoint
+的 generic recipe、kind/main 不匹配和 native-only 选项。
+parser/verifier 的 fuzz 要求已由可选 Clang libFuzzer target 实现。可重现
+corpus 同时包含真实 CLI container、独立构造的 framing seed、截断、完整性
+错误和重新认证的 section 变异。custom mutator 在部分调度中保留 framing 并
+重算 SHA-256，使 coverage 能进入 model decoder，而不是停在 integrity rejection；
+harness 同时强制失败原子性和 canonical re-encoding。
 
 ### C016：闭包环境 ABI（Confirmed）
 
@@ -879,16 +1007,14 @@ construction body 未被消费。同一源码级门禁还覆盖显式 static `ap
 源码可以通过 frontend 与 Lowering，但必须在该 static CFG 边界被拒绝。multi-shot 与 runtime apply
 仍属后续切片。
 
-第 10 项尚未整体完成。捕获式 closure environment（已冻结为 `C016`）与其余 non-Copy
-item/callable 逐元素 ownership 转移仍是明确的后续边界。
+第 10 项已于 2026-08-20 完成。捕获式 closure environment（已冻结为 `C016`）、non-Copy
+item/callable 的逐元素 ownership 转移、无条件 Sealer 和 canonical-only backend 边界均已落地；
+structured statement/continuation/slot/fragment executable-body consumer 已从源码与构建中删除。
 跨越潜在 early exit 的 Linear hoisting 因违反恰好一次约束而保持非法，它不是延后的
 lowering 功能。
-随后规范化 slot 和 fragment
-路径，原子替换 structured executable body，并让 backend 消费同一 CFG。只有删除
-structured 执行路径且完整 verifier/codegen 回归门通过后，本项才算完成；
-serializer/parser 仍属于第 11 项。
+完整 verifier/codegen 回归门通过后，下一主线是第 11 项 serializer/parser。
 
-Copy-only 闭包捕获实现完成（2026-08-14）：`C016 CL001`-`CL009` 切片已激活。capture-free
+闭包捕获实现完成（2026-08-14）：`C016 CL001`-`CL009` 的 Copy capture 切片已激活。capture-free
 `Function` 值保持 8 字节裸代码指针 ABI；捕获式 lambda 成为携带布局的 `Closure` 类型，其
 环境字段参与 canonical 类型身份、value size 与 ABI 布局。Sema 按首次引用顺序推导自由
 变量集，并以显式诊断拒绝 Affine/Linear 与借用捕获。MoonIR 携带 `MakeClosure` 与
@@ -896,7 +1022,17 @@ Copy-only 闭包捕获实现完成（2026-08-14）：`C016 CL001`-`CL009` 切片
 的字段边界。canonical CFG 构造声明环境参数 local 并把捕获读取改写为 EnvLoad，因此
 structured 与 CFG 两条路径共享同一闭包模型。JIT 与 AOT 通过隐藏环境指针执行捕获式
 闭包；正向 Copy 捕获、负向 Affine/Linear 捕获与 canonical-CFG 证据通过完整 51 测试
-套件、strict-warning 构建和 ASan/UBSan。non-Copy 捕获是下一个闭包切片。
+套件、strict-warning 构建和 ASan/UBSan。后续 non-Copy 切片也已把 Affine/Linear
+捕获显式 move 进环境，消费外部 binding，并由环境 cleanup 递归释放；借用捕获继续因
+lifetime 不能安全逃逸而拒绝。
+
+canonical CFG 单向切换记录（2026-08-20）：完整 51 项 CTest 已通过，
+CompilerPipeline 现在无条件 seal 每个可执行函数体。materialized move-only iterator 在 recipe 创建时安装
+outer projected guarded cleanup，未消费和条件提前返回会按元素正序清理；开始消费时 source
+原子转移到 loop-local guarded state，不形成双重 obligation。有限静态链接候选的
+runtime context、replay-safe multi-shot 和 statement-form apply 也已在 canonical CFG 中实现；
+每次 `resume()` 拥有独立 Continuation region，未知 context/many 候选不会降级到
+仅 interceptor 的外部 plugin ABI v1。第 10 项仍需完成单向 production switchover 才能关闭。
 
 | 顺序 | 优先级 | 工作 | 完成门 |
 |---:|---|---|---|
@@ -928,6 +1064,7 @@ structured 与 CFG 两条路径共享同一闭包模型。JIT 与 AOT 通过隐�
 - `NP001`（Confirmed deferral）：并行计算和通用并发；
 - `NP002`（Confirmed deferral）：扩展 GPU 数据类型、grid 和跨 generation device update；
 - `NP003`（Confirmed deferral）：stateful hot migration；
-- `NP004`（Confirmed deferral）：runtime context/multi-shot continuation ABI；
+- `NP004`（Confirmed deferral）：跨外部插件边界的持久 runtime
+  context/multi-shot continuation callback ABI；有限静态链接候选已由 scoped CFG 实现；
 - `NP005`（Confirmed deferral）：hotspot JIT、PGO、deoptimization 和 code reclamation；
 - `NP006`（Confirmed deferral）：开放式 runtime reflection 和通用 runtime trait object。

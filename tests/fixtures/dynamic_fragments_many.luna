@@ -1,0 +1,22 @@
+// A finite runtime-selected context may replay a Copy-only continuation.
+runtime context many twice(value: i32) {
+    print(value);
+    resume();
+    resume();
+}
+
+runtime context many bracket(value: i32) {
+    print(value + 1);
+    resume();
+    resume();
+}
+
+fn main() -> i32 {
+    dynamic slot context many replay(value: i32);
+    dynamic apply replay(twice, bracket) {
+        replay(40) {
+            print(42);
+        }
+    }
+    return 0;
+}

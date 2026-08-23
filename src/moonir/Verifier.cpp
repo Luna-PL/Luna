@@ -1568,14 +1568,23 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
     };
     std::function<void(const Expr*, CleanupState&)> transferExpr;
     transferExpr = [&transferExpr, &placeOf, &consumePlace,
-                    &activateLocal, &graph](
+                    &activateLocal, &graph, &module](
         const Expr* expression, CleanupState& state) {
         if (!expression) return;
         if (const auto* move = dynamic_cast<const MoveExpr*>(expression)) {
             transferExpr(move->operand.get(), state);
-            if (auto place = placeOf(move->operand.get()))
-                consumePlace(*place, state, move->location, "move",
-                             move->nextUnread);
+            const auto* movedType = move->operand
+                ? module.findType(move->operand->type) : nullptr;
+            // `move` of a Copy projection reads the field value; it does not
+            // partially consume or deactivate the owning aggregate cleanup.
+            // This matters for affine nominal products containing Copy fields.
+            if (auto place = placeOf(move->operand.get())) {
+                if (place->projections.empty() || !movedType ||
+                    movedType->sysmeta.resource.usage !=
+                        luna::ownership::Usage::Copy)
+                    consumePlace(*place, state, move->location, "move",
+                                 move->nextUnread);
+            }
             return;
         }
         if (const auto* binary = dynamic_cast<const BinaryExpr*>(expression)) {
@@ -1686,16 +1695,55 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 targetAncestors.insert(scope->id.value);
         }
         std::vector<CleanupId> result;
+        const auto normalizeGuardedArrayTail = [&graph, &result](size_t begin) {
+            size_t groupBegin = begin;
+            while (groupBegin < result.size()) {
+                const auto* first = graph.findCleanup(result[groupBegin]);
+                const bool isGuardedElement = first && first->guard &&
+                    first->place.projections.size() == 1 &&
+                    first->place.projections.front().kind ==
+                        ProjectionKind::ConstantIndex &&
+                    first->place.projections.front().index ==
+                        first->guard->elementIndex;
+                if (!isGuardedElement) {
+                    ++groupBegin;
+                    continue;
+                }
+                size_t groupEnd = groupBegin + 1;
+                uint64_t previousIndex = first->guard->elementIndex;
+                while (groupEnd < result.size()) {
+                    const auto* next = graph.findCleanup(result[groupEnd]);
+                    if (!next || !next->guard ||
+                        next->place.root != first->place.root ||
+                        next->guard->nextUnread != first->guard->nextUnread ||
+                        next->place.projections.size() != 1 ||
+                        next->place.projections.front().kind !=
+                            ProjectionKind::ConstantIndex ||
+                        next->place.projections.front().index !=
+                            next->guard->elementIndex ||
+                        next->guard->elementIndex + 1 != previousIndex)
+                        break;
+                    previousIndex = next->guard->elementIndex;
+                    ++groupEnd;
+                }
+                std::reverse(
+                    result.begin() + static_cast<std::ptrdiff_t>(groupBegin),
+                    result.begin() + static_cast<std::ptrdiff_t>(groupEnd));
+                groupBegin = groupEnd;
+            }
+        };
         std::unordered_set<uint32_t> visited;
         for (const ScopeRecord* scope = graph.findScope(source); scope;
              scope = graph.findScope(scope->parent)) {
             if (!visited.insert(scope->id.value).second ||
                 targetAncestors.count(scope->id.value))
                 break;
+            const size_t scopeBegin = result.size();
             for (auto cleanup = scope->cleanups.rbegin();
                  cleanup != scope->cleanups.rend(); ++cleanup)
                 if (cleanup->value < state.size() && state[cleanup->value])
                     result.push_back(*cleanup);
+            normalizeGuardedArrayTail(scopeBegin);
         }
         return result;
     };
@@ -2298,6 +2346,75 @@ bool Verifier::verify(const Module& module) {
         }
     }
 
+    std::string previousImportKey;
+    std::unordered_map<std::string, std::string> hostLinkContracts;
+    for (const auto& import : module.imports) {
+        const std::string key =
+            std::to_string(static_cast<unsigned>(import.kind)) + "\n" +
+            import.ownerPackageId + "\n" + import.localName + "\n" +
+            import.packageId + "\n" + import.alias;
+        if (!previousImportKey.empty() && key <= previousImportKey)
+            error(import.location, "import table is duplicate or out of canonical order");
+        previousImportKey = key;
+        if (!validSeparatedName(import.ownerPackageId, "."))
+            error(import.location, "import has invalid owner Package ID '" +
+                                   import.ownerPackageId + "'");
+        if (import.kind == ImportKind::Package) {
+            if (!validSeparatedName(import.packageId, ".") ||
+                !validIdentifier(import.alias))
+                error(import.location, "package import has an invalid package or alias");
+            if (!import.localName.empty() || !import.capabilityId.empty() ||
+                !import.linkSymbol.empty() || !import.abi.empty() ||
+                !import.declaration.empty() || !import.type.empty())
+                error(import.location, "package import carries host-only fields");
+        } else if (import.kind == ImportKind::Host) {
+            if (!validSeparatedName(import.localName, "::") ||
+                !validSeparatedName(import.capabilityId, ".") ||
+                import.linkSymbol.empty() || import.abi != "C" ||
+                !import.declaration.complete() || import.type.empty()) {
+                error(import.location, "host import has incomplete typed capability fields");
+                continue;
+            }
+            if (!import.packageId.empty() || !import.alias.empty())
+                error(import.location, "host import carries package-only fields");
+            const auto* declaration = module.findDeclaration(import.declaration);
+            if (!declaration || declaration->kind != DeclarationKind::Function)
+                error(import.location, "host import references a missing function contract");
+            else if (declaration->type != import.type)
+                error(import.location, "host import type differs from its declaration contract");
+            auto [found, inserted] = hostLinkContracts.emplace(
+                import.linkSymbol, import.declaration.contract.value);
+            if (!inserted && found->second != import.declaration.contract.value)
+                error(import.location, "host imports reuse link symbol '" +
+                                       import.linkSymbol + "' with different contracts");
+        } else {
+            error(import.location, "import table contains an invalid kind");
+        }
+    }
+
+    std::string previousExportKey;
+    std::unordered_set<std::string> exportNames;
+    for (const auto& exported : module.exports) {
+        const std::string key = exported.name + "\n" +
+            exported.declaration.symbol.value;
+        if (!previousExportKey.empty() && key <= previousExportKey)
+            error(exported.location, "export table is duplicate or out of canonical order");
+        previousExportKey = key;
+        if (exported.name.empty() || !exportNames.insert(exported.name).second ||
+            !exported.declaration.complete() || exported.type.empty()) {
+            error(exported.location, "export has incomplete or duplicate public identity");
+            continue;
+        }
+        const auto* declaration = module.findDeclaration(exported.declaration);
+        if (!declaration)
+            error(exported.location, "export references a missing declaration contract");
+        else if (declaration->type != exported.type ||
+                 declaration->kind != exported.kind)
+            error(exported.location, "export type or kind differs from its declaration");
+        if (!exported.abi.empty() && exported.abi != "C")
+            error(exported.location, "export carries an unsupported explicit ABI");
+    }
+
     std::unordered_set<std::string> executableIds;
     for (const auto& declaration : module.declarations) {
         if (!declaration) {
@@ -2844,7 +2961,36 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
         error({}, "null expression in '" + owner + "'");
         return;
     }
-    if (auto* unit = dynamic_cast<const UnitExpr*>(expr)) {
+    if (auto* literal = dynamic_cast<const IntLiteralExpr*>(expr)) {
+        verifyType(literal->type, literal->location,
+                   "integer literal expression", module);
+        const auto* type = module.findType(literal->type);
+        if (type && !isIntegerMetadataType(type->kind))
+            error(literal->location,
+                  "canonical integer literal does not have an integer type");
+    } else if (auto* literal = dynamic_cast<const FloatLiteralExpr*>(expr)) {
+        verifyType(literal->type, literal->location,
+                   "floating-point literal expression", module);
+        const auto* type = module.findType(literal->type);
+        if (type && type->kind != TypeKind::F32 && type->kind != TypeKind::F64)
+            error(literal->location,
+                  "canonical floating-point literal does not have a floating-point type");
+    } else if (auto* literal = dynamic_cast<const StringLiteralExpr*>(expr)) {
+        verifyType(literal->type, literal->location,
+                   "string literal expression", module);
+        const auto* type = module.findType(literal->type);
+        if (type && type->kind != TypeKind::String &&
+            type->kind != TypeKind::CStr)
+            error(literal->location,
+                  "canonical string literal does not have a string type");
+    } else if (auto* literal = dynamic_cast<const BoolLiteralExpr*>(expr)) {
+        verifyType(literal->type, literal->location,
+                   "boolean literal expression", module);
+        const auto* type = module.findType(literal->type);
+        if (type && type->kind != TypeKind::Bool)
+            error(literal->location,
+                  "canonical boolean literal does not have boolean type");
+    } else if (auto* unit = dynamic_cast<const UnitExpr*>(expr)) {
         verifyType(unit->type, unit->location, "unit expression", module);
         const auto* type = module.findType(unit->type);
         if (!type || type->kind != TypeKind::Unit)

@@ -17,7 +17,12 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
         ? mHelpers->toLLVMType(returnType)
         : mHelpers->voidTy();
 
-    if ((!decl->body && !decl->controlFlow) || decl->isExtern) return;
+    if (decl->isExtern) return;
+    if (!decl->controlFlow || decl->body) {
+        error("function '" + decl->name +
+              "' reached code generation without an exclusive canonical CFG body");
+        return;
+    }
 
     mCurrentFunc = func;
     const bool savedKernelMode = mCurrentFunctionIsKernel;
@@ -29,11 +34,6 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
     mArrayDropFlags.clear();
     mMaterializedIterators.clear();
     mLocalKnownUpperBounds.clear();
-    mSlotDefaults.clear();
-    mCurrentSlotContinuation = nullptr;
-    mContinuationFrames.clear();
-    mContinuationFrameCounter = 0;
-    mCurrentFragmentReturn = nullptr;
 
     auto entryBB = llvm::BasicBlock::Create(*mCtx, "entry", func);
     mBuilder->SetInsertPoint(entryBB);
@@ -75,21 +75,7 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
         mBuilder->SetInsertPoint(readyBB);
     }
 
-    if (decl->controlFlow) {
-        generateControlFlowBody(*decl->controlFlow, func, entryBB);
-    } else {
-        for (size_t i = 0; i < decl->params.size(); ++i) {
-            auto& p = decl->params[i];
-            auto* argVal = func->getArg(i);
-            auto* alloca = createEntryBlockAlloca(
-                func, argVal->getType(), p.name);
-            mBuilder->CreateStore(argVal, alloca);
-            mLocals[p.name] = alloca;
-            mLocalTypes[p.name] = resolveType(p.type);
-        }
-
-        generateBlock(decl->body.get(), func);
-    }
+    generateControlFlowBody(*decl->controlFlow, func, entryBB);
 
     if (retLLVMType == mHelpers->voidTy() && !mBuilder->GetInsertBlock()->getTerminator()) {
         mBuilder->CreateRetVoid();

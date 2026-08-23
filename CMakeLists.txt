@@ -94,6 +94,8 @@ option(LUNA_ENABLE_BASIC_BENCHMARK "Run the lightweight Luna CPU baseline" OFF)
 option(LUNA_STRICT_WARNINGS "Treat compiler warnings in Luna-owned targets as errors" OFF)
 option(LUNA_ENABLE_SANITIZERS
     "Instrument the compiler and embedded JIT runtime with ASan/UBSan" OFF)
+option(LUNA_ENABLE_FUZZING
+    "Build the Clang libFuzzer Moon Container trust-boundary harness" OFF)
 set(LUNA_ROCM_SMOKE_ARCH "gfx1101" CACHE STRING
     "AMDGPU architecture used by the opt-in ROCm smoke test")
 
@@ -147,6 +149,16 @@ add_executable(core-contracts-test tests/core_contracts_test.cpp)
 target_include_directories(core-contracts-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+add_executable(moon-container-test
+    tests/moon_container_test.cpp
+    src/moonir/Container.cpp
+)
+target_include_directories(moon-container-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(moon-container-test SYSTEM PRIVATE
+    ${LLVM_INCLUDE_DIRS})
+target_link_libraries(moon-container-test PRIVATE LLVM)
+
 add_library(luna-frontend OBJECT
     src/core/TypeRelations.cpp
     src/core/TypeLayout.cpp
@@ -181,8 +193,49 @@ add_executable(analysis-snapshot-test
 )
 target_include_directories(analysis-snapshot-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+add_executable(moon-container-model-test
+    tests/moon_container_model_test.cpp
+    src/moonir/Container.cpp
+    src/moonir/ContainerModel.cpp
+    src/moonir/MoonIR.cpp
+    src/moonir/Verifier.cpp
+    $<TARGET_OBJECTS:luna-frontend>
+)
+target_include_directories(moon-container-model-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(moon-container-model-test SYSTEM PRIVATE
+    ${LLVM_INCLUDE_DIRS})
+target_link_libraries(moon-container-model-test PRIVATE LLVM)
+
+if(LUNA_ENABLE_FUZZING)
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        message(FATAL_ERROR "LUNA_ENABLE_FUZZING requires Clang/libFuzzer")
+    endif()
+    add_executable(moon-container-fuzz
+        tests/moon_container_fuzz.cpp
+        src/moonir/Container.cpp
+        src/moonir/ContainerModel.cpp
+        src/moonir/MoonIR.cpp
+        src/moonir/Verifier.cpp
+        $<TARGET_OBJECTS:luna-frontend>
+    )
+    target_include_directories(moon-container-fuzz
+        PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+    target_include_directories(moon-container-fuzz SYSTEM PRIVATE
+        ${LLVM_INCLUDE_DIRS})
+    target_compile_options(moon-container-fuzz PRIVATE
+        -fsanitize=fuzzer,address,undefined
+        -fno-omit-frame-pointer)
+    target_link_options(moon-container-fuzz PRIVATE
+        -fsanitize=fuzzer,address,undefined
+        -fno-omit-frame-pointer)
+    target_link_libraries(moon-container-fuzz PRIVATE LLVM)
+endif()
+
 add_executable(moonir-canonical-test
     tests/moonir_canonical_test.cpp
+    src/moonir/Container.cpp
+    src/moonir/ContainerModel.cpp
     src/moonir/ControlFlowBuilder.cpp
     src/moonir/Lowering.cpp
     src/moonir/MoonIR.cpp
@@ -194,14 +247,12 @@ add_executable(moonir-canonical-test
     src/codegen/CodeGeneratorControlFlow.cpp
     src/codegen/CodeGeneratorExecution.cpp
     src/codegen/CodeGeneratorExpressions.cpp
-    src/codegen/CodeGeneratorFragments.cpp
     src/codegen/CodeGeneratorFunctions.cpp
     src/codegen/CodeGeneratorGpu.cpp
     src/codegen/CodeGeneratorIterator.cpp
     src/codegen/CodeGeneratorModule.cpp
     src/codegen/CodeGeneratorRangeAnalysis.cpp
     src/codegen/CodeGeneratorRuntimeDescriptors.cpp
-    src/codegen/CodeGeneratorStatements.cpp
     src/runtime/ApplicationHostServices.cpp
     src/runtime/Runtime.cpp
     src/driver/CompilerPipeline.cpp
@@ -226,6 +277,8 @@ add_executable(luna
     src/driver/Repl.cpp
     $<TARGET_OBJECTS:luna-frontend>
     src/moonir/ControlFlowBuilder.cpp
+    src/moonir/Container.cpp
+    src/moonir/ContainerModel.cpp
     src/moonir/MoonIR.cpp
     src/moonir/Lowering.cpp
     src/moonir/Verifier.cpp
@@ -238,14 +291,12 @@ add_executable(luna
     src/codegen/CodeGeneratorControlFlow.cpp
     src/codegen/CodeGeneratorExecution.cpp
     src/codegen/CodeGeneratorExpressions.cpp
-    src/codegen/CodeGeneratorFragments.cpp
     src/codegen/CodeGeneratorFunctions.cpp
     src/codegen/CodeGeneratorGpu.cpp
     src/codegen/CodeGeneratorIterator.cpp
     src/codegen/CodeGeneratorModule.cpp
     src/codegen/CodeGeneratorRangeAnalysis.cpp
     src/codegen/CodeGeneratorRuntimeDescriptors.cpp
-    src/codegen/CodeGeneratorStatements.cpp
     src/runtime/ApplicationHostServices.cpp
     src/runtime/Runtime.cpp
 )
@@ -263,11 +314,16 @@ if(LUNA_STRICT_WARNINGS)
         fragment-plugin-test
         source-manager-test
         core-contracts-test
+        moon-container-test
+        moon-container-model-test
         luna-frontend
         analysis-snapshot-test
         moonir-canonical-test
         luna
     )
+    if(LUNA_ENABLE_FUZZING)
+        list(APPEND luna_warning_targets moon-container-fuzz)
+    endif()
     foreach(target IN LISTS luna_warning_targets)
         if(MSVC)
             target_compile_options(${target} PRIVATE /W4 /WX)
@@ -287,7 +343,8 @@ if(LUNA_ENABLE_SANITIZERS)
     # shared frontend objects and both consumers without contaminating the
     # installed AOT runtime archive with sanitizer symbols.
     foreach(target IN ITEMS
-            luna luna-frontend analysis-snapshot-test moonir-canonical-test)
+            luna luna-frontend analysis-snapshot-test moonir-canonical-test
+            moon-container-test moon-container-model-test)
         target_compile_options(${target} PRIVATE
             -fsanitize=address,undefined
             -fno-omit-frame-pointer)
@@ -299,6 +356,12 @@ if(LUNA_ENABLE_SANITIZERS)
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
     target_link_options(moonir-canonical-test PRIVATE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer)
+    target_link_options(moon-container-test PRIVATE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer)
+    target_link_options(moon-container-model-test PRIVATE
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
 endif()
@@ -345,6 +408,7 @@ install(DIRECTORY examples/full_showcase/
 install(DIRECTORY stdlib/ DESTINATION ${CMAKE_INSTALL_DATADIR}/luna/stdlib)
 
 if(BUILD_TESTING)
+    find_package(Python3 3.8 REQUIRED COMPONENTS Interpreter)
     add_test(
         NAME luna.analysis-snapshot
         COMMAND $<TARGET_FILE:analysis-snapshot-test>
@@ -354,6 +418,81 @@ if(BUILD_TESTING)
         NAME luna.moonir-canonical
         COMMAND $<TARGET_FILE:moonir-canonical-test>
     )
+    add_test(
+        NAME luna.moon-container
+        COMMAND $<TARGET_FILE:moon-container-test>
+    )
+    add_test(
+        NAME luna.moon-container-model
+        COMMAND $<TARGET_FILE:moon-container-model-test>
+    )
+    add_test(
+        NAME luna.moon-container-cli
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/moon_container_cli.cmake
+    )
+    add_test(
+        NAME luna.moon-container-oracle
+        COMMAND ${Python3_EXECUTABLE}
+            ${CMAKE_CURRENT_SOURCE_DIR}/tests/moon_container_oracle.py
+            --compiler $<TARGET_FILE:luna>
+            --package
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/packages/package_kind_application
+            --work-dir
+                ${CMAKE_CURRENT_BINARY_DIR}/moon-container-oracle-test
+    )
+    add_test(
+        NAME luna.cffi-artifact
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -DLUNA_C_COMPILER=${CMAKE_C_COMPILER}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cffi_artifact.cmake
+    )
+    if(LUNA_ENABLE_FUZZING)
+        set(LUNA_MOON_FUZZ_CORPUS
+            "${CMAKE_CURRENT_BINARY_DIR}/moon-container-fuzz-corpus")
+        add_custom_target(moon-container-fuzz-corpus
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/moon_container_fuzz_corpus.py
+                --compiler $<TARGET_FILE:luna>
+                --package
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/packages/package_kind_application
+                --output-dir ${LUNA_MOON_FUZZ_CORPUS}
+            DEPENDS luna
+            VERBATIM)
+        add_test(
+            NAME luna.moon-container-fuzz-corpus
+            COMMAND ${Python3_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/moon_container_fuzz_corpus.py
+                --compiler $<TARGET_FILE:luna>
+                --package
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/packages/package_kind_application
+                --output-dir ${LUNA_MOON_FUZZ_CORPUS})
+        set_tests_properties(luna.moon-container-fuzz-corpus PROPERTIES
+            FIXTURES_SETUP moon-container-fuzz-seeds
+            LABELS fuzz)
+        add_test(
+            NAME luna.moon-container-fuzz-smoke
+            COMMAND $<TARGET_FILE:moon-container-fuzz>
+                ${LUNA_MOON_FUZZ_CORPUS}
+                -runs=2000
+                -max_len=1048576
+                -timeout=5
+                -dict=${CMAKE_CURRENT_SOURCE_DIR}/tests/moon_container_fuzz.dict
+                -artifact_prefix=${LUNA_MOON_FUZZ_CORPUS}/artifacts/)
+        set_tests_properties(luna.moon-container-fuzz-smoke PROPERTIES
+            FIXTURES_REQUIRED moon-container-fuzz-seeds
+            LABELS fuzz
+            RUN_SERIAL TRUE
+            TIMEOUT 120
+            ENVIRONMENT
+                "ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0;UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1")
+    endif()
     add_test(
         NAME luna.source-manager
         COMMAND $<TARGET_FILE:source-manager-test>
@@ -440,6 +579,7 @@ if(BUILD_TESTING)
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/file_guide_inventory.cmake
     )
+    set_tests_properties(luna.file-guide-inventory PROPERTIES RUN_SERIAL TRUE)
     add_test(
         NAME luna.0.3-design-contract
         COMMAND ${CMAKE_COMMAND}
@@ -465,6 +605,7 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/package_export_abi.cmake
     )
     add_test(

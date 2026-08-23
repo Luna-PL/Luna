@@ -2,6 +2,94 @@
 
 ## 0.3.0 — Development
 
+- Implemented the first fail-closed CFFI artifact slice. `luna build <package>
+  -t cffi` now accepts only manifest-declared library packages with a non-empty
+  surface made exclusively of `export "C" fn`, emits the platform shared
+  library plus a sealed-MoonIR-derived `<name>.h`, and uses the real link
+  symbols in that header. A strict C11 consumer compiles, links, and executes
+  against the generated artifact. Applications, package `main`, standalone
+  files, ordinary Luna exports, and empty C export sets are rejected. Native
+  library builds now fail explicitly while proof-section emission is absent,
+  preventing an accidental downgrade to an unproved executable or library.
+
+- Froze the M005 Moon Container wire boundary and implemented its hardened
+  binary framing layer. The reader/writer now enforce the eight required
+  sections, fixed little-endian header/directory fields, ascending IDs,
+  8-byte zero padding, no compression, SHA-256 integrity, optional-section
+  skipping, and parser byte/section limits. Deterministic and malformed-input
+  coverage is included. The manifest and complete TypeRecord/sysmeta payload
+  codecs now enforce fixed-width fields, UTF-8 and resource bounds, canonical
+  TypeId order, and strict enum/boolean values; an independent decoded Module
+  is re-materialized and verified. Symbol, contract, and sysmeta sections are
+  normalized by SymbolId and atomically reconstruct declaration records,
+  schemas, typed metadata constants, and canonical contracts. Import/export
+  sections now retain package edges, manifest-authorized typed host
+  capabilities, and root-package public declarations without consulting the
+  AST. The explicit 5-operation/28-expression code codec now round-trips
+  sealed CFG tables with a 256-level nesting bound. Whole-container loading is
+  atomic and runs the MoonIR verifier before publication; a production
+  frontend -> container -> loader -> LLVM JIT test preserves behavior.
+  `luna build <package> -t moon [-o path]` now emits a deterministic,
+  host-specific, self-verified `.moon` artifact. Its verified concrete
+  projection removes generic recipes and unresolved/transitively generic types
+  while retaining monomorphized instances; an entry/export/host/runtime-rooted
+  closure now removes unreachable concrete code and model rows while preserving
+  direct and dynamic callees, Drop glue, fragments, metadata, and type edges.
+  The loader reconstructs that closure before publication, closing an
+  authenticated missing-TypeRef path found by mutation testing. Canonical
+  verification now also requires every literal to carry an existing,
+  category-correct frozen type; dynamic dispatch synthesis labels its runtime
+  name literals as `cstr`. Exported generic APIs remain an explicit error.
+  Standalone input, invalid package entrypoints, and native
+  linker options are rejected. Package manifests provide the application/library
+  kind and version. A standalone Python conformance oracle now parses every
+  field of two real CLI products without linking the Luna reader, and the model
+  gate exercises raw-bit, truncation, and re-authenticated payload mutations
+  with failure-atomic and byte-canonical postconditions. An opt-in Clang
+  libFuzzer target now combines raw mutation with a SHA-repairing custom
+  mutator, a protocol dictionary, and a reproducibly generated corpus that
+  includes real CLI products. Its harness checks framing/model failure
+  atomicity and canonical re-encoding; the framing reader now publishes its
+  version and sections only after every check succeeds.
+
+- Deleted the unreachable structured executable-body backend. Function,
+  lambda, and closure codegen now require an exclusive canonical CFG body;
+  the old statement/continuation/slot/fragment consumers and their private
+  state are gone. A direct backend regression proves that unsealed structured
+  input is rejected before LLVM lowering while sealed input still JITs.
+
+- Completed canonical finite-linked context and multi-shot composition.
+  Runtime-selected contexts now lower each `resume()` to an independent
+  Continuation region; replay-safe `many` contexts, statement-form apply,
+  runtime selection inside loops, and the full showcase work in canonical
+  JIT/AOT. Unknown context/many candidates still abort instead of crossing the
+  interceptor-only external plugin ABI v1. Added positive dynamic multi-shot
+  selection and negative replay-unsafe ownership coverage. The newly reachable
+  showcase also fixed nested short-circuit normalization and Copy-field moves
+  from affine aggregates.
+
+- Made canonical sealing unconditional in CompilerPipeline and removed the
+  `LUNA_SEAL_CANONICAL` production gate. Registered tests now assert canonical
+  IR directly; the legacy structured codegen deletion is recorded above. The
+  conservative O3 four-way unroll
+  hint moved to eligible canonical backedges so the switchover does not regress
+  the CPU reduction optimization contract.
+
+- Closed the canonical move-only materialized-iterator lifetime gap. Owning
+  recipes now install outer projected guarded cleanups at materialization, so
+  abandonment and conditional early return release every source element.
+  Starting a terminal or `for` transfers the source into loop-local guarded
+  state, preventing duplicate obligations. Projected array elements clean in
+  ascending source order while ordinary locals retain reverse declaration
+  cleanup. The complete 51-test suite now passes with
+  `LUNA_SEAL_CANONICAL=1`.
+
+- Removed temporary `into_iter`/verifier stderr tracing and added a regression
+  proving that an ordinary user function named `into_iter` leaves successful
+  diagnostics clean. The package-export ABI test now stages its package under
+  the build tree, and the repository inventory test runs serially, eliminating
+  the observed parallel CTest race over source-tree AOT artifacts.
+
 - Added AwaitStmt handling to canonical CFG codegen. The canonical
   generateControlFlowBody handled LetStmt, FreeStmt, AllocateStmt, and
   ExprStmt operations but not AwaitStmt, so heterogeneous programs with
@@ -73,10 +161,11 @@
   rt_dynamic_fragment_report_unknown_and_abort. lowerApply records
   candidate sets in a new mDynamicApplyScopes stack;
   lowerDynamicSlotInvoke builds the dispatch graph with Branch
-  terminators on per-candidate match results. Runtime context and
-  multi-shot slot composition remain fail-closed with a clear NP004
-  diagnostic. The moonir_canonical_test runtime-boundary test was
-  updated: context/multi-shot is still rejected, and a new positive test
+  terminators on per-candidate match results. At this intermediate slice,
+  runtime context and multi-shot composition remained fail-closed; the later
+  finite-linked continuation work above closes that gap. The
+  moonir_canonical_test runtime-boundary test was then
+  updated with a positive test that
   verifies the interceptor path seals with 2 Fragment + 1 Continuation
   regions. Sealer coverage on valid programs rose from 90/93 (97%) to
   91/93 (98%). The 51-test CTest suite, strict-warning build, and

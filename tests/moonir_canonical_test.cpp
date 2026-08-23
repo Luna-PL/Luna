@@ -1,4 +1,5 @@
 #include "moonir/MoonIR.h"
+#include "moonir/ContainerModel.h"
 #include "moonir/ControlFlowBuilder.h"
 #include "moonir/Lowering.h"
 #include "moonir/Sealer.h"
@@ -8,6 +9,9 @@
 #include "driver/CompilerPipeline.h"
 #include "sema/SymbolTable.h"
 #include "tooling/AnalysisSnapshot.h"
+
+#include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
+#include <llvm/Support/TargetSelect.h>
 
 #include <algorithm>
 #include <cstdlib>
@@ -230,6 +234,22 @@ int main() {
         return fail("CFG verifier accepted a forged canonical block index");
     cfg.blocks.front().id = cfg.entry;
 
+    auto literalStatement = std::make_unique<moon::ExprStmt>();
+    auto literalValue = std::make_unique<moon::IntLiteralExpr>();
+    auto* literal = literalValue.get();
+    literal->value = 7;
+    literalStatement->expr = std::move(literalValue);
+    cfg.blocks.front().operations.push_back(std::move(literalStatement));
+    if (cfgVerifier.verify(cfg, module))
+        return fail("CFG verifier accepted an integer literal without a TypeRef");
+    literal->type = boolId;
+    if (cfgVerifier.verify(cfg, module))
+        return fail("CFG verifier accepted an integer literal with boolean type");
+    literal->type = i32Id;
+    if (!cfgVerifier.verify(cfg, module))
+        return fail("CFG verifier rejected a correctly typed integer literal");
+    cfg.blocks.front().operations.clear();
+
     moon::ControlFlowGraph cleanupCfg;
     cleanupCfg.sealed = true;
     cleanupCfg.entry = moon::BlockId{0};
@@ -297,7 +317,7 @@ int main() {
     guardedCleanupCfg.blocks.back().terminator.kind =
         moon::TerminatorKind::Return;
     guardedCleanupCfg.blocks.back().terminator.exitCleanups = {
-        moon::CleanupId{1}, moon::CleanupId{0}};
+        moon::CleanupId{0}, moon::CleanupId{1}};
     guardedCleanupCfg.regions.push_back({
         moon::RegionId{0}, {}, moon::RegionKind::Function,
         moon::ScopeId{0}, moon::BlockId{0}, {}, {moon::BlockId{0}},
@@ -567,18 +587,20 @@ int main() {
                     &block.terminator.exitCleanups;
         }
     }
-    std::sort(guardedTailCleanups.begin(), guardedTailCleanups.end(),
-              [](moon::CleanupId lhs, moon::CleanupId rhs) {
-        return lhs.value < rhs.value;
-    });
-    auto sortedExhaustionCleanups = guardedExhaustionCleanups
-        ? *guardedExhaustionCleanups
-        : std::vector<moon::CleanupId>{};
-    std::sort(sortedExhaustionCleanups.begin(),
-              sortedExhaustionCleanups.end(),
-              [](moon::CleanupId lhs, moon::CleanupId rhs) {
-        return lhs.value < rhs.value;
-    });
+    const auto cleanupElementOrder = [&guardedLoopCfg](
+        const std::vector<moon::CleanupId>& cleanups) {
+        std::vector<uint64_t> result;
+        if (!guardedLoopCfg) return result;
+        for (const auto cleanupId : cleanups) {
+            const auto* cleanup = guardedLoopCfg->findCleanup(cleanupId);
+            if (cleanup && cleanup->guard)
+                result.push_back(cleanup->guard->elementIndex);
+        }
+        return result;
+    };
+    const auto exhaustionElementOrder = guardedExhaustionCleanups
+        ? cleanupElementOrder(*guardedExhaustionCleanups)
+        : std::vector<uint64_t>{};
     const bool returnClosesTail = guardedReturnCleanups &&
         std::all_of(
             guardedTailCleanups.begin(), guardedTailCleanups.end(),
@@ -593,7 +615,7 @@ int main() {
         guardedNextUnread.empty() || !guardedElementTransfer ||
         guardedElementTransfer->nextUnread != guardedNextUnread ||
         guardedTailCleanups.size() != 2 ||
-        sortedExhaustionCleanups != guardedTailCleanups ||
+        exhaustionElementOrder != std::vector<uint64_t>{0, 1} ||
         !returnClosesTail)
         return fail("move-only array loop did not lower to guarded tail cleanup state");
     guardedElementTransfer->nextUnread = {};
@@ -4326,6 +4348,17 @@ fn main() -> i32 {
     moon::LunaLowerer cfgCodegenLowerer;
     auto cfgCodegenModule = cfgCodegenLowerer.lower(
         *cfgCodegenSnapshot.program(), *cfgCodegenSnapshot.symbolTable());
+    CodeGenerator structuredCodegen("structured.codegen.rejected");
+    if (structuredCodegen.generate(cfgCodegenModule.get()))
+        return fail("LLVM backend accepted a structured executable body");
+    const bool diagnosedStructuredBody = std::any_of(
+        structuredCodegen.errors().begin(), structuredCodegen.errors().end(),
+        [](const diagnostic::Diagnostic& diagnostic) {
+            return diagnostic.message.find("exclusive canonical CFG body") !=
+                   std::string::npos;
+        });
+    if (!diagnosedStructuredBody)
+        return fail("LLVM backend rejected a structured body without the canonical-boundary diagnostic");
     moon::Sealer cfgCodegenSealer;
     const bool cfgCodegenSealed =
         cfgCodegenSealer.sealFunctionBodies(*cfgCodegenModule);
@@ -4849,10 +4882,12 @@ fn branch_release(flag: bool) -> i32 {
     blocklessApply->fragmentName = "guard";
     blocklessApply->fragmentRef = interceptorRef;
     blocklessBody->stmts.push_back(std::move(blocklessApply));
-    if (cfgBuilder.build(
-            std::move(blocklessBody), {}, moon::RegionKind::Function,
-            compositionModule))
-        return fail("canonical builder accepted legacy blockless apply");
+    auto blocklessCfg = cfgBuilder.build(
+        std::move(blocklessBody), {}, moon::RegionKind::Function,
+        compositionModule);
+    if (!blocklessCfg ||
+        !cfgVerifier.verify(*blocklessCfg, compositionModule))
+        return fail("canonical builder rejected lexical statement-form apply");
 
     const std::string loweredCompositionSource = R"luna(
 package canonical.integration;
@@ -5044,33 +5079,32 @@ fn dynamic_entry() -> i32 {
     if (!dynamicEntry || !dynamicEntry->body ||
         !stableEntry || !stableEntry->body)
         return fail("runtime-boundary module lost its entry body");
-    const auto* dynamicConstructionBody = dynamicEntry->body.get();
-    const auto* stableConstructionBody = stableEntry->body.get();
     moon::Sealer runtimeBoundarySealer;
-    if (runtimeBoundarySealer.sealFunctionBodies(
-            *runtimeIntegrationModule))
-        return fail("canonical function sealing accepted a lowered runtime apply");
-    const bool diagnosedRuntimeBoundary = std::any_of(
-        runtimeBoundarySealer.errors().begin(),
-        runtimeBoundarySealer.errors().end(),
-        [](const std::string& error) {
-            return error.find(
-                       "runtime slot composition is outside the static canonical CFG slice") !=
-                       std::string::npos ||
-                error.find(
-                    "runtime context or multi-shot slot composition is "
-                    "outside the 0.3 canonical static boundary") !=
-                    std::string::npos;
-        });
-    if (!diagnosedRuntimeBoundary)
-        return fail("canonical CFG did not diagnose its runtime-apply boundary");
-    if (dynamicEntry->body.get() != dynamicConstructionBody ||
-        dynamicEntry->controlFlow ||
-        stableEntry->body.get() != stableConstructionBody ||
-        stableEntry->controlFlow)
-        return fail("failed module sealing partially consumed its function set");
+    if (!runtimeBoundarySealer.sealFunctionBodies(
+            *runtimeIntegrationModule)) {
+        for (const auto& diagnostic : runtimeBoundarySealer.errors())
+            std::cerr << diagnostic << '\n';
+        return fail("canonical function sealing rejected a linked runtime context");
+    }
+    if (dynamicEntry->body || !dynamicEntry->controlFlow ||
+        stableEntry->body || !stableEntry->controlFlow)
+        return fail("runtime context sealing did not atomically consume the function set");
     if (!verifier.verify(*runtimeIntegrationModule))
-        return fail("failed atomic sealing changed the structured module");
+        return fail("sealed runtime-context module failed canonical verification");
+    size_t runtimeFragmentRegions = 0;
+    size_t runtimeContinuationRegions = 0;
+    size_t runtimeResumeEdges = 0;
+    for (const auto& region : dynamicEntry->controlFlow->regions) {
+        runtimeFragmentRegions += region.kind == moon::RegionKind::Fragment;
+        runtimeContinuationRegions +=
+            region.kind == moon::RegionKind::Continuation;
+    }
+    for (const auto& block : dynamicEntry->controlFlow->blocks)
+        runtimeResumeEdges +=
+            block.terminator.kind == moon::TerminatorKind::Resume;
+    if (runtimeFragmentRegions != 1 ||
+        runtimeContinuationRegions != 1 || runtimeResumeEdges != 1)
+        return fail("runtime context lost its Fragment/Continuation/resume CFG");
 
     // Positive: a single-shot interceptor dynamic apply must seal into a
     // verified canonical CFG. The runtime selects among statically linked
@@ -5437,29 +5471,38 @@ fn main() -> i32 {
         return fail("fold with closure reducer did not survive Sealer canonicalization");
     }
 
-    // CompilerPipeline sealing gate: when LUNA_SEAL_CANONICAL=1 is set, the
-    // production pipeline seals function bodies into canonical CFGs. Verify
-    // that a simple program compiles and runs correctly under this gate.
+    // CompilerPipeline always seals production function bodies into canonical
+    // CFGs. Verify that a simple program cannot retain a structured body.
     {
         const std::string pipelineSource = R"luna(
+fn identity<T>(value: T) -> T {
+    return value;
+}
+
+fn forward(value: i32) -> i32 {
+    return identity(value);
+}
+
+fn dead_concrete() -> i32 {
+    return -1;
+}
+
 fn main() -> i32 {
     let values = [10, 20, 30];
     let total = 0;
     for v in values { total = total + v; }
-    if total > 0 { return total; }
+    if total > 0 { return forward(total); }
     return 0;
 }
 )luna";
         luna::driver::CompilerPipeline pipeline;
         luna::driver::CompilerPipelineOptions options;
-        setenv("LUNA_SEAL_CANONICAL", "1", 1);
         bool compiled = pipeline.compileSourceToMoonIR(
             pipelineSource, "<pipeline-seal>", options);
-        unsetenv("LUNA_SEAL_CANONICAL");
         if (!compiled) {
             for (const auto& diag : pipeline.errors())
                 std::cerr << diagnostic::render(diag) << '\n';
-            return fail("pipeline sealing gate rejected a simple for-each program");
+            return fail("production canonical sealing rejected a simple for-each program");
         }
         // The sealed module should have at least one function with a CFG.
         bool hasCgf = false;
@@ -5468,7 +5511,95 @@ fn main() -> i32 {
             if (fn && fn->controlFlow) { hasCgf = true; break; }
         }
         if (!hasCgf)
-            return fail("pipeline sealing gate did not produce a canonical CFG");
+            return fail("production pipeline did not produce a canonical CFG");
+
+        const moon::DeclarationRecord* mainRecord = nullptr;
+        for (const auto& record : pipeline.moonModule().declarationTable) {
+            if (record.kind == moon::DeclarationKind::Function &&
+                record.sourceName == "main") {
+                mainRecord = &record;
+                break;
+            }
+        }
+        if (!mainRecord)
+            return fail("production pipeline lost the main declaration row");
+        bool hasGenericRecipe = false;
+        bool hasConcreteInstance = false;
+        bool hasDeadConcrete = false;
+        for (const auto& declaration : pipeline.moonModule().declarations) {
+            const auto* function = dynamic_cast<const moon::FunctionDecl*>(
+                declaration.get());
+            if (!function) continue;
+            hasGenericRecipe |= !function->typeParams.empty() &&
+                !function->isTemplateInstance;
+            hasConcreteInstance |= function->isTemplateInstance;
+            hasDeadConcrete |= function->name == "dead_concrete";
+        }
+        if (!hasGenericRecipe || !hasConcreteInstance || !hasDeadConcrete)
+            return fail("production projection fixture lost recipe, instance, or dead function input");
+        moon::ContainerManifest manifest;
+        manifest.packageId = pipeline.moonModule().name;
+        manifest.packageVersion = "0.3.0";
+        manifest.packageKind = moon::ContainerPackageKind::Application;
+        llvm::InitializeNativeTarget();
+        llvm::InitializeNativeTargetAsmPrinter();
+        auto targetBuilder = llvm::orc::JITTargetMachineBuilder::detectHost();
+        if (!targetBuilder)
+            return fail("container JIT test could not detect its host target");
+        auto dataLayout = targetBuilder->getDefaultDataLayoutForTarget();
+        if (!dataLayout)
+            return fail("container JIT test could not derive its host data layout");
+        manifest.targetTriple = targetBuilder->getTargetTriple().str();
+        manifest.dataLayout = dataLayout->getStringRepresentation();
+        manifest.entrypoint = {
+            mainRecord->symbolId, mainRecord->contractId};
+        manifest.features = pipeline.moonModule().features;
+        std::vector<uint8_t> encodedContainer;
+        std::string containerError;
+        if (!moon::ContainerModelCodec::encodeContainer(
+                manifest, pipeline.moonModule(),
+                encodedContainer, containerError)) {
+            std::cerr << containerError << '\n';
+            return fail("production MoonIR could not enter a Moon Container");
+        }
+        moon::ContainerManifest loadedManifest;
+        moon::Module loadedModule;
+        if (!moon::ContainerModelCodec::decodeContainerForTarget(
+                encodedContainer, manifest.targetTriple, manifest.dataLayout,
+                loadedManifest,
+                loadedModule, containerError)) {
+            std::cerr << containerError << '\n';
+            return fail("production Moon Container failed verified loading");
+        }
+        for (const auto& type : loadedModule.typeTable) {
+            if (type.kind == TypeKind::TypeParam ||
+                type.kind == TypeKind::InferenceVar ||
+                type.kind == TypeKind::Unknown)
+                return fail("Moon Container retained an unresolved generic type");
+        }
+        bool loadedConcreteInstance = false;
+        bool loadedForward = false;
+        for (const auto& declaration : loadedModule.declarations) {
+            const auto* function = dynamic_cast<const moon::FunctionDecl*>(
+                declaration.get());
+            if (!function) continue;
+            if (!function->typeParams.empty() && !function->isTemplateInstance)
+                return fail("Moon Container retained a generic function recipe");
+            if (function->name == "dead_concrete")
+                return fail("Moon Container retained an unreachable concrete function");
+            loadedConcreteInstance |= function->isTemplateInstance;
+            loadedForward |= function->name == "forward";
+        }
+        if (!loadedConcreteInstance || !loadedForward)
+            return fail("Moon Container projection dropped a transitive concrete callee");
+        CodeGenerator loadedCodegen("container-roundtrip");
+        if (!loadedCodegen.generate(&loadedModule)) {
+            for (const auto& diagnostic : loadedCodegen.errors())
+                std::cerr << diagnostic::render(diagnostic) << '\n';
+            return fail("verified Moon Container failed LLVM generation");
+        }
+        if (loadedCodegen.jitRun() != 60)
+            return fail("verified Moon Container changed JIT behavior");
     }
 
     // Intrinsic call type resolution: a `slice` intrinsic call produces a

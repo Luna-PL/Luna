@@ -55,6 +55,7 @@ private:
                              std::string context,
                              bool lookupById = false);
     void resolveDeclarationReferences();
+    void buildModuleInterfaces();
     void error(const ASTNode* node, const std::string& message);
 
     struct PendingDeclarationRef {

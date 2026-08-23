@@ -1584,6 +1584,10 @@ llvm::Value* CodeGenerator::generateAddrOf(AddrOfExpr* ad) {
 }
 
 llvm::Value* CodeGenerator::generateLambda(LambdaExpr* le) {
+        if (!le->controlFlow || le->body) {
+            error("lambda reached code generation without an exclusive canonical CFG body");
+            return llvm::PoisonValue::get(mHelpers->ptrTy());
+        }
         // Generate a hidden function for the lambda body
         static int lambdaCount = 0;
         std::string lambdaName = "__lambda_" + std::to_string(lambdaCount++);
@@ -1609,8 +1613,6 @@ llvm::Value* CodeGenerator::generateLambda(LambdaExpr* le) {
         auto savedMaterializedIterators =
             std::move(mMaterializedIterators);
         auto savedUpperBounds = std::move(mLocalKnownUpperBounds);
-        auto savedContinuationFrames = std::move(mContinuationFrames);
-        const unsigned savedContinuationFrameCounter = mContinuationFrameCounter;
         auto savedCanonicalLocals = std::move(mCanonicalLocals);
         auto savedCanonicalLocalTypes = std::move(mCanonicalLocalTypes);
         auto savedIP = mBuilder->saveIP();
@@ -1619,29 +1621,12 @@ llvm::Value* CodeGenerator::generateLambda(LambdaExpr* le) {
         mArrayDropFlags.clear();
         mMaterializedIterators.clear();
         mLocalKnownUpperBounds.clear();
-        mContinuationFrames.clear();
-        mContinuationFrameCounter = 0;
         mCurrentFunc = func;
 
         auto entryBB = llvm::BasicBlock::Create(*mCtx, "entry", func);
         mBuilder->SetInsertPoint(entryBB);
 
-        if (le->controlFlow) {
-            generateControlFlowBody(*le->controlFlow, func, entryBB);
-        } else {
-            size_t idx = 0;
-            for (auto& arg : func->args()) {
-                arg.setName(le->params[idx].name);
-                auto* alloca = createEntryBlockAlloca(
-                    func, arg.getType(), le->params[idx].name);
-                mBuilder->CreateStore(&arg, alloca);
-                mLocals[le->params[idx].name] = alloca;
-                mLocalTypes[le->params[idx].name] =
-                    resolveType(le->params[idx].type);
-                idx++;
-            }
-            if (le->body) generateBlock(le->body.get(), func);
-        }
+        generateControlFlowBody(*le->controlFlow, func, entryBB);
         if (!mBuilder->GetInsertBlock()->getTerminator()) {
             if (retTy->isVoidTy()) mBuilder->CreateRetVoid();
             else mBuilder->CreateRet(llvm::Constant::getNullValue(retTy));
@@ -1656,8 +1641,6 @@ llvm::Value* CodeGenerator::generateLambda(LambdaExpr* le) {
         mMaterializedIterators =
             std::move(savedMaterializedIterators);
         mLocalKnownUpperBounds = std::move(savedUpperBounds);
-        mContinuationFrames = std::move(savedContinuationFrames);
-        mContinuationFrameCounter = savedContinuationFrameCounter;
         mCanonicalLocals = std::move(savedCanonicalLocals);
         mCanonicalLocalTypes = std::move(savedCanonicalLocalTypes);
         mBuilder->restoreIP(savedIP);
@@ -1691,11 +1674,16 @@ llvm::Value* CodeGenerator::generateEnvLoad(EnvLoadExpr* envLoad) {
 
 llvm::Value* CodeGenerator::generateMakeClosure(moon::MakeClosureExpr* closure) {
         auto* le = closure->lambda.get();
+        const TypePtr closureType = resolveType(closure->type);
+        llvm::Type* closureLLVMType = mHelpers->toLLVMType(closureType);
+        if (!le->controlFlow || le->body) {
+            error("closure lambda reached code generation without an exclusive canonical CFG body");
+            return llvm::PoisonValue::get(closureLLVMType);
+        }
         static int lambdaCount = 0;
         std::string lambdaName = "__lambda_" + std::to_string(lambdaCount++);
         if (!le->identitySuffix.empty()) lambdaName += "__" + le->identitySuffix;
 
-        const TypePtr closureType = resolveType(closure->type);
         std::vector<llvm::Type*> paramTypes;
         paramTypes.push_back(mHelpers->ptrTy());
         for (auto& p : le->params)
@@ -1715,8 +1703,6 @@ llvm::Value* CodeGenerator::generateMakeClosure(moon::MakeClosureExpr* closure) 
         auto savedMaterializedIterators =
             std::move(mMaterializedIterators);
         auto savedUpperBounds = std::move(mLocalKnownUpperBounds);
-        auto savedContinuationFrames = std::move(mContinuationFrames);
-        const unsigned savedContinuationFrameCounter = mContinuationFrameCounter;
         auto savedCanonicalLocals = std::move(mCanonicalLocals);
         auto savedCanonicalLocalTypes = std::move(mCanonicalLocalTypes);
         auto savedIP = mBuilder->saveIP();
@@ -1725,59 +1711,12 @@ llvm::Value* CodeGenerator::generateMakeClosure(moon::MakeClosureExpr* closure) 
         mArrayDropFlags.clear();
         mMaterializedIterators.clear();
         mLocalKnownUpperBounds.clear();
-        mContinuationFrames.clear();
-        mContinuationFrameCounter = 0;
         mCurrentFunc = func;
 
         auto entryBB = llvm::BasicBlock::Create(*mCtx, "entry", func);
         mBuilder->SetInsertPoint(entryBB);
 
-        llvm::Value* environmentPointer = nullptr;
-        size_t idx = 0;
-        for (auto& arg : func->args()) {
-            if (idx == 0) {
-                environmentPointer = &arg;
-                ++idx;
-                continue;
-            }
-            const size_t paramIndex = idx - 1;
-            arg.setName(le->params[paramIndex].name);
-            auto* alloca = createEntryBlockAlloca(
-                func, arg.getType(), le->params[paramIndex].name);
-            mBuilder->CreateStore(&arg, alloca);
-            mLocals[le->params[paramIndex].name] = alloca;
-            mLocalTypes[le->params[paramIndex].name] =
-                resolveType(le->params[paramIndex].type);
-            ++idx;
-        }
-
-        llvm::Type* closureLLVMType = mHelpers->toLLVMType(closureType);
-        if (le->controlFlow) {
-            generateControlFlowBody(*le->controlFlow, func, entryBB);
-        } else {
-            for (size_t fieldIndex = 0;
-                 fieldIndex < closure->capturedValues.size(); ++fieldIndex) {
-                auto* reference = dynamic_cast<IdentifierExpr*>(
-                    closure->capturedValues[fieldIndex].get());
-                if (!reference) continue;
-                TypePtr fieldType;
-                if (closureType &&
-                    fieldIndex < closureType->capturedFields.size())
-                    fieldType = closureType->capturedFields[fieldIndex].type;
-                if (!fieldType) fieldType = resolveType(reference->type);
-                auto* fieldPointer = mBuilder->CreateStructGEP(
-                    closureLLVMType, environmentPointer, fieldIndex + 1);
-                auto* loaded = mBuilder->CreateLoad(
-                    mHelpers->toLLVMType(fieldType), fieldPointer,
-                    reference->name);
-                auto* alloca = createEntryBlockAlloca(
-                    func, mHelpers->toLLVMType(fieldType), reference->name);
-                mBuilder->CreateStore(loaded, alloca);
-                mLocals[reference->name] = alloca;
-                mLocalTypes[reference->name] = fieldType;
-            }
-            if (le->body) generateBlock(le->body.get(), func);
-        }
+        generateControlFlowBody(*le->controlFlow, func, entryBB);
         if (!mBuilder->GetInsertBlock()->getTerminator()) {
             if (retTy->isVoidTy()) mBuilder->CreateRetVoid();
             else mBuilder->CreateRet(llvm::Constant::getNullValue(retTy));
@@ -1791,8 +1730,6 @@ llvm::Value* CodeGenerator::generateMakeClosure(moon::MakeClosureExpr* closure) 
         mMaterializedIterators =
             std::move(savedMaterializedIterators);
         mLocalKnownUpperBounds = std::move(savedUpperBounds);
-        mContinuationFrames = std::move(savedContinuationFrames);
-        mContinuationFrameCounter = savedContinuationFrameCounter;
         mCanonicalLocals = std::move(savedCanonicalLocals);
         mCanonicalLocalTypes = std::move(savedCanonicalLocalTypes);
         mBuilder->restoreIP(savedIP);

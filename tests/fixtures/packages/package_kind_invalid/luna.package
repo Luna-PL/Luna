@@ -1,0 +1,5 @@
+[package]
+id = "org.luna.fixture.invalid_kind"
+version = "1.0.0"
+kind = "plugin"
+sources = ["src"]

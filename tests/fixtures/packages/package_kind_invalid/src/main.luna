@@ -1,0 +1,5 @@
+package org.luna.fixture.invalid_kind;
+
+fn main() -> i32 {
+    return 0;
+}

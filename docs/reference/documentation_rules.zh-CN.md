@@ -43,7 +43,7 @@ RFC、教程和发布说明都必须遵守这些规则。
 
 - 当前只支持一跳、具体类型的 `From<Source>`；
 - 当前 kernel 数据操作只开放 `i32`；
-- Copy-only closure environment 已物化；non-Copy 捕获环境仍是阶段边界。
+- closure environment 已物化 Copy 捕获与显式 Affine/Linear move 捕获；借用捕获仍拒绝。
 
 当前实现必须写明限制，不能用未来时态包装成已经交付的能力。
 

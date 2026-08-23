@@ -366,9 +366,25 @@ OwnershipChecker::FlowResult OwnershipChecker::checkSlotInvoke(SlotInvokeStmt* s
             return false;
         }
         const CheckerState before = captureState();
+        bool replaySafe = true;
+        if (slot->acceptedCardinality == FragmentCardinality::Many) {
+            const auto savedScopes = mScopes;
+            const auto savedLoans = mLoansInScope;
+            replaySafe = checkBlock(slot->continuation.get()).ok;
+            const bool consumes = continuationConsumesCapturedState(savedScopes);
+            mScopes = savedScopes;
+            mLoansInScope = savedLoans;
+            if (consumes) {
+                error("slot '" + slot->name +
+                          "' continuation consumes or frees captured state and "
+                          "cannot be resumed more than once",
+                      slot->line, slot->col);
+                replaySafe = false;
+            }
+        }
         CheckerState merged;
         bool haveMerged = false;
-        bool ok = true;
+        bool ok = replaySafe;
         for (const auto& name : slot->resolvedDynamicFragmentNames) {
             auto candidate = mFragments.find(name);
             if (candidate == mFragments.end()) {
@@ -378,12 +394,6 @@ OwnershipChecker::FlowResult OwnershipChecker::checkSlotInvoke(SlotInvokeStmt* s
                 continue;
             }
             const bool multiShot = candidate->second->cardinality == FragmentCardinality::Many;
-            if (multiShot) {
-                error("dynamic slot '" + slot->name + "' cannot use multi-shot fragment '" +
-                      candidate->second->name + "' in the initial runtime ABI", slot->line, slot->col);
-                ok = false;
-                continue;
-            }
             restoreState(before);
             FlowResult candidateResult = checkFragment(candidate->second, slot, multiShot);
             if (!candidateResult.ok) {

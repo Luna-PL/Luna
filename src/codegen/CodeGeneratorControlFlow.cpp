@@ -2,6 +2,7 @@
 #include "../core/TypeLayout.h"
 
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/Metadata.h>
 
 #include <functional>
 #include <unordered_set>
@@ -10,6 +11,42 @@ namespace {
 
 std::string localName(const moon::LocalRecord& local) {
     return "local." + std::to_string(local.id.value) + "." + local.name;
+}
+
+bool shouldUnrollCanonicalLatch(const llvm::BasicBlock* body,
+                                const llvm::BranchInst* latch) {
+    if (!body || !latch || latch->getParent() != body ||
+        !latch->isUnconditional())
+        return false;
+    unsigned instructionCount = 0;
+    for (const llvm::Instruction& instruction : *body) {
+        if (++instructionCount > 48 ||
+            llvm::isa<llvm::CallBase>(instruction))
+            return false;
+        if (const auto* load = llvm::dyn_cast<llvm::LoadInst>(&instruction);
+            load && (load->isVolatile() || load->isAtomic()))
+            return false;
+        if (const auto* store = llvm::dyn_cast<llvm::StoreInst>(&instruction);
+            store && (store->isVolatile() || store->isAtomic()))
+            return false;
+    }
+    return instructionCount >= 24;
+}
+
+void setCanonicalLoopUnrollCount(llvm::BranchInst* latch,
+                                 llvm::LLVMContext& context,
+                                 unsigned count) {
+    auto temporary = llvm::MDNode::getTemporary(context, {});
+    llvm::Metadata* countOperands[] = {
+        llvm::MDString::get(context, "llvm.loop.unroll.count"),
+        llvm::ConstantAsMetadata::get(llvm::ConstantInt::get(
+            llvm::Type::getInt32Ty(context), count)),
+    };
+    auto* countNode = llvm::MDNode::get(context, countOperands);
+    llvm::Metadata* loopOperands[] = {temporary.get(), countNode};
+    auto* loopID = llvm::MDNode::getDistinct(context, loopOperands);
+    loopID->replaceOperandWith(0, loopID);
+    latch->setMetadata(llvm::LLVMContext::MD_loop, loopID);
 }
 
 } // namespace
@@ -479,6 +516,21 @@ void CodeGenerator::generateControlFlowBody(
             case moon::TerminatorKind::Invalid:
                 error("canonical block has no terminator");
                 break;
+        }
+    }
+
+    if (mOptimizationLevel == LunaOptimizationLevel::O3) {
+        for (const auto& block : graph.blocks) {
+            const auto& terminator = block.terminator;
+            if (terminator.kind != moon::TerminatorKind::Jump ||
+                !terminator.primary.cleanups.empty() ||
+                terminator.primary.target.empty() ||
+                terminator.primary.target.value > block.id.value)
+                continue;
+            auto* latch = llvm::dyn_cast_or_null<llvm::BranchInst>(
+                blocks[block.id.value]->getTerminator());
+            if (shouldUnrollCanonicalLatch(blocks[block.id.value], latch))
+                setCanonicalLoopUnrollCount(latch, *mCtx, 4);
         }
     }
 

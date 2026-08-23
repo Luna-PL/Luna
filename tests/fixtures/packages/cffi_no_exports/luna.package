@@ -1,0 +1,5 @@
+[package]
+id = "org.luna.fixture.cffi_no_exports"
+version = "1.0.0"
+kind = "library"
+sources = ["src"]
