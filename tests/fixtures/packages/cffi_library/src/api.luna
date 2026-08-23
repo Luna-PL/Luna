@@ -1,0 +1,9 @@
+package org.luna.fixture.cffi;
+
+export "C" fn luna_add(left: i32, right: i32) -> i32 {
+    return left + right;
+}
+
+export "C" fn luna_scale(value: f64, factor: f64) -> f64 {
+    return value * factor;
+}

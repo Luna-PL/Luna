@@ -21,13 +21,25 @@ struct PackageUse {
     int column = 0;
 };
 
+enum class PackageKind {
+    Unspecified,
+    Application,
+    Library,
+};
+
 struct PackageManifest {
     std::string id;
     std::string version;
+    PackageKind kind = PackageKind::Unspecified;
     std::vector<std::string> sources;
     std::unordered_map<std::string, std::string> dependencies;
+    // package-local module-qualified extern declaration -> stable host
+    // capability ID. ContractId remains compiler-derived.
+    std::unordered_map<std::string, std::string> hostImports;
     std::string path;
 };
+
+const char* packageKindName(PackageKind kind);
 
 struct ResolvedPackage {
     std::string id;

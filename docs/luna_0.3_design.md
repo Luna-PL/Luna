@@ -23,13 +23,12 @@ implementation, tests, references, and changelog have been updated together.
 
 ### Frozen decision boundary (2026-08-09)
 
-Confirmed IDs in this document are implementation authority. The following four IDs are the
+Confirmed IDs in this document are implementation authority. The following three IDs are the
 complete unresolved set; an implementation must not choose their answers implicitly. A newly
 discovered ambiguity must receive a stable `TBD-*` ID here before dependent code is written.
 
 | ID | Decision still required | Blocks | Does not block |
 |---|---|---|---|
-| `TBD-M005` | binary magic, integer encoding, sections, alignment, compression, and signature details | serialized Moon format conformance, parser, signer, and final `-t moon` output | in-memory canonical MoonIR tables, structural verifier rules, or deterministic model tests |
 | `TBD-EV004` | pinned/switchable/initializer/activation source and API spelling | the public evolution API and its final source/runtime bindings | generation identity, module leases, staging invariants, or internal state-machine tests |
 | `TBD-Q004` | `.all()` order and explicit ordering API | public `.all()` semantics and its ABI | Symbol Catalog, typed query sets, `.one()`, or `.optional()` |
 | `TBD-SF006` | module Slot/Fragment syntax and precise single-shot control interactions | new Slot/Fragment parsing, control semantics, and public runtime-apply surface | shadow SlotId/ContractId, descriptor schema, or legacy-corpus capture |
@@ -406,8 +405,16 @@ only canonical CFG bodies; there is no structured-body fallback or format compat
 A construction builder may temporarily retain source structure, but module sealing atomically
 removes it, and both verifier and codegen accept only the CFG.
 
-`M002` (Confirmed): a 0.3 Moon Container accepts only fully instantiated MoonIR. Generic recipes
-remain on the compiler-input side and do not enter the first untrusted container format.
+`M002` (Confirmed): a 0.3 Moon Container accepts only fully instantiated MoonIR. Before encoding,
+the compiler derives a concrete projection: `TypeParam`, inference/unknown types, every type that
+transitively depends on them, and generic declaration/function recipes are omitted, while concrete
+instances and their runtime interfaces remain. An exported generic recipe is rejected because
+silently removing public API would be unsound; open-world generic libraries require a later recipe
+format. The concrete projection is also reachability-closed: application entrypoints, library
+exports, typed host imports, and explicitly runtime-retained declarations are roots. Direct calls,
+dynamic candidates, Drop glue, fragment regions, metadata schemas, and frozen type edges form the
+transitive closure. Unreachable concrete functions/declarations/types are not serialized; package
+dependency imports remain manifest-level interface facts.
 
 `M003` (Confirmed): the 0.3 MVP Moon Container is host-specific and its manifest declares the
 target triple and data layout. Cross-target portable containers and target-specific device code
@@ -419,9 +426,137 @@ import/export, and required sysmeta sections are mandatory; debug/source/device 
 are optional. Content digests cover canonical non-signature sections, and parser/verifier work
 requires a fuzz corpus.
 
-`TBD-M005`: freeze wire details such as binary magic, integer encoding, section numbers,
-alignment, compression, and signature algorithms without changing the M001-M004 semantic
-boundaries.
+`M005` (Confirmed, 2026-08-20): the 0.3 Moon Container uses the 8-byte magic
+`89 4D 4F 4F 4E 0D 0A 1A`. Every multibyte integer is fixed-width little-endian: table indices,
+enums, counts, and UTF-8 string byte lengths use `u32`; file offsets and section lengths use
+`u64`; signed integer literals use two's-complement `i64`; floating literals use the raw `u64`
+bits of IEEE-754 binary64. Section IDs are fixed and appear in ascending order. Required sections
+are manifest, type, symbol, contract, code, imports, exports, and sysmeta; the high ID bit marks an
+optional section. Unknown required sections, duplicate IDs, out-of-order entries, and overlapping
+sections are rejected. Section starts are 8-byte aligned and every padding byte must be zero.
+
+0.3 does not support payload compression; a non-zero compression flag is rejected, avoiding both
+multiple canonical encodings of one model and decompression bombs. The container digest is
+SHA-256 over the canonical header, directory, and all section payloads except digest/signature
+material. 0.3 defines no Moon signature section: safety comes from the local verifier, while
+authenticity signatures remain a later-format feature and must not be confused with Luna Native
+proofs. Unknown optional sections may be skipped, but the emitter does not produce unknown
+sections. Reader defaults are at most 64 sections, a 1 GiB container, a 16 MiB individual string,
+`2^24` rows per table, and 256 nesting levels; host policy may only tighten these limits. These
+choices do not change the M001-M004 semantic boundary.
+
+The canonical 0.3 header is exactly 80 bytes: magic `[0,8)`, format major/minor `[8,16)`,
+header size/flags/section count/reserved `[16,32)`, directory offset/file size `[32,48)`, and
+SHA-256 `[48,80)`. The digest field is treated as all zeroes while computing the digest. The
+directory immediately follows the header; each entry is exactly 32 bytes in the order
+`id:u32`, `flags:u32`, `offset:u64`, `storedLength:u64`, `decodedLength:u64`. In 0.3 flags must
+be zero and both lengths must match. File size is the end of the final section payload; trailing
+data is not permitted.
+
+`M005-A` (Confirmed, 2026-08-20): payloads use the recursive primitives
+`str = u32 byte length + valid UTF-8 bytes`, `vec<T> = u32 row count + T...`, and
+`bool = u32(0|1)`. Enums also use `u32`, and readers reject out-of-range values. Stable
+TypeId/ShapeId/SymbolId/ContractId/AbiLayoutId values and `DeclarationRef` components are encoded
+directly as `str`; decoding never depends on emitter pointers or an out-of-container symbol table.
+
+The manifest payload order is `packageId:str`, `packageVersion:str`, `packageKind:u32`
+(application=1, library=2), `targetTriple:str`, `dataLayout:str`, `entrySymbol:str`,
+`entryContract:str`, and `featureBits:u32`. Feature bits 0..5 respectively denote runtime,
+dynamic reflection, dynamic apply, dynamic select, kernel, and reserved kernel runtime; every
+other bit is zero. Applications have a complete entry reference and libraries have none.
+
+The type payload starts with `vec<TypeRecord>` in strictly increasing TypeId UTF-8 byte order.
+The frozen `TypeRecord` field order is: its three identities; domain/identity-mode/kind; sysmeta;
+the display/source/linkage/nominal names; type-parameter names; type arguments; inner type; array
+length; mutability; parameter types; return type; parameter/return ownership contracts;
+multi-shot; continuation kind; iterator mode; fields; captured fields; variants;
+`inferenceId:i64`; the three canonical payload strings; layout ABI version/size/alignment/
+signature; the drop-glue `DeclarationRef`; and the immediate referenced TypeIds. A field is
+`name:str + type:str`, a variant is `name:str + vec<type:str>`, and an ownership contract is
+`relation:u32 + usage:u32`.
+
+Sysmeta within a TypeRecord is ordered as schema major/minor (each `u32`), five identity strings,
+the four control enums and two booleans, resource parameter contracts/result contract/
+management/release-domain/lifetime/relation/usage/cleanup and four booleans, six capability
+booleans, then the two ABI booleans and drop-glue symbol string. Decoding completes bounds,
+UTF-8, resource-limit, enum/boolean, and canonical-order validation before constructing sealed
+Module indexes and invoking the MoonIR verifier.
+
+`M005-B` (Confirmed, 2026-08-20): the declaration model is normalized into three sections with
+strictly increasing SymbolId keys; no section duplicates a complete DeclarationRecord. A symbol
+row contains `symbol/id/family/source/linkage:str`, `kind/retention:u32`, `type:str`, and source
+location (`path:str + line:i64 + column:i64`). A contract row contains `symbol:str`,
+`ContractId:str`, the complete typed sysmeta facts, the drop-glue `DeclarationRef`, and
+`canonicalContract:str`.
+
+The sysmeta section first carries metadata-schema rows in increasing schema-ID order (id/name,
+typed fields, and location), followed by declaration-metadata rows whose SymbolId key set exactly
+matches the symbol and contract sections. A metadata instance retains its schema ID, constants
+in declaration order, retention, and location. Constants use `tag:u32 + payload`; tags 0..3 are
+respectively `i64`, IEEE-754 raw `u64`, `bool`, and `str`. Readers require identical declaration
+key sets, recompute SymbolId/ContractId/canonical contract, and publish the declaration table and
+metadata schema index atomically only after every check succeeds.
+
+`M005-C` (Confirmed, 2026-08-20): the imports section is a canonical sequence of ImportRecords
+ordered by kind/owner/local-name/package/alias. A package row contains only the owner Package ID,
+dependency Package ID, alias, and location. A host row contains only the owner, module-qualified
+local declaration name, capability ID, link symbol, `C` ABI, typed `DeclarationRef`, TypeId, and
+location. Package-only and host-only fields cannot be mixed.
+
+The exports section is ordered by public name/Declaration SymbolId. Each row carries the public
+name, typed `DeclarationRef`, TypeId, declaration kind, optional `C` ABI, and location. Only
+explicit exports owned by the root package enter this table; dependency exports exist only for
+compile-time resolution. The verifier resolves every typed reference, compares TypeId/kind,
+rejects host imports that reuse a link symbol with different ContractIds, and never accepts a
+path or library name as a substitute for a capability ID.
+
+`M005-D` (Confirmed, 2026-08-20): the code section never serializes C++ RTTI or class names; it
+uses explicit non-zero `u32` opcodes. Canonical block operations are only Let=1, Allocate=2,
+Expression=3, Free=4, and Await=5. Structured Return/If/Match/While/For/Slot/Apply/Resume/Abort
+nodes must already have become CFG terminators, edges, and regions.
+
+Expression opcodes are Integer=1, Floating=2, String=3, Boolean=4, Unit=5, Identifier=6,
+Binary=7, Unary=8, Call=9, DynamicSelect=10, Launch=11, VariantConstruct=12,
+ResultConstruct=13, FieldAccess=14, Index=15, SliceLength=16, ArrayLiteral=17,
+RecordLiteral=18, HeapAllocate=19, InitializeAllocation=20, Move=21, Borrow=22,
+Dereference=23, AddressOf=24, Lambda=25, MakeClosure=26, EnvironmentLoad=27, and Assign=28.
+Unknown, zero, or structured-only tags are rejected. Entering each nested expression or lambda
+CFG consumes one reader depth level, with the default maximum fixed at 256.
+
+`M005-E` (Confirmed, 2026-08-20): the code payload starts with function rows in increasing
+SymbolId order. Each row carries executable facts that cannot be reconstructed from declaration
+tables alone: package/module identity, source/generated name, kernel/reachability/extern/
+constexpr/selector flags, ABI/link name, type parameters, typed parameter contracts, return
+contract, template concrete arguments, location, and an optional sealed CFG. An extern function
+has no CFG; every other concrete function has one. Generic recipes do not enter a 0.3 container.
+
+A CFG encodes entry/root-region/root-scope followed, in order, by block, region, scope, local,
+and cleanup tables. Every `TableRef:u32` in a table's identity column equals its row ordinal;
+`0xffffffff` is the only empty reference. A block carries its region/scope, tagged operations,
+and one terminator. A terminator uses the existing TerminatorKind as `u32` and explicitly carries
+its operand, switch type, primary/secondary edges, switch cases, and exit cleanups. The reader
+checks table shape, resources, and depth before the CFG verifier checks reachability,
+scope/region relationships, and cleanup invariants.
+
+Implementation completion record (2026-08-22): all eight required sections now
+have fixed-width canonical codecs. After SHA/directory checks, the whole-container
+reader atomically decodes types, declarations, interfaces, and code and publishes
+the Module only after MoonIR verification. An independent Python oracle parses
+actual container/code bytes, and LLVM JIT replay preserves the behavior of a real
+frontend product after encode/decode. The encoder derives and verifies a concrete
+projection, so a package may contain generic recipes while only instantiated code
+and reachable concrete type/declaration rows enter the file. The loader independently
+reconstructs the same closure before publication, preventing authenticated code from
+smuggling a missing runtime TypeRef past the verifier. The driver now exposes
+`luna build <package> -t moon [-o path]` and rejects standalone input, exported or
+entrypoint generic recipes, kind/main mismatches, and native-only options.
+The parser/verifier fuzz requirement is implemented as an opt-in Clang
+libFuzzer target. Its reproducible corpus combines an actual CLI container,
+independently constructed framing seeds, truncations, integrity failures, and
+re-authenticated section mutations. A custom mutator preserves framing and
+recomputes SHA-256 for part of the schedule so coverage reaches model decoders
+instead of stopping at integrity rejection; the harness enforces failure
+atomicity and canonical re-encoding.
 
 ### C016: Closure environment ABI (Confirmed)
 
@@ -996,13 +1131,15 @@ construction body. The same source-level gate covers an explicit static `apply`;
 lowered dynamic composition is accepted by the frontend but must be rejected at this static CFG
 boundary. Multi-shot and runtime apply remain later slices.
 
-Item 10 is not complete as a whole. Capturing closure environments (frozen as `C016`) and the
-remaining non-Copy item/callable per-element ownership transitions remain explicit boundaries.
+Item 10 was completed on 2026-08-20. Capturing closure environments (frozen as `C016`),
+non-Copy item/callable per-element ownership transitions, unconditional sealing, and the
+canonical-only backend boundary are implemented. The structured statement/continuation/slot/
+fragment executable-body consumer has been removed from the source and build.
 Linear hoisting across a potential early exit remains invalid by its exactly-once contract rather
-than a deferred lowering feature. The remaining work then normalizes slot and fragment paths,
-atomically replaces structured executable bodies, and moves the backend to the same CFG.
+than a deferred lowering feature. The next mainline is item 11 serialization/parsing.
 
-Copy-only closure capture implementation completion (2026-08-14): the `C016 CL001`-`CL009`
+Closure capture implementation completion (2026-08-14): the Copy-capture
+`C016 CL001`-`CL009`
 slice is active. Capture-free `Function` values keep the 8-byte bare code pointer ABI; a
 capturing lambda becomes a layout-bearing `Closure` type whose environment fields participate
 in canonical type identity, value size, and ABI layout. Sema derives the free-variable set in
@@ -1012,10 +1149,22 @@ list against the environment layout, the environment parameter identity, and eve
 field bound. Canonical CFG construction declares the environment parameter local and rewrites
 capture reads into EnvLoad, so structured and CFG paths share one closure model. JIT and AOT
 execute captured closures through a hidden environment pointer; positive Copy-capture,
-negative Affine/Linear-capture, and canonical-CFG evidence pass with the full 51-test suite,
-the strict-warning build, and ASan/UBSan. Non-Copy captures remain the next closure slice. Only after structured execution is deleted and the
+negative borrowed-capture, and canonical-CFG evidence pass with the full 51-test suite,
+the strict-warning build, and ASan/UBSan. The later non-Copy slice explicitly moves
+Affine/Linear captures into the environment, consumes the outer binding, and recursively cleans
+the environment; borrowed captures remain rejected because their lifetime cannot safely escape.
+Only after structured execution is deleted and the
 full verifier/codegen regression gate passes does the item-level gate pass; serializer/parser work
 remains item 11.
+
+Canonical CFG switchover record (2026-08-20): all 51 registered CTests pass and the
+CompilerPipeline now seals every executable function body unconditionally. A materialized move-only iterator installs outer projected guarded
+cleanups when the recipe is created, cleans abandoned/early-returned elements in source order,
+and atomically transfers its source into loop-local guarded state when consumption begins. Finite,
+statically linked runtime contexts, replay-safe multi-shot continuations, and statement-form apply
+are now canonical CFG features. Each `resume()` owns an independent Continuation region, while an
+unknown context/many candidate cannot fall back to interceptor-only external plugin ABI v1. Item 10
+remains open until the one-way production switchover is complete.
 
 | Order | Priority | Work | Completion gate |
 |---:|---|---|---|
@@ -1047,6 +1196,7 @@ These confirmed deferrals are not 0.3.0 implementation priorities:
 - `NP001` (Confirmed deferral): parallel computation and general concurrency;
 - `NP002` (Confirmed deferral): expanded GPU types, grids, and cross-generation device updates;
 - `NP003` (Confirmed deferral): stateful hot migration;
-- `NP004` (Confirmed deferral): runtime context/multi-shot continuation ABI;
+- `NP004` (Confirmed deferral): persistent runtime context/multi-shot continuation callback ABI
+  across an external plugin boundary; finite statically linked candidates use scoped CFG regions;
 - `NP005` (Confirmed deferral): hotspot JIT, PGO, deoptimization, and code reclamation;
 - `NP006` (Confirmed deferral): open runtime reflection and general runtime trait objects.

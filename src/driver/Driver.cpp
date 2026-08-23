@@ -3,6 +3,7 @@
 #include "driver/CommandLine.h"
 #include "driver/CompilerPipeline.h"
 #include "driver/Repl.h"
+#include "moonir/ContainerModel.h"
 #include "moonir/Printer.h"
 #include "runtime/Runtime.h"
 #include "tooling/AnalysisSnapshot.h"
@@ -11,10 +12,14 @@
 #include "diagnostics/Diagnostic.h"
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/JSON.h>
+#include <llvm/Support/TargetSelect.h>
+#include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/TargetParser/Host.h>
 
 #include <iostream>
+#include <cctype>
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -34,6 +39,358 @@ static void printErrors(const std::vector<diagnostic::Diagnostic>& errors,
         if (stage) std::cerr << "error[" << stage << "]: ";
         std::cerr << e << "\n";
     }
+}
+
+static int buildMoonContainer(
+    const CompilerPipeline& pipeline, const std::string& inputPath,
+    const std::string& outputOverride) {
+    namespace fs = std::filesystem;
+    if (!fs::is_directory(fs::path(inputPath))) {
+        std::cerr << diagnostic::format(
+            "driver", "-t moon requires a package directory",
+            inputPath, 0, 0,
+            "pass the directory containing luna.package") << "\n";
+        return 1;
+    }
+    const auto& package = pipeline.analysisSnapshot().packageManifest();
+    if (package.id.empty() || package.version.empty() ||
+        package.kind == PackageKind::Unspecified) {
+        std::cerr << diagnostic::format(
+            "driver", "-t moon requires an explicit package manifest kind",
+            inputPath, 0, 0,
+            "set kind = \"application\" or kind = \"library\" in luna.package")
+                  << "\n";
+        return 1;
+    }
+
+    moon::DeclarationRef entrypoint;
+    size_t mainCount = 0;
+    for (const auto& declaration : pipeline.moonModule().declarations) {
+        const auto* function = dynamic_cast<const moon::FunctionDecl*>(
+            declaration.get());
+        if (!function || function->packageId != package.id ||
+            function->name != "main") continue;
+        ++mainCount;
+        entrypoint = {function->symbolId, function->contractId};
+    }
+    if ((package.kind == PackageKind::Application && mainCount != 1) ||
+        (package.kind == PackageKind::Library && mainCount != 0)) {
+        std::cerr << diagnostic::format(
+            "driver",
+            package.kind == PackageKind::Application
+                ? "Moon application must contain exactly one package main"
+                : "Moon library must not contain a package main",
+            inputPath, 0, 0,
+            package.kind == PackageKind::Application
+                ? "define exactly one `fn main() -> i32` in the root package"
+                : "remove main or set kind = \"application\"") << "\n";
+        return 1;
+    }
+
+    llvm::InitializeNativeTarget();
+    llvm::InitializeNativeTargetAsmPrinter();
+    auto targetBuilder = llvm::orc::JITTargetMachineBuilder::detectHost();
+    if (!targetBuilder) {
+        std::cerr << "error[driver]: cannot detect Moon host target: "
+                  << llvm::toString(targetBuilder.takeError()) << "\n";
+        return 1;
+    }
+    auto dataLayout = targetBuilder->getDefaultDataLayoutForTarget();
+    if (!dataLayout) {
+        std::cerr << "error[driver]: cannot derive Moon host data layout: "
+                  << llvm::toString(dataLayout.takeError()) << "\n";
+        return 1;
+    }
+
+    moon::ContainerManifest manifest;
+    manifest.packageId = package.id;
+    manifest.packageVersion = package.version;
+    manifest.packageKind = package.kind == PackageKind::Application
+        ? moon::ContainerPackageKind::Application
+        : moon::ContainerPackageKind::Library;
+    manifest.targetTriple = targetBuilder->getTargetTriple().str();
+    manifest.dataLayout = dataLayout->getStringRepresentation();
+    manifest.entrypoint = entrypoint;
+    manifest.features = pipeline.moonModule().features;
+
+    std::vector<uint8_t> encoded;
+    std::string error;
+    if (!moon::ContainerModelCodec::encodeContainer(
+            manifest, pipeline.moonModule(), encoded, error)) {
+        std::cerr << diagnostic::format(
+            "moon-container", error, inputPath, 0, 0,
+            "the package must lower to closed, verified canonical MoonIR") << "\n";
+        return 1;
+    }
+    moon::ContainerManifest verifiedManifest;
+    moon::Module verifiedModule;
+    if (!moon::ContainerModelCodec::decodeContainerForTarget(
+            encoded, manifest.targetTriple, manifest.dataLayout,
+            verifiedManifest, verifiedModule, error)) {
+        std::cerr << diagnostic::format(
+            "moon-container", "generated container failed self-verification: " + error,
+            inputPath, 0, 0,
+            "report this compiler defect with the input package") << "\n";
+        return 1;
+    }
+
+    std::string artifactName = package.id;
+    if (const auto separator = artifactName.rfind('.');
+        separator != std::string::npos)
+        artifactName = artifactName.substr(separator + 1);
+    fs::path outputPath;
+    if (!outputOverride.empty()) {
+        outputPath = outputOverride;
+    } else {
+        outputPath = fs::path(pipeline.analysisSnapshot().packageRootPath()) /
+            "build" / manifest.targetTriple / (artifactName + ".moon");
+    }
+    std::error_code filesystemError;
+    if (!outputPath.parent_path().empty())
+        fs::create_directories(outputPath.parent_path(), filesystemError);
+    if (filesystemError) {
+        std::cerr << diagnostic::format(
+            "driver", "cannot create Moon output directory: " +
+                filesystemError.message(), outputPath.string(), 0, 0,
+            "check the output path permissions") << "\n";
+        return 1;
+    }
+    std::ofstream output(outputPath, std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char*>(encoded.data()),
+                 static_cast<std::streamsize>(encoded.size()));
+    if (!output) {
+        std::cerr << diagnostic::format(
+            "driver", "cannot write Moon Container", outputPath.string(),
+            0, 0, "check the output path permissions") << "\n";
+        return 1;
+    }
+    std::cout << "Built Moon Container: " << outputPath.string() << "\n";
+    return 0;
+}
+
+static std::string packageArtifactName(const std::string& packageId) {
+    const auto separator = packageId.rfind('.');
+    return separator == std::string::npos
+        ? packageId : packageId.substr(separator + 1);
+}
+
+static bool isCIdentifier(const std::string& value) {
+    if (value.empty() ||
+        !(std::isalpha(static_cast<unsigned char>(value.front())) ||
+          value.front() == '_'))
+        return false;
+    for (const char character : value) {
+        if (!(std::isalnum(static_cast<unsigned char>(character)) ||
+              character == '_'))
+            return false;
+    }
+    return true;
+}
+
+static std::string cTypeName(const moon::Module& module,
+                             const moon::TypeRef& reference,
+                             std::string& error) {
+    const auto* type = module.findType(reference);
+    if (!type) {
+        error = "C export references a missing sealed MoonIR type '" +
+            reference.value + "'";
+        return {};
+    }
+    switch (type->kind) {
+        case TypeKind::I8: return "int8_t";
+        case TypeKind::I16: return "int16_t";
+        case TypeKind::I32: return "int32_t";
+        case TypeKind::I64: return "int64_t";
+        case TypeKind::U8: return "uint8_t";
+        case TypeKind::U16: return "uint16_t";
+        case TypeKind::U32: return "uint32_t";
+        case TypeKind::U64: return "uint64_t";
+        case TypeKind::USize: return "size_t";
+        case TypeKind::ISize: return "ptrdiff_t";
+        case TypeKind::F32: return "float";
+        case TypeKind::F64: return "double";
+        case TypeKind::CStr: return "const char *";
+        case TypeKind::RawPointer: return "void *";
+        case TypeKind::Unit: return "void";
+        case TypeKind::Reference: {
+            std::string inner = cTypeName(module, type->innerTypeId, error);
+            if (inner.empty()) return {};
+            return inner + (type->isMutable ? " *" : " const *");
+        }
+        default:
+            error = "C export type '" + type->displayName +
+                "' is not representable in a generated C header";
+            return {};
+    }
+}
+
+static bool collectCffiExports(
+    const CompilerPipeline& pipeline,
+    std::vector<const moon::FunctionDecl*>& exports,
+    std::string& error) {
+    const auto& package = pipeline.analysisSnapshot().packageManifest();
+    if (package.id.empty() || package.version.empty() ||
+        package.kind == PackageKind::Unspecified) {
+        error = "-t cffi requires an explicit package manifest";
+        return false;
+    }
+    if (package.kind != PackageKind::Library) {
+        error = "-t cffi requires kind = \"library\"";
+        return false;
+    }
+
+    size_t mainCount = 0;
+    for (const auto& declaration : pipeline.moonModule().declarations) {
+        if (!declaration || declaration->packageId != package.id) continue;
+        const auto* function = dynamic_cast<const moon::FunctionDecl*>(
+            declaration.get());
+        if (function && function->name == "main") ++mainCount;
+        if (!declaration->isExported) continue;
+        if (!function || function->abi != "C" || function->isExtern) {
+            error = "CFFI public surface contains non-C export '" +
+                declaration->name + "'; use `export \"C\" fn` only";
+            return false;
+        }
+        const std::string symbol = function->linkName.empty()
+            ? function->generatedSymbolName : function->linkName;
+        if (!isCIdentifier(symbol)) {
+            error = "C export '" + function->name +
+                "' has a link symbol that is not a portable C identifier: '" +
+                symbol + "'";
+            return false;
+        }
+        exports.push_back(function);
+    }
+    if (mainCount != 0) {
+        error = "CFFI library must not contain a package main";
+        return false;
+    }
+    if (exports.empty()) {
+        error = "CFFI library must export at least one `export \"C\" fn`";
+        return false;
+    }
+    return true;
+}
+
+static int buildCffiLibrary(
+    const CompilerPipeline& pipeline, CodeGenerator& codeGenerator,
+    const std::string& inputPath, const std::vector<std::string>& linkLibraries,
+    const std::string& runtimeLibrary, const std::string& aotCompiler,
+    const std::string& outputOverride,
+    LunaOptimizationLevel optimizationLevel) {
+    namespace fs = std::filesystem;
+    std::vector<const moon::FunctionDecl*> exports;
+    std::string error;
+    if (!collectCffiExports(pipeline, exports, error)) {
+        std::cerr << diagnostic::format(
+            "driver", error, inputPath, 0, 0,
+            "CFFI artifacts are library packages with a closed explicit C ABI")
+                  << "\n";
+        return 1;
+    }
+
+    const auto& package = pipeline.analysisSnapshot().packageManifest();
+    const std::string artifactName = packageArtifactName(package.id);
+    fs::path outputPath;
+    if (!outputOverride.empty()) {
+        outputPath = outputOverride;
+    } else {
+        outputPath = fs::path(pipeline.analysisSnapshot().packageRootPath()) /
+            "build" / "cffi";
+#ifdef _WIN32
+        outputPath /= artifactName + ".dll";
+#elif defined(__APPLE__)
+        outputPath /= "lib" + artifactName + ".dylib";
+#else
+        outputPath /= "lib" + artifactName + ".so";
+#endif
+    }
+    const fs::path headerPath = outputPath.parent_path() /
+        (artifactName + ".h");
+    std::error_code filesystemError;
+    if (!outputPath.parent_path().empty())
+        fs::create_directories(outputPath.parent_path(), filesystemError);
+    if (filesystemError) {
+        std::cerr << diagnostic::format(
+            "driver", "cannot create CFFI output directory: " +
+                filesystemError.message(), outputPath.string(), 0, 0,
+            "check the output path permissions") << "\n";
+        return 1;
+    }
+
+    std::ostringstream header;
+    std::string guard = "LUNA_CFFI_" + artifactName + "_H";
+    for (char& character : guard) {
+        if (std::isalnum(static_cast<unsigned char>(character)))
+            character = static_cast<char>(
+                std::toupper(static_cast<unsigned char>(character)));
+        else
+            character = '_';
+    }
+    header << "#ifndef " << guard << "\n#define " << guard
+           << "\n\n#include <stddef.h>\n#include <stdint.h>\n\n"
+           << "#ifdef __cplusplus\nextern \"C\" {\n#endif\n\n";
+    for (const auto* function : exports) {
+        std::string typeError;
+        const std::string returnType = cTypeName(
+            pipeline.moonModule(), function->returnType, typeError);
+        if (returnType.empty()) {
+            std::cerr << diagnostic::format(
+                "driver", typeError, function->location.path,
+                function->location.line, function->location.column,
+                "use a C-ABI-safe scalar, pointer, cstr, reference, or unit")
+                      << "\n";
+            return 1;
+        }
+        const std::string symbol = function->linkName.empty()
+            ? function->generatedSymbolName : function->linkName;
+        header << returnType << ' ' << symbol << '(';
+        if (function->params.empty()) {
+            header << "void";
+        } else {
+            for (size_t index = 0; index < function->params.size(); ++index) {
+                if (index) header << ", ";
+                const std::string parameterType = cTypeName(
+                    pipeline.moonModule(), function->params[index].type,
+                    typeError);
+                if (parameterType.empty()) {
+                    std::cerr << diagnostic::format(
+                        "driver", typeError, function->location.path,
+                        function->location.line, function->location.column,
+                        "use a C-ABI-safe scalar, pointer, cstr, or reference")
+                              << "\n";
+                    return 1;
+                }
+                header << parameterType << " arg" << index;
+            }
+        }
+        header << ");\n";
+    }
+    header << "\n#ifdef __cplusplus\n}\n#endif\n\n#endif\n";
+
+    if (AotLinker::build(codeGenerator, {
+            inputPath,
+            pipeline.declaredPackageName(),
+            linkLibraries,
+            runtimeLibrary,
+            aotCompiler,
+            outputPath.string(),
+            optimizationLevel,
+            AotArtifactKind::SharedLibrary,
+        }) != 0)
+        return 1;
+
+    std::ofstream output(headerPath, std::ios::binary | std::ios::trunc);
+    output << header.str();
+    if (!output) {
+        std::cerr << diagnostic::format(
+            "driver", "cannot write generated CFFI header",
+            headerPath.string(), 0, 0,
+            "check the output path permissions") << "\n";
+        return 1;
+    }
+    std::cout << "Generated C header: " << headerPath.string() << "\n";
+    return 0;
 }
 
 static void printJsonHello() {
@@ -231,7 +588,8 @@ Usage:
                                            overlay source is read from stdin
   luna run    <file-or-package> [-O0|-O2|-O3] [--link <shared-library>]
                    [--gpu-target <target[,target...]>]  JIT-compile and execute
-  luna build  <file-or-package> [-O0|-O2|-O3] [--link <library-or-name>]
+  luna build  <package> [-O0|-O2|-O3] [-t native|moon|cffi] [-o <path>]
+                   [--link <library-or-name>]
                    [--runtime-lib <path>] [--cc <compiler>]
                    [--gpu-target <target[,target...]>]
                    [--reserve-kernel-runtime] [--emit-moonir <path>]
@@ -313,6 +671,7 @@ int run(int argc, char* argv[]) {
     auto& linkLibraries = options.linkLibraries;
     auto& runtimeLibrary = options.runtimeLibrary;
     auto& aotCompiler = options.aotCompiler;
+    auto& outputPath = options.outputPath;
     auto& moonIrOutput = options.moonIrOutput;
     auto& overlayPath = options.overlayPath;
     const bool overlaysFromStdin = options.overlaysFromStdin;
@@ -320,6 +679,7 @@ int run(int argc, char* argv[]) {
     auto& printMoonCostReport = options.printMoonCostReport;
     auto& reserveKernelRuntime = options.reserveKernelRuntime;
     auto& optimizationLevel = options.optimizationLevel;
+    const auto artifactTarget = options.artifactTarget;
     const bool jsonDiagnostics =
         options.messageFormat == MessageFormat::Json && cmd == "check";
 
@@ -435,6 +795,36 @@ int run(int argc, char* argv[]) {
         return 0;
     }
 
+    if (cmd == "build" && artifactTarget == ArtifactTarget::Moon)
+        return buildMoonContainer(pipeline, filePath, outputPath);
+
+    if (cmd == "build") {
+        const auto& package = pipeline.analysisSnapshot().packageManifest();
+        if (artifactTarget == ArtifactTarget::Cffi) {
+            std::vector<const moon::FunctionDecl*> exports;
+            std::string cffiError;
+            if (!std::filesystem::is_directory(std::filesystem::path(filePath)) ||
+                !collectCffiExports(pipeline, exports, cffiError)) {
+                if (cffiError.empty())
+                    cffiError = "-t cffi requires a package directory";
+                std::cerr << diagnostic::format(
+                    "driver", cffiError, filePath, 0, 0,
+                    "pass the directory containing a library luna.package")
+                          << "\n";
+                return 1;
+            }
+        } else if (artifactTarget == ArtifactTarget::Native &&
+                   package.kind == PackageKind::Library) {
+            std::cerr << diagnostic::format(
+                "driver",
+                "trusted Native library proof emission is not implemented",
+                filePath, 0, 0,
+                "use -t cffi for a foreign C ABI library or -t moon for a verified container")
+                      << "\n";
+            return 1;
+        }
+    }
+
     if (!pipeline.generateCode(std::move(gpuTargets))) {
         printErrors(pipeline.errors());
         return 1;
@@ -451,6 +841,11 @@ int run(int argc, char* argv[]) {
         return result;
     }
 
+    if (cmd == "build" && artifactTarget == ArtifactTarget::Cffi)
+        return buildCffiLibrary(
+            pipeline, cg, filePath, linkLibraries, runtimeLibrary,
+            aotCompiler, outputPath, optimizationLevel);
+
     if (cmd == "build")
         return AotLinker::build(cg, {
             filePath,
@@ -458,7 +853,9 @@ int run(int argc, char* argv[]) {
             linkLibraries,
             runtimeLibrary,
             aotCompiler,
+            outputPath,
             optimizationLevel,
+            AotArtifactKind::Executable,
         });
 
     std::cerr << "Unknown command: " << cmd << "\n";

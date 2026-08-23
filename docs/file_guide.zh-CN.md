@@ -193,6 +193,10 @@ obligation，不能重新推导所有权。
 | `src/moonir/MoonIR.cpp` | MoonIR 数据结构的非内联实现 |
 | `src/moonir/ControlFlowBuilder.h` | construction-only structured body 到 canonical CFG 的转换接口 |
 | `src/moonir/ControlFlowBuilder.cpp` | 消费暂态 structured body，分配稳定 local/scope/block 并生成唯一 CFG |
+| `src/moonir/Container.h` | Moon Container section、资源上限与 reader/writer 接口 |
+| `src/moonir/ContainerModel.h` | 八段 canonical model 与完整容器事务 codec 接口 |
+| `src/moonir/ContainerModel.cpp` | 固定宽度 payload、递归 CFG code、资源边界、原子解码与 Verifier 接力 |
+| `src/moonir/Container.cpp` | M005 binary framing、对齐、SHA-256 与不可信输入验证 |
 | `src/moonir/Lowering.h` | typed AST 到 MoonIR 的 lowering 接口 |
 | `src/moonir/Lowering.cpp` | 消费 typed facts 生成 MoonIR；不得重新推断语义 |
 | `src/moonir/Sealer.h` | concrete executable body 原子封存接口 |
@@ -211,13 +215,11 @@ obligation，不能重新推导所有权。
 | `src/codegen/CodeGenerator.h` | codegen façade、共享 lowering 状态和子过程声明 |
 | `src/codegen/CodeGenerator.cpp` | façade 初始化和小型共用实现 |
 | `src/codegen/CodeGeneratorModule.cpp` | module 级声明收集、host/kernel 编排与验证 |
-| `src/codegen/CodeGeneratorFunctions.cpp` | 单函数状态、参数、入口和隐式返回 lowering |
-| `src/codegen/CodeGeneratorStatements.cpp` | block/statement/control-flow lowering |
+| `src/codegen/CodeGeneratorFunctions.cpp` | canonical-only 单函数入口、状态与隐式返回 lowering |
 | `src/codegen/CodeGeneratorExpressions.cpp` | 普通 expression/value lowering |
 | `src/codegen/CodeGeneratorCleanup.cpp` | cleanup、ADT payload、共享/数组资源释放 |
 | `src/codegen/CodeGeneratorControlFlow.cpp` | canonical typed-local CFG 的 LLVM block/local/terminator lowering |
 | `src/codegen/CodeGeneratorExecution.cpp` | LLVM 生命周期、ORC JIT、AOT IR 输出 |
-| `src/codegen/CodeGeneratorFragments.cpp` | slot、continuation、fragment 与插件 dispatch |
 | `src/codegen/CodeGeneratorGpu.cpp` | GPU target、buffer ABI、launch 与 code object |
 | `src/codegen/CodeGeneratorIterator.cpp` | iterator recipe、pipeline、terminal lowering |
 | `src/codegen/CodeGeneratorRangeAnalysis.h` | 安全索引范围证明接口 |
@@ -519,7 +521,6 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/codegen/CodeGeneratorControlFlow.cpp`
 - `src/codegen/CodeGeneratorExecution.cpp`
 - `src/codegen/CodeGeneratorExpressions.cpp`
-- `src/codegen/CodeGeneratorFragments.cpp`
 - `src/codegen/CodeGeneratorFunctions.cpp`
 - `src/codegen/CodeGeneratorGpu.cpp`
 - `src/codegen/CodeGeneratorIterator.cpp`
@@ -527,7 +528,6 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/codegen/CodeGeneratorRangeAnalysis.cpp`
 - `src/codegen/CodeGeneratorRangeAnalysis.h`
 - `src/codegen/CodeGeneratorRuntimeDescriptors.cpp`
-- `src/codegen/CodeGeneratorStatements.cpp`
 - `src/core/Ownership.h`
 - `src/core/SysMeta.h`
 - `src/core/StableIdentity.h`
@@ -558,6 +558,10 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/main.cpp`
 - `src/moonir/ControlFlowBuilder.cpp`
 - `src/moonir/ControlFlowBuilder.h`
+- `src/moonir/Container.cpp`
+- `src/moonir/Container.h`
+- `src/moonir/ContainerModel.cpp`
+- `src/moonir/ContainerModel.h`
 - `src/moonir/Lowering.cpp`
 - `src/moonir/Lowering.h`
 - `src/moonir/MoonIR.cpp`
@@ -671,6 +675,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/dynamic_apply_static_slot_invalid.luna`
 - `tests/fixtures/dynamic_candidate_contract_mismatch_invalid.luna`
 - `tests/fixtures/dynamic_fragments.luna`
+- `tests/fixtures/dynamic_fragments_many.luna`
+- `tests/fixtures/dynamic_fragments_many_capture_invalid.luna`
 - `tests/fixtures/enum_match.luna`
 - `tests/fixtures/enum_match_arity_invalid.luna`
 - `tests/fixtures/enum_match_duplicate_invalid.luna`
@@ -708,6 +714,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/iterator_materialized_borrow_invalid.luna`
 - `tests/fixtures/iterator_materialized_linear_source_invalid.luna`
 - `tests/fixtures/iterator_materialized_move_only.luna`
+- `tests/fixtures/into_iter_diagnostic_clean.luna`
 - `tests/fixtures/iterator_materialized_source_use_after_invalid.luna`
 - `tests/fixtures/iterator_materialized_twice_invalid.luna`
 - `tests/fixtures/iterator_move_only_array.luna`
@@ -760,8 +767,15 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/ownership_unreachable_after_return.luna`
 - `tests/fixtures/post_let_usage_invalid.luna`
 - `tests/fixtures/package_using_missing_alias_invalid.luna`
+- `tests/fixtures/cffi_consumer.c`
 - `tests/fixtures/packages/alias_collision/01_first.luna`
 - `tests/fixtures/packages/alias_collision/02_second.luna`
+- `tests/fixtures/packages/cffi_library/luna.package`
+- `tests/fixtures/packages/cffi_library/src/api.luna`
+- `tests/fixtures/packages/cffi_no_exports/luna.package`
+- `tests/fixtures/packages/cffi_no_exports/src/api.luna`
+- `tests/fixtures/packages/cffi_typed_export/luna.package`
+- `tests/fixtures/packages/cffi_typed_export/src/api.luna`
 - `tests/fixtures/packages/duplicate_export/01_shared.luna`
 - `tests/fixtures/packages/duplicate_export/02_shared.luna`
 - `tests/fixtures/packages/duplicate_export/03_main.luna`
@@ -770,6 +784,10 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/packages/duplicate_version/03_main.luna`
 - `tests/fixtures/packages/exported_package/01_math.luna`
 - `tests/fixtures/packages/exported_package/02_main.luna`
+- `tests/fixtures/packages/package_kind_application/luna.package`
+- `tests/fixtures/packages/package_kind_application/src/main.luna`
+- `tests/fixtures/packages/package_kind_invalid/luna.package`
+- `tests/fixtures/packages/package_kind_invalid/src/main.luna`
 - `tests/fixtures/packages/mismatched_package/01_first.luna`
 - `tests/fixtures/packages/mismatched_package/02_second.luna`
 - `tests/fixtures/packages/module_headers/01_math.luna`
@@ -848,6 +866,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/workspaces/local/luna.lock`
 - `tests/fixtures/workspaces/local/luna.workspace`
 - `tests/fragment_lowering_abi.cmake`
+- `tests/cffi_artifact.cmake`
 - `tests/fragment_plugin_fixture.cpp`
 - `tests/fragment_plugin_test.cpp`
 - `tests/full_showcase.cmake`
@@ -862,6 +881,13 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/jit_aot_parity.cmake`
 - `tests/jit_runtime_symbols.cmake`
 - `tests/moon_cost_boundaries.cmake`
+- `tests/moon_container_test.cpp`
+- `tests/moon_container_model_test.cpp`
+- `tests/moon_container_cli.cmake`
+- `tests/moon_container_fuzz.cpp`
+- `tests/moon_container_fuzz.dict`
+- `tests/moon_container_fuzz_corpus.py`
+- `tests/moon_container_oracle.py`
 - `tests/optimization_pipeline.cmake`
 - `tests/package_export_abi.cmake`
 - `tests/package_manifest_workspace.cmake`

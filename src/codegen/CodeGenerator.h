@@ -14,7 +14,6 @@
 #include <llvm/ExecutionEngine/Orc/EPCDynamicLibrarySearchGenerator.h>
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/Support/TargetSelect.h>
-#include <array>
 #include <functional>
 #include <string>
 #include <utility>
@@ -51,13 +50,6 @@ public:
     const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
 private:
-    struct ContinuationFrame {
-        llvm::AllocaInst* storage = nullptr;
-        llvm::StructType* llvmType = nullptr;
-        llvm::BasicBlock* returnDispatch = nullptr;
-        llvm::Type* returnType = nullptr;
-    };
-
     struct IteratorStep {
         IteratorOp op = IteratorOp::None;
         moon::Expr* argument = nullptr;
@@ -97,16 +89,6 @@ private:
     void generateControlFlowBody(
         moon::ControlFlowGraph& graph, llvm::Function* func,
         llvm::BasicBlock* abiEntry);
-    void generateStmt(moon::Stmt* stmt, llvm::Function* func = nullptr);
-    void generateBlock(moon::BlockStmt* block, llvm::Function* func);
-    void generateStructuredContinuation(moon::BlockStmt* continuation, llvm::Function* func);
-    void generateSlotInvoke(moon::SlotInvokeStmt* slot, llvm::Function* func);
-    void generateFragmentInline(moon::FragmentDecl* fragment, moon::SlotInvokeStmt* slot,
-                                llvm::Function* func);
-    void generateDynamicFragmentDispatch(const std::vector<moon::FragmentDecl*>& candidates,
-                                         moon::SlotInvokeStmt* slot, llvm::Function* func);
-    std::array<llvm::Value*, 4> generateExternalFragmentInvocation(
-        moon::SlotInvokeStmt* slot, llvm::Function* func, llvm::Value* selected);
     llvm::Value* generateExpr(moon::Expr* expr);
     // Literal expression emitters. Split out from generateExpr so each AST
     // node has one home; behavior is unchanged.
@@ -168,8 +150,6 @@ private:
         const moon::DeclarationRef& reference) const;
     llvm::Function* resolveFunction(
         const moon::DeclarationRef& reference) const;
-    moon::FragmentDecl* resolveFragment(
-        const moon::DeclarationRef& reference) const;
     TypePtr allocationTypeForExpr(moon::Expr* expr);
     void emitLunaDeallocation(llvm::Value* pointer, const TypePtr& type);
     void emitCleanup(const std::string& place,
@@ -223,17 +203,6 @@ private:
     bool mCurrentFunctionIsKernel = false;
     std::unordered_map<std::string, llvm::Function*> mFunctions;
     std::unordered_map<std::string, llvm::Function*> mDropCallbacks;
-    std::unordered_map<std::string, moon::FragmentDecl*> mFragments;
-    std::unordered_map<std::string, moon::FragmentDecl*> mSlotDefaults;
-    std::vector<std::unordered_map<std::string, moon::FragmentDecl*>> mApplyScopes;
-    std::vector<std::unordered_map<std::string, std::vector<moon::FragmentDecl*>>> mDynamicApplyScopes;
-    moon::BlockStmt* mCurrentSlotContinuation = nullptr;
-    llvm::BasicBlock* mCurrentFragmentExit = nullptr;
-    std::vector<ContinuationFrame> mContinuationFrames;
-    unsigned mContinuationFrameCounter = 0;
-    // A return in the fragment body ends that fragment. Slot-continuation
-    // returns clear this target and use the structured CPS frame instead.
-    llvm::BasicBlock* mCurrentFragmentReturn = nullptr;
     // Exact generated kernel symbol -> PTX source, emitted only for the CUDA
     // backend. The simulator deliberately has no NVPTX dependency.
     std::unordered_map<std::string, std::string> mKernelPTX;

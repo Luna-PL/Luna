@@ -13,6 +13,12 @@ cmake --build build -j4
 ctest --test-dir build --output-on-failure
 ```
 
+production pipeline 现在总是 seal canonical CFG，因此上面的普通 CTest 命令就是
+canonical 回归门禁。有限、静态链接的 runtime context 与 replay-safe multi-shot
+continuation 都是正例。外部插件 context/multi-shot callback 仍不在 plugin ABI v1 内，
+未知候选会在 runtime 边界终止。structured executable-body backend 已从源码删除；
+聚焦单元测试还会直接调用 codegen，确认未 seal 的 body 在 canonical 边界被拒绝。
+
 发布候选构建应同时把项目自身的警告提升为错误：
 
 ```sh
@@ -22,6 +28,49 @@ cmake --build build --parallel
 
 Linux CI 在 C++17/C++23 构建矩阵中都启用该门禁。它只作用于 Luna
 仓库拥有的 target，不把 LLVM 或系统头文件的第三方警告误算为项目回归。
+
+`luna.moon-container` 独立于 frontend lowering 验证 M005 不可信字节边界，覆盖确定性
+输出、文件 round trip、必需/optional section、magic/version/header、section 顺序、
+compression 拒绝、SHA-256 篡改检测与 parser 资源上限。`luna.moon-container-model`
+覆盖八段 canonical model、畸形 opcode/截断/深度限制、失败原子性和 Verifier 接力；
+它还执行确定的 raw-bit、截断和重新认证 payload 变异：拒绝时不得发布部分
+状态，仍合法的变异必须逐 byte 规范重编码。`luna.moon-container-cli` 固定
+`-t moon` 的 package-only、确定性和 magic 行为。独立的
+`luna.moon-container-oracle` Python parser 不链接 Luna reader 代码，会对两次真实
+CLI 构建的八个 section 执行逐字段解析，包括完整 CFG 和 expression payload。
+`luna.moonir-canonical` 还会把真实 frontend 产物序列化、重新装载并 JIT 比对结果。
+该生产 fixture 同时包含 generic recipe 和具体实例，用于证明 projection 会删除
+recipe/未解决 type，但保留可执行的单态化代码。它还包含一个不可达
+concrete function 和两条边的 call chain，证明 dead declaration 会消失，传递 callee
+仍可执行。其直接 verifier 负向用例还会拒绝缺失 literal `TypeRef`
+以及被伪造为 boolean type 的 integer literal。
+
+`luna.cffi-artifact` 从真实 library package 生成平台共享库与 C header，
+再用系统 C 编译器以 strict C11 模式编译并运行一个独立消费者。
+它同时验证 application、零 C 导出、普通 Luna export、standalone build
+和未证明 Native library 都失败且不产生主产物。
+
+Moon Container 的 coverage-guided fuzzing 是可选门禁，需要 Clang/libFuzzer：
+
+```sh
+cmake -S . -B build-fuzz -G Ninja \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DLUNA_ENABLE_FUZZING=ON -DLUNA_STRICT_WARNINGS=ON
+cmake --build build-fuzz --target moon-container-fuzz moon-container-fuzz-corpus
+ctest --test-dir build-fuzz -L fuzz --output-on-failure
+```
+
+corpus generator 会保留 coverage 探索发现的文件，同时刷新 11 个稳定 seed，
+其中包含真实 CLI 产物和独立编码的 framing 用例。custom mutator 在 raw
+mutation 与重新认证的 directory/payload mutation 间交替，使 SHA-valid 输入
+能进入 model decoder。长时本地探索可直接运行 `moon-container-fuzz`，
+传入 `-max_total_time=<seconds>`、生成的 corpus 目录和
+`tests/moon_container_fuzz.dict`。
+
+当前 LLVM 22 共享库在静态初始化阶段会使 Clang ASan 报告 alloc/dealloc
+mismatch，即使链接 `libLLVM` 的空 fuzzer 也能独立复现。fuzz CTest 只关闭
+这一项检查，其他 ASan/UBSan 检查仍保留；独立的完整 sanitizer matrix
+仍保留默认 alloc/dealloc-mismatch 检查。
 
 内存安全与未定义行为门禁可独立启用：
 

@@ -56,19 +56,26 @@ int AotLinker::build(CodeGenerator& codeGenerator, AotLinkOptions options) {
 
     const fs::path inputPath(options.inputPath);
     fs::path irPath;
-    fs::path executablePath;
+    fs::path artifactPath;
     if (fs::is_directory(inputPath)) {
         const std::string packageName = options.declaredPackageName.empty()
             ? inputPath.filename().string()
             : options.declaredPackageName;
         irPath = inputPath / (packageName + ".ll");
-        executablePath = inputPath / packageName;
+        artifactPath = inputPath / packageName;
     } else {
         irPath = inputPath.string() + ".ll";
-        executablePath = inputPath.parent_path() / inputPath.stem();
+        artifactPath = inputPath.parent_path() / inputPath.stem();
+    }
+    if (!options.outputPath.empty()) {
+        artifactPath = fs::path(options.outputPath);
+        irPath = artifactPath;
+        irPath += ".ll";
     }
 #ifdef _WIN32
-    executablePath += ".exe";
+    if (options.outputPath.empty() &&
+        options.artifactKind == AotArtifactKind::Executable)
+        artifactPath += ".exe";
 #endif
 
     std::cout << "Emitting LLVM IR: " << irPath.string() << "\n";
@@ -128,13 +135,20 @@ int AotLinker::build(CodeGenerator& codeGenerator, AotLinkOptions options) {
     std::vector<std::string> linkerArgs = {
         *compilerPath,
         optimizationFlag,
-        irPath.generic_string(),
-        options.runtimeLibrary,
     };
+    if (options.artifactKind == AotArtifactKind::SharedLibrary) {
+#ifdef __APPLE__
+        linkerArgs.push_back("-dynamiclib");
+#else
+        linkerArgs.push_back("-shared");
+#endif
+    }
+    linkerArgs.push_back(irPath.generic_string());
+    linkerArgs.push_back(options.runtimeLibrary);
     if (std::string(LUNA_DL_LIBRARY).size())
         linkerArgs.push_back("-l" + std::string(LUNA_DL_LIBRARY));
     linkerArgs.push_back("-o");
-    linkerArgs.push_back(executablePath.generic_string());
+    linkerArgs.push_back(artifactPath.generic_string());
     for (const auto& library : options.linkLibraries)
         linkerArgs.push_back(isLibraryPath(library) ? library : "-l" + library);
 
@@ -171,7 +185,10 @@ int AotLinker::build(CodeGenerator& codeGenerator, AotLinkOptions options) {
         return 1;
     }
 
-    std::cout << "Built executable: " << executablePath.string() << "\n";
+    std::cout << "Built "
+              << (options.artifactKind == AotArtifactKind::SharedLibrary
+                      ? "shared library: " : "executable: ")
+              << artifactPath.string() << "\n";
     return 0;
 }
 

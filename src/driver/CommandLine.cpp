@@ -104,6 +104,7 @@ CommandLineParseResult parseCommandLine(int argc, char* argv[]) {
     CommandLineOptions options;
     options.command = command;
     options.inputPath = argv[2];
+    bool artifactTargetExplicit = false;
 
     for (int i = 3; i < argc; ++i) {
         const std::string option = argv[i];
@@ -129,6 +130,33 @@ CommandLineParseResult parseCommandLine(int argc, char* argv[]) {
             options.aotCompiler = argv[++i];
         } else if (option.rfind("--cc=", 0) == 0) {
             options.aotCompiler = option.substr(5);
+        } else if ((option == "-t" || option == "--target") &&
+                   i + 1 < argc) {
+            artifactTargetExplicit = true;
+            const std::string target = argv[++i];
+            if (target == "native")
+                options.artifactTarget = ArtifactTarget::Native;
+            else if (target == "moon")
+                options.artifactTarget = ArtifactTarget::Moon;
+            else if (target == "cffi")
+                options.artifactTarget = ArtifactTarget::Cffi;
+            else
+                return failure("Unsupported artifact target: " + target, false);
+        } else if (option.rfind("--target=", 0) == 0) {
+            artifactTargetExplicit = true;
+            const std::string target = option.substr(9);
+            if (target == "native")
+                options.artifactTarget = ArtifactTarget::Native;
+            else if (target == "moon")
+                options.artifactTarget = ArtifactTarget::Moon;
+            else if (target == "cffi")
+                options.artifactTarget = ArtifactTarget::Cffi;
+            else
+                return failure("Unsupported artifact target: " + target, false);
+        } else if (option == "-o" && i + 1 < argc) {
+            options.outputPath = argv[++i];
+        } else if (option.rfind("--output=", 0) == 0) {
+            options.outputPath = option.substr(9);
         } else if (option == "--gpu-target" && i + 1 < argc) {
             std::string targetError;
             if (!parseGpuTargets(argv[++i], options.gpuTargets, targetError))
@@ -184,6 +212,17 @@ CommandLineParseResult parseCommandLine(int argc, char* argv[]) {
     if (options.messageFormat == MessageFormat::Json && options.printMoonCostReport)
         return failure("--moon-cost-report cannot be combined with JSON diagnostics",
                        false);
+    if (command != "build" && artifactTargetExplicit)
+        return failure("-t/--target is supported only by `build`", false);
+    if (command != "build" && !options.outputPath.empty())
+        return failure("-o/--output is supported only by `build`", false);
+    if (options.artifactTarget == ArtifactTarget::Moon &&
+        (!options.linkLibraries.empty() || !options.runtimeLibrary.empty() ||
+         !options.aotCompiler.empty() || options.gpuTargets.emitPTX ||
+         options.gpuTargets.emitHSACO))
+        return failure(
+            "-t moon cannot be combined with native linker or GPU artifact options",
+            false);
 
     return {std::move(options), "", false};
 }

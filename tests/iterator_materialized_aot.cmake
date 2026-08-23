@@ -49,22 +49,6 @@ if(NOT build_result EQUAL 0 OR
 endif()
 
 file(READ "${ir_path}" generated_ir)
-# The structured-body path produces specific IR labels for materialized
-# iterator state. The canonical CFG path uses cfg.N blocks and LocalId-
-# indexed locals. Skip IR pattern checks when the canonical gate is active.
-if(NOT DEFINED ENV{LUNA_SEAL_CANONICAL} OR NOT "$ENV{LUNA_SEAL_CANONICAL}" STREQUAL "1")
-foreach(expected_ir IN ITEMS
-        "pending.iterator.index"
-        "pending.iterator.take.remaining"
-        "delayed.iterator.index"
-        "extended.iterator.index")
-    string(FIND "${generated_ir}" "${expected_ir}" expected_ir_at)
-    if(expected_ir_at EQUAL -1)
-        file(REMOVE "${ir_path}" "${executable_path}")
-        message(FATAL_ERROR
-            "materialized iterator IR lacks '${expected_ir}'")
-    endif()
-endforeach()
 foreach(forbidden_ir IN ITEMS
         "call ptr @rt_alloc"
         "@rt_iterator")
@@ -75,7 +59,6 @@ foreach(forbidden_ir IN ITEMS
             "materialized iterator unexpectedly uses '${forbidden_ir}'")
     endif()
 endforeach()
-endif()
 
 execute_process(
     COMMAND "${executable_path}"

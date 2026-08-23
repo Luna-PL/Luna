@@ -115,15 +115,13 @@ if(NOT loop_build_result EQUAL 0 OR NOT EXISTS "${loop_ir_path}")
 endif()
 file(READ "${loop_ir_path}" loop_ir)
 file(REMOVE "${loop_ir_path}" "${loop_executable_path}")
-if(NOT DEFINED ENV{LUNA_SEAL_CANONICAL} OR NOT "$ENV{LUNA_SEAL_CANONICAL}" STREQUAL "1")
 string(REGEX MATCH
     "%addeqtmp\\.3 = add [^\n]*i32 [^\n]*, 4"
     loop_unroll_increment "${loop_ir}")
 if(loop_unroll_increment STREQUAL "")
     message(FATAL_ERROR
-        "-O3 did not apply the expected four-way straight-line loop unroll.\n"
+        "canonical O3 did not apply the expected four-way straight-line loop unroll.\n"
         "IR:\n${loop_ir}")
-endif()
 endif()
 
 # A tiny single-recurrence inner loop is intentionally below the heuristic's
@@ -149,17 +147,15 @@ if(NOT nested_build_result EQUAL 0 OR NOT EXISTS "${nested_ir_path}")
 endif()
 file(READ "${nested_ir_path}" nested_ir)
 file(REMOVE "${nested_ir_path}" "${nested_executable_path}")
-if(NOT DEFINED ENV{LUNA_SEAL_CANONICAL} OR NOT "$ENV{LUNA_SEAL_CANONICAL}" STREQUAL "1")
 string(REGEX MATCH
-    "add [^\n]*i32 %column[^,\n]*, 1"
+    "add [^\n]*i32 %local\\.[0-9]+\\.column[^,\n]*, 1"
     nested_scalar_increment "${nested_ir}")
 string(REGEX MATCH
-    "add [^\n]*i32 %column[^,\n]*, 4"
+    "add [^\n]*i32 %local\\.[0-9]+\\.column[^,\n]*, 4"
     nested_forced_increment "${nested_ir}")
 if(nested_scalar_increment STREQUAL "" OR
    NOT nested_forced_increment STREQUAL "")
     message(FATAL_ERROR
-        "-O3 forced four-way unrolling on the small nested recurrence.\n"
+        "canonical O3 forced four-way unrolling on the small nested recurrence.\n"
         "IR:\n${nested_ir}")
-endif()
 endif()

@@ -50,29 +50,6 @@ if(NOT build_result EQUAL 0 OR
 endif()
 
 file(READ "${ir_path}" generated_ir)
-# The structured-body path produces specific IR labels for move-only
-# iterator state tracking. The canonical CFG path uses cfg.N blocks and
-# LocalId-indexed locals. Skip IR pattern checks when the canonical gate
-# is active.
-if(NOT DEFINED ENV{LUNA_SEAL_CANONICAL} OR NOT "$ENV{LUNA_SEAL_CANONICAL}" STREQUAL "1")
-foreach(expected_ir IN ITEMS
-        "[3 x i1]"
-        "store i1 false"
-        "drop.2"
-        "terminal.recipe"
-        "iter.fold.accumulator.initialized"
-        "store i1 false, ptr %iter.fold.accumulator.initialized"
-        "store i1 true, ptr %iter.fold.accumulator.initialized"
-        "iter.filter.reject"
-        "iter.take.exhausted")
-    string(FIND "${generated_ir}" "${expected_ir}" expected_ir_at)
-    if(expected_ir_at EQUAL -1)
-        file(REMOVE "${ir_path}" "${executable_path}")
-        message(FATAL_ERROR
-            "move-only iterator AOT IR lacks '${expected_ir}'")
-    endif()
-endforeach()
-endif()
 
 execute_process(
     COMMAND "${executable_path}"

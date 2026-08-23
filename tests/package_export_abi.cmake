@@ -5,11 +5,13 @@
 if(NOT DEFINED LUNA_EXECUTABLE OR NOT EXISTS "${LUNA_EXECUTABLE}")
     message(FATAL_ERROR "LUNA_EXECUTABLE must point at a built luna binary")
 endif()
-if(NOT DEFINED LUNA_SOURCE_DIR)
-    message(FATAL_ERROR "LUNA_SOURCE_DIR must point at the source tree")
+if(NOT DEFINED LUNA_SOURCE_DIR OR NOT DEFINED LUNA_BINARY_DIR)
+    message(FATAL_ERROR
+        "LUNA_SOURCE_DIR and LUNA_BINARY_DIR are required")
 endif()
 
-set(package_dir "${LUNA_SOURCE_DIR}/tests/fixtures/packages/exported_package")
+set(work_dir "${LUNA_BINARY_DIR}/package-export-abi")
+set(package_dir "${work_dir}/exported_package")
 set(ir_path "${package_dir}/exported_package.ll")
 set(executable_path "${package_dir}/exported_package")
 if(WIN32)
@@ -17,10 +19,14 @@ if(WIN32)
 endif()
 
 function(cleanup_package_outputs)
-    file(REMOVE "${ir_path}" "${executable_path}")
+    file(REMOVE_RECURSE "${work_dir}")
 endfunction()
 
 cleanup_package_outputs()
+file(MAKE_DIRECTORY "${work_dir}")
+file(COPY
+    "${LUNA_SOURCE_DIR}/tests/fixtures/packages/exported_package"
+    DESTINATION "${work_dir}")
 execute_process(
     COMMAND "${LUNA_EXECUTABLE}" build "${package_dir}"
     RESULT_VARIABLE build_result

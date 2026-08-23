@@ -45,6 +45,8 @@ AnalysisSnapshot AnalysisSnapshot::analyzePath(const std::string& inputPath) {
     request.inputPath = inputPath;
     const bool loadedSuccessfully = manager.load(
         request, loaded, snapshot.mPackageGraph, errors);
+    snapshot.mPackageManifest = std::move(loaded.manifest);
+    snapshot.mPackageRootPath = std::move(loaded.rootPath);
     snapshot.mProgram = std::move(loaded.program);
     if (!loadedSuccessfully) {
         snapshot.fail(errors);
@@ -73,6 +75,8 @@ AnalysisSnapshot AnalysisSnapshot::analyzePathWithOverlays(
     request.overlays = overlays;
     const bool loadedSuccessfully = manager.load(
         request, loaded, snapshot.mPackageGraph, errors);
+    snapshot.mPackageManifest = std::move(loaded.manifest);
+    snapshot.mPackageRootPath = std::move(loaded.rootPath);
     snapshot.mProgram = std::move(loaded.program);
     if (!loadedSuccessfully) {
         snapshot.fail(errors);

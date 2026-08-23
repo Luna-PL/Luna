@@ -79,15 +79,36 @@ luna run <file-or-package> [-O0|-O2|-O3] [options]
 `run` lowers verified MoonIR to LLVM, JIT-compiles the program and executes
 `main`. The driver's own process exit status is the Luna program's status.
 
-### AOT build
+### Artifact build
 
 ```sh
 luna build <file-or-package> [-O0|-O2|-O3] [options]
 ```
 
-For a file input, `build app.luna` writes `app.luna.ll` and `app`. For a package
+`-t native` is the default. For a file input, `build app.luna` writes
+`app.luna.ll` and `app`. For a package
 directory, it writes `<package-id>.ll` and `<package-id>` inside that directory.
 Windows adds `.exe` to the executable.
+
+`luna build <package-directory> -t moon` requires an explicit manifest `kind`
+and emits a self-verified, host-specific `.moon`. `-o` overrides the path;
+otherwise the output is
+`<package-root>/build/<host-target>/<last-package-component>.moon`.
+Applications require exactly one package `main`, libraries require none, and
+standalone sources and native linker/GPU artifact options are rejected. Generic
+recipes may remain in compiler input, but only concrete instances are emitted;
+an exported or entrypoint generic recipe is rejected.
+
+`luna build <package-directory> -t cffi` accepts only a manifest-declared
+library package and requires at least one `export "C" fn`. Ordinary `export fn`,
+applications, package `main`, an empty C export set, and standalone sources are
+rejected. The default output is
+`<package-root>/build/cffi/lib<last-package-component>.so` (`.dylib` on macOS,
+or `<last-package-component>.dll` on Windows) plus a sibling
+`<last-package-component>.h`. `-o` overrides the complete shared-library path;
+the header keeps the package-derived name beside it. Native library builds are
+explicitly rejected until proof-section emission is implemented; they never
+downgrade to an unproved shared library or executable.
 
 Development builds default to their own `libruntime.a` and `clang++`. Installed,
 packaged or cross-environment builds should pass `--runtime-lib` and `--cc`, or
@@ -130,6 +151,8 @@ one line should be placed in a source file and run with `luna run`.
 | `-O0`, `-O2`, `-O3` | `run`, `build` | Select MoonIR and LLVM optimization level. The default is `-O0`. |
 | `--opt O2` | `run`, `build` | Long form of the optimization option; `--opt=O2` is also accepted. |
 | `--link <library>` | `run`, `build` | Load a JIT shared library or add an AOT linker dependency. Repeatable. |
+| `-t native|moon|cffi` | `build` | Select native (default), a host-specific Moon Container, or a C ABI shared library plus header. |
+| `-o <path>` | `build` | Override the native, Moon, or primary CFFI artifact output path. |
 | `--emit-moonir <path>` | `check`, `run`, `build` | Write verified, optimized textual MoonIR. |
 | `--message-format=json` | `check`, `analyze` | Emit the command's versioned JSONL protocol. |
 | `--overlay <document>` | `analyze` | Read one in-memory source replacement from stdin. |

@@ -17,6 +17,16 @@ cmake --build build -j4
 ctest --test-dir build --output-on-failure
 ```
 
+The production pipeline now always seals canonical CFG, so the ordinary CTest
+command above is the canonical regression gate. Finite, statically linked
+runtime contexts and replay-safe multi-shot continuations are positive cases.
+A green matrix means both the supported surface and deferred boundaries match their contracts.
+External plugin contexts/multi-shot callbacks remain outside plugin ABI v1 and
+fail at the unknown-candidate runtime boundary.
+The structured executable-body backend has been deleted. A focused unit test
+also calls codegen directly and requires it to reject an unsealed body with the
+canonical-boundary diagnostic.
+
 Release-candidate builds should also promote project-owned warnings to errors:
 
 ```sh
@@ -27,6 +37,57 @@ cmake --build build --parallel
 Linux CI enables this gate in both the C++17 and C++23 build matrices. It applies only to
 targets owned by the Luna repository, so third-party warnings from LLVM or system headers
 are not misclassified as project regressions.
+
+`luna.moon-container` exercises the M005 untrusted-byte boundary independently
+from frontend lowering. It checks deterministic output, file round trips,
+required and optional sections, magic/version/header integrity, section order,
+compression rejection, SHA-256 corruption detection, and parser resource
+limits. `luna.moon-container-model` covers all eight canonical model sections,
+malformed opcodes/truncation/depth bounds, failure atomicity, and verifier
+handoff. It also runs deterministic raw-bit, truncation, and authenticated
+payload mutations; rejected inputs must not publish partial state, while any
+mutation that remains valid must re-encode byte-for-byte. `luna.moon-container-cli`
+freezes package-only, deterministic `-t moon` behavior. The separate
+`luna.moon-container-oracle` Python parser links no Luna reader code and consumes
+every field of all eight sections, including complete CFG and expression payloads,
+from two real CLI builds. `luna.moonir-canonical` serializes, reloads, and JITs a real
+frontend product to compare behavior. That production fixture contains both a
+generic recipe and its concrete instance, proving that projection drops the
+recipe/unresolved types while retaining executable monomorphized code. It also
+contains an unreachable concrete function and a two-edge call chain, proving
+that dead declarations disappear while transitive callees remain executable.
+Its direct verifier negatives also reject both a missing literal `TypeRef` and
+an integer literal forged with a boolean type.
+
+`luna.cffi-artifact` builds a platform shared library and C header from a real
+library package, then uses the system C compiler in strict C11 mode to compile
+and run an independent consumer. It also requires application, empty-C-export,
+ordinary Luna export, standalone-build, and unproved Native-library cases to
+fail without producing the primary artifact.
+
+Moon Container coverage-guided fuzzing is opt-in and requires Clang/libFuzzer:
+
+```sh
+cmake -S . -B build-fuzz -G Ninja \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DLUNA_ENABLE_FUZZING=ON -DLUNA_STRICT_WARNINGS=ON
+cmake --build build-fuzz --target moon-container-fuzz moon-container-fuzz-corpus
+ctest --test-dir build-fuzz -L fuzz --output-on-failure
+```
+
+The corpus generator preserves coverage-discovered files while refreshing 11
+stable seeds, including a real CLI product and independently encoded framing
+cases. The custom mutator alternates raw mutations with authenticated directory
+and payload mutations, allowing SHA-valid inputs to reach the model decoder.
+For longer local exploration, invoke `moon-container-fuzz` with
+`-max_total_time=<seconds>`, the generated corpus directory, and
+`tests/moon_container_fuzz.dict`.
+
+On the current LLVM 22 shared-library build, Clang ASan reports an
+alloc/dealloc mismatch during LLVM static initialization even for an empty
+fuzzer linked to `libLLVM`. The fuzz CTest disables only that check and retains
+all other ASan/UBSan checks; the separate full sanitizer matrix keeps the
+default alloc/dealloc-mismatch check enabled.
 
 Memory-safety and undefined-behavior gates can be enabled independently:
 

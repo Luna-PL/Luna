@@ -36,12 +36,17 @@ opt-in runtime capabilities:
 
 The 0.3 migration has completed the Sema split, nominal named-type default,
 usage blocks, generic Resource/Drop contracts, and library-owned `Rc`/`Arc`.
-The current implementation phase is converting the single MoonIR in place to
-canonical tables and CFG. That CFG already covers ordinary control flow and a
-growing fused-iterator subset, but it is not yet the sole executable backend
-body. The final Slot/Fragment surface, Moon Container serialization/loading,
-evolution runtime, trusted native proof format, and `-t moon`/`-t cffi`
-artifacts are not implemented release features. Legacy `dynamic` source forms
+The single MoonIR now seals executable function bodies to canonical tables and
+CFG unconditionally. The currently supported surface passes the complete
+56-test gate, including per-element move-only iterator cleanup. Finite linked runtime
+contexts and replay-safe multi-shot continuations now run canonically; persistent
+external-plugin continuation callbacks remain outside plugin ABI v1. Legacy
+structured executable-body codegen has been deleted, and the backend rejects
+unsealed bodies at its boundary. Host-specific Moon Containers now support
+deterministic serialization, atomic verified loading, and
+`luna build <package> -t moon`. `-t cffi` now emits a C ABI shared library and
+header and is gated through a real C consumer. The evolution runtime and trusted
+native proof format remain unimplemented. Legacy `dynamic` source forms
 that remain in the development compiler are migration input, not the 0.3
 phase model or a compatibility promise.
 
@@ -131,13 +136,14 @@ directory containing `luna.package`:
 | `luna check <input>` | Verify source through MoonIR without generating machine code. |
 | `luna analyze <input> --message-format=json` | Emit a semantic tooling snapshot; optionally read one or more source overlays from stdin. |
 | `luna run <input> [-O0\|-O2\|-O3]` | JIT-compile and execute a program. |
-| `luna build <input> [-O0\|-O2\|-O3]` | Emit LLVM IR, link the Runtime ABI, and produce a native executable. |
+| `luna build <input> [-O0\|-O2\|-O3] [-t native\|moon\|cffi]` | Produce the selected native, Moon Container, or CFFI artifact. |
 | `luna repl` | Start the limited Alpha REPL (`=`, `:decl`, single-line statements). |
 
 The driver also exposes explicit linker, runtime, MoonIR, cost-report and GPU target options.
 Runtime backend selection is separate from code-object generation.
-The confirmed 0.3 `-t native|moon|cffi` artifact selector is not yet a driver
-option; current `build` produces the native development artifact only.
+The 0.3 `-t native|moon|cffi` artifact selector is now a driver option. Native
+library builds fail explicitly until proof-section emission is implemented;
+they never downgrade to an unproved artifact.
 See the [compiler command reference](docs/cli.md) for commands, options, environment variables and examples.
 Repository contributors should use the [file and responsibility guide](docs/file_guide.md)
 before adding or moving implementation files.
@@ -163,15 +169,13 @@ See the [testing guide](docs/testing.md) and [heterogeneous-compute guide](docs/
 The immediate work follows the 0.3 completion gates rather than the frozen 0.2
 Alpha roadmap:
 
-1. finish canonical single-layer MoonIR CFG normalization, then make it the
-   sole backend body and delete the structured executable path;
-2. freeze and implement Moon serialization/verification plus the
-   `-t native|moon|cffi` artifact interface;
-3. implement the trusted Luna-native proof boundary and the minimal Moon
+1. converge formal package builds and platform output conventions, completing
+   the Native application/library artifact boundary;
+2. implement the trusted Luna-native proof boundary and the minimal Moon
    staging/activation runtime without adding ordinary-call hot-path cost;
-4. converge Slot/Fragment and runtime query surfaces after their remaining
+3. converge Slot/Fragment and runtime query surfaces after their remaining
    syntax/ordering decisions are frozen;
-5. update formatter, LSP, packaging, benchmarks and release gates against only
+4. update formatter, LSP, packaging, benchmarks and release gates against only
    the final 0.3 semantics.
 
 See the [0.3 implementation priorities](docs/luna_0.3_design.md#9-implementation-priority).

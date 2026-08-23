@@ -1684,6 +1684,14 @@ std::vector<Param> Parser::parseParams() {
         // A parameter type is an optional constraint. If it is omitted, the
         // semantic analyzer creates an inference variable.
         if (match(TokenKind::Colon)) p.type = parseType();
+        if (dynamic_cast<LinearTypeAST*>(p.type.get()) != nullptr) {
+            p.isLinear = true;
+            p.usage = luna::ownership::Usage::Linear;
+            p.hasExplicitUsage = true;
+        } else if (dynamic_cast<AffineTypeAST*>(p.type.get()) != nullptr) {
+            p.usage = luna::ownership::Usage::Affine;
+            p.hasExplicitUsage = true;
+        }
         if (dynamic_cast<RefTypeAST*>(p.type.get())) {
             auto* reference = static_cast<RefTypeAST*>(p.type.get());
             p.relation = reference->isMutable

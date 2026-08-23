@@ -263,6 +263,24 @@ int main(int argc, char* argv[]) {
                 "path analysis did not retain source-file provenance"))
         return 7;
 
+    const std::string manifestKindPath =
+        std::string(argv[1]) +
+        "/tests/fixtures/packages/package_kind_application";
+    auto manifestKind =
+        luna::tooling::AnalysisSnapshot::analyzePath(manifestKindPath);
+    if (!expect(manifestKind.success(), "manifest-kind analysis failed") ||
+        !expect(manifestKind.packageManifest().kind ==
+                    PackageKind::Application,
+                "analysis snapshot did not retain package kind") ||
+        !expect(manifestKind.packageManifest().hostImports.size() == 1 &&
+                    manifestKind.packageManifest().hostImports.at("puts") ==
+                        "org.luna.host.console.write" &&
+                    manifestKind.program()->hostImports.size() == 1,
+                "analysis snapshot did not retain typed host-import policy") ||
+        !expect(!manifestKind.packageRootPath().empty(),
+                "analysis snapshot did not retain package root"))
+        return 15;
+
     const std::string multiModulePath =
         std::string(argv[1]) + "/tests/fixtures/packages/module_headers";
     auto multiModule =

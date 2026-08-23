@@ -45,7 +45,8 @@ Describe behavior already delivered by the compiler but not fully frozen, such a
 
 - only one-hop, concrete-type `From<Source>` is currently supported;
 - kernel data operations currently expose only `i32`;
-- Copy-only closure environments are materialized; non-Copy capture environments remain staged.
+- closure environments materialize Copy captures and explicit Affine/Linear move captures;
+  borrowed captures remain rejected.
 
 Current implementation notes must state limitations and must not present future work as
 delivered capability.

@@ -1,0 +1,5 @@
+package org.luna.fixture.cffi_no_exports;
+
+fn private_answer() -> i32 {
+    return 42;
+}

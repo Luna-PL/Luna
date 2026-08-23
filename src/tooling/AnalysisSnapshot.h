@@ -40,6 +40,8 @@ public:
     const Program* program() const { return mProgram.get(); }
     const SymbolTable* symbolTable() const;
     const PackageGraph& packageGraph() const { return mPackageGraph; }
+    const PackageManifest& packageManifest() const { return mPackageManifest; }
+    const std::string& packageRootPath() const { return mPackageRootPath; }
     const SymbolIndex& symbolIndex() const { return mSymbolIndex; }
     const ReferenceIndex& referenceIndex() const { return mReferenceIndex; }
     const std::vector<diagnostic::Diagnostic>& errors() const {
@@ -55,6 +57,8 @@ private:
     std::unique_ptr<Program> mProgram;
     std::unique_ptr<SemanticAnalyzer> mSemanticAnalyzer;
     PackageGraph mPackageGraph;
+    PackageManifest mPackageManifest;
+    std::string mPackageRootPath;
     SymbolIndex mSymbolIndex;
     ReferenceIndex mReferenceIndex;
     std::vector<diagnostic::Diagnostic> mErrors;

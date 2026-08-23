@@ -6,7 +6,6 @@
 #include <llvm/Passes/PassBuilder.h>
 #include <llvm/Support/raw_ostream.h>
 
-using moon::FragmentDecl;
 using moon::FunctionDecl;
 using moon::ImplDecl;
 
@@ -15,20 +14,8 @@ bool CodeGenerator::generate(moon::Module* program) {
     mTypeMaterializer = std::make_unique<moon::TypeMaterializer>(*program);
     mFunctions.clear();
     mDropCallbacks.clear();
-    mFragments.clear();
-    mSlotDefaults.clear();
-    mApplyScopes.clear();
-    mDynamicApplyScopes.clear();
     mKernelPTX.clear();
     mKernelHSACO.clear();
-    for (auto& decl : program->declarations) {
-        if (auto* fragment = dynamic_cast<FragmentDecl*>(decl.get())) {
-            const std::string key = fragment->generatedSymbolName.empty()
-                ? fragment->name : fragment->generatedSymbolName;
-            mFragments[key] = fragment;
-            if (key == fragment->name) mFragments[fragment->name] = fragment;
-        }
-    }
 
     auto declareFunc = [&](FunctionDecl* f) {
         if (f->isSelector) return;

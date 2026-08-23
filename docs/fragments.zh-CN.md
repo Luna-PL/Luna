@@ -66,8 +66,8 @@ context many replay {
 ```
 
 `context many` is rejected when replay would consume, free, mutably borrow, or
-otherwise invalidate captured linear state. Dynamic runtime selection currently
-accepts only single-shot declarations.
+otherwise invalidate captured linear state. Dynamic runtime selection supports
+the same rule over a finite set of statically linked candidates.
 
 ## Slot contracts
 
@@ -162,4 +162,3 @@ proven lifetime model; exposing the current stack frame as a shared-library
 callback would be unsound. Runtime ABI v1 defines host/module service tables,
 but plugin v1 does not implicitly receive them. A future v2 must accept an
 explicitly authorized module context.
-

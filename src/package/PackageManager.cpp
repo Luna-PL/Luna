@@ -120,9 +120,10 @@ bool parsePackageManifest(const fs::path& path, PackageManifest& manifest,
         if (line.empty()) continue;
         if (line.front() == '[' && line.back() == ']') {
             section = trim(line.substr(1, line.size() - 2));
-            if (section != "package" && section != "dependencies") {
+            if (section != "package" && section != "dependencies" &&
+                section != "host-imports") {
                 manifestError(errors, path, lineNumber, "unknown manifest section '[" + section + "]'",
-                              "supported sections are [package] and [dependencies]");
+                              "supported sections are [package], [dependencies], and [host-imports]");
                 ok = false;
             }
             continue;
@@ -135,16 +136,47 @@ bool parsePackageManifest(const fs::path& path, PackageManifest& manifest,
         if (section == "package") {
             if (key == "id") ok = parseTomlString(value, manifest.id) && ok;
             else if (key == "version") ok = parseTomlString(value, manifest.version) && ok;
+            else if (key == "kind") {
+                std::string kind;
+                if (!parseTomlString(value, kind)) {
+                    ok = false;
+                } else if (kind == "application") {
+                    manifest.kind = PackageKind::Application;
+                } else if (kind == "library") {
+                    manifest.kind = PackageKind::Library;
+                } else {
+                    manifestError(
+                        errors, path, lineNumber,
+                        "unknown package kind '" + kind + "'",
+                        "use kind = \"application\" or kind = \"library\"");
+                    ok = false;
+                }
+            }
             else if (key == "sources") ok = parseTomlStringArray(value, manifest.sources) && ok;
             else {
                 manifestError(errors, path, lineNumber, "unknown [package] key '" + key + "'",
-                              "supported keys are id, version, and sources");
+                              "supported keys are id, version, kind, and sources");
                 ok = false;
             }
         } else if (section == "dependencies") {
             std::string constraint;
             if (!parseTomlString(value, constraint)) ok = false;
             else manifest.dependencies[key] = std::move(constraint);
+        } else if (section == "host-imports") {
+            std::string capability;
+            if (!parseTomlString(value, capability)) {
+                ok = false;
+            } else if (key.empty() || capability.empty()) {
+                manifestError(errors, path, lineNumber,
+                              "host import name and capability must be non-empty",
+                              "map a module-qualified extern declaration to a stable capability ID");
+                ok = false;
+            } else if (!manifest.hostImports.emplace(key, std::move(capability)).second) {
+                manifestError(errors, path, lineNumber,
+                              "duplicate host import '" + key + "'",
+                              "declare each host import exactly once");
+                ok = false;
+            }
         } else {
             manifestError(errors, path, lineNumber, "manifest key appears outside a section",
                           "start with [package]");
@@ -409,6 +441,14 @@ bool PackageManager::load(const PackageRequest& request, LoadedPackage& result,
     result.program = std::make_unique<Program>();
     result.program->isPackage = isDirectory;
     if (hasManifest) result.program->packageName = manifest.id;
+    for (const auto& [localName, capabilityId] : manifest.hostImports) {
+        result.program->hostImports.push_back({});
+        auto& hostImport = result.program->hostImports.back();
+        hostImport.ownerPackageId = manifest.id;
+        hostImport.localName = localName;
+        hostImport.capabilityId = capabilityId;
+        hostImport.sourcePath = manifest.path;
+    }
     std::set<std::string> modules;
     std::unordered_map<std::string, PackageUse> usesByAlias;
 
@@ -615,6 +655,15 @@ bool PackageManager::load(const PackageRequest& request, LoadedPackage& result,
             if (!parsePackageManifest(dependencyRoot / "luna.package",
                                       dependencyManifest, errors))
                 return false;
+            for (const auto& [localName, capabilityId] :
+                 dependencyManifest.hostImports) {
+                result.program->hostImports.push_back({});
+                auto& hostImport = result.program->hostImports.back();
+                hostImport.ownerPackageId = dependencyManifest.id;
+                hostImport.localName = localName;
+                hostImport.capabilityId = capabilityId;
+                hostImport.sourcePath = dependencyManifest.path;
+            }
             std::vector<fs::path> dependencyFiles;
             if (!collectManifestSources(dependencyRoot, dependencyManifest,
                                         dependencyFiles, errors))

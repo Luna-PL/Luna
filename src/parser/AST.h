@@ -674,6 +674,11 @@ struct Program : ASTNode {
         std::string packageId;
         std::string alias;
     };
+    struct HostImport : ASTNode {
+        std::string ownerPackageId;
+        std::string localName;
+        std::string capabilityId;
+    };
     // Canonical package identity uses dot-separated reverse-DNS components.
     // packageName is retained as the field name during the Alpha migration.
     std::string packageName;
@@ -681,6 +686,7 @@ struct Program : ASTNode {
     std::string modulePath;
     std::vector<std::string> sourceModules;
     std::vector<PackageUse> packageUses;
+    std::vector<HostImport> hostImports;
     bool isPackage = false;
     bool hasAnyKernel = false;
     std::vector<std::string> sourceFiles;

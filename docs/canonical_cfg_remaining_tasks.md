@@ -1,10 +1,12 @@
 # Canonical CFG Remaining Tasks & Known Issues
 
-> Snapshot: 2026-08-15, after the Sealer pipeline gate landed.
+> Snapshot: 2026-08-22, after the canonical-only backend and Moon Container
+> concrete-projection boundary landed.
 > All items below are 0.3 item-10 canonical-CFG switchover work.
-> Default path (structured body) remains production; `LUNA_SEAL_CANONICAL=1` gates the canonical path.
+> CompilerPipeline seals canonical CFG unconditionally and the structured
+> executable-body backend has been deleted.
 
-## Sealer coverage: 91/93 valid programs pass (98%)
+## Sealer coverage: complete registered 55-test gate passes
 
 ## Remaining tasks (by priority)
 
@@ -59,89 +61,84 @@
 
 ### P1 — Feature gaps (designated later slices)
 
-4. **slot/fragment canonicalization** — PARTIALLY RESOLVED (single-shot interceptor).
-   The canonical CFG now seals a dynamic single-shot interceptor apply: each
-   candidate fragment body is cloned into its own Fragment region, the runtime
-   selects among them via `rt_dynamic_fragment_select` /
-   `rt_dynamic_fragment_matches`, matched interceptors forward to a shared
-   Continuation region, and an unknown runtime name calls
-   `rt_dynamic_fragment_report_unknown_and_abort`. The dynamic apply scope
-   (`mDynamicApplyScopes`) tracks candidate sets; `lowerDynamicSlotInvoke`
-   builds the dispatch graph. Runtime context and multi-shot slot composition
-   remain fail-closed with a clear NP004 diagnostic. The
-   `moonir_canonical_test` runtime-boundary test was updated: context/multi-
-   shot is still rejected, and a new positive test verifies the interceptor
-   path seals with 2 Fragment + 1 Continuation regions.
-   **Remaining**: external_fragment_dispatch (uses `runtime interceptor` +
-   external plugin ABI), dynamic_fragments (uses `dynamic slot context` with
-   `resume()` — NP004 deferred), examples/fragments (multi-shot `context
-   many` — NP004 deferred). Gated on TBD-SF006 for the remaining surface.
+4. **slot/fragment canonicalization** — RESOLVED for the linked 0.3 surface.
+   Dynamic interceptor and context applies select from finite, type-checked,
+   statically linked candidates through `rt_dynamic_fragment_select` /
+   `rt_dynamic_fragment_matches`. Interceptors forward to one shared
+   Continuation region; each context `resume()` clones an independent region,
+   including replay-safe multi-shot contexts. Statement-form apply is scoped
+   alongside lexical bindings. Unknown context/many candidates abort instead
+   of entering the interceptor-only external plugin ABI v1. Positive coverage
+   includes `fragments`, `dynamic_fragments`, `loop_plugins`, dynamic
+   multi-shot selection, replay-unsafe ownership rejection, and the full
+   showcase under canonical JIT/AOT.
+   **Remaining beyond plugin ABI v1**: a persistent continuation callback ABI
+   for external plugin contexts/many remains NP004 and requires a separate
+   lifetime/authorization design.
 
-5. **materialized recipe full state** — RESOLVED. Both iterator_materialized_move_only and
-   iterator_move_only_array fail on multiple design-gated boundaries:
-   - "move-only consuming arrays require projected canonical cleanup state"
-   - "move-only iterator terminal requires projected source cleanup state"
-   - "cleanup for '$for.recipe.*' has no canonical local"
-   These require implementing guarded array cleanup state (design doc
-   §784-793) in the canonical CFG, which is a dedicated slice.
-   **Partial fix**: `lowerCleanupObligations` now skips materialized
-   iterator binding names, fixing `return_before_consuming`.
+5. **materialized recipe full state** — RESOLVED. An owning materialized
+   move-only array now installs projected guarded cleanup rows when the recipe
+   is created. Unconsumed and conditionally abandoned recipes therefore clean
+   every element on early return. Consumption transfers the outer source into
+   loop-local guarded state, so the old rows are deactivated before the new
+   rows become active. Guarded elements execute in source-index order while
+   ordinary locals retain reverse declaration cleanup order.
 
-6. **move-only iterator terminals** — for_each_move_only, fold_move_only require projected source cleanup state.
+6. **move-only iterator terminals** — RESOLVED. `for_each`, affine `fold`,
+   `collect`, direct terminals and materialized terminals transfer each
+   move-only item explicitly and preserve source-tail cleanup on exhaustion,
+   rejection and early return.
 
-7. **heterogeneous compute** — gpu intrinsics now resolve, but heterogeneous example programs fail on kernel/launch CFG construction.
+7. **heterogeneous compute** — RESOLVED for the current simulator/CUDA/ROCm
+   surface. Canonical codegen handles kernel locals, launch, moved events and
+   `AwaitStmt`; hardware execution remains an opt-in platform gate.
 
-8. **reflection/compile-time** — compile_time, type_relations, type_domains_reflection now pass. static_declaration_reflection still fails: `declaration_of` now sets `call->resultType`, but `let known = declaration_of(...)` creates a DeclarationRef-typed binding that appears in MoonIR as an IdentifierExpr with no local or declaration ref. The DeclarationRef value should be compile-time erased (not appear in MoonIR at all). This requires the DeclarationRef downgrade design change (confirmed by project owner: downgrade from compiler-intrinsic to stdlib/core type that only exists at compile time). **Partially done**: `declaration_of`, `declaration_id`, `declaration_signature`, `metadata`, and `declaration_has_metadata` now set `call->resultType`.
+8. **reflection/compile-time** — RESOLVED for the current surface.
+   Compile-time-valued reflection calls fold before sealed runtime IR, so
+   `DeclarationRef` values do not leak into canonical locals.
 
 ### P2 — Cleanup
 
-9. **Delete structured-body path** — only after all P0/P1 items close and the full 51-test suite passes under `LUNA_SEAL_CANONICAL=1`.
+9. **Delete structured-body codegen implementation** — RESOLVED. Function,
+   lambda, and closure codegen require exclusive canonical CFG bodies. The
+   statement/continuation/slot/fragment consumers, their build entries, and
+   their private fragment/continuation state have been removed. Direct backend
+   coverage rejects unsealed structured input.
 
-10. **Remove env-var gate** — flip default to sealed, remove the `LUNA_SEAL_CANONICAL` check.
+10. **Remove env-var gate** — RESOLVED. CompilerPipeline always seals and
+    verifies canonical CFG before optimization.
 
-   **Gate readiness (2026-08-18):** Running the 51-test CTest suite under
-   `LUNA_SEAL_CANONICAL=1` produces 4 failures:
-   - **NP004-deferred features (2)**: semantic-regressions (fragments
-     multi-shot), full-showcase (runtime context) — expect NP004 features
-   - **Move-only iterator cleanup state (2)**: core-surface (main: jump edge
-     cleanup state + ownership state divergence after into_iter loops),
-     iterator-materialized-move-only-aot (JIT output divergence — move-only
-     iterator element ordering) — require projected canonical cleanup state
-     for move-only iterators (design doc §784-793, P1 #5/#6)
+   **Switchover evidence (2026-08-22):** The complete 55-test suite passes on
+   the unconditional canonical pipeline, including parallel execution. The move-only
+   materialized iterator test now proves both JIT/AOT output parity and
+   ascending projected-element cleanup. `core-surface` also seals cleanly.
 
-   The into_iter parameter usage sealer gap was fixed by strengthening Owned
-   parameter usage to the frozen type's resource requirement. The
-   external-fragment-dispatch test was fixed by adding the external v1 plugin
-   fallback. The 5 IR-pattern-check failures were resolved by guarding
-   structured-path IR pattern checks. std-io-smoke was fixed by accepting
-   string/cstr coercion in the canonical verifier. The gate cannot be
-   flipped to default-on until these 4 tests pass. The output-parity scan
-   (0 mismatches) confirms the canonical codegen is correct for all programs
-   it can seal.
+   Finite linked runtime contexts and replay-safe multi-shot fragments now run
+   under both paths. NP004 is narrowed to persistent continuation callbacks
+   crossing the external plugin boundary; plugin ABI v1 remains deliberately
+   interceptor-only.
 
-   The 5 IR-pattern-check failures (iterator-move-only-aot,
-   iterator-materialized-aot, result-extended-aot, optimization-pipeline,
-   structured-cps-abi) were resolved by guarding structured-path IR pattern
-   checks with the `LUNA_SEAL_CANONICAL` env-var test. std-io-smoke was
-   fixed by accepting string/cstr coercion in the canonical verifier's
-   call-argument check. The gate cannot be flipped to default-on until these
-   5 tests pass. The output-parity scan (0 mismatches) confirms the canonical
-   codegen is correct for all programs it can seal.
+### Canonical-path and container status (2026-08-22)
 
-### Canonical-path codegen status (2026-08-18 final scan)
-
-A full scan of 94 valid fixtures under `LUNA_SEAL_CANONICAL=1` shows:
-- 41 fully successful runs (exit 0)
-- 48 seal-OK with nonzero exit (by-design: panic, error codes, etc.)
-- 2 codegen/seal errors: fragments (NP004 multi-shot), dynamic_fragments
-  (NP004 context) — both design-deferred, not bugs
-- 3 crashes: panic, result_unwrap_panic, reflection_index_out_of_range —
-  all by-design aborts (correct behavior)
-
-**Output parity: 0 mismatches.** All 88 fixtures that produce a clean exit
-under both paths produce identical results. The remaining 6 are 2 NP004-
-deferred sealer rejections (canonical-only) and 3 by-design aborts plus 1
-NP004 that also aborts under structured.
+- Full registered CTest: 56/56 on the unconditional canonical pipeline.
+- Strict-warning build: green.
+- Production canonical ASan/UBSan suite: 56/56 green after the unconditional
+  switchover, linked context/multi-shot slice, and CFFI artifact boundary.
+- Runtime contexts/multi-shot: executable canonical successes for finite
+  linked candidates; external plugin callbacks remain outside ABI v1.
+- Structured executable-body consumer: deleted; item 10's one-way backend
+  switchover is complete. Item 11's eight-section serializer, bounded parser,
+  concrete reachability projection, atomic verified loader, deterministic
+  mutation gate, independent Python oracle, and persistent coverage-guided
+  fuzz corpus/harness are implemented. Item 11 is closed.
+- Item 12 target-boundary slice: `-t cffi` now accepts only manifest-declared
+  library packages with a non-empty, exclusively explicit `export "C" fn`
+  surface. It emits a platform shared library and a sealed-MoonIR-derived C
+  header; a strict C11 consumer compiles, links, and executes against the real
+  symbols. Application, standalone, ordinary Luna export, empty export, and
+  Native-library downgrade cases fail closed. Native library proof emission,
+  the corresponding loader, formal-package-only Native build enforcement, and
+  final default Native output migration remain open; item 12 is not closed.
 
 The canonical codegen now resolves all local-reference paths through the
 LocalId-indexed tables (mCanonicalLocals / mCanonicalLocalTypes): generateCall
@@ -149,9 +146,10 @@ LocalId-indexed tables (mCanonicalLocals / mCanonicalLocalTypes): generateCall
 Array and Slice sources, Reference/RawPointer/DeviceBuffer locals),
 generateAddrOf, generateAssign (FieldAccessExpr record field assignment),
 and generateControlFlowBody (closure env parameter loading, AwaitStmt). The
-structured-path name maps (mLocals / mLocalTypes) remain as the primary
-lookup for structured-body codegen; the canonical path falls back to the
-LocalId-indexed tables when the name maps have no entry.
+backend entry accepts only canonical CFG bodies. Some shared expression and
+iterator helpers still carry name-keyed fallback storage internally; it is not
+a second executable-body path. Removing that compatibility state requires a
+separate proof that every post-CFG expression form has a LocalId-native lowering.
 
 ## Known issues (non-security, design-boundary)
 
@@ -162,8 +160,6 @@ LocalId-indexed tables when the name maps have no entry.
   and `hoistOrderedOperand` are now unified into a single shared function
   `moon::isCompilerIntrinsicName()` declared in `MoonIR.h` and defined in
   `MoonIR.cpp`.
-- **env-var gate TOCTOU**: `std::getenv` is called once and the result is checked immediately. No security impact (compiler flag, not auth), but a race could theoretically flip the value between read and use. Acceptable for a development gate.
-
 ## Completed slices (this session)
 
 1. Repository hygiene (.gitignore for DSH tool dirs)
@@ -175,4 +171,6 @@ LocalId-indexed tables when the name maps have no entry.
 7. Iterator terminal closures — canonical CFG (for_each/fold accept Closure)
 8. String/CStr cleanup crash fix (pre-existing defect)
 9. File-guide cleanup (remove stale REFACTOR_SPLIT_PLAN.md)
-10. Sealer pipeline gate (LUNA_SEAL_CANONICAL env var in CompilerPipeline)
+10. Sealer pipeline gate, followed by unconditional canonical switchover
+11. Moon Container serialization, independent oracle, mutation gate, and fuzzing
+12. CFFI shared-library/header slice with a real C consumer and fail-closed target matrix

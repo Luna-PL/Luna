@@ -50,12 +50,11 @@ if(NOT build_result EQUAL 0 OR
 endif()
 
 file(READ "${ir_path}" generated_ir)
-foreach(expected_ir IN ITEMS
-        "pending.iterator.source.flags"
-        "pending.iterator.index"
-        "iter.item.initialized"
-        "store i1 false"
-        "pending.iterator.source.drop.2")
+set(expected_ir_items
+    "$recipe.pending.next-unread"
+    "cleanup.guard"
+    "guarded.cursor.next")
+foreach(expected_ir IN LISTS expected_ir_items)
     string(FIND "${generated_ir}" "${expected_ir}" expected_ir_at)
     if(expected_ir_at EQUAL -1)
         file(REMOVE "${ir_path}" "${executable_path}")

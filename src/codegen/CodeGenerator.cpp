@@ -31,14 +31,6 @@ llvm::Function* CodeGenerator::resolveFunction(
     return mModule ? mModule->getFunction(declaration->linkageName) : nullptr;
 }
 
-moon::FragmentDecl* CodeGenerator::resolveFragment(
-    const moon::DeclarationRef& reference) const {
-    const auto* declaration = resolveDeclaration(reference);
-    if (!declaration) return nullptr;
-    auto found = mFragments.find(declaration->linkageName);
-    return found == mFragments.end() ? nullptr : found->second;
-}
-
 TypePtr CodeGenerator::allocationTypeForExpr(moon::Expr* expr) {
     if (!expr) return nullptr;
     if (auto* move = dynamic_cast<moon::MoveExpr*>(expr))

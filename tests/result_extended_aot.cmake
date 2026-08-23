@@ -49,17 +49,8 @@ function(check_result_fixture stem expected_output expected_ir)
             "${stem} AOT build failed.\n${build_output}\n${build_error}")
     endif()
     file(READ "${ir_path}" generated_ir)
-    # The structured-body path produces specific IR labels (e.g.
-    # try.converted_error). The canonical CFG path uses cfg.N blocks.
-    # Skip IR pattern checks when the canonical gate is active.
-    if(NOT DEFINED ENV{LUNA_SEAL_CANONICAL} OR NOT "$ENV{LUNA_SEAL_CANONICAL}" STREQUAL "1")
-    string(FIND "${generated_ir}" "${expected_ir}" expected_ir_at)
-    if(expected_ir_at EQUAL -1)
-        file(REMOVE "${ir_path}" "${executable_path}")
-        message(FATAL_ERROR
-            "${stem} AOT IR does not contain '${expected_ir}'")
-    endif()
-    endif()
+    # Structured-only block labels are intentionally not part of the sole
+    # canonical CFG ABI; runtime behavior below is the stable contract.
     if(ARGC GREATER 3)
         string(FIND "${generated_ir}" "${ARGV3}" forbidden_ir_at)
         if(NOT forbidden_ir_at EQUAL -1)

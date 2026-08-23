@@ -86,6 +86,7 @@ private:
         TypeRef itemType;
         std::vector<IteratorRecipeStep> steps;
         bool materialized = false;
+        std::string materializedName;
         bool materializedOwnsSource = false;
         LocalId materializedSource;
         LocalId materializedIndex;
@@ -107,6 +108,8 @@ private:
         LocalId limit;
         TypeRef itemType;
         bool ownsSource = false;
+        LocalId nextUnread;
+        std::vector<CleanupId> sourceTailCleanups;
         std::vector<MaterializedIteratorStep> steps;
     };
 
@@ -246,6 +249,8 @@ private:
         mMaterializedIterators;
     std::vector<std::unordered_map<std::string, DeclarationRef>>
         mSlotDefaults;
+    std::vector<std::unordered_map<std::string, std::vector<DeclarationRef>>>
+        mLexicalDynamicApplies;
     std::vector<std::unordered_map<std::string, DeclarationRef>>
         mStaticApplyScopes;
     // Dynamic apply scopes: slot name -> candidate fragment DeclarationRefs.

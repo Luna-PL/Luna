@@ -1,0 +1,17 @@
+// A runtime-selected multi-shot context cannot replay a continuation that
+// consumes the same captured owner more than once.
+runtime context many replay(tag: i32) {
+    resume();
+    resume();
+}
+
+fn main() -> i32 {
+    let buffer = new i32(1);
+    dynamic slot context many cleanup(tag: i32);
+    dynamic apply cleanup(replay) {
+        cleanup(0) {
+            free buffer;
+        }
+    }
+    return 0;
+}

@@ -75,14 +75,29 @@ luna run <文件或package> [-O0|-O2|-O3] [选项]
 `run` 将验证后的 MoonIR 降级到 LLVM，使用 JIT 编译并执行 `main`。驱动进程的
 退出状态就是 Luna 程序的退出状态。
 
-### AOT 构建
+### 产物构建
 
 ```sh
 luna build <文件或package> [-O0|-O2|-O3] [选项]
 ```
 
-文件输入 `build app.luna` 会生成 `app.luna.ll` 和 `app`；package 目录会在目录
+`-t native` 是默认目标。文件输入 `build app.luna` 会生成 `app.luna.ll` 和 `app`；package 目录会在目录
 中生成 `<package-id>.ll` 和 `<package-id>`。Windows 可执行文件带 `.exe` 后缀。
+
+`luna build <package目录> -t moon` 要求 manifest 显式声明 `kind`，并生成经过
+自验证的 host-specific `.moon`。`-o` 可覆盖路径；否则输出为
+`<package-root>/build/<host-target>/<package末段>.moon`。application 必须恰有一个
+package `main`，library 不得有 `main`；standalone source 和 native linker/GPU artifact
+选项会被拒绝。编译器输入可保留 generic recipe，但容器只写入 concrete
+instance；作为 export 或 entrypoint 的 generic recipe 会被拒绝。
+
+`luna build <package目录> -t cffi` 只接受 manifest 中声明为 library 的 package，
+并要求至少一个 `export "C" fn`。普通 `export fn`、application、package `main`、零 C
+导出和 standalone source 都会被拒绝。默认输出为
+`<package-root>/build/cffi/lib<package末段>.so`（macOS 为 `.dylib`，Windows 为
+`<package末段>.dll`）以及同目录的 `<package末段>.h`；`-o` 覆盖共享库完整路径，
+头文件仍以 package 末段命名并写在共享库旁。当前 Native library 会在证明段发射完成前
+明确拒绝，不能降级为无证明共享库或 executable。
 
 开发构建默认使用自身的 `libruntime.a` 和 `clang++`。安装、打包或交叉环境应该
 传入 `--runtime-lib` 和 `--cc`，也可设置 `LUNA_RUNTIME_LIB` 与 `LUNA_CXX`。
@@ -122,6 +137,8 @@ print(7)
 | `-O0`, `-O2`, `-O3` | `run`, `build` | 选择 MoonIR/LLVM 优化级别，默认 `-O0`。 |
 | `--opt O2` | `run`, `build` | 优化级别长写法，也支持 `--opt=O2`。 |
 | `--link <库>` | `run`, `build` | 为 JIT 加载共享库，或增加 AOT 链接依赖；可重复。 |
+| `-t native|moon|cffi` | `build` | 选择 native（默认）、host-specific Moon Container 或 C ABI shared library + header。 |
+| `-o <路径>` | `build` | 覆盖 native、Moon 或 CFFI 主产物输出路径。 |
 | `--emit-moonir <路径>` | `check`, `run`, `build` | 输出经过验证和优化的文本 MoonIR。 |
 | `--message-format=json` | `check`、`analyze` | 输出对应命令的 versioned JSONL 协议。 |
 | `--overlay <文档>` | `analyze` | 从 stdin 读取一个内存源码替换。 |

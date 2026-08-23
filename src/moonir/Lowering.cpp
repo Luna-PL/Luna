@@ -7,6 +7,7 @@
 #include "../sema/SymbolTable.h"
 
 #include <algorithm>
+#include <tuple>
 
 namespace moon {
 
@@ -147,6 +148,7 @@ std::unique_ptr<Module> LunaLowerer::lower(const Program& program,
     }
     module->sealTypeTable();
     resolveDeclarationReferences();
+    buildModuleInterfaces();
     mModule = nullptr;
     mSymbols = nullptr;
     mProgram = nullptr;
@@ -1333,6 +1335,112 @@ void LunaLowerer::resolveDeclarationReferences() {
     for (auto& declaration : mModule->declarations)
         if (declaration) finalizeExecutable(
             finalizeExecutable, *declaration);
+}
+
+void LunaLowerer::buildModuleInterfaces() {
+    if (!mModule || !mProgram) return;
+    mModule->imports.clear();
+    mModule->exports.clear();
+
+    for (const auto& use : mProgram->packageUses) {
+        ImportRecord record;
+        record.kind = ImportKind::Package;
+        record.ownerPackageId = use.ownerPackageId.empty()
+            ? mModule->name : use.ownerPackageId;
+        record.packageId = use.packageId;
+        record.alias = use.alias;
+        record.location = locationOf(&use);
+        mModule->imports.push_back(std::move(record));
+    }
+
+    const auto visitExecutable = [&](auto&& self, moon::Decl& declaration,
+                                     const auto& operation) -> void {
+        operation(declaration);
+        if (auto* implementation =
+                dynamic_cast<moon::ImplDecl*>(&declaration))
+            for (auto& method : implementation->methods)
+                if (method) self(self, *method, operation);
+    };
+
+    for (const auto& host : mProgram->hostImports) {
+        moon::FunctionDecl* match = nullptr;
+        size_t matchCount = 0;
+        for (auto& declaration : mModule->declarations) {
+            if (!declaration) continue;
+            visitExecutable(visitExecutable, *declaration,
+                [&](moon::Decl& candidate) {
+                    auto* function = dynamic_cast<moon::FunctionDecl*>(&candidate);
+                    if (!function || function->packageId != host.ownerPackageId)
+                        return;
+                    const std::string localName = function->modulePath.empty()
+                        ? function->name
+                        : function->modulePath + "::" + function->name;
+                    if (localName == host.localName) {
+                        match = function;
+                        ++matchCount;
+                    }
+                });
+        }
+        if (matchCount != 1 || !match || !match->isExtern || match->abi != "C") {
+            error(&host, "host import '" + host.localName +
+                "' does not identify one extern \"C\" function");
+            continue;
+        }
+        const auto* declaration = mModule->findDeclaration(match->symbolId);
+        if (!declaration) {
+            error(&host, "host import '" + host.localName +
+                "' has no canonical declaration record");
+            continue;
+        }
+        ImportRecord record;
+        record.kind = ImportKind::Host;
+        record.ownerPackageId = host.ownerPackageId;
+        record.localName = host.localName;
+        record.capabilityId = host.capabilityId;
+        record.linkSymbol = match->linkName.empty()
+            ? match->generatedSymbolName : match->linkName;
+        record.abi = match->abi;
+        record.declaration = {declaration->symbolId, declaration->contractId};
+        record.type = declaration->type;
+        record.location = locationOf(&host);
+        mModule->imports.push_back(std::move(record));
+    }
+
+    for (auto& executable : mModule->declarations) {
+        if (!executable || !executable->isExported ||
+            executable->packageId != mModule->name)
+            continue;
+        const auto* declaration = mModule->findDeclaration(executable->symbolId);
+        if (!declaration) {
+            error(nullptr, "exported declaration '" + executable->name +
+                "' has no canonical declaration record");
+            continue;
+        }
+        ExportRecord record;
+        record.name = executable->generatedSymbolName.empty()
+            ? executable->name : executable->generatedSymbolName;
+        record.declaration = {declaration->symbolId, declaration->contractId};
+        record.type = declaration->type;
+        record.kind = declaration->kind;
+        if (const auto* function =
+                dynamic_cast<const moon::FunctionDecl*>(executable.get()))
+            record.abi = function->abi;
+        record.location = executable->location;
+        mModule->exports.push_back(std::move(record));
+    }
+
+    std::sort(mModule->imports.begin(), mModule->imports.end(),
+              [](const ImportRecord& left, const ImportRecord& right) {
+        return std::tie(left.kind, left.ownerPackageId, left.localName,
+                        left.packageId, left.alias) <
+               std::tie(right.kind, right.ownerPackageId, right.localName,
+                        right.packageId, right.alias);
+    });
+    std::sort(mModule->exports.begin(), mModule->exports.end(),
+              [](const ExportRecord& left, const ExportRecord& right) {
+        return std::tie(left.name, left.declaration.symbol.value) <
+               std::tie(right.name, right.declaration.symbol.value);
+    });
 }
 
 void LunaLowerer::error(const ASTNode* node, const std::string& message) {
