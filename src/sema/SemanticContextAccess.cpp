@@ -46,6 +46,7 @@ BodyContextAccess::BodyContextAccess(SemanticContext& context)
       mMetadataSchemas(context.mMetadataSchemas),
       mProgram(context.mProgram),
       mSawReturn(context.mSawReturn),
+      mSymbolCatalog(context.mSymbolCatalog),
       mSymTable(context.mSymTable),
       mTraitMethods(context.mTraitMethods),
       mTraits(context.mTraits) {}
@@ -131,11 +132,11 @@ BodyContextAccess::evaluateConstraintExpr(
 
 std::optional<std::string> BodyContextAccess::evaluateSelectorFunction(
     FunctionDecl* function,
-    const luna::selector::DeclarationView& view,
+    const luna::selector::SymbolSet& symbols,
     const std::vector<ConstValue>& arguments,
     std::string& failure) {
     return mOwner.evaluateSelectorFunction(
-        function, view, arguments, failure);
+        function, symbols, arguments, failure);
 }
 
 void BodyContextAccess::exitConstScope() {
@@ -394,7 +395,7 @@ std::string TypeContextAccess::typeIdentity(const TypePtr& type) const {
 CompileTimeContextAccess::CompileTimeContextAccess(
     SemanticContext& context)
     : mOwner(context),
-      mActiveSelectorView(context.mActiveSelectorView),
+      mActiveSelectorSet(context.mActiveSelectorSet),
       mConcepts(context.mConcepts),
       mConstEvaluationDepth(context.mConstEvaluationDepth),
       mConstScopes(context.mConstScopes),

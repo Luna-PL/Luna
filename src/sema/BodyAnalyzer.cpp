@@ -133,6 +133,12 @@ void BodyAnalyzer::analyzeFunction(FunctionDecl* decl) {
     mContext.mCurrentReturnType = decl->inferredReturnType
         ? decl->inferredReturnType
         : mContext.declaredType(decl->returnType.get(), typeBindings);
+    if (mContext.resolved(mContext.mCurrentReturnType)->kind ==
+        TypeKind::SymbolSet)
+        mContext.error("function '" + decl->name +
+              "' cannot return compiler-only symbol_set; consume it with "
+              ".one() inside the declaring function",
+              decl->line, decl->col);
 
     if (decl->isKernel) {
         if (decl->isExtern || decl->isConstexpr || !decl->abi.empty())
@@ -158,6 +164,10 @@ void BodyAnalyzer::analyzeFunction(FunctionDecl* decl) {
         info.type = p.inferredType
             ? p.inferredType
             : mContext.declaredType(p.type.get(), typeBindings);
+        if (mContext.resolved(info.type)->kind == TypeKind::SymbolSet)
+            mContext.error("function parameter '" + p.name +
+                  "' cannot carry compiler-only symbol_set across a call boundary",
+                  p.nameLine, p.nameCol);
         const bool explicitUsage = p.hasExplicitUsage || p.isLinear ||
             dynamic_cast<LinearTypeAST*>(p.type.get()) != nullptr ||
             dynamic_cast<AffineTypeAST*>(p.type.get()) != nullptr;
@@ -1007,9 +1017,22 @@ TypePtr BodyAnalyzer::analyzeLetStmt(LetStmt* ls, TypePtr expectedReturn) {
         info.isHeapAllocated = isHeap || typeRequiresCleanup(declaredType);
         if (auto* reflected =
                 dynamic_cast<CallExpr*>(ls->initializer.get());
-            reflected && !reflected->compileTimeDeclarationId.empty())
-            info.compileTimeDeclarationId =
-                reflected->compileTimeDeclarationId;
+            reflected) {
+            if (!reflected->compileTimeDeclarationId.empty())
+                info.compileTimeDeclarationId =
+                    reflected->compileTimeDeclarationId;
+            if (!reflected->resolvedSymbolId.empty())
+                info.compileTimeDeclarationSymbolId =
+                    reflected->resolvedSymbolId;
+            if (!reflected->resolvedContractId.empty())
+                info.compileTimeDeclarationContractId =
+                    reflected->resolvedContractId;
+            if (reflected->isCompileTimeSymbolSet) {
+                info.isCompileTimeSymbolSet = true;
+                info.compileTimeSymbolSetDeclarationIds =
+                    reflected->compileTimeSymbolSetDeclarationIds;
+            }
+        }
         auto finalType = mContext.resolved(declaredType);
         ls->inferredType = finalType;
         ls->materializesIteratorRecipe = false;
@@ -2283,7 +2306,6 @@ TypePtr BodyAnalyzer::analyzeSelect(SelectExpr* selection) {
 
     if (!selection->isDynamic) {
         TypePtr callableType;
-        std::vector<luna::selector::Candidate> candidates;
         for (auto* candidate : targetFamily->second) {
             TypeVec parameters;
             std::vector<luna::ownership::Contract> contracts;
@@ -2302,36 +2324,48 @@ TypePtr BodyAnalyzer::analyzeSelect(SelectExpr* selection) {
                       selection->line, selection->col);
                 return TyUnknown;
             }
-
-            luna::selector::Candidate viewCandidate;
-            viewCandidate.symbolName = candidate->generatedSymbolName.empty()
-                ? candidate->name : candidate->generatedSymbolName;
-            viewCandidate.declarationId = nominalDeclarationIdentity(
-                mContext.mProgram, "fn", viewCandidate.symbolName, candidate);
-            viewCandidate.familyId = selection->resolvedFamilyId;
-            viewCandidate.callableType = candidateType;
-            for (const auto& attachment : candidate->metadata) {
-                luna::selector::Metadata instance;
-                instance.schemaId = attachment.resolvedSchemaId;
-                instance.values = attachment.evaluatedArguments;
-                if (attachment.retention == RetentionKind::Runtime)
-                    instance.retention = luna::selector::Retention::Runtime;
-                else if (attachment.retention == RetentionKind::Dynamic)
-                    instance.retention = luna::selector::Retention::Dynamic;
-                viewCandidate.metadata.push_back(std::move(instance));
-            }
-            candidates.push_back(std::move(viewCandidate));
         }
 
-        luna::selector::DeclarationView view(std::move(candidates));
+        if (!mContext.mSymbolCatalog || !mContext.mSymbolCatalog->valid()) {
+            const std::string reason = mContext.mSymbolCatalog
+                ? mContext.mSymbolCatalog->error()
+                : "catalog snapshot is unavailable";
+            mContext.error("selector catalog is invalid: " + reason,
+                  selection->line, selection->col);
+            return TyUnknown;
+        }
+        luna::selector::SymbolQuery query;
+        query.phase = luna::selector::QueryPhase::CompileTime;
+        query.kind = luna::selector::CatalogSymbolKind::Function;
+        query.familyId = luna::identity::symbolIdFromCanonical(
+            selection->resolvedFamilyId);
+        query.typeId = luna::types::typeId(callableType);
+        auto symbolSet = mContext.mSymbolCatalog->query(query);
+        if (!symbolSet.valid()) {
+            mContext.error("selector catalog for family '" +
+                  selection->targetName + "' is invalid: " +
+                  symbolSet.error(), selection->line, selection->col);
+            return TyUnknown;
+        }
+        if (symbolSet.size() != targetFamily->second.size()) {
+            mContext.error(
+                "declaration family '" + selection->targetName +
+                "' does not have a complete stable signature projection in "
+                "the compile-time Symbol Catalog; use explicit resolved "
+                "parameter and return types for static selection",
+                selection->line, selection->col);
+            return TyUnknown;
+        }
         std::string evaluationFailure;
         auto selectedId = mContext.evaluateSelectorFunction(
-            selectorFunction, view, staticSelectorArguments, evaluationFailure);
-        luna::selector::Engine engine;
-        auto result = engine.validate(
-            view, selectedId ? std::vector<std::string>{*selectedId}
-                             : std::vector<std::string>{});
-        if (!selectedId || !result.success()) {
+            selectorFunction, symbolSet, staticSelectorArguments,
+            evaluationFailure);
+        std::vector<luna::identity::SymbolId> selectedSymbols;
+        if (selectedId)
+            selectedSymbols.push_back(
+                luna::identity::symbolIdFromCanonical(*selectedId));
+        auto result = symbolSet.select(selectedSymbols).one();
+        if (!selectedId || !result.oneSucceeded()) {
             const std::string reason = !evaluationFailure.empty()
                 ? evaluationFailure : result.message;
             mContext.error("selector '" + selection->selectorName +
@@ -2340,6 +2374,8 @@ TypePtr BodyAnalyzer::analyzeSelect(SelectExpr* selection) {
             return TyUnknown;
         }
         selection->resolvedDeclarationId = result.selected->declarationId;
+        selection->resolvedSymbolId = result.selected->symbolId;
+        selection->resolvedContractId = result.selected->contractId;
         selection->resolvedSymbolName = result.selected->symbolName;
         selection->selectedType = callableType;
         selectorFunction->isSelector = true;
@@ -2572,6 +2608,150 @@ TypePtr BodyAnalyzer::analyzeSelect(SelectExpr* selection) {
 
 
 TypePtr BodyAnalyzer::analyzeIntrinsicCall(CallExpr* call, IdentifierExpr* id) {
+        if (id->name == "symbols") {
+            if (call->args.size() != 1) {
+                mContext.error("symbols expects exactly one declaration family",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            auto* familyName =
+                dynamic_cast<IdentifierExpr*>(call->args.front().get());
+            if (!familyName) {
+                mContext.error("symbols requires a statically named declaration family",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            auto family = mContext.mFunctionFamilies.find(
+                mContext.sourceDeclarationKey(familyName->name));
+            if (family == mContext.mFunctionFamilies.end() ||
+                family->second.empty()) {
+                mContext.error("unknown declaration family '" +
+                      familyName->name + "'", call->line, call->col);
+                return TyUnknown;
+            }
+            TypePtr requested;
+            if (!call->typeArgASTs.empty()) {
+                if (call->typeArgASTs.size() != 1) {
+                    mContext.error("symbols accepts at most one declaration type argument",
+                          call->line, call->col);
+                    return TyUnknown;
+                }
+                requested = mContext.resolved(mContext.resolveTypeAST(
+                    call->typeArgASTs.front().get(), {}));
+                if (requested->kind != TypeKind::Function) {
+                    mContext.error("symbols type argument must be a callable type",
+                          call->line, call->col);
+                    return TyUnknown;
+                }
+            }
+            TypePtr callableType;
+            bool skippedUnspecializedGeneric = false;
+            for (auto* candidate : family->second) {
+                if (!candidate->typeParams.empty()) {
+                    skippedUnspecializedGeneric = true;
+                    continue;
+                }
+                TypeVec parameters;
+                std::vector<luna::ownership::Contract> contracts;
+                for (const auto& parameter : candidate->params) {
+                    parameters.push_back(
+                        mContext.resolved(parameter.inferredType));
+                    contracts.push_back(
+                        {parameter.relation, parameter.usage});
+                }
+                auto candidateType = Type::makeFunction(
+                    std::move(parameters),
+                    mContext.resolved(candidate->inferredReturnType),
+                    std::move(contracts),
+                    {luna::ownership::Relation::Owned,
+                     candidate->returnUsage});
+                if (requested &&
+                    !luna::types::sameType(requested, candidateType))
+                    continue;
+                if (!callableType) callableType = candidateType;
+                else if (!luna::types::sameType(
+                             callableType, candidateType)) {
+                    mContext.error("declaration family '" +
+                          familyName->name +
+                          "' has multiple callable types; provide "
+                          "symbols::<Signature>(family)",
+                          call->line, call->col);
+                    return TyUnknown;
+                }
+            }
+            if (skippedUnspecializedGeneric && !requested) {
+                mContext.error("declaration family '" + familyName->name +
+                      "' contains an unspecialized generic declaration; "
+                      "provide a concrete non-generic Signature or query an "
+                      "instantiated declaration after generic catalog support",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            if (!callableType) {
+                if (skippedUnspecializedGeneric) {
+                    mContext.error("symbols cannot return an unspecialized "
+                          "generic declaration from family '" +
+                          familyName->name + "'",
+                          call->line, call->col);
+                    return TyUnknown;
+                }
+                mContext.error("symbols found no declaration matching the requested "
+                      "signature for '" + familyName->name + "'",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            if (!mContext.mSymbolCatalog ||
+                !mContext.mSymbolCatalog->valid()) {
+                mContext.error("symbols requires a valid compile-time Symbol Catalog",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            const auto familyDeclarationId = nominalDeclarationIdentity(
+                mContext.mProgram, "fn", family->second.front()->name,
+                family->second.front());
+            luna::selector::SymbolQuery query;
+            query.phase = luna::selector::QueryPhase::CompileTime;
+            query.kind = luna::selector::CatalogSymbolKind::Function;
+            query.familyId = luna::identity::symbolIdFromCanonical(
+                familyDeclarationId);
+            query.typeId = luna::types::typeId(callableType);
+            auto symbols = mContext.mSymbolCatalog->query(query);
+            size_t expected = 0;
+            for (auto* candidate : family->second) {
+                if (!candidate->typeParams.empty()) continue;
+                TypeVec parameters;
+                std::vector<luna::ownership::Contract> contracts;
+                for (const auto& parameter : candidate->params) {
+                    parameters.push_back(
+                        mContext.resolved(parameter.inferredType));
+                    contracts.push_back(
+                        {parameter.relation, parameter.usage});
+                }
+                auto candidateType = Type::makeFunction(
+                    std::move(parameters),
+                    mContext.resolved(candidate->inferredReturnType),
+                    std::move(contracts),
+                    {luna::ownership::Relation::Owned,
+                     candidate->returnUsage});
+                if (!requested || luna::types::sameType(
+                        requested, candidateType))
+                    ++expected;
+            }
+            if (!symbols.valid() || symbols.size() != expected) {
+                mContext.error("declaration family '" + familyName->name +
+                      "' does not have a complete stable signature projection "
+                      "in the compile-time Symbol Catalog",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            call->isCompileTimeSymbolSet = true;
+            call->compileTimeSymbolSetDeclarationIds.clear();
+            for (const auto* symbol : symbols.legacyTraversal())
+                call->compileTimeSymbolSetDeclarationIds.push_back(
+                    symbol->declarationId);
+            call->resultType = Type::makeSymbolSet(callableType);
+            return call->resultType;
+        }
         if (id->name == "pointer_cast") {
             if (call->typeArgASTs.size() != 1 || call->args.size() != 1) {
                 mContext.error(
@@ -2980,6 +3160,49 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
             return;
         mContext.constrain(actual, expected, context);
     };
+    const auto analyzeDeclarationRefCall =
+        [&](TypePtr reference, const std::string& declarationId,
+            IdentifierExpr* identifier) -> TypePtr {
+            reference = mContext.resolved(reference);
+            if (!reference || reference->kind != TypeKind::DeclarationRef ||
+                !reference->inner ||
+                mContext.resolved(reference->inner)->kind !=
+                    TypeKind::Function)
+                return nullptr;
+            const auto* selected =
+                mContext.mSymbolCatalog &&
+                        mContext.mSymbolCatalog->valid()
+                    ? mContext.mSymbolCatalog->findDeclaration(
+                          declarationId)
+                    : nullptr;
+            if (!selected || selected->kind !=
+                    luna::selector::CatalogSymbolKind::Function) {
+                mContext.error("declaration_ref call target is not present in "
+                      "the active Symbol Catalog", call->line, call->col);
+                return TyUnknown;
+            }
+            TypePtr callable = mContext.resolved(reference->inner);
+            if (callable->paramTypes.size() != call->args.size()) {
+                mContext.error("Argument count mismatch in declaration_ref call",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            for (size_t index = 0; index < call->args.size(); ++index)
+                constrainArgument(call->args[index].get(),
+                    callable->paramTypes[index],
+                    "declaration_ref call argument");
+            call->resolvedSymbolName = selected->symbolName;
+            call->resolvedSymbolId = selected->symbolId;
+            call->resolvedContractId = selected->contractId;
+            if (identifier)
+                identifier->resolvedSymbolName = selected->symbolName;
+            call->returnsLinear =
+                callable->returnContract.usage ==
+                    luna::ownership::Usage::Linear;
+            call->returnUsage = callable->returnContract.usage;
+            call->resultType = callable->returnType;
+            return call->resultType;
+        };
 
     if (id) {
         const std::string declarationKey = mContext.sourceDeclarationKey(id->name);
@@ -3005,6 +3228,16 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
     // solved by the arguments at its call sites.
     if (!sym) {
         TypePtr calleeType = analyzeExpr(call->callee.get());
+        if (mContext.resolved(calleeType)->kind ==
+                TypeKind::DeclarationRef) {
+            auto* terminal =
+                dynamic_cast<CallExpr*>(call->callee.get());
+            return analyzeDeclarationRefCall(
+                calleeType,
+                terminal ? terminal->compileTimeDeclarationId
+                         : std::string{},
+                nullptr);
+        }
         if (calleeType->kind != TypeKind::Function &&
             calleeType->kind != TypeKind::Closure) {
             mContext.error("Expression is not callable");
@@ -3018,6 +3251,20 @@ TypePtr BodyAnalyzer::analyzeCall(CallExpr* call) {
             constrainArgument(call->args[i].get(), calleeType->paramTypes[i], "call argument");
         call->resultType = calleeType->returnType;
         return call->resultType;
+    }
+
+    if (sym->kind == SymbolKind::Variable && sym->type &&
+        mContext.resolved(sym->type)->kind ==
+            TypeKind::DeclarationRef) {
+        TypePtr result = analyzeDeclarationRefCall(
+            sym->type, sym->compileTimeDeclarationId, id);
+        if (!sym->compileTimeDeclarationSymbolId.empty())
+            call->resolvedSymbolId =
+                sym->compileTimeDeclarationSymbolId;
+        if (!sym->compileTimeDeclarationContractId.empty())
+            call->resolvedContractId =
+                sym->compileTimeDeclarationContractId;
+        return result;
     }
 
     if (sym->kind == SymbolKind::Variable && sym->type &&
@@ -3256,6 +3503,142 @@ TypePtr BodyAnalyzer::analyzeMemberCall(
     TypePtr receiver =
         mContext.resolved(analyzeExpr(member->object.get()));
     const std::string methodName = member->field;
+    if (receiver->kind == TypeKind::SymbolSet) {
+        bool hasSet = false;
+        std::vector<std::string> declarationIds;
+        if (auto* source = dynamic_cast<CallExpr*>(member->object.get());
+            source && source->isCompileTimeSymbolSet) {
+            hasSet = true;
+            declarationIds = source->compileTimeSymbolSetDeclarationIds;
+        } else if (auto* identifier =
+                       dynamic_cast<IdentifierExpr*>(member->object.get())) {
+            if (auto* symbol = mContext.lookupSymbol(identifier->name);
+                symbol && symbol->isCompileTimeSymbolSet) {
+                hasSet = true;
+                declarationIds =
+                    symbol->compileTimeSymbolSetDeclarationIds;
+            }
+        }
+        if (!hasSet || !mContext.mSymbolCatalog ||
+            !mContext.mSymbolCatalog->valid()) {
+            mContext.error("symbol_set value is not backed by the active "
+                  "compile-time Symbol Catalog", call->line, call->col);
+            return TyUnknown;
+        }
+        luna::selector::SymbolQuery query;
+        query.phase = luna::selector::QueryPhase::CompileTime;
+        query.kind = luna::selector::CatalogSymbolKind::Function;
+        if (receiver->inner)
+            query.typeId = luna::types::typeId(receiver->inner);
+        auto universe = mContext.mSymbolCatalog->query(query);
+        std::vector<luna::identity::SymbolId> symbolIds;
+        symbolIds.reserve(declarationIds.size());
+        for (const auto& id : declarationIds)
+            symbolIds.push_back(
+                luna::identity::symbolIdFromCanonical(id));
+        auto symbols = universe.select(symbolIds);
+        if (!symbols.valid()) {
+            mContext.error(symbols.error(), call->line, call->col);
+            return TyUnknown;
+        }
+
+        if (methodName == "matching") {
+            if (!call->typeArgASTs.empty() || call->args.size() != 1) {
+                mContext.error("symbol_set.matching expects exactly one "
+                      "metadata value", call->line, call->col);
+                return TyUnknown;
+            }
+            TypePtr metadataType = mContext.resolved(
+                analyzeExpr(call->args.front().get()));
+            auto* metadataCall =
+                dynamic_cast<CallExpr*>(call->args.front().get());
+            auto* metadataName = metadataCall
+                ? dynamic_cast<IdentifierExpr*>(
+                      metadataCall->callee.get())
+                : nullptr;
+            if (metadataType->kind != TypeKind::Metadata ||
+                !metadataCall || !metadataName) {
+                mContext.error("symbol_set.matching requires a directly "
+                      "constructed metadata value", call->line, call->col);
+                return TyUnknown;
+            }
+            const std::string metadataKey =
+                mContext.sourceDeclarationKey(metadataName->name, false);
+            auto schema = mContext.mMetadataSchemas.find(metadataKey);
+            if (schema == mContext.mMetadataSchemas.end()) {
+                mContext.error("unknown metadata schema '" +
+                      metadataName->name + "'", call->line, call->col);
+                return TyUnknown;
+            }
+            std::vector<ConstValue> values;
+            values.reserve(metadataCall->args.size());
+            for (auto& argument : metadataCall->args) {
+                auto value = mContext.evaluateConstExpr(argument.get());
+                if (!value) {
+                    mContext.error("symbol_set.matching metadata arguments "
+                          "must be compile-time values",
+                          call->line, call->col);
+                    return TyUnknown;
+                }
+                values.push_back(std::move(*value));
+            }
+            const auto schemaSymbol =
+                schema->second->generatedSymbolName.empty()
+                ? schema->second->name
+                : schema->second->generatedSymbolName;
+            const auto schemaId = nominalDeclarationIdentity(
+                mContext.mProgram, "meta", schemaSymbol,
+                schema->second);
+            auto matches = symbols.filterMetadata(schemaId, values);
+            call->isCompileTimeSymbolSet = true;
+            call->compileTimeSymbolSetDeclarationIds.clear();
+            for (const auto* symbol : matches.legacyTraversal())
+                call->compileTimeSymbolSetDeclarationIds.push_back(
+                    symbol->declarationId);
+            call->resultType = Type::makeSymbolSet(receiver->inner);
+            return call->resultType;
+        }
+
+        if (methodName == "one") {
+            if (!call->typeArgASTs.empty() || !call->args.empty()) {
+                mContext.error("symbol_set.one expects no arguments",
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            auto terminal = symbols.one();
+            if (!terminal.oneSucceeded()) {
+                mContext.error(terminal.message,
+                      call->line, call->col);
+                return TyUnknown;
+            }
+            call->compileTimeDeclarationId =
+                terminal.selected->declarationId;
+            call->resolvedSymbolName =
+                terminal.selected->symbolName;
+            call->resolvedSymbolId =
+                terminal.selected->symbolId;
+            call->resolvedContractId =
+                terminal.selected->contractId;
+            call->resultType =
+                Type::makeDeclarationRef(receiver->inner);
+            return call->resultType;
+        }
+
+        if (methodName == "optional") {
+            mContext.error("symbol_set.optional public result type is not "
+                  "yet frozen; use .one() when exactly one declaration is required",
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        if (methodName == "all") {
+            mContext.error("symbol_set.all is blocked by TBD-Q004 ordering semantics",
+                  call->line, call->col);
+            return TyUnknown;
+        }
+        mContext.error("symbol_set has no query operation '" +
+              methodName + "'", call->line, call->col);
+        return TyUnknown;
+    }
     const bool collectionEntry =
         (receiver->kind == TypeKind::Array ||
          receiver->kind == TypeKind::Slice) &&

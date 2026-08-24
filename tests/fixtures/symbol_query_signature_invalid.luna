@@ -1,0 +1,13 @@
+meta release { major: i32; }
+meta variant { name: string; }
+
+@release(1)
+fn overloaded() -> i32 { return 10; }
+
+@release(1)
+@variant("argument")
+fn overloaded(value: i32) -> i32 { return value; }
+
+fn main() -> i32 {
+    return symbols(overloaded).matching(release(1)).one()();
+}

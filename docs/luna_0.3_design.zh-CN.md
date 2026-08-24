@@ -23,13 +23,14 @@
 
 ### 已冻结的决定边界（2026-08-09）
 
-本文的 Confirmed ID 是实现授权。下列三个 ID 是完整的未决集合；实现不得隐式替它们
+本文的 Confirmed ID 是实现授权。下列四个 ID 是完整的未决集合；实现不得隐式替它们
 选择答案。后续发现的新歧义必须先在此获得稳定 `TBD-*` ID，之后才能编写依赖代码。
 
 | ID | 尚需决定 | 阻塞 | 不阻塞 |
 |---|---|---|---|
 | `TBD-EV004` | pinned/switchable/initializer/activation 的源码与 API 拼写 | 公开 evolution API 及最终源码/runtime binding | generation identity、module lease、staging invariant 或内部状态机测试 |
 | `TBD-Q004` | `.all()` 顺序和显式排序 API | 公开 `.all()` 语义及其 ABI | Symbol Catalog、typed query set、`.one()` 或 `.optional()` |
+| `TBD-Q005` | 公开 `.optional()` 的结果容器及检查/解包 API | 公开 `.optional()` 源码类型 | 内部 optional cardinality、公开 `symbol_set<T>`、`.matching()` 或 `.one()` |
 | `TBD-SF006` | module Slot/Fragment 语法和 single-shot control 的精确交互 | 新 Slot/Fragment parsing、control semantics 与公开 runtime-apply surface | shadow SlotId/ContractId、descriptor schema 或旧版 corpus 固化 |
 
 当前没有登记 Proposed 决定。新的 Proposed 项必须明确标记并加入本边界，才能影响实现。
@@ -641,6 +642,12 @@ entry，而拒绝 initializer 不得改变 active generation 或 retained histor
   typed reference；
 - `Q003`（Confirmed）：查询必须使用 `.one()`、`.optional()` 或 `.all()` 等显式 terminal
   决定 cardinality；no-match/ambiguous 不由隐式链接顺序处理；
+- `Q005`（Confirmed）：首个公开 compile-time function query 表面为
+  `symbols::<Signature>(family).matching(metadata).one()`。只有所有纳入的族成员共用一个
+  callable type 时才可省略 `Signature`。`symbol_set<T>` 是可局部绑定、不可迭代的 compiler-domain
+  value；`.matching()` 接受一个直接构造的 compile-time metadata value；`.one()` 返回可绑定、
+  可调用的 `declaration_ref<T>`。在 instantiated declaration 进入 catalog 之前，未特化 generic declaration
+  会被拒绝。set、filter 和 reference binding 均在 MoonIR 前擦除；
 - `SF001`（Confirmed）：slot 是模块级二等 Symbol，拥有稳定 SlotId/ContractId；调用是
   局部 control operation，不产生可传递的 slot value；
 - `SF002`（Confirmed）：fragment 名义绑定目标 SlotId，继续服务于受限控制流
@@ -654,6 +661,31 @@ single-shot interceptor 和 single-shot context；runtime 首版只支持 single
 interceptor。non-unit result、`many` 和 runtime context/continuation ABI 延后。
 
 `TBD-Q004`：冻结 `.all()` 的规范排序以及显式排序 API；结果不得依赖链接或注册顺序。
+
+`TBD-Q005`：冻结公开 `.optional()` 是返回 core `Option<declaration_ref<T>>` 还是专用
+compiler-domain optional reference，以及对应的检查和解包拼写。编译器不得把可空的裸
+`declaration_ref<T>` 作为隐式答案暴露。
+
+实施状态（2026-08-24）：Q001/Q003 的 compile-time 内部基础已落地，但第 13 项尚未
+整体关闭。每次 `SemanticContext` 分析现在以 canonical SymbolId、ContractId、TypeId 和
+family SymbolId 构造一个一次验证、随后不可变的 catalog 快照；当前快照覆盖 canonical MoonIR
+已有的全部稳定 source declaration kind：显式稳定签名的 function、impl method、fragment、struct、
+enum、trait、impl 与 metadata schema。带 Drop 的 type/impl row 会在同一快照内把 drop-glue linkage
+封闭为强 SymbolId/ContractId，且测试逐行核对 catalog 与 sealed MoonIR。named constraint、编译器
+intrinsic 和 body analysis 后才产生的 generic instance 不冒充 source catalog row。typed finite set
+按 phase、kind、family、type 和精确 metadata value 查询，并实现顺序无关的 `.one()` 与
+`.optional()` cardinality terminal。首个公开 function 表面现已实现 `symbols::<Signature>(family)`、
+可局部绑定且不可迭代的 `symbol_set<T>`、`.matching(metadata)` 和 `.one()`。选中的
+`declaration_ref<T>` 可绑定、可反射且可直接调用；所有 query-only value 均在 MoonIR 前擦除。
+公开 `.optional()` 仅继续受 `TBD-Q005` 阻塞。静态 `select_unique` evaluation 会依次组合 candidate-set
+限定、metadata 过滤与 `.one()`，因此 no-match 和 ambiguous 无需 exact-match 旁路就有
+不同诊断。静态 selector
+已迁移到该 catalog，并在 MoonIR lowering 时再次核对选中行与 sealed declaration table 的
+SymbolId/ContractId；查询集合和 selector evaluator 均在 MoonIR 前擦除。现有源码 selector
+目标族必须在快照点具有显式、完全解析的参数与返回类型。其余源码拼写暂时保持兼容，
+dynamic exact-match 仍是待第 16 项清理的旧协议。`.all()` 与任何隐式
+结果顺序均未实现，继续由 `TBD-Q004` 阻塞；公开的非 function query constructor
+不属于此首版表面。
 
 `TBD-SF006`：冻结 module-level declaration、名义 fragment target 和 lexical invocation
 的具体语法，以及 return、abort、`?` 和 cleanup 在 single-shot context 中的精确交互。
@@ -1053,8 +1085,8 @@ construction body 未被消费。同一源码级门禁还覆盖显式 static `ap
 item/callable 的逐元素 ownership 转移、无条件 Sealer 和 canonical-only backend 边界均已落地；
 structured statement/continuation/slot/fragment executable-body consumer 已从源码与构建中删除。
 跨越潜在 early exit 的 Linear hoisting 因违反恰好一次约束而保持非法，它不是延后的
-lowering 功能。
-完整 verifier/codegen 回归门通过后，下一主线是第 11 项 serializer/parser。
+lowering 功能。第 11 项 serializer/parser/verifier/fuzz 与第 12 项三种产物路径随后均已
+完成；当前主线进入第 13 项 Symbol Catalog/query。
 
 闭包捕获实现完成（2026-08-14）：`C016 CL001`-`CL009` 的 Copy capture 切片已激活。capture-free
 `Function` 值保持 8 字节裸代码指针 ABI；捕获式 lambda 成为携带布局的 `Closure` 类型，其
@@ -1074,7 +1106,8 @@ outer projected guarded cleanup，未消费和条件提前返回会按元素正�
 原子转移到 loop-local guarded state，不形成双重 obligation。有限静态链接候选的
 runtime context、replay-safe multi-shot 和 statement-form apply 也已在 canonical CFG 中实现；
 每次 `resume()` 拥有独立 Continuation region，未知 context/many 候选不会降级到
-仅 interceptor 的外部 plugin ABI v1。第 10 项仍需完成单向 production switchover 才能关闭。
+仅 interceptor 的外部 plugin ABI v1。无条件 sealer 和 canonical-only backend 已完成
+单向 production switchover，因此第 10 项已经关闭。
 
 | 顺序 | 优先级 | 工作 | 完成门 |
 |---:|---|---|---|

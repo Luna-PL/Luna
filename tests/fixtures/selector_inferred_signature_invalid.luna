@@ -1,0 +1,12 @@
+fn first(
+    candidates: declaration_view<() -> i32>
+) -> declaration_ref<() -> i32> {
+    return declaration_at(candidates, 0);
+}
+
+fn answer() { return 42; }
+
+fn main() -> i32 {
+    let selected = select answer with first();
+    return selected();
+}

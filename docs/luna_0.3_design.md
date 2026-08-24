@@ -23,7 +23,7 @@ implementation, tests, references, and changelog have been updated together.
 
 ### Frozen decision boundary (2026-08-09)
 
-Confirmed IDs in this document are implementation authority. The following three IDs are the
+Confirmed IDs in this document are implementation authority. The following four IDs are the
 complete unresolved set; an implementation must not choose their answers implicitly. A newly
 discovered ambiguity must receive a stable `TBD-*` ID here before dependent code is written.
 
@@ -31,6 +31,7 @@ discovered ambiguity must receive a stable `TBD-*` ID here before dependent code
 |---|---|---|---|
 | `TBD-EV004` | pinned/switchable/initializer/activation source and API spelling | the public evolution API and its final source/runtime bindings | generation identity, module leases, staging invariants, or internal state-machine tests |
 | `TBD-Q004` | `.all()` order and explicit ordering API | public `.all()` semantics and its ABI | Symbol Catalog, typed query sets, `.one()`, or `.optional()` |
+| `TBD-Q005` | public `.optional()` result container and inspection/unwrapping API | public `.optional()` source typing | internal optional cardinality, public `symbol_set<T>`, `.matching()`, or `.one()` |
 | `TBD-SF006` | module Slot/Fragment syntax and precise single-shot control interactions | new Slot/Fragment parsing, control semantics, and public runtime-apply surface | shadow SlotId/ContractId, descriptor schema, or legacy-corpus capture |
 
 No Proposed decisions are currently registered. A new Proposed item must be labeled and added
@@ -714,6 +715,14 @@ The following directions are confirmed:
   descriptor-backed typed references;
 - `Q003` (Confirmed): every query uses an explicit terminal such as `.one()`, `.optional()`, or
   `.all()` to decide cardinality; no-match and ambiguity never depend on implicit link order;
+- `Q005` (Confirmed): the first public compile-time function-query surface is
+  `symbols::<Signature>(family).matching(metadata).one()`. `Signature` may be omitted only when
+  every included family member has one callable type. `symbol_set<T>` is a locally bindable
+  compiler-domain value with no iteration surface; `.matching()` accepts one directly
+  constructed, compile-time metadata value; `.one()` returns a bindable and callable
+  `declaration_ref<T>`. Unspecialized generic declarations are rejected until instantiated
+  declarations participate in the catalog. The set, filters, and reference bindings erase
+  before MoonIR;
 - `SF001` (Confirmed): a slot is a module-level second-class symbol with stable
   SlotId/ContractId; invocation is a local control operation and creates no transferable slot
   value;
@@ -730,6 +739,35 @@ deferred.
 
 `TBD-Q004`: freeze canonical ordering for `.all()` and the explicit ordering API; results must
 not depend on link or registration order.
+
+`TBD-Q005`: freeze whether public `.optional()` returns core
+`Option<declaration_ref<T>>` or a dedicated compiler-domain optional reference, together with
+its inspection and unwrap spelling. The compiler must not expose a nullable bare
+`declaration_ref<T>` as an implicit answer.
+
+Implementation status (2026-08-24): the compile-time internal foundation of Q001/Q003 is now
+implemented, but item 13 is not closed as a whole. Each `SemanticContext` analysis builds one
+validate-once, immutable catalog snapshot keyed by canonical SymbolId, ContractId, TypeId, and
+family SymbolId. The snapshot covers every stable source declaration kind currently represented
+in canonical MoonIR: functions with stable explicit signatures, impl methods, fragments, structs,
+enums, traits, implementations, and metadata schemas. Type/impl rows with Drop close their
+drop-glue linkage to a strong SymbolId/ContractId within the same snapshot, and tests compare
+catalog rows against sealed MoonIR row by row. Named constraints, compiler intrinsics, and generic
+instances produced only after body analysis do not masquerade as source-catalog rows. Typed finite
+sets query by phase, kind, family, type, and exact metadata value and implement the
+order-independent `.one()` and `.optional()` cardinality terminals. The first public function
+surface now implements `symbols::<Signature>(family)`, locally bindable non-iterable `symbol_set<T>`,
+`.matching(metadata)`, and `.one()`. A selected `declaration_ref<T>` can be bound, reflected,
+and directly called; all query-only values erase before MoonIR. Public `.optional()` remains
+blocked only on `TBD-Q005`. Static `select_unique`
+evaluation composes candidate-set restriction, metadata filtering, and `.one()`, so no-match
+and ambiguity have distinct diagnostics without an exact-match side channel. Static selectors now use that catalog and
+MoonIR lowering checks the selected SymbolId/ContractId again against the sealed declaration
+table; the query set and selector evaluator erase before MoonIR. Existing selector source
+target families must have explicit, fully resolved parameter and return types at the snapshot
+checkpoint. Other source spelling remains compatible, while the dynamic exact-match path remains a legacy protocol for
+item 16. `.all()` and every implicit result-order promise remain unimplemented and blocked by
+`TBD-Q004`; public non-function query constructors are not part of this first surface.
 
 `TBD-SF006`: freeze exact syntax for module-level declarations, nominal fragment targets, and
 lexical invocation, plus the precise interaction of return, abort, `?`, and cleanup in a
@@ -1187,7 +1225,9 @@ non-Copy item/callable per-element ownership transitions, unconditional sealing,
 canonical-only backend boundary are implemented. The structured statement/continuation/slot/
 fragment executable-body consumer has been removed from the source and build.
 Linear hoisting across a potential early exit remains invalid by its exactly-once contract rather
-than a deferred lowering feature. The next mainline is item 11 serialization/parsing.
+than a deferred lowering feature. Item 11 serialization/parsing/verifier/fuzzing and the three
+item 12 artifact paths were subsequently completed; the current mainline is item 13 Symbol
+Catalog/query work.
 
 Closure capture implementation completion (2026-08-14): the Copy-capture
 `C016 CL001`-`CL009`
@@ -1204,9 +1244,8 @@ negative borrowed-capture, and canonical-CFG evidence pass with the full 51-test
 the strict-warning build, and ASan/UBSan. The later non-Copy slice explicitly moves
 Affine/Linear captures into the environment, consumes the outer binding, and recursively cleans
 the environment; borrowed captures remain rejected because their lifetime cannot safely escape.
-Only after structured execution is deleted and the
-full verifier/codegen regression gate passes does the item-level gate pass; serializer/parser work
-remains item 11.
+The structured execution consumer is deleted and the full verifier/codegen regression gate has
+passed, so this item-level gate is closed.
 
 Canonical CFG switchover record (2026-08-20): all 51 registered CTests pass and the
 CompilerPipeline now seals every executable function body unconditionally. A materialized move-only iterator installs outer projected guarded
@@ -1214,8 +1253,9 @@ cleanups when the recipe is created, cleans abandoned/early-returned elements in
 and atomically transfers its source into loop-local guarded state when consumption begins. Finite,
 statically linked runtime contexts, replay-safe multi-shot continuations, and statement-form apply
 are now canonical CFG features. Each `resume()` owns an independent Continuation region, while an
-unknown context/many candidate cannot fall back to interceptor-only external plugin ABI v1. Item 10
-remains open until the one-way production switchover is complete.
+unknown context/many candidate cannot fall back to interceptor-only external plugin ABI v1. The
+unconditional sealer and canonical-only backend complete the one-way production switchover, so
+item 10 is closed.
 
 | Order | Priority | Work | Completion gate |
 |---:|---|---|---|

@@ -1,0 +1,13 @@
+meta release { major: i32; }
+meta marker { name: string; }
+
+@release(1)
+fn answer() -> i32 { return 10; }
+
+@release(1)
+@marker("second")
+fn answer() -> i32 { return 20; }
+
+fn main() -> i32 {
+    return symbols(answer).matching(release(1)).one()();
+}

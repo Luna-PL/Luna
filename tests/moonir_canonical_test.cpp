@@ -8,6 +8,7 @@
 #include "driver/MoonGeneration.h"
 #include "diagnostics/Diagnostic.h"
 #include "driver/CompilerPipeline.h"
+#include "selector/Selector.h"
 #include "sema/SymbolTable.h"
 #include "tooling/AnalysisSnapshot.h"
 
@@ -241,6 +242,22 @@ int main() {
     moon::Verifier cfgVerifier;
     if (!cfgVerifier.verify(cfg, module))
         return fail("canonical CFG foundation failed independent verification");
+    moon::Module leakedQueryModule;
+    leakedQueryModule.name = "canonical.query-leak";
+    leakedQueryModule.registerType(Type::makeSymbolSet(lambdaType));
+    leakedQueryModule.sealTypeTable();
+    moon::Verifier leakedQueryVerifier;
+    if (leakedQueryVerifier.verify(leakedQueryModule))
+        return fail("MoonIR verifier accepted a compiler-only symbol_set type");
+    const bool rejectedQueryType = std::any_of(
+        leakedQueryVerifier.errors().begin(),
+        leakedQueryVerifier.errors().end(),
+        [](const auto& diagnostic) {
+            return diagnostic.message.find(
+                "was not erased before MoonIR") != std::string::npos;
+        });
+    if (!rejectedQueryType)
+        return fail("MoonIR verifier did not diagnose leaked symbol_set type");
     cfg.blocks.front().id = moon::BlockId{1};
     if (cfgVerifier.verify(cfg, module))
         return fail("CFG verifier accepted a forged canonical block index");
@@ -5481,6 +5498,99 @@ fn main() -> i32 {
         for (const auto& diagnostic : verifier.errors())
             std::cerr << diagnostic.message << '\n';
         return fail("fold with closure reducer did not survive Sealer canonicalization");
+    }
+
+    // The semantic Symbol Catalog and sealed MoonIR must derive strong
+    // identity from the same declaration projection. This fixture includes
+    // every source declaration kind represented in canonical MoonIR, plus a
+    // Drop-bound nominal type whose ContractId depends on another row.
+    {
+        const std::string catalogProjectionSource = R"luna(
+meta revision { value: i32; }
+
+@revision(1)
+struct Resource { value: i32; }
+
+enum Choice { None, Some(i32) }
+
+trait Tagged {
+    fn validate(value: i32) -> i32;
+}
+
+impl Drop for Resource {
+    fn drop(resource: &mut Resource) -> unit { }
+}
+
+impl Tagged for Resource {
+    fn validate(value: i32) -> i32 { return value; }
+}
+
+context trace(value: i32) { resume(); }
+
+constraint Same<T> = type_same::<T, T>();
+
+fn main() -> i32 { return 0; }
+)luna";
+        luna::driver::CompilerPipeline catalogPipeline;
+        if (!catalogPipeline.compileSourceToMoonIR(
+                catalogProjectionSource, "<catalog-projection>")) {
+            for (const auto& diagnostic : catalogPipeline.errors())
+                std::cerr << diagnostic::render(diagnostic) << '\n';
+            return fail("catalog projection fixture did not compile");
+        }
+        const auto* catalog =
+            catalogPipeline.analysisSnapshot().symbolCatalog();
+        if (!catalog || !catalog->valid())
+            return fail("semantic analysis did not publish a valid Symbol Catalog");
+
+        const std::pair<moon::DeclarationKind, size_t> expectedKinds[] = {
+            {moon::DeclarationKind::Function, 3},
+            {moon::DeclarationKind::Fragment, 1},
+            {moon::DeclarationKind::Struct, 1},
+            {moon::DeclarationKind::Enum, 1},
+            {moon::DeclarationKind::Trait, 1},
+            {moon::DeclarationKind::Implementation, 2},
+            {moon::DeclarationKind::MetadataSchema, 1},
+        };
+        size_t projectedCount = 0;
+        for (const auto& [kind, expectedCount] : expectedKinds) {
+            luna::selector::SymbolQuery query;
+            query.kind = kind;
+            auto symbols = catalog->query(query);
+            if (!symbols.valid() || symbols.size() != expectedCount)
+                return fail("Symbol Catalog projected the wrong declaration-kind cardinality");
+            projectedCount += symbols.size();
+            for (const auto* symbol : symbols.legacyTraversal()) {
+                const auto* record =
+                    catalogPipeline.moonModule().findDeclaration(
+                        symbol->symbolId);
+                if (!record || record->id != symbol->declarationId ||
+                    record->familyId != symbol->familyDeclarationId ||
+                    record->kind != symbol->kind ||
+                    record->type != symbol->typeId ||
+                    record->contractId != symbol->contractId) {
+                    std::cerr << "catalog mismatch for "
+                              << symbol->declarationId << '\n';
+                    if (record) {
+                        std::cerr << "  catalog family/type/contract: "
+                                  << symbol->familyDeclarationId << " / "
+                                  << symbol->typeId.value << " / "
+                                  << symbol->contractId.value << '\n'
+                                  << "  MoonIR family/type/contract: "
+                                  << record->familyId << " / "
+                                  << record->type.value << " / "
+                                  << record->contractId.value << '\n'
+                                  << "  catalog canonical: "
+                                  << symbol->canonicalContract << '\n'
+                                  << "  MoonIR canonical: "
+                                  << record->canonicalContract << '\n';
+                    }
+                    return fail("Symbol Catalog identity disagrees with sealed MoonIR");
+                }
+            }
+        }
+        if (projectedCount != catalog->size())
+            return fail("compiler-only constraint leaked into the Symbol Catalog");
     }
 
     // CompilerPipeline always seals production function bodies into canonical

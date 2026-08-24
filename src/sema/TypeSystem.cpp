@@ -67,6 +67,11 @@ TypePtr resolveType(const TypeAST* ast,
             return Type::makeMetadataView(
                 resolveType(named->typeArgs.front().get(), typeBindings));
         }
+        if (named->name == "symbol_set") {
+            if (named->typeArgs.size() != 1) return TyUnknown;
+            return Type::makeSymbolSet(
+                resolveType(named->typeArgs.front().get(), typeBindings));
+        }
         if (named->name == "declaration_view") {
             TypePtr callable;
             if (!named->typeArgs.empty())
@@ -127,6 +132,7 @@ TypePtr ConstraintSolver::resolve(const TypePtr& type) {
     if ((type->kind == TypeKind::Reference || type->kind == TypeKind::RawPointer ||
          type->kind == TypeKind::DeviceBuffer || type->kind == TypeKind::Array ||
          type->kind == TypeKind::Slice || type->kind == TypeKind::MetadataView ||
+         type->kind == TypeKind::SymbolSet ||
          type->kind == TypeKind::DeclarationView ||
          type->kind == TypeKind::DeclarationRef ||
          type->kind == TypeKind::Iterator) && type->inner)
@@ -157,6 +163,7 @@ bool ConstraintSolver::contains(const TypePtr& type, int id) {
     if (resolved->kind == TypeKind::Reference || resolved->kind == TypeKind::RawPointer ||
         resolved->kind == TypeKind::DeviceBuffer || resolved->kind == TypeKind::Array ||
         resolved->kind == TypeKind::MetadataView ||
+        resolved->kind == TypeKind::SymbolSet ||
         resolved->kind == TypeKind::DeclarationView ||
         resolved->kind == TypeKind::DeclarationRef ||
         resolved->kind == TypeKind::Iterator)
@@ -255,6 +262,7 @@ bool ConstraintSolver::unifyInternal(const TypePtr& lhs, const TypePtr& rhs,
     }
     if (a->kind == TypeKind::RawPointer || a->kind == TypeKind::DeviceBuffer ||
         a->kind == TypeKind::MetadataView ||
+        a->kind == TypeKind::SymbolSet ||
         a->kind == TypeKind::DeclarationView ||
         a->kind == TypeKind::DeclarationRef ||
         a->kind == TypeKind::Iterator) {
@@ -362,6 +370,7 @@ void ConstraintSolver::collectUnresolvedNumeric(const TypePtr& type) {
     }
     if (resolved->kind == TypeKind::Reference || resolved->kind == TypeKind::RawPointer ||
         resolved->kind == TypeKind::MetadataView ||
+        resolved->kind == TypeKind::SymbolSet ||
         resolved->kind == TypeKind::DeclarationView ||
         resolved->kind == TypeKind::DeclarationRef)
         collectUnresolvedNumeric(resolved->inner);
@@ -385,6 +394,7 @@ bool ConstraintSolver::hasUnresolved(const TypePtr& type) {
     if (resolved->kind == TypeKind::InferenceVar) return true;
     if (resolved->kind == TypeKind::Reference || resolved->kind == TypeKind::RawPointer ||
         resolved->kind == TypeKind::MetadataView ||
+        resolved->kind == TypeKind::SymbolSet ||
         resolved->kind == TypeKind::DeclarationView ||
         resolved->kind == TypeKind::DeclarationRef)
         return hasUnresolved(resolved->inner);

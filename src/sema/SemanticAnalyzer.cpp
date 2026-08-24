@@ -42,6 +42,10 @@ const SymbolTable& SemanticAnalyzer::symTable() const {
     return mContext->symTable();
 }
 
+const luna::selector::SymbolCatalog* SemanticAnalyzer::symbolCatalog() const {
+    return mContext->symbolCatalog();
+}
+
 const std::vector<ResolvedDeclarationReference>&
 SemanticAnalyzer::declarationReferences() const {
     return mContext->declarationReferences();

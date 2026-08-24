@@ -84,6 +84,19 @@ enum class ReleaseDomain : uint8_t {
     HostService,
 };
 
+// Declaration kind participates directly in ContractId. Keep one core enum
+// for frontend queries, MoonIR, and container serialization so ordinals cannot
+// drift between layers.
+enum class DeclarationKind : uint8_t {
+    Function,
+    Fragment,
+    Struct,
+    Enum,
+    Trait,
+    Implementation,
+    MetadataSchema,
+};
+
 enum class ResourceLifetime : uint8_t {
     Value,
     Lexical,
@@ -149,6 +162,82 @@ struct Facts {
     CapabilityFacts capability;
     AbiFacts abi;
 };
+
+namespace detail {
+
+inline void appendIdentityPart(std::string& output, const std::string& part) {
+    output += std::to_string(part.size());
+    output += ':';
+    output += part;
+    output += ';';
+}
+
+template <typename Enum>
+inline void appendEnum(std::string& output, Enum value) {
+    appendIdentityPart(
+        output, std::to_string(static_cast<unsigned>(value)));
+}
+
+inline void appendBool(std::string& output, bool value) {
+    appendIdentityPart(output, value ? "1" : "0");
+}
+
+inline void appendOwnershipContract(
+    std::string& output, const luna::ownership::Contract& contract) {
+    appendEnum(output, contract.relation);
+    appendEnum(output, contract.usage);
+}
+
+} // namespace detail
+
+// One canonical declaration-contract encoder is shared by the frontend Symbol
+// Catalog and sealed MoonIR. Keeping both the kind and encoder in core prevents
+// either layer from inventing a parallel ContractId rule.
+inline std::string canonicalDeclarationContract(
+    DeclarationKind declarationKind,
+    const luna::identity::TypeId& type,
+    const Facts& facts,
+    const luna::identity::SymbolId& dropGlueSymbol = {},
+    const luna::identity::ContractId& dropGlueContract = {}) {
+    std::string result = "luna.contract.v1;";
+    detail::appendEnum(result, declarationKind);
+    detail::appendIdentityPart(result, type.value);
+
+    detail::appendEnum(result, facts.control.form);
+    detail::appendEnum(result, facts.control.cardinality);
+    detail::appendEnum(result, facts.control.storage);
+    detail::appendEnum(result, facts.control.forwarding);
+    detail::appendBool(result, facts.control.abortPermitted);
+    detail::appendBool(result, facts.control.replayValidated);
+
+    detail::appendIdentityPart(
+        result, std::to_string(facts.resource.parameters.size()));
+    for (const auto& parameter : facts.resource.parameters)
+        detail::appendOwnershipContract(result, parameter);
+    detail::appendOwnershipContract(result, facts.resource.result);
+    detail::appendEnum(result, facts.resource.management);
+    detail::appendEnum(result, facts.resource.releaseDomain);
+    detail::appendEnum(result, facts.resource.lifetime);
+    detail::appendEnum(result, facts.resource.relation);
+    detail::appendEnum(result, facts.resource.usage);
+    detail::appendEnum(result, facts.resource.cleanup);
+    detail::appendBool(result, facts.resource.cleanupRequired);
+    detail::appendBool(result, facts.resource.recursiveCleanup);
+    detail::appendBool(result, facts.resource.needsDrop);
+    detail::appendBool(result, facts.resource.tracksElementInitialization);
+
+    detail::appendBool(result, facts.capability.hostOnly);
+    detail::appendBool(result, facts.capability.runtimeRetained);
+    detail::appendBool(result, facts.capability.dynamicDispatch);
+    detail::appendBool(result, facts.capability.ffi);
+    detail::appendBool(result, facts.capability.gpu);
+    detail::appendBool(result, facts.capability.maySuspend);
+    detail::appendBool(result, facts.abi.stableBoundary);
+    detail::appendBool(result, facts.abi.persistentFrameRequired);
+    detail::appendIdentityPart(result, dropGlueSymbol.value);
+    detail::appendIdentityPart(result, dropGlueContract.value);
+    return result;
+}
 
 inline constexpr const char* controlFormName(ControlForm form) {
     switch (form) {

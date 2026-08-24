@@ -53,7 +53,9 @@ private:
                              std::string lookup,
                              const ASTNode* source,
                              std::string context,
-                             bool lookupById = false);
+                             bool lookupById = false,
+                             luna::identity::SymbolId expectedSymbol = {},
+                             luna::identity::ContractId expectedContract = {});
     void resolveDeclarationReferences();
     void buildModuleInterfaces();
     void error(const ASTNode* node, const std::string& message);
@@ -64,6 +66,8 @@ private:
         const ASTNode* source = nullptr;
         std::string context;
         bool lookupById = false;
+        luna::identity::SymbolId expectedSymbol;
+        luna::identity::ContractId expectedContract;
     };
 
     const Program* mProgram = nullptr;

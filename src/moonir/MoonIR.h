@@ -152,15 +152,7 @@ enum class Retention : uint8_t {
     Dynamic,
 };
 
-enum class DeclarationKind : uint8_t {
-    Function,
-    Fragment,
-    Struct,
-    Enum,
-    Trait,
-    Implementation,
-    MetadataSchema,
-};
+using DeclarationKind = luna::sysmeta::DeclarationKind;
 
 enum class FragmentKind : uint8_t { Interceptor, Context };
 enum class FragmentCardinality : uint8_t { Once, Many };

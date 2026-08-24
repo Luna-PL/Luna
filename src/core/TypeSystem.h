@@ -26,7 +26,7 @@ enum class TypeKind {
     Function, Closure, Slot, Fragment, Iterator,
     DeviceBuffer, Event, Array, Slice,
     Metadata, MetadataView, DeclarationView, DeclarationRef,
-    InferenceVar,
+    InferenceVar, SymbolSet,
     Unknown
 };
 
@@ -263,6 +263,14 @@ struct Type {
         t->inner = std::move(metadata);
         return t;
     }
+    static TypePtr makeSymbolSet(TypePtr symbol = nullptr) {
+        auto t = std::make_shared<Type>();
+        t->kind = TypeKind::SymbolSet;
+        t->domain = luna::types::TypeDomain::Compiler;
+        t->identityMode = luna::types::IdentityMode::CompilerIntrinsic;
+        t->inner = std::move(symbol);
+        return t;
+    }
     static TypePtr makeDeclarationView(TypePtr callable = nullptr) {
         auto t = std::make_shared<Type>();
         t->kind = TypeKind::DeclarationView;
@@ -465,6 +473,8 @@ struct Type {
             case TypeKind::Metadata: return "meta " + name;
             case TypeKind::MetadataView:
                 return "metadata_view<" + (inner ? inner->toString() : "_") + ">";
+            case TypeKind::SymbolSet:
+                return "symbol_set<" + (inner ? inner->toString() : "_") + ">";
             case TypeKind::DeclarationView:
                 return "declaration_view<" + (inner ? inner->toString() : "_") + ">";
             case TypeKind::DeclarationRef:

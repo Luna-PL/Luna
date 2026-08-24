@@ -120,7 +120,7 @@
 
 ### Canonical-path and container status (2026-08-24)
 
-- Full registered CTest: 58/58 on the unconditional canonical pipeline.
+- Full registered non-hardware CTest: 60/60 on the unconditional canonical pipeline.
 - Strict-warning build: green.
 - Production canonical ASan/UBSan suite: 58/58 green after the unconditional
   switchover, linked context/multi-shot slice, and Native artifact boundary.
@@ -171,6 +171,29 @@
   non-function exports. A real 60 -> 13 -> 60 Moon switch/rollback preserves both
   generation leases. This does not close `TBD-EV004` or choose public evolution
   syntax/API.
+- Item 13 compile-time foundation: each `SemanticContext` analysis now owns one
+  immutable, validate-once catalog snapshot keyed by canonical
+  SymbolId/ContractId/TypeId and family SymbolId. It projects every stable
+  source declaration kind represented in canonical MoonIR: functions with
+  resolved signatures, impl methods, fragments, structs, enums, traits,
+  implementations, and metadata schemas. Drop-bearing rows close the drop-glue
+  dependency to strong IDs, and an integration oracle compares every projected
+  row with sealed MoonIR. Named constraints, compiler intrinsics, and
+  body-generated generic instances remain outside the source snapshot.
+  Typed finite sets implement phase/kind/family/type/exact-metadata filtering
+  and order-independent `.one()` and `.optional()`. The first public function
+  surface is `symbols::<Signature>(family).matching(metadata).one()` with a
+  locally bindable, non-iterable compiler-domain `symbol_set<T>` and a bindable,
+  callable `declaration_ref<T>` result. Query state erases before MoonIR and
+  lowering rechecks the selected strong SymbolId/ContractId. Public
+  `.optional()` typing remains under `TBD-Q005`, while `.all()` remains under
+  `TBD-Q004`. Static `select_unique`
+  composes candidate restriction, metadata filtering, and `.one()`, preserving
+  distinct no-match/ambiguity failures; static selectors use this catalog, and lowering checks the selected identity
+  against the sealed declaration table before publishing a reference. The set
+  and evaluator erase before MoonIR. Public non-function constructors,
+  `.optional()` typing, `.all()` ordering, and removal of the legacy dynamic
+  exact-match path remain open, so item 13 is not yet closed.
 
 The canonical codegen now resolves all local-reference paths through the
 LocalId-indexed tables (mCanonicalLocals / mCanonicalLocalTypes): generateCall

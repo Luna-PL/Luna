@@ -1,0 +1,18 @@
+meta version { major: i32; }
+meta variant { name: string; }
+
+fn choice(view: declaration_view<() -> i32>, major: i32)
+    -> declaration_ref<() -> i32> {
+    return select_unique(view, version(major));
+}
+
+@version(1)
+fn answer() -> i32 { return 10; }
+
+@version(1)
+@variant("second")
+fn answer() -> i32 { return 20; }
+
+fn main() -> i32 {
+    return @choice(1) answer();
+}

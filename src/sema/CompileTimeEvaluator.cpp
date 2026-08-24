@@ -849,23 +849,27 @@ CompileTimeEvaluator::evaluateSelectorExpr(
             if (!declaration) return std::nullopt;
             if (callee->name == "declaration_id")
                 return declaration->declarationId;
-            const auto* candidate = mContext.mActiveSelectorView
-                ? mContext.mActiveSelectorView->find(declaration->declarationId) : nullptr;
-            if (!candidate || !candidate->callableType)
+            const auto* candidate = mContext.mActiveSelectorSet
+                ? mContext.mActiveSelectorSet->findDeclaration(
+                    declaration->declarationId) : nullptr;
+            if (!candidate || !candidate->type ||
+                candidate->kind !=
+                    luna::selector::CatalogSymbolKind::Function)
                 return std::nullopt;
             return SelectorValue(
-                luna::types::typeId(candidate->callableType).value);
+                luna::types::typeId(candidate->type).value);
         }
         if ((callee->name == "metadata" ||
              callee->name == "declaration_has_metadata") &&
             arguments.size() == 1 && call->typeArgASTs.size() == 1) {
             auto* declaration =
                 std::get_if<SelectorDeclarationValue>(&arguments[0]);
-            if (!declaration || !mContext.mActiveSelectorView) return std::nullopt;
+            if (!declaration || !mContext.mActiveSelectorSet) return std::nullopt;
             TypePtr schema = mContext.resolved(
                 mContext.resolveTypeAST(call->typeArgASTs.front().get(), {}));
             const auto* candidate =
-                mContext.mActiveSelectorView->find(declaration->declarationId);
+                mContext.mActiveSelectorSet->findDeclaration(
+                    declaration->declarationId);
             if (!candidate || schema->kind != TypeKind::Metadata)
                 return std::nullopt;
             SelectorMetadataViewValue matches;
@@ -881,20 +885,23 @@ CompileTimeEvaluator::evaluateSelectorExpr(
         if (callee->name == "select_unique" && arguments.size() == 2) {
             auto* view = std::get_if<SelectorDeclarationViewValue>(&arguments[0]);
             auto* wanted = std::get_if<SelectorMetadataValue>(&arguments[1]);
-            if (!view || !wanted || !mContext.mActiveSelectorView) return std::nullopt;
-            std::optional<std::string> match;
+            if (!view || !wanted || !mContext.mActiveSelectorSet) return std::nullopt;
+            std::vector<luna::identity::SymbolId> viewSymbols;
+            viewSymbols.reserve(view->declarationIds.size());
             for (const auto& id : view->declarationIds) {
-                const auto* candidate = mContext.mActiveSelectorView->find(id);
-                if (!candidate) continue;
-                for (const auto& metadata : candidate->metadata) {
-                    if (metadata.schemaId != wanted->schemaId ||
-                        metadata.values != wanted->fields)
-                        continue;
-                    if (match) return std::nullopt;
-                    match = id;
-                }
+                viewSymbols.push_back(
+                    luna::identity::symbolIdFromCanonical(id));
             }
-            return SelectorDeclarationValue{match ? *match : std::string()};
+            auto terminal = mContext.mActiveSelectorSet
+                ->select(viewSymbols)
+                .filterMetadata(wanted->schemaId, wanted->fields)
+                .one();
+            if (!terminal.oneSucceeded()) {
+                mSelectorEvaluationFailure = terminal.message;
+                return SelectorDeclarationValue{};
+            }
+            return SelectorDeclarationValue{
+                terminal.selected->declarationId};
         }
         const std::string metadataKey =
             mContext.sourceDeclarationKey(callee->name, false);
@@ -1059,17 +1066,18 @@ bool CompileTimeEvaluator::evaluateSelectorBlock(
 
 
 std::optional<std::string> CompileTimeEvaluator::evaluateSelectorFunction(
-    FunctionDecl* function, const luna::selector::DeclarationView& view,
+    FunctionDecl* function, const luna::selector::SymbolSet& symbols,
     const std::vector<ConstValue>& arguments, std::string& failure) {
     failure.clear();
+    mSelectorEvaluationFailure.clear();
     if (!function || function->params.size() != arguments.size() + 1) {
         failure = "selector invocation does not match its declaration";
         return std::nullopt;
     }
     std::unordered_map<std::string, SelectorValue> locals;
     SelectorDeclarationViewValue input;
-    for (const auto& candidate : view.candidates())
-        input.declarationIds.push_back(candidate.declarationId);
+    for (const auto* candidate : symbols.legacyTraversal())
+        input.declarationIds.push_back(candidate->declarationId);
     locals[function->params.front().name] = std::move(input);
     for (size_t index = 0; index < arguments.size(); ++index) {
         locals[function->params[index + 1].name] =
@@ -1077,14 +1085,14 @@ std::optional<std::string> CompileTimeEvaluator::evaluateSelectorFunction(
                 return item;
             }, arguments[index]);
     }
-    const auto* previousView = mContext.mActiveSelectorView;
+    const auto* previousSet = mContext.mActiveSelectorSet;
     const std::string previousPackage = mContext.mCurrentPackageId;
     const std::string previousModule = mContext.mCurrentModulePath;
     mContext.setDeclarationContext(function);
-    mContext.mActiveSelectorView = &view;
+    mContext.mActiveSelectorSet = &symbols;
     if (++mContext.mConstEvaluationDepth > 128) {
         --mContext.mConstEvaluationDepth;
-        mContext.mActiveSelectorView = previousView;
+        mContext.mActiveSelectorSet = previousSet;
         mContext.mCurrentPackageId = previousPackage;
         mContext.mCurrentModulePath = previousModule;
         failure = "selector recursion depth exceeded 128";
@@ -1095,7 +1103,7 @@ std::optional<std::string> CompileTimeEvaluator::evaluateSelectorFunction(
     const bool evaluated = evaluateSelectorBlock(
         function->body.get(), locals, result, returned);
     --mContext.mConstEvaluationDepth;
-    mContext.mActiveSelectorView = previousView;
+    mContext.mActiveSelectorSet = previousSet;
     mContext.mCurrentPackageId = previousPackage;
     mContext.mCurrentModulePath = previousModule;
     if (!evaluated) {
@@ -1112,7 +1120,9 @@ std::optional<std::string> CompileTimeEvaluator::evaluateSelectorFunction(
         return std::nullopt;
     }
     if (declaration->declarationId.empty()) {
-        failure = "selector returned no legal declaration";
+        failure = mSelectorEvaluationFailure.empty()
+            ? "selector returned no legal declaration"
+            : mSelectorEvaluationFailure;
         return std::nullopt;
     }
     return declaration->declarationId;

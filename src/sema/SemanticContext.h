@@ -7,11 +7,13 @@
 #include "../parser/AST.h"
 
 #include <optional>
+#include <memory>
 #include <utility>
 #include <variant>
 
 namespace luna::selector {
-class DeclarationView;
+class SymbolCatalog;
+class SymbolSet;
 }
 
 class BodyContextAccess;
@@ -143,7 +145,7 @@ public:
         bool& returned) = 0;
     virtual std::optional<std::string> evaluateSelectorFunction(
         FunctionDecl* function,
-        const luna::selector::DeclarationView& view,
+        const luna::selector::SymbolSet& symbols,
         const std::vector<SemanticConstValue>& arguments,
         std::string& failure) = 0;
 };
@@ -227,6 +229,9 @@ public:
     const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
     SymbolTable& symTable() { return mSymTable; }
     const SymbolTable& symTable() const { return mSymTable; }
+    const luna::selector::SymbolCatalog* symbolCatalog() const {
+        return mSymbolCatalog.get();
+    }
     const std::vector<ResolvedDeclarationReference>& declarationReferences() const {
         return mDeclarationReferences;
     }
@@ -262,6 +267,7 @@ private:
     void analyzeMeta(MetaDecl* decl);
     void analyzeConstraint(ConstraintDecl* decl);
     void validateMetadata(Decl* decl);
+    void rebuildSymbolCatalog();
     void analyzeSlotDecl(SlotDeclStmt* stmt);
     void analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedReturn);
     void analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn);
@@ -302,7 +308,7 @@ private:
         BlockStmt* block, std::unordered_map<std::string, SelectorValue>& locals,
         std::optional<SelectorValue>& result, bool& returned);
     std::optional<std::string> evaluateSelectorFunction(
-        FunctionDecl* function, const luna::selector::DeclarationView& view,
+        FunctionDecl* function, const luna::selector::SymbolSet& symbols,
         const std::vector<ConstValue>& arguments, std::string& failure);
     std::optional<ConstValue> evaluateConstraintExpr(
         Expr* expr, const std::unordered_map<std::string, TypePtr>& bindings,
@@ -365,6 +371,7 @@ private:
     std::unordered_map<std::string, MetaDecl*> mMetadataSchemas;
     std::unordered_map<std::string, ConstraintDecl*> mConcepts;
     std::unordered_map<std::string, std::vector<FunctionDecl*>> mFunctionFamilies;
+    std::shared_ptr<const luna::selector::SymbolCatalog> mSymbolCatalog;
     std::unordered_map<std::string, Decl*> mQualifiedDeclarations;
     std::unordered_map<std::string,
         std::unordered_map<std::string, std::string>> mPackageAliases;
@@ -430,7 +437,7 @@ private:
     std::unordered_map<std::string, FunctionDecl*> mConstexprFunctions;
     int mConstEvaluationDepth = 0;
     uint64_t mIteratorStateCounter = 0;
-    const luna::selector::DeclarationView* mActiveSelectorView = nullptr;
+    const luna::selector::SymbolSet* mActiveSelectorSet = nullptr;
     struct SlotInfo {
         std::string name;
         TypeVec paramTypes;
