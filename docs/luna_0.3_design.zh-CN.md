@@ -150,6 +150,30 @@ section；计算自身 digest 时按规范排除 proof section，而证明绑定
 code/data 与 typed descriptor。section 缺失或损坏时 Native loader 必须拒绝，不搜索
 proof sidecar。
 
+实现状态（2026-08-24）：Native library 已在平台 section 中嵌入不含指针的
+v1 proof record。规范 SHA-256 把整个 record 替换为零字节，在不产生
+自引用的前提下绑定产物其余所有字节。独立的规范 digest 覆盖排序后的
+typed-export 集合与最终平台 dynamic-dependency table，package/version、target ABI 和
+compiler identity 直接写入 record。同目录 `.trust` 输出是安装候选记录，
+不是 proof sidecar，也不会被隐式搜索。离线验证要求精确的显式 trust-store
+记录，并拒绝缺少证明、篡改、target 不匹配或缺少 trust。sealer 会直接解析最终
+ELF `DT_NEEDED`、Mach-O dylib load command 或 PE import/delay-import table；
+production verifier 与独立 oracle 都会重建并比较其规范 digest。这不信任原始
+linker command，并关闭 `TR001` 的 dynamic-dependency 部分。
+
+同一产物还导出 `luna_native_library_descriptor_v1`，返回 versioned 内存
+registry。每个 export row 携带 declaration kind、SymbolId、ContractId、linkage name，
+只有函数携带 callable entry。loader 用这些字段重建规范 export digest，
+并在暴露 typed binding 前与已信任 proof 匹配；raw symbol lookup 不是安全
+`ModuleRef`。registry 发射与独立 digest/entry 消费已实现。
+
+verified loader 会先捕获私有 staging image；Linux 封印 `memfd`，其他平台
+保持 locked/private staging file。验证、dependency 解析与 native loading 都使用
+同一 image。它在暴露精确 SymbolId+ContractId lookup 前验证 registry identity
+与规范 export digest。确定性测试会在验证后把原路径替换为另一实现，
+最终仍执行 staged implementation。进化 generation activation 与 `ModuleRef`
+发布仍待完成。
+
 `-t cffi` 只导出显式声明为 `export "C" fn` 的函数；普通 `export fn` 保持 Luna typed
 ABI，因此出现在 CFFI library public surface 时非法。每个 C export 必须属于封闭的
 C-ABI-safe 类型子集，生成的 `<name>.h` 声明编译器选定的真实 link symbol，避免
@@ -588,6 +612,24 @@ binding 参与原子切换。
 
 `TBD-EV004`：冻结 pinned reference、switchable binding、initializer 和 activation 的
 具体源码/API 拼写。
+
+实现状态（2026-08-24）：内部 EV001–EV003 状态机已实现，没有代替
+`TBD-EV004` 决定公开拼写。每个 staging request 具有
+module/content/generation identity 与被保留的 module lease；验证、binding 解析和
+可选 initializer 完成后，一次性安全点才能激活。module activation 只发布
+一个不可变 generation pointer，因此并发 switchable reader 不会看到部分
+binding 更新。普通 pinned reference 保留原 generation，0.3 保留所有已激活
+generation，rollback 原子选择已保留代码。验证、解析、initializer 或兼容性
+失败都不改变旧 active generation。持久状态迁移、公开源码/API 与面向用户的
+artifact activation 仍延后。
+内部 artifact 适配器已生效：已验证 Native library 提供 proof digest、
+registry binding、executable entry 与 library lease；host-matched 已验证 Moon
+Container 提供完整字节 content digest、decoded-module identity 与被保留的 ORC JIT
+lease。function publication 携带 executable entry，非 function export 仍是
+descriptor-backed。内部测试会激活两个真实 Moon generation，证明 pinned entry
+持续可执行、兼容 switchable entry 切换，并 rollback 到被保留的首个 JIT；这仍未
+选择任何公开 activation 拼写。replacement initializer 会在 publication 前执行已解析
+entry，而拒绝 initializer 不得改变 active generation 或 retained history。
 
 ## 7. Symbol Query 与 Slot/Fragment
 

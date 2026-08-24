@@ -38,15 +38,20 @@ The 0.3 migration has completed the Sema split, nominal named-type default,
 usage blocks, generic Resource/Drop contracts, and library-owned `Rc`/`Arc`.
 The single MoonIR now seals executable function bodies to canonical tables and
 CFG unconditionally. The currently supported surface passes the complete
-56-test gate, including per-element move-only iterator cleanup. Finite linked runtime
+58-test gate, including per-element move-only iterator cleanup. Finite linked runtime
 contexts and replay-safe multi-shot continuations now run canonically; persistent
 external-plugin continuation callbacks remain outside plugin ABI v1. Legacy
 structured executable-body codegen has been deleted, and the backend rejects
 unsealed bodies at its boundary. Host-specific Moon Containers now support
 deterministic serialization, atomic verified loading, and
 `luna build <package> -t moon`. `-t cffi` now emits a C ABI shared library and
-header and is gated through a real C consumer. The evolution runtime and trusted
-native proof format remain unimplemented. Legacy `dynamic` source forms
+header and is gated through a real C consumer. Native libraries now carry a
+proof-bound typed registry and use immutable staging for verified loading. The
+internal evolution state machine now covers stateless staging, safe-point
+activation, pinned/switchable references, rollback, and internal Native/Moon
+artifact adapters. Verified Moon function publications retain their ORC JIT
+session as the generation lease; public evolution syntax/API remains deferred by
+`TBD-EV004`. Legacy `dynamic` source forms
 that remain in the development compiler are migration input, not the 0.3
 phase model or a compatibility promise.
 
@@ -150,8 +155,9 @@ directory containing `luna.package`:
 The driver also exposes explicit linker, runtime, MoonIR, cost-report and GPU target options.
 Runtime backend selection is separate from code-object generation.
 The 0.3 `-t native|moon|cffi` artifact selector is now a driver option. Native
-library builds fail explicitly until proof-section emission is implemented;
-they never downgrade to an unproved artifact.
+libraries now carry an embedded proof and an explicit installation trust
+candidate; no adjacent record is trusted automatically, and atomic Runtime
+loading remains fail-closed until the loader is implemented.
 See the [compiler command reference](docs/cli.md) for commands, options, environment variables and examples.
 Repository contributors should use the [file and responsibility guide](docs/file_guide.md)
 before adding or moving implementation files.

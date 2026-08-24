@@ -5,12 +5,14 @@
 #include "moonir/Sealer.h"
 #include "moonir/Verifier.h"
 #include "codegen/CodeGenerator.h"
+#include "driver/MoonGeneration.h"
 #include "diagnostics/Diagnostic.h"
 #include "driver/CompilerPipeline.h"
 #include "sema/SymbolTable.h"
 #include "tooling/AnalysisSnapshot.h"
 
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
+#include <llvm/Support/Compiler.h>
 #include <llvm/Support/TargetSelect.h>
 
 #include <algorithm>
@@ -38,6 +40,16 @@ namespace {
 int fail(const char* message) {
     std::cerr << message << '\n';
     return 1;
+}
+
+using GenerationEntry = int (*)();
+
+#if defined(__clang__)
+LLVM_NO_SANITIZE("function")
+#endif
+int invokeGenerationEntry(const void* address) {
+    return reinterpret_cast<GenerationEntry>(
+        const_cast<void*>(address))();
 }
 
 } // namespace
@@ -5577,6 +5589,176 @@ fn main() -> i32 {
                 type.kind == TypeKind::Unknown)
                 return fail("Moon Container retained an unresolved generic type");
         }
+        luna::runtime::MoonRuntime evolutionRuntime;
+        luna::runtime::MoonRuntime::StagedGeneration stagedMoon;
+        if (!luna::driver::stageVerifiedMoonGeneration(
+                evolutionRuntime, encodedContainer, manifest.targetTriple,
+                manifest.dataLayout, {}, stagedMoon, containerError)) {
+            std::cerr << containerError << '\n';
+            return fail("verified Moon Container did not enter generation staging");
+        }
+        const uint64_t stagedMoonId = stagedMoon.generationId();
+        if (stagedMoonId == 0 ||
+            stagedMoon.moduleId() != manifest.packageId ||
+            stagedMoon.contentDigest().size() != 64)
+            return fail("Moon generation staging lost content identity");
+        auto moonSafePoint = evolutionRuntime.safePoint();
+        if (!evolutionRuntime.activate(
+                stagedMoon, moonSafePoint, containerError) ||
+            evolutionRuntime.activeGenerationId(manifest.packageId) !=
+                stagedMoonId ||
+            evolutionRuntime.retainedGenerationCount(manifest.packageId) != 1)
+            return fail("Moon generation did not activate atomically");
+        const auto pinnedMoon = evolutionRuntime.pin(manifest.packageId);
+        for (const auto& exported : loadedModule.exports) {
+            const auto binding = pinnedMoon.find(
+                exported.declaration.symbol.value,
+                exported.declaration.contract.value);
+            const auto* descriptor = loadedModule.findDeclaration(
+                exported.declaration);
+            if (!binding || !descriptor)
+                return fail("Moon generation lost an exported binding");
+            if (descriptor->kind == moon::DeclarationKind::Function) {
+                if (!binding.implementation() ||
+                    (binding.flags() &
+                     luna::runtime::GenerationBindingCallable) == 0)
+                    return fail("Moon generation lost an executable export");
+            } else if (binding.implementation() == nullptr ||
+                       binding.flags() != 0) {
+                return fail("Moon generation lost a descriptor-backed export");
+            }
+        }
+        const auto entryBinding = pinnedMoon.find(
+            manifest.entrypoint.symbol.value,
+            manifest.entrypoint.contract.value);
+        if (!entryBinding ||
+            (entryBinding.flags() &
+             luna::runtime::GenerationBindingCallable) == 0 ||
+            invokeGenerationEntry(entryBinding.implementation()) != 60)
+            return fail("retained Moon JIT lease changed entrypoint behavior");
+
+        luna::runtime::MoonRuntime::SwitchableBinding switchableEntry;
+        if (!evolutionRuntime.makeSwitchable(
+                manifest.packageId, manifest.entrypoint.symbol.value,
+                manifest.entrypoint.contract.value, switchableEntry,
+                containerError))
+            return fail("active Moon entrypoint did not become switchable");
+        const std::string replacementSource = R"luna(
+fn main() -> i32 {
+    return 13;
+}
+)luna";
+        luna::driver::CompilerPipeline replacementPipeline;
+        if (!replacementPipeline.compileSourceToMoonIR(
+                replacementSource, "<pipeline-seal>", options))
+            return fail("replacement Moon generation failed canonical lowering");
+        const moon::DeclarationRecord* replacementMain = nullptr;
+        for (const auto& record :
+             replacementPipeline.moonModule().declarationTable) {
+            if (record.kind == moon::DeclarationKind::Function &&
+                record.sourceName == "main") {
+                replacementMain = &record;
+                break;
+            }
+        }
+        if (!replacementMain ||
+            replacementMain->symbolId != manifest.entrypoint.symbol ||
+            replacementMain->contractId != manifest.entrypoint.contract)
+            return fail("replacement Moon generation changed entrypoint identity");
+        moon::ContainerManifest replacementManifest = manifest;
+        replacementManifest.entrypoint = {
+            replacementMain->symbolId, replacementMain->contractId};
+        std::vector<uint8_t> replacementContainer;
+        if (!moon::ContainerModelCodec::encodeContainer(
+                replacementManifest, replacementPipeline.moonModule(),
+                replacementContainer, containerError))
+            return fail("replacement Moon generation failed container encoding");
+        luna::runtime::MoonRuntime::StagedGeneration replacementStaged;
+        bool replacementInitializerRan = false;
+        if (!luna::driver::stageVerifiedMoonGeneration(
+                evolutionRuntime, replacementContainer,
+                replacementManifest.targetTriple,
+                replacementManifest.dataLayout,
+                [&](const auto&, const auto& bindings,
+                    std::string& initializerError) {
+                    if (evolutionRuntime.activeGenerationId(
+                            manifest.packageId) != stagedMoonId) {
+                        initializerError =
+                            "replacement initializer observed early publication";
+                        return false;
+                    }
+                    const auto binding = std::find_if(
+                        bindings.begin(), bindings.end(), [&](const auto& item) {
+                            return item.symbolId ==
+                                    replacementMain->symbolId.value &&
+                                item.contractId ==
+                                    replacementMain->contractId.value;
+                        });
+                    if (binding == bindings.end() ||
+                        (binding->flags &
+                         luna::runtime::GenerationBindingCallable) == 0 ||
+                        invokeGenerationEntry(binding->implementation) != 13) {
+                        initializerError =
+                            "replacement initializer saw an unresolved entry";
+                        return false;
+                    }
+                    replacementInitializerRan = true;
+                    return true;
+                }, replacementStaged,
+                containerError)) {
+            std::cerr << containerError << '\n';
+            return fail("replacement Moon generation failed staging");
+        }
+        if (!replacementInitializerRan)
+            return fail("replacement Moon initializer did not run during staging");
+        const uint64_t replacementId = replacementStaged.generationId();
+        auto replacementSafePoint = evolutionRuntime.safePoint();
+        if (!evolutionRuntime.activate(
+                replacementStaged, replacementSafePoint, containerError) ||
+            replacementId == stagedMoonId ||
+            invokeGenerationEntry(entryBinding.implementation()) != 60 ||
+            invokeGenerationEntry(
+                switchableEntry.pin().implementation()) != 13)
+            return fail("Moon generation switch violated pinned/switchable behavior");
+        auto rollbackSafePoint = evolutionRuntime.safePoint();
+        if (!evolutionRuntime.rollback(
+                manifest.packageId, stagedMoonId, rollbackSafePoint,
+                containerError) ||
+            invokeGenerationEntry(
+                switchableEntry.pin().implementation()) != 60 ||
+            evolutionRuntime.retainedGenerationCount(manifest.packageId) != 2)
+            return fail("Moon JIT generation rollback lost retained code");
+
+        bool rejectingInitializerRan = false;
+        luna::runtime::MoonRuntime::StagedGeneration initializerRejected;
+        if (luna::driver::stageVerifiedMoonGeneration(
+                evolutionRuntime, replacementContainer,
+                replacementManifest.targetTriple,
+                replacementManifest.dataLayout,
+                [&](const auto&, const auto& bindings,
+                    std::string& initializerError) {
+                    rejectingInitializerRan = !bindings.empty();
+                    initializerError = "fixture rejected Moon initializer";
+                    return false;
+                }, initializerRejected, containerError) ||
+            !rejectingInitializerRan || initializerRejected ||
+            containerError != "fixture rejected Moon initializer" ||
+            evolutionRuntime.activeGenerationId(manifest.packageId) !=
+                stagedMoonId ||
+            evolutionRuntime.retainedGenerationCount(manifest.packageId) != 2 ||
+            invokeGenerationEntry(
+                switchableEntry.pin().implementation()) != 60)
+            return fail("real Moon initializer failure changed active state");
+        auto corruptedContainer = encodedContainer;
+        corruptedContainer.back() ^= 1;
+        luna::runtime::MoonRuntime::StagedGeneration rejectedMoon;
+        if (luna::driver::stageVerifiedMoonGeneration(
+                evolutionRuntime, corruptedContainer, manifest.targetTriple,
+                manifest.dataLayout, {}, rejectedMoon, containerError) ||
+            rejectedMoon ||
+            evolutionRuntime.activeGenerationId(manifest.packageId) !=
+                stagedMoonId)
+            return fail("corrupt Moon generation changed active state");
         bool loadedConcreteInstance = false;
         bool loadedForward = false;
         for (const auto& declaration : loadedModule.declarations) {

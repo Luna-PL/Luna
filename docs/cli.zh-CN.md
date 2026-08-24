@@ -85,7 +85,16 @@ luna build <package> [-O0|-O2|-O3] [选项]
 `kind = "application"` 或 `kind = "library"`。standalone 文件仍可用于 `check`、
 `run` 和 `analyze`，但 `build` 会拒绝。`-t native` 是默认目标；Native
 application 生成 `<package-root>/build/native/<package末段>` 及同目录文本 LLVM IR，
-Windows executable 带 `.exe` 后缀。Native library 在 proof section 与 loader 完成前失败关闭。
+Windows executable 带 `.exe` 后缀。Native library 必须是 `kind = "library"`，
+且 public surface 只能包含普通 Luna export。它生成 `lib<name>.so`（macOS
+为 `.dylib`，Windows 为 `<name>.dll`）、同目录文本 IR 和嵌入式 proof section。
+构建还会写出 `<library>.trust` 作为安装候选记录，但不会自动搜索或信任；
+只有可信 installer 把该精确记录放入显式 trust store 后，未来 Runtime
+loader 才可接受。每个 library 还导出 versioned typed descriptor registry，
+row 由 proof 的 export digest 绑定并使用 SymbolId/ContractId 身份。内部
+verified-loader primitive 使用不可变/私有 staging，只发布与 proof 匹配的
+registry entry。当前还没有面向用户的 load/activation CLI 或进化 generation
+manager；raw dynamic-loader symbol lookup 不是 trusted 装载路径。
 
 `luna build <package目录> -t moon` 要求 manifest 显式声明 `kind`，并生成经过
 自验证的 host-specific `.moon`。`-o` 可覆盖路径；否则输出为
@@ -99,8 +108,8 @@ instance；作为 export 或 entrypoint 的 generic recipe 会被拒绝。
 导出和 standalone source 都会被拒绝。默认输出为
 `<package-root>/build/cffi/lib<package末段>.so`（macOS 为 `.dylib`，Windows 为
 `<package末段>.dll`）以及同目录的 `<package末段>.h`；`-o` 覆盖共享库完整路径，
-头文件仍以 package 末段命名并写在共享库旁。当前 Native library 会在证明段发射完成前
-明确拒绝，不能降级为无证明共享库或 executable。
+头文件仍以 package 末段命名并写在共享库旁。同一 package 不能静默改类为
+trusted Native：Native public surface 会拒绝 `export "C" fn`。
 
 开发构建默认使用自身的 `libruntime.a` 和 `clang++`。安装、打包或交叉环境应该
 传入 `--runtime-lib` 和 `--cc`，也可设置 `LUNA_RUNTIME_LIB` 与 `LUNA_CXX`。

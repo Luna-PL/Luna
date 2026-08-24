@@ -118,12 +118,12 @@
    crossing the external plugin boundary; plugin ABI v1 remains deliberately
    interceptor-only.
 
-### Canonical-path and container status (2026-08-22)
+### Canonical-path and container status (2026-08-24)
 
-- Full registered CTest: 56/56 on the unconditional canonical pipeline.
+- Full registered CTest: 58/58 on the unconditional canonical pipeline.
 - Strict-warning build: green.
-- Production canonical ASan/UBSan suite: 56/56 green after the unconditional
-  switchover, linked context/multi-shot slice, and CFFI artifact boundary.
+- Production canonical ASan/UBSan suite: 58/58 green after the unconditional
+  switchover, linked context/multi-shot slice, and Native artifact boundary.
 - Runtime contexts/multi-shot: executable canonical successes for finite
   linked candidates; external plugin callbacks remain outside ABI v1.
 - Structured executable-body consumer: deleted; item 10's one-way backend
@@ -138,8 +138,39 @@
   symbols. Application, standalone, ordinary Luna export, empty export, and
   Native-library downgrade cases fail closed. T003 formal-package-only build
   enforcement and the `build/native`, `build/moon`, and `build/cffi` default
-  output split are complete. Native library proof emission and the
-  corresponding loader remain open; item 12 is not closed.
+  output split are complete. Native library proof emission is recorded below;
+  the verified loader is now also complete, so item 12 is closed.
+
+  **Native proof and loader update (2026-08-24):** a
+  Native library carries one pointer-free v1 record in a platform binary
+  section. Canonical SHA-256 excludes that record and binds every other file
+  byte; separate digests bind the sorted typed-export and declared foreign
+  dependency sets, alongside package/version, target ABI, and compiler
+  identity. The generated `.trust` file is only an installation candidate and
+  is never searched implicitly. Offline explicit-trust verification rejects
+  missing proof, byte tampering, target mismatch, and absent trust records.
+  The sealer and verifier now independently parse the linker's final ELF,
+  Mach-O, or PE dependency table and bind its canonical digest. Native
+  libraries also expose a v1 typed descriptor registry bound by the
+  export digest; independent code resolves and invokes an entry only after
+  checking its SymbolId, ContractId, kind, flags, and linkage. The loader
+  captures a private immutable image, verifies and loads that same image, and
+  publishes lookups only by SymbolId plus ContractId. Deterministic tests
+  replace the original path with a different implementation after verification
+  and forge a trust-matching export digest; the staged implementation remains
+  selected and the forged registry is rejected. Generation activation belongs
+  to the separate evolution-runtime work.
+- Item 15 internal state-machine slice: EV001–EV003 now have executable
+  generation identities, retained module leases, verify/resolve/initialize
+  staging, one-use safe points, atomic activation, pinned references,
+  compatible switchable bindings, and rollback. Initializer and binding
+  failures preserve the active generation; concurrent readers see only whole
+  generations across repeated transitions. Real verified Native libraries now
+  enter this state as executable lease-backed bindings, and verified Moon
+  Containers enter with retained ORC JIT function bindings plus descriptor-backed
+  non-function exports. A real 60 -> 13 -> 60 Moon switch/rollback preserves both
+  generation leases. This does not close `TBD-EV004` or choose public evolution
+  syntax/API.
 
 The canonical codegen now resolves all local-reference paths through the
 LocalId-indexed tables (mCanonicalLocals / mCanonicalLocalTypes): generateCall

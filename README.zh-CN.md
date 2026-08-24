@@ -32,12 +32,17 @@ Luna 将静态、无额外运行时开销的语言机制，与需要显式选择
 
 0.3 迁移已经完成 Sema 拆分、具名类型默认名义化、usage block、通用
 Resource/Drop contract，以及由库拥有的 `Rc`/`Arc`。唯一 MoonIR 现在无条件把可执行函数体
-seal 为 canonical table 与 CFG；当前受支持表面已通过完整 56 项门禁，
+seal 为 canonical table 与 CFG；当前受支持表面已通过完整 58 项门禁，
 包括 move-only iterator 的逐元素清理。有限静态链接的 runtime context 与 replay-safe multi-shot 已可 canonical 执行；
 持久外部插件 continuation callback 仍不在 plugin ABI v1 内。host-specific Moon
 Container 已支持确定性序列化、原子验证装载和 `luna build <package> -t moon`；
-`-t cffi` 已可生成 C ABI 共享库与头文件，并由真实 C 消费者门禁验证。进化 runtime 和
-可信 Luna native 证明格式仍未实现。开发编译器里暂存的旧
+`-t cffi` 已可生成 C ABI 共享库与头文件，并由真实 C 消费者门禁验证。
+Native library 已具备 proof-bound typed registry 与基于不可变 staging 的验证装载。
+内部 evolution 状态机已覆盖无状态 staging、安全点 activation、
+pinned/switchable reference、rollback 与 Native/Moon artifact 内部适配器；
+已验证 Moon function publication 会把 ORC JIT session 作为 generation lease 保留；
+公开 evolution 语法/API 仍受
+`TBD-EV004` 阻塞。开发编译器里暂存的旧
 `dynamic` 源码形式只是迁移输入，不属于 0.3 phase 模型，也不构成兼容承诺。
 
 可以先阅读[主要特性概览](docs/features.zh-CN.md)，或直接查看[可编译运行的完整示例](examples/full_showcase/README.md)。
@@ -138,7 +143,8 @@ package 目录：
 运行时后端选择与设备代码生成是两个独立决策。完整参数、环境变量和示例见
 [编译器命令参考](docs/cli.zh-CN.md)。
 0.3 `-t native|moon|cffi` 产物 selector 已成为 driver 选项。Native library 会在
-证明段实现前明确拒绝，不会降级为无证明产物。
+二进制中嵌入 proof，并生成显式安装 trust 候选记录；相邻记录不会被自动
+信任，原子 Runtime loader 实现前装载路径仍保持 fail-closed。
 新增或移动实现文件前，请先查阅[仓库文件与职责指南](docs/file_guide.md)。
 
 ## 平台与测试状态

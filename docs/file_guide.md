@@ -361,6 +361,12 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/driver/CompilerPipeline.h`
 - `src/driver/Driver.cpp`
 - `src/driver/Driver.h`
+- `src/driver/MoonGeneration.cpp`
+- `src/driver/MoonGeneration.h`
+- `src/driver/NativeArtifact.cpp`
+- `src/driver/NativeArtifact.h`
+- `src/driver/NativeGeneration.cpp`
+- `src/driver/NativeGeneration.h`
 - `src/driver/Repl.cpp`
 - `src/driver/Repl.h`
 - `src/instantiation/Instantiator.cpp`
@@ -397,6 +403,9 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/parser/Parser.cpp`
 - `src/parser/Parser.h`
 - `src/runtime/FragmentPluginABI.h`
+- `src/runtime/MoonRuntime.cpp`
+- `src/runtime/MoonRuntime.h`
+- `src/runtime/NativeArtifactABI.h`
 - `src/runtime/ApplicationHostServices.cpp`
 - `src/runtime/ApplicationHostServices.h`
 - `src/runtime/Runtime.cpp`
@@ -705,6 +714,12 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/workspaces/std_io/stdin.txt`
 - `tests/fragment_lowering_abi.cmake`
 - `tests/cffi_artifact.cmake`
+- `tests/native_artifact.cmake`
+- `tests/native_artifact_consumer.py`
+- `tests/native_artifact_mutate.py`
+- `tests/native_artifact_oracle.py`
+- `tests/native_artifact_test.cpp`
+- `tests/moon_runtime_test.cpp`
 - `tests/fragment_plugin_fixture.cpp`
 - `tests/fragment_plugin_test.cpp`
 - `tests/full_showcase.cmake`

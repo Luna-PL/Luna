@@ -45,13 +45,45 @@ concrete function 和两条边的 call chain，证明 dead declaration 会消失
 仍可执行。其直接 verifier 负向用例还会拒绝缺失 literal `TypeRef`
 以及被伪造为 boolean type 的 integer literal。
 
+`luna.moon-runtime` 测试内部 EV001–EV003 状态机，不冻结受
+`TBD-EV004` 延后的公开 API。它要求严格 verify-resolve-initialize staging
+顺序、一次性且属于同一 runtime 的安全点、失败原子性、精确
+SymbolId/ContractId 兼容性、pinned 旧 reference、switchable 新 reference、代码
+lease 保留与 rollback。四个并发 reader 经过 1000 次 generation transition，
+必须只观察到所有已激活 generation 的完整 identity/implementation 对。
+canonical round-trip 测试还会把真实已验证 Moon Container 放入 staging，
+materialize 并保留其 ORC JIT，再让两个兼容 generation 经 activation 与 rollback
+执行出 60 -> 13 -> 60。首个 pinned entry 必须始终为 60、两份代码 lease 都被保留，
+replacement initializer 必须在 publication 前执行已解析的 13 entry，且 initializer
+失败或损坏容器都不得改变 active generation。
+
 `luna.cffi-artifact` 从真实 library package 生成平台共享库与 C header，
 再用系统 C 编译器以 strict C11 模式编译并运行一个独立消费者。
 它同时验证 application、零 C 导出、普通 Luna export、standalone build
-和未证明 Native library 都失败且不产生主产物。同一 target matrix 还要求
+和把 C export 当作 Native public surface 都失败且不产生主产物。同一 target matrix 还要求
 Native application 使用 `build/native`，拒绝 standalone Native build 和缺失
 manifest kind，并真实执行 package 产物。旧单文件 AOT 回归通过
 `aot_package_fixture.cmake` 暂存 application package，不在生产 driver 中增加绕过开关。
+
+`luna.native-artifact` 构建真实 Native library，并独立调用离线 trust
+verifier。它要求专用嵌入 proof section、精确的显式 trust record 以及
+package/target/compiler identity；链接后字节篡改、空 trust store 和无证明
+native binary 都必须拒绝。候选 `.trust` 文件只是给 installer 的证据，
+不是自动信任相邻文件的通道。另一个不复用 compiler 代码的 Python
+SHA-256/framing oracle 独立复核产物，raw platform consumer 还会调用真实
+typed export 并要求结果为 `42`。production verifier 与 oracle 还会分别
+重建最终 ELF/Mach-O/PE dependency table；伪造 dependency digest 必须在
+trust-store lookup 之前失败。
+consumer 通过 `luna_native_library_descriptor_v1` 取得 callable，验证每个
+registry row，使用 SymbolId/ContractId/kind/flags/linkage 重建规范 export
+digest，然后才调用 descriptor entry；它不猜测 raw function name。
+production loader 另行捕获不可变/私有 staging，验证并装载同一 image，
+只暴露精确 SymbolId+ContractId lookup。测试在验证后把原路径替换为
+返回 `13` 的未信任实现，仍必须得到 `42`；它还伪造与改动后 proof export
+digest 匹配的 trust row，loader 必须因 registry 不匹配而拒绝。
+同一独立 consumer 还会驱动两个可信 Native generation：第一代 pinned
+binding 保持 `42`，第二代激活后 switchable binding 变为 `13`，rollback 只把
+switchable binding 重定向为 `42`。
 
 Moon Container 的 coverage-guided fuzzing 是可选门禁，需要 Clang/libFuzzer：
 
@@ -94,6 +126,24 @@ UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1 \
 `libruntime.a`，因此安装后的 AOT 测试不需要额外链接 sanitizer runtime。
 ORC 生成的入口函数没有 Clang UBSan 的函数类型前缀元数据，故仅 JIT 入口的
 一次间接调用关闭 `function` 检查；调用前后的编译器与 runtime 仍保持插桩。
+Native artifact verifier/loader 测试也接受插桩，覆盖 proof parsing、不可变 staging、
+typed-registry 验证与 generation 适配。
+
+并发 generation 状态机使用独立 ThreadSanitizer 门禁，因此 TSan 不会与
+ASan/UBSan 组合，也不会插桩 LLVM/ORC：
+
+```sh
+cmake -S . -B build-thread-sanitized -G Ninja \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DLUNA_ENABLE_THREAD_SANITIZER=ON -DLUNA_STRICT_WARNINGS=ON
+cmake --build build-thread-sanitized --target moon-runtime-test
+TSAN_OPTIONS=halt_on_error=1:history_size=7 \
+  ctest --test-dir build-thread-sanitized \
+    -R luna.moon-runtime --output-on-failure
+```
+
+该门禁让四个并发 switchable reader 跨越 1000 次原子 generation transition，
+并在首个数据竞争报告处失败。
 
 当前 `luna.semantic-regressions` 覆盖：
 
