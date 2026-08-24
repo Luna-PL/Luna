@@ -59,15 +59,52 @@ that dead declarations disappear while transitive callees remain executable.
 Its direct verifier negatives also reject both a missing literal `TypeRef` and
 an integer literal forged with a boolean type.
 
+`luna.moon-runtime` tests the internal EV001–EV003 state machine without
+freezing the public API deferred by `TBD-EV004`. It requires strict
+verify-resolve-initialize staging order, one-use same-runtime safe points,
+failure atomicity, exact SymbolId/ContractId compatibility, pinned old
+references, switchable new references, retained code leases, and rollback.
+Four concurrent readers cross 1000 generation transitions and must observe
+only complete identity/implementation pairs from all activated generations.
+The canonical round-trip test also stages a real verified Moon Container,
+materializes and retains its ORC JIT, and executes two compatible generations as
+60 -> 13 -> 60 across activation and rollback. The pinned first entry remains 60,
+the replacement initializer executes the resolved 13 entry before publication,
+both code leases remain retained, and initializer failure or a corrupted container
+must leave the active generation unchanged.
+
 `luna.cffi-artifact` builds a platform shared library and C header from a real
 library package, then uses the system C compiler in strict C11 mode to compile
 and run an independent consumer. It also requires application, empty-C-export,
-ordinary Luna export, standalone-build, and unproved Native-library cases to
-fail without producing the primary artifact. The same target-matrix test
+ordinary Luna export, standalone-build, and C-export-as-Native cases to fail
+without producing the primary artifact. The same target-matrix test
 requires Native applications to use `build/native`, rejects standalone Native
 builds and missing manifest kinds, and executes the resulting package artifact.
 Legacy single-file AOT regressions use `aot_package_fixture.cmake` to stage
 temporary application packages without creating a production bypass.
+
+`luna.native-artifact` builds a real Native library and independently invokes
+the offline trust verifier. It requires the dedicated embedded proof section,
+an exact explicit trust record, package/target/compiler identity, and rejects
+post-link byte tampering, an empty trust store, and proof-free native binaries.
+The candidate `.trust` file is evidence for an installer, never an implicit
+adjacent-file trust path. A separate Python SHA-256/framing oracle does not
+reuse compiler code, and an independent raw platform consumer calls the real
+typed export and requires the result `42`. The production verifier and oracle
+separately reconstruct the final ELF/Mach-O/PE dependency table; a forged
+dependency digest must fail before trust-store lookup.
+The consumer obtains the callable through
+`luna_native_library_descriptor_v1`, validates every registry row, rebuilds the
+canonical export digest from SymbolId/ContractId/kind/flags/linkage, and only
+then calls the descriptor entry. It does not use a guessed raw function name.
+The production loader separately captures immutable/private staging, verifies
+and loads that same image, and exposes exact SymbolId+ContractId lookup. The
+test replaces the original path with an untrusted implementation returning
+`13` after verification and still requires `42`; it also forges a matching
+trust row for a changed proof export digest and requires registry rejection.
+The same independent consumer drives two trusted Native generations: a pinned
+first binding remains `42`, the switchable binding becomes `13` after second
+activation, and rollback retargets only the switchable binding to `42`.
 
 Moon Container coverage-guided fuzzing is opt-in and requires Clang/libFuzzer:
 
@@ -112,7 +149,25 @@ This instruments the compiler and in-process JIT Runtime with ASan/UBSan without
 contaminating the installed `libruntime.a`; installed AOT tests need no additional
 sanitizer-runtime link. ORC entry functions lack Clang UBSan function-type-prefix metadata,
 so the single indirect call at a JIT entry disables `function` checking; compiler and
-Runtime instrumentation before and after the call remains enabled.
+Runtime instrumentation before and after the call remains enabled. The Native artifact
+verifier/loader test is also instrumented, including proof parsing, immutable staging,
+typed-registry validation, and generation adaptation.
+
+The concurrent generation state machine has a separate ThreadSanitizer gate so
+TSan is never combined with ASan/UBSan or applied to LLVM/ORC:
+
+```sh
+cmake -S . -B build-thread-sanitized -G Ninja \
+  -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
+  -DLUNA_ENABLE_THREAD_SANITIZER=ON -DLUNA_STRICT_WARNINGS=ON
+cmake --build build-thread-sanitized --target moon-runtime-test
+TSAN_OPTIONS=halt_on_error=1:history_size=7 \
+  ctest --test-dir build-thread-sanitized \
+    -R luna.moon-runtime --output-on-failure
+```
+
+This exercises four concurrent switchable readers across 1000 atomic generation
+transitions and fails on the first reported data race.
 
 Current `luna.semantic-regressions` covers:
 

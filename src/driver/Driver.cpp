@@ -2,6 +2,7 @@
 #include "driver/AotLinker.h"
 #include "driver/CommandLine.h"
 #include "driver/CompilerPipeline.h"
+#include "driver/NativeArtifact.h"
 #include "driver/Repl.h"
 #include "moonir/ContainerModel.h"
 #include "moonir/Printer.h"
@@ -390,6 +391,130 @@ static int buildCffiLibrary(
         return 1;
     }
     std::cout << "Generated C header: " << headerPath.string() << "\n";
+    return 0;
+}
+
+static int buildNativeLibrary(
+    const CompilerPipeline& pipeline, CodeGenerator& codeGenerator,
+    const std::string& inputPath, const std::vector<std::string>& linkLibraries,
+    const std::string& runtimeLibrary, const std::string& aotCompiler,
+    const std::string& outputOverride,
+    LunaOptimizationLevel optimizationLevel) {
+    namespace fs = std::filesystem;
+    const auto& package = pipeline.analysisSnapshot().packageManifest();
+    NativeProofSpec spec;
+    spec.packageId = package.id;
+    spec.packageVersion = package.version;
+    spec.targetAbi = llvm::sys::getProcessTriple();
+    spec.compilerIdentity = std::string("luna/") + LUNA_VERSION_STRING + "@" +
+        LUNA_COMPILER_COMMIT;
+    std::vector<NativeExportSpec> nativeExports;
+
+    for (const auto& declaration : pipeline.moonModule().declarations) {
+        if (!declaration) continue;
+        if (declaration->isExported && declaration->packageId == package.id) {
+            if (const auto* function =
+                    dynamic_cast<const moon::FunctionDecl*>(declaration.get());
+                function && (function->isExtern || function->abi == "C")) {
+                std::cerr << diagnostic::format(
+                    "native-proof",
+                    "Native public surface contains foreign C export '" +
+                        function->name + "'",
+                    function->location.path, function->location.line,
+                    function->location.column,
+                    "use ordinary `export fn` for trusted Native ABI or build `-t cffi`")
+                          << "\n";
+                return 1;
+            }
+            const moon::DeclarationRecord* record = nullptr;
+            for (const auto& candidate :
+                 pipeline.moonModule().declarationTable) {
+                if (candidate.symbolId == declaration->symbolId) {
+                    record = &candidate;
+                    break;
+                }
+            }
+            if (!record) {
+                std::cerr << diagnostic::format(
+                    "native-proof",
+                    "Native export has no sealed declaration record",
+                    declaration->location.path, declaration->location.line,
+                    declaration->location.column,
+                    "report this compiler defect with the package") << "\n";
+                return 1;
+            }
+            NativeExportSpec nativeExport;
+            nativeExport.declarationKind =
+                static_cast<uint32_t>(record->kind) + 1;
+            nativeExport.flags =
+                dynamic_cast<const moon::FunctionDecl*>(declaration.get())
+                ? LUNA_NATIVE_EXPORT_CALLABLE_V1 : 0;
+            nativeExport.symbolId = record->symbolId.value;
+            nativeExport.contractId = record->contractId.value;
+            nativeExport.linkageName = record->linkageName;
+            spec.exportedDescriptors.push_back(
+                canonicalNativeExport(nativeExport));
+            nativeExports.push_back(std::move(nativeExport));
+        }
+    }
+
+    std::vector<uint8_t> proofRecord;
+    std::string proofError;
+    if (!makeNativeProofPlaceholder(spec, proofRecord, proofError) ||
+        !codeGenerator.emitNativeProofPlaceholder(proofRecord) ||
+        !codeGenerator.emitNativeLibraryDescriptor(
+            spec.packageId, spec.packageVersion, spec.targetAbi,
+            spec.compilerIdentity, nativeExports)) {
+        if (!proofError.empty())
+            std::cerr << diagnostic::format(
+                "native-proof", proofError, inputPath, 0, 0,
+                "shorten manifest identity fields or report a compiler defect")
+                      << "\n";
+        else
+            printErrors(codeGenerator.errors(), "native-proof");
+        return 1;
+    }
+
+    const std::string artifactName = packageArtifactName(package.id);
+    fs::path outputPath;
+    if (!outputOverride.empty()) {
+        outputPath = outputOverride;
+    } else {
+        outputPath = fs::path(pipeline.analysisSnapshot().packageRootPath()) /
+            "build" / "native";
+#ifdef _WIN32
+        outputPath /= artifactName + ".dll";
+#elif defined(__APPLE__)
+        outputPath /= "lib" + artifactName + ".dylib";
+#else
+        outputPath /= "lib" + artifactName + ".so";
+#endif
+    }
+    if (AotLinker::build(codeGenerator, {
+            inputPath,
+            pipeline.declaredPackageName(),
+            linkLibraries,
+            runtimeLibrary,
+            aotCompiler,
+            outputPath.string(),
+            optimizationLevel,
+            AotArtifactKind::SharedLibrary,
+        }) != 0)
+        return 1;
+
+    NativeProofInfo proofInfo;
+    const fs::path trustRecordPath = outputPath.string() + ".trust";
+    if (!sealNativeArtifact(outputPath.string(), trustRecordPath.string(),
+                            proofInfo, proofError)) {
+        std::cerr << diagnostic::format(
+            "native-proof", proofError, outputPath.string(), 0, 0,
+            "do not distribute an unsealed Native library") << "\n";
+        return 1;
+    }
+    std::cout << "Sealed Native proof: sha256="
+              << nativeDigestHex(proofInfo.artifactDigest) << "\n"
+              << "Generated trust candidate: " << trustRecordPath.string()
+              << "\n";
     return 0;
 }
 
@@ -840,30 +965,41 @@ int run(int argc, char* argv[]) {
             }
         } else if (artifactTarget == ArtifactTarget::Native) {
             if (package.kind == PackageKind::Library) {
-                std::cerr << diagnostic::format(
-                    "driver",
-                    "trusted Native library proof emission is not implemented",
-                    filePath, 0, 0,
-                    "use -t cffi for a foreign C ABI library or -t moon for a verified container")
-                          << "\n";
-                return 1;
-            }
-            size_t mainCount = 0;
-            for (const auto& declaration : pipeline.moonModule().declarations) {
-                const auto* function = dynamic_cast<const moon::FunctionDecl*>(
-                    declaration.get());
-                if (function && function->packageId == package.id &&
-                    function->name == "main")
-                    ++mainCount;
-            }
-            if (mainCount != 1) {
-                std::cerr << diagnostic::format(
-                    "driver",
-                    "Native application must contain exactly one package main",
-                    filePath, 0, 0,
-                    "define exactly one `fn main() -> i32` in the root package")
-                          << "\n";
-                return 1;
+                size_t mainCount = 0;
+                for (const auto& declaration : pipeline.moonModule().declarations) {
+                    const auto* function =
+                        dynamic_cast<const moon::FunctionDecl*>(declaration.get());
+                    if (function && function->packageId == package.id &&
+                        function->name == "main")
+                        ++mainCount;
+                }
+                if (mainCount != 0) {
+                    std::cerr << diagnostic::format(
+                        "driver", "Native library must not contain a package main",
+                        filePath, 0, 0,
+                        "remove main or set kind = \"application\"") << "\n";
+                    return 1;
+                }
+            } else {
+                size_t mainCount = 0;
+                for (const auto& declaration :
+                     pipeline.moonModule().declarations) {
+                    const auto* function =
+                        dynamic_cast<const moon::FunctionDecl*>(
+                            declaration.get());
+                    if (function && function->packageId == package.id &&
+                        function->name == "main")
+                        ++mainCount;
+                }
+                if (mainCount != 1) {
+                    std::cerr << diagnostic::format(
+                        "driver",
+                        "Native application must contain exactly one package main",
+                        filePath, 0, 0,
+                        "define exactly one `fn main() -> i32` in the root package")
+                              << "\n";
+                    return 1;
+                }
             }
         }
     }
@@ -886,6 +1022,13 @@ int run(int argc, char* argv[]) {
 
     if (cmd == "build" && artifactTarget == ArtifactTarget::Cffi)
         return buildCffiLibrary(
+            pipeline, cg, filePath, linkLibraries, runtimeLibrary,
+            aotCompiler, outputPath, optimizationLevel);
+
+    if (cmd == "build" && artifactTarget == ArtifactTarget::Native &&
+        pipeline.analysisSnapshot().packageManifest().kind ==
+            PackageKind::Library)
+        return buildNativeLibrary(
             pipeline, cg, filePath, linkLibraries, runtimeLibrary,
             aotCompiler, outputPath, optimizationLevel);
 

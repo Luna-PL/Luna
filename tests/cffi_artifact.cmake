@@ -165,6 +165,6 @@ expect_target_failure(
     "requires id, version, kind")
 expect_target_failure(
     native_library "${package_dir}" native
-    "Native library proof emission is not implemented")
+    "Native public surface contains foreign C export")
 
 file(REMOVE_RECURSE "${work_dir}")

@@ -91,7 +91,7 @@ obligation，不能重新推导所有权。
 | `README.zh-CN.md` | 中文项目入口 | 与英文入口指向同一事实来源 |
 | `LICENSE-MIT` | MIT 许可证原文 | 不加入项目说明 |
 | `LICENSE-APACHE` | Apache-2.0 许可证原文 | 不加入项目说明 |
-| `.github/workflows/linux-ci.yml` | Linux C++17/C++23、严格警告和 Sanitizer 门禁 | 不发布产物 |
+| `.github/workflows/linux-ci.yml` | Linux C++17/C++23、严格警告、ASan/UBSan 与独立 MoonRuntime TSan 门禁 | 不发布产物 |
 | `.github/workflows/macos-ci.yml` | macOS 稳定核心门禁 | 不声明其他 macOS 版本兼容 |
 | `.github/workflows/windows-ci.yml` | Windows MSYS2 UCRT64 门禁 | 不代表 MSVC/MSVCRT 支持 |
 | `.github/workflows/release.yml` | tag 校验、三平台预编译包、校验和及 prerelease | 不绕过平台测试直接发布 |
@@ -113,12 +113,25 @@ obligation，不能重新推导所有权。
 | `src/driver/CompilerPipeline.cpp` | 顺序执行 frontend、MoonIR 与 codegen 阶段 |
 | `src/driver/AotLinker.h` | native AOT 链接请求接口 |
 | `src/driver/AotLinker.cpp` | 无 shell 拼接地启动外部 linker |
+| `src/driver/MoonGeneration.h` | 已验证 Moon Container 到 retained-JIT generation 的内部适配接口 |
+| `src/driver/MoonGeneration.cpp` | host target 验证、content identity、ORC function entry、descriptor 与 decoded-module/JIT lease 适配 |
+| `src/driver/NativeArtifact.h` | Native proof 构造/封印、显式 trust 验证与 verified loader 接口 |
+| `src/driver/NativeArtifact.cpp` | 规范摘要、proof/trust、不可变 staging 与 typed registry 验证 |
+| `src/driver/NativeGeneration.h` | verified Native library 到 executable generation 的内部适配接口 |
+| `src/driver/NativeGeneration.cpp` | proof content identity、registry binding、entry 与 library lease 适配 |
 | `src/driver/Repl.h` | 可注入流的 Alpha REPL 接口 |
 | `src/driver/Repl.cpp` | REPL 命令契约、声明累计和临时源码包装 |
 | `src/package/Package.h` | package/module/workspace 装载结果和 loader 接口 |
 | `src/package/Package.cpp` | manifest、lock、源码图装载与 package 合并 |
 | `src/package/PackageManager.h` | package 管理组件的公开边界 |
 | `src/package/PackageManager.cpp` | package 管理组件实现；不得虚构远程解析 |
+
+### 5.1.1 内部 MoonRuntime evolution
+
+| 文件 | 主要职责 |
+|---|---|
+| `src/runtime/MoonRuntime.h` | EV001–EV003 generation identity、lease、staging 与 reference 内部接口；不冻结 `TBD-EV004` 公开 API |
+| `src/runtime/MoonRuntime.cpp` | verify/resolve/initialize、一次性安全点、原子 activation、pinned/switchable 与 rollback 状态机 |
 
 ### 5.2 core、lexer、parser 与 diagnostics
 
@@ -212,14 +225,14 @@ obligation，不能重新推导所有权。
 
 | 文件 | 主要职责 |
 |---|---|
-| `src/codegen/CodeGenerator.h` | codegen façade、共享 lowering 状态和子过程声明 |
+| `src/codegen/CodeGenerator.h` | codegen façade、共享 lowering 状态、可保留 JIT lease 和子过程声明 |
 | `src/codegen/CodeGenerator.cpp` | façade 初始化和小型共用实现 |
 | `src/codegen/CodeGeneratorModule.cpp` | module 级声明收集、host/kernel 编排与验证 |
 | `src/codegen/CodeGeneratorFunctions.cpp` | canonical-only 单函数入口、状态与隐式返回 lowering |
 | `src/codegen/CodeGeneratorExpressions.cpp` | 普通 expression/value lowering |
 | `src/codegen/CodeGeneratorCleanup.cpp` | cleanup、ADT payload、共享/数组资源释放 |
 | `src/codegen/CodeGeneratorControlFlow.cpp` | canonical typed-local CFG 的 LLVM block/local/terminator lowering |
-| `src/codegen/CodeGeneratorExecution.cpp` | LLVM 生命周期、ORC JIT、AOT IR 输出 |
+| `src/codegen/CodeGeneratorExecution.cpp` | LLVM 生命周期、可保留 ORC JIT materialization、JIT 执行与 AOT IR 输出 |
 | `src/codegen/CodeGeneratorGpu.cpp` | GPU target、buffer ABI、launch 与 code object |
 | `src/codegen/CodeGeneratorIterator.cpp` | iterator recipe、pipeline、terminal lowering |
 | `src/codegen/CodeGeneratorRangeAnalysis.h` | 安全索引范围证明接口 |
@@ -546,6 +559,12 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/driver/CompilerPipeline.h`
 - `src/driver/Driver.cpp`
 - `src/driver/Driver.h`
+- `src/driver/MoonGeneration.cpp`
+- `src/driver/MoonGeneration.h`
+- `src/driver/NativeArtifact.cpp`
+- `src/driver/NativeArtifact.h`
+- `src/driver/NativeGeneration.cpp`
+- `src/driver/NativeGeneration.h`
 - `src/driver/Repl.cpp`
 - `src/driver/Repl.h`
 - `src/instantiation/Instantiator.cpp`
@@ -582,6 +601,9 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/parser/Parser.cpp`
 - `src/parser/Parser.h`
 - `src/runtime/FragmentPluginABI.h`
+- `src/runtime/MoonRuntime.cpp`
+- `src/runtime/MoonRuntime.h`
+- `src/runtime/NativeArtifactABI.h`
 - `src/runtime/Runtime.cpp`
 - `src/runtime/Runtime.h`
 - `src/runtime/RuntimeABI.h`
@@ -869,6 +891,12 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/workspaces/local/luna.workspace`
 - `tests/fragment_lowering_abi.cmake`
 - `tests/cffi_artifact.cmake`
+- `tests/native_artifact.cmake`
+- `tests/native_artifact_consumer.py`
+- `tests/native_artifact_mutate.py`
+- `tests/native_artifact_oracle.py`
+- `tests/native_artifact_test.cpp`
+- `tests/moon_runtime_test.cpp`
 - `tests/fragment_plugin_fixture.cpp`
 - `tests/fragment_plugin_test.cpp`
 - `tests/full_showcase.cmake`

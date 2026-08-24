@@ -27,60 +27,24 @@ void initializeLLVM() {
 
 using LunaJitEntry = int (*)();
 
-// UBSan's `function` check probes metadata immediately before every indirect
-// call target. ORC-generated functions do not carry that compiler-emitted
-// metadata and may begin at a page boundary, where the probe itself would
-// fault. Keep the single JIT boundary exempt while retaining ASan/UBSan
-// instrumentation everywhere else in the compiler and embedded runtime.
-#if defined(__clang__)
-LLVM_NO_SANITIZE("function")
-#endif
-int invokeLunaJitEntry(LunaJitEntry entry) {
-    return entry();
-}
-
 #ifdef _WIN32
-// MinGW inserts a call to __main when lowering a function named `main` so a
-// native executable can run GCC-style global constructors. Luna JIT modules
-// contain no such CRT constructor tables, while the statically linked MinGW
-// implementation is not exported for ORC process lookup. This no-op provides
-// exactly the compiler-inserted support symbol required to materialize the JIT
-// entry point without depending on the host executable's export table.
-void lunaJitMingwMain() {}
+void lunaJitMingwMain();
 #endif
 
-} // namespace
-
-CodeGenerator::CodeGenerator(const std::string& moduleName)
-    : mCtx(std::make_unique<llvm::LLVMContext>())
-    , mModule(std::make_unique<llvm::Module>(moduleName, *mCtx))
-    , mBuilder(std::make_unique<llvm::IRBuilder<>>(*mCtx))
-    , mHelpers(std::make_unique<CGHelpers>(*mCtx)) {
-    initializeLLVM();
-}
-
-CodeGenerator::~CodeGenerator() = default;
-
-int CodeGenerator::jitRun() {
+llvm::Expected<std::unique_ptr<llvm::orc::LLJIT>> materializeLunaJit(
+    std::unique_ptr<llvm::Module>& module,
+    std::unique_ptr<llvm::LLVMContext>& context) {
     using namespace llvm;
     using namespace llvm::orc;
 
-    auto JIT = LLJITBuilder().create();
-    if (!JIT) {
-        llvm::errs() << "JIT: " << toString(JIT.takeError()) << "\n";
-        return 1;
-    }
+    auto jit = LLJITBuilder().create();
+    if (!jit) return jit.takeError();
 
-    // Luna runtime calls are language ABI symbols, not ambient process
-    // symbols. Register every referenced helper explicitly so JIT behavior
-    // does not depend on ELF -rdynamic, Mach-O export policy, or Windows
-    // __declspec(dllexport). System/user-library symbols remain available via
-    // the target-process search generator below.
     SymbolMap runtimeSymbols;
     const auto exported = JITSymbolFlags::Exported;
     auto bindRuntime = [&](StringRef name, auto* address) {
-        if (!mModule->getFunction(name)) return;
-        runtimeSymbols[(*JIT)->mangleAndIntern(name)] =
+        if (!module->getFunction(name)) return;
+        runtimeSymbols[(*jit)->mangleAndIntern(name)] =
             ExecutorSymbolDef::fromPtr(address, exported);
     };
     bindRuntime("rt_alloc", &rt_alloc);
@@ -96,8 +60,7 @@ int CodeGenerator::jitRun() {
     bindRuntime("rt_host_services_v1", &rt_host_services_v1);
     bindRuntime("rt_install_application_host_services_v1",
                 &rt_install_application_host_services_v1);
-    bindRuntime("rt_checked_array_layout_v1",
-                &rt_checked_array_layout_v1);
+    bindRuntime("rt_checked_array_layout_v1", &rt_checked_array_layout_v1);
     bindRuntime("rt_try_alloc_v1", &rt_try_alloc_v1);
     bindRuntime("rt_try_realloc_v1", &rt_try_realloc_v1);
     bindRuntime("rt_console_write_v1", &rt_console_write_v1);
@@ -114,8 +77,7 @@ int CodeGenerator::jitRun() {
     bindRuntime("rt_path_metadata_v1", &rt_path_metadata_v1);
     bindRuntime("rt_remove_file_v1", &rt_remove_file_v1);
     bindRuntime("rt_create_directory_v1", &rt_create_directory_v1);
-    bindRuntime("rt_runtime_error_snapshot_v1",
-                &rt_runtime_error_snapshot_v1);
+    bindRuntime("rt_runtime_error_snapshot_v1", &rt_runtime_error_snapshot_v1);
     bindRuntime("rt_malloc", &rt_malloc);
     bindRuntime("rt_free", &rt_free);
     bindRuntime("rt_print_i32", &rt_print_i32);
@@ -136,8 +98,7 @@ int CodeGenerator::jitRun() {
     bindRuntime("rt_dynamic_fragment_report_unknown_and_abort",
                 &rt_dynamic_fragment_report_unknown_and_abort);
     bindRuntime("rt_fragment_plugin_load", &rt_fragment_plugin_load);
-    bindRuntime("rt_fragment_plugin_last_error",
-                &rt_fragment_plugin_last_error);
+    bindRuntime("rt_fragment_plugin_last_error", &rt_fragment_plugin_last_error);
     bindRuntime("rt_fragment_plugin_is_registered",
                 &rt_fragment_plugin_is_registered);
     bindRuntime("rt_fragment_plugin_invoke", &rt_fragment_plugin_invoke);
@@ -162,41 +123,115 @@ int CodeGenerator::jitRun() {
     bindRuntime("rt_gpu_launch_hsaco", &rt_gpu_launch_hsaco);
     bindRuntime("rt_gpu_await_event", &rt_gpu_await_event);
 #ifdef _WIN32
-    runtimeSymbols[(*JIT)->mangleAndIntern("__main")] =
+    runtimeSymbols[(*jit)->mangleAndIntern("__main")] =
         ExecutorSymbolDef::fromPtr(&lunaJitMingwMain, exported);
 #endif
     if (!runtimeSymbols.empty()) {
-        if (auto err = (*JIT)->getMainJITDylib().define(
-                absoluteSymbols(std::move(runtimeSymbols)))) {
-            llvm::errs() << "JIT runtime symbols: "
-                         << toString(std::move(err)) << "\n";
-            return 1;
-        }
+        if (auto error = (*jit)->getMainJITDylib().define(
+                absoluteSymbols(std::move(runtimeSymbols))))
+            return error;
     }
 
-    auto tsm = ThreadSafeModule(std::move(mModule), std::move(mCtx));
-    auto err = (*JIT)->addIRModule(std::move(tsm));
-    if (err) {
-        llvm::errs() << "JIT: " << toString(std::move(err)) << "\n";
-        return 1;
-    }
+    auto tsm = ThreadSafeModule(std::move(module), std::move(context));
+    if (auto error = (*jit)->addIRModule(std::move(tsm)))
+        return error;
 
-    // Resolve libc and explicitly loaded user-library symbols. Luna's own
-    // runtime symbols were defined above and never rely on this fallback.
-    auto& executionSession = (*JIT)->getExecutionSession();
+    auto& executionSession = (*jit)->getExecutionSession();
     auto processSymbols =
         EPCDynamicLibrarySearchGenerator::GetForTargetProcess(executionSession);
-    if (processSymbols)
-        (*JIT)->getMainJITDylib().addGenerator(std::move(*processSymbols));
+    if (!processSymbols) return processSymbols.takeError();
+    (*jit)->getMainJITDylib().addGenerator(std::move(*processSymbols));
+    return std::move(*jit);
+}
 
-    auto mainSymbol = (*JIT)->lookup("main");
-    if (!mainSymbol) {
-        llvm::errs() << "JIT: " << toString(mainSymbol.takeError()) << "\n";
+// UBSan's `function` check probes metadata immediately before every indirect
+// call target. ORC-generated functions do not carry that compiler-emitted
+// metadata and may begin at a page boundary, where the probe itself would
+// fault. Keep the single JIT boundary exempt while retaining ASan/UBSan
+// instrumentation everywhere else in the compiler and embedded runtime.
+#if defined(__clang__)
+LLVM_NO_SANITIZE("function")
+#endif
+int invokeLunaJitEntry(LunaJitEntry entry) {
+    return entry();
+}
+
+#ifdef _WIN32
+// MinGW inserts a call to __main when lowering a function named `main` so a
+// native executable can run GCC-style global constructors. Luna JIT modules
+// contain no such CRT constructor tables, while the statically linked MinGW
+// implementation is not exported for ORC process lookup. This no-op provides
+// exactly the compiler-inserted support symbol required to materialize the JIT
+// entry point without depending on the host executable's export table.
+void lunaJitMingwMain() {}
+#endif
+
+} // namespace
+
+struct LunaJitModule::Impl {
+    std::unique_ptr<llvm::orc::LLJIT> jit;
+};
+
+LunaJitModule::LunaJitModule() : mImpl(std::make_unique<Impl>()) {}
+LunaJitModule::~LunaJitModule() = default;
+
+const void* LunaJitModule::lookup(
+    const std::string& symbol, std::string& error) const {
+    if (!mImpl || !mImpl->jit) {
+        error = "JIT module is not materialized";
+        return nullptr;
+    }
+    auto address = mImpl->jit->lookup(symbol);
+    if (!address) {
+        error = llvm::toString(address.takeError());
+        return nullptr;
+    }
+    error.clear();
+    return address->toPtr<void*>();
+}
+
+CodeGenerator::CodeGenerator(const std::string& moduleName)
+    : mCtx(std::make_unique<llvm::LLVMContext>())
+    , mModule(std::make_unique<llvm::Module>(moduleName, *mCtx))
+    , mBuilder(std::make_unique<llvm::IRBuilder<>>(*mCtx))
+    , mHelpers(std::make_unique<CGHelpers>(*mCtx)) {
+    initializeLLVM();
+}
+
+CodeGenerator::~CodeGenerator() = default;
+
+int CodeGenerator::jitRun() {
+    std::string error;
+    auto module = materializeJitModule(error);
+    if (!module) {
+        llvm::errs() << "JIT: " << error << "\n";
         return 1;
     }
-
-    auto mainFunction = mainSymbol->toPtr<int()>();
+    const auto address = module->lookup("main", error);
+    if (!address) {
+        llvm::errs() << "JIT: " << error << "\n";
+        return 1;
+    }
+    auto mainFunction = reinterpret_cast<LunaJitEntry>(
+        const_cast<void*>(address));
     return invokeLunaJitEntry(mainFunction);
+}
+
+std::shared_ptr<LunaJitModule> CodeGenerator::materializeJitModule(
+    std::string& error) {
+    if (!mModule || !mCtx) {
+        error = "LLVM module was already consumed by JIT materialization";
+        return {};
+    }
+    auto jit = materializeLunaJit(mModule, mCtx);
+    if (!jit) {
+        error = llvm::toString(jit.takeError());
+        return {};
+    }
+    auto result = std::shared_ptr<LunaJitModule>(new LunaJitModule());
+    result->mImpl->jit = std::move(*jit);
+    error.clear();
+    return result;
 }
 
 bool CodeGenerator::emitObjectFile(const std::string& outputPath) {

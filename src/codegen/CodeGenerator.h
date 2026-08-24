@@ -15,10 +15,31 @@
 #include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/Support/TargetSelect.h>
 #include <functional>
+#include <memory>
 #include <string>
 #include <utility>
 #include <vector>
 #include <unordered_map>
+
+namespace luna::driver { struct NativeExportSpec; }
+
+// Internal ownership boundary for ORC materializations. Keeping this object
+// alive keeps every address returned by lookup() executable; destroying it
+// tears down the JIT session and invalidates those addresses.
+class LunaJitModule {
+public:
+    ~LunaJitModule();
+
+    LunaJitModule(const LunaJitModule&) = delete;
+    LunaJitModule& operator=(const LunaJitModule&) = delete;
+    const void* lookup(const std::string& symbol, std::string& error) const;
+
+private:
+    friend class CodeGenerator;
+    LunaJitModule();
+    struct Impl;
+    std::unique_ptr<Impl> mImpl;
+};
 
 enum class LunaOptimizationLevel { O0, O2, O3 };
 
@@ -43,9 +64,17 @@ public:
 
     // JIT: compile and run, returning main()'s exit code
     int jitRun();
+    // Internal evolution adapter: consume the generated LLVM module into a
+    // retained ORC session whose lifetime can be held by a generation lease.
+    std::shared_ptr<LunaJitModule> materializeJitModule(std::string& error);
 
     // AOT: emit object file
     bool emitObjectFile(const std::string& outputPath);
+    bool emitNativeProofPlaceholder(const std::vector<uint8_t>& record);
+    bool emitNativeLibraryDescriptor(
+        const std::string& packageId, const std::string& packageVersion,
+        const std::string& targetAbi, const std::string& compilerIdentity,
+        const std::vector<luna::driver::NativeExportSpec>& exports);
 
     const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 

@@ -1,4 +1,5 @@
 #include "CodeGenerator.h"
+#include "driver/NativeArtifact.h"
 
 #include <cstring>
 #include <sstream>
@@ -186,4 +187,134 @@ void CodeGenerator::emitRuntimeDescriptors() {
     registry->setSection(runtimeSections.registry);
     retainedGlobals.push_back(registry);
     llvm::appendToCompilerUsed(*mModule, retainedGlobals);
+}
+
+bool CodeGenerator::emitNativeProofPlaceholder(
+    const std::vector<uint8_t>& record) {
+    if (!mModule || record.empty()) {
+        error("cannot emit an empty Native proof record");
+        return false;
+    }
+    if (mModule->getNamedGlobal("luna_native_proof_v1")) {
+        error("reserved Native proof symbol 'luna_native_proof_v1' is already defined");
+        return false;
+    }
+    auto* initializer = llvm::ConstantDataArray::get(*mCtx, record);
+    auto* proof = new llvm::GlobalVariable(
+        *mModule, initializer->getType(), true,
+        llvm::GlobalValue::ExternalLinkage, initializer,
+        "luna_native_proof_v1");
+    const llvm::Triple host(llvm::sys::getProcessTriple());
+    if (host.isOSBinFormatMachO())
+        proof->setSection("__DATA,__luna_proof");
+    else if (host.isOSBinFormatCOFF())
+        proof->setSection(".luna$proof");
+    else
+        proof->setSection(".luna.native.proof");
+    if (host.isOSBinFormatCOFF())
+        proof->setDLLStorageClass(
+            llvm::GlobalValue::DLLExportStorageClass);
+    llvm::appendToCompilerUsed(*mModule, {proof});
+    return true;
+}
+
+bool CodeGenerator::emitNativeLibraryDescriptor(
+    const std::string& packageId, const std::string& packageVersion,
+    const std::string& targetAbi, const std::string& compilerIdentity,
+    const std::vector<luna::driver::NativeExportSpec>& exports) {
+    if (!mModule ||
+        mModule->getFunction("luna_native_library_descriptor_v1")) {
+        error("reserved Native descriptor symbol is already defined");
+        return false;
+    }
+    auto* i32 = llvm::Type::getInt32Ty(*mCtx);
+    auto* i64 = llvm::Type::getInt64Ty(*mCtx);
+    auto* ptr = llvm::PointerType::getUnqual(*mCtx);
+    size_t stringIndex = 0;
+    auto cString = [&](const std::string& value) -> llvm::Constant* {
+        auto* initializer = llvm::ConstantDataArray::getString(
+            *mCtx, value, true);
+        auto* global = new llvm::GlobalVariable(
+            *mModule, initializer->getType(), true,
+            llvm::GlobalValue::PrivateLinkage, initializer,
+            "__luna_native_string_" + std::to_string(stringIndex++));
+        global->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+        return global;
+    };
+
+    auto* exportType = llvm::StructType::create(
+        *mCtx, "luna.native.export.v1");
+    exportType->setBody({i32, i32, i32, i32, ptr, ptr, ptr, ptr});
+    std::vector<llvm::Constant*> exportValues;
+    for (const auto& descriptor : exports) {
+        llvm::Constant* entry = llvm::ConstantPointerNull::get(ptr);
+        if ((descriptor.flags & LUNA_NATIVE_EXPORT_CALLABLE_V1) != 0) {
+            auto* function = mModule->getFunction(descriptor.linkageName);
+            if (!function) {
+                error("Native callable export '" + descriptor.linkageName +
+                      "' has no generated entry");
+                return false;
+            }
+            entry = function;
+        }
+        exportValues.push_back(llvm::ConstantStruct::get(
+            exportType,
+            {llvm::ConstantInt::get(i32, LUNA_NATIVE_DESCRIPTOR_ABI_V1),
+             llvm::ConstantInt::get(i32,
+                                    sizeof(LunaNativeExportDescriptorV1)),
+             llvm::ConstantInt::get(i32, descriptor.declarationKind),
+             llvm::ConstantInt::get(i32, descriptor.flags),
+             cString(descriptor.symbolId), cString(descriptor.contractId),
+             cString(descriptor.linkageName), entry}));
+    }
+    llvm::Constant* exportsPointer = llvm::ConstantPointerNull::get(ptr);
+    llvm::GlobalVariable* exportsGlobal = nullptr;
+    if (!exportValues.empty()) {
+        auto* arrayType = llvm::ArrayType::get(exportType, exportValues.size());
+        exportsGlobal = new llvm::GlobalVariable(
+            *mModule, arrayType, true, llvm::GlobalValue::InternalLinkage,
+            llvm::ConstantArray::get(arrayType, exportValues),
+            "__luna_native_exports_v1");
+        exportsPointer = exportsGlobal;
+    }
+
+    auto* descriptorType = llvm::StructType::create(
+        *mCtx, "luna.native.library.v1");
+    descriptorType->setBody(
+        {i32, i32, i32, i32, ptr, ptr, ptr, ptr, i64, ptr});
+    auto* descriptor = new llvm::GlobalVariable(
+        *mModule, descriptorType, true, llvm::GlobalValue::InternalLinkage,
+        llvm::ConstantStruct::get(
+            descriptorType,
+            {llvm::ConstantInt::get(i32, LUNA_NATIVE_DESCRIPTOR_MAGIC_V1),
+             llvm::ConstantInt::get(i32, LUNA_NATIVE_DESCRIPTOR_ABI_V1),
+             llvm::ConstantInt::get(i32,
+                                    sizeof(LunaNativeLibraryDescriptorV1)),
+             llvm::ConstantInt::get(i32, 0), cString(packageId),
+             cString(packageVersion), cString(targetAbi),
+             cString(compilerIdentity),
+             llvm::ConstantInt::get(i64, exportValues.size()),
+             exportsPointer}),
+        "__luna_native_library_v1");
+    const llvm::Triple host(llvm::sys::getProcessTriple());
+    if (host.isOSBinFormatMachO())
+        descriptor->setSection("__DATA,__luna_desc");
+    else if (host.isOSBinFormatCOFF())
+        descriptor->setSection(".luna$desc");
+    else
+        descriptor->setSection(".luna.native.descriptor");
+
+    auto* queryType = llvm::FunctionType::get(ptr, false);
+    auto* query = llvm::Function::Create(
+        queryType, llvm::GlobalValue::ExternalLinkage,
+        "luna_native_library_descriptor_v1", *mModule);
+    if (host.isOSBinFormatCOFF())
+        query->setDLLStorageClass(llvm::GlobalValue::DLLExportStorageClass);
+    auto* block = llvm::BasicBlock::Create(*mCtx, "entry", query);
+    llvm::IRBuilder<> builder(block);
+    builder.CreateRet(descriptor);
+    std::vector<llvm::GlobalValue*> retained = {descriptor, query};
+    if (exportsGlobal) retained.push_back(exportsGlobal);
+    llvm::appendToCompilerUsed(*mModule, retained);
+    return true;
 }

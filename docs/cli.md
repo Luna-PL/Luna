@@ -91,7 +91,18 @@ Standalone files remain valid for `check`, `run`, and `analyze`, but `build`
 rejects them. `-t native` is the default. A Native application writes
 `<package-root>/build/native/<last-package-component>` plus sibling textual
 LLVM IR; Windows adds `.exe` to the executable. Native libraries fail closed
-until proof-section emission and loading are implemented.
+unless their manifest kind is `library` and their public surface contains only
+ordinary Luna exports. They emit `lib<name>.so` (`.dylib` on macOS or
+`<name>.dll` on Windows), sibling textual IR, and an embedded proof section.
+The build also writes `<library>.trust` as an installation candidate. It is not
+searched or trusted automatically: a trusted installer must place the exact
+record in an explicit trust store before a future Runtime loader may accept the
+library. Each library also exports a versioned typed descriptor registry. Its
+rows are bound by the proof's export digest and use SymbolId/ContractId
+identity. The internal verified-loader primitive uses immutable/private staging
+and publishes only proof-matched registry entries. No end-user load/activation
+CLI or evolution-generation manager exists yet; raw dynamic-loader symbol
+lookup is not a trusted loading path.
 
 `luna build <package-directory> -t moon` requires an explicit manifest `kind`
 and emits a self-verified, host-specific `.moon`. `-o` overrides the path;
@@ -109,9 +120,9 @@ rejected. The default output is
 `<package-root>/build/cffi/lib<last-package-component>.so` (`.dylib` on macOS,
 or `<last-package-component>.dll` on Windows) plus a sibling
 `<last-package-component>.h`. `-o` overrides the complete shared-library path;
-the header keeps the package-derived name beside it. Native library builds are
-explicitly rejected until proof-section emission is implemented; they never
-downgrade to an unproved shared library or executable.
+the header keeps the package-derived name beside it. The same package cannot
+silently become trusted Native code: `export "C" fn` is rejected from a Native
+public surface.
 
 Development builds default to their own `libruntime.a` and `clang++`. Installed,
 packaged or cross-environment builds should pass `--runtime-lib` and `--cc`, or

@@ -78,3 +78,39 @@ jobs:
         run: |
           export PATH="/usr/lib/llvm-22/bin:$PATH"
           ctest --test-dir build-sanitized -LE hardware --output-on-failure
+
+  thread-sanitizer:
+    runs-on: ubuntu-24.04
+    env:
+      TSAN_OPTIONS: halt_on_error=1:history_size=7
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install CMake, Ninja, and LLVM 22
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ca-certificates cmake curl lsb-release ninja-build wget
+          wget -q https://apt.llvm.org/llvm.sh
+          chmod +x llvm.sh
+          sudo ./llvm.sh 22 all
+          rm llvm.sh
+
+      - name: Configure ThreadSanitizer
+        run: |
+          cmake -S . -B build-thread-sanitized -G Ninja \
+            -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+            -DCMAKE_C_COMPILER=clang-22 \
+            -DCMAKE_CXX_COMPILER=clang++-22 \
+            -DLUNA_ENABLE_THREAD_SANITIZER=ON \
+            -DLUNA_STRICT_WARNINGS=ON \
+            -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm
+
+      - name: Build concurrent runtime gate
+        run: >-
+          cmake --build build-thread-sanitized --parallel --verbose
+          --target moon-runtime-test
+
+      - name: ThreadSanitizer generation transitions
+        run: >-
+          ctest --test-dir build-thread-sanitized
+          -R luna.moon-runtime --output-on-failure

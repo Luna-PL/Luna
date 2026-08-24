@@ -2,6 +2,42 @@
 
 ## 0.3.0 — Development
 
+- Added the internal EV001–EV003 MoonRuntime generation state machine without
+  choosing the public spelling deferred by `TBD-EV004`. A candidate now stages
+  verification, binding resolution, and initialization before a one-use safe
+  point can atomically publish it. Pinned references retain old generations;
+  switchable bindings follow only compatible SymbolId/ContractId activations;
+  failed initialization or binding leaves the active generation unchanged;
+  rollback selects retained code without attempting state migration. Concurrent
+  readers and repeated transitions are covered under ASan/UBSan plus a separate
+  ThreadSanitizer CI gate that does not instrument LLVM/ORC.
+  Internal adapters now stage real verified Native libraries as executable
+  lease-backed bindings and verified Moon Containers as retained ORC
+  JIT-backed function bindings (with descriptor-backed non-function exports).
+  Two real Moon generations preserve pinned code, update a switchable entry,
+  and roll back without reclaiming either JIT. This does not claim the deferred
+  public activation API.
+
+- Implemented the Luna Native library proof-emission slice. Native library
+  packages now emit a platform shared library with an embedded, pointer-free
+  proof record in a dedicated binary section. A canonical SHA-256 digest
+  excludes that record while binding every other artifact byte; the proof also
+  covers the typed export descriptor set, the final platform dynamic
+  dependency table extracted after linking, package/version, target ABI, and
+  compiler identity. Builds produce an
+  explicit trust-store candidate which is never searched or trusted
+  automatically. Offline verification rejects binary tampering, missing proof,
+  target mismatch, and absent trust records. Foreign C exports remain confined
+  to `-t cffi` and cannot enter the trusted Native public surface. Native
+  libraries also expose a versioned descriptor registry whose entries carry
+  declaration kind, SymbolId, ContractId, linkage name, and an optional
+  callable entry. The verified loader captures one private immutable image,
+  verifies and loads that same image, validates the registry against the proof,
+  and resolves entries only by SymbolId plus ContractId. Independent tests
+  reconstruct the proof digest, forge an export trust record, and replace the
+  source path between verification and load to gate registry and TOCTOU
+  failures. Evolution-runtime activation remains separate work.
+
 - Enforced the confirmed T003 formal-build boundary. Artifact-producing
   `luna build` now requires a directory with `luna.package` and an explicit
   application/library kind; standalone files remain available to `check`,
@@ -17,8 +53,7 @@
   symbols in that header. A strict C11 consumer compiles, links, and executes
   against the generated artifact. Applications, package `main`, standalone
   files, ordinary Luna exports, and empty C export sets are rejected. Native
-  library builds now fail explicitly while proof-section emission is absent,
-  preventing an accidental downgrade to an unproved executable or library.
+  builds reject the C export surface rather than reclassifying it as trusted.
 
 - Froze the M005 Moon Container wire boundary and implemented its hardened
   binary framing layer. The reader/writer now enforce the eight required

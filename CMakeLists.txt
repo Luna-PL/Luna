@@ -94,6 +94,8 @@ option(LUNA_ENABLE_BASIC_BENCHMARK "Run the lightweight Luna CPU baseline" OFF)
 option(LUNA_STRICT_WARNINGS "Treat compiler warnings in Luna-owned targets as errors" OFF)
 option(LUNA_ENABLE_SANITIZERS
     "Instrument the compiler and embedded JIT runtime with ASan/UBSan" OFF)
+option(LUNA_ENABLE_THREAD_SANITIZER
+    "Instrument the concurrent MoonRuntime state-machine test with TSan" OFF)
 option(LUNA_ENABLE_FUZZING
     "Build the Clang libFuzzer Moon Container trust-boundary harness" OFF)
 set(LUNA_ROCM_SMOKE_ARCH "gfx1101" CACHE STRING
@@ -101,6 +103,7 @@ set(LUNA_ROCM_SMOKE_ARCH "gfx1101" CACHE STRING
 
 add_library(runtime STATIC
     src/runtime/ApplicationHostServices.cpp
+    src/runtime/MoonRuntime.cpp
     src/runtime/Runtime.cpp)
 
 add_library(runtime-abi-c-compile OBJECT tests/runtime_abi_c_compile.c)
@@ -128,6 +131,14 @@ target_include_directories(runtime-application-host-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(runtime-application-host-test PRIVATE runtime)
 
+find_package(Threads REQUIRED)
+add_executable(moon-runtime-test
+    tests/moon_runtime_test.cpp
+    src/runtime/MoonRuntime.cpp)
+target_include_directories(moon-runtime-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(moon-runtime-test PRIVATE Threads::Threads)
+
 add_executable(runtime-gpu-error-test tests/runtime_gpu_error_test.cpp)
 target_include_directories(runtime-gpu-error-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(runtime-gpu-error-test PRIVATE runtime)
@@ -148,6 +159,20 @@ target_include_directories(source-manager-test PRIVATE ${CMAKE_CURRENT_SOURCE_DI
 add_executable(core-contracts-test tests/core_contracts_test.cpp)
 target_include_directories(core-contracts-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(native-artifact-test
+    tests/native_artifact_test.cpp
+    src/driver/NativeArtifact.cpp
+    src/driver/NativeGeneration.cpp
+    src/runtime/MoonRuntime.cpp)
+target_include_directories(native-artifact-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(native-artifact-test SYSTEM PRIVATE
+    ${LLVM_INCLUDE_DIRS})
+target_link_libraries(native-artifact-test PRIVATE LLVM Threads::Threads)
+if(CMAKE_DL_LIBS AND NOT WIN32)
+    target_link_libraries(native-artifact-test PRIVATE ${CMAKE_DL_LIBS})
+endif()
 
 add_executable(moon-container-test
     tests/moon_container_test.cpp
@@ -234,6 +259,7 @@ endif()
 
 add_executable(moonir-canonical-test
     tests/moonir_canonical_test.cpp
+    src/driver/MoonGeneration.cpp
     src/moonir/Container.cpp
     src/moonir/ContainerModel.cpp
     src/moonir/ControlFlowBuilder.cpp
@@ -254,6 +280,7 @@ add_executable(moonir-canonical-test
     src/codegen/CodeGeneratorRangeAnalysis.cpp
     src/codegen/CodeGeneratorRuntimeDescriptors.cpp
     src/runtime/ApplicationHostServices.cpp
+    src/runtime/MoonRuntime.cpp
     src/runtime/Runtime.cpp
     src/driver/CompilerPipeline.cpp
     src/moonir/Optimizer.cpp
@@ -274,6 +301,9 @@ add_executable(luna
     src/driver/CommandLine.cpp
     src/driver/CompilerPipeline.cpp
     src/driver/Driver.cpp
+    src/driver/MoonGeneration.cpp
+    src/driver/NativeArtifact.cpp
+    src/driver/NativeGeneration.cpp
     src/driver/Repl.cpp
     $<TARGET_OBJECTS:luna-frontend>
     src/moonir/ControlFlowBuilder.cpp
@@ -298,6 +328,7 @@ add_executable(luna
     src/codegen/CodeGeneratorRangeAnalysis.cpp
     src/codegen/CodeGeneratorRuntimeDescriptors.cpp
     src/runtime/ApplicationHostServices.cpp
+    src/runtime/MoonRuntime.cpp
     src/runtime/Runtime.cpp
 )
 
@@ -309,11 +340,13 @@ if(LUNA_STRICT_WARNINGS)
         runtime-allocation-abi-test
         runtime-filesystem-abi-test
         runtime-application-host-test
+        moon-runtime-test
         runtime-gpu-error-test
         luna-fragment-plugin-fixture
         fragment-plugin-test
         source-manager-test
         core-contracts-test
+        native-artifact-test
         moon-container-test
         moon-container-model-test
         luna-frontend
@@ -344,7 +377,8 @@ if(LUNA_ENABLE_SANITIZERS)
     # installed AOT runtime archive with sanitizer symbols.
     foreach(target IN ITEMS
             luna luna-frontend analysis-snapshot-test moonir-canonical-test
-            moon-container-test moon-container-model-test)
+            moon-container-test moon-container-model-test moon-runtime-test
+            native-artifact-test)
         target_compile_options(${target} PRIVATE
             -fsanitize=address,undefined
             -fno-omit-frame-pointer)
@@ -363,6 +397,29 @@ if(LUNA_ENABLE_SANITIZERS)
         -fno-omit-frame-pointer)
     target_link_options(moon-container-model-test PRIVATE
         -fsanitize=address,undefined
+        -fno-omit-frame-pointer)
+    target_link_options(moon-runtime-test PRIVATE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer)
+    target_link_options(native-artifact-test PRIVATE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer)
+endif()
+
+if(LUNA_ENABLE_THREAD_SANITIZER)
+    if(LUNA_ENABLE_SANITIZERS)
+        message(FATAL_ERROR
+            "LUNA_ENABLE_THREAD_SANITIZER cannot be combined with ASan/UBSan")
+    endif()
+    if(NOT CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+        message(FATAL_ERROR
+            "LUNA_ENABLE_THREAD_SANITIZER requires Clang or GCC")
+    endif()
+    target_compile_options(moon-runtime-test PRIVATE
+        -fsanitize=thread
+        -fno-omit-frame-pointer)
+    target_link_options(moon-runtime-test PRIVATE
+        -fsanitize=thread
         -fno-omit-frame-pointer)
 endif()
 
@@ -398,7 +455,8 @@ install(TARGETS luna runtime
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
-install(FILES src/runtime/FragmentPluginABI.h src/runtime/RuntimeABI.h
+install(FILES src/runtime/FragmentPluginABI.h src/runtime/NativeArtifactABI.h
+              src/runtime/RuntimeABI.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/luna/runtime)
 install(FILES README.md README.zh-CN.md CHANGELOG.md VERSION LICENSE-MIT LICENSE-APACHE
         DESTINATION ${CMAKE_INSTALL_DOCDIR})
@@ -421,6 +479,10 @@ if(BUILD_TESTING)
     add_test(
         NAME luna.moon-container
         COMMAND $<TARGET_FILE:moon-container-test>
+    )
+    add_test(
+        NAME luna.moon-runtime
+        COMMAND $<TARGET_FILE:moon-runtime-test>
     )
     add_test(
         NAME luna.moon-container-model
@@ -452,6 +514,16 @@ if(BUILD_TESTING)
             -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -DLUNA_C_COMPILER=${CMAKE_C_COMPILER}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/cffi_artifact.cmake
+    )
+    add_test(
+        NAME luna.native-artifact
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_NATIVE_VERIFIER=$<TARGET_FILE:native-artifact-test>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -DPython3_EXECUTABLE=${Python3_EXECUTABLE}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/native_artifact.cmake
     )
     if(LUNA_ENABLE_FUZZING)
         set(LUNA_MOON_FUZZ_CORPUS

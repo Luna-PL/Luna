@@ -163,6 +163,35 @@ excluded canonically from its own digest calculation, while the proof binds all 
 code/data and typed descriptors. Removing or corrupting the section makes the Native loader
 reject the artifact; no proof sidecar is searched.
 
+Implementation status (2026-08-24): Native library emission embeds a
+pointer-free v1 proof record in a platform section. Canonical SHA-256 replaces
+the complete record with zero bytes, binding every other artifact byte without
+self-reference. Separate canonical digests cover the sorted typed-export set
+and the final platform dynamic-dependency table; package/version, target ABI,
+and compiler identity are stored directly. The sibling `.trust` output is an installation
+candidate, not a proof sidecar, and is never searched implicitly. Offline
+verification requires an exact explicit trust-store record and rejects missing
+proof, tampering, target mismatch, or absent trust. The sealer extracts ELF `DT_NEEDED`,
+Mach-O dylib load-command, or PE import/delay-import table after linking; both
+the production verifier and an independent oracle reconstruct and compare its
+canonical digest. This closes the dynamic-dependency part of `TR001` without
+trusting the original linker command.
+
+The same artifact exposes `luna_native_library_descriptor_v1`, returning a
+versioned in-memory registry. Every export row carries declaration kind,
+SymbolId, ContractId, linkage name, and a callable entry only for functions.
+The loader reconstructs the canonical export digest from these fields and
+matches the already trusted proof before exposing any typed binding; raw symbol
+lookup is not a safe `ModuleRef`. Registry emission and independent digest/entry
+consumption are implemented. The verified loader first captures a private
+staging image; Linux seals a `memfd`, while other hosts retain a locked/private
+staging file. Verification, dependency parsing, and native loading all use that
+same image. It validates registry identity and the canonical export digest
+before exposing exact SymbolId+ContractId lookup. A deterministic test replaces
+the source path with a different implementation after verification and still
+executes the staged implementation. Evolution-generation activation and
+`ModuleRef` publication remain open.
+
 `-t cffi` exports only functions explicitly declared `export "C" fn`; ordinary `export fn`
 retains the Luna typed ABI and is therefore invalid in a CFFI library's public surface. Every
 C export must use the closed C-ABI-safe type subset and the generated `<name>.h` declares the
@@ -652,6 +681,28 @@ generation, not reversing external state already changed by code.
 
 `TBD-EV004`: freeze exact source/API spelling for pinned references, switchable bindings,
 initializers, and activation.
+
+Implementation status (2026-08-24): the internal EV001–EV003 state machine is
+implemented without selecting the `TBD-EV004` public spelling. Each staging
+request has module/content/generation identity and a retained module lease;
+verification, binding resolution, and the optional initializer complete before
+a one-use safe point may activate it. Module activation publishes one immutable
+generation pointer, so concurrent switchable readers cannot observe partial
+binding updates. Ordinary pinned references retain their generation, all
+activated generations remain retained for 0.3, and rollback atomically selects
+retained code. Verification, resolution, initializer, or compatibility failure
+leaves the previous active generation unchanged. Persistent state migration,
+public source/API, and artifact-specific user activation remain deferred.
+Internal artifact adapters are active: a verified Native library contributes
+its proof digest, registry bindings, executable entries, and library lease;
+a host-matched verified Moon Container contributes its full-byte content digest,
+decoded-module identity, and a retained ORC JIT lease. Function publications
+carry executable entries while non-function exports remain descriptor-backed.
+The internal test activates two real Moon generations, proves that a pinned
+entry remains executable, switches the compatible entry, and rolls back to the
+retained first JIT. The replacement initializer executes its resolved entry
+before publication, while a rejecting initializer leaves the active generation
+and retained history unchanged. This still selects no public activation spelling.
 
 ## 7. Symbol Query and Slot/Fragment
 
