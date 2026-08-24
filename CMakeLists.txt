@@ -119,6 +119,12 @@ target_include_directories(runtime-allocation-abi-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(runtime-allocation-abi-test PRIVATE runtime)
 
+add_executable(runtime-default-allocation-test
+    tests/runtime_default_allocation_test.cpp)
+target_include_directories(runtime-default-allocation-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(runtime-default-allocation-test PRIVATE runtime)
+
 add_executable(runtime-filesystem-abi-test
     tests/runtime_filesystem_abi_test.cpp)
 target_include_directories(runtime-filesystem-abi-test
@@ -338,6 +344,7 @@ if(LUNA_STRICT_WARNINGS)
         runtime-abi-c-compile
         runtime-abi-test
         runtime-allocation-abi-test
+        runtime-default-allocation-test
         runtime-filesystem-abi-test
         runtime-application-host-test
         moon-runtime-test
@@ -580,6 +587,10 @@ if(BUILD_TESTING)
     add_test(
         NAME luna.runtime-allocation-abi-v1
         COMMAND $<TARGET_FILE:runtime-allocation-abi-test>
+    )
+    add_test(
+        NAME luna.runtime-default-allocation
+        COMMAND $<TARGET_FILE:runtime-default-allocation-test>
     )
     add_test(
         NAME luna.runtime-filesystem-abi-v1
