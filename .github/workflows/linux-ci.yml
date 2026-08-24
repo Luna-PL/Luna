@@ -14,7 +14,7 @@ jobs:
     env:
       LUNA_CXX: clang++-22
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install CMake, Ninja, and LLVM 22
         run: |
@@ -50,7 +50,7 @@ jobs:
       ASAN_OPTIONS: detect_leaks=0
       UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install CMake, Ninja, and LLVM 22
         run: |
@@ -84,7 +84,7 @@ jobs:
     env:
       TSAN_OPTIONS: halt_on_error=1:history_size=7
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install CMake, Ninja, and LLVM 22
         run: |

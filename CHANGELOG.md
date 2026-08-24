@@ -2,6 +2,13 @@
 
 ## 0.3.0 — Development
 
+- Hardened the default host allocator across current toolchains. Ordinary
+  alignments keep the `malloc`/`realloc`/`free` family, while over-aligned
+  storage now uses `posix_memalign` on POSIX and the aligned-allocation family
+  on Windows. A dedicated test exercises expansion, contraction, byte
+  preservation, and over-alignment without installing a custom allocator.
+  GitHub workflows now use the Node.js 24-based `actions/checkout@v6`.
+
 - Added the internal EV001–EV003 MoonRuntime generation state machine without
   choosing the public spelling deferred by `TBD-EV004`. A candidate now stages
   verification, binding resolution, and initialization before a one-use safe

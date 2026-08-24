@@ -52,9 +52,9 @@ Luna 运行时全部 C ABI 入口点的默认实现，涵盖宿主服务安装�
 
 | 函数 | 用途 |
 |---|---|
-| `defaultAllocate` | 对齐 `<= alignof(max_align_t)` 时用 `std::malloc`，否则用 `::operator new(align_val_t)` |
-| `defaultDeallocate` | 同上反向：对齐界限决定用 `std::free` 还是 `::operator delete(align_val_t)` |
-| `defaultReallocate` | 先分配新内存、memcpy、再释放旧内存（大对齐时无法用 `std::realloc`） |
+| `defaultAllocate` | 对齐 `<= alignof(max_align_t)` 时用 `std::malloc`；大对齐在 POSIX 用 `posix_memalign`，Windows 用 `_aligned_malloc` |
+| `defaultDeallocate` | 与分配路径严格配对：POSIX 用 `std::free`，Windows 大对齐使用 `_aligned_free` |
+| `defaultReallocate` | 普通对齐使用 `std::realloc`；大对齐则分配新内存、memcpy、再释放旧内存 |
 
 ### 引用计数内存
 

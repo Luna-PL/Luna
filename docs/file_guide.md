@@ -758,6 +758,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/runtime_abi_test.cpp`
 - `tests/runtime_allocation_abi_test.cpp`
 - `tests/runtime_application_host_test.cpp`
+- `tests/runtime_default_allocation_test.cpp`
 - `tests/runtime_filesystem_abi_test.cpp`
 - `tests/runtime_gpu_error_test.cpp`
 - `tests/semantic_regressions.cmake`

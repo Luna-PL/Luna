@@ -17,6 +17,7 @@
 #include <vector>
 
 #ifdef _WIN32
+#include <malloc.h>
 #include <windows.h>
 #else
 #include <dlfcn.h>
@@ -55,7 +56,13 @@ void* defaultAllocate(void*, size_t size, size_t alignment) {
     if (!isValidAlignment(alignment)) return nullptr;
     const size_t actualSize = size == 0 ? 1 : size;
     if (alignment <= alignof(std::max_align_t)) return std::malloc(actualSize);
-    return ::operator new(actualSize, std::align_val_t(alignment), std::nothrow);
+#ifdef _WIN32
+    return _aligned_malloc(actualSize, alignment);
+#else
+    void* allocation = nullptr;
+    return posix_memalign(&allocation, alignment, actualSize) == 0
+        ? allocation : nullptr;
+#endif
 }
 
 void defaultDeallocate(void*, void* pointer, size_t, size_t alignment) {
@@ -64,22 +71,32 @@ void defaultDeallocate(void*, void* pointer, size_t, size_t alignment) {
         std::free(pointer);
         return;
     }
-    ::operator delete(pointer, std::align_val_t(alignment));
+#ifdef _WIN32
+    _aligned_free(pointer);
+#else
+    std::free(pointer);
+#endif
 }
 
-void* defaultReallocate(void* context, void* pointer, size_t oldSize,
+void* defaultReallocate(void*, void* pointer, size_t oldSize,
                         size_t newSize, size_t alignment) {
     if (!isValidAlignment(alignment)) return nullptr;
-    if (!pointer) return defaultAllocate(context, newSize, alignment);
+    if (!pointer) return defaultAllocate(nullptr, newSize, alignment);
+    if (alignment <= alignof(std::max_align_t)) {
+        if (newSize == 0) {
+            std::free(pointer);
+            return nullptr;
+        }
+        return std::realloc(pointer, newSize);
+    }
     if (newSize == 0) {
-        defaultDeallocate(context, pointer, oldSize, alignment);
+        defaultDeallocate(nullptr, pointer, oldSize, alignment);
         return nullptr;
     }
-    if (alignment <= alignof(std::max_align_t)) return std::realloc(pointer, newSize);
-    void* replacement = defaultAllocate(context, newSize, alignment);
+    void* replacement = defaultAllocate(nullptr, newSize, alignment);
     if (!replacement) return nullptr;
     std::memcpy(replacement, pointer, std::min(oldSize, newSize));
-    defaultDeallocate(context, pointer, oldSize, alignment);
+    defaultDeallocate(nullptr, pointer, oldSize, alignment);
     return replacement;
 }
 
