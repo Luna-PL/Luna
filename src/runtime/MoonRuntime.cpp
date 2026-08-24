@@ -17,7 +17,36 @@ struct MoonRuntime::GenerationState {
 };
 
 struct MoonRuntime::ModuleState {
-    std::shared_ptr<const GenerationState> active;
+    struct ActiveGeneration {
+        std::shared_ptr<const GenerationState> load() const noexcept {
+#if defined(__cpp_lib_atomic_shared_ptr) && \
+    __cpp_lib_atomic_shared_ptr >= 201711L
+            return value.load(std::memory_order_acquire);
+#else
+            return std::atomic_load_explicit(
+                &value, std::memory_order_acquire);
+#endif
+        }
+
+        void store(
+            std::shared_ptr<const GenerationState> generation) noexcept {
+#if defined(__cpp_lib_atomic_shared_ptr) && \
+    __cpp_lib_atomic_shared_ptr >= 201711L
+            value.store(std::move(generation), std::memory_order_release);
+#else
+            std::atomic_store_explicit(
+                &value, std::move(generation), std::memory_order_release);
+#endif
+        }
+
+    private:
+#if defined(__cpp_lib_atomic_shared_ptr) && \
+    __cpp_lib_atomic_shared_ptr >= 201711L
+        std::atomic<std::shared_ptr<const GenerationState>> value;
+#else
+        std::shared_ptr<const GenerationState> value;
+#endif
+    } active;
     std::vector<std::shared_ptr<const GenerationState>> history;
     std::vector<std::pair<std::string, std::string>> switchableRequirements;
 };
@@ -126,8 +155,7 @@ MoonRuntime::PinnedBinding MoonRuntime::PinnedGeneration::find(
 
 MoonRuntime::PinnedBinding MoonRuntime::SwitchableBinding::pin() const {
     if (!module_) return {};
-    auto generation = std::atomic_load_explicit(
-        &module_->active, std::memory_order_acquire);
+    auto generation = module_->active.load();
     return MoonRuntime::makePinnedBinding(
         std::move(generation), symbolId_, contractId_);
 }
@@ -262,8 +290,7 @@ bool MoonRuntime::activate(
     if (!validatesRequirements(*module, *staged.generation_, error))
         return false;
     module->history.push_back(staged.generation_);
-    std::atomic_store_explicit(
-        &module->active, staged.generation_, std::memory_order_release);
+    module->active.store(staged.generation_);
     staged.generation_.reset();
     staged.owner_ = nullptr;
     return true;
@@ -291,8 +318,7 @@ bool MoonRuntime::rollback(
         return false;
     }
     if (!validatesRequirements(module, **generation, error)) return false;
-    std::atomic_store_explicit(
-        &module.active, *generation, std::memory_order_release);
+    module.active.store(*generation);
     return true;
 }
 
@@ -306,8 +332,7 @@ MoonRuntime::PinnedGeneration MoonRuntime::pin(
         if (found == modules_.end()) return result;
         module = found->second;
     }
-    result.generation_ = std::atomic_load_explicit(
-        &module->active, std::memory_order_acquire);
+    result.generation_ = module->active.load();
     return result;
 }
 
@@ -326,8 +351,7 @@ bool MoonRuntime::makeSwitchable(
         error = "switchable binding module has no active generation";
         return false;
     }
-    const auto active = std::atomic_load_explicit(
-        &moduleIt->second->active, std::memory_order_acquire);
+    const auto active = moduleIt->second->active.load();
     if (!active || !findBinding(*active, symbolId, contractId)) {
         error = "switchable binding identity is absent from the active generation";
         return false;
