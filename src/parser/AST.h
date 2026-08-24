@@ -333,6 +333,8 @@ struct CallExpr : Expr {
     // Semantic analysis writes the hygienic symbol selected by metadata or
     // generic instantiation.
     std::string resolvedSymbolName;
+    luna::identity::SymbolId resolvedSymbolId;
+    luna::identity::ContractId resolvedContractId;
     // `linear` is an ownership qualifier rather than an LLVM ABI type. Keep
     // it on calls so the ownership pass can enforce an owning FFI result even
     // though the resolved value type is still `raw<T>`.
@@ -359,6 +361,10 @@ struct CallExpr : Expr {
     // Static declaration reflection keeps identity in the frontend. It is
     // erased after a surrounding reflection query or select is folded.
     std::string compileTimeDeclarationId;
+    // Query-produced symbol sets are compiler-domain values. Declaration
+    // identities carry their complete membership without exposing an order.
+    bool isCompileTimeSymbolSet = false;
+    std::vector<std::string> compileTimeSymbolSetDeclarationIds;
 };
 
 // A launch is an expression so the returned event can be held in a linear
@@ -506,6 +512,8 @@ struct SelectExpr : Expr {
     std::vector<std::unique_ptr<Expr>> selectorArgs;
     bool isDynamic = false;
     std::string resolvedDeclarationId;
+    luna::identity::SymbolId resolvedSymbolId;
+    luna::identity::ContractId resolvedContractId;
     std::string resolvedSymbolName;
     std::string resolvedFamilyId;
     std::string resolvedSelectorDeclarationId;

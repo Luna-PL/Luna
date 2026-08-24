@@ -43,6 +43,7 @@ public:
     decltype(SemanticContext::mMetadataSchemas)& mMetadataSchemas;
     decltype(SemanticContext::mProgram)& mProgram;
     decltype(SemanticContext::mSawReturn)& mSawReturn;
+    decltype(SemanticContext::mSymbolCatalog)& mSymbolCatalog;
     decltype(SemanticContext::mSymTable)& mSymTable;
     decltype(SemanticContext::mTraitMethods)& mTraitMethods;
     decltype(SemanticContext::mTraits)& mTraits;
@@ -76,7 +77,7 @@ public:
         std::vector<std::string>& active);
     std::optional<std::string> evaluateSelectorFunction(
         FunctionDecl* function,
-        const luna::selector::DeclarationView& view,
+        const luna::selector::SymbolSet& symbols,
         const std::vector<ConstValue>& arguments,
         std::string& failure);
     void exitConstScope();
@@ -228,7 +229,7 @@ class CompileTimeContextAccess final {
     SemanticContext& mOwner;
 
 public:
-    decltype(SemanticContext::mActiveSelectorView)& mActiveSelectorView;
+    decltype(SemanticContext::mActiveSelectorSet)& mActiveSelectorSet;
     decltype(SemanticContext::mConcepts)& mConcepts;
     decltype(SemanticContext::mConstEvaluationDepth)& mConstEvaluationDepth;
     decltype(SemanticContext::mConstScopes)& mConstScopes;

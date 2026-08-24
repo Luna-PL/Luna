@@ -84,7 +84,7 @@ uint64_t valueSizeImpl(const TypePtr& type,
         case TypeKind::Struct:
         case TypeKind::DeviceBuffer: case TypeKind::Iterator:
         case TypeKind::Metadata: case TypeKind::MetadataView:
-        case TypeKind::DeclarationView: case TypeKind::DeclarationRef:
+        case TypeKind::SymbolSet: case TypeKind::DeclarationView: case TypeKind::DeclarationRef:
         case TypeKind::Function:
             return 8;
         case TypeKind::Record: {

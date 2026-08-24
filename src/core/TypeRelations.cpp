@@ -84,6 +84,7 @@ const char* kindName(TypeKind kind) {
         case TypeKind::Slice: return "slice";
         case TypeKind::Metadata: return "metadata";
         case TypeKind::MetadataView: return "metadata_view";
+        case TypeKind::SymbolSet: return "symbol_set";
         case TypeKind::DeclarationView: return "declaration_view";
         case TypeKind::DeclarationRef: return "declaration_ref";
         case TypeKind::InferenceVar: return "inference_var";
@@ -144,6 +145,7 @@ std::string canonicalShapeImpl(
         case TypeKind::DeviceBuffer:
         case TypeKind::Slice:
         case TypeKind::MetadataView:
+        case TypeKind::SymbolSet:
         case TypeKind::DeclarationView:
         case TypeKind::DeclarationRef:
         case TypeKind::Iterator:
@@ -225,6 +227,7 @@ std::string canonicalIdentityImpl(const TypePtr& type) {
         if (type->kind == TypeKind::TypeParam)
             appendPart(result, type->name);
         if ((type->kind == TypeKind::MetadataView ||
+             type->kind == TypeKind::SymbolSet ||
              type->kind == TypeKind::DeclarationView ||
              type->kind == TypeKind::DeclarationRef) && type->inner)
             appendPart(result, canonicalIdentityImpl(type->inner));

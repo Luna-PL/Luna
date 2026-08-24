@@ -134,6 +134,10 @@ const SymbolTable* AnalysisSnapshot::symbolTable() const {
     return mSemanticAnalyzer ? &mSemanticAnalyzer->symTable() : nullptr;
 }
 
+const luna::selector::SymbolCatalog* AnalysisSnapshot::symbolCatalog() const {
+    return mSemanticAnalyzer ? mSemanticAnalyzer->symbolCatalog() : nullptr;
+}
+
 bool AnalysisSnapshot::fail(
     const std::vector<diagnostic::Diagnostic>& errors, std::string stage) {
     if (mProgram) {

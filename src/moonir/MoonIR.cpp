@@ -16,22 +16,6 @@ void appendIdentityPart(std::string& output, const std::string& part) {
     output += ';';
 }
 
-template <typename Enum>
-void appendEnum(std::string& output, Enum value) {
-    appendIdentityPart(
-        output, std::to_string(static_cast<unsigned>(value)));
-}
-
-void appendBool(std::string& output, bool value) {
-    appendIdentityPart(output, value ? "1" : "0");
-}
-
-void appendOwnershipContract(
-    std::string& output, const luna::ownership::Contract& contract) {
-    appendEnum(output, contract.relation);
-    appendEnum(output, contract.usage);
-}
-
 } // namespace
 
 LambdaExpr::~LambdaExpr() = default;
@@ -46,45 +30,10 @@ std::string canonicalAbiLayout(const TypeRecord& type) {
 }
 
 std::string canonicalContract(const DeclarationRecord& declaration) {
-    std::string result = "luna.contract.v1;";
-    appendEnum(result, declaration.kind);
-    appendIdentityPart(result, declaration.type.value);
-
-    const auto& facts = declaration.sysmeta;
-    appendEnum(result, facts.control.form);
-    appendEnum(result, facts.control.cardinality);
-    appendEnum(result, facts.control.storage);
-    appendEnum(result, facts.control.forwarding);
-    appendBool(result, facts.control.abortPermitted);
-    appendBool(result, facts.control.replayValidated);
-
-    appendIdentityPart(
-        result, std::to_string(facts.resource.parameters.size()));
-    for (const auto& parameter : facts.resource.parameters)
-        appendOwnershipContract(result, parameter);
-    appendOwnershipContract(result, facts.resource.result);
-    appendEnum(result, facts.resource.management);
-    appendEnum(result, facts.resource.releaseDomain);
-    appendEnum(result, facts.resource.lifetime);
-    appendEnum(result, facts.resource.relation);
-    appendEnum(result, facts.resource.usage);
-    appendEnum(result, facts.resource.cleanup);
-    appendBool(result, facts.resource.cleanupRequired);
-    appendBool(result, facts.resource.recursiveCleanup);
-    appendBool(result, facts.resource.needsDrop);
-    appendBool(result, facts.resource.tracksElementInitialization);
-
-    appendBool(result, facts.capability.hostOnly);
-    appendBool(result, facts.capability.runtimeRetained);
-    appendBool(result, facts.capability.dynamicDispatch);
-    appendBool(result, facts.capability.ffi);
-    appendBool(result, facts.capability.gpu);
-    appendBool(result, facts.capability.maySuspend);
-    appendBool(result, facts.abi.stableBoundary);
-    appendBool(result, facts.abi.persistentFrameRequired);
-    appendIdentityPart(result, declaration.dropGlue.symbol.value);
-    appendIdentityPart(result, declaration.dropGlue.contract.value);
-    return result;
+    return luna::sysmeta::canonicalDeclarationContract(
+        declaration.kind, declaration.type, declaration.sysmeta,
+        declaration.dropGlue.symbol,
+        declaration.dropGlue.contract);
 }
 
 void Module::rebuildIndexes() {

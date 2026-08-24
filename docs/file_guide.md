@@ -106,7 +106,8 @@ script-defined special inputs.
   fragments, GPU, iterators, range analysis, descriptors, and helper concerns.
 - Runtime files own versioned C ABIs and host/GPU/plugin services.
 
-SemanticAnalyzer is the stable tooling/compiler facade. SemanticContext is the single internal
+SemanticAnalyzer is the stable tooling/compiler facade and exposes the read-only Symbol Catalog.
+SemanticContext is the single internal
 owner of semantic state, cross-component orchestration, and shared services. BodyAnalyzer,
 DeclarationCollector, ControlAnalyzer,
 TypeResolver, and CompileTimeEvaluator are the extracted components;
@@ -475,6 +476,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/compiler_identity.cmake`
 - `tests/control_flow_aot.cmake`
 - `tests/core_contracts_test.cpp`
+- `tests/symbol_catalog_test.cpp`
 - `tests/core_surface.cmake`
 - `tests/diagnostic_protocol.cmake`
 - `tests/external_fragment_dispatch.cmake`
@@ -677,6 +679,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/safe_array_static_bounds_invalid.luna`
 - `tests/fixtures/safe_array_wrong_element_invalid.luna`
 - `tests/fixtures/safe_arrays.luna`
+- `tests/fixtures/selector_inferred_signature_invalid.luna`
+- `tests/fixtures/selector_metadata_ambiguous_invalid.luna`
 - `tests/fixtures/selector_outside_view_invalid.luna`
 - `tests/fixtures/selector_user_logic.luna`
 - `tests/fixtures/slice_borrow.luna`
@@ -692,6 +696,13 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/structural_generic_instance_reuse.luna`
 - `tests/fixtures/structural_trait_coherence.luna`
 - `tests/fixtures/structural_type_equivalence.luna`
+- `tests/fixtures/symbol_query_all_blocked_invalid.luna`
+- `tests/fixtures/symbol_query_ambiguous_invalid.luna`
+- `tests/fixtures/symbol_query_generic_invalid.luna`
+- `tests/fixtures/symbol_query_no_match_invalid.luna`
+- `tests/fixtures/symbol_query_optional_blocked_invalid.luna`
+- `tests/fixtures/symbol_query_public.luna`
+- `tests/fixtures/symbol_query_signature_invalid.luna`
 - `tests/fixtures/type_domains_reflection.luna`
 - `tests/fixtures/type_relations.luna`
 - `tests/fixtures/usage_block_linear_unconsumed_invalid.luna`

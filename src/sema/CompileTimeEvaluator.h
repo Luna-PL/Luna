@@ -44,7 +44,7 @@ public:
         bool& returned) override;
     std::optional<std::string> evaluateSelectorFunction(
         FunctionDecl* function,
-        const luna::selector::DeclarationView& view,
+        const luna::selector::SymbolSet& symbols,
         const std::vector<SemanticConstValue>& arguments,
         std::string& failure) override;
 
@@ -58,4 +58,5 @@ private:
     using SelectorValue = SemanticSelectorValue;
 
     CompileTimeContextAccess mContext;
+    std::string mSelectorEvaluationFailure;
 };

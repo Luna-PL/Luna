@@ -5,6 +5,7 @@ endif()
 set(expected_tbd_ids
     TBD-EV004
     TBD-Q004
+    TBD-Q005
     TBD-SF006
 )
 list(SORT expected_tbd_ids)
@@ -45,6 +46,7 @@ foreach(required_text IN ITEMS
         "`T003` (Confirmed): an artifact-producing `luna build` requires a `luna.package`"
         "`M005` (Confirmed, 2026-08-20): the 0.3 Moon Container uses the 8-byte magic"
         "`TY002` (Confirmed): anonymous records do not use a `record` keyword"
+        "`Q005` (Confirmed): the first public compile-time function-query surface"
         "Priority item 6 has therefore passed its completion gate"
         "`US001` (Confirmed): explicit overrides are `copy let`, `affine let`, and `linear let`"
         "Priority item 7 has therefore passed its completion gate"
@@ -65,6 +67,7 @@ foreach(required_text IN ITEMS
         "`T003`（Confirmed）：产生正式产物的 `luna build` 必须以 `luna.package` 为输入"
         "`M005`（Confirmed，2026-08-20）：0.3 Moon Container 使用 8 字节 magic"
         "`TY002`（Confirmed）：匿名 record 不使用 `record` 关键字"
+        "`Q005`（Confirmed）：首个公开 compile-time function query 表面"
         "因此优先级第 6 项已通过完成门"
         "`US001`（Confirmed）：显式覆盖语法为 `copy let`、`affine let` 和 `linear let`"
         "因此优先级第 7 项已通过完成门"

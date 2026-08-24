@@ -166,6 +166,13 @@ add_executable(core-contracts-test tests/core_contracts_test.cpp)
 target_include_directories(core-contracts-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+add_executable(symbol-catalog-test
+    tests/symbol_catalog_test.cpp
+    src/core/TypeRelations.cpp
+    src/selector/Selector.cpp)
+target_include_directories(symbol-catalog-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 add_executable(native-artifact-test
     tests/native_artifact_test.cpp
     src/driver/NativeArtifact.cpp
@@ -353,6 +360,7 @@ if(LUNA_STRICT_WARNINGS)
         fragment-plugin-test
         source-manager-test
         core-contracts-test
+        symbol-catalog-test
         native-artifact-test
         moon-container-test
         moon-container-model-test
@@ -579,6 +587,10 @@ if(BUILD_TESTING)
     add_test(
         NAME luna.core-contracts
         COMMAND $<TARGET_FILE:core-contracts-test>
+    )
+    add_test(
+        NAME luna.symbol-catalog
+        COMMAND $<TARGET_FILE:symbol-catalog-test>
     )
     add_test(
         NAME luna.runtime-abi-v1

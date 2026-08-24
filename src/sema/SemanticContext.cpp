@@ -43,6 +43,7 @@ bool SemanticContext::analyze(Program* program) {
     mMetadataSchemas.clear();
     mConcepts.clear();
     mFunctionFamilies.clear();
+    mSymbolCatalog.reset();
     mQualifiedDeclarations.clear();
     mPackageAliases.clear();
     mGeneratedInstances.clear();
@@ -253,6 +254,11 @@ bool SemanticContext::analyze(Program* program) {
             analyzeImpl(implementation);
         }
     }
+    // All source declaration signatures, metadata, nominal resource facts,
+    // and impl-derived Drop contracts are now stable for body analysis. Build
+    // one immutable compile-time function projection for every selector in
+    // this semantic run.
+    rebuildSymbolCatalog();
     // Pass 2c: analyze all remaining ordinary bodies.
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         auto& decl = program->declarations[i];
@@ -288,6 +294,205 @@ bool SemanticContext::analyze(Program* program) {
         checkUnresolved(root.first, root.second);
     materializeInferredTypes(program);
     return mErrors.empty();
+}
+
+void SemanticContext::rebuildSymbolCatalog() {
+    std::vector<luna::selector::CatalogSymbol> symbols;
+    if (!mProgram) {
+        mSymbolCatalog = std::make_shared<luna::selector::SymbolCatalog>();
+        return;
+    }
+    struct ProjectionState {
+        const Decl* declaration = nullptr;
+        std::string dropGlueLinkage;
+    };
+    std::vector<ProjectionState> projectionStates;
+    std::unordered_map<std::string, size_t> functionsByLinkage;
+
+    const auto retention = [](RetentionKind value) {
+        if (value == RetentionKind::Runtime)
+            return luna::selector::Retention::Runtime;
+        if (value == RetentionKind::Dynamic)
+            return luna::selector::Retention::Dynamic;
+        return luna::selector::Retention::CompileTime;
+    };
+    const auto declarationTypeForFunction = [&](FunctionDecl* function) {
+        TypeVec parameters;
+        std::vector<luna::ownership::Contract> contracts;
+        for (const auto& parameter : function->params) {
+            parameters.push_back(resolved(parameter.inferredType));
+            contracts.push_back({parameter.relation, parameter.usage});
+        }
+        return Type::makeFunction(
+            std::move(parameters), resolved(function->inferredReturnType),
+            std::move(contracts),
+            {luna::ownership::Relation::Owned, function->returnUsage});
+    };
+    const auto appendProjection = [&](Decl* declaration,
+                                      luna::selector::CatalogSymbolKind kind,
+                                      const std::string& kindSpelling,
+                                      const std::string& sourceName,
+                                      const std::string& symbolName,
+                                      const std::string& familyName,
+                                      TypePtr declarationType) {
+        if (!declarationType) {
+            error("Symbol Catalog could not resolve type for declaration '" +
+                  sourceName + "'", declaration->line, declaration->col);
+            return;
+        }
+
+        luna::selector::CatalogSymbol symbol;
+        symbol.symbolName = symbolName;
+        symbol.declarationId = nominalDeclarationIdentity(
+            mProgram, kindSpelling.c_str(), symbolName, declaration);
+        symbol.familyDeclarationId = nominalDeclarationIdentity(
+            mProgram, kindSpelling.c_str(), familyName, declaration);
+        symbol.symbolId = luna::identity::symbolIdFromCanonical(
+            symbol.declarationId);
+        symbol.familyId = luna::identity::symbolIdFromCanonical(
+            symbol.familyDeclarationId);
+        symbol.kind = kind;
+        symbol.canonicalContract = declarationCanonicalContract(
+            declaration, kind, declarationType);
+        symbol.contractId = luna::identity::contractIdFromCanonical(
+            symbol.canonicalContract);
+        symbol.typeId = luna::types::typeId(declarationType);
+        symbol.type = std::move(declarationType);
+        symbol.retention = retention(declaration->retention);
+        for (const auto& attachment : declaration->metadata) {
+            luna::selector::Metadata metadata;
+            metadata.schemaId = attachment.resolvedSchemaId;
+            metadata.values = attachment.evaluatedArguments;
+            metadata.retention = retention(attachment.retention);
+            symbol.metadata.push_back(std::move(metadata));
+        }
+        if (kind == luna::selector::CatalogSymbolKind::Function) {
+            const auto insertion = functionsByLinkage.emplace(
+                symbolName, symbols.size());
+            if (!insertion.second)
+                error("Symbol Catalog contains duplicate function linkage '" +
+                      symbolName + "'", declaration->line, declaration->col);
+        }
+        projectionStates.push_back({
+            declaration, symbol.type->sysmeta.abi.dropGlueSymbol});
+        symbols.push_back(std::move(symbol));
+    };
+    const auto appendFunction = [&](FunctionDecl* function) {
+        auto type = declarationTypeForFunction(function);
+        // Inferred returns are finalized by body analysis. They are not stable
+        // query identities at this pre-body snapshot checkpoint and therefore
+        // must not leak an inference-variable TypeId into the catalog.
+        if (containsInferenceIdentity(type)) return;
+        const std::string symbolName = function->generatedSymbolName.empty()
+            ? function->name : function->generatedSymbolName;
+        appendProjection(
+            function, luna::selector::CatalogSymbolKind::Function,
+            "fn", function->name, symbolName, function->name,
+            std::move(type));
+    };
+
+    for (const auto& declaration : mProgram->declarations) {
+        if (auto* function =
+                dynamic_cast<FunctionDecl*>(declaration.get())) {
+            appendFunction(function);
+        } else if (auto* fragment =
+                       dynamic_cast<FragmentDecl*>(declaration.get())) {
+            const std::string symbolName = fragment->generatedSymbolName.empty()
+                ? fragment->name : fragment->generatedSymbolName;
+            appendProjection(
+                fragment, luna::selector::CatalogSymbolKind::Fragment,
+                "fragment", fragment->name, symbolName, fragment->name,
+                fragment->structuralType);
+        } else if (auto* structure =
+                       dynamic_cast<StructDecl*>(declaration.get())) {
+            const std::string symbolName = structure->generatedSymbolName.empty()
+                ? structure->name : structure->generatedSymbolName;
+            auto type = mSymTable.lookupType(symbolName);
+            if (!type) type = mSymTable.lookupType(structure->name);
+            appendProjection(
+                structure, luna::selector::CatalogSymbolKind::Struct,
+                "struct", structure->name, symbolName, structure->name,
+                std::move(type));
+        } else if (auto* enumeration =
+                       dynamic_cast<EnumDecl*>(declaration.get())) {
+            const std::string symbolName = enumeration->generatedSymbolName.empty()
+                ? enumeration->name : enumeration->generatedSymbolName;
+            auto type = mSymTable.lookupType(symbolName);
+            if (!type) type = mSymTable.lookupType(enumeration->name);
+            appendProjection(
+                enumeration, luna::selector::CatalogSymbolKind::Enum,
+                "enum", enumeration->name, symbolName, enumeration->name,
+                std::move(type));
+        } else if (auto* trait =
+                       dynamic_cast<TraitDecl*>(declaration.get())) {
+            const std::string symbolName = trait->generatedSymbolName.empty()
+                ? trait->name : trait->generatedSymbolName;
+            auto type = mSymTable.lookupType(trait->resolvedTraitId);
+            if (!type) type = mSymTable.lookupType(symbolName);
+            appendProjection(
+                trait, luna::selector::CatalogSymbolKind::Trait,
+                "trait", trait->name, symbolName, trait->name,
+                std::move(type));
+        } else if (auto* implementation =
+                       dynamic_cast<ImplDecl*>(declaration.get())) {
+            std::unordered_map<std::string, TypePtr> bindings;
+            for (const auto& parameter : implementation->typeParams)
+                bindings[parameter] = Type::makeTypeParam(parameter);
+            auto targetType = resolveTypeAST(
+                implementation->targetType.get(), bindings);
+            const std::string traitId =
+                implementation->trait.resolvedTraitId;
+            const std::string symbolName =
+                implementation->generatedSymbolName.empty()
+                ? traitId + "__for__" + implementation->resolvedTargetTypeId
+                : implementation->generatedSymbolName;
+            appendProjection(
+                implementation,
+                luna::selector::CatalogSymbolKind::Implementation,
+                "impl", "impl", symbolName, traitId,
+                std::move(targetType));
+            for (const auto& method : implementation->methods)
+                appendFunction(method.get());
+        } else if (auto* metadata =
+                       dynamic_cast<MetaDecl*>(declaration.get())) {
+            const std::string symbolName = metadata->generatedSymbolName.empty()
+                ? metadata->name : metadata->generatedSymbolName;
+            appendProjection(
+                metadata,
+                luna::selector::CatalogSymbolKind::MetadataSchema,
+                "meta", metadata->name, symbolName, metadata->name,
+                mSymTable.lookupType(symbolName));
+        }
+        // Named constraints are compiler predicates and intentionally erase
+        // before both the Symbol Catalog and MoonIR declaration table.
+    }
+
+    // Seal resource contracts only after every function row exists: nominal
+    // type and impl contracts bind Drop by strong declaration identity, not by
+    // the frontend linkage string carried during semantic analysis.
+    for (size_t index = 0; index < symbols.size(); ++index) {
+        const auto& dropGlueLinkage =
+            projectionStates[index].dropGlueLinkage;
+        if (dropGlueLinkage.empty()) continue;
+        const auto drop = functionsByLinkage.find(dropGlueLinkage);
+        if (drop == functionsByLinkage.end()) {
+            error("Symbol Catalog cannot resolve Drop glue '" +
+                  dropGlueLinkage + "'");
+            continue;
+        }
+        const auto& dropSymbol = symbols[drop->second];
+        auto& symbol = symbols[index];
+        symbol.canonicalContract = declarationCanonicalContract(
+            projectionStates[index].declaration, symbol.kind, symbol.type,
+            dropSymbol.symbolId, dropSymbol.contractId);
+        symbol.contractId = luna::identity::contractIdFromCanonical(
+            symbol.canonicalContract);
+    }
+    auto catalog = std::make_shared<luna::selector::SymbolCatalog>(
+        std::move(symbols));
+    if (!catalog->valid())
+        error("invalid Symbol Catalog: " + catalog->error());
+    mSymbolCatalog = std::move(catalog);
 }
 
 // ─── Declaration pass ──────────────────────────────────────────────
@@ -590,10 +795,10 @@ bool SemanticContext::evaluateSelectorBlock(
         block, locals, result, returned);
 }
 std::optional<std::string> SemanticContext::evaluateSelectorFunction(
-    FunctionDecl* function, const luna::selector::DeclarationView& view,
+    FunctionDecl* function, const luna::selector::SymbolSet& symbols,
     const std::vector<ConstValue>& arguments, std::string& failure) {
     return mCompileTimeAnalysis->evaluateSelectorFunction(
-        function, view, arguments, failure);
+        function, symbols, arguments, failure);
 }
 FunctionDecl* SemanticContext::findMatchingImpl(
     const std::string& traitName, const std::string& typeName,

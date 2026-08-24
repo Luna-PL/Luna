@@ -1,0 +1,6 @@
+fn identity<T>(value: T) -> T { return value; }
+
+fn main() -> i32 {
+    let candidates = symbols(identity);
+    return 0;
+}

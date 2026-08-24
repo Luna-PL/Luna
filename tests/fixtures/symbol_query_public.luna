@@ -1,0 +1,23 @@
+meta release { major: i32; }
+meta variant { name: string; }
+
+@release(1)
+fn answer() -> i32 { return 10; }
+
+@release(2)
+fn answer() -> i32 { return 20; }
+
+@release(1)
+fn overloaded() -> i32 { return 22; }
+
+@release(1)
+@variant("argument")
+fn overloaded(value: i32) -> i32 { return value; }
+
+fn main() -> i32 {
+    let candidates = symbols(answer);
+    let selected = candidates.matching(release(2)).one();
+    let typed = symbols::<() -> i32>(overloaded)
+        .matching(release(1)).one();
+    return selected() + typed();
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "TypeSystem.h"
+#include "../core/TypeRelations.h"
 #include "../parser/AST.h"
 
 #include <iomanip>
@@ -20,6 +21,84 @@ inline std::string nominalDeclarationIdentity(
     if (declaration && !declaration->modulePath.empty())
         owner += "::" + declaration->modulePath;
     return owner + "::" + kind + "::" + symbol;
+}
+
+inline luna::sysmeta::Facts declarationContractFacts(
+    const Decl* declaration, luna::sysmeta::DeclarationKind kind,
+    const TypePtr& type) {
+    luna::sysmeta::Facts facts;
+    if (type) {
+        if (kind == luna::sysmeta::DeclarationKind::Function ||
+            kind == luna::sysmeta::DeclarationKind::Fragment) {
+            facts = type->sysmeta;
+        } else {
+            // MoonIR declaration records inherit the represented type's
+            // resource contract, while non-executable declarations keep
+            // their own default control/capability/ABI facts.
+            facts.resource = type->sysmeta.resource;
+        }
+        // MoonIR seals its type graph before finalizing declaration
+        // ContractIds. Mirror the same derived resource fields here so the
+        // semantic snapshot and the sealed table cannot disagree merely
+        // because cleanup/lifetime facts were materialized at different
+        // phases.
+        const auto resource = resourceContractForType(type);
+        facts.resource.usage = resource.usage;
+        facts.resource.cleanup = resource.cleanup;
+        facts.resource.cleanupRequired = resource.cleanupRequired;
+        facts.resource.recursiveCleanup = resource.recursiveCleanup;
+        facts.resource.lifetime = resource.lifetime;
+        facts.resource.relation = resource.relation;
+    }
+    facts.capability.runtimeRetained = declaration &&
+        declaration->retention != RetentionKind::CompileTime;
+    if (const auto* function =
+            dynamic_cast<const FunctionDecl*>(declaration)) {
+        facts.capability.ffi = function->isExtern || !function->abi.empty();
+        facts.capability.gpu = function->isKernel;
+        facts.capability.hostOnly = !function->isKernel;
+        facts.abi.stableBoundary =
+            function->isExtern || !function->abi.empty();
+    }
+    return facts;
+}
+
+inline std::string declarationCanonicalContract(
+    const Decl* declaration, luna::sysmeta::DeclarationKind kind,
+    const TypePtr& type,
+    const luna::identity::SymbolId& dropGlueSymbol = {},
+    const luna::identity::ContractId& dropGlueContract = {}) {
+    const auto facts = declarationContractFacts(declaration, kind, type);
+    return luna::sysmeta::canonicalDeclarationContract(
+        kind, luna::types::typeId(type), facts,
+        dropGlueSymbol, dropGlueContract);
+}
+
+inline bool containsInferenceIdentityImpl(
+    const TypePtr& input, std::unordered_set<const Type*>& visited) {
+    const TypePtr type = input;
+    if (!type || !visited.insert(type.get()).second) return false;
+    if (type->kind == TypeKind::InferenceVar) return true;
+    if (containsInferenceIdentityImpl(type->inner, visited) ||
+        containsInferenceIdentityImpl(type->returnType, visited))
+        return true;
+    for (const auto& argument : type->typeArgs)
+        if (containsInferenceIdentityImpl(argument, visited)) return true;
+    for (const auto& parameter : type->paramTypes)
+        if (containsInferenceIdentityImpl(parameter, visited)) return true;
+    for (const auto& field : type->fields)
+        if (containsInferenceIdentityImpl(field.type, visited)) return true;
+    for (const auto& variant : type->variants)
+        for (const auto& field : variant.fields)
+            if (containsInferenceIdentityImpl(field, visited)) return true;
+    for (const auto& field : type->capturedFields)
+        if (containsInferenceIdentityImpl(field.type, visited)) return true;
+    return false;
+}
+
+inline bool containsInferenceIdentity(const TypePtr& type) {
+    std::unordered_set<const Type*> visited;
+    return containsInferenceIdentityImpl(type, visited);
 }
 
 inline uint64_t stableMetadataHash(const std::string& value) {

@@ -2049,11 +2049,15 @@ bool Verifier::verify(const Module& module) {
             error({}, "metadata type '" + type.id.value +
                       "' is outside the Meta type domain");
         if ((type.kind == TypeKind::MetadataView ||
+             type.kind == TypeKind::SymbolSet ||
              type.kind == TypeKind::DeclarationView ||
              type.kind == TypeKind::DeclarationRef) &&
             type.domain != luna::types::TypeDomain::Compiler)
             error({}, "compile-time view/reference type '" + type.id.value +
                       "' is outside the Compiler type domain");
+        if (type.kind == TypeKind::SymbolSet)
+            error({}, "compiler-only symbol_set type '" + type.id.value +
+                      "' was not erased before MoonIR");
         if (type.kind == TypeKind::Trait &&
             type.domain != luna::types::TypeDomain::Compiler)
             error({}, "trait type '" + type.id.value +

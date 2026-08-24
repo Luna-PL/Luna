@@ -196,6 +196,8 @@ private:
             for (const auto& type : expr->typeArgASTs)
                 clone->typeArgASTs.push_back(cloneType(type.get()));
             clone->resolvedSymbolName = expr->resolvedSymbolName;
+            clone->resolvedSymbolId = expr->resolvedSymbolId;
+            clone->resolvedContractId = expr->resolvedContractId;
             clone->returnsLinear = expr->returnsLinear;
             clone->returnUsage = expr->returnUsage;
             clone->intrinsicType = substitute(expr->intrinsicType);
@@ -220,6 +222,10 @@ private:
             clone->compileTimeValue = expr->compileTimeValue;
             clone->compileTimeDeclarationId =
                 expr->compileTimeDeclarationId;
+            clone->isCompileTimeSymbolSet =
+                expr->isCompileTimeSymbolSet;
+            clone->compileTimeSymbolSetDeclarationIds =
+                expr->compileTimeSymbolSetDeclarationIds;
             return located(std::move(clone), src);
         }
         if (auto* expr = dynamic_cast<const LaunchExpr*>(src)) {
@@ -371,6 +377,8 @@ private:
             clone->isDynamic = expr->isDynamic;
             clone->resolvedDeclarationId =
                 expr->resolvedDeclarationId;
+            clone->resolvedSymbolId = expr->resolvedSymbolId;
+            clone->resolvedContractId = expr->resolvedContractId;
             clone->resolvedSymbolName = expr->resolvedSymbolName;
             clone->resolvedFamilyId = expr->resolvedFamilyId;
             clone->resolvedSelectorDeclarationId =
@@ -790,6 +798,16 @@ TypePtr TypeResolver::resolveTypeAST(const TypeAST* ast,
             TypePtr callable = named->typeArgs.empty()
                 ? nullptr : resolveTypeAST(named->typeArgs.front().get(), bindings);
             return Type::makeDeclarationView(callable);
+        }
+        if (named->name == "symbol_set") {
+            if (named->typeArgs.size() != 1) {
+                mContext.error("symbol_set requires exactly one declaration type argument",
+                      named->line, named->col);
+                return TyUnknown;
+            }
+            TypePtr symbol = resolveTypeAST(
+                named->typeArgs.front().get(), bindings);
+            return Type::makeSymbolSet(symbol);
         }
         if (named->name == "declaration_ref") {
             if (named->typeArgs.size() > 1) {

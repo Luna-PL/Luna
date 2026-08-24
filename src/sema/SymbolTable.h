@@ -33,6 +33,10 @@ struct SymbolInfo {
     // Non-empty only for frontend-only declaration_ref values. These values
     // are erased before MoonIR after static reflection has consumed them.
     std::string compileTimeDeclarationId;
+    luna::identity::SymbolId compileTimeDeclarationSymbolId;
+    luna::identity::ContractId compileTimeDeclarationContractId;
+    bool isCompileTimeSymbolSet = false;
+    std::vector<std::string> compileTimeSymbolSetDeclarationIds;
 };
 
 class SymbolTable {

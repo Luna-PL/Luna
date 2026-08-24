@@ -29,6 +29,7 @@ llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
         case TypeKind::DeviceBuffer:
         case TypeKind::Metadata:
         case TypeKind::MetadataView:
+        case TypeKind::SymbolSet:
         case TypeKind::DeclarationView:
         case TypeKind::DeclarationRef: return ptrTy();
         case TypeKind::Iterator: return ptrTy();
@@ -105,6 +106,7 @@ uint64_t typeSize(const TypePtr& type) {
         case TypeKind::DeviceBuffer:
         case TypeKind::Metadata:
         case TypeKind::MetadataView:
+        case TypeKind::SymbolSet:
         case TypeKind::DeclarationView:
         case TypeKind::DeclarationRef: return 8;
         case TypeKind::Iterator: return 8;

@@ -24,6 +24,9 @@ class CompileTimeEvaluator;
 class ControlAnalyzer;
 class DeclarationCollector;
 class TypeResolver;
+namespace luna::selector {
+class SymbolCatalog;
+}
 
 class SemanticAnalyzer {
 public:
@@ -37,6 +40,7 @@ public:
     const std::vector<diagnostic::Diagnostic>& errors() const;
     SymbolTable& symTable();
     const SymbolTable& symTable() const;
+    const luna::selector::SymbolCatalog* symbolCatalog() const;
     const std::vector<ResolvedDeclarationReference>& declarationReferences() const;
 
 private:

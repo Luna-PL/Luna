@@ -1,0 +1,6 @@
+fn answer() -> i32 { return 42; }
+
+fn main() -> i32 {
+    let candidates = symbols(answer).all();
+    return 0;
+}

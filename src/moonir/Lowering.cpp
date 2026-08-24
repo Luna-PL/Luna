@@ -358,18 +358,41 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
             return value;
         }
         auto value = std::make_unique<moon::CallExpr>();
-        value->callee = lowerExpr(call->callee.get());
+        if (const auto* compileTimeReference =
+                dynamic_cast<const ::CallExpr*>(call->callee.get());
+            compileTimeReference &&
+            !compileTimeReference->compileTimeDeclarationId.empty() &&
+            !call->resolvedSymbolName.empty()) {
+            auto callee = std::make_unique<moon::IdentifierExpr>();
+            callee->name = call->resolvedSymbolName;
+            deferDeclarationRef(
+                callee->declaration, call->resolvedSymbolName,
+                call, "compile-time query call target", false,
+                call->resolvedSymbolId,
+                call->resolvedContractId);
+            if (compileTimeReference->resultType &&
+                compileTimeReference->resultType->inner)
+                callee->type = typeRef(
+                    compileTimeReference->resultType->inner);
+            value->callee = std::move(callee);
+        } else {
+            value->callee = lowerExpr(call->callee.get());
+        }
         for (const auto& argument : call->args)
             value->args.push_back(lowerExpr(argument.get()));
         value->typeArgs = typeRefs(call->typeArgs);
         deferDeclarationRef(value->calleeRef, call->resolvedSymbolName,
-                            call, "call target");
+                            call, "call target", false,
+                            call->resolvedSymbolId,
+                            call->resolvedContractId);
         if (!call->resolvedSymbolName.empty()) {
             if (auto* callee = dynamic_cast<moon::IdentifierExpr*>(
                     value->callee.get()))
                 deferDeclarationRef(
                     callee->declaration, call->resolvedSymbolName,
-                    call, "resolved call identifier");
+                    call, "resolved call identifier", false,
+                    call->resolvedSymbolId,
+                    call->resolvedContractId);
         }
         value->returnsLinear = call->returnsLinear;
         value->returnUsage = call->returnUsage;
@@ -661,8 +684,10 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
             auto value = std::make_unique<moon::IdentifierExpr>();
             value->name = selection->resolvedSymbolName;
             deferDeclarationRef(
-                value->declaration, selection->resolvedSymbolName,
-                selection, "statically selected declaration");
+                value->declaration, selection->resolvedDeclarationId,
+                selection, "statically selected declaration", true,
+                selection->resolvedSymbolId,
+                selection->resolvedContractId);
             value->type = typeRef(selection->selectedType);
             result = std::move(value);
         }
@@ -682,7 +707,8 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         result = lowerBlock(block);
     } else if (auto* let = dynamic_cast<const ::LetStmt*>(statement)) {
         if (let->inferredType &&
-            let->inferredType->kind == TypeKind::DeclarationRef)
+            (let->inferredType->kind == TypeKind::SymbolSet ||
+             let->inferredType->kind == TypeKind::DeclarationRef))
             return nullptr;
         if (let->materializesIteratorRecipe) {
             (void)typeRef(TyI32);
@@ -1268,10 +1294,13 @@ void LunaLowerer::deferDeclarationRef(
     std::string lookup,
     const ASTNode* source,
     std::string context,
-    bool lookupById) {
+    bool lookupById,
+    luna::identity::SymbolId expectedSymbol,
+    luna::identity::ContractId expectedContract) {
     if (lookup.empty()) return;
     mPendingDeclarationRefs.push_back({
-        &target, std::move(lookup), source, std::move(context), lookupById});
+        &target, std::move(lookup), source, std::move(context), lookupById,
+        std::move(expectedSymbol), std::move(expectedContract)});
 }
 
 void LunaLowerer::resolveDeclarationReferences() {
@@ -1316,6 +1345,14 @@ void LunaLowerer::resolveDeclarationReferences() {
             error(pending.source, pending.context +
                   " references missing MoonIR declaration '" +
                   pending.lookup + "'");
+            continue;
+        }
+        if ((!pending.expectedSymbol.empty() &&
+             pending.expectedSymbol != declaration->symbolId) ||
+            (!pending.expectedContract.empty() &&
+             pending.expectedContract != declaration->contractId)) {
+            error(pending.source, pending.context +
+                  " disagrees with the sealed SymbolId/ContractId");
             continue;
         }
         *pending.target = {

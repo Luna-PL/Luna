@@ -172,7 +172,7 @@ obligation，不能重新推导所有权。
 | `src/sema/DeclarationCollector.h` | 声明收集/注册组件的窄接口 |
 | `src/sema/DeclarationCollector.cpp` | 声明、metadata、FFI 和初始 trait/impl contract 注册 |
 | `src/sema/SemanticAnalysisSupport.h` | Sema 组件共享且无可变状态的纯辅助函数 |
-| `src/sema/SemanticAnalyzer.h` | tooling/compiler 使用的稳定语义分析 facade |
+| `src/sema/SemanticAnalyzer.h` | tooling/compiler 使用的稳定语义分析 facade，含只读 Symbol Catalog 访问 |
 | `src/sema/SemanticAnalyzer.cpp` | facade 生命周期和对内部 context 的窄委托 |
 | `src/sema/SemanticContext.h` | 当前唯一内部语义状态、catalog 和组件抽取接口 |
 | `src/sema/SemanticContext.cpp` | 语义编排、跨组件委托和唯一共享状态服务 |
@@ -184,8 +184,8 @@ obligation，不能重新推导所有权。
 | `src/sema/TypeResolver.cpp` | 类型 AST 解析、约束求解、推断物化与单态化 |
 | `src/sema/OwnershipChecker.h` | ownership/borrow 阶段接口与 place 状态 |
 | `src/sema/OwnershipChecker.cpp` | path-sensitive move、borrow、cleanup 检查 |
-| `src/selector/Selector.h` | selector 候选、请求和结果模型 |
-| `src/selector/Selector.cpp` | 静态/动态候选过滤和唯一选择 |
+| `src/selector/Selector.h` | 不可变 Symbol Catalog、typed query set/terminal 与旧 selector 兼容模型 |
+| `src/selector/Selector.cpp` | catalog SymbolId/ContractId/TypeId 验证、`.one()`/`.optional()` 和旧动态选择规划 |
 | `src/instantiation/Instantiator.h` | 泛型实例请求、状态机和 ID 接口 |
 | `src/instantiation/Instantiator.cpp` | 稳定实例 key、缓存和状态转换 |
 | `src/macro/MacroProcessor.h` | 宏处理组件接口 |
@@ -260,7 +260,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 
 | 文件 | 主要职责 |
 |---|---|
-| `src/tooling/AnalysisSnapshot.h` | 可保留 typed AST、package graph、symbol table 与诊断的只读分析快照 |
+| `src/tooling/AnalysisSnapshot.h` | 可保留 typed AST、package graph、symbol table、Symbol Catalog 与诊断的只读分析快照 |
 | `src/tooling/AnalysisSnapshot.cpp` | package/内存 overlay 源码的 Parser、Sema、Trait 与 Ownership 前端编排 |
 | `src/tooling/ReferenceIndex.h` | 编译器已解析声明引用的只读索引接口 |
 | `src/tooling/ReferenceIndex.cpp` | 语义引用目标到稳定 SymbolId 的映射、排序与去重 |
@@ -373,6 +373,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/analysis_protocol.cmake` | `luna.analysis` v1 JSONL envelope、声明记录与 byte span 回归 |
 | `tests/analysis_snapshot_test.cpp` | 内存/路径分析、部分失败状态与 frontend 生命周期回归 |
 | `tests/source_manager_test.cpp` | 内存文档版本、Unicode 和 CRLF 回归 |
+| `tests/symbol_catalog_test.cpp` | typed catalog 身份、cardinality terminal、排列不变量与失败封闭回归 |
 | `tests/fixtures/*.luna` | 单主题源码输入；断言必须留在调用它的 CMake 脚本 |
 | `tests/fixtures/repl_session.txt` | REPL 标准输入 transcript |
 | `tests/fixtures/packages/**` | 文件顺序、package header、export 和聚合诊断输入 |
@@ -663,6 +664,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/aot_package_fixture.cmake`
 - `tests/control_flow_aot.cmake`
 - `tests/core_surface.cmake`
+- `tests/symbol_catalog_test.cpp`
 - `tests/diagnostic_protocol.cmake`
 - `tests/external_fragment_dispatch.cmake`
 - `tests/ffi_aot.cmake`
@@ -859,6 +861,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/safe_array_static_bounds_invalid.luna`
 - `tests/fixtures/safe_array_wrong_element_invalid.luna`
 - `tests/fixtures/safe_arrays.luna`
+- `tests/fixtures/selector_inferred_signature_invalid.luna`
+- `tests/fixtures/selector_metadata_ambiguous_invalid.luna`
 - `tests/fixtures/selector_outside_view_invalid.luna`
 - `tests/fixtures/selector_user_logic.luna`
 - `tests/fixtures/slice_borrow.luna`
@@ -874,6 +878,13 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/structural_generic_instance_reuse.luna`
 - `tests/fixtures/structural_trait_coherence.luna`
 - `tests/fixtures/structural_type_equivalence.luna`
+- `tests/fixtures/symbol_query_all_blocked_invalid.luna`
+- `tests/fixtures/symbol_query_ambiguous_invalid.luna`
+- `tests/fixtures/symbol_query_generic_invalid.luna`
+- `tests/fixtures/symbol_query_no_match_invalid.luna`
+- `tests/fixtures/symbol_query_optional_blocked_invalid.luna`
+- `tests/fixtures/symbol_query_public.luna`
+- `tests/fixtures/symbol_query_signature_invalid.luna`
 - `tests/fixtures/type_domains_reflection.luna`
 - `tests/fixtures/type_relations.luna`
 - `tests/fixtures/usage_block_linear_unconsumed_invalid.luna`

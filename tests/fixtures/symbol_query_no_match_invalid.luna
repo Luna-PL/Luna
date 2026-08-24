@@ -1,0 +1,8 @@
+meta release { major: i32; }
+
+@release(1)
+fn answer() -> i32 { return 10; }
+
+fn main() -> i32 {
+    return symbols(answer).matching(release(9)).one()();
+}

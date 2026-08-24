@@ -11,6 +11,9 @@
 
 class SemanticAnalyzer;
 class SymbolTable;
+namespace luna::selector {
+class SymbolCatalog;
+}
 
 namespace luna::tooling {
 
@@ -39,6 +42,7 @@ public:
     bool success() const { return mSuccess; }
     const Program* program() const { return mProgram.get(); }
     const SymbolTable* symbolTable() const;
+    const luna::selector::SymbolCatalog* symbolCatalog() const;
     const PackageGraph& packageGraph() const { return mPackageGraph; }
     const PackageManifest& packageManifest() const { return mPackageManifest; }
     const std::string& packageRootPath() const { return mPackageRootPath; }
