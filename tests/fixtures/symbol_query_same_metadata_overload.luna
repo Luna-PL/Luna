@@ -1,0 +1,26 @@
+meta revision { major: i32; }
+
+@revision(3)
+fn route(value: i32) -> i32 {
+    return value * 3;
+}
+
+@revision(3)
+fn route() -> i32 {
+    return 5;
+}
+
+fn main() -> i32 {
+    let unary = symbols::<(i32) -> i32>(route)
+        .matching(revision(3)).one();
+    let nullary = symbols::<() -> i32>(route)
+        .matching(revision(3)).optional();
+    match nullary {
+        None => {
+            return 1;
+        },
+        Some(selected) => {
+            return unary(21) + selected();
+        }
+    }
+}

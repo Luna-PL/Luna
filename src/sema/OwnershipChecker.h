@@ -137,6 +137,7 @@ private:
     TypePtr typeOfPlace(const Place& place) const;
 
     VarInfo* lookup(const std::string& name);
+    VarInfo* lookupCleanupVariable(const std::string& encodedPlace);
     void define(const std::string& name, TypePtr type, bool isHeap,
                 luna::ownership::Usage usage = luna::ownership::Usage::Copy,
                 luna::ownership::Relation relation = luna::ownership::Relation::Owned,

@@ -37,7 +37,6 @@ bool SemanticContext::analyze(Program* program) {
     mConstexprFunctions.clear();
     mSlotScopes.clear();
     mApplyScopes.clear();
-    mDynamicApplyScopes.clear();
     enterSlotScope();
     mFragments.clear();
     mMetadataSchemas.clear();
@@ -66,7 +65,8 @@ bool SemanticContext::analyze(Program* program) {
     mTraitMethods[luna::sysmeta::FromTraitId] = {
         {luna::sysmeta::FromMethodName, nullptr}
     };
-    mTraitOwners[luna::sysmeta::FromTraitId] = "luna.compiler";
+    mTraitOwners[luna::sysmeta::FromTraitId] =
+        luna::core_contracts::PackageId;
     mImpls.clear();
     mFromConversions.clear();
     mFromIteratorImplementations.clear();
@@ -91,12 +91,15 @@ bool SemanticContext::analyze(Program* program) {
         std::string name;
         if (auto* f = dynamic_cast<FunctionDecl*>(declaration)) name = f->name;
         else if (auto* f = dynamic_cast<FragmentDecl*>(declaration)) name = f->name;
+        else if (auto* s = dynamic_cast<SlotDecl*>(declaration)) name = s->name;
         else if (auto* s = dynamic_cast<StructDecl*>(declaration)) name = s->name;
         else if (auto* e = dynamic_cast<EnumDecl*>(declaration)) name = e->name;
         else if (auto* t = dynamic_cast<TraitDecl*>(declaration)) name = t->name;
         else if (auto* m = dynamic_cast<MetaDecl*>(declaration)) name = m->name;
         else if (auto* c = dynamic_cast<ConstraintDecl*>(declaration)) name = c->name;
-        if (!name.empty()) ++linkageNameCounts[metadataDeclarationName(name, declaration)];
+        if (!name.empty())
+            ++linkageNameCounts[
+                metadataDeclarationName(name, declaration)];
     }
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         auto* declaration = program->declarations[i].get();
@@ -105,6 +108,7 @@ bool SemanticContext::analyze(Program* program) {
         std::string name;
         if (auto* f = dynamic_cast<FunctionDecl*>(declaration)) name = f->name;
         else if (auto* f = dynamic_cast<FragmentDecl*>(declaration)) name = f->name;
+        else if (auto* s = dynamic_cast<SlotDecl*>(declaration)) name = s->name;
         else if (auto* s = dynamic_cast<StructDecl*>(declaration)) name = s->name;
         else if (auto* e = dynamic_cast<EnumDecl*>(declaration)) name = e->name;
         else if (auto* t = dynamic_cast<TraitDecl*>(declaration)) name = t->name;
@@ -114,6 +118,8 @@ bool SemanticContext::analyze(Program* program) {
             const std::string familyKey = qualifiedDeclarationKey(
                 mCurrentPackageId, mCurrentModulePath, name);
             const std::string sourceLinkage = metadataDeclarationName(name, declaration);
+            const std::string sourceIdentity =
+                declarationSourceIdentity(name, declaration);
             const bool isRootEntry = name == "main" &&
                 mCurrentPackageId == (program->packageName.empty()
                     ? std::string("main") : program->packageName);
@@ -122,9 +128,11 @@ bool SemanticContext::analyze(Program* program) {
             declaration->generatedSymbolName = isRootEntry
                 ? "main"
                 : (linkageNameCounts[sourceLinkage] > 1 || sourceLinkage == "main")
-                ? isolatedLinkageName(familyKey + "::" + sourceLinkage, sourceLinkage)
+                ? isolatedLinkageName(
+                      familyKey + "::" + sourceIdentity,
+                      sourceLinkage)
                 : sourceLinkage;
-            const std::string identity = familyKey + "::" + sourceLinkage;
+            const std::string identity = familyKey + "::" + sourceIdentity;
             if (!declaredNames.emplace(identity, declaration).second)
                 error("Duplicate package declaration '" + name + "' in module '" +
                       (mCurrentModulePath.empty() ? std::string("<root>")
@@ -220,6 +228,16 @@ bool SemanticContext::analyze(Program* program) {
     }
     // Pass 1c: declarations that may resolve or instantiate those complete
     // nominal shapes.
+    // Module-level slots must be registered before fragments because every
+    // fragment names one nominal SlotId as its target.
+    for (size_t i = 0; i < sourceDeclarationCount; ++i) {
+        if (auto* slot = dynamic_cast<SlotDecl*>(
+                program->declarations[i].get())) {
+            setDeclarationContext(slot);
+            setDiagnosticLocation(slot);
+            declareSlot(slot);
+        }
+    }
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {
         auto& decl = program->declarations[i];
         setDeclarationContext(decl.get());
@@ -232,6 +250,14 @@ bool SemanticContext::analyze(Program* program) {
         else if (auto* implementation =
                      dynamic_cast<ImplDecl*>(decl.get()))
             declareImpl(implementation);
+    }
+    for (size_t i = 0; i < sourceDeclarationCount; ++i) {
+        if (auto* slot = dynamic_cast<SlotDecl*>(
+                program->declarations[i].get())) {
+            setDeclarationContext(slot);
+            setDiagnosticLocation(slot);
+            finalizeSlot(slot);
+        }
     }
     // Pass 2a: materialize all trait method sets before checking any impl or
     // generic call. This also supports trait declarations after their uses.
@@ -312,8 +338,6 @@ void SemanticContext::rebuildSymbolCatalog() {
     const auto retention = [](RetentionKind value) {
         if (value == RetentionKind::Runtime)
             return luna::selector::Retention::Runtime;
-        if (value == RetentionKind::Dynamic)
-            return luna::selector::Retention::Dynamic;
         return luna::selector::Retention::CompileTime;
     };
     const auto declarationTypeForFunction = [&](FunctionDecl* function) {
@@ -343,8 +367,14 @@ void SemanticContext::rebuildSymbolCatalog() {
 
         luna::selector::CatalogSymbol symbol;
         symbol.symbolName = symbolName;
-        symbol.declarationId = nominalDeclarationIdentity(
-            mProgram, kindSpelling.c_str(), symbolName, declaration);
+        symbol.declarationId =
+            kind == luna::selector::CatalogSymbolKind::Function
+                ? functionDeclarationIdentity(
+                      mProgram,
+                      dynamic_cast<FunctionDecl*>(declaration))
+                : nominalDeclarationIdentity(
+                      mProgram, kindSpelling.c_str(), symbolName,
+                      declaration);
         symbol.familyDeclarationId = nominalDeclarationIdentity(
             mProgram, kindSpelling.c_str(), familyName, declaration);
         symbol.symbolId = luna::identity::symbolIdFromCanonical(
@@ -395,6 +425,14 @@ void SemanticContext::rebuildSymbolCatalog() {
         if (auto* function =
                 dynamic_cast<FunctionDecl*>(declaration.get())) {
             appendFunction(function);
+        } else if (auto* slot =
+                       dynamic_cast<SlotDecl*>(declaration.get())) {
+            const std::string symbolName = slot->generatedSymbolName.empty()
+                ? slot->name : slot->generatedSymbolName;
+            appendProjection(
+                slot, luna::selector::CatalogSymbolKind::Slot,
+                "slot", slot->name, symbolName, slot->name,
+                slot->structuralType);
         } else if (auto* fragment =
                        dynamic_cast<FragmentDecl*>(declaration.get())) {
             const std::string symbolName = fragment->generatedSymbolName.empty()
@@ -567,6 +605,14 @@ void SemanticContext::analyzeImpl(ImplDecl* decl) {
 }
 void SemanticContext::analyzeSlotDecl(SlotDeclStmt* stmt) {
     mControlAnalysis->analyzeSlotDecl(stmt);
+}
+
+void SemanticContext::declareSlot(SlotDecl* decl) {
+    mControlAnalysis->declareSlot(decl);
+}
+
+void SemanticContext::finalizeSlot(SlotDecl* decl) {
+    mControlAnalysis->finalizeSlot(decl);
 }
 
 void SemanticContext::analyzeSlotInvoke(

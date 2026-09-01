@@ -99,7 +99,11 @@ SchemaMajor/SchemaMinor 版本、Drop/From/Option/Iterator 等 Trait 与类型 I
 
 ### 4.1 selector（Selector.h/.cpp）
 
-编译期选择（select/family）：候选视图 DeclarationView 与选择器 Engine。候选（Candidate）带 declarationId / symbolName / familyId / callableType / retention（CompileTime/Runtime/Dynamic），并带元数据；Engine::validate 校验“返回的恰好一个 id 来自该 view 且同 family”，结果型是 Result（ResultKind 为 Unique / NoMatch / Ambiguous / InvalidCandidate / InvalidView）；动态选择用 Engine::planDynamic 产出 DynamicPlan。
+编译期选择（select/family）使用 `DeclarationView` 与 `Engine`。`Candidate` 带
+declarationId / symbolName / familyId / callableType / retention（CompileTime/Runtime）与
+metadata；`Engine::validate` 校验返回的唯一 ID 来自同 family 的输入 view。
+`SymbolCatalog`/`SymbolSet` 另提供类型化查询、稳定排序及 `.one()`/`.optional()`。
+0.3 不生成 dynamic selector plan；runtime switching 走 typed EV004 宿主 binding。
 
 ### 4.2 instantiation（Instantiator.h/.cpp）
 

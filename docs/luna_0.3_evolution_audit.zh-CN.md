@@ -17,8 +17,8 @@
 - Luna 不引入 effect 机制。下文的 effect set、effect bits、effect contract 或 effect
   compatibility 等表述已被取代；确实需要的事实由编译器推导为只读、强类型 sysmeta；
 - 0.3 编译器不提供旧 Rc/Arc 或 Slot/Fragment 语法的兼容 lowering；旧源码使用旧编译器；
-- 实现顺序和发布门以总体设计为准；未决 Slot/Fragment 源码/控制细节保留为
-  `TBD-SF006`，不视为已批准的语言机制。
+- 实现顺序和发布门以总体设计为准；SF006 现已取代本审计中的 Slot/Fragment
+  源码/控制建议。
 
 ## 1. 范围与结论
 

@@ -1,0 +1,13 @@
+fn answer() -> i32 { return 42; }
+
+fn main() -> i32 {
+    let candidate = symbols(answer).optional();
+    match candidate {
+        None => {
+            return 7;
+        },
+        Some(selected) => {
+            return selected();
+        }
+    }
+}

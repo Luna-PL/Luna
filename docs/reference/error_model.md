@@ -6,6 +6,11 @@
 > Normative status: core semantics are normative; internal layout and planned capabilities in the status table are non-normative
 > Initial implementation audit: `d0ab31c` (2026-07-31)
 
+> Luna 0.3 identity note: the value, propagation, cleanup, and panic rules below remain
+> applicable, but Result now has the canonical nominal identity
+> `org.luna.core::result::Result` and From uses `org.luna.core::convert::From`.
+> References to structural Result identity describe only the historical 0.2 baseline.
+
 This document defines the error semantics that 0.2 Alpha may rely on, separating unfinished
 standard-library/external adapters from the core model. See
 [architecture decisions D005/D006](../decisions.md) for rationale.

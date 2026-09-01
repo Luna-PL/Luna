@@ -1,0 +1,8 @@
+fn route() -> i32 { return 1; }
+
+fn identity<T>(value: T) -> T { return value; }
+
+fn main() -> i32 {
+    let escaped = identity(symbols(route).all());
+    return declaration_count(escaped);
+}

@@ -14,9 +14,8 @@ ctest --test-dir build --output-on-failure
 ```
 
 production pipeline 现在总是 seal canonical CFG，因此上面的普通 CTest 命令就是
-canonical 回归门禁。有限、静态链接的 runtime context 与 replay-safe multi-shot
-continuation 都是正例。外部插件 context/multi-shot callback 仍不在 plugin ABI v1 内，
-未知候选会在 runtime 边界终止。structured executable-body backend 已从源码删除；
+canonical 回归门禁。静态 single-shot interceptor/context 是正例；`context many`、
+dynamic slot/apply 与外部 context callback 是显式拒绝边界。structured executable-body backend 已从源码删除；
 聚焦单元测试还会直接调用 codegen，确认未 seal 的 body 在 canonical 边界被拒绝。
 
 发布候选构建应同时把项目自身的警告提升为错误：
@@ -45,14 +44,22 @@ concrete function 和两条边的 call chain，证明 dead declaration 会消失
 仍可执行。其直接 verifier 负向用例还会拒绝缺失 literal `TypeRef`
 以及被伪造为 boolean type 的 integer literal。
 
-`luna.moon-runtime` 测试内部 EV001–EV003 状态机，不冻结受
-`TBD-EV004` 延后的公开 API。它要求严格 verify-resolve-initialize staging
+`luna.moon-runtime` 通过公开 `runtime/Evolution.h` 表面测试 EV001–EV004
+状态机。它要求严格 verify-resolve-initialize staging
 顺序、一次性且属于同一 runtime 的安全点、失败原子性、精确
-SymbolId/ContractId 兼容性、pinned 旧 reference、switchable 新 reference、代码
+SymbolId/ContractId/kind/flag 兼容性、pinned 旧 reference、switchable 新 reference、代码
 lease 保留与 rollback。四个并发 reader 经过 1000 次 generation transition，
 必须只观察到所有已激活 generation 的完整 identity/implementation 对。
-canonical round-trip 测试还会把真实已验证 Moon Container 放入 staging，
-materialize 并保留其 ORC JIT，再让两个兼容 generation 经 activation 与 rollback
+load-once 用例要求相同内容复用首个 pinned generation、拒绝不同内容，并只保留
+一份 lease。canonical round-trip 测试还会装载一次真实已验证 Moon Container，
+`luna.runtime-descriptor-v1` 独立验证已安装的 C-compatible registry ABI、精确
+SymbolId/ContractId/kind/flag lookup、严格排序、typed metadata、callable-kind 约束与
+version 拒绝。canonical Moon loader 测试还会从 ORC 解析已发射 registry，在发布前把
+TypeId、metadata payload 与 callable 分类同已验证 Container 交叉比对，并只通过
+descriptor-backed binding 调用私有 retained function。cost-boundary 测试
+要求只有 runtime-retained 程序出现 descriptor/registry v1 type 与稳定 identity，静态 query
+必须不发射任何这些内容。
+证明相同请求不会再 materialize ORC generation，再让两个兼容 generation 经 activation 与 rollback
 执行出 60 -> 13 -> 60。首个 pinned entry 必须始终为 60、两份代码 lease 都被保留，
 replacement initializer 必须在 publication 前执行已解析的 13 entry，且 initializer
 失败或损坏容器都不得改变 active generation。
@@ -81,6 +88,9 @@ production loader 另行捕获不可变/私有 staging，验证并装载同一 i
 只暴露精确 SymbolId+ContractId lookup。测试在验证后把原路径替换为
 返回 `13` 的未信任实现，仍必须得到 `42`；它还伪造与改动后 proof export
 digest 匹配的 trust row，loader 必须因 registry 不匹配而拒绝。
+load-once 适配器还会用精确 SymbolId/ContractId/function/callable 要求解析
+callable，对相同可信内容跳过另一次平台装载，并在 publication 前拒绝同一
+Package ID 的第二个可信 image。
 同一独立 consumer 还会驱动两个可信 Native generation：第一代 pinned
 binding 保持 `42`，第二代激活后 switchable binding 变为 `13`，rollback 只把
 switchable binding 重定向为 `42`。
@@ -148,7 +158,8 @@ TSAN_OPTIONS=halt_on_error=1:history_size=7 \
 当前 `luna.semantic-regressions` 覆盖：
 
 - lexer/parser 的结构化错误与顶层多错误恢复、基础函数、算术/位/关系运算符和逻辑短路、闭包、泛型单态化、`const` / `constexpr`、编译期反射。
-- interceptor / context / slot 的有效路径、abort 合流与多发射资源安全负例。
+- 名义 interceptor/context/slot 有效路径、return/abort/resume cleanup，以及显式
+  multi-shot/dynamic 迁移负例。
 - 函数、类型和 trait 的版本选择与不完整 impl。
 - 多文件包、跨文件解析恢复、显式导出、重复符号/版本身份、导出/FFI 边界与包名一致性。
 - C ABI 的 JIT/AOT `puts` 链接、线性 `free` 移交，以及 ABI、泛型和参数类型边界的负例。
@@ -190,6 +201,17 @@ match 都成为 `Switch`，三个 payload binding 保留 pattern `LocalId`，且
 clone、隐式复制拒绝、最后 handle 精确一次释放、嵌套 payload Drop、MoonIR
 普通 nominal 事实以及 LLVM Runtime ABI v1 调用。
 
+`luna.core-option` 在 JIT 与 AOT 中验证源码定义的 Core `Option<T>` 取值
+函数，覆盖 Copy 值、affine `Some` payload 转移、`None` fallback 转移、
+未选中 fallback 的精确一次清理，以及 canonical CFG 将 `never`/panic
+分支封闭为 `Unreachable`，而不是落入无值 return。runtime 负例还会
+核对 `unwrap(None)` 的稳定默认文本与 `expect(None)` 的调用者文本。
+
+`luna.core-result` 在 JIT 与 AOT 中验证普通源码定义的 Core Result 取值层，
+覆盖 Copy 值、affine Ok/Err payload 转移、已选中与未选中 fallback 清理、
+已消费 error 清理，以及 `unwrap`、`expect`、`unwrap_err`、`expect_err`
+的默认或调用者 panic 文本。
+
 `luna.package-export-abi` 是独立的 AOT ABI 测试：它确认 package 中带有 `export` 的函数在 LLVM IR 中为外部符号，而未导出的函数为 `internal`。测试在结束时删除自身生成的 `.ll` 与可执行文件。
 
 `luna.return-cleanup-abi` 是路径敏感释放的 AOT 测试：它确认嵌套分支和落空路径上的每个 `return` 都在自身路径上发射一次携带精确 `size/alignment` 的 `rt_dealloc`，而不是把清理留在不可达的块末尾。
@@ -208,9 +230,12 @@ clone、隐式复制拒绝、最后 handle 精确一次释放、嵌套 payload D
 O3 四路展开提示，并防止同一提示应用于过小的嵌套递归，同时优化后的 JIT/AOT
 必须返回相同结果。
 
-`luna.fragment-lowering-abi` 检查静态 fragment 不会退化为动态候选选择或堆分配；`luna.structured-cps-abi` 则在 O0 下检查 context 续体的栈上 frame、独立入口和返回分发块，并运行“续体内 return”案例，确认 `resume()` 后的代码不会错误执行。
+`luna.fragment-lowering-abi` 检查静态 fragment 不会退化为动态候选选择或堆分配；
+`luna.structured-cps-abi` 则在 O0 下检查 canonical context continuation，并运行“续体内
+return”案例，确认保留的 fragment 资源被清理且 `resume()` 后的代码不会错误执行。
 
-`luna.external-fragment-plugin-abi` 使用真实共享库验证外部描述符的 ABI、注册、重复契约拒绝和显式参数调用；`luna.external-fragment-dispatch` 则让动态槽选择静态候选之外的外部 interceptor，确认插件继续动作后槽续体仍然执行。
+`luna.legacy-dynamic-fragment-source` 验证已移除的 dynamic fragment 源码拼写在迁移
+边界失败。优先级第 16 项已删除生产 external plugin ABI，因此不再保留正向 plugin ABI 测试。
 
 `luna.aot-runtime-boundary` 覆盖显式 `--runtime-lib` / `--cc`、缺失运行时库的 `DRV0001` 诊断，以及 AOT 可执行文件的 GPU 后端初始化失败边界。
 
@@ -223,10 +248,16 @@ runtime、公开 ABI 头文件、标准库 workspace 与语义参考文档均已
 报告的 commit。CMake 同时监视 Git HEAD 与当前 branch ref，因此普通增量构建会在提交
 后刷新该身份，不会静默发布带旧 build stamp 的二进制。
 
+`luna.ecosystem-frozen-baseline` 验证作为历史生态证据记录的 toolchain/Lunax
+精确 commit 与 clean worktree。`luna.ecosystem-release-policy` 单独验证 fail-closed
+策略：冻结快照可以仍然有效，但发布必须保持阻断。prebuilt-release workflow 以
+`REQUIRE_READY=ON` 重跑该策略，在任一平台打包前要求 `release.publish`、
+`status: release-ready` 以及面向当前版本的 Luna 兼容 tag。
+
 `luna.runtime-gpu-error-state` 验证 CPU 模拟器下 event 的成功与无效状态 ABI；`luna.gpu-error-boundary-abi` 检查 AOT IR 中 `await` 的失败分支会调用统一 GPU 错误终止入口，保证 CUDA/ROCm 的 launch 或同步失败不会静默继续执行。
 前者同时检查 Runtime error snapshot 的稳定 GPU domain/code、两阶段消息复制和
 旧 `last_error` 兼容，并确保一次 operation error 不会反向污染已成功的 backend
-初始化状态；`luna.runtime-abi-v1` 覆盖 fragment plugin 错误快照以及公开头文件的
+初始化状态；`luna.runtime-abi-v1` 覆盖 host service/error snapshot 行为以及公开头文件的
 C/C++ ABI 可编译性。
 
 `luna.jit-aot-extended-parity` 以 `-O2` 比较多文件包和 CPU 模拟器异构程序的 JIT/AOT 退出码及 stdout，确保优化不破坏包级链接或 host-side launch/event 降低。

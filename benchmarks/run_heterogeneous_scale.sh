@@ -33,6 +33,7 @@ out_file="${LUNA_HETERO_OUT:-}"
 temp_dir="$(mktemp -d /tmp/luna-hetero-scale.XXXXXX)"
 gen_dir="${temp_dir}/src"
 luna_hip_bin="${temp_dir}/cpp23_hip_vector"
+source "${source_root}/benchmarks/package_source.sh"
 
 cleanup() {
     rm -rf -- "${temp_dir}"
@@ -91,8 +92,15 @@ fi
 
 run_luna_aot() {
     local source="$1" backend_name="$2" target_flag="$3"
-    local binary="${source%.luna}"
-    "${luna_driver}" build "${source}" -O2 "${target_flag}" >/dev/null
+    local stem package_name package_root binary
+    stem="${source##*/}"
+    stem="${stem%.luna}"
+    package_name="${stem//-/_}"
+    package_name="${package_name,,}"
+    package_root="${temp_dir}/packages/${backend_name}/${package_name}"
+    luna_benchmark_build_package "${luna_driver}" "${source}" \
+        "${package_root}" "${package_name}" -O2 "${target_flag}" || return
+    binary="${LUNA_BENCHMARK_AOT}"
     local start end output wall kernel_ms
     start="$(now_ns)"
     output="$("${bench_prefix[@]}" env LUNA_GPU_BACKEND="${backend_name}" LUNA_GPU_PROFILE=1 "${binary}")"

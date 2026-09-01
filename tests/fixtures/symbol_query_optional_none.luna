@@ -1,0 +1,18 @@
+meta release { major: i32; }
+
+@release(1)
+fn answer() -> i32 { return 42; }
+
+fn main() -> i32 {
+    let candidate = symbols(answer)
+        .matching(release(2)).optional();
+    match candidate {
+        None => {
+            return 7;
+        },
+        Some(selected) => {
+            // This arm remains type-checked even though this query is empty.
+            return selected();
+        }
+    }
+}

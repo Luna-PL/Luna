@@ -1,0 +1,12 @@
+meta rank { value: i32; }
+
+@rank(1)
+fn route() -> i32 { return 1; }
+
+fn main() -> i32 {
+    let empty = symbols(route).matching(rank(9)).all();
+    for selected in empty {
+        return selected();
+    }
+    return declaration_count(empty);
+}

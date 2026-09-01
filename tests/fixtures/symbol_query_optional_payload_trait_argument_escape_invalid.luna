@@ -1,0 +1,29 @@
+trait RefConsumer {
+    fn consume_ref(
+        value: i32,
+        target: declaration_ref<() -> i32>
+    ) -> i32;
+}
+
+impl RefConsumer for i32 {
+    fn consume_ref(
+        value: i32,
+        target: declaration_ref<() -> i32>
+    ) -> i32 {
+        return value;
+    }
+}
+
+fn answer() -> i32 { return 42; }
+
+fn main() -> i32 {
+    let candidate = symbols(answer).optional();
+    match candidate {
+        None => {
+            return 0;
+        },
+        Some(selected) => {
+            return 1.consume_ref(selected);
+        }
+    }
+}

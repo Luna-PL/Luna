@@ -57,11 +57,12 @@ C++ 类比：像「作用域化的 friend + 引用聚合」：每个组件拿到
 
 ## 关键结构体·类·枚举
 
-- `class BodyContextAccess final`：体分析组件视图。
+- `class BodyContextAccess final`：体分析组件视图，包括为非 function Symbol Catalog query 推断 kind 所需的 qualified declaration lookup/type resolution。
   - 字段：`mConcepts`、`mConstexprFunctions`、`mConstraints`、`mCurrentFragmentDecl`、`mCurrentFunctionReturnUsage`/`mCurrentFunctionReturnsLinear`、`mCurrentModulePath`/`mCurrentPackageId`、`mCurrentReturnType`、`mDeclaredTypes`、`mFromConversions`、`mFromIteratorImplementations`、`mFunctionFamilies`、`mGeneratedInstances`、`mImpls`、`mInFunction`/`mInKernel`、`mInferenceRoots`、`mIteratorStateCounter`、`mMetadataSchemas`、`mProgram`、`mSawReturn`、`mSymTable`、`mTraitMethods`、`mTraits`。
   - 方法：`analyzeApply`/`analyzeSlotDecl`/`analyzeSlotInvoke`、反射调用、`constrain`/`declareFunction`/`declaredType`/const 作用域、`error`、const/constraint/selector 求值、`instantiateNominal`/`lookupSymbol`/`monomorphize`、引用记录、`requireBool/Numeric/Integer`、`resolveTypeAST`/`resolved`/`satisfiesTrait`/`setDeclarationContext`/`setDiagnosticLocation`/`sourceDeclarationKey`/`traitIdentity`/`typeIdentity`/`typeToAST`。
 - `class DeclarationContextAccess final`：声明收集组件视图（字段含 `mFragments`、`mTraitOwners`、`mTraitTypeParams` 等；方法含 `analyzeExpr`/`checkUnresolved`/`resolveTraitRef` 等）。
-- `class ControlContextAccess final`：控制流组件视图（`mApplyScopes`、`mCurrentFragmentSlot`、`mDynamicApplyScopes`、`mSlotScopes` 等；`analyzeBlock`/`analyzeExpr` 等）。
+- `class ControlContextAccess final`：静态控制流组件视图（`mApplyScopes`、
+  `mCurrentFragmentSlot`、`mSlotScopes` 等；`analyzeBlock`/`analyzeExpr` 等）。
 - `class TypeContextAccess final`：类型组件视图（`mConstraints`、`mInstantiator`、`mInstantiatedFunctions`、`mQualifiedDeclarations`、诊断字段等；`lookupDeclaredType` 等）。
 - `class CompileTimeContextAccess final`：编译期求值组件视图（`mActiveSelectorView`、`mConstEvaluationDepth`、`mConstScopes` 等；`analyzeExpr`/`resolveTypeAST` 等）。
 - 各 access 均 `friend class SemanticContext`，构造函数私有、由 `SemanticContext` 的 `xxxAccess()` 工厂创建。

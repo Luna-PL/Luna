@@ -23,8 +23,9 @@ functions; unresolved recipes never cross the container trust boundary. An
 entry/export/host-interface/runtime-retention reachability closure then removes
 unused concrete code and model rows while retaining direct/dynamic callees,
 Drop glue, metadata, fragments, and their type dependencies.
-The evolution runtime is not complete; portable cross-target containers are
-explicitly deferred beyond 0.3.
+The minimum host-only, stateless evolution loop is exposed through the installed
+C++17 API; portable cross-target containers and state migration are explicitly
+deferred beyond 0.3. See the [host evolution API](evolution.md).
 
 Detailed design: [Architecture decisions D001/D002](decisions.md).
 
@@ -116,10 +117,9 @@ ordinary user function over real iterable declaration/metadata views and is
 resolved at compile time. Known declarations can instead use direct static
 reflection without metadata or selection. Runtime visibility must be requested
 with `runtime`; compile-time-only metadata is not silently retained. The 0.3
-phase model has compile-time and runtime only. Legacy `dynamic select` and
-`dynamic apply` forms still present in the development compiler are transitional
-0.2 implementation surface pending the frozen runtime query/Slot replacements,
-not a third phase or compatibility commitment.
+phase model has compile-time and runtime only. Legacy `dynamic select`,
+`dynamic slot`, and `dynamic apply` are rejected, and their production paths
+were deleted. None of them defines a third phase or compatibility commitment.
 
 Detailed guide: [Metadata and selectors](versioning.md).
 
@@ -134,12 +134,11 @@ Detailed guide: [Packages and modules](packages.md).
 
 ## Structured fragments
 
-`interceptor`, `context`, `slot`, `resume`, `abort` and `apply` currently model
-structured control flow and extensibility. Their current function-local source
-forms are the implementation being migrated, not the final 0.3 surface. The
-confirmed destination uses module-level second-class Slot identity, nominal
-Fragment targets and verified MoonIR composition; exact declaration/control
-spelling remains `TBD-SF006`.
+`interceptor`, `context`, `slot`, `resume`, `abort` and `apply` model structured
+control flow and extensibility. SF006 freezes module-level second-class Slot
+identity, nominal Fragment targets, lexical invocation/application, unit-result
+single-shot control, and verified MoonIR composition. Legacy local, dynamic,
+multi-shot, and blockless forms are rejected.
 
 Detailed guide: [Fragments, slots and plugins](fragments.md).
 

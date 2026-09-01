@@ -23,26 +23,26 @@ extern "C" fn runtime_console_read(
     error: raw<u8>
 ) -> i32 as "rt_console_read_v1";
 
-// Explicitly temporary 0.2 convenience adapters used by std::io. They avoid
-// pretending that borrowed cstr is the future owned String API.
-extern "C" fn runtime_compat_write_text(
+// Initial v1 convenience adapters used by std::io. They avoid pretending that
+// borrowed cstr is an owned String API.
+extern "C" fn runtime_write_text(
     stream: i32, text: cstr, newline: i32
-) -> i32 as "rt_compat_console_write_cstr_0_2";
+) -> i32 as "rt_console_write_cstr_v1";
 
-extern "C" fn runtime_compat_write_i32(
+extern "C" fn runtime_write_i32(
     stream: i32, value: i32, newline: i32
-) -> i32 as "rt_compat_console_write_i32_0_2";
+) -> i32 as "rt_console_write_i32_v1";
 
-extern "C" fn runtime_compat_flush(
+extern "C" fn runtime_flush_simple(
     stream: i32
-) -> i32 as "rt_compat_console_flush_0_2";
+) -> i32 as "rt_console_flush_simple_v1";
 
-extern "C" fn runtime_compat_read_line_lossy()
-    -> cstr as "rt_compat_console_read_line_lossy_0_2";
+extern "C" fn runtime_read_line_lossy()
+    -> cstr as "rt_console_read_line_lossy_v1";
 
-extern "C" fn runtime_compat_parse_i32_or(
+extern "C" fn runtime_parse_i32_or(
     text: cstr, fallback: i32
-) -> i32 as "rt_compat_parse_i32_or_0_2";
+) -> i32 as "rt_parse_i32_or_v1";
 
 export fn write(
     stream: i32,
@@ -66,26 +66,26 @@ export fn read(
     return runtime_console_read(bytes, byte_capacity, bytes_read, error);
 }
 
-export fn compat_write_text(
+export fn write_text(
     stream: i32, text: cstr, newline: i32
 ) -> i32 {
-    return runtime_compat_write_text(stream, text, newline);
+    return runtime_write_text(stream, text, newline);
 }
 
-export fn compat_write_i32(
+export fn write_i32(
     stream: i32, value: i32, newline: i32
 ) -> i32 {
-    return runtime_compat_write_i32(stream, value, newline);
+    return runtime_write_i32(stream, value, newline);
 }
 
-export fn compat_flush(stream: i32) -> i32 {
-    return runtime_compat_flush(stream);
+export fn flush_simple(stream: i32) -> i32 {
+    return runtime_flush_simple(stream);
 }
 
-export fn compat_read_line_lossy() -> cstr {
-    return runtime_compat_read_line_lossy();
+export fn read_line_lossy() -> cstr {
+    return runtime_read_line_lossy();
 }
 
-export fn compat_parse_i32_or(text: cstr, fallback: i32) -> i32 {
-    return runtime_compat_parse_i32_or(text, fallback);
+export fn parse_i32_or(text: cstr, fallback: i32) -> i32 {
+    return runtime_parse_i32_or(text, fallback);
 }

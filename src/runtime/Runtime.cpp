@@ -5,7 +5,6 @@
 #include <atomic>
 #include <charconv>
 #include <cstdlib>
-#include <cctype>
 #include <cstddef>
 #include <cstring>
 #include <cstdio>
@@ -14,7 +13,6 @@
 #include <string>
 #include <unordered_map>
 #include <utility>
-#include <vector>
 
 #ifdef _WIN32
 #include <malloc.h>
@@ -229,8 +227,8 @@ int ioUnsupported(LunaIoErrorV1* error, uint32_t operation) {
     return LUNA_RUNTIME_STATUS_IO_ERROR;
 }
 
-int legacyConsoleFailure(LunaIoErrorV1* error, uint32_t operation,
-                         int status) {
+int consoleAdapterFailure(LunaIoErrorV1* error, uint32_t operation,
+                          int status) {
     if (status == LUNA_RUNTIME_STATUS_OK) return status;
     if (!error) return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
     *error = {LUNA_RUNTIME_ABI_V1, sizeof(LunaIoErrorV1),
@@ -429,37 +427,9 @@ struct GpuRuntimeState {
     double profiledKernelMs = 0.0;
 };
 
-struct FragmentPluginState {
-    struct Loaded {
-        void* library = nullptr;
-        const LunaFragmentPluginDescriptorV1* descriptor = nullptr;
-        std::string path;
-    };
-    std::vector<Loaded> loaded;
-    int32_t errorCode = LUNA_RUNTIME_ERROR_NONE;
-    std::string error;
-};
-
 GpuRuntimeState& state() {
     static GpuRuntimeState value;
     return value;
-}
-
-FragmentPluginState& fragmentPlugins() {
-    static FragmentPluginState value;
-    return value;
-}
-
-void clearFragmentPluginError() {
-    auto& plugins = fragmentPlugins();
-    plugins.errorCode = LUNA_RUNTIME_ERROR_NONE;
-    plugins.error.clear();
-}
-
-void setFragmentPluginError(int32_t code, std::string message) {
-    auto& plugins = fragmentPlugins();
-    plugins.errorCode = code;
-    plugins.error = std::move(message);
 }
 
 void setGpuError(int32_t code, std::string message) {
@@ -477,20 +447,6 @@ void reportGpuProfileAtExit() {
     const auto& runtime = state();
     if (!runtime.profileEnabled || (!runtime.cuda && !runtime.rocm)) return;
     std::printf("Luna GPU profile: kernel_ms=%.6f\n", runtime.profiledKernelMs);
-}
-
-std::string dynamicFragmentEnvironmentKey(const char* slotName) {
-    std::string key = "LUNA_FRAGMENT_";
-    for (const char* character = slotName; character && *character; ++character) {
-        const unsigned char value = static_cast<unsigned char>(*character);
-        if ((value >= 'a' && value <= 'z') || (value >= 'A' && value <= 'Z'))
-            key.push_back(static_cast<char>(std::toupper(value)));
-        else if ((value >= '0' && value <= '9') || value == '_')
-            key.push_back(static_cast<char>(value));
-        else
-            key.push_back('_');
-    }
-    return key;
 }
 
 // A module can export more than one kernel. Keep the binary in the key so a
@@ -593,70 +549,6 @@ bool checkHip(const char* operation, hipError_t status) {
 void setGpuOperationError(const std::string& message,
                           int32_t code = LUNA_RUNTIME_ERROR_INVALID_STATE) {
     setGpuError(code, message);
-}
-
-const LunaFragmentPluginDescriptorV1* findFragmentPlugin(
-    const char* slotName, const char* fragmentName, const char* contractHash) {
-    if (!slotName || !fragmentName || !contractHash) return nullptr;
-    for (const auto& loaded : fragmentPlugins().loaded) {
-        const auto* descriptor = loaded.descriptor;
-        if (!descriptor || !descriptor->slot_name || !descriptor->fragment_name ||
-            !descriptor->contract_hash)
-            continue;
-        if (std::strcmp(descriptor->slot_name, slotName) == 0 &&
-            std::strcmp(descriptor->fragment_name, fragmentName) == 0 &&
-            std::strcmp(descriptor->contract_hash, contractHash) == 0)
-            return descriptor;
-    }
-    return nullptr;
-}
-
-bool validateFragmentPluginDescriptor(
-    const LunaFragmentPluginDescriptorV1* descriptor, const char* path) {
-    const std::string source = path ? path : "<plugin>";
-    if (!descriptor) {
-        setFragmentPluginError(
-            LUNA_RUNTIME_ERROR_INVALID_DESCRIPTOR,
-            "plugin '" + source + "' returned a null descriptor");
-        return false;
-    }
-    if (descriptor->magic != LUNA_FRAGMENT_PLUGIN_DESCRIPTOR_V1 ||
-        descriptor->abi_version != LUNA_FRAGMENT_PLUGIN_ABI_V1) {
-        setFragmentPluginError(
-            LUNA_RUNTIME_ERROR_UNSUPPORTED_ABI,
-            "plugin '" + source + "' uses an unsupported fragment ABI");
-        return false;
-    }
-    if (descriptor->descriptor_size < sizeof(LunaFragmentPluginDescriptorV1)) {
-        setFragmentPluginError(
-            LUNA_RUNTIME_ERROR_INVALID_DESCRIPTOR,
-            "plugin '" + source + "' has a truncated fragment descriptor");
-        return false;
-    }
-    if (!descriptor->plugin_id || !*descriptor->plugin_id ||
-        !descriptor->fragment_name || !*descriptor->fragment_name ||
-        !descriptor->slot_name || !*descriptor->slot_name ||
-        !descriptor->contract_hash || !*descriptor->contract_hash ||
-        !descriptor->entry) {
-        setFragmentPluginError(
-            LUNA_RUNTIME_ERROR_INVALID_DESCRIPTOR,
-            "plugin '" + source +
-                "' has incomplete fragment metadata or no entry point");
-        return false;
-    }
-    if (descriptor->fragment_kind != LUNA_FRAGMENT_KIND_INTERCEPTOR ||
-        descriptor->cardinality != LUNA_FRAGMENT_CARDINALITY_ONCE ||
-        (descriptor->effects & LUNA_FRAGMENT_EFFECT_HOST_ONLY) == 0 ||
-        (descriptor->effects & ~(LUNA_FRAGMENT_EFFECT_HOST_ONLY |
-                                 LUNA_FRAGMENT_EFFECT_MAY_ABORT)) != 0) {
-        setFragmentPluginError(
-            LUNA_RUNTIME_ERROR_INVALID_DESCRIPTOR,
-            "plugin '" + source +
-                "' is outside the v1 external fragment contract: only host-only "
-                "single-shot interceptors are supported");
-        return false;
-    }
-    return true;
 }
 
 bool loadHipApi() {
@@ -820,7 +712,7 @@ int rt_console_write_v1(uint32_t stream, const void* bytes, size_t byte_count,
     const auto* services = activateHostServices();
     if ((services->capabilities & LUNA_HOST_CAP_CONSOLE) == 0)
         return ioUnsupported(error, LUNA_IO_OPERATION_WRITE);
-    return legacyConsoleFailure(
+    return consoleAdapterFailure(
         error, LUNA_IO_OPERATION_WRITE,
         services->console->write(services->console->context, stream,
                                  static_cast<const char*>(bytes), byte_count));
@@ -833,7 +725,7 @@ int rt_console_flush_v1(uint32_t stream, LunaIoErrorV1* error) {
     const auto* services = activateHostServices();
     if ((services->capabilities & LUNA_HOST_CAP_CONSOLE) == 0)
         return ioUnsupported(error, LUNA_IO_OPERATION_FLUSH);
-    return legacyConsoleFailure(
+    return consoleAdapterFailure(
         error, LUNA_IO_OPERATION_FLUSH,
         services->console->flush(services->console->context, stream));
 }
@@ -972,12 +864,6 @@ int rt_runtime_error_snapshot_v1(uint32_t domain,
     int32_t code = LUNA_RUNTIME_ERROR_NONE;
     const std::string* diagnostic = nullptr;
     switch (domain) {
-    case LUNA_RUNTIME_ERROR_DOMAIN_FRAGMENT_PLUGIN: {
-        const auto& plugins = fragmentPlugins();
-        code = plugins.errorCode;
-        diagnostic = &plugins.error;
-        break;
-    }
     case LUNA_RUNTIME_ERROR_DOMAIN_GPU: {
         const auto& runtime = state();
         code = runtime.errorCode;
@@ -1139,14 +1025,6 @@ void rt_panic_cstr(const char* message) {
     std::abort();
 }
 
-void* rt_malloc(size_t size) {
-    return rt_alloc(size, LUNA_DEFAULT_HOST_ALIGNMENT);
-}
-
-void rt_free(void* ptr) {
-    rt_dealloc(ptr, 0, LUNA_DEFAULT_HOST_ALIGNMENT);
-}
-
 void rt_print_i32(int32_t value) {
     char buffer[32];
     const int length = std::snprintf(buffer, sizeof(buffer), "%d\n", value);
@@ -1167,8 +1045,8 @@ void rt_print_cstr(const char* value) {
     console->write(console->context, LUNA_CONSOLE_STDOUT, "\n", 1);
 }
 
-int rt_compat_console_write_cstr_0_2(uint32_t stream, const char* value,
-                                    int32_t newline) {
+int rt_console_write_cstr_v1(uint32_t stream, const char* value,
+                            int32_t newline) {
     if (!value || (newline != 0 && newline != 1))
         return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
     LunaIoErrorV1 error{};
@@ -1179,8 +1057,8 @@ int rt_compat_console_write_cstr_0_2(uint32_t stream, const char* value,
     return status;
 }
 
-int rt_compat_console_write_i32_0_2(uint32_t stream, int32_t value,
-                                   int32_t newline) {
+int rt_console_write_i32_v1(uint32_t stream, int32_t value,
+                           int32_t newline) {
     if (newline != 0 && newline != 1)
         return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
     char buffer[32];
@@ -1194,12 +1072,12 @@ int rt_compat_console_write_i32_0_2(uint32_t stream, int32_t value,
     return status;
 }
 
-int rt_compat_console_flush_0_2(uint32_t stream) {
+int rt_console_flush_simple_v1(uint32_t stream) {
     LunaIoErrorV1 error{};
     return rt_console_flush_v1(stream, &error);
 }
 
-const char* rt_compat_console_read_line_lossy_0_2() {
+const char* rt_console_read_line_lossy_v1() {
     thread_local std::array<char, 4096> line{};
     size_t length = 0;
     for (;;) {
@@ -1218,7 +1096,7 @@ const char* rt_compat_console_read_line_lossy_0_2() {
     return line.data();
 }
 
-int32_t rt_compat_parse_i32_or_0_2(const char* text, int32_t fallback) {
+int32_t rt_parse_i32_or_v1(const char* text, int32_t fallback) {
     if (!text) return fallback;
     const char* begin = text;
     while (*begin == ' ' || *begin == '\t' || *begin == '\r' ||
@@ -1239,140 +1117,6 @@ int32_t rt_array_index_or_abort(int32_t index, size_t length) {
     if (index >= 0 && static_cast<size_t>(index) < length) return index;
     std::fprintf(stderr, "Luna runtime error: array index %d is outside length %zu\n", index, length);
     std::abort();
-}
-
-const char* rt_dynamic_fragment_select(const char* slot_name, const char* fallback_name) {
-    if (const char* plugin = std::getenv("LUNA_FRAGMENT_PLUGIN"); plugin && *plugin)
-        rt_fragment_plugin_load(plugin);
-    const std::string key = dynamicFragmentEnvironmentKey(slot_name);
-    const char* selected = std::getenv(key.c_str());
-    return selected && *selected ? selected : fallback_name;
-}
-
-int rt_dynamic_fragment_matches(const char* selected_name, const char* candidate_name) {
-    return selected_name && candidate_name && std::strcmp(selected_name, candidate_name) == 0;
-}
-
-void rt_dynamic_fragment_report_unknown_and_abort(const char* slot_name,
-                                                  const char* selected_name) {
-    std::fprintf(stderr, "dynamic fragment selection '%s' is not registered for slot '%s'\n",
-                 selected_name ? selected_name : "<null>",
-                 slot_name ? slot_name : "<unknown>");
-    std::fflush(stderr);
-    std::exit(EXIT_FAILURE);
-}
-
-int rt_fragment_plugin_load(const char* path) {
-    auto& plugins = fragmentPlugins();
-    clearFragmentPluginError();
-    if (!path || !*path) {
-        setFragmentPluginError(
-            LUNA_RUNTIME_ERROR_INVALID_ARGUMENT,
-            "fragment plugin path is empty");
-        return 0;
-    }
-
-    for (const auto& loaded : plugins.loaded) {
-        if (loaded.path == path) return 1;
-    }
-
-    void* library = lunaOpenLibrary(path);
-    if (!library) {
-        setFragmentPluginError(
-            LUNA_RUNTIME_ERROR_DYNAMIC_LIBRARY,
-            "could not load fragment plugin '" + std::string(path) + "': " +
-                lunaDynamicLoaderError());
-        return 0;
-    }
-
-    auto descriptorFn = reinterpret_cast<LunaFragmentPluginDescriptorFnV1>(
-        lunaLoadSymbol(library, "luna_fragment_plugin_descriptor_v1"));
-    if (!descriptorFn) {
-        setFragmentPluginError(
-            LUNA_RUNTIME_ERROR_MISSING_SYMBOL,
-            "fragment plugin '" + std::string(path) +
-                "' does not export luna_fragment_plugin_descriptor_v1");
-        lunaCloseLibrary(library);
-        return 0;
-    }
-
-    const auto* descriptor = descriptorFn();
-    if (!validateFragmentPluginDescriptor(descriptor, path)) {
-        lunaCloseLibrary(library);
-        return 0;
-    }
-    if (findFragmentPlugin(descriptor->slot_name, descriptor->fragment_name,
-                           descriptor->contract_hash)) {
-        setFragmentPluginError(
-            LUNA_RUNTIME_ERROR_DUPLICATE_REGISTRATION,
-            "fragment plugin '" + std::string(path) +
-                "' duplicates registered fragment '" + descriptor->fragment_name +
-                "' for slot '" + descriptor->slot_name + "'");
-        lunaCloseLibrary(library);
-        return 0;
-    }
-
-    plugins.loaded.push_back({library, descriptor, path});
-    return 1;
-}
-
-const char* rt_fragment_plugin_last_error() {
-    return fragmentPlugins().error.c_str();
-}
-
-int rt_fragment_plugin_is_registered(const char* slot_name,
-                                     const char* fragment_name,
-                                     const char* contract_hash) {
-    return findFragmentPlugin(slot_name, fragment_name, contract_hash) ? 1 : 0;
-}
-
-int rt_fragment_plugin_invoke(const char* slot_name,
-                              const char* fragment_name,
-                              const char* contract_hash,
-                              const LunaFragmentInvocationV1* invocation) {
-    auto* descriptor = findFragmentPlugin(slot_name, fragment_name, contract_hash);
-    if (!descriptor) {
-        setFragmentPluginError(
-            LUNA_RUNTIME_ERROR_NOT_FOUND,
-            "no external fragment registered for slot '" +
-                std::string(slot_name ? slot_name : "<unknown>") + "', fragment '" +
-                std::string(fragment_name ? fragment_name : "<unknown>") +
-                "' and the requested contract");
-        return LUNA_FRAGMENT_PLUGIN_ERROR;
-    }
-    if (!invocation || invocation->abi_version != LUNA_FRAGMENT_PLUGIN_ABI_V1) {
-        setFragmentPluginError(
-            LUNA_RUNTIME_ERROR_UNSUPPORTED_ABI,
-            "external fragment invocation uses an unsupported ABI");
-        return LUNA_FRAGMENT_PLUGIN_ERROR;
-    }
-    const int result = descriptor->entry(invocation);
-    if (result != LUNA_FRAGMENT_PLUGIN_CONTINUE &&
-        result != LUNA_FRAGMENT_PLUGIN_ABORT) {
-        setFragmentPluginError(
-            LUNA_RUNTIME_ERROR_INVALID_RESULT,
-            "external fragment '" + std::string(descriptor->fragment_name) +
-                "' returned an invalid action");
-        return LUNA_FRAGMENT_PLUGIN_ERROR;
-    }
-    if (result == LUNA_FRAGMENT_PLUGIN_ABORT &&
-        (descriptor->effects & LUNA_FRAGMENT_EFFECT_MAY_ABORT) == 0) {
-        setFragmentPluginError(
-            LUNA_RUNTIME_ERROR_INVALID_RESULT,
-            "external fragment '" + std::string(descriptor->fragment_name) +
-                "' returned abort without declaring the may-abort effect");
-        return LUNA_FRAGMENT_PLUGIN_ERROR;
-    }
-    return result;
-}
-
-void rt_fragment_plugin_report_error_and_abort() {
-    const char* message = fragmentPlugins().error.empty()
-        ? "unknown external fragment plugin failure"
-        : fragmentPlugins().error.c_str();
-    std::fprintf(stderr, "Luna external fragment plugin error: %s\n", message);
-    std::fflush(stderr);
-    std::exit(EXIT_FAILURE);
 }
 
 int rt_gpu_initialize() {

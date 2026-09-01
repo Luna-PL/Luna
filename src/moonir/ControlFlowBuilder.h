@@ -200,10 +200,6 @@ private:
     std::optional<OpenBlock> lowerSlotInvoke(
         std::unique_ptr<SlotInvokeStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
-    std::optional<OpenBlock> lowerDynamicSlotInvoke(
-        std::unique_ptr<SlotInvokeStmt> statement, OpenBlock current,
-        RegionId region, ScopeId scope,
-        std::vector<DeclarationRef> candidates);
     std::optional<OpenBlock> lowerResume(
         std::unique_ptr<ResumeStmt> statement,
         OpenBlock current, RegionId region, ScopeId scope);
@@ -224,6 +220,8 @@ private:
         std::unique_ptr<LetStmt> declaration, OpenBlock current,
         ScopeId scope);
     LocalId lookupLocal(const std::string& name) const;
+    LocalId lookupCleanupLocal(
+        const std::string& name, size_t shadowOrdinal) const;
     const MaterializedIteratorRecipe* lookupMaterializedIterator(
         const std::string& name) const;
     void pushBindings();
@@ -245,19 +243,21 @@ private:
     std::string mCaptureEnvParamName;
     LocalId mCaptureEnvLocal;
     std::vector<std::unordered_map<std::string, LocalId>> mBindings;
+    struct HiddenCleanupBindingGroup {
+        size_t outerBindingDepth = 0;
+        std::vector<std::unordered_map<std::string, LocalId>> bindings;
+    };
+    // A context continuation cannot resolve fragment-local names, but an
+    // enclosing-function return from that continuation must still lower the
+    // cleanup obligations of live fragment locals. Each group records where
+    // those hidden scopes sit in lexical cleanup order.
+    std::vector<HiddenCleanupBindingGroup> mHiddenCleanupBindingGroups;
     std::vector<std::unordered_map<std::string, MaterializedIteratorRecipe>>
         mMaterializedIterators;
     std::vector<std::unordered_map<std::string, DeclarationRef>>
         mSlotDefaults;
-    std::vector<std::unordered_map<std::string, std::vector<DeclarationRef>>>
-        mLexicalDynamicApplies;
     std::vector<std::unordered_map<std::string, DeclarationRef>>
         mStaticApplyScopes;
-    // Dynamic apply scopes: slot name -> candidate fragment DeclarationRefs.
-    // Populated by lowerApply when the apply carries a finite candidate set;
-    // consumed by lowerSlotInvoke to resolve dynamic dispatch candidates.
-    std::vector<std::unordered_map<std::string, std::vector<DeclarationRef>>>
-        mDynamicApplyScopes;
     // Active only while a cloned static fragment body is being composed into
     // its invocation graph. A source `return` or `abort` exits that fragment,
     // not the enclosing Luna function.

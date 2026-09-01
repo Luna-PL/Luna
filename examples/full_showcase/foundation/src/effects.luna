@@ -1,21 +1,24 @@
 package org.luna.examples.showcase.foundation;
 module effects;
 
-export interceptor audit(value: i32) {
+export slot interceptor audit_slot(value: i32);
+export slot context pipeline(value: i32);
+
+export interceptor audit(value: i32) for audit_slot {
     print(value);
 }
 
-export context around(value: i32) {
-    print(value);
-    resume();
-}
-
-export runtime context trace(value: i32) {
+export context around(value: i32) for pipeline {
     print(value);
     resume();
 }
 
-export runtime context observe(value: i32) {
+export runtime context trace(value: i32) for pipeline {
+    print(value);
+    resume();
+}
+
+export runtime context observe(value: i32) for pipeline {
     print(value + 1);
     resume();
 }

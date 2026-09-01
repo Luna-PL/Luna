@@ -41,8 +41,8 @@ struct is still a different type.
 | Mode | Typical source | Identity rule |
 |---|---|---|
 | Builtin | `i32`, `bool`, `never` | Determined by builtin kind and parameters |
-| Structural | Anonymous records, `Result`, functions | Determined by complete canonical structural shape |
-| Nominal | Named `struct`/`enum`, traits | Determined by package/module declaration identity |
+| Structural | Anonymous records, functions | Determined by complete canonical structural shape |
+| Nominal | Named `struct`/`enum`, `Result`, traits | Determined by package/module declaration identity |
 | MetaSchema | `meta` schema | Always has schema declaration identity |
 | CompilerIntrinsic | Views, type parameters, Iterator recipes | Determined by compiler contract, not ordinary user layout |
 | Inference/Error | Sema state | Does not form a publishable type identity |
@@ -175,7 +175,9 @@ slices implicitly.
 ### 5.4 Result
 
 `Result<T, E>` has exactly two payload types usable in ordinary runtime value positions.
-It is a structural sum; its active payload, usage, matching, and cleanup rules are defined
+It has the canonical nominal declaration identity `org.luna.core::result::Result`, parameterized
+by `T` and `E`. Its representation remains a structural two-variant sum; its active payload,
+usage, matching, and cleanup rules are defined
 in the [error-model contract](error_model.md). Sema's complete negative well-formedness
 matrix for Compiler/Meta payloads remains an A0 follow-up audit item.
 

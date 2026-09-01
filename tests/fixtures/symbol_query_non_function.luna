@@ -1,0 +1,47 @@
+meta revision { value: i32; }
+
+@revision(1)
+struct Snapshot { value: i32; }
+
+@revision(2)
+enum Choice { None, Some(i32) }
+
+@revision(3)
+trait Tagged {
+    fn value(input: i32) -> i32;
+}
+
+@revision(4)
+slot context trace_slot(value: i32);
+
+@revision(4)
+context trace(value: i32) for trace_slot { resume(); }
+
+@revision(5)
+meta marker { value: bool; }
+
+fn main() -> i32 {
+    let snapshot = symbols(Snapshot).matching(revision(1)).one();
+    let choice = symbols(Choice).optional();
+    let tagged = symbols(Tagged).all();
+    let slots = symbols(trace_slot).all::<revision>();
+    let traces = symbols(trace).all::<revision>();
+    let schemas = symbols(marker).all();
+    let result = declaration_count(tagged) + declaration_count(slots) + declaration_count(traces) +
+        declaration_count(schemas);
+    for schema in schemas {
+        print(declaration_id(schema));
+    }
+    if declaration_id(snapshot) == "" {
+        return 10;
+    }
+    match choice {
+        None => { return 20; },
+        Some(selected) => {
+            if declaration_id(selected) == "" {
+                return 30;
+            }
+        }
+    }
+    return result;
+}

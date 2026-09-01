@@ -21,17 +21,29 @@
 所有计划语法都只是 Draft。实现、测试、参考文档和变更日志同步完成前，本文不声明
 编译器已经支持这些能力。
 
-### 已冻结的决定边界（2026-08-09）
+### 已冻结的决定边界（2026-08-30）
 
-本文的 Confirmed ID 是实现授权。下列四个 ID 是完整的未决集合；实现不得隐式替它们
-选择答案。后续发现的新歧义必须先在此获得稳定 `TBD-*` ID，之后才能编写依赖代码。
+本文的 Confirmed ID 是实现授权。2026-08-31 的发布复核发现，SF006 只关闭了
+静态、词法、unit-result、single-shot 切片，不能被解读为完整 Slot/Fragment
+模型已决。当前未决集合为：
 
-| ID | 尚需决定 | 阻塞 | 不阻塞 |
-|---|---|---|---|
-| `TBD-EV004` | pinned/switchable/initializer/activation 的源码与 API 拼写 | 公开 evolution API 及最终源码/runtime binding | generation identity、module lease、staging invariant 或内部状态机测试 |
-| `TBD-Q004` | `.all()` 顺序和显式排序 API | 公开 `.all()` 语义及其 ABI | Symbol Catalog、typed query set、`.one()` 或 `.optional()` |
-| `TBD-Q005` | 公开 `.optional()` 的结果容器及检查/解包 API | 公开 `.optional()` 源码类型 | 内部 optional cardinality、公开 `symbol_set<T>`、`.matching()` 或 `.one()` |
-| `TBD-SF006` | module Slot/Fragment 语法和 single-shot control 的精确交互 | 新 Slot/Fragment parsing、control semantics 与公开 runtime-apply surface | shadow SlotId/ContractId、descriptor schema 或旧版 corpus 固化 |
+- `TBD-SF007`（阻断 0.3 candidate）：0.3 的发布范围是否明确限定为 static
+  lexical composition，还是必须在 0.3 公开可获取、可传递的
+  `RuntimeFragmentRef` 与 runtime apply；
+- `TBD-SF008`（阻断 0.3 candidate）：同一 slot 的嵌套 `apply` 是最内层词法
+  shadow、handler chain 还是错误；当 fragment 内再调用当前正在应用的 slot 时，
+  应定义递归/重入还是 fail closed。当前实现隐式选择最内层 shadow，且没有
+  封闭同 fragment 重入；
+- `TBD-SF009`（阻断 0.3 candidate）：`runtime slot/fragment` retention 在 0.3 是否只承诺
+  不可调用的 descriptor/identity 记录，以及 exported/private slot descriptor 的保留
+  规则；当前 showcase 会发射 runtime context descriptor，但不存在对应的 runtime
+  continuation entry；
+- `TBD-SF010`（若 `TBD-SF007` 选择 static-only，则不阻断 0.3）：
+  `RuntimeFragmentRef<S>` 的构造/查询语法、Copy/Affine 规则、`ModuleLease` 生命期、
+  static/runtime apply operand 统一规则，以及首个 runtime interceptor/context continuation ABI。
+
+后续发现的新歧义也必须先在此处获得稳定 `TBD-*` ID，之后才能编写
+依赖代码；实现不得隐式替它选择答案。
 
 当前没有登记 Proposed 决定。新的 Proposed 项必须明确标记并加入本边界，才能影响实现。
 
@@ -45,7 +57,7 @@
 | artifact target | `-t` 选择的产物级别；不是 language mode 或语义版本选择器 |
 | Moon Container / Luna Native / Foreign C FFI | 本地验证后安全 / 由证明建立信任 / unsafe foreign implementation 三种边界 |
 | relation / usage | ownership relation 与 Copy/Affine/Linear 消耗纪律；两者正交 |
-| slot / RuntimeFragmentRef | 二等 control symbol / typed runtime value；都不等同普通函数 |
+| slot / RuntimeFragmentRef | 二等 control symbol / 保留给后续决策的 typed runtime value；0.3 当前不公开后者，两者都不等同普通函数 |
 | MoonIR | 同时具有内存和序列化形式的单一 canonical backend IR，不是两个语义 IR |
 | unchecked operation | 未来可能出现的窄粒度 primitive-specific 省略检查；绝不是通用 `unsafe {}` scope |
 
@@ -394,7 +406,7 @@ CFG body，不保留 structured-body fallback 或格式兼容开关。构建期 
 和它们的 runtime interface。导出的 generic recipe 会被拒绝，因为静默删除公开
 API 不安全；open-world 泛型库需要后续 recipe 格式。concrete projection 同时
 是 reachability-closed：application entrypoint、library export、typed host import 和显式
-runtime-retained declaration 是根；direct call、dynamic candidate、Drop glue、fragment region、
+runtime-retained declaration 是根；direct call、静态选中的 declaration edge、Drop glue、fragment region、
 metadata schema 和冻结 type edge 构成传递闭包。不可达的 concrete function/declaration/type
 不进入容器；package dependency import 仍作为 manifest-level interface fact 保留。
 
@@ -440,9 +452,8 @@ emitter 内部指针或容器外的 symbol table。
 manifest payload 按以下顺序固定：`packageId:str`、`packageVersion:str`、
 `packageKind:u32`（application=1, library=2）、`targetTriple:str`、
 `dataLayout:str`、`entrySymbol:str`、`entryContract:str`、`featureBits:u32`。
-feature bit 0..5 依次为 runtime、dynamic reflection、dynamic apply、dynamic select、
-kernel 和 reserved kernel runtime，其他 bit 必须为零。application 必须有完整
-entry reference，library 必须没有 entry reference。
+bit 0 表示 runtime，bit 1..3 已退役且必须为零，bit 4 表示 kernel，bit 5 保留 kernel
+runtime；其他 bit 必须为零。application 必须有完整 entry reference，library 必须没有。
 
 type payload 以 `vec<TypeRecord>` 开始，并按 TypeId UTF-8 byte 序严格递增。
 `TypeRecord` 字段顺序固定为：三个 identity，domain/identity-mode/kind，
@@ -495,7 +506,7 @@ Allocate=2、Expression=3、Free=4、Await=5；structured Return/If/Match/
 While/For/Slot/Apply/Resume/Abort 必须已转换为 CFG terminator、edge 和 region。
 
 expression opcode 固定为 Integer=1、Floating=2、String=3、Boolean=4、
-Unit=5、Identifier=6、Binary=7、Unary=8、Call=9、DynamicSelect=10、
+Unit=5、Identifier=6、Binary=7、Unary=8、Call=9、已退役且拒绝的 DynamicSelect=10、
 Launch=11、VariantConstruct=12、ResultConstruct=13、FieldAccess=14、
 Index=15、SliceLength=16、ArrayLiteral=17、RecordLiteral=18、HeapAllocate=19、
 InitializeAllocation=20、Move=21、Borrow=22、Dereference=23、AddressOf=24、
@@ -611,18 +622,26 @@ binding 参与原子切换。
 执行且允许在 activation 前失败；rollback 的首版含义是继续或恢复旧 generation，
 不是逆向迁移已改变的外部状态。
 
-`TBD-EV004`：冻结 pinned reference、switchable binding、initializer 和 activation 的
-具体源码/API 拼写。
+`EV004`（Confirmed，2026-08-30）：0.3 不增加 evolution 的 Luna 源码构造，也不提供
+独立 CLI 命令。公开控制面是已安装的 C++17 源级 API
+`<luna/runtime/Evolution.h>`，其 `EvolutionApiVersion == 1`；它不属于 Runtime ABI v1
+的 C 二进制 ABI。冻结的对象与操作名为 `MoonRuntime`、
+`GenerationStagingRequest`、`GenerationBindingRequirement`、`stage`、`loadOnce`、
+`safePoint`、`activate`、`pin`、`makeSwitchable` 与 `rollback`；
+`StagedGeneration`/`SafePoint` 为 move-only，`PinnedGeneration`/`PinnedBinding`
+保留 generation，切换读取必须显式调用 `SwitchableBinding::pin()`。initializer 是传给
+`stage` 的宿主 callback，不是源码 annotation。通用 staging callback 是宿主信任边界；
+compiler-owned Moon/Native adapter 是 artifact-specific verified integration，不构成第二套
+activation API。外部进程管理器可以封装本 API，但协议属于应用策略。
 
-实现状态（2026-08-24）：内部 EV001–EV003 状态机已实现，没有代替
-`TBD-EV004` 决定公开拼写。每个 staging request 具有
+实现完成（2026-08-30）：EV001–EV004 状态机及公开 C++ 宿主拼写已实现。每个 staging request 具有
 module/content/generation identity 与被保留的 module lease；验证、binding 解析和
 可选 initializer 完成后，一次性安全点才能激活。module activation 只发布
 一个不可变 generation pointer，因此并发 switchable reader 不会看到部分
 binding 更新。普通 pinned reference 保留原 generation，0.3 保留所有已激活
 generation，rollback 原子选择已保留代码。验证、解析、initializer 或兼容性
-失败都不改变旧 active generation。持久状态迁移、公开源码/API 与面向用户的
-artifact activation 仍延后。
+失败都不改变旧 active generation。持久状态迁移、自动更新发现、跨进程 activation
+协议与独立打包的 artifact-loader SDK 仍延后。
 内部 artifact 适配器已生效：已验证 Native library 提供 proof digest、
 registry binding、executable entry 与 library lease；host-matched 已验证 Moon
 Container 提供完整字节 content digest、decoded-module identity 与被保留的 ORC JIT
@@ -630,7 +649,8 @@ lease。function publication 携带 executable entry，非 function export 仍�
 descriptor-backed。内部测试会激活两个真实 Moon generation，证明 pinned entry
 持续可执行、兼容 switchable entry 切换，并 rollback 到被保留的首个 JIT；这仍未
 选择任何公开 activation 拼写。replacement initializer 会在 publication 前执行已解析
-entry，而拒绝 initializer 不得改变 active generation 或 retained history。
+entry，而拒绝 initializer 不得改变 active generation 或 retained history。安装头文件检查与
+完整状态机测试共同守护公开拼写和行为。
 
 ## 7. Symbol Query 与 Slot/Fragment
 
@@ -647,7 +667,31 @@ entry，而拒绝 initializer 不得改变 active generation 或 retained histor
   callable type 时才可省略 `Signature`。`symbol_set<T>` 是可局部绑定、不可迭代的 compiler-domain
   value；`.matching()` 接受一个直接构造的 compile-time metadata value；`.one()` 返回可绑定、
   可调用的 `declaration_ref<T>`。在 instantiated declaration 进入 catalog 之前，未特化 generic declaration
-  会被拒绝。set、filter 和 reference binding 均在 MoonIR 前擦除；
+  会被拒绝。同一 source family 内的 declaration discriminator 由 metadata key 与规范化 callable
+  source signature 共同组成：相同 metadata 加相同签名仍是重复声明，相同 metadata 加不同签名
+  则获得不同的确定性 linkage 和稳定 DeclarationId/SymbolId。声明身份直接取自 source
+  discriminator，而不取自 executable linkage，因此扩展 overload family 不会改写已有身份。
+  set、filter 和 reference binding 均在 MoonIR 前擦除；
+- `Q006`（Confirmed）：`.optional()` 返回 compiler-domain specialization
+  `core::option::Option<declaration_ref<T>>`。零个匹配产生 `None`，一个匹配产生
+  `Some(reference)`，多个匹配是编译错误。该值只能通过现有穷尽 `match` 的 `None/Some`
+  pattern 在当前编译边界内消费；两侧 arm 都接受语义检查，但 lowering 只保留静态选中的
+  arm。optional 容器与 payload binding 在 MoonIR 前擦除，也不得跨 function return/parameter
+  边界；
+- `Q004`（Confirmed，2026-08-26）：`.all()` 返回 compiler-domain
+  `declaration_view<T>`，按 `SymbolId.value` 字节序升序排列。显式
+  `.all::<M>()` 则按每个声明上唯一的 `M` attachment，依 schema 字段声明顺序做
+  lexicographic 排序。排序字段可为整数、bool 或 string，floating point 被拒绝；每个 candidate
+  必须恰有一个 `M`，重复 metadata tuple 是错误。空 view 合法。view 可局部再绑定、计数、
+  用经边界检查的 compile-time 整数索引，并可静态迭代；view 及其 element reference 在
+  MoonIR 前擦除，不得跨普通 call/return 边界。该决定不增加 runtime ABI；
+- `Q007`（Confirmed，2026-08-27）：`symbols(Name)` 为具有公开 source name 的非 function
+  声明推断 declaration kind 与 type，范围为 Slot、Fragment、Struct、Enum、Trait 和
+  MetadataSchema。这些 query 不接受显式 type argument，复用 function query 的 typed set、
+  metadata filter、cardinality、ordering、reflection、静态迭代、不逃逸与擦除规则。在 instantiated
+  declaration 进入 catalog 前，未特化 generic nominal declaration 仍被拒绝。Implementation row
+  没有公开 source name，因此仍为 catalog 内部事实，不提供 constructor。非 function
+  `declaration_ref<T>` 可反射但不可调用；
 - `SF001`（Confirmed）：slot 是模块级二等 Symbol，拥有稳定 SlotId/ContractId；调用是
   局部 control operation，不产生可传递的 slot value；
 - `SF002`（Confirmed）：fragment 名义绑定目标 SlotId，继续服务于受限控制流
@@ -656,39 +700,57 @@ entry，而拒绝 initializer 不得改变 active generation 或 retained histor
 - `SF004`（Confirmed）：普通函数/函数引用与 RuntimeFragmentRef 分开建模，形状相同
   也不允许隐式互换。
 
-`SF005`（Confirmed）：0.3.0 slot/fragment result 固定为 `unit`。静态路径支持
-single-shot interceptor 和 single-shot context；runtime 首版只支持 single-shot
-interceptor。non-unit result、`many` 和 runtime context/continuation ABI 延后。
+`SF005`（Confirmed）：0.3.0 slot/fragment result 固定为 `unit`。已实现的静态路径支持
+single-shot interceptor 和 single-shot context。non-unit result 与 `many` 延后。runtime
+fragment execution 是否进入 0.3 由 `TBD-SF007` 决定；若进入，首个 ABI 仍只考虑
+single-shot interceptor，runtime context/continuation ABI 继续延后。
 
-`TBD-Q004`：冻结 `.all()` 的规范排序以及显式排序 API；结果不得依赖链接或注册顺序。
+`SF006`（Confirmed，2026-08-29）：slot 使用模块级声明
+`slot interceptor|context Name(parameters) [default Fragment];`。fragment 使用
+`interceptor|context Name(parameters) for QualifiedSlot { ... }`，并且必须完整保持目标
+slot 的参数/control contract。调用为 `QualifiedSlot(arguments) { ... }`，词法应用为
+`apply QualifiedFragment { ... }`；apply 从 fragment 的名义 target 推导 slot。interceptor
+自然落尾转发一次；context 自然落尾丢弃尚未消费的 continuation。fragment 的 `return;`
+只能返回 unit，并在不进入未消费 continuation 的情况下退出；`abort()` 显式记录丢弃，且
+single-shot `resume()` 后不得 abort。continuation 内的 `return` 或 `?` 退出外层函数并跳过
+post-resume fragment 代码，同时保持 canonical cleanup；fragment 内的 `?` 被拒绝。局部 slot、
+无 body apply、`context many` 和 `dynamic slot/apply` 均已移除。不引入 runtime typed-reference
+获取语法；普通 apply 是唯一拼写，未来 typed operand 扩展必须另行决定。
 
-`TBD-Q005`：冻结公开 `.optional()` 是返回 core `Option<declaration_ref<T>>` 还是专用
-compiler-domain optional reference，以及对应的检查和解包拼写。编译器不得把可空的裸
-`declaration_ref<T>` 作为隐式答案暴露。
-
-实施状态（2026-08-24）：Q001/Q003 的 compile-time 内部基础已落地，但第 13 项尚未
-整体关闭。每次 `SemanticContext` 分析现在以 canonical SymbolId、ContractId、TypeId 和
+实施状态（2026-08-27）：Q001/Q003/Q004/Q005/Q006/Q007 的 compile-time Symbol
+Catalog/query 表面已落地，优先级第 13 项已关闭。每次 `SemanticContext` 分析现在以 canonical SymbolId、ContractId、TypeId 和
 family SymbolId 构造一个一次验证、随后不可变的 catalog 快照；当前快照覆盖 canonical MoonIR
-已有的全部稳定 source declaration kind：显式稳定签名的 function、impl method、fragment、struct、
+已有的全部稳定 source declaration kind：显式稳定签名的 function、impl method、slot、fragment、struct、
 enum、trait、impl 与 metadata schema。带 Drop 的 type/impl row 会在同一快照内把 drop-glue linkage
 封闭为强 SymbolId/ContractId，且测试逐行核对 catalog 与 sealed MoonIR。named constraint、编译器
 intrinsic 和 body analysis 后才产生的 generic instance 不冒充 source catalog row。typed finite set
 按 phase、kind、family、type 和精确 metadata value 查询，并实现顺序无关的 `.one()` 与
-`.optional()` cardinality terminal。首个公开 function 表面现已实现 `symbols::<Signature>(family)`、
-可局部绑定且不可迭代的 `symbol_set<T>`、`.matching(metadata)` 和 `.one()`。选中的
+`.optional()` cardinality terminal。function 表面实现 `symbols::<Signature>(family)`，而具有 source
+name 的 Slot、Fragment、Struct、Enum、Trait 和 MetadataSchema 使用推断型 `symbols(Name)`。两者都生成
+可局部绑定的 `symbol_set<T>`，并支持 `.matching(metadata)`、`.one()`、`.optional()` 和
+`.all()`/`.all::<M>()`。后者生成可局部再绑定、可静态迭代的 `declaration_view<T>`，顺序为
+canonical SymbolId 字节序或经验证的 metadata lexicographic 顺序。`declaration_count`、
+compile-time `declaration_at` 和静态 `for` 消费该 view，包括空集情形。选中的
 `declaration_ref<T>` 可绑定、可反射且可直接调用；所有 query-only value 均在 MoonIR 前擦除。
-公开 `.optional()` 仅继续受 `TBD-Q005` 阻塞。静态 `select_unique` evaluation 会依次组合 candidate-set
+`.optional()` 通过现有穷尽 `match` 消费 compiler-domain Core Option，并在 lowering 时只保留
+静态选中的 `None` 或 `Some` arm。局部再绑定与嵌套 match 会保留该静态选择，
+`Some` payload 不得跨越普通函数 call/return 边界；独立 verifier 会拒绝伪造泄漏的
+compiler-domain Option。双程序身份 oracle 还会验证：增加携带相同 metadata 的
+sibling overload 不会改写已有声明的 DeclarationId、SymbolId 或 ContractId。静态 `select_unique`
+evaluation 会依次组合 candidate-set
 限定、metadata 过滤与 `.one()`，因此 no-match 和 ambiguous 无需 exact-match 旁路就有
 不同诊断。静态 selector
 已迁移到该 catalog，并在 MoonIR lowering 时再次核对选中行与 sealed declaration table 的
 SymbolId/ContractId；查询集合和 selector evaluator 均在 MoonIR 前擦除。现有源码 selector
-目标族必须在快照点具有显式、完全解析的参数与返回类型。其余源码拼写暂时保持兼容，
-dynamic exact-match 仍是待第 16 项清理的旧协议。`.all()` 与任何隐式
-结果顺序均未实现，继续由 `TBD-Q004` 阻塞；公开的非 function query constructor
-不属于此首版表面。
+目标族必须在快照点具有显式、完全解析的参数与返回类型。未特化 generic nominal declaration fail-closed，
+内部 Implementation row 仍仅存于 catalog。第 16 项现已从 frontend、Selector、MoonIR、
+Container codec、verifier 与 LLVM backend 删除原 dynamic exact-match 路径；退役 opcode 10、
+feature bit 与 Dynamic retention value 会在 artifact 边界被拒绝，不获得兼容语义。
 
-`TBD-SF006`：冻结 module-level declaration、名义 fragment target 和 lexical invocation
-的具体语法，以及 return、abort、`?` 和 cleanup 在 single-shot context 中的精确交互。
+SF006 的静态切片已由上述 declaration/control grammar、catalog 与 MoonIR 中的名义 Slot row、Fragment
+到 Slot 的强引用、runtime descriptor kind 8、迁移诊断，以及 cleanup/control 回归 oracle
+关闭。完整 runtime model 与嵌套/重入边界仍受 `TBD-SF007`–`TBD-SF010`
+约束。已冻结的精确行为见 [Interceptor、Context 与 Slot](fragments.zh-CN.md)。
 
 Luna 不因为 Slot/Fragment 借鉴代数效应的控制思想而引入 effect 机制。
 
@@ -762,7 +824,7 @@ TypeId；旧的源码默认结构分支与冗余的 `nominal` modifier/keyword �
 顺序独立。C++ 风格 `<Constraint T>`、具名 `where Constraint<T>` 和 inline
 `where predicate` 都使用已有编译期 constraint evaluator；inline 写法没有 symbol，也没有
 MoonIR node。正例、负例、package 限定名、reflection、identity、layout、MoonIR verifier、JIT 与 AOT
-证据已通过全部 48 项注册测试。因此优先级第 6 项已通过完成门。具名 product 仍使用
+证据已通过全部 60 项注册测试。因此优先级第 6 项已通过完成门。具名 product 仍使用
 当前指针表示这一实现细节；本阶段不声称已完成具名 product 内联布局重设计。下一项实现工作是
 第 7 项：usage block 糖与最终 binding contract。
 
@@ -773,7 +835,7 @@ default；显式 contract 若弱化类型/Resource、moved source 或 function r
 Sema 会拒绝。Copy 类型的裸 allocation 不会被隐式提升为 affine；Luna 保留显式安全、
 类 C 的默认语义。frontend 只把最终 per-binding usage 记入可验证 MoonIR；usage-scope construct
 和运行时操作均不进入 lowering。嵌套/覆盖/binder/lambda 正例、linearity 与 weakening 反例、
-JIT/AOT 行为及全部 48 项测试均通过。因此优先级第 7 项已通过完成门。下一项是第 8 项：
+JIT/AOT 行为及全部 60 项测试均通过。因此优先级第 7 项已通过完成门。下一项是第 8 项：
 完成通用 Resource/Drop contract 与递归 cleanup 路径。
 
 Resource/Drop 实施完成记录（2026-08-09）：`Drop` 现直接解析为规范
@@ -841,10 +903,11 @@ recipe operation，verifier 会拒绝 sealed CFG 中未展开的 recipe。builde
 fixture。成功封存会删除 function structured body，只安装一份以 `Function` region 为根的
 CFG；module verifier 会拒绝缺失 body、body/CFG 并存、root kind 漂移或 parameter table
 与签名不一致。construction payload 中省略的冗余 operand type 可由 LocalId operand 与
-sealed type table 补齐，但非空冲突类型绝不被覆盖。该 sealer 尚未接入 production pipeline：
-必须先闭合 fragment/runtime composition 与 LLVM CFG consumption，之后才进行单向模块切换。
+sealed type table 补齐，但非空冲突类型绝不被覆盖。在这一历史子阶段，sealer 尚未接入
+production pipeline：当时必须先闭合 fragment/runtime composition 与 LLVM CFG
+consumption，之后才进行单向模块切换；本节末尾记录的 unconditional switchover 已完成该条件。
 
-首个 LLVM consumption 切片现已可执行，但仍未接入 production pipeline。对仅持有 CFG
+首个 LLVM consumption 切片在该历史子阶段已经可执行，但仍未接入 production pipeline。对仅持有 CFG
 body 的 function，backend 按 `LocalId` 分配 typed-local storage，按已验证 parameter table
 映射参数，生成非控制 operation，并直接从 block table 翻译 `Jump`、`Branch`、
 `Return`、`Switch`、`Resume`、`Abort` 和 `Unreachable`。`Switch` 只读取一次冻结的
@@ -858,8 +921,9 @@ root、unguarded value cleanup 现已在 jump、branch、switch、return、resum
 abort edge 上按 verifier 确认的精确顺序 lowering。branch 使用专用 edge cleanup block，
 return value 则在 exit cleanup 前求值，保留 Luna 求值顺序。fixture 同时覆盖 root
 parameter return cleanup 与词法 fallthrough cleanup。projected/guarded 及 raw-allocation
-cleanup、allocation operation 与更广的 expression surface 当前仍 fail closed；在这些路径和
-runtime composition 闭合前，production sealer 仍不接线。
+cleanup、allocation operation 与更广的 expression surface 当时仍 fail closed；在这些路径和
+runtime composition 闭合前，production sealer 因而仍未接线。后续子阶段已闭合这些路径并
+删除 structured execution consumer，最终状态以第 9 节末尾的单向切换记录为准。
 
 无捕获 lambda 的子阶段也已完成：lambda expression 仅作为闭包值节点，其
 structured body 在构造时被消费为一份独立、以 `Lambda` region 为根的
@@ -1077,16 +1141,40 @@ runtime state。绑定 local 时，如果 identifier 的 construction form 没�
 从已解析 LocalId 的冻结 TypeRef 补齐；若非空 TypeRef 与 local 冲突，则保留冲突并由独立 verifier 拒绝。
 集成门禁依次执行源码 parsing 与 Sema、Luna lowering、structured verification、CFG construction 和 CFG
 verification，并检查 default fragment、词法 capture、resume edge、region topology，以及 declaration
-construction body 未被消费。同一源码级门禁还覆盖显式 static `apply`；另一份 dynamic composition
-源码可以通过 frontend 与 Lowering，但必须在该 static CFG 边界被拒绝。multi-shot 与 runtime apply
-仍属后续切片。
+construction body 未被消费。同一源码级门禁还覆盖显式 static `apply`。SF006 现已在 frontend
+拒绝 dynamic composition 与 multi-shot 语法；保留的旧 construction node 只用于测试 corpus，
+不会形成第二条公开源码路径。
 
 第 10 项已于 2026-08-20 完成。捕获式 closure environment（已冻结为 `C016`）、non-Copy
 item/callable 的逐元素 ownership 转移、无条件 Sealer 和 canonical-only backend 边界均已落地；
 structured statement/continuation/slot/fragment executable-body consumer 已从源码与构建中删除。
 跨越潜在 early exit 的 Linear hoisting 因违反恰好一次约束而保持非法，它不是延后的
 lowering 功能。第 11 项 serializer/parser/verifier/fuzz 与第 12 项三种产物路径随后均已
-完成；当前主线进入第 13 项 Symbol Catalog/query。
+完成；第 13 项 compile-time Symbol Catalog/query 表面也已完成。第 14 项 Runtime
+descriptor、通用 declaration binding 与 loader 同样已完成；它不提供源码级
+`RuntimeFragmentRef`。SF006 现已关闭公开静态
+Slot/Fragment 表面。EV004 随后冻结 host-only evolution 控制面，因此优先级第 15 项已完成。
+
+第 14 项 load-once 状态（2026-08-27）：内部产物适配器现可以通过一次操作，把
+真实已验证 Moon Container 或可信 Native library 变为带 lease 的 pinned generation。
+在可信 Package ID/content identity 已知后，相同请求会在 ORC JIT 或平台动态装载
+之前返回已有 generation；同一 module 的不同内容会被拒绝，并仍是显式 evolution
+操作。typed binding requirement 同时包含 SymbolId、ContractId、declaration kind 与
+required flags，switchable binding 会跨 generation 保留这个完整要求。该内部闭环现接入
+EV004 公开 `MoonRuntime` 控制面；artifact adapter 仍是 compiler-owned integration helper。
+
+第 14 项完成（2026-08-27）：显式保留的 declaration 现使用已安装、C-compatible 的
+Runtime descriptor ABI v1。每行携带稳定 SymbolId、ContractId、TypeId、declaration
+kind、retention、callable flags、linkage、typed retained metadata 与可选 function entry；
+所有行严格按 SymbolId 排序。registry view 一次验证完整有界 ABI，随后做精确
+typed lookup，不在普通调用中重复验证。真实 Moon loader 从 ORC 取得 registry，
+并在发布 generation 前把每一行、metadata value 与 callable 分类同独立验证的
+Container 交叉比对；私有 function entry 只通过已验证 registry 发布，不暴露 raw linkage。
+Native 继续使用 proof-bound registry，并把同一 typed identity 映射为
+generation binding。纯静态产物不包含 Runtime registry 或 descriptor type。它与上述
+load-once/lease 工作一起关闭优先级第 14 项。SF006 随后在不引入 runtime-query 语法的
+前提下冻结了公开静态 Slot/Fragment 拼写；EV004 随后以已安装的 host-only C++ 控制面
+关闭优先级第 15 项。
 
 闭包捕获实现完成（2026-08-14）：`C016 CL001`-`CL009` 的 Copy capture 切片已激活。capture-free
 `Function` 值保持 8 字节裸代码指针 ABI；捕获式 lambda 成为携带布局的 `Closure` 类型，其
@@ -1103,10 +1191,10 @@ lifetime 不能安全逃逸而拒绝。
 canonical CFG 单向切换记录（2026-08-20）：完整 51 项 CTest 已通过，
 CompilerPipeline 现在无条件 seal 每个可执行函数体。materialized move-only iterator 在 recipe 创建时安装
 outer projected guarded cleanup，未消费和条件提前返回会按元素正序清理；开始消费时 source
-原子转移到 loop-local guarded state，不形成双重 obligation。有限静态链接候选的
-runtime context、replay-safe multi-shot 和 statement-form apply 也已在 canonical CFG 中实现；
-每次 `resume()` 拥有独立 Continuation region，未知 context/many 候选不会降级到
-仅 interceptor 的外部 plugin ABI v1。无条件 sealer 和 canonical-only backend 已完成
+原子转移到 loop-local guarded state，不形成双重 obligation。canonical CFG machinery 曾覆盖
+有限 runtime candidate 与 replay-safe multi-shot continuation，但 SF006 已移除这些源码路径，
+只保留词法 single-shot apply；每个受支持 context 的 `resume()` 拥有独立 Continuation region。
+无条件 sealer 和 canonical-only backend 已完成
 单向 production switchover，因此第 10 项已经关闭。
 
 | 顺序 | 优先级 | 工作 | 完成门 |
@@ -1132,6 +1220,38 @@ runtime context、replay-safe multi-shot 和 statement-form apply 也已在 cano
 每个阶段必须同时增加正例、负例、MoonIR/ABI 证据和按需付费检查。回滚依赖版本控制，
 不通过在生产编译器中永久保留旧路径实现。
 
+优先级第 15 项已于 2026-08-30 通过完成门。公开头文件现随安装产物提供，EV004 精确
+生命周期已有文档；测试覆盖严格 staging 顺序、真实已验证 Moon/Native generation、
+一次性 safe point、失败原子性、并发 switchable snapshot、pinned lifetime、initializer
+拒绝、activation 与 rollback。
+
+优先级第 16 项已于 2026-08-30 通过完成门：Dynamic declaration/metadata retention 与
+`dynamic select` 现会在源码边界失败，其 exact-match Selector/MoonIR/codegen 实现已删除。
+runtime-retained declaration 继续通过 descriptor ABI v1 与 typed EV004 binding 工作，且不含
+Dynamic feature/opcode。标准库内部 console helper 也改用 0.3 v1 名称，不再使用
+`rt_compat_*_0_2`。external fragment-plugin/dynamic-apply 的公开头、Runtime/JIT ABI、
+MoonIR capability、canonical CFG 分支与构建目标均已删除；退役 feature bit 2 在 Container
+边界被拒绝。compiler-special Rc/Arc 与 dynamic 源码只存在于冻结迁移/负例 corpus，生产
+代码已无 0.2 compatibility branch。第 17 项正在进行：basic、9/20 workload CPU
+套件、单 workload analyzer 与最小 heterogeneous simulator 用例都已将源码作为
+临时 0.3 application package 实际构建并执行，默认 release smoke test 会持续守护
+该 AOT 路径。当前用户文档不再把已删除的 dynamic 路径当作可用功能，prebuilt
+workflow 也会对冻结的 0.2.1 生态快照 fail closed。2026-08-31 的本地候选验证已把
+toolchain 升至 0.2.0：grammar、formatter corpus、compiler conformance、LSP、VS Code
+扩展（含真实 Extension Host 的激活/格式化/task/重启测试，以及由编译器
+拥有语义的 check/build/run task）、release build 和 Linux VSIX 均面向
+Luna 0.3 并通过；Lunax 0.2.0 也已用当前
+0.3 编译器完成严格构建、6 项命令/后端/事务安装测试、安装树与通用归档验证。它们
+仍是各自仓库中的未提交候选，不构成可引用的发布证据。发布流程已增加两阶段提升：
+两个组件会针对同一个无 tag 的不可变 Luna 候选 commit 构建并发布
+`LUNA-SOURCE-COMMIT` 证据，之后仅允许 lock/状态文档变化，最后才创建 Luna tag，因而
+不存在互相等待或移动 tag 的闭环。完成该项仍需要为三个候选建立独立提交、发布两个
+组件的已证明不可变产物，随后把共同的候选 commit 与产物证据写入并显式升级 lock。
+这些剩余授权、发布等级与明确延后项已集中记录在
+[生态发布交接决策表](ecosystem_release.zh-CN.md#发布交接决策登记表2026-08-31)；
+当前 candidate 仍被 `TBD-SF007`–`TBD-SF009` 阻断；若确认 0.3 static-only，
+`TBD-SF010` 可作为明确延后项关闭。
+
 ## 10. 非优先目标占位
 
 以下延后决定已经确认；它们不进入 0.3.0 优先实现范围：
@@ -1140,6 +1260,6 @@ runtime context、replay-safe multi-shot 和 statement-form apply 也已在 cano
 - `NP002`（Confirmed deferral）：扩展 GPU 数据类型、grid 和跨 generation device update；
 - `NP003`（Confirmed deferral）：stateful hot migration；
 - `NP004`（Confirmed deferral）：跨外部插件边界的持久 runtime
-  context/multi-shot continuation callback ABI；有限静态链接候选已由 scoped CFG 实现；
+  context/multi-shot continuation callback ABI；0.3 不公开对应源码表面；
 - `NP005`（Confirmed deferral）：hotspot JIT、PGO、deoptimization 和 code reclamation；
 - `NP006`（Confirmed deferral）：开放式 runtime reflection 和通用 runtime trait object。

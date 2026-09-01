@@ -1,0 +1,68 @@
+package org.luna.fixture.core_result;
+module application;
+
+using org.luna.core as core;
+
+struct Resource {
+    marker: i32;
+}
+
+impl Drop for Resource {
+    fn drop(value: &mut Resource) -> unit {
+        print(value.marker);
+    }
+}
+
+fn unwrap_resource() -> i32 {
+    let selected = new Resource(121);
+    let result = Ok::<Resource, i32>(move selected);
+    let value = core::result::unwrap(move result);
+    return value.marker;
+}
+
+fn unwrap_err_resource() -> i32 {
+    let selected = new Resource(122);
+    let result = Err::<i32, Resource>(move selected);
+    let value = core::result::unwrap_err(move result);
+    return value.marker;
+}
+
+fn unwrap_or_ok_resource() -> i32 {
+    let selected = new Resource(123);
+    let fallback = new Resource(124);
+    let result = Ok::<Resource, i32>(move selected);
+    let value = core::result::unwrap_or(move result, move fallback);
+    return value.marker;
+}
+
+fn unwrap_or_err_resource() -> i32 {
+    let error = new Resource(125);
+    let fallback = new Resource(126);
+    let result = Err::<Resource, Resource>(move error);
+    let value = core::result::unwrap_or(move result, move fallback);
+    return value.marker;
+}
+
+fn main() -> i32 {
+    let ok = Ok::<i32, i32>(40);
+    if core::result::unwrap_or(ok, 1) != 40 { return 1; }
+
+    let err = Err::<i32, i32>(2);
+    if core::result::unwrap_or(err, 41) != 41 { return 2; }
+
+    let expected = Ok::<i32, i32>(42);
+    if core::result::expect(expected, "value must be Ok") != 42 {
+        return 3;
+    }
+
+    let expected_err = Err::<i32, i32>(43);
+    if core::result::expect_err(expected_err, "value must be Err") != 43 {
+        return 4;
+    }
+
+    if unwrap_resource() != 121 { return 5; }
+    if unwrap_err_resource() != 122 { return 6; }
+    if unwrap_or_ok_resource() != 123 { return 7; }
+    if unwrap_or_err_resource() != 126 { return 8; }
+    return 42;
+}

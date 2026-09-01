@@ -1,4 +1,4 @@
-#include "runtime/MoonRuntime.h"
+#include "runtime/Evolution.h"
 
 #include <atomic>
 #include <iostream>
@@ -26,6 +26,8 @@ struct Implementation {
 };
 
 using Runtime = luna::runtime::MoonRuntime;
+
+static_assert(luna::runtime::EvolutionApiVersion == 1);
 using Request = luna::runtime::GenerationStagingRequest;
 using Binding = luna::runtime::GenerationBinding;
 
@@ -33,7 +35,9 @@ bool stageOne(Runtime& runtime, const Request& request,
               const std::string& symbolId, const std::string& contractId,
               const void* implementation, Runtime::StagedGeneration& staged,
               std::string& phases, std::string& error,
-              bool initializerSucceeds = true) {
+              bool initializerSucceeds = true,
+              uint32_t declarationKind = 1,
+              uint32_t flags = luna::runtime::GenerationBindingCallable) {
     return runtime.stage(
         request,
         [&](const Request&, std::string&) {
@@ -42,7 +46,8 @@ bool stageOne(Runtime& runtime, const Request& request,
         },
         [&](const Request&, std::vector<Binding>& bindings, std::string&) {
             phases += 'R';
-            bindings.push_back({symbolId, contractId, implementation});
+            bindings.push_back({symbolId, contractId, implementation,
+                                declarationKind, flags});
             return true;
         },
         [&](const Request&, const std::vector<Binding>& bindings,
@@ -77,6 +82,62 @@ int main() {
     std::atomic<unsigned> secondLeaseDestructions{0};
     std::atomic<unsigned> thirdLeaseDestructions{0};
     std::string error;
+
+    {
+        Runtime runtime;
+        std::atomic<unsigned> leaseDestructions{0};
+        Request request{
+            ModuleId, std::string(64, 'a'),
+            std::make_shared<LeaseProbe>(leaseDestructions)};
+        Runtime::StagedGeneration staged;
+        std::string phases;
+        if (!stageOne(runtime, request, SymbolId, ContractId, &first,
+                      staged, phases, error))
+            return fail("load-once fixture did not stage");
+        Runtime::PinnedGeneration loaded;
+        if (!runtime.loadOnce(staged, loaded, error) || staged || !loaded ||
+            runtime.retainedGenerationCount(ModuleId) != 1)
+            return fail("first load-once publication did not pin one generation");
+        const luna::runtime::GenerationBindingRequirement typedFunction{
+            SymbolId, ContractId, 1,
+            luna::runtime::GenerationBindingCallable};
+        if (!loaded.find(typedFunction))
+            return fail("typed binding requirement rejected its exact export");
+        auto wrongKind = typedFunction;
+        wrongKind.declarationKind = 2;
+        if (loaded.find(wrongKind))
+            return fail("typed binding requirement accepted the wrong declaration kind");
+        auto wrongFlags = typedFunction;
+        wrongFlags.requiredFlags = 1u << 8;
+        if (loaded.find(wrongFlags))
+            return fail("typed binding requirement accepted missing capabilities");
+
+        Runtime::StagedGeneration duplicateStaged;
+        phases.clear();
+        if (!stageOne(runtime, request, SymbolId, ContractId, &second,
+                      duplicateStaged, phases, error))
+            return fail("same-content load-once fixture did not stage");
+        Runtime::PinnedGeneration duplicateLoaded;
+        if (!runtime.loadOnce(
+                duplicateStaged, duplicateLoaded, error) ||
+            duplicateLoaded.generationId() != loaded.generationId() ||
+            implementationOf(duplicateLoaded.find(typedFunction)) != &first ||
+            runtime.retainedGenerationCount(ModuleId) != 1)
+            return fail("same-content load-once did not reuse the first generation");
+
+        Request changedRequest = request;
+        changedRequest.contentDigest = std::string(64, 'b');
+        Runtime::StagedGeneration changedStaged;
+        phases.clear();
+        if (!stageOne(runtime, changedRequest, SymbolId, ContractId, &second,
+                      changedStaged, phases, error))
+            return fail("changed-content load-once fixture did not stage");
+        Runtime::PinnedGeneration changedLoaded;
+        if (runtime.loadOnce(changedStaged, changedLoaded, error) ||
+            error.find("different content") == std::string::npos ||
+            runtime.retainedGenerationCount(ModuleId) != 1)
+            return fail("load-once replaced an already loaded module");
+    }
 
     {
         Runtime runtime;
@@ -140,6 +201,20 @@ int main() {
             secondId <= firstId || implementationOf(switchable.pin()) != &second ||
             implementationOf(pinnedFirstBinding) != &first)
             return fail("activation did not distinguish switchable and pinned references");
+
+        Request wrongKindRequest{
+            ModuleId, std::string(64, 'e'),
+            std::make_shared<LeaseProbe>(thirdLeaseDestructions)};
+        Runtime::StagedGeneration wrongKindStaged;
+        phases.clear();
+        if (!stageOne(runtime, wrongKindRequest, SymbolId, ContractId,
+                      &incompatible, wrongKindStaged, phases, error, true, 2))
+            return fail("wrong-kind generation staging precondition failed");
+        auto wrongKindSafePoint = runtime.safePoint();
+        if (runtime.activate(wrongKindStaged, wrongKindSafePoint, error) ||
+            error.find("switchable binding") == std::string::npos ||
+            runtime.activeGenerationId(ModuleId) != secondId)
+            return fail("switchable typed reference accepted a changed declaration kind");
 
         Request incompatibleRequest{
             ModuleId, std::string(64, '3'),
@@ -258,7 +333,7 @@ int main() {
 
     if (firstLeaseDestructions.load() != 2 ||
         secondLeaseDestructions.load() != 1 ||
-        thirdLeaseDestructions.load() != 2)
+        thirdLeaseDestructions.load() != 3)
         return fail("runtime did not release all leases at process-scope teardown");
     return 0;
 }

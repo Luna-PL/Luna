@@ -100,9 +100,9 @@ record in an explicit trust store before a future Runtime loader may accept the
 library. Each library also exports a versioned typed descriptor registry. Its
 rows are bound by the proof's export digest and use SymbolId/ContractId
 identity. The internal verified-loader primitive uses immutable/private staging
-and publishes only proof-matched registry entries. No end-user load/activation
-CLI or evolution-generation manager exists yet; raw dynamic-loader symbol
-lookup is not a trusted loading path.
+and publishes only proof-matched registry entries. EV004 exposes process-local
+generation control through the C++17 host API, not an end-user load/activation
+CLI; raw dynamic-loader symbol lookup is not a trusted loading path.
 
 `luna build <package-directory> -t moon` requires an explicit manifest `kind`
 and emits a self-verified, host-specific `.moon`. `-o` overrides the path;
@@ -171,7 +171,7 @@ one line should be placed in a source file and run with `luna run`.
 | `--message-format=json` | `check`, `analyze` | Emit the command's versioned JSONL protocol. |
 | `--overlay <document>` | `analyze` | Read one in-memory source replacement from stdin. |
 | `--overlays-from-stdin` | `analyze` | Read a versioned multi-document overlay JSON object from stdin. |
-| `--moon-cost-report` | `run`, `build` | Print explicit runtime, dynamic, instantiation and kernel cost decisions. |
+| `--moon-cost-report` | `run`, `build` | Print explicit runtime, instantiation, and kernel cost decisions. |
 | `--gpu-target <list>` | `run`, `build` | Generate requested device code objects. Accepts comma-separated targets. |
 | `--reserve-kernel-runtime` | `run`, `build` | Retain kernel runtime capability even without a reachable launch. |
 | `--runtime-lib <path>` | `build` | Select the Luna `libruntime.a` used for AOT linking. |
@@ -213,11 +213,6 @@ not silently fall back. See [Heterogeneous compute](heterogeneous_compute.md).
 | `LUNA_GPU_BACKEND` | Runtime GPU backend: `sim`, `cuda` or `rocm`. |
 | `LUNA_GPU_PROFILE=1` | Print accumulated CUDA/ROCm device-event kernel time. |
 | `LUNA_GPU_DUMP_HSACO=<dir>` | Save generated ROCm HSACO files for inspection. |
-| `LUNA_FRAGMENT_PLUGIN=<path>` | Load an Alpha v1 external fragment plugin. |
-| `LUNA_FRAGMENT_<SLOT>=<name>` | Choose a linked dynamic fragment candidate for a slot. |
-
-Plugin constraints and environment-driven selection are described in
-[Fragments and plugins](fragments.md).
 
 ## Useful workflows
 

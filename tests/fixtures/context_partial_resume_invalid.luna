@@ -1,4 +1,6 @@
-context invalid(flag: bool) {
+slot context hook(flag: bool);
+
+context invalid(flag: bool) for hook {
     if flag {
         resume();
     } else {
@@ -7,7 +9,6 @@ context invalid(flag: bool) {
 }
 
 fn main() -> i32 {
-    slot context hook(flag: bool);
-    apply hook(invalid) { hook(true) { } }
+    apply invalid { hook(true) { } }
     return 0;
 }

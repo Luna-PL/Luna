@@ -63,19 +63,20 @@ if [[ "${mca_mode}" == "1" ]] && ! command -v llvm-mca >/dev/null; then
 fi
 
 temp_dir="$(mktemp -d /tmp/luna-analyze.XXXXXX)"
-luna_aot="${temp_dir}/luna_${workload}"
 cpp_bin="${temp_dir}/cpp_${workload}"
-luna_ir="${luna_source}.ll"
+source "${source_root}/benchmarks/package_source.sh"
+luna_aot=""
 
 cleanup() {
-    rm -f -- "${luna_ir}" "${luna_source%.luna}"
     rm -rf -- "${temp_dir}"
 }
 trap cleanup EXIT
 
-"${luna_driver}" build "${luna_source}" "${optimization}" >/dev/null
-cp "${luna_ir}" "${temp_dir}/luna.raw.ll"
-mv "${luna_source%.luna}" "${luna_aot}"
+package_name="analyze_${workload//-/_}"
+luna_benchmark_build_package "${luna_driver}" "${luna_source}" \
+    "${temp_dir}/luna-package" "${package_name}" "${optimization}"
+luna_aot="${LUNA_BENCHMARK_AOT}"
+cp "${LUNA_BENCHMARK_IR}" "${temp_dir}/luna.raw.ll"
 
 cpp_function_for() {
     case "$1" in
@@ -313,9 +314,10 @@ luna_empty="${temp_dir}/luna_empty.luna"
 cpp_empty="${temp_dir}/cpp_empty.cpp"
 printf 'fn main() -> i32 {\n    print(0);\n    return 0;\n}\n' > "${luna_empty}"
 printf '#include <cstdio>\nint main() { std::printf("0\\n"); return 0; }\n' > "${cpp_empty}"
-"${luna_driver}" build "${luna_empty}" "${optimization}" >/dev/null 2>&1
+luna_benchmark_build_package "${luna_driver}" "${luna_empty}" \
+    "${temp_dir}/empty-package" empty_baseline "${optimization}" >/dev/null 2>&1
 "${cpp_compiler}" -std=c++23 "${optimization}" "${cpp_empty}" -o "${temp_dir}/cpp_empty"
-luna_baseline_bin="${luna_empty%.luna}"
+luna_baseline_bin="${LUNA_BENCHMARK_AOT}"
 
 python3 "${source_root}/tools/benchmark_probe.py" --iterations 5 --warmups 1 \
     --tag luna-baseline -- "${luna_baseline_bin}" > "${temp_dir}/luna_base.json" 2>/dev/null

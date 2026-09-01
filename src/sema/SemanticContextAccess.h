@@ -42,6 +42,8 @@ public:
     decltype(SemanticContext::mIteratorStateCounter)& mIteratorStateCounter;
     decltype(SemanticContext::mMetadataSchemas)& mMetadataSchemas;
     decltype(SemanticContext::mProgram)& mProgram;
+    decltype(SemanticContext::mQualifiedDeclarations)&
+        mQualifiedDeclarations;
     decltype(SemanticContext::mSawReturn)& mSawReturn;
     decltype(SemanticContext::mSymbolCatalog)& mSymbolCatalog;
     decltype(SemanticContext::mSymTable)& mSymTable;
@@ -85,6 +87,7 @@ public:
     TypePtr instantiateNominal(
         const TypePtr& type, const std::vector<TypePtr>& arguments);
     SymbolInfo* lookupSymbol(const std::string& name);
+    TypePtr lookupDeclaredType(const std::string& name);
     FunctionDecl* monomorphize(
         FunctionDecl* generic, const TypeVec& concreteTypes);
     void recordDeclarationReference(
@@ -134,6 +137,7 @@ public:
     decltype(SemanticContext::mImpls)& mImpls;
     decltype(SemanticContext::mMetadataSchemas)& mMetadataSchemas;
     decltype(SemanticContext::mProgram)& mProgram;
+    decltype(SemanticContext::mSlotScopes)& mSlotScopes;
     decltype(SemanticContext::mSymTable)& mSymTable;
     decltype(SemanticContext::mTraitOwners)& mTraitOwners;
     decltype(SemanticContext::mTraitTypeParams)& mTraitTypeParams;
@@ -174,8 +178,8 @@ public:
     decltype(SemanticContext::mCurrentFragmentDecl)& mCurrentFragmentDecl;
     decltype(SemanticContext::mCurrentFragmentSlot)& mCurrentFragmentSlot;
     decltype(SemanticContext::mCurrentReturnType)& mCurrentReturnType;
-    decltype(SemanticContext::mDynamicApplyScopes)& mDynamicApplyScopes;
     decltype(SemanticContext::mFragments)& mFragments;
+    decltype(SemanticContext::mProgram)& mProgram;
     decltype(SemanticContext::mSlotScopes)& mSlotScopes;
     decltype(SemanticContext::mSymTable)& mSymTable;
 

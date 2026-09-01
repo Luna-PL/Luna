@@ -23,6 +23,13 @@ LUNA_BASIC_BENCH_ITERATIONS=10 \
 This reports Luna JIT compile+run, Luna AOT build, Luna AOT run and C++23 run
 separately for a deterministic integer workload.
 
+The benchmark runners stage each Luna source in a temporary 0.3 application
+package before AOT compilation. They do not depend on the removed standalone
+`luna build file.luna` path and do not leave package artifacts beside the
+benchmark sources. The default `luna.benchmark-package-smoke` release test
+builds and executes the arithmetic workload through this package path even
+when the opt-in measurement suites are disabled.
+
 ## CPU comparison
 
 ```sh

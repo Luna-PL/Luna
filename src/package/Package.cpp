@@ -44,6 +44,8 @@ std::vector<PackageExport> PackageLoader::exports(const Program* program) {
             result.push_back({publicDeclarationName(function, function->name), "function", function->modulePath});
         else if (auto* fragment = dynamic_cast<FragmentDecl*>(declaration.get()))
             result.push_back({publicDeclarationName(fragment, fragment->name), "fragment", fragment->modulePath});
+        else if (auto* slot = dynamic_cast<SlotDecl*>(declaration.get()))
+            result.push_back({publicDeclarationName(slot, slot->name), "slot", slot->modulePath});
         else if (auto* structure = dynamic_cast<StructDecl*>(declaration.get()))
             result.push_back({publicDeclarationName(structure, structure->name), "struct", structure->modulePath});
         else if (auto* enumeration = dynamic_cast<EnumDecl*>(declaration.get()))

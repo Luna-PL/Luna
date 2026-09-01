@@ -1,0 +1,18 @@
+meta version {
+    major: i32;
+}
+
+fn choice(view: declaration_view, major: i32) -> declaration_ref {
+    return select_unique(view, version(major));
+}
+
+runtime@version(1)
+fn answer(value: i32) -> i32 { return value + 1; }
+
+runtime@version(2)
+fn answer(value: i32) -> i32 { return value + 2; }
+
+fn main() -> i32 {
+    let selected = select answer with choice(2);
+    return selected(40);
+}

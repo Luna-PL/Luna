@@ -24,13 +24,14 @@ fn main() -> i32 {
     let adt_score = showcase::data::model::accept_choice(choice) +
                     showcase::data::model::accept_command(command);
 
-    // Static and runtime metadata selection share the same declaration family.
+    // Compile-time selection can choose runtime-retained declarations without
+    // embedding the removed dynamic exact-match protocol.
     let selected = select showcase::dispatch::answer
                    with showcase::dispatch::choose(1, 0, 0);
     let static_value = selected(move retained.value);
-    let dynamic_selected = dynamic select showcase::dispatch::answer
-                           with showcase::dispatch::choose(2, 0, 0);
-    let dynamic_value = dynamic_selected(static_value);
+    let selected_v2 = select showcase::dispatch::answer
+                      with showcase::dispatch::choose(2, 0, 0);
+    let dynamic_value = selected_v2(static_value);
 
     // Closures, arrays, indexing, slicing, borrowing and compound operators.
     let add_one = fn(value: i32) -> i32 {
@@ -41,19 +42,15 @@ fn main() -> i32 {
     let middle = values[1..3];
     let closure_value = add_one(middle[0]);
 
-    // Static and dynamic fragments exercise interceptor/context continuation
-    // contracts without requiring an external plugin.
-    slot interceptor audit_slot(value: i32);
-    apply audit_slot(showcase::effects::audit) {
-        audit_slot(closure_value) {
+    // Nominal fragments exercise interceptor/context continuation contracts.
+    apply showcase::effects::audit {
+        showcase::effects::audit_slot(closure_value) {
             print(closure_value);
         }
     }
 
-    dynamic slot context pipeline(value: i32);
-    dynamic apply pipeline(showcase::effects::trace,
-                           showcase::effects::observe) {
-        pipeline(closure_value) {
+    apply showcase::effects::trace {
+        showcase::effects::pipeline(closure_value) {
             print(dynamic_value);
         }
     }

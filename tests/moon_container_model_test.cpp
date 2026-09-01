@@ -15,6 +15,8 @@ namespace {
 static_assert(static_cast<uint32_t>(moon::CodeOperationOpcode::Let) == 1);
 static_assert(static_cast<uint32_t>(moon::CodeOperationOpcode::Await) == 5);
 static_assert(static_cast<uint32_t>(moon::CodeExpressionOpcode::Integer) == 1);
+static_assert(static_cast<uint32_t>(
+                  moon::CodeExpressionOpcode::ReservedDynamicSelect) == 10);
 static_assert(static_cast<uint32_t>(moon::CodeExpressionOpcode::Assign) == 28);
 
 int fail(const std::string& message) {
@@ -122,7 +124,6 @@ int main(int argc, char* argv[]) {
     manifest.entrypoint.contract =
         luna::identity::ContractId{"contract:main"};
     manifest.features.runtime = true;
-    manifest.features.dynamicSelect = true;
 
     std::vector<uint8_t> manifestBytes;
     if (!moon::ContainerModelCodec::encodeManifest(
@@ -144,7 +145,7 @@ int main(int argc, char* argv[]) {
         decodedManifest.dataLayout != manifest.dataLayout ||
         decodedManifest.entrypoint != manifest.entrypoint ||
         !decodedManifest.features.runtime ||
-        !decodedManifest.features.dynamicSelect)
+        decodedManifest.features.kernelRuntimeReserved)
         return fail("manifest model codec lost semantic fields");
 
     auto malformedManifest = manifestBytes;
@@ -152,6 +153,21 @@ int main(int argc, char* argv[]) {
     if (moon::ContainerModelCodec::decodeManifest(
             malformedManifest, decodedManifest, error))
         return fail("manifest decoder accepted unknown feature flags");
+    malformedManifest = manifestBytes;
+    writeU32(malformedManifest, malformedManifest.size() - 4, 1u << 1);
+    if (moon::ContainerModelCodec::decodeManifest(
+            malformedManifest, decodedManifest, error))
+        return fail("manifest decoder accepted retired Dynamic retention");
+    malformedManifest = manifestBytes;
+    writeU32(malformedManifest, malformedManifest.size() - 4, 1u << 2);
+    if (moon::ContainerModelCodec::decodeManifest(
+            malformedManifest, decodedManifest, error))
+        return fail("manifest decoder accepted the retired dynamic-apply feature");
+    malformedManifest = manifestBytes;
+    writeU32(malformedManifest, malformedManifest.size() - 4, 1u << 3);
+    if (moon::ContainerModelCodec::decodeManifest(
+            malformedManifest, decodedManifest, error))
+        return fail("manifest decoder accepted the retired dynamic-select feature");
     malformedManifest = manifestBytes;
     malformedManifest.push_back(0);
     if (moon::ContainerModelCodec::decodeManifest(
@@ -454,6 +470,12 @@ int main(int argc, char* argv[]) {
             unknownOpcode, decoded, error) ||
         decoded.declarations[0].get() != preservedDeclaration)
         return fail("code decoder accepted expression opcode zero");
+    unknownOpcode = codeBytes;
+    writeU32(unknownOpcode, expressionOpcode, 10);
+    if (moon::ContainerModelCodec::decodeCode(
+            unknownOpcode, decoded, error) ||
+        decoded.declarations[0].get() != preservedDeclaration)
+        return fail("code decoder accepted retired dynamic-select opcode 10");
     unknownOpcode = codeBytes;
     writeU32(unknownOpcode, expressionOpcode, 29);
     if (moon::ContainerModelCodec::decodeCode(

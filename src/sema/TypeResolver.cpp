@@ -226,6 +226,16 @@ private:
                 expr->isCompileTimeSymbolSet;
             clone->compileTimeSymbolSetDeclarationIds =
                 expr->compileTimeSymbolSetDeclarationIds;
+            clone->isCompileTimeQueryDeclarationView =
+                expr->isCompileTimeQueryDeclarationView;
+            clone->compileTimeDeclarationViewDeclarationIds =
+                expr->compileTimeDeclarationViewDeclarationIds;
+            clone->isCompileTimeQueryDeclarationRef =
+                expr->isCompileTimeQueryDeclarationRef;
+            clone->isCompileTimeOptionalDeclarationRef =
+                expr->isCompileTimeOptionalDeclarationRef;
+            clone->compileTimeOptionalHasValue =
+                expr->compileTimeOptionalHasValue;
             return located(std::move(clone), src);
         }
         if (auto* expr = dynamic_cast<const LaunchExpr*>(src)) {
@@ -374,7 +384,6 @@ private:
             clone->selectorName = expr->selectorName;
             for (const auto& argument : expr->selectorArgs)
                 clone->selectorArgs.push_back(cloneExpr(argument.get()));
-            clone->isDynamic = expr->isDynamic;
             clone->resolvedDeclarationId =
                 expr->resolvedDeclarationId;
             clone->resolvedSymbolId = expr->resolvedSymbolId;
@@ -383,12 +392,6 @@ private:
             clone->resolvedFamilyId = expr->resolvedFamilyId;
             clone->resolvedSelectorDeclarationId =
                 expr->resolvedSelectorDeclarationId;
-            clone->dynamicCandidateIds = expr->dynamicCandidateIds;
-            clone->dynamicMetadataSchemaId =
-                expr->dynamicMetadataSchemaId;
-            clone->dynamicFilterArguments =
-                expr->dynamicFilterArguments;
-            clone->dynamicCandidates = expr->dynamicCandidates;
             clone->selectedType = substitute(expr->selectedType);
             return located(std::move(clone), src);
         }
@@ -447,6 +450,10 @@ private:
             auto clone = std::make_unique<MatchStmt>();
             clone->scrutinee = cloneExpr(statement->scrutinee.get());
             clone->matchedType = substitute(statement->matchedType);
+            clone->isCompileTimeOptionalMatch =
+                statement->isCompileTimeOptionalMatch;
+            clone->compileTimeSelectedArm =
+                statement->compileTimeSelectedArm;
             for (const auto& sourceArm : statement->arms) {
                 MatchArm arm;
                 arm.sourcePath = sourceArm.sourcePath;
@@ -485,6 +492,16 @@ private:
             clone->iterable = cloneExpr(statement->iterable.get());
             clone->body = cloneBlock(statement->body.get());
             clone->elementType = substitute(statement->elementType);
+            clone->isCompileTimeDeclarationViewLoop =
+                statement->isCompileTimeDeclarationViewLoop;
+            clone->compileTimeDeclarationIds =
+                statement->compileTimeDeclarationIds;
+            clone->compileTimeSymbolNames =
+                statement->compileTimeSymbolNames;
+            clone->compileTimeSymbolIds =
+                statement->compileTimeSymbolIds;
+            clone->compileTimeContractIds =
+                statement->compileTimeContractIds;
             clone->protocolNextSymbol = statement->protocolNextSymbol;
             clone->protocolIteratorType =
                 substitute(statement->protocolIteratorType);
@@ -520,7 +537,6 @@ private:
             clone->acceptedKind = statement->acceptedKind;
             clone->acceptedCardinality =
                 statement->acceptedCardinality;
-            clone->isDynamic = statement->isDynamic;
             for (const auto& parameter : statement->params)
                 clone->params.push_back(cloneParam(parameter));
             clone->defaultFragment = statement->defaultFragment;
@@ -536,11 +552,6 @@ private:
             clone->acceptedKind = statement->acceptedKind;
             clone->acceptedCardinality =
                 statement->acceptedCardinality;
-            clone->isDynamic = statement->isDynamic;
-            clone->usesDynamicDispatch =
-                statement->usesDynamicDispatch;
-            clone->resolvedDynamicFragmentNames =
-                statement->resolvedDynamicFragmentNames;
             for (const auto& argument : statement->args)
                 clone->args.push_back(cloneExpr(argument.get()));
             clone->continuation =
@@ -576,11 +587,6 @@ private:
             auto clone = std::make_unique<ApplyStmt>();
             clone->slotName = statement->slotName;
             clone->fragmentName = statement->fragmentName;
-            clone->isDynamic = statement->isDynamic;
-            clone->alternativeFragmentNames =
-                statement->alternativeFragmentNames;
-            clone->resolvedAlternativeFragmentNames =
-                statement->resolvedAlternativeFragmentNames;
             clone->resolvedFragmentName =
                 statement->resolvedFragmentName;
             clone->body = cloneBlock(statement->body.get());
@@ -593,10 +599,8 @@ private:
 
 FunctionDecl* TypeResolver::monomorphize(FunctionDecl* generic, const TypeVec& concreteTypes) {
     luna::instantiation::Request request;
-    const auto genericSymbol = generic->generatedSymbolName.empty()
-        ? generic->name : generic->generatedSymbolName;
-    request.genericDeclarationId = nominalDeclarationIdentity(
-        mContext.mProgram, "fn", genericSymbol, generic);
+    request.genericDeclarationId =
+        functionDeclarationIdentity(mContext.mProgram, generic);
     for (const auto& type : concreteTypes)
         request.typeArguments.push_back(mContext.typeIdentity(resolved(type)));
     request.requestedBy = mContext.mDiagnosticFile + ":" +

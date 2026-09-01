@@ -174,6 +174,8 @@ class ControlAnalysis {
 public:
     virtual ~ControlAnalysis() = default;
 
+    virtual void declareSlot(SlotDecl* decl) = 0;
+    virtual void finalizeSlot(SlotDecl* decl) = 0;
     virtual void analyzeSlotDecl(SlotDeclStmt* stmt) = 0;
     virtual void analyzeSlotInvoke(
         SlotInvokeStmt* stmt, TypePtr expectedReturn) = 0;
@@ -269,6 +271,8 @@ private:
     void validateMetadata(Decl* decl);
     void rebuildSymbolCatalog();
     void analyzeSlotDecl(SlotDeclStmt* stmt);
+    void declareSlot(SlotDecl* decl);
+    void finalizeSlot(SlotDecl* decl);
     void analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedReturn);
     void analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn);
     void analyzeFragmentForSlot(FragmentDecl* fragment, const std::string& slotName,
@@ -439,6 +443,7 @@ private:
     uint64_t mIteratorStateCounter = 0;
     const luna::selector::SymbolSet* mActiveSelectorSet = nullptr;
     struct SlotInfo {
+        SlotDecl* declaration = nullptr;
         std::string name;
         TypeVec paramTypes;
         std::vector<luna::ownership::Contract> paramContracts;
@@ -448,12 +453,10 @@ private:
         FragmentKind acceptedKind = FragmentKind::Interceptor;
         FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
         bool isImplicitCapture = false;
-        bool isDynamic = false;
         TypePtr structuralType;
     };
     std::vector<std::unordered_map<std::string, SlotInfo>> mSlotScopes;
     std::vector<std::unordered_map<std::string, FragmentDecl*>> mApplyScopes;
-    std::vector<std::unordered_map<std::string, std::vector<FragmentDecl*>>> mDynamicApplyScopes;
     std::unordered_map<std::string, FragmentDecl*> mFragments;
     const SlotInfo* mCurrentFragmentSlot = nullptr;
     FragmentDecl* mCurrentFragmentDecl = nullptr;

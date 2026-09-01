@@ -1,0 +1,7 @@
+fn route() -> i32 { return 1; }
+
+fn main() -> i32 {
+    let ordered = symbols(route).all();
+    let selected = declaration_at(ordered, 1);
+    return selected();
+}

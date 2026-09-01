@@ -255,8 +255,8 @@ TypePtr CompileTimeEvaluator::analyzeDeclarationReflectionCall(
         }
         const auto symbol = selected->generatedSymbolName.empty()
             ? selected->name : selected->generatedSymbolName;
-        call->compileTimeDeclarationId = nominalDeclarationIdentity(
-            mContext.mProgram, "fn", symbol, selected);
+        call->compileTimeDeclarationId =
+            functionDeclarationIdentity(mContext.mProgram, selected);
         call->resolvedSymbolName = symbol;
         call->resultType = Type::makeDeclarationRef(selectedType);
         return call->resultType;
@@ -293,6 +293,13 @@ TypePtr CompileTimeEvaluator::analyzeDeclarationReflectionCall(
                     luna::types::typeId(reference->inner).value;
         }
     }
+    // A statically expanded declaration_view loop has one concrete identity
+    // per lowering iteration, but its callable signature is invariant and can
+    // be folded during the single semantic analysis of the loop body.
+    if (name == "declaration_signature" && !call->compileTimeValue &&
+        reference->inner)
+        call->compileTimeValue =
+            luna::types::typeId(reference->inner).value;
     call->resultType = TyString;
     return call->resultType;
 }
@@ -815,11 +822,9 @@ CompileTimeEvaluator::evaluateSelectorExpr(
                 selected = candidate;
             }
             if (!selected) return std::nullopt;
-            const auto symbol = selected->generatedSymbolName.empty()
-                ? selected->name : selected->generatedSymbolName;
             return SelectorDeclarationValue{
-                nominalDeclarationIdentity(
-                    mContext.mProgram, "fn", symbol, selected)};
+                functionDeclarationIdentity(
+                    mContext.mProgram, selected)};
         }
         std::vector<SelectorValue> arguments;
         for (auto& argument : call->args) {
@@ -1076,7 +1081,7 @@ std::optional<std::string> CompileTimeEvaluator::evaluateSelectorFunction(
     }
     std::unordered_map<std::string, SelectorValue> locals;
     SelectorDeclarationViewValue input;
-    for (const auto* candidate : symbols.legacyTraversal())
+    for (const auto* candidate : symbols.orderedSymbols())
         input.declarationIds.push_back(candidate->declarationId);
     locals[function->params.front().name] = std::move(input);
     for (size_t index = 0; index < arguments.size(); ++index) {

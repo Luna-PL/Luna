@@ -1,22 +1,24 @@
 #include "ControlAnalyzer.h"
 
 #include "SemanticContext.h"
+#include "SemanticAnalysisSupport.h"
 #include "../core/TypeRelations.h"
 #include "../parser/AST.h"
 #include <algorithm>
 #include <set>
 #include <utility>
 
-void ControlAnalyzer::analyzeSlotDecl(SlotDeclStmt* stmt) {
-    if (mContext.mSlotScopes.back().count(stmt->name)) {
-        mContext.error("duplicate slot declaration '" + stmt->name + "'", stmt->line, stmt->col);
+void ControlAnalyzer::declareSlot(SlotDecl* decl) {
+    const std::string sourceKey = mContext.sourceDeclarationKey(decl->name);
+    if (mContext.mSlotScopes.front().count(sourceKey)) {
+        mContext.error("duplicate slot declaration '" + decl->name + "'", decl->line, decl->col);
         return;
     }
     TypeVec params;
     std::vector<luna::ownership::Contract> contracts;
-    for (auto& param : stmt->params) {
+    for (auto& param : decl->params) {
         if (!param.type) {
-            mContext.error("explicit slot parameter '" + param.name + "' requires a type", stmt->line, stmt->col);
+            mContext.error("module-level slot parameter '" + param.name + "' requires a type", decl->line, decl->col);
             params.push_back(TyUnknown);
             contracts.push_back({});
         } else {
@@ -37,53 +39,76 @@ void ControlAnalyzer::analyzeSlotDecl(SlotDeclStmt* stmt) {
         }
     }
     ControlContextAccess::SlotInfo info;
-    info.name = stmt->name;
-    info.acceptedKind = stmt->acceptedKind;
-    info.acceptedCardinality = stmt->acceptedCardinality;
-    info.isDynamic = stmt->isDynamic;
+    info.declaration = decl;
+    info.name = decl->name;
+    info.acceptedKind = decl->acceptedKind;
+    info.acceptedCardinality = decl->acceptedCardinality;
     info.paramTypes = params;
     info.paramContracts = contracts;
-    for (const auto& param : stmt->params) info.paramNames.push_back(param.name);
-    info.defaultFragment = stmt->defaultFragment;
-    if (!info.defaultFragment.empty()) {
-        if (auto* fragment = selectFragment(info.defaultFragment, stmt)) {
-            if (fragment->kind != info.acceptedKind ||
-                fragment->cardinality != info.acceptedCardinality)
-                mContext.error("default binding for slot '" + stmt->name +
-                      "' has the wrong interceptor/context or once/many contract", stmt->line, stmt->col);
-            info.resolvedDefaultFragmentName = fragment->generatedSymbolName.empty()
-                ? fragment->name : fragment->generatedSymbolName;
-            stmt->resolvedDefaultFragmentName = info.resolvedDefaultFragmentName;
-        }
-    }
+    for (const auto& param : decl->params) info.paramNames.push_back(param.name);
+    info.defaultFragment = decl->defaultFragment;
     info.structuralType = Type::makeSlot(
-        params, TyUnit, info.acceptedCardinality == FragmentCardinality::Many,
+        params, TyUnit, false,
         info.acceptedKind == FragmentKind::Interceptor
             ? ContinuationKind::Interceptor : ContinuationKind::Context,
         contracts);
-    stmt->structuralType = info.structuralType;
-    mContext.mSlotScopes.back().emplace(stmt->name, info);
+    const std::string symbolName = decl->generatedSymbolName.empty()
+        ? decl->name : decl->generatedSymbolName;
+    info.structuralType->identityMode = luna::types::IdentityMode::Nominal;
+    info.structuralType->nominalId = nominalDeclarationIdentity(
+        mContext.mProgram, "slot", symbolName, decl);
+    info.structuralType->name = decl->name;
+    info.structuralType->declarationLinkageName = symbolName;
+    decl->structuralType = info.structuralType;
+    mContext.mSlotScopes.front().emplace(sourceKey, info);
 
     SymbolInfo symbol;
     symbol.kind = SymbolKind::Slot;
-    symbol.type = stmt->structuralType;
-    if (!mContext.mSymTable.define(stmt->name, symbol))
-        mContext.error("slot name '" + stmt->name + "' conflicts with an existing binding", stmt->line, stmt->col);
+    symbol.type = decl->structuralType;
+    if (!mContext.mSymTable.defineAtRoot(sourceKey, symbol))
+        mContext.error("slot name '" + decl->name + "' conflicts with an existing declaration", decl->line, decl->col);
+}
+
+void ControlAnalyzer::analyzeSlotDecl(SlotDeclStmt* stmt) {
+    mContext.error("local slot declarations are not part of Luna 0.3; declare the slot at module level",
+                   stmt->line, stmt->col);
+}
+
+void ControlAnalyzer::finalizeSlot(SlotDecl* decl) {
+    if (!decl || decl->defaultFragment.empty()) return;
+    auto* fragment = selectFragment(decl->defaultFragment, decl);
+    if (!fragment) return;
+    const std::string slotSymbol = decl->generatedSymbolName.empty()
+        ? decl->name : decl->generatedSymbolName;
+    if (fragment->resolvedTargetSlotName != slotSymbol) {
+        mContext.error("default fragment '" + fragment->name +
+            "' nominally targets a different slot than '" + decl->name + "'",
+            decl->line, decl->col);
+        return;
+    }
+    decl->resolvedDefaultFragmentName =
+        fragment->generatedSymbolName.empty()
+            ? fragment->name : fragment->generatedSymbolName;
+    const std::string key = mContext.sourceDeclarationKey(decl->name);
+    auto found = mContext.mSlotScopes.front().find(key);
+    if (found != mContext.mSlotScopes.front().end())
+        found->second.resolvedDefaultFragmentName =
+            decl->resolvedDefaultFragmentName;
 }
 
 void ControlAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedReturn) {
-    if (stmt->isDynamic) {
-        mContext.error("dynamic slot must be a separate declaration with an explicit interface; write `dynamic slot name(value: Type);`",
-              stmt->line, stmt->col);
+    const std::string slotKey = mContext.sourceDeclarationKey(stmt->name);
+    ControlContextAccess::SlotInfo* declared = nullptr;
+    for (auto it = mContext.mSlotScopes.rbegin();
+         it != mContext.mSlotScopes.rend(); ++it) {
+        auto found = it->find(slotKey);
+        if (found != it->end()) { declared = &found->second; break; }
+    }
+    if (!declared) {
+        mContext.error("unknown module-level slot '" + stmt->name + "'",
+                       stmt->line, stmt->col);
         return;
     }
-    auto lookupSlot = [this](const std::string& name) -> ControlContextAccess::SlotInfo* {
-        for (auto it = mContext.mSlotScopes.rbegin(); it != mContext.mSlotScopes.rend(); ++it) {
-            auto found = it->find(name);
-            if (found != it->end()) return &found->second;
-        }
-        return nullptr;
-    };
     auto lookupApplied = [this](const std::string& name) -> FragmentDecl* {
         for (auto it = mContext.mApplyScopes.rbegin(); it != mContext.mApplyScopes.rend(); ++it) {
             auto found = it->find(name);
@@ -91,132 +116,40 @@ void ControlAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedRe
         }
         return nullptr;
     };
-    auto lookupDynamicApplied = [this](const std::string& name) -> const std::vector<FragmentDecl*>* {
-        for (auto it = mContext.mDynamicApplyScopes.rbegin(); it != mContext.mDynamicApplyScopes.rend(); ++it) {
-            auto found = it->find(name);
-            if (found != it->end()) return &found->second;
-        }
-        return nullptr;
-    };
-
-    ControlContextAccess::SlotInfo active;
-    if (stmt->isImplicitCapture) {
-        active.name = stmt->name;
-        active.acceptedKind = stmt->acceptedKind;
-        active.acceptedCardinality = stmt->acceptedCardinality;
-        active.isImplicitCapture = true;
-        active.defaultFragment = stmt->defaultFragment;
-        active.structuralType = Type::makeSlot(
-            {}, TyUnit, active.acceptedCardinality == FragmentCardinality::Many,
-            active.acceptedKind == FragmentKind::Interceptor
-                ? ContinuationKind::Interceptor : ContinuationKind::Context);
-        if (!mContext.mSlotScopes.back().emplace(stmt->name, active).second) {
-            mContext.error("duplicate implicit slot '" + stmt->name + "'", stmt->line, stmt->col);
-            return;
-        }
-        active = mContext.mSlotScopes.back().at(stmt->name);
-    } else if (!stmt->interfaceParams.empty()) {
-        active.name = stmt->name;
-        active.acceptedKind = stmt->acceptedKind;
-        active.acceptedCardinality = stmt->acceptedCardinality;
-        active.defaultFragment = stmt->defaultFragment;
-        for (auto& param : stmt->interfaceParams) {
-            if (!param.type) {
-                mContext.error("inline slot parameter '" + param.name + "' requires a type", stmt->line, stmt->col);
-                active.paramTypes.push_back(TyUnknown);
-                continue;
-            }
-            auto parameterType = mContext.declaredType(param.type.get(), {});
-            param.inferredType = parameterType;
-            active.paramTypes.push_back(parameterType);
-            const bool explicitUsage = param.hasExplicitUsage || param.isLinear ||
-                dynamic_cast<LinearTypeAST*>(param.type.get()) != nullptr ||
-                dynamic_cast<AffineTypeAST*>(param.type.get()) != nullptr;
-            const auto requestedUsage = param.isLinear
-                ? luna::ownership::Usage::Linear
-                : (explicitUsage ? param.usage : defaultUsageForType(parameterType));
-            const auto contract = parameterContractFor(
-                parameterType, requestedUsage, explicitUsage);
-            param.relation = contract.relation;
-            param.usage = contract.usage;
-            active.paramContracts.push_back(contract);
-            active.paramNames.push_back(param.name);
-            auto* captured = mContext.mSymTable.lookup(param.name);
-            if (!captured) mContext.error("inline slot parameter '" + param.name + "' has no matching local binding");
-            else mContext.constrain(captured->type, parameterType,
-                           "inline slot parameter '" + param.name + "'");
-        }
-        active.structuralType = Type::makeSlot(
-            active.paramTypes, TyUnit,
-            active.acceptedCardinality == FragmentCardinality::Many,
-            active.acceptedKind == FragmentKind::Interceptor
-                ? ContinuationKind::Interceptor : ContinuationKind::Context,
-            active.paramContracts);
-        mContext.mSlotScopes.back()[stmt->name] = active;
-    } else {
-        auto* declared = lookupSlot(stmt->name);
-        if (!declared) {
-            mContext.error("unknown slot '" + stmt->name + "'", stmt->line, stmt->col);
-            return;
-        }
-        active = *declared;
-        stmt->acceptedKind = active.acceptedKind;
-        stmt->acceptedCardinality = active.acceptedCardinality;
-        if (stmt->args.size() != active.paramTypes.size()) {
-            mContext.error("slot '" + stmt->name + "' expects " +
-                  std::to_string(active.paramTypes.size()) + " arguments, got " +
-                  std::to_string(stmt->args.size()), stmt->line, stmt->col);
-        }
-        const size_t count = std::min(stmt->args.size(), active.paramTypes.size());
-        for (size_t i = 0; i < count; ++i)
-            mContext.constrain(mContext.analyzeExpr(stmt->args[i].get()), active.paramTypes[i],
-                      "argument " + std::to_string(i + 1) + " of slot '" + stmt->name + "'");
-    }
-
+    const auto& active = *declared;
+    stmt->acceptedKind = active.acceptedKind;
+    stmt->acceptedCardinality = active.acceptedCardinality;
     stmt->structuralType = active.structuralType;
     stmt->resolvedParamNames = active.paramNames;
+    stmt->defaultFragment = active.defaultFragment;
+    if (stmt->args.size() != active.paramTypes.size()) {
+        mContext.error("slot '" + stmt->name + "' expects " +
+              std::to_string(active.paramTypes.size()) + " arguments, got " +
+              std::to_string(stmt->args.size()), stmt->line, stmt->col);
+    }
+    const size_t count = std::min(stmt->args.size(), active.paramTypes.size());
+    for (size_t i = 0; i < count; ++i)
+        mContext.constrain(mContext.analyzeExpr(stmt->args[i].get()),
+            active.paramTypes[i], "argument " + std::to_string(i + 1) +
+            " of slot '" + stmt->name + "'");
     const auto captures = mContext.mSymTable.visibleSymbols();
     mContext.analyzeBlock(stmt->continuation.get(), expectedReturn);
 
-    FragmentDecl* fragment = lookupApplied(stmt->name);
-    const std::vector<FragmentDecl*>* dynamicFragments = lookupDynamicApplied(stmt->name);
-    if (dynamicFragments && !dynamicFragments->empty()) {
-        stmt->usesDynamicDispatch = true;
-        stmt->resolvedDynamicFragmentNames.clear();
-        FragmentDecl* contract = nullptr;
-        for (auto* candidate : *dynamicFragments) {
-            if (!candidate) continue;
-            if (candidate->kind != active.acceptedKind ||
-                candidate->cardinality != active.acceptedCardinality)
-                mContext.error("dynamic candidate '" + candidate->name +
-                      "' does not match slot '" + stmt->name + "' contract",
-                      stmt->line, stmt->col);
-            if (!contract) contract = candidate;
-            else if (candidate->kind != contract->kind ||
-                     candidate->cardinality != contract->cardinality) {
-                mContext.error("all dynamic candidates must declare the same interceptor/context and once/many contract",
-                      stmt->line, stmt->col);
-            }
-            stmt->resolvedDynamicFragmentNames.push_back(
-                candidate->generatedSymbolName.empty() ? candidate->name : candidate->generatedSymbolName);
-            analyzeFragmentForSlot(candidate, stmt->name, active.paramTypes,
-                                   active.paramContracts, captures);
-        }
-        return;
-    }
+    FragmentDecl* fragment = lookupApplied(slotKey);
     if (!fragment && !active.defaultFragment.empty()) {
         fragment = selectFragment(active.defaultFragment, stmt);
     }
     if (fragment) {
-        active.resolvedDefaultFragmentName = fragment->generatedSymbolName.empty()
+        stmt->resolvedDefaultFragmentName = fragment->generatedSymbolName.empty()
             ? fragment->name : fragment->generatedSymbolName;
-        stmt->resolvedDefaultFragmentName = active.resolvedDefaultFragmentName;
     }
     if (!fragment) return; // no binding is an identity fragment: resume once
-    if (fragment->kind != active.acceptedKind ||
-        fragment->cardinality != active.acceptedCardinality)
-        mContext.error("fragment '" + fragment->name + "' does not match slot '" + stmt->name +
-              "' interceptor/context and once/many contract", stmt->line, stmt->col);
+    if (fragment->resolvedTargetSlotName !=
+        (active.declaration && !active.declaration->generatedSymbolName.empty()
+             ? active.declaration->generatedSymbolName : active.name))
+        mContext.error("fragment '" + fragment->name +
+            "' nominally targets a different slot than '" + stmt->name + "'",
+            stmt->line, stmt->col);
     analyzeFragmentForSlot(fragment, stmt->name, active.paramTypes,
                            active.paramContracts, captures);
 }
@@ -226,79 +159,33 @@ void ControlAnalyzer::analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn) {
     if (!fragment) return;
     stmt->resolvedFragmentName = fragment->generatedSymbolName.empty()
         ? fragment->name : fragment->generatedSymbolName;
-    ControlContextAccess::SlotInfo* knownSlot = nullptr;
-    for (auto it = mContext.mSlotScopes.rbegin(); it != mContext.mSlotScopes.rend(); ++it) {
-        auto found = it->find(stmt->slotName);
-        if (found != it->end()) { knownSlot = &found->second; break; }
-    }
-    auto matchesContract = [](const FragmentDecl* candidate, const ControlContextAccess::SlotInfo* slot) {
-        return !slot || (candidate->kind == slot->acceptedKind &&
-                         candidate->cardinality == slot->acceptedCardinality);
-    };
-    if (!matchesContract(fragment, knownSlot))
-        mContext.error("fragment '" + fragment->name + "' does not match slot '" + stmt->slotName +
-              "' interceptor/context and once/many contract", stmt->line, stmt->col);
-    if (stmt->isDynamic) {
-        ControlContextAccess::SlotInfo* slot = knownSlot;
-        if (!slot) {
-            mContext.error("dynamic apply requires a previously declared dynamic slot '" + stmt->slotName + "'",
-                  stmt->line, stmt->col);
-            return;
-        }
-        if (!slot->isDynamic) {
-            mContext.error("slot '" + stmt->slotName + "' is static; declare it with `dynamic slot` before dynamic apply",
-                  stmt->line, stmt->col);
-            return;
-        }
-        auto requireRuntimeCandidate = [this, stmt](const FragmentDecl* candidate) {
-            if (candidate && candidate->retention == RetentionKind::CompileTime)
-                mContext.error("dynamic apply candidate '" + candidate->name +
-                      "' must be declared `runtime` or `dynamic`",
-                      stmt->line, stmt->col);
-        };
-        requireRuntimeCandidate(fragment);
-        std::vector<FragmentDecl*> candidates{fragment};
-        for (const auto& name : stmt->alternativeFragmentNames) {
-            auto* candidate = selectFragment(name, stmt);
-            if (!candidate) continue;
-            requireRuntimeCandidate(candidate);
-            if (!matchesContract(candidate, slot))
-                mContext.error("dynamic candidate '" + candidate->name + "' does not match slot '" +
-                      stmt->slotName + "' contract", stmt->line, stmt->col);
-            candidates.push_back(candidate);
-            stmt->resolvedAlternativeFragmentNames.push_back(
-                candidate->generatedSymbolName.empty() ? candidate->name : candidate->generatedSymbolName);
-        }
-        if (stmt->body) {
-            enterSlotScope();
-            mContext.mApplyScopes.back()[stmt->slotName] = fragment;
-            mContext.mDynamicApplyScopes.back()[stmt->slotName] = std::move(candidates);
-            mContext.analyzeBlock(stmt->body.get(), expectedReturn);
-            exitSlotScope();
-        } else {
-            mContext.mApplyScopes.back()[stmt->slotName] = fragment;
-            mContext.mDynamicApplyScopes.back()[stmt->slotName] = std::move(candidates);
-        }
+    stmt->slotName = fragment->targetSlotName;
+    if (stmt->slotName.empty()) {
+        mContext.error("fragment '" + fragment->name +
+                       "' has no resolved nominal slot target",
+                       stmt->line, stmt->col);
         return;
     }
-    if (stmt->body) {
-        enterSlotScope();
-        mContext.mApplyScopes.back()[stmt->slotName] = fragment;
-        mContext.analyzeBlock(stmt->body.get(), expectedReturn);
-        exitSlotScope();
-    } else {
-        mContext.mApplyScopes.back()[stmt->slotName] = fragment;
+    if (!stmt->body) {
+        mContext.error("lexical `apply` requires a body", stmt->line, stmt->col);
+        return;
     }
+    enterSlotScope();
+    const std::string slotKey = mContext.sourceDeclarationKey(
+        fragment->targetSlotName);
+    mContext.mApplyScopes.back()[slotKey] = fragment;
+    mContext.analyzeBlock(stmt->body.get(), expectedReturn);
+    exitSlotScope();
 }
 
 void ControlAnalyzer::analyzeFragmentForSlot(
     FragmentDecl* fragment, const std::string& slotName, const TypeVec& parameterTypes,
     const std::vector<luna::ownership::Contract>& parameterContracts,
     const std::unordered_map<std::string, SymbolInfo>& captures) {
-    if (fragment->params.size() > parameterTypes.size()) {
-        mContext.error("fragment '" + fragment->name + "' requires " +
-              std::to_string(fragment->params.size()) + " parameters, but slot '" + slotName +
-              " provides " + std::to_string(parameterTypes.size()));
+    if (fragment->params.size() != parameterTypes.size()) {
+        mContext.error("fragment '" + fragment->name + "' must bind all " +
+              std::to_string(parameterTypes.size()) + " parameters of slot '" +
+              slotName + "'");
         return;
     }
 
@@ -446,21 +333,6 @@ void ControlAnalyzer::analyzeFragmentForSlot(
             }
         }
     }
-    // A fragment may leave parameter types implicit until it is bound to a
-    // typed slot. Rebuild its own declaration shape from the now-resolved
-    // prefix rather than copying the entire slot interface into the fragment.
-    TypeVec fragmentParameterTypes;
-    std::vector<luna::ownership::Contract> fragmentParameterContracts;
-    for (const auto& parameter : fragment->params) {
-        fragmentParameterTypes.push_back(parameter.inferredType);
-        fragmentParameterContracts.push_back(
-            {parameter.relation, parameter.usage});
-    }
-    fragment->structuralType = Type::makeFragment(
-        std::move(fragmentParameterTypes), TyUnit, isMany,
-        fragment->kind == FragmentKind::Interceptor
-            ? ContinuationKind::Interceptor : ContinuationKind::Context,
-        std::move(fragmentParameterContracts));
     if (isMany) {
         for (const auto& [name, info] : captures) {
             if (info.isLinear) {
@@ -477,13 +349,11 @@ void ControlAnalyzer::analyzeFragmentForSlot(
 void ControlAnalyzer::enterSlotScope() {
     mContext.mSlotScopes.emplace_back();
     mContext.mApplyScopes.emplace_back();
-    mContext.mDynamicApplyScopes.emplace_back();
 }
 
 void ControlAnalyzer::exitSlotScope() {
     if (mContext.mSlotScopes.size() > 1) mContext.mSlotScopes.pop_back();
     if (mContext.mApplyScopes.size() > 1) mContext.mApplyScopes.pop_back();
-    if (mContext.mDynamicApplyScopes.size() > 1) mContext.mDynamicApplyScopes.pop_back();
 }
 
 FragmentDecl* ControlAnalyzer::selectFragment(

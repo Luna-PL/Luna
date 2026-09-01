@@ -15,7 +15,6 @@ namespace luna::selector {
 enum class Retention : uint8_t {
     CompileTime,
     Runtime,
-    Dynamic,
 };
 
 using MetadataValue = std::variant<int64_t, double, bool, std::string>;
@@ -90,10 +89,10 @@ struct TerminalResult {
 
 class SymbolCatalog;
 
-// A typed finite set produced by a catalog query. It intentionally exposes no
-// `.all()` terminal until TBD-Q004 freezes ordering. `legacyTraversal()` only
-// preserves the existing source selector evaluator and is not a public query
-// ordering promise.
+// A typed finite set produced by a catalog query. Public `.all()` order is
+// canonical SymbolId byte order. `.all::<M>()` uses the schema field order as
+// a lexicographic key and rejects any input that would not define a total,
+// unique order.
 class SymbolSet {
 public:
     bool valid() const { return mValid; }
@@ -103,7 +102,7 @@ public:
         const luna::identity::SymbolId& symbolId) const;
     const CatalogSymbol* findDeclaration(
         const std::string& declarationId) const;
-    const std::vector<const CatalogSymbol*>& legacyTraversal() const {
+    const std::vector<const CatalogSymbol*>& orderedSymbols() const {
         return mSymbols;
     }
 
@@ -112,6 +111,8 @@ public:
     SymbolSet filterMetadata(
         const std::string& schemaId,
         const std::vector<MetadataValue>& values) const;
+    SymbolSet all() const;
+    SymbolSet allByMetadata(const std::string& schemaId) const;
     TerminalResult one() const;
     TerminalResult optional() const;
 
@@ -189,12 +190,6 @@ struct Result {
     bool success() const { return kind == ResultKind::Unique && selected.has_value(); }
 };
 
-struct DynamicPlan {
-    std::string familyId;
-    std::vector<std::string> candidateIds;
-    std::string selectorDeclarationId;
-};
-
 class Engine {
 public:
     // The ordinary selector function returns declaration identities. Engine
@@ -203,10 +198,6 @@ public:
     Result validate(const DeclarationView& view,
                     const std::vector<std::string>& returnedIds) const;
 
-    std::optional<DynamicPlan> planDynamic(
-        const DeclarationView& view,
-        const std::string& selectorDeclarationId,
-        std::string& error) const;
 };
 
 } // namespace luna::selector

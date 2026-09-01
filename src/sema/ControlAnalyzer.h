@@ -7,6 +7,8 @@ public:
     explicit ControlAnalyzer(ControlContextAccess context)
         : mContext(std::move(context)) {}
 
+    void declareSlot(SlotDecl* decl) override;
+    void finalizeSlot(SlotDecl* decl) override;
     void analyzeSlotDecl(SlotDeclStmt* stmt) override;
     void analyzeSlotInvoke(
         SlotInvokeStmt* stmt, TypePtr expectedReturn) override;

@@ -57,11 +57,13 @@ C++ analogy: like "scoped friend + reference aggregation": each component gets a
 
 ## Key Structs, Classes, and Enums
 
-- `class BodyContextAccess final`: the body-analysis component view.
+- `class BodyContextAccess final`: the body-analysis component view, including qualified declaration lookup/type resolution used to infer non-function Symbol Catalog query kinds.
   - Fields: `mConcepts`, `mConstexprFunctions`, `mConstraints`, `mCurrentFragmentDecl`, `mCurrentFunctionReturnUsage`/`mCurrentFunctionReturnsLinear`, `mCurrentModulePath`/`mCurrentPackageId`, `mCurrentReturnType`, `mDeclaredTypes`, `mFromConversions`, `mFromIteratorImplementations`, `mFunctionFamilies`, `mGeneratedInstances`, `mImpls`, `mInFunction`/`mInKernel`, `mInferenceRoots`, `mIteratorStateCounter`, `mMetadataSchemas`, `mProgram`, `mSawReturn`, `mSymTable`, `mTraitMethods`, `mTraits`.
   - Methods: `analyzeApply`/`analyzeSlotDecl`/`analyzeSlotInvoke`, reflection invocations, `constrain`/`declareFunction`/`declaredType`/const scoping, `error`, const/constraint/selector evaluation, `instantiateNominal`/`lookupSymbol`/`monomorphize`, reference recording, `requireBool`/`requireNumeric`/`requireInteger`, `resolveTypeAST`/`resolved`/`satisfiesTrait`/`setDeclarationContext`/`setDiagnosticLocation`/`sourceDeclarationKey`/`traitIdentity`/`typeIdentity`/`typeToAST`.
 - `class DeclarationContextAccess final`: the declaration-collection component view (fields include `mFragments`, `mTraitOwners`, `mTraitTypeParams`, etc.; methods include `analyzeExpr`/`checkUnresolved`/`resolveTraitRef`, etc.).
-- `class ControlContextAccess final`: the control-flow component view (`mApplyScopes`, `mCurrentFragmentSlot`, `mDynamicApplyScopes`, `mSlotScopes`, etc.; `analyzeBlock`/`analyzeExpr`, etc.).
+- `class ControlContextAccess final`: the static control-flow component view
+  (`mApplyScopes`, `mCurrentFragmentSlot`, `mSlotScopes`, etc.;
+  `analyzeBlock`/`analyzeExpr`, etc.).
 - `class TypeContextAccess final`: the type component view (`mConstraints`, `mInstantiator`, `mInstantiatedFunctions`, `mQualifiedDeclarations`, diagnostic fields, etc.; `lookupDeclaredType`, etc.).
 - `class CompileTimeContextAccess final`: the compile-time evaluation component view (`mActiveSelectorView`, `mConstEvaluationDepth`, `mConstScopes`, etc.; `analyzeExpr`/`resolveTypeAST`, etc.).
 - Each access is a `friend class SemanticContext`, has a private constructor, and is created by `SemanticContext`'s `xxxAccess()` factories.

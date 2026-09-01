@@ -45,6 +45,7 @@ BodyContextAccess::BodyContextAccess(SemanticContext& context)
       mIteratorStateCounter(context.mIteratorStateCounter),
       mMetadataSchemas(context.mMetadataSchemas),
       mProgram(context.mProgram),
+      mQualifiedDeclarations(context.mQualifiedDeclarations),
       mSawReturn(context.mSawReturn),
       mSymbolCatalog(context.mSymbolCatalog),
       mSymTable(context.mSymTable),
@@ -64,6 +65,10 @@ TypePtr BodyContextAccess::analyzeDeclarationReflectionCall(
 TypePtr BodyContextAccess::analyzeReflectionCall(
     CallExpr* call, const std::string& name) {
     return mOwner.analyzeReflectionCall(call, name);
+}
+
+TypePtr BodyContextAccess::lookupDeclaredType(const std::string& name) {
+    return mOwner.lookupDeclaredType(name);
 }
 
 void BodyContextAccess::analyzeSlotDecl(SlotDeclStmt* stmt) {
@@ -244,6 +249,7 @@ DeclarationContextAccess::DeclarationContextAccess(SemanticContext& context)
       mImpls(context.mImpls),
       mMetadataSchemas(context.mMetadataSchemas),
       mProgram(context.mProgram),
+      mSlotScopes(context.mSlotScopes),
       mSymTable(context.mSymTable),
       mTraitOwners(context.mTraitOwners),
       mTraitTypeParams(context.mTraitTypeParams),
@@ -318,8 +324,8 @@ ControlContextAccess::ControlContextAccess(SemanticContext& context)
       mCurrentFragmentDecl(context.mCurrentFragmentDecl),
       mCurrentFragmentSlot(context.mCurrentFragmentSlot),
       mCurrentReturnType(context.mCurrentReturnType),
-      mDynamicApplyScopes(context.mDynamicApplyScopes),
       mFragments(context.mFragments),
+      mProgram(context.mProgram),
       mSlotScopes(context.mSlotScopes),
       mSymTable(context.mSymTable) {}
 

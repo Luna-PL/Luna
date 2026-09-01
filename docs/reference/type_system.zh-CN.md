@@ -40,8 +40,8 @@ Luna 对一个值至少回答四个不同问题：
 | 模式 | 典型来源 | 身份规则 |
 |---|---|---|
 | Builtin | `i32`、`bool`、`never` | 由语言内置种类和参数确定 |
-| Structural | 匿名 record、`Result`、函数 | 由完整的规范结构形状确定 |
-| Nominal | 具名 `struct`/`enum`、trait | 由 package/module 声明身份确定 |
+| Structural | 匿名 record、函数 | 由完整的规范结构形状确定 |
+| Nominal | 具名 `struct`/`enum`、`Result`、trait | 由 package/module 声明身份确定 |
 | MetaSchema | `meta` schema | 始终具有 schema 声明身份 |
 | CompilerIntrinsic | 视图、type parameter、Iterator recipe | 由编译器契约确定，不是普通用户布局 |
 | Inference/Error | Sema 状态 | 不形成可发布类型身份 |
@@ -164,8 +164,10 @@ inline 形式是匿名前端谓词，没有声明身份，且在 MoonIR 之前�
 
 ### 5.4 Result
 
-`Result<T, E>` 恰好有两个可用于普通运行时值位置的载荷类型。它是结构 sum；其
-活动载荷、usage、匹配和清理规则见[错误模型契约](error_model.md)。Sema 对
+`Result<T, E>` 恰好有两个可用于普通运行时值位置的载荷类型。它具有
+`org.luna.core::result::Result` 规范名义声明身份，并由 `T` 与 `E` 参数化；表示仍是
+结构型两变体 sum。其活动载荷、usage、匹配和清理规则见
+[错误模型契约](error_model.md)。Sema 对
 Compiler/Meta 载荷的完整 well-formedness 负例矩阵仍是 A0 后的实现核对项。
 
 ### 5.5 callable

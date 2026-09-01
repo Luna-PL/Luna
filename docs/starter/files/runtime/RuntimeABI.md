@@ -111,7 +111,6 @@ Across the entire Luna runtime, this serves the role of a C++ "dependency inject
 - **Runtime.h** — Declares function signatures with the same struct types as in `RuntimeABI.h`, but `RuntimeABI.h` additionally declares all `rt_*` forwarding functions, while `Runtime.h` declares the internal implementation functions.
 - **Runtime.cpp** — Uses the types and constants defined in `RuntimeABI.h` and implements all `rt_*` functions.
 - **ApplicationHostServices.h** — Returns `LunaConsoleV1*` and `LunaFileSystemV1*`, whose type definitions originate from this file.
-- **FragmentPluginABI.h** — A separate fragment-plugin ABI that, together with this file, forms the complete runtime ABI contract.
 - This file is the foundational dependency of all other runtime files; any file that implements runtime behavior must include it.
 
 ## Further Reading
@@ -119,7 +118,6 @@ Across the entire Luna runtime, this serves the role of a C++ "dependency inject
 - Complete declarations of the C ABI entry points in `Runtime.h`
 - Default implementations of each type from this file in `Runtime.cpp`
 - Concrete platform adaptation of the file system and console in `ApplicationHostServices.cpp`
-- The fragment-plugin ABI specification in `FragmentPluginABI.h`
 
 
 ---

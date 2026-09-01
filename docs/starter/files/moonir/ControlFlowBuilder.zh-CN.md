@@ -94,7 +94,9 @@ namespace: moon
 
 ## 输入/状态
 
-构造器维护多张作用域栈：mBindings、mMaterializedIterators、mSlotDefaults、mLexicalDynamicApplies、mDynamicApplyScopes、mFragmentContexts，以及 mCaptureNames/mCaptureClosureType 等捕获上下文。mErrors 收集失败；graph 未 seal 时返空。
+构造器维护 `mBindings`、`mMaterializedIterators`、`mSlotDefaults`、
+`mStaticApplyScopes` 与 `mFragmentContexts` 等作用域栈，以及捕获和隐藏清理
+上下文。`mErrors` 收集失败；graph 无法 seal 时返空。
 
 ## 与周边文件·阶段的关系
 

@@ -67,11 +67,11 @@ AOT 消费同一份已检查 MoonIR，并共享宿主优化级别与 runtime ABI
 精确类型规则见[类型系统参考](reference/type_system.md)；Runtime 边界见
 [Runtime ABI](runtime_abi.md)。
 
-## 静态、运行时与动态选择
+## 静态与运行时选择
 
-静态 selector 在编译期从类型正确的候选集合中选择声明。动态 slot 只允许编译器
-已经验证的有限候选或满足 Alpha plugin ABI 的外部 interceptor。当前系统不接受
-任意原生函数指针，也不把环境变量当作安全边界。
+静态 selector 在编译期从类型正确的候选集合中选择声明；SF006 Slot/Fragment composition
+同样是静态、名义的。Runtime-retained descriptor 仍是强类型 loader/tooling 数据；Luna 0.3
+不公开 dynamic slot/apply 源码形式，也不接受任意原生函数指针或把环境变量当作安全边界。
 
 Metadata 是声明附加数据和选择协议的扩展点；普通 metadata 不自动进入声明身份，
 只有显式 selector/discriminator 规则可以区分声明族成员。

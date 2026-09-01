@@ -179,6 +179,8 @@ struct Type {
         auto t = std::make_shared<Type>();
         t->kind = TypeKind::Result;
         t->name = "Result";
+        t->nominalId = luna::sysmeta::ResultTypeId;
+        t->identityMode = luna::types::IdentityMode::Nominal;
         t->typeArgs = {std::move(value), std::move(error)};
         return t;
     }
@@ -285,6 +287,15 @@ struct Type {
         t->domain = luna::types::TypeDomain::Compiler;
         t->identityMode = luna::types::IdentityMode::CompilerIntrinsic;
         t->inner = std::move(callable);
+        return t;
+    }
+    static TypePtr makeCompileTimeOption(TypePtr value = nullptr) {
+        auto t = makeEnum(
+            "Option",
+            {{"None", {}}, {"Some", {value}}},
+            luna::sysmeta::OptionTypeId);
+        t->domain = luna::types::TypeDomain::Compiler;
+        t->typeArgs = {std::move(value)};
         return t;
     }
     static TypePtr makeFunction(

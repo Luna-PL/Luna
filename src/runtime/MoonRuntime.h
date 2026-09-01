@@ -14,8 +14,8 @@ enum GenerationBindingFlag : uint32_t {
     GenerationBindingCallable = 1u << 0,
 };
 
-// Internal 0.3 generation state-machine input. Public source/API spelling is
-// deliberately deferred by TBD-EV004; this header is not an installed ABI.
+// Public 0.3 C++ host control-plane input. The module lease keeps the verified
+// code and descriptor storage alive for every pinned reference.
 struct GenerationStagingRequest {
     std::string moduleId;
     std::string contentDigest;
@@ -28,6 +28,16 @@ struct GenerationBinding {
     const void* implementation = nullptr;
     uint32_t declarationKind = 0;
     uint32_t flags = 0;
+};
+
+// A runtime typed-reference requirement. ContractId carries the canonical
+// callable/value contract while declarationKind and requiredFlags prevent a
+// loader adapter from changing the representation class under that identity.
+struct GenerationBindingRequirement {
+    std::string symbolId;
+    std::string contractId;
+    uint32_t declarationKind = 0;
+    uint32_t requiredFlags = 0;
 };
 
 using GenerationVerifier = std::function<bool(
@@ -103,6 +113,8 @@ public:
         const std::string& contentDigest() const;
         PinnedBinding find(const std::string& symbolId,
                            const std::string& contractId) const;
+        PinnedBinding find(
+            const GenerationBindingRequirement& requirement) const;
 
     private:
         friend class MoonRuntime;
@@ -123,6 +135,9 @@ public:
         std::string contractId_;
     };
 
+    // A host attestation that the process is at an application-defined point
+    // where one atomic generation publication is permitted. Tokens are
+    // single-use and belong to the runtime that created them.
     SafePoint safePoint() const { return SafePoint(this); }
 
     bool stage(const GenerationStagingRequest& request,
@@ -132,6 +147,11 @@ public:
                StagedGeneration& staged, std::string& error);
     bool activate(StagedGeneration& staged, SafePoint& safePoint,
                   std::string& error);
+    // Publishes the first generation for a module. Repeating the same content
+    // returns the already-pinned
+    // generation; different content is rejected and must use activate().
+    bool loadOnce(StagedGeneration& staged, PinnedGeneration& loaded,
+                  std::string& error);
     bool rollback(const std::string& moduleId, uint64_t generationId,
                   SafePoint& safePoint, std::string& error);
 
@@ -139,6 +159,9 @@ public:
     bool makeSwitchable(const std::string& moduleId,
                         const std::string& symbolId,
                         const std::string& contractId,
+                        SwitchableBinding& binding, std::string& error);
+    bool makeSwitchable(const std::string& moduleId,
+                        const GenerationBindingRequirement& requirement,
                         SwitchableBinding& binding, std::string& error);
     uint64_t activeGenerationId(const std::string& moduleId) const;
     size_t retainedGenerationCount(const std::string& moduleId) const;

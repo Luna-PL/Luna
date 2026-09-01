@@ -1,31 +1,35 @@
-interceptor audit {
+slot interceptor first();
+slot context second();
+slot context third();
+
+interceptor audit for first {
     print(10);
 }
 
-context around {
+context around for second {
     print(20);
     resume();
     print(30);
 }
 
-context reject {
+context reject for third {
     print(40);
     abort();
 }
 
 fn main() -> i32 {
-    apply first(audit) {
-        slot interceptor first {
+    apply audit {
+        first() {
             print(11);
         }
     }
-    apply second(around) {
-        slot context second {
+    apply around {
+        second() {
             print(21);
         }
     }
-    apply third(reject) {
-        slot context third {
+    apply reject {
+        third() {
             print(99);
         }
         print(41);

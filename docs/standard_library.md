@@ -1,13 +1,13 @@
 # Luna Standard-Library Design
 
 > Document category: 0.3-oriented design and implementation boundary
-> Current implementation baseline: Luna 0.2.1
+> Current implementation baseline: Luna 0.3.0
 > Status: Stage A and the Stage B host/allocator substrate are implemented; safe container
 > and I/O adapters remain proposed
 
 The standard library stays in the main repository until the package, resource,
-Moon-container, and Runtime ABI contracts are stable. The 0.2.1 sources remain a historical
-migration baseline; new owning-container APIs target the clean-break 0.3 compiler.
+Moon-container, and Runtime ABI contracts are stable. The 0.2.1 sources remain only in the
+historical migration baseline; new owning-container APIs target the clean-break 0.3 compiler.
 API sketches in this document describe semantics, not frozen 0.3 spelling.
 
 ## 1. Goals and non-goals
@@ -85,12 +85,31 @@ The library does not introduce exception unwinding or a global error registry.
 The 0.3 direction is:
 
 - `core::option::Option<T>` remains the canonical optional container;
-- `core::result::Result<T, E>` becomes the canonical declared Result identity;
+- `core::result::Result<T, E>` has the canonical nominal Result identity;
 - the compiler recognizes that exact Core Result identity for `?`, rather than every enum
   named `Result`;
 - `From<S> for T` remains one-hop, static, unique, and auditable;
 - `TryFrom<S>` and parsing traits return concrete error types;
 - libraries return the narrowest useful error and applications define aggregate enums.
+
+Core `Option<T>` now implements `is_some`, `is_none`, `unwrap`, `expect`, and
+`unwrap_or`. The three extraction functions explicitly consume the Option and
+therefore work for both Copy and affine payloads. `Some` transfers exactly one
+payload, an unselected affine fallback in `unwrap_or` is cleaned exactly once,
+and `None` preserves the panic boundary. This surface does not depend on mutable
+slices or any Slot/Fragment decision.
+
+Core `result` now provides ordinary source-defined consuming `unwrap`, `expect`,
+`unwrap_err`, `expect_err`, and `unwrap_or` functions. They work with Copy and affine
+payloads, transfer the selected payload once, and clean an unused fallback or consumed
+error payload exactly once. Result construction, matching, identity, and `?` remain the
+same compiler-supported contracts.
+
+The clean-break identity migration is implemented: compiler materialization of
+`Result<T, E>` uses `org.luna.core::result::Result`, and the compiler-known `From`
+contract uses `org.luna.core::convert::From`. Their current syntax and lowering remain
+compiler-supported; moving those surfaces to ordinary source declarations is separate
+library work.
 
 Core retains allocation-free value errors such as `BoundsError`, `UtfError`, `LayoutError`,
 and `AllocError`. Std adds host errors. The initial I/O error should retain machine facts
@@ -250,7 +269,7 @@ supply and retain its own table. Initial convenience APIs may include `print`, `
 `read_line`, but their implementation must route through these protocols rather than create
 a second console ABI.
 
-The 0.2.1 workspace now provides a deliberately temporary, explicitly typed `std::io`
+The 0.3 workspace provides a deliberately narrow, explicitly typed `std::io`
 surface so applications can use the host substrate before the 0.3 traits and owned String
 syntax are frozen:
 
@@ -328,7 +347,8 @@ the first usable IO/Vec/error surface.
 ### Stage A: contracts and package skeleton
 
 - implemented: central exact 0.3 Core identities for Result, From, Drop, Clone, iterators, and
-  resources; the compiler has switched once and retains no 0.2 language branch;
+  resources; compiler-materialized Result and From have switched once and retain no 0.2
+  identity branch;
 - implemented: `org.luna.sys` and `org.luna.alloc` dependency skeletons;
 - implemented: append-only console-input and filesystem Runtime ABI capability contracts,
   including compatibility with previously published v1 prefixes;
@@ -345,7 +365,7 @@ now owns raw `console`, `fs`, and `alloc` forwarding wrappers, so Luna library c
 decode C service tables. The safe Luna APIs below remain pending the explicit 0.3 language
 surface.
 
-- implemented as a temporary 0.2.1 adapter: explicitly typed stdout/stderr text and i32
+- implemented as a narrow 0.3 adapter: explicitly typed stdout/stderr text and i32
   writes, flush, raw byte I/O, lossy line input, and fallback-based i32 parsing;
 - implemented: ordinary nominal `Rc<T>`/`Arc<T>`, explicit `Clone`, recursive Drop callbacks,
   and Runtime ABI v1 retain/release;

@@ -2,6 +2,138 @@
 
 ## 0.3.0 — Development
 
+- Added the ordinary source-defined `core::result` extraction layer:
+  consuming `unwrap`, `expect`, `unwrap_err`, `expect_err`, and `unwrap_or`
+  preserve the canonical compiler-materialized Result identity while serving
+  Copy and affine payloads. JIT/AOT tests cover exact-once selected, fallback,
+  and error cleanup plus all four panic boundaries.
+
+- Switched compiler-known `Result<T, E>` and `From<S>` to their canonical
+  `org.luna.core` 0.3 identities with no legacy identity branch. Result keeps
+  the existing inline ADT shape and ABI while gaining nominal type identity.
+
+- Expanded the source-defined Core `Option<T>` surface with consuming
+  `unwrap`, `expect`, and `unwrap_or`. Copy and affine payloads share the same
+  API; `Some` transfers exactly one payload, an unused affine fallback is
+  cleaned exactly once, and `None` preserves the panic boundary. Canonical CFG
+  construction now terminates every `never` expression statement with
+  `Unreachable`, closing the fall-through bug exposed by generic Option
+  extractors. Dedicated JIT/AOT tests cover value results and resource cleanup.
+
+- Hardened the final ecosystem/release path. Root packaging now blocks on
+  immutable toolchain and Lunax release metadata, checksums, source-commit
+  evidence, and GitHub artifact attestations through the same fail-closed
+  verifier used by the independent evidence workflow. Benchmark runners stage
+  sources as temporary Luna 0.3 application packages; the basic, 9-/20-case
+  CPU, analyzer, and simulator paths execute successfully, and a default AOT
+  package smoke test guards against regression. The 0.2.0 tooling candidate
+  also adds compiler-owned VS Code check/build/run tasks and a real Extension
+  Host activation/format/task/restart gate.
+
+- Completed priority item 16. The final Dynamic source entry point,
+  `dynamic select` and Dynamic declaration/metadata retention now fail with
+  migration diagnostics; compile-time `select` remains static, while runtime
+  replacement uses typed EV004 host bindings. The showcase and cost boundary
+  now prove that runtime-retained descriptor rows do not require or emit the
+  legacy exact-match operation. The external fragment-plugin/dynamic-apply
+  public header, Runtime/JIT ABI, MoonIR capability and CFG construction path,
+  install surface, and positive plugin tests have also been deleted. Container
+  feature bit 2 is retired and rejected; frozen 0.2 programs remain only in
+  migration and negative-test corpora.
+
+- Froze EV004 and completed priority item 15. The installed C++17
+  `<luna/runtime/Evolution.h>` host API now exposes the verified stateless
+  generation loop: staging callbacks, optional initializer, load-once,
+  generation-retaining pinned references, explicit switchable snapshots,
+  one-use same-runtime safe points, atomic activation, and rollback. Luna 0.3
+  adds no source evolution construct or standalone activation CLI; state
+  migration, automatic discovery, cross-process policy, and code reclamation
+  remain deferred. The C++ control plane is separate from Runtime ABI v1's C
+  binary-compatibility contract.
+
+- Implemented the frozen static SF006 slice. Slots are nominal module-level declarations;
+  interceptors/contexts explicitly target a slot, invocation and apply require
+  lexical bodies, and apply derives its target from the fragment. Unit-result
+  single-shot return/abort/resume behavior is now fixed, while local slots,
+  blockless apply, `context many`, and dynamic slot/apply syntax fail with
+  migration diagnostics. Canonical MoonIR, the Symbol Catalog, package exports,
+  tooling, and Runtime/Native descriptor ABI now carry Slot declaration kind 8
+  plus strong Fragment-to-Slot identity. Runtime references, same-slot
+  nesting/re-entry, and descriptor-retention promises remain under
+  `TBD-SF007` through `TBD-SF010`.
+
+- Fixed cleanup on an enclosing-function `return` or `?` from a context
+  continuation. CFG construction now keeps fragment locals lexically hidden
+  from the continuation while retaining a cleanup-only LocalId mapping, so
+  live context resources are dropped exactly once before the outer exit.
+  Regression oracles also cover interceptor-local cleanup before fragment
+  return and the skipped continuation/post-resume paths.
+
+- Completed priority item 14's common Runtime descriptor boundary. Explicitly
+  retained declarations now emit an installed, C-compatible v1 registry ABI
+  with stable SymbolId, ContractId, TypeId, declaration kind, retention,
+  callable flags, typed metadata, linkage, and optional entry. Registries are
+  strictly SymbolId ordered and validated once before exact typed lookup. The
+  real Moon loader retrieves the registry from retained ORC code and
+  cross-checks every row, metadata value, and callable classification against
+  the independently verified Container before publication. Private callable
+  entries remain registry-only rather than exposing raw linkage. Static-only programs
+  still emit no registry or descriptor types.
+
+- Added the internal Moon/Native load-once loop for priority item 14. Verified
+  Moon Containers and trusted Native libraries now publish one pinned,
+  lease-backed generation directly; a repeated request for the same
+  Package ID and content digest reuses it before JIT/dynamic loading, while
+  different content fails closed and remains an explicit evolution action.
+  Runtime typed-reference requirements bind SymbolId, ContractId, declaration
+  kind, and required flags. Switchable references retain that full requirement
+  across activation, preventing a candidate from changing callable/kind class
+  under an otherwise matching identity. Real Moon and Native artifacts cover
+  exact lookup, load deduplication, mismatch rejection, and lease retention.
+
+- Completed the compile-time Symbol Query surface for source-name-bearing
+  non-function declarations. `symbols(Name)` now infers Slot, Fragment, Struct,
+  Enum, Trait, and MetadataSchema rows and reuses the existing metadata,
+  cardinality, ordering, reflection, static-iteration, non-escape, and MoonIR
+  erasure rules. Unspecialized generic nominals fail closed; internal
+  Implementation rows remain catalog-only.
+
+- Fixed canonical CFG cleanup for local `string`/`cstr` literals. Value cleanup
+  now matches the structured and recursive cleanup paths and never passes an
+  immutable LLVM global string to `rt_dealloc`; true allocation cleanup remains
+  active. A minimal regression runs under JIT, AOT, and ASan/UBSan.
+
+- Froze Q004 and implemented `symbol_set<T>.all()`. Canonical iteration is
+  ascending bytewise SymbolId order; `.all::<M>()` provides explicit
+  lexicographic ordering by integer, boolean, and string metadata fields while
+  rejecting missing or repeated attachments, floating-point keys, and
+  duplicate tuples. The compiler-domain `declaration_view<T>` supports local
+  rebinding, compile-time count/index operations, empty views, and statically
+  expanded `for` loops. Views and query-derived references cannot cross
+  ordinary call/return boundaries and erase before MoonIR.
+
+- Froze Q006 and implemented the public compile-time
+  `symbol_set<T>.optional()` terminal as a compiler-domain Core
+  `Option<declaration_ref<T>>`. Exhaustive `None`/`Some` matching keeps both
+  arms type-checked while lowering only the statically selected arm; zero and
+  one matches are represented without runtime state, ambiguity remains an
+  error, and function call/return boundaries reject escape. Query-only Option
+  state erases before MoonIR, whose verifier independently rejects a forged
+  leaked specialization. Local rebindings and nested matches preserve the
+  static selection, while a `Some` payload cannot escape through an ordinary
+  call or return. JIT O0/O3 and formal-package AOT tests cover Some, None,
+  ambiguity, inactive-arm checking, and zero residual query IR.
+
+- Fixed stable identity for heterogeneous overloads that carry identical
+  metadata. Early linkage assignment now combines the metadata discriminator
+  with a length-delimited, alpha-normalized callable source signature, giving
+  distinct signatures distinct deterministic linkages. DeclarationId/SymbolId
+  derivation now uses that source identity directly instead of executable
+  linkage, so adding or removing another overload cannot rewrite an existing
+  declaration's identity. A two-program MoonIR oracle compares DeclarationId,
+  SymbolId, and ContractId before and after adding a sibling overload. Exact
+  metadata/signature duplicates remain rejected.
+
 - Hardened the default host allocator across current toolchains. Ordinary
   alignments keep the `malloc`/`realloc`/`free` family, while over-aligned
   storage now uses `posix_memalign` on POSIX and the aligned-allocation family
@@ -9,8 +141,8 @@
   preservation, and over-alignment without installing a custom allocator.
   GitHub workflows now use the Node.js 24-based `actions/checkout@v6`.
 
-- Added the internal EV001–EV003 MoonRuntime generation state machine without
-  choosing the public spelling deferred by `TBD-EV004`. A candidate now stages
+- Added the first internal EV001–EV003 MoonRuntime generation state-machine
+  slice, later exposed by EV004. A candidate stages
   verification, binding resolution, and initialization before a one-use safe
   point can atomically publish it. Pinned references retain old generations;
   switchable bindings follow only compatible SymbolId/ContractId activations;

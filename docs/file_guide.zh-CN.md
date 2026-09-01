@@ -53,7 +53,6 @@ obligation，不能重新推导所有权。
 | `docs/reference/` | Alpha 规范、语义基线、类型与错误模型 | 教程、路线图、临时状态 |
 | `examples/` | 独立、可阅读的语言用例 | 唯一回归证据、测试断言 |
 | `examples/full_showcase/` | 完整 workspace/package 集成示例 | 编译器内部测试逻辑 |
-| `examples/slot_plugins/` | slot/fragment 插件示例 | Runtime ABI 的权威定义 |
 | `src/` | 编译器和嵌入式 Runtime 实现 | 测试数据、教程 |
 | `src/core/` | 无前后端依赖的类型、身份、布局、所有权和 sysmeta 模型 | AST、符号表、LLVM |
 | `src/diagnostics/` | 跨阶段诊断格式 | 阶段专属语义判断 |
@@ -113,12 +112,12 @@ obligation，不能重新推导所有权。
 | `src/driver/CompilerPipeline.cpp` | 顺序执行 frontend、MoonIR 与 codegen 阶段 |
 | `src/driver/AotLinker.h` | native AOT 链接请求接口 |
 | `src/driver/AotLinker.cpp` | 无 shell 拼接地启动外部 linker |
-| `src/driver/MoonGeneration.h` | 已验证 Moon Container 到 retained-JIT generation 的内部适配接口 |
-| `src/driver/MoonGeneration.cpp` | host target 验证、content identity、ORC function entry、descriptor 与 decoded-module/JIT lease 适配 |
+| `src/driver/MoonGeneration.h` | 已验证 Moon Container 到 retained-JIT generation 的 staging/load-once 内部适配接口 |
+| `src/driver/MoonGeneration.cpp` | host target 验证、content identity 预检、load-once 去重、ORC function entry、descriptor 与 decoded-module/JIT lease 适配 |
 | `src/driver/NativeArtifact.h` | Native proof 构造/封印、显式 trust 验证与 verified loader 接口 |
 | `src/driver/NativeArtifact.cpp` | 规范摘要、proof/trust、不可变 staging 与 typed registry 验证 |
-| `src/driver/NativeGeneration.h` | verified Native library 到 executable generation 的内部适配接口 |
-| `src/driver/NativeGeneration.cpp` | proof content identity、registry binding、entry 与 library lease 适配 |
+| `src/driver/NativeGeneration.h` | verified Native library 到 executable generation 的 staging/load-once 内部适配接口 |
+| `src/driver/NativeGeneration.cpp` | proof content identity 预检、load-once 去重、registry binding、entry 与 library lease 适配 |
 | `src/driver/Repl.h` | 可注入流的 Alpha REPL 接口 |
 | `src/driver/Repl.cpp` | REPL 命令契约、声明累计和临时源码包装 |
 | `src/package/Package.h` | package/module/workspace 装载结果和 loader 接口 |
@@ -126,12 +125,13 @@ obligation，不能重新推导所有权。
 | `src/package/PackageManager.h` | package 管理组件的公开边界 |
 | `src/package/PackageManager.cpp` | package 管理组件实现；不得虚构远程解析 |
 
-### 5.1.1 内部 MoonRuntime evolution
+### 5.1.1 MoonRuntime evolution
 
 | 文件 | 主要职责 |
 |---|---|
-| `src/runtime/MoonRuntime.h` | EV001–EV003 generation identity、lease、staging 与 reference 内部接口；不冻结 `TBD-EV004` 公开 API |
-| `src/runtime/MoonRuntime.cpp` | verify/resolve/initialize、一次性安全点、原子 activation、pinned/switchable 与 rollback 状态机 |
+| `src/runtime/Evolution.h` | 已安装的 EV004 C++17 宿主控制面入口与 API version |
+| `src/runtime/MoonRuntime.h` | EV001–EV004 generation identity、lease、typed requirement、load-once、staging、pinned/switchable reference、activation 与 rollback 公开 C++ 源级接口 |
+| `src/runtime/MoonRuntime.cpp` | verify/resolve/initialize、首次发布去重、一次性安全点、原子 activation、typed pinned/switchable 与 rollback 状态机 |
 
 ### 5.2 core、lexer、parser 与 diagnostics
 
@@ -237,7 +237,7 @@ obligation，不能重新推导所有权。
 | `src/codegen/CodeGeneratorIterator.cpp` | iterator recipe、pipeline、terminal lowering |
 | `src/codegen/CodeGeneratorRangeAnalysis.h` | 安全索引范围证明接口 |
 | `src/codegen/CodeGeneratorRangeAnalysis.cpp` | statement/expression 共用范围分析 |
-| `src/codegen/CodeGeneratorRuntimeDescriptors.cpp` | runtime declaration/metadata descriptor emission |
+| `src/codegen/CodeGeneratorRuntimeDescriptors.cpp` | 按 SymbolId 排序的 Runtime descriptor ABI v1 declaration/metadata/registry emission |
 | `src/codegen/CGHelpers.h` | 无阶段所有权的 LLVM 小型辅助接口 |
 | `src/codegen/CGHelpers.cpp` | codegen 辅助实现；不得持有 module 编排状态 |
 
@@ -249,12 +249,14 @@ obligation，不能重新推导所有权。
 | 文件 | 主要职责 |
 |---|---|
 | `src/runtime/RuntimeABI.h` | versioned C-compatible Runtime ABI v1 |
-| `src/runtime/FragmentPluginABI.h` | versioned external fragment plugin ABI |
+| `src/runtime/RuntimeDescriptorABI.h` | 已安装的 versioned C-compatible Runtime descriptor/metadata/registry ABI v1 |
+| `src/runtime/RuntimeDescriptor.h` | lease-owned registry 一次验证与精确 typed lookup 内部接口 |
+| `src/runtime/RuntimeDescriptor.cpp` | descriptor 有界字段、顺序、metadata 与 callable-kind 验证 |
 | `src/runtime/Runtime.h` | 编译器内嵌 Runtime 的 C++ 内部接口 |
-| `src/runtime/Runtime.cpp` | allocator/console/error/GPU/plugin Runtime 实现 |
+| `src/runtime/Runtime.cpp` | allocator/console/error/GPU Runtime 实现 |
 
 ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容器或 LLVM 类型不得泄漏
-到两个公开 C ABI 头中。
+到这些公开 C ABI 头中。
 
 ### 5.7 tooling
 
@@ -300,6 +302,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `stdlib/core/src/prelude.luna` | 核心预导入声明 |
 | `stdlib/core/src/error.luna` | 核心错误协议 |
 | `stdlib/core/src/option.luna` | 核心 Option ADT |
+| `stdlib/core/src/result.luna` | 消费型 Core Result 取值 helper |
 | `stdlib/core/src/iter.luna` | 核心 Iterator/IntoIterator 协议 |
 | `stdlib/std/luna.package` | `org.luna.std` manifest |
 | `stdlib/std/src/io.luna` | 标准 I/O 表面 |
@@ -320,6 +323,8 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `docs/migration_0.2_to_0.3.zh-CN.md` | 0.2 至 0.3 迁移记录的中文对应版本 |
 | `docs/alpha_release.md` | 0.2.1 支持范围、限制和发布门 |
 | `docs/alpha_release.zh-CN.md` | Alpha 发布说明的中文对应版本 |
+| `docs/evolution.md` | EV004 C++17 宿主进化 API、对象生命周期与失败边界 |
+| `docs/evolution.zh-CN.md` | EV004 宿主进化 API 的中文对应版本 |
 | `docs/features.md` | 英文已实现功能导航 |
 | `docs/features.zh-CN.md` | 中文已实现功能导航 |
 | `docs/getting_started.en.md` | 英文构建/安装/首次运行教程 |
@@ -351,8 +356,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 
 `examples/*.luna` 每个文件只演示其文件名对应的单一语言主题；带 `_invalid` 的文件
 演示诊断。`examples/full_showcase/` 是唯一允许组合大部分 Alpha 表面的完整示例，
-其 `foundation` 是库 package，`app` 是消费者 package。`examples/slot_plugins/`
-只演示插件使用。
+其 `foundation` 是库 package，`app` 是消费者 package。
 
 `benchmarks/luna_cpu_*.luna` 分别提供命名操作的 Luna CPU 工作负载；
 `cpp23_cpu_suite.cpp` 是对照实现，`cpp23_allocation_support.cpp` 通过非 LTO
@@ -367,9 +371,8 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/*.cmake` | 启动编译器/产物、检查退出状态、诊断、IR、ABI 或输出 |
 | `tests/runtime_abi_c_compile.c` | 证明公开 Runtime ABI 头可由 C 编译 |
 | `tests/runtime_abi_test.cpp` | Runtime ABI v1 行为与兼容性 |
+| `tests/runtime_descriptor_test.cpp` | Runtime descriptor ABI v1 验证、精确 typed lookup 与 fail-closed 边界 |
 | `tests/runtime_gpu_error_test.cpp` | GPU/runtime 错误快照行为 |
-| `tests/fragment_plugin_fixture.cpp` | 测试用外部插件共享库 |
-| `tests/fragment_plugin_test.cpp` | 插件 ABI 装载/调用边界 |
 | `tests/analysis_protocol.cmake` | `luna.analysis` v1 JSONL envelope、声明记录与 byte span 回归 |
 | `tests/analysis_snapshot_test.cpp` | 内存/路径分析、部分失败状态与 frontend 生命周期回归 |
 | `tests/source_manager_test.cpp` | 内存文档版本、Unicode 和 CRLF 回归 |
@@ -417,6 +420,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `benchmarks/luna_cpu_nested.luna`
 - `benchmarks/luna_cpu_reduction.luna`
 - `benchmarks/luna_gpu_vector.luna`
+- `benchmarks/package_source.sh`
 - `benchmarks/run_basic_benchmark.sh`
 - `benchmarks/run_cpu_comparison.sh`
 - `benchmarks/run_rocm_cpp23_comparison.sh`
@@ -433,6 +437,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `docs/compile_time.zh-CN.md`
 - `docs/decisions.md`
 - `docs/decisions.zh-CN.md`
+- `docs/evolution.md`
+- `docs/evolution.zh-CN.md`
 - `docs/features.md`
 - `docs/features.zh-CN.md`
 - `docs/file_guide.md`
@@ -484,7 +490,6 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `examples/basic.luna`
 - `examples/closure.luna`
 - `examples/compile_time.luna`
-- `examples/dynamic_select.luna`
 - `examples/ffi.luna`
 - `examples/fragment_multishot_free_invalid.luna`
 - `examples/fragment_multishot_invalid.luna`
@@ -515,9 +520,6 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `examples/minimal.luna`
 - `examples/operators.luna`
 - `examples/print.luna`
-- `examples/slot_plugins/README.md`
-- `examples/slot_plugins/README.zh-CN.md`
-- `examples/slot_plugins/loop_plugins.luna`
 - `examples/test.luna`
 - `examples/test2.luna`
 - `examples/trait_versioned_nominal.luna`
@@ -601,10 +603,13 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/parser/AST.h`
 - `src/parser/Parser.cpp`
 - `src/parser/Parser.h`
-- `src/runtime/FragmentPluginABI.h`
+- `src/runtime/Evolution.h`
 - `src/runtime/MoonRuntime.cpp`
 - `src/runtime/MoonRuntime.h`
 - `src/runtime/NativeArtifactABI.h`
+- `src/runtime/RuntimeDescriptor.cpp`
+- `src/runtime/RuntimeDescriptor.h`
+- `src/runtime/RuntimeDescriptorABI.h`
 - `src/runtime/Runtime.cpp`
 - `src/runtime/Runtime.h`
 - `src/runtime/RuntimeABI.h`
@@ -651,6 +656,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `stdlib/core/src/option.luna`
 - `stdlib/core/src/prelude.luna`
 - `stdlib/core/src/rc.luna`
+- `stdlib/core/src/result.luna`
 - `stdlib/core/src/resource.luna`
 - `stdlib/core/src/shared.luna`
 - `stdlib/core/src/shared_runtime.luna`
@@ -662,8 +668,11 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/analysis_protocol.cmake`
 - `tests/analysis_snapshot_test.cpp`
 - `tests/aot_package_fixture.cmake`
+- `tests/benchmark_package_smoke.cmake`
 - `tests/control_flow_aot.cmake`
 - `tests/core_surface.cmake`
+- `tests/core_option.cmake`
+- `tests/core_result.cmake`
 - `tests/symbol_catalog_test.cpp`
 - `tests/diagnostic_protocol.cmake`
 - `tests/external_fragment_dispatch.cmake`
@@ -690,10 +699,15 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/context_abort_preserves_outer_resource.luna`
 - `tests/fixtures/context_continuation_return_invalid.luna`
 - `tests/fixtures/context_continuation_return_valid.luna`
+- `tests/fixtures/context_continuation_try_cleanup_valid.luna`
 - `tests/fixtures/context_linear_guard.luna`
 - `tests/fixtures/context_missing_control_invalid.luna`
 - `tests/fixtures/context_partial_resume_invalid.luna`
 - `tests/fixtures/context_return_ends_fragment_valid.luna`
+- `tests/fixtures/core_option_app/luna.package`
+- `tests/fixtures/core_option_app/src/main.luna`
+- `tests/fixtures/core_result_app/luna.package`
+- `tests/fixtures/core_result_app/src/main.luna`
 - `tests/fixtures/core_surface_app/luna.package`
 - `tests/fixtures/core_surface_app/src/main.luna`
 - `tests/fixtures/drop_intrinsic.luna`
@@ -702,6 +716,9 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/dynamic_fragments.luna`
 - `tests/fixtures/dynamic_fragments_many.luna`
 - `tests/fixtures/dynamic_fragments_many_capture_invalid.luna`
+- `tests/fixtures/dynamic_select_0_2.luna`
+- `tests/fixtures/dynamic_select_removed_invalid.luna`
+- `tests/fixtures/runtime_retention_descriptor.luna`
 - `tests/fixtures/enum_match.luna`
 - `tests/fixtures/enum_match_arity_invalid.luna`
 - `tests/fixtures/enum_match_duplicate_invalid.luna`
@@ -716,12 +733,14 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/ffi_unsupported_abi_invalid.luna`
 - `tests/fixtures/ffi_unsupported_type_invalid.luna`
 - `tests/fixtures/fragment_contracts.luna`
+- `tests/fixtures/fragment_return_value_invalid.luna`
 - `tests/fixtures/generic_argument_count_invalid.luna`
 - `tests/fixtures/generic_body_cloning.luna`
 - `tests/fixtures/generic_instance_reuse.luna`
 - `tests/fixtures/heterogeneous_bulk_transfer.luna`
 - `tests/fixtures/heterogeneous_bulk_transfer_invalid.luna`
 - `tests/fixtures/interceptor_resume_invalid.luna`
+- `tests/fixtures/interceptor_return_cleanup_valid.luna`
 - `tests/fixtures/invalid_export.luna`
 - `tests/fixtures/inline_where_not_satisfied_invalid.luna`
 - `tests/fixtures/iterator_count_move_only_invalid.luna`
@@ -873,17 +892,39 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/slot_fragment_contract_mismatch_invalid.luna`
 - `tests/fixtures/slot_missing_contract_invalid.luna`
 - `tests/fixtures/static_declaration_reflection.luna`
+- `tests/fixtures/string_literal_local_cleanup.luna`
 - `tests/fixtures/structural_enum_equivalence.luna`
 - `tests/fixtures/structural_field_order_invalid.luna`
 - `tests/fixtures/structural_generic_instance_reuse.luna`
 - `tests/fixtures/structural_trait_coherence.luna`
 - `tests/fixtures/structural_type_equivalence.luna`
-- `tests/fixtures/symbol_query_all_blocked_invalid.luna`
+- `tests/fixtures/symbol_query_all_ordered.luna`
+- `tests/fixtures/symbol_query_all_empty.luna`
+- `tests/fixtures/symbol_query_all_duplicate_key_invalid.luna`
+- `tests/fixtures/symbol_query_all_missing_key_invalid.luna`
+- `tests/fixtures/symbol_query_all_float_key_invalid.luna`
+- `tests/fixtures/symbol_query_all_view_escape_invalid.luna`
+- `tests/fixtures/symbol_query_all_ref_escape_invalid.luna`
+- `tests/fixtures/symbol_query_all_view_return_escape_invalid.luna`
+- `tests/fixtures/symbol_query_all_ref_return_escape_invalid.luna`
+- `tests/fixtures/symbol_query_all_index_invalid.luna`
 - `tests/fixtures/symbol_query_ambiguous_invalid.luna`
 - `tests/fixtures/symbol_query_generic_invalid.luna`
 - `tests/fixtures/symbol_query_no_match_invalid.luna`
-- `tests/fixtures/symbol_query_optional_blocked_invalid.luna`
+- `tests/fixtures/symbol_query_non_function.luna`
+- `tests/fixtures/symbol_query_non_function_call_invalid.luna`
+- `tests/fixtures/symbol_query_non_function_generic_invalid.luna`
+- `tests/fixtures/symbol_query_optional_ambiguous_invalid.luna`
+- `tests/fixtures/symbol_query_optional_argument_escape_invalid.luna`
+- `tests/fixtures/symbol_query_optional_escape_invalid.luna`
+- `tests/fixtures/symbol_query_optional_none.luna`
+- `tests/fixtures/symbol_query_optional_payload_argument_escape_invalid.luna`
+- `tests/fixtures/symbol_query_optional_payload_return_escape_invalid.luna`
+- `tests/fixtures/symbol_query_optional_payload_trait_argument_escape_invalid.luna`
+- `tests/fixtures/symbol_query_optional_rebind_nested.luna`
+- `tests/fixtures/symbol_query_optional_some.luna`
 - `tests/fixtures/symbol_query_public.luna`
+- `tests/fixtures/symbol_query_same_metadata_overload.luna`
 - `tests/fixtures/symbol_query_signature_invalid.luna`
 - `tests/fixtures/type_domains_reflection.luna`
 - `tests/fixtures/type_relations.luna`
@@ -908,8 +949,6 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/native_artifact_oracle.py`
 - `tests/native_artifact_test.cpp`
 - `tests/moon_runtime_test.cpp`
-- `tests/fragment_plugin_fixture.cpp`
-- `tests/fragment_plugin_test.cpp`
 - `tests/full_showcase.cmake`
 - `tests/gpu_error_boundary_abi.cmake`
 - `tests/gpu_target_split.cmake`
@@ -934,6 +973,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/package_manifest_workspace.cmake`
 - `tests/package_module_model.cmake`
 - `tests/rc_arc_core.cmake`
+- `tests/release_evidence_test.js`
+- `tests/release_readiness.cmake`
 - `tests/repl_smoke.cmake`
 - `tests/resource_drop_aot.cmake`
 - `tests/result_error_aot.cmake`
@@ -943,11 +984,14 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/rocm_smoke.cmake`
 - `tests/runtime_abi_c_compile.c`
 - `tests/runtime_abi_test.cpp`
+- `tests/runtime_descriptor_test.cpp`
 - `tests/runtime_gpu_error_test.cpp`
 - `tests/semantic_regressions.cmake`
 - `tests/source_manager_test.cpp`
 - `tests/stable_core_parity.cmake`
 - `tests/structured_cps_abi.cmake`
 - `tools/benchmark_heterogeneous.sh`
+- `tools/verify_locked_component_release.sh`
+- `tools/verify_release_readiness.cmake`
 - `tools/verify_release_evidence.js`
 <!-- FILE_INVENTORY_END -->

@@ -1,6 +1,6 @@
 # src/runtime/Runtime.cpp
 
-Luna 运行时全部 C ABI 入口点的默认实现，涵盖宿主服务安装、内存管理（普通/RC/ARC）、控制台 I/O、GPU 后端（CUDA/ROCm）动态加载、片段插件加载、动态片段分派和错误快照。
+Luna Runtime C ABI 入口点的默认实现，涵盖宿主服务安装、内存管理（普通/RC/ARC）、console/file I/O、GPU 后端（CUDA/ROCm）动态加载和错误快照。
 
 ## 这个文件做什么
 
@@ -9,8 +9,6 @@ Luna 运行时全部 C ABI 入口点的默认实现，涵盖宿主服务安装�
 - 提供应用级宿主服务 `applicationHostServices`，含控制台输入和文件系统。
 - 通过 `std::atomic` 实现宿主服务的单次安装与三阶段生命周期（0=可配置，-1=安装中，1=已激活）。
 - 管理 GPU 运行时状态（`GpuRuntimeState`）：在命名空间匿名作用域内通过函数静态局部变量持有 CUDA Driver API 与 HIP API 的函数指针，仅在用户选择 `cuda`/ `rocm` 后端时动态加载（`dlopen`/ `LoadLibrary`）。
-- 管理片段插件状态（`FragmentPluginState`）：加载的共享库列表、错误码与错误消息。
-- 处理动态片段选择：从环境变量 `LUNA_FRAGMENT_<SLOT>` 读取名称。
 - 实现 GPU 性能分析（`LUNA_GPU_PROFILE=1`）：进程退出时通过 `std::atexit` 报告累计内核时间。
 
 ## 关键结构体·类·枚举
@@ -27,8 +25,6 @@ Luna 运行时全部 C ABI 入口点的默认实现，涵盖宿主服务安装�
 | `CudaEventRecord` | CUDA 启动/完成事件对 | — |
 | `HipPendingEvent` | HIP 启动/完成事件对 | — |
 | `GpuRuntimeState` | GPU 运行时全局状态：初始化标志、后端类型、CUDA/HIP 句柄、模块缓存、函数缓存、事件缓存、性能分析累计时间 | 单例状态对象 |
-| `FragmentPluginState::Loaded` | 已加载的片段插件：共享库指针、描述符指针、路径 | — |
-| `FragmentPluginState` | 片段插件运行时状态：加载列表、错误码、错误消息 | — |
 
 ### 关键常量
 
@@ -76,23 +72,6 @@ Luna 运行时全部 C ABI 入口点的默认实现，涵盖宿主服务安装�
 | `checkCuda` / `checkHip` | 每次 API 调用后的错误检查，失败时调用 `setGpuError` |
 | `reportGpuProfileAtExit` | 通过 `std::atexit` 注册，打印 `Luna GPU profile: kernel_ms=...` |
 
-### 动态片段分派
-
-| 函数 | 用途 |
-|---|---|
-| `dynamicFragmentEnvironmentKey` | 将 slot_name 转换为全大写环境变量键名 `LUNA_FRAGMENT_<SLOT>`，非字母数字下划线字符映射为 `_` |
-| `rt_dynamic_fragment_select` | 读取该环境变量，若为空则返回 fallback_name |
-| `rt_dynamic_fragment_matches` | 字符串比较 selected_name 与 candidate_name |
-| `rt_dynamic_fragment_report_unknown_and_abort` | 打印错误消息并调用 `std::abort` |
-
-### 片段插件加载
-
-| 函数 | 用途 |
-|---|---|
-| `rt_fragment_plugin_load` | 调用 `lunaOpenLibrary`（`dlopen`/ `LoadLibrary`），查找 `luna_fragment_plugin_descriptor_v1` 符号，校验描述符，注册到 `FragmentPluginState` |
-| `rt_fragment_plugin_is_registered` | 遍历已加载列表，按 slot_name + fragment_name + contract_hash 三元组匹配 |
-| `rt_fragment_plugin_invoke` | 查找匹配插件并调用其 `entry` 函数指针 |
-
 ### 工具函数
 
 | 函数 | 用途 |
@@ -106,14 +85,12 @@ Luna 运行时全部 C ABI 入口点的默认实现，涵盖宿主服务安装�
 - **Runtime.h** —— 本文件实现的全部函数声明。`Runtime.cpp` 直接 `#include` 它。
 - **RuntimeABI.h** —— 提供 `LunaHostServicesV1` 等结构体定义和所有 `LUNA_*` 常量宏。`Runtime.cpp` 直接 `#include` 它。
 - **ApplicationHostServices.h** —— 提供 `lunaApplicationConsoleV1` / `lunaApplicationFileSystemV1`，用于构造 `applicationHostServices` 常量。
-- **FragmentPluginABI.h** —— 提供 `LunaFragmentPluginDescriptorV1` 等类型，用于插件加载验证。
 - **生成代码（Generated IR）** —— 编译器生成的代码在运行时调用本文件实现的 `rt_*` 函数。
 - 本文件不依赖任何 Luna 编译器内部结构，仅依赖标准 C/C++ 运行时和平台动态加载 API。
 
 ## 延伸阅读
 
 - `RuntimeABI.h` 中所有结构体字段的完整语义
-- `FragmentPluginABI.h` 中片段插件描述符的 ABI 规范
 - `ApplicationHostServices.cpp` 中文件系统与控制台输入的具体实现
 - CUDA Driver API 文档（`cuModuleLoadData`/ `cuLaunchKernel` 等）
 - ROCm HIP API 文档（`hipModuleLoadData`/ `hipModuleLaunchKernel` 等）
@@ -137,9 +114,8 @@ Luna 运行时的 C 语言 ABI 入口点总声明头文件，定义了宿主环�
 - 声明宿主服务（Host Services）的安装与查询接口：`rt_install_host_services_v1`、`rt_install_application_host_services_v1`、`rt_host_services_v1`。
 - 声明 Luna 托管内存分配器：普通分配（`rt_alloc`/ `rt_realloc`/ `rt_dealloc`）、引用计数 RC（`rt_rc_allocate_v1`/ `rt_rc_retain_v1`/ `rt_rc_release_v1`）、原子引用计数 ARC（`rt_arc_allocate_v1`/ `rt_arc_retain_v1`/ `rt_arc_release_v1`）。
 - 声明控制台输出、输入及格式化打印工具函数（`rt_print_i32`、`rt_print_cstr`）。
-- 声明 0.2 版兼容性桥接层（`rt_compat_console_write_cstr_0_2` 等五函数）。
+- 声明内部 v1 标准库 console adapter（`rt_console_write_cstr_v1` 等五函数）。
 - 声明 GPU 后端初始化、设备内存分配、数据传输、内核启动与事件等待函数簇（`rt_gpu_*`）。
-- 声明片段（Fragment）动态分派（`rt_dynamic_fragment_select`/ `rt_dynamic_fragment_matches`/ `rt_dynamic_fragment_report_unknown_and_abort`）与外部插件加载（`rt_fragment_plugin_load`/ `rt_fragment_plugin_invoke` 等）。
 - 声明数组越界安全检查 `rt_array_index_or_abort`。
 - 错误快照查询 `rt_runtime_error_snapshot_v1`。
 
@@ -152,7 +128,6 @@ Luna 运行时的 C 语言 ABI 入口点总声明头文件，定义了宿主环�
 - `LunaHostServicesV1` —— 宿主服务描述符，包含分配器、控制台、可执行内存、文件系统等子表。
 - `LunaRuntimeErrorSnapshotV1` —— 运行时错误快照，含 domain、code、message_size。
 - `LunaDropCallbackV1` —— 析构回调函数指针类型（`void(*)(void* value_storage)`）。
-- `LunaFragmentInvocationV1` —— 片段调用参数包，定义在 `FragmentPluginABI.h`。
 
 ## 关键函数·方法
 
@@ -173,31 +148,13 @@ Luna 运行时的 C 语言 ABI 入口点总声明头文件，定义了宿主环�
 | `rt_arc_allocate_v1` / `rt_arc_retain_v1` / `rt_arc_release_v1` | 原子引用计数（`std::atomic<int>` 版 `shared_ptr`），可用于跨线程共享 |
 | `rt_panic_cstr` | 不可恢复错误，打印消息并终止进程（类似 `std::terminate` + 自定义消息） |
 
-### 控制台 I/O 与兼容桥接
+### 控制台 I/O 与 library adapter
 
 | 函数 | 用途 |
 |---|---|
 | `rt_print_i32` / `rt_print_cstr` | 语言级整数/字符串打印，使用稳定的 Luna ABI，避免 JIT 对象解析平台 `printf` |
-| `rt_compat_console_write_cstr_0_2` 等 | 0.2 版标准库临时适配器，后续会被 0.3 安全 IO 层替换 |
+| `rt_console_write_cstr_v1` 等 | 基于 raw host console ABI 的首版 0.3 cstr/i32 标准库 adapter |
 | `rt_array_index_or_abort` | 生成代码在 GEP 前调用；越界则终止，防止未定义行为 |
-
-### 片段（Fragment）动态分派
-
-| 函数 | 用途 |
-|---|---|
-| `rt_dynamic_fragment_select` | 根据 slot_name 从环境变量 `LUNA_FRAGMENT_<SLOT>` 读取选择 |
-| `rt_dynamic_fragment_matches` | 检查 selected_name 是否等于 candidate_name |
-| `rt_dynamic_fragment_report_unknown_and_abort` | 选择到未知片段时打印错误并终止 |
-
-### 外部片段插件
-
-| 函数 | 用途 |
-|---|---|
-| `rt_fragment_plugin_load` | 加载共享库（`dlopen`/ `LoadLibrary`）并校验描述符，进程级常驻 |
-| `rt_fragment_plugin_last_error` | 返回最近一次加载错误的字符串 |
-| `rt_fragment_plugin_is_registered` | 按 slot_name + fragment_name + contract_hash 三元组查询注册状态 |
-| `rt_fragment_plugin_invoke` | 调用已注册的片段入口点 |
-| `rt_fragment_plugin_report_error_and_abort` | 报告插件错误并终止 |
 
 ### GPU 后端
 
@@ -214,15 +171,13 @@ Luna 运行时的 C 语言 ABI 入口点总声明头文件，定义了宿主环�
 ## 与周边文件·阶段的关系
 
 - **RuntimeABI.h** —— 本文件所有函数签名中使用的结构体定义来源。`Runtime.h` 直接 `#include` 它。
-- **FragmentPluginABI.h** —— 提供 `LunaFragmentInvocationV1` 等类型，被 `rt_fragment_plugin_invoke` 引用。`Runtime.h` 直接 `#include` 它。
 - **Runtime.cpp** —— 本文件所有声明的实现。每个 `rt_*` 函数都在 `Runtime.cpp` 中有对应定义。
 - **ApplicationHostServices.h/.cpp** —— 提供 `lunaApplicationConsoleV1` / `lunaApplicationFileSystemV1`，被 `rt_install_application_host_services_v1` 使用。
-- **生成代码（Generated IR）** —— 编译器生成的代码直接调用 `rt_*` 函数，如 `rt_alloc`、`rt_array_index_or_abort`、`rt_dynamic_fragment_*`、`rt_gpu_*` 等。
+- **生成代码（Generated IR）** —— 编译器生成代码调用已验证的 `rt_*` 函数，如 `rt_alloc`、`rt_array_index_or_abort` 与 `rt_gpu_*`。
 
 ## 延伸阅读
 
 - `RuntimeABI.h` 中各结构体字段的完整语义
-- `FragmentPluginABI.h` 中片段描述符与调用约定的 ABI 规范
 - `Runtime.cpp` 中各函数在默认实现下的行为
 - `ApplicationHostServices.h` 中控制台输入与文件系统服务的工厂函数
 

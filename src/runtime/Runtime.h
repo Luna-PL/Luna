@@ -2,7 +2,6 @@
 
 #include <cstddef>
 #include <cstdint>
-#include "FragmentPluginABI.h"
 #include "RuntimeABI.h"
 
 #ifdef __cplusplus
@@ -35,55 +34,26 @@ void  rt_arc_retain_v1(void* pointer);
 void  rt_arc_release_v1(void* pointer);
 void  rt_panic_cstr(const char* message);
 
-// Alpha compatibility bridge for already emitted IR. New compiler output
-// does not use these layout-less entry points. Custom allocators that support
-// old IR must accept size == 0 on deallocation.
-void* rt_malloc(size_t size);
-void  rt_free(void* ptr);
 // Language-level printing uses a stable Luna ABI instead of resolving the
 // platform's variadic printf from a JIT object. This keeps JIT/AOT output and
 // buffering behavior identical across ELF, Mach-O, and MinGW/UCRT.
 void  rt_print_i32(int32_t value);
 void  rt_print_cstr(const char* value);
-// Temporary 0.2 standard-library adapters. They intentionally avoid claiming
-// the future Display/FromStr/owned-String contracts and will be replaced by
-// the 0.3 safe IO layer. `read_line_lossy` returns thread-local storage valid
+// Initial v1 standard-library adapters for the current cstr/i32 surface. They
+// intentionally avoid claiming Display/FromStr/owned-String contracts.
+// `read_line_lossy` returns thread-local storage valid
 // until the next call on the same thread, truncates at 4095 bytes, and maps
 // EOF and host failure to an empty string.
-int rt_compat_console_write_cstr_0_2(uint32_t stream, const char* value,
-                                    int32_t newline);
-int rt_compat_console_write_i32_0_2(uint32_t stream, int32_t value,
-                                   int32_t newline);
-int rt_compat_console_flush_0_2(uint32_t stream);
-const char* rt_compat_console_read_line_lossy_0_2();
-int32_t rt_compat_parse_i32_or_0_2(const char* text, int32_t fallback);
+int rt_console_write_cstr_v1(uint32_t stream, const char* value,
+                            int32_t newline);
+int rt_console_write_i32_v1(uint32_t stream, int32_t value,
+                           int32_t newline);
+int rt_console_flush_simple_v1(uint32_t stream);
+const char* rt_console_read_line_lossy_v1();
+int32_t rt_parse_i32_or_v1(const char* text, int32_t fallback);
 // Generated safe array accesses call this before forming a GEP. It never
 // returns on failure, preventing undefined behaviour from out-of-bounds IR.
 int32_t rt_array_index_or_abort(int32_t index, size_t length);
-
-// Dynamic fragment dispatch is host-only. A generated dynamic apply asks the
-// runtime for LUNA_FRAGMENT_<SLOT>; the selected name must be one of the
-// compiler-checked candidates embedded by that apply site.
-const char* rt_dynamic_fragment_select(const char* slot_name, const char* fallback_name);
-int         rt_dynamic_fragment_matches(const char* selected_name, const char* candidate_name);
-void        rt_dynamic_fragment_report_unknown_and_abort(const char* slot_name,
-                                                         const char* selected_name);
-
-// External fragment plugins are loaded by an explicit host action or by the
-// LUNA_FRAGMENT_PLUGIN environment variable.  Loading retains the shared
-// library for the process lifetime; callers never receive a native loader
-// handle (`dlopen` on POSIX or `LoadLibrary` on Windows).  A successful load
-// validates the descriptor before registering it.
-int         rt_fragment_plugin_load(const char* path);
-const char* rt_fragment_plugin_last_error();
-int         rt_fragment_plugin_is_registered(const char* slot_name,
-                                              const char* fragment_name,
-                                              const char* contract_hash);
-int         rt_fragment_plugin_invoke(const char* slot_name,
-                                      const char* fragment_name,
-                                      const char* contract_hash,
-                                      const LunaFragmentInvocationV1* invocation);
-void        rt_fragment_plugin_report_error_and_abort();
 
 // The execution backend is selected at runtime through LUNA_GPU_BACKEND:
 // `sim` (the default), `cuda`, or `rocm`. Device code-object targets are

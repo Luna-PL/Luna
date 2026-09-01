@@ -1,12 +1,14 @@
-context stop {
+slot context hook();
+
+context stop for hook {
     print(1);
     return;
     print(99);
 }
 
 fn main() -> i32 {
-    apply hook(stop) {
-        slot context hook {
+    apply stop {
+        hook() {
             print(42);
         }
         print(7);

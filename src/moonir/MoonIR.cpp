@@ -53,6 +53,7 @@ void Module::rebuildIndexes() {
     declarationsById.clear();
     functionsBySymbol.clear();
     fragmentsBySymbol.clear();
+    slotsBySymbol.clear();
     for (auto& declaration : declarations) {
         if (!declaration) continue;
         declarationsById[declaration->declarationId] = declaration.get();
@@ -64,6 +65,10 @@ void Module::rebuildIndexes() {
             const auto& symbol = fragment->generatedSymbolName.empty()
                 ? fragment->name : fragment->generatedSymbolName;
             fragmentsBySymbol[symbol] = fragment;
+        } else if (auto* slot = dynamic_cast<SlotDecl*>(declaration.get())) {
+            const auto& symbol = slot->generatedSymbolName.empty()
+                ? slot->name : slot->generatedSymbolName;
+            slotsBySymbol[symbol] = slot;
         } else if (auto* implementation = dynamic_cast<ImplDecl*>(declaration.get())) {
             for (auto& method : implementation->methods) {
                 if (!method) continue;
@@ -407,7 +412,6 @@ const char* retentionName(Retention retention) {
     switch (retention) {
         case Retention::CompileTime: return "compile_time";
         case Retention::Runtime: return "runtime";
-        case Retention::Dynamic: return "dynamic";
     }
     return "unknown";
 }
@@ -421,6 +425,7 @@ const char* declarationKindName(DeclarationKind kind) {
         case DeclarationKind::Trait: return "trait";
         case DeclarationKind::Implementation: return "implementation";
         case DeclarationKind::MetadataSchema: return "metadata_schema";
+        case DeclarationKind::Slot: return "slot";
     }
     return "unknown";
 }
@@ -431,7 +436,6 @@ const char* costKindName(CostKind kind) {
         case CostKind::GenericInstantiation: return "generic_instantiation";
         case CostKind::RuntimeDescriptor: return "runtime_descriptor";
         case CostKind::RuntimeMetadata: return "runtime_metadata";
-        case CostKind::DynamicBinding: return "dynamic_binding";
         case CostKind::KernelCode: return "kernel_code";
         case CostKind::ReservedCapability: return "reserved_capability";
     }
@@ -553,11 +557,6 @@ bool isCompilerIntrinsicName(const std::string& name) {
         "gpu_alloc_i32", "gpu_copy_from_host_i32",
         "gpu_copy_to_host_i32", "gpu_free",
         "gpu_load_i32", "gpu_store_i32",
-        "rt_dynamic_fragment_select",
-        "rt_dynamic_fragment_matches",
-        "rt_dynamic_fragment_report_unknown_and_abort",
-        "rt_canonical_fragment_plugin_fallback",
-        "rt_fragment_plugin_report_error_and_abort",
     };
     return names.count(name) > 0;
 }

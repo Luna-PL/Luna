@@ -8,8 +8,8 @@
 
 要点：
 
-- **声明身份**：`nominalDeclarationIdentity` 生成 `package::module::kind::symbol` 形式的稳定身份（`kind` 为 `struct`/`enum`/`trait`/`meta`/`fn` 等）。
-- **链接名**：`metadataDeclarationName` 给带元数据的声明生成 `base__meta_<hash>` 后缀链接名；`isolatedLinkageName` 生成 `__luna_<hash>_<sourceName>` 的隔离链接名。
+- **声明身份**：`nominalDeclarationIdentity` 生成 `package::module::kind::symbol` 形式的稳定身份（`kind` 为 `struct`/`enum`/`trait`/`meta`/`fn` 等）；`functionDeclarationIdentity` 使用 metadata 与规范化 callable source signature，不使用依赖重载数量的 executable linkage。
+- **链接名**：`metadataDeclarationName` 给带元数据的声明生成 `base__meta_<hash>` 基础链接名；`sourceTypeIdentity`/`functionSourceSignatureIdentity` 规范化 callable source signature（含 type parameter alpha-normalization），`declarationSourceIdentity` 将签名与 metadata key 组合，`isolatedLinkageName` 再生成 `__luna_<hash>_<sourceName>`。
 - **稳定哈希**：`stableMetadataHash` 是 FNV-1a 64 位哈希。
 - **元数据键**：`metadataExpressionKey` 把常量表达式转成稳定字符串键。
 - **名字工具**：`qualifiedDeclarationKey`/`splitQualifiedName`/`effectivePackageId`/`nominalTypeOwner`。
@@ -28,6 +28,9 @@ C++ 类比：这相当于一组编译期工具函数库：名字修饰（name ma
 - `stableMetadataHash(value)`：FNV-1a 64 位。
 - `metadataExpressionKey(expr)`：常量表达式 → `i:`/`f:`/`b:`/`s:`/`id:`/`expr@` 前缀键。
 - `metadataDeclarationName(base, decl)`：带元数据的声明链接名（`base__meta_<hash>`）。
+- `sourceTypeIdentity(type, typeParameters)` / `functionSourceSignatureIdentity(function)`：在 resolved `TypeId` 尚不可用时生成长度分隔的规范化 source type/callable identity。
+- `declarationSourceIdentity(base, decl)`：把 metadata 基础 linkage 与 function signature discriminator 组合；非 function 声明保持旧身份。
+- `functionDeclarationIdentity(program, function)`：从 source discriminator 生成 function DeclarationId，在添加或移除其他 overload 时保持已有 SymbolId 稳定。
 - `effectivePackageId(program, decl)`：声明/程序/`main` 的包 id 优先级。
 - `nominalTypeOwner(type)`：从 `nominalId` 提取 `::` 前的 owner。
 - `qualifiedDeclarationKey(packageId, modulePath, name)`：拼完整限定键。

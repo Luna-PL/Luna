@@ -38,9 +38,10 @@ The 0.3 migration has completed the Sema split, nominal named-type default,
 usage blocks, generic Resource/Drop contracts, and library-owned `Rc`/`Arc`.
 The single MoonIR now seals executable function bodies to canonical tables and
 CFG unconditionally. The currently supported surface passes the complete
-58-test gate, including per-element move-only iterator cleanup. Finite linked runtime
-contexts and replay-safe multi-shot continuations now run canonically; persistent
-external-plugin continuation callbacks remain outside plugin ABI v1. Legacy
+61-test gate, including per-element move-only iterator cleanup. SF006 module-level nominal
+slots and static single-shot interceptor/context continuations now run canonically;
+multi-shot/dynamic source forms and persistent external-plugin continuation callbacks remain
+outside the 0.3 surface. Legacy
 structured executable-body codegen has been deleted, and the backend rejects
 unsealed bodies at its boundary. Host-specific Moon Containers now support
 deterministic serialization, atomic verified loading, and
@@ -50,8 +51,9 @@ proof-bound typed registry and use immutable staging for verified loading. The
 internal evolution state machine now covers stateless staging, safe-point
 activation, pinned/switchable references, rollback, and internal Native/Moon
 artifact adapters. Verified Moon function publications retain their ORC JIT
-session as the generation lease; public evolution syntax/API remains deferred by
-`TBD-EV004`. Legacy `dynamic` source forms
+session as the generation lease. EV004 now exposes the stateless control plane
+through the installed C++17 `<luna/runtime/Evolution.h>` API; 0.3 deliberately
+adds no Luna evolution syntax or standalone activation CLI. Legacy `dynamic` source forms
 that remain in the development compiler are migration input, not the 0.3
 phase model or a compatibility promise.
 
@@ -156,8 +158,9 @@ The driver also exposes explicit linker, runtime, MoonIR, cost-report and GPU ta
 Runtime backend selection is separate from code-object generation.
 The 0.3 `-t native|moon|cffi` artifact selector is now a driver option. Native
 libraries now carry an embedded proof and an explicit installation trust
-candidate; no adjacent record is trusted automatically, and atomic Runtime
-loading remains fail-closed until the loader is implemented.
+candidate; no adjacent record is trusted automatically. The internal verified
+loader publishes a pinned load-once generation and rejects a different image
+for the same Package ID unless the explicit evolution path is used.
 See the [compiler command reference](docs/cli.md) for commands, options, environment variables and examples.
 Repository contributors should use the [file and responsibility guide](docs/file_guide.md)
 before adding or moving implementation files.
@@ -183,13 +186,12 @@ See the [testing guide](docs/testing.md) and [heterogeneous-compute guide](docs/
 The immediate work follows the 0.3 completion gates rather than the frozen 0.2
 Alpha roadmap:
 
-1. implement the trusted Luna-native proof section, trust records, and loader;
-2. implement the minimal Moon
-   staging/activation runtime without adding ordinary-call hot-path cost;
-3. converge Slot/Fragment and runtime query surfaces after their remaining
-   syntax/ordering decisions are frozen;
-4. update formatter, LSP, packaging, benchmarks and release gates against only
-   the final 0.3 semantics.
+1. priority item 16 has completed the repository-wide legacy production audit
+   and removed the old Dynamic, Rc/Arc-special, slot/plugin, and console paths;
+2. priority item 17 is aligning formatter, LSP, Lunax, packaging, benchmarks,
+   documentation, and release gates with only the final 0.3 semantics; root
+   publication remains blocked until compatible toolchain and Lunax releases
+   are recorded in the ecosystem lock.
 
 See the [0.3 implementation priorities](docs/luna_0.3_design.md#9-implementation-priority).
 
@@ -200,6 +202,7 @@ or reference material:
 
 - [Getting started](docs/getting_started.md)
 - [Feature overview](docs/features.md)
+- [Host evolution API](docs/evolution.md)
 - [Compiler command reference](docs/cli.md)
 - [Full language showcase](examples/full_showcase/README.md)
 - [0.2 Alpha semantic reference](docs/reference/README.md)

@@ -1,0 +1,17 @@
+fn answer() -> i32 { return 42; }
+
+fn leak() -> declaration_ref<() -> i32> {
+    let candidate = symbols(answer).optional();
+    match candidate {
+        None => {
+            return declaration_of(answer);
+        },
+        Some(selected) => {
+            return selected;
+        }
+    }
+}
+
+fn main() -> i32 {
+    return 0;
+}

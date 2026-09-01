@@ -6,7 +6,7 @@ Implementation of Printer.h: prints Module / TypeRecord / declaration / metadata
 
 print() emits the output in sections:
 
-- Header: module name and version, features (runtime, dynamic_reflection, dynamic_apply, dynamic_select, kernel, kernel_runtime_reserved, etc.), sourceModule, packageUses;
+- Header: module name and version, active features (runtime, kernel, kernel_runtime_reserved), sourceModule, and packageUses;
 - Type section: one line per TypeRecord (id, shape, abi_layout, domain, identity, sysmeta resource contract, abi_size/abi_align);
 - metadata schema; declarationTable (decl line + sysmeta sub-lines + metadata attach);
 - Declaration list: function / fragment entries each print name(parameters…) -> return type, with kernel / deferred_recipe / generic_recipe / instantiation markers.

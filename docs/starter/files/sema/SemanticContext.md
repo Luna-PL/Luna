@@ -7,9 +7,9 @@
 This is Sema's "conductor." `analyze(Program*)` drives the five components in dependency order, ensuring forward references are independent of declaration order:
 
 1. Initialize/reset all state (const scopes, slot/apply scopes, and the various registries).
-2. Register built-in constraints: `Drop` (reserved by the compiler), `From` (luna.compiler).
+2. Register compiler-known Core constraints: canonical `Drop` and `From` identities owned by `org.luna.core`.
 3. Package use-alias table (`mPackageAliases`).
-4. **Linkage name assignment**: iterate over all declarations and generate a `generatedSymbolName` for each (`main` is special-cased; duplicates or declarations carrying metadata use `isolatedLinkageName`), and check for package-level name collisions.
+4. **Linkage name assignment**: iterate over all declarations and generate a `generatedSymbolName` for each (`main` is special-cased; repeated base linkages use `isolatedLinkageName` keyed by metadata plus normalized callable source signature), and check for package-level name/signature collisions.
 5. `declareMeta` (metadata schemas registered first).
 6. `declareConstraint` (constraint names registered first; where-clause order is irrelevant).
 7. Pre-bind nominal types: `Type::makeStruct`/`makeEnum` write into `mDeclaredTypes`/`mSymTable` (supports forward references).
@@ -31,7 +31,7 @@ No new types (the structs live in the .h); this file contains:
 
 - `SemanticContext()`: registers the built-in types and `print`.
 - `analyze(Program*)`: the multi-pass pipeline described above; returns `mErrors.empty()`.
-- Linkage name assignment details: `metadataDeclarationName(name, decl)` produces the base linkage name; `isRootEntry` (`main`) → `"main"`; duplicates or `main` conflicts → `isolatedLinkageName(familyKey + "::" + sourceLinkage, sourceLinkage)`; and issues `Duplicate package declaration`/`more than one main` diagnostics.
+- Linkage name assignment details: `metadataDeclarationName(name, decl)` produces the base linkage name and `declarationSourceIdentity` adds a normalized callable source signature for functions; `isRootEntry` (`main`) → `"main"`; repeated base linkages or `main` conflicts use `isolatedLinkageName(familyKey + "::" + sourceIdentity, sourceLinkage)`. Exact metadata/signature duplicates still issue `Duplicate package declaration`; heterogeneous signatures receive distinct linkages.
 - `resolveTraitRef(TraitRef&, useSite)`: special-cases `Drop`/`From` (compiler-reserved ids); otherwise looks up `mTraits` and calls `recordDeclarationReference`.
 - `satisfiesTrait(traitId, type)`: dual lookup in `mImpls` + `mTraitMethods`.
 - `recordDeclarationReference`/`recordResolvedReference`: write to `mDeclarationReferences` (IDE navigation), with validity filtering.
@@ -94,8 +94,11 @@ The five interfaces (all pure virtual, implemented by their corresponding compon
 
 - `struct FromConversion`: a one-to-one conversion record for the `From` trait (source/target/`FunctionDecl*`/symbol).
 - `struct FromIteratorImplementation`: the builder protocol for `FromIterator` (item/builder/target + begin/push/finish).
-- `struct SlotInfo`: a slot declaration summary (parameter types/constraints/default fragments/kind/cardinality/dynamism, etc.).
-- Field groups: `mSymTable`, `mMetadataSchemas`, `mConcepts`, `mFunctionFamilies`, `mQualifiedDeclarations`, `mPackageAliases`, `mImpls`, `mFromConversions`, `mFromIteratorImplementations`, `mTraitTypeParams`/`mTraitMethods`/`mTraitOwners`/`mTraits`, `mDeclaredTypes`, `mGeneratedInstances`/`mInstantiator`/`mInstantiatedFunctions`, `mErrors`, `mDeclarationReferences`, the current package/module/diagnostic location, `mCurrentReturnType`/`mInFunction`/`mInKernel`/`mSawReturn`/`mConstraints`/`mInferenceRoots`/`mConstScopes`/`mConstexprFunctions`/`mConstEvaluationDepth`, `mSlotScopes`/`mApplyScopes`/`mDynamicApplyScopes`/`mFragments`/`mCurrentFragmentSlot`/`mCurrentFragmentDecl`, `mIteratorStateCounter`, `mActiveSelectorView`.
+- `struct SlotInfo`: a slot declaration summary (nominal declaration,
+  parameter types/contracts, default fragment, kind, and cardinality).
+- Field groups include symbol/type/trait/instantiation state, diagnostics,
+  compile-time evaluation state, static `mSlotScopes`/`mApplyScopes`, fragment
+  state, iterator state, and the active compile-time selector view.
 
 ## Key Functions and Methods
 

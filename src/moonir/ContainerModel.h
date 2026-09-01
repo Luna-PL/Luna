@@ -22,7 +22,7 @@ enum class CodeOperationOpcode : uint32_t {
 enum class CodeExpressionOpcode : uint32_t {
     Integer = 1, Floating = 2, String = 3, Boolean = 4, Unit = 5,
     Identifier = 6, Binary = 7, Unary = 8, Call = 9,
-    DynamicSelect = 10, Launch = 11, VariantConstruct = 12,
+    ReservedDynamicSelect = 10, Launch = 11, VariantConstruct = 12,
     ResultConstruct = 13, FieldAccess = 14, Index = 15,
     SliceLength = 16, ArrayLiteral = 17, RecordLiteral = 18,
     HeapAllocate = 19, InitializeAllocation = 20, Move = 21,

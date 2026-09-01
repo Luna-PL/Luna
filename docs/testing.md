@@ -18,11 +18,10 @@ ctest --test-dir build --output-on-failure
 ```
 
 The production pipeline now always seals canonical CFG, so the ordinary CTest
-command above is the canonical regression gate. Finite, statically linked
-runtime contexts and replay-safe multi-shot continuations are positive cases.
-A green matrix means both the supported surface and deferred boundaries match their contracts.
-External plugin contexts/multi-shot callbacks remain outside plugin ABI v1 and
-fail at the unknown-candidate runtime boundary.
+command above is the canonical regression gate. Static single-shot interceptors
+and contexts are positive cases; `context many`, dynamic slot/apply, and external
+context callbacks are explicit rejection boundaries. A green matrix means both
+the supported surface and deferred boundaries match their contracts.
 The structured executable-body backend has been deleted. A focused unit test
 also calls codegen directly and requires it to reject an unsealed body with the
 canonical-boundary diagnostic.
@@ -59,15 +58,27 @@ that dead declarations disappear while transitive callees remain executable.
 Its direct verifier negatives also reject both a missing literal `TypeRef` and
 an integer literal forged with a boolean type.
 
-`luna.moon-runtime` tests the internal EV001–EV003 state machine without
-freezing the public API deferred by `TBD-EV004`. It requires strict
+`luna.moon-runtime` tests the EV001–EV004 state machine through the public
+`runtime/Evolution.h` surface. It requires strict
 verify-resolve-initialize staging order, one-use same-runtime safe points,
-failure atomicity, exact SymbolId/ContractId compatibility, pinned old
+failure atomicity, typed SymbolId/ContractId/kind/flag compatibility, pinned old
 references, switchable new references, retained code leases, and rollback.
+Its load-once cases require identical content to reuse the first pinned
+generation, reject different content, and keep exactly one retained lease.
+`luna.runtime-descriptor-v1` independently validates the installed
+C-compatible registry ABI, exact SymbolId/ContractId/kind/flag lookup,
+strict ordering, typed metadata, callable-kind constraints, and version
+rejection. The canonical Moon loader test additionally resolves the emitted
+registry from ORC and cross-checks its TypeIds, metadata payloads, and callable
+classification against the verified Container before publication. It invokes
+a private retained function only through that descriptor-backed binding. The cost-boundary
+test requires descriptor/registry v1 types and stable identities only for a
+runtime-retained program and proves that a static query emits none of them.
 Four concurrent readers cross 1000 generation transitions and must observe
 only complete identity/implementation pairs from all activated generations.
-The canonical round-trip test also stages a real verified Moon Container,
-materializes and retains its ORC JIT, and executes two compatible generations as
+The canonical round-trip test also loads a real verified Moon Container once,
+proves that an identical request does not materialize another ORC generation,
+and executes two compatible generations as
 60 -> 13 -> 60 across activation and rollback. The pinned first entry remains 60,
 the replacement initializer executes the resolved 13 entry before publication,
 both code leases remain retained, and initializer failure or a corrupted container
@@ -102,6 +113,10 @@ and loads that same image, and exposes exact SymbolId+ContractId lookup. The
 test replaces the original path with an untrusted implementation returning
 `13` after verification and still requires `42`; it also forges a matching
 trust row for a changed proof export digest and requires registry rejection.
+The load-once adapter additionally resolves the callable with an exact
+SymbolId/ContractId/function/callable requirement, skips another platform load
+for identical trusted content, and rejects a second trusted image with the same
+Package ID before publication.
 The same independent consumer drives two trusted Native generations: a pinned
 first binding remains `42`, the switchable binding becomes `13` after second
 activation, and rollback retargets only the switchable binding to `42`.
@@ -174,8 +189,8 @@ Current `luna.semantic-regressions` covers:
 - structured lexer/parser errors and top-level multi-error recovery; basic functions,
   arithmetic/bitwise/relational operators and logical short-circuiting; closures, generic
   monomorphization, `const`/`constexpr`, and compile-time reflection;
-- valid interceptor/context/slot paths, abort merging, and multi-emission resource-safety
-  negatives;
+- valid nominal interceptor/context/slot paths, return/abort/resume cleanup, and explicit
+  multi-shot/dynamic migration negatives;
 - version selection for functions, types, and traits, plus incomplete implementations;
 - multi-file packages, cross-file parse recovery, explicit exports, duplicate
   symbol/version identity, export/FFI boundaries, and package-name consistency;
@@ -219,8 +234,8 @@ stable output or key diagnostic text in `tests/semantic_regressions.cmake`.
 path. Its default-fragment case runs source parsing and Sema through Luna lowering before building
 and independently verifying the canonical CFG. It checks the construction-only implicit `Apply`,
 an explicit static `apply`, context `Resume`, lexical LocalId capture, and preservation of reusable
-fragment bodies. A separately lowered dynamic-apply program must reach the declared static CFG
-boundary and be rejected rather than silently composed as a static candidate. The function sealer
+fragment bodies. Legacy dynamic/multi-shot construction fixtures remain verifier corpus, while
+their source spellings are rejected in the frontend. The function sealer
 fixture additionally proves transactional replacement: a valid lowered function loses its
 structured body and verifies with one CFG, simultaneous representations are rejected, and a
 runtime-apply failure preserves the original module unchanged.
@@ -244,6 +259,19 @@ tail element.
 `luna.rc-arc-core` uses the real Core package to verify JIT/AOT behavior, explicit trait/member
 clone, implicit-copy rejection, exact-once last-handle release, nested payload Drop, ordinary
 nominal MoonIR facts, and LLVM Runtime ABI v1 calls.
+
+`luna.core-option` verifies the source-defined Core `Option<T>` extractors in
+both JIT and AOT builds. It covers Copy values, affine `Some` payload transfer,
+`None` fallback transfer, exact-once cleanup of an unselected fallback, and the
+canonical `never`/panic branch becoming `Unreachable` rather than falling
+through to a valueless return. Runtime-negative cases also check the stable
+`unwrap(None)` message and caller-provided `expect(None)` message.
+
+`luna.core-result` verifies the ordinary source-defined Core Result extraction
+layer in JIT and AOT builds. It covers Copy values, affine Ok/Err payload
+transfer, selected and unselected fallback cleanup, consumed error cleanup,
+and the default or caller-provided panic messages for `unwrap`, `expect`,
+`unwrap_err`, and `expect_err`.
 
 `luna.package-export-abi` is an independent AOT ABI test: it verifies that exported
 package functions are external symbols in LLVM IR while non-exported functions are
@@ -273,14 +301,12 @@ nested recurrence from that hint, and requires optimized JIT/AOT to return the s
 
 `luna.fragment-lowering-abi` checks that static fragments do not degrade into dynamic
 candidate selection or heap allocation. `luna.structured-cps-abi` checks, at O0, the
-stack frame, independent entry, and return-dispatch block for a context continuation, and
-runs a continuation-internal return case to ensure code after `resume()` is not executed
-incorrectly.
+canonical context continuation and runs a continuation-internal return case to ensure retained
+fragment resources are cleaned and code after `resume()` is not executed.
 
-`luna.external-fragment-plugin-abi` uses a real shared library to verify external descriptor
-ABI, registration, duplicate-contract rejection, and explicit-parameter calls.
-`luna.external-fragment-dispatch` selects an external interceptor beyond static candidates
-and confirms that the slot continuation still runs after plugin continuation.
+`luna.legacy-dynamic-fragment-source` confirms that the removed dynamic fragment
+source spelling fails at its migration boundary. There is no positive external
+plugin ABI test because that production ABI was deleted in priority item 16.
 
 `luna.aot-runtime-boundary` covers explicit `--runtime-lib`/`--cc`, the
 `DRV0001` missing-runtime diagnostic, and GPU-backend initialization failure in an AOT
@@ -297,14 +323,21 @@ reported by the compiler's structured analysis hello. The CMake project watches 
 HEAD and the active branch ref, so an ordinary incremental build refreshes this identity
 after a commit instead of silently publishing a stale build stamp.
 
+`luna.ecosystem-frozen-baseline` verifies the exact, clean toolchain and Lunax commits recorded
+as historical ecosystem evidence. `luna.ecosystem-release-policy` separately verifies the
+fail-closed policy: a frozen snapshot may remain valid while publication stays blocked. The
+prebuilt-release workflow reruns that policy with `REQUIRE_READY=ON`, which requires
+`release.publish`, `status: release-ready`, and current-version Luna compatibility tags before
+any platform packaging job starts.
+
 `luna.runtime-gpu-error-state` verifies successful and invalid event ABI states on the CPU
 simulator. `luna.gpu-error-boundary-abi` checks that an `await` failure branch in AOT IR
 calls the unified GPU-error termination entry, so CUDA/ROCm launch or synchronization
 failures cannot continue silently. The former also checks stable GPU domain/code fields in
 the Runtime error snapshot, two-stage message copying, legacy `last_error` compatibility,
 and that one operation error does not contaminate successful backend initialization.
-`luna.runtime-abi-v1` covers fragment-plugin error snapshots and C/C++ compilability of the
-public header.
+`luna.runtime-abi-v1` covers host-service/error-snapshot behavior and C/C++
+compilability of the public header.
 
 `luna.jit-aot-extended-parity` compares, at `-O2`, JIT/AOT exit code and stdout for
 multi-file packages and CPU-simulator heterogeneous programs, ensuring optimization does not

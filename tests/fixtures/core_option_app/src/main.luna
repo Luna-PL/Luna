@@ -1,0 +1,65 @@
+package org.luna.fixture.core_option;
+module application;
+
+using org.luna.core as core;
+
+struct Resource {
+    marker: i32;
+}
+
+impl Drop for Resource {
+    fn drop(value: &mut Resource) -> unit {
+        print(value.marker);
+    }
+}
+
+fn unwrap_or_some_resource() -> i32 {
+    let selected = new Resource(111);
+    let fallback = new Resource(112);
+    let option = core::option::Option::<Resource>::Some(move selected);
+    let result = core::option::unwrap_or(move option, move fallback);
+    return result.marker;
+}
+
+fn unwrap_or_none_resource() -> i32 {
+    let fallback = new Resource(113);
+    let option = core::option::Option::<Resource>::None();
+    let result = core::option::unwrap_or(move option, move fallback);
+    return result.marker;
+}
+
+fn unwrap_resource() -> i32 {
+    let selected = new Resource(114);
+    let option = core::option::Option::<Resource>::Some(move selected);
+    let result = core::option::unwrap(move option);
+    return result.marker;
+}
+
+fn expect_resource() -> i32 {
+    let selected = new Resource(115);
+    let option = core::option::Option::<Resource>::Some(move selected);
+    let result = core::option::expect(move option, "resource must exist");
+    return result.marker;
+}
+
+fn main() -> i32 {
+    let some = core::option::Option::<i32>::Some(40);
+    if core::option::unwrap_or(some, 1) != 40 { return 1; }
+
+    let none = core::option::Option::<i32>::None();
+    if core::option::unwrap_or(none, 41) != 41 { return 2; }
+
+    let unwrap_value = core::option::Option::<i32>::Some(42);
+    if core::option::unwrap(unwrap_value) != 42 { return 3; }
+
+    let expect_value = core::option::Option::<i32>::Some(43);
+    if core::option::expect(expect_value, "value must exist") != 43 {
+        return 4;
+    }
+
+    if unwrap_or_some_resource() != 111 { return 5; }
+    if unwrap_or_none_resource() != 113 { return 6; }
+    if unwrap_resource() != 114 { return 7; }
+    if expect_resource() != 115 { return 8; }
+    return 42;
+}

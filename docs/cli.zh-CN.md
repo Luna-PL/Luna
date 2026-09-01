@@ -93,8 +93,8 @@ Windows executable 带 `.exe` 后缀。Native library 必须是 `kind = "library
 loader 才可接受。每个 library 还导出 versioned typed descriptor registry，
 row 由 proof 的 export digest 绑定并使用 SymbolId/ContractId 身份。内部
 verified-loader primitive 使用不可变/私有 staging，只发布与 proof 匹配的
-registry entry。当前还没有面向用户的 load/activation CLI 或进化 generation
-manager；raw dynamic-loader symbol lookup 不是 trusted 装载路径。
+registry entry。EV004 通过 C++17 宿主 API 提供进程内 generation 控制，而不是
+面向用户的 load/activation CLI；raw dynamic-loader symbol lookup 不是 trusted 装载路径。
 
 `luna build <package目录> -t moon` 要求 manifest 显式声明 `kind`，并生成经过
 自验证的 host-specific `.moon`。`-o` 可覆盖路径；否则输出为
@@ -155,7 +155,7 @@ print(7)
 | `--message-format=json` | `check`、`analyze` | 输出对应命令的 versioned JSONL 协议。 |
 | `--overlay <文档>` | `analyze` | 从 stdin 读取一个内存源码替换。 |
 | `--overlays-from-stdin` | `analyze` | 从 stdin 读取带版本的多文档 overlay JSON 对象。 |
-| `--moon-cost-report` | `run`, `build` | 输出运行时、动态绑定、泛型实例和 kernel 的显式成本。 |
+| `--moon-cost-report` | `run`, `build` | 输出运行时、泛型实例和 kernel 的显式成本。 |
 | `--gpu-target <列表>` | `run`, `build` | 为逗号分隔的目标生成设备代码。 |
 | `--reserve-kernel-runtime` | `run`, `build` | 即使没有可达 launch，也保留 kernel runtime 能力。 |
 | `--runtime-lib <路径>` | `build` | 指定 AOT 链接使用的 Luna `libruntime.a`。 |
@@ -192,10 +192,6 @@ LUNA_GPU_BACKEND=rocm luna run app.luna -O2 \
 | `LUNA_GPU_BACKEND` | 运行时 GPU 后端：`sim`、`cuda` 或 `rocm`。 |
 | `LUNA_GPU_PROFILE=1` | 输出 CUDA/ROCm device-event 累计 kernel 时间。 |
 | `LUNA_GPU_DUMP_HSACO=<目录>` | 保存生成的 ROCm HSACO 以供检查。 |
-| `LUNA_FRAGMENT_PLUGIN=<路径>` | 加载 Alpha v1 外部 fragment 插件。 |
-| `LUNA_FRAGMENT_<SLOT>=<名称>` | 为 slot 选择已链接的动态 fragment 候选。 |
-
-插件限制及环境选择规则见[Fragment 与插件](fragments.md)。
 
 ## 常用工作流
 

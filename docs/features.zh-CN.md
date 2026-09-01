@@ -18,7 +18,9 @@ encoder 会把含泛型的编译器输入投影为 concrete type 和已单态化
 recipe 不跨越容器信任边界。随后以 entry/export/host interface/runtime retention
 为根计算可达闭包，删除未使用的 concrete code 和 model row，同时保留 direct/dynamic
 callee、Drop glue、metadata、fragment 及其 type dependency。
-evolution runtime 尚未完成，portable cross-target container 明确延后到 0.3 之后。
+最小 host-only、无状态 evolution 闭环已通过安装的 C++17 API 暴露；portable
+cross-target container 与 state migration 明确延后到 0.3 之后。详见
+[宿主进化 API](evolution.zh-CN.md)。
 
 具体设计：[架构决策 D001/D002](decisions.md)。
 
@@ -51,7 +53,7 @@ Resource 要求。只有最终 binding contract 进入 MoonIR。
 
 可恢复失败使用普通值 `Result<T, E>`。通用 enum/Result 穷尽 `match` 绑定活动载荷；
 后缀 `?` 携带路径敏感清理义务，并在错误类型不同时调用唯一、静态解析的
-`From<Source> for Target`。0.2 编译器/MoonIR 的 inline ADT v1 布局支持普通
+`From<Source> for Target`。0.3 编译器/MoonIR 的 inline ADT v1 布局支持普通
 enum、数组、slice 与嵌套 Result，清理只作用于当前 tag 对应的载荷；该内部布局
 不是 C FFI 承诺。
 
@@ -92,8 +94,8 @@ Metadata schema 是一等声明。静态 `select` 会在真实、可遍历的声
 视图上执行普通用户函数，并在编译期完成。对象已经可由名称和签名确定时，可以
 直接做静态声明反射，不需要 Metadata 或 Select。只有使用 `runtime` 才保留运行时
 可见信息，普通编译期 Metadata 不会被悄悄带入运行时。0.3 phase 模型只有
-compile-time 与 runtime；开发编译器里仍存在的旧 `dynamic select` / `dynamic apply`
-是等待已冻结 runtime query/Slot replacement 的 0.2 过渡实现，不是第三个 phase 或兼容承诺。
+compile-time 与 runtime；旧 `dynamic select`、`dynamic slot` 与 `dynamic apply` 均被拒绝，
+对应 production path 已删除。它们都不是第三个 phase 或兼容承诺。
 
 具体说明：[Metadata 与 selector](versioning.md)。
 
@@ -107,10 +109,10 @@ Package ID 使用反向 DNS 名称，是版本和依赖单元；module 使用 `:
 
 ## 结构化 fragment
 
-`interceptor`、`context`、`slot`、`resume`、`abort` 和 `apply` 当前用于表达结构化
-控制流与扩展性。现有 function-local 源码形式是正在迁移的实现，不是最终 0.3 表面。
-已确认的目标使用 module-level 二等 Slot identity、名义 Fragment target 和经过验证的
-MoonIR composition；确切声明/control 拼写仍是 `TBD-SF006`。
+`interceptor`、`context`、`slot`、`resume`、`abort` 和 `apply` 用于表达结构化控制流与
+扩展性。SF006 已冻结 module-level 二等 Slot identity、名义 Fragment target、词法调用/
+应用、unit-result single-shot control 和经验证的 MoonIR composition。旧 local、dynamic、
+multi-shot 与无 body 形式均被拒绝。
 
 具体说明：[Fragment、slot 与插件](fragments.md)。
 

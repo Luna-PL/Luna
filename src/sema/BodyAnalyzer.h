@@ -43,6 +43,9 @@ private:
         std::vector<std::string> captures;
     };
     std::vector<CaptureFrame> mCaptureFrames;
+    // Inactive arms of a compile-time Option match are still type-checked,
+    // but an absent Some payload intentionally has no catalog identity.
+    bool mInCompileTimeInactiveBranch = false;
 
     luna::ownership::Usage inherentUsageForInitializer(
         Expr* initializer, const TypePtr& type);

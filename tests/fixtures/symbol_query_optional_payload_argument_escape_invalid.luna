@@ -1,0 +1,18 @@
+fn answer() -> i32 { return 42; }
+
+fn identity<T>(value: T) -> T {
+    return value;
+}
+
+fn main() -> i32 {
+    let candidate = symbols(answer).optional();
+    match candidate {
+        None => {
+            return 0;
+        },
+        Some(selected) => {
+            let escaped = identity(selected);
+            return 1;
+        }
+    }
+}

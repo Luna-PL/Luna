@@ -1,4 +1,6 @@
-context guard(flag: bool) {
+slot context guarded(flag: bool);
+
+context guard(flag: bool) for guarded {
     if flag {
         abort();
     } else {
@@ -8,8 +10,7 @@ context guard(flag: bool) {
 
 fn main() -> i32 {
     let data = gpu_alloc_i32(1);
-    slot context guarded(flag: bool);
-    apply guarded(guard) {
+    apply guard {
         guarded(true) {
             gpu_free(move data);
         }

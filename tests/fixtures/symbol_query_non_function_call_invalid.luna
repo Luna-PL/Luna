@@ -1,0 +1,6 @@
+struct Snapshot { value: i32; }
+
+fn main() -> i32 {
+    let selected = symbols(Snapshot).one();
+    return selected();
+}

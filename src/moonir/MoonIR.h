@@ -149,7 +149,6 @@ struct Node {
 enum class Retention : uint8_t {
     CompileTime,
     Runtime,
-    Dynamic,
 };
 
 using DeclarationKind = luna::sysmeta::DeclarationKind;
@@ -412,7 +411,6 @@ struct SlotDeclStmt : Stmt {
     std::string name;
     FragmentKind acceptedKind = FragmentKind::Interceptor;
     FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
-    bool isDynamic = false;
     std::vector<Param> params;
     std::string defaultFragment;
     DeclarationRef defaultFragmentRef;
@@ -423,9 +421,6 @@ struct SlotInvokeStmt : Stmt {
     std::string name;
     FragmentKind acceptedKind = FragmentKind::Interceptor;
     FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
-    bool isDynamic = false;
-    bool usesDynamicDispatch = false;
-    DeclarationRefVec dynamicFragmentRefs;
     std::vector<std::unique_ptr<Expr>> args;
     std::unique_ptr<BlockStmt> continuation;
     bool isImplicitCapture = false;
@@ -449,9 +444,6 @@ struct AwaitStmt : Stmt {
 struct ApplyStmt : Stmt {
     std::string slotName;
     std::string fragmentName;
-    bool isDynamic = false;
-    std::vector<std::string> alternativeFragmentNames;
-    DeclarationRefVec alternativeFragmentRefs;
     DeclarationRef fragmentRef;
     std::unique_ptr<BlockStmt> body;
 };
@@ -517,22 +509,6 @@ struct CallExpr : Expr {
     DeclarationRef iteratorCollectPush;
     DeclarationRef iteratorCollectFinish;
     std::optional<ConstantValue> compileTimeValue;
-};
-
-struct DynamicSelectCandidate {
-    DeclarationRef declaration;
-    std::vector<ConstantValue> metadataValues;
-};
-
-// A dynamic select is an explicit host-side binding operation.  Its finite
-// candidate set and runtime-visible metadata are embedded in MoonIR so a
-// backend or future MoonRuntime can validate the operation before execution.
-struct DynamicSelectExpr : Expr {
-    std::string familyId;
-    DeclarationRef selector;
-    std::string metadataSchemaId;
-    std::vector<std::unique_ptr<Expr>> filterArguments;
-    std::vector<DynamicSelectCandidate> candidates;
 };
 
 struct LaunchExpr : Expr {
@@ -850,8 +826,17 @@ struct FunctionDecl : Decl {
 struct FragmentDecl : Decl {
     FragmentKind kind = FragmentKind::Interceptor;
     FragmentCardinality cardinality = FragmentCardinality::Once;
+    DeclarationRef targetSlot;
     std::vector<Param> params;
     std::unique_ptr<BlockStmt> body;
+    TypeRef structuralType;
+};
+
+struct SlotDecl : Decl {
+    FragmentKind acceptedKind = FragmentKind::Interceptor;
+    FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
+    std::vector<Param> params;
+    DeclarationRef defaultFragment;
     TypeRef structuralType;
 };
 
@@ -892,9 +877,6 @@ struct ImplDecl : Decl {
 
 struct FeatureFlags {
     bool runtime = false;
-    bool dynamicReflection = false;
-    bool dynamicApply = false;
-    bool dynamicSelect = false;
     bool kernel = false;
     bool kernelRuntimeReserved = false;
 };
@@ -904,7 +886,6 @@ enum class CostKind : uint8_t {
     GenericInstantiation,
     RuntimeDescriptor,
     RuntimeMetadata,
-    DynamicBinding,
     KernelCode,
     ReservedCapability,
 };
@@ -971,6 +952,7 @@ struct Module {
     std::unordered_map<std::string, size_t> declarationRecordsByLinkage;
     std::unordered_map<std::string, FunctionDecl*> functionsBySymbol;
     std::unordered_map<std::string, FragmentDecl*> fragmentsBySymbol;
+    std::unordered_map<std::string, SlotDecl*> slotsBySymbol;
 
     void rebuildIndexes();
     TypeRef registerType(const TypePtr& type);

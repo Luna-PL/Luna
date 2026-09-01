@@ -70,6 +70,7 @@ C++ analogy: it is like a "scope-qualified symbol dictionary" — analogous to a
   - `isLinear`/`usage`/`relation`: the ownership contract (`luna::ownership::Usage/Relation`).
   - `isConst`/`isExported`/`isExtern`/`returnsLinear`/`returnUsage`/`paramContracts`, etc.
   - `compileTimeDeclarationId`: a `declaration_ref` value used by the frontend only and erased before MIR.
+  - `isCompileTimeSymbolSet`/`isCompileTimeQueryDeclarationView` and their declaration-ID vectors preserve locally rebound query membership and order; query-reference/optional-payload flags enforce call/return non-escape.
 - `class SymbolTable`:
   - `mScopes`: the scope stack (`vector<unordered_map<string, SymbolInfo>>`); `mScopes[0]` is the package-level root scope.
   - `mTypeMap`: the global "type/trait registry" (name → `TypePtr`).

@@ -1,0 +1,8 @@
+fn route() -> i32 { return 1; }
+
+fn escape() -> declaration_ref<() -> i32> {
+    let ordered = symbols(route).all();
+    return declaration_at(ordered, 0);
+}
+
+fn main() -> i32 { return 0; }

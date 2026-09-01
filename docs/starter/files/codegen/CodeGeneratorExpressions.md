@@ -2,7 +2,7 @@
 
 ## What This File Does
 
-This file implements all expression-generation methods in the `CodeGenerator` class whose names start with `generate`, as well as the overall dispatch entry point `generateExpr(Expr*)`, covering **every expression kind** in the Luna language: literals, identifiers, dynamic selection, field access, slice length, subscript indexing, binary/unary operations, variant construction / Result construction / Record literals, initialized allocation / heap allocation, function calls (including built-ins / standard library / dynamic fragments / plugins / GPU built-ins / print / Ok / Err / is_ok / unwrap / slice / panic / compile-time constants), try propagation, assignment (including compound-assignment deref / field / index / local), move, borrow, dereference, address-of, lambdas, closure environment loads, and closure construction.
+This file implements all expression-generation methods in `CodeGenerator` and the `generateExpr(Expr*)` dispatch entry point, covering literals, identifiers, field/index access, operators, variants/Result/records, allocation, ordinary and intrinsic calls, GPU built-ins, `try`, assignment, ownership expressions, lambdas, and closures.
 
 For C++ readers: this is the "expression evaluator" of the entire LLVM backend — each `generateXxx` corresponds to one kind of AST node; after dispatch via `generateExpr`'s dynamic_cast, LLVM IR is emitted using the `mBuilder->Create*` family of methods. Among these, `generateCall` is the largest (~470 lines), handling various built-in runtime calls as well as indirect calls through function pointers and closures.
 
@@ -33,7 +33,7 @@ For C++ readers: this is the "expression evaluator" of the entire LLVM backend �
 - `HeapAlloc`: calls `rt_alloc` to obtain a pointer, then stores the constructor arguments to initialize it.
 
 **`generateCall` (most complex, lines 660-1130)**:
-- Checks, in order: iterator terminals (Fold/ForEach/Count/Collect) → `pointer_cast` → `drop_callback` → `Ok`/`Err`/`is_ok`/`is_err`/`unwrap`/`unwrap_err` → `panic` → `slice` (3 args) → compile-time constants → GPU built-ins (`gpu_alloc_i32`/`gpu_free`/`gpu_load_i32`/`gpu_store_i32`/`gpu_copy_from/to_host_i32`) → `print` (i32 or cstr) → dynamic fragments (`rt_dynamic_fragment_select`/`matches`/`report_unknown_and_abort`) → plugins (`rt_canonical_fragment_plugin_fallback`/`rt_fragment_plugin_report_error_and_abort`) → global function calls (resolveFunction + CreateCall, with Unreachable appended after Never-returning calls) → indirect function calls (FunctionType types) → closure calls (code_ptr + env structure, with the env pointer as the first argument).
+- Checks iterator terminals, compiler/runtime intrinsics, GPU built-ins and printing before resolving verified global calls, indirect function calls, and closure calls.
 
 **Other expressions**: `generateTry` (conditional branch on isOk → on the failure edge, packResultPayload + emitCleanups + CreateRet), `generateAssign` (compound-assignment expansion / array elements / fields / locals), `generateMove` (optionally updates a guarded cursor), `generateBorrow` (address-of / array elements / slice elements), `generateDeref` (Load), `generateAddrOf` (returns an alloca), `generateLambda` (emits a hidden function + generateControlFlowBody), `generateEnvLoad` (loads fields of the closure env structure), `generateMakeClosure` (emits a hidden function + builds the closure struct {code_ptr, captured...}).
 

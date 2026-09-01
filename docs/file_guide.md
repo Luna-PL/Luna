@@ -57,7 +57,6 @@ obligations but must not rederive ownership.
 | docs/reference/ | Alpha contracts, semantic baseline, type and error models | Tutorials, roadmap, temporary status |
 | examples/ | Independent readable language examples | Sole regression evidence or test assertions |
 | examples/full_showcase/ | Complete workspace/package integration example | Compiler-internal test logic |
-| examples/slot_plugins/ | Slot/fragment plugin examples | Runtime ABI authority |
 | src/ | Compiler and embedded Runtime implementation | Test data or tutorials |
 | src/core/ | Backend-independent type, identity, layout, ownership, sysmeta models | AST, symbol tables, LLVM |
 | src/diagnostics/ | Cross-stage diagnostic format | Stage-specific semantic decisions |
@@ -94,6 +93,10 @@ script-defined special inputs.
 ## 5. Source responsibility boundaries
 
 - Driver files own command dispatch, pipeline orchestration, REPL, and AOT linking.
+  `MoonGeneration` and `NativeGeneration` are the internal verified-artifact
+  adapters, including typed load-once publication; they feed the EV004 control
+  plane but are not a second activation API. `MoonRuntime` owns pinned/switchable typed
+  requirements, retained leases, first publication, activation, and rollback.
 - Package files own manifests, locks, source graphs, and package merging.
 - Core files own ownership, sysmeta, type identity, type relations, and layout.
 - Lexer/parser files own tokens, AST, parsing, and syntax recovery.
@@ -105,6 +108,9 @@ script-defined special inputs.
 - Codegen files are split by module, function, statement, expression, cleanup, execution,
   fragments, GPU, iterators, range analysis, descriptors, and helper concerns.
 - Runtime files own versioned C ABIs and host/GPU/plugin services.
+  `RuntimeDescriptorABI.h` is the installed in-memory descriptor contract;
+  `RuntimeDescriptor.h/.cpp` validate one lease-owned registry and provide
+  exact typed lookup without defining source-language query syntax.
 
 SemanticAnalyzer is the stable tooling/compiler facade and exposes the read-only Symbol Catalog.
 SemanticContext is the single internal
@@ -136,8 +142,8 @@ assessment. Both are design records, not part of the 0.2 normative reference or 
 implementation. The paired 0.2-to-0.3 migration record owns the breaking-change register and
 the independently replayable final 0.2 corpus; it does not add a compatibility path.
 
-Examples demonstrate one topic per file; full_showcase is the combined Alpha example and
-slot_plugins demonstrates plugin use. Benchmark runners are responsible for reproducible
+Examples demonstrate one topic per file; full_showcase is the combined Alpha example.
+Benchmark runners are responsible for reproducible
 build, sampling, and reporting. `cpp23_allocation_support.cpp` keeps the C++ allocation
 workload observable across a non-LTO translation-unit boundary.
 
@@ -192,6 +198,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `benchmarks/luna_cpu_stream_read.luna`
 - `benchmarks/luna_cpu_stream_write.luna`
 - `benchmarks/luna_gpu_vector.luna`
+- `benchmarks/package_source.sh`
 - `benchmarks/run_basic_benchmark.sh`
 - `benchmarks/run_cpu_comparison.sh`
 - `benchmarks/run_cpu_suite_extended.sh`
@@ -212,6 +219,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `docs/decisions.zh-CN.md`
 - `docs/ecosystem_release.md`
 - `docs/ecosystem_release.zh-CN.md`
+- `docs/evolution.md`
+- `docs/evolution.zh-CN.md`
 - `docs/features.md`
 - `docs/features.zh-CN.md`
 - `docs/file_guide.md`
@@ -285,7 +294,6 @@ Git internals, and ignored generated artifacts are excluded.
 - `examples/basic.luna`
 - `examples/closure.luna`
 - `examples/compile_time.luna`
-- `examples/dynamic_select.luna`
 - `examples/ffi.luna`
 - `examples/fragment_multishot_free_invalid.luna`
 - `examples/fragment_multishot_invalid.luna`
@@ -316,9 +324,6 @@ Git internals, and ignored generated artifacts are excluded.
 - `examples/minimal.luna`
 - `examples/operators.luna`
 - `examples/print.luna`
-- `examples/slot_plugins/README.md`
-- `examples/slot_plugins/README.zh-CN.md`
-- `examples/slot_plugins/loop_plugins.luna`
 - `examples/test.luna`
 - `examples/test2.luna`
 - `examples/trait_versioned_nominal.luna`
@@ -403,10 +408,13 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/parser/AST.h`
 - `src/parser/Parser.cpp`
 - `src/parser/Parser.h`
-- `src/runtime/FragmentPluginABI.h`
+- `src/runtime/Evolution.h`
 - `src/runtime/MoonRuntime.cpp`
 - `src/runtime/MoonRuntime.h`
 - `src/runtime/NativeArtifactABI.h`
+- `src/runtime/RuntimeDescriptor.cpp`
+- `src/runtime/RuntimeDescriptor.h`
+- `src/runtime/RuntimeDescriptorABI.h`
 - `src/runtime/ApplicationHostServices.cpp`
 - `src/runtime/ApplicationHostServices.h`
 - `src/runtime/Runtime.cpp`
@@ -455,6 +463,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `stdlib/core/src/option.luna`
 - `stdlib/core/src/prelude.luna`
 - `stdlib/core/src/rc.luna`
+- `stdlib/core/src/result.luna`
 - `stdlib/core/src/resource.luna`
 - `stdlib/core/src/shared.luna`
 - `stdlib/core/src/shared_runtime.luna`
@@ -473,9 +482,12 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/analysis_protocol.cmake`
 - `tests/analysis_snapshot_test.cpp`
 - `tests/aot_package_fixture.cmake`
+- `tests/benchmark_package_smoke.cmake`
 - `tests/compiler_identity.cmake`
 - `tests/control_flow_aot.cmake`
 - `tests/core_contracts_test.cpp`
+- `tests/core_option.cmake`
+- `tests/core_result.cmake`
 - `tests/symbol_catalog_test.cpp`
 - `tests/core_surface.cmake`
 - `tests/diagnostic_protocol.cmake`
@@ -503,10 +515,15 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/context_abort_preserves_outer_resource.luna`
 - `tests/fixtures/context_continuation_return_invalid.luna`
 - `tests/fixtures/context_continuation_return_valid.luna`
+- `tests/fixtures/context_continuation_try_cleanup_valid.luna`
 - `tests/fixtures/context_linear_guard.luna`
 - `tests/fixtures/context_missing_control_invalid.luna`
 - `tests/fixtures/context_partial_resume_invalid.luna`
 - `tests/fixtures/context_return_ends_fragment_valid.luna`
+- `tests/fixtures/core_option_app/luna.package`
+- `tests/fixtures/core_option_app/src/main.luna`
+- `tests/fixtures/core_result_app/luna.package`
+- `tests/fixtures/core_result_app/src/main.luna`
 - `tests/fixtures/core_surface_app/luna.package`
 - `tests/fixtures/core_surface_app/src/main.luna`
 - `tests/fixtures/drop_intrinsic.luna`
@@ -515,6 +532,9 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/dynamic_fragments.luna`
 - `tests/fixtures/dynamic_fragments_many.luna`
 - `tests/fixtures/dynamic_fragments_many_capture_invalid.luna`
+- `tests/fixtures/dynamic_select_0_2.luna`
+- `tests/fixtures/dynamic_select_removed_invalid.luna`
+- `tests/fixtures/runtime_retention_descriptor.luna`
 - `tests/fixtures/enum_match.luna`
 - `tests/fixtures/enum_match_arity_invalid.luna`
 - `tests/fixtures/enum_match_duplicate_invalid.luna`
@@ -529,12 +549,14 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/ffi_unsupported_abi_invalid.luna`
 - `tests/fixtures/ffi_unsupported_type_invalid.luna`
 - `tests/fixtures/fragment_contracts.luna`
+- `tests/fixtures/fragment_return_value_invalid.luna`
 - `tests/fixtures/generic_argument_count_invalid.luna`
 - `tests/fixtures/generic_body_cloning.luna`
 - `tests/fixtures/generic_instance_reuse.luna`
 - `tests/fixtures/heterogeneous_bulk_transfer.luna`
 - `tests/fixtures/heterogeneous_bulk_transfer_invalid.luna`
 - `tests/fixtures/interceptor_resume_invalid.luna`
+- `tests/fixtures/interceptor_return_cleanup_valid.luna`
 - `tests/fixtures/invalid_export.luna`
 - `tests/fixtures/inline_where_not_satisfied_invalid.luna`
 - `tests/fixtures/iterator_count_move_only_invalid.luna`
@@ -691,17 +713,39 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/slot_fragment_contract_mismatch_invalid.luna`
 - `tests/fixtures/slot_missing_contract_invalid.luna`
 - `tests/fixtures/static_declaration_reflection.luna`
+- `tests/fixtures/string_literal_local_cleanup.luna`
 - `tests/fixtures/structural_enum_equivalence.luna`
 - `tests/fixtures/structural_field_order_invalid.luna`
 - `tests/fixtures/structural_generic_instance_reuse.luna`
 - `tests/fixtures/structural_trait_coherence.luna`
 - `tests/fixtures/structural_type_equivalence.luna`
-- `tests/fixtures/symbol_query_all_blocked_invalid.luna`
+- `tests/fixtures/symbol_query_all_ordered.luna`
+- `tests/fixtures/symbol_query_all_empty.luna`
+- `tests/fixtures/symbol_query_all_duplicate_key_invalid.luna`
+- `tests/fixtures/symbol_query_all_missing_key_invalid.luna`
+- `tests/fixtures/symbol_query_all_float_key_invalid.luna`
+- `tests/fixtures/symbol_query_all_view_escape_invalid.luna`
+- `tests/fixtures/symbol_query_all_ref_escape_invalid.luna`
+- `tests/fixtures/symbol_query_all_view_return_escape_invalid.luna`
+- `tests/fixtures/symbol_query_all_ref_return_escape_invalid.luna`
+- `tests/fixtures/symbol_query_all_index_invalid.luna`
 - `tests/fixtures/symbol_query_ambiguous_invalid.luna`
 - `tests/fixtures/symbol_query_generic_invalid.luna`
 - `tests/fixtures/symbol_query_no_match_invalid.luna`
-- `tests/fixtures/symbol_query_optional_blocked_invalid.luna`
+- `tests/fixtures/symbol_query_non_function.luna`
+- `tests/fixtures/symbol_query_non_function_call_invalid.luna`
+- `tests/fixtures/symbol_query_non_function_generic_invalid.luna`
+- `tests/fixtures/symbol_query_optional_ambiguous_invalid.luna`
+- `tests/fixtures/symbol_query_optional_argument_escape_invalid.luna`
+- `tests/fixtures/symbol_query_optional_escape_invalid.luna`
+- `tests/fixtures/symbol_query_optional_none.luna`
+- `tests/fixtures/symbol_query_optional_payload_argument_escape_invalid.luna`
+- `tests/fixtures/symbol_query_optional_payload_return_escape_invalid.luna`
+- `tests/fixtures/symbol_query_optional_payload_trait_argument_escape_invalid.luna`
+- `tests/fixtures/symbol_query_optional_rebind_nested.luna`
+- `tests/fixtures/symbol_query_optional_some.luna`
 - `tests/fixtures/symbol_query_public.luna`
+- `tests/fixtures/symbol_query_same_metadata_overload.luna`
 - `tests/fixtures/symbol_query_signature_invalid.luna`
 - `tests/fixtures/type_domains_reflection.luna`
 - `tests/fixtures/type_relations.luna`
@@ -731,8 +775,6 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/native_artifact_oracle.py`
 - `tests/native_artifact_test.cpp`
 - `tests/moon_runtime_test.cpp`
-- `tests/fragment_plugin_fixture.cpp`
-- `tests/fragment_plugin_test.cpp`
 - `tests/full_showcase.cmake`
 - `tests/gpu_error_boundary_abi.cmake`
 - `tests/gpu_target_split.cmake`
@@ -758,6 +800,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/package_manifest_workspace.cmake`
 - `tests/package_module_model.cmake`
 - `tests/rc_arc_core.cmake`
+- `tests/release_evidence_test.js`
+- `tests/release_readiness.cmake`
 - `tests/repl_smoke.cmake`
 - `tests/resource_drop_aot.cmake`
 - `tests/result_error_aot.cmake`
@@ -767,6 +811,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/rocm_smoke.cmake`
 - `tests/runtime_abi_c_compile.c`
 - `tests/runtime_abi_test.cpp`
+- `tests/runtime_descriptor_test.cpp`
 - `tests/runtime_allocation_abi_test.cpp`
 - `tests/runtime_application_host_test.cpp`
 - `tests/runtime_default_allocation_test.cpp`
@@ -783,6 +828,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `tools/gen_cpu_bench_sources.py`
 - `tools/gen_heterogeneous_scale.py`
 - `tools/verify_ecosystem_lock.cmake`
+- `tools/verify_locked_component_release.sh`
+- `tools/verify_release_readiness.cmake`
 - `tools/verify_release_evidence.js`
 - `Doxyfile`
 - `docs/starter/files/codegen.md`
@@ -853,8 +900,6 @@ Git internals, and ignored generated artifacts are excluded.
 - `docs/starter/files/runtime.zh-CN.md`
 - `docs/starter/files/runtime/ApplicationHostServices.md`
 - `docs/starter/files/runtime/ApplicationHostServices.zh-CN.md`
-- `docs/starter/files/runtime/FragmentPluginABI.md`
-- `docs/starter/files/runtime/FragmentPluginABI.zh-CN.md`
 - `docs/starter/files/runtime/Runtime.md`
 - `docs/starter/files/runtime/Runtime.zh-CN.md`
 - `docs/starter/files/runtime/RuntimeABI.md`

@@ -4,8 +4,10 @@
 #include "../core/TypeRelations.h"
 #include "../parser/AST.h"
 
+#include <algorithm>
 #include <iomanip>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 
 inline std::string displayTraitRef(const TraitRef& trait) {
@@ -29,7 +31,8 @@ inline luna::sysmeta::Facts declarationContractFacts(
     luna::sysmeta::Facts facts;
     if (type) {
         if (kind == luna::sysmeta::DeclarationKind::Function ||
-            kind == luna::sysmeta::DeclarationKind::Fragment) {
+            kind == luna::sysmeta::DeclarationKind::Fragment ||
+            kind == luna::sysmeta::DeclarationKind::Slot) {
             facts = type->sysmeta;
         } else {
             // MoonIR declaration records inherit the represented type's
@@ -142,6 +145,133 @@ inline std::string metadataDeclarationName(const std::string& base,
     output << base << "__meta_" << std::hex << std::setw(16)
            << std::setfill('0') << stableMetadataHash(key);
     return output.str();
+}
+
+inline void appendSourceIdentityPart(
+    std::string& output, const std::string& part) {
+    output += std::to_string(part.size()) + ":" + part;
+}
+
+inline std::string sourceTypeIdentity(
+    const TypeAST* type,
+    const std::unordered_map<std::string, size_t>& typeParameters) {
+    if (!type) return "inferred";
+    if (const auto* named = dynamic_cast<const NamedTypeAST*>(type)) {
+        std::string result = "named{";
+        const auto parameter = typeParameters.find(named->name);
+        appendSourceIdentityPart(
+            result,
+            parameter == typeParameters.end()
+                ? named->name
+                : "type-param@" + std::to_string(parameter->second));
+        appendSourceIdentityPart(
+            result,
+            named->arrayLength
+                ? std::to_string(*named->arrayLength)
+                : std::string{});
+        for (const auto& argument : named->typeArgs)
+            appendSourceIdentityPart(
+                result,
+                sourceTypeIdentity(argument.get(), typeParameters));
+        return result + "}";
+    }
+    if (const auto* reference = dynamic_cast<const RefTypeAST*>(type)) {
+        std::string result = reference->isMutable
+            ? "mutable-reference{" : "shared-reference{";
+        appendSourceIdentityPart(
+            result,
+            sourceTypeIdentity(reference->inner.get(), typeParameters));
+        return result + "}";
+    }
+    if (const auto* linear = dynamic_cast<const LinearTypeAST*>(type)) {
+        std::string result = "linear{";
+        appendSourceIdentityPart(
+            result,
+            sourceTypeIdentity(linear->inner.get(), typeParameters));
+        return result + "}";
+    }
+    if (const auto* affine = dynamic_cast<const AffineTypeAST*>(type)) {
+        std::string result = "affine{";
+        appendSourceIdentityPart(
+            result,
+            sourceTypeIdentity(affine->inner.get(), typeParameters));
+        return result + "}";
+    }
+    if (const auto* function = dynamic_cast<const FunctionTypeAST*>(type)) {
+        std::string result = "function{";
+        for (const auto& parameter : function->paramTypes)
+            appendSourceIdentityPart(
+                result,
+                sourceTypeIdentity(parameter.get(), typeParameters));
+        appendSourceIdentityPart(
+            result,
+            sourceTypeIdentity(function->returnType.get(), typeParameters));
+        return result + "}";
+    }
+    if (const auto* record = dynamic_cast<const RecordTypeAST*>(type)) {
+        std::vector<const RecordTypeAST::Field*> fields;
+        fields.reserve(record->fields.size());
+        for (const auto& field : record->fields)
+            fields.push_back(&field);
+        std::sort(
+            fields.begin(), fields.end(),
+            [](const auto* lhs, const auto* rhs) {
+                return lhs->name < rhs->name;
+            });
+        std::string result = "record{";
+        for (const auto* field : fields) {
+            appendSourceIdentityPart(result, field->name);
+            appendSourceIdentityPart(
+                result,
+                sourceTypeIdentity(field->type.get(), typeParameters));
+        }
+        return result + "}";
+    }
+    return "unknown-source-type";
+}
+
+inline std::string functionSourceSignatureIdentity(
+    const FunctionDecl* function) {
+    if (!function) return {};
+    std::unordered_map<std::string, size_t> typeParameters;
+    for (size_t index = 0; index < function->typeParams.size(); ++index)
+        typeParameters.emplace(function->typeParams[index], index);
+    std::string result = "function-signature{";
+    appendSourceIdentityPart(
+        result, std::to_string(function->typeParams.size()));
+    for (const auto& parameter : function->params) {
+        appendSourceIdentityPart(
+            result,
+            parameter.hasExplicitUsage
+                ? std::string(luna::ownership::usageName(parameter.usage))
+                : "default-usage");
+        appendSourceIdentityPart(
+            result,
+            sourceTypeIdentity(parameter.type.get(), typeParameters));
+    }
+    appendSourceIdentityPart(
+        result,
+        sourceTypeIdentity(function->returnType.get(), typeParameters));
+    return result + "}";
+}
+
+inline std::string declarationSourceIdentity(
+    const std::string& base, const Decl* declaration) {
+    std::string result = metadataDeclarationName(base, declaration);
+    if (const auto* function =
+            dynamic_cast<const FunctionDecl*>(declaration)) {
+        result += "::" + functionSourceSignatureIdentity(function);
+    }
+    return result;
+}
+
+inline std::string functionDeclarationIdentity(
+    const Program* program, const FunctionDecl* function) {
+    if (!function) return {};
+    return nominalDeclarationIdentity(
+        program, "fn",
+        declarationSourceIdentity(function->name, function),
+        function);
 }
 
 inline std::string effectivePackageId(const Program* program, const Decl* declaration) {

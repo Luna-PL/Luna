@@ -6,7 +6,7 @@ Printer.h 的实现：把 Module / TypeRecord / declaration / metadata 打印成
 
 print() 分块输出：
 
-- 顶部：模块名与版本、features（runtime、dynamic_reflection、dynamic_apply、dynamic_select、kernel、kernel_runtime_reserved 等）、sourceModule、packageUses；
+- 顶部：模块名与版本、active features（runtime、kernel、kernel_runtime_reserved）、sourceModule、packageUses；
 - 类型块：每个 TypeRecord 一行（id、shape、abi_layout、domain、identity、sysmeta 资源契约、abi_size/abi_align）；
 - metadata schema；declarationTable（decl 行 + sysmeta 子行 + metadata attach）；
 - 声明列表：function / fragment 分别打印名字(参数…) -> 返回类型，并带 kernel / deferred_recipe / generic_recipe / instantiation 标记。
