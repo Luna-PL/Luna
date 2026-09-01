@@ -1,165 +1,133 @@
 # Interceptors, contexts, and slots
 
-The fragment model distinguishes three behaviors: an `interceptor` continues
-automatically after normal completion, a `context` controls its continuation
-through `resume()`, and `abort()` explicitly skips the continuation.
-`return` ends only the current fragment. Slots record parameters, emission
-cardinality, and ownership effects in their contracts; static paths are kept
-inline whenever possible, while dynamic paths retain dispatch cost.
-
-Luna does not infer a fragment's control behavior from how many times
-`resume()` happens to occur. The declaration and the slot both carry an
-explicit contract.
-
-## Interceptors
-
-An interceptor performs straight-line work and forwards the continuation once
-when it completes normally. It cannot call `resume()` and requires no retained
-continuation frame:
+Luna 0.3 models a control hook as a nominal module-level `slot` and its
+implementation as an `interceptor` or `context` that explicitly targets that
+slot. A slot invocation always carries a lexical continuation body, and an
+`apply` always carries a lexical body.
 
 ```luna
-interceptor audit(value: i32) {
+slot interceptor observed(value: i32) default audit;
+
+interceptor audit(value: i32) for observed {
     print(value);
 }
 
-slot interceptor pipeline(value: i32) default audit;
-pipeline(7) { print(8); }
+fn main() -> i32 {
+    apply audit {
+        observed(41) {
+            print(42);
+        }
+    }
+    return 0;
+}
 ```
 
-`abort()` is the only way for an interceptor to discard the continuation.
+Slots and fragments are declared at module scope. A fragment must bind every
+slot parameter with the same type, ownership relation, and usage. Its control
+form must also match the target slot. The target gives both declarations a
+nominal contract identity; two same-shaped slots are still different types.
+Declaration order does not affect a `default` binding.
 
-## Contexts
+## Single-shot control contract
 
-A context explicitly controls a retained continuation. `resume()` enters the
-slot continuation and returns to the next statement in the context after that
-continuation completes. `abort()` explicitly discards the slot continuation.
-If a context path reaches its end without `resume()`, it is an implicit abort;
-the compiler does not require boilerplate `abort()`:
+Luna 0.3 freezes unit-result, single-shot control. `context many`, dynamic
+slot/apply syntax, local slot declarations, and blockless apply are rejected
+with migration diagnostics.
+
+| Operation | `interceptor` | `context` |
+| --- | --- | --- |
+| Natural fallthrough | Enters the continuation exactly once | Discards an unconsumed continuation; after `resume()`, completes the fragment |
+| `resume()` | Rejected | Enters the continuation once, then returns to the next fragment statement if it completes normally |
+| `return;` | Ends the fragment and skips the continuation | Ends the fragment and skips an unconsumed continuation; after `resume()`, ends post-resume fragment execution |
+| `abort()` | Explicitly discards the continuation | Explicitly discards an unconsumed continuation |
+
+Fragment return is unit-only: `return value;` is rejected. `abort()` after a
+single-shot context has resumed is also rejected because the continuation has
+already been consumed. A context path may omit `resume()`; reaching its end is
+an implicit discard rather than a missing-control error.
+
+`return;` and `abort()` can have the same destination before a continuation is
+entered, but remain different canonical operations. Return is normal
+fragment-local termination. Abort records an explicit continuation-discard
+decision and is invalid once a single-shot continuation has been consumed.
+
+## Continuation boundary
+
+The lexical body belongs to the invoking function, not to the fragment:
+
+- `return value;` in the continuation returns from the enclosing function and
+  bypasses context code after `resume()`.
+- `?` in the continuation propagates from the enclosing `Result` function and
+  has the same bypass behavior.
+- `?` inside a fragment is rejected because it would otherwise propagate
+  across the slot boundary implicitly; handle the `Result` explicitly there.
+- Fragment-local names are not visible in the continuation, even when a local
+  shadows a name in the invoking scope.
+
+These rules avoid a second hidden meaning for `return` or `?`.
+
+## Ownership and cleanup
+
+Every edge leaving a fragment carries explicit cleanup obligations:
+
+- interceptor locals are cleaned before natural forwarding, `return;`, or
+  `abort()` reaches its target;
+- context locals live across `resume()` and are cleaned when the context exits,
+  including an enclosing-function return or `?` from the continuation;
+- continuation locals are cleaned on their ordinary function/block exit;
+- fragment-local exits do not consume enclosing resources implicitly; all
+  paths that reach code after the slot must agree on ownership, borrow, and
+  in-flight device state;
+- a still-valid linear fragment local must be consumed before a fragment exit.
+
+Cleanup order is represented on canonical CFG edges and verified before code
+generation. Static composition therefore needs neither a heap continuation nor
+runtime dispatch.
+
+## Apply and defaults
+
+`apply fragment { ... }` derives its target slot from the fragment declaration.
+Within the lexical body, matching slot invocations use that fragment. Outside
+the body, a slot uses its declared default; a slot with no active binding and no
+default behaves as the identity operation and runs its continuation directly.
 
 ```luna
-context profile {
+slot context measured();
+
+context profile for measured {
     let start = monotonic_now();
     resume();
     print(monotonic_now() - start);
 }
 
-apply work(profile) {
-    slot context work { perform_work(); }
+fn run() -> unit {
+    apply profile {
+        measured() {
+            perform_work();
+        }
+    }
 }
 ```
 
-`return` ends the current fragment immediately. It is distinct from
-`abort()`: abort is the explicit decision not to enter the slot continuation,
-while return is the fragment's own termination path. Code after `resume()`
-executes only after the continuation completes normally.
-The lowering creates a stack-resident continuation frame with a normal path and
-a function-return path. A `return` inside the slot continuation stores its
-result in that frame and bypasses the context's post-resume code, so it cannot
-silently run cleanup or effects that follow the slot.
+Qualified exported slot and fragment names follow ordinary package/module name
+resolution. `symbols(slot_name)` may inspect a slot declaration, but a slot is
+reflectable and non-callable: the query result is declaration metadata, not a
+function value.
 
-Multi-shot behavior is explicit:
+## Runtime boundary
 
-```luna
-context many replay {
-    resume();
-    resume();
-}
-```
+Runtime-retained Slot and Fragment descriptors have stable declaration kinds,
+nominal IDs, contract IDs, and strong fragment-to-slot references. This freezes
+the representation needed by loaders and tooling without inventing a second
+source language. These rows are currently non-callable descriptor/identity
+evidence and contain no runtime continuation entry. `TBD-SF009` decides whether
+0.3 freezes that promise and the exported/private slot-retention rule.
 
-`context many` is rejected when replay would consume, free, mutably borrow, or
-otherwise invalidate captured linear state. Dynamic runtime selection supports
-the same rule over a finite set of statically linked candidates.
-
-## Slot contracts
-
-Every slot declares which category it accepts:
-
-```luna
-slot interceptor observe(value: i32);
-slot context transaction(value: i32);
-slot context many replayable(value: i32);
-dynamic slot context runtime_hook(value: i32);
-```
-
-Binding an interceptor to a context slot, or the reverse, is a type error.
-`interceptor(...)` and `context(...; once|many)` are distinct structural types.
-The legacy `fragment` declaration and an unqualified `slot name` are rejected
-with migration diagnostics.
-
-## Ownership effects
-
-The compiler checks every normal-resume and abort exit at the slot boundary.
-All exits that reach code after the slot must agree on linear ownership,
-borrows, and device in-flight state. A fragment-local linear value must be
-consumed before `abort()`.
-
-`resume()` accepts no arguments. It restores the original captured frame, so a
-context cannot forge replacement continuation inputs.
-
-## Lowering and performance
-
-Statically known interceptors are lowered as straight-line inlined code followed
-by the continuation. Statically known contexts use a stack frame and explicit
-continuation CFG blocks; there is no generic heap continuation object or
-indirect call. LLVM can eliminate the frame's temporary state at `-O2`/`-O3`
-when the continuation has no observable return transfer.
-
-Dynamic apply performs one runtime candidate selection and branches among a
-finite, linked, type-checked candidate set. Candidate bodies remain inline in
-their branches. Unknown names abort with a diagnostic; arbitrary function
-pointers are never accepted.
-
-```luna
-context trace(value: i32) { print(value); resume(); }
-context audit(value: i32) { print(value + 2); resume(); }
-
-dynamic slot context pipeline(value: i32);
-dynamic apply pipeline(trace, audit) {
-    pipeline(41) { print(42); }
-}
-```
-
-## Runtime selection
-
-Dynamic apply selects from a finite set of linked, type-checked candidates. The
-first candidate is the deterministic fallback. A slot name maps to an
-environment key:
-
-```text
-slot: pipeline       -> LUNA_FRAGMENT_PIPELINE
-slot: request-log    -> LUNA_FRAGMENT_REQUEST_LOG
-```
-
-An unknown candidate reports an error instead of invoking an arbitrary pointer.
-Selection occurs at each slot invocation, but every candidate must preserve the
-same linear, borrow and device in-flight state. Dynamic slots remain host-only.
-The environment is useful for tests and deployment configuration; it is not a
-security boundary.
-
-## External shared-library plugins
-
-Alpha plugin ABI v1 supports host-only, single-shot interceptors with explicit
-parameters:
-
-```text
-LUNA_FRAGMENT_PIPELINE=external_trace
-LUNA_FRAGMENT_PLUGIN=/path/to/libtrace.so
-luna run app.luna
-```
-
-Windows uses the corresponding `.dll` path. A plugin exports
-`luna_fragment_plugin_descriptor_v1`; the runtime validates its plugin
-id/version, slot name, ABI hash, parameter layout, once/many capability, effect
-flags and entry point before registration.
-
-The entry receives read-only pointers to explicit slot arguments and returns a
-declared `continue` or `abort`. The host then executes the statically generated
-continuation. Libraries remain loaded for the process lifetime, and duplicate
-`(slot, fragment, contract)` registrations are rejected.
-
-External `context`, `resume()`, `many`, lexical capture and retained argument
-pointers are not allowed. They require a persistent continuation frame and a
-proven lifetime model; exposing the current stack frame as a shared-library
-callback would be unsound. Runtime ABI v1 defines host/module service tables,
-but plugin v1 does not implicitly receive them. A future v2 must accept an
-explicitly authorized module context.
+Luna 0.3 does not expose runtime typed-reference lookup/acquisition syntax.
+Ordinary `apply fragment { ... }` is the sole apply spelling; extending its
+fragment operand to an acquired typed reference depends on `TBD-SF007`.
+Acquisition, ownership, lifetime, and runtime-apply ABI rules belong to
+`TBD-SF010`.
+The removed `dynamic slot` and `dynamic apply` spellings remain only in the
+migration-error corpus. Their former external plugin ABI and environment-driven
+dispatch runtime were deleted rather than carried into 0.3.

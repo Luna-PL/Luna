@@ -19,7 +19,7 @@ struct TypeAST;
 
 enum class FragmentKind { Interceptor, Context };
 enum class FragmentCardinality { Once, Many };
-enum class RetentionKind { CompileTime, Runtime, Dynamic };
+enum class RetentionKind { CompileTime, Runtime };
 using MetadataConstValue = std::variant<int64_t, double, bool, std::string>;
 
 // ─── AST Node base ───────────────────────────────────────────────────
@@ -174,6 +174,11 @@ struct MatchStmt : Stmt {
     std::unique_ptr<Expr> scrutinee;
     TypePtr matchedType;
     std::vector<MatchArm> arms;
+    // A compiler-domain Option<declaration_ref<T>> has no runtime
+    // representation. Sema records the statically selected arm so lowering
+    // can erase the Option and retain only that arm's body.
+    bool isCompileTimeOptionalMatch = false;
+    size_t compileTimeSelectedArm = static_cast<size_t>(-1);
 };
 
 struct WhileStmt : Stmt {
@@ -189,6 +194,14 @@ struct ForStmt : Stmt {
     std::unique_ptr<Expr> iterable;
     std::unique_ptr<BlockStmt> body;
     TypePtr elementType;
+    // A query-produced declaration_view is statically expanded before
+    // MoonIR. These parallel vectors preserve the exact ordered identity
+    // selected by semantic analysis for each expansion.
+    bool isCompileTimeDeclarationViewLoop = false;
+    std::vector<std::string> compileTimeDeclarationIds;
+    std::vector<std::string> compileTimeSymbolNames;
+    std::vector<luna::identity::SymbolId> compileTimeSymbolIds;
+    std::vector<luna::identity::ContractId> compileTimeContractIds;
     // Empty keeps the compiler-fused array/slice/range recipe path.  A
     // non-empty symbol denotes the exact Core Iterator::next implementation
     // selected by semantic analysis; codegen must not repeat trait lookup.
@@ -223,14 +236,12 @@ struct FreeStmt : Stmt {
     bool isImplicit = false;
 };
 
-// A local slot either declares an explicit interface (`slot s(x: T);`) or
-// creates an implicit-capture continuation at its current source position
-// (`slot s { ... }`). The semantic pass fills its structural type and effects.
+// Legacy construction node kept only for independently rejecting pre-0.3
+// structured IR. Source parsing never produces a local slot declaration.
 struct SlotDeclStmt : Stmt {
     std::string name;
     FragmentKind acceptedKind = FragmentKind::Interceptor;
     FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
-    bool isDynamic = false;
     std::vector<Param> params;
     std::string defaultFragment;
     std::string resolvedDefaultFragmentName;
@@ -243,9 +254,6 @@ struct SlotInvokeStmt : Stmt {
     std::string name;
     FragmentKind acceptedKind = FragmentKind::Interceptor;
     FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
-    bool isDynamic = false;
-    bool usesDynamicDispatch = false;
-    std::vector<std::string> resolvedDynamicFragmentNames;
     std::vector<std::unique_ptr<Expr>> args;
     std::unique_ptr<BlockStmt> continuation;
     bool isImplicitCapture = false;
@@ -273,12 +281,6 @@ struct AwaitStmt : Stmt {
 struct ApplyStmt : Stmt {
     std::string slotName;
     std::string fragmentName;
-    bool isDynamic = false;
-    // A dynamic apply declares a finite, type-checked candidate set. The
-    // first entry remains the deterministic fallback when no runtime choice
-    // is installed for this slot.
-    std::vector<std::string> alternativeFragmentNames;
-    std::vector<std::string> resolvedAlternativeFragmentNames;
     std::string resolvedFragmentName;
     std::unique_ptr<BlockStmt> body;
 };
@@ -365,6 +367,18 @@ struct CallExpr : Expr {
     // identities carry their complete membership without exposing an order.
     bool isCompileTimeSymbolSet = false;
     std::vector<std::string> compileTimeSymbolSetDeclarationIds;
+    // `.all()` produces a locally bindable compiler-domain view with a
+    // frozen order. It is consumed by static indexing or iteration.
+    bool isCompileTimeQueryDeclarationView = false;
+    std::vector<std::string> compileTimeDeclarationViewDeclarationIds;
+    // A declaration_ref obtained from a public query must not escape through
+    // an ordinary call/return boundary.
+    bool isCompileTimeQueryDeclarationRef = false;
+    // `.optional()` is a compiler-domain specialization of Core Option. Its
+    // payload identity is meaningful only when `compileTimeOptionalHasValue`
+    // is true and must be consumed by a compile-time match before MoonIR.
+    bool isCompileTimeOptionalDeclarationRef = false;
+    bool compileTimeOptionalHasValue = false;
 };
 
 // A launch is an expression so the returned event can be held in a linear
@@ -496,31 +510,15 @@ struct AssignExpr : Expr {
 // expression supplies the finite view according to the public protocol and
 // resolves the returned DeclarationRef before static MoonIR lowering.
 struct SelectExpr : Expr {
-    struct DynamicFilterArgument {
-        // Index into selectorArgs when the selector protocol forwards one of
-        // its explicit parameters; otherwise the binding is a literal.
-        std::optional<size_t> selectorArgumentIndex;
-        std::optional<MetadataConstValue> constant;
-    };
-    struct DynamicCandidate {
-        std::string declarationId;
-        std::string symbolName;
-        std::vector<MetadataConstValue> metadataValues;
-    };
     std::string targetName;
     std::string selectorName;
     std::vector<std::unique_ptr<Expr>> selectorArgs;
-    bool isDynamic = false;
     std::string resolvedDeclarationId;
     luna::identity::SymbolId resolvedSymbolId;
     luna::identity::ContractId resolvedContractId;
     std::string resolvedSymbolName;
     std::string resolvedFamilyId;
     std::string resolvedSelectorDeclarationId;
-    std::vector<std::string> dynamicCandidateIds;
-    std::string dynamicMetadataSchemaId;
-    std::vector<DynamicFilterArgument> dynamicFilterArguments;
-    std::vector<DynamicCandidate> dynamicCandidates;
     TypePtr selectedType;
 };
 
@@ -582,7 +580,6 @@ struct FunctionDecl : Decl {
     bool isExtern = false;
     bool isConstexpr = false;
     bool isSelector = false;
-    bool isDynamicSelector = false;
     std::string abi;
     std::string linkName;
     std::vector<std::string> typeParams;
@@ -603,11 +600,23 @@ struct FragmentDecl : Decl {
     std::string name;
     FragmentKind kind = FragmentKind::Interceptor;
     FragmentCardinality cardinality = FragmentCardinality::Once;
-    // Explicit fragment parameters form the reusable-slot input interface.
-    // Empty means the fragment has no declared inputs and may bind an
-    // implicit-capture slot.
+    // A fragment is nominally bound to exactly one module-level slot. Its
+    // parameter list names that slot's complete input contract; annotations
+    // may repeat the slot types but cannot alter them.
+    std::string targetSlotName;
+    std::string resolvedTargetSlotName;
     std::vector<Param> params;
     std::unique_ptr<BlockStmt> body;
+    TypePtr structuralType;
+};
+
+struct SlotDecl : Decl {
+    std::string name;
+    FragmentKind acceptedKind = FragmentKind::Interceptor;
+    FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
+    std::vector<Param> params;
+    std::string defaultFragment;
+    std::string resolvedDefaultFragmentName;
     TypePtr structuralType;
 };
 

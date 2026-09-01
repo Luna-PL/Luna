@@ -129,7 +129,6 @@ private:
     llvm::Value* generateArrayLiteral(moon::ArrayLiteralExpr* expr);
     // Value-access expression emitters.
     llvm::Value* generateIdentifier(moon::IdentifierExpr* expr);
-    llvm::Value* generateDynamicSelect(moon::DynamicSelectExpr* expr);
     llvm::Value* generateFieldAccess(moon::FieldAccessExpr* expr);
     llvm::Value* generateSliceLength(moon::SliceLengthExpr* expr);
     llvm::Value* generateIndex(moon::IndexExpr* expr);
@@ -240,9 +239,8 @@ private:
     std::unordered_map<std::string, std::string> mKernelHSACO;
 
     std::vector<diagnostic::Diagnostic> mErrors;
-    // Keep O0 as the Alpha default.  Experimental source constructs such as
-    // dynamic fragments can opt in to the standard LLVM speed pipelines once
-    // their behavior is covered by parity tests.
+    // Keep O0 as the default; explicit optimization levels use the standard
+    // LLVM speed pipelines covered by JIT/AOT parity tests.
     LunaOptimizationLevel mOptimizationLevel = LunaOptimizationLevel::O0;
     LunaGpuTargetConfig mGpuTargets;
 };

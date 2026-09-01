@@ -12,6 +12,8 @@ optimization="${LUNA_CPU_OPT_LEVEL:--O3}"
 cpp_compiler="${CXX:-clang++}"
 temp_dir="$(mktemp -d /tmp/luna-cpu-bench.XXXXXX)"
 cpp_binary="${temp_dir}/cpp23_cpu_suite"
+source "${source_root}/benchmarks/package_source.sh"
+declare -A luna_binaries
 
 workloads=(arithmetic branch calls array allocation bitmix reduction array-scan nested)
 
@@ -31,10 +33,6 @@ luna_source_for() {
 }
 
 cleanup() {
-    for workload in "${workloads[@]}"; do
-        source="$(luna_source_for "${workload}")"
-        rm -f -- "${source}.ll" "${source%.luna}"
-    done
     rm -rf -- "${temp_dir}"
 }
 trap cleanup EXIT
@@ -66,7 +64,10 @@ fi
 
 for workload in "${workloads[@]}"; do
     source="$(luna_source_for "${workload}")"
-    "${luna_driver}" build "${source}" "${optimization}" >/dev/null
+    package_name="${workload//-/_}"
+    luna_benchmark_build_package "${luna_driver}" "${source}" \
+        "${temp_dir}/packages/${package_name}" "${package_name}" "${optimization}"
+    luna_binaries["${workload}"]="${LUNA_BENCHMARK_AOT}"
 done
 
 average_median_p95() {
@@ -113,8 +114,7 @@ echo "  warning: idealized microbenchmarks cannot establish a real-world perform
 
 for workload in "${workloads[@]}"; do
     expected="$(${cpp_binary} "${workload}" | tail -n 1)"
-    luna_binary="$(luna_source_for "${workload}")"
-    luna_binary="${luna_binary%.luna}"
+    luna_binary="${luna_binaries[${workload}]}"
     luna_times="${temp_dir}/${workload}.luna"
     cpp_times="${temp_dir}/${workload}.cpp"
     : > "${luna_times}"

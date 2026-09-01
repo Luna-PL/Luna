@@ -2,12 +2,7 @@ if(NOT DEFINED LUNA_SOURCE_DIR)
     message(FATAL_ERROR "LUNA_SOURCE_DIR must point at the source tree")
 endif()
 
-set(expected_tbd_ids
-    TBD-EV004
-    TBD-Q004
-    TBD-Q005
-    TBD-SF006
-)
+set(expected_tbd_ids TBD-SF007 TBD-SF008 TBD-SF009 TBD-SF010)
 list(SORT expected_tbd_ids)
 
 function(verify_design_document relative_path language)
@@ -20,7 +15,7 @@ function(verify_design_document relative_path language)
     string(REGEX MATCHALL "TBD-[A-Z]+[0-9]+" actual_tbd_ids "${text}")
     list(REMOVE_DUPLICATES actual_tbd_ids)
     list(SORT actual_tbd_ids)
-    if(NOT actual_tbd_ids STREQUAL expected_tbd_ids)
+    if(NOT "${actual_tbd_ids}" STREQUAL "${expected_tbd_ids}")
         message(FATAL_ERROR
             "${language} Luna 0.3 TBD register differs from the frozen set.\n"
             "Expected: ${expected_tbd_ids}\n"
@@ -39,6 +34,25 @@ endfunction()
 verify_design_document("docs/luna_0.3_design.md" "English")
 verify_design_document("docs/luna_0.3_design.zh-CN.md" "Chinese")
 
+set(expected_release_decisions
+    RLS001 RLS002 RLS003 RLS004 RLS005 RLS006 RLS007 RLS008)
+foreach(release_document IN ITEMS
+        "docs/ecosystem_release.md"
+        "docs/ecosystem_release.zh-CN.md")
+    file(READ "${LUNA_SOURCE_DIR}/${release_document}" release_text)
+    string(REGEX MATCHALL "RLS[0-9]+" actual_release_decisions
+           "${release_text}")
+    list(REMOVE_DUPLICATES actual_release_decisions)
+    list(SORT actual_release_decisions)
+    if(NOT "${actual_release_decisions}" STREQUAL
+           "${expected_release_decisions}")
+        message(FATAL_ERROR
+            "${release_document} release handoff register drifted.\n"
+            "Expected: ${expected_release_decisions}\n"
+            "Actual:   ${actual_release_decisions}")
+    endif()
+endforeach()
+
 file(READ "${LUNA_SOURCE_DIR}/docs/luna_0.3_design.md" english_design)
 foreach(required_text IN ITEMS
         "No Proposed decisions are currently registered"
@@ -47,6 +61,13 @@ foreach(required_text IN ITEMS
         "`M005` (Confirmed, 2026-08-20): the 0.3 Moon Container uses the 8-byte magic"
         "`TY002` (Confirmed): anonymous records do not use a `record` keyword"
         "`Q005` (Confirmed): the first public compile-time function-query surface"
+        "`Q006` (Confirmed): `.optional()` returns the compiler-domain specialization"
+        "`Q004` (Confirmed, 2026-08-26): `.all()` returns a compiler-domain"
+        "`Q007` (Confirmed, 2026-08-27): `symbols(Name)` infers the declaration kind"
+        "`SF006` (Confirmed, 2026-08-29): a slot is declared at module scope"
+        "`EV004` (Confirmed, 2026-08-30): 0.3 adds no Luna source construct"
+        "Priority item 15 passed its completion gate on 2026-08-30"
+        "Priority item 16 passed its completion gate on 2026-08-30"
         "Priority item 6 has therefore passed its completion gate"
         "`US001` (Confirmed): explicit overrides are `copy let`, `affine let`, and `linear let`"
         "Priority item 7 has therefore passed its completion gate"
@@ -68,6 +89,13 @@ foreach(required_text IN ITEMS
         "`M005`（Confirmed，2026-08-20）：0.3 Moon Container 使用 8 字节 magic"
         "`TY002`（Confirmed）：匿名 record 不使用 `record` 关键字"
         "`Q005`（Confirmed）：首个公开 compile-time function query 表面"
+        "`Q006`（Confirmed）：`.optional()` 返回 compiler-domain specialization"
+        "`Q004`（Confirmed，2026-08-26）：`.all()` 返回 compiler-domain"
+        "`Q007`（Confirmed，2026-08-27）：`symbols(Name)` 为具有公开 source name"
+        "`SF006`（Confirmed，2026-08-29）：slot 使用模块级声明"
+        "`EV004`（Confirmed，2026-08-30）：0.3 不增加 evolution 的 Luna 源码构造"
+        "优先级第 15 项已于 2026-08-30 通过完成门"
+        "优先级第 16 项已于 2026-08-30 通过完成门"
         "因此优先级第 6 项已通过完成门"
         "`US001`（Confirmed）：显式覆盖语法为 `copy let`、`affine let` 和 `linear let`"
         "因此优先级第 7 项已通过完成门"

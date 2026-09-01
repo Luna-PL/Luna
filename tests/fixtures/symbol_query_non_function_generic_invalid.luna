@@ -1,0 +1,6 @@
+struct Box<T> { value: T; }
+
+fn main() -> i32 {
+    let candidates = symbols(Box);
+    return declaration_count(candidates.all());
+}

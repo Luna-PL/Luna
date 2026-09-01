@@ -7,9 +7,9 @@
 这是 Sema 的「总指挥」。`analyze(Program*)` 按依赖顺序驱动五组件，保证前向引用与声明顺序无关：
 
 1. 初始化/清洗所有状态（const 作用域、slot/apply 作用域、各注册表）。
-2. 内置契约注册：`Drop`（编译器保留）、`From`（luna.compiler）。
+2. 编译器已知 Core 契约注册：归 `org.luna.core` 所有的 canonical `Drop` 与 `From` 身份。
 3. 包 use 别名表（`mPackageAliases`）。
-4. **链接名分配**：遍历所有声明，为每个声明生成 `generatedSymbolName`（`main` 特殊处理，重名/带元数据用 `isolatedLinkageName`），并查包级重名。
+4. **链接名分配**：遍历所有声明，为每个声明生成 `generatedSymbolName`（`main` 特殊处理；重复的基础 linkage 用 metadata 加规范化 callable source signature 驱动 `isolatedLinkageName`），并查包级名称/签名冲突。
 5. `declareMeta`（元数据 schema 先注册）。
 6. `declareConstraint`（约束名先注册，where 子句顺序无关）。
 7. 名义类型预绑定：`Type::makeStruct/makeEnum` 写入 `mDeclaredTypes`/`mSymTable`（支持前向引用）。
@@ -31,7 +31,7 @@ C++ 类比：一个编译单元的「翻译单元级上下文 + 调度器」：�
 
 - `SemanticContext()`：注册内置类型与 `print`。
 - `analyze(Program*)`：如上多趟管线；返回 `mErrors.empty()`。
-- 链接名分配细节：`metadataDeclarationName(name, decl)` 生成基础链接名；`isRootEntry`（`main`）→ `"main"`；重复或 `main` 冲突 → `isolatedLinkageName(familyKey + "::" + sourceLinkage, sourceLinkage)`；并做 `Duplicate package declaration`/`more than one main` 诊断。
+- 链接名分配细节：`metadataDeclarationName(name, decl)` 生成基础链接名，function 再由 `declarationSourceIdentity` 加入规范化 callable source signature；`isRootEntry`（`main`）→ `"main"`；重复基础 linkage 或 `main` 冲突使用 `isolatedLinkageName(familyKey + "::" + sourceIdentity, sourceLinkage)`。metadata/签名完全相同仍报 `Duplicate package declaration`，异构签名得到不同 linkage。
 - `resolveTraitRef(TraitRef&, useSite)`：`Drop`/`From` 特判（编译器保留 id），否则查 `mTraits` 并 `recordDeclarationReference`。
 - `satisfiesTrait(traitId, type)`：`mImpls` + `mTraitMethods` 双查。
 - `recordDeclarationReference`/`recordResolvedReference`：写 `mDeclarationReferences`（IDE 跳转），带有效性过滤。
@@ -94,8 +94,11 @@ C++ 类比：`SemanticContext` ≈ 编译器的「编译单元上下文（Transl
 
 - `struct FromConversion`：`From` trait 的一对一转换记录（source/target/`FunctionDecl*`/symbol）。
 - `struct FromIteratorImplementation`：`FromIterator` 的 builder 协议（item/builder/target + begin/push/finish）。
-- `struct SlotInfo`：槽位声明摘要（参数类型/契约/默认片段/种类/基数/动态性等）。
-- 字段群：`mSymTable`、`mMetadataSchemas`、`mConcepts`、`mFunctionFamilies`、`mQualifiedDeclarations`、`mPackageAliases`、`mImpls`、`mFromConversions`、`mFromIteratorImplementations`、`mTraitTypeParams`/`mTraitMethods`/`mTraitOwners`/`mTraits`、`mDeclaredTypes`、`mGeneratedInstances`/`mInstantiator`/`mInstantiatedFunctions`、`mErrors`、`mDeclarationReferences`、当前包/模块/诊断位置、`mCurrentReturnType`/`mInFunction`/`mInKernel`/`mSawReturn`/`mConstraints`/`mInferenceRoots`/`mConstScopes`/`mConstexprFunctions`/`mConstEvaluationDepth`、`mSlotScopes`/`mApplyScopes`/`mDynamicApplyScopes`/`mFragments`/`mCurrentFragmentSlot`/`mCurrentFragmentDecl`、`mIteratorStateCounter`、`mActiveSelectorView`。
+- `struct SlotInfo`：slot 声明摘要（名义声明、参数类型/契约、默认 fragment、
+  种类与基数）。
+- 字段群包括符号/类型/trait/instantiation 状态、诊断、编译期求值状态、
+  静态 `mSlotScopes`/`mApplyScopes`、fragment 状态、iterator 状态与当前编译期
+  selector view。
 
 ## 关键函数·方法
 

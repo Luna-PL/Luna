@@ -1,0 +1,7 @@
+fn route() -> i32 { return 1; }
+
+fn escape() -> declaration_view<() -> i32> {
+    return symbols(route).all();
+}
+
+fn main() -> i32 { return 0; }

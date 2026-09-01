@@ -104,6 +104,7 @@ set(LUNA_ROCM_SMOKE_ARCH "gfx1101" CACHE STRING
 add_library(runtime STATIC
     src/runtime/ApplicationHostServices.cpp
     src/runtime/MoonRuntime.cpp
+    src/runtime/RuntimeDescriptor.cpp
     src/runtime/Runtime.cpp)
 
 add_library(runtime-abi-c-compile OBJECT tests/runtime_abi_c_compile.c)
@@ -112,6 +113,12 @@ target_include_directories(runtime-abi-c-compile PRIVATE ${CMAKE_CURRENT_SOURCE_
 add_executable(runtime-abi-test tests/runtime_abi_test.cpp)
 target_include_directories(runtime-abi-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(runtime-abi-test PRIVATE runtime)
+
+add_executable(runtime-descriptor-test
+    tests/runtime_descriptor_test.cpp
+    src/runtime/RuntimeDescriptor.cpp)
+target_include_directories(runtime-descriptor-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
 add_executable(runtime-allocation-abi-test
     tests/runtime_allocation_abi_test.cpp)
@@ -148,13 +155,6 @@ target_link_libraries(moon-runtime-test PRIVATE Threads::Threads)
 add_executable(runtime-gpu-error-test tests/runtime_gpu_error_test.cpp)
 target_include_directories(runtime-gpu-error-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(runtime-gpu-error-test PRIVATE runtime)
-
-add_library(luna-fragment-plugin-fixture SHARED tests/fragment_plugin_fixture.cpp)
-target_include_directories(luna-fragment-plugin-fixture PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-
-add_executable(fragment-plugin-test tests/fragment_plugin_test.cpp)
-target_include_directories(fragment-plugin-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
-target_link_libraries(fragment-plugin-test PRIVATE runtime)
 
 add_executable(source-manager-test
     tests/source_manager_test.cpp
@@ -294,6 +294,7 @@ add_executable(moonir-canonical-test
     src/codegen/CodeGeneratorRuntimeDescriptors.cpp
     src/runtime/ApplicationHostServices.cpp
     src/runtime/MoonRuntime.cpp
+    src/runtime/RuntimeDescriptor.cpp
     src/runtime/Runtime.cpp
     src/driver/CompilerPipeline.cpp
     src/moonir/Optimizer.cpp
@@ -342,6 +343,7 @@ add_executable(luna
     src/codegen/CodeGeneratorRuntimeDescriptors.cpp
     src/runtime/ApplicationHostServices.cpp
     src/runtime/MoonRuntime.cpp
+    src/runtime/RuntimeDescriptor.cpp
     src/runtime/Runtime.cpp
 )
 
@@ -350,14 +352,13 @@ if(LUNA_STRICT_WARNINGS)
         runtime
         runtime-abi-c-compile
         runtime-abi-test
+        runtime-descriptor-test
         runtime-allocation-abi-test
         runtime-default-allocation-test
         runtime-filesystem-abi-test
         runtime-application-host-test
         moon-runtime-test
         runtime-gpu-error-test
-        luna-fragment-plugin-fixture
-        fragment-plugin-test
         source-manager-test
         core-contracts-test
         symbol-catalog-test
@@ -393,7 +394,7 @@ if(LUNA_ENABLE_SANITIZERS)
     foreach(target IN ITEMS
             luna luna-frontend analysis-snapshot-test moonir-canonical-test
             moon-container-test moon-container-model-test moon-runtime-test
-            native-artifact-test)
+            native-artifact-test runtime-descriptor-test)
         target_compile_options(${target} PRIVATE
             -fsanitize=address,undefined
             -fno-omit-frame-pointer)
@@ -417,6 +418,9 @@ if(LUNA_ENABLE_SANITIZERS)
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
     target_link_options(native-artifact-test PRIVATE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer)
+    target_link_options(runtime-descriptor-test PRIVATE
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
 endif()
@@ -470,8 +474,9 @@ install(TARGETS luna runtime
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
-install(FILES src/runtime/FragmentPluginABI.h src/runtime/NativeArtifactABI.h
-              src/runtime/RuntimeABI.h
+install(FILES src/runtime/Evolution.h src/runtime/MoonRuntime.h
+              src/runtime/NativeArtifactABI.h
+              src/runtime/RuntimeABI.h src/runtime/RuntimeDescriptorABI.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/luna/runtime)
 install(FILES README.md README.zh-CN.md CHANGELOG.md VERSION LICENSE-MIT LICENSE-APACHE
         DESTINATION ${CMAKE_INSTALL_DOCDIR})
@@ -597,6 +602,10 @@ if(BUILD_TESTING)
         COMMAND $<TARGET_FILE:runtime-abi-test>
     )
     add_test(
+        NAME luna.runtime-descriptor-v1
+        COMMAND $<TARGET_FILE:runtime-descriptor-test>
+    )
+    add_test(
         NAME luna.runtime-allocation-abi-v1
         COMMAND $<TARGET_FILE:runtime-allocation-abi-test>
     )
@@ -645,13 +654,32 @@ if(BUILD_TESTING)
     if(EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/Lunax/.git" AND
        EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/toolchain/.git")
         add_test(
-            NAME luna.ecosystem-0.2-lock
+            NAME luna.ecosystem-frozen-baseline
             COMMAND ${CMAKE_COMMAND}
                 -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
                 -P ${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_ecosystem_lock.cmake
         )
-        set_tests_properties(luna.ecosystem-0.2-lock PROPERTIES
+        set_tests_properties(luna.ecosystem-frozen-baseline PROPERTIES
             LABELS "integration")
+    endif()
+    add_test(
+        NAME luna.ecosystem-release-policy
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/release_readiness.cmake
+    )
+    set_tests_properties(luna.ecosystem-release-policy PROPERTIES
+        LABELS "release")
+    find_program(NODE_EXECUTABLE NAMES node nodejs)
+    if(NODE_EXECUTABLE)
+        add_test(
+            NAME luna.release-evidence-policy
+            COMMAND ${NODE_EXECUTABLE}
+                ${CMAKE_CURRENT_SOURCE_DIR}/tests/release_evidence_test.js
+                ${CMAKE_CURRENT_SOURCE_DIR}/tools/verify_release_evidence.js
+        )
+        set_tests_properties(luna.release-evidence-policy PROPERTIES
+            LABELS "release")
     endif()
     add_test(
         NAME luna.analysis-protocol-v1
@@ -726,6 +754,22 @@ if(BUILD_TESTING)
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/core_surface.cmake
+    )
+    add_test(
+        NAME luna.core-option
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/core_option.cmake
+    )
+    add_test(
+        NAME luna.core-result
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/core_result.cmake
     )
     add_test(
         NAME luna.rc-arc-core
@@ -857,6 +901,8 @@ if(BUILD_TESTING)
             -DLUNA_BUILD_CONFIG=$<CONFIG>
             -DLUNA_VERSION=${PROJECT_VERSION}
             -DLUNA_AOT_COMPILER=${LUNA_AOT_COMPILER}
+            -DLUNA_CXX_COMPILER=${CMAKE_CXX_COMPILER}
+            -DLUNA_CMAKE_GENERATOR=${CMAKE_GENERATOR}
             -DLUNA_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
             -DLUNA_RUNTIME_FILE=$<TARGET_FILE_NAME:runtime>
             -DLUNA_INSTALL_BINDIR=${CMAKE_INSTALL_BINDIR}
@@ -874,16 +920,10 @@ if(BUILD_TESTING)
         COMMAND $<TARGET_FILE:runtime-gpu-error-test>
     )
     add_test(
-        NAME luna.external-fragment-plugin-abi
-        COMMAND $<TARGET_FILE:fragment-plugin-test>
-                $<TARGET_FILE:luna-fragment-plugin-fixture>
-    )
-    add_test(
-        NAME luna.external-fragment-dispatch
+        NAME luna.legacy-dynamic-fragment-source
         COMMAND ${CMAKE_COMMAND}
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
-            -DLUNA_PLUGIN=$<TARGET_FILE:luna-fragment-plugin-fixture>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/external_fragment_dispatch.cmake
     )
     add_test(
@@ -940,6 +980,16 @@ if(BUILD_TESTING)
             -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/moon_cost_boundaries.cmake
     )
+    add_test(
+        NAME luna.benchmark-package-smoke
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
+            -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/benchmark_package_smoke.cmake
+    )
+    set_tests_properties(luna.benchmark-package-smoke PROPERTIES
+        LABELS "benchmark;release")
     if(LUNA_ENABLE_ROCM_SMOKE)
         add_test(
             NAME luna.rocm-smoke

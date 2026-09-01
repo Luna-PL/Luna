@@ -5,4 +5,4 @@ kind = "application"
 sources = ["src"]
 
 [dependencies]
-"org.luna.std" = "0.2.1"
+"org.luna.std" = "0.3.0"

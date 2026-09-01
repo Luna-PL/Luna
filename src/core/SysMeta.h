@@ -20,9 +20,11 @@ inline constexpr const char* DropTraitId =
 inline constexpr const char* DropMethodName =
     luna::core_contracts::DropMethodName;
 inline constexpr const char* FromTraitId =
-    luna::core_contracts::legacy_0_2::FromTraitId;
+    luna::core_contracts::canonical_0_3::FromTraitId;
 inline constexpr const char* FromMethodName =
     luna::core_contracts::FromMethodName;
+inline constexpr const char* ResultTypeId =
+    luna::core_contracts::canonical_0_3::ResultTypeId;
 inline constexpr const char* OptionTypeId =
     luna::core_contracts::canonical_0_3::OptionTypeId;
 inline constexpr const char* IteratorTraitId =
@@ -37,13 +39,6 @@ inline constexpr const char* FromIteratorPushMethodName =
     luna::core_contracts::FromIteratorPushMethodName;
 inline constexpr const char* FromIteratorFinishMethodName =
     luna::core_contracts::FromIteratorFinishMethodName;
-
-// These are recorded so the clean-break 0.3 implementation can switch once
-// without inventing another spelling or retaining a language-mode branch.
-inline constexpr const char* CanonicalFromTraitId =
-    luna::core_contracts::canonical_0_3::FromTraitId;
-inline constexpr const char* CanonicalResultTypeId =
-    luna::core_contracts::canonical_0_3::ResultTypeId;
 
 enum class ControlForm : uint8_t {
     Plain,
@@ -95,6 +90,7 @@ enum class DeclarationKind : uint8_t {
     Trait,
     Implementation,
     MetadataSchema,
+    Slot,
 };
 
 enum class ResourceLifetime : uint8_t {
@@ -141,7 +137,6 @@ struct ResourceFacts {
 struct CapabilityFacts {
     bool hostOnly = false;
     bool runtimeRetained = false;
-    bool dynamicDispatch = false;
     bool ffi = false;
     bool gpu = false;
     bool maySuspend = false;
@@ -228,7 +223,6 @@ inline std::string canonicalDeclarationContract(
 
     detail::appendBool(result, facts.capability.hostOnly);
     detail::appendBool(result, facts.capability.runtimeRetained);
-    detail::appendBool(result, facts.capability.dynamicDispatch);
     detail::appendBool(result, facts.capability.ffi);
     detail::appendBool(result, facts.capability.gpu);
     detail::appendBool(result, facts.capability.maySuspend);

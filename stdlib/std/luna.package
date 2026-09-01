@@ -1,10 +1,10 @@
 [package]
 id = "org.luna.std"
-version = "0.2.1"
+version = "0.3.0"
 kind = "library"
 sources = ["src"]
 
 [dependencies]
-"org.luna.core" = "0.2.1"
-"org.luna.sys" = "0.2.1"
-"org.luna.alloc" = "0.2.1"
+"org.luna.core" = "0.3.0"
+"org.luna.sys" = "0.3.0"
+"org.luna.alloc" = "0.3.0"

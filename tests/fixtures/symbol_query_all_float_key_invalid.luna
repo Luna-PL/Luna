@@ -1,0 +1,9 @@
+meta weight { value: f64; }
+
+@weight(1.5)
+fn route() -> i32 { return 1; }
+
+fn main() -> i32 {
+    let ordered = symbols(route).all::<weight>();
+    return declaration_count(ordered);
+}

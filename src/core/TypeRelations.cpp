@@ -236,7 +236,7 @@ std::string canonicalIdentityImpl(const TypePtr& type) {
         return result;
     }
     // Structural composite types (Function, Closure, Slot, Fragment, Array,
-    // Record, Result, Enum, Reference, RawPointer, DeviceBuffer, Slice) fall
+    // Record, Enum, Reference, RawPointer, DeviceBuffer, Slice) fall
     // through to here. Their identity must distinguish nominal children:
     // fn(First) and fn(Second) are different types even when First and Second
     // share the same structural shape. Use canonicalIdentityImpl for the

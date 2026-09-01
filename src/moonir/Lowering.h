@@ -6,6 +6,7 @@
 
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -70,12 +71,22 @@ private:
         luna::identity::ContractId expectedContract;
     };
 
+    struct CompileTimeDeclarationBinding {
+        std::string declarationId;
+        std::string symbolName;
+        luna::identity::SymbolId symbolId;
+        luna::identity::ContractId contractId;
+        TypePtr type;
+    };
+
     const Program* mProgram = nullptr;
     const SymbolTable* mSymbols = nullptr;
     Module* mModule = nullptr;
     bool mReserveKernelRuntime = false;
     std::unordered_set<std::string> mRequiredKernelSymbols;
     std::vector<PendingDeclarationRef> mPendingDeclarationRefs;
+    std::unordered_map<std::string, CompileTimeDeclarationBinding>
+        mCompileTimeDeclarationBindings;
     std::vector<diagnostic::Diagnostic> mErrors;
 };
 

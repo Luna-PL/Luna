@@ -10,6 +10,11 @@
 
 namespace {
 
+int fail(const char* message) {
+    std::cerr << message << '\n';
+    return 1;
+}
+
 struct LoadPause {
     std::string readyPath;
     std::string releasePath;
@@ -97,9 +102,46 @@ int generationSwitch(int argc, char** argv) {
                      "<second-trust> <symbol-id> <contract-id>\n";
         return 2;
     }
+    luna::runtime::MoonRuntime loadOnceRuntime;
+    luna::runtime::MoonRuntime::PinnedGeneration loadedOnce;
+    std::string error;
+    if (!luna::driver::loadVerifiedNativeGenerationOnce(
+            loadOnceRuntime, argv[2], argv[3], loadedOnce, error)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    const luna::runtime::GenerationBindingRequirement typedFunction{
+        argv[6], argv[7], LUNA_NATIVE_DECLARATION_FUNCTION_V1,
+        LUNA_NATIVE_EXPORT_CALLABLE_V1};
+    const auto firstLoadedBinding = loadedOnce.find(typedFunction);
+    if (callGenerationBinding(firstLoadedBinding) != 42 ||
+        loadOnceRuntime.retainedGenerationCount(loadedOnce.moduleId()) != 1)
+        return fail("Native load-once did not expose one typed generation");
+    luna::runtime::MoonRuntime::PinnedGeneration duplicateLoaded;
+    if (!luna::driver::loadVerifiedNativeGenerationOnce(
+            loadOnceRuntime, argv[2], argv[3], duplicateLoaded, error) ||
+        duplicateLoaded.generationId() != loadedOnce.generationId() ||
+        callGenerationBinding(duplicateLoaded.find(typedFunction)) != 42 ||
+        loadOnceRuntime.retainedGenerationCount(loadedOnce.moduleId()) != 1)
+        return fail("Native same-content load did not reuse its first generation");
+    luna::runtime::MoonRuntime::PinnedGeneration changedLoaded;
+    if (luna::driver::loadVerifiedNativeGenerationOnce(
+            loadOnceRuntime, argv[4], argv[5], changedLoaded, error) ||
+        error.find("different content") == std::string::npos ||
+        callGenerationBinding(loadedOnce.find(typedFunction)) != 42)
+        return fail("Native load-once allowed a different image to replace the module");
+    luna::runtime::MoonRuntime::StagedGeneration loadProbe;
+    if (!luna::driver::stageVerifiedNativeGeneration(
+            loadOnceRuntime, argv[2], argv[3], {}, loadProbe, error) ||
+        loadProbe.generationId() != loadedOnce.generationId() + 1)
+        return fail("Native load-once materialized a discarded generation");
+    luna::runtime::MoonRuntime::PinnedGeneration probeLoaded;
+    if (!loadOnceRuntime.loadOnce(loadProbe, probeLoaded, error) ||
+        probeLoaded.generationId() != loadedOnce.generationId())
+        return fail("Native load-once probe did not reuse the first generation");
+
     luna::runtime::MoonRuntime runtime;
     luna::runtime::MoonRuntime::StagedGeneration first;
-    std::string error;
     if (!luna::driver::stageVerifiedNativeGeneration(
             runtime, argv[2], argv[3], {}, first, error)) {
         std::cerr << error << '\n';

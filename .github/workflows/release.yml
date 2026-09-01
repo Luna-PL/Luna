@@ -15,7 +15,49 @@ permissions:
   contents: write
 
 jobs:
+  readiness:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
+
+      - name: Require promoted 0.3 ecosystem snapshot
+        run: >-
+          cmake
+          -DLUNA_SOURCE_DIR="$PWD"
+          -DREQUIRE_READY=ON
+          -P tools/verify_release_readiness.cmake
+
+  ecosystem-evidence:
+    needs: readiness
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - component: toolchain
+            repository: Luna-PL/toolchains
+          - component: lunax
+            repository: Luna-PL/Lunax
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+
+      - name: Reverify locked release evidence
+        run: >-
+          bash tools/verify_locked_component_release.sh
+          ecosystem.lock.json
+          "${{ matrix.component }}"
+          "${{ matrix.repository }}"
+          "release-evidence/${{ matrix.component }}"
+
   linux:
+    needs: [readiness, ecosystem-evidence]
     runs-on: ubuntu-24.04
     env:
       LUNA_CXX: clang++-22
@@ -113,7 +155,7 @@ jobs:
               -printf '%f\n' | sort | paste -sd, -
           )"
           {
-            echo "Luna $version prebuilt Alpha package"
+            echo "Luna $version prebuilt package"
             echo "Target: Ubuntu 24.04 x86_64 (glibc)"
             echo "Bundled compiler dependency closure: $bundled_libraries"
             echo "AOT requirement: a compatible LLVM 22 clang++ linker driver"
@@ -154,6 +196,7 @@ jobs:
           if-no-files-found: error
 
   macos:
+    needs: [readiness, ecosystem-evidence]
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v6
@@ -204,7 +247,7 @@ jobs:
             -exec codesign --force --sign - {} \;
           codesign --force --sign - "stage/$package/bin/luna"
           {
-            echo "Luna $version prebuilt Alpha package"
+            echo "Luna $version prebuilt package"
             echo "Target: macOS 14 $architecture"
             echo "Bundled compiler dependency: $llvm_name and its non-system dylib closure"
             echo "AOT requirement: a compatible Homebrew LLVM clang++ linker driver"
@@ -263,6 +306,7 @@ jobs:
           if-no-files-found: error
 
   windows:
+    needs: [readiness, ecosystem-evidence]
     runs-on: windows-2022
     defaults:
       run:
@@ -321,7 +365,7 @@ jobs:
             exit 1
           fi
           {
-            echo "Luna $version prebuilt Alpha package"
+            echo "Luna $version prebuilt package"
             echo "Target: Windows x86_64, MSYS2 UCRT64"
             echo "Bundled compiler dependencies: UCRT64 DLL closure reported by ldd"
             echo "AOT requirement: a compatible MSYS2 UCRT64 LLVM clang++ linker driver"

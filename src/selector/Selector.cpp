@@ -1,6 +1,7 @@
 #include "Selector.h"
 #include "../core/TypeRelations.h"
 
+#include <algorithm>
 #include <unordered_set>
 
 namespace luna::selector {
@@ -135,6 +136,83 @@ SymbolSet SymbolSet::filterMetadata(
     return SymbolSet(mOwner, std::move(matches));
 }
 
+SymbolSet SymbolSet::all() const {
+    if (!mValid) return SymbolSet(mError, mFailureKind);
+    auto ordered = mSymbols;
+    std::sort(ordered.begin(), ordered.end(),
+              [](const CatalogSymbol* left, const CatalogSymbol* right) {
+                  return left->symbolId.value < right->symbolId.value;
+              });
+    return SymbolSet(mOwner, std::move(ordered));
+}
+
+SymbolSet SymbolSet::allByMetadata(const std::string& schemaId) const {
+    if (!mValid) return SymbolSet(mError, mFailureKind);
+    struct Row {
+        const CatalogSymbol* symbol = nullptr;
+        const std::vector<MetadataValue>* key = nullptr;
+    };
+    std::vector<Row> rows;
+    rows.reserve(mSymbols.size());
+    for (const auto* symbol : mSymbols) {
+        const std::vector<MetadataValue>* key = nullptr;
+        size_t attachments = 0;
+        for (const auto& metadata : symbol->metadata) {
+            if (metadata.schemaId != schemaId) continue;
+            ++attachments;
+            key = &metadata.values;
+        }
+        if (attachments != 1) {
+            return SymbolSet(
+                "symbol query .all metadata order requires exactly one '" +
+                    schemaId + "' attachment on declaration '" +
+                    symbol->declarationId + "'",
+                TerminalKind::InvalidCandidate);
+        }
+        for (const auto& value : *key) {
+            if (std::holds_alternative<double>(value)) {
+                return SymbolSet(
+                    "symbol query .all metadata order does not support "
+                    "floating-point keys",
+                    TerminalKind::InvalidCandidate);
+            }
+        }
+        rows.push_back({symbol, key});
+    }
+    const auto compareValue = [](const MetadataValue& left,
+                                 const MetadataValue& right) {
+        if (left.index() != right.index()) return left.index() < right.index();
+        if (const auto* value = std::get_if<int64_t>(&left))
+            return *value < std::get<int64_t>(right);
+        if (const auto* value = std::get_if<bool>(&left))
+            return *value < std::get<bool>(right);
+        if (const auto* value = std::get_if<std::string>(&left))
+            return *value < std::get<std::string>(right);
+        return false;
+    };
+    const auto keyLess = [&](const Row& left, const Row& right) {
+        return std::lexicographical_compare(
+            left.key->begin(), left.key->end(),
+            right.key->begin(), right.key->end(), compareValue);
+    };
+    const auto keysEqual = [&](const Row& left, const Row& right) {
+        return !keyLess(left, right) && !keyLess(right, left);
+    };
+    std::sort(rows.begin(), rows.end(), keyLess);
+    for (size_t index = 1; index < rows.size(); ++index) {
+        if (keysEqual(rows[index - 1], rows[index])) {
+            return SymbolSet(
+                "symbol query .all metadata order has a duplicate key for '" +
+                    schemaId + "'",
+                TerminalKind::Ambiguous);
+        }
+    }
+    std::vector<const CatalogSymbol*> ordered;
+    ordered.reserve(rows.size());
+    for (const auto& row : rows) ordered.push_back(row.symbol);
+    return SymbolSet(mOwner, std::move(ordered));
+}
+
 TerminalResult SymbolSet::one() const {
     if (!mValid) return {mFailureKind, std::nullopt, mError};
     if (mSymbols.empty())
@@ -201,36 +279,6 @@ Result Engine::validate(const DeclarationView& view,
         return {ResultKind::InvalidCandidate, std::nullopt,
                 "selector returned a declaration outside its supplied candidate view"};
     return {ResultKind::Unique, *selected, {}};
-}
-
-std::optional<DynamicPlan> Engine::planDynamic(
-    const DeclarationView& view, const std::string& selectorDeclarationId,
-    std::string& error) const {
-    error.clear();
-    if (!view.valid()) {
-        error = view.error();
-        return std::nullopt;
-    }
-    if (selectorDeclarationId.empty()) {
-        error = "dynamic selector has no declaration identity";
-        return std::nullopt;
-    }
-    DynamicPlan plan;
-    plan.familyId = view.familyId();
-    plan.selectorDeclarationId = selectorDeclarationId;
-    for (const auto& candidate : view.candidates()) {
-        if (candidate.retention == Retention::CompileTime) {
-            error = "dynamic select candidate '" + candidate.declarationId +
-                    "' has no runtime descriptor";
-            return std::nullopt;
-        }
-        plan.candidateIds.push_back(candidate.declarationId);
-    }
-    if (plan.candidateIds.empty()) {
-        error = "dynamic select has an empty candidate view";
-        return std::nullopt;
-    }
-    return plan;
 }
 
 } // namespace luna::selector

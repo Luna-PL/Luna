@@ -84,6 +84,24 @@ for (const asset of release.assets) {
 }
 assertMap(remoteAssets, expectedAssets, "release asset");
 
+if (component.verified_luna_source_commit) {
+  if (!/^[0-9a-f]{40}$/.test(component.verified_luna_source_commit)) {
+    fail(`${componentName} has an invalid verified_luna_source_commit`);
+  }
+  const sourceCommitAsset = "LUNA-SOURCE-COMMIT";
+  if (!expectedAssets.has(sourceCommitAsset)) {
+    fail(`${componentName} release does not record ${sourceCommitAsset}`);
+  }
+  const recordedSourceCommit = fs
+    .readFileSync(path.join(checksumDirectory, sourceCommitAsset), "utf8")
+    .trim();
+  assertEqual(
+    recordedSourceCommit,
+    component.verified_luna_source_commit,
+    "verified Luna source commit",
+  );
+}
+
 if (published.checksum_manifest) {
   const manifestPath = path.join(checksumDirectory, published.checksum_manifest.asset);
   assertEqual(sha256(manifestPath), published.checksum_manifest.sha256, "checksum manifest digest");

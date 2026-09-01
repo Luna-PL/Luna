@@ -86,7 +86,7 @@ kind = "application"
 sources = ["src"]
 
 [dependencies]
-"org.luna.std" = "0.2.1"
+"org.luna.std" = "0.3.0"
 ```
 
 `kind` is required and must be `"application"` or `"library"`. An application must
@@ -110,7 +110,7 @@ system library paths.
 # luna.lock (tool-generated and canonically sorted by Package ID)
 [[package]]
 id = "org.luna.std"
-version = "0.2.1"
+version = "0.3.0"
 source = "workspace:std"
 hash = "..."
 ```
@@ -151,6 +151,6 @@ functions, types, and fragments remain package-internal. `export` is an ABI comm
 merely a name-resolution marker. Non-exported package-level functions retain internal
 linkage in LLVM IR; exported functions use external symbols.
 
-Functions, structs, enums, traits, `interceptor`, and `context` may be exported.
+Functions, structs, enums, traits, slots, `interceptor`, and `context` may be exported.
 `extern` functions cannot also be exported. See [versioning.md](versioning.md) for public
 Metadata/Selector interface rules.

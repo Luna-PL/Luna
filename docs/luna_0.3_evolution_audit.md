@@ -21,8 +21,8 @@ design, the overall design governs. In particular:
   typed sysmeta where such facts are actually needed;
 - compatibility lowering for old Rc/Arc or Slot/Fragment syntax is not part of the 0.3
   compiler; old source uses the old compiler;
-- implementation order and release gates come from the overall design, while the unresolved
-  Slot/Fragment source/control details remain `TBD-SF006`, not an approved mechanism.
+- implementation order and release gates come from the overall design; SF006 now supersedes
+  this audit's Slot/Fragment source/control recommendations.
 
 ## 1. Scope and decision
 

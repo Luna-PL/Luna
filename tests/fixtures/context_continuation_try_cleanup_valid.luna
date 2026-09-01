@@ -1,0 +1,37 @@
+struct TryResource {
+    marker: i32;
+}
+
+impl Drop for TryResource {
+    fn drop(resource: &mut TryResource) -> unit {
+        print(resource.marker);
+    }
+}
+
+fn source() -> Result<i32, i32> {
+    return Err(7);
+}
+
+slot context hook();
+
+context around for hook {
+    let resource = new TryResource(62);
+    resume();
+    print(99);
+}
+
+fn pipeline() -> Result<i32, i32> {
+    apply around {
+        hook() {
+            let value = source()?;
+            print(value);
+        }
+    }
+    return Ok(0);
+}
+
+fn main() -> i32 {
+    let result = pipeline();
+    print(unwrap_err(move result));
+    return 0;
+}

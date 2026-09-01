@@ -156,25 +156,18 @@ int main() {
         return 1;
     }
 
-    if (rt_fragment_plugin_load(nullptr) != 0) {
-        std::cerr << "empty fragment plugin path was accepted\n";
-        return 1;
-    }
     LunaRuntimeErrorSnapshotV1 errorSnapshot{};
     char message[64]{};
-    if (rt_runtime_error_snapshot_v1(
-            LUNA_RUNTIME_ERROR_DOMAIN_FRAGMENT_PLUGIN, &errorSnapshot,
-            message, sizeof(message)) != LUNA_RUNTIME_STATUS_OK ||
-        errorSnapshot.domain != LUNA_RUNTIME_ERROR_DOMAIN_FRAGMENT_PLUGIN ||
-        errorSnapshot.code != LUNA_RUNTIME_ERROR_INVALID_ARGUMENT ||
-        std::strcmp(message, "fragment plugin path is empty") != 0) {
-        std::cerr << "fragment plugin error was not copied into a stable snapshot\n";
-        return 1;
-    }
     if (rt_runtime_error_snapshot_v1(
             LUNA_RUNTIME_ERROR_DOMAIN_NONE, &errorSnapshot,
             message, sizeof(message)) != LUNA_RUNTIME_STATUS_INVALID_ARGUMENT) {
         std::cerr << "invalid runtime error domain was accepted\n";
+        return 1;
+    }
+    if (rt_runtime_error_snapshot_v1(
+            LUNA_RUNTIME_ERROR_DOMAIN_RESERVED_1, &errorSnapshot,
+            message, sizeof(message)) != LUNA_RUNTIME_STATUS_INVALID_ARGUMENT) {
+        std::cerr << "retired fragment-plugin error domain was accepted\n";
         return 1;
     }
     return 0;

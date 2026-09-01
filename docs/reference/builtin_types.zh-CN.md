@@ -54,7 +54,7 @@
 | `&mut T` | Value/Structural | 一个 `T` | Copy handle；MutableBorrow relation | 8 字节；独占 loan |
 | `array<T, N>` | Value/Structural | 一个 `T` 和非负编译期整数 `N` | 由 `T` 决定 | 内联 `N * size(T)`；Frozen core |
 | `slice<T>` | Value/Structural | 恰好一个 `T` | Copy handle + 来源 shared loan | 16 字节 `{data,length}`；当前只读 |
-| `Result<T, E>` | Value/Structural | 恰好两个载荷类型 | `join(usage(T), usage(E))` | inline ADT v1；核心语义 Frozen |
+| `Result<T, E>` | Value/Canonical Core 名义声明 | 恰好两个载荷类型 | `join(usage(T), usage(E))` | `org.luna.core::result::Result`；inline ADT v1 |
 | `device_buffer<T>` | Value/Structural builtin constructor | 恰好一个元素类型 | Linear | 8 字节句柄；当前操作只稳定支持 `i32` |
 | `(P...) -> R` | Value/Structural | 参数序列和返回类型 | Copy function value；contract 属于 shape | 8 字节代码/闭包入口表示；closure env 未冻结 |
 | `affine T` | 非独立类型 | 只用于 usage contract | Affine | TypeId 仍为 `T` |

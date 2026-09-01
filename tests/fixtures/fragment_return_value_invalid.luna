@@ -1,0 +1,12 @@
+slot interceptor hook();
+
+interceptor invalid for hook {
+    return 1;
+}
+
+fn main() -> i32 {
+    apply invalid {
+        hook() { }
+    }
+    return 0;
+}

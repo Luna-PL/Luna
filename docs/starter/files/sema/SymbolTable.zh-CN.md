@@ -70,6 +70,7 @@ C++ 类比：相当于一本「作用域限定的符号字典」——类似定�
   - `isLinear`/`usage`/`relation`：所有权契约（`luna::ownership::Usage/Relation`）。
   - `isConst`/`isExported`/`isExtern`/`returnsLinear`/`returnUsage`/`paramContracts` 等。
   - `compileTimeDeclarationId`：前端专用、MIR 前抹掉的 `declaration_ref` 值。
+  - `isCompileTimeSymbolSet`/`isCompileTimeQueryDeclarationView` 及其 declaration-ID vector 保留局部再绑定后的 query membership 与顺序；query-reference/optional-payload flag 实施 call/return 不逃逸边界。
 - `class SymbolTable`：
   - `mScopes`：作用域栈（`vector<unordered_map<string, SymbolInfo>>`），`mScopes[0]` 是包级根作用域。
   - `mTypeMap`：全局「类型/特征注册表」（名→`TypePtr`）。

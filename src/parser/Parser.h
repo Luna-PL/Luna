@@ -32,6 +32,7 @@ private:
     std::unique_ptr<StructDecl> parseStructDecl();
     std::unique_ptr<EnumDecl> parseEnumDecl();
     std::unique_ptr<FragmentDecl> parseFragmentDecl(FragmentKind kind);
+    std::unique_ptr<SlotDecl> parseSlotDecl();
     std::unique_ptr<TraitDecl> parseTraitDecl();
     std::unique_ptr<ImplDecl> parseImplDecl();
     std::unique_ptr<MetaDecl> parseMetaDecl();
@@ -47,11 +48,10 @@ private:
     std::unique_ptr<Stmt> parseWhileStmt();
     std::unique_ptr<Stmt> parseForStmt();
     std::unique_ptr<Stmt> parseFreeStmt();
-    std::unique_ptr<Stmt> parseSlotStmt(bool isDynamic = false);
     std::unique_ptr<Stmt> parseResumeStmt();
     std::unique_ptr<Stmt> parseAbortStmt();
     std::unique_ptr<Stmt> parseAwaitStmt();
-    std::unique_ptr<Stmt> parseApplyStmt(bool isDynamic = false);
+    std::unique_ptr<Stmt> parseApplyStmt();
     std::unique_ptr<Stmt> parseNamedSlotInvokeStmt();
     std::unique_ptr<Stmt> parseExprStmt();
 
@@ -76,8 +76,8 @@ private:
     std::unique_ptr<Expr> parseIfExpr();
     std::unique_ptr<Expr> parseLambda();
     std::unique_ptr<Expr> parseLaunchExpr();
-    std::unique_ptr<SelectExpr> parseSelectExpr(bool isDynamic,
-                                                bool selectAlreadyConsumed = true);
+    std::unique_ptr<SelectExpr> parseSelectExpr(
+        bool selectAlreadyConsumed = true);
 
     std::unique_ptr<TypeAST> parseType();
     std::unique_ptr<RecordTypeAST> parseRecordType();

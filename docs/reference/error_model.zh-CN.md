@@ -6,6 +6,10 @@
 > 规范性：核心语义规范；状态表中的内部布局和计划能力非规范
 > 首次实现核对：`d0ab31c`（2026-07-31）
 
+> Luna 0.3 身份注记：下文的值、传播、清理与 panic 规则仍适用，但 Result
+> 现在具有 `org.luna.core::result::Result` 规范名义身份，From 使用
+> `org.luna.core::convert::From`。下文的结构型 Result 身份只描述历史 0.2 基线。
+
 本文给出 0.2 Alpha 可以依赖的错误语义，并把尚未完成的标准库/外部 adapter 与
 核心模型分开。设计理由见[架构决策 D005/D006](../decisions.md)。
 

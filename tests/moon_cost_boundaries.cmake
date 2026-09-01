@@ -9,7 +9,8 @@ set(work_dir "${LUNA_BINARY_DIR}/moon-cost-boundaries")
 file(REMOVE_RECURSE "${work_dir}")
 file(MAKE_DIRECTORY "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/kernel_unused.luna" DESTINATION "${work_dir}")
-file(COPY "${LUNA_SOURCE_DIR}/examples/dynamic_select.luna" DESTINATION "${work_dir}")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/runtime_retention_descriptor.luna"
+     DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/selector_user_logic.luna" DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/concepts.luna" DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/generic_instance_reuse.luna" DESTINATION "${work_dir}")
@@ -62,18 +63,27 @@ if(reserved_gpu EQUAL -1 OR reserved_kernel EQUAL -1 OR reserved_feature EQUAL -
     message(FATAL_ERROR "explicit kernel reservation did not materialize its audited cost")
 endif()
 
-set(dynamic_source "${work_dir}/dynamic_select.luna")
-build_case("${dynamic_source}" "${work_dir}/dynamic.moonir")
-file(READ "${last_ir_path}" dynamic_ir)
-file(READ "${work_dir}/dynamic.moonir" dynamic_moon)
-string(FIND "${dynamic_ir}" "__moon_runtime_registry_" runtime_registry)
-string(FIND "${dynamic_ir}" "dynamic.select.unique" dynamic_binding)
-string(FIND "${dynamic_ir}" "rt_gpu_" dynamic_gpu)
-string(FIND "${dynamic_moon}" "dynamic_select" dynamic_feature)
-if(runtime_registry EQUAL -1 OR dynamic_binding EQUAL -1 OR
-   NOT dynamic_gpu EQUAL -1 OR dynamic_feature EQUAL -1)
+set(runtime_source "${work_dir}/runtime_retention_descriptor.luna")
+build_case("${runtime_source}" "${work_dir}/runtime-retention.moonir")
+file(READ "${last_ir_path}" runtime_ir)
+file(READ "${work_dir}/runtime-retention.moonir" runtime_moon)
+string(FIND "${runtime_ir}" "__moon_runtime_registry_" runtime_registry)
+string(FIND "${runtime_ir}" "moon.runtime.declaration.v1" runtime_descriptor_v1)
+string(FIND "${runtime_ir}" "moon.runtime.registry.v1" runtime_registry_v1)
+string(FIND "${runtime_ir}" "symbol_" runtime_symbol_id)
+string(FIND "${runtime_ir}" "contract_" runtime_contract_id)
+string(FIND "${runtime_ir}" "type_" runtime_type_id)
+string(FIND "${runtime_ir}" "dynamic.select.unique" dynamic_binding)
+string(FIND "${runtime_ir}" "rt_gpu_" dynamic_gpu)
+string(FIND "${runtime_moon}" "dynamic_select" dynamic_feature)
+if(runtime_registry EQUAL -1 OR runtime_descriptor_v1 EQUAL -1 OR
+   runtime_registry_v1 EQUAL -1 OR runtime_symbol_id EQUAL -1 OR
+   runtime_contract_id EQUAL -1 OR runtime_type_id EQUAL -1 OR
+   NOT dynamic_binding EQUAL -1 OR
+   NOT dynamic_gpu EQUAL -1 OR NOT dynamic_feature EQUAL -1)
     file(REMOVE_RECURSE "${work_dir}")
-    message(FATAL_ERROR "dynamic select/runtime descriptor cost boundary is incorrect")
+    message(FATAL_ERROR
+        "runtime descriptors retained the removed dynamic-select cost")
 endif()
 
 set(static_selector_source "${work_dir}/selector_user_logic.luna")
@@ -82,11 +92,13 @@ file(READ "${last_ir_path}" static_selector_ir)
 file(READ "${work_dir}/static-selector.moonir" static_selector_moon)
 string(FIND "${static_selector_ir}" "choose_release" static_selector_machine_code)
 string(FIND "${static_selector_ir}" "__moon_runtime_registry_" static_selector_registry)
+string(FIND "${static_selector_ir}" "moon.runtime.declaration.v1" static_descriptor_v1)
 string(FIND "${static_selector_moon}" "choose_release" static_selector_protocol)
 string(FIND "${static_selector_moon}" "declaration_view" static_selector_view)
 string(FIND "${static_selector_moon}" "dynamic_select" static_selector_dynamic)
 if(NOT static_selector_machine_code EQUAL -1 OR
    NOT static_selector_registry EQUAL -1 OR
+   NOT static_descriptor_v1 EQUAL -1 OR
    NOT static_selector_protocol EQUAL -1 OR
    NOT static_selector_view EQUAL -1 OR
    NOT static_selector_dynamic EQUAL -1)

@@ -1,11 +1,13 @@
-context around {
+slot context hook();
+
+context around for hook {
     resume();
     print(2);
 }
 
 fn main() -> i32 {
-    apply hook(around) {
-        slot context hook {
+    apply around {
+        hook() {
             return 1;
         }
     }

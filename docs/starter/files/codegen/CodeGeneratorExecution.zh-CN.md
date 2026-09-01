@@ -20,7 +20,7 @@
 
 **`int CodeGenerator::jitRun()`**
 - 建 LLJITBuilder() 创建 JIT。
-- 逐条 `bindRuntime(name, &func)` 把运行期 helper 绑进 SymbolMap（Exported，mangleAndIntern），条件为该名字已在 module 中引用。覆盖：alloc/realloc/dealloc、RC/ARC(rt_rc_* / rt_arc_*)、panic、host_services、checked_array_layout、try_alloc/realloc、console I/O、file I/O、path metadata、runtime_error、raw malloc/free、print_i32/cstr、0.2 兼容符号、array_index_or_abort、动态片段/插件(rt_dynamic_fragment_* / rt_fragment_plugin_*)、GPU(rt_gpu_*)。Windows 下额外把 luaJitMingwMain 作为 `__main` 绑定。
+- 逐条 `bindRuntime(name, &func)` 把运行期 helper 绑进 SymbolMap（Exported，mangleAndIntern），条件为该名字已在 module 中引用。覆盖 allocation、RC/ARC 库存储、panic、host service、可恢复分配、console/file I/O、runtime error、数组边界与 GPU helper。Windows 下额外把 `lunaJitMingwMain` 作为 `__main` 绑定。
 - define 进 mainJITDylib(absoluteSymbols) 后，addIRModule(ThreadSafeModule(move(mModule),move(mCtx)))。
 - 加 EPCDynamicLibrarySearchGenerator::GetForTargetProcess 生成器供 libc/用户库回退。
 - lookup("main")、toPtr<int()>()、return invokeLunaJitEntry(mainFunction)。失败均打日志返回 1。

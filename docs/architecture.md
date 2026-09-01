@@ -75,12 +75,12 @@ physical directory and file. Refactoring files alone must not cross the current 
 
 See the type-system reference for exact type rules and Runtime ABI for the Runtime boundary.
 
-## Static, runtime, and dynamic selection
+## Static and runtime selection
 
-A static selector chooses a declaration at compile time from a type-correct candidate set. A
-dynamic slot permits only compiler-verified finite candidates or external interceptors meeting
-the Alpha plugin ABI. The system does not accept arbitrary native function pointers or treat
-environment variables as a security boundary.
+A static selector chooses a declaration at compile time from a type-correct candidate set.
+SF006 Slot/Fragment composition is also static and nominal. Runtime-retained descriptors remain
+typed loader/tooling data; Luna 0.3 exposes no dynamic slot/apply source form and does not accept
+arbitrary native function pointers or treat environment variables as a security boundary.
 
 Metadata extends declaration data and selection protocols. Ordinary metadata does not
 automatically enter declaration identity; explicit selector/discriminator rules are required

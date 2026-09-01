@@ -32,9 +32,6 @@ void Printer::print(const Module& module, std::ostream& out) const {
         out << name;
     };
     feature("runtime", module.features.runtime);
-    feature("dynamic_reflection", module.features.dynamicReflection);
-    feature("dynamic_apply", module.features.dynamicApply);
-    feature("dynamic_select", module.features.dynamicSelect);
     feature("kernel", module.features.kernel);
     feature("kernel_runtime_reserved", module.features.kernelRuntimeReserved);
     out << "]\n";
@@ -171,6 +168,13 @@ void Printer::print(const Module& module, std::ostream& out) const {
                         ? fragment->name : fragment->generatedSymbolName)
                 << "\" : " << typeName(module, fragment->structuralType);
             printLocation(fragment->location, out);
+            out << "\n";
+        } else if (auto* slot = dynamic_cast<const SlotDecl*>(declaration.get())) {
+            out << "  moon.slot @" << slot->declarationId << " symbol \""
+                << (slot->generatedSymbolName.empty()
+                        ? slot->name : slot->generatedSymbolName)
+                << "\" : " << typeName(module, slot->structuralType);
+            printLocation(slot->location, out);
             out << "\n";
         }
     }

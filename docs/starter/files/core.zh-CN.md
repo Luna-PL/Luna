@@ -25,8 +25,7 @@ types: 无（仅常量）
 把标准库留给编译器内部约定的身份字符串（trait 名、类型名、方法名）收拢到一处，
 避免散落在 Sema、布局、所有权等代码里造成拼写漂移。仅含编译期常量，无逻辑、无运行期状态。
 
-同时记录 0.2（legacy）与 0.3（canonical）两代命名，供清理切换（clean-break 0.3）一次性切换，
-无需保留语言模式分支。
+只记录 clean-break 0.3 的 canonical 命名，不保留 0.2 身份或语言模式分支。
 
 ## 关键结构体·类·枚举
 
@@ -35,7 +34,6 @@ types: 无（仅常量）
 | 成员 | 含义 |
 | --- | --- |
 | `PackageId = "org.luna.core"` | 核心包身份标识。 |
-| `legacy_0_2::*` | 0.2 旧名（Drop、From、Result）。 |
 | `canonical_0_3::*` | 0.3 新名（Drop、Clone、From、TryFrom、Option、Result、Iterator…）。 |
 | `DropMethodName/CloneMethodName/...` | trait 方法名（drop、clone、next、into_iter、begin/push/finish）。 |
 | `GlobalAllocatorDomainId` | 全局分配器域身份。 |
@@ -188,7 +186,7 @@ types: Facts / IdentityFacts / ControlFacts / ResourceFacts / CapabilityFacts / 
 | `struct AbiFacts` | stableBoundary/persistentFrameRequired/dropGlueSymbol。 |
 | `struct Facts` | schemaMajor/Minor + 五个子结构。 |
 
-常量：`SchemaMajor=1`、`SchemaMinor=3`，`DropTraitId`/`DropMethodName`/`FromTraitId`/`CanonicalFromTraitId`/`CanonicalResultTypeId` 等。
+常量：`SchemaMajor=1`、`SchemaMinor=3`，`DropTraitId`/`DropMethodName`/`FromTraitId`/`ResultTypeId` 等。
 
 ## 关键函数·方法
 `controlFormName`、`cardinalityName`、`continuationStorageName`、`releaseDomainName`、`resourceLifetimeName`、`forwardingName`、`resourceManagementName`：枚举名 → 稳定字符串。

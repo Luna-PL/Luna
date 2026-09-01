@@ -111,31 +111,21 @@ after static reflection and does not create a runtime descriptor. If the name
 and optional signature still identify multiple declarations, compilation
 fails; `select` is the tool for that open-boundary case.
 
-## Runtime visibility and dynamic selection (provisional)
+## Runtime visibility and host binding
 
 Prefix an attachment with `runtime` when a runtime operation must inspect it:
 
 ```luna
 runtime@release("stable", 1, 2, 0)
 fn parse() -> i32 { return 120; }
-
-fn resolve(major: i32) -> i32 {
-    let f = dynamic select parse with
-        choose_release("stable", major, 2, 0);
-    return f();
-}
 ```
 
-`runtime@...` also gives its declaration a minimal Runtime Descriptor. The
-existing `dynamic select` exact-match path remains available for compatibility,
-but its generalized selector/reflection capability set is intentionally not
-frozen by the static protocol described above. Compile-time-only metadata
-cannot be inspected by a dynamic operation.
-
-No static operation implicitly retains metadata, descriptors, selector code, or
-reflection data. `runtime` and `dynamic` must be written explicitly. Their
-final capability sets, replacement rules, and reflection surface remain future
-design work.
+`runtime@...` also gives its declaration a minimal Runtime Descriptor. No static
+operation implicitly retains metadata, descriptors, selector code, or
+reflection data; `runtime` must be written explicitly. Compile-time-only
+metadata cannot be inspected through a Runtime descriptor. The former
+`dynamic` retention and `dynamic select` exact-match protocol are rejected in
+0.3; runtime switching belongs to typed EV004 host bindings.
 
 ## Current boundary
 
@@ -146,5 +136,5 @@ the same Selector component and declaration-view protocol rather than
 reintroducing special version syntax.
 
 See [`examples/versioning.luna`](../examples/versioning.luna) for static
-selection and [`examples/dynamic_select.luna`](../examples/dynamic_select.luna)
-for the explicit runtime path.
+selection and [the host evolution API](evolution.md) for explicit runtime
+binding and generation switching.

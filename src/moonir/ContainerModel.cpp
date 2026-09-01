@@ -287,7 +287,6 @@ void encodeFacts(Encoder& encoder, const luna::sysmeta::Facts& facts) {
     encoder.boolean(facts.resource.tracksElementInitialization);
     encoder.boolean(facts.capability.hostOnly);
     encoder.boolean(facts.capability.runtimeRetained);
-    encoder.boolean(facts.capability.dynamicDispatch);
     encoder.boolean(facts.capability.ffi);
     encoder.boolean(facts.capability.gpu);
     encoder.boolean(facts.capability.maySuspend);
@@ -334,7 +333,6 @@ bool decodeFacts(Decoder& decoder, luna::sysmeta::Facts& facts) {
         decoder.boolean(facts.resource.tracksElementInitialization) &&
         decoder.boolean(facts.capability.hostOnly) &&
         decoder.boolean(facts.capability.runtimeRetained) &&
-        decoder.boolean(facts.capability.dynamicDispatch) &&
         decoder.boolean(facts.capability.ffi) &&
         decoder.boolean(facts.capability.gpu) &&
         decoder.boolean(facts.capability.maySuspend) &&
@@ -517,18 +515,12 @@ bool decodeType(Decoder& decoder, TypeRecord& type) {
 
 uint32_t featureBits(const FeatureFlags& features) {
     return (features.runtime ? 1u << 0 : 0) |
-        (features.dynamicReflection ? 1u << 1 : 0) |
-        (features.dynamicApply ? 1u << 2 : 0) |
-        (features.dynamicSelect ? 1u << 3 : 0) |
         (features.kernel ? 1u << 4 : 0) |
         (features.kernelRuntimeReserved ? 1u << 5 : 0);
 }
 
 void decodeFeatureBits(uint32_t bits, FeatureFlags& features) {
     features.runtime = (bits & (1u << 0)) != 0;
-    features.dynamicReflection = (bits & (1u << 1)) != 0;
-    features.dynamicApply = (bits & (1u << 2)) != 0;
-    features.dynamicSelect = (bits & (1u << 3)) != 0;
     features.kernel = (bits & (1u << 4)) != 0;
     features.kernelRuntimeReserved = (bits & (1u << 5)) != 0;
 }
@@ -614,7 +606,7 @@ bool decodeMetadata(Decoder& decoder, MetadataInstance& metadata) {
         if (!decodeConstant(decoder, value)) return false;
         metadata.values.push_back(std::move(value));
     }
-    return decoder.enumeration(metadata.retention, 2) &&
+    return decoder.enumeration(metadata.retention, 1) &&
         decodeLocation(decoder, metadata.location);
 }
 
@@ -679,7 +671,6 @@ std::optional<CodeExpressionOpcode> codeExpressionOpcode(
     if (dynamic_cast<const BinaryExpr*>(&expression)) return CodeExpressionOpcode::Binary;
     if (dynamic_cast<const UnaryExpr*>(&expression)) return CodeExpressionOpcode::Unary;
     if (dynamic_cast<const CallExpr*>(&expression)) return CodeExpressionOpcode::Call;
-    if (dynamic_cast<const DynamicSelectExpr*>(&expression)) return CodeExpressionOpcode::DynamicSelect;
     if (dynamic_cast<const LaunchExpr*>(&expression)) return CodeExpressionOpcode::Launch;
     if (dynamic_cast<const VariantConstructExpr*>(&expression)) return CodeExpressionOpcode::VariantConstruct;
     if (dynamic_cast<const ResultConstructExpr*>(&expression)) return CodeExpressionOpcode::ResultConstruct;
@@ -861,19 +852,6 @@ bool encodeExpr(Encoder& encoder, const Expr* expression, uint32_t depth,
         encoder.boolean(value->compileTimeValue.has_value());
         if (value->compileTimeValue) encodeConstant(
             encoder, *value->compileTimeValue);
-    } else if (const auto* value =
-                   dynamic_cast<const DynamicSelectExpr*>(expression)) {
-        encoder.string(value->familyId);
-        encodeReference(encoder, value->selector);
-        encoder.string(value->metadataSchemaId);
-        if (!encodeExprVector(
-                encoder, value->filterArguments, nested, limits)) return false;
-        encoder.rows(value->candidates, [&](const auto& candidate) {
-            encodeReference(encoder, candidate.declaration);
-            encoder.rows(candidate.metadataValues, [&](const auto& constant) {
-                encodeConstant(encoder, constant);
-            });
-        });
     } else if (const auto* value = dynamic_cast<const LaunchExpr*>(expression)) {
         encoder.string(value->kernelName);
         encodeReference(encoder, value->kernelRef);
@@ -992,7 +970,7 @@ bool decodeExpr(Decoder& decoder, std::unique_ptr<Expr>& expression,
         case CodeExpressionOpcode::Binary: decoded = std::make_unique<BinaryExpr>(); break;
         case CodeExpressionOpcode::Unary: decoded = std::make_unique<UnaryExpr>(); break;
         case CodeExpressionOpcode::Call: decoded = std::make_unique<CallExpr>(); break;
-        case CodeExpressionOpcode::DynamicSelect: decoded = std::make_unique<DynamicSelectExpr>(); break;
+        case CodeExpressionOpcode::ReservedDynamicSelect: return false;
         case CodeExpressionOpcode::Launch: decoded = std::make_unique<LaunchExpr>(); break;
         case CodeExpressionOpcode::VariantConstruct: decoded = std::make_unique<VariantConstructExpr>(); break;
         case CodeExpressionOpcode::ResultConstruct: decoded = std::make_unique<ResultConstructExpr>(); break;
@@ -1066,27 +1044,6 @@ bool decodeExpr(Decoder& decoder, std::unique_ptr<Expr>& expression,
             ConstantValue constant;
             if (!decodeConstant(decoder, constant)) return false;
             value->compileTimeValue = std::move(constant);
-        }
-    } else if (auto* value = dynamic_cast<DynamicSelectExpr*>(decoded.get())) {
-        if (!decoder.string(value->familyId) ||
-            !decodeReference(decoder, value->selector) ||
-            !decoder.string(value->metadataSchemaId) ||
-            !decodeExprVector(
-                decoder, value->filterArguments, nested, limits)) return false;
-        uint32_t count = 0;
-        if (!decoder.rowCount(count)) return false;
-        for (uint32_t index = 0; index < count; ++index) {
-            DynamicSelectCandidate candidate;
-            if (!decodeReference(decoder, candidate.declaration)) return false;
-            uint32_t constantCount = 0;
-            if (!decoder.rowCount(constantCount)) return false;
-            for (uint32_t constantIndex = 0;
-                 constantIndex < constantCount; ++constantIndex) {
-                ConstantValue constant;
-                if (!decodeConstant(decoder, constant)) return false;
-                candidate.metadataValues.push_back(std::move(constant));
-            }
-            value->candidates.push_back(std::move(candidate));
         }
     } else if (auto* value = dynamic_cast<LaunchExpr*>(decoded.get())) {
         if (!decoder.string(value->kernelName) ||
@@ -1637,14 +1594,6 @@ void collectExpressionReferences(
         references.declaration(call->iteratorCollectBegin);
         references.declaration(call->iteratorCollectPush);
         references.declaration(call->iteratorCollectFinish);
-    } else if (const auto* selection =
-                   dynamic_cast<const DynamicSelectExpr*>(expression)) {
-        references.declaration(selection->selector);
-        references.schema(selection->metadataSchemaId);
-        for (const auto& argument : selection->filterArguments)
-            collectExpressionReferences(argument.get(), references);
-        for (const auto& candidate : selection->candidates)
-            references.declaration(candidate.declaration);
     } else if (const auto* launch =
                    dynamic_cast<const LaunchExpr*>(expression)) {
         references.declaration(launch->kernelRef);
@@ -2116,7 +2065,7 @@ bool ContainerModelCodec::decodeManifest(
         !decoder.string(decoded.targetTriple) ||
         !decoder.string(decoded.dataLayout) ||
         !decodeReference(decoder, decoded.entrypoint) ||
-        !decoder.u32(features) || (features & ~0x3fu) != 0 ||
+        !decoder.u32(features) || (features & ~0x31u) != 0 ||
         !decoder.finish("manifest")) {
         error = decoder.error().empty()
             ? "Moon Container manifest has invalid flags or package kind"
@@ -2328,7 +2277,7 @@ bool ContainerModelCodec::decodeDeclarations(
             !symbolDecoder.string(declaration.sourceName) ||
             !symbolDecoder.string(declaration.linkageName) ||
             !symbolDecoder.enumeration(declaration.kind, 6) ||
-            !symbolDecoder.enumeration(declaration.retention, 2) ||
+            !symbolDecoder.enumeration(declaration.retention, 1) ||
             !symbolDecoder.string(declaration.type.value) ||
             !decodeLocation(symbolDecoder, declaration.location)) {
             error = symbolDecoder.error().empty()

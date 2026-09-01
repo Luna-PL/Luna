@@ -1,6 +1,0 @@
-fn answer() -> i32 { return 42; }
-
-fn main() -> i32 {
-    let candidate = symbols(answer).optional();
-    return 0;
-}

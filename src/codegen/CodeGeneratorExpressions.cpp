@@ -16,7 +16,6 @@ using moon::BoolLiteralExpr;
 using moon::BorrowExpr;
 using moon::CallExpr;
 using moon::DerefExpr;
-using moon::DynamicSelectExpr;
 using moon::EnvLoadExpr;
 using moon::Expr;
 using moon::FieldAccessExpr;
@@ -99,96 +98,6 @@ llvm::Value* CodeGenerator::generateIdentifier(IdentifierExpr* id) {
             return function;
     }
     return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
-}
-
-llvm::Value* CodeGenerator::generateDynamicSelect(DynamicSelectExpr* selection) {
-    auto* opaquePointerType = llvm::cast<llvm::PointerType>(mHelpers->ptrTy());
-    std::vector<llvm::Value*> filterValues;
-    for (auto& argument : selection->filterArguments)
-        filterValues.push_back(generateExpr(argument.get()));
-
-    llvm::Value* selected = llvm::ConstantPointerNull::get(opaquePointerType);
-    llvm::Value* matchCount = llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
-    for (const auto& candidate : selection->candidates) {
-        llvm::Value* matches = llvm::ConstantInt::getTrue(*mCtx);
-        for (size_t index = 0; index < filterValues.size(); ++index) {
-            llvm::Value* actual = filterValues[index];
-            const auto& expectedValue = candidate.metadataValues[index];
-            llvm::Value* equal = nullptr;
-            if (auto* integer = std::get_if<int64_t>(&expectedValue)) {
-                if (!actual->getType()->isIntegerTy()) {
-                    error("dynamic selector integer metadata type mismatch");
-                    return llvm::ConstantPointerNull::get(opaquePointerType);
-                }
-                auto* expected = llvm::ConstantInt::get(
-                    actual->getType(), static_cast<uint64_t>(*integer), true);
-                equal = mBuilder->CreateICmpEQ(actual, expected, "dynamic.meta.eq");
-            } else if (auto* floating = std::get_if<double>(&expectedValue)) {
-                if (!actual->getType()->isFloatingPointTy()) {
-                    error("dynamic selector floating metadata type mismatch");
-                    return llvm::ConstantPointerNull::get(opaquePointerType);
-                }
-                auto* expected = llvm::ConstantFP::get(actual->getType(), *floating);
-                equal = mBuilder->CreateFCmpOEQ(actual, expected, "dynamic.meta.eq");
-            } else if (auto* boolean = std::get_if<bool>(&expectedValue)) {
-                if (!actual->getType()->isIntegerTy()) {
-                    error("dynamic selector boolean metadata type mismatch");
-                    return llvm::ConstantPointerNull::get(opaquePointerType);
-                }
-                auto* expected = llvm::ConstantInt::get(
-                    actual->getType(), *boolean ? 1 : 0);
-                equal = mBuilder->CreateICmpEQ(actual, expected, "dynamic.meta.eq");
-            } else {
-                const auto& string = std::get<std::string>(expectedValue);
-                if (!actual->getType()->isPointerTy()) {
-                    error("dynamic selector string metadata type mismatch");
-                    return llvm::ConstantPointerNull::get(opaquePointerType);
-                }
-                auto* storage = mBuilder->CreateGlobalString(
-                    string, "dynamic.meta.string");
-                auto* expected = mBuilder->CreateInBoundsGEP(
-                    storage->getValueType(), storage,
-                    {llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
-                     llvm::ConstantInt::get(mHelpers->i32Ty(), 0)});
-                auto compare = mModule->getOrInsertFunction(
-                    "strcmp", mHelpers->i32Ty(), mHelpers->ptrTy(),
-                    mHelpers->ptrTy());
-                auto* compared = mBuilder->CreateCall(
-                    compare, {actual, expected}, "dynamic.meta.strcmp");
-                equal = mBuilder->CreateICmpEQ(
-                    compared, llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
-                    "dynamic.meta.eq");
-            }
-            matches = mBuilder->CreateAnd(matches, equal, "dynamic.meta.all");
-        }
-        llvm::Function* function = resolveFunction(candidate.declaration);
-        if (!function) {
-            error("dynamic select candidate '" +
-                  candidate.declaration.symbol.value +
-                  "' has no generated function");
-            return llvm::ConstantPointerNull::get(opaquePointerType);
-        }
-        selected = mBuilder->CreateSelect(matches, function, selected,
-                                          "dynamic.selected");
-        matchCount = mBuilder->CreateAdd(
-            matchCount, mBuilder->CreateZExt(matches, mHelpers->i32Ty()),
-            "dynamic.match.count");
-    }
-
-    auto* valid = mBuilder->CreateICmpEQ(
-        matchCount, llvm::ConstantInt::get(mHelpers->i32Ty(), 1),
-        "dynamic.select.unique");
-    auto* success = llvm::BasicBlock::Create(
-        *mCtx, "dynamic.select.success", mCurrentFunc);
-    auto* failure = llvm::BasicBlock::Create(
-        *mCtx, "dynamic.select.failure", mCurrentFunc);
-    mBuilder->CreateCondBr(valid, success, failure);
-    mBuilder->SetInsertPoint(failure);
-    auto abort = mModule->getOrInsertFunction("abort", mHelpers->voidTy());
-    mBuilder->CreateCall(abort);
-    mBuilder->CreateUnreachable();
-    mBuilder->SetInsertPoint(success);
-    return selected;
 }
 
 llvm::Value* CodeGenerator::generateFieldAccess(FieldAccessExpr* field) {
@@ -899,113 +808,6 @@ llvm::Value* CodeGenerator::generateCall(CallExpr* call) {
                     }
                 }
                 return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
-            }
-        }
-
-        // Runtime fragment dispatch intrinsics emitted by the canonical CFG
-        // builder for dynamic single-shot interceptor apply. These have no
-        // MoonIR declaration row; resolve them directly to their runtime ABI.
-        if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get())) {
-            if (calleeId->name == "rt_dynamic_fragment_select" &&
-                call->args.size() == 2) {
-                auto fn = mModule->getOrInsertFunction(
-                    "rt_dynamic_fragment_select",
-                    mHelpers->ptrTy(), mHelpers->ptrTy(), mHelpers->ptrTy());
-                std::vector<llvm::Value*> args;
-                for (auto& arg : call->args)
-                    args.push_back(coerceCallArgument(
-                        generateExpr(arg.get()), mHelpers->ptrTy()));
-                return mBuilder->CreateCall(fn, args, "dynamic.fragment.select");
-            }
-            if (calleeId->name == "rt_dynamic_fragment_matches" &&
-                call->args.size() == 2) {
-                auto fn = mModule->getOrInsertFunction(
-                    "rt_dynamic_fragment_matches",
-                    mHelpers->i32Ty(), mHelpers->ptrTy(), mHelpers->ptrTy());
-                std::vector<llvm::Value*> args;
-                for (auto& arg : call->args)
-                    args.push_back(coerceCallArgument(
-                        generateExpr(arg.get()), mHelpers->ptrTy()));
-                return mBuilder->CreateCall(fn, args, "dynamic.fragment.matches");
-            }
-            if (calleeId->name == "rt_dynamic_fragment_report_unknown_and_abort") {
-                auto fn = mModule->getOrInsertFunction(
-                    "rt_dynamic_fragment_report_unknown_and_abort",
-                    mHelpers->voidTy(), mHelpers->ptrTy(), mHelpers->ptrTy());
-                std::vector<llvm::Value*> args;
-                for (auto& arg : call->args)
-                    args.push_back(coerceCallArgument(
-                        generateExpr(arg.get()), mHelpers->ptrTy()));
-                mBuilder->CreateCall(fn, args);
-                mBuilder->CreateUnreachable();
-                return llvm::PoisonValue::get(mHelpers->i32Ty());
-            }
-            // Canonical dynamic slot dispatch: external v1 plugin fallback.
-            // Args: slot_name (str), selected_name (str), slot args...
-            // Builds a LunaFragmentInvocationV1 struct and calls
-            // rt_fragment_plugin_invoke. Returns its i32 result.
-            if (calleeId->name == "rt_canonical_fragment_plugin_fallback" &&
-                call->args.size() >= 3) {
-                auto* slotName = coerceCallArgument(
-                    generateExpr(call->args[0].get()), mHelpers->ptrTy());
-                auto* selected = coerceCallArgument(
-                    generateExpr(call->args[1].get()), mHelpers->ptrTy());
-                auto* contract = coerceCallArgument(
-                    generateExpr(call->args[2].get()), mHelpers->ptrTy());
-                // Build the invocation struct: {i32 abi_version, ptr args, usize arg_count}
-                auto* invocationType = llvm::StructType::get(
-                    *mCtx, {mHelpers->i32Ty(), mHelpers->ptrTy(), mHelpers->sizeTy()});
-                auto* invocationStorage = createEntryBlockAlloca(
-                    mCurrentFunc, invocationType, "plugin.invocation");
-                const size_t numArgs = call->args.size() - 3;
-                llvm::Value* argArray = llvm::ConstantPointerNull::get(
-                    llvm::cast<llvm::PointerType>(mHelpers->ptrTy()));
-                if (numArgs > 0) {
-                    auto* arrayType = llvm::ArrayType::get(mHelpers->ptrTy(), numArgs);
-                    auto* arrayStorage = createEntryBlockAlloca(
-                        mCurrentFunc, arrayType, "plugin.args");
-                    for (size_t i = 0; i < numArgs; ++i) {
-                        auto* value = generateExpr(call->args[i + 3].get());
-                        auto* valueStorage = createEntryBlockAlloca(
-                            mCurrentFunc, value->getType(), "plugin.arg");
-                        mBuilder->CreateStore(value, valueStorage);
-                        auto* element = mBuilder->CreateInBoundsGEP(
-                            arrayType, arrayStorage,
-                            {llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
-                             llvm::ConstantInt::get(mHelpers->i32Ty(), i)},
-                            "plugin.arg.ptr");
-                        mBuilder->CreateStore(valueStorage, element);
-                    }
-                    argArray = mBuilder->CreateInBoundsGEP(
-                        arrayType, arrayStorage,
-                        {llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
-                         llvm::ConstantInt::get(mHelpers->i32Ty(), 0)},
-                        "plugin.args.ptr");
-                }
-                mBuilder->CreateStore(
-                    llvm::ConstantInt::get(mHelpers->i32Ty(), 1), // ABI_V1
-                    mBuilder->CreateStructGEP(invocationType, invocationStorage, 0));
-                mBuilder->CreateStore(
-                    argArray,
-                    mBuilder->CreateStructGEP(invocationType, invocationStorage, 1));
-                mBuilder->CreateStore(
-                    llvm::ConstantInt::get(mHelpers->sizeTy(), numArgs),
-                    mBuilder->CreateStructGEP(invocationType, invocationStorage, 2));
-                auto invoke = mModule->getOrInsertFunction(
-                    "rt_fragment_plugin_invoke", mHelpers->i32Ty(),
-                    mHelpers->ptrTy(), mHelpers->ptrTy(), mHelpers->ptrTy(),
-                    mHelpers->ptrTy());
-                return mBuilder->CreateCall(invoke,
-                    {slotName, selected, contract, invocationStorage},
-                    "plugin.action");
-            }
-            if (calleeId->name == "rt_fragment_plugin_report_error_and_abort") {
-                auto fn = mModule->getOrInsertFunction(
-                    "rt_fragment_plugin_report_error_and_abort",
-                    mHelpers->voidTy());
-                mBuilder->CreateCall(fn);
-                mBuilder->CreateUnreachable();
-                return llvm::PoisonValue::get(mHelpers->i32Ty());
             }
         }
 
@@ -1757,6 +1559,10 @@ llvm::Value* CodeGenerator::generateMakeClosure(moon::MakeClosureExpr* closure) 
 }
 
 llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
+    if (!expr) {
+        error("codegen was asked to lower a null expression");
+        return llvm::PoisonValue::get(mHelpers->i32Ty());
+    }
     if (auto* il = dynamic_cast<IntLiteralExpr*>(expr))
         return generateIntLiteral(il);
     if (auto* fl = dynamic_cast<FloatLiteralExpr*>(expr))
@@ -1769,8 +1575,6 @@ llvm::Value* CodeGenerator::generateExpr(Expr* expr) {
         return generateUnitLiteral(unit);
     if (auto* id = dynamic_cast<IdentifierExpr*>(expr))
         return generateIdentifier(id);
-    if (auto* selection = dynamic_cast<DynamicSelectExpr*>(expr))
-        return generateDynamicSelect(selection);
     if (auto* bin = dynamic_cast<BinaryExpr*>(expr))
         if (auto* value = generateBinary(bin)) return value;
     if (auto* un = dynamic_cast<UnaryExpr*>(expr))

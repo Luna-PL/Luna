@@ -1,0 +1,27 @@
+struct FragmentResource {
+    marker: i32;
+}
+
+impl Drop for FragmentResource {
+    fn drop(resource: &mut FragmentResource) -> unit {
+        print(resource.marker);
+    }
+}
+
+slot interceptor hook();
+
+interceptor stop for hook {
+    let resource = new FragmentResource(11);
+    return;
+    print(99);
+}
+
+fn main() -> i32 {
+    apply stop {
+        hook() {
+            print(22);
+        }
+        print(33);
+    }
+    return 0;
+}

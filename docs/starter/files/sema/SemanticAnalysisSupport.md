@@ -8,8 +8,8 @@ Several semantic analysis components all deal with matters such as "a declaratio
 
 Key points:
 
-- **Declaration identity**: `nominalDeclarationIdentity` produces a stable identity of the form `package::module::kind::symbol` (where `kind` is `struct`/`enum`/`trait`/`meta`/`fn`, etc.).
-- **Linkage names**: `metadataDeclarationName` generates a `base__meta_<hash>`-suffixed linkage name for declarations carrying metadata; `isolatedLinkageName` generates an isolated linkage name of the form `__luna_<hash>_<sourceName>`.
+- **Declaration identity**: `nominalDeclarationIdentity` produces a stable identity of the form `package::module::kind::symbol` (where `kind` is `struct`/`enum`/`trait`/`meta`/`fn`, etc.); `functionDeclarationIdentity` uses metadata plus the normalized callable source signature rather than the count-dependent executable linkage.
+- **Linkage names**: `metadataDeclarationName` generates a `base__meta_<hash>`-suffixed base linkage for declarations carrying metadata; `sourceTypeIdentity` and `functionSourceSignatureIdentity` normalize callable source signatures (including alpha-normalized type parameters), `declarationSourceIdentity` combines that signature with the metadata key, and `isolatedLinkageName` generates `__luna_<hash>_<sourceName>`.
 - **Stable hashing**: `stableMetadataHash` is an FNV-1a 64-bit hash.
 - **Metadata keys**: `metadataExpressionKey` converts constant expressions into stable string keys.
 - **Name utilities**: `qualifiedDeclarationKey`/`splitQualifiedName`/`effectivePackageId`/`nominalTypeOwner`.
@@ -28,6 +28,9 @@ No classes or enums; everything is inline free functions (mostly pure string pro
 - `stableMetadataHash(value)`: FNV-1a 64-bit.
 - `metadataExpressionKey(expr)`: constant expression → a key with an `i:`/`f:`/`b:`/`s:`/`id:`/`expr@` prefix.
 - `metadataDeclarationName(base, decl)`: linkage name for declarations with metadata (`base__meta_<hash>`).
+- `sourceTypeIdentity(type, typeParameters)` / `functionSourceSignatureIdentity(function)`: length-delimited normalized source-type/callable identity used before resolved `TypeId` values exist.
+- `declarationSourceIdentity(base, decl)`: combines the metadata-derived base linkage with a function signature discriminator; non-function declarations keep their existing identity.
+- `functionDeclarationIdentity(program, function)`: produces a function DeclarationId from the source discriminator, keeping SymbolId stable when another overload is added or removed.
 - `effectivePackageId(program, decl)`: package id precedence — declaration/program/`main`.
 - `nominalTypeOwner(type)`: extracts the owner before `::` from `nominalId`.
 - `qualifiedDeclarationKey(packageId, modulePath, name)`: assembles the fully qualified key.

@@ -2,4 +2,4 @@ package org.luna.alloc;
 module prelude;
 
 // Box, Vec, and String are reserved for the explicit 0.3 resource model.
-// The 0.2 compatibility package intentionally exports no owning container.
+// The current narrow package intentionally exports no owning container yet.

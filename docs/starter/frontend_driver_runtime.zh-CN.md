@@ -16,7 +16,7 @@ Normative status: non-normative
 | 前端 | src/lexer, src/parser | Token.h, Lexer.h, Lexer.cpp, AST.h, Parser.h, Parser.cpp |
 | 包装载 | src/package | Package.h, Package.cpp, PackageManager.h, PackageManager.cpp |
 | 驱动器 | src/driver | Driver, CommandLine, CompilerPipeline, AotLinker, Repl (各含 .h/.cpp) |
-| 运行时 | src/runtime | RuntimeABI.h, Runtime.h, Runtime.cpp, ApplicationHostServices.h/.cpp, FragmentPluginABI.h |
+| 运行时 | src/runtime | RuntimeABI.h, Runtime.h, Runtime.cpp, ApplicationHostServices.h/.cpp |
 
 建议阅读顺序：前端 -> driver -> runtime。每部分给：定位 / 关键结构 / 文件责任表 / 真实代码走读 / 面向 C++ 读者的新概念。
 
@@ -184,7 +184,7 @@ int luna::driver::run(int argc, char* argv[]) {
 
 # 第三部分：runtime（运行时 ABI）
 
-> 关键词：RuntimeABI / ApplicationHostServices / FragmentPluginABI。这部分最能体现“C 与 C++ 之分”，全部使用 extern C + 纯 C 结构/函数指针。
+> 关键词：RuntimeABI / ApplicationHostServices。这部分最能体现“C 与 C++ 之分”，全部使用 extern C + 纯 C 结构/函数指针。
 
 ## 3.1 定位
 
@@ -222,24 +222,15 @@ int rt_install_host_services_v1(const LunaHostServicesV1*);
 - GPU：可选（sim / CUDA / ROCm）。
 安装/注册入口：`rt_install_host_services_v1`；hosting capability 由宿主提供并声明。
 
-## 3.4 FragmentPluginABI（fragment 插件边界）
-
-`src/runtime/FragmentPluginABI.h` 定义宿主如何加载外部 fragment 插件：
-- 描述符（descriptor）描述插件身份/能力；
-- 入口函数（invoke / entry）承担调用；
-- 宿主按 slot/fragment 名找到插件并调用入口。
-这相当于 C++ 里“动态库导出 C ABI”的典范。
-
-## 3.5 文件责任表（runtime）
+## 3.4 文件责任表（runtime）
 
 | 文件 | 责任 |
 |------|------|
 | src/runtime/RuntimeABI.h | C 结构/状态码/能力/allocator 函数指针声明（extern C） |
 | src/runtime/Runtime.h/.cpp | 默认宿主 + rt_* 设置入口 + 引用计数 + panic |
 | src/runtime/ApplicationHostServices.h/.cpp | 默认宿主实现（I/O/GPU/allocator） |
-| src/runtime/FragmentPluginABI.h | 插件：描述符 + 入口 + 常量 |
 
-## 3.6 面向 C++ 读者的新概念（runtime）
+## 3.5 面向 C++ 读者的新概念（runtime）
 
 - extern C + 未命名 struct + 显式版本号，构成稳定 ABI；函数指针表 = 手工接口。
 - host 能力位 = 运行前宿主明示能给什么，是轻量的能力协商。

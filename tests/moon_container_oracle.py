@@ -128,7 +128,7 @@ def facts(cursor: Cursor) -> None:
     cursor.u32(2)
     cursor.u32(2)
     cursor.u32(7)
-    for _ in range(12):
+    for _ in range(11):
         cursor.boolean()
     cursor.string()
 
@@ -159,8 +159,10 @@ def parse_manifest(payload: bytes) -> dict[str, object]:
     target_triple = cursor.string()
     data_layout = cursor.string()
     entry = reference(cursor)
-    features = cursor.u32(0x3F)
+    features = cursor.u32()
     cursor.finish()
+    if features & ~0x31:
+        raise FormatError("manifest: retired or unknown feature bit is set")
     if not package_id or not package_version or package_kind not in (1, 2):
         raise FormatError("manifest: invalid package identity")
     if not target_triple or not data_layout:

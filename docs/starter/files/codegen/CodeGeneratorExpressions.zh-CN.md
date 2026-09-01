@@ -2,7 +2,7 @@
 
 ## 这个文件做什么
 
-本文件实现 `CodeGenerator` 类中所有以 `generate` 开头的表达式生成方法，以及总调度入口 `generateExpr(Expr*)`，覆盖 Luna 语言的**全部表达式种类**：字面量、标识符、动态选择、字段访问、切片长度、下标索引、二元/一元运算、变体构造/Result 构造/Record 字面量、初始化分配/堆分配、函数调用（含内建/标准库/动态片段/插件/GPU 内建/print/Ok/Err/is_ok/unwrap/slice/panic/compile-time 常量）、try 传播、赋值（含复合赋值 deref/field/index/local）、移动、借用、解引用、取地址、lambda、闭包环境加载、闭包构造。
+本文件实现 `CodeGenerator` 的表达式生成方法与总调度入口 `generateExpr(Expr*)`，覆盖字面量、标识符、字段/索引、运算、Variant/Result/Record、分配、普通与 intrinsic 调用、GPU builtin、`try`、赋值、ownership 表达式、lambda 与 closure。
 
 对 C++ 读者：这是整个 LLVM 后端的「表达式求值器」——每个 `generateXxx` 对应一种 AST 节点，经 `generateExpr` 的 dynamic_cast 分派后，使用 `mBuilder->Create*` 系列生成 LLVM IR。其中 `generateCall` 最庞大（~470 行），需要处理各种内建运行时调用与函数指针/闭包调用的间接调用。
 
@@ -33,7 +33,7 @@
 - `HeapAlloc`：调 `rt_alloc` 获取指针，再按构造函数参数 store 初始化。
 
 **`generateCall`（最复杂，660-1130 行）**：
-- 依次检查：iterator terminal（Fold/ForEach/Count/Collect）→ `pointer_cast` → `drop_callback` → `Ok`/`Err`/`is_ok`/`is_err`/`unwrap`/`unwrap_err` → `panic` → `slice`(3 参) → 编译期常量 → GPU 内建(`gpu_alloc_i32`/`gpu_free`/`gpu_load_i32`/`gpu_store_i32`/`gpu_copy_from/to_host_i32`) → `print`(i32 或 cstr) → 动态片段(`rt_dynamic_fragment_select/matches/report_unknown_and_abort`) → 插件(`rt_canonical_fragment_plugin_fallback`/`rt_fragment_plugin_report_error_and_abort`) → 全局函数调用（resolveFunction + CreateCall，Never 返回加 Unreachable）→ 间接函数调用（FunctionType 类型）→ 闭包调用（code_ptr + env 结构，首参数 env 指针）。
+- 依次处理 iterator terminal、compiler/runtime intrinsic、GPU builtin 与 print，再解析已验证的全局调用、间接函数调用和 closure 调用。
 
 **其他表达式**：`generateTry`（条件分支 on isOk→失败边 packResultPayload + emitCleanups + CreateRet）、`generateAssign`（复合赋值展开/数组元素/字段/局部）、`generateMove`（可选更新 guarded cursor）、`generateBorrow`（取地址/数组元素/切片元素）、`generateDeref`（Load）、`generateAddrOf`（返回 alloca）、`generateLambda`（生成隐藏函数 + generateControlFlowBody）、`generateEnvLoad`（闭包 env 结构字段 load）、`generateMakeClosure`（生成隐藏函数 + 构造 closure 结构体 {code_ptr, captured...}）。
 

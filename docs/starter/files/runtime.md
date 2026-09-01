@@ -13,6 +13,5 @@ audience: C/C++ programmers reading the Luna compiler sources
 This guide has been split into the following standalone files for easy reading:
 
 - [ApplicationHostServices.md](ApplicationHostServices.md)
-- [FragmentPluginABI.md](FragmentPluginABI.md)
 - [Runtime.md](Runtime.md)
 - [RuntimeABI.md](RuntimeABI.md)

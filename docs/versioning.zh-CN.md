@@ -100,7 +100,7 @@ print(declaration_signature(known));
 擦除，不创建运行时 descriptor。若名称和可选签名仍对应多个声明，编译失败；开放边界
 应使用 `select`。
 
-## 运行时可见性与动态选择（暂定）
+## 运行时可见性与宿主绑定
 
 当运行时操作必须检查 Metadata 时，在附加项前加 `runtime`：
 
@@ -109,12 +109,11 @@ runtime@release("stable", 1, 2, 0)
 fn parse() -> i32 { return 120; }
 ```
 
-`runtime@...` 也为声明提供最小 Runtime Descriptor。已有的 `dynamic select` 精确
-匹配路径仍为兼容保留，但其通用 Selector/反射能力尚未由上述静态协议冻结。只有编译
-期的 Metadata 不能被动态操作检查。
-
-静态操作不会隐式保留 Metadata、descriptor、Selector 代码或反射数据。`runtime` 和
-`dynamic` 必须显式书写；最终 capability 集合、替换规则和反射表面仍是后续设计。
+`runtime@...` 也为声明提供最小 Runtime Descriptor。静态操作不会隐式保留
+Metadata、descriptor、Selector 代码或反射数据；`runtime` 必须显式书写。纯编译期
+Metadata 不能通过 Runtime descriptor 检查。原 `dynamic` retention 与
+`dynamic select` exact-match 协议在 0.3 中被拒绝；runtime 切换由 typed EV004 宿主
+binding 承担。
 
 ## 当前边界
 
@@ -123,4 +122,4 @@ Metadata 附加项可用于函数、fragment、struct、enum、trait 和 impl。
 Selector 组件和 declaration-view 协议，不重新引入特殊版本语法。
 
 参见 [examples/versioning.luna](../examples/versioning.luna) 的静态选择，以及
-[examples/dynamic_select.luna](../examples/dynamic_select.luna) 的显式运行时路径。
+[宿主进化 API](evolution.zh-CN.md)的显式 runtime binding 与 generation switching。

@@ -47,7 +47,7 @@ int main() {
     const auto second = makeSymbol("pkg::fn::answer_b", "pkg::fn::answer",
                                    callable, Retention::Runtime);
     const auto third = makeSymbol("pkg::fn::other", "pkg::fn::other",
-                                  otherType, Retention::Dynamic);
+                                  otherType, Retention::Runtime);
 
     SymbolCatalog catalog({first, second, third});
     if (!catalog.valid()) return fail("valid Symbol Catalog was rejected");
@@ -119,6 +119,42 @@ int main() {
             .one().kind != TerminalKind::Ambiguous)
         return fail("metadata filter accepted multiple matching declarations");
 
+    auto orderedFirst = first;
+    orderedFirst.metadata.push_back(
+        {"meta::rank", {int64_t{2}, std::string{"z"}},
+         Retention::CompileTime});
+    auto orderedSecond = second;
+    orderedSecond.metadata.push_back(
+        {"meta::rank", {int64_t{1}, std::string{"a"}},
+         Retention::CompileTime});
+    SymbolCatalog orderingCatalog({orderedFirst, orderedSecond});
+    auto metadataOrdered = orderingCatalog.query(familyQuery)
+        .allByMetadata("meta::rank");
+    if (!metadataOrdered.valid() ||
+        metadataOrdered.orderedSymbols().size() != 2 ||
+        metadataOrdered.orderedSymbols()[0]->symbolId != second.symbolId ||
+        metadataOrdered.orderedSymbols()[1]->symbolId != first.symbolId)
+        return fail("metadata order did not use schema field order lexicographically");
+
+    auto duplicateRank = orderedSecond;
+    duplicateRank.metadata.front().values =
+        orderedFirst.metadata.front().values;
+    if (SymbolCatalog({orderedFirst, duplicateRank}).query(familyQuery)
+            .allByMetadata("meta::rank").valid())
+        return fail("metadata order accepted a duplicate key");
+    if (metadataCatalog.query(familyQuery)
+            .allByMetadata("meta::version").valid())
+        return fail("metadata order accepted duplicate schema attachments");
+    if (SymbolCatalog({orderedFirst, second}).query(familyQuery)
+            .allByMetadata("meta::rank").valid())
+        return fail("metadata order accepted a missing schema attachment");
+    auto floatingRank = first;
+    floatingRank.metadata.push_back(
+        {"meta::rank", {1.5}, Retention::CompileTime});
+    if (SymbolCatalog({floatingRank}).query(familyQuery)
+            .allByMetadata("meta::rank").valid())
+        return fail("metadata order accepted a floating-point key");
+
     auto outside = family.select({third.symbolId}).one();
     if (outside.kind != TerminalKind::InvalidCandidate ||
         outside.message.find("outside") == std::string::npos)
@@ -137,8 +173,8 @@ int main() {
         structureResult.selected->symbolId != structure.symbolId)
         return fail("declaration-kind query did not isolate a non-function row");
 
-    // Cardinality terminals must be invariant under registration order. This
-    // exhaustively checks every permutation without defining `.all()` order.
+    // Cardinality terminals and canonical `.all()` must be invariant under
+    // registration order. Exhaust every source/catalog permutation.
     std::vector<CatalogSymbol> permutation{first, second, third};
     std::sort(permutation.begin(), permutation.end(),
               [](const auto& left, const auto& right) {
@@ -150,6 +186,10 @@ int main() {
         if (set.size() != 2 || set.one().kind != TerminalKind::Ambiguous ||
             !set.select({first.symbolId}).one().oneSucceeded())
             return fail("query terminal depends on registration order");
+        const auto ordered = set.all().orderedSymbols();
+        if (ordered.size() != 2 ||
+            ordered[0]->symbolId.value > ordered[1]->symbolId.value)
+            return fail("canonical .all() depends on registration order");
     } while (std::next_permutation(
         permutation.begin(), permutation.end(),
         [](const auto& left, const auto& right) {

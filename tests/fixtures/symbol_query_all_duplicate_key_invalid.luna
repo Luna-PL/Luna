@@ -1,0 +1,15 @@
+meta rank { value: i32; }
+meta label { value: string; }
+
+@rank(1)
+@label("first")
+fn route() -> i32 { return 1; }
+
+@rank(1)
+@label("second")
+fn route() -> i32 { return 2; }
+
+fn main() -> i32 {
+    let ordered = symbols(route).all::<rank>();
+    return declaration_count(ordered);
+}

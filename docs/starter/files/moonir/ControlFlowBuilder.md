@@ -93,7 +93,10 @@ It does not merely expand statements; it is responsible for
 
 ## Inputs / State
 
-The builder maintains several scope stacks: mBindings, mMaterializedIterators, mSlotDefaults, mLexicalDynamicApplies, mDynamicApplyScopes, and mFragmentContexts, plus capture context such as mCaptureNames/mCaptureClosureType. mErrors collects failures; the graph is returned empty when not sealed.
+The builder maintains scope stacks for `mBindings`, `mMaterializedIterators`,
+`mSlotDefaults`, `mStaticApplyScopes`, and `mFragmentContexts`, plus capture and
+hidden-cleanup context. `mErrors` collects failures; the graph is returned empty
+when it cannot be sealed.
 
 ## Relationship to Surrounding Files and Pipeline Stages
 

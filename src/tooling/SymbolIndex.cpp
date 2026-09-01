@@ -125,6 +125,7 @@ const char* indexedSymbolKindName(IndexedSymbolKind kind) {
         case IndexedSymbolKind::Kernel: return "kernel";
         case IndexedSymbolKind::Method: return "method";
         case IndexedSymbolKind::Fragment: return "fragment";
+        case IndexedSymbolKind::Slot: return "slot";
         case IndexedSymbolKind::Struct: return "struct";
         case IndexedSymbolKind::Enum: return "enum";
         case IndexedSymbolKind::Trait: return "trait";
@@ -156,6 +157,15 @@ SymbolIndex SymbolIndex::build(const Program& program) {
             signature += fragment->name + parameterList(fragment->params);
             index.add(commonSymbol(
                 *fragment, fragment->name, IndexedSymbolKind::Fragment,
+                std::move(signature)));
+        } else if (const auto* slot =
+                       dynamic_cast<const SlotDecl*>(declaration)) {
+            std::string signature = "slot ";
+            signature += slot->acceptedKind == FragmentKind::Interceptor
+                ? "interceptor " : "context ";
+            signature += slot->name + parameterList(slot->params);
+            index.add(commonSymbol(
+                *slot, slot->name, IndexedSymbolKind::Slot,
                 std::move(signature)));
         } else if (const auto* structure =
                        dynamic_cast<const StructDecl*>(declaration)) {

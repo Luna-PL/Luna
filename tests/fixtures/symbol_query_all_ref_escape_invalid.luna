@@ -1,0 +1,9 @@
+fn route() -> i32 { return 1; }
+
+fn identity<T>(value: T) -> T { return value; }
+
+fn main() -> i32 {
+    let ordered = symbols(route).all();
+    let escaped = identity(declaration_at(ordered, 0));
+    return escaped();
+}

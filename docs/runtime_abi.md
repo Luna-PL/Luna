@@ -3,7 +3,28 @@
 Starting with Luna 0.2.1, language facilities are separated from raw C FFI. Compiler-
 generated `new`, path-sensitive automatic cleanup, explicit `free`, and language `print`
 call only the Luna Runtime ABI; they no longer resolve `malloc/free/printf` directly. The
-public C-compatible header is `runtime/RuntimeABI.h`.
+public C-compatible service header is `runtime/RuntimeABI.h`; descriptor-backed discovery
+uses the separate `runtime/RuntimeDescriptorABI.h` artifact contract.
+
+## Runtime descriptor ABI v1
+
+An explicitly runtime-retained declaration is represented by one
+`LunaRuntimeDeclarationDescriptorV1`. Its stable fields are SymbolId, ContractId, TypeId,
+declaration kind, retention, callable flags, linkage, retained typed metadata, and an
+optional function entry. A `LunaRuntimeDescriptorRegistryV1` owns a strictly increasing
+SymbolId-ordered pointer table plus its module identity. These are in-memory records inside
+an already verified module; they never authenticate a Moon Container or Native library.
+Declaration kind values are Function=1, Fragment=2, Struct=3, Enum=4, Trait=5,
+Implementation=6, MetadataSchema=7, and Slot=8. A Slot is non-callable; a Fragment's
+sealed declaration record carries a strong nominal reference to its target Slot.
+
+The loader validates the bounded registry once, including ABI/size/reserved fields,
+metadata value tags, ordering, and callable-kind consistency. Typed binding then uses exact
+SymbolId + ContractId + declaration kind + required flags lookup. Ordinary calls use the
+resulting pinned entry and do not revalidate the registry. The Moon loader also compares the
+registry with the independently verified Container before publication; a private callable
+remains reachable only through its registry entry, not raw symbol lookup.
+Static-only programs emit neither the registry nor its descriptor types.
 
 ## Design boundary
 
@@ -44,8 +65,8 @@ elements and call `rt_dealloc` explicitly. `org.luna.sys::alloc` contains the ra
 bridge. Mapping this record into `core::AllocError` belongs in the future safe Alloc adapter.
 
 The compiler carries the same exact layout through allocation and every cleanup path, so a
-custom allocator does not need a hidden header on each object. `rt_malloc/rt_free` remain
-compatibility entries for already-generated Alpha IR; new IR does not use them.
+custom allocator does not need a hidden header on each object. The old
+layout-less `rt_malloc`/`rt_free` bridge was removed with the Alpha IR path.
 
 ## Core shared cells
 
@@ -76,7 +97,6 @@ path-sensitive cleanup before returning early.
 
 Runtime ABI v1 exposes recoverable boundary errors through
 `rt_runtime_error_snapshot_v1`. The caller selects
-`LUNA_RUNTIME_ERROR_DOMAIN_FRAGMENT_PLUGIN` or
 `LUNA_RUNTIME_ERROR_DOMAIN_GPU` and receives stable `domain/code` fields plus optional
 UTF-8 diagnostic text:
 
@@ -95,9 +115,8 @@ NUL-terminated text in a non-empty buffer.
 Error identity is determined only by `domain/code`; text is diagnostic. Snapshot operations
 do not allocate. If a safe adapter cannot allocate an owned message, it must preserve the
 machine fields and omit text, not panic, and must not store the volatile pointer returned by
-`rt_gpu_last_error` or `rt_fragment_plugin_last_error` in a long-lived value. The two
-legacy `last_error` entries remain for Alpha compatibility; new adapters should use the
-snapshot interface and copy immediately after a failing call.
+`rt_gpu_last_error` in a long-lived value. New adapters should use the snapshot
+interface and copy immediately after a failing call.
 
 ## Console input and filesystem services
 
@@ -149,10 +168,10 @@ depends on retaining the path used to open the file. The raw ABI deliberately do
 Those policies belong in Std and are built by
 repeating these partial operations while handling `INTERRUPTED` explicitly.
 
-The non-v1 `rt_compat_console_*_0_2` helpers are an intentionally temporary adapter for the
-0.2.1 `std::io` module. They provide cstr/i32 formatting and bounded line input without
-freezing the future owned String or formatting traits. They are declared in `Runtime.h`, not
-the stable public `RuntimeABI.h`, and are removed by the one-time 0.3 implementation switch.
+The internal `rt_console_*_v1` library adapters provide cstr/i32 formatting and
+bounded line input without claiming an owned String or formatting-trait
+contract. They are declared in `Runtime.h`, not the stable public
+`RuntimeABI.h`; the raw host console operations above remain the ABI authority.
 
 ## Five resource domains that must not be mixed
 
@@ -205,10 +224,9 @@ process, while AOT uses the system linker; both paths have `puts`/`free` regress
 capability bits. v1 may append fields only at the end of the structure, and consumers must
 check the minimum prefix needed by every advertised capability rather than requiring the
 latest known structure size. Nested tables follow the same rule. `LunaRuntimeModuleContextV1`
-is reserved for verified Moon
-containers and a future plugin ABI v2, allowing dynamic modules to use an authorized
-service table rather than relying on accidentally visible process C symbols. The current
-external fragment ABI v1 remains unchanged and will not be extended silently.
+is reserved for verified Moon containers and future authorized module services,
+allowing dynamic modules to use a service table rather than relying on accidentally
+visible process C symbols. The former external fragment ABI v1 was removed in 0.3.
 
 ## Pay only for what is used
 
@@ -218,5 +236,6 @@ external fragment ABI v1 remains unchanged and will not be extended silently.
   Neither path embeds a capability or hidden allocation header in every language object.
 - Recoverable containers use `rt_try_alloc_v1`/`rt_try_realloc_v1`; failure neither aborts
   nor consumes an existing positive-size allocation.
-- Executable memory, GPU, dynamic selection, and dynamic apply are independent capabilities;
-  linking `libruntime` does not enable them automatically.
+- Executable memory and GPU remain independent capabilities. Retired dynamic
+  selection/apply feature bits are rejected at artifact boundaries rather than
+  activated by linking `libruntime`.

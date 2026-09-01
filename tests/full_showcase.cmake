@@ -46,7 +46,6 @@ foreach(required_text IN ITEMS
         "generic_recipe"
         " instantiation"
         "retention runtime"
-        " dynamic_select"
         " kernel")
     string(FIND "${moonir}" "${required_text}" required_at)
     if(required_at EQUAL -1)
@@ -55,6 +54,11 @@ foreach(required_text IN ITEMS
             "full showcase MoonIR is missing '${required_text}'.\n${moonir}")
     endif()
 endforeach()
+string(FIND "${moonir}" "dynamic_select" dynamic_select_at)
+if(NOT dynamic_select_at EQUAL -1)
+    file(REMOVE_RECURSE "${work_dir}")
+    message(FATAL_ERROR "full showcase retained the removed dynamic-select protocol.\n${moonir}")
+endif()
 string(FIND "${moonir}" "unresolved" unresolved_at)
 if(NOT unresolved_at EQUAL -1)
     file(REMOVE_RECURSE "${work_dir}")

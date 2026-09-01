@@ -3,8 +3,8 @@ module io;
 using org.luna.core as core;
 using org.luna.sys as sys;
 
-// Temporary 0.2.1 IO surface. Status 0 is success; other values are Runtime
-// status codes. These explicitly typed functions do not claim the future 0.3
+// Initial 0.3 IO surface. Status 0 is success; other values are Runtime
+// status codes. These explicitly typed functions do not claim future
 // Display, FromStr, owned String, slice, or Result contracts.
 
 export fn stdout_write_bytes(
@@ -29,54 +29,54 @@ export fn stdin_read_bytes(
 }
 
 export fn stdout_write_text(text: cstr) -> i32 {
-    return sys::console::compat_write_text(1, text, 0);
+    return sys::console::write_text(1, text, 0);
 }
 
 export fn stdout_write_line(text: cstr) -> i32 {
-    return sys::console::compat_write_text(1, text, 1);
+    return sys::console::write_text(1, text, 1);
 }
 
 export fn stderr_write_text(text: cstr) -> i32 {
-    return sys::console::compat_write_text(2, text, 0);
+    return sys::console::write_text(2, text, 0);
 }
 
 export fn stderr_write_line(text: cstr) -> i32 {
-    return sys::console::compat_write_text(2, text, 1);
+    return sys::console::write_text(2, text, 1);
 }
 
 export fn stdout_write_i32(value: i32) -> i32 {
-    return sys::console::compat_write_i32(1, value, 0);
+    return sys::console::write_i32(1, value, 0);
 }
 
 export fn stdout_write_i32_line(value: i32) -> i32 {
-    return sys::console::compat_write_i32(1, value, 1);
+    return sys::console::write_i32(1, value, 1);
 }
 
 export fn stderr_write_i32(value: i32) -> i32 {
-    return sys::console::compat_write_i32(2, value, 0);
+    return sys::console::write_i32(2, value, 0);
 }
 
 export fn stderr_write_i32_line(value: i32) -> i32 {
-    return sys::console::compat_write_i32(2, value, 1);
+    return sys::console::write_i32(2, value, 1);
 }
 
 export fn stdout_flush() -> i32 {
-    return sys::console::compat_flush(1);
+    return sys::console::flush_simple(1);
 }
 
 export fn stderr_flush() -> i32 {
-    return sys::console::compat_flush(2);
+    return sys::console::flush_simple(2);
 }
 
 // Returns a borrowed cstr backed by a per-thread 4096-byte buffer. The value
 // is replaced by the next call on the same thread. Input beyond 4095 bytes is
 // consumed but truncated. Empty input represents a blank line, EOF, or error.
 export fn read_line_lossy() -> cstr {
-    return sys::console::compat_read_line_lossy();
+    return sys::console::read_line_lossy();
 }
 
 // Parses a complete ASCII decimal i32 after trimming ASCII whitespace.
 // Invalid or out-of-range input returns `fallback`.
 export fn parse_i32_or(text: cstr, fallback: i32) -> i32 {
-    return sys::console::compat_parse_i32_or(text, fallback);
+    return sys::console::parse_i32_or(text, fallback);
 }

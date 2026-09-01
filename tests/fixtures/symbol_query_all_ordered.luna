@@ -1,0 +1,20 @@
+meta rank { value: i32; }
+
+@rank(2)
+fn route() -> i32 { return 2; }
+
+@rank(1)
+fn route() -> i32 { return 1; }
+
+fn main() -> i32 {
+    let original = symbols(route).all::<rank>();
+    let ordered = original;
+    let result = declaration_count(ordered);
+    for selected in ordered {
+        let rebound = selected;
+        print(declaration_id(rebound));
+        result = result * 10 + rebound();
+    }
+    let first = declaration_at(ordered, 0);
+    return result * 10 + first();
+}

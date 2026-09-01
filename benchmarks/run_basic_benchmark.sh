@@ -12,11 +12,11 @@ cpp_compiler="${CXX:-clang++}"
 source="${source_root}/benchmarks/luna_cpu_arithmetic.luna"
 temp_dir="$(mktemp -d /tmp/luna-basic-bench.XXXXXX)"
 cpp_binary="${temp_dir}/cpp23_arithmetic"
-ir_path="${source}.ll"
-aot_binary="${source%.luna}"
+source "${source_root}/benchmarks/package_source.sh"
+package_root="${temp_dir}/package"
+aot_binary=""
 
 cleanup() {
-    rm -f -- "${ir_path}" "${aot_binary}"
     rm -rf -- "${temp_dir}"
 }
 trap cleanup EXIT
@@ -72,7 +72,9 @@ measure_repeated() {
 }
 
 "${cpp_compiler}" -std=c++23 "${optimization}" \
-    "${source_root}/benchmarks/cpp23_cpu_suite.cpp" -o "${cpp_binary}"
+    "${source_root}/benchmarks/cpp23_cpu_suite.cpp" \
+    "${source_root}/benchmarks/cpp23_allocation_support.cpp" \
+    -o "${cpp_binary}"
 expected="$(${cpp_binary} arithmetic | tail -n 1)"
 luna_output="$(${luna_driver} run "${source}" "${optimization}")"
 if [[ "${luna_output}" != *"${expected}"* ]]; then
@@ -90,7 +92,9 @@ echo "  note: C++23 and Luna do not necessarily have identical safety/runtime ab
 measure_repeated "Luna JIT compile+run" "${luna_driver}" run "${source}" "${optimization}"
 
 build_start="$(timestamp_ns)"
-"${luna_driver}" build "${source}" "${optimization}" >/dev/null
+luna_benchmark_build_package "${luna_driver}" "${source}" \
+    "${package_root}" arithmetic "${optimization}"
+aot_binary="${LUNA_BENCHMARK_AOT}"
 build_end="$(timestamp_ns)"
 printf '  %-24s total=%8sms\n' "Luna AOT build" "$(elapsed_ms "${build_start}" "${build_end}")"
 

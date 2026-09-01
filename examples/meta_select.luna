@@ -1,5 +1,5 @@
 // Metadata schemas are source-level types.  Attachments are compile-time-only
-// unless the attachment is prefixed with `runtime` or `dynamic`.
+// unless the attachment is prefixed with `runtime`.
 meta version {
     major: i32;
     minor: i32;

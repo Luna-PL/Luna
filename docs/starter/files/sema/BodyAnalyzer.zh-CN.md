@@ -33,7 +33,7 @@
 - `analyzeStmt(stmt, expectedReturn)`：kernel 内禁 host 控制结构（slot/apply/resume/abort/await/free）；按类型分派：slot 声明/调用→`mContext.analyzeSlotDecl/Invoke`，apply→`analyzeApply`，`resume()` 须在 fragment 内且 interceptor 禁 resume，`abort()` 须在 fragment 内，`await` 要求 `Event` 类型，`let`→`analyzeLetStmt`，`return`→约束返回值与线性契约，`if`/`while`→`requireBool` 条件再分析体，`match`→`analyzeMatchStmt`，`for`→`analyzeForStmt`，`expr`→`analyzeExpr`，`free`→分析操作数。
 - `analyzeBlock`：`enterScope`/`enterConstScope`/`enterSlotScope` → 遍历语句 `analyzeStmt` → 退出三作用域。
 - `analyzeExpr(expr)`：首查字面量（Int→`TyI32`、Float→`TyF64`、String→`TyString`、Bool→`TyBool`）；`IdentifierExpr`→查 `mFunctionFamilies`（家族>1 报歧义，提示用 `select`）+ `lookupSymbol`；其余按类型分派到专用方法（含 lambda/二元/一元/调用/字段/索引/数组/record/variant/try/move/borrow/deref/取址/块/if 表达式/heap/select 等）。
-- `analyzeCall`/`analyzeMemberCall`/`analyzeIteratorCall`/`analyzeIntrinsicCall`：函数调用、成员方法（trait impl 方法）、迭代器（protocol/recipe）、内建/intrinsic 的解析与类型约束。
+- `analyzeCall`/`analyzeMemberCall`/`analyzeIteratorCall`/`analyzeIntrinsicCall`：函数调用、成员方法（trait impl 方法）、迭代器（protocol/recipe）、内建/intrinsic 的解析与类型约束。公开 `symbols(Name)` 在此推断 Function/Fragment/Struct/Enum/Trait/MetadataSchema catalog kind（generic nominal fail-closed），`symbol_set` terminal 也在此折叠：`.all()` 冻结 SymbolId 顺序，`.all::<M>()` 验证 metadata 顺序，query view 支持 compile-time count/index 和静态展开的 `for`，但不得跨普通 call/return 边界。
 - `analyzeLaunch`：`launch kernel(...)` 启动（线程数、参数、事件）。
 - `analyzeSelect`：`select target with selector(...)` 的声明族筛选（配合 `CompileTimeEvaluator` 做 selector 求值）。
 - `analyzeLetStmt`/`analyzeMatchStmt`/`analyzeForStmt`/`analyzeLambdaExpr`/`analyzeVariantConstructExpr`/`analyzeRecordLiteralExpr`/`analyzeTryExpr`：大型分支拆出的专用方法（let 绑定用法决策、match 变体/绑定类型、for 迭代协议/物料化、lambda 捕获与闭包构建、变体构造/record 字面量、`try` 错误传播）。

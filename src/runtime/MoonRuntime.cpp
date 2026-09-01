@@ -48,7 +48,7 @@ struct MoonRuntime::ModuleState {
 #endif
     } active;
     std::vector<std::shared_ptr<const GenerationState>> history;
-    std::vector<std::pair<std::string, std::string>> switchableRequirements;
+    std::vector<GenerationBindingRequirement> switchableRequirements;
 };
 
 namespace {
@@ -151,6 +151,17 @@ MoonRuntime::PinnedBinding MoonRuntime::PinnedGeneration::find(
     const std::string& symbolId, const std::string& contractId) const {
     return MoonRuntime::makePinnedBinding(
         generation_, symbolId, contractId);
+}
+
+MoonRuntime::PinnedBinding MoonRuntime::PinnedGeneration::find(
+    const GenerationBindingRequirement& requirement) const {
+    auto binding = MoonRuntime::makePinnedBinding(
+        generation_, requirement.symbolId, requirement.contractId);
+    if (!binding || binding.declarationKind() != requirement.declarationKind ||
+        (binding.flags() & requirement.requiredFlags) !=
+            requirement.requiredFlags)
+        return {};
+    return binding;
 }
 
 MoonRuntime::PinnedBinding MoonRuntime::SwitchableBinding::pin() const {
@@ -268,11 +279,70 @@ bool MoonRuntime::validatesRequirements(
     const ModuleState& module, const GenerationState& generation,
     std::string& error) {
     for (const auto& requirement : module.switchableRequirements) {
-        if (!findBinding(generation, requirement.first, requirement.second)) {
+        const auto* binding = findBinding(
+            generation, requirement.symbolId, requirement.contractId);
+        if (!binding ||
+            binding->declarationKind != requirement.declarationKind ||
+            (binding->flags & requirement.requiredFlags) !=
+                requirement.requiredFlags) {
             error = "generation does not satisfy an existing switchable binding";
             return false;
         }
     }
+    return true;
+}
+
+bool MoonRuntime::loadOnce(
+    StagedGeneration& staged, PinnedGeneration& loaded,
+    std::string& error) {
+    error.clear();
+    if (loaded.generation_) {
+        error = "load-once output already owns a generation";
+        return false;
+    }
+    if (staged.owner_ != this || !staged.generation_) {
+        error = "load-once requires a staged generation from the same runtime";
+        return false;
+    }
+
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto& module = modules_[staged.generation_->moduleId];
+    if (!module) module = std::make_shared<ModuleState>();
+    const auto active = module->active.load();
+    if (active) {
+        if (active->contentDigest != staged.generation_->contentDigest) {
+            error = "module is already loaded with different content";
+            return false;
+        }
+        if (active->bindings.size() != staged.generation_->bindings.size()) {
+            error = "same-content generation resolved a different binding set";
+            return false;
+        }
+        for (size_t index = 0; index < active->bindings.size(); ++index) {
+            const auto& current = active->bindings[index];
+            const auto& candidate = staged.generation_->bindings[index];
+            if (current.symbolId != candidate.symbolId ||
+                current.contractId != candidate.contractId ||
+                current.declarationKind != candidate.declarationKind ||
+                current.flags != candidate.flags) {
+                error = "same-content generation resolved a different binding set";
+                return false;
+            }
+        }
+        loaded.generation_ = active;
+        staged.generation_.reset();
+        staged.owner_ = nullptr;
+        return true;
+    }
+    if (!module->history.empty()) {
+        error = "load-once module has retained generations but no active generation";
+        return false;
+    }
+    module->history.push_back(staged.generation_);
+    module->active.store(staged.generation_);
+    loaded.generation_ = staged.generation_;
+    staged.generation_.reset();
+    staged.owner_ = nullptr;
     return true;
 }
 
@@ -340,6 +410,16 @@ bool MoonRuntime::makeSwitchable(
     const std::string& moduleId, const std::string& symbolId,
     const std::string& contractId, SwitchableBinding& binding,
     std::string& error) {
+    GenerationBindingRequirement requirement;
+    requirement.symbolId = symbolId;
+    requirement.contractId = contractId;
+    return makeSwitchable(moduleId, requirement, binding, error);
+}
+
+bool MoonRuntime::makeSwitchable(
+    const std::string& moduleId,
+    const GenerationBindingRequirement& requested,
+    SwitchableBinding& binding, std::string& error) {
     error.clear();
     if (binding.module_) {
         error = "switchable binding output is already initialized";
@@ -352,18 +432,34 @@ bool MoonRuntime::makeSwitchable(
         return false;
     }
     const auto active = moduleIt->second->active.load();
-    if (!active || !findBinding(*active, symbolId, contractId)) {
+    const auto* activeBinding = active
+        ? findBinding(*active, requested.symbolId, requested.contractId)
+        : nullptr;
+    if (!activeBinding ||
+        (requested.declarationKind != 0 &&
+         activeBinding->declarationKind != requested.declarationKind) ||
+        (activeBinding->flags & requested.requiredFlags) !=
+            requested.requiredFlags) {
         error = "switchable binding identity is absent from the active generation";
         return false;
     }
-    const auto requirement = std::make_pair(symbolId, contractId);
+    GenerationBindingRequirement requirement = requested;
+    requirement.declarationKind = activeBinding->declarationKind;
+    requirement.requiredFlags = activeBinding->flags;
     auto& requirements = moduleIt->second->switchableRequirements;
-    if (std::find(requirements.begin(), requirements.end(), requirement) ==
-        requirements.end())
+    const auto duplicate = std::find_if(
+        requirements.begin(), requirements.end(),
+        [&](const GenerationBindingRequirement& existing) {
+            return existing.symbolId == requirement.symbolId &&
+                existing.contractId == requirement.contractId &&
+                existing.declarationKind == requirement.declarationKind &&
+                existing.requiredFlags == requirement.requiredFlags;
+        });
+    if (duplicate == requirements.end())
         requirements.push_back(requirement);
     binding.module_ = moduleIt->second;
-    binding.symbolId_ = symbolId;
-    binding.contractId_ = contractId;
+    binding.symbolId_ = requirement.symbolId;
+    binding.contractId_ = requirement.contractId;
     return true;
 }
 

@@ -780,10 +780,6 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             scanGraphExpr(call->callee.get(), block);
             for (const auto& argument : call->args)
                 scanGraphExpr(argument.get(), block);
-        } else if (const auto* selection =
-                       dynamic_cast<const DynamicSelectExpr*>(expression)) {
-            for (const auto& argument : selection->filterArguments)
-                scanGraphExpr(argument.get(), block);
         } else if (const auto* launch =
                        dynamic_cast<const LaunchExpr*>(expression)) {
             scanGraphExpr(launch->threads.get(), block);
@@ -1598,10 +1594,6 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             transferExpr(call->callee.get(), state);
             for (const auto& argument : call->args)
                 transferExpr(argument.get(), state);
-        } else if (const auto* selection =
-                       dynamic_cast<const DynamicSelectExpr*>(expression)) {
-            for (const auto& argument : selection->filterArguments)
-                transferExpr(argument.get(), state);
         } else if (const auto* launch =
                        dynamic_cast<const LaunchExpr*>(expression)) {
             transferExpr(launch->threads.get(), state);
@@ -2058,6 +2050,11 @@ bool Verifier::verify(const Module& module) {
         if (type.kind == TypeKind::SymbolSet)
             error({}, "compiler-only symbol_set type '" + type.id.value +
                       "' was not erased before MoonIR");
+        if (type.kind == TypeKind::Enum &&
+            type.domain == luna::types::TypeDomain::Compiler &&
+            type.nominalDeclarationId == luna::sysmeta::OptionTypeId)
+            error({}, "compiler-only Option type '" + type.id.value +
+                      "' was not erased before MoonIR");
         if (type.kind == TypeKind::Trait &&
             type.domain != luna::types::TypeDomain::Compiler)
             error({}, "trait type '" + type.id.value +
@@ -2266,10 +2263,6 @@ bool Verifier::verify(const Module& module) {
                 record.dropGlue, record.location,
                 "Drop glue for declaration '" + record.id + "'",
                 module, DeclarationKind::Function);
-        if (record.sysmeta.capability.dynamicDispatch &&
-            !module.features.dynamicApply)
-            error(record.location, "declaration '" + record.id +
-                                   "' requires dynamic dispatch without the module capability");
         if (record.sysmeta.capability.runtimeRetained !=
             (record.retention != Retention::CompileTime))
             error(record.location, "declaration '" + record.id +
@@ -2279,6 +2272,14 @@ bool Verifier::verify(const Module& module) {
             if (!recordType)
                 error(record.location, "declaration '" + record.id +
                                        "' references a type absent from the type table");
+            else if (record.kind == DeclarationKind::Slot &&
+                     recordType->kind != TypeKind::Slot)
+                error(record.location, "slot declaration '" + record.id +
+                                       "' does not reference a slot type");
+            else if (record.kind == DeclarationKind::Fragment &&
+                     recordType->kind != TypeKind::Fragment)
+                error(record.location, "fragment declaration '" + record.id +
+                                       "' does not reference a fragment type");
             else if ((recordType->kind == TypeKind::Function ||
                       recordType->kind == TypeKind::Slot ||
                       recordType->kind == TypeKind::Fragment) &&
@@ -2303,18 +2304,19 @@ bool Verifier::verify(const Module& module) {
                 error(record.location, "declaration '" + record.id +
                                        "' sysmeta result contract differs from its type");
         }
-        if (record.kind == DeclarationKind::Fragment) {
+        if (record.kind == DeclarationKind::Fragment ||
+            record.kind == DeclarationKind::Slot) {
             const auto form = record.sysmeta.control.form;
             if (form != luna::sysmeta::ControlForm::Interceptor &&
                 form != luna::sysmeta::ControlForm::Context)
-                error(record.location, "fragment '" + record.id +
-                                       "' has no fragment control sysmeta");
+                error(record.location, "control declaration '" + record.id +
+                                       "' has no slot/fragment control sysmeta");
             if (record.sysmeta.control.storage !=
                 luna::sysmeta::ContinuationStorage::ScopedStack)
-                error(record.location, "fragment '" + record.id +
+                error(record.location, "control declaration '" + record.id +
                                        "' must use a scoped continuation in the current ABI");
             if (!record.sysmeta.capability.hostOnly)
-                error(record.location, "fragment '" + record.id +
+                error(record.location, "control declaration '" + record.id +
                                        "' must be host-only in the current ABI");
         }
         for (const auto& metadata : record.metadata) {
@@ -2457,12 +2459,6 @@ bool Verifier::verify(const Module& module) {
         verifyDeclaration(*declaration, module);
     }
 
-    if (module.features.dynamicApply && !module.features.runtime)
-        error({}, "dynamic apply requires the runtime feature");
-    if (module.features.dynamicSelect && !module.features.runtime)
-        error({}, "dynamic select requires the runtime feature");
-    if (module.features.dynamicReflection && !module.features.runtime)
-        error({}, "dynamic reflection requires the runtime feature");
     if (module.features.kernelRuntimeReserved && !module.features.kernel)
         error({}, "reserved kernel runtime requires the kernel feature");
 
@@ -2502,10 +2498,49 @@ void Verifier::verifyDeclaration(const Decl& declaration, const Module& module) 
                 error(fragment->location,
                       "fragment declaration disagrees with its frozen control contract");
         }
+        verifyDeclarationRef(
+            fragment->targetSlot, fragment->location,
+            "nominal target of fragment '" + fragment->name + "'",
+            module, DeclarationKind::Slot);
+        const auto* target = module.findDeclaration(fragment->targetSlot);
+        if (contract && target && contract->nominalDeclarationId !=
+            target->id)
+            error(fragment->location,
+                  "fragment contract is not nominally bound to its target slot");
         for (const auto& parameter : fragment->params)
             verifyType(parameter.type, fragment->location,
                        "fragment parameter '" + parameter.name + "'", module);
         verifyBlock(fragment->body.get(), module, fragment->name);
+        return;
+    }
+    if (auto* slot = dynamic_cast<const SlotDecl*>(&declaration)) {
+        verifyType(slot->structuralType, slot->location,
+                   "slot '" + slot->name + "' structural type", module);
+        const auto* contract = module.findType(slot->structuralType);
+        if (!contract || contract->kind != TypeKind::Slot) {
+            error(slot->location,
+                  "slot declaration has no frozen nominal slot contract");
+        } else {
+            const auto expectedKind =
+                slot->acceptedKind == FragmentKind::Interceptor
+                    ? ContinuationKind::Interceptor
+                    : ContinuationKind::Context;
+            if (contract->continuationKind != expectedKind ||
+                contract->isMultiShot)
+                error(slot->location,
+                      "slot declaration disagrees with its frozen single-shot control contract");
+            if (contract->nominalDeclarationId != slot->declarationId)
+                error(slot->location,
+                      "slot type is not nominally bound to its declaration identity");
+        }
+        for (const auto& parameter : slot->params)
+            verifyType(parameter.type, slot->location,
+                       "slot parameter '" + parameter.name + "'", module);
+        if (!slot->defaultFragment.empty())
+            verifyDeclarationRef(
+                slot->defaultFragment, slot->location,
+                "default fragment for slot '" + slot->name + "'",
+                module, DeclarationKind::Fragment);
         return;
     }
     if (auto* structure = dynamic_cast<const StructDecl*>(&declaration)) {
@@ -2910,33 +2945,12 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
                 slot->defaultFragmentRef, slot->location,
                 "default fragment for slot invocation '" +
                 slot->name + "'", module, DeclarationKind::Fragment);
-        for (const auto& candidate : slot->dynamicFragmentRefs)
-            verifyDeclarationRef(
-                candidate, slot->location,
-                "dynamic fragment candidate for slot '" +
-                slot->name + "'", module, DeclarationKind::Fragment);
         verifyBlock(slot->continuation.get(), module, owner);
-        if (slot->usesDynamicDispatch && !module.features.dynamicApply)
-            error(slot->location, "dynamic slot dispatch is present without dynamic apply capability");
     } else if (auto* apply = dynamic_cast<const ApplyStmt*>(stmt)) {
         verifyDeclarationRef(
             apply->fragmentRef, apply->location,
             "fragment bound by apply for slot '" + apply->slotName + "'",
             module, DeclarationKind::Fragment);
-        std::unordered_set<std::string> fragmentSymbols{
-            apply->fragmentRef.symbol.value};
-        for (const auto& candidate : apply->alternativeFragmentRefs) {
-            verifyDeclarationRef(
-                candidate, apply->location,
-                "dynamic apply fragment candidate for slot '" +
-                apply->slotName + "'", module, DeclarationKind::Fragment);
-            if (!fragmentSymbols.insert(candidate.symbol.value).second)
-                error(apply->location,
-                      "dynamic apply repeats fragment SymbolId '" +
-                      candidate.symbol.value + "'");
-        }
-        if (apply->isDynamic && !module.features.dynamicApply)
-            error(apply->location, "dynamic apply is present without dynamic apply capability");
         if (apply->body) verifyBlock(apply->body.get(), module, owner);
     } else if (auto* abort = dynamic_cast<const AbortStmt*>(stmt)) {
         std::unordered_set<std::string> cleanupPlaces;
@@ -3000,65 +3014,6 @@ void Verifier::verifyExpr(const Expr* expr, const Module& module,
         if (!type || type->kind != TypeKind::Unit)
             error(unit->location,
                   "canonical unit expression does not have unit type");
-    } else if (auto* selection = dynamic_cast<const DynamicSelectExpr*>(expr)) {
-        if (!module.features.dynamicSelect || !module.features.runtime)
-            error(selection->location,
-                  "dynamic select expression is present without runtime dynamic-select capability");
-        verifyType(selection->type, selection->location,
-                   "dynamic select callable type", module);
-        const auto* selectionType = module.findType(selection->type);
-        if (!selectionType || selectionType->kind != TypeKind::Function)
-            error(selection->location, "dynamic select must produce a callable type");
-        if (selection->familyId.empty() || selection->selector.empty() ||
-            selection->metadataSchemaId.empty())
-            error(selection->location, "dynamic select has an incomplete binding identity");
-        else
-            verifyDeclarationRef(
-                selection->selector, selection->location,
-                "dynamic selector", module, DeclarationKind::Function);
-        if (selection->filterArguments.empty() || selection->candidates.empty())
-            error(selection->location, "dynamic select has an empty filter or candidate set");
-        for (const auto& argument : selection->filterArguments)
-            verifyExpr(argument.get(), module, owner);
-        std::unordered_set<std::string> candidateIds;
-        for (const auto& candidate : selection->candidates) {
-            if (!candidate.declaration.complete())
-                error(selection->location,
-                      "dynamic select candidate has no stable declaration reference");
-            else if (!candidateIds.insert(
-                         candidate.declaration.symbol.value).second)
-                error(selection->location, "dynamic select contains duplicate candidate '" +
-                                           candidate.declaration.symbol.value + "'");
-            if (candidate.metadataValues.size() != selection->filterArguments.size())
-                error(selection->location, "dynamic select candidate metadata shape mismatch");
-            const DeclarationRecord* record = verifyDeclarationRef(
-                candidate.declaration, selection->location,
-                "dynamic select candidate", module,
-                DeclarationKind::Function);
-            if (!record || record->retention == Retention::CompileTime) {
-                error(selection->location, "dynamic select candidate '" +
-                      candidate.declaration.symbol.value +
-                      "' has no runtime descriptor");
-                continue;
-            }
-            if (record->familyId != selection->familyId)
-                error(selection->location, "dynamic select candidate '" +
-                                           candidate.declaration.symbol.value +
-                                           "' does not match its declared linkage/family");
-            bool retainedMetadata = false;
-            for (const auto& metadata : record->metadata) {
-                if (metadata.schemaId == selection->metadataSchemaId &&
-                    metadata.retention != Retention::CompileTime &&
-                    metadata.values == candidate.metadataValues) {
-                    retainedMetadata = true;
-                    break;
-                }
-            }
-            if (!retainedMetadata)
-                error(selection->location, "dynamic select candidate '" +
-                      candidate.declaration.symbol.value +
-                      "' does not retain the inspected metadata at runtime");
-        }
     } else if (auto* identifier = dynamic_cast<const IdentifierExpr*>(expr)) {
         if (!identifier->declaration.empty())
             verifyDeclarationRef(

@@ -2,7 +2,36 @@
 #include "../diagnostics/Diagnostic.h"
 #include <functional>
 #include <algorithm>
+#include <limits>
 #include <unordered_set>
+
+namespace {
+
+constexpr const char* kCleanupShadowMarker = "$cleanup-shadow$";
+
+std::string cleanupPlace(const std::string& name, size_t shadowOrdinal) {
+    if (shadowOrdinal == 0) return name;
+    return name + kCleanupShadowMarker + std::to_string(shadowOrdinal);
+}
+
+std::pair<std::string, size_t> decodeCleanupPlace(const std::string& place) {
+    const size_t marker = place.rfind(kCleanupShadowMarker);
+    if (marker == std::string::npos) return {place, 0};
+    const std::string ordinal = place.substr(
+        marker + std::char_traits<char>::length(kCleanupShadowMarker));
+    if (ordinal.empty()) return {place, 0};
+    size_t value = 0;
+    for (const unsigned char c : ordinal) {
+        if (c < '0' || c > '9') return {place, 0};
+        const size_t digit = static_cast<size_t>(c - '0');
+        if (value > (std::numeric_limits<size_t>::max() - digit) / 10)
+            return {place, 0};
+        value = value * 10 + digit;
+    }
+    return {place.substr(0, marker), value};
+}
+
+} // namespace
 
 OwnershipChecker::OwnershipChecker() {
     enterScope();
@@ -359,86 +388,6 @@ OwnershipChecker::FlowResult OwnershipChecker::checkSlotInvoke(SlotInvokeStmt* s
     FragmentDecl* fragment = lookupApplied(slot->name);
     if (!fragment) fragment = lookupDefault(slot->name);
 
-    if (slot->usesDynamicDispatch) {
-        if (slot->resolvedDynamicFragmentNames.empty()) {
-            error("dynamic slot '" + slot->name + "' has no resolved fragment candidates",
-                  slot->line, slot->col);
-            return false;
-        }
-        const CheckerState before = captureState();
-        bool replaySafe = true;
-        if (slot->acceptedCardinality == FragmentCardinality::Many) {
-            const auto savedScopes = mScopes;
-            const auto savedLoans = mLoansInScope;
-            replaySafe = checkBlock(slot->continuation.get()).ok;
-            const bool consumes = continuationConsumesCapturedState(savedScopes);
-            mScopes = savedScopes;
-            mLoansInScope = savedLoans;
-            if (consumes) {
-                error("slot '" + slot->name +
-                          "' continuation consumes or frees captured state and "
-                          "cannot be resumed more than once",
-                      slot->line, slot->col);
-                replaySafe = false;
-            }
-        }
-        CheckerState merged;
-        bool haveMerged = false;
-        bool ok = replaySafe;
-        for (const auto& name : slot->resolvedDynamicFragmentNames) {
-            auto candidate = mFragments.find(name);
-            if (candidate == mFragments.end()) {
-                error("dynamic slot '" + slot->name + "' references unknown fragment '" + name + "'",
-                      slot->line, slot->col);
-                ok = false;
-                continue;
-            }
-            const bool multiShot = candidate->second->cardinality == FragmentCardinality::Many;
-            restoreState(before);
-            FlowResult candidateResult = checkFragment(candidate->second, slot, multiShot);
-            if (!candidateResult.ok) {
-                ok = false;
-                continue;
-            }
-            if (!candidateResult.fallsThrough) continue;
-            const CheckerState after = captureState();
-            if (!haveMerged) {
-                merged = after;
-                haveMerged = true;
-                continue;
-            }
-            bool same = merged.scopes.size() == after.scopes.size() &&
-                        merged.loans.size() == after.loans.size();
-            if (same) {
-                for (size_t index = 0; index < merged.scopes.size() && same; ++index) {
-                    if (merged.scopes[index].size() != after.scopes[index].size()) {
-                        same = false;
-                        break;
-                    }
-                    for (const auto& [variable, prior] : merged.scopes[index]) {
-                        auto current = after.scopes[index].find(variable);
-                        if (current == after.scopes[index].end() || !sameVarState(prior, current->second)) {
-                            same = false;
-                            break;
-                        }
-                    }
-                    if (index < merged.loans.size() &&
-                        !sameLoanState(merged.loans[index], after.loans[index]))
-                        same = false;
-                }
-            }
-            if (!same) {
-                error("dynamic fragments bound to slot '" + slot->name +
-                      "' leave different ownership or borrow states; dynamic alternatives must be effect-compatible",
-                      slot->line, slot->col);
-                ok = false;
-            }
-        }
-        if (ok && haveMerged) restoreState(merged);
-        else restoreState(before);
-        return {ok && haveMerged, haveMerged};
-    }
-
     if (!fragment) return checkBlock(slot->continuation.get());
 
     const bool multiShot = fragment->cardinality == FragmentCardinality::Many;
@@ -774,7 +723,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkAbortStmt(AbortStmt* abort) 
             abort->autoFrees = collectFreesAtFragmentExit();
             abort->cleanups.clear();
             for (const auto& place : abort->autoFrees) {
-                auto* variable = lookup(place);
+                auto* variable = lookupCleanupVariable(place);
                 abort->cleanups.push_back({
                     place, cleanupActionForType(variable ? variable->type : nullptr),
                     variable ? variable->type : nullptr});
@@ -1054,7 +1003,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkReturnStmt(ReturnStmt* ret) 
                 ret->autoFrees = collectFreesAtFragmentExit();
                 ret->cleanups.clear();
                 for (const auto& place : ret->autoFrees) {
-                    auto* variable = lookup(place);
+                    auto* variable = lookupCleanupVariable(place);
                 ret->cleanups.push_back({
                         place, cleanupActionForType(variable ? variable->type : nullptr),
                         variable ? variable->type : nullptr});
@@ -1074,7 +1023,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkReturnStmt(ReturnStmt* ret) 
             ret->autoFrees = collectFreesAtReturn();
             ret->cleanups.clear();
             for (const auto& place : ret->autoFrees) {
-                auto* variable = lookup(place);
+                auto* variable = lookupCleanupVariable(place);
                 ret->cleanups.push_back({
                     place, cleanupActionForType(variable ? variable->type : nullptr),
                     variable ? variable->type : nullptr});
@@ -1872,7 +1821,7 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
         }
         propagation->cleanups.clear();
         for (const auto& place : collectFreesAtReturn()) {
-            auto* variable = lookup(place);
+            auto* variable = lookupCleanupVariable(place);
             propagation->cleanups.push_back({
                 place,
                 cleanupActionForType(variable ? variable->type : nullptr),
@@ -2279,6 +2228,18 @@ OwnershipChecker::VarInfo* OwnershipChecker::lookup(const std::string& name) {
     return nullptr;
 }
 
+OwnershipChecker::VarInfo* OwnershipChecker::lookupCleanupVariable(
+    const std::string& encodedPlace) {
+    auto [name, ordinal] = decodeCleanupPlace(encodedPlace);
+    for (auto scope = mScopes.rbegin(); scope != mScopes.rend(); ++scope) {
+        auto found = scope->find(name);
+        if (found == scope->end()) continue;
+        if (ordinal == 0) return &found->second;
+        --ordinal;
+    }
+    return nullptr;
+}
+
 void OwnershipChecker::define(const std::string& name, TypePtr type, bool isHeap,
                               luna::ownership::Usage usage,
                               luna::ownership::Relation relation,
@@ -2316,12 +2277,14 @@ std::vector<std::string> OwnershipChecker::collectFreesAtScopeExit() {
 
 std::vector<std::string> OwnershipChecker::collectFreesAtReturn() const {
     std::vector<std::string> frees;
+    std::unordered_map<std::string, size_t> shadowOrdinals;
     // Exit order is innermost to outermost, matching lexical destruction.
     for (auto scope = mScopes.rbegin(); scope != mScopes.rend(); ++scope) {
         for (const auto& [name, info] : *scope) {
+            const size_t ordinal = shadowOrdinals[name]++;
             if (info.isHeapAllocated && !luna::ownership::mustConsume(info.usage) &&
                 info.state == OwnState::Valid)
-                frees.push_back(name);
+                frees.push_back(cleanupPlace(name, ordinal));
         }
     }
     return frees;
@@ -2329,11 +2292,13 @@ std::vector<std::string> OwnershipChecker::collectFreesAtReturn() const {
 
 std::vector<std::string> OwnershipChecker::collectFreesAtFragmentExit() const {
     std::vector<std::string> frees;
+    std::unordered_map<std::string, size_t> shadowOrdinals;
     for (size_t index = mScopes.size(); index > mCurrentFragmentScopeBase; --index) {
         for (const auto& [name, info] : mScopes[index - 1]) {
+            const size_t ordinal = shadowOrdinals[name]++;
             if (info.isHeapAllocated && !luna::ownership::mustConsume(info.usage) &&
                 info.state == OwnState::Valid)
-                frees.push_back(name);
+                frees.push_back(cleanupPlace(name, ordinal));
         }
     }
     return frees;

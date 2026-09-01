@@ -1,0 +1,12 @@
+meta release { major: i32; }
+
+@release(1)
+fn answer() -> i32 { return 10; }
+
+@release(2)
+fn answer() -> i32 { return 20; }
+
+fn main() -> i32 {
+    let candidate = symbols(answer).optional();
+    return 0;
+}

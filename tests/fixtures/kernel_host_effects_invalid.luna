@@ -1,14 +1,16 @@
 // Device kernels may perform scalar control flow and device-buffer operations,
 // but never host continuation, allocation, synchronization, or cleanup effects.
-context passthrough {
+slot context checkpoint();
+
+context passthrough for checkpoint {
     resume();
 }
 
 kernel fn invalid(index: i32, data: &mut device_buffer<i32>) {
-    slot context checkpoint {
+    checkpoint() {
         gpu_store_i32(data, index, index);
     }
-    apply checkpoint(passthrough) {
+    apply passthrough {
         checkpoint() {
             gpu_store_i32(data, index, index);
         }

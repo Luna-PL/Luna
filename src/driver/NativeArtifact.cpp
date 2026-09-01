@@ -604,7 +604,7 @@ bool validateNativeDescriptor(
         if (exported.abi_version != LUNA_NATIVE_DESCRIPTOR_ABI_V1 ||
             exported.struct_size != sizeof(LunaNativeExportDescriptorV1) ||
             spec.declarationKind < LUNA_NATIVE_DECLARATION_FUNCTION_V1 ||
-            spec.declarationKind > LUNA_NATIVE_DECLARATION_METADATA_SCHEMA_V1 ||
+            spec.declarationKind > LUNA_NATIVE_DECLARATION_SLOT_V1 ||
             (spec.flags & ~LUNA_NATIVE_EXPORT_CALLABLE_V1) != 0 ||
             !descriptorString(exported.symbol_id, spec.symbolId) ||
             !descriptorString(exported.contract_id, spec.contractId) ||

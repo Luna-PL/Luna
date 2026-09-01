@@ -1,5 +1,6 @@
 #include "core/CoreContracts.h"
 #include "core/SysMeta.h"
+#include "core/TypeSystem.h"
 
 #include <cstring>
 #include <iostream>
@@ -74,15 +75,19 @@ int main() {
     if (!equal(luna::sysmeta::DropTraitId,
                canonical_0_3::DropTraitId) ||
         !equal(luna::sysmeta::FromTraitId,
-               legacy_0_2::FromTraitId)) {
-        std::cerr << "active compiler-trait identity is inconsistent\n";
+               canonical_0_3::FromTraitId) ||
+        !equal(luna::sysmeta::ResultTypeId,
+               canonical_0_3::ResultTypeId)) {
+        std::cerr << "active compiler-known Core identity is inconsistent\n";
         return 1;
     }
-    if (equal(legacy_0_2::DropTraitId,
-              canonical_0_3::DropTraitId) ||
-        equal(legacy_0_2::FromTraitId,
-              canonical_0_3::FromTraitId)) {
-        std::cerr << "legacy and canonical identities were conflated\n";
+    const auto result = Type::makeResult(
+        Type::makePrimitive(TypeKind::I32),
+        Type::makePrimitive(TypeKind::String));
+    if (result->identityMode != luna::types::IdentityMode::Nominal ||
+        result->nominalId != canonical_0_3::ResultTypeId ||
+        result->typeArgs.size() != 2) {
+        std::cerr << "Result did not acquire its canonical nominal identity\n";
         return 1;
     }
     if (!equal(luna::sysmeta::releaseDomainName(

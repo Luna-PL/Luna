@@ -39,7 +39,7 @@ register_0_2_case(
     "Program exited with code: 1")
 register_0_2_case(
     dynamic-symbol-selection success
-    examples/dynamic_select.luna -
+    tests/fixtures/dynamic_select_0_2.luna -
     "Program exited with code: 20")
 register_0_2_case(
     dynamic-fragment-default success

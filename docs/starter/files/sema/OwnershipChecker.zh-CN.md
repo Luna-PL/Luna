@@ -20,7 +20,9 @@
 - `checkFunction(decl)`：参数默认是非拥有视图（`define` 时 `isHeapAllocated` 仅在 Owned 且需清理时设真）；`checkBlock(体)`；fall-through 时 `validateLinearScope`；把 `collectFreesAtScopeExit()` 得到的隐式 `FreeStmt` 追加到体尾（`isImplicit=true`，`action=cleanupActionForType`）。
 - `checkBlock(block)`：压入作用域与 apply/slot 栈；逐语句 `checkStmt`；遇到 `!ok` 提前退出；返回终止后语句不可达（`!fallsThrough` 即 break）；`releaseLoansInCurrentScope` 结束本块借用；`validateLinearScope`（仅 fall-through）；收集 `collectFreesAtScopeExit` 并仅在 fall-through 时把隐式 `FreeStmt` 插入块尾；`exitScope` 并返回。
 - `checkStmt(stmt)`、`checkExpr(expr)`：分派到各专用方法；`checkLetStmt`/`checkForStmt`（迭代器源所有权）/`checkReturnStmt`（返回时把返回值标注为待释放并清理）/`checkMatchStmt`（臂间状态合并）/`checkAbortStmt`（fragment 内 abort）/`checkCallExpr`（实参消费、借用、跨调用 in-flight）/`checkVariantConstruct`/`checkRecordLiteral`/`checkLaunchExpr`（GPU event 与 in-flight 资源）。
-- `checkSlotInvoke(slot)`：解析 apply 或默认 fragment；`usesDynamicDispatch` 时对每个候选片段：`restoreState(before)` → `checkFragment(candidate, slot, multiShot)`，收集 fall-through 状态并核对各动态候选「效果一致」（借用/变量状态相同），否则报错；Many（multi-shot）时先快照检查续延体一次，若捕获状态被消费（`continuationConsumesCapturedState`）则报「不可 resume 多次」。
+- `checkSlotInvoke(slot)`：解析最内层静态 apply 或默认 fragment。Many（multi-shot）
+  时先快照检查 continuation body 一次；若捕获状态被消费
+  （`continuationConsumesCapturedState`），该 fragment 不能多次 resume。
 - `checkFragment(fragment, slot, multiShot)`：保存当前槽位/片段上下文、进入作用域绑定片段参数；`checkBlock(fragment->body)`；interceptor 在 body fall-through 后再 `checkBlock(slot->continuation)`；收集所有「退出点」`CheckerState`（含 abort/return 路径）；`mergeFallthroughStates` 逐对合并；`restoreState` 回滚；返回以反映是否 fall-through。
 - `continuationConsumesCapturedState(before)`：比较快照前后，若某变量从 `Valid` 变非 `Valid` 说明被消费。
 - `captureState`/`restoreState`：`CheckerState` 快照/回滚。

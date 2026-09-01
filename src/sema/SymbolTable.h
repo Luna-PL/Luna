@@ -37,6 +37,15 @@ struct SymbolInfo {
     luna::identity::ContractId compileTimeDeclarationContractId;
     bool isCompileTimeSymbolSet = false;
     std::vector<std::string> compileTimeSymbolSetDeclarationIds;
+    bool isCompileTimeQueryDeclarationView = false;
+    std::vector<std::string> compileTimeDeclarationViewDeclarationIds;
+    bool isCompileTimeQueryDeclarationRef = false;
+    bool isCompileTimeOptionalDeclarationRef = false;
+    bool compileTimeOptionalHasValue = false;
+    // A declaration_ref introduced by the Some arm of a compiler-domain
+    // Option must be consumed inside that match boundary. Ordinary selector
+    // declaration_ref values keep their existing compile-time function flow.
+    bool isCompileTimeOptionalPayload = false;
 };
 
 class SymbolTable {

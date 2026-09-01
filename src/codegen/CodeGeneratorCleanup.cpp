@@ -551,6 +551,13 @@ void CodeGenerator::emitCanonicalCleanup(
         error("canonical cleanup has no materialized type");
         return;
     }
+    // String and cstr values currently point at immutable globals and own no
+    // allocation. Keep canonical CFG cleanup aligned with emitCleanup() and
+    // emitOwnedPayloadCleanup(); an Allocation record must still release the
+    // separately allocated storage for `new string`/`new cstr`.
+    if (cleanup.kind == moon::CleanupKind::Value &&
+        (type->kind == TypeKind::String || type->kind == TypeKind::CStr))
+        return;
     const auto root = cleanup.place.root.value;
     const std::string label =
         "local." + std::to_string(root) + ".cleanup";

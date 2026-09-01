@@ -1,0 +1,10 @@
+fn answer() -> i32 { return 42; }
+
+fn identity<T>(value: T) -> T {
+    return value;
+}
+
+fn main() -> i32 {
+    let escaped = identity(symbols(answer).optional());
+    return 0;
+}

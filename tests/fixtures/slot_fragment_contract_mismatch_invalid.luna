@@ -1,10 +1,12 @@
-interceptor audit {
+slot context hook();
+
+interceptor audit for hook {
     print(1);
 }
 
 fn main() -> i32 {
-    apply hook(audit) {
-        slot context hook {
+    apply audit {
+        hook() {
             print(2);
         }
     }

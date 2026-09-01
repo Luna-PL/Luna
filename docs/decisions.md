@@ -138,9 +138,10 @@ promotion hides ownership and failure origin; an explicit adapter provides a sta
 
 - An interceptor continues after normal completion; a context controls its continuation through
   `resume()`; `abort()` discards the continuation.
-- Once/Many is a declaration contract, not inferred from how many `resume()` calls appear.
-- Static contexts use stack continuation frames; dynamic external plugins currently allow only
-  host-only, single-shot interceptors.
+- Luna 0.3 exposes only single-shot unit-result contracts; `many` is deferred rather than
+  inferred from how many `resume()` calls appear.
+- Static contexts use canonical stack-scoped continuation regions. The former
+  external plugin ABI was deleted rather than extended to contexts.
 
 **Rationale**
 

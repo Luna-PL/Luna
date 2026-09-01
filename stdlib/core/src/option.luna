@@ -27,3 +27,41 @@ export fn is_none<T>(value: Option<T>) -> bool {
         }
     }
 }
+
+// Consuming extractors keep Option useful for both Copy values and affine
+// resources. Matching transfers the Some payload to the caller; every
+// unselected fallback remains an ordinary local and is cleaned exactly once.
+export fn unwrap<T>(affine value: Option<T>) -> affine T {
+    match move value {
+        None => {
+            panic("called core::option::unwrap on None");
+        },
+        Some(item) => {
+            return item;
+        }
+    }
+}
+
+export fn expect<T>(affine value: Option<T>, message: cstr) -> affine T {
+    match move value {
+        None => {
+            panic(message);
+        },
+        Some(item) => {
+            return item;
+        }
+    }
+}
+
+export fn unwrap_or<T>(
+    affine value: Option<T>, affine fallback: T
+) -> affine T {
+    match move value {
+        None => {
+            return fallback;
+        },
+        Some(item) => {
+            return item;
+        }
+    }
+}

@@ -1,8 +1,8 @@
 [package]
 id = "org.luna.examples.showcase.app"
-version = "0.2.1"
+version = "0.3.0"
 kind = "application"
 sources = ["src"]
 
 [dependencies]
-"org.luna.examples.showcase.foundation" = "0.2.1"
+"org.luna.examples.showcase.foundation" = "0.3.0"

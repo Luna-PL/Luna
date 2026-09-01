@@ -13,13 +13,12 @@ warmups="${LUNA_BENCH_WARMUPS:-1}"
 optimization="${LUNA_BENCH_OPT_LEVEL:--O2}"
 source="${source_root}/benchmarks/luna_gpu_vector.luna"
 cpp_source="${source_root}/benchmarks/cpp23_hip_vector.cpp"
-luna_ir="${source}.ll"
-luna_aot="${source_root}/benchmarks/luna_gpu_vector"
 temp_dir="$(mktemp -d /tmp/luna-cpp23-rocm.XXXXXX)"
 cpp_binary="${temp_dir}/cpp23_hip_vector"
+source "${source_root}/benchmarks/package_source.sh"
+luna_aot=""
 
 cleanup() {
-    rm -f -- "${luna_ir}" "${luna_aot}"
     rm -rf -- "${temp_dir}"
 }
 trap cleanup EXIT
@@ -50,8 +49,10 @@ fi
 # the build half can run on a compiler-only machine, while the produced AOT
 # binary is still executed with ROCm below. This also makes ISA investigations
 # possible without occupying a GPU.
-"${luna_driver}" build "${source}" "${optimization}" \
-    "--gpu-target=rocm:${architecture}" >/dev/null
+luna_benchmark_build_package "${luna_driver}" "${source}" \
+    "${temp_dir}/luna-package" gpu_vector "${optimization}" \
+    "--gpu-target=rocm:${architecture}"
+luna_aot="${LUNA_BENCHMARK_AOT}"
 
 elapsed_ms() {
     awk -v start="$1" -v end="$2" 'BEGIN { printf "%.3f", (end - start) / 1000000 }'

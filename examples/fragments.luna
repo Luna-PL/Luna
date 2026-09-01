@@ -1,39 +1,40 @@
-// An implicit-capture, multi-resume local slot.
-context many twice {
+slot context local();
+slot context pipeline(value: i32) default log;
+slot context later();
+
+// Every 0.3 context is single-shot and nominally targets one slot.
+context twice for local {
     print(value);
-    resume();
-    print(value + 1);
     resume();
 }
 
 // An explicit reusable slot consumes the fragment's declared input interface.
-context log(value) {
+context log(value) for pipeline {
     print(value);
     resume();
 }
 
-context observe {
+context observe for later {
     print(value);
     resume();
 }
 
 fn main() -> i32 {
     let value = 10;
-    apply local(twice) {
-        slot context many local {
+    apply twice {
+        local() {
             print(value * 2);
         }
     }
 
-    slot context pipeline(value: i32) default log;
     pipeline(7) {
         print(8);
     }
 
-    // Statement-form apply lasts through the enclosing lexical scope.
-    apply later(observe);
-    slot context later {
-        print(value + 2);
+    apply observe {
+        later() {
+            print(value + 2);
+        }
     }
 
     return 0;

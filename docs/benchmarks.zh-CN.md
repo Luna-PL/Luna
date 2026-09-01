@@ -22,6 +22,12 @@ LUNA_BASIC_BENCH_ITERATIONS=10 \
 它分别报告 Luna JIT compile+run、AOT build、AOT run 和 C++23 run，使用确定性的
 整数 workload。
 
+基准 runner 会先把每个 Luna 源文件放入临时 0.3 application package，再执行
+AOT 编译；它们不依赖已移除的 `luna build file.luna` 路径，也不会在基准
+源码旁留下 package 产物。即使可选测量套件关闭，默认 release 测试
+`luna.benchmark-package-smoke` 也会通过该 package 路径构建并执行 arithmetic
+workload。
+
 ## CPU 对照
 
 ```sh

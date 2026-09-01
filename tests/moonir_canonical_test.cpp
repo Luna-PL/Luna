@@ -5,10 +5,12 @@
 #include "moonir/Sealer.h"
 #include "moonir/Verifier.h"
 #include "codegen/CodeGenerator.h"
+#include "core/TypeLayout.h"
 #include "driver/MoonGeneration.h"
 #include "diagnostics/Diagnostic.h"
 #include "driver/CompilerPipeline.h"
 #include "selector/Selector.h"
+#include "sema/SemanticAnalysisSupport.h"
 #include "sema/SymbolTable.h"
 #include "tooling/AnalysisSnapshot.h"
 
@@ -44,6 +46,7 @@ int fail(const char* message) {
 }
 
 using GenerationEntry = int (*)();
+using UnaryGenerationEntry = int (*)(int);
 
 #if defined(__clang__)
 LLVM_NO_SANITIZE("function")
@@ -53,9 +56,49 @@ int invokeGenerationEntry(const void* address) {
         const_cast<void*>(address))();
 }
 
+#if defined(__clang__)
+LLVM_NO_SANITIZE("function")
+#endif
+int invokeUnaryGenerationEntry(const void* address, int value) {
+    return reinterpret_cast<UnaryGenerationEntry>(
+        const_cast<void*>(address))(value);
+}
+
 } // namespace
 
 int main() {
+    FunctionDecl unaryRoute;
+    unaryRoute.name = "route";
+    unaryRoute.packageId = "identity.test";
+    unaryRoute.generatedSymbolName = "route__single_linkage";
+    Decl::MetadataAttachment unaryRevision;
+    unaryRevision.schemaName = "revision";
+    unaryRevision.arguments.push_back(std::make_unique<IntLiteralExpr>(3));
+    unaryRoute.metadata.push_back(std::move(unaryRevision));
+    Param routeValue;
+    routeValue.name = "value";
+    routeValue.type = std::make_unique<NamedTypeAST>("i32");
+    unaryRoute.params.push_back(std::move(routeValue));
+    unaryRoute.returnType = std::make_unique<NamedTypeAST>("i32");
+    const auto unaryRouteIdentity =
+        functionDeclarationIdentity(nullptr, &unaryRoute);
+    unaryRoute.generatedSymbolName = "route__overload_family_linkage";
+    if (functionDeclarationIdentity(nullptr, &unaryRoute) !=
+        unaryRouteIdentity)
+        return fail("function identity changed with generated linkage");
+
+    FunctionDecl nullaryRoute;
+    nullaryRoute.name = "route";
+    nullaryRoute.packageId = "identity.test";
+    Decl::MetadataAttachment nullaryRevision;
+    nullaryRevision.schemaName = "revision";
+    nullaryRevision.arguments.push_back(std::make_unique<IntLiteralExpr>(3));
+    nullaryRoute.metadata.push_back(std::move(nullaryRevision));
+    nullaryRoute.returnType = std::make_unique<NamedTypeAST>("i32");
+    if (functionDeclarationIdentity(nullptr, &nullaryRoute) ==
+        unaryRouteIdentity)
+        return fail("same-metadata overload signatures shared an identity");
+
     moon::ControlFlowGraph cfg;
     cfg.entry = moon::BlockId{0};
     cfg.rootRegion = moon::RegionId{0};
@@ -119,6 +162,17 @@ int main() {
     const auto unitId = module.registerType(TyUnit);
     auto resultI32Bool = Type::makeResult(TyI32, TyBool);
     const auto resultI32BoolId = module.registerType(resultI32Bool);
+    const auto* canonicalResultRecord = module.findType(resultI32BoolId);
+    if (!canonicalResultRecord ||
+        canonicalResultRecord->identityMode !=
+            luna::types::IdentityMode::Nominal ||
+        canonicalResultRecord->nominalDeclarationId !=
+            luna::sysmeta::ResultTypeId ||
+        canonicalResultRecord->typeArgumentIds.size() != 2 ||
+        canonicalResultRecord->layoutAbiVersion !=
+            luna::layout::InlineAdtAbiVersion)
+        return fail(
+            "Result lost its canonical Core identity or inline ADT layout");
     auto lambdaType = Type::makeFunction(
         {TyI32}, TyI32,
         {{luna::ownership::Relation::Owned,
@@ -258,6 +312,23 @@ int main() {
         });
     if (!rejectedQueryType)
         return fail("MoonIR verifier did not diagnose leaked symbol_set type");
+    moon::Module leakedOptionalModule;
+    leakedOptionalModule.name = "canonical.optional-leak";
+    leakedOptionalModule.registerType(Type::makeCompileTimeOption(
+        Type::makeDeclarationRef(lambdaType)));
+    leakedOptionalModule.sealTypeTable();
+    moon::Verifier leakedOptionalVerifier;
+    if (leakedOptionalVerifier.verify(leakedOptionalModule))
+        return fail("MoonIR verifier accepted a compiler-only Option type");
+    const bool rejectedOptionalType = std::any_of(
+        leakedOptionalVerifier.errors().begin(),
+        leakedOptionalVerifier.errors().end(),
+        [](const auto& diagnostic) {
+            return diagnostic.message.find(
+                "compiler-only Option type") != std::string::npos;
+        });
+    if (!rejectedOptionalType)
+        return fail("MoonIR verifier did not diagnose leaked Option type");
     cfg.blocks.front().id = moon::BlockId{1};
     if (cfgVerifier.verify(cfg, module))
         return fail("CFG verifier accepted a forged canonical block index");
@@ -4564,10 +4635,33 @@ fn branch_release(flag: bool) -> i32 {
     const auto sharedI32Type = Type::makeReference(TyI32);
     const auto sharedI32TypeId =
         compositionModule.registerType(sharedI32Type);
+    const std::string interceptorSlotId =
+        "canonical.composition::slot::hook";
+    const auto interceptorSlotType = Type::makeSlot(
+        {sharedI32Type}, TyUnit, false, ContinuationKind::Interceptor,
+        {{luna::ownership::Relation::SharedBorrow,
+          luna::ownership::Usage::Copy}});
+    interceptorSlotType->identityMode = luna::types::IdentityMode::Nominal;
+    interceptorSlotType->nominalId = interceptorSlotId;
+    const auto interceptorSlotTypeId =
+        compositionModule.registerType(interceptorSlotType);
+    moon::DeclarationRecord interceptorSlotRecord;
+    interceptorSlotRecord.id = interceptorSlotId;
+    interceptorSlotRecord.familyId = interceptorSlotId;
+    interceptorSlotRecord.symbolId =
+        luna::identity::symbolIdFromCanonical(interceptorSlotId);
+    interceptorSlotRecord.sourceName = "hook";
+    interceptorSlotRecord.linkageName = "hook";
+    interceptorSlotRecord.kind = moon::DeclarationKind::Slot;
+    interceptorSlotRecord.type = interceptorSlotTypeId;
+    interceptorSlotRecord.sysmeta = interceptorSlotType->sysmeta;
+    compositionModule.declarationTable.push_back(interceptorSlotRecord);
     const auto interceptorType = Type::makeFragment(
         {sharedI32Type}, TyUnit, false, ContinuationKind::Interceptor,
         {{luna::ownership::Relation::SharedBorrow,
           luna::ownership::Usage::Copy}});
+    interceptorType->identityMode = luna::types::IdentityMode::Nominal;
+    interceptorType->nominalId = interceptorSlotId;
     const auto interceptorTypeId =
         compositionModule.registerType(interceptorType);
     const std::string interceptorId =
@@ -4619,8 +4713,29 @@ fn branch_release(flag: bool) -> i32 {
     auto* interceptorBody = interceptor->body.get();
     compositionModule.declarations.push_back(std::move(interceptor));
 
+    const std::string contextSlotId =
+        "canonical.composition::slot::around_hook";
+    const auto contextSlotType = Type::makeSlot(
+        {}, TyUnit, false, ContinuationKind::Context);
+    contextSlotType->identityMode = luna::types::IdentityMode::Nominal;
+    contextSlotType->nominalId = contextSlotId;
+    const auto contextSlotTypeId =
+        compositionModule.registerType(contextSlotType);
+    moon::DeclarationRecord contextSlotRecord;
+    contextSlotRecord.id = contextSlotId;
+    contextSlotRecord.familyId = contextSlotId;
+    contextSlotRecord.symbolId =
+        luna::identity::symbolIdFromCanonical(contextSlotId);
+    contextSlotRecord.sourceName = "around_hook";
+    contextSlotRecord.linkageName = "around_hook";
+    contextSlotRecord.kind = moon::DeclarationKind::Slot;
+    contextSlotRecord.type = contextSlotTypeId;
+    contextSlotRecord.sysmeta = contextSlotType->sysmeta;
+    compositionModule.declarationTable.push_back(contextSlotRecord);
     const auto contextType = Type::makeFragment(
         {}, TyUnit, false, ContinuationKind::Context);
+    contextType->identityMode = luna::types::IdentityMode::Nominal;
+    contextType->nominalId = contextSlotId;
     const auto contextTypeId = compositionModule.registerType(contextType);
     const std::string contextId =
         "canonical.composition::fragment::around";
@@ -4671,6 +4786,12 @@ fn branch_release(flag: bool) -> i32 {
         compositionModule.declarations.front().get());
     executableInterceptor->contractId = sealedInterceptor->contractId;
     executableInterceptor->sysmeta = sealedInterceptor->sysmeta;
+    const auto* sealedInterceptorSlot =
+        compositionModule.findDeclarationById(interceptorSlotId);
+    if (!sealedInterceptorSlot)
+        return fail("static composition lost its nominal interceptor slot");
+    executableInterceptor->targetSlot = {
+        sealedInterceptorSlot->symbolId, sealedInterceptorSlot->contractId};
     const auto* sealedContext =
         compositionModule.findDeclarationById(contextId);
     if (!sealedContext)
@@ -4679,6 +4800,12 @@ fn branch_release(flag: bool) -> i32 {
         compositionModule.declarations[1].get());
     executableContext->contractId = sealedContext->contractId;
     executableContext->sysmeta = sealedContext->sysmeta;
+    const auto* sealedContextSlot =
+        compositionModule.findDeclarationById(contextSlotId);
+    if (!sealedContextSlot)
+        return fail("static composition lost its nominal context slot");
+    executableContext->targetSlot = {
+        sealedContextSlot->symbolId, sealedContextSlot->contractId};
     compositionModule.rebuildIndexes();
     const moon::DeclarationRef interceptorRef{
         sealedInterceptor->symbolId, sealedInterceptor->contractId};
@@ -4921,23 +5048,25 @@ fn branch_release(flag: bool) -> i32 {
     const std::string loweredCompositionSource = R"luna(
 package canonical.integration;
 
-context passthrough(value: i32) {
+slot context hook(value: i32) default passthrough;
+slot context captured();
+
+context passthrough(value: i32) for hook {
     resume();
 }
 
-context lexical_capture {
+context lexical_capture for captured {
     outer;
     resume();
 }
 
 fn main() -> i32 {
     let outer = 7;
-    slot context hook(value: i32) default passthrough;
     hook(outer) {
         outer;
     }
-    apply captured(lexical_capture) {
-        slot context captured {
+    apply lexical_capture {
+        captured() {
             outer;
         }
     }
@@ -5053,7 +5182,9 @@ fn main() -> i32 {
     const std::string loweredRuntimeCompositionSource = R"luna(
 package canonical.runtime_boundary;
 
-runtime context trace(value: i32) {
+slot context pipeline(value: i32);
+
+runtime context trace(value: i32) for pipeline {
     value;
     resume();
 }
@@ -5063,8 +5194,7 @@ fn stable_entry() -> i32 {
 }
 
 fn dynamic_entry() -> i32 {
-    dynamic slot context pipeline(value: i32);
-    dynamic apply pipeline(trace) {
+    apply trace {
         pipeline(1) {
             2;
         }
@@ -5135,24 +5265,23 @@ fn dynamic_entry() -> i32 {
         runtimeContinuationRegions != 1 || runtimeResumeEdges != 1)
         return fail("runtime context lost its Fragment/Continuation/resume CFG");
 
-    // Positive: a single-shot interceptor dynamic apply must seal into a
-    // verified canonical CFG. The runtime selects among statically linked
-    // candidates via rt_dynamic_fragment_select/matches; each candidate body
-    // is cloned into its own Fragment region and forwards to the continuation.
-    const std::string dynamicInterceptorSource = R"luna(
+    // Positive: an ordinary lexical interceptor apply seals into a verified
+    // canonical CFG with one Fragment region and one shared continuation.
+    const std::string staticInterceptorSource = R"luna(
 package canonical.dynamic_interceptor;
 
-runtime interceptor trace(value: i32) {
+slot interceptor pipeline(value: i32);
+
+runtime interceptor trace(value: i32) for pipeline {
     print(value + 1);
 }
 
-runtime interceptor audit(value: i32) {
+runtime interceptor audit(value: i32) for pipeline {
     print(value + 2);
 }
 
 fn main() -> i32 {
-    dynamic slot interceptor pipeline(value: i32);
-    dynamic apply pipeline(trace, audit) {
+    apply trace {
         pipeline(41) {
             print(42);
         }
@@ -5162,12 +5291,12 @@ fn main() -> i32 {
 )luna";
     auto interceptorSnapshot =
         luna::tooling::AnalysisSnapshot::analyzeSource(
-            dynamicInterceptorSource,
+            staticInterceptorSource,
             "<canonical-dynamic-interceptor>");
     if (!interceptorSnapshot.success()) {
         for (const auto& diagnostic : interceptorSnapshot.errors())
             std::cerr << diagnostic << '\n';
-        return fail("frontend rejected the dynamic interceptor source");
+        return fail("frontend rejected the static interceptor source");
     }
     moon::LunaLowerer interceptorLowerer;
     auto interceptorModule = interceptorLowerer.lower(
@@ -5176,10 +5305,10 @@ fn main() -> i32 {
     if (!interceptorLowerer.errors().empty()) {
         for (const auto& diagnostic : interceptorLowerer.errors())
             std::cerr << diagnostic << '\n';
-        return fail("MoonIR lowering rejected the dynamic interceptor source");
+        return fail("MoonIR lowering rejected the static interceptor source");
     }
     if (!verifier.verify(*interceptorModule))
-        return fail("dynamic interceptor module failed structured verification");
+        return fail("static interceptor module failed structured verification");
     moon::FunctionDecl* interceptorMain = nullptr;
     for (auto& declaration : interceptorModule->declarations) {
         auto* function = dynamic_cast<moon::FunctionDecl*>(declaration.get());
@@ -5187,25 +5316,25 @@ fn main() -> i32 {
             interceptorMain = function;
     }
     if (!interceptorMain || !interceptorMain->body)
-        return fail("dynamic interceptor module lost its main body");
+        return fail("static interceptor module lost its main body");
     moon::Sealer interceptorSealer;
     if (!interceptorSealer.sealFunctionBodies(*interceptorModule)) {
         for (const auto& diagnostic : interceptorSealer.errors())
             std::cerr << diagnostic << '\n';
-        return fail("canonical sealing rejected a valid dynamic interceptor apply");
+        return fail("canonical sealing rejected a valid static interceptor apply");
     }
     if (!interceptorMain->controlFlow)
-        return fail("dynamic interceptor main was not sealed to a canonical CFG");
+        return fail("static interceptor main was not sealed to a canonical CFG");
     size_t interceptorFragmentRegions = 0;
     size_t interceptorContinuationRegions = 0;
     for (const auto& region : interceptorMain->controlFlow->regions) {
         if (region.kind == moon::RegionKind::Fragment) ++interceptorFragmentRegions;
         if (region.kind == moon::RegionKind::Continuation) ++interceptorContinuationRegions;
     }
-    if (interceptorFragmentRegions != 2)
-        return fail("dynamic interceptor apply did not materialize 2 candidate Fragment regions");
+    if (interceptorFragmentRegions != 1)
+        return fail("static interceptor apply did not materialize one Fragment region");
     if (interceptorContinuationRegions != 1)
-        return fail("dynamic interceptor apply did not materialize 1 shared Continuation region");
+        return fail("static interceptor apply did not materialize one shared Continuation region");
 
     const auto reverseIterator = reverse.typesById.find(shortId.value);
     if (reverseIterator == reverse.typesById.end())
@@ -5525,7 +5654,8 @@ impl Tagged for Resource {
     fn validate(value: i32) -> i32 { return value; }
 }
 
-context trace(value: i32) { resume(); }
+slot context trace_slot(value: i32);
+context trace(value: i32) for trace_slot { resume(); }
 
 constraint Same<T> = type_same::<T, T>();
 
@@ -5551,6 +5681,7 @@ fn main() -> i32 { return 0; }
             {moon::DeclarationKind::Trait, 1},
             {moon::DeclarationKind::Implementation, 2},
             {moon::DeclarationKind::MetadataSchema, 1},
+            {moon::DeclarationKind::Slot, 1},
         };
         size_t projectedCount = 0;
         for (const auto& [kind, expectedCount] : expectedKinds) {
@@ -5560,7 +5691,7 @@ fn main() -> i32 { return 0; }
             if (!symbols.valid() || symbols.size() != expectedCount)
                 return fail("Symbol Catalog projected the wrong declaration-kind cardinality");
             projectedCount += symbols.size();
-            for (const auto* symbol : symbols.legacyTraversal()) {
+            for (const auto* symbol : symbols.orderedSymbols()) {
                 const auto* record =
                     catalogPipeline.moonModule().findDeclaration(
                         symbol->symbolId);
@@ -5597,6 +5728,15 @@ fn main() -> i32 { return 0; }
     // CFGs. Verify that a simple program cannot retain a structured body.
     {
         const std::string pipelineSource = R"luna(
+meta revision {
+    major: i32;
+}
+
+runtime@revision(1)
+fn retained_answer(value: i32) -> i32 {
+    return value + 1;
+}
+
 fn identity<T>(value: T) -> T {
     return value;
 }
@@ -5699,34 +5839,76 @@ fn main() -> i32 {
                 type.kind == TypeKind::Unknown)
                 return fail("Moon Container retained an unresolved generic type");
         }
+        const bool hasRuntimeDescriptorInput = std::any_of(
+            loadedModule.declarationTable.begin(),
+            loadedModule.declarationTable.end(),
+            [](const moon::DeclarationRecord& record) {
+                return record.retention != moon::Retention::CompileTime ||
+                    std::any_of(
+                        record.metadata.begin(), record.metadata.end(),
+                        [](const moon::MetadataInstance& metadata) {
+                            return metadata.retention !=
+                                moon::Retention::CompileTime;
+                        });
+            });
+        if (!hasRuntimeDescriptorInput)
+            return fail("Moon loader fixture lost its Runtime descriptor input");
         luna::runtime::MoonRuntime evolutionRuntime;
-        luna::runtime::MoonRuntime::StagedGeneration stagedMoon;
-        if (!luna::driver::stageVerifiedMoonGeneration(
+        luna::runtime::MoonRuntime::PinnedGeneration pinnedMoon;
+        if (!luna::driver::loadVerifiedMoonGenerationOnce(
                 evolutionRuntime, encodedContainer, manifest.targetTriple,
-                manifest.dataLayout, {}, stagedMoon, containerError)) {
+                manifest.dataLayout, pinnedMoon, containerError)) {
             std::cerr << containerError << '\n';
-            return fail("verified Moon Container did not enter generation staging");
+            return fail("verified Moon Container did not complete load-once");
         }
-        const uint64_t stagedMoonId = stagedMoon.generationId();
+        const moon::DeclarationRecord* retainedAnswer = nullptr;
+        for (const auto& record : loadedModule.declarationTable) {
+            if (record.sourceName == "retained_answer") {
+                retainedAnswer = &record;
+                break;
+            }
+        }
+        if (!retainedAnswer)
+            return fail("Moon loader fixture lost its retained function row");
+        const luna::runtime::GenerationBindingRequirement retainedRequirement{
+            retainedAnswer->symbolId.value,
+            retainedAnswer->contractId.value,
+            static_cast<uint32_t>(retainedAnswer->kind) + 1,
+            luna::runtime::GenerationBindingCallable};
+        const auto retainedBinding = pinnedMoon.find(retainedRequirement);
+        if (!retainedBinding ||
+            invokeUnaryGenerationEntry(retainedBinding.implementation(), 41) != 42)
+            return fail("Moon descriptor-backed typed reference was not callable");
+        const uint64_t stagedMoonId = pinnedMoon.generationId();
         if (stagedMoonId == 0 ||
-            stagedMoon.moduleId() != manifest.packageId ||
-            stagedMoon.contentDigest().size() != 64)
-            return fail("Moon generation staging lost content identity");
-        auto moonSafePoint = evolutionRuntime.safePoint();
-        if (!evolutionRuntime.activate(
-                stagedMoon, moonSafePoint, containerError) ||
+            pinnedMoon.moduleId() != manifest.packageId ||
+            pinnedMoon.contentDigest().size() != 64 ||
             evolutionRuntime.activeGenerationId(manifest.packageId) !=
                 stagedMoonId ||
             evolutionRuntime.retainedGenerationCount(manifest.packageId) != 1)
-            return fail("Moon generation did not activate atomically");
-        const auto pinnedMoon = evolutionRuntime.pin(manifest.packageId);
+            return fail("Moon load-once lost content identity or publication");
+        luna::runtime::MoonRuntime::PinnedGeneration duplicateMoon;
+        if (!luna::driver::loadVerifiedMoonGenerationOnce(
+                evolutionRuntime, encodedContainer, manifest.targetTriple,
+                manifest.dataLayout, duplicateMoon, containerError) ||
+            duplicateMoon.generationId() != stagedMoonId ||
+            evolutionRuntime.retainedGenerationCount(manifest.packageId) != 1)
+            return fail("Moon same-content load did not reuse its first generation");
         for (const auto& exported : loadedModule.exports) {
-            const auto binding = pinnedMoon.find(
-                exported.declaration.symbol.value,
-                exported.declaration.contract.value);
             const auto* descriptor = loadedModule.findDeclaration(
                 exported.declaration);
-            if (!binding || !descriptor)
+            if (!descriptor)
+                return fail("Moon generation lost an exported descriptor");
+            luna::runtime::GenerationBindingRequirement requirement;
+            requirement.symbolId = exported.declaration.symbol.value;
+            requirement.contractId = exported.declaration.contract.value;
+            requirement.declarationKind =
+                static_cast<uint32_t>(descriptor->kind) + 1;
+            if (descriptor->kind == moon::DeclarationKind::Function)
+                requirement.requiredFlags =
+                    luna::runtime::GenerationBindingCallable;
+            const auto binding = pinnedMoon.find(requirement);
+            if (!binding)
                 return fail("Moon generation lost an exported binding");
             if (descriptor->kind == moon::DeclarationKind::Function) {
                 if (!binding.implementation() ||
@@ -5776,6 +5958,7 @@ fn main() -> i32 {
             replacementMain->contractId != manifest.entrypoint.contract)
             return fail("replacement Moon generation changed entrypoint identity");
         moon::ContainerManifest replacementManifest = manifest;
+        replacementManifest.features = replacementPipeline.moonModule().features;
         replacementManifest.entrypoint = {
             replacementMain->symbolId, replacementMain->contractId};
         std::vector<uint8_t> replacementContainer;
@@ -5783,6 +5966,17 @@ fn main() -> i32 {
                 replacementManifest, replacementPipeline.moonModule(),
                 replacementContainer, containerError))
             return fail("replacement Moon generation failed container encoding");
+        luna::runtime::MoonRuntime::PinnedGeneration changedMoon;
+        if (luna::driver::loadVerifiedMoonGenerationOnce(
+                evolutionRuntime, replacementContainer,
+                replacementManifest.targetTriple,
+                replacementManifest.dataLayout, changedMoon,
+                containerError) ||
+            containerError.find("different content") == std::string::npos ||
+            evolutionRuntime.activeGenerationId(manifest.packageId) !=
+                stagedMoonId ||
+            invokeGenerationEntry(entryBinding.implementation()) != 60)
+            return fail("Moon load-once replaced a module with different content");
         luna::runtime::MoonRuntime::StagedGeneration replacementStaged;
         bool replacementInitializerRan = false;
         if (!luna::driver::stageVerifiedMoonGeneration(
@@ -5822,6 +6016,8 @@ fn main() -> i32 {
         if (!replacementInitializerRan)
             return fail("replacement Moon initializer did not run during staging");
         const uint64_t replacementId = replacementStaged.generationId();
+        if (replacementId != stagedMoonId + 1)
+            return fail("Moon load-once materialized a discarded generation");
         auto replacementSafePoint = evolutionRuntime.safePoint();
         if (!evolutionRuntime.activate(
                 replacementStaged, replacementSafePoint, containerError) ||

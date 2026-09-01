@@ -1,13 +1,27 @@
 // A return from the slot continuation must return from the enclosing function
 // and must not execute the context's post-resume code.
-context around {
+struct ContinuationResource {
+    marker: i32;
+}
+
+impl Drop for ContinuationResource {
+    fn drop(resource: &mut ContinuationResource) -> unit {
+        print(resource.marker);
+    }
+}
+
+slot context hook();
+
+context around for hook {
+    let resource = new ContinuationResource(63);
     resume();
     print(2);
 }
 
 fn main() -> i32 {
-    apply hook(around) {
-        slot context hook {
+    apply around {
+        hook() {
+            let resource = new ContinuationResource(64);
             return 1;
         }
     }

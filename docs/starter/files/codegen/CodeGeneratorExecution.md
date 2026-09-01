@@ -23,7 +23,7 @@ Within the anonymous namespace:
 **`int CodeGenerator::jitRun()`**
 
 - Creates the JIT with `LLJITBuilder()`.
-- Binds the runtime helpers one by one via `bindRuntime(name, &func)` into a SymbolMap (Exported, mangleAndIntern), conditioned on that name already being referenced in the module. Coverage: alloc/realloc/dealloc, RC/ARC (rt_rc_* / rt_arc_*), panic, host_services, checked_array_layout, try_alloc/realloc, console I/O, file I/O, path metadata, runtime_error, raw malloc/free, print_i32/cstr, 0.2-compat symbols, array_index_or_abort, dynamic fragments/plugins (rt_dynamic_fragment_* / rt_fragment_plugin_*), GPU (rt_gpu_*). On Windows it additionally binds luaJitMingwMain as `__main`.
+- Binds the runtime helpers one by one via `bindRuntime(name, &func)` into a SymbolMap (Exported, mangleAndIntern), conditioned on that name already being referenced in the module. Coverage includes allocation, RC/ARC library storage, panic, host services, recoverable allocation, console/file I/O, runtime errors, array bounds, and GPU helpers. On Windows it additionally binds `lunaJitMingwMain` as `__main`.
 - After defining into mainJITDylib (absoluteSymbols), calls `addIRModule(ThreadSafeModule(move(mModule), move(mCtx)))`.
 - Adds the `EPCDynamicLibrarySearchGenerator::GetForTargetProcess` generator for falling back to libc/user libraries.
 - `lookup("main")`, `toPtr<int()>()`, then `return invokeLunaJitEntry(mainFunction)`. All failure paths log and return 1.

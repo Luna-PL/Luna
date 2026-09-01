@@ -1,12 +1,12 @@
 # Luna 标准库设计
 
 > 文档类别：面向 0.3 的设计与实现边界
-> 当前实现基线：Luna 0.2.1
+> 当前实现基线：Luna 0.3.0
 > 状态：Stage A 与 Stage B host/allocator substrate 已实现；安全容器与 I/O
 > adapter 仍是 Proposed
 
 在 package、resource、Moon container 和 Runtime ABI 契约稳定前，标准库继续位于主仓库。
-0.2.1 源码只作为历史迁移基线保留；新的拥有型容器 API 面向 clean-break 0.3 编译器。
+0.2.1 源码只存在于历史迁移基线；新的拥有型容器 API 面向 clean-break 0.3 编译器。
 本文中的 API 草图定义语义，不冻结最终 0.3 拼写。
 
 ## 1. 目标与非目标
@@ -84,11 +84,27 @@ unwinding 或全局错误 registry。
 0.3 方向：
 
 - `core::option::Option<T>` 保持规范可选容器身份；
-- `core::result::Result<T, E>` 成为规范声明型 Result 身份；
+- `core::result::Result<T, E>` 具有规范名义 Result 身份；
 - 编译器只对该 Core Result 的精确身份实现 `?`，而不是识别任意名为 `Result` 的 enum；
 - `From<S> for T` 保持一跳、静态、唯一且可审计；
 - `TryFrom<S>` 和 parse trait 返回具体错误类型；
 - 库 API 返回最窄的有用错误，应用自行定义聚合 enum。
+
+Core `Option<T>` 已实现 `is_some`、`is_none`、`unwrap`、`expect` 与
+`unwrap_or`。三个取值函数显式消费 Option，因而同时适用 Copy 与 affine
+payload；`Some` 只转移一次 payload，`unwrap_or` 中未选中的 affine fallback
+精确清理一次，`None` 保持 panic 边界。该表面不需要 mutable slice
+或 Slot/Fragment 决策。
+
+Core `result` 现在提供普通源码定义的消费型 `unwrap`、`expect`、
+`unwrap_err`、`expect_err` 与 `unwrap_or`。它们同时支持 Copy 和 affine
+payload，只转移一次选中的 payload，并对未使用 fallback 或已消费的 error
+payload 精确清理一次。Result 构造、匹配、身份和 `?` 仍使用同一编译器契约。
+
+clean-break 身份迁移已实现：编译器物化的 `Result<T, E>` 使用
+`org.luna.core::result::Result`，编译器已知的 `From` 契约使用
+`org.luna.core::convert::From`。它们当前的语法与 lowering 仍由编译器支持；
+将这些表面转为普通源码声明是后续的标准库工作。
 
 Core 保留不分配的 `BoundsError`、`UtfError`、`LayoutError` 和 `AllocError`等值错误；
 Std 增加 host 错误。初始 I/O 错误必须在不分配诊断文本时保留机器事实：
@@ -233,7 +249,7 @@ Seek::seek(&mut self, SeekFrom) -> Result<u64, IoError>
 自己的 service table。首批便利 API 可包含
 `print`、`println` 和 `read_line`，但它们必须路由到这些 protocol，不得另建第二套 console ABI。
 
-0.2.1 workspace 现在提供一层刻意临时、类型明确的 `std::io`，使应用可在 0.3
+0.3 workspace 现在提供一层刻意精简、类型明确的 `std::io`，使应用可在 0.3
 trait 与 owned String 语法冻结前使用 host substrate：
 
 ```text
@@ -303,7 +319,8 @@ package 或 milestone。它们不得阻塞第一个可用 IO/Vec/error surface�
 ### Stage A：契约与 package skeleton
 
 - 已实现：集中定义 Result、From、Drop、Clone、iterator 与 resource 的精确
-  0.3 Core 身份；编译器已一次性切换，不保留 0.2 language branch；
+  0.3 Core 身份；编译器物化的 Result 与 From 已一次性切换，不保留
+  0.2 身份分支；
 - 已实现：`org.luna.sys` 与 `org.luna.alloc` dependency skeleton；
 - 已实现：append-only console-input 与 filesystem Runtime ABI capability 合约，并兼容已发布的
   v1 结构前缀；
@@ -318,7 +335,7 @@ native application-host substrate 已实现：generated JIT/AOT entry 会在不�
 raw `console`、`fs` 和 `alloc` forwarding wrapper，Luna library code 不需要解析 C
 service table。以下 safe Luna API 仍等待 0.3 language surface 的一次性落地。
 
-- 已作为临时 0.2.1 adapter 实现：明确类型的 stdout/stderr text 与 i32 write、flush、
+- 已作为精简 0.3 adapter 实现：明确类型的 stdout/stderr text 与 i32 write、flush、
   raw byte I/O、lossy line input 和 fallback-based i32 parse；
 - 已实现：普通名义 `Rc<T>`/`Arc<T>`、显式 `Clone`、递归 Drop callback 与
   Runtime ABI v1 retain/release；

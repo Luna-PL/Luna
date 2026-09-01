@@ -199,8 +199,6 @@ void DeclarationCollector::validateMetadata(Decl* decl) {
         if (attachment.retention == RetentionKind::Runtime &&
             decl->retention == RetentionKind::CompileTime)
             decl->retention = RetentionKind::Runtime;
-        if (attachment.retention == RetentionKind::Dynamic)
-            decl->retention = RetentionKind::Dynamic;
     }
 }
 
@@ -211,33 +209,89 @@ void DeclarationCollector::declareFragment(FragmentDecl* decl) {
         mContext.error("duplicate fragment declaration '" + decl->name + "'", decl->line, decl->col);
         return;
     }
+    const std::string targetKey = mContext.sourceDeclarationKey(
+        decl->targetSlotName);
+    if (mContext.mSlotScopes.empty()) {
+        mContext.error("fragment '" + decl->name +
+                       "' has no module-level slot registry", decl->line, decl->col);
+        return;
+    }
+    const auto target = mContext.mSlotScopes.front().find(targetKey);
+    if (target == mContext.mSlotScopes.front().end()) {
+        mContext.error("fragment '" + decl->name +
+                       "' targets unknown module-level slot '" +
+                       decl->targetSlotName + "'", decl->line, decl->col);
+        return;
+    }
+    const auto& slot = target->second;
+    if (decl->kind != slot.acceptedKind ||
+        decl->cardinality != slot.acceptedCardinality) {
+        mContext.error("fragment '" + decl->name +
+                       "' control form does not match nominal slot '" +
+                       decl->targetSlotName + "'", decl->line, decl->col);
+    }
+    if (decl->params.size() != slot.paramTypes.size()) {
+        mContext.error("fragment '" + decl->name + "' must bind all " +
+                       std::to_string(slot.paramTypes.size()) +
+                       " parameters of nominal slot '" +
+                       decl->targetSlotName + "'", decl->line, decl->col);
+    }
     SymbolInfo info;
     info.kind = SymbolKind::Fragment;
     TypeVec parameterTypes;
     std::vector<luna::ownership::Contract> parameterContracts;
-    for (auto& parameter : decl->params) {
-        parameter.inferredType = mContext.declaredType(parameter.type.get(), {});
+    const size_t comparable = std::min(
+        decl->params.size(), slot.paramTypes.size());
+    for (size_t index = 0; index < decl->params.size(); ++index) {
+        auto& parameter = decl->params[index];
+        const TypePtr slotType = index < comparable
+            ? slot.paramTypes[index] : TyUnknown;
+        parameter.inferredType = parameter.type
+            ? mContext.declaredType(parameter.type.get(), {})
+            : slotType;
+        if (parameter.type && index < comparable)
+            mContext.constrain(parameter.inferredType, slotType,
+                "parameter '" + parameter.name + "' of fragment '" +
+                decl->name + "'");
+        parameter.inferredType = slotType;
         parameterTypes.push_back(parameter.inferredType);
         const bool explicitUsage = parameter.hasExplicitUsage || parameter.isLinear ||
             dynamic_cast<LinearTypeAST*>(parameter.type.get()) != nullptr ||
             dynamic_cast<AffineTypeAST*>(parameter.type.get()) != nullptr;
-        const auto requestedUsage = parameter.isLinear
-            ? luna::ownership::Usage::Linear
-            : (explicitUsage ? parameter.usage
-                             : defaultUsageForType(parameter.inferredType));
-        const auto contract = parameterContractFor(
-            parameter.inferredType, requestedUsage, explicitUsage);
-        parameter.relation = contract.relation;
-        parameter.usage = contract.usage;
-        parameterContracts.push_back(contract);
+        const luna::ownership::Contract slotContract = index < comparable
+            ? slot.paramContracts[index] : luna::ownership::Contract{};
+        if (explicitUsage) {
+            const auto requestedUsage = parameter.isLinear
+                ? luna::ownership::Usage::Linear : parameter.usage;
+            const auto declaredContract = parameterContractFor(
+                parameter.inferredType, requestedUsage, true);
+            if (declaredContract != slotContract)
+                mContext.error("parameter '" + parameter.name +
+                    "' of fragment '" + decl->name +
+                    "' cannot change the ownership contract of slot '" +
+                    decl->targetSlotName + "'", decl->line, decl->col);
+        }
+        parameter.relation = slotContract.relation;
+        parameter.usage = slotContract.usage;
+        parameterContracts.push_back(slotContract);
     }
     info.type = Type::makeFragment(
         std::move(parameterTypes), TyUnit,
-        decl->cardinality == FragmentCardinality::Many,
+        false,
         decl->kind == FragmentKind::Interceptor
             ? ContinuationKind::Interceptor : ContinuationKind::Context,
         std::move(parameterContracts));
+    info.type->identityMode = luna::types::IdentityMode::Nominal;
+    info.type->nominalId = slot.structuralType
+        ? slot.structuralType->nominalId : std::string{};
+    info.type->name = decl->name;
+    info.type->declarationLinkageName = decl->generatedSymbolName.empty()
+        ? decl->name : decl->generatedSymbolName;
     decl->structuralType = info.type;
+    decl->resolvedTargetSlotName = slot.declaration &&
+        !slot.declaration->generatedSymbolName.empty()
+        ? slot.declaration->generatedSymbolName
+        : slot.name;
     mContext.mSymTable.defineAtRoot(sourceKey, info);
 }
 

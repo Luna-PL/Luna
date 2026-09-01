@@ -1,6 +1,9 @@
 fn answer() -> i32 { return 42; }
 
+fn leak() -> auto {
+    return symbols(answer).optional();
+}
+
 fn main() -> i32 {
-    let candidates = symbols(answer).all();
     return 0;
 }

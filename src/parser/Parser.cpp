@@ -149,9 +149,11 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
             else retention = RetentionKind::Runtime;
         } else if (match(TokenKind::Dynamic)) {
             consumedModifier = true;
+            addError("Dynamic retention was removed in Luna 0.3",
+                     "use `runtime` retention and acquire typed bindings through the host evolution API");
             if (check(TokenKind::At))
-                metadata.push_back(parseMetadataAttachment(RetentionKind::Dynamic));
-            else retention = RetentionKind::Dynamic;
+                metadata.push_back(parseMetadataAttachment(RetentionKind::Runtime));
+            else retention = RetentionKind::Runtime;
         } else if (check(TokenKind::At)) {
             consumedModifier = true;
             metadata.push_back(parseMetadataAttachment(RetentionKind::CompileTime));
@@ -164,6 +166,7 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
     std::unique_ptr<Decl> decl;
     if (match(TokenKind::Fn))
         decl = parseFunctionDecl(false, isExtern, abi, isConstexpr, isKernel);
+    else if (match(TokenKind::Slot)) decl = parseSlotDecl();
     else if (match(TokenKind::Interceptor)) decl = parseFragmentDecl(FragmentKind::Interceptor);
     else if (match(TokenKind::Context)) decl = parseFragmentDecl(FragmentKind::Context);
     else if (match(TokenKind::Fragment)) {
@@ -181,11 +184,11 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
         if (isExported || isExtern || isConstexpr || isKernel) {
             addError("expected a declaration after `export`, found " +
                      diagnostic::quotedToken(peek().lexeme),
-                     "only `fn`, `interceptor`, `context`, `struct`, `enum`, "
+                     "only `fn`, `slot`, `interceptor`, `context`, `struct`, `enum`, "
                      "`trait`, `meta`, and `constraint` can be exported");
         } else {
             addError("expected a declaration, found " + diagnostic::quotedToken(peek().lexeme),
-                     "start a declaration with `fn`, `interceptor`, `context`, "
+                     "start a declaration with `fn`, `slot`, `interceptor`, `context`, "
                      "`struct`, `enum`, `trait`, `impl`, `meta`, or `constraint`");
         }
         advance(); // skip unexpected token
@@ -196,9 +199,7 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
         // that implication local to the attached declaration so one schema
         // does not make every use of it pay a runtime cost.
         for (const auto& attachment : metadata) {
-            if (attachment.retention == RetentionKind::Dynamic)
-                retention = RetentionKind::Dynamic;
-            else if (attachment.retention == RetentionKind::Runtime &&
+            if (attachment.retention == RetentionKind::Runtime &&
                      retention == RetentionKind::CompileTime)
                 retention = RetentionKind::Runtime;
         }
@@ -279,13 +280,16 @@ std::unique_ptr<ConstraintDecl> Parser::parseConstraintDecl() {
 std::unique_ptr<FragmentDecl> Parser::parseFragmentDecl(FragmentKind kind) {
     auto decl = std::make_unique<FragmentDecl>();
     decl->kind = kind;
-    if (kind == FragmentKind::Context && match(TokenKind::Many))
-        decl->cardinality = FragmentCardinality::Many;
+    if (kind == FragmentKind::Context && match(TokenKind::Many)) {
+        addError("`context many` is not part of Luna 0.3",
+                 "use a single-shot `context`; multi-shot continuations are deferred");
+        return nullptr;
+    }
     else if (kind == FragmentKind::Interceptor && check(TokenKind::Many))
         addError("interceptor is always single-pass and cannot be `many`");
     if (!match(TokenKind::Identifier)) {
         addError("expected a fragment name, found " + diagnostic::quotedToken(peek().lexeme),
-                 "write `fragment name { ... }` or `fragment name(value) { ... }`");
+                 "write `interceptor name(args) for slot_name { ... }` or `context name(args) for slot_name { ... }`");
         return nullptr;
     }
     const auto& nameToken = mTokens[mPos - 1];
@@ -296,7 +300,49 @@ std::unique_ptr<FragmentDecl> Parser::parseFragmentDecl(FragmentKind kind) {
         decl->params = parseParams();
         consume(TokenKind::RParen, "Expected ')' after fragment parameters");
     }
+    consume(TokenKind::For, "Expected `for` and a nominal slot target after fragment parameters");
+    if (!parseQualifiedName(decl->targetSlotName)) {
+        addError("expected a module-level slot name after `for`");
+        return nullptr;
+    }
     decl->body = parseBlock();
+    return decl;
+}
+
+std::unique_ptr<SlotDecl> Parser::parseSlotDecl() {
+    auto decl = std::make_unique<SlotDecl>();
+    if (match(TokenKind::Interceptor)) {
+        decl->acceptedKind = FragmentKind::Interceptor;
+    } else if (match(TokenKind::Context)) {
+        decl->acceptedKind = FragmentKind::Context;
+        if (match(TokenKind::Many)) {
+            addError("`slot context many` is not part of Luna 0.3",
+                     "declare a single-shot `slot context`; multi-shot continuations are deferred");
+            return nullptr;
+        }
+    } else {
+        addError("slot must declare its single-shot control contract",
+                 "write `slot interceptor name(...);` or `slot context name(...);`");
+        return nullptr;
+    }
+    if (!match(TokenKind::Identifier)) {
+        addError("expected a module-level slot name");
+        return nullptr;
+    }
+    const auto& name = mTokens[mPos - 1];
+    decl->name = name.lexeme;
+    decl->nameLine = name.line;
+    decl->nameCol = name.col;
+    consume(TokenKind::LParen, "Expected '(' after module-level slot name");
+    if (!check(TokenKind::RParen)) decl->params = parseParams();
+    consume(TokenKind::RParen, "Expected ')' after slot parameters");
+    if (match(TokenKind::Default)) {
+        if (!parseQualifiedName(decl->defaultFragment)) {
+            addError("expected a fragment name after `default`");
+            return nullptr;
+        }
+    }
+    consume(TokenKind::SemiColon, "Expected ';' after module-level slot declaration");
     return decl;
 }
 
@@ -588,16 +634,19 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
     if (match(TokenKind::Let))
         return stamp(parseLetStmt(luna::ownership::Usage::Copy, match(TokenKind::Const)));
     if (match(TokenKind::Free)) return stamp(parseFreeStmt());
-    if (match(TokenKind::Slot)) return stamp(parseSlotStmt());
+    if (match(TokenKind::Slot)) {
+        addError("slot declarations are module-level in Luna 0.3",
+                 "move `slot interceptor/context name(...);` outside the function and invoke it as `name(args) { ... }`");
+        synchronizeStatement();
+        return nullptr;
+    }
     if (match(TokenKind::Resume)) return stamp(parseResumeStmt());
     if (match(TokenKind::Abort)) return stamp(parseAbortStmt());
     if (match(TokenKind::Await)) return stamp(parseAwaitStmt());
     if (match(TokenKind::Apply)) return stamp(parseApplyStmt());
     if (match(TokenKind::Dynamic)) {
-        if (match(TokenKind::Slot)) return stamp(parseSlotStmt(true));
-        if (match(TokenKind::Apply)) return stamp(parseApplyStmt(true));
-        addError("`dynamic` must introduce `slot` or `apply`",
-                 "write `dynamic slot name(value: Type);` or `dynamic apply name(fragment, ...) { ... }`");
+        addError("`dynamic slot` and `dynamic apply` were removed in Luna 0.3",
+                 "use a statically named fragment with ordinary lexical `apply`; runtime fragment acquisition/application is not exposed in Luna 0.3");
         synchronizeStatement();
         return nullptr;
     }
@@ -612,82 +661,6 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
         // Assignment statement (lhs = expr ;) — handled in parseExprStmt via parseExpr
     }
     return stamp(parseExprStmt());
-}
-
-std::unique_ptr<Stmt> Parser::parseSlotStmt(bool isDynamic) {
-    const Token start = mTokens[mPos - 1]; // `slot` was consumed by parseStatement
-    FragmentKind acceptedKind;
-    FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
-    if (match(TokenKind::Interceptor)) acceptedKind = FragmentKind::Interceptor;
-    else if (match(TokenKind::Context)) {
-        acceptedKind = FragmentKind::Context;
-        if (match(TokenKind::Many)) acceptedCardinality = FragmentCardinality::Many;
-    }
-    else {
-        addError("slot must declare its fragment contract",
-                 "write `slot interceptor name { ... }` or `slot context name { ... }`");
-        synchronizeStatement();
-        return nullptr;
-    }
-    if (!match(TokenKind::Identifier)) {
-        addError("expected a slot name, found " + diagnostic::quotedToken(peek().lexeme),
-                 "write `slot name { ... }` or `slot name(value: Type);`");
-        synchronizeStatement();
-        return nullptr;
-    }
-    const std::string name = mTokens[mPos - 1].lexeme;
-    std::vector<Param> params;
-    bool hasInterface = false;
-    if (match(TokenKind::LParen)) {
-        hasInterface = true;
-        params = parseParams();
-        consume(TokenKind::RParen, "Expected ')' after slot interface");
-    }
-
-    std::string defaultFragment;
-    if (match(TokenKind::Default)) {
-        if (!match(TokenKind::Identifier)) {
-            addError("expected a fragment name after `default`");
-            synchronizeStatement();
-            return nullptr;
-        }
-        defaultFragment = mTokens[mPos - 1].lexeme;
-    }
-
-    if (check(TokenKind::SemiColon)) {
-        advance();
-        if (!hasInterface) {
-            addError("a separately declared slot requires an explicit interface",
-                     "use `slot " + name + "(value: Type);`, or define an implicit slot with a continuation block");
-            return nullptr;
-        }
-        auto stmt = std::make_unique<SlotDeclStmt>();
-        stmt->name = name;
-        stmt->acceptedKind = acceptedKind;
-        stmt->acceptedCardinality = acceptedCardinality;
-        stmt->isDynamic = isDynamic;
-        stmt->params = std::move(params);
-        stmt->defaultFragment = std::move(defaultFragment);
-        stmt->sourcePath = mSourceName; stmt->line = start.line; stmt->col = start.col;
-        return stmt;
-    }
-
-    if (!check(TokenKind::LBrace)) {
-        addError("expected `;` or a continuation block after slot declaration");
-        synchronizeStatement();
-        return nullptr;
-    }
-    auto stmt = std::make_unique<SlotInvokeStmt>();
-    stmt->name = name;
-    stmt->acceptedKind = acceptedKind;
-    stmt->acceptedCardinality = acceptedCardinality;
-    stmt->isDynamic = isDynamic;
-    stmt->isImplicitCapture = !hasInterface;
-    stmt->interfaceParams = std::move(params);
-    stmt->defaultFragment = std::move(defaultFragment);
-    stmt->continuation = parseBlock();
-    stmt->sourcePath = mSourceName; stmt->line = start.line; stmt->col = start.col;
-    return stmt;
 }
 
 std::unique_ptr<Stmt> Parser::parseResumeStmt() {
@@ -725,34 +698,21 @@ std::unique_ptr<Stmt> Parser::parseAwaitStmt() {
     return stmt;
 }
 
-std::unique_ptr<Stmt> Parser::parseApplyStmt(bool isDynamic) {
+std::unique_ptr<Stmt> Parser::parseApplyStmt() {
     const Token start = mTokens[mPos - 1]; // `apply` already consumed
     auto stmt = std::make_unique<ApplyStmt>();
-    stmt->isDynamic = isDynamic;
-    if (!match(TokenKind::Identifier)) {
-        addError("expected a slot name after `apply`");
-        synchronizeStatement();
-        return nullptr;
-    }
-    stmt->slotName = mTokens[mPos - 1].lexeme;
-    consume(TokenKind::LParen, "Expected '(' after slot name in `apply`");
     if (!parseQualifiedName(stmt->fragmentName)) {
-        addError("expected a fragment name in `apply`");
+        addError("expected a statically named fragment after `apply`");
         synchronizeStatement();
         return nullptr;
     }
-    while (isDynamic && match(TokenKind::Comma)) {
-        std::string alternative;
-        if (!parseQualifiedName(alternative)) {
-            addError("expected a fragment name after ',' in dynamic apply");
-            synchronizeStatement();
-            return nullptr;
-        }
-        stmt->alternativeFragmentNames.push_back(std::move(alternative));
+    if (!check(TokenKind::LBrace)) {
+        addError("lexical `apply` requires a body",
+                 "write `apply fragment_name { ... }`; blockless apply was removed in Luna 0.3");
+        synchronizeStatement();
+        return nullptr;
     }
-    consume(TokenKind::RParen, "Expected ')' after fragment name in `apply`");
-    if (check(TokenKind::LBrace)) stmt->body = parseBlock();
-    else consume(TokenKind::SemiColon, "Expected ';' or a block after `apply`");
+    stmt->body = parseBlock();
     stmt->sourcePath = mSourceName; stmt->line = start.line; stmt->col = start.col;
     return stmt;
 }
@@ -760,7 +720,10 @@ std::unique_ptr<Stmt> Parser::parseApplyStmt(bool isDynamic) {
 std::unique_ptr<Stmt> Parser::parseNamedSlotInvokeStmt() {
     const Token start = peek();
     auto stmt = std::make_unique<SlotInvokeStmt>();
-    stmt->name = advance().lexeme;
+    if (!parseQualifiedName(stmt->name)) {
+        addError("expected a module-level slot name");
+        return nullptr;
+    }
     consume(TokenKind::LParen, "Expected '(' after slot name");
     if (!check(TokenKind::RParen)) stmt->args = parseArgs();
     consume(TokenKind::RParen, "Expected ')' after slot arguments");
@@ -1074,11 +1037,13 @@ std::unique_ptr<Expr> Parser::parseMulDiv() {
 std::unique_ptr<Expr> Parser::parseUnary() {
     if (match(TokenKind::Dynamic)) {
         if (!match(TokenKind::Select)) {
-            addError("`dynamic` in expression position must introduce `select`",
-                     "write `dynamic select target with selector(...)`");
+            addError("Dynamic expressions were removed in Luna 0.3",
+                     "use compile-time `select` or a typed host binding");
             return std::make_unique<IntLiteralExpr>(0);
         }
-        return parseSelectExpr(true);
+        addError("`dynamic select` was removed in Luna 0.3",
+                 "use compile-time `select`; runtime replacement is an EV004 typed host binding");
+        return parseSelectExpr();
     }
     if (match(TokenKind::Minus) || match(TokenKind::Not) || match(TokenKind::Tilde)) {
         auto expr = std::make_unique<UnaryExpr>();
@@ -1293,7 +1258,7 @@ std::unique_ptr<Expr> Parser::parsePostfix() {
 }
 
 std::unique_ptr<Expr> Parser::parsePrimary() {
-    if (match(TokenKind::Select)) return parseSelectExpr(false);
+    if (match(TokenKind::Select)) return parseSelectExpr();
     if (match(TokenKind::At)) {
         const Token start = mTokens[mPos - 1];
         auto selection = std::make_unique<SelectExpr>();
@@ -1466,15 +1431,13 @@ std::unique_ptr<RecordLiteralExpr> Parser::parseRecordLiteral(
     return record;
 }
 
-std::unique_ptr<SelectExpr> Parser::parseSelectExpr(bool isDynamic,
-                                                    bool selectAlreadyConsumed) {
+std::unique_ptr<SelectExpr> Parser::parseSelectExpr(bool selectAlreadyConsumed) {
     (void)selectAlreadyConsumed;
     const Token start = mTokens[mPos - 1];
     auto selection = std::make_unique<SelectExpr>();
     selection->sourcePath = mSourceName;
     selection->line = start.line;
     selection->col = start.col;
-    selection->isDynamic = isDynamic;
     if (!parseQualifiedName(selection->targetName)) {
         addError("expected a declaration family after `select`",
                  "write `select target with selector(arguments)`");
@@ -1873,9 +1836,16 @@ bool Parser::isAtEnd() const {
 }
 
 bool Parser::isNamedSlotInvocationStart() const {
-    if (!check(TokenKind::Identifier) || peekAhead(1).kind != TokenKind::LParen) return false;
+    if (!check(TokenKind::Identifier)) return false;
+    int open = mPos + 1;
+    while (open + 1 < static_cast<int>(mTokens.size()) &&
+           mTokens[open].kind == TokenKind::ColonColon &&
+           mTokens[open + 1].kind == TokenKind::Identifier)
+        open += 2;
+    if (open >= static_cast<int>(mTokens.size()) ||
+        mTokens[open].kind != TokenKind::LParen) return false;
     int depth = 0;
-    for (int i = mPos + 1; i < static_cast<int>(mTokens.size()); ++i) {
+    for (int i = open; i < static_cast<int>(mTokens.size()); ++i) {
         const TokenKind kind = mTokens[i].kind;
         if (kind == TokenKind::LParen) ++depth;
         else if (kind == TokenKind::RParen && --depth == 0)

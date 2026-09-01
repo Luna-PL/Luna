@@ -9,20 +9,12 @@ fn choice(view: declaration_view, major: i32, minor: i32, patch: i32) -> declara
 }
 
 runtime@version(1, 0, 0)
-fn answer(value: i32) -> i32 {
-    return value + 10;
-}
+fn answer(value: i32) -> i32 { return value + 10; }
 
 runtime@version(2, 0, 0)
-fn answer(value: i32) -> i32 {
-    return value + 20;
-}
-
-fn choose_at_runtime(major: i32) -> i32 {
-    let selected = dynamic select answer with choice(major, 0, 0);
-    return selected(0);
-}
+fn answer(value: i32) -> i32 { return value + 20; }
 
 fn main() -> i32 {
-    return choose_at_runtime(2);
+    let selected = dynamic select answer with choice(2, 0, 0);
+    return selected(0);
 }

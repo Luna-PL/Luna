@@ -55,7 +55,7 @@ users cannot construct a valid device-event constant.
 | `&mut T` | Value/Structural | One `T` | Copy handle; MutableBorrow relation | 8 bytes; exclusive loan |
 | `array<T, N>` | Value/Structural | One `T` and non-negative compile-time integer `N` | Derived from `T` | Inline `N * size(T)`; Frozen core |
 | `slice<T>` | Value/Structural | Exactly one `T` | Copy handle plus source shared loan | 16-byte `{data,length}`; currently read-only |
-| `Result<T, E>` | Value/Structural | Exactly two payload types | `join(usage(T), usage(E))` | Inline ADT v1; core semantics Frozen |
+| `Result<T, E>` | Value/Nominal Core declaration | Exactly two payload types | `join(usage(T), usage(E))` | `org.luna.core::result::Result`; inline ADT v1 |
 | `device_buffer<T>` | Value/Structural builtin constructor | Exactly one element type | Linear | 8-byte handle; device operations currently stable mainly for `i32` |
 | `(P...) -> R` | Value/Structural | Parameter sequence and return type | Copy function value; contract is part of shape | 8-byte code pointer for capture-free functions; Copy-only captured closures use the C016 inline environment representation |
 | `affine T` | Not an independent type | Usage contract only | Affine | TypeId remains `T` |

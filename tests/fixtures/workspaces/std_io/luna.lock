@@ -1,26 +1,26 @@
 [[package]]
 id = "org.luna.core"
-version = "0.2.1"
+version = "0.3.0"
 source = "workspace:../../../../stdlib/core"
-hash = "luna-core-0.2.1"
+hash = "luna-core-0.3.0"
 
 [[package]]
 id = "org.luna.sys"
-version = "0.2.1"
+version = "0.3.0"
 source = "workspace:../../../../stdlib/sys"
-hash = "luna-sys-0.2.1"
+hash = "luna-sys-0.3.0"
 
 [[package]]
 id = "org.luna.alloc"
-version = "0.2.1"
+version = "0.3.0"
 source = "workspace:../../../../stdlib/alloc"
-hash = "luna-alloc-0.2.1"
+hash = "luna-alloc-0.3.0"
 
 [[package]]
 id = "org.luna.std"
-version = "0.2.1"
+version = "0.3.0"
 source = "workspace:../../../../stdlib/std"
-hash = "luna-std-0.2.1"
+hash = "luna-std-0.3.0"
 
 [[package]]
 id = "org.luna.fixture.std_io"

@@ -1,0 +1,66 @@
+package org.luna.core;
+module result;
+
+// Result itself keeps its compiler-materialized canonical Core identity. These
+// ordinary source functions provide the consuming extraction layer without
+// changing `?`, constructor, match, or inline ADT lowering.
+export fn unwrap<T, E>(affine value: Result<T, E>) -> affine T {
+    match move value {
+        Err(error) => {
+            panic("called core::result::unwrap on Err");
+        },
+        Ok(item) => {
+            return item;
+        }
+    }
+}
+
+export fn expect<T, E>(
+    affine value: Result<T, E>, message: cstr
+) -> affine T {
+    match move value {
+        Err(error) => {
+            panic(message);
+        },
+        Ok(item) => {
+            return item;
+        }
+    }
+}
+
+export fn unwrap_err<T, E>(affine value: Result<T, E>) -> affine E {
+    match move value {
+        Err(error) => {
+            return error;
+        },
+        Ok(item) => {
+            panic("called core::result::unwrap_err on Ok");
+        }
+    }
+}
+
+export fn expect_err<T, E>(
+    affine value: Result<T, E>, message: cstr
+) -> affine E {
+    match move value {
+        Err(error) => {
+            return error;
+        },
+        Ok(item) => {
+            panic(message);
+        }
+    }
+}
+
+export fn unwrap_or<T, E>(
+    affine value: Result<T, E>, affine fallback: T
+) -> affine T {
+    match move value {
+        Err(error) => {
+            return fallback;
+        },
+        Ok(item) => {
+            return item;
+        }
+    }
+}

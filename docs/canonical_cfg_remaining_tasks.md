@@ -1,12 +1,13 @@
 # Canonical CFG Remaining Tasks & Known Issues
 
-> Snapshot: 2026-08-22, after the canonical-only backend and Moon Container
-> concrete-projection boundary landed.
-> All items below are 0.3 item-10 canonical-CFG switchover work.
+> Snapshot: 2026-08-26, after the public compile-time query `.optional()`
+> slice and overload-identity hardening landed in the working tree.
+> This file began as the item-10 canonical-CFG switchover ledger and now keeps
+> the canonical-path evidence needed by the remaining 0.3 completion items.
 > CompilerPipeline seals canonical CFG unconditionally and the structured
 > executable-body backend has been deleted.
 
-## Sealer coverage: complete registered 55-test gate passes
+## Sealer coverage: complete registered 60-test gate passes
 
 ## Remaining tasks (by priority)
 
@@ -61,17 +62,14 @@
 
 ### P1 — Feature gaps (designated later slices)
 
-4. **slot/fragment canonicalization** — RESOLVED for the linked 0.3 surface.
-   Dynamic interceptor and context applies select from finite, type-checked,
-   statically linked candidates through `rt_dynamic_fragment_select` /
-   `rt_dynamic_fragment_matches`. Interceptors forward to one shared
-   Continuation region; each context `resume()` clones an independent region,
-   including replay-safe multi-shot contexts. Statement-form apply is scoped
-   alongside lexical bindings. Unknown context/many candidates abort instead
-   of entering the interceptor-only external plugin ABI v1. Positive coverage
-   includes `fragments`, `dynamic_fragments`, `loop_plugins`, dynamic
-   multi-shot selection, replay-unsafe ownership rejection, and the full
-   showcase under canonical JIT/AOT.
+4. **slot/fragment canonicalization** — RESOLVED for the SF006 0.3 surface.
+   Module-level nominal slots and targeted fragments compose lexical
+   single-shot interceptor/context regions. Interceptors forward to one
+   Continuation region; each supported context `resume()` owns an independent
+   region. The earlier dynamic/multi-shot construction coverage is retained as
+   migration/rejection corpus, not as a public source path. Positive coverage
+   includes `fragments`, qualified package composition, cleanup/control exits,
+   nominal shadow identity, and the full showcase under canonical JIT/AOT.
    **Remaining beyond plugin ABI v1**: a persistent continuation callback ABI
    for external plugin contexts/many remains NP004 and requires a separate
    lifetime/authorization design.
@@ -113,19 +111,19 @@
    materialized iterator test now proves both JIT/AOT output parity and
    ascending projected-element cleanup. `core-surface` also seals cleanly.
 
-   Finite linked runtime contexts and replay-safe multi-shot fragments now run
-   under both paths. NP004 is narrowed to persistent continuation callbacks
-   crossing the external plugin boundary; plugin ABI v1 remains deliberately
-   interceptor-only.
+   Static single-shot contexts run under both paths. Dynamic/multi-shot source
+   forms are rejected by SF006; plugin ABI v1 remains deliberately
+   interceptor-only and NP004 covers any future persistent callback ABI.
 
 ### Canonical-path and container status (2026-08-24)
 
 - Full registered non-hardware CTest: 60/60 on the unconditional canonical pipeline.
 - Strict-warning build: green.
-- Production canonical ASan/UBSan suite: 58/58 green after the unconditional
-  switchover, linked context/multi-shot slice, and Native artifact boundary.
-- Runtime contexts/multi-shot: executable canonical successes for finite
-  linked candidates; external plugin callbacks remain outside ABI v1.
+- Production canonical ASan/UBSan suite: 60/60 green after the public query
+  optional slice and overload-identity hardening.
+- Slot/Fragment: executable canonical successes for static single-shot
+  composition; dynamic/multi-shot forms and external context callbacks remain
+  outside the 0.3 surface.
 - Structured executable-body consumer: deleted; item 10's one-way backend
   switchover is complete. Item 11's eight-section serializer, bounded parser,
   concrete reachability projection, atomic verified loader, deterministic
@@ -160,7 +158,7 @@
   and forge a trust-matching export digest; the staged implementation remains
   selected and the forged registry is rejected. Generation activation belongs
   to the separate evolution-runtime work.
-- Item 15 internal state-machine slice: EV001–EV003 now have executable
+- Item 15 state-machine slice (completed by EV004 on 2026-08-30): EV001–EV004 have executable
   generation identities, retained module leases, verify/resolve/initialize
   staging, one-use safe points, atomic activation, pinned references,
   compatible switchable bindings, and rollback. Initializer and binding
@@ -169,8 +167,8 @@
   enter this state as executable lease-backed bindings, and verified Moon
   Containers enter with retained ORC JIT function bindings plus descriptor-backed
   non-function exports. A real 60 -> 13 -> 60 Moon switch/rollback preserves both
-  generation leases. This does not close `TBD-EV004` or choose public evolution
-  syntax/API.
+  generation leases. The installed C++17 host API now fixes the public control
+  plane without adding Luna evolution syntax or an activation CLI.
 - Item 13 compile-time foundation: each `SemanticContext` analysis now owns one
   immutable, validate-once catalog snapshot keyed by canonical
   SymbolId/ContractId/TypeId and family SymbolId. It projects every stable
@@ -184,16 +182,29 @@
   and order-independent `.one()` and `.optional()`. The first public function
   surface is `symbols::<Signature>(family).matching(metadata).one()` with a
   locally bindable, non-iterable compiler-domain `symbol_set<T>` and a bindable,
-  callable `declaration_ref<T>` result. Query state erases before MoonIR and
-  lowering rechecks the selected strong SymbolId/ContractId. Public
-  `.optional()` typing remains under `TBD-Q005`, while `.all()` remains under
-  `TBD-Q004`. Static `select_unique`
+  callable `declaration_ref<T>` result. Function declaration discrimination now
+  combines metadata with a normalized source signature, so heterogeneous
+  overloads sharing identical metadata retain distinct deterministic linkages
+  and stable source-derived SymbolIds while exact duplicates still fail closed;
+  extending a family does not rewrite an existing SymbolId. Public `.optional()` now yields a
+  compiler-domain Core `Option<declaration_ref<T>>`: exhaustive `None`/`Some`
+  matching is checked in Sema and lowering retains only the statically selected
+  arm. Local rebindings preserve the static choice; payloads cannot escape
+  through ordinary call or return boundaries. Query state erases before MoonIR,
+  whose verifier independently rejects a forged leaked Option specialization,
+  and lowering rechecks the selected strong SymbolId/ContractId. Cross-program
+  snapshots also prove that adding a sibling overload preserves the existing
+  DeclarationId, SymbolId, and ContractId. Q004 is now frozen: `.all()` uses canonical
+  SymbolId byte order, while `.all::<M>()` uses a validated unique lexicographic metadata key;
+  both produce a statically iterable compiler-domain view that erases before MoonIR. Static `select_unique`
   composes candidate restriction, metadata filtering, and `.one()`, preserving
   distinct no-match/ambiguity failures; static selectors use this catalog, and lowering checks the selected identity
   against the sealed declaration table before publishing a reference. The set
-  and evaluator erase before MoonIR. Public non-function constructors,
-  `.optional()` typing, `.all()` ordering, and removal of the legacy dynamic
-  exact-match path remain open, so item 13 is not yet closed.
+  and evaluator erase before MoonIR. `symbols(Name)` now covers the
+  source-name-bearing Fragment, Struct, Enum, Trait, and MetadataSchema kinds;
+  unspecialized generic nominals fail closed and internal Implementation rows
+  remain catalog-only. Item 13 is closed. Item 16 subsequently removed the
+  former dynamic exact-match path and reserved its old artifact tags as invalid.
 
 The canonical codegen now resolves all local-reference paths through the
 LocalId-indexed tables (mCanonicalLocals / mCanonicalLocalTypes): generateCall
@@ -208,7 +219,7 @@ separate proof that every post-CFG expression form has a LocalId-native lowering
 
 ## Known issues (non-security, design-boundary)
 
-- **String/CStr cleanup no-op**: `typeRequiresCleanup(String)=true` but string literals are global constants. Cleanup is a no-op in `emitOwnedPayloadCleanup` and `emitCleanup`. When the stdlib introduces heap-allocated text, this must be revisited.
+- **String/CStr cleanup no-op**: `typeRequiresCleanup(String)=true` but string literals are global constants. Value cleanup is a no-op in `emitOwnedPayloadCleanup`, `emitCleanup`, and the canonical `emitCanonicalCleanup`; allocation cleanup remains active. JIT/AOT and ASan/UBSan regressions cover a local string literal. When the stdlib introduces heap-allocated text, this must be revisited.
 - **Dead loads at -O0**: String cleanup early-return generates unused `CreateLoad` instructions. Harmless; eliminated at `-O2+`.
 - **Canonical path duplicate intrinsic sets**: **Fixed**. The intrinsic name
   sets in `ControlFlowBuilder::bindExpr`, `Verifier::scanGraphIdentifier`,

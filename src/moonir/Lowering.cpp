@@ -4,6 +4,7 @@
 #include "../core/TypeRelations.h"
 #include "../lexer/Token.h"
 #include "../parser/AST.h"
+#include "../sema/SemanticAnalysisSupport.h"
 #include "../sema/SymbolTable.h"
 
 #include <algorithm>
@@ -16,6 +17,7 @@ namespace {
 std::string declarationName(const ::Decl* declaration) {
     if (auto* function = dynamic_cast<const ::FunctionDecl*>(declaration)) return function->name;
     if (auto* fragment = dynamic_cast<const ::FragmentDecl*>(declaration)) return fragment->name;
+    if (auto* slot = dynamic_cast<const ::SlotDecl*>(declaration)) return slot->name;
     if (auto* structure = dynamic_cast<const ::StructDecl*>(declaration)) return structure->name;
     if (auto* enumeration = dynamic_cast<const ::EnumDecl*>(declaration)) return enumeration->name;
     if (auto* trait = dynamic_cast<const ::TraitDecl*>(declaration)) return trait->name;
@@ -56,6 +58,7 @@ std::unique_ptr<Module> LunaLowerer::lower(const Program& program,
     mReserveKernelRuntime = reserveKernelRuntime;
     mRequiredKernelSymbols.clear();
     mPendingDeclarationRefs.clear();
+    mCompileTimeDeclarationBindings.clear();
     auto module = std::make_unique<Module>();
     mModule = module.get();
     module->name = program.packageName.empty() ? "main" : program.packageName;
@@ -277,10 +280,23 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         result = std::move(value);
     } else if (auto* identifier = dynamic_cast<const ::IdentifierExpr*>(expression)) {
         auto value = std::make_unique<moon::IdentifierExpr>();
-        value->name = identifier->name;
-        deferDeclarationRef(
-            value->declaration, identifier->resolvedSymbolName,
-            identifier, "declaration-valued identifier");
+        const auto compileTime =
+            mCompileTimeDeclarationBindings.find(identifier->name);
+        if (compileTime != mCompileTimeDeclarationBindings.end()) {
+            value->name = compileTime->second.symbolName;
+            value->type = typeRef(compileTime->second.type);
+            deferDeclarationRef(
+                value->declaration,
+                compileTime->second.declarationId,
+                identifier, "compile-time declaration_view element",
+                true, compileTime->second.symbolId,
+                compileTime->second.contractId);
+        } else {
+            value->name = identifier->name;
+            deferDeclarationRef(
+                value->declaration, identifier->resolvedSymbolName,
+                identifier, "declaration-valued identifier");
+        }
         result = std::move(value);
     } else if (auto* binary = dynamic_cast<const ::BinaryExpr*>(expression)) {
         auto value = std::make_unique<moon::BinaryExpr>();
@@ -312,6 +328,25 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
             value->type = typeRef(TyBool);
         result = std::move(value);
     } else if (auto* call = dynamic_cast<const ::CallExpr*>(expression)) {
+        if (const auto* callee = dynamic_cast<const ::IdentifierExpr*>(
+                call->callee.get());
+            callee && callee->name == "declaration_id" &&
+            call->args.size() == 1) {
+            if (const auto* identifier =
+                    dynamic_cast<const ::IdentifierExpr*>(
+                        call->args.front().get())) {
+                const auto binding =
+                    mCompileTimeDeclarationBindings.find(identifier->name);
+                if (binding != mCompileTimeDeclarationBindings.end()) {
+                    auto value =
+                        std::make_unique<moon::StringLiteralExpr>();
+                    value->value = binding->second.declarationId;
+                    value->type = typeRef(TyString);
+                    value->location = locationOf(expression);
+                    return value;
+                }
+            }
+        }
         // A call with a folded compile-time value (declaration_id/signature,
         // type_*, declaration_has_metadata, etc.) is erased to a literal so it
         // does not reach MoonIR as a call referencing compile-time-only
@@ -358,7 +393,28 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
             return value;
         }
         auto value = std::make_unique<moon::CallExpr>();
-        if (const auto* compileTimeReference =
+        const CompileTimeDeclarationBinding* loopBinding = nullptr;
+        if (const auto* identifier = dynamic_cast<const ::IdentifierExpr*>(
+                call->callee.get())) {
+            const auto found =
+                mCompileTimeDeclarationBindings.find(identifier->name);
+            if (found != mCompileTimeDeclarationBindings.end())
+                loopBinding = &found->second;
+        }
+        if (loopBinding) {
+            auto callee = std::make_unique<moon::IdentifierExpr>();
+            callee->name = loopBinding->symbolName;
+            callee->type = typeRef(loopBinding->type);
+            deferDeclarationRef(
+                callee->declaration, loopBinding->declarationId,
+                call, "compile-time declaration_view call target", true,
+                loopBinding->symbolId, loopBinding->contractId);
+            value->callee = std::move(callee);
+            deferDeclarationRef(
+                value->calleeRef, loopBinding->declarationId,
+                call, "compile-time declaration_view call target", true,
+                loopBinding->symbolId, loopBinding->contractId);
+        } else if (const auto* compileTimeReference =
                 dynamic_cast<const ::CallExpr*>(call->callee.get());
             compileTimeReference &&
             !compileTimeReference->compileTimeDeclarationId.empty() &&
@@ -614,83 +670,15 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
         value->rhs = lowerExpr(assignment->rhs.get());
         result = std::move(value);
     } else if (auto* selection = dynamic_cast<const ::SelectExpr*>(expression)) {
-        if (selection->isDynamic) {
-            auto value = std::make_unique<moon::DynamicSelectExpr>();
-            value->familyId = selection->resolvedFamilyId;
-            deferDeclarationRef(
-                value->selector,
-                selection->resolvedSelectorDeclarationId,
-                selection, "dynamic selector", true);
-            value->metadataSchemaId = selection->dynamicMetadataSchemaId;
-            value->type = typeRef(selection->selectedType);
-            for (const auto& binding : selection->dynamicFilterArguments) {
-                if (binding.selectorArgumentIndex &&
-                    *binding.selectorArgumentIndex < selection->selectorArgs.size()) {
-                    value->filterArguments.push_back(lowerExpr(
-                        selection->selectorArgs[*binding.selectorArgumentIndex].get()));
-                    continue;
-                }
-                std::unique_ptr<moon::Expr> literal;
-                if (binding.constant) {
-                    if (auto* integer = std::get_if<int64_t>(&*binding.constant)) {
-                        auto node = std::make_unique<moon::IntLiteralExpr>();
-                        node->value = *integer;
-                        node->type = typeRef(TyI32);
-                        literal = std::move(node);
-                    } else if (auto* floating = std::get_if<double>(&*binding.constant)) {
-                        auto node = std::make_unique<moon::FloatLiteralExpr>();
-                        node->value = *floating;
-                        node->type = typeRef(TyF64);
-                        literal = std::move(node);
-                    } else if (auto* boolean = std::get_if<bool>(&*binding.constant)) {
-                        auto node = std::make_unique<moon::BoolLiteralExpr>();
-                        node->value = *boolean;
-                        node->type = typeRef(TyBool);
-                        literal = std::move(node);
-                    } else if (auto* string = std::get_if<std::string>(&*binding.constant)) {
-                        auto node = std::make_unique<moon::StringLiteralExpr>();
-                        node->value = *string;
-                        node->type = typeRef(TyString);
-                        literal = std::move(node);
-                    }
-                }
-                if (!literal) {
-                    error(selection, "dynamic selector filter has no lowered value");
-                    return nullptr;
-                }
-                literal->location = locationOf(selection);
-                value->filterArguments.push_back(std::move(literal));
-            }
-            value->candidates.reserve(selection->dynamicCandidates.size());
-            for (const auto& source : selection->dynamicCandidates) {
-                DynamicSelectCandidate candidate;
-                candidate.metadataValues = source.metadataValues;
-                value->candidates.push_back(std::move(candidate));
-            }
-            for (size_t index = 0;
-                 index < selection->dynamicCandidates.size(); ++index)
-                deferDeclarationRef(
-                    value->candidates[index].declaration,
-                    selection->dynamicCandidates[index].declarationId,
-                    selection, "dynamic select candidate", true);
-            mModule->features.runtime = true;
-            mModule->features.dynamicSelect = true;
-            mModule->costs.push_back({CostKind::DynamicBinding,
-                                      selection->targetName,
-                                      "dynamic select operation",
-                                      locationOf(selection)});
-            result = std::move(value);
-        } else {
-            auto value = std::make_unique<moon::IdentifierExpr>();
-            value->name = selection->resolvedSymbolName;
-            deferDeclarationRef(
-                value->declaration, selection->resolvedDeclarationId,
-                selection, "statically selected declaration", true,
-                selection->resolvedSymbolId,
-                selection->resolvedContractId);
-            value->type = typeRef(selection->selectedType);
-            result = std::move(value);
-        }
+        auto value = std::make_unique<moon::IdentifierExpr>();
+        value->name = selection->resolvedSymbolName;
+        deferDeclarationRef(
+            value->declaration, selection->resolvedDeclarationId,
+            selection, "statically selected declaration", true,
+            selection->resolvedSymbolId,
+            selection->resolvedContractId);
+        value->type = typeRef(selection->selectedType);
+        result = std::move(value);
     } else {
         error(expression, "unsupported expression reached MoonIR lowering");
         return nullptr;
@@ -708,8 +696,28 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
     } else if (auto* let = dynamic_cast<const ::LetStmt*>(statement)) {
         if (let->inferredType &&
             (let->inferredType->kind == TypeKind::SymbolSet ||
-             let->inferredType->kind == TypeKind::DeclarationRef))
+             let->inferredType->kind == TypeKind::DeclarationView ||
+             let->inferredType->kind == TypeKind::DeclarationRef ||
+             (let->inferredType->kind == TypeKind::Enum &&
+              let->inferredType->domain ==
+                  luna::types::TypeDomain::Compiler &&
+              let->inferredType->nominalId ==
+                  luna::sysmeta::OptionTypeId))) {
+            if (let->inferredType->kind == TypeKind::DeclarationRef) {
+                if (const auto* identifier =
+                        dynamic_cast<const ::IdentifierExpr*>(
+                            let->initializer.get())) {
+                    const auto source =
+                        mCompileTimeDeclarationBindings.find(
+                            identifier->name);
+                    if (source !=
+                        mCompileTimeDeclarationBindings.end())
+                        mCompileTimeDeclarationBindings[let->name] =
+                            source->second;
+                }
+            }
             return nullptr;
+        }
         if (let->materializesIteratorRecipe) {
             (void)typeRef(TyI32);
             (void)typeRef(TyUSize);
@@ -759,6 +767,14 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         value->elseBranch = lowerStmt(conditional->elseBranch.get());
         result = std::move(value);
     } else if (auto* match = dynamic_cast<const ::MatchStmt*>(statement)) {
+        if (match->isCompileTimeOptionalMatch) {
+            if (match->compileTimeSelectedArm >= match->arms.size()) {
+                error(match, "compile-time Option match has no selected arm");
+                return nullptr;
+            }
+            return lowerBlock(
+                match->arms[match->compileTimeSelectedArm].body.get());
+        }
         auto value = std::make_unique<moon::MatchStmt>();
         value->scrutinee = lowerExpr(match->scrutinee.get());
         value->matchedType = typeRef(match->matchedType);
@@ -780,6 +796,43 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         value->body = lowerBlock(loop->body.get());
         result = std::move(value);
     } else if (auto* loop = dynamic_cast<const ::ForStmt*>(statement)) {
+        if (loop->isCompileTimeDeclarationViewLoop) {
+            auto expanded = std::make_unique<moon::BlockStmt>();
+            if (loop->compileTimeDeclarationIds.size() !=
+                    loop->compileTimeSymbolNames.size() ||
+                loop->compileTimeDeclarationIds.size() !=
+                    loop->compileTimeSymbolIds.size() ||
+                loop->compileTimeDeclarationIds.size() !=
+                    loop->compileTimeContractIds.size()) {
+                error(loop, "compile-time declaration_view loop has "
+                      "inconsistent identity vectors");
+                return nullptr;
+            }
+            const auto previous =
+                mCompileTimeDeclarationBindings.find(loop->varName);
+            const bool hadPrevious =
+                previous != mCompileTimeDeclarationBindings.end();
+            CompileTimeDeclarationBinding saved;
+            if (hadPrevious) saved = previous->second;
+            for (size_t index = 0;
+                 index < loop->compileTimeDeclarationIds.size(); ++index) {
+                mCompileTimeDeclarationBindings[loop->varName] = {
+                    loop->compileTimeDeclarationIds[index],
+                    loop->compileTimeSymbolNames[index],
+                    loop->compileTimeSymbolIds[index],
+                    loop->compileTimeContractIds[index],
+                    loop->elementType && loop->elementType->inner
+                        ? loop->elementType->inner : TyUnknown};
+                auto body = lowerBlock(loop->body.get());
+                if (body) expanded->stmts.push_back(std::move(body));
+            }
+            if (hadPrevious)
+                mCompileTimeDeclarationBindings[loop->varName] =
+                    std::move(saved);
+            else
+                mCompileTimeDeclarationBindings.erase(loop->varName);
+            result = std::move(expanded);
+        } else {
         auto value = std::make_unique<moon::ForStmt>();
         // Canonical compiler-recipe loops synthesize an i32/usize cursor and
         // bool branch condition after declaration references are resolved.
@@ -813,6 +866,7 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         value->recipeStateName = loop->recipeStateName;
         value->recipeSourceType = typeRef(loop->recipeSourceType);
         result = std::move(value);
+        }
     } else if (auto* release = dynamic_cast<const ::FreeStmt*>(statement)) {
         auto value = std::make_unique<moon::FreeStmt>();
         value->operand = lowerExpr(release->operand.get());
@@ -826,7 +880,6 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
             ? moon::FragmentKind::Interceptor : moon::FragmentKind::Context;
         value->acceptedCardinality = slot->acceptedCardinality == ::FragmentCardinality::Once
             ? moon::FragmentCardinality::Once : moon::FragmentCardinality::Many;
-        value->isDynamic = slot->isDynamic;
         for (const auto& parameter : slot->params)
             value->params.push_back(lowerParam(parameter));
         value->defaultFragment = slot->defaultFragment;
@@ -843,16 +896,6 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
             ? moon::FragmentKind::Interceptor : moon::FragmentKind::Context;
         value->acceptedCardinality = slot->acceptedCardinality == ::FragmentCardinality::Once
             ? moon::FragmentCardinality::Once : moon::FragmentCardinality::Many;
-        value->isDynamic = slot->isDynamic;
-        value->usesDynamicDispatch = slot->usesDynamicDispatch;
-        value->dynamicFragmentRefs.resize(
-            slot->resolvedDynamicFragmentNames.size());
-        for (size_t index = 0;
-             index < slot->resolvedDynamicFragmentNames.size(); ++index)
-            deferDeclarationRef(
-                value->dynamicFragmentRefs[index],
-                slot->resolvedDynamicFragmentNames[index],
-                slot, "dynamic slot fragment candidate");
         for (const auto& argument : slot->args)
             value->args.push_back(lowerExpr(argument.get()));
         value->continuation = lowerBlock(slot->continuation.get());
@@ -866,13 +909,6 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
             slot->resolvedDefaultFragmentName,
             slot, "slot invocation default fragment");
         value->structuralType = typeRef(slot->structuralType);
-        if (slot->usesDynamicDispatch) {
-            mModule->features.runtime = true;
-            mModule->features.dynamicApply = true;
-            mModule->registerType(TyCStr);
-            mModule->registerType(TyI32);
-            mModule->registerType(TyBool);
-        }
         result = std::move(value);
     } else if (dynamic_cast<const ::ResumeStmt*>(statement)) {
         result = std::make_unique<moon::ResumeStmt>();
@@ -898,35 +934,11 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         auto value = std::make_unique<moon::ApplyStmt>();
         value->slotName = apply->slotName;
         value->fragmentName = apply->fragmentName;
-        value->isDynamic = apply->isDynamic;
-        value->alternativeFragmentNames = apply->alternativeFragmentNames;
-        value->alternativeFragmentRefs.resize(
-            apply->resolvedAlternativeFragmentNames.size());
-        for (size_t index = 0;
-             index < apply->resolvedAlternativeFragmentNames.size(); ++index)
-            deferDeclarationRef(
-                value->alternativeFragmentRefs[index],
-                apply->resolvedAlternativeFragmentNames[index],
-                apply, "dynamic apply fragment candidate");
         deferDeclarationRef(
-            value->fragmentRef,
+        value->fragmentRef,
             apply->resolvedFragmentName,
             apply, "apply fragment");
         value->body = lowerBlock(apply->body.get());
-        if (apply->isDynamic) {
-            mModule->features.runtime = true;
-            mModule->features.dynamicApply = true;
-            mModule->costs.push_back({CostKind::DynamicBinding, apply->slotName,
-                                      "dynamic apply operation", locationOf(apply)});
-            // Dynamic fragment dispatch (rt_dynamic_fragment_select/matches)
-            // uses string-literal name arguments and returns cstr/i32. A
-            // program that uses dynamic apply but no string literals would
-            // otherwise lack the frozen CStr/I32/Bool rows the canonical
-            // CFG builder resolves from the type table.
-            mModule->registerType(TyCStr);
-            mModule->registerType(TyI32);
-            mModule->registerType(TyBool);
-        }
         result = std::move(value);
     } else {
         error(statement, "unsupported statement reached MoonIR lowering");
@@ -938,12 +950,15 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
 
 std::unique_ptr<moon::BlockStmt> LunaLowerer::lowerBlock(const ::BlockStmt* block) {
     if (!block) return nullptr;
+    const auto savedCompileTimeBindings =
+        mCompileTimeDeclarationBindings;
     auto result = std::make_unique<moon::BlockStmt>();
     result->location = locationOf(block);
     for (const auto& statement : block->stmts) {
         auto lowered = lowerStmt(statement.get());
         if (lowered) result->stmts.push_back(std::move(lowered));
     }
+    mCompileTimeDeclarationBindings = savedCompileTimeBindings;
     return result;
 }
 
@@ -956,8 +971,8 @@ std::unique_ptr<moon::FunctionDecl> LunaLowerer::lowerFunction(
     result->generatedSymbolName = function->generatedSymbolName.empty()
         ? function->name : function->generatedSymbolName;
     result->familyId = declarationIdentity(function, mModule->name, "fn", function->name);
-    result->declarationId = declarationIdentity(
-        function, mModule->name, "fn", result->generatedSymbolName);
+    result->declarationId =
+        functionDeclarationIdentity(mProgram, function);
     result->isExported = function->isExported;
     result->isKernel = function->isKernel;
     result->isExtern = function->isExtern;
@@ -1021,9 +1036,36 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         // declaration. Erase its compiler-only function and view types before
         // MoonIR so the zero-cost rule is structural, not merely a backend
         // optimization.
-        if (function->isSelector && !function->isDynamicSelector)
+        if (function->isSelector)
             return nullptr;
         return lowerFunction(function);
+    }
+    if (auto* slot = dynamic_cast<const ::SlotDecl*>(declaration)) {
+        auto result = std::make_unique<moon::SlotDecl>();
+        result->location = locationOf(slot);
+        result->name = slot->name;
+        result->generatedSymbolName = declarationSymbol(slot);
+        result->familyId = declarationIdentity(
+            slot, mModule->name, "slot", slot->name);
+        result->declarationId = declarationIdentity(
+            slot, mModule->name, "slot", result->generatedSymbolName);
+        result->isExported = slot->isExported;
+        result->acceptedKind = slot->acceptedKind == ::FragmentKind::Interceptor
+            ? moon::FragmentKind::Interceptor : moon::FragmentKind::Context;
+        result->acceptedCardinality = moon::FragmentCardinality::Once;
+        for (const auto& parameter : slot->params)
+            result->params.push_back(lowerParam(parameter));
+        result->structuralType = typeRef(slot->structuralType);
+        if (slot->structuralType) result->sysmeta = slot->structuralType->sysmeta;
+        lowerCommonDeclaration(slot, *result);
+        if (!slot->resolvedDefaultFragmentName.empty())
+            deferDeclarationRef(
+                result->defaultFragment,
+                slot->resolvedDefaultFragmentName, slot,
+                "default fragment for slot '" + slot->name + "'");
+        addDeclarationRecord(*result, DeclarationKind::Slot,
+                             slot->structuralType);
+        return result;
     }
     if (auto* fragment = dynamic_cast<const ::FragmentDecl*>(declaration)) {
         auto result = std::make_unique<moon::FragmentDecl>();
@@ -1038,6 +1080,9 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
             ? moon::FragmentKind::Interceptor : moon::FragmentKind::Context;
         result->cardinality = fragment->cardinality == ::FragmentCardinality::Once
             ? moon::FragmentCardinality::Once : moon::FragmentCardinality::Many;
+        deferDeclarationRef(
+            result->targetSlot, fragment->resolvedTargetSlotName, fragment,
+            "nominal target of fragment '" + fragment->name + "'");
         for (const auto& parameter : fragment->params)
             result->params.push_back(lowerParam(parameter));
         result->body = lowerBlock(fragment->body.get());
@@ -1198,7 +1243,6 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
 
 Retention LunaLowerer::lowerRetention(RetentionKind retention) const {
     if (retention == RetentionKind::Runtime) return Retention::Runtime;
-    if (retention == RetentionKind::Dynamic) return Retention::Dynamic;
     return Retention::CompileTime;
 }
 
@@ -1228,12 +1272,9 @@ void LunaLowerer::lowerCommonDeclaration(const ::Decl* source,
     }
     if (source->retention != RetentionKind::CompileTime) {
         mModule->features.runtime = true;
-        if (source->retention == RetentionKind::Dynamic)
-            mModule->features.dynamicReflection = true;
         mModule->costs.push_back({CostKind::RuntimeDescriptor,
                                   target.declarationId,
-                                  source->retention == RetentionKind::Dynamic
-                                      ? "dynamic declaration" : "runtime declaration",
+                                  "runtime declaration",
                                   target.location});
     }
 }

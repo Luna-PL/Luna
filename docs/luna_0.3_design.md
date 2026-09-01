@@ -21,18 +21,28 @@ The document uses these states:
 All example syntax is Draft. This document does not claim compiler support until the
 implementation, tests, references, and changelog have been updated together.
 
-### Frozen decision boundary (2026-08-09)
+### Frozen decision boundary (2026-08-30)
 
-Confirmed IDs in this document are implementation authority. The following four IDs are the
-complete unresolved set; an implementation must not choose their answers implicitly. A newly
-discovered ambiguity must receive a stable `TBD-*` ID here before dependent code is written.
+Confirmed IDs in this document are implementation authority. A 2026-08-31 release review found
+that SF006 closes only the static, lexical, unit-result, single-shot slice and cannot be read as
+completing the whole Slot/Fragment model. The current unresolved set is:
 
-| ID | Decision still required | Blocks | Does not block |
-|---|---|---|---|
-| `TBD-EV004` | pinned/switchable/initializer/activation source and API spelling | the public evolution API and its final source/runtime bindings | generation identity, module leases, staging invariants, or internal state-machine tests |
-| `TBD-Q004` | `.all()` order and explicit ordering API | public `.all()` semantics and its ABI | Symbol Catalog, typed query sets, `.one()`, or `.optional()` |
-| `TBD-Q005` | public `.optional()` result container and inspection/unwrapping API | public `.optional()` source typing | internal optional cardinality, public `symbol_set<T>`, `.matching()`, or `.one()` |
-| `TBD-SF006` | module Slot/Fragment syntax and precise single-shot control interactions | new Slot/Fragment parsing, control semantics, and public runtime-apply surface | shadow SlotId/ContractId, descriptor schema, or legacy-corpus capture |
+- `TBD-SF007` (blocks the 0.3 candidate): whether 0.3 explicitly ships only static lexical
+  composition or must expose an acquirable, transferable `RuntimeFragmentRef` and runtime apply;
+- `TBD-SF008` (blocks the 0.3 candidate): whether nested `apply` for one slot uses innermost
+  lexical shadowing, a handler chain, or an error, and whether a fragment may recursively or
+  reentrantly invoke the slot currently applying it. The implementation currently assumes
+  innermost shadowing and has no closed same-fragment re-entry rule;
+- `TBD-SF009` (blocks the 0.3 candidate): whether `runtime slot/fragment` retention in 0.3 promises
+  only non-callable descriptor/identity records, including the exported/private slot-retention
+  rule. The showcase currently emits runtime context descriptors without a corresponding runtime
+  continuation entry;
+- `TBD-SF010` (does not block 0.3 if `TBD-SF007` chooses static-only): the construction/query
+  spelling, Copy/Affine and `ModuleLease` lifetime rules for `RuntimeFragmentRef<S>`, unified
+  static/runtime apply operands, and the first runtime interceptor/context continuation ABI.
+
+Any newly discovered ambiguity must likewise receive a stable `TBD-*` ID here before dependent
+code is written; implementation must not silently choose an answer.
 
 No Proposed decisions are currently registered. A new Proposed item must be labeled and added
 to this boundary before it can influence an implementation.
@@ -47,7 +57,7 @@ The normative vocabulary for this draft is:
 | artifact target | the output level selected by `-t`; never a language mode or semantic version selector |
 | Moon Container / Luna Native / Foreign C FFI | safe-after-local-verification / trusted-by-proof / unsafe foreign implementation boundaries |
 | relation / usage | ownership relation and Copy/Affine/Linear consumption discipline; orthogonal axes |
-| slot / RuntimeFragmentRef | a second-class control symbol / a typed runtime value; they are not ordinary functions |
+| slot / RuntimeFragmentRef | a second-class control symbol / a typed runtime value reserved for a later decision; 0.3 does not currently expose the latter, and neither is an ordinary function |
 | MoonIR | one canonical backend IR with in-memory and serialized forms, not two semantic IRs |
 | unchecked operation | a possible narrow primitive-specific check omission; never a general `unsafe {}` scope |
 
@@ -442,7 +452,7 @@ instances and their runtime interfaces remain. An exported generic recipe is rej
 silently removing public API would be unsound; open-world generic libraries require a later recipe
 format. The concrete projection is also reachability-closed: application entrypoints, library
 exports, typed host imports, and explicitly runtime-retained declarations are roots. Direct calls,
-dynamic candidates, Drop glue, fragment regions, metadata schemas, and frozen type edges form the
+statically selected declaration edges, Drop glue, fragment regions, metadata schemas, and frozen type edges form the
 transitive closure. Unreachable concrete functions/declarations/types are not serialized; package
 dependency imports remain manifest-level interface facts.
 
@@ -491,9 +501,10 @@ directly as `str`; decoding never depends on emitter pointers or an out-of-conta
 
 The manifest payload order is `packageId:str`, `packageVersion:str`, `packageKind:u32`
 (application=1, library=2), `targetTriple:str`, `dataLayout:str`, `entrySymbol:str`,
-`entryContract:str`, and `featureBits:u32`. Feature bits 0..5 respectively denote runtime,
-dynamic reflection, dynamic apply, dynamic select, kernel, and reserved kernel runtime; every
-other bit is zero. Applications have a complete entry reference and libraries have none.
+`entryContract:str`, and `featureBits:u32`. Bit 0 denotes runtime, bits 1..3 are
+retired and must be zero, bit 4 denotes kernel, and bit 5 reserves the kernel
+runtime; every other bit is zero. Applications have a complete entry reference
+and libraries have none.
 
 The type payload starts with `vec<TypeRecord>` in strictly increasing TypeId UTF-8 byte order.
 The frozen `TypeRecord` field order is: its three identities; domain/identity-mode/kind; sysmeta;
@@ -546,7 +557,7 @@ Expression=3, Free=4, and Await=5. Structured Return/If/Match/While/For/Slot/App
 nodes must already have become CFG terminators, edges, and regions.
 
 Expression opcodes are Integer=1, Floating=2, String=3, Boolean=4, Unit=5, Identifier=6,
-Binary=7, Unary=8, Call=9, DynamicSelect=10, Launch=11, VariantConstruct=12,
+Binary=7, Unary=8, Call=9, retired/rejected DynamicSelect=10, Launch=11, VariantConstruct=12,
 ResultConstruct=13, FieldAccess=14, Index=15, SliceLength=16, ArrayLiteral=17,
 RecordLiteral=18, HeapAllocate=19, InitializeAllocation=20, Move=21, Borrow=22,
 Dereference=23, AddressOf=24, Lambda=25, MakeClosure=26, EnvironmentLoad=27, and Assign=28.
@@ -680,11 +691,23 @@ explicitly declared bindings participate in an atomic switch.
 may fail before activation. Initial rollback means continuing with or restoring the old
 generation, not reversing external state already changed by code.
 
-`TBD-EV004`: freeze exact source/API spelling for pinned references, switchable bindings,
-initializers, and activation.
+`EV004` (Confirmed, 2026-08-30): 0.3 adds no Luna source construct and no
+standalone CLI command for evolution. The public control plane is the installed
+C++17 source API `<luna/runtime/Evolution.h>` with
+`EvolutionApiVersion == 1`; it is not part of Runtime ABI v1's C binary ABI.
+The fixed object and operation names are `MoonRuntime`,
+`GenerationStagingRequest`, `GenerationBindingRequirement`, `stage`,
+`loadOnce`, `safePoint`, `activate`, `pin`, `makeSwitchable`, and `rollback`,
+with move-only `StagedGeneration`/`SafePoint`, generation-retaining
+`PinnedGeneration`/`PinnedBinding`, and explicit `SwitchableBinding::pin()`.
+Initializers are host callbacks supplied to `stage`, not source annotations.
+Generic staging callbacks are a host trust boundary; the compiler-owned Moon
+and Native adapters remain artifact-specific verified integrations rather than
+a second activation API. An external process manager may wrap this API, but its
+protocol is application policy.
 
-Implementation status (2026-08-24): the internal EV001–EV003 state machine is
-implemented without selecting the `TBD-EV004` public spelling. Each staging
+Implementation completion (2026-08-30): the EV001–EV004 state machine and
+public C++ host spelling are implemented. Each staging
 request has module/content/generation identity and a retained module lease;
 verification, binding resolution, and the optional initializer complete before
 a one-use safe point may activate it. Module activation publishes one immutable
@@ -693,7 +716,8 @@ binding updates. Ordinary pinned references retain their generation, all
 activated generations remain retained for 0.3, and rollback atomically selects
 retained code. Verification, resolution, initializer, or compatibility failure
 leaves the previous active generation unchanged. Persistent state migration,
-public source/API, and artifact-specific user activation remain deferred.
+automatic update discovery, a cross-process activation protocol, and a packaged
+artifact-loader SDK remain deferred.
 Internal artifact adapters are active: a verified Native library contributes
 its proof digest, registry bindings, executable entries, and library lease;
 a host-matched verified Moon Container contributes its full-byte content digest,
@@ -703,7 +727,8 @@ The internal test activates two real Moon generations, proves that a pinned
 entry remains executable, switches the compatible entry, and rolls back to the
 retained first JIT. The replacement initializer executes its resolved entry
 before publication, while a rejecting initializer leaves the active generation
-and retained history unchanged. This still selects no public activation spelling.
+and retained history unchanged. The installed-header and full state-machine
+tests guard the public spelling and behavior.
 
 ## 7. Symbol Query and Slot/Fragment
 
@@ -721,8 +746,36 @@ The following directions are confirmed:
   compiler-domain value with no iteration surface; `.matching()` accepts one directly
   constructed, compile-time metadata value; `.one()` returns a bindable and callable
   `declaration_ref<T>`. Unspecialized generic declarations are rejected until instantiated
-  declarations participate in the catalog. The set, filters, and reference bindings erase
-  before MoonIR;
+  declarations participate in the catalog. Within one source family, the declaration
+  discriminator combines the metadata key with a normalized callable source signature:
+  identical metadata plus identical signatures remain a duplicate declaration, while identical
+  metadata plus distinct signatures receive distinct deterministic linkages and stable
+  DeclarationId/SymbolId values. Declaration identity is derived from the source discriminator,
+  not executable linkage, so extending an overload family does not rewrite existing identities.
+  The set, filters, and reference bindings erase before MoonIR;
+- `Q006` (Confirmed): `.optional()` returns the compiler-domain specialization
+  `core::option::Option<declaration_ref<T>>`. Zero matches produce `None`, one match produces
+  `Some(reference)`, and multiple matches are a compile error. The value is consumed within the
+  current compilation boundary through the existing exhaustive `None`/`Some` match patterns.
+  Both arms receive semantic checking, while lowering retains only the statically selected arm.
+  The optional container and payload binding erase before MoonIR and cannot cross function
+  return or parameter boundaries;
+- `Q004` (Confirmed, 2026-08-26): `.all()` returns a compiler-domain
+  `declaration_view<T>` sorted by ascending bytewise `SymbolId.value`. The explicit
+  `.all::<M>()` form instead sorts lexicographically by the single attached `M` instance, using
+  schema field declaration order. Ordering fields may be integer, boolean, or string; floating
+  point is rejected. Every candidate must carry exactly one `M`, and duplicate metadata tuples
+  are errors. Empty views are valid. Views may be rebound, counted, indexed with a bounds-checked
+  compile-time integer, and statically iterated; the view and its element references erase before
+  MoonIR and cannot cross ordinary call or return boundaries. This adds no runtime ABI;
+- `Q007` (Confirmed, 2026-08-27): `symbols(Name)` infers the declaration kind and type for
+  source-name-bearing non-function declarations: Slot, Fragment, Struct, Enum, Trait, and
+  MetadataSchema. These queries accept no explicit type argument and reuse the same typed-set,
+  metadata-filter, cardinality, ordering, reflection, static-iteration, non-escape, and erasure
+  rules as function queries. Unspecialized generic nominal declarations remain rejected until
+  instantiated declarations enter the catalog. Implementation rows remain internal catalog
+  facts because they have no public source name and receive no constructor. A non-function
+  `declaration_ref<T>` is reflectable but not callable;
 - `SF001` (Confirmed): a slot is a module-level second-class symbol with stable
   SlotId/ContractId; invocation is a local control operation and creates no transferable slot
   value;
@@ -732,46 +785,68 @@ The following directions are confirmed:
 - `SF004` (Confirmed): ordinary functions/function references and RuntimeFragmentRef are separate
   models and do not implicitly interchange even when shapes match.
 
-`SF005` (Confirmed): 0.3.0 slot/fragment results remain `unit`. Static paths support
-single-shot interceptors and single-shot contexts; the first runtime path supports only a
-single-shot interceptor. Non-unit results, `many`, and runtime context/continuation ABI are
-deferred.
+`SF005` (Confirmed): 0.3.0 slot/fragment results remain `unit`. The implemented static path
+supports single-shot interceptors and single-shot contexts. Non-unit results and `many` are
+deferred. `TBD-SF007` decides whether runtime fragment execution enters 0.3; if it does, the first
+ABI still considers only single-shot interceptors, while the runtime context/continuation ABI
+remains deferred.
 
-`TBD-Q004`: freeze canonical ordering for `.all()` and the explicit ordering API; results must
-not depend on link or registration order.
+`SF006` (Confirmed, 2026-08-29): a slot is declared at module scope as
+`slot interceptor|context Name(parameters) [default Fragment];`. A fragment is declared as
+`interceptor|context Name(parameters) for QualifiedSlot { ... }`, and must exactly preserve the
+target slot's parameter/control contract. Invocation is `QualifiedSlot(arguments) { ... }` and
+lexical application is `apply QualifiedFragment { ... }`; apply infers the slot from the nominal
+fragment target. Interceptor fallthrough forwards once, while context fallthrough discards an
+unconsumed continuation. Fragment `return;` is unit-only and exits the fragment without entering
+an unconsumed continuation; `abort()` explicitly records the discard and is invalid after a
+single-shot `resume()`. A continuation `return` or `?` exits the enclosing function and bypasses
+post-resume fragment code while retaining canonical cleanup. `?` inside a fragment is rejected.
+Local slot declarations, blockless apply, `context many`, and `dynamic slot/apply` are removed.
+No runtime typed-reference acquisition syntax is introduced; ordinary apply is the sole spelling
+and any future typed operand extension must be decided separately.
 
-`TBD-Q005`: freeze whether public `.optional()` returns core
-`Option<declaration_ref<T>>` or a dedicated compiler-domain optional reference, together with
-its inspection and unwrap spelling. The compiler must not expose a nullable bare
-`declaration_ref<T>` as an implicit answer.
-
-Implementation status (2026-08-24): the compile-time internal foundation of Q001/Q003 is now
-implemented, but item 13 is not closed as a whole. Each `SemanticContext` analysis builds one
+Implementation status (2026-08-27): the compile-time Symbol Catalog/query surface of
+Q001/Q003/Q004/Q005/Q006/Q007 is implemented, and priority item 13 is closed. Each
+`SemanticContext` analysis builds one
 validate-once, immutable catalog snapshot keyed by canonical SymbolId, ContractId, TypeId, and
 family SymbolId. The snapshot covers every stable source declaration kind currently represented
-in canonical MoonIR: functions with stable explicit signatures, impl methods, fragments, structs,
+in canonical MoonIR: functions with stable explicit signatures, impl methods, slots, fragments, structs,
 enums, traits, implementations, and metadata schemas. Type/impl rows with Drop close their
 drop-glue linkage to a strong SymbolId/ContractId within the same snapshot, and tests compare
 catalog rows against sealed MoonIR row by row. Named constraints, compiler intrinsics, and generic
 instances produced only after body analysis do not masquerade as source-catalog rows. Typed finite
 sets query by phase, kind, family, type, and exact metadata value and implement the
 order-independent `.one()` and `.optional()` cardinality terminals. The first public function
-surface now implements `symbols::<Signature>(family)`, locally bindable non-iterable `symbol_set<T>`,
-`.matching(metadata)`, and `.one()`. A selected `declaration_ref<T>` can be bound, reflected,
-and directly called; all query-only values erase before MoonIR. Public `.optional()` remains
-blocked only on `TBD-Q005`. Static `select_unique`
+function surface implements `symbols::<Signature>(family)`, while source-name-bearing Slot, Fragment,
+Struct, Enum, Trait, and MetadataSchema declarations use inferred `symbols(Name)`. Both produce
+locally bindable `symbol_set<T>` values with
+`.matching(metadata)`, `.one()`, `.optional()`, and `.all()`/`.all::<M>()`. The latter produces a
+locally bindable, statically iterable `declaration_view<T>` with canonical SymbolId order or a
+validated lexicographic metadata order. `declaration_count`, compile-time `declaration_at`, and
+static `for` consume that view, including the empty case. A selected `declaration_ref<T>` can be bound,
+reflected, and directly called; all query-only values erase before MoonIR. `.optional()` is consumed
+through an exhaustive match over the compiler-domain Core Option, and lowering retains only the
+statically selected `None` or `Some` arm. Local rebindings preserve the static selection, including
+nested matches, while a `Some` payload cannot cross an ordinary call or return boundary. The
+independent verifier rejects a forged leaked compiler-domain Option. A two-program identity oracle
+also proves that adding a same-metadata sibling overload does not change an existing declaration's
+DeclarationId, SymbolId, or ContractId. Static `select_unique`
 evaluation composes candidate-set restriction, metadata filtering, and `.one()`, so no-match
 and ambiguity have distinct diagnostics without an exact-match side channel. Static selectors now use that catalog and
 MoonIR lowering checks the selected SymbolId/ContractId again against the sealed declaration
 table; the query set and selector evaluator erase before MoonIR. Existing selector source
 target families must have explicit, fully resolved parameter and return types at the snapshot
-checkpoint. Other source spelling remains compatible, while the dynamic exact-match path remains a legacy protocol for
-item 16. `.all()` and every implicit result-order promise remain unimplemented and blocked by
-`TBD-Q004`; public non-function query constructors are not part of this first surface.
+checkpoint. Unspecialized generic nominal declarations fail closed, and internal Implementation
+rows remain catalog-only. Item 16 has now removed the former dynamic exact-match
+path across the frontend, Selector, MoonIR, Container codec, verifier, and LLVM
+backend. Retired opcode 10, feature bits, and Dynamic retention values are
+rejected at artifact boundaries rather than acquiring compatibility semantics.
 
-`TBD-SF006`: freeze exact syntax for module-level declarations, nominal fragment targets, and
-lexical invocation, plus the precise interaction of return, abort, `?`, and cleanup in a
-single-shot context.
+The static SF006 slice is closed by the declaration/control grammar above, nominal Slot rows in
+the catalog and MoonIR, strong Fragment-to-Slot references, runtime descriptor kind 8, migration
+diagnostics, and cleanup/control regression oracles. The full runtime model and the nested/re-entry
+boundary remain governed by `TBD-SF007` through `TBD-SF010`. The frozen static behavior is summarized in
+[Interceptors, contexts, and slots](fragments.md).
 
 Luna does not gain an effect mechanism merely because Slot/Fragment borrows control ideas from
 algebraic effects.
@@ -855,7 +930,7 @@ field evaluation order is independent from canonical identity/layout order. C++-
 `<Constraint T>`, named `where Constraint<T>`, and inline `where predicate` all use the existing
 compile-time constraint evaluator; the inline spelling has no symbol or MoonIR node. Positive,
 negative, package-qualified, reflection, identity, layout, MoonIR-verifier, JIT, and AOT evidence
-passes all 48 registered tests. Priority item 6 has therefore passed its completion gate. Named
+passes all 60 registered tests. Priority item 6 has therefore passed its completion gate. Named
 products still use the current pointer representation as an implementation detail; this phase
 does not claim an inline named-product layout redesign. The next implementation item is 7:
 usage-block sugar and final binding contracts.
@@ -948,10 +1023,13 @@ Successful sealing removes the function's structured body and installs one `Func
 and module verification rejects missing bodies, simultaneous body/CFG ownership, root-kind drift,
 or parameter-table disagreement. Frozen operand types omitted as redundant construction payload
 are reconstructed from LocalId operands and the sealed type table without overwriting a conflicting
-non-empty type. This sealer is not yet invoked by the production pipeline: fragment/runtime
-composition and LLVM CFG consumption must close before the one-way module switch.
+non-empty type. At this historical subphase the sealer was not yet invoked by the production
+pipeline: fragment/runtime composition and LLVM CFG consumption still had to close before the
+one-way module switch. The unconditional switchover recorded at the end of this section later
+satisfied that condition.
 
-The first LLVM-consumption slice is now executable but remains outside the production pipeline.
+The first LLVM-consumption slice was executable at that historical subphase but remained outside
+the production pipeline.
 For an exclusively CFG-backed function, the backend allocates typed-local storage by `LocalId`,
 maps parameters by the verified parameter table, emits non-control operations, and translates
 `Jump`, `Branch`, `Return`, `Switch`, `Resume`, `Abort`, and `Unreachable` directly from the block
@@ -966,9 +1044,10 @@ Root, unguarded value cleanups now lower on jump, branch, switch, return, resume
 exact verifier-approved order. Branches receive edge-specific cleanup blocks, while a return value
 is evaluated before its exit cleanups, preserving Luna evaluation order. The fixture covers both a
 root parameter return cleanup and a lexical fallthrough cleanup. Projected/guarded and
-raw-allocation cleanups, allocation operations, and the wider expression surface currently fail
-closed; the production sealer therefore remains disconnected until those paths and runtime
-composition are complete.
+raw-allocation cleanups, allocation operations, and the wider expression surface still failed
+closed at that point; the production sealer therefore remained disconnected until those paths
+and runtime composition were complete. Later subphases closed them and deleted the structured
+execution consumer; the one-way switchover record at the end of Section 9 is the final state.
 
 The capture-free lambda subphase is also complete. A lambda expression remains a closure-value
 node, while construction consumes its structured body into an independent canonical CFG rooted at
@@ -1216,9 +1295,9 @@ frozen TypeRef from its resolved LocalId. A non-empty conflicting TypeRef is lef
 independent verifier to reject. The integration gate runs source parsing and Sema, Luna lowering,
 structured verification, CFG construction, then CFG verification, and checks the default
 fragment, lexical capture, resume edge, region topology, and preservation of the declaration's
-construction body. The same source-level gate covers an explicit static `apply`; a separately
-lowered dynamic composition is accepted by the frontend but must be rejected at this static CFG
-boundary. Multi-shot and runtime apply remain later slices.
+construction body. The same source-level gate covers an explicit static `apply`. SF006 now rejects
+dynamic composition and multi-shot syntax in the frontend; retained legacy construction nodes are
+test corpus only and never form a second public source path.
 
 Item 10 was completed on 2026-08-20. Capturing closure environments (frozen as `C016`),
 non-Copy item/callable per-element ownership transitions, unconditional sealing, and the
@@ -1226,8 +1305,38 @@ canonical-only backend boundary are implemented. The structured statement/contin
 fragment executable-body consumer has been removed from the source and build.
 Linear hoisting across a potential early exit remains invalid by its exactly-once contract rather
 than a deferred lowering feature. Item 11 serialization/parsing/verifier/fuzzing and the three
-item 12 artifact paths were subsequently completed; the current mainline is item 13 Symbol
-Catalog/query work.
+item 12 artifact paths and item 13 compile-time Symbol Catalog/query surface were subsequently
+completed. Item 14 Runtime descriptors, generic declaration bindings, and loaders is also complete;
+this does not provide a source-level `RuntimeFragmentRef`. SF006
+now closes the public static Slot/Fragment surface. EV004 subsequently froze the
+host-only evolution control plane, so priority item 15 is complete.
+
+Item 14 load-once status (2026-08-27): the internal artifact adapters now take
+a real verified Moon Container or trusted Native library through one operation
+to a pinned, lease-backed generation. Once the trusted Package ID/content
+identity is known, an identical request returns the existing generation before
+ORC JIT or platform dynamic loading; different content for the same module is
+rejected and remains an explicit evolution action. A typed binding requirement
+contains SymbolId, ContractId, declaration kind, and required flags, and a
+switchable binding preserves that complete requirement across generations.
+The internal loop now feeds the EV004 public `MoonRuntime` control plane; its
+artifact adapters remain compiler-owned integration helpers.
+
+Item 14 completion (2026-08-27): explicitly retained declarations now use the
+installed C-compatible Runtime descriptor ABI v1. Each row carries stable
+SymbolId, ContractId, TypeId, declaration kind, retention, callable flags,
+linkage, typed retained metadata, and an optional function entry; rows are
+strictly SymbolId ordered. A registry view validates the whole bounded ABI once
+and performs exact typed lookup without per-call revalidation. The real Moon
+loader obtains this registry from ORC and compares every row, metadata value,
+and callable classification against the independently verified Container
+before publication. Private function entries are published only through the
+validated registry without exposing raw linkage. Native keeps its proof-bound registry and maps the
+same typed identity into generation bindings. Static-only artifacts contain no
+Runtime registry or descriptor types. Together with the load-once/lease work
+above, this closes priority item 14. SF006 subsequently froze the public static
+Slot/Fragment spelling without introducing runtime-query syntax; EV004 then
+closed priority item 15 with the installed host-only C++ control plane.
 
 Closure capture implementation completion (2026-08-14): the Copy-capture
 `C016 CL001`-`CL009`
@@ -1250,10 +1359,10 @@ passed, so this item-level gate is closed.
 Canonical CFG switchover record (2026-08-20): all 51 registered CTests pass and the
 CompilerPipeline now seals every executable function body unconditionally. A materialized move-only iterator installs outer projected guarded
 cleanups when the recipe is created, cleans abandoned/early-returned elements in source order,
-and atomically transfers its source into loop-local guarded state when consumption begins. Finite,
-statically linked runtime contexts, replay-safe multi-shot continuations, and statement-form apply
-are now canonical CFG features. Each `resume()` owns an independent Continuation region, while an
-unknown context/many candidate cannot fall back to interceptor-only external plugin ABI v1. The
+and atomically transfers its source into loop-local guarded state when consumption begins. The
+canonical CFG machinery once exercised finite runtime candidates and replay-safe multi-shot
+continuations, but SF006 removes those source paths and retains only lexical single-shot apply.
+Each supported context `resume()` owns an independent Continuation region. The
 unconditional sealer and canonical-only backend complete the one-way production switchover, so
 item 10 is closed.
 
@@ -1280,6 +1389,49 @@ item 10 is closed.
 Every phase adds positive, negative, MoonIR/ABI, and pay-for-use evidence. Rollback uses version
 control; it does not permanently retain legacy paths in the production compiler.
 
+Priority item 15 passed its completion gate on 2026-08-30. The public header is
+installed, its exact EV004 lifecycle is documented, and the test suite covers
+strict staging order, real verified Moon/Native generations, one-use safe
+points, failure atomicity, concurrent switchable snapshots, pinned lifetime,
+initializer rejection, activation, and rollback.
+
+Priority item 16 passed its completion gate on 2026-08-30. Dynamic declaration/metadata retention and
+`dynamic select` now fail at the source boundary, and their exact-match
+Selector/MoonIR/codegen implementation has been deleted. Runtime-retained
+declarations continue through descriptor ABI v1 and typed EV004 bindings with
+no Dynamic feature or opcode. The internal standard-library console helpers
+also use 0.3 v1 names rather than `rt_compat_*_0_2`. The external
+fragment-plugin/dynamic-apply public header, Runtime/JIT ABI, MoonIR capability,
+canonical CFG branches, and build targets have been deleted; retired feature
+bit 2 is rejected at the Container boundary. Compiler-special Rc/Arc and
+dynamic source remain only in frozen migration/negative corpora, leaving no
+0.2 compatibility branch in production. Item 17 is in progress: the basic and
+9-/20-workload CPU suites, the single-workload analyzer, and a minimal
+heterogeneous simulator case all build and execute their sources as temporary
+0.3 application packages; a default release smoke test permanently guards that
+AOT path. Current user documentation no longer presents the removed dynamic
+path, and the prebuilt workflow now fails closed against the frozen 0.2.1
+ecosystem snapshot. Local candidate validation on 2026-08-31 has upgraded
+toolchain to 0.2.0: its grammar, formatter corpus, compiler conformance, LSP,
+VS Code extension (including a real Extension Host activation/format/restart
+test and compiler-owned check/build/run tasks), release build, and Linux VSIX
+now target Luna 0.3 and pass. Lunax 0.2.0
+also passes a strict build with the current 0.3 compiler, all
+six command/backend/transactional-install tests, installed-tree verification,
+and generic archive inspection. These remain uncommitted candidates in their
+independent repositories, not citable release evidence. The release flow now
+uses two-phase promotion: both components build against the same immutable,
+untagged Luna candidate commit and publish `LUNA-SOURCE-COMMIT` evidence; only
+lock/status-document changes may follow before the final Luna tag is created.
+This removes both circular waiting and any need to move a tag. Completion still
+requires independent commits for all three candidates, attested immutable
+artifacts for both child components, and explicit lock promotion with their
+common candidate commit and artifact evidence.
+The remaining authorization, release-tier, and explicit-deferral choices are
+centralized in the [ecosystem release handoff decision register](ecosystem_release.md#release-handoff-decision-register-2026-08-31);
+the candidate remains blocked by `TBD-SF007` through `TBD-SF009`. If 0.3 is confirmed as
+static-only, `TBD-SF010` can close as an explicit deferral.
+
 ## 10. Non-priority placeholders
 
 These confirmed deferrals are not 0.3.0 implementation priorities:
@@ -1288,6 +1440,6 @@ These confirmed deferrals are not 0.3.0 implementation priorities:
 - `NP002` (Confirmed deferral): expanded GPU types, grids, and cross-generation device updates;
 - `NP003` (Confirmed deferral): stateful hot migration;
 - `NP004` (Confirmed deferral): persistent runtime context/multi-shot continuation callback ABI
-  across an external plugin boundary; finite statically linked candidates use scoped CFG regions;
+  across an external plugin boundary; 0.3 exposes no corresponding source surface;
 - `NP005` (Confirmed deferral): hotspot JIT, PGO, deoptimization, and code reclamation;
 - `NP006` (Confirmed deferral): open runtime reflection and general runtime trait objects.

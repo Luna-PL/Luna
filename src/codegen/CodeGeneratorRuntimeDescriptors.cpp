@@ -1,6 +1,8 @@
 #include "CodeGenerator.h"
 #include "driver/NativeArtifact.h"
+#include "runtime/RuntimeDescriptor.h"
 
+#include <algorithm>
 #include <cstring>
 #include <sstream>
 
@@ -8,6 +10,31 @@
 #include <llvm/Transforms/Utils/ModuleUtils.h>
 
 namespace {
+
+static_assert(
+    static_cast<uint32_t>(moon::DeclarationKind::Function) + 1 ==
+        LUNA_RUNTIME_DECLARATION_FUNCTION_V1 &&
+    static_cast<uint32_t>(moon::DeclarationKind::Fragment) + 1 ==
+        LUNA_RUNTIME_DECLARATION_FRAGMENT_V1 &&
+    static_cast<uint32_t>(moon::DeclarationKind::Struct) + 1 ==
+        LUNA_RUNTIME_DECLARATION_STRUCT_V1 &&
+    static_cast<uint32_t>(moon::DeclarationKind::Enum) + 1 ==
+        LUNA_RUNTIME_DECLARATION_ENUM_V1 &&
+    static_cast<uint32_t>(moon::DeclarationKind::Trait) + 1 ==
+        LUNA_RUNTIME_DECLARATION_TRAIT_V1 &&
+    static_cast<uint32_t>(moon::DeclarationKind::Implementation) + 1 ==
+        LUNA_RUNTIME_DECLARATION_IMPLEMENTATION_V1 &&
+    static_cast<uint32_t>(moon::DeclarationKind::MetadataSchema) + 1 ==
+        LUNA_RUNTIME_DECLARATION_METADATA_SCHEMA_V1 &&
+    static_cast<uint32_t>(moon::DeclarationKind::Slot) + 1 ==
+        LUNA_RUNTIME_DECLARATION_SLOT_V1,
+    "Moon declaration kinds must match Runtime descriptor ABI v1");
+static_assert(
+    static_cast<uint32_t>(moon::Retention::CompileTime) ==
+        LUNA_RUNTIME_RETENTION_COMPILE_TIME_V1 &&
+    static_cast<uint32_t>(moon::Retention::Runtime) ==
+        LUNA_RUNTIME_RETENTION_RUNTIME_V1,
+    "Moon retention kinds must match Runtime descriptor ABI v1");
 
 struct MoonRuntimeSectionNames {
     const char* descriptors;
@@ -44,18 +71,21 @@ uint64_t stableRuntimeId(const std::string& text) {
 void CodeGenerator::emitRuntimeDescriptors() {
     if (!mProgram || !mProgram->features.runtime) return;
 
-    auto* i8 = llvm::Type::getInt8Ty(*mCtx);
     auto* i32 = mHelpers->i32Ty();
     auto* i64 = llvm::Type::getInt64Ty(*mCtx);
     auto* ptr = llvm::cast<llvm::PointerType>(mHelpers->ptrTy());
-    auto* metadataValueType = llvm::StructType::create(*mCtx, "moon.metadata.value");
-    metadataValueType->setBody({i8, i64, ptr});
+    auto* metadataValueType = llvm::StructType::create(
+        *mCtx, "moon.runtime.metadata.value.v1");
+    metadataValueType->setBody({i32, i32, i64, ptr});
     auto* metadataInstanceType = llvm::StructType::create(
-        *mCtx, "moon.metadata.instance");
-    metadataInstanceType->setBody({ptr, i64, ptr, i8});
+        *mCtx, "moon.runtime.metadata.instance.v1");
+    metadataInstanceType->setBody(
+        {i32, i32, i32, i32, ptr, i64, ptr});
     auto* descriptorType = llvm::StructType::create(
-        *mCtx, "moon.declaration.descriptor");
-    descriptorType->setBody({i32, ptr, ptr, ptr, i8, i8, i64, ptr, ptr});
+        *mCtx, "moon.runtime.declaration.v1");
+    descriptorType->setBody(
+        {i32, i32, i32, i32, i32, i32, i32, i32,
+         ptr, ptr, ptr, ptr, i64, ptr, ptr});
 
     std::unordered_map<std::string, llvm::Constant*> strings;
     auto cString = [&](const std::string& text) -> llvm::Constant* {
@@ -79,18 +109,32 @@ void CodeGenerator::emitRuntimeDescriptors() {
     const MoonRuntimeSectionNames runtimeSections = moonRuntimeSectionNames();
     std::vector<llvm::GlobalValue*> retainedGlobals;
     std::vector<llvm::Constant*> descriptorPointers;
+    std::vector<const moon::DeclarationRecord*> retainedRecords;
     for (const auto& record : mProgram->declarationTable) {
+        const bool hasRetainedMetadata = std::any_of(
+            record.metadata.begin(), record.metadata.end(),
+            [](const moon::MetadataInstance& metadata) {
+                return metadata.retention != moon::Retention::CompileTime;
+            });
+        if (record.retention != moon::Retention::CompileTime ||
+            hasRetainedMetadata)
+            retainedRecords.push_back(&record);
+    }
+    std::sort(
+        retainedRecords.begin(), retainedRecords.end(),
+        [](const moon::DeclarationRecord* left,
+           const moon::DeclarationRecord* right) {
+            return left->symbolId.value < right->symbolId.value;
+        });
+    for (const auto* recordPointer : retainedRecords) {
+        const auto& record = *recordPointer;
         std::vector<const moon::MetadataInstance*> retainedMetadata;
         for (const auto& metadata : record.metadata) {
             if (metadata.retention != moon::Retention::CompileTime)
                 retainedMetadata.push_back(&metadata);
         }
-        if (record.retention == moon::Retention::CompileTime &&
-            retainedMetadata.empty())
-            continue;
-
         std::ostringstream suffixStream;
-        suffixStream << std::hex << stableRuntimeId(record.id);
+        suffixStream << std::hex << stableRuntimeId(record.symbolId.value);
         const std::string suffix = suffixStream.str();
         std::vector<llvm::Constant*> metadataConstants;
         for (size_t metadataIndex = 0;
@@ -116,7 +160,8 @@ void CodeGenerator::emitRuntimeDescriptors() {
                 }
                 valueConstants.push_back(llvm::ConstantStruct::get(
                     metadataValueType,
-                    {llvm::ConstantInt::get(i8, kind),
+                    {llvm::ConstantInt::get(i32, kind),
+                     llvm::ConstantInt::get(i32, 0),
                      llvm::ConstantInt::get(i64, payload), text}));
             }
 
@@ -133,11 +178,16 @@ void CodeGenerator::emitRuntimeDescriptors() {
             }
             metadataConstants.push_back(llvm::ConstantStruct::get(
                 metadataInstanceType,
-                {cString(metadata.schemaId),
-                 llvm::ConstantInt::get(i64, metadata.values.size()),
-                 valuesPointer,
+                {llvm::ConstantInt::get(
+                     i32, LUNA_RUNTIME_DESCRIPTOR_ABI_V1),
                  llvm::ConstantInt::get(
-                     i8, static_cast<uint8_t>(metadata.retention))}));
+                     i32, sizeof(LunaRuntimeMetadataInstanceV1)),
+                 llvm::ConstantInt::get(
+                     i32, static_cast<uint32_t>(metadata.retention)),
+                 llvm::ConstantInt::get(i32, 0),
+                 cString(metadata.schemaId),
+                 llvm::ConstantInt::get(i64, metadata.values.size()),
+                 valuesPointer}));
         }
 
         llvm::Constant* metadataPointer = llvm::ConstantPointerNull::get(ptr);
@@ -154,13 +204,25 @@ void CodeGenerator::emitRuntimeDescriptors() {
         llvm::Constant* entry = llvm::ConstantPointerNull::get(ptr);
         auto function = mFunctions.find(record.linkageName);
         if (function != mFunctions.end()) entry = function->second;
+        const uint32_t flags = entry->isNullValue()
+            ? 0 : LUNA_RUNTIME_DESCRIPTOR_CALLABLE_V1;
         auto* descriptor = llvm::ConstantStruct::get(
             descriptorType,
-            {llvm::ConstantInt::get(i32, 1),
-             cString(record.id), cString(record.familyId),
+            {llvm::ConstantInt::get(
+                 i32, LUNA_RUNTIME_DESCRIPTOR_MAGIC_V1),
+             llvm::ConstantInt::get(i32, LUNA_RUNTIME_DESCRIPTOR_ABI_V1),
+             llvm::ConstantInt::get(
+                 i32, sizeof(LunaRuntimeDeclarationDescriptorV1)),
+             llvm::ConstantInt::get(
+                 i32, static_cast<uint32_t>(record.kind) + 1),
+             llvm::ConstantInt::get(i32, flags),
+             llvm::ConstantInt::get(
+                 i32, static_cast<uint32_t>(record.retention)),
+             llvm::ConstantInt::get(i32, 0),
+             llvm::ConstantInt::get(i32, 0),
+             cString(record.symbolId.value),
+             cString(record.contractId.value), cString(record.type.value),
              cString(record.linkageName),
-             llvm::ConstantInt::get(i8, static_cast<uint8_t>(record.kind)),
-             llvm::ConstantInt::get(i8, static_cast<uint8_t>(record.retention)),
              llvm::ConstantInt::get(i64, retainedMetadata.size()),
              metadataPointer, entry});
         auto* descriptorGlobal = new llvm::GlobalVariable(
@@ -174,17 +236,29 @@ void CodeGenerator::emitRuntimeDescriptors() {
     if (descriptorPointers.empty()) return;
     auto* pointerArrayType = llvm::ArrayType::get(ptr, descriptorPointers.size());
     auto* pointerArray = llvm::ConstantArray::get(pointerArrayType, descriptorPointers);
-    auto* registryType = llvm::StructType::get(i64, pointerArrayType);
+    std::ostringstream registrySuffix;
+    registrySuffix << std::hex << stableRuntimeId(mProgram->name);
+    auto* pointerArrayGlobal = new llvm::GlobalVariable(
+        *mModule, pointerArrayType, true, llvm::GlobalValue::InternalLinkage,
+        pointerArray, "__moon_runtime_descriptors_" + registrySuffix.str());
+    auto* registryType = llvm::StructType::create(
+        *mCtx, "moon.runtime.registry.v1");
+    registryType->setBody({i32, i32, i32, i32, ptr, i64, ptr});
     auto* registryValue = llvm::ConstantStruct::get(
         registryType,
-        {llvm::ConstantInt::get(i64, descriptorPointers.size()), pointerArray});
-    std::ostringstream registryName;
-    registryName << "__moon_runtime_registry_" << std::hex
-                 << stableRuntimeId(mProgram->name);
+        {llvm::ConstantInt::get(i32, LUNA_RUNTIME_REGISTRY_MAGIC_V1),
+         llvm::ConstantInt::get(i32, LUNA_RUNTIME_DESCRIPTOR_ABI_V1),
+         llvm::ConstantInt::get(
+             i32, sizeof(LunaRuntimeDescriptorRegistryV1)),
+         llvm::ConstantInt::get(i32, 0), cString(mProgram->name),
+         llvm::ConstantInt::get(i64, descriptorPointers.size()),
+         pointerArrayGlobal});
     auto* registry = new llvm::GlobalVariable(
         *mModule, registryType, true, llvm::GlobalValue::ExternalLinkage,
-        registryValue, registryName.str());
+        registryValue,
+        luna::runtime::runtimeDescriptorRegistrySymbol(mProgram->name));
     registry->setSection(runtimeSections.registry);
+    retainedGlobals.push_back(pointerArrayGlobal);
     retainedGlobals.push_back(registry);
     llvm::appendToCompilerUsed(*mModule, retainedGlobals);
 }

@@ -15,6 +15,8 @@ file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/exported_package"
      DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/examples/heterogeneous.luna"
      DESTINATION "${work_dir}")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/string_literal_local_cleanup.luna"
+     DESTINATION "${work_dir}")
 include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
 
 set(LUNA_EXE_SUFFIX "")
@@ -81,6 +83,15 @@ luna_stage_aot_application(
     "${heterogeneous_source}" "jit_extended_heterogeneous")
 check_parity(
     "heterogeneous simulator"
+    "${LUNA_AOT_PACKAGE_DIR}"
+    "${LUNA_AOT_IR_PATH}"
+    "${LUNA_AOT_EXECUTABLE_PATH}")
+
+set(string_cleanup_source "${work_dir}/string_literal_local_cleanup.luna")
+luna_stage_aot_application(
+    "${string_cleanup_source}" "jit_extended_string_cleanup")
+check_parity(
+    "string literal local cleanup"
     "${LUNA_AOT_PACKAGE_DIR}"
     "${LUNA_AOT_IR_PATH}"
     "${LUNA_AOT_EXECUTABLE_PATH}")

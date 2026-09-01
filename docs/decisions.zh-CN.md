@@ -121,9 +121,10 @@ initialization tracking 与 mutable-view 失效规则。
 **决定**
 
 - interceptor 正常完成后继续；context 通过 `resume()` 控制续体；`abort()` 丢弃续体。
-- once/many 是声明契约，不从源码中出现几次 `resume()` 推断。
-- 静态 context 使用栈上 continuation frame；动态外部插件目前只允许 host-only、
-  single-shot interceptor。
+- Luna 0.3 只公开 single-shot unit-result contract；`many` 被延后，而不是从源码中
+  `resume()` 的出现次数推断。
+- 静态 context 使用 canonical 栈作用域 continuation region；原 external plugin ABI
+  已删除，不扩展到 context。
 
 **理由**
 

@@ -78,32 +78,15 @@ llvm::Expected<std::unique_ptr<llvm::orc::LLJIT>> materializeLunaJit(
     bindRuntime("rt_remove_file_v1", &rt_remove_file_v1);
     bindRuntime("rt_create_directory_v1", &rt_create_directory_v1);
     bindRuntime("rt_runtime_error_snapshot_v1", &rt_runtime_error_snapshot_v1);
-    bindRuntime("rt_malloc", &rt_malloc);
-    bindRuntime("rt_free", &rt_free);
     bindRuntime("rt_print_i32", &rt_print_i32);
     bindRuntime("rt_print_cstr", &rt_print_cstr);
-    bindRuntime("rt_compat_console_write_cstr_0_2",
-                &rt_compat_console_write_cstr_0_2);
-    bindRuntime("rt_compat_console_write_i32_0_2",
-                &rt_compat_console_write_i32_0_2);
-    bindRuntime("rt_compat_console_flush_0_2",
-                &rt_compat_console_flush_0_2);
-    bindRuntime("rt_compat_console_read_line_lossy_0_2",
-                &rt_compat_console_read_line_lossy_0_2);
-    bindRuntime("rt_compat_parse_i32_or_0_2",
-                &rt_compat_parse_i32_or_0_2);
+    bindRuntime("rt_console_write_cstr_v1", &rt_console_write_cstr_v1);
+    bindRuntime("rt_console_write_i32_v1", &rt_console_write_i32_v1);
+    bindRuntime("rt_console_flush_simple_v1", &rt_console_flush_simple_v1);
+    bindRuntime("rt_console_read_line_lossy_v1",
+                &rt_console_read_line_lossy_v1);
+    bindRuntime("rt_parse_i32_or_v1", &rt_parse_i32_or_v1);
     bindRuntime("rt_array_index_or_abort", &rt_array_index_or_abort);
-    bindRuntime("rt_dynamic_fragment_select", &rt_dynamic_fragment_select);
-    bindRuntime("rt_dynamic_fragment_matches", &rt_dynamic_fragment_matches);
-    bindRuntime("rt_dynamic_fragment_report_unknown_and_abort",
-                &rt_dynamic_fragment_report_unknown_and_abort);
-    bindRuntime("rt_fragment_plugin_load", &rt_fragment_plugin_load);
-    bindRuntime("rt_fragment_plugin_last_error", &rt_fragment_plugin_last_error);
-    bindRuntime("rt_fragment_plugin_is_registered",
-                &rt_fragment_plugin_is_registered);
-    bindRuntime("rt_fragment_plugin_invoke", &rt_fragment_plugin_invoke);
-    bindRuntime("rt_fragment_plugin_report_error_and_abort",
-                &rt_fragment_plugin_report_error_and_abort);
     bindRuntime("rt_gpu_initialize", &rt_gpu_initialize);
     bindRuntime("rt_gpu_backend_name", &rt_gpu_backend_name);
     bindRuntime("rt_gpu_last_error", &rt_gpu_last_error);

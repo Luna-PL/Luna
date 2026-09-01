@@ -111,7 +111,6 @@ typedef struct LunaHostServicesV1 {
 - **Runtime.h** —— 声明与 `RuntimeABI.h` 中结构体类型相同的函数签名，但 `RuntimeABI.h` 额外声明了所有 `rt_*` 转发函数，而 `Runtime.h` 声明的是内部实现函数。
 - **Runtime.cpp** —— 使用 `RuntimeABI.h` 中定义的类型和常量，实现所有 `rt_*` 函数。
 - **ApplicationHostServices.h** —— 返回 `LunaConsoleV1*` 和 `LunaFileSystemV1*`，其类型定义来自本文件。
-- **FragmentPluginABI.h** —— 独立的片段插件 ABI，与本文件一起构成完整的运行时 ABI 契约。
 - 本文件是所有其他运行时文件的基础依赖，任何实现运行时行为的文件都必须包含它。
 
 ## 延伸阅读
@@ -119,7 +118,6 @@ typedef struct LunaHostServicesV1 {
 - `Runtime.h` 中 C ABI 入口点的完整声明
 - `Runtime.cpp` 中本文件各类型的默认实现
 - `ApplicationHostServices.cpp` 中文件系统与控制台的具体平台适配
-- `FragmentPluginABI.h` 中片段插件 ABI 规范
 
 
 ---

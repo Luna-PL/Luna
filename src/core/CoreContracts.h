@@ -1,18 +1,11 @@
 #pragma once
 
 // Compiler-known standard-library identities live here rather than being
-// scattered through Sema. The final 0.2 checkpoint used the legacy compiler
-// identities below; the clean-break 0.3 implementation switches once to the
-// canonical Core identities without a language-mode branch.
+// scattered through Sema. Luna 0.3 uses only the canonical Core identities;
+// the clean break deliberately retains no legacy language-mode branch.
 namespace luna::core_contracts {
 
 inline constexpr const char* PackageId = "org.luna.core";
-
-namespace legacy_0_2 {
-inline constexpr const char* DropTraitId = "luna.compiler.Drop";
-inline constexpr const char* FromTraitId = "luna.compiler.From";
-inline constexpr const char* ResultTypeId = "luna.compiler.Result";
-} // namespace legacy_0_2
 
 namespace canonical_0_3 {
 inline constexpr const char* DropTraitId =

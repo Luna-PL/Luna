@@ -2,8 +2,27 @@
 
 Luna 0.2.1 开始把语言基础能力与原始 C FFI 分离。编译器生成的
 `new`、路径敏感自动清理、显式 `free` 与语言 `print` 只调用 Luna
-Runtime ABI，不再直接解析 `malloc/free/printf`。公开的 C 兼容头文件为
-`runtime/RuntimeABI.h`。
+Runtime ABI，不再直接解析 `malloc/free/printf`。公开的 C-compatible service 头文件为
+`runtime/RuntimeABI.h`；descriptor-backed discovery 使用独立的
+`runtime/RuntimeDescriptorABI.h` 产物契约。
+
+## Runtime descriptor ABI v1
+
+显式 runtime-retained declaration 由一个 `LunaRuntimeDeclarationDescriptorV1` 表示。
+其稳定字段为 SymbolId、ContractId、TypeId、declaration kind、retention、callable flags、
+linkage、retained typed metadata 与可选 function entry。`LunaRuntimeDescriptorRegistryV1`
+携带 module identity 以及严格按 SymbolId 递增的指针表。这些是已验证 module 内的
+in-memory record，绝不用于认证 Moon Container 或 Native library。
+Declaration kind 数值为 Function=1、Fragment=2、Struct=3、Enum=4、Trait=5、
+Implementation=6、MetadataSchema=7、Slot=8。Slot 不可调用；Fragment 的 sealed
+declaration record 携带指向目标 Slot 的名义强引用。
+
+loader 一次验证有界 registry，包括 ABI/size/reserved 字段、metadata value tag、
+排序与 callable-kind 一致性。typed binding 随后使用精确 SymbolId + ContractId +
+declaration kind + required flags lookup。普通调用直接使用已得到的 pinned entry，不重复验证
+registry。Moon loader 还会在发布前把 registry 同独立验证的 Container 交叉比对；
+私有 callable 只能经 registry entry 到达，不允许 raw symbol lookup。纯静态程序既不发射
+registry，也不发射其 descriptor type。
 
 ## 设计边界
 
@@ -41,8 +60,8 @@ size 溢出和 OOM。零 size 分配成功返回 null，且不调用 host alloca
 已经提供原始 Luna FFI bridge；将该记录映射为 `core::AllocError` 属于后续安全 Alloc adapter。
 
 编译器在分配和每条清理路径上携带同一精确布局，因此自定义 allocator
-不需要为每个对象添加隐藏头。`rt_malloc/rt_free` 仅为已经生成的 Alpha IR
-保留兼容；新 IR 不使用它们。
+不需要为每个对象添加隐藏头。旧 layout-less `rt_malloc`/`rt_free` bridge 已随 Alpha IR
+路径删除。
 
 ## Core 共享单元
 
@@ -70,8 +89,7 @@ allocator domain。callback 只销毁已初始化 payload，不释放外层单�
 ## 可恢复错误快照
 
 Runtime ABI v1 通过 `rt_runtime_error_snapshot_v1` 暴露可恢复边界错误。调用者
-指定 `LUNA_RUNTIME_ERROR_DOMAIN_FRAGMENT_PLUGIN` 或
-`LUNA_RUNTIME_ERROR_DOMAIN_GPU`，得到稳定的 `domain/code` 和可选 UTF-8
+指定 `LUNA_RUNTIME_ERROR_DOMAIN_GPU`，得到稳定的 `domain/code` 和可选 UTF-8
 诊断文本：
 
 ```c
@@ -87,10 +105,8 @@ int status = rt_runtime_error_snapshot_v1(
 
 错误身份只由 `domain/code` 决定，文本仅用于诊断。快照操作本身不分配内存；
 安全 adapter 若无法为 owned message 分配空间，必须保留机器错误字段并省略文本，
-不能 panic，也不能把 `rt_gpu_last_error` 或
-`rt_fragment_plugin_last_error` 返回的易失指针存进长期值。两个旧
-`last_error` 入口为 Alpha 兼容保留，新 adapter 应使用快照接口，并在失败调用后
-立即复制。
+不能 panic，也不能把 `rt_gpu_last_error` 返回的易失指针存进长期值。新 adapter 应使用
+快照接口，并在失败调用后立即复制。
 
 ## Console input 与 filesystem service
 
@@ -134,10 +150,9 @@ handle metadata 与 path metadata 是独立操作；safe `File::metadata` 不依
 path。raw ABI 不承诺 `read_exact`、`write_all`、text decoding、递归建目录或 best-effort
 Drop。这些 policy 属于 Std，由其重复 partial operation 并显式处理 `INTERRUPTED`。
 
-非 v1 的 `rt_compat_console_*_0_2` helper 是专为 0.2.1 `std::io` 提供的临时 adapter。
-它们在不冻结未来 owned String 与 formatting trait 的前提下提供 cstr/i32 formatting 和
-有界 line input。这些符号声明于 `Runtime.h`，不属于稳定的公开 `RuntimeABI.h`，
-并将在一次性的 0.3 实现切换中删除。
+内部 `rt_console_*_v1` library adapter 在不声明 owned String 或 formatting-trait
+契约的前提下提供 cstr/i32 formatting 和有界 line input。它们声明于 `Runtime.h`，
+不属于稳定的公开 `RuntimeABI.h`；上文 raw host console operation 仍是 ABI 权威。
 
 ## 五个不可混用的资源域
 
@@ -186,9 +201,9 @@ errno，也不会延长外部 `last_error` 指针的生命周期。JIT 通过宿
 `LunaHostServicesV1` 使用 `magic`、`abi_version`、`struct_size` 和 capability bits
 进行验证。v1 只能在结构尾部追加字段；消费方必须检查每个已声明 capability 所需的最小
 前缀，而不是强制要求最新已知结构 size。嵌套表遵循同一规则。
-`LunaRuntimeModuleContextV1` 预留给经验证的 Moon 容器和未来插件 ABI v2，
+`LunaRuntimeModuleContextV1` 预留给经验证的 Moon 容器和未来授权模块服务，
 使动态模块通过授权的服务表工作，而不是依赖进程里偶然可见的 C
-符号。当前 external fragment ABI v1 仍保持原样，不会被无声扩展。
+符号。原 external fragment ABI v1 已在 0.3 删除。
 
 ## 按需付费
 
@@ -198,5 +213,5 @@ errno，也不会延长外部 `last_error` 指针的生命周期。JIT 通过宿
   语言对象中内嵌 capability 或隐藏分配 header。
 - 可恢复容器使用 `rt_try_alloc_v1`/`rt_try_realloc_v1`；失败不会 abort，也不会消费
   既有的正 size allocation。
-- 可执行内存、GPU、动态选择和动态 apply 都是独立 capability，不会因为链接
-  `libruntime` 就自动启用。
+- 可执行内存与 GPU 仍是独立 capability。退役 dynamic selection/apply feature bit 会在
+  artifact 边界被拒绝，不能通过链接 `libruntime` 激活。

@@ -81,7 +81,7 @@ kind = "application"
 sources = ["src"]
 
 [dependencies]
-"org.luna.std" = "0.2.1"
+"org.luna.std" = "0.3.0"
 ```
 
 `kind` 是必填字段，只能是 `"application"` 或 `"library"`。application
@@ -104,7 +104,7 @@ PackageManager 从当前 package 向上查找最近的 `luna.workspace`，再读
 # luna.lock（工具生成并按 Package ID 规范排序）
 [[package]]
 id = "org.luna.std"
-version = "0.2.1"
+version = "0.3.0"
 source = "workspace:std"
 hash = "..."
 ```
@@ -141,6 +141,6 @@ MoonIR 的全路径检查，不生成 LLVM IR 或可执行文件。
 package 内部。`export` 是 ABI 承诺，不是单纯的名称解析标记。未导出包级
 函数在 LLVM IR 中保持内部链接；导出函数使用外部符号。
 
-函数、结构体、枚举、trait、`interceptor` 与 `context` 均可导出。`extern`
+函数、结构体、枚举、trait、slot、`interceptor` 与 `context` 均可导出。`extern`
 函数不能同时导出。Metadata/Selector 的公开接口规则见
 [versioning.md](versioning.md)。

@@ -14,6 +14,7 @@ enum class IndexedSymbolKind {
     Kernel,
     Method,
     Fragment,
+    Slot,
     Struct,
     Enum,
     Trait,

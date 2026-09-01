@@ -1,6 +1,8 @@
 if(NOT DEFINED LUNA_BINARY_DIR OR
    NOT DEFINED LUNA_VERSION OR
    NOT DEFINED LUNA_AOT_COMPILER OR
+   NOT DEFINED LUNA_CXX_COMPILER OR
+   NOT DEFINED LUNA_CMAKE_GENERATOR OR
    NOT DEFINED LUNA_RUNTIME_FILE)
     message(FATAL_ERROR
         "install smoke requires the build directory, Luna version, "
@@ -44,6 +46,12 @@ set(installed_runtime
     "${stage}/${LUNA_INSTALL_LIBDIR}/${LUNA_RUNTIME_FILE}")
 set(installed_runtime_header
     "${stage}/${LUNA_INSTALL_INCLUDEDIR}/luna/runtime/RuntimeABI.h")
+set(installed_descriptor_header
+    "${stage}/${LUNA_INSTALL_INCLUDEDIR}/luna/runtime/RuntimeDescriptorABI.h")
+set(installed_evolution_header
+    "${stage}/${LUNA_INSTALL_INCLUDEDIR}/luna/runtime/Evolution.h")
+set(installed_moon_runtime_header
+    "${stage}/${LUNA_INSTALL_INCLUDEDIR}/luna/runtime/MoonRuntime.h")
 set(installed_stdlib
     "${stage}/${LUNA_INSTALL_DATADIR}/luna/stdlib/luna.workspace")
 set(installed_type_reference
@@ -53,6 +61,9 @@ foreach(installed
         "${installed_luna}"
         "${installed_runtime}"
         "${installed_runtime_header}"
+        "${installed_descriptor_header}"
+        "${installed_evolution_header}"
+        "${installed_moon_runtime_header}"
         "${installed_stdlib}"
         "${installed_type_reference}")
     if(NOT EXISTS "${installed}")
@@ -60,6 +71,69 @@ foreach(installed
             "staged installation is missing required artifact: ${installed}")
     endif()
 endforeach()
+
+set(retired_fragment_plugin_header
+    "${stage}/${LUNA_INSTALL_INCLUDEDIR}/luna/runtime/FragmentPluginABI.h")
+if(EXISTS "${retired_fragment_plugin_header}")
+    message(FATAL_ERROR
+        "staged installation retained removed fragment plugin ABI header")
+endif()
+
+# Compile and link one independent C++17 consumer against the installed
+# evolution header and runtime archive. This catches a header that merely
+# exists in the package but cannot be consumed from its public include path.
+set(host_api_source_dir "${work}/evolution-host-source")
+set(host_api_build_dir "${work}/evolution-host-build")
+file(MAKE_DIRECTORY "${host_api_source_dir}")
+file(WRITE "${host_api_source_dir}/main.cpp"
+"#include <luna/runtime/Evolution.h>\n"
+"static_assert(luna::runtime::EvolutionApiVersion == 1);\n"
+"int main() {\n"
+"    luna::runtime::MoonRuntime runtime;\n"
+"    return runtime.activeGenerationId(\"missing\") == 0 ? 0 : 1;\n"
+"}\n")
+file(WRITE "${host_api_source_dir}/CMakeLists.txt"
+"cmake_minimum_required(VERSION 3.20)\n"
+"project(LunaEvolutionInstallConsumer LANGUAGES CXX)\n"
+"find_package(Threads REQUIRED)\n"
+"add_executable(evolution-install-consumer main.cpp)\n"
+"set_property(TARGET evolution-install-consumer PROPERTY CXX_STANDARD 17)\n"
+"set_property(TARGET evolution-install-consumer PROPERTY CXX_STANDARD_REQUIRED ON)\n"
+"target_include_directories(evolution-install-consumer PRIVATE [==[${stage}/${LUNA_INSTALL_INCLUDEDIR}]==])\n"
+"target_link_libraries(evolution-install-consumer PRIVATE [==[${installed_runtime}]==] Threads::Threads ${CMAKE_DL_LIBS})\n")
+
+execute_process(
+    COMMAND "${CMAKE_COMMAND}"
+        -S "${host_api_source_dir}"
+        -B "${host_api_build_dir}"
+        -G "${LUNA_CMAKE_GENERATOR}"
+        -DCMAKE_CXX_COMPILER=${LUNA_CXX_COMPILER}
+    RESULT_VARIABLE host_api_configure_result
+    OUTPUT_VARIABLE host_api_configure_output
+    ERROR_VARIABLE host_api_configure_error
+)
+if(NOT host_api_configure_result EQUAL 0)
+    message(FATAL_ERROR
+        "installed evolution API consumer failed to configure.\n"
+        "${host_api_configure_output}\n${host_api_configure_error}")
+endif()
+
+set(host_api_build_command
+    "${CMAKE_COMMAND}" --build "${host_api_build_dir}")
+if(DEFINED LUNA_BUILD_CONFIG AND NOT LUNA_BUILD_CONFIG STREQUAL "")
+    list(APPEND host_api_build_command --config "${LUNA_BUILD_CONFIG}")
+endif()
+execute_process(
+    COMMAND ${host_api_build_command}
+    RESULT_VARIABLE host_api_build_result
+    OUTPUT_VARIABLE host_api_build_output
+    ERROR_VARIABLE host_api_build_error
+)
+if(NOT host_api_build_result EQUAL 0)
+    message(FATAL_ERROR
+        "installed evolution API consumer failed to build.\n"
+        "${host_api_build_output}\n${host_api_build_error}")
+endif()
 
 execute_process(
     COMMAND "${installed_luna}" --version
