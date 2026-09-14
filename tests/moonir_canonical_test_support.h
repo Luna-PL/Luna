@@ -193,6 +193,10 @@ inline int fail(const char* message) {
     return 1;
 }
 
+inline void trace(const char* phase) {
+    std::cerr << "[moonir-canonical] " << phase << '\n';
+}
+
 using GenerationEntry = int (*)();
 using UnaryGenerationEntry = int (*)(int);
 

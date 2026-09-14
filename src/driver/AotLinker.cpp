@@ -972,9 +972,9 @@ int AotLinker::build(CodeGenerator& codeGenerator, AotLinkOptions options) {
         linkerArgs.push_back(isLibraryPath(library) ? library : "-l" + library);
 
     std::string linkerExecutable = *compilerPath;
-    bool streamDirectArtifact = false;
     std::vector<fs::path> directLinkDependencies;
 #ifdef _WIN32
+    bool streamDirectArtifact = false;
     // Clang's MinGW driver starts a second process after expanding a stable
     // CRT/library recipe. For the ordinary executable case, use the companion
     // ld.lld directly when the complete known layout is present. Any driver
