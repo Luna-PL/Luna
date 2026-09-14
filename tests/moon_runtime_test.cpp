@@ -84,8 +84,8 @@ int main() {
     std::string error;
 
     {
-        Runtime runtime;
         std::atomic<unsigned> leaseDestructions{0};
+        Runtime runtime;
         Request request{
             ModuleId, std::string(64, 'a'),
             std::make_shared<LeaseProbe>(leaseDestructions)};

@@ -79,10 +79,25 @@ stable core implicitly through toolchain work.
   digest verification, caching and network dependency resolution are not implemented.
 - Installed AOT builds must receive `--runtime-lib` / `--cc`, or
   `LUNA_RUNTIME_LIB` / `LUNA_CXX` must be set.
-- The REPL supports only `= <i32 expression>`, `:decl <complete one-line
-  declaration>`, one-line temporary statements and `:help/:reset/:quit`.
-  Declarations persist through source recompilation; locals, heap values, JIT
-  globals and runtime state do not persist, and multiline input is unsupported.
+- The REPL supports `= <i32 expression>`, `:type`, transactional `:decl`,
+  `:undo`, one-line temporary statements, and explicit `:paste ... :end`
+  multiline cells. Declarations persist through source recompilation; locals,
+  heap values, JIT globals and runtime state do not persist. Runtime evaluation
+  uses a fresh worker with configurable time, process-tree memory and output
+  limits, allowing the session to recover from compiler crashes, aborts, output
+  floods and hangs. One unused single-shot worker is prewarmed while the session
+  waits for input, but still consumes only one bounded request before exiting.
+  Completed result publication is separated from a bounded background teardown
+  (two workers, 500 ms cleanup grace), and replacement preparation is
+  asynchronous. Native Windows Events or inherited POSIX socket pairs carry
+  readiness, containment-gate and completion notifications without control-file
+  polling. Bounded inherited data channels carry the request and two-stage
+  running/final result records, while separately drained channels enforce the
+  shared stdout/stderr byte budget without per-cell temporary files.
+  `--timings` reports cache/prewarm status, ten frontend/MoonIR subphases, LLVM
+  codegen, JIT materialization/lookup/cleanup, entry execution and end-to-end submission
+  latency for each compiled cell. Successful exact-source `:type` queries use a
+  declaration-invalidated, bounded session cache; executable results never do.
 
 ## Prebuilt packages
 

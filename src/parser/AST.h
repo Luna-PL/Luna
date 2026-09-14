@@ -290,6 +290,9 @@ struct Expr : ASTNode {};
 
 struct IntLiteralExpr : Expr {
     int64_t value;
+    // Integer literals are contextually typed. Unconstrained literals are
+    // defaulted to i32 after semantic inference has completed.
+    TypePtr inferredType;
     explicit IntLiteralExpr(int64_t v) : value(v) {}
 };
 

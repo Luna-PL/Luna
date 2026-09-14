@@ -33,6 +33,9 @@ fn main() -> i32 {
 - Its first parameter is explicitly `index: i32`; `launch` supplies one logical index per thread.
 - It returns `unit`, is neither generic nor `extern`/`constexpr`, and may only call `gpu_load_i32` and `gpu_store_i32` in this initial ABI.
 - Scalars are passed by value. A buffer is passed only as `&device_buffer<T>` or `&mut device_buffer<T>`.
+- `device_buffer<i32>` 值携带 `{data, length}`。kernel 中的 buffer borrow 会展开为
+  `(device pointer, element length)`；形成 GEP 前会检查每个动态设备索引，非法索引
+  直接 trap，不会生成越界内存访问。
 - Kernel bodies form a `DeviceMemory`-only sublanguage: scalar bindings, arithmetic, branches, loops, and the two device built-ins are allowed. `slot`, `apply`, `resume()`, `abort()`, `await`, `launch`, `new`, `free`, FFI, closures, reflection, and ordinary host calls are rejected. This prevents host continuations or resource effects from entering SIMT code.
 
 `device_buffer<T>` and the `event` returned from `launch` are automatically linear. Buffer arguments must be explicit named borrows at the launch site. Launching a buffer produces an in-flight loan that lasts until the corresponding `await`:
@@ -157,6 +160,11 @@ upload requires a mutable device borrow; the download requires a mutable host
 borrow. This preserves the borrow checker at both endpoints while the language
 does not yet provide a safe host array or slice type. A negative count is
 rejected for literals and fails at runtime for dynamic values.
+
+宿主 Runtime ABI 避免依赖各目标不同的 aggregate calling convention：
+`rt_gpu_alloc_i32` 写入 `LunaDeviceBufferI32V1` out-carrier，load/store/copy/free
+入口则把 `data` 与 `length` 作为独立标量参数传递。Runtime 仅接受与 live allocation
+同时匹配的二元组，因此篡改可见长度不能扩大访问范围，释放后的旧 carrier 也不能复用。
 
 The valid and invalid examples are in `examples/heterogeneous*.luna`.
 Benchmark methodology and the JIT/AOT sampling script are in

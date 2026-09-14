@@ -1,10 +1,15 @@
 #include "tooling/AnalysisSnapshot.h"
 
+#include "lexer/Lexer.h"
+#include "parser/AST.h"
+#include "sema/PredefinedTypes.h"
 #include "sema/SymbolTable.h"
 
 #include <algorithm>
+#include <array>
 #include <iostream>
 #include <string>
+#include <unordered_map>
 
 namespace {
 
@@ -18,6 +23,89 @@ bool expect(bool condition, const char* message) {
 
 int main(int argc, char* argv[]) {
     if (!expect(argc == 2, "expected the Luna source directory")) return 1;
+
+    Lexer predefinedLexer("i32 i64 f32 f64 bool string");
+    const auto predefinedTokens = predefinedLexer.tokenize();
+    if (!expect(predefinedLexer.errors().empty(),
+                "predefined type names failed lexing") ||
+        !expect(predefinedTokens.size() == 7,
+                "predefined type token inventory is incorrect") ||
+        !expect(std::all_of(
+                    predefinedTokens.begin(), predefinedTokens.end() - 1,
+                    [](const Token& token) {
+                        return token.kind == TokenKind::Identifier;
+                    }),
+                "predefined type names are still lexer keywords"))
+        return 16;
+
+    const std::array<std::pair<const char*, TypePtr>, 18> atomicTypes = {{
+        {"i8", TyI8}, {"i16", TyI16}, {"i32", TyI32}, {"i64", TyI64},
+        {"u8", TyU8}, {"u16", TyU16}, {"u32", TyU32}, {"u64", TyU64},
+        {"usize", TyUSize}, {"isize", TyISize}, {"f32", TyF32},
+        {"f64", TyF64}, {"bool", TyBool}, {"string", TyString},
+        {"cstr", TyCStr}, {"unit", TyUnit}, {"never", TyNever},
+        {"event", TyEvent},
+    }};
+    SymbolTable predefinedSymbols;
+    for (const auto& [name, expected] : atomicTypes) {
+        if (!expect(findPredefinedAtomicType(name) == expected,
+                    "predefined atomic type did not retain singleton identity") ||
+            !expect(predefinedSymbols.lookupType(name) == expected,
+                    "symbol table omitted a predefined atomic type"))
+            return 17;
+    }
+    if (!expect(predefinedTypes().size() == 27,
+                "predefined type registry inventory is incorrect") ||
+        !expect(!predefinedSymbols.defineType("i32", Type::makeStruct("i32")),
+                "predefined atomic binding was overwritten") ||
+        !expect(!predefinedSymbols.defineType("raw", Type::makeStruct("raw")),
+                "predefined constructor binding was overwritten") ||
+        !expect(predefinedSymbols.lookupType("i32") == TyI32,
+                "failed overwrite changed predefined atomic identity"))
+        return 18;
+
+    NamedTypeAST i32Type("i32");
+    std::unordered_map<std::string, TypePtr> invalidShadow = {
+        {"i32", Type::makeStruct("shadowed-i32")},
+    };
+    NamedTypeAST rawType("raw");
+    rawType.typeArgs.push_back(std::make_unique<NamedTypeAST>("i32"));
+    const auto resolvedRaw = resolveType(&rawType, invalidShadow);
+    if (!expect(resolveType(&i32Type, invalidShadow) == TyI32,
+                "generic binding shadowed a predefined atomic type") ||
+        !expect(resolvedRaw && resolvedRaw->kind == TypeKind::RawPointer &&
+                    resolvedRaw->inner == TyI32,
+                "standalone resolver bypassed predefined formation rules"))
+        return 20;
+
+    auto predefinedCollision = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "struct i32 { value: i32; }\n"
+        "fn identity<i64>(value: i64) -> i64 { return value; }\n",
+        "file:///workspace/predefined_collision.luna");
+    const auto hasPredefinedDiagnostic = [&](const std::string& fragment) {
+        return std::any_of(
+            predefinedCollision.errors().begin(),
+            predefinedCollision.errors().end(),
+            [&](const auto& error) {
+                return error.code == "SEM0004" &&
+                    error.message.find(fragment) != std::string::npos;
+            });
+    };
+    if (!expect(!predefinedCollision.success(),
+                "predefined type collision was accepted") ||
+        !expect(hasPredefinedDiagnostic("cannot redefine predefined type 'i32'"),
+                "predefined declaration collision diagnostic is missing") ||
+        !expect(hasPredefinedDiagnostic("type parameter 'i64' conflicts"),
+                "predefined type-parameter collision diagnostic is missing"))
+        return 19;
+
+    auto valueNamespace = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "fn i32() -> i32 { return 32; }\n"
+        "fn main() -> i32 { return i32(); }\n",
+        "file:///workspace/predefined_value_name.luna");
+    if (!expect(valueNamespace.success(),
+                "predefined type name was incorrectly reserved in the value namespace"))
+        return 21;
 
     const std::string validSource =
         "package org.luna.test;\n"

@@ -77,7 +77,7 @@ path: src/codegen/CGHelpers.h
 **`llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const`**
 作用：按 `type->kind` 分派，把 Luna 类型映射为 LLVM 类型。要点：
 - 整数/浮点/布尔直接映射：I8 转 i8、U32 转 i32、F32 转 f32、Bool 转 i1。
-- `String`/`CStr`/`RawPointer`/`DeviceBuffer`/`Metadata`/`MetadataView`/`DeclarationView`/`DeclarationRef`/`Iterator` 都转通用指针 `ptrTy()`。
+- `String`/`CStr`/`RawPointer`/`Metadata`/`MetadataView`/`DeclarationView`/`DeclarationRef`/`Iterator` 转通用指针 `ptrTy()`；`DeviceBuffer` 转携带边界的 `{ptr, i64}` 值。
 - `Result` 与 `Enum` 转带标签结构 `{ tag, [N x i64] }`（tag 为 i32 或 bool，payload 按 `lua::layout::valueSize`/`enumPayloadSize` 定宽到 8 字节字）。
 - `Array` 转 `[len x inner]`；`Slice` 转 `{ptr, i64}`；`Record` 逐字段递归 `StructType`；`Closure` 转 `{code_ptr, captured...}`；`Reference`/`Struct`/`Function` 转指针；`Unit`/`Never` 转 void；`Event` 转 i32；未知种类回退 i32。
 - 谁调用：贯穿 codegen——`CodeGeneratorModule.cpp` 的 `declareFunc`、`CodeGeneratorFunctions.cpp`、`CodeGeneratorControlFlow.cpp`、`CodeGeneratorExpressions.cpp` 等。

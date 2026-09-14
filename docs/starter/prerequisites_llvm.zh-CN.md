@@ -147,7 +147,7 @@ Luna 拿到的 MoonIR 已经是**密封（sealed）后的规范 CFG**（见 ）�
 
 - `llvm::LLVMContext`：全局单例，持有 type id 与 metadata。
 - `llvm::Module`：一个“翻译单元”（可类比单个 `.o` 或 LLVM 里的 `.bc`），持有函数、全局变量、底层版。
-- `llvm::ExecutionEngine`/ORC `LLJIT`：运行时执行（JIT）。Luna 的 `jitRun()` 走 LLJIT；AOT 走 `emitObjectFile`。
+- `llvm::ExecutionEngine`/ORC `LLJIT`：运行时执行（JIT）。Luna 的 `jitRun()` 走 LLJIT；AOT 通过 `emitObjectFile` 保留 IR，并由 `emitNativeObjectFile` 生成链接输入。
 
 Luna `CodeGenerator` 成员：`std::unique_ptr<llvm::LLVMContext>`、`std::unique_ptr<llvm::Module>`、`std::unique_ptr<llvm::IRBuilder<>>`（即 `mBuilder`）、以及 `LunaOptimizationLevel`。
 

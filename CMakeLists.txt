@@ -10,16 +10,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(LLVM REQUIRED CONFIG)
+if(LLVM_VERSION_MAJOR LESS 20)
+    message(FATAL_ERROR
+        "Luna requires LLVM 20 or newer; found LLVM ${LLVM_PACKAGE_VERSION}.")
+endif()
 if(NOT TARGET LLVM)
     message(FATAL_ERROR
         "This LLVM installation does not export the monolithic LLVM target. "
         "Set LLVM_DIR to the matching LLVM CMake package or install LLVM development files.")
 endif()
+message(STATUS "Luna LLVM compatibility: ${LLVM_PACKAGE_VERSION} (minimum 20)")
 
-# Luna emits textual LLVM IR for AOT builds, so the native link driver must
-# understand LLVM IR even when Luna itself is compiled with GCC. Keep this
-# tool separate from CMAKE_CXX_COMPILER and make it overridable for packaged
-# or cross-toolchain test environments.
+# Luna emits the native object itself and uses a Clang-compatible driver for
+# the final platform/CRT link. Keep this tool separate from CMAKE_CXX_COMPILER
+# and make it overridable for packaged or cross-toolchain test environments.
 if(NOT DEFINED LUNA_AOT_COMPILER)
     find_program(LUNA_AOT_COMPILER
         NAMES clang++-${LLVM_VERSION_MAJOR} clang++
@@ -92,6 +96,13 @@ option(LUNA_ENABLE_ROCM_BENCHMARK "Run the large Luna versus C++23/HIP ROCm comp
 option(LUNA_ENABLE_CPU_BENCHMARK "Run common Luna versus C++23 CPU benchmarks" OFF)
 option(LUNA_ENABLE_BASIC_BENCHMARK "Run the lightweight Luna CPU baseline" OFF)
 option(LUNA_STRICT_WARNINGS "Treat compiler warnings in Luna-owned targets as errors" OFF)
+set(LUNA_SEPARATE_COMPILER_DEBUG_INFO_DEFAULT OFF)
+if(MINGW)
+    set(LUNA_SEPARATE_COMPILER_DEBUG_INFO_DEFAULT ON)
+endif()
+option(LUNA_SEPARATE_COMPILER_DEBUG_INFO
+    "Keep MinGW RelWithDebInfo compiler DWARF in a sibling .debug file"
+    ${LUNA_SEPARATE_COMPILER_DEBUG_INFO_DEFAULT})
 option(LUNA_ENABLE_SANITIZERS
     "Instrument the compiler and embedded JIT runtime with ASan/UBSan" OFF)
 option(LUNA_ENABLE_THREAD_SANITIZER
@@ -105,7 +116,14 @@ add_library(runtime STATIC
     src/runtime/ApplicationHostServices.cpp
     src/runtime/MoonRuntime.cpp
     src/runtime/RuntimeDescriptor.cpp
-    src/runtime/Runtime.cpp)
+    src/runtime/Runtime.cpp
+    src/runtime/RuntimeGpu.cpp)
+if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
+    # The runtime is a static archive consumed by AOT applications. Keep each
+    # function and datum independently discardable so the final native link
+    # does not retain an entire runtime translation unit for one ABI symbol.
+    target_compile_options(runtime PRIVATE -ffunction-sections -fdata-sections)
+endif()
 
 add_library(runtime-abi-c-compile OBJECT tests/runtime_abi_c_compile.c)
 target_include_directories(runtime-abi-c-compile PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -173,9 +191,20 @@ add_executable(symbol-catalog-test
 target_include_directories(symbol-catalog-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
+add_executable(builtin-types-test
+    tests/builtin_types_test.cpp
+    src/core/TypeLayout.cpp
+    src/core/TypeRelations.cpp
+    src/sema/PredefinedTypes.cpp
+    src/sema/SymbolTable.cpp
+    src/sema/TypeSystem.cpp)
+target_include_directories(builtin-types-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
 add_executable(native-artifact-test
     tests/native_artifact_test.cpp
     src/driver/NativeArtifact.cpp
+    src/driver/NativeArtifactLoading.cpp
     src/driver/NativeGeneration.cpp
     src/runtime/MoonRuntime.cpp)
 target_include_directories(native-artifact-test
@@ -202,23 +231,43 @@ add_library(luna-frontend OBJECT
     src/core/TypeLayout.cpp
     src/lexer/Lexer.cpp
     src/parser/Parser.cpp
+    src/parser/ParserExpressions.cpp
+    src/parser/ParserStatements.cpp
+    src/parser/ParserTypes.cpp
     src/sema/TypeSystem.cpp
+    src/sema/PredefinedTypes.cpp
     src/sema/SymbolTable.cpp
     src/sema/SemanticAnalyzer.cpp
     src/sema/BodyAnalyzer.cpp
+    src/sema/BodyAnalyzerCalls.cpp
+    src/sema/BodyAnalyzerExpressions.cpp
+    src/sema/BodyAnalyzerIntrinsics.cpp
+    src/sema/BodyAnalyzerMemberCalls.cpp
+    src/sema/BodyAnalyzerStatements.cpp
+    src/sema/BodyAnalyzerPatterns.cpp
+    src/sema/BodyAnalyzerClosures.cpp
+    src/sema/CompileTimeConstEvaluator.cpp
     src/sema/CompileTimeEvaluator.cpp
+    src/sema/CompileTimeSelectorEvaluator.cpp
     src/sema/ControlAnalyzer.cpp
     src/sema/DeclarationCollector.cpp
     src/sema/SemanticContext.cpp
+    src/sema/SemanticContextDelegation.cpp
     src/sema/SemanticContextAccess.cpp
     src/sema/TypeResolver.cpp
+    src/sema/TypeResolverMonomorphization.cpp
     src/sema/TraitChecker.cpp
     src/sema/OwnershipChecker.cpp
+    src/sema/OwnershipCheckerFunctions.cpp
+    src/sema/OwnershipCheckerControlFlow.cpp
+    src/sema/OwnershipCheckerExpressions.cpp
+    src/sema/OwnershipCheckerState.cpp
     src/selector/Selector.cpp
     src/instantiation/Instantiator.cpp
     src/macro/MacroProcessor.cpp
     src/package/Package.cpp
     src/package/PackageManager.cpp
+    src/package/PackageParsing.cpp
     src/tooling/AnalysisSnapshot.cpp
     src/tooling/ReferenceIndex.cpp
     src/tooling/SymbolIndex.cpp
@@ -235,8 +284,17 @@ add_executable(moon-container-model-test
     tests/moon_container_model_test.cpp
     src/moonir/Container.cpp
     src/moonir/ContainerModel.cpp
+    src/moonir/ContainerModelCode.cpp
+    src/moonir/ContainerModelOpcodes.cpp
+    src/moonir/ContainerModelProjection.cpp
+    src/moonir/ContainerModelSections.cpp
     src/moonir/MoonIR.cpp
     src/moonir/Verifier.cpp
+    src/moonir/VerifierControlFlow.cpp
+    src/moonir/VerifierOwnership.cpp
+    src/moonir/VerifierModule.cpp
+    src/moonir/VerifierStructured.cpp
+    src/moonir/VerifierExpressions.cpp
     $<TARGET_OBJECTS:luna-frontend>
 )
 target_include_directories(moon-container-model-test
@@ -253,8 +311,17 @@ if(LUNA_ENABLE_FUZZING)
         tests/moon_container_fuzz.cpp
         src/moonir/Container.cpp
         src/moonir/ContainerModel.cpp
+        src/moonir/ContainerModelCode.cpp
+        src/moonir/ContainerModelOpcodes.cpp
+        src/moonir/ContainerModelProjection.cpp
+        src/moonir/ContainerModelSections.cpp
         src/moonir/MoonIR.cpp
         src/moonir/Verifier.cpp
+        src/moonir/VerifierControlFlow.cpp
+        src/moonir/VerifierOwnership.cpp
+        src/moonir/VerifierModule.cpp
+        src/moonir/VerifierStructured.cpp
+        src/moonir/VerifierExpressions.cpp
         $<TARGET_OBJECTS:luna-frontend>
     )
     target_include_directories(moon-container-fuzz
@@ -272,30 +339,69 @@ endif()
 
 add_executable(moonir-canonical-test
     tests/moonir_canonical_test.cpp
+    tests/moonir_canonical_control_flow_test.cpp
+    tests/moonir_canonical_iterator_test.cpp
+    tests/moonir_canonical_iterator_recipes_test.cpp
+    tests/moonir_canonical_iterator_terminals_test.cpp
+    tests/moonir_canonical_iterator_ordering_test.cpp
+    tests/moonir_canonical_iterator_cleanup_test.cpp
+    tests/moonir_canonical_closure_test.cpp
+    tests/moonir_canonical_pipeline_test.cpp
+    tests/moonir_canonical_sealing_test.cpp
+    tests/moonir_canonical_sealing_functions_test.cpp
+    tests/moonir_canonical_sealing_composition_test.cpp
+    tests/moonir_canonical_sealing_lowering_test.cpp
+    tests/moonir_canonical_sealing_symbols_test.cpp
+    tests/moonir_canonical_sealing_iterators_test.cpp
     src/driver/MoonGeneration.cpp
     src/moonir/Container.cpp
     src/moonir/ContainerModel.cpp
+    src/moonir/ContainerModelCode.cpp
+    src/moonir/ContainerModelOpcodes.cpp
+    src/moonir/ContainerModelProjection.cpp
+    src/moonir/ContainerModelSections.cpp
     src/moonir/ControlFlowBuilder.cpp
+    src/moonir/ControlFlowBuilderBuild.cpp
+    src/moonir/ControlFlowBuilderClone.cpp
+    src/moonir/ControlFlowBuilderExpressions.cpp
+    src/moonir/ControlFlowBuilderExpressionAnalysis.cpp
+    src/moonir/ControlFlowBuilderIterators.cpp
+    src/moonir/ControlFlowBuilderIteratorLowering.cpp
+    src/moonir/ControlFlowBuilderTerminals.cpp
+    src/moonir/ControlFlowBuilderCleanup.cpp
     src/moonir/Lowering.cpp
+    src/moonir/LoweringDeclarations.cpp
+    src/moonir/LoweringExpressions.cpp
     src/moonir/MoonIR.cpp
     src/moonir/Sealer.cpp
     src/moonir/Verifier.cpp
+    src/moonir/VerifierControlFlow.cpp
+    src/moonir/VerifierOwnership.cpp
+    src/moonir/VerifierModule.cpp
+    src/moonir/VerifierStructured.cpp
+    src/moonir/VerifierExpressions.cpp
     src/codegen/CGHelpers.cpp
     src/codegen/CodeGenerator.cpp
+    src/codegen/CodeGeneratorCalls.cpp
+    src/codegen/CodeGeneratorCanonicalCleanup.cpp
     src/codegen/CodeGeneratorCleanup.cpp
     src/codegen/CodeGeneratorControlFlow.cpp
     src/codegen/CodeGeneratorExecution.cpp
     src/codegen/CodeGeneratorExpressions.cpp
     src/codegen/CodeGeneratorFunctions.cpp
     src/codegen/CodeGeneratorGpu.cpp
+    src/codegen/CodeGeneratorGpuRuntime.cpp
     src/codegen/CodeGeneratorIterator.cpp
+    src/codegen/CodeGeneratorIteratorTerminals.cpp
     src/codegen/CodeGeneratorModule.cpp
+    src/codegen/CodeGeneratorOwnershipExpressions.cpp
     src/codegen/CodeGeneratorRangeAnalysis.cpp
     src/codegen/CodeGeneratorRuntimeDescriptors.cpp
     src/runtime/ApplicationHostServices.cpp
     src/runtime/MoonRuntime.cpp
     src/runtime/RuntimeDescriptor.cpp
     src/runtime/Runtime.cpp
+    src/runtime/RuntimeGpu.cpp
     src/driver/CompilerPipeline.cpp
     src/moonir/Optimizer.cpp
     $<TARGET_OBJECTS:luna-frontend>
@@ -315,37 +421,95 @@ add_executable(luna
     src/driver/CommandLine.cpp
     src/driver/CompilerPipeline.cpp
     src/driver/Driver.cpp
+    src/driver/DriverSupport.cpp
     src/driver/MoonGeneration.cpp
     src/driver/NativeArtifact.cpp
+    src/driver/NativeArtifactLoading.cpp
     src/driver/NativeGeneration.cpp
     src/driver/Repl.cpp
+    src/driver/ReplExecution.cpp
+    src/driver/ReplProcess.cpp
+    src/driver/ReplProtocol.cpp
+    src/driver/ReplTiming.cpp
+    src/driver/ReplTransport.cpp
+    src/driver/ReplWorker.cpp
     $<TARGET_OBJECTS:luna-frontend>
     src/moonir/ControlFlowBuilder.cpp
+    src/moonir/ControlFlowBuilderBuild.cpp
+    src/moonir/ControlFlowBuilderClone.cpp
+    src/moonir/ControlFlowBuilderExpressions.cpp
+    src/moonir/ControlFlowBuilderExpressionAnalysis.cpp
+    src/moonir/ControlFlowBuilderIterators.cpp
+    src/moonir/ControlFlowBuilderIteratorLowering.cpp
+    src/moonir/ControlFlowBuilderTerminals.cpp
+    src/moonir/ControlFlowBuilderCleanup.cpp
     src/moonir/Container.cpp
     src/moonir/ContainerModel.cpp
+    src/moonir/ContainerModelCode.cpp
+    src/moonir/ContainerModelOpcodes.cpp
+    src/moonir/ContainerModelProjection.cpp
+    src/moonir/ContainerModelSections.cpp
     src/moonir/MoonIR.cpp
     src/moonir/Lowering.cpp
+    src/moonir/LoweringDeclarations.cpp
+    src/moonir/LoweringExpressions.cpp
     src/moonir/Verifier.cpp
+    src/moonir/VerifierControlFlow.cpp
+    src/moonir/VerifierOwnership.cpp
+    src/moonir/VerifierModule.cpp
+    src/moonir/VerifierStructured.cpp
+    src/moonir/VerifierExpressions.cpp
     src/moonir/Optimizer.cpp
     src/moonir/Printer.cpp
     src/moonir/Sealer.cpp
     src/codegen/CGHelpers.cpp
     src/codegen/CodeGenerator.cpp
+    src/codegen/CodeGeneratorCalls.cpp
+    src/codegen/CodeGeneratorCanonicalCleanup.cpp
     src/codegen/CodeGeneratorCleanup.cpp
     src/codegen/CodeGeneratorControlFlow.cpp
     src/codegen/CodeGeneratorExecution.cpp
     src/codegen/CodeGeneratorExpressions.cpp
     src/codegen/CodeGeneratorFunctions.cpp
     src/codegen/CodeGeneratorGpu.cpp
+    src/codegen/CodeGeneratorGpuRuntime.cpp
     src/codegen/CodeGeneratorIterator.cpp
+    src/codegen/CodeGeneratorIteratorTerminals.cpp
     src/codegen/CodeGeneratorModule.cpp
+    src/codegen/CodeGeneratorOwnershipExpressions.cpp
     src/codegen/CodeGeneratorRangeAnalysis.cpp
     src/codegen/CodeGeneratorRuntimeDescriptors.cpp
     src/runtime/ApplicationHostServices.cpp
     src/runtime/MoonRuntime.cpp
     src/runtime/RuntimeDescriptor.cpp
     src/runtime/Runtime.cpp
+    src/runtime/RuntimeGpu.cpp
 )
+
+if(BUILD_TESTING)
+    add_library(repl-worker-process-tree-helper SHARED
+        tests/repl_worker_process_tree.cpp)
+    target_compile_definitions(repl-worker-process-tree-helper PRIVATE
+        LUNA_REPL_PROCESS_TREE_LIBRARY=1)
+    target_link_libraries(repl-worker-process-tree-helper PRIVATE Threads::Threads)
+    add_executable(repl-worker-descendant
+        tests/repl_worker_process_tree.cpp)
+    target_link_libraries(repl-worker-descendant PRIVATE Threads::Threads)
+    add_executable(repl-delayed-input
+        tests/repl_worker_process_tree.cpp)
+    target_compile_definitions(repl-delayed-input PRIVATE
+        LUNA_REPL_DELAYED_INPUT=1)
+    target_link_libraries(repl-delayed-input PRIVATE Threads::Threads)
+endif()
+
+add_executable(repl-protocol-test
+    tests/repl_protocol_test.cpp
+    src/driver/ReplProtocol.cpp)
+target_include_directories(repl-protocol-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_include_directories(repl-protocol-test SYSTEM PRIVATE
+    ${LLVM_INCLUDE_DIRS})
+target_link_libraries(repl-protocol-test PRIVATE LLVM)
 
 if(LUNA_STRICT_WARNINGS)
     set(luna_warning_targets
@@ -362,7 +526,9 @@ if(LUNA_STRICT_WARNINGS)
         source-manager-test
         core-contracts-test
         symbol-catalog-test
+        builtin-types-test
         native-artifact-test
+        repl-protocol-test
         moon-container-test
         moon-container-model-test
         luna-frontend
@@ -370,6 +536,12 @@ if(LUNA_STRICT_WARNINGS)
         moonir-canonical-test
         luna
     )
+    if(BUILD_TESTING)
+        list(APPEND luna_warning_targets
+            repl-worker-process-tree-helper
+            repl-worker-descendant
+            repl-delayed-input)
+    endif()
     if(LUNA_ENABLE_FUZZING)
         list(APPEND luna_warning_targets moon-container-fuzz)
     endif()
@@ -394,7 +566,7 @@ if(LUNA_ENABLE_SANITIZERS)
     foreach(target IN ITEMS
             luna luna-frontend analysis-snapshot-test moonir-canonical-test
             moon-container-test moon-container-model-test moon-runtime-test
-            native-artifact-test runtime-descriptor-test)
+            native-artifact-test runtime-descriptor-test builtin-types-test)
         target_compile_options(${target} PRIVATE
             -fsanitize=address,undefined
             -fno-omit-frame-pointer)
@@ -421,6 +593,9 @@ if(LUNA_ENABLE_SANITIZERS)
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
     target_link_options(runtime-descriptor-test PRIVATE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer)
+    target_link_options(builtin-types-test PRIVATE
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
 endif()
@@ -470,10 +645,38 @@ endif()
 # export every compiler symbol merely to make in-process JIT work: that policy
 # is unreliable on Windows and unnecessarily enlarges the host symbol surface.
 
+set(LUNA_SEPARATE_COMPILER_DEBUG_INFO_ACTIVE OFF)
+if(MINGW AND LUNA_SEPARATE_COMPILER_DEBUG_INFO AND
+   CMAKE_BUILD_TYPE STREQUAL "RelWithDebInfo")
+    set(LUNA_SEPARATE_COMPILER_DEBUG_INFO_ACTIVE ON)
+    find_program(LUNA_LLVM_OBJCOPY
+        NAMES llvm-objcopy
+        HINTS ${LLVM_TOOLS_BINARY_DIR}
+        REQUIRED)
+    find_program(LUNA_LLVM_STRIP
+        NAMES llvm-strip
+        HINTS ${LLVM_TOOLS_BINARY_DIR}
+        REQUIRED)
+    set(LUNA_COMPILER_DEBUG_FILE "$<TARGET_FILE:luna>.debug")
+    add_custom_command(TARGET luna POST_BUILD
+        COMMAND "${LUNA_LLVM_OBJCOPY}" --only-keep-debug
+                "$<TARGET_FILE:luna>" "${LUNA_COMPILER_DEBUG_FILE}"
+        COMMAND "${LUNA_LLVM_STRIP}" --strip-debug "$<TARGET_FILE:luna>"
+        COMMAND "${LUNA_LLVM_OBJCOPY}"
+                "--add-gnu-debuglink=${LUNA_COMPILER_DEBUG_FILE}"
+                "$<TARGET_FILE:luna>"
+        COMMENT "Separating Luna compiler DWARF from the MinGW executable"
+        VERBATIM)
+endif()
+
 install(TARGETS luna runtime
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR}
 )
+if(LUNA_SEPARATE_COMPILER_DEBUG_INFO_ACTIVE)
+    install(FILES "${CMAKE_CURRENT_BINARY_DIR}/luna.exe.debug"
+        DESTINATION ${CMAKE_INSTALL_BINDIR})
+endif()
 install(FILES src/runtime/Evolution.h src/runtime/MoonRuntime.h
               src/runtime/NativeArtifactABI.h
               src/runtime/RuntimeABI.h src/runtime/RuntimeDescriptorABI.h
@@ -487,6 +690,14 @@ install(DIRECTORY stdlib/ DESTINATION ${CMAKE_INSTALL_DATADIR}/luna/stdlib)
 
 if(BUILD_TESTING)
     find_package(Python3 3.8 REQUIRED COMPONENTS Interpreter)
+    add_test(
+        NAME luna.builtin-types
+        COMMAND $<TARGET_FILE:builtin-types-test>
+    )
+    add_test(
+        NAME luna.repl-protocol
+        COMMAND $<TARGET_FILE:repl-protocol-test>
+    )
     add_test(
         NAME luna.analysis-snapshot
         COMMAND $<TARGET_FILE:analysis-snapshot-test>
@@ -694,6 +905,10 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
+            -DLUNA_REPL_PROCESS_TREE_LIBRARY=$<TARGET_FILE:repl-worker-process-tree-helper>
+            -DLUNA_REPL_DESCENDANT_EXECUTABLE=$<TARGET_FILE:repl-worker-descendant>
+            -DLUNA_REPL_DELAYED_INPUT_EXECUTABLE=$<TARGET_FILE:repl-delayed-input>
+            -DLUNA_REPL_MEMORY_LIMIT_ENFORCED=$<NOT:$<BOOL:${LUNA_ENABLE_SANITIZERS}>>
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/repl_smoke.cmake
     )
     add_test(
@@ -905,6 +1120,7 @@ if(BUILD_TESTING)
             -DLUNA_CMAKE_GENERATOR=${CMAKE_GENERATOR}
             -DLUNA_EXECUTABLE_SUFFIX=${CMAKE_EXECUTABLE_SUFFIX}
             -DLUNA_RUNTIME_FILE=$<TARGET_FILE_NAME:runtime>
+            -DLUNA_EXPECT_SEPARATE_DEBUG_INFO=${LUNA_SEPARATE_COMPILER_DEBUG_INFO_ACTIVE}
             -DLUNA_INSTALL_BINDIR=${CMAKE_INSTALL_BINDIR}
             -DLUNA_INSTALL_LIBDIR=${CMAKE_INSTALL_LIBDIR}
             -DLUNA_INSTALL_INCLUDEDIR=${CMAKE_INSTALL_INCLUDEDIR}

@@ -6,7 +6,7 @@ Default implementation of Luna runtime C ABI entry points, covering host-service
 
 - Implements all `rt_*` functions declared in `Runtime.h`.
 - Provides default `LunaHostServicesV1`, `LunaAllocatorV1`, and `LunaConsoleV1` instances (`defaultHostServices`, `defaultAllocator`, `defaultConsole`).
-- Provides the application-level host services `applicationHostServices`, including console input and the file system.
+- Provides the lightweight default allocator/output host profile and the publication state used by the lazily linked full application profile.
 - Implements single-shot installation and a three-phase lifecycle for host services via `std::atomic` (0 = configurable, -1 = installing, 1 = active).
 - Manages GPU runtime state (`GpuRuntimeState`): function-static local variables within the anonymous namespace hold the CUDA Driver API and HIP API function pointers, which are dynamically loaded (`dlopen`/ `LoadLibrary`) only when the user selects the `cuda`/ `rocm` backend.
 - Implements GPU profiling (`LUNA_GPU_PROFILE=1`): reports cumulative kernel time via `std::atexit` at process exit.
@@ -31,7 +31,7 @@ Default implementation of Luna runtime C ABI entry points, covering host-service
 | Constant | Value | Purpose |
 |---|---|---|
 | `defaultHostServices` | `LunaHostServicesV1` | Default host services, providing only the allocator + console output |
-| `applicationHostServices` | `LunaHostServicesV1` | Application-level host services, additionally providing console input + file system |
+| `defaultHostServices` | `LunaHostServicesV1` | Lightweight allocator + console-output profile used unless a host or full application profile is installed |
 | `hostServicesPhase` | `std::atomic<int>` | Three phases: 0 = configurable, -1 = installing, 1 = active |
 
 ## Key Functions and Methods
@@ -84,7 +84,7 @@ Default implementation of Luna runtime C ABI entry points, covering host-service
 
 - **Runtime.h** — Declarations of all functions implemented by this file. `Runtime.cpp` `#include`s it directly.
 - **RuntimeABI.h** — Provides the definitions of structs such as `LunaHostServicesV1` and all the `LUNA_*` constant macros. `Runtime.cpp` `#include`s it directly.
-- **ApplicationHostServices.h** — Provides `lunaApplicationConsoleV1` / `lunaApplicationFileSystemV1`, used to construct the `applicationHostServices` constant.
+- **ApplicationHostServices.h** — Provides the lazily linked console-input/filesystem profile and delegates its validated publication to Runtime state.
 - **Generated IR** — Compiler-generated code calls the `rt_*` functions implemented by this file at runtime.
 - This file does not depend on any Luna compiler internals; it depends only on the standard C/C++ runtime and the platform dynamic-loading APIs.
 
@@ -136,7 +136,7 @@ This file defines no structs; all struct definitions live in `RuntimeABI.h`. Thi
 | Function | Purpose |
 |---|---|
 | `rt_install_host_services_v1` | Installs a custom host service descriptor; must be called before the first runtime service use; passing `nullptr` is rejected |
-| `rt_install_application_host_services_v1` | Installs process-level console input + file system services, for use by ordinary generated Luna application entry points |
+| `rt_install_application_host_services_v1` | Lazily installs process-level console input + filesystem services when generated code actually requires that profile |
 | `rt_host_services_v1` | Returns the currently installed `LunaHostServicesV1*` |
 
 ### Memory management
@@ -162,8 +162,8 @@ This file defines no structs; all struct definitions live in `RuntimeABI.h`. Thi
 |---|---|
 | `rt_gpu_initialize` | Initializes the backend according to `LUNA_GPU_BACKEND` (`sim`/ `cuda`/ `rocm`) |
 | `rt_gpu_backend_name` / `rt_gpu_backend_is_cuda` / `rt_gpu_backend_is_rocm` | Query the current backend type |
-| `rt_gpu_alloc_i32` / `rt_gpu_free` | Device memory allocation/deallocation (`int32_t` elements) |
-| `rt_gpu_load_i32` / `rt_gpu_store_i32` | Scalar read/write (plain memory on the simulator, device pointers for CUDA/ROCm) |
+| `rt_gpu_alloc_i32` / `rt_gpu_free` | Device memory allocation/deallocation with a `{data, length}` carrier; scalar call parameters avoid platform aggregate-ABI differences |
+| `rt_gpu_load_i32` / `rt_gpu_store_i32` | Bounds-validated scalar read/write (plain memory on the simulator, device pointers for CUDA/ROCm) |
 | `rt_gpu_copy_from_host_i32` / `rt_gpu_copy_to_host_i32` | Bulk host <-> device transfers |
 | `rt_gpu_launch_ptx` / `rt_gpu_launch_hsaco` | Launch kernels emitted by LLVM as PTX or HSA Code Object |
 | `rt_gpu_await_event` | Waits for a kernel event to complete (returns 1 on success, 0 on failure) |
@@ -171,8 +171,8 @@ This file defines no structs; all struct definitions live in `RuntimeABI.h`. Thi
 ## Relationship to Surrounding Files and Pipeline Stages
 
 - **RuntimeABI.h** — Source of the struct definitions used in all function signatures in this file. `Runtime.h` `#include`s it directly.
-- **Runtime.cpp** — Implementation of all declarations in this file. Every `rt_*` function has a corresponding definition in `Runtime.cpp`.
-- **ApplicationHostServices.h/.cpp** — Provide `lunaApplicationConsoleV1` / `lunaApplicationFileSystemV1`, used by `rt_install_application_host_services_v1`.
+- **Runtime.cpp / RuntimeGpu.cpp** — Implement the lightweight core/host forwarding and the separately isolated GPU ABI.
+- **ApplicationHostServices.h/.cpp** — Implement `rt_install_application_host_services_v1` and the native console-input/filesystem adapters in a separate archive member.
 - **Generated IR** — Compiler-generated code calls verified `rt_*` functions such as `rt_alloc`, `rt_array_index_or_abort`, and `rt_gpu_*`.
 
 ## Further Reading

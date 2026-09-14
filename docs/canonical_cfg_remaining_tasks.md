@@ -7,7 +7,7 @@
 > CompilerPipeline seals canonical CFG unconditionally and the structured
 > executable-body backend has been deleted.
 
-## Sealer coverage: complete registered 60-test gate passes
+## Sealer coverage: complete registered CTest gate passes
 
 ## Remaining tasks (by priority)
 

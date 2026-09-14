@@ -1,0 +1,19 @@
+fn identity(value) {
+    return value;
+}
+
+fn annotated_auto(value: auto) -> auto {
+    return value;
+}
+
+fn generic_identity<T>(value: T) -> T {
+    return value;
+}
+
+fn add(left, right) {
+    return left + right;
+}
+
+fn main() {
+    return add(annotated_auto(identity(20)), generic_identity(22));
+}

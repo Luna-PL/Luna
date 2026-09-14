@@ -1216,6 +1216,7 @@ outer projected guarded cleanup，未消费和条件提前返回会按元素正�
 | 15 | P4 | 完成最小 generation staging/activation/rollback | 已确认的最小进化闭环通过 |
 | 16 | P4 | 全仓审计 Dynamic、旧 Rc/Arc、旧 slot/plugin 等遗留表面 | 各新实现已原子删除对应旧路径；生产代码无 0.2 compatibility branch |
 | 17 | P5 | 同步 formatter、LSP、Lunax、文档、benchmark 和发布门 | 生态只面向 0.3 新语义 |
+| 18 | P5 | 建立全工具链性能预算，并优先优化循环与数组 | 版本化 AOT/JIT 基线通过，且不弱化边界、所有权、诊断或 ABI 契约 |
 
 每个阶段必须同时增加正例、负例、MoonIR/ABI 证据和按需付费检查。回滚依赖版本控制，
 不通过在生产编译器中永久保留旧路径实现。

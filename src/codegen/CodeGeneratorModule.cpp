@@ -1,16 +1,62 @@
 #include "CodeGenerator.h"
 
+#include <llvm/Config/llvm-config.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/MC/TargetRegistry.h>
 #include <llvm/Passes/OptimizationLevel.h>
 #include <llvm/Passes/PassBuilder.h>
+#include <llvm/Support/CodeGen.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Target/TargetMachine.h>
+#include <llvm/TargetParser/Host.h>
+
+#include <memory>
+#include <optional>
 
 using moon::FunctionDecl;
 using moon::ImplDecl;
 
+namespace {
+
+std::unique_ptr<llvm::TargetMachine> createHostOptimizationTarget(
+    llvm::Module& module, LunaOptimizationLevel level, std::string& error) {
+    const std::string targetTriple = llvm::sys::getProcessTriple();
+#if LLVM_VERSION_MAJOR >= 22
+    const llvm::Target* target = llvm::TargetRegistry::lookupTarget(
+        llvm::Triple(targetTriple), error);
+    module.setTargetTriple(llvm::Triple(targetTriple));
+#else
+    const llvm::Target* target = llvm::TargetRegistry::lookupTarget(
+        targetTriple, error);
+    module.setTargetTriple(targetTriple);
+#endif
+    if (!target) return nullptr;
+
+    llvm::TargetOptions options;
+    std::unique_ptr<llvm::TargetMachine> machine(target->createTargetMachine(
+#if LLVM_VERSION_MAJOR >= 22
+        llvm::Triple(targetTriple), "generic", "", options,
+#else
+        targetTriple, "generic", "", options,
+#endif
+        llvm::Reloc::PIC_, std::nullopt,
+        level == LunaOptimizationLevel::O3
+            ? llvm::CodeGenOptLevel::Aggressive
+            : llvm::CodeGenOptLevel::Default));
+    if (!machine) {
+        error = "could not create the LLVM host target machine";
+        return nullptr;
+    }
+    module.setDataLayout(machine->createDataLayout());
+    return machine;
+}
+
+} // namespace
+
 bool CodeGenerator::generate(moon::Module* program) {
     mProgram = program;
+    mHostTargetMachine.reset();
     mTypeMaterializer = std::make_unique<moon::TypeMaterializer>(*program);
     mFunctions.clear();
     mDropCallbacks.clear();
@@ -23,7 +69,17 @@ bool CodeGenerator::generate(moon::Module* program) {
         if (!f->typeParams.empty() && !f->isTemplateInstance) return;
         std::vector<llvm::Type*> paramLLVMTypes;
         for (auto& p : f->params) {
-            paramLLVMTypes.push_back(mHelpers->toLLVMType(resolveType(p.type)));
+            const TypePtr type = resolveType(p.type);
+            if (f->isKernel && type && type->kind == TypeKind::Reference &&
+                type->inner && type->inner->kind == TypeKind::DeviceBuffer) {
+                // Native GPU ABIs handle scalar parameters predictably. Keep
+                // the bounds-carrying source value explicit as (data, length)
+                // instead of relying on target-specific aggregate lowering.
+                paramLLVMTypes.push_back(mHelpers->ptrTy());
+                paramLLVMTypes.push_back(mHelpers->sizeTy());
+            } else {
+                paramLLVMTypes.push_back(mHelpers->toLLVMType(type));
+            }
         }
         const TypePtr returnType = resolveType(f->returnType);
         llvm::Type* retLLVMType = returnType
@@ -120,11 +176,23 @@ bool CodeGenerator::generate(moon::Module* program) {
     if (mErrors.empty() && verifyHostModule("")) return false;
 
     if (mErrors.empty() && mOptimizationLevel != LunaOptimizationLevel::O0) {
+        std::string targetError;
+        mHostTargetMachine = createHostOptimizationTarget(
+            *mModule, mOptimizationLevel, targetError);
+        if (!mHostTargetMachine) {
+            error("cannot configure target-aware host optimization: " +
+                  targetError);
+            return false;
+        }
         llvm::LoopAnalysisManager loopAnalyses;
         llvm::FunctionAnalysisManager functionAnalyses;
         llvm::CGSCCAnalysisManager cgsccAnalyses;
         llvm::ModuleAnalysisManager moduleAnalyses;
-        llvm::PassBuilder passBuilder;
+        // Supplying the target machine is what makes TTI available to the
+        // vectorizer and loop cost model. Without it, JIT code is optimized
+        // generically and AOT only recovers after clang runs a second O2/O3
+        // middle-end pipeline over the emitted IR.
+        llvm::PassBuilder passBuilder(mHostTargetMachine.get());
         passBuilder.registerModuleAnalyses(moduleAnalyses);
         passBuilder.registerCGSCCAnalyses(cgsccAnalyses);
         passBuilder.registerFunctionAnalyses(functionAnalyses);
@@ -137,7 +205,37 @@ bool CodeGenerator::generate(moon::Module* program) {
                 : llvm::OptimizationLevel::O2;
         auto pipeline = passBuilder.buildPerModuleDefaultPipeline(level);
         pipeline.run(*mModule, moduleAnalyses);
-        if (verifyHostModule(" after optimization")) return false;
     }
+
+    // Runtime's lightweight default profile already owns allocation and
+    // console output. Install the heavier application profile only for input,
+    // filesystem, direct host-service access, or the currently conservative
+    // GPU application boundary. In particular, print-only programs must not
+    // pull the file registry into their native artifact.
+    bool needsApplicationHost = mProgram && mProgram->features.kernel;
+    for (const auto& function : *mModule) {
+        if (function.use_empty()) continue;
+        const llvm::StringRef name = function.getName();
+        if (name == "rt_console_read_v1" ||
+            name == "rt_console_read_line_lossy_v1" ||
+            name.starts_with("rt_file_") || name.starts_with("rt_path_") ||
+            name == "rt_remove_file_v1" || name == "rt_create_directory_v1" ||
+            name == "rt_host_services_v1") {
+            needsApplicationHost = true;
+            break;
+        }
+    }
+    if (needsApplicationHost) {
+        if (auto* mainFunction = mModule->getFunction("main");
+            mainFunction && !mainFunction->empty()) {
+            auto installApplicationHost = mModule->getOrInsertFunction(
+                "rt_install_application_host_services_v1", mHelpers->i32Ty());
+            llvm::IRBuilder<> entryBuilder(&*mainFunction->getEntryBlock().getFirstInsertionPt());
+            entryBuilder.CreateCall(installApplicationHost);
+        }
+    }
+    if (mOptimizationLevel != LunaOptimizationLevel::O0 &&
+        verifyHostModule(" after optimization"))
+        return false;
     return mErrors.empty();
 }

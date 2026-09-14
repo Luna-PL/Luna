@@ -94,11 +94,10 @@ owns its hidden state. Consuming move-only arrays use per-element initialization
 bits; `filter`/`take` clean rejected items, and `map` may produce move-only
 outputs or consume move-only inputs through an explicit owning parameter.
 Lambda bodies now receive path-sensitive ownership checking, while
-`fold`/`for_each`/`count` own hidden move-only terminal recipe state. The current
-structured LLVM path uses an initialization bit for a move-only affine fold
-accumulator. Its completed canonical-CFG replacement instead proves
-move/reinitialization/final transfer statically with one synthetic local and no
-runtime flag; that CFG is not yet the sole backend body. Linear accumulators remain
+`fold`/`for_each`/`count` own hidden move-only terminal recipe state. The sole
+canonical-CFG backend proves move/reinitialization/final transfer for a move-only
+affine fold accumulator statically with one synthetic local and no runtime
+initialization flag. Linear accumulators remain
 a staged boundary. `C016` closure environments support Copy capture and explicit
 Affine/Linear move capture; borrowed capture remains rejected. No-capture recipes,
 including recipes that own move-only array sources, can now materialize as affine,

@@ -32,7 +32,7 @@ Luna 将静态、无额外运行时开销的语言机制，与需要显式选择
 
 0.3 迁移已经完成 Sema 拆分、具名类型默认名义化、usage block、通用
 Resource/Drop contract，以及由库拥有的 `Rc`/`Arc`。唯一 MoonIR 现在无条件把可执行函数体
-seal 为 canonical table 与 CFG；当前受支持表面已通过完整 61 项门禁，
+seal 为 canonical table 与 CFG；当前受支持表面已通过完整注册 CTest 门禁，
 包括 move-only iterator 的逐元素清理。SF006 模块级名义 slot 与静态 single-shot
 interceptor/context continuation 已可 canonical 执行；multi-shot/dynamic 源码形式和持久
 外部插件 continuation callback 均不在 0.3 表面。host-specific Moon
@@ -138,7 +138,7 @@ package 目录：
 | `luna analyze <输入> --message-format=json` | 输出语义工具快照，可从 stdin 读取一个或多个源码 overlay。 |
 | `luna run <输入> [-O0\|-O2\|-O3]` | 使用 JIT 编译并运行程序。 |
 | `luna build <package> [-O0\|-O2\|-O3] [-t native\|moon\|cffi]` | 生成所选的 native、Moon Container 或 CFFI 产物。 |
-| `luna repl` | 启动有限 Alpha REPL（`=`、`:decl`、单行语句）。 |
+| `luna repl` | 启动 worker 隔离的 Alpha REPL（`=`、`:type`、事务化声明、显式多行 cell）。 |
 
 驱动还提供显式链接、运行时库、MoonIR 导出、成本报告和 GPU target 选项。
 运行时后端选择与设备代码生成是两个独立决策。完整参数、环境变量和示例见
@@ -173,7 +173,8 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
    slot/plugin 与 console 路径；
 2. 优先级第 17 项正在让 formatter、LSP、Lunax、package、benchmark、文档与
    release gate 只面向最终 0.3 语义；在兼容的 toolchain 与 Lunax release 写入
-   ecosystem lock 前，根仓发布保持阻断。
+   ecosystem lock 前，根仓发布保持阻断；
+3. 优先级第 18 项将建立全工具链性能预算，优先处理循环和数组吞吐，同时保持安全检查。
 
 详细实现顺序与完成门见[0.3 总体设计](docs/luna_0.3_design.zh-CN.md#9-实现优先级)。
 

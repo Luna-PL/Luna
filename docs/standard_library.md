@@ -263,9 +263,10 @@ preserving partial-operation and `Interrupted` behavior. Text decoding is explic
 
 `Stdin`, `Stdout`, and `Stderr` are ordinary host handles implementing these protocols. The
 extended Runtime Console v1 contract supports stdout/stderr writes, flushes, and optional
-stdin reads. The minimal Runtime default does not advertise input; an ordinary generated
-application explicitly installs the native application profile, while an embedding host may
-supply and retain its own table. Initial convenience APIs may include `print`, `println`, and
+stdin reads. The minimal Runtime default does not advertise input; generated applications that
+retain input/filesystem calls explicitly install the native application profile, while
+output-only applications use the default console and an embedding host may supply and retain
+its own table. Initial convenience APIs may include `print`, `println`, and
 `read_line`, but their implementation must route through these protocols rather than create
 a second console ABI.
 

@@ -87,6 +87,9 @@ private:
     std::vector<PendingDeclarationRef> mPendingDeclarationRefs;
     std::unordered_map<std::string, CompileTimeDeclarationBinding>
         mCompileTimeDeclarationBindings;
+    // Builtin Type objects are immutable process-wide singletons. Avoid
+    // rebuilding their complete frozen record for every literal occurrence.
+    mutable std::unordered_map<const Type*, TypeRef> mBuiltinTypeRefs;
     std::vector<diagnostic::Diagnostic> mErrors;
 };
 

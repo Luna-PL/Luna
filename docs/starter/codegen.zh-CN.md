@@ -24,7 +24,7 @@
 src/codegen/ 把**已经通过验证（verified）的 MoonIR** 翻译成 **LLVM IR**：一个 moon::Module（src/moonir/MoonIR.h）进来，得到一个 llvm::Module（内存里的一整套 IR），再交给两套出口：
 
 - **JIT**：CodeGenerator::jitRun() 用 ORC 的 LLJIT 就地生成机器码并执行入口函数 main；
-- **AOT**：CodeGenerator::emitObjectFile() 把 llvm::Module 打印成文本 IR 并写盘，再交由外层 build 流程做系统链接成可执行文件。
+- **AOT**：CodeGenerator::emitObjectFile() 保留文本 IR，emitNativeObjectFile() 直接生成 native `.o`，外层 build 只让 clang 完成平台链接。
 
 也就是说，codegen 是一个“IR 到 IR”的翻译器（moon::Module → llvm::Module）加“IR 到可执行物”的编排器（JIT / object）。寄存器分配、指令选择等低层工作完全交给 LLVM 后端，codegen 自己不做。
 
@@ -118,7 +118,7 @@ C/C++ 类比：&arr[i] 与 &object.field。
 
 | 文件（src/codegen/） | 主要职责 | 值得注意的符号 |
 |---|---|---|
-| CodeGenerator.h | 引擎类头：成员、状态表、私有方法声明 | class CodeGenerator；generate / jitRun / emitObjectFile；LunaGpuTargetConfig；LunaOptimizationLevel |
+| CodeGenerator.h | 引擎类头：成员、状态表、私有方法声明 | class CodeGenerator；generate / jitRun / emitObjectFile / emitNativeObjectFile；LunaGpuTargetConfig；LunaOptimizationLevel |
 | CGHelpers.h/.cpp | Luna → llvm::Type 与 size/align | toLLVMType；typeSize；typeAlignment |
 | CodeGenerator.cpp | 共享的小工具 | coerceCallArgument；createEntryAlloca；resolveType；resolveDeclaration；resolveFunction；allocationTypeForExpr；fieldIndex；error |
 | CodeGeneratorModule.cpp | 生成主调度 | CodeGenerator::generate（声明函数 → 生成内核 → 生成宿主 → verify → 优化）；declareFunc；emitRuntimeDescriptors |
@@ -127,7 +127,7 @@ C/C++ 类比：&arr[i] 与 &object.field。
 | CodeGeneratorExpressions.cpp | 所有表达式 → LLVM 值 | generateExpr 分发器 + 各 generateXxx 发射器 |
 | CodeGeneratorCleanup.cpp | 所有权释放 / drop | emitOwnedPayloadCleanup；emitResourceContentsCleanup；emitCanonicalCleanup；getOrCreateDropCallback；emitLunaDeallocation；packResultPayload / unpackResultPayload |
 | CodeGeneratorIterator.cpp | 迭代器适配器与终端 | buildIteratorPlan；emitIteratorPipeline；generateIteratorTerminal；emitCallableInvocation |
-| CodeGeneratorExecution.cpp | 构造 / LLVM 初始化 / JIT / 符号绑定 | jitRun；emitObjectFile；initializeLLVM；bindRuntime 表 |
+| CodeGeneratorExecution.cpp | 构造 / LLVM 初始化 / JIT / AOT 输出 | jitRun；emitObjectFile；emitNativeObjectFile；target initialization；bindRuntime 表 |
 | CodeGeneratorGpu.cpp | GPU 内核 + launch | emitKernelPTX；emitKernelHSACO；generateLaunch；generateDeviceBufferPointer；lowerDirectDeviceMemoryToGlobal；makeHipModuleBundle |
 | CodeGeneratorRangeAnalysis.{h,cpp} | 数组下标区间证明 | knownArrayIndexUpperBound；isProvablySafeArrayIndex |
 | CodeGeneratorRuntimeDescriptors.cpp | 运行时描述符 / 注册表 | emitRuntimeDescriptors；moonRuntimeSectionNames；stableRuntimeId |
@@ -145,7 +145,7 @@ generateFunctionBody(FunctionDecl*)（CodeGeneratorFunctions.cpp）：
 1. 找到对应 llvm::Function。函数声明在 CodeGeneratorModule.cpp 的 declareFunc 里先行创建，解决引用。
 2. 清空“当前函数”的编译状态：mLocals、mLocalTypes、mCanonicalLocals、mArrayDropFlags、mMaterializedIterators、mLocalKnownUpperBound 等全部 reset。
 3. 创建 entry BasicBlock，mBuilder->SetInsertPoint(entryBB)。
-4. 若是入口函数（名称为 main）：先插入对 rt_install_application_host_services_v1 的调用（JIT/AOT 共用同一入口策略）；若主机启用 kernel，再插入 rt_gpu_initialize、失败路径调用 rt_gpu_report_initialization_error，并按返回类型回一个通用失败值。
+4. 若入口 `main` 使用 kernel，则插入 rt_gpu_initialize，失败路径调用 rt_gpu_report_initialization_error 并按返回类型返回通用失败值；整个 module 优化完成后，再仅为仍存活的 input/filesystem/直接 host/GPU 使用在入口注入 rt_install_application_host_services_v1。
 5. 核心调用 generateControlFlowBody(*decl->controlFlow, func, entryBB)。
 6. 若返回类型是 void 且当前块没有 terminator，最后补一个 CreateRetVoid()。
 
@@ -166,7 +166,7 @@ generateControlFlowBody（CodeGeneratorControlFlow.cpp）在开头给“所有 l
 generateExpr(Expr*)（CodeGeneratorExpressions.cpp）是一个分发器：用 dynamic_cast 逐个试探 IntLiteralExpr、IdentifierExpr、BinaryExpr…，命中以后调用对应的 generateXxx（可理解为用 RTTI 的手写 visitor）。它覆盖了：
 
 - 字面量：Int / Float / String / Bool / Unit / ArrayLiteral；
-- 值访问：Identifier、DynamicSelect、FieldAccess、SliceLength、Index（Index 对下标调用 rt_array_index_or_abort 做越界检查）；
+- 值访问：Identifier、DynamicSelect、FieldAccess、SliceLength、Index（可证明安全的 Index 省略检查，其余生成内联快路径并仅在失败边调用 rt_array_index_or_abort）；
 - 算术：Binary（&& 与 || 被降成小型 CFG 短路，其余走 Create*）、Unary；
 - 构造：VariantConstruct（构建 {i32, [Nxi64]}）、ResultConstruct、RecordLiteral、InitAllocation、HeapAlloc（调用 rt_alloc）；
 - 调用：generateCall（详见下）；
@@ -239,7 +239,7 @@ CodeGeneratorModule.cpp 里的 generate() 是编排者：
 ### 8.2 两种落地
 
 - **JIT**（Execution.cpp 的 jitRun）：LLJITBuilder().create() → 在主 JITDylib 上注册整张 runtimeSymbols 表（bindRuntime 把 rt_alloc、rt_rc_*、rt_arc_*、rt_panic、rt_console、rt_gpu_* 等所有 luna 运行时 helper 注册为绝对符号；Win32 额外注入 __main no-op）→ addIRModule(ThreadSafeModule(...)) 把 module+context 交给 JIT → 再挂一个 EPCDynamicLibrarySearchGenerator libc / 用户库（Luna 自身的符号已显式绑定，不依赖宿主进程导出表）→ lookup(“main”) → 转成入口函数 toPtr<int()>() → 调用。这个入口用 LLVM_NO_SANITIZE(“function”) 包一层，避免 UBSan 在 ORC 函数的探针踩点。
-- **AOT**：emitObjectFile 取主机 triple 设进 llvm::Module（setTargetTriple），然后用 raw_fd_ostream 直接把 module 打印成文本 IR（注释："text IR, avoids bitcode compat issues"）写上 .ll；**不在这里生成 .o**，系统链接由外层 build 流程完成。
+- **AOT**：emitObjectFile 取主机 triple 并把 module 打印为可检查的 `.ll`；emitNativeObjectFile 使用 native TargetMachine 与 legacy codegen pass 直接生成 PIC `.o`。外层 build 把 `.o` 交给 clang，只完成系统/CRT 链接。
 
 因此 run（JIT）与 build（AOT）是两条独立、但共享同一个 mModule 的落地路径——这正是 tests/jit_aot_parity.cmake 能断言“JIT 与 AOT 行为必须一致”的缘由。
 

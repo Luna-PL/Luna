@@ -78,7 +78,7 @@ path: src/codegen/CodeGenerator.h
 - `MaterializedIterator`：`{plan, sourceData, limit, indexStorage, sourceDropFlags, ownsSource, steps}` 迭代器物化到 LLVM 状态后的全部 IR 值。
 
 **`class CodeGenerator`**（public）：
-- 公开方法：`CodeGenerator(moduleName)`、`~CodeGenerator()`、`generate(Module*)`、`setOptimizationLevel`、`setGpuTargets`、`jitRun()`、`emitObjectFile()`、`errors()` const。
+- 公开方法：`CodeGenerator(moduleName)`、`~CodeGenerator()`、`generate(Module*)`、`setOptimizationLevel`、`setGpuTargets`、`jitRun()`、`emitObjectFile()`、`emitNativeObjectFile()`、`errors()` const。
 - 私有方法（~70 个，见头文件 52-176 行）：按功能分组：`generateFunctionBody`、`generateControlFlowBody`、`generateExpr`（总入口）；各类字面量/访问/算术/构造/调用/控制流/所有权/闭包/迭代器/GPU 的 `generate*` 方法；`emitRuntimeDescriptors`、`emitKernelPTX/HSACO`、`emitCleanup` 系列等。
 - 私有成员变量（177-218 行）：`mCtx`(LLVMContext)、`mModule`、`mBuilder`、`mHelpers`(CGHelpers)；`mProgram`(moon::Module*)；`mTypeMaterializer`；`mLocals`/`mLocalTypes`(name->alloca/type 映射)；`mCanonicalLocals`/`mCanonicalLocalTypes`(LocalId->alloca/type)；`mArrayDropFlags`(name->drop bit)；`mMaterializedIterators`；`mLocalKnownUpperBounds`(name->exclusive upper bound)；`mCurrentFunc`/`mCurrentFunctionIsKernel`；`mFunctions`/`mDropCallbacks`；`mKernelPTX`/`mKernelHSACO`；`mErrors`；`mOptimizationLevel`；`mGpuTargets`。
 

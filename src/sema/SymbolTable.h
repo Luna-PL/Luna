@@ -68,8 +68,9 @@ public:
     size_t lookupDepth(const std::string& name) const;
 
     // Types: store the resolved TypePtr for user-defined types/traits
-    void defineType(const std::string& name, TypePtr type);
+    bool defineType(const std::string& name, TypePtr type);
     TypePtr lookupType(const std::string& name) const;
+    bool isPredefinedType(const std::string& name) const;
     std::unordered_map<std::string, SymbolInfo> visibleSymbols() const;
 
 private:

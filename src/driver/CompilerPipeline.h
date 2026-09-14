@@ -4,6 +4,7 @@
 #include "diagnostics/Diagnostic.h"
 #include "tooling/AnalysisSnapshot.h"
 
+#include <cstdint>
 #include <memory>
 #include <string>
 #include <vector>
@@ -19,12 +20,20 @@ struct CompilerPipelineOptions {
     bool aheadOfTime = false;
 };
 
+struct CompilerPipelineTimings {
+    luna::tooling::AnalysisTimings analysis;
+    uint64_t loweringMicroseconds = 0;
+    uint64_t verificationMicroseconds = 0;
+    uint64_t sealingMicroseconds = 0;
+    uint64_t optimizationMicroseconds = 0;
+    uint64_t codegenMicroseconds = 0;
+};
+
 class CompilerPipeline {
 public:
     bool compileToMoonIR(const CompilerPipelineOptions& options);
-    bool compileSourceToMoonIR(
-        const std::string& source, const std::string& virtualPath,
-        const CompilerPipelineOptions& options = {});
+    bool compileSourceToMoonIR(const std::string& source, const std::string& virtualPath,
+                               const CompilerPipelineOptions& options = {});
     bool generateCode(LunaGpuTargetConfig gpuTargets);
 
     const moon::Module& moonModule() const;
@@ -33,13 +42,12 @@ public:
     const std::vector<diagnostic::Diagnostic>& errors() const;
     const std::string& errorStage() const;
     const luna::tooling::AnalysisSnapshot& analysisSnapshot() const;
+    const CompilerPipelineTimings& timings() const { return mTimings; }
 
 private:
-    bool lowerAnalyzedProgram(
-        const CompilerPipelineOptions& options, std::string moduleName);
+    bool lowerAnalyzedProgram(const CompilerPipelineOptions& options, std::string moduleName);
     void reset(const CompilerPipelineOptions& options);
-    bool fail(const std::vector<diagnostic::Diagnostic>& errors,
-              std::string stage = {});
+    bool fail(const std::vector<diagnostic::Diagnostic>& errors, std::string stage = {});
 
     LunaOptimizationLevel mOptimizationLevel = LunaOptimizationLevel::O0;
     std::string mModuleName;
@@ -49,6 +57,7 @@ private:
     std::unique_ptr<CodeGenerator> mCodeGenerator;
     std::vector<diagnostic::Diagnostic> mErrors;
     std::string mErrorStage;
+    CompilerPipelineTimings mTimings;
 };
 
 } // namespace luna::driver

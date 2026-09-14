@@ -35,7 +35,7 @@ CompilerPipeline::lowerAnalyzedProgram
    llvm::Module → 优化
    │
    ├─ JIT  : LLJIT::jitRun() → 直接运行 main
-   └─ AOT  : emitObjectFile → AotLinker → 可执行
+   └─ AOT  : emitObjectFile + emitNativeObjectFile → AotLinker → 可执行
 ```
 
 ## 1. 起点：main.cpp 与 Driver
@@ -86,7 +86,7 @@ if (!sealer.sealFunctionBodies(*mMoonModule)) return fail(...);
 CompilerPipeline 随后调 CodeGenerator（src/codegen/*）。它对 sealed MoonIR 每个函数翻译成一个 llvm::Function：alloca 分配局部、每节点映射为指令、CFG 映射为基本块与分支（详见 [codegen 导读](./codegen.zh-CN.md)）。随后：
 
 - **JIT 模式**：CodeGenerator::jitRun() 用 ORC / LLJIT 加载，找到 main 运行并返回退出码。
-- **AOT 模式**：CodeGenerator::emitObjectFile(outputPath) 产出目标文件，AotLinker 调用系统链接器变成可执行。
+- **AOT 模式**：CodeGenerator 保留文本 IR 并直接产出 native object，AotLinker 调用系统链接器完成可执行文件。
 
 ## 5. 优化级别
 

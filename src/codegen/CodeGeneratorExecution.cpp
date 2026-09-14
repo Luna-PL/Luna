@@ -2,28 +2,22 @@
 
 #include "../runtime/Runtime.h"
 
+#include <llvm/Config/llvm-config.h>
+#include <llvm/IR/LegacyPassManager.h>
+#include <llvm/MC/TargetRegistry.h>
+#include <llvm/Support/CodeGen.h>
 #include <llvm/Support/Compiler.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/raw_ostream.h>
+#include <llvm/Target/TargetMachine.h>
 #include <llvm/TargetParser/Host.h>
 
+#include <chrono>
 #include <memory>
+#include <mutex>
 #include <utility>
 
 namespace {
-
-void initializeLLVM() {
-    static bool initialized = false;
-    if (!initialized) {
-        llvm::InitializeNativeTarget();
-        llvm::InitializeNativeTargetAsmPrinter();
-        llvm::InitializeNativeTargetAsmParser();
-        llvm::InitializeAllTargets();
-        llvm::InitializeAllTargetMCs();
-        llvm::InitializeAllAsmPrinters();
-        initialized = true;
-    }
-}
 
 using LunaJitEntry = int (*)();
 
@@ -31,9 +25,9 @@ using LunaJitEntry = int (*)();
 void lunaJitMingwMain();
 #endif
 
-llvm::Expected<std::unique_ptr<llvm::orc::LLJIT>> materializeLunaJit(
-    std::unique_ptr<llvm::Module>& module,
-    std::unique_ptr<llvm::LLVMContext>& context) {
+llvm::Expected<std::unique_ptr<llvm::orc::LLJIT>>
+materializeLunaJit(std::unique_ptr<llvm::Module>& module,
+                   std::unique_ptr<llvm::LLVMContext>& context) {
     using namespace llvm;
     using namespace llvm::orc;
 
@@ -79,19 +73,18 @@ llvm::Expected<std::unique_ptr<llvm::orc::LLJIT>> materializeLunaJit(
     bindRuntime("rt_create_directory_v1", &rt_create_directory_v1);
     bindRuntime("rt_runtime_error_snapshot_v1", &rt_runtime_error_snapshot_v1);
     bindRuntime("rt_print_i32", &rt_print_i32);
+    bindRuntime("rt_print_u32", &rt_print_u32);
     bindRuntime("rt_print_cstr", &rt_print_cstr);
     bindRuntime("rt_console_write_cstr_v1", &rt_console_write_cstr_v1);
     bindRuntime("rt_console_write_i32_v1", &rt_console_write_i32_v1);
     bindRuntime("rt_console_flush_simple_v1", &rt_console_flush_simple_v1);
-    bindRuntime("rt_console_read_line_lossy_v1",
-                &rt_console_read_line_lossy_v1);
+    bindRuntime("rt_console_read_line_lossy_v1", &rt_console_read_line_lossy_v1);
     bindRuntime("rt_parse_i32_or_v1", &rt_parse_i32_or_v1);
     bindRuntime("rt_array_index_or_abort", &rt_array_index_or_abort);
     bindRuntime("rt_gpu_initialize", &rt_gpu_initialize);
     bindRuntime("rt_gpu_backend_name", &rt_gpu_backend_name);
     bindRuntime("rt_gpu_last_error", &rt_gpu_last_error);
-    bindRuntime("rt_gpu_report_initialization_error",
-                &rt_gpu_report_initialization_error);
+    bindRuntime("rt_gpu_report_initialization_error", &rt_gpu_report_initialization_error);
     bindRuntime("rt_gpu_report_operation_error_and_abort",
                 &rt_gpu_report_operation_error_and_abort);
     bindRuntime("rt_gpu_backend_is_cuda", &rt_gpu_backend_is_cuda);
@@ -110,18 +103,16 @@ llvm::Expected<std::unique_ptr<llvm::orc::LLJIT>> materializeLunaJit(
         ExecutorSymbolDef::fromPtr(&lunaJitMingwMain, exported);
 #endif
     if (!runtimeSymbols.empty()) {
-        if (auto error = (*jit)->getMainJITDylib().define(
-                absoluteSymbols(std::move(runtimeSymbols))))
+        if (auto error =
+                (*jit)->getMainJITDylib().define(absoluteSymbols(std::move(runtimeSymbols))))
             return error;
     }
 
     auto tsm = ThreadSafeModule(std::move(module), std::move(context));
-    if (auto error = (*jit)->addIRModule(std::move(tsm)))
-        return error;
+    if (auto error = (*jit)->addIRModule(std::move(tsm))) return error;
 
     auto& executionSession = (*jit)->getExecutionSession();
-    auto processSymbols =
-        EPCDynamicLibrarySearchGenerator::GetForTargetProcess(executionSession);
+    auto processSymbols = EPCDynamicLibrarySearchGenerator::GetForTargetProcess(executionSession);
     if (!processSymbols) return processSymbols.takeError();
     (*jit)->getMainJITDylib().addGenerator(std::move(*processSymbols));
     return std::move(*jit);
@@ -135,9 +126,7 @@ llvm::Expected<std::unique_ptr<llvm::orc::LLJIT>> materializeLunaJit(
 #if defined(__clang__)
 LLVM_NO_SANITIZE("function")
 #endif
-int invokeLunaJitEntry(LunaJitEntry entry) {
-    return entry();
-}
+int invokeLunaJitEntry(LunaJitEntry entry) { return entry(); }
 
 #ifdef _WIN32
 // MinGW inserts a call to __main when lowering a function named `main` so a
@@ -151,6 +140,28 @@ void lunaJitMingwMain() {}
 
 } // namespace
 
+void initializeLunaLLVMTargets() {
+    static std::once_flag initialization;
+    std::call_once(initialization, [] {
+        llvm::InitializeNativeTarget();
+        llvm::InitializeNativeTargetAsmPrinter();
+        llvm::InitializeNativeTargetAsmParser();
+    });
+}
+
+namespace {
+
+void initializeLunaLLVMDeviceTargets() {
+    static std::once_flag initialization;
+    std::call_once(initialization, [] {
+        llvm::InitializeAllTargets();
+        llvm::InitializeAllTargetMCs();
+        llvm::InitializeAllAsmPrinters();
+    });
+}
+
+} // namespace
+
 struct LunaJitModule::Impl {
     std::unique_ptr<llvm::orc::LLJIT> jit;
 };
@@ -158,8 +169,7 @@ struct LunaJitModule::Impl {
 LunaJitModule::LunaJitModule() : mImpl(std::make_unique<Impl>()) {}
 LunaJitModule::~LunaJitModule() = default;
 
-const void* LunaJitModule::lookup(
-    const std::string& symbol, std::string& error) const {
+const void* LunaJitModule::lookup(const std::string& symbol, std::string& error) const {
     if (!mImpl || !mImpl->jit) {
         error = "JIT module is not materialized";
         return nullptr;
@@ -174,34 +184,67 @@ const void* LunaJitModule::lookup(
 }
 
 CodeGenerator::CodeGenerator(const std::string& moduleName)
-    : mCtx(std::make_unique<llvm::LLVMContext>())
-    , mModule(std::make_unique<llvm::Module>(moduleName, *mCtx))
-    , mBuilder(std::make_unique<llvm::IRBuilder<>>(*mCtx))
-    , mHelpers(std::make_unique<CGHelpers>(*mCtx)) {
-    initializeLLVM();
+    : mCtx(std::make_unique<llvm::LLVMContext>()),
+      mModule(std::make_unique<llvm::Module>(moduleName, *mCtx)),
+      mBuilder(std::make_unique<llvm::IRBuilder<>>(*mCtx)),
+      mHelpers(std::make_unique<CGHelpers>(*mCtx)) {
+    initializeLunaLLVMTargets();
 }
 
 CodeGenerator::~CodeGenerator() = default;
 
-int CodeGenerator::jitRun() {
-    std::string error;
-    auto module = materializeJitModule(error);
-    if (!module) {
-        llvm::errs() << "JIT: " << error << "\n";
-        return 1;
-    }
-    const auto address = module->lookup("main", error);
-    if (!address) {
-        llvm::errs() << "JIT: " << error << "\n";
-        return 1;
-    }
-    auto mainFunction = reinterpret_cast<LunaJitEntry>(
-        const_cast<void*>(address));
-    return invokeLunaJitEntry(mainFunction);
+void CodeGenerator::setGpuTargets(LunaGpuTargetConfig targets) {
+    if (targets.emitPTX || targets.emitHSACO) initializeLunaLLVMDeviceTargets();
+    mGpuTargets = std::move(targets);
 }
 
-std::shared_ptr<LunaJitModule> CodeGenerator::materializeJitModule(
-    std::string& error) {
+LunaJitRunResult CodeGenerator::jitRun() {
+    LunaJitRunResult result;
+    std::string error;
+    const auto materializationStart = std::chrono::steady_clock::now();
+    auto module = materializeJitModule(error);
+    result.materializationMicroseconds =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                  std::chrono::steady_clock::now() - materializationStart)
+                                  .count());
+    if (!module) {
+        result.error = std::move(error);
+        return result;
+    }
+    const auto lookupStart = std::chrono::steady_clock::now();
+    const auto address = module->lookup("main", error);
+    result.lookupMicroseconds =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                  std::chrono::steady_clock::now() - lookupStart)
+                                  .count());
+    if (!address) {
+        result.error = std::move(error);
+        const auto cleanupStart = std::chrono::steady_clock::now();
+        module.reset();
+        result.cleanupMicroseconds =
+            static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                      std::chrono::steady_clock::now() - cleanupStart)
+                                      .count());
+        return result;
+    }
+    auto mainFunction = reinterpret_cast<LunaJitEntry>(const_cast<void*>(address));
+    const auto executionStart = std::chrono::steady_clock::now();
+    result.exitCode = invokeLunaJitEntry(mainFunction);
+    result.executionMicroseconds =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                  std::chrono::steady_clock::now() - executionStart)
+                                  .count());
+    result.executed = true;
+    const auto cleanupStart = std::chrono::steady_clock::now();
+    module.reset();
+    result.cleanupMicroseconds =
+        static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                  std::chrono::steady_clock::now() - cleanupStart)
+                                  .count());
+    return result;
+}
+
+std::shared_ptr<LunaJitModule> CodeGenerator::materializeJitModule(std::string& error) {
     if (!mModule || !mCtx) {
         error = "LLVM module was already consumed by JIT materialization";
         return {};
@@ -219,7 +262,11 @@ std::shared_ptr<LunaJitModule> CodeGenerator::materializeJitModule(
 
 bool CodeGenerator::emitObjectFile(const std::string& outputPath) {
     auto targetTriple = llvm::sys::getProcessTriple();
+#if LLVM_VERSION_MAJOR >= 22
     mModule->setTargetTriple(llvm::Triple(targetTriple));
+#else
+    mModule->setTargetTriple(targetTriple);
+#endif
 
     std::error_code ec;
     llvm::raw_fd_ostream dest(outputPath, ec, llvm::sys::fs::OF_None);
@@ -230,5 +277,66 @@ bool CodeGenerator::emitObjectFile(const std::string& outputPath) {
 
     mModule->print(dest, nullptr); // text IR, avoids bitcode compat issues
     dest.flush();
+    return true;
+}
+
+bool CodeGenerator::emitNativeObjectFile(const std::string& outputPath) {
+    initializeLunaLLVMTargets();
+    const std::string targetTriple = llvm::sys::getProcessTriple();
+    llvm::TargetMachine* machine = mHostTargetMachine.get();
+    if (!machine) {
+        std::string targetError;
+#if LLVM_VERSION_MAJOR >= 22
+        const llvm::Target* target = llvm::TargetRegistry::lookupTarget(
+            llvm::Triple(targetTriple), targetError);
+        mModule->setTargetTriple(llvm::Triple(targetTriple));
+#else
+        const llvm::Target* target = llvm::TargetRegistry::lookupTarget(
+            targetTriple, targetError);
+        mModule->setTargetTriple(targetTriple);
+#endif
+        if (!target) {
+            error("Cannot select native target: " + targetError);
+            return false;
+        }
+
+        llvm::TargetOptions targetOptions;
+        const auto codegenLevel =
+            mOptimizationLevel == LunaOptimizationLevel::O3
+                ? llvm::CodeGenOptLevel::Aggressive
+                : mOptimizationLevel == LunaOptimizationLevel::O2
+                    ? llvm::CodeGenOptLevel::Default
+                    : llvm::CodeGenOptLevel::None;
+        mHostTargetMachine.reset(target->createTargetMachine(
+#if LLVM_VERSION_MAJOR >= 22
+            llvm::Triple(targetTriple), "generic", "", targetOptions,
+#else
+            targetTriple, "generic", "", targetOptions,
+#endif
+            llvm::Reloc::PIC_, std::nullopt, codegenLevel));
+        if (!mHostTargetMachine) {
+            error("Cannot create the native target machine");
+            return false;
+        }
+        machine = mHostTargetMachine.get();
+    }
+    mModule->setDataLayout(machine->createDataLayout());
+
+    std::error_code fileError;
+    llvm::raw_fd_ostream destination(
+        outputPath, fileError, llvm::sys::fs::OF_None);
+    if (fileError) {
+        error("Cannot open native object output: " + fileError.message());
+        return false;
+    }
+    llvm::legacy::PassManager passManager;
+    if (machine->addPassesToEmitFile(
+            passManager, destination, nullptr,
+            llvm::CodeGenFileType::ObjectFile)) {
+        error("Native LLVM backend cannot emit an object file");
+        return false;
+    }
+    passManager.run(*mModule);
+    destination.flush();
     return true;
 }

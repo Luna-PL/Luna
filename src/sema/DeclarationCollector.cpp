@@ -1,12 +1,40 @@
 #include "DeclarationCollector.h"
 
+#include "PredefinedTypes.h"
 #include "SemanticAnalysisSupport.h"
 #include "../core/TypeRelations.h"
 #include "../parser/AST.h"
 #include <set>
 #include <utility>
 
+namespace {
+
+bool rejectPredefinedTypeDeclaration(
+    DeclarationContextAccess& context, const std::string& name,
+    const char* declarationKind, int line, int col) {
+    if (!isPredefinedTypeName(name)) return false;
+    context.error("cannot redefine predefined type '" + name + "' with " +
+                  declarationKind + " declaration", line, col);
+    return true;
+}
+
+void validateTypeParameters(
+    DeclarationContextAccess& context,
+    const std::vector<std::string>& parameters,
+    const std::string& owner, int line, int col) {
+    for (const auto& parameter : parameters) {
+        if (isPredefinedTypeName(parameter))
+            context.error("type parameter '" + parameter +
+                          "' conflicts with predefined type '" + parameter +
+                          "' in " + owner, line, col);
+    }
+}
+
+} // namespace
+
 void DeclarationCollector::declareFunction(FunctionDecl* decl) {
+    validateTypeParameters(mContext, decl->typeParams,
+        "function '" + decl->name + "'", decl->line, decl->col);
     const std::string sourceKey = qualifiedDeclarationKey(
         mContext.mCurrentPackageId, mContext.mCurrentModulePath, decl->name);
     mContext.mFunctionFamilies[sourceKey].push_back(decl);
@@ -81,6 +109,9 @@ void DeclarationCollector::declareFunction(FunctionDecl* decl) {
 
 void DeclarationCollector::declareMeta(MetaDecl* decl) {
     if (!decl) return;
+    if (rejectPredefinedTypeDeclaration(
+            mContext, decl->name, "metadata", decl->line, decl->col))
+        return;
     const std::string sourceKey = qualifiedDeclarationKey(
         mContext.mCurrentPackageId, mContext.mCurrentModulePath, decl->name);
     if (mContext.mMetadataSchemas.count(sourceKey)) {
@@ -120,6 +151,8 @@ void DeclarationCollector::declareMeta(MetaDecl* decl) {
 
 void DeclarationCollector::declareConstraint(ConstraintDecl* decl) {
     if (!decl) return;
+    validateTypeParameters(mContext, decl->typeParams,
+        "constraint '" + decl->name + "'", decl->line, decl->col);
     const std::string sourceKey = qualifiedDeclarationKey(
         mContext.mCurrentPackageId, mContext.mCurrentModulePath, decl->name);
     if (!mContext.mConcepts.emplace(sourceKey, decl).second) {
@@ -344,6 +377,11 @@ void DeclarationCollector::validateFFIFunction(FunctionDecl* decl) {
 }
 
 void DeclarationCollector::declareStruct(StructDecl* decl) {
+    if (rejectPredefinedTypeDeclaration(
+            mContext, decl->name, "struct", decl->line, decl->col))
+        return;
+    validateTypeParameters(mContext, decl->typeParams,
+        "struct '" + decl->name + "'", decl->line, decl->col);
     const std::string identity = decl->generatedSymbolName.empty()
         ? decl->name : decl->generatedSymbolName;
     auto declared = mContext.mDeclaredTypes[identity];
@@ -382,6 +420,11 @@ void DeclarationCollector::declareStruct(StructDecl* decl) {
 }
 
 void DeclarationCollector::declareEnum(EnumDecl* decl) {
+    if (rejectPredefinedTypeDeclaration(
+            mContext, decl->name, "enum", decl->line, decl->col))
+        return;
+    validateTypeParameters(mContext, decl->typeParams,
+        "enum '" + decl->name + "'", decl->line, decl->col);
     const std::string identity = decl->generatedSymbolName.empty()
         ? decl->name : decl->generatedSymbolName;
     auto declared = mContext.mDeclaredTypes[identity];
@@ -417,6 +460,11 @@ void DeclarationCollector::declareEnum(EnumDecl* decl) {
 }
 
 void DeclarationCollector::declareTrait(TraitDecl* decl) {
+    if (rejectPredefinedTypeDeclaration(
+            mContext, decl->name, "trait", decl->line, decl->col))
+        return;
+    validateTypeParameters(mContext, decl->typeParams,
+        "trait '" + decl->name + "'", decl->line, decl->col);
     if (decl->name == "Drop" || decl->name == "From") {
         mContext.error("trait name '" + decl->name +
               "' is reserved for a compiler-known resource/error contract",
@@ -437,6 +485,8 @@ void DeclarationCollector::declareTrait(TraitDecl* decl) {
 }
 
 void DeclarationCollector::declareImpl(ImplDecl* decl) {
+    validateTypeParameters(mContext, decl->typeParams,
+        "implementation", decl->line, decl->col);
     std::unordered_map<std::string, TypePtr> implBindings;
     for (const auto& parameter : decl->typeParams)
         implBindings[parameter] = Type::makeTypeParam(parameter);
@@ -463,6 +513,8 @@ void DeclarationCollector::declareImpl(ImplDecl* decl) {
     auto registerMethod = [&](FunctionDecl* method,
                               const std::string& symbol,
                               bool exposeUnqualified = true) {
+        validateTypeParameters(mContext, method->typeParams,
+            "method '" + method->name + "'", method->line, method->col);
         method->generatedSymbolName = symbol;
         SymbolInfo info;
         info.kind = SymbolKind::Function;

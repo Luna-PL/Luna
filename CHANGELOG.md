@@ -2,6 +2,77 @@
 
 ## 0.3.0 — Development
 
+- Hardened the Alpha REPL around an explicit session/cell model. Declaration
+  commits are transactional through LLVM code generation, `main` cannot poison
+  later submissions, `:undo`, `:type`, `:load`, and explicit multiline paste
+  cells are available, REPL CLI options are parsed normally, and JIT infrastructure
+  failure is no longer confused with a program returning exit code 1. Runtime
+  declaration validation, type queries and evaluation now use fresh workers
+  with configurable time, process-tree memory and combined-output limits.
+  Full signed-i32 result transport, descendant cleanup, and recovery from
+  compiler crashes, runtime aborts, output floods or hangs are covered. An
+  opt-in `--timings` report separates lexing, parsing, semantic analysis,
+  traits, ownership, indexing, MoonIR lowering/verification/sealing/optimization,
+  LLVM codegen, JIT materialization/lookup/cleanup, execution and end-to-end worker cost
+  without changing default transcripts. Successful exact-source `:type` queries
+  use a bounded 32-entry/1 MiB cache that is invalidated whenever declarations
+  change; executable cells and their side effects are never cached. Persisted
+  declaration source is also maintained incrementally instead of rebuilt per cell.
+  Parent-side timing now partitions cache lookup, worker acquisition, submission,
+  round-trip, result collection and replacement scheduling without double-counting
+  the overlapping worker phases. Worker request decoding, library loading, total
+  active time, residual internal time and the publication/wakeup round-trip gap
+  are separately attributable.
+  The session now keeps one unused single-shot worker prewarmed behind a
+  containment gate while waiting for input, submits a length-delimited request
+  only after a cell arrives, and replenishes the worker after every submission.
+  Each fresh worker now initializes LLVM's immutable target registries before
+  publishing readiness, moving that one-time cost into idle preparation without
+  carrying compiler or JIT state across cells.
+  This hides process and LLVM-library startup during interactive think time
+  without allowing compiler, JIT, linked-library, or runtime state to cross a
+  cell boundary. Timing reports expose whether a cell used an already-ready
+  worker. Completed cells explicitly flush and publish their result before
+  process teardown; a two-entry background reaper then allows up to 500 ms for
+  normal cleanup before forcefully closing the contained process tree. The next
+  worker is prepared asynchronously after publication, removing teardown and
+  replenishment work from the interactive result path without making cleanup
+  unbounded. Readiness, containment-gate and completion handshakes now use
+  inheritable Windows Events or POSIX socket pairs instead of polling three
+  temporary control files. The bounded request and the worker's two-stage
+  running/final result records now use inherited data channels as well; the
+  parent drains results during execution, removing three more temporary files
+  without introducing pipe-buffer deadlocks. Worker-side endpoints are marked
+  non-inheritable before linked code runs, so exec'd descendants cannot retain
+  or forge the internal protocol. Captured stdout/stderr now use separately
+  drained bounded channels too, eliminating the remaining temporary files and
+  file-size polling without buffering the configured output limit in parent
+  memory. POSIX workers apply a non-raiseable `RLIMIT_AS`
+  before publishing readiness, which preserves the inherited memory boundary
+  while allowing LLVM to use `posix_spawn` from the asynchronous preparation
+  thread. Windows worker launch relies on the REPL-owned process-tree Job
+  Object instead of first creating LLVM's redundant per-process memory-limit
+  job.
+
+- Split the REPL implementation into interactive session, parent execution,
+  worker compilation, protocol, transport, and process-containment units. The
+  public REPL interface and worker wire protocol remain unchanged, and the
+  protocol encoder/decoder now has focused boundary tests.
+
+- Migrated all intrinsic type spellings to one immutable predefined-type
+  registry. The former `i32`/`i64`/`f32`/`f64`/`bool`/`string` lexer tokens are
+  ordinary identifiers resolved in the type namespace; atomic singleton and
+  MoonIR identities are unchanged. Type declarations and generic parameters
+  cannot shadow predefined names and report `SEM0004`. A dedicated regression
+  now freezes all atomic singleton identities, TypeIds, sizes/alignments,
+  constructor formation, and the device-buffer C carrier layout.
+
+- Hardened `device_buffer<i32>` as a 64-bit `{data, length}` capability across
+  Runtime ABI, host lowering, and CUDA/ROCm kernel ABI. Live-allocation checks
+  reject forged lengths, out-of-bounds access, and stale handles; device-side
+  indexing traps. Native Windows LLVM 20 and WSL LLVM 22 are covered by strict
+  warning builds, with LLVM versions below 20 rejected at configuration time.
+
 - Added the ordinary source-defined `core::result` extraction layer:
   consuming `unwrap`, `expect`, `unwrap_err`, `expect_err`, and `unwrap_or`
   preserve the canonical compiler-materialized Result identity while serving

@@ -12,14 +12,14 @@
 - 对 Expr 子类连串 dynamic_cast + 调用对应 generateXxx。若 `generateBinary`/`generateUnary` 返回 nullptr 则继续尝试其他类型（短路逻辑）。最后未知类型报错并返回 PoisonValue。
 
 **字面量生成器**（generateIntLiteral/FloatLiteral/StringLiteral/BoolLiteral/UnitLiteral/ArrayLiteral）：
-- `IntLiteral`：`ConstantInt::get(i32Ty, value, true)`。`FloatLiteral`：`ConstantFP::get(f64Ty, value)`。`StringLiteral`：`CreateGlobalString` → GEP 取首字符。`BoolLiteral`：i1 常量。`UnitLiteral`：返回 i32 0（单元无运行时负载）。`ArrayLiteral`：`UndefValue` 数组 → 逐元素 CreateInsertValue。
+- `IntLiteral`：`ConstantInt::get(i32Ty, value, true)`。`FloatLiteral`：`ConstantFP::get(f64Ty, value)`。`StringLiteral`：`CreateGlobalString` → GEP 取首字符。`BoolLiteral`：i1 常量。`UnitLiteral`：返回 i32 0（单元无运行时负载）。纯常量 `ArrayLiteral` 直接生成一个 `ConstantArray`，canonical 局部初始化再通过私有全局常量与 `memcpy` 实体化；其他字面量仍按求值顺序逐元素 `CreateInsertValue`。
 
 **访问生成器**（generateIdentifier/DynamicSelect/FieldAccess/SliceLength/Index）：
 - `Identifier`：按 canonical local (LocalId) → mLocals (name) → resolveFunction 顺序，返回加载值。
 - `DynamicSelect`：对候选按 metadata 逐字段比较（整数/浮点/布尔/字符串），构建 `CreateSelect` 链选择函数指针，匹配计数非 1 则 abort。
 - `FieldAccess`：Record 类型用 ExtractValue；Struct 指针型用 GEP + Load。
 - `SliceLength`：ExtractValue slice 的字段 1（长度）。
-- `Index`：对 Array 或 Slice 做 `rt_array_index_or_abort` 越界检查（除非可静态证明安全），然后 GEP + Load。
+- `Index`：可静态证明安全的数组访问省略检查；其余访问生成内联边界快路径，只有冷失败边调用 `rt_array_index_or_abort`，随后执行 GEP + Load。
 
 **算术生成器**（generateBinary / generateUnary）：
 - `Binary`：`&&` 与 `||` 走短路的 CFG（CondBr 分左右），其余加/减/乘/除/余/位运算/比较都按浮点/整型选择合适的 Create 方法。

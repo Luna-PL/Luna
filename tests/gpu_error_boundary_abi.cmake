@@ -37,6 +37,12 @@ foreach(required
         "call i32 @rt_gpu_await_event"
         "call void @rt_gpu_report_operation_error_and_abort()"
         "gpu.operation.failed"
+        "call void @rt_gpu_alloc_i32(i64 8, ptr"
+        "call void @rt_gpu_store_i32(ptr"
+        "device.index.inrange"
+        "device.index.invalid"
+        "call void @llvm.trap()"
+        "launch.device.length.slot"
         "unreachable")
     string(FIND "${generated_ir}" "${required}" required_at)
     if(required_at EQUAL -1)

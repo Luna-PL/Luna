@@ -2,7 +2,7 @@
 
 ## 这个文件做什么
 
-实现 `CodeGenerator::generate(moon::Module*)`——代码生成阶段的**总入口/编排者**。按序完成：初始化 `mProgram` 与 `mTypeMaterializer` 并清空各映射；对 module 内所有函数与 impl 方法「声明」（declareFunc）建立 LLVM `Function` 壳（含 ABI 可见性/链接、模板实例与 selector 过滤、Never 返回加 NoReturn 属性）；发射运行时描述符 `emitRuntimeDescriptors`；Pass A 先生成内核函数体（保证设备码对象先于宿主发射存在）；按需对内核做 PTX/HSACO 发射；Pass B 最后生成宿主函数体；校验宿主模块，并在非 O0 时走 PassBuilder O2/O3 优化管线后再次校验；最终以 `mErrors` 是否为空判定成败。
+实现 `CodeGenerator::generate(moon::Module*)`——代码生成阶段的**总入口/编排者**。它声明 LLVM 函数壳、发射 Runtime descriptor、先生成 kernel 与所需 PTX/HSACO、再生成 host body，随后校验并运行 target-aware O2/O3 管线。优化后检查仍存活的 Runtime 调用，只为 input/filesystem/直接 host/GPU 使用注入完整 application host profile，最后再次校验。
 
 ## 关键结构体·类·枚举
 
@@ -11,7 +11,7 @@
 ## 关键函数·方法
 
 **`bool CodeGenerator::generate(moon::Module* program)`**
-- 初始化：mProgram=program；mTypeMaterializer=new TypeMaterializer(*program)；清空 mFunctions/mDropCallbacks/mKernelPTX/mKernelHSACO。
+- 初始化：mProgram=program；重置可复用 host TargetMachine；构造 TypeMaterializer；清空 mFunctions/mDropCallbacks/mKernelPTX/mKernelHSACO。
 - `declareFunc`：跳过 selector；跳过不可达内核；跳过「带类型形参却非模板实例」。用 resolveType 求参数/返回 LLVM 类型构造 FunctionType 并 Function::Create。可见性：`!program->isPackage || f->isExported || f->isExtern || f->name==main` → ExternalLinkage，否则 InternalLinkage。符号名优先 linkName，其次 generatedSymbolName / name。Never 返回加 Attribute::NoReturn。写入 mFunctions（含名字别名）。
 - `generateBodies(kernels)`：遍历 declarations，其中 FunctionDecl 与 ImplDecl.methods 都参与，过滤（非 selector、isKernel==kernels、codegen reachable、模板实例化或无形参）后调 generateFunctionBody。
 - Pass1：为所有函数/方法 declareFunc（解决前向引用）。
@@ -19,7 +19,8 @@
 - Pass2（内核）：generateBodies(true)；若 mGpuTargets.emitPTX 对每个 reachable 内核调 emitKernelPTX（失败返回 false）；emitHSACO 同理。
 - Pass3（宿主）：generateBodies(false)——宿主侧先嵌入已产出的 PTX/HSACO，避免 AOT 嵌入临时空设备模块。
 - 校验：verifyHostModule(suffix) 用 llvm::verifyModule(mModule,&stream) 写错误到诊断；mErrors 空但校验失败则返回 false。
-- 优化：mErrors 空且 mOptimizationLevel != O0 时注册分析管理器、构造 PassBuilder，对 O2（O2/O3）用 buildPerModuleDefaultPipeline 跑 module 优化，再 verifyHostModule(" after optimization")。
+- 优化：mErrors 空且 mOptimizationLevel != O0 时创建并保留一个 PIC host TargetMachine，注册分析管理器并运行对应 O2/O3 buildPerModuleDefaultPipeline。
+- Host profile：优化后扫描被使用的声明；console input、filesystem、直接 host service 或 GPU 使用会在 main 开头注入 rt_install_application_host_services_v1，纯计算/仅分配/仅输出程序保留轻量默认 profile，随后再次校验优化 module。
 - 返回 mErrors.empty()。
 - 谁调用：上层编译管线（语义分析后以 module 调 generate 作为后端第一入口）。谁被调：declareFunc、emitRuntimeDescriptors、generateFunctionBody、emitKernelPTX/emitKernelHSACO、verifyModule 与现代 PassBuilder。
 

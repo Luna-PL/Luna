@@ -2,26 +2,29 @@
 
 #include "diagnostics/Diagnostic.h"
 
-#include "CGHelpers.h"
 #include "../moonir/MoonIR.h"
+#include "CGHelpers.h"
+#include <cstdint>
+#include <functional>
+#include <llvm/ExecutionEngine/ExecutionEngine.h>
+#include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
+#include <llvm/ExecutionEngine/Orc/EPCDynamicLibrarySearchGenerator.h>
+#include <llvm/ExecutionEngine/Orc/LLJIT.h>
+#include <llvm/IR/Function.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/LLVMContext.h>
 #include <llvm/IR/Module.h>
-#include <llvm/IR/IRBuilder.h>
-#include <llvm/IR/Function.h>
 #include <llvm/IR/Verifier.h>
-#include <llvm/ExecutionEngine/ExecutionEngine.h>
-#include <llvm/ExecutionEngine/Orc/LLJIT.h>
-#include <llvm/ExecutionEngine/Orc/EPCDynamicLibrarySearchGenerator.h>
-#include <llvm/ExecutionEngine/Orc/AbsoluteSymbols.h>
 #include <llvm/Support/TargetSelect.h>
-#include <functional>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <utility>
 #include <vector>
-#include <unordered_map>
 
-namespace luna::driver { struct NativeExportSpec; }
+namespace luna::driver {
+struct NativeExportSpec;
+}
 
 // Internal ownership boundary for ORC materializations. Keeping this object
 // alive keeps every address returned by lookup() executable; destroying it
@@ -43,6 +46,11 @@ private:
 
 enum class LunaOptimizationLevel { O0, O2, O3 };
 
+// Initialize the immutable LLVM native-target registries used by Luna. This is
+// safe to call repeatedly and lets fresh REPL workers pay the one-time host
+// cost before they publish readiness without eagerly loading device targets.
+void initializeLunaLLVMTargets();
+
 // Device code-object targets are compiler inputs. Runtime backend selection is
 // deliberately separate and remains owned by LUNA_GPU_BACKEND in Runtime.cpp.
 // The host simulator form is always available for every reachable kernel.
@@ -53,6 +61,16 @@ struct LunaGpuTargetConfig {
     std::string rocmArchitecture = "gfx1101";
 };
 
+struct LunaJitRunResult {
+    bool executed = false;
+    int exitCode = 1;
+    std::string error;
+    uint64_t materializationMicroseconds = 0;
+    uint64_t lookupMicroseconds = 0;
+    uint64_t executionMicroseconds = 0;
+    uint64_t cleanupMicroseconds = 0;
+};
+
 class CodeGenerator {
 public:
     CodeGenerator(const std::string& moduleName);
@@ -60,21 +78,24 @@ public:
 
     bool generate(moon::Module* module);
     void setOptimizationLevel(LunaOptimizationLevel level) { mOptimizationLevel = level; }
-    void setGpuTargets(LunaGpuTargetConfig targets) { mGpuTargets = std::move(targets); }
+    void setGpuTargets(LunaGpuTargetConfig targets);
 
-    // JIT: compile and run, returning main()'s exit code
-    int jitRun();
+    // JIT: compile and run while keeping infrastructure failure distinct from
+    // a successfully executed program whose main() returns a non-zero code.
+    LunaJitRunResult jitRun();
     // Internal evolution adapter: consume the generated LLVM module into a
     // retained ORC session whose lifetime can be held by a generation lease.
     std::shared_ptr<LunaJitModule> materializeJitModule(std::string& error);
 
-    // AOT: emit object file
+    // AOT: retain inspectable textual IR and emit the native linker input.
     bool emitObjectFile(const std::string& outputPath);
+    bool emitNativeObjectFile(const std::string& outputPath);
     bool emitNativeProofPlaceholder(const std::vector<uint8_t>& record);
-    bool emitNativeLibraryDescriptor(
-        const std::string& packageId, const std::string& packageVersion,
-        const std::string& targetAbi, const std::string& compilerIdentity,
-        const std::vector<luna::driver::NativeExportSpec>& exports);
+    bool emitNativeLibraryDescriptor(const std::string& packageId,
+                                     const std::string& packageVersion,
+                                     const std::string& targetAbi,
+                                     const std::string& compilerIdentity,
+                                     const std::vector<luna::driver::NativeExportSpec>& exports);
 
     const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
@@ -115,9 +136,8 @@ private:
     };
 
     void generateFunctionBody(moon::FunctionDecl* decl);
-    void generateControlFlowBody(
-        moon::ControlFlowGraph& graph, llvm::Function* func,
-        llvm::BasicBlock* abiEntry);
+    void generateControlFlowBody(moon::ControlFlowGraph& graph, llvm::Function* func,
+                                 llvm::BasicBlock* abiEntry);
     llvm::Value* generateExpr(moon::Expr* expr);
     // Literal expression emitters. Split out from generateExpr so each AST
     // node has one home; behavior is unchanged.
@@ -132,6 +152,9 @@ private:
     llvm::Value* generateFieldAccess(moon::FieldAccessExpr* expr);
     llvm::Value* generateSliceLength(moon::SliceLengthExpr* expr);
     llvm::Value* generateIndex(moon::IndexExpr* expr);
+    llvm::Value* emitCheckedArrayIndex(llvm::Value* index,
+                                       llvm::Value* length,
+                                       const std::string& label);
     // Arithmetic expression emitters.
     llvm::Value* generateBinary(moon::BinaryExpr* expr);
     llvm::Value* generateUnary(moon::UnaryExpr* expr);
@@ -154,34 +177,27 @@ private:
     llvm::Value* generateEnvLoad(moon::EnvLoadExpr* expr);
     llvm::Value* generateMakeClosure(moon::MakeClosureExpr* expr);
     bool buildIteratorPlan(moon::Expr* expr, IteratorPlan& plan);
-    bool materializeIteratorBinding(
-        const std::string& name,
-        const IteratorPlan& plan);
+    bool materializeIteratorBinding(const std::string& name, const IteratorPlan& plan);
     void emitIteratorPipeline(const IteratorPlan& plan,
                               const std::function<void(llvm::Value*)>& consume,
                               const std::function<void()>& prepareTerminal = {});
     llvm::Value* generateIteratorTerminal(moon::CallExpr* call);
-    llvm::Value* emitCallableInvocation(llvm::Value* callable,
-                                        const TypePtr& callableType,
+    llvm::Value* emitCallableInvocation(llvm::Value* callable, const TypePtr& callableType,
                                         llvm::ArrayRef<llvm::Value*> arguments,
-                                        llvm::Type* returnType,
-                                        const std::string& name);
+                                        llvm::Type* returnType, const std::string& name);
     llvm::Value* generateLaunch(moon::LaunchExpr* launch);
-    llvm::Value* generateDeviceBufferPointer(moon::Expr* expr);
+    llvm::Value* generateDeviceBufferValue(moon::Expr* expr);
+    llvm::Value* emitDeviceBufferIndexCheck(llvm::Value* index, llvm::Value* length);
     llvm::Value* generateHostRawPointer(moon::Expr* expr);
     void emitRuntimeDescriptors();
-    void emitGpuOperationFailureCheck(llvm::Value* operationSucceeded,
-                                      llvm::Function* func);
+    void emitGpuOperationFailureCheck(llvm::Value* operationSucceeded, llvm::Function* func);
     llvm::Value* coerceCallArgument(llvm::Value* value, llvm::Type* target);
     TypePtr resolveType(const moon::TypeRef& reference);
-    const moon::DeclarationRecord* resolveDeclaration(
-        const moon::DeclarationRef& reference) const;
-    llvm::Function* resolveFunction(
-        const moon::DeclarationRef& reference) const;
+    const moon::DeclarationRecord* resolveDeclaration(const moon::DeclarationRef& reference) const;
+    llvm::Function* resolveFunction(const moon::DeclarationRef& reference) const;
     TypePtr allocationTypeForExpr(moon::Expr* expr);
     void emitLunaDeallocation(llvm::Value* pointer, const TypePtr& type);
-    void emitCleanup(const std::string& place,
-                     luna::ownership::CleanupAction action);
+    void emitCleanup(const std::string& place, luna::ownership::CleanupAction action);
     void emitCanonicalCleanup(const moon::CleanupRecord& cleanup);
     void emitMaterializedIteratorCleanup(const std::string& name);
     llvm::Value* packResultPayload(llvm::Value* value, const TypePtr& type,
@@ -190,22 +206,23 @@ private:
                                      uint64_t byteOffset = 0);
     void emitResourceContentsCleanup(llvm::Value* value, const TypePtr& type,
                                      const std::string& label);
-    void emitOwnedPayloadCleanup(llvm::Value* value, const TypePtr& type,
-                                 const std::string& label);
+    void emitOwnedPayloadCleanup(llvm::Value* value, const TypePtr& type, const std::string& label);
     llvm::Function* getOrCreateDropCallback(const TypePtr& type);
     bool emitKernelPTX(moon::FunctionDecl* kernel);
     bool emitKernelHSACO(moon::FunctionDecl* kernel);
 
     // Helpers
-    llvm::AllocaInst* createEntryBlockAlloca(llvm::Function* func,
-                                              llvm::Type* type,
-                                              const std::string& name);
+    llvm::AllocaInst* createEntryBlockAlloca(llvm::Function* func, llvm::Type* type,
+                                             const std::string& name);
     size_t fieldIndex(const TypePtr& type, const std::string& field) const;
 
     void error(const std::string& msg);
 
     std::unique_ptr<llvm::LLVMContext> mCtx;
     std::unique_ptr<llvm::Module> mModule;
+    // Reused by the optimization and native code-emission phases so one cold
+    // AOT build does not configure the same host target twice.
+    std::unique_ptr<llvm::TargetMachine> mHostTargetMachine;
     std::unique_ptr<llvm::IRBuilder<>> mBuilder;
     std::unique_ptr<CGHelpers> mHelpers;
 
@@ -219,11 +236,13 @@ private:
     // may shadow and are never backend identities.
     std::vector<llvm::AllocaInst*> mCanonicalLocals;
     std::vector<TypePtr> mCanonicalLocalTypes;
+    // A source-level kernel reference to device_buffer expands to the native
+    // device pointer plus this hidden element-count parameter.
+    std::vector<llvm::Value*> mCanonicalDeviceBufferLengths;
     // Hidden consuming-array iterator states use one initialization bit per
     // element. ArrayDrop consults these bits on normal and early exits.
     std::unordered_map<std::string, llvm::AllocaInst*> mArrayDropFlags;
-    std::unordered_map<std::string, MaterializedIterator>
-        mMaterializedIterators;
+    std::unordered_map<std::string, MaterializedIterator> mMaterializedIterators;
     // Exclusive upper bounds proven from local initializers, used only to
     // remove redundant safe-array checks. Any assignment invalidates a bound.
     std::unordered_map<std::string, uint64_t> mLocalKnownUpperBounds;

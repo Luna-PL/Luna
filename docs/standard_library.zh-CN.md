@@ -244,9 +244,9 @@ Seek::seek(&mut self, SeekFrom) -> Result<u64, IoError>
 `Interrupted` 语义。text decoding 必须显式。
 
 `Stdin`、`Stdout` 和 `Stderr` 是实现这些协议的普通 host handle。扩展后的 Runtime Console v1
-合约支持 stdout/stderr write、flush 和可选 stdin read。默认 runtime 不声明 input capability，
-普通 generated application 会显式安装 native application profile；embedding host 可提供并保留
-自己的 service table。首批便利 API 可包含
+合约支持 stdout/stderr write、flush 和可选 stdin read。默认 runtime 不声明 input capability；
+仍含 input/filesystem 调用的 generated application 会显式安装 native application profile，
+仅输出应用使用默认 console，embedding host 仍可提供并保留自己的 service table。首批便利 API 可包含
 `print`、`println` 和 `read_line`，但它们必须路由到这些 protocol，不得另建第二套 console ABI。
 
 0.3 workspace 现在提供一层刻意精简、类型明确的 `std::io`，使应用可在 0.3

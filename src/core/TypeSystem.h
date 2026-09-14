@@ -795,3 +795,9 @@ inline bool isIntegerType(const TypePtr& t) {
                  t->kind == TypeKind::U32 || t->kind == TypeKind::U64 ||
                  t->kind == TypeKind::USize || t->kind == TypeKind::ISize);
 }
+
+inline bool isUnsignedIntegerType(const TypePtr& t) {
+    return t && (t->kind == TypeKind::U8 || t->kind == TypeKind::U16 ||
+                 t->kind == TypeKind::U32 || t->kind == TypeKind::U64 ||
+                 t->kind == TypeKind::USize);
+}

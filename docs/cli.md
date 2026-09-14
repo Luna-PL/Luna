@@ -129,6 +129,24 @@ packaged or cross-environment builds should pass `--runtime-lib` and `--cc`, or
 set `LUNA_RUNTIME_LIB` and `LUNA_CXX`. A missing runtime reports `DRV0001`; a
 native linker failure reports `DRV0002`.
 
+Native and CFFI links keep a sibling `<artifact>.luna-link-state`. On a repeat
+build, Luna retains inspectable textual IR, emits a sibling native `.o`, and
+passes that object to the native platform linker. A recognized x86-64
+MinGW/Clang executable toolchain invokes its companion `ld.lld` directly to
+avoid a redundant driver process; shared libraries, searched `-l` inputs,
+driver environment overrides, and other toolchain layouts continue through
+the selected clang driver. On that direct path, lld streams the executable to
+Luna; Luna hashes it while writing a sibling pending file and publishes it only
+after successful process completion. Luna prints `Up to date:`
+only when the generated IR and object are byte-identical, the full link command
+is unchanged, and the compiler, Runtime archive, object, and path-based link
+libraries are no newer than the artifact. Direct-link toolchain files are also
+tracked. Native applications additionally use
+the guarded pre-frontend fingerprint described in the benchmark guide. Deleting
+the state file or any required output forces the corresponding normal path.
+Fresh sibling outputs and state files are published by same-directory rename;
+changed existing outputs retain the overwrite-and-content-validation path.
+
 ### REPL
 
 ```sh
@@ -140,23 +158,117 @@ The Alpha REPL deliberately exposes a narrow, tested contract:
 ```text
 = 20 + 22
 :decl fn twice(value: i32) -> i32 { return value + value; }
+:type twice(1)
 = twice(21)
 print(7)
+:undo
 :reset
 :quit
 ```
 
 - `= <expression>` evaluates an expression whose result must be `i32`.
 - `:decl <declaration>` validates and persists one complete single-line
-  declaration. Persisted declarations are recompiled with later submissions.
+  declaration. Validation includes LLVM code generation and a synthetic REPL
+  entry point; failed declarations are not committed. Persisted declarations
+  are recompiled with later submissions.
+- `:type <expression>` reports the inferred type without executing the expression.
+- `:paste decl`, `:paste expr`, or `:paste stmt` reads an explicit multiline
+  cell terminated by a line containing only `:end`.
+- `:load <path>` validates a source file as one declaration cell. Diagnostics
+  retain the real source path and excerpts.
 - Other input executes as one statement in a temporary `main`.
-- `:help`, `:reset` and `:quit` display the contract, discard declarations and
-  exit respectively. `exit` remains a compatibility spelling for `:quit`.
+- `:undo` removes the last committed declaration. `:help`, `:reset` and
+  `:quit` display the contract, discard declarations and exit respectively.
+  `exit` remains a compatibility spelling for `:quit`.
 
-This is an **Implemented Experimental** tool, not a persistent runtime. Multiline
-input is unsupported. Local variables, heap values, JIT globals and runtime
-state do not survive a submission. A declaration that cannot be represented on
-one line should be placed in a source file and run with `luna run`.
+This is an **Implemented Experimental** tool, not a persistent runtime. Local
+variables, heap values, JIT globals and runtime state do not survive a
+submission. Every declaration validation, type query, expression and statement
+is compiled in a fresh worker process; executable cells are also JITed and run
+there. While waiting for input, the session keeps exactly one unused,
+single-shot worker prewarmed behind its containment gate. A cell is sent as a
+bounded, length-delimited operation/path/source request; that worker consumes
+only that request. Before publishing readiness, each worker initializes LLVM's
+immutable target registries; no compiler, JIT, or user state is shared with
+another cell. The request and the worker's bounded running/final result records
+travel over inherited data channels; the parent drains result records
+while the worker runs. After execution the worker flushes the cell's output and
+publishes completion. Readiness, containment-gate and completion notifications use native
+Windows Events or inherited POSIX socket pairs, not polled control files.
+Captured stdout/stderr use separately drained channels with one shared byte
+budget, so the REPL no longer needs per-cell temporary files or file-size
+polling. Internal protocol endpoints are made non-inheritable before linked code runs. A
+background reaper permits at most two completed workers and gives
+each no more than 500 ms from publication to exit normally before terminating
+its contained process tree. Preparation of the replacement starts
+asynchronously at publication. Thus interactive think time can hide
+process and LLVM-library startup without carrying compiler, JIT, linked-library
+or runtime state between cells. Scripted back-to-back cells may reach the next
+worker before it is ready and still pay the remaining startup cost. An idle
+worker monitors the parent and exits if the session disappears. Process-exit
+hooks from linked libraries are best-effort cleanup, not cell output semantics;
+they must finish within the same 500 ms retirement grace.
+
+A compiler crash, runtime abort or execution timeout therefore does not
+terminate the REPL session. `--timeout <seconds>` sets the complete per-cell
+compile-and-execute limit from 1 to 3600 seconds (default 30).
+`--memory-limit <MiB>` limits the worker process tree to 256–65536 MiB (default
+1024), while `--output-limit <MiB>` caps captured stdout plus stderr to 1–1024
+MiB (default 16). Descendants are grouped with the worker and terminated when
+the worker is retired (within the 500 ms grace) or immediately when the cell is
+cancelled. This is crash/resource containment, not an
+operating-system security sandbox; only run source and linked libraries you
+trust. AddressSanitizer-instrumented development builds disable the memory cap
+because ASan must reserve a very large shadow address range; timeout, output and
+process-tree containment remain active. Multiline input is deliberately explicit
+rather than inferred from parser recovery. Use `--no-prompt` for
+transcript-driven input. `--timings` writes one `timing[repl]` line per
+`validate`, `type`, or `run` operation to stderr.
+`cache=hit` denotes a successful exact-source `:type` result served from the
+bounded 32-entry/1 MiB session cache; `cache=miss` denotes the worker path.
+Declaration changes, `:undo`, and `:reset` invalidate that cache. Validation and
+execution results are never cached, so executable cells retain fresh-worker
+isolation and repeat their side effects. On a cache hit, `prewarmed=unused` and
+all worker phase fields are zero.
+`prewarmed=yes` means the selected worker had reached its gate before that cell
+was submitted; `prewarmed=no` means `total` includes the remaining startup wait.
+`frontend` is the aggregate source-analysis and MoonIR duration. Its detailed
+fields are `lexer`, `parser`, `semantic`, `traits`, `ownership`, `indexing`,
+`lowering`, `verification`, `sealing`, and `moon-opt`; their rounded sum need not
+exactly equal the aggregate. `codegen` covers LLVM generation,
+`codegen-setup` covers generator construction and any target initialization not
+already completed during worker startup, and `codegen-total` is their complete
+envelope.
+`jit-materialize` and `jit-lookup` expose ORC JIT setup, `execution` is only the
+user entry-point call, `jit-cleanup` covers LLJIT teardown, and `jit-total` is
+the complete `jitRun()` envelope. `overhead` is the
+parent-observed time outside `worker-total`, and `total` is the complete
+parent-observed submission latency. `worker-request` covers request receipt and
+decoding, `worker-link` covers requested dynamic-library loading,
+`worker-running-publish` covers the pre-execution Running frame,
+`worker-total` runs from request-channel servicing until immediately before the
+final result is serialized, and `worker-other` is the part of that interval not
+assigned to request, link, frontend, the codegen envelope, Running publication, or the JIT
+envelope. A zero detailed
+phase can mean it completed below timer resolution or was not reached. Idle
+preparation, worker teardown and replacement creation that continue outside the
+submission are not charged to `total`.
+The parent-side latency timeline is reported separately: `parent-cache` is the
+complete cache-hit path; `parent-acquire` obtains the prepared worker,
+`parent-submit` finishes readiness/containment and sends the request,
+`parent-roundtrip` runs from submission until completion observation and thus
+overlaps the worker phases, `parent-collect` drains and validates the result, and
+`parent-replenish` queues retirement and the replacement worker. These parent
+fields partition `total` on successful operations; they must not be added to the
+worker phase fields. `parent-roundtrip-gap` subtracts `worker-total` from the
+roundtrip and therefore isolates final-result serialization/publication, signal
+wakeup, scheduling and cross-process measurement noise rather than one single
+code phase.
+On Windows, the memory limit is an aggregate Job Object limit. On POSIX, the
+worker installs a non-raiseable per-process `RLIMIT_AS` before readiness and its
+descendants inherit that limit.
+`-O0/-O2/-O3`, `--opt`, `--link`, `--timeout`, `--memory-limit`,
+`--output-limit`, `--timings`, and `--help` are parsed as normal REPL CLI options.
 
 ## Common options
 

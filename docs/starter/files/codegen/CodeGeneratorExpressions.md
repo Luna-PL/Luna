@@ -12,14 +12,14 @@ For C++ readers: this is the "expression evaluator" of the entire LLVM backend �
 - Runs a series of dynamic_casts against Expr subclasses and calls the matching generateXxx. If `generateBinary`/`generateUnary` return nullptr, it keeps trying the remaining types (short-circuit logic). Unrecognized types finally raise an error and return PoisonValue.
 
 **Literal generators** (generateIntLiteral/FloatLiteral/StringLiteral/BoolLiteral/UnitLiteral/ArrayLiteral):
-- `IntLiteral`: `ConstantInt::get(i32Ty, value, true)`. `FloatLiteral`: `ConstantFP::get(f64Ty, value)`. `StringLiteral`: `CreateGlobalString` → GEP to obtain the first character. `BoolLiteral`: i1 constant. `UnitLiteral`: returns i32 0 (unit has no runtime payload). `ArrayLiteral`: `UndefValue` array → element-wise CreateInsertValue.
+- `IntLiteral`: `ConstantInt::get(i32Ty, value, true)`. `FloatLiteral`: `ConstantFP::get(f64Ty, value)`. `StringLiteral`: `CreateGlobalString` → GEP to obtain the first character. `BoolLiteral`: i1 constant. `UnitLiteral`: returns i32 0 (unit has no runtime payload). An all-constant `ArrayLiteral` becomes one `ConstantArray`, which canonical local initialization materializes from a private global with `memcpy`; other literals retain ordered element-wise `CreateInsertValue` construction.
 
 **Access generators** (generateIdentifier/DynamicSelect/FieldAccess/SliceLength/Index):
 - `Identifier`: resolves in the order canonical local (LocalId) → mLocals (name) → resolveFunction, and returns the loaded value.
 - `DynamicSelect`: compares each candidate field by field against the metadata (integer/float/bool/string), building a `CreateSelect` chain to pick the function pointer; aborts if the match count is not 1.
 - `FieldAccess`: uses ExtractValue for Record types; GEP + Load for struct pointer types.
 - `SliceLength`: ExtractValue on field 1 (the length) of the slice.
-- `Index`: performs a bounds check with `rt_array_index_or_abort` on arrays or slices (unless safety can be proven statically), then GEP + Load.
+- `Index`: omits statically proven array checks; otherwise emits an inline bounds fast path whose cold failure edge calls `rt_array_index_or_abort`, then performs GEP + Load.
 
 **Arithmetic generators** (generateBinary / generateUnary):
 - `Binary`: `&&` and `||` use a short-circuit CFG (CondBr branches left/right); all other operations — add/subtract/multiply/divide/remainder/bitwise/compare — pick the appropriate Create method based on float or integer types.

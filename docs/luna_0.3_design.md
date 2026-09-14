@@ -1385,6 +1385,7 @@ item 10 is closed.
 | 15 | P4 | complete minimum generation staging/activation/rollback | confirmed minimum evolution loop passes |
 | 16 | P4 | audit the repository for Dynamic, old Rc/Arc, old slot/plugin, and other legacy surfaces | each replacement atomically removed its old path; production has no 0.2 compatibility branch |
 | 17 | P5 | update formatter, LSP, Lunax, docs, benchmarks, and release gates | ecosystem targets only the new 0.3 semantics |
+| 18 | P5 | establish whole-toolchain performance budgets, then optimize loops and arrays first | versioned AOT/JIT baselines pass without weakening bounds, ownership, diagnostics, or ABI contracts |
 
 Every phase adds positive, negative, MoonIR/ABI, and pay-for-use evidence. Rollback uses version
 control; it does not permanently retain legacy paths in the production compiler.

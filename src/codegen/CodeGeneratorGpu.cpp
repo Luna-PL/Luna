@@ -6,6 +6,7 @@
 #include <optional>
 
 #include <llvm/ADT/SmallString.h>
+#include <llvm/Config/llvm-config.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/IntrinsicsAMDGPU.h>
 #include <llvm/IR/LegacyPassManager.h>
@@ -205,15 +206,24 @@ bool CodeGenerator::emitKernelPTX(FunctionDecl* kernel) {
 
     constexpr const char* targetTriple = "nvptx64-nvidia-cuda";
     std::string targetError;
+#if LLVM_VERSION_MAJOR >= 22
     const llvm::Target* target = llvm::TargetRegistry::lookupTarget(
         llvm::Triple(targetTriple), targetError);
+#else
+    const llvm::Target* target = llvm::TargetRegistry::lookupTarget(
+        targetTriple, targetError);
+#endif
     if (!target) {
         error("CUDA backend requires LLVM NVPTX support: " + targetError);
         return false;
     }
     llvm::TargetOptions options;
     std::unique_ptr<llvm::TargetMachine> machine(target->createTargetMachine(
+#if LLVM_VERSION_MAJOR >= 22
         llvm::Triple(targetTriple), mGpuTargets.cudaArchitecture, "", options,
+#else
+        targetTriple, mGpuTargets.cudaArchitecture, "", options,
+#endif
         llvm::Reloc::PIC_, std::nullopt,
         llvm::CodeGenOptLevel::Aggressive));
     if (!machine) {
@@ -224,7 +234,11 @@ bool CodeGenerator::emitKernelPTX(FunctionDecl* kernel) {
 
     auto deviceModule =
         std::make_unique<llvm::Module>("cuda." + symbol, *mCtx);
+#if LLVM_VERSION_MAJOR >= 22
     deviceModule->setTargetTriple(llvm::Triple(targetTriple));
+#else
+    deviceModule->setTargetTriple(targetTriple);
+#endif
     deviceModule->setDataLayout(machine->createDataLayout());
     auto* deviceFunction = llvm::Function::Create(
         source->second->getFunctionType(),
@@ -234,6 +248,9 @@ bool CodeGenerator::emitKernelPTX(FunctionDecl* kernel) {
     deviceFunction->setCallingConv(llvm::CallingConv::PTX_Kernel);
 
     llvm::ValueToValueMapTy valueMap;
+    if (auto* sourceTrap = mModule->getFunction("llvm.trap"))
+        valueMap[sourceTrap] = llvm::Intrinsic::getOrInsertDeclaration(
+            deviceModule.get(), llvm::Intrinsic::trap);
     auto destinationArgument = deviceFunction->arg_begin();
     for (auto& sourceArgument : source->second->args()) {
         destinationArgument->setName(sourceArgument.getName());
@@ -332,15 +349,24 @@ bool CodeGenerator::emitKernelHSACO(FunctionDecl* kernel) {
     constexpr const char* targetTriple = "amdgcn-amd-amdhsa";
     const std::string& architecture = mGpuTargets.rocmArchitecture;
     std::string targetError;
+#if LLVM_VERSION_MAJOR >= 22
     const llvm::Target* target = llvm::TargetRegistry::lookupTarget(
         llvm::Triple(targetTriple), targetError);
+#else
+    const llvm::Target* target = llvm::TargetRegistry::lookupTarget(
+        targetTriple, targetError);
+#endif
     if (!target) {
         error("ROCm backend requires LLVM AMDGPU support: " + targetError);
         return false;
     }
     llvm::TargetOptions options;
     std::unique_ptr<llvm::TargetMachine> machine(target->createTargetMachine(
+#if LLVM_VERSION_MAJOR >= 22
         llvm::Triple(targetTriple), architecture, "", options,
+#else
+        targetTriple, architecture, "", options,
+#endif
         llvm::Reloc::PIC_, std::nullopt,
         llvm::CodeGenOptLevel::Aggressive));
     if (!machine) {
@@ -351,7 +377,11 @@ bool CodeGenerator::emitKernelHSACO(FunctionDecl* kernel) {
 
     auto deviceModule =
         std::make_unique<llvm::Module>("rocm." + symbol, *mCtx);
+#if LLVM_VERSION_MAJOR >= 22
     deviceModule->setTargetTriple(llvm::Triple(targetTriple));
+#else
+    deviceModule->setTargetTriple(targetTriple);
+#endif
     deviceModule->setDataLayout(machine->createDataLayout());
     llvm::SmallVector<llvm::Type*, 8> deviceParameterTypes;
     for (llvm::Type* parameter :
@@ -371,6 +401,9 @@ bool CodeGenerator::emitKernelHSACO(FunctionDecl* kernel) {
     deviceFunction->setCallingConv(llvm::CallingConv::AMDGPU_KERNEL);
 
     llvm::ValueToValueMapTy valueMap;
+    if (auto* sourceTrap = mModule->getFunction("llvm.trap"))
+        valueMap[sourceTrap] = llvm::Intrinsic::getOrInsertDeclaration(
+            deviceModule.get(), llvm::Intrinsic::trap);
     auto* abiBlock =
         llvm::BasicBlock::Create(*mCtx, "abi", deviceFunction);
     llvm::IRBuilder<> abiBuilder(abiBlock);
@@ -603,220 +636,4 @@ bool CodeGenerator::emitKernelHSACO(FunctionDecl* kernel) {
     mKernelHSACO.emplace(
         symbol, makeHipModuleBundle(linkedHsaco, architecture));
     return true;
-}
-
-llvm::Value* CodeGenerator::generateDeviceBufferPointer(Expr* expr) {
-    if (auto* move = dynamic_cast<MoveExpr*>(expr))
-        return generateDeviceBufferPointer(move->operand.get());
-    if (auto* borrow = dynamic_cast<BorrowExpr*>(expr))
-        return generateDeviceBufferPointer(borrow->operand.get());
-    if (auto* address = dynamic_cast<AddrOfExpr*>(expr))
-        return generateDeviceBufferPointer(address->operand.get());
-    if (auto* id = dynamic_cast<IdentifierExpr*>(expr)) {
-        auto local = mLocals.find(id->name);
-        if (local != mLocals.end()) {
-            TypePtr type;
-            auto typed = mLocalTypes.find(id->name);
-            if (typed != mLocalTypes.end()) type = typed->second;
-            auto* value = mBuilder->CreateLoad(local->second->getAllocatedType(), local->second,
-                                               id->name + ".devicearg");
-            // A kernel reference parameter contains the caller's buffer slot.
-            // In host functions dereference that slot once more to obtain the
-            // actual allocation. Kernel IR instead uses the direct device
-            // pointer ABI, which is also the form supplied by the CUDA Driver.
-            if (type && type->kind == TypeKind::Reference && type->inner &&
-                type->inner->kind == TypeKind::DeviceBuffer && !mCurrentFunctionIsKernel)
-                return mBuilder->CreateLoad(mHelpers->ptrTy(), value, id->name + ".deviceptr");
-            return value;
-        }
-    }
-    return generateExpr(expr);
-}
-
-llvm::Value* CodeGenerator::generateHostRawPointer(Expr* expr) {
-    // A bulk transfer accepts &raw<i32> / &mut raw<i32>.  The reference is
-    // to a local that stores the foreign pointer, so load once to recover the
-    // actual host-memory address rather than passing the address of its slot.
-    Expr* operand = expr;
-    if (auto* borrow = dynamic_cast<BorrowExpr*>(operand)) operand = borrow->operand.get();
-    else if (auto* address = dynamic_cast<AddrOfExpr*>(operand)) operand = address->operand.get();
-    if (auto* id = dynamic_cast<IdentifierExpr*>(operand)) {
-        auto local = mLocals.find(id->name);
-        if (local != mLocals.end())
-            return mBuilder->CreateLoad(local->second->getAllocatedType(), local->second,
-                                        id->name + ".hostptr");
-    }
-    return generateExpr(expr);
-}
-
-void CodeGenerator::emitGpuOperationFailureCheck(llvm::Value* operationSucceeded,
-                                                  llvm::Function* func) {
-    auto* succeeded = mBuilder->CreateICmpNE(
-        operationSucceeded, llvm::ConstantInt::get(operationSucceeded->getType(), 0),
-        "gpu.operation.ok");
-    auto* failedBB = llvm::BasicBlock::Create(*mCtx, "gpu.operation.failed", func);
-    auto* continuedBB = llvm::BasicBlock::Create(*mCtx, "gpu.operation.continue", func);
-    mBuilder->CreateCondBr(succeeded, continuedBB, failedBB);
-
-    mBuilder->SetInsertPoint(failedBB);
-    auto report = mModule->getOrInsertFunction(
-        "rt_gpu_report_operation_error_and_abort", mHelpers->voidTy());
-    mBuilder->CreateCall(report);
-    mBuilder->CreateUnreachable();
-
-    mBuilder->SetInsertPoint(continuedBB);
-}
-
-llvm::Value* CodeGenerator::generateLaunch(LaunchExpr* launch) {
-    const auto* kernelDeclaration = resolveDeclaration(
-        launch->kernelRef);
-    const std::string symbol = kernelDeclaration
-        ? kernelDeclaration->linkageName : std::string{};
-    llvm::Function* callee = resolveFunction(launch->kernelRef);
-    if (!callee || !mCurrentFunc) {
-        error("cannot lower launch of unknown kernel '" + launch->kernelName + "'");
-        return llvm::ConstantInt::get(mHelpers->i32Ty(), 0);
-    }
-
-    auto* counter = createEntryBlockAlloca(mCurrentFunc, mHelpers->i32Ty(), "launch.index");
-    auto* threads = coerceCallArgument(generateExpr(launch->threads.get()), mHelpers->i32Ty());
-    mBuilder->CreateStore(llvm::ConstantInt::get(mHelpers->i32Ty(), 0), counter);
-
-    // Both CUDA's Driver API and HIP's Module API receive an array of
-    // addresses, not an array of values. Buffer borrows already are addresses
-    // of host-side buffer slots; scalar launch values are materialized into
-    // entry-block slots here.
-    std::vector<llvm::Value*> driverParameters;
-    driverParameters.push_back(counter);
-    for (size_t i = 0; i < launch->args.size(); ++i) {
-        llvm::Value* value = generateExpr(launch->args[i].get());
-        const size_t parameterIndex = i + 1;
-        llvm::Type* parameterType = parameterIndex < callee->getFunctionType()->getNumParams()
-            ? callee->getFunctionType()->getParamType(parameterIndex) : value->getType();
-        if (parameterType->isPointerTy() && value->getType()->isPointerTy()) {
-            driverParameters.push_back(value);
-        } else {
-            value = coerceCallArgument(value, parameterType);
-            auto* slot = createEntryBlockAlloca(mCurrentFunc, value->getType(), "launch.scalar");
-            mBuilder->CreateStore(value, slot);
-            driverParameters.push_back(slot);
-        }
-    }
-    auto* parameterArrayType = llvm::ArrayType::get(mHelpers->ptrTy(), driverParameters.size());
-    auto* parameterArray = createEntryBlockAlloca(mCurrentFunc, parameterArrayType, "launch.params");
-    for (size_t i = 0; i < driverParameters.size(); ++i) {
-        auto* destination = mBuilder->CreateInBoundsGEP(
-            parameterArrayType, parameterArray,
-            {llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
-             llvm::ConstantInt::get(mHelpers->i32Ty(), i)}, "launch.param");
-        mBuilder->CreateStore(driverParameters[i], destination);
-    }
-    auto* parameterStart = mBuilder->CreateInBoundsGEP(
-        parameterArrayType, parameterArray,
-        {llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
-         llvm::ConstantInt::get(mHelpers->i32Ty(), 0)}, "launch.paramstart");
-
-    const auto ptx = mKernelPTX.find(symbol);
-    const std::string ptxSource = ptx == mKernelPTX.end() ? "" : ptx->second;
-    auto* ptxValue = mBuilder->CreateGlobalString(ptxSource, "kernel.ptx");
-    const auto hsaco = mKernelHSACO.find(symbol);
-    llvm::Value* hsacoValue = nullptr;
-    llvm::Value* hsacoSize = nullptr;
-    if (hsaco == mKernelHSACO.end() || hsaco->second.empty()) {
-        hsacoValue = mBuilder->CreateGlobalString("", "kernel.hsaco.empty");
-        hsacoSize = llvm::ConstantInt::get(mHelpers->i64Ty(), 0);
-    } else {
-        const llvm::StringRef hsacoSource(hsaco->second.data(), hsaco->second.size());
-        auto* hsacoData = llvm::ConstantDataArray::getString(*mCtx, hsacoSource, false);
-        auto* hsacoGlobal = new llvm::GlobalVariable(
-            *mModule, hsacoData->getType(), true, llvm::GlobalValue::PrivateLinkage,
-            hsacoData, "kernel.hsaco");
-        hsacoValue = mBuilder->CreateInBoundsGEP(
-            hsacoData->getType(), hsacoGlobal,
-            {llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
-             llvm::ConstantInt::get(mHelpers->i32Ty(), 0)}, "kernel.hsaco.data");
-        hsacoSize = llvm::ConstantInt::get(mHelpers->i64Ty(), hsaco->second.size());
-    }
-    auto* kernelName = mBuilder->CreateGlobalString(symbol, "kernel.name");
-    auto cudaBackend = mModule->getOrInsertFunction(
-        "rt_gpu_backend_is_cuda", mHelpers->i32Ty());
-    auto* useCuda = mBuilder->CreateICmpNE(
-        mBuilder->CreateCall(cudaBackend, {}, "gpu.backend"),
-        llvm::ConstantInt::get(mHelpers->i32Ty(), 0), "gpu.iscuda");
-    auto rocmBackend = mModule->getOrInsertFunction(
-        "rt_gpu_backend_is_rocm", mHelpers->i32Ty());
-    auto* useRocm = mBuilder->CreateICmpNE(
-        mBuilder->CreateCall(rocmBackend, {}, "gpu.backend"),
-        llvm::ConstantInt::get(mHelpers->i32Ty(), 0), "gpu.isrocm");
-
-    auto* cudaBB = llvm::BasicBlock::Create(*mCtx, "launch.cuda", mCurrentFunc);
-    auto* backendBB = llvm::BasicBlock::Create(*mCtx, "launch.backend", mCurrentFunc);
-    auto* rocmBB = llvm::BasicBlock::Create(*mCtx, "launch.rocm", mCurrentFunc);
-    auto* condBB = llvm::BasicBlock::Create(*mCtx, "launch.sim.cond", mCurrentFunc);
-    auto* bodyBB = llvm::BasicBlock::Create(*mCtx, "launch.sim.body", mCurrentFunc);
-    auto* exitBB = llvm::BasicBlock::Create(*mCtx, "launch.sim.exit", mCurrentFunc);
-    auto* mergeBB = llvm::BasicBlock::Create(*mCtx, "launch.merge", mCurrentFunc);
-    mBuilder->CreateCondBr(useCuda, cudaBB, backendBB);
-
-    mBuilder->SetInsertPoint(cudaBB);
-    auto cudaLaunch = mModule->getOrInsertFunction(
-        "rt_gpu_launch_ptx", mHelpers->i32Ty(), mHelpers->ptrTy(), mHelpers->ptrTy(),
-        mHelpers->i32Ty(), mHelpers->ptrTy());
-    auto* cudaEvent = mBuilder->CreateCall(cudaLaunch,
-        {ptxValue, kernelName, threads, parameterStart}, "cuda.event");
-    mBuilder->CreateBr(mergeBB);
-
-    mBuilder->SetInsertPoint(backendBB);
-    mBuilder->CreateCondBr(useRocm, rocmBB, condBB);
-
-    mBuilder->SetInsertPoint(rocmBB);
-    auto rocmLaunch = mModule->getOrInsertFunction(
-        "rt_gpu_launch_hsaco", mHelpers->i32Ty(), mHelpers->ptrTy(),
-        mHelpers->i64Ty(), mHelpers->ptrTy(), mHelpers->i32Ty(), mHelpers->ptrTy());
-    auto* rocmEvent = mBuilder->CreateCall(rocmLaunch,
-        {hsacoValue, hsacoSize, kernelName, threads, parameterStart}, "rocm.event");
-    mBuilder->CreateBr(mergeBB);
-
-    mBuilder->SetInsertPoint(condBB);
-    auto* index = mBuilder->CreateLoad(mHelpers->i32Ty(), counter, "launch.index.value");
-    auto* active = mBuilder->CreateICmpSLT(index, threads, "launch.active");
-    mBuilder->CreateCondBr(active, bodyBB, exitBB);
-
-    mBuilder->SetInsertPoint(bodyBB);
-    std::vector<llvm::Value*> args;
-    args.push_back(index);
-    for (size_t i = 0; i < launch->args.size(); ++i) {
-        const size_t paramIndex = i + 1;
-        llvm::Value* value = nullptr;
-        if (paramIndex < callee->getFunctionType()->getNumParams() &&
-            callee->getFunctionType()->getParamType(paramIndex)->isPointerTy()) {
-            // The CPU simulator calls the same kernel IR used for PTX, so it
-            // passes the buffer pointer value rather than the address of the
-            // host slot used only by CUDA's parameter-array ABI.
-            value = generateDeviceBufferPointer(launch->args[i].get());
-        } else {
-            value = generateExpr(launch->args[i].get());
-        }
-        if (paramIndex < callee->getFunctionType()->getNumParams())
-            value = coerceCallArgument(value, callee->getFunctionType()->getParamType(paramIndex));
-        args.push_back(value);
-    }
-    mBuilder->CreateCall(callee, args);
-    auto* next = mBuilder->CreateAdd(index, llvm::ConstantInt::get(mHelpers->i32Ty(), 1),
-                                     "launch.next");
-    mBuilder->CreateStore(next, counter);
-    mBuilder->CreateBr(condBB);
-
-    mBuilder->SetInsertPoint(exitBB);
-    mBuilder->CreateBr(mergeBB);
-
-    mBuilder->SetInsertPoint(mergeBB);
-    auto* event = mBuilder->CreatePHI(mHelpers->i32Ty(), 3, "launch.event");
-    event->addIncoming(cudaEvent, cudaBB);
-    event->addIncoming(rocmEvent, rocmBB);
-    // Event value 1 denotes a completed simulator dispatch. `await` remains
-    // explicit in source and becomes event synchronization in either vendor
-    // branch above.
-    event->addIncoming(llvm::ConstantInt::get(mHelpers->i32Ty(), 1), exitBB);
-    return event;
 }

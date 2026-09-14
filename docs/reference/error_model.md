@@ -200,7 +200,7 @@ Codes support editors, CI, and documentation lookup; messages, source snippets, 
 | `LEX` | Lexing | `LEX0001`: invalid character |
 | `PAR` | Parsing | `PAR0001`: missing expected syntax element |
 | `PKG` | Package loading | `PKG0001`: unreadable input; `PKG0003`: package-name mismatch |
-| `SEM` | Type/semantic analysis | `SEM0001`: undefined name; `SEM0002`: type constraint; `SEM0003`: missing return; `SEM0101`: C ABI |
+| `SEM` | Type/semantic analysis | `SEM0001`: undefined name; `SEM0002`: type constraint; `SEM0003`: missing return; `SEM0004`: predefined type collision; `SEM0101`: C ABI |
 | `TRT` | Trait | `TRT0001`: trait constraint error |
 | `OWN` | Ownership | `OWN0001`: use after move; `OWN0002`: use after free; `OWN0003`: borrow conflict; `OWN0004`: linear value not consumed; `OWN0101`: GPU in-flight; `OWN0201`: control-flow state mismatch |
 | `CGN` | Code generation | `CGN0001`: invalid host IR; `CGN0101`: CUDA; `CGN0102`: ROCm |

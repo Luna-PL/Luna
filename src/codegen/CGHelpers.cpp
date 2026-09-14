@@ -26,13 +26,13 @@ llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
         case TypeKind::String:
         case TypeKind::CStr:
         case TypeKind::RawPointer:
-        case TypeKind::DeviceBuffer:
         case TypeKind::Metadata:
         case TypeKind::MetadataView:
         case TypeKind::SymbolSet:
         case TypeKind::DeclarationView:
         case TypeKind::DeclarationRef: return ptrTy();
         case TypeKind::Iterator: return ptrTy();
+        case TypeKind::DeviceBuffer: return deviceBufferTy();
         case TypeKind::Result: {
             const uint64_t valueSize = type->typeArgs.size() > 0
                 ? luna::layout::valueSize(type->typeArgs[0]) : 0;
@@ -103,7 +103,7 @@ uint64_t typeSize(const TypePtr& type) {
         case TypeKind::CStr: return 8; // pointer size
         case TypeKind::Reference:
         case TypeKind::RawPointer: return 8;
-        case TypeKind::DeviceBuffer:
+        case TypeKind::DeviceBuffer: return 16;
         case TypeKind::Metadata:
         case TypeKind::MetadataView:
         case TypeKind::SymbolSet:

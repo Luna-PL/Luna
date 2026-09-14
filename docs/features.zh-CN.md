@@ -77,9 +77,9 @@ Core 提供具有稳定 package identity 的 `Option`、`Iterator`、`IntoIterat
 初始化位，`filter`/`take` 会清理拒绝项，`map` 可从 Copy 输入产生 move-only
 输出，也可通过显式 owning 参数消费 move-only 输入。lambda 函数体已进入路径敏感
 所有权检查，`fold`/`for_each`/`count` 会持有 move-only 终结 recipe 的隐藏状态。
-当前 structured LLVM path 对 move-only affine fold accumulator 使用初始化位；已完成的
-canonical-CFG replacement 则用一个 synthetic local 静态证明 move、重新初始化和最终
-transfer，不需要 runtime flag，但该 CFG 尚未成为唯一 backend body。linear accumulator
+当前唯一的 canonical-CFG backend 用一个 synthetic local 静态证明 move-only affine
+fold accumulator 的 move、重新初始化和最终 transfer，不需要 runtime initialization
+flag。linear accumulator
 仍是后续边界。`C016` closure environment 已支持 Copy 捕获与显式 Affine/Linear move
 捕获；借用捕获继续拒绝。
 无捕获 recipe（包括拥有 move-only 数组源的 recipe）现可物化为 affine、单次消费

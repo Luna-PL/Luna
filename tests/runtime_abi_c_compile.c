@@ -8,6 +8,12 @@ _Static_assert(LUNA_RUNTIME_DECLARATION_SLOT_V1 == 8,
                "Runtime Slot declaration kind must remain stable");
 _Static_assert(LUNA_NATIVE_DECLARATION_SLOT_V1 == 8,
                "Native Slot declaration kind must remain stable");
+_Static_assert(sizeof(LunaDeviceBufferI32V1) == sizeof(void*) + sizeof(size_t),
+               "Device-buffer carrier must remain two contiguous ABI words");
+_Static_assert(offsetof(LunaDeviceBufferI32V1, data) == 0,
+               "Device-buffer data must be the first ABI field");
+_Static_assert(offsetof(LunaDeviceBufferI32V1, length) == sizeof(void*),
+               "Device-buffer length must follow the data pointer");
 
 // Build-only C translation unit: the public host ABI must not require C++.
 size_t luna_runtime_abi_c_layout_probe(void) {
@@ -35,6 +41,7 @@ size_t luna_runtime_abi_c_layout_probe(void) {
            sizeof(LunaFileMetadataV1) + sizeof(LunaAllocErrorV1) +
            sizeof(LunaOwnedForeignMemoryV1) + sizeof(LunaRuntimeModuleContextV1) +
            sizeof(LunaRuntimeErrorSnapshotV1) + sizeof(LunaNativeProofV1) +
+           sizeof(LunaDeviceBufferI32V1) +
            sizeof(LunaNativeExportDescriptorV1) +
            sizeof(LunaNativeLibraryDescriptorV1) +
            sizeof(LunaRuntimeMetadataValueV1) +

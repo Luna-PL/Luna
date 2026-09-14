@@ -1,7 +1,12 @@
 #include "SymbolTable.h"
+#include "PredefinedTypes.h"
 
 SymbolTable::SymbolTable() {
     enterScope(); // global scope
+    for (const auto& definition : predefinedTypes()) {
+        if (definition.form == PredefinedTypeForm::Atomic)
+            mTypeMap.emplace(std::string(definition.name), definition.atomicType);
+    }
 }
 
 void SymbolTable::enterScope() {
@@ -54,13 +59,19 @@ bool SymbolTable::hasInCurrentScope(const std::string& name) const {
     return mScopes.back().count(name) > 0;
 }
 
-void SymbolTable::defineType(const std::string& name, TypePtr type) {
+bool SymbolTable::defineType(const std::string& name, TypePtr type) {
+    if (isPredefinedTypeName(name)) return false;
     mTypeMap[name] = type;
+    return true;
 }
 
 TypePtr SymbolTable::lookupType(const std::string& name) const {
     auto it = mTypeMap.find(name);
     return it == mTypeMap.end() ? nullptr : it->second;
+}
+
+bool SymbolTable::isPredefinedType(const std::string& name) const {
+    return isPredefinedTypeName(name);
 }
 
 std::unordered_map<std::string, SymbolInfo> SymbolTable::visibleSymbols() const {

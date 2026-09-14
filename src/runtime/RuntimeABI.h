@@ -47,6 +47,15 @@ enum LunaRuntimeErrorCodeV1 {
     LUNA_RUNTIME_ERROR_INVALID_STATE = 12,
 };
 
+// Bounds-carrying device allocation capability. `data` is opaque to host
+// code; `length` is the number of i32 elements, not a byte count. Runtime
+// entry points validate both fields against the live-allocation registry so a
+// copied, forged, or stale carrier cannot widen the accessible range.
+typedef struct LunaDeviceBufferI32V1 {
+    void* data;
+    size_t length;
+} LunaDeviceBufferI32V1;
+
 typedef struct LunaRuntimeErrorSnapshotV1 {
     uint32_t abi_version;
     uint32_t struct_size;

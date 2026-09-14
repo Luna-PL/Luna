@@ -38,7 +38,7 @@ The 0.3 migration has completed the Sema split, nominal named-type default,
 usage blocks, generic Resource/Drop contracts, and library-owned `Rc`/`Arc`.
 The single MoonIR now seals executable function bodies to canonical tables and
 CFG unconditionally. The currently supported surface passes the complete
-61-test gate, including per-element move-only iterator cleanup. SF006 module-level nominal
+registered CTest gate, including per-element move-only iterator cleanup. SF006 module-level nominal
 slots and static single-shot interceptor/context continuations now run canonically;
 multi-shot/dynamic source forms and persistent external-plugin continuation callbacks remain
 outside the 0.3 surface. Legacy
@@ -125,7 +125,10 @@ Continue with the [English getting-started guide](docs/getting_started.md).
 
 ## Build from source
 
-The validated development toolchain is LLVM/Clang 22, CMake 3.20 or newer, a C++17 compiler, and optionally Ninja. On Linux and macOS:
+The primary development toolchain is LLVM/Clang 22. Luna also carries and tests
+source compatibility for LLVM/Clang 20, including Windows JIT and AOT builds.
+CMake 3.20 or newer, a C++17 compiler, and optionally Ninja are required. On
+Linux and macOS:
 
 ```sh
 LLVM_DIR="$(llvm-config --cmakedir)"
@@ -152,7 +155,7 @@ directory containing `luna.package`:
 | `luna analyze <input> --message-format=json` | Emit a semantic tooling snapshot; optionally read one or more source overlays from stdin. |
 | `luna run <input> [-O0\|-O2\|-O3]` | JIT-compile and execute a program. |
 | `luna build <package> [-O0\|-O2\|-O3] [-t native\|moon\|cffi]` | Produce the selected native, Moon Container, or CFFI artifact. |
-| `luna repl` | Start the limited Alpha REPL (`=`, `:decl`, single-line statements). |
+| `luna repl` | Start the worker-isolated Alpha REPL (`=`, `:type`, transactional declarations, explicit multiline cells). |
 
 The driver also exposes explicit linker, runtime, MoonIR, cost-report and GPU target options.
 Runtime backend selection is separate from code-object generation.
@@ -191,7 +194,9 @@ Alpha roadmap:
 2. priority item 17 is aligning formatter, LSP, Lunax, packaging, benchmarks,
    documentation, and release gates with only the final 0.3 semantics; root
    publication remains blocked until compatible toolchain and Lunax releases
-   are recorded in the ecosystem lock.
+   are recorded in the ecosystem lock;
+3. priority item 18 will establish whole-toolchain performance budgets and
+   address loop/array throughput first, without weakening safety checks.
 
 See the [0.3 implementation priorities](docs/luna_0.3_design.md#9-implementation-priority).
 

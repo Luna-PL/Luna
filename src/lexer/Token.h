@@ -10,8 +10,6 @@ enum class TokenKind {
     Meta, Constraint, Select, With, Runtime, Dynamic, Kernel, Launch, Await,
     Trait, Impl, Where, Struct, Enum, Package, Module, Using, As, Export, If, Else, Match, While, For,
     True, False, Self,
-    // Built-in types (parsed as keywords for type annotations)
-    TyI32, TyI64, TyF32, TyF64, TyBool, TyString,
     // Identifiers & literals
     Identifier, IntLiteral, FloatLiteral, StringLiteral,
     // Operators
@@ -69,9 +67,6 @@ const std::unordered_map<std::string, TokenKind> KEYWORDS = {
     {"while",  TokenKind::While},
     {"for",    TokenKind::For},    {"true",   TokenKind::True},
     {"false",  TokenKind::False},  {"Self",   TokenKind::Self},
-    {"i32",    TokenKind::TyI32},  {"i64",    TokenKind::TyI64},
-    {"f32",    TokenKind::TyF32},  {"f64",    TokenKind::TyF64},
-    {"bool",   TokenKind::TyBool}, {"string", TokenKind::TyString},
 };
 
 inline std::string tokenKindName(TokenKind k) {
@@ -127,12 +122,6 @@ inline std::string tokenKindName(TokenKind k) {
         case TokenKind::True: return "true";
         case TokenKind::False: return "false";
         case TokenKind::Self: return "Self";
-        case TokenKind::TyI32: return "i32";
-        case TokenKind::TyI64: return "i64";
-        case TokenKind::TyF32: return "f32";
-        case TokenKind::TyF64: return "f64";
-        case TokenKind::TyBool: return "bool";
-        case TokenKind::TyString: return "string";
         case TokenKind::Identifier: return "identifier";
         case TokenKind::IntLiteral: return "int literal";
         case TokenKind::FloatLiteral: return "float literal";

@@ -81,14 +81,14 @@ Luna 应用级宿主服务的完整实现，在 `ApplicationHostServices.h` 声�
 
 - **ApplicationHostServices.h** —— 本文件实现的工厂函数声明，包含 `RuntimeABI.h`。
 - **RuntimeABI.h** —— 提供 `LunaConsoleV1`、`LunaFileSystemV1`、`LunaFileHandleV1`、`LunaIoErrorV1`、`LunaFileMetadataV1` 等类型定义，以及所有 `LUNA_*` 常量。
-- **Runtime.cpp** —— 将本文件提供的 `lunaApplicationConsoleV1` 和 `lunaApplicationFileSystemV1` 组合到 `applicationHostServices` 常量中，通过 `rt_install_application_host_services_v1` 安装。
+- **Runtime.cpp** —— 持有轻量默认 allocator/output profile 与内部发布状态转换；本文件在 `rt_install_application_host_services_v1` 内惰性构造完整 input/filesystem profile，使仅输出的 archive 链接无需提取它。
 - 本文件是 Luna 运行时中唯一直接调用平台 POSIX/Windows 文件 I/O API 的翻译单元。
 
 ## 延伸阅读
 
 - `ApplicationHostServices.h` 中两个工厂函数的声明
 - `RuntimeABI.h` 中 `LunaFileSystemV1` 和 `LunaConsoleV1` 的完整字段定义
-- `Runtime.cpp` 中 `applicationHostServices` 常量的构造与激活
+- `ApplicationHostServices.cpp` 中 application profile 的惰性构造与激活
 - POSIX `open`(2)、`lseek`(2)、`fsync`(2)、`fstat`(2) 等系统调用文档
 - Windows CRT `_wopen`、`_lseeki64`、`_commit`、`_fstat64` API 文档
 
@@ -133,11 +133,11 @@ Luna 应用级宿主服务的工厂函数声明头文件，提供了两个返回
 
 - **RuntimeABI.h** —— 提供 `LunaConsoleV1` 和 `LunaFileSystemV1` 的类型定义。本文件直接依赖它。
 - **ApplicationHostServices.cpp** —— 本文件声明的两个函数的实现，包含完整的平台适配代码（POSIX + Windows）。
-- **Runtime.h / Runtime.cpp** —— `Runtime.cpp` 中的 `applicationHostServices` 常量通过调用这两个函数来初始化其控制台和文件系统子表。`rt_install_application_host_services_v1` 安装这个服务。
-- **生成代码（Generated IR）** —— 编译器生成的应用程序入口点通过 `rt_install_application_host_services_v1` 安装这些服务，然后使用 `rt_console_write_v1`、`rt_file_open_v1` 等转发函数。
+- **Runtime.h / Runtime.cpp** —— 持有轻量默认 profile，并负责验证/发布请求的完整 application profile。
+- **生成代码（Generated IR）** —— 优化后仅在 input、filesystem、直接 host service 或 GPU 使用仍存活时注入 `rt_install_application_host_services_v1`；仅输出调用使用 Runtime 默认 console。
 
 ## 延伸阅读
 
 - `ApplicationHostServices.cpp` 中各函数的具体平台实现
-- `Runtime.cpp` 中 `applicationHostServices` 常量的构造与使用
+- `ApplicationHostServices.cpp` 中 application profile 的惰性构造与安装
 - `RuntimeABI.h` 中 `LunaConsoleV1` 和 `LunaFileSystemV1` 的完整字段定义

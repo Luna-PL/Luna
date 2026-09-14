@@ -84,8 +84,10 @@ LUNA_CPU_ITERATIONS=7 LUNA_CPU_WARMUPS=2 \
 
 Input arrays are shared bit-for-bit between both sides through
 `tools/gen_cpu_bench_sources.py` (seeded RNG, never hand-edited). The runner
-alternates execution order, verifies identical checksums, and reports
-mean/median/p95. Optionally pin the measurement core and priority:
+builds one executable per workload on both sides, alternates execution order,
+verifies identical checksums, and reports mean/median/p95. Isolating the C++
+workload avoids dispatcher and code-layout effects from a monolithic suite.
+Optionally pin the measurement core and priority:
 
 ```sh
 LUNA_BENCH_PIN=2 LUNA_BENCH_NICE=-5 \
@@ -104,7 +106,7 @@ New dimensions and what they isolate:
 | `hash` | 256-slot open addressing, 128 keys, 100k probes |
 | `find` | 16 KiB linear scan, 200k searches |
 | `recursion` | `fib(32)`, call-stack behavior |
-| `rotate` | manual bit-rotate + manual popcount, 20M iterations |
+| `rotate` | bit-rotate + `u32` popcount intrinsic, 20M iterations |
 
 Sample recorded on 2026-08-14, Luna commit `f1a5302`, same host and toolchain
 as above (Clang 22.1.6, `-O3`, 7 measured runs after 2 warmups; median wall ms
@@ -133,12 +135,174 @@ including process startup):
 | recursion | 7.069 | 6.205 | 1.14x |
 | rotate | 93.169 | 76.033 | 1.23x |
 
-The pattern is unambiguous: every workload that touches an array index sits
-between 2.1x and 13.4x slower, while pure scalar workloads stay at parity
-(0.83x-1.24x). This is a regression against the 2026-08-11 sample where
-`array` was 1.01x and `array-scan` 0.87x; the CFG-refactor phase currently
-lowers every array index into a `rt_array_index_or_abort` runtime call that is
-neither inlined nor eliminated at `-O3` (see the attribution tool below).
+The pattern in this historical `f1a5302` sample is unambiguous: every workload
+that touches an array index sits between 2.1x and 13.4x slower, while pure
+scalar workloads stay at parity (0.83x-1.24x). This was a regression against
+the 2026-08-11 sample where `array` was 1.01x and `array-scan` 0.87x: that CFG
+revision lowered every array index into a `rt_array_index_or_abort` runtime
+call that was neither inlined nor eliminated at `-O3`. Current code removes
+statically proven checks and lowers every remaining check to an inline fast
+path; only its cold failure edge calls the Runtime diagnostic, allowing LLVM
+to use dominating loop conditions without weakening bounds safety.
+
+Host O2/O3 now also constructs a generic host `TargetMachine` before building
+LLVM's pass pipeline. This supplies the target transform/cost model to loop
+unrolling and vectorization without specializing AOT artifacts for the build
+machine. In an isolated Windows/Clang 20 check on 2026-09-11, `find` IR compiled
+without clang's second middle-end pass fell from 136.57 ms to 105.41 ms after
+the change; the ordinary full AOT path was 104.24 ms. The same audit found that
+integer literals were fixed to `i32` and unsigned LLVM operations were never
+selected. Contextual integer literals plus unsigned divide/remainder, shift and
+comparison lowering now expose rotate as `llvm.fshl`/x86 `rol`. The remaining
+manual 32-step popcount dominated the test, so both benchmark sides now use
+their typed popcount intrinsic. On that Windows host, Luna workload-only time
+changed from 99.66 ms (1.24x C++) to 26.20 ms (0.97x C++); process cycles are
+at parity (69.00M vs 68.78M). The process probe now reports Windows process
+cycles in addition to CPU time, RSS and page faults.
+
+A follow-up audit on 2026-09-13 found that `ONLY_WORKLOAD` was passed by the
+attribution tool but ignored by the C++ suite, while the full runner timed each
+sample by spawning two MSYS `date` processes. Both paths now build one C++
+executable per workload and use the in-process paired probe. With the corrected
+isolation, `chase` measured 1.01x in process cycles over 25 runs and `find`
+measured 1.00x; their hot blocks match C++ throughput. The remaining wall-time
+ratios on very short workloads are dominated by the roughly 3 ms AOT runtime
+startup delta, not their generated loops.
+
+The same audit found that AOT links inherited implementation-only DWARF from
+the compiler build's `libruntime.a`. Per-symbol runtime sections, dead-section
+elimination and debug-section stripping reduced a representative Windows AOT
+executable from 498,688 bytes to 64,000 bytes. Across 31 paired `find` runs its
+median wall time changed from 75.274 ms to 73.215 ms, with identical output.
+Luna does not currently emit source-level debug metadata, so this only removes
+compiler-build leakage rather than user-program debugging information.
+After integrating the change, a 7-run pass over all 20 isolated workloads put
+median wall ratios in the 0.76x-1.06x range and process-cycle ratios in the
+0.72x-1.06x range; `find`, `divmod`, and `rotate` were all 1.00x by wall time,
+while `chase` was 1.03x.
+
+Compiler-throughput profiling on the same host found a second redundant LLVM
+middle-end: Luna had already optimized target-aware IR, then asked clang to
+optimize it again. Keeping clang's O2/O3 backend level while disabling that
+second pass reduced 15-run paired full `find` builds from 238.079 ms to
+231.205 ms median (p95 252.914 to 240.533 ms), with byte-identical emitted IR
+and unchanged executable throughput. Luna now goes further by emitting the
+native object directly and retaining textual IR only as an inspectable
+artifact, so clang performs the final platform link without an IR frontend.
+
+Unchanged native builds now compare newly generated IR by content and reuse
+the executable only when the IR, complete link command, compiler, runtime
+archive, and path-based link dependencies are all current. This reduced the
+same `find` build to 111.822 ms. Phase attribution then exposed an immediately
+repeated whole-module verification after sealing: the sealer already verifies
+every new CFG, and the pipeline still performs its final post-optimizer
+verification. Removing only the duplicate middle pass reduced the incremental
+median to 105.907 ms and process cycles from 182.76M to 168.28M. Overall,
+literal-leaf fast paths in CFG construction and verification then reduced that
+median to 83.546 ms and cycles to 120.79M. Memoizing immutable builtin MoonIR
+type references reduced the 4,096-element array's lowering phase from about
+13 ms to 0.6 ms; lazily registering NVPTX/AMDGPU targets only for explicit
+device output gave a paired 72.851 to 72.388 ms change while reducing cycles
+from 96.05M to 94.02M and peak working set by about 896 KiB.
+
+Native application builds now also keep a conservative pre-frontend input
+fingerprint. It covers package/workspace Luna sources, manifests and lockfiles,
+code-generation options, the Luna compiler, runtime, AOT compiler, and
+path-resolved link inputs. The cache stores SHA-256 digests for emitted IR,
+the native object, and the executable; missing or ambiguous inputs fall back to the exact IR
+comparison path. On the final 15-run guarded-cache pass, unchanged `find` builds had a
+42.493 ms median, 45.634 ms p95, 55.56M median cycles, and 22.65 MiB median peak
+working set. This is 82.2% shorter, or 5.61x the build throughput, versus the
+238.079 ms baseline. Compared with the final full frontend/MoonIR/LLVM cache
+path at 70.758 ms, the preflight hit removes another 40.0%.
+
+The direct-object cold path was measured separately with seven fresh package
+directories per workload. Small O3 builds fell from 219.87 to 184.16 ms
+(-16.2%), the 4,096-element `find` build from 257.64 to 241.39 ms (-6.3%), and
+the 98 KiB two-array `stream-copy` build from 260.05 to 238.94 ms (-8.1%). The
+small-to-large delta is now primarily Luna/LLVM work; the remaining common
+roughly 180 ms floor is dominated by process startup and the final CRT/runtime
+archive link.
+
+A follow-up dependency audit found that every `main` installed the full
+application host profile even when it only returned a constant or printed a
+value. The profile's dynamic initialization pulled the filesystem registry and
+libc++ into otherwise small artifacts. Host-profile injection now runs after
+optimization and is restricted to input/filesystem/direct-host/GPU users; the
+profile implementation is archive-separated and its filesystem registry is
+lazy. A constant-return executable shrank from 47,104 to 20,480 bytes
+(-56.5%); the 4,096-element output-producing `find` executable shrank from
+64,000 to 39,424 bytes (-38.4%), with unchanged output.
+
+Host-profile pruning alone did not materially shorten the noisy cold path: an
+immediate 15-package production pass measured 252.156 ms median. Instrumented
+phase isolation then found the hidden cost. LLVM IR itself took 0.862 ms to
+write but 8-23 ms to copy into place; native object emission took about 4.1 ms
+but its copy-based commit took 20-40 ms; final cache digest/state publication
+took another 21-43 ms. On Windows, the cold path wrote each new output to a
+temporary file, copied it to a previously absent destination, then deleted the
+temporary file, multiplying filesystem and scanner work.
+
+New outputs now commit with a same-directory rename; overwrite-by-copy remains
+for an existing changed destination. In a 10-sample instrumented pass, IR
+commit fell to 2.224 ms median and object commit to 4.976 ms, reducing the AOT
+layer to 119.090 ms. The final uninstrumented 15-package `find` pass measured
+200.716 ms median and 211.710 ms p95, 20.4% below the immediate 252.156 ms
+baseline. Preflight cache hits bypass this path and remain at the roughly
+43-46 ms process floor. The largest remaining cold segment is the external
+clang/lld CRT link at about 88-90 ms. A 20-pair alternating link test also
+rejected `-nostdlib++` as an optimization (91.616 vs 89.914 ms, same output
+size), so that extra policy was not retained.
+
+The MinGW/Clang path was then isolated into its two processes. Across 24 paired
+links of the same object and Runtime archive, the clang++ driver measured
+88.540 ms median (102.640 ms p95), while invoking its companion `ld.lld`
+with the driver-expanded CRT recipe measured 55.970 ms (64.590 ms p95). Luna
+now selects that direct subprocess only for a recognized x86-64 MinGW/Clang
+layout, an executable, path-resolved user libraries, and an unmodified driver
+environment. Shared libraries, bare `-l` inputs, custom driver environments,
+and unknown layouts retain clang++ semantics. The linker, CRT, builtin and
+system archives are included in cache invalidation. No Clang/LLD libraries are
+embedded into Luna, avoiding a multi-megabyte linker payload and its broad
+startup cost. The direct and driver-mediated representative executables were
+SHA-256 identical. In 16 fresh `find` packages, complete cold O3 builds
+measured 169.953 ms median and 186.307 ms p95, 15.3% below the preceding
+200.716 ms median. A 30-run guarded
+cache check remained within its process floor at 45.701 ms median.
+Parallelizing the post-link input recheck and three artifact digests was also
+tested over 20 alternating pairs: 171.490 ms serial versus 170.470 ms parallel
+was below the noise floor, while the parallel path produced the worse tail
+outlier. It was not retained.
+
+The next phase trace separated cache publication: the required post-link input
+recheck took 3.2-4.1 ms, IR hashing about 0.38 ms, and object hashing about
+0.15 ms. Reading the newly linked 39 KiB executable for its integrity digest,
+however, stalled for 13-27 ms in the Windows filesystem/scanner path. The
+compatible direct-lld path now requests the PE on stdout; Luna writes those
+bytes once to a sibling pending file while updating SHA-256, then publishes it
+after lld succeeds. Restricted inherited handles, failed-link cleanup, atomic
+fresh-output rename, and the post-link source recheck are preserved. With
+`SOURCE_DATE_EPOCH` fixed, file-output and streamed-output artifacts were
+SHA-256 identical. Across 24 warmed alternating full-build pairs, streaming
+reduced the cold `find` median from 174.910 to 162.930 ms (-6.8%) and p95 from
+188.740 to 172.460 ms (-8.6%). A final 30-run hot-cache check measured
+46.326 ms median, remaining in the same process-startup range.
+
+That hot result was then compared with a no-work `luna --version`: 42.100 ms
+of the 46.426 ms build was process/image startup, not cache validation. The
+RelWithDebInfo executable contained 3.6 MiB of code but about 113 MiB of DWARF.
+On MinGW RelWithDebInfo builds, Luna now keeps that DWARF in a sibling
+`luna.exe.debug`, adds a `.gnu_debuglink`, and strips only the compiler image;
+Release, Debug, and non-MinGW builds are unchanged. `llvm-symbolizer` still
+resolved `main` to `src/main.cpp:3`. In 40 warmed alternating pairs the image
+changed from 119.0 to 5.27 MB, `--version` fell from 42.830 to 36.030 ms
+(-15.9%), and guarded hot builds fell from 47.690 to 40.910 ms (-14.2%). The
+same streamed linker across 24 paired cold builds fell from 161.340 to
+153.110 ms median (-5.1%), with p95 falling from 169.990 to 163.430 ms
+(-3.9%). The behavior can be disabled with
+`LUNA_SEPARATE_COMPILER_DEBUG_INFO=OFF`.
+Delay-loading LLVM itself was rejected: lld cannot delay-load the imported
+data symbol `llvm::sys::DynamicLibrary::Invalid`.
 
 ## Heterogeneous and ROCm comparison
 
@@ -267,12 +431,43 @@ Signal families, all from the same LLVM 22.1.6 toolchain:
    is subtracted from both sides, separating startup from workload time.
 5. **`--mca`**: extracts the largest assembly block from each side and runs
    `llvm-mca` on it (CPU auto-detected, e.g. znver4) for cycle/IPC estimates.
+   On Windows the dynamic probe also records `QueryProcessCycleTime` cycles.
 
-For the sample above, the analyzer attributes the `array` gap to "12 runtime
+For the historical `f1a5302` sample above, the analyzer attributes the `array` gap to "12 runtime
 guard calls in the hot path (`rt_array_index_or_abort`), Luna IR 63 vs 29
 instructions, 12 asm calls vs 2", and the scalar workloads to "no gap". On
 machines without perf, the report says so and the remaining signals still
 apply; installing `linux-tools` adds hardware counters automatically.
+
+## Whole-toolchain performance plan
+
+Performance work is an explicit post-semantics project phase, not an informal
+cleanup item. The order is:
+
+1. Freeze reproducible compile-time, JIT, AOT, startup, peak-memory and runtime
+   baselines by Luna commit and toolchain. Add budgets only after noise and
+   empty-process costs are recorded.
+2. Treat loops and arrays as the first runtime priority: fixed-array access,
+   scans, reductions, nested loops, range/iterator lowering, bounds-check cost,
+   alias information and vectorization all receive isolated workloads.
+3. Attribute each gap at MoonIR, LLVM IR, optimization-remark, assembly and
+   hardware-counter levels. Redundant checks may be removed only when a
+   dominating proof preserves the same failure boundary; required checks need
+   an inlineable fast path. No optimization may weaken bounds or ownership.
+4. Continue with allocation, calls, recursion, generic specialization, cleanup
+   code size and runtime ABI crossings after the loop/array gate is stable.
+5. Track compiler throughput and interactive latency separately. REPL timing
+   splits lexing, parsing, semantic/trait/ownership/indexing work, four MoonIR
+   stages, LLVM codegen, JIT materialization/lookup/cleanup, entry execution and
+   orchestration. Track exact-source `:type` cache hits separately from worker
+   submissions; no cache or warm-worker design may weaken crash, timeout, memory,
+   output or process-tree containment, or preserve user JIT state across cells.
+6. Maintain Windows LLVM 20, WSL/Linux LLVM 22 and sanitizer coverage. GPU
+   kernels, transfers and launch latency remain a separate hardware matrix.
+
+Completion requires checksum-equivalent workloads, `-O0/-O2/-O3` JIT/AOT
+correctness, safety-negative tests, before/after raw measurements and a stated
+IR/assembly explanation. A single favorable microbenchmark is not completion.
 
 ## Contribution rules
 

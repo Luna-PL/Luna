@@ -4,6 +4,7 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Metadata.h>
 
+#include <algorithm>
 #include <functional>
 #include <unordered_set>
 
@@ -56,6 +57,7 @@ void CodeGenerator::generateControlFlowBody(
     llvm::BasicBlock* abiEntry) {
     mCanonicalLocals.assign(graph.locals.size(), nullptr);
     mCanonicalLocalTypes.assign(graph.locals.size(), nullptr);
+    mCanonicalDeviceBufferLengths.assign(graph.locals.size(), nullptr);
     std::unordered_set<uint32_t> pointerBackedLocals;
     for (const auto& block : graph.blocks) {
         for (const auto& operation : block.operations) {
@@ -97,6 +99,17 @@ void CodeGenerator::generateControlFlowBody(
             static_cast<unsigned>(parameterIndex++));
         auto* storage = mCanonicalLocals[local.id.value];
         auto* storageType = storage->getAllocatedType();
+        const TypePtr& localType = mCanonicalLocalTypes[local.id.value];
+        if (mCurrentFunctionIsKernel && localType &&
+            localType->kind == TypeKind::Reference && localType->inner &&
+            localType->inner->kind == TypeKind::DeviceBuffer) {
+            if (parameterIndex >= func->arg_size()) {
+                error("kernel device-buffer parameter is missing its length");
+            } else {
+                mCanonicalDeviceBufferLengths[local.id.value] = func->getArg(
+                    static_cast<unsigned>(parameterIndex++));
+            }
+        }
         // A closure environment parameter arrives as a pointer to the env
         // struct ({ptr, i32}), but the canonical local is typed as the
         // Closure struct value. Load the struct from the pointer so the
@@ -256,9 +269,29 @@ void CodeGenerator::generateControlFlowBody(
                 if (!value || mBuilder->GetInsertBlock()->getTerminator())
                     continue;
                 auto* storage = mCanonicalLocals[declaration->local.value];
-                mBuilder->CreateStore(
-                    coerceCallArgument(value, storage->getAllocatedType()),
-                    storage);
+                const TypePtr& localType =
+                    mCanonicalLocalTypes[declaration->local.value];
+                if (localType && localType->kind == TypeKind::Array &&
+                    llvm::isa<llvm::Constant>(value)) {
+                    auto* initializer = llvm::cast<llvm::Constant>(value);
+                    auto* global = new llvm::GlobalVariable(
+                        *mModule, storage->getAllocatedType(), true,
+                        llvm::GlobalValue::PrivateLinkage, initializer,
+                        "array.literal");
+                    global->setUnnamedAddr(
+                        llvm::GlobalValue::UnnamedAddr::Global);
+                    const auto alignment = llvm::Align(std::max<uint64_t>(
+                        1, luna::layout::valueAlignment(localType)));
+                    global->setAlignment(alignment);
+                    mBuilder->CreateMemCpy(
+                        storage, alignment, global, alignment,
+                        luna::layout::valueSize(localType));
+                } else {
+                    mBuilder->CreateStore(
+                        coerceCallArgument(
+                            value, storage->getAllocatedType()),
+                        storage);
+                }
             } else if (auto* release =
                            dynamic_cast<moon::FreeStmt*>(operation.get())) {
                 if (release->isImplicit) {

@@ -2,14 +2,14 @@
 
 ## What This File Does
 
-Implements `CodeGenerator::generateFunctionBody(FunctionDecl*)`: generates the LLVM code for a single Luna function's body. It is responsible for four things: determining the function's LLVM `Function` and return type; clearing the "current-function" member state (local table, canonical locals, array drop flags, materialized iterators, known upper bounds); if the function is `main`, injecting the host application service initialization `rt_install_application_host_services_v1`, and, when a kernel is present, injecting GPU initialization `rt_gpu_initialize` (on failure, calling `rt_gpu_report_initialization_error` to return an error code); then calling `generateControlFlowBody` to generate the canonical CFG body, and finally adding a void return.
+Implements `CodeGenerator::generateFunctionBody(FunctionDecl*)`: generates the LLVM code for a single Luna function's body. It determines the LLVM `Function` and return type, clears current-function state, injects GPU initialization for a kernel-using `main`, calls `generateControlFlowBody`, and finally adds a void return. Application host-service installation is selected later in `CodeGeneratorModule.cpp`, after optimization has exposed which input/filesystem calls survive.
 
 For C++ readers: this is a "function-level entry adapter" — it translates declaration-level information (parameters/return type/whether it is `main`/whether a kernel exists) into a single `generateControlFlowBody` call and handles the prologue (entry initialization, state reset). The actual statement/control-flow generation lives in the ControlFlow file.
 
 ## Key Functions and Methods
 
 **`void CodeGenerator::generateFunctionBody(FunctionDecl* decl)`**
-- Logical order: (1) look up the LLVM `Function` in `mFunctions`/`mModule` by `generatedSymbolName` or `name`, and return if it cannot be found; (2) resolve the return type to `retLLVMType`; (3) return directly if `decl->isExtern`; if `decl->controlFlow` is empty, report the error "without exclusive canonical CFG body"; (4) set `mCurrentFunc` and `mCurrentFunctionIsKernel` (saving/restoring the old values) and clear `mLocals`/`mLocalTypes`/`mCanonicalLocals`/`mCanonicalLocalTypes`/`mArrayDropFlags`/`mMaterializedIterators`/`mLocalKnownUpperBounds`; (5) create the `entry` basic block and set the insertion point; (6) if it is `main`: insert a call to `rt_install_application_host_services_v1` (JIT and AOT share the entry strategy); (7) if `name==main` and `mProgram->features.kernel`: call `rt_gpu_initialize` and branch on the result to `readyBB`/`failedBB`, where `failedBB` calls `rt_gpu_report_initialization_error` and returns 1/null/void according to the return type (avoiding a null-pointer crash in AOT when the backend is misconfigured); (8) `generateControlFlowBody(*decl->controlFlow, func, entryBB)`; (9) if the return is void and there is no terminator, add `CreateRetVoid`; restore the `mCurrentFunc`/kernel flag.
+- Logical order: (1) look up the LLVM `Function` in `mFunctions`/`mModule`; (2) resolve `retLLVMType`; (3) skip externs and reject a missing canonical CFG; (4) save/reset current-function state; (5) create `entry`; (6) for a kernel-using `main`, call `rt_gpu_initialize` and return an appropriate failure value after `rt_gpu_report_initialization_error`; (7) call `generateControlFlowBody`; (8) add a missing void return and restore state. `CodeGeneratorModule.cpp` subsequently optimizes the module and injects `rt_install_application_host_services_v1` only for surviving input/filesystem/direct-host/GPU use.
 - Who calls it: `generateBodies` in `CodeGeneratorModule.cpp` (for all non-selector, non-template-parameter, codegen-reachable functions/impl methods, in two passes: kernel first, then host). What it calls: `generateControlFlowBody` and the various lower-level generate methods.
 
 ## Relationship to Surrounding Files and Pipeline Stages
@@ -24,7 +24,7 @@ For C++ readers: this is a "function-level entry adapter" — it translates decl
 
 1. `CodeGeneratorModule.cpp` — the declaration/function entry table and the two-pass dispatch.
 2. `CodeGeneratorControlFlow.cpp` — how the canonical CFG body is invoked by this function.
-3. runtime: `rt_install_application_host_services_v1`/`rt_gpu_initialize`/`rt_gpu_report_initialization_error`.
+3. runtime: `rt_gpu_initialize`/`rt_gpu_report_initialization_error`; conditional host-profile injection lives in `CodeGeneratorModule.cpp`.
 
 ---
 

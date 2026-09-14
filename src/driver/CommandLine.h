@@ -2,6 +2,7 @@
 
 #include "codegen/CodeGenerator.h"
 
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <vector>
@@ -34,6 +35,22 @@ struct CommandLineOptions {
     ArtifactTarget artifactTarget = ArtifactTarget::Native;
     bool printMoonCostReport = false;
     bool reserveKernelRuntime = false;
+    bool replNoPrompt = false;
+    bool replShowHelp = false;
+    bool replShowTimings = false;
+    unsigned replTimeoutSeconds = 30;
+    unsigned replMemoryLimitMiB = 1024;
+    unsigned replOutputLimitMiB = 16;
+    uint64_t replWorkerRequestChannel = 0;
+    uint64_t replWorkerResultChannel = 0;
+    uint64_t replWorkerStdoutChannel = 0;
+    uint64_t replWorkerStderrChannel = 0;
+    uint64_t replWorkerReadySignal = 0;
+    uint64_t replWorkerGateSignal = 0;
+    uint64_t replWorkerCompletionSignal = 0;
+    unsigned replWorkerParentProcessId = 0;
+    unsigned replWorkerMemoryLimitMiB = 0;
+    bool replWorkerMemoryLimitSpecified = false;
     LunaOptimizationLevel optimizationLevel = LunaOptimizationLevel::O0;
 };
 
