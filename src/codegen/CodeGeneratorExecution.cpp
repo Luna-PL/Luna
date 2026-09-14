@@ -112,7 +112,14 @@ materializeLunaJit(std::unique_ptr<llvm::Module>& module,
     if (auto error = (*jit)->addIRModule(std::move(tsm))) return error;
 
     auto& executionSession = (*jit)->getExecutionSession();
-    auto processSymbols = EPCDynamicLibrarySearchGenerator::GetForTargetProcess(executionSession);
+    auto processSymbols = EPCDynamicLibrarySearchGenerator::GetForTargetProcess(
+        executionSession, [](const SymbolStringPtr& symbol) {
+            // A missing Luna entry must remain a lookup failure. Mach-O
+            // executables export their host `main`, and admitting it here can
+            // make jitRun() recursively invoke the compiler/test process.
+            const StringRef name = *symbol;
+            return name != "main" && name != "_main";
+        });
     if (!processSymbols) return processSymbols.takeError();
     (*jit)->getMainJITDylib().addGenerator(std::move(*processSymbols));
     return std::move(*jit);
