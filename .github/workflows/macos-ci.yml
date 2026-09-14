@@ -13,13 +13,13 @@ jobs:
           # The release-readiness regression test compares HEAD with HEAD^.
           fetch-depth: 2
 
-      - name: Install CMake, Ninja, and LLVM
-        run: brew install cmake ninja llvm
+      - name: Install CMake, Ninja, and LLVM 22
+        run: brew install cmake ninja llvm@22
 
       - name: Configure
         shell: bash
         run: |
-          llvm_prefix="$(brew --prefix llvm)"
+          llvm_prefix="$(brew --prefix llvm@22)"
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_COMPILER="${llvm_prefix}/bin/clang" \
@@ -31,7 +31,7 @@ jobs:
 
       - name: Stable core regression suite
         run: |
-          llvm_prefix="$(brew --prefix llvm)"
+          llvm_prefix="$(brew --prefix llvm@22)"
           export LUNA_CXX="${llvm_prefix}/bin/clang++"
           export PATH="${llvm_prefix}/bin:$PATH"
           ctest --test-dir build -LE hardware --output-on-failure

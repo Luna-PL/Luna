@@ -40,7 +40,7 @@ Alpha Windows CI verifies only CPU, JIT/AOT, FFI, plugin ABI, and simulator regr
 GPU hardware still requires the vendor driver and runtime to be installed separately and is
 not a default CI gate.
 
-Luna accepts LLVM/Clang 20 and newer; LLVM 20 and 22 are the currently tested API
+Luna accepts LLVM/Clang 20 through 22; LLVM 20 and 22 are the currently tested API
 baselines. Keep `clang++`, `LLVM_DIR`, and the DLLs on `PATH` from the same MSYS2
 environment. An existing **CLANG64** installation is also suitable for local native
 development builds by replacing `/ucrt64` with `/clang64` in the commands above. Do not

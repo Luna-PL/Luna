@@ -215,8 +215,10 @@ target 初始化，`codegen-total` 是两者的完整包络。`jit-materialize` 
 不得再与 worker 阶段相加。`parent-roundtrip-gap` 是 `parent-roundtrip` 减去
 `worker-total`，它混合最终结果序列化/发布、信号唤醒、调度和跨进程测量噪声，并非
 单一代码阶段。
-Windows 的内存限制是 Job Object 的进程树总量限制；POSIX worker 会在发布 ready
-之前设置不可自行提高、由后代继承的逐进程 `RLIMIT_AS`。
+Windows 的内存限制是 Job Object 的进程树总量限制；Linux worker 会在发布 ready
+之前设置不可自行提高、由后代继承的逐进程 `RLIMIT_AS`。Darwin 不允许把上限降到
+启动时已映射的地址空间以下，因此 macOS 会把所选额度加到初始映射占用后，再设置
+同样不可自行提高的上限。
 
 ## 常用选项
 
