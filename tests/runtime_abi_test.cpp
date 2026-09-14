@@ -129,8 +129,9 @@ int main() {
     }
 
     rt_print_i32(41);
+    rt_print_u32(4294967295u);
     rt_print_cstr("runtime ABI");
-    if (host.output != "41\nruntime ABI\n") {
+    if (host.output != "41\n4294967295\nruntime ABI\n") {
         std::cerr << "language console output bypassed the installed host service\n";
         return 1;
     }

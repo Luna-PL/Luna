@@ -195,3 +195,33 @@ file(REMOVE_RECURSE "${invalid_workspace}")
 if(NOT from_orphan_result EQUAL 1 OR from_orphan_at EQUAL -1)
     message(FATAL_ERROR "foreign From impl was accepted")
 endif()
+
+if(UNIX)
+    set(escape_fixture "${LUNA_BINARY_DIR}/manifest-source-link-escape")
+    set(escape_package "${escape_fixture}/package")
+    set(escape_outside "${escape_fixture}/outside")
+    file(REMOVE_RECURSE "${escape_fixture}")
+    file(MAKE_DIRECTORY "${escape_package}" "${escape_outside}")
+    file(WRITE "${escape_package}/luna.package"
+        "[package]\nid = \"org.luna.fixture.escape\"\nversion = \"1.0.0\"\nkind = \"application\"\nsources = [\"src\"]\n")
+    file(WRITE "${escape_outside}/main.luna"
+        "package org.luna.fixture.escape;\nmodule application;\nfn main() -> i32 { return 0; }\n")
+    file(CREATE_LINK "${escape_outside}" "${escape_package}/src"
+         SYMBOLIC RESULT escape_link_result)
+    if(NOT "${escape_link_result}" STREQUAL "0")
+        file(REMOVE_RECURSE "${escape_fixture}")
+        message(FATAL_ERROR "could not create package source-link fixture: ${escape_link_result}")
+    endif()
+    execute_process(
+        COMMAND "${LUNA_EXECUTABLE}" check "${escape_package}"
+        RESULT_VARIABLE escape_result
+        OUTPUT_VARIABLE escape_output
+        ERROR_VARIABLE escape_error
+    )
+    string(FIND "${escape_output}\n${escape_error}"
+           "source root escapes the package through a filesystem link" escape_at)
+    file(REMOVE_RECURSE "${escape_fixture}")
+    if(NOT escape_result EQUAL 1 OR escape_at EQUAL -1)
+        message(FATAL_ERROR "a package source-root symlink escaped its package boundary")
+    endif()
+endif()

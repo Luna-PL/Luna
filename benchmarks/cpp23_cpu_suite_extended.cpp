@@ -4,6 +4,7 @@
 // seed=24301). Never edit the input arrays by hand; regenerate instead.
 
 #include <array>
+#include <bit>
 #include <cstdint>
 #include <cstdio>
 #include <cstdlib>
@@ -991,10 +992,7 @@ std::uint32_t rotate() {
         const auto mixed = value ^ static_cast<std::uint32_t>(i);
         value = (mixed << 7) | (mixed >> 25);
         value &= 2'147'483'647u;
-        std::uint32_t bits = 0;
-        for (int b = 0; b < 32; ++b) {
-            bits += (value >> static_cast<unsigned>(b)) & 1u;
-        }
+        const std::uint32_t bits = std::popcount(value);
         sum += bits;
     }
     return sum & 255u;
@@ -1002,10 +1000,8 @@ std::uint32_t rotate() {
 } // namespace
 
 #ifdef ONLY_WORKLOAD
-// Single-workload build used by tools/benchmark_analyze.sh so IR/asm/probe
-// metrics are not polluted by the other workloads in this suite.
-int main(int, char**) {
-    std::printf("%u\n", ONLY_WORKLOAD() & 255u);
+int main() {
+    std::printf("%u\n", ONLY_WORKLOAD());
     return 0;
 }
 #else
@@ -1036,5 +1032,4 @@ int main(int argc, char** argv) {
     std::printf("%u\n", result);
     return 0;
 }
-
 #endif

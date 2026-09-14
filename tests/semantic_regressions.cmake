@@ -152,6 +152,8 @@ expect_success("minimal function" "examples/minimal.luna" "Program exited with c
 expect_success("string literal local cleanup is a no-op" "tests/fixtures/string_literal_local_cleanup.luna" "Program exited with code: 0")
 expect_success("operators" "examples/operators.luna" "Program exited with code: 6")
 expect_success("comparison operators" "tests/fixtures/comparison_operators.luna" "Program exited with code: 42")
+expect_success("contextual unsigned integer literals and operations" "tests/fixtures/unsigned_integer_codegen.luna" "1431655765\n0\n1\n32\n4294967295\nProgram exited with code: 0")
+expect_success("contextual integer inference through calls" "tests/fixtures/contextual_integer_inference.luna" "Program exited with code: 42")
 expect_success_without("logical short-circuit" "tests/fixtures/logical_short_circuit.luna" "Program exited with code: 42" "99")
 expect_success("signature and auto inference" "examples/inference.luna" "Program exited with code: 42")
 expect_success_without("ordinary into_iter name has clean diagnostics" "tests/fixtures/into_iter_diagnostic_clean.luna" "Program exited with code: 42" "LOWER_PARAM")
@@ -331,6 +333,9 @@ expect_error("ignored owning FFI return" "tests/fixtures/ffi_owning_return_ignor
 expect_error("invalid owning FFI return type" "tests/fixtures/ffi_owning_return_type_invalid.luna" "owning FFI return of 'bad_allocator' must use `linear raw<T>`")
 expect_error_with_source("in-flight device buffer borrow" "examples/heterogeneous_inflight_invalid.luna" "Cannot borrow device buffer 'data' while a launch is in flight" "gpu_store_i32(borrow mut data, 0, 2);")
 expect_error("bulk upload requires mutable buffer borrow" "tests/fixtures/heterogeneous_bulk_transfer_invalid.luna" "requires `borrow mut buffer`")
+expect_errors("negative GPU allocation and index literals" "tests/fixtures/gpu_negative_literal_invalid.luna"
+    "'gpu_alloc_i32' requires a non-negative element count"
+    "'gpu_store_i32' requires a non-negative index")
 expect_error("unawaited launch event" "examples/heterogeneous_unawaited_invalid.luna" "was not awaited before returning")
 expect_errors("kernel host-control effects" "tests/fixtures/kernel_host_effects_invalid.luna"
     "kernel body may not use slot invocation"
@@ -395,4 +400,4 @@ expect_error("enum match rejects duplicate variants" "tests/fixtures/enum_match_
 expect_error("enum match checks payload arity" "tests/fixtures/enum_match_arity_invalid.luna" "variant 'Number' expects 1 payload binding(s), got 2")
 expect_success("Result supports nested and aggregate payloads" "tests/fixtures/result_payload_abi_invalid.luna" "41\n24\nProgram exited with code: 30")
 expect_error("panic requires a text message" "tests/fixtures/panic_message_type_invalid.luna" "panic message must be string or cstr")
-expect_error("temporary print rejects unsupported values" "tests/fixtures/print_unsupported_type_invalid.luna" "temporary print supports only i32, string, or cstr")
+expect_error("temporary print rejects unsupported values" "tests/fixtures/print_unsupported_type_invalid.luna" "temporary print supports only i32, u32, string, or cstr")

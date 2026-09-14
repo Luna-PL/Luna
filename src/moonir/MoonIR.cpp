@@ -536,6 +536,7 @@ const char* identityModeName(luna::types::IdentityMode mode) {
 bool isCompilerIntrinsicName(const std::string& name) {
     static const std::unordered_set<std::string> names = {
         "print", "panic", "slice", "new", "free", "clone",
+        "popcount_u32",
         "range", "metadata", "select_unique",
         "type_of", "type_kind", "type_id", "type_shape",
         "type_domain", "type_nominal",

@@ -31,21 +31,13 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
     mLocalTypes.clear();
     mCanonicalLocals.clear();
     mCanonicalLocalTypes.clear();
+    mCanonicalDeviceBufferLengths.clear();
     mArrayDropFlags.clear();
     mMaterializedIterators.clear();
     mLocalKnownUpperBounds.clear();
 
     auto entryBB = llvm::BasicBlock::Create(*mCtx, "entry", func);
     mBuilder->SetInsertPoint(entryBB);
-
-    // A generated application explicitly requests the ordinary host profile.
-    // The Runtime helper preserves a descriptor already supplied by an
-    // embedding host, so JIT and AOT share this entry policy safely.
-    if (decl->name == "main") {
-        auto installApplicationHost = mModule->getOrInsertFunction(
-            "rt_install_application_host_services_v1", mHelpers->i32Ty());
-        mBuilder->CreateCall(installApplicationHost);
-    }
 
     // GPU init is only needed when kernels exist. Pure-CPU programs must never
     // reference rt_gpu_* symbols so they materialise on every platform (incl.

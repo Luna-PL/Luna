@@ -85,8 +85,10 @@ foreach(hsaco IN LISTS hsaco_files)
     if(NOT readobj_result EQUAL 0)
         message(FATAL_ERROR "could not read ${hsaco} metadata: ${readobj_error}")
     endif()
-    if(NOT metadata MATCHES "kernarg_segment_size: 16")
-        message(FATAL_ERROR "${hsaco} has an unexpected kernarg ABI; expected 16 bytes:\n${metadata}")
+    # index:i32 + global data pointer + length:usize, including HSA ABI
+    # alignment, occupies 24 bytes.
+    if(NOT metadata MATCHES "kernarg_segment_size: 24")
+        message(FATAL_ERROR "${hsaco} has an unexpected bounds-carrying kernarg ABI; expected 24 bytes:\n${metadata}")
     endif()
     if(metadata MATCHES "hidden_(hostcall|multigrid|heap|default_queue|completion_action|queue_ptr)")
         message(FATAL_ERROR "${hsaco} contains forbidden hidden runtime arguments:\n${metadata}")

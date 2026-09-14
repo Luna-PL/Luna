@@ -16,6 +16,7 @@ public:
                std::string* reason = nullptr);
     void requireNumeric(const TypePtr& type);
     void requireBool(const TypePtr& type);
+    bool defaultNumeric(const TypePtr& type);
     void defaultUnconstrainedNumeric();
     bool hasUnresolved(const TypePtr& type);
 

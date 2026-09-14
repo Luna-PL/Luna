@@ -50,9 +50,19 @@ Luna 0.2.1 是用于语言试验和内部项目的 Linux/macOS/Windows 预发布
   精确版本依赖和递归 workspace 依赖装载；远程 registry、内容摘要验证、缓存和
   网络依赖解析尚未实现。
 - AOT 安装后须显式传入 `--runtime-lib` / `--cc`，或设置 `LUNA_RUNTIME_LIB` / `LUNA_CXX`。
-- REPL 仅支持 `= <i32 表达式>`、`:decl <完整单行声明>`、单行临时语句和
-  `:help/:reset/:quit`。声明通过源码重编译保留；局部变量、堆值、JIT 全局状态和
-  运行时状态不会跨输入保留，也不支持多行输入。
+- REPL 支持 `= <i32 表达式>`、`:type`、事务化 `:decl`、`:undo`、单行临时语句，
+  以及显式的 `:paste ... :end` 多行 cell。声明通过源码重编译保留；局部变量、
+  堆值、JIT 全局状态和运行时状态不会跨输入保留。编译与运行使用带时间、进程树
+  内存和输出限制的全新 worker，发生编译器崩溃、abort、输出洪泛或死循环后会话
+  仍可继续。会话等待输入时会预热一个尚未使用的一次性 worker，但它仍只消费一个
+  有界请求便退出。`--timings` 可按 cell 报告缓存/预热状态、十项 frontend/MoonIR
+  细分、LLVM codegen、JIT materialization/lookup/cleanup、入口执行与端到端提交延迟。源码
+  完全一致且成功的 `:type` 查询使用随声明变更失效的有界会话缓存；可执行结果绝不
+  缓存。完成结果发布与有界后台清理相分离（最多两个
+  worker、500 ms 清理宽限），替代 worker 也异步准备。ready、隔离门和完成通知由
+  原生 Windows Event 或继承的 POSIX socketpair 承载，不再轮询控制文件。请求和
+  running/final 两阶段结果记录通过有上限的继承数据通道传输；stdout/stderr 也由共享
+  字节预算的独立通道持续排空，不再创建逐 cell 临时文件。
 
 ## 预编译包
 

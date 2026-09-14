@@ -75,8 +75,9 @@ LUNA_CPU_ITERATIONS=7 LUNA_CPU_WARMUPS=2 \
 ```
 
 两侧输入数组由 `tools/gen_cpu_bench_sources.py`（固定种子 RNG）逐位共享，
-禁止手改。runner 交替执行顺序、校验 checksum 一致，并报告 mean/median/p95。
-可选用 `LUNA_BENCH_PIN`（taskset 固定核心）与 `LUNA_BENCH_NICE` 降低噪声：
+禁止手改。runner 对两端都按 workload 构建独立 executable、交替执行顺序、校验
+checksum 一致，并报告 mean/median/p95；C++ 不再受单体分发程序的 dispatcher 与代码布局
+干扰。可选用 `LUNA_BENCH_PIN`（taskset 固定核心）与 `LUNA_BENCH_NICE` 降低噪声：
 
 ```sh
 LUNA_BENCH_PIN=2 LUNA_BENCH_NICE=-5 \
@@ -95,7 +96,7 @@ LUNA_BENCH_PIN=2 LUNA_BENCH_NICE=-5 \
 | `hash` | 256 槽开放寻址，128 键，100k 次探测 |
 | `find` | 16 KiB 线性查找 × 200k 次 |
 | `recursion` | `fib(32)`，调用栈行为 |
-| `rotate` | 手工位旋转 + 手工 popcount × 20M 次 |
+| `rotate` | 位旋转 + `u32` popcount intrinsic × 20M 次 |
 
 样本于 2026-08-14 在 Luna commit `f1a5302` 记录，环境与上文相同（Clang
 22.1.6、`-O3`、预热 2 次后测 7 次；中位 wall 毫秒，含进程启动）：
@@ -123,11 +124,123 @@ LUNA_BENCH_PIN=2 LUNA_BENCH_NICE=-5 \
 | recursion | 7.069 | 6.205 | 1.14x |
 | rotate | 93.169 | 76.033 | 1.23x |
 
-规律非常明确：凡是触碰数组索引的 workload 全部落在 2.1x-13.4x，而纯标量
-workload 全部持平（0.83x-1.24x）。相比 2026-08-11 样本（`array` 1.01x、
-`array-scan` 0.87x）这是回退：当前 CFG 重构阶段把每次数组索引下放为
-`rt_array_index_or_abort` 运行时调用，且 `-O3` 下既不内联也不消除
-（详见下文归因工具）。
+这个历史 `f1a5302` 样本的规律非常明确：凡是触碰数组索引的 workload 全部落在
+2.1x-13.4x，而纯标量 workload 全部持平（0.83x-1.24x）。相比 2026-08-11
+样本（`array` 1.01x、`array-scan` 0.87x）这是一次回退：当时的 CFG 重构把
+每次数组索引下放为 `rt_array_index_or_abort` 运行时调用，且 `-O3` 下既不内联
+也不消除。当前代码会先删除可静态证明的检查，其余检查生成内联快路径；只有冷失败
+边才调用 Runtime 诊断，因此 LLVM 可以利用支配循环条件，同时不弱化越界安全。
+
+当前 host O2/O3 还会在构造 LLVM pass pipeline 之前创建 generic host
+`TargetMachine`，让循环展开和向量化获得目标变换信息与成本模型，同时不会把 AOT
+产物特化到构建机器。2026-09-11 的 Windows/Clang 20 隔离验证中，在关闭 clang
+第二轮中端优化的条件下，`find` 从 136.57 ms 降至 105.41 ms；常规完整 AOT 路径为
+104.24 ms。同一轮审计还发现整数常量被固定为 `i32`，后端从不选择无符号 LLVM
+操作。现在上下文整数常量和无符号除法、取模、右移、比较已完整传递，rotate 会生成
+`llvm.fshl`/x86 `rol`。剩余热点是 32 步手工 popcount，因此两端基准都改用各自的
+类型化 popcount intrinsic。该 Windows 主机上，Luna 的 workload-only 时间从
+99.66 ms（C++ 的 1.24x）降至 26.20 ms（0.97x），进程周期持平（69.00M 对
+68.78M）。进程探针现在除 CPU 时间、RSS、缺页外也报告 Windows 进程周期。
+
+2026-09-13 的后续审计发现，归因工具虽然传入了 `ONLY_WORKLOAD`，C++ 套件却没有消费
+这个宏；完整 runner 还会为每个样本额外启动两个 MSYS `date` 进程。现在两条路径都按
+workload 构建独立 C++ executable，并由单个探针进程进行成对交替采样。修正隔离后，
+`chase` 的25次进程周期比为 1.01x，`find` 为 1.00x，热点块吞吐也与 C++ 一致。
+极短 workload 剩余的 wall 比值主要来自约 3 ms 的 AOT runtime 启动差，而不是循环代码。
+
+同一轮审计还发现，AOT 链接会从编译器构建目录的 `libruntime.a` 继承仅供实现调试的
+DWARF。运行时按符号分节、死区段消除及调试段剥离后，代表性 Windows AOT executable
+从 498,688 字节降至 64,000 字节；31次 `find` 成对采样的 wall 中位数从
+75.274 ms 降至 73.215 ms，输出不变。Luna 当前尚未生成源级调试元数据，因此这里只是
+消除编译器构建配置泄漏，不会删除用户程序已有的调试信息。
+集成后对20个隔离 workload 各测7次，wall 中位比范围为 0.76x-1.06x，进程周期比范围为
+0.72x-1.06x；`find`、`divmod`、`rotate` 的 wall 均为 1.00x，`chase` 为 1.03x。
+
+同一主机的编译吞吐剖析又发现一轮重复 LLVM 中端：Luna 已经生成经过 target-aware
+优化的 IR，随后又要求 clang 对它完整优化一次。保留 clang 的 O2/O3 后端级别、仅关闭
+第二轮中端后，`find` 的15轮成对全量构建 wall 中位数从 238.079 ms 降至 231.205 ms
+（p95 从 252.914 降至 240.533 ms）；两端生成的 IR 逐字节相同，executable 吞吐不变。
+现在 Luna 进一步直接生成 native object，文本 IR 只作为可检查产物保留，因此 clang
+只执行最终平台链接，不再经过 IR frontend。
+
+现在未变更的 native build 会按内容比较新 IR，并且只有 IR、完整链接命令、编译器、
+Runtime archive 及路径型链接依赖都未过期时才复用 executable。这让同一个 `find` 构建
+降至 111.822 ms。阶段归因随后定位到 sealing 后紧邻的一轮整模块重复验证：sealer 已经
+验证每个新 CFG，pipeline 之后仍保留 post-optimizer 最终验证。仅移除这次中间重复遍历后，
+增量中位数进一步降至 105.907 ms，进程周期从 182.76M 降至 168.28M。字面量叶节点
+在 CFG 构建和验证中的快速路径又将中位数降到 83.546 ms，周期降到 120.79M。缓存
+不可变 builtin MoonIR 类型引用后，4096 元素数组的 lowering 阶段从约 13 ms 降至
+0.6 ms；仅在显式请求设备产物时注册 NVPTX/AMDGPU 目标，使成对中位数从 72.851 ms
+降至 72.388 ms，周期从 96.05M 降至 94.02M，峰值工作集约减少 896 KiB。
+
+原生应用构建现在还维护保守的前端前输入指纹。它覆盖 package/workspace 的 Luna
+源码、manifest 和 lockfile、代码生成选项、Luna 编译器、Runtime、AOT 编译器以及
+可按路径解析的链接输入；缓存同时保存 LLVM IR、native object 与可执行文件的 SHA-256。任何输入
+缺失或链接目标有歧义时，都会退回精确 IR 比较路径。最终 15 次带完整保护的缓存测量中，
+未变更 `find` 的中位数为 42.493 ms，p95 为 45.634 ms，中位周期为 55.56M，中位峰值
+工作集为 22.65 MiB。相对 238.079 ms 基线缩短 82.2%，构建吞吐为 5.60 倍；相对仍
+完整执行前端/MoonIR/LLVM 的最终 70.758 ms 路径，前置命中又减少 40.0%。
+
+直接 object 的冷路径使用每个 workload 七个全新 package 目录单独测量。小型 O3 构建
+从 219.87 ms 降至 184.16 ms（-16.2%），4096 元素 `find` 从 257.64 ms 降至
+241.39 ms（-6.3%），98 KiB、双数组的 `stream-copy` 从 260.05 ms 降至 238.94 ms
+（-8.1%）。小程序到大程序的差值现在主要来自 Luna/LLVM；共同的约 180 ms 下限主要
+是进程启动以及最终 CRT/Runtime archive 链接。
+
+后续依赖审计发现，即使 `main` 只返回常量或输出一个值，也会安装完整 application host
+profile；该 profile 的动态初始化会把 filesystem registry 与 libc++ 拉进本来很小的产物。
+现在 host profile 在优化后按需注入，只覆盖 input/filesystem/直接 host 查询/GPU 用户；
+profile 实现与 Runtime archive 分离，filesystem registry 也改为惰性构造。常量返回 executable 从 47,104 字节降至
+20,480 字节（-56.5%）；带输出的 4096 元素 `find` 从 64,000 字节降至 39,424 字节
+（-38.4%），输出不变。
+
+仅裁剪 host profile 没有显著缩短有噪声的冷路径：紧邻的一轮 15 package 生产测量中位数
+为 252.156 ms。分段探针随后找到了隐藏成本：LLVM IR 实际写出只需 0.862 ms，但复制提交
+需 8-23 ms；native object emission 约 4.1 ms，复制提交却需 20-40 ms；最终缓存摘要与
+state 发布还需 21-43 ms。Windows 冷路径会先写临时文件，再复制到尚不存在的目标，最后
+删除临时文件，重复触发 filesystem 与扫描器工作。
+
+现在新输出使用同目录 rename 提交，只有已存在且内容变化的目标继续走安全覆盖复制。
+10 次带探针测量中，IR commit 中位数降至 2.224 ms，object commit 降至 4.976 ms，AOT
+层降至 119.090 ms。最终无探针的 15 package `find` 中位数为 200.716 ms，p95 为
+211.710 ms，相对紧邻 252.156 ms 基线缩短 20.4%。前置缓存命中绕过这条路径，仍处于约
+43-46 ms 的进程下限。当前最大的冷构建段是约 88-90 ms 的外部 clang/lld CRT 链接。
+20 对交替链接还排除了 `-nostdlib++`：91.616 ms 对默认路径 89.914 ms，产物大小相同，
+因此没有保留这项额外策略。
+
+随后把 MinGW/Clang 链接路径拆成两个进程单独测量。同一 object 与 Runtime archive 的
+24 对链接中，clang++ driver 中位数为 88.540 ms（p95 102.640 ms），使用 driver 展开的
+CRT 参数直接调用其配套 `ld.lld` 则为 55.970 ms（p95 64.590 ms）。现在 Luna 只在识别到
+x86-64 MinGW/Clang 布局、构建 executable、用户库均可按路径解析且 driver 环境未被修改时
+选择该直接子进程；shared library、裸 `-l` 输入、自定义 driver 环境与未知布局仍保持
+clang++ 语义。linker、CRT、builtin 及系统 archive 也进入缓存失效条件。实现没有把
+Clang/LLD 库嵌入 Luna，避免引入数 MB 的 linker 负载及其普遍启动成本。driver 路径与
+直接路径生成的代表性 executable 的 SHA-256 完全相同。16 个全新 `find` package 的完整
+O3 冷构建中位数为 169.953 ms，p95 为 186.307 ms；相对上一阶段 200.716 ms 中位数再降
+15.3%。30 次保护缓存复测的中位数为 45.701 ms，仍处在相同进程下限。
+另以 20 对交替构建测试了并行执行链接后的输入复查与三个产物摘要：串行 171.490 ms，
+并行 170.470 ms，差异低于噪声，同时并行路径出现更差的尾部离群值，因此没有保留。
+
+下一轮阶段探针进一步拆开 cache publication：必须保留的链接后输入复查耗时 3.2-4.1 ms，
+IR 摘要约 0.38 ms，object 摘要约 0.15 ms；但为了完整性摘要首次读取刚链接出的 39 KiB
+executable，会在 Windows filesystem/scanner 路径停顿 13-27 ms。兼容的直接 lld 路径现在
+要求 PE 写到 stdout；Luna 将字节单次写入同目录 pending 文件的同时更新 SHA-256，并只在
+lld 成功后发布。受限继承 handle、失败清理、首次产物原子 rename 及链接后源码复查均保留。
+固定 `SOURCE_DATE_EPOCH` 后，文件输出与流式输出的产物 SHA-256 完全相同。24 对已预热、
+交替执行的完整构建中，流式路径让冷 `find` 中位数从 174.910 降至 162.930 ms（-6.8%），
+p95 从 188.740 降至 172.460 ms（-8.6%）。最终 30 次热缓存复测中位数为
+46.326 ms，仍处于相同的进程启动区间。
+
+随后用无实际工作的 `luna --version` 对照该热结果：46.426 ms 构建中有 42.100 ms
+来自进程/映像启动，而非缓存校验。RelWithDebInfo executable 的代码只有 3.6 MiB，DWARF
+却约 113 MiB。现在 MinGW RelWithDebInfo 构建把 DWARF 保存在相邻 `luna.exe.debug`，
+写入 `.gnu_debuglink`，并且只剥离编译器映像；Release、Debug 及非 MinGW 构建不变。
+`llvm-symbolizer` 仍能把 `main` 定位到 `src/main.cpp:3`。40 对预热交替测试中，映像从
+119.0 降至 5.27 MB，`--version` 从 42.830 降至 36.030 ms（-15.9%），保护缓存热构建
+从 47.690 降至 40.910 ms（-14.2%）。使用同一流式 linker 的 24 对冷构建中，中位数
+从 161.340 降至 153.110 ms（-5.1%），p95 从 169.990 降至 163.430 ms（-3.9%）。可用
+`LUNA_SEPARATE_COMPILER_DEBUG_INFO=OFF` 关闭该行为。LLVM 自身的 delay-load 实验未保留：
+lld 无法延迟加载导入数据符号 `llvm::sys::DynamicLibrary::Invalid`。
 
 ## 异构与 ROCm 对照
 
@@ -238,12 +351,37 @@ LUNA_ANALYZE_ITERATIONS=5 \
 4. **启动分解**：空程序基线（Luna AOT 与 C++）从两侧减去，把启动与工作量
    时间分开。
 5. **`--mca`**：从两侧汇编中提取最大代码块，用 `llvm-mca` 分析
-   （CPU 自动探测，如 znver4）得到周期/IPC 估计。
+   （CPU 自动探测，如 znver4）得到周期/IPC 估计；Windows 动态探针还记录
+   `QueryProcessCycleTime` 进程周期。
 
-对上述样本，分析器把 `array` 差距归因为"热路径 12 处运行时守卫调用
+对上述历史 `f1a5302` 样本，分析器把 `array` 差距归因为"热路径 12 处运行时守卫调用
 （`rt_array_index_or_abort`），Luna IR 63 vs 29 条，asm 调用 12 vs 2"，
 标量 workload 归因为"无差距"。没有 perf 的机器会明确提示，其余信号仍然
 有效；安装 `linux-tools` 后硬件计数器自动启用。
+
+## 全工具链性能规划
+
+性能工作是语义收口后的正式项目阶段，不作为零散清理项处理，顺序如下：
+
+1. 按 Luna commit 与工具链冻结可复现的编译时间、JIT、AOT、启动、峰值内存和
+   运行时基线；先记录噪声与空进程成本，再建立性能预算。
+2. 将循环和数组列为首要运行时目标：为定长数组访问、扫描、归约、嵌套循环、
+   range/iterator lowering、边界检查成本、alias 信息和向量化建立隔离 workload。
+3. 对每项差距同时检查 MoonIR、LLVM IR、优化 remark、汇编和硬件计数器。只有存在
+   dominating proof 且保持同一失败边界时才能消除冗余检查；不可消除的检查需要可内联
+   fast path。任何优化都不得弱化边界或所有权安全。
+4. 循环/数组门稳定后，再处理分配、调用、递归、泛型特化、cleanup 代码体积和
+   Runtime ABI crossing。
+5. 编译吞吐与交互延迟分开跟踪。REPL 计时区分 lexer、parser、
+   semantic/traits/ownership/indexing、四项 MoonIR 阶段、LLVM codegen、JIT
+   materialization/lookup/cleanup、入口执行和编排开销，并将源码完全一致的 `:type` 缓存命中
+   与 worker 提交分开统计；任何缓存或 warm-worker 设计都必须保持崩溃、超时、内存、
+   输出与进程树隔离，并且不得让用户 JIT 状态跨 cell 保留。
+6. 持续覆盖 Windows LLVM 20、WSL/Linux LLVM 22 和 sanitizer；GPU kernel、传输和
+   launch 延迟继续使用独立硬件矩阵。
+
+完成门要求 workload checksum 等价、`-O0/-O2/-O3` JIT/AOT 正确性、安全负例、
+前后原始测量以及明确的 IR/汇编解释；单个有利微基准不构成完成。
 
 ## 提交规则
 

@@ -2,7 +2,7 @@
 
 ## What This File Does
 
-This file implements the lifecycle and execution core of `CodeGenerator`: the constructor (which initializes the LLVM context/module/IRBuilder/CGHelpers and initializes LLVM target support), the destructor, `jitRun()` (which JIT-compiles and executes the generated `main` via ORC LLJIT and returns its exit code), and `emitObjectFile()` (which writes the module to disk as textual IR for AOT use). The file also contains an anonymous namespace: `initializeLLVM()` performs one-time initialization of the target backends; `invokeLunaJitEntry` is the sole JIT boundary and is exempted from the UBSan function check; `lunaJitMingwMain()` is an empty `__main` placeholder for MinGW.
+This file implements the lifecycle and execution core of `CodeGenerator`: construction, JIT execution, inspectable textual-IR output, and direct native-object output for AOT. Native targets are initialized normally; NVPTX/AMDGPU registries are initialized only when device output is requested.
 
 For C++ readers: `jitRun` is the heaviest method in the entire file — it manually binds all of Luna's runtime `rt_*` helper symbols explicitly into JIT semantics (rather than relying on ELF `-rdynamic` / Mach-O exports / Windows `dllexport`), hands the `ThreadSafeModule` to LLJIT, then falls back to process symbols from libc/user libraries, and finally `lookup("main")` and invokes it.
 
@@ -10,7 +10,7 @@ For C++ readers: `jitRun` is the heaviest method in the entire file — it manua
 
 Within the anonymous namespace:
 
-- `void initializeLLVM()` — a static flag guards against re-entry; performs a one-time `InitializeNativeTarget(AsmPrinter/AsmParser)` and `InitializeAllTargets/MCs/AsmPrinters`.
+- `initializeLunaLLVMTargets()` initializes the native target once; the separate device initializer registers all targets only for requested PTX/HSACO output.
 - `using LunaJitEntry = int (*)()` and `int invokeLunaJitEntry(LunaJitEntry entry)` — wraps the call under `#if defined(__clang__) LLVM_NO_SANITIZE("function")` to avoid crashes from ORC-generated functions lacking UBSan metadata when probed at page boundaries.
 - Under `_WIN32`, `void lunaJitMingwMain(){}` — a no-op symbol supplied because MinGW injects a `__main` call into functions named main.
 
@@ -20,7 +20,7 @@ Within the anonymous namespace:
 
 - Initializes `mCtx` (`make_unique<LLVMContext>`), `mModule` (moduleName), `mBuilder`, `mHelpers`, then calls `initializeLLVM()`.
 
-**`int CodeGenerator::jitRun()`**
+**`LunaJitRunResult CodeGenerator::jitRun()`**
 
 - Creates the JIT with `LLJITBuilder()`.
 - Binds the runtime helpers one by one via `bindRuntime(name, &func)` into a SymbolMap (Exported, mangleAndIntern), conditioned on that name already being referenced in the module. Coverage includes allocation, RC/ARC library storage, panic, host services, recoverable allocation, console/file I/O, runtime errors, array bounds, and GPU helpers. On Windows it additionally binds `lunaJitMingwMain` as `__main`.
@@ -34,11 +34,14 @@ Within the anonymous namespace:
 - Sets the triple to `getProcessTriple()`, opens the output with `raw_fd_ostream`, and writes textual IR via `mModule->print(dest)` (avoiding bitcode compatibility issues).
 - Who calls it: the AOT path (the upstream compilation pipeline).
 
+**`bool CodeGenerator::emitNativeObjectFile(const string& outputPath)`**
+
+- Reuses the PIC host `TargetMachine` already configured for O2/O3 optimization (or creates it once for O0), then runs LLVM's object-file emission passes. The outer AOT driver gives this `.o` to the platform linker; recognized x86-64 MinGW/Clang executable builds invoke the companion `ld.lld` directly, while other layouts and shared libraries retain the selected clang driver.
+
 ## Relationship to Surrounding Files and Pipeline Stages
 
-- Belongs to the **execution/output stage**: after generate, either `jitRun` executes immediately or `emitObjectFile` writes AOT artifacts.
-- Only includes `CodeGenerator.h` and `../runtime/Runtime.h`; does not depend on other codegen implementation files.
-- Initializes LLVM target support, used by the NVPTX/AMDGPU backends in the Gpu file.
+- Belongs to the **execution/output stage**: after generate, either `jitRun` executes immediately or the two emit methods retain `.ll` and produce the native linker input.
+- Initializes native LLVM target support and lazily enables device registries used by the GPU implementation.
 
 ## Further Reading
 

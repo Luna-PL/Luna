@@ -21,6 +21,9 @@ public:
     llvm::Type* voidTy() const { return llvm::Type::getVoidTy(mCtx); }
     llvm::Type* ptrTy() const { return llvm::PointerType::get(mCtx, 0); }
     llvm::Type* sizeTy() const { return llvm::Type::getInt64Ty(mCtx); }
+    llvm::StructType* deviceBufferTy() const {
+        return llvm::StructType::get(mCtx, {ptrTy(), sizeTy()});
+    }
 
     llvm::LLVMContext& context() { return mCtx; }
 

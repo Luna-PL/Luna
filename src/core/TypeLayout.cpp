@@ -82,11 +82,13 @@ uint64_t valueSizeImpl(const TypePtr& type,
         case TypeKind::String: case TypeKind::CStr:
         case TypeKind::RawPointer: case TypeKind::Reference:
         case TypeKind::Struct:
-        case TypeKind::DeviceBuffer: case TypeKind::Iterator:
+        case TypeKind::Iterator:
         case TypeKind::Metadata: case TypeKind::MetadataView:
         case TypeKind::SymbolSet: case TypeKind::DeclarationView: case TypeKind::DeclarationRef:
         case TypeKind::Function:
             return 8;
+        case TypeKind::DeviceBuffer:
+            return 16;
         case TypeKind::Record: {
             if (!active.insert(type.get()).second)
                 return 0;

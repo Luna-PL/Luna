@@ -108,17 +108,32 @@ int status = rt_runtime_error_snapshot_v1(
 不能 panic，也不能把 `rt_gpu_last_error` 返回的易失指针存进长期值。新 adapter 应使用
 快照接口，并在失败调用后立即复制。
 
+## 携带边界的设备缓冲区
+
+实验性 GPU 边界用 C-compatible 的
+`LunaDeviceBufferI32V1 { void* data; size_t length; }` 表示
+`device_buffer<i32>`。生成代码在 64 位目标上保留这个 16 字节值，但调用 Runtime
+时采用目标无关的标量签名：分配入口写入 out-carrier，其他 GPU 入口分别接收
+`data` 与 `length`。这样可避开 Windows 与 SysV 对双机器字 C 结构按值返回/传参的
+不兼容规则。
+
+Runtime 为每次分配登记权威元素数，并拒绝未知或已释放的指针、与登记值不一致的
+carrier 长度、负索引/数量及越过长度的范围。kernel ABI 同样把 buffer borrow
+展开为 `(data, length)`，在形成越界 device GEP 前直接 trap。
+
 ## Console input 与 filesystem service
 
 Runtime ABI v1 只在原 output-only console 与 host-services 结构尾部扩展字段。
 `LUNA_CONSOLE_V1_OUTPUT_SIZE` 和 `LUNA_HOST_SERVICES_V1_BASE_SIZE` 表示已经发布的旧
 前缀。只声明旧 capability 的 host 可继续传入这些前缀 size；声明
 `LUNA_HOST_CAP_CONSOLE_INPUT` 或 `LUNA_HOST_CAP_FILESYSTEM` 的 host 必须提供完整扩展表。
-默认 runtime 当前不声明这两个新 capability。
-编译器生成的 application `main` 会在其他 Runtime 操作前显式调用
-`rt_install_application_host_services_v1`。该 application profile 为普通 JIT/AOT executable
-增加 native stdin 与 filesystem service；它不会替换 embedding host 已安装的 service table，
-没有 application entry 的 library/module 也不会隐式取得这些 capability。
+默认 runtime 当前不声明这两个新 capability，但已提供 allocator 与 console output。
+优化完成后，编译器只在仍存活的代码需要 console input、filesystem、直接检查 host service
+或 GPU application boundary 时，才向 application `main` 注入
+`rt_install_application_host_services_v1`。纯计算、仅分配、panic 与仅输出程序继续使用轻量
+默认 profile。application profile 为普通 JIT/AOT executable 增加 native stdin 与
+filesystem service；它不会替换 embedding host 已安装的 service table，没有 application
+entry 的 library/module 也不会隐式取得这些 capability。
 
 Console input 与 output 共用 `LunaConsoleV1` 表。`read` 可以成功返回少于请求长度的数据；
 成功且 `bytes_read == 0` 表示 EOF。可恢复操作失败返回 `LUNA_RUNTIME_STATUS_IO_ERROR` 并填写

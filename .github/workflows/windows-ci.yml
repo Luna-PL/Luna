@@ -12,6 +12,9 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v6
+        with:
+          # The release-readiness regression test compares HEAD with HEAD^.
+          fetch-depth: 2
 
       - name: Install UCRT64 CMake, Ninja, and LLVM
         uses: msys2/setup-msys2@v2
@@ -31,7 +34,8 @@ jobs:
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_COMPILER=/ucrt64/bin/clang.exe \
             -DCMAKE_CXX_COMPILER=/ucrt64/bin/clang++.exe \
-            -DLLVM_DIR=/ucrt64/lib/cmake/llvm
+            -DLLVM_DIR=/ucrt64/lib/cmake/llvm \
+            -DLUNA_STRICT_WARNINGS=ON
 
       - name: Build
         run: |

@@ -81,14 +81,14 @@ Key methods:
 
 - **ApplicationHostServices.h** — declares the factory functions implemented in this file; includes `RuntimeABI.h`.
 - **RuntimeABI.h** — provides type definitions such as `LunaConsoleV1`, `LunaFileSystemV1`, `LunaFileHandleV1`, `LunaIoErrorV1`, `LunaFileMetadataV1`, as well as all `LUNA_*` constants.
-- **Runtime.cpp** — combines `lunaApplicationConsoleV1` and `lunaApplicationFileSystemV1` provided by this file into the `applicationHostServices` constant, installed via `rt_install_application_host_services_v1`.
+- **Runtime.cpp** — owns the lightweight default allocator/output profile and the internal publication transition. This file builds the full input/filesystem profile lazily inside `rt_install_application_host_services_v1`, so output-only archive links do not extract it.
 - This file is the only translation unit in the Luna runtime that directly calls the platform POSIX/Windows file I/O APIs.
 
 ## Further Reading
 
 - The declarations of the two factory functions in `ApplicationHostServices.h`
 - The complete field definitions of `LunaFileSystemV1` and `LunaConsoleV1` in `RuntimeABI.h`
-- The construction and activation of the `applicationHostServices` constant in `Runtime.cpp`
+- The lazy construction and activation of the application profile in `ApplicationHostServices.cpp`
 - Documentation for POSIX system calls such as `open`(2), `lseek`(2), `fsync`(2), `fstat`(2)
 - Documentation for Windows CRT APIs `_wopen`, `_lseeki64`, `_commit`, `_fstat64`
 
@@ -133,11 +133,11 @@ The implementations of these two functions are located in `ApplicationHostServic
 
 - **RuntimeABI.h** — provides the type definitions for `LunaConsoleV1` and `LunaFileSystemV1`. This file directly depends on it.
 - **ApplicationHostServices.cpp** — the implementation of the two functions declared in this file, containing the complete platform-adaptation code (POSIX + Windows).
-- **Runtime.h / Runtime.cpp** — the `applicationHostServices` constant in `Runtime.cpp` initializes its console and file-system sub-tables by calling these two functions. `rt_install_application_host_services_v1` installs this service.
-- **Generated code (Generated IR)** — the compiler-generated application entry point installs these services via `rt_install_application_host_services_v1`, then uses forwarding functions such as `rt_console_write_v1`, `rt_file_open_v1`, etc.
+- **Runtime.h / Runtime.cpp** — owns the lightweight default profile and validates/publishes a requested full application profile.
+- **Generated code (Generated IR)** — after optimization, the compiler injects `rt_install_application_host_services_v1` only when input, filesystem, direct host-service, or GPU use survives. Output-only calls use Runtime's default console.
 
 ## Further Reading
 
 - The specific platform implementations of each function in `ApplicationHostServices.cpp`
-- The construction and use of the `applicationHostServices` constant in `Runtime.cpp`
+- The lazy construction and installation of the application profile in `ApplicationHostServices.cpp`
 - The complete field definitions of `LunaConsoleV1` and `LunaFileSystemV1` in `RuntimeABI.h`

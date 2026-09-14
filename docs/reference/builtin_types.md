@@ -56,7 +56,7 @@ users cannot construct a valid device-event constant.
 | `array<T, N>` | Value/Structural | One `T` and non-negative compile-time integer `N` | Derived from `T` | Inline `N * size(T)`; Frozen core |
 | `slice<T>` | Value/Structural | Exactly one `T` | Copy handle plus source shared loan | 16-byte `{data,length}`; currently read-only |
 | `Result<T, E>` | Value/Nominal Core declaration | Exactly two payload types | `join(usage(T), usage(E))` | `org.luna.core::result::Result`; inline ADT v1 |
-| `device_buffer<T>` | Value/Structural builtin constructor | Exactly one element type | Linear | 8-byte handle; device operations currently stable mainly for `i32` |
+| `device_buffer<T>` | Value/Structural builtin constructor | Exactly one element type | Linear | 16-byte `{data, length}` capability on 64-bit targets; device operations currently stable mainly for `i32` |
 | `(P...) -> R` | Value/Structural | Parameter sequence and return type | Copy function value; contract is part of shape | 8-byte code pointer for capture-free functions; Copy-only captured closures use the C016 inline environment representation |
 | `affine T` | Not an independent type | Usage contract only | Affine | TypeId remains `T` |
 | `linear T` | Not an independent type | Usage contract only | Linear | TypeId remains `T` |
@@ -143,15 +143,40 @@ identity is part of protocol selection.
 This matrix describes the set allowed in 0.2; it does not promise that future versions will
 always reject a category at a given boundary.
 
-## 9. Known gaps
+## 9. Predefined type names
 
-- builtin types are not yet driven by a centralized registry, so Parser/Sema/layout/boundary sets may drift;
+`i32`, `i64`, `f32`, `f64`, `bool`, and `string` are no longer lexer keywords.
+Like every other predefined type name, they lex as `Identifier` and enter the
+normal named-type parser path. This is a name-resolution change only: their
+intrinsic `TypeKind`, `Ty*` singleton, layout, operators, canonical TypeId,
+MoonIR identity, and literal-default behavior are unchanged.
+
+`PredefinedTypes` is the authoritative registry for all atomic names (`i8`
+through `never`, plus `event`) and for the arity/formation rules of `raw`,
+`Result`, `device_buffer`, `array`, `slice`, `metadata_view`, `symbol_set`,
+`declaration_view`, and `declaration_ref`. Both the semantic resolver and the
+standalone type helper consume this registry. Atomic entries are installed in
+the root type namespace, and `SymbolTable::defineType` refuses to replace any
+registered predefined name.
+
+Predefined names are immutable in the type namespace. A struct, enum, trait, or
+metadata declaration with such a name, and a type parameter that would shadow
+one, is rejected with `SEM0004`. The registry is consulted before generic
+bindings during error recovery, so an invalid shadow never changes the meaning
+of a predefined type use.
+
+## 10. Known gaps
+
+- layout and boundary allow-lists remain separate from the centralized name/formation registry and require cross-layer review when new types are added;
 - target-dependent `usize/isize` semantics are not frozen beyond the 64-bit model;
 - integer-constant width selection lacks complete range diagnostics;
 - inline ADT payload strategy above 8-byte alignment is not frozen;
 - non-Copy closure environments and cross-function Iterator-adapter Drop layout are not delivered; Copy-only closure environments are delivered under C016;
 - public formatting, encoding, and standard-library APIs for `string` are not frozen;
 - `device_buffer<T>` formation is generic, but current device operations remain mainly fixed to `i32`;
+- a device buffer's element length is part of its value ABI. Runtime operations
+  validate the `(data, length)` pair against the live-allocation registry, and
+  kernel references lower to separate pointer and length parameters;
 - callable ownership shape needs a fuller assignment/unification negative matrix;
 - unified well-formedness rejection for Meta/Compiler arguments in parameterized Value
   containers still needs to be completed.
@@ -159,7 +184,7 @@ always reject a category at a given boundary.
 These gaps must be handled as implementation or specification work; they must not be hidden
 by removing the affected type from the inventory.
 
-## 10. Evidence entry points
+## 11. Evidence entry points
 
 - type identity: `tests/fixtures/type_relations.luna`
 - type domains: `tests/fixtures/type_domains_reflection.luna`
@@ -167,8 +192,8 @@ by removing the affected type from the inventory.
 - ownership: `tests/fixtures/ownership_*.luna`
 - array/slice: `tests/fixtures/safe_arrays.luna`, `tests/fixtures/slice_*.luna`
 - Result/errors: `tests/fixtures/result_*.luna`
-- builtins and layout: `tests/builtin_types_test.cpp`, `tests/type_size_test.cpp`
-- MoonIR boundary: `tests/moonir_verifier_test.cpp`
+- builtins, TypeIds, and layout: `tests/builtin_types_test.cpp`
+- MoonIR boundary: `tests/moonir_canonical_test.cpp`
 - Core Rc/Arc: `tests/rc_arc_core.cmake`, `tests/fixtures/rc_arc_core_app/`
 
 When a row changes status, update this table, the semantic baseline, the relevant tests, and

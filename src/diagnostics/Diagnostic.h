@@ -53,6 +53,7 @@ inline std::string errorCode(const std::string& phase, const std::string& messag
     }
     if (phase == "semantic") {
         if (has("undefined name")) return "SEM0001";
+        if (has("predefined type")) return "SEM0004";
         if (has("Type constraint failed") || has("constraint '"))
             return "SEM0002";
         if (has("may finish without returning")) return "SEM0003";

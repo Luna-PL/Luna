@@ -252,7 +252,7 @@ the stack state needed for static expansion; it does not rewrite itself into Cor
 and cross-package adapter values should eventually use these stable Core types.
 
 The user-protocol path is connected: Sema recognizes only the stable package identity
-`org.luna.core::iter::Iterator), validates `next(&mut Self) -> Option<Item>`, and writes
+`org.luna.core::iter::Iterator`, validates `next(&mut Self) -> Option<Item>`, and writes
 the unique static `next` symbol, iterator type, Option type, and variant index to MoonIR.
 LLVM calls `next` once per iteration and branches on `None`/`Some`. A same-shaped trait
 with a method also named `next` is not mistaken for the iteration protocol.

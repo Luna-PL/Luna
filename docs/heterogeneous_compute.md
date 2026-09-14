@@ -33,6 +33,10 @@ fn main() -> i32 {
 - Its first parameter is explicitly `index: i32`; `launch` supplies one logical index per thread.
 - It returns `unit`, is neither generic nor `extern`/`constexpr`, and may only call `gpu_load_i32` and `gpu_store_i32` in this initial ABI.
 - Scalars are passed by value. A buffer is passed only as `&device_buffer<T>` or `&mut device_buffer<T>`.
+- A `device_buffer<i32>` value carries `{data, length}`. Kernel buffer borrows
+  expand to `(device pointer, element length)`, and every dynamic device index
+  is checked before GEP formation; an invalid index traps instead of producing
+  out-of-bounds LLVM IR.
 - Kernel bodies form a `DeviceMemory`-only sublanguage: scalar bindings, arithmetic, branches, loops, and the two device built-ins are allowed. `slot`, `apply`, `resume()`, `abort()`, `await`, `launch`, `new`, `free`, FFI, closures, reflection, and ordinary host calls are rejected. This prevents host continuations or resource effects from entering SIMT code.
 
 `device_buffer<T>` and the `event` returned from `launch` are automatically linear. Buffer arguments must be explicit named borrows at the launch site. Launching a buffer produces an in-flight loan that lasts until the corresponding `await`:
@@ -157,6 +161,13 @@ upload requires a mutable device borrow; the download requires a mutable host
 borrow. This preserves the borrow checker at both endpoints while the language
 does not yet provide a safe host array or slice type. A negative count is
 rejected for literals and fails at runtime for dynamic values.
+
+The host Runtime ABI avoids target-dependent aggregate calling conventions:
+`rt_gpu_alloc_i32` writes a `LunaDeviceBufferI32V1` out-carrier, while load,
+store, copy, and free entries receive `data` and `length` as separate scalar
+arguments. The runtime accepts the pair only when both fields match a live
+allocation, so changing the visible length cannot widen access and a stale
+carrier cannot be reused after free.
 
 The valid and invalid examples are in `examples/heterogeneous*.luna`.
 Benchmark methodology and the JIT/AOT sampling script are in

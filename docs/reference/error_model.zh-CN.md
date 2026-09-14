@@ -188,7 +188,7 @@ error[ownership/OWN0001]: use after move of 'buffer'
 | `LEX` | 词法 | `LEX0001`：非法字符 |
 | `PAR` | 解析 | `PAR0001`：缺少期望的语法元素 |
 | `PKG` | 包加载 | `PKG0001`：输入不可读；`PKG0003`：包名不一致 |
-| `SEM` | 类型/语义 | `SEM0001`：未定义名称；`SEM0002`：类型约束；`SEM0003`：缺失返回；`SEM0101`：C ABI |
+| `SEM` | 类型/语义 | `SEM0001`：未定义名称；`SEM0002`：类型约束；`SEM0003`：缺失返回；`SEM0004`：预定义类型名称冲突；`SEM0101`：C ABI |
 | `TRT` | trait | `TRT0001`：trait 约束错误 |
 | `OWN` | 所有权 | `OWN0001`：move 后使用；`OWN0002`：free 后使用；`OWN0003`：借用冲突；`OWN0004`：linear 未消费；`OWN0101`：GPU in-flight；`OWN0201`：控制流状态不一致 |
 | `CGN` | 代码生成 | `CGN0001`：无效宿主 IR；`CGN0101`：CUDA；`CGN0102`：ROCm |

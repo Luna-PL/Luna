@@ -46,6 +46,14 @@ private:
     void verifyCanonicalTables(const ControlFlowGraph& graph);
     // Region structure and block ownership verification.
     void verifyRegions(const ControlFlowGraph& graph, const Module& module);
+    void verifyControlFlowBlocks(
+        const ControlFlowGraph& graph, const Module& module,
+        const std::unordered_set<uint32_t>& guardedCursorIds,
+        std::vector<std::vector<BlockId>>& successors);
+    // Path-sensitive cleanup and move-only local state over canonical CFG
+    // edges. Kept separate from structural block/terminator verification.
+    void verifyOwnershipDataflow(
+        const ControlFlowGraph& graph, const Module& module, bool hasEntry);
     void error(const SourceLocation& location, const std::string& message);
 
     std::vector<diagnostic::Diagnostic> mErrors;

@@ -6,6 +6,7 @@
 #include <cstdio>
 #include <cstring>
 #include <limits>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -32,34 +33,61 @@ public:
         while (candidate == LUNA_INVALID_FILE_HANDLE_V1 ||
                mDescriptors.count(candidate) != 0)
             candidate = mNextHandle++;
-        mDescriptors.emplace(candidate, descriptor);
+        mDescriptors.emplace(candidate, std::make_shared<Entry>(descriptor));
         return candidate;
     }
 
     template <typename Function>
     int withDescriptor(LunaFileHandleV1 handle, Function&& function) {
-        std::lock_guard<std::mutex> lock(mMutex);
-        const auto found = mDescriptors.find(handle);
-        if (found == mDescriptors.end()) return EBADF;
-        return function(found->second);
+        std::shared_ptr<Entry> entry;
+        {
+            std::lock_guard<std::mutex> registryLock(mMutex);
+            const auto found = mDescriptors.find(handle);
+            if (found == mDescriptors.end()) return EBADF;
+            entry = found->second;
+        }
+        std::lock_guard<std::mutex> descriptorLock(entry->mutex);
+        if (!entry->open) return EBADF;
+        return function(entry->descriptor);
     }
 
     bool take(LunaFileHandleV1 handle, int& descriptor) {
-        std::lock_guard<std::mutex> lock(mMutex);
-        const auto found = mDescriptors.find(handle);
-        if (found == mDescriptors.end()) return false;
-        descriptor = found->second;
-        mDescriptors.erase(found);
+        std::shared_ptr<Entry> entry;
+        {
+            std::lock_guard<std::mutex> registryLock(mMutex);
+            const auto found = mDescriptors.find(handle);
+            if (found == mDescriptors.end()) return false;
+            entry = found->second;
+            mDescriptors.erase(found);
+        }
+        std::lock_guard<std::mutex> descriptorLock(entry->mutex);
+        if (!entry->open) return false;
+        entry->open = false;
+        descriptor = entry->descriptor;
         return true;
     }
 
 private:
+    struct Entry {
+        explicit Entry(int value) : descriptor(value) {}
+
+        int descriptor;
+        bool open = true;
+        std::mutex mutex;
+    };
+
     std::mutex mMutex;
-    std::unordered_map<LunaFileHandleV1, int> mDescriptors;
+    std::unordered_map<LunaFileHandleV1, std::shared_ptr<Entry>> mDescriptors;
     LunaFileHandleV1 mNextHandle = 1;
 };
 
-FileRegistry files;
+FileRegistry& fileRegistry() {
+    // Most compiler invocations and many applications never touch the file
+    // ABI. Avoid constructing a mutex/hash table and registering its process
+    // destructor until the first real filesystem operation.
+    static FileRegistry registry;
+    return registry;
+}
 
 uint32_t errorKind(int code) {
     switch (code) {
@@ -340,7 +368,7 @@ int openFile(void*, const char* path, size_t pathSize, uint32_t flags,
     if (descriptor < 0)
         return ioFailure(error, LUNA_IO_OPERATION_OPEN, errno);
     try {
-        *handle = files.insert(descriptor);
+        *handle = fileRegistry().insert(descriptor);
     } catch (...) {
         nativeClose(descriptor);
         return ioFailure(error, LUNA_IO_OPERATION_OPEN, ENOMEM);
@@ -353,7 +381,7 @@ int readFile(void*, LunaFileHandleV1 handle, void* bytes, size_t capacity,
     if (!bytesRead || !error || (!bytes && capacity != 0))
         return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
     *bytesRead = 0;
-    const int lookup = files.withDescriptor(handle, [&](int descriptor) {
+    const int lookup = fileRegistry().withDescriptor(handle, [&](int descriptor) {
         if (capacity == 0) return 0;
         const auto count = nativeRead(descriptor, bytes, capacity);
         if (count < 0) return errno;
@@ -369,7 +397,7 @@ int writeFile(void*, LunaFileHandleV1 handle, const void* bytes, size_t count,
     if (!bytesWritten || !error || (!bytes && count != 0))
         return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
     *bytesWritten = 0;
-    const int result = files.withDescriptor(handle, [&](int descriptor) {
+    const int result = fileRegistry().withDescriptor(handle, [&](int descriptor) {
         if (count == 0) return 0;
         const auto written = nativeWrite(descriptor, bytes, count);
         if (written < 0) return errno;
@@ -386,7 +414,7 @@ int seekFile(void*, LunaFileHandleV1 handle, int64_t offset, uint32_t whence,
         return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
     const int nativeWhence = whence == LUNA_SEEK_FROM_START ? SEEK_SET :
         whence == LUNA_SEEK_FROM_CURRENT ? SEEK_CUR : SEEK_END;
-    const int result = files.withDescriptor(handle, [&](int descriptor) {
+    const int result = fileRegistry().withDescriptor(handle, [&](int descriptor) {
         const auto value = nativeSeek(descriptor, offset, nativeWhence);
         if (value < 0) return errno;
         *position = static_cast<uint64_t>(value);
@@ -398,14 +426,14 @@ int seekFile(void*, LunaFileHandleV1 handle, int64_t offset, uint32_t whence,
 
 int flushFile(void*, LunaFileHandleV1 handle, LunaIoErrorV1* error) {
     if (!error) return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
-    const int result = files.withDescriptor(handle, [](int) { return 0; });
+    const int result = fileRegistry().withDescriptor(handle, [](int) { return 0; });
     return result == 0 ? LUNA_RUNTIME_STATUS_OK
                        : ioFailure(error, LUNA_IO_OPERATION_FLUSH, result);
 }
 
 int syncFile(void*, LunaFileHandleV1 handle, LunaIoErrorV1* error) {
     if (!error) return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
-    const int result = files.withDescriptor(handle, [](int descriptor) {
+    const int result = fileRegistry().withDescriptor(handle, [](int descriptor) {
         return nativeSync(descriptor) == 0 ? 0 : errno;
     });
     return result == 0 ? LUNA_RUNTIME_STATUS_OK
@@ -415,7 +443,7 @@ int syncFile(void*, LunaFileHandleV1 handle, LunaIoErrorV1* error) {
 int closeFile(void*, LunaFileHandleV1 handle, LunaIoErrorV1* error) {
     if (!error) return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
     int descriptor = -1;
-    if (!files.take(handle, descriptor))
+    if (!fileRegistry().take(handle, descriptor))
         return ioFailure(error, LUNA_IO_OPERATION_CLOSE, EBADF);
     if (nativeClose(descriptor) != 0)
         return ioFailure(error, LUNA_IO_OPERATION_CLOSE, errno);
@@ -461,7 +489,7 @@ void writeMetadata(const NativeStat& source, LunaFileMetadataV1* target) {
 int handleMetadata(void*, LunaFileHandleV1 handle, LunaFileMetadataV1* metadata,
                    LunaIoErrorV1* error) {
     if (!metadata || !error) return LUNA_RUNTIME_STATUS_INVALID_ARGUMENT;
-    const int result = files.withDescriptor(handle, [&](int descriptor) {
+    const int result = fileRegistry().withDescriptor(handle, [&](int descriptor) {
         NativeStat value{};
         if (descriptorStat(descriptor, &value) != 0) return errno;
         writeMetadata(value, metadata);
@@ -546,4 +574,21 @@ const LunaConsoleV1* lunaApplicationConsoleV1() {
 
 const LunaFileSystemV1* lunaApplicationFileSystemV1() {
     return &applicationFileSystem;
+}
+
+int rt_install_application_host_services_v1() {
+    static const LunaHostServicesV1 services{
+        LUNA_HOST_SERVICES_MAGIC_V1,
+        LUNA_RUNTIME_ABI_V1,
+        sizeof(LunaHostServicesV1),
+        0,
+        LUNA_HOST_CAP_ALLOCATOR | LUNA_HOST_CAP_CONSOLE |
+            LUNA_HOST_CAP_CONSOLE_INPUT | LUNA_HOST_CAP_FILESYSTEM,
+        lunaDefaultAllocatorV1(),
+        lunaApplicationConsoleV1(),
+        nullptr,
+        lunaApplicationFileSystemV1(),
+    };
+
+    return lunaInstallApplicationHostServicesV1(&services);
 }

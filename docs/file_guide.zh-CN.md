@@ -82,6 +82,7 @@ obligation，不能重新推导所有权。
 
 | 文件 | 主要职责 | 边界 |
 |---|---|---|
+| `.gitattributes` | 跨平台固定 shell 脚本使用 LF | 不改变源码和文档的默认换行策略 |
 | `.gitignore` | 排除构建树和生成产物 | 不隐藏应版本化的源码/基线 |
 | `CMakeLists.txt` | 声明目标、安装布局和 CTest 注册 | 测试断言进入 `tests/*.cmake` |
 | `VERSION` | 完整发行版本字符串的唯一文本源 | 不保存构建号或平台后缀 |
@@ -105,7 +106,9 @@ obligation，不能重新推导所有权。
 | `src/main.cpp` | 最薄进程入口；把 `argc/argv` 交给 driver |
 | `src/Version.h` | 编译期版本常量，与 `VERSION` 同步 |
 | `src/driver/Driver.h` | driver 顶层 `run` 接口 |
-| `src/driver/Driver.cpp` | 命令分派、用户输出和顶层退出状态 |
+| `src/driver/Driver.cpp` | 命令分派和顶层退出状态 |
+| `src/driver/DriverSupport.cpp` | build 产物路径、CLI/JSON 输出及 analysis 协议辅助实现 |
+| `src/driver/DriverInternal.h` | Driver 命令分派与辅助实现之间的私有接口 |
 | `src/driver/CommandLine.h` | CLI 选项和解析结果数据结构 |
 | `src/driver/CommandLine.cpp` | `check/run/build` 参数解析和组合约束 |
 | `src/driver/CompilerPipeline.h` | 文件/内存源码到 MoonIR/codegen 的编排接口 |
@@ -115,15 +118,25 @@ obligation，不能重新推导所有权。
 | `src/driver/MoonGeneration.h` | 已验证 Moon Container 到 retained-JIT generation 的 staging/load-once 内部适配接口 |
 | `src/driver/MoonGeneration.cpp` | host target 验证、content identity 预检、load-once 去重、ORC function entry、descriptor 与 decoded-module/JIT lease 适配 |
 | `src/driver/NativeArtifact.h` | Native proof 构造/封印、显式 trust 验证与 verified loader 接口 |
-| `src/driver/NativeArtifact.cpp` | 规范摘要、proof/trust、不可变 staging 与 typed registry 验证 |
+| `src/driver/NativeArtifact.cpp` | 规范摘要、proof/trust 编码、密封与验证 |
+| `src/driver/NativeArtifactLoading.cpp` | 私有 staging、动态装载与 typed registry 验证 |
+| `src/driver/NativeArtifactInternal.h` | proof 与 loader 共享的私有摘要边界及资源上限 |
 | `src/driver/NativeGeneration.h` | verified Native library 到 executable generation 的 staging/load-once 内部适配接口 |
 | `src/driver/NativeGeneration.cpp` | proof content identity 预检、load-once 去重、registry binding、entry 与 library lease 适配 |
-| `src/driver/Repl.h` | 可注入流的 Alpha REPL 接口 |
-| `src/driver/Repl.cpp` | REPL 命令契约、声明累计和临时源码包装 |
+| `src/driver/Repl.h` | 可注入流、worker 与资源策略的 Alpha REPL 接口 |
+| `src/driver/Repl.cpp` | REPL 命令循环、cell 契约、声明累计和源码组装 |
+| `src/driver/ReplExecution.cpp` | worker 预热、父进程调度、输出预算、超时与有界回收 |
+| `src/driver/ReplWorker.cpp` | 隐藏 worker 入口、前端/codegen/JIT 与结果发布 |
+| `src/driver/ReplProtocol.h/.cpp` | 长度定界请求和两阶段结果协议；不执行平台 I/O |
+| `src/driver/ReplTiming.h/.cpp` | worker 阶段与父进程时间线的 `--timings` 报告器 |
+| `src/driver/ReplTransport.h/.cpp` | Windows Pipe/Event 与 POSIX socketpair 传输封装 |
+| `src/driver/ReplProcess.h/.cpp` | Job Object/进程组、资源限制、重定向和句柄保护 |
 | `src/package/Package.h` | package/module/workspace 装载结果和 loader 接口 |
 | `src/package/Package.cpp` | manifest、lock、源码图装载与 package 合并 |
 | `src/package/PackageManager.h` | package 管理组件的公开边界 |
-| `src/package/PackageManager.cpp` | package 管理组件实现；不得虚构远程解析 |
+| `src/package/PackageManager.cpp` | package 图、workspace 与 source 合并编排；不得虚构远程解析 |
+| `src/package/PackageParsing.cpp` | manifest、workspace、lock 与 source 文件解析及路径约束 |
+| `src/package/PackageParsingInternal.h` | package 装载编排与解析实现之间的私有接口 |
 
 ### 5.1.1 MoonRuntime evolution
 
@@ -160,11 +173,16 @@ obligation，不能重新推导所有权。
 |---|---|
 | `src/sema/TypeSystem.h` | sema 使用的约束求解声明和共享类型入口 |
 | `src/sema/TypeSystem.cpp` | 类型字符串、约束和 sema 类型辅助实现 |
+| `src/sema/PredefinedTypes.h` | 不可变预定义类型名称、形式与解析接口 |
+| `src/sema/PredefinedTypes.cpp` | 原子类型 singleton 和参数化内置类型的唯一 formation registry |
 | `src/sema/Inference.h` | 局部类型推断数据结构/算法 |
 | `src/sema/SymbolTable.h` | scope、symbol kind 和 symbol info 接口 |
 | `src/sema/SymbolTable.cpp` | 词法 scope 与名字绑定实现 |
 | `src/sema/BodyAnalyzer.h` | 函数体语义分析组件的窄接口 |
-| `src/sema/BodyAnalyzer.cpp` | statement、expression、call、iterator 和 device/launch 语义 |
+| `src/sema/BodyAnalyzer.cpp` | 函数、类型声明与 binding usage 的主体分析入口 |
+| `src/sema/BodyAnalyzerStatements.cpp` | binding、return、loop 与通用 statement/block 分派 |
+| `src/sema/BodyAnalyzerPatterns.cpp` | match、record 与 variant 构造语义 |
+| `src/sema/BodyAnalyzerClosures.cpp` | try、lambda、capture 与 closure 类型语义 |
 | `src/sema/CompileTimeEvaluator.h` | 编译期求值组件的窄接口 |
 | `src/sema/CompileTimeEvaluator.cpp` | const、constraint、selector 与 reflection/sysmeta 编译期求值 |
 | `src/sema/ControlAnalyzer.h` | Slot/Fragment/apply 控制分析组件的窄接口 |
@@ -183,7 +201,9 @@ obligation，不能重新推导所有权。
 | `src/sema/TypeResolver.h` | 类型解析、约束与泛型实例化组件的窄接口 |
 | `src/sema/TypeResolver.cpp` | 类型 AST 解析、约束求解、推断物化与单态化 |
 | `src/sema/OwnershipChecker.h` | ownership/borrow 阶段接口与 place 状态 |
-| `src/sema/OwnershipChecker.cpp` | path-sensitive move、borrow、cleanup 检查 |
+| `src/sema/OwnershipChecker.cpp` | binding、return、match 与 loop ownership 检查 |
+| `src/sema/OwnershipCheckerFunctions.cpp` | program、function 与 lambda ownership 检查入口 |
+| `src/sema/OwnershipCheckerControlFlow.cpp` | block、fragment 与路径状态捕获、比较和合并 |
 | `src/selector/Selector.h` | 不可变 Symbol Catalog、typed query set/terminal 与旧 selector 兼容模型 |
 | `src/selector/Selector.cpp` | catalog SymbolId/ContractId/TypeId 验证、`.one()`/`.optional()` 和旧动态选择规划 |
 | `src/instantiation/Instantiator.h` | 泛型实例请求、状态机和 ID 接口 |
@@ -202,20 +222,38 @@ obligation，不能重新推导所有权。
 
 | 文件 | 主要职责 |
 |---|---|
-| `src/moonir/MoonIR.h` | MoonIR module、function、instruction、type table 和 cost 模型 |
+| `src/moonir/MoonIR.h` | 保持现有 include 路径兼容的 MoonIR 模型聚合头 |
+| `src/moonir/MoonIRTypes.h` | 稳定引用、基础枚举、类型/声明表记录与公共 source 元数据 |
+| `src/moonir/MoonIRExpressions.h` | structured statement 与 expression 模型 |
+| `src/moonir/MoonIRControlFlow.h` | canonical local、cleanup、edge、block、region、scope 与 CFG 模型 |
+| `src/moonir/MoonIRModule.h` | declaration、feature、module、cost、import/export 与 TypeMaterializer |
 | `src/moonir/MoonIR.cpp` | MoonIR 数据结构的非内联实现 |
 | `src/moonir/ControlFlowBuilder.h` | construction-only structured body 到 canonical CFG 的转换接口 |
 | `src/moonir/ControlFlowBuilder.cpp` | 消费暂态 structured body，分配稳定 local/scope/block 并生成唯一 CFG |
+| `src/moonir/ControlFlowBuilderBuild.cpp` | canonical CFG 构建入口、fragment/apply/resume lowering 与表达式绑定 |
+| `src/moonir/ControlFlowBuilderClone.cpp` | Builder 私有的 structured AST 深度受限克隆与 capture read 重写 |
+| `src/moonir/ControlFlowBuilderCloneInternal.h` | structured 克隆实现的私有跨翻译单元接口 |
+| `src/moonir/ControlFlowBuilderExpressionAnalysis.cpp` | expression 中 terminal、pending control flow 与 early-exit 分析 |
+| `src/moonir/ControlFlowBuilderIteratorLowering.cpp` | iterator recipe 物化与 canonical loop lowering |
+| `src/moonir/ControlFlowBuilderCleanup.cpp` | cleanup obligation 排序、edge 转换与 canonical table 重排 |
 | `src/moonir/Container.h` | Moon Container section、资源上限与 reader/writer 接口 |
 | `src/moonir/ContainerModel.h` | 八段 canonical model 与完整容器事务 codec 接口 |
-| `src/moonir/ContainerModel.cpp` | 固定宽度 payload、递归 CFG code、资源边界、原子解码与 Verifier 接力 |
+| `src/moonir/ContainerModel.cpp` | 原子容器装配、目标检查与 Verifier 接力 |
+| `src/moonir/ContainerModelCode.cpp` | expression、operation、terminator、CFG 与 function code section 编解码 |
+| `src/moonir/ContainerModelOpcodes.cpp` | code operation 与 expression 的稳定 opcode 分类映射 |
+| `src/moonir/ContainerModelProjection.cpp` | concrete declaration/type/sysmeta 可达性投影 |
+| `src/moonir/ContainerModelSections.cpp` | manifest、type、symbol、contract、sysmeta 与 interface section 编解码 |
+| `src/moonir/ContainerModelInternal.h` | 私有 Encoder/Decoder 与跨 section 编解码辅助边界 |
 | `src/moonir/Container.cpp` | M005 binary framing、对齐、SHA-256 与不可信输入验证 |
 | `src/moonir/Lowering.h` | typed AST 到 MoonIR 的 lowering 接口 |
 | `src/moonir/Lowering.cpp` | 消费 typed facts 生成 MoonIR；不得重新推断语义 |
 | `src/moonir/Sealer.h` | concrete executable body 原子封存接口 |
 | `src/moonir/Sealer.cpp` | 先构造并验证全部候选 CFG，再一次性替换 structured function body |
 | `src/moonir/Verifier.h` | MoonIR verifier 接口 |
-| `src/moonir/Verifier.cpp` | 结构、类型、cleanup、control-flow 不变量验证 |
+| `src/moonir/Verifier.cpp` | canonical CFG 的结构、类型、block 与 terminator 不变量验证 |
+| `src/moonir/VerifierControlFlow.cpp` | canonical block operation、expression、terminator 与 edge 验证 |
+| `src/moonir/VerifierOwnership.cpp` | canonical CFG 的路径敏感 cleanup 与 move-only 状态数据流验证 |
+| `src/moonir/VerifierExpressions.cpp` | structured expression、type 与诊断辅助验证 |
 | `src/moonir/Optimizer.h` | 目标无关 MoonIR 优化接口 |
 | `src/moonir/Optimizer.cpp` | 只保持 verifier 契约的 MoonIR 变换 |
 | `src/moonir/Printer.h` | 文本 MoonIR 与 cost report 输出接口 |
@@ -375,10 +413,13 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/runtime_gpu_error_test.cpp` | GPU/runtime 错误快照行为 |
 | `tests/analysis_protocol.cmake` | `luna.analysis` v1 JSONL envelope、声明记录与 byte span 回归 |
 | `tests/analysis_snapshot_test.cpp` | 内存/路径分析、部分失败状态与 frontend 生命周期回归 |
+| `tests/builtin_types_test.cpp` | 预定义类型 singleton、TypeId、formation、布局与 C ABI 交叉验证 |
 | `tests/source_manager_test.cpp` | 内存文档版本、Unicode 和 CRLF 回归 |
 | `tests/symbol_catalog_test.cpp` | typed catalog 身份、cardinality terminal、排列不变量与失败封闭回归 |
+| `tests/moonir_canonical*_test.cpp` | 同一 canonical 测试可执行文件的分域翻译单元；分别覆盖 CFG、iterator、closure、sealing、pipeline 与容器边界 |
 | `tests/fixtures/*.luna` | 单主题源码输入；断言必须留在调用它的 CMake 脚本 |
 | `tests/fixtures/repl_session.txt` | REPL 标准输入 transcript |
+| `tests/repl_worker_process_tree.cpp` | REPL worker 后代/有界回收、进程局部状态隔离与预热输入延迟 helper |
 | `tests/fixtures/packages/**` | 文件顺序、package header、export 和聚合诊断输入 |
 | `tests/fixtures/workspaces/**` | workspace/lock/manifest 和依赖图输入 |
 
@@ -399,6 +440,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `.github/workflows/release-evidence.yml`
 - `.github/workflows/release.yml`
 - `.github/workflows/windows-ci.yml`
+- `.gitattributes`
 - `.gitignore`
 - `CHANGELOG.md`
 - `CMakeLists.txt`
@@ -532,6 +574,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/codegen/CGHelpers.cpp`
 - `src/codegen/CGHelpers.h`
 - `src/codegen/CodeGenerator.cpp`
+- `src/codegen/CodeGeneratorCalls.cpp`
+- `src/codegen/CodeGeneratorCanonicalCleanup.cpp`
 - `src/codegen/CodeGenerator.h`
 - `src/codegen/CodeGeneratorCleanup.cpp`
 - `src/codegen/CodeGeneratorControlFlow.cpp`
@@ -539,8 +583,11 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/codegen/CodeGeneratorExpressions.cpp`
 - `src/codegen/CodeGeneratorFunctions.cpp`
 - `src/codegen/CodeGeneratorGpu.cpp`
+- `src/codegen/CodeGeneratorGpuRuntime.cpp`
 - `src/codegen/CodeGeneratorIterator.cpp`
+- `src/codegen/CodeGeneratorIteratorTerminals.cpp`
 - `src/codegen/CodeGeneratorModule.cpp`
+- `src/codegen/CodeGeneratorOwnershipExpressions.cpp`
 - `src/codegen/CodeGeneratorRangeAnalysis.cpp`
 - `src/codegen/CodeGeneratorRangeAnalysis.h`
 - `src/codegen/CodeGeneratorRuntimeDescriptors.cpp`
@@ -561,15 +608,29 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/driver/CompilerPipeline.cpp`
 - `src/driver/CompilerPipeline.h`
 - `src/driver/Driver.cpp`
+- `src/driver/DriverInternal.h`
+- `src/driver/DriverSupport.cpp`
 - `src/driver/Driver.h`
 - `src/driver/MoonGeneration.cpp`
 - `src/driver/MoonGeneration.h`
 - `src/driver/NativeArtifact.cpp`
+- `src/driver/NativeArtifactLoading.cpp`
+- `src/driver/NativeArtifactInternal.h`
 - `src/driver/NativeArtifact.h`
 - `src/driver/NativeGeneration.cpp`
 - `src/driver/NativeGeneration.h`
 - `src/driver/Repl.cpp`
 - `src/driver/Repl.h`
+- `src/driver/ReplExecution.cpp`
+- `src/driver/ReplProcess.cpp`
+- `src/driver/ReplProcess.h`
+- `src/driver/ReplProtocol.cpp`
+- `src/driver/ReplProtocol.h`
+- `src/driver/ReplTiming.cpp`
+- `src/driver/ReplTiming.h`
+- `src/driver/ReplTransport.cpp`
+- `src/driver/ReplTransport.h`
+- `src/driver/ReplWorker.cpp`
 - `src/instantiation/Instantiator.cpp`
 - `src/instantiation/Instantiator.h`
 - `src/lexer/Lexer.cpp`
@@ -579,15 +640,35 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/macro/MacroProcessor.h`
 - `src/main.cpp`
 - `src/moonir/ControlFlowBuilder.cpp`
+- `src/moonir/ControlFlowBuilderBuild.cpp`
+- `src/moonir/ControlFlowBuilderClone.cpp`
+- `src/moonir/ControlFlowBuilderCloneInternal.h`
+- `src/moonir/ControlFlowBuilderExpressions.cpp`
+- `src/moonir/ControlFlowBuilderExpressionAnalysis.cpp`
 - `src/moonir/ControlFlowBuilder.h`
+- `src/moonir/ControlFlowBuilderIterators.cpp`
+- `src/moonir/ControlFlowBuilderIteratorLowering.cpp`
+- `src/moonir/ControlFlowBuilderTerminals.cpp`
+- `src/moonir/ControlFlowBuilderCleanup.cpp`
 - `src/moonir/Container.cpp`
 - `src/moonir/Container.h`
 - `src/moonir/ContainerModel.cpp`
+- `src/moonir/ContainerModelCode.cpp`
+- `src/moonir/ContainerModelOpcodes.cpp`
+- `src/moonir/ContainerModelProjection.cpp`
+- `src/moonir/ContainerModelSections.cpp`
+- `src/moonir/ContainerModelInternal.h`
 - `src/moonir/ContainerModel.h`
 - `src/moonir/Lowering.cpp`
+- `src/moonir/LoweringDeclarations.cpp`
+- `src/moonir/LoweringExpressions.cpp`
 - `src/moonir/Lowering.h`
 - `src/moonir/MoonIR.cpp`
 - `src/moonir/MoonIR.h`
+- `src/moonir/MoonIRTypes.h`
+- `src/moonir/MoonIRExpressions.h`
+- `src/moonir/MoonIRControlFlow.h`
+- `src/moonir/MoonIRModule.h`
 - `src/moonir/Optimizer.cpp`
 - `src/moonir/Optimizer.h`
 - `src/moonir/Printer.cpp`
@@ -595,14 +676,25 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/moonir/Sealer.cpp`
 - `src/moonir/Sealer.h`
 - `src/moonir/Verifier.cpp`
+- `src/moonir/VerifierControlFlow.cpp`
+- `src/moonir/VerifierOwnership.cpp`
 - `src/moonir/Verifier.h`
+- `src/moonir/VerifierInternal.h`
+- `src/moonir/VerifierModule.cpp`
+- `src/moonir/VerifierStructured.cpp`
+- `src/moonir/VerifierExpressions.cpp`
 - `src/package/Package.cpp`
 - `src/package/Package.h`
 - `src/package/PackageManager.cpp`
+- `src/package/PackageParsing.cpp`
+- `src/package/PackageParsingInternal.h`
 - `src/package/PackageManager.h`
 - `src/parser/AST.h`
 - `src/parser/Parser.cpp`
+- `src/parser/ParserExpressions.cpp`
 - `src/parser/Parser.h`
+- `src/parser/ParserStatements.cpp`
+- `src/parser/ParserTypes.cpp`
 - `src/runtime/Evolution.h`
 - `src/runtime/MoonRuntime.cpp`
 - `src/runtime/MoonRuntime.h`
@@ -611,25 +703,43 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/runtime/RuntimeDescriptor.h`
 - `src/runtime/RuntimeDescriptorABI.h`
 - `src/runtime/Runtime.cpp`
+- `src/runtime/RuntimeGpu.cpp`
 - `src/runtime/Runtime.h`
 - `src/runtime/RuntimeABI.h`
 - `src/selector/Selector.cpp`
 - `src/selector/Selector.h`
 - `src/sema/BodyAnalyzer.cpp`
+- `src/sema/BodyAnalyzerCalls.cpp`
+- `src/sema/BodyAnalyzerExpressions.cpp`
 - `src/sema/BodyAnalyzer.h`
+- `src/sema/BodyAnalyzerInternal.h`
+- `src/sema/BodyAnalyzerIntrinsics.cpp`
+- `src/sema/BodyAnalyzerMemberCalls.cpp`
+- `src/sema/BodyAnalyzerStatements.cpp`
+- `src/sema/BodyAnalyzerPatterns.cpp`
+- `src/sema/BodyAnalyzerClosures.cpp`
 - `src/sema/CompileTimeEvaluator.cpp`
 - `src/sema/CompileTimeEvaluator.h`
+- `src/sema/CompileTimeConstEvaluator.cpp`
+- `src/sema/CompileTimeSelectorEvaluator.cpp`
 - `src/sema/ControlAnalyzer.cpp`
 - `src/sema/ControlAnalyzer.h`
 - `src/sema/DeclarationCollector.cpp`
 - `src/sema/DeclarationCollector.h`
 - `src/sema/Inference.h`
 - `src/sema/OwnershipChecker.cpp`
+- `src/sema/OwnershipCheckerFunctions.cpp`
+- `src/sema/OwnershipCheckerControlFlow.cpp`
+- `src/sema/OwnershipCheckerExpressions.cpp`
 - `src/sema/OwnershipChecker.h`
+- `src/sema/OwnershipCheckerState.cpp`
+- `src/sema/PredefinedTypes.cpp`
+- `src/sema/PredefinedTypes.h`
 - `src/sema/SemanticAnalysisSupport.h`
 - `src/sema/SemanticAnalyzer.cpp`
 - `src/sema/SemanticAnalyzer.h`
 - `src/sema/SemanticContext.cpp`
+- `src/sema/SemanticContextDelegation.cpp`
 - `src/sema/SemanticContext.h`
 - `src/sema/SemanticContextAccess.cpp`
 - `src/sema/SemanticContextAccess.h`
@@ -639,6 +749,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/sema/TraitChecker.h`
 - `src/sema/TypeResolver.cpp`
 - `src/sema/TypeResolver.h`
+- `src/sema/TypeResolverMonomorphization.cpp`
 - `src/sema/TypeSystem.cpp`
 - `src/sema/TypeSystem.h`
 - `src/tooling/SourceManager.cpp`
@@ -669,6 +780,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/analysis_snapshot_test.cpp`
 - `tests/aot_package_fixture.cmake`
 - `tests/benchmark_package_smoke.cmake`
+- `tests/builtin_types_test.cpp`
 - `tests/control_flow_aot.cmake`
 - `tests/core_surface.cmake`
 - `tests/core_option.cmake`
@@ -739,6 +851,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/generic_instance_reuse.luna`
 - `tests/fixtures/heterogeneous_bulk_transfer.luna`
 - `tests/fixtures/heterogeneous_bulk_transfer_invalid.luna`
+- `tests/fixtures/gpu_negative_literal_invalid.luna`
 - `tests/fixtures/interceptor_resume_invalid.luna`
 - `tests/fixtures/interceptor_return_cleanup_valid.luna`
 - `tests/fixtures/invalid_export.luna`
@@ -968,6 +1081,22 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/moon_container_fuzz.dict`
 - `tests/moon_container_fuzz_corpus.py`
 - `tests/moon_container_oracle.py`
+- `tests/moonir_canonical_closure_test.cpp`
+- `tests/moonir_canonical_control_flow_test.cpp`
+- `tests/moonir_canonical_iterator_cleanup_test.cpp`
+- `tests/moonir_canonical_iterator_ordering_test.cpp`
+- `tests/moonir_canonical_iterator_recipes_test.cpp`
+- `tests/moonir_canonical_iterator_terminals_test.cpp`
+- `tests/moonir_canonical_iterator_test.cpp`
+- `tests/moonir_canonical_pipeline_test.cpp`
+- `tests/moonir_canonical_sealing_composition_test.cpp`
+- `tests/moonir_canonical_sealing_functions_test.cpp`
+- `tests/moonir_canonical_sealing_iterators_test.cpp`
+- `tests/moonir_canonical_sealing_lowering_test.cpp`
+- `tests/moonir_canonical_sealing_symbols_test.cpp`
+- `tests/moonir_canonical_sealing_test.cpp`
+- `tests/moonir_canonical_test.cpp`
+- `tests/moonir_canonical_test_support.h`
 - `tests/optimization_pipeline.cmake`
 - `tests/package_export_abi.cmake`
 - `tests/package_manifest_workspace.cmake`
@@ -976,6 +1105,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/release_evidence_test.js`
 - `tests/release_readiness.cmake`
 - `tests/repl_smoke.cmake`
+- `tests/repl_protocol_test.cpp`
+- `tests/repl_worker_process_tree.cpp`
 - `tests/resource_drop_aot.cmake`
 - `tests/result_error_aot.cmake`
 - `tests/result_extended_aot.cmake`

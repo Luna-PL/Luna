@@ -78,7 +78,7 @@ For C++ readers: this file is the "API boundary + implementation state definitio
 - `MaterializedIterator`: `{plan, sourceData, limit, indexStorage, sourceDropFlags, ownsSource, steps}` all the IR values after the iterator is materialized into LLVM state.
 
 **`class CodeGenerator`** (public):
-- Public methods: `CodeGenerator(moduleName)`, `~CodeGenerator()`, `generate(Module*)`, `setOptimizationLevel`, `setGpuTargets`, `jitRun()`, `emitObjectFile()`, `errors()` const.
+- Public methods: `CodeGenerator(moduleName)`, `~CodeGenerator()`, `generate(Module*)`, `setOptimizationLevel`, `setGpuTargets`, `jitRun()`, `emitObjectFile()`, `emitNativeObjectFile()`, `errors()` const.
 - Private methods (~70 of them, see lines 52-176 of the header): grouped by function — `generateFunctionBody`, `generateControlFlowBody`, `generateExpr` (the main entry point); the `generate*` methods for literals/access/arithmetic/construction/calls/control flow/ownership/closures/iterators/GPU; `emitRuntimeDescriptors`, `emitKernelPTX/HSACO`, the `emitCleanup` family, and so on.
 - Private member variables (lines 177-218): `mCtx` (LLVMContext), `mModule`, `mBuilder`, `mHelpers` (CGHelpers); `mProgram` (moon::Module*); `mTypeMaterializer`; `mLocals`/`mLocalTypes` (name->alloca/type mapping); `mCanonicalLocals`/`mCanonicalLocalTypes` (LocalId->alloca/type); `mArrayDropFlags` (name->drop bit); `mMaterializedIterators`; `mLocalKnownUpperBounds` (name->exclusive upper bound); `mCurrentFunc`/`mCurrentFunctionIsKernel`; `mFunctions`/`mDropCallbacks`; `mKernelPTX`/`mKernelHSACO`; `mErrors`; `mOptimizationLevel`; `mGpuTargets`.
 

@@ -1,4 +1,5 @@
 #include "TypeSystem.h"
+#include "PredefinedTypes.h"
 #include "../parser/AST.h"
 
 TypePtr resolveType(const TypeAST* ast,
@@ -16,74 +17,16 @@ TypePtr resolveType(const TypeAST* ast,
 
     auto named = dynamic_cast<const NamedTypeAST*>(ast);
     if (named) {
+        auto predefined = resolvePredefinedType(
+            *named, [&](const TypeAST* argument) {
+                return resolveType(argument, typeBindings);
+            });
+        if (predefined.recognized)
+            return predefined.error.empty() ? predefined.type : TyUnknown;
+
         auto it = typeBindings.find(named->name);
         if (it != typeBindings.end()) return it->second;
-
-        if (named->name == "i32") return TyI32;
-        if (named->name == "i64") return TyI64;
-        if (named->name == "i8") return TyI8;
-        if (named->name == "i16") return TyI16;
-        if (named->name == "u8") return TyU8;
-        if (named->name == "u16") return TyU16;
-        if (named->name == "u32") return TyU32;
-        if (named->name == "u64") return TyU64;
-        if (named->name == "usize") return TyUSize;
-        if (named->name == "isize") return TyISize;
-        if (named->name == "f32") return TyF32;
-        if (named->name == "f64") return TyF64;
-        if (named->name == "bool") return TyBool;
-        if (named->name == "string") return TyString;
-        if (named->name == "cstr") return TyCStr;
-        if (named->name == "unit") return TyUnit;
-        if (named->name == "never") return TyNever;
         if (named->name == "Self") return Type::makeTypeParam("Self");
-
-        if (named->name == "raw") {
-            if (named->typeArgs.size() != 1) return TyUnknown;
-            return Type::makeRawPointer(resolveType(named->typeArgs[0].get(), typeBindings));
-        }
-        if (named->name == "Result") {
-            if (named->typeArgs.size() != 2) return TyUnknown;
-            return Type::makeResult(
-                resolveType(named->typeArgs[0].get(), typeBindings),
-                resolveType(named->typeArgs[1].get(), typeBindings));
-        }
-        if (named->name == "device_buffer") {
-            if (named->typeArgs.size() != 1) return TyUnknown;
-            return Type::makeDeviceBuffer(resolveType(named->typeArgs[0].get(), typeBindings));
-        }
-        if (named->name == "array") {
-            if (named->typeArgs.size() != 1 || !named->arrayLength) return TyUnknown;
-            return Type::makeArray(resolveType(named->typeArgs[0].get(), typeBindings),
-                                   *named->arrayLength);
-        }
-        if (named->name == "slice") {
-            if (named->typeArgs.size() != 1) return TyUnknown;
-            return Type::makeSlice(resolveType(named->typeArgs[0].get(), typeBindings));
-        }
-        if (named->name == "event") return TyEvent;
-        if (named->name == "metadata_view") {
-            if (named->typeArgs.size() != 1) return TyUnknown;
-            return Type::makeMetadataView(
-                resolveType(named->typeArgs.front().get(), typeBindings));
-        }
-        if (named->name == "symbol_set") {
-            if (named->typeArgs.size() != 1) return TyUnknown;
-            return Type::makeSymbolSet(
-                resolveType(named->typeArgs.front().get(), typeBindings));
-        }
-        if (named->name == "declaration_view") {
-            TypePtr callable;
-            if (!named->typeArgs.empty())
-                callable = resolveType(named->typeArgs.front().get(), typeBindings);
-            return Type::makeDeclarationView(callable);
-        }
-        if (named->name == "declaration_ref") {
-            TypePtr callable;
-            if (!named->typeArgs.empty())
-                callable = resolveType(named->typeArgs.front().get(), typeBindings);
-            return Type::makeDeclarationRef(callable);
-        }
 
         auto type = Type::makeStruct(named->name);
         for (auto& arg : named->typeArgs)
@@ -358,6 +301,15 @@ void ConstraintSolver::requireBool(const TypePtr& type) {
     auto resolved = resolve(type);
     if (resolved && resolved->kind == TypeKind::InferenceVar)
         mBoolConstraints[resolved->inferenceId] = true;
+}
+
+bool ConstraintSolver::defaultNumeric(const TypePtr& type) {
+    auto resolved = resolve(type);
+    if (!resolved || resolved->kind != TypeKind::InferenceVar ||
+        !mNumericConstraints[resolved->inferenceId])
+        return false;
+    mBindings[resolved->inferenceId] = TyI32;
+    return true;
 }
 
 void ConstraintSolver::collectUnresolvedNumeric(const TypePtr& type) {

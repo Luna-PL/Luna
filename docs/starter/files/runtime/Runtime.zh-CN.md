@@ -6,7 +6,7 @@ Luna Runtime C ABI 入口点的默认实现，涵盖宿主服务安装、内存�
 
 - 实现 `Runtime.h` 中声明的全部 `rt_*` 函数。
 - 提供默认的 `LunaHostServicesV1`、`LunaAllocatorV1`、`LunaConsoleV1` 实例（`defaultHostServices`、`defaultAllocator`、`defaultConsole`）。
-- 提供应用级宿主服务 `applicationHostServices`，含控制台输入和文件系统。
+- 提供轻量默认 allocator/output host profile，以及惰性链接完整 application profile 所需的发布状态。
 - 通过 `std::atomic` 实现宿主服务的单次安装与三阶段生命周期（0=可配置，-1=安装中，1=已激活）。
 - 管理 GPU 运行时状态（`GpuRuntimeState`）：在命名空间匿名作用域内通过函数静态局部变量持有 CUDA Driver API 与 HIP API 的函数指针，仅在用户选择 `cuda`/ `rocm` 后端时动态加载（`dlopen`/ `LoadLibrary`）。
 - 实现 GPU 性能分析（`LUNA_GPU_PROFILE=1`）：进程退出时通过 `std::atexit` 报告累计内核时间。
@@ -31,7 +31,7 @@ Luna Runtime C ABI 入口点的默认实现，涵盖宿主服务安装、内存�
 | 常量 | 值 | 用途 |
 |---|---|---|
 | `defaultHostServices` | `LunaHostServicesV1` | 默认宿主服务，仅提供分配器 + 控制台输出 |
-| `applicationHostServices` | `LunaHostServicesV1` | 应用级宿主服务，额外提供控制台输入 + 文件系统 |
+| `defaultHostServices` | `LunaHostServicesV1` | 默认使用的轻量 allocator + console-output profile，直到 host 或完整 application profile 被安装 |
 | `hostServicesPhase` | `std::atomic<int>` | 三阶段：0=可配置，-1=安装中，1=已激活 |
 
 ## 关键函数·方法
@@ -84,7 +84,7 @@ Luna Runtime C ABI 入口点的默认实现，涵盖宿主服务安装、内存�
 
 - **Runtime.h** —— 本文件实现的全部函数声明。`Runtime.cpp` 直接 `#include` 它。
 - **RuntimeABI.h** —— 提供 `LunaHostServicesV1` 等结构体定义和所有 `LUNA_*` 常量宏。`Runtime.cpp` 直接 `#include` 它。
-- **ApplicationHostServices.h** —— 提供 `lunaApplicationConsoleV1` / `lunaApplicationFileSystemV1`，用于构造 `applicationHostServices` 常量。
+- **ApplicationHostServices.h** —— 提供惰性链接的 console-input/filesystem profile，并委托 Runtime 状态完成校验发布。
 - **生成代码（Generated IR）** —— 编译器生成的代码在运行时调用本文件实现的 `rt_*` 函数。
 - 本文件不依赖任何 Luna 编译器内部结构，仅依赖标准 C/C++ 运行时和平台动态加载 API。
 
@@ -136,7 +136,7 @@ Luna 运行时的 C 语言 ABI 入口点总声明头文件，定义了宿主环�
 | 函数 | 用途 |
 |---|---|
 | `rt_install_host_services_v1` | 安装自定义宿主服务描述符；必须在首次运行时服务使用前调用，传入 `nullptr` 被拒绝 |
-| `rt_install_application_host_services_v1` | 安装进程级控制台输入 + 文件系统服务，供普通生成的 Luna 应用入口使用 |
+| `rt_install_application_host_services_v1` | 仅在生成代码确实需要时惰性安装进程级 console input + filesystem service |
 | `rt_host_services_v1` | 返回当前已安装的 `LunaHostServicesV1*` |
 
 ### 内存管理
@@ -162,8 +162,8 @@ Luna 运行时的 C 语言 ABI 入口点总声明头文件，定义了宿主环�
 |---|---|
 | `rt_gpu_initialize` | 根据 `LUNA_GPU_BACKEND`（`sim`/ `cuda`/ `rocm`）初始化后端 |
 | `rt_gpu_backend_name` / `rt_gpu_backend_is_cuda` / `rt_gpu_backend_is_rocm` | 查询当前后端类型 |
-| `rt_gpu_alloc_i32` / `rt_gpu_free` | 设备内存分配/释放（`int32_t` 元素） |
-| `rt_gpu_load_i32` / `rt_gpu_store_i32` | 标量读写（模拟器为普通内存，CUDA/ROCm 为设备指针） |
+| `rt_gpu_alloc_i32` / `rt_gpu_free` | 使用 `{data, length}` carrier 分配/释放设备内存；调用入口使用标量参数以避开平台 aggregate ABI 差异 |
+| `rt_gpu_load_i32` / `rt_gpu_store_i32` | 带边界验证的标量读写（模拟器为普通内存，CUDA/ROCm 为设备指针） |
 | `rt_gpu_copy_from_host_i32` / `rt_gpu_copy_to_host_i32` | 批量主机 <-> 设备传输 |
 | `rt_gpu_launch_ptx` / `rt_gpu_launch_hsaco` | 启动 LLVM 发射的 PTX 或 HSA Code Object 内核 |
 | `rt_gpu_await_event` | 等待内核事件完成（返回 1 成功，0 失败） |
@@ -171,8 +171,8 @@ Luna 运行时的 C 语言 ABI 入口点总声明头文件，定义了宿主环�
 ## 与周边文件·阶段的关系
 
 - **RuntimeABI.h** —— 本文件所有函数签名中使用的结构体定义来源。`Runtime.h` 直接 `#include` 它。
-- **Runtime.cpp** —— 本文件所有声明的实现。每个 `rt_*` 函数都在 `Runtime.cpp` 中有对应定义。
-- **ApplicationHostServices.h/.cpp** —— 提供 `lunaApplicationConsoleV1` / `lunaApplicationFileSystemV1`，被 `rt_install_application_host_services_v1` 使用。
+- **Runtime.cpp / RuntimeGpu.cpp** —— 分别实现轻量核心/host forwarding 与独立隔离的 GPU ABI。
+- **ApplicationHostServices.h/.cpp** —— 在独立 archive member 中实现 `rt_install_application_host_services_v1` 及 native console-input/filesystem adapter。
 - **生成代码（Generated IR）** —— 编译器生成代码调用已验证的 `rt_*` 函数，如 `rt_alloc`、`rt_array_index_or_abort` 与 `rt_gpu_*`。
 
 ## 延伸阅读

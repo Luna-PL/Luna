@@ -55,7 +55,7 @@
 | `array<T, N>` | Value/Structural | 一个 `T` 和非负编译期整数 `N` | 由 `T` 决定 | 内联 `N * size(T)`；Frozen core |
 | `slice<T>` | Value/Structural | 恰好一个 `T` | Copy handle + 来源 shared loan | 16 字节 `{data,length}`；当前只读 |
 | `Result<T, E>` | Value/Canonical Core 名义声明 | 恰好两个载荷类型 | `join(usage(T), usage(E))` | `org.luna.core::result::Result`；inline ADT v1 |
-| `device_buffer<T>` | Value/Structural builtin constructor | 恰好一个元素类型 | Linear | 8 字节句柄；当前操作只稳定支持 `i32` |
+| `device_buffer<T>` | Value/Structural builtin constructor | 恰好一个元素类型 | Linear | 64 位目标上为 16 字节 `{data, length}` capability；当前操作只稳定支持 `i32` |
 | `(P...) -> R` | Value/Structural | 参数序列和返回类型 | Copy function value；contract 属于 shape | 8 字节代码/闭包入口表示；closure env 未冻结 |
 | `affine T` | 非独立类型 | 只用于 usage contract | Affine | TypeId 仍为 `T` |
 | `linear T` | 非独立类型 | 只用于 usage contract | Linear | TypeId 仍为 `T` |
@@ -138,22 +138,41 @@
 
 本矩阵描述 0.2 当前允许集合，不暗示未来永远拒绝某类边界。
 
-## 9. 已知缺口
+## 9. 预定义类型名称
 
-- 内置类型尚未由集中 registry 驱动，Parser/Sema/布局/边界集合可能发生漂移；
+`i32`、`i64`、`f32`、`f64`、`bool`、`string` 已不再是 lexer 关键字。它们与其余
+预定义类型名一样被词法化为 `Identifier`，并进入普通 named-type parser 路径。
+这只改变名称解析架构；它们的 intrinsic `TypeKind`、`Ty*` singleton、布局、运算
+规则、canonical TypeId、MoonIR 身份和字面量默认类型均保持不变。
+
+`PredefinedTypes` 是全部原子名称（`i8` 至 `never`，以及 `event`）和 `raw`、
+`Result`、`device_buffer`、`array`、`slice`、`metadata_view`、`symbol_set`、
+`declaration_view`、`declaration_ref` arity/formation 规则的唯一权威 registry。
+语义 resolver 和独立 type helper 都使用该 registry；原子项安装到 root type
+namespace，`SymbolTable::defineType` 会拒绝替换任意已注册预定义名称。
+
+预定义名称在类型命名空间中不可变。struct、enum、trait、metadata 声明以及会遮蔽
+这些名称的类型参数均以 `SEM0004` 拒绝。错误恢复期间 registry 也先于泛型绑定
+查询，因此无效遮蔽不会改变预定义类型引用的含义。
+
+## 10. 已知缺口
+
+- layout 与 boundary allow-list 仍独立于集中式名称/formation registry；新增类型时仍需跨层审查；
 - `usize/isize` 的目标相关语义尚未与非 64 位平台冻结；
 - 整数常量按参数宽度生成时缺少完整范围诊断；
 - 高于 8 字节对齐的 inline ADT 载荷策略未冻结；
 - non-Copy closure environment 和跨函数 Iterator adapter Drop 布局尚未交付；Copy-only closure environment 已按 C016 交付；
 - `string` 的公开格式化、编码和标准库 API 尚未冻结；
 - `device_buffer<T>` 的类型构造已泛化，但当前设备操作仍主要固定为 `i32`；
+- 设备缓冲区的元素长度属于值 ABI。Runtime 会把 `(data, length)` 与 live-allocation
+  registry 交叉校验，kernel 引用则降低为独立的 pointer 与 length 参数；
 - callable ownership shape 需要更完整的赋值/统一负例矩阵。
 - 参数化 Value 容器对 Meta/Compiler 类型实参的统一 well-formedness 拒绝矩阵仍需
   补齐。
 
 这些缺口必须作为实现或规范工作处理，不能通过从清单中删除对应类型来隐藏。
 
-## 10. 证据入口
+## 11. 证据入口
 
 - 类型身份：`tests/fixtures/type_relations.luna`
 - 类型域：`tests/fixtures/type_domains_reflection.luna`
@@ -164,5 +183,6 @@
 - Core Rc/Arc：`tests/rc_arc_core.cmake` 与 `tests/fixtures/rc_arc_core_app/`
 - FFI：`tests/ffi_aot.cmake`
 - kernel/event：`tests/gpu_target_split.cmake`、`tests/moon_cost_boundaries.cmake`
+- builtin singleton、TypeId 与布局：`tests/builtin_types_test.cpp`
 - Core 类型：`tests/core_surface.cmake`
 - MoonIR 类型拒绝：`tests/semantic_regressions.cmake` 和 Verifier 回归

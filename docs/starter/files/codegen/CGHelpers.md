@@ -77,7 +77,7 @@ For C++ readers: you can think of `CGHelpers` as a "type factory + context holde
 **`llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const`**
 What it does: dispatches on `type->kind` and maps a Luna type to an LLVM type. Key points:
 - Integers/floats/bools map directly: I8 to i8, U32 to i32, F32 to f32, Bool to i1.
-- `String`/`CStr`/`RawPointer`/`DeviceBuffer`/`Metadata`/`MetadataView`/`DeclarationView`/`DeclarationRef`/`Iterator` all map to the generic pointer `ptrTy()`.
+- `String`/`CStr`/`RawPointer`/`Metadata`/`MetadataView`/`DeclarationView`/`DeclarationRef`/`Iterator` map to `ptrTy()`; `DeviceBuffer` maps to the bounds-carrying `{ptr, i64}` value.
 - `Result` and `Enum` map to a tagged structure `{ tag, [N x i64] }` (tag is i32 or bool; the payload is padded to 8-byte words per `lua::layout::valueSize`/`enumPayloadSize`).
 - `Array` maps to `[len x inner]`; `Slice` maps to `{ptr, i64}`; `Record` builds a `StructType` recursively field by field; `Closure` maps to `{code_ptr, captured...}`; `Reference`/`Struct`/`Function` map to pointers; `Unit`/`Never` map to void; `Event` maps to i32; unknown kinds fall back to i32.
 - Who calls it: throughout codegen — `declareFunc` in `CodeGeneratorModule.cpp`, `CodeGeneratorFunctions.cpp`, `CodeGeneratorControlFlow.cpp`, `CodeGeneratorExpressions.cpp`, etc.

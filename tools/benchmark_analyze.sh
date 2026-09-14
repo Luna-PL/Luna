@@ -40,15 +40,10 @@ set -- "${stripped[@]}"
 
 mca_cpu="${LUNA_MCA_CPU:-}"
 if [[ "${mca_mode}" == "1" && -z "${mca_cpu}" ]]; then
-    if grep -qiE "zen4|7500F|7700X|7900X|7950X" /proc/cpuinfo; then
-        mca_cpu="znver4"
-    elif grep -qiE "zen3|5600X|5800X|5900X|5950X" /proc/cpuinfo; then
-        mca_cpu="znver3"
-    elif grep -qiE "zen2|3600X|3700X|3900X|3950X" /proc/cpuinfo; then
-        mca_cpu="znver2"
-    else
-        mca_cpu="znver4"
-    fi
+    # llvm-mca resolves `native` through LLVM's host CPU detection. This is
+    # both more accurate than a partial model-name table and works on MSYS,
+    # where /proc/cpuinfo describes the real Windows host.
+    mca_cpu="native"
 fi
 
 for tool in llvm-dis opt llc; do
@@ -186,7 +181,7 @@ cpp_asm_movs="$(parse_metric "${cpp_asm}" movs)"
 python3 "${source_root}/tools/benchmark_probe.py" --iterations "${iterations}" \
     --warmups "${warmups}" --tag luna --perf -- "${luna_aot}" > "${temp_dir}/luna.probe.json"
 python3 "${source_root}/tools/benchmark_probe.py" --iterations "${iterations}" \
-    --warmups "${warmups}" --tag cpp --perf -- "${cpp_bin}" "${workload}" > "${temp_dir}/cpp.probe.json"
+    --warmups "${warmups}" --tag cpp --perf -- "${cpp_bin}" > "${temp_dir}/cpp.probe.json"
 
 luna_summary="$(grep '"samples"' "${temp_dir}/luna.probe.json" | tail -n 1)"
 cpp_summary="$(grep '"samples"' "${temp_dir}/cpp.probe.json" | tail -n 1)"
@@ -199,6 +194,8 @@ luna_wall="$(printf '%s' "${luna_summary}" | python3 -c 'import json,sys; print(
 cpp_wall="$(printf '%s' "${cpp_summary}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["wall_ms_median"])')"
 luna_rss="$(printf '%s' "${luna_summary}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["max_rss_kib_median"])')"
 cpp_rss="$(printf '%s' "${cpp_summary}" | python3 -c 'import json,sys; print(json.load(sys.stdin)["max_rss_kib_median"])')"
+luna_cycles="$(printf '%s' "${luna_summary}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("cpu_cycles_median", 0))')"
+cpp_cycles="$(printf '%s' "${cpp_summary}" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("cpu_cycles_median", 0))')"
 
 echo "=== gap analysis: ${workload} (${optimization}) ==="
 echo "--- static (optimized LLVM IR, LLVM $(llvm-config --version)) ---"
@@ -251,6 +248,9 @@ fi
 echo "--- dynamic (probe, median of ${iterations}) ---"
 echo "  wall: Luna=${luna_wall}ms C++=${cpp_wall}ms ratio=$(ratio "${luna_wall}" "${cpp_wall}")x"
 echo "  max RSS: Luna=${luna_rss}KiB C++=${cpp_rss}KiB ratio=$(ratio "${luna_rss}" "${cpp_rss}")x"
+if [[ "${luna_cycles}" -gt 0 && "${cpp_cycles}" -gt 0 ]]; then
+    echo "  process cycles: Luna=${luna_cycles} C++=${cpp_cycles} ratio=$(ratio "${luna_cycles}" "${cpp_cycles}")x"
+fi
 
 signals=""
 if awk -v l="${luna_wall}" -v c="${cpp_wall}" 'BEGIN { exit !(l > c * 1.3) }'; then
@@ -269,6 +269,11 @@ if awk -v l="${luna_wall}" -v c="${cpp_wall}" 'BEGIN { exit !(l > c * 1.3) }'; t
     if awk -v l="${luna_rss}" -v c="${cpp_rss}" 'BEGIN { exit !(l > c * 1.5) }'; then
         signals="${signals} [内存占用高: RSS ${luna_rss} vs ${cpp_rss} KiB]"
     fi
+    luna_double_shift="$(grep -Ec '^[[:space:]]*shld' "${temp_dir}/luna.s" || true)"
+    cpp_rotate="$(grep -Ec '^[[:space:]]*ro[lr]' "${temp_dir}/cpp.s" || true)"
+    if [[ "${luna_double_shift}" -gt 0 && "${cpp_rotate}" -gt 0 ]]; then
+        signals="${signals} [rotate 规范化缺失: Luna=shld C++=rol/ror]"
+    fi
     if [[ -z "${signals}" ]]; then
         signals=" [未命中已知信号,需 perf/llvm-mca 级分析]"
     fi
@@ -276,10 +281,14 @@ else
     signals=" [Luna 不慢于 C++ 1.3x, 无需归因]"
 fi
 echo "--- attribution ---"
-luna_rt_calls="$(grep -c 'call .*@rt_' "${temp_dir}/luna.opt.ll" || true)"
 rt_signals=""
-if [[ "${luna_rt_calls}" -gt 0 ]]; then
-    rt_signals=" [Luna 热路径调用运行时守卫 ${luna_rt_calls} 处, 如 rt_array_index_or_abort 边界检查]"
+luna_guard_calls="$(grep -c 'call .*@rt_array_index_or_abort' "${temp_dir}/luna.opt.ll" || true)"
+luna_alloc_calls="$(grep -Ec 'call .*@rt_(alloc|dealloc|realloc)' "${temp_dir}/luna.opt.ll" || true)"
+if [[ "${luna_guard_calls}" -gt 0 ]]; then
+    rt_signals="${rt_signals} [Luna 保留数组边界失败调用 ${luna_guard_calls} 处]"
+fi
+if [[ "${luna_alloc_calls}" -gt 0 ]]; then
+    rt_signals="${rt_signals} [Luna 保留分配/释放调用 ${luna_alloc_calls} 处]"
 fi
 echo "  ${rt_signals}${signals}"
 if [[ "${mca_mode}" == "1" ]]; then

@@ -11,6 +11,9 @@ endif()
 if(NOT DEFINED LUNA_RUNTIME_LIBRARY OR NOT EXISTS "${LUNA_RUNTIME_LIBRARY}")
     message(FATAL_ERROR "LUNA_RUNTIME_LIBRARY must point at the built Luna runtime archive")
 endif()
+find_program(LUNA_LLVM_READOBJ
+    NAMES llvm-readobj-22 llvm-readobj-21 llvm-readobj-20
+          llvm-readobj-19 llvm-readobj-18 llvm-readobj)
 
 set(source_path "${LUNA_SOURCE_DIR}/tests/fixtures/aot_runtime_boundary.luna")
 include("${LUNA_SOURCE_DIR}/tests/aot_package_fixture.cmake")
@@ -36,6 +39,21 @@ if(NOT build_result EQUAL 0 OR NOT EXISTS "${ir_path}" OR NOT EXISTS "${executab
     message(FATAL_ERROR
         "AOT build with explicit runtime settings failed.\nResult: ${build_result}\n"
         "Output:\n${build_output}\n${build_error}")
+endif()
+
+if(LUNA_LLVM_READOBJ)
+    execute_process(
+        COMMAND "${LUNA_LLVM_READOBJ}" --sections "${executable_path}"
+        RESULT_VARIABLE sections_result
+        OUTPUT_VARIABLE sections_output
+        ERROR_VARIABLE sections_error)
+    string(FIND "${sections_output}" ".debug_" debug_section_at)
+    if(NOT sections_result EQUAL 0 OR NOT debug_section_at EQUAL -1)
+        cleanup_outputs()
+        message(FATAL_ERROR
+            "AOT artifact retained compiler-runtime debug sections.\n"
+            "Result: ${sections_result}\nOutput:\n${sections_output}\n${sections_error}")
+    endif()
 endif()
 
 execute_process(

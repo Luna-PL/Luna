@@ -118,6 +118,22 @@ machine fields and omit text, not panic, and must not store the volatile pointer
 `rt_gpu_last_error` in a long-lived value. New adapters should use the snapshot
 interface and copy immediately after a failing call.
 
+## Bounds-carrying device buffers
+
+The experimental GPU boundary represents `device_buffer<i32>` with the
+C-compatible `LunaDeviceBufferI32V1 { void* data; size_t length; }` carrier.
+Generated code keeps this 16-byte value on 64-bit targets, but calls Runtime
+through target-neutral scalar signatures: allocation writes an out-carrier,
+and other GPU entries receive `data` and `length` separately. This deliberately
+avoids the incompatible Windows and SysV rules for returning or passing a
+two-word C structure by value.
+
+Runtime registers the authoritative element count for every allocation. It
+rejects an unknown/stale pointer, a carrier length different from the registered
+length, a negative index/count, or a range beyond that length. Kernel ABI
+lowering likewise expands a buffer borrow to `(data, length)` and traps before
+forming an out-of-range device GEP.
+
 ## Console input and filesystem services
 
 Runtime ABI v1 extends its original output-only console and host-services structures only
@@ -125,12 +141,14 @@ at their tails. `LUNA_CONSOLE_V1_OUTPUT_SIZE` and
 `LUNA_HOST_SERVICES_V1_BASE_SIZE` name the previously published prefixes. A host that
 advertises only the older capabilities may continue to pass those prefix sizes; a host that
 advertises `LUNA_HOST_CAP_CONSOLE_INPUT` or `LUNA_HOST_CAP_FILESYSTEM` must provide the
-complete extended table. The default runtime currently advertises neither new capability.
-Compiler-generated application `main` functions explicitly call
-`rt_install_application_host_services_v1` before other Runtime operations. That application
-profile adds native stdin and filesystem services for ordinary JIT and AOT executables. It
-does not replace a service table already supplied by an embedding host; a library/module with
-no application entry point does not acquire the capabilities implicitly.
+complete extended table. The default runtime currently advertises neither new capability, but
+it does provide allocator and console-output services. After optimization, the compiler injects
+`rt_install_application_host_services_v1` into application `main` only when surviving code needs
+console input, filesystem access, direct host-service inspection, or the GPU application
+boundary. Pure, allocation-only, panic, and output-only programs retain the lightweight default
+profile. The application profile adds native stdin and filesystem services for ordinary JIT and
+AOT executables. It does not replace a service table already supplied by an embedding host; a
+library/module with no application entry point does not acquire the capabilities implicitly.
 
 Console input uses the same `LunaConsoleV1` table as output. `read` may complete with fewer
 bytes than requested; success with `bytes_read == 0` is EOF. A recoverable operation failure

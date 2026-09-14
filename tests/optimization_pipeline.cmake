@@ -14,10 +14,11 @@ set(source_path "${LUNA_SOURCE_DIR}/tests/fixtures/optimization_constant_fold.lu
 luna_stage_aot_application("${source_path}" "optimization_constant_fold")
 set(ir_path "${LUNA_AOT_IR_PATH}")
 set(executable_path "${LUNA_AOT_EXECUTABLE_PATH}")
+set(object_path "${executable_path}.o")
 set(package_path "${LUNA_AOT_PACKAGE_DIR}")
 
 function(cleanup_outputs)
-    file(REMOVE "${ir_path}" "${executable_path}")
+    file(REMOVE "${ir_path}" "${object_path}" "${executable_path}")
 endfunction()
 
 function(build_and_read level output_var)
@@ -32,6 +33,16 @@ function(build_and_read level output_var)
         cleanup_outputs()
         message(FATAL_ERROR
             "optimization build ${level} failed.\nResult: ${build_result}\n"
+            "Output:\n${build_output}\n${build_error}")
+    endif()
+    string(FIND "${build_output}\n${build_error}"
+        "-Xclang -disable-llvm-passes" disable_llvm_passes_at)
+    string(FIND "${build_output}\n${build_error}"
+        "Emitting native object:" native_object_at)
+    if(NOT disable_llvm_passes_at EQUAL -1 OR native_object_at EQUAL -1)
+        cleanup_outputs()
+        message(FATAL_ERROR
+            "${level} did not use Luna's direct native-object path.\n"
             "Output:\n${build_output}\n${build_error}")
     endif()
     file(READ "${ir_path}" ir)
@@ -85,6 +96,13 @@ if(NOT aot_result EQUAL 42)
 endif()
 
 build_and_read(-O3 o3_ir)
+string(FIND "${o3_ir}" "rt_install_application_host_services_v1"
+    pure_host_install_at)
+if(NOT pure_host_install_at EQUAL -1)
+    cleanup_outputs()
+    message(FATAL_ERROR
+        "pure application retained the heavyweight host-service profile.\nIR:\n${o3_ir}")
+endif()
 cleanup_outputs()
 string(FIND "${o3_ir}" "ret i32 42" o3_constant_return)
 if(o3_constant_return EQUAL -1)
@@ -123,8 +141,9 @@ if(loop_unroll_increment STREQUAL "")
         "IR:\n${loop_ir}")
 endif()
 
-# A tiny single-recurrence inner loop is intentionally below the heuristic's
-# lower bound: forcing it to four-way unroll lengthens the dependency chain.
+# A tiny single-recurrence inner loop is intentionally below Luna's explicit
+# unroll heuristic. A target-aware LLVM cost model may still choose its own
+# profitable factor; Luna must not force the heuristic's four-way count.
 set(nested_source_path "${LUNA_SOURCE_DIR}/benchmarks/luna_cpu_nested.luna")
 luna_stage_aot_application("${nested_source_path}" "optimization_nested")
 set(nested_ir_path "${LUNA_AOT_IR_PATH}")
@@ -146,14 +165,149 @@ endif()
 file(READ "${nested_ir_path}" nested_ir)
 file(REMOVE "${nested_ir_path}" "${nested_executable_path}")
 string(REGEX MATCH
-    "add [^\n]*i32 %local\\.[0-9]+\\.column[^,\n]*, 1"
-    nested_scalar_increment "${nested_ir}")
-string(REGEX MATCH
     "add [^\n]*i32 %local\\.[0-9]+\\.column[^,\n]*, 4"
     nested_forced_increment "${nested_ir}")
-if(nested_scalar_increment STREQUAL "" OR
-   NOT nested_forced_increment STREQUAL "")
+if(NOT nested_forced_increment STREQUAL "")
     message(FATAL_ERROR
         "canonical O3 forced four-way unrolling on the small nested recurrence.\n"
         "IR:\n${nested_ir}")
+endif()
+
+# Safe fixed-array access must not force an out-of-line Runtime call through a
+# hot loop. Direct range proofs cover masked/constant indices; the inline
+# fallback lets LLVM use dominating loop and short-circuit conditions while
+# retaining the original Runtime diagnostic on the failure edge.
+function(assert_no_optimized_array_guard source_path fixture_name)
+    luna_stage_aot_application("${source_path}" "${fixture_name}")
+    set(array_ir_path "${LUNA_AOT_IR_PATH}")
+    set(array_executable_path "${LUNA_AOT_EXECUTABLE_PATH}")
+    execute_process(
+        COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}" -O3
+        RESULT_VARIABLE array_build_result
+        OUTPUT_VARIABLE array_build_output
+        ERROR_VARIABLE array_build_error
+    )
+    if(NOT array_build_result EQUAL 0 OR NOT EXISTS "${array_ir_path}")
+        file(REMOVE "${array_ir_path}" "${array_executable_path}")
+        message(FATAL_ERROR
+            "O3 array-guard regression build failed for ${fixture_name}.\n"
+            "Result: ${array_build_result}\n"
+            "Output:\n${array_build_output}\n${array_build_error}")
+    endif()
+    file(READ "${array_ir_path}" array_ir)
+    if(ARGC GREATER 2)
+        file(SIZE "${array_ir_path}" array_ir_size)
+        if(array_ir_size GREATER ARGV2)
+            file(REMOVE "${array_ir_path}" "${array_executable_path}")
+            message(FATAL_ERROR
+                "O3 array IR for ${fixture_name} grew to ${array_ir_size} bytes; "
+                "limit is ${ARGV2}")
+        endif()
+    endif()
+    file(REMOVE "${array_ir_path}" "${array_executable_path}")
+    string(REGEX MATCH
+        "call [^\n]*@rt_array_index_or_abort"
+        remaining_array_guard "${array_ir}")
+    if(NOT remaining_array_guard STREQUAL "")
+        message(FATAL_ERROR
+            "O3 retained a hot array Runtime guard for ${fixture_name}.\n"
+            "IR:\n${array_ir}")
+    endif()
+    if(ARGC GREATER 2)
+        string(REGEX MATCH "target triple = \"x86_64-" x86_host "${array_ir}")
+        if(NOT x86_host STREQUAL "")
+            string(REGEX MATCH
+                "array\\.load[^\n]*\\.3 = load"
+                target_cost_unroll "${array_ir}")
+            if(target_cost_unroll STREQUAL "")
+                message(FATAL_ERROR
+                    "O3 did not use the x86-64 target cost model for ${fixture_name}; "
+                    "the four-way search-loop unroll is missing.\nIR:\n${array_ir}")
+            endif()
+        endif()
+    endif()
+endfunction()
+
+assert_no_optimized_array_guard(
+    "${LUNA_SOURCE_DIR}/benchmarks/luna_cpu_array.luna"
+    "optimization_array_mask")
+assert_no_optimized_array_guard(
+    "${LUNA_SOURCE_DIR}/benchmarks/luna_cpu_find.luna"
+    "optimization_array_dominating_bound"
+    131072)
+
+# Contextually typed unsigned literals must survive semantic lowering and
+# select unsigned LLVM operations. This is both a correctness contract and a
+# prerequisite for target rotate/bit-manipulation combines.
+set(unsigned_source_path
+    "${LUNA_SOURCE_DIR}/tests/fixtures/unsigned_integer_codegen.luna")
+luna_stage_aot_application("${unsigned_source_path}" "optimization_unsigned")
+set(unsigned_ir_path "${LUNA_AOT_IR_PATH}")
+set(unsigned_executable_path "${LUNA_AOT_EXECUTABLE_PATH}")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}" -O0
+    RESULT_VARIABLE unsigned_build_result
+    OUTPUT_VARIABLE unsigned_build_output
+    ERROR_VARIABLE unsigned_build_error)
+if(NOT unsigned_build_result EQUAL 0 OR NOT EXISTS "${unsigned_ir_path}")
+    file(REMOVE "${unsigned_ir_path}" "${unsigned_executable_path}")
+    message(FATAL_ERROR
+        "unsigned integer regression build failed.\n"
+        "Output:\n${unsigned_build_output}\n${unsigned_build_error}")
+endif()
+file(READ "${unsigned_ir_path}" unsigned_ir)
+foreach(unsigned_instruction
+        "udiv i32" "urem i32" "lshr i32" "icmp ugt i32"
+        "call i32 @llvm.ctpop.i32" "call void @rt_print_u32")
+    string(FIND "${unsigned_ir}" "${unsigned_instruction}"
+        unsigned_instruction_at)
+    if(unsigned_instruction_at EQUAL -1)
+        file(REMOVE "${unsigned_ir_path}" "${unsigned_executable_path}")
+        message(FATAL_ERROR
+            "unsigned source did not lower '${unsigned_instruction}'.\n"
+            "IR:\n${unsigned_ir}")
+    endif()
+endforeach()
+execute_process(
+    COMMAND "${unsigned_executable_path}"
+    RESULT_VARIABLE unsigned_run_result
+    OUTPUT_VARIABLE unsigned_run_output
+    ERROR_VARIABLE unsigned_run_error)
+file(REMOVE "${unsigned_ir_path}" "${unsigned_executable_path}")
+if(NOT unsigned_run_result EQUAL 0 OR
+   NOT unsigned_run_output STREQUAL
+       "1431655765\n0\n1\n32\n4294967295\n" OR
+   NOT unsigned_run_error STREQUAL "")
+    message(FATAL_ERROR
+        "unsigned AOT execution disagrees with u32 semantics.\n"
+        "stdout=${unsigned_run_output}\nstderr=${unsigned_run_error}")
+endif()
+
+# The rotate workload previously repeated a signed arithmetic shift and
+# reached x86 as SHLD. Unsigned right-shift semantics expose a canonical rotate
+# to LLVM, which the target backend can select as one ROL instruction.
+set(rotate_source_path "${LUNA_SOURCE_DIR}/benchmarks/luna_cpu_rotate.luna")
+luna_stage_aot_application("${rotate_source_path}" "optimization_rotate")
+set(rotate_ir_path "${LUNA_AOT_IR_PATH}")
+set(rotate_executable_path "${LUNA_AOT_EXECUTABLE_PATH}")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${LUNA_AOT_PACKAGE_DIR}" -O3
+    RESULT_VARIABLE rotate_build_result
+    OUTPUT_VARIABLE rotate_build_output
+    ERROR_VARIABLE rotate_build_error)
+if(NOT rotate_build_result EQUAL 0 OR NOT EXISTS "${rotate_ir_path}")
+    file(REMOVE "${rotate_ir_path}" "${rotate_executable_path}")
+    message(FATAL_ERROR
+        "O3 rotate regression build failed.\n"
+        "Output:\n${rotate_build_output}\n${rotate_build_error}")
+endif()
+file(READ "${rotate_ir_path}" rotate_ir)
+file(REMOVE "${rotate_ir_path}" "${rotate_executable_path}")
+string(FIND "${rotate_ir}"
+    "@llvm.fshl.i32(i32 %bitxortmp, i32 %bitxortmp, i32 7)"
+    canonical_rotate_at)
+if(canonical_rotate_at EQUAL -1)
+    message(FATAL_ERROR
+        "O3 did not expose the unsigned rotate as canonical fshl.\n"
+        "IR:\n${rotate_ir}")
 endif()

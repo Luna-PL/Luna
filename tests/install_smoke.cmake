@@ -42,6 +42,11 @@ endif()
 
 set(installed_luna
     "${stage}/${LUNA_INSTALL_BINDIR}/luna${LUNA_EXECUTABLE_SUFFIX}")
+if(LUNA_EXPECT_SEPARATE_DEBUG_INFO AND
+   NOT EXISTS "${installed_luna}.debug")
+    message(FATAL_ERROR
+        "staged installation is missing ${installed_luna}.debug")
+endif()
 set(installed_runtime
     "${stage}/${LUNA_INSTALL_LIBDIR}/${LUNA_RUNTIME_FILE}")
 set(installed_runtime_header

@@ -38,6 +38,7 @@ void  rt_panic_cstr(const char* message);
 // platform's variadic printf from a JIT object. This keeps JIT/AOT output and
 // buffering behavior identical across ELF, Mach-O, and MinGW/UCRT.
 void  rt_print_i32(int32_t value);
+void  rt_print_u32(uint32_t value);
 void  rt_print_cstr(const char* value);
 // Initial v1 standard-library adapters for the current cstr/i32 surface. They
 // intentionally avoid claiming Display/FromStr/owned-String contracts.
@@ -75,16 +76,22 @@ int         rt_gpu_backend_is_rocm();
 
 // Device memory and host/device scalar transfer. In the simulator a device
 // buffer is host-backed; CUDA and ROCm backends keep an opaque device pointer.
-void* rt_gpu_alloc_i32(size_t element_count);
-void  rt_gpu_free(void* buffer);
-int32_t rt_gpu_load_i32(void* buffer, int32_t index);
-void    rt_gpu_store_i32(void* buffer, int32_t index, int32_t value);
+// Allocation writes the public bounds-carrying carrier through an out pointer;
+// remaining entries use scalar fields to avoid target-specific C aggregate
+// calling conventions while retaining length in every access ABI.
+void rt_gpu_alloc_i32(size_t element_count, LunaDeviceBufferI32V1* buffer);
+void rt_gpu_free(void* data, size_t length);
+int32_t rt_gpu_load_i32(void* data, size_t length, int32_t index);
+void rt_gpu_store_i32(void* data, size_t length, int32_t index,
+                      int32_t value);
 // Bulk copies use an explicit host raw pointer and element count. They return
 // zero on failure so generated host code can enter the same observable error
 // boundary used by await.
-int rt_gpu_copy_from_host_i32(void* destination, const int32_t* source,
+int rt_gpu_copy_from_host_i32(void* destination, size_t destination_length,
+                              const int32_t* source,
                               int32_t element_count);
 int rt_gpu_copy_to_host_i32(int32_t* destination, const void* source,
+                            size_t source_length,
                             int32_t element_count);
 
 // Launch LLVM-emitted device modules. `params` follows the CUDA Driver / HIP

@@ -1,0 +1,12 @@
+fn main() -> i32 {
+    let high: u32 = 4294967295;
+    let divisor: u32 = 3;
+    print(high / divisor);
+    print(high % divisor);
+    print(high >> 31);
+    print(popcount_u32(high));
+    if high > 1 {
+        print(high);
+    }
+    return 0;
+}
