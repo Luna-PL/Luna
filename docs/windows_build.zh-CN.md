@@ -38,7 +38,7 @@ Windows AOT 输出带 `.exe` 后缀；构建树和安装树中的编译器驱动
 Alpha 的 Windows CI 只验证 CPU、JIT/AOT、FFI、插件 ABI 和模拟器回归；GPU
 硬件仍需分别安装厂商驱动和运行时，不作为默认 CI 门槛。
 
-Luna 接受 LLVM/Clang 20 及以上版本；目前经过兼容验证的 API 基线为 LLVM 20
+Luna 接受 LLVM/Clang 20 至 22；目前经过兼容验证的 API 基线为 LLVM 20
 和 22。`clang++`、`LLVM_DIR` 与 `PATH` 中的 DLL 必须来自同一个 MSYS2 环境。
 已有 **CLANG64** 环境也可以用于本机原生开发构建，只需把上述命令中的
 `/ucrt64` 替换为 `/clang64`。不要把 MSYS2 LLVM 包与 MSVC 目标文件或另一个

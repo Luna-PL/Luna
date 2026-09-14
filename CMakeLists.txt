@@ -10,16 +10,16 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(LLVM REQUIRED CONFIG)
-if(LLVM_VERSION_MAJOR LESS 20)
+if(LLVM_VERSION_MAJOR LESS 20 OR LLVM_VERSION_MAJOR GREATER 22)
     message(FATAL_ERROR
-        "Luna requires LLVM 20 or newer; found LLVM ${LLVM_PACKAGE_VERSION}.")
+        "Luna requires LLVM 20 through 22; found LLVM ${LLVM_PACKAGE_VERSION}.")
 endif()
 if(NOT TARGET LLVM)
     message(FATAL_ERROR
         "This LLVM installation does not export the monolithic LLVM target. "
         "Set LLVM_DIR to the matching LLVM CMake package or install LLVM development files.")
 endif()
-message(STATUS "Luna LLVM compatibility: ${LLVM_PACKAGE_VERSION} (minimum 20)")
+message(STATUS "Luna LLVM compatibility: ${LLVM_PACKAGE_VERSION} (supported majors 20-22)")
 
 # Luna emits the native object itself and uses a Clang-compatible driver for
 # the final platform/CRT link. Keep this tool separate from CMAKE_CXX_COMPILER

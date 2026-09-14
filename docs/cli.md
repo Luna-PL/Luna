@@ -264,9 +264,11 @@ worker phase fields. `parent-roundtrip-gap` subtracts `worker-total` from the
 roundtrip and therefore isolates final-result serialization/publication, signal
 wakeup, scheduling and cross-process measurement noise rather than one single
 code phase.
-On Windows, the memory limit is an aggregate Job Object limit. On POSIX, the
+On Windows, the memory limit is an aggregate Job Object limit. On Linux, the
 worker installs a non-raiseable per-process `RLIMIT_AS` before readiness and its
-descendants inherit that limit.
+descendants inherit that limit. Darwin rejects limits below the address space
+already mapped at startup, so macOS adds the selected allowance to that initial
+mapping footprint before installing the same non-raiseable limit.
 `-O0/-O2/-O3`, `--opt`, `--link`, `--timeout`, `--memory-limit`,
 `--output-limit`, `--timings`, and `--help` are parsed as normal REPL CLI options.
 

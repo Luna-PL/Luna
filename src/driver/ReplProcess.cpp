@@ -26,6 +26,9 @@
 #include <fcntl.h>
 #include <sys/resource.h>
 #include <sys/socket.h>
+#if defined(__APPLE__)
+#include <mach/mach.h>
+#endif
 #if defined(__linux__)
 #include <sys/prctl.h>
 #endif
@@ -185,7 +188,26 @@ bool applyWorkerMemoryLimit(unsigned memoryLimitMiB, std::ostream& errors) {
     (void)errors;
 #else
     if (memoryLimitMiB == 0) return true;
-    const uint64_t requestedBytes = static_cast<uint64_t>(memoryLimitMiB) * 1024 * 1024;
+    uint64_t requestedBytes = static_cast<uint64_t>(memoryLimitMiB) * 1024 * 1024;
+#if defined(__APPLE__)
+    // Darwin refuses to lower RLIMIT_AS below the address space already mapped
+    // by the executable and its shared libraries. Treat the configured amount
+    // as additional worker headroom so the limit remains enforceable after
+    // exec() regardless of the LLVM dylib footprint.
+    mach_task_basic_info_data_t taskInfo{};
+    mach_msg_type_number_t taskInfoCount = MACH_TASK_BASIC_INFO_COUNT;
+    if (::task_info(::mach_task_self(), MACH_TASK_BASIC_INFO,
+                    reinterpret_cast<task_info_t>(&taskInfo),
+                    &taskInfoCount) != KERN_SUCCESS) {
+        errors << "error[repl-worker]: cannot read current address-space usage\n";
+        return false;
+    }
+    if (taskInfo.virtual_size > std::numeric_limits<uint64_t>::max() - requestedBytes) {
+        errors << "error[repl-worker]: memory limit overflows current address space\n";
+        return false;
+    }
+    requestedBytes += taskInfo.virtual_size;
+#endif
     if (requestedBytes > static_cast<uint64_t>(std::numeric_limits<rlim_t>::max())) {
         errors << "error[repl-worker]: memory limit does not fit platform rlimit\n";
         return false;
