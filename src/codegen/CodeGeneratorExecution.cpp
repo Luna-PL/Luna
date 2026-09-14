@@ -112,7 +112,12 @@ materializeLunaJit(std::unique_ptr<llvm::Module>& module,
     if (auto error = (*jit)->addIRModule(std::move(tsm))) return error;
 
     auto& executionSession = (*jit)->getExecutionSession();
+#if LLVM_VERSION_MAJOR >= 23
+    auto processSymbols = EPCDynamicLibrarySearchGenerator::GetForTargetProcess(
+        executionSession, (*jit)->getDylibMgr());
+#else
     auto processSymbols = EPCDynamicLibrarySearchGenerator::GetForTargetProcess(executionSession);
+#endif
     if (!processSymbols) return processSymbols.takeError();
     (*jit)->getMainJITDylib().addGenerator(std::move(*processSymbols));
     return std::move(*jit);
