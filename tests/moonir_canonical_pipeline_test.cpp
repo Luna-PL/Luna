@@ -42,6 +42,7 @@ static_assert(std::is_same_v<decltype(moon::StructDecl::type), moon::TypeRef>);
 namespace canonical_test {
 
 int runCatalogProjectionTests() {
+    trace("catalog projection");
     // The semantic Symbol Catalog and sealed MoonIR must derive strong
     // identity from the same declaration projection. This fixture includes
     // every source declaration kind represented in canonical MoonIR, plus a
@@ -140,6 +141,7 @@ fn main() -> i32 { return 0; }
 }
 
 int runPipelineContainerTests() {
+    trace("pipeline container compile");
     // CompilerPipeline always seals production function bodies into canonical
     // CFGs. Verify that a simple program cannot retain a structured body.
     {
@@ -271,6 +273,7 @@ fn main() -> i32 {
             return fail("Moon loader fixture lost its Runtime descriptor input");
         luna::runtime::MoonRuntime evolutionRuntime;
         luna::runtime::MoonRuntime::PinnedGeneration pinnedMoon;
+        trace("pipeline container initial generation load");
         if (!luna::driver::loadVerifiedMoonGenerationOnce(
                 evolutionRuntime, encodedContainer, manifest.targetTriple,
                 manifest.dataLayout, pinnedMoon, containerError)) {
@@ -292,6 +295,7 @@ fn main() -> i32 {
             static_cast<uint32_t>(retainedAnswer->kind) + 1,
             luna::runtime::GenerationBindingCallable};
         const auto retainedBinding = pinnedMoon.find(retainedRequirement);
+        trace("pipeline container retained binding invoke");
         if (!retainedBinding ||
             invokeUnaryGenerationEntry(retainedBinding.implementation(), 41) != 42)
             return fail("Moon descriptor-backed typed reference was not callable");
@@ -336,6 +340,7 @@ fn main() -> i32 {
                 return fail("Moon generation lost a descriptor-backed export");
             }
         }
+        trace("pipeline container entry binding invoke");
         const auto entryBinding = pinnedMoon.find(
             manifest.entrypoint.symbol.value,
             manifest.entrypoint.contract.value);
@@ -395,6 +400,7 @@ fn main() -> i32 {
             return fail("Moon load-once replaced a module with different content");
         luna::runtime::MoonRuntime::StagedGeneration replacementStaged;
         bool replacementInitializerRan = false;
+        trace("pipeline container replacement staging");
         if (!luna::driver::stageVerifiedMoonGeneration(
                 evolutionRuntime, replacementContainer,
                 replacementManifest.targetTriple,
@@ -434,6 +440,7 @@ fn main() -> i32 {
         const uint64_t replacementId = replacementStaged.generationId();
         if (replacementId != stagedMoonId + 1)
             return fail("Moon load-once materialized a discarded generation");
+        trace("pipeline container replacement activation");
         auto replacementSafePoint = evolutionRuntime.safePoint();
         if (!evolutionRuntime.activate(
                 replacementStaged, replacementSafePoint, containerError) ||
@@ -442,6 +449,7 @@ fn main() -> i32 {
             invokeGenerationEntry(
                 switchableEntry.pin().implementation()) != 13)
             return fail("Moon generation switch violated pinned/switchable behavior");
+        trace("pipeline container rollback");
         auto rollbackSafePoint = evolutionRuntime.safePoint();
         if (!evolutionRuntime.rollback(
                 manifest.packageId, stagedMoonId, rollbackSafePoint,
@@ -451,6 +459,7 @@ fn main() -> i32 {
             evolutionRuntime.retainedGenerationCount(manifest.packageId) != 2)
             return fail("Moon JIT generation rollback lost retained code");
 
+        trace("pipeline container rejected initializer");
         bool rejectingInitializerRan = false;
         luna::runtime::MoonRuntime::StagedGeneration initializerRejected;
         if (luna::driver::stageVerifiedMoonGeneration(
@@ -496,6 +505,7 @@ fn main() -> i32 {
         }
         if (!loadedConcreteInstance || !loadedForward)
             return fail("Moon Container projection dropped a transitive concrete callee");
+        trace("pipeline container roundtrip JIT");
         CodeGenerator loadedCodegen("container-roundtrip");
         if (!loadedCodegen.generate(&loadedModule)) {
             for (const auto& diagnostic : loadedCodegen.errors())

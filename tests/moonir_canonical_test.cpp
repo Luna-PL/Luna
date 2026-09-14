@@ -496,6 +496,7 @@ int main() {
         affineValueProducerTypeId, actionTypeId, unitConsumerTypeId,
         unitOrderedConsumerTypeId, moveMapTypeId, affinePredicateTypeId,
         affineIdentityTypeId, moveMapIteratorId, choiceId};
+    trace("control-flow tests");
     if (const int result = runControlFlowTests(controlFlowContext))
         return result;
 
@@ -580,9 +581,11 @@ int main() {
     if (!verifier.verify(reverse))
         return fail("reverse-order canonical module failed independent verification");
 
+    trace("sealing tests");
     if (const int result = runSealingTests(
             cfgBuilder, cfgVerifier, module, reverse, shortId, productId))
         return result;
+    trace("registered pipeline tests");
     if (const int result = runRegisteredTests()) return result;
 
     return 0;

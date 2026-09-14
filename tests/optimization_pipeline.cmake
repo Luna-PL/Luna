@@ -217,12 +217,13 @@ function(assert_no_optimized_array_guard source_path fixture_name)
         string(REGEX MATCH "target triple = \"x86_64-" x86_host "${array_ir}")
         if(NOT x86_host STREQUAL "")
             string(REGEX MATCH
-                "array\\.load[^\n]*\\.3 = load"
-                target_cost_unroll "${array_ir}")
-            if(target_cost_unroll STREQUAL "")
+                "(array\\.load[^\n]*\\.3 = load|load <4 x i32>)"
+                target_cost_parallelism "${array_ir}")
+            if(target_cost_parallelism STREQUAL "")
                 message(FATAL_ERROR
                     "O3 did not use the x86-64 target cost model for ${fixture_name}; "
-                    "the four-way search-loop unroll is missing.\nIR:\n${array_ir}")
+                    "neither four-way scalar unrolling nor four-lane vectorization "
+                    "was found.\nIR:\n${array_ir}")
             endif()
         endif()
     endif()
