@@ -22,24 +22,25 @@
 所有计划语法都只是 Draft。实现、测试、参考文档和变更日志同步完成前，本文不声明
 编译器已经支持这些能力。
 
-### 已冻结的决定边界（2026-08-30）
+### 核心冻结决定边界（2026-09-15）
 
-本文的 Confirmed ID 是实现授权。2026-08-31 的发布复核发现，SF006 只关闭了
+本文的 Confirmed ID 是实现授权。2026-09-15 的核心冻结复核确认，SF006 只关闭了
 静态、词法、unit-result、single-shot 切片，不能被解读为完整 Slot/Fragment
-模型已决。当前未决集合为：
+模型已决。整个 Slot/Fragment 表面明确排除在 0.3 核心冻结之外，因此以下稳定占位
+保持开放，但不阻断核心候选或 alpha 发布：
 
-- `TBD-SF007`（阻断 0.3 candidate）：0.3 的发布范围是否明确限定为 static
+- `TBD-SF007`（Slot/Fragment 开放范围）：未来稳定表面是否明确限定为 static
   lexical composition，还是必须在 0.3 公开可获取、可传递的
   `RuntimeFragmentRef` 与 runtime apply；
-- `TBD-SF008`（阻断 0.3 candidate）：同一 slot 的嵌套 `apply` 是最内层词法
+- `TBD-SF008`（Slot/Fragment 开放范围）：同一 slot 的嵌套 `apply` 是最内层词法
   shadow、handler chain 还是错误；当 fragment 内再调用当前正在应用的 slot 时，
   应定义递归/重入还是 fail closed。当前实现隐式选择最内层 shadow，且没有
   封闭同 fragment 重入；
-- `TBD-SF009`（阻断 0.3 candidate）：`runtime slot/fragment` retention 在 0.3 是否只承诺
+- `TBD-SF009`（Slot/Fragment 开放范围）：`runtime slot/fragment` retention 是否只承诺
   不可调用的 descriptor/identity 记录，以及 exported/private slot descriptor 的保留
   规则；当前 showcase 会发射 runtime context descriptor，但不存在对应的 runtime
   continuation entry；
-- `TBD-SF010`（若 `TBD-SF007` 选择 static-only，则不阻断 0.3）：
+- `TBD-SF010`（Slot/Fragment 开放范围）：
   `RuntimeFragmentRef<S>` 的构造/查询语法、Copy/Affine 规则、`ModuleLease` 生命期、
   static/runtime apply operand 统一规则，以及首个 runtime interceptor/context continuation ABI。
 
@@ -1238,21 +1239,22 @@ MoonIR capability、canonical CFG 分支与构建目标均已删除；退役 fea
 套件、单 workload analyzer 与最小 heterogeneous simulator 用例都已将源码作为
 临时 0.3 application package 实际构建并执行，默认 release smoke test 会持续守护
 该 AOT 路径。当前用户文档不再把已删除的 dynamic 路径当作可用功能，prebuilt
-workflow 也会对冻结的 0.2.1 生态快照 fail closed。2026-08-31 的本地候选验证已把
-toolchain 升至 0.2.0：grammar、formatter corpus、compiler conformance、LSP、VS Code
-扩展（含真实 Extension Host 的激活/格式化/task/重启测试，以及由编译器
-拥有语义的 check/build/run task）、release build 和 Linux VSIX 均面向
-Luna 0.3 并通过；Lunax 0.2.0 也已用当前
-0.3 编译器完成严格构建、6 项命令/后端/事务安装测试、安装树与通用归档验证。它们
-仍是各自仓库中的未提交候选，不构成可引用的发布证据。发布流程已增加两阶段提升：
+workflow 也会对冻结的 0.2.1 生态快照 fail closed。2026-09-15 的本地验证形成了
+Luna 候选 `e983c7d`、Toolchains 0.2.0 候选 `7eda07e` 与 Lunax 0.2.0 候选
+`a64ef20`。Toolchains 已通过生成 grammar 与 12 个当前编译器 fixture、绑定真实
+编译器 Slot/Fragment analysis 的完整 Rust workspace、Clippy、release build、VS Code
+源码检查和 Windows VSIX 打包；Lunax 已通过 Luna 0.3 application 严格构建及全部
+6 项命令/后端/事务安装测试。子仓 workflow 也会生成带 checksum 与 attestation 的
+`LUNA-SOURCE-COMMIT` 资产。它们是工作树清洁的本地提交，尚不构成远程 CI 或发布证据。
+发布流程已增加两阶段提升：
 两个组件会针对同一个无 tag 的不可变 Luna 候选 commit 构建并发布
 `LUNA-SOURCE-COMMIT` 证据，之后仅允许 lock/状态文档变化，最后才创建 Luna tag，因而
-不存在互相等待或移动 tag 的闭环。完成该项仍需要为三个候选建立独立提交、发布两个
-组件的已证明不可变产物，随后把共同的候选 commit 与产物证据写入并显式升级 lock。
+不存在互相等待或移动 tag 的闭环。完成该项仍需要远程 CI、两个组件已证明的不可变
+产物，随后把共同的候选 commit 与产物证据写入并显式升级 lock。
 这些剩余授权、发布等级与明确延后项已集中记录在
-[生态发布交接决策表](ecosystem_release.zh-CN.md#发布交接决策登记表2026-08-31)；
-当前 candidate 仍被 `TBD-SF007`–`TBD-SF009` 阻断；若确认 0.3 static-only，
-`TBD-SF010` 可作为明确延后项关闭。
+[生态发布交接决策表](ecosystem_release.zh-CN.md#发布交接决策登记表2026-09-15)；
+`TBD-SF007`–`TBD-SF010` 继续保持开放并排除在核心冻结契约之外；项目在声称
+Slot/Fragment 语义稳定前必须解决它们，但它们不再阻断本次核心候选。
 
 ## 10. 非优先目标占位
 

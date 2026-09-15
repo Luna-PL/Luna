@@ -24,9 +24,9 @@ other:
 
 1. Commit the complete Luna sources, tests, and release workflows to obtain a candidate commit,
    but do not create the `v0.3.0` tag.
-2. Commit and tag the toolchain and Lunax releases, then manually dispatch each release workflow
-   with that exact Luna candidate commit as `luna_ref`. The workflow resolves and publishes the
-   actual 40-character commit; a mutable branch name is not retained as evidence.
+2. Commit and tag the toolchain and Lunax releases. Each compatibility manifest pins that exact
+   Luna candidate as `source_commit`; the release workflow reads and publishes the 40-character
+   commit, so a mutable branch name is never retained as evidence.
 3. Complete child consumer, checksum, and attestation verification. Record the same commit as
    `verified_luna_source_commit` for both components together with their immutable release
    evidence.
@@ -83,30 +83,31 @@ set, resolves lightweight or annotated tags to the final commit, and reverifies 
 `LUNA-SOURCE-COMMIT`, and GitHub/Sigstore attestations. The independent Release evidence workflow
 and final tag publication use the same verification script so the two gates cannot drift.
 
-## Release handoff decision register (2026-08-31)
+## Release handoff decision register (2026-09-15)
 
-The 2026-08-31 review reopened Slot/Fragment `TBD-SF007` through `TBD-SF010`: the static lexical
-slice is implemented, but the full runtime model is not closed. Candidate commits are therefore
-paused until the blocking items are resolved; the rows below also record artifact authorization,
-release scope, and explicit deferrals:
+The 2026-09-15 review keeps Slot/Fragment `TBD-SF007` through `TBD-SF010` deliberately open: the
+static lexical slice is implemented, but the full runtime model is not closed. Slot/Fragment is
+therefore excluded from the 0.3 core freeze rather than used to block it. The rows below record
+the resulting candidate state, artifact authorization, release scope, and explicit deferrals:
 
 | ID | Confirmation needed | Encoded default | Recommendation | Blocks 0.3 release |
 |---|---|---|---|---|
-| `RLS001` | Candidate commit topology | All three independent worktrees are uncommitted | Create one fully tested candidate commit per repository, followed later by a separate root lock/status promotion commit; do not create untested intermediate semantic commits | Yes; confirm before any push/tag |
-| `RLS002` | GitHub release visibility | Root `v0.3.0` and Lunax `v0.2.0` are prereleases; Toolchain `v0.2.0` is a normal release | Keep the tiers encoded by the current workflows; any unification must happen before the candidate commit and repeat the gates | Yes |
-| `RLS003` | Authorization for external writes | No commit, push, tag, or publish has occurred | Authorize the two-phase sequence once: candidate commits → push/CI → child tags/releases → lock promotion → Luna tag/release | Yes |
+| `RLS001` | Candidate commit topology | Local candidates exist at Luna `e983c7d`, Toolchains `7eda07e`, and Lunax `a64ef20`; the three worktrees are clean before this status-only update | Preserve the Luna semantic candidate and follow it later with a separate root lock/status promotion commit | No; locally complete |
+| `RLS002` | GitHub release visibility | Root `v0.3.0` and Lunax `v0.2.0` are prereleases; Toolchains `v0.2.0` is a normal release | Keep the tiers encoded by the current workflows; any unification must happen before child tags and repeat the gates | Yes; confirm before tags |
+| `RLS003` | Authorization for external writes | Local commits exist; no push, tag, or publish has occurred | Authorize the remaining sequence explicitly: push/CI → child tags/releases → lock promotion → Luna tag/release | Yes |
 | `RLS004` | Whether real CUDA/ROCm performance evidence is a release gate | Release workflows exclude hardware tests with `-LE hardware`; simulator/AOT gates pass | Keep hardware measurements as independent non-blocking evidence rather than making a particular GPU a 0.3 prerequisite | No |
 | `RLS005` | Whether VS Code test selection, workspace status, and cache reporting enter 0.3 | Luna/Lunax expose no owner protocols for them, so the editor does not guess | Explicitly defer them until after 0.3; ship only compiler-owned check/build/run tasks | No |
-| `RLS006` | Overall-design document status | It still says `Draft`, and `TBD-SF007` through `TBD-SF010` are registered again | Change it to `Accepted release candidate` only after the blockers close and the candidate is accepted, then to a released status after the final tag | Yes |
+| `RLS006` | Overall-design document status | It remains `Draft` because Slot/Fragment is open, while the separately documented core freeze has a local candidate | Keep the full design `Draft`; promote the core snapshot independently and change the overall status only after Slot/Fragment closes | No for the core candidate; yes before claiming the whole design stable |
 | `RLS007` | Policy during a temporary attestation-service failure | Each asset retries five times and then fails closed | Wait for and rerun GitHub/Sigstore; never bypass attestations or accept checksums alone | Yes, until the network gate passes |
-| `RLS008` | Slot/Fragment design closure | The static slice is implemented; runtime scope, same-slot nesting/re-entry, and descriptor promises are not frozen | Decide and implement `TBD-SF007` through `TBD-SF009`; if static-only is chosen, explicitly defer `TBD-SF010` | Yes |
+| `RLS008` | Slot/Fragment design closure | The static slice is implemented; runtime scope, same-slot nesting/re-entry, and descriptor promises remain open | Keep `TBD-SF007` through `TBD-SF010` open and outside the core-freeze contract; resolve them before publishing stable Slot/Fragment semantics | No for the core/alpha release; yes for stable Slot/Fragment |
 
-After the Slot/Fragment decisions close, the release sequence is:
+With Slot/Fragment explicitly excluded from the core freeze, the release sequence is:
 
-1. Close `TBD-SF007` through `TBD-SF009`, complete the implementation, negative tests, and
-   specification implied by those choices, and disposition `TBD-SF010`.
-2. Review the three diffs, create and push the three candidate commits, and wait for remote CI.
-3. Release Toolchain and Lunax against the exact Luna candidate SHA, never a mutable branch.
+1. Preserve `TBD-SF007` through `TBD-SF010` as open Slot/Fragment work and do not expand the
+   frozen core candidate to resolve them.
+2. Push the three existing candidate commits and wait for remote CI.
+3. Release Toolchain and Lunax against the exact Luna candidate SHA recorded in each
+   compatibility manifest, never a mutable branch.
 4. Download every asset and pass consumer, checksum, source-commit, and attestation gates.
 5. Atomically replace both child components' versions, commits, URLs, timestamps, artifact
    digests, and `verified_luna_source_commit` in the lock; set `status: release-ready` and

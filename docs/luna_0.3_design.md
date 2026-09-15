@@ -22,23 +22,25 @@ The document uses these states:
 All example syntax is Draft. This document does not claim compiler support until the
 implementation, tests, references, and changelog have been updated together.
 
-### Frozen decision boundary (2026-08-30)
+### Core-freeze decision boundary (2026-09-15)
 
-Confirmed IDs in this document are implementation authority. A 2026-08-31 release review found
-that SF006 closes only the static, lexical, unit-result, single-shot slice and cannot be read as
-completing the whole Slot/Fragment model. The current unresolved set is:
+Confirmed IDs in this document are implementation authority. The 2026-09-15 core-freeze review
+confirmed that SF006 closes only the static, lexical, unit-result, single-shot slice and cannot
+be read as completing the whole Slot/Fragment model. The entire Slot/Fragment surface is
+explicitly outside the 0.3 core freeze, so these stable placeholders remain open without
+blocking the core candidate or alpha release:
 
-- `TBD-SF007` (blocks the 0.3 candidate): whether 0.3 explicitly ships only static lexical
+- `TBD-SF007` (open Slot/Fragment scope): whether a future stable surface ships only static lexical
   composition or must expose an acquirable, transferable `RuntimeFragmentRef` and runtime apply;
-- `TBD-SF008` (blocks the 0.3 candidate): whether nested `apply` for one slot uses innermost
+- `TBD-SF008` (open Slot/Fragment scope): whether nested `apply` for one slot uses innermost
   lexical shadowing, a handler chain, or an error, and whether a fragment may recursively or
   reentrantly invoke the slot currently applying it. The implementation currently assumes
   innermost shadowing and has no closed same-fragment re-entry rule;
-- `TBD-SF009` (blocks the 0.3 candidate): whether `runtime slot/fragment` retention in 0.3 promises
+- `TBD-SF009` (open Slot/Fragment scope): whether `runtime slot/fragment` retention promises
   only non-callable descriptor/identity records, including the exported/private slot-retention
   rule. The showcase currently emits runtime context descriptors without a corresponding runtime
   continuation entry;
-- `TBD-SF010` (does not block 0.3 if `TBD-SF007` chooses static-only): the construction/query
+- `TBD-SF010` (open Slot/Fragment scope): the construction/query
   spelling, Copy/Affine and `ModuleLease` lifetime rules for `RuntimeFragmentRef<S>`, unified
   static/runtime apply operands, and the first runtime interceptor/context continuation ABI.
 
@@ -1413,26 +1415,26 @@ heterogeneous simulator case all build and execute their sources as temporary
 0.3 application packages; a default release smoke test permanently guards that
 AOT path. Current user documentation no longer presents the removed dynamic
 path, and the prebuilt workflow now fails closed against the frozen 0.2.1
-ecosystem snapshot. Local candidate validation on 2026-08-31 has upgraded
-toolchain to 0.2.0: its grammar, formatter corpus, compiler conformance, LSP,
-VS Code extension (including a real Extension Host activation/format/restart
-test and compiler-owned check/build/run tasks), release build, and Linux VSIX
-now target Luna 0.3 and pass. Lunax 0.2.0
-also passes a strict build with the current 0.3 compiler, all
-six command/backend/transactional-install tests, installed-tree verification,
-and generic archive inspection. These remain uncommitted candidates in their
-independent repositories, not citable release evidence. The release flow now
+ecosystem snapshot. Local validation on 2026-09-15 produced Luna candidate
+`e983c7d`, Toolchains 0.2.0 candidate `7eda07e`, and Lunax 0.2.0 candidate
+`a64ef20`. Toolchains passes its generated grammar and 12 current compiler
+fixtures, complete Rust workspace with real-compiler Slot/Fragment analysis,
+Clippy, release build, VS Code source validation, and Windows VSIX packaging.
+Lunax passes its strict Luna 0.3 application build and all six
+command/backend/transactional-install tests. The child workflows also emit
+checksummed, attested `LUNA-SOURCE-COMMIT` assets. These are clean local
+commits, not yet remote CI or release evidence. The release flow
 uses two-phase promotion: both components build against the same immutable,
 untagged Luna candidate commit and publish `LUNA-SOURCE-COMMIT` evidence; only
 lock/status-document changes may follow before the final Luna tag is created.
 This removes both circular waiting and any need to move a tag. Completion still
-requires independent commits for all three candidates, attested immutable
-artifacts for both child components, and explicit lock promotion with their
-common candidate commit and artifact evidence.
+requires remote CI, attested immutable artifacts for both child components,
+and explicit lock promotion with their common candidate commit and artifact evidence.
 The remaining authorization, release-tier, and explicit-deferral choices are
-centralized in the [ecosystem release handoff decision register](ecosystem_release.md#release-handoff-decision-register-2026-08-31);
-the candidate remains blocked by `TBD-SF007` through `TBD-SF009`. If 0.3 is confirmed as
-static-only, `TBD-SF010` can close as an explicit deferral.
+centralized in the [ecosystem release handoff decision register](ecosystem_release.md#release-handoff-decision-register-2026-09-15);
+`TBD-SF007` through `TBD-SF010` remain deliberately open and outside the core-freeze
+contract. They must be resolved before the project claims stable Slot/Fragment semantics,
+but they do not block this core candidate.
 
 ## 10. Non-priority placeholders
 
