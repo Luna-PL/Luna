@@ -2,6 +2,8 @@
 
 #include "SemanticContextAccess.h"
 
+#include <unordered_set>
+
 class TypeResolver final : public TypeAnalysis {
 public:
     explicit TypeResolver(TypeContextAccess context)
@@ -36,5 +38,8 @@ public:
     void materializeInferredTypes(Program* program) override;
 
 private:
+    TypePtr validateTypeFormation(const TypePtr& type, const TypeAST* source);
+
     TypeContextAccess mContext;
+    std::unordered_set<const TypeAST*> mReportedTypeFormationErrors;
 };

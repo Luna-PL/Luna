@@ -355,6 +355,8 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `docs/roadmap.md` | 未实现能力和阶段计划 |
 | `docs/luna_0.3_design.md` | Luna 0.3 总体设计草案与已确认/待决边界 |
 | `docs/luna_0.3_design.zh-CN.md` | Luna 0.3 总体设计草案的中文对应版本 |
+| `docs/core_freeze.md` | Luna 0.3 核心冻结候选的英文权威范围、开放项与门禁 |
+| `docs/core_freeze.zh-CN.md` | Luna 0.3 核心冻结候选的中文对应版本 |
 | `docs/luna_0.3_evolution_audit.md` | 受总体设计约束的 Luna 0.3 slot/fragment 历史审计 |
 | `docs/luna_0.3_evolution_audit.zh-CN.md` | Luna 0.3 历史审计的中文对应版本 |
 | `docs/migration_0.2_to_0.3.md` | 0.2 至 0.3 破坏性变化登记和旧编译器迁移 corpus |
@@ -799,6 +801,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/anonymous_record_owned_field.luna`
 - `tests/fixtures/anonymous_record_partial_move_invalid.luna`
 - `tests/fixtures/anonymous_records.luna`
+- `tests/fixtures/array_layout_overflow_invalid.luna`
+- `tests/fixtures/array_length_overflow_invalid.luna`
 - `tests/fixtures/array_move_element_invalid.luna`
 - `tests/fixtures/comparison_non_numeric_invalid.luna`
 - `tests/fixtures/comparison_operators.luna`
@@ -872,6 +876,9 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/iterator_materialized_linear_source_invalid.luna`
 - `tests/fixtures/iterator_materialized_move_only.luna`
 - `tests/fixtures/into_iter_diagnostic_clean.luna`
+- `tests/fixtures/integer_literal_boundaries.luna`
+- `tests/fixtures/integer_literal_ranges_invalid.luna`
+- `tests/fixtures/integer_literal_token_overflow_invalid.luna`
 - `tests/fixtures/iterator_materialized_source_use_after_invalid.luna`
 - `tests/fixtures/iterator_materialized_twice_invalid.luna`
 - `tests/fixtures/iterator_move_only_array.luna`
@@ -1040,6 +1047,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/symbol_query_same_metadata_overload.luna`
 - `tests/fixtures/symbol_query_signature_invalid.luna`
 - `tests/fixtures/type_domains_reflection.luna`
+- `tests/fixtures/type_domain_value_formation_invalid.luna`
 - `tests/fixtures/type_relations.luna`
 - `tests/fixtures/usage_block_linear_unconsumed_invalid.luna`
 - `tests/fixtures/usage_block_loop_unconsumed_invalid.luna`

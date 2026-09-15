@@ -51,6 +51,10 @@ enum variant 构造与 match 引用记录，以及一条
 package 内一个已存在的源码文件，不写临时文件。`--overlays-from-stdin` 读取
 `luna.overlay` version 1 JSON 对象：
 
+version 1 envelope 与 record 含义稳定；`symbol_kind` 等字符串词汇是开放枚举。
+consumer 应尽可能保留未知值，否则降级为 unknown/generic symbol；陌生 kind 不得使
+JSONL stream 整体失败。新增必填字段或改变既有含义必须提升协议版本。
+
 ```json
 {
   "protocol": "luna.overlay",

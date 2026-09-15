@@ -239,6 +239,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `docs/iterators.zh-CN.md`
 - `docs/luna_0.3_design.md`
 - `docs/luna_0.3_design.zh-CN.md`
+- `docs/core_freeze.md`
+- `docs/core_freeze.zh-CN.md`
 - `docs/luna_0.3_evolution_audit.md`
 - `docs/luna_0.3_evolution_audit.zh-CN.md`
 - `docs/migration_0.2_to_0.3.md`
@@ -576,6 +578,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/anonymous_record_owned_field.luna`
 - `tests/fixtures/anonymous_record_partial_move_invalid.luna`
 - `tests/fixtures/anonymous_records.luna`
+- `tests/fixtures/array_layout_overflow_invalid.luna`
+- `tests/fixtures/array_length_overflow_invalid.luna`
 - `tests/fixtures/array_move_element_invalid.luna`
 - `tests/fixtures/comparison_non_numeric_invalid.luna`
 - `tests/fixtures/comparison_operators.luna`
@@ -650,6 +654,9 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/iterator_materialized_linear_source_invalid.luna`
 - `tests/fixtures/iterator_materialized_move_only.luna`
 - `tests/fixtures/into_iter_diagnostic_clean.luna`
+- `tests/fixtures/integer_literal_boundaries.luna`
+- `tests/fixtures/integer_literal_ranges_invalid.luna`
+- `tests/fixtures/integer_literal_token_overflow_invalid.luna`
 - `tests/fixtures/iterator_materialized_source_use_after_invalid.luna`
 - `tests/fixtures/iterator_materialized_twice_invalid.luna`
 - `tests/fixtures/iterator_move_only_array.luna`
@@ -823,6 +830,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/symbol_query_same_metadata_overload.luna`
 - `tests/fixtures/symbol_query_signature_invalid.luna`
 - `tests/fixtures/type_domains_reflection.luna`
+- `tests/fixtures/type_domain_value_formation_invalid.luna`
 - `tests/fixtures/type_relations.luna`
 - `tests/fixtures/unsigned_integer_codegen.luna`
 - `tests/fixtures/usage_block_linear_unconsumed_invalid.luna`

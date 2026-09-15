@@ -2,6 +2,15 @@
 
 ## 0.3.0 — Development
 
+- Established the Luna 0.3 core-freeze candidate boundary while deliberately
+  keeping Slot and Fragment semantics open. Value-type formation is now checked
+  recursively across parsing, semantic analysis and MoonIR verification;
+  contextual integer literals and array lengths use non-throwing, range-checked
+  conversion; and unrepresentable 64-bit value layouts are rejected. The CLI
+  analysis vocabulary is documented as an open enum, the reserved runtime
+  descriptor tags no longer imply frozen Slot/Fragment semantics, and focused
+  regression fixtures cover integer boundaries, malformed type domains and
+  overflowing array layouts.
 - Hardened the Alpha REPL around an explicit session/cell model. Declaration
   commits are transactional through LLVM code generation, `main` cannot poison
   later submissions, `:undo`, `:type`, `:load`, and explicit multiline paste

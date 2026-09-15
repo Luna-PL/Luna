@@ -327,6 +327,44 @@ bool containsType(const Type* current, const Type* target,
     return false;
 }
 
+bool wellFormedTypeDomainImpl(
+    const Type* current, std::unordered_set<const Type*>& active,
+    std::string* reason) {
+    if (!current || !active.insert(current).second) return true;
+    auto validate = [&](const TypePtr& child) {
+        if (!child) return true;
+        if (current->domain == TypeDomain::Value &&
+            child->kind != TypeKind::TypeParam &&
+            child->kind != TypeKind::InferenceVar &&
+            child->kind != TypeKind::Unknown &&
+            child->domain != TypeDomain::Value) {
+            if (reason) {
+                *reason = "value-domain type '" + current->toString() +
+                    "' cannot contain " + domainName(child->domain) +
+                    "-domain type '" + child->toString() + "'";
+            }
+            return false;
+        }
+        return wellFormedTypeDomainImpl(child.get(), active, reason);
+    };
+
+    if (!validate(current->inner) || !validate(current->returnType))
+        return false;
+    for (const auto& argument : current->typeArgs)
+        if (!validate(argument)) return false;
+    for (const auto& parameter : current->paramTypes)
+        if (!validate(parameter)) return false;
+    for (const auto& field : current->fields)
+        if (!validate(field.type)) return false;
+    for (const auto& field : current->capturedFields)
+        if (!validate(field.type)) return false;
+    for (const auto& variant : current->variants)
+        for (const auto& field : variant.fields)
+            if (!validate(field)) return false;
+    active.erase(current);
+    return true;
+}
+
 } // namespace
 
 std::string canonicalShape(const TypePtr& type) {
@@ -387,6 +425,11 @@ bool isRecursiveShape(const TypePtr& type) {
     if (!type) return false;
     std::unordered_set<const Type*> visited;
     return containsType(type.get(), type.get(), visited);
+}
+
+bool isWellFormedTypeDomain(const TypePtr& type, std::string* reason) {
+    std::unordered_set<const Type*> active;
+    return wellFormedTypeDomainImpl(type.get(), active, reason);
 }
 
 } // namespace luna::types

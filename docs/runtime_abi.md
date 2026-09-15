@@ -17,6 +17,9 @@ an already verified module; they never authenticate a Moon Container or Native l
 Declaration kind values are Function=1, Fragment=2, Struct=3, Enum=4, Trait=5,
 Implementation=6, MetadataSchema=7, and Slot=8. A Slot is non-callable; a Fragment's
 sealed declaration record carries a strong nominal reference to its target Slot.
+The numeric values and v1 record layout are reserved, but Slot/Fragment semantics remain
+outside the 0.3 core freeze. They must not be silently reinterpreted: an incompatible meaning
+requires a new ABI/container version or an explicitly negotiated capability.
 
 The loader validates the bounded registry once, including ABI/size/reserved fields,
 metadata value tags, ordering, and callable-kind consistency. Typed binding then uses exact

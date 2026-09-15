@@ -180,7 +180,9 @@ add_executable(source-manager-test
 )
 target_include_directories(source-manager-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 
-add_executable(core-contracts-test tests/core_contracts_test.cpp)
+add_executable(core-contracts-test
+    tests/core_contracts_test.cpp
+    src/core/TypeRelations.cpp)
 target_include_directories(core-contracts-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 

@@ -99,6 +99,8 @@ private:
     bool isAtEnd() const;
     bool isNamedSlotInvocationStart() const;
     void addError(const std::string& msg, const std::string& hint = "");
+    void addErrorAt(const Token& token, const std::string& msg,
+                    const std::string& hint = "");
     void synchronizeDeclaration();
     void synchronizeStatement();
     std::string sourceLineAt(int line) const;

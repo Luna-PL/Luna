@@ -27,4 +27,10 @@ bool isExplicitlyConvertible(const TypePtr& from, const TypePtr& to);
 bool isAbiCompatible(const TypePtr& lhs, const TypePtr& rhs);
 bool isRecursiveShape(const TypePtr& type);
 
+// Every Value-domain constructor may contain only Value-domain arguments.
+// Compiler type parameters are permitted as unresolved placeholders, but a
+// concrete Meta/Compiler argument makes the instantiated Value type invalid.
+bool isWellFormedTypeDomain(const TypePtr& type,
+                            std::string* reason = nullptr);
+
 } // namespace luna::types

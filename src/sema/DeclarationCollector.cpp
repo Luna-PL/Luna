@@ -417,6 +417,9 @@ void DeclarationCollector::declareStruct(StructDecl* decl) {
         field.inferredType = typedField.type;
         declared->fields.push_back(std::move(typedField));
     }
+    std::string domainError;
+    if (!luna::types::isWellFormedTypeDomain(declared, &domainError))
+        mContext.error(domainError, decl->line, decl->col);
 }
 
 void DeclarationCollector::declareEnum(EnumDecl* decl) {
@@ -457,6 +460,9 @@ void DeclarationCollector::declareEnum(EnumDecl* decl) {
         }
         declared->variants.push_back(std::move(typedVariant));
     }
+    std::string domainError;
+    if (!luna::types::isWellFormedTypeDomain(declared, &domainError))
+        mContext.error(domainError, decl->line, decl->col);
 }
 
 void DeclarationCollector::declareTrait(TraitDecl* decl) {

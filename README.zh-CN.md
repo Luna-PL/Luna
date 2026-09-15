@@ -195,6 +195,7 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
 - [当前架构](docs/architecture.md)
 - [架构决策](docs/decisions.md)
 - [Luna 0.3 总体设计草案](docs/luna_0.3_design.zh-CN.md)
+- [Luna 0.3 核心冻结边界](docs/core_freeze.zh-CN.md)
 - [Fragment 与 slot](docs/fragments.md)
 - [Runtime ABI 与 C FFI](docs/runtime_abi.md)
 - [异构计算](docs/heterogeneous_compute.md)

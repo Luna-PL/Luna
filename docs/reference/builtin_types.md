@@ -57,7 +57,7 @@ users cannot construct a valid device-event constant.
 | `slice<T>` | Value/Structural | Exactly one `T` | Copy handle plus source shared loan | 16-byte `{data,length}`; currently read-only |
 | `Result<T, E>` | Value/Nominal Core declaration | Exactly two payload types | `join(usage(T), usage(E))` | `org.luna.core::result::Result`; inline ADT v1 |
 | `device_buffer<T>` | Value/Structural builtin constructor | Exactly one element type | Linear | 16-byte `{data, length}` capability on 64-bit targets; device operations currently stable mainly for `i32` |
-| `(P...) -> R` | Value/Structural | Parameter sequence and return type | Copy function value; contract is part of shape | 8-byte code pointer for capture-free functions; Copy-only captured closures use the C016 inline environment representation |
+| `(P...) -> R` | Value/Structural | Parameter sequence and return type | Callable usage and parameter/result contracts are part of shape | 8-byte code pointer for capture-free functions; owned Copy/Affine/Linear captures use the C016 inline environment representation; borrowed captures are deferred |
 | `affine T` | Not an independent type | Usage contract only | Affine | TypeId remains `T` |
 | `linear T` | Not an independent type | Usage contract only | Linear | TypeId remains `T` |
 
@@ -140,7 +140,7 @@ identity is part of protocol selection.
 | device buffer/event | Yes | No | Dedicated ABI | No |
 | Meta/Compiler views | Compile time | No | No | Yes |
 
-This matrix describes the set allowed in 0.2; it does not promise that future versions will
+This matrix describes the set allowed in 0.3; it does not promise that future versions will
 always reject a category at a given boundary.
 
 ## 9. Predefined type names
@@ -169,17 +169,19 @@ of a predefined type use.
 
 - layout and boundary allow-lists remain separate from the centralized name/formation registry and require cross-layer review when new types are added;
 - target-dependent `usize/isize` semantics are not frozen beyond the 64-bit model;
-- integer-constant width selection lacks complete range diagnostics;
 - inline ADT payload strategy above 8-byte alignment is not frozen;
-- non-Copy closure environments and cross-function Iterator-adapter Drop layout are not delivered; Copy-only closure environments are delivered under C016;
+- borrowed closure environments and cross-function Iterator-adapter Drop layout are not delivered; owned Copy/Affine/Linear closure environments are delivered under C016;
 - public formatting, encoding, and standard-library APIs for `string` are not frozen;
 - `device_buffer<T>` formation is generic, but current device operations remain mainly fixed to `i32`;
 - a device buffer's element length is part of its value ABI. Runtime operations
   validate the `(data, length)` pair against the live-allocation registry, and
   kernel references lower to separate pointer and length parameters;
 - callable ownership shape needs a fuller assignment/unification negative matrix;
-- unified well-formedness rejection for Meta/Compiler arguments in parameterized Value
-  containers still needs to be completed.
+
+Contextual integer literals are parsed without exceptions across the full unsigned 64-bit
+magnitude range and then checked against their resolved signed/unsigned type. Value-domain
+constructors uniformly reject concrete Meta/Compiler arguments; the MoonIR verifier repeats
+the domain and representable-layout checks at the frozen artifact boundary.
 
 These gaps must be handled as implementation or specification work; they must not be hidden
 by removing the affected type from the inventory.
@@ -188,6 +190,8 @@ by removing the affected type from the inventory.
 
 - type identity: `tests/fixtures/type_relations.luna`
 - type domains: `tests/fixtures/type_domains_reflection.luna`
+- Value-domain formation: `tests/fixtures/type_domain_value_formation_invalid.luna`
+- integer ranges/layout: `tests/fixtures/integer_literal_*`, `tests/fixtures/array_*overflow_invalid.luna`
 - structural/nominal relations: `tests/fixtures/structural_*.luna`
 - ownership: `tests/fixtures/ownership_*.luna`
 - array/slice: `tests/fixtures/safe_arrays.luna`, `tests/fixtures/slice_*.luna`

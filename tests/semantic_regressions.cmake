@@ -153,6 +153,14 @@ expect_success("string literal local cleanup is a no-op" "tests/fixtures/string_
 expect_success("operators" "examples/operators.luna" "Program exited with code: 6")
 expect_success("comparison operators" "tests/fixtures/comparison_operators.luna" "Program exited with code: 42")
 expect_success("contextual unsigned integer literals and operations" "tests/fixtures/unsigned_integer_codegen.luna" "1431655765\n0\n1\n32\n4294967295\nProgram exited with code: 0")
+expect_success("integer literal signed and unsigned boundaries" "tests/fixtures/integer_literal_boundaries.luna" "Program exited with code: 42")
+expect_errors("contextual integer literal ranges" "tests/fixtures/integer_literal_ranges_invalid.luna"
+    "integer literal '300' is outside the range of i8"
+    "integer literal '-1' is outside the range of u8"
+    "integer literal '9223372036854775808' is outside the range of i64")
+expect_error("integer token overflow is diagnosed" "tests/fixtures/integer_literal_token_overflow_invalid.luna" "integer literal is outside the supported unsigned 64-bit range")
+expect_error("array length token overflow is diagnosed" "tests/fixtures/array_length_overflow_invalid.luna" "array length is outside the supported unsigned 64-bit range")
+expect_error("array value layout overflow is diagnosed" "tests/fixtures/array_layout_overflow_invalid.luna" "has a value layout that exceeds the 64-bit value-size limit")
 expect_success("contextual integer inference through calls" "tests/fixtures/contextual_integer_inference.luna" "Program exited with code: 42")
 expect_success_without("logical short-circuit" "tests/fixtures/logical_short_circuit.luna" "Program exited with code: 42" "99")
 expect_success("signature and auto inference" "examples/inference.luna" "Program exited with code: 42")
@@ -162,6 +170,17 @@ expect_success("generic body cloning" "tests/fixtures/generic_body_cloning.luna"
 expect_success("compile-time reflection" "examples/compile_time.luna" "Program exited with code: 42")
 expect_error("named products are nominal by default" "tests/fixtures/structural_type_equivalence.luna" "Pixel and Point are different types")
 expect_success("type domains and stable identity reflection" "tests/fixtures/type_domains_reflection.luna" "Program exited with code: 42")
+expect_errors("Value constructors reject Meta and Compiler arguments" "tests/fixtures/type_domain_value_formation_invalid.luna"
+    "value-domain type 'InvalidField' cannot contain meta-domain type 'meta Schema'"
+    "value-domain type 'InvalidVariant' cannot contain meta-domain type 'meta Schema'"
+    "function parameter 'value' cannot carry a compiler-only value across a call boundary"
+    "value-domain type 'array<meta Schema, 1>' cannot contain meta-domain type 'meta Schema'"
+    "value-domain type 'Result<meta Schema, i32>' cannot contain meta-domain type 'meta Schema'"
+    "value-domain type 'raw<meta Schema>' cannot contain meta-domain type 'meta Schema'"
+    "value-domain type 'slice<meta Schema>' cannot contain meta-domain type 'meta Schema'"
+    "value-domain type 'Holder<meta Schema>' cannot contain meta-domain type 'meta Schema'"
+    "value-domain type 'device_buffer<meta Schema>' cannot contain meta-domain type 'meta Schema'"
+    "cannot contain compiler-domain type 'declaration_ref<fn(...)>'")
 expect_success("explicit type relations" "tests/fixtures/type_relations.luna" "Program exited with code: 42")
 expect_success("anonymous record type, value, layout, and constraint" "tests/fixtures/anonymous_records.luna" "1\n40\nProgram exited with code: 42")
 expect_success("anonymous record recursively cleans owned fields" "tests/fixtures/anonymous_record_owned_field.luna" "Program exited with code: 42")

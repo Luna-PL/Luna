@@ -1,6 +1,8 @@
 #include "../diagnostics/Diagnostic.h"
 #include "Parser.h"
 
+#include <charconv>
+#include <cmath>
 #include <unordered_set>
 
 namespace {
@@ -402,7 +404,19 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     }
     if (match(TokenKind::IntLiteral)) {
         const Token& token = mTokens[mPos - 1];
-        auto node = std::make_unique<IntLiteralExpr>(std::stoll(token.lexeme));
+        uint64_t parsed = 0;
+        const auto result = std::from_chars(
+            token.lexeme.data(), token.lexeme.data() + token.lexeme.size(),
+            parsed);
+        if (result.ec == std::errc::result_out_of_range ||
+            result.ptr != token.lexeme.data() + token.lexeme.size()) {
+            addErrorAt(
+                token,
+                "integer literal is outside the supported unsigned 64-bit range",
+                "use a value from 0 through 18446744073709551615");
+            parsed = 0;
+        }
+        auto node = std::make_unique<IntLiteralExpr>(parsed);
         node->sourcePath = mSourceName;
         node->line = token.line;
         node->col = token.col;
@@ -410,7 +424,20 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     }
     if (match(TokenKind::FloatLiteral)) {
         const Token& token = mTokens[mPos - 1];
-        auto node = std::make_unique<FloatLiteralExpr>(std::stod(token.lexeme));
+        double parsed = 0.0;
+        const auto result = std::from_chars(
+            token.lexeme.data(), token.lexeme.data() + token.lexeme.size(),
+            parsed);
+        if (result.ec == std::errc::result_out_of_range ||
+            result.ptr != token.lexeme.data() + token.lexeme.size() ||
+            !std::isfinite(parsed)) {
+            addErrorAt(
+                token,
+                "floating-point literal is outside the finite f64 range",
+                "use a finite IEEE-754 f64 value");
+            parsed = 0.0;
+        }
+        auto node = std::make_unique<FloatLiteralExpr>(parsed);
         node->sourcePath = mSourceName;
         node->line = token.line;
         node->col = token.col;

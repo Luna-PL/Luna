@@ -53,6 +53,11 @@ variant construction/match records, followed by one `summary`. With
 `--overlay` retains the original transport in which stdin replaces one existing
 source file. `--overlays-from-stdin` reads a `luna.overlay` version 1 JSON object:
 
+The version 1 envelope and record meanings are stable, while string vocabularies such as
+`symbol_kind` are open enumerations. A consumer must preserve an unknown value when possible
+or degrade it to an unknown/generic symbol; an unfamiliar kind must not invalidate the JSONL
+stream. A new mandatory field or changed existing meaning requires a protocol version bump.
+
 ```json
 {
   "protocol": "luna.overlay",

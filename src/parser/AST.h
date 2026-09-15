@@ -9,6 +9,7 @@
 #include <optional>
 #include <variant>
 #include <cstdint>
+#include <cstring>
 
 // ─── Forward declarations ────────────────────────────────────────────
 struct Param;
@@ -289,11 +290,19 @@ struct ApplyStmt : Stmt {
 struct Expr : ASTNode {};
 
 struct IntLiteralExpr : Expr {
+    // Source integer tokens are non-negative magnitudes; unary `-` is a
+    // separate expression. Preserve the complete u64 range so contextual
+    // unsigned literals do not lose their high bit before semantic checking.
+    uint64_t magnitude;
     int64_t value;
     // Integer literals are contextually typed. Unconstrained literals are
     // defaulted to i32 after semantic inference has completed.
     TypePtr inferredType;
-    explicit IntLiteralExpr(int64_t v) : value(v) {}
+    explicit IntLiteralExpr(uint64_t v)
+        : magnitude(v) {
+        static_assert(sizeof(value) == sizeof(v));
+        std::memcpy(&value, &v, sizeof(value));
+    }
 };
 
 struct FloatLiteralExpr : Expr {

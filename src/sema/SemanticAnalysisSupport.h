@@ -115,7 +115,7 @@ inline uint64_t stableMetadataHash(const std::string& value) {
 
 inline std::string metadataExpressionKey(const Expr* expression) {
     if (auto* value = dynamic_cast<const IntLiteralExpr*>(expression))
-        return "i:" + std::to_string(value->value);
+        return "i:" + std::to_string(value->magnitude);
     if (auto* value = dynamic_cast<const FloatLiteralExpr*>(expression)) {
         std::ostringstream output;
         output << "f:" << std::setprecision(17) << value->value;

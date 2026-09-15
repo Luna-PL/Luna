@@ -2,9 +2,50 @@
 #include "PredefinedTypes.h"
 
 #include "SemanticAnalysisSupport.h"
+#include "../core/TypeLayout.h"
+#include "../core/TypeRelations.h"
 #include "../parser/AST.h"
 #include <functional>
+#include <limits>
 #include <utility>
+
+namespace {
+
+unsigned integerWidth(TypeKind kind) {
+    switch (kind) {
+        case TypeKind::I8:
+        case TypeKind::U8: return 8;
+        case TypeKind::I16:
+        case TypeKind::U16: return 16;
+        case TypeKind::I32:
+        case TypeKind::U32: return 32;
+        case TypeKind::I64:
+        case TypeKind::U64:
+        case TypeKind::USize:
+        case TypeKind::ISize: return 64;
+        default: return 0;
+    }
+}
+
+bool integerLiteralFits(uint64_t magnitude, const TypePtr& type,
+                        bool negative) {
+    if (!type || !isIntegerType(type)) return true;
+    const unsigned width = integerWidth(type->kind);
+    if (width == 0) return true;
+    if (isUnsignedIntegerType(type)) {
+        if (negative && magnitude != 0) return false;
+        const uint64_t maximum = width == 64
+            ? std::numeric_limits<uint64_t>::max()
+            : (uint64_t{1} << width) - 1;
+        return magnitude <= maximum;
+    }
+    const uint64_t maximum = negative
+        ? (uint64_t{1} << (width - 1))
+        : (uint64_t{1} << (width - 1)) - 1;
+    return magnitude <= maximum;
+}
+
+} // namespace
 
 FunctionDecl* TypeResolver::findMatchingImpl(const std::string& traitName,
                                                   const std::string& typeName,
@@ -18,6 +59,28 @@ FunctionDecl* TypeResolver::findMatchingImpl(const std::string& traitName,
     return methodIt->second;
 }
 
+TypePtr TypeResolver::validateTypeFormation(
+    const TypePtr& type, const TypeAST* source) {
+    std::string reason;
+    if (!luna::types::isWellFormedTypeDomain(type, &reason)) {
+        if (!source || mReportedTypeFormationErrors.insert(source).second)
+            mContext.error(
+                reason,
+                source ? source->line : 0,
+                source ? source->col : 0);
+        return type;
+    }
+    if (!luna::layout::valueLayoutFits(type) &&
+        (!source || mReportedTypeFormationErrors.insert(source).second)) {
+        mContext.error(
+            "type '" + type->toString() +
+                "' has a value layout that exceeds the 64-bit value-size limit",
+            source ? source->line : 0,
+            source ? source->col : 0);
+    }
+    return type;
+}
+
 TypePtr TypeResolver::resolveTypeAST(const TypeAST* ast,
     const std::unordered_map<std::string, TypePtr>& bindings) {
     if (!ast) return TyUnit;
@@ -28,7 +91,8 @@ TypePtr TypeResolver::resolveTypeAST(const TypeAST* ast,
         for (const auto& field : record->fields)
             fields.push_back({
                 field.name, resolveTypeAST(field.type.get(), bindings)});
-        auto resolvedRecord = Type::makeRecord(std::move(fields));
+        auto resolvedRecord = validateTypeFormation(
+            Type::makeRecord(std::move(fields)), record);
         const_cast<RecordTypeAST*>(record)->resolvedType = resolvedRecord;
         return resolvedRecord;
     }
@@ -50,7 +114,7 @@ TypePtr TypeResolver::resolveTypeAST(const TypeAST* ast,
                 resolved(predefined.type->inner)->kind != TypeKind::Metadata)
                 mContext.error("metadata_view type argument must be a meta schema",
                       named->line, named->col);
-            return predefined.type;
+            return validateTypeFormation(predefined.type, named);
         }
         auto bound = bindings.find(named->name);
         if (bound != bindings.end()) return bound->second;
@@ -80,15 +144,22 @@ TypePtr TypeResolver::resolveTypeAST(const TypeAST* ast,
             TypeVec args;
             for (auto& arg : named->typeArgs)
                 args.push_back(resolveTypeAST(arg.get(), bindings));
-            const_cast<NamedTypeAST*>(named)->resolvedType = args.empty()
-                ? nominalType : instantiateNominal(nominalType, args);
+            const_cast<NamedTypeAST*>(named)->resolvedType =
+                validateTypeFormation(
+                    args.empty()
+                        ? nominalType
+                        : instantiateNominal(nominalType, args),
+                    named);
             return const_cast<NamedTypeAST*>(named)->resolvedType;
         }
         return resolveType(ast, bindings);
     }
     if (auto* ref = dynamic_cast<const RefTypeAST*>(ast))
-        return Type::makeReference(resolveTypeAST(ref->inner.get(), bindings),
-                                   ref->isMutable);
+        return validateTypeFormation(
+            Type::makeReference(
+                resolveTypeAST(ref->inner.get(), bindings),
+                ref->isMutable),
+            ref);
     if (auto* linear = dynamic_cast<const LinearTypeAST*>(ast))
         return resolveTypeAST(linear->inner.get(), bindings);
     if (auto* affine = dynamic_cast<const AffineTypeAST*>(ast))
@@ -113,9 +184,12 @@ TypePtr TypeResolver::resolveTypeAST(const TypeAST* ast,
             : (dynamic_cast<AffineTypeAST*>(fn->returnType.get())
                 ? luna::ownership::Usage::Affine
                 : defaultUsageForType(returnType));
-        return Type::makeFunction(
-            std::move(params), std::move(returnType), std::move(contracts),
-            {luna::ownership::Relation::Owned, returnUsage});
+        return validateTypeFormation(
+            Type::makeFunction(
+                std::move(params), std::move(returnType),
+                std::move(contracts),
+                {luna::ownership::Relation::Owned, returnUsage}),
+            fn);
     }
     return TyUnknown;
 }
@@ -298,12 +372,26 @@ void TypeResolver::materializeInferredTypes(Program* program) {
         const auto* named = dynamic_cast<const NamedTypeAST*>(type.get());
         return named && named->name == "auto";
     };
+    const auto validateIntegerLiteral = [this](
+        IntLiteralExpr* literal, bool negative) {
+        literal->inferredType = literal->inferredType
+            ? resolved(literal->inferredType) : TyI32;
+        if (!integerLiteralFits(
+                literal->magnitude, literal->inferredType, negative)) {
+            mContext.error(
+                "integer literal '" +
+                    std::string(negative ? "-" : "") +
+                    std::to_string(literal->magnitude) +
+                    "' is outside the range of " +
+                    literal->inferredType->toString(),
+                literal->line, literal->col);
+        }
+    };
 
     visitExpr = [&](Expr* expr) {
         if (!expr) return;
         if (auto* literal = dynamic_cast<IntLiteralExpr*>(expr)) {
-            literal->inferredType = literal->inferredType
-                ? resolved(literal->inferredType) : TyI32;
+            validateIntegerLiteral(literal, false);
             return;
         }
         if (auto* l = dynamic_cast<LambdaExpr*>(expr)) {
@@ -322,7 +410,17 @@ void TypeResolver::materializeInferredTypes(Program* program) {
             return;
         }
         if (auto* b = dynamic_cast<BinaryExpr*>(expr)) { visitExpr(b->lhs.get()); visitExpr(b->rhs.get()); return; }
-        if (auto* u = dynamic_cast<UnaryExpr*>(expr)) { visitExpr(u->operand.get()); return; }
+        if (auto* u = dynamic_cast<UnaryExpr*>(expr)) {
+            if (u->op == TokenKind::Minus) {
+                if (auto* literal =
+                        dynamic_cast<IntLiteralExpr*>(u->operand.get())) {
+                    validateIntegerLiteral(literal, true);
+                    return;
+                }
+            }
+            visitExpr(u->operand.get());
+            return;
+        }
         if (auto* c = dynamic_cast<CallExpr*>(expr)) {
             if (c->intrinsicType)
                 c->intrinsicType = resolved(c->intrinsicType);

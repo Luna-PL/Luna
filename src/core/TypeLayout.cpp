@@ -1,6 +1,7 @@
 #include "TypeLayout.h"
 
 #include <algorithm>
+#include <limits>
 #include <sstream>
 #include <unordered_set>
 
@@ -152,6 +153,152 @@ uint64_t valueSizeImpl(const TypePtr& type,
     }
 }
 
+bool checkedAdd(uint64_t left, uint64_t right, uint64_t& result) {
+    if (left > std::numeric_limits<uint64_t>::max() - right)
+        return false;
+    result = left + right;
+    return true;
+}
+
+bool checkedMultiply(uint64_t left, uint64_t right, uint64_t& result) {
+    if (left != 0 && right > std::numeric_limits<uint64_t>::max() / left)
+        return false;
+    result = left * right;
+    return true;
+}
+
+bool checkedAlign(uint64_t value, uint64_t alignment, uint64_t& result) {
+    if (alignment <= 1) {
+        result = value;
+        return true;
+    }
+    uint64_t adjusted = 0;
+    if (!checkedAdd(value, alignment - 1, adjusted)) return false;
+    result = adjusted / alignment * alignment;
+    return true;
+}
+
+bool valueSizeFitsImpl(const TypePtr& type,
+                       std::unordered_set<const Type*>& active,
+                       uint64_t& size) {
+    if (!type) {
+        size = 0;
+        return true;
+    }
+    switch (type->kind) {
+        case TypeKind::I8: case TypeKind::U8: case TypeKind::Bool:
+            size = 1; return true;
+        case TypeKind::I16: case TypeKind::U16:
+            size = 2; return true;
+        case TypeKind::I32: case TypeKind::U32: case TypeKind::F32:
+        case TypeKind::Event:
+            size = 4; return true;
+        case TypeKind::I64: case TypeKind::U64:
+        case TypeKind::USize: case TypeKind::ISize: case TypeKind::F64:
+        case TypeKind::String: case TypeKind::CStr:
+        case TypeKind::RawPointer: case TypeKind::Reference:
+        case TypeKind::Struct: case TypeKind::Iterator:
+        case TypeKind::Metadata: case TypeKind::MetadataView:
+        case TypeKind::SymbolSet: case TypeKind::DeclarationView:
+        case TypeKind::DeclarationRef: case TypeKind::Function:
+            size = 8; return true;
+        case TypeKind::DeviceBuffer:
+            size = 16; return true;
+        case TypeKind::Unit: case TypeKind::Never:
+            size = 0; return true;
+        case TypeKind::Slice:
+            size = 16; return true;
+        case TypeKind::Array: {
+            uint64_t elementSize = 0;
+            if (!valueSizeFitsImpl(type->inner, active, elementSize))
+                return false;
+            return checkedMultiply(
+                type->arrayLength, elementSize, size);
+        }
+        case TypeKind::Record:
+        case TypeKind::Closure: {
+            if (!active.insert(type.get()).second) {
+                size = 0;
+                return true;
+            }
+            uint64_t offset = type->kind == TypeKind::Closure ? 8 : 0;
+            uint64_t maximumAlignment = type->kind == TypeKind::Closure ? 8 : 1;
+            const auto& fields = type->kind == TypeKind::Closure
+                ? type->capturedFields : type->fields;
+            for (const auto& field : fields) {
+                uint64_t fieldSize = 0;
+                if (!valueSizeFitsImpl(field.type, active, fieldSize)) {
+                    active.erase(type.get());
+                    return false;
+                }
+                const uint64_t alignment =
+                    valueAlignmentImpl(field.type, active);
+                maximumAlignment = std::max(maximumAlignment, alignment);
+                if (!checkedAlign(offset, alignment, offset) ||
+                    !checkedAdd(offset, fieldSize, offset)) {
+                    active.erase(type.get());
+                    return false;
+                }
+            }
+            active.erase(type.get());
+            return checkedAlign(offset, maximumAlignment, size);
+        }
+        case TypeKind::Result: {
+            uint64_t payload = 0;
+            for (const auto& argument : type->typeArgs) {
+                uint64_t argumentSize = 0;
+                if (!valueSizeFitsImpl(argument, active, argumentSize))
+                    return false;
+                payload = std::max(payload, argumentSize);
+            }
+            payload = std::max<uint64_t>(InlinePayloadAlignment, payload);
+            if (!checkedAlign(payload, InlinePayloadAlignment, payload))
+                return false;
+            return checkedAdd(InlineTagStorageSize, payload, size);
+        }
+        case TypeKind::Enum: {
+            if (!active.insert(type.get()).second) {
+                size = 0;
+                return true;
+            }
+            uint64_t payload = 0;
+            for (const auto& variant : type->variants) {
+                uint64_t offset = 0;
+                uint64_t maximumAlignment = 1;
+                for (const auto& field : variant.fields) {
+                    uint64_t fieldSize = 0;
+                    if (!valueSizeFitsImpl(field, active, fieldSize)) {
+                        active.erase(type.get());
+                        return false;
+                    }
+                    const uint64_t alignment = std::min<uint64_t>(
+                        InlinePayloadAlignment,
+                        valueAlignmentImpl(field, active));
+                    maximumAlignment = std::max(
+                        maximumAlignment, alignment);
+                    if (!checkedAlign(offset, alignment, offset) ||
+                        !checkedAdd(offset, fieldSize, offset)) {
+                        active.erase(type.get());
+                        return false;
+                    }
+                }
+                if (!checkedAlign(offset, maximumAlignment, offset)) {
+                    active.erase(type.get());
+                    return false;
+                }
+                payload = std::max(payload, offset);
+            }
+            active.erase(type.get());
+            payload = std::max<uint64_t>(InlinePayloadAlignment, payload);
+            if (!checkedAlign(payload, InlinePayloadAlignment, payload))
+                return false;
+            return checkedAdd(InlineTagStorageSize, payload, size);
+        }
+        default:
+            size = 0; return true;
+    }
+}
+
 } // namespace
 
 uint64_t valueSize(const TypePtr& type) {
@@ -162,6 +309,12 @@ uint64_t valueSize(const TypePtr& type) {
 uint64_t valueAlignment(const TypePtr& type) {
     std::unordered_set<const Type*> active;
     return valueAlignmentImpl(type, active);
+}
+
+bool valueLayoutFits(const TypePtr& type) {
+    std::unordered_set<const Type*> active;
+    uint64_t size = 0;
+    return valueSizeFitsImpl(type, active, size);
 }
 
 uint64_t productStorageAlignment(const TypePtr& type) {

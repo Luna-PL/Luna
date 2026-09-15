@@ -11,7 +11,7 @@ inline bool isNegativeIntegerLiteral(const Expr* expression) {
     if (!unary || unary->op != TokenKind::Minus) return false;
     const auto* literal = dynamic_cast<const IntLiteralExpr*>(
         unary->operand.get());
-    return literal && literal->value != 0;
+    return literal && literal->magnitude != 0;
 }
 
 inline bool hasLayoutDependentTypeParameter(
@@ -60,6 +60,7 @@ inline bool genericDropLayoutDependsOnParameter(const TypePtr& target) {
 
 inline bool isCompilerOnlyValue(const TypePtr& type) {
     if (!type) return false;
+    if (type->domain == luna::types::TypeDomain::Meta) return true;
     switch (type->kind) {
         case TypeKind::SymbolSet:
             return true;

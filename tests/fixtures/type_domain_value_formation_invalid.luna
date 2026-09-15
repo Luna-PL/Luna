@@ -1,0 +1,33 @@
+meta Schema {
+    value: i32;
+}
+
+struct Holder<T> {
+    value: T;
+}
+
+struct InvalidField {
+    value: Schema;
+}
+
+enum InvalidVariant {
+    Value(Schema),
+}
+
+fn direct(value: Schema) -> i32 { return 0; }
+fn in_array(value: array<Schema, 1>) -> i32 { return 0; }
+fn in_result(value: Result<Schema, i32>) -> i32 { return 0; }
+fn in_raw(value: raw<Schema>) -> i32 { return 0; }
+fn in_slice(value: slice<Schema>) -> i32 { return 0; }
+fn in_nominal(value: Holder<Schema>) -> i32 { return 0; }
+fn in_device(linear value: device_buffer<Schema>) -> i32 {
+    move value;
+    return 0;
+}
+fn compiler_in_array(
+    value: array<declaration_ref<() -> i32>, 1>
+) -> i32 {
+    return 0;
+}
+
+fn main() -> i32 { return 0; }
