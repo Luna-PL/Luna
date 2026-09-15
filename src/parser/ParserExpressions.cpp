@@ -3,11 +3,20 @@
 
 #include <charconv>
 #include <cmath>
+#include <locale>
+#include <sstream>
 #include <unordered_set>
 
 namespace {
 
 constexpr int kMaxParseNestingDepth = 256;
+
+bool parseFiniteF64(const std::string& text, double& value) {
+    std::istringstream input(text);
+    input.imbue(std::locale::classic());
+    if (!(input >> value) || !std::isfinite(value)) return false;
+    return input.peek() == std::char_traits<char>::eof();
+}
 
 } // namespace
 
@@ -425,12 +434,7 @@ std::unique_ptr<Expr> Parser::parsePrimary() {
     if (match(TokenKind::FloatLiteral)) {
         const Token& token = mTokens[mPos - 1];
         double parsed = 0.0;
-        const auto result = std::from_chars(
-            token.lexeme.data(), token.lexeme.data() + token.lexeme.size(),
-            parsed);
-        if (result.ec == std::errc::result_out_of_range ||
-            result.ptr != token.lexeme.data() + token.lexeme.size() ||
-            !std::isfinite(parsed)) {
+        if (!parseFiniteF64(token.lexeme, parsed)) {
             addErrorAt(
                 token,
                 "floating-point literal is outside the finite f64 range",

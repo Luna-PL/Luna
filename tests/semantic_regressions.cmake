@@ -159,6 +159,7 @@ expect_errors("contextual integer literal ranges" "tests/fixtures/integer_litera
     "integer literal '-1' is outside the range of u8"
     "integer literal '9223372036854775808' is outside the range of i64")
 expect_error("integer token overflow is diagnosed" "tests/fixtures/integer_literal_token_overflow_invalid.luna" "integer literal is outside the supported unsigned 64-bit range")
+expect_error("floating-point token overflow is diagnosed" "tests/fixtures/float_literal_overflow_invalid.luna" "floating-point literal is outside the finite f64 range")
 expect_error("array length token overflow is diagnosed" "tests/fixtures/array_length_overflow_invalid.luna" "array length is outside the supported unsigned 64-bit range")
 expect_error("array value layout overflow is diagnosed" "tests/fixtures/array_layout_overflow_invalid.luna" "has a value layout that exceeds the 64-bit value-size limit")
 expect_success("contextual integer inference through calls" "tests/fixtures/contextual_integer_inference.luna" "Program exited with code: 42")
