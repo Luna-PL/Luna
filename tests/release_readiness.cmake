@@ -157,19 +157,34 @@ if(stale_evidence_result EQUAL 0 OR
 endif()
 
 execute_process(
-    COMMAND "${GIT_EXECUTABLE}" rev-parse HEAD^
+    COMMAND "${GIT_EXECUTABLE}" log -1 --format=%H HEAD --
+            tests/release_readiness.cmake
     WORKING_DIRECTORY "${LUNA_SOURCE_DIR}"
-    RESULT_VARIABLE parent_result
-    OUTPUT_VARIABLE parent_commit
-    ERROR_VARIABLE parent_error
+    RESULT_VARIABLE policy_commit_result
+    OUTPUT_VARIABLE policy_commit
+    ERROR_VARIABLE policy_commit_error
     OUTPUT_STRIP_TRAILING_WHITESPACE)
-if(NOT parent_result EQUAL 0)
-    message(FATAL_ERROR "cannot resolve Luna HEAD parent: ${parent_error}")
+if(NOT policy_commit_result EQUAL 0 OR policy_commit STREQUAL "")
+    message(FATAL_ERROR
+        "cannot resolve the release-policy commit: ${policy_commit_error}")
+endif()
+execute_process(
+    COMMAND "${GIT_EXECUTABLE}" rev-parse "${policy_commit}^"
+    WORKING_DIRECTORY "${LUNA_SOURCE_DIR}"
+    RESULT_VARIABLE stale_candidate_result
+    OUTPUT_VARIABLE stale_candidate_commit
+    ERROR_VARIABLE stale_candidate_error
+    OUTPUT_STRIP_TRAILING_WHITESPACE)
+if(NOT stale_candidate_result EQUAL 0)
+    message(FATAL_ERROR
+        "cannot resolve the commit before the release policy: "
+        "${stale_candidate_error}")
 endif()
 set(stale_lock "${ready_lock}")
 foreach(component IN ITEMS toolchain lunax)
     string(JSON stale_lock SET "${stale_lock}"
-           components ${component} verified_luna_source_commit "\"${parent_commit}\"")
+           components ${component} verified_luna_source_commit
+           "\"${stale_candidate_commit}\"")
 endforeach()
 set(stale_lock_path "${CMAKE_CURRENT_BINARY_DIR}/release-stale.lock.json")
 file(WRITE "${stale_lock_path}" "${stale_lock}\n")
