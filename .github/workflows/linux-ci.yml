@@ -16,9 +16,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # release_readiness.cmake verifies that post-candidate changes are
-          # rejected by comparing HEAD with its parent.
-          fetch-depth: 2
+          # release_readiness.cmake verifies candidate ancestry and the entire
+          # post-candidate promotion path.
+          fetch-depth: 0
 
       - name: Install CMake, Ninja, and LLVM 22
         run: |
@@ -56,9 +56,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # The full sanitized suite includes the release-readiness history
-          # policy test, which needs HEAD^.
-          fetch-depth: 2
+          # The full sanitized suite includes the release-readiness ancestry
+          # policy test, which requires the complete promotion history.
+          fetch-depth: 0
 
       - name: Install CMake, Ninja, and LLVM 22
         run: |
