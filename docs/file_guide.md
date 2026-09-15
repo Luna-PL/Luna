@@ -626,6 +626,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/ffi_result_boundary_invalid.luna`
 - `tests/fixtures/ffi_unsupported_abi_invalid.luna`
 - `tests/fixtures/ffi_unsupported_type_invalid.luna`
+- `tests/fixtures/float_literal_overflow_invalid.luna`
 - `tests/fixtures/fragment_contracts.luna`
 - `tests/fixtures/fragment_return_value_invalid.luna`
 - `tests/fixtures/generic_argument_count_invalid.luna`
