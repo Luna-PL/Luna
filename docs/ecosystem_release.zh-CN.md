@@ -19,8 +19,9 @@ package 后，consumer verification 才会从 pending 升级。
 0.3 使用两阶段提升，避免 Luna tag 与子组件 release 互相等待：
 
 1. 先提交完整的 Luna 源码、测试和发布工作流，得到候选 commit，但不创建 `v0.3.0` tag；
-2. 分别提交并创建 toolchain/Lunax 的 release tag，通过手动 release workflow 把该 Luna
-   候选 commit 作为 `luna_ref`；工作流解析并发布实际验证的 40 位 commit，不能只记录分支；
+2. 分别提交并创建 toolchain/Lunax 的 release tag；各自 compatibility manifest 用
+   `source_commit` 固定该 Luna 候选，release workflow 读取并发布这个 40 位 commit，
+   不把可变分支名保留为证据；
 3. 完成子组件 consumer、checksum 和 attestation 验证，把同一个 commit 写入两组件的
    `verified_luna_source_commit`，并录入不可变 release 证据；
 4. 提交 lock 提升，再创建最终 Luna tag。候选 commit 之后只允许修改
@@ -69,28 +70,30 @@ lock。
 checksum、`LUNA-SOURCE-COMMIT` 和 GitHub/Sigstore attestation。独立 Release evidence
 workflow 与最终 tag 发布使用同一个验证脚本，避免两套门禁随时间漂移。
 
-## 发布交接决策登记表（2026-08-31）
+## 发布交接决策登记表（2026-09-15）
 
-2026-08-31 复核重新打开了 Slot/Fragment 的 `TBD-SF007`–`TBD-SF010`：
-已完成的是 static lexical slice，不是完整 runtime model。因此候选提交已暂停，
-先解决阻断项，再处理下表的产物授权、发布范围与延后项：
+2026-09-15 复核决定让 Slot/Fragment 的 `TBD-SF007`–`TBD-SF010` 保持开放：
+已完成的是 static lexical slice，不是完整 runtime model。因此 Slot/Fragment 被排除在
+0.3 核心冻结之外，而不是继续阻断核心冻结。下表记录当前候选状态、产物授权、发布范围
+与明确延后项：
 
 | ID | 需要确认的内容 | 当前已编码默认 | 建议 | 是否阻断 0.3 发布 |
 |---|---|---|---|---|
-| `RLS001` | 候选提交拓扑 | 三个独立工作树均未提交 | 每个仓库创建一个经完整验证的 candidate commit；根仓稍后另建一个仅包含 lock/状态的 promotion commit，不拆出未单独测试的中间语义提交 | 是；必须在 push/tag 前确认 |
-| `RLS002` | GitHub release 可见性 | 根 `v0.3.0` 与 Lunax `v0.2.0` 为 prerelease；Toolchain `v0.2.0` 为普通 release | 保持当前三个 workflow 的等级；如需统一，必须在 candidate commit 前修改并重跑门禁 | 是 |
-| `RLS003` | 外部写操作授权 | 未 commit、push、tag 或 publish | 按两阶段顺序一次授权：candidate commits → push/CI → 子组件 tags/releases → lock promotion → Luna tag/release | 是 |
+| `RLS001` | 候选提交拓扑 | 本地候选已建立：Luna `e983c7d`、Toolchains `7eda07e`、Lunax `a64ef20`；本次纯状态更新前三个工作树均清洁 | 保留 Luna 语义候选；根仓稍后另建仅包含 lock/状态的 promotion commit | 否；本地已完成 |
+| `RLS002` | GitHub release 可见性 | 根 `v0.3.0` 与 Lunax `v0.2.0` 为 prerelease；Toolchains `v0.2.0` 为普通 release | 保持当前三个 workflow 的等级；如需统一，必须在子组件 tag 前修改并重跑门禁 | 是；tag 前确认 |
+| `RLS003` | 外部写操作授权 | 本地 commit 已建立；尚未 push、tag 或 publish | 明确授权剩余顺序：push/CI → 子组件 tags/releases → lock promotion → Luna tag/release | 是 |
 | `RLS004` | 真实 CUDA/ROCm 性能证据是否为发布门 | release workflow 用 `-LE hardware` 明确排除硬件测试；simulator/AOT 门已通过 | 保持为非阻断的独立性能证据，不将某块 GPU 变成 0.3 发布前置条件 | 否 |
 | `RLS005` | VS Code test selection、workspace status 和 cache report 是否进入 0.3 | Luna/Lunax 尚无对应所有者协议，editor 不猜测 | 显式延后到 0.3 之后；0.3 只发布已有编译器语义的 check/build/run task | 否 |
-| `RLS006` | 总体设计文档状态 | 仍标记 `Draft`，且 `TBD-SF007`–`TBD-SF010` 已重新登记 | 阻断项关闭且 candidate 被接受时改为 `Accepted release candidate`；最终 tag 后再改为已发布状态 | 是 |
+| `RLS006` | 总体设计文档状态 | Slot/Fragment 尚开放，因此总体仍为 `Draft`；单独记录的核心冻结已有本地候选 | 保持总体设计为 `Draft`，独立提升核心快照；仅在 Slot/Fragment 收口后修改总体状态 | 对核心候选否；对宣称整体设计稳定是 |
 | `RLS007` | attestation 服务临时失败时的策略 | 每项有限重试 5 次，仍失败则 fail closed | 等待/重跑 GitHub/Sigstore 服务，不允许手工绕过或仅依赖 checksum | 是，直到联网门禁通过 |
-| `RLS008` | Slot/Fragment 设计收口 | static slice 已实现，runtime scope、同 slot 嵌套/重入与 descriptor 承诺未冻结 | 决定并实现 `TBD-SF007`–`TBD-SF009`；若选 static-only，将 `TBD-SF010` 明确延后 | 是 |
+| `RLS008` | Slot/Fragment 设计收口 | static slice 已实现；runtime scope、同 slot 嵌套/重入与 descriptor 承诺保持开放 | 让 `TBD-SF007`–`TBD-SF010` 保持开放并排除在核心冻结契约之外；发布稳定 Slot/Fragment 语义前再收口 | 对核心/alpha 发布否；对稳定 Slot/Fragment 是 |
 
-收口 Slot/Fragment 决策后，发布执行顺序为：
+Slot/Fragment 已明确排除在核心冻结之外，发布执行顺序为：
 
-1. 关闭 `TBD-SF007`–`TBD-SF009`，按决定补齐实现、负例与规范，并处理 `TBD-SF010`；
-2. 最后审查三个 diff，创建并 push 三个 candidate commit，等待远程 CI；
-3. 以精确 Luna candidate SHA 分别发布 Toolchain/Lunax，不使用可变分支名；
+1. 保持 `TBD-SF007`–`TBD-SF010` 为开放的 Slot/Fragment 工作，不扩张已冻结的核心候选；
+2. push 三个现有 candidate commit，等待远程 CI；
+3. 按 compatibility manifest 记录的精确 Luna candidate SHA 分别发布 Toolchain/Lunax，
+   不使用可变分支名；
 4. 下载每个资产并通过 consumer、checksum、source-commit 和 attestation 门；
 5. 一次性替换 lock 中两个子组件的 version、commit、URL、时间、资产摘要与
    `verified_luna_source_commit`，设置 `status: release-ready` 和 `release.publish: true`；
