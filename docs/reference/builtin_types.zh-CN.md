@@ -56,7 +56,7 @@
 | `slice<T>` | Value/Structural | 恰好一个 `T` | Copy handle + 来源 shared loan | 16 字节 `{data,length}`；当前只读 |
 | `Result<T, E>` | Value/Canonical Core 名义声明 | 恰好两个载荷类型 | `join(usage(T), usage(E))` | `org.luna.core::result::Result`；inline ADT v1 |
 | `device_buffer<T>` | Value/Structural builtin constructor | 恰好一个元素类型 | Linear | 64 位目标上为 16 字节 `{data, length}` capability；当前操作只稳定支持 `i32` |
-| `(P...) -> R` | Value/Structural | 参数序列和返回类型 | Copy function value；contract 属于 shape | 8 字节代码/闭包入口表示；closure env 未冻结 |
+| `(P...) -> R` | Value/Structural | 参数序列和返回类型 | callable usage 与参数/结果 contract 属于 shape | 无捕获函数为 8 字节代码指针；拥有型 Copy/Affine/Linear capture 使用 C016 inline environment；borrowed capture 延后 |
 | `affine T` | 非独立类型 | 只用于 usage contract | Affine | TypeId 仍为 `T` |
 | `linear T` | 非独立类型 | 只用于 usage contract | Linear | TypeId 仍为 `T` |
 
@@ -136,7 +136,7 @@
 | device buffer/event | 是 | 否 | 通过专用 ABI | 否 |
 | Meta/Compiler views | 编译期 | 否 | 否 | 是 |
 
-本矩阵描述 0.2 当前允许集合，不暗示未来永远拒绝某类边界。
+本矩阵描述 0.3 当前允许集合，不暗示未来永远拒绝某类边界。
 
 ## 9. 预定义类型名称
 
@@ -159,16 +159,17 @@ namespace，`SymbolTable::defineType` 会拒绝替换任意已注册预定义名
 
 - layout 与 boundary allow-list 仍独立于集中式名称/formation registry；新增类型时仍需跨层审查；
 - `usize/isize` 的目标相关语义尚未与非 64 位平台冻结；
-- 整数常量按参数宽度生成时缺少完整范围诊断；
 - 高于 8 字节对齐的 inline ADT 载荷策略未冻结；
-- non-Copy closure environment 和跨函数 Iterator adapter Drop 布局尚未交付；Copy-only closure environment 已按 C016 交付；
+- borrowed closure environment 和跨函数 Iterator adapter Drop 布局尚未交付；拥有型 Copy/Affine/Linear closure environment 已按 C016 交付；
 - `string` 的公开格式化、编码和标准库 API 尚未冻结；
 - `device_buffer<T>` 的类型构造已泛化，但当前设备操作仍主要固定为 `i32`；
 - 设备缓冲区的元素长度属于值 ABI。Runtime 会把 `(data, length)` 与 live-allocation
   registry 交叉校验，kernel 引用则降低为独立的 pointer 与 length 参数；
 - callable ownership shape 需要更完整的赋值/统一负例矩阵。
-- 参数化 Value 容器对 Meta/Compiler 类型实参的统一 well-formedness 拒绝矩阵仍需
-  补齐。
+
+上下文整数字面量会在完整 unsigned 64-bit magnitude 范围内无异常解析，再按已解析的
+有/无符号目标类型检查范围。Value-domain constructor 统一拒绝具体 Meta/Compiler 实参；
+MoonIR verifier 会在冻结产物边界重复检查类型域和可表示布局。
 
 这些缺口必须作为实现或规范工作处理，不能通过从清单中删除对应类型来隐藏。
 
@@ -176,6 +177,8 @@ namespace，`SymbolTable::defineType` 会拒绝替换任意已注册预定义名
 
 - 类型身份：`tests/fixtures/type_relations.luna`
 - 类型域：`tests/fixtures/type_domains_reflection.luna`
+- Value-domain formation：`tests/fixtures/type_domain_value_formation_invalid.luna`
+- 整数范围/布局：`tests/fixtures/integer_literal_*`、`tests/fixtures/array_*overflow_invalid.luna`
 - 结构/名义关系：`tests/fixtures/structural_*.luna`
 - 所有权：`tests/fixtures/ownership_*.luna`
 - array/slice：`tests/fixtures/safe_arrays.luna`、`slice_*.luna`

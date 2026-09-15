@@ -1,6 +1,7 @@
 #include "Parser.h"
 #include "../diagnostics/Diagnostic.h"
 
+#include <charconv>
 #include <unordered_set>
 
 std::unique_ptr<TypeAST> Parser::parseType() {
@@ -46,9 +47,22 @@ std::unique_ptr<TypeAST> Parser::parseType() {
         if (match(TokenKind::Lt)) {
             named->typeArgs.push_back(parseType());
             if (named->name == "array" && match(TokenKind::Comma)) {
-                if (match(TokenKind::IntLiteral))
-                    named->arrayLength = static_cast<uint64_t>(std::stoull(mTokens[mPos - 1].lexeme));
-                else
+                if (match(TokenKind::IntLiteral)) {
+                    const Token& length = mTokens[mPos - 1];
+                    uint64_t parsed = 0;
+                    const auto result = std::from_chars(
+                        length.lexeme.data(),
+                        length.lexeme.data() + length.lexeme.size(), parsed);
+                    if (result.ec == std::errc::result_out_of_range ||
+                        result.ptr != length.lexeme.data() + length.lexeme.size()) {
+                        addErrorAt(
+                            length,
+                            "array length is outside the supported unsigned 64-bit range",
+                            "use a value from 0 through 18446744073709551615");
+                    } else {
+                        named->arrayLength = parsed;
+                    }
+                } else
                     addError("array<T, N> requires a non-negative integer compile-time length",
                              "write `array<i32, 4>`, not a runtime expression");
             } else while (match(TokenKind::Comma)) {
@@ -359,6 +373,15 @@ void Parser::addError(const std::string& msg, const std::string& hint) {
     }
     mErrors.push_back(diagnostic::format("parse", message, mSourceName, peek().line, peek().col,
                                          resolvedHint, sourceLineAt(peek().line)));
+}
+
+void Parser::addErrorAt(const Token& token, const std::string& msg,
+                        const std::string& hint) {
+    std::string message = msg;
+    if (message.rfind("Expected", 0) == 0) message[0] = 'e';
+    mErrors.push_back(diagnostic::format(
+        "parse", message, mSourceName, token.line, token.col,
+        hint, sourceLineAt(token.line)));
 }
 
 void Parser::synchronizeDeclaration() {

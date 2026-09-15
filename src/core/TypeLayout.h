@@ -19,6 +19,7 @@ uint64_t alignTo(uint64_t value, uint64_t alignment);
 // inline values.
 uint64_t valueSize(const TypePtr& type);
 uint64_t valueAlignment(const TypePtr& type);
+bool valueLayoutFits(const TypePtr& type);
 
 // Size/alignment of the heap payload behind a pointer-represented nominal
 // product, plus declaration-order field offsets within that payload.

@@ -297,7 +297,7 @@ TypePtr BodyAnalyzer::analyzeExpr(Expr* expr) {
             return TyUnknown;
         }
         if (object->kind == TypeKind::Array) if (auto* literal = dynamic_cast<IntLiteralExpr*>(ix->index.get());
-            literal && (literal->value < 0 || static_cast<uint64_t>(literal->value) >= object->arrayLength))
+            literal && literal->magnitude >= object->arrayLength)
             mContext.error("array index " + std::to_string(literal->value) + " is outside array length " +
                   std::to_string(object->arrayLength), ix->line, ix->col);
         return object->inner;

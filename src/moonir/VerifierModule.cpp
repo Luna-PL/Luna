@@ -243,6 +243,13 @@ bool Verifier::verify(const Module& module) {
             error({}, "cannot materialize frozen type '" + type.id.value + "'");
             continue;
         }
+        std::string domainError;
+        if (!luna::types::isWellFormedTypeDomain(
+                restored, &domainError))
+            error({}, "frozen type domain is invalid: " + domainError);
+        if (!luna::layout::valueLayoutFits(restored))
+            error({}, "frozen type '" + type.id.value +
+                      "' exceeds the 64-bit ABI size limit");
         if (luna::types::canonicalType(restored) != type.canonicalType ||
             luna::types::typeId(restored) != type.id)
             error({}, "frozen payload does not reproduce TypeId '" +

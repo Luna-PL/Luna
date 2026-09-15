@@ -137,7 +137,7 @@ private:
     std::unique_ptr<Expr> cloneExpr(const Expr* src) {
         if (!src) return nullptr;
         if (auto* expr = dynamic_cast<const IntLiteralExpr*>(src))
-            return located(std::make_unique<IntLiteralExpr>(expr->value), src);
+            return located(std::make_unique<IntLiteralExpr>(expr->magnitude), src);
         if (auto* expr = dynamic_cast<const FloatLiteralExpr*>(src))
             return located(std::make_unique<FloatLiteralExpr>(expr->value), src);
         if (auto* expr = dynamic_cast<const StringLiteralExpr*>(src))

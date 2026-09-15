@@ -16,6 +16,8 @@ in-memory record，绝不用于认证 Moon Container 或 Native library。
 Declaration kind 数值为 Function=1、Fragment=2、Struct=3、Enum=4、Trait=5、
 Implementation=6、MetadataSchema=7、Slot=8。Slot 不可调用；Fragment 的 sealed
 declaration record 携带指向目标 Slot 的名义强引用。
+这些数字与 v1 record layout 已保留，但 Slot/Fragment 语义不进入 0.3 核心冻结。
+不得静默重新解释；不兼容含义必须使用新的 ABI/container 版本或显式协商 capability。
 
 loader 一次验证有界 registry，包括 ABI/size/reserved 字段、metadata value tag、
 排序与 callable-kind 一致性。typed binding 随后使用精确 SymbolId + ContractId +

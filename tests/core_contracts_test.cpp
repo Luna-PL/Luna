@@ -1,5 +1,6 @@
 #include "core/CoreContracts.h"
 #include "core/SysMeta.h"
+#include "core/TypeRelations.h"
 #include "core/TypeSystem.h"
 
 #include <cstring>
@@ -88,6 +89,24 @@ int main() {
         result->nominalId != canonical_0_3::ResultTypeId ||
         result->typeArgs.size() != 2) {
         std::cerr << "Result did not acquire its canonical nominal identity\n";
+        return 1;
+    }
+    const auto metadata = Type::makeMetadata("org.luna.test::Schema");
+    const auto validMetadataView = Type::makeMetadataView(metadata);
+    const auto invalidArray = Type::makeArray(metadata, 1);
+    const auto invalidFunction = Type::makeFunction({metadata}, TyI32);
+    const auto genericValue = Type::makeStruct(
+        "Holder", {{"value", Type::makeTypeParam("T")}},
+        "org.luna.test::Holder");
+    std::string domainError;
+    if (!luna::types::isWellFormedTypeDomain(result) ||
+        !luna::types::isWellFormedTypeDomain(validMetadataView) ||
+        !luna::types::isWellFormedTypeDomain(genericValue) ||
+        luna::types::isWellFormedTypeDomain(invalidArray, &domainError) ||
+        domainError.find("cannot contain meta-domain type") ==
+            std::string::npos ||
+        luna::types::isWellFormedTypeDomain(invalidFunction)) {
+        std::cerr << "Value type-domain formation is not fail-closed\n";
         return 1;
     }
     if (!equal(luna::sysmeta::releaseDomainName(

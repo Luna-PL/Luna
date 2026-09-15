@@ -5,6 +5,7 @@ English | [简体中文](luna_0.3_design.zh-CN.md)
 > Document category: RFC / overall design
 > Applies to: candidate Luna 0.3.0
 > Status: Draft
+> Core freeze: Candidate; see [Luna 0.3 Core Freeze Boundary](core_freeze.md). Slot/Fragment remains open.
 > Normative status: non-normative RFC; implementation-completion records identify the portions already active in the 0.3 development compiler
 > Final 0.2 implementation checkpoint: `a188d87a6f10d7fa67582389a0a0b915f3741401` (2026-08-09)
 

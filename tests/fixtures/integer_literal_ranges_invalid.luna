@@ -1,0 +1,9 @@
+fn take_i8(value: i8) -> i32 { return 0; }
+fn take_u8(value: u8) -> i32 { return 0; }
+fn take_i64(value: i64) -> i32 { return 0; }
+
+fn main() -> i32 {
+    let first = take_i8(300);
+    let second = take_u8(-1);
+    return first + second + take_i64(9223372036854775808);
+}
