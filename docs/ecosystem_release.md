@@ -92,7 +92,7 @@ the resulting candidate state, artifact authorization, release scope, and explic
 
 | ID | Confirmation needed | Encoded default | Recommendation | Blocks 0.3 release |
 |---|---|---|---|---|
-| `RLS001` | Candidate commit topology | Local candidates exist at Luna `71d40c5`, Toolchains `7279b3d`, and Lunax `74af78d`; the three worktrees are clean before this status-only update | Preserve the Luna semantic candidate and follow it later with a separate root lock/status promotion commit | No; locally complete |
+| `RLS001` | Candidate commit topology | Local candidates exist at Luna `a96fdb4`, Toolchains `8a006c3`, and Lunax `f392186`; the three worktrees are clean before this status-only update | Preserve the Luna semantic candidate and follow it later with a separate root lock/status promotion commit | No; locally complete |
 | `RLS002` | GitHub release visibility | Root `v0.3.0` and Lunax `v0.2.0` are prereleases; Toolchains `v0.2.0` is a normal release | Keep the tiers encoded by the current workflows; any unification must happen before child tags and repeat the gates | Yes; confirm before tags |
 | `RLS003` | Authorization for external writes | Local commits exist; no push, tag, or publish has occurred | Authorize the remaining sequence explicitly: push/CI → child tags/releases → lock promotion → Luna tag/release | Yes |
 | `RLS004` | Whether real CUDA/ROCm performance evidence is a release gate | Release workflows exclude hardware tests with `-LE hardware`; simulator/AOT gates pass | Keep hardware measurements as independent non-blocking evidence rather than making a particular GPU a 0.3 prerequisite | No |

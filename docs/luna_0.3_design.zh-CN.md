@@ -1240,8 +1240,8 @@ MoonIR capability、canonical CFG 分支与构建目标均已删除；退役 fea
 临时 0.3 application package 实际构建并执行，默认 release smoke test 会持续守护
 该 AOT 路径。当前用户文档不再把已删除的 dynamic 路径当作可用功能，prebuilt
 workflow 也会对冻结的 0.2.1 生态快照 fail closed。2026-09-15 的本地验证形成了
-Luna 候选 `71d40c5`、Toolchains 0.2.0 候选 `7279b3d` 与 Lunax 0.2.0 候选
-`74af78d`。Toolchains 已通过生成 grammar 与 12 个当前编译器 fixture、绑定真实
+Luna 候选 `a96fdb4`、Toolchains 0.2.0 候选 `8a006c3` 与 Lunax 0.2.0 候选
+`f392186`。Toolchains 已通过生成 grammar 与 12 个当前编译器 fixture、绑定真实
 编译器 Slot/Fragment analysis 的完整 Rust workspace、Clippy、release build、VS Code
 源码检查和 Windows VSIX 打包；Lunax 已通过 Luna 0.3 application 严格构建及全部
 6 项命令/后端/事务安装测试。子仓 workflow 也会生成带 checksum 与 attestation 的
