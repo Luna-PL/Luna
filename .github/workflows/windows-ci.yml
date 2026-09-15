@@ -13,8 +13,9 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          # The release-readiness regression test compares HEAD with HEAD^.
-          fetch-depth: 2
+          # The release-readiness regression test verifies the complete
+          # candidate-to-promotion history.
+          fetch-depth: 0
 
       - name: Install UCRT64 CMake, Ninja, and LLVM
         uses: msys2/setup-msys2@v2
