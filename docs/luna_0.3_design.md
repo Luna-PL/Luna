@@ -1416,8 +1416,8 @@ heterogeneous simulator case all build and execute their sources as temporary
 AOT path. Current user documentation no longer presents the removed dynamic
 path, and the prebuilt workflow now fails closed against the frozen 0.2.1
 ecosystem snapshot. Local validation on 2026-09-15 produced Luna candidate
-`a96fdb4`, Toolchains 0.2.0 candidate `8a006c3`, and Lunax 0.2.0 candidate
-`f392186`. Toolchains passes its generated grammar and 12 current compiler
+`41ce85e`, Toolchains 0.2.0 candidate `e48ba16`, and Lunax 0.2.0 candidate
+`d8ba00e`. Toolchains passes its generated grammar and 12 current compiler
 fixtures, complete Rust workspace with real-compiler Slot/Fragment analysis,
 Clippy, release build, VS Code source validation, and Windows VSIX packaging.
 Lunax passes its strict Luna 0.3 application build and all six
