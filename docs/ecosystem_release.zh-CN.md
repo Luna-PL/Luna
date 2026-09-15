@@ -79,7 +79,7 @@ workflow 与最终 tag 发布使用同一个验证脚本，避免两套门禁随
 
 | ID | 需要确认的内容 | 当前已编码默认 | 建议 | 是否阻断 0.3 发布 |
 |---|---|---|---|---|
-| `RLS001` | 候选提交拓扑 | 本地候选已建立：Luna `a96fdb4`、Toolchains `8a006c3`、Lunax `f392186`；本次纯状态更新前三个工作树均清洁 | 保留 Luna 语义候选；根仓稍后另建仅包含 lock/状态的 promotion commit | 否；本地已完成 |
+| `RLS001` | 候选提交拓扑 | 本地候选已建立：Luna `41ce85e`、Toolchains `e48ba16`、Lunax `d8ba00e`；本次纯状态更新前三个工作树均清洁 | 保留 Luna 语义候选；根仓稍后另建仅包含 lock/状态的 promotion commit | 否；本地已完成 |
 | `RLS002` | GitHub release 可见性 | 根 `v0.3.0` 与 Lunax `v0.2.0` 为 prerelease；Toolchains `v0.2.0` 为普通 release | 保持当前三个 workflow 的等级；如需统一，必须在子组件 tag 前修改并重跑门禁 | 是；tag 前确认 |
 | `RLS003` | 外部写操作授权 | 本地 commit 已建立；尚未 push、tag 或 publish | 明确授权剩余顺序：push/CI → 子组件 tags/releases → lock promotion → Luna tag/release | 是 |
 | `RLS004` | 真实 CUDA/ROCm 性能证据是否为发布门 | release workflow 用 `-LE hardware` 明确排除硬件测试；simulator/AOT 门已通过 | 保持为非阻断的独立性能证据，不将某块 GPU 变成 0.3 发布前置条件 | 否 |
