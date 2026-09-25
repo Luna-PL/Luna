@@ -1,5 +1,6 @@
 #pragma once
 
+#include <atomic>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -200,8 +201,14 @@ private:
 
     mutable std::mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<ModuleState>> modules_;
+#if defined(__cpp_lib_atomic_shared_ptr) && \
+    __cpp_lib_atomic_shared_ptr >= 201711L
+    std::atomic<std::shared_ptr<const RuntimeFragmentBindingSetState>>
+        activeFragmentBindings_;
+#else
     std::shared_ptr<const RuntimeFragmentBindingSetState>
         activeFragmentBindings_;
+#endif
     uint64_t nextGenerationId_ = 1;
 };
 

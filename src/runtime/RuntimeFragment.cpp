@@ -773,16 +773,26 @@ bool MoonRuntime::activateFragmentBindings(
         return false;
     }
     if (!consumeSafePoint(safePoint, error)) return false;
+#if defined(__cpp_lib_atomic_shared_ptr) && \
+    __cpp_lib_atomic_shared_ptr >= 201711L
+    activeFragmentBindings_.store(bindings.state_, std::memory_order_release);
+#else
     std::atomic_store_explicit(
         &activeFragmentBindings_, bindings.state_,
         std::memory_order_release);
+#endif
     return true;
 }
 
 RuntimeFragmentBindingSet MoonRuntime::pinFragmentBindings() const {
     RuntimeFragmentBindingSet result;
+#if defined(__cpp_lib_atomic_shared_ptr) && \
+    __cpp_lib_atomic_shared_ptr >= 201711L
+    result.state_ = activeFragmentBindings_.load(std::memory_order_acquire);
+#else
     result.state_ = std::atomic_load_explicit(
         &activeFragmentBindings_, std::memory_order_acquire);
+#endif
     return result;
 }
 
