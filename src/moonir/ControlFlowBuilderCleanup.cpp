@@ -45,8 +45,8 @@ std::vector<CleanupId> ControlFlowBuilder::lowerCleanupObligations(
             // mMaterializedIterators, not mBindings). Its cleanup is handled
             // by the source/index/limit state locals; skip the obligation.
             // Walk the full binding stack, not just the innermost level: the
-            // recipe may be registered in an outer scope while a return or
-            // abort inside a nested loop lowers its obligation.
+            // recipe may be registered in an outer scope while an early exit
+            // inside a nested loop lowers its obligation.
             if (mGuardedConsumingRecipeNames.count(cleanupName))
                 continue;
             if (const auto* recipe =

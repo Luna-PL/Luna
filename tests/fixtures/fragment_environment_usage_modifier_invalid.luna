@@ -1,0 +1,15 @@
+package tests.fragment_environment_usage_modifier_invalid;
+
+slot checkpoint();
+
+fragment invalid[affine token: i32] for checkpoint {
+    print(token);
+    resume;
+}
+
+fn main() -> i32 {
+    apply invalid[42] {
+        checkpoint() { }
+    }
+    return 0;
+}

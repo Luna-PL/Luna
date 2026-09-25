@@ -1,6 +1,6 @@
-slot interceptor hook();
+slot hook();
 
-interceptor audit for hook {
+fragment audit for hook {
     print(1);
 }
 

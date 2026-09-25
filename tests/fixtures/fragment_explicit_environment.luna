@@ -1,0 +1,16 @@
+package tests.fragment_explicit_environment;
+
+slot checkpoint();
+
+fragment report[value: i32] for checkpoint {
+    print(value);
+    resume;
+}
+
+fn main() -> i32 {
+    let value = 42;
+    apply report[value] {
+        checkpoint() { }
+    }
+    return 0;
+}

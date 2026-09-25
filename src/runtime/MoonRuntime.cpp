@@ -1,5 +1,7 @@
 #include "MoonRuntime.h"
 
+#include "RuntimeDescriptorABI.h"
+
 #include <algorithm>
 #include <atomic>
 #include <cctype>
@@ -7,6 +9,15 @@
 #include <utility>
 
 namespace luna::runtime {
+
+static_assert(
+    static_cast<uint32_t>(GenerationBindingPublicControl) ==
+        LUNA_RUNTIME_DESCRIPTOR_PUBLIC_CONTROL_V1,
+    "generation and descriptor public-control flags must agree");
+static_assert(
+    static_cast<uint32_t>(GenerationBindingFragmentContext) ==
+        LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_CONTEXT_V1,
+    "generation and descriptor fragment-context flags must agree");
 
 struct MoonRuntime::GenerationState {
     uint64_t generationId = 0;
@@ -164,6 +175,23 @@ MoonRuntime::PinnedBinding MoonRuntime::PinnedGeneration::find(
     return binding;
 }
 
+std::vector<MoonRuntime::PinnedBinding>
+MoonRuntime::PinnedGeneration::findAll(
+    uint32_t declarationKind, uint32_t requiredFlags) const {
+    std::vector<PinnedBinding> result;
+    if (!generation_ || declarationKind == 0) return result;
+    for (const auto& binding : generation_->bindings) {
+        if (binding.declarationKind != declarationKind ||
+            (binding.flags & requiredFlags) != requiredFlags)
+            continue;
+        PinnedBinding pinned;
+        pinned.generation_ = generation_;
+        pinned.binding_ = &binding;
+        result.push_back(std::move(pinned));
+    }
+    return result;
+}
+
 MoonRuntime::PinnedBinding MoonRuntime::SwitchableBinding::pin() const {
     if (!module_) return {};
     auto generation = module_->active.load();
@@ -226,8 +254,33 @@ bool MoonRuntime::stage(
               });
     for (size_t index = 0; index < bindings.size(); ++index) {
         const auto& binding = bindings[index];
+        const uint32_t knownFlags =
+            GenerationBindingCallable |
+            GenerationBindingFragmentExecutable |
+            GenerationBindingPublicControl |
+            GenerationBindingFragmentContext;
+        const bool callable =
+            (binding.flags & GenerationBindingCallable) != 0;
+        const bool fragmentExecutable =
+            (binding.flags & GenerationBindingFragmentExecutable) != 0;
+        const bool publicControl =
+            (binding.flags & GenerationBindingPublicControl) != 0;
+        const bool fragmentContext =
+            (binding.flags & GenerationBindingFragmentContext) != 0;
         if (!validIdentity(binding.symbolId) ||
             !validIdentity(binding.contractId) || !binding.implementation ||
+            (binding.flags & ~knownFlags) != 0 ||
+            (callable && fragmentExecutable) ||
+            (callable && binding.declarationKind !=
+                LUNA_RUNTIME_DECLARATION_FUNCTION_V1) ||
+            (fragmentExecutable && binding.declarationKind !=
+                LUNA_RUNTIME_DECLARATION_FRAGMENT_V1) ||
+            (fragmentContext &&
+             (!callable || binding.declarationKind !=
+                 LUNA_RUNTIME_DECLARATION_FUNCTION_V1)) ||
+            (publicControl &&
+             binding.declarationKind != LUNA_RUNTIME_DECLARATION_FRAGMENT_V1 &&
+             binding.declarationKind != LUNA_RUNTIME_DECLARATION_SLOT_V1) ||
             (index != 0 && bindings[index - 1].symbolId == binding.symbolId)) {
             error = "generation resolution produced an invalid or duplicate binding";
             return false;

@@ -1,6 +1,7 @@
 #include "CodeGenerator.h"
 #include "driver/NativeArtifact.h"
 #include "runtime/RuntimeDescriptor.h"
+#include "runtime/RuntimeFragmentABI.h"
 
 #include <algorithm>
 #include <cstring>
@@ -66,6 +67,19 @@ uint64_t stableRuntimeId(const std::string& text) {
     return hash;
 }
 
+bool isExportedRuntimeControl(
+    const moon::Module& module, const moon::DeclarationRecord& record) {
+    if (record.kind != moon::DeclarationKind::Slot &&
+        record.kind != moon::DeclarationKind::Fragment)
+        return false;
+    const moon::DeclarationRef reference{record.symbolId, record.contractId};
+    return std::any_of(
+        module.exports.begin(), module.exports.end(),
+        [&](const moon::ExportRecord& exported) {
+            return exported.declaration == reference;
+        });
+}
+
 } // namespace
 
 void CodeGenerator::emitRuntimeDescriptors() {
@@ -86,6 +100,12 @@ void CodeGenerator::emitRuntimeDescriptors() {
     descriptorType->setBody(
         {i32, i32, i32, i32, i32, i32, i32, i32,
          ptr, ptr, ptr, ptr, i64, ptr, ptr});
+    auto* fragmentDescriptorType = llvm::StructType::create(
+        *mCtx, "moon.runtime.fragment.v1");
+    fragmentDescriptorType->setBody({
+        i32, i32, i32, i32, i32, i32, i32, i32,
+        ptr, ptr, ptr, ptr, ptr, i64, i64, ptr, ptr, i64, i64,
+        ptr, ptr, ptr});
 
     std::unordered_map<std::string, llvm::Constant*> strings;
     auto cString = [&](const std::string& text) -> llvm::Constant* {
@@ -117,7 +137,8 @@ void CodeGenerator::emitRuntimeDescriptors() {
                 return metadata.retention != moon::Retention::CompileTime;
             });
         if (record.retention != moon::Retention::CompileTime ||
-            hasRetainedMetadata)
+            hasRetainedMetadata ||
+            isExportedRuntimeControl(*mProgram, record))
             retainedRecords.push_back(&record);
     }
     std::sort(
@@ -202,10 +223,246 @@ void CodeGenerator::emitRuntimeDescriptors() {
         }
 
         llvm::Constant* entry = llvm::ConstantPointerNull::get(ptr);
-        auto function = mFunctions.find(record.linkageName);
-        if (function != mFunctions.end()) entry = function->second;
-        const uint32_t flags = entry->isNullValue()
+        bool fragmentExecutable = false;
+        if (record.kind == moon::DeclarationKind::Fragment &&
+            record.runtimeEntry.complete() &&
+            record.controlTarget.complete()) {
+            const auto* helperRecord = mProgram->findDeclaration(
+                record.runtimeEntry);
+            const auto* slotRecord = mProgram->findDeclaration(
+                record.controlTarget);
+            const auto* environmentRecord = mProgram->findType(
+                record.environmentType);
+            const auto* argumentsRecord = mProgram->findType(
+                record.controlArgumentsType);
+            auto helper = helperRecord
+                ? mFunctions.find(helperRecord->linkageName)
+                : mFunctions.end();
+            if (!helperRecord || !slotRecord || !environmentRecord ||
+                !argumentsRecord || helper == mFunctions.end()) {
+                error("exported Fragment '" + record.sourceName +
+                      "' has an incomplete runtime entry");
+            } else {
+                const TypePtr environmentType = resolveType(
+                    record.environmentType);
+                const TypePtr argumentsType = resolveType(
+                    record.controlArgumentsType);
+                auto* environmentLLVM = llvm::dyn_cast_or_null<llvm::StructType>(
+                    mHelpers->toLLVMType(environmentType));
+                auto* argumentsLLVM = llvm::dyn_cast_or_null<llvm::StructType>(
+                    mHelpers->toLLVMType(argumentsType));
+                const bool captureFree = environmentRecord->fields.empty();
+                llvm::Constant* factory = llvm::ConstantPointerNull::get(ptr);
+                llvm::Constant* destroy = llvm::ConstantPointerNull::get(ptr);
+
+                if (!captureFree && environmentLLVM) {
+                    auto* factoryType = llvm::FunctionType::get(
+                        i32, {ptr, ptr}, false);
+                    auto* factoryFunction = llvm::Function::Create(
+                        factoryType, llvm::GlobalValue::PrivateLinkage,
+                        "__moon_fragment_factory_" + suffix, *mModule);
+                    auto argumentsIterator = factoryFunction->arg_begin();
+                    llvm::Value* factoryArguments = &*argumentsIterator++;
+                    llvm::Value* outputEnvironment = &*argumentsIterator;
+                    auto* factoryEntry = llvm::BasicBlock::Create(
+                        *mCtx, "entry", factoryFunction);
+                    auto* factoryInvalid = llvm::BasicBlock::Create(
+                        *mCtx, "invalid", factoryFunction);
+                    auto* factoryConstruct = llvm::BasicBlock::Create(
+                        *mCtx, "construct", factoryFunction);
+                    auto* factoryCopy = llvm::BasicBlock::Create(
+                        *mCtx, "copy", factoryFunction);
+                    llvm::IRBuilder<> builder(factoryEntry);
+                    auto* valid = builder.CreateAnd(
+                        builder.CreateIsNotNull(factoryArguments),
+                        builder.CreateIsNotNull(outputEnvironment));
+                    builder.CreateCondBr(valid, factoryConstruct, factoryInvalid);
+                    builder.SetInsertPoint(factoryInvalid);
+                    builder.CreateRet(llvm::ConstantInt::getSigned(i32, -1));
+                    builder.SetInsertPoint(factoryConstruct);
+                    auto allocation = mModule->getOrInsertFunction(
+                        "rt_alloc", ptr, mHelpers->sizeTy(),
+                        mHelpers->sizeTy());
+                    auto* environment = builder.CreateCall(
+                        allocation,
+                        {llvm::ConstantInt::get(
+                             mHelpers->sizeTy(), environmentRecord->valueSize),
+                         llvm::ConstantInt::get(
+                             mHelpers->sizeTy(), environmentRecord->valueAlignment)},
+                        "environment");
+                    builder.CreateCondBr(
+                        builder.CreateIsNotNull(environment),
+                        factoryCopy, factoryInvalid);
+                    builder.SetInsertPoint(factoryCopy);
+                    builder.CreateMemCpy(
+                        environment, llvm::Align(environmentRecord->valueAlignment),
+                        factoryArguments,
+                        llvm::Align(environmentRecord->valueAlignment),
+                        environmentRecord->valueSize);
+                    builder.CreateStore(environment, outputEnvironment);
+                    builder.CreateRet(llvm::ConstantInt::get(i32, 0));
+                    factory = factoryFunction;
+                    retainedGlobals.push_back(factoryFunction);
+
+                    auto* destroyType = llvm::FunctionType::get(
+                        mHelpers->voidTy(), {ptr}, false);
+                    auto* destroyFunction = llvm::Function::Create(
+                        destroyType, llvm::GlobalValue::PrivateLinkage,
+                        "__moon_fragment_destroy_" + suffix, *mModule);
+                    auto* destroyEntry = llvm::BasicBlock::Create(
+                        *mCtx, "entry", destroyFunction);
+                    llvm::IRBuilder<> destroyBuilder(destroyEntry);
+                    auto deallocation = mModule->getOrInsertFunction(
+                        "rt_dealloc", mHelpers->voidTy(), ptr,
+                        mHelpers->sizeTy(), mHelpers->sizeTy());
+                    destroyBuilder.CreateCall(
+                        deallocation,
+                        {&*destroyFunction->arg_begin(),
+                         llvm::ConstantInt::get(
+                             mHelpers->sizeTy(), environmentRecord->valueSize),
+                         llvm::ConstantInt::get(
+                             mHelpers->sizeTy(), environmentRecord->valueAlignment)});
+                    destroyBuilder.CreateRetVoid();
+                    destroy = destroyFunction;
+                    retainedGlobals.push_back(destroyFunction);
+                }
+
+                if (!environmentLLVM || !argumentsLLVM) {
+                    error("exported Fragment '" + record.sourceName +
+                          "' does not use record ABI layouts");
+                } else {
+                    auto* executeType = llvm::FunctionType::get(
+                        mHelpers->voidTy(), {ptr, ptr}, false);
+                    auto* executeFunction = llvm::Function::Create(
+                        executeType, llvm::GlobalValue::PrivateLinkage,
+                        "__moon_fragment_execute_" + suffix, *mModule);
+                    auto executeArguments = executeFunction->arg_begin();
+                    llvm::Value* environment = &*executeArguments++;
+                    llvm::Value* activation = &*executeArguments;
+                    auto* executeEntry = llvm::BasicBlock::Create(
+                        *mCtx, "entry", executeFunction);
+                    auto* executeBody = llvm::BasicBlock::Create(
+                        *mCtx, "invoke", executeFunction);
+                    auto* executeReturn = llvm::BasicBlock::Create(
+                        *mCtx, "return", executeFunction);
+                    llvm::IRBuilder<> builder(executeEntry);
+                    auto accessor = mModule->getOrInsertFunction(
+                        "luna_runtime_fragment_activation_arguments_v1",
+                        ptr, ptr, ptr, ptr, ptr, i64, i64);
+                    auto* slotArguments = builder.CreateCall(
+                        accessor,
+                        {activation, cString(slotRecord->symbolId.value),
+                         cString(slotRecord->contractId.value),
+                         cString(argumentsRecord->abiLayoutId.value),
+                         llvm::ConstantInt::get(i64, argumentsRecord->valueSize),
+                         llvm::ConstantInt::get(
+                             i64, argumentsRecord->valueAlignment)},
+                        "slot.arguments");
+                    llvm::Value* valid = llvm::ConstantInt::getTrue(*mCtx);
+                    if (argumentsRecord->valueSize != 0)
+                        valid = builder.CreateIsNotNull(slotArguments);
+                    if (!captureFree)
+                        valid = builder.CreateAnd(
+                            valid, builder.CreateIsNotNull(environment));
+                    builder.CreateCondBr(valid, executeBody, executeReturn);
+                    builder.SetInsertPoint(executeBody);
+                    std::vector<llvm::Value*> helperArguments;
+                    helperArguments.reserve(
+                        environmentRecord->fields.size() +
+                        argumentsRecord->fields.size() + 1);
+                    for (size_t index = 0;
+                         index < environmentRecord->fields.size(); ++index) {
+                        auto* address = builder.CreateStructGEP(
+                            environmentLLVM, environment,
+                            static_cast<unsigned>(index));
+                        helperArguments.push_back(builder.CreateLoad(
+                            environmentLLVM->getElementType(index), address));
+                    }
+                    for (size_t index = 0;
+                         index < argumentsRecord->fields.size(); ++index) {
+                        auto* address = builder.CreateStructGEP(
+                            argumentsLLVM, slotArguments,
+                            static_cast<unsigned>(index));
+                        helperArguments.push_back(builder.CreateLoad(
+                            argumentsLLVM->getElementType(index), address));
+                    }
+                    helperArguments.push_back(activation);
+                    if (helper->second->arg_size() != helperArguments.size()) {
+                        error("runtime Fragment helper parameter count is inconsistent");
+                    } else {
+                        builder.CreateCall(helper->second, helperArguments);
+                    }
+                    builder.CreateBr(executeReturn);
+                    builder.SetInsertPoint(executeReturn);
+                    builder.CreateRetVoid();
+                    retainedGlobals.push_back(executeFunction);
+
+                    auto* fragmentDescriptor = new llvm::GlobalVariable(
+                        *mModule, fragmentDescriptorType, true,
+                        llvm::GlobalValue::PrivateLinkage,
+                        llvm::ConstantStruct::get(
+                            fragmentDescriptorType,
+                            {llvm::ConstantInt::get(
+                                 i32, LUNA_RUNTIME_FRAGMENT_MAGIC_V1),
+                             llvm::ConstantInt::get(
+                                 i32, LUNA_RUNTIME_FRAGMENT_ABI_V1),
+                             llvm::ConstantInt::get(
+                                 i32, sizeof(LunaRuntimeFragmentDescriptorV1)),
+                             llvm::ConstantInt::get(
+                                 i32, captureFree
+                                     ? LUNA_RUNTIME_FRAGMENT_CAPTURE_FREE_V1 : 0),
+                             llvm::ConstantInt::get(i32, 0),
+                             llvm::ConstantInt::get(i32, 0),
+                             llvm::ConstantInt::get(i32, 0),
+                             llvm::ConstantInt::get(i32, 0),
+                             cString(record.symbolId.value),
+                             cString(record.contractId.value),
+                             cString(slotRecord->symbolId.value),
+                             cString(slotRecord->contractId.value),
+                             cString(argumentsRecord->abiLayoutId.value),
+                             llvm::ConstantInt::get(
+                                 i64, argumentsRecord->valueSize),
+                             llvm::ConstantInt::get(
+                                 i64, argumentsRecord->valueAlignment),
+                             cString(captureFree
+                                 ? std::string{} : record.environmentType.value),
+                             cString(environmentRecord->abiLayoutId.value),
+                             llvm::ConstantInt::get(
+                                 i64, captureFree ? 0 : environmentRecord->valueSize),
+                             llvm::ConstantInt::get(
+                                 i64, captureFree ? 1 : environmentRecord->valueAlignment),
+                             factory, destroy, executeFunction}),
+                        "__moon_fragment_descriptor_" + suffix);
+                    retainedGlobals.push_back(fragmentDescriptor);
+                    entry = fragmentDescriptor;
+                    fragmentExecutable = true;
+                }
+            }
+        }
+        // Runtime metadata retains only the declaration identity needed to
+        // host the attachment. It must not accidentally publish a callable
+        // entry for an otherwise compile-time declaration.
+        if (!fragmentExecutable &&
+            record.retention != moon::Retention::CompileTime) {
+            auto function = mFunctions.find(record.linkageName);
+            if (function != mFunctions.end()) entry = function->second;
+        }
+        uint32_t flags = entry->isNullValue()
             ? 0 : LUNA_RUNTIME_DESCRIPTOR_CALLABLE_V1;
+        if ((flags & LUNA_RUNTIME_DESCRIPTOR_CALLABLE_V1) != 0) {
+            const auto function = mProgram->functionsBySymbol.find(
+                record.linkageName);
+            if (function != mProgram->functionsBySymbol.end() &&
+                function->second &&
+                function->second->requiresFragmentContext)
+                flags |= LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_CONTEXT_V1;
+        }
+        if (fragmentExecutable) {
+            flags &= ~LUNA_RUNTIME_DESCRIPTOR_CALLABLE_V1;
+            flags |= LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_EXECUTABLE_V1;
+        }
+        if (isExportedRuntimeControl(*mProgram, record))
+            flags |= LUNA_RUNTIME_DESCRIPTOR_PUBLIC_CONTROL_V1;
         auto* descriptor = llvm::ConstantStruct::get(
             descriptorType,
             {llvm::ConstantInt::get(

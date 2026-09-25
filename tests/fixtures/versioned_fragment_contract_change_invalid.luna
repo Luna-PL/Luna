@@ -1,11 +1,11 @@
 meta revision { value: i32; }
 
-slot interceptor hook_slot();
+slot hook_slot();
 
 @revision(1)
-interceptor hook for hook_slot { print(1); }
+fragment hook for hook_slot { print(1); }
 
 @revision(2)
-interceptor hook for hook_slot { print(2); }
+fragment hook for hook_slot { print(2); }
 
 fn main() -> i32 { return 0; }

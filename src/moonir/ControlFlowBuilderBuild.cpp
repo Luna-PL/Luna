@@ -39,9 +39,9 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     mBindings.clear();
     mHiddenCleanupBindingGroups.clear();
     mMaterializedIterators.clear();
-    mSlotDefaults.clear();
     mStaticApplyScopes.clear();
-    mFragmentContexts.clear();
+    mActiveApplyEnvironmentCleanups.clear();
+    mFragmentFrames.clear();
     mCleanupByLocal.clear();
     mActiveExpressionCleanups.clear();
     mGuardedConsumingRecipeNames.clear();
@@ -231,32 +231,116 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerMatch(
 std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerApply(
     std::unique_ptr<ApplyStmt> statement, OpenBlock current,
     RegionId region, ScopeId scope) {
-    if (!resolveFragment(statement->fragmentRef)) {
+    const FragmentDecl* fragment = resolveFragment(statement->fragmentRef);
+    if (!fragment) {
         error(statement->location,
               "static apply references a missing canonical fragment");
         return std::nullopt;
     }
 
-    // A blockless node can only arrive from independently constructed legacy
-    // structured IR; retain the ordinary static lexical binding behavior.
     if (!statement->body) {
-        mSlotDefaults.back()[statement->slotName] = statement->fragmentRef;
-        return current;
+        error(statement->location, "canonical apply requires a lexical body");
+        return std::nullopt;
+    }
+    if (statement->environmentArgs.size() !=
+        fragment->environmentParams.size()) {
+        error(statement->location,
+              "canonical apply environment arity disagrees with its fragment");
+        return std::nullopt;
     }
 
+    const RegionId applyRegion = addRegion(
+        region, RegionKind::Apply, statement->body->location);
+    const ScopeId applyScope = addScope(
+        scope, applyRegion, statement->body->location);
+    const BlockId applyEntry = addBlock(
+        applyRegion, applyScope, statement->body->location);
+    pushBindings();
+    std::optional<OpenBlock> body = OpenBlock{applyEntry, {}};
+    StaticFragmentBinding binding;
+    std::vector<CleanupId> environmentCleanups;
+    binding.fragment = statement->fragmentRef;
+    binding.environmentLocals.reserve(fragment->environmentParams.size());
+    // Construction is ordered. If a later environment argument propagates an
+    // error, every earlier owning field is already live and must be cleaned.
+    mActiveApplyEnvironmentCleanups.emplace_back();
+    for (size_t index = 0;
+         body && index < fragment->environmentParams.size(); ++index) {
+        const auto& parameter = fragment->environmentParams[index];
+        if (statement->borrowsEnvironment) {
+            const auto* identifier = dynamic_cast<const IdentifierExpr*>(
+                statement->environmentArgs[index].get());
+            const LocalId local = identifier
+                ? lookupLocal(identifier->name) : LocalId{};
+            if (!identifier || local.empty()) {
+                error(statement->location,
+                      "borrowed fragment environment must name an existing local");
+                body = std::nullopt;
+            } else {
+                binding.environmentLocals.push_back(local);
+            }
+            continue;
+        }
+        auto environment = std::make_unique<LetStmt>();
+        environment->location = statement->location;
+        environment->name = "$fragment.environment." +
+            std::to_string(mExpressionCounter++) + "." + parameter.name;
+        const auto* environmentType = mModule->findType(parameter.type);
+        environment->usage = environmentType
+            ? environmentType->sysmeta.resource.usage
+            : luna::ownership::Usage::Copy;
+        environment->isLinear =
+            environment->usage == luna::ownership::Usage::Linear;
+        environment->relation = luna::ownership::Relation::Owned;
+        environment->type = parameter.type;
+        environment->initializer = std::move(statement->environmentArgs[index]);
+        const std::string localName = environment->name;
+        body = lowerStatement(
+            std::move(environment), std::move(*body), applyRegion, applyScope);
+        if (body) {
+            const LocalId local = lookupLocal(localName);
+            if (local.empty()) {
+                error(statement->location,
+                      "fragment environment has no canonical apply binding");
+                body = std::nullopt;
+            } else {
+                binding.environmentLocals.push_back(local);
+                if (auto cleanup = mCleanupByLocal.find(local.value);
+                    cleanup != mCleanupByLocal.end()) {
+                    environmentCleanups.push_back(cleanup->second);
+                    mActiveApplyEnvironmentCleanups.back().push_back(
+                        cleanup->second);
+                }
+            }
+        }
+    }
     mStaticApplyScopes.emplace_back();
-    mStaticApplyScopes.back()[statement->slotName] = statement->fragmentRef;
-    auto body = lowerNestedBlock(
-        std::move(statement->body), region, scope, RegionKind::Apply);
+    // Match source composition by the sealed Slot contract: a qualified
+    // invocation and the Fragment's local target name can differ. The
+    // compiler-generated runtime helper and hand-built construction fixtures
+    // can use an unreferenced Slot, so retain spelling as a fallback key only
+    // for invocations without a complete nominal reference.
+    const std::string slotKey = fragment->targetSlot.symbol.value + "/" +
+        fragment->targetSlot.contract.value;
+    mStaticApplyScopes.back()[statement->slotName] = binding;
+    mStaticApplyScopes.back()[slotKey] = std::move(binding);
+    if (body)
+        body = lowerSequence(
+            statement->body->stmts, std::move(*body), applyRegion, applyScope);
+    mActiveApplyEnvironmentCleanups.pop_back();
     mStaticApplyScopes.pop_back();
-    connectJump(current, body.entry);
-    if (!body.exit) return std::nullopt;
+    popBindings();
+    connectJump(current, applyEntry);
+    if (!body) return std::nullopt;
 
     const BlockId continuation = addBlock(
         region, scope,
-        mGraph->blocks[body.exit->block.value].location);
-    connectJump(*body.exit, continuation);
-    mGraph->regions[body.region.value].exit = continuation;
+        mGraph->blocks[body->block.value].location);
+    body->cleanups.insert(
+        body->cleanups.end(), environmentCleanups.begin(),
+        environmentCleanups.end());
+    connectJump(*body, continuation);
+    mGraph->regions[applyRegion.value].exit = continuation;
     return OpenBlock{continuation, {}};
 }
 
@@ -275,6 +359,20 @@ const FragmentDecl* ControlFlowBuilder::resolveFragment(
     return nullptr;
 }
 
+const SlotDecl* ControlFlowBuilder::resolveSlot(
+    const DeclarationRef& reference) const {
+    if (!mModule || !reference.complete()) return nullptr;
+    const auto* record = mModule->findDeclaration(reference);
+    if (!record || record->kind != DeclarationKind::Slot) return nullptr;
+    for (const auto& declaration : mModule->declarations) {
+        const auto* slot = dynamic_cast<const SlotDecl*>(declaration.get());
+        if (slot && slot->symbolId == reference.symbol &&
+            slot->contractId == reference.contract)
+            return slot;
+    }
+    return nullptr;
+}
+
 std::optional<ControlFlowBuilder::OpenBlock>
 ControlFlowBuilder::lowerSlotInvoke(
     std::unique_ptr<SlotInvokeStmt> statement, OpenBlock current,
@@ -285,27 +383,17 @@ ControlFlowBuilder::lowerSlotInvoke(
         return std::nullopt;
     }
 
-    DeclarationRef fragmentReference;
-    bool boundByStaticApply = false;
+    StaticFragmentBinding activeBinding;
+    const std::string slotKey = statement->slotRef.complete()
+        ? statement->slotRef.symbol.value + "/" +
+            statement->slotRef.contract.value
+        : statement->name;
     for (size_t depth = mStaticApplyScopes.size(); depth > 0; --depth) {
         const auto& bindings = mStaticApplyScopes[depth - 1];
-        if (auto found = bindings.find(statement->name);
+        if (auto found = bindings.find(slotKey);
             found != bindings.end()) {
-            fragmentReference = found->second;
-            boundByStaticApply = true;
+            activeBinding = found->second;
             break;
-        }
-    }
-    if (fragmentReference.empty())
-        fragmentReference = statement->defaultFragmentRef;
-    if (fragmentReference.empty()) {
-        for (size_t depth = mSlotDefaults.size(); depth > 0; --depth) {
-            const auto& defaults = mSlotDefaults[depth - 1];
-            if (auto found = defaults.find(statement->name);
-                found != defaults.end()) {
-                fragmentReference = found->second;
-                break;
-            }
         }
     }
 
@@ -323,23 +411,79 @@ ControlFlowBuilder::lowerSlotInvoke(
         mGraph->regions[continuation.region.value].exit = exit;
         return OpenBlock{exit, {}};
     };
-    if (fragmentReference.empty()) return buildUnmodifiedContinuation();
+    const SlotDecl* slot = nullptr;
+    if (activeBinding.fragment.empty()) {
+        slot = resolveSlot(statement->slotRef);
+        if (!slot) {
+            error(statement->location,
+                  "slot invocation references a missing canonical Slot");
+            return std::nullopt;
+        }
+    }
+    if (activeBinding.fragment.empty() && !slot->isExported)
+        return buildUnmodifiedContinuation();
 
+    if (activeBinding.fragment.empty()) {
+        if (statement->args.size() != slot->params.size()) {
+            error(statement->location,
+                  "runtime Slot invocation argument arity disagrees with its declaration");
+            return std::nullopt;
+        }
+        std::vector<std::unique_ptr<Expr>*> operands;
+        operands.reserve(statement->args.size());
+        for (auto& argument : statement->args)
+            operands.push_back(&argument);
+        auto normalized = normalizeOrderedOperands(
+            operands, std::move(current), region, scope);
+        if (!normalized) return std::nullopt;
+        current = std::move(*normalized);
+
+        auto arguments = std::make_unique<RecordLiteralExpr>();
+        arguments->location = statement->location;
+        arguments->type = slot->argumentsType;
+        arguments->fields.reserve(statement->args.size());
+        for (size_t index = 0; index < statement->args.size(); ++index) {
+            RecordLiteralExpr::Field field;
+            field.name = slot->params[index].name;
+            field.value = std::move(statement->args[index]);
+            arguments->fields.push_back(std::move(field));
+        }
+        if (!bindExpr(arguments.get())) return std::nullopt;
+
+        auto continuation = lowerNestedBlock(
+            std::move(statement->continuation), region, scope,
+            RegionKind::Continuation);
+        const BlockId exit = addBlock(region, scope, statement->location);
+        if (continuation.exit) connectJump(*continuation.exit, exit);
+        mGraph->regions[continuation.region.value].exit = exit;
+
+        auto& terminator = mGraph->blocks[current.block.value].terminator;
+        terminator.kind = TerminatorKind::RuntimeSlot;
+        terminator.location = statement->location;
+        terminator.operand = std::move(arguments);
+        terminator.primary.target = continuation.entry;
+        terminator.secondary.target = exit;
+        terminator.runtimeSlot = statement->slotRef;
+        terminator.runtimeArgumentsType = slot->argumentsType;
+        return OpenBlock{exit, {}};
+    }
+
+    const DeclarationRef fragmentReference = activeBinding.fragment;
     const FragmentDecl* fragment = resolveFragment(fragmentReference);
     if (!fragment) {
         error(statement->location,
               "slot invocation references a missing canonical fragment");
         return std::nullopt;
     }
-    if (fragment->kind != statement->acceptedKind ||
-        fragment->cardinality != statement->acceptedCardinality) {
-        error(statement->location,
-              "slot invocation and fragment control contracts disagree");
-        return std::nullopt;
-    }
     if (!fragment->body) {
         error(statement->location,
               "static fragment has no structured construction body");
+        return std::nullopt;
+    }
+    if (fragment->environmentParams.size() !=
+        activeBinding.environmentLocals.size()) {
+        error(statement->location,
+              "slot invocation cannot materialize the fragment environment");
         return std::nullopt;
     }
     if (fragment->params.size() != statement->args.size() &&
@@ -355,27 +499,9 @@ ControlFlowBuilder::lowerSlotInvoke(
         return std::nullopt;
     }
 
-    // An explicit source apply already owns the composition region. A slot
-    // default has the same static control contract without source-level apply
-    // syntax, so materialize its application boundary here. This keeps every
-    // Fragment/Continuation pair under one independently verifiable Apply
-    // region without retaining a runtime descriptor or another language
-    // concept.
     RegionId invocationRegion = region;
     ScopeId invocationScope = scope;
     OpenBlock invocationCurrent = current;
-    RegionId implicitApplyRegion;
-    if (!boundByStaticApply) {
-        implicitApplyRegion = addRegion(
-            region, RegionKind::Apply, statement->location);
-        invocationScope = addScope(
-            scope, implicitApplyRegion, statement->location);
-        const BlockId entry = addBlock(
-            implicitApplyRegion, invocationScope, statement->location);
-        connectJump(current, entry);
-        invocationRegion = implicitApplyRegion;
-        invocationCurrent = OpenBlock{entry, current.cleanups};
-    }
 
     std::vector<std::unique_ptr<Stmt>> parameterBindings;
     parameterBindings.reserve(fragment->params.size());
@@ -411,9 +537,19 @@ ControlFlowBuilder::lowerSlotInvoke(
         fragmentRegion, fragmentScope, fragmentBody->location);
     const size_t outerBindingDepth = mBindings.size();
     pushBindings();
-    mFragmentContexts.push_back({
-        invocationExit, fragment->kind, statement->continuation.get(),
-        outerBindingDepth});
+    for (size_t index = 0; index < fragment->environmentParams.size(); ++index) {
+        const auto& parameter = fragment->environmentParams[index];
+        const LocalId local = activeBinding.environmentLocals[index];
+        if (mBindings.back().count(parameter.name) || local.empty() ||
+            local.value >= mGraph->locals.size()) {
+            error(statement->location,
+                  "fragment environment parameter has no unique canonical binding");
+            continue;
+        }
+        mBindings.back()[parameter.name] = local;
+    }
+    mFragmentFrames.push_back({
+        invocationExit, statement->continuation.get(), outerBindingDepth});
     std::optional<OpenBlock> fragmentOpen = OpenBlock{fragmentEntry, {}};
     for (auto& binding : parameterBindings) {
         if (!fragmentOpen) break;
@@ -435,80 +571,54 @@ ControlFlowBuilder::lowerSlotInvoke(
         fragmentOpen = lowerSequence(
             fragmentBody->stmts, std::move(*fragmentOpen),
             fragmentRegion, fragmentScope);
-    mFragmentContexts.pop_back();
+    mFragmentFrames.pop_back();
     popBindings();
     mGraph->regions[fragmentRegion.value].exit = invocationExit;
     connectJump(invocationCurrent, fragmentEntry);
 
-    if (fragmentOpen && fragment->kind == FragmentKind::Interceptor) {
-        auto continuation = lowerNestedBlock(
-            std::move(statement->continuation), invocationRegion,
-            invocationScope,
-            RegionKind::Continuation);
+    if (fragmentOpen) {
         auto& terminator =
             mGraph->blocks[fragmentOpen->block.value].terminator;
-        terminator.kind = TerminatorKind::Jump;
-        terminator.location = statement->location;
-        terminator.primary.target = continuation.entry;
-        terminator.primary.cleanups = canonicalCleanupOrder(
-            fragmentOpen->cleanups, fragmentScope, continuation.scope);
-        if (continuation.exit)
-            connectJump(*continuation.exit, invocationExit);
-        mGraph->regions[continuation.region.value].exit = invocationExit;
-    } else if (fragmentOpen) {
-        auto& terminator =
-            mGraph->blocks[fragmentOpen->block.value].terminator;
-        terminator.kind = TerminatorKind::Abort;
+        terminator.kind = TerminatorKind::Discard;
         terminator.location = statement->location;
         terminator.primary.target = invocationExit;
         terminator.primary.cleanups = canonicalCleanupOrder(
             fragmentOpen->cleanups, fragmentScope, invocationScope);
     }
-    if (implicitApplyRegion.empty())
-        return OpenBlock{invocationExit, {}};
-
-    const BlockId exit = addBlock(region, scope, statement->location);
-    connectJump(OpenBlock{invocationExit, {}}, exit);
-    mGraph->regions[implicitApplyRegion.value].exit = exit;
-    return OpenBlock{exit, {}};
+    return OpenBlock{invocationExit, {}};
 }
 
 std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerResume(
     std::unique_ptr<ResumeStmt> statement, OpenBlock current,
     RegionId region, ScopeId scope) {
-    if (mFragmentContexts.empty() ||
-        mFragmentContexts.back().kind != FragmentKind::Context ||
-        !mFragmentContexts.back().continuation) {
+    if (mFragmentFrames.empty() ||
+        !mFragmentFrames.back().continuation) {
         error(statement->location,
-              "resume() has no active canonical context continuation");
+              "resume has no active canonical fragment continuation");
         return std::nullopt;
     }
-    const FragmentContext active = mFragmentContexts.back();
+    const FragmentFrame active = mFragmentFrames.back();
     auto continuationBody = cloneStructuredBlock(active.continuation);
     if (!continuationBody) {
         error(statement->location,
-              "context continuation cannot be cloned before canonical construction");
+              "fragment continuation cannot be cloned before canonical construction");
         return std::nullopt;
     }
 
     using BindingMap = std::unordered_map<std::string, LocalId>;
     using IteratorMap = std::unordered_map<
         std::string, MaterializedIteratorRecipe>;
-    using DefaultMap = std::unordered_map<std::string, DeclarationRef>;
     std::vector<BindingMap> fragmentBindings;
     std::vector<IteratorMap> fragmentIterators;
-    std::vector<DefaultMap> fragmentDefaults;
     for (size_t index = active.outerBindingDepth;
          index < mBindings.size(); ++index) {
         fragmentBindings.push_back(std::move(mBindings[index]));
         fragmentIterators.push_back(std::move(mMaterializedIterators[index]));
-        fragmentDefaults.push_back(std::move(mSlotDefaults[index]));
     }
     mBindings.resize(active.outerBindingDepth);
     mMaterializedIterators.resize(active.outerBindingDepth);
-    mSlotDefaults.resize(active.outerBindingDepth);
-    auto fragmentContexts = std::move(mFragmentContexts);
-    mFragmentContexts.clear();
+    auto fragmentFrames = std::move(mFragmentFrames);
+    mFragmentFrames.clear();
 
     mHiddenCleanupBindingGroups.push_back({
         active.outerBindingDepth, fragmentBindings});
@@ -519,7 +629,7 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerResume(
 
     mHiddenCleanupBindingGroups.pop_back();
 
-    mFragmentContexts = std::move(fragmentContexts);
+    mFragmentFrames = std::move(fragmentFrames);
     mBindings.insert(
         mBindings.end(),
         std::make_move_iterator(fragmentBindings.begin()),
@@ -528,10 +638,6 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerResume(
         mMaterializedIterators.end(),
         std::make_move_iterator(fragmentIterators.begin()),
         std::make_move_iterator(fragmentIterators.end()));
-    mSlotDefaults.insert(
-        mSlotDefaults.end(),
-        std::make_move_iterator(fragmentDefaults.begin()),
-        std::make_move_iterator(fragmentDefaults.end()));
 
     auto& terminator = mGraph->blocks[current.block.value].terminator;
     terminator.kind = TerminatorKind::Resume;

@@ -54,8 +54,12 @@ bool validateDescriptor(const LunaRuntimeDeclarationDescriptorV1& descriptor) {
         descriptor.declaration_kind < LUNA_RUNTIME_DECLARATION_FUNCTION_V1 ||
         descriptor.declaration_kind >
             LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
-        (descriptor.flags & ~LUNA_RUNTIME_DESCRIPTOR_CALLABLE_V1) != 0 ||
-        descriptor.retention != LUNA_RUNTIME_RETENTION_RUNTIME_V1 ||
+        (descriptor.flags &
+         ~(LUNA_RUNTIME_DESCRIPTOR_CALLABLE_V1 |
+           LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_EXECUTABLE_V1 |
+           LUNA_RUNTIME_DESCRIPTOR_PUBLIC_CONTROL_V1 |
+           LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_CONTEXT_V1)) != 0 ||
+        descriptor.retention > LUNA_RUNTIME_RETENTION_RUNTIME_V1 ||
         descriptor.reserved_zero_0 != 0 || descriptor.reserved_zero_1 != 0 ||
         !validText(descriptor.symbol_id) ||
         !validText(descriptor.contract_id) || !validText(descriptor.type_id) ||
@@ -63,13 +67,34 @@ bool validateDescriptor(const LunaRuntimeDeclarationDescriptorV1& descriptor) {
         descriptor.metadata_count > MaxMetadataCount ||
         (descriptor.metadata_count != 0 && !descriptor.metadata) ||
         (descriptor.retention == LUNA_RUNTIME_RETENTION_COMPILE_TIME_V1 &&
-         descriptor.metadata_count == 0))
+         descriptor.metadata_count == 0 &&
+         (descriptor.flags &
+          LUNA_RUNTIME_DESCRIPTOR_PUBLIC_CONTROL_V1) == 0))
         return false;
     const bool callable =
         (descriptor.flags & LUNA_RUNTIME_DESCRIPTOR_CALLABLE_V1) != 0;
-    if (callable != (descriptor.entry != nullptr) ||
+    const bool fragmentExecutable =
+        (descriptor.flags &
+         LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_EXECUTABLE_V1) != 0;
+    const bool publicControl =
+        (descriptor.flags &
+         LUNA_RUNTIME_DESCRIPTOR_PUBLIC_CONTROL_V1) != 0;
+    const bool fragmentContext =
+        (descriptor.flags &
+         LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_CONTEXT_V1) != 0;
+    if (callable && fragmentExecutable)
+        return false;
+    if ((callable || fragmentExecutable) != (descriptor.entry != nullptr) ||
         (callable && descriptor.declaration_kind !=
-            LUNA_RUNTIME_DECLARATION_FUNCTION_V1))
+            LUNA_RUNTIME_DECLARATION_FUNCTION_V1) ||
+        (fragmentExecutable && descriptor.declaration_kind !=
+            LUNA_RUNTIME_DECLARATION_FRAGMENT_V1) ||
+        (fragmentContext &&
+         (!callable || descriptor.declaration_kind !=
+             LUNA_RUNTIME_DECLARATION_FUNCTION_V1)) ||
+        (publicControl &&
+         descriptor.declaration_kind != LUNA_RUNTIME_DECLARATION_FRAGMENT_V1 &&
+         descriptor.declaration_kind != LUNA_RUNTIME_DECLARATION_SLOT_V1))
         return false;
     for (uint64_t index = 0; index < descriptor.metadata_count; ++index) {
         if (!validateMetadata(descriptor.metadata[index])) return false;
@@ -130,7 +155,11 @@ RuntimeDescriptorRegistryView::find(
     uint32_t declarationKind, uint32_t requiredFlags) const {
     if (!registry_ || symbolId.empty() || contractId.empty() ||
         declarationKind == 0 ||
-        (requiredFlags & ~LUNA_RUNTIME_DESCRIPTOR_CALLABLE_V1) != 0)
+        (requiredFlags &
+         ~(LUNA_RUNTIME_DESCRIPTOR_CALLABLE_V1 |
+           LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_EXECUTABLE_V1 |
+           LUNA_RUNTIME_DESCRIPTOR_PUBLIC_CONTROL_V1 |
+           LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_CONTEXT_V1)) != 0)
         return nullptr;
     if (registry_->descriptor_count == 0) return nullptr;
     const auto* begin = registry_->descriptors;

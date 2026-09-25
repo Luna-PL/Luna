@@ -36,22 +36,22 @@ void ControlAnalyzer::declareSlot(SlotDecl* decl) {
             param.relation = contract.relation;
             param.usage = contract.usage;
             contracts.push_back(contract);
+            if (decl->isExported &&
+                contract.usage != luna::ownership::Usage::Copy)
+                mContext.error("exported slot '" + decl->name +
+                    "' currently requires Copy parameter contracts; parameter '" +
+                    param.name + "' is move-only",
+                    decl->line, decl->col);
         }
     }
     ControlContextAccess::SlotInfo info;
     info.declaration = decl;
     info.name = decl->name;
-    info.acceptedKind = decl->acceptedKind;
-    info.acceptedCardinality = decl->acceptedCardinality;
     info.paramTypes = params;
     info.paramContracts = contracts;
     for (const auto& param : decl->params) info.paramNames.push_back(param.name);
-    info.defaultFragment = decl->defaultFragment;
     info.structuralType = Type::makeSlot(
-        params, TyUnit, false,
-        info.acceptedKind == FragmentKind::Interceptor
-            ? ContinuationKind::Interceptor : ContinuationKind::Context,
-        contracts);
+        params, TyUnit, contracts);
     const std::string symbolName = decl->generatedSymbolName.empty()
         ? decl->name : decl->generatedSymbolName;
     info.structuralType->identityMode = luna::types::IdentityMode::Nominal;
@@ -69,31 +69,8 @@ void ControlAnalyzer::declareSlot(SlotDecl* decl) {
         mContext.error("slot name '" + decl->name + "' conflicts with an existing declaration", decl->line, decl->col);
 }
 
-void ControlAnalyzer::analyzeSlotDecl(SlotDeclStmt* stmt) {
-    mContext.error("local slot declarations are not part of Luna 0.3; declare the slot at module level",
-                   stmt->line, stmt->col);
-}
-
 void ControlAnalyzer::finalizeSlot(SlotDecl* decl) {
-    if (!decl || decl->defaultFragment.empty()) return;
-    auto* fragment = selectFragment(decl->defaultFragment, decl);
-    if (!fragment) return;
-    const std::string slotSymbol = decl->generatedSymbolName.empty()
-        ? decl->name : decl->generatedSymbolName;
-    if (fragment->resolvedTargetSlotName != slotSymbol) {
-        mContext.error("default fragment '" + fragment->name +
-            "' nominally targets a different slot than '" + decl->name + "'",
-            decl->line, decl->col);
-        return;
-    }
-    decl->resolvedDefaultFragmentName =
-        fragment->generatedSymbolName.empty()
-            ? fragment->name : fragment->generatedSymbolName;
-    const std::string key = mContext.sourceDeclarationKey(decl->name);
-    auto found = mContext.mSlotScopes.front().find(key);
-    if (found != mContext.mSlotScopes.front().end())
-        found->second.resolvedDefaultFragmentName =
-            decl->resolvedDefaultFragmentName;
+    (void)decl;
 }
 
 void ControlAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedReturn) {
@@ -117,11 +94,11 @@ void ControlAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedRe
         return nullptr;
     };
     const auto& active = *declared;
-    stmt->acceptedKind = active.acceptedKind;
-    stmt->acceptedCardinality = active.acceptedCardinality;
     stmt->structuralType = active.structuralType;
     stmt->resolvedParamNames = active.paramNames;
-    stmt->defaultFragment = active.defaultFragment;
+    stmt->resolvedSlotName =
+        active.declaration && !active.declaration->generatedSymbolName.empty()
+        ? active.declaration->generatedSymbolName : active.name;
     if (stmt->args.size() != active.paramTypes.size()) {
         mContext.error("slot '" + stmt->name + "' expects " +
               std::to_string(active.paramTypes.size()) + " arguments, got " +
@@ -132,26 +109,21 @@ void ControlAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedRe
         mContext.constrain(mContext.analyzeExpr(stmt->args[i].get()),
             active.paramTypes[i], "argument " + std::to_string(i + 1) +
             " of slot '" + stmt->name + "'");
-    const auto captures = mContext.mSymTable.visibleSymbols();
     mContext.analyzeBlock(stmt->continuation.get(), expectedReturn);
 
     FragmentDecl* fragment = lookupApplied(slotKey);
-    if (!fragment && !active.defaultFragment.empty()) {
-        fragment = selectFragment(active.defaultFragment, stmt);
-    }
     if (fragment) {
-        stmt->resolvedDefaultFragmentName = fragment->generatedSymbolName.empty()
+        stmt->resolvedFragmentName = fragment->generatedSymbolName.empty()
             ? fragment->name : fragment->generatedSymbolName;
     }
     if (!fragment) return; // no binding is an identity fragment: resume once
     if (fragment->resolvedTargetSlotName !=
-        (active.declaration && !active.declaration->generatedSymbolName.empty()
-             ? active.declaration->generatedSymbolName : active.name))
+        stmt->resolvedSlotName)
         mContext.error("fragment '" + fragment->name +
             "' nominally targets a different slot than '" + stmt->name + "'",
             stmt->line, stmt->col);
     analyzeFragmentForSlot(fragment, stmt->name, active.paramTypes,
-                           active.paramContracts, captures);
+                           active.paramContracts);
 }
 
 void ControlAnalyzer::analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn) {
@@ -170,6 +142,22 @@ void ControlAnalyzer::analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn) {
         mContext.error("lexical `apply` requires a body", stmt->line, stmt->col);
         return;
     }
+    if (stmt->environmentArgs.size() != fragment->environmentParams.size()) {
+        mContext.error("fragment '" + fragment->name + "' expects " +
+                       std::to_string(fragment->environmentParams.size()) +
+                       " environment arguments, got " +
+                       std::to_string(stmt->environmentArgs.size()),
+                       stmt->line, stmt->col);
+    }
+    const size_t environmentCount = std::min(
+        stmt->environmentArgs.size(), fragment->environmentParams.size());
+    for (size_t index = 0; index < environmentCount; ++index) {
+        mContext.constrain(
+            mContext.analyzeExpr(stmt->environmentArgs[index].get()),
+            fragment->environmentParams[index].inferredType,
+            "environment argument " + std::to_string(index + 1) +
+                " of fragment '" + fragment->name + "'");
+    }
     enterSlotScope();
     const std::string slotKey = mContext.sourceDeclarationKey(
         fragment->targetSlotName);
@@ -180,8 +168,7 @@ void ControlAnalyzer::analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn) {
 
 void ControlAnalyzer::analyzeFragmentForSlot(
     FragmentDecl* fragment, const std::string& slotName, const TypeVec& parameterTypes,
-    const std::vector<luna::ownership::Contract>& parameterContracts,
-    const std::unordered_map<std::string, SymbolInfo>& captures) {
+    const std::vector<luna::ownership::Contract>& parameterContracts) {
     if (fragment->params.size() != parameterTypes.size()) {
         mContext.error("fragment '" + fragment->name + "' must bind all " +
               std::to_string(parameterTypes.size()) + " parameters of slot '" +
@@ -194,11 +181,7 @@ void ControlAnalyzer::analyzeFragmentForSlot(
     context.paramTypes = parameterTypes;
     context.paramContracts = parameterContracts;
     context.structuralType = Type::makeSlot(
-        parameterTypes, TyUnit,
-        fragment->cardinality == FragmentCardinality::Many,
-        fragment->kind == FragmentKind::Interceptor
-            ? ContinuationKind::Interceptor : ContinuationKind::Context,
-        parameterContracts);
+        parameterTypes, TyUnit, parameterContracts);
     const ControlContextAccess::SlotInfo* savedSlot =
         mContext.mCurrentFragmentSlot;
     FragmentDecl* savedFragment = mContext.mCurrentFragmentDecl;
@@ -207,7 +190,18 @@ void ControlAnalyzer::analyzeFragmentForSlot(
     mContext.mCurrentFragmentDecl = fragment;
     mContext.mCurrentReturnType = TyUnit;
 
-    mContext.mSymTable.enterScope();
+    // A fragment declaration is not a lexical closure. Only module symbols,
+    // explicit environment parameters, and Slot invocation parameters are
+    // visible in its body.
+    mContext.mSymTable.enterIsolatedScope();
+    for (auto& parameter : fragment->environmentParams) {
+        SymbolInfo info;
+        info.kind = SymbolKind::Variable;
+        info.type = parameter.inferredType;
+        info.usage = luna::ownership::Usage::Copy;
+        info.relation = luna::ownership::Relation::SharedBorrow;
+        mContext.mSymTable.define(parameter.name, info);
+    }
     for (size_t i = 0; i < fragment->params.size(); ++i) {
         auto& param = fragment->params[i];
         SymbolInfo info;
@@ -233,26 +227,17 @@ void ControlAnalyzer::analyzeFragmentForSlot(
         param.inferredType = info.type;
         mContext.mSymTable.define(param.name, info);
     }
-    for (const auto& [name, info] : captures) {
-        if (!mContext.mSymTable.hasInCurrentScope(name)) mContext.mSymTable.define(name, info);
-    }
     mContext.analyzeBlock(fragment->body.get(), TyUnit);
-    mContext.mSymTable.exitScope();
+    mContext.mSymTable.exitIsolatedScope();
     mContext.mCurrentReturnType = savedReturnType;
 
     struct ControlPaths {
         std::set<int> active{0};
-        bool aborted = false;
-        bool returned = false;
-        bool abortAfterResume = false;
     };
     std::function<ControlPaths(const BlockStmt*, const std::set<int>&)> analyzePaths;
     std::function<ControlPaths(const Stmt*, const std::set<int>&)> analyzeStmtPaths;
     auto mergePaths = [](ControlPaths left, const ControlPaths& right) {
         left.active.insert(right.active.begin(), right.active.end());
-        left.aborted = left.aborted || right.aborted;
-        left.returned = left.returned || right.returned;
-        left.abortAfterResume = left.abortAfterResume || right.abortAfterResume;
         return left;
     };
     analyzeStmtPaths = [&](const Stmt* stmt, const std::set<int>& incoming) -> ControlPaths {
@@ -263,12 +248,8 @@ void ControlAnalyzer::analyzeFragmentForSlot(
             for (int count : incoming) out.active.insert(std::min(count + 1, 2));
             return out;
         }
-        if (dynamic_cast<const AbortStmt*>(stmt)) {
-            for (int count : incoming) if (count > 0) out.abortAfterResume = true;
-            out.active.clear(); out.aborted = true; return out;
-        }
         if (dynamic_cast<const ReturnStmt*>(stmt)) {
-            out.active.clear(); out.returned = true; return out;
+            out.active.clear(); return out;
         }
         if (auto* block = dynamic_cast<const BlockStmt*>(stmt))
             return analyzePaths(block, incoming);
@@ -291,7 +272,8 @@ void ControlAnalyzer::analyzeFragmentForSlot(
         if (auto* loop = dynamic_cast<const WhileStmt*>(stmt)) {
             ControlPaths body = analyzePaths(loop->body.get(), incoming);
             // A loop may execute zero times or repeat. Any resume in its body
-            // therefore makes a once-context path potentially multi-shot.
+            // therefore makes a single-shot Fragment path potentially resume
+            // more than once.
             out = mergePaths(out, body);
             for (int before : incoming) for (int after : body.active)
                 if (after > before) out.active.insert(2);
@@ -313,32 +295,15 @@ void ControlAnalyzer::analyzeFragmentForSlot(
             if (paths.active.empty()) break;
             ControlPaths next = analyzeStmtPaths(statement.get(), paths.active);
             paths.active = std::move(next.active);
-            paths.aborted = paths.aborted || next.aborted;
-            paths.returned = paths.returned || next.returned;
-            paths.abortAfterResume = paths.abortAfterResume || next.abortAfterResume;
         }
         return paths;
     };
     const ControlPaths control = analyzePaths(fragment->body.get(), {0});
-    const bool isMany = fragment->cardinality == FragmentCardinality::Many;
-    if (!isMany && control.abortAfterResume)
-        mContext.error("single-shot context '" + fragment->name +
-              "' cannot abort after resume(); the continuation has already been consumed");
-    if (fragment->kind == FragmentKind::Context) {
-        for (int resumes : control.active) {
-            if (!isMany && resumes > 1) {
-                mContext.error("single-shot context '" + fragment->name +
-                      "' may resume its continuation at most once; a path with no `resume()` is an implicit abort");
-                break;
-            }
-        }
-    }
-    if (isMany) {
-        for (const auto& [name, info] : captures) {
-            if (info.isLinear) {
-                mContext.error("fragment '" + fragment->name + "' may resume slot '" + slotName +
-                      "' more than once, but captured linear value '" + name + "' is not replayable");
-            }
+    for (int resumes : control.active) {
+        if (resumes > 1) {
+            mContext.error("single-shot fragment '" + fragment->name +
+                  "' may resume its continuation at most once; a path with no `resume;` discards it");
+            break;
         }
     }
 

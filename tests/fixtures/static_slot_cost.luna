@@ -1,0 +1,15 @@
+slot hook(value: i32);
+
+fragment add_two(value: i32) for hook {
+    resume;
+}
+
+fn main() -> i32 {
+    let result = 40;
+    apply add_two {
+        hook(1) {
+            result += 2;
+        }
+    }
+    return result;
+}

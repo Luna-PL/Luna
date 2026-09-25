@@ -38,15 +38,37 @@ void Verifier::verifyDeclaration(const Decl& declaration, const Module& module) 
         if (!contract || contract->kind != TypeKind::Fragment) {
             error(fragment->location,
                   "fragment declaration has no frozen fragment contract");
-        } else {
-            const auto expectedKind = fragment->kind == FragmentKind::Interceptor
-                ? ContinuationKind::Interceptor
-                : ContinuationKind::Context;
-            if (contract->continuationKind != expectedKind ||
-                contract->isMultiShot !=
-                    (fragment->cardinality == FragmentCardinality::Many))
+        }
+        verifyType(fragment->environmentType, fragment->location,
+                   "fragment '" + fragment->name + "' environment type", module);
+        const auto* environment = module.findType(fragment->environmentType);
+        if (!environment || environment->kind != TypeKind::Record) {
+            error(fragment->location,
+                  "fragment declaration has no frozen record environment");
+        } else if (environment->fields.size() !=
+                   fragment->environmentParams.size()) {
+            error(fragment->location,
+                  "fragment environment field arity disagrees with its parameters");
+        }
+        for (const auto& parameter : fragment->environmentParams) {
+            verifyType(parameter.type, fragment->location,
+                       "fragment environment parameter '" + parameter.name + "'", module);
+            if (environment) {
+                const auto field = std::find_if(
+                    environment->fields.begin(), environment->fields.end(),
+                    [&](const TypeFieldRecord& candidate) {
+                        return candidate.name == parameter.name;
+                    });
+                if (field == environment->fields.end() ||
+                    field->type != parameter.type)
+                    error(fragment->location,
+                          "fragment environment parameter '" + parameter.name +
+                          "' disagrees with its frozen record field");
+            }
+            if (parameter.usage != luna::ownership::Usage::Copy ||
+                parameter.relation != luna::ownership::Relation::SharedBorrow)
                 error(fragment->location,
-                      "fragment declaration disagrees with its frozen control contract");
+                      "current fragment environments must expose Copy shared-borrow fields");
         }
         verifyDeclarationRef(
             fragment->targetSlot, fragment->location,
@@ -71,14 +93,6 @@ void Verifier::verifyDeclaration(const Decl& declaration, const Module& module) 
             error(slot->location,
                   "slot declaration has no frozen nominal slot contract");
         } else {
-            const auto expectedKind =
-                slot->acceptedKind == FragmentKind::Interceptor
-                    ? ContinuationKind::Interceptor
-                    : ContinuationKind::Context;
-            if (contract->continuationKind != expectedKind ||
-                contract->isMultiShot)
-                error(slot->location,
-                      "slot declaration disagrees with its frozen single-shot control contract");
             if (contract->nominalDeclarationId != slot->declarationId)
                 error(slot->location,
                       "slot type is not nominally bound to its declaration identity");
@@ -86,11 +100,20 @@ void Verifier::verifyDeclaration(const Decl& declaration, const Module& module) 
         for (const auto& parameter : slot->params)
             verifyType(parameter.type, slot->location,
                        "slot parameter '" + parameter.name + "'", module);
-        if (!slot->defaultFragment.empty())
-            verifyDeclarationRef(
-                slot->defaultFragment, slot->location,
-                "default fragment for slot '" + slot->name + "'",
-                module, DeclarationKind::Fragment);
+        verifyType(slot->argumentsType, slot->location,
+                   "slot '" + slot->name + "' argument record", module);
+        const auto* arguments = module.findType(slot->argumentsType);
+        if (!arguments || arguments->kind != TypeKind::Record ||
+            arguments->fields.size() != slot->params.size()) {
+            error(slot->location,
+                  "slot declaration has no frozen argument record");
+        } else {
+            for (size_t index = 0; index < slot->params.size(); ++index)
+                if (arguments->fields[index].name != slot->params[index].name ||
+                    arguments->fields[index].type != slot->params[index].type)
+                    error(slot->location,
+                          "slot argument record disagrees with its parameters");
+        }
         return;
     }
     if (auto* structure = dynamic_cast<const StructDecl*>(&declaration)) {
@@ -179,6 +202,11 @@ void Verifier::verifyFunction(
     if (function.isKernel && function.isCodegenReachable && !module.features.kernel)
         error(function.location, "kernel '" + function.name +
                                  "' is present without the kernel feature");
+    if (function.requiresFragmentContext &&
+        (function.isExtern || function.isKernel || function.isExported ||
+         function.name == "main"))
+        error(function.location, "function '" + function.name +
+              "' reaches a runtime Slot but has no runtime-aware public entry ABI");
     const auto* returnType = module.findType(function.returnType);
     if (function.isKernel && returnType && returnType->kind != TypeKind::Unit)
         error(function.location, "kernel '" + function.name + "' must return unit");
@@ -475,49 +503,32 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
                 release->action,
                 release->operand->type,
                 release->location, "free operation", module);
-    } else if (auto* slot = dynamic_cast<const SlotDeclStmt*>(stmt)) {
-        verifyType(slot->structuralType, slot->location,
-                   "slot '" + slot->name + "' structural contract", module);
-        if (!slot->defaultFragment.empty() ||
-            !slot->defaultFragmentRef.empty())
-            verifyDeclarationRef(
-                slot->defaultFragmentRef, slot->location,
-                "default fragment for slot '" + slot->name + "'", module,
-                DeclarationKind::Fragment);
     } else if (auto* slot = dynamic_cast<const SlotInvokeStmt*>(stmt)) {
         for (const auto& argument : slot->args)
             verifyExpr(argument.get(), module, owner);
+        // Synthetic, statically-bound invocations (notably the executable
+        // Fragment helper) do not name a standalone Slot declaration.  An
+        // unbound invocation must be resolved before it can become a
+        // RuntimeSlot terminator, where the exact reference is mandatory.
+        const auto* declaration = slot->slotRef.empty() ? nullptr
+            : verifyDeclarationRef(
+                  slot->slotRef, slot->location,
+                  "slot invocation '" + slot->name + "'", module,
+                  DeclarationKind::Slot);
         verifyType(slot->structuralType, slot->location,
                    "slot invocation '" + slot->name + "' contract", module);
-        if (!slot->defaultFragment.empty() ||
-            !slot->defaultFragmentRef.empty())
-            verifyDeclarationRef(
-                slot->defaultFragmentRef, slot->location,
-                "default fragment for slot invocation '" +
-                slot->name + "'", module, DeclarationKind::Fragment);
+        if (declaration && declaration->type != slot->structuralType)
+            error(slot->location,
+                  "slot invocation contract disagrees with its nominal declaration");
         verifyBlock(slot->continuation.get(), module, owner);
     } else if (auto* apply = dynamic_cast<const ApplyStmt*>(stmt)) {
+        for (const auto& argument : apply->environmentArgs)
+            verifyExpr(argument.get(), module, owner);
         verifyDeclarationRef(
             apply->fragmentRef, apply->location,
             "fragment bound by apply for slot '" + apply->slotName + "'",
             module, DeclarationKind::Fragment);
         if (apply->body) verifyBlock(apply->body.get(), module, owner);
-    } else if (auto* abort = dynamic_cast<const AbortStmt*>(stmt)) {
-        std::unordered_set<std::string> cleanupPlaces;
-        for (const auto& cleanup : abort->cleanups) {
-            if (cleanup.place.empty())
-                error(abort->location, "abort cleanup in '" + owner + "' has no place");
-            else if (!cleanupPlaces.insert(cleanup.place).second)
-                error(abort->location, "duplicate abort cleanup for place '" +
-                      cleanup.place + "' in '" + owner + "'");
-            if (cleanup.typeId.empty() || !module.findType(cleanup.typeId))
-                error(abort->location, "abort cleanup for place '" + cleanup.place +
-                      "' references no frozen type in '" + owner + "'");
-            else
-                verifyCleanupAction(
-                    cleanup.action, cleanup.typeId, abort->location,
-                    "abort cleanup for '" + cleanup.place + "'", module);
-        }
     } else if (auto* await = dynamic_cast<const AwaitStmt*>(stmt)) {
         verifyExpr(await->event.get(), module, owner);
     }

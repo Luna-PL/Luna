@@ -72,13 +72,18 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
     if (match(TokenKind::Free)) return stamp(parseFreeStmt());
     if (match(TokenKind::Slot)) {
         addError("slot declarations are module-level in Luna 0.3",
-                 "move `slot interceptor/context name(...);` outside the function and invoke it as "
+                 "move `slot name(...);` outside the function and invoke it as "
                  "`name(args) { ... }`");
         synchronizeStatement();
         return nullptr;
     }
     if (match(TokenKind::Resume)) return stamp(parseResumeStmt());
-    if (match(TokenKind::Abort)) return stamp(parseAbortStmt());
+    if (match(TokenKind::Abort)) {
+        addError("`abort` was removed from the Slot/Fragment model",
+                 "omit `resume;` to discard the captured continuation, or use `return;` explicitly");
+        synchronizeStatement();
+        return nullptr;
+    }
     if (match(TokenKind::Await)) return stamp(parseAwaitStmt());
     if (match(TokenKind::Apply)) return stamp(parseApplyStmt());
     if (match(TokenKind::Dynamic)) {
@@ -103,28 +108,14 @@ std::unique_ptr<Stmt> Parser::parseStatement() {
 
 std::unique_ptr<Stmt> Parser::parseResumeStmt() {
     const Token start = mTokens[mPos - 1]; // `resume` already consumed
-    consume(TokenKind::LParen, "Expected '(' after `resume`");
-    if (!check(TokenKind::RParen)) {
-        addError("`resume` does not accept arguments",
-                 "the slot continuation restores its original captured frame; write `resume()`");
+    if (check(TokenKind::LParen)) {
+        addError("`resume()` was replaced by the `resume;` statement",
+                 "write `resume;`");
         synchronizeStatement();
         return nullptr;
     }
-    consume(TokenKind::RParen, "Expected ')' after `resume`");
-    consume(TokenKind::SemiColon, "Expected ';' after `resume()`");
+    consume(TokenKind::SemiColon, "Expected ';' after `resume`");
     auto stmt = std::make_unique<ResumeStmt>();
-    stmt->sourcePath = mSourceName;
-    stmt->line = start.line;
-    stmt->col = start.col;
-    return stmt;
-}
-
-std::unique_ptr<Stmt> Parser::parseAbortStmt() {
-    const Token start = mTokens[mPos - 1];
-    consume(TokenKind::LParen, "Expected '(' after `abort`");
-    consume(TokenKind::RParen, "Expected ')' after `abort`");
-    consume(TokenKind::SemiColon, "Expected ';' after `abort()`");
-    auto stmt = std::make_unique<AbortStmt>();
     stmt->sourcePath = mSourceName;
     stmt->line = start.line;
     stmt->col = start.col;
@@ -150,9 +141,13 @@ std::unique_ptr<Stmt> Parser::parseApplyStmt() {
         synchronizeStatement();
         return nullptr;
     }
+    if (match(TokenKind::LBracket)) {
+        if (!check(TokenKind::RBracket)) stmt->environmentArgs = parseArgs();
+        consume(TokenKind::RBracket, "Expected ']' after fragment environment arguments");
+    }
     if (!check(TokenKind::LBrace)) {
         addError("lexical `apply` requires a body",
-                 "write `apply fragment_name { ... }`; blockless apply was removed in Luna 0.3");
+                 "write `apply fragment_name[environment] { ... }`; blockless apply was removed in Luna 0.3");
         synchronizeStatement();
         return nullptr;
     }

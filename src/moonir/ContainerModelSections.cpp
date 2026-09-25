@@ -168,8 +168,10 @@ void encodeType(Encoder& encoder, const TypeRecord& type) {
         encodeContract(encoder, contract);
     });
     encodeContract(encoder, type.returnContract);
-    encoder.boolean(type.isMultiShot);
-    encoder.enumeration(type.continuationKind);
+    // Moon Container 0.3 keeps these two wire positions reserved. The unified
+    // Slot/Fragment model encodes only single-shot explicit continuation.
+    encoder.boolean(false);
+    encoder.u32(1);
     encoder.enumeration(type.iteratorMode);
     encodeFields(encoder, type.fields);
     encodeFields(encoder, type.capturedFields);
@@ -230,12 +232,16 @@ bool decodeType(Decoder& decoder, TypeRecord& type) {
         if (!decodeContract(decoder, contract)) return false;
         type.parameterContracts.push_back(contract);
     }
+    bool reservedSingleShot = false;
+    uint32_t reservedExplicitContinuation = 0;
     if (!decodeContract(decoder, type.returnContract) ||
-        !decoder.boolean(type.isMultiShot) ||
-        !decoder.enumeration(type.continuationKind, 1) ||
+        !decoder.boolean(reservedSingleShot) ||
+        !decoder.u32(reservedExplicitContinuation) ||
         !decoder.enumeration(type.iteratorMode, 4) ||
         !decodeFields(decoder, type.fields) ||
         !decodeFields(decoder, type.capturedFields))
+        return false;
+    if (reservedSingleShot || reservedExplicitContinuation != 1)
         return false;
 
     uint32_t variantCount = 0;
@@ -388,6 +394,10 @@ struct ContractPayload {
     luna::identity::ContractId id;
     luna::sysmeta::Facts facts;
     DeclarationRef dropGlue;
+    DeclarationRef controlTarget;
+    TypeRef environmentType;
+    TypeRef controlArgumentsType;
+    DeclarationRef runtimeEntry;
     std::string canonical;
 };
 
@@ -589,6 +599,10 @@ bool ContainerModelCodec::encodeContracts(
         encoder.string(declaration->contractId.value);
         encodeFacts(encoder, declaration->sysmeta);
         encodeReference(encoder, declaration->dropGlue);
+        encodeReference(encoder, declaration->controlTarget);
+        encoder.string(declaration->environmentType.value);
+        encoder.string(declaration->controlArgumentsType.value);
+        encodeReference(encoder, declaration->runtimeEntry);
         encoder.string(declaration->canonicalContract);
     });
     if (!encoder.good()) {
@@ -666,7 +680,7 @@ bool ContainerModelCodec::decodeDeclarations(
             !symbolDecoder.string(declaration.familyId) ||
             !symbolDecoder.string(declaration.sourceName) ||
             !symbolDecoder.string(declaration.linkageName) ||
-            !symbolDecoder.enumeration(declaration.kind, 6) ||
+            !symbolDecoder.enumeration(declaration.kind, 7) ||
             !symbolDecoder.enumeration(declaration.retention, 1) ||
             !symbolDecoder.string(declaration.type.value) ||
             !decodeLocation(symbolDecoder, declaration.location)) {
@@ -701,6 +715,10 @@ bool ContainerModelCodec::decodeDeclarations(
             !contractDecoder.string(payload.id.value) ||
             !decodeFacts(contractDecoder, payload.facts) ||
             !decodeReference(contractDecoder, payload.dropGlue) ||
+            !decodeReference(contractDecoder, payload.controlTarget) ||
+            !contractDecoder.string(payload.environmentType.value) ||
+            !contractDecoder.string(payload.controlArgumentsType.value) ||
+            !decodeReference(contractDecoder, payload.runtimeEntry) ||
             !contractDecoder.string(payload.canonical)) {
             error = contractDecoder.error().empty()
                 ? "Moon Container contract record contains an invalid scalar"
@@ -812,6 +830,14 @@ bool ContainerModelCodec::decodeDeclarations(
         declaration.contractId = std::move(contract->second.id);
         declaration.sysmeta = std::move(contract->second.facts);
         declaration.dropGlue = std::move(contract->second.dropGlue);
+        declaration.controlTarget =
+            std::move(contract->second.controlTarget);
+        declaration.environmentType =
+            std::move(contract->second.environmentType);
+        declaration.controlArgumentsType =
+            std::move(contract->second.controlArgumentsType);
+        declaration.runtimeEntry =
+            std::move(contract->second.runtimeEntry);
         declaration.canonicalContract = std::move(contract->second.canonical);
         declaration.metadata = std::move(metadata->second.metadata);
         if (luna::identity::symbolIdFromCanonical(declaration.id) !=
@@ -958,7 +984,7 @@ bool ContainerModelCodec::decodeInterfaces(
         if (!exportDecoder.string(exported.name) ||
             !decodeReference(exportDecoder, exported.declaration) ||
             !exportDecoder.string(exported.type.value) ||
-            !exportDecoder.enumeration(exported.kind, 6) ||
+            !exportDecoder.enumeration(exported.kind, 7) ||
             !exportDecoder.string(exported.abi) ||
             !decodeLocation(exportDecoder, exported.location)) {
             error = exportDecoder.error().empty()

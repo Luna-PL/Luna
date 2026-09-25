@@ -6,12 +6,6 @@
 #include <unordered_set>
 
 bool OwnershipChecker::checkLaunchExpr(LaunchExpr* launch) {
-    if (mValidatingManyContinuation) {
-        error("a multi-shot fragment cannot launch asynchronous work because its continuation may "
-              "be replayed",
-              launch->line, launch->col);
-        return false;
-    }
     for (auto& arg : launch->args) {
         bool isInFlightBorrow = false;
         if (auto* borrow = dynamic_cast<BorrowExpr*>(arg.get())) {
@@ -194,15 +188,6 @@ bool OwnershipChecker::checkRecordLiteral(RecordLiteralExpr* record) {
 
 OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
     setDiagnosticLocation(stmt);
-    if (auto* declaration = dynamic_cast<SlotDeclStmt*>(stmt)) {
-        if (mSlotScopes.back().count(declaration->name)) {
-            error("duplicate slot declaration '" + declaration->name + "'", declaration->line,
-                  declaration->col);
-            return false;
-        }
-        mSlotScopes.back()[declaration->name] = declaration;
-        return true;
-    }
     if (auto* slot = dynamic_cast<SlotInvokeStmt*>(stmt)) return checkSlotInvoke(slot);
     if (auto* apply = dynamic_cast<ApplyStmt*>(stmt)) {
         const std::string& fragmentName =
@@ -212,6 +197,27 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
             error("unknown fragment '" + apply->fragmentName + "' in apply", apply->line,
                   apply->col);
             return false;
+        }
+        const size_t environmentCount = std::min(
+            apply->environmentArgs.size(),
+            fragment->second->environmentParams.size());
+        for (size_t index = 0; index < environmentCount; ++index) {
+            auto& argument = apply->environmentArgs[index];
+            const auto& parameter =
+                fragment->second->environmentParams[index];
+            const auto usage = defaultUsageForType(parameter.inferredType);
+            if (luna::ownership::isMoveOnly(usage) &&
+                !dynamic_cast<MoveExpr*>(argument.get())) {
+                if (auto place = extractPlace(argument.get())) {
+                    error(std::string(luna::ownership::usageName(usage)) +
+                              " environment value '" + renderPlace(*place) +
+                              "' must be moved explicitly into fragment '" +
+                              fragment->second->name + "'",
+                          apply->line, apply->col);
+                    return false;
+                }
+            }
+            if (!checkExpr(argument.get())) return false;
         }
         if (apply->body) {
             mApplyScopes.emplace_back();
@@ -225,17 +231,15 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
     }
     if (dynamic_cast<ResumeStmt*>(stmt)) {
         if (!mCurrentSlotContinuation) {
-            error("`resume()` may only appear in an applied fragment", stmt->line, stmt->col);
+            error("`resume;` may only appear in an applied fragment", stmt->line, stmt->col);
             return false;
         }
-        if (mValidatingManyContinuation) return true;
         const bool savedCheckingContinuation = mCheckingSlotContinuation;
         mCheckingSlotContinuation = true;
         FlowResult continuation = checkBlock(mCurrentSlotContinuation);
         mCheckingSlotContinuation = savedCheckingContinuation;
         return continuation;
     }
-    if (auto* abort = dynamic_cast<AbortStmt*>(stmt)) return checkAbortStmt(abort);
     if (auto* await = dynamic_cast<AwaitStmt*>(stmt)) {
         auto* id = dynamic_cast<IdentifierExpr*>(await->event.get());
         auto* event = id ? lookup(id->name) : nullptr;

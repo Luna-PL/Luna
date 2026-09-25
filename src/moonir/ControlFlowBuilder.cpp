@@ -156,7 +156,7 @@ ControlFlowBuilder::lowerSequence(
             continue;
         }
         if (!open) {
-            // Statements after a terminating path (return/abort/break) are
+            // Statements after a terminating path (return/discard/break) are
             // unreachable dead code. The structured backend silently skips
             // them; the canonical CFG must do the same rather than rejecting
             // the program.
@@ -357,13 +357,13 @@ ControlFlowBuilder::lowerStatement(
                         mActiveExpressionCleanups.begin(),
                         mActiveExpressionCleanups.end());
         auto& terminator = mGraph->blocks[current.block.value].terminator;
-        if (!mFragmentContexts.empty()) {
+        if (!mFragmentFrames.empty()) {
             if (returned->value) {
                 error(returned->location,
                       "0.3 fragment return must not carry a value");
                 return std::nullopt;
             }
-            const BlockId exit = mFragmentContexts.back().exit;
+            const BlockId exit = mFragmentFrames.back().exit;
             terminator.kind = TerminatorKind::Jump;
             terminator.location = returned->location;
             terminator.primary.target = exit;
@@ -371,17 +371,15 @@ ControlFlowBuilder::lowerStatement(
                 cleanups, scope, mGraph->blocks[exit.value].scope);
             return std::nullopt;
         }
+        for (const auto& applyCleanups : mActiveApplyEnvironmentCleanups)
+            cleanups.insert(cleanups.end(), applyCleanups.begin(),
+                            applyCleanups.end());
         terminator.kind = TerminatorKind::Return;
         terminator.location = returned->location;
         terminator.operand = std::move(returned->value);
         terminator.exitCleanups = canonicalCleanupOrder(
             cleanups, scope, std::nullopt);
         return std::nullopt;
-    }
-    if (auto* slot = dynamic_cast<SlotDeclStmt*>(statement.get())) {
-        if (!slot->defaultFragmentRef.empty())
-            mSlotDefaults.back()[slot->name] = slot->defaultFragmentRef;
-        return current;
     }
     if (dynamic_cast<SlotInvokeStmt*>(statement.get())) {
         std::unique_ptr<SlotInvokeStmt> owned(
@@ -394,27 +392,6 @@ ControlFlowBuilder::lowerStatement(
             static_cast<ApplyStmt*>(statement.release()));
         return lowerApply(
             std::move(owned), std::move(current), region, scope);
-    }
-    if (auto* abort = dynamic_cast<AbortStmt*>(statement.get())) {
-        if (mFragmentContexts.empty()) {
-            error(abort->location,
-                  "abort() has no active canonical fragment boundary");
-            return std::nullopt;
-        }
-        auto cleanups = lowerCleanupObligations(abort->cleanups, scope);
-        cleanups.insert(cleanups.end(), current.cleanups.begin(),
-                        current.cleanups.end());
-        cleanups.insert(cleanups.end(),
-                        mActiveExpressionCleanups.begin(),
-                        mActiveExpressionCleanups.end());
-        const BlockId exit = mFragmentContexts.back().exit;
-        auto& terminator = mGraph->blocks[current.block.value].terminator;
-        terminator.kind = TerminatorKind::Abort;
-        terminator.location = abort->location;
-        terminator.primary.target = exit;
-        terminator.primary.cleanups = canonicalCleanupOrder(
-            cleanups, scope, mGraph->blocks[exit.value].scope);
-        return std::nullopt;
     }
     if (dynamic_cast<ResumeStmt*>(statement.get())) {
         std::unique_ptr<ResumeStmt> owned(
@@ -920,13 +897,11 @@ ControlFlowBuilder::lookupMaterializedIterator(
 void ControlFlowBuilder::pushBindings() {
     mBindings.emplace_back();
     mMaterializedIterators.emplace_back();
-    mSlotDefaults.emplace_back();
 }
 
 void ControlFlowBuilder::popBindings() {
     if (!mBindings.empty()) mBindings.pop_back();
     if (!mMaterializedIterators.empty()) mMaterializedIterators.pop_back();
-    if (!mSlotDefaults.empty()) mSlotDefaults.pop_back();
 }
 
 void ControlFlowBuilder::connectJump(

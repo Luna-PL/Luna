@@ -176,15 +176,13 @@ public:
 
     virtual void declareSlot(SlotDecl* decl) = 0;
     virtual void finalizeSlot(SlotDecl* decl) = 0;
-    virtual void analyzeSlotDecl(SlotDeclStmt* stmt) = 0;
     virtual void analyzeSlotInvoke(
         SlotInvokeStmt* stmt, TypePtr expectedReturn) = 0;
     virtual void analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn) = 0;
     virtual void analyzeFragmentForSlot(
         FragmentDecl* fragment, const std::string& slotName,
         const TypeVec& parameterTypes,
-        const std::vector<luna::ownership::Contract>& parameterContracts,
-        const std::unordered_map<std::string, SymbolInfo>& captures) = 0;
+        const std::vector<luna::ownership::Contract>& parameterContracts) = 0;
     virtual void enterSlotScope() = 0;
     virtual void exitSlotScope() = 0;
     virtual FragmentDecl* selectFragment(
@@ -270,15 +268,13 @@ private:
     void analyzeConstraint(ConstraintDecl* decl);
     void validateMetadata(Decl* decl);
     void rebuildSymbolCatalog();
-    void analyzeSlotDecl(SlotDeclStmt* stmt);
     void declareSlot(SlotDecl* decl);
     void finalizeSlot(SlotDecl* decl);
     void analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedReturn);
     void analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn);
     void analyzeFragmentForSlot(FragmentDecl* fragment, const std::string& slotName,
                                 const TypeVec& parameterTypes,
-                                const std::vector<luna::ownership::Contract>& parameterContracts,
-                                const std::unordered_map<std::string, SymbolInfo>& captures);
+                                const std::vector<luna::ownership::Contract>& parameterContracts);
 
     TypePtr analyzeStmt(Stmt* stmt, TypePtr expectedReturnType);
     TypePtr analyzeBlock(BlockStmt* block, TypePtr expectedReturnType);
@@ -448,10 +444,6 @@ private:
         TypeVec paramTypes;
         std::vector<luna::ownership::Contract> paramContracts;
         std::vector<std::string> paramNames;
-        std::string defaultFragment;
-        std::string resolvedDefaultFragmentName;
-        FragmentKind acceptedKind = FragmentKind::Interceptor;
-        FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
         bool isImplicitCapture = false;
         TypePtr structuralType;
     };

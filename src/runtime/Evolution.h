@@ -4,6 +4,7 @@
 // This control-plane API is source-level C++; it is not part of Runtime ABI v1's
 // C binary-compatibility contract.
 #include "MoonRuntime.h"
+#include "RuntimeFragment.h"
 
 namespace luna::runtime {
 

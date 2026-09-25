@@ -22,6 +22,19 @@ const moon::DeclarationRecord* CodeGenerator::resolveDeclaration(
     return mProgram ? mProgram->findDeclaration(reference) : nullptr;
 }
 
+const moon::FunctionDecl* CodeGenerator::resolveFunctionDeclaration(
+    const moon::DeclarationRef& reference) const {
+    const auto* declaration = resolveDeclaration(reference);
+    if (!declaration || !mProgram) return nullptr;
+    const auto found = mProgram->functionsBySymbol.find(
+        declaration->linkageName);
+    if (found == mProgram->functionsBySymbol.end() || !found->second ||
+        found->second->symbolId != reference.symbol ||
+        found->second->contractId != reference.contract)
+        return nullptr;
+    return found->second;
+}
+
 llvm::Function* CodeGenerator::resolveFunction(
     const moon::DeclarationRef& reference) const {
     const auto* declaration = resolveDeclaration(reference);

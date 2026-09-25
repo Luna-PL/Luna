@@ -17,8 +17,6 @@
 
 using TypeVec = std::vector<TypePtr>;
 
-enum class ContinuationKind { Interceptor, Context };
-
 enum class TypeKind {
     I8, I16, I32, I64, U8, U16, U32, U64, USize, ISize,
     F32, F64, Bool, String, CStr, RawPointer, Unit, Never,
@@ -115,10 +113,6 @@ struct Type {
     // Compiler-derived, read-only semantic facts. This replaces a separate
     // user-visible effect summary without turning sysmeta into user metadata.
     luna::sysmeta::Facts sysmeta;
-    // Slots and fragments are structural continuations. `isMultiShot` is part
-    // of their type: a Many fragment cannot bind to a Once-only slot.
-    bool isMultiShot = false;
-    ContinuationKind continuationKind = ContinuationKind::Context;
     IteratorMode iteratorMode = IteratorMode::Copy;
     std::vector<TypeField> fields;       // for Struct/Record
     std::vector<TypeVariant> variants;   // for Enum
@@ -337,8 +331,7 @@ struct Type {
         return t;
     }
     static TypePtr makeSlot(
-        TypeVec params, TypePtr ret = nullptr, bool multiShot = false,
-        ContinuationKind behavior = ContinuationKind::Context,
+        TypeVec params, TypePtr ret = nullptr,
         std::vector<luna::ownership::Contract> contracts = {},
         luna::ownership::Contract resultContract = {}) {
         auto t = std::make_shared<Type>();
@@ -349,30 +342,19 @@ struct Type {
         if (t->paramContracts.empty())
             t->paramContracts.resize(t->paramTypes.size());
         t->returnContract = resultContract;
-        t->isMultiShot = multiShot;
-        t->continuationKind = behavior;
         t->sysmeta.resource.parameters = t->paramContracts;
         t->sysmeta.resource.result = t->returnContract;
-        t->sysmeta.control.form =
-            behavior == ContinuationKind::Interceptor
-                ? luna::sysmeta::ControlForm::Interceptor
-                : luna::sysmeta::ControlForm::Context;
-        t->sysmeta.control.cardinality = multiShot
-            ? luna::sysmeta::Cardinality::Many
-            : luna::sysmeta::Cardinality::Once;
+        t->sysmeta.control.form = luna::sysmeta::ControlForm::Fragment;
+        t->sysmeta.control.cardinality = luna::sysmeta::Cardinality::Once;
         t->sysmeta.control.storage =
             luna::sysmeta::ContinuationStorage::ScopedStack;
-        t->sysmeta.control.forwarding =
-            behavior == ContinuationKind::Interceptor
-                ? luna::sysmeta::Forwarding::Automatic
-                : luna::sysmeta::Forwarding::Explicit;
-        t->sysmeta.control.abortPermitted = true;
+        t->sysmeta.control.forwarding = luna::sysmeta::Forwarding::Explicit;
+        t->sysmeta.control.abortPermitted = false;
         t->sysmeta.capability.hostOnly = true;
         return t;
     }
     static TypePtr makeFragment(
-        TypeVec params, TypePtr ret = nullptr, bool multiShot = false,
-        ContinuationKind behavior = ContinuationKind::Context,
+        TypeVec params, TypePtr ret = nullptr,
         std::vector<luna::ownership::Contract> contracts = {},
         luna::ownership::Contract resultContract = {}) {
         auto t = std::make_shared<Type>();
@@ -383,24 +365,14 @@ struct Type {
         if (t->paramContracts.empty())
             t->paramContracts.resize(t->paramTypes.size());
         t->returnContract = resultContract;
-        t->isMultiShot = multiShot;
-        t->continuationKind = behavior;
         t->sysmeta.resource.parameters = t->paramContracts;
         t->sysmeta.resource.result = t->returnContract;
-        t->sysmeta.control.form =
-            behavior == ContinuationKind::Interceptor
-                ? luna::sysmeta::ControlForm::Interceptor
-                : luna::sysmeta::ControlForm::Context;
-        t->sysmeta.control.cardinality = multiShot
-            ? luna::sysmeta::Cardinality::Many
-            : luna::sysmeta::Cardinality::Once;
+        t->sysmeta.control.form = luna::sysmeta::ControlForm::Fragment;
+        t->sysmeta.control.cardinality = luna::sysmeta::Cardinality::Once;
         t->sysmeta.control.storage =
             luna::sysmeta::ContinuationStorage::ScopedStack;
-        t->sysmeta.control.forwarding =
-            behavior == ContinuationKind::Interceptor
-                ? luna::sysmeta::Forwarding::Automatic
-                : luna::sysmeta::Forwarding::Explicit;
-        t->sysmeta.control.abortPermitted = true;
+        t->sysmeta.control.forwarding = luna::sysmeta::Forwarding::Explicit;
+        t->sysmeta.control.abortPermitted = false;
         t->sysmeta.capability.hostOnly = true;
         return t;
     }
@@ -529,14 +501,10 @@ struct Type {
                                   : "&" + (inner ? inner->toString() : "?");
             case TypeKind::Function: return "fn(...)";
             case TypeKind::Closure: return "closure(...)";
-            case TypeKind::Slot: return
-                std::string(continuationKind == ContinuationKind::Interceptor
-                                ? "slot interceptor(" : "slot context(") +
-                std::to_string(paramTypes.size()) + (isMultiShot ? "; many)" : "; once)");
-            case TypeKind::Fragment: return
-                std::string(continuationKind == ContinuationKind::Interceptor
-                                ? "interceptor(" : "context(") +
-                std::to_string(paramTypes.size()) + (isMultiShot ? "; many)" : "; once)");
+            case TypeKind::Slot:
+                return "slot(" + std::to_string(paramTypes.size()) + ")";
+            case TypeKind::Fragment:
+                return "fragment(" + std::to_string(paramTypes.size()) + ")";
             case TypeKind::Iterator:
                 return "iterator<" +
                     (inner ? inner->toString() : std::string("?")) + ">";

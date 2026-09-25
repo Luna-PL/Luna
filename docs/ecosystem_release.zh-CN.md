@@ -1,9 +1,8 @@
 # 生态发布快照
 
 `ecosystem.lock.json` 是连接 Luna、LunaToolchain 与 Lunax 三个独立仓库的权威快照。
-当前入库的快照故意冻结在 0.2.1 baseline；它是该发布线的证据，不表示当前
-0.3 编译器生态已就绪。Luna 组件由“包含该 lock 文件的 commit”标识；子组件使用
-精确 Git commit。
+当前入库的快照是已提升的 0.3.0 生态发布候选快照。Luna 组件由“包含该 lock 文件的
+commit”标识；子组件使用精确 Git commit。
 语言版本、诊断协议和分析协议与各组件 package 版本分别记录。
 对于已经发布的子组件，`commit` 跟踪当前验证源码，`published_release.commit` 则记录公开
 制品所对应的不可变 commit。快照同时保留 release URL、发布时间、checksum manifest 摘要

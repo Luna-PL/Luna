@@ -113,6 +113,10 @@ script-defined special inputs.
   `RuntimeDescriptorABI.h` is the installed in-memory descriptor contract;
   `RuntimeDescriptor.h/.cpp` validate one lease-owned registry and provide
   exact typed lookup without defining source-language query syntax.
+  `RuntimeFragmentABI.h` freezes the factory/environment/execution-thunk ABI;
+  `RuntimeFragment.h/.cpp` construct move-only, generation-pinned references
+  after one-time nominal and environment validation, and expose immutable
+  exact-Slot candidate snapshots without embedding host selection policy.
 
 SemanticAnalyzer is the stable tooling/compiler facade and exposes the read-only Symbol Catalog.
 SemanticContext is the single internal
@@ -239,6 +243,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `docs/iterators.zh-CN.md`
 - `docs/luna_0.3_design.md`
 - `docs/luna_0.3_design.zh-CN.md`
+- `docs/slot_fragment_runtime_plan.md`
+- `docs/slot_fragment_runtime_plan.zh-CN.md`
 - `docs/core_freeze.md`
 - `docs/core_freeze.zh-CN.md`
 - `docs/luna_0.3_evolution_audit.md`
@@ -427,6 +433,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/moonir/ContainerModelSections.cpp`
 - `src/moonir/ContainerModelInternal.h`
 - `src/moonir/ContainerModel.h`
+- `src/moonir/FragmentContextEffects.cpp`
+- `src/moonir/FragmentContextEffects.h`
 - `src/moonir/Lowering.cpp`
 - `src/moonir/LoweringDeclarations.cpp`
 - `src/moonir/LoweringExpressions.cpp`
@@ -470,6 +478,9 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/runtime/RuntimeDescriptor.cpp`
 - `src/runtime/RuntimeDescriptor.h`
 - `src/runtime/RuntimeDescriptorABI.h`
+- `src/runtime/RuntimeFragment.cpp`
+- `src/runtime/RuntimeFragment.h`
+- `src/runtime/RuntimeFragmentABI.h`
 - `src/runtime/ApplicationHostServices.cpp`
 - `src/runtime/ApplicationHostServices.h`
 - `src/runtime/Runtime.cpp`
@@ -613,11 +624,16 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/dynamic_select_0_2.luna`
 - `tests/fixtures/dynamic_select_removed_invalid.luna`
 - `tests/fixtures/runtime_retention_descriptor.luna`
+- `tests/fixtures/runtime_slot_cost.luna`
 - `tests/fixtures/enum_match.luna`
 - `tests/fixtures/enum_match_arity_invalid.luna`
 - `tests/fixtures/enum_match_duplicate_invalid.luna`
 - `tests/fixtures/enum_match_non_exhaustive_invalid.luna`
 - `tests/fixtures/enum_match_resource.luna`
+- `tests/fixtures/exported_fragment_move_only_environment_invalid.luna`
+- `tests/fixtures/exported_fragment_private_slot_invalid.luna`
+- `tests/fixtures/exported_fragment_runtime.luna`
+- `tests/fixtures/exported_slot_move_only_invalid.luna`
 - `tests/fixtures/external_fragment_dispatch.luna`
 - `tests/fixtures/ffi_generic_invalid.luna`
 - `tests/fixtures/ffi_owning_return.luna`
@@ -628,6 +644,15 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/ffi_unsupported_type_invalid.luna`
 - `tests/fixtures/float_literal_overflow_invalid.luna`
 - `tests/fixtures/fragment_contracts.luna`
+- `tests/fixtures/fragment_environment_arity_invalid.luna`
+- `tests/fixtures/fragment_explicit_environment.luna`
+- `tests/fixtures/fragment_implicit_capture_invalid.luna`
+- `tests/fixtures/fragment_owned_environment.luna`
+- `tests/fixtures/fragment_owned_environment_move.luna`
+- `tests/fixtures/fragment_owned_environment_move_invalid.luna`
+- `tests/fixtures/fragment_linear_environment_invalid.luna`
+- `tests/fixtures/fragment_environment_partial_init_cleanup.luna`
+- `tests/fixtures/fragment_environment_usage_modifier_invalid.luna`
 - `tests/fixtures/fragment_return_value_invalid.luna`
 - `tests/fixtures/generic_argument_count_invalid.luna`
 - `tests/fixtures/generic_body_cloning.luna`
@@ -788,12 +813,14 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/selector_metadata_ambiguous_invalid.luna`
 - `tests/fixtures/selector_outside_view_invalid.luna`
 - `tests/fixtures/selector_user_logic.luna`
+- `tests/fixtures/static_slot_cost.luna`
 - `tests/fixtures/slice_borrow.luna`
 - `tests/fixtures/slice_bounds_invalid.luna`
 - `tests/fixtures/slice_empty_tail.luna`
 - `tests/fixtures/slice_write_source_invalid.luna`
 - `tests/fixtures/slot_cardinality_contract_mismatch_invalid.luna`
 - `tests/fixtures/slot_fragment_contract_mismatch_invalid.luna`
+- `tests/fixtures/slot_fragment_removed_surface_invalid.luna`
 - `tests/fixtures/slot_missing_contract_invalid.luna`
 - `tests/fixtures/static_declaration_reflection.luna`
 - `tests/fixtures/string_literal_local_cleanup.luna`
@@ -881,6 +908,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/moon_container_oracle.py`
 - `tests/moonir_canonical_closure_test.cpp`
 - `tests/moonir_canonical_control_flow_test.cpp`
+- `tests/moonir_canonical_cross_package_runtime_test.cpp`
 - `tests/moonir_canonical_iterator_cleanup_test.cpp`
 - `tests/moonir_canonical_iterator_ordering_test.cpp`
 - `tests/moonir_canonical_iterator_recipes_test.cpp`
@@ -914,6 +942,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/runtime_abi_c_compile.c`
 - `tests/runtime_abi_test.cpp`
 - `tests/runtime_descriptor_test.cpp`
+- `tests/runtime_fragment_test.cpp`
 - `tests/runtime_allocation_abi_test.cpp`
 - `tests/runtime_application_host_test.cpp`
 - `tests/runtime_default_allocation_test.cpp`

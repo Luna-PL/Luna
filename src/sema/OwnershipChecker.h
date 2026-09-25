@@ -71,7 +71,6 @@ private:
         std::vector<std::unordered_map<std::string, VarInfo>> scopes;
         std::vector<std::vector<Loan>> loans;
         std::vector<std::unordered_map<std::string, FragmentDecl*>> applyScopes;
-        std::vector<std::unordered_map<std::string, SlotDeclStmt*>> slotScopes;
     };
 
     bool checkFunction(FunctionDecl* decl);
@@ -84,15 +83,13 @@ private:
     FlowResult checkForStmt(ForStmt* stmt);
     FlowResult checkReturnStmt(ReturnStmt* stmt);
     FlowResult checkMatchStmt(MatchStmt* stmt);
-    FlowResult checkAbortStmt(AbortStmt* stmt);
     // Large checkExpr branches split out for readability.
     bool checkCallExpr(CallExpr* call);
     bool checkVariantConstruct(VariantConstructExpr* expr);
     bool checkRecordLiteral(RecordLiteralExpr* expr);
     bool checkLaunchExpr(LaunchExpr* launch);
     FlowResult checkSlotInvoke(SlotInvokeStmt* slot);
-    FlowResult checkFragment(FragmentDecl* fragment, SlotInvokeStmt* slot, bool multiShot);
-    bool continuationConsumesCapturedState(const std::vector<std::unordered_map<std::string, VarInfo>>& before) const;
+    FlowResult checkFragment(FragmentDecl* fragment, SlotInvokeStmt* slot);
     CheckerState captureState() const;
     void restoreState(const CheckerState& state);
     bool mergeFallthroughStates(const CheckerState& before,
@@ -106,8 +103,6 @@ private:
     bool sameLoanState(const std::vector<Loan>& left, const std::vector<Loan>& right) const;
     bool sameApplyState(const std::vector<std::unordered_map<std::string, FragmentDecl*>>& left,
                         const std::vector<std::unordered_map<std::string, FragmentDecl*>>& right) const;
-    bool sameSlotState(const std::vector<std::unordered_map<std::string, SlotDeclStmt*>>& left,
-                       const std::vector<std::unordered_map<std::string, SlotDeclStmt*>>& right) const;
     std::string describeControlFlowDifference(const std::string& name,
                                               const VarInfo& left,
                                               const VarInfo& right,
@@ -163,14 +158,11 @@ private:
     int mDiagnosticCol = 0;
     std::unordered_map<std::string, FragmentDecl*> mFragments;
     std::vector<std::unordered_map<std::string, FragmentDecl*>> mApplyScopes;
-    std::vector<std::unordered_map<std::string, SlotDeclStmt*>> mSlotScopes;
     BlockStmt* mCurrentSlotContinuation = nullptr;
-    bool mValidatingManyContinuation = false;
     bool mCheckingSlotContinuation = false;
-    std::vector<CheckerState>* mCurrentFragmentAbortExits = nullptr;
+    std::vector<CheckerState>* mCurrentFragmentExits = nullptr;
     size_t mCurrentFragmentScopeBase = 0;
     size_t mCurrentFragmentApplyBase = 0;
-    size_t mCurrentFragmentSlotBase = 0;
     // While checking a lambda, Copy locals from enclosing scopes are kept
     // here as capture candidates: they are registered as value copies in the
     // lambda scope so the body reads the captured copy. Affine/Linear entries

@@ -1,0 +1,9 @@
+slot private_hook(value: i32);
+
+export fragment visible_candidate(value: i32) for private_hook {
+    resume;
+}
+
+fn main() -> i32 {
+    return 0;
+}

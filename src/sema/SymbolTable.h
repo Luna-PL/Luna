@@ -50,6 +50,7 @@ struct SymbolInfo {
 
 class SymbolTable {
 public:
+    using Scope = std::unordered_map<std::string, SymbolInfo>;
     SymbolTable();
 
     void enterScope();
@@ -72,9 +73,14 @@ public:
     TypePtr lookupType(const std::string& name) const;
     bool isPredefinedType(const std::string& name) const;
     std::unordered_map<std::string, SymbolInfo> visibleSymbols() const;
+    // Enter a declaration-body scope that can see its own nested scopes and
+    // the module root, but not the caller's intervening lexical scopes.
+    void enterIsolatedScope();
+    void exitIsolatedScope();
 
 private:
-    std::vector<std::unordered_map<std::string, SymbolInfo>> mScopes;
+    std::vector<Scope> mScopes;
+    std::vector<size_t> mVisibilityBarriers;
     std::unordered_map<std::string, TypePtr> mTypeMap; // global type/trait registry
     std::unordered_map<std::string, SymbolInfo> mLinkageSymbols;
 };

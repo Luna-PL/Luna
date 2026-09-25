@@ -229,9 +229,9 @@ void DeclarationCollector::validateMetadata(Decl* decl) {
                           schema->second->fields[index].name + "'");
             attachment.evaluatedArguments.push_back(*value);
         }
-        if (attachment.retention == RetentionKind::Runtime &&
-            decl->retention == RetentionKind::CompileTime)
-            decl->retention = RetentionKind::Runtime;
+        // A runtime-visible attachment retains the owner's stable identity,
+        // not the owner's executable body. Declaration retention remains an
+        // independent capability decision.
     }
 }
 
@@ -257,11 +257,12 @@ void DeclarationCollector::declareFragment(FragmentDecl* decl) {
         return;
     }
     const auto& slot = target->second;
-    if (decl->kind != slot.acceptedKind ||
-        decl->cardinality != slot.acceptedCardinality) {
-        mContext.error("fragment '" + decl->name +
-                       "' control form does not match nominal slot '" +
-                       decl->targetSlotName + "'", decl->line, decl->col);
+    if (decl->isExported &&
+        (!slot.declaration || !slot.declaration->isExported)) {
+        mContext.error("exported fragment '" + decl->name +
+                       "' must target an exported slot; '" +
+                       decl->targetSlotName + "' is private",
+                       decl->line, decl->col);
     }
     if (decl->params.size() != slot.paramTypes.size()) {
         mContext.error("fragment '" + decl->name + "' must bind all " +
@@ -269,14 +270,60 @@ void DeclarationCollector::declareFragment(FragmentDecl* decl) {
                        " parameters of nominal slot '" +
                        decl->targetSlotName + "'", decl->line, decl->col);
     }
-    SymbolInfo info;
-    info.kind = SymbolKind::Fragment;
-    TypeVec parameterTypes;
+      SymbolInfo info;
+      info.kind = SymbolKind::Fragment;
+      std::set<std::string> parameterNames;
+      std::vector<TypeField> environmentFields;
+      environmentFields.reserve(decl->environmentParams.size());
+      for (auto& parameter : decl->environmentParams) {
+          if (!parameterNames.insert(parameter.name).second)
+              mContext.error("duplicate fragment parameter '" + parameter.name +
+                  "' in fragment '" + decl->name + "'", decl->line, decl->col);
+          if (!parameter.type) {
+              mContext.error("environment parameter '" + parameter.name +
+                  "' of fragment '" + decl->name +
+                  "' requires an explicit type", decl->line, decl->col);
+              parameter.inferredType = TyUnknown;
+          } else {
+              parameter.inferredType = mContext.declaredType(parameter.type.get(), {});
+          }
+          const auto usage = defaultUsageForType(parameter.inferredType);
+          if (decl->isExported && usage != luna::ownership::Usage::Copy)
+              mContext.error("exported fragment '" + decl->name +
+                  "' currently requires a Copy environment; field '" +
+                  parameter.name + "' is move-only",
+                  decl->line, decl->col);
+          if (parameter.isLinear || usage == luna::ownership::Usage::Linear) {
+              mContext.error("environment parameter '" + parameter.name +
+                  "' of fragment '" + decl->name +
+                  "' cannot be linear: fragment activations only borrow their "
+                  "apply-owned environment, so no activation can consume it exactly once",
+                  decl->line, decl->col);
+          } else if (parameter.hasExplicitUsage ||
+                     dynamic_cast<AffineTypeAST*>(parameter.type.get()) != nullptr) {
+              mContext.error("environment parameter '" + parameter.name +
+                  "' of fragment '" + decl->name +
+                  "' must not use an ownership modifier: apply storage ownership "
+                  "is inferred from the field type and activations always borrow it",
+                  decl->line, decl->col);
+          }
+          // Fragment execution reads the apply-owned environment. It never
+          // owns or consumes an individual environment field.
+          parameter.usage = luna::ownership::Usage::Copy;
+          parameter.isLinear = false;
+          parameter.relation = luna::ownership::Relation::SharedBorrow;
+          environmentFields.push_back({parameter.name, parameter.inferredType});
+      }
+      decl->environmentType = Type::makeRecord(std::move(environmentFields));
+      TypeVec parameterTypes;
     std::vector<luna::ownership::Contract> parameterContracts;
     const size_t comparable = std::min(
         decl->params.size(), slot.paramTypes.size());
-    for (size_t index = 0; index < decl->params.size(); ++index) {
-        auto& parameter = decl->params[index];
+      for (size_t index = 0; index < decl->params.size(); ++index) {
+          auto& parameter = decl->params[index];
+          if (!parameterNames.insert(parameter.name).second)
+              mContext.error("duplicate fragment parameter '" + parameter.name +
+                  "' in fragment '" + decl->name + "'", decl->line, decl->col);
         const TypePtr slotType = index < comparable
             ? slot.paramTypes[index] : TyUnknown;
         parameter.inferredType = parameter.type
@@ -309,11 +356,7 @@ void DeclarationCollector::declareFragment(FragmentDecl* decl) {
         parameterContracts.push_back(slotContract);
     }
     info.type = Type::makeFragment(
-        std::move(parameterTypes), TyUnit,
-        false,
-        decl->kind == FragmentKind::Interceptor
-            ? ContinuationKind::Interceptor : ContinuationKind::Context,
-        std::move(parameterContracts));
+        std::move(parameterTypes), TyUnit, std::move(parameterContracts));
     info.type->identityMode = luna::types::IdentityMode::Nominal;
     info.type->nominalId = slot.structuralType
         ? slot.structuralType->nominalId : std::string{};

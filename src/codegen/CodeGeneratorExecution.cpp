@@ -1,6 +1,7 @@
 #include "CodeGenerator.h"
 
 #include "../runtime/Runtime.h"
+#include "../runtime/RuntimeFragmentABI.h"
 
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/LegacyPassManager.h>
@@ -98,6 +99,12 @@ materializeLunaJit(std::unique_ptr<llvm::Module>& module,
     bindRuntime("rt_gpu_launch_ptx", &rt_gpu_launch_ptx);
     bindRuntime("rt_gpu_launch_hsaco", &rt_gpu_launch_hsaco);
     bindRuntime("rt_gpu_await_event", &rt_gpu_await_event);
+    bindRuntime("luna_runtime_fragment_activation_arguments_v1",
+                &luna_runtime_fragment_activation_arguments_v1);
+    bindRuntime("luna_runtime_fragment_activation_resume_v1",
+                &luna_runtime_fragment_activation_resume_v1);
+    bindRuntime("luna_runtime_fragment_dispatch_v1",
+                &luna_runtime_fragment_dispatch_v1);
 #ifdef _WIN32
     runtimeSymbols[(*jit)->mangleAndIntern("__main")] =
         ExecutorSymbolDef::fromPtr(&lunaJitMingwMain, exported);

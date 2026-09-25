@@ -9,43 +9,6 @@ OwnershipChecker::OwnershipChecker() {
     enterScope();
 }
 
-OwnershipChecker::FlowResult OwnershipChecker::checkAbortStmt(AbortStmt* abort) {
-        if (!mCurrentFragmentAbortExits) {
-            error("`abort()` may only appear in an applied interceptor or context",
-                  abort->line, abort->col);
-            return false;
-        }
-        bool ok = true;
-        for (size_t index = mCurrentFragmentScopeBase; index < mScopes.size(); ++index) {
-            for (const auto& [name, info] : mScopes[index]) {
-                if (luna::ownership::mustConsume(info.usage) &&
-                    info.state == OwnState::Valid) {
-                    error("Linear variable '" + name +
-                          "' must be consumed before aborting the fragment",
-                          abort->line, abort->col);
-                    ok = false;
-                }
-            }
-        }
-        if (ok) {
-            abort->autoFrees = collectFreesAtFragmentExit();
-            abort->cleanups.clear();
-            for (const auto& place : abort->autoFrees) {
-                auto* variable = lookupCleanupVariable(place);
-                abort->cleanups.push_back({
-                    place, cleanupActionForType(variable ? variable->type : nullptr),
-                    variable ? variable->type : nullptr});
-            }
-        }
-        CheckerState exit = captureState();
-        exit.scopes.resize(mCurrentFragmentScopeBase);
-        exit.loans.resize(mCurrentFragmentScopeBase);
-        exit.applyScopes.resize(mCurrentFragmentApplyBase);
-        exit.slotScopes.resize(mCurrentFragmentSlotBase);
-        mCurrentFragmentAbortExits->push_back(std::move(exit));
-        return {ok, false};
-}
-
 OwnershipChecker::FlowResult OwnershipChecker::checkLetStmt(LetStmt* let) {
         const size_t loanCount = mLoansInScope.back().size();
         VarInfo* movedSource = nullptr;
@@ -292,7 +255,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkReturnStmt(ReturnStmt* ret) 
             releaseLoan(mLoansInScope.back().back());
             mLoansInScope.back().pop_back();
         }
-        if (mCurrentFragmentAbortExits && !mCheckingSlotContinuation) {
+        if (mCurrentFragmentExits && !mCheckingSlotContinuation) {
             // Returning from a fragment ends only that fragment. Its local
             // resources must be closed, while enclosing function resources
             // remain available to the code after the slot.
@@ -320,8 +283,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkReturnStmt(ReturnStmt* ret) 
                 exit.scopes.resize(mCurrentFragmentScopeBase);
                 exit.loans.resize(mCurrentFragmentScopeBase);
                 exit.applyScopes.resize(mCurrentFragmentApplyBase);
-                exit.slotScopes.resize(mCurrentFragmentSlotBase);
-                mCurrentFragmentAbortExits->push_back(std::move(exit));
+                mCurrentFragmentExits->push_back(std::move(exit));
             }
             return {ok, false};
         }

@@ -534,6 +534,7 @@ void TypeResolver::materializeInferredTypes(Program* program) {
             return;
         }
         if (auto* a = dynamic_cast<ApplyStmt*>(stmt)) {
+            for (auto& argument : a->environmentArgs) visitExpr(argument.get());
             visitBlock(a->body.get());
             return;
         }
@@ -566,6 +567,12 @@ void TypeResolver::materializeInferredTypes(Program* program) {
             }
         } else if (auto* f = dynamic_cast<FragmentDecl*>(decl.get())) {
             f->structuralType = resolved(f->structuralType);
+            f->environmentType = resolved(f->environmentType);
+            for (auto& p : f->environmentParams) {
+                p.inferredType = resolved(p.inferredType);
+                if (needsConcreteAnnotation(p.type))
+                    p.type = typeToAST(p.inferredType);
+            }
             for (auto& p : f->params) {
                 p.inferredType = resolved(p.inferredType);
                 if (needsConcreteAnnotation(p.type))

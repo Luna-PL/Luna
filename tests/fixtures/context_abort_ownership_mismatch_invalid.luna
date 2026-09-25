@@ -1,10 +1,11 @@
-slot context guarded(flag: bool);
+slot guarded(flag: bool);
 
-context guard(flag: bool) for guarded {
+fragment guard(flag: bool) for guarded {
     if flag {
-        abort();
+        // Falling through discards the continuation on this path.
+        print(1);
     } else {
-        resume();
+        resume;
     }
 }
 

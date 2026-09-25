@@ -27,6 +27,14 @@ enum LunaRuntimeDeclarationKindV1 {
 
 enum LunaRuntimeDescriptorFlagV1 {
     LUNA_RUNTIME_DESCRIPTOR_CALLABLE_V1 = 1u << 0,
+    // entry points to LunaRuntimeFragmentDescriptorV1, not directly to code.
+    LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_EXECUTABLE_V1 = 1u << 1,
+    // The exported Slot contract or Fragment candidate is visible to the
+    // host runtime. This is independent from retention and executability.
+    LUNA_RUNTIME_DESCRIPTOR_PUBLIC_CONTROL_V1 = 1u << 2,
+    // A callable Function entry has one leading opaque
+    // RuntimeFragmentExecutionContext pointer before its declared parameters.
+    LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_CONTEXT_V1 = 1u << 3,
 };
 
 enum LunaRuntimeRetentionV1 {

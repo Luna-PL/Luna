@@ -55,7 +55,6 @@ public:
         CallExpr* call, const std::string& name);
     TypePtr analyzeReflectionCall(
         CallExpr* call, const std::string& name);
-    void analyzeSlotDecl(SlotDeclStmt* stmt);
     void analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedReturn);
     bool constrain(const TypePtr& actual, const TypePtr& expected,
                    const std::string& context);

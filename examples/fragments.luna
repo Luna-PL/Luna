@@ -1,37 +1,39 @@
-slot context local();
-slot context pipeline(value: i32) default log;
-slot context later();
+slot local();
+slot pipeline(value: i32);
+slot later();
 
-// Every 0.3 context is single-shot and nominally targets one slot.
-context twice for local {
+// Every fragment is single-shot and nominally targets one slot.
+fragment twice[value: i32] for local {
     print(value);
-    resume();
+    resume;
 }
 
 // An explicit reusable slot consumes the fragment's declared input interface.
-context log(value) for pipeline {
+fragment log(value) for pipeline {
     print(value);
-    resume();
+    resume;
 }
 
-context observe for later {
+fragment observe[value: i32] for later {
     print(value);
-    resume();
+    resume;
 }
 
 fn main() -> i32 {
     let value = 10;
-    apply twice {
+    apply twice[value] {
         local() {
             print(value * 2);
         }
     }
 
-    pipeline(7) {
-        print(8);
+    apply log {
+        pipeline(7) {
+            print(8);
+        }
     }
 
-    apply observe {
+    apply observe[value] {
         later() {
             print(value + 2);
         }

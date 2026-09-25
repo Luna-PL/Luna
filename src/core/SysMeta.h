@@ -42,15 +42,15 @@ inline constexpr const char* FromIteratorFinishMethodName =
 
 enum class ControlForm : uint8_t {
     Plain,
-    Interceptor,
-    Context,
+    ReservedLegacyAutomatic,
+    Fragment,
     Coroutine,
 };
 
 enum class Cardinality : uint8_t {
     None,
     Once,
-    Many,
+    ReservedLegacyMany,
 };
 
 enum class ContinuationStorage : uint8_t {
@@ -61,7 +61,7 @@ enum class ContinuationStorage : uint8_t {
 
 enum class Forwarding : uint8_t {
     None,
-    Automatic,
+    ReservedLegacyAutomatic,
     Explicit,
 };
 
@@ -236,8 +236,8 @@ inline std::string canonicalDeclarationContract(
 inline constexpr const char* controlFormName(ControlForm form) {
     switch (form) {
         case ControlForm::Plain: return "plain";
-        case ControlForm::Interceptor: return "interceptor";
-        case ControlForm::Context: return "context";
+        case ControlForm::ReservedLegacyAutomatic: return "reserved_legacy";
+        case ControlForm::Fragment: return "fragment";
         case ControlForm::Coroutine: return "coroutine";
     }
     return "invalid";
@@ -247,7 +247,7 @@ inline constexpr const char* cardinalityName(Cardinality cardinality) {
     switch (cardinality) {
         case Cardinality::None: return "none";
         case Cardinality::Once: return "once";
-        case Cardinality::Many: return "many";
+        case Cardinality::ReservedLegacyMany: return "reserved_legacy";
     }
     return "invalid";
 }
@@ -288,7 +288,7 @@ inline constexpr const char* resourceLifetimeName(
 inline constexpr const char* forwardingName(Forwarding forwarding) {
     switch (forwarding) {
         case Forwarding::None: return "none";
-        case Forwarding::Automatic: return "automatic";
+        case Forwarding::ReservedLegacyAutomatic: return "reserved_legacy";
         case Forwarding::Explicit: return "explicit";
     }
     return "invalid";

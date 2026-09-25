@@ -520,9 +520,16 @@ void Verifier::verifyOwnershipDataflow(
                     propagateEdge(block.terminator.primary, state,
                                   "resume edge cleanup");
                     break;
-                case TerminatorKind::Abort:
+                case TerminatorKind::Discard:
                     propagateEdge(block.terminator.primary, state,
-                                  "abort edge cleanup");
+                                  "fragment discard edge cleanup");
+                    break;
+                case TerminatorKind::RuntimeSlot:
+                    transferExpr(block.terminator.operand.get(), state);
+                    propagateEdge(block.terminator.primary, state,
+                                  "runtime Slot continuation cleanup");
+                    propagateEdge(block.terminator.secondary, state,
+                                  "runtime Slot completion cleanup");
                     break;
                 case TerminatorKind::Invalid:
                 case TerminatorKind::Unreachable:

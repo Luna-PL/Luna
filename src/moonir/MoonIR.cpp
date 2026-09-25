@@ -110,8 +110,6 @@ TypeRef Module::registerType(const TypePtr& type) {
     record.isMutable = type->isMutable;
     record.parameterContracts = type->paramContracts;
     record.returnContract = type->returnContract;
-    record.isMultiShot = type->isMultiShot;
-    record.continuationKind = type->continuationKind;
     record.iteratorMode = type->iteratorMode;
     record.inferenceId = type->inferenceId;
     record.canonicalType = canonicalTypeValue;
@@ -382,8 +380,6 @@ TypePtr TypeMaterializer::materialize(const TypeRef& reference) {
     result->paramContracts = record->parameterContracts;
     result->returnContract = record->returnContract;
     result->sysmeta = record->sysmeta;
-    result->isMultiShot = record->isMultiShot;
-    result->continuationKind = record->continuationKind;
     result->iteratorMode = record->iteratorMode;
     result->inferenceId = record->inferenceId;
 
@@ -503,8 +499,9 @@ const char* terminatorKindName(TerminatorKind kind) {
         case TerminatorKind::Switch: return "switch";
         case TerminatorKind::Return: return "return";
         case TerminatorKind::Resume: return "resume";
-        case TerminatorKind::Abort: return "abort";
+        case TerminatorKind::Discard: return "discard";
         case TerminatorKind::Unreachable: return "unreachable";
+        case TerminatorKind::RuntimeSlot: return "runtime_slot";
     }
     return "unknown";
 }
@@ -555,6 +552,7 @@ bool isCompilerIntrinsicName(const std::string& name) {
         "declaration_has_metadata",
         "is_ok", "is_err", "unwrap", "unwrap_err",
         "Ok", "Err", "pointer_cast", "drop_callback",
+        "__luna_runtime_fragment_resume_v1",
         "gpu_alloc_i32", "gpu_copy_from_host_i32",
         "gpu_copy_to_host_i32", "gpu_free",
         "gpu_load_i32", "gpu_store_i32",

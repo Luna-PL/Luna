@@ -7,6 +7,19 @@ fn inferred_add(left: auto, right: auto) -> auto {
     return left + right;
 }
 
+// A host-callable entry may reach a public Slot owned by a dependency.
+runtime fn dynamic_probe() -> i32 {
+    let result = 40;
+    showcase::effects::audit_slot(1) {
+        result += 2;
+    }
+    return result;
+}
+
+export fragment app_audit(value: i32) for showcase::effects::audit_slot {
+    print(value);
+}
+
 fn main() -> i32 {
     // constexpr, generic monomorphization, inference and ordinary control flow.
     const let scale = showcase::algorithms::pow2(3);

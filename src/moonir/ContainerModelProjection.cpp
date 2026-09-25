@@ -213,6 +213,8 @@ void collectGraphReferences(
             }
         }
         references.type(block.terminator.switchType);
+        references.type(block.terminator.runtimeArgumentsType);
+        references.declaration(block.terminator.runtimeSlot);
         collectExpressionReferences(
             block.terminator.operand.get(), references);
     }
@@ -363,7 +365,11 @@ bool buildConcreteProjection(
             }
             const auto& declaration = *found->second;
             selectType(declaration.type);
+            selectType(declaration.environmentType);
+            selectType(declaration.controlArgumentsType);
             selectDeclaration(declaration.dropGlue);
+            selectDeclaration(declaration.controlTarget);
+            selectDeclaration(declaration.runtimeEntry);
             if (declaration.kind == DeclarationKind::MetadataSchema)
                 selectSchema(declaration.id);
             for (const auto& metadata : declaration.metadata)

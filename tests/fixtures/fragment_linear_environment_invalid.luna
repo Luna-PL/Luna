@@ -1,0 +1,15 @@
+package tests.fragment_linear_environment_invalid;
+
+slot checkpoint();
+
+fragment invalid[linear token: i32] for checkpoint {
+    print(token);
+    resume;
+}
+
+fn main() -> i32 {
+    apply invalid[42] {
+        checkpoint() { }
+    }
+    return 0;
+}

@@ -28,7 +28,7 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     const std::string interceptorSlotId =
         "canonical.composition::slot::hook";
     const auto interceptorSlotType = Type::makeSlot(
-        {sharedI32Type}, TyUnit, false, ContinuationKind::Interceptor,
+        {sharedI32Type}, TyUnit,
         {{luna::ownership::Relation::SharedBorrow,
           luna::ownership::Usage::Copy}});
     interceptorSlotType->identityMode = luna::types::IdentityMode::Nominal;
@@ -47,7 +47,7 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     interceptorSlotRecord.sysmeta = interceptorSlotType->sysmeta;
     compositionModule.declarationTable.push_back(interceptorSlotRecord);
     const auto interceptorType = Type::makeFragment(
-        {sharedI32Type}, TyUnit, false, ContinuationKind::Interceptor,
+        {sharedI32Type}, TyUnit,
         {{luna::ownership::Relation::SharedBorrow,
           luna::ownership::Usage::Copy}});
     interceptorType->identityMode = luna::types::IdentityMode::Nominal;
@@ -75,8 +75,6 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     interceptor->symbolId = interceptorRecord.symbolId;
     interceptor->name = "guard";
     interceptor->generatedSymbolName = "guard";
-    interceptor->kind = moon::FragmentKind::Interceptor;
-    interceptor->cardinality = moon::FragmentCardinality::Once;
     interceptor->structuralType = interceptorTypeId;
     interceptor->params.push_back({
         "view", false, luna::ownership::Usage::Copy,
@@ -91,22 +89,13 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     guardedReturn->thenBlock->stmts.push_back(
         std::make_unique<moon::ReturnStmt>());
     interceptor->body->stmts.push_back(std::move(guardedReturn));
-    auto guardedAbort = std::make_unique<moon::IfStmt>();
-    auto abortCondition = std::make_unique<moon::BoolLiteralExpr>();
-    abortCondition->value = true;
-    abortCondition->type = compositionModule.registerType(TyBool);
-    guardedAbort->cond = std::move(abortCondition);
-    guardedAbort->thenBlock = std::make_unique<moon::BlockStmt>();
-    guardedAbort->thenBlock->stmts.push_back(
-        std::make_unique<moon::AbortStmt>());
-    interceptor->body->stmts.push_back(std::move(guardedAbort));
     auto* interceptorBody = interceptor->body.get();
     compositionModule.declarations.push_back(std::move(interceptor));
 
     const std::string contextSlotId =
         "canonical.composition::slot::around_hook";
     const auto contextSlotType = Type::makeSlot(
-        {}, TyUnit, false, ContinuationKind::Context);
+        {}, TyUnit);
     contextSlotType->identityMode = luna::types::IdentityMode::Nominal;
     contextSlotType->nominalId = contextSlotId;
     const auto contextSlotTypeId =
@@ -123,7 +112,7 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     contextSlotRecord.sysmeta = contextSlotType->sysmeta;
     compositionModule.declarationTable.push_back(contextSlotRecord);
     const auto contextType = Type::makeFragment(
-        {}, TyUnit, false, ContinuationKind::Context);
+        {}, TyUnit);
     contextType->identityMode = luna::types::IdentityMode::Nominal;
     contextType->nominalId = contextSlotId;
     const auto contextTypeId = compositionModule.registerType(contextType);
@@ -147,8 +136,6 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     context->symbolId = contextRecord.symbolId;
     context->name = "around";
     context->generatedSymbolName = "around";
-    context->kind = moon::FragmentKind::Context;
-    context->cardinality = moon::FragmentCardinality::Once;
     context->structuralType = contextTypeId;
     context->body = std::make_unique<moon::BlockStmt>();
     auto shadow = std::make_unique<moon::LetStmt>();
@@ -218,8 +205,6 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     staticApply->body = std::make_unique<moon::BlockStmt>();
     auto slotInvocation = std::make_unique<moon::SlotInvokeStmt>();
     slotInvocation->name = "hook";
-    slotInvocation->acceptedKind = moon::FragmentKind::Interceptor;
-    slotInvocation->acceptedCardinality = moon::FragmentCardinality::Once;
     auto sharedArgument = std::make_unique<moon::BorrowExpr>();
     sharedArgument->type = sharedI32TypeId;
     auto sharedSource = std::make_unique<moon::IdentifierExpr>();
@@ -265,19 +250,19 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
             resumeEdges +=
                 block.terminator.kind == moon::TerminatorKind::Resume;
             abortEdges +=
-                block.terminator.kind == moon::TerminatorKind::Abort;
+                block.terminator.kind == moon::TerminatorKind::Discard;
         }
     }
     if (!compositionCfg ||
         !cfgVerifier.verify(*compositionCfg, compositionModule) ||
         applyRegions != 1 || fragmentRegions != 1 ||
-        continuationRegions != 1 || resumeEdges != 0 || abortEdges != 1 ||
+        continuationRegions != 0 || resumeEdges != 0 || abortEdges != 1 ||
         !borrowedFragmentLocal ||
         borrowedFragmentLocal->relation !=
             luna::ownership::Relation::SharedBorrow ||
         borrowedFragmentCleanup ||
         executableInterceptor->body.get() != interceptorBody)
-        return fail("static interceptor did not compose into canonical CFG regions and edges");
+        return fail("discarding fragment did not compose into canonical CFG regions and edges");
     moon::LetStmt* borrowedFragmentDefinition = nullptr;
     for (auto& block : compositionCfg->blocks)
         for (auto& operation : block.operations)
@@ -301,29 +286,17 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
         luna::ownership::Relation::SharedBorrow;
     if (!cfgVerifier.verify(*compositionCfg, compositionModule))
         return fail("restored fragment parameter relation no longer verifies");
-    moon::BlockId interceptorContinuationEntry;
-    for (const auto& composedRegion : compositionCfg->regions)
-        if (composedRegion.kind == moon::RegionKind::Continuation)
-            interceptorContinuationEntry = composedRegion.entry;
-    moon::Terminator* automaticForward = nullptr;
     moon::Terminator* composedAbort = nullptr;
     for (auto& block : compositionCfg->blocks) {
-        if (block.terminator.kind == moon::TerminatorKind::Jump &&
-            block.terminator.primary.target == interceptorContinuationEntry)
-            automaticForward = &block.terminator;
-        if (block.terminator.kind == moon::TerminatorKind::Abort)
+        if (block.terminator.kind == moon::TerminatorKind::Discard)
             composedAbort = &block.terminator;
     }
-    if (!automaticForward || !composedAbort)
-        return fail("static composition lost a control terminator");
+    if (!composedAbort)
+        return fail("static composition lost its discard terminator");
     const auto fragmentExit = composedAbort->primary.target;
-    automaticForward->kind = moon::TerminatorKind::Resume;
+    composedAbort->primary.target = compositionCfg->entry;
     if (cfgVerifier.verify(*compositionCfg, compositionModule))
-        return fail("CFG verifier accepted explicit resume in an interceptor");
-    automaticForward->kind = moon::TerminatorKind::Jump;
-    composedAbort->primary.target = interceptorContinuationEntry;
-    if (cfgVerifier.verify(*compositionCfg, compositionModule))
-        return fail("CFG verifier accepted abort into the continuation");
+        return fail("CFG verifier accepted discard outside the fragment exit");
     composedAbort->primary.target = fragmentExit;
     if (!cfgVerifier.verify(*compositionCfg, compositionModule))
         return fail("restored static composition no longer verifies");
@@ -344,8 +317,6 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     contextApply->body = std::make_unique<moon::BlockStmt>();
     auto contextInvocation = std::make_unique<moon::SlotInvokeStmt>();
     contextInvocation->name = "hook";
-    contextInvocation->acceptedKind = moon::FragmentKind::Context;
-    contextInvocation->acceptedCardinality = moon::FragmentCardinality::Once;
     contextInvocation->continuation = std::make_unique<moon::BlockStmt>();
     auto outerUse = std::make_unique<moon::ExprStmt>();
     auto outerIdentifier = std::make_unique<moon::IdentifierExpr>();
@@ -371,7 +342,7 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
         for (auto& block : contextCfg->blocks) {
             if (block.terminator.kind == moon::TerminatorKind::Resume)
                 contextResume = &block.terminator;
-            if (block.terminator.kind == moon::TerminatorKind::Abort)
+            if (block.terminator.kind == moon::TerminatorKind::Discard)
                 contextAbort = &block.terminator;
             if (contextCfg->regions[block.region.value].kind ==
                     moon::RegionKind::Continuation) {
@@ -417,7 +388,7 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     contextResume->kind = moon::TerminatorKind::Resume;
     contextRegion->fragment = interceptorRef;
     if (cfgVerifier.verify(*contextCfg, compositionModule))
-        return fail("CFG verifier accepted context control under an interceptor contract");
+        return fail("CFG verifier accepted control under the wrong nominal fragment");
     contextRegion->fragment = contextRef;
     if (!cfgVerifier.verify(*contextCfg, compositionModule))
         return fail("restored static context no longer verifies");
@@ -431,9 +402,8 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     auto blocklessCfg = cfgBuilder.build(
         std::move(blocklessBody), {}, moon::RegionKind::Function,
         compositionModule);
-    if (!blocklessCfg ||
-        !cfgVerifier.verify(*blocklessCfg, compositionModule))
-        return fail("canonical builder rejected lexical statement-form apply");
+    if (blocklessCfg)
+        return fail("canonical builder accepted removed blockless apply");
 
 
     return 0;

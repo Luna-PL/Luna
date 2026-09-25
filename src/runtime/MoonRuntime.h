@@ -10,8 +10,18 @@
 
 namespace luna::runtime {
 
+class RuntimeFragmentBindingSet;
+struct RuntimeFragmentBindingSetState;
+
 enum GenerationBindingFlag : uint32_t {
     GenerationBindingCallable = 1u << 0,
+    GenerationBindingFragmentExecutable = 1u << 1,
+    // The binding names a host-visible exported Slot/Fragment control.
+    // Publication alone does not imply that a Fragment has executable glue.
+    GenerationBindingPublicControl = 1u << 2,
+    // Callable implementation takes a leading opaque Fragment execution
+    // context before its declared source parameters.
+    GenerationBindingFragmentContext = 1u << 3,
 };
 
 // Public 0.3 C++ host control-plane input. The module lease keeps the verified
@@ -115,6 +125,8 @@ public:
                            const std::string& contractId) const;
         PinnedBinding find(
             const GenerationBindingRequirement& requirement) const;
+        std::vector<PinnedBinding> findAll(
+            uint32_t declarationKind, uint32_t requiredFlags) const;
 
     private:
         friend class MoonRuntime;
@@ -155,6 +167,14 @@ public:
     bool rollback(const std::string& moduleId, uint64_t generationId,
                   SafePoint& safePoint, std::string& error);
 
+    // Atomically publishes a host-selected immutable Fragment binding set.
+    // Selection and metadata policy happen before this boundary; activation
+    // requires the same single-use safe-point protocol as generation changes.
+    bool activateFragmentBindings(
+        const RuntimeFragmentBindingSet& bindings,
+        SafePoint& safePoint, std::string& error);
+    RuntimeFragmentBindingSet pinFragmentBindings() const;
+
     PinnedGeneration pin(const std::string& moduleId) const;
     bool makeSwitchable(const std::string& moduleId,
                         const std::string& symbolId,
@@ -180,6 +200,8 @@ private:
 
     mutable std::mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<ModuleState>> modules_;
+    std::shared_ptr<const RuntimeFragmentBindingSetState>
+        activeFragmentBindings_;
     uint64_t nextGenerationId_ = 1;
 };
 

@@ -27,11 +27,22 @@ Runtime ABI v1，不承诺 C ABI，也不承诺跨 C++ toolchain 的二进制兼
 - `SafePoint` 是由 `safePoint()` 创建、move-only 且只能使用一次的 token。它表示
   宿主确认当前可切换，不会替宿主暂停线程；`activate` 与 `rollback` 都要求来自同一
   `MoonRuntime` 的全新 token。
+- `RuntimeFragmentBindingSet` 是宿主 Slot 策略生成的不可变结果。它拥有已经验证的 Fragment
+  reference 并固定其 generation。严格构造器要求每个精确 Slot 最多一个 binding；显式 chain
+  构造器则保留宿主顺序。`activateFragmentBindings` 使用同一 safe-point 协议发布，
+  `pinFragmentBindings` 返回稳定的 dispatch snapshot。局部 override 可以替换或屏蔽一个 Slot，
+  且不会修改任一 snapshot。
+- `RuntimeFragmentExecutionContext` 把一个 pinned BindingSet 转为传给生成后 runtime-aware entry
+  的显式 data-plane capability。它不查找 ambient Runtime；即使宿主在调用期间激活替代集合，
+  该 context 仍保持原 snapshot。
 
 typed binding requirement 包含 `symbolId`、`contractId`、`declarationKind` 与
 `requiredFlags`。switchable binding 建立后，runtime 会把当时 active binding 的精确
 kind/flags 固定为后续每次 activation 的最低要求。兼容性检查发生在发布新的不可变
 generation pointer 之前，不进入普通调用热路径。
+`GenerationBindingFragmentContext` 只能与 `GenerationBindingCallable` 一起用于 Function
+binding。它告知宿主 implementation pointer 会在源码声明参数之前接收一个 opaque
+`RuntimeFragmentExecutionContext` pointer；这是 ABI capability，不是候选发现请求。
 
 ## 生命周期
 
@@ -60,6 +71,17 @@ auto currentEntry = switchable.pin();
 
 auto rollbackPoint = runtime.safePoint();
 ok = runtime.rollback(moduleId, oldGenerationId, rollbackPoint, error);
+
+luna::runtime::RuntimeFragmentBindingSet selected;
+ok = luna::runtime::makeRuntimeFragmentBindingSet(
+    std::move(fragmentRefs), selected, error);
+auto bindingPoint = runtime.safePoint();
+ok = ok && runtime.activateFragmentBindings(
+    selected, bindingPoint, error);
+auto dispatchSnapshot = runtime.pinFragmentBindings();
+luna::runtime::RuntimeFragmentExecutionContext executionContext;
+ok = ok && luna::runtime::makeRuntimeFragmentExecutionContext(
+    dispatchSnapshot, executionContext, error);
 ```
 
 仓库内 Moon/Native generation adapter 会提供已验证产物专用的 verifier/resolver callback

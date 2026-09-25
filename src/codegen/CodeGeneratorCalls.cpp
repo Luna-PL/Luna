@@ -60,6 +60,39 @@ llvm::Value* CodeGenerator::generateCall(CallExpr* call) {
         return mBuilder->CreateCall(intrinsic, {value}, "popcount");
     }
     if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
+        calleeId &&
+        calleeId->name == "__luna_runtime_fragment_resume_v1" &&
+        call->args.size() == 1) {
+        auto resume = mModule->getOrInsertFunction(
+            "luna_runtime_fragment_activation_resume_v1",
+            mHelpers->i32Ty(), mHelpers->ptrTy());
+        auto* activation = coerceCallArgument(
+            generateExpr(call->args.front().get()), mHelpers->ptrTy());
+        auto* result = mBuilder->CreateCall(
+            resume, {activation}, "fragment.resume");
+        // Runtime Fragment helpers are unit-returning functions. A positive
+        // result means that the outlined Slot continuation escaped its
+        // enclosing function (return/?); a negative result means dispatch
+        // failed. In both cases the helper must skip all post-resume code so
+        // the result can propagate through the surrounding Fragment chain.
+        if (!mCurrentFunc || !mCurrentFunc->getReturnType()->isVoidTy()) {
+            error("runtime Fragment resume requires a unit helper function");
+            return result;
+        }
+        auto* continued = llvm::BasicBlock::Create(
+            *mCtx, "fragment.resume.continued", mCurrentFunc);
+        auto* escaped = llvm::BasicBlock::Create(
+            *mCtx, "fragment.resume.escaped", mCurrentFunc);
+        auto* completed = mBuilder->CreateICmpEQ(
+            result, llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
+            "fragment.resume.completed");
+        mBuilder->CreateCondBr(completed, continued, escaped);
+        mBuilder->SetInsertPoint(escaped);
+        mBuilder->CreateRetVoid();
+        mBuilder->SetInsertPoint(continued);
+        return result;
+    }
+    if (auto* calleeId = dynamic_cast<IdentifierExpr*>(call->callee.get());
         calleeId && calleeId->name == "pointer_cast" && call->args.size() == 1) {
         return coerceCallArgument(generateExpr(call->args.front().get()), mHelpers->ptrTy());
     }
@@ -310,12 +343,32 @@ llvm::Value* CodeGenerator::generateCall(CallExpr* call) {
         llvm::Function* callee =
             call->calleeRef.complete() ? resolveFunction(call->calleeRef) : nullptr;
         if (callee) {
-
             std::vector<llvm::Value*> args;
+            size_t hiddenParameterCount = 0;
+            const auto* calleeDeclaration =
+                resolveFunctionDeclaration(call->calleeRef);
+            if (calleeDeclaration &&
+                calleeDeclaration->requiresFragmentContext) {
+                if (!mCurrentFragmentContext) {
+                    error("direct call to context-requiring function '" +
+                          calleeDeclaration->name +
+                          "' has no fragment execution context");
+                    return llvm::PoisonValue::get(
+                        callee->getReturnType()->isVoidTy()
+                            ? mHelpers->i32Ty()
+                            : callee->getReturnType());
+                }
+                args.push_back(mCurrentFragmentContext);
+                hiddenParameterCount = 1;
+            }
             for (size_t i = 0; i < call->args.size(); ++i) {
                 auto* value = generateExpr(call->args[i].get());
-                if (i < callee->getFunctionType()->getNumParams())
-                    value = coerceCallArgument(value, callee->getFunctionType()->getParamType(i));
+                const size_t abiIndex = i + hiddenParameterCount;
+                if (abiIndex < callee->getFunctionType()->getNumParams())
+                    value = coerceCallArgument(
+                        value,
+                        callee->getFunctionType()->getParamType(
+                            static_cast<unsigned>(abiIndex)));
                 args.push_back(value);
             }
 

@@ -18,8 +18,6 @@ struct Stmt;
 struct BlockStmt;
 struct TypeAST;
 
-enum class FragmentKind { Interceptor, Context };
-enum class FragmentCardinality { Once, Many };
 enum class RetentionKind { CompileTime, Runtime };
 using MetadataConstValue = std::variant<int64_t, double, bool, std::string>;
 
@@ -131,7 +129,7 @@ struct LetStmt : Stmt {
 
 // A path-specific cleanup is attached to the control transfer that leaves
 // the owning scope.  Keeping this independent from ReturnStmt is important:
-// fragment abort and future control-exit edges need the same resource
+// Fragment discard and future control-exit edges need the same resource
 // semantics.
 struct CleanupObligation {
     std::string place;
@@ -237,41 +235,21 @@ struct FreeStmt : Stmt {
     bool isImplicit = false;
 };
 
-// Legacy construction node kept only for independently rejecting pre-0.3
-// structured IR. Source parsing never produces a local slot declaration.
-struct SlotDeclStmt : Stmt {
-    std::string name;
-    FragmentKind acceptedKind = FragmentKind::Interceptor;
-    FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
-    std::vector<Param> params;
-    std::string defaultFragment;
-    std::string resolvedDefaultFragmentName;
-    TypePtr structuralType;
-};
-
 // `name(args) { ... }` is only valid for a previously declared explicit slot.
-// The block is the continuation run by a fragment's `resume()`.
+// The block is the continuation run by a fragment's `resume;`.
 struct SlotInvokeStmt : Stmt {
     std::string name;
-    FragmentKind acceptedKind = FragmentKind::Interceptor;
-    FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
     std::vector<std::unique_ptr<Expr>> args;
     std::unique_ptr<BlockStmt> continuation;
     bool isImplicitCapture = false;
     std::vector<Param> interfaceParams;
     std::vector<std::string> resolvedParamNames;
-    std::string defaultFragment;
-    std::string resolvedDefaultFragmentName;
+    std::string resolvedSlotName;
+    std::string resolvedFragmentName;
     TypePtr structuralType;
 };
 
 struct ResumeStmt : Stmt {};
-struct AbortStmt : Stmt {
-    // Fragment-local affine owners that must be released before control skips
-    // the continuation and rejoins after the slot.
-    std::vector<std::string> autoFrees;
-    std::vector<CleanupObligation> cleanups;
-};
 
 struct AwaitStmt : Stmt {
     std::unique_ptr<Expr> event;
@@ -283,6 +261,10 @@ struct ApplyStmt : Stmt {
     std::string slotName;
     std::string fragmentName;
     std::string resolvedFragmentName;
+    // Constructor arguments for the fragment's explicit environment. They
+    // are evaluated once when entering the lexical apply region, not once per
+    // slot invocation.
+    std::vector<std::unique_ptr<Expr>> environmentArgs;
     std::unique_ptr<BlockStmt> body;
 };
 
@@ -610,8 +592,10 @@ struct FunctionDecl : Decl {
 
 struct FragmentDecl : Decl {
     std::string name;
-    FragmentKind kind = FragmentKind::Interceptor;
-    FragmentCardinality cardinality = FragmentCardinality::Once;
+    // Explicit construction environment. Square brackets keep these values
+    // distinct from the parenthesized Slot invocation contract.
+    std::vector<Param> environmentParams;
+    TypePtr environmentType;
     // A fragment is nominally bound to exactly one module-level slot. Its
     // parameter list names that slot's complete input contract; annotations
     // may repeat the slot types but cannot alter them.
@@ -624,11 +608,7 @@ struct FragmentDecl : Decl {
 
 struct SlotDecl : Decl {
     std::string name;
-    FragmentKind acceptedKind = FragmentKind::Interceptor;
-    FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
     std::vector<Param> params;
-    std::string defaultFragment;
-    std::string resolvedDefaultFragmentName;
     TypePtr structuralType;
 };
 

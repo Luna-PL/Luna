@@ -93,7 +93,7 @@ void Verifier::verifyControlFlowBlocks(
                         scopeWithin(local->scope, fragment->scope) &&
                         !scopeWithin(local->scope, continuation->scope))
                         error(identifier.location,
-                              "context continuation references fragment-local state");
+                              "slot continuation references fragment-local state");
                 }
                 if (local->kind == LocalKind::Synthetic &&
                     luna::ownership::isMoveOnly(local->usage) &&
@@ -599,6 +599,11 @@ void Verifier::verifyControlFlowBlocks(
                 error(block.terminator.location,
                       "terminator carries fields outside its canonical shape");
         };
+        if (block.terminator.kind != TerminatorKind::RuntimeSlot &&
+            (!block.terminator.runtimeSlot.empty() ||
+             !block.terminator.runtimeArgumentsType.empty()))
+            error(block.terminator.location,
+                  "non-runtime-Slot terminator carries runtime Slot fields");
         switch (block.terminator.kind) {
             case TerminatorKind::Invalid:
                 error(block.terminator.location, "block has no terminator");
@@ -628,21 +633,8 @@ void Verifier::verifyControlFlowBlocks(
                         const auto* targetFragment = enclosingRegion(
                             target->region, RegionKind::Fragment);
                         if (sourceFragment && targetContinuation) {
-                            const auto* declaration = module.findDeclaration(
-                                sourceFragment->fragment);
-                            const auto* contract = declaration
-                                ? module.findType(declaration->type) : nullptr;
-                            const auto* fragmentApply = enclosingRegion(
-                                sourceFragment->id, RegionKind::Apply);
-                            const auto* continuationApply = enclosingRegion(
-                                targetContinuation->id, RegionKind::Apply);
-                            if (!contract ||
-                                contract->continuationKind !=
-                                    ContinuationKind::Interceptor ||
-                                !fragmentApply || !continuationApply ||
-                                fragmentApply->id != continuationApply->id)
-                                error(block.terminator.location,
-                                      "ordinary jump enters a continuation outside interceptor forwarding");
+                            error(block.terminator.location,
+                                  "ordinary jump may not enter a fragment continuation");
                         } else if (sourceFragment &&
                                    (!targetFragment ||
                                     targetFragment->id != sourceFragment->id) &&
@@ -774,15 +766,15 @@ void Verifier::verifyControlFlowBlocks(
                           "return terminator carries a switch type");
                 break;
             case TerminatorKind::Resume:
-            case TerminatorKind::Abort:
+            case TerminatorKind::Discard:
                 rejectOperand();
                 if (!block.terminator.switchType.empty())
                     error(block.terminator.location,
-                          "resume/abort terminator carries a switch type");
+                          "resume/discard terminator carries a switch type");
                 verifyEdge(
                     block, block.terminator.primary,
                     block.terminator.kind == TerminatorKind::Resume
-                        ? "resume edge" : "abort edge");
+                        ? "resume edge" : "fragment discard edge");
                 if (const auto* fragment = enclosingRegion(
                         block.region, RegionKind::Fragment)) {
                     const auto* declaration = module.findDeclaration(
@@ -791,17 +783,16 @@ void Verifier::verifyControlFlowBlocks(
                         ? module.findType(declaration->type) : nullptr;
                     const auto* target = graph.findBlock(
                         block.terminator.primary.target);
-                    if (block.terminator.kind == TerminatorKind::Abort) {
+                    if (block.terminator.kind == TerminatorKind::Discard) {
                         if (fragment->exit.empty() ||
                             block.terminator.primary.target != fragment->exit)
                             error(block.terminator.location,
-                                  "abort edge does not target its enclosing fragment exit");
+                                  "fragment discard edge does not target its enclosing fragment exit");
                     } else if (target) {
                         if (!fragmentType ||
-                            fragmentType->continuationKind !=
-                                ContinuationKind::Context)
+                            fragmentType->kind != TypeKind::Fragment)
                             error(block.terminator.location,
-                                  "resume terminator is not owned by a context fragment");
+                                  "resume terminator is not owned by a fragment");
                         const auto* continuation = graph.findRegion(
                             target->region);
                         const auto* fragmentApply = enclosingRegion(
@@ -822,7 +813,7 @@ void Verifier::verifyControlFlowBlocks(
                     error(block.terminator.location,
                           block.terminator.kind == TerminatorKind::Resume
                               ? "resume terminator is outside a fragment region"
-                              : "abort terminator is outside a fragment region");
+                              : "discard terminator is outside a fragment region");
                 }
                 appendSuccessor(block.terminator.primary);
                 rejectSecondaryCasesAndExit();
@@ -838,6 +829,69 @@ void Verifier::verifyControlFlowBlocks(
                           "unreachable terminator carries a successor");
                 rejectSecondaryCasesAndExit();
                 break;
+            case TerminatorKind::RuntimeSlot: {
+                if (!block.terminator.operand)
+                    error(block.terminator.location,
+                          "runtime Slot terminator has no argument record");
+                else
+                    verifyGraphExpr(
+                        block.terminator.operand.get(), block,
+                        "runtime Slot arguments");
+                if (!block.terminator.switchType.empty() ||
+                    !block.terminator.cases.empty() ||
+                    !block.terminator.exitCleanups.empty())
+                    error(block.terminator.location,
+                          "runtime Slot terminator carries non-Slot fields");
+                const auto* declaration = verifyDeclarationRef(
+                    block.terminator.runtimeSlot,
+                    block.terminator.location,
+                    "runtime Slot target", module,
+                    DeclarationKind::Slot);
+                verifyType(
+                    block.terminator.runtimeArgumentsType,
+                    block.terminator.location,
+                    "runtime Slot argument record", module);
+                const auto* argumentsType = module.findType(
+                    block.terminator.runtimeArgumentsType);
+                if (!argumentsType ||
+                    argumentsType->kind != TypeKind::Record)
+                    error(block.terminator.location,
+                          "runtime Slot arguments do not use a frozen Record type");
+                if (declaration &&
+                    declaration->controlArgumentsType !=
+                        block.terminator.runtimeArgumentsType)
+                    error(block.terminator.location,
+                          "runtime Slot argument record disagrees with its nominal declaration");
+                if (block.terminator.operand &&
+                    block.terminator.operand->type !=
+                        block.terminator.runtimeArgumentsType)
+                    error(block.terminator.location,
+                          "runtime Slot operand disagrees with its argument record");
+                if (!isPublicSlotTarget(
+                        module, block.terminator.runtimeSlot))
+                    error(block.terminator.location,
+                          "runtime Slot target is not an exported control");
+                verifyEdge(
+                    block, block.terminator.primary,
+                    "runtime Slot continuation edge");
+                verifyEdge(
+                    block, block.terminator.secondary,
+                    "runtime Slot completion edge");
+                const auto* continuationEntry = graph.findBlock(
+                    block.terminator.primary.target);
+                const auto* continuation = continuationEntry
+                    ? graph.findRegion(continuationEntry->region) : nullptr;
+                if (!continuation ||
+                    continuation->kind != RegionKind::Continuation ||
+                    continuation->entry != continuationEntry->id ||
+                    continuation->exit !=
+                        block.terminator.secondary.target)
+                    error(block.terminator.location,
+                          "runtime Slot does not own one exact continuation region");
+                appendSuccessor(block.terminator.primary);
+                appendSuccessor(block.terminator.secondary);
+                break;
+            }
         }
     }
 

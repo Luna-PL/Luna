@@ -1,0 +1,13 @@
+struct Resource {
+    value: i32;
+}
+
+export slot published();
+
+export fragment candidate[resource: Resource] for published {
+    resume;
+}
+
+fn main() -> i32 {
+    return 0;
+}

@@ -137,7 +137,8 @@ private:
 
     void generateFunctionBody(moon::FunctionDecl* decl);
     void generateControlFlowBody(moon::ControlFlowGraph& graph, llvm::Function* func,
-                                 llvm::BasicBlock* abiEntry);
+                                 llvm::BasicBlock* abiEntry,
+                                 size_t hiddenParameterCount);
     llvm::Value* generateExpr(moon::Expr* expr);
     // Literal expression emitters. Split out from generateExpr so each AST
     // node has one home; behavior is unchanged.
@@ -194,6 +195,8 @@ private:
     llvm::Value* coerceCallArgument(llvm::Value* value, llvm::Type* target);
     TypePtr resolveType(const moon::TypeRef& reference);
     const moon::DeclarationRecord* resolveDeclaration(const moon::DeclarationRef& reference) const;
+    const moon::FunctionDecl* resolveFunctionDeclaration(
+        const moon::DeclarationRef& reference) const;
     llvm::Function* resolveFunction(const moon::DeclarationRef& reference) const;
     TypePtr allocationTypeForExpr(moon::Expr* expr);
     void emitLunaDeallocation(llvm::Value* pointer, const TypePtr& type);
@@ -247,6 +250,9 @@ private:
     // remove redundant safe-array checks. Any assignment invalidates a bound.
     std::unordered_map<std::string, uint64_t> mLocalKnownUpperBounds;
     llvm::Function* mCurrentFunc = nullptr;
+    // Non-null only while lowering a function whose verified
+    // requires_fragment_context effect added the hidden leading ABI argument.
+    llvm::Value* mCurrentFragmentContext = nullptr;
     bool mCurrentFunctionIsKernel = false;
     std::unordered_map<std::string, llvm::Function*> mFunctions;
     std::unordered_map<std::string, llvm::Function*> mDropCallbacks;

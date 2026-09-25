@@ -1,12 +1,12 @@
-slot context hook();
+slot hook(value: i32);
 
-interceptor audit for hook {
+fragment audit(value: string) for hook {
     print(1);
 }
 
 fn main() -> i32 {
     apply audit {
-        hook() {
+        hook(2) {
             print(2);
         }
     }

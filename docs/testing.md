@@ -74,6 +74,55 @@ classification against the verified Container before publication. It invokes
 a private retained function only through that descriptor-backed binding. The cost-boundary
 test requires descriptor/registry v1 types and stable identities only for a
 runtime-retained program and proves that a static query emits none of them.
+`luna.runtime-fragment-v1` covers exact Slot/Fragment descriptor validation,
+owned and borrowed environments, generation-pinned candidate snapshots,
+immutable BindingSet activation, None/One selection, host-ordered chains, and
+local overrides. It also drives the explicit execution-context C ABI, rejects
+an implicit/null context, proves that the context pins its pre-activation
+snapshot, and verifies that an enclosing continuation escape skips all
+post-`resume` chain code. `luna.moon-cost-boundaries` separately requires an
+exported executable Fragment to materialize its descriptor, factory/destroy,
+execute thunk, and activation operations while existing static-only fixtures
+remain free of runtime-selection machinery. It also counts exactly one LLVM
+dispatch call for a dynamic Slot site, requires an explicit context and frame,
+and checks that a static Slot composition has no dispatch, context frame, or
+runtime registry. No elapsed-time threshold is involved.
+`luna.moonir-canonical` additionally proves that an unbound exported Slot seals
+as a `RuntimeSlot` terminator with its exact declaration and packed argument
+record, while a private unbound Slot remains erased. The code-section model
+round-trip exercises non-empty RuntimeSlot declaration and argument TypeId
+fields so container preservation is not inferred from empty defaults.
+The same fixture proves `requires_fragment_context` propagation from a runtime
+Slot leaf to its exact direct caller, absence on the private/static path, and
+verifier rejection of a forged summary. The code codec round-trip also carries
+a non-default true effect bit.
+The canonical codegen check lowers a RuntimeSlot continuation with a mutable
+Copy capture through the real `luna_runtime_fragment_dispatch_v1` ABI. It
+requires LLVM verification to accept the hidden-parameter direct-call ABI and
+inspects the emitted IR for a retained and forwarded `fragment.context` plus
+the dispatch call. It also proves that an ordinary export cannot publish a
+context-requiring implementation. The same generated module is materialized
+through ORC, and its runtime registry must expose the context-requiring
+`runtime fn` as a callable Function descriptor carrying the
+`FRAGMENT_CONTEXT` flag and a non-null entry. Calling that entry with an empty
+BindingSet and then with a host-selected generated Fragment must both execute
+the outlined callback through `resume`, write the capture from 40 to 42, and
+return 42. A second JIT module proves that continuation `return` and `?`
+execute continuation-local Drop cleanup before using the escaped status
+to return 42 and propagate `Err(7)` from their enclosing runtime entries. The
+fixture's Drop markers are 64 and 65 respectively. Runtime descriptor and
+MoonRuntime tests independently reject the context flag on a non-callable or
+non-Function binding.
+Another JIT fixture enters an outer Slot whose continuation calls a function
+with an inner dynamic Slot. Both dispatches use the forwarded context and
+return 44. A separate lexical nesting fixture verifies three callback levels,
+transitive Copy-capture writeback (10), mutation/writeback of a Drop-bearing
+affine resource (8), and inner `return` and `?` escapes through outer callbacks
+(7 in each case). Resource-escape fixtures execute an inner return through
+two callback levels (30) and a single-level outer-resource cleanup (9). A
+selected generated Fragment that omits `resume` takes the post-Slot path (0).
+Ownership analysis rejects a continuation that consumes an outer resource
+while the skipped-continuation path would leave it live.
 Four concurrent readers cross 1000 generation transitions and must observe
 only complete identity/implementation pairs from all activated generations.
 The canonical round-trip test also loads a real verified Moon Container once,

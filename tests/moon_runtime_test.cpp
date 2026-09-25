@@ -111,6 +111,41 @@ int main() {
         wrongFlags.requiredFlags = 1u << 8;
         if (loaded.find(wrongFlags))
             return fail("typed binding requirement accepted missing capabilities");
+        auto fragmentContextFunction = typedFunction;
+        fragmentContextFunction.requiredFlags =
+            luna::runtime::GenerationBindingCallable |
+            luna::runtime::GenerationBindingFragmentContext;
+        if (loaded.find(fragmentContextFunction))
+            return fail("ordinary callable binding satisfied fragment-context ABI");
+
+        Runtime::StagedGeneration contextAware;
+        phases.clear();
+        if (!stageOne(
+                runtime, request, "symbol:context-aware", ContractId, &first,
+                contextAware, phases, error, true, 1,
+                luna::runtime::GenerationBindingCallable |
+                    luna::runtime::GenerationBindingFragmentContext) ||
+            phases != "VRI")
+            return fail("runtime rejected a context-aware function binding");
+
+        Runtime::StagedGeneration invalidFragmentContext;
+        phases.clear();
+        if (stageOne(
+                runtime, request, "symbol:missing-callable", ContractId,
+                &first, invalidFragmentContext, phases, error, true, 1,
+                luna::runtime::GenerationBindingFragmentContext) ||
+            error.find("invalid or duplicate binding") == std::string::npos)
+            return fail("runtime accepted fragment-context ABI without callable");
+
+        Runtime::StagedGeneration invalidPublicControl;
+        phases.clear();
+        if (stageOne(
+                runtime, request, "symbol:not-control", "contract:not-control",
+                &first, invalidPublicControl, phases, error, true,
+                1,
+                luna::runtime::GenerationBindingPublicControl) ||
+            error.find("invalid or duplicate binding") == std::string::npos)
+            return fail("runtime accepted a public-control function binding");
 
         Runtime::StagedGeneration duplicateStaged;
         phases.clear();
@@ -208,7 +243,8 @@ int main() {
         Runtime::StagedGeneration wrongKindStaged;
         phases.clear();
         if (!stageOne(runtime, wrongKindRequest, SymbolId, ContractId,
-                      &incompatible, wrongKindStaged, phases, error, true, 2))
+                      &incompatible, wrongKindStaged, phases, error, true, 2,
+                      0))
             return fail("wrong-kind generation staging precondition failed");
         auto wrongKindSafePoint = runtime.safePoint();
         if (runtime.activate(wrongKindStaged, wrongKindSafePoint, error) ||

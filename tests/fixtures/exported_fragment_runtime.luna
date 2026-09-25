@@ -1,0 +1,11 @@
+export slot published_hook(value: i32);
+
+export fragment published_candidate[offset: i32](value: i32) for published_hook {
+    if offset == value {
+        resume;
+    }
+}
+
+fn main() -> i32 {
+    return 0;
+}

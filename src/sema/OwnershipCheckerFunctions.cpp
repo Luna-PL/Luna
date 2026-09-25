@@ -9,9 +9,7 @@ bool OwnershipChecker::check(Program* program, SymbolTable& symTable) {
     mSymTable = &symTable;
     mFragments.clear();
     mApplyScopes.clear();
-    mSlotScopes.clear();
     mApplyScopes.emplace_back();
-    mSlotScopes.emplace_back();
     for (auto& declaration : program->declarations) {
         if (auto* fragment = dynamic_cast<FragmentDecl*>(declaration.get())) {
             mFragments[fragment->name] = fragment;
@@ -35,7 +33,6 @@ bool OwnershipChecker::checkFunction(FunctionDecl* decl) {
     setDiagnosticLocation(decl);
     enterScope();
     mApplyScopes.emplace_back();
-    mSlotScopes.emplace_back();
 
     for (auto& param : decl->params) {
         TypePtr type = param.inferredType ? param.inferredType
@@ -73,7 +70,6 @@ bool OwnershipChecker::checkFunction(FunctionDecl* decl) {
     if (!bodyResult.ok) {
         exitScope();
         mApplyScopes.pop_back();
-        mSlotScopes.pop_back();
         return false;
     }
 
@@ -94,7 +90,6 @@ bool OwnershipChecker::checkFunction(FunctionDecl* decl) {
 
     exitScope();
     mApplyScopes.pop_back();
-    mSlotScopes.pop_back();
     return mErrors.empty();
 }
 
@@ -105,22 +100,17 @@ bool OwnershipChecker::checkLambda(LambdaExpr* lambda) {
     auto savedScopes = std::move(mScopes);
     auto savedLoans = std::move(mLoansInScope);
     auto savedApplyScopes = std::move(mApplyScopes);
-    auto savedSlotScopes = std::move(mSlotScopes);
     auto savedUnavailableCaptures =
         std::move(mUnavailableLambdaCaptures);
     auto* savedSlotContinuation = mCurrentSlotContinuation;
-    const bool savedManyContinuation =
-        mValidatingManyContinuation;
     const bool savedCheckingContinuation =
         mCheckingSlotContinuation;
-    auto* savedAbortExits =
-        mCurrentFragmentAbortExits;
+    auto* savedFragmentExits =
+        mCurrentFragmentExits;
     const size_t savedFragmentScopeBase =
         mCurrentFragmentScopeBase;
     const size_t savedFragmentApplyBase =
         mCurrentFragmentApplyBase;
-    const size_t savedFragmentSlotBase =
-        mCurrentFragmentSlotBase;
 
     mUnavailableLambdaCaptures = savedUnavailableCaptures;
     for (const auto& scope : savedScopes)
@@ -130,17 +120,13 @@ bool OwnershipChecker::checkLambda(LambdaExpr* lambda) {
     mScopes.clear();
     mLoansInScope.clear();
     mApplyScopes.clear();
-    mSlotScopes.clear();
     enterScope();
     mApplyScopes.emplace_back();
-    mSlotScopes.emplace_back();
     mCurrentSlotContinuation = nullptr;
-    mValidatingManyContinuation = false;
     mCheckingSlotContinuation = false;
-    mCurrentFragmentAbortExits = nullptr;
+    mCurrentFragmentExits = nullptr;
     mCurrentFragmentScopeBase = 0;
     mCurrentFragmentApplyBase = 0;
-    mCurrentFragmentSlotBase = 0;
 
     for (auto& param : lambda->params) {
         TypePtr type = param.inferredType
@@ -233,28 +219,22 @@ bool OwnershipChecker::checkLambda(LambdaExpr* lambda) {
 
     exitScope();
     mApplyScopes.pop_back();
-    mSlotScopes.pop_back();
 
     mScopes = std::move(savedScopes);
     mLoansInScope = std::move(savedLoans);
     mApplyScopes = std::move(savedApplyScopes);
-    mSlotScopes = std::move(savedSlotScopes);
     mUnavailableLambdaCaptures =
         std::move(savedUnavailableCaptures);
     mCurrentSlotContinuation =
         savedSlotContinuation;
-    mValidatingManyContinuation =
-        savedManyContinuation;
     mCheckingSlotContinuation =
         savedCheckingContinuation;
-    mCurrentFragmentAbortExits =
-        savedAbortExits;
+    mCurrentFragmentExits =
+        savedFragmentExits;
     mCurrentFragmentScopeBase =
         savedFragmentScopeBase;
     mCurrentFragmentApplyBase =
         savedFragmentApplyBase;
-    mCurrentFragmentSlotBase =
-        savedFragmentSlotBase;
 
     return capturesValid && bodyResult.ok &&
            mErrors.size() == errorsBefore;

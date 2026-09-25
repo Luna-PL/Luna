@@ -245,6 +245,8 @@ obligation，不能重新推导所有权。
 | `src/moonir/ContainerModelSections.cpp` | manifest、type、symbol、contract、sysmeta 与 interface section 编解码 |
 | `src/moonir/ContainerModelInternal.h` | 私有 Encoder/Decoder 与跨 section 编解码辅助边界 |
 | `src/moonir/Container.cpp` | M005 binary framing、对齐、SHA-256 与不可信输入验证 |
+| `src/moonir/FragmentContextEffects.h` | Runtime Slot execution-context effect 推导接口 |
+| `src/moonir/FragmentContextEffects.cpp` | 以 RuntimeSlot 为种子对精确 direct call graph 求最小不动点 |
 | `src/moonir/Lowering.h` | typed AST 到 MoonIR 的 lowering 接口 |
 | `src/moonir/Lowering.cpp` | 消费 typed facts 生成 MoonIR；不得重新推断语义 |
 | `src/moonir/Sealer.h` | concrete executable body 原子封存接口 |
@@ -269,7 +271,7 @@ obligation，不能重新推导所有权。
 | `src/codegen/CodeGeneratorFunctions.cpp` | canonical-only 单函数入口、状态与隐式返回 lowering |
 | `src/codegen/CodeGeneratorExpressions.cpp` | 普通 expression/value lowering |
 | `src/codegen/CodeGeneratorCleanup.cpp` | cleanup、ADT payload、共享/数组资源释放 |
-| `src/codegen/CodeGeneratorControlFlow.cpp` | canonical typed-local CFG 的 LLVM block/local/terminator lowering |
+| `src/codegen/CodeGeneratorControlFlow.cpp` | canonical typed-local CFG 的 LLVM block/local/terminator lowering；含 RuntimeSlot 同步 Copy frame、显式 context dispatch、cleanup edge 及 `return`/`?` escape |
 | `src/codegen/CodeGeneratorExecution.cpp` | LLVM 生命周期、可保留 ORC JIT materialization、JIT 执行与 AOT IR 输出 |
 | `src/codegen/CodeGeneratorGpu.cpp` | GPU target、buffer ABI、launch 与 code object |
 | `src/codegen/CodeGeneratorIterator.cpp` | iterator recipe、pipeline、terminal lowering |
@@ -290,6 +292,9 @@ obligation，不能重新推导所有权。
 | `src/runtime/RuntimeDescriptorABI.h` | 已安装的 versioned C-compatible Runtime descriptor/metadata/registry ABI v1 |
 | `src/runtime/RuntimeDescriptor.h` | lease-owned registry 一次验证与精确 typed lookup 内部接口 |
 | `src/runtime/RuntimeDescriptor.cpp` | descriptor 有界字段、顺序、metadata 与 callable-kind 验证 |
+| `src/runtime/RuntimeFragmentABI.h` | 已安装的 Fragment factory、显式环境与 opaque activation execution thunk ABI v1 |
+| `src/runtime/RuntimeFragment.h` | move-only、generation-pinned `RuntimeFragmentRef`、owned/borrowed 环境构造及精确 Slot 候选快照接口 |
+| `src/runtime/RuntimeFragment.cpp` | Fragment/Slot/factory/environment 一次性验证、候选过滤、cleanup 与 lease 保持实现 |
 | `src/runtime/Runtime.h` | 编译器内嵌 Runtime 的 C++ 内部接口 |
 | `src/runtime/Runtime.cpp` | allocator/console/error/GPU Runtime 实现 |
 
@@ -412,6 +417,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/runtime_abi_c_compile.c` | 证明公开 Runtime ABI 头可由 C 编译 |
 | `tests/runtime_abi_test.cpp` | Runtime ABI v1 行为与兼容性 |
 | `tests/runtime_descriptor_test.cpp` | Runtime descriptor ABI v1 验证、精确 typed lookup 与 fail-closed 边界 |
+| `tests/runtime_fragment_test.cpp` | Runtime Fragment descriptor、名义 Slot 校验、显式环境 cleanup 与 generation lease 生命周期 |
 | `tests/runtime_gpu_error_test.cpp` | GPU/runtime 错误快照行为 |
 | `tests/analysis_protocol.cmake` | `luna.analysis` v1 JSONL envelope、声明记录与 byte span 回归 |
 | `tests/analysis_snapshot_test.cpp` | 内存/路径分析、部分失败状态与 frontend 生命周期回归 |
@@ -498,6 +504,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `docs/iterators.zh-CN.md`
 - `docs/luna_0.3_design.md`
 - `docs/luna_0.3_design.zh-CN.md`
+- `docs/slot_fragment_runtime_plan.md`
+- `docs/slot_fragment_runtime_plan.zh-CN.md`
 - `docs/luna_0.3_evolution_audit.md`
 - `docs/luna_0.3_evolution_audit.zh-CN.md`
 - `docs/migration_0.2_to_0.3.md`
@@ -661,6 +669,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/moonir/ContainerModelSections.cpp`
 - `src/moonir/ContainerModelInternal.h`
 - `src/moonir/ContainerModel.h`
+- `src/moonir/FragmentContextEffects.cpp`
+- `src/moonir/FragmentContextEffects.h`
 - `src/moonir/Lowering.cpp`
 - `src/moonir/LoweringDeclarations.cpp`
 - `src/moonir/LoweringExpressions.cpp`
@@ -704,6 +714,9 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/runtime/RuntimeDescriptor.cpp`
 - `src/runtime/RuntimeDescriptor.h`
 - `src/runtime/RuntimeDescriptorABI.h`
+- `src/runtime/RuntimeFragment.cpp`
+- `src/runtime/RuntimeFragment.h`
+- `src/runtime/RuntimeFragmentABI.h`
 - `src/runtime/Runtime.cpp`
 - `src/runtime/RuntimeGpu.cpp`
 - `src/runtime/Runtime.h`
@@ -835,11 +848,16 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/dynamic_select_0_2.luna`
 - `tests/fixtures/dynamic_select_removed_invalid.luna`
 - `tests/fixtures/runtime_retention_descriptor.luna`
+- `tests/fixtures/runtime_slot_cost.luna`
 - `tests/fixtures/enum_match.luna`
 - `tests/fixtures/enum_match_arity_invalid.luna`
 - `tests/fixtures/enum_match_duplicate_invalid.luna`
 - `tests/fixtures/enum_match_non_exhaustive_invalid.luna`
 - `tests/fixtures/enum_match_resource.luna`
+- `tests/fixtures/exported_fragment_move_only_environment_invalid.luna`
+- `tests/fixtures/exported_fragment_private_slot_invalid.luna`
+- `tests/fixtures/exported_fragment_runtime.luna`
+- `tests/fixtures/exported_slot_move_only_invalid.luna`
 - `tests/fixtures/external_fragment_dispatch.luna`
 - `tests/fixtures/ffi_generic_invalid.luna`
 - `tests/fixtures/ffi_owning_return.luna`
@@ -849,6 +867,15 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/ffi_unsupported_abi_invalid.luna`
 - `tests/fixtures/ffi_unsupported_type_invalid.luna`
 - `tests/fixtures/fragment_contracts.luna`
+- `tests/fixtures/fragment_environment_arity_invalid.luna`
+- `tests/fixtures/fragment_explicit_environment.luna`
+- `tests/fixtures/fragment_implicit_capture_invalid.luna`
+- `tests/fixtures/fragment_owned_environment.luna`
+- `tests/fixtures/fragment_owned_environment_move.luna`
+- `tests/fixtures/fragment_owned_environment_move_invalid.luna`
+- `tests/fixtures/fragment_linear_environment_invalid.luna`
+- `tests/fixtures/fragment_environment_partial_init_cleanup.luna`
+- `tests/fixtures/fragment_environment_usage_modifier_invalid.luna`
 - `tests/fixtures/fragment_return_value_invalid.luna`
 - `tests/fixtures/generic_argument_count_invalid.luna`
 - `tests/fixtures/generic_body_cloning.luna`
@@ -1004,12 +1031,14 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/selector_metadata_ambiguous_invalid.luna`
 - `tests/fixtures/selector_outside_view_invalid.luna`
 - `tests/fixtures/selector_user_logic.luna`
+- `tests/fixtures/static_slot_cost.luna`
 - `tests/fixtures/slice_borrow.luna`
 - `tests/fixtures/slice_bounds_invalid.luna`
 - `tests/fixtures/slice_empty_tail.luna`
 - `tests/fixtures/slice_write_source_invalid.luna`
 - `tests/fixtures/slot_cardinality_contract_mismatch_invalid.luna`
 - `tests/fixtures/slot_fragment_contract_mismatch_invalid.luna`
+- `tests/fixtures/slot_fragment_removed_surface_invalid.luna`
 - `tests/fixtures/slot_missing_contract_invalid.luna`
 - `tests/fixtures/static_declaration_reflection.luna`
 - `tests/fixtures/string_literal_local_cleanup.luna`
@@ -1091,6 +1120,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/moon_container_oracle.py`
 - `tests/moonir_canonical_closure_test.cpp`
 - `tests/moonir_canonical_control_flow_test.cpp`
+- `tests/moonir_canonical_cross_package_runtime_test.cpp`
 - `tests/moonir_canonical_iterator_cleanup_test.cpp`
 - `tests/moonir_canonical_iterator_ordering_test.cpp`
 - `tests/moonir_canonical_iterator_recipes_test.cpp`
@@ -1124,6 +1154,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/runtime_abi_c_compile.c`
 - `tests/runtime_abi_test.cpp`
 - `tests/runtime_descriptor_test.cpp`
+- `tests/runtime_fragment_test.cpp`
 - `tests/runtime_gpu_error_test.cpp`
 - `tests/semantic_regressions.cmake`
 - `tests/source_manager_test.cpp`

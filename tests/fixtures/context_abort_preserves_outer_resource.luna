@@ -1,7 +1,7 @@
-slot context hook();
+slot hook();
 
-context reject for hook {
-    abort();
+fragment reject for hook {
+    // Falling through discards the captured continuation.
 }
 
 fn main() -> i32 {

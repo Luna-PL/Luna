@@ -58,6 +58,7 @@ private:
                              luna::identity::SymbolId expectedSymbol = {},
                              luna::identity::ContractId expectedContract = {});
     void resolveDeclarationReferences();
+    void materializeRuntimeFragmentHelpers();
     void buildModuleInterfaces();
     void error(const ASTNode* node, const std::string& message);
 

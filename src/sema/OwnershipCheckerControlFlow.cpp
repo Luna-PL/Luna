@@ -8,7 +8,6 @@
 OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
     enterScope();
     mApplyScopes.emplace_back();
-    mSlotScopes.emplace_back();
     FlowResult result;
     for (auto& stmt : block->stmts) {
         result = checkStmt(stmt.get());
@@ -16,7 +15,6 @@ OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
             releaseLoansInCurrentScope();
             exitScope();
             mApplyScopes.pop_back();
-            mSlotScopes.pop_back();
             return {false, result.fallsThrough};
         }
         // Statements after a return are unreachable.  In particular, they
@@ -34,7 +32,6 @@ OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
     if (!mErrors.empty()) {
         exitScope();
         mApplyScopes.pop_back();
-        mSlotScopes.pop_back();
         return {false, result.fallsThrough};
     }
 
@@ -72,7 +69,6 @@ OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
 
     exitScope();
     mApplyScopes.pop_back();
-    mSlotScopes.pop_back();
     return {mErrors.empty(), result.fallsThrough};
 }
 
@@ -84,71 +80,56 @@ OwnershipChecker::FlowResult OwnershipChecker::checkSlotInvoke(SlotInvokeStmt* s
         }
         return nullptr;
     };
-    auto lookupDefault = [this, slot](const std::string& name) -> FragmentDecl* {
-        if (!slot->defaultFragment.empty()) {
-            auto direct = mFragments.find(slot->defaultFragment);
-            if (direct != mFragments.end()) return direct->second;
-        }
-        for (auto it = mSlotScopes.rbegin(); it != mSlotScopes.rend(); ++it) {
-            auto found = it->find(name);
-            if (found == it->end() || !found->second || found->second->defaultFragment.empty()) continue;
-            auto fragment = mFragments.find(found->second->defaultFragment);
-            if (fragment != mFragments.end()) return fragment->second;
-        }
-        return nullptr;
-    };
-
     FragmentDecl* fragment = lookupApplied(slot->name);
-    if (!fragment) fragment = lookupDefault(slot->name);
 
-    if (!fragment) return checkBlock(slot->continuation.get());
-
-    const bool multiShot = fragment->cardinality == FragmentCardinality::Many;
-    if (!multiShot) return checkFragment(fragment, slot, false);
-
-    // Multi-shot continuations are replayed from the same frame. Check one
-    // execution on a snapshot, then reject any captured ownership transition.
-    const auto savedScopes = mScopes;
-    const auto savedLoans = mLoansInScope;
-    const size_t errorsBefore = mErrors.size();
-    bool continuationOk = checkBlock(slot->continuation.get()).ok;
-    const bool consumes = continuationConsumesCapturedState(savedScopes);
-    mScopes = savedScopes;
-    mLoansInScope = savedLoans;
-    if (consumes) {
-        error("slot '" + slot->name + "' continuation consumes or frees captured state and cannot be resumed more than once",
-              slot->line, slot->col);
-        continuationOk = false;
+    if (!fragment) {
+        // A runtime-selected Fragment may finish without resuming the
+        // continuation. Its owner then continues after the Slot with the
+        // pre-invocation ownership state, even if the continuation itself
+        // always returns. If it does resume and complete normally, both
+        // continuing paths must agree on ownership.
+        const CheckerState before = captureState();
+        FlowResult continuation = checkBlock(slot->continuation.get());
+        if (!continuation.ok) {
+            restoreState(before);
+            return continuation;
+        }
+        if (!continuation.fallsThrough) {
+            restoreState(before);
+            return {true, true};
+        }
+        const CheckerState after = captureState();
+        if (!mergeFallthroughStates(before, before, after, slot))
+            return {false, true};
+        return {true, true};
     }
-    // Do not emit duplicate diagnostics from the validation-only traversal.
-    if (mErrors.size() > errorsBefore && !continuationOk) {
-        // Preserve real continuation diagnostics while ensuring the fragment
-        // itself is still checked with resume treated as a replay marker.
-    }
-    FlowResult fragmentResult = checkFragment(fragment, slot, true);
-    return {continuationOk && fragmentResult.ok, fragmentResult.fallsThrough};
+    return checkFragment(fragment, slot);
 }
 
 OwnershipChecker::FlowResult OwnershipChecker::checkFragment(
-    FragmentDecl* fragment, SlotInvokeStmt* slot, bool multiShot) {
+    FragmentDecl* fragment, SlotInvokeStmt* slot) {
     const CheckerState before = captureState();
     auto* savedContinuation = mCurrentSlotContinuation;
-    const bool savedManyValidation = mValidatingManyContinuation;
     const bool savedCheckingContinuation = mCheckingSlotContinuation;
-    auto* savedAbortExits = mCurrentFragmentAbortExits;
+    auto* savedFragmentExits = mCurrentFragmentExits;
     const size_t savedScopeBase = mCurrentFragmentScopeBase;
     const size_t savedApplyBase = mCurrentFragmentApplyBase;
-    const size_t savedSlotBase = mCurrentFragmentSlotBase;
     std::vector<CheckerState> exits;
     mCurrentSlotContinuation = slot->continuation.get();
-    mValidatingManyContinuation = multiShot;
     mCheckingSlotContinuation = false;
-    mCurrentFragmentAbortExits = &exits;
+    mCurrentFragmentExits = &exits;
     mCurrentFragmentScopeBase = before.scopes.size();
     mCurrentFragmentApplyBase = before.applyScopes.size();
-    mCurrentFragmentSlotBase = before.slotScopes.size();
 
     enterScope();
+    for (auto& param : fragment->environmentParams) {
+        TypePtr type = param.inferredType ? param.inferredType
+                                          : resolveType(param.type.get(), {});
+        define(param.name, type, false, luna::ownership::Usage::Copy,
+               luna::ownership::Relation::SharedBorrow,
+               type && type->kind == TypeKind::Reference,
+               false);
+    }
     for (auto& param : fragment->params) {
         TypePtr type = param.inferredType ? param.inferredType
                                            : resolveType(param.type.get(), {});
@@ -160,28 +141,20 @@ OwnershipChecker::FlowResult OwnershipChecker::checkFragment(
     }
     FlowResult body = fragment->body ? checkBlock(fragment->body.get()) : FlowResult{};
     bool ok = body.ok;
-    if (ok && body.fallsThrough && fragment->kind == FragmentKind::Interceptor) {
-        FlowResult continuation = checkBlock(slot->continuation.get());
-        ok = continuation.ok;
-        body.fallsThrough = continuation.fallsThrough;
-    }
     if (ok && body.fallsThrough) {
         CheckerState normal = captureState();
         normal.scopes.resize(before.scopes.size());
         normal.loans.resize(before.loans.size());
         normal.applyScopes.resize(before.applyScopes.size());
-        normal.slotScopes.resize(before.slotScopes.size());
         exits.push_back(std::move(normal));
     }
     exitScope();
 
     mCurrentSlotContinuation = savedContinuation;
-    mValidatingManyContinuation = savedManyValidation;
     mCheckingSlotContinuation = savedCheckingContinuation;
-    mCurrentFragmentAbortExits = savedAbortExits;
+    mCurrentFragmentExits = savedFragmentExits;
     mCurrentFragmentScopeBase = savedScopeBase;
     mCurrentFragmentApplyBase = savedApplyBase;
-    mCurrentFragmentSlotBase = savedSlotBase;
 
     restoreState(before);
     if (!ok) return {false, false};
@@ -196,35 +169,19 @@ OwnershipChecker::FlowResult OwnershipChecker::checkFragment(
         merged = captureState();
     }
     restoreState(merged);
-    // An abort exits the fragment but deliberately resumes the code after
-    // the slot invocation. A continuation return, in contrast, leaves no
-    // fragment exit and terminates the enclosing function.
+    // Fragment completion resumes after the slot invocation. A continuation
+    // return, in contrast, leaves no fragment exit and terminates the owner.
     return {true, body.fallsThrough || !exits.empty()};
 }
 
-bool OwnershipChecker::continuationConsumesCapturedState(
-    const std::vector<std::unordered_map<std::string, VarInfo>>& before) const {
-    const size_t scopeCount = std::min(before.size(), mScopes.size());
-    for (size_t i = 0; i < scopeCount; ++i) {
-        for (const auto& [name, prior] : before[i]) {
-            auto current = mScopes[i].find(name);
-            if (current == mScopes[i].end()) continue;
-            if (prior.state == OwnState::Valid && current->second.state != OwnState::Valid)
-                return true;
-        }
-    }
-    return false;
-}
-
 OwnershipChecker::CheckerState OwnershipChecker::captureState() const {
-    return {mScopes, mLoansInScope, mApplyScopes, mSlotScopes};
+    return {mScopes, mLoansInScope, mApplyScopes};
 }
 
 void OwnershipChecker::restoreState(const CheckerState& state) {
     mScopes = state.scopes;
     mLoansInScope = state.loans;
     mApplyScopes = state.applyScopes;
-    mSlotScopes = state.slotScopes;
 }
 
 bool OwnershipChecker::sameVarState(const VarInfo& left, const VarInfo& right) const {
@@ -278,20 +235,6 @@ bool OwnershipChecker::sameApplyState(
     return true;
 }
 
-bool OwnershipChecker::sameSlotState(
-    const std::vector<std::unordered_map<std::string, SlotDeclStmt*>>& left,
-    const std::vector<std::unordered_map<std::string, SlotDeclStmt*>>& right) const {
-    if (left.size() != right.size()) return false;
-    for (size_t i = 0; i < left.size(); ++i) {
-        if (left[i].size() != right[i].size()) return false;
-        for (const auto& [name, slot] : left[i]) {
-            auto found = right[i].find(name);
-            if (found == right[i].end() || found->second != slot) return false;
-        }
-    }
-    return true;
-}
-
 std::string OwnershipChecker::describeControlFlowDifference(
     const std::string& name, const VarInfo& left, const VarInfo& right,
     const char* construct) const {
@@ -323,6 +266,8 @@ bool OwnershipChecker::mergeFallthroughStates(const CheckerState& before,
                                               const CheckerState& left,
                                               const CheckerState& right,
                                               const ASTNode* controlFlow) {
+    const char* construct =
+        dynamic_cast<const SlotInvokeStmt*>(controlFlow) ? "slot" : "if";
     if (before.scopes.size() != left.scopes.size() ||
         before.scopes.size() != right.scopes.size()) {
         error("internal ownership-state mismatch while merging control-flow paths",
@@ -344,7 +289,7 @@ bool OwnershipChecker::mergeFallthroughStates(const CheckerState& before,
                 continue;
             }
             if (!sameVarState(leftVar->second, rightVar->second)) {
-                error(describeControlFlowDifference(name, leftVar->second, rightVar->second, "if"),
+                error(describeControlFlowDifference(name, leftVar->second, rightVar->second, construct),
                       controlFlow ? controlFlow->line : 0, controlFlow ? controlFlow->col : 0);
                 ok = false;
                 continue;
@@ -362,9 +307,8 @@ bool OwnershipChecker::mergeFallthroughStates(const CheckerState& before,
             }
         }
     }
-    if (ok && (!sameLoans || !sameApplyState(left.applyScopes, right.applyScopes) ||
-               !sameSlotState(left.slotScopes, right.slotScopes))) {
-        error("lexical borrow, slot, or apply state differs across paths through `if`; "
+    if (ok && (!sameLoans || !sameApplyState(left.applyScopes, right.applyScopes))) {
+        error(std::string("lexical borrow or apply state differs across paths through `") + construct + "`; "
               "such state must remain branch-local", controlFlow ? controlFlow->line : 0,
               controlFlow ? controlFlow->col : 0);
         ok = false;
@@ -405,9 +349,8 @@ bool OwnershipChecker::loopPreservesOuterState(const CheckerState& before,
             }
         }
     }
-    if (ok && (!sameLoans || !sameApplyState(before.applyScopes, after.applyScopes) ||
-               !sameSlotState(before.slotScopes, after.slotScopes))) {
-        error("loop body changes a lexical slot or apply binding; make that binding local to the loop body",
+    if (ok && (!sameLoans || !sameApplyState(before.applyScopes, after.applyScopes))) {
+        error("loop body changes a lexical apply binding; make that binding local to the loop body",
               loop ? loop->line : 0, loop ? loop->col : 0);
         ok = false;
     }

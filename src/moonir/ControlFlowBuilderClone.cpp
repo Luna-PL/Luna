@@ -386,41 +386,21 @@ std::unique_ptr<Stmt> cloneStructuredStmt(const Stmt* source) {
         result->isImplicit = statement->isImplicit;
         return result;
     }
-    if (const auto* statement = dynamic_cast<const SlotDeclStmt*>(source)) {
-        auto result = clonedNode(statement);
-        result->name = statement->name;
-        result->acceptedKind = statement->acceptedKind;
-        result->acceptedCardinality = statement->acceptedCardinality;
-        result->params = statement->params;
-        result->defaultFragment = statement->defaultFragment;
-        result->defaultFragmentRef = statement->defaultFragmentRef;
-        result->structuralType = statement->structuralType;
-        return result;
-    }
     if (const auto* statement = dynamic_cast<const SlotInvokeStmt*>(source)) {
         auto result = clonedNode(statement);
         result->name = statement->name;
-        result->acceptedKind = statement->acceptedKind;
-        result->acceptedCardinality = statement->acceptedCardinality;
+        result->slotRef = statement->slotRef;
         for (const auto& argument : statement->args)
             result->args.push_back(cloneStructuredExpr(argument.get()));
         result->continuation = cloneStructuredBlock(statement->continuation.get());
         result->isImplicitCapture = statement->isImplicitCapture;
         result->interfaceParams = statement->interfaceParams;
         result->resolvedParamNames = statement->resolvedParamNames;
-        result->defaultFragment = statement->defaultFragment;
-        result->defaultFragmentRef = statement->defaultFragmentRef;
         result->structuralType = statement->structuralType;
         return result;
     }
     if (const auto* statement = dynamic_cast<const ResumeStmt*>(source))
         return clonedNode(statement);
-    if (const auto* statement = dynamic_cast<const AbortStmt*>(source)) {
-        auto result = clonedNode(statement);
-        result->autoFrees = statement->autoFrees;
-        result->cleanups = statement->cleanups;
-        return result;
-    }
     if (const auto* statement = dynamic_cast<const AwaitStmt*>(source)) {
         auto result = clonedNode(statement);
         result->event = cloneStructuredExpr(statement->event.get());
@@ -431,6 +411,9 @@ std::unique_ptr<Stmt> cloneStructuredStmt(const Stmt* source) {
         result->slotName = statement->slotName;
         result->fragmentName = statement->fragmentName;
         result->fragmentRef = statement->fragmentRef;
+        result->borrowsEnvironment = statement->borrowsEnvironment;
+        for (const auto& argument : statement->environmentArgs)
+            result->environmentArgs.push_back(cloneStructuredExpr(argument.get()));
         result->body = cloneStructuredBlock(statement->body.get());
         return result;
     }
@@ -680,6 +663,9 @@ std::unique_ptr<Stmt> rewriteCaptureReadsStmt(
         return stmt;
     }
     if (auto* apply = dynamic_cast<ApplyStmt*>(stmt.get())) {
+        for (auto& argument : apply->environmentArgs)
+            argument = rewriteCaptureReadsExpr(
+                std::move(argument), captures, envLocal, closureType, module);
         for (auto& statement : apply->body->stmts)
             statement = rewriteCaptureReadsStmt(
                 std::move(statement), captures, envLocal, closureType, module);

@@ -53,6 +53,10 @@ set(installed_runtime_header
     "${stage}/${LUNA_INSTALL_INCLUDEDIR}/luna/runtime/RuntimeABI.h")
 set(installed_descriptor_header
     "${stage}/${LUNA_INSTALL_INCLUDEDIR}/luna/runtime/RuntimeDescriptorABI.h")
+set(installed_fragment_header
+    "${stage}/${LUNA_INSTALL_INCLUDEDIR}/luna/runtime/RuntimeFragment.h")
+set(installed_fragment_abi_header
+    "${stage}/${LUNA_INSTALL_INCLUDEDIR}/luna/runtime/RuntimeFragmentABI.h")
 set(installed_evolution_header
     "${stage}/${LUNA_INSTALL_INCLUDEDIR}/luna/runtime/Evolution.h")
 set(installed_moon_runtime_header
@@ -67,6 +71,8 @@ foreach(installed
         "${installed_runtime}"
         "${installed_runtime_header}"
         "${installed_descriptor_header}"
+        "${installed_fragment_header}"
+        "${installed_fragment_abi_header}"
         "${installed_evolution_header}"
         "${installed_moon_runtime_header}"
         "${installed_stdlib}"

@@ -1,6 +1,6 @@
-slot context hook();
+slot hook();
 
-context invalid for hook {
+fragment invalid for hook {
     print(1);
 }
 

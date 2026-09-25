@@ -1,0 +1,17 @@
+slot hook();
+
+fragment candidate for hook { }
+
+runtime slot published();
+
+runtime fragment published_candidate for hook { }
+
+slot fallback() default candidate;
+
+fragment aborted for hook {
+    abort();
+}
+
+fragment legacy_resume for hook {
+    resume();
+}

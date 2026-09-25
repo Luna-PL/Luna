@@ -59,12 +59,11 @@ private:
         std::optional<OpenBlock> exit;
     };
 
-    struct FragmentContext {
+    struct FragmentFrame {
         BlockId exit;
-        FragmentKind kind = FragmentKind::Interceptor;
         const BlockStmt* continuation = nullptr;
         // Binding scopes at or below this depth belong to the fragment. A
-        // context continuation retains their lifetime but must resolve names
+        // slot continuation retains their lifetime but must resolve names
         // only in the invoking lexical environment.
         size_t outerBindingDepth = 0;
     };
@@ -205,6 +204,8 @@ private:
         OpenBlock current, RegionId region, ScopeId scope);
     const FragmentDecl* resolveFragment(
         const DeclarationRef& reference) const;
+    const SlotDecl* resolveSlot(
+        const DeclarationRef& reference) const;
 
     bool bindExpr(Expr* expression);
     bool parseIteratorRecipe(
@@ -247,21 +248,28 @@ private:
         size_t outerBindingDepth = 0;
         std::vector<std::unordered_map<std::string, LocalId>> bindings;
     };
-    // A context continuation cannot resolve fragment-local names, but an
+    // A slot continuation cannot resolve fragment-local names, but an
     // enclosing-function return from that continuation must still lower the
     // cleanup obligations of live fragment locals. Each group records where
     // those hidden scopes sit in lexical cleanup order.
     std::vector<HiddenCleanupBindingGroup> mHiddenCleanupBindingGroups;
     std::vector<std::unordered_map<std::string, MaterializedIteratorRecipe>>
         mMaterializedIterators;
-    std::vector<std::unordered_map<std::string, DeclarationRef>>
-        mSlotDefaults;
-    std::vector<std::unordered_map<std::string, DeclarationRef>>
+    struct StaticFragmentBinding {
+        DeclarationRef fragment;
+        std::vector<LocalId> environmentLocals;
+    };
+    std::vector<std::unordered_map<std::string, StaticFragmentBinding>>
         mStaticApplyScopes;
+    // Each lexical apply owns its materialized environment until the apply
+    // exits. Fragment activations only borrow these locals. Function exits
+    // originating in a resumed continuation must therefore carry every
+    // active apply environment cleanup, while fragment-local exits must not.
+    std::vector<std::vector<CleanupId>> mActiveApplyEnvironmentCleanups;
     // Active only while a cloned static fragment body is being composed into
-    // its invocation graph. A source `return` or `abort` exits that fragment,
-    // not the enclosing Luna function.
-    std::vector<FragmentContext> mFragmentContexts;
+    // its invocation graph. A source `return` exits that fragment, not the
+    // enclosing Luna function.
+    std::vector<FragmentFrame> mFragmentFrames;
     std::unordered_map<uint32_t, CleanupId> mCleanupByLocal;
     // Cleanup-bearing synthetic operands are active from their generated let
     // until the parent expression consumes them. Structured early exits built
@@ -270,7 +278,7 @@ private:
     std::vector<CleanupId> mActiveExpressionCleanups;
     // Recipe-state names of guarded consuming for-loops currently being
     // lowered. The frontend records each as a cleanup obligation on return/
-    // abort edges, but the obligation has no canonical local: every element is
+    // fragment-discard edges, but the obligation has no canonical local: every element is
     // moved out by a canonical MoveExpr whose cleanup is the per-element
     // guarded tail already attached to the exit edge through
     // mActiveExpressionCleanups. Such obligations are skipped in

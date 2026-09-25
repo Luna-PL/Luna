@@ -12,16 +12,15 @@ fn source() -> Result<i32, i32> {
     return Err(7);
 }
 
-slot context hook();
+slot hook();
 
-context around for hook {
-    let resource = new TryResource(62);
-    resume();
+fragment around[resource: TryResource] for hook {
+    resume;
     print(99);
 }
 
 fn pipeline() -> Result<i32, i32> {
-    apply around {
+    apply around[new TryResource(62)] {
         hook() {
             let value = source()?;
             print(value);

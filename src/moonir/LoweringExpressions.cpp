@@ -632,29 +632,12 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         value->action = release->action;
         value->isImplicit = release->isImplicit;
         result = std::move(value);
-    } else if (auto* slot = dynamic_cast<const ::SlotDeclStmt*>(statement)) {
-        auto value = std::make_unique<moon::SlotDeclStmt>();
-        value->name = slot->name;
-        value->acceptedKind = slot->acceptedKind == ::FragmentKind::Interceptor
-            ? moon::FragmentKind::Interceptor : moon::FragmentKind::Context;
-        value->acceptedCardinality = slot->acceptedCardinality == ::FragmentCardinality::Once
-            ? moon::FragmentCardinality::Once : moon::FragmentCardinality::Many;
-        for (const auto& parameter : slot->params)
-            value->params.push_back(lowerParam(parameter));
-        value->defaultFragment = slot->defaultFragment;
-        deferDeclarationRef(
-            value->defaultFragmentRef,
-            slot->resolvedDefaultFragmentName,
-            slot, "slot default fragment");
-        value->structuralType = typeRef(slot->structuralType);
-        result = std::move(value);
     } else if (auto* slot = dynamic_cast<const ::SlotInvokeStmt*>(statement)) {
         auto value = std::make_unique<moon::SlotInvokeStmt>();
         value->name = slot->name;
-        value->acceptedKind = slot->acceptedKind == ::FragmentKind::Interceptor
-            ? moon::FragmentKind::Interceptor : moon::FragmentKind::Context;
-        value->acceptedCardinality = slot->acceptedCardinality == ::FragmentCardinality::Once
-            ? moon::FragmentCardinality::Once : moon::FragmentCardinality::Many;
+        deferDeclarationRef(
+            value->slotRef, slot->resolvedSlotName,
+            slot, "slot invocation '" + slot->name + "'");
         for (const auto& argument : slot->args)
             value->args.push_back(lowerExpr(argument.get()));
         value->continuation = lowerBlock(slot->continuation.get());
@@ -662,29 +645,10 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         for (const auto& parameter : slot->interfaceParams)
             value->interfaceParams.push_back(lowerParam(parameter));
         value->resolvedParamNames = slot->resolvedParamNames;
-        value->defaultFragment = slot->defaultFragment;
-        deferDeclarationRef(
-            value->defaultFragmentRef,
-            slot->resolvedDefaultFragmentName,
-            slot, "slot invocation default fragment");
         value->structuralType = typeRef(slot->structuralType);
         result = std::move(value);
     } else if (dynamic_cast<const ::ResumeStmt*>(statement)) {
         result = std::make_unique<moon::ResumeStmt>();
-    } else if (auto* abort = dynamic_cast<const ::AbortStmt*>(statement)) {
-        auto value = std::make_unique<moon::AbortStmt>();
-        value->autoFrees = abort->autoFrees;
-        for (const auto& cleanup : abort->cleanups) {
-            moon::CleanupObligation lowered;
-            lowered.place = cleanup.place;
-            lowered.action = cleanup.action;
-            if (cleanup.type) {
-                if (mModule) mModule->registerType(cleanup.type);
-                lowered.typeId = luna::types::typeId(cleanup.type);
-            }
-            value->cleanups.push_back(std::move(lowered));
-        }
-        result = std::move(value);
     } else if (auto* await = dynamic_cast<const ::AwaitStmt*>(statement)) {
         auto value = std::make_unique<moon::AwaitStmt>();
         value->event = lowerExpr(await->event.get());
@@ -697,6 +661,8 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         value->fragmentRef,
             apply->resolvedFragmentName,
             apply, "apply fragment");
+        for (const auto& argument : apply->environmentArgs)
+            value->environmentArgs.push_back(lowerExpr(argument.get()));
         value->body = lowerBlock(apply->body.get());
         result = std::move(value);
     } else {

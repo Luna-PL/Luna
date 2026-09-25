@@ -481,16 +481,12 @@ TypePtr BodyAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
     // accidentally inline a fragment or emit a host runtime call into HSACO.
     if (mContext.mInKernel) {
         const char* construct = nullptr;
-        if (dynamic_cast<SlotDeclStmt*>(stmt))
-            construct = "slot declaration";
-        else if (dynamic_cast<SlotInvokeStmt*>(stmt))
+        if (dynamic_cast<SlotInvokeStmt*>(stmt))
             construct = "slot invocation";
         else if (dynamic_cast<ApplyStmt*>(stmt))
             construct = "apply binding";
         else if (dynamic_cast<ResumeStmt*>(stmt))
             construct = "resume()";
-        else if (dynamic_cast<AbortStmt*>(stmt))
-            construct = "abort()";
         else if (dynamic_cast<AwaitStmt*>(stmt))
             construct = "await";
         else if (dynamic_cast<FreeStmt*>(stmt))
@@ -503,10 +499,6 @@ TypePtr BodyAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
             return TyUnit;
         }
     }
-    if (auto* slot = dynamic_cast<SlotDeclStmt*>(stmt)) {
-        mContext.analyzeSlotDecl(slot);
-        return TyUnit;
-    }
     if (auto* slot = dynamic_cast<SlotInvokeStmt*>(stmt)) {
         mContext.analyzeSlotInvoke(slot, expectedReturn);
         return TyUnit;
@@ -517,18 +509,7 @@ TypePtr BodyAnalyzer::analyzeStmt(Stmt* stmt, TypePtr expectedReturn) {
     }
     if (dynamic_cast<ResumeStmt*>(stmt)) {
         if (!mContext.mCurrentFragmentDecl)
-            mContext.error("`resume()` may only appear inside a fragment", stmt->line, stmt->col);
-        else if (mContext.mCurrentFragmentDecl &&
-                 mContext.mCurrentFragmentDecl->kind == FragmentKind::Interceptor)
-            mContext.error("`resume()` is not allowed in an interceptor; normal completion "
-                           "forwards automatically",
-                           stmt->line, stmt->col);
-        return TyUnit;
-    }
-    if (dynamic_cast<AbortStmt*>(stmt)) {
-        if (!mContext.mCurrentFragmentDecl)
-            mContext.error("`abort()` may only appear inside an interceptor or context", stmt->line,
-                           stmt->col);
+            mContext.error("`resume;` may only appear inside a fragment", stmt->line, stmt->col);
         return TyUnit;
     }
     if (auto* await = dynamic_cast<AwaitStmt*>(stmt)) {

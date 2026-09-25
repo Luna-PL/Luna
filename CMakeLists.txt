@@ -116,6 +116,7 @@ add_library(runtime STATIC
     src/runtime/ApplicationHostServices.cpp
     src/runtime/MoonRuntime.cpp
     src/runtime/RuntimeDescriptor.cpp
+    src/runtime/RuntimeFragment.cpp
     src/runtime/Runtime.cpp
     src/runtime/RuntimeGpu.cpp)
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
@@ -137,6 +138,12 @@ add_executable(runtime-descriptor-test
     src/runtime/RuntimeDescriptor.cpp)
 target_include_directories(runtime-descriptor-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+add_executable(runtime-fragment-test
+    tests/runtime_fragment_test.cpp)
+target_include_directories(runtime-fragment-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(runtime-fragment-test PRIVATE runtime)
 
 add_executable(runtime-allocation-abi-test
     tests/runtime_allocation_abi_test.cpp)
@@ -290,6 +297,7 @@ add_executable(moon-container-model-test
     src/moonir/ContainerModelOpcodes.cpp
     src/moonir/ContainerModelProjection.cpp
     src/moonir/ContainerModelSections.cpp
+    src/moonir/FragmentContextEffects.cpp
     src/moonir/MoonIR.cpp
     src/moonir/Verifier.cpp
     src/moonir/VerifierControlFlow.cpp
@@ -317,6 +325,7 @@ if(LUNA_ENABLE_FUZZING)
         src/moonir/ContainerModelOpcodes.cpp
         src/moonir/ContainerModelProjection.cpp
         src/moonir/ContainerModelSections.cpp
+        src/moonir/FragmentContextEffects.cpp
         src/moonir/MoonIR.cpp
         src/moonir/Verifier.cpp
         src/moonir/VerifierControlFlow.cpp
@@ -353,6 +362,7 @@ add_executable(moonir-canonical-test
     tests/moonir_canonical_sealing_functions_test.cpp
     tests/moonir_canonical_sealing_composition_test.cpp
     tests/moonir_canonical_sealing_lowering_test.cpp
+    tests/moonir_canonical_cross_package_runtime_test.cpp
     tests/moonir_canonical_sealing_symbols_test.cpp
     tests/moonir_canonical_sealing_iterators_test.cpp
     src/driver/MoonGeneration.cpp
@@ -374,6 +384,7 @@ add_executable(moonir-canonical-test
     src/moonir/Lowering.cpp
     src/moonir/LoweringDeclarations.cpp
     src/moonir/LoweringExpressions.cpp
+    src/moonir/FragmentContextEffects.cpp
     src/moonir/MoonIR.cpp
     src/moonir/Sealer.cpp
     src/moonir/Verifier.cpp
@@ -402,6 +413,7 @@ add_executable(moonir-canonical-test
     src/runtime/ApplicationHostServices.cpp
     src/runtime/MoonRuntime.cpp
     src/runtime/RuntimeDescriptor.cpp
+    src/runtime/RuntimeFragment.cpp
     src/runtime/Runtime.cpp
     src/runtime/RuntimeGpu.cpp
     src/driver/CompilerPipeline.cpp
@@ -410,6 +422,8 @@ add_executable(moonir-canonical-test
 )
 target_include_directories(moonir-canonical-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_compile_definitions(moonir-canonical-test
+    PRIVATE LUNA_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
 target_include_directories(moonir-canonical-test SYSTEM PRIVATE
     ${LLVM_INCLUDE_DIRS})
 target_link_libraries(moonir-canonical-test PRIVATE LLVM)
@@ -451,6 +465,7 @@ add_executable(luna
     src/moonir/ContainerModelOpcodes.cpp
     src/moonir/ContainerModelProjection.cpp
     src/moonir/ContainerModelSections.cpp
+    src/moonir/FragmentContextEffects.cpp
     src/moonir/MoonIR.cpp
     src/moonir/Lowering.cpp
     src/moonir/LoweringDeclarations.cpp
@@ -484,6 +499,7 @@ add_executable(luna
     src/runtime/ApplicationHostServices.cpp
     src/runtime/MoonRuntime.cpp
     src/runtime/RuntimeDescriptor.cpp
+    src/runtime/RuntimeFragment.cpp
     src/runtime/Runtime.cpp
     src/runtime/RuntimeGpu.cpp
 )
@@ -519,6 +535,7 @@ if(LUNA_STRICT_WARNINGS)
         runtime-abi-c-compile
         runtime-abi-test
         runtime-descriptor-test
+        runtime-fragment-test
         runtime-allocation-abi-test
         runtime-default-allocation-test
         runtime-filesystem-abi-test
@@ -568,7 +585,8 @@ if(LUNA_ENABLE_SANITIZERS)
     foreach(target IN ITEMS
             luna luna-frontend analysis-snapshot-test moonir-canonical-test
             moon-container-test moon-container-model-test moon-runtime-test
-            native-artifact-test runtime-descriptor-test builtin-types-test)
+            native-artifact-test runtime-descriptor-test
+            runtime-fragment-test builtin-types-test)
         target_compile_options(${target} PRIVATE
             -fsanitize=address,undefined
             -fno-omit-frame-pointer)
@@ -595,6 +613,9 @@ if(LUNA_ENABLE_SANITIZERS)
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
     target_link_options(runtime-descriptor-test PRIVATE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer)
+    target_link_options(runtime-fragment-test PRIVATE
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
     target_link_options(builtin-types-test PRIVATE
@@ -682,6 +703,7 @@ endif()
 install(FILES src/runtime/Evolution.h src/runtime/MoonRuntime.h
               src/runtime/NativeArtifactABI.h
               src/runtime/RuntimeABI.h src/runtime/RuntimeDescriptorABI.h
+              src/runtime/RuntimeFragment.h src/runtime/RuntimeFragmentABI.h
         DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/luna/runtime)
 install(FILES README.md README.zh-CN.md CHANGELOG.md VERSION LICENSE-MIT LICENSE-APACHE
         DESTINATION ${CMAKE_INSTALL_DOCDIR})
@@ -817,6 +839,10 @@ if(BUILD_TESTING)
     add_test(
         NAME luna.runtime-descriptor-v1
         COMMAND $<TARGET_FILE:runtime-descriptor-test>
+    )
+    add_test(
+        NAME luna.runtime-fragment-v1
+        COMMAND $<TARGET_FILE:runtime-fragment-test>
     )
     add_test(
         NAME luna.runtime-allocation-abi-v1

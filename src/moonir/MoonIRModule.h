@@ -28,6 +28,9 @@ struct FunctionDecl : Decl {
     bool isExtern = false;
     bool isConstexpr = false;
     bool isSelector = false;
+    // Derived after CFG sealing. True exactly when this function or one of its
+    // exact direct callees can reach a RuntimeSlot terminator.
+    bool requiresFragmentContext = false;
     std::string abi;
     std::string linkName;
     std::vector<std::string> typeParams;
@@ -44,20 +47,18 @@ struct FunctionDecl : Decl {
 };
 
 struct FragmentDecl : Decl {
-    FragmentKind kind = FragmentKind::Interceptor;
-    FragmentCardinality cardinality = FragmentCardinality::Once;
     DeclarationRef targetSlot;
+    std::vector<Param> environmentParams;
+    TypeRef environmentType;
     std::vector<Param> params;
     std::unique_ptr<BlockStmt> body;
     TypeRef structuralType;
 };
 
 struct SlotDecl : Decl {
-    FragmentKind acceptedKind = FragmentKind::Interceptor;
-    FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
     std::vector<Param> params;
-    DeclarationRef defaultFragment;
     TypeRef structuralType;
+    TypeRef argumentsType;
 };
 
 struct StructDecl : Decl {

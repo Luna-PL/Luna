@@ -36,17 +36,24 @@ void SymbolTable::defineLinkage(const std::string& name, SymbolInfo info) {
 }
 
 SymbolInfo* SymbolTable::lookup(const std::string& name) {
-    for (auto it = mScopes.rbegin(); it != mScopes.rend(); ++it) {
-        auto found = it->find(name);
-        if (found != it->end()) return &found->second;
+    const size_t barrier = mVisibilityBarriers.empty()
+        ? size_t{1} : mVisibilityBarriers.back();
+    for (size_t depth = mScopes.size(); depth > barrier; --depth) {
+        auto found = mScopes[depth - 1].find(name);
+        if (found != mScopes[depth - 1].end()) return &found->second;
     }
+    auto root = mScopes.front().find(name);
+    if (root != mScopes.front().end()) return &root->second;
     return nullptr;
 }
 
 size_t SymbolTable::lookupDepth(const std::string& name) const {
-    for (size_t depth = mScopes.size(); depth > 0; --depth) {
+    const size_t barrier = mVisibilityBarriers.empty()
+        ? size_t{1} : mVisibilityBarriers.back();
+    for (size_t depth = mScopes.size(); depth > barrier; --depth) {
         if (mScopes[depth - 1].count(name)) return depth - 1;
     }
+    if (mScopes.front().count(name)) return 0;
     return static_cast<size_t>(-1);
 }
 
@@ -75,9 +82,22 @@ bool SymbolTable::isPredefinedType(const std::string& name) const {
 }
 
 std::unordered_map<std::string, SymbolInfo> SymbolTable::visibleSymbols() const {
-    std::unordered_map<std::string, SymbolInfo> result;
-    for (const auto& scope : mScopes) {
-        for (const auto& [name, info] : scope) result[name] = info;
-    }
+    std::unordered_map<std::string, SymbolInfo> result = mScopes.front();
+    const size_t barrier = mVisibilityBarriers.empty()
+        ? size_t{1} : mVisibilityBarriers.back();
+    for (size_t depth = barrier; depth < mScopes.size(); ++depth)
+        for (const auto& [name, info] : mScopes[depth]) result[name] = info;
     return result;
+}
+
+void SymbolTable::enterIsolatedScope() {
+    mVisibilityBarriers.push_back(mScopes.size());
+    enterScope();
+}
+
+void SymbolTable::exitIsolatedScope() {
+    if (mVisibilityBarriers.empty()) return;
+    const size_t barrier = mVisibilityBarriers.back();
+    while (mScopes.size() > barrier) exitScope();
+    mVisibilityBarriers.pop_back();
 }

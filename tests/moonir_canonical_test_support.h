@@ -217,6 +217,7 @@ inline int invokeUnaryGenerationEntry(const void* address, int value) {
 }
 
 int runRegisteredTests();
+int runCrossPackageRuntimeTest();
 int runControlFlowTests(ControlFlowTestContext& context);
 int runIteratorTests(ControlFlowTestContext& context);
 int runIteratorRecipeTests(ControlFlowTestContext& context);

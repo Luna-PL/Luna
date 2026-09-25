@@ -1,6 +1,6 @@
-slot interceptor hook();
+slot hook();
 
-interceptor invalid for hook {
+fragment invalid for hook {
     return 1;
 }
 

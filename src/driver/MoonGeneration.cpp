@@ -4,6 +4,7 @@
 #include "diagnostics/Diagnostic.h"
 #include "moonir/ContainerModel.h"
 #include "runtime/RuntimeDescriptor.h"
+#include "runtime/RuntimeFragment.h"
 
 #include <llvm/ADT/ArrayRef.h>
 #include <llvm/Support/SHA256.h>
@@ -45,9 +46,24 @@ bool hasRetainedMetadata(const moon::DeclarationRecord& record) {
         });
 }
 
-bool hasRuntimeDescriptor(const moon::DeclarationRecord& record) {
+bool isExportedRuntimeControl(
+    const moon::Module& module, const moon::DeclarationRecord& record) {
+    if (record.kind != moon::DeclarationKind::Slot &&
+        record.kind != moon::DeclarationKind::Fragment)
+        return false;
+    const moon::DeclarationRef reference{record.symbolId, record.contractId};
+    return std::any_of(
+        module.exports.begin(), module.exports.end(),
+        [&](const moon::ExportRecord& exported) {
+            return exported.declaration == reference;
+        });
+}
+
+bool hasRuntimeDescriptor(
+    const moon::Module& module, const moon::DeclarationRecord& record) {
     return record.retention != moon::Retention::CompileTime ||
-        hasRetainedMetadata(record);
+        hasRetainedMetadata(record) ||
+        isExportedRuntimeControl(module, record);
 }
 
 bool matchesRuntimeMetadataValue(
@@ -79,7 +95,7 @@ bool validateRuntimeDescriptors(
     LoadedMoonGeneration& loaded, std::string& error) {
     std::vector<const moon::DeclarationRecord*> expected;
     for (const auto& record : loaded.module.declarationTable) {
-        if (hasRuntimeDescriptor(record))
+        if (hasRuntimeDescriptor(loaded.module, record))
             expected.push_back(&record);
     }
     if (expected.empty()) return true;
@@ -159,15 +175,54 @@ bool validateRuntimeDescriptors(
             record.linkageName);
         const bool callable = record.kind == moon::DeclarationKind::Function &&
             function != loaded.module.functionsBySymbol.end() && function->second;
-        const uint32_t expectedFlags = callable
+        const bool fragmentExecutable =
+            record.kind == moon::DeclarationKind::Fragment &&
+            record.runtimeEntry.complete();
+        uint32_t expectedFlags = callable
             ? LUNA_RUNTIME_DESCRIPTOR_CALLABLE_V1 : 0;
+        if (callable && function->second->requiresFragmentContext)
+            expectedFlags |= LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_CONTEXT_V1;
+        if (fragmentExecutable)
+            expectedFlags |= LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_EXECUTABLE_V1;
+        if (isExportedRuntimeControl(loaded.module, record))
+            expectedFlags |= LUNA_RUNTIME_DESCRIPTOR_PUBLIC_CONTROL_V1;
         if (descriptor->flags != expectedFlags) {
             error = "verified Moon Runtime descriptor callable flags mismatch";
             return false;
         }
-        if (!callable && descriptor->entry) {
+        if (!callable && !fragmentExecutable && descriptor->entry) {
             error = "verified Moon non-function descriptor has a callable entry";
             return false;
+        }
+        if (fragmentExecutable) {
+            const auto* fragment =
+                static_cast<const LunaRuntimeFragmentDescriptorV1*>(
+                    descriptor->entry);
+            const auto* slot = loaded.module.findDeclaration(
+                record.controlTarget);
+            const auto* environment = loaded.module.findType(
+                record.environmentType);
+            const auto* arguments = loaded.module.findType(
+                record.controlArgumentsType);
+            std::string fragmentError;
+            if (!fragment || !slot || !environment || !arguments ||
+                !luna::runtime::validateRuntimeFragmentDescriptor(
+                    *fragment, fragmentError) ||
+                record.symbolId.value != fragment->fragment_id ||
+                record.contractId.value != fragment->fragment_contract_id ||
+                slot->symbolId.value != fragment->slot_id ||
+                slot->contractId.value != fragment->slot_contract_id ||
+                arguments->abiLayoutId.value !=
+                    fragment->slot_arguments_layout_id ||
+                arguments->valueSize != fragment->slot_arguments_size ||
+                arguments->valueAlignment !=
+                    fragment->slot_arguments_alignment ||
+                environment->abiLayoutId.value !=
+                    fragment->environment_layout_id) {
+                error = "verified Moon runtime Fragment descriptor mismatch";
+                if (!fragmentError.empty()) error += ": " + fragmentError;
+                return false;
+            }
         }
     }
     return true;
@@ -232,7 +287,7 @@ bool stageVerifiedMoonGeneration(
                           loaded->manifest.entrypoint) == published.end())
                 published.push_back(loaded->manifest.entrypoint);
             for (const auto& declaration : loaded->module.declarationTable) {
-                if (!hasRuntimeDescriptor(declaration)) continue;
+                if (!hasRuntimeDescriptor(loaded->module, declaration)) continue;
                 const moon::DeclarationRef reference{
                     declaration.symbolId, declaration.contractId};
                 if (std::find(published.begin(), published.end(), reference) ==
@@ -256,6 +311,10 @@ bool stageVerifiedMoonGeneration(
                 binding.declarationKind =
                     static_cast<uint32_t>(declaration->kind) + 1;
                 binding.flags = 0;
+                if (isExportedRuntimeControl(
+                        loaded->module, *declaration))
+                    binding.flags |=
+                        luna::runtime::GenerationBindingPublicControl;
                 if (declaration->kind == moon::DeclarationKind::Function) {
                     const auto* runtimeDescriptor =
                         loaded->runtimeDescriptors.find(
@@ -265,8 +324,12 @@ bool stageVerifiedMoonGeneration(
                             LUNA_RUNTIME_DESCRIPTOR_CALLABLE_V1);
                     if (runtimeDescriptor) {
                         binding.implementation = runtimeDescriptor->entry;
-                        binding.flags =
+                        binding.flags |=
                             luna::runtime::GenerationBindingCallable;
+                        if ((runtimeDescriptor->flags &
+                             LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_CONTEXT_V1) != 0)
+                            binding.flags |=
+                                luna::runtime::GenerationBindingFragmentContext;
                         bindings.push_back(std::move(binding));
                         continue;
                     }
@@ -288,8 +351,28 @@ bool stageVerifiedMoonGeneration(
                             "' failed JIT lookup: " + resolutionError;
                         return false;
                     }
-                    binding.flags =
+                    binding.flags |=
                         luna::runtime::GenerationBindingCallable;
+                    if (function->second->requiresFragmentContext)
+                        binding.flags |=
+                            luna::runtime::GenerationBindingFragmentContext;
+                } else if (declaration->kind ==
+                               moon::DeclarationKind::Fragment &&
+                           declaration->runtimeEntry.complete()) {
+                    const auto* runtimeDescriptor =
+                        loaded->runtimeDescriptors.find(
+                            declaration->symbolId.value,
+                            declaration->contractId.value,
+                            static_cast<uint32_t>(declaration->kind) + 1,
+                            LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_EXECUTABLE_V1);
+                    if (!runtimeDescriptor || !runtimeDescriptor->entry) {
+                        resolutionError =
+                            "verified Moon Fragment lost its runtime descriptor";
+                        return false;
+                    }
+                    binding.implementation = runtimeDescriptor->entry;
+                    binding.flags |=
+                        luna::runtime::GenerationBindingFragmentExecutable;
                 }
                 bindings.push_back(std::move(binding));
             }

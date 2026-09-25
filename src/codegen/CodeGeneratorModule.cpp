@@ -68,6 +68,8 @@ bool CodeGenerator::generate(moon::Module* program) {
         if (f->isKernel && !f->isCodegenReachable) return;
         if (!f->typeParams.empty() && !f->isTemplateInstance) return;
         std::vector<llvm::Type*> paramLLVMTypes;
+        if (f->requiresFragmentContext)
+            paramLLVMTypes.push_back(mHelpers->ptrTy());
         for (auto& p : f->params) {
             const TypePtr type = resolveType(p.type);
             if (f->isKernel && type && type->kind == TypeKind::Reference &&

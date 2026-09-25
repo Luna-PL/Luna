@@ -150,20 +150,15 @@ SymbolIndex SymbolIndex::build(const Program& program) {
                 functionSignature(*function), function->isExtern));
         } else if (const auto* fragment =
                        dynamic_cast<const FragmentDecl*>(declaration)) {
-            std::string signature = fragment->kind == FragmentKind::Interceptor
-                ? "interceptor " : "context ";
-            if (fragment->cardinality == FragmentCardinality::Many)
-                signature += "many ";
-            signature += fragment->name + parameterList(fragment->params);
+            std::string signature =
+                "fragment " + fragment->name + parameterList(fragment->params);
             index.add(commonSymbol(
                 *fragment, fragment->name, IndexedSymbolKind::Fragment,
                 std::move(signature)));
         } else if (const auto* slot =
                        dynamic_cast<const SlotDecl*>(declaration)) {
-            std::string signature = "slot ";
-            signature += slot->acceptedKind == FragmentKind::Interceptor
-                ? "interceptor " : "context ";
-            signature += slot->name + parameterList(slot->params);
+            std::string signature =
+                "slot " + slot->name + parameterList(slot->params);
             index.add(commonSymbol(
                 *slot, slot->name, IndexedSymbolKind::Slot,
                 std::move(signature)));

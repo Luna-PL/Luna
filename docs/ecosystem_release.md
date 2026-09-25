@@ -1,11 +1,10 @@
 # Ecosystem release snapshot
 
 `ecosystem.lock.json` is the authoritative snapshot connecting the otherwise independent
-Luna, LunaToolchain, and Lunax repositories. The checked-in snapshot is intentionally the
-immutable 0.2.1 baseline; it is evidence for that release line, not a declaration that the
-current 0.3 compiler ecosystem is ready. The Luna component is the commit containing the lock
-file; child components use exact Git commits. Language, diagnostic, and analysis protocol
-versions are recorded separately from component package versions.
+Luna, LunaToolchain, and Lunax repositories. The checked-in snapshot is the promoted 0.3.0
+ecosystem release-candidate snapshot. The Luna component is the commit containing the lock file; child
+components use exact Git commits. Language, diagnostic, and analysis protocol versions are
+recorded separately from component package versions.
 For a released child component, `commit` tracks the current verification source while
 `published_release.commit` records the immutable commit behind the public artifacts. Release
 URLs, publication time, the checksum manifest digest, and every artifact digest are retained as

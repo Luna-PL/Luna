@@ -480,6 +480,9 @@ ControlFlowBuilder::lowerTryExpression(
     failureCleanups.insert(
         failureCleanups.end(), mActiveExpressionCleanups.begin(),
         mActiveExpressionCleanups.end());
+    for (const auto& applyCleanups : mActiveApplyEnvironmentCleanups)
+        failureCleanups.insert(failureCleanups.end(), applyCleanups.begin(),
+                               applyCleanups.end());
     auto& failureTerminator = mGraph->blocks[failure.value].terminator;
     failureTerminator.kind = TerminatorKind::Return;
     failureTerminator.location = expression->location;

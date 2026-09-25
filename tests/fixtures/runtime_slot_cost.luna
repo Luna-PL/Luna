@@ -1,0 +1,13 @@
+export slot hook(value: i32);
+
+runtime fn dynamic_entry() -> i32 {
+    let result = 40;
+    hook(1) {
+        result += 2;
+    }
+    return result;
+}
+
+fn main() -> i32 {
+    return 0;
+}

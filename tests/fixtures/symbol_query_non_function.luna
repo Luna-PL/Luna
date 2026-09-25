@@ -12,10 +12,10 @@ trait Tagged {
 }
 
 @revision(4)
-slot context trace_slot(value: i32);
+slot trace_slot(value: i32);
 
 @revision(4)
-context trace(value: i32) for trace_slot { resume(); }
+fragment trace(value: i32) for trace_slot { resume; }
 
 @revision(5)
 meta marker { value: bool; }

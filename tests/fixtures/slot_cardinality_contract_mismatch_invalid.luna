@@ -1,13 +1,5 @@
-context many replay {
-    resume();
-    resume();
-}
+slot hook();
 
-fn main() -> i32 {
-    apply hook(replay) {
-        slot context hook {
-            print(1);
-        }
-    }
-    return 0;
+fragment many replay for hook {
+    resume;
 }

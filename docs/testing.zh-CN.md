@@ -59,6 +59,40 @@ TypeId、metadata payload 与 callable 分类同已验证 Container 交叉比对
 descriptor-backed binding 调用私有 retained function。cost-boundary 测试
 要求只有 runtime-retained 程序出现 descriptor/registry v1 type 与稳定 identity，静态 query
 必须不发射任何这些内容。
+`luna.runtime-fragment-v1` 覆盖精确 Slot/Fragment descriptor 验证、owned/borrowed 环境、
+generation-pinned candidate snapshot、不可变 BindingSet 激活、None/One 选择、宿主定序 chain
+与局部 override。它还会真实驱动显式 execution-context C ABI，拒绝隐式/null context，证明
+context 固定 activation 前的 snapshot，并验证外层 continuation escape 会跳过 chain 中全部
+post-`resume` 代码。`luna.moon-cost-boundaries` 另行要求 exported executable Fragment 物化
+descriptor、factory/destroy、execute thunk 与 activation 操作，同时保证现有 static-only fixture
+不携带 runtime-selection 机制。它还要求一个动态 Slot site 在 LLVM IR 中恰好生成一次 dispatch
+call，并保留显式 context 与 frame；静态 Slot 组合则不得携带 dispatch、context frame 或 runtime
+registry。该门禁不依赖运行耗时。
+`luna.moonir-canonical` 还证明未绑定的 exported Slot 会 seal 为携带精确 declaration 与已打包
+参数 record 的 `RuntimeSlot` terminator，而未绑定的 private Slot 仍会被擦除。code-section model
+往返测试会使用非空 RuntimeSlot declaration 与 argument TypeId 字段，确保容器保留能力不是根据
+空默认值推断出来的。
+同一 fixture 还证明 `requires_fragment_context` 会从 runtime Slot 叶函数传播到精确 direct
+caller、不会污染 private/static 路径，并验证 verifier 会拒绝伪造 summary。code codec 往返也会
+携带非默认的 true effect bit。
+canonical codegen 检查会把带可变 Copy capture 的 RuntimeSlot continuation 真实 lowering 到
+`luna_runtime_fragment_dispatch_v1` ABI，要求 LLVM 验证隐藏参数 direct-call ABI，并检查发射 IR
+同时保留、转发 `fragment.context` 且含 dispatch call。它还证明普通 export 不能发布一个需要
+context 的实现。同一生成模块会经 ORC materialize，且其 runtime registry 必须把需要 context 的
+`runtime fn` 暴露为带 `FRAGMENT_CONTEXT` flag 和非空 entry 的 callable Function descriptor。
+测试分别使用空 BindingSet 与宿主选中的真实生成 Fragment 调用入口；两条路径都必须经 `resume`
+执行 outlined callback，把 capture 从 40 回写为 42 并返回 42。第二个 JIT module 证明
+continuation `return` 与 `?` 会先执行 continuation-local Drop cleanup，再通过 escaped status
+从外层 runtime entry 返回 42 或传播 `Err(7)`；两次 Drop marker 分别为 64 与 65。runtime
+descriptor 与 MoonRuntime 测试还会分别拒绝把 context flag 用在 non-callable 或非 Function
+binding 上。
+另一 JIT fixture 从外层 Slot continuation 调用含内部动态 Slot 的函数，两次 dispatch 共用转发的
+context，最终返回 44。另一词法嵌套 fixture 验证三层 callback、跨层 Copy capture 回写
+得到 10、带 Drop 的 affine 资源跨层修改及回写（得到 8），以及内层 `return` 和 `?` 穿过
+外部 callback 逃逸（均得到 7）。资源逃逸 fixture 验证内层 return 穿过两层 callback
+得到 30，以及单层 Slot 对外层资源执行 cleanup 后返回 9；选中不调用 `resume` 的生成
+Fragment 时走 Slot 后续路径，得到 0。若 continuation 消耗了外层资源、而跳过
+continuation 的路径仍保留该资源，所有权分析会拒绝这种分歧。
 证明相同请求不会再 materialize ORC generation，再让两个兼容 generation 经 activation 与 rollback
 执行出 60 -> 13 -> 60。首个 pinned entry 必须始终为 60、两份代码 lease 都被保留，
 replacement initializer 必须在 publication 前执行已解析的 13 entry，且 initializer

@@ -463,23 +463,9 @@ private:
             clone->isImplicit = statement->isImplicit;
             return located(std::move(clone), src);
         }
-        if (auto* statement = dynamic_cast<const SlotDeclStmt*>(src)) {
-            auto clone = std::make_unique<SlotDeclStmt>();
-            clone->name = statement->name;
-            clone->acceptedKind = statement->acceptedKind;
-            clone->acceptedCardinality = statement->acceptedCardinality;
-            for (const auto& parameter : statement->params)
-                clone->params.push_back(cloneParam(parameter));
-            clone->defaultFragment = statement->defaultFragment;
-            clone->resolvedDefaultFragmentName = statement->resolvedDefaultFragmentName;
-            clone->structuralType = substitute(statement->structuralType);
-            return located(std::move(clone), src);
-        }
         if (auto* statement = dynamic_cast<const SlotInvokeStmt*>(src)) {
             auto clone = std::make_unique<SlotInvokeStmt>();
             clone->name = statement->name;
-            clone->acceptedKind = statement->acceptedKind;
-            clone->acceptedCardinality = statement->acceptedCardinality;
             for (const auto& argument : statement->args)
                 clone->args.push_back(cloneExpr(argument.get()));
             clone->continuation = cloneBlock(statement->continuation.get());
@@ -487,20 +473,13 @@ private:
             for (const auto& parameter : statement->interfaceParams)
                 clone->interfaceParams.push_back(cloneParam(parameter));
             clone->resolvedParamNames = statement->resolvedParamNames;
-            clone->defaultFragment = statement->defaultFragment;
-            clone->resolvedDefaultFragmentName = statement->resolvedDefaultFragmentName;
+            clone->resolvedSlotName = statement->resolvedSlotName;
+            clone->resolvedFragmentName = statement->resolvedFragmentName;
             clone->structuralType = substitute(statement->structuralType);
             return located(std::move(clone), src);
         }
         if (dynamic_cast<const ResumeStmt*>(src))
             return located(std::make_unique<ResumeStmt>(), src);
-        if (auto* statement = dynamic_cast<const AbortStmt*>(src)) {
-            auto clone = std::make_unique<AbortStmt>();
-            clone->autoFrees = statement->autoFrees;
-            for (const auto& cleanup : statement->cleanups)
-                clone->cleanups.push_back(cloneCleanup(cleanup));
-            return located(std::move(clone), src);
-        }
         if (auto* statement = dynamic_cast<const AwaitStmt*>(src)) {
             auto clone = std::make_unique<AwaitStmt>();
             clone->event = cloneExpr(statement->event.get());
@@ -511,6 +490,8 @@ private:
             clone->slotName = statement->slotName;
             clone->fragmentName = statement->fragmentName;
             clone->resolvedFragmentName = statement->resolvedFragmentName;
+            for (const auto& argument : statement->environmentArgs)
+                clone->environmentArgs.push_back(cloneExpr(argument.get()));
             clone->body = cloneBlock(statement->body.get());
             return located(std::move(clone), src);
         }

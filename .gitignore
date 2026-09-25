@@ -3,8 +3,9 @@
 /build-*/
 /.omo/
 /.cache/
-# Independent nested ecosystem repository.
+# Independent nested ecosystem repositories.
 /Lunax/
+/toolchain/
 /cmake-build-*/
 CMakeCache.txt
 CMakeFiles/

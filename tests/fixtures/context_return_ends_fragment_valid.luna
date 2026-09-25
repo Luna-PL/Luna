@@ -1,6 +1,6 @@
-slot context hook();
+slot hook();
 
-context stop for hook {
+fragment stop for hook {
     print(1);
     return;
     print(99);

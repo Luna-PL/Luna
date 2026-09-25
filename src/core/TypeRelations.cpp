@@ -169,12 +169,6 @@ std::string canonicalShapeImpl(
         case TypeKind::Slot:
         case TypeKind::Fragment:
         case TypeKind::Closure:
-            if (type->kind == TypeKind::Slot || type->kind == TypeKind::Fragment) {
-                appendPart(result, type->isMultiShot ? "many" : "once");
-                appendPart(result,
-                    type->continuationKind == ContinuationKind::Interceptor
-                        ? "interceptor" : "context");
-            }
             for (size_t index = 0; index < type->paramTypes.size(); ++index) {
                 const luna::ownership::Contract contract = index < type->paramContracts.size()
                     ? type->paramContracts[index] : luna::ownership::Contract{};

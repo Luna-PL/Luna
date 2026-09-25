@@ -113,6 +113,7 @@ std::unique_ptr<Module> LunaLowerer::lower(const Program& program,
             {},
         });
     }
+    materializeRuntimeFragmentHelpers();
     module->sealTypeTable();
     resolveDeclarationReferences();
     buildModuleInterfaces();

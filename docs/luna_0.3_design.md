@@ -11,7 +11,9 @@ English | [简体中文](luna_0.3_design.zh-CN.md)
 
 This document is the umbrella design for Luna 0.3. The existing
 [Slot/Fragment refactoring audit](luna_0.3_evolution_audit.md) is a topic audit governed by
-this document, not the complete 0.3 specification.
+this document, not the complete 0.3 specification. The confirmed runtime direction and staged
+implementation are recorded in the
+[Slot/Fragment Runtime Injection Plan](slot_fragment_runtime_plan.md).
 
 The document uses these states:
 
@@ -807,6 +809,16 @@ post-resume fragment code while retaining canonical cleanup. `?` inside a fragme
 Local slot declarations, blockless apply, `context many`, and `dynamic slot/apply` are removed.
 No runtime typed-reference acquisition syntax is introduced; ordinary apply is the sole spelling
 and any future typed operand extension must be decided separately.
+
+`SFR001` (Confirmed, 2026-09-23) supersedes SF006 as the implementation direction for the open
+Slot/Fragment surface. A `slot` is itself a fixed nominal injection point; a unified `fragment`
+targets exactly one SlotId and uses explicit single-shot `resume;`. `RuntimeFragmentRef<S>` is the
+only transferable runtime handler and is not interchangeable with a function reference. Exported
+fragments become verified candidates of their exported target slot. Runtime exposes immutable,
+generation-pinned candidate snapshots, while the host alone selects and activates an immutable
+BindingSet. Metadata is typed selection policy, never capability evidence, and reflection or
+candidate filtering does not run on the Slot dispatch path. The dedicated runtime plan freezes the
+four-keyword surface and the staged removal of the legacy interceptor/context representation.
 
 Implementation status (2026-08-27): the compile-time Symbol Catalog/query surface of
 Q001/Q003/Q004/Q005/Q006/Q007 is implemented, and priority item 13 is closed. Each

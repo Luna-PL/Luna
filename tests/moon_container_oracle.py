@@ -189,7 +189,7 @@ def parse_types(payload: bytes) -> dict[str, object]:
         cursor.string()
         cursor.string()
         cursor.u32(4)
-        cursor.u32(6)
+        cursor.u32(7)
         kind = cursor.u32(UNKNOWN_TYPE)
         facts(cursor)
         for _ in range(4):
@@ -258,6 +258,10 @@ def parse_contracts(payload: bytes) -> list[str]:
         cursor.string()
         facts(cursor)
         reference(cursor)
+        reference(cursor)
+        cursor.string()
+        cursor.string()
+        reference(cursor)
         cursor.string()
     cursor.finish()
     if symbols != sorted(symbols) or len(symbols) != len(set(symbols)):
@@ -307,7 +311,7 @@ def parse_exports(payload: bytes) -> int:
         cursor.string()
         reference(cursor)
         cursor.string()
-        cursor.u32(6)
+        cursor.u32(7)
         cursor.string()
         location(cursor)
     cursor.finish()
@@ -497,7 +501,7 @@ def edge(cursor: Cursor) -> None:
 
 
 def terminator(cursor: Cursor, depth: int) -> None:
-    cursor.u32(7)
+    cursor.u32(8)
     location(cursor)
     optional_expr(cursor, depth)
     cursor.string()
@@ -508,6 +512,8 @@ def terminator(cursor: Cursor, depth: int) -> None:
         edge(cursor)
         table_refs(cursor)
     table_refs(cursor)
+    reference(cursor)
+    cursor.string()
 
 
 def graph(cursor: Cursor, depth: int) -> None:
@@ -581,7 +587,7 @@ def parse_code(payload: bytes) -> list[dict[str, object]]:
         module_path = cursor.string()
         name = cursor.string()
         generated_name = cursor.string()
-        for _ in range(5):
+        for _ in range(6):
             cursor.boolean()
         cursor.string()
         cursor.string()

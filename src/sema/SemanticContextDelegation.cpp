@@ -81,10 +81,6 @@ void SemanticContext::analyzeTrait(TraitDecl* decl) {
 void SemanticContext::analyzeImpl(ImplDecl* decl) {
     mBodyAnalysis->analyzeImpl(decl);
 }
-void SemanticContext::analyzeSlotDecl(SlotDeclStmt* stmt) {
-    mControlAnalysis->analyzeSlotDecl(stmt);
-}
-
 void SemanticContext::declareSlot(SlotDecl* decl) {
     mControlAnalysis->declareSlot(decl);
 }
@@ -105,10 +101,9 @@ void SemanticContext::analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn) {
 void SemanticContext::analyzeFragmentForSlot(
     FragmentDecl* fragment, const std::string& slotName,
     const TypeVec& parameterTypes,
-    const std::vector<luna::ownership::Contract>& parameterContracts,
-    const std::unordered_map<std::string, SymbolInfo>& captures) {
+    const std::vector<luna::ownership::Contract>& parameterContracts) {
     mControlAnalysis->analyzeFragmentForSlot(
-        fragment, slotName, parameterTypes, parameterContracts, captures);
+        fragment, slotName, parameterTypes, parameterContracts);
 }
 
 void SemanticContext::enterSlotScope() {

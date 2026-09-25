@@ -1,7 +1,9 @@
 #include "CodeGenerator.h"
 #include "../core/TypeLayout.h"
+#include "../runtime/RuntimeFragmentABI.h"
 
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Metadata.h>
 
 #include <algorithm>
@@ -50,11 +52,244 @@ void setCanonicalLoopUnrollCount(llvm::BranchInst* latch,
     latch->setMetadata(llvm::LLVMContext::MD_loop, loopID);
 }
 
+void collectRuntimeContinuationLocals(
+    const moon::Expr* expression,
+    std::unordered_set<uint32_t>& locals) {
+    if (!expression) return;
+    if (const auto* identifier =
+            dynamic_cast<const moon::IdentifierExpr*>(expression)) {
+        if (!identifier->local.empty()) locals.insert(identifier->local.value);
+    } else if (const auto* binary =
+                   dynamic_cast<const moon::BinaryExpr*>(expression)) {
+        collectRuntimeContinuationLocals(binary->lhs.get(), locals);
+        collectRuntimeContinuationLocals(binary->rhs.get(), locals);
+    } else if (const auto* unary =
+                   dynamic_cast<const moon::UnaryExpr*>(expression)) {
+        collectRuntimeContinuationLocals(unary->operand.get(), locals);
+    } else if (const auto* call =
+                   dynamic_cast<const moon::CallExpr*>(expression)) {
+        collectRuntimeContinuationLocals(call->callee.get(), locals);
+        for (const auto& argument : call->args)
+            collectRuntimeContinuationLocals(argument.get(), locals);
+    } else if (const auto* launch =
+                   dynamic_cast<const moon::LaunchExpr*>(expression)) {
+        collectRuntimeContinuationLocals(launch->threads.get(), locals);
+        for (const auto& argument : launch->args)
+            collectRuntimeContinuationLocals(argument.get(), locals);
+    } else if (const auto* variant =
+                   dynamic_cast<const moon::VariantConstructExpr*>(expression)) {
+        for (const auto& argument : variant->args)
+            collectRuntimeContinuationLocals(argument.get(), locals);
+    } else if (const auto* result =
+                   dynamic_cast<const moon::ResultConstructExpr*>(expression)) {
+        collectRuntimeContinuationLocals(result->payload.get(), locals);
+    } else if (const auto* field =
+                   dynamic_cast<const moon::FieldAccessExpr*>(expression)) {
+        collectRuntimeContinuationLocals(field->object.get(), locals);
+    } else if (const auto* index =
+                   dynamic_cast<const moon::IndexExpr*>(expression)) {
+        collectRuntimeContinuationLocals(index->object.get(), locals);
+        collectRuntimeContinuationLocals(index->index.get(), locals);
+    } else if (const auto* length =
+                   dynamic_cast<const moon::SliceLengthExpr*>(expression)) {
+        collectRuntimeContinuationLocals(length->slice.get(), locals);
+    } else if (const auto* array =
+                   dynamic_cast<const moon::ArrayLiteralExpr*>(expression)) {
+        for (const auto& element : array->elements)
+            collectRuntimeContinuationLocals(element.get(), locals);
+    } else if (const auto* record =
+                   dynamic_cast<const moon::RecordLiteralExpr*>(expression)) {
+        for (const auto& field : record->fields)
+            collectRuntimeContinuationLocals(field.value.get(), locals);
+    } else if (const auto* allocation =
+                   dynamic_cast<const moon::HeapAllocExpr*>(expression)) {
+        collectRuntimeContinuationLocals(allocation->initializer.get(), locals);
+    } else if (const auto* allocation =
+                   dynamic_cast<const moon::InitAllocationExpr*>(expression)) {
+        for (const auto& element : allocation->elements)
+            collectRuntimeContinuationLocals(element.value.get(), locals);
+    } else if (const auto* move =
+                   dynamic_cast<const moon::MoveExpr*>(expression)) {
+        collectRuntimeContinuationLocals(move->operand.get(), locals);
+    } else if (const auto* borrow =
+                   dynamic_cast<const moon::BorrowExpr*>(expression)) {
+        collectRuntimeContinuationLocals(borrow->operand.get(), locals);
+    } else if (const auto* dereference =
+                   dynamic_cast<const moon::DerefExpr*>(expression)) {
+        collectRuntimeContinuationLocals(dereference->operand.get(), locals);
+    } else if (const auto* address =
+                   dynamic_cast<const moon::AddrOfExpr*>(expression)) {
+        collectRuntimeContinuationLocals(address->operand.get(), locals);
+    } else if (const auto* closure =
+                   dynamic_cast<const moon::MakeClosureExpr*>(expression)) {
+        for (const auto& value : closure->capturedValues)
+            collectRuntimeContinuationLocals(value.get(), locals);
+    } else if (const auto* assignment =
+                   dynamic_cast<const moon::AssignExpr*>(expression)) {
+        collectRuntimeContinuationLocals(assignment->lhs.get(), locals);
+        collectRuntimeContinuationLocals(assignment->rhs.get(), locals);
+    }
+}
+
+bool scopeWithin(const moon::ControlFlowGraph& graph, moon::ScopeId scope,
+                 moon::ScopeId ancestor) {
+    while (!scope.empty()) {
+        if (scope == ancestor) return true;
+        const auto* record = graph.findScope(scope);
+        if (!record || record->parent == scope) break;
+        scope = record->parent;
+    }
+    return false;
+}
+
+struct RuntimeContinuationPlan {
+    const moon::RegionRecord* region = nullptr;
+    std::vector<moon::LocalId> captures;
+};
+
+bool prepareRuntimeContinuation(
+    const moon::ControlFlowGraph& graph,
+    const moon::Terminator& terminator,
+    RuntimeContinuationPlan& plan,
+    std::string& reason) {
+    if (!terminator.primary.cleanups.empty()) {
+        reason = "runtime Slot continuation entry cleanup cannot be outlined";
+        return false;
+    }
+    const auto* entry = graph.findBlock(terminator.primary.target);
+    const auto* region = entry ? graph.findRegion(entry->region) : nullptr;
+    if (!region || region->kind != moon::RegionKind::Continuation ||
+        region->entry != terminator.primary.target ||
+        region->exit != terminator.secondary.target) {
+        reason = "runtime Slot has no exact continuation region";
+        return false;
+    }
+    std::unordered_set<uint32_t> regionBlocks;
+    for (const auto block : region->blocks) regionBlocks.insert(block.value);
+    const auto hasOnlyLocalCleanups = [&](const auto& cleanups) {
+        for (const auto cleanupId : cleanups) {
+            const auto* cleanup = graph.findCleanup(cleanupId);
+            const auto* local = cleanup
+                ? graph.findLocal(cleanup->place.root) : nullptr;
+            if (!cleanup || !local ||
+                !scopeWithin(graph, local->scope, region->scope))
+                return false;
+        }
+        return true;
+    };
+    std::unordered_set<uint32_t> referencedLocals;
+    for (const auto blockId : region->blocks) {
+        const auto* block = graph.findBlock(blockId);
+        if (!block) return false;
+        for (const auto& operation : block->operations) {
+            if (const auto* declaration =
+                    dynamic_cast<const moon::LetStmt*>(operation.get())) {
+                collectRuntimeContinuationLocals(
+                    declaration->initializer.get(), referencedLocals);
+            } else if (const auto* statement =
+                           dynamic_cast<const moon::ExprStmt*>(operation.get())) {
+                collectRuntimeContinuationLocals(
+                    statement->expr.get(), referencedLocals);
+            } else if (const auto* release =
+                           dynamic_cast<const moon::FreeStmt*>(operation.get())) {
+                collectRuntimeContinuationLocals(
+                    release->operand.get(), referencedLocals);
+            } else if (dynamic_cast<const moon::AllocateStmt*>(
+                           operation.get())) {
+                // The allocation LocalId is continuation-local and uses the
+                // same canonical storage type as the enclosing CFG.
+            } else {
+                reason = "runtime Slot continuation operation requires full outlining";
+                return false;
+            }
+        }
+        collectRuntimeContinuationLocals(
+            block->terminator.operand.get(), referencedLocals);
+        const auto supportedEdge = [&](const moon::ControlEdge& edge) {
+            return hasOnlyLocalCleanups(edge.cleanups) &&
+                   (edge.target == terminator.secondary.target ||
+                    regionBlocks.count(edge.target.value) != 0);
+        };
+        if (block->terminator.kind == moon::TerminatorKind::Jump) {
+            if (!supportedEdge(block->terminator.primary)) {
+                reason = "runtime Slot continuation jump escapes its outline";
+                return false;
+            }
+        } else if (block->terminator.kind == moon::TerminatorKind::Branch) {
+            if (!supportedEdge(block->terminator.primary) ||
+                !supportedEdge(block->terminator.secondary)) {
+                reason = "runtime Slot continuation branch requires cleanup outlining";
+                return false;
+            }
+        } else if (block->terminator.kind == moon::TerminatorKind::Switch) {
+            if (!supportedEdge(block->terminator.primary)) {
+                reason = "runtime Slot continuation switch default escapes its outline";
+                return false;
+            }
+            for (const auto& item : block->terminator.cases) {
+                if (!supportedEdge(item.edge)) {
+                    reason = "runtime Slot continuation switch case escapes its outline";
+                    return false;
+                }
+            }
+        } else if (block->terminator.kind == moon::TerminatorKind::Return) {
+            for (const auto cleanupId : block->terminator.exitCleanups) {
+                const auto* cleanup = graph.findCleanup(cleanupId);
+                const auto* local = cleanup
+                    ? graph.findLocal(cleanup->place.root) : nullptr;
+                if (!cleanup || !local) {
+                    reason = "runtime Slot continuation return has a missing cleanup local";
+                    return false;
+                }
+                // A return exits the source function, not merely this
+                // outline. Its cleanup may own an enclosing local that is
+                // otherwise never mentioned by the continuation.
+                referencedLocals.insert(local->id.value);
+            }
+        } else if (block->terminator.kind ==
+                   moon::TerminatorKind::RuntimeSlot) {
+            if (!supportedEdge(block->terminator.secondary)) {
+                reason = "nested runtime Slot completion escapes its outline";
+                return false;
+            }
+            RuntimeContinuationPlan nestedPlan;
+            if (!prepareRuntimeContinuation(
+                    graph, block->terminator, nestedPlan, reason))
+                return false;
+            for (const auto local : nestedPlan.captures)
+                referencedLocals.insert(local.value);
+        } else if (block->terminator.kind !=
+                   moon::TerminatorKind::Unreachable) {
+            reason = "runtime Slot continuation control escape requires full outlining";
+            return false;
+        }
+    }
+    for (const uint32_t localId : referencedLocals) {
+        const auto* local = graph.findLocal(moon::LocalId{localId});
+        if (!local) {
+            reason = "runtime Slot continuation references a missing local";
+            return false;
+        }
+        if (scopeWithin(graph, local->scope, region->scope)) continue;
+        // The dispatch ABI is synchronous and resume is single-shot. The
+        // outlined storage is a temporary view of the same canonical owner,
+        // never an independently live value: only sealed CFG cleanup/move
+        // edges may consume it, and completion writes its representation back.
+        plan.captures.push_back(local->id);
+    }
+    std::sort(plan.captures.begin(), plan.captures.end(),
+              [](moon::LocalId left, moon::LocalId right) {
+                  return left.value < right.value;
+              });
+    plan.region = region;
+    return true;
+}
+
 } // namespace
 
 void CodeGenerator::generateControlFlowBody(
     moon::ControlFlowGraph& graph, llvm::Function* func,
-    llvm::BasicBlock* abiEntry) {
+    llvm::BasicBlock* abiEntry, size_t hiddenParameterCount) {
     mCanonicalLocals.assign(graph.locals.size(), nullptr);
     mCanonicalLocalTypes.assign(graph.locals.size(), nullptr);
     mCanonicalDeviceBufferLengths.assign(graph.locals.size(), nullptr);
@@ -86,7 +321,7 @@ void CodeGenerator::generateControlFlowBody(
         mCanonicalLocalTypes[local.id.value] = std::move(type);
     }
 
-    size_t parameterIndex = 0;
+    size_t parameterIndex = hiddenParameterCount;
     for (const auto& local : graph.locals) {
         if (local.kind != moon::LocalKind::Parameter) continue;
         if (parameterIndex >= func->arg_size() ||
@@ -399,14 +634,469 @@ void CodeGenerator::generateControlFlowBody(
             case moon::TerminatorKind::Resume:
                 emitEdge(terminator.primary, "canonical resume edge");
                 break;
-            case moon::TerminatorKind::Abort:
-                emitEdge(terminator.primary, "canonical abort edge");
+            case moon::TerminatorKind::Discard:
+                emitEdge(terminator.primary, "canonical fragment discard edge");
                 break;
             case moon::TerminatorKind::Unreachable:
                 mBuilder->CreateUnreachable();
                 break;
-            case moon::TerminatorKind::Switch:
-            {
+            case moon::TerminatorKind::RuntimeSlot: {
+                using RuntimeCompletionTarget =
+                    std::function<llvm::BasicBlock*(const moon::ControlEdge&, const std::string&)>;
+                // The same emitter handles a source-function site and sites
+                // inside an outlined continuation. Each nested frame inherits
+                // the original return storage; only the outermost frame
+                // materializes the source-level return value.
+                std::function<void(const moon::BasicBlock&, const moon::Terminator&,
+                                   llvm::Function*, const RuntimeCompletionTarget&, llvm::Type*,
+                                   llvm::Value*, const std::function<void()>&)>
+                    emitRuntimeSlot;
+                emitRuntimeSlot = [&](const moon::BasicBlock& block,
+                                      const moon::Terminator& terminator, llvm::Function* func,
+                                      const RuntimeCompletionTarget& completionTarget,
+                                      llvm::Type* sourceReturnType, llvm::Value* inheritedReturn,
+                                      const std::function<void()>& propagateEscape) {
+                    if (!mCurrentFragmentContext) {
+                        error("runtime Slot has no explicit Fragment execution context");
+                        mBuilder->CreateUnreachable();
+                        return;
+                    }
+                    RuntimeContinuationPlan continuationPlan;
+                    std::string continuationError;
+                    if (!prepareRuntimeContinuation(graph, terminator, continuationPlan,
+                                                    continuationError)) {
+                        error(continuationError);
+                        mBuilder->CreateUnreachable();
+                        return;
+                    }
+                    const auto* slot = resolveDeclaration(terminator.runtimeSlot);
+                    TypePtr argumentType = resolveType(terminator.runtimeArgumentsType);
+                    const auto* argumentRecord =
+                        mProgram ? mProgram->findType(terminator.runtimeArgumentsType) : nullptr;
+                    llvm::Value* arguments = generateExpr(terminator.operand.get());
+                    auto* completion =
+                        completionTarget(terminator.secondary, "runtime.slot.completion.cleanup");
+                    if (!slot || !argumentType || !argumentRecord || !arguments || !completion) {
+                        error("runtime Slot dispatch has incomplete nominal or layout facts");
+                        if (!mBuilder->GetInsertBlock()->getTerminator())
+                            mBuilder->CreateUnreachable();
+                        return;
+                    }
+
+                    auto* argumentStorage = createEntryBlockAlloca(func, arguments->getType(),
+                                                                   "runtime.slot.arguments");
+                    mBuilder->CreateStore(arguments, argumentStorage);
+
+                    std::vector<llvm::Type*> frameFields(continuationPlan.captures.size() + 2,
+                                                         mHelpers->ptrTy());
+                    auto* frameType = llvm::StructType::get(*mCtx, frameFields);
+                    auto* frame = createEntryBlockAlloca(func, frameType, "runtime.slot.frame");
+                    mBuilder->CreateStore(mCurrentFragmentContext,
+                                          mBuilder->CreateStructGEP(frameType, frame, 0,
+                                                                    "runtime.slot.frame.context"));
+                    llvm::Value* escapedReturn = inheritedReturn;
+                    if (!sourceReturnType->isVoidTy() && !escapedReturn)
+                        escapedReturn = createEntryBlockAlloca(func, sourceReturnType,
+                                                               "runtime.slot.escaped.return");
+                    mBuilder->CreateStore(
+                        escapedReturn ? escapedReturn
+                                      : llvm::ConstantPointerNull::get(
+                                            llvm::cast<llvm::PointerType>(mHelpers->ptrTy())),
+                        mBuilder->CreateStructGEP(frameType, frame, 1,
+                                                  "runtime.slot.frame.return"));
+                    for (size_t index = 0; index < continuationPlan.captures.size(); ++index) {
+                        const auto local = continuationPlan.captures[index];
+                        if (local.value >= mCanonicalLocals.size() ||
+                            !mCanonicalLocals[local.value]) {
+                            error("runtime Slot continuation capture has no LLVM storage");
+                            continue;
+                        }
+                        mBuilder->CreateStore(
+                            mCanonicalLocals[local.value],
+                            mBuilder->CreateStructGEP(frameType, frame,
+                                                      static_cast<unsigned>(index + 2),
+                                                      "runtime.slot.frame.capture"));
+                    }
+
+                    auto* callbackType =
+                        llvm::FunctionType::get(mHelpers->i32Ty(), {mHelpers->ptrTy()}, false);
+                    const std::string callbackName = func->getName().str() + ".runtime_slot." +
+                                                     std::to_string(block.id.value) + ".continue";
+                    auto* callback =
+                        llvm::Function::Create(callbackType, llvm::GlobalValue::InternalLinkage,
+                                               callbackName, mModule.get());
+                    auto* callbackEntry = llvm::BasicBlock::Create(*mCtx, "entry", callback);
+                    callback->getArg(0)->setName("runtime.slot.frame");
+
+                    const auto parentInsertPoint = mBuilder->saveIP();
+                    auto* savedFunction = mCurrentFunc;
+                    auto* savedFragmentContext = mCurrentFragmentContext;
+                    const bool savedKernelMode = mCurrentFunctionIsKernel;
+                    auto savedCanonicalLocals = std::move(mCanonicalLocals);
+                    auto savedCanonicalLocalTypes = std::move(mCanonicalLocalTypes);
+                    auto savedCanonicalDeviceBufferLengths =
+                        std::move(mCanonicalDeviceBufferLengths);
+
+                    mCurrentFunc = callback;
+                    mCurrentFunctionIsKernel = false;
+                    mBuilder->SetInsertPoint(callbackEntry);
+                    mCurrentFragmentContext = mBuilder->CreateLoad(
+                        mHelpers->ptrTy(),
+                        mBuilder->CreateStructGEP(frameType, callback->getArg(0), 0,
+                                                  "runtime.slot.context.address"),
+                        "fragment.context");
+                    mCanonicalLocals.assign(graph.locals.size(), nullptr);
+                    mCanonicalLocalTypes.assign(graph.locals.size(), nullptr);
+                    mCanonicalDeviceBufferLengths.assign(graph.locals.size(), nullptr);
+                    for (const auto& local : graph.locals) {
+                        if (local.id.value >= savedCanonicalLocals.size() ||
+                            !savedCanonicalLocals[local.id.value]) {
+                            error("runtime Slot outline cannot recover local storage type");
+                            continue;
+                        }
+                        auto* localStorage = createEntryBlockAlloca(
+                            callback, savedCanonicalLocals[local.id.value]->getAllocatedType(),
+                            localName(local) + ".outlined");
+                        mCanonicalLocals[local.id.value] = localStorage;
+                        mCanonicalLocalTypes[local.id.value] = resolveType(local.type);
+                    }
+                    for (size_t index = 0; index < continuationPlan.captures.size(); ++index) {
+                        const auto local = continuationPlan.captures[index];
+                        if (local.value >= mCanonicalLocals.size() ||
+                            !mCanonicalLocals[local.value])
+                            continue;
+                        auto* source = mBuilder->CreateLoad(
+                            mHelpers->ptrTy(),
+                            mBuilder->CreateStructGEP(frameType, callback->getArg(0),
+                                                      static_cast<unsigned>(index + 2),
+                                                      "runtime.slot.capture.address"),
+                            "runtime.slot.capture");
+                        auto* storage = mCanonicalLocals[local.value];
+                        mBuilder->CreateStore(mBuilder->CreateLoad(storage->getAllocatedType(),
+                                                                   source,
+                                                                   "runtime.slot.capture.value"),
+                                              storage);
+                    }
+
+                    std::vector<llvm::BasicBlock*> continuationBlocks(graph.blocks.size(), nullptr);
+                    for (const auto blockId : continuationPlan.region->blocks)
+                        continuationBlocks[blockId.value] = llvm::BasicBlock::Create(
+                            *mCtx, "runtime.slot.cfg." + std::to_string(blockId.value), callback);
+                    auto* callbackCompletion =
+                        llvm::BasicBlock::Create(*mCtx, "runtime.slot.completed", callback);
+                    mBuilder->CreateBr(continuationBlocks[continuationPlan.region->entry.value]);
+
+                    const auto callbackTarget = [&](moon::BlockId target) -> llvm::BasicBlock* {
+                        if (target == terminator.secondary.target) return callbackCompletion;
+                        return target.value < continuationBlocks.size()
+                                   ? continuationBlocks[target.value]
+                                   : nullptr;
+                    };
+                    const auto outlinedEdgeTarget =
+                        [&](const moon::ControlEdge& edge,
+                            const std::string& label) -> llvm::BasicBlock* {
+                        auto* target = callbackTarget(edge.target);
+                        if (!target || edge.cleanups.empty()) return target;
+                        const auto saved = mBuilder->saveIP();
+                        auto* bridge = llvm::BasicBlock::Create(*mCtx, label, callback);
+                        mBuilder->SetInsertPoint(bridge);
+                        for (const auto cleanupId : edge.cleanups) {
+                            const auto* cleanup = graph.findCleanup(cleanupId);
+                            if (!cleanup)
+                                error("runtime Slot outline references no cleanup row");
+                            else
+                                emitCanonicalCleanup(*cleanup);
+                        }
+                        if (!mBuilder->GetInsertBlock()->getTerminator())
+                            mBuilder->CreateBr(target);
+                        mBuilder->restoreIP(saved);
+                        return bridge;
+                    };
+                    const auto emitCaptureWriteback = [&]() {
+                        for (size_t index = 0; index < continuationPlan.captures.size(); ++index) {
+                            const auto local = continuationPlan.captures[index];
+                            if (local.value >= mCanonicalLocals.size() ||
+                                !mCanonicalLocals[local.value])
+                                continue;
+                            auto* destination = mBuilder->CreateLoad(
+                                mHelpers->ptrTy(),
+                                mBuilder->CreateStructGEP(frameType, callback->getArg(0),
+                                                          static_cast<unsigned>(index + 2),
+                                                          "runtime.slot.capture.writeback.address"),
+                                "runtime.slot.capture.writeback");
+                            auto* storage = mCanonicalLocals[local.value];
+                            mBuilder->CreateStore(
+                                mBuilder->CreateLoad(storage->getAllocatedType(), storage,
+                                                     "runtime.slot.capture.writeback.value"),
+                                destination);
+                        }
+                    };
+                    for (const auto blockId : continuationPlan.region->blocks) {
+                        const auto* continuationBlock = graph.findBlock(blockId);
+                        auto* llvmBlock = continuationBlocks[blockId.value];
+                        if (!continuationBlock || !llvmBlock) continue;
+                        mBuilder->SetInsertPoint(llvmBlock);
+                        for (const auto& operation : continuationBlock->operations) {
+                            if (const auto* declaration =
+                                    dynamic_cast<const moon::LetStmt*>(operation.get())) {
+                                llvm::Value* value = generateExpr(declaration->initializer.get());
+                                if (value && !declaration->local.empty() &&
+                                    declaration->local.value < mCanonicalLocals.size() &&
+                                    mCanonicalLocals[declaration->local.value] &&
+                                    !mBuilder->GetInsertBlock()->getTerminator()) {
+                                    auto* storage = mCanonicalLocals[declaration->local.value];
+                                    mBuilder->CreateStore(
+                                        coerceCallArgument(value, storage->getAllocatedType()),
+                                        storage);
+                                }
+                            } else if (const auto* statement =
+                                           dynamic_cast<const moon::ExprStmt*>(operation.get())) {
+                                (void)generateExpr(statement->expr.get());
+                            } else if (const auto* release =
+                                           dynamic_cast<const moon::FreeStmt*>(operation.get())) {
+                                emitCanonicalFree(*release);
+                            } else if (const auto* allocation =
+                                           dynamic_cast<const moon::AllocateStmt*>(
+                                               operation.get())) {
+                                if (allocation->local.empty() ||
+                                    allocation->local.value >= mCanonicalLocals.size() ||
+                                    !mCanonicalLocals[allocation->local.value]) {
+                                    error("outlined canonical allocation has no local storage");
+                                } else {
+                                    auto allocatedType = resolveType(allocation->allocatedType);
+                                    auto rtAlloc = mModule->getOrInsertFunction(
+                                        "rt_alloc", mHelpers->ptrTy(), mHelpers->sizeTy(),
+                                        mHelpers->sizeTy());
+                                    auto* pointer = mBuilder->CreateCall(
+                                        rtAlloc,
+                                        {llvm::ConstantInt::get(mHelpers->sizeTy(),
+                                                                typeSize(allocatedType)),
+                                         llvm::ConstantInt::get(mHelpers->sizeTy(),
+                                                                typeAlignment(allocatedType))},
+                                        "runtime.slot.allocation");
+                                    mBuilder->CreateStore(
+                                        pointer, mCanonicalLocals[allocation->local.value]);
+                                }
+                            }
+                            if (mBuilder->GetInsertBlock()->getTerminator()) break;
+                        }
+                        if (mBuilder->GetInsertBlock()->getTerminator()) continue;
+                        const auto& callbackTerminator = continuationBlock->terminator;
+                        if (callbackTerminator.kind == moon::TerminatorKind::Jump) {
+                            mBuilder->CreateBr(outlinedEdgeTarget(callbackTerminator.primary,
+                                                                  "runtime.slot.jump.cleanup"));
+                        } else if (callbackTerminator.kind == moon::TerminatorKind::Branch) {
+                            llvm::Value* condition = generateExpr(callbackTerminator.operand.get());
+                            auto* yes = outlinedEdgeTarget(callbackTerminator.primary,
+                                                           "runtime.slot.branch.true.cleanup");
+                            auto* no = outlinedEdgeTarget(callbackTerminator.secondary,
+                                                          "runtime.slot.branch.false.cleanup");
+                            if (!condition || !yes || !no)
+                                error("runtime Slot outlined branch has no LLVM target");
+                            else
+                                mBuilder->CreateCondBr(condition, yes, no);
+                        } else if (callbackTerminator.kind == moon::TerminatorKind::Switch) {
+                            const TypePtr switchType = resolveType(callbackTerminator.switchType);
+                            llvm::Value* value = generateExpr(callbackTerminator.operand.get());
+                            auto* aggregateType =
+                                value ? llvm::dyn_cast<llvm::StructType>(value->getType())
+                                      : nullptr;
+                            if (!switchType ||
+                                (switchType->kind != TypeKind::Enum &&
+                                 switchType->kind != TypeKind::Result) ||
+                                !aggregateType || aggregateType->getNumElements() != 2) {
+                                error("runtime Slot outlined switch has no sum layout");
+                                mBuilder->CreateUnreachable();
+                                continue;
+                            }
+                            llvm::Value* tag =
+                                mBuilder->CreateExtractValue(value, {0}, "runtime.slot.switch.tag");
+                            llvm::Value* payload = mBuilder->CreateExtractValue(
+                                value, {1}, "runtime.slot.switch.payload");
+                            auto* tagType = llvm::dyn_cast<llvm::IntegerType>(tag->getType());
+                            auto* defaultTarget = outlinedEdgeTarget(
+                                callbackTerminator.primary, "runtime.slot.switch.default.cleanup");
+                            if (!tagType || !defaultTarget) {
+                                error("runtime Slot outlined switch has no dispatch target");
+                                mBuilder->CreateUnreachable();
+                                continue;
+                            }
+                            const auto dispatchPoint = mBuilder->saveIP();
+                            std::vector<llvm::BasicBlock*> caseTargets;
+                            caseTargets.reserve(callbackTerminator.cases.size());
+                            for (const auto& item : callbackTerminator.cases) {
+                                std::vector<TypePtr> bindingTypes;
+                                std::vector<uint64_t> bindingOffsets;
+                                if (switchType->kind == TypeKind::Enum &&
+                                    item.tag < switchType->variants.size()) {
+                                    const auto& variant = switchType->variants[item.tag];
+                                    bindingTypes = variant.fields;
+                                    for (size_t field = 0; field < variant.fields.size(); ++field)
+                                        bindingOffsets.push_back(
+                                            luna::layout::variantFieldOffset(variant, field));
+                                } else if (switchType->kind == TypeKind::Result &&
+                                           switchType->typeArgs.size() == 2 && item.tag < 2) {
+                                    bindingTypes.push_back(
+                                        switchType->typeArgs[item.tag == 1 ? 0 : 1]);
+                                    bindingOffsets.push_back(0);
+                                } else {
+                                    error("runtime Slot switch case is outside its sum type");
+                                }
+                                if (item.bindings.empty()) {
+                                    caseTargets.push_back(outlinedEdgeTarget(
+                                        item.edge, "runtime.slot.switch.case.cleanup"));
+                                    continue;
+                                }
+                                auto* bridge = llvm::BasicBlock::Create(
+                                    *mCtx, "runtime.slot.switch.case." + std::to_string(item.tag),
+                                    callback);
+                                caseTargets.push_back(bridge);
+                                mBuilder->SetInsertPoint(bridge);
+                                for (const auto cleanupId : item.edge.cleanups) {
+                                    const auto* cleanup = graph.findCleanup(cleanupId);
+                                    if (cleanup) emitCanonicalCleanup(*cleanup);
+                                }
+                                const size_t comparable =
+                                    std::min(bindingTypes.size(), item.bindings.size());
+                                for (size_t binding = 0; binding < comparable; ++binding) {
+                                    const auto local = item.bindings[binding];
+                                    if (local.empty() || local.value >= mCanonicalLocals.size() ||
+                                        !mCanonicalLocals[local.value]) {
+                                        error("runtime Slot switch binding has no storage");
+                                        continue;
+                                    }
+                                    auto* storage = mCanonicalLocals[local.value];
+                                    llvm::Value* field = unpackResultPayload(
+                                        payload, bindingTypes[binding], bindingOffsets[binding]);
+                                    mBuilder->CreateStore(
+                                        coerceCallArgument(field, storage->getAllocatedType()),
+                                        storage);
+                                }
+                                if (!mBuilder->GetInsertBlock()->getTerminator())
+                                    mBuilder->CreateBr(callbackTarget(item.edge.target));
+                            }
+                            mBuilder->restoreIP(dispatchPoint);
+                            auto* dispatch = mBuilder->CreateSwitch(
+                                tag, defaultTarget, callbackTerminator.cases.size());
+                            for (size_t index = 0; index < callbackTerminator.cases.size();
+                                 ++index) {
+                                if (!caseTargets[index]) continue;
+                                dispatch->addCase(llvm::ConstantInt::get(
+                                                      tagType, callbackTerminator.cases[index].tag),
+                                                  caseTargets[index]);
+                            }
+                        } else if (callbackTerminator.kind == moon::TerminatorKind::RuntimeSlot) {
+                            llvm::Value* returnStorage = mBuilder->CreateLoad(
+                                mHelpers->ptrTy(),
+                                mBuilder->CreateStructGEP(frameType, callback->getArg(0), 1,
+                                                          "runtime.slot.nested.return.address"),
+                                "runtime.slot.nested.return");
+                            emitRuntimeSlot(*continuationBlock, callbackTerminator, callback,
+                                            outlinedEdgeTarget, sourceReturnType, returnStorage,
+                                            [&]() {
+                                                emitCaptureWriteback();
+                                                mBuilder->CreateRet(llvm::ConstantInt::get(
+                                                    mHelpers->i32Ty(),
+                                                    LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1));
+                                            });
+                        } else if (callbackTerminator.kind == moon::TerminatorKind::Return) {
+                            llvm::Value* returnValue = nullptr;
+                            if (callbackTerminator.operand)
+                                returnValue = generateExpr(callbackTerminator.operand.get());
+                            for (const auto cleanupId : callbackTerminator.exitCleanups) {
+                                const auto* cleanup = graph.findCleanup(cleanupId);
+                                if (!cleanup)
+                                    error("runtime Slot return references no cleanup row");
+                                else
+                                    emitCanonicalCleanup(*cleanup);
+                            }
+                            emitCaptureWriteback();
+                            if (!sourceReturnType->isVoidTy()) {
+                                auto* destination = mBuilder->CreateLoad(
+                                    mHelpers->ptrTy(),
+                                    mBuilder->CreateStructGEP(frameType, callback->getArg(0), 1,
+                                                              "runtime.slot.return.address"),
+                                    "runtime.slot.return");
+                                if (!returnValue)
+                                    error("runtime Slot outlined return has no value");
+                                else
+                                    mBuilder->CreateStore(
+                                        coerceCallArgument(returnValue, sourceReturnType),
+                                        destination);
+                            }
+                            mBuilder->CreateRet(llvm::ConstantInt::get(
+                                mHelpers->i32Ty(), LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1));
+                        } else {
+                            mBuilder->CreateUnreachable();
+                        }
+                    }
+
+                    mBuilder->SetInsertPoint(callbackCompletion);
+                    emitCaptureWriteback();
+                    mBuilder->CreateRet(llvm::ConstantInt::get(
+                        mHelpers->i32Ty(), LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1));
+
+                    mCanonicalLocals = std::move(savedCanonicalLocals);
+                    mCanonicalLocalTypes = std::move(savedCanonicalLocalTypes);
+                    mCanonicalDeviceBufferLengths = std::move(savedCanonicalDeviceBufferLengths);
+                    mCurrentFunc = savedFunction;
+                    mCurrentFragmentContext = savedFragmentContext;
+                    mCurrentFunctionIsKernel = savedKernelMode;
+                    mBuilder->restoreIP(parentInsertPoint);
+
+                    auto* slotId =
+                        mBuilder->CreateGlobalString(slot->symbolId.value, "runtime.slot.id");
+                    auto* slotContract = mBuilder->CreateGlobalString(slot->contractId.value,
+                                                                      "runtime.slot.contract");
+                    auto* argumentsLayout = mBuilder->CreateGlobalString(
+                        argumentRecord->abiLayoutId.value, "runtime.slot.arguments.layout");
+                    auto dispatch = mModule->getOrInsertFunction(
+                        "luna_runtime_fragment_dispatch_v1", mHelpers->i32Ty(), mHelpers->ptrTy(),
+                        mHelpers->ptrTy(), mHelpers->ptrTy(), mHelpers->ptrTy(), mHelpers->i64Ty(),
+                        mHelpers->i64Ty(), mHelpers->ptrTy(), mHelpers->ptrTy(), mHelpers->ptrTy());
+                    auto* status = mBuilder->CreateCall(
+                        dispatch,
+                        {mCurrentFragmentContext, slotId, slotContract, argumentsLayout,
+                         llvm::ConstantInt::get(mHelpers->i64Ty(), argumentRecord->valueSize),
+                         llvm::ConstantInt::get(mHelpers->i64Ty(), argumentRecord->valueAlignment),
+                         argumentStorage, callback, frame},
+                        "runtime.slot.dispatch");
+                    auto* failed = llvm::BasicBlock::Create(*mCtx, "runtime.slot.failed", func);
+                    auto* escaped = llvm::BasicBlock::Create(*mCtx, "runtime.slot.escaped", func);
+                    auto* nonCompleted =
+                        llvm::BasicBlock::Create(*mCtx, "runtime.slot.non_completed", func);
+                    mBuilder->CreateCondBr(
+                        mBuilder->CreateICmpEQ(
+                            status,
+                            llvm::ConstantInt::get(mHelpers->i32Ty(),
+                                                   LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1)),
+                        completion, nonCompleted);
+                    mBuilder->SetInsertPoint(nonCompleted);
+                    mBuilder->CreateCondBr(
+                        mBuilder->CreateICmpEQ(
+                            status, llvm::ConstantInt::get(
+                                        mHelpers->i32Ty(),
+                                        LUNA_RUNTIME_FRAGMENT_DISPATCH_CONTINUATION_ESCAPED_V1)),
+                        escaped, failed);
+                    mBuilder->SetInsertPoint(escaped);
+                    if (propagateEscape)
+                        propagateEscape();
+                    else if (sourceReturnType->isVoidTy())
+                        mBuilder->CreateRetVoid();
+                    else
+                        mBuilder->CreateRet(mBuilder->CreateLoad(sourceReturnType, escapedReturn,
+                                                                 "runtime.slot.escaped.value"));
+                    mBuilder->SetInsertPoint(failed);
+                    auto* trap = llvm::Intrinsic::getOrInsertDeclaration(mModule.get(),
+                                                                         llvm::Intrinsic::trap);
+                    mBuilder->CreateCall(trap);
+                    mBuilder->CreateUnreachable();
+                };
+                emitRuntimeSlot(block, terminator, func, edgeTarget, func->getReturnType(), nullptr,
+                                {});
+                break;
+            }
+            case moon::TerminatorKind::Switch: {
                 const TypePtr switchType = resolveType(
                     terminator.switchType);
                 if (!switchType ||

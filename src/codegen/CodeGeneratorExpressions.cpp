@@ -146,6 +146,13 @@ llvm::Value* CodeGenerator::generateIdentifier(IdentifierExpr* id) {
         return mBuilder->CreateLoad(alloca->getAllocatedType(), alloca, id->name);
     }
     if (id->declaration.complete()) {
+        if (const auto* declaration =
+                resolveFunctionDeclaration(id->declaration);
+            declaration && declaration->requiresFragmentContext) {
+            error("function value '" + declaration->name +
+                  "' requires the context-aware indirect-call ABI");
+            return llvm::PoisonValue::get(mHelpers->ptrTy());
+        }
         if (auto* function = resolveFunction(id->declaration))
             return function;
     }

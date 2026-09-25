@@ -101,35 +101,18 @@ struct FreeStmt : Stmt {
     bool isImplicit = false;
 };
 
-struct SlotDeclStmt : Stmt {
-    std::string name;
-    FragmentKind acceptedKind = FragmentKind::Interceptor;
-    FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
-    std::vector<Param> params;
-    std::string defaultFragment;
-    DeclarationRef defaultFragmentRef;
-    TypeRef structuralType;
-};
-
 struct SlotInvokeStmt : Stmt {
     std::string name;
-    FragmentKind acceptedKind = FragmentKind::Interceptor;
-    FragmentCardinality acceptedCardinality = FragmentCardinality::Once;
+    DeclarationRef slotRef;
     std::vector<std::unique_ptr<Expr>> args;
     std::unique_ptr<BlockStmt> continuation;
     bool isImplicitCapture = false;
     std::vector<Param> interfaceParams;
     std::vector<std::string> resolvedParamNames;
-    std::string defaultFragment;
-    DeclarationRef defaultFragmentRef;
     TypeRef structuralType;
 };
 
 struct ResumeStmt : Stmt {};
-struct AbortStmt : Stmt {
-    std::vector<std::string> autoFrees;
-    std::vector<CleanupObligation> cleanups;
-};
 
 struct AwaitStmt : Stmt {
     std::unique_ptr<Expr> event;
@@ -139,6 +122,11 @@ struct ApplyStmt : Stmt {
     std::string slotName;
     std::string fragmentName;
     DeclarationRef fragmentRef;
+    std::vector<std::unique_ptr<Expr>> environmentArgs;
+    // Compiler-generated runtime helpers receive already materialized
+    // environment fields as parameters. They borrow those locals directly
+    // instead of constructing and cleaning a second owned environment.
+    bool borrowsEnvironment = false;
     std::unique_ptr<BlockStmt> body;
 };
 

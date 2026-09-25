@@ -1,0 +1,16 @@
+package tests.fragment_implicit_capture_invalid;
+
+slot checkpoint();
+
+fragment report for checkpoint {
+    value;
+    resume;
+}
+
+fn main() -> i32 {
+    let value = 42;
+    apply report {
+        checkpoint() { }
+    }
+    return 0;
+}

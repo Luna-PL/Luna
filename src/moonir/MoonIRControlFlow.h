@@ -54,7 +54,7 @@ struct SwitchEdge {
 
 struct Terminator : Node {
     TerminatorKind kind = TerminatorKind::Invalid;
-    // Branch condition, switch scrutinee, or return value. Jump/resume/abort/
+    // Branch condition, switch scrutinee, or return value. Jump/resume/discard/
     // unreachable leave this empty.
     std::unique_ptr<Expr> operand;
     TypeRef switchType;
@@ -62,6 +62,13 @@ struct Terminator : Node {
     ControlEdge secondary;
     std::vector<SwitchEdge> cases;
     std::vector<CleanupId> exitCleanups;
+    // Present only for RuntimeSlot. The nominal declaration and frozen
+    // argument record are explicit verifier inputs; `operand` is the packed
+    // record, `primary` enters the compiler-owned continuation, and
+    // `secondary` continues after dispatch when the chain completes or
+    // discards that continuation.
+    DeclarationRef runtimeSlot;
+    TypeRef runtimeArgumentsType;
 };
 
 struct BasicBlock : Node {
@@ -82,8 +89,8 @@ struct RegionRecord {
     std::vector<BlockId> blocks;
     SourceLocation location;
     // Present only for an inlined Fragment region. The declaration table owns
-    // the nominal identity and frozen interceptor/context + once/many
-    // contract; regions do not duplicate that semantic payload.
+    // the nominal identity and frozen Fragment contract; regions do not
+    // duplicate that semantic payload.
     DeclarationRef fragment;
     // Ordered entry bindings for a Fragment region. Their type, relation and
     // usage must match the frozen fragment parameter contract.

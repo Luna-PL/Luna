@@ -1,5 +1,6 @@
 #include "Verifier.h"
 #include "VerifierInternal.h"
+#include "FragmentContextEffects.h"
 #include "../core/TypeLayout.h"
 
 #include "../diagnostics/Diagnostic.h"
@@ -403,11 +404,17 @@ bool Verifier::verify(const Module& module) {
         }
         if (record.kind == DeclarationKind::Fragment ||
             record.kind == DeclarationKind::Slot) {
-            const auto form = record.sysmeta.control.form;
-            if (form != luna::sysmeta::ControlForm::Interceptor &&
-                form != luna::sysmeta::ControlForm::Context)
+            if (record.sysmeta.control.form !=
+                luna::sysmeta::ControlForm::Fragment)
                 error(record.location, "control declaration '" + record.id +
-                                       "' has no slot/fragment control sysmeta");
+                                       "' must use the unified fragment control form");
+            if (record.sysmeta.control.cardinality !=
+                luna::sysmeta::Cardinality::Once ||
+                record.sysmeta.control.forwarding !=
+                    luna::sysmeta::Forwarding::Explicit ||
+                record.sysmeta.control.abortPermitted)
+                error(record.location, "control declaration '" + record.id +
+                                       "' has a legacy continuation contract");
             if (record.sysmeta.control.storage !=
                 luna::sysmeta::ContinuationStorage::ScopedStack)
                 error(record.location, "control declaration '" + record.id +
@@ -415,6 +422,96 @@ bool Verifier::verify(const Module& module) {
             if (!record.sysmeta.capability.hostOnly)
                 error(record.location, "control declaration '" + record.id +
                                        "' must be host-only in the current ABI");
+        }
+        if (record.kind == DeclarationKind::Fragment) {
+            const bool exported = std::any_of(
+                module.exports.begin(), module.exports.end(),
+                [&](const ExportRecord& candidate) {
+                    return candidate.declaration == DeclarationRef{
+                        record.symbolId, record.contractId};
+                });
+            if (!record.controlTarget.complete())
+                error(record.location, "fragment declaration '" + record.id +
+                                       "' has no exact target Slot contract");
+            else {
+                const auto* target = module.findDeclaration(
+                    record.controlTarget);
+                if (!target || target->kind != DeclarationKind::Slot)
+                    error(record.location, "fragment declaration '" + record.id +
+                                           "' targets a missing Slot contract");
+            }
+            const auto* environment = module.findType(record.environmentType);
+            if (!environment || environment->kind != TypeKind::Record)
+                error(record.location, "fragment declaration '" + record.id +
+                                       "' has no frozen environment record");
+            const auto* arguments = module.findType(
+                record.controlArgumentsType);
+            const auto* target = module.findDeclaration(record.controlTarget);
+            if (!arguments || arguments->kind != TypeKind::Record ||
+                !target || target->controlArgumentsType !=
+                    record.controlArgumentsType)
+                error(record.location, "fragment declaration '" + record.id +
+                                       "' has no target Slot argument record");
+            if (exported && !record.runtimeEntry.complete())
+                error(record.location, "exported fragment declaration '" +
+                                       record.id + "' has no runtime entry");
+            if (!record.runtimeEntry.empty()) {
+                verifyDeclarationRef(
+                    record.runtimeEntry, record.location,
+                    "runtime entry for fragment '" + record.id + "'",
+                    module, DeclarationKind::Function);
+                const auto* entry = module.findDeclaration(
+                    record.runtimeEntry);
+                const auto* entryType = entry
+                    ? module.findType(entry->type) : nullptr;
+                if (!entryType || entryType->kind != TypeKind::Function ||
+                    !environment || !arguments) {
+                    error(record.location, "runtime entry for fragment '" +
+                                           record.id + "' is not a function");
+                } else {
+                    std::vector<TypeRef> expectedParameters;
+                    for (const auto& field : environment->fields)
+                        expectedParameters.push_back(field.type);
+                    for (const auto& field : arguments->fields)
+                        expectedParameters.push_back(field.type);
+                    const size_t valueParameterCount =
+                        expectedParameters.size();
+                    const bool parameterTypesMatch =
+                        entryType->parameterTypeIds.size() ==
+                            valueParameterCount + 1 &&
+                        std::equal(
+                            expectedParameters.begin(),
+                            expectedParameters.end(),
+                            entryType->parameterTypeIds.begin());
+                    const auto* activation = parameterTypesMatch
+                        ? module.findType(
+                            entryType->parameterTypeIds.back()) : nullptr;
+                    const auto* activationPointee = activation
+                        ? module.findType(activation->innerTypeId) : nullptr;
+                    const auto* result = module.findType(
+                        entryType->returnTypeId);
+                    if (!parameterTypesMatch || !activation ||
+                        activation->kind != TypeKind::RawPointer ||
+                        !activationPointee ||
+                        activationPointee->kind != TypeKind::Unit ||
+                        !result || result->kind != TypeKind::Unit)
+                        error(record.location,
+                              "runtime entry for fragment '" + record.id +
+                              "' has an incompatible execution signature");
+                }
+            }
+        } else if (record.kind == DeclarationKind::Slot) {
+            const auto* arguments = module.findType(
+                record.controlArgumentsType);
+            if (!arguments || arguments->kind != TypeKind::Record)
+                error(record.location, "slot declaration '" + record.id +
+                                       "' has no frozen argument record");
+        } else if (!record.controlTarget.empty() ||
+                   !record.environmentType.empty() ||
+                   !record.controlArgumentsType.empty() ||
+                   !record.runtimeEntry.empty()) {
+            error(record.location, "non-Fragment declaration '" + record.id +
+                                   "' carries Fragment runtime-control facts");
         }
         for (const auto& metadata : record.metadata) {
             auto schema = schemasById.find(metadata.schemaId);
@@ -442,10 +539,9 @@ bool Verifier::verify(const Module& module) {
             }
             if (metadata.retention != Retention::CompileTime && !module.features.runtime)
                 error(metadata.location, "runtime metadata is present without the runtime feature");
-            if (static_cast<uint8_t>(metadata.retention) >
-                static_cast<uint8_t>(record.retention))
-                error(metadata.location, "metadata retention exceeds declaration retention for '" +
-                                         record.id + "'");
+            // Metadata retention is independent from executable retention.
+            // Runtime metadata may retain this row's stable identity while
+            // the declaration itself remains non-callable and erasable.
         }
     }
 
@@ -497,6 +593,7 @@ bool Verifier::verify(const Module& module) {
 
     std::string previousExportKey;
     std::unordered_set<std::string> exportNames;
+    std::vector<const DeclarationRecord*> exportedDeclarations;
     for (const auto& exported : module.exports) {
         const std::string key = exported.name + "\n" +
             exported.declaration.symbol.value;
@@ -511,11 +608,27 @@ bool Verifier::verify(const Module& module) {
         const auto* declaration = module.findDeclaration(exported.declaration);
         if (!declaration)
             error(exported.location, "export references a missing declaration contract");
-        else if (declaration->type != exported.type ||
-                 declaration->kind != exported.kind)
-            error(exported.location, "export type or kind differs from its declaration");
+        else {
+            exportedDeclarations.push_back(declaration);
+            if (declaration->type != exported.type ||
+                declaration->kind != exported.kind)
+                error(exported.location, "export type or kind differs from its declaration");
+        }
         if (!exported.abi.empty() && exported.abi != "C")
             error(exported.location, "export carries an unsupported explicit ABI");
+    }
+
+    for (const auto* declaration : exportedDeclarations) {
+        if (!declaration || declaration->kind != DeclarationKind::Fragment)
+            continue;
+        const auto executable = module.declarationsById.find(declaration->id);
+        const auto* fragment = executable == module.declarationsById.end()
+            ? nullptr
+            : dynamic_cast<const FragmentDecl*>(executable->second);
+        if (!fragment) continue;
+        if (!isPublicSlotTarget(module, fragment->targetSlot))
+            error(fragment->location, "exported fragment '" + fragment->name +
+                "' must target an exported slot");
     }
 
     std::unordered_set<std::string> executableIds;
@@ -554,6 +667,31 @@ bool Verifier::verify(const Module& module) {
                                              declaration->declarationId + "'");
         }
         verifyDeclaration(*declaration, module);
+    }
+
+    const auto fragmentContextEffects = computeFragmentContextEffects(module);
+    const auto verifyFragmentContextEffect = [&](const FunctionDecl* function) {
+        if (!function) return;
+        const DeclarationRef reference{
+            function->symbolId, function->contractId};
+        const auto found = fragmentContextEffects.find(
+            fragmentContextEffectKey(reference));
+        const bool inferred =
+            found != fragmentContextEffects.end() && found->second;
+        if (function->requiresFragmentContext != inferred)
+            error(function->location,
+                  "function '" + function->name +
+                  "' has a forged requires_fragment_context effect");
+    };
+    for (const auto& declaration : module.declarations) {
+        if (const auto* function =
+                dynamic_cast<const FunctionDecl*>(declaration.get())) {
+            verifyFragmentContextEffect(function);
+        } else if (const auto* implementation =
+                       dynamic_cast<const ImplDecl*>(declaration.get())) {
+            for (const auto& method : implementation->methods)
+                verifyFragmentContextEffect(method.get());
+        }
     }
 
     if (module.features.kernelRuntimeReserved && !module.features.kernel)

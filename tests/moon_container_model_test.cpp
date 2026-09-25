@@ -61,9 +61,9 @@ std::optional<size_t> firstOperationOpcodeOffset(
     if (!functions || *functions != 1) return std::nullopt;
     for (unsigned index = 0; index < 6; ++index)
         if (!skipString()) return std::nullopt;
-    if (offset > bytes.size() || bytes.size() - offset < 20)
+    if (offset > bytes.size() || bytes.size() - offset < 24)
         return std::nullopt;
-    offset += 20;
+    offset += 24;
     for (unsigned index = 0; index < 2; ++index)
         if (!skipString()) return std::nullopt;
     const auto typeParameters = takeU32();
@@ -441,6 +441,62 @@ int main(int argc, char* argv[]) {
             decoded, canonicalCodeBytes, error) ||
         canonicalCodeBytes != codeBytes)
         return fail("code model codec is not byte-canonical after decode");
+
+    // RuntimeSlot carries the two identity-bearing facts needed by the later
+    // execution-context lowering.  Exercise non-empty values explicitly so a
+    // schema change cannot silently preserve only the legacy terminator data.
+    auto& runtimeSlotTerminator =
+        dynamic_cast<moon::FunctionDecl*>(source.declarations[0].get())
+            ->controlFlow->blocks[0].terminator;
+    const auto savedKind = runtimeSlotTerminator.kind;
+    const auto savedPrimary = runtimeSlotTerminator.primary;
+    const auto savedSecondary = runtimeSlotTerminator.secondary;
+    runtimeSlotTerminator.kind = moon::TerminatorKind::RuntimeSlot;
+    runtimeSlotTerminator.primary.target = moon::BlockId{0};
+    runtimeSlotTerminator.secondary.target = moon::BlockId{0};
+    runtimeSlotTerminator.runtimeSlot = {
+        luna::identity::SymbolId{"symbol:runtime-slot"},
+        luna::identity::ContractId{"contract:runtime-slot"}};
+    runtimeSlotTerminator.runtimeArgumentsType = i32Ref;
+    auto* runtimeSlotSourceFunction =
+        dynamic_cast<moon::FunctionDecl*>(source.declarations[0].get());
+    runtimeSlotSourceFunction->requiresFragmentContext = true;
+    std::vector<uint8_t> runtimeSlotBytes;
+    moon::Module runtimeSlotDecoded;
+    runtimeSlotDecoded.name = source.name;
+    runtimeSlotDecoded.features = source.features;
+    if (!moon::ContainerModelCodec::encodeCode(
+            source, runtimeSlotBytes, error) ||
+        !moon::ContainerModelCodec::decodeTypes(
+            typeBytes, runtimeSlotDecoded, error) ||
+        !moon::ContainerModelCodec::decodeDeclarations(
+            symbolBytes, contractBytes, sysmetaBytes,
+            runtimeSlotDecoded, error) ||
+        !moon::ContainerModelCodec::decodeCode(
+            runtimeSlotBytes, runtimeSlotDecoded, error))
+        return fail("RuntimeSlot code round-trip failed: " + error);
+    const auto* runtimeSlotFunction =
+        runtimeSlotDecoded.declarations.empty() ? nullptr
+        : dynamic_cast<const moon::FunctionDecl*>(
+              runtimeSlotDecoded.declarations[0].get());
+    const auto* decodedRuntimeSlot =
+        runtimeSlotFunction && runtimeSlotFunction->controlFlow &&
+                !runtimeSlotFunction->controlFlow->blocks.empty()
+            ? &runtimeSlotFunction->controlFlow->blocks[0].terminator
+            : nullptr;
+    if (!decodedRuntimeSlot ||
+        decodedRuntimeSlot->kind != moon::TerminatorKind::RuntimeSlot ||
+        decodedRuntimeSlot->runtimeSlot != runtimeSlotTerminator.runtimeSlot ||
+        decodedRuntimeSlot->runtimeArgumentsType != i32Ref ||
+        !runtimeSlotFunction->requiresFragmentContext)
+        return fail("code codec lost RuntimeSlot identity fields");
+    runtimeSlotTerminator.kind = savedKind;
+    runtimeSlotTerminator.primary = savedPrimary;
+    runtimeSlotTerminator.secondary = savedSecondary;
+    runtimeSlotTerminator.runtimeSlot = {};
+    runtimeSlotTerminator.runtimeArgumentsType = {};
+    runtimeSlotSourceFunction->requiresFragmentContext = false;
+
     if (!verifier.verify(decoded)) {
         for (const auto& diagnostic : verifier.errors())
             std::cerr << diagnostic.message << '\n';

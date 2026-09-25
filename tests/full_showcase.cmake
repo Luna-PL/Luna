@@ -46,6 +46,9 @@ foreach(required_text IN ITEMS
         "generic_recipe"
         " instantiation"
         "retention runtime"
+        "::fn::dynamic_probe"
+        "::fragment::app_audit"
+        "::slot::audit_slot"
         " kernel")
     string(FIND "${moonir}" "${required_text}" required_at)
     if(required_at EQUAL -1)
@@ -110,6 +113,14 @@ if(NOT build_result EQUAL 0 OR NOT EXISTS "${ir_path}" OR
         "Result: ${build_result}\n${build_output}\n${build_error}")
 endif()
 
+file(READ "${ir_path}" llvm_ir)
+string(FIND "${llvm_ir}" "luna_runtime_fragment_dispatch_v1" dispatch_at)
+if(dispatch_at EQUAL -1)
+    file(REMOVE_RECURSE "${work_dir}")
+    message(FATAL_ERROR
+        "cross-package runtime Slot did not lower to the dispatch ABI.\n${llvm_ir}")
+endif()
+
 execute_process(
     COMMAND "${CMAKE_COMMAND}" -E env LUNA_GPU_BACKEND=sim "${executable_path}"
     RESULT_VARIABLE aot_result
@@ -123,6 +134,30 @@ if(NOT aot_result EQUAL 42 OR NOT "${aot_output}" STREQUAL "${jit_o2_output}")
         "JIT stdout:\n${jit_o2_output}\n"
         "AOT result: ${aot_result}\nAOT stdout:\n${aot_output}\n"
         "AOT stderr:\n${aot_error}")
+endif()
+
+# A dependency Slot is a public control only while its owning package exports
+# it. Keep both the runtime invocation and the exported candidate honest.
+set(effects_path "${showcase_dir}/foundation/src/effects.luna")
+file(READ "${effects_path}" effects_source)
+string(REPLACE "export slot audit_slot(value: i32);"
+               "slot audit_slot(value: i32);"
+               private_effects_source "${effects_source}")
+if("${private_effects_source}" STREQUAL "${effects_source}")
+    file(REMOVE_RECURSE "${work_dir}")
+    message(FATAL_ERROR "full showcase lost its exported dependency Slot fixture")
+endif()
+file(WRITE "${effects_path}" "${private_effects_source}")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" check "${app_dir}"
+    RESULT_VARIABLE private_result
+    OUTPUT_VARIABLE private_output
+    ERROR_VARIABLE private_error
+)
+if(private_result EQUAL 0)
+    file(REMOVE_RECURSE "${work_dir}")
+    message(FATAL_ERROR
+        "full showcase accepted a private dependency Slot as a runtime control")
 endif()
 
 file(REMOVE_RECURSE "${work_dir}")

@@ -1,0 +1,16 @@
+package tests.fragment_owned_environment_move_invalid;
+
+slot checkpoint();
+
+fragment report[text: string] for checkpoint {
+    print(text);
+    resume;
+}
+
+fn main() -> i32 {
+    let text = "not moved";
+    apply report[text] {
+        checkpoint() { }
+    }
+    return 0;
+}

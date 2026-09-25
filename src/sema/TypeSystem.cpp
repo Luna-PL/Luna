@@ -262,15 +262,6 @@ bool ConstraintSolver::unifyInternal(const TypePtr& lhs, const TypePtr& rhs,
     }
     if (a->kind == TypeKind::Function || a->kind == TypeKind::Slot ||
         a->kind == TypeKind::Fragment) {
-        if ((a->kind == TypeKind::Fragment || a->kind == TypeKind::Slot) &&
-            a->continuationKind != b->continuationKind) {
-            if (reason) *reason = "interceptor and context are different continuation contracts";
-            return false;
-        }
-        if (a->isMultiShot != b->isMultiShot) {
-            if (reason) *reason = "continuation emission capabilities differ";
-            return false;
-        }
         if (a->paramTypes.size() != b->paramTypes.size()) {
             if (reason) *reason = "function arities differ";
             return false;

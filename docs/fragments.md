@@ -1,15 +1,19 @@
-# Interceptors, contexts, and slots
+# Slots and fragments
 
-Luna 0.3 models a control hook as a nominal module-level `slot` and its
-implementation as an `interceptor` or `context` that explicitly targets that
-slot. A slot invocation always carries a lexical continuation body, and an
-`apply` always carries a lexical body.
+English | [简体中文](fragments.zh-CN.md)
+
+Luna models an injection point as a nominal module-level `slot` and its handler
+as a `fragment` that explicitly targets that slot. Declaring a slot is the
+opt-in to controlled interception; a slot is not a function or transferable
+value. A fragment is not interchangeable with a function reference because it
+may receive the compiler-owned slot continuation through `resume`.
 
 ```luna
-slot interceptor observed(value: i32) default audit;
+slot observed(value: i32);
 
-interceptor audit(value: i32) for observed {
+fragment audit(value) for observed {
     print(value);
+    resume;
 }
 
 fn main() -> i32 {
@@ -22,112 +26,137 @@ fn main() -> i32 {
 }
 ```
 
-Slots and fragments are declared at module scope. A fragment must bind every
-slot parameter with the same type, ownership relation, and usage. Its control
-form must also match the target slot. The target gives both declarations a
-nominal contract identity; two same-shaped slots are still different types.
-Declaration order does not affect a `default` binding.
+Slots and fragments are module-level declarations. A fragment binds every slot
+parameter and inherits the target's types and ownership contract. The target is
+nominal: two same-shaped slots remain different injection points.
 
-## Single-shot control contract
+## Single-shot continuation
 
-Luna 0.3 freezes unit-result, single-shot control. `context many`, dynamic
-slot/apply syntax, local slot declarations, and blockless apply are rejected
-with migration diagnostics.
-
-| Operation | `interceptor` | `context` |
-| --- | --- | --- |
-| Natural fallthrough | Enters the continuation exactly once | Discards an unconsumed continuation; after `resume()`, completes the fragment |
-| `resume()` | Rejected | Enters the continuation once, then returns to the next fragment statement if it completes normally |
-| `return;` | Ends the fragment and skips the continuation | Ends the fragment and skips an unconsumed continuation; after `resume()`, ends post-resume fragment execution |
-| `abort()` | Explicitly discards the continuation | Explicitly discards an unconsumed continuation |
-
-Fragment return is unit-only: `return value;` is rejected. `abort()` after a
-single-shot context has resumed is also rejected because the continuation has
-already been consumed. A context path may omit `resume()`; reaching its end is
-an implicit discard rather than a missing-control error.
-
-`return;` and `abort()` can have the same destination before a continuation is
-entered, but remain different canonical operations. Return is normal
-fragment-local termination. Abort records an explicit continuation-discard
-decision and is invalid once a single-shot continuation has been consumed.
-
-## Continuation boundary
-
-The lexical body belongs to the invoking function, not to the fragment:
-
-- `return value;` in the continuation returns from the enclosing function and
-  bypasses context code after `resume()`.
-- `?` in the continuation propagates from the enclosing `Result` function and
-  has the same bypass behavior.
-- `?` inside a fragment is rejected because it would otherwise propagate
-  across the slot boundary implicitly; handle the `Result` explicitly there.
-- Fragment-local names are not visible in the continuation, even when a local
-  shadows a name in the invoking scope.
-
-These rules avoid a second hidden meaning for `return` or `?`.
-
-## Ownership and cleanup
-
-Every edge leaving a fragment carries explicit cleanup obligations:
-
-- interceptor locals are cleaned before natural forwarding, `return;`, or
-  `abort()` reaches its target;
-- context locals live across `resume()` and are cleaned when the context exits,
-  including an enclosing-function return or `?` from the continuation;
-- continuation locals are cleaned on their ordinary function/block exit;
-- fragment-local exits do not consume enclosing resources implicitly; all
-  paths that reach code after the slot must agree on ownership, borrow, and
-  in-flight device state;
-- a still-valid linear fragment local must be consumed before a fragment exit.
-
-Cleanup order is represented on canonical CFG edges and verified before code
-generation. Static composition therefore needs neither a heap continuation nor
-runtime dispatch.
-
-## Apply and defaults
-
-`apply fragment { ... }` derives its target slot from the fragment declaration.
-Within the lexical body, matching slot invocations use that fragment. Outside
-the body, a slot uses its declared default; a slot with no active binding and no
-default behaves as the identity operation and runs its continuation directly.
+The first contract is unit-result and single-shot. `resume;` enters the next
+selected fragment or the invocation's base continuation at most once. If the
+continuation completes normally, execution returns to the statements after
+`resume`. Natural fragment fallthrough or `return;` before `resume` discards the
+unconsumed continuation.
 
 ```luna
-slot context measured();
-
-context profile for measured {
+fragment measured[label: i32](value) for observed {
+    print(label);
     let start = monotonic_now();
-    resume();
+    resume;
     print(monotonic_now() - start);
 }
+```
 
-fn run() -> unit {
-    apply profile {
-        measured() {
-            perform_work();
-        }
+The continuation belongs to the invoking function:
+
+- `return value;` in the continuation returns from that function and bypasses
+  post-resume fragment code;
+- `?` in the continuation has the same outer propagation behavior;
+- the continuation cannot be stored, returned, forged, or resumed twice;
+- fragment-local names are not visible in the continuation.
+
+Cleanup obligations are explicit on canonical CFG edges. Fragment locals that
+survive across `resume` are cleaned on normal completion and outer escape.
+
+## Apply
+
+`apply fragment[environment arguments] { ... }` constructs and installs a
+fragment for a lexical region. Square brackets are the fragment construction
+environment; parentheses remain exclusively the Slot invocation contract.
+Environment arguments are evaluated once on entry to the apply region and are
+reused by every matching Slot invocation. Fragment bodies do not implicitly
+capture locals from the apply site. The Apply region owns Copy or affine
+environment fields; every Fragment activation receives shared-borrow views.
+An affine place therefore requires an explicit `move` at construction, while
+an owning rvalue may be passed directly. Linear fields are rejected because a
+reusable borrowed environment cannot prove exactly-once consumption. Field
+ownership is inferred from its type, so ownership modifiers are not accepted
+in the environment parameter list. A slot with no active binding runs its base
+continuation directly.
+
+```luna
+apply measured[7] {
+    observed(10) {
+        perform_work();
     }
 }
 ```
 
-Qualified exported slot and fragment names follow ordinary package/module name
-resolution. `symbols(slot_name)` may inspect a slot declaration, but a slot is
-reflectable and non-callable: the query result is declaration metadata, not a
-function value.
+Static composition can be inlined and carries no Runtime descriptor or dispatch
+cost. The confirmed runtime plan extends the same operand position to a verified
+`RuntimeFragmentRef<S>` rather than adding `dynamic apply`.
 
-## Runtime boundary
+## Public candidates
 
-Runtime-retained Slot and Fragment descriptors have stable declaration kinds,
-nominal IDs, contract IDs, and strong fragment-to-slot references. This freezes
-the representation needed by loaders and tooling without inventing a second
-source language. These rows are currently non-callable descriptor/identity
-evidence and contain no runtime continuation entry. `TBD-SF009` decides whether
-0.3 freezes that promise and the exported/private slot-retention rule.
+`export slot` publishes a stable injection contract. An `export fragment`
+targeting an exported slot is a candidate implementation of that exact SlotId.
+Candidate membership comes from the verified nominal relationship and
+ContractId, never from user metadata.
 
-Luna 0.3 does not expose runtime typed-reference lookup/acquisition syntax.
-Ordinary `apply fragment { ... }` is the sole apply spelling; extending its
-fragment operand to an acquired typed reference depends on `TBD-SF007`.
-Acquisition, ownership, lifetime, and runtime-apply ABI rules belong to
-`TBD-SF010`.
-The removed `dynamic slot` and `dynamic apply` spellings remain only in the
-migration-error corpus. Their former external plugin ABI and environment-driven
-dispatch runtime were deleted rather than carried into 0.3.
+Metadata attached through a public schema is selection policy for the host.
+The typed candidate query returns immutable generation-pinned snapshots of
+public executable Fragments for one exact SlotId/ContractId. The host selects
+None or one candidate per exact Slot, constructs an immutable BindingSet, and
+publishes it only at a Runtime safe point. Reflection, metadata filtering, and
+descriptor validation do not run on ordinary Slot dispatch.
+
+See the confirmed
+[Slot/Fragment Runtime Injection Plan](slot_fragment_runtime_plan.md) for the
+descriptor, lifetime, host-policy, and staged implementation boundaries.
+
+## Implementation status
+
+The unified `slot`, `fragment ... for`, and `resume;` syntax is connected to the
+single-shot static Sema, MoonIR, JIT, and AOT path. Legacy categories, `many`,
+`abort`, declaration defaults, and Slot/Fragment `runtime` modifiers are no
+longer legal source constructs. Their semantic fields and lowering branches
+have also been removed. The 0.3 container preserves the old wire offsets only
+as reserved canonical values and rejects legacy values while decoding.
+
+Runtime Fragment factory descriptors and `RuntimeFragmentRef<S>` are available
+at the host ABI boundary. Source-level explicit Copy and affine environments
+are lowered through Sema and MoonIR with cleanup on normal Apply exit, outer
+`return`, and `?` propagation. Exported controls now have a retention-independent
+`PUBLIC_CONTROL` descriptor capability; exact Fragment target/environment facts
+survive verified container loading, and candidate snapshots filter public
+executable bindings by exact Slot contract. Slot argument records and the
+Runtime-owned opaque single-shot activation are also frozen. The initial public
+execution ABI accepts Copy Slot contracts and Copy Fragment environments;
+static apply continues to support affine environments. Exported Fragments now
+reuse static CFG composition through a hidden container-reachable function;
+LLVM emits verified factory/destroy/execute wrappers and publishes them as
+executable candidates. Immutable BindingSet construction, safe-point atomic
+activation, pinned snapshots, None/One dispatch, host-ordered chains, and
+immutable local Slot overrides are implemented. The explicit execution-context
+C ABI propagates continuation escape without global/TLS Runtime state, and the
+artifact-cost gate covers exported executable materialization versus erased
+static composition. An unbound exported Slot invocation is now preserved in the
+sealed CFG as a verified `RuntimeSlot` terminator with an exact declaration
+reference, frozen argument Record TypeId, packed operand, continuation entry,
+and completion edge. Static `apply` composition remains ahead of this path, and
+unbound private Slots remain erasable. Effect-directed context propagation,
+including a verifier-recomputed least fixed point over exact direct calls, is
+now represented and container-preserved as `requires_fragment_context`.
+Affected internal LLVM functions now receive one hidden leading context
+parameter and exact direct calls forward it; unaffected functions retain their
+original ABI. A context-requiring `runtime fn` now publishes its ordinary
+Function descriptor with the `FRAGMENT_CONTEXT` ABI flag, and its binding
+preserves that flag for host-side typed lookup. This reuses the existing
+runtime catalog instead of creating a second entry registry. An ordinary
+`export fn` still promises its declared public ABI and is therefore rejected
+when it requires the hidden capability; context-requiring function values also
+remain rejected until the indirect-call ABI exists. Continuation
+dispatch now outlines synchronous captures into an explicit stack frame,
+packs the frozen argument record, calls the stable Runtime ABI, and writes
+capture mutations back before following the completion edge. A cleanup-free
+or resource-bearing enclosing `return`/`?` is carried through the frame and the
+distinct escaped status. Canonical cleanup edges, Result switches, and case
+bindings execute inside the callback before escape; selected generated
+Fragments have been exercised through `resume` against that callback. A
+continuation can call another function that reaches a dynamic Slot; its explicit
+context is forwarded. Lexically nested Slots now recursively outline their
+callbacks, propagate the same context and return storage, and write back
+transitive captures, including affine resources. An inner escape performs the
+sealed cleanup of enclosing resources before propagating its return; a selected
+Fragment that omits `resume` instead reaches the post-Slot cleanup path. A
+structural IR gate counts dynamic dispatch and checks static composition for erasure.

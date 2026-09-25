@@ -11,7 +11,8 @@
 
 本文是 Luna 0.3 的总纲。现有
 [Slot/Fragment 重构审计](luna_0.3_evolution_audit.zh-CN.md)是受本文约束的专题审计，
-不是 0.3 的总规范。
+不是 0.3 的总规范。已确认的 runtime 方向和分阶段实施记录在
+[Slot/Fragment 运行时注入计划](slot_fragment_runtime_plan.zh-CN.md)。
 
 文中使用以下状态：
 
@@ -718,6 +719,15 @@ single-shot `resume()` 后不得 abort。continuation 内的 `return` 或 `?` �
 post-resume fragment 代码，同时保持 canonical cleanup；fragment 内的 `?` 被拒绝。局部 slot、
 无 body apply、`context many` 和 `dynamic slot/apply` 均已移除。不引入 runtime typed-reference
 获取语法；普通 apply 是唯一拼写，未来 typed operand 扩展必须另行决定。
+
+`SFR001`（Confirmed，2026-09-23）取代 SF006，成为开放 Slot/Fragment 表面的实施方向。
+`slot` 本身就是固定、名义化的注入点；统一的 `fragment` 只目标指向一个确切 SlotId，并
+使用显式 single-shot `resume;`。`RuntimeFragmentRef<S>` 是唯一可传递的运行时处理器，
+不能与 function reference 互换。Exported Fragment 自动成为其 exported 目标 Slot 的已验证
+候选；Runtime 提供不可变、generation-pinned 的候选快照，只有宿主能选择并激活不可变
+BindingSet。Metadata 是强类型选择策略而不是能力证据，反射与候选过滤不得进入 Slot
+dispatch 热路径。专门的 runtime 计划冻结四关键字表面以及删除旧 interceptor/context
+内部表示的实施阶段。
 
 实施状态（2026-08-27）：Q001/Q003/Q004/Q005/Q006/Q007 的 compile-time Symbol
 Catalog/query 表面已落地，优先级第 13 项已关闭。每次 `SemanticContext` 分析现在以 canonical SymbolId、ContractId、TypeId 和

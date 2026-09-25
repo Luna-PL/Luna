@@ -1,14 +1,18 @@
-# Interceptor、Context 与 Slot
+# Slot 与 Fragment
 
-Luna 0.3 把控制挂接点表示为模块级名义 `slot`，把实现表示为显式指向该 slot 的
-`interceptor` 或 `context`。slot 调用必须携带词法 continuation body，`apply` 也必须
-携带词法 body。
+[English](fragments.md) | 简体中文
+
+Luna 使用模块级、名义化的 `slot` 表示注入点，使用显式目标指向该 Slot 的
+`fragment` 表示处理器。声明 Slot 本身就是对受控切入的显式选择；Slot 不是函数或可传递
+值。Fragment 可以通过 `resume` 获得编译器拥有的 Slot 续体，因此不能与 function
+reference 互换。
 
 ```luna
-slot interceptor observed(value: i32) default audit;
+slot observed(value: i32);
 
-interceptor audit(value: i32) for observed {
+fragment audit(value) for observed {
     print(value);
+    resume;
 }
 
 fn main() -> i32 {
@@ -21,95 +25,106 @@ fn main() -> i32 {
 }
 ```
 
-Slot 与 fragment 都在模块作用域声明。fragment 必须绑定 slot 的全部参数，并保持相同的
-类型、所有权 relation 和 usage；控制形式也必须与目标 slot 一致。目标 slot 为两项声明
-提供名义契约身份，因此两个结构完全相同的 slot 仍是不同类型。`default` 绑定不受声明
-顺序影响。
+Slot 与 Fragment 都是模块级声明。Fragment 绑定 Slot 的全部参数，并继承目标的类型与
+ownership contract。目标关系是名义化的：两个形状相同的 Slot 仍是不同注入点。
 
-## Single-shot 控制契约
+## Single-shot continuation
 
-Luna 0.3 冻结 unit-result、single-shot 控制。`context many`、dynamic slot/apply、局部
-slot 声明和无 body 的 apply 均以迁移诊断拒绝。
-
-| 操作 | `interceptor` | `context` |
-| --- | --- | --- |
-| 自然落尾 | 恰好一次进入 continuation | 未消费时丢弃 continuation；执行过 `resume()` 后则完成 fragment |
-| `resume()` | 拒绝 | 进入 continuation 一次；若其正常完成，再回到 fragment 的下一条语句 |
-| `return;` | 结束 fragment 并跳过 continuation | 结束 fragment 并跳过尚未消费的 continuation；若已 resume，则结束 post-resume fragment 代码 |
-| `abort()` | 显式丢弃 continuation | 显式丢弃尚未消费的 continuation |
-
-Fragment return 只能是 unit，`return value;` 会被拒绝。single-shot context 在
-`resume()` 后执行 `abort()` 也会被拒绝，因为 continuation 已被消费。context 路径可以不写
-`resume()`；自然落尾表示隐式丢弃，不是“缺少控制操作”错误。
-
-在进入 continuation 之前，`return;` 与 `abort()` 可能抵达同一后继，但它们仍是不同的
-canonical 操作：return 是 fragment-local 的正常终止；abort 记录显式丢弃 continuation 的
-决定，并且不能用于已经消费 continuation 的 single-shot 路径。
-
-## Continuation 边界
-
-词法 body 属于调用函数，而不属于 fragment：
-
-- continuation 中的 `return value;` 返回外层函数，并跳过 context 中 `resume()` 之后的代码；
-- continuation 中的 `?` 从外层 `Result` 函数传播，具有相同的跳过行为；
-- fragment 内的 `?` 会被拒绝，因为它会隐式跨过 slot 边界；应在 fragment 内显式处理
-  `Result`；
-- fragment 局部名在 continuation 中不可见，即使它遮蔽了调用作用域中的同名变量。
-
-因此 `return` 和 `?` 不会因所在位置而获得第二套隐藏含义。
-
-## 所有权与 cleanup
-
-每条离开 fragment 的边都携带显式 cleanup 义务：
-
-- interceptor 局部值会在自然转发、`return;` 或 `abort()` 抵达目标前清理；
-- context 局部值跨 `resume()` 存活，并在 context 退出时清理，包括 continuation 从外层函数
-  `return` 或用 `?` 传播时；
-- continuation 局部值按普通函数/块退出规则清理；
-- fragment-local 退出不会隐式消费外层资源；所有能抵达 slot 之后代码的路径必须具有一致的
-  ownership、borrow 与设备 in-flight 状态；
-- fragment 中仍有效的 linear 局部值必须在 fragment 退出前被消费。
-
-Cleanup 顺序记录在 canonical CFG edge 上，并在代码生成前验证。静态组合因此不需要堆上
-continuation，也不需要 runtime dispatch。
-
-## Apply 与默认实现
-
-`apply fragment { ... }` 从 fragment 声明推导目标 slot。在词法 body 内，相应 slot 调用
-使用该 fragment；body 外使用 slot 声明的 default。既没有活动绑定也没有 default 的 slot
-按 identity 操作处理，直接执行 continuation。
+首个契约只支持 unit-result、single-shot。`resume;` 最多一次进入宿主选定的下一个
+Fragment，或 invocation 的 base continuation；continuation 正常结束后，控制流回到
+`resume` 后的 Fragment 语句。Fragment 在 `resume` 前自然落尾或执行 `return;`，都会丢弃
+尚未消费的 continuation。
 
 ```luna
-slot context measured();
-
-context profile for measured {
+fragment measured[label: i32](value) for observed {
+    print(label);
     let start = monotonic_now();
-    resume();
+    resume;
     print(monotonic_now() - start);
 }
+```
 
-fn run() -> unit {
-    apply profile {
-        measured() {
-            perform_work();
-        }
+Continuation 属于发起调用的函数：
+
+- continuation 中的 `return value;` 返回该外层函数，并跳过 post-resume Fragment 代码；
+- continuation 中的 `?` 具有相同的外层传播行为；
+- continuation 不能被保存、返回、伪造或恢复两次；
+- Fragment 局部名称对 continuation 不可见。
+
+Cleanup obligation 显式记录在 canonical CFG edge 上。跨 `resume` 存活的 Fragment 局部
+值会在正常结束和外层逃逸时得到清理。
+
+## Apply
+
+`apply fragment[环境实参] { ... }` 在词法范围内构造并安装 Fragment。方括号只表示
+Fragment 构造环境，圆括号始终只表示 Slot invocation 契约。环境实参在进入 apply region
+时求值一次，后续每次匹配的 Slot invocation 都复用它。Fragment 正文不会隐式捕获 apply
+调用点的局部变量。Apply region 拥有 Copy 或 affine 环境字段，每次 Fragment activation
+只获得 shared-borrow 视图。因此 affine place 在构造时必须显式 `move`，拥有型右值则可
+直接传入。linear 字段会被拒绝，因为可复用的借用环境无法证明恰好消费一次。字段所有权
+由其类型推导，所以环境参数列表不接受所有权修饰。Slot 没有 active binding
+时，直接运行 invocation 提供的 base continuation。
+
+```luna
+apply measured[7] {
+    observed(10) {
+        perform_work();
     }
 }
 ```
 
-导出的 slot 与 fragment 可按普通 package/module 规则使用限定名。`symbols(slot_name)` 可以
-查询 slot 声明，但 slot 只是可反射、不可调用的声明元数据，不是函数值。
+静态组合可以内联，不携带 Runtime descriptor 或 dispatch 成本。已确认 runtime 计划会把
+同一 operand 位置扩展为已验证的 `RuntimeFragmentRef<S>`，而不是增加 `dynamic apply`。
 
-## Runtime 边界
+## 公开候选
 
-Runtime-retained Slot/Fragment descriptor 已具有稳定 declaration kind、名义 ID、contract
-ID，以及 fragment 指向 slot 的强引用。这冻结了 loader 与 tooling 所需的表示，但没有创造
-第二套源码语言。当前这些 row 只是不可调用的 descriptor/identity 证据，不含
-runtime continuation entry；0.3 是否冻结该承诺及 exported/private slot 的保留规则，由
-`TBD-SF009` 决定。
+`export slot` 发布稳定的注入契约。目标指向 exported Slot 的 `export fragment` 是该确切
+SlotId 的候选实现。候选资格来自已验证的名义关系与 ContractId，绝不来自用户 metadata。
 
-Luna 0.3 尚不公开 runtime typed-reference 的查找/获取语法。`apply fragment { ... }` 是唯一
-apply 拼写；0.3 是否保持 static-only 由 `TBD-SF007` 决定。typed reference 的获取、
-所有权、生命期与 runtime apply ABI 归入 `TBD-SF010`。
-已移除的 `dynamic slot` 与 `dynamic apply` 只保留为迁移错误 corpus；原 external plugin ABI
-和环境变量驱动的 dispatch runtime 已删除，不进入 0.3。
+通过公开 schema 附加的 metadata 是宿主选择策略。typed candidate 查询现在按精确
+SlotId/ContractId 返回公开且可执行 Fragment 的不可变、generation-pinned 快照；宿主负责
+为每个精确 Slot 选择 None 或一个候选、构造不可变 BindingSet，并且只在 Runtime safe point
+发布。普通 Slot dispatch 不运行反射、metadata 过滤或 descriptor 重新验证。
+
+Descriptor、生命周期、宿主策略和分阶段实现边界见已确认的
+[Slot/Fragment 运行时注入计划](slot_fragment_runtime_plan.zh-CN.md)。
+
+## 实现状态
+
+统一的 `slot`、`fragment ... for`、`resume;` 语法已经接入 single-shot 静态 Sema、
+MoonIR、JIT 与 AOT 路径。旧分类、`many`、`abort`、声明 default 与 Slot/Fragment 的
+`runtime` 修饰均已退出合法源码表面，相应的语义字段与 lowering 分支也已经删除。0.3
+容器仅把旧 wire offset 保留为 canonical reserved value，并在解码时拒绝 legacy 值。
+
+Runtime Fragment factory descriptor 与 `RuntimeFragmentRef<S>` 已具备宿主 ABI 基础；
+源码侧显式 Copy 与 affine 环境已经接入 Sema 与 MoonIR，并在 Apply 正常退出、外层
+`return` 和 `?` 传播时执行 cleanup。导出的控制声明现在携带独立于 retention 的
+`PUBLIC_CONTROL` descriptor 能力；精确 Fragment 目标/环境事实会经过容器验证加载保留，
+candidate snapshot 也会按精确 Slot contract 过滤公开可执行绑定。Slot argument record 与
+Runtime-owned opaque single-shot activation 也已冻结。首版公开执行 ABI 接受 Copy Slot 参数
+契约和 Copy Fragment 环境；静态 apply 仍支持 affine 环境。exported Fragment 现在通过容器
+可达的隐藏函数复用静态 CFG 组合，LLVM 发射经过验证的 factory/destroy/execute wrapper，并将
+其发布为可执行候选。不可变 BindingSet 构造、safe-point 原子激活、pinned snapshot、
+None/One dispatch、宿主定序 chain 和不可变局部 Slot override 已实现。显式 execution-context
+C ABI 可在不依赖全局/TLS Runtime 状态的前提下传播 continuation escape；artifact-cost 门禁也
+已覆盖 exported executable 物化与 static composition 擦除。未静态绑定的 exported Slot invocation
+现在会在 sealed CFG 中保留为经过验证的 `RuntimeSlot` terminator，显式携带确切 declaration
+reference、冻结的参数 Record TypeId、已打包 operand、continuation 入口与完成边。静态 `apply`
+composition 仍优先于该路径，未绑定的 private Slot 仍可擦除。effect-directed context 传播、
+包括由 verifier 重算的精确 direct call 最小不动点，现在已表示并以
+`requires_fragment_context` 写入容器。受影响的内部 LLVM function 现在已增加一个前置隐藏
+context 参数，并由精确 direct call 转发；
+不受影响的函数保持原 ABI。需要 context 的 `runtime fn` 现在会发布带
+`FRAGMENT_CONTEXT` ABI flag 的普通 Function descriptor，其 binding 也保留该 flag，供宿主做
+typed lookup；这直接复用现有 runtime catalog，不另建入口注册表。普通 `export fn` 仍承诺源码
+声明的公开 ABI，因此需要隐藏 capability 时会被拒绝；需要 context 的 function value 也继续等待
+context-aware indirect-call ABI。continuation dispatch 现在会把同步 capture outline 到显式
+栈 frame，打包冻结参数 record、调用稳定 Runtime ABI，并在沿 completion edge 继续前回写 capture
+修改。外层 `return`/`?` 会通过 frame 和独立 escaped status 传播；canonical cleanup edge、
+Result switch 与 case binding 都在 callback 内先执行再逃逸。测试也已让宿主选择真实生成的
+Fragment，并经其 `resume` 进入该 callback。continuation 调用另一个会触发动态 Slot 的函数
+已经可运行，显式 context 会继续转发。词法嵌套的 Slot 现在会递归 outline callback、
+传递同一 context 和 return storage，并回写跨层 capture，包括 affine/resource。内层逃逸会先
+执行封存的外层资源 cleanup，再传播返回；若宿主选中的 Fragment 不调用 `resume`，则走 Slot
+后续路径的 cleanup。新增的结构化 IR 门禁会统计动态 dispatch，并检查静态
+组合是否完全擦除 runtime 选择成本。

@@ -1,0 +1,35 @@
+package tests.fragment_environment_partial_init_cleanup;
+
+struct EnvironmentResource {
+    marker: i32;
+}
+
+impl Drop for EnvironmentResource {
+    fn drop(resource: &mut EnvironmentResource) -> unit {
+        print(resource.marker);
+    }
+}
+
+fn fail() -> Result<i32, i32> {
+    return Err(7);
+}
+
+slot checkpoint();
+
+fragment report[resource: EnvironmentResource, value: i32] for checkpoint {
+    print(value);
+    resume;
+}
+
+fn pipeline() -> Result<i32, i32> {
+    apply report[new EnvironmentResource(73), fail()?] {
+        checkpoint() { }
+    }
+    return Ok(0);
+}
+
+fn main() -> i32 {
+    let result = pipeline();
+    print(unwrap_err(move result));
+    return 0;
+}

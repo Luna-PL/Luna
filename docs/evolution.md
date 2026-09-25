@@ -34,12 +34,28 @@ protocol is application policy rather than a language or compiler contract.
 - `SafePoint` is a move-only, single-use token created by `safePoint()`. It is
   a host attestation, not runtime thread suspension. `activate` and `rollback`
   require a fresh token from the same `MoonRuntime`.
+- `RuntimeFragmentBindingSet` is the immutable result of host Slot policy. It
+  owns prevalidated Fragment references and pins their generations. The strict
+  constructor permits at most one binding per exact Slot; the explicit chain
+  constructor preserves host order. Publication through
+  `activateFragmentBindings` requires the same safe-point protocol;
+  `pinFragmentBindings` returns a stable dispatch snapshot. A local override
+  may replace or suppress one Slot without mutating either snapshot.
+- `RuntimeFragmentExecutionContext` turns one pinned BindingSet into the
+  explicit data-plane capability passed to generated runtime-aware entries.
+  It has no ambient Runtime lookup and preserves the same snapshot even if the
+  host activates a replacement while the call is running.
 
 A typed binding requirement consists of `symbolId`, `contractId`,
 `declarationKind`, and `requiredFlags`. Once a switchable binding is created,
 the runtime preserves the active binding's exact kind and flags as the minimum
 requirement for every later activation. Compatibility is checked before the
 new immutable generation pointer is published, never on each ordinary call.
+`GenerationBindingFragmentContext` is valid only together with
+`GenerationBindingCallable` on a Function binding. It tells the host that the
+implementation pointer takes a leading opaque
+`RuntimeFragmentExecutionContext` pointer before the declared source
+parameters; it is an ABI capability, not a request to discover candidates.
 
 ## Lifecycle
 
@@ -68,6 +84,17 @@ auto currentEntry = switchable.pin();
 
 auto rollbackPoint = runtime.safePoint();
 ok = runtime.rollback(moduleId, oldGenerationId, rollbackPoint, error);
+
+luna::runtime::RuntimeFragmentBindingSet selected;
+ok = luna::runtime::makeRuntimeFragmentBindingSet(
+    std::move(fragmentRefs), selected, error);
+auto bindingPoint = runtime.safePoint();
+ok = ok && runtime.activateFragmentBindings(
+    selected, bindingPoint, error);
+auto dispatchSnapshot = runtime.pinFragmentBindings();
+luna::runtime::RuntimeFragmentExecutionContext executionContext;
+ok = ok && luna::runtime::makeRuntimeFragmentExecutionContext(
+    dispatchSnapshot, executionContext, error);
 ```
 
 The compiler repository's Moon and Native generation adapters supply verified

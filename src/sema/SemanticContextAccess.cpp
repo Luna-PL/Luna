@@ -71,10 +71,6 @@ TypePtr BodyContextAccess::lookupDeclaredType(const std::string& name) {
     return mOwner.lookupDeclaredType(name);
 }
 
-void BodyContextAccess::analyzeSlotDecl(SlotDeclStmt* stmt) {
-    mOwner.analyzeSlotDecl(stmt);
-}
-
 void BodyContextAccess::analyzeSlotInvoke(
     SlotInvokeStmt* stmt, TypePtr expectedReturn) {
     mOwner.analyzeSlotInvoke(stmt, std::move(expectedReturn));

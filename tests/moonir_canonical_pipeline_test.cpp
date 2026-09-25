@@ -9,6 +9,7 @@
 #include "driver/MoonGeneration.h"
 #include "diagnostics/Diagnostic.h"
 #include "driver/CompilerPipeline.h"
+#include "runtime/RuntimeFragment.h"
 #include "selector/Selector.h"
 #include "sema/SemanticAnalysisSupport.h"
 #include "sema/SymbolTable.h"
@@ -41,6 +42,15 @@ static_assert(std::is_same_v<decltype(moon::StructDecl::type), moon::TypeRef>);
 
 namespace canonical_test {
 
+namespace {
+
+int32_t markRuntimeFragmentResume(void* context) {
+    if (context) ++*static_cast<int*>(context);
+    return LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1;
+}
+
+} // namespace
+
 int runCatalogProjectionTests() {
     trace("catalog projection");
     // The semantic Symbol Catalog and sealed MoonIR must derive strong
@@ -68,8 +78,8 @@ impl Tagged for Resource {
     fn validate(value: i32) -> i32 { return value; }
 }
 
-slot context trace_slot(value: i32);
-context trace(value: i32) for trace_slot { resume(); }
+slot trace_slot(value: i32);
+fragment trace(value: i32) for trace_slot { resume; }
 
 constraint Same<T> = type_same::<T, T>();
 
@@ -150,9 +160,16 @@ meta revision {
     major: i32;
 }
 
-runtime@revision(1)
+runtime
 fn retained_answer(value: i32) -> i32 {
     return value + 1;
+}
+
+export slot published_hook(value: i32);
+export fragment published_candidate[offset: i32](value: i32) for published_hook {
+    if offset == value {
+        resume;
+    }
 }
 
 fn identity<T>(value: T) -> T {
@@ -257,11 +274,25 @@ fn main() -> i32 {
                 type.kind == TypeKind::Unknown)
                 return fail("Moon Container retained an unresolved generic type");
         }
+        const auto isExportedRuntimeControl = [&](
+            const moon::DeclarationRecord& record) {
+            if (record.kind != moon::DeclarationKind::Slot &&
+                record.kind != moon::DeclarationKind::Fragment)
+                return false;
+            const moon::DeclarationRef reference{
+                record.symbolId, record.contractId};
+            return std::any_of(
+                loadedModule.exports.begin(), loadedModule.exports.end(),
+                [&](const moon::ExportRecord& exported) {
+                    return exported.declaration == reference;
+                });
+        };
         const bool hasRuntimeDescriptorInput = std::any_of(
             loadedModule.declarationTable.begin(),
             loadedModule.declarationTable.end(),
-            [](const moon::DeclarationRecord& record) {
+            [&](const moon::DeclarationRecord& record) {
                 return record.retention != moon::Retention::CompileTime ||
+                    isExportedRuntimeControl(record) ||
                     std::any_of(
                         record.metadata.begin(), record.metadata.end(),
                         [](const moon::MetadataInstance& metadata) {
@@ -271,6 +302,26 @@ fn main() -> i32 {
             });
         if (!hasRuntimeDescriptorInput)
             return fail("Moon loader fixture lost its Runtime descriptor input");
+        size_t exportedRuntimeControlCount = 0;
+        for (const auto& record : loadedModule.declarationTable)
+            if (isExportedRuntimeControl(record))
+                ++exportedRuntimeControlCount;
+        if (exportedRuntimeControlCount != 2 ||
+            !loadedModule.features.runtime)
+            return fail("exported Slot/Fragment did not request Runtime publication");
+        const moon::DeclarationRecord* publishedFragment = nullptr;
+        for (const auto& record : loadedModule.declarationTable)
+            if (record.sourceName == "published_candidate")
+                publishedFragment = &record;
+        if (!publishedFragment ||
+            !publishedFragment->controlTarget.complete() ||
+            publishedFragment->environmentType.empty() ||
+            publishedFragment->controlArgumentsType.empty() ||
+            !publishedFragment->runtimeEntry.complete() ||
+            !loadedModule.findDeclaration(publishedFragment->controlTarget) ||
+            !loadedModule.findType(publishedFragment->environmentType) ||
+            !loadedModule.findType(publishedFragment->controlArgumentsType))
+            return fail("Moon Container lost Fragment target/environment facts");
         luna::runtime::MoonRuntime evolutionRuntime;
         luna::runtime::MoonRuntime::PinnedGeneration pinnedMoon;
         trace("pipeline container initial generation load");
@@ -327,6 +378,10 @@ fn main() -> i32 {
             if (descriptor->kind == moon::DeclarationKind::Function)
                 requirement.requiredFlags =
                     luna::runtime::GenerationBindingCallable;
+            else if (descriptor->kind == moon::DeclarationKind::Slot ||
+                     descriptor->kind == moon::DeclarationKind::Fragment)
+                requirement.requiredFlags =
+                    luna::runtime::GenerationBindingPublicControl;
             const auto binding = pinnedMoon.find(requirement);
             if (!binding)
                 return fail("Moon generation lost an exported binding");
@@ -336,10 +391,52 @@ fn main() -> i32 {
                      luna::runtime::GenerationBindingCallable) == 0)
                     return fail("Moon generation lost an executable export");
             } else if (binding.implementation() == nullptr ||
-                       binding.flags() != 0) {
+                       (descriptor->kind == moon::DeclarationKind::Fragment
+                            ? binding.flags() !=
+                                (luna::runtime::GenerationBindingPublicControl |
+                                 luna::runtime::GenerationBindingFragmentExecutable)
+                            : binding.flags() !=
+                                luna::runtime::GenerationBindingPublicControl)) {
                 return fail("Moon generation lost a descriptor-backed export");
             }
         }
+        const auto* publishedSlot = loadedModule.findDeclaration(
+            publishedFragment->controlTarget);
+        const auto* publishedArguments = loadedModule.findType(
+            publishedFragment->controlArgumentsType);
+        if (!publishedSlot || !publishedArguments)
+            return fail("runtime Fragment fixture lost its Slot ABI records");
+        const luna::runtime::RuntimeSlotRequirement runtimeSlot{
+            publishedSlot->symbolId.value, publishedSlot->contractId.value};
+        luna::runtime::RuntimeFragmentCandidateSnapshot candidates;
+        if (!luna::runtime::snapshotRuntimeFragmentCandidates(
+                pinnedMoon, runtimeSlot, candidates, containerError) ||
+            candidates.size() != 1)
+            return fail("runtime Fragment candidate snapshot was not exact");
+        luna::runtime::RuntimeFragmentRef fragmentRef;
+        int32_t environmentValue = 42;
+        const luna::runtime::RuntimeFragmentFactoryArguments factoryArguments{
+            publishedFragment->environmentType.value, &environmentValue};
+        if (!luna::runtime::makeOwnedRuntimeFragmentRef(
+                *candidates.at(0), runtimeSlot, factoryArguments,
+                fragmentRef, containerError))
+            return fail("stateful runtime Fragment could not be bound");
+        int32_t slotValue = 42;
+        luna::runtime::RuntimeFragmentActivation activation;
+        int resumeCount = 0;
+        const luna::runtime::RuntimeFragmentArguments runtimeArguments{
+            publishedArguments->abiLayoutId.value,
+            publishedArguments->valueSize,
+            publishedArguments->valueAlignment,
+            &slotValue};
+        if (!luna::runtime::makeRuntimeFragmentActivation(
+                runtimeSlot, runtimeArguments, markRuntimeFragmentResume,
+                &resumeCount, activation, containerError))
+            return fail("runtime Fragment activation could not be created");
+        fragmentRef.descriptor()->execute(
+            fragmentRef.environment(), activation.opaque());
+        if (resumeCount != 1 || !activation.resumed())
+            return fail("runtime Fragment did not resume exactly once");
         trace("pipeline container entry binding invoke");
         const auto entryBinding = pinnedMoon.find(
             manifest.entrypoint.symbol.value,
@@ -524,6 +621,7 @@ int runRegisteredTests() {
     const TestCase tests[] = {
         &runCatalogProjectionTests,
         &runPipelineContainerTests,
+        &runCrossPackageRuntimeTest,
     };
     for (const auto test : tests)
         if (const int result = test()) return result;

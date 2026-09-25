@@ -1,8 +1,8 @@
-slot context hook();
+slot hook();
 
-context invalid for hook {
-    resume();
-    abort();
+fragment invalid for hook {
+    resume;
+    resume;
 }
 
 fn main() -> i32 {

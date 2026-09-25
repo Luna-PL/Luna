@@ -1,8 +1,8 @@
-slot context hook();
+slot hook();
 
-context invalid for hook {
+fragment invalid for hook {
     let temporary = gpu_alloc_i32(1);
-    abort();
+    // Natural fragment completion must not leak local linear state.
 }
 
 fn main() -> i32 {

@@ -1,0 +1,9 @@
+struct Resource {
+    value: i32;
+}
+
+export slot published(resource: affine Resource);
+
+fn main() -> i32 {
+    return 0;
+}

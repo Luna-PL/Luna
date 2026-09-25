@@ -101,8 +101,9 @@ enum class TerminatorKind : uint8_t {
     Switch,
     Return,
     Resume,
-    Abort,
+    Discard,
     Unreachable,
+    RuntimeSlot,
 };
 
 enum class ProjectionKind : uint8_t {
@@ -152,9 +153,6 @@ enum class Retention : uint8_t {
 };
 
 using DeclarationKind = luna::sysmeta::DeclarationKind;
-
-enum class FragmentKind : uint8_t { Interceptor, Context };
-enum class FragmentCardinality : uint8_t { Once, Many };
 
 // MoonIR owns its operator vocabulary. LLVM lowering must not depend on lexer
 // token values or source spelling.
@@ -250,8 +248,6 @@ struct TypeRecord {
     TypeRef returnTypeId;
     std::vector<luna::ownership::Contract> parameterContracts;
     luna::ownership::Contract returnContract;
-    bool isMultiShot = false;
-    ContinuationKind continuationKind = ContinuationKind::Context;
     IteratorMode iteratorMode = IteratorMode::Copy;
     std::vector<TypeFieldRecord> fields;
     std::vector<TypeFieldRecord> capturedFields;
@@ -282,6 +278,15 @@ struct DeclarationRecord {
     Retention retention = Retention::CompileTime;
     std::vector<MetadataInstance> metadata;
     TypeRef type;
+    // Canonical runtime-control relationships. These are compiler facts, not
+    // user metadata: Fragment rows name one exact Slot contract and the
+    // frozen environment record used by their factory ABI.
+    DeclarationRef controlTarget;
+    TypeRef environmentType;
+    TypeRef controlArgumentsType;
+    // Hidden compiler-generated function that materializes this Fragment's
+    // statically verified composition as a runtime execution entry.
+    DeclarationRef runtimeEntry;
     luna::sysmeta::Facts sysmeta;
     DeclarationRef dropGlue;
     std::string canonicalContract;

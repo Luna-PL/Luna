@@ -1,0 +1,15 @@
+package tests.fragment_environment_arity_invalid;
+
+slot checkpoint();
+
+fragment report[value: i32] for checkpoint {
+    value;
+    resume;
+}
+
+fn main() -> i32 {
+    apply report[] {
+        checkpoint() { }
+    }
+    return 0;
+}

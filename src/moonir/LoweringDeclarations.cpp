@@ -151,19 +151,17 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         result->declarationId = declarationIdentity(
             slot, mModule->name, "slot", result->generatedSymbolName);
         result->isExported = slot->isExported;
-        result->acceptedKind = slot->acceptedKind == ::FragmentKind::Interceptor
-            ? moon::FragmentKind::Interceptor : moon::FragmentKind::Context;
-        result->acceptedCardinality = moon::FragmentCardinality::Once;
-        for (const auto& parameter : slot->params)
+        std::vector<TypeField> argumentFields;
+        argumentFields.reserve(slot->params.size());
+        for (const auto& parameter : slot->params) {
             result->params.push_back(lowerParam(parameter));
+            argumentFields.push_back({parameter.name, parameterType(parameter)});
+        }
+        result->argumentsType = typeRef(
+            Type::makeRecord(std::move(argumentFields)));
         result->structuralType = typeRef(slot->structuralType);
         if (slot->structuralType) result->sysmeta = slot->structuralType->sysmeta;
         lowerCommonDeclaration(slot, *result);
-        if (!slot->resolvedDefaultFragmentName.empty())
-            deferDeclarationRef(
-                result->defaultFragment,
-                slot->resolvedDefaultFragmentName, slot,
-                "default fragment for slot '" + slot->name + "'");
         addDeclarationRecord(*result, DeclarationKind::Slot,
                              slot->structuralType);
         return result;
@@ -177,14 +175,13 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         result->declarationId = declarationIdentity(
             fragment, mModule->name, "fragment", result->generatedSymbolName);
         result->isExported = fragment->isExported;
-        result->kind = fragment->kind == ::FragmentKind::Interceptor
-            ? moon::FragmentKind::Interceptor : moon::FragmentKind::Context;
-        result->cardinality = fragment->cardinality == ::FragmentCardinality::Once
-            ? moon::FragmentCardinality::Once : moon::FragmentCardinality::Many;
-        deferDeclarationRef(
-            result->targetSlot, fragment->resolvedTargetSlotName, fragment,
-            "nominal target of fragment '" + fragment->name + "'");
-        for (const auto& parameter : fragment->params)
+          deferDeclarationRef(
+              result->targetSlot, fragment->resolvedTargetSlotName, fragment,
+              "nominal target of fragment '" + fragment->name + "'");
+          for (const auto& parameter : fragment->environmentParams)
+              result->environmentParams.push_back(lowerParam(parameter));
+          result->environmentType = typeRef(fragment->environmentType);
+          for (const auto& parameter : fragment->params)
             result->params.push_back(lowerParam(parameter));
         result->body = lowerBlock(fragment->body.get());
         const TypePtr structuralType = fragment->structuralType;
@@ -378,6 +375,21 @@ void LunaLowerer::lowerCommonDeclaration(const ::Decl* source,
                                   "runtime declaration",
                                   target.location});
     }
+    const bool publishesRuntimeControl = source->isExported &&
+        (dynamic_cast<const ::SlotDecl*>(source) ||
+         dynamic_cast<const ::FragmentDecl*>(source));
+    if (publishesRuntimeControl) {
+        // Export controls external visibility. For Slot/Fragment declarations
+        // that visibility is also the explicit publication boundary for the
+        // runtime candidate protocol, without changing declaration retention.
+        mModule->features.runtime = true;
+        mModule->costs.push_back({
+            CostKind::RuntimeDescriptor, target.declarationId,
+            dynamic_cast<const ::SlotDecl*>(source)
+                ? "exported slot contract"
+                : "exported fragment candidate",
+            target.location});
+    }
 }
 
 TypePtr LunaLowerer::inferredExprType(const ::Expr* expression) const {
@@ -416,6 +428,14 @@ void LunaLowerer::addDeclarationRecord(const moon::Decl& declaration,
     record.retention = declaration.retention;
     record.metadata = declaration.metadata;
     record.type = typeRef(type);
+    if (const auto* fragment =
+            dynamic_cast<const moon::FragmentDecl*>(&declaration)) {
+        record.controlTarget = fragment->targetSlot;
+        record.environmentType = fragment->environmentType;
+    } else if (const auto* slot =
+                   dynamic_cast<const moon::SlotDecl*>(&declaration)) {
+        record.controlArgumentsType = slot->argumentsType;
+    }
     record.sysmeta = declaration.sysmeta;
     if (type) {
         record.sysmeta.resource = type->sysmeta.resource;
@@ -430,6 +450,136 @@ void LunaLowerer::addDeclarationRecord(const moon::Decl& declaration,
     record.sysmeta.identity.contract = record.contractId;
     record.location = declaration.location;
     mModule->declarationTable.push_back(std::move(record));
+}
+
+void LunaLowerer::materializeRuntimeFragmentHelpers() {
+    if (!mModule) return;
+
+    std::vector<moon::FragmentDecl*> fragments;
+    for (const auto& declaration : mModule->declarations) {
+        auto* fragment = declaration
+            ? dynamic_cast<moon::FragmentDecl*>(declaration.get()) : nullptr;
+        if (fragment && fragment->isExported) fragments.push_back(fragment);
+    }
+
+    const TypePtr activationType = Type::makeRawPointer(TyUnit);
+    const TypeRef activationTypeRef = typeRef(activationType);
+    const TypeRef unitTypeRef = typeRef(TyUnit);
+    const TypePtr resumeType = Type::makeFunction(
+        {activationType}, TyI32,
+        {{luna::ownership::Relation::Owned,
+          luna::ownership::Usage::Copy}},
+        {luna::ownership::Relation::Owned,
+         luna::ownership::Usage::Copy});
+    const TypeRef resumeTypeRef = typeRef(resumeType);
+    mModule->rebuildIndexes();
+    TypeMaterializer materializer(*mModule);
+
+    for (auto* fragment : fragments) {
+        auto helper = std::make_unique<moon::FunctionDecl>();
+        helper->location = fragment->location;
+        helper->name = "$runtime_fragment_entry";
+        helper->generatedSymbolName = fragment->generatedSymbolName +
+            ".__luna_runtime_fragment_entry";
+        helper->familyId = fragment->familyId + "::$runtime-entry";
+        helper->declarationId = fragment->declarationId + "::$runtime-entry";
+        helper->packageId = fragment->packageId;
+        helper->modulePath = fragment->modulePath;
+        helper->symbolId = luna::identity::symbolIdFromCanonical(
+            helper->declarationId);
+        helper->returnType = unitTypeRef;
+
+        TypeVec parameterTypes;
+        std::vector<luna::ownership::Contract> parameterContracts;
+        auto addParameter = [&](std::string name, const TypeRef& type,
+                                luna::ownership::Relation relation) {
+            helper->params.push_back({
+                std::move(name), false, luna::ownership::Usage::Copy,
+                relation, type});
+            TypePtr materialized = materializer.materialize(type);
+            parameterTypes.push_back(materialized ? materialized : TyUnit);
+            parameterContracts.push_back({
+                relation, luna::ownership::Usage::Copy});
+        };
+        for (size_t index = 0; index < fragment->environmentParams.size(); ++index)
+            addParameter("$environment." + std::to_string(index),
+                         fragment->environmentParams[index].type,
+                         luna::ownership::Relation::SharedBorrow);
+        for (size_t index = 0; index < fragment->params.size(); ++index)
+            addParameter("$argument." + std::to_string(index),
+                         fragment->params[index].type,
+                         luna::ownership::Relation::Owned);
+        addParameter("$activation", activationTypeRef,
+                     luna::ownership::Relation::Owned);
+
+        auto body = std::make_unique<moon::BlockStmt>();
+        body->location = fragment->location;
+        auto apply = std::make_unique<moon::ApplyStmt>();
+        apply->location = fragment->location;
+        apply->slotName = "$runtime.slot";
+        apply->fragmentName = fragment->name;
+        apply->borrowsEnvironment = true;
+        deferDeclarationRef(
+            apply->fragmentRef, fragment->generatedSymbolName, nullptr,
+            "runtime Fragment helper");
+        for (size_t index = 0; index < fragment->environmentParams.size(); ++index) {
+            auto argument = std::make_unique<moon::IdentifierExpr>();
+            argument->location = fragment->location;
+            argument->name = "$environment." + std::to_string(index);
+            argument->type = fragment->environmentParams[index].type;
+            apply->environmentArgs.push_back(std::move(argument));
+        }
+
+        apply->body = std::make_unique<moon::BlockStmt>();
+        apply->body->location = fragment->location;
+        auto slot = std::make_unique<moon::SlotInvokeStmt>();
+        slot->location = fragment->location;
+        slot->name = apply->slotName;
+        slot->structuralType = fragment->structuralType;
+        slot->interfaceParams = fragment->params;
+        for (size_t index = 0; index < fragment->params.size(); ++index) {
+            auto argument = std::make_unique<moon::IdentifierExpr>();
+            argument->location = fragment->location;
+            argument->name = "$argument." + std::to_string(index);
+            argument->type = fragment->params[index].type;
+            slot->args.push_back(std::move(argument));
+        }
+
+        slot->continuation = std::make_unique<moon::BlockStmt>();
+        slot->continuation->location = fragment->location;
+        auto resumeStatement = std::make_unique<moon::ExprStmt>();
+        resumeStatement->location = fragment->location;
+        auto resume = std::make_unique<moon::CallExpr>();
+        resume->location = fragment->location;
+        resume->type = typeRef(TyI32);
+        auto callee = std::make_unique<moon::IdentifierExpr>();
+        callee->location = fragment->location;
+        callee->name = "__luna_runtime_fragment_resume_v1";
+        callee->type = resumeTypeRef;
+        resume->callee = std::move(callee);
+        auto activation = std::make_unique<moon::IdentifierExpr>();
+        activation->location = fragment->location;
+        activation->name = "$activation";
+        activation->type = activationTypeRef;
+        resume->args.push_back(std::move(activation));
+        resumeStatement->expr = std::move(resume);
+        slot->continuation->stmts.push_back(std::move(resumeStatement));
+        apply->body->stmts.push_back(std::move(slot));
+        body->stmts.push_back(std::move(apply));
+        helper->body = std::move(body);
+
+        const TypePtr callableType = Type::makeFunction(
+            std::move(parameterTypes), TyUnit,
+            std::move(parameterContracts),
+            {luna::ownership::Relation::Owned,
+             luna::ownership::Usage::Copy});
+        helper->sysmeta = callableType->sysmeta;
+        addDeclarationRecord(*helper, DeclarationKind::Function, callableType);
+        mModule->costs.push_back({
+            CostKind::MachineCode, helper->declarationId,
+            "exported Fragment runtime entry", helper->location});
+        mModule->declarations.push_back(std::move(helper));
+    }
 }
 
 void LunaLowerer::deferDeclarationRef(
@@ -500,6 +650,32 @@ void LunaLowerer::resolveDeclarationReferences() {
         }
         *pending.target = {
             declaration->symbolId, declaration->contractId};
+    }
+
+    // Deferred references are now sealed. Mirror Fragment runtime-control
+    // facts into the declaration table so verified containers do not need a
+    // frontend recipe to recover the target or environment layout.
+    for (const auto& executable : mModule->declarations) {
+        const auto* fragment = executable
+            ? dynamic_cast<const moon::FragmentDecl*>(executable.get())
+            : nullptr;
+        if (!fragment) continue;
+        const auto found = mModule->declarationRecordsBySymbol.find(
+            fragment->symbolId.value);
+        if (found == mModule->declarationRecordsBySymbol.end() ||
+            found->second >= mModule->declarationTable.size())
+            continue;
+        auto& record = mModule->declarationTable[found->second];
+        record.controlTarget = fragment->targetSlot;
+        record.environmentType = fragment->environmentType;
+        const auto* target = mModule->findDeclaration(fragment->targetSlot);
+        if (target)
+            record.controlArgumentsType = target->controlArgumentsType;
+        const auto* runtimeEntry = mModule->findDeclarationById(
+            fragment->declarationId + "::$runtime-entry");
+        if (runtimeEntry)
+            record.runtimeEntry = {
+                runtimeEntry->symbolId, runtimeEntry->contractId};
     }
 
     const auto finalizeExecutable = [&](auto&& self, moon::Decl& declaration)

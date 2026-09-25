@@ -5,9 +5,17 @@ if(NOT DEFINED LUNA_SOURCE_DIR)
 endif()
 
 set(verifier "${LUNA_SOURCE_DIR}/tools/verify_release_readiness.cmake")
+file(READ "${LUNA_SOURCE_DIR}/ecosystem.lock.json" baseline_lock)
+string(JSON frozen_lock SET "${baseline_lock}" status "\"frozen-0.2.1-baseline\"")
+string(JSON frozen_lock SET "${frozen_lock}" snapshot
+       "\"luna-0.2.1-tooling-candidate.11\"")
+string(JSON frozen_lock SET "${frozen_lock}" release publish false)
+set(frozen_lock_path "${CMAKE_CURRENT_BINARY_DIR}/release-frozen.lock.json")
+file(WRITE "${frozen_lock_path}" "${frozen_lock}\n")
 execute_process(
     COMMAND "${CMAKE_COMMAND}"
             -DLUNA_SOURCE_DIR=${LUNA_SOURCE_DIR}
+            -DECOSYSTEM_LOCK_PATH=${frozen_lock_path}
             -P "${verifier}"
     RESULT_VARIABLE frozen_result
     OUTPUT_VARIABLE frozen_output

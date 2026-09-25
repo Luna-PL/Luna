@@ -613,12 +613,14 @@ bool encodeTerminator(Encoder& encoder, const Terminator& terminator,
         encodeTableRefs(encoder, switchCase.bindings);
     });
     encodeTableRefs(encoder, terminator.exitCleanups);
+    encodeReference(encoder, terminator.runtimeSlot);
+    encoder.string(terminator.runtimeArgumentsType.value);
     return encoder.good();
 }
 
 bool decodeTerminator(Decoder& decoder, Terminator& terminator,
                       uint32_t depth, const ContainerLimits& limits) {
-    if (!decoder.enumeration(terminator.kind, 7) ||
+    if (!decoder.enumeration(terminator.kind, 8) ||
         !decodeLocation(decoder, terminator.location) ||
         !decodeOptionalExpr(decoder, terminator.operand, depth, limits) ||
         !decoder.string(terminator.switchType.value) ||
@@ -633,7 +635,9 @@ bool decodeTerminator(Decoder& decoder, Terminator& terminator,
             !decodeTableRefs(decoder, switchCase.bindings)) return false;
         terminator.cases.push_back(std::move(switchCase));
     }
-    return decodeTableRefs(decoder, terminator.exitCleanups);
+    return decodeTableRefs(decoder, terminator.exitCleanups) &&
+        decodeReference(decoder, terminator.runtimeSlot) &&
+        decoder.string(terminator.runtimeArgumentsType.value);
 }
 
 bool encodeGraph(Encoder& encoder, const ControlFlowGraph& graph,
@@ -816,6 +820,7 @@ bool encodeFunction(
     encoder.boolean(function.isExtern);
     encoder.boolean(function.isConstexpr);
     encoder.boolean(function.isSelector);
+    encoder.boolean(function.requiresFragmentContext);
     encoder.string(function.abi);
     encoder.string(function.linkName);
     encoder.rows(function.typeParams, [&](const auto& parameter) {
@@ -851,6 +856,7 @@ bool decodeFunction(
         !decoder.boolean(decoded->isExtern) ||
         !decoder.boolean(decoded->isConstexpr) ||
         !decoder.boolean(decoded->isSelector) ||
+        !decoder.boolean(decoded->requiresFragmentContext) ||
         !decoder.string(decoded->abi) ||
         !decoder.string(decoded->linkName)) return false;
 

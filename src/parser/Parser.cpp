@@ -125,6 +125,7 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
     bool isConstexpr = false;
     bool isExtern = false;
     bool isKernel = false;
+    bool hasExplicitRuntimeRetention = false;
     RetentionKind retention = RetentionKind::CompileTime;
     std::vector<Decl::MetadataAttachment> metadata;
     bool consumedModifier = true;
@@ -138,7 +139,10 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
             consumedModifier = true;
             if (check(TokenKind::At))
                 metadata.push_back(parseMetadataAttachment(RetentionKind::Runtime));
-            else retention = RetentionKind::Runtime;
+            else {
+                retention = RetentionKind::Runtime;
+                hasExplicitRuntimeRetention = true;
+            }
         } else if (match(TokenKind::Dynamic)) {
             consumedModifier = true;
             addError("Dynamic retention was removed in Luna 0.3",
@@ -159,11 +163,14 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
     if (match(TokenKind::Fn))
         decl = parseFunctionDecl(false, isExtern, abi, isConstexpr, isKernel);
     else if (match(TokenKind::Slot)) decl = parseSlotDecl();
-    else if (match(TokenKind::Interceptor)) decl = parseFragmentDecl(FragmentKind::Interceptor);
-    else if (match(TokenKind::Context)) decl = parseFragmentDecl(FragmentKind::Context);
-    else if (match(TokenKind::Fragment)) {
-        addError("`fragment` is ambiguous and is no longer accepted",
-                 "use `interceptor name { ... }`, `context name { ... }`, or `context many name { ... }`");
+    else if (match(TokenKind::Fragment))
+        // The unified surface has one explicit, single-shot continuation
+        // contract. Keep using the existing Context representation until the
+        // legacy interceptor/context split is removed from MoonIR.
+        decl = parseFragmentDecl();
+    else if (match(TokenKind::Interceptor) || match(TokenKind::Context)) {
+        addError("`interceptor` and `context` declarations were replaced by `fragment`",
+                 "write `fragment name(args) for slot_name { ... }`");
         return nullptr;
     }
     else if (match(TokenKind::Struct)) decl = parseStructDecl();
@@ -176,24 +183,23 @@ std::unique_ptr<Decl> Parser::parseDeclaration() {
         if (isExported || isExtern || isConstexpr || isKernel) {
             addError("expected a declaration after `export`, found " +
                      diagnostic::quotedToken(peek().lexeme),
-                     "only `fn`, `slot`, `interceptor`, `context`, `struct`, `enum`, "
+                     "only `fn`, `slot`, `fragment`, `struct`, `enum`, "
                      "`trait`, `meta`, and `constraint` can be exported");
         } else {
             addError("expected a declaration, found " + diagnostic::quotedToken(peek().lexeme),
-                     "start a declaration with `fn`, `slot`, `interceptor`, `context`, "
+                     "start a declaration with `fn`, `slot`, `fragment`, "
                      "`struct`, `enum`, `trait`, `impl`, `meta`, or `constraint`");
         }
         advance(); // skip unexpected token
         return nullptr;
     }
     if (decl) {
-        // A runtime-visible attachment needs a descriptor to live on. Keep
-        // that implication local to the attached declaration so one schema
-        // does not make every use of it pay a runtime cost.
-        for (const auto& attachment : metadata) {
-            if (attachment.retention == RetentionKind::Runtime &&
-                     retention == RetentionKind::CompileTime)
-                retention = RetentionKind::Runtime;
+        if (hasExplicitRuntimeRetention &&
+            (dynamic_cast<SlotDecl*>(decl.get()) ||
+             dynamic_cast<FragmentDecl*>(decl.get()))) {
+            addError("`runtime` is not a Slot/Fragment declaration modifier",
+                     "declare `slot` as the fixed injection point and `fragment` as its "
+                     "candidate; runtime materialization is inferred from actual use");
         }
         decl->isExported = isExported;
         decl->retention = retention;
@@ -269,25 +275,27 @@ std::unique_ptr<ConstraintDecl> Parser::parseConstraintDecl() {
     return declaration;
 }
 
-std::unique_ptr<FragmentDecl> Parser::parseFragmentDecl(FragmentKind kind) {
+std::unique_ptr<FragmentDecl> Parser::parseFragmentDecl() {
     auto decl = std::make_unique<FragmentDecl>();
-    decl->kind = kind;
-    if (kind == FragmentKind::Context && match(TokenKind::Many)) {
-        addError("`context many` is not part of Luna 0.3",
-                 "use a single-shot `context`; multi-shot continuations are deferred");
+    if (match(TokenKind::Many)) {
+        addError("`many` is not part of the Slot/Fragment model",
+                 "remove `many`; each fragment may resume its captured continuation at most once");
         return nullptr;
     }
-    else if (kind == FragmentKind::Interceptor && check(TokenKind::Many))
-        addError("interceptor is always single-pass and cannot be `many`");
     if (!match(TokenKind::Identifier)) {
         addError("expected a fragment name, found " + diagnostic::quotedToken(peek().lexeme),
-                 "write `interceptor name(args) for slot_name { ... }` or `context name(args) for slot_name { ... }`");
+                 "write `fragment name(args) for slot_name { ... }`");
         return nullptr;
     }
     const auto& nameToken = mTokens[mPos - 1];
     decl->name = nameToken.lexeme;
     decl->nameLine = nameToken.line;
     decl->nameCol = nameToken.col;
+    if (match(TokenKind::LBracket)) {
+        if (!check(TokenKind::RBracket))
+            decl->environmentParams = parseParams();
+        consume(TokenKind::RBracket, "Expected ']' after fragment environment parameters");
+    }
     if (match(TokenKind::LParen)) {
         decl->params = parseParams();
         consume(TokenKind::RParen, "Expected ')' after fragment parameters");
@@ -303,18 +311,15 @@ std::unique_ptr<FragmentDecl> Parser::parseFragmentDecl(FragmentKind kind) {
 
 std::unique_ptr<SlotDecl> Parser::parseSlotDecl() {
     auto decl = std::make_unique<SlotDecl>();
-    if (match(TokenKind::Interceptor)) {
-        decl->acceptedKind = FragmentKind::Interceptor;
-    } else if (match(TokenKind::Context)) {
-        decl->acceptedKind = FragmentKind::Context;
-        if (match(TokenKind::Many)) {
-            addError("`slot context many` is not part of Luna 0.3",
-                     "declare a single-shot `slot context`; multi-shot continuations are deferred");
-            return nullptr;
-        }
-    } else {
-        addError("slot must declare its single-shot control contract",
-                 "write `slot interceptor name(...);` or `slot context name(...);`");
+    // Declaring a slot is itself the opt-in control point.
+    if (match(TokenKind::Interceptor) || match(TokenKind::Context)) {
+        addError("a slot no longer declares an `interceptor` or `context` category",
+                 "write `slot name(args);`");
+        return nullptr;
+    }
+    if (match(TokenKind::Many)) {
+        addError("`many` is not part of the Slot/Fragment model",
+                 "write `slot name(args);`; fragments are single-shot");
         return nullptr;
     }
     if (!match(TokenKind::Identifier)) {
@@ -329,10 +334,9 @@ std::unique_ptr<SlotDecl> Parser::parseSlotDecl() {
     if (!check(TokenKind::RParen)) decl->params = parseParams();
     consume(TokenKind::RParen, "Expected ')' after slot parameters");
     if (match(TokenKind::Default)) {
-        if (!parseQualifiedName(decl->defaultFragment)) {
-            addError("expected a fragment name after `default`");
-            return nullptr;
-        }
+        addError("slot `default` fragments were removed",
+                 "use an explicit lexical `apply fragment_name { ... }` at the host-selected site");
+        return nullptr;
     }
     consume(TokenKind::SemiColon, "Expected ';' after module-level slot declaration");
     return decl;

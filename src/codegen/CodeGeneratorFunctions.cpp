@@ -25,6 +25,17 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
     }
 
     mCurrentFunc = func;
+    llvm::Value* savedFragmentContext = mCurrentFragmentContext;
+    mCurrentFragmentContext = nullptr;
+    if (decl->requiresFragmentContext) {
+        if (func->arg_empty()) {
+            error("function '" + decl->name +
+                  "' requires a fragment context but its LLVM ABI has no hidden parameter");
+        } else {
+            mCurrentFragmentContext = func->getArg(0);
+            mCurrentFragmentContext->setName("fragment.context");
+        }
+    }
     const bool savedKernelMode = mCurrentFunctionIsKernel;
     mCurrentFunctionIsKernel = decl->isKernel;
     mLocals.clear();
@@ -67,12 +78,15 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
         mBuilder->SetInsertPoint(readyBB);
     }
 
-    generateControlFlowBody(*decl->controlFlow, func, entryBB);
+    generateControlFlowBody(
+        *decl->controlFlow, func, entryBB,
+        decl->requiresFragmentContext ? 1u : 0u);
 
     if (retLLVMType == mHelpers->voidTy() && !mBuilder->GetInsertBlock()->getTerminator()) {
         mBuilder->CreateRetVoid();
     }
 
     mCurrentFunc = nullptr;
+    mCurrentFragmentContext = savedFragmentContext;
     mCurrentFunctionIsKernel = savedKernelMode;
 }

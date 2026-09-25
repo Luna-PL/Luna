@@ -519,7 +519,7 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
         }
         for (size_t index = 0; index < reachable.size(); ++index)
             if (!reachable[index]) {
-                // Unreachable blocks can arise from context/fragment control
+                // Unreachable blocks can arise from Fragment control
                 // flow where a continuation's return terminates the path
                 // before post-resume or invocation-exit blocks are
                 // connected. These are dead code, not verification errors.

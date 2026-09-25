@@ -1,6 +1,7 @@
 #include "Sealer.h"
 
 #include "ControlFlowBuilder.h"
+#include "FragmentContextEffects.h"
 #include "Verifier.h"
 
 #include <utility>
@@ -72,6 +73,7 @@ bool Sealer::sealFunctionBodies(Module& module) {
         item.function->controlFlow = std::move(item.graph);
         item.function->body.reset();
     }
+    inferFragmentContextEffects(module);
     return true;
 }
 

@@ -8,16 +8,15 @@ impl Drop for FragmentResource {
     }
 }
 
-slot interceptor hook();
+slot hook();
 
-interceptor stop for hook {
-    let resource = new FragmentResource(11);
+fragment stop[resource: FragmentResource] for hook {
     return;
     print(99);
 }
 
 fn main() -> i32 {
-    apply stop {
+    apply stop[new FragmentResource(11)] {
         hook() {
             print(22);
         }

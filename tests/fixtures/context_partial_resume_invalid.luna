@@ -1,8 +1,8 @@
-slot context hook(flag: bool);
+slot hook(flag: bool);
 
-context invalid(flag: bool) for hook {
+fragment invalid(flag: bool) for hook {
     if flag {
-        resume();
+        resume;
     } else {
         print(1);
     }

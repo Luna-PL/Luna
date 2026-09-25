@@ -10,16 +10,15 @@ impl Drop for ContinuationResource {
     }
 }
 
-slot context hook();
+slot hook();
 
-context around for hook {
-    let resource = new ContinuationResource(63);
-    resume();
+fragment around[resource: ContinuationResource] for hook {
+    resume;
     print(2);
 }
 
 fn main() -> i32 {
-    apply around {
+    apply around[new ContinuationResource(63)] {
         hook() {
             let resource = new ContinuationResource(64);
             return 1;

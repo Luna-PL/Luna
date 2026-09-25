@@ -11,6 +11,12 @@ file(MAKE_DIRECTORY "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/kernel_unused.luna" DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/runtime_retention_descriptor.luna"
      DESTINATION "${work_dir}")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/exported_fragment_runtime.luna"
+     DESTINATION "${work_dir}")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/runtime_slot_cost.luna"
+     DESTINATION "${work_dir}")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/static_slot_cost.luna"
+     DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/selector_user_logic.luna" DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/concepts.luna" DESTINATION "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/generic_instance_reuse.luna" DESTINATION "${work_dir}")
@@ -73,18 +79,90 @@ string(FIND "${runtime_ir}" "moon.runtime.registry.v1" runtime_registry_v1)
 string(FIND "${runtime_ir}" "symbol_" runtime_symbol_id)
 string(FIND "${runtime_ir}" "contract_" runtime_contract_id)
 string(FIND "${runtime_ir}" "type_" runtime_type_id)
+string(REGEX MATCHALL
+    "@__moon_descriptor_[^\n]*ptr null \\}, section"
+    runtime_identity_only_descriptors "${runtime_ir}")
+list(LENGTH runtime_identity_only_descriptors runtime_identity_only_count)
 string(FIND "${runtime_ir}" "dynamic.select.unique" dynamic_binding)
 string(FIND "${runtime_ir}" "rt_gpu_" dynamic_gpu)
 string(FIND "${runtime_moon}" "dynamic_select" dynamic_feature)
 if(runtime_registry EQUAL -1 OR runtime_descriptor_v1 EQUAL -1 OR
    runtime_registry_v1 EQUAL -1 OR runtime_symbol_id EQUAL -1 OR
    runtime_contract_id EQUAL -1 OR runtime_type_id EQUAL -1 OR
+   NOT runtime_identity_only_count EQUAL 2 OR
    NOT dynamic_binding EQUAL -1 OR
    NOT dynamic_gpu EQUAL -1 OR NOT dynamic_feature EQUAL -1)
     file(REMOVE_RECURSE "${work_dir}")
     message(FATAL_ERROR
         "runtime descriptors retained the removed dynamic-select cost")
 endif()
+
+set(runtime_fragment_source "${work_dir}/exported_fragment_runtime.luna")
+build_case("${runtime_fragment_source}"
+           "${work_dir}/exported-fragment-runtime.moonir")
+file(READ "${last_ir_path}" runtime_fragment_ir)
+foreach(required IN ITEMS
+        "moon.runtime.fragment.v1"
+        "__luna_runtime_fragment_entry"
+        "__moon_fragment_factory_"
+        "__moon_fragment_destroy_"
+        "__moon_fragment_execute_"
+        "luna_runtime_fragment_activation_arguments_v1"
+        "luna_runtime_fragment_activation_resume_v1"
+        "fragment.resume.escaped")
+    string(FIND "${runtime_fragment_ir}" "${required}" found)
+    if(found EQUAL -1)
+        file(REMOVE_RECURSE "${work_dir}")
+        message(FATAL_ERROR
+            "exported Fragment did not materialize audited runtime cost '${required}'")
+    endif()
+endforeach()
+
+# Count generated call sites, rather than timing execution. The dynamic entry
+# pays for one explicit dispatch and a context-aware ABI; a static composition
+# must not acquire either the dispatch or the Runtime catalog machinery.
+set(dynamic_slot_source "${work_dir}/runtime_slot_cost.luna")
+build_case("${dynamic_slot_source}" "${work_dir}/runtime-slot-cost.moonir")
+file(READ "${last_ir_path}" dynamic_slot_ir)
+string(REGEX MATCHALL
+    "call i32 @luna_runtime_fragment_dispatch_v1\\("
+    dynamic_slot_dispatch_calls "${dynamic_slot_ir}")
+list(LENGTH dynamic_slot_dispatch_calls dynamic_slot_dispatch_count)
+string(FIND "${dynamic_slot_ir}" "fragment.context" dynamic_slot_context)
+string(FIND "${dynamic_slot_ir}" "__moon_runtime_registry_" dynamic_slot_registry)
+string(FIND "${dynamic_slot_ir}" "runtime.slot.frame" dynamic_slot_frame)
+foreach(forbidden IN ITEMS
+        "snapshotRuntimeFragmentCandidates"
+        "makeRuntimeFragmentBindingSet"
+        "pinFragmentBindings")
+    string(FIND "${dynamic_slot_ir}" "${forbidden}" found)
+    if(NOT found EQUAL -1)
+        message(FATAL_ERROR
+            "dynamic Slot hot path contains host policy '${forbidden}'")
+    endif()
+endforeach()
+if(NOT dynamic_slot_dispatch_count EQUAL 1 OR
+   dynamic_slot_context EQUAL -1 OR
+   dynamic_slot_registry EQUAL -1 OR
+   dynamic_slot_frame EQUAL -1)
+    message(FATAL_ERROR
+        "dynamic Slot lost its single explicit dispatch/context boundary")
+endif()
+
+set(static_slot_source "${work_dir}/static_slot_cost.luna")
+build_case("${static_slot_source}" "${work_dir}/static-slot-cost.moonir")
+file(READ "${last_ir_path}" static_slot_ir)
+foreach(forbidden IN ITEMS
+        "luna_runtime_fragment_dispatch_v1"
+        "__moon_runtime_registry_"
+        "runtime.slot.frame"
+        "fragment.context")
+    string(FIND "${static_slot_ir}" "${forbidden}" found)
+    if(NOT found EQUAL -1)
+        message(FATAL_ERROR
+            "static Slot composition retained runtime machinery '${forbidden}'")
+    endif()
+endforeach()
 
 set(static_selector_source "${work_dir}/selector_user_logic.luna")
 build_case("${static_selector_source}" "${work_dir}/static-selector.moonir")

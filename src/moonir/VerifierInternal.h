@@ -12,6 +12,36 @@ inline bool isGeneric(const FunctionDecl& function) {
     return !function.typeParams.empty() && !function.isTemplateInstance;
 }
 
+inline bool isPublicSlotTarget(
+    const Module& module, const DeclarationRef& reference) {
+    const auto* record = module.findDeclaration(reference);
+    if (!record || record->kind != DeclarationKind::Slot) return false;
+    const bool locallyPublished = std::any_of(
+        module.exports.begin(), module.exports.end(),
+        [&](const ExportRecord& exported) {
+            return exported.kind == DeclarationKind::Slot &&
+                exported.declaration == reference;
+        });
+    if (locallyPublished) return true;
+    // A package composite includes dependency declarations but publishes only
+    // its own export table. A foreign Slot is callable dynamically only when
+    // its exact executable declaration is public and the owner package is a
+    // declared dependency of this package.
+    const auto found = module.declarationsById.find(record->id);
+    const auto* slot = found == module.declarationsById.end()
+        ? nullptr : dynamic_cast<const SlotDecl*>(found->second);
+    if (!slot || slot->symbolId != reference.symbol ||
+        slot->contractId != reference.contract ||
+        !slot->isExported || slot->packageId == module.name)
+        return false;
+    return std::any_of(
+        module.packageUses.begin(), module.packageUses.end(),
+        [&](const Module::PackageUse& use) {
+            return use.ownerPackageId == module.name &&
+                use.packageId == slot->packageId;
+        });
+}
+
 inline bool isIntegerMetadataType(TypeKind kind) {
     switch (kind) {
         case TypeKind::I8:

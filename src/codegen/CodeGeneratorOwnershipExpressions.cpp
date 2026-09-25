@@ -489,6 +489,7 @@ llvm::Value* CodeGenerator::generateLambda(LambdaExpr* le) {
         auto savedUpperBounds = std::move(mLocalKnownUpperBounds);
         auto savedCanonicalLocals = std::move(mCanonicalLocals);
         auto savedCanonicalLocalTypes = std::move(mCanonicalLocalTypes);
+        auto* savedFragmentContext = mCurrentFragmentContext;
         auto savedIP = mBuilder->saveIP();
         mLocals.clear();
         mLocalTypes.clear();
@@ -496,11 +497,12 @@ llvm::Value* CodeGenerator::generateLambda(LambdaExpr* le) {
         mMaterializedIterators.clear();
         mLocalKnownUpperBounds.clear();
         mCurrentFunc = func;
+        mCurrentFragmentContext = nullptr;
 
         auto entryBB = llvm::BasicBlock::Create(*mCtx, "entry", func);
         mBuilder->SetInsertPoint(entryBB);
 
-        generateControlFlowBody(*le->controlFlow, func, entryBB);
+        generateControlFlowBody(*le->controlFlow, func, entryBB, 0);
         if (!mBuilder->GetInsertBlock()->getTerminator()) {
             if (retTy->isVoidTy()) mBuilder->CreateRetVoid();
             else mBuilder->CreateRet(llvm::Constant::getNullValue(retTy));
@@ -517,6 +519,7 @@ llvm::Value* CodeGenerator::generateLambda(LambdaExpr* le) {
         mLocalKnownUpperBounds = std::move(savedUpperBounds);
         mCanonicalLocals = std::move(savedCanonicalLocals);
         mCanonicalLocalTypes = std::move(savedCanonicalLocalTypes);
+        mCurrentFragmentContext = savedFragmentContext;
         mBuilder->restoreIP(savedIP);
         return func;
 }
@@ -579,6 +582,7 @@ llvm::Value* CodeGenerator::generateMakeClosure(moon::MakeClosureExpr* closure) 
         auto savedUpperBounds = std::move(mLocalKnownUpperBounds);
         auto savedCanonicalLocals = std::move(mCanonicalLocals);
         auto savedCanonicalLocalTypes = std::move(mCanonicalLocalTypes);
+        auto* savedFragmentContext = mCurrentFragmentContext;
         auto savedIP = mBuilder->saveIP();
         mLocals.clear();
         mLocalTypes.clear();
@@ -586,11 +590,12 @@ llvm::Value* CodeGenerator::generateMakeClosure(moon::MakeClosureExpr* closure) 
         mMaterializedIterators.clear();
         mLocalKnownUpperBounds.clear();
         mCurrentFunc = func;
+        mCurrentFragmentContext = nullptr;
 
         auto entryBB = llvm::BasicBlock::Create(*mCtx, "entry", func);
         mBuilder->SetInsertPoint(entryBB);
 
-        generateControlFlowBody(*le->controlFlow, func, entryBB);
+        generateControlFlowBody(*le->controlFlow, func, entryBB, 0);
         if (!mBuilder->GetInsertBlock()->getTerminator()) {
             if (retTy->isVoidTy()) mBuilder->CreateRetVoid();
             else mBuilder->CreateRet(llvm::Constant::getNullValue(retTy));
@@ -606,6 +611,7 @@ llvm::Value* CodeGenerator::generateMakeClosure(moon::MakeClosureExpr* closure) 
         mLocalKnownUpperBounds = std::move(savedUpperBounds);
         mCanonicalLocals = std::move(savedCanonicalLocals);
         mCanonicalLocalTypes = std::move(savedCanonicalLocalTypes);
+        mCurrentFragmentContext = savedFragmentContext;
         mBuilder->restoreIP(savedIP);
 
         auto* closureStorage = mBuilder->CreateAlloca(closureLLVMType);

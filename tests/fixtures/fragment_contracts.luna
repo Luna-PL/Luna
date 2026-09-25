@@ -1,20 +1,20 @@
-slot interceptor first();
-slot context second();
-slot context third();
+slot first();
+slot second();
+slot third();
 
-interceptor audit for first {
+fragment audit for first {
     print(10);
+    resume;
 }
 
-context around for second {
+fragment around for second {
     print(20);
-    resume();
+    resume;
     print(30);
 }
 
-context reject for third {
+fragment reject for third {
     print(40);
-    abort();
 }
 
 fn main() -> i32 {
