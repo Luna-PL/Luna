@@ -467,6 +467,40 @@ fn static_exported_path() -> i32 {
     dynamicPath->isExported = false;
     if (!verifier.verify(*runtimeSlotModule))
         return fail("verifier rejected the restored internal context ABI");
+    const auto* publicSlotRecord = runtimeSlotModule->findDeclaration(
+        runtimeSlot->runtimeSlot);
+    const auto publicSlotFound = publicSlotRecord
+        ? runtimeSlotModule->declarationsById.find(publicSlotRecord->id)
+        : runtimeSlotModule->declarationsById.end();
+    auto* publishedSlot = publicSlotFound ==
+            runtimeSlotModule->declarationsById.end()
+        ? nullptr : dynamic_cast<moon::SlotDecl*>(publicSlotFound->second);
+    if (!publishedSlot)
+        return fail("runtime Slot fixture lost its executable Slot declaration");
+    publishedSlot->isExported = false;
+    if (verifier.verify(*runtimeSlotModule))
+        return fail("forged export row published a private runtime Slot");
+    publishedSlot->isExported = true;
+    if (!verifier.verify(*runtimeSlotModule))
+        return fail("verifier rejected the restored public runtime Slot");
+    const auto ownPackage = publishedSlot->packageId;
+    publishedSlot->packageId = "canonical.foreign_package";
+    runtimeSlotModule->packageUses.push_back({
+        runtimeSlotModule->name, publishedSlot->packageId, "foreign"});
+    const bool acceptedForeignSlot = verifier.verify(*runtimeSlotModule);
+    const bool rejectedRuntimeTarget = std::any_of(
+        verifier.errors().begin(), verifier.errors().end(),
+        [](const auto& diagnostic) {
+            return diagnostic.message.find(
+                "runtime Slot target is not an exported control") !=
+                std::string::npos;
+        });
+    if (acceptedForeignSlot || !rejectedRuntimeTarget)
+        return fail("forged local export row re-exported a foreign runtime Slot");
+    runtimeSlotModule->packageUses.pop_back();
+    publishedSlot->packageId = ownPackage;
+    if (!verifier.verify(*runtimeSlotModule))
+        return fail("verifier rejected the restored owning Slot package");
 
     // The first dispatch-lowering slice accepts a closed, side-effect-free
     // continuation. This fixture drives the real Runtime ABI rather than

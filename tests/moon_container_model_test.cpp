@@ -419,6 +419,23 @@ int main(int argc, char* argv[]) {
             std::cerr << diagnostic.message << '\n';
         return fail("Verifier rejected independently decoded interfaces");
     }
+    const auto localDeclarationId = decoded.declarationTable[0].id;
+    decoded.declarationTable[0].id = "foreign.package::fn::handler";
+    decoded.rebuildIndexes();
+    const bool acceptedForeignExport = verifier.verify(decoded);
+    const bool diagnosedForeignExport = std::any_of(
+        verifier.errors().begin(), verifier.errors().end(),
+        [](const auto& diagnostic) {
+            return diagnostic.message.find(
+                "export does not belong to the publishing package") !=
+                std::string::npos;
+        });
+    if (acceptedForeignExport || !diagnosedForeignExport)
+        return fail("interface verifier accepted a foreign export row");
+    decoded.declarationTable[0].id = localDeclarationId;
+    decoded.rebuildIndexes();
+    if (!verifier.verify(decoded))
+        return fail("interface verifier rejected the restored local export");
 
     std::vector<uint8_t> codeBytes;
     if (!moon::ContainerModelCodec::encodeCode(

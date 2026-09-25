@@ -613,6 +613,17 @@ bool Verifier::verify(const Module& module) {
             if (declaration->type != exported.type ||
                 declaration->kind != exported.kind)
                 error(exported.location, "export type or kind differs from its declaration");
+            if (declaration->id.rfind(module.name + "::", 0) != 0)
+                error(exported.location,
+                      "export does not belong to the publishing package");
+            const auto executable = module.declarationsById.find(
+                declaration->id);
+            if (executable != module.declarationsById.end() &&
+                (!executable->second ||
+                 executable->second->packageId != module.name ||
+                 !executable->second->isExported))
+                error(exported.location,
+                      "export does not name a locally published declaration");
         }
         if (!exported.abi.empty() && exported.abi != "C")
             error(exported.location, "export carries an unsupported explicit ABI");

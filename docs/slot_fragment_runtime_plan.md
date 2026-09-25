@@ -296,11 +296,18 @@ a leading opaque execution-context pointer. `export` remains ordinary external
 visibility and does not acquire this ABI implicitly. Cross-package invocation
 and exported Fragment targeting use the dependency's exact Slot declaration
 identity and require that dependency to expose the Slot as a public control.
-An end-to-end host test now separately compiles the Slot owner's source module
+The verifier checks that a root export belongs to its publishing package and,
+when executable code is present, agrees with the declaration's public flag;
+a forged export row cannot turn a private or foreign Slot into a runtime target.
+Foreign Slot package ownership must also agree with the stable declaration ID,
+not merely a mutable package label or dependency row.
+An end-to-end host test now separately compiles the Slot owner's full package
 and the plugin package, loads them as distinct JIT generations, selects the
 plugin candidate for the host Slot, and distinguishes selected dispatch from
 the unbound continuation. The execution context keeps the plugin generation
 alive after the runtime tears down and releases it when the context is dropped.
+The host package's unused exported compiler-domain selector is classified at
+declaration time and erased from MoonIR even without a local `select` call.
 The current lowering packs the
 frozen Slot argument record and calls `luna_runtime_fragment_dispatch_v1` with
 a synchronous stack frame containing the execution context, return storage,

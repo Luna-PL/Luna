@@ -13,6 +13,7 @@ set(work_dir "${LUNA_BINARY_DIR}/full-showcase")
 set(showcase_dir "${work_dir}/full_showcase")
 set(app_dir "${showcase_dir}/app")
 set(moonir_path "${work_dir}/showcase.moonir")
+set(foundation_moonir_path "${work_dir}/foundation.moonir")
 set(package_id "org.luna.examples.showcase.app")
 set(executable_path "${app_dir}/build/native/app")
 if(WIN32)
@@ -23,6 +24,28 @@ set(ir_path "${executable_path}.ll")
 file(REMOVE_RECURSE "${work_dir}")
 file(MAKE_DIRECTORY "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/examples/full_showcase" DESTINATION "${work_dir}")
+
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" check "${showcase_dir}/foundation"
+            --emit-moonir "${foundation_moonir_path}"
+    RESULT_VARIABLE foundation_result
+    OUTPUT_VARIABLE foundation_output
+    ERROR_VARIABLE foundation_error
+)
+if(NOT foundation_result EQUAL 0 OR
+   NOT EXISTS "${foundation_moonir_path}")
+    file(REMOVE_RECURSE "${work_dir}")
+    message(FATAL_ERROR
+        "standalone showcase foundation failed validation.\n"
+        "Result: ${foundation_result}\n${foundation_output}\n${foundation_error}")
+endif()
+file(READ "${foundation_moonir_path}" foundation_moonir)
+string(FIND "${foundation_moonir}" "::dispatch::fn::choose" selector_at)
+if(NOT selector_at EQUAL -1)
+    file(REMOVE_RECURSE "${work_dir}")
+    message(FATAL_ERROR
+        "unused compiler-domain selector leaked into foundation MoonIR")
+endif()
 
 execute_process(
     COMMAND "${LUNA_EXECUTABLE}" check "${app_dir}"

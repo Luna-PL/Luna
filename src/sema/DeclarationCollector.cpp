@@ -95,6 +95,14 @@ void DeclarationCollector::declareFunction(FunctionDecl* decl) {
         info.paramContracts.push_back(contract);
         info.paramTypes.push_back(pt);
     }
+    // A selector is a compiler-domain declaration even when no local `select`
+    // expression happens to call it. In particular, an exported selector in a
+    // library must not become a value-domain runtime function merely because
+    // that library is compiled independently of its consumers.
+    if (!info.paramTypes.empty() && info.paramTypes.front() &&
+        info.paramTypes.front()->kind == TypeKind::DeclarationView &&
+        info.returnType && info.returnType->kind == TypeKind::DeclarationRef)
+        decl->isSelector = true;
     if (mContext.mFunctionFamilies[sourceKey].size() == 1) {
         mContext.mSymTable.defineAtRoot(sourceKey, info);
     }

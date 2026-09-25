@@ -231,9 +231,13 @@ context 参数，精确 direct call 会转发调用者的 capability；不受影
 binding，并携带 `FRAGMENT_CONTEXT`，表示入口在源码参数之前接收 opaque execution-context
 pointer。`export` 仍只表示普通外部可见性，不会隐式获得该 ABI。跨包 Slot 调用和 exported
 Fragment 指向依赖包 Slot 时，均使用该 Slot 的确切声明身份，并要求所属依赖包将其公开为
-控制点。端到端宿主测试现已分别编译 Slot 所在源码模块与插件包，加载为不同的 JIT generation，
+控制点。verifier 现在核对根包 export 的声明归属；可执行声明存在时还核对其公开标志，
+伪造 export 行不能把私有或外包 Slot 变为运行时目标。外包 Slot 的 packageId 还必须与
+稳定声明 ID 的归属一致，不能只改包名和依赖行冒充。端到端宿主测试现已分别编译 Slot
+所属完整包与插件包，加载为不同的 JIT generation，
 从插件选取该 Slot 的候选，并通过不同返回值区分选中 dispatch 与未绑定续体。runtime 销毁后
-execution context 仍固定插件 generation；释放 context 后 generation 随之释放。当前 lowering
+execution context 仍固定插件 generation；释放 context 后 generation 随之释放。宿主包中未被本包
+`select` 调用的 exported 编译期 selector 现于声明阶段分类，并从 MoonIR 擦除。当前 lowering
 会打包冻结的 Slot 参数 record，并通过一个同步栈
 frame 调用 `luna_runtime_fragment_dispatch_v1`；frame 携带 execution context、return storage 和
 指向 live capture 的指针。callback 把 capture 暂存进 typed local、执行 outlined blocks、

@@ -5,10 +5,8 @@
 #include "moonir_canonical_test_support.h"
 
 #include <filesystem>
-#include <fstream>
 #include <iostream>
 #include <memory>
-#include <sstream>
 #include <string>
 #include <vector>
 
@@ -17,15 +15,10 @@ namespace canonical_test {
 int runCrossPackageRuntimeTest() {
     const auto showcasePath = std::filesystem::path(LUNA_TEST_SOURCE_DIR) /
         "examples/full_showcase";
-    const auto effectsPath = showcasePath / "foundation/src/effects.luna";
-    std::ifstream effectsInput(effectsPath, std::ios::binary);
-    if (!effectsInput)
-        return fail("dependency host source could not be opened");
-    std::ostringstream effectsBuffer;
-    effectsBuffer << effectsInput.rdbuf();
     luna::driver::CompilerPipeline hostPipeline;
-    if (!hostPipeline.compileSourceToMoonIR(
-            effectsBuffer.str(), effectsPath.string())) {
+    luna::driver::CompilerPipelineOptions hostOptions;
+    hostOptions.inputPath = (showcasePath / "foundation").string();
+    if (!hostPipeline.compileToMoonIR(hostOptions)) {
         for (const auto& diagnostic : hostPipeline.errors())
             std::cerr << diagnostic::render(diagnostic) << '\n';
         return fail("dependency host did not compile to MoonIR");

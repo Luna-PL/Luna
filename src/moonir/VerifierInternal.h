@@ -16,24 +16,25 @@ inline bool isPublicSlotTarget(
     const Module& module, const DeclarationRef& reference) {
     const auto* record = module.findDeclaration(reference);
     if (!record || record->kind != DeclarationKind::Slot) return false;
-    const bool locallyPublished = std::any_of(
-        module.exports.begin(), module.exports.end(),
-        [&](const ExportRecord& exported) {
-            return exported.kind == DeclarationKind::Slot &&
-                exported.declaration == reference;
-        });
-    if (locallyPublished) return true;
-    // A package composite includes dependency declarations but publishes only
-    // its own export table. A foreign Slot is callable dynamically only when
-    // its exact executable declaration is public and the owner package is a
-    // declared dependency of this package.
     const auto found = module.declarationsById.find(record->id);
     const auto* slot = found == module.declarationsById.end()
         ? nullptr : dynamic_cast<const SlotDecl*>(found->second);
     if (!slot || slot->symbolId != reference.symbol ||
         slot->contractId != reference.contract ||
-        !slot->isExported || slot->packageId == module.name)
+        !slot->isExported || slot->packageId.empty() ||
+        record->id.rfind(slot->packageId + "::", 0) != 0)
         return false;
+    if (slot->packageId == module.name)
+        return std::any_of(
+            module.exports.begin(), module.exports.end(),
+            [&](const ExportRecord& exported) {
+                return exported.kind == DeclarationKind::Slot &&
+                    exported.declaration == reference;
+            });
+    // A package composite includes dependency declarations but publishes only
+    // its own export table. A foreign Slot is callable dynamically only when
+    // its exact executable declaration is public and the owner package is a
+    // declared dependency of this package.
     return std::any_of(
         module.packageUses.begin(), module.packageUses.end(),
         [&](const Module::PackageUse& use) {
