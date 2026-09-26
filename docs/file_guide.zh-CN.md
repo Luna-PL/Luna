@@ -471,6 +471,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `benchmarks/luna_cpu_reduction.luna`
 - `benchmarks/luna_gpu_vector.luna`
 - `benchmarks/package_source.sh`
+- `benchmarks/runtime_fragment_benchmark.cpp`
 - `benchmarks/run_basic_benchmark.sh`
 - `benchmarks/run_cpu_comparison.sh`
 - `benchmarks/run_rocm_cpp23_comparison.sh`

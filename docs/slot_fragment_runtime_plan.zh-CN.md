@@ -250,3 +250,22 @@ switch/case binding，都会在 callback 报告逃逸前执行。continuation �
 因此 Slot 后续路径也保留准确的资源清理。新增的非计时型
 结构门禁要求每个动态 Slot site 只生成一次 dispatch call，静态组合
 不携带 Runtime 选择机制。
+
+### 可复现的运行时成本探针
+
+`runtime-fragment-benchmark` 是显式构建的微基准，不参加默认构建或计时型 CI 门禁：
+
+```sh
+cmake --build build-perf --config Release --target runtime-fragment-benchmark
+./build-perf/runtime-fragment-benchmark 100000 64
+```
+
+Windows 可执行文件带 `.exe`，多配置构建则位于 `Release` 子目录。第一个参数是每项
+迭代次数，第二个是同一 generation 的 Fragment 行数（至少 4，至多 4096），其中
+4 行目标指向被查询的 Slot。建议分别运行 4、64、256 行，并记录平台、编译器、构建
+类型与每项 ns/op；不要跨机器直接比较绝对时间。输出区分候选快照查询、引用加 BindingSet
+构建、safe-point 激活加 pin，以及 None/One 的显式 C ABI dispatch。
+候选查询处于控制平面，允许随 catalog 大小变化；dispatch 是热路径，必须与候选数量
+脱钩。已有非计时结构测试继续负责硬性回归判定，微基准仅提供性能证据，不能以不稳定
+的固定时间阈值决定 CI 成败。
+各平台 CI 仅显式构建探针并执行极小的正确性 smoke，不比较输出时间。

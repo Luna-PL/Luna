@@ -42,6 +42,11 @@ jobs:
       - name: Build
         run: cmake --build build --parallel --verbose
 
+      - name: Runtime Fragment cost-probe smoke
+        run: |
+          cmake --build build --target runtime-fragment-benchmark --parallel
+          ./build/runtime-fragment-benchmark 10 4
+
       - name: Stable core regression suite
         run: |
           export PATH="/usr/lib/llvm-22/bin:$PATH"

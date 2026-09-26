@@ -30,6 +30,11 @@ jobs:
       - name: Build
         run: cmake --build build --parallel --verbose
 
+      - name: Runtime Fragment cost-probe smoke
+        run: |
+          cmake --build build --target runtime-fragment-benchmark --parallel
+          ./build/runtime-fragment-benchmark 10 4
+
       - name: Stable core regression suite
         run: |
           llvm_prefix="$(brew --prefix llvm@22)"

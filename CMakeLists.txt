@@ -145,6 +145,14 @@ target_include_directories(runtime-fragment-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(runtime-fragment-test PRIVATE runtime)
 
+# Opt-in quantitative probe. Timing results are machine-dependent and must
+# never become a pass/fail threshold in the stable regression suite.
+add_executable(runtime-fragment-benchmark EXCLUDE_FROM_ALL
+    benchmarks/runtime_fragment_benchmark.cpp)
+target_include_directories(runtime-fragment-benchmark
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(runtime-fragment-benchmark PRIVATE runtime)
+
 add_executable(runtime-allocation-abi-test
     tests/runtime_allocation_abi_test.cpp)
 target_include_directories(runtime-allocation-abi-test

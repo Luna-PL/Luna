@@ -325,3 +325,27 @@ and an escaping continuation retain their exact resource cleanups. A non-timing
 structural gate now requires one generated
 dispatch call per dynamic Slot site and no Runtime selection machinery in a
 static-only composition.
+
+### Reproducible runtime cost probe
+
+`runtime-fragment-benchmark` is an explicitly built microbenchmark, not part of
+the default build or a timing-based CI gate:
+
+```sh
+cmake --build build-perf --config Release --target runtime-fragment-benchmark
+./build-perf/runtime-fragment-benchmark 100000 64
+```
+
+On Windows the executable has an `.exe` suffix; multi-config builds place it
+under `Release`. The first argument is iterations per case. The second is the
+number of Fragment rows in one generation (4–4096), of which four target the
+queried Slot. Run with 4, 64, and 256 rows and record the platform, compiler,
+build type, and ns/op instead of comparing absolute times across machines.
+The cases separate candidate snapshot discovery, ref plus BindingSet creation,
+safe-point activation plus pinning, and explicit C ABI dispatch for None and
+One. Discovery is control-plane work and may scale with
+catalog size; hot-path dispatch must not. Non-timing structural tests remain
+the hard regression gate. This probe supplies performance evidence without a
+machine-dependent CI time threshold.
+Platform CI only builds the probe and runs a tiny correctness smoke; it never
+compares the reported times.

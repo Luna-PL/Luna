@@ -206,6 +206,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `benchmarks/luna_cpu_stream_write.luna`
 - `benchmarks/luna_gpu_vector.luna`
 - `benchmarks/package_source.sh`
+- `benchmarks/runtime_fragment_benchmark.cpp`
 - `benchmarks/run_basic_benchmark.sh`
 - `benchmarks/run_cpu_comparison.sh`
 - `benchmarks/run_cpu_suite_extended.sh`

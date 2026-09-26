@@ -43,6 +43,12 @@ jobs:
           export PATH="/ucrt64/bin:$PATH"
           cmake --build build --parallel --verbose
 
+      - name: Runtime Fragment cost-probe smoke
+        run: |
+          export PATH="/ucrt64/bin:$PATH"
+          cmake --build build --target runtime-fragment-benchmark --parallel
+          ./build/runtime-fragment-benchmark.exe 10 4
+
       - name: JIT, AOT, and runtime boundaries
         run: |
           export PATH="/ucrt64/bin:$PATH"
