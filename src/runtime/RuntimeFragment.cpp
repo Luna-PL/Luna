@@ -268,7 +268,10 @@ RuntimeFragmentRef::RuntimeFragmentRef(RuntimeFragmentRef&& other) noexcept
 RuntimeFragmentRef& RuntimeFragmentRef::operator=(
     RuntimeFragmentRef&& other) noexcept {
     if (this == &other) return *this;
-    reset();
+    // Install the incoming value before invoking old cleanup. A synchronous
+    // cleanup callback observes the new state and may reset/replace it; no
+    // assignment after that callback may silently overwrite its changes.
+    RuntimeFragmentRef retired(std::move(*this));
     binding_ = std::move(other.binding_);
     descriptor_ = std::exchange(other.descriptor_, nullptr);
     environment_ = std::exchange(other.environment_, nullptr);
@@ -302,13 +305,16 @@ const char* RuntimeFragmentRef::slotContractId() const {
 }
 
 void RuntimeFragmentRef::reset() noexcept {
-    if (ownsEnvironment_ && descriptor_ && descriptor_->destroy && environment_)
-        descriptor_->destroy(environment_);
-    environmentLease_.reset();
-    environment_ = nullptr;
-    descriptor_ = nullptr;
-    ownsEnvironment_ = false;
-    binding_ = {};
+    // Detach first so nested reset is empty and live-reference rebind survives.
+    // Declaration order keeps the original generation pinned until both owned
+    // destroy and borrowed-environment lease cleanup have finished.
+    auto binding = std::exchange(binding_, MoonRuntime::PinnedBinding{});
+    auto environmentLease = std::move(environmentLease_);
+    const auto* descriptor = std::exchange(descriptor_, nullptr);
+    void* environment = std::exchange(environment_, nullptr);
+    const bool ownsEnvironment = std::exchange(ownsEnvironment_, false);
+    if (ownsEnvironment && descriptor && descriptor->destroy && environment)
+        descriptor->destroy(environment);
 }
 
 bool makeOwnedRuntimeFragmentRef(

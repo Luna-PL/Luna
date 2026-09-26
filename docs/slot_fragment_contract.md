@@ -20,6 +20,7 @@ arbitrary handler-body re-entry.
 | Runtime ordered chain | The host's explicit order determines `resume` progression, followed by reverse-order post-resume execution. Catalog order and loading order do not choose the chain. | `luna.runtime-fragment-v1` |
 | In-flight snapshot lifetime | Dispatch owns its selected snapshot through complete handler unwind. A synchronous native callback may clear or replace the published C++ handle without releasing the active One/chain environments or generation; the replacement affects future calls only. Owned and borrowed environments are released before their final module lease, including escape and failure paths. | `luna.runtime-fragment-v1` |
 | Factory generation lifetime | Owned construction pins the validated generation before invoking the factory. Synchronous clearing/replacement of the source binding cannot release that generation during construction or rejected-output cleanup, nor redirect the new reference to a different binding. Success transfers the original pin to the reference; failure destroys any non-null output once before releasing the generation pin. | `luna.runtime-fragment-v1` |
+| Reference cleanup callbacks | `reset` detaches retired state before owned destroy or borrowed-lease release and retains its generation until those operations complete. A nested reset is empty; synchronous rebind of a live reference survives. Move assignment installs incoming state before old cleanup, so callback changes are not overwritten. Owned environments are destroyed once; the reference's borrowed lease is released before its module pin. | `luna.runtime-fragment-v1` |
 | Single-shot failure propagation | A failed resume on a live activation remains failed. Ignoring a repeated-resume error cannot turn its enclosing One/chain dispatch into success; the continuation still runs at most once. Downstream failures propagate outward without overwriting their diagnostics, and a fresh invocation of the same context is unaffected. | `luna.runtime-fragment-v1` |
 | Runtime same-Slot continuation nesting | Each dispatch creates fresh single-shot activations, even with the same pinned context and selected chain. A propagated inner continuation escape bypasses post-resume code in the suspended outer chain. | `luna.runtime-fragment-v1` |
 | Nested local override / None | An explicit inner context replaces or removes the selected Slot chain only for that context. It does not modify the suspended outer chain; None still propagates continuation escape. | `luna.runtime-fragment-v1` |
@@ -61,6 +62,9 @@ responsible for those obligations.
 The context must be live when entering the C ABI. In-flight retention does not
 authorize another call through a released opaque pointer, or concurrent mutation
 of the same C++ handle without synchronization.
+Cleanup callbacks must not throw, destroy an object still in use, or resurrect an
+object whose destructor is running. Live-reference cleanup re-entry is a native
+host lifecycle rule, not authorization of arbitrary Luna handler-body re-entry.
 Failure propagation does not roll back already-performed effects or sandbox
 native handlers; it prevents a failed activation from being reported as a
 successful dispatch when the handler returns.

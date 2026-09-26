@@ -121,6 +121,12 @@ C++ 宿主层从已验证 generation binding 构造 move-only `RuntimeFragmentRe
 拒绝产物的清理也保留原 pin；成功则将该 pin 交给引用。factory-owned 环境会先于
 generation lease 销毁；borrowed 环境必须携带自己的显式 lease。
 
+引用 reset 在 owned destroy／borrowed environment lease 释放前摘走旧状态，并保留原
+generation 直到这些清理完成，因此嵌套 reset 看到空引用。同步清理回调可重新绑定仍
+存活的引用，外层 reset 不会清除该新值。移动赋值先安装 incoming 状态，再清理旧
+状态，同样保留回调修改。清理不得抛异常、销毁仍在使用的对象或复活正在析构的对象。
+这些 native 宿主生命周期规则不扩大 Luna handler body 重入范围，也不改变 v1 ABI。
+
 环境构造检查实际地址是否满足声明的对齐，而不只检查 alignment 字段。被拒绝的非空
 工厂产物在发布前销毁一次，borrowed 环境不会传给 Fragment 的 destroy 回调。Slot activation 以及 C++／C
 分派都在 Fragment 或 base continuation 执行之前拒绝非法或错位参数，包括宿主策略

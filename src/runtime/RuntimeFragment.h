@@ -125,6 +125,8 @@ public:
     RuntimeFragmentRef(const RuntimeFragmentRef&) = delete;
     RuntimeFragmentRef& operator=(const RuntimeFragmentRef&) = delete;
     RuntimeFragmentRef(RuntimeFragmentRef&& other) noexcept;
+    // Installs incoming state before old cleanup; synchronous cleanup changes
+    // to this live reference are not overwritten after the callback returns.
     RuntimeFragmentRef& operator=(RuntimeFragmentRef&& other) noexcept;
     ~RuntimeFragmentRef();
 
@@ -139,6 +141,10 @@ public:
     }
     void* environment() const { return environment_; }
 
+    // Detaches before callbacks and pins the old generation through owned
+    // destroy/borrowed lease cleanup. Nested reset is empty; a callback rebind
+    // of a live reference survives. Callbacks must not resurrect a destroying
+    // object, destroy an object still in use, or mutate it concurrently.
     void reset() noexcept;
 
 private:

@@ -538,6 +538,152 @@ int testFactoryLifetime(const LunaRuntimeFragmentDescriptorV1& original) {
     return 0;
 }
 
+enum class CleanupOperation { Reset, MoveAssign, Destruction };
+enum class CleanupAction { Reset, Replace };
+
+struct CleanupReentryProbe {
+    std::array<unsigned, 3> environmentCalls{};
+    std::array<unsigned, 3> environmentCompletions{};
+    std::array<unsigned, 3> moduleDestructions{};
+    bool retainedDuringCallback = true;
+    bool environmentBeforeModule = true;
+    bool observedExpectedState = true;
+    bool entered = false;
+    CleanupOperation operation = CleanupOperation::Reset;
+    CleanupAction action = CleanupAction::Reset;
+    luna::runtime::RuntimeFragmentRef* target = nullptr;
+    luna::runtime::RuntimeFragmentRef* replacement = nullptr;
+    const char* incomingId = nullptr;
+};
+
+struct CleanupEnvironment {
+    CleanupReentryProbe* probe;
+    unsigned index;
+};
+
+void cleanupReentryEnvironment(void* storage) {
+    const auto environment = *static_cast<CleanupEnvironment*>(storage);
+    auto& probe = *environment.probe;
+    ++probe.environmentCalls[environment.index];
+    if (environment.index == 0 && !probe.entered && probe.target) {
+        probe.entered = true;
+        probe.retainedDuringCallback &= probe.moduleDestructions[0] == 0;
+        probe.observedExpectedState &= probe.operation == CleanupOperation::MoveAssign
+            ? *probe.target && probe.target->fragmentId() == probe.incomingId
+            : !*probe.target && probe.target->generationId() == 0 &&
+              probe.target->descriptor() == nullptr && probe.target->environment() == nullptr;
+        if (probe.action == CleanupAction::Reset)
+            probe.target->reset();
+        else
+            *probe.target = std::move(*probe.replacement);
+        probe.retainedDuringCallback &= probe.moduleDestructions[0] == 0;
+    }
+    ++probe.environmentCompletions[environment.index];
+}
+
+int testCleanupReentry(const LunaRuntimeFragmentDescriptorV1& original) {
+    using namespace luna::runtime;
+    std::array<LunaRuntimeFragmentDescriptorV1, 3> descriptors{original, original, original};
+    const std::array<const char*, 3> ids{
+        "fragment:cleanup-old", "fragment:cleanup-incoming", "fragment:cleanup-replacement"};
+    for (unsigned index = 0; index < descriptors.size(); ++index) {
+        auto& descriptor = descriptors[index];
+        descriptor.fragment_id = ids[index];
+        descriptor.fragment_contract_id = ids[index];
+        descriptor.factory_contract_id = "contract:cleanup-factory";
+        descriptor.environment_layout_id = "layout:cleanup-environment";
+        descriptor.environment_size = sizeof(CleanupEnvironment);
+        descriptor.environment_alignment = alignof(CleanupEnvironment);
+        descriptor.factory = createPayloadProbe;
+        descriptor.destroy = cleanupReentryEnvironment;
+        descriptor.execute = executePayloadProbe;
+    }
+    const RuntimeSlotRequirement slot{original.slot_id, original.slot_contract_id};
+    for (bool borrowed : {false, true})
+    for (CleanupOperation operation : {
+             CleanupOperation::Reset, CleanupOperation::MoveAssign, CleanupOperation::Destruction})
+    for (CleanupAction action : {CleanupAction::Reset, CleanupAction::Replace}) {
+        // Rebinding a destroying object is not supported. Nested reset is
+        // harmless, but callbacks must not resurrect an object in its destructor.
+        if (operation == CleanupOperation::Destruction && action == CleanupAction::Replace)
+            continue;
+        CleanupReentryProbe probe;
+        probe.operation = operation;
+        probe.action = action;
+        probe.incomingId = ids[1];
+        std::array<CleanupEnvironment, 3> environments{{{&probe, 0}, {&probe, 1}, {&probe, 2}}};
+        auto target = std::make_unique<RuntimeFragmentRef>();
+        RuntimeFragmentRef incoming;
+        RuntimeFragmentRef replacement;
+        const std::array<RuntimeFragmentRef*, 3> references{target.get(), &incoming, &replacement};
+        std::string error;
+        for (unsigned index = 0; index < references.size(); ++index) {
+            Runtime runtime;
+            auto lease = std::shared_ptr<const void>(new int(1),
+                [&probe, index](const void* storage) {
+                    probe.environmentBeforeModule &= probe.environmentCompletions[index] == 1;
+                    ++probe.moduleDestructions[index];
+                    delete static_cast<const int*>(storage);
+                });
+            Runtime::PinnedBinding binding;
+            if (!stageFragment(runtime, lease, &descriptors[index], binding, error))
+                return fail("cleanup reentry generation did not stage");
+            if (borrowed) {
+                auto environmentLease = std::shared_ptr<const void>(&environments[index],
+                    [](const void* storage) {
+                        cleanupReentryEnvironment(const_cast<void*>(storage));
+                    });
+                if (!makeBorrowedRuntimeFragmentRef(binding, slot,
+                        {descriptors[index].environment_layout_id,
+                         sizeof(CleanupEnvironment), alignof(CleanupEnvironment),
+                         &environments[index], environmentLease}, *references[index], error))
+                    return fail("cleanup reentry borrowed environment did not bind");
+            } else if (!makeOwnedRuntimeFragmentRef(binding, slot,
+                           {descriptors[index].factory_contract_id, &environments[index]},
+                           *references[index], error)) {
+                return fail("cleanup reentry owned environment did not bind");
+            }
+        }
+        probe.target = target.get();
+        probe.replacement = &replacement;
+        const auto initialGeneration = target->generationId();
+        auto& self = *target;
+        auto& alias = *references[0];
+        self = std::move(alias);
+        if (!self || self.fragmentId() != ids[0] || self.generationId() != initialGeneration ||
+            self.environment() != &environments[0] || probe.environmentCalls[0] != 0 ||
+            probe.moduleDestructions[0] != 0) {
+            probe.target = nullptr;
+            return fail("self move assignment changed a live Fragment reference");
+        }
+        if (operation == CleanupOperation::Destruction) target.reset();
+        else if (operation == CleanupOperation::MoveAssign) *target = std::move(incoming);
+        else target->reset();
+        const bool correctFinalState = operation == CleanupOperation::Destruction ||
+            (action == CleanupAction::Reset ? !*target
+                : *target && target->fragmentId() == ids[2] && !replacement &&
+                  probe.moduleDestructions[2] == 0 && probe.environmentCalls[2] == 0);
+        const bool sourceMoved = operation != CleanupOperation::MoveAssign ||
+            (!incoming && incoming.generationId() == 0 && incoming.environment() == nullptr &&
+             incoming.descriptor() == nullptr);
+        // Fixture environments stay allocated on the stack even when testing
+        // the old implementation, so duplicate destroys are counted, not freed.
+        if (target) target->reset();
+        incoming.reset();
+        replacement.reset();
+        probe.target = nullptr;
+        if (!correctFinalState || !sourceMoved || !probe.entered || !probe.observedExpectedState ||
+            !probe.retainedDuringCallback || !probe.environmentBeforeModule)
+            return fail("Fragment cleanup reentry exposed stale state or lost a new binding");
+        for (unsigned index = 0; index < environments.size(); ++index) {
+            if (probe.environmentCalls[index] != 1 || probe.environmentCompletions[index] != 1 ||
+                probe.moduleDestructions[index] != 1)
+                return fail("Fragment cleanup reentry repeated destruction or leaked an environment");
+        }
+    }
+    return 0;
+}
+
 } // namespace
 
 int main() {
@@ -1444,5 +1590,6 @@ int main() {
     }
 
     if (testDispatchLifetime(descriptor) != 0) return 1;
-    return testFactoryLifetime(descriptor);
+    if (testFactoryLifetime(descriptor) != 0) return 1;
+    return testCleanupReentry(descriptor);
 }

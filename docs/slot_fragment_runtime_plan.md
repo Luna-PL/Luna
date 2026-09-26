@@ -143,6 +143,15 @@ the same pin; success transfers it to the reference. Factory-owned environments 
 before the generation lease is released; borrowed environments require their
 own explicit lease.
 
+Reference reset detaches retired state before calling owned destroy or releasing
+the borrowed-environment lease, and retains the original generation through both.
+Nested reset therefore sees an empty reference. A synchronous cleanup callback may
+rebind a still-live reference without that value being erased by the outer reset.
+Move assignment installs incoming state before old cleanup; it likewise preserves
+callback changes. Cleanup must not throw, destroy an object still in use, or
+resurrect a destroying object. These native host lifecycle rules do not broaden
+Luna handler-body re-entry or change the v1 ABI.
+
 Environment construction checks the actual address against its declared
 alignment, not just the alignment field. A rejected non-null factory result is
 destroyed once before publication; borrowed storage never enters the Fragment's

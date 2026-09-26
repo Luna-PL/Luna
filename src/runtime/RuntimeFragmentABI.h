@@ -28,6 +28,10 @@ enum LunaRuntimeFragmentFlagV1 {
 typedef int32_t (*LunaRuntimeFragmentFactoryFnV1)(
     const void* factory_arguments, void** output_environment);
 
+// C++ reference cleanup detaches retired state before invoking destroy and
+// keeps its generation pinned until cleanup returns. Synchronous mutation of
+// a live reference does not revive retired state. Callbacks must not throw or
+// resurrect an object whose destructor is running.
 typedef void (*LunaRuntimeFragmentDestroyFnV1)(void* environment);
 
 // activation is compiler-owned and opaque to plugins and hosts. It carries the
