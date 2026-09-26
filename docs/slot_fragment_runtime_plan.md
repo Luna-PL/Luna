@@ -91,6 +91,14 @@ ContractId, target relationship, unit/single-shot control, continuation use,
 environment layout, ownership, ABI, and generation-lifetime requirements.
 User metadata can never forge these facts.
 
+Runtime identity keys crossing the C++/C boundary reject embedded NUL, as well
+as CR/LF/tab, so conversion to a null-terminated ABI name cannot silently change
+the module, declaration, Slot contract, or argument-layout identity. Staging
+rejects malformed generation keys before initialization; candidate discovery,
+activation, dispatch (including None), and overrides reject ambiguous Slot keys.
+These are C++ identity checks. A C ABI name ends at its first NUL; native callers
+must not truncate an unvalidated C++ ID before invoking that ABI.
+
 Runtime-retained metadata requires only a minimal owner identity anchor. It
 must not promote its owner to a callable function, executable fragment, open
 slot, or Runtime API. This boundary is now enforced by the frontend, MoonIR

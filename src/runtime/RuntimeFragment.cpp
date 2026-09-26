@@ -66,8 +66,9 @@ bool validText(const char* text, bool allowEmpty = false) {
 }
 
 bool validIdentity(const std::string& value) {
+    // Explicit count includes NUL: C++ and C ABI keys must denote one identity.
     return !value.empty() && value.size() < MaxIdentityBytes &&
-        value.find_first_of("\r\n\t") == std::string::npos;
+        value.find_first_of("\r\n\t\0", 0, 4) == std::string::npos;
 }
 
 bool powerOfTwo(uint64_t value) {

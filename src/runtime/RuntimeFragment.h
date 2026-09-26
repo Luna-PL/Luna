@@ -11,6 +11,7 @@
 namespace luna::runtime {
 
 struct RuntimeSlotRequirement {
+    // Nominal ABI keys cannot contain embedded NUL or CR/LF/tab characters.
     std::string slotId;
     std::string contractId;
 };

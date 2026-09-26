@@ -70,8 +70,9 @@ const std::string& emptyString() {
 }
 
 bool validIdentity(const std::string& value) {
+    // IDs must survive conversion to null-terminated C ABI names unchanged.
     return !value.empty() &&
-        value.find_first_of("\r\n\t") == std::string::npos;
+        value.find_first_of("\r\n\t\0", 0, 4) == std::string::npos;
 }
 
 bool validDigest(const std::string& digest) {

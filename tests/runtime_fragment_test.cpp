@@ -421,6 +421,43 @@ int main() {
         }
         const luna::runtime::RuntimeFragmentArguments aligned{
             layout, 8, 8, storage.data()};
+        for (const bool inContract : {false, true}) {
+            auto ambiguousSlot = slot;
+            auto& identity = inContract ? ambiguousSlot.contractId : ambiguousSlot.slotId;
+            identity += '\0';
+            identity += "hidden";
+            luna::runtime::RuntimeFragmentActivation activation;
+            if (luna::runtime::makeRuntimeFragmentActivation(
+                    ambiguousSlot, aligned, resumeActivation, &resumes, activation, error) ||
+                activation || error.empty())
+                return fail("activation accepted an embedded NUL Slot identity");
+            luna::runtime::RuntimeFragmentRef ambiguousRef;
+            if (luna::runtime::makeOwnedRuntimeFragmentRef(
+                    binding, ambiguousSlot, {"", nullptr}, ambiguousRef, error) ||
+                ambiguousRef || error.find("Slot requirement is invalid") == std::string::npos)
+                return fail("Fragment construction did not reject an ambiguous Slot identity");
+            for (const auto* bindings : {&none, &selected}) {
+                if (bindings->dispatch(
+                        ambiguousSlot, aligned, resumeActivation, &resumes, error) ||
+                    error.empty() || resumes != 0 || payloadProbeExecutions != 0)
+                    return fail("ambiguous Slot identity reached a dispatch callback");
+                luna::runtime::RuntimeFragmentBindingSet localOverride;
+                if (luna::runtime::makeRuntimeFragmentBindingOverride(
+                        *bindings, ambiguousSlot, {}, localOverride, error) ||
+                    localOverride || error.empty())
+                    return fail("local override accepted an ambiguous Slot identity");
+            }
+        }
+        auto ambiguousArguments = aligned;
+        ambiguousArguments.layoutId += '\0';
+        ambiguousArguments.layoutId += "hidden";
+        luna::runtime::RuntimeFragmentActivation ambiguousActivation;
+        if (luna::runtime::makeRuntimeFragmentActivation(
+                slot, ambiguousArguments, resumeActivation, &resumes, ambiguousActivation, error) ||
+            ambiguousActivation || error.empty() ||
+            none.dispatch(slot, ambiguousArguments, resumeActivation, &resumes, error) ||
+            error.empty() || resumes != 0)
+            return fail("embedded NUL argument layout reached an activation or None callback");
         if (!selected.dispatch(slot, aligned, resumeActivation, &resumes, error) ||
             payloadProbeExecutions != 1 || resumes != 0 ||
             !none.dispatch(slot, aligned, resumeActivation, &resumes, error) ||
@@ -586,6 +623,17 @@ int main() {
                 generation, slot, snapshot, error) ||
             error.find("already initialized") == std::string::npos)
             return fail("candidate discovery overwrote an immutable snapshot");
+        for (const bool inContract : {false, true}) {
+            auto ambiguousSlot = slot;
+            auto& identity = inContract ? ambiguousSlot.contractId : ambiguousSlot.slotId;
+            identity += '\0';
+            identity += "hidden";
+            luna::runtime::RuntimeFragmentCandidateSnapshot ambiguousSnapshot;
+            if (luna::runtime::snapshotRuntimeFragmentCandidates(
+                    generation, ambiguousSlot, ambiguousSnapshot, error) ||
+                ambiguousSnapshot || error.empty())
+                return fail("candidate discovery accepted an embedded NUL Slot identity");
+        }
 
         const luna::runtime::RuntimeFragmentFactoryArguments noFactory{
             "", nullptr};

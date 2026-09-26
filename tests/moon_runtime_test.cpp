@@ -83,6 +83,23 @@ int main() {
     std::atomic<unsigned> thirdLeaseDestructions{0};
     std::string error;
 
+    // Runtime IDs also cross null-terminated C ABI descriptors. A C++ string
+    // with an embedded NUL must not become a second identity for one C name.
+    for (unsigned field = 0; field < 3; ++field) {
+        Runtime runtime;
+        Request request{ModuleId, std::string(64, 'a'), std::make_shared<int>(1)};
+        std::string symbol = SymbolId;
+        std::string contract = ContractId;
+        auto& identity = field == 0 ? request.moduleId : (field == 1 ? symbol : contract);
+        identity += '\0';
+        identity += "hidden";
+        Runtime::StagedGeneration staged;
+        std::string phases;
+        if (stageOne(runtime, request, symbol, contract, &first, staged, phases, error) ||
+            staged || error.empty() || phases != (field == 0 ? "" : "VR"))
+            return fail("embedded NUL identity reached generation initialization");
+    }
+
     {
         std::atomic<unsigned> leaseDestructions{0};
         Runtime runtime;

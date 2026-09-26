@@ -81,6 +81,13 @@ FragmentOffer；它不会让其他声明自动获得 callable 或 executable 能
 unit/single-shot control、续体使用、环境布局、ownership、ABI 和 generation 生命周期
 要求。用户 metadata 不能伪造这些事实。
 
+跨 C++／C 边界的 Runtime identity key 除 CR／LF／tab 外，也拒绝内嵌 NUL，避免转成
+null-terminated ABI 名称时静默改变 module、声明、Slot contract 或参数 layout 身份。
+Staging 在初始化前拒绝非法 generation key；候选发现、activation、分派（包括 None）
+和 override 也拒绝有歧义的 Slot key。
+这些是 C++ 身份检查；C ABI 名称止于第一个 NUL，native 调用方不得先截断一个未经
+验证的 C++ ID，再调用该 ABI。
+
 Runtime-retained metadata 只需要最小 owner identity anchor，不得把 owner 提升为 callable
 function、executable fragment、开放 slot 或 Runtime API。该边界已在前端、MoonIR verifier
 与 Runtime descriptor 发射中落实：metadata owner 可以保持 compile-time retention，其
