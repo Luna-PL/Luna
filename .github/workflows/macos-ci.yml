@@ -36,7 +36,7 @@ jobs:
           ./build/runtime-fragment-benchmark 10 4
           ./build/runtime-fragment-benchmark 11 64
           ./build/runtime-fragment-benchmark 1001 256
-          cmake -DLUNA_FRAGMENT_BENCHMARK_EXECUTABLE="$PWD/build/runtime-fragment-benchmark" \
+          cmake -Werror=dev -DLUNA_FRAGMENT_BENCHMARK_EXECUTABLE="$PWD/build/runtime-fragment-benchmark" \
             -DLUNA_FRAGMENT_BENCHMARK_ITERATIONS=10000 \
             -DLUNA_FRAGMENT_BENCHMARK_RECORD="$PWD/build/fragment-cost-interleaved.csv" \
             -P tests/runtime_fragment_benchmark.cmake

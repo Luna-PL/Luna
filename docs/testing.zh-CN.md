@@ -30,7 +30,9 @@ Linux CI 在 C++17/C++23 构建矩阵中都启用该门禁。它只作用于 Lun
 
 可选目标 `runtime-fragment-benchmark` 不把计时门禁加入默认构建／CTest。各平台 CI
 显式构建它，并运行 `tests/runtime_fragment_benchmark.cmake`，核对 900 个交错样本、
-精确计数、构建 metadata、CSV 格式与位置平衡顺序；`fragment-cost-*` 观察 artifact
+精确计数、构建 metadata、CSV 格式与位置平衡顺序。独立脚本显式设置项目的 CMake
+3.20 策略基线；CI 使用 `-Werror=dev`，避免解析／策略警告静默改变检查语义。
+`fragment-cost-*` 观察 artifact
 保留 14 天，测量时间不决定成败。复现与解释限制见
 [运行时计划](slot_fragment_runtime_plan.zh-CN.md#交错观察协议)。
 

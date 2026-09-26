@@ -41,6 +41,8 @@ The opt-in `runtime-fragment-benchmark` keeps the default build and CTest suite
 free of timing gates. Platform CI builds it explicitly and runs
 `tests/runtime_fragment_benchmark.cmake` to validate 900 interleaved samples,
 exact counters, build metadata, CSV format, and the position-balanced schedule.
+The standalone script sets the project's CMake 3.20 policy baseline; CI invokes
+it with `-Werror=dev` so parser/policy warnings cannot silently alter validation.
 It retains `fragment-cost-*` observations for 14 days; measured times do not
 determine success. See the [runtime plan](slot_fragment_runtime_plan.md#interleaved-observation-protocol)
 for reproduction and interpretation limits.
