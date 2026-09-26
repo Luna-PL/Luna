@@ -326,6 +326,22 @@ structural gate now requires one generated
 dispatch call per dynamic Slot site and no Runtime selection machinery in a
 static-only composition.
 
+### Static cycle safety and continuation nesting
+
+As of 2026-09-26, Sema and the CFG builder independently reject direct or
+mutual static Fragment expansion cycles instead of recursing indefinitely.
+Regression tests cover both source diagnostics and a recursive MoonIR body
+injected after semantic analysis. Finite same-Slot nesting in a base
+continuation remains valid, including lexical binding overrides.
+The CFG verifier accepts entry into a directly nested Fragment only through its
+recorded entry block; an adversarial jump to a nested non-entry block remains
+rejected. Runtime C ABI tests reuse one pinned context and selected chain for
+nested same-Slot dispatch,
+checking independent single-shot activation state and propagation of an inner
+continuation escape through both chains. Arbitrary handler-body runtime
+recursion is still outside the frozen `TBD-SF008` guarantee; these checks do not
+introduce a runtime depth limit or automatic suppression policy.
+
 ### Reproducible runtime cost probe
 
 `runtime-fragment-benchmark` is an explicitly built microbenchmark, not part of

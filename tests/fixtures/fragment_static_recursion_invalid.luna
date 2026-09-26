@@ -1,0 +1,13 @@
+slot hook();
+
+fragment recursive() for hook {
+    hook() {}
+    resume;
+}
+
+fn main() -> i32 {
+    apply recursive {
+        hook() {}
+    }
+    return 0;
+}

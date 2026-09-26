@@ -1,0 +1,34 @@
+slot hook(value: i32);
+
+fragment trace(value) for hook {
+    print(value);
+    resume;
+}
+
+fragment replacement(value) for hook {
+    print(value + 10);
+    resume;
+}
+
+fragment wrapper(value) for hook {
+    apply replacement {
+        hook(value) { print(value + 20); }
+    }
+    resume;
+}
+
+fn main() -> i32 {
+    apply trace {
+        hook(1) {
+            hook(2) { print(3); }
+        }
+        apply replacement {
+            hook(4) { print(5); }
+        }
+        hook(6) { print(7); }
+    }
+    apply wrapper {
+        hook(8) { print(9); }
+    }
+    return 0;
+}

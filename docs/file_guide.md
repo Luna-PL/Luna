@@ -645,6 +645,9 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/ffi_unsupported_type_invalid.luna`
 - `tests/fixtures/float_literal_overflow_invalid.luna`
 - `tests/fixtures/fragment_contracts.luna`
+- `tests/fixtures/fragment_nested_continuation.luna`
+- `tests/fixtures/fragment_static_mutual_recursion_invalid.luna`
+- `tests/fixtures/fragment_static_recursion_invalid.luna`
 - `tests/fixtures/fragment_environment_arity_invalid.luna`
 - `tests/fixtures/fragment_explicit_environment.luna`
 - `tests/fixtures/fragment_implicit_capture_invalid.luna`

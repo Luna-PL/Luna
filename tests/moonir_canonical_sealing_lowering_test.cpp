@@ -25,6 +25,135 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto& reverse = context.reverseModule;
     const auto shortId = context.shortIteratorType;
 
+    // Sema is not the only trust boundary: a structured input may be forged
+    // after source analysis. The CFG bridge must reject cyclic static body
+    // expansion itself rather than exhausting the compiler's stack.
+    auto recursionSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        R"luna(
+package canonical.static_recursion;
+slot hook();
+fragment finite() for hook { resume; }
+fn main() -> i32 {
+    apply finite { hook() {} }
+    return 0;
+}
+)luna", "<canonical-static-recursion>");
+    if (!recursionSnapshot.success())
+        return fail("frontend rejected finite static recursion fixture");
+    moon::LunaLowerer recursionLowerer;
+    auto recursionModule = recursionLowerer.lower(
+        *recursionSnapshot.program(), *recursionSnapshot.symbolTable());
+    if (!recursionModule || !recursionLowerer.errors().empty())
+        return fail("finite static recursion fixture did not lower");
+    moon::FunctionDecl* recursionMain = nullptr;
+    moon::FragmentDecl* recursionFragment = nullptr;
+    moon::SlotDecl* recursionSlot = nullptr;
+    for (auto& declaration : recursionModule->declarations) {
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(declaration.get());
+            function && function->name == "main")
+            recursionMain = function;
+        if (auto* fragment = dynamic_cast<moon::FragmentDecl*>(declaration.get()))
+            recursionFragment = fragment;
+        if (auto* slot = dynamic_cast<moon::SlotDecl*>(declaration.get()))
+            recursionSlot = slot;
+    }
+    if (!recursionMain || !recursionFragment || !recursionSlot)
+        return fail("static recursion fixture lost its declarations");
+    auto forgedInvocation = std::make_unique<moon::SlotInvokeStmt>();
+    forgedInvocation->name = recursionSlot->name;
+    forgedInvocation->slotRef = recursionFragment->targetSlot;
+    forgedInvocation->structuralType = recursionSlot->structuralType;
+    forgedInvocation->continuation = std::make_unique<moon::BlockStmt>();
+    recursionFragment->body->stmts.insert(
+        recursionFragment->body->stmts.begin(), std::move(forgedInvocation));
+    moon::ControlFlowBuilder recursionBuilder;
+    auto recursiveCfg = recursionBuilder.build(
+        *recursionMain->body, recursionMain->params,
+        moon::RegionKind::Function, *recursionModule);
+    if (recursiveCfg || !std::any_of(
+            recursionBuilder.errors().begin(), recursionBuilder.errors().end(),
+            [](const std::string& error) {
+                return error.find("recursive static fragment composition") !=
+                    std::string::npos;
+            }))
+        return fail("CFG construction accepted forged recursive static composition");
+
+    auto overrideSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        R"luna(
+package canonical.nested_override;
+slot hook();
+fragment replacement() for hook { resume; print(2); }
+fragment wrapper() for hook {
+    apply replacement { hook() { print(1); } }
+    resume;
+}
+fn main() -> i32 {
+    apply wrapper { hook() {} }
+    return 0;
+}
+)luna", "<canonical-nested-override>");
+    if (!overrideSnapshot.success())
+        return fail("frontend rejected finite nested Fragment override");
+    moon::LunaLowerer overrideLowerer;
+    auto overrideModule = overrideLowerer.lower(
+        *overrideSnapshot.program(), *overrideSnapshot.symbolTable());
+    if (!overrideModule || !overrideLowerer.errors().empty())
+        return fail("finite nested Fragment override did not lower");
+    moon::FunctionDecl* nestedMain = nullptr;
+    for (auto& declaration : overrideModule->declarations) {
+        auto* function = dynamic_cast<moon::FunctionDecl*>(declaration.get());
+        if (function && function->name == "main") nestedMain = function;
+    }
+    if (!nestedMain || !nestedMain->body)
+        return fail("nested Fragment override lost main");
+    moon::ControlFlowBuilder nestedBuilder;
+    auto nestedCfg = nestedBuilder.build(
+        *nestedMain->body, nestedMain->params,
+        moon::RegionKind::Function, *overrideModule);
+    if (!nestedCfg || !cfgVerifier.verify(*nestedCfg, *overrideModule))
+        return fail("valid nested Fragment entry failed CFG verification");
+    const auto enclosingFragment = [&](moon::RegionId start)
+        -> const moon::RegionRecord* {
+        for (const auto* region = nestedCfg->findRegion(start); region;
+             region = nestedCfg->findRegion(region->parent))
+            if (region->kind == moon::RegionKind::Fragment) return region;
+        return nullptr;
+    };
+    bool checkedNestedEntry = false;
+    for (auto& block : nestedCfg->blocks) {
+        if (block.terminator.kind != moon::TerminatorKind::Jump) continue;
+        const auto* sourceFragment = enclosingFragment(block.region);
+        const auto* target = nestedCfg->findBlock(block.terminator.primary.target);
+        const auto* targetFragment = target
+            ? enclosingFragment(target->region) : nullptr;
+        if (!sourceFragment || !targetFragment ||
+            sourceFragment->id == targetFragment->id ||
+            enclosingFragment(targetFragment->parent) != sourceFragment ||
+            target->id != targetFragment->entry) continue;
+        const auto nonEntry = std::find_if(
+            nestedCfg->blocks.begin(), nestedCfg->blocks.end(),
+            [&](const moon::BasicBlock& candidate) {
+                return candidate.region == targetFragment->id &&
+                    candidate.id != targetFragment->entry;
+            });
+        if (nonEntry == nestedCfg->blocks.end())
+            return fail("nested Fragment fixture has no non-entry block");
+        const auto savedTarget = block.terminator.primary.target;
+        block.terminator.primary.target = nonEntry->id;
+        if (cfgVerifier.verify(*nestedCfg, *overrideModule) ||
+            !std::any_of(cfgVerifier.errors().begin(), cfgVerifier.errors().end(),
+                [](const diagnostic::Diagnostic& error) {
+                    return error.message.find("jump escapes a fragment through a non-exit edge") !=
+                        std::string::npos;
+                }))
+            return fail("CFG verification allowed a jump into a nested Fragment non-entry");
+        block.terminator.primary.target = savedTarget;
+        checkedNestedEntry = true;
+        break;
+    }
+    if (!checkedNestedEntry || !cfgVerifier.verify(*nestedCfg, *overrideModule))
+        return fail("nested Fragment entry guard did not recover after restoration");
+
     const std::string loweredCompositionSource = R"luna(
 package canonical.integration;
 

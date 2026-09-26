@@ -76,6 +76,16 @@ apply measured[7] {
 静态组合可以内联，不携带 Runtime descriptor 或 dispatch 成本。已确认 runtime 计划会把
 同一 operand 位置扩展为已验证的 `RuntimeFragmentRef<S>`，而不是增加 `dynamic apply`。
 
+静态组合必须展开成有限 CFG。Fragment body 直接或相互调用 Slot，且 active binding
+会重新进入该 Fragment 时，语义分析与 CFG builder 都会拒绝。这是构造期的环检查，
+不是禁止在 base continuation 内再次调用同一 Slot。续体嵌套仍合法，内层 `apply`
+使用自己的词法绑定。
+
+Runtime dispatch 也为每次调用创建独立的 single-shot activation。base continuation
+可使用同一 pinned execution context 再次分派同一 Slot；内层正常完成后，外层
+activation 继续执行，内层续体逃逸则跳过内外两条 chain 的 post-resume 代码。
+这不意味着任意 Fragment handler body 的递归分派已经冻结为稳定语言保证。
+
 ## 公开候选
 
 `export slot` 发布稳定的注入契约。目标指向 exported Slot 的 `export fragment` 是该确切

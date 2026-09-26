@@ -66,6 +66,7 @@ private:
         // slot continuation retains their lifetime but must resolve names
         // only in the invoking lexical environment.
         size_t outerBindingDepth = 0;
+        DeclarationRef fragment;
     };
 
     struct IteratorRecipeStep {

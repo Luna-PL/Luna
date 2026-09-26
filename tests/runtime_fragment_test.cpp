@@ -107,6 +107,32 @@ int32_t recordEscapingChainBase(void* context) {
     return LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1;
 }
 
+struct NestedDispatchProbe {
+    const void* executionContext;
+    const luna::runtime::RuntimeSlotRequirement* slot;
+    const luna::runtime::RuntimeFragmentArguments* arguments;
+    std::vector<int>* trace;
+    bool entered = false;
+    bool escapeInner = false;
+    int32_t nestedStatus = LUNA_RUNTIME_FRAGMENT_DISPATCH_INVALID_CONTEXT_V1;
+};
+
+int32_t nestedChainBase(void* context) {
+    auto& probe = *static_cast<NestedDispatchProbe*>(context);
+    probe.trace->push_back(0);
+    if (probe.entered)
+        return probe.escapeInner
+            ? LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1
+            : LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1;
+    probe.entered = true;
+    probe.nestedStatus = luna_runtime_fragment_dispatch_v1(
+        probe.executionContext, probe.slot->slotId.c_str(),
+        probe.slot->contractId.c_str(), probe.arguments->layoutId.c_str(),
+        probe.arguments->size, probe.arguments->alignment,
+        probe.arguments->data, nestedChainBase, &probe);
+    return probe.nestedStatus;
+}
+
 using Runtime = luna::runtime::MoonRuntime;
 
 bool stageFragment(
@@ -640,6 +666,41 @@ int main() {
                 LUNA_RUNTIME_FRAGMENT_DISPATCH_CONTINUATION_ESCAPED_V1 ||
             trace != std::vector<int>({1, 2, 0}))
             return fail("C dispatch ABI lost the continuation escape result");
+
+        // The same selected chain can be invoked from its base continuation.
+        // Each dispatch owns fresh consumed bits; the outer activation remains
+        // suspended and resumes normally after the nested invocation completes.
+        trace.clear();
+        NestedDispatchProbe nested{
+            chainContext.opaque(), &slot, &dispatchArguments, &trace};
+        activeChainTrace = &trace;
+        const int32_t nestedStatus = luna_runtime_fragment_dispatch_v1(
+            chainContext.opaque(), slot.slotId.c_str(),
+            slot.contractId.c_str(), dispatchArguments.layoutId.c_str(),
+            dispatchArguments.size, dispatchArguments.alignment,
+            dispatchArguments.data, nestedChainBase, &nested);
+        activeChainTrace = nullptr;
+        if (nestedStatus != LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1 ||
+            nested.nestedStatus != LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1 ||
+            trace != std::vector<int>({1, 2, 0, 1, 2, 0, 3, 4, 3, 4}))
+            return fail("nested same-Slot dispatch shared single-shot activation state");
+
+        trace.clear();
+        nested.entered = false;
+        nested.escapeInner = true;
+        activeChainTrace = &trace;
+        const int32_t nestedEscapeStatus = luna_runtime_fragment_dispatch_v1(
+            chainContext.opaque(), slot.slotId.c_str(),
+            slot.contractId.c_str(), dispatchArguments.layoutId.c_str(),
+            dispatchArguments.size, dispatchArguments.alignment,
+            dispatchArguments.data, nestedChainBase, &nested);
+        activeChainTrace = nullptr;
+        if (nestedEscapeStatus !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_CONTINUATION_ESCAPED_V1 ||
+            nested.nestedStatus !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_CONTINUATION_ESCAPED_V1 ||
+            trace != std::vector<int>({1, 2, 0, 1, 2, 0}))
+            return fail("nested same-Slot escape resumed outer post-resume code");
 
         luna::runtime::RuntimeFragmentRef localRef;
         if (!luna::runtime::makeOwnedRuntimeFragmentRef(

@@ -176,6 +176,14 @@ void ControlAnalyzer::analyzeFragmentForSlot(
         return;
     }
 
+    if (std::find(mAnalyzingFragments.begin(), mAnalyzingFragments.end(),
+                  fragment) != mAnalyzingFragments.end()) {
+        mContext.error("recursive static fragment composition re-enters '" +
+            fragment->name + "'", fragment->line, fragment->col);
+        return;
+    }
+    mAnalyzingFragments.push_back(fragment);
+
     ControlContextAccess::SlotInfo context;
     context.name = slotName;
     context.paramTypes = parameterTypes;
@@ -309,6 +317,7 @@ void ControlAnalyzer::analyzeFragmentForSlot(
 
     mContext.mCurrentFragmentSlot = savedSlot;
     mContext.mCurrentFragmentDecl = savedFragment;
+    mAnalyzingFragments.pop_back();
 }
 
 void ControlAnalyzer::enterSlotScope() {

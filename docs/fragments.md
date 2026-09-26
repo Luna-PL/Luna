@@ -86,6 +86,20 @@ Static composition can be inlined and carries no Runtime descriptor or dispatch
 cost. The confirmed runtime plan extends the same operand position to a verified
 `RuntimeFragmentRef<S>` rather than adding `dynamic apply`.
 
+Static composition must expand to a finite CFG. A Fragment body that directly
+or mutually invokes Slots whose active bindings re-enter that Fragment is
+rejected, both during semantic analysis and by the CFG builder. This is a
+construction-time cycle check, not a ban on invoking the same Slot inside its
+base continuation. Continuation nesting remains valid, and an inner `apply`
+uses its own lexical binding.
+
+Runtime dispatch likewise creates fresh single-shot activations for each
+invocation. A base continuation may dispatch the same Slot using the same
+pinned execution context; nested completion preserves the outer activation,
+while nested continuation escape bypasses post-resume code in both chains.
+This does not freeze arbitrary recursive dispatch from a Fragment handler body
+as a stable language guarantee.
+
 ## Public candidates
 
 `export slot` publishes a stable injection contract. An `export fragment`

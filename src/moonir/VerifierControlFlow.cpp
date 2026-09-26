@@ -632,12 +632,23 @@ void Verifier::verifyControlFlowBlocks(
                             block.region, RegionKind::Fragment);
                         const auto* targetFragment = enclosingRegion(
                             target->region, RegionKind::Fragment);
+                        const auto* parentFragment = targetFragment
+                            ? enclosingRegion(targetFragment->parent,
+                                              RegionKind::Fragment)
+                            : nullptr;
+                        // Static Slot composition enters a nested Fragment,
+                        // but must not bypass its parameter-initializing entry.
+                        const bool entersNestedFragment = sourceFragment &&
+                            targetFragment && parentFragment &&
+                            parentFragment->id == sourceFragment->id &&
+                            target->id == targetFragment->entry;
                         if (sourceFragment && targetContinuation) {
                             error(block.terminator.location,
                                   "ordinary jump may not enter a fragment continuation");
                         } else if (sourceFragment &&
                                    (!targetFragment ||
                                     targetFragment->id != sourceFragment->id) &&
+                                   !entersNestedFragment &&
                                    (sourceFragment->exit.empty() ||
                                     target->id != sourceFragment->exit)) {
                             error(block.terminator.location,

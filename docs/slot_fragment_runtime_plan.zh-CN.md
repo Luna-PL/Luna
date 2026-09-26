@@ -251,6 +251,18 @@ switch/case binding，都会在 callback 报告逃逸前执行。continuation �
 结构门禁要求每个动态 Slot site 只生成一次 dispatch call，静态组合
 不携带 Runtime 选择机制。
 
+### 静态环防护与续体嵌套
+
+截至 2026-09-26，Sema 与 CFG builder 独立拒绝直接或相互递归的静态 Fragment 展开，
+避免无限递归。回归覆盖源码诊断，以及在语义分析后注入递归 MoonIR body 的情况。
+base continuation 中有限的同 Slot 嵌套仍合法，包括词法绑定 override。CFG verifier
+仅允许从外层 Fragment 进入直接嵌套 Fragment 的已记录入口块，伪造跳转到内层
+非入口块仍会被拒绝。Runtime C ABI
+测试用同一 pinned context 和已选 chain 嵌套分派同一 Slot，核对独立 single-shot
+activation 状态，并验证内层续体逃逸能穿过内外两条 chain。任意 handler body 的
+runtime 递归仍不属于已冻结的 `TBD-SF008` 保证；这些检查不引入 runtime 深度限制，
+也不替宿主选择自动抑制策略。
+
 ### 可复现的运行时成本探针
 
 `runtime-fragment-benchmark` 是显式构建的微基准，不参加默认构建或计时型 CI 门禁：

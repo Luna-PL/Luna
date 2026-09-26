@@ -469,6 +469,15 @@ ControlFlowBuilder::lowerSlotInvoke(
     }
 
     const DeclarationRef fragmentReference = activeBinding.fragment;
+    if (std::any_of(mFragmentFrames.begin(), mFragmentFrames.end(),
+            [&](const FragmentFrame& frame) {
+                return frame.fragment.symbol == fragmentReference.symbol &&
+                    frame.fragment.contract == fragmentReference.contract;
+            })) {
+        error(statement->location,
+              "recursive static fragment composition re-enters its active Fragment");
+        return std::nullopt;
+    }
     const FragmentDecl* fragment = resolveFragment(fragmentReference);
     if (!fragment) {
         error(statement->location,
@@ -549,7 +558,8 @@ ControlFlowBuilder::lowerSlotInvoke(
         mBindings.back()[parameter.name] = local;
     }
     mFragmentFrames.push_back({
-        invocationExit, statement->continuation.get(), outerBindingDepth});
+        invocationExit, statement->continuation.get(), outerBindingDepth,
+        fragmentReference});
     std::optional<OpenBlock> fragmentOpen = OpenBlock{fragmentEntry, {}};
     for (auto& binding : parameterBindings) {
         if (!fragmentOpen) break;

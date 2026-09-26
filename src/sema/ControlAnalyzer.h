@@ -2,6 +2,8 @@
 
 #include "SemanticContextAccess.h"
 
+#include <vector>
+
 class ControlAnalyzer final : public ControlAnalysis {
 public:
     explicit ControlAnalyzer(ControlContextAccess context)
@@ -24,4 +26,6 @@ public:
 
 private:
     ControlContextAccess mContext;
+    // Tracks construction-time body expansion, not runtime activations.
+    std::vector<FragmentDecl*> mAnalyzingFragments;
 };

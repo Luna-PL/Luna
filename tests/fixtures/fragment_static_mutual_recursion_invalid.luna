@@ -1,0 +1,21 @@
+slot left();
+slot right();
+
+fragment first() for left {
+    right() {}
+    resume;
+}
+
+fragment second() for right {
+    left() {}
+    resume;
+}
+
+fn main() -> i32 {
+    apply first {
+        apply second {
+            left() {}
+        }
+    }
+    return 0;
+}
