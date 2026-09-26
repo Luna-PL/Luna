@@ -154,6 +154,70 @@ fn main() -> i32 {
     if (!checkedNestedEntry || !cfgVerifier.verify(*nestedCfg, *overrideModule))
         return fail("nested Fragment entry guard did not recover after restoration");
 
+    // Publication must validate the helper's recomputed effect rather than
+    // its claimed summary. Static-only handlers and private composition are
+    // not subject to the context-free public execute wrapper limitation.
+    for (const char* fixture : {
+             "exported_fragment_dynamic_body_invalid.luna",
+             "exported_fragment_dynamic_call_invalid.luna",
+             "exported_fragment_static_body.luna",
+             "fragment_static_dynamic_body.luna"}) {
+        const auto path = std::filesystem::path(LUNA_TEST_SOURCE_DIR) /
+            "tests" / "fixtures" / fixture;
+        std::ifstream input(path, std::ios::binary);
+        std::ostringstream source;
+        source << input.rdbuf();
+        if (!input || source.str().empty())
+            return fail("could not read Fragment handler context fixture");
+        auto snapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+            source.str(), path.generic_string());
+        if (!snapshot.success())
+            return fail("Fragment handler context fixture failed source analysis");
+        moon::LunaLowerer lowerer;
+        auto handlerModule = lowerer.lower(
+            *snapshot.program(), *snapshot.symbolTable());
+        moon::Sealer sealer;
+        if (!handlerModule || !lowerer.errors().empty() ||
+            !sealer.sealFunctionBodies(*handlerModule))
+            return fail("Fragment handler context fixture failed CFG construction");
+        const bool rejectedCandidate =
+            std::string(fixture).find("_invalid") != std::string::npos;
+        const auto hasContextDiagnostic = [&]() {
+            return std::any_of(verifier.errors().begin(), verifier.errors().end(),
+                [](const diagnostic::Diagnostic& diagnostic) {
+                    return diagnostic.message.find(
+                        "cannot pass an execution context to its handler body") !=
+                        std::string::npos;
+                });
+        };
+        if (verifier.verify(*handlerModule) == rejectedCandidate ||
+            (rejectedCandidate && !hasContextDiagnostic()))
+            return fail("Fragment publication did not enforce its execution context ABI");
+        if (rejectedCandidate) {
+            moon::FunctionDecl* helper = nullptr;
+            for (const auto& record : handlerModule->declarationTable) {
+                if (record.kind != moon::DeclarationKind::Fragment ||
+                    record.sourceName != "candidate") continue;
+                for (auto& declaration : handlerModule->declarations) {
+                    auto* function = dynamic_cast<moon::FunctionDecl*>(declaration.get());
+                    if (function && function->symbolId == record.runtimeEntry.symbol &&
+                        function->contractId == record.runtimeEntry.contract)
+                        helper = function;
+                }
+            }
+            if (!helper || !helper->requiresFragmentContext)
+                return fail("published handler lost its transitive context effect");
+            helper->requiresFragmentContext = false;
+            if (verifier.verify(*handlerModule) || !hasContextDiagnostic())
+                return fail("forged helper summary bypassed the Fragment execution ABI check");
+            helper->requiresFragmentContext = true;
+        } else {
+            CodeGenerator codegen("canonical-fragment-handler-context");
+            if (!codegen.generate(handlerModule.get()))
+                return fail("context-free publication or private context inheritance failed codegen");
+        }
+    }
+
     const std::string loweredCompositionSource = R"luna(
 package canonical.integration;
 

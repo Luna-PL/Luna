@@ -1,0 +1,12 @@
+export slot hook();
+export slot nested_hook();
+
+fn touch() { nested_hook() {} }
+fn forward() { touch(); }
+
+export fragment candidate() for hook {
+    forward();
+    resume;
+}
+
+fn main() -> i32 { return 0; }

@@ -869,6 +869,11 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/ffi_unsupported_type_invalid.luna`
 - `tests/fixtures/fragment_contracts.luna`
 - `tests/fixtures/fragment_nested_continuation.luna`
+- `tests/fixtures/exported_fragment_dynamic_body_invalid.luna`
+- `tests/fixtures/exported_fragment_dynamic_call_invalid.luna`
+- `tests/fixtures/exported_fragment_unused_body_invalid.luna`
+- `tests/fixtures/exported_fragment_static_body.luna`
+- `tests/fixtures/fragment_static_dynamic_body.luna`
 - `tests/fixtures/fragment_static_mutual_recursion_invalid.luna`
 - `tests/fixtures/fragment_static_recursion_invalid.luna`
 - `tests/fixtures/fragment_environment_arity_invalid.luna`

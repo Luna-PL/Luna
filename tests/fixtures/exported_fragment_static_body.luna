@@ -1,0 +1,29 @@
+export slot hook();
+export slot nested_hook();
+slot private_hook();
+
+fragment passthrough() for nested_hook { resume; }
+
+export fragment candidate() for hook {
+    apply passthrough {
+        nested_hook() { print(41); }
+    }
+    resume;
+}
+
+export fragment unused() for hook {
+    apply passthrough { nested_hook() { print(40); } }
+    resume;
+}
+
+export fragment erased() for hook {
+    let marker = 43;
+    private_hook() { print(marker); }
+    resume;
+}
+
+fn main() -> i32 {
+    apply candidate { hook() { print(42); } }
+    apply erased { hook() { print(44); } }
+    return 0;
+}

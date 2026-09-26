@@ -86,6 +86,15 @@ Runtime dispatch 也为每次调用创建独立的 single-shot activation。base
 activation 继续执行，内层续体逃逸则跳过内外两条 chain 的 post-resume 代码。
 这不意味着任意 Fragment handler body 的递归分派已经冻结为稳定语言保证。
 
+当前公开 Fragment execute ABI 只传入环境与 opaque activation，不传 execution context。
+因此 exported handler 的生成入口直接或经普通函数调用触达未绑定 exported Slot 时，
+`luna check` 会在 LLVM 生成或产物发射前拒绝。verifier 独立重算 effect，伪造 helper
+summary 不能绕过检查。exported body 即使未被本包 `apply` 使用，也会进行语义分析。
+这项 ABI 限制不是禁止 handler 调用所有 Slot：静态绑定的调用与未绑定 private Slot
+会消除动态依赖。未绑定 private Slot 的 body 降为普通词法块，可以访问发起调用的
+handler 的局部变量。私有静态组合仍可继承受影响调用者的 execution context。
+这些检查不增加关键字，也不引入 runtime 递归策略。
+
 ## 公开候选
 
 `export slot` 发布稳定的注入契约。目标指向 exported Slot 的 `export fragment` 是该确切

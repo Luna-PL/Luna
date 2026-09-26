@@ -342,6 +342,22 @@ continuation escape through both chains. Arbitrary handler-body runtime
 recursion is still outside the frozen `TBD-SF008` guarantee; these checks do not
 introduce a runtime depth limit or automatic suppression policy.
 
+### Published handler execution boundary
+
+The published-handler boundary is checked independently of local use: exported
+Fragment bodies receive semantic analysis even when no local `apply` exists.
+After sealing, the verifier uses its recomputed direct-call fixed point to
+reject any Fragment runtime entry requiring an execution context, because the
+v1 public execute wrapper cannot pass that capability. Direct and transitive
+handler dependencies are rejected by `luna check` before codegen; a forged
+context-free helper summary cannot bypass the check. Statically bound exported
+Slots, erased private Slots, and private static Fragment composition remain
+valid. Erased private Slot bodies use lexical regions, not suspended
+continuation regions, so they can execute inside a handler and access its
+locals without weakening the real Fragment continuation boundary. Runtime
+handler context propagation and its re-entry policy still require an explicit
+ABI/design decision; no new implicit context source is added.
+
 ### Reproducible runtime cost probe
 
 `runtime-fragment-benchmark` is an explicitly built microbenchmark, not part of

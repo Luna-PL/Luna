@@ -1,0 +1,9 @@
+export slot hook();
+export slot nested_hook();
+
+export fragment candidate() for hook {
+    nested_hook() {}
+    resume;
+}
+
+fn main() -> i32 { return 0; }

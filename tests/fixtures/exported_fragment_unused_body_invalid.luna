@@ -1,0 +1,8 @@
+export slot hook();
+
+export fragment candidate() for hook {
+    missing_handler_function();
+    resume;
+}
+
+fn main() -> i32 { return 0; }

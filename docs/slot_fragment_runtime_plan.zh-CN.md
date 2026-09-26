@@ -263,6 +263,18 @@ activation 状态，并验证内层续体逃逸能穿过内外两条 chain。任
 runtime 递归仍不属于已冻结的 `TBD-SF008` 保证；这些检查不引入 runtime 深度限制，
 也不替宿主选择自动抑制策略。
 
+### 发布 handler 的执行边界
+
+发布 handler 的边界现在独立于本包使用情况进行检查：exported Fragment body 即使
+没有本地 `apply`，也必须通过语义分析。封存后 verifier 依据独立重算的 direct-call
+最小不动点，拒绝需要 execution context 的 Fragment runtime entry，因为 v1 的公开
+execute wrapper 无法传递该 capability。直接与传递依赖均由 `luna check` 在 codegen
+前拒绝；伪造 helper 的 context-free summary 不能绕过检查。静态绑定的 exported Slot、
+擦除的 private Slot 以及私有静态 Fragment 组合仍合法。擦除的 private Slot body 使用
+词法 region，而不是 suspended continuation region，因此可在 handler 内执行并访问
+其局部变量，不需要放宽真实 Fragment continuation 的边界。Runtime handler context
+传递及其重入策略仍需明确的 ABI／设计决定；没有新增隐式 context 来源。
+
 ### 可复现的运行时成本探针
 
 `runtime-fragment-benchmark` 是显式构建的微基准，不参加默认构建或计时型 CI 门禁：

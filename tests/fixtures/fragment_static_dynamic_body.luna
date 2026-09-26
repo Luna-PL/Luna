@@ -1,0 +1,13 @@
+export slot hook();
+export slot nested_hook();
+
+fragment candidate() for hook {
+    nested_hook() {}
+    resume;
+}
+
+runtime fn entry() {
+    apply candidate { hook() {} }
+}
+
+fn main() -> i32 { return 0; }

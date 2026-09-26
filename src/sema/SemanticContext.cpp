@@ -287,6 +287,17 @@ bool SemanticContext::analyze(Program* program) {
         setDeclarationContext(decl.get());
         setDiagnosticLocation(decl.get());
         if (auto* f = dynamic_cast<FunctionDecl*>(decl.get())) analyzeFunction(f);
+        else if (auto* fragment = dynamic_cast<FragmentDecl*>(decl.get());
+                 fragment && fragment->isExported) {
+            // Publication materializes an executable helper even when no
+            // source-level apply uses this Fragment in the publishing package.
+            const auto target = mSlotScopes.front().find(
+                sourceDeclarationKey(fragment->targetSlotName));
+            if (target != mSlotScopes.front().end())
+                analyzeFragmentForSlot(
+                    fragment, fragment->targetSlotName,
+                    target->second.paramTypes, target->second.paramContracts);
+        }
         else if (auto* s = dynamic_cast<StructDecl*>(decl.get())) analyzeStruct(s);
         else if (auto* e = dynamic_cast<EnumDecl*>(decl.get())) analyzeEnum(e);
         else if (auto* m = dynamic_cast<MetaDecl*>(decl.get())) analyzeMeta(m);

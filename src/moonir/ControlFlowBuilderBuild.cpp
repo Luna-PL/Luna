@@ -399,9 +399,12 @@ ControlFlowBuilder::lowerSlotInvoke(
 
     const auto buildUnmodifiedContinuation = [&]()
         -> std::optional<OpenBlock> {
+        // An unbound private Slot is identity, not a suspended Fragment
+        // continuation. Its erased body keeps the caller's lexical scope,
+        // including when the caller is itself a Fragment handler.
         auto continuation = lowerNestedBlock(
             std::move(statement->continuation), region, scope,
-            RegionKind::Continuation);
+            RegionKind::Lexical);
         connectJump(current, continuation.entry);
         if (!continuation.exit) return std::nullopt;
         const BlockId exit = addBlock(

@@ -681,6 +681,20 @@ bool Verifier::verify(const Module& module) {
     }
 
     const auto fragmentContextEffects = computeFragmentContextEffects(module);
+    for (const auto& record : module.declarationTable) {
+        if (record.kind != DeclarationKind::Fragment ||
+            !record.runtimeEntry.complete()) continue;
+        const auto found = fragmentContextEffects.find(
+            fragmentContextEffectKey(record.runtimeEntry));
+        // The v1 execute wrapper receives environment plus activation, not
+        // an execution context. Never trust a forged helper effect summary
+        // to make a context-dependent candidate appear executable under v1.
+        if (found != fragmentContextEffects.end() && found->second)
+            error(record.location,
+                  "exported fragment '" + record.sourceName +
+                  "' reaches a runtime Slot, but the current Fragment execution ABI "
+                  "cannot pass an execution context to its handler body");
+    }
     const auto verifyFragmentContextEffect = [&](const FunctionDecl* function) {
         if (!function) return;
         const DeclarationRef reference{

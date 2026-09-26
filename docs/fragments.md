@@ -100,6 +100,19 @@ while nested continuation escape bypasses post-resume code in both chains.
 This does not freeze arbitrary recursive dispatch from a Fragment handler body
 as a stable language guarantee.
 
+The current public Fragment execute ABI passes an environment and an opaque
+activation, but no execution context. An exported handler whose generated entry
+reaches an unbound exported Slot, directly or through ordinary function calls,
+is therefore rejected by `luna check` before LLVM generation or artifact
+emission. The verifier recomputes this effect; a forged helper summary cannot
+bypass the check. An exported body is analyzed even without a local `apply`.
+This ABI restriction does not ban all Slot calls in handlers: statically bound
+calls and unbound private Slots erase the dynamic dependency. An unbound
+private Slot body becomes an ordinary lexical block and may access its
+invoking handler's locals. Private static composition may inherit an affected
+caller's execution context. No new keyword or runtime recursion policy is
+introduced by these checks.
+
 ## Public candidates
 
 `export slot` publishes a stable injection contract. An `export fragment`
