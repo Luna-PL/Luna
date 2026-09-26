@@ -298,7 +298,10 @@ set(timeout_input_path "${CMAKE_CURRENT_BINARY_DIR}/repl-timeout-input.txt")
 file(WRITE "${timeout_input_path}"
     "while true {}\n= 7\n= 2147483647\n= -2147483647 - 1\n:quit\n")
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" repl --timeout 1 --memory-limit 256 --no-prompt
+    # This case measures timeout recovery, not the minimum memory budget.
+    # LLVM JIT virtual-memory headroom varies on macOS runners; the separate
+    # memory-limit case below still exercises the explicit 256 MiB ceiling.
+    COMMAND "${LUNA_EXECUTABLE}" repl --timeout 1 --no-prompt
     INPUT_FILE "${timeout_input_path}"
     RESULT_VARIABLE timeout_result
     OUTPUT_VARIABLE timeout_output
