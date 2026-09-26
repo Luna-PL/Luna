@@ -267,7 +267,17 @@ Fragment 指向依赖包 Slot 时，均使用该 Slot 的确切声明身份，�
 所属完整包与插件包，加载为不同的 JIT generation，
 从插件选取该 Slot 的候选，并通过不同返回值区分选中 dispatch 与未绑定续体。runtime 销毁后
 execution context 仍固定插件 generation；释放 context 后 generation 随之释放。宿主包中未被本包
-`select` 调用的 exported 编译期 selector 现于声明阶段分类，并从 MoonIR 擦除。当前 lowering
+`select` 调用的 exported 编译期 selector 现于声明阶段分类，并从 MoonIR 擦除。
+另有 verified container 回归覆盖本包公开 Slot：codec 保留 declaration／contract／export
+行，但不重建前端 `SlotDecl` 对象。验证器在缺少该临时对象时接受本包确切 Slot export；
+对象仍存在时继续核对其公开标志。缺失、错误 kind／contract 的公开行与外包 import／
+re-export 冒充仍被拒绝。完整 encode／decode／load 测试覆盖生成的 Copy factory、None／
+One、resume／discard、capture 回写及 return 逃逸，且在 Runtime 销毁后继续执行。
+上述跨包源码到 JIT 测试**不证明**对应的 verified container 路径：依赖 Slot 的公开事实
+仍需要持久化、可独立验证的表示。解码后的外包 runtime Slot target 当前 fail closed。
+真实跨包 artifact 工作负载成为端到端性能证据前，必须先补齐此缺口。本次本包修复
+不改变容器 wire format 或 runtime ABI。
+当前 lowering
 会打包冻结的 Slot 参数 record，并通过一个同步栈
 frame 调用 `luna_runtime_fragment_dispatch_v1`；frame 携带 execution context、return storage 和
 指向 live capture 的指针。callback 把 capture 暂存进 typed local、执行 outlined blocks、

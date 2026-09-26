@@ -23,6 +23,7 @@
 | 引用清理回调 | `reset` 在 owned destroy／borrowed lease 释放前摘走旧状态，保留其 generation 直到这些操作完成。嵌套 reset 看到空引用；同步重新绑定仍存活的引用会保留。移动赋值先安装 incoming 状态，再清理旧状态，不覆盖回调修改。Owned 环境仅销毁一次；引用持有的 borrowed lease 先于其 module pin 释放。 | `luna.runtime-fragment-v1` |
 | Single-shot 失败传播 | 有效 activation 的 resume 失败会保持失败；忽略重复 resume 的错误不能使它所属的 One／chain 分派伪装为成功，续体仍最多执行一次。下游失败向外传播且保留其诊断，同一 context 的新调用不受旧失败影响。 | `luna.runtime-fragment-v1` |
 | Runtime 同 Slot 续体嵌套 | 即使使用同一 pinned context 与已选 chain，每次 dispatch 仍创建独立 single-shot activation；被继续传播的内层续体逃逸会跳过暂停的外层 chain 的 post-resume 代码。 | `luna.runtime-fragment-v1` |
+| Verified container 的本包 Slot publication | 解码保留 canonical Slot／contract 与 export 行，而非前端 Slot 对象。本包确切 Slot export 可通过 verified generation adapter 分派；缺失、错误 kind／contract 的 export，以及外包 import／re-export 冒充均被拒绝。生成的 Copy 环境 factory、None／One、resume／discard、capture 回写与续体 return 逃逸在 Runtime 销毁后仍可执行。 | `luna.moonir-canonical` |
 | 嵌套局部 override／None | 明确传入的内层 context 只在自身替换或移除目标 Slot 的 chain，不修改暂停的外层 chain；None 仍传播续体逃逸。 | `luna.runtime-fragment-v1` |
 | Runtime 参数与环境地址 | Slot 参数的实际地址必须满足声明的对齐；空载体固定为 size 0、alignment 1、null data。None 与 One 都在执行回调前拒绝非法载体，借用及工厂返回的环境也必须实际对齐。被拒绝的非空工厂产物销毁一次。 | `luna.runtime-fragment-v1` |
 | Runtime 身份表示 | C++ module、symbol、contract、Slot 与参数 layout ID 不允许内嵌 NUL。Generation staging 在初始化前拒绝它；发现、activation、None／One 分派与局部 override 拒绝歧义键，不会静默截断成另一个 C ABI 身份。 | `luna.moon-runtime`、`luna.runtime-fragment-v1` |
@@ -69,6 +70,9 @@ pointer，也不允许在没有同步的情况下并发修改同一个 C++ 句�
 
 带 context 的间接调用及非 Copy 的 exported 契约仍不在有界首版 ABI 内。本文不扩大
 2026-09-15 的核心冻结，也不关闭独立的性能、稳定性及发布授权门禁。
+跨包源码到 JIT 的证据不等于跨包 verified container 加载：依赖 Slot 的公开事实
+尚未以可独立授权解码后外包 runtime target 的形式保留。此类 target 仍被拒绝，
+不会从 dependency 行推断为公开。
 另见[运行时计划](slot_fragment_runtime_plan.zh-CN.md)和
 [发布登记](ecosystem_release.zh-CN.md)。
 

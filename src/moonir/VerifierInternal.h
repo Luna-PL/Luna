@@ -16,21 +16,29 @@ inline bool isPublicSlotTarget(
     const Module& module, const DeclarationRef& reference) {
     const auto* record = module.findDeclaration(reference);
     if (!record || record->kind != DeclarationKind::Slot) return false;
+    const auto locallyPublished = [&] {
+        return record->id.rfind(module.name + "::", 0) == 0 &&
+            std::any_of(
+                module.exports.begin(), module.exports.end(),
+                [&](const ExportRecord& exported) {
+                    return exported.kind == DeclarationKind::Slot &&
+                        exported.declaration == reference;
+                });
+    };
     const auto found = module.declarationsById.find(record->id);
-    const auto* slot = found == module.declarationsById.end()
-        ? nullptr : dynamic_cast<const SlotDecl*>(found->second);
+    // A decoded container retains canonical Slot/contract and export rows,
+    // not frontend SlotDecl objects. Only this package's exact export row can
+    // establish publication without an executable declaration. In particular,
+    // a dependency/import row alone cannot publish a foreign Slot.
+    if (found == module.declarationsById.end()) return locallyPublished();
+    const auto* slot = dynamic_cast<const SlotDecl*>(found->second);
     if (!slot || slot->symbolId != reference.symbol ||
         slot->contractId != reference.contract ||
         !slot->isExported || slot->packageId.empty() ||
         record->id.rfind(slot->packageId + "::", 0) != 0)
         return false;
     if (slot->packageId == module.name)
-        return std::any_of(
-            module.exports.begin(), module.exports.end(),
-            [&](const ExportRecord& exported) {
-                return exported.kind == DeclarationKind::Slot &&
-                    exported.declaration == reference;
-            });
+        return locallyPublished();
     // A package composite includes dependency declarations but publishes only
     // its own export table. A foreign Slot is callable dynamically only when
     // its exact executable declaration is public and the owner package is a

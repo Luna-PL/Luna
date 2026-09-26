@@ -24,6 +24,7 @@ arbitrary handler-body re-entry.
 | Reference cleanup callbacks | `reset` detaches retired state before owned destroy or borrowed-lease release and retains its generation until those operations complete. A nested reset is empty; synchronous rebind of a live reference survives. Move assignment installs incoming state before old cleanup, so callback changes are not overwritten. Owned environments are destroyed once; the reference's borrowed lease is released before its module pin. | `luna.runtime-fragment-v1` |
 | Single-shot failure propagation | A failed resume on a live activation remains failed. Ignoring a repeated-resume error cannot turn its enclosing One/chain dispatch into success; the continuation still runs at most once. Downstream failures propagate outward without overwriting their diagnostics, and a fresh invocation of the same context is unaffected. | `luna.runtime-fragment-v1` |
 | Runtime same-Slot continuation nesting | Each dispatch creates fresh single-shot activations, even with the same pinned context and selected chain. A propagated inner continuation escape bypasses post-resume code in the suspended outer chain. | `luna.runtime-fragment-v1` |
+| Verified container, local Slot publication | Decoding retains canonical Slot/contract and export rows, not frontend Slot objects. A local exact Slot export remains dispatchable through the verified generation adapter; missing/wrong-kind/wrong-contract exports and foreign import/re-export attempts are rejected. Generated Copy environment factories, None/One, resume/discard, captured writeback and continuation return escape remain executable after Runtime teardown. | `luna.moonir-canonical` |
 | Nested local override / None | An explicit inner context replaces or removes the selected Slot chain only for that context. It does not modify the suspended outer chain; None still propagates continuation escape. | `luna.runtime-fragment-v1` |
 | Runtime payload storage | Actual Slot argument addresses must satisfy their declared alignment. Empty carriers use size 0, alignment 1, and null data. None and One reject malformed carriers before callbacks; borrowed and factory-returned environments must also be aligned. Rejected non-null factory output is destroyed once. | `luna.runtime-fragment-v1` |
 | Runtime identity representation | C++ module, symbol, contract, Slot, and argument-layout IDs cannot contain embedded NUL. Generation staging rejects them before initialization; discovery, activation, None/One dispatch, and local override reject ambiguous keys rather than silently truncating them into a different C ABI identity. | `luna.moon-runtime`, `luna.runtime-fragment-v1` |
@@ -81,6 +82,10 @@ policy is introduced.
 Context-aware indirect calls and non-Copy exported contracts remain outside the
 bounded first ABI. This profile does not enlarge the 2026-09-15 core freeze or
 close the separate performance, stability, and release-authorization gates.
+Cross-package source-to-JIT evidence does not establish cross-package verified
+container loading: dependency Slot publication facts are not yet retained in a
+form that can independently authorize decoded foreign runtime targets. Those
+targets remain rejected rather than inferred public from dependency rows.
 See the [runtime plan](slot_fragment_runtime_plan.md) and
 [release register](ecosystem_release.md).
 

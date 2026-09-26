@@ -418,6 +418,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/runtime_abi_test.cpp` | Runtime ABI v1 行为与兼容性 |
 | `tests/runtime_descriptor_test.cpp` | Runtime descriptor ABI v1 验证、精确 typed lookup 与 fail-closed 边界 |
 | `tests/runtime_fragment_test.cpp` | Runtime Fragment descriptor、名义 Slot 校验、显式环境 cleanup 与 generation lease 生命周期 |
+| `tests/moonir_canonical_runtime_slot_container_test.cpp` | 真实 verified Moon Container 的本包 Slot publication、生成 Fragment factory／dispatch、None／One 与逃逸；缺失／伪造公开事实的拒绝 |
 | `tests/runtime_fragment_concurrency_test.cpp` | 显式握手的并发宿主发布／分派、Runtime 销毁后 pinned context 与最终 lease 清理；实现和测试一同插桩 |
 | `tests/runtime_fragment_benchmark.cmake` | 交错成本探针的 CSV／构建身份／独立采样顺序与精确计数检查，不用 ns/op 判定成败 |
 | `tests/runtime_gpu_error_test.cpp` | GPU/runtime 错误快照行为 |
@@ -1137,6 +1138,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/moonir_canonical_closure_test.cpp`
 - `tests/moonir_canonical_control_flow_test.cpp`
 - `tests/moonir_canonical_cross_package_runtime_test.cpp`
+- `tests/moonir_canonical_runtime_slot_container_test.cpp`
 - `tests/moonir_canonical_iterator_cleanup_test.cpp`
 - `tests/moonir_canonical_iterator_ordering_test.cpp`
 - `tests/moonir_canonical_iterator_recipes_test.cpp`

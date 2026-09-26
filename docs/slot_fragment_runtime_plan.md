@@ -348,6 +348,20 @@ the unbound continuation. The execution context keeps the plugin generation
 alive after the runtime tears down and releases it when the context is dropped.
 The host package's unused exported compiler-domain selector is classified at
 declaration time and erased from MoonIR even without a local `select` call.
+Verified container coverage now separately checks local public Slots: the codec
+retains declaration/contract/export rows but does not reconstruct frontend
+`SlotDecl` objects. The verifier therefore accepts an exact local Slot export
+without that transient object, while retaining executable-declaration checks
+when one exists. Missing, wrong-kind or wrong-contract publication rows and
+foreign import/re-export attempts remain rejected. A full encode/decode/load
+test exercises generated Copy factories, None/One, resume/discard, capture
+writeback and return escape after Runtime teardown.
+The source-to-JIT cross-package test above does **not** prove the corresponding
+verified container path: dependency Slot publication facts still need a
+persisted, independently verifiable representation. Decoded foreign runtime
+Slot targets currently fail closed. This gap must be addressed before a real
+cross-package artifact workload can serve as end-to-end performance evidence;
+this local fix changes neither the container wire format nor the runtime ABI.
 The current lowering packs the
 frozen Slot argument record and calls `luna_runtime_fragment_dispatch_v1` with
 a synchronous stack frame containing the execution context, return storage,

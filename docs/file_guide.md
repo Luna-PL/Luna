@@ -926,6 +926,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/moonir_canonical_closure_test.cpp`
 - `tests/moonir_canonical_control_flow_test.cpp`
 - `tests/moonir_canonical_cross_package_runtime_test.cpp`
+- `tests/moonir_canonical_runtime_slot_container_test.cpp`
 - `tests/moonir_canonical_iterator_cleanup_test.cpp`
 - `tests/moonir_canonical_iterator_ordering_test.cpp`
 - `tests/moonir_canonical_iterator_recipes_test.cpp`

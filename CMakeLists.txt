@@ -390,6 +390,7 @@ add_executable(moonir-canonical-test
     tests/moonir_canonical_sealing_composition_test.cpp
     tests/moonir_canonical_sealing_lowering_test.cpp
     tests/moonir_canonical_cross_package_runtime_test.cpp
+    tests/moonir_canonical_runtime_slot_container_test.cpp
     tests/moonir_canonical_sealing_symbols_test.cpp
     tests/moonir_canonical_sealing_iterators_test.cpp
     src/driver/MoonGeneration.cpp
