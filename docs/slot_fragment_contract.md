@@ -18,6 +18,7 @@ arbitrary handler-body re-entry.
 | Static same-Slot continuation nesting | Finite nesting is valid. Inner discard skips only its own continuation; an inner continuation return escapes the invoking function and skips both handlers' post-resume code. | `luna.semantic-regressions` |
 | Private unbound Slot | Identity lowers to a lexical block, including inside a handler; it does not introduce a runtime context dependency. | `luna.semantic-regressions`, `luna.moonir-canonical` |
 | Runtime ordered chain | The host's explicit order determines `resume` progression, followed by reverse-order post-resume execution. Catalog order and loading order do not choose the chain. | `luna.runtime-fragment-v1` |
+| Concurrent host publication/dispatch | Four native readers suspend live continuations across explicit None/One/chain publications; old dispatches retain their selection on completion, escape, and failure. Reader-owned copies of one context keep dispatching after Runtime destruction, with independent activations and ordered final cleanup. The implementation and harness are instrumented by the Linux TSan gate. | `luna.runtime-fragment-concurrency` |
 | In-flight snapshot lifetime | Dispatch owns its selected snapshot through complete handler unwind. A synchronous native callback may clear or replace the published C++ handle without releasing the active One/chain environments or generation; the replacement affects future calls only. Owned and borrowed environments are released before their final module lease, including escape and failure paths. | `luna.runtime-fragment-v1` |
 | Factory generation lifetime | Owned construction pins the validated generation before invoking the factory. Synchronous clearing/replacement of the source binding cannot release that generation during construction or rejected-output cleanup, nor redirect the new reference to a different binding. Success transfers the original pin to the reference; failure destroys any non-null output once before releasing the generation pin. | `luna.runtime-fragment-v1` |
 | Reference cleanup callbacks | `reset` detaches retired state before owned destroy or borrowed-lease release and retains its generation until those operations complete. A nested reset is empty; synchronous rebind of a live reference survives. Move assignment installs incoming state before old cleanup, so callback changes are not overwritten. Owned environments are destroyed once; the reference's borrowed lease is released before its module pin. | `luna.runtime-fragment-v1` |
@@ -44,6 +45,10 @@ The independent CFG/effect checks live in
 [canonical lowering tests](../tests/moonir_canonical_sealing_lowering_test.cpp);
 the explicit context/chain/override checks live in
 [runtime Fragment tests](../tests/runtime_fragment_test.cpp).
+The [concurrent host harness](../tests/runtime_fragment_concurrency_test.cpp)
+uses immutable native environments and private per-call arguments. Hosts remain
+responsible for callback/environment synchronization; this is not source-language
+thread-safety admission for arbitrary Fragment environments or Arc payloads.
 
 ## Remaining decision and release boundary
 
@@ -84,9 +89,9 @@ See the [runtime plan](slot_fragment_runtime_plan.md) and
 Build the compiler and test targets first, then run:
 
 ```sh
-ctest --test-dir build --output-on-failure -R 'luna\.(analysis-snapshot|semantic-regressions|moon-runtime|runtime-fragment-v1|moonir-canonical|moon-cost-boundaries|0\.3-design-contract)$'
+ctest --test-dir build --output-on-failure -R 'luna\.(analysis-snapshot|semantic-regressions|moon-runtime|runtime-fragment-v1|runtime-fragment-concurrency|moonir-canonical|moon-cost-boundaries|0\.3-design-contract)$'
 ```
 
-The seven gates are behavioral/structural checks, not benchmark timing thresholds.
+The eight gates are behavioral/structural checks, not benchmark timing thresholds.
 A stable-release claim still needs the full regression suite and corresponding
 cross-platform evidence for the exact proposed release commit.

@@ -118,12 +118,12 @@ jobs:
             -DLUNA_STRICT_WARNINGS=ON \
             -DLLVM_DIR=/usr/lib/llvm-22/lib/cmake/llvm
 
-      - name: Build concurrent runtime gate
+      - name: Build concurrent runtime gates
         run: >-
           cmake --build build-thread-sanitized --parallel --verbose
-          --target moon-runtime-test
+          --target moon-runtime-test runtime-fragment-concurrency-test
 
-      - name: ThreadSanitizer generation transitions
+      - name: ThreadSanitizer generation and Fragment transitions
         run: >-
           ctest --test-dir build-thread-sanitized
-          -R luna.moon-runtime --output-on-failure
+          -R 'luna\.(moon-runtime|runtime-fragment-concurrency)$' --output-on-failure

@@ -311,6 +311,15 @@ execute wrapper 无法传递该 capability。直接与传递依赖均由 `luna c
 [SF008 有界契约证据](slot_fragment_contract.zh-CN.md)集中整理上述边界，以及嵌套
 override／None、静态 discard／return 门禁；记录的是已实现行为，不是稳定版发布授权。
 
+### 并发宿主证据
+
+并发宿主证据见 `luna.runtime-fragment-concurrency`：四个 reader 在仍存活的续体中
+跨越 96 次 None／One／chain 原子发布，覆盖正常完成、逃逸、失败隔离；Runtime 销毁
+后，reader 各自持有的同一 pinned context 状态副本再分派 1024 次。独立目标在
+ASan/UBSan 或 Linux 独立 TSan 作业中同时插桩两份 Runtime 源码，不插桩 AOT archive
+或 LLVM/ORC。不可变 native 环境与逐调用参数不授予任意插件线程安全，也不新增 Luna
+跨线程 API。复现方式见[测试指南](testing.zh-CN.md)。
+
 ### 可复现的运行时成本探针
 
 `runtime-fragment-benchmark` 是显式构建的微基准，不参加默认构建或计时型 CI 门禁：

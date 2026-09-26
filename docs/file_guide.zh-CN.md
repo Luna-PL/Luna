@@ -91,7 +91,7 @@ obligation，不能重新推导所有权。
 | `README.zh-CN.md` | 中文项目入口 | 与英文入口指向同一事实来源 |
 | `LICENSE-MIT` | MIT 许可证原文 | 不加入项目说明 |
 | `LICENSE-APACHE` | Apache-2.0 许可证原文 | 不加入项目说明 |
-| `.github/workflows/linux-ci.yml` | Linux C++17/C++23、严格警告、ASan/UBSan 与独立 MoonRuntime TSan 门禁 | 不发布产物 |
+| `.github/workflows/linux-ci.yml` | Linux C++17/C++23、严格警告、ASan/UBSan 与 generation／Fragment 独立 TSan 门禁 | 不发布产物 |
 | `.github/workflows/macos-ci.yml` | macOS 稳定核心门禁 | 不声明其他 macOS 版本兼容 |
 | `.github/workflows/windows-ci.yml` | Windows MSYS2 UCRT64 门禁 | 不代表 MSVC/MSVCRT 支持 |
 | `.github/workflows/release.yml` | tag 校验、三平台预编译包、校验和及 prerelease | 不绕过平台测试直接发布 |
@@ -418,6 +418,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/runtime_abi_test.cpp` | Runtime ABI v1 行为与兼容性 |
 | `tests/runtime_descriptor_test.cpp` | Runtime descriptor ABI v1 验证、精确 typed lookup 与 fail-closed 边界 |
 | `tests/runtime_fragment_test.cpp` | Runtime Fragment descriptor、名义 Slot 校验、显式环境 cleanup 与 generation lease 生命周期 |
+| `tests/runtime_fragment_concurrency_test.cpp` | 显式握手的并发宿主发布／分派、Runtime 销毁后 pinned context 与最终 lease 清理；实现和测试一同插桩 |
 | `tests/runtime_gpu_error_test.cpp` | GPU/runtime 错误快照行为 |
 | `tests/analysis_protocol.cmake` | `luna.analysis` v1 JSONL envelope、声明记录与 byte span 回归 |
 | `tests/analysis_snapshot_test.cpp` | 内存/路径分析、部分失败状态与 frontend 生命周期回归 |
@@ -1168,6 +1169,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/runtime_abi_c_compile.c`
 - `tests/runtime_abi_test.cpp`
 - `tests/runtime_descriptor_test.cpp`
+- `tests/runtime_fragment_concurrency_test.cpp`
 - `tests/runtime_fragment_test.cpp`
 - `tests/runtime_gpu_error_test.cpp`
 - `tests/semantic_regressions.cmake`

@@ -157,6 +157,9 @@ Test scripts own assertions for exit status, diagnostics, IR, ABI, and output. F
 source inputs. semantic_regressions.cmake is the positive/negative language matrix; other
 scripts cover AOT/JIT, MoonIR, packages, Runtime, GPU, fragments, iterators, install, and
 release boundaries.
+`runtime_fragment_concurrency_test.cpp` owns the handshake-driven native Fragment
+publication/dispatch and post-Runtime pinned-context lifetime gate. Its standalone
+target compiles the Runtime sources directly for ASan/UBSan and TSan coverage.
 
 ## 7. Exact file inventory
 
@@ -956,6 +959,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/runtime_abi_c_compile.c`
 - `tests/runtime_abi_test.cpp`
 - `tests/runtime_descriptor_test.cpp`
+- `tests/runtime_fragment_concurrency_test.cpp`
 - `tests/runtime_fragment_test.cpp`
 - `tests/runtime_allocation_abi_test.cpp`
 - `tests/runtime_application_host_test.cpp`

@@ -217,21 +217,30 @@ Runtime instrumentation before and after the call remains enabled. The Native ar
 verifier/loader test is also instrumented, including proof parsing, immutable staging,
 typed-registry validation, and generation adaptation.
 
-The concurrent generation state machine has a separate ThreadSanitizer gate so
+Concurrent generation and Fragment dispatch have separate ThreadSanitizer gates so
 TSan is never combined with ASan/UBSan or applied to LLVM/ORC:
 
 ```sh
 cmake -S . -B build-thread-sanitized -G Ninja \
   -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
   -DLUNA_ENABLE_THREAD_SANITIZER=ON -DLUNA_STRICT_WARNINGS=ON
-cmake --build build-thread-sanitized --target moon-runtime-test
+cmake --build build-thread-sanitized --target moon-runtime-test runtime-fragment-concurrency-test
 TSAN_OPTIONS=halt_on_error=1:history_size=7 \
   ctest --test-dir build-thread-sanitized \
-    -R luna.moon-runtime --output-on-failure
+    -R 'luna\.(moon-runtime|runtime-fragment-concurrency)$' --output-on-failure
 ```
 
 This exercises four concurrent switchable readers across 1000 atomic generation
 transitions and fails on the first reported data race.
+The Fragment gate compiles MoonRuntime and RuntimeFragment directly into its
+instrumented target. Four readers enter live continuations before each of 96
+None/One/chain publications; explicit handshakes prove that the old dispatch
+finishes against its pinned selection, including completion, escape, and failure.
+After Runtime and host policy handles are released, reader-owned copies of one
+context perform 1024 further C++/C ABI dispatches before exactly-once environment
+and final generation cleanup. No sleeps or timing thresholds choose correctness.
+The harness uses immutable native environments and per-call argument storage;
+it does not certify arbitrary plugin callbacks or add a source-language cross-thread API.
 
 Current `luna.semantic-regressions` covers:
 

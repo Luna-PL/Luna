@@ -167,6 +167,7 @@ foreach(language IN ITEMS en zh-CN)
     file(READ "${LUNA_SOURCE_DIR}/${profile}" text)
     foreach(required IN ITEMS "${profile_marker}" "${approval_boundary}"
             "TBD-SF008" "luna.semantic-regressions" "luna.runtime-fragment-v1"
+            "luna.runtime-fragment-concurrency"
             "luna.moonir-canonical" "luna.moon-cost-boundaries"
             "fragment_nested_discard.luna" "fragment_static_dynamic_body.luna")
         string(FIND "${text}" "${required}" found)

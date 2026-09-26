@@ -106,7 +106,7 @@ option(LUNA_SEPARATE_COMPILER_DEBUG_INFO
 option(LUNA_ENABLE_SANITIZERS
     "Instrument the compiler and embedded JIT runtime with ASan/UBSan" OFF)
 option(LUNA_ENABLE_THREAD_SANITIZER
-    "Instrument the concurrent MoonRuntime state-machine test with TSan" OFF)
+    "Instrument concurrent generation and Fragment runtime gates with TSan" OFF)
 option(LUNA_ENABLE_FUZZING
     "Build the Clang libFuzzer Moon Container trust-boundary harness" OFF)
 set(LUNA_ROCM_SMOKE_ARCH "gfx1101" CACHE STRING
@@ -184,6 +184,16 @@ add_executable(moon-runtime-test
 target_include_directories(moon-runtime-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(moon-runtime-test PRIVATE Threads::Threads)
+
+# Compile the relevant Runtime sources into this target so sanitizer builds
+# instrument the implementation, not just a test linked to the AOT archive.
+add_executable(runtime-fragment-concurrency-test
+    tests/runtime_fragment_concurrency_test.cpp
+    src/runtime/MoonRuntime.cpp
+    src/runtime/RuntimeFragment.cpp)
+target_include_directories(runtime-fragment-concurrency-test
+    PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+target_link_libraries(runtime-fragment-concurrency-test PRIVATE Threads::Threads)
 
 add_executable(runtime-gpu-error-test tests/runtime_gpu_error_test.cpp)
 target_include_directories(runtime-gpu-error-test PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
@@ -544,6 +554,7 @@ if(LUNA_STRICT_WARNINGS)
         runtime-abi-test
         runtime-descriptor-test
         runtime-fragment-test
+        runtime-fragment-concurrency-test
         runtime-allocation-abi-test
         runtime-default-allocation-test
         runtime-filesystem-abi-test
@@ -594,7 +605,7 @@ if(LUNA_ENABLE_SANITIZERS)
             luna luna-frontend analysis-snapshot-test moonir-canonical-test
             moon-container-test moon-container-model-test moon-runtime-test
             native-artifact-test runtime-descriptor-test
-            runtime-fragment-test builtin-types-test)
+            runtime-fragment-test runtime-fragment-concurrency-test builtin-types-test)
         target_compile_options(${target} PRIVATE
             -fsanitize=address,undefined
             -fno-omit-frame-pointer)
@@ -626,6 +637,9 @@ if(LUNA_ENABLE_SANITIZERS)
     target_link_options(runtime-fragment-test PRIVATE
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
+    target_link_options(runtime-fragment-concurrency-test PRIVATE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer)
     target_link_options(builtin-types-test PRIVATE
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
@@ -640,12 +654,14 @@ if(LUNA_ENABLE_THREAD_SANITIZER)
         message(FATAL_ERROR
             "LUNA_ENABLE_THREAD_SANITIZER requires Clang or GCC")
     endif()
-    target_compile_options(moon-runtime-test PRIVATE
-        -fsanitize=thread
-        -fno-omit-frame-pointer)
-    target_link_options(moon-runtime-test PRIVATE
-        -fsanitize=thread
-        -fno-omit-frame-pointer)
+    foreach(target IN ITEMS moon-runtime-test runtime-fragment-concurrency-test)
+        target_compile_options(${target} PRIVATE
+            -fsanitize=thread
+            -fno-omit-frame-pointer)
+        target_link_options(${target} PRIVATE
+            -fsanitize=thread
+            -fno-omit-frame-pointer)
+    endforeach()
 endif()
 
 target_include_directories(luna SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
@@ -852,6 +868,11 @@ if(BUILD_TESTING)
         NAME luna.runtime-fragment-v1
         COMMAND $<TARGET_FILE:runtime-fragment-test>
     )
+    add_test(
+        NAME luna.runtime-fragment-concurrency
+        COMMAND $<TARGET_FILE:runtime-fragment-concurrency-test>
+    )
+    set_tests_properties(luna.runtime-fragment-concurrency PROPERTIES TIMEOUT 60)
     add_test(
         NAME luna.runtime-allocation-abi-v1
         COMMAND $<TARGET_FILE:runtime-allocation-abi-test>

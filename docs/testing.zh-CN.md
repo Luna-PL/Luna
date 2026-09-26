@@ -173,21 +173,28 @@ ORC 生成的入口函数没有 Clang UBSan 的函数类型前缀元数据，故
 Native artifact verifier/loader 测试也接受插桩，覆盖 proof parsing、不可变 staging、
 typed-registry 验证与 generation 适配。
 
-并发 generation 状态机使用独立 ThreadSanitizer 门禁，因此 TSan 不会与
+并发 generation 与 Fragment 分派使用独立 ThreadSanitizer 门禁，因此 TSan 不会与
 ASan/UBSan 组合，也不会插桩 LLVM/ORC：
 
 ```sh
 cmake -S . -B build-thread-sanitized -G Ninja \
   -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ \
   -DLUNA_ENABLE_THREAD_SANITIZER=ON -DLUNA_STRICT_WARNINGS=ON
-cmake --build build-thread-sanitized --target moon-runtime-test
+cmake --build build-thread-sanitized --target moon-runtime-test runtime-fragment-concurrency-test
 TSAN_OPTIONS=halt_on_error=1:history_size=7 \
   ctest --test-dir build-thread-sanitized \
-    -R luna.moon-runtime --output-on-failure
+    -R 'luna\.(moon-runtime|runtime-fragment-concurrency)$' --output-on-failure
 ```
 
 该门禁让四个并发 switchable reader 跨越 1000 次原子 generation transition，
 并在首个数据竞争报告处失败。
+Fragment 门禁将 MoonRuntime／RuntimeFragment 源码直接编入插桩目标。四个 reader
+在每次 None／One／chain 发布前进入仍存活的续体，共握手切换 96 次，核对旧分派在
+正常完成、逃逸和失败时都使用原 pinned 选择。释放 Runtime 和宿主策略句柄后，各
+reader 持有的同一 context 状态的副本再进行 1024 次 C++／C ABI 分派，最后核对环境
+恰好清理一次、generation 最后释放。不靠 sleep 或计时阈值决定正确性。
+测试使用不可变 native 环境与逐调用参数存储，不证明任意插件回调的线程安全，也不
+新增源码语言的跨线程 API。
 
 当前 `luna.semantic-regressions` 覆盖：
 

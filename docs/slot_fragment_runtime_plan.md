@@ -407,6 +407,18 @@ The [SF008 bounded contract evidence](slot_fragment_contract.md) consolidates
 these boundaries and the nested override/None and static discard/return gates.
 It records implemented behavior, not stable-release approval.
 
+### Concurrent host evidence
+
+`luna.runtime-fragment-concurrency` now verifies host-owned atomic publication
+against four readers whose continuations remain live across 96 None/One/chain
+transitions. It covers normal completion, escape, failure isolation, and 1024
+further dispatches through reader-owned copies of one pinned context after the
+Runtime is destroyed. The independent target instruments both Runtime sources
+under ASan/UBSan or the separate Linux TSan job, without instrumenting the AOT
+archive or LLVM/ORC. Its immutable native environments and per-call argument
+storage do not confer arbitrary plugin thread safety or introduce a Luna
+cross-thread API. See the [testing guide](testing.md) for reproduction.
+
 ### Reproducible runtime cost probe
 
 `runtime-fragment-benchmark` is an explicitly built microbenchmark, not part of

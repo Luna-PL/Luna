@@ -17,6 +17,7 @@
 | 静态同 Slot 续体嵌套 | 有限嵌套合法。内层 discard 只跳过自己的续体；内层续体 return 则退出发起调用的函数，并跳过内外 handler 的 post-resume 代码。 | `luna.semantic-regressions` |
 | 未绑定 private Slot | Identity 降为普通词法块，在 handler 内也如此；不会引入 runtime context 依赖。 | `luna.semantic-regressions`、`luna.moonir-canonical` |
 | Runtime ordered chain | `resume` 按宿主明确给出的顺序前进，post-resume 按逆序返回；catalog 顺序和加载顺序不决定 chain。 | `luna.runtime-fragment-v1` |
+| 并发宿主发布／分派 | 四个 native reader 在仍存活的续体内暂停并跨越显式 None／One／chain 发布；旧分派在正常完成、逃逸和失败时都保留原选择。Runtime 销毁后，reader 各自持有的同一 context 状态的副本仍可分派，activation 独立，最终按序清理。Linux TSan 门禁同时插桩实现与测试。 | `luna.runtime-fragment-concurrency` |
 | 执行中快照的生命周期 | 分派持有已选快照，直到所有 handler 返回。同步 native 回调可清空或替换公开 C++ 句柄，不会释放当前 One／chain 的环境或 generation；替换只影响后续调用。Owned／borrowed 环境先于最后的 module lease 释放，逃逸与失败路径也如此。 | `luna.runtime-fragment-v1` |
 | Factory generation 生命周期 | Owned 构造在调用 factory 前固定已验证的 generation。同步清空或替换输入 binding 不会在构造或拒绝产物清理期间释放原 generation，也不能让新引用改用另一 binding。成功将原 pin 交给引用；失败先销毁非空产物一次，再释放原 pin。 | `luna.runtime-fragment-v1` |
 | 引用清理回调 | `reset` 在 owned destroy／borrowed lease 释放前摘走旧状态，保留其 generation 直到这些操作完成。嵌套 reset 看到空引用；同步重新绑定仍存活的引用会保留。移动赋值先安装 incoming 状态，再清理旧状态，不覆盖回调修改。Owned 环境仅销毁一次；引用持有的 borrowed lease 先于其 module pin 释放。 | `luna.runtime-fragment-v1` |
@@ -41,6 +42,9 @@ return 不会自动逃逸调用者的续体或外层 chain。
 [canonical lowering 测试](../tests/moonir_canonical_sealing_lowering_test.cpp)；
 显式 context／chain／override 检查在
 [runtime Fragment 测试](../tests/runtime_fragment_test.cpp)。
+[并发宿主测试](../tests/runtime_fragment_concurrency_test.cpp)使用不可变 native 环境和
+逐调用独立参数。回调／环境的同步仍由宿主负责；这不是任意 Fragment 环境或 Arc
+payload 的源码线程安全准入。
 
 ## 剩余决定与发布边界
 
@@ -73,8 +77,8 @@ pointer，也不允许在没有同步的情况下并发修改同一个 C++ 句�
 先构建编译器和测试目标，然后运行：
 
 ```sh
-ctest --test-dir build --output-on-failure -R 'luna\.(analysis-snapshot|semantic-regressions|moon-runtime|runtime-fragment-v1|moonir-canonical|moon-cost-boundaries|0\.3-design-contract)$'
+ctest --test-dir build --output-on-failure -R 'luna\.(analysis-snapshot|semantic-regressions|moon-runtime|runtime-fragment-v1|runtime-fragment-concurrency|moonir-canonical|moon-cost-boundaries|0\.3-design-contract)$'
 ```
 
-七项门禁都是行为／结构检查，不使用微基准时间阈值。稳定版发布声明仍需要完整
+八项门禁都是行为／结构检查，不使用微基准时间阈值。稳定版发布声明仍需要完整
 回归，以及针对确切拟发布 commit 的跨平台证据。
