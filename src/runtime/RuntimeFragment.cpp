@@ -31,6 +31,7 @@ struct RuntimeFragmentActivationState {
     RuntimeFragmentResumeCallback continuation = nullptr;
     void* continuationContext = nullptr;
     bool consumed = false;
+    bool failed = false;
 };
 
 namespace {
@@ -569,6 +570,15 @@ bool dispatchRuntimeFragmentChain(RuntimeFragmentChainDispatch& dispatch) {
         dispatch.failed = true;
         return false;
     }
+    // Execute has no result channel. Preserve protocol failure even if a
+    // native handler ignores resume's negative result, without replacing a
+    // more specific error already reported by the downstream continuation.
+    const auto* state = static_cast<const RuntimeFragmentActivationState*>(
+        activation.opaque());
+    if (state->failed && !dispatch.failed) {
+        *dispatch.error = "runtime Fragment activation violated its single-shot continuation contract";
+        dispatch.failed = true;
+    }
     return !dispatch.failed;
 }
 
@@ -890,18 +900,25 @@ extern "C" int32_t luna_runtime_fragment_activation_resume_v1(
     auto* state = static_cast<
         luna::runtime::RuntimeFragmentActivationState*>(activation);
     if (!state ||
-        state->magic != luna::runtime::RuntimeFragmentActivationMagic ||
-        state->consumed || !state->continuation)
+        state->magic != luna::runtime::RuntimeFragmentActivationMagic)
         return LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1;
+    if (state->failed || state->consumed || !state->continuation) {
+        state->failed = true;
+        return LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1;
+    }
     state->consumed = true;
     try {
         const int32_t result =
             state->continuation(state->continuationContext);
-        if (result != LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1 &&
-            result != LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1)
+        if (state->failed ||
+            (result != LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1 &&
+             result != LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1)) {
+            state->failed = true;
             return LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1;
+        }
         return result;
     } catch (...) {
+        state->failed = true;
         return LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1;
     }
 }

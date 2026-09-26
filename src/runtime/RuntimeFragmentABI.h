@@ -71,6 +71,9 @@ int32_t luna_runtime_fragment_dispatch_v1(
 // host control plane. Resume is single-shot. It returns COMPLETED when the
 // continuation returns locally, ESCAPED when it performs an enclosing
 // return/error propagation, and a negative value on invalid use or failure.
+// Resume failure is sticky on a live activation: its Fragment dispatch reports
+// failure even if its handler ignores the negative result. Each new dispatch
+// has fresh activation state; already-performed effects are not rolled back.
 const void* luna_runtime_fragment_activation_arguments_v1(
     void* activation,
     const char* slot_id,

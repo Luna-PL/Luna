@@ -48,6 +48,8 @@ std::atomic<unsigned> factoryCalls{0};
 std::atomic<unsigned> destroyCalls{0};
 unsigned payloadProbeExecutions = 0;
 unsigned payloadProbeDestructions = 0;
+bool repeatResumeProbe = true;
+std::array<int32_t, 3> repeatedResumeResults{};
 std::vector<int>* activeChainTrace = nullptr;
 
 int32_t resumeActivation(void* context) {
@@ -98,6 +100,39 @@ void executeResumingFragment(void*, void* activation) {
             "layout:pipeline-arguments", sizeof(int), alignof(int)));
     if (argument && *argument == 42)
         luna_runtime_fragment_activation_resume_v1(activation);
+}
+
+// Intentionally ignores resume errors to test the outer dispatch boundary.
+void executeRepeatedResumeFragment(void*, void* activation) {
+    repeatedResumeResults[0] = luna_runtime_fragment_activation_resume_v1(activation);
+    if (repeatResumeProbe) {
+        repeatedResumeResults[1] = luna_runtime_fragment_activation_resume_v1(activation);
+        repeatedResumeResults[2] = luna_runtime_fragment_activation_resume_v1(activation);
+    }
+}
+
+struct CountedControlProbe {
+    unsigned calls = 0;
+    int32_t result = LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1;
+};
+
+int32_t countedControl(void* context) {
+    auto& probe = *static_cast<CountedControlProbe*>(context);
+    ++probe.calls;
+    return probe.result;
+}
+
+struct ReentrantResumeProbe {
+    void* activation = nullptr;
+    unsigned calls = 0;
+    int32_t nestedResult = 0;
+};
+
+int32_t reentrantResume(void* context) {
+    auto& probe = *static_cast<ReentrantResumeProbe*>(context);
+    ++probe.calls;
+    probe.nestedResult = luna_runtime_fragment_activation_resume_v1(probe.activation);
+    return LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1;
 }
 
 void executeFirstChainFragment(void*, void* activation) {
@@ -525,6 +560,114 @@ int main() {
     captureFree.execute = executeResumingFragment;
     if (!luna::runtime::validateRuntimeFragmentDescriptor(captureFree, error))
         return fail("canonical capture-free Fragment descriptor was rejected");
+
+    {
+        auto faulty = captureFree;
+        faulty.execute = executeRepeatedResumeFragment;
+        Runtime runtime;
+        Runtime::PinnedBinding binding;
+        if (!stageFragment(runtime, std::make_shared<int>(1), &faulty, binding, error))
+            return fail("single-shot failure fixture did not stage");
+        const luna::runtime::RuntimeSlotRequirement slot{
+            faulty.slot_id, faulty.slot_contract_id};
+        int argument = 42;
+        const luna::runtime::RuntimeFragmentArguments arguments{
+            faulty.slot_arguments_layout_id, sizeof(argument), alignof(int), &argument};
+        luna::runtime::RuntimeFragmentRef reference;
+        if (!luna::runtime::makeOwnedRuntimeFragmentRef(
+                binding, slot, {"", nullptr}, reference, error))
+            return fail("single-shot failure fixture did not bind");
+        std::vector<luna::runtime::RuntimeFragmentRef> references;
+        references.push_back(std::move(reference));
+        luna::runtime::RuntimeFragmentBindingSet bindings;
+        luna::runtime::RuntimeFragmentExecutionContext context;
+        if (!luna::runtime::makeRuntimeFragmentBindingSet(
+                std::move(references), bindings, error) ||
+            !luna::runtime::makeRuntimeFragmentExecutionContext(bindings, context, error))
+            return fail("single-shot failure context did not initialize");
+        for (const int32_t result : {
+                 LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1,
+                 LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1}) {
+            CountedControlProbe probe{0, result};
+            auto outcome = luna::runtime::RuntimeFragmentDispatchOutcome::ContinuationEscaped;
+            if (bindings.dispatchWithOutcome(
+                    slot, arguments, countedControl, &probe, outcome, error) ||
+                error.find("single-shot") == std::string::npos || probe.calls != 1 ||
+                outcome != luna::runtime::RuntimeFragmentDispatchOutcome::Completed ||
+                repeatedResumeResults[0] != result ||
+                repeatedResumeResults[1] != LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+                repeatedResumeResults[2] != LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1)
+                return fail("ignored repeated resume was reported as successful dispatch");
+            probe.calls = 0;
+            if (luna_runtime_fragment_dispatch_v1(
+                    context.opaque(), slot.slotId.c_str(), slot.contractId.c_str(),
+                    arguments.layoutId.c_str(), arguments.size, arguments.alignment,
+                    arguments.data, countedControl, &probe) !=
+                    LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 || probe.calls != 1)
+                return fail("C ABI lost a repeated-resume activation failure");
+        }
+        CountedControlProbe invalidControl{0, 99};
+        if (context.dispatch(slot, arguments, countedControl, &invalidControl, error) ||
+            invalidControl.calls != 1 || error.find("invalid control result") == std::string::npos)
+            return fail("activation failure overwrote a downstream continuation diagnostic");
+        repeatResumeProbe = false;
+        CountedControlProbe recovered;
+        if (!context.dispatch(slot, arguments, countedControl, &recovered, error) ||
+            recovered.calls != 1 || !error.empty())
+            return fail("failed activation poisoned a fresh invocation of the same context");
+        repeatResumeProbe = true;
+
+        auto outer = captureFree;
+        outer.fragment_id = "fragment:failure-outer";
+        outer.fragment_contract_id = "contract:failure-outer";
+        outer.execute = executeFirstChainFragment;
+        Runtime outerRuntime;
+        Runtime::PinnedBinding outerBinding;
+        if (!stageFragment(
+                outerRuntime, std::make_shared<int>(1), &outer, outerBinding, error))
+            return fail("single-shot outer chain fixture did not stage");
+        luna::runtime::RuntimeFragmentRef outerRef;
+        luna::runtime::RuntimeFragmentRef innerRef;
+        if (!luna::runtime::makeOwnedRuntimeFragmentRef(
+                outerBinding, slot, {"", nullptr}, outerRef, error) ||
+            !luna::runtime::makeOwnedRuntimeFragmentRef(
+                binding, slot, {"", nullptr}, innerRef, error))
+            return fail("single-shot failure chain did not bind");
+        std::vector<luna::runtime::RuntimeFragmentRef> chainRefs;
+        chainRefs.push_back(std::move(outerRef));
+        chainRefs.push_back(std::move(innerRef));
+        luna::runtime::RuntimeFragmentBindingSet chain;
+        if (!luna::runtime::makeRuntimeFragmentChainBindingSet(
+                std::move(chainRefs), chain, error))
+            return fail("single-shot failure chain did not initialize");
+        std::vector<int> trace;
+        activeChainTrace = &trace;
+        const bool failedChain = chain.dispatch(slot, arguments, recordChainBase, &trace, error);
+        activeChainTrace = nullptr;
+        if (failedChain || error.find("single-shot") == std::string::npos ||
+            trace != std::vector<int>({1, 0}))
+            return fail("inner repeated resume failed to reach the outer chain handler");
+        trace.clear();
+        repeatResumeProbe = false;
+        activeChainTrace = &trace;
+        const bool recoveredChain = chain.dispatch(slot, arguments, recordChainBase, &trace, error);
+        activeChainTrace = nullptr;
+        repeatResumeProbe = true;
+        if (!recoveredChain || !error.empty() || trace != std::vector<int>({1, 0, 4}))
+            return fail("single-shot failure poisoned a new invocation of the chain");
+
+        ReentrantResumeProbe reentrant;
+        luna::runtime::RuntimeFragmentActivation activation;
+        if (!luna::runtime::makeRuntimeFragmentActivation(
+                slot, arguments, reentrantResume, &reentrant, activation, error))
+            return fail("reentrant resume fixture did not initialize");
+        reentrant.activation = activation.opaque();
+        if (luna_runtime_fragment_activation_resume_v1(activation.opaque()) !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+            reentrant.nestedResult != LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+            reentrant.calls != 1 || !activation.resumed())
+            return fail("pending resume reported success after recursive use of its activation");
+    }
 
     {
         int argument = 42;

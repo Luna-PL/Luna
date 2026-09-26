@@ -104,6 +104,11 @@ Fragment 续体由编译器拥有，不可伪造、不可逃逸，并且每个 a
 未来 ordered chain 中的 `resume` 前进到宿主选择的下一个 Fragment，最终进入 base
 continuation；隐式链接或加载顺序不得决定处理链。
 
+Resume 失败在有效 activation 内保持失败，包括重复或递归使用同一个 activation。
+返回 void 的 native execute thunk 不能仅靠忽略负值 resume 结果隐藏失败：thunk 返回后，
+外层 dispatch 报告执行失败。下游 chain 诊断保持完整，每次新调用都使用全新的 activation
+状态。这既不许可 handler body 重入，也不回滚 native 副作用。
+
 ### 阶段 3 Runtime ABI 基础
 
 阶段 3 的首个切片冻结 C-compatible Fragment descriptor，其中包含 FragmentId/ContractId、

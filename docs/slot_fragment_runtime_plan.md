@@ -119,6 +119,13 @@ at most once per activation. A future ordered chain advances `resume` to the
 next selected Fragment and finally to the base continuation. No implicit link
 or load order defines that chain.
 
+Resume failures are sticky within a live activation, including repeated use or
+recursive use of that same activation. A void native execute thunk cannot hide
+the failure merely by ignoring its negative resume result: the outer dispatch
+reports execution failure after the thunk returns. Downstream chain diagnostics
+remain intact, and every new invocation starts with fresh activation state.
+This neither permits handler-body re-entry nor rolls back native side effects.
+
 ### Stage-3 runtime ABI foundation
 
 The first stage-3 slice freezes a C-compatible Fragment descriptor containing

@@ -18,6 +18,7 @@ arbitrary handler-body re-entry.
 | Static same-Slot continuation nesting | Finite nesting is valid. Inner discard skips only its own continuation; an inner continuation return escapes the invoking function and skips both handlers' post-resume code. | `luna.semantic-regressions` |
 | Private unbound Slot | Identity lowers to a lexical block, including inside a handler; it does not introduce a runtime context dependency. | `luna.semantic-regressions`, `luna.moonir-canonical` |
 | Runtime ordered chain | The host's explicit order determines `resume` progression, followed by reverse-order post-resume execution. Catalog order and loading order do not choose the chain. | `luna.runtime-fragment-v1` |
+| Single-shot failure propagation | A failed resume on a live activation remains failed. Ignoring a repeated-resume error cannot turn its enclosing One/chain dispatch into success; the continuation still runs at most once. Downstream failures propagate outward without overwriting their diagnostics, and a fresh invocation of the same context is unaffected. | `luna.runtime-fragment-v1` |
 | Runtime same-Slot continuation nesting | Each dispatch creates fresh single-shot activations, even with the same pinned context and selected chain. A propagated inner continuation escape bypasses post-resume code in the suspended outer chain. | `luna.runtime-fragment-v1` |
 | Nested local override / None | An explicit inner context replaces or removes the selected Slot chain only for that context. It does not modify the suspended outer chain; None still propagates continuation escape. | `luna.runtime-fragment-v1` |
 | Runtime payload storage | Actual Slot argument addresses must satisfy their declared alignment. Empty carriers use size 0, alignment 1, and null data. None and One reject malformed carriers before callbacks; borrowed and factory-returned environments must also be aligned. Rejected non-null factory output is destroyed once. | `luna.runtime-fragment-v1` |
@@ -55,6 +56,9 @@ Host-authored native callbacks are not Luna source verified by this profile.
 Storage alignment checks do not prove that arbitrary native pointers refer to
 valid allocations of the claimed size or lifetime; the host and factory remain
 responsible for those obligations.
+Failure propagation does not roll back already-performed effects or sandbox
+native handlers; it prevents a failed activation from being reported as a
+successful dispatch when the handler returns.
 Their ability to invoke the C dispatch ABI is not a stable guarantee of arbitrary
 Luna handler-body recursion. No implicit TLS/current Runtime, automatic
 same-Slot suppression, runtime recursion limit, or multi-shot continuation
