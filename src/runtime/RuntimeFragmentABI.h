@@ -22,6 +22,9 @@ enum LunaRuntimeFragmentFlagV1 {
 // return a non-null environment aligned to environment_alignment. Rejected
 // non-null factory output is returned to destroy exactly once. ABI callbacks
 // must not unwind across this C boundary, including that failure cleanup.
+// The C++ constructor pins the validated generation throughout the factory
+// call and rejected-output cleanup, even if the host replaces its source
+// binding handle synchronously. A successful reference keeps that same pin.
 typedef int32_t (*LunaRuntimeFragmentFactoryFnV1)(
     const void* factory_arguments, void** output_environment);
 

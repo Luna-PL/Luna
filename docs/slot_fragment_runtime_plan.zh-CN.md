@@ -115,8 +115,10 @@ Resume 失败在有效 activation 内保持失败，包括重复或递归使用�
 精确目标 SlotId/ContractId、factory contract、环境布局、factory/destroy 函数与 execution
 thunk。thunk 接收编译器拥有的 opaque activation，而不是宿主可构造的 continuation 表示。
 
-C++ 宿主层从已验证 generation binding 构造 move-only `RuntimeFragmentRef`。构造过程一次性
-校验全部 identity 与 layout，随后固定该 binding 所属 generation。factory-owned 环境会先于
+C++ 宿主层从已验证 generation binding 构造 move-only `RuntimeFragmentRef`。构造过程先
+固定该 binding 所属 generation，再一次性校验全部 identity 与 layout 并调用 factory。
+同步 native factory 回调清空或替换输入 binding，不会改变新引用选定的 generation。
+拒绝产物的清理也保留原 pin；成功则将该 pin 交给引用。factory-owned 环境会先于
 generation lease 销毁；borrowed 环境必须携带自己的显式 lease。
 
 环境构造检查实际地址是否满足声明的对齐，而不只检查 alignment 字段。被拒绝的非空

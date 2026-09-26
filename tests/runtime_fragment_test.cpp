@@ -410,6 +410,134 @@ int testDispatchLifetime(const LunaRuntimeFragmentDescriptorV1& original) {
     return 0;
 }
 
+enum class FactoryLifetimeResult {
+    Success, FailedWithEnvironment, FailedWithoutEnvironment,
+    NullSuccess, UnalignedEnvironment, StandardException, UnknownException,
+};
+
+struct FactoryLifetimeProbe {
+    unsigned moduleDestructions = 0;
+    unsigned environmentDestructions = 0;
+    unsigned factoryCalls = 0;
+    bool factoryRetainedGeneration = true;
+    bool cleanupRetainedGeneration = true;
+    bool environmentBeforeModule = false;
+    bool createsEnvironment = true;
+    FactoryLifetimeResult result = FactoryLifetimeResult::Success;
+    // Static fixture storage/callback code stays valid even on the unfixed
+    // implementation. External counters detect premature module release.
+    alignas(16) std::array<unsigned char, 16> storage{};
+    Runtime::PinnedBinding published;
+    Runtime::PinnedBinding replacement;
+};
+
+FactoryLifetimeProbe* activeFactoryLifetimeProbe = nullptr;
+
+int32_t createFactoryLifetimeEnvironment(const void* arguments, void** output) {
+    auto& probe = *const_cast<FactoryLifetimeProbe*>(
+        static_cast<const FactoryLifetimeProbe*>(arguments));
+    ++probe.factoryCalls;
+    probe.published = probe.replacement;
+    probe.factoryRetainedGeneration &= probe.moduleDestructions == 0;
+    if (probe.createsEnvironment) {
+        *output = probe.storage.data() +
+            (probe.result == FactoryLifetimeResult::UnalignedEnvironment ? 1 : 0);
+    }
+    // Defensive exception paths are exercised here; ABI callbacks are still
+    // required not to unwind across the C boundary.
+    if (probe.result == FactoryLifetimeResult::StandardException)
+        throw std::runtime_error("factory lifetime probe");
+    if (probe.result == FactoryLifetimeResult::UnknownException) throw 42;
+    return probe.result == FactoryLifetimeResult::FailedWithEnvironment ||
+           probe.result == FactoryLifetimeResult::FailedWithoutEnvironment ? 1 : 0;
+}
+
+void destroyFactoryLifetimeEnvironment(void*) {
+    auto& probe = *activeFactoryLifetimeProbe;
+    probe.cleanupRetainedGeneration &= probe.moduleDestructions == 0;
+    ++probe.environmentDestructions;
+}
+
+int testFactoryLifetime(const LunaRuntimeFragmentDescriptorV1& original) {
+    using namespace luna::runtime;
+    auto descriptor = original;
+    descriptor.factory_contract_id = "contract:factory-lifetime";
+    descriptor.environment_layout_id = "layout:factory-lifetime";
+    descriptor.environment_size = 8;
+    descriptor.environment_alignment = 8;
+    descriptor.factory = createFactoryLifetimeEnvironment;
+    descriptor.destroy = destroyFactoryLifetimeEnvironment;
+    descriptor.execute = executePayloadProbe;
+    auto replacementDescriptor = descriptor;
+    replacementDescriptor.fragment_id = "fragment:factory-replacement";
+    replacementDescriptor.fragment_contract_id = "contract:factory-replacement";
+    const RuntimeSlotRequirement slot{descriptor.slot_id, descriptor.slot_contract_id};
+    for (bool replace : {false, true})
+    for (FactoryLifetimeResult result : {
+             FactoryLifetimeResult::Success,
+             FactoryLifetimeResult::FailedWithEnvironment,
+             FactoryLifetimeResult::FailedWithoutEnvironment,
+             FactoryLifetimeResult::NullSuccess,
+             FactoryLifetimeResult::UnalignedEnvironment,
+             FactoryLifetimeResult::StandardException,
+             FactoryLifetimeResult::UnknownException}) {
+        FactoryLifetimeProbe probe;
+        probe.result = result;
+        probe.createsEnvironment = result != FactoryLifetimeResult::FailedWithoutEnvironment &&
+                                   result != FactoryLifetimeResult::NullSuccess;
+        std::string error;
+        if (replace) {
+            Runtime runtime;
+            if (!stageFragment(runtime, std::make_shared<int>(1),
+                    &replacementDescriptor, probe.replacement, error))
+                return fail("factory lifetime replacement did not stage");
+        }
+        {
+            Runtime runtime;
+            auto lease = std::shared_ptr<const void>(new int(1),
+                [&probe](const void* storage) {
+                    probe.environmentBeforeModule = probe.environmentDestructions ==
+                        (probe.createsEnvironment ? 1u : 0u);
+                    ++probe.moduleDestructions;
+                    delete static_cast<const int*>(storage);
+                });
+            if (!stageFragment(runtime, lease, &descriptor, probe.published, error))
+                return fail("factory lifetime original generation did not stage");
+        }
+        const auto originalGeneration = probe.published.generationId();
+        RuntimeFragmentRef reference;
+        activeFactoryLifetimeProbe = &probe;
+        const bool constructed = makeOwnedRuntimeFragmentRef(probe.published, slot,
+            {descriptor.factory_contract_id, &probe}, reference, error);
+        const bool success = result == FactoryLifetimeResult::Success;
+        const bool correctReference = success
+            ? reference && reference.generationId() == originalGeneration &&
+              reference.fragmentId() == descriptor.fragment_id &&
+              reference.fragmentContractId() == descriptor.fragment_contract_id &&
+              reference.descriptor() == &descriptor && reference.environment() == probe.storage.data() &&
+              probe.moduleDestructions == 0 && probe.environmentDestructions == 0 && error.empty()
+            : !reference && reference.generationId() == 0 && !error.empty();
+        reference.reset();
+        activeFactoryLifetimeProbe = nullptr;
+        if (constructed != success || !correctReference || probe.factoryCalls != 1 ||
+            !probe.factoryRetainedGeneration || !probe.cleanupRetainedGeneration)
+            return fail("Fragment factory did not retain its original validated generation");
+        if (probe.environmentDestructions != (probe.createsEnvironment ? 1u : 0u) ||
+            probe.moduleDestructions != 1 || !probe.environmentBeforeModule)
+            return fail("Fragment factory failure leaked or released module before cleanup");
+        if ((replace && probe.published.symbolId() != replacementDescriptor.fragment_id) ||
+            (!replace && probe.published))
+            return fail("Fragment construction overwrote the host's changed binding handle");
+        if (result == FactoryLifetimeResult::StandardException &&
+            error.find("factory lifetime probe") == std::string::npos)
+            return fail("Fragment factory lost its exception diagnostic");
+        if (result == FactoryLifetimeResult::UnknownException &&
+            error.find("factory threw") == std::string::npos)
+            return fail("Fragment factory lost its unknown exception diagnostic");
+    }
+    return 0;
+}
+
 } // namespace
 
 int main() {
@@ -1315,5 +1443,6 @@ int main() {
             return fail("local Fragment override mutated its base BindingSet");
     }
 
-    return testDispatchLifetime(descriptor);
+    if (testDispatchLifetime(descriptor) != 0) return 1;
+    return testFactoryLifetime(descriptor);
 }

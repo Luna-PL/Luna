@@ -160,6 +160,9 @@ private:
     bool ownsEnvironment_ = false;
 };
 
+// Retains the validated generation before invoking the factory, including
+// failure cleanup. Synchronous replacement/release of the source binding does
+// not change the new reference's identity or overwrite the host's handle.
 bool makeOwnedRuntimeFragmentRef(
     const MoonRuntime::PinnedBinding& binding,
     const RuntimeSlotRequirement& slot,

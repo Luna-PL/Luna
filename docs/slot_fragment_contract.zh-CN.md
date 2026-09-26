@@ -18,6 +18,7 @@
 | 未绑定 private Slot | Identity 降为普通词法块，在 handler 内也如此；不会引入 runtime context 依赖。 | `luna.semantic-regressions`、`luna.moonir-canonical` |
 | Runtime ordered chain | `resume` 按宿主明确给出的顺序前进，post-resume 按逆序返回；catalog 顺序和加载顺序不决定 chain。 | `luna.runtime-fragment-v1` |
 | 执行中快照的生命周期 | 分派持有已选快照，直到所有 handler 返回。同步 native 回调可清空或替换公开 C++ 句柄，不会释放当前 One／chain 的环境或 generation；替换只影响后续调用。Owned／borrowed 环境先于最后的 module lease 释放，逃逸与失败路径也如此。 | `luna.runtime-fragment-v1` |
+| Factory generation 生命周期 | Owned 构造在调用 factory 前固定已验证的 generation。同步清空或替换输入 binding 不会在构造或拒绝产物清理期间释放原 generation，也不能让新引用改用另一 binding。成功将原 pin 交给引用；失败先销毁非空产物一次，再释放原 pin。 | `luna.runtime-fragment-v1` |
 | Single-shot 失败传播 | 有效 activation 的 resume 失败会保持失败；忽略重复 resume 的错误不能使它所属的 One／chain 分派伪装为成功，续体仍最多执行一次。下游失败向外传播且保留其诊断，同一 context 的新调用不受旧失败影响。 | `luna.runtime-fragment-v1` |
 | Runtime 同 Slot 续体嵌套 | 即使使用同一 pinned context 与已选 chain，每次 dispatch 仍创建独立 single-shot activation；被继续传播的内层续体逃逸会跳过暂停的外层 chain 的 post-resume 代码。 | `luna.runtime-fragment-v1` |
 | 嵌套局部 override／None | 明确传入的内层 context 只在自身替换或移除目标 Slot 的 chain，不修改暂停的外层 chain；None 仍传播续体逃逸。 | `luna.runtime-fragment-v1` |

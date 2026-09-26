@@ -135,8 +135,11 @@ receives a compiler-owned opaque activation rather than a host-constructible
 continuation representation.
 
 The C++ host layer constructs a move-only `RuntimeFragmentRef` from a verified
-generation binding. Construction validates every identity and layout once,
-then pins that binding's generation. Factory-owned environments are destroyed
+generation binding. Construction pins that binding's generation before validating
+every identity and layout once and invoking the factory. A synchronous native
+factory callback may clear or replace the source binding handle without changing
+the generation selected for the new reference. Rejected-output cleanup retains
+the same pin; success transfers it to the reference. Factory-owned environments are destroyed
 before the generation lease is released; borrowed environments require their
 own explicit lease.
 

@@ -321,8 +321,12 @@ bool makeOwnedRuntimeFragmentRef(
         error = "runtime Fragment output is already initialized";
         return false;
     }
+    // The factory may synchronously clear or replace the caller's binding.
+    // Retain the exact generation we validate through construction and any
+    // rejected-output cleanup, then transfer that pin to the new reference.
+    auto pinnedBinding = binding;
     const LunaRuntimeFragmentDescriptorV1* descriptor = nullptr;
-    if (!validateBinding(binding, slot, descriptor, error)) return false;
+    if (!validateBinding(pinnedBinding, slot, descriptor, error)) return false;
 
     void* environment = nullptr;
     const bool captureFree =
@@ -363,7 +367,7 @@ bool makeOwnedRuntimeFragmentRef(
         }
     }
 
-    output.binding_ = binding;
+    output.binding_ = std::move(pinnedBinding);
     output.descriptor_ = descriptor;
     output.environment_ = environment;
     output.ownsEnvironment_ = !captureFree;
