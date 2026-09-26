@@ -300,7 +300,7 @@ file(WRITE "${timeout_input_path}"
 execute_process(
     # This case measures timeout recovery, not the minimum memory budget.
     # LLVM JIT virtual-memory headroom varies on macOS runners; the separate
-    # memory-limit case below still exercises the explicit 256 MiB ceiling.
+    # memory-limit case below exercises a separate explicit ceiling.
     COMMAND "${LUNA_EXECUTABLE}" repl --timeout 1 --no-prompt
     INPUT_FILE "${timeout_input_path}"
     RESULT_VARIABLE timeout_result
@@ -439,17 +439,24 @@ if(LUNA_REPL_MEMORY_LIMIT_ENFORCED)
 :quit
 ]=])
     execute_process(
-        COMMAND "${LUNA_EXECUTABLE}" repl --memory-limit 256
+        # The minimum accepted budget is not a portable LLVM JIT footprint.
+        # Verify ceiling enforcement and next-cell recovery at the default
+        # budget; the linked helper requests 1536 MiB and marks JIT entry.
+        COMMAND "${LUNA_EXECUTABLE}" repl --memory-limit 1024
             --link "${LUNA_REPL_PROCESS_TREE_LIBRARY}" --no-prompt
         INPUT_FILE "${memory_limit_input_path}"
         RESULT_VARIABLE memory_limit_result
         OUTPUT_VARIABLE memory_limit_output
         ERROR_VARIABLE memory_limit_errors
     )
+    string(REGEX MATCHALL "error\\[repl\\]: worker terminated while running JIT code"
+        memory_limit_terminations "${memory_limit_errors}")
+    list(LENGTH memory_limit_terminations memory_limit_termination_count)
     if(NOT memory_limit_result EQUAL 0 OR
        NOT memory_limit_output MATCHES "declaration stored" OR
        NOT memory_limit_output MATCHES "= 19" OR
-       NOT memory_limit_errors MATCHES "error\\[repl\\]: worker terminated while running JIT code")
+       NOT memory_limit_errors MATCHES "REPL memory stress entered" OR
+       NOT memory_limit_termination_count EQUAL 1)
         message(FATAL_ERROR
             "REPL memory-limit recovery failed (${memory_limit_result}).\n"
             "${memory_limit_output}\n${memory_limit_errors}")

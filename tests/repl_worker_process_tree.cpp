@@ -103,7 +103,10 @@ extern "C" LUNA_REPL_TEST_EXPORT int32_t repl_spawn_descendant() {
 }
 
 extern "C" LUNA_REPL_TEST_EXPORT int32_t repl_exceed_memory_limit() {
-    constexpr size_t AllocationBytes = 384ULL * 1024 * 1024;
+    // Exceed the recovery test's explicit 1024 MiB budget, even on Darwin
+    // where that budget is additional address-space headroom after startup.
+    std::cerr << "REPL memory stress entered\n" << std::flush;
+    constexpr size_t AllocationBytes = 1536ULL * 1024 * 1024;
     auto* allocation = static_cast<unsigned char*>(std::malloc(AllocationBytes));
     if (!allocation) std::abort();
     for (size_t offset = 0; offset < AllocationBytes; offset += 4096)

@@ -28,6 +28,13 @@ cmake --build build --parallel
 Linux CI 在 C++17/C++23 构建矩阵中都启用该门禁。它只作用于 Luna
 仓库拥有的 target，不把 LLVM 或系统头文件的第三方警告误算为项目回归。
 
+`luna.repl-smoke` 将超时恢复与内存压力分离。非 sanitizer 的内存用例明确设置
+1024 MiB worker 额度，请求分配 1536 MiB，要求出现 linked-JIT 执行标记且恰好一次
+worker 终止，再要求下一单元输出 `19`。它验证限额执行和恢复，不保证所有 LLVM
+构建都能在最小可接受的 256 MiB 额度中完成编译。macOS 的额度为启动映射之上的
+额外地址空间；生产限额机制没有改变。Sanitizer 保留地址空间与该上限不兼容，
+因此 sanitizer 作业跳过此内存用例。
+
 `luna.moon-container` 独立于 frontend lowering 验证 M005 不可信字节边界，覆盖确定性
 输出、文件 round trip、必需/optional section、magic/version/header、section 顺序、
 compression 拒绝、SHA-256 篡改检测与 parser 资源上限。`luna.moon-container-model`

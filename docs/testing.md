@@ -37,6 +37,15 @@ Linux CI enables this gate in both the C++17 and C++23 build matrices. It applie
 targets owned by the Luna repository, so third-party warnings from LLVM or system headers
 are not misclassified as project regressions.
 
+`luna.repl-smoke` separates timeout recovery from memory stress. Its non-sanitized
+memory case uses an explicit 1024 MiB worker budget and a 1536 MiB allocation
+request, requires a linked-JIT entry marker and exactly one worker termination,
+then requires the next cell to produce `19`. It tests enforcement and recovery,
+not whether every LLVM build can compile within the minimum accepted 256 MiB
+budget. macOS uses additional address-space headroom above startup mappings;
+the production limit mechanism is unchanged. Sanitized runs skip this case
+because sanitizer reservations are incompatible with the address-space ceiling.
+
 `luna.moon-container` exercises the M005 untrusted-byte boundary independently
 from frontend lowering. It checks deterministic output, file round trips,
 required and optional sections, magic/version/header integrity, section order,
