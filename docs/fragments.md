@@ -113,6 +113,10 @@ invoking handler's locals. Private static composition may inherit an affected
 caller's execution context. No new keyword or runtime recursion policy is
 introduced by these checks.
 
+The [SF008 bounded contract evidence](slot_fragment_contract.md) separates
+these implemented rules from stable-release acceptance and future handler ABI
+extensions, with a rule-by-rule regression matrix.
+
 ## Public candidates
 
 `export slot` publishes a stable injection contract. An `export fragment`

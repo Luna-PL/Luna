@@ -1,0 +1,34 @@
+slot hook(value: i32);
+
+fragment around(value) for hook {
+    print(value);
+    resume;
+    print(value + 10);
+}
+
+fragment discard(value) for hook {
+    print(value + 100);
+}
+
+fn escaping() -> i32 {
+    apply around {
+        hook(5) {
+            hook(6) { return 42; }
+        }
+    }
+    return 0;
+}
+
+fn main() -> i32 {
+    apply around {
+        hook(1) {
+            apply discard {
+                hook(2) { print(999); }
+            }
+            print(3);
+        }
+        print(4);
+    }
+    print(escaping());
+    return 0;
+}

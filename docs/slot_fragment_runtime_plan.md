@@ -358,6 +358,10 @@ locals without weakening the real Fragment continuation boundary. Runtime
 handler context propagation and its re-entry policy still require an explicit
 ABI/design decision; no new implicit context source is added.
 
+The [SF008 bounded contract evidence](slot_fragment_contract.md) consolidates
+these boundaries and the nested override/None and static discard/return gates.
+It records implemented behavior, not stable-release approval.
+
 ### Reproducible runtime cost probe
 
 `runtime-fragment-benchmark` is an explicitly built microbenchmark, not part of

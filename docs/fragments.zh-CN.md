@@ -95,6 +95,9 @@ summary 不能绕过检查。exported body 即使未被本包 `apply` 使用，�
 handler 的局部变量。私有静态组合仍可继承受影响调用者的 execution context。
 这些检查不增加关键字，也不引入 runtime 递归策略。
 
+[SF008 有界契约证据](slot_fragment_contract.zh-CN.md)按规则列出回归矩阵，并将已实现
+行为与稳定版承诺接受、未来 handler ABI 扩展分开记录。
+
 ## 公开候选
 
 `export slot` 发布稳定的注入契约。目标指向 exported Slot 的 `export fragment` 是该确切

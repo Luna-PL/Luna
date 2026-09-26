@@ -126,3 +126,11 @@ Context-aware indirect calls and non-Copy exported Slot contracts remain outside
 This revision does not enlarge the 0.3 core freeze or by itself authorize a stable
 Slot/Fragment release; cross-platform CI and independent performance/stability evidence remain
 separate gates.
+
+The [SF008 bounded profile (2026-09-26)](slot_fragment_contract.md) now records
+static cycle rejection, finite same-Slot continuation nesting, independent
+runtime activations, nested override/None isolation, and the context-free v1
+published-handler boundary with executable regression evidence. `TBD-SF008`
+remains open for stable-profile acceptance and any handler context/re-entry
+extension. Implemented bounded behavior is not stable-release approval and
+does not reopen the core-freeze boundary.

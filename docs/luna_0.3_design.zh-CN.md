@@ -53,6 +53,13 @@ generation lease、不可变 BindingSet 与显式 `runtime fn` execution context
 间接调用仍不支持。`TBD-SF008` 已有宿主定序 chain 和不可变局部 override，但同一 Fragment
 重入尚未冻结为稳定语言承诺。这些新处置不追溯改变 2026-09-15 的核心冻结决定。
 
+SF008 有界规则（2026-09-26）：静态 Fragment 递归展开现已 fail closed；有限续体嵌套、
+宿主定序 chain、独立 single-shot activation，以及明确传入的内层 override／None context
+均已有行为证据。需要动态 execution context 的 exported handler 会被当前 v1 execute ABI
+边界拒绝。[有界契约证据](slot_fragment_contract.zh-CN.md)记录具体规则与回归门禁。
+`TBD-SF008` 对稳定语言承诺的接受，以及 published handler context／重入扩展仍保持开放；
+本次更新不隐式授权二者，也不改变核心冻结。
+
 后续发现的新歧义也必须先在此处获得稳定 `TBD-*` ID，之后才能编写
 依赖代码；实现不得隐式替它选择答案。
 
@@ -1276,7 +1283,8 @@ Luna 候选 `41ce85e`、Toolchains 0.2.0 候选 `63c8fe1` 与 Lunax 0.2.0 候选
 这些剩余授权、发布等级与明确延后项已集中记录在
 [生态发布交接决策表](ecosystem_release.zh-CN.md#发布交接决策登记表2026-09-15)；
 历史的 `TBD-SF007`–`TBD-SF010` 决策边界继续排除在核心冻结契约之外；当前处置已在
-上文记录。同 Fragment 重入与独立稳定性证据仍需收口，才可声称 Slot/Fragment 语义稳定；
+上文及有界规则中记录。有界规则的稳定承诺接受、任何 handler body 重入扩展，以及独立
+稳定性证据仍是单独决定，才可声称 Slot/Fragment 语义稳定；
 这些工作不阻断本次核心候选。
 
 ## 10. 非优先目标占位

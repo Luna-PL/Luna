@@ -143,6 +143,39 @@ foreach(required_text IN ITEMS
     endif()
 endforeach()
 
+foreach(language IN ITEMS en zh-CN)
+    if(language STREQUAL "en")
+        set(suffix "")
+        set(profile_marker "SF008 bounded profile (2026-09-26)")
+        set(approval_boundary "not stable-release approval")
+    else()
+        set(suffix ".zh-CN")
+        set(profile_marker "SF008 有界规则（2026-09-26）")
+        set(approval_boundary "不是稳定版发布授权")
+    endif()
+    foreach(document IN ITEMS
+            "docs/luna_0.3_design${suffix}.md"
+            "docs/ecosystem_release${suffix}.md")
+        file(READ "${LUNA_SOURCE_DIR}/${document}" text)
+        string(FIND "${text}" "${profile_marker}" marker_at)
+        string(FIND "${text}" "slot_fragment_contract${suffix}.md" link_at)
+        if(marker_at EQUAL -1 OR link_at EQUAL -1)
+            message(FATAL_ERROR "${document} lost the bounded SF008 disposition or evidence link")
+        endif()
+    endforeach()
+    set(profile "docs/slot_fragment_contract${suffix}.md")
+    file(READ "${LUNA_SOURCE_DIR}/${profile}" text)
+    foreach(required IN ITEMS "${profile_marker}" "${approval_boundary}"
+            "TBD-SF008" "luna.semantic-regressions" "luna.runtime-fragment-v1"
+            "luna.moonir-canonical" "luna.moon-cost-boundaries"
+            "fragment_nested_discard.luna" "fragment_static_dynamic_body.luna")
+        string(FIND "${text}" "${required}" found)
+        if(found EQUAL -1)
+            message(FATAL_ERROR "${profile} lost bounded contract evidence: ${required}")
+        endif()
+    endforeach()
+endforeach()
+
 file(READ "${LUNA_SOURCE_DIR}/docs/luna_0.3_evolution_audit.md" english_audit)
 file(READ "${LUNA_SOURCE_DIR}/docs/luna_0.3_evolution_audit.zh-CN.md" chinese_audit)
 string(FIND "${english_audit}" "superseded" english_superseded)

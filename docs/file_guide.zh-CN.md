@@ -507,6 +507,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `docs/luna_0.3_design.zh-CN.md`
 - `docs/slot_fragment_runtime_plan.md`
 - `docs/slot_fragment_runtime_plan.zh-CN.md`
+- `docs/slot_fragment_contract.md`
+- `docs/slot_fragment_contract.zh-CN.md`
 - `docs/luna_0.3_evolution_audit.md`
 - `docs/luna_0.3_evolution_audit.zh-CN.md`
 - `docs/migration_0.2_to_0.3.md`
@@ -869,6 +871,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/ffi_unsupported_type_invalid.luna`
 - `tests/fixtures/fragment_contracts.luna`
 - `tests/fixtures/fragment_nested_continuation.luna`
+- `tests/fixtures/fragment_nested_discard.luna`
 - `tests/fixtures/exported_fragment_dynamic_body_invalid.luna`
 - `tests/fixtures/exported_fragment_dynamic_call_invalid.luna`
 - `tests/fixtures/exported_fragment_unused_body_invalid.luna`

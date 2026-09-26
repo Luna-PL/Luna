@@ -275,6 +275,9 @@ execute wrapper 无法传递该 capability。直接与传递依赖均由 `luna c
 其局部变量，不需要放宽真实 Fragment continuation 的边界。Runtime handler context
 传递及其重入策略仍需明确的 ABI／设计决定；没有新增隐式 context 来源。
 
+[SF008 有界契约证据](slot_fragment_contract.zh-CN.md)集中整理上述边界，以及嵌套
+override／None、静态 discard／return 门禁；记录的是已实现行为，不是稳定版发布授权。
+
 ### 可复现的运行时成本探针
 
 `runtime-fragment-benchmark` 是显式构建的微基准，不参加默认构建或计时型 CI 门禁：

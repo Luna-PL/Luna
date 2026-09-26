@@ -57,6 +57,16 @@ unsupported. `TBD-SF008` now has deterministic host-ordered chains and immutable
 but same-fragment re-entry is not yet a frozen stable-language promise. These dispositions do
 not retroactively change the 2026-09-15 core-freeze decision.
 
+SF008 bounded profile (2026-09-26): static Fragment expansion cycles now fail
+closed; finite continuation nesting, host-ordered chains, independent
+single-shot activations, and explicit inner override/None contexts have
+behavioral evidence. Exported handlers requiring a dynamic execution context
+are rejected by the current v1 execute ABI boundary. The
+[bounded contract evidence](slot_fragment_contract.md) records the exact rules
+and regression gates. `TBD-SF008` remains open for stable-language acceptance
+and any published-handler context/re-entry extension; this update does not
+silently authorize either or change the core freeze.
+
 Any newly discovered ambiguity must likewise receive a stable `TBD-*` ID here before dependent
 code is written; implementation must not silently choose an answer.
 
@@ -1461,8 +1471,9 @@ and explicit lock promotion with their common candidate commit and artifact evid
 The remaining authorization, release-tier, and explicit-deferral choices are
 centralized in the [ecosystem release handoff decision register](ecosystem_release.md#release-handoff-decision-register-2026-09-15);
 the historical `TBD-SF007` through `TBD-SF010` decision boundary remains outside the core-freeze
-contract. Its current disposition is recorded above; same-fragment re-entry and independent
-stability evidence still need closure before claiming stable Slot/Fragment semantics, but do not
+contract. Its current disposition and bounded profile are recorded above; stable acceptance
+of that profile, any handler-body re-entry extension, and independent stability evidence
+remain separate decisions before claiming stable Slot/Fragment semantics, but do not
 block the core candidate.
 
 ## 10. Non-priority placeholders

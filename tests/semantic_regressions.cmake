@@ -222,6 +222,7 @@ expect_success_without("explicit fragment contracts" "tests/fixtures/fragment_co
 expect_error("static Fragment recursion fails closed" "tests/fixtures/fragment_static_recursion_invalid.luna" "recursive static fragment composition re-enters 'recursive'")
 expect_error("mutual static Fragment recursion fails closed" "tests/fixtures/fragment_static_mutual_recursion_invalid.luna" "recursive static fragment composition re-enters 'first'")
 expect_success("nested same-Slot continuations and lexical overrides remain finite" "tests/fixtures/fragment_nested_continuation.luna" "1\n2\n3\n14\n5\n6\n7\n18\n28\n9\nProgram exited with code: 0")
+expect_success_without("nested same-Slot discard and outer return preserve control boundaries" "tests/fixtures/fragment_nested_discard.luna" "1\n102\n3\n11\n4\n5\n6\n42\nProgram exited with code: 0" "999")
 expect_success("context retains a private linear guard" "tests/fixtures/context_linear_guard.luna" "Program exited with code: 0")
 expect_success("fragment discard preserves untouched outer resource" "tests/fixtures/context_abort_preserves_outer_resource.luna" "42")
 expect_error("legacy dynamic fragment selection is removed" "tests/fixtures/dynamic_fragments.luna" "`dynamic slot` and `dynamic apply` were removed in Luna 0.3")

@@ -5,6 +5,7 @@
 #include <iostream>
 #include <memory>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -732,6 +733,47 @@ int main() {
                 slot, dispatchArguments, recordChainBase, &trace, error) ||
             trace != std::vector<int>({0}))
             return fail("local Fragment policy None did not call the base continuation");
+
+        luna::runtime::RuntimeFragmentExecutionContext overrideContext;
+        luna::runtime::RuntimeFragmentExecutionContext noneContext;
+        if (!luna::runtime::makeRuntimeFragmentExecutionContext(
+                localOverride, overrideContext, error) ||
+            !luna::runtime::makeRuntimeFragmentExecutionContext(
+                localNone, noneContext, error))
+            return fail("local override did not produce independent execution contexts");
+        const auto dispatchNestedOverride = [&](const void* innerContext,
+                                                 bool escapeInner) {
+            trace.clear();
+            NestedDispatchProbe probe{
+                innerContext, &slot, &dispatchArguments, &trace};
+            probe.escapeInner = escapeInner;
+            activeChainTrace = &trace;
+            const int32_t status = luna_runtime_fragment_dispatch_v1(
+                chainContext.opaque(), slot.slotId.c_str(),
+                slot.contractId.c_str(), dispatchArguments.layoutId.c_str(),
+                dispatchArguments.size, dispatchArguments.alignment,
+                dispatchArguments.data, nestedChainBase, &probe);
+            activeChainTrace = nullptr;
+            return std::pair<int32_t, int32_t>{status, probe.nestedStatus};
+        };
+        const auto overrideStatus = dispatchNestedOverride(
+            overrideContext.opaque(), false);
+        if (overrideStatus.first != LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1 ||
+            overrideStatus.second != LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1 ||
+            trace != std::vector<int>({1, 2, 0, 2, 0, 3, 3, 4}))
+            return fail("nested local override changed its suspended outer chain");
+        const auto noneStatus = dispatchNestedOverride(noneContext.opaque(), false);
+        if (noneStatus.first != LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1 ||
+            noneStatus.second != LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1 ||
+            trace != std::vector<int>({1, 2, 0, 0, 3, 4}))
+            return fail("nested policy None suppressed its suspended outer chain");
+        const auto noneEscapeStatus = dispatchNestedOverride(noneContext.opaque(), true);
+        if (noneEscapeStatus.first !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_CONTINUATION_ESCAPED_V1 ||
+            noneEscapeStatus.second !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_CONTINUATION_ESCAPED_V1 ||
+            trace != std::vector<int>({1, 2, 0, 0}))
+            return fail("nested policy None lost outer continuation escape propagation");
         trace.clear();
         activeChainTrace = &trace;
         const bool baseUnchanged = chain.dispatch(

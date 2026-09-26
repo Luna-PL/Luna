@@ -246,6 +246,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `docs/luna_0.3_design.zh-CN.md`
 - `docs/slot_fragment_runtime_plan.md`
 - `docs/slot_fragment_runtime_plan.zh-CN.md`
+- `docs/slot_fragment_contract.md`
+- `docs/slot_fragment_contract.zh-CN.md`
 - `docs/core_freeze.md`
 - `docs/core_freeze.zh-CN.md`
 - `docs/luna_0.3_evolution_audit.md`
@@ -646,6 +648,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/float_literal_overflow_invalid.luna`
 - `tests/fixtures/fragment_contracts.luna`
 - `tests/fixtures/fragment_nested_continuation.luna`
+- `tests/fixtures/fragment_nested_discard.luna`
 - `tests/fixtures/exported_fragment_dynamic_body_invalid.luna`
 - `tests/fixtures/exported_fragment_dynamic_call_invalid.luna`
 - `tests/fixtures/exported_fragment_unused_body_invalid.luna`

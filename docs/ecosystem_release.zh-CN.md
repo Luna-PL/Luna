@@ -109,3 +109,9 @@ Slot dispatch。`TBD-SF008` 已有宿主定序 chain 与局部 override，但同
 冻结为稳定语言承诺。带 context 的间接调用和非 Copy 的 exported Slot 契约不在首版 ABI 内。
 本次修订不扩大 0.3 核心冻结，也不单独授权稳定版 Slot/Fragment 发布；跨平台 CI 与独立
 性能/稳定性证据仍是另外的门禁。
+
+[SF008 有界规则（2026-09-26）](slot_fragment_contract.zh-CN.md)现已集中记录静态环拒绝、
+有限同 Slot 续体嵌套、独立 runtime activation、内层 override／None 隔离，以及 v1
+published handler 不接收 context 的边界，并对应可执行回归证据。`TBD-SF008` 对有界规则
+的稳定承诺接受及任何 handler context／重入扩展仍保持开放。已实现有界行为不等于
+稳定版发布授权，也不重新扩大核心冻结边界。
