@@ -37,6 +37,14 @@ Linux CI enables this gate in both the C++17 and C++23 build matrices. It applie
 targets owned by the Luna repository, so third-party warnings from LLVM or system headers
 are not misclassified as project regressions.
 
+The opt-in `runtime-fragment-benchmark` keeps the default build and CTest suite
+free of timing gates. Platform CI builds it explicitly and runs
+`tests/runtime_fragment_benchmark.cmake` to validate 900 interleaved samples,
+exact counters, build metadata, CSV format, and the position-balanced schedule.
+It retains `fragment-cost-*` observations for 14 days; measured times do not
+determine success. See the [runtime plan](slot_fragment_runtime_plan.md#interleaved-observation-protocol)
+for reproduction and interpretation limits.
+
 `luna.repl-smoke` separates timeout recovery from memory stress. Its non-sanitized
 memory case uses an explicit 1024 MiB worker budget and a 1536 MiB allocation
 request, requires a linked-JIT entry marker and exactly one worker termination,

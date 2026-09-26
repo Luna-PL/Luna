@@ -350,6 +350,9 @@ C ABI dispatch。Context 构造不计入 dispatch 时间。Native capture-free h
 
 #### 本机测量快照（2026-09-26）
 
+这是历史固定顺序协议。不能与下方交错协议直接比较绝对时间：fixture 组织与编译出的
+探针代码已改变，尽管 Runtime 实现语义没有变化。
+
 环境：Windows 11 build 26200、Intel Core i7-12700（12 核／20 逻辑处理器）、
 MSYS2 CLANG64 Clang 20.1.8、C++17、Ninja RelWithDebInfo，开启严格警告。
 Runtime 实现：`2c9cf754f17678978dd9f1fa2eb4c50689f001cb`；探针 Git blob：
@@ -377,3 +380,52 @@ Runtime 实现：`2c9cf754f17678978dd9f1fa2eb4c50689f001cb`；探针 Git blob：
 证明实测延迟恒定：chain 和 override 时间明显变化，原因尚未隔离。没有进一步证据时，
 既不能归因于目录扫描，也不能直接当作调度噪声忽略。性能验收仍需受控、交错运行，
 以及独立的 Linux／macOS 测量。这是 native fixture 证据，不是编译插件工作负载或发布授权。
+
+#### 交错观察协议
+
+独立模式 `--interleaved [iterations] [rounds]` 默认每项测量 10000 次、30 轮。同进程先
+创建独立的 4／64／256 行 fixture 及全部五个 execution context，再开始计时。
+每轮测量全部 30 个“目录／用例”组合；从零计数的轮次 `r` 将时间位置 `p` 映射为
+`(p + 7*r) % 30`。30 轮内，每个组合恰好占据每个位置一次。轮数为 30 的倍数时位置
+平衡；较短运行会明确报告 `position_balanced=no`，不能作为等价证据。
+
+```sh
+cmake --build build-perf --config Release --target runtime-fragment-benchmark
+cmake -DLUNA_FRAGMENT_BENCHMARK_EXECUTABLE="$PWD/build-perf/runtime-fragment-benchmark" \
+  -DLUNA_FRAGMENT_BENCHMARK_ITERATIONS=10000 \
+  -DLUNA_FRAGMENT_BENCHMARK_RECORD="$PWD/build-perf/fragment-cost-interleaved.csv" \
+  -P tests/runtime_fragment_benchmark.cmake
+```
+
+Windows／多配置构建需调整可执行文件路径。脚本省略迭代参数时只运行三次，用于快速
+协议检查。它独立核对 900 行顺序、源码 SHA-256、metadata、包含预热的精确计数、非完整
+轮次标记及严格 CLI 拒绝；全部通过才写记录。CSV 注释携带构建 HEAD、探针源码摘要、
+构建类型、编译器、C++ 方言及采样配置；单独的 HEAD 不证明工作区干净，也不证明完整
+Runtime provenance。每个样本保留轮次与位置，供检查时间相关效应。
+每个样本仍预热 `min(iterations, 1000)` 次；fixture 创建、CSV 输出、总计检查不在计时内，
+native handler／逐调用检查仍在计时内。CPU affinity、功耗策略与后台活动未控制且明确
+标注；交错只减少顺序混杂，并非控制全部因素。
+
+Linux C++17／C++23、macOS、Windows CI 均运行 10000 次／30 轮，以 `fragment-cost-*`
+保留已验证的 CSV artifact 14 天，不用任何 ns/op 数值决定成败。这是共享 runner 的观察，
+不是性能验收。稳定证据归档、受控 affinity／功耗实验、多个独立进程复测及编译插件工作
+负载仍属后续发布工作。
+
+本机交错快照：与上方相同的 Windows／Clang 20.1.8 机器，Runtime 实现为
+`1663a0b05b16506702ea467cd1cca0c8b8a26e25`，探针源码 SHA-256 为
+`2510865763f7e27424d677fcc35c0d8ca429a8db741acbfa4c2dd76bbb6e71f6`。
+一个进程，每格 30 个样本，每个样本测量 10000 次、预热 1000 次；900 个样本均通过
+顺序与计数核对。下表为 ns/op 中位数（最小值—最大值）：
+
+| 项目 | 4 行 | 64 行 | 256 行 |
+| --- | --- | --- | --- |
+| candidate_snapshot | 643.55 (609.9–737.5) | 6834.65 (6595.7–7366.3) | 26379.90 (25241.8–29402.8) |
+| dispatch_none | 216.15 (202.7–673.7) | 214.15 (201.8–462.2) | 216.10 (202.8–254.8) |
+| dispatch_one | 505.95 (472.6–948.5) | 499.45 (477.4–716.3) | 511.80 (472.5–900.9) |
+| dispatch_chain_2 | 730.05 (675.2–1014.7) | 718.35 (664.5–1084.7) | 727.95 (684.4–781.7) |
+| dispatch_chain_4 | 1223.90 (1137.9–1342.2) | 1200.10 (1077.7–1388.3) | 1206.10 (1085.2–1406.3) |
+| dispatch_override_none | 217.15 (202.9–292.6) | 218.10 (201.8–246.6) | 215.70 (202.1–307.4) |
+
+本次未复现旧表中 chain／override 分派随目录规模增长的中位数变化，但仍有离群值，
+原因未隔离。由于 fixture 组织、迭代次数及编译出的探针也改变，不能只归因于顺序，
+也不能声称 Runtime 获得了某个幅度的优化。

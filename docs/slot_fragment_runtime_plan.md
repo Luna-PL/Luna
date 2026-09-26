@@ -456,6 +456,10 @@ activation counts and the warmup cap; their expected final counters are
 
 #### Local measurement snapshot (2026-09-26)
 
+This is the historical fixed-order protocol. Do not compare its absolute times
+directly with the interleaved protocol below: fixture organization and compiled
+probe code differ, even though Runtime implementation semantics are unchanged.
+
 Environment: Windows 11 build 26200, Intel Core i7-12700 (12 cores, 20 logical
 processors), MSYS2 CLANG64 Clang 20.1.8, C++17, Ninja RelWithDebInfo with strict
 warnings. Runtime implementation: `2c9cf754f17678978dd9f1fa2eb4c50689f001cb`;
@@ -487,3 +491,60 @@ Do not attribute the variation to catalog scanning or dismiss it as scheduler
 noise without further evidence. Controlled, interleaved runs and independent
 Linux/macOS measurements remain necessary before a performance acceptance claim.
 This is native-fixture evidence, not compiled plugin workload or release approval.
+
+#### Interleaved observation protocol
+
+The separate `--interleaved [iterations] [rounds]` mode defaults to 10000 measured
+iterations and 30 rounds. It prebuilds independent 4-/64-/256-row fixtures in one
+process, including all five execution contexts, before starting any sample timer.
+Each round measures all 30 catalog/case pairs; round `r` (zero-based) maps temporal
+position `p` to `(p + 7*r) % 30`. Every pair occupies each position exactly once
+over 30 rounds. Multiples of 30 are position-balanced; shorter runs explicitly
+report `position_balanced=no`, rather than claiming equivalent evidence.
+
+```sh
+cmake --build build-perf --config Release --target runtime-fragment-benchmark
+cmake -DLUNA_FRAGMENT_BENCHMARK_EXECUTABLE="$PWD/build-perf/runtime-fragment-benchmark" \
+  -DLUNA_FRAGMENT_BENCHMARK_ITERATIONS=10000 \
+  -DLUNA_FRAGMENT_BENCHMARK_RECORD="$PWD/build-perf/fragment-cost-interleaved.csv" \
+  -P tests/runtime_fragment_benchmark.cmake
+```
+
+Adjust the executable path for Windows or multi-config builds. The script defaults
+to only three iterations for a fast protocol check when the iterations argument
+is omitted. It independently verifies the 900-row schedule, source SHA-256,
+metadata, exact counters (including warmup), partial-round labeling, and strict
+CLI rejection. A record is written only after all checks pass. CSV comments contain
+the build HEAD, probe source digest, build type, compiler, C++ dialect, and sampling
+configuration; HEAD alone is not a clean-worktree or complete Runtime provenance
+claim. Samples include round and position so consumers can inspect temporal effects.
+Warmup remains `min(iterations, 1000)` per sample; fixture setup, CSV output, and
+aggregate checks are outside timers, while native handler/per-call checks remain
+inside them. CPU affinity, power policy, and background activity are uncontrolled
+and explicitly labeled. Interleaving reduces ordering confounds, not all confounds.
+
+Linux C++17/C++23, macOS, and Windows CI use 10000 iterations and 30 rounds. They
+retain validated CSV artifacts as `fragment-cost-*` for 14 days; no ns/op value is
+used for pass/fail. These are observations from shared runners, not performance
+acceptance. A stable evidence archive, controlled affinity/power experiments,
+replicated independent runs, and compiled-plugin workloads remain release work.
+
+Local interleaved snapshot: the same Windows/Clang 20.1.8 machine described above,
+Runtime implementation `1663a0b05b16506702ea467cd1cca0c8b8a26e25`, probe source SHA-256
+`2510865763f7e27424d677fcc35c0d8ca429a8db741acbfa4c2dd76bbb6e71f6`.
+One process, 30 samples per cell, 10000 measured + 1000 warmup calls per sample;
+all 900 samples passed schedule and counter checks. Median ns/op (min–max):
+
+| Case | 4 rows | 64 rows | 256 rows |
+| --- | --- | --- | --- |
+| candidate_snapshot | 643.55 (609.9–737.5) | 6834.65 (6595.7–7366.3) | 26379.90 (25241.8–29402.8) |
+| dispatch_none | 216.15 (202.7–673.7) | 214.15 (201.8–462.2) | 216.10 (202.8–254.8) |
+| dispatch_one | 505.95 (472.6–948.5) | 499.45 (477.4–716.3) | 511.80 (472.5–900.9) |
+| dispatch_chain_2 | 730.05 (675.2–1014.7) | 718.35 (664.5–1084.7) | 727.95 (684.4–781.7) |
+| dispatch_chain_4 | 1223.90 (1137.9–1342.2) | 1200.10 (1077.7–1388.3) | 1206.10 (1085.2–1406.3) |
+| dispatch_override_none | 217.15 (202.9–292.6) | 218.10 (201.8–246.6) | 215.70 (202.1–307.4) |
+
+This run did not reproduce the historical catalog-associated median growth in
+chain/override dispatch. It still has outliers and does not isolate their cause.
+Because the fixture organization, iteration count, and compiled probe also changed,
+do not attribute the difference solely to ordering or claim a Runtime speedup.

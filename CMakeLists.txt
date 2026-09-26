@@ -152,6 +152,15 @@ add_executable(runtime-fragment-benchmark EXCLUDE_FROM_ALL
 target_include_directories(runtime-fragment-benchmark
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_link_libraries(runtime-fragment-benchmark PRIVATE runtime)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/runtime_fragment_benchmark.cpp"
+    LUNA_FRAGMENT_PROBE_SHA256)
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/runtime_fragment_benchmark.cpp")
+target_compile_definitions(runtime-fragment-benchmark PRIVATE
+    LUNA_FRAGMENT_PROBE_GIT_COMMIT="${LUNA_GIT_COMMIT}"
+    LUNA_FRAGMENT_PROBE_SHA256="${LUNA_FRAGMENT_PROBE_SHA256}"
+    LUNA_FRAGMENT_PROBE_BUILD_TYPE="$<CONFIG>"
+    LUNA_FRAGMENT_PROBE_COMPILER="${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 
 add_executable(runtime-allocation-abi-test
     tests/runtime_allocation_abi_test.cpp)

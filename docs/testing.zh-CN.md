@@ -28,6 +28,12 @@ cmake --build build --parallel
 Linux CI 在 C++17/C++23 构建矩阵中都启用该门禁。它只作用于 Luna
 仓库拥有的 target，不把 LLVM 或系统头文件的第三方警告误算为项目回归。
 
+可选目标 `runtime-fragment-benchmark` 不把计时门禁加入默认构建／CTest。各平台 CI
+显式构建它，并运行 `tests/runtime_fragment_benchmark.cmake`，核对 900 个交错样本、
+精确计数、构建 metadata、CSV 格式与位置平衡顺序；`fragment-cost-*` 观察 artifact
+保留 14 天，测量时间不决定成败。复现与解释限制见
+[运行时计划](slot_fragment_runtime_plan.zh-CN.md#交错观察协议)。
+
 `luna.repl-smoke` 将超时恢复与内存压力分离。非 sanitizer 的内存用例明确设置
 1024 MiB worker 额度，请求分配 1536 MiB，要求出现 linked-JIT 执行标记且恰好一次
 worker 终止，再要求下一单元输出 `19`。它验证限额执行和恢复，不保证所有 LLVM

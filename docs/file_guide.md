@@ -960,6 +960,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/runtime_abi_test.cpp`
 - `tests/runtime_descriptor_test.cpp`
 - `tests/runtime_fragment_concurrency_test.cpp`
+- `tests/runtime_fragment_benchmark.cmake`
 - `tests/runtime_fragment_test.cpp`
 - `tests/runtime_allocation_abi_test.cpp`
 - `tests/runtime_application_host_test.cpp`

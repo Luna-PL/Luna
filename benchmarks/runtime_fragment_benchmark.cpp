@@ -2,12 +2,15 @@
 #include "runtime/RuntimeDescriptorABI.h"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <iomanip>
 #include <iostream>
 #include <memory>
+#include <locale>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -141,176 +144,281 @@ RuntimeFragmentBindingSet makeChain(
     return chain;
 }
 
-int run(std::size_t iterations, std::size_t fragmentRows) {
-    auto rows = std::make_shared<std::vector<DescriptorRow>>(fragmentRows);
-    for (std::size_t index = 0; index < rows->size(); ++index)
-        fillDescriptor((*rows)[index], index);
+constexpr std::array<const char*, 10> CaseNames{
+    "candidate_snapshot", "ref_plus_binding_set", "refs_plus_chain_4",
+    "local_override_none", "safe_point_activate_and_pin", "dispatch_none",
+    "dispatch_one", "dispatch_chain_2", "dispatch_chain_4", "dispatch_override_none"};
 
-    MoonRuntime runtime;
-    std::string error;
-    const luna::runtime::GenerationStagingRequest request{
-        "benchmark.fragment.module", std::string(64, 'b'), rows};
-    MoonRuntime::StagedGeneration staged;
-    require(runtime.stage(
-                request,
-                [](const auto&, std::string&) { return true; },
-                [rows](const auto&, auto& bindings, std::string&) {
-                    for (const auto& row : *rows)
-                        bindings.push_back({
-                            row.fragmentId,
-                            row.contractId,
-                            &row.descriptor,
-                            LUNA_RUNTIME_DECLARATION_FRAGMENT_V1,
-                            luna::runtime::GenerationBindingFragmentExecutable |
-                                luna::runtime::GenerationBindingPublicControl});
-                    return true;
-                },
-                {}, staged, error),
-            "could not stage benchmark generation", error);
-    MoonRuntime::PinnedGeneration generation;
-    require(runtime.loadOnce(staged, generation, error),
-            "could not load benchmark generation", error);
-
-    const RuntimeSlotRequirement slot{SlotId, SlotContractId};
-    RuntimeFragmentCandidateSnapshot candidates;
-    require(luna::runtime::snapshotRuntimeFragmentCandidates(
-                generation, slot, candidates, error) &&
-                candidates.size() == MatchingCandidates,
-            "benchmark candidate set is invalid", error);
-    const auto* selected = candidates.at(0);
-    require(selected != nullptr, "benchmark has no selected candidate");
-
-    RuntimeFragmentBindingSet none;
-    require(luna::runtime::makeRuntimeFragmentBindingSet({}, none, error),
-            "could not build empty BindingSet", error);
-    std::vector<RuntimeFragmentRef> selectedRefs;
-    selectedRefs.push_back(makeRef(*selected, slot, error));
-    RuntimeFragmentBindingSet one;
-    require(luna::runtime::makeRuntimeFragmentBindingSet(
-                std::move(selectedRefs), one, error),
-            "could not build selected BindingSet", error);
-    const auto chainTwo = makeChain(candidates, slot, 2, error);
-    const auto chainFour = makeChain(candidates, slot, 4, error);
-    RuntimeFragmentBindingSet overrideNone;
-    require(luna::runtime::makeRuntimeFragmentBindingOverride(
-                chainFour, slot, {}, overrideNone, error) &&
-                overrideNone.chainSize(slot) == 0 && chainFour.chainSize(slot) == 4,
-            "could not build isolated local None override", error);
-    RuntimeFragmentExecutionContext noneContext;
-    RuntimeFragmentExecutionContext oneContext;
-    RuntimeFragmentExecutionContext chainTwoContext;
-    RuntimeFragmentExecutionContext chainFourContext;
-    RuntimeFragmentExecutionContext overrideNoneContext;
-    require(luna::runtime::makeRuntimeFragmentExecutionContext(
-                none, noneContext, error) &&
-                luna::runtime::makeRuntimeFragmentExecutionContext(
-                    one, oneContext, error) &&
-                luna::runtime::makeRuntimeFragmentExecutionContext(
-                    chainTwo, chainTwoContext, error) &&
-                luna::runtime::makeRuntimeFragmentExecutionContext(
-                    chainFour, chainFourContext, error) &&
-                luna::runtime::makeRuntimeFragmentExecutionContext(
-                    overrideNone, overrideNoneContext, error),
-            "could not build dispatch contexts", error);
-
-    std::uint64_t checksum = 0;
+struct Sample {
+    double nanoseconds;
+    std::uint64_t checksum;
     DispatchCounters counters;
-    const Arguments argument{42, &counters};
-    auto dispatch = [&](const RuntimeFragmentExecutionContext& context,
-                        std::uint64_t expectedFragments) {
+};
+
+// One stable fixture per catalog size. Its explicit contexts and argument
+// storage outlive every sample; fixture setup is never inside a timer.
+class BenchmarkFixture {
+public:
+    explicit BenchmarkFixture(std::size_t fragmentRows) {
+        auto rows = std::make_shared<std::vector<DescriptorRow>>(fragmentRows);
+        for (std::size_t index = 0; index < rows->size(); ++index)
+            fillDescriptor((*rows)[index], index);
+
+        const luna::runtime::GenerationStagingRequest request{
+            "benchmark.fragment.module", std::string(64, 'b'), rows};
+        MoonRuntime::StagedGeneration staged;
+        require(runtime.stage(
+                    request,
+                    [](const auto&, std::string&) { return true; },
+                    [rows](const auto&, auto& bindings, std::string&) {
+                        for (const auto& row : *rows)
+                            bindings.push_back({
+                                row.fragmentId,
+                                row.contractId,
+                                &row.descriptor,
+                                LUNA_RUNTIME_DECLARATION_FRAGMENT_V1,
+                                luna::runtime::GenerationBindingFragmentExecutable |
+                                    luna::runtime::GenerationBindingPublicControl});
+                        return true;
+                    },
+                    {}, staged, error),
+                "could not stage benchmark generation", error);
+        require(runtime.loadOnce(staged, generation, error),
+                "could not load benchmark generation", error);
+
+        require(luna::runtime::snapshotRuntimeFragmentCandidates(
+                    generation, slot, candidates, error) &&
+                    candidates.size() == MatchingCandidates,
+                "benchmark candidate set is invalid", error);
+        selected = candidates.at(0);
+        require(selected != nullptr, "benchmark has no selected candidate");
+
+        require(luna::runtime::makeRuntimeFragmentBindingSet({}, none, error),
+                "could not build empty BindingSet", error);
+        std::vector<RuntimeFragmentRef> selectedRefs;
+        selectedRefs.push_back(makeRef(*selected, slot, error));
+        require(luna::runtime::makeRuntimeFragmentBindingSet(
+                    std::move(selectedRefs), one, error),
+                "could not build selected BindingSet", error);
+        chainTwo = makeChain(candidates, slot, 2, error);
+        chainFour = makeChain(candidates, slot, 4, error);
+        require(luna::runtime::makeRuntimeFragmentBindingOverride(
+                    chainFour, slot, {}, overrideNone, error) &&
+                    overrideNone.chainSize(slot) == 0 && chainFour.chainSize(slot) == 4,
+                "could not build isolated local None override", error);
+        require(luna::runtime::makeRuntimeFragmentExecutionContext(
+                    none, noneContext, error) &&
+                    luna::runtime::makeRuntimeFragmentExecutionContext(
+                        one, oneContext, error) &&
+                    luna::runtime::makeRuntimeFragmentExecutionContext(
+                        chainTwo, chainTwoContext, error) &&
+                    luna::runtime::makeRuntimeFragmentExecutionContext(
+                        chainFour, chainFourContext, error) &&
+                    luna::runtime::makeRuntimeFragmentExecutionContext(
+                        overrideNone, overrideNoneContext, error),
+                "could not build dispatch contexts", error);
+    }
+
+    Sample sample(std::size_t caseIndex, std::size_t iterations) {
+        checksum = 0;
+        counters = {};
+        double nanoseconds = 0;
+        switch (caseIndex) {
+        case 0:
+            nanoseconds = measure(iterations, [&](std::size_t) {
+                RuntimeFragmentCandidateSnapshot snapshot;
+                require(luna::runtime::snapshotRuntimeFragmentCandidates(
+                            generation, slot, snapshot, error),
+                        "candidate query failed", error);
+                checksum += snapshot.size();
+            });
+            break;
+        case 1:
+            nanoseconds = measure(iterations, [&](std::size_t) {
+                std::vector<RuntimeFragmentRef> refs;
+                refs.push_back(makeRef(*selected, slot, error));
+                RuntimeFragmentBindingSet bindings;
+                require(luna::runtime::makeRuntimeFragmentBindingSet(
+                            std::move(refs), bindings, error),
+                        "binding construction failed", error);
+                checksum += bindings.bindingCount();
+            });
+            break;
+        case 2:
+            nanoseconds = measure(iterations, [&](std::size_t) {
+                const auto bindings = makeChain(candidates, slot, 4, error);
+                checksum += bindings.bindingCount();
+            });
+            break;
+        case 3:
+            nanoseconds = measure(iterations, [&](std::size_t) {
+                RuntimeFragmentBindingSet bindings;
+                require(luna::runtime::makeRuntimeFragmentBindingOverride(
+                            chainFour, slot, {}, bindings, error) &&
+                            bindings.chainSize(slot) == 0 && chainFour.chainSize(slot) == 4,
+                        "local override construction changed its base", error);
+                checksum += bindings.bindingCount() + 1;
+            });
+            break;
+        case 4:
+            nanoseconds = measure(iterations, [&](std::size_t index) {
+                auto safePoint = runtime.safePoint();
+                require(runtime.activateFragmentBindings(
+                            index % 2 == 0 ? one : none, safePoint, error),
+                        "binding activation failed", error);
+                checksum += runtime.pinFragmentBindings().bindingCount();
+            });
+            break;
+        case 5:
+            nanoseconds = measure(iterations, [&](std::size_t) { dispatch(noneContext, 0); });
+            break;
+        case 6:
+            nanoseconds = measure(iterations, [&](std::size_t) { dispatch(oneContext, 1); });
+            break;
+        case 7:
+            nanoseconds = measure(iterations, [&](std::size_t) { dispatch(chainTwoContext, 2); });
+            break;
+        case 8:
+            nanoseconds = measure(iterations, [&](std::size_t) { dispatch(chainFourContext, 4); });
+            break;
+        case 9:
+            nanoseconds = measure(iterations, [&](std::size_t) { dispatch(overrideNoneContext, 0); });
+            break;
+        default:
+            throw std::runtime_error("invalid benchmark case");
+        }
+        const auto warmup = std::min<std::size_t>(iterations, 1000);
+        const auto calls = iterations + warmup;
+        const std::array<std::uint64_t, 5> controlCounts{4, 1, 4, 1, 0};
+        const std::array<std::uint64_t, 5> fragmentCounts{0, 1, 2, 4, 0};
+        const auto expectedChecksum = caseIndex < 4 ? controlCounts[caseIndex] * calls
+            : (caseIndex == 4 ? (iterations + 1) / 2 + (warmup + 1) / 2 : 0);
+        const auto expectedContinuations = caseIndex >= 5 ? calls : 0;
+        const auto expectedFragments = caseIndex >= 5 ? fragmentCounts[caseIndex - 5] * calls : 0;
+        require(checksum == expectedChecksum && counters.continuations == expectedContinuations &&
+                    counters.fragments == expectedFragments,
+                "benchmark sample counters are invalid");
+        return {nanoseconds, checksum, counters};
+    }
+
+private:
+    void dispatch(const RuntimeFragmentExecutionContext& context,
+                  std::uint64_t expectedFragments) {
         const auto beforeContinuations = counters.continuations;
         const auto beforeFragments = counters.fragments;
         const auto status = luna_runtime_fragment_dispatch_v1(
             context.opaque(), SlotId, SlotContractId, ArgumentsLayoutId,
-            sizeof(argument), alignof(Arguments), &argument,
-            baseContinuation, &counters);
-        require(status == LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1,
-                "benchmark dispatch failed");
+            sizeof(argument), alignof(Arguments), &argument, baseContinuation, &counters);
+        require(status == LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1, "benchmark dispatch failed");
         require(counters.continuations == beforeContinuations + 1 &&
                     counters.fragments == beforeFragments + expectedFragments,
                 "benchmark dispatch did not execute the selected policy");
-    };
+    }
 
+    MoonRuntime runtime;
+    std::string error;
+    MoonRuntime::PinnedGeneration generation;
+    const RuntimeSlotRequirement slot{SlotId, SlotContractId};
+    RuntimeFragmentCandidateSnapshot candidates;
+    const MoonRuntime::PinnedBinding* selected = nullptr;
+    RuntimeFragmentBindingSet none, one, chainTwo, chainFour, overrideNone;
+    RuntimeFragmentExecutionContext noneContext, oneContext, chainTwoContext,
+        chainFourContext, overrideNoneContext;
+    std::uint64_t checksum = 0;
+    DispatchCounters counters;
+    const Arguments argument{42, &counters};
+};
+
+int run(std::size_t iterations, std::size_t fragmentRows) {
+    BenchmarkFixture fixture(fragmentRows);
+    std::uint64_t checksum = 0;
+    DispatchCounters counters;
     std::cout << "runtime-fragment benchmark: iterations=" << iterations
               << ", fragment_rows=" << fragmentRows
               << ", matching_candidates=" << MatchingCandidates << '\n';
-    report("candidate_snapshot", measure(iterations, [&](std::size_t) {
-        RuntimeFragmentCandidateSnapshot snapshot;
-        require(luna::runtime::snapshotRuntimeFragmentCandidates(
-                    generation, slot, snapshot, error),
-                "candidate query failed", error);
-        checksum += snapshot.size();
-    }));
-    report("ref_plus_binding_set", measure(iterations, [&](std::size_t) {
-        std::vector<RuntimeFragmentRef> refs;
-        refs.push_back(makeRef(*selected, slot, error));
-        RuntimeFragmentBindingSet bindings;
-        require(luna::runtime::makeRuntimeFragmentBindingSet(
-                    std::move(refs), bindings, error),
-                "binding construction failed", error);
-        checksum += bindings.bindingCount();
-    }));
-    report("refs_plus_chain_4", measure(iterations, [&](std::size_t) {
-        const auto bindings = makeChain(candidates, slot, 4, error);
-        checksum += bindings.bindingCount();
-    }));
-    report("local_override_none", measure(iterations, [&](std::size_t) {
-        RuntimeFragmentBindingSet bindings;
-        require(luna::runtime::makeRuntimeFragmentBindingOverride(
-                    chainFour, slot, {}, bindings, error) &&
-                    bindings.chainSize(slot) == 0 && chainFour.chainSize(slot) == 4,
-                "local override construction changed its base", error);
-        checksum += bindings.bindingCount() + 1;
-    }));
-    report("safe_point_activate_and_pin", measure(iterations, [&](std::size_t index) {
-        auto safePoint = runtime.safePoint();
-        require(runtime.activateFragmentBindings(
-                    index % 2 == 0 ? one : none, safePoint, error),
-                "binding activation failed", error);
-        checksum += runtime.pinFragmentBindings().bindingCount();
-    }));
-    report("dispatch_none", measure(iterations, [&](std::size_t) {
-        dispatch(noneContext, 0);
-    }));
-    report("dispatch_one", measure(iterations, [&](std::size_t) {
-        dispatch(oneContext, 1);
-    }));
-    report("dispatch_chain_2", measure(iterations, [&](std::size_t) {
-        dispatch(chainTwoContext, 2);
-    }));
-    report("dispatch_chain_4", measure(iterations, [&](std::size_t) {
-        dispatch(chainFourContext, 4);
-    }));
-    report("dispatch_override_none", measure(iterations, [&](std::size_t) {
-        dispatch(overrideNoneContext, 0);
-    }));
-    const auto warmup = std::min<std::size_t>(iterations, 1000);
-    const auto calls = iterations + warmup;
-    require(counters.continuations == 5 * calls,
-            "dispatch lost a continuation call");
-    require(counters.fragments == 7 * calls,
-            "dispatch lost a selected Fragment call");
-    require(checksum == 10 * calls + (iterations + 1) / 2 + (warmup + 1) / 2,
-            "benchmark control-plane checksum is invalid");
+    for (std::size_t caseIndex = 0; caseIndex < CaseNames.size(); ++caseIndex) {
+        const auto sample = fixture.sample(caseIndex, iterations);
+        report(CaseNames[caseIndex], sample.nanoseconds);
+        checksum += sample.checksum;
+        counters.continuations += sample.counters.continuations;
+        counters.fragments += sample.counters.fragments;
+    }
     std::cout << "checksum=" << checksum
               << ", continuation_calls=" << counters.continuations
               << ", fragment_calls=" << counters.fragments << '\n';
     return 0;
 }
 
+int runInterleaved(std::size_t iterations, std::size_t rounds) {
+    constexpr std::array<std::size_t, 3> RowCounts{4, 64, 256};
+    constexpr auto SamplesPerRound = RowCounts.size() * CaseNames.size();
+    std::array<std::unique_ptr<BenchmarkFixture>, RowCounts.size()> fixtures;
+    for (std::size_t index = 0; index < fixtures.size(); ++index)
+        fixtures[index] = std::make_unique<BenchmarkFixture>(RowCounts[index]);
+    std::cout << "# protocol=luna.fragment-cost.interleaved.v1\n"
+              << "# git_commit=" << LUNA_FRAGMENT_PROBE_GIT_COMMIT << '\n'
+              << "# probe_sha256=" << LUNA_FRAGMENT_PROBE_SHA256 << '\n'
+              << "# build_type=" << LUNA_FRAGMENT_PROBE_BUILD_TYPE << '\n'
+              << "# compiler=" << LUNA_FRAGMENT_PROBE_COMPILER << '\n'
+              << "# cxx=" << __cplusplus << '\n'
+              << "# iterations=" << iterations << ",warmup="
+              << std::min<std::size_t>(iterations, 1000) << ",rounds=" << rounds << '\n'
+              << "# affinity=uncontrolled,power_policy=uncontrolled\n"
+              << "round,position,fragment_rows,case,ns_per_op,checksum,continuation_calls,fragment_calls\n";
+    std::array<std::array<unsigned, SamplesPerRound>, SamplesPerRound> visits{};
+    for (std::size_t round = 0; round < rounds; ++round) {
+        for (std::size_t position = 0; position < SamplesPerRound; ++position) {
+            // Seven is coprime with thirty: over thirty rounds every fixture/
+            // case pair occupies each temporal position exactly once.
+            const auto pair = (position + round * 7) % SamplesPerRound;
+            const auto fixtureIndex = pair / CaseNames.size();
+            const auto caseIndex = pair % CaseNames.size();
+            ++visits[pair][position];
+            const auto sample = fixtures[fixtureIndex]->sample(caseIndex, iterations);
+            std::cout << round + 1 << ',' << position + 1 << ',' << RowCounts[fixtureIndex]
+                      << ',' << CaseNames[caseIndex] << ',' << std::fixed << std::setprecision(1)
+                      << sample.nanoseconds << ',' << sample.checksum << ','
+                      << sample.counters.continuations << ',' << sample.counters.fragments << '\n';
+        }
+    }
+    if (rounds % SamplesPerRound == 0) {
+        for (const auto& pair : visits)
+            for (const auto count : pair)
+                require(count == rounds / SamplesPerRound, "interleaved schedule is not balanced");
+    }
+    std::cout << "# verified_samples=" << rounds * SamplesPerRound
+              << ",position_balanced=" << (rounds % SamplesPerRound == 0 ? "yes" : "no") << '\n';
+    return 0;
+}
+
+std::size_t parseCount(const char* text, std::size_t minimum, std::size_t maximum) {
+    const std::string value(text);
+    std::size_t count = 0;
+    const auto result = std::from_chars(value.data(), value.data() + value.size(), count);
+    if (result.ec != std::errc{} || result.ptr != value.data() + value.size() ||
+        count < minimum || count > maximum)
+        throw std::runtime_error("invalid benchmark count: " + value);
+    return count;
+}
+
 } // namespace
 
 int main(int argc, char** argv) {
     try {
-        const auto iterations = argc == 1
-            ? std::size_t{100000} : static_cast<std::size_t>(std::stoull(argv[1]));
-        const auto fragmentRows = argc < 3
-            ? std::size_t{64} : static_cast<std::size_t>(std::stoull(argv[2]));
-        if (argc > 3 || iterations == 0 || iterations > 10000000 ||
-            fragmentRows < MatchingCandidates || fragmentRows > 4096)
+        std::cout.imbue(std::locale::classic());
+        if (argc >= 2 && std::string(argv[1]) == "--interleaved") {
+            if (argc > 4)
+                throw std::runtime_error(
+                    "usage: runtime-fragment-benchmark --interleaved [iterations] [1..300 rounds]");
+            const auto iterations = argc >= 3 ? parseCount(argv[2], 1, 10000000) : 10000;
+            const auto rounds = argc >= 4 ? parseCount(argv[3], 1, 300) : 30;
+            return runInterleaved(iterations, rounds);
+        }
+        if (argc > 3)
             throw std::runtime_error(
-                "usage: runtime-fragment-benchmark [1..10000000 iterations] "
-                "[4..4096 fragment rows]");
+                "usage: runtime-fragment-benchmark [1..10000000 iterations] [4..4096 fragment rows]");
+        const auto iterations = argc >= 2 ? parseCount(argv[1], 1, 10000000) : 100000;
+        const auto fragmentRows = argc >= 3 ? parseCount(argv[2], MatchingCandidates, 4096) : 64;
         return run(iterations, fragmentRows);
     } catch (const std::exception& exception) {
         std::cerr << exception.what() << '\n';
