@@ -546,6 +546,17 @@ export fragment local_impl(value) for published {
     resume;
 }
 
+// Host-only candidate: no source-local apply can supply its ownership checks
+// or implicit cleanup. Both sides of resume own independent linear locals.
+export fragment runtime_owned(value) for published {
+    linear let before = new i32(value);
+    free before;
+    let cleanup = new i32(value);
+    resume;
+    linear let after = new i32(value);
+    free after;
+}
+
 fn dynamic_path() -> i32 {
     let captured = 40;
     published(41) {
@@ -768,7 +779,7 @@ fn static_exported_path() -> i32 {
     const moon::DeclarationRecord* fragmentDeclaration = nullptr;
     for (const auto& declaration : runtimeSlotModule->declarationTable)
         if (declaration.kind == moon::DeclarationKind::Fragment &&
-            declaration.sourceName == "local_impl")
+            declaration.sourceName == "runtime_owned")
             fragmentDeclaration = &declaration;
     const auto* fragmentDescriptor = fragmentDeclaration
         ? contextAbiRegistry.find(
@@ -832,6 +843,9 @@ fn static_exported_path() -> i32 {
             selectedBindings, selectedContext, contextAbiError) ||
         contextEntry(selectedContext.opaque()) != 42)
         return fail("selected runtime Fragment did not resume the outlined continuation");
+    for (size_t invocation = 0; invocation < 8; ++invocation)
+        if (contextEntry(selectedContext.opaque()) != 42)
+            return fail("host-only Fragment ownership/cleanup did not survive repeated dispatch");
 
     const std::string escapingRuntimeSlotSource = R"luna(
 package canonical.runtime_slot_escape;

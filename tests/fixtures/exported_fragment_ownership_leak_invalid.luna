@@ -1,0 +1,8 @@
+export slot hook();
+
+// No source-local apply: publication must still check local linear state.
+export fragment candidate() for hook {
+    let temporary = gpu_alloc_i32(1);
+}
+
+fn main() -> i32 { return 0; }

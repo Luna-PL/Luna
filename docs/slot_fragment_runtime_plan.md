@@ -345,7 +345,12 @@ introduce a runtime depth limit or automatic suppression policy.
 ### Published handler execution boundary
 
 The published-handler boundary is checked independently of local use: exported
-Fragment bodies receive semantic analysis even when no local `apply` exists.
+Fragment bodies receive semantic and independent ownership analysis even when
+no local `apply` exists. Local linear state must be consumed on all completing
+paths, conflicting loans and repeated frees fail in the frontend, and implicit
+affine cleanup is retained for host-only candidates. Ownership analysis uses an
+opaque, normally completing continuation with no caller resources; actual
+static applications additionally check their real continuation paths.
 After sealing, the verifier uses its recomputed direct-call fixed point to
 reject any Fragment runtime entry requiring an execution context, because the
 v1 public execute wrapper cannot pass that capability. Direct and transitive

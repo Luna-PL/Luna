@@ -266,7 +266,10 @@ runtime 递归仍不属于已冻结的 `TBD-SF008` 保证；这些检查不引�
 ### 发布 handler 的执行边界
 
 发布 handler 的边界现在独立于本包使用情况进行检查：exported Fragment body 即使
-没有本地 `apply`，也必须通过语义分析。封存后 verifier 依据独立重算的 direct-call
+没有本地 `apply`，也必须通过语义与独立所有权分析。局部 linear 状态在所有正常结束路径
+上都必须消耗，冲突借用与重复 free 在前端被拒绝，仅宿主选择的候选也保留隐式 affine
+清理。独立所有权检查使用不携带调用者资源、正常结束的 opaque 续体；实际静态 apply
+另外检查真实续体的路径。封存后 verifier 依据独立重算的 direct-call
 最小不动点，拒绝需要 execution context 的 Fragment runtime entry，因为 v1 的公开
 execute wrapper 无法传递该 capability。直接与传递依赖均由 `luna check` 在 codegen
 前拒绝；伪造 helper 的 context-free summary 不能绕过检查。静态绑定的 exported Slot、

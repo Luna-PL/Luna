@@ -19,6 +19,7 @@
 | Runtime ordered chain | `resume` 按宿主明确给出的顺序前进，post-resume 按逆序返回；catalog 顺序和加载顺序不决定 chain。 | `luna.runtime-fragment-v1` |
 | Runtime 同 Slot 续体嵌套 | 即使使用同一 pinned context 与已选 chain，每次 dispatch 仍创建独立 single-shot activation；被继续传播的内层续体逃逸会跳过暂停的外层 chain 的 post-resume 代码。 | `luna.runtime-fragment-v1` |
 | 嵌套局部 override／None | 明确传入的内层 context 只在自身替换或移除目标 Slot 的 chain，不修改暂停的外层 chain；None 仍传播续体逃逸。 | `luna.runtime-fragment-v1` |
+| 发布 handler 的所有权 | Exported body 即使没有本地 `apply` 也独立检查所有权：局部 linear 状态必须消耗，冲突借用与重复 free 被拒绝。隐式 affine 清理在重复静态应用、续体逃逸和仅宿主选择的 runtime dispatch 中仍有效。 | `luna.analysis-snapshot`、`luna.semantic-regressions`、`luna.moonir-canonical` |
 | 发布 handler 的 capability | Exported body 即使没有本地使用也必须分析；生成的 Fragment runtime entry 若直接或传递地需要 execution context，由独立重算的 effect 拒绝，伪造 summary 不能绕过。 | `luna.semantic-regressions`、`luna.moonir-canonical` |
 | 静态／runtime 成本边界 | 静态绑定组合不引入 runtime dispatch 或候选发现；未绑定 exported Slot 使用显式 context-directed dispatch。 | `luna.moon-cost-boundaries`、`luna.moonir-canonical` |
 
@@ -27,7 +28,8 @@ return 不会自动逃逸调用者的续体或外层 chain。
 
 静态源码证据包括[有限嵌套](../tests/fixtures/fragment_nested_continuation.luna)、
 [嵌套 discard 与 return](../tests/fixtures/fragment_nested_discard.luna)、
-[静态 handler 发布](../tests/fixtures/exported_fragment_static_body.luna)，以及
+[静态 handler 发布](../tests/fixtures/exported_fragment_static_body.luna)、
+[发布 handler 清理](../tests/fixtures/exported_fragment_ownership.luna)，以及
 [私有组合继承 context](../tests/fixtures/fragment_static_dynamic_body.luna)。
 独立 CFG／effect 检查在
 [canonical lowering 测试](../tests/moonir_canonical_sealing_lowering_test.cpp)；
@@ -56,8 +58,8 @@ opaque activation，不接收这项 capability。未来扩展必须先明确 con
 先构建编译器和测试目标，然后运行：
 
 ```sh
-ctest --test-dir build --output-on-failure -R 'luna\.(semantic-regressions|runtime-fragment-v1|moonir-canonical|moon-cost-boundaries|0\.3-design-contract)$'
+ctest --test-dir build --output-on-failure -R 'luna\.(analysis-snapshot|semantic-regressions|runtime-fragment-v1|moonir-canonical|moon-cost-boundaries|0\.3-design-contract)$'
 ```
 
-五项门禁都是行为／结构检查，不使用微基准时间阈值。稳定版发布声明仍需要完整
+六项门禁都是行为／结构检查，不使用微基准时间阈值。稳定版发布声明仍需要完整
 回归，以及针对确切拟发布 commit 的跨平台证据。

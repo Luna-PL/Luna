@@ -202,6 +202,8 @@ expect_error("fragment environments cannot hide linear consumption" "tests/fixtu
 expect_error("fragment environment ownership modifiers are inferred" "tests/fixtures/fragment_environment_usage_modifier_invalid.luna" "must not use an ownership modifier")
 expect_error("exported fragments require exported slots" "tests/fixtures/exported_fragment_private_slot_invalid.luna" "must target an exported slot")
 expect_error("unused exported Fragment bodies are analyzed" "tests/fixtures/exported_fragment_unused_body_invalid.luna" "undefined name 'missing_handler_function'")
+expect_error_with_source("unused exported Fragment ownership is checked" "tests/fixtures/exported_fragment_ownership_leak_invalid.luna" "Linear variable 'temporary' was not consumed" "exported_fragment_ownership_leak_invalid.luna:5:")
+expect_success("published Fragment cleanup survives independent checking and repeated apply" "tests/fixtures/exported_fragment_ownership.luna" "51\n52\n53\n57\n51\n52\n53\n57\n51\n57\n61\n54\n55\n58\n56\nProgram exited with code: 0")
 expect_error_with_source("exported Fragment direct dynamic body fails before codegen" "tests/fixtures/exported_fragment_dynamic_body_invalid.luna" "cannot pass an execution context to its handler body" "exported_fragment_dynamic_body_invalid.luna:4:1")
 expect_error_with_source("exported Fragment transitive dynamic body fails before codegen" "tests/fixtures/exported_fragment_dynamic_call_invalid.luna" "cannot pass an execution context to its handler body" "exported_fragment_dynamic_call_invalid.luna:7:1")
 expect_success("exported Fragment statically handled and private identity bodies remain executable" "tests/fixtures/exported_fragment_static_body.luna" "41\n42\n43\n44\nProgram exited with code: 0")

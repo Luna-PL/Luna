@@ -20,6 +20,7 @@ arbitrary handler-body re-entry.
 | Runtime ordered chain | The host's explicit order determines `resume` progression, followed by reverse-order post-resume execution. Catalog order and loading order do not choose the chain. | `luna.runtime-fragment-v1` |
 | Runtime same-Slot continuation nesting | Each dispatch creates fresh single-shot activations, even with the same pinned context and selected chain. A propagated inner continuation escape bypasses post-resume code in the suspended outer chain. | `luna.runtime-fragment-v1` |
 | Nested local override / None | An explicit inner context replaces or removes the selected Slot chain only for that context. It does not modify the suspended outer chain; None still propagates continuation escape. | `luna.runtime-fragment-v1` |
+| Published handler ownership | Exported bodies receive independent ownership checking without local `apply`: local linear state must be consumed and conflicting loans or repeated frees are rejected. Implicit affine cleanup remains valid under repeated static application, continuation escape, and host-only runtime dispatch. | `luna.analysis-snapshot`, `luna.semantic-regressions`, `luna.moonir-canonical` |
 | Published handler capability | Exported bodies are analyzed without local use. A generated Fragment runtime entry that directly or transitively requires an execution context is rejected using independently recomputed effects, even if its summary is forged. | `luna.semantic-regressions`, `luna.moonir-canonical` |
 | Static/runtime cost boundary | Statically bound composition introduces no runtime dispatch or candidate discovery. Unbound exported Slots use explicit context-directed dispatch. | `luna.moon-cost-boundaries`, `luna.moonir-canonical` |
 
@@ -31,6 +32,7 @@ Static source evidence includes
 [finite nesting](../tests/fixtures/fragment_nested_continuation.luna),
 [nested discard and return](../tests/fixtures/fragment_nested_discard.luna),
 [static handler publication](../tests/fixtures/exported_fragment_static_body.luna),
+[published handler cleanup](../tests/fixtures/exported_fragment_ownership.luna),
 and [private context inheritance](../tests/fixtures/fragment_static_dynamic_body.luna).
 The independent CFG/effect checks live in
 [canonical lowering tests](../tests/moonir_canonical_sealing_lowering_test.cpp);
@@ -64,9 +66,9 @@ See the [runtime plan](slot_fragment_runtime_plan.md) and
 Build the compiler and test targets first, then run:
 
 ```sh
-ctest --test-dir build --output-on-failure -R 'luna\.(semantic-regressions|runtime-fragment-v1|moonir-canonical|moon-cost-boundaries|0\.3-design-contract)$'
+ctest --test-dir build --output-on-failure -R 'luna\.(analysis-snapshot|semantic-regressions|runtime-fragment-v1|moonir-canonical|moon-cost-boundaries|0\.3-design-contract)$'
 ```
 
-The five gates are behavioral/structural checks, not benchmark timing thresholds.
+The six gates are behavioral/structural checks, not benchmark timing thresholds.
 A stable-release claim still needs the full regression suite and corresponding
 cross-platform evidence for the exact proposed release commit.

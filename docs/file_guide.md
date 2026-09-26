@@ -653,6 +653,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/exported_fragment_dynamic_call_invalid.luna`
 - `tests/fixtures/exported_fragment_unused_body_invalid.luna`
 - `tests/fixtures/exported_fragment_static_body.luna`
+- `tests/fixtures/exported_fragment_ownership.luna`
+- `tests/fixtures/exported_fragment_ownership_leak_invalid.luna`
 - `tests/fixtures/fragment_static_dynamic_body.luna`
 - `tests/fixtures/fragment_static_mutual_recursion_invalid.luna`
 - `tests/fixtures/fragment_static_recursion_invalid.luna`

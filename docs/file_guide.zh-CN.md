@@ -876,6 +876,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/exported_fragment_dynamic_call_invalid.luna`
 - `tests/fixtures/exported_fragment_unused_body_invalid.luna`
 - `tests/fixtures/exported_fragment_static_body.luna`
+- `tests/fixtures/exported_fragment_ownership.luna`
+- `tests/fixtures/exported_fragment_ownership_leak_invalid.luna`
 - `tests/fixtures/fragment_static_dynamic_body.luna`
 - `tests/fixtures/fragment_static_mutual_recursion_invalid.luna`
 - `tests/fixtures/fragment_static_recursion_invalid.luna`

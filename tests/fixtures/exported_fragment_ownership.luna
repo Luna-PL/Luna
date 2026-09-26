@@ -1,0 +1,56 @@
+export slot hook();
+
+struct HandlerResource { marker: i32; }
+
+impl Drop for HandlerResource {
+    fn drop(resource: &mut HandlerResource) -> unit {
+        print(resource.marker);
+    }
+}
+
+// These candidates are published but never applied in this package.
+export fragment unused() for hook {
+    linear let token = new i32(1);
+    free token;
+    let cleanup = new HandlerResource(59);
+    resume;
+}
+
+export fragment unused_return() for hook {
+    let cleanup = new HandlerResource(60);
+    resume;
+    return;
+}
+
+export fragment candidate() for hook {
+    linear let before = new i32(4);
+    free before;
+    let cleanup = new HandlerResource(57);
+    print(51);
+    resume;
+    linear let after = new i32(6);
+    free after;
+    print(53);
+}
+
+export fragment returning() for hook {
+    let cleanup = new HandlerResource(58);
+    print(54);
+    resume;
+    return;
+}
+
+fn escaping() -> i32 {
+    apply candidate { hook() { return 61; } }
+    return 62;
+}
+
+fn main() -> i32 {
+    // Independent validation and repeated applications must not duplicate frees.
+    apply candidate { hook() { print(52); } }
+    apply candidate { hook() { print(52); } }
+    print(escaping());
+    apply returning { hook() { print(55); } }
+    print(56);
+    return 0;
+}

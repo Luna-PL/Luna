@@ -315,6 +315,45 @@ int main(int argc, char* argv[]) {
                 "semantic diagnostic was not retained"))
         return 4;
 
+    // Publication is an independent executable boundary: ownership validity
+    // cannot depend on whether this package happens to apply the candidate.
+    const std::array<std::pair<const char*, const char*>, 5> invalidHandlers = {{
+        {"let temporary = gpu_alloc_i32(1);",
+         "Linear variable 'temporary' was not consumed"},
+        {"let temporary = gpu_alloc_i32(1); resume; return;",
+         "must be consumed before returning from the fragment"},
+        {"let temporary = new i32(1); free temporary; free temporary;",
+         "after free of 'temporary'"},
+        {"let temporary = new i32(1); let view = borrow temporary; free temporary;",
+         "while an overlapping place is borrowed"},
+        {"linear let temporary = new i32(1); if true { free temporary; }",
+         "consumed on only some paths"},
+    }};
+    for (const auto& handler : invalidHandlers) {
+        const auto* body = handler.first;
+        const auto* diagnostic = handler.second;
+        for (const bool applied : {false, true}) {
+            const std::string source =
+                std::string("export slot hook();\n") +
+                "export fragment candidate() for hook {\n" + body + "\n}\n" +
+                "fn main() -> i32 {\n" +
+                (applied ? "apply candidate { hook() {} }\n" : "") +
+                "return 0;\n}\n";
+            auto published = luna::tooling::AnalysisSnapshot::analyzeSource(
+                source, "file:///workspace/published_ownership.luna");
+            if (!expect(!published.success(),
+                        "invalid published handler passed ownership checking") ||
+                !expect(std::any_of(
+                            published.errors().begin(), published.errors().end(),
+                            [&](const auto& error) {
+                                return error.code.find("OWN") == 0 &&
+                                    error.message.find(diagnostic) != std::string::npos;
+                            }),
+                        "published handler lost its ownership diagnostic"))
+                return 21;
+        }
+    }
+
     auto shadowed = luna::tooling::AnalysisSnapshot::analyzeSource(
         "fn target() -> i32 { return 1; }\n"
         "fn main() -> i32 {\n"

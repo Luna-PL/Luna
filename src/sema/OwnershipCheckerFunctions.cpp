@@ -18,6 +18,18 @@ bool OwnershipChecker::check(Program* program, SymbolTable& symTable) {
         }
     }
     for (auto& declaration : program->declarations) {
+        auto* fragment = dynamic_cast<FragmentDecl*>(declaration.get());
+        if (!fragment || !fragment->isExported) continue;
+        // A published executable must be valid without any source-local
+        // application. Reuse Fragment-local exit/loan/cleanup rules with an
+        // opaque, normally completing continuation and no caller resources.
+        // This is ownership analysis only, not an emitted Slot invocation.
+        setDiagnosticLocation(fragment);
+        SlotInvokeStmt invocation;
+        invocation.continuation = std::make_unique<BlockStmt>();
+        if (!checkFragment(fragment, &invocation).ok) return false;
+    }
+    for (auto& declaration : program->declarations) {
         if (auto* function = dynamic_cast<FunctionDecl*>(declaration.get())) {
             if (function->isExtern) continue;
             if (!checkFunction(function)) return false;
