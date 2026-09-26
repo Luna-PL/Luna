@@ -284,6 +284,16 @@ One、resume／discard、capture 回写及 return 逃逸，且在 Runtime 销毁
 load-once 缓存命中也不能绕过验证。消费者重新编码后的字节完全一致，证明未改变
 wire format、ContractId 编码或 Runtime ABI。证据快照不引用可变的解码后 export 行，
 消费者也不能签发自己导入的 Slot 的本包公开证据。
+正式 `luna build <package> -t moon` 打包入口也已覆盖。完整的 target-bound roundtrip
+现位于 `encodeContainer` 内，使用仍可用的已验证源码 projection 依赖事实；这些临时
+事实不返回调用者。CLI 不再执行第二次无依赖上下文的 decode。CLI 门禁将 host/plugin
+各自生成两份实际文件并比较 hash；产物消费者仍必须提供独立解码的 owner 证据。
+
+```sh
+luna build tests/fixtures/runtime_fragment_container/host -t moon -o build/fragment-host.moon
+luna build tests/fixtures/runtime_fragment_container/plugin -t moon -o build/fragment-plugin.moon
+```
+
 回归在 Runtime 销毁后执行 64 次真实 host/consumer None/One 调用。这是功能性产物证据，
 不是延迟 benchmark 或发布批准。下一步仍是使用这些显式 owner 产物的 compiled-plugin
 对比工作负载，将 setup/discovery 放在 dispatch 计时之外。产物信任/认证、依赖取得与

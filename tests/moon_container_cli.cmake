@@ -34,6 +34,32 @@ if(NOT magic_hex STREQUAL "894d4f4f4e0d0a1a")
     message(FATAL_ERROR "-t moon output has the wrong container magic")
 endif()
 
+# Both owner and consumer must be real deterministic CLI artifacts. Encoding
+# uses source-owned dependency facts for its internal roundtrip; no automatic
+# runtime dependency loading or consumer re-export is implied.
+set(fragment_workspace "${LUNA_SOURCE_DIR}/tests/fixtures/runtime_fragment_container")
+foreach(member IN ITEMS host plugin)
+    foreach(copy IN ITEMS first second)
+        set(output "${work_dir}/${member}-${copy}.moon")
+        execute_process(
+            COMMAND "${LUNA_EXECUTABLE}" build "${fragment_workspace}/${member}"
+                    -t moon -o "${output}"
+            RESULT_VARIABLE result OUTPUT_VARIABLE stdout ERROR_VARIABLE stderr)
+        if(NOT result EQUAL 0 OR NOT EXISTS "${output}")
+            message(FATAL_ERROR "cross-package ${member} -t moon failed (${result})\n${stdout}\n${stderr}")
+        endif()
+        file(READ "${output}" magic_hex OFFSET 0 LIMIT 8 HEX)
+        if(NOT magic_hex STREQUAL "894d4f4f4e0d0a1a")
+            message(FATAL_ERROR "cross-package ${member} artifact has invalid magic")
+        endif()
+    endforeach()
+    file(SHA256 "${work_dir}/${member}-first.moon" first_digest)
+    file(SHA256 "${work_dir}/${member}-second.moon" second_digest)
+    if(NOT first_digest STREQUAL second_digest)
+        message(FATAL_ERROR "cross-package ${member} artifact is nondeterministic")
+    endif()
+endforeach()
+
 set(default_package "${work_dir}/default-package")
 file(COPY "${package_dir}/" DESTINATION "${default_package}")
 set(default_output

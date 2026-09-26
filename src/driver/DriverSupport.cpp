@@ -120,17 +120,9 @@ int buildMoonContainer(const CompilerPipeline& pipeline, const std::string& inpu
                   << "\n";
         return 1;
     }
-    moon::ContainerManifest verifiedManifest;
-    moon::Module verifiedModule;
-    if (!moon::ContainerModelCodec::decodeContainerForTarget(encoded, manifest.targetTriple,
-                                                             manifest.dataLayout, verifiedManifest,
-                                                             verifiedModule, error)) {
-        std::cerr << diagnostic::format(
-                         "moon-container", "generated container failed self-verification: " + error,
-                         inputPath, 0, 0, "report this compiler defect with the input package")
-                  << "\n";
-        return 1;
-    }
+    // encodeContainer performs the complete target-bound roundtrip before
+    // returning bytes, using source-verified dependency facts only internally.
+    // Re-decoding here without explicit owner evidence would reject plugins.
 
     std::string artifactName = package.id;
     if (const auto separator = artifactName.rfind('.'); separator != std::string::npos)

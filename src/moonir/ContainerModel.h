@@ -117,6 +117,8 @@ public:
     // Encodes or decodes all eight required sections as one integrity-checked
     // container. Decode publishes neither manifest nor module until the
     // complete model has passed the MoonIR verifier.
+    // Encode also self-decodes against its verified source projection, without
+    // exposing transient dependency evidence or weakening runtime decoding.
     static bool encodeContainer(
         const ContainerManifest& manifest, const Module& module,
         std::vector<uint8_t>& output, std::string& error,

@@ -151,8 +151,21 @@ bool ContainerModelCodec::encodeContainer(
         output.clear();
         return false;
     }
-    return ContainerWriter::encode(
-        std::move(sections), output, error, limits);
+    if (!ContainerWriter::encode(std::move(sections), output, error, limits))
+        return false;
+    // Self-verify while the already-verified source projection's transient
+    // dependency facts are still available. They never escape this encoding
+    // operation; runtime consumers still need independent owner artifacts.
+    ContainerManifest verifiedManifest;
+    Module verifiedModule;
+    if (!decodeContainerForTarget(output, manifest.targetTriple, manifest.dataLayout,
+            verifiedManifest, verifiedModule, error, limits,
+            projection.dependencySlotPublications)) {
+        error = "generated Moon Container failed self-verification: " + error;
+        output.clear();
+        return false;
+    }
+    return true;
 }
 
 bool ContainerModelCodec::decodeContainer(

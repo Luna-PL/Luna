@@ -94,6 +94,8 @@ Artifact verification is structural/integrity verification, not publisher
 authentication or a native-code sandbox; artifact trust and Fragment selection
 remain host responsibilities. The compiler adapter does not discover artifacts
 on disk, recursively load dependencies, select candidates or activate bindings.
+Formal `build -t moon` encoding self-verifies internally against the verified
+source projection; it exposes no dependency evidence for consumer loading.
 See the [runtime plan](slot_fragment_runtime_plan.md) and
 [release register](ecosystem_release.md).
 

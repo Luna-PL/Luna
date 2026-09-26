@@ -373,6 +373,18 @@ bypass verification. Byte-identical consumer re-encoding demonstrates that this
 path changes neither wire format, ContractId encoding nor Runtime ABI. An owner
 evidence snapshot never aliases mutable decoded exports, and consumers cannot
 attest their imported Slots as local publications.
+Formal `luna build <package> -t moon` packaging is also covered. The complete
+target-bound roundtrip now runs inside `encodeContainer`, while the verified
+source projection's dependency facts are available; those transient facts are
+not returned to callers. The CLI does not perform a second context-free decode.
+The CLI gate emits each host/plugin package twice into real files and compares
+their hashes. Artifact consumers still need independently decoded owner evidence.
+
+```sh
+luna build tests/fixtures/runtime_fragment_container/host -t moon -o build/fragment-host.moon
+luna build tests/fixtures/runtime_fragment_container/plugin -t moon -o build/fragment-plugin.moon
+```
+
 The test makes 64 real host/consumer None/One calls after Runtime teardown.
 This is functional artifact evidence, not a latency benchmark or release gate
 approval. The next step remains a compiled-plugin comparison workload using these

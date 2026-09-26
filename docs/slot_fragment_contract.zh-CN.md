@@ -78,6 +78,8 @@ stage 消费者时显式传入。owner、直接依赖、target/layout、精确 S
 或派发时查找。产物校验只保证结构与完整性，不认证发布者，也不隔离 native code；
 产物信任与 Fragment 选择仍由宿主负责。编译器适配器不扫描磁盘、不递归加载依赖、
 不自动选候选或激活绑定。
+正式 `build -t moon` 编码在内部依照已验证的源码 projection 完成自校验，不对外
+提供可供消费者加载使用的依赖证据。
 另见[运行时计划](slot_fragment_runtime_plan.zh-CN.md)和
 [发布登记](ecosystem_release.zh-CN.md)。
 
