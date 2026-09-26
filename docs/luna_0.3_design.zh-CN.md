@@ -513,7 +513,10 @@ module-qualified local declaration name、capability ID、link symbol、`C` ABI�
 
 exports section 按 public name/Declaration SymbolId 递增，每行保存 public name、
 typed `DeclarationRef`、TypeId、declaration kind、可选 `C` ABI 和 location。只有
-root package 的显式 export 进入该表，dependency export 仅用于编译时解析。
+root package 的显式 export 进入该表，源码解析使用的 dependency export 不复制进来。
+解码后的外包 runtime Slot 由编译器适配器接收显式不可变证据：其来自所属包独立验证的
+根 exports，绑定精确 Slot 契约及 target/layout。此 2026-09-26 实现澄清不增加消费者
+export、wire 字段或隐式依赖加载。
 verifier 必须解析每个 typed reference，比对 TypeId/kind，拒绝同 link symbol
 不同 ContractId 的 host imports，且不允许容器使用 path/library name 代替
 capability ID。

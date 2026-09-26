@@ -114,17 +114,21 @@ public:
         const std::vector<uint8_t>& input, Module& module,
         std::string& error, const ContainerLimits& limits = {});
 
-    // Encodes or decodes all eight required sections as one authenticated
+    // Encodes or decodes all eight required sections as one integrity-checked
     // container. Decode publishes neither manifest nor module until the
     // complete model has passed the MoonIR verifier.
     static bool encodeContainer(
         const ContainerManifest& manifest, const Module& module,
         std::vector<uint8_t>& output, std::string& error,
         const ContainerLimits& limits = {});
+    // Dependencies are explicit immutable evidence from independently decoded
+    // owner containers. No filesystem resolution, re-export or Runtime loading
+    // is implied; hashes/verification do not establish publisher authenticity.
     static bool decodeContainer(
         const std::vector<uint8_t>& input, ContainerManifest& manifest,
         Module& module, std::string& error,
-        const ContainerLimits& limits = {});
+        const ContainerLimits& limits = {},
+        const SlotPublicationDependencies& dependencies = {});
     // Executable loading additionally binds the host-specific manifest facts.
     // A mismatch publishes neither manifest nor module.
     static bool decodeContainerForTarget(
@@ -132,7 +136,8 @@ public:
         const std::string& expectedTargetTriple,
         const std::string& expectedDataLayout,
         ContainerManifest& manifest, Module& module,
-        std::string& error, const ContainerLimits& limits = {});
+        std::string& error, const ContainerLimits& limits = {},
+        const SlotPublicationDependencies& dependencies = {});
 };
 
 } // namespace moon

@@ -356,12 +356,29 @@ when one exists. Missing, wrong-kind or wrong-contract publication rows and
 foreign import/re-export attempts remain rejected. A full encode/decode/load
 test exercises generated Copy factories, None/One, resume/discard, capture
 writeback and return escape after Runtime teardown.
-The source-to-JIT cross-package test above does **not** prove the corresponding
-verified container path: dependency Slot publication facts still need a
-persisted, independently verifiable representation. Decoded foreign runtime
-Slot targets currently fail closed. This gap must be addressed before a real
-cross-package artifact workload can serve as end-to-end performance evidence;
-this local fix changes neither the container wire format nor the runtime ABI.
+The source-to-JIT cross-package test above is distinct from artifact loading.
+The verified-container gap is now covered by a separate small host/plugin
+workspace: both packages encode into independent containers and load through
+the verified generation adapter, not direct JIT registration. Persistent Slot
+publication remains in the owner's root `Exports`. Fully verified owner decode
+issues an immutable `localSlotPublication` evidence snapshot; consumer decode,
+stage and load-once accept explicit `SlotPublicationDependencies`. Evidence checks
+owner/direct import, target/layout, exact identity, structural type and argument
+layout. Source composites use transient compiler-owned evidence while checking
+the concrete projection; this is not serialized into consumer exports. Decode
+without independently verified owner evidence still fails closed. Null/duplicate,
+private-owner, changed-contract, unrelated-owner and other-target evidence are
+rejected without partial output or initialization; load-once cache hits cannot
+bypass verification. Byte-identical consumer re-encoding demonstrates that this
+path changes neither wire format, ContractId encoding nor Runtime ABI. An owner
+evidence snapshot never aliases mutable decoded exports, and consumers cannot
+attest their imported Slots as local publications.
+The test makes 64 real host/consumer None/One calls after Runtime teardown.
+This is functional artifact evidence, not a latency benchmark or release gate
+approval. The next step remains a compiled-plugin comparison workload using these
+explicit owner artifacts, with setup/discovery outside dispatch timers. Artifact
+trust/authentication, dependency retrieval and candidate-selection policy remain
+host responsibilities; no implicit loading, activation or hot-path catalog is added.
 The current lowering packs the
 frozen Slot argument record and calls `luna_runtime_fragment_dispatch_v1` with
 a synchronous stack frame containing the execution context, return storage,

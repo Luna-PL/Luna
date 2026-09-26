@@ -82,10 +82,18 @@ policy is introduced.
 Context-aware indirect calls and non-Copy exported contracts remain outside the
 bounded first ABI. This profile does not enlarge the 2026-09-15 core freeze or
 close the separate performance, stability, and release-authorization gates.
-Cross-package source-to-JIT evidence does not establish cross-package verified
-container loading: dependency Slot publication facts are not yet retained in a
-form that can independently authorize decoded foreign runtime targets. Those
-targets remain rejected rather than inferred public from dependency rows.
+Cross-package verified containers use the owner's own root `Exports` as the
+persistent Slot publication fact. After fully decoding that owner artifact,
+the compiler issues immutable `SlotPublicationEvidence`; the host explicitly
+supplies it when decoding or staging a consumer. Owner, direct dependency,
+target/layout, exact SlotId/ContractId, structural type and argument layout must
+agree. Missing evidence remains fail-closed, including load-once cache hits.
+Consumers do not re-export dependency Slots. This introduces no new keyword,
+container field, ContractId encoding, Runtime ABI or dispatch-time lookup.
+Artifact verification is structural/integrity verification, not publisher
+authentication or a native-code sandbox; artifact trust and Fragment selection
+remain host responsibilities. The compiler adapter does not discover artifacts
+on disk, recursively load dependencies, select candidates or activate bindings.
 See the [runtime plan](slot_fragment_runtime_plan.md) and
 [release register](ecosystem_release.md).
 

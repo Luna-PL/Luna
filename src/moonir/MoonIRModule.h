@@ -2,6 +2,9 @@
 
 #include "MoonIRControlFlow.h"
 
+#include <algorithm>
+#include <utility>
+
 namespace moon {
 
 struct Decl : Node {
@@ -143,6 +146,51 @@ struct ExportRecord {
     SourceLocation location;
 };
 
+// Immutable compiler-issued evidence, not a new wire table or a runtime
+// capability. Each owner artifact's verified root Exports remains the source
+// of truth; a consumer must explicitly supply that owner's evidence.
+class SlotPublicationEvidence {
+public:
+    const std::string& ownerPackageId() const { return mOwner; }
+    const std::string& targetTriple() const { return mTarget; }
+    const std::string& dataLayout() const { return mLayout; }
+    bool matches(const DeclarationRecord& record) const {
+        return std::any_of(mSlots.begin(), mSlots.end(), [&](const auto& slot) {
+            return record.kind == DeclarationKind::Slot &&
+                record.id == slot.id && record.symbolId == slot.symbolId &&
+                record.contractId == slot.contractId && record.type == slot.type &&
+                record.controlArgumentsType == slot.controlArgumentsType;
+        });
+    }
+
+private:
+    friend class ContainerModelCodec;
+    struct Publication {
+        std::string id;
+        luna::identity::SymbolId symbolId;
+        luna::identity::ContractId contractId;
+        TypeRef type;
+        TypeRef controlArgumentsType;
+    };
+    SlotPublicationEvidence(std::string owner, std::string target,
+                            std::string layout,
+                            std::vector<DeclarationRecord> slots)
+        : mOwner(std::move(owner)), mTarget(std::move(target)),
+          mLayout(std::move(layout)) {
+        mSlots.reserve(slots.size());
+        for (const auto& slot : slots)
+            mSlots.push_back({slot.id, slot.symbolId, slot.contractId,
+                              slot.type, slot.controlArgumentsType});
+    }
+    std::string mOwner;
+    std::string mTarget;
+    std::string mLayout;
+    std::vector<Publication> mSlots;
+};
+
+using SlotPublicationDependencies =
+    std::vector<std::shared_ptr<const SlotPublicationEvidence>>;
+
 struct Module {
     uint32_t formatMajor = FormatMajor;
     uint32_t formatMinor = FormatMinor;
@@ -163,6 +211,10 @@ struct Module {
     std::vector<DeclarationRecord> declarationTable;
     std::vector<ImportRecord> imports;
     std::vector<ExportRecord> exports;
+    // Deliberately not serialized. Local evidence is issued only after full
+    // container verification; dependency evidence never becomes a root export.
+    std::shared_ptr<const SlotPublicationEvidence> localSlotPublication;
+    SlotPublicationDependencies dependencySlotPublications;
     std::vector<std::unique_ptr<Decl>> declarations;
     std::vector<CostItem> costs;
 

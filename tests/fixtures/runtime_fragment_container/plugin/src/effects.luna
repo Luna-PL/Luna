@@ -1,0 +1,14 @@
+package canonical.container.plugin;
+module effects;
+
+using canonical.container.host as host;
+
+export fragment plugin_audit(value: i32) for host::effects::audit_slot {
+    if value == 0 { resume; }
+}
+
+runtime fn dynamic_probe() -> i32 {
+    let result = 40;
+    host::effects::audit_slot(1) { result += 2; }
+    return result;
+}

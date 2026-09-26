@@ -70,9 +70,14 @@ pointer，也不允许在没有同步的情况下并发修改同一个 C++ 句�
 
 带 context 的间接调用及非 Copy 的 exported 契约仍不在有界首版 ABI 内。本文不扩大
 2026-09-15 的核心冻结，也不关闭独立的性能、稳定性及发布授权门禁。
-跨包源码到 JIT 的证据不等于跨包 verified container 加载：依赖 Slot 的公开事实
-尚未以可独立授权解码后外包 runtime target 的形式保留。此类 target 仍被拒绝，
-不会从 dependency 行推断为公开。
+跨包 verified container 以所属包自身的根 `Exports` 持久化 Slot 公开事实。
+完整解码该所属包产物后，编译器签发不可变 `SlotPublicationEvidence`；宿主在解码或
+stage 消费者时显式传入。owner、直接依赖、target/layout、精确 SlotId/ContractId、
+结构类型与参数布局必须吻合。缺少证据仍 fail closed，包括 load-once 缓存命中。
+消费者不重新导出依赖 Slot；没有新增关键字、容器字段、ContractId 编码、Runtime ABI
+或派发时查找。产物校验只保证结构与完整性，不认证发布者，也不隔离 native code；
+产物信任与 Fragment 选择仍由宿主负责。编译器适配器不扫描磁盘、不递归加载依赖、
+不自动选候选或激活绑定。
 另见[运行时计划](slot_fragment_runtime_plan.zh-CN.md)和
 [发布登记](ecosystem_release.zh-CN.md)。
 

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "runtime/MoonRuntime.h"
+#include "moonir/MoonIRModule.h"
 
 #include <cstdint>
 #include <string>
@@ -12,6 +13,8 @@ namespace luna::driver {
 // lease for function publications and descriptor-backed non-function exports.
 // This compiler-owned artifact adapter feeds the public MoonRuntime control
 // plane; packaging it as a standalone host SDK is outside the 0.3 surface.
+// Explicit dependency Slot evidence is checked before JIT/staging and even
+// before a load-once cache hit. It does not select or activate any Fragment.
 bool stageVerifiedMoonGeneration(
     luna::runtime::MoonRuntime& runtime,
     const std::vector<uint8_t>& containerBytes,
@@ -19,7 +22,8 @@ bool stageVerifiedMoonGeneration(
     const std::string& expectedDataLayout,
     const luna::runtime::GenerationInitializer& initializer,
     luna::runtime::MoonRuntime::StagedGeneration& staged,
-    std::string& error);
+    std::string& error,
+    const moon::SlotPublicationDependencies& dependencies = {});
 
 bool loadVerifiedMoonGenerationOnce(
     luna::runtime::MoonRuntime& runtime,
@@ -27,6 +31,7 @@ bool loadVerifiedMoonGenerationOnce(
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
     luna::runtime::MoonRuntime::PinnedGeneration& loaded,
-    std::string& error);
+    std::string& error,
+    const moon::SlotPublicationDependencies& dependencies = {});
 
 } // namespace luna::driver

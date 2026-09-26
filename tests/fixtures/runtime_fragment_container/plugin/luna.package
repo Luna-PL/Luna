@@ -1,0 +1,8 @@
+[package]
+id = "canonical.container.plugin"
+version = "0.3.0"
+kind = "library"
+sources = ["src"]
+
+[dependencies]
+"canonical.container.host" = "0.3.0"

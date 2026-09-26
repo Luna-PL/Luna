@@ -3,11 +3,46 @@
 #include "Verifier.h"
 
 #include <algorithm>
+#include <map>
+#include <unordered_set>
 #include <utility>
 
 namespace moon {
 
 using namespace container_detail;
+
+namespace {
+bool validateSlotDependencies(const ContainerManifest& manifest, const Module& module,
+                              const SlotPublicationDependencies& dependencies,
+                              std::string& error, const ContainerLimits& limits) {
+    if (dependencies.size() > limits.maximumTableRows) {
+        error = "Moon Container Slot evidence exceeds the configured row limit";
+        return false;
+    }
+    std::unordered_set<std::string> owners;
+    for (const auto& evidence : dependencies) {
+        if (!evidence || !owners.insert(evidence->ownerPackageId()).second) {
+            error = "Moon Container Slot evidence is null or has duplicate owners";
+            return false;
+        }
+        if (evidence->targetTriple() != manifest.targetTriple ||
+            evidence->dataLayout() != manifest.dataLayout) {
+            error = "Moon Container Slot evidence target does not match the consumer";
+            return false;
+        }
+        if (evidence->ownerPackageId() == module.name ||
+            !std::any_of(module.packageUses.begin(), module.packageUses.end(),
+                [&](const auto& use) {
+                    return use.ownerPackageId == module.name &&
+                        use.packageId == evidence->ownerPackageId();
+                })) {
+            error = "Moon Container Slot evidence owner is not a direct dependency";
+            return false;
+        }
+    }
+    return true;
+}
+} // namespace
 
 bool ContainerModelCodec::encodeContainer(
     const ContainerManifest& manifest, const Module& module,
@@ -31,6 +66,36 @@ bool ContainerModelCodec::encodeContainer(
     Module projection;
     if (!buildConcreteProjection(
             manifest, module, projection, error)) return false;
+    // Source composites still have compiler-authoritative SlotDecls. This
+    // evidence is used only while verifying the concrete export projection;
+    // artifact consumers must obtain it from independently verified owners.
+    std::map<std::string, std::vector<DeclarationRecord>> sourceSlots;
+    for (const auto& executable : module.declarations) {
+        const auto* slot = dynamic_cast<const SlotDecl*>(executable.get());
+        if (!slot || !slot->isExported || slot->packageId == module.name) continue;
+        if (!std::any_of(module.packageUses.begin(), module.packageUses.end(),
+                [&](const auto& use) {
+                    return use.ownerPackageId == module.name &&
+                        use.packageId == slot->packageId;
+                })) continue;
+        const auto* record = projection.findDeclaration(
+            DeclarationRef{slot->symbolId, slot->contractId});
+        if (record && record->id.rfind(slot->packageId + "::", 0) == 0)
+            sourceSlots[slot->packageId].push_back(*record);
+    }
+    for (auto& group : sourceSlots) {
+        const auto& owner = group.first;
+        auto& slots = group.second;
+        if (std::any_of(projection.dependencySlotPublications.begin(),
+                projection.dependencySlotPublications.end(), [&](const auto& evidence) {
+                    return evidence && evidence->ownerPackageId() == owner;
+                })) continue;
+        projection.dependencySlotPublications.push_back(
+            std::shared_ptr<const SlotPublicationEvidence>(new SlotPublicationEvidence(
+                owner, manifest.targetTriple, manifest.dataLayout, std::move(slots))));
+    }
+    if (!validateSlotDependencies(manifest, projection,
+            projection.dependencySlotPublications, error, limits)) return false;
     const auto* entry = manifest.entrypoint.empty()
         ? nullptr : findDeclarationRecord(projection, manifest.entrypoint);
     if ((manifest.packageKind == ContainerPackageKind::Application &&
@@ -92,7 +157,8 @@ bool ContainerModelCodec::encodeContainer(
 
 bool ContainerModelCodec::decodeContainer(
     const std::vector<uint8_t>& input, ContainerManifest& manifest,
-    Module& module, std::string& error, const ContainerLimits& limits) {
+    Module& module, std::string& error, const ContainerLimits& limits,
+    const SlotPublicationDependencies& dependencies) {
     ContainerReader reader;
     if (!reader.parse(input, error, limits)) return false;
     const auto section = [&](ContainerSectionId id)
@@ -130,6 +196,9 @@ bool ContainerModelCodec::decodeContainer(
         !decodeInterfaces(
             *importBytes, *exportBytes, decodedModule, error, limits) ||
         !decodeCode(*codeBytes, decodedModule, error, limits)) return false;
+    if (!validateSlotDependencies(decodedManifest, decodedModule, dependencies,
+            error, limits)) return false;
+    decodedModule.dependencySlotPublications = dependencies;
     Module decodedProjection;
     if (!buildConcreteProjection(
             decodedManifest, decodedModule, decodedProjection, error))
@@ -173,6 +242,16 @@ bool ContainerModelCodec::decodeContainer(
         return false;
     }
 
+    std::vector<DeclarationRecord> publicSlots;
+    for (const auto& exported : decodedModule.exports) {
+        if (exported.kind != DeclarationKind::Slot) continue;
+        if (const auto* record = decodedModule.findDeclaration(exported.declaration))
+            publicSlots.push_back(*record);
+    }
+    decodedModule.localSlotPublication =
+        std::shared_ptr<const SlotPublicationEvidence>(new SlotPublicationEvidence(
+            decodedManifest.packageId, decodedManifest.targetTriple,
+            decodedManifest.dataLayout, std::move(publicSlots)));
     manifest = std::move(decodedManifest);
     module = std::move(decodedModule);
     module.rebuildIndexes();
@@ -185,7 +264,8 @@ bool ContainerModelCodec::decodeContainerForTarget(
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
     ContainerManifest& manifest, Module& module,
-    std::string& error, const ContainerLimits& limits) {
+    std::string& error, const ContainerLimits& limits,
+    const SlotPublicationDependencies& dependencies) {
     if (expectedTargetTriple.empty() || expectedDataLayout.empty()) {
         error = "Moon Container executable target expectation is incomplete";
         return false;
@@ -193,7 +273,7 @@ bool ContainerModelCodec::decodeContainerForTarget(
     ContainerManifest decodedManifest;
     Module decodedModule;
     if (!decodeContainer(
-            input, decodedManifest, decodedModule, error, limits)) return false;
+            input, decodedManifest, decodedModule, error, limits, dependencies)) return false;
     if (decodedManifest.targetTriple != expectedTargetTriple ||
         decodedManifest.dataLayout != expectedDataLayout) {
         error = "Moon Container target triple or data layout does not match the host";

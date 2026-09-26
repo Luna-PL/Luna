@@ -27,10 +27,22 @@ inline bool isPublicSlotTarget(
     };
     const auto found = module.declarationsById.find(record->id);
     // A decoded container retains canonical Slot/contract and export rows,
-    // not frontend SlotDecl objects. Only this package's exact export row can
-    // establish publication without an executable declaration. In particular,
-    // a dependency/import row alone cannot publish a foreign Slot.
-    if (found == module.declarationsById.end()) return locallyPublished();
+    // not frontend SlotDecl objects. Foreign publication additionally requires
+    // explicit evidence issued from the owner's independently verified artifact.
+    // Imports alone, a consumer's exports, and runtime retention cannot attest it.
+    if (found == module.declarationsById.end()) {
+        if (record->id.rfind(module.name + "::", 0) == 0)
+            return locallyPublished();
+        return std::any_of(module.dependencySlotPublications.begin(),
+            module.dependencySlotPublications.end(), [&](const auto& evidence) {
+                return evidence && evidence->matches(*record) &&
+                    std::any_of(module.packageUses.begin(), module.packageUses.end(),
+                        [&](const Module::PackageUse& use) {
+                            return use.ownerPackageId == module.name &&
+                                use.packageId == evidence->ownerPackageId();
+                        });
+            });
+    }
     const auto* slot = dynamic_cast<const SlotDecl*>(found->second);
     if (!slot || slot->symbolId != reference.symbol ||
         slot->contractId != reference.contract ||

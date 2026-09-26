@@ -452,6 +452,7 @@ bool buildConcreteProjection(
     projection.packageUses = source.packageUses;
     projection.isPackage = source.isPackage;
     projection.features = source.features;
+    projection.dependencySlotPublications = source.dependencySlotPublications;
     projection.rebuildIndexes();
     return true;
 }

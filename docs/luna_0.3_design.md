@@ -572,8 +572,12 @@ location. Package-only and host-only fields cannot be mixed.
 
 The exports section is ordered by public name/Declaration SymbolId. Each row carries the public
 name, typed `DeclarationRef`, TypeId, declaration kind, optional `C` ABI, and location. Only
-explicit exports owned by the root package enter this table; dependency exports exist only for
-compile-time resolution. The verifier resolves every typed reference, compares TypeId/kind,
+explicit exports owned by the root package enter this table; dependency exports used in
+source resolution are not copied into it. For a decoded foreign runtime Slot, the compiler
+adapter accepts explicit immutable evidence from the owner's independently verified root
+exports, bound to the exact Slot contract and target/layout. This 2026-09-26 implementation
+clarification introduces no consumer export, wire field or implicit dependency loading.
+The verifier resolves every typed reference, compares TypeId/kind,
 rejects host imports that reuse a link symbol with different ContractIds, and never accepts a
 path or library name as a substitute for a capability ID.
 

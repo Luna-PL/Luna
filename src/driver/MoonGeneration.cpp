@@ -237,11 +237,11 @@ bool stageVerifiedMoonGeneration(
     const std::string& expectedDataLayout,
     const luna::runtime::GenerationInitializer& initializer,
     luna::runtime::MoonRuntime::StagedGeneration& staged,
-    std::string& error) {
+    std::string& error, const moon::SlotPublicationDependencies& dependencies) {
     auto loaded = std::make_shared<LoadedMoonGeneration>();
     if (!moon::ContainerModelCodec::decodeContainerForTarget(
             containerBytes, expectedTargetTriple, expectedDataLayout,
-            loaded->manifest, loaded->module, error))
+            loaded->manifest, loaded->module, error, {}, dependencies))
         return false;
     loaded->contentDigest = containerDigest(containerBytes);
 
@@ -387,7 +387,7 @@ bool loadVerifiedMoonGenerationOnce(
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
     luna::runtime::MoonRuntime::PinnedGeneration& loaded,
-    std::string& error) {
+    std::string& error, const moon::SlotPublicationDependencies& dependencies) {
     if (loaded) {
         error = "Moon load-once output already owns a generation";
         return false;
@@ -396,7 +396,7 @@ bool loadVerifiedMoonGenerationOnce(
     moon::Module module;
     if (!moon::ContainerModelCodec::decodeContainerForTarget(
             containerBytes, expectedTargetTriple, expectedDataLayout,
-            manifest, module, error))
+            manifest, module, error, {}, dependencies))
         return false;
     const std::string digest = containerDigest(containerBytes);
     auto existing = runtime.pin(manifest.packageId);
@@ -411,7 +411,7 @@ bool loadVerifiedMoonGenerationOnce(
     luna::runtime::MoonRuntime::StagedGeneration staged;
     if (!stageVerifiedMoonGeneration(
             runtime, containerBytes, expectedTargetTriple,
-            expectedDataLayout, {}, staged, error))
+            expectedDataLayout, {}, staged, error, dependencies))
         return false;
     return runtime.loadOnce(staged, loaded, error);
 }

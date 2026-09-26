@@ -226,7 +226,7 @@ obligation，不能重新推导所有权。
 | `src/moonir/MoonIRTypes.h` | 稳定引用、基础枚举、类型/声明表记录与公共 source 元数据 |
 | `src/moonir/MoonIRExpressions.h` | structured statement 与 expression 模型 |
 | `src/moonir/MoonIRControlFlow.h` | canonical local、cleanup、edge、block、region、scope 与 CFG 模型 |
-| `src/moonir/MoonIRModule.h` | declaration、feature、module、cost、import/export 与 TypeMaterializer |
+| `src/moonir/MoonIRModule.h` | declaration、feature、module、cost、import/export、不可变 Slot 公开证据与 TypeMaterializer |
 | `src/moonir/MoonIR.cpp` | MoonIR 数据结构的非内联实现 |
 | `src/moonir/ControlFlowBuilder.h` | construction-only structured body 到 canonical CFG 的转换接口 |
 | `src/moonir/ControlFlowBuilder.cpp` | 消费暂态 structured body，分配稳定 local/scope/block 并生成唯一 CFG |
@@ -238,7 +238,7 @@ obligation，不能重新推导所有权。
 | `src/moonir/ControlFlowBuilderCleanup.cpp` | cleanup obligation 排序、edge 转换与 canonical table 重排 |
 | `src/moonir/Container.h` | Moon Container section、资源上限与 reader/writer 接口 |
 | `src/moonir/ContainerModel.h` | 八段 canonical model 与完整容器事务 codec 接口 |
-| `src/moonir/ContainerModel.cpp` | 原子容器装配、目标检查与 Verifier 接力 |
+| `src/moonir/ContainerModel.cpp` | 原子容器装配、目标检查、所属包证据签发、显式依赖证据核对与 Verifier 接力 |
 | `src/moonir/ContainerModelCode.cpp` | expression、operation、terminator、CFG 与 function code section 编解码 |
 | `src/moonir/ContainerModelOpcodes.cpp` | code operation 与 expression 的稳定 opcode 分类映射 |
 | `src/moonir/ContainerModelProjection.cpp` | concrete declaration/type/sysmeta 可达性投影 |
@@ -419,6 +419,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/runtime_descriptor_test.cpp` | Runtime descriptor ABI v1 验证、精确 typed lookup 与 fail-closed 边界 |
 | `tests/runtime_fragment_test.cpp` | Runtime Fragment descriptor、名义 Slot 校验、显式环境 cleanup 与 generation lease 生命周期 |
 | `tests/moonir_canonical_runtime_slot_container_test.cpp` | 真实 verified Moon Container 的本包 Slot publication、生成 Fragment factory／dispatch、None／One 与逃逸；缺失／伪造公开事实的拒绝 |
+| `tests/moonir_canonical_cross_package_container_test.cpp` | 所属包独立产物签发不可变 Slot 公开证据、显式消费者验证与拒绝边界、字节一致的 roundtrip、跨 generation 的真实 None／One 派发 |
 | `tests/runtime_fragment_concurrency_test.cpp` | 显式握手的并发宿主发布／分派、Runtime 销毁后 pinned context 与最终 lease 清理；实现和测试一同插桩 |
 | `tests/runtime_fragment_benchmark.cmake` | 交错成本探针的 CSV／构建身份／独立采样顺序与精确计数检查，不用 ns/op 判定成败 |
 | `tests/runtime_gpu_error_test.cpp` | GPU/runtime 错误快照行为 |
@@ -854,6 +855,12 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/dynamic_select_0_2.luna`
 - `tests/fixtures/dynamic_select_removed_invalid.luna`
 - `tests/fixtures/runtime_retention_descriptor.luna`
+- `tests/fixtures/runtime_fragment_container/host/luna.package`
+- `tests/fixtures/runtime_fragment_container/host/src/effects.luna`
+- `tests/fixtures/runtime_fragment_container/luna.lock`
+- `tests/fixtures/runtime_fragment_container/luna.workspace`
+- `tests/fixtures/runtime_fragment_container/plugin/luna.package`
+- `tests/fixtures/runtime_fragment_container/plugin/src/effects.luna`
 - `tests/fixtures/runtime_slot_cost.luna`
 - `tests/fixtures/enum_match.luna`
 - `tests/fixtures/enum_match_arity_invalid.luna`
@@ -1138,6 +1145,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/moonir_canonical_closure_test.cpp`
 - `tests/moonir_canonical_control_flow_test.cpp`
 - `tests/moonir_canonical_cross_package_runtime_test.cpp`
+- `tests/moonir_canonical_cross_package_container_test.cpp`
 - `tests/moonir_canonical_runtime_slot_container_test.cpp`
 - `tests/moonir_canonical_iterator_cleanup_test.cpp`
 - `tests/moonir_canonical_iterator_ordering_test.cpp`

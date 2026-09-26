@@ -622,6 +622,7 @@ int runRegisteredTests() {
         &runCatalogProjectionTests,
         &runPipelineContainerTests,
         &runCrossPackageRuntimeTest,
+        &runCrossPackageContainerTest,
         &runRuntimeSlotContainerTest,
     };
     for (const auto test : tests)

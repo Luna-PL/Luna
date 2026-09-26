@@ -273,10 +273,21 @@ execution context 仍固定插件 generation；释放 context 后 generation 随
 对象仍存在时继续核对其公开标志。缺失、错误 kind／contract 的公开行与外包 import／
 re-export 冒充仍被拒绝。完整 encode／decode／load 测试覆盖生成的 Copy factory、None／
 One、resume／discard、capture 回写及 return 逃逸，且在 Runtime 销毁后继续执行。
-上述跨包源码到 JIT 测试**不证明**对应的 verified container 路径：依赖 Slot 的公开事实
-仍需要持久化、可独立验证的表示。解码后的外包 runtime Slot target 当前 fail closed。
-真实跨包 artifact 工作负载成为端到端性能证据前，必须先补齐此缺口。本次本包修复
-不改变容器 wire format 或 runtime ABI。
+上述跨包源码到 JIT 测试与产物加载是两条不同证据。独立的小型 host/plugin workspace
+现已覆盖 verified container 缺口：两包分别编码容器，使用已验证 generation 适配器加载，
+而非直接注册 JIT。Slot 公开事实仍持久化在所属包根 `Exports` 中；所属包完整解码验证后
+签发不可变 `localSlotPublication` 快照。消费者的 decode、stage 与 load-once 接收显式
+`SlotPublicationDependencies`，核对 owner/直接导入、target/layout、精确身份、结构类型
+与参数布局。源码复合包只在 concrete projection 校验时使用临时编译器事实，不把它写入
+消费者 exports；缺少所属包独立证据仍 fail closed。空/重复、私有 owner、变化契约、
+无关 owner 与另一 target 的证据均被拒绝，且不部分发布输出或执行 initializer；
+load-once 缓存命中也不能绕过验证。消费者重新编码后的字节完全一致，证明未改变
+wire format、ContractId 编码或 Runtime ABI。证据快照不引用可变的解码后 export 行，
+消费者也不能签发自己导入的 Slot 的本包公开证据。
+回归在 Runtime 销毁后执行 64 次真实 host/consumer None/One 调用。这是功能性产物证据，
+不是延迟 benchmark 或发布批准。下一步仍是使用这些显式 owner 产物的 compiled-plugin
+对比工作负载，将 setup/discovery 放在 dispatch 计时之外。产物信任/认证、依赖取得与
+候选选择策略仍由宿主负责，不增加隐式加载、激活或热路径 catalog。
 当前 lowering
 会打包冻结的 Slot 参数 record，并通过一个同步栈
 frame 调用 `luna_runtime_fragment_dispatch_v1`；frame 携带 execution context、return storage 和

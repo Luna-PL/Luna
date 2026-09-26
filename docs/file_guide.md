@@ -107,6 +107,9 @@ script-defined special inputs.
   conversion, and retained read-only frontend analysis snapshots.
 - Selector and instantiation files own candidate selection and generic-instance state.
 - MoonIR files own lowering, verification, optimization, and deterministic printing.
+  `MoonIRModule.h` also holds immutable compiler-issued Slot publication evidence;
+  `ContainerModel.cpp` derives it from verified owner artifacts and checks explicit
+  dependency evidence without changing the serialized import/export tables.
 - Codegen files are split by module, function, statement, expression, cleanup, execution,
   fragments, GPU, iterators, range analysis, descriptors, and helper concerns.
 - Runtime files own versioned C ABIs and host/GPU/plugin services.
@@ -630,6 +633,12 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/dynamic_select_0_2.luna`
 - `tests/fixtures/dynamic_select_removed_invalid.luna`
 - `tests/fixtures/runtime_retention_descriptor.luna`
+- `tests/fixtures/runtime_fragment_container/host/luna.package`
+- `tests/fixtures/runtime_fragment_container/host/src/effects.luna`
+- `tests/fixtures/runtime_fragment_container/luna.lock`
+- `tests/fixtures/runtime_fragment_container/luna.workspace`
+- `tests/fixtures/runtime_fragment_container/plugin/luna.package`
+- `tests/fixtures/runtime_fragment_container/plugin/src/effects.luna`
 - `tests/fixtures/runtime_slot_cost.luna`
 - `tests/fixtures/enum_match.luna`
 - `tests/fixtures/enum_match_arity_invalid.luna`
@@ -926,6 +935,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/moonir_canonical_closure_test.cpp`
 - `tests/moonir_canonical_control_flow_test.cpp`
 - `tests/moonir_canonical_cross_package_runtime_test.cpp`
+- `tests/moonir_canonical_cross_package_container_test.cpp`
 - `tests/moonir_canonical_runtime_slot_container_test.cpp`
 - `tests/moonir_canonical_iterator_cleanup_test.cpp`
 - `tests/moonir_canonical_iterator_ordering_test.cpp`

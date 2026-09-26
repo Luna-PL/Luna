@@ -1,0 +1,11 @@
+[[package]]
+id = "canonical.container.host"
+version = "0.3.0"
+source = "workspace:host"
+hash = "runtime-fragment-container-host-0.3.0"
+
+[[package]]
+id = "canonical.container.plugin"
+version = "0.3.0"
+source = "workspace:plugin"
+hash = "runtime-fragment-container-plugin-0.3.0"

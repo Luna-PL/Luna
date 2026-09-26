@@ -1,0 +1,10 @@
+package canonical.container.host;
+module effects;
+
+export slot audit_slot(value: i32);
+
+runtime fn host_probe() -> i32 {
+    let result = 40;
+    audit_slot(1) { result += 2; }
+    return result;
+}
