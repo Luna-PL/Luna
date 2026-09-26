@@ -107,6 +107,12 @@ C++ 宿主层从已验证 generation binding 构造 move-only `RuntimeFragmentRe
 校验全部 identity 与 layout，随后固定该 binding 所属 generation。factory-owned 环境会先于
 generation lease 销毁；borrowed 环境必须携带自己的显式 lease。
 
+环境构造检查实际地址是否满足声明的对齐，而不只检查 alignment 字段。被拒绝的非空
+工厂产物在发布前销毁一次，borrowed 环境不会传给 Fragment 的 destroy 回调。Slot activation 以及 C++／C
+分派都在 Fragment 或 base continuation 执行之前拒绝非法或错位参数，包括宿主策略
+None。空载体固定使用 size 0、alignment 1、null data。这些检查不证明分配边界或
+生命周期，也不改变 v1 ABI。
+
 阶段 3 的第二个切片实现了源码构造分离：
 `fragment name[环境](Slot 参数) for slot` 与 `apply name[实参] { ... }`。apply 实参只在
 Apply region 入口求值一次，每个 Slot activation 借用所得 binding。语义分析会隔离 Fragment

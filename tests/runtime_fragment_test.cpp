@@ -1,6 +1,7 @@
 #include "runtime/RuntimeFragment.h"
 #include "runtime/RuntimeDescriptorABI.h"
 
+#include <array>
 #include <atomic>
 #include <iostream>
 #include <memory>
@@ -45,11 +46,28 @@ struct BorrowedEnvironmentProbe {
 
 std::atomic<unsigned> factoryCalls{0};
 std::atomic<unsigned> destroyCalls{0};
+unsigned payloadProbeExecutions = 0;
+unsigned payloadProbeDestructions = 0;
 std::vector<int>* activeChainTrace = nullptr;
 
 int32_t resumeActivation(void* context) {
     ++*static_cast<unsigned*>(context);
     return LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1;
+}
+
+// Adversarial payload tests must never dereference intentionally unaligned
+// storage, even when running against the old, permissive implementation.
+void executePayloadProbe(void*, void*) {
+    ++payloadProbeExecutions;
+}
+
+int32_t createPayloadProbe(const void* arguments, void** outputEnvironment) {
+    *outputEnvironment = const_cast<void*>(arguments);
+    return 0;
+}
+
+void destroyPayloadProbe(void*) {
+    ++payloadProbeDestructions;
 }
 
 int32_t createEnvironment(
@@ -333,6 +351,140 @@ int main() {
     captureFree.environment_alignment = 1;
     captureFree.factory = nullptr;
     captureFree.destroy = nullptr;
+
+    {
+        auto probeDescriptor = captureFree;
+        probeDescriptor.slot_arguments_size = 8;
+        probeDescriptor.slot_arguments_alignment = 8;
+        probeDescriptor.execute = executePayloadProbe;
+        Runtime runtime;
+        auto lease = std::make_shared<int>(1);
+        Runtime::PinnedBinding binding;
+        if (!stageFragment(runtime, lease, &probeDescriptor, binding, error))
+            return fail("payload validation fixture did not stage");
+        const luna::runtime::RuntimeSlotRequirement slot{
+            probeDescriptor.slot_id, probeDescriptor.slot_contract_id};
+        luna::runtime::RuntimeFragmentRef reference;
+        if (!luna::runtime::makeOwnedRuntimeFragmentRef(
+                binding, slot, {"", nullptr}, reference, error))
+            return fail("payload validation fixture did not bind");
+        std::vector<luna::runtime::RuntimeFragmentRef> references;
+        references.push_back(std::move(reference));
+        luna::runtime::RuntimeFragmentBindingSet selected;
+        luna::runtime::RuntimeFragmentBindingSet none;
+        if (!luna::runtime::makeRuntimeFragmentBindingSet(
+                std::move(references), selected, error) ||
+            !luna::runtime::makeRuntimeFragmentBindingSet({}, none, error))
+            return fail("payload validation BindingSets did not initialize");
+        alignas(64) std::array<unsigned char, 64> storage{};
+        const std::string layout = probeDescriptor.slot_arguments_layout_id;
+        const std::array<luna::runtime::RuntimeFragmentArguments, 9> invalid = {{
+            {layout, 8, 8, storage.data() + 1},
+            {layout, 8, 8, nullptr},
+            {layout, 0, 1, storage.data()},
+            {layout, 8, 0, storage.data()},
+            {layout, 8, 3, storage.data()},
+            {layout, 8, 1u << 21, storage.data()},
+            {layout, 0, 8, nullptr},
+            {"", 8, 8, storage.data()},
+            {"layout:\ninvalid", 8, 8, storage.data()},
+        }};
+        unsigned resumes = 0;
+        for (const auto& arguments : invalid) {
+            luna::runtime::RuntimeFragmentActivation activation;
+            if (luna::runtime::makeRuntimeFragmentActivation(
+                    slot, arguments, resumeActivation, &resumes, activation, error) ||
+                activation || error.empty())
+                return fail("activation accepted an invalid or unaligned payload");
+            for (const auto* bindings : {&none, &selected}) {
+                auto outcome = luna::runtime::RuntimeFragmentDispatchOutcome::ContinuationEscaped;
+                if (bindings->dispatchWithOutcome(
+                        slot, arguments, resumeActivation, &resumes, outcome, error) ||
+                    error.empty() ||
+                    outcome != luna::runtime::RuntimeFragmentDispatchOutcome::Completed)
+                    return fail("None/One dispatch accepted an invalid payload");
+                luna::runtime::RuntimeFragmentExecutionContext context;
+                if (!luna::runtime::makeRuntimeFragmentExecutionContext(
+                        *bindings, context, error))
+                    return fail("payload validation context did not initialize");
+                if (context.dispatch(slot, arguments, resumeActivation, &resumes, error) ||
+                    error.empty())
+                    return fail("execution context accepted an invalid payload");
+                if (luna_runtime_fragment_dispatch_v1(
+                        context.opaque(), slot.slotId.c_str(), slot.contractId.c_str(),
+                        arguments.layoutId.c_str(), arguments.size, arguments.alignment,
+                        arguments.data, resumeActivation, &resumes) !=
+                        LUNA_RUNTIME_FRAGMENT_DISPATCH_INVALID_INVOCATION_V1 ||
+                    resumes != 0 || payloadProbeExecutions != 0)
+                    return fail("invalid payload reached a Fragment or continuation callback");
+            }
+        }
+        const luna::runtime::RuntimeFragmentArguments aligned{
+            layout, 8, 8, storage.data()};
+        if (!selected.dispatch(slot, aligned, resumeActivation, &resumes, error) ||
+            payloadProbeExecutions != 1 || resumes != 0 ||
+            !none.dispatch(slot, aligned, resumeActivation, &resumes, error) ||
+            resumes != 1)
+            return fail("valid aligned None/One dispatch was rejected");
+        const luna::runtime::RuntimeFragmentArguments empty{
+            "layout:empty", 0, 1, nullptr};
+        if (!none.dispatch(slot, empty, resumeActivation, &resumes, error) || resumes != 2)
+            return fail("canonical empty payload was rejected");
+        luna::runtime::RuntimeFragmentActivation emptyActivation;
+        if (!luna::runtime::makeRuntimeFragmentActivation(
+                slot, empty, resumeActivation, &resumes, emptyActivation, error) ||
+            luna_runtime_fragment_activation_resume_v1(emptyActivation.opaque()) !=
+                LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1 || resumes != 3)
+            return fail("canonical empty activation was rejected");
+        luna::runtime::RuntimeFragmentExecutionContext noneContext;
+        if (!luna::runtime::makeRuntimeFragmentExecutionContext(none, noneContext, error) ||
+            luna_runtime_fragment_dispatch_v1(
+                noneContext.opaque(), slot.slotId.c_str(), slot.contractId.c_str(),
+                empty.layoutId.c_str(), 0, 1, nullptr, resumeActivation, &resumes) !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1 || resumes != 4)
+            return fail("canonical empty C ABI invocation was rejected");
+    }
+
+    {
+        auto probeDescriptor = descriptor;
+        probeDescriptor.environment_size = 8;
+        probeDescriptor.environment_alignment = 8;
+        probeDescriptor.factory = createPayloadProbe;
+        probeDescriptor.destroy = destroyPayloadProbe;
+        probeDescriptor.execute = executePayloadProbe;
+        Runtime runtime;
+        auto lease = std::make_shared<int>(1);
+        Runtime::PinnedBinding binding;
+        if (!stageFragment(runtime, lease, &probeDescriptor, binding, error))
+            return fail("environment validation fixture did not stage");
+        const luna::runtime::RuntimeSlotRequirement slot{
+            probeDescriptor.slot_id, probeDescriptor.slot_contract_id};
+        alignas(64) std::array<unsigned char, 64> storage{};
+        luna::runtime::RuntimeFragmentRef reference;
+        luna::runtime::BorrowedFragmentEnvironment environment{
+            probeDescriptor.environment_layout_id, 8, 8, storage.data() + 1, lease};
+        if (luna::runtime::makeBorrowedRuntimeFragmentRef(
+                binding, slot, environment, reference, error) || reference || error.empty())
+            return fail("borrowed Fragment accepted an unaligned environment");
+        if (luna::runtime::makeOwnedRuntimeFragmentRef(
+                binding, slot,
+                {probeDescriptor.factory_contract_id, storage.data() + 1}, reference, error) ||
+            reference || error.empty() || payloadProbeDestructions != 1)
+            return fail("invalid factory environment was published or not reclaimed once");
+        environment.data = storage.data();
+        if (!luna::runtime::makeBorrowedRuntimeFragmentRef(
+                binding, slot, environment, reference, error))
+            return fail("aligned borrowed environment was rejected");
+        reference.reset();
+        if (payloadProbeDestructions != 1 ||
+            !luna::runtime::makeOwnedRuntimeFragmentRef(
+                binding, slot, {probeDescriptor.factory_contract_id, storage.data()},
+                reference, error))
+            return fail("borrowed cleanup destroyed storage or aligned factory was rejected");
+        reference.reset();
+        if (payloadProbeDestructions != 2)
+            return fail("aligned factory environment was not destroyed exactly once");
+    }
     captureFree.execute = executeResumingFragment;
     if (!luna::runtime::validateRuntimeFragmentDescriptor(captureFree, error))
         return fail("canonical capture-free Fragment descriptor was rejected");

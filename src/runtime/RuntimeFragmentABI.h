@@ -19,8 +19,9 @@ enum LunaRuntimeFragmentFlagV1 {
 
 // Factory arguments use the compiler-defined layout identified by
 // factory_contract_id. Zero means success. A successful stateful factory must
-// return a non-null environment. ABI callbacks must not unwind across this C
-// boundary.
+// return a non-null environment aligned to environment_alignment. Rejected
+// non-null factory output is returned to destroy exactly once. ABI callbacks
+// must not unwind across this C boundary, including that failure cleanup.
 typedef int32_t (*LunaRuntimeFragmentFactoryFnV1)(
     const void* factory_arguments, void** output_environment);
 
@@ -35,6 +36,9 @@ typedef void (*LunaRuntimeFragmentExecuteFnV1)(
 // context capability. The context pins an immutable BindingSet snapshot for
 // the whole call; it is never recovered from process-global or thread-local
 // state. The base continuation remains compiler-owned and synchronous.
+// Nonempty argument storage must be aligned to arguments_alignment; empty
+// storage is exactly (size=0, alignment=1, pointer=null). Invalid carriers fail
+// before either a selected Fragment or the None/base continuation executes.
 enum LunaRuntimeFragmentContinuationResultV1 {
     LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1 = 0,
     LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1 = 1,

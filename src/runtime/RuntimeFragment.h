@@ -21,6 +21,9 @@ struct RuntimeFragmentFactoryArguments {
 };
 
 struct BorrowedFragmentEnvironment {
+    // The address must satisfy the declared alignment, and the lease must
+    // keep the full environment storage alive. Runtime checks the alignment,
+    // not the truth of the host's claimed bounds or lifetime.
     std::string layoutId;
     uint64_t size = 0;
     uint64_t alignment = 0;
@@ -29,6 +32,8 @@ struct BorrowedFragmentEnvironment {
 };
 
 struct RuntimeFragmentArguments {
+    // Nonempty storage requires an actually aligned address; an empty record
+    // uses size 0, alignment 1, and null data. The host owns bounds/lifetime.
     std::string layoutId;
     uint64_t size = 0;
     uint64_t alignment = 0;

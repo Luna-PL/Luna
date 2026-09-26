@@ -74,6 +74,16 @@ bool powerOfTwo(uint64_t value) {
     return value != 0 && (value & (value - 1)) == 0;
 }
 
+// A declared alignment is not evidence that the actual payload address
+// satisfies it. Check before generated code can perform a typed load. This
+// does not establish allocation bounds or lifetime; those remain host duties.
+bool validStorage(const void* data, uint64_t size, uint64_t alignment) {
+    if (size == 0) return !data && alignment == 1;
+    return data && powerOfTwo(alignment) &&
+        alignment <= MaxEnvironmentAlignment &&
+        (reinterpret_cast<uintptr_t>(data) & (alignment - 1)) == 0;
+}
+
 bool validateBinding(
     const MoonRuntime::PinnedBinding& binding,
     const RuntimeSlotRequirement& slot,
@@ -187,10 +197,7 @@ bool makeRuntimeFragmentActivation(
     }
     if (!validIdentity(slot.slotId) || !validIdentity(slot.contractId) ||
         !validIdentity(arguments.layoutId) || !continuation ||
-        (arguments.size == 0
-             ? arguments.alignment != 1 || arguments.data != nullptr
-             : (!arguments.data || !powerOfTwo(arguments.alignment) ||
-                arguments.alignment > MaxEnvironmentAlignment))) {
+        !validStorage(arguments.data, arguments.size, arguments.alignment)) {
         error = "runtime Fragment activation contract is invalid";
         return false;
     }
@@ -346,6 +353,12 @@ bool makeOwnedRuntimeFragmentRef(
             error = "runtime Fragment factory threw";
             return false;
         }
+        if (!validStorage(environment, descriptor->environment_size,
+                          descriptor->environment_alignment)) {
+            descriptor->destroy(environment);
+            error = "runtime Fragment factory returned an unaligned environment";
+            return false;
+        }
     }
 
     output.binding_ = binding;
@@ -378,7 +391,8 @@ bool makeBorrowedRuntimeFragmentRef(
     } else if (!environment.data || !environment.lease ||
                environment.layoutId != descriptor->environment_layout_id ||
                environment.size != descriptor->environment_size ||
-               environment.alignment != descriptor->environment_alignment) {
+               environment.alignment != descriptor->environment_alignment ||
+               !validStorage(environment.data, environment.size, environment.alignment)) {
         error = "borrowed runtime Fragment environment does not match its layout";
         return false;
     }
@@ -669,6 +683,11 @@ bool RuntimeFragmentBindingSet::dispatchWithOutcome(
         error = "runtime Fragment dispatch requirement is invalid";
         return false;
     }
+    if (!validIdentity(arguments.layoutId) ||
+        !validStorage(arguments.data, arguments.size, arguments.alignment)) {
+        error = "runtime Fragment dispatch argument carrier is invalid";
+        return false;
+    }
     const auto* found = findBindingEntry(*state_, slot);
     if (!found) {
         try {
@@ -820,12 +839,8 @@ extern "C" int32_t luna_runtime_fragment_dispatch_v1(
             !luna::runtime::validText(slot_contract_id) ||
             !luna::runtime::validText(arguments_layout_id) ||
             !base_continuation ||
-            (arguments_size == 0
-                 ? arguments_alignment != 1 || arguments != nullptr
-                 : (!arguments ||
-                    !luna::runtime::powerOfTwo(arguments_alignment) ||
-                    arguments_alignment >
-                        luna::runtime::MaxEnvironmentAlignment)))
+            !luna::runtime::validStorage(
+                arguments, arguments_size, arguments_alignment))
             return LUNA_RUNTIME_FRAGMENT_DISPATCH_INVALID_INVOCATION_V1;
 
         std::string error;

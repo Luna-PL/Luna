@@ -20,6 +20,7 @@ arbitrary handler-body re-entry.
 | Runtime ordered chain | The host's explicit order determines `resume` progression, followed by reverse-order post-resume execution. Catalog order and loading order do not choose the chain. | `luna.runtime-fragment-v1` |
 | Runtime same-Slot continuation nesting | Each dispatch creates fresh single-shot activations, even with the same pinned context and selected chain. A propagated inner continuation escape bypasses post-resume code in the suspended outer chain. | `luna.runtime-fragment-v1` |
 | Nested local override / None | An explicit inner context replaces or removes the selected Slot chain only for that context. It does not modify the suspended outer chain; None still propagates continuation escape. | `luna.runtime-fragment-v1` |
+| Runtime payload storage | Actual Slot argument addresses must satisfy their declared alignment. Empty carriers use size 0, alignment 1, and null data. None and One reject malformed carriers before callbacks; borrowed and factory-returned environments must also be aligned. Rejected non-null factory output is destroyed once. | `luna.runtime-fragment-v1` |
 | Published handler ownership | Exported bodies receive independent ownership checking without local `apply`: local linear state must be consumed and conflicting loans or repeated frees are rejected. Implicit affine cleanup remains valid under repeated static application, continuation escape, and host-only runtime dispatch. | `luna.analysis-snapshot`, `luna.semantic-regressions`, `luna.moonir-canonical` |
 | Published handler capability | Exported bodies are analyzed without local use. A generated Fragment runtime entry that directly or transitively requires an execution context is rejected using independently recomputed effects, even if its summary is forged. | `luna.semantic-regressions`, `luna.moonir-canonical` |
 | Static/runtime cost boundary | Statically bound composition introduces no runtime dispatch or candidate discovery. Unbound exported Slots use explicit context-directed dispatch. | `luna.moon-cost-boundaries`, `luna.moonir-canonical` |
@@ -50,6 +51,9 @@ extension must decide context propagation, re-entry semantics, and ABI
 compatibility before implementation; removing the rejection alone is unsafe.
 
 Host-authored native callbacks are not Luna source verified by this profile.
+Storage alignment checks do not prove that arbitrary native pointers refer to
+valid allocations of the claimed size or lifetime; the host and factory remain
+responsible for those obligations.
 Their ability to invoke the C dispatch ABI is not a stable guarantee of arbitrary
 Luna handler-body recursion. No implicit TLS/current Runtime, automatic
 same-Slot suppression, runtime recursion limit, or multi-shot continuation

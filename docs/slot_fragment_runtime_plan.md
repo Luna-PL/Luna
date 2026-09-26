@@ -125,6 +125,14 @@ then pins that binding's generation. Factory-owned environments are destroyed
 before the generation lease is released; borrowed environments require their
 own explicit lease.
 
+Environment construction checks the actual address against its declared
+alignment, not just the alignment field. A rejected non-null factory result is
+destroyed once before publication; borrowed storage never enters the Fragment's
+destroy callback. Slot activations and both C++/C dispatch reject malformed or unaligned
+argument carriers before any Fragment or base continuation callback, including
+host policy None. Empty carriers use size 0, alignment 1, and null data. These
+checks do not prove allocation bounds or lifetime and do not change the v1 ABI.
+
 The second stage-3 slice implements the source construction split:
 `fragment name[environment](slot parameters) for slot` and
 `apply name[arguments] { ... }`. Apply arguments are evaluated exactly once in
