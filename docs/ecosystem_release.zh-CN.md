@@ -71,10 +71,10 @@ workflow 与最终 tag 发布使用同一个验证脚本，避免两套门禁随
 
 ## 发布交接决策登记表（2026-09-15）
 
-2026-09-15 复核决定让 Slot/Fragment 的 `TBD-SF007`–`TBD-SF010` 保持开放：
-已完成的是 static lexical slice，不是完整 runtime model。因此 Slot/Fragment 被排除在
-0.3 核心冻结之外，而不是继续阻断核心冻结。下表记录当前候选状态、产物授权、发布范围
-与明确延后项：
+2026-09-15 复核时让 Slot/Fragment 的 `TBD-SF007`–`TBD-SF010` 保持开放：
+那一检查点仅完成 static lexical slice。因此 Slot/Fragment 被排除在 0.3 核心冻结之外，
+而不是继续阻断核心冻结。下表保留当时的候选状态、产物授权、发布范围与明确延后项，
+并非 2026-09-25 runtime 实施状态的实时报告：
 
 | ID | 需要确认的内容 | 当前已编码默认 | 建议 | 是否阻断 0.3 发布 |
 |---|---|---|---|---|
@@ -89,7 +89,7 @@ workflow 与最终 tag 发布使用同一个验证脚本，避免两套门禁随
 
 Slot/Fragment 已明确排除在核心冻结之外，发布执行顺序为：
 
-1. 保持 `TBD-SF007`–`TBD-SF010` 为开放的 Slot/Fragment 工作，不扩张已冻结的核心候选；
+1. 在当时检查点，保持 `TBD-SF007`–`TBD-SF010` 为开放的 Slot/Fragment 工作，不扩张已冻结的核心候选；
 2. push 三个现有 candidate commit，等待远程 CI；
 3. 按 compatibility manifest 记录的精确 Luna candidate SHA 分别发布 Toolchain/Lunax，
    不使用可变分支名；
@@ -98,3 +98,14 @@ Slot/Fragment 已明确排除在核心冻结之外，发布执行顺序为：
    `verified_luna_source_commit`，设置 `status: release-ready` 和 `release.publish: true`；
 6. 通过 strict readiness 与联网 evidence 门，提交 lock promotion，最后创建
    `v0.3.0` 并触发根仓 prerelease。
+
+### Slot/Fragment 状态修订（2026-09-25）
+
+SFR001 与[运行时注入计划](slot_fragment_runtime_plan.zh-CN.md)取代了历史 SF006 语法，
+并解决 `TBD-SF007` 和 `TBD-SF009` 的 runtime 范围及保留规则选择。
+`TBD-SF010` 的有界首版 ABI 已实现：已验证的 runtime Fragment 引用、固定 generation 的
+候选快照、宿主选定的 BindingSet、safe-point 激活、显式 execution context 与跨包动态
+Slot dispatch。`TBD-SF008` 已有宿主定序 chain 与局部 override，但同 Fragment 重入尚未
+冻结为稳定语言承诺。带 context 的间接调用和非 Copy 的 exported Slot 契约不在首版 ABI 内。
+本次修订不扩大 0.3 核心冻结，也不单独授权稳定版 Slot/Fragment 发布；跨平台 CI 与独立
+性能/稳定性证据仍是另外的门禁。

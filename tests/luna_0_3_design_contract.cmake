@@ -34,6 +34,24 @@ endfunction()
 verify_design_document("docs/luna_0.3_design.md" "English")
 verify_design_document("docs/luna_0.3_design.zh-CN.md" "Chinese")
 
+# The old TBD IDs remain as historical decision keys, but their current
+# disposition must not regress to the pre-runtime SF006 account.
+foreach(design_document IN ITEMS
+        "docs/luna_0.3_design.md"
+        "docs/luna_0.3_design.zh-CN.md")
+    file(READ "${LUNA_SOURCE_DIR}/${design_document}" design_text)
+    if(design_document MATCHES "zh-CN")
+        set(disposition_marker "截至 2026-09-25 的处置")
+    else()
+        set(disposition_marker "Disposition as of 2026-09-25")
+    endif()
+    string(FIND "${design_text}" "${disposition_marker}" found)
+    if(found EQUAL -1)
+        message(FATAL_ERROR
+            "${design_document} lost its post-SF006 runtime decision disposition")
+    endif()
+endforeach()
+
 set(expected_release_decisions
     RLS001 RLS002 RLS003 RLS004 RLS005 RLS006 RLS007 RLS008)
 foreach(release_document IN ITEMS
@@ -50,6 +68,22 @@ foreach(release_document IN ITEMS
             "${release_document} release handoff register drifted.\n"
             "Expected: ${expected_release_decisions}\n"
             "Actual:   ${actual_release_decisions}")
+    endif()
+endforeach()
+
+foreach(release_document IN ITEMS
+        "docs/ecosystem_release.md"
+        "docs/ecosystem_release.zh-CN.md")
+    file(READ "${LUNA_SOURCE_DIR}/${release_document}" release_text)
+    if(release_document MATCHES "zh-CN")
+        set(revision_marker "Slot/Fragment 状态修订（2026-09-25）")
+    else()
+        set(revision_marker "Slot/Fragment status revision (2026-09-25)")
+    endif()
+    string(FIND "${release_text}" "${revision_marker}" runtime_revision)
+    if(runtime_revision EQUAL -1)
+        message(FATAL_ERROR
+            "${release_document} lost the post-SF006 runtime status revision")
     endif()
 endforeach()
 

@@ -5,7 +5,7 @@ English | [简体中文](luna_0.3_design.zh-CN.md)
 > Document category: RFC / overall design
 > Applies to: candidate Luna 0.3.0
 > Status: Draft
-> Core freeze: Candidate; see [Luna 0.3 Core Freeze Boundary](core_freeze.md). Slot/Fragment remains open.
+> Core freeze: Candidate; see [Luna 0.3 Core Freeze Boundary](core_freeze.md). Slot/Fragment remains outside that freeze; its runtime implementation is tracked separately.
 > Normative status: non-normative RFC; implementation-completion records identify the portions already active in the 0.3 development compiler
 > Final 0.2 implementation checkpoint: `a188d87a6f10d7fa67582389a0a0b915f3741401` (2026-08-09)
 
@@ -27,10 +27,10 @@ implementation, tests, references, and changelog have been updated together.
 ### Core-freeze decision boundary (2026-09-15)
 
 Confirmed IDs in this document are implementation authority. The 2026-09-15 core-freeze review
-confirmed that SF006 closes only the static, lexical, unit-result, single-shot slice and cannot
-be read as completing the whole Slot/Fragment model. The entire Slot/Fragment surface is
-explicitly outside the 0.3 core freeze, so these stable placeholders remain open without
-blocking the core candidate or alpha release:
+confirmed that SF006 closed only the static, lexical, unit-result, single-shot slice. The
+following register records that historical boundary. SFR001 and the runtime injection plan
+subsequently superseded it; Slot/Fragment still remains outside the 0.3 core freeze, and a
+stable Slot/Fragment release claim requires its own completion evidence:
 
 - `TBD-SF007` (open Slot/Fragment scope): whether a future stable surface ships only static lexical
   composition or must expose an acquirable, transferable `RuntimeFragmentRef` and runtime apply;
@@ -45,6 +45,17 @@ blocking the core candidate or alpha release:
 - `TBD-SF010` (open Slot/Fragment scope): the construction/query
   spelling, Copy/Affine and `ModuleLease` lifetime rules for `RuntimeFragmentRef<S>`, unified
   static/runtime apply operands, and the first runtime interceptor/context continuation ABI.
+
+Disposition as of 2026-09-25: `TBD-SF007` is resolved in favor of host-selected runtime
+injection, with static `apply` retaining its zero-runtime-cost path. `TBD-SF009` is resolved by
+removing `runtime slot/fragment`: `export` publishes a public control, while executable
+materialization follows the actual operation and compiler-owned sysmeta. The bounded first ABI
+resolves the implementable part of `TBD-SF010`: exact nominal refs, verified candidate snapshots,
+Copy-only exported Slot parameters and Fragment environments, generation leases, immutable
+BindingSets, and explicit `runtime fn` execution contexts. Context-aware indirect calls remain
+unsupported. `TBD-SF008` now has deterministic host-ordered chains and immutable local overrides,
+but same-fragment re-entry is not yet a frozen stable-language promise. These dispositions do
+not retroactively change the 2026-09-15 core-freeze decision.
 
 Any newly discovered ambiguity must likewise receive a stable `TBD-*` ID here before dependent
 code is written; implementation must not silently choose an answer.
@@ -790,7 +801,7 @@ The following directions are confirmed:
 - `SF004` (Confirmed): ordinary functions/function references and RuntimeFragmentRef are separate
   models and do not implicitly interchange even when shapes match.
 
-`SF005` (Confirmed): 0.3.0 slot/fragment results remain `unit`. The implemented static path
+`SF005` (Confirmed, historical static slice; superseded by SFR001): 0.3.0 slot/fragment results remain `unit`. The implemented static path
 supports single-shot interceptors and single-shot contexts. Non-unit results and `many` are
 deferred. `TBD-SF007` decides whether runtime fragment execution enters 0.3; if it does, the first
 ABI still considers only single-shot interceptors, while the runtime context/continuation ABI
@@ -809,6 +820,9 @@ post-resume fragment code while retaining canonical cleanup. `?` inside a fragme
 Local slot declarations, blockless apply, `context many`, and `dynamic slot/apply` are removed.
 No runtime typed-reference acquisition syntax is introduced; ordinary apply is the sole spelling
 and any future typed operand extension must be decided separately.
+
+The SF006 syntax above is a historical 2026-08-29 static milestone. SFR001 below supersedes it;
+it is not the current source grammar.
 
 `SFR001` (Confirmed, 2026-09-23) supersedes SF006 as the implementation direction for the open
 Slot/Fragment surface. A `slot` is itself a fixed nominal injection point; a unified `fragment`
@@ -859,9 +873,11 @@ rejected at artifact boundaries rather than acquiring compatibility semantics.
 
 The static SF006 slice is closed by the declaration/control grammar above, nominal Slot rows in
 the catalog and MoonIR, strong Fragment-to-Slot references, runtime descriptor kind 8, migration
-diagnostics, and cleanup/control regression oracles. The full runtime model and the nested/re-entry
-boundary remain governed by `TBD-SF007` through `TBD-SF010`. The frozen static behavior is summarized in
-[Interceptors, contexts, and slots](fragments.md).
+diagnostics, and cleanup/control regression oracles. This paragraph records the former static
+milestone, not the current source grammar. The SFR001 runtime implementation and remaining
+same-fragment re-entry limitation are recorded above and in the
+[Slot/Fragment runtime plan](slot_fragment_runtime_plan.md); current source behavior is described in
+[Slots and fragments](fragments.md).
 
 Luna does not gain an effect mechanism merely because Slot/Fragment borrows control ideas from
 algebraic effects.
@@ -1444,9 +1460,10 @@ requires remote CI, attested immutable artifacts for both child components,
 and explicit lock promotion with their common candidate commit and artifact evidence.
 The remaining authorization, release-tier, and explicit-deferral choices are
 centralized in the [ecosystem release handoff decision register](ecosystem_release.md#release-handoff-decision-register-2026-09-15);
-`TBD-SF007` through `TBD-SF010` remain deliberately open and outside the core-freeze
-contract. They must be resolved before the project claims stable Slot/Fragment semantics,
-but they do not block this core candidate.
+the historical `TBD-SF007` through `TBD-SF010` decision boundary remains outside the core-freeze
+contract. Its current disposition is recorded above; same-fragment re-entry and independent
+stability evidence still need closure before claiming stable Slot/Fragment semantics, but do not
+block the core candidate.
 
 ## 10. Non-priority placeholders
 

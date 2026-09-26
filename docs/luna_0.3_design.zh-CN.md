@@ -5,7 +5,7 @@
 > 文档类别：RFC / 总体设计
 > 适用版本：候选 Luna 0.3.0
 > 状态：Draft
-> 核心冻结：候选；见 [Luna 0.3 核心冻结边界](core_freeze.zh-CN.md)。Slot/Fragment 保持开放。
+> 核心冻结：候选；见 [Luna 0.3 核心冻结边界](core_freeze.zh-CN.md)。Slot/Fragment 仍在该冻结范围之外，runtime 实施另行跟踪。
 > 规范性：非规范 RFC；实现完成记录会标出已在 0.3 开发期编译器生效的部分
 > 最终 0.2 实现检查点：`a188d87a6f10d7fa67582389a0a0b915f3741401`（2026-08-09）
 
@@ -25,10 +25,10 @@
 
 ### 核心冻结决定边界（2026-09-15）
 
-本文的 Confirmed ID 是实现授权。2026-09-15 的核心冻结复核确认，SF006 只关闭了
-静态、词法、unit-result、single-shot 切片，不能被解读为完整 Slot/Fragment
-模型已决。整个 Slot/Fragment 表面明确排除在 0.3 核心冻结之外，因此以下稳定占位
-保持开放，但不阻断核心候选或 alpha 发布：
+本文的 Confirmed ID 是实现授权。2026-09-15 的核心冻结复核确认，SF006 当时只关闭了
+静态、词法、unit-result、single-shot 切片。以下登记保留那次历史边界；其后 SFR001
+及运行时注入计划已经取代旧模型。Slot/Fragment 仍在 0.3 核心冻结之外，宣称其语义稳定
+需要独立的完成证据：
 
 - `TBD-SF007`（Slot/Fragment 开放范围）：未来稳定表面是否明确限定为 static
   lexical composition，还是必须在 0.3 公开可获取、可传递的
@@ -44,6 +44,14 @@
 - `TBD-SF010`（Slot/Fragment 开放范围）：
   `RuntimeFragmentRef<S>` 的构造/查询语法、Copy/Affine 规则、`ModuleLease` 生命期、
   static/runtime apply operand 统一规则，以及首个 runtime interceptor/context continuation ABI。
+
+截至 2026-09-25 的处置：`TBD-SF007` 已选择宿主选定的 runtime 注入，静态 `apply` 仍保持
+零 Runtime 成本。`TBD-SF009` 通过删除 `runtime slot/fragment` 解决：`export` 发布公开
+控制点，可执行物化由实际操作和编译器 sysmeta 决定。`TBD-SF010` 的首版可实施边界已确定：
+确切名义化引用、已验证候选快照、Copy-only 的 exported Slot 参数及 Fragment 环境、
+generation lease、不可变 BindingSet 与显式 `runtime fn` execution context；带 context 的
+间接调用仍不支持。`TBD-SF008` 已有宿主定序 chain 和不可变局部 override，但同一 Fragment
+重入尚未冻结为稳定语言承诺。这些新处置不追溯改变 2026-09-15 的核心冻结决定。
 
 后续发现的新歧义也必须先在此处获得稳定 `TBD-*` ID，之后才能编写
 依赖代码；实现不得隐式替它选择答案。
@@ -703,7 +711,7 @@ entry，而拒绝 initializer 不得改变 active generation 或 retained histor
 - `SF004`（Confirmed）：普通函数/函数引用与 RuntimeFragmentRef 分开建模，形状相同
   也不允许隐式互换。
 
-`SF005`（Confirmed）：0.3.0 slot/fragment result 固定为 `unit`。已实现的静态路径支持
+`SF005`（Confirmed，历史静态切片；已由 SFR001 取代）：0.3.0 slot/fragment result 固定为 `unit`。已实现的静态路径支持
 single-shot interceptor 和 single-shot context。non-unit result 与 `many` 延后。runtime
 fragment execution 是否进入 0.3 由 `TBD-SF007` 决定；若进入，首个 ABI 仍只考虑
 single-shot interceptor，runtime context/continuation ABI 继续延后。
@@ -719,6 +727,9 @@ single-shot `resume()` 后不得 abort。continuation 内的 `return` 或 `?` �
 post-resume fragment 代码，同时保持 canonical cleanup；fragment 内的 `?` 被拒绝。局部 slot、
 无 body apply、`context many` 和 `dynamic slot/apply` 均已移除。不引入 runtime typed-reference
 获取语法；普通 apply 是唯一拼写，未来 typed operand 扩展必须另行决定。
+
+以上 SF006 语法仅是 2026-08-29 静态里程碑的历史记录，已由下述 SFR001 取代，不能作为
+当前源码语法使用。
 
 `SFR001`（Confirmed，2026-09-23）取代 SF006，成为开放 Slot/Fragment 表面的实施方向。
 `slot` 本身就是固定、名义化的注入点；统一的 `fragment` 只目标指向一个确切 SlotId，并
@@ -761,8 +772,9 @@ feature bit 与 Dynamic retention value 会在 artifact 边界被拒绝，不获
 
 SF006 的静态切片已由上述 declaration/control grammar、catalog 与 MoonIR 中的名义 Slot row、Fragment
 到 Slot 的强引用、runtime descriptor kind 8、迁移诊断，以及 cleanup/control 回归 oracle
-关闭。完整 runtime model 与嵌套/重入边界仍受 `TBD-SF007`–`TBD-SF010`
-约束。已冻结的精确行为见 [Interceptor、Context 与 Slot](fragments.zh-CN.md)。
+关闭。本段记录旧静态里程碑，而不是当前源码语法。SFR001 的 runtime 实施与同 Fragment
+重入限制见上文及 [Slot/Fragment 运行时计划](slot_fragment_runtime_plan.zh-CN.md)；当前源码行为见
+[Slot 与 Fragment](fragments.zh-CN.md)。
 
 Luna 不因为 Slot/Fragment 借鉴代数效应的控制思想而引入 effect 机制。
 
@@ -1263,8 +1275,9 @@ Luna 候选 `41ce85e`、Toolchains 0.2.0 候选 `63c8fe1` 与 Lunax 0.2.0 候选
 产物，随后把共同的候选 commit 与产物证据写入并显式升级 lock。
 这些剩余授权、发布等级与明确延后项已集中记录在
 [生态发布交接决策表](ecosystem_release.zh-CN.md#发布交接决策登记表2026-09-15)；
-`TBD-SF007`–`TBD-SF010` 继续保持开放并排除在核心冻结契约之外；项目在声称
-Slot/Fragment 语义稳定前必须解决它们，但它们不再阻断本次核心候选。
+历史的 `TBD-SF007`–`TBD-SF010` 决策边界继续排除在核心冻结契约之外；当前处置已在
+上文记录。同 Fragment 重入与独立稳定性证据仍需收口，才可声称 Slot/Fragment 语义稳定；
+这些工作不阻断本次核心候选。
 
 ## 10. 非优先目标占位
 

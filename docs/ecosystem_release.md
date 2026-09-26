@@ -84,10 +84,10 @@ and final tag publication use the same verification script so the two gates cann
 
 ## Release handoff decision register (2026-09-15)
 
-The 2026-09-15 review keeps Slot/Fragment `TBD-SF007` through `TBD-SF010` deliberately open: the
-static lexical slice is implemented, but the full runtime model is not closed. Slot/Fragment is
-therefore excluded from the 0.3 core freeze rather than used to block it. The rows below record
-the resulting candidate state, artifact authorization, release scope, and explicit deferrals:
+The 2026-09-15 review kept Slot/Fragment `TBD-SF007` through `TBD-SF010` deliberately open: at
+that checkpoint only the static lexical slice was implemented. Slot/Fragment was excluded from
+the 0.3 core freeze rather than used to block it. The rows below preserve that dated handoff
+decision and candidate state; they are not a live report of the 2026-09-25 runtime implementation:
 
 | ID | Confirmation needed | Encoded default | Recommendation | Blocks 0.3 release |
 |---|---|---|---|---|
@@ -102,8 +102,8 @@ the resulting candidate state, artifact authorization, release scope, and explic
 
 With Slot/Fragment explicitly excluded from the core freeze, the release sequence is:
 
-1. Preserve `TBD-SF007` through `TBD-SF010` as open Slot/Fragment work and do not expand the
-   frozen core candidate to resolve them.
+1. At that checkpoint, preserve `TBD-SF007` through `TBD-SF010` as open Slot/Fragment work and do
+   not expand the frozen core candidate to resolve them.
 2. Push the three existing candidate commits and wait for remote CI.
 3. Release Toolchain and Lunax against the exact Luna candidate SHA recorded in each
    compatibility manifest, never a mutable branch.
@@ -113,3 +113,16 @@ With Slot/Fragment explicitly excluded from the core freeze, the release sequenc
    `release.publish: true`.
 6. Pass strict readiness and online evidence, commit the lock promotion, then create `v0.3.0`
    and trigger the root prerelease.
+
+### Slot/Fragment status revision (2026-09-25)
+
+SFR001 and the [runtime injection plan](slot_fragment_runtime_plan.md) supersede the historical
+SF006 syntax and resolve the runtime-scope and retention choices in `TBD-SF007` and `TBD-SF009`.
+The bounded first ABI of `TBD-SF010` is implemented: verified runtime Fragment refs, pinned
+candidate snapshots, host-selected BindingSets, safe-point activation, explicit execution
+contexts, and cross-package dynamic Slot dispatch. `TBD-SF008` now has host-ordered chains and
+local overrides, but same-fragment re-entry is not yet a frozen stable-language promise.
+Context-aware indirect calls and non-Copy exported Slot contracts remain outside the first ABI.
+This revision does not enlarge the 0.3 core freeze or by itself authorize a stable
+Slot/Fragment release; cross-platform CI and independent performance/stability evidence remain
+separate gates.
