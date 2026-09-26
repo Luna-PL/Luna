@@ -554,6 +554,7 @@ if(LUNA_STRICT_WARNINGS)
         runtime-abi-test
         runtime-descriptor-test
         runtime-fragment-test
+        runtime-fragment-benchmark
         runtime-fragment-concurrency-test
         runtime-allocation-abi-test
         runtime-default-allocation-test

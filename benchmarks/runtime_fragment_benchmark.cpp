@@ -33,12 +33,29 @@ struct DescriptorRow {
     LunaRuntimeFragmentDescriptorV1 descriptor{};
 };
 
+struct DispatchCounters {
+    std::uint64_t continuations = 0;
+    std::uint64_t fragments = 0;
+};
+
+struct Arguments {
+    std::int32_t value;
+    DispatchCounters* counters;
+};
+
 int32_t baseContinuation(void* context) {
-    ++*static_cast<std::uint64_t*>(context);
+    ++static_cast<DispatchCounters*>(context)->continuations;
     return LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1;
 }
 
 void executeResumingFragment(void*, void* activation) {
+    const auto* arguments = static_cast<const Arguments*>(
+        luna_runtime_fragment_activation_arguments_v1(
+            activation, SlotId, SlotContractId, ArgumentsLayoutId,
+            sizeof(Arguments), alignof(Arguments)));
+    if (!arguments || arguments->value != 42 || !arguments->counters)
+        std::abort();
+    ++arguments->counters->fragments;
     if (luna_runtime_fragment_activation_resume_v1(activation) !=
         LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1)
         std::abort();
@@ -83,8 +100,8 @@ void fillDescriptor(DescriptorRow& row, std::size_t index) {
         row.slotId.c_str(),
         SlotContractId,
         ArgumentsLayoutId,
-        sizeof(std::int32_t),
-        alignof(std::int32_t),
+        sizeof(Arguments),
+        alignof(Arguments),
         "",
         "benchmark.empty.environment",
         0,
@@ -104,6 +121,24 @@ RuntimeFragmentRef makeRef(
                 binding, slot, {}, ref, error),
             "could not create benchmark Fragment ref", error);
     return ref;
+}
+
+RuntimeFragmentBindingSet makeChain(
+    const RuntimeFragmentCandidateSnapshot& candidates,
+    const RuntimeSlotRequirement& slot, std::size_t length,
+    std::string& error) {
+    std::vector<RuntimeFragmentRef> refs;
+    for (std::size_t index = 0; index < length; ++index) {
+        const auto* binding = candidates.at(index);
+        require(binding != nullptr, "benchmark chain has no candidate");
+        refs.push_back(makeRef(*binding, slot, error));
+    }
+    RuntimeFragmentBindingSet chain;
+    require(luna::runtime::makeRuntimeFragmentChainBindingSet(
+                std::move(refs), chain, error),
+            "could not build benchmark chain", error);
+    require(chain.chainSize(slot) == length, "benchmark chain length is invalid");
+    return chain;
 }
 
 int run(std::size_t iterations, std::size_t fragmentRows) {
@@ -154,24 +189,46 @@ int run(std::size_t iterations, std::size_t fragmentRows) {
     require(luna::runtime::makeRuntimeFragmentBindingSet(
                 std::move(selectedRefs), one, error),
             "could not build selected BindingSet", error);
+    const auto chainTwo = makeChain(candidates, slot, 2, error);
+    const auto chainFour = makeChain(candidates, slot, 4, error);
+    RuntimeFragmentBindingSet overrideNone;
+    require(luna::runtime::makeRuntimeFragmentBindingOverride(
+                chainFour, slot, {}, overrideNone, error) &&
+                overrideNone.chainSize(slot) == 0 && chainFour.chainSize(slot) == 4,
+            "could not build isolated local None override", error);
     RuntimeFragmentExecutionContext noneContext;
     RuntimeFragmentExecutionContext oneContext;
+    RuntimeFragmentExecutionContext chainTwoContext;
+    RuntimeFragmentExecutionContext chainFourContext;
+    RuntimeFragmentExecutionContext overrideNoneContext;
     require(luna::runtime::makeRuntimeFragmentExecutionContext(
                 none, noneContext, error) &&
                 luna::runtime::makeRuntimeFragmentExecutionContext(
-                    one, oneContext, error),
+                    one, oneContext, error) &&
+                luna::runtime::makeRuntimeFragmentExecutionContext(
+                    chainTwo, chainTwoContext, error) &&
+                luna::runtime::makeRuntimeFragmentExecutionContext(
+                    chainFour, chainFourContext, error) &&
+                luna::runtime::makeRuntimeFragmentExecutionContext(
+                    overrideNone, overrideNoneContext, error),
             "could not build dispatch contexts", error);
 
     std::uint64_t checksum = 0;
-    std::uint64_t continuationCalls = 0;
-    const std::int32_t argument = 42;
-    auto dispatch = [&](const RuntimeFragmentExecutionContext& context) {
+    DispatchCounters counters;
+    const Arguments argument{42, &counters};
+    auto dispatch = [&](const RuntimeFragmentExecutionContext& context,
+                        std::uint64_t expectedFragments) {
+        const auto beforeContinuations = counters.continuations;
+        const auto beforeFragments = counters.fragments;
         const auto status = luna_runtime_fragment_dispatch_v1(
             context.opaque(), SlotId, SlotContractId, ArgumentsLayoutId,
-            sizeof(argument), alignof(std::int32_t), &argument,
-            baseContinuation, &continuationCalls);
+            sizeof(argument), alignof(Arguments), &argument,
+            baseContinuation, &counters);
         require(status == LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1,
                 "benchmark dispatch failed");
+        require(counters.continuations == beforeContinuations + 1 &&
+                    counters.fragments == beforeFragments + expectedFragments,
+                "benchmark dispatch did not execute the selected policy");
     };
 
     std::cout << "runtime-fragment benchmark: iterations=" << iterations
@@ -193,6 +250,18 @@ int run(std::size_t iterations, std::size_t fragmentRows) {
                 "binding construction failed", error);
         checksum += bindings.bindingCount();
     }));
+    report("refs_plus_chain_4", measure(iterations, [&](std::size_t) {
+        const auto bindings = makeChain(candidates, slot, 4, error);
+        checksum += bindings.bindingCount();
+    }));
+    report("local_override_none", measure(iterations, [&](std::size_t) {
+        RuntimeFragmentBindingSet bindings;
+        require(luna::runtime::makeRuntimeFragmentBindingOverride(
+                    chainFour, slot, {}, bindings, error) &&
+                    bindings.chainSize(slot) == 0 && chainFour.chainSize(slot) == 4,
+                "local override construction changed its base", error);
+        checksum += bindings.bindingCount() + 1;
+    }));
     report("safe_point_activate_and_pin", measure(iterations, [&](std::size_t index) {
         auto safePoint = runtime.safePoint();
         require(runtime.activateFragmentBindings(
@@ -201,16 +270,31 @@ int run(std::size_t iterations, std::size_t fragmentRows) {
         checksum += runtime.pinFragmentBindings().bindingCount();
     }));
     report("dispatch_none", measure(iterations, [&](std::size_t) {
-        dispatch(noneContext);
+        dispatch(noneContext, 0);
     }));
     report("dispatch_one", measure(iterations, [&](std::size_t) {
-        dispatch(oneContext);
+        dispatch(oneContext, 1);
     }));
-    require(continuationCalls ==
-                2 * (iterations + std::min<std::size_t>(iterations, 1000)),
+    report("dispatch_chain_2", measure(iterations, [&](std::size_t) {
+        dispatch(chainTwoContext, 2);
+    }));
+    report("dispatch_chain_4", measure(iterations, [&](std::size_t) {
+        dispatch(chainFourContext, 4);
+    }));
+    report("dispatch_override_none", measure(iterations, [&](std::size_t) {
+        dispatch(overrideNoneContext, 0);
+    }));
+    const auto warmup = std::min<std::size_t>(iterations, 1000);
+    const auto calls = iterations + warmup;
+    require(counters.continuations == 5 * calls,
             "dispatch lost a continuation call");
+    require(counters.fragments == 7 * calls,
+            "dispatch lost a selected Fragment call");
+    require(checksum == 10 * calls + (iterations + 1) / 2 + (warmup + 1) / 2,
+            "benchmark control-plane checksum is invalid");
     std::cout << "checksum=" << checksum
-              << ", continuation_calls=" << continuationCalls << '\n';
+              << ", continuation_calls=" << counters.continuations
+              << ", fragment_calls=" << counters.fragments << '\n';
     return 0;
 }
 

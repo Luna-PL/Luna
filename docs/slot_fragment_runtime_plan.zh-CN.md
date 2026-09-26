@@ -333,8 +333,47 @@ Windows 可执行文件带 `.exe`，多配置构建则位于 `Release` 子目录
 迭代次数，第二个是同一 generation 的 Fragment 行数（至少 4，至多 4096），其中
 4 行目标指向被查询的 Slot。建议分别运行 4、64、256 行，并记录平台、编译器、构建
 类型与每项 ns/op；不要跨机器直接比较绝对时间。输出区分候选快照查询、引用加 BindingSet
-构建、safe-point 激活加 pin，以及 None/One 的显式 C ABI dispatch。
+构建、四引用 chain 构造、局部 None override 构造、safe-point 激活加 pin，以及
+None／One／二成员 chain／四成员 chain／在四成员 base chain 上局部 None 的显式
+C ABI dispatch。Context 构造不计入 dispatch 时间。Native capture-free handler 打开
+经过检查的参数载体并增加逐调用计数，因此时间包含这些 fixture 检查和 base callback，
+不是纯 dispatcher 开销。
+每项先预热 `min(iterations, 1000)` 次，再测量请求的迭代次数。逐次与总计数会拒绝
+漏执行 handler、重复续体或仍执行 base chain 的 None override。CI 的 `10 4` smoke
+必须输出 `checksum=210, continuation_calls=100, fragment_calls=140`，不依赖时间判定。
 候选查询处于控制平面，允许随 catalog 大小变化；dispatch 是热路径，必须与候选数量
 脱钩。已有非计时结构测试继续负责硬性回归判定，微基准仅提供性能证据，不能以不稳定
 的固定时间阈值决定 CI 成败。
 各平台 CI 仅显式构建探针并执行极小的正确性 smoke，不比较输出时间。
+另运行 `11 64` 和 `1001 256`，分别覆盖奇数激活计数与预热上限；预期最终计数为
+`232/110/154` 和 `21011/10005/14007`（checksum／continuation／Fragment）。
+
+#### 本机测量快照（2026-09-26）
+
+环境：Windows 11 build 26200、Intel Core i7-12700（12 核／20 逻辑处理器）、
+MSYS2 CLANG64 Clang 20.1.8、C++17、Ninja RelWithDebInfo，开启严格警告。
+Runtime 实现：`2c9cf754f17678978dd9f1fa2eb4c50689f001cb`；探针 Git blob：
+`d6c94daea117324b30b01b9c8d90b4cabe124200`。
+按 4、64、256 行依次运行，每组 5 个独立进程，每项 100000 次测量、1000 次预热。
+15 次均核对通过 `checksum=1060500, continuation_calls=505000, fragment_calls=707000`。
+未控制 CPU affinity、功耗策略与后台活动。
+
+下表为 ns/op 中位数，括号内为观察到的最小值—最大值：
+
+| 项目 | 4 行 | 64 行 | 256 行 |
+| --- | --- | --- | --- |
+| candidate_snapshot | 651.6 (637.2–721.5) | 6671.2 (6534.8–6821.2) | 25699.0 (25501.5–26090.7) |
+| ref_plus_binding_set | 861.1 (830.7–904.8) | 850.0 (846.1–885.6) | 847.2 (826.1–866.8) |
+| refs_plus_chain_4 | 1948.0 (1927.2–1980.6) | 1981.0 (1894.5–2054.9) | 1925.0 (1899.1–2149.2) |
+| local_override_none | 279.4 (274.5–295.3) | 281.6 (270.5–295.7) | 273.3 (271.2–275.6) |
+| safe_point_activate_and_pin | 56.4 (55.5–56.9) | 54.7 (53.9–56.4) | 54.5 (52.9–55.3) |
+| dispatch_none | 217.2 (212.6–233.6) | 213.1 (205.1–222.1) | 210.5 (208.1–225.3) |
+| dispatch_one | 503.6 (495.4–523.5) | 720.1 (678.5–748.5) | 493.3 (483.8–930.0) |
+| dispatch_chain_2 | 730.7 (707.3–759.8) | 911.3 (876.6–918.4) | 1398.2 (1062.8–1540.1) |
+| dispatch_chain_4 | 1186.1 (1145.8–1249.9) | 1362.6 (1347.0–1480.1) | 2147.7 (2051.7–2372.3) |
+| dispatch_override_none | 222.9 (212.0–229.6) | 213.6 (210.2–218.6) | 423.2 (416.5–564.5) |
+
+候选发现体现了预期的扫描成本。Dispatch 的结构不访问 catalog，但这些样本**不能**
+证明实测延迟恒定：chain 和 override 时间明显变化，原因尚未隔离。没有进一步证据时，
+既不能归因于目录扫描，也不能直接当作调度噪声忽略。性能验收仍需受控、交错运行，
+以及独立的 Linux／macOS 测量。这是 native fixture 证据，不是编译插件工作负载或发布授权。

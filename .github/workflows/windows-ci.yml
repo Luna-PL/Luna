@@ -48,6 +48,8 @@ jobs:
           export PATH="/ucrt64/bin:$PATH"
           cmake --build build --target runtime-fragment-benchmark --parallel
           ./build/runtime-fragment-benchmark.exe 10 4
+          ./build/runtime-fragment-benchmark.exe 11 64
+          ./build/runtime-fragment-benchmark.exe 1001 256
 
       - name: JIT, AOT, and runtime boundaries
         run: |

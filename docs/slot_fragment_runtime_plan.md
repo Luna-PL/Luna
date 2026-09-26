@@ -435,10 +435,55 @@ number of Fragment rows in one generation (4–4096), of which four target the
 queried Slot. Run with 4, 64, and 256 rows and record the platform, compiler,
 build type, and ns/op instead of comparing absolute times across machines.
 The cases separate candidate snapshot discovery, ref plus BindingSet creation,
-safe-point activation plus pinning, and explicit C ABI dispatch for None and
-One. Discovery is control-plane work and may scale with
+four-ref chain construction, local None override construction, safe-point
+activation plus pinning, and explicit C ABI dispatch for None, One, two-/four-member
+chains, and local None over a four-member base chain. Context construction is
+outside the dispatch timers. The native capture-free handlers open the checked
+argument carrier and increment a private call counter; timings include these
+fixture checks and the base callback, not just dispatcher overhead.
+Each case warms up for `min(iterations, 1000)` calls, then measures the requested
+iterations. Per-dispatch and aggregate counters reject missing handlers, duplicate
+continuations, or an override that still executes its base chain. The `10 4` CI
+smoke must report `checksum=210, continuation_calls=100, fragment_calls=140`;
+timing never determines success. Discovery is control-plane work and may scale with
 catalog size; hot-path dispatch must not. Non-timing structural tests remain
 the hard regression gate. This probe supplies performance evidence without a
 machine-dependent CI time threshold.
 Platform CI only builds the probe and runs a tiny correctness smoke; it never
-compares the reported times.
+compares the reported times. The `11 64` and `1001 256` cases also cover odd
+activation counts and the warmup cap; their expected final counters are
+`232/110/154` and `21011/10005/14007` (checksum/continuation/Fragment).
+
+#### Local measurement snapshot (2026-09-26)
+
+Environment: Windows 11 build 26200, Intel Core i7-12700 (12 cores, 20 logical
+processors), MSYS2 CLANG64 Clang 20.1.8, C++17, Ninja RelWithDebInfo with strict
+warnings. Runtime implementation: `2c9cf754f17678978dd9f1fa2eb4c50689f001cb`;
+probe Git blob: `d6c94daea117324b30b01b9c8d90b4cabe124200`.
+Five separate processes per row count, in order 4, 64, 256, each with 100000
+iterations per case and 1000 warmup calls. All 15 processes verified
+`checksum=1060500, continuation_calls=505000, fragment_calls=707000`.
+CPU affinity, power policy, and background activity were not controlled.
+
+Values are median ns/op, with observed minimum–maximum in parentheses:
+
+| Case | 4 rows | 64 rows | 256 rows |
+| --- | --- | --- | --- |
+| candidate_snapshot | 651.6 (637.2–721.5) | 6671.2 (6534.8–6821.2) | 25699.0 (25501.5–26090.7) |
+| ref_plus_binding_set | 861.1 (830.7–904.8) | 850.0 (846.1–885.6) | 847.2 (826.1–866.8) |
+| refs_plus_chain_4 | 1948.0 (1927.2–1980.6) | 1981.0 (1894.5–2054.9) | 1925.0 (1899.1–2149.2) |
+| local_override_none | 279.4 (274.5–295.3) | 281.6 (270.5–295.7) | 273.3 (271.2–275.6) |
+| safe_point_activate_and_pin | 56.4 (55.5–56.9) | 54.7 (53.9–56.4) | 54.5 (52.9–55.3) |
+| dispatch_none | 217.2 (212.6–233.6) | 213.1 (205.1–222.1) | 210.5 (208.1–225.3) |
+| dispatch_one | 503.6 (495.4–523.5) | 720.1 (678.5–748.5) | 493.3 (483.8–930.0) |
+| dispatch_chain_2 | 730.7 (707.3–759.8) | 911.3 (876.6–918.4) | 1398.2 (1062.8–1540.1) |
+| dispatch_chain_4 | 1186.1 (1145.8–1249.9) | 1362.6 (1347.0–1480.1) | 2147.7 (2051.7–2372.3) |
+| dispatch_override_none | 222.9 (212.0–229.6) | 213.6 (210.2–218.6) | 423.2 (416.5–564.5) |
+
+Discovery shows the expected scanning cost. Dispatch has no catalog access by
+construction, but these samples do **not** establish constant measured latency:
+chain and override timings vary significantly, and the causes are unisolated.
+Do not attribute the variation to catalog scanning or dismiss it as scheduler
+noise without further evidence. Controlled, interleaved runs and independent
+Linux/macOS measurements remain necessary before a performance acceptance claim.
+This is native-fixture evidence, not compiled plugin workload or release approval.

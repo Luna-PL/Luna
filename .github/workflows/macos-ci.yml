@@ -34,6 +34,8 @@ jobs:
         run: |
           cmake --build build --target runtime-fragment-benchmark --parallel
           ./build/runtime-fragment-benchmark 10 4
+          ./build/runtime-fragment-benchmark 11 64
+          ./build/runtime-fragment-benchmark 1001 256
 
       - name: Stable core regression suite
         run: |
