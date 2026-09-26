@@ -1,0 +1,8 @@
+[package]
+id = "benchmark.compiled.plugin"
+version = "0.3.0"
+kind = "library"
+sources = ["src"]
+
+[dependencies]
+"benchmark.compiled.host" = "0.3.0"

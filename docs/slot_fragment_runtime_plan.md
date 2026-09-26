@@ -387,8 +387,8 @@ luna build tests/fixtures/runtime_fragment_container/plugin -t moon -o build/fra
 
 The test makes 64 real host/consumer None/One calls after Runtime teardown.
 This is functional artifact evidence, not a latency benchmark or release gate
-approval. The next step remains a compiled-plugin comparison workload using these
-explicit owner artifacts, with setup/discovery outside dispatch timers. Artifact
+approval. The compiled-plugin comparison probe below uses these explicit owner
+artifacts, with setup/discovery outside dispatch timers. Artifact
 trust/authentication, dependency retrieval and candidate-selection policy remain
 host responsibilities; no implicit loading, activation or hot-path catalog is added.
 The current lowering packs the
@@ -591,3 +591,71 @@ This run did not reproduce the historical catalog-associated median growth in
 chain/override dispatch. It still has outliers and does not isolate their cause.
 Because the fixture organization, iteration count, and compiled probe also changed,
 do not attribute the difference solely to ordering or claim a Runtime speedup.
+
+#### Compiled-plugin comparison protocol
+
+`moonir-canonical-test --compiled-fragment-cost [iterations] [rounds]` reuses the
+compiler harness's frontend/backend linkage, not native stand-in handlers.
+`benchmarks/compiled_fragment/` contains independent library host/plugin packages.
+The probe compiles both with MoonIR O2, encodes and self-verifies real Moon
+Containers, obtains owner publication evidence from verified decoding, and loads
+both through `loadVerifiedMoonGenerationOnce`. It does not bypass verification
+through direct JIT registration. The current adapter uses its default LLVM O0;
+CSV explicitly labels `llvm_optimization=adapter_default`. MoonIR O2 is **not**
+a full LLVM O2 performance configuration. No production optimization default or
+Runtime ABI is changed by this probe.
+
+Each input is `call_index % 1024`; let `B = input * 3`:
+
+| Timed cases | Expected result | Entry ABI |
+| --- | --- | --- |
+| plain, private_erased, static_resume | B + 17 | i32 → i32, no context |
+| static_discard | B | i32 → i32, no context |
+| dynamic_none, dynamic_one, dynamic_chain_2, dynamic_chain_4, dynamic_override_none | B + 17 | explicit context + i32 → i32 |
+
+The host explicitly chooses `resume_a/b/c/d` in that order. Generated Copy
+factories receive `mask=0`, so every timed handler resumes; chain lengths are
+checked as 1/2/4. Local None overrides chain-4 without mutating its parent.
+Default CTest executes only 320 non-timed output checks: 32 inputs across nine
+cases, plus 32 factory `mask=1` checks distinguishing resume from discard.
+Runtime teardown precedes all checks and samples; pinned entries and contexts
+retain generated code and environments. This does not add Luna threading or
+native-code isolation guarantees.
+
+Timing is opt-in. Defaults are 10000 iterations and nine rounds; accepted ranges
+are 1..10000000 iterations and 1..90 rounds. Each round measures all nine cases,
+with `(position + 4*round) % 9` (zero-based). Multiples of nine are position-balanced;
+partial runs report `no`. Every sample warms `min(iterations,1000)` calls, resets
+the input sequence for measurement, and verifies a closed-form checksum after
+the timer. CSV `calls` and `checksum` include warmup; `ns_per_op` covers measured
+calls only. The checksum verifies final outputs, **not** per-handler event counts.
+Native harness case branching, input variation, indirect JIT calls and checksum
+accumulation are inside the timer. Baselines use a different context-free ABI;
+differences are end-to-end observations, not isolated Slot instructions.
+
+Compile/encode/owner-decode, verified load/JIT, discovery/factory/binding setup,
+result validation, and output are outside dispatch timers. Three setup durations
+are separate single observations, not statistically sampled setup benchmarks.
+Metadata includes build HEAD, probe SHA-256, the path/hash aggregate of all six
+workload files, actual host/plugin container digests, build type, native compiler,
+C++ dialect, LLVM version, target/layout, optimization profile and uncontrolled
+affinity/power. HEAD alone does not prove a clean worktree or complete build provenance;
+artifact digests may differ by target and source locations.
+
+```sh
+cmake --build build --target moonir-canonical-test --parallel
+cmake -Werror=dev -DLUNA_COMPILED_PROBE_EXECUTABLE="$PWD/build/moonir-canonical-test" \
+  -DLUNA_COMPILED_PROBE_ITERATIONS=10000 \
+  -DLUNA_COMPILED_PROBE_RECORD="$PWD/build/compiled-fragment-cost.csv" \
+  -P tests/compiled_fragment_benchmark.cmake
+```
+
+Adjust the executable path for Windows/multi-config builds. The script defaults
+to three iterations for a protocol check and independently verifies 81 samples,
+case/position balance, exact calls/checksums, source/workload hashes, metadata,
+partial labeling and invalid CLI rejection. It writes CSV only after validation.
+Linux C++17/C++23, macOS and Windows CI use 10000 iterations and retain this CSV
+alongside the native probe in `fragment-cost-*` artifacts for 14 days. Neither
+ns/op nor setup duration is a pass/fail threshold. These shared-runner samples
+do not close SF008: replicated processes, controlled machine state, an explicit
+optimized-JIT profile and stable evidence archival remain acceptance work.

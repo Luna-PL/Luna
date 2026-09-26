@@ -1,0 +1,36 @@
+package benchmark.compiled.host;
+module effects;
+
+export slot open_hook(value: i32);
+slot private_hook(value: i32);
+
+fragment local_resume[mask: i32](value: i32) for open_hook {
+    if (value & mask) == 0 { resume; }
+}
+fragment local_discard(value: i32) for open_hook {}
+
+runtime fn plain(value: i32) -> i32 { return value * 3 + 17; }
+
+runtime fn private_erased(value: i32) -> i32 {
+    let result = value * 3;
+    private_hook(value) { result += 17; }
+    return result;
+}
+
+runtime fn static_resume(value: i32) -> i32 {
+    let result = value * 3;
+    apply local_resume[0] { open_hook(value) { result += 17; } }
+    return result;
+}
+
+runtime fn static_discard(value: i32) -> i32 {
+    let result = value * 3;
+    apply local_discard { open_hook(value) { result += 17; } }
+    return result;
+}
+
+runtime fn dynamic_probe(value: i32) -> i32 {
+    let result = value * 3;
+    open_hook(value) { result += 17; }
+    return result;
+}

@@ -295,8 +295,8 @@ luna build tests/fixtures/runtime_fragment_container/plugin -t moon -o build/fra
 ```
 
 回归在 Runtime 销毁后执行 64 次真实 host/consumer None/One 调用。这是功能性产物证据，
-不是延迟 benchmark 或发布批准。下一步仍是使用这些显式 owner 产物的 compiled-plugin
-对比工作负载，将 setup/discovery 放在 dispatch 计时之外。产物信任/认证、依赖取得与
+不是延迟 benchmark 或发布批准。下方的 compiled-plugin 对比探针使用这些显式 owner
+产物，将 setup/discovery 放在 dispatch 计时之外。产物信任/认证、依赖取得与
 候选选择策略仍由宿主负责，不增加隐式加载、激活或热路径 catalog。
 当前 lowering
 会打包冻结的 Slot 参数 record，并通过一个同步栈
@@ -460,3 +460,58 @@ Linux C++17／C++23、macOS、Windows CI 均运行 10000 次／30 轮，以 `fra
 本次未复现旧表中 chain／override 分派随目录规模增长的中位数变化，但仍有离群值，
 原因未隔离。由于 fixture 组织、迭代次数及编译出的探针也改变，不能只归因于顺序，
 也不能声称 Runtime 获得了某个幅度的优化。
+
+#### 编译插件对比协议
+
+`moonir-canonical-test --compiled-fragment-cost [iterations] [rounds]` 复用编译器
+harness 的 frontend/backend 链接，不使用 native 替身 handler。
+`benchmarks/compiled_fragment/` 包含独立的 host/plugin 库包。探针以 MoonIR O2 编译两包，
+编码并自校验真实 Moon Container，从独立验证的 owner 解码获得公开证据，然后通过
+`loadVerifiedMoonGenerationOnce` 加载；不直接注册 JIT 绕过验证。当前适配器使用默认
+LLVM O0，CSV 明确标为 `llvm_optimization=adapter_default`。MoonIR O2 **不等于**
+完整 LLVM O2 性能配置；探针不改变生产优化默认值或 Runtime ABI。
+
+每次输入为 `call_index % 1024`；令 `B = input * 3`：
+
+| 计时路径 | 预期结果 | 入口 ABI |
+| --- | --- | --- |
+| plain、private_erased、static_resume | B + 17 | i32 → i32，无 context |
+| static_discard | B | i32 → i32，无 context |
+| dynamic_none、dynamic_one、dynamic_chain_2、dynamic_chain_4、dynamic_override_none | B + 17 | 显式 context + i32 → i32 |
+
+宿主显式按 `resume_a/b/c/d` 顺序选择候选。生成的 Copy factory 收到 `mask=0`，因此
+全部计时 handler 都 resume；绑定链长度核对为 1/2/4。局部 None 覆盖 chain-4，且不改变
+父绑定。默认 CTest 仅执行 320 次非计时输出检查：32 个输入分别经过九种路径，另加
+32 次 factory `mask=1` 检查以区分 resume/discard。Runtime 在全部检查与采样前销毁，
+pinned entry 和 context 保留生成的代码与环境；这不新增 Luna 线程或 native code
+隔离保证。
+
+计时必须显式启用，默认 10000 次迭代、九轮；允许范围为迭代 1..10000000、轮数 1..90。
+每轮测量全部九种路径，采用 `(position + 4*round) % 9`（从零开始）。九的倍数为位置
+平衡轮数；不足整组明确标为 `no`。每个样本预热 `min(iterations,1000)` 次，测量时重置
+输入序列，计时结束后核对闭式 checksum。CSV 的 `calls` 和 `checksum` 包含预热；
+`ns_per_op` 仅覆盖正式测量。checksum 验证最终输出，**不证明**各层 handler 的事件次数。
+native harness 的 case 分支、输入变化、间接 JIT 调用和 checksum 累加均在计时内。
+基线采用不同的无 context ABI；差值是端到端观察，不是孤立 Slot 指令成本。
+
+compile/encode/owner-decode、verified load/JIT、候选发现/factory/绑定准备、结果验证
+和输出都在 dispatch 计时之外。三项 setup 时长只是分别一次观察，不是统计采样的 setup
+benchmark。metadata 包含 build HEAD、探针 SHA-256、六个工作负载文件的 path/hash 聚合、
+实际 host/plugin 容器 digest、构建类型、native 编译器、C++ 方言、LLVM 版本、target/layout、
+优化配置及未受控 affinity/功耗。HEAD 本身不证明工作树干净或完整构建来源；产物 digest
+可因 target 和源码 location 不同而变化。
+
+```sh
+cmake --build build --target moonir-canonical-test --parallel
+cmake -Werror=dev -DLUNA_COMPILED_PROBE_EXECUTABLE="$PWD/build/moonir-canonical-test" \
+  -DLUNA_COMPILED_PROBE_ITERATIONS=10000 \
+  -DLUNA_COMPILED_PROBE_RECORD="$PWD/build/compiled-fragment-cost.csv" \
+  -P tests/compiled_fragment_benchmark.cmake
+```
+
+Windows／多配置构建需调整可执行路径。脚本默认三次迭代用于协议检查，独立核对 81 个
+样本、case/position 平衡、精确 calls/checksum、源码/工作负载 hash、metadata、不完整
+轮次标记及非法 CLI 拒绝，全部验证后才写 CSV。Linux C++17/C++23、macOS 和 Windows
+CI 使用 10000 次迭代，将此 CSV 与 native 探针一起保留在 14 天的 `fragment-cost-*`
+artifact 内。ns/op 和 setup 时长都不作为成败阈值。共享 runner 样本不关闭 SF008：
+多进程复测、受控机器状态、明确的优化 JIT 配置和稳定证据归档仍属于性能验收工作。

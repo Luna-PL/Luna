@@ -47,6 +47,15 @@ It retains `fragment-cost-*` observations for 14 days; measured times do not
 determine success. See the [runtime plan](slot_fragment_runtime_plan.md#interleaved-observation-protocol)
 for reproduction and interpretation limits.
 
+The compiler harness also exposes opt-in `--compiled-fragment-cost`. Its default
+CTest path runs 320 non-timed checks of the actual two-package compiled workload;
+the timing mode is never invoked by default CTest. Platform CI separately runs
+`tests/compiled_fragment_benchmark.cmake` with 10000 iterations, verifying 81
+position-balanced samples and exact calls/checksums. Its CSV shares the 14-day
+`fragment-cost-*` artifact with the native probe. The verified container adapter's
+current LLVM default is O0, distinct from the fixture's MoonIR O2. These are
+observations, not timing thresholds or optimized-JIT acceptance.
+
 `luna.repl-smoke` separates timeout recovery from memory stress. Its non-sanitized
 memory case uses an explicit 1024 MiB worker budget and a 1536 MiB allocation
 request, requires a linked-JIT entry marker and exactly one worker termination,

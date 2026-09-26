@@ -113,6 +113,9 @@ script-defined special inputs.
 - Codegen files are split by module, function, statement, expression, cleanup, execution,
   fragments, GPU, iterators, range analysis, descriptors, and helper concerns.
 - Runtime files own versioned C ABIs and host/GPU/plugin services.
+  The compiler-linked `compiled_fragment_benchmark.cpp/.h` lives under benchmarks;
+  `moonir-canonical-test` routes its explicit timing mode and default non-timed
+  workload checks. Its CMake script validates protocol, not latency.
   `RuntimeDescriptorABI.h` is the installed in-memory descriptor contract;
   `RuntimeDescriptor.h/.cpp` validate one lease-owned registry and provide
   exact typed lookup without defining source-language query syntax.
@@ -213,6 +216,14 @@ Git internals, and ignored generated artifacts are excluded.
 - `benchmarks/luna_gpu_vector.luna`
 - `benchmarks/package_source.sh`
 - `benchmarks/runtime_fragment_benchmark.cpp`
+- `benchmarks/compiled_fragment_benchmark.cpp`
+- `benchmarks/compiled_fragment_benchmark.h`
+- `benchmarks/compiled_fragment/host/luna.package`
+- `benchmarks/compiled_fragment/host/src/effects.luna`
+- `benchmarks/compiled_fragment/luna.lock`
+- `benchmarks/compiled_fragment/luna.workspace`
+- `benchmarks/compiled_fragment/plugin/luna.package`
+- `benchmarks/compiled_fragment/plugin/src/effects.luna`
 - `benchmarks/run_basic_benchmark.sh`
 - `benchmarks/run_cpu_comparison.sh`
 - `benchmarks/run_cpu_suite_extended.sh`
@@ -972,6 +983,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/runtime_descriptor_test.cpp`
 - `tests/runtime_fragment_concurrency_test.cpp`
 - `tests/runtime_fragment_benchmark.cmake`
+- `tests/compiled_fragment_benchmark.cmake`
 - `tests/runtime_fragment_test.cpp`
 - `tests/runtime_allocation_abi_test.cpp`
 - `tests/runtime_application_host_test.cpp`

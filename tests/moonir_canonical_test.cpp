@@ -7,6 +7,7 @@
 #include "codegen/CodeGenerator.h"
 #include "core/TypeLayout.h"
 #include "driver/MoonGeneration.h"
+#include "../benchmarks/compiled_fragment_benchmark.h"
 #include "diagnostics/Diagnostic.h"
 #include "driver/CompilerPipeline.h"
 #include "selector/Selector.h"
@@ -41,7 +42,9 @@ static_assert(std::is_same_v<decltype(moon::StructDecl::type), moon::TypeRef>);
 
 using namespace canonical_test;
 
-int main() {
+int main(int argc, char** argv) {
+    if (argc > 1) return luna::benchmarks::runCompiledFragmentBenchmark(argc, argv);
+    if (const int result = luna::benchmarks::checkCompiledFragmentWorkload()) return result;
     FunctionDecl unaryRoute;
     unaryRoute.name = "route";
     unaryRoute.packageId = "identity.test";

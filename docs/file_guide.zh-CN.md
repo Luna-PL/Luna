@@ -403,6 +403,10 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 演示诊断。`examples/full_showcase/` 是唯一允许组合大部分 Alpha 表面的完整示例，
 其 `foundation` 是库 package，`app` 是消费者 package。
 
+`benchmarks/compiled_fragment/` 是真实的两包产物对比工作负载；
+`compiled_fragment_benchmark.cpp/.h` 复用 `moonir-canonical-test` 的编译器链接，提供
+显式计时模式和默认非计时正确性检查，独立 CMake 脚本只验证协议、不设延迟阈值。
+
 `benchmarks/luna_cpu_*.luna` 分别提供命名操作的 Luna CPU 工作负载；
 `cpp23_cpu_suite.cpp` 是对照实现，`cpp23_allocation_support.cpp` 通过非 LTO
 翻译单元边界保持分配调用可观察；`luna_gpu_vector.luna` 与
@@ -422,6 +426,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/moonir_canonical_cross_package_container_test.cpp` | 所属包独立产物签发不可变 Slot 公开证据、显式消费者验证与拒绝边界、字节一致的 roundtrip、跨 generation 的真实 None／One 派发 |
 | `tests/runtime_fragment_concurrency_test.cpp` | 显式握手的并发宿主发布／分派、Runtime 销毁后 pinned context 与最终 lease 清理；实现和测试一同插桩 |
 | `tests/runtime_fragment_benchmark.cmake` | 交错成本探针的 CSV／构建身份／独立采样顺序与精确计数检查，不用 ns/op 判定成败 |
+| `tests/compiled_fragment_benchmark.cmake` | 真实两包编译产物对比探针的 81 样本顺序、调用数／checksum、来源与产物身份、CLI 拒绝检查，无计时阈值 |
 | `tests/runtime_gpu_error_test.cpp` | GPU/runtime 错误快照行为 |
 | `tests/analysis_protocol.cmake` | `luna.analysis` v1 JSONL envelope、声明记录与 byte span 回归 |
 | `tests/analysis_snapshot_test.cpp` | 内存/路径分析、部分失败状态与 frontend 生命周期回归 |
@@ -476,6 +481,14 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `benchmarks/luna_gpu_vector.luna`
 - `benchmarks/package_source.sh`
 - `benchmarks/runtime_fragment_benchmark.cpp`
+- `benchmarks/compiled_fragment_benchmark.cpp`
+- `benchmarks/compiled_fragment_benchmark.h`
+- `benchmarks/compiled_fragment/host/luna.package`
+- `benchmarks/compiled_fragment/host/src/effects.luna`
+- `benchmarks/compiled_fragment/luna.lock`
+- `benchmarks/compiled_fragment/luna.workspace`
+- `benchmarks/compiled_fragment/plugin/luna.package`
+- `benchmarks/compiled_fragment/plugin/src/effects.luna`
 - `benchmarks/run_basic_benchmark.sh`
 - `benchmarks/run_cpu_comparison.sh`
 - `benchmarks/run_rocm_cpp23_comparison.sh`
@@ -1182,6 +1195,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/runtime_descriptor_test.cpp`
 - `tests/runtime_fragment_concurrency_test.cpp`
 - `tests/runtime_fragment_benchmark.cmake`
+- `tests/compiled_fragment_benchmark.cmake`
 - `tests/runtime_fragment_test.cpp`
 - `tests/runtime_gpu_error_test.cpp`
 - `tests/semantic_regressions.cmake`

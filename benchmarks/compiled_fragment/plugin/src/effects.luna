@@ -1,0 +1,17 @@
+package benchmark.compiled.plugin;
+module effects;
+
+using benchmark.compiled.host as host;
+
+export fragment resume_a[mask: i32](value: i32) for host::effects::open_hook {
+    if (value & mask) == 0 { resume; }
+}
+export fragment resume_b[mask: i32](value: i32) for host::effects::open_hook {
+    if (value & mask) == 0 { resume; }
+}
+export fragment resume_c[mask: i32](value: i32) for host::effects::open_hook {
+    if (value & mask) == 0 { resume; }
+}
+export fragment resume_d[mask: i32](value: i32) for host::effects::open_hook {
+    if (value & mask) == 0 { resume; }
+}

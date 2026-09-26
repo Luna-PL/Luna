@@ -1,0 +1,11 @@
+[[package]]
+id = "benchmark.compiled.host"
+version = "0.3.0"
+source = "workspace:host"
+hash = "compiled-fragment-host-0.3.0"
+
+[[package]]
+id = "benchmark.compiled.plugin"
+version = "0.3.0"
+source = "workspace:plugin"
+hash = "compiled-fragment-plugin-0.3.0"

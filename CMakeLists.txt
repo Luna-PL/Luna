@@ -376,6 +376,7 @@ if(LUNA_ENABLE_FUZZING)
 endif()
 
 add_executable(moonir-canonical-test
+    benchmarks/compiled_fragment_benchmark.cpp
     tests/moonir_canonical_test.cpp
     tests/moonir_canonical_control_flow_test.cpp
     tests/moonir_canonical_iterator_test.cpp
@@ -453,6 +454,25 @@ target_include_directories(moonir-canonical-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(moonir-canonical-test
     PRIVATE LUNA_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/compiled_fragment_benchmark.cpp"
+    LUNA_COMPILED_PROBE_SHA256)
+set(LUNA_COMPILED_WORKLOAD_HASH_INPUT "")
+foreach(path IN ITEMS host/luna.package host/src/effects.luna luna.lock luna.workspace
+                      plugin/luna.package plugin/src/effects.luna)
+    set(workload_path "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/compiled_fragment/${path}")
+    file(SHA256 "${workload_path}" workload_hash)
+    string(APPEND LUNA_COMPILED_WORKLOAD_HASH_INPUT "${path}:${workload_hash}\n")
+    set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${workload_path}")
+endforeach()
+string(SHA256 LUNA_COMPILED_WORKLOAD_SHA256 "${LUNA_COMPILED_WORKLOAD_HASH_INPUT}")
+set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/compiled_fragment_benchmark.cpp")
+set_property(SOURCE benchmarks/compiled_fragment_benchmark.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+    LUNA_COMPILED_PROBE_COMMIT="${LUNA_GIT_COMMIT}"
+    LUNA_COMPILED_PROBE_SHA256="${LUNA_COMPILED_PROBE_SHA256}"
+    LUNA_COMPILED_WORKLOAD_SHA256="${LUNA_COMPILED_WORKLOAD_SHA256}"
+    LUNA_COMPILED_PROBE_BUILD_TYPE="$<CONFIG>"
+    LUNA_COMPILED_PROBE_COMPILER="${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 target_include_directories(moonir-canonical-test SYSTEM PRIVATE
     ${LLVM_INCLUDE_DIRS})
 target_link_libraries(moonir-canonical-test PRIVATE LLVM)

@@ -52,12 +52,18 @@ jobs:
             -DLUNA_FRAGMENT_BENCHMARK_ITERATIONS=10000 \
             -DLUNA_FRAGMENT_BENCHMARK_RECORD="$PWD/build/fragment-cost-interleaved.csv" \
             -P tests/runtime_fragment_benchmark.cmake
+          cmake -Werror=dev -DLUNA_COMPILED_PROBE_EXECUTABLE="$PWD/build/moonir-canonical-test" \
+            -DLUNA_COMPILED_PROBE_ITERATIONS=10000 \
+            -DLUNA_COMPILED_PROBE_RECORD="$PWD/build/compiled-fragment-cost.csv" \
+            -P tests/compiled_fragment_benchmark.cmake
 
       - name: Retain Fragment cost observations
         uses: actions/upload-artifact@v4
         with:
           name: fragment-cost-linux-cxx${{ matrix.cxx-standard }}-attempt${{ github.run_attempt }}
-          path: build/fragment-cost-interleaved.csv
+          path: |
+            build/fragment-cost-interleaved.csv
+            build/compiled-fragment-cost.csv
           if-no-files-found: error
           retention-days: 14
 
