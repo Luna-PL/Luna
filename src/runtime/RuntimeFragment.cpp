@@ -685,7 +685,11 @@ bool RuntimeFragmentBindingSet::dispatchWithOutcome(
     std::string& error) const {
     error.clear();
     outcome = RuntimeFragmentDispatchOutcome::Completed;
-    if (!state_) {
+    // Callbacks may synchronously replace/release the caller's published
+    // handle. Own this exact snapshot until the complete chain has unwound;
+    // no subsequent access may depend on the receiver still owning state_.
+    const auto state = state_;
+    if (!state) {
         error = "runtime Fragment dispatch requires an initialized BindingSet";
         return false;
     }
@@ -699,7 +703,7 @@ bool RuntimeFragmentBindingSet::dispatchWithOutcome(
         error = "runtime Fragment dispatch argument carrier is invalid";
         return false;
     }
-    const auto* found = findBindingEntry(*state_, slot);
+    const auto* found = findBindingEntry(*state, slot);
     if (!found) {
         try {
             const int32_t result = baseContinuation(continuationContext);

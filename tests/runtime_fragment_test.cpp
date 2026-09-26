@@ -5,6 +5,7 @@
 #include <atomic>
 #include <iostream>
 #include <memory>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -219,6 +220,194 @@ bool stageFragment(
         declarationKind, flags};
     binding = loaded.find(requirement);
     return static_cast<bool>(binding);
+}
+
+struct DispatchLifetimeProbe {
+    // Counters outlive handle cleanup, including an early fixture failure.
+    std::atomic<unsigned> environmentDestructions{0};
+    std::atomic<unsigned> moduleDestructions{0};
+    luna::runtime::RuntimeFragmentBindingSet bindings;
+    luna::runtime::RuntimeFragmentExecutionContext context;
+    luna::runtime::RuntimeFragmentBindingSet replacement;
+    luna::runtime::RuntimeFragmentExecutionContext replacementContext;
+    unsigned handlers = 0;
+    unsigned returnedHandlers = 0;
+    unsigned baseCalls = 0;
+    bool releaseInHandler = false;
+    bool retainedThroughout = true;
+    bool environmentBeforeModule = false;
+    int32_t control = LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1;
+
+    void releasePublishedHandles() {
+        bindings = replacement;
+        context = replacementContext;
+        checkRetained();
+    }
+    void checkRetained() {
+        retainedThroughout &= environmentDestructions.load() == 0 &&
+                              moduleDestructions.load() == 0;
+    }
+};
+
+DispatchLifetimeProbe* activeLifetimeProbe = nullptr;
+
+struct LifetimeEnvironment {
+    explicit LifetimeEnvironment(std::atomic<unsigned>& destructions)
+        : destructions(destructions) {}
+    ~LifetimeEnvironment() { ++destructions; }
+    std::atomic<unsigned>& destructions;
+};
+
+int32_t createLifetimeEnvironment(const void* arguments, void** output) {
+    auto& probe = *const_cast<DispatchLifetimeProbe*>(
+        static_cast<const DispatchLifetimeProbe*>(arguments));
+    *output = new LifetimeEnvironment(probe.environmentDestructions);
+    return 0;
+}
+
+void destroyLifetimeEnvironment(void* environment) {
+    delete static_cast<LifetimeEnvironment*>(environment);
+}
+
+void executeLifetimeFragment(void*, void* activation) {
+    auto& probe = *activeLifetimeProbe;
+    ++probe.handlers;
+    if (probe.releaseInHandler && probe.handlers == 1)
+        probe.releasePublishedHandles();
+    // Fail the old implementation without traversing a freed chain or reading
+    // a freed environment. Lifetime evidence comes from external counters.
+    if (!probe.retainedThroughout) return;
+    luna_runtime_fragment_activation_resume_v1(activation);
+    probe.checkRetained();
+    ++probe.returnedHandlers;
+}
+
+int32_t releaseLifetimeBase(void* context) {
+    auto& probe = *static_cast<DispatchLifetimeProbe*>(context);
+    ++probe.baseCalls;
+    if (!probe.releaseInHandler) probe.releasePublishedHandles();
+    if (probe.control == -99) throw std::runtime_error("lifetime continuation probe");
+    return probe.control;
+}
+
+int testDispatchLifetime(const LunaRuntimeFragmentDescriptorV1& original) {
+    using namespace luna::runtime;
+    auto descriptor = original;
+    descriptor.factory_contract_id = "contract:lifetime-factory";
+    descriptor.environment_layout_id = "layout:lifetime-environment";
+    descriptor.environment_size = sizeof(LifetimeEnvironment);
+    descriptor.environment_alignment = alignof(LifetimeEnvironment);
+    descriptor.factory = createLifetimeEnvironment;
+    descriptor.destroy = destroyLifetimeEnvironment;
+    descriptor.execute = executeLifetimeFragment;
+    const RuntimeSlotRequirement slot{descriptor.slot_id, descriptor.slot_contract_id};
+    int argument = 42;
+    const RuntimeFragmentArguments arguments{
+        descriptor.slot_arguments_layout_id, sizeof(argument), alignof(int), &argument};
+    // One and chain; owned and borrowed environments; BindingSet, C++ context,
+    // and C ABI; release before resume or in base; clear or replace with None;
+    // completed, escaped, invalid, and throwing continuation results.
+    for (unsigned chainLength : {1u, 2u})
+    for (bool borrowed : {false, true})
+    for (unsigned entry : {0u, 1u, 2u})
+    for (bool releaseInHandler : {false, true})
+    for (bool replace : {false, true})
+    for (int32_t control : {0, 1, 99, -99}) {
+        DispatchLifetimeProbe probe;
+        probe.releaseInHandler = releaseInHandler;
+        probe.control = control;
+        std::string error;
+        if (replace &&
+            (!makeRuntimeFragmentBindingSet({}, probe.replacement, error) ||
+             !makeRuntimeFragmentExecutionContext(
+                 probe.replacement, probe.replacementContext, error)))
+            return fail("dispatch lifetime replacement did not initialize");
+        {
+            Runtime runtime;
+            auto lease = std::shared_ptr<const void>(new int(1),
+                [&probe, chainLength](const void* storage) {
+                    probe.environmentBeforeModule =
+                        probe.environmentDestructions.load() == chainLength;
+                    ++probe.moduleDestructions;
+                    delete static_cast<const int*>(storage);
+                });
+            Runtime::PinnedBinding binding;
+            if (!stageFragment(runtime, lease, &descriptor, binding, error))
+                return fail("dispatch lifetime generation did not stage");
+            std::vector<RuntimeFragmentRef> references;
+            for (unsigned index = 0; index < chainLength; ++index) {
+                RuntimeFragmentRef reference;
+                if (borrowed) {
+                    auto environment = std::make_shared<LifetimeEnvironment>(
+                        probe.environmentDestructions);
+                    if (!makeBorrowedRuntimeFragmentRef(binding, slot,
+                            {descriptor.environment_layout_id,
+                             descriptor.environment_size, descriptor.environment_alignment,
+                             environment.get(), environment}, reference, error))
+                        return fail("dispatch lifetime borrowed environment did not bind");
+                } else if (!makeOwnedRuntimeFragmentRef(binding, slot,
+                               {descriptor.factory_contract_id, &probe}, reference, error)) {
+                    return fail("dispatch lifetime owned environment did not bind");
+                }
+                references.push_back(std::move(reference));
+            }
+            if (!makeRuntimeFragmentChainBindingSet(
+                    std::move(references), probe.bindings, error))
+                return fail("dispatch lifetime BindingSet did not initialize");
+            if (entry != 0) {
+                if (!makeRuntimeFragmentExecutionContext(
+                        probe.bindings, probe.context, error))
+                    return fail("dispatch lifetime context did not initialize");
+                probe.bindings = {};
+            }
+        } // The published handle is now the only owner of environments/generation.
+        activeLifetimeProbe = &probe;
+        RuntimeFragmentDispatchOutcome outcome = RuntimeFragmentDispatchOutcome::Completed;
+        bool succeeded;
+        int32_t status = LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1;
+        if (entry == 2) {
+            status = luna_runtime_fragment_dispatch_v1(
+                probe.context.opaque(), slot.slotId.c_str(), slot.contractId.c_str(),
+                arguments.layoutId.c_str(), arguments.size, arguments.alignment,
+                arguments.data, releaseLifetimeBase, &probe);
+            succeeded = status >= 0;
+            outcome = status == LUNA_RUNTIME_FRAGMENT_DISPATCH_CONTINUATION_ESCAPED_V1
+                ? RuntimeFragmentDispatchOutcome::ContinuationEscaped
+                : RuntimeFragmentDispatchOutcome::Completed;
+        } else if (entry == 1) {
+            succeeded = probe.context.dispatchWithOutcome(
+                slot, arguments, releaseLifetimeBase, &probe, outcome, error);
+        } else {
+            succeeded = probe.bindings.dispatchWithOutcome(
+                slot, arguments, releaseLifetimeBase, &probe, outcome, error);
+        }
+        activeLifetimeProbe = nullptr;
+        if (!probe.retainedThroughout || probe.handlers != chainLength ||
+            probe.returnedHandlers != chainLength || probe.baseCalls != 1)
+            return fail("dispatch did not pin its snapshot until every handler returned");
+        if (succeeded != (control == 0 || control == 1) ||
+            outcome != (control == 1 ? RuntimeFragmentDispatchOutcome::ContinuationEscaped
+                                    : RuntimeFragmentDispatchOutcome::Completed))
+            return fail("dispatch lifetime pin changed continuation control results");
+        if (control == 99 || control == -99) {
+            if ((entry == 2 && status != LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1) ||
+                (entry != 2 && error.find(control == 99 ? "invalid control result"
+                                                       : "lifetime continuation probe") == std::string::npos))
+                return fail("dispatch lifetime pin lost the continuation failure diagnostic");
+        }
+        if (probe.environmentDestructions.load() != chainLength ||
+            probe.moduleDestructions.load() != 1 || !probe.environmentBeforeModule)
+            return fail("dispatch snapshot leaked or released generation before environments");
+        if (replace) {
+            unsigned resumes = 0;
+            const bool ranNone = entry == 0
+                ? probe.bindings.dispatch(slot, arguments, resumeActivation, &resumes, error)
+                : probe.context.dispatch(slot, arguments, resumeActivation, &resumes, error);
+            if (!ranNone || resumes != 1 || probe.handlers != chainLength)
+                return fail("published replacement did not apply to the next invocation");
+        }
+    }
+    return 0;
 }
 
 } // namespace
@@ -1126,5 +1315,5 @@ int main() {
             return fail("local Fragment override mutated its base BindingSet");
     }
 
-    return 0;
+    return testDispatchLifetime(descriptor);
 }

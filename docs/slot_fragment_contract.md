@@ -18,6 +18,7 @@ arbitrary handler-body re-entry.
 | Static same-Slot continuation nesting | Finite nesting is valid. Inner discard skips only its own continuation; an inner continuation return escapes the invoking function and skips both handlers' post-resume code. | `luna.semantic-regressions` |
 | Private unbound Slot | Identity lowers to a lexical block, including inside a handler; it does not introduce a runtime context dependency. | `luna.semantic-regressions`, `luna.moonir-canonical` |
 | Runtime ordered chain | The host's explicit order determines `resume` progression, followed by reverse-order post-resume execution. Catalog order and loading order do not choose the chain. | `luna.runtime-fragment-v1` |
+| In-flight snapshot lifetime | Dispatch owns its selected snapshot through complete handler unwind. A synchronous native callback may clear or replace the published C++ handle without releasing the active One/chain environments or generation; the replacement affects future calls only. Owned and borrowed environments are released before their final module lease, including escape and failure paths. | `luna.runtime-fragment-v1` |
 | Single-shot failure propagation | A failed resume on a live activation remains failed. Ignoring a repeated-resume error cannot turn its enclosing One/chain dispatch into success; the continuation still runs at most once. Downstream failures propagate outward without overwriting their diagnostics, and a fresh invocation of the same context is unaffected. | `luna.runtime-fragment-v1` |
 | Runtime same-Slot continuation nesting | Each dispatch creates fresh single-shot activations, even with the same pinned context and selected chain. A propagated inner continuation escape bypasses post-resume code in the suspended outer chain. | `luna.runtime-fragment-v1` |
 | Nested local override / None | An explicit inner context replaces or removes the selected Slot chain only for that context. It does not modify the suspended outer chain; None still propagates continuation escape. | `luna.runtime-fragment-v1` |
@@ -56,6 +57,9 @@ Host-authored native callbacks are not Luna source verified by this profile.
 Storage alignment checks do not prove that arbitrary native pointers refer to
 valid allocations of the claimed size or lifetime; the host and factory remain
 responsible for those obligations.
+The context must be live when entering the C ABI. In-flight retention does not
+authorize another call through a released opaque pointer, or concurrent mutation
+of the same C++ handle without synchronization.
 Failure propagation does not roll back already-performed effects or sandbox
 native handlers; it prevents a failed activation from being reported as a
 successful dispatch when the handler returns.

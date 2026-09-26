@@ -194,7 +194,10 @@ public:
 
     // Dispatches one exact Slot against this frozen snapshot. With no binding,
     // the base continuation runs directly. A selected Fragment may resume it
-    // at most once or may end without resuming.
+    // at most once or may end without resuming. The call retains the snapshot
+    // until all handlers return, even if a synchronous callback replaces or
+    // releases the caller's handle. This does not permit concurrent mutation
+    // of the same C++ handle or reuse of a released opaque context pointer.
     bool dispatch(
         const RuntimeSlotRequirement& slot,
         RuntimeFragmentArguments arguments,

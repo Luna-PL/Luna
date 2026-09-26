@@ -198,7 +198,12 @@ consume prevalidated `RuntimeFragmentRef` values into an immutable BindingSet
 with at most one winner for each exact SlotId/ContractId. `MoonRuntime`
 publishes that set atomically only with a fresh same-runtime `SafePoint` and
 returns pinned snapshots for dispatch. Replacing the active set does not
-retarget or invalidate an older snapshot. Dispatch performs no discovery,
+retarget or invalidate an older snapshot. Each dispatch retains its selected
+snapshot until all handlers unwind, even if a synchronous native callback clears
+or replaces the caller's published C++ BindingSet/context handle. This preserves
+owned/borrowed environments and generation leases on completion, escape, and
+failure paths; it does not permit reusing a released opaque pointer or concurrent
+mutation of the same C++ handle. Dispatch performs no discovery,
 metadata filtering, or descriptor revalidation: it makes one exact Slot lookup,
 checks the invocation argument layout, and either executes the selected
 Fragment or calls the base continuation directly for host policy `None`.

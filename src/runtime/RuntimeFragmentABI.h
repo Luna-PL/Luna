@@ -36,6 +36,10 @@ typedef void (*LunaRuntimeFragmentExecuteFnV1)(
 // context capability. The context pins an immutable BindingSet snapshot for
 // the whole call; it is never recovered from process-global or thread-local
 // state. The base continuation remains compiler-owned and synchronous.
+// After dispatch enters, it retains the selected snapshot through handler
+// unwind, even if a synchronous host callback releases the context owner.
+// The opaque context must be live at entry; this does not authorize subsequent
+// calls through a released pointer or concurrent mutation of its C++ owner.
 // Nonempty argument storage must be aligned to arguments_alignment; empty
 // storage is exactly (size=0, alignment=1, pointer=null). Invalid carriers fail
 // before either a selected Fragment or the None/base continuation executes.

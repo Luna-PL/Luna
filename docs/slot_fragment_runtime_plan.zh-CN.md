@@ -160,7 +160,11 @@ move-only 值跨宿主边界需要明确的转移/drop 协议，不能用不安�
 第六个切片实现阶段 5 的宿主激活边界。宿主可以把已经验证的 `RuntimeFragmentRef` 消费为
 不可变 BindingSet，每个精确 SlotId/ContractId 最多选择一个胜者。`MoonRuntime` 只有拿到来自
 同一 runtime 的 fresh `SafePoint` 才会原子发布该集合，并向 dispatch 返回 pinned snapshot。
-替换 active set 不会改指向或使旧 snapshot 失效。dispatch 不执行发现、metadata 过滤或
+替换 active set 不会改指向或使旧 snapshot 失效。每次分派自身保留已选快照，直到所有
+handler 返回；即使同步 native 回调清空或替换调用者的公开 C++ BindingSet／context 句柄，
+owned／borrowed 环境与 generation lease 在正常完成、逃逸及失败路径中仍保持存活。
+这不允许复用已释放的 opaque pointer，也不允许并发修改同一个 C++ 句柄。
+dispatch 不执行发现、metadata 过滤或
 descriptor 重新验证：它只做一次精确 Slot 查找、核对本次参数布局，然后执行选中的 Fragment；
 宿主策略为 `None` 时则直接调用 base continuation。
 
