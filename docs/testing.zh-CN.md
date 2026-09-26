@@ -37,11 +37,13 @@ Linux CI 在 C++17/C++23 构建矩阵中都启用该门禁。它只作用于 Lun
 [运行时计划](slot_fragment_runtime_plan.zh-CN.md#交错观察协议)。
 
 编译器测试 harness 也提供可选 `--compiled-fragment-cost`。默认 CTest 只运行实际两包
-编译工作负载的 320 次非计时检查，不调用计时模式。各平台 CI 独立运行
-`tests/compiled_fragment_benchmark.cmake`，使用 10000 次迭代，核对 81 个位置平衡样本
-以及精确调用数／checksum。CSV 与 native 探针一起保存在 14 天的 `fragment-cost-*`
-artifact 中。已验证容器适配器目前 LLVM 默认 O0，区别于夹具的 MoonIR O2；这些仅是
-观察值，不是计时阈值或已优化 JIT 的性能验收。
+编译工作负载在 LLVM IR O0／O2／O3 下的 960 次非计时结果检查，以及配置／缓存拒绝和
+快照门禁，不调用计时模式。各平台 CI 独立运行 `tests/compiled_fragment_benchmark.cmake`，
+使用 10000 次迭代，每个配置核对 81 个位置平衡样本（共 243 个）及精确调用数／checksum。
+三份 CSV 与 native 探针一起保存在 14 天的 `fragment-cost-*` artifact 中。已验证容器
+适配器默认仍为 LLVM IR O0，区别于夹具的 MoonIR O2；O2／O3 必须显式选择，ORC 机器码
+生成保持默认。v2 协议记录实际配置与不可变的 materialization key。这些仅是观察值，
+不是计时阈值或已完成的性能验收。
 
 `luna.repl-smoke` 将超时恢复与内存压力分离。非 sanitizer 的内存用例明确设置
 1024 MiB worker 额度，请求分配 1536 MiB，要求出现 linked-JIT 执行标记且恰好一次

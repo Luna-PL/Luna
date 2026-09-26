@@ -17,6 +17,11 @@ Runtime ABI v1，不承诺 C ABI，也不承诺跨 C++ toolchain 的二进制兼
 - `MoonRuntime` 持有 module history 及每个 module 原子发布的 active generation。
 - `GenerationStagingRequest` 携带稳定 module ID、content digest 与非空共享 module
   lease；该 lease 必须维持代码和 descriptor storage 的寿命。
+  新增的可选尾字段 `materializationKey` 把 loader 的生成代码配置与产物摘要分开。
+  原三字段 request 保持空 key。key 在 staged／pinned 快照中不可变；load-once 复用要求
+  content 与 key 都相同，改变 key 必须显式 `activate`，不会隐式替换。非空 key 在
+  callback 前拒绝 CR／LF／tab／内嵌 NUL。该兼容的 C++ 源级扩展不改变 Runtime C ABI
+  v1 或任何容器 record。
 - `GenerationVerifier`、`GenerationResolver` 和可选
   `GenerationInitializer` 构成可信 staging 边界；staging 严格按此顺序执行，且不发布。
 - `StagedGeneration` 是 move-only candidate；`loadOnce` 用于首次发布，`activate`
@@ -90,6 +95,13 @@ ok = ok && luna::runtime::makeRuntimeFragmentExecutionContext(
 本 API 不会让任意 implementation pointer 自动变得可信。
 
 ## 失败与寿命规则
+
+编译器内部 Moon adapter 可显式选择 `MoonJitOptimization::O0`／`O2`／`O3`，默认
+仍为 O0。配置选择 LLVM IR 优化流水线，ORC 机器码生成保持默认设置。生成配置 key
+包含 adapter profile 版本、LLVM 版本、IR 级别及 ORC 策略。缓存复用前仍验证
+target/layout、完整性与依赖 Slot 证据。未知配置与同内容／不同 key 请求失败时，不改变
+发布状态或输出句柄。key 是可信 loader 的声明，不是签名或安全证明；native loader
+须如实记录影响代码生成的配置。Native adapter 的行为不变。
 
 验证、解析、初始化、兼容性检查、activation 或 rollback 失败，都不改变先前 active
 generation。initializer 在 staging 时执行，可能已经产生外部副作用；若 staging 或后续

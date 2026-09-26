@@ -83,6 +83,61 @@ int main() {
     std::atomic<unsigned> thirdLeaseDestructions{0};
     std::string error;
 
+    // Artifact content and loader configuration are independent identities.
+    // The optional key preserves existing three-field request construction.
+    {
+        Runtime runtime;
+        Request request{ModuleId, std::string(64, 'a'), std::make_shared<int>(1)};
+        request.materializationKey = "fixture:O0";
+        Runtime::StagedGeneration staged;
+        std::string phases;
+        if (!stageOne(runtime, request, SymbolId, ContractId, &first, staged, phases, error) ||
+            staged.materializationKey() != "fixture:O0")
+            return fail("staging lost materialization identity");
+        Runtime::PinnedGeneration loaded;
+        if (!runtime.loadOnce(staged, loaded, error) ||
+            loaded.materializationKey() != "fixture:O0")
+            return fail("load-once lost materialization identity");
+        request.materializationKey = "fixture:O2";
+        phases.clear();
+        if (!stageOne(runtime, request, SymbolId, ContractId, &second, staged, phases, error))
+            return fail("alternate materialization did not stage");
+        const auto alternateId = staged.generationId();
+        Runtime::PinnedGeneration rejected;
+        if (runtime.loadOnce(staged, rejected, error) || rejected ||
+            staged.generationId() != alternateId ||
+            error.find("materialization configuration") == std::string::npos ||
+            runtime.activeGenerationId(ModuleId) != loaded.generationId() ||
+            runtime.retainedGenerationCount(ModuleId) != 1)
+            return fail("cross-configuration load-once changed publication or outputs");
+        auto point = runtime.safePoint();
+        if (!runtime.activate(staged, point, error) || staged ||
+            runtime.pin(ModuleId).materializationKey() != "fixture:O2" ||
+            loaded.materializationKey() != "fixture:O0")
+            return fail("explicit activation did not preserve configuration snapshots");
+        auto rollback = runtime.safePoint();
+        if (!runtime.rollback(ModuleId, loaded.generationId(), rollback, error) ||
+            runtime.pin(ModuleId).materializationKey() != "fixture:O0")
+            return fail("rollback lost retained materialization configuration");
+        request.materializationKey = "fixture:O0";
+        phases.clear();
+        if (!stageOne(runtime, request, SymbolId, ContractId, &second, staged, phases, error) ||
+            !runtime.loadOnce(staged, rejected, error) ||
+            rejected.generationId() != loaded.generationId())
+            return fail("same-configuration load-once did not reuse code");
+        for (const auto& invalid : {std::string("bad\0key", 7), std::string("bad\nkey"),
+                                   std::string("bad\rkey"), std::string("bad\tkey")}) {
+            request.materializationKey = invalid;
+            phases.clear();
+            if (stageOne(runtime, request, SymbolId, ContractId, &first, staged, phases, error) ||
+                staged || !phases.empty() || error.empty())
+                return fail("invalid materialization key reached verification");
+        }
+        if (!Runtime::StagedGeneration{}.materializationKey().empty() ||
+            !Runtime::PinnedGeneration{}.materializationKey().empty())
+            return fail("empty generation exposed a configuration key");
+    }
+
     // Runtime IDs also cross null-terminated C ABI descriptors. A C++ string
     // with an embedded NUL must not become a second identity for one C name.
     for (unsigned field = 0; field < 3; ++field) {

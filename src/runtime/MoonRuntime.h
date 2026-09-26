@@ -31,6 +31,9 @@ struct GenerationStagingRequest {
     std::string moduleId;
     std::string contentDigest;
     std::shared_ptr<const void> moduleLease;
+    // Optional loader-owned code-generation identity, separate from the
+    // artifact digest. Empty preserves the original unprofiled host behavior.
+    std::string materializationKey = {};
 };
 
 struct GenerationBinding {
@@ -91,6 +94,7 @@ public:
         uint64_t generationId() const;
         const std::string& moduleId() const;
         const std::string& contentDigest() const;
+        const std::string& materializationKey() const;
 
     private:
         friend class MoonRuntime;
@@ -122,6 +126,7 @@ public:
         uint64_t generationId() const;
         const std::string& moduleId() const;
         const std::string& contentDigest() const;
+        const std::string& materializationKey() const;
         PinnedBinding find(const std::string& symbolId,
                            const std::string& contractId) const;
         PinnedBinding find(
@@ -161,8 +166,8 @@ public:
     bool activate(StagedGeneration& staged, SafePoint& safePoint,
                   std::string& error);
     // Publishes the first generation for a module. Repeating the same content
-    // returns the already-pinned
-    // generation; different content is rejected and must use activate().
+    // and materialization key returns the already-pinned generation;
+    // different content/configuration is rejected and must use activate().
     bool loadOnce(StagedGeneration& staged, PinnedGeneration& loaded,
                   std::string& error);
     bool rollback(const std::string& moduleId, uint64_t generationId,

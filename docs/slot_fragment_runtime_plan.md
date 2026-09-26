@@ -594,16 +594,16 @@ do not attribute the difference solely to ordering or claim a Runtime speedup.
 
 #### Compiled-plugin comparison protocol
 
-`moonir-canonical-test --compiled-fragment-cost [iterations] [rounds]` reuses the
+`moonir-canonical-test --compiled-fragment-cost [iterations] [rounds] [O0|O2|O3]` reuses the
 compiler harness's frontend/backend linkage, not native stand-in handlers.
 `benchmarks/compiled_fragment/` contains independent library host/plugin packages.
 The probe compiles both with MoonIR O2, encodes and self-verifies real Moon
 Containers, obtains owner publication evidence from verified decoding, and loads
 both through `loadVerifiedMoonGenerationOnce`. It does not bypass verification
-through direct JIT registration. The current adapter uses its default LLVM O0;
-CSV explicitly labels `llvm_optimization=adapter_default`. MoonIR O2 is **not**
-a full LLVM O2 performance configuration. No production optimization default or
-Runtime ABI is changed by this probe.
+through direct JIT registration. The adapter defaults to LLVM IR O0 and accepts
+explicit O2/O3 profiles. Protocol v2 records the exact IR level and
+`orc_codegen=default`: ORC machine-code generation is unchanged. MoonIR O2 alone
+does not select LLVM IR O2. Production defaults and Runtime C ABI are unchanged.
 
 Each input is `call_index % 1024`; let `B = input * 3`:
 
@@ -616,9 +616,10 @@ Each input is `call_index % 1024`; let `B = input * 3`:
 The host explicitly chooses `resume_a/b/c/d` in that order. Generated Copy
 factories receive `mask=0`, so every timed handler resumes; chain lengths are
 checked as 1/2/4. Local None overrides chain-4 without mutating its parent.
-Default CTest executes only 320 non-timed output checks: 32 inputs across nine
+Each profile executes 320 non-timed output checks: 32 inputs across nine
 cases, plus 32 factory `mask=1` checks distinguishing resume from discard.
-Runtime teardown precedes all checks and samples; pinned entries and contexts
+Default CTest checks all three profiles (960 results) and configuration/cache
+rejection, without calling timing mode. Runtime teardown precedes all result checks and samples; pinned entries and contexts
 retain generated code and environments. This does not add Luna threading or
 native-code isolation guarantees.
 
@@ -638,15 +639,15 @@ result validation, and output are outside dispatch timers. Three setup durations
 are separate single observations, not statistically sampled setup benchmarks.
 Metadata includes build HEAD, probe SHA-256, the path/hash aggregate of all six
 workload files, actual host/plugin container digests, build type, native compiler,
-C++ dialect, LLVM version, target/layout, optimization profile and uncontrolled
+C++ dialect, LLVM version, target/layout, optimization profile, materialization key and uncontrolled
 affinity/power. HEAD alone does not prove a clean worktree or complete build provenance;
 artifact digests may differ by target and source locations.
 
 ```sh
 cmake --build build --target moonir-canonical-test --parallel
 cmake -Werror=dev -DLUNA_COMPILED_PROBE_EXECUTABLE="$PWD/build/moonir-canonical-test" \
-  -DLUNA_COMPILED_PROBE_ITERATIONS=10000 \
-  -DLUNA_COMPILED_PROBE_RECORD="$PWD/build/compiled-fragment-cost.csv" \
+  -DLUNA_COMPILED_PROBE_ITERATIONS=10000 -DLUNA_COMPILED_PROBE_PROFILE=O2 \
+  -DLUNA_COMPILED_PROBE_RECORD="$PWD/build/compiled-fragment-cost-O2.csv" \
   -P tests/compiled_fragment_benchmark.cmake
 ```
 
@@ -654,8 +655,21 @@ Adjust the executable path for Windows/multi-config builds. The script defaults
 to three iterations for a protocol check and independently verifies 81 samples,
 case/position balance, exact calls/checksums, source/workload hashes, metadata,
 partial labeling and invalid CLI rejection. It writes CSV only after validation.
-Linux C++17/C++23, macOS and Windows CI use 10000 iterations and retain this CSV
-alongside the native probe in `fragment-cost-*` artifacts for 14 days. Neither
+The script's profile defaults to O0; select O2/O3 explicitly. Linux C++17/C++23,
+macOS and Windows CI run all three in separate processes with 10000 iterations
+(243 samples) and retain three CSVs alongside the native probe in
+`fragment-cost-*` artifacts for 14 days. Neither
 ns/op nor setup duration is a pass/fail threshold. These shared-runner samples
-do not close SF008: replicated processes, controlled machine state, an explicit
-optimized-JIT profile and stable evidence archival remain acceptance work.
+do not close SF008: replicated processes, controlled machine state, cross-profile
+order balancing and stable evidence archival remain acceptance work.
+
+The compiler adapter sets `CodeGenerator`'s LLVM IR level before verified
+lowering. The optional generation `materializationKey` keeps artifact digest
+and generated-code configuration separate; it includes LLVM version, IR profile
+and the default ORC policy. Both the early adapter cache and Runtime's locked
+load-once path reject different keys, leaving active history and output handles
+unchanged. Same-profile reuse still validates target/layout, integrity and owner
+Slot evidence first. Explicit activation/rollback may switch profiles while old
+pins retain their code. This is an additive C++ source control-plane extension,
+not a container/sysmeta schema or Runtime C ABI change. The key is trusted loader
+attestation, not cryptographic proof or a native-code sandbox.

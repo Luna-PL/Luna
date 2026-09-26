@@ -48,13 +48,16 @@ determine success. See the [runtime plan](slot_fragment_runtime_plan.md#interlea
 for reproduction and interpretation limits.
 
 The compiler harness also exposes opt-in `--compiled-fragment-cost`. Its default
-CTest path runs 320 non-timed checks of the actual two-package compiled workload;
+CTest path runs 960 non-timed result checks of the actual two-package compiled workload
+across LLVM IR O0/O2/O3, plus configuration/cache rejection and snapshot gates;
 the timing mode is never invoked by default CTest. Platform CI separately runs
 `tests/compiled_fragment_benchmark.cmake` with 10000 iterations, verifying 81
-position-balanced samples and exact calls/checksums. Its CSV shares the 14-day
+position-balanced samples per profile (243 total) and exact calls/checksums. Its three CSVs share the 14-day
 `fragment-cost-*` artifact with the native probe. The verified container adapter's
-current LLVM default is O0, distinct from the fixture's MoonIR O2. These are
-observations, not timing thresholds or optimized-JIT acceptance.
+LLVM default remains O0, distinct from the fixture's MoonIR O2; O2/O3 are explicit
+IR optimization profiles and ORC codegen stays at its defaults. Protocol v2
+records the chosen profile and immutable materialization key. These are
+observations, not timing thresholds or completed performance acceptance.
 
 `luna.repl-smoke` separates timeout recovery from memory stress. Its non-sanitized
 memory case uses an explicit 1024 MiB worker budget and a 1536 MiB allocation

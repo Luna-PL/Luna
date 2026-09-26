@@ -143,8 +143,8 @@ obligation，不能重新推导所有权。
 | 文件 | 主要职责 |
 |---|---|
 | `src/runtime/Evolution.h` | 已安装的 EV004 C++17 宿主控制面入口与 API version |
-| `src/runtime/MoonRuntime.h` | EV001–EV004 generation identity、lease、typed requirement、load-once、staging、pinned/switchable reference、activation 与 rollback 公开 C++ 源级接口 |
-| `src/runtime/MoonRuntime.cpp` | verify/resolve/initialize、首次发布去重、一次性安全点、原子 activation、typed pinned/switchable 与 rollback 状态机 |
+| `src/runtime/MoonRuntime.h` | EV001–EV004 generation identity、独立 materialization key、lease、typed requirement、load-once、staging、pinned/switchable reference、activation 与 rollback 公开 C++ 源级接口 |
+| `src/runtime/MoonRuntime.cpp` | verify/resolve/initialize、同内容／同配置首次发布去重、一次性安全点、原子 activation、typed pinned/switchable 与 rollback 状态机 |
 
 ### 5.2 core、lexer、parser 与 diagnostics
 
@@ -405,7 +405,8 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 
 `benchmarks/compiled_fragment/` 是真实的两包产物对比工作负载；
 `compiled_fragment_benchmark.cpp/.h` 复用 `moonir-canonical-test` 的编译器链接，提供
-显式计时模式和默认非计时正确性检查，独立 CMake 脚本只验证协议、不设延迟阈值。
+显式计时模式和默认 O0／O2／O3 非计时正确性及缓存／配置检查，独立 CMake 脚本只
+验证 v2 配置／来源与每配置 81 个样本，不设延迟阈值。
 
 `benchmarks/luna_cpu_*.luna` 分别提供命名操作的 Luna CPU 工作负载；
 `cpp23_cpu_suite.cpp` 是对照实现，`cpp23_allocation_support.cpp` 通过非 LTO
@@ -426,7 +427,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/moonir_canonical_cross_package_container_test.cpp` | 所属包独立产物签发不可变 Slot 公开证据、显式消费者验证与拒绝边界、字节一致的 roundtrip、跨 generation 的真实 None／One 派发 |
 | `tests/runtime_fragment_concurrency_test.cpp` | 显式握手的并发宿主发布／分派、Runtime 销毁后 pinned context 与最终 lease 清理；实现和测试一同插桩 |
 | `tests/runtime_fragment_benchmark.cmake` | 交错成本探针的 CSV／构建身份／独立采样顺序与精确计数检查，不用 ns/op 判定成败 |
-| `tests/compiled_fragment_benchmark.cmake` | 真实两包编译产物对比探针的 81 样本顺序、调用数／checksum、来源与产物身份、CLI 拒绝检查，无计时阈值 |
+| `tests/compiled_fragment_benchmark.cmake` | 真实两包编译产物对比探针每配置 81 样本顺序、调用数／checksum、v2 配置／来源与产物身份、CLI 拒绝检查，无计时阈值 |
 | `tests/runtime_gpu_error_test.cpp` | GPU/runtime 错误快照行为 |
 | `tests/analysis_protocol.cmake` | `luna.analysis` v1 JSONL envelope、声明记录与 byte span 回归 |
 | `tests/analysis_snapshot_test.cpp` | 内存/路径分析、部分失败状态与 frontend 生命周期回归 |

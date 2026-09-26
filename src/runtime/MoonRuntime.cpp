@@ -23,6 +23,7 @@ struct MoonRuntime::GenerationState {
     uint64_t generationId = 0;
     std::string moduleId;
     std::string contentDigest;
+    std::string materializationKey;
     std::shared_ptr<const void> moduleLease;
     std::vector<GenerationBinding> bindings;
 };
@@ -109,6 +110,10 @@ const std::string& MoonRuntime::StagedGeneration::contentDigest() const {
     return generation_ ? generation_->contentDigest : emptyString();
 }
 
+const std::string& MoonRuntime::StagedGeneration::materializationKey() const {
+    return generation_ ? generation_->materializationKey : emptyString();
+}
+
 uint64_t MoonRuntime::PinnedBinding::generationId() const {
     return generation_ ? generation_->generationId : 0;
 }
@@ -143,6 +148,10 @@ const std::string& MoonRuntime::PinnedGeneration::moduleId() const {
 
 const std::string& MoonRuntime::PinnedGeneration::contentDigest() const {
     return generation_ ? generation_->contentDigest : emptyString();
+}
+
+const std::string& MoonRuntime::PinnedGeneration::materializationKey() const {
+    return generation_ ? generation_->materializationKey : emptyString();
 }
 
 const GenerationBinding* MoonRuntime::findBinding(
@@ -222,7 +231,9 @@ bool MoonRuntime::stage(
         return false;
     }
     if (!validIdentity(request.moduleId) ||
-        !validDigest(request.contentDigest) || !request.moduleLease) {
+        !validDigest(request.contentDigest) || !request.moduleLease ||
+        (!request.materializationKey.empty() &&
+         !validIdentity(request.materializationKey))) {
         error = "generation staging identity or module lease is invalid";
         return false;
     }
@@ -312,6 +323,7 @@ bool MoonRuntime::stage(
     }
     generation->moduleId = request.moduleId;
     generation->contentDigest = request.contentDigest;
+    generation->materializationKey = request.materializationKey;
     generation->moduleLease = request.moduleLease;
     generation->bindings = std::move(bindings);
     staged.owner_ = this;
@@ -366,6 +378,10 @@ bool MoonRuntime::loadOnce(
     if (active) {
         if (active->contentDigest != staged.generation_->contentDigest) {
             error = "module is already loaded with different content";
+            return false;
+        }
+        if (active->materializationKey != staged.generation_->materializationKey) {
+            error = "module is already loaded with different materialization configuration";
             return false;
         }
         if (active->bindings.size() != staged.generation_->bindings.size()) {

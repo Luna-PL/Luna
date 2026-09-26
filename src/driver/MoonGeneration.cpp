@@ -7,6 +7,7 @@
 #include "runtime/RuntimeFragment.h"
 
 #include <llvm/ADT/ArrayRef.h>
+#include <llvm/Config/llvm-config.h>
 #include <llvm/Support/SHA256.h>
 
 #include <algorithm>
@@ -23,9 +24,25 @@ struct LoadedMoonGeneration {
     moon::ContainerManifest manifest;
     moon::Module module;
     std::string contentDigest;
+    std::string materializationKey;
     std::shared_ptr<LunaJitModule> jitLease;
     luna::runtime::RuntimeDescriptorRegistryView runtimeDescriptors;
 };
+
+bool jitConfiguration(MoonJitOptimization optimization,
+                      LunaOptimizationLevel& level, std::string& key,
+                      std::string& error) {
+    const char* name = nullptr;
+    switch (optimization) {
+    case MoonJitOptimization::O0: level = LunaOptimizationLevel::O0; name = "O0"; break;
+    case MoonJitOptimization::O2: level = LunaOptimizationLevel::O2; name = "O2"; break;
+    case MoonJitOptimization::O3: level = LunaOptimizationLevel::O3; name = "O3"; break;
+    default: error = "invalid verified Moon JIT optimization profile"; return false;
+    }
+    key = std::string("luna.verified-moon-jit.v1:llvm=") + LLVM_VERSION_STRING +
+        ":ir=" + name + ":orc=default";
+    return true;
+}
 
 std::string containerDigest(const std::vector<uint8_t>& bytes) {
     llvm::SHA256 hash;
@@ -237,16 +254,23 @@ bool stageVerifiedMoonGeneration(
     const std::string& expectedDataLayout,
     const luna::runtime::GenerationInitializer& initializer,
     luna::runtime::MoonRuntime::StagedGeneration& staged,
-    std::string& error, const moon::SlotPublicationDependencies& dependencies) {
+    std::string& error, const moon::SlotPublicationDependencies& dependencies,
+    MoonJitOptimization optimization) {
+    error.clear();
+    LunaOptimizationLevel level;
+    std::string materializationKey;
+    if (!jitConfiguration(optimization, level, materializationKey, error)) return false;
     auto loaded = std::make_shared<LoadedMoonGeneration>();
     if (!moon::ContainerModelCodec::decodeContainerForTarget(
             containerBytes, expectedTargetTriple, expectedDataLayout,
             loaded->manifest, loaded->module, error, {}, dependencies))
         return false;
     loaded->contentDigest = containerDigest(containerBytes);
+    loaded->materializationKey = materializationKey;
 
     CodeGenerator codeGenerator(
         loaded->manifest.packageId + "@" + loaded->contentDigest);
+    codeGenerator.setOptimizationLevel(level);
     if (!codeGenerator.generate(&loaded->module)) {
         std::ostringstream details;
         details << "verified Moon generation failed LLVM lowering";
@@ -265,12 +289,14 @@ bool stageVerifiedMoonGeneration(
     luna::runtime::GenerationStagingRequest request;
     request.moduleId = loaded->manifest.packageId;
     request.contentDigest = loaded->contentDigest;
+    request.materializationKey = loaded->materializationKey;
     request.moduleLease = loaded;
     return runtime.stage(
         request,
         [loaded](const auto& candidate, std::string& verificationError) {
             if (candidate.moduleId != loaded->manifest.packageId ||
-                candidate.contentDigest != loaded->contentDigest) {
+                candidate.contentDigest != loaded->contentDigest ||
+                candidate.materializationKey != loaded->materializationKey) {
                 verificationError =
                     "verified Moon generation identity changed before staging";
                 return false;
@@ -387,11 +413,16 @@ bool loadVerifiedMoonGenerationOnce(
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
     luna::runtime::MoonRuntime::PinnedGeneration& loaded,
-    std::string& error, const moon::SlotPublicationDependencies& dependencies) {
+    std::string& error, const moon::SlotPublicationDependencies& dependencies,
+    MoonJitOptimization optimization) {
+    error.clear();
     if (loaded) {
         error = "Moon load-once output already owns a generation";
         return false;
     }
+    LunaOptimizationLevel level;
+    std::string materializationKey;
+    if (!jitConfiguration(optimization, level, materializationKey, error)) return false;
     moon::ContainerManifest manifest;
     moon::Module module;
     if (!moon::ContainerModelCodec::decodeContainerForTarget(
@@ -405,13 +436,17 @@ bool loadVerifiedMoonGenerationOnce(
             error = "module is already loaded with different content";
             return false;
         }
+        if (existing.materializationKey() != materializationKey) {
+            error = "module is already loaded with different materialization configuration";
+            return false;
+        }
         loaded = std::move(existing);
         return true;
     }
     luna::runtime::MoonRuntime::StagedGeneration staged;
     if (!stageVerifiedMoonGeneration(
             runtime, containerBytes, expectedTargetTriple,
-            expectedDataLayout, {}, staged, error, dependencies))
+            expectedDataLayout, {}, staged, error, dependencies, optimization))
         return false;
     return runtime.loadOnce(staged, loaded, error);
 }

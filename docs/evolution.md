@@ -21,6 +21,13 @@ protocol is application policy rather than a language or compiler contract.
 - `GenerationStagingRequest` carries a stable module ID, content digest, and a
   non-null shared module lease. The lease must keep code and descriptor storage
   alive.
+  An optional trailing `materializationKey` separates a loader's generated-code
+  configuration from the artifact digest. Existing three-field requests keep
+  an empty key. The key is immutable in staged/pinned snapshots; load-once reuse
+  requires equal content **and** equal keys. Changing a key is an explicit
+  `activate` transition, not an implicit replacement. Nonempty keys reject CR,
+  LF, tab and embedded NUL before callbacks. This additive C++ source API field
+  does not change Runtime C ABI v1 or any container record.
 - `GenerationVerifier`, `GenerationResolver`, and optional
   `GenerationInitializer` form the trusted staging boundary. Staging runs them
   in that order and publishes nothing.
@@ -103,6 +110,16 @@ The generic public `stage` entry is a trust boundary: an embedding host that
 provides different callbacks is responsible for authenticating the artifact,
 checking its target and descriptor ABI, and resolving only verified entries.
 The API does not make an arbitrary implementation pointer trustworthy.
+
+The compiler-owned Moon adapter accepts explicit `MoonJitOptimization::O0`,
+`O2` or `O3` (default O0). These select the LLVM IR pipeline while ORC machine
+code generation retains its defaults. Its materialization key includes the
+adapter profile version, LLVM version, IR level and ORC policy. Target/layout,
+integrity and dependency Slot evidence are still checked before cache reuse.
+Unknown profile values and same-content/different-key requests fail without
+changing publication or the output handle. The key is loader attestation, not
+a signature or a safety proof; trusted native loaders must describe all their
+code-generation choices faithfully. Native adapter behavior is unchanged.
 
 ## Failure and lifetime rules
 

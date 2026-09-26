@@ -10,12 +10,19 @@ if(NOT LUNA_COMPILED_PROBE_ITERATIONS MATCHES "^[0-9]+$" OR
    LUNA_COMPILED_PROBE_ITERATIONS LESS 1 OR LUNA_COMPILED_PROBE_ITERATIONS GREATER 10000000)
     message(FATAL_ERROR "compiled probe iterations must be 1..10000000")
 endif()
+if(NOT DEFINED LUNA_COMPILED_PROBE_PROFILE)
+    set(LUNA_COMPILED_PROBE_PROFILE O0)
+endif()
+if(NOT LUNA_COMPILED_PROBE_PROFILE MATCHES "^O[023]$")
+    message(FATAL_ERROR "compiled probe profile must be O0, O2, or O3")
+endif()
 execute_process(COMMAND "${LUNA_COMPILED_PROBE_EXECUTABLE}" --compiled-fragment-cost
-        "${LUNA_COMPILED_PROBE_ITERATIONS}" 9
+        "${LUNA_COMPILED_PROBE_ITERATIONS}" 9 "${LUNA_COMPILED_PROBE_PROFILE}"
     RESULT_VARIABLE status OUTPUT_VARIABLE output ERROR_VARIABLE errors TIMEOUT 180)
 if(NOT status EQUAL 0 OR NOT errors STREQUAL "")
     message(FATAL_ERROR "compiled probe failed (${status}): ${errors}")
 endif()
+string(REPLACE "\r\n" "\n" output "${output}")
 set(probe_root "${CMAKE_CURRENT_LIST_DIR}/../benchmarks")
 file(SHA256 "${probe_root}/compiled_fragment_benchmark.cpp" probe_hash)
 set(workload_input "")
@@ -25,9 +32,10 @@ foreach(path IN ITEMS host/luna.package host/src/effects.luna luna.lock luna.wor
     string(APPEND workload_input "${path}:${hash}\n")
 endforeach()
 string(SHA256 workload_hash "${workload_input}")
-foreach(required IN ITEMS "# protocol=luna.compiled-fragment-cost.v1"
+foreach(required IN ITEMS "# protocol=luna.compiled-fragment-cost.v2"
         "# probe_sha256=${probe_hash}" "# workload_sha256=${workload_hash}"
-        "# moonir_optimization=O2,llvm_optimization=adapter_default"
+        "# moonir_optimization=O2,llvm_optimization=${LUNA_COMPILED_PROBE_PROFILE}"
+        "# orc_codegen=default"
         "# candidate_count=4,host_order=resume_a/resume_b/resume_c/resume_d"
         "# correctness_checks=320,runtime_alive_during_samples=no"
         "# affinity=uncontrolled,power_policy=uncontrolled"
@@ -39,6 +47,12 @@ foreach(required IN ITEMS "# protocol=luna.compiled-fragment-cost.v1"
         message(FATAL_ERROR "compiled probe lost protocol metadata: ${required}")
     endif()
 endforeach()
+string(REGEX MATCH "# cxx=[0-9]+,llvm=([^\r\n]+)" llvm_metadata "${output}")
+set(materialization_key "luna.verified-moon-jit.v1:llvm=${CMAKE_MATCH_1}:ir=${LUNA_COMPILED_PROBE_PROFILE}:orc=default")
+string(FIND "${output}" "# materialization_key=${materialization_key}\n" found)
+if(found EQUAL -1)
+    message(FATAL_ERROR "compiled probe JIT configuration identity mismatch")
+endif()
 foreach(key IN ITEMS git_commit build_type compiler cxx target data_layout)
     if(NOT output MATCHES "# ${key}=[^\r\n]+")
         message(FATAL_ERROR "compiled probe lost build metadata: ${key}")
@@ -104,17 +118,25 @@ endforeach()
 if(NOT samples EQUAL 81)
     message(FATAL_ERROR "compiled probe emitted ${samples} samples, expected 81")
 endif()
-execute_process(COMMAND "${LUNA_COMPILED_PROBE_EXECUTABLE}" --compiled-fragment-cost 1 1
+execute_process(COMMAND "${LUNA_COMPILED_PROBE_EXECUTABLE}" --compiled-fragment-cost 1 1 "${LUNA_COMPILED_PROBE_PROFILE}"
     RESULT_VARIABLE status OUTPUT_VARIABLE partial ERROR_VARIABLE errors TIMEOUT 30)
 if(NOT status EQUAL 0 OR NOT errors STREQUAL "" OR
    NOT partial MATCHES "# verified_samples=9,position_balanced=no")
     message(FATAL_ERROR "partial compiled schedule incorrectly reported balance")
 endif()
+execute_process(COMMAND "${LUNA_COMPILED_PROBE_EXECUTABLE}" --compiled-fragment-cost 1 1
+    RESULT_VARIABLE status OUTPUT_VARIABLE default_output ERROR_VARIABLE errors TIMEOUT 30)
+if(NOT status EQUAL 0 OR NOT errors STREQUAL "" OR
+   NOT default_output MATCHES "# moonir_optimization=O2,llvm_optimization=O0")
+    message(FATAL_ERROR "compiled probe default profile changed")
+endif()
 foreach(arguments IN ITEMS "--unknown" "--compiled-fragment-cost|-1"
         "--compiled-fragment-cost|3junk" "--compiled-fragment-cost|18446744073709551616"
         "--compiled-fragment-cost|0" "--compiled-fragment-cost|10000001"
         "--compiled-fragment-cost|3|0" "--compiled-fragment-cost|3|-1"
-        "--compiled-fragment-cost|3|91" "--compiled-fragment-cost|3|9|extra")
+        "--compiled-fragment-cost|3|91" "--compiled-fragment-cost|3|9|extra"
+        "--compiled-fragment-cost|3|9|O1" "--compiled-fragment-cost|3|9|o2"
+        "--compiled-fragment-cost|3|9|O2|extra")
     string(REPLACE "|" ";" arguments "${arguments}")
     execute_process(COMMAND "${LUNA_COMPILED_PROBE_EXECUTABLE}" ${arguments}
         RESULT_VARIABLE status OUTPUT_VARIABLE invalid_output ERROR_VARIABLE errors TIMEOUT 10)
@@ -125,4 +147,4 @@ endforeach()
 if(DEFINED LUNA_COMPILED_PROBE_RECORD)
     file(WRITE "${LUNA_COMPILED_PROBE_RECORD}" "${output}")
 endif()
-message(STATUS "Compiled Fragment probe: 81 samples, exact calls/checksums, balanced positions; no timing threshold")
+message(STATUS "Compiled Fragment ${LUNA_COMPILED_PROBE_PROFILE} probe: 81 samples, exact calls/checksums, balanced positions; no timing threshold")

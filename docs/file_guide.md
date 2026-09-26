@@ -99,6 +99,8 @@ script-defined special inputs.
   adapters, including typed load-once publication; they feed the EV004 control
   plane but are not a second activation API. `MoonRuntime` owns pinned/switchable typed
   requirements, retained leases, first publication, activation, and rollback.
+  Moon's explicit LLVM IR profile sets a loader-owned materialization key;
+  Runtime compares that key independently of artifact content during load-once.
 - Package files own manifests, locks, source graphs, and package merging.
 - Core files own ownership, sysmeta, type identity, type relations, and layout.
 - Lexer/parser files own tokens, AST, parsing, and syntax recovery.
@@ -115,7 +117,8 @@ script-defined special inputs.
 - Runtime files own versioned C ABIs and host/GPU/plugin services.
   The compiler-linked `compiled_fragment_benchmark.cpp/.h` lives under benchmarks;
   `moonir-canonical-test` routes its explicit timing mode and default non-timed
-  workload checks. Its CMake script validates protocol, not latency.
+  O0/O2/O3 workload and cache/configuration checks. Its CMake script validates
+  v2 profile/provenance and 81 samples per profile, not latency.
   `RuntimeDescriptorABI.h` is the installed in-memory descriptor contract;
   `RuntimeDescriptor.h/.cpp` validate one lease-owned registry and provide
   exact typed lookup without defining source-language query syntax.

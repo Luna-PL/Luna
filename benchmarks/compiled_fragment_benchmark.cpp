@@ -30,6 +30,18 @@ using runtime::MoonRuntime;
 using runtime::RuntimeFragmentBindingSet;
 using runtime::RuntimeFragmentExecutionContext;
 using runtime::RuntimeFragmentRef;
+using driver::MoonJitOptimization;
+constexpr std::array<MoonJitOptimization, 3> Profiles{
+    MoonJitOptimization::O0, MoonJitOptimization::O2, MoonJitOptimization::O3};
+
+const char* profileName(MoonJitOptimization profile) {
+    switch (profile) {
+    case MoonJitOptimization::O0: return "O0";
+    case MoonJitOptimization::O2: return "O2";
+    case MoonJitOptimization::O3: return "O3";
+    }
+    throw std::runtime_error("invalid compiled probe profile");
+}
 constexpr std::array<const char*, 9> Cases{
     "plain", "private_erased", "static_resume", "static_discard", "dynamic_none",
     "dynamic_one", "dynamic_chain_2", "dynamic_chain_4", "dynamic_override_none"};
@@ -80,7 +92,7 @@ struct Sample { double nanoseconds; uint64_t calls; uint64_t checksum; };
 
 class Fixture {
 public:
-    explicit Fixture(bool observeSetup = false) {
+    explicit Fixture(MoonJitOptimization profile, bool observeSetup = false) {
         const auto compileStart = observeSetup ? Clock::now() : Clock::time_point{};
         const auto root = std::filesystem::path(LUNA_TEST_SOURCE_DIR) / "benchmarks/compiled_fragment";
         driver::CompilerPipeline hostPipeline, pluginPipeline;
@@ -123,12 +135,15 @@ public:
         MoonRuntime runtime;
         MoonRuntime::PinnedGeneration host, plugin;
         require(driver::loadVerifiedMoonGenerationOnce(runtime, hostBytes,
-            targetTriple, dataLayout, host, error), "host verified load failed", error);
+            targetTriple, dataLayout, host, error, {}, profile), "host verified load failed", error);
         require(driver::loadVerifiedMoonGenerationOnce(runtime, pluginBytes,
-            targetTriple, dataLayout, plugin, error, dependencies), "plugin verified load failed", error);
+            targetTriple, dataLayout, plugin, error, dependencies, profile), "plugin verified load failed", error);
         require(host.generationId() != plugin.generationId(), "compiled generations were not independent");
         hostDigest = host.contentDigest();
         pluginDigest = plugin.contentDigest();
+        materializationKey = host.materializationKey();
+        require(!materializationKey.empty() && materializationKey == plugin.materializationKey(),
+            "host/plugin JIT configuration identity mismatch");
         if (observeSetup) loadMs = milliseconds(loadStart);
         const auto bindStart = observeSetup ? Clock::now() : Clock::time_point{};
         for (size_t index = 0; index < 4; ++index) {
@@ -195,6 +210,76 @@ public:
         require(runtime::makeRuntimeFragmentExecutionContext(conditional, conditionalContext, error),
             "conditional factory context failed", error);
         if (observeSetup) discoveryBindingMs = milliseconds(bindStart);
+        if (!observeSetup) {
+            // These are non-timed loading gates, not setup observations.
+            MoonRuntime::PinnedGeneration duplicate;
+            require(driver::loadVerifiedMoonGenerationOnce(runtime, hostBytes,
+                targetTriple, dataLayout, duplicate, error, {}, profile) &&
+                duplicate.generationId() == host.generationId(), "same-profile cache did not reuse code", error);
+            MoonRuntime::PinnedGeneration pluginDuplicate;
+            require(driver::loadVerifiedMoonGenerationOnce(runtime, pluginBytes,
+                targetTriple, dataLayout, pluginDuplicate, error, dependencies, profile) &&
+                pluginDuplicate.generationId() == plugin.generationId(), "plugin profile cache did not reuse code", error);
+            MoonRuntime::PinnedGeneration unverified;
+            require(!driver::loadVerifiedMoonGenerationOnce(runtime, pluginBytes,
+                targetTriple, dataLayout, unverified, error, {}, profile) && !unverified && !error.empty(),
+                "profile cache bypassed owner Slot evidence");
+            auto corrupt = pluginBytes;
+            corrupt.back() ^= 1;
+            require(!driver::loadVerifiedMoonGenerationOnce(runtime, corrupt,
+                targetTriple, dataLayout, unverified, error, dependencies, profile) &&
+                !unverified && !error.empty(), "profile cache bypassed container integrity");
+            require(!driver::loadVerifiedMoonGenerationOnce(runtime, pluginBytes,
+                "not-the-host-target", dataLayout, unverified, error, dependencies, profile) &&
+                !unverified && !error.empty(), "profile cache bypassed target validation");
+            const auto other = profile == MoonJitOptimization::O0 ? MoonJitOptimization::O2 : MoonJitOptimization::O0;
+            MoonRuntime::PinnedGeneration rejected;
+            require(!driver::loadVerifiedMoonGenerationOnce(runtime, hostBytes,
+                targetTriple, dataLayout, rejected, error, {}, other) && !rejected &&
+                error.find("materialization configuration") != std::string::npos,
+                "cross-profile cache returned old code");
+            // A separately staged candidate exercises Runtime's locked loadOnce
+            // path as well as the adapter's early cache check.
+            MoonRuntime::StagedGeneration staged;
+            require(driver::stageVerifiedMoonGeneration(runtime, hostBytes,
+                targetTriple, dataLayout, {}, staged, error, {}, other), "alternate profile did not stage", error);
+            const auto stagedId = staged.generationId();
+            require(!runtime.loadOnce(staged, rejected, error) && !rejected &&
+                staged.generationId() == stagedId &&
+                error.find("materialization configuration") != std::string::npos &&
+                runtime.activeGenerationId(host.moduleId()) == host.generationId() &&
+                runtime.retainedGenerationCount(host.moduleId()) == 1,
+                "locked cross-profile rejection changed generation state");
+            auto generationPoint = runtime.safePoint();
+            require(runtime.activate(staged, generationPoint, error) && !staged,
+                "explicit JIT profile activation failed", error);
+            const auto switched = runtime.pin(host.moduleId());
+            const auto switchedDynamic = switched.find(dynamic.symbolId.value, dynamic.contractId.value);
+            require(switched.generationId() == stagedId && switched.materializationKey() != materializationKey &&
+                switched.contentDigest() == hostDigest && switchedDynamic &&
+                invokeDynamic(switchedDynamic.implementation(), contexts[3].opaque(), 7) == 38 &&
+                invokeDynamic(entries[4].implementation(), contexts[3].opaque(), 7) == 38,
+                "profile activation changed contracts, context interop or old pinned code");
+            auto rollbackPoint = runtime.safePoint();
+            require(runtime.rollback(host.moduleId(), host.generationId(), rollbackPoint, error) &&
+                runtime.pin(host.moduleId()).materializationKey() == materializationKey,
+                "real JIT profile rollback failed", error);
+            MoonRuntime::PinnedGeneration defaultLoad;
+            const bool defaultAccepted = driver::loadVerifiedMoonGenerationOnce(runtime, hostBytes,
+                targetTriple, dataLayout, defaultLoad, error);
+            require(defaultAccepted == (profile == MoonJitOptimization::O0) &&
+                (defaultAccepted ? defaultLoad.generationId() == host.generationId() : !defaultLoad),
+                "legacy/default loader did not remain O0");
+            MoonRuntime::StagedGeneration invalid;
+            require(!driver::stageVerifiedMoonGeneration(runtime, hostBytes,
+                targetTriple, dataLayout, {}, invalid, error, {}, static_cast<MoonJitOptimization>(99)) &&
+                !invalid && error.find("invalid verified Moon JIT") != std::string::npos,
+                "invalid JIT profile reached staging");
+            require(!driver::loadVerifiedMoonGenerationOnce(runtime, hostBytes,
+                targetTriple, dataLayout, rejected, error, {}, static_cast<MoonJitOptimization>(99)) &&
+                !rejected && error.find("invalid verified Moon JIT") != std::string::npos,
+                "invalid JIT profile reached cache");
+        }
         // Runtime and pipelines die here. Entries and contexts alone own the
         // generated code/factory environments during correctness and timing.
     }
@@ -233,7 +318,7 @@ public:
         return {std::chrono::duration<double, std::nano>(elapsed).count() / iterations,
                 iterations + warmup, checksum};
     }
-    std::string targetTriple, dataLayout, hostDigest, pluginDigest;
+    std::string targetTriple, dataLayout, hostDigest, pluginDigest, materializationKey;
     double compileEncodeMs = 0, loadMs = 0, discoveryBindingMs = 0;
 private:
     runtime::RuntimeSlotRequirement requirement;
@@ -253,20 +338,37 @@ size_t count(const char* argument, size_t maximum) {
 } // namespace
 
 int checkCompiledFragmentWorkload() {
-    try { Fixture fixture; fixture.check(); return 0; }
+    try {
+        std::string hostDigest, pluginDigest;
+        for (const auto profile : Profiles) {
+            Fixture fixture(profile);
+            fixture.check();
+            if (hostDigest.empty()) { hostDigest = fixture.hostDigest; pluginDigest = fixture.pluginDigest; }
+            require(fixture.hostDigest == hostDigest && fixture.pluginDigest == pluginDigest,
+                "LLVM profiles did not load identical containers");
+        }
+        return 0;
+    }
     catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }
 
 int runCompiledFragmentBenchmark(int argc, char** argv) {
     try {
-        require(argc >= 2 && argc <= 4 && std::string(argv[1]) == "--compiled-fragment-cost",
-            "usage: moonir-canonical-test --compiled-fragment-cost [1..10000000 iterations] [1..90 rounds]");
+        require(argc >= 2 && argc <= 5 && std::string(argv[1]) == "--compiled-fragment-cost",
+            "usage: moonir-canonical-test --compiled-fragment-cost [1..10000000 iterations] [1..90 rounds] [O0|O2|O3]");
         const auto iterations = argc >= 3 ? count(argv[2], 10000000) : 10000;
         const auto rounds = argc >= 4 ? count(argv[3], 90) : 9;
-        Fixture fixture(true);
+        MoonJitOptimization profile = MoonJitOptimization::O0;
+        if (argc == 5) {
+            const std::string name(argv[4]);
+            require(name == "O0" || name == "O2" || name == "O3", "invalid compiled JIT profile: " + name);
+            profile = name == "O0" ? MoonJitOptimization::O0 :
+                name == "O2" ? MoonJitOptimization::O2 : MoonJitOptimization::O3;
+        }
+        Fixture fixture(profile, true);
         fixture.check();
         std::cout.imbue(std::locale::classic());
-        std::cout << "# protocol=luna.compiled-fragment-cost.v1\n"
+        std::cout << "# protocol=luna.compiled-fragment-cost.v2\n"
             << "# git_commit=" << LUNA_COMPILED_PROBE_COMMIT << '\n'
             << "# probe_sha256=" << LUNA_COMPILED_PROBE_SHA256 << '\n'
             << "# workload_sha256=" << LUNA_COMPILED_WORKLOAD_SHA256 << '\n'
@@ -277,7 +379,9 @@ int runCompiledFragmentBenchmark(int argc, char** argv) {
             << "# data_layout=" << fixture.dataLayout << '\n'
             << "# host_container_sha256=" << fixture.hostDigest << '\n'
             << "# plugin_container_sha256=" << fixture.pluginDigest << '\n'
-            << "# moonir_optimization=O2,llvm_optimization=adapter_default\n"
+            << "# moonir_optimization=O2,llvm_optimization=" << profileName(profile) << '\n'
+            << "# orc_codegen=default\n"
+            << "# materialization_key=" << fixture.materializationKey << '\n'
             << "# candidate_count=4,host_order=resume_a/resume_b/resume_c/resume_d\n"
             << "# correctness_checks=320,runtime_alive_during_samples=no\n"
             << "# compile_encode_decode_ms=" << std::fixed << std::setprecision(3) << fixture.compileEncodeMs << '\n'
