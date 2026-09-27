@@ -430,6 +430,9 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/runtime_fragment_affinity.cmake` | 平台 CI 的只读允许 CPU 查询、测量线程固定正确性冒烟及不允许／不支持请求拒绝；不改变默认 CTest 或生产 Runtime API |
 | `tests/compiled_fragment_benchmark.cmake` | 真实两包编译产物对比探针每配置 81 样本顺序、调用数／checksum、v2 配置／来源与产物身份、CLI 拒绝检查，无计时阈值 |
 | `tests/compiled_fragment_probe_protocol.cmake` | 纯记录／排列调度校验、共同来源与产物一致性，不启动程序或写采样文件 |
+| `tests/compiled_fragment_pinned_protocol.cmake` | 独立固定线程原始记录的控制器摘要、CPU／group／scope 身份及共享样本检查；不接入旧 bundle |
+| `tests/compiled_fragment_pinned_protocol_test.cmake` | 默认仅用合成记录核对 LF／CRLF、固定／默认模式互斥及损坏 metadata／样本拒绝；不运行计时或固定线程 |
+| `benchmarks/fragment_thread_affinity.h` | 原生和编译探针共用的只读 CPU 能力查询、显式线程固定与样本边界回读；固定记录单独绑定控制器摘要，不属于生产 Runtime API |
 | `tests/compiled_fragment_series.cmake` | 显式启动全新测量进程，以全部排列平衡组内顺序，全部校验后归档原始记录、合并样本和字节摘要 manifest |
 | `tests/compiled_fragment_series_protocol_test.cmake` | 默认非计时的合成记录正例、调度平衡与损坏记录／既有目录拒绝门禁 |
 | `tests/compiled_fragment_bundle.cmake` | 只读验收解包后的 v1 bundle，检查来源、实际字节摘要与原始／合并样本的精确映射，可显式固定预期提交／manifest 摘要 |
@@ -494,6 +497,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `benchmarks/runtime_fragment_benchmark.cpp`
 - `benchmarks/compiled_fragment_benchmark.cpp`
 - `benchmarks/compiled_fragment_benchmark.h`
+- `benchmarks/fragment_thread_affinity.h`
 - `benchmarks/compiled_fragment/host/luna.package`
 - `benchmarks/compiled_fragment/host/src/effects.luna`
 - `benchmarks/compiled_fragment/luna.lock`
@@ -1209,6 +1213,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/runtime_fragment_affinity.cmake`
 - `tests/compiled_fragment_benchmark.cmake`
 - `tests/compiled_fragment_probe_protocol.cmake`
+- `tests/compiled_fragment_pinned_protocol.cmake`
+- `tests/compiled_fragment_pinned_protocol_test.cmake`
 - `tests/compiled_fragment_series.cmake`
 - `tests/compiled_fragment_series_protocol_test.cmake`
 - `tests/compiled_fragment_bundle.cmake`

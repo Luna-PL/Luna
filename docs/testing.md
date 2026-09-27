@@ -53,8 +53,15 @@ macOS and multi-group Windows hosts must reject the pinned mode explicitly.
 This smoke does not select a performance machine or change power policy, and
 does not add timing gates to default CTest. Explicit measurements use
 `LUNA_FRAGMENT_BENCHMARK_LOGICAL_CPU` with the existing validator and a separate
-`luna.fragment-cost.pinned-thread.v1` record. See
+`luna.fragment-cost.pinned-thread.v2` record, including the shared controller's
+SHA-256. Earlier pinned v1 records are not rewritten. See
 [measurement-thread affinity](slot_fragment_runtime_plan.md#measurement-thread-affinity).
+When supplied `LUNA_COMPILED_PROBE_EXECUTABLE`, the affinity smoke also checks
+the compiled probe's capability query, O0/O2/O3 pinned dispatch samples and
+unsupported/disallowed CPU rejection. The separate
+`luna.compiled-fragment-pinned-protocol` default CTest is synthetic only: LF/CRLF,
+controller identity, CPU/group/scope, calls/checksums and mutual mode rejection.
+The actual pinned mode remains opt-in and does not enter v1 observation bundles.
 
 The compiler harness also exposes opt-in `--compiled-fragment-cost`. Its default
 CTest path runs 960 non-timed result checks of the actual two-package compiled workload

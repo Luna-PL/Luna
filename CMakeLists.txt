@@ -154,11 +154,15 @@ target_include_directories(runtime-fragment-benchmark
 target_link_libraries(runtime-fragment-benchmark PRIVATE runtime)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/runtime_fragment_benchmark.cpp"
     LUNA_FRAGMENT_PROBE_SHA256)
+file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/fragment_thread_affinity.h"
+    LUNA_FRAGMENT_AFFINITY_SHA256)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/fragment_thread_affinity.h"
     "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/runtime_fragment_benchmark.cpp")
 target_compile_definitions(runtime-fragment-benchmark PRIVATE
     LUNA_FRAGMENT_PROBE_GIT_COMMIT="${LUNA_GIT_COMMIT}"
     LUNA_FRAGMENT_PROBE_SHA256="${LUNA_FRAGMENT_PROBE_SHA256}"
+    LUNA_FRAGMENT_AFFINITY_SHA256="${LUNA_FRAGMENT_AFFINITY_SHA256}"
     LUNA_FRAGMENT_PROBE_BUILD_TYPE="$<CONFIG>"
     LUNA_FRAGMENT_PROBE_COMPILER="${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
 
@@ -470,6 +474,7 @@ set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
 set_property(SOURCE benchmarks/compiled_fragment_benchmark.cpp APPEND PROPERTY COMPILE_DEFINITIONS
     LUNA_COMPILED_PROBE_COMMIT="${LUNA_GIT_COMMIT}"
     LUNA_COMPILED_PROBE_SHA256="${LUNA_COMPILED_PROBE_SHA256}"
+    LUNA_FRAGMENT_AFFINITY_SHA256="${LUNA_FRAGMENT_AFFINITY_SHA256}"
     LUNA_COMPILED_WORKLOAD_SHA256="${LUNA_COMPILED_WORKLOAD_SHA256}"
     LUNA_COMPILED_PROBE_BUILD_TYPE="$<CONFIG>"
     LUNA_COMPILED_PROBE_COMPILER="${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
@@ -1299,6 +1304,11 @@ if(BUILD_TESTING)
         NAME luna.compiled-fragment-series-protocol
         COMMAND ${CMAKE_COMMAND} -Werror=dev
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/compiled_fragment_series_protocol_test.cmake
+    )
+    add_test(
+        NAME luna.compiled-fragment-pinned-protocol
+        COMMAND ${CMAKE_COMMAND} -Werror=dev
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/compiled_fragment_pinned_protocol_test.cmake
     )
     add_test(
         NAME luna.compiled-fragment-bundle

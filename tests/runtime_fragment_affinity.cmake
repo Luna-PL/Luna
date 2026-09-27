@@ -12,12 +12,28 @@ if(NOT status EQUAL 0 OR NOT errors STREQUAL "")
     message(FATAL_ERROR "affinity query failed (${status}): ${errors}")
 endif()
 string(REPLACE "\r\n" "\n" info "${info}")
+if(DEFINED LUNA_COMPILED_PROBE_EXECUTABLE)
+    execute_process(COMMAND "${LUNA_COMPILED_PROBE_EXECUTABLE}" --compiled-fragment-affinity-info
+        RESULT_VARIABLE status OUTPUT_VARIABLE compiled_info ERROR_VARIABLE errors TIMEOUT 30)
+    string(REPLACE "\r\n" "\n" compiled_info "${compiled_info}")
+    if(NOT status EQUAL 0 OR NOT errors STREQUAL "" OR NOT compiled_info STREQUAL info)
+        message(FATAL_ERROR "compiled/native affinity capabilities differ or query failed: ${compiled_info}\n${errors}")
+    endif()
+endif()
 
 function(require_cpu_rejected cpu)
     execute_process(COMMAND "${LUNA_FRAGMENT_BENCHMARK_EXECUTABLE}" --pinned-thread "${cpu}" 1 1
         RESULT_VARIABLE status OUTPUT_VARIABLE output ERROR_VARIABLE errors TIMEOUT 30)
     if(NOT status EQUAL 1 OR NOT output STREQUAL "" OR errors STREQUAL "")
         message(FATAL_ERROR "unsupported/disallowed CPU was not rejected: ${cpu}")
+    endif()
+    if(DEFINED LUNA_COMPILED_PROBE_EXECUTABLE)
+        execute_process(COMMAND "${LUNA_COMPILED_PROBE_EXECUTABLE}"
+                --compiled-fragment-cost-pinned-thread "${cpu}" 1 1 O0
+            RESULT_VARIABLE status OUTPUT_VARIABLE output ERROR_VARIABLE errors TIMEOUT 30)
+        if(NOT status EQUAL 1 OR NOT output STREQUAL "" OR errors STREQUAL "")
+            message(FATAL_ERROR "compiled unsupported/disallowed CPU was not rejected: ${cpu}")
+        endif()
     endif()
 endfunction()
 
@@ -71,6 +87,19 @@ execute_process(COMMAND "${CMAKE_COMMAND}" "${warning_option}"
 if(NOT status EQUAL 0 OR NOT errors STREQUAL "")
     message(FATAL_ERROR "pinned-thread correctness smoke failed (${status}): ${output}\n${errors}")
 endif()
+if(DEFINED LUNA_COMPILED_PROBE_EXECUTABLE)
+    foreach(profile IN ITEMS O0 O2 O3)
+        execute_process(COMMAND "${CMAKE_COMMAND}" "${warning_option}"
+                "-DLUNA_COMPILED_PROBE_EXECUTABLE=${LUNA_COMPILED_PROBE_EXECUTABLE}"
+                -DLUNA_COMPILED_PROBE_ITERATIONS=3 "-DLUNA_COMPILED_PROBE_PROFILE=${profile}"
+                "-DLUNA_COMPILED_PROBE_LOGICAL_CPU=${first_cpu}"
+                -P "${CMAKE_CURRENT_LIST_DIR}/compiled_fragment_benchmark.cmake"
+            RESULT_VARIABLE status OUTPUT_VARIABLE output ERROR_VARIABLE errors TIMEOUT 180)
+        if(NOT status EQUAL 0 OR NOT errors STREQUAL "")
+            message(FATAL_ERROR "compiled pinned ${profile} smoke failed (${status}): ${output}\n${errors}")
+        endif()
+    endforeach()
+endif()
 # Exercise a second explicit index when possible, so CPU 0 is not an implicit
 # success assumption. The probe independently checks counters for every sample.
 list(GET allowed -1 last_allowed_cpu)
@@ -84,6 +113,18 @@ if(NOT last_allowed_cpu STREQUAL first_cpu)
     if(NOT status EQUAL 0 OR NOT errors STREQUAL "" OR affinity_at EQUAL -1 OR
        NOT output MATCHES "# verified_samples=30,position_balanced=no")
         message(FATAL_ERROR "second allowed CPU failed: ${last_allowed_cpu}: ${output}\n${errors}")
+    endif()
+    if(DEFINED LUNA_COMPILED_PROBE_EXECUTABLE)
+        execute_process(COMMAND "${LUNA_COMPILED_PROBE_EXECUTABLE}"
+                --compiled-fragment-cost-pinned-thread "${last_allowed_cpu}" 1 1 O0
+            RESULT_VARIABLE status OUTPUT_VARIABLE output ERROR_VARIABLE errors TIMEOUT 30)
+        string(FIND "${output}"
+            "# affinity=measurement_thread,logical_cpu=${last_allowed_cpu},processor_group=${processor_group},verified=sample_boundaries,power_policy=uncontrolled"
+            affinity_at)
+        if(NOT status EQUAL 0 OR NOT errors STREQUAL "" OR affinity_at EQUAL -1 OR
+           NOT output MATCHES "# verified_samples=9,position_balanced=no")
+            message(FATAL_ERROR "compiled second allowed CPU failed: ${last_allowed_cpu}: ${output}\n${errors}")
+        endif()
     endif()
 endif()
 # A disallowed in-range CPU is preferable; a full allowed mask still has a
@@ -99,3 +140,6 @@ foreach(cpu RANGE 0 ${last_cpu})
 endforeach()
 require_cpu_rejected("${disallowed}")
 message(STATUS "Pinned-thread smoke: CPU ${first_cpu}, 900 verified samples; disallowed CPU rejected; no timing threshold")
+if(DEFINED LUNA_COMPILED_PROBE_EXECUTABLE)
+    message(STATUS "Compiled pinned-thread smoke: O0/O2/O3, 243 samples, distinct mode/control provenance; no timing threshold")
+endif()

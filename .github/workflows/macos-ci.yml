@@ -41,6 +41,7 @@ jobs:
             -DLUNA_FRAGMENT_BENCHMARK_RECORD="$PWD/build/fragment-cost-interleaved.csv" \
             -P tests/runtime_fragment_benchmark.cmake
           cmake -Werror=dev -DLUNA_FRAGMENT_BENCHMARK_EXECUTABLE="$PWD/build/runtime-fragment-benchmark" \
+            -DLUNA_COMPILED_PROBE_EXECUTABLE="$PWD/build/moonir-canonical-test" \
             -P tests/runtime_fragment_affinity.cmake
           for profile in O0 O2 O3; do
             cmake -Werror=dev -DLUNA_COMPILED_PROBE_EXECUTABLE="$PWD/build/moonir-canonical-test" \

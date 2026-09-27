@@ -598,8 +598,11 @@ The native probe additionally exposes `--affinity-info` (read-only) and
 `--pinned-thread CPU [iterations] [rounds]`. CPU is a canonical unsigned decimal
 logical index, chosen explicitly from the reported allowed set, not a physical
 core identifier or automatic topology policy. The defaults remain 10000/30.
-The pinned mode has its own `luna.fragment-cost.pinned-thread.v1` protocol;
-default interleaved v1 and compiled-probe/bundle/evidence formats are unchanged.
+The pinned mode now uses `luna.fragment-cost.pinned-thread.v2`, binding the shared
+`benchmarks/fragment_thread_affinity.h` controller with `affinity_control_sha256`
+as well as the probe's own source digest. Earlier pinned v1 records are retained
+as historical observations without retroactively claiming controller identity.
+Default interleaved v1 and uncontrolled compiled v2/bundle/evidence formats are unchanged.
 
 ```sh
 ./build-perf/runtime-fragment-benchmark --affinity-info
@@ -633,6 +636,46 @@ frequency/power/background controls, topology documentation and durable archival
 still need their own evidence. Boundary checks can affect cache/scheduling between
 samples; pinned and uncontrolled records must not be treated as identical harnesses
 or evidence of a Runtime speedup. No production Runtime or source-language API changes.
+
+#### Compiled dispatch-thread affinity
+
+The compiled probe reuses that controller through read-only
+`--compiled-fragment-affinity-info` and opt-in
+`--compiled-fragment-cost-pinned-thread CPU [iterations] [rounds] [O0|O2|O3]`.
+Defaults are 10000/9/O0. Invalid/unsupported/disallowed CPU requests fail before
+fixture compilation; after compiling, verified loading, binding and 320 correctness
+checks, the probe rechecks the allowed set and pins the dispatch measurement thread.
+Existing ORC workers are not pinned by the probe. The main thread's mask and
+current CPU are verified before/after each sample, outside the timer.
+
+```sh
+./build-perf/moonir-canonical-test --compiled-fragment-affinity-info
+# Choose an allowed logical CPU and a fresh output path.
+cmake -Werror=dev -DLUNA_COMPILED_PROBE_EXECUTABLE="$PWD/build-perf/moonir-canonical-test" \
+  -DLUNA_COMPILED_PROBE_LOGICAL_CPU=0 -DLUNA_COMPILED_PROBE_PROFILE=O2 \
+  -DLUNA_COMPILED_PROBE_ITERATIONS=10000 \
+  -DLUNA_COMPILED_PROBE_RECORD="$PWD/build-perf/compiled-pinned-O2.csv" \
+  -P tests/compiled_fragment_benchmark.cmake
+```
+
+The separate `luna.compiled-fragment-cost.pinned-thread.v1` raw-record protocol
+adds controller SHA-256, CPU/group/boundary-verification metadata, and
+`setup_affinity=uncontrolled,measurement_scope=dispatch_samples`. Setup timings
+are **not pinned observations**. The new pure `compiled_fragment_pinned_protocol.cmake`
+requires these exact identities before reusing the unchanged 81-sample schedule,
+calls/checksum and build/workload checks. Derived validation strings never replace
+or relabel observed bytes. Pinned and default readers reject the other mode.
+The shared affinity smoke additionally runs three-iteration O0/O2/O3 dispatch
+checks (243 samples), a second allowed CPU when available, and explicit rejection
+on unsupported platforms. CMake 4.4 child invocations use the author-warning spelling.
+
+The existing v1 series, bundle reader, evidence exporter and descriptive summary
+accept only uncontrolled compiled v2. Pinned raw records are not added to their
+inventories or 14-day CI artifacts. A pinned multi-process series with its own
+versioned archival/reader/controller-source inventory is still future work;
+do not place these CSVs inside an existing closed bundle. Default CTest adds only
+synthetic record checks, never thread pinning or a timing threshold. Frequency,
+power, background load, durable storage and performance/release approval remain unclaimed.
 
 #### Compiled-plugin comparison protocol
 

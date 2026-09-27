@@ -1,3 +1,4 @@
+#include "fragment_thread_affinity.h"
 #include "compiled_fragment_benchmark.h"
 
 #include "diagnostics/Diagnostic.h"
@@ -19,6 +20,7 @@
 #include <iomanip>
 #include <iostream>
 #include <locale>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -354,21 +356,37 @@ int checkCompiledFragmentWorkload() {
 
 int runCompiledFragmentBenchmark(int argc, char** argv) {
     try {
-        require(argc >= 2 && argc <= 5 && std::string(argv[1]) == "--compiled-fragment-cost",
-            "usage: moonir-canonical-test --compiled-fragment-cost [1..10000000 iterations] [1..90 rounds] [O0|O2|O3]");
-        const auto iterations = argc >= 3 ? count(argv[2], 10000000) : 10000;
-        const auto rounds = argc >= 4 ? count(argv[3], 90) : 9;
+        std::cout.imbue(std::locale::classic());
+        if (argc >= 2 && std::string(argv[1]) == "--compiled-fragment-affinity-info") {
+            require(argc == 2, "usage: moonir-canonical-test --compiled-fragment-affinity-info");
+            return affinity::reportAffinity();
+        }
+        const bool pinRequested = argc >= 2 &&
+            std::string(argv[1]) == "--compiled-fragment-cost-pinned-thread";
+        require(argc >= (pinRequested ? 3 : 2) && argc <= (pinRequested ? 6 : 5) &&
+            (pinRequested || std::string(argv[1]) == "--compiled-fragment-cost"),
+            "usage: moonir-canonical-test --compiled-fragment-cost [iterations] [rounds] [O0|O2|O3], "
+            "or --compiled-fragment-cost-pinned-thread CPU [iterations] [rounds] [O0|O2|O3]");
+        const auto cpu = pinRequested ? affinity::parseCpu(argv[2]) : 0;
+        // Reject unsupported/disallowed CPUs before compiling or loading anything,
+        // but do not pin setup (including any ORC workers created there).
+        if (pinRequested) (void)affinity::requireAllowedCpu(cpu);
+        const int first = pinRequested ? 3 : 2;
+        const auto iterations = argc > first ? count(argv[first], 10000000) : 10000;
+        const auto rounds = argc > first + 1 ? count(argv[first + 1], 90) : 9;
         MoonJitOptimization profile = MoonJitOptimization::O0;
-        if (argc == 5) {
-            const std::string name(argv[4]);
+        if (argc > first + 2) {
+            const std::string name(argv[first + 2]);
             require(name == "O0" || name == "O2" || name == "O3", "invalid compiled JIT profile: " + name);
             profile = name == "O0" ? MoonJitOptimization::O0 :
                 name == "O2" ? MoonJitOptimization::O2 : MoonJitOptimization::O3;
         }
         Fixture fixture(profile, true);
         fixture.check();
-        std::cout.imbue(std::locale::classic());
-        std::cout << "# protocol=luna.compiled-fragment-cost.v2\n"
+        std::unique_ptr<affinity::PinnedThread> pinned;
+        if (pinRequested) pinned = std::make_unique<affinity::PinnedThread>(cpu);
+        std::cout << "# protocol=" << (pinned ? "luna.compiled-fragment-cost.pinned-thread.v1"
+                                            : "luna.compiled-fragment-cost.v2") << '\n'
             << "# git_commit=" << LUNA_COMPILED_PROBE_COMMIT << '\n'
             << "# probe_sha256=" << LUNA_COMPILED_PROBE_SHA256 << '\n'
             << "# workload_sha256=" << LUNA_COMPILED_WORKLOAD_SHA256 << '\n'
@@ -387,9 +405,12 @@ int runCompiledFragmentBenchmark(int argc, char** argv) {
             << "# compile_encode_decode_ms=" << std::fixed << std::setprecision(3) << fixture.compileEncodeMs << '\n'
             << "# verified_load_jit_ms=" << fixture.loadMs << '\n'
             << "# discovery_binding_ms=" << fixture.discoveryBindingMs << '\n'
-            << "# iterations=" << iterations << ",warmup=" << std::min<size_t>(iterations, 1000) << ",rounds=" << rounds << '\n'
-            << "# affinity=uncontrolled,power_policy=uncontrolled\n"
-            << "# timed_harness=case_branch+input_modulo+JIT_call+checksum\n"
+            << "# iterations=" << iterations << ",warmup=" << std::min<size_t>(iterations, 1000) << ",rounds=" << rounds << '\n';
+        if (pinned) {
+            pinned->report(LUNA_FRAGMENT_AFFINITY_SHA256);
+            std::cout << "# setup_affinity=uncontrolled,measurement_scope=dispatch_samples\n";
+        } else std::cout << "# affinity=uncontrolled,power_policy=uncontrolled\n";
+        std::cout << "# timed_harness=case_branch+input_modulo+JIT_call+checksum\n"
             << "round,position,case,ns_per_op,calls,checksum\n";
         std::cout << std::setprecision(1);
         std::array<std::array<unsigned, Cases.size()>, Cases.size()> visits{};
@@ -397,7 +418,9 @@ int runCompiledFragmentBenchmark(int argc, char** argv) {
             for (size_t position = 0; position < Cases.size(); ++position) {
                 const auto index = (position + round * 4) % Cases.size();
                 ++visits[index][position];
+                if (pinned) pinned->verify();
                 const auto sample = fixture.sample(index, iterations);
+                if (pinned) pinned->verify();
                 std::cout << round + 1 << ',' << position + 1 << ',' << Cases[index] << ','
                     << sample.nanoseconds << ',' << sample.calls << ',' << sample.checksum << '\n';
             }

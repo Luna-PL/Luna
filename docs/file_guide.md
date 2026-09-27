@@ -120,6 +120,11 @@ script-defined special inputs.
   validates either explicit mode; `runtime_fragment_affinity.cmake` checks allowed
   CPU lookup, pinned correctness and unsupported/disallowed rejection in platform
   CI, without changing the default build/CTest or production Runtime APIs.
+  `fragment_thread_affinity.h` is the probe-only shared controller; pinned native
+  v2 and compiled pinned v1 records separately bind its source digest. Compiled
+  setup remains unpinned. `compiled_fragment_pinned_protocol.cmake` validates only
+  pinned raw records; its synthetic default test checks mode separation without
+  starting probes. Existing observation bundles remain uncontrolled-only.
   The compiler-linked `compiled_fragment_benchmark.cpp/.h` lives under benchmarks;
   `moonir-canonical-test` routes its explicit timing mode and default non-timed
   O0/O2/O3 workload and cache/configuration checks. Its CMake script validates
@@ -242,6 +247,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `benchmarks/runtime_fragment_benchmark.cpp`
 - `benchmarks/compiled_fragment_benchmark.cpp`
 - `benchmarks/compiled_fragment_benchmark.h`
+- `benchmarks/fragment_thread_affinity.h`
 - `benchmarks/compiled_fragment/host/luna.package`
 - `benchmarks/compiled_fragment/host/src/effects.luna`
 - `benchmarks/compiled_fragment/luna.lock`
@@ -1010,6 +1016,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/runtime_fragment_affinity.cmake`
 - `tests/compiled_fragment_benchmark.cmake`
 - `tests/compiled_fragment_probe_protocol.cmake`
+- `tests/compiled_fragment_pinned_protocol.cmake`
+- `tests/compiled_fragment_pinned_protocol_test.cmake`
 - `tests/compiled_fragment_series.cmake`
 - `tests/compiled_fragment_series_protocol_test.cmake`
 - `tests/compiled_fragment_bundle.cmake`

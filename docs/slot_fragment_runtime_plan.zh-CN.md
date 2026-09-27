@@ -466,7 +466,9 @@ Linux C++17／C++23、macOS、Windows CI 均运行 10000 次／30 轮，以 `fra
 原生探针新增只读 `--affinity-info` 与 `--pinned-thread CPU [iterations] [rounds]`。
 CPU 必须是规范的无符号十进制逻辑索引，由调用方从报告的允许集合显式选择，不是物理
 核编号，也不提供自动拓扑策略。默认仍为 10000 次／30 轮。固定模式使用独立的
-`luna.fragment-cost.pinned-thread.v1`；默认交错 v1、编译探针／bundle／证据格式不变。
+`luna.fragment-cost.pinned-thread.v2`，除探针摘要外，通过 `affinity_control_sha256`
+绑定共用的 `benchmarks/fragment_thread_affinity.h` 控制器。旧固定 v1 记录保留为历史观察，
+不重写，也不追溯赋予控制器身份。默认交错 v1、未固定编译 v2／bundle／证据格式不变。
 
 ```sh
 ./build-perf/runtime-fragment-benchmark --affinity-info
@@ -495,6 +497,39 @@ cmake -Werror=dev -DLUNA_FRAGMENT_BENCHMARK_EXECUTABLE="$PWD/build-perf/runtime-
 固定线程 CSV。独立进程测量、频率／功耗／后台控制、拓扑记录和长期归档仍需各自证据。
 边界检查会影响样本之间的缓存／调度，不能把固定与未固定记录当成完全相同的 harness，
 也不能据此声称 Runtime 获得加速。不改变生产 Runtime 或源码语言 API。
+
+#### 编译派发线程亲和性
+
+编译探针共用该控制器，提供只读 `--compiled-fragment-affinity-info` 及显式
+`--compiled-fragment-cost-pinned-thread CPU [iterations] [rounds] [O0|O2|O3]`。
+默认 10000 次／9 轮／O0。非法／不支持／不允许的 CPU 请求在编译 fixture 前失败；
+编译、验证装载、绑定和 320 次正确性核对完成后，再检查允许集合并固定派发测量线程。
+探针不固定已有 ORC worker。每个样本前后在计时外核对主线程的 mask 与实际 CPU。
+
+```sh
+./build-perf/moonir-canonical-test --compiled-fragment-affinity-info
+# 选择一个允许的逻辑 CPU，并使用全新的输出路径。
+cmake -Werror=dev -DLUNA_COMPILED_PROBE_EXECUTABLE="$PWD/build-perf/moonir-canonical-test" \
+  -DLUNA_COMPILED_PROBE_LOGICAL_CPU=0 -DLUNA_COMPILED_PROBE_PROFILE=O2 \
+  -DLUNA_COMPILED_PROBE_ITERATIONS=10000 \
+  -DLUNA_COMPILED_PROBE_RECORD="$PWD/build-perf/compiled-pinned-O2.csv" \
+  -P tests/compiled_fragment_benchmark.cmake
+```
+
+独立原始记录协议 `luna.compiled-fragment-cost.pinned-thread.v1` 新增控制器 SHA-256、
+CPU／group／边界核对 metadata，以及
+`setup_affinity=uncontrolled,measurement_scope=dispatch_samples`。setup 耗时**不是固定线程
+观察值**。新的纯 `compiled_fragment_pinned_protocol.cmake` 先要求这些身份精确匹配，再复用
+未改变的 81 样本顺序、调用数／checksum 及构建／工作负载检查。派生校验字符串不替换或
+重标注原始字节；固定 reader 与默认 reader 互相拒绝另一模式。
+共用亲和性冒烟还做三次迭代的 O0／O2／O3 派发检查（243 样本）、可用时的第二个合法
+CPU，以及不支持平台的显式拒绝。CMake 4.4 子调用使用 author 警告参数名称。
+
+已有 v1 series、bundle reader、证据导出和描述性汇总仍只接受未固定的编译 v2。固定原始
+记录不加入其文件清单或 14 天 CI artifact。固定线程多进程序列及其独立版本的归档／reader／
+控制器源码清单仍是后续工作；不要把这些 CSV 放进已有的封闭 bundle。默认 CTest 只增加
+合成记录检查，不固定线程，也不设计时阈值。频率、功耗、后台负载、长期存储与性能／发布
+批准仍不作保证。
 
 #### 编译插件对比协议
 
