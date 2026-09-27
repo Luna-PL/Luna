@@ -1092,3 +1092,40 @@ RuntimeFragment.cpp 均为 `e4772b379dc4e9f59877a8239c46aeb1f5d960b5b545a1851d69
 这些锚点不是完整构建／二进制归档、签名或可复现性证明；两批旧证据和两批新证据均保持原样。
 重跑仍须全新路径，显式 CPU 0、迭代 10000／100000、三轮系列及各自提交／摘要；
 后续报告提交不是本轮观察的构建提交，数值也不要求重现。
+
+#### 绑定派发复用固定 Slot 身份（2026-09-27）
+
+已实现上一节的下一项候选：BindingSet 私有 Entry 用拥有型
+`RuntimeSlotRequirement` 保存原有两个名义键；查找、稳定分组与局部 override
+仍按精确 Slot／Contract 排序。同步链 dispatch 不再复制这两个字符串，activation
+引用选中 Entry 的记录。派发入口原有局部 shared snapshot pin 保持 Entry、整链、
+环境和 generation，直到全部嵌套 resume／handler 返回；不依赖发布句柄继续存活。
+
+参数 carrier 仍按值拥有 layout／size／alignment／data 记录，payload 存储寿命仍由
+宿主负责。C ABI 入口仍复制宿主 C 字符串，公开 activation 仍拥有自己的身份和
+carrier；没有改变公开 API／ABI／语法、验证、single-shot 或失败传播协议。
+宿主仍明确选择 None／One／顺序链，没有引入自动候选集合、热更新或排序策略。
+
+在旧实现上先加入长身份分配比较，观察到
+`bound dispatch copied frozen Slot/Contract identities` 失败；实现后通过。
+1／4／64 成员的绑定派发普通 C++ 分配计数现在必须与同参数的 None 派发相等，
+不只是随链长保持常数。长 layout carrier 的按值复制仍可能分配，测试不覆盖
+所有 aligned／系统分配，也不声称整个派发零分配或给出计时提升。
+
+现有寿命夹具扩展至 768 个组合：One／两成员链、owned／borrowed 环境、BindingSet／
+C++ context／C ABI、在首 handler 或 base 修改／销毁调用者身份与 carrier、释放／
+替换发布句柄、重复 resume、完成／escape／非法结果／异常。检查所有仍存活的
+activation 使用原身份和参数，环境先于 generation 清理，错误不被后续重复 resume
+覆盖，替换的 None 只影响下一次调用。同 Slot 的嵌套 1／4／64 链还在最深 base
+销毁内外两次调用共用的原始记录，检查最多 128 个悬挂 activation；公开 activation
+拥有型 move、handler 异常后恢复与局部 override 原有回归继续保留。
+
+Windows 严格警告普通及 ASan／UBSan 的两个 Runtime CTest 通过；sanitizer 直接
+instrument 相关 Runtime 实现。现有 Arch Linux WSL 的 Clang 22.1.8／libstdc++ 16
+以 C++17 和 C++23、O0、sized deallocation、ASan／UBSan 直接编译 Runtime 测试
+均通过；这不是完整 Ubuntu CI 复刻。Windows 严格警告全量构建成功，77／77 项
+非 hardware 回归通过（285.74 秒）；文档 inventory 与 `git diff --check` 通过。
+
+本轮没有新的性能观察系列采样。下一步应在干净的新构建提交上确认跨平台 CI，再用既有 CPU／
+迭代／三轮协议及全新证据路径进行匹配采样；不得把上一节数值作为这次身份复用的
+性能结果。性能／发布验收和持久外部证据存储仍未完成。

@@ -264,6 +264,8 @@ struct ScopedActivationProbe {
     const luna::runtime::RuntimeFragmentBindingSet* bindings = nullptr;
     const luna::runtime::RuntimeSlotRequirement* slot = nullptr;
     const luna::runtime::RuntimeFragmentArguments* arguments = nullptr;
+    std::unique_ptr<luna::runtime::RuntimeSlotRequirement>* callerSlot = nullptr;
+    std::unique_ptr<luna::runtime::RuntimeFragmentArguments>* callerArguments = nullptr;
     std::array<void*, 256> live{};
     size_t depth = 0;
     unsigned entered = 0;
@@ -322,11 +324,21 @@ int32_t scopedActivationBase(void* context) {
         std::string error;
         auto outcome = luna::runtime::RuntimeFragmentDispatchOutcome::Completed;
         probe.valid &= probe.bindings->dispatchWithOutcome(
-            *probe.slot, *probe.arguments, scopedActivationBase, &probe,
+            probe.callerSlot ? **probe.callerSlot : *probe.slot,
+            probe.callerArguments ? **probe.callerArguments : *probe.arguments,
+            scopedActivationBase, &probe,
             outcome, error) && error.empty();
         probe.valid &= (outcome ==
             luna::runtime::RuntimeFragmentDispatchOutcome::ContinuationEscaped) ==
             (probe.control == LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1);
+        for (size_t index = 0; index < probe.depth; ++index)
+            probe.valid &= probe.matches(probe.live[index]);
+    } else if (probe.callerSlot) {
+        // Destroy the very records passed to both outer and inner dispatch
+        // while every activation is suspended. The expected identities and
+        // payload used by matches() remain independent, host-owned fixtures.
+        probe.callerSlot->reset();
+        probe.callerArguments->reset();
         for (size_t index = 0; index < probe.depth; ++index)
             probe.valid &= probe.matches(probe.live[index]);
     }
@@ -379,6 +391,18 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
     int payload = 42;
     const luna::runtime::RuntimeFragmentArguments arguments{
         layoutId, sizeof(payload), alignof(int), &payload};
+    luna::runtime::RuntimeFragmentBindingSet none;
+    if (!luna::runtime::makeRuntimeFragmentBindingSet({}, none, error))
+        return fail("scoped activation None fixture did not initialize");
+    unsigned noneResumes = 0;
+    dispatchAllocations = 0;
+    countDispatchAllocations = true;
+    const bool ranNone = none.dispatch(
+        slot, arguments, resumeActivation, &noneResumes, error);
+    countDispatchAllocations = false;
+    const size_t noneAllocations = dispatchAllocations;
+    if (!ranNone || !error.empty() || noneResumes != 1)
+        return fail("scoped activation None fixture did not dispatch");
     size_t oneAllocations = 0;
     for (unsigned chainLength : {1u, 4u, 64u}) {
         std::vector<luna::runtime::RuntimeFragmentRef> references;
@@ -411,6 +435,11 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
         if (chainLength == 1) oneAllocations = dispatchAllocations;
         else if (dispatchAllocations != oneAllocations)
             return fail("synchronous activation allocations grew with chain length");
+        // Both paths copy the caller's long argument layout into the by-value
+        // carrier. A bound path must not additionally copy Slot/Contract keys
+        // already owned by the pinned, immutable BindingSet entry.
+        if (dispatchAllocations != noneAllocations)
+            return fail("bound dispatch copied frozen Slot/Contract identities");
 
         // Keep a 64-handler outer chain suspended while the same Slot runs
         // another 64 handlers. All 128 live activation addresses must differ.
@@ -421,14 +450,21 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
             probe.nest = true;
             probe.nested = false;
             probe.control = control;
+            auto callerSlot = std::make_unique<luna::runtime::RuntimeSlotRequirement>(slot);
+            auto callerArguments = std::make_unique<luna::runtime::RuntimeFragmentArguments>(arguments);
+            probe.callerSlot = &callerSlot;
+            probe.callerArguments = &callerArguments;
             activeScopedActivationProbe = &probe;
             auto outcome = luna::runtime::RuntimeFragmentDispatchOutcome::Completed;
             const bool nested = bindings.dispatchWithOutcome(
-                slot, arguments, scopedActivationBase, &probe, outcome, error);
+                *callerSlot, *callerArguments, scopedActivationBase, &probe, outcome, error);
             activeScopedActivationProbe = nullptr;
+            probe.callerSlot = nullptr;
+            probe.callerArguments = nullptr;
             if (!nested || !error.empty() || !probe.valid || probe.depth != 0 ||
                 probe.entered != 2 * chainLength ||
                 probe.returned != 2 * chainLength || probe.baseCalls != 2 ||
+                callerSlot || callerArguments ||
                 (outcome == luna::runtime::RuntimeFragmentDispatchOutcome::ContinuationEscaped) !=
                     (control == LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1))
                 return fail("nested scoped activation state or escape was not isolated");
@@ -486,22 +522,49 @@ struct DispatchLifetimeProbe {
     luna::runtime::RuntimeFragmentExecutionContext context;
     luna::runtime::RuntimeFragmentBindingSet replacement;
     luna::runtime::RuntimeFragmentExecutionContext replacementContext;
+    const luna::runtime::RuntimeSlotRequirement* expectedSlot = nullptr;
+    const luna::runtime::RuntimeFragmentArguments* expectedArguments = nullptr;
+    std::unique_ptr<luna::runtime::RuntimeSlotRequirement> callerSlot;
+    std::unique_ptr<luna::runtime::RuntimeFragmentArguments> callerArguments;
+    std::array<void*, 2> activations{};
+    size_t depth = 0;
     unsigned handlers = 0;
     unsigned returnedHandlers = 0;
     unsigned baseCalls = 0;
     bool releaseInHandler = false;
+    bool destroyCallerRecords = false;
+    bool repeatResume = false;
     bool retainedThroughout = true;
     bool environmentBeforeModule = false;
     int32_t control = LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1;
 
     void releasePublishedHandles() {
+        if (destroyCallerRecords) {
+            callerSlot.reset();
+            callerArguments.reset();
+        } else {
+            callerSlot->slotId = callerSlot->contractId = "changed";
+            callerArguments->layoutId = "changed";
+            callerArguments->data = nullptr;
+            callerArguments->size = 0;
+            callerArguments->alignment = 3;
+        }
         bindings = replacement;
         context = replacementContext;
         checkRetained();
+        checkActivations();
     }
     void checkRetained() {
         retainedThroughout &= environmentDestructions.load() == 0 &&
                               moduleDestructions.load() == 0;
+    }
+    void checkActivations() {
+        for (size_t index = 0; index < depth; ++index)
+            retainedThroughout &= luna_runtime_fragment_activation_arguments_v1(
+                activations[index], expectedSlot->slotId.c_str(),
+                expectedSlot->contractId.c_str(), expectedArguments->layoutId.c_str(),
+                expectedArguments->size, expectedArguments->alignment) ==
+                    expectedArguments->data;
     }
 };
 
@@ -528,13 +591,27 @@ void destroyLifetimeEnvironment(void* environment) {
 void executeLifetimeFragment(void*, void* activation) {
     auto& probe = *activeLifetimeProbe;
     ++probe.handlers;
+    if (probe.depth >= probe.activations.size()) {
+        probe.retainedThroughout = false;
+        return;
+    }
+    probe.activations[probe.depth++] = activation;
+    probe.checkActivations();
     if (probe.releaseInHandler && probe.handlers == 1)
         probe.releasePublishedHandles();
     // Fail the old implementation without traversing a freed chain or reading
     // a freed environment. Lifetime evidence comes from external counters.
-    if (!probe.retainedThroughout) return;
+    if (!probe.retainedThroughout) {
+        --probe.depth;
+        return;
+    }
     luna_runtime_fragment_activation_resume_v1(activation);
+    if (probe.repeatResume)
+        probe.retainedThroughout &= luna_runtime_fragment_activation_resume_v1(activation) ==
+            LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1;
     probe.checkRetained();
+    probe.checkActivations();
+    --probe.depth;
     ++probe.returnedHandlers;
 }
 
@@ -542,13 +619,20 @@ int32_t releaseLifetimeBase(void* context) {
     auto& probe = *static_cast<DispatchLifetimeProbe*>(context);
     ++probe.baseCalls;
     if (!probe.releaseInHandler) probe.releasePublishedHandles();
+    probe.checkActivations();
     if (probe.control == -99) throw std::runtime_error("lifetime continuation probe");
     return probe.control;
 }
 
 int testDispatchLifetime(const LunaRuntimeFragmentDescriptorV1& original) {
     using namespace luna::runtime;
+    const std::string slotId = "slot:lifetime:" + std::string(128, 's');
+    const std::string contractId = "contract:lifetime:" + std::string(128, 'c');
+    const std::string layoutId = "layout:lifetime:" + std::string(128, 'l');
     auto descriptor = original;
+    descriptor.slot_id = slotId.c_str();
+    descriptor.slot_contract_id = contractId.c_str();
+    descriptor.slot_arguments_layout_id = layoutId.c_str();
     descriptor.factory_contract_id = "contract:lifetime-factory";
     descriptor.environment_layout_id = "layout:lifetime-environment";
     descriptor.environment_size = sizeof(LifetimeEnvironment);
@@ -562,15 +646,24 @@ int testDispatchLifetime(const LunaRuntimeFragmentDescriptorV1& original) {
         descriptor.slot_arguments_layout_id, sizeof(argument), alignof(int), &argument};
     // One and chain; owned and borrowed environments; BindingSet, C++ context,
     // and C ABI; release before resume or in base; clear or replace with None;
-    // completed, escaped, invalid, and throwing continuation results.
+    // mutate/destroy caller identities/carrier; repeated resume; completed,
+    // escaped, invalid, and throwing continuation results.
     for (unsigned chainLength : {1u, 2u})
     for (bool borrowed : {false, true})
     for (unsigned entry : {0u, 1u, 2u})
     for (bool releaseInHandler : {false, true})
     for (bool replace : {false, true})
+    for (bool destroyCallerRecords : {false, true})
+    for (bool repeatResume : {false, true})
     for (int32_t control : {0, 1, 99, -99}) {
         DispatchLifetimeProbe probe;
         probe.releaseInHandler = releaseInHandler;
+        probe.destroyCallerRecords = destroyCallerRecords;
+        probe.repeatResume = repeatResume;
+        probe.expectedSlot = &slot;
+        probe.expectedArguments = &arguments;
+        probe.callerSlot = std::make_unique<RuntimeSlotRequirement>(slot);
+        probe.callerArguments = std::make_unique<RuntimeFragmentArguments>(arguments);
         probe.control = control;
         std::string error;
         if (replace &&
@@ -623,32 +716,36 @@ int testDispatchLifetime(const LunaRuntimeFragmentDescriptorV1& original) {
         int32_t status = LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1;
         if (entry == 2) {
             status = luna_runtime_fragment_dispatch_v1(
-                probe.context.opaque(), slot.slotId.c_str(), slot.contractId.c_str(),
-                arguments.layoutId.c_str(), arguments.size, arguments.alignment,
-                arguments.data, releaseLifetimeBase, &probe);
+                probe.context.opaque(), probe.callerSlot->slotId.c_str(),
+                probe.callerSlot->contractId.c_str(), probe.callerArguments->layoutId.c_str(),
+                probe.callerArguments->size, probe.callerArguments->alignment,
+                probe.callerArguments->data, releaseLifetimeBase, &probe);
             succeeded = status >= 0;
             outcome = status == LUNA_RUNTIME_FRAGMENT_DISPATCH_CONTINUATION_ESCAPED_V1
                 ? RuntimeFragmentDispatchOutcome::ContinuationEscaped
                 : RuntimeFragmentDispatchOutcome::Completed;
         } else if (entry == 1) {
             succeeded = probe.context.dispatchWithOutcome(
-                slot, arguments, releaseLifetimeBase, &probe, outcome, error);
+                *probe.callerSlot, *probe.callerArguments,
+                releaseLifetimeBase, &probe, outcome, error);
         } else {
             succeeded = probe.bindings.dispatchWithOutcome(
-                slot, arguments, releaseLifetimeBase, &probe, outcome, error);
+                *probe.callerSlot, *probe.callerArguments,
+                releaseLifetimeBase, &probe, outcome, error);
         }
         activeLifetimeProbe = nullptr;
-        if (!probe.retainedThroughout || probe.handlers != chainLength ||
+        if (!probe.retainedThroughout || probe.depth != 0 || probe.handlers != chainLength ||
             probe.returnedHandlers != chainLength || probe.baseCalls != 1)
             return fail("dispatch did not pin its snapshot until every handler returned");
-        if (succeeded != (control == 0 || control == 1) ||
-            outcome != (control == 1 ? RuntimeFragmentDispatchOutcome::ContinuationEscaped
+        if (succeeded != (!repeatResume && (control == 0 || control == 1)) ||
+            outcome != (succeeded && control == 1 ? RuntimeFragmentDispatchOutcome::ContinuationEscaped
                                     : RuntimeFragmentDispatchOutcome::Completed))
             return fail("dispatch lifetime pin changed continuation control results");
-        if (control == 99 || control == -99) {
+        if (repeatResume || control == 99 || control == -99) {
             if ((entry == 2 && status != LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1) ||
                 (entry != 2 && error.find(control == 99 ? "invalid control result"
-                                                       : "lifetime continuation probe") == std::string::npos))
+                                         : control == -99 ? "lifetime continuation probe"
+                                                          : "single-shot continuation contract") == std::string::npos))
                 return fail("dispatch lifetime pin lost the continuation failure diagnostic");
         }
         if (probe.environmentDestructions.load() != chainLength ||

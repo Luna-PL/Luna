@@ -206,6 +206,12 @@ uninstrumented. See [scoped activation storage](slot_fragment_runtime_plan.md#sc
 The counter's ordinary allocation replacements include nothrow scalar/array
 new and cleanup delete; explicit pairing/count tests protect the libstdc++
 temporary-buffer path under ASan without suppressing mismatch checks.
+Frozen-entry identity reuse additionally requires bound allocation counts for
+1/4/64 handlers to equal None with the same carrier. Caller records may be mutated
+or destroyed and contexts released/replaced inside callbacks; 768 lifetime cases
+check original identities, repeated resume and preserved downstream errors. Up to
+128 nested activations survive caller-record destruction at the deepest base.
+See [frozen Slot identity reuse](slot_fragment_runtime_plan.md#reuse-frozen-slot-identity-during-bound-dispatch-2026-09-27).
 `luna.moonir-canonical` additionally proves that an unbound exported Slot seals
 as a `RuntimeSlot` terminator with its exact declaration and packed argument
 record, while a private unbound Slot remains erased. The code-section model

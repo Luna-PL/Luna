@@ -12,8 +12,7 @@ namespace luna::runtime {
 
 struct RuntimeFragmentBindingSetState {
     struct Entry {
-        std::string slotId;
-        std::string slotContractId;
+        RuntimeSlotRequirement slot;
         std::vector<std::shared_ptr<RuntimeFragmentRef>> chain;
     };
     std::vector<Entry> entries;
@@ -27,7 +26,8 @@ struct RuntimeFragmentExecutionContextState {
 struct RuntimeFragmentActivationState {
     uint64_t magic = 0;
     // Public activations own these records. Synchronous chain activations
-    // leave them empty and borrow the dispatch's immutable owned records.
+    // leave them empty and borrow the pinned entry's Slot and dispatch's
+    // owned argument carrier.
     // Keeping one state type avoids a second opaque ABI representation.
     RuntimeSlotRequirement ownedSlot;
     RuntimeFragmentArguments ownedArguments;
@@ -108,7 +108,8 @@ bool validateActivationContract(
 
 // The records must outlive this activation. Public construction points at
 // storage owned by the same heap state; the private synchronous path points
-// at the enclosing dispatch, which outlives every nested resume/handler.
+// at the immutable BindingSet entry and enclosing dispatch's argument carrier.
+// The dispatch snapshot pin retains the entry through every nested resume.
 void initializeActivationState(
     RuntimeFragmentActivationState& state,
     const RuntimeSlotRequirement& slot,
@@ -470,13 +471,13 @@ const RuntimeFragmentBindingSetState::Entry* findBindingEntry(
         state.entries.begin(), state.entries.end(), slot,
         [](const RuntimeFragmentBindingSetState::Entry& entry,
            const RuntimeSlotRequirement& requirement) {
-            if (entry.slotId != requirement.slotId)
-                return entry.slotId < requirement.slotId;
-            return entry.slotContractId < requirement.contractId;
+            if (entry.slot.slotId != requirement.slotId)
+                return entry.slot.slotId < requirement.slotId;
+            return entry.slot.contractId < requirement.contractId;
         });
     if (found == state.entries.end() ||
-        found->slotId != slot.slotId ||
-        found->slotContractId != slot.contractId)
+        found->slot.slotId != slot.slotId ||
+        found->slot.contractId != slot.contractId)
         return nullptr;
     return &*found;
 }
@@ -496,8 +497,7 @@ bool buildRuntimeFragmentBindingState(
             return false;
         }
         RuntimeFragmentBindingSetState::Entry entry;
-        entry.slotId = binding.slotId();
-        entry.slotContractId = binding.slotContractId();
+        entry.slot = {binding.slotId(), binding.slotContractId()};
         entry.chain.push_back(
             std::make_shared<RuntimeFragmentRef>(std::move(binding)));
         selected.push_back(std::move(entry));
@@ -505,15 +505,15 @@ bool buildRuntimeFragmentBindingState(
     std::stable_sort(
         selected.begin(), selected.end(),
         [](const auto& left, const auto& right) {
-            if (left.slotId != right.slotId)
-                return left.slotId < right.slotId;
-            return left.slotContractId < right.slotContractId;
+            if (left.slot.slotId != right.slot.slotId)
+                return left.slot.slotId < right.slot.slotId;
+            return left.slot.contractId < right.slot.contractId;
         });
     for (auto& candidate : selected) {
         if (state->entries.empty() ||
-            state->entries.back().slotId != candidate.slotId ||
-            state->entries.back().slotContractId !=
-                candidate.slotContractId) {
+            state->entries.back().slot.slotId != candidate.slot.slotId ||
+            state->entries.back().slot.contractId !=
+                candidate.slot.contractId) {
             state->entries.push_back(std::move(candidate));
             continue;
         }
@@ -542,7 +542,6 @@ bool buildRuntimeFragmentBindingState(
 struct RuntimeFragmentChainDispatch {
     const RuntimeFragmentBindingSetState::Entry* entry = nullptr;
     size_t next = 0;
-    RuntimeSlotRequirement slot;
     RuntimeFragmentArguments arguments;
     RuntimeFragmentResumeCallback baseContinuation = nullptr;
     void* continuationContext = nullptr;
@@ -595,17 +594,18 @@ bool dispatchRuntimeFragmentChain(RuntimeFragmentChainDispatch& dispatch) {
     const auto& fragment = dispatch.entry->chain[dispatch.next++];
     // Resume is synchronous, so this frame remains live until the handler and
     // all downstream handlers return. No per-handler heap state or identity
-    // copies are needed. The enclosing dispatch still owns its records and
+    // copies are needed. Slot identity comes from the pinned immutable entry,
+    // never from caller storage; the dispatch owns its argument carrier and
     // retains the complete BindingSet generation/environment snapshot.
     RuntimeFragmentActivationState activation;
     if (!validateActivationContract(
-            dispatch.slot, dispatch.arguments,
+            dispatch.entry->slot, dispatch.arguments,
             resumeRuntimeFragmentChain, *dispatch.error)) {
         dispatch.failed = true;
         return false;
     }
     initializeActivationState(
-        activation, dispatch.slot, dispatch.arguments,
+        activation, dispatch.entry->slot, dispatch.arguments,
         resumeRuntimeFragmentChain, &dispatch);
     try {
         fragment->descriptor()->execute(
@@ -681,8 +681,8 @@ bool makeRuntimeFragmentBindingOverride(
         return false;
     if (replacementState->entries.size() > 1 ||
         (!replacementState->entries.empty() &&
-         (replacementState->entries.front().slotId != slot.slotId ||
-          replacementState->entries.front().slotContractId !=
+         (replacementState->entries.front().slot.slotId != slot.slotId ||
+          replacementState->entries.front().slot.contractId !=
               slot.contractId))) {
         error = "runtime Fragment local override must target one exact Slot";
         return false;
@@ -694,13 +694,13 @@ bool makeRuntimeFragmentBindingOverride(
         state->entries.begin(), state->entries.end(), slot,
         [](const RuntimeFragmentBindingSetState::Entry& entry,
            const RuntimeSlotRequirement& requirement) {
-            if (entry.slotId != requirement.slotId)
-                return entry.slotId < requirement.slotId;
-            return entry.slotContractId < requirement.contractId;
+            if (entry.slot.slotId != requirement.slotId)
+                return entry.slot.slotId < requirement.slotId;
+            return entry.slot.contractId < requirement.contractId;
         });
     const bool existing = position != state->entries.end() &&
-        position->slotId == slot.slotId &&
-        position->slotContractId == slot.contractId;
+        position->slot.slotId == slot.slotId &&
+        position->slot.contractId == slot.contractId;
     const size_t index = static_cast<size_t>(
         position - state->entries.begin());
     if (existing) state->entries.erase(state->entries.begin() + index);
@@ -787,7 +787,7 @@ bool RuntimeFragmentBindingSet::dispatchWithOutcome(
     }
 
     RuntimeFragmentChainDispatch dispatch{
-        found, 0, slot, std::move(arguments), baseContinuation,
+        found, 0, std::move(arguments), baseContinuation,
         continuationContext, &error,
         RuntimeFragmentDispatchOutcome::Completed, false};
     if (!dispatchRuntimeFragmentChain(dispatch)) return false;

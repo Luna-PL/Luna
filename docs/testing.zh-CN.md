@@ -150,6 +150,10 @@ ASan／UBSan 在该夹具和并发 target 中直接 instrument 相关 Runtime �
 保持未 instrument。详见[作用域 activation 存储](slot_fragment_runtime_plan.zh-CN.md#同步链路-activation-作用域存储2026-09-27)。
 计数器的普通分配替换包含 nothrow 标量／数组 new 和 cleanup delete；显式配对／计数
 测试保护 libstdc++ 临时缓冲的 ASan 路径，不关闭 mismatch 检查。
+固定 Entry 身份复用另要求 1／4／64 成员的绑定派发计数等于同参数 None，验证调用者
+记录在回调中修改／销毁及 context 释放／替换后仍可读取原始身份；768 个寿命组合
+覆盖重复 resume 和 downstream 错误保留，最多 128 个嵌套 activation 的原始记录
+可在最深 base 销毁。详见[固定 Slot 身份复用](slot_fragment_runtime_plan.zh-CN.md#绑定派发复用固定-slot-身份2026-09-27)。
 `luna.moonir-canonical` 还证明未绑定的 exported Slot 会 seal 为携带精确 declaration 与已打包
 参数 record 的 `RuntimeSlot` terminator，而未绑定的 private Slot 仍会被擦除。code-section model
 往返测试会使用非空 RuntimeSlot declaration 与 argument TypeId 字段，确保容器保留能力不是根据

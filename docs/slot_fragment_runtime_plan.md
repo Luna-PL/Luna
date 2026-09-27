@@ -1393,3 +1393,54 @@ proofs. Neither old nor new evidence was overwritten. Reruns still require
 fresh paths, explicit CPU 0, separate iterations 10000/100000, three cycles and
 each commit/digest. Later report commits are not this observation build, and
 values need not reproduce exactly.
+
+#### Reuse frozen Slot identity during bound dispatch (2026-09-27)
+
+The next candidate above is implemented. A private BindingSet Entry stores the
+same two nominal keys in an owning `RuntimeSlotRequirement`; exact Slot/Contract
+lookup, stable grouping and local-override ordering are unchanged. Synchronous
+chain dispatch no longer copies those strings; activations reference the selected
+entry's record. The existing local shared snapshot pin retains the entry, chain,
+environments and generation until all nested resumes/handlers return, regardless
+of release or replacement of the published handle.
+
+The argument carrier still owns its by-value layout/size/alignment/data record;
+payload storage lifetime remains a host duty. C ABI entry still copies host C
+strings, and public activations still own their identity/carrier records. No public
+API/ABI/syntax, validation, single-shot or failure-propagation protocol changed.
+Host selection remains explicit None/One/ordered chain, with no automatic candidate
+set, hot-update mechanism or ordering policy.
+
+First adding a long-identity allocation comparison to the old implementation
+produced `bound dispatch copied frozen Slot/Contract identities`; the new code
+passes. Ordinary C++ allocation counts for 1/4/64 bound handlers must now equal
+None dispatch with the same carrier, not just stay constant as the chain grows.
+Copying the long layout in the by-value carrier can still allocate. This counter
+does not cover all aligned/system allocation, prove allocation-free dispatch or
+provide a timing improvement.
+
+The existing lifetime fixture now covers 768 combinations: One/two-handler chain,
+owned/borrowed environments, BindingSet/C++ context/C ABI, caller identity/carrier
+mutation or destruction in the first handler or base, published-handle release or
+replacement, repeated resume, and completion/escape/invalid-result/exception.
+All live activations must retain original identities/arguments; environments are
+destroyed before generation release, subsequent repeated resume cannot overwrite
+downstream diagnostics, and replacement None affects only the next invocation.
+Nested same-Slot 1/4/64 chains destroy the caller records shared by outer/inner
+dispatch at the deepest base while up to 128 activations remain suspended.
+Public owning moves, recovery after handler exceptions and existing local-override
+regressions remain in place.
+
+Both Runtime CTests pass in Windows strict-warning ordinary and ASan/UBSan builds;
+sanitizer instruments the relevant implementation directly. Existing Arch Linux
+WSL Clang 22.1.8/libstdc++ 16 also passes direct Runtime test builds under C++17
+and C++23, O0, sized deallocation and ASan/UBSan. This is not a full Ubuntu CI
+replica. The Windows strict-warning full build succeeds; all 77 non-hardware
+regressions pass (285.74 seconds), as do documentation inventory and
+`git diff --check`.
+
+No new matched performance cohort was sampled in this implementation stage. Next confirm cross-platform
+CI for a clean new build commit, then use the existing CPU/iteration/three-cycle
+protocol with fresh evidence paths. The preceding observations are not performance
+results for identity reuse. Performance/release acceptance and durable external
+evidence storage remain open.
