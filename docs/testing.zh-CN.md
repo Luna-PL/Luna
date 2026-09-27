@@ -146,6 +146,8 @@ Runtime 夹具另用长身份比较 1／4／64 成员链的普通 C++ 分配计�
 activation 的拥有型 move／寿命契约。这是分配回归，不是计时门禁或整个派发零分配声明。
 ASan／UBSan 在该夹具和并发 target 中直接 instrument 相关 Runtime 源码，安装 archive
 保持未 instrument。详见[作用域 activation 存储](slot_fragment_runtime_plan.zh-CN.md#同步链路-activation-作用域存储2026-09-27)。
+计数器的普通分配替换包含 nothrow 标量／数组 new 和 cleanup delete；显式配对／计数
+测试保护 libstdc++ 临时缓冲的 ASan 路径，不关闭 mismatch 检查。
 `luna.moonir-canonical` 还证明未绑定的 exported Slot 会 seal 为携带精确 declaration 与已打包
 参数 record 的 `RuntimeSlot` terminator，而未绑定的 private Slot 仍会被擦除。code-section model
 往返测试会使用非空 RuntimeSlot declaration 与 argument TypeId 字段，确保容器保留能力不是根据

@@ -1251,3 +1251,28 @@ depths are not a bound for arbitrary stack use. No chain-length policy or async
 semantics are added. The full non-hardware CTest suite passes 77/77 (268.39 s),
 including the evidence and summary gates. Matched-protocol timing and controlled acceptance remain
 open; reduced allocation paths are not a measured speedup claim.
+
+#### Linux sanitizer allocation-counter fixture repair (2026-09-27)
+
+Before remeasurement, CI for `6da36eb` showed macOS/Windows passing and Linux
+ordinary C++17/C++23 and TSan passing, but ASan/UBSan failed
+`luna.runtime-fragment-v1`. The log reported
+`alloc-dealloc-mismatch (operator new vs free)` while libstdc++ released a
+`stable_sort` temporary buffer, rather than an activation lifetime failure.
+
+The test counter replaced ordinary throwing new/delete but omitted nothrow
+entry points. The buffer used the sanitizer's default nothrow new, followed by
+the test's free-based sized delete. Scalar/array nothrow allocation and cleanup
+delete now complete the ordinary allocation family using the same allocator.
+An explicit regression checks four nothrow allocations, their counts and both
+ordinary/cleanup release paths. Aligned allocation is not replaced; mismatch
+checking and sanitizers are not disabled. Production Runtime, ABI and timing
+protocols are unchanged.
+
+Existing local Arch Linux WSL (Clang 22.1.8/libstdc++ 16), directly compiling
+the fixture and relevant Runtime with C++17, O0,
+`-fsized-deallocation -fsanitize=address,undefined`, reproduced the same stack
+before the fix and passes afterward, as does C++23. This is neither an Ubuntu
+CI replica nor full Linux compiler-suite acceptance. Both Runtime CTest gates
+pass in strict-warning normal and ASan/UBSan Windows builds. Planned matched
+timing samples have not started; remote regression confirmation comes first.

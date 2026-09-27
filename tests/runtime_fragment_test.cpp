@@ -30,10 +30,23 @@ void* operator new(std::size_t size) {
 }
 
 void* operator new[](std::size_t size) { return ::operator new(size); }
+// libstdc++ stable_sort uses nothrow allocation for its temporary buffer.
+// Replace the entire ordinary allocation family: leaving the sanitizer's
+// nothrow new paired with our free-based delete is an alloc/dealloc mismatch.
+void* operator new(std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new(size); }
+    catch (...) { return nullptr; }
+}
+void* operator new[](std::size_t size, const std::nothrow_t&) noexcept {
+    try { return ::operator new[](size); }
+    catch (...) { return nullptr; }
+}
 void operator delete(void* storage) noexcept { std::free(storage); }
 void operator delete[](void* storage) noexcept { std::free(storage); }
 void operator delete(void* storage, std::size_t) noexcept { std::free(storage); }
 void operator delete[](void* storage, std::size_t) noexcept { std::free(storage); }
+void operator delete(void* storage, const std::nothrow_t&) noexcept { std::free(storage); }
+void operator delete[](void* storage, const std::nothrow_t&) noexcept { std::free(storage); }
 
 namespace {
 
@@ -321,6 +334,23 @@ int32_t scopedActivationBase(void* context) {
 }
 
 int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
+    // Exercise nothrow allocation with both ordinary release (the STL path)
+    // and nothrow cleanup release, even on libraries whose sort uses no buffer.
+    dispatchAllocations = 0;
+    countDispatchAllocations = true;
+    void* scalar = ::operator new(64, std::nothrow);
+    void* array = ::operator new[](64, std::nothrow);
+    void* scalarCleanup = ::operator new(64, std::nothrow);
+    void* arrayCleanup = ::operator new[](64, std::nothrow);
+    countDispatchAllocations = false;
+    const bool counted = scalar && array && scalarCleanup && arrayCleanup &&
+        dispatchAllocations == 4;
+    ::operator delete(scalar, std::size_t{64});
+    ::operator delete[](array);
+    ::operator delete(scalarCleanup, std::nothrow);
+    ::operator delete[](arrayCleanup, std::nothrow);
+    if (!counted) return fail("ordinary nothrow allocation counter is not paired or counted");
+
     // Deliberately exceed typical SSO capacities; short names would hide the
     // former per-handler identity/carrier copies from allocation counting.
     const std::string slotId = "slot:" + std::string(128, 's');

@@ -982,3 +982,22 @@ ASan／UBSan 下相同两测试均已通过。深链仍使用递归，测试覆�
 完整非硬件 CTest 77／77 通过（268.39 秒），证据／汇总门禁也保持通过。
 本轮不新增链长政策或异步语义。匹配协议的性能复测与受控验收仍待完成，
 不把分配路径减少等同于已测得的速度提升。
+
+#### 分配计数夹具 Linux sanitizer 修复（2026-09-27）
+
+复测前检查提交 `6da36eb` 的 CI：macOS／Windows 通过，Linux 的普通 C++17／C++23
+与 TSan 通过，但 ASan／UBSan 的 `luna.runtime-fragment-v1` 失败。失败日志为
+`alloc-dealloc-mismatch (operator new vs free)`，发生在 libstdc++ 的 `stable_sort`
+临时缓冲释放，而非同步 activation 的生命周期检查。
+
+测试计数器替换了普通 throwing `new/delete`，却遗漏 `nothrow` 入口；临时缓冲经
+sanitizer 默认 `nothrow new` 分配，随后被测试的 `free` 型 sized delete 释放。
+现补齐标量／数组的 nothrow 分配和 cleanup delete，使普通分配家族使用同一分配器，
+并在测试中显式检查四次 nothrow 分配计数及普通／cleanup 释放配对。不替换 aligned
+分配，不禁用 mismatch 检查，不移除 sanitizer，不修改生产 Runtime／ABI／计时协议。
+
+本机现有 Arch Linux WSL（Clang 22.1.8、libstdc++ 16）以 C++17、O0、
+`-fsized-deallocation -fsanitize=address,undefined` 直接编译测试与相关 Runtime，
+先复现相同的失败栈，再验证修复后通过；C++23 下同样通过。这不是 Ubuntu CI 环境
+复刻或完整 Linux 编译器套件验收。Windows 严格警告普通／ASan／UBSan 配置下的两个
+Runtime CTest 均通过。本轮原定匹配协议的性能采样尚未开始，等待修复的远端回归确认。

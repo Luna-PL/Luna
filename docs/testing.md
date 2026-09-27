@@ -200,6 +200,9 @@ contract. This is an allocation regression, not a timing or allocation-free
 dispatch claim. ASan/UBSan builds instrument the relevant Runtime sources directly
 in this fixture as well as in the concurrency target; the installed archive stays
 uninstrumented. See [scoped activation storage](slot_fragment_runtime_plan.md#scoped-synchronous-chain-activation-storage-2026-09-27).
+The counter's ordinary allocation replacements include nothrow scalar/array
+new and cleanup delete; explicit pairing/count tests protect the libstdc++
+temporary-buffer path under ASan without suppressing mismatch checks.
 `luna.moonir-canonical` additionally proves that an unbound exported Slot seals
 as a `RuntimeSlot` terminator with its exact declaration and packed argument
 record, while a private unbound Slot remains erased. The code-section model
