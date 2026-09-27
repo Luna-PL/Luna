@@ -130,9 +130,9 @@ Ref-bearing exported Slot／Fragment payload、non-Copy 环境、non-unit 与 mu
    初始化的 None 或仅含一个精确 Slot 的冻结有序链；`makeRuntimeFragmentExecutionContextOverride`
    从显式 parent 派生。输入不消费、失败不发布，与原 vector override 共用合并实现。
    Native 有序链不等于源码 Ref 可装多个 Fragment。
-2. **待实现的类型／产物**：Slot 声明参数解析、名义 Ref 类型／ownership／资源事实、
-   canonical／sealing／container round-trip；不能插入枚举导致旧 wire type 值漂移，
-   不支持的读者 fail closed。测试同形异槽、contract 变化、伪造事实及递归资源载荷拒绝。
+2. **部分实现的类型／产物**：内部名义 Ref／ownership／资源事实和内存中冻结／恢复
+   已完成，见下文。Slot 声明参数的源码解析、完整 Drop 桥与 container round-trip 仍待
+   完成；旧 wire type 值不漂移，当前读写端明确拒绝尚未支持的内部 Ref。
 3. **待实现的宿主桥**：严格 singleton 导入、拥有／借用参数、拥有返回与 Runtime drop；
    carrier／contract 错误、失败回滚、卸载及恰好一次 cleanup。
 4. **待实现的源码 apply**：名字 operand 解析、一次求值与 region borrow、effect 固定点、
@@ -154,6 +154,49 @@ borrowed 环境、直接／快照派生 BindingSet／C++ context／C ABI、执�
 Runtime 两项 2／2，通过 WSL Arch Linux Clang 22.1.8 C++17 的直接 Runtime 与并发
 ASan／UBSan 编译／执行。方向状态门额外拒绝回退为 scope-open，不允许提前宣称源码
 完成。本轮没有新的匹配性能采样，不改旧证据身份锚点或释放／发布门禁。
+
+### 内部 Ref 类型准备（2026-09-28）
+
+本切片只增加编译器内部 `TypeKind::RuntimeFragmentRef` 与
+`Type::makeRuntimeFragmentRef(slotType)`，没有注册新的源码 predefined type 或扩展
+`apply` parser。它的唯一类型边是确切 nominal Slot；TypeId 编码目标声明身份，ShapeId
+保留目标签名结构，不依赖 runtime generation 或最终 ContractId。
+
+形成检查要求具体、unit／single-shot／Copy-only Slot，拒绝函数／匿名同形 Slot、
+未解析类型参数／inference／Unknown、Ref-bearing 目标载荷和不一致的契约事实。
+Ref 为 owned／affine／Unique／Executable／Lexical，需要 Drop 而非 Luna Deallocate；
+它本身是 Plain value，不拥有或表示 single-shot continuation。未标注参数借用，显式
+affine 参数拥有；array／record／Result／closure 的 recursive cleanup 按既有规则推导。
+
+普通 shape equality 不授予 Ref 转换权。Explicit conversion 与 ABI compatibility 检查
+在原有身份／结构外还比较 Ref 所在位置的 nominal Slot 约束，覆盖 pointer／borrow／
+callable signature／capture 和 nominal aggregate。即使外层 nominal TypeId 相同、
+shape 相同但内部 Ref 目标发生变化，也不能通过包装擦除目标约束。这不是替代未来
+宿主入口的 sealed ContractId 检查。
+
+内存中的 MoonIR 类型表通过既有 `innerTypeId`／`referencedTypeIds` 固定 Slot 图，
+TypeMaterializer 可以独立恢复身份和资源事实；修改前端对象不改变冻结结果。64 位
+内部布局暂以一个 opaque handle（8 字节／8 对齐）准备，这不是已发布的 C carrier ABI。
+当前仍没有真实 Drop bridge／dropGlue，不能将“能冻结”当成“已 verified／可执行”。
+
+旧 enum 的 Slot=27、Fragment=28、Unknown=40 不变，内部 Ref 仅追加为 41。Wire decoder
+仍以旧上限 fail closed，writer 也拒绝输出此 kind；Module verifier 明确拒绝 published
+Ref，LLVM helper 不用未知类型的 i32 fallback 偷跑。不能通过伪造 Drop/sysmeta 或填一个
+不存在的释放符号绕过这项边界；将来解除门禁须同时接通真实宿主／释放桥与跨包验证。
+
+回归位于 `core_contracts_test.cpp` 和 `moonir_canonical_sealing_test.cpp`，覆盖同形异槽、
+稳定身份与 contract shape 分离、七种包装、nominal aggregate 载荷变化、17 类伪造
+Ref 事实、无效／不具体目标、递归图遍历、冻结恢复与前端修改隔离、writer／container／
+LLVM 拒绝，以及将 ordinal 41 注入旧 type section 后 decoder 不发布半成品状态。
+`core-contracts-test` 现也在 sanitizer 配置中直接插桩自己的实现对象，不改变 installed
+Runtime archive。源码签名、借用 region、导入／返回／drop 和动态 apply 仍未完成；
+`source-ref-apply` 保持 implementation-open。
+
+本轮最终严格构建通过完整 77／77 非 hardware 门禁（237.00 秒），Windows
+ASan／UBSan 的 builtin types、core contracts、canonical MoonIR、container model 四项
+4／4 通过（14.29 秒），已核对核心实现对象确实带插桩，而不是仅链接 sanitizer。
+WSL Arch Linux Clang 22.1.8 C++17 直接编译／执行核心类型测试的 ASan／UBSan 也通过。
+设计状态、文档 inventory 与 diff 检查通过；不新增匹配性能采样、发布批准或解锁旧 TBD。
 
 ## 宿主控制的发现与注入
 

@@ -141,6 +141,8 @@ bool Verifier::verify(const Module& module) {
         if (type.kind == TypeKind::SymbolSet)
             error({}, "compiler-only symbol_set type '" + type.id.value +
                       "' was not erased before MoonIR");
+        if (type.kind == TypeKind::RuntimeFragmentRef)
+            error({}, "RuntimeFragmentRef host/drop bridge is not implemented; internal type preparation cannot be published");
         if (type.kind == TypeKind::Enum &&
             type.domain == luna::types::TypeDomain::Compiler &&
             type.nominalDeclarationId == luna::sysmeta::OptionTypeId)

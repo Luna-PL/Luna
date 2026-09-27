@@ -77,6 +77,7 @@ const char* kindName(TypeKind kind) {
         case TypeKind::Closure: return "closure";
         case TypeKind::Slot: return "slot";
         case TypeKind::Fragment: return "fragment";
+        case TypeKind::RuntimeFragmentRef: return "runtime_fragment_ref";
         case TypeKind::Iterator: return "iterator";
         case TypeKind::DeviceBuffer: return "device_buffer";
         case TypeKind::Event: return "event";
@@ -96,7 +97,7 @@ const char* kindName(TypeKind kind) {
 std::string canonicalShapeImpl(
     const Type* type,
     std::unordered_map<const Type*, size_t>& active,
-    size_t& nextAnchor) {
+    size_t& nextAnchor, bool preserveRefTargets = false) {
     if (!type) return "missing";
     auto recursive = active.find(type);
     if (recursive != active.end()) return "ref@" + std::to_string(recursive->second);
@@ -108,8 +109,11 @@ std::string canonicalShapeImpl(
     appendPart(result, kindName(type->kind));
 
     auto appendType = [&](const TypePtr& child) {
-        appendPart(result, canonicalShapeImpl(child.get(), active, nextAnchor));
+        appendPart(result, canonicalShapeImpl(
+            child.get(), active, nextAnchor, preserveRefTargets));
     };
+    if (preserveRefTargets && type->kind == TypeKind::RuntimeFragmentRef)
+        appendPart(result, type->inner ? type->inner->nominalId : "missing");
 
     switch (type->kind) {
         case TypeKind::Struct:
@@ -149,6 +153,7 @@ std::string canonicalShapeImpl(
         case TypeKind::DeclarationView:
         case TypeKind::DeclarationRef:
         case TypeKind::Iterator:
+        case TypeKind::RuntimeFragmentRef:
             appendType(type->inner);
             if (type->kind == TypeKind::Iterator) {
                 appendPart(result, std::to_string(
@@ -198,6 +203,15 @@ std::string canonicalShapeImpl(
     result += '}';
     active.erase(type);
     return result;
+}
+
+// Normal ShapeId intentionally forgets nominal declaration identities. For
+// Ref-bearing conversions/ABI checks, retain Slot constraints at their exact
+// graph positions, including inside nominal aggregate payloads and cycles.
+std::string refConstrainedShape(const TypePtr& type) {
+    std::unordered_map<const Type*, size_t> active;
+    size_t nextAnchor = 0;
+    return canonicalShapeImpl(type.get(), active, nextAnchor, true);
 }
 
 std::string canonicalIdentityImpl(const TypePtr& type) {
@@ -263,6 +277,10 @@ std::string canonicalIdentityImpl(const TypePtr& type) {
         appendPart(result, canonicalIdentityImpl(type->inner));
         return result;
     }
+    if (type->kind == TypeKind::RuntimeFragmentRef) {
+        appendPart(result, canonicalIdentityImpl(type->inner));
+        return result;
+    }
     if (type->kind == TypeKind::Reference && type->inner) {
         appendPart(result, type->isMutable ? "mutable" : "shared");
         appendPart(result, canonicalIdentityImpl(type->inner));
@@ -321,10 +339,82 @@ bool containsType(const Type* current, const Type* target,
     return false;
 }
 
+bool containsMatchingType(const TypePtr& type,
+                         const std::function<bool(const Type&)>& matches) {
+    std::unordered_set<const Type*> visited;
+    std::function<bool(const TypePtr&)> visit = [&](const TypePtr& item) {
+        if (!item || !visited.insert(item.get()).second) return false;
+        if (matches(*item)) return true;
+        if (visit(item->inner) || visit(item->returnType)) return true;
+        for (const auto& argument : item->typeArgs) if (visit(argument)) return true;
+        for (const auto& parameter : item->paramTypes) if (visit(parameter)) return true;
+        for (const auto& field : item->fields) if (visit(field.type)) return true;
+        for (const auto& field : item->capturedFields) if (visit(field.type)) return true;
+        for (const auto& variant : item->variants)
+            for (const auto& field : variant.fields) if (visit(field)) return true;
+        return false;
+    };
+    return visit(type);
+}
+
 bool wellFormedTypeDomainImpl(
     const Type* current, std::unordered_set<const Type*>& active,
     std::string* reason) {
     if (!current || !active.insert(current).second) return true;
+    if (current->kind == TypeKind::RuntimeFragmentRef) {
+        const auto& target = current->inner;
+        const auto& resource = current->sysmeta.resource;
+        bool valid = current->domain == TypeDomain::Value &&
+            current->identityMode == IdentityMode::Structural &&
+            target && target->kind == TypeKind::Slot &&
+            target->identityMode == IdentityMode::Nominal && !target->nominalId.empty() &&
+            target->returnType && target->returnType->kind == TypeKind::Unit &&
+            target->sysmeta.control.form == luna::sysmeta::ControlForm::Fragment &&
+            target->sysmeta.control.cardinality == luna::sysmeta::Cardinality::Once &&
+            target->sysmeta.control.storage == luna::sysmeta::ContinuationStorage::ScopedStack &&
+            target->sysmeta.control.forwarding == luna::sysmeta::Forwarding::Explicit &&
+            !target->sysmeta.control.abortPermitted &&
+            !containsMatchingType(target, [](const Type& payload) {
+                return payload.kind == TypeKind::RuntimeFragmentRef ||
+                    payload.kind == TypeKind::TypeParam || payload.kind == TypeKind::InferenceVar ||
+                    payload.kind == TypeKind::Unknown || payload.domain != TypeDomain::Value;
+            }) && target->typeArgs.empty() &&
+            target->typeParams.empty() &&
+            target->paramContracts.size() == target->paramTypes.size() &&
+            target->sysmeta.resource.parameters == target->paramContracts &&
+            target->sysmeta.resource.result == target->returnContract &&
+            target->returnContract.relation == luna::ownership::Relation::Owned &&
+            target->returnContract.usage == luna::ownership::Usage::Copy &&
+            current->nominalId.empty() && current->typeArgs.empty() &&
+            current->typeParams.empty() && current->paramTypes.empty() &&
+            !current->returnType && current->paramContracts.empty() &&
+            current->fields.empty() && current->capturedFields.empty() &&
+            current->variants.empty() && !current->isMutable && current->arrayLength == 0 &&
+            resource.management == luna::sysmeta::ResourceManagement::Unique &&
+            resource.releaseDomain == luna::sysmeta::ReleaseDomain::Executable &&
+            resource.lifetime == luna::sysmeta::ResourceLifetime::Lexical &&
+            resource.relation == luna::ownership::Relation::Owned &&
+            resource.usage == luna::ownership::Usage::Affine &&
+            resource.cleanup == luna::ownership::CleanupAction::Drop &&
+            resource.cleanupRequired && resource.needsDrop && !resource.recursiveCleanup &&
+            current->sysmeta.control.form == luna::sysmeta::ControlForm::Plain &&
+            current->sysmeta.control.cardinality == luna::sysmeta::Cardinality::None &&
+            current->sysmeta.control.storage == luna::sysmeta::ContinuationStorage::None &&
+            current->sysmeta.control.forwarding == luna::sysmeta::Forwarding::None &&
+            !current->sysmeta.control.abortPermitted &&
+            current->sysmeta.capability.hostOnly;
+        if (valid) {
+            for (size_t index = 0; index < target->paramTypes.size(); ++index) {
+                valid &= target->paramTypes[index] &&
+                    defaultUsageForType(target->paramTypes[index]) == luna::ownership::Usage::Copy &&
+                    target->paramContracts[index].usage == luna::ownership::Usage::Copy;
+            }
+        }
+        if (!valid) {
+            if (reason) *reason = "RuntimeFragmentRef requires a nominal unit/single-shot Copy-only Slot and owned executable cleanup facts";
+            return false;
+        }
+    }
     auto validate = [&](const TypePtr& child) {
         if (!child) return true;
         if (current->domain == TypeDomain::Value &&
@@ -405,6 +495,8 @@ bool isExplicitlyConvertible(const TypePtr& from, const TypePtr& to) {
     if (!from || !to || from->domain != TypeDomain::Value ||
         to->domain != TypeDomain::Value)
         return false;
+    if (containsRuntimeFragmentRef(from) || containsRuntimeFragmentRef(to))
+        return sameType(from, to) && refConstrainedShape(from) == refConstrainedShape(to);
     return sameType(from, to) || sameShape(from, to);
 }
 
@@ -412,7 +504,15 @@ bool isAbiCompatible(const TypePtr& lhs, const TypePtr& rhs) {
     if (!lhs || !rhs || lhs->domain != TypeDomain::Value ||
         rhs->domain != TypeDomain::Value)
         return false;
+    if (containsRuntimeFragmentRef(lhs) || containsRuntimeFragmentRef(rhs))
+        return sameType(lhs, rhs) && refConstrainedShape(lhs) == refConstrainedShape(rhs);
     return sameShape(lhs, rhs);
+}
+
+bool containsRuntimeFragmentRef(const TypePtr& type) {
+    return containsMatchingType(type, [](const Type& payload) {
+        return payload.kind == TypeKind::RuntimeFragmentRef;
+    });
 }
 
 bool isRecursiveShape(const TypePtr& type) {

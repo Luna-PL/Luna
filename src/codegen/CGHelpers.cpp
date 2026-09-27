@@ -2,6 +2,7 @@
 #include "../core/TypeLayout.h"
 
 #include <algorithm>
+#include <stdexcept>
 #include <vector>
 
 CGHelpers::CGHelpers(llvm::LLVMContext& ctx) : mCtx(ctx) {}
@@ -10,6 +11,8 @@ llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
     if (!type) return voidTy();
 
     switch (type->kind) {
+        case TypeKind::RuntimeFragmentRef:
+            throw std::logic_error("RuntimeFragmentRef host/drop bridge is not implemented");
         case TypeKind::I8:    return llvm::Type::getInt8Ty(mCtx);
         case TypeKind::I16:   return llvm::Type::getInt16Ty(mCtx);
         case TypeKind::I32:   return i32Ty();

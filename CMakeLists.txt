@@ -647,7 +647,8 @@ if(LUNA_ENABLE_SANITIZERS)
             luna luna-frontend analysis-snapshot-test moonir-canonical-test
             moon-container-test moon-container-model-test moon-runtime-test
             native-artifact-test runtime-descriptor-test
-            runtime-fragment-test runtime-fragment-concurrency-test builtin-types-test)
+            runtime-fragment-test runtime-fragment-concurrency-test builtin-types-test
+            core-contracts-test)
         target_compile_options(${target} PRIVATE
             -fsanitize=address,undefined
             -fno-omit-frame-pointer)
@@ -683,6 +684,9 @@ if(LUNA_ENABLE_SANITIZERS)
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
     target_link_options(builtin-types-test PRIVATE
+        -fsanitize=address,undefined
+        -fno-omit-frame-pointer)
+    target_link_options(core-contracts-test PRIVATE
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
 endif()

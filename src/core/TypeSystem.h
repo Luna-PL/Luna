@@ -25,7 +25,10 @@ enum class TypeKind {
     DeviceBuffer, Event, Array, Slice,
     Metadata, MetadataView, DeclarationView, DeclarationRef,
     InferenceVar, SymbolSet,
-    Unknown
+    Unknown,
+    // Append only: values through Unknown are part of the existing container
+    // encoding. This internal kind is not yet accepted by that wire decoder.
+    RuntimeFragmentRef
 };
 
 enum class IteratorMode : uint8_t {
@@ -376,6 +379,23 @@ struct Type {
         t->sysmeta.capability.hostOnly = true;
         return t;
     }
+    // Internal source-type preparation only. The inner edge is a nominal Slot
+    // type, never a callable environment or an owned continuation. Formation
+    // validates the target and compiler resource facts independently.
+    static TypePtr makeRuntimeFragmentRef(TypePtr slot) {
+        auto t = std::make_shared<Type>();
+        t->kind = TypeKind::RuntimeFragmentRef;
+        t->inner = std::move(slot);
+        t->sysmeta.resource.management = luna::sysmeta::ResourceManagement::Unique;
+        t->sysmeta.resource.releaseDomain = luna::sysmeta::ReleaseDomain::Executable;
+        t->sysmeta.resource.lifetime = luna::sysmeta::ResourceLifetime::Lexical;
+        t->sysmeta.resource.usage = luna::ownership::Usage::Affine;
+        t->sysmeta.resource.cleanup = luna::ownership::CleanupAction::Drop;
+        t->sysmeta.resource.cleanupRequired = true;
+        t->sysmeta.resource.needsDrop = true;
+        t->sysmeta.capability.hostOnly = true;
+        return t;
+    }
     static TypePtr makeUnknown() {
         auto t = std::make_shared<Type>();
         t->kind = TypeKind::Unknown;
@@ -505,6 +525,9 @@ struct Type {
                 return "slot(" + std::to_string(paramTypes.size()) + ")";
             case TypeKind::Fragment:
                 return "fragment(" + std::to_string(paramTypes.size()) + ")";
+            case TypeKind::RuntimeFragmentRef:
+                return "RuntimeFragmentRef<" +
+                    (inner ? inner->name : std::string("?")) + ">";
             case TypeKind::Iterator:
                 return "iterator<" +
                     (inner ? inner->toString() : std::string("?")) + ">";

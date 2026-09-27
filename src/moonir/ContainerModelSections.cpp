@@ -499,6 +499,11 @@ bool ContainerModelCodec::encodeTypes(
     }
     std::string previousId;
     for (const auto& type : module.typeTable) {
+        if (static_cast<uint32_t>(type.kind) > static_cast<uint32_t>(TypeKind::Unknown)) {
+            error = "Moon Container RuntimeFragmentRef or unknown type kind is not supported by the wire type ABI";
+            output.clear();
+            return false;
+        }
         if (type.id.empty() ||
             (!previousId.empty() && type.id.value <= previousId)) {
             error = "Moon Container TypeIds are empty, duplicate, or out of order";

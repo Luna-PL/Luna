@@ -151,10 +151,11 @@ before optimizing; never remove validation or borrow callback-destroyable storag
    parent. Inputs are not consumed, failure publishes no output, and the vector
    override shares the merge implementation. Native ordered chains do not make
    source Refs multi-Fragment values.
-2. **Unimplemented types/artifacts**: Slot declaration arguments, nominal Ref
-   type/ownership/resource facts, canonical/sealing/container round-trip. Do not
-   shift old wire type enum values; unsupported readers fail closed. Test same-shaped
-   distinct Slots, contract changes, forged facts and recursive resource payload rejection.
+2. **Partially implemented types/artifacts**: internal nominal Ref/ownership/resource
+   facts and in-memory freezing/materialization are complete as detailed below.
+   Source Slot declaration arguments, real Drop bridge and container round-trip
+   remain unimplemented. Old wire ordinals are unchanged; current readers/writers
+   explicitly reject the unsupported internal Ref.
 3. **Unimplemented host bridge**: strict singleton import, owning/borrowed arguments,
    owning returns and Runtime drop; carrier/contract errors, rollback, unloading
    and exactly-once cleanup tests.
@@ -184,6 +185,60 @@ Runtime and concurrency C++17 ASan/UBSan compilation/execution passes on WSL Arc
 Linux Clang 22.1.8. The status gate additionally rejects obsolete scope-open state,
 without claiming source completion. No new matched performance sampling, evidence
 anchor replacement, or release-gate change occurs in this stage.
+
+### Internal Ref type preparation (2026-09-28)
+
+This slice adds only internal `TypeKind::RuntimeFragmentRef` and
+`Type::makeRuntimeFragmentRef(slotType)`. It registers no source predefined type
+and changes no apply parser. The sole type edge names an exact nominal Slot:
+TypeId encodes declaration identity, while ShapeId retains signature structure,
+independent of runtime generation/final ContractId.
+
+Formation requires a concrete unit/single-shot/Copy-only Slot. Reject functions,
+anonymous same-shaped Slots, unresolved type parameters/inference/Unknown,
+Ref-bearing target payloads and inconsistent contract facts. Ref resources are
+owned/affine/Unique/Executable/Lexical with Drop, not Luna Deallocate. Ref is a
+Plain value, not an owned single-shot continuation. Unqualified parameters borrow;
+explicit affine parameters own. Array/record/Result/closure recursive cleanup
+uses existing rules.
+
+Ordinary shape equality permits no Ref conversion. Explicit conversion/ABI
+compatibility additionally compares nominal Slot constraints at their exact graph
+positions, including pointers, borrows, callable signatures, captures and nominal
+aggregates. A changed inner Ref target cannot be erased even when the outer nominal
+TypeId and normal shape stay equal. This does not replace future sealed ContractId
+checks at host ingress.
+
+MoonIR freezes the Slot graph through existing `innerTypeId`/`referencedTypeIds`.
+TypeMaterializer independently restores identity/resources; mutating frontend
+objects changes no frozen result. The 64-bit internal layout prepares one opaque
+handle (8 bytes/alignment 8), not a published C carrier ABI. No actual Drop
+bridge/dropGlue exists yet: freezing is not verified/executable publication.
+
+Old enum ordinals Slot=27, Fragment=28 and Unknown=40 remain; internal Ref is appended
+as 41. The wire decoder still rejects beyond its old limit, and the writer rejects
+this kind too. Module verification explicitly rejects published Refs; LLVM helpers
+cannot silently use the unknown-type i32 fallback. Forged Drop/sysmeta or a nonexistent
+release symbol grants no bypass. Lifting the gate requires real host/release bridges
+and cross-package verification together.
+
+Regressions in `core_contracts_test.cpp` and `moonir_canonical_sealing_test.cpp`
+cover distinct same-shaped Slots, stable identity versus contract shape, seven
+wrappers, nominal aggregate payload changes, 17 forged Ref facts, invalid/unresolved
+targets, recursive traversal, freezing/materialization isolated from frontend
+mutation, writer/container/LLVM rejection and injecting ordinal 41 into an old type
+section without decoder partial publication. `core-contracts-test` now directly
+instruments its own implementation objects in sanitizer builds, leaving the installed
+Runtime archive unchanged. Source signatures, region borrows, import/return/drop
+and dynamic apply remain unimplemented; `source-ref-apply` stays implementation-open.
+
+The final strict build passes all 77 non-hardware gates (237.00 seconds). Windows
+ASan/UBSan builtin types, core contracts, canonical MoonIR and container model gates
+pass 4/4 (14.29 seconds); core implementation objects are confirmed instrumented,
+not merely linked against sanitizer runtimes. Direct C++17 core-type ASan/UBSan
+compilation/execution also passes on WSL Arch Linux Clang 22.1.8. Design status,
+documentation inventory and diff checks pass. No matched performance sampling,
+release approval or historical TBD closure is added.
 
 ## Host-controlled discovery and injection
 

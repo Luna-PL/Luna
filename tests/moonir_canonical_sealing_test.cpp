@@ -1,6 +1,110 @@
 #include "moonir_canonical_test_support.h"
+#include "moonir/ContainerModel.h"
+#include "codegen/CGHelpers.h"
+#include "core/TypeLayout.h"
+#include "core/TypeRelations.h"
+
+#include <algorithm>
+#include <stdexcept>
 
 namespace canonical_test {
+
+int testRuntimeFragmentRefPreparation() {
+    auto slot = Type::makeSlot({TyI32});
+    slot->identityMode = luna::types::IdentityMode::Nominal;
+    slot->nominalId = "canonical.ref_preparation::checkpoint";
+    slot->name = "checkpoint";
+    const auto ref = Type::makeRuntimeFragmentRef(slot);
+    const auto shape = luna::types::shapeId(ref);
+    moon::Module prepared;
+    prepared.name = "canonical.ref_preparation";
+    const auto id = prepared.registerType(ref);
+    const auto slotId = luna::types::typeId(slot);
+    const auto aggregateId = prepared.registerType(Type::makeRecord({{"ref", ref}}));
+    const auto borrowId = prepared.registerType(Type::makeReference(ref));
+    prepared.sealTypeTable();
+    // The complete frozen graph must not depend on the frontend object.
+    slot->name = "mutated";
+    slot->paramTypes = {TyI64};
+    moon::TypeMaterializer materializer(prepared);
+    const auto restored = materializer.materialize(id);
+    const auto* record = prepared.findType(id);
+    const auto* aggregate = prepared.findType(aggregateId);
+    const auto* borrow = prepared.findType(borrowId);
+    if (!restored || !record || !aggregate || !borrow ||
+        restored->kind != TypeKind::RuntimeFragmentRef ||
+        !luna::types::isWellFormedTypeDomain(restored) ||
+        luna::types::typeId(restored) != id || luna::types::shapeId(restored) != shape ||
+        restored->inner->name != "checkpoint" || restored->inner->paramTypes[0]->kind != TypeKind::I32 ||
+        record->innerTypeId != slotId || record->referencedTypeIds != moon::TypeRefVec{slotId} ||
+        record->valueSize != 8 || record->valueAlignment != 8 ||
+        !luna::layout::valueLayoutFits(restored) ||
+        !record->sysmeta.resource.needsDrop || !record->sysmeta.resource.cleanupRequired ||
+        record->sysmeta.resource.usage != luna::ownership::Usage::Affine ||
+        record->sysmeta.resource.releaseDomain != luna::sysmeta::ReleaseDomain::Executable ||
+        !aggregate->sysmeta.resource.recursiveCleanup ||
+        aggregate->sysmeta.resource.usage != luna::ownership::Usage::Affine ||
+        borrow->sysmeta.resource.cleanupRequired ||
+        borrow->sysmeta.resource.relation != luna::ownership::Relation::SharedBorrow)
+        return fail("internal Ref freezing/materialization lost its nominal target or resources");
+    moon::Verifier verifier;
+    if (verifier.verify(prepared) || !std::any_of(
+            verifier.errors().begin(), verifier.errors().end(), [](const auto& error) {
+                return error.message.find("RuntimeFragmentRef host/drop bridge is not implemented") != std::string::npos;
+            }))
+        return fail("MoonIR publication accepted internal Ref preparation without a host/drop bridge");
+    std::vector<uint8_t> bytes{1, 2, 3};
+    std::string error;
+    if (moon::ContainerModelCodec::encodeTypes(prepared, bytes, error) || !bytes.empty() ||
+        error.find("RuntimeFragmentRef") == std::string::npos)
+        return fail("wire type writer emitted the internal, unsupported Ref kind");
+    moon::ContainerManifest manifest;
+    manifest.packageId = prepared.name;
+    manifest.features = prepared.features;
+    bytes = {1, 2, 3};
+    if (moon::ContainerModelCodec::encodeContainer(manifest, prepared, bytes, error) ||
+        !bytes.empty() || error.find("RuntimeFragmentRef") == std::string::npos)
+        return fail("container publication bypassed the Ref bridge gate");
+    llvm::LLVMContext llvmContext;
+    CGHelpers helpers(llvmContext);
+    bool rejected = false;
+    try { helpers.toLLVMType(restored); }
+    catch (const std::logic_error& exception) {
+        rejected = std::string(exception.what()).find("RuntimeFragmentRef") != std::string::npos;
+    }
+    if (!rejected) return fail("LLVM type lowering silently used its scalar fallback for an internal Ref");
+    // Forge the new ordinal into an otherwise old, canonical singleton type
+    // section. Decoder rejection must preserve the caller's existing table.
+    moon::Module old;
+    old.name = "canonical.old_types";
+    const auto oldId = old.registerType(TyI32);
+    old.sealTypeTable();
+    if (!moon::ContainerModelCodec::encodeTypes(old, bytes, error))
+        return fail("old type writer changed during internal Ref preparation");
+    const auto readU32 = [&](size_t offset) {
+        return static_cast<uint32_t>(bytes[offset]) |
+            (static_cast<uint32_t>(bytes[offset + 1]) << 8) |
+            (static_cast<uint32_t>(bytes[offset + 2]) << 16) |
+            (static_cast<uint32_t>(bytes[offset + 3]) << 24);
+    };
+    size_t offset = 4; // Row count, followed by TypeId, ShapeId, AbiLayoutId.
+    for (unsigned index = 0; index < 3; ++index) {
+        if (offset + 4 > bytes.size()) return fail("old type section string header is truncated");
+        const auto length = readU32(offset);
+        offset += 4;
+        if (length > bytes.size() - offset) return fail("old type section string is truncated");
+        offset += length;
+    }
+    offset += 8; // Domain and identity mode precede kind.
+    if (offset + 4 > bytes.size() || readU32(offset) != static_cast<uint32_t>(TypeKind::I32))
+        return fail("old type scalar order changed during Ref preparation");
+    bytes[offset] = static_cast<uint8_t>(TypeKind::RuntimeFragmentRef);
+    if (moon::ContainerModelCodec::decodeTypes(bytes, old, error) || error.empty() ||
+        !old.typeTableSealed || old.typeTable.size() != 1 || !old.findType(oldId) ||
+        old.findType(oldId)->kind != TypeKind::I32)
+        return fail("wire reader accepted an unsupported Ref ordinal or published partial state");
+    return 0;
+}
 
 int runSealingTests(
     moon::ControlFlowBuilder& cfgBuilder,
@@ -18,7 +122,7 @@ int runSealingTests(
     if (const int result = runLoweredCompositionTests(context)) return result;
     if (const int result = runSymbolSealingTests(context)) return result;
     if (const int result = runIteratorSealingTests(context)) return result;
-    return 0;
+    return testRuntimeFragmentRefPreparation();
 }
 
 } // namespace canonical_test

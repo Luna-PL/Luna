@@ -87,6 +87,7 @@ uint64_t valueSizeImpl(const TypePtr& type,
         case TypeKind::Metadata: case TypeKind::MetadataView:
         case TypeKind::SymbolSet: case TypeKind::DeclarationView: case TypeKind::DeclarationRef:
         case TypeKind::Function:
+        case TypeKind::RuntimeFragmentRef:
             return 8;
         case TypeKind::DeviceBuffer:
             return 16;
@@ -201,6 +202,7 @@ bool valueSizeFitsImpl(const TypePtr& type,
         case TypeKind::Metadata: case TypeKind::MetadataView:
         case TypeKind::SymbolSet: case TypeKind::DeclarationView:
         case TypeKind::DeclarationRef: case TypeKind::Function:
+        case TypeKind::RuntimeFragmentRef:
             size = 8; return true;
         case TypeKind::DeviceBuffer:
             size = 16; return true;

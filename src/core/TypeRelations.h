@@ -26,6 +26,9 @@ bool isExplicitlyConvertible(const TypePtr& from, const TypePtr& to);
 // only accepts identical language shapes; target ABI policy will refine it.
 bool isAbiCompatible(const TypePtr& lhs, const TypePtr& rhs);
 bool isRecursiveShape(const TypePtr& type);
+// Includes nested records, ADTs, pointers, callable signatures and captures.
+// A structurally equal wrapper must not erase a Ref's nominal Slot constraint.
+bool containsRuntimeFragmentRef(const TypePtr& type);
 
 // Every Value-domain constructor may contain only Value-domain arguments.
 // Compiler type parameters are permitted as unresolved placeholders, but a

@@ -69,7 +69,7 @@ or release approval.
 | Boundary | State | Evidence / actual remaining work |
 | --- | --- | --- |
 | `host-ref` | `implemented` | C++ move-only refs, owned/borrowed environments, factories/cleanup and generation pins; `luna.runtime-fragment-v1`. |
-| `source-ref-apply` | `implementation-open` | Source Ref/apply is the selected next direction: host-supplied affine Refs and local application under an explicit parent. Frozen-snapshot derivation support is implemented; source types, host handle bridge, runtime-valued operand and end-to-end gates remain unimplemented; see implementation slices. |
+| `source-ref-apply` | `implementation-open` | Source Ref/apply is selected: frozen-snapshot derivation and internal Ref identity/ownership/freezing are implemented. Source signatures, actual host/Drop bridge, wire round-trip, runtime operand and end-to-end gates remain unimplemented; internal Refs cannot yet be published; see implementation slices. |
 | `candidate-snapshot` | `implemented` | `snapshotRuntimeFragmentCandidates(generation, slot, ...)` filters one explicitly supplied generation by exact Slot/Contract and pins an immutable snapshot; not an all-loaded-package global query. |
 | `candidate-aggregation` | `host-managed` | Hosts know the packages they load and may compose per-generation candidates. Runtime has no built-in global candidate set/cross-generation aggregate query. A convenience API is a later scope choice, not a hot-path defect. |
 | `candidate-notification` | `host-managed` | Load/activation results and generation identities let hosts observe changes; no built-in candidate event bus or automatic discovery, ordering, winner selection or injection. |
