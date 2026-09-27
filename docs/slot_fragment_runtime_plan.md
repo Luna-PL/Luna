@@ -1444,3 +1444,127 @@ CI for a clean new build commit, then use the existing CPU/iteration/three-cycle
 protocol with fresh evidence paths. The preceding observations are not performance
 results for identity reuse. Performance/release acceptance and durable external
 evidence storage remain open.
+
+#### Matched-protocol frozen-identity observations (2026-09-28)
+
+The observation build is `bc9d6fd2c9e760ab3bb10a77d862bffda0e032dc`. Its Linux,
+macOS and Windows CI all succeeded: runs `36326337409`, `36326337446` and
+`36326337412`. The probe was rebuilt for this commit and non-timed correctness
+checks pass. The tree was clean before/after sampling; sources and timing protocols
+did not change during sampling. This stage only adds an observation report, not a
+third Runtime optimization. The implementation stage's 77/77 non-hardware and
+Windows/WSL sanitizer results remain recorded; this report commit is not the
+observation build.
+
+The host remains Windows 11 build 26200, i7-12700 (12 cores/20 logical CPUs),
+Clang/LLVM 20.1.8, C++17, strict-warning RelWithDebInfo native `-O2 -g -DNDEBUG`.
+The original order runs iterations 10000 then 100000, each with three cycles,
+nine batch samples per case and 1000 warmup calls. MoonIR O2, LLVM IR O0/O2/O3,
+default ORC and the timed harness are unchanged. Each cohort contains 54 fresh
+processes, 18 per profile and 4374 samples, totaling 108/8748. Exact mappings,
+orders, nominal identities, call counts and checksums all pass. Only the dispatch
+measurement thread is pinned to group 0/logical CPU 0 and checked at sample
+boundaries. Allowed CPUs are 0–19; physical core class is not inferred and setup
+is unpinned.
+
+Read-only power queries before/after sampling both report Balanced. No power
+policy, priority or background environment was changed; frequency, temperature,
+background load and scheduling remain uncontrolled. This agent ran no concurrent
+local build, regression, WSL compilation or second observation cohort while
+sampling. CPU pinning is not complete machine-state control; cross-day sequential
+observations are especially not controlled alternating A/B trials.
+
+Matching-iteration common manifest metadata compared with `1081937` differs only
+in commit and combined-file digest. Probe/workload/runner/validator/affinity-controller
+source digests, both Container digests, configurations, harness and materialization
+keys match. The two new manifests differ only in iterations and combined digest.
+Runtime implementation and actual probe binaries differ; matching metadata is not
+complete build identity or proof of reproducibility.
+
+Results are **medians of process medians (minimum–maximum process median)** in
+ns/op. Each underlying sample is a whole-batch call average, not individual-call
+latency. The complete new 100000-iteration cohort:
+
+| Case | LLVM O0 | LLVM O2 | LLVM O3 |
+| --- | --- | --- | --- |
+| plain | 4.40 (4.30–4.40) | 2.00 (1.90–2.00) | 2.00 (1.90–2.00) |
+| private_erased | 4.40 (4.30–4.50) | 2.00 (1.90–2.00) | 2.00 (1.90–2.00) |
+| static_resume | 2.20 (2.10–2.20) | 2.00 (1.90–2.00) | 2.00 (1.90–2.00) |
+| static_discard | 1.95 (1.90–2.00) | 2.00 (1.90–2.10) | 2.00 (1.90–2.00) |
+| dynamic_none | 208.80 (203.90–217.40) | 207.85 (202.90–213.40) | 209.55 (201.50–221.50) |
+| dynamic_one | 404.30 (401.00–408.70) | 404.10 (396.30–422.80) | 404.55 (394.30–425.50) |
+| dynamic_chain_2 | 553.80 (542.90–564.80) | 547.80 (542.40–576.60) | 552.35 (540.60–591.30) |
+| dynamic_chain_4 | 914.50 (901.40–937.20) | 857.60 (842.30–892.10) | 860.20 (846.80–884.40) |
+| dynamic_override_none | 208.60 (203.10–215.90) | 208.40 (204.90–219.90) | 210.55 (202.50–220.00) |
+
+O2 old/new cohorts are summarized separately, not pooled or paired by process:
+
+| Case | Old 10000 | New 10000 | Old 100000 | New 100000 |
+| --- | --- | --- | --- | --- |
+| dynamic_none | 211.35 (205.50–218.20) | 204.80 (198.80–219.10) | 213.35 (209.40–233.20) | 207.85 (202.90–213.40) |
+| dynamic_one | 460.25 (447.70–479.40) | 396.65 (386.10–405.50) | 461.95 (452.70–500.70) | 404.10 (396.30–422.80) |
+| dynamic_chain_2 | 608.10 (588.90–637.00) | 546.45 (536.00–566.00) | 608.20 (589.60–658.00) | 547.80 (542.40–576.60) |
+| dynamic_chain_4 | 909.65 (888.20–940.40) | 850.90 (832.20–880.90) | 904.80 (888.10–977.70) | 857.60 (842.30–892.10) |
+| dynamic_override_none | 210.10 (206.10–227.50) | 203.65 (198.40–228.80) | 213.20 (208.90–222.60) | 208.40 (204.90–219.90) |
+
+Bound-path observations are lower, consistent in direction with removing owning
+Slot/Contract copies per dispatch, but None/local None also shift slightly.
+There is no allocator-time attribution or controlled machine state, so not all
+differences can be attributed to this change. No attributable speedup ratios,
+confidence intervals or profile winner are claimed. Static paths remain near
+2 ns, but ABI/harness differences and static-discard results still prevent
+subtraction to isolate a Slot instruction. `approval=none`; no new timing threshold
+or performance/release approval.
+
+Long-cohort O2 per-cycle medians are 399.40/404.25/406.80 for One and
+858.30/856.25/862.70 for chain-4, not constant costs. Individual batch-average
+ranges are 386.70–443.90 and 824.10–940.40 respectively, and 195.40–261.90 for
+None, not individual-call tail bounds. Setup single-observation medians are
+10.9025 ms compile/encode/decode, 24.057 ms verified load/JIT and 0.029 ms
+lookup/four-candidate discovery/host ordering/factories/bindings/context. Setup
+is unpinned; this synthetic four-candidate workload does not establish general
+reflection or large-catalog performance.
+
+New evidence is still only in ignored local directories, not CI uploads or
+arranged durable external storage:
+`build-audit-clang64/fragment-evaluation-bc9d6fd-i10000-c3-evidence/` and
+`fragment-evaluation-bc9d6fd-i100000-c3-evidence/`. Each package has 74 files;
+the 73 indexed file byte hashes pass the current trusted checkout's checker,
+without executing archived scripts or probes. Manifest SHA-256:
+
+```text
+10000:  786997de18ad85338efd9191dec544de82e43c1ca3ec2ac28615e3e68cb4d873
+100000: 2eec94a483ae2765e2a4bdc49ab9b960e7ca30767f0276e906e82db3736f7ee1
+```
+
+Evidence-index SHA-256:
+
+```text
+10000:  50eecb78d127a8ab2e30e713d74261c5962411e7d08e5f9e20379a3ffa8c561e
+100000: 463baafa81aa660aa8c2908e21f6147bdde775491b5e944c0652f76f83dab632
+```
+
+Actual probe binary SHA-256 before/after sampling:
+`eb8a27e28d66507268c05fb360aa5e46e9cb43c94cd45fc034e2de6799322227`.
+RuntimeFragment.cpp SHA-256 before/after:
+`0812cbdc4f7c931393304f2b383e31bea665e2ae72f558921b1273868a5e0242`.
+Summary tool remains
+`e35ce22f899950fc79915de09af05d9f4f2eb952a0d082211bc83ff0ca4eeb59`.
+These are not signatures, full binary archives or complete build attestations.
+No old/new evidence was overwritten; reruns require fresh paths and each
+commit/digest, not identical numeric outcomes.
+
+Report checks independently recompute all 47 table cells in each document,
+per-cycle medians, batch-average ranges and setup medians from raw CSV.
+Evidence inventory/digest anchors, documentation inventory and `git diff --check`
+pass. This documentation stage does not claim a new complete compiler regression
+or performance approval.
+
+Next consolidate the remaining v1 acceptance checklist: completed core
+correctness/allocation regressions, undecided performance/release criteria and
+explicitly deferred capabilities, without immediately adding a third optimization.
+Further optimization should first audit ownership/borrowing and validation at
+Runtime entry and argument storage, identify a testable allocation/cost hypothesis,
+then add regressions and matched observations. Do not remove validation, borrow
+host storage that callbacks can destroy or expand keywords/automatic candidate
+set mechanisms.

@@ -130,6 +130,10 @@ allocation experiment are documented in
 After scoped activation storage, another two independent 54-process cohorts
 used the same protocol; separately summarized old/new data, integrity anchors
 and limitations are in [matched-protocol observations](slot_fragment_runtime_plan.md#matched-protocol-scoped-activation-observations-2026-09-27).
+Frozen-identity reuse has a further pair of independent 54-process cohorts,
+compared at matching iterations with the preceding version using unchanged
+timing/validation protocols and fresh evidence paths. See [frozen-identity observations](slot_fragment_runtime_plan.md#matched-protocol-frozen-identity-observations-2026-09-28);
+this is not performance/release approval.
 The verified container adapter's
 LLVM default remains O0, distinct from the fixture's MoonIR O2; O2/O3 are explicit
 IR optimization profiles and ORC codegen stays at its defaults. Protocol v2

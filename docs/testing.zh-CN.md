@@ -91,6 +91,8 @@ CI 随后导出 `compiled-fragment-evidence/`（原始 bundle、原字节的校�
 下一轮分配优化建议见[编译插件本机观察性评估](slot_fragment_runtime_plan.zh-CN.md#编译插件本机观察性评估2026-09-27)。
 作用域 activation 实现后另采两批各 54 个进程，保持同协议而独立汇总旧／新数据；
 结果、证据锚点与限制见[匹配协议复测](slot_fragment_runtime_plan.zh-CN.md#作用域-activation-的匹配协议复测2026-09-27)。
+固定身份复用后再采两批各 54 个进程，与上一版按相同迭代独立对照，保持原计时／
+校验协议及全新证据路径。详见[固定身份复用观察](slot_fragment_runtime_plan.zh-CN.md#固定身份复用的匹配协议复测2026-09-28)；不是性能／发布批准。
 已验证容器
 适配器默认仍为 LLVM IR O0，区别于夹具的 MoonIR O2；O2／O3 必须显式选择，ORC 机器码
 生成保持默认。v2 协议记录实际配置与不可变的 materialization key。这些仅是观察值，
