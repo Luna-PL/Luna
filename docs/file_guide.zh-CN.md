@@ -443,6 +443,8 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/compiled_fragment_bundle_test.cmake` | 构建目录中的合成文件夹具、只读性与缺失／损坏／重新摘要的错误记录拒绝测试，不启动计时程序 |
 | `tests/compiled_fragment_probe_fixture.cmake` | 记录协议、离线 bundle 及可迁移证据测试共用的合成零时延记录／文件夹具构造器，不运行 JIT |
 | `tests/compiled_fragment_evidence_test.cmake` | 合成证据包迁移、原始观测不变、既有目录及不安全路径／损坏数据拒绝、包内脚本不执行门禁 |
+| `tools/compiled_fragment_pinned_evidence.cmake` | 显式固定证据字节检查入口，复用私有核心但拒绝默认协议，不执行归档源码或重复协议验收 |
+| `tools/package_compiled_fragment_pinned_evidence.cmake` | 显式固定证据导出入口，封闭保存 17 份校验源码及原 bundle，控制器／固定 reader 可迁移，旧证据格式不变 |
 | `tests/compiled_fragment_summary_test.cmake` | 默认／固定汇总共用的合成门禁，复用 Python 3.8+，检查进程聚合、小数统计、只读性、模式隔离、固定身份及损坏记录拒绝，不启动计时程序 |
 | `tools/summarize_compiled_fragment_bundle.py` | 显式选择可信默认／固定 reader，以独立报告协议只读输出进程及配置统计，保留 scope，不自动识别模式、不执行归档代码、不作性能批准 |
 | `tests/runtime_gpu_error_test.cpp` | GPU/runtime 错误快照行为 |
@@ -1242,5 +1244,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tools/verify_release_evidence.js`
 - `tools/compiled_fragment_evidence.cmake`
 - `tools/package_compiled_fragment_evidence.cmake`
+- `tools/compiled_fragment_pinned_evidence.cmake`
+- `tools/package_compiled_fragment_pinned_evidence.cmake`
 - `tools/summarize_compiled_fragment_bundle.py`
 <!-- FILE_INVENTORY_END -->

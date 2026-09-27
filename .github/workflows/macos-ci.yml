@@ -73,6 +73,14 @@ jobs:
             -DLUNA_COMPILED_EVIDENCE_EXPECTED_COMMIT="${{ github.sha }}" \
             -DLUNA_COMPILED_EVIDENCE_EXPECTED_MANIFEST_SHA256="$manifest_sha" \
             -P tools/package_compiled_fragment_evidence.cmake
+          if [ -d build/compiled-fragment-pinned-series ]; then
+            pinned_manifest_sha="$(shasum -a 256 build/compiled-fragment-pinned-series/manifest.csv | cut -d ' ' -f1)"
+            cmake -Werror=dev -DLUNA_COMPILED_PINNED_EVIDENCE_BUNDLE_DIR="$PWD/build/compiled-fragment-pinned-series" \
+              -DLUNA_COMPILED_PINNED_EVIDENCE_OUTPUT_DIR="$PWD/build/compiled-fragment-pinned-evidence" \
+              -DLUNA_COMPILED_PINNED_EVIDENCE_EXPECTED_COMMIT="${{ github.sha }}" \
+              -DLUNA_COMPILED_PINNED_EVIDENCE_EXPECTED_MANIFEST_SHA256="$pinned_manifest_sha" \
+              -P tools/package_compiled_fragment_pinned_evidence.cmake
+          fi
 
       - name: Retain Fragment cost observations
         uses: actions/upload-artifact@v4
@@ -81,7 +89,7 @@ jobs:
           path: |
             build/fragment-cost-interleaved.csv
             build/compiled-fragment-evidence/
-            build/compiled-fragment-pinned-series/
+            build/compiled-fragment-pinned-evidence/
           if-no-files-found: error
           retention-days: 14
 

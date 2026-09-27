@@ -1329,6 +1329,13 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/compiled_fragment_evidence_test.cmake
     )
     add_test(
+        NAME luna.compiled-fragment-pinned-evidence
+        COMMAND ${CMAKE_COMMAND} -Werror=dev
+            -DLUNA_COMPILED_EVIDENCE_TEST_MODE=pinned
+            -DLUNA_COMPILED_EVIDENCE_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/compiled-fragment-pinned-evidence-tests
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/compiled_fragment_evidence_test.cmake
+    )
+    add_test(
         NAME luna.compiled-fragment-summary
         COMMAND ${CMAKE_COMMAND}
             -DLUNA_PYTHON_EXECUTABLE=${Python3_EXECUTABLE}

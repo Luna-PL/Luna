@@ -48,7 +48,7 @@ O0／O2／O3 固定线程派发，以及不允许／不支持请求拒绝。默�
 scope、调用数／checksum 与两种模式互相拒绝。实际固定模式仍须显式调用，不进入 v1 观察 bundle。
 亲和性冒烟的可选 `LUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR` 增加显式 CI 观察策略：第一个允许
 CPU、18 个全新进程、10000 次迭代，测量序列内部不插入冒烟子进程。不支持的平台不生成
-替代数据。CI 用 workflow 提交独立验收固定目录，将其作为旧证据目录的同级目录保留，
+替代数据。CI 用 workflow 提交独立验收固定目录，再导出可迁移证据包，将其作为旧证据目录的同级目录保留，
 artifact 名称／14 天策略不变。默认 `luna.compiled-fragment-pinned-bundle` 仅用构建树合成数据，
 检查 1／2／10 轮、LF／CRLF、只读性、模式互斥、控制器／CPU／scope 损坏、重新摘要的非法
 记录和失败采样不发布输出。见[固定线程序列与离线验收](slot_fragment_runtime_plan.zh-CN.md#固定线程序列与离线验收)。
@@ -71,6 +71,12 @@ CI 随后导出 `compiled-fragment-evidence/`（原始 bundle、原字节的校�
 `luna.compiled-fragment-evidence` 仅用合成文件，覆盖导出／迁移、LF／CRLF、1／2／10 轮、
 观测不变、包内脚本不执行，以及不安全路径／摘要／文件清单／批准声明拒绝。见
 [可迁移证据导出](slot_fragment_runtime_plan.zh-CN.md#可迁移证据导出)。
+支持的平台另用显式固定 exporter 导出 `compiled-fragment-pinned-evidence/`，以独立
+`pinned-evidence.v1` 协议上传该包，不重复上传松散固定 bundle；旧证据 v1 不变。
+同一合成脚本也支持 `luna.compiled-fragment-pinned-evidence`，检查固定 17 源码清单、
+1／2／10 轮、LF／CRLF、已确认可信的原字节 reader 迁移、模式拒绝、控制器损坏／缺失、
+预检失败不发布，以及字节检查不执行包内脚本；不启动计时或操作系统亲和性代码。见
+[固定模式可迁移证据](slot_fragment_runtime_plan.zh-CN.md#固定模式可迁移证据)。
 `luna.compiled-fragment-summary` 门禁检查只读描述性
 统计、LF／CRLF、零值、小数及偶数个值的中位数、独立进程而非混合轮次聚合，以及拒绝
 输入时没有部分报告。仅使用构建目录中的合成夹具和可信 checkout reader，不启动计时

@@ -565,12 +565,13 @@ setup 范围，保留原始／合并行的精确映射、分配置 materializati
 核对全部原始／合并字节；不启动探针、不执行归档代码、不推导胜者，也不批准延迟或发布。
 可选提交／manifest 锚点只检测不匹配，本身不证明真实性。
 
-CI 将固定目录放在 `compiled-fragment-evidence/` 的**同级**，而非内部，artifact 名称和
+CI 将固定序列导出为下方 `compiled-fragment-pinned-evidence/`，放在
+`compiled-fragment-evidence/` 的**同级**，而非内部，artifact 名称和
 14 天保留策略不变。macOS 或不支持的 Windows group 明确省略该目录。默认合成门禁覆盖
 LF／CRLF、多轮、输入字节不变、缺失／未列出／符号链接／不安全路径、metadata／源码／
 顺序损坏、重新摘要的非法记录、模式隔离和失败不发布；固定记录／bundle 门禁共用合成
 fixture。此目录仍需要匹配的可信 checkout 字节：携带摘要，不携带可迁移的控制器／
-validator 源码快照。可迁移证据导出、功耗／后台控制实验及长期归档
+validator 源码快照；下方独立证据包补齐这些字节。功耗／后台控制实验及长期归档
 仍需另行完成；setup 及组间顺序平衡仍不作保证。
 
 #### 编译插件对比协议
@@ -760,6 +761,49 @@ Linux C++17／C++23、macOS、Windows CI 在 bundle 验收后导出证据包，�
 不执行、既有／嵌套输出、损坏／缺失／不安全清单；Unix 还检查符号链接记录，不启动
 计时程序。该包只是便于迁移到另行选定的存储；永久后端、保留／访问策略及受控性能
 验收仍未完成。正式 release evidence／attestation 工作流及生态锁不变。
+
+#### 固定模式可迁移证据
+
+`tools/package_compiled_fragment_pinned_evidence.cmake` 从显式入口导出已验收的固定
+bundle；`tools/compiled_fragment_pinned_evidence.cmake` 提供对应的只读字节检查入口。
+协议分别为 `luna.compiled-fragment-pinned-evidence.v1` 与
+`luna.compiled-fragment-pinned-series.v1`，默认入口互相拒绝另一模式，不按 metadata 自动切换。
+两种模式复用私有导出／检查核心；旧证据 v1 的 12 份源码清单及索引格式不变。
+
+固定包包含 `bundle/` 的原始字节、`source/` 的 17 份固定校验输入和最后发布的
+`evidence.csv`。清单将默认 sampler 换为固定 sampler，并增加固定 bundle reader、固定
+protocol validator、`fragment_thread_affinity.h`、固定证据 reader 及固定 exporter。
+保留共享 reader／validator、导出／检查核心、探针 C++ 和六份工作负载输入。
+索引保存观测提交／manifest 锚点、轮数、排序的路径／摘要、
+`source_snapshot=validation-inputs-only` 与 `approval=none`；CPU／group／scope／控制器身份
+仍保留在包内原始 manifest／记录中。1／2／10 轮分别为 38／56／200 个文件（包含索引）。
+
+```sh
+cmake -Werror=dev -DLUNA_COMPILED_PINNED_EVIDENCE_BUNDLE_DIR="/path/to/pinned-series" \
+  -DLUNA_COMPILED_PINNED_EVIDENCE_OUTPUT_DIR="/existing/parent/new-pinned-evidence" \
+  -DLUNA_COMPILED_PINNED_EVIDENCE_EXPECTED_COMMIT="<观测提交>" \
+  -DLUNA_COMPILED_PINNED_EVIDENCE_EXPECTED_MANIFEST_SHA256="<manifest字节摘要>" \
+  -P tools/package_compiled_fragment_pinned_evidence.cmake
+cmake -Werror=dev -DLUNA_COMPILED_PINNED_EVIDENCE_DIR="/path/to/copied-pinned-evidence" \
+  -DLUNA_COMPILED_PINNED_EVIDENCE_EXPECTED_COMMIT="<观测提交>" \
+  -DLUNA_COMPILED_PINNED_EVIDENCE_EXPECTED_INDEX_SHA256="<独立可信索引摘要>" \
+  -P tools/compiled_fragment_pinned_evidence.cmake
+```
+
+导出要求提交与 manifest 锚点、全新输出及既有非符号链接父目录；不覆盖观测，不允许输出
+嵌套在输入中，预检失败不创建输出。复制前后核对字节及完整协议，索引最后写入；写入中断
+仍可能留下部分目录。两种字节 reader 在返回前再次检查清单内文件摘要，不执行包内脚本，
+也不重放完整 bundle 协议。重新摘要的包内脚本只作为数据；必须先从独立可信事实确认
+源码字节，才可手动运行包内 `source/tests/compiled_fragment_pinned_bundle.cmake`，指定
+`LUNA_COMPILED_PINNED_BUNDLE_DIR` 与原始提交／manifest 锚点。迁移后的配套 reader
+不需要原始 checkout。Python 汇总仍使用当前可信 checkout，不自动执行包内源码。
+
+CI 将该包作为 `compiled-fragment-evidence/` 的同级上传，原始固定 bundle 位于包内，
+不再重复上传松散目录；不支持的平台不生成固定包，artifact 名称／14 天策略不变。
+共用合成门禁覆盖源清单数量、迁移、输入／输出只读、模式互斥、控制器缺失／损坏和预检失败
+不发布，不启动计时或亲和性代码。源码快照不是完整构建、探针二进制、签名或 attestation；
+摘要不证明真实性或可复现性，不抵御恶意并发文件修改。性能批准、功耗／后台控制及长期
+存储仍未完成，不改变 Runtime ABI、SF008 范围或正式 release evidence 工作流。
 
 #### 离线描述性汇总
 

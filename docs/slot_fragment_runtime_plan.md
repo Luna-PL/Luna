@@ -721,15 +721,16 @@ all raw/combined bytes again before returning; neither starts a probe, executes
 archive code, infers a winner or approves latency/release. Optional commit and
 manifest anchors detect mismatches, not authenticity by themselves.
 
-CI stores the pinned directory **alongside**, not inside, `compiled-fragment-evidence/`,
+CI exports the pinned series to `compiled-fragment-pinned-evidence/` below,
+**alongside**, not inside, `compiled-fragment-evidence/`,
 keeping the existing artifact names and 14-day retention. macOS or unsupported
 Windows groups omit it explicitly. The default synthetic gate covers LF/CRLF,
 multiple cycles, unchanged input bytes, missing/unlisted/symlink/unsafe-path inputs,
 metadata/source/order corruption, rehashed invalid records, mode separation and
 failure without publication. Pinned/protocol tests share synthetic fixture builders.
 This directory still needs matching trusted checkout bytes: it carries digests,
-not a portable controller/validator source snapshot. Portable evidence export,
-controlled power/background experiments and durable
+not a portable controller/validator source snapshot; the separate evidence package
+below supplies those bytes. Controlled power/background experiments and durable
 archival remain separate work; setup and between-block balance remain unclaimed.
 
 #### Compiled-plugin comparison protocol
@@ -968,6 +969,61 @@ without running a timing binary. The package enables migration to separately
 chosen storage; a permanent backend, retention/access policy and controlled
 performance acceptance are still open. Release-evidence/attestation workflows
 and ecosystem locks are unchanged.
+
+#### Portable pinned evidence
+
+`tools/package_compiled_fragment_pinned_evidence.cmake` explicitly exports an
+accepted pinned bundle; `tools/compiled_fragment_pinned_evidence.cmake` is its
+read-only byte-check entry point. The protocols are
+`luna.compiled-fragment-pinned-evidence.v1` and
+`luna.compiled-fragment-pinned-series.v1`. Default and pinned entry points reject
+the other mode and never select it from metadata. They share private export/check
+cores; old evidence v1 retains its index format and 12-source inventory.
+
+The pinned package contains original `bundle/` bytes, 17 validation-input files
+under `source/`, and a last-written `evidence.csv`. Its inventory replaces the
+default sampler with the pinned sampler, adding the pinned bundle reader,
+pinned protocol validator, `fragment_thread_affinity.h`, pinned evidence reader
+and pinned exporter. Shared reader/validator, export/check cores, probe C++ and
+six workload inputs remain. The sorted path/hash index preserves observation
+commit/manifest anchors, cycles, `source_snapshot=validation-inputs-only` and
+`approval=none`; CPU/group/scope/controller facts remain in original manifest/raw
+records. Cycles 1/2/10 have 38/56/200 files including the index.
+
+```sh
+cmake -Werror=dev -DLUNA_COMPILED_PINNED_EVIDENCE_BUNDLE_DIR="/path/to/pinned-series" \
+  -DLUNA_COMPILED_PINNED_EVIDENCE_OUTPUT_DIR="/existing/parent/new-pinned-evidence" \
+  -DLUNA_COMPILED_PINNED_EVIDENCE_EXPECTED_COMMIT="<observation commit>" \
+  -DLUNA_COMPILED_PINNED_EVIDENCE_EXPECTED_MANIFEST_SHA256="<manifest byte digest>" \
+  -P tools/package_compiled_fragment_pinned_evidence.cmake
+cmake -Werror=dev -DLUNA_COMPILED_PINNED_EVIDENCE_DIR="/path/to/copied-pinned-evidence" \
+  -DLUNA_COMPILED_PINNED_EVIDENCE_EXPECTED_COMMIT="<observation commit>" \
+  -DLUNA_COMPILED_PINNED_EVIDENCE_EXPECTED_INDEX_SHA256="<independently trusted index digest>" \
+  -P tools/compiled_fragment_pinned_evidence.cmake
+```
+
+Export requires commit/manifest anchors, a fresh output and an existing
+non-symlink parent; observations are not overwritten and nested output is rejected.
+Preflight failures create no output. Bytes and the full protocol are rechecked
+around copying; interrupted writes can still leave partial directories. Both byte
+readers recheck inventory-file hashes before returning, execute no archived code
+and do not replay full bundle acceptance. Rehashed archived scripts remain data.
+Only after confirming source bytes against independently trusted facts may one
+manually run `source/tests/compiled_fragment_pinned_bundle.cmake`, specifying
+`LUNA_COMPILED_PINNED_BUNDLE_DIR` and original commit/manifest anchors. The relocated
+matched-source reader needs no original checkout. Python summaries still use the
+current trusted checkout and never automatically execute package source.
+
+CI uploads the package beside `compiled-fragment-evidence/`; original pinned
+records are inside it, not also uploaded as a duplicate loose bundle. Unsupported
+hosts produce no pinned package. Artifact names and 14-day retention are unchanged.
+Shared synthetic gates cover fixed source counts, relocation, read-only bytes,
+mode separation, missing/corrupt controller and failed preflight without publication;
+they run no timing or affinity code. This snapshot is not a complete build,
+probe binary, signature or attestation. Digests do not establish authenticity or
+reproducibility and are not a hostile-concurrency filesystem snapshot. Performance
+approval, controlled power/background conditions and durable storage remain open;
+Runtime ABI, SF008 and formal release-evidence workflows are unchanged.
 
 #### Offline descriptive summaries
 

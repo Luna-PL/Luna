@@ -66,7 +66,8 @@ The optional `LUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR` in the affinity smoke adds
 an explicit CI observation policy: first allowed CPU, 18 fresh processes at
 10000 iterations, with no smoke subprocesses inside the measured series.
 Unsupported platforms produce no substitute. CI independently accepts the
-separate pinned directory with its workflow commit and retains it as a sibling
+separate pinned directory with its workflow commit, exports its portable evidence
+package, and retains that package as a sibling
 of the old evidence directory under the same artifact names/14-day policy.
 The default `luna.compiled-fragment-pinned-bundle` test uses only synthetic
 build-tree data: 1/2/10 cycles, LF/CRLF, read-only acceptance, mode separation,
@@ -99,6 +100,15 @@ probe, retaining the same artifact names and 14-day policy. The default
 LF/CRLF, 1/2/10 cycles, unchanged observations, inert archived scripts and unsafe
 path/hash/inventory/approval-claim rejection. See
 [portable evidence export](slot_fragment_runtime_plan.md#portable-evidence-export).
+Supported hosts additionally export `compiled-fragment-pinned-evidence/` with
+the explicit pinned exporter and a separate `pinned-evidence.v1` protocol, then
+upload that package instead of a duplicate loose pinned bundle. Default evidence
+v1 stays unchanged. The shared synthetic test also backs
+`luna.compiled-fragment-pinned-evidence`: fixed 17-source inventory, 1/2/10 cycles,
+LF/CRLF, relocation with exact trusted reader bytes, mode rejection, controller
+corruption/missing files, no output on preflight failure and no archived-script
+execution by byte checks. Neither test runs timing or OS-affinity code. See
+[portable pinned evidence](slot_fragment_runtime_plan.md#portable-pinned-evidence).
 The `luna.compiled-fragment-summary` gate checks read-only descriptive statistics,
 LF/CRLF, zero values, decimal/even-count medians, independent-process rather than
 pooled-round aggregation, and rejection with no partial report. It uses only

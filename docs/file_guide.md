@@ -131,7 +131,8 @@ script-defined special inputs.
   private reader core; the default entry point stays uncontrolled-only. Its
   synthetic test shares `compiled_fragment_pinned_fixture.cmake` with the raw
   protocol test and never starts a timing probe. CI retains the pinned directory
-  as a sibling of old evidence, not a portable evidence export or default-summary input.
+  in a separate portable pinned evidence package alongside old evidence, never as
+  a default-summary input.
   The compiler-linked `compiled_fragment_benchmark.cpp/.h` lives under benchmarks;
   `moonir-canonical-test` routes its explicit timing mode and default non-timed
   O0/O2/O3 workload and cache/configuration checks. Its CMake script validates
@@ -149,6 +150,11 @@ script-defined special inputs.
   index last. `tools/compiled_fragment_evidence.cmake` checks only its closed file
   inventory and byte hashes, never executing the archived scripts. The synthetic
   evidence test covers relocation and the separate trust/approval boundaries.
+  `tools/package_compiled_fragment_pinned_evidence.cmake` and
+  `tools/compiled_fragment_pinned_evidence.cmake` explicitly select separate pinned
+  export/byte-check protocols in the shared private core. The 17-source snapshot
+  includes the controller and pinned reader/validator; old evidence keeps its
+  12-source inventory. Both synthetic gates share the evidence test script.
   `tools/summarize_compiled_fragment_bundle.py` uses the trusted checkout reader
   before emitting read-only descriptive process/profile statistics. Default
   uncontrolled and explicit `--mode pinned` use separate readers/report protocols,
@@ -1061,6 +1067,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `tools/verify_release_evidence.js`
 - `tools/compiled_fragment_evidence.cmake`
 - `tools/package_compiled_fragment_evidence.cmake`
+- `tools/compiled_fragment_pinned_evidence.cmake`
+- `tools/package_compiled_fragment_pinned_evidence.cmake`
 - `tools/summarize_compiled_fragment_bundle.py`
 - `Doxyfile`
 - `docs/starter/files/codegen.md`
