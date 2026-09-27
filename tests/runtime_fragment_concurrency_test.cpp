@@ -222,7 +222,10 @@ int main() {
                 call.reader = reader;
                 call.epoch = epoch;
                 if (bindings.chainSize({SlotId, SlotContract}) != epoch % 3 ||
-                    !makeRuntimeFragmentExecutionContext(bindings, selected, localError) ||
+                    !(reader % 2 == 0
+                        ? makeRuntimeFragmentExecutionContextOverride(
+                            context, {SlotId, SlotContract}, bindings, selected, localError)
+                        : makeRuntimeFragmentExecutionContext(bindings, selected, localError)) ||
                     !dispatchAndCheck(selected, epoch % 3, call, reader % 2 == 0)) {
                     evidence.failed.store(true, std::memory_order_relaxed);
                     publication.abort.store(true, std::memory_order_release);

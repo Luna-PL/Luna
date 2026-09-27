@@ -5,7 +5,7 @@
 > 状态：已确认实施计划，2026-09-23
 > 范围：类型安全、由宿主控制的运行时注入
 > 当前验收视图（2026-09-28）：见 [v1 验收快照](slot_fragment_contract.zh-CN.md#v1-验收快照2026-09-28)。
-> 原生宿主闭环已实现；Luna 源码级运行时 Ref／apply 仍是待定实施范围，不把历史阶段完成记录等同于全部源码计划完成。
+> 原生宿主闭环已实现；2026-09-28 已选择继续源码级 Ref／apply，详细切片见下文。源码能力仍未实现，不把方向确认或 Runtime 支撑等同于源码完成。
 
 ## 模型
 
@@ -35,9 +35,125 @@ export fragment trace[prefix: string](value) for pipeline {
 }
 ```
 
-静态 apply 仍可特化为零 Runtime 成本。绑定或导入 Fragment 会创建
+静态 apply 仍可特化为零 Runtime 成本。最终设计中，绑定或导入 Fragment 会创建
 `RuntimeFragmentRef<S>`；它拥有或借用显式环境，并固定所属 module generation。
 `apply` 借用该引用，每次 Slot invocation 都创建新的 single-shot activation。
+
+## 源码级 Ref／apply 的实施切片（2026-09-28）
+
+方向已确认：让 Luna 源码作为宿主，接收、选择并局部应用运行时引用。先打通宿主提供
+的已验证 Ref，不同时引入源码 loader、全局候选索引、handler 重入或新关键字。
+以下是**目标语法，当前不能编译**；本轮只实现后述 native 快照支撑。
+
+```luna
+export slot pipeline(value: i32);
+
+// 默认 move-only 参数是共享借用，不转移拥有权。
+runtime fn host_entry(selected: RuntimeFragmentRef<pipeline>) {
+    apply selected {
+        pipeline(42) { print("base"); }
+    }
+}
+
+// 显式 affine 参数才是 owning take；拥有型返回不携带局部 context。
+fn transfer(selected: affine RuntimeFragmentRef<pipeline>)
+    -> affine RuntimeFragmentRef<pipeline> {
+    return selected;
+}
+```
+
+### 表面、身份与所有权
+
+专属关键字仍只有 `slot fragment apply resume`；`RuntimeFragmentRef<S>` 是内建类型名，
+`S` 解析为确切 Slot 声明。首批复用名字 operand 文法：`apply trace[实参] { ... }`
+组合静态 Fragment；`apply selected { ... }` 对 Ref 值作局部覆盖。Ref 不再接收环境实参，
+环境已在构造时固定，不在 apply 或 Slot invocation 中重绑。首批不支持任意表达式
+operand，例如 `apply choose() { ... }`，也不增加第二套 apply 关键字。
+
+TypeId 以目标 Slot 的稳定名义声明身份参数化，不以参数结构、用户字符串或 metadata
+判断相等；sealed ContractId 单独作兼容检查，产物验证与宿主入口都必须匹配。不把最终
+ContractId 反向塞入它所依赖的 TypeId，避免身份循环。两个同形 Slot 不互换，旧引用
+不自动升级 contract；相同 ShapeId／handle 布局不授予转换权。候选数据不是 Ref，
+源码不提供空引用或 raw pointer 强转构造。
+
+局部拥有型 Ref 是 affine：可移动、丢弃与返回，不可隐式复制。现有未标注 move-only
+函数参数是共享借用，显式 affine 才转移拥有权。Apply 只求值一次并在整个 region 内
+共享借用；同一个 Ref 可以连续 apply，每次 Slot 调用都建立新的 single-shot activation。
+Single-shot 限制续体，不限制 Ref 的总使用次数。借用期间移动／释放 owner、借用逃逸、
+从借用参数返回拥有型 Ref 必须被拒绝。
+
+### 宿主桥与 generation 寿命
+
+首批通过现有 verified generation／factory 路径取得 native Ref，再显式封装为恰含
+一个精确 Slot 与一个 Fragment 的冻结状态；任意 BindingSet 不能冒充源码 Ref。入口
+检查 nominal Slot、sealed contract、carrier ABI 和拥有／借用方式，失败在进入源码
+回调前报告。导入／返回／drop 桥接符号及 carrier ABI 仍待实现；本轮不新增 C 可传入
+的源码 handle，不改 descriptor v1 或 execute 签名。
+
+源码 owner 独占封装句柄；内部可共享环境／generation pin，不暴露源码 Copy 能力。
+Drop 走 Runtime 专用桥，不能用 Luna `free` 释放 C++ 对象或插件环境。最后一个内部
+pin 释放时，环境先于模块卸载；borrowed native 环境仍须显式 environment lease。
+异常／return／`?` 都要正确清理 region context 与拥有型 Ref。
+
+源码 `.bind` 暂不作为首批构造入口：现有 context 只有 BindingSet，没有 MoonRuntime、
+所属 generation 或 catalog 回指。声明地址、runtime metadata 和 TLS 不能证明可逃逸
+引用的模块寿命。未来自行构造需要显式、验证过且固定 generation 的 offer／构造
+capability；取得方式单独设计，不能冒充已实现的反射能力。
+
+### 局部 apply 与显式 context
+
+从有效显式 parent 派生局部 context，仅把确切 `S` 替换成 One(ref)，保留其他 Slot。
+嵌套同 Slot 遮蔽而非自动追加；退出后使用 parent。不发布全局 BindingSet、不调用
+safe point、不枚举候选、不自动选胜者；宿主源码决定传入谁、在哪里应用。
+
+Direct-call context effect 固定点必须识别 runtime apply，MoonIR verifier 独立复算。
+首批不暗中制造空根 context；宿主可显式提供初始化过的 None context。Handler body
+仍不能取得／传递 context 或直接／传递动态 dispatch。Context-aware 间接调用、
+Ref-bearing exported Slot／Fragment payload、non-Copy 环境、non-unit 与 multi-shot
+仍不开放；普通 runtime 入口的专用 Ref handle 桥不是公开 Slot 资源载荷 ABI。
+
+### 内部承载方式取舍
+
+| 方式 | 优点 | 代价／结论 |
+| --- | --- | --- |
+| 每次 apply 消费 native Ref，重新构造下次引用 | 实现表面最小 | 破坏借用和重复 apply，重复 factory；拒绝 |
+| 源码 Ref 直接 Copy／引用计数 | 多处安装直接 | 改变 affine 表面，扩大别名／并发承诺；不选 |
+| affine 句柄封装冻结 singleton BindingSet，局部 context 共享内部 pin | 复用验证／cleanup，不重建环境；源码不可 Copy | region 入口复制 Slot 索引／链 pin；首批选用，私有表示可优化 |
+
+当前派生成本随 base Slot／链规模增长，不是 O(1)、零分配或任意 Ref／环境线程安全
+承诺；它不增加逐 Slot 调用的反射／factory。后续先测量 region 频率与 context 规模，
+不能去掉验证或借用可能被回调销毁的宿主存储。
+
+### 交付顺序与完成门
+
+1. **已实现的 native 支撑**：`makeRuntimeFragmentBindingOverrideFromSnapshot` 接受
+   初始化的 None 或仅含一个精确 Slot 的冻结有序链；`makeRuntimeFragmentExecutionContextOverride`
+   从显式 parent 派生。输入不消费、失败不发布，与原 vector override 共用合并实现。
+   Native 有序链不等于源码 Ref 可装多个 Fragment。
+2. **待实现的类型／产物**：Slot 声明参数解析、名义 Ref 类型／ownership／资源事实、
+   canonical／sealing／container round-trip；不能插入枚举导致旧 wire type 值漂移，
+   不支持的读者 fail closed。测试同形异槽、contract 变化、伪造事实及递归资源载荷拒绝。
+3. **待实现的宿主桥**：严格 singleton 导入、拥有／借用参数、拥有返回与 Runtime drop；
+   carrier／contract 错误、失败回滚、卸载及恰好一次 cleanup。
+4. **待实现的源码 apply**：名字 operand 解析、一次求值与 region borrow、effect 固定点、
+   显式 context lowering／独立 verifier；重复／嵌套、同槽遮蔽、其他槽保留、正常退出／
+   return／`?`／失败清理，以及禁止 handler 重入的回归。
+5. **端到端完成门**：真实两包 verified container 的 Ref 导入／源码应用、参数／返回
+   transfer 与错误候选。只有这些通过才能将 `source-ref-apply` 标为 implemented；
+   方向确认和 native 支撑不关闭源码缺口、历史 TBD 或发布批准。
+
+本轮 native 回归检查重复派生、同槽替换／None、其他槽保留、错误 contract／多槽／
+未初始化输入／输出别名拒绝，且 factory 不重复。寿命矩阵扩为 1536 组，包含 owned／
+borrowed 环境、直接／快照派生 BindingSet／C++ context／C ABI、执行中释放或替换、
+调用方记录销毁、重复 resume、完成／逃逸／无效控制／抛出失败，并检查 cleanup 顺序。
+并发测试中两个 reader 从冻结 parent 与宿主选择快照派生独立 context，另两个走原路径；
+这是不可变 native 环境的回归，不开放源码 Send／Sync。
+
+严格构建的完整非 hardware 门禁 77／77 通过（208.49 秒）；最后扩展并发夹具后另行
+重建并运行 Runtime 两项、设计状态与 inventory，4／4 通过。Windows ASan／UBSan
+Runtime 两项 2／2，通过 WSL Arch Linux Clang 22.1.8 C++17 的直接 Runtime 与并发
+ASan／UBSan 编译／执行。方向状态门额外拒绝回退为 scope-open，不允许提前宣称源码
+完成。本轮没有新的匹配性能采样，不改旧证据身份锚点或释放／发布门禁。
 
 ## 宿主控制的发现与注入
 

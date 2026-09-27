@@ -115,9 +115,9 @@ bool snapshotRuntimeFragmentCandidates(
     RuntimeFragmentCandidateSnapshot& output,
     std::string& error);
 
-// Move-only, generation-pinned runtime value corresponding to the language
-// type RuntimeFragmentRef<S>. Construction performs all identity, ABI and
-// environment validation once. Dispatch may then use descriptor()/environment()
+// Move-only, generation-pinned native runtime value. The planned Luna source
+// type RuntimeFragmentRef<S> is not yet exposed. Construction validates identity,
+// ABI and environment once. Dispatch may then use descriptor()/environment()
 // without repeating those checks.
 class RuntimeFragmentRef {
 public:
@@ -233,6 +233,10 @@ private:
         const RuntimeFragmentBindingSet&, const RuntimeSlotRequirement&,
         std::vector<RuntimeFragmentRef>, RuntimeFragmentBindingSet&,
         std::string&);
+    friend bool makeRuntimeFragmentBindingOverrideFromSnapshot(
+        const RuntimeFragmentBindingSet&, const RuntimeSlotRequirement&,
+        const RuntimeFragmentBindingSet&, RuntimeFragmentBindingSet&,
+        std::string&);
     friend bool makeRuntimeFragmentExecutionContext(
         const RuntimeFragmentBindingSet&,
         RuntimeFragmentExecutionContext&, std::string&);
@@ -259,6 +263,18 @@ bool makeRuntimeFragmentBindingOverride(
     const RuntimeFragmentBindingSet& base,
     const RuntimeSlotRequirement& slot,
     std::vector<RuntimeFragmentRef> replacement,
+    RuntimeFragmentBindingSet& output, std::string& error);
+
+// Shares an already validated, immutable replacement snapshot without moving
+// references or calling factories. Replacement must be initialized and either
+// empty (local None) or contain only the exact requested Slot's ordered chain.
+// All other base Slot entries are preserved. Neither input is changed; each
+// derived snapshot independently pins the shared environments/generations.
+// This is a native preparation API, not a source Ref/apply or a C ABI handle.
+bool makeRuntimeFragmentBindingOverrideFromSnapshot(
+    const RuntimeFragmentBindingSet& base,
+    const RuntimeSlotRequirement& slot,
+    const RuntimeFragmentBindingSet& replacement,
     RuntimeFragmentBindingSet& output, std::string& error);
 
 // Explicit data-plane capability passed from a host entry boundary to
@@ -290,6 +306,10 @@ private:
     friend bool makeRuntimeFragmentExecutionContext(
         const RuntimeFragmentBindingSet&,
         RuntimeFragmentExecutionContext&, std::string&);
+    friend bool makeRuntimeFragmentExecutionContextOverride(
+        const RuntimeFragmentExecutionContext&, const RuntimeSlotRequirement&,
+        const RuntimeFragmentBindingSet&, RuntimeFragmentExecutionContext&,
+        std::string&);
     std::shared_ptr<const RuntimeFragmentExecutionContextState> state_;
 };
 
@@ -297,5 +317,14 @@ bool makeRuntimeFragmentExecutionContext(
     const RuntimeFragmentBindingSet& bindings,
     RuntimeFragmentExecutionContext& output,
     std::string& error);
+
+// Derives a local context from an explicit, initialized parent and the same
+// restricted replacement snapshot as the override API above. No MoonRuntime
+// lookup, TLS, safe-point publication, or mutation of the parent is performed.
+bool makeRuntimeFragmentExecutionContextOverride(
+    const RuntimeFragmentExecutionContext& base,
+    const RuntimeSlotRequirement& slot,
+    const RuntimeFragmentBindingSet& replacement,
+    RuntimeFragmentExecutionContext& output, std::string& error);
 
 } // namespace luna::runtime

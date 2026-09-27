@@ -675,10 +675,26 @@ bool makeRuntimeFragmentBindingOverride(
         return false;
     }
 
-    std::shared_ptr<const RuntimeFragmentBindingSetState> replacementState;
+    RuntimeFragmentBindingSet replacementSnapshot;
     if (!buildRuntimeFragmentBindingState(
-            std::move(replacement), true, replacementState, error))
+            std::move(replacement), true, replacementSnapshot.state_, error))
         return false;
+    return makeRuntimeFragmentBindingOverrideFromSnapshot(
+        base, slot, replacementSnapshot, output, error);
+}
+
+bool makeRuntimeFragmentBindingOverrideFromSnapshot(
+    const RuntimeFragmentBindingSet& base,
+    const RuntimeSlotRequirement& slot,
+    const RuntimeFragmentBindingSet& replacement,
+    RuntimeFragmentBindingSet& output, std::string& error) {
+    error.clear();
+    if (!base.state_ || !replacement.state_ || output ||
+        !validIdentity(slot.slotId) || !validIdentity(slot.contractId)) {
+        error = "runtime Fragment local override input is invalid";
+        return false;
+    }
+    const auto& replacementState = replacement.state_;
     if (replacementState->entries.size() > 1 ||
         (!replacementState->entries.empty() &&
          (replacementState->entries.front().slot.slotId != slot.slotId ||
@@ -813,6 +829,24 @@ bool makeRuntimeFragmentExecutionContext(
     state->bindings = bindings;
     output.state_ = std::move(state);
     return true;
+}
+
+bool makeRuntimeFragmentExecutionContextOverride(
+    const RuntimeFragmentExecutionContext& base,
+    const RuntimeSlotRequirement& slot,
+    const RuntimeFragmentBindingSet& replacement,
+    RuntimeFragmentExecutionContext& output, std::string& error) {
+    error.clear();
+    if (!base.state_ ||
+        base.state_->magic != RuntimeFragmentExecutionContextMagic || output) {
+        error = "runtime Fragment local context override input is invalid";
+        return false;
+    }
+    RuntimeFragmentBindingSet derived;
+    if (!makeRuntimeFragmentBindingOverrideFromSnapshot(
+            base.state_->bindings, slot, replacement, derived, error))
+        return false;
+    return makeRuntimeFragmentExecutionContext(derived, output, error);
 }
 
 bool RuntimeFragmentExecutionContext::dispatch(

@@ -202,7 +202,7 @@ foreach(language IN ITEMS en zh-CN)
     string(SUBSTRING "${text}" ${acceptance_begin_at} ${acceptance_length} acceptance)
     set(expected_acceptance_rows
         "| `host-ref` | `implemented` |"
-        "| `source-ref-apply` | `scope-open` |"
+        "| `source-ref-apply` | `implementation-open` |"
         "| `candidate-snapshot` | `implemented` |"
         "| `candidate-aggregation` | `host-managed` |"
         "| `candidate-notification` | `host-managed` |"
@@ -221,6 +221,12 @@ foreach(language IN ITEMS en zh-CN)
         message(FATAL_ERROR
             "${profile} v1 acceptance scope drifted. Source values, optional host "
             "infrastructure, deferred capabilities and approval must remain distinct.")
+    endif()
+    string(REPLACE "| `source-ref-apply` | `implementation-open` |"
+                   "| `source-ref-apply` | `scope-open` |" stale_scope "${acceptance}")
+    v1_acceptance_rows_match("${stale_scope}" "${expected_acceptance_rows}" accepted)
+    if(accepted)
+        message(FATAL_ERROR "v1 classifier accepted the obsolete source scope disposition")
     endif()
     # In-memory negative fixtures exercise the same classifier without
     # modifying documentation, generating files or adding a CTest target.

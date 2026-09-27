@@ -77,6 +77,9 @@ apply measured[7] {
 同一 operand 位置扩展为已验证的 `RuntimeFragmentRef<S>`，而不是增加 `dynamic apply`。
 这是尚未实施的源码扩展方向：当前 `apply` 仍解析静态命名 Fragment，不接受运行时
 Ref 变量；C++ 宿主的 `RuntimeFragmentRef` 不能据此当作已存在的 Luna 类型。
+[源码实施切片](slot_fragment_runtime_plan.zh-CN.md#源码级-refapply-的实施切片2026-09-28)
+已选择优先打通宿主提供的 affine Ref 与显式 parent 下的局部应用；可复用的 native
+快照派生已实现，不等于源码类型或宿主桥已经完成。
 
 静态组合必须展开成有限 CFG。Fragment body 直接或相互调用 Slot，且 active binding
 会重新进入该 Fragment 时，语义分析与 CFG builder 都会拒绝。这是构造期的环检查，

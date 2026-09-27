@@ -88,6 +88,9 @@ cost. The confirmed runtime plan extends the same operand position to a verified
 This is an unimplemented source extension: current `apply` still resolves a
 statically named Fragment, not a runtime Ref variable. A C++ host
 `RuntimeFragmentRef` is not an already-available Luna type.
+The [source implementation slices](slot_fragment_runtime_plan.md#source-refapply-implementation-slices-2026-09-28)
+now prioritize host-supplied affine Refs and explicit-parent local application.
+Reusable native snapshot derivation is implemented, not the source type or bridge.
 
 Static composition must expand to a finite CFG. A Fragment body that directly
 or mutually invokes Slots whose active bindings re-enter that Fragment is

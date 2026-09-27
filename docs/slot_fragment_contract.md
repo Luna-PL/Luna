@@ -69,7 +69,7 @@ or release approval.
 | Boundary | State | Evidence / actual remaining work |
 | --- | --- | --- |
 | `host-ref` | `implemented` | C++ move-only refs, owned/borrowed environments, factories/cleanup and generation pins; `luna.runtime-fragment-v1`. |
-| `source-ref-apply` | `scope-open` | Luna has no transferable Ref construction/import/parameter/return type or runtime Ref `apply` operand. The planned same-operand extension remains; decide next-stage scope rather than claiming completion or permanently deferring it without direction. |
+| `source-ref-apply` | `implementation-open` | Source Ref/apply is the selected next direction: host-supplied affine Refs and local application under an explicit parent. Frozen-snapshot derivation support is implemented; source types, host handle bridge, runtime-valued operand and end-to-end gates remain unimplemented; see implementation slices. |
 | `candidate-snapshot` | `implemented` | `snapshotRuntimeFragmentCandidates(generation, slot, ...)` filters one explicitly supplied generation by exact Slot/Contract and pins an immutable snapshot; not an all-loaded-package global query. |
 | `candidate-aggregation` | `host-managed` | Hosts know the packages they load and may compose per-generation candidates. Runtime has no built-in global candidate set/cross-generation aggregate query. A convenience API is a later scope choice, not a hot-path defect. |
 | `candidate-notification` | `host-managed` | Load/activation results and generation identities let hosts observe changes; no built-in candidate event bus or automatic discovery, ordering, winner selection or injection. |
@@ -90,13 +90,13 @@ Source pointers: [host APIs](../src/runtime/RuntimeFragment.h),
 [per-generation discovery](../src/runtime/RuntimeFragment.cpp),
 [static apply parser](../src/parser/ParserStatements.cpp) and
 [real cross-package container loading](../tests/moonir_canonical_runtime_slot_container_test.cpp).
-The latest production Runtime commit is `bc9d6fd`, with the implementation stage's
+The frozen-identity measurement anchor is `bc9d6fd`, with that stage's
 77/77 non-hardware regressions and successful three-platform CI; it is also the
 observation build. Report commit `7757b77` is tracked separately. Neither that
 report nor this audit commit is the measurement build. Full observations/digests
 are in the [implementation plan](slot_fragment_runtime_plan.md#matched-protocol-frozen-identity-observations-2026-09-28).
 
-The existing strict-warning build passes the eight bounded gates plus documentation
+The audit stage's existing strict-warning build passes the eight bounded gates plus documentation
 inventory, 9/9 (final run: 14.68 seconds); this is not a new full compiler build or a 77-test
 rerun. The new status gate first fails without the acceptance snapshot and then
 passes with it; in-memory negative fixtures also reject premature completion,
@@ -111,15 +111,12 @@ The local repository is not shallow, the candidate commit object exists, and a
 direct `git merge-base --is-ancestor` returns 1; this is not merely missing shallow
 history or an unavailable object.
 
-Prioritize scope selection over a third micro-optimization:
+Source Ref/runtime apply was selected on 2026-09-28, ahead of a third micro-optimization:
 
 1. For native-host v1 acceptance, decide practical performance budgets, stable
    commitments and evidence-storage policy. No global catalog, candidate events
    or handler re-entry is required merely for this acceptance path.
-2. For Luna-source hosts, `source-ref-apply` is actual missing work. First specify
-   nominal Ref types, construction/import APIs, Copy/move/borrow and generation
-   lifetimes, and explicit-context propagation for local runtime `apply`. Do not
-   pick new syntax or change the public ABI before resolving this scope.
+2. `source-ref-apply` is actual missing work. The [source implementation slices](slot_fragment_runtime_plan.md#source-refapply-implementation-slices-2026-09-28) start with a frozen singleton and explicit parent for host ingress, nominal types and local apply. Source `.bind`, loading policy and handler re-entry are not part of this first increment.
 
 `tests/luna_0_3_design_contract.cmake` protects both languages' complete classification
 against conflating source gaps, optional host facilities, deferred capabilities

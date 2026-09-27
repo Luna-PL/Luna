@@ -260,6 +260,145 @@ bool stageFragment(
     return static_cast<bool>(binding);
 }
 
+int testSnapshotOverrides(const LunaRuntimeFragmentDescriptorV1& original) {
+    using namespace luna::runtime;
+    auto first = original;
+    first.execute = executeFirstChainFragment;
+    auto second = original;
+    second.fragment_id = "fragment:snapshot-second";
+    second.fragment_contract_id = "contract:snapshot-second";
+    second.execute = executeSecondChainFragment;
+    auto other = first;
+    other.fragment_id = "fragment:snapshot-other";
+    other.fragment_contract_id = "contract:snapshot-other";
+    other.slot_id = "slot:snapshot-other";
+    auto incompatible = second;
+    incompatible.fragment_id = "fragment:snapshot-incompatible";
+    incompatible.fragment_contract_id = "contract:snapshot-incompatible";
+    incompatible.slot_contract_id = "contract:snapshot-incompatible-slot";
+    const RuntimeSlotRequirement slot{first.slot_id, first.slot_contract_id};
+    const RuntimeSlotRequirement otherSlot{other.slot_id, other.slot_contract_id};
+    std::string error;
+    const auto freeze = [&](const auto& descriptor, auto& output) {
+        Runtime runtime;
+        Runtime::PinnedBinding binding;
+        RuntimeFragmentRef reference;
+        FactoryArguments factory{42};
+        if (!stageFragment(runtime, std::make_shared<int>(1), &descriptor, binding, error) ||
+            !makeOwnedRuntimeFragmentRef(binding,
+                {descriptor.slot_id, descriptor.slot_contract_id},
+                {descriptor.factory_contract_id, &factory}, reference, error))
+            return false;
+        std::vector<RuntimeFragmentRef> references;
+        references.push_back(std::move(reference));
+        return makeRuntimeFragmentBindingSet(std::move(references), output, error);
+    };
+    RuntimeFragmentBindingSet firstSnapshot, secondSnapshot, otherSnapshot, incompatibleSnapshot;
+    RuntimeFragmentBindingSet none, base;
+    if (!freeze(first, firstSnapshot) || !freeze(second, secondSnapshot) ||
+        !freeze(other, otherSnapshot) || !freeze(incompatible, incompatibleSnapshot) ||
+        !makeRuntimeFragmentBindingSet({}, none, error) ||
+        !makeRuntimeFragmentBindingOverrideFromSnapshot(
+            firstSnapshot, otherSlot, otherSnapshot, base, error))
+        return fail("reusable snapshot fixture did not initialize");
+    const auto factories = factoryCalls.load();
+    const auto destructions = destroyCalls.load();
+    RuntimeFragmentExecutionContext parent;
+    if (!makeRuntimeFragmentExecutionContext(base, parent, error))
+        return fail("reusable snapshot parent context did not initialize");
+    int argument = 42;
+    const RuntimeFragmentArguments arguments{
+        first.slot_arguments_layout_id, sizeof(argument), alignof(int), &argument};
+    const auto checkTrace = [&](const auto& context, const auto& requirement,
+                                const std::vector<int>& expected, bool escape = false) {
+        std::vector<int> trace;
+        activeChainTrace = &trace;
+        RuntimeFragmentDispatchOutcome outcome;
+        const bool success = context.dispatchWithOutcome(
+            requirement, arguments, escape ? recordEscapingChainBase : recordChainBase,
+            &trace, outcome, error);
+        activeChainTrace = nullptr;
+        return success && trace == expected && outcome == (escape
+            ? RuntimeFragmentDispatchOutcome::ContinuationEscaped
+            : RuntimeFragmentDispatchOutcome::Completed);
+    };
+    // The same immutable selected value supports repeated and nested regions.
+    // Replacement shadows rather than appends, and preserves every other Slot.
+    for (unsigned iteration = 0; iteration < 8; ++iteration) {
+        RuntimeFragmentBindingSet derived;
+        RuntimeFragmentExecutionContext local, cleared, restored;
+        if (!makeRuntimeFragmentBindingOverrideFromSnapshot(
+                base, slot, secondSnapshot, derived, error) ||
+            derived.size() != 2 || derived.bindingCount() != 2 ||
+            !makeRuntimeFragmentExecutionContextOverride(
+                parent, slot, secondSnapshot, local, error) ||
+            !makeRuntimeFragmentExecutionContextOverride(local, slot, none, cleared, error) ||
+            !makeRuntimeFragmentExecutionContextOverride(
+                cleared, slot, firstSnapshot, restored, error) ||
+            !checkTrace(derived, slot, {2, 0, 3}) ||
+            !checkTrace(local, slot, {2, 0, 3}) ||
+            !checkTrace(local, otherSlot, {1, 0, 4}) ||
+            !checkTrace(cleared, slot, {0}) ||
+            !checkTrace(cleared, otherSlot, {1, 0, 4}) ||
+            !checkTrace(restored, slot, {1, 0, 4}) ||
+            !checkTrace(local, slot, {2, 0}, true) ||
+            !checkTrace(parent, slot, {1, 0, 4}))
+            return fail("snapshot override consumed a reference, appended a chain, or changed its parent");
+    }
+    RuntimeFragmentBindingSet uninitialized;
+    const auto reject = [&](const auto& source, const auto& requirement, const auto& selected) {
+        RuntimeFragmentBindingSet result;
+        error = "stale error";
+        return !makeRuntimeFragmentBindingOverrideFromSnapshot(
+            source, requirement, selected, result, error) && !result &&
+            !error.empty() && error != "stale error";
+    };
+    if (!reject(uninitialized, slot, secondSnapshot) ||
+        !reject(base, slot, uninitialized) || !reject(base, slot, otherSnapshot) ||
+        !reject(base, slot, incompatibleSnapshot) || !reject(base, slot, base))
+        return fail("snapshot override accepted an uninitialized, mismatched, or multi-Slot selection");
+    for (const std::string& invalid : {std::string{}, std::string("bad\0id", 6),
+                                      std::string("bad\nid"), std::string("bad\rid"),
+                                      std::string("bad\tid"), std::string(4096, 'x')}) {
+        if (!reject(base, RuntimeSlotRequirement{invalid, slot.contractId}, none) ||
+            !reject(base, RuntimeSlotRequirement{slot.slotId, invalid}, none))
+            return fail("snapshot override accepted a malformed Slot identity");
+    }
+    // Alias/initialized outputs must not replace a live input or its pins.
+    const void* parentIdentity = parent.opaque();
+    RuntimeFragmentExecutionContext invalidParent, result;
+    if (makeRuntimeFragmentBindingOverrideFromSnapshot(
+            base, slot, secondSnapshot, base, error) || error.empty() ||
+        makeRuntimeFragmentBindingOverrideFromSnapshot(
+            base, slot, secondSnapshot, secondSnapshot, error) || error.empty() ||
+        makeRuntimeFragmentExecutionContextOverride(
+            parent, slot, secondSnapshot, parent, error) || error.empty() ||
+        parent.opaque() != parentIdentity ||
+        makeRuntimeFragmentExecutionContextOverride(
+            invalidParent, slot, secondSnapshot, result, error) || result || error.empty())
+        return fail("snapshot override overwrote a live output or accepted an invalid parent");
+    for (const auto* selected : {&uninitialized, &otherSnapshot, &incompatibleSnapshot, &base}) {
+        if (makeRuntimeFragmentExecutionContextOverride(
+                parent, slot, *selected, result, error) || result || error.empty())
+            return fail("context override bypassed replacement validation");
+    }
+    RuntimeFragmentExecutionContext retained;
+    if (!makeRuntimeFragmentExecutionContextOverride(
+            parent, slot, secondSnapshot, retained, error) ||
+        factoryCalls.load() != factories || destroyCalls.load() != destructions)
+        return fail("snapshot preparation reran a factory or released a live environment");
+    firstSnapshot = secondSnapshot = otherSnapshot = incompatibleSnapshot = base = none = {};
+    parent = {};
+    if (destroyCalls.load() != destructions + 2 ||
+        !checkTrace(retained, slot, {2, 0, 3}) ||
+        !checkTrace(retained, otherSlot, {1, 0, 4}))
+        return fail("derived context failed to pin selected and unrelated environments");
+    retained = {};
+    if (destroyCalls.load() != destructions + 4)
+        return fail("reusable snapshots leaked or destroyed an environment more than once");
+    return 0;
+}
+
 struct ScopedActivationProbe {
     const luna::runtime::RuntimeFragmentBindingSet* bindings = nullptr;
     const luna::runtime::RuntimeSlotRequirement* slot = nullptr;
@@ -536,6 +675,7 @@ struct DispatchLifetimeProbe {
     bool repeatResume = false;
     bool retainedThroughout = true;
     bool environmentBeforeModule = false;
+    unsigned factoryCalls = 0;
     int32_t control = LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1;
 
     void releasePublishedHandles() {
@@ -580,6 +720,7 @@ struct LifetimeEnvironment {
 int32_t createLifetimeEnvironment(const void* arguments, void** output) {
     auto& probe = *const_cast<DispatchLifetimeProbe*>(
         static_cast<const DispatchLifetimeProbe*>(arguments));
+    ++probe.factoryCalls;
     *output = new LifetimeEnvironment(probe.environmentDestructions);
     return 0;
 }
@@ -645,12 +786,13 @@ int testDispatchLifetime(const LunaRuntimeFragmentDescriptorV1& original) {
     const RuntimeFragmentArguments arguments{
         descriptor.slot_arguments_layout_id, sizeof(argument), alignof(int), &argument};
     // One and chain; owned and borrowed environments; BindingSet, C++ context,
-    // and C ABI; release before resume or in base; clear or replace with None;
+    // and C ABI, directly or derived from a reusable frozen snapshot; release
+    // before resume or in base; clear or replace with None;
     // mutate/destroy caller identities/carrier; repeated resume; completed,
     // escaped, invalid, and throwing continuation results.
     for (unsigned chainLength : {1u, 2u})
     for (bool borrowed : {false, true})
-    for (unsigned entry : {0u, 1u, 2u})
+    for (unsigned entry : {0u, 1u, 2u, 3u, 4u, 5u})
     for (bool releaseInHandler : {false, true})
     for (bool replace : {false, true})
     for (bool destroyCallerRecords : {false, true})
@@ -703,18 +845,38 @@ int testDispatchLifetime(const LunaRuntimeFragmentDescriptorV1& original) {
             if (!makeRuntimeFragmentChainBindingSet(
                     std::move(references), probe.bindings, error))
                 return fail("dispatch lifetime BindingSet did not initialize");
-            if (entry != 0) {
-                if (!makeRuntimeFragmentExecutionContext(
+            if (entry >= 3) {
+                RuntimeFragmentBindingSet empty;
+                RuntimeFragmentBindingSet derived;
+                if (!makeRuntimeFragmentBindingSet({}, empty, error))
+                    return fail("snapshot lifetime base did not initialize");
+                if (entry == 3) {
+                    if (!makeRuntimeFragmentBindingOverrideFromSnapshot(
+                            empty, slot, probe.bindings, derived, error))
+                        return fail("snapshot lifetime override did not initialize");
+                    probe.bindings = std::move(derived);
+                } else {
+                    RuntimeFragmentExecutionContext base;
+                    if (!makeRuntimeFragmentExecutionContext(empty, base, error) ||
+                        !makeRuntimeFragmentExecutionContextOverride(
+                            base, slot, probe.bindings, probe.context, error))
+                        return fail("snapshot lifetime context override did not initialize");
+                }
+            }
+            if (entry % 3 != 0) {
+                if (entry < 3 && !makeRuntimeFragmentExecutionContext(
                         probe.bindings, probe.context, error))
                     return fail("dispatch lifetime context did not initialize");
                 probe.bindings = {};
             }
+            if (probe.factoryCalls != (borrowed ? 0u : chainLength))
+                return fail("snapshot override reconstructed a Fragment environment");
         } // The published handle is now the only owner of environments/generation.
         activeLifetimeProbe = &probe;
         RuntimeFragmentDispatchOutcome outcome = RuntimeFragmentDispatchOutcome::Completed;
         bool succeeded;
         int32_t status = LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1;
-        if (entry == 2) {
+        if (entry % 3 == 2) {
             status = luna_runtime_fragment_dispatch_v1(
                 probe.context.opaque(), probe.callerSlot->slotId.c_str(),
                 probe.callerSlot->contractId.c_str(), probe.callerArguments->layoutId.c_str(),
@@ -724,7 +886,7 @@ int testDispatchLifetime(const LunaRuntimeFragmentDescriptorV1& original) {
             outcome = status == LUNA_RUNTIME_FRAGMENT_DISPATCH_CONTINUATION_ESCAPED_V1
                 ? RuntimeFragmentDispatchOutcome::ContinuationEscaped
                 : RuntimeFragmentDispatchOutcome::Completed;
-        } else if (entry == 1) {
+        } else if (entry % 3 == 1) {
             succeeded = probe.context.dispatchWithOutcome(
                 *probe.callerSlot, *probe.callerArguments,
                 releaseLifetimeBase, &probe, outcome, error);
@@ -742,8 +904,8 @@ int testDispatchLifetime(const LunaRuntimeFragmentDescriptorV1& original) {
                                     : RuntimeFragmentDispatchOutcome::Completed))
             return fail("dispatch lifetime pin changed continuation control results");
         if (repeatResume || control == 99 || control == -99) {
-            if ((entry == 2 && status != LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1) ||
-                (entry != 2 && error.find(control == 99 ? "invalid control result"
+            if ((entry % 3 == 2 && status != LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1) ||
+                (entry % 3 != 2 && error.find(control == 99 ? "invalid control result"
                                          : control == -99 ? "lifetime continuation probe"
                                                           : "single-shot continuation contract") == std::string::npos))
                 return fail("dispatch lifetime pin lost the continuation failure diagnostic");
@@ -753,7 +915,7 @@ int testDispatchLifetime(const LunaRuntimeFragmentDescriptorV1& original) {
             return fail("dispatch snapshot leaked or released generation before environments");
         if (replace) {
             unsigned resumes = 0;
-            const bool ranNone = entry == 0
+            const bool ranNone = entry % 3 == 0
                 ? probe.bindings.dispatch(slot, arguments, resumeActivation, &resumes, error)
                 : probe.context.dispatch(slot, arguments, resumeActivation, &resumes, error);
             if (!ranNone || resumes != 1 || probe.handlers != chainLength)
@@ -1943,6 +2105,7 @@ int main() {
     }
 
     if (testScopedActivation(descriptor) != 0) return 1;
+    if (testSnapshotOverrides(descriptor) != 0) return 1;
     if (testDispatchLifetime(descriptor) != 0) return 1;
     if (testFactoryLifetime(descriptor) != 0) return 1;
     return testCleanupReentry(descriptor);

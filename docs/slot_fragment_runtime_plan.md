@@ -5,7 +5,7 @@ English | [简体中文](slot_fragment_runtime_plan.zh-CN.md)
 > Status: Confirmed implementation plan, 2026-09-23
 > Scope: type-safe, host-controlled runtime injection
 > Current acceptance view (2026-09-28): see the [v1 acceptance snapshot](slot_fragment_contract.md#v1-acceptance-snapshot-2026-09-28).
-> The native-host loop is implemented; Luna source-level runtime Ref/apply remains a scope decision. Historical stage completion does not mean the entire source plan is implemented.
+> The native-host loop is implemented. Source Ref/apply was selected as the next direction on 2026-09-28; the slices below distinguish implemented native support from unimplemented source capabilities.
 
 ## Model
 
@@ -37,10 +37,153 @@ export fragment trace[prefix: string](value) for pipeline {
 }
 ```
 
-Static apply remains a zero-Runtime-cost specialization. Binding or importing a
+Static apply remains a zero-Runtime-cost specialization. In the final design, binding or importing a
 fragment creates a `RuntimeFragmentRef<S>` that owns or borrows its explicit
 environment and pins its module generation. `apply` borrows that reference;
 each slot invocation creates a fresh single-shot activation.
+
+## Source Ref/apply implementation slices (2026-09-28)
+
+The selected direction lets Luna source act as a host: receive, select and locally
+apply runtime references. Start with host-supplied verified Refs, without also
+adding a source loader, global candidate index, handler re-entry or keywords.
+This is **target syntax, not currently compilable**; only native snapshot support
+is implemented in this slice.
+
+```luna
+export slot pipeline(value: i32);
+
+// Unqualified move-only parameters are shared borrows, not ownership transfers.
+runtime fn host_entry(selected: RuntimeFragmentRef<pipeline>) {
+    apply selected {
+        pipeline(42) { print("base"); }
+    }
+}
+
+// Explicit affine parameters take ownership; owning returns carry no local context.
+fn transfer(selected: affine RuntimeFragmentRef<pipeline>)
+    -> affine RuntimeFragmentRef<pipeline> {
+    return selected;
+}
+```
+
+### Surface, identity and ownership
+
+The dedicated keywords remain `slot fragment apply resume`. `RuntimeFragmentRef<S>`
+is a builtin type name; `S` resolves to an exact Slot declaration. Initially keep
+name operands: `apply trace[arguments] { ... }` composes a static Fragment;
+`apply selected { ... }` locally overrides using a Ref value. Ref operands take
+no environment arguments: construction fixes the environment, not each apply or
+Slot invocation. Arbitrary expressions such as `apply choose() { ... }` are not
+part of the first slice; there is no second apply keyword.
+
+TypeId is parameterized by stable nominal Slot declaration identity, not parameter
+shape, a user string or metadata. Sealed ContractId is separately matched by
+artifact verification and host ingress. Do not feed the final ContractId back into
+its dependent TypeId, creating an identity cycle. Same-shaped Slots remain distinct;
+old Refs never silently upgrade contracts. Equal ShapeId/handle layout permits no
+conversion. Candidate data is not a Ref; source has no null Ref or raw-pointer cast
+constructor.
+
+Owning local Refs are affine: movable, discardable and returnable, not implicitly
+copyable. Existing unqualified move-only parameters are shared borrows; explicit
+affine parameters take ownership. Apply evaluates once and shared-borrows throughout
+the region. Sequential apply reuses the Ref; each Slot call creates a fresh
+single-shot activation. The continuation, not the Ref lifetime, is single-shot.
+Reject moving/freeing its owner during borrowing, escaping a borrow or returning
+an owning Ref from a borrowed parameter.
+
+### Host bridge and generation lifetime
+
+Initially use the existing verified generation/factory path, then explicitly wrap
+a native Ref in frozen state with exactly one Slot and one Fragment. Arbitrary
+BindingSets cannot stand in for source Refs. Ingress checks nominal Slot, sealed
+contract, carrier ABI and owning/borrowed convention before invoking source code.
+Import/return/drop bridge symbols and the carrier ABI remain unimplemented; this
+slice adds no C source-handle ingress and changes no v1 descriptor/execute signature.
+
+The source owner uniquely owns its wrapper; internal environment/generation pins
+may be shared without exposing source Copy. Drop needs Runtime glue, never Luna
+`free` for a C++ object or plugin environment. Final release destroys environments
+before unloading modules; borrowed native environments still need an explicit
+environment lease. Exceptions, return and `?` must clean up region contexts/owners.
+
+Source `.bind` is not the initial constructor: execution contexts contain only a
+BindingSet, with no MoonRuntime/generation/catalog back-pointer. Declaration
+addresses, runtime metadata and TLS cannot prove an escaping Ref's module lifetime.
+Future construction needs an explicit verified, generation-pinned offer/construction
+capability; acquisition is a separate task, not an implemented reflection feature.
+
+### Local apply and explicit context
+
+Derive from a valid explicit parent, replacing only exact `S` with One(ref) while
+preserving other Slots. Nested same-Slot regions shadow, never implicitly append;
+exit uses the parent. No global BindingSet publication, safe point, candidate
+enumeration or automatic winner selection occurs. Host source chooses the Ref
+and its application site.
+
+The direct-call context-effect fixed point must recognize runtime apply, with
+independent MoonIR verifier recomputation. Do not synthesize an empty root; hosts
+may explicitly supply an initialized None context. Handler bodies still cannot
+acquire/pass context or directly/transitively dispatch dynamically. Context-aware
+indirect calls, Ref-bearing exported Slot/Fragment payloads, non-Copy environments,
+non-unit and multi-shot remain outside this slice. A normal runtime entry's Ref
+handle bridge is not an expanded public Slot resource-payload ABI.
+
+### Internal representation trade-offs
+
+| Approach | Benefit | Cost / decision |
+| --- | --- | --- |
+| Consume native Ref per apply, reconstruct next time | Smallest implementation surface | Breaks borrowing/repeated apply, reruns factories; reject |
+| Make source Ref Copy/reference-counted | Direct multi-installation | Changes affine semantics, expands aliasing/concurrency promises; reject |
+| Affine wrapper around a frozen singleton BindingSet; local contexts share pins | Reuses validation/cleanup without rebuilding environments; source stays non-Copy | Copies Slot indexes/chain pins at region entry; selected initially, private representation can be optimized |
+
+Current setup grows with base Slots/chains. This is not O(1), allocation-free
+region setup or an arbitrary Ref/environment thread-safety promise. No per-Slot
+invocation reflection/factory is added. Measure region frequency/context size
+before optimizing; never remove validation or borrow callback-destroyable storage.
+
+### Delivery order and completion gates
+
+1. **Implemented native support**: `makeRuntimeFragmentBindingOverrideFromSnapshot`
+   accepts initialized None or a frozen ordered chain for exactly one requested
+   Slot; `makeRuntimeFragmentExecutionContextOverride` derives from an explicit
+   parent. Inputs are not consumed, failure publishes no output, and the vector
+   override shares the merge implementation. Native ordered chains do not make
+   source Refs multi-Fragment values.
+2. **Unimplemented types/artifacts**: Slot declaration arguments, nominal Ref
+   type/ownership/resource facts, canonical/sealing/container round-trip. Do not
+   shift old wire type enum values; unsupported readers fail closed. Test same-shaped
+   distinct Slots, contract changes, forged facts and recursive resource payload rejection.
+3. **Unimplemented host bridge**: strict singleton import, owning/borrowed arguments,
+   owning returns and Runtime drop; carrier/contract errors, rollback, unloading
+   and exactly-once cleanup tests.
+4. **Unimplemented source apply**: name resolution, once-only evaluation/region
+   borrow, effect fixed point, explicit-context lowering/independent verification;
+   repeated/nested apply, shadowing, other Slots, normal/return/`?`/failure cleanup
+   and rejected handler re-entry regressions.
+5. **End-to-end gate**: real two-package verified containers with Ref import/source
+   application, parameter/return transfer and invalid candidates. Only then may
+   `source-ref-apply` become implemented. Direction approval/native support closes
+   neither source gaps, historical TBDs nor release authorization.
+
+Native regressions cover repeated derivation, same-Slot replacement/None,
+preserved other Slots, rejection of mismatched contracts/multiple Slots/
+uninitialized inputs/aliased outputs, and no repeated factory calls. The lifetime
+matrix now has 1536 cases: owned/borrowed environments; direct/snapshot-derived
+BindingSets, C++ contexts and C ABI; release/replacement during execution;
+destroyed caller records; repeated resume; completion/escape/invalid control/
+throwing failure; and cleanup ordering. Two concurrent readers derive independent
+contexts from a frozen parent/selected snapshot while two use the original path.
+This tests immutable native environments, not source Send/Sync eligibility.
+
+The strict build passes all 77 non-hardware gates (208.49 seconds). After the final
+concurrency-fixture extension, rebuild and rerun of the two Runtime gates, design
+status and inventory passes 4/4. Windows ASan/UBSan Runtime gates pass 2/2; direct
+Runtime and concurrency C++17 ASan/UBSan compilation/execution passes on WSL Arch
+Linux Clang 22.1.8. The status gate additionally rejects obsolete scope-open state,
+without claiming source completion. No new matched performance sampling, evidence
+anchor replacement, or release-gate change occurs in this stage.
 
 ## Host-controlled discovery and injection
 
