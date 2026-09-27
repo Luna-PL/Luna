@@ -428,6 +428,9 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/runtime_fragment_concurrency_test.cpp` | 显式握手的并发宿主发布／分派、Runtime 销毁后 pinned context 与最终 lease 清理；实现和测试一同插桩 |
 | `tests/runtime_fragment_benchmark.cmake` | 交错成本探针的 CSV／构建身份／独立采样顺序与精确计数检查，不用 ns/op 判定成败 |
 | `tests/compiled_fragment_benchmark.cmake` | 真实两包编译产物对比探针每配置 81 样本顺序、调用数／checksum、v2 配置／来源与产物身份、CLI 拒绝检查，无计时阈值 |
+| `tests/compiled_fragment_probe_protocol.cmake` | 纯记录／排列调度校验、共同来源与产物一致性，不启动程序或写采样文件 |
+| `tests/compiled_fragment_series.cmake` | 显式启动全新测量进程，以全部排列平衡组内顺序，全部校验后归档原始记录、合并样本和字节摘要 manifest |
+| `tests/compiled_fragment_series_protocol_test.cmake` | 默认非计时的合成记录正例、调度平衡与损坏记录／既有目录拒绝门禁 |
 | `tests/runtime_gpu_error_test.cpp` | GPU/runtime 错误快照行为 |
 | `tests/analysis_protocol.cmake` | `luna.analysis` v1 JSONL envelope、声明记录与 byte span 回归 |
 | `tests/analysis_snapshot_test.cpp` | 内存/路径分析、部分失败状态与 frontend 生命周期回归 |
@@ -1197,6 +1200,9 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/runtime_fragment_concurrency_test.cpp`
 - `tests/runtime_fragment_benchmark.cmake`
 - `tests/compiled_fragment_benchmark.cmake`
+- `tests/compiled_fragment_probe_protocol.cmake`
+- `tests/compiled_fragment_series.cmake`
+- `tests/compiled_fragment_series_protocol_test.cmake`
 - `tests/runtime_fragment_test.cpp`
 - `tests/runtime_gpu_error_test.cpp`
 - `tests/semantic_regressions.cmake`

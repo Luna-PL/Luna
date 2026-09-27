@@ -513,10 +513,9 @@ cmake -Werror=dev -DLUNA_COMPILED_PROBE_EXECUTABLE="$PWD/build/moonir-canonical-
 Windows／多配置构建需调整可执行路径。脚本默认三次迭代用于协议检查，独立核对 81 个
 样本、case/position 平衡、精确 calls/checksum、源码/工作负载 hash、metadata、不完整
 轮次标记及非法 CLI 拒绝，全部验证后才写 CSV。Linux C++17/C++23、macOS 和 Windows
-CI 分别以独立进程运行三种配置，每种使用 10000 次迭代（共 243 个样本），将三份 CSV
-与 native 探针一起保留在 14 天的 `fragment-cost-*`
-artifact 内。ns/op 和 setup 时长都不作为成败阈值。共享 runner 样本不关闭 SF008：
-多进程复测、受控机器状态、跨配置采样顺序平衡和稳定证据归档仍属于性能验收工作。
+CI 先运行三次迭代的 CLI 预检，再运行下面的多进程系列。ns/op 和 setup 时长都不作为
+成败阈值。共享 runner 样本不关闭 SF008：受控机器状态、更广的复测及稳定证据归档
+仍属于性能验收工作。
 脚本默认配置仍是 O0，O2／O3 必须通过 `LUNA_COMPILED_PROBE_PROFILE` 显式选择。
 
 编译器 adapter 在已验证 lowering 前设置 `CodeGenerator` 的 LLVM IR 级别。可选的
@@ -526,3 +525,39 @@ generation `materializationKey` 将产物摘要与生成代码配置分开，包
 完整性及 owner Slot 证据。显式 activation／rollback 可切换配置，旧 pin 仍保留原代码。
 这是兼容的 C++ 源级控制面扩展，不改变容器／sysmeta schema 或 Runtime C ABI。
 key 是可信 loader 的声明，不是加密证明或 native code 沙箱。
+
+#### 多进程重复对比协议
+
+`tests/compiled_fragment_series.cmake` 为每份测量记录启动全新二进制进程，不在系列中
+穿插默认／非法 CLI 预检进程。一轮包含 O0／O2／O3 的全部六种排列：六组各三个进程，
+共 18 个进程、每配置六个独立进程、1458 个 dispatch 样本。每配置在每个组内位置出现
+两次，每对不同配置的有向相邻关系在**组内**出现两次；不声称组间过渡也平衡。
+额外轮次轮转排列组的顺序。轮数允许 1..10，默认 1；迭代默认三次用于 smoke，允许
+无前导零的十进制 1..10000000，CI 使用 10000。
+
+每进程复用 v2 校验器，检查 81 个样本、计数、checksum、构建与产物事实。整个系列
+必须保持 host/plugin 容器摘要、target/layout、构建／来源身份、采样配置与 ORC 策略
+一致；materialization key 分配置保持一致。必需 metadata key 恰好出现一次，SHA-256
+不接受附加后缀。这验证独立进程复测，而不是同一进程重复使用缓存 generation。
+
+全部结果在内存校验后才写 bundle。输出目录必须尚不存在，不覆盖或删除既有路径。
+bundle 包含 `process-N-PROFILE.csv`、前置 process／cycle／block／组内 position／profile
+列的 `samples.csv`，以及最后写出的 `manifest.csv`。manifest 保存共同来源、采样期间
+核对未变化的 runner／validator 源码摘要、各配置 key、
+计数／顺序保证、每份原始文件和合并 CSV 的实际字节 SHA-256。写后读回并按 LF／CRLF
+规范化核对内容，再发布 manifest。写入中断可能留下没有完整 manifest 的部分目录；
+消费者必须验证列出的摘要，不能把目录存在视为成功。摘要证明完整性，不证明真实性、
+干净工作树或可复现性。
+
+```sh
+cmake -Werror=dev -DLUNA_COMPILED_PROBE_EXECUTABLE="$PWD/build/moonir-canonical-test" \
+  -DLUNA_COMPILED_PROBE_ITERATIONS=10000 -DLUNA_COMPILED_SERIES_CYCLES=1 \
+  -DLUNA_COMPILED_SERIES_OUTPUT_DIR="$PWD/build/compiled-fragment-series" \
+  -P tests/compiled_fragment_series.cmake
+```
+
+Linux C++17/C++23、macOS 与 Windows CI 将完整 bundle 和 native 探针一起保留 14 天。
+默认合成 CTest 覆盖 LF／CRLF、轮数 1／2／6／10，拒绝重复 metadata、损坏计数／checksum、
+header／digest、变化的来源、重复／截断调度及既有输出目录，不启动计时探针。这不增加
+语言、容器或 Runtime API。进程／组调度、affinity／功耗及共享 runner 负载仍未受控，
+该协议不关闭性能验收。

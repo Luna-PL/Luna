@@ -119,6 +119,10 @@ script-defined special inputs.
   `moonir-canonical-test` routes its explicit timing mode and default non-timed
   O0/O2/O3 workload and cache/configuration checks. Its CMake script validates
   v2 profile/provenance and 81 samples per profile, not latency.
+  `compiled_fragment_probe_protocol.cmake` is pure shared record/schedule validation;
+  `compiled_fragment_series.cmake` runs opt-in fresh processes and publishes a
+  hash-bound bundle only after validation. Its synthetic protocol test never
+  invokes timing mode.
   `RuntimeDescriptorABI.h` is the installed in-memory descriptor contract;
   `RuntimeDescriptor.h/.cpp` validate one lease-owned registry and provide
   exact typed lookup without defining source-language query syntax.
@@ -987,6 +991,9 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/runtime_fragment_concurrency_test.cpp`
 - `tests/runtime_fragment_benchmark.cmake`
 - `tests/compiled_fragment_benchmark.cmake`
+- `tests/compiled_fragment_probe_protocol.cmake`
+- `tests/compiled_fragment_series.cmake`
+- `tests/compiled_fragment_series_protocol_test.cmake`
 - `tests/runtime_fragment_test.cpp`
 - `tests/runtime_allocation_abi_test.cpp`
 - `tests/runtime_application_host_test.cpp`

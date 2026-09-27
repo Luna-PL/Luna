@@ -50,10 +50,15 @@ for reproduction and interpretation limits.
 The compiler harness also exposes opt-in `--compiled-fragment-cost`. Its default
 CTest path runs 960 non-timed result checks of the actual two-package compiled workload
 across LLVM IR O0/O2/O3, plus configuration/cache rejection and snapshot gates;
-the timing mode is never invoked by default CTest. Platform CI separately runs
-`tests/compiled_fragment_benchmark.cmake` with 10000 iterations, verifying 81
-position-balanced samples per profile (243 total) and exact calls/checksums. Its three CSVs share the 14-day
-`fragment-cost-*` artifact with the native probe. The verified container adapter's
+the timing mode is never invoked by default CTest. The synthetic
+`luna.compiled-fragment-series-protocol` gate checks LF/CRLF records, permutation
+balance and rejection without invoking a timing binary. Platform CI separately
+runs three-iteration CLI preflight and `tests/compiled_fragment_series.cmake`:
+18 fresh measured processes, 10000 iterations, 1458 exact-validated samples.
+Six permutations balance profile positions and directed neighbors within blocks;
+boundaries between blocks remain unclaimed. The bundle's manifest, 18 raw CSVs
+and combined samples share the 14-day `fragment-cost-*` artifact with the native probe.
+The verified container adapter's
 LLVM default remains O0, distinct from the fixture's MoonIR O2; O2/O3 are explicit
 IR optimization profiles and ORC codegen stays at its defaults. Protocol v2
 records the chosen profile and immutable materialization key. These are

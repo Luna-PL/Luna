@@ -655,13 +655,11 @@ Adjust the executable path for Windows/multi-config builds. The script defaults
 to three iterations for a protocol check and independently verifies 81 samples,
 case/position balance, exact calls/checksums, source/workload hashes, metadata,
 partial labeling and invalid CLI rejection. It writes CSV only after validation.
-The script's profile defaults to O0; select O2/O3 explicitly. Linux C++17/C++23,
-macOS and Windows CI run all three in separate processes with 10000 iterations
-(243 samples) and retain three CSVs alongside the native probe in
-`fragment-cost-*` artifacts for 14 days. Neither
+The script's profile defaults to O0; select O2/O3 explicitly. Platform CI runs
+three-iteration CLI preflight, then the multi-process series below. Neither
 ns/op nor setup duration is a pass/fail threshold. These shared-runner samples
-do not close SF008: replicated processes, controlled machine state, cross-profile
-order balancing and stable evidence archival remain acceptance work.
+do not close SF008: controlled machine state, wider replication and stable
+evidence archival remain acceptance work.
 
 The compiler adapter sets `CodeGenerator`'s LLVM IR level before verified
 lowering. The optional generation `materializationKey` keeps artifact digest
@@ -673,3 +671,49 @@ Slot evidence first. Explicit activation/rollback may switch profiles while old
 pins retain their code. This is an additive C++ source control-plane extension,
 not a container/sysmeta schema or Runtime C ABI change. The key is trusted loader
 attestation, not cryptographic proof or a native-code sandbox.
+
+#### Repeated-process comparison protocol
+
+`tests/compiled_fragment_series.cmake` starts one new executable process per
+measured record, without interleaved default/invalid-CLI smoke processes. One
+cycle contains all six O0/O2/O3 permutations: six blocks of three launches,
+18 processes, six independent processes per profile and 1458 dispatch samples.
+Each profile appears twice in each within-block position; each directed distinct
+profile neighbor appears twice **within blocks**. Between-block transitions are
+not claimed balanced. Additional cycles rotate permutation-block order; accepted
+cycles are 1..10, default 1. Iterations default to 3 for a smoke run, accepted
+canonical decimal integers 1..10000000 (no leading zero); CI uses 10000.
+
+Each process reuses the v2 validator for 81 samples, counters, checksums, build
+and artifact facts. All processes must agree on host/plugin container hashes,
+target/layout, build/source identities, sampling configuration and ORC policy;
+materialization keys must agree separately per profile. Required metadata keys
+occur exactly once, and SHA-256 fields reject suffixes. This separates actual
+replication from repeatedly invoking a cached generation in one process.
+
+All results validate in memory before any bundle is written. The requested
+output directory must be fresh; existing paths are never overwritten or removed.
+The bundle contains `process-N-PROFILE.csv`, `samples.csv` prefixed with process,
+cycle, block, within-block position and profile, and a last-written `manifest.csv`.
+The manifest records common provenance, runner/validator source hashes checked
+unchanged during sampling, per-profile keys, counts/order claims,
+actual-byte SHA-256 for every raw file and the combined CSV. Writes are read back
+and checked after LF/CRLF normalization before the manifest is published. An
+interrupted write may leave a partial directory without a complete manifest;
+readers must verify the listed hashes, not treat directory existence as success.
+Hashes establish integrity, not authenticity, clean-tree proof or reproducibility.
+
+```sh
+cmake -Werror=dev -DLUNA_COMPILED_PROBE_EXECUTABLE="$PWD/build/moonir-canonical-test" \
+  -DLUNA_COMPILED_PROBE_ITERATIONS=10000 -DLUNA_COMPILED_SERIES_CYCLES=1 \
+  -DLUNA_COMPILED_SERIES_OUTPUT_DIR="$PWD/build/compiled-fragment-series" \
+  -P tests/compiled_fragment_series.cmake
+```
+
+Linux C++17/C++23, macOS and Windows CI archive the entire bundle alongside the
+native probe for 14 days. The default synthetic CTest checks LF/CRLF fixtures,
+cycles 1/2/6/10 and rejection of duplicate metadata, damaged counters/checksums,
+headers/digests, changed provenance, repeated/truncated schedule and occupied
+output paths, without starting a timing probe. This adds no language, container
+or Runtime API. Process and block scheduling, affinity/power and shared-runner
+load remain uncontrolled; this protocol does not close performance acceptance.

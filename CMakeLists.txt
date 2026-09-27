@@ -1295,6 +1295,11 @@ if(BUILD_TESTING)
     )
     set_tests_properties(luna.benchmark-package-smoke PROPERTIES
         LABELS "benchmark;release")
+    add_test(
+        NAME luna.compiled-fragment-series-protocol
+        COMMAND ${CMAKE_COMMAND} -Werror=dev
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/compiled_fragment_series_protocol_test.cmake
+    )
     if(LUNA_ENABLE_ROCM_SMOKE)
         add_test(
             NAME luna.rocm-smoke

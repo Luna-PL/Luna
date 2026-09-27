@@ -38,9 +38,12 @@ Linux CI 在 C++17/C++23 构建矩阵中都启用该门禁。它只作用于 Lun
 
 编译器测试 harness 也提供可选 `--compiled-fragment-cost`。默认 CTest 只运行实际两包
 编译工作负载在 LLVM IR O0／O2／O3 下的 960 次非计时结果检查，以及配置／缓存拒绝和
-快照门禁，不调用计时模式。各平台 CI 独立运行 `tests/compiled_fragment_benchmark.cmake`，
-使用 10000 次迭代，每个配置核对 81 个位置平衡样本（共 243 个）及精确调用数／checksum。
-三份 CSV 与 native 探针一起保存在 14 天的 `fragment-cost-*` artifact 中。已验证容器
+快照门禁，不调用计时模式。新增 `luna.compiled-fragment-series-protocol` 用合成记录
+检查 LF／CRLF、排列平衡和拒绝行为，不启动计时二进制。各平台 CI 先做三次迭代的 CLI
+预检，再独立运行 `tests/compiled_fragment_series.cmake`：18 个全新测量进程、10000 次
+迭代、1458 个严格校验样本。六种排列平衡组内配置位置及有向相邻关系，组间边界不作
+平衡保证。manifest、18 份原始 CSV 及合并样本与 native 探针一起保存在 14 天的
+`fragment-cost-*` artifact 中。已验证容器
 适配器默认仍为 LLVM IR O0，区别于夹具的 MoonIR O2；O2／O3 必须显式选择，ORC 机器码
 生成保持默认。v2 协议记录实际配置与不可变的 materialization key。这些仅是观察值，
 不是计时阈值或已完成的性能验收。
