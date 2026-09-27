@@ -36,6 +36,8 @@ typedef void (*LunaRuntimeFragmentDestroyFnV1)(void* environment);
 
 // activation is compiler-owned and opaque to plugins and hosts. It carries the
 // Slot arguments and the non-forgeable single-shot continuation state.
+// The token is live only during this synchronous execute call (including
+// nested resume). It must not be retained or used after execute returns.
 typedef void (*LunaRuntimeFragmentExecuteFnV1)(
     void* environment, void* activation);
 

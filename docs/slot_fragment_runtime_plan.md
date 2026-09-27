@@ -1213,3 +1213,41 @@ To rerun, select an allowed CPU and fresh output paths, pass iterations
 10000/100000 and three cycles separately to the pinned series, then use pinned
 evidence export and `--mode pinned` summaries with each commit/digest. Values
 need not reproduce exactly; later report commits are not these observation builds.
+
+#### Scoped synchronous-chain activation storage (2026-09-27)
+
+The first proposed optimization is implemented: internal chain dispatch creates
+an activation on each synchronous handler's call frame, borrowing Slot/Contract
+and carrier records owned by the enclosing dispatch. It no longer invokes the
+public constructor for per-handler heap state and identity-string copies.
+Public owning `RuntimeFragmentActivation` construction, moves and opaque API
+are unchanged, as are C ABI functions/descriptor layouts and the v1 version.
+The same private state type retains owning fields, left empty in internal
+frames, avoiding a second opaque representation.
+
+Both paths share complete activation contract validation. Single-shot, sticky
+failure, downstream diagnostics, continuation escape, exception propagation
+and the complete BindingSet/generation pin remain intact. Handler tokens live
+only during synchronous execute (including nested resume), not after return;
+the old implementation also released activations on return. Payload bounds and
+lifetime remain host duties. Entry-string construction and per-dispatch owning
+record snapshots are unchanged; this is not allocation-free whole dispatch.
+
+The existing `luna.runtime-fragment-v1` test now compares ordinary C++ allocation
+counts for 1/4/64-handler chains with long identities to avoid SSO hiding copies.
+The old implementation fails because counts grow with chain length; the new
+counts match. Fixture construction is outside the counting window, handlers/base
+do not allocate, and aligned/system allocations are not covered. This is not a
+timing threshold. Tests also cover distinct addresses for 64+64 simultaneously
+live activations, matching arguments before/after resume and wrong-identity
+rejection, nested completion/escape, recovery after an inner handler throws, and
+public owning records surviving caller mutation/destruction and two moves.
+
+ASan/UBSan builds directly compile the relevant Runtime implementation into this
+test, instrumenting more than its fixture without contaminating the installed
+AOT runtime archive. Strict-warning standard builds and both Runtime tests pass,
+as do the same two tests under ASan/UBSan. Deep chains remain recursive; tested
+depths are not a bound for arbitrary stack use. No chain-length policy or async
+semantics are added. The full non-hardware CTest suite passes 77/77 (268.39 s),
+including the evidence and summary gates. Matched-protocol timing and controlled acceptance remain
+open; reduced allocation paths are not a measured speedup claim.

@@ -638,6 +638,11 @@ if(LUNA_ENABLE_SANITIZERS)
     # `luna` embeds Runtime.cpp for JIT symbol resolution. Instrument the
     # shared frontend objects and both consumers without contaminating the
     # installed AOT runtime archive with sanitizer symbols.
+    # Instrument Fragment activation/lifetime checks as well as the fixture;
+    # explicit objects satisfy these symbols before the uninstrumented archive.
+    target_sources(runtime-fragment-test PRIVATE
+        src/runtime/MoonRuntime.cpp
+        src/runtime/RuntimeFragment.cpp)
     foreach(target IN ITEMS
             luna luna-frontend analysis-snapshot-test moonir-canonical-test
             moon-container-test moon-container-model-test moon-runtime-test

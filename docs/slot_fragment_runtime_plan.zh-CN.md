@@ -954,3 +954,31 @@ SHA-256 为 `fc7bdaa9bba31506418a0a25f01d09c01f00355c6e7edbc5f6f1ba07248604e1`�
 重跑时使用全新路径，选择允许 CPU，分别给固定 series 指定 10000／100000 次与三轮；
 随后按固定证据导出和 `--mode pinned` 汇总命令使用对应的提交／摘要。重跑数值不要求
 相同；后续报告提交不应被误认成这两批观察的构建提交。
+
+#### 同步链路 activation 作用域存储（2026-09-27）
+
+已实现上述第一项优化：内部链派发在每个同步 handler 的调用帧上创建 activation，
+引用外层 dispatch 自己拥有的 Slot／Contract 与参数载体，不再调用公开构造器做
+每 handler 的堆分配及身份字符串复制。公开 `RuntimeFragmentActivation` 的拥有型
+构造、move 与 opaque API 不变，C ABI 函数／descriptor 布局和 v1 版本不变。
+同一私有 state 类型保留拥有型字段，内部帧让它们为空，以避免增加第二套 opaque 表示。
+
+公开与内部路径共用完整 activation 合法性检查；single-shot、sticky failure、
+下游诊断、continuation escape、异常传播与完整 BindingSet／generation pin 均保留。
+handler token 只在同步 execute（含嵌套 resume）期间有效，不能保存到返回之后使用；
+这与旧实现返回时释放 activation 的寿命一致。载体 payload 的边界／寿命仍由宿主负责。
+入口字符串构造和每次 dispatch 的拥有型记录快照未改，不能称整个派发零分配。
+
+既有 `luna.runtime-fragment-v1` 新增长身份（避免 SSO 遮蔽复制）、1／4／64 成员链的
+普通 C++ 分配计数比较，旧实现会因分配数随链长增长而失败；优化后分配数相同。
+计数窗口不含 fixture 创建，handler／base 不自行分配，不覆盖 aligned／系统分配，
+不是计时阈值。还覆盖 64+64 个同时存活 activation 的地址独立性、resume 前后参数
+匹配／错误身份拒绝、嵌套完成／escape、内层 handler 抛异常后恢复，以及公开对象在
+调用者身份／载体修改及销毁后经两次 move 仍保持自己的记录。
+
+ASan／UBSan 配置为此测试直接编译相关 Runtime 实现，不只 instrument fixture，
+且不污染安装的 AOT runtime archive。标准严格警告构建与两个 Runtime 测试、
+ASan／UBSan 下相同两测试均已通过。深链仍使用递归，测试覆盖不是任意深度的栈界限；
+完整非硬件 CTest 77／77 通过（268.39 秒），证据／汇总门禁也保持通过。
+本轮不新增链长政策或异步语义。匹配协议的性能复测与受控验收仍待完成，
+不把分配路径减少等同于已测得的速度提升。

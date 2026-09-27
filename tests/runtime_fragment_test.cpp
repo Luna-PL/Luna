@@ -3,12 +3,37 @@
 
 #include <array>
 #include <atomic>
+#include <cstdlib>
 #include <iostream>
 #include <memory>
+#include <new>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace {
+
+// Test-only ordinary C++ allocation counter, enabled only across synchronous
+// dispatch. It is not a timer or a claim about plugin/OS/aligned allocations.
+thread_local bool countDispatchAllocations = false;
+thread_local size_t dispatchAllocations = 0;
+
+} // namespace
+
+void* operator new(std::size_t size) {
+    if (void* storage = std::malloc(size == 0 ? 1 : size)) {
+        if (countDispatchAllocations) ++dispatchAllocations;
+        return storage;
+    }
+    throw std::bad_alloc();
+}
+
+void* operator new[](std::size_t size) { return ::operator new(size); }
+void operator delete(void* storage) noexcept { std::free(storage); }
+void operator delete[](void* storage) noexcept { std::free(storage); }
+void operator delete(void* storage, std::size_t) noexcept { std::free(storage); }
+void operator delete[](void* storage, std::size_t) noexcept { std::free(storage); }
 
 namespace {
 
@@ -220,6 +245,207 @@ bool stageFragment(
         declarationKind, flags};
     binding = loaded.find(requirement);
     return static_cast<bool>(binding);
+}
+
+struct ScopedActivationProbe {
+    const luna::runtime::RuntimeFragmentBindingSet* bindings = nullptr;
+    const luna::runtime::RuntimeSlotRequirement* slot = nullptr;
+    const luna::runtime::RuntimeFragmentArguments* arguments = nullptr;
+    std::array<void*, 256> live{};
+    size_t depth = 0;
+    unsigned entered = 0;
+    unsigned returned = 0;
+    unsigned baseCalls = 0;
+    bool valid = true;
+    bool nest = false;
+    bool nested = false;
+    bool throwHandler = false;
+    size_t throwDepth = 0;
+    int32_t control = LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1;
+
+    bool matches(void* activation) const {
+        return luna_runtime_fragment_activation_arguments_v1(
+            activation, slot->slotId.c_str(), slot->contractId.c_str(),
+            arguments->layoutId.c_str(), arguments->size,
+            arguments->alignment) == arguments->data;
+    }
+};
+
+ScopedActivationProbe* activeScopedActivationProbe = nullptr;
+
+void executeScopedActivationProbe(void*, void* activation) {
+    auto& probe = *activeScopedActivationProbe;
+    ++probe.entered;
+    if (probe.depth >= probe.live.size()) {
+        probe.valid = false;
+        return;
+    }
+    for (size_t index = 0; index < probe.depth; ++index)
+        probe.valid &= probe.live[index] != activation;
+    probe.live[probe.depth++] = activation;
+    probe.valid &= probe.matches(activation);
+    probe.valid &= luna_runtime_fragment_activation_arguments_v1(
+        activation, "slot:wrong", probe.slot->contractId.c_str(),
+        probe.arguments->layoutId.c_str(), probe.arguments->size,
+        probe.arguments->alignment) == nullptr;
+    const int32_t result = luna_runtime_fragment_activation_resume_v1(activation);
+    probe.valid &= probe.matches(activation);
+    --probe.depth;
+    ++probe.returned;
+    if (probe.throwHandler && probe.depth == probe.throwDepth)
+        throw std::runtime_error("scoped activation handler probe");
+    // A failed downstream handler is deliberately ignored here, as native
+    // execute has no result channel. Outer dispatch must retain that failure.
+    if (!probe.throwHandler) probe.valid &= result == probe.control;
+}
+
+int32_t scopedActivationBase(void* context) {
+    auto& probe = *static_cast<ScopedActivationProbe*>(context);
+    ++probe.baseCalls;
+    for (size_t index = 0; index < probe.depth; ++index)
+        probe.valid &= probe.matches(probe.live[index]);
+    if (probe.nest && !probe.nested) {
+        probe.nested = true;
+        std::string error;
+        auto outcome = luna::runtime::RuntimeFragmentDispatchOutcome::Completed;
+        probe.valid &= probe.bindings->dispatchWithOutcome(
+            *probe.slot, *probe.arguments, scopedActivationBase, &probe,
+            outcome, error) && error.empty();
+        probe.valid &= (outcome ==
+            luna::runtime::RuntimeFragmentDispatchOutcome::ContinuationEscaped) ==
+            (probe.control == LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1);
+        for (size_t index = 0; index < probe.depth; ++index)
+            probe.valid &= probe.matches(probe.live[index]);
+    }
+    return probe.control;
+}
+
+int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
+    // Deliberately exceed typical SSO capacities; short names would hide the
+    // former per-handler identity/carrier copies from allocation counting.
+    const std::string slotId = "slot:" + std::string(128, 's');
+    const std::string contractId = "contract:" + std::string(128, 'c');
+    const std::string layoutId = "layout:" + std::string(128, 'l');
+    auto descriptor = prototype;
+    descriptor.flags = LUNA_RUNTIME_FRAGMENT_CAPTURE_FREE_V1;
+    descriptor.slot_id = slotId.c_str();
+    descriptor.slot_contract_id = contractId.c_str();
+    descriptor.slot_arguments_layout_id = layoutId.c_str();
+    descriptor.slot_arguments_size = sizeof(int);
+    descriptor.slot_arguments_alignment = alignof(int);
+    descriptor.factory_contract_id = "";
+    descriptor.environment_layout_id = "layout:empty";
+    descriptor.environment_size = 0;
+    descriptor.environment_alignment = 1;
+    descriptor.factory = nullptr;
+    descriptor.destroy = nullptr;
+    descriptor.execute = executeScopedActivationProbe;
+    std::string error;
+    Runtime runtime;
+    Runtime::PinnedBinding binding;
+    if (!stageFragment(runtime, std::make_shared<int>(1), &descriptor, binding, error))
+        return fail("scoped activation fixture did not stage");
+    const luna::runtime::RuntimeSlotRequirement slot{slotId, contractId};
+    int payload = 42;
+    const luna::runtime::RuntimeFragmentArguments arguments{
+        layoutId, sizeof(payload), alignof(int), &payload};
+    size_t oneAllocations = 0;
+    for (unsigned chainLength : {1u, 4u, 64u}) {
+        std::vector<luna::runtime::RuntimeFragmentRef> references;
+        for (unsigned index = 0; index < chainLength; ++index) {
+            luna::runtime::RuntimeFragmentRef reference;
+            if (!luna::runtime::makeOwnedRuntimeFragmentRef(
+                    binding, slot, {"", nullptr}, reference, error))
+                return fail("scoped activation reference did not bind");
+            references.push_back(std::move(reference));
+        }
+        luna::runtime::RuntimeFragmentBindingSet bindings;
+        if (!luna::runtime::makeRuntimeFragmentChainBindingSet(
+                std::move(references), bindings, error))
+            return fail("scoped activation chain did not initialize");
+        ScopedActivationProbe probe;
+        probe.bindings = &bindings;
+        probe.slot = &slot;
+        probe.arguments = &arguments;
+        activeScopedActivationProbe = &probe;
+        dispatchAllocations = 0;
+        countDispatchAllocations = true;
+        const bool dispatched = bindings.dispatch(
+            slot, arguments, scopedActivationBase, &probe, error);
+        countDispatchAllocations = false;
+        activeScopedActivationProbe = nullptr;
+        if (!dispatched || !error.empty() || !probe.valid || probe.depth != 0 ||
+            probe.entered != chainLength || probe.returned != chainLength ||
+            probe.baseCalls != 1)
+            return fail("scoped activation lost arguments or distinct live state");
+        if (chainLength == 1) oneAllocations = dispatchAllocations;
+        else if (dispatchAllocations != oneAllocations)
+            return fail("synchronous activation allocations grew with chain length");
+
+        // Keep a 64-handler outer chain suspended while the same Slot runs
+        // another 64 handlers. All 128 live activation addresses must differ.
+        for (int32_t control : {LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1,
+                                LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1}) {
+            probe.depth = 0;
+            probe.entered = probe.returned = probe.baseCalls = 0;
+            probe.nest = true;
+            probe.nested = false;
+            probe.control = control;
+            activeScopedActivationProbe = &probe;
+            auto outcome = luna::runtime::RuntimeFragmentDispatchOutcome::Completed;
+            const bool nested = bindings.dispatchWithOutcome(
+                slot, arguments, scopedActivationBase, &probe, outcome, error);
+            activeScopedActivationProbe = nullptr;
+            if (!nested || !error.empty() || !probe.valid || probe.depth != 0 ||
+                probe.entered != 2 * chainLength ||
+                probe.returned != 2 * chainLength || probe.baseCalls != 2 ||
+                (outcome == luna::runtime::RuntimeFragmentDispatchOutcome::ContinuationEscaped) !=
+                    (control == LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1))
+                return fail("nested scoped activation state or escape was not isolated");
+        }
+        probe.nest = false;
+        probe.control = LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1;
+        probe.throwHandler = true;
+        probe.throwDepth = chainLength - 1;
+        activeScopedActivationProbe = &probe;
+        const bool threw = bindings.dispatch(
+            slot, arguments, scopedActivationBase, &probe, error);
+        const bool diagnosed = error.find("scoped activation handler probe") != std::string::npos;
+        probe.throwHandler = false;
+        const bool recovered = bindings.dispatch(
+            slot, arguments, scopedActivationBase, &probe, error);
+        activeScopedActivationProbe = nullptr;
+        if (threw || !diagnosed || !recovered || !error.empty() || !probe.valid || probe.depth != 0)
+            return fail("scoped activation handler failure poisoned a fresh dispatch");
+    }
+
+    // Public activation still owns identity/carrier values across caller
+    // mutation and moves; only payload storage keeps the host lifetime duty.
+    luna::runtime::RuntimeFragmentActivation activation;
+    unsigned resumes = 0;
+    {
+        auto mutableSlot = slot;
+        auto mutableArguments = arguments;
+        if (!luna::runtime::makeRuntimeFragmentActivation(
+                mutableSlot, mutableArguments, resumeActivation, &resumes,
+                activation, error))
+            return fail("owning activation fixture did not initialize");
+        mutableSlot.slotId = mutableSlot.contractId = "changed";
+        mutableArguments.layoutId = "changed";
+        mutableArguments.data = nullptr;
+    }
+    luna::runtime::RuntimeFragmentActivation moved(std::move(activation));
+    luna::runtime::RuntimeFragmentActivation assigned;
+    assigned = std::move(moved);
+    if (activation || moved || !assigned || assigned.resumed() ||
+        luna_runtime_fragment_activation_arguments_v1(
+            assigned.opaque(), slotId.c_str(), contractId.c_str(),
+            layoutId.c_str(), sizeof(payload), alignof(int)) != &payload ||
+        luna_runtime_fragment_activation_resume_v1(assigned.opaque()) !=
+            LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1 ||
+        !assigned.resumed() || resumes != 1)
+        return fail("public activation stopped owning identity/carrier values");
+    return 0;
 }
 
 struct DispatchLifetimeProbe {
@@ -1589,6 +1815,7 @@ int main() {
             return fail("local Fragment override mutated its base BindingSet");
     }
 
+    if (testScopedActivation(descriptor) != 0) return 1;
     if (testDispatchLifetime(descriptor) != 0) return 1;
     if (testFactoryLifetime(descriptor) != 0) return 1;
     return testCleanupReentry(descriptor);

@@ -141,6 +141,11 @@ descriptor、factory/destroy、execute thunk 与 activation 操作，同时保�
 不携带 runtime-selection 机制。它还要求一个动态 Slot site 在 LLVM IR 中恰好生成一次 dispatch
 call，并保留显式 context 与 frame；静态 Slot 组合则不得携带 dispatch、context frame 或 runtime
 registry。该门禁不依赖运行耗时。
+Runtime 夹具另用长身份比较 1／4／64 成员链的普通 C++ 分配计数，要求计数不随链长增长；
+验证 128 个同时存活的嵌套 activation、类型化参数访问、escape／失败后恢复，以及公开
+activation 的拥有型 move／寿命契约。这是分配回归，不是计时门禁或整个派发零分配声明。
+ASan／UBSan 在该夹具和并发 target 中直接 instrument 相关 Runtime 源码，安装 archive
+保持未 instrument。详见[作用域 activation 存储](slot_fragment_runtime_plan.zh-CN.md#同步链路-activation-作用域存储2026-09-27)。
 `luna.moonir-canonical` 还证明未绑定的 exported Slot 会 seal 为携带精确 declaration 与已打包
 参数 record 的 `RuntimeSlot` terminator，而未绑定的 private Slot 仍会被擦除。code-section model
 往返测试会使用非空 RuntimeSlot declaration 与 argument TypeId 字段，确保容器保留能力不是根据

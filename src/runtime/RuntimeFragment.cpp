@@ -26,8 +26,13 @@ struct RuntimeFragmentExecutionContextState {
 
 struct RuntimeFragmentActivationState {
     uint64_t magic = 0;
-    RuntimeSlotRequirement slot;
-    RuntimeFragmentArguments arguments;
+    // Public activations own these records. Synchronous chain activations
+    // leave them empty and borrow the dispatch's immutable owned records.
+    // Keeping one state type avoids a second opaque ABI representation.
+    RuntimeSlotRequirement ownedSlot;
+    RuntimeFragmentArguments ownedArguments;
+    const RuntimeSlotRequirement* slot = nullptr;
+    const RuntimeFragmentArguments* arguments = nullptr;
     RuntimeFragmentResumeCallback continuation = nullptr;
     void* continuationContext = nullptr;
     bool consumed = false;
@@ -84,6 +89,39 @@ bool validStorage(const void* data, uint64_t size, uint64_t alignment) {
     return data && powerOfTwo(alignment) &&
         alignment <= MaxEnvironmentAlignment &&
         (reinterpret_cast<uintptr_t>(data) & (alignment - 1)) == 0;
+}
+
+bool validateActivationContract(
+    const RuntimeSlotRequirement& slot,
+    const RuntimeFragmentArguments& arguments,
+    RuntimeFragmentResumeCallback continuation,
+    std::string& error) {
+    error.clear();
+    if (!validIdentity(slot.slotId) || !validIdentity(slot.contractId) ||
+        !validIdentity(arguments.layoutId) || !continuation ||
+        !validStorage(arguments.data, arguments.size, arguments.alignment)) {
+        error = "runtime Fragment activation contract is invalid";
+        return false;
+    }
+    return true;
+}
+
+// The records must outlive this activation. Public construction points at
+// storage owned by the same heap state; the private synchronous path points
+// at the enclosing dispatch, which outlives every nested resume/handler.
+void initializeActivationState(
+    RuntimeFragmentActivationState& state,
+    const RuntimeSlotRequirement& slot,
+    const RuntimeFragmentArguments& arguments,
+    RuntimeFragmentResumeCallback continuation,
+    void* continuationContext) {
+    state.slot = &slot;
+    state.arguments = &arguments;
+    state.continuation = continuation;
+    state.continuationContext = continuationContext;
+    state.consumed = false;
+    state.failed = false;
+    state.magic = RuntimeFragmentActivationMagic;
 }
 
 bool validateBinding(
@@ -197,18 +235,14 @@ bool makeRuntimeFragmentActivation(
         error = "runtime Fragment activation output is already initialized";
         return false;
     }
-    if (!validIdentity(slot.slotId) || !validIdentity(slot.contractId) ||
-        !validIdentity(arguments.layoutId) || !continuation ||
-        !validStorage(arguments.data, arguments.size, arguments.alignment)) {
-        error = "runtime Fragment activation contract is invalid";
+    if (!validateActivationContract(slot, arguments, continuation, error))
         return false;
-    }
     auto state = std::make_unique<RuntimeFragmentActivationState>();
-    state->magic = RuntimeFragmentActivationMagic;
-    state->slot = slot;
-    state->arguments = std::move(arguments);
-    state->continuation = continuation;
-    state->continuationContext = continuationContext;
+    state->ownedSlot = slot;
+    state->ownedArguments = std::move(arguments);
+    initializeActivationState(
+        *state, state->ownedSlot, state->ownedArguments,
+        continuation, continuationContext);
     output.state_ = std::move(state);
     return true;
 }
@@ -559,17 +593,23 @@ bool dispatchRuntimeFragmentChain(RuntimeFragmentChainDispatch& dispatch) {
     }
 
     const auto& fragment = dispatch.entry->chain[dispatch.next++];
-    RuntimeFragmentActivation activation;
-    if (!makeRuntimeFragmentActivation(
+    // Resume is synchronous, so this frame remains live until the handler and
+    // all downstream handlers return. No per-handler heap state or identity
+    // copies are needed. The enclosing dispatch still owns its records and
+    // retains the complete BindingSet generation/environment snapshot.
+    RuntimeFragmentActivationState activation;
+    if (!validateActivationContract(
             dispatch.slot, dispatch.arguments,
-            resumeRuntimeFragmentChain, &dispatch,
-            activation, *dispatch.error)) {
+            resumeRuntimeFragmentChain, *dispatch.error)) {
         dispatch.failed = true;
         return false;
     }
+    initializeActivationState(
+        activation, dispatch.slot, dispatch.arguments,
+        resumeRuntimeFragmentChain, &dispatch);
     try {
         fragment->descriptor()->execute(
-            fragment->environment(), activation.opaque());
+            fragment->environment(), &activation);
     } catch (const std::exception& exception) {
         *dispatch.error = "runtime Fragment execution threw: " +
             std::string(exception.what());
@@ -583,9 +623,7 @@ bool dispatchRuntimeFragmentChain(RuntimeFragmentChainDispatch& dispatch) {
     // Execute has no result channel. Preserve protocol failure even if a
     // native handler ignores resume's negative result, without replacing a
     // more specific error already reported by the downstream continuation.
-    const auto* state = static_cast<const RuntimeFragmentActivationState*>(
-        activation.opaque());
-    if (state->failed && !dispatch.failed) {
+    if (activation.failed && !dispatch.failed) {
         *dispatch.error = "runtime Fragment activation violated its single-shot continuation contract";
         dispatch.failed = true;
     }
@@ -899,14 +937,15 @@ extern "C" const void* luna_runtime_fragment_activation_arguments_v1(
         luna::runtime::RuntimeFragmentActivationState*>(activation);
     if (!state ||
         state->magic != luna::runtime::RuntimeFragmentActivationMagic ||
+        !state->slot || !state->arguments ||
         !slot_id || !slot_contract_id || !arguments_layout_id ||
-        state->slot.slotId != slot_id ||
-        state->slot.contractId != slot_contract_id ||
-        state->arguments.layoutId != arguments_layout_id ||
-        state->arguments.size != arguments_size ||
-        state->arguments.alignment != arguments_alignment)
+        state->slot->slotId != slot_id ||
+        state->slot->contractId != slot_contract_id ||
+        state->arguments->layoutId != arguments_layout_id ||
+        state->arguments->size != arguments_size ||
+        state->arguments->alignment != arguments_alignment)
         return nullptr;
-    return state->arguments.data;
+    return state->arguments->data;
 }
 
 extern "C" int32_t luna_runtime_fragment_activation_resume_v1(
