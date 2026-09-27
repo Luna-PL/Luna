@@ -66,6 +66,13 @@ files, metadata/source/order/hash corruption and rehashed-but-invalid records.
 Unix also checks a symlinked raw record. No timing executable is invoked.
 For offline commands and optional manifest/commit anchors, see
 [offline bundle acceptance](slot_fragment_runtime_plan.md#offline-bundle-acceptance).
+CI then exports `compiled-fragment-evidence/` (original bundle plus exact-byte
+validation inputs and an index) and uploads that directory alongside the native
+probe, retaining the same artifact names and 14-day policy. The default
+`luna.compiled-fragment-evidence` test uses only synthetic files: export/relocation,
+LF/CRLF, 1/2/10 cycles, unchanged observations, inert archived scripts and unsafe
+path/hash/inventory/approval-claim rejection. See
+[portable evidence export](slot_fragment_runtime_plan.md#portable-evidence-export).
 The verified container adapter's
 LLVM default remains O0, distinct from the fixture's MoonIR O2; O2/O3 are explicit
 IR optimization profiles and ORC codegen stays at its defaults. Protocol v2

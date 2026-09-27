@@ -127,6 +127,11 @@ script-defined special inputs.
   source identities, byte hashes and exact raw-to-combined mappings. Its default
   synthetic file-fixture test shares `compiled_fragment_probe_fixture.cmake`
   with the in-memory protocol test; neither invokes a timing binary.
+  `tools/package_compiled_fragment_evidence.cmake` copies an accepted bundle and
+  its exact-byte validation inputs to a fresh portable directory, publishing an
+  index last. `tools/compiled_fragment_evidence.cmake` checks only its closed file
+  inventory and byte hashes, never executing the archived scripts. The synthetic
+  evidence test covers relocation and the separate trust/approval boundaries.
   `RuntimeDescriptorABI.h` is the installed in-memory descriptor contract;
   `RuntimeDescriptor.h/.cpp` validate one lease-owned registry and provide
   exact typed lookup without defining source-language query syntax.
@@ -1001,6 +1006,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/compiled_fragment_bundle.cmake`
 - `tests/compiled_fragment_bundle_test.cmake`
 - `tests/compiled_fragment_probe_fixture.cmake`
+- `tests/compiled_fragment_evidence_test.cmake`
 - `tests/runtime_fragment_test.cpp`
 - `tests/runtime_allocation_abi_test.cpp`
 - `tests/runtime_application_host_test.cpp`
@@ -1021,6 +1027,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `tools/verify_locked_component_release.sh`
 - `tools/verify_release_readiness.cmake`
 - `tools/verify_release_evidence.js`
+- `tools/compiled_fragment_evidence.cmake`
+- `tools/package_compiled_fragment_evidence.cmake`
 - `Doxyfile`
 - `docs/starter/files/codegen.md`
 - `docs/starter/files/codegen.zh-CN.md`

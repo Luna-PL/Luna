@@ -49,6 +49,11 @@ Linux CI 在 C++17/C++23 构建矩阵中都启用该门禁。它只作用于 Lun
 1／2／10 轮、输入字节不变、缺失／未列出文件、metadata／来源／顺序／摘要损坏，以及
 重新计算摘要后仍非法的记录；Unix 还检查原始文件符号链接。不会启动计时程序。
 离线命令与可选 manifest／提交锚点见[离线 bundle 验收](slot_fragment_runtime_plan.zh-CN.md#离线-bundle-验收)。
+CI 随后导出 `compiled-fragment-evidence/`（原始 bundle、原字节的校验输入及索引），
+与 native 探针一起上传，artifact 名称和 14 天保留策略不变。默认
+`luna.compiled-fragment-evidence` 仅用合成文件，覆盖导出／迁移、LF／CRLF、1／2／10 轮、
+观测不变、包内脚本不执行，以及不安全路径／摘要／文件清单／批准声明拒绝。见
+[可迁移证据导出](slot_fragment_runtime_plan.zh-CN.md#可迁移证据导出)。
 已验证容器
 适配器默认仍为 LLVM IR O0，区别于夹具的 MoonIR O2；O2／O3 必须显式选择，ORC 机器码
 生成保持默认。v2 协议记录实际配置与不可变的 materialization key。这些仅是观察值，

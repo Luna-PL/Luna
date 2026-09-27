@@ -595,3 +595,56 @@ CTest 新增合成文件夹具的验收／拒绝（包括重新摘要的损坏�
 CRLF 及 1／2／10 轮；Unix 还检查符号链接记录。夹具仅保留在构建目录内的唯一目录，
 不覆盖观测结果，不执行计时代码。CI 的 14 天保留策略未改变；长期证据存储与受控
 机器的性能测量仍是独立未完成项。
+
+#### 可迁移证据导出
+
+`tools/package_compiled_fragment_evidence.cmake` 将已验收 bundle 导出到全新目录，其
+父目录必须已存在且不是符号链接。必须指定预期观测提交及原始 manifest 的实际字节
+SHA-256。拒绝既有输出路径，以及嵌套在输入 bundle 内的输出。不覆盖／删除观测，
+不创建 Release、不上传外部存储、不改变保留策略。
+
+证据包包含原始 `bundle/`、`source/` 下十二份原字节文件（reader、protocol、runner、
+打包／字节检查工具、探针 C++ 及六份工作负载输入），以及最后写出的 `evidence.csv`。
+v1 索引规定封闭且排序的路径／摘要清单，保存观测提交／manifest 锚点、轮数、
+`source_snapshot=validation-inputs-only` 和 `approval=none`。其中 `bundle_git_commit`
+仅指观测的提交；配套校验工具按字节摘要标识，不宣称属于该历史提交。复制保留字节，
+包括源码／记录换行；发布索引前再次核对输入／副本摘要，然后校验完整证据包。中断可能
+留下部分目录，目录／索引存在本身不代表验收成功；不要复用部分目录作为输出。
+
+```sh
+cmake -Werror=dev -DLUNA_COMPILED_EVIDENCE_BUNDLE_DIR="/path/to/compiled-fragment-series" \
+  -DLUNA_COMPILED_EVIDENCE_OUTPUT_DIR="/existing/parent/new-evidence-directory" \
+  -DLUNA_COMPILED_EVIDENCE_EXPECTED_COMMIT="<观测提交>" \
+  -DLUNA_COMPILED_EVIDENCE_EXPECTED_MANIFEST_SHA256="<manifest字节摘要>" \
+  -P tools/package_compiled_fragment_evidence.cmake
+```
+
+导出时输出 `evidence.csv` 的实际字节 SHA-256。应在证据包之外独立保存此索引锚点及
+可信 CI／源码事实。使用可信 checkout 中的 `tools/compiled_fragment_evidence.cmake`
+只读检查已解包证据包的完整封闭目录树及每份文件摘要：
+
+```sh
+cmake -Werror=dev -DLUNA_COMPILED_EVIDENCE_DIR="/path/to/copied-evidence-directory" \
+  -DLUNA_COMPILED_EVIDENCE_EXPECTED_COMMIT="<观测提交>" \
+  -DLUNA_COMPILED_EVIDENCE_EXPECTED_INDEX_SHA256="<独立可信索引摘要>" \
+  -P tools/compiled_fragment_evidence.cmake
+```
+
+字节检查不会执行／include 包内脚本，也**不重复** bundle 协议验收：重新计算摘要的
+脚本仍只是数据，同时修改文件及自报索引不能证明真实性。可选的预期索引／提交锚点
+必须来自独立可信事实。接收方确认校验源码字节可信后，才可以手工使用包内
+`source/tests/compiled_fragment_bundle.cmake` 检查 `bundle/`，并指定原始预期提交／
+manifest 锚点；迁移后不再依赖原始源码路径或 Git checkout。不可仅凭不可信索引或
+未固定锚点的字节检查成功就执行包内代码。
+
+这些源码仅覆盖配套 reader 的校验输入，不是完整构建／可复现性快照、编译器／JIT
+二进制、native 探针记录、attestation 或签名；若需要 native CSV，应另行保存同级
+记录。检查／导出期间输入必须不变，不提供文件系统快照或抵御并发恶意修改的沙箱。
+证据包没有计时阈值、性能／发布批准，不改变 SF008 范围。
+
+Linux C++17／C++23、macOS、Windows CI 在 bundle 验收后导出证据包，并将
+`compiled-fragment-evidence/` 与 native CSV 一起上传，artifact 名称及 14 天保留
+策略不变。默认合成 CTest 覆盖 LF／CRLF、1／2／10 轮、迁移、观测不变、包内脚本
+不执行、既有／嵌套输出、损坏／缺失／不安全清单；Unix 还检查符号链接记录，不启动
+计时程序。该包只是便于迁移到另行选定的存储；永久后端、保留／访问策略及受控性能
+验收仍未完成。正式 release evidence／attestation 工作流及生态锁不变。

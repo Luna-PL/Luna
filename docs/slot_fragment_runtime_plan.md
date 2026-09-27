@@ -761,3 +761,70 @@ cycles 1/2/10; Unix also tests a symlinked record. Fixtures stay in uniquely nam
 build-tree directories, never overwrite observations, and do not run timing code.
 The 14-day CI retention policy is unchanged; durable evidence storage and
 controlled-machine performance measurements remain separate unfinished work.
+
+#### Portable evidence export
+
+`tools/package_compiled_fragment_evidence.cmake` exports an accepted bundle to a
+fresh directory with an existing non-symlink parent. Both the expected observation
+commit and actual bundle-manifest SHA-256 are required. Existing output paths and
+output nested inside the input bundle are rejected. It never overwrites/deletes
+observations, creates a Release, uploads to storage, or changes retention policy.
+
+The package contains the original `bundle/`, twelve exact-byte files under
+`source/` (the reader, protocol, runner, packaging/byte-checking tools, probe C++
+and six workload inputs), and a last-written `evidence.csv`. This v1 index has a
+closed, sorted path/hash inventory, observation commit/manifest anchors, cycle
+count, `source_snapshot=validation-inputs-only` and `approval=none`. Its
+`bundle_git_commit` refers only to the observation; archived validation tools are
+identified by their byte hashes, not attributed to that historical commit.
+Copies preserve bytes, including source/record line endings. Input/copy hashes
+are checked before index publication, then the completed package is byte-checked.
+Partial directories may remain after interruption; directory/index existence
+alone is not evidence of acceptance. Never reuse such a directory as output.
+
+```sh
+cmake -Werror=dev -DLUNA_COMPILED_EVIDENCE_BUNDLE_DIR="/path/to/compiled-fragment-series" \
+  -DLUNA_COMPILED_EVIDENCE_OUTPUT_DIR="/existing/parent/new-evidence-directory" \
+  -DLUNA_COMPILED_EVIDENCE_EXPECTED_COMMIT="<observation-commit>" \
+  -DLUNA_COMPILED_EVIDENCE_EXPECTED_MANIFEST_SHA256="<manifest-byte-digest>" \
+  -P tools/package_compiled_fragment_evidence.cmake
+```
+
+Export prints the actual-byte SHA-256 of `evidence.csv`. Preserve this index
+anchor independently of the package, together with trusted CI/source facts.
+`tools/compiled_fragment_evidence.cmake`, run from a trusted checkout, accepts the
+unpacked package read-only, checking its entire closed tree and each byte hash:
+
+```sh
+cmake -Werror=dev -DLUNA_COMPILED_EVIDENCE_DIR="/path/to/copied-evidence-directory" \
+  -DLUNA_COMPILED_EVIDENCE_EXPECTED_COMMIT="<observation-commit>" \
+  -DLUNA_COMPILED_EVIDENCE_EXPECTED_INDEX_SHA256="<independently-trusted-index-digest>" \
+  -P tools/compiled_fragment_evidence.cmake
+```
+
+Byte verification never executes/includes archived scripts. It does **not**
+repeat bundle protocol acceptance: a rehashed script is just data, and replacing
+both files and a self-reported index does not establish authenticity. The optional
+expected index/commit anchors must come from independently trusted facts. Only
+after establishing trust in the validation source bytes may a receiver manually
+run `source/tests/compiled_fragment_bundle.cmake` against `bundle/`, using the
+original expected commit/manifest anchors. Relocation then requires no original
+source path or Git checkout. Do not run archived code based solely on an untrusted
+index or on an unanchored successful byte check.
+
+The source files are sufficient for the bundled reader's validation inputs, not
+a complete build/reproducibility snapshot, compiler/JIT binary, native probe
+record, attestation or signature. Keep the sibling native CSV separately if
+needed. Inputs must stay immutable during checks/export; this is not a filesystem
+snapshot or a sandbox against hostile concurrent edits. The package has no timing
+threshold or performance/release approval, and does not alter SF008 scope.
+
+Linux C++17/C++23, macOS and Windows CI export this package after bundle acceptance
+and upload `compiled-fragment-evidence/` alongside the native CSV under the same
+artifact names for 14 days. Default synthetic CTest checks LF/CRLF, 1/2/10 cycles,
+relocation, unchanged observations, inert archived scripts, occupied/nested
+outputs and corrupted/incomplete/unsafe inventories (Unix also symlink records),
+without running a timing binary. The package enables migration to separately
+chosen storage; a permanent backend, retention/access policy and controlled
+performance acceptance are still open. Release-evidence/attestation workflows
+and ecosystem locks are unchanged.

@@ -433,7 +433,8 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/compiled_fragment_series_protocol_test.cmake` | 默认非计时的合成记录正例、调度平衡与损坏记录／既有目录拒绝门禁 |
 | `tests/compiled_fragment_bundle.cmake` | 只读验收解包后的 v1 bundle，检查来源、实际字节摘要与原始／合并样本的精确映射，可显式固定预期提交／manifest 摘要 |
 | `tests/compiled_fragment_bundle_test.cmake` | 构建目录中的合成文件夹具、只读性与缺失／损坏／重新摘要的错误记录拒绝测试，不启动计时程序 |
-| `tests/compiled_fragment_probe_fixture.cmake` | 记录协议及离线 bundle 测试共用的合成零时延记录构造器，不运行 JIT |
+| `tests/compiled_fragment_probe_fixture.cmake` | 记录协议、离线 bundle 及可迁移证据测试共用的合成零时延记录／文件夹具构造器，不运行 JIT |
+| `tests/compiled_fragment_evidence_test.cmake` | 合成证据包迁移、原始观测不变、既有目录及不安全路径／损坏数据拒绝、包内脚本不执行门禁 |
 | `tests/runtime_gpu_error_test.cpp` | GPU/runtime 错误快照行为 |
 | `tests/analysis_protocol.cmake` | `luna.analysis` v1 JSONL envelope、声明记录与 byte span 回归 |
 | `tests/analysis_snapshot_test.cpp` | 内存/路径分析、部分失败状态与 frontend 生命周期回归 |
@@ -1209,6 +1210,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/compiled_fragment_bundle.cmake`
 - `tests/compiled_fragment_bundle_test.cmake`
 - `tests/compiled_fragment_probe_fixture.cmake`
+- `tests/compiled_fragment_evidence_test.cmake`
 - `tests/runtime_fragment_test.cpp`
 - `tests/runtime_gpu_error_test.cpp`
 - `tests/semantic_regressions.cmake`
@@ -1219,4 +1221,6 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tools/verify_locked_component_release.sh`
 - `tools/verify_release_readiness.cmake`
 - `tools/verify_release_evidence.js`
+- `tools/compiled_fragment_evidence.cmake`
+- `tools/package_compiled_fragment_evidence.cmake`
 <!-- FILE_INVENTORY_END -->

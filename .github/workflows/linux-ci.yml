@@ -68,13 +68,22 @@ jobs:
             -DLUNA_COMPILED_BUNDLE_EXPECTED_COMMIT="${{ github.sha }}" \
             -P tests/compiled_fragment_bundle.cmake
 
+      - name: Package portable compiled Fragment evidence
+        run: |
+          manifest_sha="$(sha256sum build/compiled-fragment-series/manifest.csv | cut -d ' ' -f1)"
+          cmake -Werror=dev -DLUNA_COMPILED_EVIDENCE_BUNDLE_DIR="$PWD/build/compiled-fragment-series" \
+            -DLUNA_COMPILED_EVIDENCE_OUTPUT_DIR="$PWD/build/compiled-fragment-evidence" \
+            -DLUNA_COMPILED_EVIDENCE_EXPECTED_COMMIT="${{ github.sha }}" \
+            -DLUNA_COMPILED_EVIDENCE_EXPECTED_MANIFEST_SHA256="$manifest_sha" \
+            -P tools/package_compiled_fragment_evidence.cmake
+
       - name: Retain Fragment cost observations
         uses: actions/upload-artifact@v4
         with:
           name: fragment-cost-linux-cxx${{ matrix.cxx-standard }}-attempt${{ github.run_attempt }}
           path: |
             build/fragment-cost-interleaved.csv
-            build/compiled-fragment-series/
+            build/compiled-fragment-evidence/
           if-no-files-found: error
           retention-days: 14
 
