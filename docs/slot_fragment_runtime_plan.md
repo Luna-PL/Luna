@@ -1276,3 +1276,120 @@ before the fix and passes afterward, as does C++23. This is neither an Ubuntu
 CI replica nor full Linux compiler-suite acceptance. Both Runtime CTest gates
 pass in strict-warning normal and ASan/UBSan Windows builds. Planned matched
 timing samples have not started; remote regression confirmation comes first.
+
+#### Matched-protocol scoped-activation observations (2026-09-27)
+
+The observation build is `108193719213ca0344541b736acbc835b54adfe6`.
+Production Runtime last changed in `6da36eb`; the later repair changed only the
+test counter. The probe was rebuilt at the new commit and passed untimed result
+checks. The tree was clean before sampling and sources/protocols were unchanged
+throughout. No second optimization was implemented.
+Before committing this report, Linux/macOS/Windows CI for this build all
+succeeded, including the repaired Linux ASan/UBSan gate: runs
+`36324347602`/`36324347627`/`36324347594` respectively.
+
+Environment remains Windows 11 build 26200, i7-12700 (12 cores/20 logical CPUs),
+Clang/LLVM 20.1.8, C++17, strict-warning RelWithDebInfo, native
+`-O2 -g -DNDEBUG`. Only dispatch measurement threads were pinned to logical
+CPU 0/group 0; allowed CPUs were 0–19 and no physical core class is assumed.
+Read-only start/end queries reported Balanced. Frequency, temperature,
+background load, setup affinity and process scheduling remain uncontrolled.
+Earlier Linux fixture diagnosis used WSL; background conditions were not shut
+down or normalized. This agent ran no concurrent local build, regression,
+WSL compile or second measurement cohort. Remote CI was tracked separately.
+
+Separate sequential 10000/100000-iteration cohorts each used three cycles,
+1000 warmups and nine batch samples per case. MoonIR O2, LLVM IR O0/O2/O3 and
+default ORC were unchanged. Each has 54 fresh processes, 18 per profile and
+4374 samples: total 108/8748. All schedule/identity/call/checksum/raw-to-combined
+mapping and byte checks passed. Common manifest metadata against matching
+`303c6be` cohorts differed only in commit and combined-file hash. Workload,
+probe/runner/validator/affinity-controller source hashes, container hashes,
+configuration, materialization keys and timed harness matched. Between the two
+new manifests only iterations and combined hash differ. Actual probe binaries
+and Runtime source differ; matching metadata is not a claim of identical builds.
+
+Values remain **median of process medians (minimum–maximum process median)**,
+in ns/op. Each underlying sample averages an entire batch, not a single call.
+Complete new 100000-iteration results:
+
+| Case | LLVM O0 | LLVM O2 | LLVM O3 |
+| --- | --- | --- | --- |
+| plain | 4.40 (4.30–4.60) | 2.00 (2.00–2.00) | 2.00 (2.00–2.00) |
+| private_erased | 4.40 (4.40–4.50) | 2.00 (2.00–2.00) | 2.00 (1.90–2.00) |
+| static_resume | 2.20 (2.20–2.20) | 2.00 (1.90–2.00) | 2.00 (1.90–2.00) |
+| static_discard | 2.00 (1.90–2.00) | 2.00 (1.90–2.00) | 2.00 (1.90–2.00) |
+| dynamic_none | 211.85 (210.10–225.50) | 213.35 (209.40–233.20) | 213.25 (207.00–218.80) |
+| dynamic_one | 459.35 (450.00–486.80) | 461.95 (452.70–500.70) | 460.60 (453.50–471.60) |
+| dynamic_chain_2 | 609.70 (598.60–649.60) | 608.20 (589.60–658.00) | 605.65 (592.10–622.50) |
+| dynamic_chain_4 | 977.90 (962.00–1022.80) | 904.80 (888.10–977.70) | 906.35 (895.30–920.20) |
+| dynamic_override_none | 214.25 (208.40–225.90) | 213.20 (208.90–222.60) | 213.60 (209.70–219.50) |
+
+Matching-profile O2 old/new cohorts are summarized separately, not pooled or
+paired across processes at different times:
+
+| Case | Old 10000 | New 10000 | Old 100000 | New 100000 |
+| --- | --- | --- | --- | --- |
+| dynamic_none | 209.35 (203.70–221.20) | 211.35 (205.50–218.20) | 217.05 (208.40–230.20) | 213.35 (209.40–233.20) |
+| dynamic_one | 546.10 (523.20–581.80) | 460.25 (447.70–479.40) | 555.15 (542.30–594.00) | 461.95 (452.70–500.70) |
+| dynamic_chain_2 | 777.75 (751.80–824.40) | 608.10 (588.90–637.00) | 790.60 (770.30–842.00) | 608.20 (589.60–658.00) |
+| dynamic_chain_4 | 1339.35 (1285.40–1388.40) | 909.65 (888.20–940.40) | 1356.15 (1317.60–1401.90) | 904.80 (888.10–977.70) |
+| dynamic_override_none | 212.50 (206.60–246.10) | 210.10 (206.10–227.50) | 217.45 (213.00–233.10) | 213.20 (208.90–222.60) |
+
+Bound-path observations are lower, while None/local None remain in roughly the
+same range, consistent in direction with reduced per-handler allocation.
+However, these four sequential cohorts are not randomized alternating controlled
+A/B trials or repetitions of one machine state. No allocator-time attribution,
+confidence intervals, attributable speedup ratios, profile winners or
+performance/release approval are supplied. Matching-profile O2 static paths
+remain near 2 ns, but differing ABIs/harness costs and static-discard results
+still prevent subtraction to isolate a Slot instruction. `approval=none` and
+no new timing threshold.
+
+New long-cohort O2 per-cycle medians are 461.85/464.15/457.20 for One and
+900.10/906.90/905.30 for chain-4, not constant. Individual batch-average ranges
+are 442.50–544.20 for One, 875.70–1019.30 for chain-4 and 203.50–311.80 for
+None, not individual-call tail bounds. Single setup-observation medians are
+11.349 ms compile/encode/decode, 24.417 ms verified load/JIT and 0.032 ms
+lookup/four-candidate discovery/host ordering/factories/bindings/context.
+Setup is unpinned; discovery in this fixed four-candidate workload is not a
+general-reflection or large-catalog performance result.
+
+Next, prioritize testing **reuse of Slot/Contract identities already frozen
+in BindingSet**, removing extra owning identity copies per bound dispatch.
+The existing snapshot pin must retain these records until every handler returns.
+Do not borrow host C ABI strings, remove identity/layout validation, alter the
+public owning activation or change payload lifetime duties. First test caller
+identity mutation, context release, nesting/failure and allocation behavior,
+then use matched timing protocols. This is a candidate, not implemented here;
+no new candidate-set mechanism or keyword is needed.
+
+New evidence remains in ignored local build directories, not automatically
+uploaded CI artifacts or durable external storage:
+`build-audit-clang64/fragment-evaluation-1081937-i10000-c3-evidence/` and
+`fragment-evaluation-1081937-i100000-c3-evidence/`, each with 74 files.
+Manifest SHA-256:
+
+```text
+10000:  2a1f7ae3f0c85ff4a85d98fd7d3218603172d306ce271e934e487f8360f0fcd8
+100000: 1a1d331fcd42077303aab88242aaeecabdf7bb452615ee8b1a6e2fae5745d8fa
+```
+
+Evidence-index SHA-256:
+
+```text
+10000:  e764e8193ab5d3a7a013d416309eb74e93c67dbf9e953aef927ff040312ccd2b
+100000: 92070c286c0548b16e7e93da986c873167c39ed5422b83622baf16e82300e174
+```
+
+Actual binary SHA-256 before/after sampling:
+`bf2b812e51f2ce7264526b41029c27181125cf2d85e44f9cf4563924ed3a8690`.
+RuntimeFragment.cpp SHA-256 before/after:
+`e4772b379dc4e9f59877a8239c46aeb1f5d960b5b545a1851d6901629e4fd554`.
+Summary tool remains
+`e35ce22f899950fc79915de09af05d9f4f2eb952a0d082211bc83ff0ca4eeb59`.
+Anchors are not complete build/binary archives, signatures or reproducibility
+proofs. Neither old nor new evidence was overwritten. Reruns still require
+fresh paths, explicit CPU 0, separate iterations 10000/100000, three cycles and
+each commit/digest. Later report commits are not this observation build, and
+values need not reproduce exactly.
