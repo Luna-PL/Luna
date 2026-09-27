@@ -1312,6 +1312,13 @@ if(BUILD_TESTING)
             -DLUNA_COMPILED_EVIDENCE_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/compiled-fragment-evidence-tests
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/compiled_fragment_evidence_test.cmake
     )
+    add_test(
+        NAME luna.compiled-fragment-summary
+        COMMAND ${CMAKE_COMMAND}
+            -DLUNA_PYTHON_EXECUTABLE=${Python3_EXECUTABLE}
+            -DLUNA_COMPILED_SUMMARY_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/compiled-fragment-summary-tests
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/compiled_fragment_summary_test.cmake
+    )
     if(LUNA_ENABLE_ROCM_SMOKE)
         add_test(
             NAME luna.rocm-smoke

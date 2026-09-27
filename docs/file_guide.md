@@ -132,6 +132,9 @@ script-defined special inputs.
   index last. `tools/compiled_fragment_evidence.cmake` checks only its closed file
   inventory and byte hashes, never executing the archived scripts. The synthetic
   evidence test covers relocation and the separate trust/approval boundaries.
+  `tools/summarize_compiled_fragment_bundle.py` uses the trusted checkout reader
+  before emitting read-only descriptive process/profile statistics. Its synthetic
+  CMake test reuses the suite's Python 3.8+ dependency and never invokes a timing probe.
   `RuntimeDescriptorABI.h` is the installed in-memory descriptor contract;
   `RuntimeDescriptor.h/.cpp` validate one lease-owned registry and provide
   exact typed lookup without defining source-language query syntax.
@@ -1007,6 +1010,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/compiled_fragment_bundle_test.cmake`
 - `tests/compiled_fragment_probe_fixture.cmake`
 - `tests/compiled_fragment_evidence_test.cmake`
+- `tests/compiled_fragment_summary_test.cmake`
 - `tests/runtime_fragment_test.cpp`
 - `tests/runtime_allocation_abi_test.cpp`
 - `tests/runtime_application_host_test.cpp`
@@ -1029,6 +1033,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tools/verify_release_evidence.js`
 - `tools/compiled_fragment_evidence.cmake`
 - `tools/package_compiled_fragment_evidence.cmake`
+- `tools/summarize_compiled_fragment_bundle.py`
 - `Doxyfile`
 - `docs/starter/files/codegen.md`
 - `docs/starter/files/codegen.zh-CN.md`

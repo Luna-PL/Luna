@@ -828,3 +828,52 @@ without running a timing binary. The package enables migration to separately
 chosen storage; a permanent backend, retention/access policy and controlled
 performance acceptance are still open. Release-evidence/attestation workflows
 and ecosystem locks are unchanged.
+
+#### Offline descriptive summaries
+
+`tools/summarize_compiled_fragment_bundle.py` (Python 3.8+, standard library only)
+accepts an unpacked bundle through the **trusted current checkout's** CMake reader
+before producing `luna.compiled-fragment-summary.v1` JSON on stdout. It never
+executes a probe or archived scripts, extracts an archive, or writes input/output
+files. `--cmake` selects a trusted executable; its default is `cmake` on PATH.
+The source bytes must match the bundle's protocol/probe/workload/runner identities,
+as for ordinary offline acceptance. This is not an arbitrary historical reader.
+
+```sh
+python3 tools/summarize_compiled_fragment_bundle.py \
+  --bundle "/path/to/compiled-fragment-series" \
+  --expected-commit "<full lowercase observation commit>" \
+  --expected-manifest-sha256 "<independently trusted manifest byte digest>"
+```
+
+Optional anchors have the same trust boundary as the reader. Without an external
+manifest anchor, the tool pins the manifest bytes seen at the start for internal
+consistency, not authentication. It rechecks raw-file, combined-file and manifest
+bytes plus the closed inventory before emitting a complete report. Validation,
+missing-tool or parsing failure produces an error on stderr, a nonzero status
+and no report on stdout. Inputs must remain unchanged; this is not a filesystem
+snapshot against malicious concurrent changes. Archived scripts remain data.
+
+Each process/case reports count, minimum, median and maximum of its nine rounds.
+Each profile/case then summarizes the **independent-process medians**, not all
+pooled rounds: six processes per profile per cycle. Even-count medians average
+the two central values; exact decimal strings avoid floating-point rounding.
+Per-process rows retain cycle, block, profile position and record name, and the
+report retains manifest identity and the reporting tool's actual byte digest.
+Setup stages separately summarize their single observation per process; they
+remain descriptive observations, not statistically sampled setup benchmarks.
+
+The report explicitly records `approval=none`, uncontrolled machine conditions,
+different entry ABIs and timed harness costs. It supplies no confidence intervals,
+ratios/winner selection, timing gates, isolated Slot instruction-cost claim or
+performance/release approval. It is derived data, not part of the closed v1
+bundle/evidence inventory; keep any saved report **outside** those directories.
+Existing package formats, 14-day CI retention, Runtime semantics and SF008 scope
+are unchanged. Permanent storage and controlled performance acceptance stay open.
+
+The default `luna.compiled-fragment-summary` CTest reuses the Python 3.8+
+interpreter already required by `BUILD_TESTING`; compiler-only builds gain no dependency.
+Synthetic LF/CRLF fixtures cover zero values, exact decimal/even-count medians,
+1/2-cycle aggregation, a skewed distribution that distinguishes process medians
+from pooled rounds, unchanged input bytes, wrong anchors, corrupted records and
+missing CMake. The tests execute only the trusted reader, never a timing probe.

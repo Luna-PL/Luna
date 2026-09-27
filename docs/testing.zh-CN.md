@@ -54,6 +54,11 @@ CI 随后导出 `compiled-fragment-evidence/`（原始 bundle、原字节的校�
 `luna.compiled-fragment-evidence` 仅用合成文件，覆盖导出／迁移、LF／CRLF、1／2／10 轮、
 观测不变、包内脚本不执行，以及不安全路径／摘要／文件清单／批准声明拒绝。见
 [可迁移证据导出](slot_fragment_runtime_plan.zh-CN.md#可迁移证据导出)。
+`luna.compiled-fragment-summary` 门禁检查只读描述性
+统计、LF／CRLF、零值、小数及偶数个值的中位数、独立进程而非混合轮次聚合，以及拒绝
+输入时没有部分报告。仅使用构建目录中的合成夹具和可信 checkout reader，不启动计时
+程序。复用 `BUILD_TESTING` 已要求的 Python 3.8+，不增加仅编译器构建的依赖。见
+[离线描述性汇总](slot_fragment_runtime_plan.zh-CN.md#离线描述性汇总)。
 已验证容器
 适配器默认仍为 LLVM IR O0，区别于夹具的 MoonIR O2；O2／O3 必须显式选择，ORC 机器码
 生成保持默认。v2 协议记录实际配置与不可变的 materialization key。这些仅是观察值，

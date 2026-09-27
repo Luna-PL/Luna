@@ -648,3 +648,41 @@ Linux C++17／C++23、macOS、Windows CI 在 bundle 验收后导出证据包，�
 不执行、既有／嵌套输出、损坏／缺失／不安全清单；Unix 还检查符号链接记录，不启动
 计时程序。该包只是便于迁移到另行选定的存储；永久后端、保留／访问策略及受控性能
 验收仍未完成。正式 release evidence／attestation 工作流及生态锁不变。
+
+#### 离线描述性汇总
+
+`tools/summarize_compiled_fragment_bundle.py` 只需 Python 3.8+ 标准库，先通过**当前可信
+checkout** 的 CMake reader 验收解包后的 bundle，再向 stdout 输出
+`luna.compiled-fragment-summary.v1` JSON。不执行探针或包内脚本、不解压归档、不写入
+输入／输出文件。`--cmake` 指定可信程序，默认使用 PATH 中的 `cmake`。协议、探针、
+工作负载及 runner 源码字节必须匹配观测身份，与普通离线验收相同；不是任意历史读取器。
+
+```sh
+python3 tools/summarize_compiled_fragment_bundle.py \
+  --bundle "/path/to/compiled-fragment-series" \
+  --expected-commit "<完整小写观测提交>" \
+  --expected-manifest-sha256 "<独立可信manifest字节摘要>"
+```
+
+可选锚点与 reader 的信任边界相同。没有外部 manifest 锚点时，工具固定起始读取的
+manifest 字节，只用于内部一致性，不证明真实性。输出完整报告前重新核对原始文件、
+合并文件、manifest 的字节摘要及封闭目录清单。校验、程序缺失或解析失败时，stderr
+报告错误、返回非零状态，stdout 没有报告。输入必须保持不变；不提供抵御恶意并发
+修改的文件系统快照。归档脚本始终只作为数据。
+
+每个进程／路径报告九轮样本的数量、最小值、中位数和最大值；随后按配置／路径汇总
+**独立进程的中位数**，而非混合所有轮次：每配置每轮系列六个进程。偶数个值的中位数
+取两个中心值的平均，精确小数字符串避免浮点舍入。逐进程保留 cycle、block、组内
+profile position 和记录名，报告保留 manifest 身份及汇总工具的实际字节摘要。
+setup 阶段单独汇总每个进程的一次观察，仍不是统计采样的 setup benchmark。
+
+报告明确保留 `approval=none`、未受控机器条件、不同入口 ABI 和计时 harness 成本。
+不提供置信区间、比值／胜者选择、计时门禁、孤立 Slot 指令成本结论或性能／发布批准。
+报告是派生数据，不属于封闭的 v1 bundle／evidence 清单；保存时必须放在这些目录
+**之外**。包格式、CI 的 14 天保留策略、Runtime 语义及 SF008 范围均不变。长期存储
+及受控性能验收仍保持开放。
+
+默认 `luna.compiled-fragment-summary` CTest 复用 `BUILD_TESTING` 已要求的 Python 3.8+，
+不增加仅编译器构建的依赖。合成 LF／CRLF 夹具覆盖零值、精确小数／偶数中位数、1／2 轮
+聚合、可区分进程中位数与混合轮次的偏斜分布、输入字节不变、错误锚点、损坏记录及
+CMake 缺失。仅执行可信 reader，不启动计时程序。

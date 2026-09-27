@@ -73,6 +73,13 @@ probe, retaining the same artifact names and 14-day policy. The default
 LF/CRLF, 1/2/10 cycles, unchanged observations, inert archived scripts and unsafe
 path/hash/inventory/approval-claim rejection. See
 [portable evidence export](slot_fragment_runtime_plan.md#portable-evidence-export).
+The `luna.compiled-fragment-summary` gate checks read-only descriptive statistics,
+LF/CRLF, zero values, decimal/even-count medians, independent-process rather than
+pooled-round aggregation, and rejection with no partial report. It uses only
+synthetic build-tree fixtures and the trusted checkout reader, not a timing probe.
+It reuses the Python 3.8+ interpreter already required by `BUILD_TESTING`, without
+adding a dependency to compiler-only builds. See
+[offline descriptive summaries](slot_fragment_runtime_plan.md#offline-descriptive-summaries).
 The verified container adapter's
 LLVM default remains O0, distinct from the fixture's MoonIR O2; O2/O3 are explicit
 IR optimization profiles and ORC codegen stays at its defaults. Protocol v2
