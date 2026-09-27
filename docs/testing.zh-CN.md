@@ -86,6 +86,9 @@ CI 随后导出 `compiled-fragment-evidence/`（原始 bundle、原字节的校�
 独立报告协议、CPU／group／控制器／validator／setup 身份保留、有限亲和性声明、模式互斥、
 错误 scope 及重新摘要的控制器／checksum 损坏，失败不输出报告。两种模式共用统计逻辑，
 不混合观察，不改变 bundle／证据包格式、CI 保留策略或性能批准边界。
+2026-09-27 本机观察性评估另行运行两批各 54 个独立进程、10000／100000 次迭代，
+共 8748 个严格校验样本；不是默认 CTest 或受控性能门禁。环境、统计单位、证据锚点及
+下一轮分配优化建议见[编译插件本机观察性评估](slot_fragment_runtime_plan.zh-CN.md#编译插件本机观察性评估2026-09-27)。
 已验证容器
 适配器默认仍为 LLVM IR O0，区别于夹具的 MoonIR O2；O2／O3 必须显式选择，ORC 机器码
 生成保持默认。v2 协议记录实际配置与不可变的 materialization key。这些仅是观察值，

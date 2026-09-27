@@ -1098,3 +1098,118 @@ They also check explicit/default uncontrolled equivalence, mutual mode rejection
 invalid mode spelling, fixed identity retention and limited-affinity wording,
 CPU/group/setup mismatches, and controller/checksum corruption with recomputed
 raw hashes. All failures leave stdout without a report and inputs unchanged.
+
+#### Local compiled-plugin observations (2026-09-27)
+
+This round evaluates existing code without modifying Runtime, ABI, probes,
+timing protocols or system power/priority policy. The observation build is
+`303c6bee7bfd9b0232be61fc2625c66dca4ccace`; the tree was clean before sampling.
+Environment: Windows 11 build 26200, i7-12700 (12 cores/20 logical processors),
+MSYS2 CLANG64 Clang/LLVM 20.1.8, C++17, Ninja RelWithDebInfo (native
+`-O2 -g -DNDEBUG`, strict warnings). Only dispatch measurement threads were
+pinned to logical CPU 0/group 0 and checked at sample boundaries; no physical
+core class is claimed. Read-only power queries before and after reported
+Windows Balanced, but frequency, temperature, background load, setup affinity
+and process scheduling were uncontrolled/not continuously monitored. No build,
+regression suite or second measurement cohort ran concurrently.
+
+Separate sequential cohorts used 10000 and 100000 iterations, each with three
+complete series cycles: 54 independent processes, 18 per profile, nine samples
+per process/case, 4374 samples. Total: 108 processes/8748 samples. Warmup was
+1000, MoonIR O2, LLVM IR O0/O2/O3, default ORC. Every schedule, identity,
+call/checksum, raw/combined mapping and byte check passed. Common manifest
+identities matched apart from iteration configuration and combined-file hash.
+Each cohort was summarized separately, without pooling earlier one-cycle or
+uncontrolled records.
+
+Each sample is average ns/op across its batch, not individual-call latency.
+The 100000-iteration table reports **median of process medians (minimum–maximum
+process median)**, not P50/P99 or confidence intervals:
+
+| Case | LLVM O0 | LLVM O2 | LLVM O3 |
+| --- | --- | --- | --- |
+| plain | 4.50 (4.40–4.50) | 2.00 (1.90–2.00) | 2.00 (2.00–2.10) |
+| private_erased | 4.50 (4.40–4.50) | 2.00 (2.00–2.00) | 2.00 (2.00–2.00) |
+| static_resume | 2.20 (2.20–2.30) | 2.00 (2.00–2.10) | 2.00 (2.00–2.00) |
+| static_discard | 2.00 (2.00–2.00) | 2.00 (2.00–2.00) | 2.00 (2.00–2.00) |
+| dynamic_none | 216.30 (209.10–225.40) | 217.05 (208.40–230.20) | 215.30 (211.30–229.50) |
+| dynamic_one | 561.35 (544.40–609.80) | 555.15 (542.30–594.00) | 548.90 (531.70–575.70) |
+| dynamic_chain_2 | 799.10 (771.60–824.50) | 790.60 (770.30–842.00) | 793.15 (772.30–831.60) |
+| dynamic_chain_4 | 1422.75 (1384.20–1535.10) | 1356.15 (1317.60–1401.90) | 1342.85 (1290.50–1440.40) |
+| dynamic_override_none | 218.10 (211.20–226.90) | 217.45 (213.00–233.10) | 215.55 (212.30–229.50) |
+
+O2 cohort summaries below are separate sequential observations. Their changes
+cannot be attributed to iteration count, used to select a winning profile, or
+claimed as a speedup:
+
+| Case | 10000 iterations | 100000 iterations |
+| --- | --- | --- |
+| dynamic_none | 209.35 (203.70–221.20) | 217.05 (208.40–230.20) |
+| dynamic_one | 546.10 (523.20–581.80) | 555.15 (542.30–594.00) |
+| dynamic_chain_2 | 777.75 (751.80–824.40) | 790.60 (770.30–842.00) |
+| dynamic_chain_4 | 1339.35 (1285.40–1388.40) | 1356.15 (1317.60–1401.90) |
+| dynamic_override_none | 212.50 (206.60–246.10) | 217.45 (213.00–233.10) |
+
+Long-cohort O2 per-cycle medians were 544.45/568.25/562.90 ns/op for One and
+1344.70/1369.40/1353.25 for chain-4, not constant across cycles. Individual
+batch-average samples for O2 None ranged from 201.50 to 614.70 ns/op; the
+process-median table is not a tail-latency bound. Causes are not isolated.
+Long-cohort O2 setup medians were 11.518 ms compile/encode/decode, 24.984 ms
+verified load/JIT and 0.0315 ms lookup/four-candidate discovery/host ordering/
+factories/bindings/context creation. These single setup observations are
+unpinned, not a general reflection benchmark or large-catalog evidence.
+
+Source inspection is distinct from timing attribution: `findBindingEntry`
+binary-searches the pinned BindingSet, not the candidate catalog.
+`luna_runtime_fragment_dispatch_v1` constructs owning Slot/Contract/argument-layout
+strings per invocation. `dispatchRuntimeFragmentChain` uses the public activation
+constructor per handler, which calls
+`std::make_unique<RuntimeFragmentActivationState>` and copies identity/carrier
+data. These are code allocation paths, not measured allocation counts or
+attributable time. Validation, snapshot pinning, callbacks/capture writeback and
+different entry ABIs/harness costs contribute to the full path. Subtracting
+plain does not isolate a Slot instruction; static-discard also returns a different
+result.
+
+The next recommended experiment is scoped activation storage **inside the
+synchronous chain**, retaining the public owning activation API, nominal/layout
+validation, single-shot, failure propagation, escape/cleanup, nesting and
+generation pinning, and checking deep-chain stack use. First verify correctness
+and allocation paths without timing, then remeasure with matched protocols.
+Owning entry-string optimization is separate: establish C ABI byte lifetimes
+before proposing borrowed views. No new candidate-set mechanism or context/
+reentry/non-Copy ABI scope is needed. None of these optimizations was implemented
+in this round; no threshold was set, `approval=none`, controlled acceptance stays open.
+
+Local evidence is under
+`build-audit-clang64/fragment-evaluation-303c6be-i10000-c3-evidence/` and
+`fragment-evaluation-303c6be-i100000-c3-evidence/`, each with 74 files and original
+records in `bundle/`. These ignored build-tree directories are not durable
+external storage or automatically uploaded CI artifacts. Manifest SHA-256:
+
+```text
+10000:  e7bee2874fac69d3f38e73312304d8d7b6229fa70170b5244ffee6084a624f19
+100000: 9c92401ecebfedc5d34c15d77254a5f0e26a1d418327981d111d1ee80e4ed1f9
+```
+
+Evidence-index SHA-256:
+
+```text
+10000:  d5e18925b4b4958630af61ed7695477afa2a2379704a566557ebd5b281a9d437
+100000: 0c40d250ad89548d79604af47bfe924e68b718a092732a931d6695fa63823226
+```
+
+Summary tool SHA-256:
+`e35ce22f899950fc79915de09af05d9f4f2eb952a0d082211bc83ff0ca4eeb59`.
+Actual probe binary SHA-256:
+`c2a14bb67460a16f5aeff9afd57e4e9c63972ca02a50f7c6344deee0a21ad682`.
+RuntimeFragment.cpp last changed in `0c92301928b51018847102687c7b354f499bb7b9`;
+its current SHA-256 is
+`fc7bdaa9bba31506418a0a25f01d09c01f00355c6e7edbc5f6f1ba07248604e1`.
+These identities/anchors support observation checks, not complete build
+attestation or reproducibility claims.
+
+To rerun, select an allowed CPU and fresh output paths, pass iterations
+10000/100000 and three cycles separately to the pinned series, then use pinned
+evidence export and `--mode pinned` summaries with each commit/digest. Values
+need not reproduce exactly; later report commits are not these observation builds.

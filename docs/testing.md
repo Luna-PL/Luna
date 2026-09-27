@@ -122,6 +122,11 @@ CPU/group/controller/validator/setup identity retention, limited-affinity wordin
 mode separation, wrong scope and rehashed controller/checksum corruption, with
 no report on failure. Both modes share statistics, never mix observations, and
 leave the bundle/evidence formats, CI retention and performance approval unchanged.
+The separate 2026-09-27 local pilot ran two 54-process cohorts at 10000/100000
+iterations, accepting 8748 samples. It is not default CTest or a controlled
+performance gate. Environment, aggregation units, evidence anchors and the next
+allocation experiment are documented in
+[local compiled-plugin observations](slot_fragment_runtime_plan.md#local-compiled-plugin-observations-2026-09-27).
 The verified container adapter's
 LLVM default remains O0, distinct from the fixture's MoonIR O2; O2/O3 are explicit
 IR optimization profiles and ORC codegen stays at its defaults. Protocol v2
