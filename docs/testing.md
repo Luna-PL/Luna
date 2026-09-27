@@ -58,6 +58,14 @@ runs three-iteration CLI preflight and `tests/compiled_fragment_series.cmake`:
 Six permutations balance profile positions and directed neighbors within blocks;
 boundaries between blocks remain unclaimed. The bundle's manifest, 18 raw CSVs
 and combined samples share the 14-day `fragment-cost-*` artifact with the native probe.
+Before upload, CI independently reads that bundle with
+`tests/compiled_fragment_bundle.cmake`, pinning the expected workflow commit.
+The default `luna.compiled-fragment-bundle` test creates synthetic build-tree
+fixtures only: LF/CRLF, 1/2/10 cycles, unchanged input bytes, missing/unlisted
+files, metadata/source/order/hash corruption and rehashed-but-invalid records.
+Unix also checks a symlinked raw record. No timing executable is invoked.
+For offline commands and optional manifest/commit anchors, see
+[offline bundle acceptance](slot_fragment_runtime_plan.md#offline-bundle-acceptance).
 The verified container adapter's
 LLVM default remains O0, distinct from the fixture's MoonIR O2; O2/O3 are explicit
 IR optimization profiles and ORC codegen stays at its defaults. Protocol v2

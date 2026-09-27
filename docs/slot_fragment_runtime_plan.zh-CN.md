@@ -561,3 +561,37 @@ Linux C++17/C++23、macOS 与 Windows CI 将完整 bundle 和 native 探针一�
 header／digest、变化的来源、重复／截断调度及既有输出目录，不启动计时探针。这不增加
 语言、容器或 Runtime API。进程／组调度、affinity／功耗及共享 runner 负载仍未受控，
 该协议不关闭性能验收。
+
+#### 离线 bundle 验收
+
+`tests/compiled_fragment_bundle.cmake` 对已解包的 v1 bundle 做只读验收，不启动探针、
+不解压归档、不写文件、不设置计时阈值。目录必须恰好包含 manifest、合并 CSV 及列出
+的原始记录；缺失、未列出及符号链接项会被拒绝。记录名必须是规范的
+`process-N-PROFILE.csv` basename，不允许路径穿越。manifest／每份原始记录上限
+64 KiB，合并 CSV 上限 4 MiB，轮数仍不超过十。必需 manifest key 唯一，拒绝未知 key／
+文本；声明的计数、顺序和平衡必须符合 v1 调度。
+
+检查器验证实际文件字节 SHA-256、每份 v2 原始记录、共同来源及分配置 key，然后从
+原始记录重建合并 CSV，逐行核对映射。错误 checksum、变化的来源或错误合并映射，
+即使重新计算了相关摘要也会被拒绝。runner／validator 摘要必须与源码 checkout 的
+实际字节匹配，共用校验器也检查原始记录的探针／工作负载摘要。归档时保留匹配的源码
+checkout；checkout 换行方式变化也可能改变字节摘要。这不是任意历史版本读取器。
+
+```sh
+cmake -Werror=dev -DLUNA_COMPILED_BUNDLE_DIR="/path/to/compiled-fragment-series" \
+  -DLUNA_COMPILED_BUNDLE_EXPECTED_COMMIT="<完整小写40位十六进制提交>" \
+  -DLUNA_COMPILED_BUNDLE_EXPECTED_MANIFEST_SHA256="<小写64位十六进制manifest摘要>" \
+  -P tests/compiled_fragment_bundle.cmake
+```
+
+两个预期锚点均可选。若指定，应取自独立可信的归档／CI 事实；从同一不可信 bundle
+计算锚点不能证明真实性。提交 metadata 本身是自报信息，不证明工作树干净、完整构建
+来源或可复现性。验收期间输入必须保持不变：读取前后摘要检查可以检测变化，但不提供
+文件系统快照或针对并发恶意修改的沙箱。未提供锚点时，这只是匹配源码字节的自洽性
+验收，不是来源认证、性能验收或发布授权。
+
+四个跨平台／方言观测作业在上传前使用 workflow 提交作为预期锚点运行检查器。默认
+CTest 新增合成文件夹具的验收／拒绝（包括重新摘要的损坏数据）、只读字节检查、LF／
+CRLF 及 1／2／10 轮；Unix 还检查符号链接记录。夹具仅保留在构建目录内的唯一目录，
+不覆盖观测结果，不执行计时代码。CI 的 14 天保留策略未改变；长期证据存储与受控
+机器的性能测量仍是独立未完成项。

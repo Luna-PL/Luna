@@ -50,6 +50,12 @@ jobs:
             -DLUNA_COMPILED_SERIES_OUTPUT_DIR="$PWD/build/compiled-fragment-series" \
             -P tests/compiled_fragment_series.cmake
 
+      - name: Verify archived compiled Fragment bundle
+        run: |
+          cmake -Werror=dev -DLUNA_COMPILED_BUNDLE_DIR="$PWD/build/compiled-fragment-series" \
+            -DLUNA_COMPILED_BUNDLE_EXPECTED_COMMIT="${{ github.sha }}" \
+            -P tests/compiled_fragment_bundle.cmake
+
       - name: Retain Fragment cost observations
         uses: actions/upload-artifact@v4
         with:

@@ -43,7 +43,13 @@ Linux CI 在 C++17/C++23 构建矩阵中都启用该门禁。它只作用于 Lun
 预检，再独立运行 `tests/compiled_fragment_series.cmake`：18 个全新测量进程、10000 次
 迭代、1458 个严格校验样本。六种排列平衡组内配置位置及有向相邻关系，组间边界不作
 平衡保证。manifest、18 份原始 CSV 及合并样本与 native 探针一起保存在 14 天的
-`fragment-cost-*` artifact 中。已验证容器
+`fragment-cost-*` artifact 中。
+上传前 CI 通过 `tests/compiled_fragment_bundle.cmake` 独立只读验收，固定预期 workflow
+提交。默认 `luna.compiled-fragment-bundle` 仅在构建目录生成合成文件夹具，覆盖 LF／CRLF、
+1／2／10 轮、输入字节不变、缺失／未列出文件、metadata／来源／顺序／摘要损坏，以及
+重新计算摘要后仍非法的记录；Unix 还检查原始文件符号链接。不会启动计时程序。
+离线命令与可选 manifest／提交锚点见[离线 bundle 验收](slot_fragment_runtime_plan.zh-CN.md#离线-bundle-验收)。
+已验证容器
 适配器默认仍为 LLVM IR O0，区别于夹具的 MoonIR O2；O2／O3 必须显式选择，ORC 机器码
 生成保持默认。v2 协议记录实际配置与不可变的 materialization key。这些仅是观察值，
 不是计时阈值或已完成的性能验收。

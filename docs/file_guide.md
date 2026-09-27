@@ -123,6 +123,10 @@ script-defined special inputs.
   `compiled_fragment_series.cmake` runs opt-in fresh processes and publishes a
   hash-bound bundle only after validation. Its synthetic protocol test never
   invokes timing mode.
+  `compiled_fragment_bundle.cmake` accepts an unpacked bundle read-only, checking
+  source identities, byte hashes and exact raw-to-combined mappings. Its default
+  synthetic file-fixture test shares `compiled_fragment_probe_fixture.cmake`
+  with the in-memory protocol test; neither invokes a timing binary.
   `RuntimeDescriptorABI.h` is the installed in-memory descriptor contract;
   `RuntimeDescriptor.h/.cpp` validate one lease-owned registry and provide
   exact typed lookup without defining source-language query syntax.
@@ -994,6 +998,9 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/compiled_fragment_probe_protocol.cmake`
 - `tests/compiled_fragment_series.cmake`
 - `tests/compiled_fragment_series_protocol_test.cmake`
+- `tests/compiled_fragment_bundle.cmake`
+- `tests/compiled_fragment_bundle_test.cmake`
+- `tests/compiled_fragment_probe_fixture.cmake`
 - `tests/runtime_fragment_test.cpp`
 - `tests/runtime_allocation_abi_test.cpp`
 - `tests/runtime_application_host_test.cpp`

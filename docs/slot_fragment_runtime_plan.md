@@ -717,3 +717,47 @@ headers/digests, changed provenance, repeated/truncated schedule and occupied
 output paths, without starting a timing probe. This adds no language, container
 or Runtime API. Process and block scheduling, affinity/power and shared-runner
 load remain uncontrolled; this protocol does not close performance acceptance.
+
+#### Offline bundle acceptance
+
+`tests/compiled_fragment_bundle.cmake` accepts an already unpacked v1 bundle
+without executing a probe, extracting an archive, writing files, or applying
+timing thresholds. It requires exactly the manifest, combined CSV and listed raw
+records; missing, unlisted and symlinked entries are rejected. Record filenames
+must be the canonical `process-N-PROFILE.csv` basenames, with no path traversal.
+Manifest/raw size is bounded at 64 KiB each, combined CSV at 4 MiB, and cycles
+remain bounded at ten. Required manifest keys are unique, unknown keys/text are
+rejected, and declared counts/order/balance must match the v1 schedule.
+
+The reader checks actual-byte SHA-256, every raw v2 record, common identities and
+per-profile keys, then reconstructs the combined CSV from the raw records and
+compares every mapped row. A wrong checksum, changed provenance or incorrect
+combined mapping is rejected even when the affected files have been rehashed.
+Runner/validator hashes must match the source checkout's exact bytes, and raw
+probe/workload hashes are checked by the shared validator. Keep the matching
+source checkout with an archive; differing checkout line endings can change
+these byte hashes. This is not an arbitrary historical-version reader.
+
+```sh
+cmake -Werror=dev -DLUNA_COMPILED_BUNDLE_DIR="/path/to/compiled-fragment-series" \
+  -DLUNA_COMPILED_BUNDLE_EXPECTED_COMMIT="<full-lowercase-40-hex-commit>" \
+  -DLUNA_COMPILED_BUNDLE_EXPECTED_MANIFEST_SHA256="<lowercase-64-hex-manifest-digest>" \
+  -P tests/compiled_fragment_bundle.cmake
+```
+
+Both expected anchors are optional. If supplied, compare them with independently
+trusted archive/CI facts; calculating them from the same untrusted bundle does
+not establish authenticity. Commit metadata alone is self-reported, not proof
+of a clean tree, complete build provenance or reproducibility. Inputs must remain
+immutable while validating: before/after byte-hash checks detect changes but do
+not provide a filesystem snapshot or a sandbox against concurrent hostile edits.
+Without anchors this is self-consistency acceptance against source bytes, not
+authenticated provenance, performance acceptance or release authorization.
+
+All four platform/dialect observation jobs run the reader with the workflow
+commit before upload. Default CTest adds synthetic file-fixture acceptance and
+rejection (including rehashed corruption), read-only byte checks, LF/CRLF and
+cycles 1/2/10; Unix also tests a symlinked record. Fixtures stay in uniquely named
+build-tree directories, never overwrite observations, and do not run timing code.
+The 14-day CI retention policy is unchanged; durable evidence storage and
+controlled-machine performance measurements remain separate unfinished work.
