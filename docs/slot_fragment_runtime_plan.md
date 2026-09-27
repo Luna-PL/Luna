@@ -4,6 +4,8 @@ English | [简体中文](slot_fragment_runtime_plan.zh-CN.md)
 
 > Status: Confirmed implementation plan, 2026-09-23
 > Scope: type-safe, host-controlled runtime injection
+> Current acceptance view (2026-09-28): see the [v1 acceptance snapshot](slot_fragment_contract.md#v1-acceptance-snapshot-2026-09-28).
+> The native-host loop is implemented; Luna source-level runtime Ref/apply remains a scope decision. Historical stage completion does not mean the entire source plan is implemented.
 
 ## Model
 

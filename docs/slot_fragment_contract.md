@@ -2,7 +2,7 @@
 
 [English](slot_fragment_contract.md) | [简体中文](slot_fragment_contract.zh-CN.md)
 
-> Status: implemented bounded behavior and regression evidence, 2026-09-26.
+> Status: implemented bounded behavior and regression evidence; v1 acceptance snapshot updated 2026-09-28.
 > This records the SFR001/v1 implementation; it is not stable-release approval.
 
 ## SF008 bounded profile (2026-09-26)
@@ -50,6 +50,81 @@ The [concurrent host harness](../tests/runtime_fragment_concurrency_test.cpp)
 uses immutable native environments and private per-call arguments. Hosts remain
 responsible for callback/environment synchronization; this is not source-language
 thread-safety admission for arbitrary Fragment environments or Arc payloads.
+
+## v1 acceptance snapshot (2026-09-28)
+
+This audit compares sources, host headers, verified-container tests and implementation
+records. Core completion means **bounded v1 driven by native host APIs**, not the
+entire SFR001 source-language plan or stable acceptance. C++ `RuntimeFragmentRef`
+is not templated on `S`: it checks exact Slot/Contract identities at construction
+and installation. It does not imply an available transferable Luna
+`RuntimeFragmentRef<S>` type. Source type/ownership validation and runtime nominal
+checking at the host boundary are different guarantees.
+
+Keys/states below are audit labels, not new keywords, public APIs, decision IDs
+or release approval.
+
+<!-- SLOT_FRAGMENT_V1_ACCEPTANCE_BEGIN -->
+
+| Boundary | State | Evidence / actual remaining work |
+| --- | --- | --- |
+| `host-ref` | `implemented` | C++ move-only refs, owned/borrowed environments, factories/cleanup and generation pins; `luna.runtime-fragment-v1`. |
+| `source-ref-apply` | `scope-open` | Luna has no transferable Ref construction/import/parameter/return type or runtime Ref `apply` operand. The planned same-operand extension remains; decide next-stage scope rather than claiming completion or permanently deferring it without direction. |
+| `candidate-snapshot` | `implemented` | `snapshotRuntimeFragmentCandidates(generation, slot, ...)` filters one explicitly supplied generation by exact Slot/Contract and pins an immutable snapshot; not an all-loaded-package global query. |
+| `candidate-aggregation` | `host-managed` | Hosts know the packages they load and may compose per-generation candidates. Runtime has no built-in global candidate set/cross-generation aggregate query. A convenience API is a later scope choice, not a hot-path defect. |
+| `candidate-notification` | `host-managed` | Load/activation results and generation identities let hosts observe changes; no built-in candidate event bus or automatic discovery, ordering, winner selection or injection. |
+| `binding-dispatch` | `implemented` | Explicit None/One/ordered chains, safe points, pinned contexts and local overrides; in-flight handle release/replacement retains the original snapshot/environments. |
+| `context-entry` | `implemented` | Explicit `runtime fn` host entries, direct-call effect fixed points, argument/continuation frames, cross-package verified containers and return/`?` escape; `luna.moonir-canonical`. |
+| `handler-context-reentry` | `deferred` | v1 published execute wrappers lack context; direct/transitive dynamic dispatch from handler bodies is rejected. Native base-continuation nesting does not grant it; stable `TBD-SF008` acceptance stays open. |
+| `context-indirect-call` | `deferred` | Context-dependent function values/indirect calls fail closed; no TLS or removal of rejection checks expands the ABI. |
+| `noncopy-public-abi` | `deferred` | Exported Slot parameters/Fragment environments are Copy-only; static affine environments are not a cross-host move/drop protocol. |
+| `multi-shot-nonunit` | `deferred` | v1 remains unit-result/single-shot, without escaping continuations, asynchronous activations or multiple resumes. |
+| `runtime-cost-structure` | `implemented` | Static erasure, one dispatch per dynamic site and control-plane work outside dispatch; scoped activations/frozen identities have allocation/lifetime regressions, not allocation-free whole dispatch. |
+| `performance-acceptance` | `acceptance-open` | Pinned-thread matched observations exist, not controlled alternating A/B, cross-platform budgets or formal approval. Tiny/short CI series prove behavior/protocol, not acceptance. |
+| `durable-evidence` | `storage-open` | Local packages/14-day CI artifacts are not durable external storage. Choose destination, retention and identity anchors; longer CI retention alone is not permanent archival. |
+| `stable-release` | `authorization-open` | Bounded behavior completion is separate from stable-language/release authorization; historical TBD keys, the 0.3 core freeze, tags/lock/release gates are unchanged. |
+
+<!-- SLOT_FRAGMENT_V1_ACCEPTANCE_END -->
+
+Source pointers: [host APIs](../src/runtime/RuntimeFragment.h),
+[per-generation discovery](../src/runtime/RuntimeFragment.cpp),
+[static apply parser](../src/parser/ParserStatements.cpp) and
+[real cross-package container loading](../tests/moonir_canonical_runtime_slot_container_test.cpp).
+The latest production Runtime commit is `bc9d6fd`, with the implementation stage's
+77/77 non-hardware regressions and successful three-platform CI; it is also the
+observation build. Report commit `7757b77` is tracked separately. Neither that
+report nor this audit commit is the measurement build. Full observations/digests
+are in the [implementation plan](slot_fragment_runtime_plan.md#matched-protocol-frozen-identity-observations-2026-09-28).
+
+The existing strict-warning build passes the eight bounded gates plus documentation
+inventory, 9/9 (final run: 14.68 seconds); this is not a new full compiler build or a 77-test
+rerun. The new status gate first fails without the acceptance snapshot and then
+passes with it; in-memory negative fixtures also reject premature completion,
+missing/duplicate boundaries and unregistered entries.
+Read-only `verify_release_readiness.cmake` currently blocks publication because the
+lock's verified Luna candidate `41ce85ec9d6d2c2f22b193b3ece60abb09d4c5c3` is not an
+ancestor of HEAD. Exit 0 means the fail-closed policy works, not release-ready.
+This is separate ecosystem evidence/promotion work, not a Slot execution defect;
+do not automatically replace the candidate, edit the lock or move historical tags
+to bypass it.
+The local repository is not shallow, the candidate commit object exists, and a
+direct `git merge-base --is-ancestor` returns 1; this is not merely missing shallow
+history or an unavailable object.
+
+Prioritize scope selection over a third micro-optimization:
+
+1. For native-host v1 acceptance, decide practical performance budgets, stable
+   commitments and evidence-storage policy. No global catalog, candidate events
+   or handler re-entry is required merely for this acceptance path.
+2. For Luna-source hosts, `source-ref-apply` is actual missing work. First specify
+   nominal Ref types, construction/import APIs, Copy/move/borrow and generation
+   lifetimes, and explicit-context propagation for local runtime `apply`. Do not
+   pick new syntax or change the public ABI before resolving this scope.
+
+`tests/luna_0_3_design_contract.cmake` protects both languages' complete classification
+against conflating source gaps, optional host facilities, deferred capabilities
+and approval. It is a status-consistency gate, not source-behavior evidence or
+owner approval for these capabilities.
 
 ## Remaining decision and release boundary
 

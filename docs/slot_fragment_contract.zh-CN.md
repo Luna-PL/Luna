@@ -2,7 +2,7 @@
 
 [English](slot_fragment_contract.md) | 简体中文
 
-> 状态：已实现的有界行为及回归证据，2026-09-26。
+> 状态：已实现的有界行为及回归证据；v1 验收快照更新于 2026-09-28。
 > 本文记录 SFR001/v1 的实现，不是稳定版发布授权。
 
 ## SF008 有界规则（2026-09-26）
@@ -46,6 +46,69 @@ return 不会自动逃逸调用者的续体或外层 chain。
 [并发宿主测试](../tests/runtime_fragment_concurrency_test.cpp)使用不可变 native 环境和
 逐调用独立参数。回调／环境的同步仍由宿主负责；这不是任意 Fragment 环境或 Arc
 payload 的源码线程安全准入。
+
+## v1 验收快照（2026-09-28）
+
+本次对照源码、宿主头文件、verified container 测试与实施记录。核心机制已完成仅指
+**原生宿主 API 驱动的有界 v1**，不是全部 SFR001 源码计划或稳定版验收。C++
+`RuntimeFragmentRef` 不是按 `S` 参数化的模板；它在构造和安装时检查精确 Slot／
+Contract，并不意味着 Luna 已有可传递的 `RuntimeFragmentRef<S>` 类型。源码类型／
+所有权验证与宿主边界的运行时名义检查不能互相冒充。
+
+下列键与状态只是审计标签，不是新关键字、公共 API、决策 ID 或发布批准。
+
+<!-- SLOT_FRAGMENT_V1_ACCEPTANCE_BEGIN -->
+
+| 边界 | 状态 | 已有证据／实际剩余项 |
+| --- | --- | --- |
+| `host-ref` | `implemented` | C++ move-only 引用、owned／borrowed 环境、factory／cleanup、generation pin；`luna.runtime-fragment-v1`。 |
+| `source-ref-apply` | `scope-open` | Luna 源码尚无可传递 Ref 的构造／导入／参数与返回类型，也不能用运行时 Ref 作为 `apply` operand。原定同 operand 扩展方向仍保留；须确认下一阶段范围，不误报完成，也不擅自永久延期。 |
+| `candidate-snapshot` | `implemented` | `snapshotRuntimeFragmentCandidates(generation, slot, ...)` 按精确 Slot／Contract 过滤显式给定的单个 generation，快照不可变且固定 generation；不是所有已加载包的全局查询。 |
+| `candidate-aggregation` | `host-managed` | 宿主知道自己加载的包并可组合各 generation 的候选；Runtime 没有内建全局候选集合或跨 generation 聚合查询。便利 API 是后续范围选择，不是当前热路径缺陷。 |
+| `candidate-notification` | `host-managed` | 加载／激活结果和 generation identity 供宿主观察；没有内建候选变化事件总线，不自动发现、排序、选胜者或注入。 |
+| `binding-dispatch` | `implemented` | 显式 None／One／ordered chain、safe point、pinned context、局部 override；执行中释放／替换句柄仍保留原快照与环境。 |
+| `context-entry` | `implemented` | `runtime fn` 显式宿主入口、direct-call effect 最小不动点、参数与 continuation frame、跨包 verified container、return／`?` 逃逸；`luna.moonir-canonical`。 |
+| `handler-context-reentry` | `deferred` | v1 published execute wrapper 不传 context；handler 正文直接／传递动态 dispatch 被拒绝。Native base continuation 嵌套不授予此能力；`TBD-SF008` 稳定承诺仍开放。 |
+| `context-indirect-call` | `deferred` | 需要 context 的 function value／间接调用仍 fail closed，不靠 TLS 或删除拒绝检查扩展 ABI。 |
+| `noncopy-public-abi` | `deferred` | Exported Slot 参数与 Fragment 环境为 Copy-only；静态 affine 环境不等于跨宿主 move/drop 协议。 |
+| `multi-shot-nonunit` | `deferred` | 首版仍是 unit-result、single-shot，不增加可逃逸续体、异步 activation 或多次 resume。 |
+| `runtime-cost-structure` | `implemented` | 静态擦除、动态 site 单次 dispatch、控制平面不进入热路径；作用域 activation 与固定身份复用有分配／寿命回归，不是整次派发零分配。 |
+| `performance-acceptance` | `acceptance-open` | 已有固定线程匹配观察，不是受控交替 A/B、跨平台性能预算或正式批准。CI 微型／短系列证明行为和协议，不能代替性能验收。 |
+| `durable-evidence` | `storage-open` | 本机证据包和 14 天 CI artifacts 不等于持久外部存储；需确定目的地、保留期与身份锚点，不能仅延长 CI 保留就声称永久归档。 |
+| `stable-release` | `authorization-open` | 有界行为完成与稳定语言／发布授权分离；不关闭历史 TBD 登记、不扩大 0.3 核心冻结、不改 tag／lock／发布门禁。 |
+
+<!-- SLOT_FRAGMENT_V1_ACCEPTANCE_END -->
+
+源码定位：[宿主 API](../src/runtime/RuntimeFragment.h)、
+[单 generation 查询](../src/runtime/RuntimeFragment.cpp)、
+[静态 apply parser](../src/parser/ParserStatements.cpp)及
+[跨包真实容器加载](../tests/moonir_canonical_runtime_slot_container_test.cpp)。
+最近生产 Runtime 提交为 `bc9d6fd`，上一阶段 77／77 非 hardware 回归和三平台 CI
+通过；性能观察构建也是该提交。报告提交 `7757b77` 的跨平台结果另行跟踪，不把报告或
+本次审计提交当作原始测量构建。完整数值及摘要在
+[实施计划](slot_fragment_runtime_plan.zh-CN.md#固定身份复用的匹配协议复测2026-09-28)。
+
+本轮用既有严格警告构建运行有界八项门禁及文档 inventory，9／9 通过（最终 14.68 秒），
+不声称重新构建了全部编译器或重跑了 77 项。新增状态门禁先因缺少验收快照失败，补齐后
+通过；内存负夹具还拒绝提前宣称完成、漏项、重复项和未登记项。
+只读 `verify_release_readiness.cmake` 当前明确阻止发布：lock 中的已验证 Luna candidate
+`41ce85ec9d6d2c2f22b193b3ece60abb09d4c5c3` 不是当前 HEAD 的祖先。脚本退出 0 表示
+fail-closed 策略正常，不表示 release-ready；这是独立生态证据／提升问题，不是 Slot
+执行缺陷。不能自动换掉 candidate、改 lock 或移动历史 tag 来绕过该门禁。
+本地仓库不是 shallow clone，候选 commit 对象存在，直接 `git merge-base --is-ancestor`
+返回 1；这不是仅因浅历史或缺失对象产生的检查失败。
+
+下一步优先作范围决定，而不是继续第三项微优化：
+
+1. 若验收目标是当前 native-host v1，先明确实用性能预算、稳定承诺和证据存储政策；
+   不必为此增加全局 catalog、候选通知或 handler 重入。
+2. 若目标包括 Luna 源码作为宿主，`source-ref-apply` 是实质未完成项。先细化 Ref 的
+   名义类型、构造／导入 API、Copy／move／borrow 与 generation 寿命，以及局部
+   runtime `apply` 如何传递显式 context；未确认前不选择新语法或直接改公开 ABI。
+
+`tests/luna_0_3_design_contract.cmake` 保护两种语言的完整分类，防止把源码缺口、宿主
+可选设施、延期能力和批准混作“实现完成”。它是状态一致性门禁，不是这些能力的源码
+行为证明或负责人批准。
 
 ## 剩余决定与发布边界
 

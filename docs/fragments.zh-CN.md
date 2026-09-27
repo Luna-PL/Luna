@@ -75,6 +75,8 @@ apply measured[7] {
 
 静态组合可以内联，不携带 Runtime descriptor 或 dispatch 成本。已确认 runtime 计划会把
 同一 operand 位置扩展为已验证的 `RuntimeFragmentRef<S>`，而不是增加 `dynamic apply`。
+这是尚未实施的源码扩展方向：当前 `apply` 仍解析静态命名 Fragment，不接受运行时
+Ref 变量；C++ 宿主的 `RuntimeFragmentRef` 不能据此当作已存在的 Luna 类型。
 
 静态组合必须展开成有限 CFG。Fragment body 直接或相互调用 Slot，且 active binding
 会重新进入该 Fragment 时，语义分析与 CFG builder 都会拒绝。这是构造期的环检查，
@@ -103,10 +105,12 @@ handler 的局部变量。私有静态组合仍可继承受影响调用者的 ex
 `export slot` 发布稳定的注入契约。目标指向 exported Slot 的 `export fragment` 是该确切
 SlotId 的候选实现。候选资格来自已验证的名义关系与 ContractId，绝不来自用户 metadata。
 
-通过公开 schema 附加的 metadata 是宿主选择策略。typed candidate 查询现在按精确
-SlotId/ContractId 返回公开且可执行 Fragment 的不可变、generation-pinned 快照；宿主负责
-为每个精确 Slot 选择 None 或一个候选、构造不可变 BindingSet，并且只在 Runtime safe point
-发布。普通 Slot dispatch 不运行反射、metadata 过滤或 descriptor 重新验证。
+通过公开 schema 附加的 metadata 是宿主选择策略。typed candidate 查询对宿主明确传入的
+单个 generation 按精确 SlotId/ContractId 返回公开且可执行 Fragment 的不可变、
+generation-pinned 快照，不是全局聚合查询或候选通知服务。宿主负责组合需要的候选、
+为每个精确 Slot 选择 None、One 或显式 OrderedChain，构造不可变 BindingSet，并只在
+Runtime safe point 发布。普通 Slot dispatch 不运行反射、metadata 过滤或 descriptor
+重新验证。现有 API 与剩余源码范围见 [v1 验收快照](slot_fragment_contract.zh-CN.md#v1-验收快照2026-09-28)。
 
 Descriptor、生命周期、宿主策略和分阶段实现边界见已确认的
 [Slot/Fragment 运行时注入计划](slot_fragment_runtime_plan.zh-CN.md)。

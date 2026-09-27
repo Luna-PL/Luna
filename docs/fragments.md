@@ -85,6 +85,9 @@ apply measured[7] {
 Static composition can be inlined and carries no Runtime descriptor or dispatch
 cost. The confirmed runtime plan extends the same operand position to a verified
 `RuntimeFragmentRef<S>` rather than adding `dynamic apply`.
+This is an unimplemented source extension: current `apply` still resolves a
+statically named Fragment, not a runtime Ref variable. A C++ host
+`RuntimeFragmentRef` is not an already-available Luna type.
 
 Static composition must expand to a finite CFG. A Fragment body that directly
 or mutually invokes Slots whose active bindings re-enter that Fragment is
@@ -125,11 +128,14 @@ Candidate membership comes from the verified nominal relationship and
 ContractId, never from user metadata.
 
 Metadata attached through a public schema is selection policy for the host.
-The typed candidate query returns immutable generation-pinned snapshots of
-public executable Fragments for one exact SlotId/ContractId. The host selects
-None or one candidate per exact Slot, constructs an immutable BindingSet, and
-publishes it only at a Runtime safe point. Reflection, metadata filtering, and
-descriptor validation do not run on ordinary Slot dispatch.
+The typed candidate query takes one explicit generation and returns immutable,
+generation-pinned public executable Fragments for an exact SlotId/ContractId,
+not a global aggregate query or candidate-notification service. Hosts compose
+the candidates they need, select None, One or explicit OrderedChain per Slot,
+construct an immutable BindingSet and publish only at a Runtime safe point.
+Reflection, metadata filtering and descriptor validation do not run on ordinary
+Slot dispatch. See the [v1 acceptance snapshot](slot_fragment_contract.md#v1-acceptance-snapshot-2026-09-28)
+for existing APIs and remaining source-language scope.
 
 See the confirmed
 [Slot/Fragment Runtime Injection Plan](slot_fragment_runtime_plan.md) for the

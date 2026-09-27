@@ -34,6 +34,18 @@ endfunction()
 verify_design_document("docs/luna_0.3_design.md" "English")
 verify_design_document("docs/luna_0.3_design.zh-CN.md" "Chinese")
 
+function(v1_acceptance_rows_match acceptance expected_rows output)
+    string(REGEX MATCHALL "\\| `[a-z][a-z-]+` \\| `[a-z][a-z-]+` \\|"
+           actual_rows "${acceptance}")
+    list(SORT expected_rows)
+    list(SORT actual_rows)
+    if("${actual_rows}" STREQUAL "${expected_rows}")
+        set(${output} TRUE PARENT_SCOPE)
+    else()
+        set(${output} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
 # The old TBD IDs remain as historical decision keys, but their current
 # disposition must not regress to the pre-runtime SF006 account.
 foreach(design_document IN ITEMS
@@ -175,6 +187,68 @@ foreach(language IN ITEMS en zh-CN)
             message(FATAL_ERROR "${profile} lost bounded contract evidence: ${required}")
         endif()
     endforeach()
+    # Keep the host implementation distinct from unimplemented source values,
+    # optional host infrastructure, deferred ABI extensions and release gates.
+    # These are audit states, not new language decisions or runtime keywords.
+    set(acceptance_begin "<!-- SLOT_FRAGMENT_V1_ACCEPTANCE_BEGIN -->")
+    set(acceptance_end "<!-- SLOT_FRAGMENT_V1_ACCEPTANCE_END -->")
+    string(FIND "${text}" "${acceptance_begin}" acceptance_begin_at)
+    string(FIND "${text}" "${acceptance_end}" acceptance_end_at)
+    if(acceptance_begin_at EQUAL -1 OR acceptance_end_at EQUAL -1 OR
+       acceptance_end_at LESS acceptance_begin_at)
+        message(FATAL_ERROR "${profile} lost its bounded v1 acceptance snapshot")
+    endif()
+    math(EXPR acceptance_length "${acceptance_end_at} - ${acceptance_begin_at}")
+    string(SUBSTRING "${text}" ${acceptance_begin_at} ${acceptance_length} acceptance)
+    set(expected_acceptance_rows
+        "| `host-ref` | `implemented` |"
+        "| `source-ref-apply` | `scope-open` |"
+        "| `candidate-snapshot` | `implemented` |"
+        "| `candidate-aggregation` | `host-managed` |"
+        "| `candidate-notification` | `host-managed` |"
+        "| `binding-dispatch` | `implemented` |"
+        "| `context-entry` | `implemented` |"
+        "| `handler-context-reentry` | `deferred` |"
+        "| `context-indirect-call` | `deferred` |"
+        "| `noncopy-public-abi` | `deferred` |"
+        "| `multi-shot-nonunit` | `deferred` |"
+        "| `runtime-cost-structure` | `implemented` |"
+        "| `performance-acceptance` | `acceptance-open` |"
+        "| `durable-evidence` | `storage-open` |"
+        "| `stable-release` | `authorization-open` |")
+    v1_acceptance_rows_match("${acceptance}" "${expected_acceptance_rows}" accepted)
+    if(NOT accepted)
+        message(FATAL_ERROR
+            "${profile} v1 acceptance scope drifted. Source values, optional host "
+            "infrastructure, deferred capabilities and approval must remain distinct.")
+    endif()
+    # In-memory negative fixtures exercise the same classifier without
+    # modifying documentation, generating files or adding a CTest target.
+    foreach(row IN LISTS expected_acceptance_rows)
+        if(NOT row MATCHES "`implemented`")
+            string(REGEX REPLACE "`[a-z-]+` \\|$" "`implemented` |" promoted "${row}")
+            string(REPLACE "${row}" "${promoted}" broken "${acceptance}")
+            v1_acceptance_rows_match("${broken}" "${expected_acceptance_rows}" accepted)
+            if(accepted)
+                message(FATAL_ERROR "v1 classifier accepted premature completion: ${row}")
+            endif()
+        endif()
+        string(REPLACE "${row}" "" broken "${acceptance}")
+        v1_acceptance_rows_match("${broken}" "${expected_acceptance_rows}" accepted)
+        if(accepted)
+            message(FATAL_ERROR "v1 classifier accepted a missing boundary: ${row}")
+        endif()
+        set(broken "${acceptance}\n${row}")
+        v1_acceptance_rows_match("${broken}" "${expected_acceptance_rows}" accepted)
+        if(accepted)
+            message(FATAL_ERROR "v1 classifier accepted a duplicate boundary: ${row}")
+        endif()
+    endforeach()
+    v1_acceptance_rows_match("${acceptance}\n| `unregistered-boundary` | `implemented` |"
+                            "${expected_acceptance_rows}" accepted)
+    if(accepted)
+        message(FATAL_ERROR "v1 classifier accepted an unregistered boundary")
+    endif()
 endforeach()
 
 file(READ "${LUNA_SOURCE_DIR}/docs/luna_0.3_evolution_audit.md" english_audit)
