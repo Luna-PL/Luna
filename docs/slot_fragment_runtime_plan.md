@@ -670,10 +670,10 @@ The shared affinity smoke additionally runs three-iteration O0/O2/O3 dispatch
 checks (243 samples), a second allowed CPU when available, and explicit rejection
 on unsupported platforms. CMake 4.4 child invocations use the author-warning spelling.
 
-The existing v1 series, default bundle entry point, evidence exporter and descriptive
-summary accept only uncontrolled compiled v2. Pinned raw records are not added to
+The existing v1 series, default bundle entry point, evidence exporter and default
+summary mode accept only uncontrolled compiled v2. Pinned raw records are not added to
 their inventories. The separate pinned series below is not a portable evidence
-export or a new input to the old summary tool. Do not place these CSVs inside an
+export or an input to the default summary mode. Do not place these CSVs inside an
 existing closed bundle. Default CTest adds only
 synthetic record checks, never thread pinning or a timing threshold. Frequency,
 power, background load, durable storage and performance/release approval remain unclaimed.
@@ -729,7 +729,7 @@ metadata/source/order corruption, rehashed invalid records, mode separation and
 failure without publication. Pinned/protocol tests share synthetic fixture builders.
 This directory still needs matching trusted checkout bytes: it carries digests,
 not a portable controller/validator source snapshot. Portable evidence export,
-descriptive pinned summaries, controlled power/background experiments and durable
+controlled power/background experiments and durable
 archival remain separate work; setup and between-block balance remain unclaimed.
 
 #### Compiled-plugin comparison protocol
@@ -986,6 +986,26 @@ python3 tools/summarize_compiled_fragment_bundle.py \
   --expected-manifest-sha256 "<independently trusted manifest byte digest>"
 ```
 
+The default, also spelled `--mode uncontrolled`, retains that protocol and reader.
+Only explicit `--mode pinned` selects the pinned reader and produces the separate
+`luna.compiled-fragment-pinned-summary.v1` report. Neither mode detects or falls
+back to the other from metadata; mismatched bundles are rejected with no report.
+Both reuse the same decimal/process aggregation. Pinned reports preserve all
+manifest metadata, including CPU/group, controller and pinned-validator digests,
+per-profile materialization keys and unpinned setup scope:
+
+```sh
+python3 tools/summarize_compiled_fragment_bundle.py --mode pinned \
+  --bundle "/path/to/compiled-fragment-pinned-series" \
+  --expected-commit "<full lowercase observation commit>" \
+  --expected-manifest-sha256 "<independently trusted manifest byte digest>"
+```
+
+Pinning is limited to the dispatch measurement thread and verified sample
+boundaries, not setup, power policy, shared machine load or between-process
+scheduling. Boundary-check/harness costs prevent treating pinned and uncontrolled
+records as interchangeable. The tool does not merge bundles or compare modes.
+
 Optional anchors have the same trust boundary as the reader. Without an external
 manifest anchor, the tool pins the manifest bytes seen at the start for internal
 consistency, not authentication. It rechecks raw-file, combined-file and manifest
@@ -1011,9 +1031,14 @@ bundle/evidence inventory; keep any saved report **outside** those directories.
 Existing package formats, 14-day CI retention, Runtime semantics and SF008 scope
 are unchanged. Permanent storage and controlled performance acceptance stay open.
 
-The default `luna.compiled-fragment-summary` CTest reuses the Python 3.8+
+The default `luna.compiled-fragment-summary` and `luna.compiled-fragment-pinned-summary`
+CTest gates share the same fixture/statistics test and reuse the Python 3.8+
 interpreter already required by `BUILD_TESTING`; compiler-only builds gain no dependency.
 Synthetic LF/CRLF fixtures cover zero values, exact decimal/even-count medians,
 1/2-cycle aggregation, a skewed distribution that distinguishes process medians
 from pooled rounds, unchanged input bytes, wrong anchors, corrupted records and
 missing CMake. The tests execute only the trusted reader, never a timing probe.
+They also check explicit/default uncontrolled equivalence, mutual mode rejection,
+invalid mode spelling, fixed identity retention and limited-affinity wording,
+CPU/group/setup mismatches, and controller/checksum corruption with recomputed
+raw hashes. All failures leave stdout without a report and inputs unchanged.

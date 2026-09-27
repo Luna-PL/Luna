@@ -525,8 +525,8 @@ CPU／group／边界核对 metadata，以及
 共用亲和性冒烟还做三次迭代的 O0／O2／O3 派发检查（243 样本）、可用时的第二个合法
 CPU，以及不支持平台的显式拒绝。CMake 4.4 子调用使用 author 警告参数名称。
 
-已有 v1 series、默认 bundle 入口、证据导出和描述性汇总仍只接受未固定的编译 v2。固定原始
-记录不加入其文件清单。下方独立固定序列不是可迁移证据导出，也不是旧汇总工具的新输入；
+已有 v1 series、默认 bundle 入口、证据导出和默认汇总模式仍只接受未固定的编译 v2。固定原始
+记录不加入其文件清单。下方独立固定序列不是可迁移证据导出，也不是默认汇总模式的输入；
 不要把这些 CSV 放进已有的封闭 bundle。默认 CTest 只增加
 合成记录检查，不固定线程，也不设计时阈值。频率、功耗、后台负载、长期存储与性能／发布
 批准仍不作保证。
@@ -570,7 +570,7 @@ CI 将固定目录放在 `compiled-fragment-evidence/` 的**同级**，而非内
 LF／CRLF、多轮、输入字节不变、缺失／未列出／符号链接／不安全路径、metadata／源码／
 顺序损坏、重新摘要的非法记录、模式隔离和失败不发布；固定记录／bundle 门禁共用合成
 fixture。此目录仍需要匹配的可信 checkout 字节：携带摘要，不携带可迁移的控制器／
-validator 源码快照。可迁移证据导出、固定记录描述性汇总、功耗／后台控制实验及长期归档
+validator 源码快照。可迁移证据导出、功耗／后台控制实验及长期归档
 仍需另行完成；setup 及组间顺序平衡仍不作保证。
 
 #### 编译插件对比协议
@@ -776,6 +776,23 @@ python3 tools/summarize_compiled_fragment_bundle.py \
   --expected-manifest-sha256 "<独立可信manifest字节摘要>"
 ```
 
+默认模式也可显式写为 `--mode uncontrolled`，reader 和报告协议保持不变。只有显式
+`--mode pinned` 才选择固定 reader，输出独立的 `luna.compiled-fragment-pinned-summary.v1`。
+不根据 metadata 自动识别或回退；模式与 bundle 不匹配时拒绝且不输出报告。两种模式
+复用小数／进程聚合逻辑。固定报告保留全部 manifest metadata，包括 CPU／group、控制器及
+固定 validator 摘要、分配置 materialization key 和未固定 setup 范围：
+
+```sh
+python3 tools/summarize_compiled_fragment_bundle.py --mode pinned \
+  --bundle "/path/to/compiled-fragment-pinned-series" \
+  --expected-commit "<完整小写观测提交>" \
+  --expected-manifest-sha256 "<独立可信manifest字节摘要>"
+```
+
+亲和性只约束 dispatch 测量线程，并在样本边界验证，不约束 setup、功耗、后台负载或
+进程间调度。边界检查和 harness 成本使固定／默认记录不能视为等价；工具不合并 bundle，
+也不比较两种模式。
+
 可选锚点与 reader 的信任边界相同。没有外部 manifest 锚点时，工具固定起始读取的
 manifest 字节，只用于内部一致性，不证明真实性。输出完整报告前重新核对原始文件、
 合并文件、manifest 的字节摘要及封闭目录清单。校验、程序缺失或解析失败时，stderr
@@ -794,7 +811,11 @@ setup 阶段单独汇总每个进程的一次观察，仍不是统计采样的 s
 **之外**。包格式、CI 的 14 天保留策略、Runtime 语义及 SF008 范围均不变。长期存储
 及受控性能验收仍保持开放。
 
-默认 `luna.compiled-fragment-summary` CTest 复用 `BUILD_TESTING` 已要求的 Python 3.8+，
+默认 `luna.compiled-fragment-summary` 与 `luna.compiled-fragment-pinned-summary` CTest
+共用夹具／统计测试，复用 `BUILD_TESTING` 已要求的 Python 3.8+，
 不增加仅编译器构建的依赖。合成 LF／CRLF 夹具覆盖零值、精确小数／偶数中位数、1／2 轮
 聚合、可区分进程中位数与混合轮次的偏斜分布、输入字节不变、错误锚点、损坏记录及
 CMake 缺失。仅执行可信 reader，不启动计时程序。
+另检查默认／显式未固定报告一致、模式互斥、非法模式、固定身份保留及亲和性范围声明、
+CPU／group／setup 错配，以及重新计算原始摘要后的控制器／checksum 损坏。所有拒绝路径
+均无 stdout 报告，输入字节保持不变。

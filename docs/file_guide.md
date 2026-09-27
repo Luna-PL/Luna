@@ -150,8 +150,11 @@ script-defined special inputs.
   inventory and byte hashes, never executing the archived scripts. The synthetic
   evidence test covers relocation and the separate trust/approval boundaries.
   `tools/summarize_compiled_fragment_bundle.py` uses the trusted checkout reader
-  before emitting read-only descriptive process/profile statistics. Its synthetic
-  CMake test reuses the suite's Python 3.8+ dependency and never invokes a timing probe.
+  before emitting read-only descriptive process/profile statistics. Default
+  uncontrolled and explicit `--mode pinned` use separate readers/report protocols,
+  share aggregation and preserve their measurement scope; neither auto-detects a mode.
+  Its two synthetic CTest gates share one script, reuse the suite's Python 3.8+
+  dependency and never invoke a timing probe.
   `RuntimeDescriptorABI.h` is the installed in-memory descriptor contract;
   `RuntimeDescriptor.h/.cpp` validate one lease-owned registry and provide
   exact typed lookup without defining source-language query syntax.

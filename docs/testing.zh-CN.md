@@ -76,6 +76,10 @@ CI 随后导出 `compiled-fragment-evidence/`（原始 bundle、原字节的校�
 输入时没有部分报告。仅使用构建目录中的合成夹具和可信 checkout reader，不启动计时
 程序。复用 `BUILD_TESTING` 已要求的 Python 3.8+，不增加仅编译器构建的依赖。见
 [离线描述性汇总](slot_fragment_runtime_plan.zh-CN.md#离线描述性汇总)。
+同一脚本也支持 `luna.compiled-fragment-pinned-summary`，检查工具显式 `--mode pinned` 的
+独立报告协议、CPU／group／控制器／validator／setup 身份保留、有限亲和性声明、模式互斥、
+错误 scope 及重新摘要的控制器／checksum 损坏，失败不输出报告。两种模式共用统计逻辑，
+不混合观察，不改变 bundle／证据包格式、CI 保留策略或性能批准边界。
 已验证容器
 适配器默认仍为 LLVM IR O0，区别于夹具的 MoonIR O2；O2／O3 必须显式选择，ORC 机器码
 生成保持默认。v2 协议记录实际配置与不可变的 materialization key。这些仅是观察值，

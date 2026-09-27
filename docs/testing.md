@@ -106,6 +106,12 @@ synthetic build-tree fixtures and the trusted checkout reader, not a timing prob
 It reuses the Python 3.8+ interpreter already required by `BUILD_TESTING`, without
 adding a dependency to compiler-only builds. See
 [offline descriptive summaries](slot_fragment_runtime_plan.md#offline-descriptive-summaries).
+The same test script backs `luna.compiled-fragment-pinned-summary`, exercising
+the tool's explicit `--mode pinned` and separate report protocol. It checks
+CPU/group/controller/validator/setup identity retention, limited-affinity wording,
+mode separation, wrong scope and rehashed controller/checksum corruption, with
+no report on failure. Both modes share statistics, never mix observations, and
+leave the bundle/evidence formats, CI retention and performance approval unchanged.
 The verified container adapter's
 LLVM default remains O0, distinct from the fixture's MoonIR O2; O2/O3 are explicit
 IR optimization profiles and ORC codegen stays at its defaults. Protocol v2

@@ -62,20 +62,37 @@ def describe(values):
             "median": format(median, "f"), "max": format(ordered[-1], "f")}
 
 
-def summarize(bundle, cmake, expected_commit=None, expected_manifest=None):
+def summarize(bundle, cmake, expected_commit=None, expected_manifest=None, mode="uncontrolled"):
+    # Mode is explicit caller policy, never inferred from untrusted metadata.
+    if mode == "uncontrolled":
+        anchor = "LUNA_COMPILED_BUNDLE"
+        reader = "compiled_fragment_bundle.cmake"
+        protocol = "luna.compiled-fragment-summary.v1"
+        affinity_limit = "Affinity, power policy, shared machine load and process scheduling are uncontrolled."
+    elif mode == "pinned":
+        anchor = "LUNA_COMPILED_PINNED_BUNDLE"
+        reader = "compiled_fragment_pinned_bundle.cmake"
+        protocol = "luna.compiled-fragment-pinned-summary.v1"
+        affinity_limit = (
+            "Only the dispatch measurement thread is pinned and verified at sample boundaries; "
+            "setup affinity, power policy, shared machine load and between-process scheduling remain uncontrolled. "
+            "Boundary checks can affect scheduling/cache state; pinned and uncontrolled records are not interchangeable."
+        )
+    else:
+        raise ValueError("unsupported summary mode")
     if not bundle.is_dir() or bundle.is_symlink():
         raise ValueError("bundle requires an existing non-symlink directory")
     bundle = bundle.resolve()
     manifest_bytes = read_bytes(bundle / "manifest.csv", 65536)
     manifest_hash = digest(manifest_bytes)
-    command = [cmake, f"-DLUNA_COMPILED_BUNDLE_DIR={bundle}"]
+    command = [cmake, f"-D{anchor}_DIR={bundle}"]
     if expected_commit is not None:
-        command.append(f"-DLUNA_COMPILED_BUNDLE_EXPECTED_COMMIT={expected_commit}")
+        command.append(f"-D{anchor}_EXPECTED_COMMIT={expected_commit}")
     # Always anchor the reader to the bytes this reporting pass initially saw.
     # This self-derived anchor is a consistency check, NOT authentication.
-    command.append("-DLUNA_COMPILED_BUNDLE_EXPECTED_MANIFEST_SHA256=" +
+    command.append(f"-D{anchor}_EXPECTED_MANIFEST_SHA256=" +
                    (expected_manifest if expected_manifest is not None else manifest_hash))
-    command.extend(["-P", str(ROOT / "tests" / "compiled_fragment_bundle.cmake")])
+    command.extend(["-P", str(ROOT / "tests" / reader)])
     accepted = subprocess.run(command, capture_output=True, text=True, encoding="utf-8",
                               errors="replace", timeout=60, check=False)
     if accepted.returncode != 0 or accepted.stderr:
@@ -128,7 +145,7 @@ def summarize(bundle, cmake, expected_commit=None, expected_manifest=None):
     if {path.name for path in bundle.iterdir()} != {name for name, _ in raw_hashes} | {"manifest.csv", "samples.csv"}:
         raise ValueError("bundle inventory changed during aggregation")
     return {
-        "protocol": "luna.compiled-fragment-summary.v1", "approval": "none",
+        "protocol": protocol, "approval": "none",
         "input_manifest_sha256": manifest_hash, "input_metadata": declared,
         "verification": "matched-source-bundle-integrity-and-protocol",
         "summary_tool_sha256": digest(Path(__file__).read_bytes()),
@@ -140,7 +157,7 @@ def summarize(bundle, cmake, expected_commit=None, expected_manifest=None):
         },
         "limitations": [
             "Self-reported provenance and checksums do not authenticate the publisher or a clean build.",
-            "Affinity, power policy, shared machine load and process scheduling are uncontrolled.",
+            affinity_limit,
             "No confidence intervals, timing thresholds, winner selection or performance/release approval.",
             "Different entry ABIs and timed harness costs prevent isolated Slot-instruction conclusions.",
             "Inputs must remain unchanged; byte checks are not an adversarial filesystem snapshot.",
@@ -152,12 +169,14 @@ def summarize(bundle, cmake, expected_commit=None, expected_manifest=None):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--bundle", required=True, type=Path)
+    parser.add_argument("--mode", choices=("uncontrolled", "pinned"), default="uncontrolled",
+                        help="explicit reader/report mode; never auto-detected (default: uncontrolled)")
     parser.add_argument("--cmake", default="cmake", help="trusted CMake executable (default: PATH)")
     parser.add_argument("--expected-commit")
     parser.add_argument("--expected-manifest-sha256")
     args = parser.parse_args()
     try:
-        report = summarize(args.bundle, args.cmake, args.expected_commit, args.expected_manifest_sha256)
+        report = summarize(args.bundle, args.cmake, args.expected_commit, args.expected_manifest_sha256, args.mode)
         serialized = json.dumps(report, sort_keys=True, indent=2, ensure_ascii=True)
     except (ValueError, KeyError, csv.Error, InvalidOperation, OSError, subprocess.SubprocessError) as error:
         print(f"compiled Fragment summary: {error}", file=sys.stderr)
