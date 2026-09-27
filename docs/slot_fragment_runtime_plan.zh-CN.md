@@ -461,6 +461,41 @@ Linux C++17／C++23、macOS、Windows CI 均运行 10000 次／30 轮，以 `fra
 原因未隔离。由于 fixture 组织、迭代次数及编译出的探针也改变，不能只归因于顺序，
 也不能声称 Runtime 获得了某个幅度的优化。
 
+#### 测量线程亲和性
+
+原生探针新增只读 `--affinity-info` 与 `--pinned-thread CPU [iterations] [rounds]`。
+CPU 必须是规范的无符号十进制逻辑索引，由调用方从报告的允许集合显式选择，不是物理
+核编号，也不提供自动拓扑策略。默认仍为 10000 次／30 轮。固定模式使用独立的
+`luna.fragment-cost.pinned-thread.v1`；默认交错 v1、编译探针／bundle／证据格式不变。
+
+```sh
+./build-perf/runtime-fragment-benchmark --affinity-info
+# 将 0 换成报告的允许 CPU；使用全新的输出路径。
+cmake -Werror=dev -DLUNA_FRAGMENT_BENCHMARK_EXECUTABLE="$PWD/build-perf/runtime-fragment-benchmark" \
+  -DLUNA_FRAGMENT_BENCHMARK_LOGICAL_CPU=0 \
+  -DLUNA_FRAGMENT_BENCHMARK_ITERATIONS=10000 \
+  -DLUNA_FRAGMENT_BENCHMARK_RECORD="$PWD/build-perf/fragment-cost-pinned-thread.csv" \
+  -P tests/runtime_fragment_benchmark.cmake
+```
+
+只约束新探针的测量线程。Windows 使用
+[线程亲和性](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setthreadaffinitymask)，
+只接受单 processor group（group 0）；Linux 使用
+[调用线程亲和性](https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html)
+及固定 `CPU_SETSIZE` mask。更大的内核 mask、不允许的 CPU、系统调用失败和不支持的平台
+都 fail closed，绝不回退为未约束运行。macOS 与多 group Windows 明确报告不支持。
+不改变调用方进程，也不改全局功耗、优先级或调度策略。绑定后及每个样本前后，在计时外
+核对实际 mask 和当前 CPU；metadata 记为 `affinity=measurement_thread`、
+`verified=sample_boundaries` 及请求 CPU／group，功耗仍是 `uncontrolled`。
+这不证明外部程序不可能在样本内部改变亲和性。
+
+各平台 CI 独立运行 `tests/runtime_fragment_affinity.cmake` 正确性冒烟：只读查询能力，
+在第一个允许 CPU 上做三次迭代、900 个顺序／计数核对，并拒绝不允许／不支持的请求。
+自动取第一个 CPU 仅用于冒烟，不是性能测量的 CPU 选择策略。现有 14 天 artifact 不增加
+固定线程 CSV。独立进程测量、频率／功耗／后台控制、拓扑记录和长期归档仍需各自证据。
+边界检查会影响样本之间的缓存／调度，不能把固定与未固定记录当成完全相同的 harness，
+也不能据此声称 Runtime 获得加速。不改变生产 Runtime 或源码语言 API。
+
 #### 编译插件对比协议
 
 `moonir-canonical-test --compiled-fragment-cost [iterations] [rounds] [O0|O2|O3]` 复用编译器

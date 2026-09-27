@@ -35,6 +35,13 @@ Linux CI 在 C++17/C++23 构建矩阵中都启用该门禁。它只作用于 Lun
 `fragment-cost-*` 观察 artifact
 保留 14 天，测量时间不决定成败。复现与解释限制见
 [运行时计划](slot_fragment_runtime_plan.zh-CN.md#交错观察协议)。
+`tests/runtime_fragment_affinity.cmake` 单独只读查询可用 CPU。在支持的 Windows／Linux
+主机上选一个允许的 CPU 做三次迭代、900 样本的正确性冒烟，并拒绝不允许的 CPU；
+macOS 与多 processor group 的 Windows 必须明确拒绝固定模式。这不选择性能验收机器、
+不改变功耗策略，也不把计时门禁加入默认 CTest。显式测量通过现有 validator 的
+`LUNA_FRAGMENT_BENCHMARK_LOGICAL_CPU` 参数生成独立的
+`luna.fragment-cost.pinned-thread.v1` 记录。见
+[测量线程亲和性](slot_fragment_runtime_plan.zh-CN.md#测量线程亲和性)。
 
 编译器测试 harness 也提供可选 `--compiled-fragment-cost`。默认 CTest 只运行实际两包
 编译工作负载在 LLVM IR O0／O2／O3 下的 960 次非计时结果检查，以及配置／缓存拒绝和

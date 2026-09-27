@@ -115,6 +115,11 @@ script-defined special inputs.
 - Codegen files are split by module, function, statement, expression, cleanup, execution,
   fragments, GPU, iterators, range analysis, descriptors, and helper concerns.
 - Runtime files own versioned C ABIs and host/GPU/plugin services.
+  The opt-in native `runtime_fragment_benchmark.cpp` supports separate uncontrolled
+  and measurement-thread-pinned records. `runtime_fragment_benchmark.cmake`
+  validates either explicit mode; `runtime_fragment_affinity.cmake` checks allowed
+  CPU lookup, pinned correctness and unsupported/disallowed rejection in platform
+  CI, without changing the default build/CTest or production Runtime APIs.
   The compiler-linked `compiled_fragment_benchmark.cpp/.h` lives under benchmarks;
   `moonir-canonical-test` routes its explicit timing mode and default non-timed
   O0/O2/O3 workload and cache/configuration checks. Its CMake script validates
@@ -1002,6 +1007,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/runtime_descriptor_test.cpp`
 - `tests/runtime_fragment_concurrency_test.cpp`
 - `tests/runtime_fragment_benchmark.cmake`
+- `tests/runtime_fragment_affinity.cmake`
 - `tests/compiled_fragment_benchmark.cmake`
 - `tests/compiled_fragment_probe_protocol.cmake`
 - `tests/compiled_fragment_series.cmake`

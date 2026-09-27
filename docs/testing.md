@@ -46,6 +46,15 @@ it with `-Werror=dev` so parser/policy warnings cannot silently alter validation
 It retains `fragment-cost-*` observations for 14 days; measured times do not
 determine success. See the [runtime plan](slot_fragment_runtime_plan.md#interleaved-observation-protocol)
 for reproduction and interpretation limits.
+`tests/runtime_fragment_affinity.cmake` separately queries allowed CPUs without
+changing affinity. On supported Windows/Linux hosts it selects one allowed CPU
+for a three-iteration, 900-sample correctness smoke and rejects disallowed CPUs;
+macOS and multi-group Windows hosts must reject the pinned mode explicitly.
+This smoke does not select a performance machine or change power policy, and
+does not add timing gates to default CTest. Explicit measurements use
+`LUNA_FRAGMENT_BENCHMARK_LOGICAL_CPU` with the existing validator and a separate
+`luna.fragment-cost.pinned-thread.v1` record. See
+[measurement-thread affinity](slot_fragment_runtime_plan.md#measurement-thread-affinity).
 
 The compiler harness also exposes opt-in `--compiled-fragment-cost`. Its default
 CTest path runs 960 non-timed result checks of the actual two-package compiled workload

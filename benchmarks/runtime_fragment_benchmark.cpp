@@ -1,3 +1,18 @@
+#if defined(_WIN32)
+#ifndef _WIN32_WINNT
+#define _WIN32_WINNT 0x0601
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#elif defined(__linux__)
+#ifndef _GNU_SOURCE
+#define _GNU_SOURCE
+#endif
+#include <sched.h>
+#endif
+
 #include "runtime/RuntimeFragment.h"
 #include "runtime/RuntimeDescriptorABI.h"
 
@@ -5,6 +20,7 @@
 #include <array>
 #include <charconv>
 #include <chrono>
+#include <cerrno>
 #include <cstdint>
 #include <cstdlib>
 #include <iomanip>
@@ -69,6 +85,137 @@ void require(bool condition, const char* message,
     if (!condition)
         throw std::runtime_error(message + (error.empty() ? "" : ": " + error));
 }
+
+struct AffinityInfo {
+    std::size_t cpuLimit = 0;
+    std::vector<std::size_t> allowedCpus;
+    std::string processorGroup = "none";
+    std::string unsupportedReason;
+};
+
+#if defined(_WIN32) || defined(__linux__)
+void requireAffinityCall(bool success, const char* message) {
+    if (!success) {
+#if defined(_WIN32)
+        const auto code = GetLastError();
+#else
+        const auto code = errno;
+#endif
+        throw std::runtime_error(std::string(message) + ": " + std::to_string(code));
+    }
+}
+#endif
+
+// Probe-only controls: never alter the host process or any Runtime API.
+// Fixed-size masks fail closed on larger systems instead of guessing CPU IDs.
+AffinityInfo queryAffinity() {
+    AffinityInfo info;
+#if defined(_WIN32)
+    const auto groups = GetActiveProcessorGroupCount();
+    requireAffinityCall(groups != 0, "could not query processor groups");
+    if (groups != 1) {
+        info.unsupportedReason = "windows_multiple_processor_groups";
+        return info;
+    }
+    GROUP_AFFINITY threadMask{};
+    DWORD_PTR processMask = 0, systemMask = 0;
+    requireAffinityCall(GetThreadGroupAffinity(GetCurrentThread(), &threadMask) != 0,
+                        "could not query thread affinity");
+    require(threadMask.Group == 0, "unsupported Windows processor group");
+    requireAffinityCall(GetProcessAffinityMask(GetCurrentProcess(), &processMask, &systemMask) != 0,
+                        "could not query process affinity");
+    info.cpuLimit = sizeof(DWORD_PTR) * 8;
+    info.processorGroup = "0";
+    const auto allowed = threadMask.Mask & processMask & systemMask;
+    for (std::size_t cpu = 0; cpu < info.cpuLimit; ++cpu)
+        if ((allowed & (DWORD_PTR{1} << cpu)) != 0)
+            info.allowedCpus.push_back(cpu);
+#elif defined(__linux__)
+    cpu_set_t mask{};
+    requireAffinityCall(sched_getaffinity(0, sizeof(mask), &mask) == 0,
+                        "could not query thread affinity (fixed-size mask)");
+    info.cpuLimit = CPU_SETSIZE;
+    for (std::size_t cpu = 0; cpu < info.cpuLimit; ++cpu)
+        if (CPU_ISSET(static_cast<int>(cpu), &mask))
+            info.allowedCpus.push_back(cpu);
+#else
+    info.unsupportedReason = "unsupported_platform";
+    return info;
+#endif
+    require(!info.allowedCpus.empty(), "thread has no allowed CPU");
+    return info;
+}
+
+int reportAffinity() {
+    const auto info = queryAffinity();
+    std::cout << "# protocol=luna.fragment-cost.affinity-info.v1\n";
+    if (!info.unsupportedReason.empty()) {
+        std::cout << "# supported=no\n# reason=" << info.unsupportedReason << '\n';
+        return 0;
+    }
+    std::cout << "# supported=yes\n# cpu_limit=" << info.cpuLimit
+              << "\n# processor_group=" << info.processorGroup << "\n# allowed_cpus=";
+    for (std::size_t index = 0; index < info.allowedCpus.size(); ++index) {
+        if (index != 0) std::cout << ',';
+        std::cout << info.allowedCpus[index];
+    }
+    std::cout << '\n';
+    return 0;
+}
+
+class PinnedThread {
+public:
+    explicit PinnedThread(std::size_t cpu) : cpu_(cpu), info_(queryAffinity()) {
+        require(info_.unsupportedReason.empty(), "thread affinity is unsupported",
+                info_.unsupportedReason);
+        require(std::find(info_.allowedCpus.begin(), info_.allowedCpus.end(), cpu_) !=
+                    info_.allowedCpus.end(),
+                "requested CPU is outside the thread's allowed set");
+#if defined(_WIN32)
+        requireAffinityCall(SetThreadAffinityMask(GetCurrentThread(), DWORD_PTR{1} << cpu_) != 0,
+                            "could not pin measurement thread");
+#elif defined(__linux__)
+        cpu_set_t mask{};
+        CPU_ZERO(&mask);
+        CPU_SET(static_cast<int>(cpu_), &mask);
+        requireAffinityCall(sched_setaffinity(0, sizeof(mask), &mask) == 0,
+                            "could not pin measurement thread");
+#endif
+        verify();
+    }
+
+    void verify() const {
+#if defined(_WIN32)
+        GROUP_AFFINITY mask{};
+        requireAffinityCall(GetThreadGroupAffinity(GetCurrentThread(), &mask) != 0,
+                            "could not read back thread affinity");
+        PROCESSOR_NUMBER current{};
+        GetCurrentProcessorNumberEx(&current);
+        require(mask.Group == 0 && mask.Mask == (DWORD_PTR{1} << cpu_) &&
+                    current.Group == 0 && current.Number == cpu_,
+                "measurement thread affinity/current CPU changed");
+#elif defined(__linux__)
+        cpu_set_t mask{};
+        requireAffinityCall(sched_getaffinity(0, sizeof(mask), &mask) == 0,
+                            "could not read back thread affinity");
+        require(CPU_COUNT(&mask) == 1 && CPU_ISSET(static_cast<int>(cpu_), &mask) &&
+                    sched_getcpu() == static_cast<int>(cpu_),
+                "measurement thread affinity/current CPU changed");
+#else
+        throw std::runtime_error("thread affinity is unsupported");
+#endif
+    }
+
+    void report() const {
+        std::cout << "# affinity=measurement_thread,logical_cpu=" << cpu_
+                  << ",processor_group=" << info_.processorGroup
+                  << ",verified=sample_boundaries,power_policy=uncontrolled\n";
+    }
+
+private:
+    std::size_t cpu_;
+    AffinityInfo info_;
+};
 
 template <typename Function>
 double measure(std::size_t iterations, Function&& function) {
@@ -349,22 +496,26 @@ int run(std::size_t iterations, std::size_t fragmentRows) {
     return 0;
 }
 
-int runInterleaved(std::size_t iterations, std::size_t rounds) {
+int runInterleaved(std::size_t iterations, std::size_t rounds,
+                   const PinnedThread* pinned = nullptr) {
     constexpr std::array<std::size_t, 3> RowCounts{4, 64, 256};
     constexpr auto SamplesPerRound = RowCounts.size() * CaseNames.size();
     std::array<std::unique_ptr<BenchmarkFixture>, RowCounts.size()> fixtures;
     for (std::size_t index = 0; index < fixtures.size(); ++index)
         fixtures[index] = std::make_unique<BenchmarkFixture>(RowCounts[index]);
-    std::cout << "# protocol=luna.fragment-cost.interleaved.v1\n"
+    if (pinned) pinned->verify();
+    std::cout << "# protocol=" << (pinned ? "luna.fragment-cost.pinned-thread.v1"
+                                         : "luna.fragment-cost.interleaved.v1") << '\n'
               << "# git_commit=" << LUNA_FRAGMENT_PROBE_GIT_COMMIT << '\n'
               << "# probe_sha256=" << LUNA_FRAGMENT_PROBE_SHA256 << '\n'
               << "# build_type=" << LUNA_FRAGMENT_PROBE_BUILD_TYPE << '\n'
               << "# compiler=" << LUNA_FRAGMENT_PROBE_COMPILER << '\n'
               << "# cxx=" << __cplusplus << '\n'
               << "# iterations=" << iterations << ",warmup="
-              << std::min<std::size_t>(iterations, 1000) << ",rounds=" << rounds << '\n'
-              << "# affinity=uncontrolled,power_policy=uncontrolled\n"
-              << "round,position,fragment_rows,case,ns_per_op,checksum,continuation_calls,fragment_calls\n";
+              << std::min<std::size_t>(iterations, 1000) << ",rounds=" << rounds << '\n';
+    if (pinned) pinned->report();
+    else std::cout << "# affinity=uncontrolled,power_policy=uncontrolled\n";
+    std::cout << "round,position,fragment_rows,case,ns_per_op,checksum,continuation_calls,fragment_calls\n";
     std::array<std::array<unsigned, SamplesPerRound>, SamplesPerRound> visits{};
     for (std::size_t round = 0; round < rounds; ++round) {
         for (std::size_t position = 0; position < SamplesPerRound; ++position) {
@@ -374,7 +525,9 @@ int runInterleaved(std::size_t iterations, std::size_t rounds) {
             const auto fixtureIndex = pair / CaseNames.size();
             const auto caseIndex = pair % CaseNames.size();
             ++visits[pair][position];
+            if (pinned) pinned->verify();
             const auto sample = fixtures[fixtureIndex]->sample(caseIndex, iterations);
+            if (pinned) pinned->verify();
             std::cout << round + 1 << ',' << position + 1 << ',' << RowCounts[fixtureIndex]
                       << ',' << CaseNames[caseIndex] << ',' << std::fixed << std::setprecision(1)
                       << sample.nanoseconds << ',' << sample.checksum << ','
@@ -406,6 +559,23 @@ std::size_t parseCount(const char* text, std::size_t minimum, std::size_t maximu
 int main(int argc, char** argv) {
     try {
         std::cout.imbue(std::locale::classic());
+        if (argc >= 2 && std::string(argv[1]) == "--affinity-info") {
+            if (argc != 2)
+                throw std::runtime_error("usage: runtime-fragment-benchmark --affinity-info");
+            return reportAffinity();
+        }
+        if (argc >= 2 && std::string(argv[1]) == "--pinned-thread") {
+            if (argc < 3 || argc > 5)
+                throw std::runtime_error(
+                    "usage: runtime-fragment-benchmark --pinned-thread CPU [iterations] [1..300 rounds]");
+            const std::string cpuText(argv[2]);
+            const auto cpu = parseCount(argv[2], 0, 1023);
+            require(cpuText == std::to_string(cpu), "CPU must be a canonical unsigned integer");
+            const auto iterations = argc >= 4 ? parseCount(argv[3], 1, 10000000) : 10000;
+            const auto rounds = argc >= 5 ? parseCount(argv[4], 1, 300) : 30;
+            const PinnedThread pinned(cpu);
+            return runInterleaved(iterations, rounds, &pinned);
+        }
         if (argc >= 2 && std::string(argv[1]) == "--interleaved") {
             if (argc > 4)
                 throw std::runtime_error(

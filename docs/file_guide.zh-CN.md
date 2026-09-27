@@ -427,6 +427,7 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/moonir_canonical_cross_package_container_test.cpp` | 所属包独立产物签发不可变 Slot 公开证据、显式消费者验证与拒绝边界、字节一致的 roundtrip、跨 generation 的真实 None／One 派发 |
 | `tests/runtime_fragment_concurrency_test.cpp` | 显式握手的并发宿主发布／分派、Runtime 销毁后 pinned context 与最终 lease 清理；实现和测试一同插桩 |
 | `tests/runtime_fragment_benchmark.cmake` | 交错成本探针的 CSV／构建身份／独立采样顺序与精确计数检查，不用 ns/op 判定成败 |
+| `tests/runtime_fragment_affinity.cmake` | 平台 CI 的只读允许 CPU 查询、测量线程固定正确性冒烟及不允许／不支持请求拒绝；不改变默认 CTest 或生产 Runtime API |
 | `tests/compiled_fragment_benchmark.cmake` | 真实两包编译产物对比探针每配置 81 样本顺序、调用数／checksum、v2 配置／来源与产物身份、CLI 拒绝检查，无计时阈值 |
 | `tests/compiled_fragment_probe_protocol.cmake` | 纯记录／排列调度校验、共同来源与产物一致性，不启动程序或写采样文件 |
 | `tests/compiled_fragment_series.cmake` | 显式启动全新测量进程，以全部排列平衡组内顺序，全部校验后归档原始记录、合并样本和字节摘要 manifest |
@@ -1205,6 +1206,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/runtime_descriptor_test.cpp`
 - `tests/runtime_fragment_concurrency_test.cpp`
 - `tests/runtime_fragment_benchmark.cmake`
+- `tests/runtime_fragment_affinity.cmake`
 - `tests/compiled_fragment_benchmark.cmake`
 - `tests/compiled_fragment_probe_protocol.cmake`
 - `tests/compiled_fragment_series.cmake`

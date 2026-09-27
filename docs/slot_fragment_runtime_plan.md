@@ -592,6 +592,48 @@ chain/override dispatch. It still has outliers and does not isolate their cause.
 Because the fixture organization, iteration count, and compiled probe also changed,
 do not attribute the difference solely to ordering or claim a Runtime speedup.
 
+#### Measurement-thread affinity
+
+The native probe additionally exposes `--affinity-info` (read-only) and
+`--pinned-thread CPU [iterations] [rounds]`. CPU is a canonical unsigned decimal
+logical index, chosen explicitly from the reported allowed set, not a physical
+core identifier or automatic topology policy. The defaults remain 10000/30.
+The pinned mode has its own `luna.fragment-cost.pinned-thread.v1` protocol;
+default interleaved v1 and compiled-probe/bundle/evidence formats are unchanged.
+
+```sh
+./build-perf/runtime-fragment-benchmark --affinity-info
+# Replace 0 with a CPU in the reported allowed set; use a fresh output path.
+cmake -Werror=dev -DLUNA_FRAGMENT_BENCHMARK_EXECUTABLE="$PWD/build-perf/runtime-fragment-benchmark" \
+  -DLUNA_FRAGMENT_BENCHMARK_LOGICAL_CPU=0 \
+  -DLUNA_FRAGMENT_BENCHMARK_ITERATIONS=10000 \
+  -DLUNA_FRAGMENT_BENCHMARK_RECORD="$PWD/build-perf/fragment-cost-pinned-thread.csv" \
+  -P tests/runtime_fragment_benchmark.cmake
+```
+
+Only the new probe's measurement thread is constrained. Windows uses
+[thread affinity](https://learn.microsoft.com/en-us/windows/win32/api/winbase/nf-winbase-setthreadaffinitymask)
+and accepts only a single processor group (group 0); Linux uses
+[calling-thread affinity](https://man7.org/linux/man-pages/man2/sched_setaffinity.2.html)
+with a fixed `CPU_SETSIZE` mask. Larger kernel masks, disallowed CPUs, syscall
+failures and unsupported platforms fail closed, never falling back to an
+uncontrolled run. macOS and multi-group Windows explicitly report unsupported.
+Neither the caller process nor global power, priority or scheduler policy is changed.
+The mask and current CPU are checked after binding and before/after every sample,
+outside the timer. Metadata says `affinity=measurement_thread` and
+`verified=sample_boundaries`, with the requested CPU/group and power policy still
+`uncontrolled`; this is not proof against an external change inside a sample.
+
+Platform CI runs `tests/runtime_fragment_affinity.cmake` as a separate correctness
+smoke: read-only capability query, the first allowed CPU with three iterations,
+900 schedule/counter checks, and disallowed/unsupported CPU rejection. This
+choice is only a smoke policy, not a measured-performance CPU selection. No pinned
+CSV is added to the existing 14-day artifact. Independent-process measurements,
+frequency/power/background controls, topology documentation and durable archival
+still need their own evidence. Boundary checks can affect cache/scheduling between
+samples; pinned and uncontrolled records must not be treated as identical harnesses
+or evidence of a Runtime speedup. No production Runtime or source-language API changes.
+
 #### Compiled-plugin comparison protocol
 
 `moonir-canonical-test --compiled-fragment-cost [iterations] [rounds] [O0|O2|O3]` reuses the
