@@ -1,4 +1,11 @@
 cmake_minimum_required(VERSION 3.20)
+# CMake 4.4 renamed the dev diagnostic category to author. Preserve the
+# warning-error option without CLI deprecation output on newer CMake.
+if(CMAKE_VERSION VERSION_GREATER_EQUAL 4.4)
+    set(author_warning_error -Werror=author)
+else()
+    set(author_warning_error -Werror=dev)
+endif()
 include("${CMAKE_CURRENT_LIST_DIR}/../tools/package_compiled_fragment_evidence.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/compiled_fragment_probe_fixture.cmake")
 if(NOT DEFINED LUNA_COMPILED_EVIDENCE_TEST_ROOT)
@@ -114,7 +121,7 @@ set(directory "${root}/relocated/evidence")
 file(SHA256 "${directory}/evidence.csv" LUNA_COMPILED_EVIDENCE_EXPECTED_INDEX_SHA256)
 string(REPEAT a 40 LUNA_COMPILED_EVIDENCE_EXPECTED_COMMIT)
 luna_verify_compiled_evidence("${directory}")
-execute_process(COMMAND "${CMAKE_COMMAND}" -Werror=dev
+execute_process(COMMAND "${CMAKE_COMMAND}" "${author_warning_error}"
         "-DLUNA_COMPILED_BUNDLE_DIR=${directory}/bundle"
         "-DLUNA_COMPILED_BUNDLE_EXPECTED_COMMIT=${LUNA_COMPILED_EVIDENCE_EXPECTED_COMMIT}"
         -P "${directory}/source/tests/compiled_fragment_bundle.cmake"
@@ -153,7 +160,7 @@ foreach(test IN LISTS rejections)
     string(REPLACE "|" ";" fields "${test}")
     list(GET fields 0 name)
     list(GET fields 1 expected)
-    execute_process(COMMAND "${CMAKE_COMMAND}" -Werror=dev "-DEVIDENCE_TEST_CASE=${name}"
+    execute_process(COMMAND "${CMAKE_COMMAND}" "${author_warning_error}" "-DEVIDENCE_TEST_CASE=${name}"
             "-DLUNA_COMPILED_EVIDENCE_TEST_ROOT=${root}/children-${name}" -P "${CMAKE_CURRENT_LIST_FILE}"
         RESULT_VARIABLE status OUTPUT_VARIABLE output ERROR_VARIABLE errors TIMEOUT 30)
     if(NOT status EQUAL 1 OR NOT errors MATCHES "${expected}")
