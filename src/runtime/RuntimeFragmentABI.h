@@ -17,6 +17,28 @@ enum LunaRuntimeFragmentFlagV1 {
     LUNA_RUNTIME_FRAGMENT_CAPTURE_FREE_V1 = 1u << 0,
 };
 
+// Additive native Ref bridge, NOT the source/container Ref ABI. Only the C++
+// host constructor creates a handle, from one validated Fragment for one exact
+// Slot. It is not a BindingSet, execution context or activation address. Check
+// borrows a live handle; magic is a tag, not validation of arbitrary pointers.
+// Callers provide readable NUL-terminated identities and retain the handle
+// throughout a borrow. Do not duplicate owning carriers or mutate concurrently.
+enum LunaRuntimeFragmentRefStatusV1 {
+    LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 = 0,
+    LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1 = -1,
+    LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1 = -2,
+};
+
+int32_t luna_runtime_fragment_ref_check_v1(
+    const void* reference, const char* slot_id, const char* slot_contract_id);
+
+// Consumes the unique owning carrier, clearing it BEFORE environment/module
+// cleanup callbacks. Null carrier/address is a no-op. Reentrant drop through
+// this same cleared carrier is safe; copied/stale/foreign pointers are not.
+// Cleanup callbacks must not throw or resurrect a destroying owner. Contexts
+// previously derived from a borrowed Ref retain their own frozen snapshot pin.
+void luna_runtime_fragment_ref_drop_v1(void** reference);
+
 // Factory arguments use the compiler-defined layout identified by
 // factory_contract_id. Zero means success. A successful stateful factory must
 // return a non-null environment aligned to environment_alignment. Rejected

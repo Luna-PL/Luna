@@ -23,6 +23,12 @@ struct RuntimeFragmentExecutionContextState {
     RuntimeFragmentBindingSet bindings;
 };
 
+struct RuntimeFragmentRefHandleState {
+    uint64_t magic = 0;
+    RuntimeSlotRequirement slot;
+    RuntimeFragmentBindingSet singleton;
+};
+
 struct RuntimeFragmentActivationState {
     uint64_t magic = 0;
     // Public activations own these records. Synchronous chain activations
@@ -53,6 +59,8 @@ constexpr uint64_t RuntimeFragmentActivationMagic =
     0x4c554e4141435431ULL; // "LUNAACT1"
 constexpr uint64_t RuntimeFragmentExecutionContextMagic =
     0x4c554e4145584331ULL; // "LUNAEXC1"
+constexpr uint64_t RuntimeFragmentRefHandleMagic =
+    0x4c554e4152454631ULL; // "LUNAREF1"
 
 const std::string& emptyString() {
     static const std::string empty;
@@ -849,6 +857,73 @@ bool makeRuntimeFragmentExecutionContextOverride(
     return makeRuntimeFragmentExecutionContext(derived, output, error);
 }
 
+RuntimeFragmentRefHandle::RuntimeFragmentRefHandle(
+    RuntimeFragmentRefHandle&& other) noexcept : handle_(other.release()) {}
+
+RuntimeFragmentRefHandle& RuntimeFragmentRefHandle::operator=(
+    RuntimeFragmentRefHandle&& other) noexcept {
+    if (this != &other) {
+        void* retired = handle_;
+        handle_ = other.release();
+        luna_runtime_fragment_ref_drop_v1(&retired);
+    }
+    return *this;
+}
+
+RuntimeFragmentRefHandle::~RuntimeFragmentRefHandle() { reset(); }
+
+void* RuntimeFragmentRefHandle::release() noexcept {
+    return std::exchange(handle_, nullptr);
+}
+
+void RuntimeFragmentRefHandle::reset() noexcept {
+    luna_runtime_fragment_ref_drop_v1(&handle_);
+}
+
+bool makeRuntimeFragmentRefHandle(
+    RuntimeFragmentRef& reference, const RuntimeSlotRequirement& slot,
+    RuntimeFragmentRefHandle& output, std::string& error) {
+    error.clear();
+    if (output || !reference ||
+        !validIdentity(slot.slotId) || !validIdentity(slot.contractId) ||
+        slot.slotId != reference.slotId() ||
+        slot.contractId != reference.slotContractId()) {
+        error = "runtime Fragment Ref handle requires an empty output and one exact Slot reference";
+        return false;
+    }
+    auto handle = std::make_unique<RuntimeFragmentRefHandleState>();
+    auto snapshot = std::make_shared<RuntimeFragmentBindingSetState>();
+    auto pinned = std::make_shared<RuntimeFragmentRef>();
+    snapshot->entries.push_back({slot, {pinned}});
+    handle->slot = slot;
+    handle->singleton.state_ = std::move(snapshot);
+    handle->magic = RuntimeFragmentRefHandleMagic;
+    // Nothing below allocates, validates or invokes a factory. Publish only
+    // after every allocation has succeeded, leaving the source empty once.
+    *pinned = std::move(reference);
+    output.handle_ = handle.release();
+    return true;
+}
+
+bool makeRuntimeFragmentExecutionContextOverrideFromRef(
+    const RuntimeFragmentExecutionContext& base,
+    const RuntimeSlotRequirement& slot,
+    const RuntimeFragmentRefHandle& reference,
+    RuntimeFragmentExecutionContext& output, std::string& error) {
+    error.clear();
+    if (!validIdentity(slot.slotId) || !validIdentity(slot.contractId) ||
+        luna_runtime_fragment_ref_check_v1(
+            reference.opaque(), slot.slotId.c_str(), slot.contractId.c_str()) !=
+                LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1) {
+        error = "runtime Fragment Ref handle does not match the exact Slot";
+        return false;
+    }
+    const auto* state = static_cast<const RuntimeFragmentRefHandleState*>(
+        reference.opaque());
+    return makeRuntimeFragmentExecutionContextOverride(
+        base, slot, state->singleton, output, error);
+}
+
 bool RuntimeFragmentExecutionContext::dispatch(
     const RuntimeSlotRequirement& slot,
     RuntimeFragmentArguments arguments,
@@ -913,6 +988,32 @@ RuntimeFragmentBindingSet MoonRuntime::pinFragmentBindings() const {
 }
 
 } // namespace luna::runtime
+
+extern "C" int32_t luna_runtime_fragment_ref_check_v1(
+    const void* reference, const char* slot_id, const char* slot_contract_id) {
+    const auto* state = static_cast<const
+        luna::runtime::RuntimeFragmentRefHandleState*>(reference);
+    if (!state || state->magic != luna::runtime::RuntimeFragmentRefHandleMagic)
+        return LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1;
+    if (!luna::runtime::validText(slot_id) ||
+        !luna::runtime::validText(slot_contract_id))
+        return LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1;
+    // Singleton shape is guaranteed only by the host constructor. No public
+    // factory accepts an arbitrary frozen BindingSet or a multi-Fragment chain.
+    return state->slot.slotId == slot_id &&
+           state->slot.contractId == slot_contract_id
+        ? LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1
+        : LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1;
+}
+
+extern "C" void luna_runtime_fragment_ref_drop_v1(void** reference) {
+    if (!reference || !*reference) return;
+    auto* retired = static_cast<
+        luna::runtime::RuntimeFragmentRefHandleState*>(*reference);
+    *reference = nullptr;
+    retired->magic = 0;
+    delete retired;
+}
 
 extern "C" int32_t luna_runtime_fragment_dispatch_v1(
     const void* execution_context,

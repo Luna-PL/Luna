@@ -156,9 +156,10 @@ before optimizing; never remove validation or borrow callback-destroyable storag
    Source Slot declaration arguments, real Drop bridge and container round-trip
    remain unimplemented. Old wire ordinals are unchanged; current readers/writers
    explicitly reject the unsupported internal Ref.
-3. **Unimplemented host bridge**: strict singleton import, owning/borrowed arguments,
-   owning returns and Runtime drop; carrier/contract errors, rollback, unloading
-   and exactly-once cleanup tests.
+3. **Partially implemented host bridge**: native strict singleton owning handles,
+   exact-target checks, borrowed context derivation and Runtime drop are complete
+   below. Source import, owning/borrowed parameters, owning returns, compiler
+   dropGlue and two-package carrier/contract validation remain unconnected.
 4. **Unimplemented source apply**: name resolution, once-only evaluation/region
    borrow, effect fixed point, explicit-context lowering/independent verification;
    repeated/nested apply, shadowing, other Slots, normal/return/`?`/failure cleanup
@@ -212,8 +213,9 @@ checks at host ingress.
 MoonIR freezes the Slot graph through existing `innerTypeId`/`referencedTypeIds`.
 TypeMaterializer independently restores identity/resources; mutating frontend
 objects changes no frozen result. The 64-bit internal layout prepares one opaque
-handle (8 bytes/alignment 8), not a published C carrier ABI. No actual Drop
-bridge/dropGlue exists yet: freezing is not verified/executable publication.
+handle (8 bytes/alignment 8), not a published C carrier ABI. This type slice did
+not connect Drop/dropGlue: freezing is not verified/executable publication.
+The subsequent native bridge below still leaves source Drop gates closed.
 
 Old enum ordinals Slot=27, Fragment=28 and Unknown=40 remain; internal Ref is appended
 as 41. The wire decoder still rejects beyond its old limit, and the writer rejects
@@ -239,6 +241,48 @@ not merely linked against sanitizer runtimes. Direct C++17 core-type ASan/UBSan
 compilation/execution also passes on WSL Arch Linux Clang 22.1.8. Design status,
 documentation inventory and diff checks pass. No matched performance sampling,
 release approval or historical TBD closure is added.
+
+### Native Ref handle / Runtime Drop bridge (2026-09-28)
+
+`RuntimeFragmentRefHandle` is a non-Copy, movable unique owner. Only
+`makeRuntimeFragmentRefHandle` creates one by consuming a validated native Ref
+for one exact SlotId/ContractId. Empty Refs, mismatched targets and initialized
+outputs fail without consumption. All allocations precede the final move;
+failure injection at every allocation proves rollback without lost ownership
+or partial output. The private frozen BindingSet contains exactly one Slot and
+one Fragment: no API imports None, multiple Slots or an ordered chain as a Ref.
+
+`opaque()` borrows; `release()` transfers unique ownership to a raw carrier.
+Additive C ABI `luna_runtime_fragment_ref_check_v1` checks the live handle's exact
+target without heap allocation. `luna_runtime_fragment_ref_drop_v1(void**)`
+clears the carrier before cleanup. Null carrier/address and reentrant drop
+through the same cleared carrier are safe; duplicated owners, stale/foreign
+pointers and concurrent mutation are not. Magic is a tag, not arbitrary-pointer
+validation or a global handle registry.
+
+`makeRuntimeFragmentExecutionContextOverrideFromRef` borrows the handle and reuses
+frozen derivation: repeated use neither consumes it nor reruns its factory;
+nested same-Slot use replaces rather than appends, preserving other Slots and
+the parent. Each derived context independently pins environment/generation and
+may outlive the handle/parent. Final pin release uses existing Ref cleanup,
+environment before module release. C++ reset/move assignment also detach/install
+before callbacks; cleanup rebinds of live owners survive callback return.
+
+This is only an additive native bridge, not source/container carrier publication.
+Descriptor v1, execute arguments, old wire ordinals and compiler guards remain
+unchanged. Source signatures, import/parameter/return transfer, compiler dropGlue,
+wire round-trip, region borrows and dynamic apply remain unfinished;
+`source-ref-apply` stays implementation-open. No global candidate index, TLS or
+reflection hot path is introduced. No new matched performance sampling or old
+evidence/release-gate changes occur.
+
+The strict full build passes all 77 non-hardware gates (202.19 seconds). After
+the final module-cleanup pin assertion, rebuild/run of both native Runtime gates,
+design status and inventory passes 4/4. Windows ASan/UBSan Runtime gates pass 2/2;
+direct Runtime C++17 ASan/UBSan compilation/execution passes on WSL Arch Linux
+Clang 22.1.8. The C ABI compile fixture checks C function-pointer signatures for
+both new operations; diff checks pass. These are local checks, not remote CI or
+stable-release approval.
 
 ## Host-controlled discovery and injection
 

@@ -13,6 +13,8 @@ _Static_assert(LUNA_RUNTIME_FRAGMENT_ABI_V1 == 1,
                "Runtime Fragment ABI version must remain stable");
 _Static_assert(LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1 == 0,
                "Runtime Fragment dispatch success must remain zero");
+_Static_assert(LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 == 0,
+               "Native Ref bridge check success must remain zero");
 _Static_assert(LUNA_RUNTIME_DESCRIPTOR_FRAGMENT_CONTEXT_V1 == (1u << 3),
                "Runtime Fragment-context callable flag must remain stable");
 _Static_assert(sizeof(LunaDeviceBufferI32V1) == sizeof(void*) + sizeof(size_t),
@@ -32,6 +34,9 @@ size_t luna_runtime_abi_c_layout_probe(void) {
     LunaNativeLibraryDescriptorFnV1 native_descriptor = 0;
     LunaRuntimeDescriptorRegistryV1 runtime_registry = {0};
     LunaRuntimeFragmentDescriptorV1 runtime_fragment = {0};
+    int32_t (*ref_check)(const void*, const char*, const char*) =
+        luna_runtime_fragment_ref_check_v1;
+    void (*ref_drop)(void**) = luna_runtime_fragment_ref_drop_v1;
     (void)allocate;
     (void)deallocate;
     (void)snapshot_error;
@@ -39,6 +44,8 @@ size_t luna_runtime_abi_c_layout_probe(void) {
     (void)native_descriptor;
     (void)runtime_registry;
     (void)runtime_fragment;
+    (void)ref_check;
+    (void)ref_drop;
     (void)&luna_runtime_fragment_dispatch_v1;
     (void)&rt_console_read_v1;
     (void)&rt_file_open_v1;

@@ -9,6 +9,7 @@
 #include <new>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -18,10 +19,15 @@ namespace {
 // dispatch. It is not a timer or a claim about plugin/OS/aligned allocations.
 thread_local bool countDispatchAllocations = false;
 thread_local size_t dispatchAllocations = 0;
+// Deterministic preparation-only allocation failure injection. Disabled for
+// callbacks/dispatch and all existing lifetime/performance fixtures.
+thread_local int refHandleAllocationCountdown = -1;
 
 } // namespace
 
 void* operator new(std::size_t size) {
+    if (refHandleAllocationCountdown == 0) throw std::bad_alloc();
+    if (refHandleAllocationCountdown > 0) --refHandleAllocationCountdown;
     if (void* storage = std::malloc(size == 0 ? 1 : size)) {
         if (countDispatchAllocations) ++dispatchAllocations;
         return storage;
@@ -258,6 +264,218 @@ bool stageFragment(
         declarationKind, flags};
     binding = loaded.find(requirement);
     return static_cast<bool>(binding);
+}
+
+void** bridgeDropCarrier = nullptr;
+bool bridgeCarrierDetached = false;
+std::atomic<unsigned>* bridgeModuleDrops = nullptr;
+unsigned bridgeExpectedModuleDrops = 0;
+bool bridgeModulePinned = false;
+luna::runtime::RuntimeFragmentRefHandle* bridgeCleanupOwner = nullptr;
+luna::runtime::RuntimeFragmentRefHandle* bridgeCleanupReplacement = nullptr;
+
+void destroyBridgeEnvironment(void* environment) {
+    if (bridgeModuleDrops)
+        bridgeModulePinned = *bridgeModuleDrops == bridgeExpectedModuleDrops;
+    if (bridgeDropCarrier) {
+        bridgeCarrierDetached = *bridgeDropCarrier == nullptr;
+        luna_runtime_fragment_ref_drop_v1(bridgeDropCarrier);
+    }
+    if (bridgeCleanupOwner) {
+        auto* owner = std::exchange(bridgeCleanupOwner, nullptr);
+        if (bridgeCleanupReplacement)
+            *owner = std::move(*bridgeCleanupReplacement);
+        else
+            owner->reset();
+    }
+    destroyEnvironment(environment);
+}
+
+int testRefHandleBridge(const LunaRuntimeFragmentDescriptorV1& original) {
+    using namespace luna::runtime;
+    static_assert(!std::is_copy_constructible_v<RuntimeFragmentRefHandle>);
+    static_assert(!std::is_copy_assignable_v<RuntimeFragmentRefHandle>);
+    static_assert(std::is_nothrow_move_constructible_v<RuntimeFragmentRefHandle>);
+    static_assert(std::is_nothrow_move_assignable_v<RuntimeFragmentRefHandle>);
+    auto descriptor = original;
+    descriptor.execute = executeFirstChainFragment;
+    const RuntimeSlotRequirement slot{descriptor.slot_id, descriptor.slot_contract_id};
+    const RuntimeSlotRequirement wrongSlot{"slot:other", slot.contractId};
+    const RuntimeSlotRequirement wrongContract{slot.slotId, "contract:other"};
+    FactoryArguments factory{42};
+    std::string error;
+    std::atomic<unsigned> moduleDrops{0}, borrowedDrops{0};
+    const unsigned factoriesBefore = factoryCalls;
+    const unsigned destroysBefore = destroyCalls;
+    const auto make = [&](const auto& selected, bool borrowed, auto& reference) {
+        Runtime runtime;
+        Runtime::PinnedBinding binding;
+        auto lease = std::make_shared<LeaseProbe>(moduleDrops);
+        if (!stageFragment(runtime, lease, &selected, binding, error)) return false;
+        if (!borrowed)
+            return makeOwnedRuntimeFragmentRef(binding,
+                {selected.slot_id, selected.slot_contract_id},
+                {selected.factory_contract_id, &factory}, reference, error);
+        auto environment = std::make_shared<BorrowedEnvironmentProbe>(42, borrowedDrops);
+        return makeBorrowedRuntimeFragmentRef(binding,
+            {selected.slot_id, selected.slot_contract_id},
+            {selected.environment_layout_id, sizeof(Environment), alignof(Environment),
+             &environment->environment, environment}, reference, error);
+    };
+    RuntimeFragmentBindingSet none;
+    RuntimeFragmentExecutionContext parent;
+    auto parentFragment = descriptor;
+    parentFragment.execute = executeSecondChainFragment;
+    auto otherFragment = parentFragment;
+    otherFragment.slot_id = "slot:bridge-other";
+    otherFragment.fragment_id = "fragment:bridge-other";
+    const RuntimeSlotRequirement otherSlot{otherFragment.slot_id, otherFragment.slot_contract_id};
+    RuntimeFragmentRef parentRef, otherRef;
+    if (!make(parentFragment, false, parentRef) || !make(otherFragment, false, otherRef))
+        return fail("Ref bridge parent references failed");
+    std::vector<RuntimeFragmentRef> parentRefs;
+    parentRefs.push_back(std::move(parentRef));
+    parentRefs.push_back(std::move(otherRef));
+    if (!makeRuntimeFragmentBindingSet(std::move(parentRefs), none, error) ||
+        !makeRuntimeFragmentExecutionContext(none, parent, error))
+        return fail("Ref bridge parent preparation failed");
+    const int argument = 42;
+    const RuntimeFragmentArguments arguments{
+        descriptor.slot_arguments_layout_id, sizeof(int), alignof(int), &argument};
+    for (bool borrowed : {false, true}) {
+        RuntimeFragmentRef source, empty;
+        RuntimeFragmentRefHandle handle;
+        if (!make(descriptor, borrowed, source)) return fail("Ref bridge source failed");
+        for (const auto& target : {wrongSlot, wrongContract,
+                                  RuntimeSlotRequirement{std::string("slot\0x", 6), slot.contractId}}) {
+            if (makeRuntimeFragmentRefHandle(source, target, handle, error) ||
+                !source || handle)
+                return fail("Ref bridge validation consumed/published an invalid target");
+        }
+        if (makeRuntimeFragmentRefHandle(empty, slot, handle, error) || handle)
+            return fail("Ref bridge accepted an empty native Ref");
+        bool created = false;
+        unsigned allocationFailures = 0;
+        for (int budget = 0; budget < 32 && !created; ++budget) {
+            refHandleAllocationCountdown = budget;
+            try { created = makeRuntimeFragmentRefHandle(source, slot, handle, error); }
+            catch (const std::bad_alloc&) { ++allocationFailures; }
+            refHandleAllocationCountdown = -1;
+            if (!created && (!source || handle))
+                return fail("Ref bridge allocation failure lost ownership");
+        }
+        if (!created || source || !handle || allocationFailures < 4)
+            return fail("Ref bridge singleton construction/allocation rollback failed");
+        if (!make(descriptor, borrowed, source)) return fail("Ref bridge second source failed");
+        if (makeRuntimeFragmentRefHandle(source, slot, handle, error) || !source || !handle)
+            return fail("Ref bridge overwrote initialized output");
+        source.reset();
+        countDispatchAllocations = true;
+        dispatchAllocations = 0;
+        const auto checked = luna_runtime_fragment_ref_check_v1(
+            handle.opaque(), slot.slotId.c_str(), slot.contractId.c_str());
+        countDispatchAllocations = false;
+        if (checked != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 || dispatchAllocations != 0 ||
+            luna_runtime_fragment_ref_check_v1(nullptr, slot.slotId.c_str(), slot.contractId.c_str()) !=
+                LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1)
+            return fail("Ref bridge live/null check failed or allocated");
+        for (const char* invalid : {static_cast<const char*>(nullptr), "", "bad\nkey"}) {
+            if (luna_runtime_fragment_ref_check_v1(handle.opaque(), invalid, slot.contractId.c_str()) !=
+                    LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1 ||
+                luna_runtime_fragment_ref_check_v1(handle.opaque(), slot.slotId.c_str(), invalid) !=
+                    LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1)
+                return fail("Ref bridge accepted invalid C identity");
+        }
+        RuntimeFragmentExecutionContext rejected, missing;
+        if (makeRuntimeFragmentExecutionContextOverrideFromRef(parent, wrongSlot, handle, rejected, error) ||
+            makeRuntimeFragmentExecutionContextOverrideFromRef(parent, wrongContract, handle, rejected, error) ||
+            makeRuntimeFragmentExecutionContextOverrideFromRef(missing, slot, handle, rejected, error) || rejected)
+            return fail("Ref bridge accepted mismatched target or absent parent");
+        RuntimeFragmentExecutionContext retained;
+        for (unsigned repeat = 0; repeat < 4; ++repeat) {
+            RuntimeFragmentExecutionContext derived;
+            if (!makeRuntimeFragmentExecutionContextOverrideFromRef(parent, slot, handle, derived, error))
+                return fail("Ref bridge repeated borrow failed");
+            if (makeRuntimeFragmentExecutionContextOverrideFromRef(parent, slot, handle, derived, error))
+                return fail("Ref bridge overwrote initialized context");
+            RuntimeFragmentExecutionContext shadowed;
+            if (!makeRuntimeFragmentExecutionContextOverrideFromRef(derived, slot, handle, shadowed, error))
+                return fail("Ref bridge same-Slot nested borrow failed");
+            std::vector<int> trace;
+            activeChainTrace = &trace;
+            const bool dispatched = shadowed.dispatch(slot, arguments, recordChainBase, &trace, error);
+            activeChainTrace = nullptr;
+            if (!dispatched || trace != std::vector<int>({1, 0, 4}))
+                return fail("Ref bridge did not install exactly one Fragment");
+            trace.clear();
+            activeChainTrace = &trace;
+            const bool preserved = shadowed.dispatch(otherSlot, arguments, recordChainBase, &trace, error);
+            activeChainTrace = nullptr;
+            if (!preserved || trace != std::vector<int>({2, 0, 3}))
+                return fail("Ref bridge shadowing changed another Slot");
+            retained = derived;
+        }
+        RuntimeFragmentRefHandle moved(std::move(handle));
+        auto* sameHandle = &moved;
+        moved = std::move(*sameHandle);
+        if (handle || !moved) return fail("Ref bridge move/self-move lost ownership");
+        void* carrier = moved.release();
+        luna_runtime_fragment_ref_drop_v1(&carrier);
+        luna_runtime_fragment_ref_drop_v1(&carrier);
+        luna_runtime_fragment_ref_drop_v1(nullptr);
+        if (carrier || moved) return fail("Ref bridge C drop did not clear carrier");
+        std::vector<int> trace;
+        activeChainTrace = &trace;
+        const bool pinned = retained.dispatch(slot, arguments, recordEscapingChainBase, &trace, error);
+        activeChainTrace = nullptr;
+        if (!pinned || trace != std::vector<int>({1, 0}))
+            return fail("Ref bridge drop invalidated a derived context");
+        retained = {};
+    }
+    std::vector<int> parentTrace;
+    activeChainTrace = &parentTrace;
+    const bool unchanged = parent.dispatch(slot, arguments, recordChainBase, &parentTrace, error);
+    activeChainTrace = nullptr;
+    if (!unchanged || parentTrace != std::vector<int>({2, 0, 3}))
+        return fail("Ref bridge mutated parent policy");
+    parent = {};
+    none = {};
+    if (factoryCalls != factoriesBefore + 4 || destroyCalls != destroysBefore + 4 ||
+        borrowedDrops != 2 || moduleDrops != 6)
+        return fail("Ref bridge ownership/factory/module cleanup counts failed");
+
+    auto reentrant = descriptor;
+    reentrant.destroy = destroyBridgeEnvironment;
+    RuntimeFragmentRef source;
+    RuntimeFragmentRefHandle owner, incoming, replacement;
+    if (!make(reentrant, false, source) || !makeRuntimeFragmentRefHandle(source, slot, owner, error))
+        return fail("Ref bridge reentrant owner preparation failed");
+    void* carrier = owner.release();
+    bridgeDropCarrier = &carrier;
+    bridgeCarrierDetached = false;
+    bridgeModuleDrops = &moduleDrops;
+    bridgeExpectedModuleDrops = moduleDrops;
+    bridgeModulePinned = false;
+    luna_runtime_fragment_ref_drop_v1(&carrier);
+    bridgeDropCarrier = nullptr;
+    bridgeModuleDrops = nullptr;
+    if (!bridgeCarrierDetached || !bridgeModulePinned || carrier)
+        return fail("Ref bridge cleanup observed a still-owned carrier or unloaded module");
+    if (!make(reentrant, false, source) || !makeRuntimeFragmentRefHandle(source, slot, owner, error) ||
+        !make(descriptor, false, source) || !makeRuntimeFragmentRefHandle(source, slot, incoming, error) ||
+        !make(descriptor, false, source) || !makeRuntimeFragmentRefHandle(source, slot, replacement, error))
+        return fail("Ref bridge cleanup rebind preparation failed");
+    bridgeCleanupOwner = &owner;
+    bridgeCleanupReplacement = &replacement;
+    const unsigned beforeMove = destroyCalls;
+    owner = std::move(incoming);
+    bridgeCleanupReplacement = nullptr;
+    if (!owner || incoming || replacement || bridgeCleanupOwner || destroyCalls != beforeMove + 2)
+        return fail("Ref bridge move cleanup overwrote callback rebind");
+    owner.reset();
+    if (destroyCalls != destroysBefore + 8 || moduleDrops != 10)
+        return fail("Ref bridge reentrant cleanup leaked/doubled ownership");
+    return 0;
 }
 
 int testSnapshotOverrides(const LunaRuntimeFragmentDescriptorV1& original) {
@@ -2106,6 +2324,7 @@ int main() {
 
     if (testScopedActivation(descriptor) != 0) return 1;
     if (testSnapshotOverrides(descriptor) != 0) return 1;
+    if (testRefHandleBridge(descriptor) != 0) return 1;
     if (testDispatchLifetime(descriptor) != 0) return 1;
     if (testFactoryLifetime(descriptor) != 0) return 1;
     return testCleanupReentry(descriptor);

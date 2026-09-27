@@ -133,8 +133,9 @@ Ref-bearing exported Slot／Fragment payload、non-Copy 环境、non-unit 与 mu
 2. **部分实现的类型／产物**：内部名义 Ref／ownership／资源事实和内存中冻结／恢复
    已完成，见下文。Slot 声明参数的源码解析、完整 Drop 桥与 container round-trip 仍待
    完成；旧 wire type 值不漂移，当前读写端明确拒绝尚未支持的内部 Ref。
-3. **待实现的宿主桥**：严格 singleton 导入、拥有／借用参数、拥有返回与 Runtime drop；
-   carrier／contract 错误、失败回滚、卸载及恰好一次 cleanup。
+3. **部分实现的宿主桥**：native 严格 singleton owning handle、精确目标检查、借用派生
+   context 与 Runtime drop 已完成，见下文；源码导入、拥有／借用参数、拥有返回、
+   compiler dropGlue 和两包 carrier／contract 校验仍未接通。
 4. **待实现的源码 apply**：名字 operand 解析、一次求值与 region borrow、effect 固定点、
    显式 context lowering／独立 verifier；重复／嵌套、同槽遮蔽、其他槽保留、正常退出／
    return／`?`／失败清理，以及禁止 handler 重入的回归。
@@ -177,7 +178,8 @@ shape 相同但内部 Ref 目标发生变化，也不能通过包装擦除目标
 内存中的 MoonIR 类型表通过既有 `innerTypeId`／`referencedTypeIds` 固定 Slot 图，
 TypeMaterializer 可以独立恢复身份和资源事实；修改前端对象不改变冻结结果。64 位
 内部布局暂以一个 opaque handle（8 字节／8 对齐）准备，这不是已发布的 C carrier ABI。
-当前仍没有真实 Drop bridge／dropGlue，不能将“能冻结”当成“已 verified／可执行”。
+此类型切片尚未接通 Drop bridge／dropGlue，不能将“能冻结”当成“已 verified／可执行”；
+后续 native 桥见下一节，源码 Drop 门禁仍关闭。
 
 旧 enum 的 Slot=27、Fragment=28、Unknown=40 不变，内部 Ref 仅追加为 41。Wire decoder
 仍以旧上限 fail closed，writer 也拒绝输出此 kind；Module verifier 明确拒绝 published
@@ -197,6 +199,38 @@ ASan／UBSan 的 builtin types、core contracts、canonical MoonIR、container m
 4／4 通过（14.29 秒），已核对核心实现对象确实带插桩，而不是仅链接 sanitizer。
 WSL Arch Linux Clang 22.1.8 C++17 直接编译／执行核心类型测试的 ASan／UBSan 也通过。
 设计状态、文档 inventory 与 diff 检查通过；不新增匹配性能采样、发布批准或解锁旧 TBD。
+
+### Native Ref handle／Runtime Drop 桥（2026-09-28）
+
+`RuntimeFragmentRefHandle` 是不可 Copy、可 move 的唯一拥有句柄，只能由
+`makeRuntimeFragmentRefHandle` 消费一个已验证的 native Ref 创建。入口同时核对确切
+SlotId 与 ContractId；空 Ref、错误目标和已初始化输出拒绝，失败不消费输入。
+所有分配先于最终 move，逐个分配失败注入证明异常回滚不丢失 Ref 或发布半成品。
+内部封装冻结的单 Slot／单 Fragment BindingSet，不能从 None、多槽或有序链直接导入。
+
+`opaque()` 只借用；`release()` 将唯一所有权转给 raw carrier。新增 C ABI
+`luna_runtime_fragment_ref_check_v1` 校验 live handle 的目标（该检查无 heap 分配），
+`luna_runtime_fragment_ref_drop_v1(void**)` 在 cleanup 前清空 carrier。空 carrier／
+地址和同一已清空 carrier 的重入 Drop 安全；复制 owning pointer、stale／foreign pointer
+和并发修改仍不合法。Magic 不是任意指针验证或全局句柄登记机制。
+
+`makeRuntimeFragmentExecutionContextOverrideFromRef` 借用句柄、复用冻结派生路径；
+重复使用不消费 Ref、不重跑 factory，同槽嵌套替换而非追加，其他槽和 parent 保持原样。
+每个派生 context 独立固定环境与 generation，Ref 或 parent 释放不影响它；最后一个 pin
+释放后沿既有 Ref cleanup 路径先清理环境再释放模块。C++ reset 和 move assignment 也
+遵守先分离／先安装再回调规则，live owner 的 cleanup rebind 不会被回调返回覆盖。
+
+这只是 additive native bridge，不发布源码／container carrier ABI，不更改 descriptor v1、
+execute 参数、旧 wire ordinal 或现有 compiler guards。源码签名、import／参数／返回、
+compiler dropGlue、wire round-trip、region borrow 和动态 apply 仍待完成；
+`source-ref-apply` 保持 implementation-open。没有全局候选索引、TLS 或反射热路径。
+本轮不新增匹配性能采样，不改旧 evidence／发布门禁。
+
+严格完整构建后非 hardware 门禁 77／77 通过（202.19 秒）；最后补充模块 cleanup pin
+断言后，重建／执行 native Runtime 两项及设计状态／inventory，4／4 通过。Windows
+ASan／UBSan Runtime 两项 2／2 与 WSL Arch Linux Clang 22.1.8 C++17 直接编译／执行
+Runtime 插桩测试通过。C ABI compile fixture 验证新增 check／drop 的 C 函数指针签名；
+diff 检查通过。上述是本地验证，不等同于远端 CI 或稳定发布批准。
 
 ## 宿主控制的发现与注入
 

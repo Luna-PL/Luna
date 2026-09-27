@@ -184,6 +184,39 @@ bool makeBorrowedRuntimeFragmentRef(
 struct RuntimeFragmentBindingSetState;
 struct RuntimeFragmentExecutionContextState;
 class RuntimeFragmentExecutionContext;
+class RuntimeFragmentRefHandle;
+
+// Unique native owning carrier for the future source bridge. opaque() is a
+// shared borrow; release() transfers ownership to a raw carrier that MUST use
+// luna_runtime_fragment_ref_drop_v1. No arbitrary-pointer adoption or snapshot
+// import is provided. No source Ref ABI/publication gate is opened here.
+class RuntimeFragmentRefHandle {
+public:
+    RuntimeFragmentRefHandle() = default;
+    RuntimeFragmentRefHandle(const RuntimeFragmentRefHandle&) = delete;
+    RuntimeFragmentRefHandle& operator=(const RuntimeFragmentRefHandle&) = delete;
+    RuntimeFragmentRefHandle(RuntimeFragmentRefHandle&& other) noexcept;
+    RuntimeFragmentRefHandle& operator=(RuntimeFragmentRefHandle&& other) noexcept;
+    ~RuntimeFragmentRefHandle();
+
+    explicit operator bool() const { return handle_ != nullptr; }
+    const void* opaque() const { return handle_; }
+    void* release() noexcept;
+    // Detaches before cleanup. Callback rebinds of a live owner survive.
+    void reset() noexcept;
+
+private:
+    friend bool makeRuntimeFragmentRefHandle(
+        RuntimeFragmentRef&, const RuntimeSlotRequirement&,
+        RuntimeFragmentRefHandle&, std::string&);
+    void* handle_ = nullptr;
+};
+
+// On success consumes reference; ordinary validation failures and allocation
+// exceptions leave it/output unchanged. All allocations precede the move.
+bool makeRuntimeFragmentRefHandle(
+    RuntimeFragmentRef& reference, const RuntimeSlotRequirement& slot,
+    RuntimeFragmentRefHandle& output, std::string& error);
 
 // Immutable host policy result. The strict constructor models None/One while
 // the explicit chain constructor stores host-ordered bindings for each exact
@@ -223,6 +256,9 @@ public:
 
 private:
     friend class MoonRuntime;
+    friend bool makeRuntimeFragmentRefHandle(
+        RuntimeFragmentRef&, const RuntimeSlotRequirement&,
+        RuntimeFragmentRefHandle&, std::string&);
     friend bool makeRuntimeFragmentBindingSet(
         std::vector<RuntimeFragmentRef>, RuntimeFragmentBindingSet&,
         std::string&);
@@ -325,6 +361,16 @@ bool makeRuntimeFragmentExecutionContextOverride(
     const RuntimeFragmentExecutionContext& base,
     const RuntimeSlotRequirement& slot,
     const RuntimeFragmentBindingSet& replacement,
+    RuntimeFragmentExecutionContext& output, std::string& error);
+
+// Borrows the strict singleton handle and derives local One(ref). Repeated
+// application does not consume it or rerun its factory. Exact target validation
+// precedes snapshot derivation; parent/other Slots are preserved. The derived
+// context owns a snapshot pin and can outlive both the handle and parent.
+bool makeRuntimeFragmentExecutionContextOverrideFromRef(
+    const RuntimeFragmentExecutionContext& base,
+    const RuntimeSlotRequirement& slot,
+    const RuntimeFragmentRefHandle& reference,
     RuntimeFragmentExecutionContext& output, std::string& error);
 
 } // namespace luna::runtime
