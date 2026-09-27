@@ -125,6 +125,13 @@ script-defined special inputs.
   setup remains unpinned. `compiled_fragment_pinned_protocol.cmake` validates only
   pinned raw records; its synthetic default test checks mode separation without
   starting probes. Existing observation bundles remain uncontrolled-only.
+  `compiled_fragment_pinned_series.cmake` separately samples fresh pinned
+  processes and publishes a closed directory with source/CPU identities.
+  `compiled_fragment_pinned_bundle.cmake` selects the pinned mode of the shared
+  private reader core; the default entry point stays uncontrolled-only. Its
+  synthetic test shares `compiled_fragment_pinned_fixture.cmake` with the raw
+  protocol test and never starts a timing probe. CI retains the pinned directory
+  as a sibling of old evidence, not a portable evidence export or default-summary input.
   The compiler-linked `compiled_fragment_benchmark.cpp/.h` lives under benchmarks;
   `moonir-canonical-test` routes its explicit timing mode and default non-timed
   O0/O2/O3 workload and cache/configuration checks. Its CMake script validates
@@ -1018,6 +1025,10 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/compiled_fragment_probe_protocol.cmake`
 - `tests/compiled_fragment_pinned_protocol.cmake`
 - `tests/compiled_fragment_pinned_protocol_test.cmake`
+- `tests/compiled_fragment_pinned_series.cmake`
+- `tests/compiled_fragment_pinned_bundle.cmake`
+- `tests/compiled_fragment_pinned_bundle_test.cmake`
+- `tests/compiled_fragment_pinned_fixture.cmake`
 - `tests/compiled_fragment_series.cmake`
 - `tests/compiled_fragment_series_protocol_test.cmake`
 - `tests/compiled_fragment_bundle.cmake`

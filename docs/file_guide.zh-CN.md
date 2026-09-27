@@ -432,6 +432,10 @@ ABI 头只能做向后兼容的版本化扩展。编译器便利 API、C++ 容�
 | `tests/compiled_fragment_probe_protocol.cmake` | 纯记录／排列调度校验、共同来源与产物一致性，不启动程序或写采样文件 |
 | `tests/compiled_fragment_pinned_protocol.cmake` | 独立固定线程原始记录的控制器摘要、CPU／group／scope 身份及共享样本检查；不接入旧 bundle |
 | `tests/compiled_fragment_pinned_protocol_test.cmake` | 默认仅用合成记录核对 LF／CRLF、固定／默认模式互斥及损坏 metadata／样本拒绝；不运行计时或固定线程 |
+| `tests/compiled_fragment_pinned_series.cmake` | 显式 CPU 的独立固定序列，复用配置排列，全部全新进程校验后归档封闭目录并绑定源码／控制器身份；失败不回退 |
+| `tests/compiled_fragment_pinned_bundle.cmake` | 从可信显式入口选择共享私有 reader 的固定模式，只读验收原始／合并映射、字节摘要和 CPU／scope／来源，不执行归档代码 |
+| `tests/compiled_fragment_pinned_bundle_test.cmake` | 1／2／10 轮合成固定目录的只读、模式隔离、损坏／重新摘要记录拒绝及失败采样不发布门禁 |
+| `tests/compiled_fragment_pinned_fixture.cmake` | 固定原始记录／bundle 门禁共用的合成 fixture，不运行探针或系统亲和性操作 |
 | `benchmarks/fragment_thread_affinity.h` | 原生和编译探针共用的只读 CPU 能力查询、显式线程固定与样本边界回读；固定记录单独绑定控制器摘要，不属于生产 Runtime API |
 | `tests/compiled_fragment_series.cmake` | 显式启动全新测量进程，以全部排列平衡组内顺序，全部校验后归档原始记录、合并样本和字节摘要 manifest |
 | `tests/compiled_fragment_series_protocol_test.cmake` | 默认非计时的合成记录正例、调度平衡与损坏记录／既有目录拒绝门禁 |
@@ -1215,6 +1219,10 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/compiled_fragment_probe_protocol.cmake`
 - `tests/compiled_fragment_pinned_protocol.cmake`
 - `tests/compiled_fragment_pinned_protocol_test.cmake`
+- `tests/compiled_fragment_pinned_series.cmake`
+- `tests/compiled_fragment_pinned_bundle.cmake`
+- `tests/compiled_fragment_pinned_bundle_test.cmake`
+- `tests/compiled_fragment_pinned_fixture.cmake`
 - `tests/compiled_fragment_series.cmake`
 - `tests/compiled_fragment_series_protocol_test.cmake`
 - `tests/compiled_fragment_bundle.cmake`

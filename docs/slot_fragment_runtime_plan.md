@@ -630,8 +630,9 @@ outside the timer. Metadata says `affinity=measurement_thread` and
 Platform CI runs `tests/runtime_fragment_affinity.cmake` as a separate correctness
 smoke: read-only capability query, the first allowed CPU with three iterations,
 900 schedule/counter checks, and disallowed/unsupported CPU rejection. This
-choice is only a smoke policy, not a measured-performance CPU selection. No pinned
-CSV is added to the existing 14-day artifact. Independent-process measurements,
+choice is only a smoke policy, not a performance-acceptance CPU selection. No pinned
+native CSV is added to the artifact; the separate compiled series below is retained
+for 14 days. Independent-process measurements,
 frequency/power/background controls, topology documentation and durable archival
 still need their own evidence. Boundary checks can affect cache/scheduling between
 samples; pinned and uncontrolled records must not be treated as identical harnesses
@@ -669,13 +670,67 @@ The shared affinity smoke additionally runs three-iteration O0/O2/O3 dispatch
 checks (243 samples), a second allowed CPU when available, and explicit rejection
 on unsupported platforms. CMake 4.4 child invocations use the author-warning spelling.
 
-The existing v1 series, bundle reader, evidence exporter and descriptive summary
-accept only uncontrolled compiled v2. Pinned raw records are not added to their
-inventories or 14-day CI artifacts. A pinned multi-process series with its own
-versioned archival/reader/controller-source inventory is still future work;
-do not place these CSVs inside an existing closed bundle. Default CTest adds only
+The existing v1 series, default bundle entry point, evidence exporter and descriptive
+summary accept only uncontrolled compiled v2. Pinned raw records are not added to
+their inventories. The separate pinned series below is not a portable evidence
+export or a new input to the old summary tool. Do not place these CSVs inside an
+existing closed bundle. Default CTest adds only
 synthetic record checks, never thread pinning or a timing threshold. Frequency,
 power, background load, durable storage and performance/release approval remain unclaimed.
+
+#### Pinned series and offline acceptance
+
+`tests/compiled_fragment_pinned_series.cmake` requires an explicit
+`LUNA_COMPILED_PROBE_LOGICAL_CPU` and fresh `LUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR`.
+It reuses the six profile permutations, cycle rotation and within-block position/
+directed-neighbor checks. Each cycle has 18 fresh measured processes, six per
+profile, with nine position-balanced rounds each: 1458 samples. No capability,
+default or invalid-CLI smoke subprocesses interleave these records. Windows/Linux
+are supported; unsupported platforms, disallowed CPUs and process failures do
+not fall back to uncontrolled observations. The directory is created only after
+all processes validate, and the manifest is written last.
+
+```sh
+cmake -Werror=dev -DLUNA_COMPILED_PROBE_EXECUTABLE="$PWD/build-perf/moonir-canonical-test" \
+  -DLUNA_COMPILED_PROBE_LOGICAL_CPU=0 -DLUNA_COMPILED_PROBE_ITERATIONS=10000 \
+  -DLUNA_COMPILED_SERIES_CYCLES=1 \
+  -DLUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR="$PWD/build-perf/compiled-pinned-series" \
+  -P tests/compiled_fragment_pinned_series.cmake
+cmake -Werror=dev -DLUNA_COMPILED_PINNED_BUNDLE_DIR="$PWD/build-perf/compiled-pinned-series" \
+  -DLUNA_COMPILED_PINNED_BUNDLE_EXPECTED_COMMIT=<full-build-commit> \
+  -DLUNA_COMPILED_PINNED_BUNDLE_EXPECTED_MANIFEST_SHA256=<manifest-byte-sha256> \
+  -P tests/compiled_fragment_pinned_bundle.cmake
+```
+
+Choose a reported allowed CPU, adjust Windows/multi-config paths, and use a fresh
+output directory. The standalone sampler defaults to three iterations when omitted;
+the explicit CI observation policy uses 10000, one cycle, and the first allowed CPU
+selected **outside** the sampler. This is not a topology or performance-acceptance
+policy. Unsupported hosts emit no pinned directory and no uncontrolled substitute.
+
+The closed `luna.compiled-fragment-pinned-series.v1` directory contains only
+`manifest.csv`, `samples.csv` and its `18 * cycles` raw records (20/38/182 files
+for 1/2/10 cycles). It binds the unchanged shared validator, pinned validator,
+sampler and affinity-controller source digests; declares CPU/group and unpinned
+setup scope; and preserves exact raw-to-combined row mappings, per-profile
+materialization keys, common build/workload identities and file byte hashes.
+The explicit pinned reader and default reader share a private validation core
+but select their modes through trusted entry points, never the manifest or an
+ambient flag. Both reject the other's protocol. Readers are read-only and check
+all raw/combined bytes again before returning; neither starts a probe, executes
+archive code, infers a winner or approves latency/release. Optional commit and
+manifest anchors detect mismatches, not authenticity by themselves.
+
+CI stores the pinned directory **alongside**, not inside, `compiled-fragment-evidence/`,
+keeping the existing artifact names and 14-day retention. macOS or unsupported
+Windows groups omit it explicitly. The default synthetic gate covers LF/CRLF,
+multiple cycles, unchanged input bytes, missing/unlisted/symlink/unsafe-path inputs,
+metadata/source/order corruption, rehashed invalid records, mode separation and
+failure without publication. Pinned/protocol tests share synthetic fixture builders.
+This directory still needs matching trusted checkout bytes: it carries digests,
+not a portable controller/validator source snapshot. Portable evidence export,
+descriptive pinned summaries, controlled power/background experiments and durable
+archival remain separate work; setup and between-block balance remain unclaimed.
 
 #### Compiled-plugin comparison protocol
 

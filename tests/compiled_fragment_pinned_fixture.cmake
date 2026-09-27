@@ -1,0 +1,57 @@
+cmake_minimum_required(VERSION 3.20)
+include("${CMAKE_CURRENT_LIST_DIR}/compiled_fragment_probe_fixture.cmake")
+
+# Synthetic fixtures only; no timing binary, OS affinity or observed data edits.
+function(luna_compiled_pinned_probe_fixture profile cpu group result)
+    luna_compiled_probe_fixture("${profile}" output)
+    file(SHA256 "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../benchmarks/fragment_thread_affinity.h" hash)
+    string(REPLACE "protocol=luna.compiled-fragment-cost.v2"
+        "protocol=luna.compiled-fragment-cost.pinned-thread.v1" output "${output}")
+    string(REPLACE "# affinity=uncontrolled,power_policy=uncontrolled\n"
+        "# affinity=measurement_thread,logical_cpu=${cpu},processor_group=${group},verified=sample_boundaries,power_policy=uncontrolled\n# affinity_control_sha256=${hash}\n# setup_affinity=uncontrolled,measurement_scope=dispatch_samples\n"
+        output "${output}")
+    set(${result} "${output}" PARENT_SCOPE)
+endfunction()
+
+function(luna_compiled_pinned_bundle_fixture directory cycles)
+    luna_compiled_bundle_fixture("${directory}" "${cycles}")
+    file(READ "${directory}/manifest.csv" manifest)
+    string(REPLACE "protocol=luna.compiled-fragment-series.v1"
+        "protocol=luna.compiled-fragment-pinned-series.v1" manifest "${manifest}")
+    string(REPLACE "probe_protocol=luna.compiled-fragment-cost.v2"
+        "probe_protocol=luna.compiled-fragment-cost.pinned-thread.v1" manifest "${manifest}")
+    file(SHA256 "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/compiled_fragment_pinned_series.cmake" runner_hash)
+    file(SHA256 "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/compiled_fragment_pinned_protocol.cmake" validator_hash)
+    file(SHA256 "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../benchmarks/fragment_thread_affinity.h" control_hash)
+    string(REGEX REPLACE "(# series_runner_sha256=)[0-9a-f]+" "\\1${runner_hash}" manifest "${manifest}")
+    string(REPLACE "# affinity=uncontrolled,power_policy=uncontrolled\n"
+        "# affinity=measurement_thread,logical_cpu=19,processor_group=0,verified=sample_boundaries,power_policy=uncontrolled\n"
+        manifest "${manifest}")
+    string(APPEND manifest "# logical_cpu=19\n# processor_group=0\n# affinity_control_sha256=${control_hash}\n")
+    string(APPEND manifest "# setup_affinity=uncontrolled,measurement_scope=dispatch_samples\n# pinned_protocol_validator_sha256=${validator_hash}\n")
+    luna_compiled_series_schedule("${cycles}" schedule)
+    set(index 0)
+    foreach(item IN LISTS schedule)
+        math(EXPR index "${index} + 1")
+        string(REGEX REPLACE "^.*," "" profile "${item}")
+        set(filename "process-${index}-${profile}.csv")
+        luna_compiled_pinned_probe_fixture("${profile}" 19 0 record)
+        string(REPEAT a 40 commit)
+        string(REPLACE "git_commit=synthetic-test-only" "git_commit=${commit}" record "${record}")
+        if(ARGC GREATER 2 AND ARGV2 STREQUAL "CRLF")
+            string(REPLACE "\n" "\r\n" record "${record}")
+        endif()
+        file(WRITE "${directory}/${filename}" "${record}")
+        file(SHA256 "${directory}/${filename}" hash)
+        string(REGEX REPLACE "(${filename},)[0-9a-f]+" "\\1${hash}" manifest "${manifest}")
+    endforeach()
+    if(ARGC GREATER 2 AND ARGV2 STREQUAL "CRLF")
+        file(READ "${directory}/samples.csv" combined)
+        string(REPLACE "\n" "\r\n" combined "${combined}")
+        file(WRITE "${directory}/samples.csv" "${combined}")
+        file(SHA256 "${directory}/samples.csv" hash)
+        string(REGEX REPLACE "(# combined_sha256=)[0-9a-f]+" "\\1${hash}" manifest "${manifest}")
+        string(REPLACE "\n" "\r\n" manifest "${manifest}")
+    endif()
+    file(WRITE "${directory}/manifest.csv" "${manifest}")
+endfunction()

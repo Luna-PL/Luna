@@ -1317,6 +1317,12 @@ if(BUILD_TESTING)
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/compiled_fragment_bundle_test.cmake
     )
     add_test(
+        NAME luna.compiled-fragment-pinned-bundle
+        COMMAND ${CMAKE_COMMAND} -Werror=dev
+            -DLUNA_COMPILED_PINNED_BUNDLE_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/compiled-fragment-pinned-bundle-tests
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/compiled_fragment_pinned_bundle_test.cmake
+    )
+    add_test(
         NAME luna.compiled-fragment-evidence
         COMMAND ${CMAKE_COMMAND} -Werror=dev
             -DLUNA_COMPILED_EVIDENCE_TEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/compiled-fragment-evidence-tests

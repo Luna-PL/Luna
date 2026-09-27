@@ -46,6 +46,12 @@ macOS 与多 processor group 的 Windows 必须明确拒绝固定模式。这不
 O0／O2／O3 固定线程派发，以及不允许／不支持请求拒绝。默认 CTest 新增独立的
 `luna.compiled-fragment-pinned-protocol`，仅用合成记录检查 LF／CRLF、控制器身份、CPU／group／
 scope、调用数／checksum 与两种模式互相拒绝。实际固定模式仍须显式调用，不进入 v1 观察 bundle。
+亲和性冒烟的可选 `LUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR` 增加显式 CI 观察策略：第一个允许
+CPU、18 个全新进程、10000 次迭代，测量序列内部不插入冒烟子进程。不支持的平台不生成
+替代数据。CI 用 workflow 提交独立验收固定目录，将其作为旧证据目录的同级目录保留，
+artifact 名称／14 天策略不变。默认 `luna.compiled-fragment-pinned-bundle` 仅用构建树合成数据，
+检查 1／2／10 轮、LF／CRLF、只读性、模式互斥、控制器／CPU／scope 损坏、重新摘要的非法
+记录和失败采样不发布输出。见[固定线程序列与离线验收](slot_fragment_runtime_plan.zh-CN.md#固定线程序列与离线验收)。
 
 编译器测试 harness 也提供可选 `--compiled-fragment-cost`。默认 CTest 只运行实际两包
 编译工作负载在 LLVM IR O0／O2／O3 下的 960 次非计时结果检查，以及配置／缓存拒绝和

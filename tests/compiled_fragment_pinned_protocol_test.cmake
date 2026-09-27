@@ -1,20 +1,10 @@
 cmake_minimum_required(VERSION 3.20)
 include("${CMAKE_CURRENT_LIST_DIR}/compiled_fragment_pinned_protocol.cmake")
-include("${CMAKE_CURRENT_LIST_DIR}/compiled_fragment_probe_fixture.cmake")
+include("${CMAKE_CURRENT_LIST_DIR}/compiled_fragment_pinned_fixture.cmake")
 
-function(pinned_fixture profile cpu group result)
-    luna_compiled_probe_fixture("${profile}" output)
-    file(SHA256 "${CMAKE_CURRENT_FUNCTION_LIST_DIR}/../benchmarks/fragment_thread_affinity.h" hash)
-    string(REPLACE "protocol=luna.compiled-fragment-cost.v2"
-        "protocol=luna.compiled-fragment-cost.pinned-thread.v1" output "${output}")
-    string(REPLACE "# affinity=uncontrolled,power_policy=uncontrolled\n"
-        "# affinity=measurement_thread,logical_cpu=${cpu},processor_group=${group},verified=sample_boundaries,power_policy=uncontrolled\n# affinity_control_sha256=${hash}\n# setup_affinity=uncontrolled,measurement_scope=dispatch_samples\n"
-        output "${output}")
-    set(${result} "${output}" PARENT_SCOPE)
-endfunction()
 
 if(DEFINED TEST_CASE)
-    pinned_fixture(O0 19 0 output)
+    luna_compiled_pinned_probe_fixture(O0 19 0 output)
     if(TEST_CASE STREQUAL wrong_controller)
         luna_compiled_probe_metadata("${output}" affinity_control_sha256 hash)
         string(REPEAT c 64 changed)
@@ -58,7 +48,7 @@ foreach(profile IN ITEMS O0 O2 O3)
         string(REPLACE "|" ";" fields "${specification}")
         list(GET fields 0 cpu)
         list(GET fields 1 group)
-        pinned_fixture("${profile}" "${cpu}" "${group}" output)
+        luna_compiled_pinned_probe_fixture("${profile}" "${cpu}" "${group}" output)
         luna_validate_compiled_pinned_probe("${output}" 3 "${profile}" "${cpu}" "${group}")
         string(REPLACE "\n" "\r\n" crlf "${output}")
         luna_validate_compiled_pinned_probe("${crlf}" 3 "${profile}" "${cpu}" "${group}")

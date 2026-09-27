@@ -3,6 +3,9 @@ cmake_minimum_required(VERSION 3.20)
 if(NOT DEFINED LUNA_FRAGMENT_BENCHMARK_EXECUTABLE)
     message(FATAL_ERROR "LUNA_FRAGMENT_BENCHMARK_EXECUTABLE is required")
 endif()
+if(DEFINED LUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR AND NOT DEFINED LUNA_COMPILED_PROBE_EXECUTABLE)
+    message(FATAL_ERROR "optional pinned series requires the compiled probe executable")
+endif()
 
 # Capability lookup is read-only. Selecting the first allowed CPU here is only
 # a correctness smoke test, not a performance experiment or topology policy.
@@ -48,6 +51,9 @@ if(info MATCHES "^# protocol=luna[.]fragment-cost[.]affinity-info[.]v1\n# suppor
     endif()
     require_cpu_rejected(0)
     message(STATUS "Pinned-thread probe rejects unsupported platform/group; default probe is unchanged")
+    if(DEFINED LUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR)
+        message(STATUS "Pinned series unavailable on this platform/group; no uncontrolled substitute is generated")
+    endif()
     return()
 endif()
 if(NOT info MATCHES "^# protocol=luna[.]fragment-cost[.]affinity-info[.]v1\n# supported=yes\n# cpu_limit=([1-9][0-9]*)\n# processor_group=(0|none)\n# allowed_cpus=([0-9,]+)\n$")
@@ -142,4 +148,20 @@ require_cpu_rejected("${disallowed}")
 message(STATUS "Pinned-thread smoke: CPU ${first_cpu}, 900 verified samples; disallowed CPU rejected; no timing threshold")
 if(DEFINED LUNA_COMPILED_PROBE_EXECUTABLE)
     message(STATUS "Compiled pinned-thread smoke: O0/O2/O3, 243 samples, distinct mode/control provenance; no timing threshold")
+endif()
+if(DEFINED LUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR)
+    # Explicit CI observation policy: the first allowed CPU, not a topology or
+    # performance-acceptance policy. No smoke processes interleave this series.
+    execute_process(COMMAND "${CMAKE_COMMAND}" "${warning_option}"
+            "-DLUNA_COMPILED_PROBE_EXECUTABLE=${LUNA_COMPILED_PROBE_EXECUTABLE}"
+            "-DLUNA_COMPILED_PROBE_LOGICAL_CPU=${first_cpu}"
+            -DLUNA_COMPILED_PROBE_ITERATIONS=10000 -DLUNA_COMPILED_SERIES_CYCLES=1
+            "-DLUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR=${LUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR}"
+            -P "${CMAKE_CURRENT_LIST_DIR}/compiled_fragment_pinned_series.cmake"
+        RESULT_VARIABLE status OUTPUT_VARIABLE output ERROR_VARIABLE errors TIMEOUT 900)
+    if(NOT status EQUAL 0 OR NOT errors STREQUAL "" OR
+       NOT IS_DIRECTORY "${LUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR}")
+        message(FATAL_ERROR "optional pinned observation series failed (${status}): ${output}\n${errors}")
+    endif()
+    message(STATUS "Pinned CI observations: 18 independent processes on logical CPU ${first_cpu}; setup/power/background remain uncontrolled")
 endif()

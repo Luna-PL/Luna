@@ -493,8 +493,8 @@ cmake -Werror=dev -DLUNA_FRAGMENT_BENCHMARK_EXECUTABLE="$PWD/build-perf/runtime-
 
 各平台 CI 独立运行 `tests/runtime_fragment_affinity.cmake` 正确性冒烟：只读查询能力，
 在第一个允许 CPU 上做三次迭代、900 个顺序／计数核对，并拒绝不允许／不支持的请求。
-自动取第一个 CPU 仅用于冒烟，不是性能测量的 CPU 选择策略。现有 14 天 artifact 不增加
-固定线程 CSV。独立进程测量、频率／功耗／后台控制、拓扑记录和长期归档仍需各自证据。
+自动取第一个 CPU 是冒烟策略，不是性能验收的 CPU 选择策略。artifact 不增加原生固定线程
+CSV；下方独立的编译序列保留 14 天。独立进程测量、频率／功耗／后台控制、拓扑记录和长期归档仍需各自证据。
 边界检查会影响样本之间的缓存／调度，不能把固定与未固定记录当成完全相同的 harness，
 也不能据此声称 Runtime 获得加速。不改变生产 Runtime 或源码语言 API。
 
@@ -525,11 +525,53 @@ CPU／group／边界核对 metadata，以及
 共用亲和性冒烟还做三次迭代的 O0／O2／O3 派发检查（243 样本）、可用时的第二个合法
 CPU，以及不支持平台的显式拒绝。CMake 4.4 子调用使用 author 警告参数名称。
 
-已有 v1 series、bundle reader、证据导出和描述性汇总仍只接受未固定的编译 v2。固定原始
-记录不加入其文件清单或 14 天 CI artifact。固定线程多进程序列及其独立版本的归档／reader／
-控制器源码清单仍是后续工作；不要把这些 CSV 放进已有的封闭 bundle。默认 CTest 只增加
+已有 v1 series、默认 bundle 入口、证据导出和描述性汇总仍只接受未固定的编译 v2。固定原始
+记录不加入其文件清单。下方独立固定序列不是可迁移证据导出，也不是旧汇总工具的新输入；
+不要把这些 CSV 放进已有的封闭 bundle。默认 CTest 只增加
 合成记录检查，不固定线程，也不设计时阈值。频率、功耗、后台负载、长期存储与性能／发布
 批准仍不作保证。
+
+#### 固定线程序列与离线验收
+
+`tests/compiled_fragment_pinned_series.cmake` 要求显式
+`LUNA_COMPILED_PROBE_LOGICAL_CPU` 和全新 `LUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR`。
+复用六种配置排列、轮次旋转及组内位置／有向相邻检查。每轮 18 个全新测量进程、每配置
+六个进程，各有九个位置平衡轮次，共 1458 个样本。测量记录之间不插入能力查询、默认
+或非法 CLI 冒烟子进程。支持 Windows／Linux；不支持平台、不允许的 CPU 和进程失败
+不回退为未约束观察。全部进程验证后才创建输出目录，manifest 最后写入。
+
+```sh
+cmake -Werror=dev -DLUNA_COMPILED_PROBE_EXECUTABLE="$PWD/build-perf/moonir-canonical-test" \
+  -DLUNA_COMPILED_PROBE_LOGICAL_CPU=0 -DLUNA_COMPILED_PROBE_ITERATIONS=10000 \
+  -DLUNA_COMPILED_SERIES_CYCLES=1 \
+  -DLUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR="$PWD/build-perf/compiled-pinned-series" \
+  -P tests/compiled_fragment_pinned_series.cmake
+cmake -Werror=dev -DLUNA_COMPILED_PINNED_BUNDLE_DIR="$PWD/build-perf/compiled-pinned-series" \
+  -DLUNA_COMPILED_PINNED_BUNDLE_EXPECTED_COMMIT=<完整构建提交> \
+  -DLUNA_COMPILED_PINNED_BUNDLE_EXPECTED_MANIFEST_SHA256=<manifest字节摘要> \
+  -P tests/compiled_fragment_pinned_bundle.cmake
+```
+
+选择报告的允许 CPU，调整 Windows／多配置路径，并使用全新输出目录。独立 sampler 省略
+迭代参数时默认三次；显式 CI 观察策略用 10000 次、一轮，并在 sampler **外部**选择第一个
+允许 CPU。这不是拓扑或性能验收策略。不支持的主机不生成固定目录，也不生成未约束替代数据。
+
+封闭的 `luna.compiled-fragment-pinned-series.v1` 目录只包含 `manifest.csv`、`samples.csv`
+及 `18 * cycles` 份原始记录（1／2／10 轮分别为 20／38／182 个文件）。绑定未改变的共享
+validator、固定 validator、sampler 和亲和性控制器的源码摘要，声明 CPU／group 与未固定
+setup 范围，保留原始／合并行的精确映射、分配置 materialization key、共同构建／工作负载
+身份及文件字节摘要。固定 reader 与默认 reader 共用私有校验核心，但由可信显式入口选择
+模式，不按 manifest 或环境标志自动切换；互相拒绝另一协议。reader 只读，并在返回前再次
+核对全部原始／合并字节；不启动探针、不执行归档代码、不推导胜者，也不批准延迟或发布。
+可选提交／manifest 锚点只检测不匹配，本身不证明真实性。
+
+CI 将固定目录放在 `compiled-fragment-evidence/` 的**同级**，而非内部，artifact 名称和
+14 天保留策略不变。macOS 或不支持的 Windows group 明确省略该目录。默认合成门禁覆盖
+LF／CRLF、多轮、输入字节不变、缺失／未列出／符号链接／不安全路径、metadata／源码／
+顺序损坏、重新摘要的非法记录、模式隔离和失败不发布；固定记录／bundle 门禁共用合成
+fixture。此目录仍需要匹配的可信 checkout 字节：携带摘要，不携带可迁移的控制器／
+validator 源码快照。可迁移证据导出、固定记录描述性汇总、功耗／后台控制实验及长期归档
+仍需另行完成；setup 及组间顺序平衡仍不作保证。
 
 #### 编译插件对比协议
 

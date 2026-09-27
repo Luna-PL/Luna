@@ -62,6 +62,16 @@ unsupported/disallowed CPU rejection. The separate
 `luna.compiled-fragment-pinned-protocol` default CTest is synthetic only: LF/CRLF,
 controller identity, CPU/group/scope, calls/checksums and mutual mode rejection.
 The actual pinned mode remains opt-in and does not enter v1 observation bundles.
+The optional `LUNA_COMPILED_PINNED_SERIES_OUTPUT_DIR` in the affinity smoke adds
+an explicit CI observation policy: first allowed CPU, 18 fresh processes at
+10000 iterations, with no smoke subprocesses inside the measured series.
+Unsupported platforms produce no substitute. CI independently accepts the
+separate pinned directory with its workflow commit and retains it as a sibling
+of the old evidence directory under the same artifact names/14-day policy.
+The default `luna.compiled-fragment-pinned-bundle` test uses only synthetic
+build-tree data: 1/2/10 cycles, LF/CRLF, read-only acceptance, mode separation,
+controller/CPU/scope corruption, rehashed invalid records and failed sampling
+without output publication. See [pinned series and offline acceptance](slot_fragment_runtime_plan.md#pinned-series-and-offline-acceptance).
 
 The compiler harness also exposes opt-in `--compiled-fragment-cost`. Its default
 CTest path runs 960 non-timed result checks of the actual two-package compiled workload
