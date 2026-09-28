@@ -1,4 +1,5 @@
 #include "RuntimeFragment.h"
+#include "RuntimeFragmentCompilerBridge.h"
 
 #include "RuntimeDescriptorABI.h"
 
@@ -1025,6 +1026,55 @@ extern "C" void luna_runtime_fragment_ref_drop_v1(void** reference) {
     auto* retired = static_cast<
         luna::runtime::RuntimeFragmentRefHandleState*>(*reference);
     *reference = nullptr;
+    retired->magic = 0;
+    delete retired;
+}
+
+extern "C" int32_t luna_compiler_fragment_context_override_from_ref(
+    const void* parent_context, const void* reference,
+    const char* slot_id, const char* slot_contract_id,
+    void** output_context) {
+    if (!output_context || *output_context)
+        return LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_OUTPUT;
+    const auto* parent = static_cast<const
+        luna::runtime::RuntimeFragmentExecutionContextState*>(parent_context);
+    if (!parent || parent->magic !=
+            luna::runtime::RuntimeFragmentExecutionContextMagic)
+        return LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT;
+    if (!luna::runtime::validText(slot_id) ||
+        !luna::runtime::validText(slot_contract_id) ||
+        luna_runtime_fragment_ref_check_v1(
+            reference, slot_id, slot_contract_id) !=
+                LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
+        return LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_REFERENCE;
+    try {
+        const auto* selected = static_cast<const
+            luna::runtime::RuntimeFragmentRefHandleState*>(reference);
+        const luna::runtime::RuntimeSlotRequirement slot{
+            slot_id, slot_contract_id};
+        luna::runtime::RuntimeFragmentBindingSet bindings;
+        std::string error;
+        if (!luna::runtime::makeRuntimeFragmentBindingOverrideFromSnapshot(
+                parent->bindings, slot, selected->singleton,
+                bindings, error))
+            return LUNA_COMPILER_FRAGMENT_OVERRIDE_FAILED;
+        auto derived = std::make_unique<
+            luna::runtime::RuntimeFragmentExecutionContextState>();
+        derived->bindings = std::move(bindings);
+        derived->magic =
+            luna::runtime::RuntimeFragmentExecutionContextMagic;
+        *output_context = derived.release();
+        return LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS;
+    } catch (...) {
+        return LUNA_COMPILER_FRAGMENT_OVERRIDE_FAILED;
+    }
+}
+
+extern "C" void luna_compiler_fragment_context_drop(void** context) {
+    if (!context || !*context) return;
+    auto* retired = static_cast<
+        luna::runtime::RuntimeFragmentExecutionContextState*>(
+            std::exchange(*context, nullptr));
     retired->magic = 0;
     delete retired;
 }

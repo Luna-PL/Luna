@@ -1,4 +1,5 @@
 #include "runtime/RuntimeFragment.h"
+#include "runtime/RuntimeFragmentCompilerBridge.h"
 #include "runtime/RuntimeDescriptorABI.h"
 
 #include <array>
@@ -415,6 +416,77 @@ int testRefHandleBridge(const LunaRuntimeFragmentDescriptorV1& original) {
                 return fail("Ref bridge shadowing changed another Slot");
             retained = derived;
         }
+        void* compiledContext = nullptr;
+        void* occupiedContext = &factory; // Never passed as a context.
+        if (luna_compiler_fragment_context_override_from_ref(
+                parent.opaque(), handle.opaque(), slot.slotId.c_str(),
+                slot.contractId.c_str(), nullptr) !=
+                LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_OUTPUT ||
+            luna_compiler_fragment_context_override_from_ref(
+                parent.opaque(), handle.opaque(), slot.slotId.c_str(),
+                slot.contractId.c_str(), &occupiedContext) !=
+                LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_OUTPUT ||
+            occupiedContext != &factory ||
+            luna_compiler_fragment_context_override_from_ref(
+                nullptr, handle.opaque(), slot.slotId.c_str(),
+                slot.contractId.c_str(), &compiledContext) !=
+                LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT ||
+            luna_compiler_fragment_context_override_from_ref(
+                parent.opaque(), handle.opaque(), wrongSlot.slotId.c_str(),
+                slot.contractId.c_str(), &compiledContext) !=
+                LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_REFERENCE ||
+            luna_compiler_fragment_context_override_from_ref(
+                parent.opaque(), nullptr, slot.slotId.c_str(),
+                slot.contractId.c_str(), &compiledContext) !=
+                LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_REFERENCE ||
+            compiledContext)
+            return fail("compiler Ref context bridge changed output on rejection");
+        refHandleAllocationCountdown = 0;
+        const int32_t allocationStatus =
+            luna_compiler_fragment_context_override_from_ref(
+                parent.opaque(), handle.opaque(), slot.slotId.c_str(),
+                slot.contractId.c_str(), &compiledContext);
+        refHandleAllocationCountdown = -1;
+        if (allocationStatus != LUNA_COMPILER_FRAGMENT_OVERRIDE_FAILED ||
+            compiledContext || !handle)
+            return fail("compiler Ref context bridge did not roll back allocation failure");
+        if (luna_compiler_fragment_context_override_from_ref(
+                parent.opaque(), handle.opaque(), slot.slotId.c_str(),
+                slot.contractId.c_str(), &compiledContext) !=
+                LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS || !compiledContext)
+            return fail("compiler Ref context bridge failed to derive a snapshot");
+        void* nestedCompiledContext = nullptr;
+        if (luna_compiler_fragment_context_override_from_ref(
+                compiledContext, handle.opaque(), slot.slotId.c_str(),
+                slot.contractId.c_str(), &nestedCompiledContext) !=
+                LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS || !nestedCompiledContext)
+            return fail("compiler Ref context bridge rejected a nested override");
+        std::vector<int> compiledTrace;
+        activeChainTrace = &compiledTrace;
+        const int32_t nestedCompiledStatus = luna_runtime_fragment_dispatch_v1(
+            nestedCompiledContext, slot.slotId.c_str(),
+            slot.contractId.c_str(), arguments.layoutId.c_str(),
+            arguments.size, arguments.alignment, arguments.data,
+            recordChainBase, &compiledTrace);
+        activeChainTrace = nullptr;
+        if (nestedCompiledStatus != LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1 ||
+            compiledTrace != std::vector<int>({1, 0, 4}))
+            return fail("compiler nested Ref context did not shadow one Slot");
+        compiledTrace.clear();
+        activeChainTrace = &compiledTrace;
+        const int32_t otherCompiledStatus = luna_runtime_fragment_dispatch_v1(
+            compiledContext, otherSlot.slotId.c_str(),
+            otherSlot.contractId.c_str(), arguments.layoutId.c_str(),
+            arguments.size, arguments.alignment, arguments.data,
+            recordChainBase, &compiledTrace);
+        activeChainTrace = nullptr;
+        if (otherCompiledStatus != LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1 ||
+            compiledTrace != std::vector<int>({2, 0, 3}))
+            return fail("compiler Ref context changed an unrelated Slot");
+        luna_compiler_fragment_context_drop(&nestedCompiledContext);
+        luna_compiler_fragment_context_drop(&nestedCompiledContext);
+        if (nestedCompiledContext)
+            return fail("compiler nested context drop did not clear its owner");
         RuntimeFragmentRefHandle moved(std::move(handle));
         auto* sameHandle = &moved;
         moved = std::move(*sameHandle);
@@ -487,6 +559,22 @@ int testRefHandleBridge(const LunaRuntimeFragmentDescriptorV1& original) {
         activeChainTrace = nullptr;
         if (!pinned || trace != std::vector<int>({1, 0}))
             return fail("Ref bridge drop invalidated a derived context");
+        trace.clear();
+        activeChainTrace = &trace;
+        const int32_t compiledStatus = luna_runtime_fragment_dispatch_v1(
+            compiledContext, slot.slotId.c_str(), slot.contractId.c_str(),
+            arguments.layoutId.c_str(), arguments.size,
+            arguments.alignment, arguments.data,
+            recordEscapingChainBase, &trace);
+        activeChainTrace = nullptr;
+        if (compiledStatus !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_CONTINUATION_ESCAPED_V1 ||
+            trace != std::vector<int>({1, 0}))
+            return fail("compiler Ref context lost its pin after owner Drop");
+        luna_compiler_fragment_context_drop(&compiledContext);
+        luna_compiler_fragment_context_drop(&compiledContext);
+        if (compiledContext)
+            return fail("compiler Ref context drop did not clear its owner");
         retained = {};
     }
     std::vector<int> parentTrace;

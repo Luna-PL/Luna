@@ -634,6 +634,19 @@ and code generator still reject it explicitly. The frozen Moon Container 0.3
 layout and public ABI have not changed. Operand/context execution, cleanup on
 all exits, wire/public ABI design and end-to-end acceptance remain open.
 
+### Compiler-private Ref context bridge (2026-09-28)
+
+The native runtime now offers a compiler-private, unpublished bridge from a
+borrowed live Ref handle and explicit parent context to an independently owned
+derived context pointer. It validates the exact Slot, preserves the parent's
+other bindings, uses the existing immutable snapshot override, and publishes
+the output only after all allocations succeed. An owning-cell Drop clears the
+cell before releasing the snapshot. Nested derivation and survival after Ref
+owner Drop are regression-tested. This is preparation for generated code, not
+source `apply` execution: LLVM still rejects Ref-apply CFGs, and generated
+entry/exit placement, return/error cleanup, wire format and public ABI remain
+open. The bridge is not part of the stable runtime Fragment ABI.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal

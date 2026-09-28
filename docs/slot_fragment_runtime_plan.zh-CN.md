@@ -500,6 +500,16 @@ Slot 站点变为运行时分派，并参与既有 context-effect 固定点。�
 code generator 仍明确拒绝它。冻结的 Moon Container 0.3 布局与公开 ABI 均未改变。
 operand／context 执行、所有退出路径的清理、wire／公开 ABI 设计及端到端验收仍未完成。
 
+### 编译器私有的 Ref context 桥接（2026-09-28）
+
+Native runtime 现提供未发布、仅供编译器使用的桥接：从借用的存活 Ref handle 和
+显式父 context 派生独立拥有的 context 指针。它核对精确 Slot，保留父 context 的
+其他绑定，复用不可变快照 override，且仅在全部分配成功后写入输出。拥有型 cell
+的 Drop 先清空 cell，再释放快照。嵌套派生和 Ref owner Drop 后仍可使用的行为已有
+回归验证。这是生成代码的准备，**不是**源码 `apply` 已可执行：LLVM 仍拒绝 Ref-apply
+CFG；生成的入口／出口安放、return／错误清理、wire 格式和公开 ABI 仍未完成。
+此桥接不属于稳定 runtime Fragment ABI。
+
 ## 宿主控制的发现与注入
 
 目标指向 exported Slot 的 exported Fragment，凭名义关系成为候选；metadata 不授予
