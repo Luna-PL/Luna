@@ -213,6 +213,65 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                      }))
         return fail("source Ref apply gate lost its explicit ABI diagnostic");
 
+    auto contextRefSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "export slot checkpoint(value: i32);\n"
+        "runtime fn dispatch(selected: RuntimeFragmentRef<checkpoint>) {\n"
+        "  checkpoint(1) {}\n"
+        "}\n"
+        "runtime fn relay(selected: RuntimeFragmentRef<checkpoint>) {\n"
+        "  dispatch(selected);\n"
+        "}\n",
+        "<canonical-ref-context-effect>");
+    if (!contextRefSnapshot.success())
+        return fail("frontend rejected context-bearing Ref entry preparation");
+    moon::LunaLowerer contextRefLowerer;
+    auto contextRefModule = contextRefLowerer.lower(
+        *contextRefSnapshot.program(), *contextRefSnapshot.symbolTable());
+    if (!contextRefModule || !contextRefLowerer.errors().empty())
+        return fail("context-bearing Ref entry failed private MoonIR lowering");
+    moon::Sealer contextRefSealer;
+    if (!contextRefSealer.sealFunctionBodies(*contextRefModule))
+        return fail("context-bearing Ref entry did not seal a canonical CFG");
+    moon::FunctionDecl* contextDispatch = nullptr;
+    moon::FunctionDecl* contextRelay = nullptr;
+    for (auto& declaration : contextRefModule->declarations) {
+        auto* function = dynamic_cast<moon::FunctionDecl*>(declaration.get());
+        if (!function) continue;
+        if (function->name == "dispatch") contextDispatch = function;
+        if (function->name == "relay") contextRelay = function;
+    }
+    if (!contextDispatch || !contextRelay ||
+        !contextDispatch->requiresFragmentContext ||
+        !contextRelay->requiresFragmentContext)
+        return fail("runtime Slot/Ref entry lost direct or transitive context effect");
+    CodeGenerator blockedContextRef("canonical-ref-context-gate");
+    if (blockedContextRef.generate(contextRefModule.get()) ||
+        std::any_of(blockedContextRef.errors().begin(),
+                    blockedContextRef.errors().end(),
+                    [](const auto& diagnostic) {
+                        return diagnostic.message.find(
+                            "private RuntimeFragmentRef unit ingress proof failed") !=
+                            std::string::npos;
+                    }))
+        return fail("context-bearing Ref entry escaped or failed private proof");
+    contextRelay->requiresFragmentContext = false;
+    CodeGenerator forgedContextRef("canonical-ref-forged-context-gate");
+    const bool forgedContextPublished =
+        forgedContextRef.generate(contextRefModule.get());
+    contextRelay->requiresFragmentContext = true;
+    if (forgedContextPublished ||
+        !std::any_of(forgedContextRef.errors().begin(),
+                     forgedContextRef.errors().end(),
+                     [](const auto& diagnostic) {
+                         return diagnostic.message.find(
+                             "private RuntimeFragmentRef unit ingress proof failed for 'relay'") !=
+                             std::string::npos &&
+                             diagnostic.message.find(
+                                 "context effect differs from the sealed CFG fixed point") !=
+                             std::string::npos;
+                     }))
+        return fail("forged transitive Ref context effect passed private proof");
+
     llvm::LLVMContext bridgeContext;
     CGHelpers bridgeHelpers(bridgeContext);
     llvm::Module bridgeModule("canonical.ref_ingress_preparation", bridgeContext);

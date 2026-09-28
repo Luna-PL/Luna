@@ -166,10 +166,12 @@ before optimizing; never remove validation or borrow callback-destroyable storag
    dropGlue and two-package carrier/contract validation remain unconnected.
 4. **Partially implemented source apply**: exact-Slot local Ref recognition,
    rejection of environment arguments and lexical shared-loan checking are
-   prepared. Once-only evaluation/region context, effect fixed point,
-   explicit-context lowering/independent verification remain open;
-   repeated/nested apply, shadowing, other Slots, normal/return/`?`/failure cleanup
-   and rejected handler re-entry regressions.
+   prepared. The existing CFG effect fixed point is proven for direct and
+   transitive Ref-carrying entries, but Ref-apply region connection,
+   once-only evaluation/context, explicit-context lowering/independent
+   verification remain open; executable repeated/nested apply, shadowing,
+   other Slots, normal/return/`?`/failure cleanup and rejected handler
+   re-entry regressions are not complete.
 5. **End-to-end gate**: real two-package verified containers with Ref import/source
    application, parameter/return transfer and invalid candidates. Only then may
    `source-ref-apply` become implemented. Direction approval/native support closes
@@ -597,14 +599,27 @@ body; repeated apply is allowed while moving the owner inside that body is
 rejected. A dynamic binding masks an outer static binding for the same Slot
 in frontend analysis. This is **not executable source apply**: lowering reports
 an explicit context-override ABI diagnostic and cannot publish an artifact.
-The effect fixed point, runtime operand and context lowering, return/error
-cleanup and cross-package tests remain completion gates.
+Connecting this region to the canonical CFG effect fixed point, runtime
+operand/context lowering, return/error cleanup and cross-package tests remain
+completion gates.
 
 The strict full build passes. The parallel non-hardware run passed 76/77;
 `luna.repl-smoke` timed out in process-tree cleanup under parallel load and
 passed when rerun alone. The final focused analysis, canonical, REPL,
 documentation and inventory gates pass 5/5. This is not a source Ref
 end-to-end acceptance or a new performance observation.
+
+### Ref-carrying context effect and nested-loan proof (2026-09-28)
+
+The existing sealed-CFG effect fixed point marks both a Ref-parameter function
+that directly invokes an exported Slot and a Ref-parameter caller reaching it.
+Private unit ingress now checks that independently recomputed effect before
+generating any LLVM body; a forged transitive effect is rejected. Frontend
+regressions also prove nested shared `apply` loans, release before an owning
+return, and rejection of an owner escaping from inside an active loan. This
+validates the machinery surrounding Ref apply, **not** the missing region
+override or executable lowering. No public ABI or wire format changes.
+The strict full build and all 77 non-hardware gates pass (156.55 seconds).
 
 ## Host-controlled discovery and injection
 

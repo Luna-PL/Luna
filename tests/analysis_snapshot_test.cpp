@@ -212,6 +212,21 @@ int main(int argc, char* argv[]) {
                     innerSlot->resolvedFragmentName.empty(),
                 "Ref apply failed to mask an outer static Fragment"))
         return 26;
+    auto nestedBorrow = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "export slot checkpoint();\n"
+        "runtime fn transfer_after_apply("
+        "selected: affine RuntimeFragmentRef<checkpoint>) "
+        "-> affine RuntimeFragmentRef<checkpoint> {\n"
+        "  apply selected { apply selected { checkpoint() {} } }\n"
+        "  return selected;\n"
+        "}\n",
+        "file:///workspace/runtime_ref_nested_borrow.luna");
+    if (!nestedBorrow.success())
+        for (const auto& diagnostic : nestedBorrow.errors())
+            std::cerr << diagnostic.message << '\n';
+    if (!expect(nestedBorrow.success(),
+                "nested Ref apply did not release loans before owning return"))
+        return 27;
     const std::array<const char*, 3> invalidRefApplies = {
         "export slot checkpoint(value: i32); "
         "runtime fn bad(selected: RuntimeFragmentRef<checkpoint>) "
@@ -240,8 +255,24 @@ int main(int argc, char* argv[]) {
             });
         if (!expect(!rejected.success() && diagnosed,
                     "invalid source Ref apply passed semantic/ownership analysis"))
-            return 27;
+            return 28;
     }
+    auto escapedBorrow = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "export slot checkpoint();\n"
+        "runtime fn bad(selected: affine RuntimeFragmentRef<checkpoint>) "
+        "-> affine RuntimeFragmentRef<checkpoint> {\n"
+        "  apply selected { return selected; }\n"
+        "}\n",
+        "file:///workspace/runtime_ref_borrow_escape.luna");
+    if (!expect(!escapedBorrow.success() &&
+                    std::any_of(escapedBorrow.errors().begin(),
+                                escapedBorrow.errors().end(),
+                                [](const auto& diagnostic) {
+                                    return diagnostic.message.find("borrow") !=
+                                        std::string::npos;
+                                }),
+                "Ref owner escaped from its active apply loan"))
+        return 29;
 
     const std::string validSource =
         "package org.luna.test;\n"

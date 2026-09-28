@@ -1,4 +1,5 @@
 #include "CodeGenerator.h"
+#include "moonir/FragmentContextEffects.h"
 #include "moonir/Verifier.h"
 
 #include <llvm/Config/llvm-config.h>
@@ -53,6 +54,15 @@ std::unique_ptr<llvm::TargetMachine> createHostOptimizationTarget(
     return machine;
 }
 
+bool matchesPrivateRefContextEffect(
+    const moon::Module& program, const FunctionDecl& function) {
+    const auto effects = moon::computeFragmentContextEffects(program);
+    const auto found = effects.find(moon::fragmentContextEffectKey(
+        {function.symbolId, function.contractId}));
+    const bool inferred = found != effects.end() && found->second;
+    return function.requiresFragmentContext == inferred;
+}
+
 } // namespace
 
 bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
@@ -75,6 +85,10 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         function.body || function.isExtern ||
         !cfgVerifier.verify(*function.controlFlow, program)) {
         failure = "function has no independently verified sealed CFG";
+        return false;
+    }
+    if (!matchesPrivateRefContextEffect(program, function)) {
+        failure = "Ref entry context effect differs from the sealed CFG fixed point";
         return false;
     }
     std::vector<llvm::Type*> parameters;
@@ -192,6 +206,10 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefOwnedReturn(
     moon::Verifier cfgVerifier;
     if (!cfgVerifier.verify(*function.controlFlow, program)) {
         failure = "owned Ref return CFG failed independent verification";
+        return false;
+    }
+    if (!matchesPrivateRefContextEffect(program, function)) {
+        failure = "owned Ref return context effect differs from the sealed CFG fixed point";
         return false;
     }
     const moon::LocalRecord* parameterLocal = nullptr;

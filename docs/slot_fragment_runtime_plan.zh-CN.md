@@ -140,9 +140,10 @@ Ref-bearing exported Slot／Fragment payload、non-Copy 环境、non-unit 与 mu
    context 与 Runtime drop 已完成，见下文；源码导入、拥有／借用参数、拥有返回、
    compiler dropGlue 和两包 carrier／contract 校验仍未接通。
 4. **部分实现的源码 apply**：局部 Ref 精确 Slot 识别、环境实参拒绝与词法共享借用检查
-   已准备；一次求值／region context、effect 固定点、显式 context lowering／独立
-   verifier 仍开放；重复／嵌套、同槽遮蔽、其他槽保留、正常退出／
-   return／`?`／失败清理，以及禁止 handler 重入的回归。
+   已准备；既有 CFG effect 固定点已对直接和传递的 Ref 参数入口验证，但 Ref apply
+   region 接入、一次求值／context、显式 context lowering／独立 verifier 仍开放；
+   可执行的重复／嵌套 apply、同槽遮蔽、其他槽保留、正常退出／return／`?`／失败清理，
+   以及禁止 handler 重入的回归尚未完成。
 5. **端到端完成门**：真实两包 verified container 的 Ref 导入／源码应用、参数／返回
    transfer 与错误候选。只有这些通过才能将 `source-ref-apply` 标为 implemented；
    方向确认和 native 支撑不关闭源码缺口、历史 TBD 或发布批准。
@@ -472,12 +473,21 @@ module 验证。篡改结果的所有权用法会使证明失败。前一轮 uni
 Fragment：解析精确导出的 Slot、拒绝环境实参，并在词法 body 内共享借用 owner。
 同一 Ref 可以重复 apply，body 内移动 owner 会被拒绝。前端分析中，动态绑定会遮蔽
 同槽的外层静态绑定。这**不是可执行的源码 apply**：lowering 明确报告缺少源码
-context-override ABI，不能发布产物。Effect 固定点、运行时 operand／context
-lowering、return／错误清理及跨包测试仍是完成门。
+context-override ABI，不能发布产物。该 region 接入 canonical CFG effect 固定点、
+运行时 operand／context lowering、return／错误清理及跨包测试仍是完成门。
 
 严格完整构建通过。并行非硬件回归 76／77 通过；`luna.repl-smoke` 的进程树清理在
 并行负载下超时，单独重跑通过。最终聚焦的分析、canonical、REPL、文档和清单
 门禁 5／5 通过。这不是源码 Ref 端到端验收，也不是新的性能观察。
+
+### Ref 参数的 context effect 与嵌套借用验证（2026-09-28）
+
+既有的密封 CFG effect 固定点，现经回归验证可标记直接调用 exported Slot 的 Ref 参数
+函数，以及传递到它的 Ref 参数调用者。私有 unit 入口在生成 LLVM 函数体之前，会独立
+重算 effect 并拒绝伪造的传递标记。前端回归还证明嵌套共享 `apply` 借用、拥有型返回前
+释放借用，以及在借用作用域内带走 owner 会被拒绝。这验证 Ref apply 周边的机制，
+**不是**缺失的 region override 或可执行 lowering；不改公开 ABI 或 wire 格式。
+严格完整构建与全部 77 项非硬件门禁通过（156.55 秒）。
 
 ## 宿主控制的发现与注入
 
