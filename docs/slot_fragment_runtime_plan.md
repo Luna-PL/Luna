@@ -5,7 +5,7 @@ English | [简体中文](slot_fragment_runtime_plan.zh-CN.md)
 > Status: Confirmed implementation plan, 2026-09-23
 > Scope: type-safe, host-controlled runtime injection
 > Current acceptance view (2026-09-28): see the [v1 acceptance snapshot](slot_fragment_contract.md#v1-acceptance-snapshot-2026-09-28).
-> The native-host loop is implemented. Source Ref/apply was selected as the next direction on 2026-09-28; the slices below distinguish implemented native support from unimplemented source capabilities.
+> The native-host loop is implemented. Source Ref/apply was selected as the next direction on 2026-09-28. Source type spelling and constraints are prepared, but executable source Ref/apply remains unimplemented; the slices below distinguish these boundaries.
 
 ## Model
 
@@ -283,6 +283,38 @@ direct Runtime C++17 ASan/UBSan compilation/execution passes on WSL Arch Linux
 Clang 22.1.8. The C ABI compile fixture checks C function-pointer signatures for
 both new operations; diff checks pass. These are local checks, not remote CI or
 stable-release approval.
+
+### Source Ref type spelling and constraint boundary (2026-09-28)
+
+The predefined type constructor `RuntimeFragmentRef<S>` is still an ordinary
+Identifier, **not a new keyword**. Parsing reuses generic type syntax. Only in
+this constructor's argument position does semantic analysis resolve a module
+Slot declaration to its exact nominal Slot type; same-shaped functions/structs
+and wrong arities fail. `S` must meet the prior concrete unit/single-shot/Copy-only
+formation rules. No Ref construction from arbitrary declaration addresses is
+introduced.
+
+Constraint unification now preserves the nominal target and ABI shape. It cannot
+silently equate distinct same-shaped Slots or a changed signature under the same
+Slot identity. Inference traversal visits the Ref target; AST reconstruction keeps
+the resolved nominal identity. Unqualified parameters remain shared borrows;
+explicit affine parameters own. This does not grant source Ref copying or handler
+re-entry.
+
+Analysis-snapshot tests cover valid declarations, non-Slot targets and missing/
+extra arguments. A real source-to-MoonIR regression demonstrates that the type
+parses and lowers into internal preparation but the verifier still rejects
+executable publication. Source import, owning parameter/return transfer, compiler
+dropGlue, wire round-trip and dynamic `apply` remain unfinished;
+`source-ref-apply` stays implementation-open and the old container decoder limit
+is unchanged.
+
+This slice passes a strict full build and all 77 non-hardware gates (257.87
+seconds). Windows ASan/UBSan builtin types, analysis snapshot and canonical
+MoonIR pass 3/3; direct C++17 builtin/semantic-constraint ASan/UBSan compilation
+and execution pass on WSL Arch Linux Clang 22.1.8. Design status, inventory
+and diff checks pass. These are local checks, not remote CI or stable-release
+approval.
 
 ## Host-controlled discovery and injection
 

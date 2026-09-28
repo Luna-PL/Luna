@@ -31,6 +31,7 @@ const std::vector<PredefinedTypeDefinition>& predefinedTypes() {
         {"symbol_set", PredefinedTypeForm::SymbolSet, 1, 1, false, nullptr},
         {"declaration_view", PredefinedTypeForm::DeclarationView, 0, 1, false, nullptr},
         {"declaration_ref", PredefinedTypeForm::DeclarationRef, 0, 1, false, nullptr},
+        {"RuntimeFragmentRef", PredefinedTypeForm::RuntimeFragmentRef, 1, 1, false, nullptr},
     };
     return definitions;
 }
@@ -74,6 +75,8 @@ std::string invalidArgumentsMessage(PredefinedTypeForm form) {
         return "declaration_view accepts at most one callable type argument";
     case PredefinedTypeForm::DeclarationRef:
         return "declaration_ref accepts at most one callable type argument";
+    case PredefinedTypeForm::RuntimeFragmentRef:
+        return "RuntimeFragmentRef<S> requires exactly one nominal Slot type argument";
     }
     return "invalid predefined type arguments";
 }
@@ -130,6 +133,9 @@ resolvePredefinedType(const NamedTypeAST& named,
         break;
     case PredefinedTypeForm::DeclarationRef:
         result.type = Type::makeDeclarationRef(first);
+        break;
+    case PredefinedTypeForm::RuntimeFragmentRef:
+        result.type = Type::makeRuntimeFragmentRef(first);
         break;
     case PredefinedTypeForm::Atomic:
         break;

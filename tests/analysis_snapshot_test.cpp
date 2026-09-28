@@ -24,11 +24,11 @@ bool expect(bool condition, const char* message) {
 int main(int argc, char* argv[]) {
     if (!expect(argc == 2, "expected the Luna source directory")) return 1;
 
-    Lexer predefinedLexer("i32 i64 f32 f64 bool string");
+    Lexer predefinedLexer("i32 i64 f32 f64 bool string RuntimeFragmentRef");
     const auto predefinedTokens = predefinedLexer.tokenize();
     if (!expect(predefinedLexer.errors().empty(),
                 "predefined type names failed lexing") ||
-        !expect(predefinedTokens.size() == 7,
+        !expect(predefinedTokens.size() == 8,
                 "predefined type token inventory is incorrect") ||
         !expect(std::all_of(
                     predefinedTokens.begin(), predefinedTokens.end() - 1,
@@ -54,11 +54,13 @@ int main(int argc, char* argv[]) {
                     "symbol table omitted a predefined atomic type"))
             return 17;
     }
-    if (!expect(predefinedTypes().size() == 27,
+    if (!expect(predefinedTypes().size() == 28,
                 "predefined type registry inventory is incorrect") ||
         !expect(!predefinedSymbols.defineType("i32", Type::makeStruct("i32")),
                 "predefined atomic binding was overwritten") ||
-        !expect(!predefinedSymbols.defineType("raw", Type::makeStruct("raw")),
+        !expect(!predefinedSymbols.defineType("raw", Type::makeStruct("raw")) &&
+                    !predefinedSymbols.defineType("RuntimeFragmentRef",
+                        Type::makeStruct("RuntimeFragmentRef")),
                 "predefined constructor binding was overwritten") ||
         !expect(predefinedSymbols.lookupType("i32") == TyI32,
                 "failed overwrite changed predefined atomic identity"))
@@ -106,6 +108,50 @@ int main(int argc, char* argv[]) {
     if (!expect(valueNamespace.success(),
                 "predefined type name was incorrectly reserved in the value namespace"))
         return 21;
+
+    auto sourceRef = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "slot checkpoint(value: i32);\n"
+        "fn observe(selected: RuntimeFragmentRef<checkpoint>) -> unit {}\n",
+        "file:///workspace/runtime_ref_type.luna");
+    if (!sourceRef.success())
+        for (const auto& diagnostic : sourceRef.errors())
+            std::cerr << diagnostic.message << '\n';
+    if (!expect(sourceRef.success(),
+                "valid nominal Slot Ref source type failed semantic analysis") ||
+        !expect(sourceRef.program() && sourceRef.program()->declarations.size() == 2,
+                "source Ref declaration inventory changed"))
+        return 22;
+    const auto* selectedFunction = dynamic_cast<const FunctionDecl*>(
+        sourceRef.program()->declarations[1].get());
+    const auto* selectedSlot = dynamic_cast<const SlotDecl*>(
+        sourceRef.program()->declarations[0].get());
+    if (!expect(selectedFunction && selectedSlot &&
+                    selectedFunction->params.size() == 1 &&
+                    selectedFunction->params[0].inferredType &&
+                    selectedFunction->params[0].inferredType->kind ==
+                        TypeKind::RuntimeFragmentRef &&
+                    selectedFunction->params[0].inferredType->inner ==
+                        selectedSlot->structuralType &&
+                    selectedFunction->params[0].relation ==
+                        luna::ownership::Relation::SharedBorrow,
+                "source Ref lost its exact nominal Slot or default borrow"))
+        return 23;
+    for (const auto& source : {
+        "fn wrong(selected: RuntimeFragmentRef<i32>) -> unit {}\n",
+        "fn missing(selected: RuntimeFragmentRef) -> unit {}\n",
+        "slot checkpoint(); fn extra(selected: RuntimeFragmentRef<checkpoint, checkpoint>) -> unit {}\n",
+    }) {
+        auto rejected = luna::tooling::AnalysisSnapshot::analyzeSource(
+            source, "file:///workspace/runtime_ref_invalid.luna");
+        if (!expect(!rejected.success() &&
+                        std::any_of(rejected.errors().begin(), rejected.errors().end(),
+                            [](const auto& diagnostic) {
+                                return diagnostic.message.find("RuntimeFragmentRef") !=
+                                    std::string::npos;
+                            }),
+                    "invalid source Ref target/arity was not diagnosed"))
+            return 24;
+    }
 
     const std::string validSource =
         "package org.luna.test;\n"

@@ -25,6 +25,29 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto& reverse = context.reverseModule;
     const auto shortId = context.shortIteratorType;
 
+    // The source spelling now resolves an exact nominal Slot, but must not
+    // publish an executable Ref until ingress, dropGlue and wire validation
+    // are connected. Test the actual frontend -> lowerer -> verifier path.
+    auto sourceRefSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "slot checkpoint(value: i32);\n"
+        "fn observe(selected: RuntimeFragmentRef<checkpoint>) -> unit {}\n",
+        "<canonical-source-ref-gate>");
+    if (!sourceRefSnapshot.success())
+        return fail("frontend rejected a well-formed nominal source Ref type");
+    moon::LunaLowerer sourceRefLowerer;
+    auto sourceRefModule = sourceRefLowerer.lower(
+        *sourceRefSnapshot.program(), *sourceRefSnapshot.symbolTable());
+    if (!sourceRefModule || !sourceRefLowerer.errors().empty())
+        return fail("source Ref type did not lower into private MoonIR preparation");
+    if (verifier.verify(*sourceRefModule) ||
+        !std::any_of(verifier.errors().begin(), verifier.errors().end(),
+            [](const auto& error) {
+                return error.message.find(
+                    "RuntimeFragmentRef host/drop bridge is not implemented") !=
+                    std::string::npos;
+            }))
+        return fail("source Ref passed executable publication before its full bridge");
+
     // Sema is not the only trust boundary: a structured input may be forged
     // after source analysis. The CFG bridge must reject cyclic static body
     // expansion itself rather than exhausting the compiler's stack.

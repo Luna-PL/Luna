@@ -5,7 +5,7 @@
 > 状态：已确认实施计划，2026-09-23
 > 范围：类型安全、由宿主控制的运行时注入
 > 当前验收视图（2026-09-28）：见 [v1 验收快照](slot_fragment_contract.zh-CN.md#v1-验收快照2026-09-28)。
-> 原生宿主闭环已实现；2026-09-28 已选择继续源码级 Ref／apply，详细切片见下文。源码能力仍未实现，不把方向确认或 Runtime 支撑等同于源码完成。
+> 原生宿主闭环已实现；2026-09-28 已选择继续源码级 Ref／apply，详细切片见下文。源码类型拼写和约束检查已准备，源码执行能力仍未实现，不把方向确认或 Runtime 支撑等同于源码完成。
 
 ## 模型
 
@@ -231,6 +231,28 @@ compiler dropGlue、wire round-trip、region borrow 和动态 apply 仍待完成
 ASan／UBSan Runtime 两项 2／2 与 WSL Arch Linux Clang 22.1.8 C++17 直接编译／执行
 Runtime 插桩测试通过。C ABI compile fixture 验证新增 check／drop 的 C 函数指针签名；
 diff 检查通过。上述是本地验证，不等同于远端 CI 或稳定发布批准。
+
+### 源码 Ref 类型拼写与约束边界（2026-09-28）
+
+新增预定义类型构造器 `RuntimeFragmentRef<S>`，仍是普通 Identifier，**不是新增关键字**。
+解析器沿用现有泛型类型语法；语义解析只在该构造器的参数位置将模块 Slot 声明解析为
+确切名义 Slot，普通同形函数／结构体或错误参数个数拒绝。`S` 必须满足此前的 unit、
+single-shot、Copy-only 和具体化要求；未开放从任意声明地址构造 Ref。
+
+语义约束统一现在比较 Ref 的名义 Slot 身份及 ABI 结构，不允许默认结构统一吞掉同形异槽，
+也不允许同一 Slot 身份下目标签名变化被视作兼容。推断遍历会进入 Ref 的目标边；
+前端重建 AST 时保存已解析名义身份。默认参数是 shared borrow，显式 affine 才是拥有；
+不存在源码 Ref Copy 能力或 Handler 可重入的隐式许可。
+
+分析快照覆盖合法声明、错误类型参数及缺失／过多参数。另有真实源码→MoonIR 回归证明：
+类型可解析并降低为内部表示，但 verifier 必须拒绝可执行发布。源码 import、拥有参数／
+返回传递、compiler dropGlue、wire round-trip 和动态 `apply` 仍未实现；
+`source-ref-apply` 保持 implementation-open，且旧 container decoder 上限不变。
+
+本切片严格完整构建与非 hardware 回归 77／77 通过（257.87 秒）；Windows ASan／UBSan
+的 builtin types、analysis snapshot、canonical MoonIR 三项 3／3 通过，WSL Arch Linux
+Clang 22.1.8 C++17 直接编译／执行 builtin 类型与语义约束插桩测试通过。设计状态、文档
+inventory 与 diff 检查通过；这是本地验证，不表示远端 CI 或稳定发布批准。
 
 ## 宿主控制的发现与注入
 

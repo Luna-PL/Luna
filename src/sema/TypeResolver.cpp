@@ -103,6 +103,28 @@ TypePtr TypeResolver::resolveTypeAST(const TypeAST* ast,
         if (named->resolvedType) return named->resolvedType;
         auto predefined = resolvePredefinedType(
             *named, [&](const TypeAST* argument) {
+                // Slot declarations are control-plane symbols, not ordinary
+                // type names. Only the Ref constructor may name one as its
+                // type argument; retain its exact nominal declaration type.
+                if (named->name == "RuntimeFragmentRef") {
+                    const auto* target = dynamic_cast<const NamedTypeAST*>(argument);
+                    if (target && target->typeArgs.empty() && !target->arrayLength) {
+                        const std::string key =
+                            mContext.sourceDeclarationKey(target->name);
+                        auto* symbol = mContext.mSymTable.lookup(key);
+                        if (symbol && symbol->kind == SymbolKind::Slot &&
+                            symbol->type) {
+                            const auto declaration =
+                                mContext.mQualifiedDeclarations.find(key);
+                            if (declaration !=
+                                mContext.mQualifiedDeclarations.end())
+                                mContext.recordDeclarationReference(
+                                    target, target->name.size(),
+                                    declaration->second);
+                            return symbol->type;
+                        }
+                    }
+                }
                 return resolveTypeAST(argument, bindings);
             });
         if (predefined.recognized) {
@@ -315,6 +337,15 @@ std::unique_ptr<TypeAST> TypeResolver::typeToAST(const TypePtr& type) {
         auto raw = std::make_unique<NamedTypeAST>("raw");
         raw->typeArgs.push_back(typeToAST(t->inner));
         return raw;
+    }
+    if (t->kind == TypeKind::RuntimeFragmentRef) {
+        auto reference = std::make_unique<NamedTypeAST>("RuntimeFragmentRef");
+        auto target = std::make_unique<NamedTypeAST>(
+            t->inner ? t->inner->name : "<missing-slot>");
+        target->resolvedType = t->inner;
+        reference->typeArgs.push_back(std::move(target));
+        reference->resolvedType = t;
+        return reference;
     }
     if (t->kind == TypeKind::Result && t->typeArgs.size() == 2) {
         auto result = std::make_unique<NamedTypeAST>("Result");

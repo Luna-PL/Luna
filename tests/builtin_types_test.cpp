@@ -4,6 +4,7 @@
 #include "runtime/RuntimeABI.h"
 #include "sema/PredefinedTypes.h"
 #include "sema/SymbolTable.h"
+#include "sema/Inference.h"
 
 #include <array>
 #include <cstddef>
@@ -64,7 +65,7 @@ int main() {
                 "the frozen builtin layout test requires a 64-bit target") ||
         !expect(sizeof(LunaDeviceBufferI32V1) == 16,
                 "device buffer C carrier is not two machine words") ||
-        !expect(predefinedTypes().size() == 27,
+        !expect(predefinedTypes().size() == 28,
                 "predefined type registry inventory changed unexpectedly"))
         return 1;
 
@@ -97,7 +98,9 @@ int main() {
     if (!expect(names.size() == atomicTypes.size(), "predefined atomic names are not unique") ||
         !expect(typeIds.size() == atomicTypes.size(), "predefined atomic TypeIds are not unique") ||
         !expect(!symbols.defineType("i32", Type::makeStruct("i32")) &&
-                    !symbols.defineType("raw", Type::makeStruct("raw")),
+                    !symbols.defineType("raw", Type::makeStruct("raw")) &&
+                    !symbols.defineType("RuntimeFragmentRef",
+                                        Type::makeStruct("RuntimeFragmentRef")),
                 "predefined type binding was replaceable"))
         return 3;
 
@@ -152,6 +155,60 @@ int main() {
         !expect(resolveType(&invalidArray, {}).get() == TyUnknown.get(),
                 "array type accepted a missing extent"))
         return 5;
+
+    const auto slot = [](const char* id, TypePtr parameter = TyI32) {
+        auto target = Type::makeSlot({parameter});
+        target->name = "hook";
+        target->identityMode = luna::types::IdentityMode::Nominal;
+        target->nominalId = id;
+        return target;
+    };
+    NamedTypeAST ref("RuntimeFragmentRef");
+    ref.typeArgs.push_back(namedType("hook"));
+    NamedTypeAST bareRef("RuntimeFragmentRef");
+    NamedTypeAST twoArgs("RuntimeFragmentRef");
+    twoArgs.typeArgs.push_back(namedType("hook"));
+    twoArgs.typeArgs.push_back(namedType("hook"));
+    const auto slotA = slot("pkg::a");
+    const auto slotB = slot("pkg::b");
+    const auto refA = resolveType(&ref, {{"hook", slotA}});
+    const auto refB = resolveType(&ref, {{"hook", slotB}});
+    const auto holderA = Type::makeStruct(
+        "Holder", {{"selected", refA}}, "pkg::Holder");
+    const auto holderB = Type::makeStruct(
+        "Holder", {{"selected", refB}}, "pkg::Holder");
+    std::string reason;
+    ConstraintSolver solver;
+    if (!expect(refA->kind == TypeKind::RuntimeFragmentRef &&
+                    refA->inner == slotA &&
+                    luna::types::isWellFormedTypeDomain(refA) &&
+                    luna::layout::valueSize(refA) == sizeof(void*),
+                "RuntimeFragmentRef<S> did not form an exact nominal Slot Ref") ||
+        !expect(resolveType(&bareRef, {}).get() == TyUnknown.get() &&
+                    resolveType(&twoArgs, {{"hook", slotA}}).get() == TyUnknown.get(),
+                "RuntimeFragmentRef accepted wrong type-argument arity") ||
+        !expect(refB->inner == slotB &&
+                    !luna::types::isAbiCompatible(refA, refB) &&
+                    !solver.unify(refA, refB, &reason) &&
+                    reason.find("Slot contract") != std::string::npos,
+                "semantic unification erased the Ref target Slot identity") ||
+        !expect(solver.unify(refA, Type::makeRuntimeFragmentRef(slot("pkg::a"))),
+                "semantic unification rejected a matching nominal Ref") ||
+        !expect(!solver.unify(refA,
+                    Type::makeRuntimeFragmentRef(slot("pkg::a", TyI64))),
+                "semantic unification accepted a changed Slot contract") ||
+        !expect(!solver.unify(holderA, holderB),
+                "semantic unification erased a Ref target inside a nominal holder") ||
+        !expect(!solver.unify(Type::makeResult(refA, TyI32),
+                             Type::makeResult(refB, TyI32)),
+                "semantic unification erased a Ref target inside Result") ||
+        !expect(!solver.unify(Type::makeRawPointer(refA),
+                             Type::makeRawPointer(refB)),
+                "semantic unification erased a Ref target inside a pointer") ||
+        !expect(!luna::types::isWellFormedTypeDomain(
+                    resolveType(&ref, {{"hook", TyI32}})),
+                "RuntimeFragmentRef accepted a non-Slot target"))
+        return 6;
 
     auto product = Type::makeStruct("Aligned", {{"small", TyI8}, {"wide", TyI64}}, "test::Aligned");
     if (!expect(luna::layout::valueSize(product) == 8,

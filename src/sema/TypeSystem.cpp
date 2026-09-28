@@ -1,5 +1,6 @@
 #include "TypeSystem.h"
 #include "PredefinedTypes.h"
+#include "../core/TypeRelations.h"
 #include "../parser/AST.h"
 
 TypePtr resolveType(const TypeAST* ast,
@@ -78,6 +79,7 @@ TypePtr ConstraintSolver::resolve(const TypePtr& type) {
          type->kind == TypeKind::SymbolSet ||
          type->kind == TypeKind::DeclarationView ||
          type->kind == TypeKind::DeclarationRef ||
+         type->kind == TypeKind::RuntimeFragmentRef ||
          type->kind == TypeKind::Iterator) && type->inner)
         type->inner = resolve(type->inner);
     else if (type->kind == TypeKind::Function || type->kind == TypeKind::Slot ||
@@ -109,6 +111,7 @@ bool ConstraintSolver::contains(const TypePtr& type, int id) {
         resolved->kind == TypeKind::SymbolSet ||
         resolved->kind == TypeKind::DeclarationView ||
         resolved->kind == TypeKind::DeclarationRef ||
+        resolved->kind == TypeKind::RuntimeFragmentRef ||
         resolved->kind == TypeKind::Iterator)
         return contains(resolved->inner, id);
     if (resolved->kind == TypeKind::Function || resolved->kind == TypeKind::Slot ||
@@ -172,6 +175,16 @@ bool ConstraintSolver::unifyInternal(const TypePtr& lhs, const TypePtr& rhs,
         if (reason) *reason = a->toString() + " and " + b->toString() + " are different types";
         return false;
     }
+    // Nominal products normally unify by their declaration ID alone. That
+    // shortcut (and structural closure/callable shortcuts below) must not
+    // erase an embedded Ref's exact target Slot. Ref-bearing generic wrappers
+    // remain conservative until source import/transfer has its own verifier.
+    if ((luna::types::containsRuntimeFragmentRef(a) ||
+         luna::types::containsRuntimeFragmentRef(b)) &&
+        !luna::types::isAbiCompatible(a, b)) {
+        if (reason) *reason = "RuntimeFragmentRef target Slot contract differs inside a type";
+        return false;
+    }
     const bool identityBearing =
         a->identityMode == luna::types::IdentityMode::Nominal ||
         a->identityMode == luna::types::IdentityMode::MetaSchema ||
@@ -202,6 +215,13 @@ bool ConstraintSolver::unifyInternal(const TypePtr& lhs, const TypePtr& rhs,
             return false;
         }
         return unifyInternal(a->inner, b->inner, reason);
+    }
+    if (a->kind == TypeKind::RuntimeFragmentRef) {
+        if (!luna::types::isAbiCompatible(a, b)) {
+            if (reason) *reason = "RuntimeFragmentRef targets are not the same nominal Slot contract";
+            return false;
+        }
+        return true;
     }
     if (a->kind == TypeKind::RawPointer || a->kind == TypeKind::DeviceBuffer ||
         a->kind == TypeKind::MetadataView ||
@@ -315,7 +335,8 @@ void ConstraintSolver::collectUnresolvedNumeric(const TypePtr& type) {
         resolved->kind == TypeKind::MetadataView ||
         resolved->kind == TypeKind::SymbolSet ||
         resolved->kind == TypeKind::DeclarationView ||
-        resolved->kind == TypeKind::DeclarationRef)
+        resolved->kind == TypeKind::DeclarationRef ||
+        resolved->kind == TypeKind::RuntimeFragmentRef)
         collectUnresolvedNumeric(resolved->inner);
     if (resolved->kind == TypeKind::Function || resolved->kind == TypeKind::Slot ||
         resolved->kind == TypeKind::Fragment) {
@@ -339,7 +360,8 @@ bool ConstraintSolver::hasUnresolved(const TypePtr& type) {
         resolved->kind == TypeKind::MetadataView ||
         resolved->kind == TypeKind::SymbolSet ||
         resolved->kind == TypeKind::DeclarationView ||
-        resolved->kind == TypeKind::DeclarationRef)
+        resolved->kind == TypeKind::DeclarationRef ||
+        resolved->kind == TypeKind::RuntimeFragmentRef)
         return hasUnresolved(resolved->inner);
     if (resolved->kind == TypeKind::Function || resolved->kind == TypeKind::Slot ||
         resolved->kind == TypeKind::Fragment) {

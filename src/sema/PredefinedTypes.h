@@ -22,6 +22,7 @@ enum class PredefinedTypeForm {
     SymbolSet,
     DeclarationView,
     DeclarationRef,
+    RuntimeFragmentRef,
 };
 
 struct PredefinedTypeDefinition {

@@ -115,8 +115,9 @@ bool snapshotRuntimeFragmentCandidates(
     RuntimeFragmentCandidateSnapshot& output,
     std::string& error);
 
-// Move-only, generation-pinned native runtime value. The planned Luna source
-// type RuntimeFragmentRef<S> is not yet exposed. Construction validates identity,
+// Move-only, generation-pinned native runtime value. The Luna source spelling
+// RuntimeFragmentRef<S> has only type-analysis support, not import/execution.
+// Construction validates identity,
 // ABI and environment once. Dispatch may then use descriptor()/environment()
 // without repeating those checks.
 class RuntimeFragmentRef {
