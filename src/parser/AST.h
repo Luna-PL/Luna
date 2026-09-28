@@ -259,6 +259,7 @@ struct AwaitStmt : Stmt {
 // remainder of the current lexical scope.
 struct ApplyStmt : Stmt {
     std::string slotName;
+    std::string resolvedSlotName;
     std::string fragmentName;
     std::string resolvedFragmentName;
     // A local RuntimeFragmentRef<S> uses the same lexical `apply` spelling.

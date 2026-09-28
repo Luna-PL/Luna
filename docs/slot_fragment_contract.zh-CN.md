@@ -62,7 +62,7 @@ Contract，并不意味着 Luna 已有可传递的 `RuntimeFragmentRef<S>` 类�
 | 边界 | 状态 | 已有证据／实际剩余项 |
 | --- | --- | --- |
 | `host-ref` | `implemented` | C++ move-only 引用、owned／borrowed 环境、factory／cleanup、generation pin 及已校验的 native 拥有 carrier 转移；`luna.runtime-fragment-v1`。 |
-| `source-ref-apply` | `implementation-open` | Native singleton handle／校验／Drop／transfer、源码 `RuntimeFragmentRef<S>` 拼写／名义检查、LLVM Ref Drop／局部转移，以及前端精确 Slot 的 Ref apply 识别／词法借用检查已实现。一次性 CodeGenerator module 把真实生成的 unit 和直接 affine 返回函数体分别与私有、返回状态码的宿主 carrier wrapper 配对；后者检查空输出、两次精确目标所有权转移并清理失败返回。源码签名／import／参数／返回发布、公开宿主返回 ABI、完整 compiler dropGlue、wire round-trip、可执行 Ref operand／context lowering 与端到端门仍未完成，内部 Ref 暂禁止发布；见实施切片。 |
+| `source-ref-apply` | `implementation-open` | Native singleton handle／校验／Drop／transfer、源码 `RuntimeFragmentRef<S>` 拼写／名义检查、LLVM Ref Drop／局部转移，以及前端精确 Slot 的 Ref apply 识别／词法借用检查已实现。内部 canonical CFG 记录现能验证 Ref owner、精确导出的 Slot 和词法 Apply region；Slot 站点参与既有 context-effect 固定点。一次性 CodeGenerator module 把真实生成的 unit 和直接 affine 返回函数体分别与私有、返回状态码的宿主 carrier wrapper 配对；后者检查空输出、两次精确目标所有权转移并清理失败返回。源码签名／import／参数／返回发布、公开宿主返回 ABI、完整 compiler dropGlue、wire round-trip、可执行 Ref operand／context override 与端到端门仍未完成，内部 Ref 暂禁止发布；见实施切片。 |
 | `candidate-snapshot` | `implemented` | `snapshotRuntimeFragmentCandidates(generation, slot, ...)` 按精确 Slot／Contract 过滤显式给定的单个 generation，快照不可变且固定 generation；不是所有已加载包的全局查询。 |
 | `candidate-aggregation` | `host-managed` | 宿主知道自己加载的包并可组合各 generation 的候选；Runtime 没有内建全局候选集合或跨 generation 聚合查询。便利 API 是后续范围选择，不是当前热路径缺陷。 |
 | `candidate-notification` | `host-managed` | 加载／激活结果和 generation identity 供宿主观察；没有内建候选变化事件总线，不自动发现、排序、选胜者或注入。 |

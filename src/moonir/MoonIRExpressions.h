@@ -122,6 +122,10 @@ struct ApplyStmt : Stmt {
     std::string slotName;
     std::string fragmentName;
     DeclarationRef fragmentRef;
+    // Internal-only Ref apply. The runtime Slot is frozen separately from
+    // the operand local; no executable source carrier ABI is implied.
+    bool runtimeRefOperand = false;
+    DeclarationRef runtimeSlot;
     std::vector<std::unique_ptr<Expr>> environmentArgs;
     // Compiler-generated runtime helpers receive already materialized
     // environment fields as parameters. They borrow those locals directly

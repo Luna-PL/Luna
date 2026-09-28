@@ -654,19 +654,16 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         value->event = lowerExpr(await->event.get());
         result = std::move(value);
     } else if (auto* apply = dynamic_cast<const ::ApplyStmt*>(statement)) {
-        if (apply->runtimeRefOperand) {
-            error(apply,
-                  "RuntimeFragmentRef apply needs the source context-override ABI; "
-                  "executable lowering is not implemented");
-            return nullptr;
-        }
         auto value = std::make_unique<moon::ApplyStmt>();
         value->slotName = apply->slotName;
         value->fragmentName = apply->fragmentName;
-        deferDeclarationRef(
-        value->fragmentRef,
-            apply->resolvedFragmentName,
-            apply, "apply fragment");
+        value->runtimeRefOperand = apply->runtimeRefOperand;
+        if (apply->runtimeRefOperand)
+            deferDeclarationRef(value->runtimeSlot,
+                apply->resolvedSlotName, apply, "Ref apply Slot");
+        else
+            deferDeclarationRef(value->fragmentRef,
+                apply->resolvedFragmentName, apply, "apply fragment");
         for (const auto& argument : apply->environmentArgs)
             value->environmentArgs.push_back(lowerExpr(argument.get()));
         value->body = lowerBlock(apply->body.get());

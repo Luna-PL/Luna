@@ -218,6 +218,46 @@ void Verifier::verifyRegions(const ControlFlowGraph& graph, const Module& module
             error(graph.blocks[index].location,
                   "block " + std::to_string(index) +
                   " must belong to exactly one direct region");
+
+    std::unordered_set<uint32_t> runtimeApplyRegions;
+    for (const auto& binding : graph.runtimeRefApplies) {
+        const auto* region = graph.findRegion(binding.region);
+        const auto* local = graph.findLocal(binding.reference);
+        if (!region || region->kind != RegionKind::Apply ||
+            !runtimeApplyRegions.insert(binding.region.value).second) {
+            error({}, "canonical Ref apply has a missing, wrong-kind or duplicate region");
+            continue;
+        }
+        if (!local || !binding.slot.complete()) {
+            error(region->location,
+                  "canonical Ref apply has no local owner or exact Slot reference");
+            continue;
+        }
+        const auto target = module.resolveRuntimeFragmentRefTarget(local->type);
+        const bool exported = std::any_of(
+            module.exports.begin(), module.exports.end(),
+            [&](const ExportRecord& entry) {
+                return entry.kind == DeclarationKind::Slot &&
+                    entry.declaration == binding.slot;
+            });
+        if (!target || target->symbol != binding.slot.symbol ||
+            target->contract != binding.slot.contract || !exported) {
+            error(region->location,
+                  "canonical Ref apply local does not target its exported Slot");
+        }
+        bool inScope = false;
+        for (auto* scope = graph.findScope(region->scope); scope;
+             scope = graph.findScope(scope->parent)) {
+            if (scope->id == local->scope) {
+                inScope = true;
+                break;
+            }
+            if (scope->parent.empty()) break;
+        }
+        if (!inScope)
+            error(region->location,
+                  "canonical Ref apply local is outside the lexical parent scope");
+    }
 }
 
 bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {

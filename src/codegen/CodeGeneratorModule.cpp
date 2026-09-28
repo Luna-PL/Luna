@@ -87,6 +87,10 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         failure = "function has no independently verified sealed CFG";
         return false;
     }
+    if (!function.controlFlow->runtimeRefApplies.empty()) {
+        failure = "Ref apply context override is not executable";
+        return false;
+    }
     if (!matchesPrivateRefContextEffect(program, function)) {
         failure = "Ref entry context effect differs from the sealed CFG fixed point";
         return false;
@@ -206,6 +210,10 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefOwnedReturn(
     moon::Verifier cfgVerifier;
     if (!cfgVerifier.verify(*function.controlFlow, program)) {
         failure = "owned Ref return CFG failed independent verification";
+        return false;
+    }
+    if (!function.controlFlow->runtimeRefApplies.empty()) {
+        failure = "Ref apply context override is not executable";
         return false;
     }
     if (!matchesPrivateRefContextEffect(program, function)) {

@@ -213,6 +213,10 @@ void Verifier::verifyFunction(
     if (function.body) {
         verifyBlock(function.body.get(), module, function.name);
     } else if (function.controlFlow) {
+        if (!function.controlFlow->runtimeRefApplies.empty())
+            error(function.location,
+                  "RuntimeFragmentRef apply context override is internal-only; "
+                  "executable source lowering is not implemented");
         const auto* root = function.controlFlow->findRegion(
             function.controlFlow->rootRegion);
         if (!root || root->kind != RegionKind::Function)
@@ -524,10 +528,25 @@ void Verifier::verifyStmt(const Stmt* stmt, const Module& module,
     } else if (auto* apply = dynamic_cast<const ApplyStmt*>(stmt)) {
         for (const auto& argument : apply->environmentArgs)
             verifyExpr(argument.get(), module, owner);
-        verifyDeclarationRef(
-            apply->fragmentRef, apply->location,
-            "fragment bound by apply for slot '" + apply->slotName + "'",
-            module, DeclarationKind::Fragment);
+        if (apply->runtimeRefOperand) {
+            if (!apply->fragmentRef.empty() ||
+                !apply->environmentArgs.empty() ||
+                apply->borrowsEnvironment)
+                error(apply->location,
+                      "Ref apply cannot carry a static Fragment environment");
+            verifyDeclarationRef(
+                apply->runtimeSlot, apply->location,
+                "Ref apply Slot '" + apply->slotName + "'",
+                module, DeclarationKind::Slot);
+        } else {
+            if (!apply->runtimeSlot.empty())
+                error(apply->location,
+                      "static apply cannot carry a runtime Ref Slot");
+            verifyDeclarationRef(
+                apply->fragmentRef, apply->location,
+                "fragment bound by apply for slot '" + apply->slotName + "'",
+                module, DeclarationKind::Fragment);
+        }
         if (apply->body) verifyBlock(apply->body.get(), module, owner);
     } else if (auto* await = dynamic_cast<const AwaitStmt*>(stmt)) {
         verifyExpr(await->event.get(), module, owner);

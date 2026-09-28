@@ -107,6 +107,14 @@ struct ScopeRecord {
     SourceLocation location;
 };
 
+// In-memory proof of a lexical Ref override. The executable context
+// construction/drop operation and wire representation remain unimplemented.
+struct RuntimeRefApplyRecord {
+    RegionId region;
+    LocalId reference;
+    DeclarationRef slot;
+};
+
 struct ControlFlowGraph {
     bool sealed = false;
     BlockId entry;
@@ -117,6 +125,8 @@ struct ControlFlowGraph {
     std::vector<ScopeRecord> scopes;
     std::vector<LocalRecord> locals;
     std::vector<CleanupRecord> cleanups;
+    // Never serialized in Moon Container 0.3.
+    std::vector<RuntimeRefApplyRecord> runtimeRefApplies;
 
     const BasicBlock* findBlock(BlockId id) const;
     const RegionRecord* findRegion(RegionId id) const;

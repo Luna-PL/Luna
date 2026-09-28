@@ -488,6 +488,7 @@ private:
         if (auto* statement = dynamic_cast<const ApplyStmt*>(src)) {
             auto clone = std::make_unique<ApplyStmt>();
             clone->slotName = statement->slotName;
+            clone->resolvedSlotName = statement->resolvedSlotName;
             clone->fragmentName = statement->fragmentName;
             clone->resolvedFragmentName = statement->resolvedFragmentName;
             clone->runtimeRefOperand = statement->runtimeRefOperand;

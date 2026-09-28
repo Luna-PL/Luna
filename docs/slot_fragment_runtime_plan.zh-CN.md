@@ -472,9 +472,9 @@ module 验证。篡改结果的所有权用法会使证明失败。前一轮 uni
 既有 `apply name { ... }` 拼写现可区分局部 `RuntimeFragmentRef<S>` 与静态
 Fragment：解析精确导出的 Slot、拒绝环境实参，并在词法 body 内共享借用 owner。
 同一 Ref 可以重复 apply，body 内移动 owner 会被拒绝。前端分析中，动态绑定会遮蔽
-同槽的外层静态绑定。这**不是可执行的源码 apply**：lowering 明确报告缺少源码
-context-override ABI，不能发布产物。该 region 接入 canonical CFG effect 固定点、
-运行时 operand／context lowering、return／错误清理及跨包测试仍是完成门。
+同槽的外层静态绑定。这**不是可执行的源码 apply**：已有内部 canonical region 和
+effect 验证，但 module 发布会明确报告 context-override 尚未实现，不能发布产物。
+运行时 operand／context 执行、return／错误清理及跨包测试仍是完成门。
 
 严格完整构建通过。并行非硬件回归 76／77 通过；`luna.repl-smoke` 的进程树清理在
 并行负载下超时，单独重跑通过。最终聚焦的分析、canonical、REPL、文档和清单
@@ -488,6 +488,17 @@ context-override ABI，不能发布产物。该 region 接入 canonical CFG effe
 释放借用，以及在借用作用域内带走 owner 会被拒绝。这验证 Ref apply 周边的机制，
 **不是**缺失的 region override 或可执行 lowering；不改公开 ABI 或 wire 格式。
 严格完整构建与全部 77 项非硬件门禁通过（156.55 秒）。
+
+### 内部 canonical Ref-apply region（2026-09-28）
+
+源码 Ref apply 现可先进入结构化 MoonIR，再落为内存中的 canonical `Apply` region。
+独立的 `RuntimeRefApplyRecord` 将该 region 与局部 Ref owner、精确导出的 Slot
+关联。CFG verifier 检查 region 类型与唯一性、词法作用域、局部 Ref 类型，以及
+Slot／Contract 的名义匹配。动态绑定遮蔽同槽外层静态 Fragment，因此 body 中的
+Slot 站点变为运行时分派，并参与既有 context-effect 固定点。这只是证明边界，
+不是可执行的 context override：密封 module verifier、container encoder 和
+code generator 仍明确拒绝它。冻结的 Moon Container 0.3 布局与公开 ABI 均未改变。
+operand／context 执行、所有退出路径的清理、wire／公开 ABI 设计及端到端验收仍未完成。
 
 ## 宿主控制的发现与注入
 

@@ -212,7 +212,8 @@ std::optional<RefIngressPlan> resolveRefIngressPlan(
         function.isSelector || !function.typeParams.empty() ||
         function.generatedSymbolName.empty() || !function.linkName.empty() ||
         function.params.size() != 1 || function.body ||
-        !function.controlFlow || !function.controlFlow->sealed)
+        !function.controlFlow || !function.controlFlow->sealed ||
+        !function.controlFlow->runtimeRefApplies.empty())
         return std::nullopt;
     const bool member = std::any_of(
         module.declarations.begin(), module.declarations.end(),

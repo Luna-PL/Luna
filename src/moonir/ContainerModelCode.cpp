@@ -642,6 +642,9 @@ bool decodeTerminator(Decoder& decoder, Terminator& terminator,
 
 bool encodeGraph(Encoder& encoder, const ControlFlowGraph& graph,
                  uint32_t depth, const ContainerLimits& limits) {
+    if (!graph.runtimeRefApplies.empty())
+        return encoder.reject(
+            "Moon Container 0.3 cannot encode internal RuntimeFragmentRef apply regions");
     if (depth >= limits.maximumNestingDepth)
         return encoder.reject("Moon Container code exceeds the nesting limit");
     if (!graph.sealed)

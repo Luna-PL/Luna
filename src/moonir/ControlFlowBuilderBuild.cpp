@@ -231,6 +231,58 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerMatch(
 std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerApply(
     std::unique_ptr<ApplyStmt> statement, OpenBlock current,
     RegionId region, ScopeId scope) {
+    if (statement->runtimeRefOperand) {
+        if (!statement->body || !statement->fragmentRef.empty() ||
+            !statement->environmentArgs.empty() ||
+            statement->borrowsEnvironment) {
+            error(statement->location,
+                  "canonical Ref apply has an invalid lexical operand shape");
+            return std::nullopt;
+        }
+        const auto* slot = resolveSlot(statement->runtimeSlot);
+        const LocalId reference = lookupLocal(statement->fragmentName);
+        const auto* local = mGraph->findLocal(reference);
+        const auto target = local && mModule
+            ? mModule->resolveRuntimeFragmentRefTarget(local->type)
+            : std::nullopt;
+        if (!slot || !slot->isExported || !target ||
+            target->symbol != statement->runtimeSlot.symbol ||
+            target->contract != statement->runtimeSlot.contract) {
+            error(statement->location,
+                  "canonical Ref apply requires one local Ref for its exact exported Slot");
+            return std::nullopt;
+        }
+
+        const RegionId applyRegion = addRegion(
+            region, RegionKind::Apply, statement->body->location);
+        const ScopeId applyScope = addScope(
+            scope, applyRegion, statement->body->location);
+        const BlockId applyEntry = addBlock(
+            applyRegion, applyScope, statement->body->location);
+        mGraph->runtimeRefApplies.push_back(
+            {applyRegion, reference, statement->runtimeSlot});
+        pushBindings();
+        mStaticApplyScopes.emplace_back();
+        // An empty binding masks any outer static Fragment; the body's Slot
+        // sites then become RuntimeSlot terms and enter the existing effect
+        // fixed point. This is proof-only: no context override is emitted.
+        const std::string slotKey = statement->runtimeSlot.symbol.value +
+            "/" + statement->runtimeSlot.contract.value;
+        mStaticApplyScopes.back()[statement->slotName] = {};
+        mStaticApplyScopes.back()[slotKey] = {};
+        auto body = lowerSequence(
+            statement->body->stmts, OpenBlock{applyEntry, {}},
+            applyRegion, applyScope);
+        mStaticApplyScopes.pop_back();
+        popBindings();
+        connectJump(current, applyEntry);
+        if (!body) return std::nullopt;
+        const BlockId continuation = addBlock(
+            region, scope, mGraph->blocks[body->block.value].location);
+        connectJump(*body, continuation);
+        mGraph->regions[applyRegion.value].exit = continuation;
+        return OpenBlock{continuation, {}};
+    }
     const FragmentDecl* fragment = resolveFragment(statement->fragmentRef);
     if (!fragment) {
         error(statement->location,

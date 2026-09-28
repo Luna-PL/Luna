@@ -597,11 +597,10 @@ The existing `apply name { ... }` spelling now distinguishes a local
 Slot, rejects environment arguments, and borrows the owner for the lexical
 body; repeated apply is allowed while moving the owner inside that body is
 rejected. A dynamic binding masks an outer static binding for the same Slot
-in frontend analysis. This is **not executable source apply**: lowering reports
-an explicit context-override ABI diagnostic and cannot publish an artifact.
-Connecting this region to the canonical CFG effect fixed point, runtime
-operand/context lowering, return/error cleanup and cross-package tests remain
-completion gates.
+in frontend analysis. This is **not executable source apply**: an internal
+canonical region and effect proof exist, but module publication reports an
+explicit context-override diagnostic. Runtime operand/context execution,
+return/error cleanup and cross-package tests remain completion gates.
 
 The strict full build passes. The parallel non-hardware run passed 76/77;
 `luna.repl-smoke` timed out in process-tree cleanup under parallel load and
@@ -620,6 +619,20 @@ return, and rejection of an owner escaping from inside an active loan. This
 validates the machinery surrounding Ref apply, **not** the missing region
 override or executable lowering. No public ABI or wire format changes.
 The strict full build and all 77 non-hardware gates pass (156.55 seconds).
+
+### Internal canonical Ref-apply region (2026-09-28)
+
+Source Ref apply now lowers to a structured MoonIR apply and then an in-memory
+canonical `Apply` region. A separate `RuntimeRefApplyRecord` associates that
+region with its local Ref owner and exact exported Slot. The CFG verifier checks
+the region kind and uniqueness, lexical scope, local Ref type, and nominal
+Slot/Contract match. Dynamic binding masks an outer static Fragment for that
+Slot, so Slot sites in the body become runtime dispatch and participate in the
+existing context-effect fixed point. This record is a proof boundary, not an
+executable context override: the sealed module verifier, container encoder,
+and code generator still reject it explicitly. The frozen Moon Container 0.3
+layout and public ABI have not changed. Operand/context execution, cleanup on
+all exits, wire/public ABI design and end-to-end acceptance remain open.
 
 ## Host-controlled discovery and injection
 

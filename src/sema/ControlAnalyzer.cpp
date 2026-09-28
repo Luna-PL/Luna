@@ -163,6 +163,10 @@ void ControlAnalyzer::analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn) {
             return;
         }
         stmt->slotName = selected->name;
+        stmt->resolvedSlotName =
+            selected->declaration->generatedSymbolName.empty()
+                ? selected->declaration->name
+                : selected->declaration->generatedSymbolName;
         enterSlotScope();
         // Null deliberately masks an outer static binding. The selected Ref
         // will supply the runtime binding once lowering is implemented.

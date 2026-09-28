@@ -411,6 +411,8 @@ std::unique_ptr<Stmt> cloneStructuredStmt(const Stmt* source) {
         result->slotName = statement->slotName;
         result->fragmentName = statement->fragmentName;
         result->fragmentRef = statement->fragmentRef;
+        result->runtimeRefOperand = statement->runtimeRefOperand;
+        result->runtimeSlot = statement->runtimeSlot;
         result->borrowsEnvironment = statement->borrowsEnvironment;
         for (const auto& argument : statement->environmentArgs)
             result->environmentArgs.push_back(cloneStructuredExpr(argument.get()));

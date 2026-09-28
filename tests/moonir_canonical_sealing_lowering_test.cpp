@@ -15,6 +15,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Verifier.h>
@@ -202,16 +203,80 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::LunaLowerer sourceApplyLowerer;
     auto sourceApplyModule = sourceApplyLowerer.lower(
         *sourceApplySnapshot.program(), *sourceApplySnapshot.symbolTable());
-    if (sourceApplyModule && sourceApplyLowerer.errors().empty())
-        return fail("source Ref apply escaped its closed executable lowering gate");
-    if (!std::any_of(sourceApplyLowerer.errors().begin(),
-                     sourceApplyLowerer.errors().end(),
+    if (!sourceApplyModule || !sourceApplyLowerer.errors().empty())
+        return fail("source Ref apply did not lower to internal structured MoonIR");
+    moon::FunctionDecl* sourceApplyEntry = nullptr;
+    for (auto& declaration : sourceApplyModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function && function->name == "host_entry")
+            sourceApplyEntry = function;
+    moon::Sealer sourceApplySealer;
+    if (!sourceApplyEntry ||
+        !sourceApplySealer.sealFunctionBodies(*sourceApplyModule) ||
+        !sourceApplyEntry->controlFlow ||
+        sourceApplyEntry->controlFlow->runtimeRefApplies.size() != 1 ||
+        !sourceApplyEntry->requiresFragmentContext)
+        return fail("source Ref apply lost its internal CFG region or context effect");
+    auto& refApplyBinding =
+        sourceApplyEntry->controlFlow->runtimeRefApplies.front();
+    const auto* refApplyLocal = sourceApplyEntry->controlFlow->findLocal(
+        refApplyBinding.reference);
+    const auto refApplyTarget = refApplyLocal
+        ? sourceApplyModule->resolveRuntimeFragmentRefTarget(refApplyLocal->type)
+        : std::nullopt;
+    moon::Verifier refApplyCfgVerifier;
+    if (!refApplyTarget || *refApplyTarget != refApplyBinding.slot ||
+        !refApplyCfgVerifier.verify(*sourceApplyEntry->controlFlow,
+                                    *sourceApplyModule))
+        return fail("internal Ref apply CFG failed exact-target verification");
+    const auto originalApplyContract = refApplyBinding.slot.contract;
+    refApplyBinding.slot.contract = luna::identity::contractIdFromCanonical(
+        "forged Ref apply Slot contract");
+    const bool forgedRefApplyAccepted = refApplyCfgVerifier.verify(
+        *sourceApplyEntry->controlFlow, *sourceApplyModule);
+    refApplyBinding.slot.contract = originalApplyContract;
+    if (forgedRefApplyAccepted)
+        return fail("internal Ref apply CFG accepted a retargeted Slot contract");
+    const auto originalApplyLocal = refApplyBinding.reference;
+    refApplyBinding.reference = moon::LocalId{};
+    const bool missingRefLocalAccepted = refApplyCfgVerifier.verify(
+        *sourceApplyEntry->controlFlow, *sourceApplyModule);
+    refApplyBinding.reference = originalApplyLocal;
+    if (missingRefLocalAccepted)
+        return fail("internal Ref apply CFG accepted a missing owner local");
+    sourceApplyEntry->controlFlow->runtimeRefApplies.push_back(refApplyBinding);
+    const bool duplicateRefApplyAccepted = refApplyCfgVerifier.verify(
+        *sourceApplyEntry->controlFlow, *sourceApplyModule);
+    sourceApplyEntry->controlFlow->runtimeRefApplies.pop_back();
+    if (duplicateRefApplyAccepted)
+        return fail("internal Ref apply CFG accepted duplicate region ownership");
+    std::vector<uint8_t> blockedApplyCode{1, 2, 3};
+    std::string blockedApplyWireError;
+    if (moon::ContainerModelCodec::encodeCode(
+            *sourceApplyModule, blockedApplyCode, blockedApplyWireError) ||
+        !blockedApplyCode.empty() ||
+        blockedApplyWireError.find(
+            "cannot encode internal RuntimeFragmentRef apply regions") ==
+            std::string::npos)
+        return fail("internal Ref apply CFG escaped the frozen code wire gate");
+    if (verifier.verify(*sourceApplyModule) ||
+        !std::any_of(verifier.errors().begin(), verifier.errors().end(),
                      [](const auto& diagnostic) {
                          return diagnostic.message.find(
-                             "RuntimeFragmentRef apply needs the source context-override ABI") !=
+                             "RuntimeFragmentRef apply context override is internal-only") !=
                              std::string::npos;
                      }))
-        return fail("source Ref apply gate lost its explicit ABI diagnostic");
+        return fail("internal Ref apply CFG escaped module publication gating");
+    CodeGenerator blockedSourceApply("canonical-ref-apply-codegen-gate");
+    if (blockedSourceApply.generate(sourceApplyModule.get()) ||
+        !std::any_of(blockedSourceApply.errors().begin(),
+                     blockedSourceApply.errors().end(),
+                     [](const auto& diagnostic) {
+                         return diagnostic.message.find(
+                             "Ref apply context override is not executable") !=
+                             std::string::npos;
+                     }))
+        return fail("internal Ref apply CFG escaped its executable codegen gate");
 
     auto contextRefSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "export slot checkpoint(value: i32);\n"
