@@ -34,7 +34,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "slot checkpoint(value: i32);\n"
         "slot shadow(value: i32);\n"
         "fn observe(selected: RuntimeFragmentRef<checkpoint>) -> unit {}\n"
-        "fn accept(selected: affine RuntimeFragmentRef<checkpoint>) -> unit {}\n",
+        "fn accept(selected: affine RuntimeFragmentRef<checkpoint>) -> unit {}\n"
+        "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
+        "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
     if (!sourceRefSnapshot.success())
         return fail("frontend rejected a well-formed nominal source Ref type");
@@ -45,18 +47,20 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         return fail("source Ref type did not lower into private MoonIR preparation");
     moon::FunctionDecl* observe = nullptr;
     moon::FunctionDecl* accept = nullptr;
+    moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
     for (auto& declaration : sourceRefModule->declarations) {
         if (auto* function = dynamic_cast<moon::FunctionDecl*>(
                 declaration.get())) {
             if (function->name == "observe") observe = function;
             if (function->name == "accept") accept = function;
+            if (function->name == "transfer") transfer = function;
         }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
                 declaration.get()); slot && slot->name == "shadow")
             shadow = slot;
     }
-    if (!observe || !accept || observe->params.size() != 1 ||
+    if (!observe || !accept || !transfer || observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
         return fail("source Ref target fixture has no frozen function/Slot");
     const auto refId = observe->params.front().type;
@@ -130,13 +134,20 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !std::any_of(blockedRefCodegen.errors().begin(),
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
-                    "2 private unit body/wrapper pair(s) verified and discarded") !=
+                    "2 private unit body/wrapper pair(s) and 1 private owned "
+                    "return body/bodies verified and discarded") !=
                     std::string::npos;
             }) ||
         std::any_of(blockedRefCodegen.errors().begin(),
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
                     "private RuntimeFragmentRef unit ingress proof failed") !=
+                    std::string::npos;
+            }) ||
+        std::any_of(blockedRefCodegen.errors().begin(),
+            blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "private RuntimeFragmentRef owned return proof failed") !=
                     std::string::npos;
             }))
         return fail("direct codegen bypassed the unimplemented Ref host ingress ABI");
@@ -159,6 +170,26 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                     std::string::npos;
             }))
         return fail("forged Ref relation escaped or appeared proven by codegen");
+    const auto originalReturnUsage = transfer->returnUsage;
+    transfer->returnUsage = luna::ownership::Usage::Copy;
+    CodeGenerator forgedReturnCodegen("canonical-forged-ref-return-gate");
+    const bool forgedReturnPublished =
+        forgedReturnCodegen.generate(sourceRefModule.get());
+    transfer->returnUsage = originalReturnUsage;
+    if (forgedReturnPublished ||
+        !std::any_of(forgedReturnCodegen.errors().begin(),
+            forgedReturnCodegen.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "private RuntimeFragmentRef owned return proof failed for 'transfer'") !=
+                    std::string::npos;
+            }) ||
+        !std::any_of(forgedReturnCodegen.errors().begin(),
+            forgedReturnCodegen.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "raw-pointer function publication is blocked") !=
+                    std::string::npos;
+            }))
+        return fail("forged Ref return relation escaped or appeared proven");
 
     llvm::LLVMContext bridgeContext;
     CGHelpers bridgeHelpers(bridgeContext);

@@ -541,6 +541,24 @@ ASan/UBSan canonical test. WSL Arch Linux Clang 22.1.8 syntax-compiles the
 changed backend file. Design-status, file-guide and diff checks pass; these
 are not remote CI or release approval.
 
+### Private affine Ref return-body proof (2026-09-28)
+
+A real source `fn transfer(selected: affine RuntimeFragmentRef<S>) -> affine
+RuntimeFragmentRef<S> { return selected; }` now reaches a second disposable
+CodeGenerator proof. It requires the exact same frozen nominal Ref type on
+both sides, owned/affine parameter and result contracts, no hidden runtime
+context, an independently verified sealed CFG, and a direct return of its
+unique parameter local. The generated internal LLVM body must return a handle
+loaded from the parameter carrier, clear that carrier before returning, and
+pass LLVM module verification. A forged result ownership usage fails the
+proof. The earlier unit-result body/wrapper proof remains separate.
+
+This proves a narrow callee-side move, not a host return ABI: there is no
+status-bearing output carrier, destination validation, failure cleanup,
+cross-package import, descriptor or callable publication. Both proof modules
+are destroyed and direct codegen still rejects all source Ref publication.
+`source-ref-apply` remains implementation-open.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal

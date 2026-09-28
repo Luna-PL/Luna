@@ -131,6 +131,190 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
     return true;
 }
 
+bool CodeGenerator::verifyPrivateRuntimeFragmentRefOwnedReturn(
+    moon::Module& program, FunctionDecl& function, std::string& failure) {
+    // This deliberately proves only the direct affine parameter round-trip.
+    // The host output carrier, failure protocol and publication are separate.
+    const auto* result = program.findType(function.returnType);
+    const auto* parameter = program.findType(function.params.front().type);
+    const auto* record = program.findDeclarationById(function.declarationId);
+    const auto* callable = record ? program.findType(record->type) : nullptr;
+    if (!program.typeTableSealed || !result || !parameter ||
+        result->kind != TypeKind::RuntimeFragmentRef ||
+        parameter->kind != TypeKind::RuntimeFragmentRef ||
+        result->id != parameter->id ||
+        !program.resolveRuntimeFragmentRefTarget(result->id) ||
+        result->sysmeta.resource.management !=
+            luna::sysmeta::ResourceManagement::Unique ||
+        result->sysmeta.resource.releaseDomain !=
+            luna::sysmeta::ReleaseDomain::Executable ||
+        result->sysmeta.resource.lifetime !=
+            luna::sysmeta::ResourceLifetime::Lexical ||
+        result->sysmeta.resource.relation != luna::ownership::Relation::Owned ||
+        result->sysmeta.resource.usage != luna::ownership::Usage::Affine ||
+        !result->sysmeta.resource.cleanupRequired ||
+        !result->sysmeta.resource.needsDrop ||
+        result->sysmeta.resource.cleanup !=
+            luna::ownership::CleanupAction::Drop ||
+        !result->sysmeta.capability.hostOnly ||
+        function.params.front().relation != luna::ownership::Relation::Owned ||
+        function.params.front().usage != luna::ownership::Usage::Affine ||
+        function.returnUsage != luna::ownership::Usage::Affine ||
+        function.returnsLinear || function.requiresFragmentContext ||
+        function.isExtern || function.isKernel || function.isSelector ||
+        !function.typeParams.empty() || function.body ||
+        function.generatedSymbolName.empty() || !function.linkName.empty() ||
+        !record || record->kind != moon::DeclarationKind::Function ||
+        record->symbolId != function.symbolId ||
+        record->contractId != function.contractId ||
+        record->linkageName != function.generatedSymbolName ||
+        record->canonicalContract != moon::canonicalContract(*record) ||
+        record->contractId != luna::identity::contractIdFromCanonical(
+            record->canonicalContract) ||
+        record->sysmeta.identity.symbol != record->symbolId ||
+        record->sysmeta.identity.contract != record->contractId ||
+        !callable || callable->kind != TypeKind::Function ||
+        callable->parameterTypeIds.size() != 1 ||
+        callable->parameterTypeIds.front() != parameter->id ||
+        callable->returnTypeId != result->id ||
+        callable->parameterContracts.size() != 1 ||
+        callable->parameterContracts.front() != luna::ownership::Contract{
+            luna::ownership::Relation::Owned, luna::ownership::Usage::Affine} ||
+        callable->returnContract != luna::ownership::Contract{
+            luna::ownership::Relation::Owned, luna::ownership::Usage::Affine}) {
+        failure = "owned Ref return has no matching frozen callable";
+        return false;
+    }
+    if (!function.controlFlow || !function.controlFlow->sealed) {
+        failure = "owned Ref return has no sealed CFG";
+        return false;
+    }
+    moon::Verifier cfgVerifier;
+    if (!cfgVerifier.verify(*function.controlFlow, program)) {
+        failure = "owned Ref return CFG failed independent verification";
+        return false;
+    }
+    const moon::LocalRecord* parameterLocal = nullptr;
+    for (const auto& local : function.controlFlow->locals) {
+        if (local.kind != moon::LocalKind::Parameter) continue;
+        if (parameterLocal) {
+            failure = "owned Ref return has multiple CFG parameters";
+            return false;
+        }
+        parameterLocal = &local;
+    }
+    if (!parameterLocal || parameterLocal->scope !=
+            function.controlFlow->rootScope ||
+        parameterLocal->name != function.params.front().name ||
+        parameterLocal->type != function.params.front().type ||
+        parameterLocal->relation != luna::ownership::Relation::Owned ||
+        parameterLocal->usage != luna::ownership::Usage::Affine) {
+        failure = "owned Ref return CFG parameter differs from declaration";
+        return false;
+    }
+    size_t parameterCleanups = 0;
+    for (const auto& cleanup : function.controlFlow->cleanups) {
+        if (cleanup.place.root != parameterLocal->id) continue;
+        ++parameterCleanups;
+        if (!cleanup.place.projections.empty() || cleanup.guard ||
+            cleanup.scope != function.controlFlow->rootScope ||
+            cleanup.type != parameterLocal->type ||
+            cleanup.kind != moon::CleanupKind::Value ||
+            cleanup.action != luna::ownership::CleanupAction::Drop) {
+            failure = "owned Ref return has a noncanonical parameter cleanup";
+            return false;
+        }
+    }
+    if (parameterCleanups != 1) {
+        failure = "owned Ref return has no unique parameter Drop cleanup";
+        return false;
+    }
+    size_t directReturns = 0;
+    for (const auto& block : function.controlFlow->blocks) {
+        if (block.terminator.kind != moon::TerminatorKind::Return) continue;
+        const auto* identifier = dynamic_cast<const moon::IdentifierExpr*>(
+            block.terminator.operand.get());
+        if (!identifier || identifier->local != parameterLocal->id) {
+            failure = "owned Ref return is not a direct parameter transfer";
+            return false;
+        }
+        ++directReturns;
+    }
+    if (!directReturns) {
+        failure = "owned Ref return has no direct return path";
+        return false;
+    }
+
+    CodeGenerator proof("private.ref.owned.return.proof");
+    proof.mProgram = &program;
+    proof.mTypeMaterializer =
+        std::make_unique<moon::TypeMaterializer>(program);
+    auto* body = llvm::Function::Create(
+        llvm::FunctionType::get(proof.mHelpers->ptrTy(),
+                                {proof.mHelpers->ptrTy()}, false),
+        llvm::Function::InternalLinkage,
+        function.generatedSymbolName, *proof.mModule);
+    proof.mFunctions[function.generatedSymbolName] = body;
+    proof.generateFunctionBody(&function);
+    if (!proof.mErrors.empty() || body->empty()) {
+        failure = proof.mErrors.empty()
+            ? "owned Ref return generated no body"
+            : proof.mErrors.front().message;
+        return false;
+    }
+    size_t returnedHandles = 0;
+    for (auto& block : *body) {
+        auto* returned = llvm::dyn_cast_or_null<llvm::ReturnInst>(
+            block.getTerminator());
+        if (!returned) continue;
+        auto* taken = llvm::dyn_cast_or_null<llvm::LoadInst>(
+            returned->getReturnValue());
+        if (!taken || !llvm::isa<llvm::AllocaInst>(
+                taken->getPointerOperand())) {
+            failure = "owned Ref return did not take a local carrier";
+            return false;
+        }
+        auto* cell = taken->getPointerOperand();
+        bool parameterStored = false;
+        bool carrierCleared = false;
+        for (auto& candidateBlock : *body)
+            for (auto& instruction : candidateBlock)
+                if (auto* store = llvm::dyn_cast<llvm::StoreInst>(
+                        &instruction); store && store->getPointerOperand() == cell &&
+                    store->getValueOperand() == body->getArg(0))
+                    parameterStored = true;
+        for (auto& instruction : block) {
+            if (&instruction == taken) {
+                carrierCleared = false;
+            } else if (auto* store = llvm::dyn_cast<llvm::StoreInst>(
+                           &instruction); store &&
+                       store->getPointerOperand() == cell &&
+                       llvm::isa<llvm::ConstantPointerNull>(
+                           store->getValueOperand())) {
+                carrierCleared = true;
+            }
+        }
+        if (!parameterStored || !carrierCleared) {
+            failure = "owned Ref return did not clear its parameter carrier";
+            return false;
+        }
+        ++returnedHandles;
+    }
+    if (!body->hasInternalLinkage() || returnedHandles != directReturns) {
+        failure = "generated owned Ref return does not match CFG return paths";
+        return false;
+    }
+    std::string invalidIR;
+    llvm::raw_string_ostream stream(invalidIR);
+    if (llvm::verifyModule(*proof.mModule, &stream)) {
+        stream.flush();
+        failure = "generated owned Ref return LLVM IR is invalid: " + invalidIR;
+        return false;
+    }
+    failure.clear();
+    return true;
+}
+
 bool CodeGenerator::generate(moon::Module* program) {
     if (!program) {
         error("code generation has no MoonIR module");
@@ -147,6 +331,7 @@ bool CodeGenerator::generate(moon::Module* program) {
     }
     if (containsRef) {
         size_t provenEntries = 0;
+        size_t provenReturns = 0;
         for (auto& declaration : program->declarations) {
             auto* function = dynamic_cast<FunctionDecl*>(declaration.get());
             if (!function || function->params.size() != 1) continue;
@@ -154,21 +339,34 @@ bool CodeGenerator::generate(moon::Module* program) {
                 function->params.front().type);
             const auto* result = program->findType(function->returnType);
             if (!parameter || !result ||
-                parameter->kind != TypeKind::RuntimeFragmentRef ||
-                result->kind != TypeKind::Unit) continue;
+                parameter->kind != TypeKind::RuntimeFragmentRef) continue;
             std::string failure;
-            if (verifyPrivateRuntimeFragmentRefUnitIngress(
-                    *program, *function, failure)) {
-                ++provenEntries;
+            if (result->kind == TypeKind::Unit) {
+                if (verifyPrivateRuntimeFragmentRefUnitIngress(
+                        *program, *function, failure)) {
+                    ++provenEntries;
+                } else {
+                    error("private RuntimeFragmentRef unit ingress proof failed for '" +
+                          function->name + "': " + failure);
+                }
+            } else if (result->kind == TypeKind::RuntimeFragmentRef) {
+                if (verifyPrivateRuntimeFragmentRefOwnedReturn(
+                        *program, *function, failure)) {
+                    ++provenReturns;
+                } else {
+                    error("private RuntimeFragmentRef owned return proof failed for '" +
+                          function->name + "': " + failure);
+                }
             } else {
-                error("private RuntimeFragmentRef unit ingress proof failed for '" +
-                      function->name + "': " + failure);
+                continue;
             }
         }
         error("RuntimeFragmentRef host ingress/return ABI is not implemented; "
               "raw-pointer function publication is blocked; " +
               std::to_string(provenEntries) +
-              " private unit body/wrapper pair(s) verified and discarded");
+              " private unit body/wrapper pair(s) and " +
+              std::to_string(provenReturns) +
+              " private owned return body/bodies verified and discarded");
         return false;
     }
     mProgram = program;

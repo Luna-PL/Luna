@@ -142,6 +142,11 @@ private:
     static bool verifyPrivateRuntimeFragmentRefUnitIngress(
         moon::Module& program, moon::FunctionDecl& function,
         std::string& failure);
+    // Pass-through owned Ref returns are lowered only inside a disposable
+    // proof module; no host return carrier or public function is emitted.
+    static bool verifyPrivateRuntimeFragmentRefOwnedReturn(
+        moon::Module& program, moon::FunctionDecl& function,
+        std::string& failure);
     void generateControlFlowBody(moon::ControlFlowGraph& graph, llvm::Function* func,
                                  llvm::BasicBlock* abiEntry,
                                  size_t hiddenParameterCount);

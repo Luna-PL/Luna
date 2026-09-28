@@ -429,6 +429,21 @@ unit 返回；需要其他函数体或额外 lowering 支持的入口可以在�
 亦通过；WSL Arch Linux Clang 22.1.8 对改动的后端文件完成语法编译。
 设计状态、file guide 和差异检查通过；这不是远端 CI 或发布批准。
 
+### 私有 affine Ref 返回函数体证明（2026-09-28）
+
+真实源码 `fn transfer(selected: affine RuntimeFragmentRef<S>) -> affine
+RuntimeFragmentRef<S> { return selected; }` 现在进入第二个一次性 CodeGenerator
+证明。它要求参数与结果具有完全相同的冻结名义 Ref 类型、拥有／affine 契约、无隐藏
+runtime context、独立验证的 sealed CFG，以及直接返回唯一参数 local。生成的内部
+LLVM 函数体必须从参数 carrier 取出句柄、在返回前清空该 carrier，并通过完整 LLVM
+module 验证。篡改结果的所有权用法会使证明失败。前一轮 unit 返回的函数体／wrapper
+证明与本项分开。
+
+这仅证明被调用方狭义的所有权移动，不是宿主返回 ABI：还没有携带状态码的输出
+carrier、目标验证、失败清理、跨包 import、descriptor 或 callable 发布。两个证明
+module 均立即销毁，直接 codegen 仍拒绝所有源码 Ref 发布。
+`source-ref-apply` 保持 implementation-open。
+
 ## 宿主控制的发现与注入
 
 目标指向 exported Slot 的 exported Fragment，凭名义关系成为候选；metadata 不授予
