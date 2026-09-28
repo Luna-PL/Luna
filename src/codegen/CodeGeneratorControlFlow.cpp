@@ -617,8 +617,33 @@ void CodeGenerator::generateControlFlowBody(
                     if (!mBuilder->GetInsertBlock()->getTerminator())
                         mBuilder->CreateRetVoid();
                 } else {
-                    llvm::Value* value = generateExpr(
-                        terminator.operand.get());
+                    llvm::Value* value = nullptr;
+                    const TypePtr operandType = terminator.operand
+                        ? resolveType(terminator.operand->type) : nullptr;
+                    if (operandType &&
+                        operandType->kind == TypeKind::RuntimeFragmentRef) {
+                        if (auto* identifier = dynamic_cast<moon::IdentifierExpr*>(
+                                terminator.operand.get())) {
+                            const auto* local = graph.findLocal(identifier->local);
+                            if (!local || local->relation !=
+                                    luna::ownership::Relation::Owned ||
+                                identifier->local.value >= mCanonicalLocals.size() ||
+                                !mCanonicalLocals[identifier->local.value]) {
+                                error("RuntimeFragmentRef return requires an owned local carrier");
+                                break;
+                            }
+                            value = mHelpers->emitRuntimeFragmentRefTake(
+                                *mBuilder, mCanonicalLocals[identifier->local.value]);
+                        } else if (dynamic_cast<moon::FieldAccessExpr*>(
+                                       terminator.operand.get()) ||
+                                   dynamic_cast<moon::IndexExpr*>(
+                                       terminator.operand.get())) {
+                            error("RuntimeFragmentRef projected return requires in-place transfer");
+                            break;
+                        }
+                    }
+                    if (!value)
+                        value = generateExpr(terminator.operand.get());
                     if (!value) {
                         error("canonical non-void return has no value");
                         break;

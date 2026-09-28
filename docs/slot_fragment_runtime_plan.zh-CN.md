@@ -294,6 +294,23 @@ verifier 与 container gate 保持关闭，`source-ref-apply` 仍为 implementat
 canonical MoonIR 1／1 通过。设计状态、file guide inventory 与差异检查通过。
 这不表示远端 CI 或稳定发布批准。
 
+### 内部 Ref 局部转移预备（2026-09-28）
+
+内部 codegen 预备路径把直接局部 `move ref` 按“读取原 carrier → 清空原 cell →
+交出值”的顺序降低；直接 `return ref` 对拥有型参数／局部也使用同一操作，
+使后续退出清理回调看不到仍持有的来源。字段／索引投影的 Ref move 和 return
+暂 fail closed，须先有原位投影 cell 和部分初始化／move 证明。LLVM 定向回归检查
+清空指令紧随读取，且目标 cell 的 Drop 仍走专属 Runtime 符号。
+
+这不是宿主到源码的 ABI：当前生成函数仍只接收裸 pointer 参数，尚未在入口核对
+SlotId／sealed ContractId 或消费宿主 carrier cell；借用与拥有参数的跨边界协议、
+返回转交宿主、聚合清理、wire round-trip 都未完成。MoonIR／container 门禁不变，
+`source-ref-apply` 保持 implementation-open。
+
+本切片严格构建及非 hardware 回归 77／77 通过（204.15 秒）；Windows
+ASan／UBSan canonical MoonIR 1／1 通过。设计状态、inventory 和差异检查通过。
+这是本地验证，不代表远端 CI 或稳定发布批准。
+
 ## 宿主控制的发现与注入
 
 目标指向 exported Slot 的 exported Fragment，凭名义关系成为候选；metadata 不授予

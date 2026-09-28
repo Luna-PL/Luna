@@ -314,7 +314,27 @@ llvm::Value* CodeGenerator::generateAssign(AssignExpr* as) {
 }
 
 llvm::Value* CodeGenerator::generateMove(MoveExpr* mv) {
-        llvm::Value* value = generateExpr(mv->operand.get());
+        llvm::Value* value = nullptr;
+        const TypePtr movedType = mv->operand
+            ? resolveType(mv->operand->type) : nullptr;
+        if (movedType && movedType->kind == TypeKind::RuntimeFragmentRef) {
+            auto* id = dynamic_cast<IdentifierExpr*>(mv->operand.get());
+            llvm::Value* cell = nullptr;
+            if (id && !id->local.empty() &&
+                id->local.value < mCanonicalLocals.size())
+                cell = mCanonicalLocals[id->local.value];
+            else if (id) {
+                auto found = mLocals.find(id->name);
+                if (found != mLocals.end()) cell = found->second;
+            }
+            if (!cell || !mv->nextUnread.empty()) {
+                error("RuntimeFragmentRef move requires a direct local carrier");
+                return llvm::PoisonValue::get(mHelpers->ptrTy());
+            }
+            value = mHelpers->emitRuntimeFragmentRefTake(*mBuilder, cell);
+        } else {
+            value = generateExpr(mv->operand.get());
+        }
         if (!mv->nextUnread.empty() &&
             mv->nextUnread.value < mCanonicalLocals.size() &&
             mCanonicalLocals[mv->nextUnread.value]) {

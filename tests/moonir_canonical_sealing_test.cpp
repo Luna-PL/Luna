@@ -76,15 +76,27 @@ int testRuntimeFragmentRefPreparation() {
     auto* entry = llvm::BasicBlock::Create(llvmContext, "entry", function);
     llvm::IRBuilder<> builder(entry);
     auto* carrier = builder.CreateAlloca(helpers.ptrTy(), nullptr, "ref.carrier");
+    auto* destination = builder.CreateAlloca(
+        helpers.ptrTy(), nullptr, "ref.destination");
     builder.CreateStore(llvm::ConstantPointerNull::get(
         llvm::cast<llvm::PointerType>(helpers.ptrTy())), carrier);
+    builder.CreateStore(llvm::ConstantPointerNull::get(
+        llvm::cast<llvm::PointerType>(helpers.ptrTy())), destination);
+    auto* taken = llvm::dyn_cast<llvm::LoadInst>(
+        helpers.emitRuntimeFragmentRefTake(builder, carrier));
+    if (!taken) return fail("internal Ref take did not load its source carrier");
+    auto* clear = llvm::dyn_cast<llvm::StoreInst>(taken->getNextNode());
+    if (!clear || clear->getPointerOperand() != carrier ||
+        !llvm::isa<llvm::ConstantPointerNull>(clear->getValueOperand()))
+        return fail("internal Ref take did not clear the source before transfer");
+    builder.CreateStore(taken, destination);
     auto* drop = helpers.emitRuntimeFragmentRefDrop(
-        builder, llvmModule, carrier);
+        builder, llvmModule, destination);
     builder.CreateRetVoid();
     if (!drop->getCalledFunction() ||
         drop->getCalledFunction()->getName() !=
             "luna_runtime_fragment_ref_drop_v1" ||
-        drop->getArgOperand(0) != carrier ||
+        drop->getArgOperand(0) != destination ||
         llvmModule.getFunction("rt_dealloc") ||
         llvm::verifyModule(llvmModule))
         return fail("internal Ref Drop did not clear its original carrier via runtime ABI");

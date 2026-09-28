@@ -93,6 +93,15 @@ llvm::CallInst* CGHelpers::emitRuntimeFragmentRefDrop(
     return builder.CreateCall(drop, {carrierCell});
 }
 
+llvm::Value* CGHelpers::emitRuntimeFragmentRefTake(
+    llvm::IRBuilder<>& builder, llvm::Value* carrierCell) const {
+    auto* value = builder.CreateLoad(ptrTy(), carrierCell, "ref.take");
+    builder.CreateStore(
+        llvm::ConstantPointerNull::get(
+            llvm::cast<llvm::PointerType>(ptrTy())), carrierCell);
+    return value;
+}
+
 uint64_t typeSize(const TypePtr& type) {
     if (!type) return 0;
     switch (type->kind) {

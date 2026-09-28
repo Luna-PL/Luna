@@ -368,6 +368,28 @@ as does the Windows ASan/UBSan canonical MoonIR test (1/1). Design status,
 file-guide inventory and diff checks pass. This is not remote CI or stable
 release approval.
 
+### Internal Ref local transfer preparation (2026-09-28)
+
+In the internal codegen preparation path, `move ref` of a direct local lowers as load,
+clear the original carrier cell, then hand off the value. A direct `return ref`
+from an owned local/parameter uses the same operation so subsequent exit
+cleanup callbacks cannot observe a second owning source. Projected field/index
+Ref moves and returns fail closed until in-place projected cells and partial
+initialization/move handling are proved. A focused LLVM test checks that the
+clear immediately follows the load and the destination Drop still targets the
+dedicated Runtime symbol.
+
+This is not the host-to-source ABI. Generated functions still accept a raw
+pointer argument without checking SlotId/sealed ContractId or consuming the
+host carrier cell. Cross-boundary owned/borrowed parameter and return rules,
+aggregate cleanup and wire round-trip remain unfinished. MoonIR/container
+gates stay closed; `source-ref-apply` remains implementation-open.
+
+This slice passes the strict build and all 77 non-hardware gates (204.15
+seconds); Windows ASan/UBSan canonical MoonIR passes 1/1. Design status,
+inventory and diff checks pass. This is local evidence, not remote CI or stable
+release approval.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal

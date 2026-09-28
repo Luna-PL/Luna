@@ -16,6 +16,8 @@ public:
     llvm::CallInst* emitRuntimeFragmentRefDrop(
         llvm::IRBuilder<>& builder, llvm::Module& module,
         llvm::Value* carrierCell) const;
+    llvm::Value* emitRuntimeFragmentRefTake(
+        llvm::IRBuilder<>& builder, llvm::Value* carrierCell) const;
     llvm::Type* i32Ty() const { return llvm::Type::getInt32Ty(mCtx); }
     llvm::Type* i64Ty() const { return llvm::Type::getInt64Ty(mCtx); }
     llvm::Type* f32Ty() const { return llvm::Type::getFloatTy(mCtx); }
