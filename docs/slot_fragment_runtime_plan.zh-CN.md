@@ -510,6 +510,16 @@ Native runtime 现提供未发布、仅供编译器使用的桥接：从借用�
 CFG；生成的入口／出口安放、return／错误清理、wire 格式和公开 ABI 仍未完成。
 此桥接不属于稳定 runtime Fragment ABI。
 
+### Canonical Ref-apply context 安放计划（2026-09-28）
+
+新增不进入 wire 的编译器分析，沿每个 CFG block 的 Ref-apply region 祖先链计算
+context 栈。每条后继边记录按内到外释放、按外到内构造的 context；`return` 与
+`unreachable` 终止路径单独记录。进入 Ref-apply region 只能经过其确切入口 block。
+独立 CFG verifier 执行此分析，因此伪造边不能绕过 context 构造。回归覆盖正常
+进入／退出、绕过入口，以及嵌套提前返回时内层先释放的义务。这仍只是安放
+**计划**，尚未生成清理指令：LLVM 仍拒绝该 region，运行时失败及被 outline 的
+continuation 尚未针对生成指令完成验证。不改 container 或公开 ABI。
+
 ## 宿主控制的发现与注入
 
 目标指向 exported Slot 的 exported Fragment，凭名义关系成为候选；metadata 不授予

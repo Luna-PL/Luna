@@ -135,4 +135,30 @@ struct ControlFlowGraph {
     const CleanupRecord* findCleanup(CleanupId id) const;
 };
 
+// Compiler-internal placement obligations for Ref context construction and
+// release. Edge exits are innermost-first; entries are outermost-first.
+// Return and unreachable terminals have no successor edge and are explicit.
+struct RuntimeRefApplyFlowEdge {
+    BlockId source;
+    BlockId target;
+    std::vector<RegionId> exits;
+    std::vector<RegionId> enters;
+};
+
+struct RuntimeRefApplyFlowTerminal {
+    BlockId block;
+    TerminatorKind kind = TerminatorKind::Invalid;
+    std::vector<RegionId> exits;
+};
+
+struct RuntimeRefApplyFlowPlan {
+    // Indexed by canonical BlockId; each stack is outermost-first.
+    std::vector<std::vector<RegionId>> activeByBlock;
+    std::vector<RuntimeRefApplyFlowEdge> edges;
+    std::vector<RuntimeRefApplyFlowTerminal> terminals;
+};
+
+std::optional<RuntimeRefApplyFlowPlan> planRuntimeRefApplyFlow(
+    const ControlFlowGraph& graph, std::string& error);
+
 } // namespace moon

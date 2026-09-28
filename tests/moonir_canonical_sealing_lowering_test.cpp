@@ -229,6 +229,46 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !refApplyCfgVerifier.verify(*sourceApplyEntry->controlFlow,
                                     *sourceApplyModule))
         return fail("internal Ref apply CFG failed exact-target verification");
+    std::string refApplyFlowError;
+    const auto refApplyFlow = moon::planRuntimeRefApplyFlow(
+        *sourceApplyEntry->controlFlow, refApplyFlowError);
+    if (!refApplyFlow || !refApplyFlowError.empty() ||
+        !std::any_of(refApplyFlow->edges.begin(), refApplyFlow->edges.end(),
+                     [&](const auto& edge) {
+                         return edge.enters ==
+                             std::vector<moon::RegionId>{refApplyBinding.region};
+                     }) ||
+        !std::any_of(refApplyFlow->edges.begin(), refApplyFlow->edges.end(),
+                     [&](const auto& edge) {
+                         return edge.exits ==
+                             std::vector<moon::RegionId>{refApplyBinding.region};
+                     }))
+        return fail("Ref apply flow lost normal context entry or exit");
+    const auto* refApplyRegion = sourceApplyEntry->controlFlow->findRegion(
+        refApplyBinding.region);
+    moon::BasicBlock* enteringRefApply = nullptr;
+    moon::BlockId nonEntryTarget;
+    for (auto& block : sourceApplyEntry->controlFlow->blocks) {
+        if (block.terminator.kind == moon::TerminatorKind::Jump &&
+            refApplyRegion && block.terminator.primary.target ==
+                refApplyRegion->entry)
+            enteringRefApply = &block;
+        if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot)
+            nonEntryTarget = block.terminator.primary.target;
+    }
+    if (!enteringRefApply || nonEntryTarget.empty())
+        return fail("Ref apply flow fixture has no entry or nested continuation");
+    const auto originalRefEntryTarget =
+        enteringRefApply->terminator.primary.target;
+    enteringRefApply->terminator.primary.target = nonEntryTarget;
+    const bool bypassAccepted = moon::planRuntimeRefApplyFlow(
+        *sourceApplyEntry->controlFlow, refApplyFlowError).has_value();
+    const bool bypassVerified = refApplyCfgVerifier.verify(
+        *sourceApplyEntry->controlFlow, *sourceApplyModule);
+    enteringRefApply->terminator.primary.target = originalRefEntryTarget;
+    if (bypassAccepted || bypassVerified || refApplyFlowError.find(
+            "without its exact region entry") == std::string::npos)
+        return fail("Ref apply flow accepted a bypassed context entry");
     const auto originalApplyContract = refApplyBinding.slot.contract;
     refApplyBinding.slot.contract = luna::identity::contractIdFromCanonical(
         "forged Ref apply Slot contract");
@@ -277,6 +317,43 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                              std::string::npos;
                      }))
         return fail("internal Ref apply CFG escaped its executable codegen gate");
+
+    auto sourceEarlyReturnSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "runtime fn early(selected: RuntimeFragmentRef<checkpoint>) {\n"
+            "  apply selected { apply selected { return; } }\n"
+            "}\n",
+            "<canonical-nested-ref-early-return>");
+    if (!sourceEarlyReturnSnapshot.success())
+        return fail("frontend rejected nested Ref apply early-return fixture");
+    moon::LunaLowerer earlyReturnLowerer;
+    auto earlyReturnModule = earlyReturnLowerer.lower(
+        *sourceEarlyReturnSnapshot.program(),
+        *sourceEarlyReturnSnapshot.symbolTable());
+    moon::Sealer earlyReturnSealer;
+    if (!earlyReturnModule || !earlyReturnLowerer.errors().empty() ||
+        !earlyReturnSealer.sealFunctionBodies(*earlyReturnModule))
+        return fail("nested Ref apply early return did not seal");
+    moon::FunctionDecl* earlyReturn = nullptr;
+    for (auto& declaration : earlyReturnModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function && function->name == "early")
+            earlyReturn = function;
+    if (!earlyReturn || !earlyReturn->controlFlow ||
+        earlyReturn->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*earlyReturn->controlFlow,
+                                    *earlyReturnModule))
+        return fail("nested Ref apply early return failed CFG verification");
+    const auto earlyFlow = moon::planRuntimeRefApplyFlow(
+        *earlyReturn->controlFlow, refApplyFlowError);
+    if (!earlyFlow || earlyFlow->terminals.size() != 1 ||
+        earlyFlow->terminals.front().kind != moon::TerminatorKind::Return ||
+        earlyFlow->terminals.front().exits !=
+            std::vector<moon::RegionId>{
+                earlyReturn->controlFlow->runtimeRefApplies[1].region,
+                earlyReturn->controlFlow->runtimeRefApplies[0].region})
+        return fail("nested Ref apply return lost inner-before-outer cleanup order");
 
     auto contextRefSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "export slot checkpoint(value: i32);\n"

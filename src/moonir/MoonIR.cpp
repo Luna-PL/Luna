@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <stdexcept>
+#include <unordered_set>
 
 namespace moon {
 
@@ -320,6 +321,108 @@ const CleanupRecord* ControlFlowGraph::findCleanup(CleanupId id) const {
     return !id.empty() && id.value < cleanups.size() &&
                    cleanups[id.value].id == id
         ? &cleanups[id.value] : nullptr;
+}
+
+std::optional<RuntimeRefApplyFlowPlan> planRuntimeRefApplyFlow(
+    const ControlFlowGraph& graph, std::string& error) {
+    error.clear();
+    RuntimeRefApplyFlowPlan plan;
+    plan.activeByBlock.resize(graph.blocks.size());
+    std::unordered_set<uint32_t> marked;
+    for (const auto& binding : graph.runtimeRefApplies) {
+        const auto* region = graph.findRegion(binding.region);
+        if (!region || region->kind != RegionKind::Apply ||
+            !marked.insert(binding.region.value).second) {
+            error = "Ref apply flow has a missing, wrong-kind or duplicate region";
+            return std::nullopt;
+        }
+    }
+    for (const auto& block : graph.blocks) {
+        if (!graph.findBlock(block.id)) {
+            error = "Ref apply flow has an invalid canonical block";
+            return std::nullopt;
+        }
+        std::unordered_set<uint32_t> seen;
+        std::vector<RegionId> active;
+        for (RegionId current = block.region; !current.empty();) {
+            const auto* region = graph.findRegion(current);
+            if (!region || !seen.insert(current.value).second) {
+                error = "Ref apply flow has a missing or cyclic region ancestor";
+                return std::nullopt;
+            }
+            if (marked.count(current.value)) active.push_back(current);
+            current = region->parent;
+        }
+        std::reverse(active.begin(), active.end());
+        plan.activeByBlock[block.id.value] = std::move(active);
+    }
+    const auto* entry = graph.findBlock(graph.entry);
+    if (!entry || !plan.activeByBlock[entry->id.value].empty()) {
+        error = "Ref apply flow starts inside an unconstructed context";
+        return std::nullopt;
+    }
+    for (const auto& block : graph.blocks) {
+        const auto& source = plan.activeByBlock[block.id.value];
+        const auto appendEdge = [&](const ControlEdge& edge) -> bool {
+            const auto* target = graph.findBlock(edge.target);
+            if (!target) {
+                error = "Ref apply flow references a missing successor";
+                return false;
+            }
+            const auto& destination = plan.activeByBlock[target->id.value];
+            size_t common = 0;
+            while (common < source.size() && common < destination.size() &&
+                   source[common] == destination[common])
+                ++common;
+            RuntimeRefApplyFlowEdge transition;
+            transition.source = block.id;
+            transition.target = target->id;
+            for (size_t index = source.size(); index > common; --index)
+                transition.exits.push_back(source[index - 1]);
+            for (size_t index = common; index < destination.size(); ++index) {
+                const auto* region = graph.findRegion(destination[index]);
+                if (!region || region->entry != target->id) {
+                    error = "Ref apply flow enters a context without its exact region entry";
+                    return false;
+                }
+                transition.enters.push_back(region->id);
+            }
+            plan.edges.push_back(std::move(transition));
+            return true;
+        };
+        const auto& term = block.terminator;
+        switch (term.kind) {
+            case TerminatorKind::Jump:
+            case TerminatorKind::Resume:
+            case TerminatorKind::Discard:
+                if (!appendEdge(term.primary)) return std::nullopt;
+                break;
+            case TerminatorKind::Branch:
+            case TerminatorKind::RuntimeSlot:
+                if (!appendEdge(term.primary) || !appendEdge(term.secondary))
+                    return std::nullopt;
+                break;
+            case TerminatorKind::Switch:
+                if (!appendEdge(term.primary)) return std::nullopt;
+                for (const auto& item : term.cases)
+                    if (!appendEdge(item.edge)) return std::nullopt;
+                break;
+            case TerminatorKind::Return:
+            case TerminatorKind::Unreachable:
+                if (!source.empty()) {
+                    RuntimeRefApplyFlowTerminal terminal;
+                    terminal.block = block.id;
+                    terminal.kind = term.kind;
+                    terminal.exits.assign(source.rbegin(), source.rend());
+                    plan.terminals.push_back(std::move(terminal));
+                }
+                break;
+            case TerminatorKind::Invalid:
+                error = "Ref apply flow has an invalid terminator";
+                return std::nullopt;
+        }
+    }
+    return plan;
 }
 
 const DeclarationRecord* Module::findDeclaration(

@@ -647,6 +647,20 @@ source `apply` execution: LLVM still rejects Ref-apply CFGs, and generated
 entry/exit placement, return/error cleanup, wire format and public ABI remain
 open. The bridge is not part of the stable runtime Fragment ABI.
 
+### Canonical Ref-apply context placement plan (2026-09-28)
+
+A wire-neutral compiler analysis now walks each CFG block's Ref-apply region
+ancestry. For every successor edge it records contexts to release in
+innermost-first order and contexts to construct in outermost-first order;
+`return` and `unreachable` terminals are recorded separately. Entry into a
+Ref-apply region is accepted only through that region's exact entry block.
+The independent CFG verifier runs this analysis, so a forged edge cannot
+bypass context construction. Regression covers normal entry/exit, a bypassed
+entry, and nested early return with inner-before-outer release obligations.
+This is a placement **plan**, not emitted cleanup: LLVM still rejects the
+region, and runtime failures or outlined continuations have not yet been
+proven against generated instructions. No container or public ABI change.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal

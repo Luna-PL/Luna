@@ -258,6 +258,11 @@ void Verifier::verifyRegions(const ControlFlowGraph& graph, const Module& module
             error(region->location,
                   "canonical Ref apply local is outside the lexical parent scope");
     }
+    if (!graph.runtimeRefApplies.empty()) {
+        std::string flowError;
+        if (!planRuntimeRefApplyFlow(graph, flowError))
+            error({}, flowError);
+    }
 }
 
 bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
