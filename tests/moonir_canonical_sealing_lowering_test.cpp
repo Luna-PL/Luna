@@ -33,7 +33,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto sourceRefSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "slot checkpoint(value: i32);\n"
         "slot shadow(value: i32);\n"
-        "fn observe(selected: RuntimeFragmentRef<checkpoint>) -> unit {}\n",
+        "fn observe(selected: RuntimeFragmentRef<checkpoint>) -> unit {}\n"
+        "fn accept(selected: affine RuntimeFragmentRef<checkpoint>) -> unit {}\n",
         "<canonical-source-ref-gate>");
     if (!sourceRefSnapshot.success())
         return fail("frontend rejected a well-formed nominal source Ref type");
@@ -42,17 +43,21 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         *sourceRefSnapshot.program(), *sourceRefSnapshot.symbolTable());
     if (!sourceRefModule || !sourceRefLowerer.errors().empty())
         return fail("source Ref type did not lower into private MoonIR preparation");
-    const moon::FunctionDecl* observe = nullptr;
+    moon::FunctionDecl* observe = nullptr;
+    moon::FunctionDecl* accept = nullptr;
     const moon::SlotDecl* shadow = nullptr;
-    for (const auto& declaration : sourceRefModule->declarations) {
-        if (const auto* function = dynamic_cast<const moon::FunctionDecl*>(
-                declaration.get()); function && function->name == "observe")
-            observe = function;
+    for (auto& declaration : sourceRefModule->declarations) {
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get())) {
+            if (function->name == "observe") observe = function;
+            if (function->name == "accept") accept = function;
+        }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
                 declaration.get()); slot && slot->name == "shadow")
             shadow = slot;
     }
-    if (!observe || observe->params.size() != 1 || !shadow)
+    if (!observe || !accept || observe->params.size() != 1 ||
+        accept->params.size() != 1 || !shadow)
         return fail("source Ref target fixture has no frozen function/Slot");
     const auto refId = observe->params.front().type;
     auto* refRecord = const_cast<moon::TypeRecord*>(
@@ -103,6 +108,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     slotRecord->type = originalType;
     if (!sourceRefModule->resolveRuntimeFragmentRefTarget(refId))
         return fail("frozen Ref target did not recover after rejected mutations");
+    moon::Sealer sourceRefSealer;
+    if (!sourceRefSealer.sealFunctionBodies(*sourceRefModule))
+        return fail("source Ref functions did not seal ownership CFGs");
     if (verifier.verify(*sourceRefModule) ||
         !std::any_of(verifier.errors().begin(), verifier.errors().end(),
             [](const auto& error) {
@@ -209,46 +217,109 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* borrowedBodyFunction = llvm::Function::Create(
         llvm::FunctionType::get(
             bridgeHelpers.voidTy(), {bridgeHelpers.ptrTy()}, false),
-        llvm::Function::InternalLinkage, "borrowed_ref_body", bridgeModule);
+        llvm::Function::InternalLinkage,
+        observe->generatedSymbolName, bridgeModule);
     bridgeBuilder.SetInsertPoint(llvm::BasicBlock::Create(
         bridgeContext, "entry", borrowedBodyFunction));
     bridgeBuilder.CreateRetVoid();
     auto* owningBodyFunction = llvm::Function::Create(
-        llvm::FunctionType::get(bridgeHelpers.voidTy(),
-            {bridgeHelpers.ptrTy(), bridgeHelpers.ptrTy()}, false),
-        llvm::Function::InternalLinkage, "owning_ref_body", bridgeModule);
+        llvm::FunctionType::get(
+            bridgeHelpers.voidTy(), {bridgeHelpers.ptrTy()}, false),
+        llvm::Function::InternalLinkage,
+        accept->generatedSymbolName, bridgeModule);
     bridgeBuilder.SetInsertPoint(llvm::BasicBlock::Create(
         bridgeContext, "entry", owningBodyFunction));
     auto* bodyOwner = bridgeBuilder.CreateAlloca(bridgeHelpers.ptrTy());
-    bridgeBuilder.CreateStore(owningBodyFunction->getArg(1), bodyOwner);
+    bridgeBuilder.CreateStore(owningBodyFunction->getArg(0), bodyOwner);
     bridgeHelpers.emitRuntimeFragmentRefDrop(
         bridgeBuilder, bridgeModule, bodyOwner);
     bridgeBuilder.CreateRetVoid();
     auto* generatedBorrowWrapper =
         bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
-            bridgeModule, *borrowedBodyFunction, *target,
-            RuntimeFragmentRefIngressMode::Borrowed, false,
+            bridgeModule, *borrowedBodyFunction, *sourceRefModule, *observe,
             "borrowed_ref_host_entry");
     auto* generatedOwnedWrapper =
         bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
-            bridgeModule, *owningBodyFunction, *target,
-            RuntimeFragmentRefIngressMode::Owned, true,
+            bridgeModule, *owningBodyFunction, *sourceRefModule, *accept,
             "owning_ref_host_entry");
     if (bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
-            bridgeModule, *borrowedBodyFunction, {},
-            RuntimeFragmentRefIngressMode::Borrowed, false,
-            "bad_ref_host_entry") ||
-        bridgeModule.getFunction("bad_ref_host_entry") ||
+            bridgeModule, *borrowedBodyFunction, *sourceRefModule, *observe,
+            "borrowed_ref_host_entry"))
+        return fail("LLVM Ref host wrapper accepted a duplicate name");
+    auto* unrelatedBody = llvm::Function::Create(
+        llvm::FunctionType::get(
+            bridgeHelpers.voidTy(), {bridgeHelpers.ptrTy()}, false),
+        llvm::Function::InternalLinkage, "unrelated_ref_body", bridgeModule);
+    bridgeBuilder.SetInsertPoint(llvm::BasicBlock::Create(
+        bridgeContext, "entry", unrelatedBody));
+    bridgeBuilder.CreateRetVoid();
+    if (bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
+            bridgeModule, *unrelatedBody, *sourceRefModule, *observe,
+            "unrelated_ref_entry") ||
+        bridgeModule.getFunction("unrelated_ref_entry"))
+        return fail("LLVM Ref host wrapper accepted a different body symbol");
+    const auto originalOwnedRelation = accept->params.front().relation;
+    accept->params.front().relation = luna::ownership::Relation::SharedBorrow;
+    const bool forgedRelationAccepted =
         bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
-            bridgeModule, *borrowedBodyFunction, *target,
-            RuntimeFragmentRefIngressMode::Borrowed, false,
-            "borrowed_ref_host_entry") ||
+            bridgeModule, *owningBodyFunction, *sourceRefModule, *accept,
+            "forged_relation_ref_entry") != nullptr;
+    accept->params.front().relation = originalOwnedRelation;
+    auto& ownedCleanups = accept->controlFlow->cleanups;
+    const auto ownedCleanup = std::find_if(
+        ownedCleanups.begin(), ownedCleanups.end(),
+        [accept](const moon::CleanupRecord& cleanup) {
+            return cleanup.type == accept->params.front().type &&
+                cleanup.place.projections.empty();
+        });
+    if (ownedCleanup == ownedCleanups.end())
+        return fail("owned source Ref has no canonical parameter Drop");
+    const auto originalCleanupAction = ownedCleanup->action;
+    ownedCleanup->action = luna::ownership::CleanupAction::None;
+    const bool forgedCleanupAccepted =
         bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
-            bridgeModule, *borrowedBodyFunction, *target,
-            RuntimeFragmentRefIngressMode::Borrowed, true,
-            "bad_context_ref_host_entry") ||
-        bridgeModule.getFunction("bad_context_ref_host_entry"))
-        return fail("LLVM Ref host wrapper accepted an invalid target or name");
+            bridgeModule, *owningBodyFunction, *sourceRefModule, *accept,
+            "forged_cleanup_ref_entry") != nullptr;
+    ownedCleanup->action = originalCleanupAction;
+    const auto* ownedDeclaration = sourceRefModule->findDeclarationById(
+        accept->declarationId);
+    auto* ownedCallable = ownedDeclaration
+        ? const_cast<moon::TypeRecord*>(
+              sourceRefModule->findType(ownedDeclaration->type)) : nullptr;
+    if (!ownedCallable)
+        return fail("owned source Ref has no frozen callable contract");
+    const auto originalCallableCanonical = ownedCallable->canonicalType;
+    ownedCallable->canonicalType += ";forged";
+    const bool forgedCallableAccepted =
+        bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
+            bridgeModule, *owningBodyFunction, *sourceRefModule, *accept,
+            "forged_callable_ref_entry") != nullptr;
+    ownedCallable->canonicalType = originalCallableCanonical;
+    const auto originalRefCleanupRequired =
+        refRecord->sysmeta.resource.cleanupRequired;
+    refRecord->sysmeta.resource.cleanupRequired = false;
+    const bool forgedRefResourceAccepted =
+        bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
+            bridgeModule, *owningBodyFunction, *sourceRefModule, *accept,
+            "forged_ref_resource_entry") != nullptr;
+    refRecord->sysmeta.resource.cleanupRequired =
+        originalRefCleanupRequired;
+    const auto originalEffect = accept->requiresFragmentContext;
+    accept->requiresFragmentContext = !originalEffect;
+    const bool forgedEffectAccepted =
+        bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
+            bridgeModule, *owningBodyFunction, *sourceRefModule, *accept,
+            "forged_effect_ref_entry") != nullptr;
+    accept->requiresFragmentContext = originalEffect;
+    if (forgedRelationAccepted || forgedCleanupAccepted ||
+        forgedCallableAccepted || forgedRefResourceAccepted ||
+        forgedEffectAccepted ||
+        bridgeModule.getFunction("forged_relation_ref_entry") ||
+        bridgeModule.getFunction("forged_cleanup_ref_entry") ||
+        bridgeModule.getFunction("forged_callable_ref_entry") ||
+        bridgeModule.getFunction("forged_ref_resource_entry") ||
+        bridgeModule.getFunction("forged_effect_ref_entry"))
+        return fail("LLVM Ref host wrapper accepted forged source ownership facts");
 
     const auto findCallTo = [](llvm::Function* function,
                                llvm::Function* callee) -> llvm::CallInst* {
@@ -268,18 +339,18 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         generatedOwnedWrapper, owningBodyFunction);
     auto* ownedTake = generatedOwnedCall
         ? llvm::dyn_cast<llvm::LoadInst>(
-              generatedOwnedCall->getArgOperand(1)) : nullptr;
+              generatedOwnedCall->getArgOperand(0)) : nullptr;
     auto* clearedOwner = ownedTake
         ? llvm::dyn_cast<llvm::StoreInst>(ownedTake->getNextNode()) : nullptr;
     if (!generatedBorrowWrapper || !generatedOwnedWrapper ||
         !generatedBorrowWrapper->hasInternalLinkage() ||
         !generatedOwnedWrapper->hasInternalLinkage() ||
         generatedBorrowWrapper->arg_size() != 1 ||
-        generatedOwnedWrapper->arg_size() != 2 ||
+        generatedOwnedWrapper->arg_size() != 1 ||
         !generatedBorrowCall || !generatedOwnedCall ||
         generatedBorrowCall->getArgOperand(0) !=
             generatedBorrowWrapper->getArg(0) ||
-        generatedOwnedCall->getArgOperand(0) !=
+        generatedOwnedCall->getArgOperand(0) ==
             generatedOwnedWrapper->getArg(0) ||
         !ownedTake || !clearedOwner ||
         !llvm::isa<llvm::AllocaInst>(ownedTake->getPointerOperand()) ||
@@ -342,7 +413,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !returnsSuccessAfterBody(generatedBorrowCall) ||
         !returnsSuccessAfterBody(generatedOwnedCall) ||
         generatedOwnedStatus->getArgOperand(0) !=
-            generatedOwnedWrapper->getArg(1) ||
+            generatedOwnedWrapper->getArg(0) ||
         generatedOwnedStatus->getArgOperand(3) !=
             ownedTake->getPointerOperand() ||
         !carriesIdentity(generatedBorrowStatus, 1, target->symbol.value) ||

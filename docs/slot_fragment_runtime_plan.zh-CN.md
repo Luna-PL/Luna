@@ -388,6 +388,27 @@ canonical MoonIR 1／1 通过；WSL Arch Linux Clang 22.1.8 对改动的后端�
 完成语法编译检查。设计状态、file guide inventory 与差异检查通过；这些是本地
 验证，不代表远端 CI 或稳定发布批准。
 
+### 冻结 Ref 入口所有权配对（2026-09-28）
+
+私有单 Ref／unit wrapper 不再接收调用方指定的借用／拥有模式、目标或 context
+标志，而是从模块中真实存在的 Function 声明推导。构造要求封存的名义 Ref 目标、
+unit 返回、完整的冻结 Function 类型及声明契约、匹配的唯一 canonical 参数和
+独立验证的 sealed CFG。共享借用参数不得有 cleanup；affine owner 必须恰有一条
+根作用域直接 Drop cleanup。Fragment context effect 从模块调用图独立复算，
+再确定入口 ABI 形状；LLVM 函数体符号及指针参数数目也必须与源码声明一致。
+对抗回归篡改参数关系、cleanup、函数类型 canonical、Ref 资源事实和 context effect，均拒绝
+生成 wrapper；不相符的 LLVM 函数体名字亦被拒绝。
+
+这只证明内部所有权模式的选择，不证明任意传入的 LLVM 函数体实现了该 CFG。
+CodeGenerator 尚未把 helper 与自己生成的函数体配对，也未发布 descriptor；
+MoonIR／后端／container 的 Ref 门禁保持关闭。源码 import、返回、聚合清理和
+动态 `apply` 仍未完成。
+
+最终代码的严格构建和非 hardware 回归 77／77 通过（193.67 秒），Windows
+ASan／UBSan canonical MoonIR 1／1 通过；WSL Arch Linux Clang 22.1.8
+对改动的后端文件完成语法编译检查。设计状态、file guide inventory 与差异
+检查通过；这些是本地验证，不代表远端 CI 或稳定发布批准。
+
 ## 宿主控制的发现与注入
 
 目标指向 exported Slot 的 exported Fragment，凭名义关系成为候选；metadata 不授予

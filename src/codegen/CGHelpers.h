@@ -8,9 +8,11 @@
 #include <unordered_map>
 #include <string>
 
-namespace moon { struct DeclarationRef; }
-
-enum class RuntimeFragmentRefIngressMode { Borrowed, Owned };
+namespace moon {
+struct DeclarationRef;
+struct FunctionDecl;
+struct Module;
+}
 
 class CGHelpers {
 public:
@@ -40,13 +42,13 @@ public:
         llvm::Value* sourceCell, llvm::Value* destinationCell,
         const moon::DeclarationRef& target,
         llvm::BasicBlock* bodyEntry) const;
-    // Internal one-Ref, unit-result wrapper. The body must already obey its
-    // verified borrow/ownership contract; no source ABI is published here.
+    // Internal one-Ref, unit-result wrapper. Mode and target come only from
+    // the frozen source signature and independently verified canonical CFG.
+    // This does not publish a source ABI or authenticate arbitrary LLVM code.
     llvm::Function* emitRuntimeFragmentRefUnitIngressWrapper(
         llvm::Module& module, llvm::Function& body,
-        const moon::DeclarationRef& target,
-        RuntimeFragmentRefIngressMode mode,
-        bool hasFragmentContext,
+        const moon::Module& sourceModule,
+        const moon::FunctionDecl& sourceFunction,
         const std::string& name) const;
     llvm::Type* i32Ty() const { return llvm::Type::getInt32Ty(mCtx); }
     llvm::Type* i64Ty() const { return llvm::Type::getInt64Ty(mCtx); }

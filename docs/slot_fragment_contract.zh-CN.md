@@ -62,7 +62,7 @@ Contract，并不意味着 Luna 已有可传递的 `RuntimeFragmentRef<S>` 类�
 | 边界 | 状态 | 已有证据／实际剩余项 |
 | --- | --- | --- |
 | `host-ref` | `implemented` | C++ move-only 引用、owned／borrowed 环境、factory／cleanup、generation pin 及已校验的 native 拥有 carrier 转移；`luna.runtime-fragment-v1`。 |
-| `source-ref-apply` | `implementation-open` | Native singleton handle／校验／Drop／transfer 桥、源码 `RuntimeFragmentRef<S>` 类型拼写／名义约束检查、内部 LLVM Ref Drop／局部转移／冻结目标解析与借用／拥有入口调用、状态分支及私有单 Ref／unit 返回 wrapper 原型已实现。生成源码签名／import／参数／返回接线、所有权配对验证、完整 compiler dropGlue、wire round-trip、运行时 operand 与端到端门仍未完成，内部 Ref 暂禁止发布；见实施切片。 |
+| `source-ref-apply` | `implementation-open` | Native singleton handle／校验／Drop／transfer 桥、源码 `RuntimeFragmentRef<S>` 拼写／名义检查、LLVM Ref Drop／局部转移及私有单 Ref／unit 返回 wrapper 已实现。wrapper 模式与目标现由冻结源码函数类型、sealed CFG 参数／Drop 事实及独立复算的 context effect 推导。真实生成函数体配对、源码签名／import／参数／返回发布、完整 compiler dropGlue、wire round-trip、运行时 operand 与端到端门仍未完成，内部 Ref 暂禁止发布；见实施切片。 |
 | `candidate-snapshot` | `implemented` | `snapshotRuntimeFragmentCandidates(generation, slot, ...)` 按精确 Slot／Contract 过滤显式给定的单个 generation，快照不可变且固定 generation；不是所有已加载包的全局查询。 |
 | `candidate-aggregation` | `host-managed` | 宿主知道自己加载的包并可组合各 generation 的候选；Runtime 没有内建全局候选集合或跨 generation 聚合查询。便利 API 是后续范围选择，不是当前热路径缺陷。 |
 | `candidate-notification` | `host-managed` | 加载／激活结果和 generation identity 供宿主观察；没有内建候选变化事件总线，不自动发现、排序、选胜者或注入。 |

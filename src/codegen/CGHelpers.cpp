@@ -1,9 +1,12 @@
 #include "CGHelpers.h"
 #include "../core/TypeLayout.h"
-#include "../moonir/MoonIRTypes.h"
+#include "../core/TypeRelations.h"
+#include "../moonir/FragmentContextEffects.h"
+#include "../moonir/Verifier.h"
 #include "../runtime/RuntimeFragmentABI.h"
 
 #include <algorithm>
+#include <optional>
 #include <vector>
 
 CGHelpers::CGHelpers(llvm::LLVMContext& ctx) : mCtx(ctx) {}
@@ -194,18 +197,151 @@ llvm::CallInst* CGHelpers::emitRuntimeFragmentRefOwnedIngressGate(
     return status;
 }
 
+namespace {
+
+struct RefUnitIngressPlan {
+    moon::DeclarationRef target;
+    bool owned = false;
+    bool hasFragmentContext = false;
+};
+
+std::optional<RefUnitIngressPlan> resolveRefUnitIngressPlan(
+    const moon::Module& module, const moon::FunctionDecl& function) {
+    if (!module.typeTableSealed || function.isExtern || function.isKernel ||
+        function.isSelector || !function.typeParams.empty() ||
+        function.generatedSymbolName.empty() || !function.linkName.empty() ||
+        function.params.size() != 1 || function.body ||
+        !function.controlFlow || !function.controlFlow->sealed)
+        return std::nullopt;
+    const bool member = std::any_of(
+        module.declarations.begin(), module.declarations.end(),
+        [&function](const auto& declaration) {
+            return declaration.get() == &function;
+        });
+    if (!member) return std::nullopt;
+    const auto& parameter = function.params.front();
+    const auto target = module.resolveRuntimeFragmentRefTarget(parameter.type);
+    const auto* refType = module.findType(parameter.type);
+    const auto* returnType = module.findType(function.returnType);
+    if (!target || !refType || !returnType ||
+        returnType->kind != TypeKind::Unit ||
+        function.returnUsage != luna::ownership::Usage::Copy ||
+        function.returnsLinear ||
+        refType->sysmeta.resource.management !=
+            luna::sysmeta::ResourceManagement::Unique ||
+        refType->sysmeta.resource.releaseDomain !=
+            luna::sysmeta::ReleaseDomain::Executable ||
+        refType->sysmeta.resource.lifetime !=
+            luna::sysmeta::ResourceLifetime::Lexical ||
+        refType->sysmeta.resource.relation !=
+            luna::ownership::Relation::Owned ||
+        refType->sysmeta.resource.usage !=
+            luna::ownership::Usage::Affine ||
+        !refType->sysmeta.resource.cleanupRequired ||
+        !refType->sysmeta.resource.needsDrop ||
+        refType->sysmeta.resource.cleanup !=
+            luna::ownership::CleanupAction::Drop ||
+        !refType->sysmeta.capability.hostOnly ||
+        parameter.isLinear ||
+        (parameter.relation == luna::ownership::Relation::SharedBorrow
+            ? parameter.usage != luna::ownership::Usage::Copy
+            : parameter.relation != luna::ownership::Relation::Owned ||
+              parameter.usage != luna::ownership::Usage::Affine))
+        return std::nullopt;
+
+    const auto* record = module.findDeclarationById(function.declarationId);
+    const auto* callable = record ? module.findType(record->type) : nullptr;
+    moon::TypeMaterializer materializer(module);
+    const TypePtr restoredCallable = callable
+        ? materializer.materialize(record->type) : nullptr;
+    if (!record || record->kind != moon::DeclarationKind::Function ||
+        record->id != function.declarationId ||
+        record->symbolId != luna::identity::symbolIdFromCanonical(record->id) ||
+        record->symbolId != function.symbolId ||
+        record->contractId != function.contractId ||
+        record->sysmeta.identity.symbol != record->symbolId ||
+        record->sysmeta.identity.contract != record->contractId ||
+        record->linkageName != function.generatedSymbolName ||
+        record->canonicalContract != moon::canonicalContract(*record) ||
+        record->contractId != luna::identity::contractIdFromCanonical(
+            record->canonicalContract) ||
+        !callable || callable->kind != TypeKind::Function ||
+        !restoredCallable ||
+        luna::types::typeId(restoredCallable) != callable->id ||
+        luna::types::canonicalType(restoredCallable) !=
+            callable->canonicalType ||
+        callable->parameterTypeIds.size() != 1 ||
+        callable->parameterTypeIds.front() != parameter.type ||
+        callable->returnTypeId != function.returnType ||
+        callable->returnContract != luna::ownership::Contract{
+            luna::ownership::Relation::Owned, function.returnUsage} ||
+        callable->parameterContracts.size() != 1 ||
+        callable->parameterContracts.front() !=
+            luna::ownership::Contract{parameter.relation, parameter.usage} ||
+        record->sysmeta.resource.parameters.size() != 1 ||
+        record->sysmeta.resource.parameters.front() !=
+            callable->parameterContracts.front() ||
+        record->sysmeta.resource.result != callable->returnContract)
+        return std::nullopt;
+
+    const auto& graph = *function.controlFlow;
+    const auto* root = graph.findRegion(graph.rootRegion);
+    if (!root || root->kind != moon::RegionKind::Function)
+        return std::nullopt;
+    const moon::LocalRecord* parameterLocal = nullptr;
+    for (const auto& local : graph.locals) {
+        if (local.kind != moon::LocalKind::Parameter) continue;
+        if (parameterLocal) return std::nullopt;
+        parameterLocal = &local;
+    }
+    if (!parameterLocal || parameterLocal->scope != graph.rootScope ||
+        parameterLocal->name != parameter.name ||
+        parameterLocal->type != parameter.type ||
+        parameterLocal->relation != parameter.relation ||
+        parameterLocal->usage != parameter.usage)
+        return std::nullopt;
+    size_t matchingCleanups = 0;
+    for (const auto& cleanup : graph.cleanups) {
+        if (cleanup.place.root != parameterLocal->id) continue;
+        ++matchingCleanups;
+        if (!cleanup.place.projections.empty() || cleanup.guard ||
+            cleanup.scope != graph.rootScope ||
+            cleanup.type != parameter.type ||
+            cleanup.kind != moon::CleanupKind::Value ||
+            cleanup.action != luna::ownership::CleanupAction::Drop)
+            return std::nullopt;
+    }
+    if (matchingCleanups !=
+        (parameter.relation == luna::ownership::Relation::Owned ? 1u : 0u))
+        return std::nullopt;
+    moon::Verifier verifier;
+    if (!verifier.verify(graph, module)) return std::nullopt;
+    const auto effects = moon::computeFragmentContextEffects(module);
+    const auto effect = effects.find(moon::fragmentContextEffectKey(
+        {function.symbolId, function.contractId}));
+    if (function.requiresFragmentContext !=
+        (effect != effects.end() && effect->second))
+        return std::nullopt;
+    return RefUnitIngressPlan{
+        *target,
+        parameter.relation == luna::ownership::Relation::Owned,
+        function.requiresFragmentContext};
+}
+
+} // namespace
+
 llvm::Function* CGHelpers::emitRuntimeFragmentRefUnitIngressWrapper(
     llvm::Module& module, llvm::Function& body,
-    const moon::DeclarationRef& target,
-    RuntimeFragmentRefIngressMode mode,
-    bool hasFragmentContext,
+    const moon::Module& sourceModule,
+    const moon::FunctionDecl& sourceFunction,
     const std::string& name) const {
-    if ((mode != RuntimeFragmentRefIngressMode::Borrowed &&
-         mode != RuntimeFragmentRefIngressMode::Owned) ||
-        !target.complete() || name.empty() || module.getFunction(name) ||
+    const auto plan = resolveRefUnitIngressPlan(sourceModule, sourceFunction);
+    if (!plan || name.empty() || module.getFunction(name) ||
         body.getParent() != &module || body.isVarArg() ||
+        body.getName() != sourceFunction.generatedSymbolName ||
         !body.getReturnType()->isVoidTy() ||
-        body.arg_size() != (hasFragmentContext ? 2u : 1u)) return nullptr;
+        body.arg_size() != (plan->hasFragmentContext ? 2u : 1u))
+        return nullptr;
     for (const auto& argument : body.args()) {
         if (!argument.getType()->isPointerTy()) return nullptr;
     }
@@ -221,17 +357,17 @@ llvm::Function* CGHelpers::emitRuntimeFragmentRefUnitIngressWrapper(
         static_cast<unsigned>(wrapper->arg_size() - 1));
     llvm::Value* reference = incoming;
     llvm::CallInst* status = nullptr;
-    if (mode == RuntimeFragmentRefIngressMode::Owned) {
+    if (plan->owned) {
         auto* destination = builder.CreateAlloca(ptrTy(), nullptr, "ref.owner");
         builder.CreateStore(
             llvm::ConstantPointerNull::get(
                 llvm::cast<llvm::PointerType>(ptrTy())), destination);
         status = emitRuntimeFragmentRefOwnedIngressGate(
-            builder, module, incoming, destination, target, bodyEntry);
+            builder, module, incoming, destination, plan->target, bodyEntry);
         if (status) reference = emitRuntimeFragmentRefTake(builder, destination);
     } else {
         status = emitRuntimeFragmentRefBorrowIngressGate(
-            builder, module, incoming, target, bodyEntry);
+            builder, module, incoming, plan->target, bodyEntry);
     }
     if (!status) {
         wrapper->eraseFromParent();
@@ -239,7 +375,7 @@ llvm::Function* CGHelpers::emitRuntimeFragmentRefUnitIngressWrapper(
     }
 
     std::vector<llvm::Value*> arguments;
-    if (hasFragmentContext) arguments.push_back(wrapper->getArg(0));
+    if (plan->hasFragmentContext) arguments.push_back(wrapper->getArg(0));
     arguments.push_back(reference);
     auto* call = builder.CreateCall(&body, arguments);
     call->setCallingConv(body.getCallingConv());

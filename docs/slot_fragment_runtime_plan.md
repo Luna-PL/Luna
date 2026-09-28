@@ -487,6 +487,33 @@ syntax-compiles the changed backend file. Design status, file-guide inventory
 and diff checks pass. These are local checks, not remote CI or stable-release
 approval.
 
+### Frozen Ref ingress ownership pairing (2026-09-28)
+
+The private one-Ref/unit wrapper no longer accepts a caller-supplied borrow
+or owning mode, target, or context flag. Its construction derives these from
+one actual module Function declaration. It requires a sealed nominal Ref
+target and unit result, an intact frozen Function type and declaration
+contract, a matching single canonical parameter, and a separately verified
+sealed CFG. A shared borrow must have no parameter cleanup; an affine owner
+must have exactly one direct root-scope Drop cleanup. The fragment-context
+effect is independently recomputed from the module call graph before its ABI
+shape is accepted. The LLVM body symbol and pointer arity must match the
+source declaration. Adversarial regression mutates relation, cleanup,
+canonical callable type, Ref resource facts and context effect, and checks
+that no wrapper is created; a mismatched LLVM body name is also rejected.
+
+This establishes an internal ownership-selection proof, not proof that an
+arbitrary supplied LLVM body implements that CFG. CodeGenerator has not yet
+paired the helper with its own generated body or published a descriptor;
+MoonIR/backend/container Ref gates remain closed. Source import, return,
+aggregate cleanup and dynamic `apply` remain open.
+
+The strict build and all 77 non-hardware gates pass on the final code (193.67
+seconds), as does Windows ASan/UBSan canonical MoonIR (1/1). WSL Arch Linux
+Clang 22.1.8 syntax-compiles the changed backend file. Design status,
+file-guide inventory and diff checks pass. These are local checks, not remote
+CI or stable-release approval.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal
