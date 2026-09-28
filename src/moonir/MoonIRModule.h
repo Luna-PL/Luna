@@ -239,6 +239,10 @@ struct Module {
         const std::string& id) const;
     const DeclarationRecord* findDeclarationByLinkage(
         const std::string& linkage) const;
+    // Resolves only frozen nominal Slot evidence, never a same-shaped type or
+    // an unsealed frontend pointer. This is not host ingress authorization.
+    std::optional<DeclarationRef> resolveRuntimeFragmentRefTarget(
+        const TypeRef& reference) const;
 };
 
 // Backends may materialize their preferred Type graph from canonical records.

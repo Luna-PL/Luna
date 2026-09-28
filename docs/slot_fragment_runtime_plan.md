@@ -390,6 +390,30 @@ seconds); Windows ASan/UBSan canonical MoonIR passes 1/1. Design status,
 inventory and diff checks pass. This is local evidence, not remote CI or stable
 release approval.
 
+### Frozen Ref target resolution (2026-09-28)
+
+`Module::resolveRuntimeFragmentRefTarget(TypeRef)` now resolves an exact
+SymbolId/ContractId from a sealed `RuntimeFragmentRef<S>` inner type and its
+nominal Slot declaration. It rederives Slot/Ref TypeIds and canonical types,
+then checks the declaration type, symbol, canonical contract and sysmeta
+identity. A same-shaped different Slot, mismatched declaration type, forged
+contract or unsealed table is rejected. The regression uses two same-shaped
+Slots from real source lowering and confirms that the Ref publication verifier
+gate remains closed after restoring the table.
+
+This supplies target facts for a future ingress; it does not validate a live
+native handle or change generated functions' raw-pointer ABI. A borrowed host
+parameter needs a read-only `check`; an owned one must validate and transfer
+through distinct carrier cells, not copy a raw pointer and call it owning.
+Ingress error reporting, cross-package evidence, owning return delivery and
+wire round-trip remain unfinished; `source-ref-apply` and MoonIR/container
+gates stay closed.
+
+The local strict build and all 77 non-hardware gates pass (209.57 seconds),
+as does Windows ASan/UBSan canonical MoonIR (1/1). Design status, file-guide
+inventory and diff checks pass. This is not remote CI or stable-release
+approval.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal

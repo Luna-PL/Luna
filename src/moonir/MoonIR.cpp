@@ -356,6 +356,48 @@ const DeclarationRecord* Module::findDeclarationByLinkage(
     return &declarationTable[found->second];
 }
 
+std::optional<DeclarationRef> Module::resolveRuntimeFragmentRefTarget(
+    const TypeRef& reference) const {
+    if (!typeTableSealed) return std::nullopt;
+    const auto* ref = findType(reference);
+    if (!ref || ref->kind != TypeKind::RuntimeFragmentRef ||
+        ref->domain != luna::types::TypeDomain::Value ||
+        ref->identityMode != luna::types::IdentityMode::Structural ||
+        ref->innerTypeId.empty())
+        return std::nullopt;
+    const auto* slotType = findType(ref->innerTypeId);
+    if (!slotType || slotType->kind != TypeKind::Slot ||
+        slotType->domain != luna::types::TypeDomain::Value ||
+        slotType->identityMode != luna::types::IdentityMode::Nominal ||
+        slotType->nominalDeclarationId.empty())
+        return std::nullopt;
+    // Re-derive identity from the frozen nominal edge. A modified innerTypeId
+    // with the same shape must not silently retarget the Ref.
+    auto nominalSlot = Type::makeSlot({});
+    nominalSlot->identityMode = luna::types::IdentityMode::Nominal;
+    nominalSlot->nominalId = slotType->nominalDeclarationId;
+    const auto nominalRef = Type::makeRuntimeFragmentRef(nominalSlot);
+    if (luna::types::typeId(nominalSlot) != slotType->id ||
+        luna::types::canonicalType(nominalSlot) !=
+            slotType->canonicalType ||
+        luna::types::typeId(nominalRef) != ref->id ||
+        luna::types::canonicalType(nominalRef) != ref->canonicalType)
+        return std::nullopt;
+    const auto* slot = findDeclarationById(slotType->nominalDeclarationId);
+    if (!slot || slot->kind != DeclarationKind::Slot ||
+        slot->id != slotType->nominalDeclarationId ||
+        slot->type != ref->innerTypeId ||
+        slot->symbolId.empty() || slot->contractId.empty() ||
+        slot->symbolId != luna::identity::symbolIdFromCanonical(slot->id) ||
+        slot->canonicalContract != canonicalContract(*slot) ||
+        slot->contractId != luna::identity::contractIdFromCanonical(
+            slot->canonicalContract) ||
+        slot->sysmeta.identity.symbol != slot->symbolId ||
+        slot->sysmeta.identity.contract != slot->contractId)
+        return std::nullopt;
+    return DeclarationRef{slot->symbolId, slot->contractId};
+}
+
 TypePtr TypeMaterializer::materialize(const TypeRef& reference) {
     if (reference.empty()) return nullptr;
     if (auto found = mCache.find(reference.value); found != mCache.end())

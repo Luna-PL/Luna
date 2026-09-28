@@ -30,6 +30,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     // are connected. Test the actual frontend -> lowerer -> verifier path.
     auto sourceRefSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "slot checkpoint(value: i32);\n"
+        "slot shadow(value: i32);\n"
         "fn observe(selected: RuntimeFragmentRef<checkpoint>) -> unit {}\n",
         "<canonical-source-ref-gate>");
     if (!sourceRefSnapshot.success())
@@ -39,6 +40,67 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         *sourceRefSnapshot.program(), *sourceRefSnapshot.symbolTable());
     if (!sourceRefModule || !sourceRefLowerer.errors().empty())
         return fail("source Ref type did not lower into private MoonIR preparation");
+    const moon::FunctionDecl* observe = nullptr;
+    const moon::SlotDecl* shadow = nullptr;
+    for (const auto& declaration : sourceRefModule->declarations) {
+        if (const auto* function = dynamic_cast<const moon::FunctionDecl*>(
+                declaration.get()); function && function->name == "observe")
+            observe = function;
+        if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
+                declaration.get()); slot && slot->name == "shadow")
+            shadow = slot;
+    }
+    if (!observe || observe->params.size() != 1 || !shadow)
+        return fail("source Ref target fixture has no frozen function/Slot");
+    const auto refId = observe->params.front().type;
+    auto* refRecord = const_cast<moon::TypeRecord*>(
+        sourceRefModule->findType(refId));
+    const auto* slotType = refRecord
+        ? sourceRefModule->findType(refRecord->innerTypeId) : nullptr;
+    auto* slotRecord = slotType
+        ? const_cast<moon::DeclarationRecord*>(
+              sourceRefModule->findDeclarationById(
+                  slotType->nominalDeclarationId)) : nullptr;
+    const auto* shadowRecord = sourceRefModule->findDeclarationById(
+        shadow->declarationId);
+    const auto target = sourceRefModule->resolveRuntimeFragmentRefTarget(refId);
+    if (!refRecord || !slotRecord || !shadowRecord || !target ||
+        target->symbol != slotRecord->symbolId ||
+        target->contract != slotRecord->contractId ||
+        sourceRefModule->resolveRuntimeFragmentRefTarget(shadowRecord->type))
+        return fail("frozen Ref target did not resolve one exact nominal Slot contract");
+    sourceRefModule->typeTableSealed = false;
+    if (sourceRefModule->resolveRuntimeFragmentRefTarget(refId))
+        return fail("unsealed Ref type table supplied a runtime target");
+    sourceRefModule->typeTableSealed = true;
+    const auto originalInner = refRecord->innerTypeId;
+    refRecord->innerTypeId = shadowRecord->type;
+    if (sourceRefModule->resolveRuntimeFragmentRefTarget(refId))
+        return fail("same-shaped Slot substitution retargeted a frozen Ref");
+    refRecord->innerTypeId = originalInner;
+    const auto originalContract = slotRecord->contractId;
+    slotRecord->contractId = luna::identity::contractIdFromCanonical(
+        "forged slot contract");
+    if (sourceRefModule->resolveRuntimeFragmentRefTarget(refId))
+        return fail("frozen Ref accepted a forged Slot contract");
+    slotRecord->contractId = originalContract;
+    const auto originalCanonicalContract = slotRecord->canonicalContract;
+    slotRecord->canonicalContract = "forged slot contract";
+    slotRecord->contractId = luna::identity::contractIdFromCanonical(
+        slotRecord->canonicalContract);
+    slotRecord->sysmeta.identity.contract = slotRecord->contractId;
+    if (sourceRefModule->resolveRuntimeFragmentRefTarget(refId))
+        return fail("frozen Ref accepted a self-consistent forged contract string");
+    slotRecord->canonicalContract = originalCanonicalContract;
+    slotRecord->contractId = originalContract;
+    slotRecord->sysmeta.identity.contract = originalContract;
+    const auto originalType = slotRecord->type;
+    slotRecord->type = shadowRecord->type;
+    if (sourceRefModule->resolveRuntimeFragmentRefTarget(refId))
+        return fail("frozen Ref accepted a Slot declaration/type mismatch");
+    slotRecord->type = originalType;
+    if (!sourceRefModule->resolveRuntimeFragmentRefTarget(refId))
+        return fail("frozen Ref target did not recover after rejected mutations");
     if (verifier.verify(*sourceRefModule) ||
         !std::any_of(verifier.errors().begin(), verifier.errors().end(),
             [](const auto& error) {

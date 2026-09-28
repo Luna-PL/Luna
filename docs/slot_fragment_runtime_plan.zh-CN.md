@@ -311,6 +311,25 @@ SlotId／sealed ContractId 或消费宿主 carrier cell；借用与拥有参数�
 ASan／UBSan canonical MoonIR 1／1 通过。设计状态、inventory 和差异检查通过。
 这是本地验证，不代表远端 CI 或稳定发布批准。
 
+### 冻结 Ref 目标解析（2026-09-28）
+
+新增 `Module::resolveRuntimeFragmentRefTarget(TypeRef)`，仅在类型表已封存时从
+`RuntimeFragmentRef<S>` 的冻结 inner type 找到同一名义 Slot 声明，返回精确
+SymbolId／ContractId。它重新推导 Slot 和 Ref 的 TypeId／canonical type，核对
+声明类型、symbol、canonical contract 与 sysmeta identity；同形异槽替换、
+错误声明类型、伪造 contract 或未封存表均拒绝。回归使用真实源码 lowering 的
+两座同形 Slot，并在恢复原表后继续确认 verifier 仍禁止 Ref 发布。
+
+这只解决未来入口需要的目标事实，不验证任何 live native handle，也不改变生成
+函数的裸 pointer ABI。借用参数需要在宿主边界只读 `check`；拥有参数必须通过
+独立 carrier cell 进行校验后转移，不能先复制裸 pointer 再称为 owning。
+入口错误的报告方式、跨包证据、返回交付和 wire round-trip 尚未完成；
+`source-ref-apply` 与 MoonIR／container 门禁保持原状。
+
+本地严格构建及非 hardware 回归 77／77 通过（209.57 秒），Windows
+ASan／UBSan canonical MoonIR 1／1 通过；设计状态、file guide inventory 和
+差异检查通过。这不代表远端 CI 或稳定发布批准。
+
 ## 宿主控制的发现与注入
 
 目标指向 exported Slot 的 exported Fragment，凭名义关系成为候选；metadata 不授予
