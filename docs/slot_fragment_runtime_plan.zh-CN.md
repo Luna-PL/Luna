@@ -368,6 +368,26 @@ canonical MoonIR 1／1 通过；WSL Arch Linux Clang 22.1.8 对改动的后端�
 完成语法编译检查。设计状态、file guide inventory 与差异检查通过；这些是本地
 验证，不代表远端 CI 或稳定发布批准。
 
+### 私有单 Ref 宿主 wrapper 原型（2026-09-28）
+
+内部 LLVM emitter 现在可围绕 `void` 函数体生成完整的状态返回 wrapper：函数体
+只有一个 Ref 参数，可选一个显式前置 Fragment execution context。借用入口检查
+live handle；拥有入口先把宿主 carrier 转入初始为空的私有 cell，再在调用函数体前
+读取并清空该 cell，把唯一句柄交给函数体。校验／转移失败原样返回 Runtime 状态，
+不调用函数体，也不改变调用方拥有型 carrier。wrapper 仍为 internal linkage，
+不进入 Runtime descriptor。IR 回归核对函数体调用、context 透传、owner cell
+清空、失败分支、冻结目标以及无效目标／context／名字的拒绝。
+
+此原型本身不能证明被调用方 CFG 会按借用或拥有关系处理 Ref 参数并执行相应
+cleanup。发布前仍须完成该证明、真实源码声明接线、返回 ABI 与跨包执行。
+MoonIR／后端／container 门禁保持关闭，`source-ref-apply` 仍为
+implementation-open。
+
+严格构建和非 hardware 回归 77／77 通过（201.50 秒），Windows ASan／UBSan
+canonical MoonIR 1／1 通过；WSL Arch Linux Clang 22.1.8 对改动的后端文件
+完成语法编译检查。设计状态、file guide inventory 与差异检查通过；这些是本地
+验证，不代表远端 CI 或稳定发布批准。
+
 ## 宿主控制的发现与注入
 
 目标指向 exported Slot 的 exported Fragment，凭名义关系成为候选；metadata 不授予

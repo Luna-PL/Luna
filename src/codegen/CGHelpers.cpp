@@ -194,6 +194,60 @@ llvm::CallInst* CGHelpers::emitRuntimeFragmentRefOwnedIngressGate(
     return status;
 }
 
+llvm::Function* CGHelpers::emitRuntimeFragmentRefUnitIngressWrapper(
+    llvm::Module& module, llvm::Function& body,
+    const moon::DeclarationRef& target,
+    RuntimeFragmentRefIngressMode mode,
+    bool hasFragmentContext,
+    const std::string& name) const {
+    if ((mode != RuntimeFragmentRefIngressMode::Borrowed &&
+         mode != RuntimeFragmentRefIngressMode::Owned) ||
+        !target.complete() || name.empty() || module.getFunction(name) ||
+        body.getParent() != &module || body.isVarArg() ||
+        !body.getReturnType()->isVoidTy() ||
+        body.arg_size() != (hasFragmentContext ? 2u : 1u)) return nullptr;
+    for (const auto& argument : body.args()) {
+        if (!argument.getType()->isPointerTy()) return nullptr;
+    }
+
+    std::vector<llvm::Type*> parameters(body.arg_size(), ptrTy());
+    auto* wrapper = llvm::Function::Create(
+        llvm::FunctionType::get(i32Ty(), parameters, false),
+        llvm::Function::InternalLinkage, name, module);
+    auto* entry = llvm::BasicBlock::Create(mCtx, "entry", wrapper);
+    auto* bodyEntry = llvm::BasicBlock::Create(mCtx, "ref.body", wrapper);
+    llvm::IRBuilder<> builder(entry);
+    auto* incoming = wrapper->getArg(
+        static_cast<unsigned>(wrapper->arg_size() - 1));
+    llvm::Value* reference = incoming;
+    llvm::CallInst* status = nullptr;
+    if (mode == RuntimeFragmentRefIngressMode::Owned) {
+        auto* destination = builder.CreateAlloca(ptrTy(), nullptr, "ref.owner");
+        builder.CreateStore(
+            llvm::ConstantPointerNull::get(
+                llvm::cast<llvm::PointerType>(ptrTy())), destination);
+        status = emitRuntimeFragmentRefOwnedIngressGate(
+            builder, module, incoming, destination, target, bodyEntry);
+        if (status) reference = emitRuntimeFragmentRefTake(builder, destination);
+    } else {
+        status = emitRuntimeFragmentRefBorrowIngressGate(
+            builder, module, incoming, target, bodyEntry);
+    }
+    if (!status) {
+        wrapper->eraseFromParent();
+        return nullptr;
+    }
+
+    std::vector<llvm::Value*> arguments;
+    if (hasFragmentContext) arguments.push_back(wrapper->getArg(0));
+    arguments.push_back(reference);
+    auto* call = builder.CreateCall(&body, arguments);
+    call->setCallingConv(body.getCallingConv());
+    builder.CreateRet(llvm::ConstantInt::get(
+        i32Ty(), LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1));
+    return wrapper;
+}
+
 uint64_t typeSize(const TypePtr& type) {
     if (!type) return 0;
     switch (type->kind) {

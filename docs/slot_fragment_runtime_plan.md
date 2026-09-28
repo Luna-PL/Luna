@@ -462,6 +462,31 @@ syntax-compiles the changed backend file. Design status, file-guide inventory
 and diff checks pass. These are local checks, not remote CI or stable-release
 approval.
 
+### Private one-Ref host wrapper prototype (2026-09-28)
+
+An internal LLVM emitter now constructs a complete status-returning wrapper
+around a `void` body with one Ref parameter and, optionally, one explicit
+leading Fragment execution context. Borrowed ingress checks the live handle;
+owned ingress transfers the host carrier into an initially empty private cell,
+then takes and clears that cell immediately before passing the sole handle to
+the body. A failed check/transfer returns the exact Runtime status without
+calling the body or changing the caller's owning carrier. The wrapper remains
+internal-linkage and is not put into a runtime descriptor. IR regression
+checks the body calls, context forwarding, owner-cell clearing, failure
+branches, frozen target and rejection of invalid target/context/name shapes.
+
+This prototype does not itself prove that the callee's CFG treats its Ref
+parameter as borrowed or owned and runs the matching cleanup. That proof,
+actual source declaration wiring, return ABI and cross-package execution are
+required before publication. The MoonIR/backend/container gates remain closed
+and `source-ref-apply` remains implementation-open.
+
+The strict build and all 77 non-hardware gates pass (201.50 seconds), as does
+Windows ASan/UBSan canonical MoonIR (1/1). WSL Arch Linux Clang 22.1.8
+syntax-compiles the changed backend file. Design status, file-guide inventory
+and diff checks pass. These are local checks, not remote CI or stable-release
+approval.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal

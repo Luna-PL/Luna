@@ -10,6 +10,8 @@
 
 namespace moon { struct DeclarationRef; }
 
+enum class RuntimeFragmentRefIngressMode { Borrowed, Owned };
+
 class CGHelpers {
 public:
     explicit CGHelpers(llvm::LLVMContext& ctx);
@@ -38,6 +40,14 @@ public:
         llvm::Value* sourceCell, llvm::Value* destinationCell,
         const moon::DeclarationRef& target,
         llvm::BasicBlock* bodyEntry) const;
+    // Internal one-Ref, unit-result wrapper. The body must already obey its
+    // verified borrow/ownership contract; no source ABI is published here.
+    llvm::Function* emitRuntimeFragmentRefUnitIngressWrapper(
+        llvm::Module& module, llvm::Function& body,
+        const moon::DeclarationRef& target,
+        RuntimeFragmentRefIngressMode mode,
+        bool hasFragmentContext,
+        const std::string& name) const;
     llvm::Type* i32Ty() const { return llvm::Type::getInt32Ty(mCtx); }
     llvm::Type* i64Ty() const { return llvm::Type::getInt64Ty(mCtx); }
     llvm::Type* f32Ty() const { return llvm::Type::getFloatTy(mCtx); }

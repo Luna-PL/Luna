@@ -206,6 +206,87 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     bridgeBuilder.SetInsertPoint(wrongStatusBody);
     bridgeBuilder.CreateRetVoid();
 
+    auto* borrowedBodyFunction = llvm::Function::Create(
+        llvm::FunctionType::get(
+            bridgeHelpers.voidTy(), {bridgeHelpers.ptrTy()}, false),
+        llvm::Function::InternalLinkage, "borrowed_ref_body", bridgeModule);
+    bridgeBuilder.SetInsertPoint(llvm::BasicBlock::Create(
+        bridgeContext, "entry", borrowedBodyFunction));
+    bridgeBuilder.CreateRetVoid();
+    auto* owningBodyFunction = llvm::Function::Create(
+        llvm::FunctionType::get(bridgeHelpers.voidTy(),
+            {bridgeHelpers.ptrTy(), bridgeHelpers.ptrTy()}, false),
+        llvm::Function::InternalLinkage, "owning_ref_body", bridgeModule);
+    bridgeBuilder.SetInsertPoint(llvm::BasicBlock::Create(
+        bridgeContext, "entry", owningBodyFunction));
+    auto* bodyOwner = bridgeBuilder.CreateAlloca(bridgeHelpers.ptrTy());
+    bridgeBuilder.CreateStore(owningBodyFunction->getArg(1), bodyOwner);
+    bridgeHelpers.emitRuntimeFragmentRefDrop(
+        bridgeBuilder, bridgeModule, bodyOwner);
+    bridgeBuilder.CreateRetVoid();
+    auto* generatedBorrowWrapper =
+        bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
+            bridgeModule, *borrowedBodyFunction, *target,
+            RuntimeFragmentRefIngressMode::Borrowed, false,
+            "borrowed_ref_host_entry");
+    auto* generatedOwnedWrapper =
+        bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
+            bridgeModule, *owningBodyFunction, *target,
+            RuntimeFragmentRefIngressMode::Owned, true,
+            "owning_ref_host_entry");
+    if (bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
+            bridgeModule, *borrowedBodyFunction, {},
+            RuntimeFragmentRefIngressMode::Borrowed, false,
+            "bad_ref_host_entry") ||
+        bridgeModule.getFunction("bad_ref_host_entry") ||
+        bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
+            bridgeModule, *borrowedBodyFunction, *target,
+            RuntimeFragmentRefIngressMode::Borrowed, false,
+            "borrowed_ref_host_entry") ||
+        bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
+            bridgeModule, *borrowedBodyFunction, *target,
+            RuntimeFragmentRefIngressMode::Borrowed, true,
+            "bad_context_ref_host_entry") ||
+        bridgeModule.getFunction("bad_context_ref_host_entry"))
+        return fail("LLVM Ref host wrapper accepted an invalid target or name");
+
+    const auto findCallTo = [](llvm::Function* function,
+                               llvm::Function* callee) -> llvm::CallInst* {
+        if (!function) return nullptr;
+        for (auto& block : *function) {
+            for (auto& instruction : block) {
+                if (auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
+                    call && call->getCalledFunction() == callee)
+                    return call;
+            }
+        }
+        return nullptr;
+    };
+    auto* generatedBorrowCall = findCallTo(
+        generatedBorrowWrapper, borrowedBodyFunction);
+    auto* generatedOwnedCall = findCallTo(
+        generatedOwnedWrapper, owningBodyFunction);
+    auto* ownedTake = generatedOwnedCall
+        ? llvm::dyn_cast<llvm::LoadInst>(
+              generatedOwnedCall->getArgOperand(1)) : nullptr;
+    auto* clearedOwner = ownedTake
+        ? llvm::dyn_cast<llvm::StoreInst>(ownedTake->getNextNode()) : nullptr;
+    if (!generatedBorrowWrapper || !generatedOwnedWrapper ||
+        !generatedBorrowWrapper->hasInternalLinkage() ||
+        !generatedOwnedWrapper->hasInternalLinkage() ||
+        generatedBorrowWrapper->arg_size() != 1 ||
+        generatedOwnedWrapper->arg_size() != 2 ||
+        !generatedBorrowCall || !generatedOwnedCall ||
+        generatedBorrowCall->getArgOperand(0) !=
+            generatedBorrowWrapper->getArg(0) ||
+        generatedOwnedCall->getArgOperand(0) !=
+            generatedOwnedWrapper->getArg(0) ||
+        !ownedTake || !clearedOwner ||
+        !llvm::isa<llvm::AllocaInst>(ownedTake->getPointerOperand()) ||
+        clearedOwner->getPointerOperand() != ownedTake->getPointerOperand() ||
+        !llvm::isa<llvm::ConstantPointerNull>(clearedOwner->getValueOperand()))
+        return fail("LLVM Ref host wrapper copied an owner or lost its context");
+
     const auto gatesBodyOnSuccess = [](const llvm::CallInst* status,
                                        const llvm::BasicBlock* body) {
         if (!status) return false;
@@ -223,6 +304,21 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             llvm::cast<llvm::ConstantInt>(accepted->getOperand(1))->isZero() &&
             failed && failed->getReturnValue() == status;
     };
+    auto* generatedBorrowStatus = findCallTo(
+        generatedBorrowWrapper,
+        bridgeModule.getFunction("luna_runtime_fragment_ref_check_v1"));
+    auto* generatedOwnedStatus = findCallTo(
+        generatedOwnedWrapper,
+        bridgeModule.getFunction("luna_runtime_fragment_ref_transfer_v1"));
+    const auto returnsSuccessAfterBody = [](const llvm::CallInst* call) {
+        const auto* returned = call
+            ? llvm::dyn_cast_or_null<llvm::ReturnInst>(call->getNextNode())
+            : nullptr;
+        const auto* status = returned
+            ? llvm::dyn_cast<llvm::ConstantInt>(returned->getReturnValue())
+            : nullptr;
+        return status && status->isZero();
+    };
     if (!borrowCheck || !ownedTransfer ||
         !borrowCheck->getCalledFunction() ||
         borrowCheck->getCalledFunction()->getName() !=
@@ -239,6 +335,18 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !carriesIdentity(ownedTransfer, 2, target->contract.value) ||
         !gatesBodyOnSuccess(borrowStatus, borrowBody) ||
         !gatesBodyOnSuccess(ownedStatus, ownedBody) ||
+        !gatesBodyOnSuccess(generatedBorrowStatus,
+            generatedBorrowCall->getParent()) ||
+        !gatesBodyOnSuccess(generatedOwnedStatus,
+            generatedOwnedCall->getParent()) ||
+        !returnsSuccessAfterBody(generatedBorrowCall) ||
+        !returnsSuccessAfterBody(generatedOwnedCall) ||
+        generatedOwnedStatus->getArgOperand(0) !=
+            generatedOwnedWrapper->getArg(1) ||
+        generatedOwnedStatus->getArgOperand(3) !=
+            ownedTake->getPointerOperand() ||
+        !carriesIdentity(generatedBorrowStatus, 1, target->symbol.value) ||
+        !carriesIdentity(generatedOwnedStatus, 2, target->contract.value) ||
         ownedStatus->getArgOperand(0) != ownedWrapper->getArg(0) ||
         ownedStatus->getArgOperand(3) != ownedCell ||
         !carriesIdentity(borrowStatus, 1, target->symbol.value) ||
