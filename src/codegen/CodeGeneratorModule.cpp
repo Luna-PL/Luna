@@ -55,6 +55,20 @@ std::unique_ptr<llvm::TargetMachine> createHostOptimizationTarget(
 } // namespace
 
 bool CodeGenerator::generate(moon::Module* program) {
+    if (!program) {
+        error("code generation has no MoonIR module");
+        return false;
+    }
+    for (const auto& type : program->typeTable) {
+        if (type.kind != TypeKind::RuntimeFragmentRef) continue;
+        if (!program->resolveRuntimeFragmentRefTarget(type.id)) {
+            error("RuntimeFragmentRef has no frozen nominal Slot/Contract target");
+        } else {
+            error("RuntimeFragmentRef host ingress/return ABI is not implemented; "
+                  "raw-pointer function publication is blocked");
+        }
+        return false;
+    }
     mProgram = program;
     mHostTargetMachine.reset();
     mTypeMaterializer = std::make_unique<moon::TypeMaterializer>(*program);

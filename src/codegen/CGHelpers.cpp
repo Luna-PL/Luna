@@ -1,5 +1,6 @@
 #include "CGHelpers.h"
 #include "../core/TypeLayout.h"
+#include "../moonir/MoonIRTypes.h"
 
 #include <algorithm>
 #include <vector>
@@ -100,6 +101,40 @@ llvm::Value* CGHelpers::emitRuntimeFragmentRefTake(
         llvm::ConstantPointerNull::get(
             llvm::cast<llvm::PointerType>(ptrTy())), carrierCell);
     return value;
+}
+
+llvm::CallInst* CGHelpers::emitRuntimeFragmentRefBorrowCheck(
+    llvm::IRBuilder<>& builder, llvm::Module& module,
+    llvm::Value* reference, const moon::DeclarationRef& target) const {
+    if (!target.complete() || !reference ||
+        !reference->getType()->isPointerTy()) return nullptr;
+    auto check = module.getOrInsertFunction(
+        "luna_runtime_fragment_ref_check_v1", i32Ty(),
+        ptrTy(), ptrTy(), ptrTy());
+    return builder.CreateCall(check, {
+        reference,
+        builder.CreateGlobalString(target.symbol.value, "ref.target.slot"),
+        builder.CreateGlobalString(target.contract.value, "ref.target.contract"),
+    });
+}
+
+llvm::CallInst* CGHelpers::emitRuntimeFragmentRefOwnedTransfer(
+    llvm::IRBuilder<>& builder, llvm::Module& module,
+    llvm::Value* sourceCell, llvm::Value* destinationCell,
+    const moon::DeclarationRef& target) const {
+    if (!target.complete() || !sourceCell || !destinationCell ||
+        sourceCell == destinationCell ||
+        !sourceCell->getType()->isPointerTy() ||
+        !destinationCell->getType()->isPointerTy()) return nullptr;
+    auto transfer = module.getOrInsertFunction(
+        "luna_runtime_fragment_ref_transfer_v1", i32Ty(),
+        ptrTy(), ptrTy(), ptrTy(), ptrTy());
+    return builder.CreateCall(transfer, {
+        sourceCell,
+        builder.CreateGlobalString(target.symbol.value, "ref.target.slot"),
+        builder.CreateGlobalString(target.contract.value, "ref.target.contract"),
+        destinationCell,
+    });
 }
 
 uint64_t typeSize(const TypePtr& type) {

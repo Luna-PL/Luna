@@ -8,6 +8,8 @@
 #include <unordered_map>
 #include <string>
 
+namespace moon { struct DeclarationRef; }
+
 class CGHelpers {
 public:
     explicit CGHelpers(llvm::LLVMContext& ctx);
@@ -18,6 +20,13 @@ public:
         llvm::Value* carrierCell) const;
     llvm::Value* emitRuntimeFragmentRefTake(
         llvm::IRBuilder<>& builder, llvm::Value* carrierCell) const;
+    llvm::CallInst* emitRuntimeFragmentRefBorrowCheck(
+        llvm::IRBuilder<>& builder, llvm::Module& module,
+        llvm::Value* reference, const moon::DeclarationRef& target) const;
+    llvm::CallInst* emitRuntimeFragmentRefOwnedTransfer(
+        llvm::IRBuilder<>& builder, llvm::Module& module,
+        llvm::Value* sourceCell, llvm::Value* destinationCell,
+        const moon::DeclarationRef& target) const;
     llvm::Type* i32Ty() const { return llvm::Type::getInt32Ty(mCtx); }
     llvm::Type* i64Ty() const { return llvm::Type::getInt64Ty(mCtx); }
     llvm::Type* f32Ty() const { return llvm::Type::getFloatTy(mCtx); }

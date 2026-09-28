@@ -16,6 +16,8 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <llvm/IR/Constants.h>
+#include <llvm/IR/Verifier.h>
 
 namespace canonical_test {
 
@@ -109,6 +111,66 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                     std::string::npos;
             }))
         return fail("source Ref passed executable publication before its full bridge");
+    CodeGenerator blockedRefCodegen("canonical-source-ref-codegen-gate");
+    if (blockedRefCodegen.generate(sourceRefModule.get()) ||
+        !std::any_of(blockedRefCodegen.errors().begin(),
+            blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "raw-pointer function publication is blocked") !=
+                    std::string::npos;
+            }))
+        return fail("direct codegen bypassed the unimplemented Ref host ingress ABI");
+
+    llvm::LLVMContext bridgeContext;
+    CGHelpers bridgeHelpers(bridgeContext);
+    llvm::Module bridgeModule("canonical.ref_ingress_preparation", bridgeContext);
+    auto* bridgeFunction = llvm::Function::Create(
+        llvm::FunctionType::get(
+            bridgeHelpers.voidTy(),
+            {bridgeHelpers.ptrTy(), bridgeHelpers.ptrTy()}, false),
+        llvm::Function::ExternalLinkage, "test_ref_ingress", bridgeModule);
+    auto* bridgeEntry = llvm::BasicBlock::Create(
+        bridgeContext, "entry", bridgeFunction);
+    llvm::IRBuilder<> bridgeBuilder(bridgeEntry);
+    auto* sourceCell = bridgeFunction->getArg(0);
+    auto* destinationCell = bridgeFunction->getArg(1);
+    auto* borrowed = bridgeBuilder.CreateLoad(
+        bridgeHelpers.ptrTy(), sourceCell, "borrowed.ref");
+    auto* borrowCheck = bridgeHelpers.emitRuntimeFragmentRefBorrowCheck(
+        bridgeBuilder, bridgeModule, borrowed, *target);
+    auto* ownedTransfer = bridgeHelpers.emitRuntimeFragmentRefOwnedTransfer(
+        bridgeBuilder, bridgeModule, sourceCell, destinationCell, *target);
+    if (bridgeHelpers.emitRuntimeFragmentRefBorrowCheck(
+            bridgeBuilder, bridgeModule, borrowed, {}) ||
+        bridgeHelpers.emitRuntimeFragmentRefOwnedTransfer(
+            bridgeBuilder, bridgeModule, sourceCell, sourceCell, *target))
+        return fail("LLVM Ref ingress accepted an incomplete target or aliased owner cells");
+    bridgeBuilder.CreateRetVoid();
+    const auto carriesIdentity = [](const llvm::CallInst* call,
+                                    unsigned index, const std::string& value) {
+        const auto* global = llvm::dyn_cast<llvm::GlobalVariable>(
+            call->getArgOperand(index));
+        const auto* data = global
+            ? llvm::dyn_cast<llvm::ConstantDataArray>(global->getInitializer())
+            : nullptr;
+        return data && data->isCString() && data->getAsCString() == value;
+    };
+    if (!borrowCheck || !ownedTransfer ||
+        !borrowCheck->getCalledFunction() ||
+        borrowCheck->getCalledFunction()->getName() !=
+            "luna_runtime_fragment_ref_check_v1" ||
+        borrowCheck->getArgOperand(0) != borrowed ||
+        !carriesIdentity(borrowCheck, 1, target->symbol.value) ||
+        !carriesIdentity(borrowCheck, 2, target->contract.value) ||
+        !ownedTransfer->getCalledFunction() ||
+        ownedTransfer->getCalledFunction()->getName() !=
+            "luna_runtime_fragment_ref_transfer_v1" ||
+        ownedTransfer->getArgOperand(0) != sourceCell ||
+        ownedTransfer->getArgOperand(3) != destinationCell ||
+        !carriesIdentity(ownedTransfer, 1, target->symbol.value) ||
+        !carriesIdentity(ownedTransfer, 2, target->contract.value) ||
+        llvm::verifyModule(bridgeModule))
+        return fail("LLVM Ref ingress preparation conflated borrow and owning carrier ABIs");
 
     // Sema is not the only trust boundary: a structured input may be forged
     // after source analysis. The CFG bridge must reject cyclic static body

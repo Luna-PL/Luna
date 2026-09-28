@@ -330,6 +330,25 @@ SymbolId／ContractId。它重新推导 Slot 和 Ref 的 TypeId／canonical type
 ASan／UBSan canonical MoonIR 1／1 通过；设计状态、file guide inventory 和
 差异检查通过。这不代表远端 CI 或稳定发布批准。
 
+### Ref 宿主入口 LLVM 调用预备与二次门禁（2026-09-28）
+
+编译器内部现有两条互不混用的 IR 调用构造：共享借用只对 live handle 调用
+`luna_runtime_fragment_ref_check_v1`；拥有型入口用来源／目标两个 cell 调用
+`luna_runtime_fragment_ref_transfer_v1`。两者接收完整的 `DeclarationRef`；定向
+回归将冻结 Ref 目标解析所得的 SlotId／ContractId 传入，并核对身份常量、调用目标
+与 carrier 参数位置。返回状态留给未来入口 wrapper 处理；JIT 已注册这两个 Runtime 符号。
+
+`CodeGenerator::generate` 现在也在 Ref 类型上 fail closed：即使有人绕过 MoonIR
+verifier 直接调用后端，也不能把尚未包装的裸 pointer 函数发布成宿主入口。
+这里仍未生成或执行入口 wrapper，未定义错误状态到源码函数返回的映射，也没有
+跨包 import／拥有返回协议。原 MoonIR／container 门禁和 `source-ref-apply`
+implementation-open 状态不变。
+
+严格构建和非 hardware 回归 77／77 通过（195.47 秒），Windows ASan／UBSan
+canonical MoonIR 1／1 通过，WSL Arch Linux Clang 22.1.8 对改动涉及的后端文件
+完成语法编译检查。设计状态、file guide inventory 和差异检查通过；这是本地验证，
+不代表远端 CI 或稳定发布批准。
+
 ## 宿主控制的发现与注入
 
 目标指向 exported Slot 的 exported Fragment，凭名义关系成为候选；metadata 不授予

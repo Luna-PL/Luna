@@ -414,6 +414,29 @@ as does Windows ASan/UBSan canonical MoonIR (1/1). Design status, file-guide
 inventory and diff checks pass. This is not remote CI or stable-release
 approval.
 
+### Ref host-ingress LLVM call preparation and secondary gate (2026-09-28)
+
+The compiler now has separate internal IR emitters: a shared borrow calls
+`luna_runtime_fragment_ref_check_v1` on the live handle; an owned ingress calls
+`luna_runtime_fragment_ref_transfer_v1` with distinct source/destination
+carrier cells. Both accept a complete `DeclarationRef`; the focused regression
+passes the SlotId/ContractId from frozen Ref target resolution and checks the
+constants, call symbols and carrier argument positions. Their status remains
+for a future ingress wrapper to handle; the JIT binds both Runtime symbols.
+
+`CodeGenerator::generate` also fails closed on Ref types. Bypassing the MoonIR
+verifier and calling the backend directly can no longer publish an unwrapped
+raw-pointer function as a host entry. No ingress wrapper is generated or run
+yet; status-to-source-return mapping, cross-package import and owning-return
+delivery are unfinished. MoonIR/container gates and `source-ref-apply` remain
+unchanged.
+
+The strict build and all 77 non-hardware gates pass (195.47 seconds), as does
+Windows ASan/UBSan canonical MoonIR (1/1). WSL Arch Linux Clang 22.1.8
+syntax-compiles the changed backend files. Design status, file-guide inventory
+and diff checks pass. These are local checks, not remote CI or stable-release
+approval.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal
