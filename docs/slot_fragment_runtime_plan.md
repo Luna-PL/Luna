@@ -437,6 +437,31 @@ syntax-compiles the changed backend files. Design status, file-guide inventory
 and diff checks pass. These are local checks, not remote CI or stable-release
 approval.
 
+### Ref host-ingress status gate preparation (2026-09-28)
+
+The compiler now emits separate borrow and owned ingress gates for an `i32`
+status-returning host wrapper. A borrow checks the handle without acquiring
+Drop rights; an owned ingress transfers from the caller's carrier into a
+distinct, initially empty callee carrier. Only status zero branches to the
+body; failure returns the unchanged Runtime status before user code. The IR
+fixture checks both branch destinations, the returned failure value, exact
+frozen Slot/Contract identities, the owned carrier position, and rejection of
+a wrapper without a status return. The owned fixture drops its callee carrier
+on the success path.
+
+These are internal LLVM building blocks, not a generated or executed source
+host wrapper. They do not define a general source return/error ABI, borrow
+lifetime across callbacks, owning return delivery, aggregate dropGlue, or
+cross-package import. Direct code generation, MoonIR verification and the
+container codec still refuse source Ref publication; `source-ref-apply` stays
+implementation-open.
+
+The strict build and all 77 non-hardware gates pass (205.65 seconds), as does
+Windows ASan/UBSan canonical MoonIR (1/1). WSL Arch Linux Clang 22.1.8
+syntax-compiles the changed backend file. Design status, file-guide inventory
+and diff checks pass. These are local checks, not remote CI or stable-release
+approval.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal

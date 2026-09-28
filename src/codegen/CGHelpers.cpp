@@ -1,6 +1,7 @@
 #include "CGHelpers.h"
 #include "../core/TypeLayout.h"
 #include "../moonir/MoonIRTypes.h"
+#include "../runtime/RuntimeFragmentABI.h"
 
 #include <algorithm>
 #include <vector>
@@ -135,6 +136,62 @@ llvm::CallInst* CGHelpers::emitRuntimeFragmentRefOwnedTransfer(
         builder.CreateGlobalString(target.contract.value, "ref.target.contract"),
         destinationCell,
     });
+}
+
+namespace {
+
+bool validRefIngressGate(llvm::IRBuilder<>& builder,
+                         llvm::Module& module,
+                         llvm::BasicBlock* bodyEntry,
+                         llvm::Type* statusType) {
+    auto* entry = builder.GetInsertBlock();
+    auto* wrapper = entry ? entry->getParent() : nullptr;
+    return wrapper && wrapper->getParent() == &module &&
+        !entry->getTerminator() && bodyEntry &&
+        bodyEntry != entry && bodyEntry->getParent() == wrapper &&
+        bodyEntry->empty() && wrapper->getReturnType() == statusType;
+}
+
+void finishRefIngressGate(llvm::IRBuilder<>& builder,
+                          llvm::CallInst* status,
+                          llvm::BasicBlock* bodyEntry) {
+    auto* wrapper = builder.GetInsertBlock()->getParent();
+    auto* failure = llvm::BasicBlock::Create(
+        builder.getContext(), "ref.ingress.failed", wrapper);
+    auto* accepted = builder.CreateICmpEQ(
+        status,
+        llvm::ConstantInt::get(
+            status->getType(), LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1),
+        "ref.ingress.accepted");
+    builder.CreateCondBr(accepted, bodyEntry, failure);
+    builder.SetInsertPoint(failure);
+    builder.CreateRet(status);
+    builder.SetInsertPoint(bodyEntry);
+}
+
+} // namespace
+
+llvm::CallInst* CGHelpers::emitRuntimeFragmentRefBorrowIngressGate(
+    llvm::IRBuilder<>& builder, llvm::Module& module,
+    llvm::Value* reference, const moon::DeclarationRef& target,
+    llvm::BasicBlock* bodyEntry) const {
+    if (!validRefIngressGate(builder, module, bodyEntry, i32Ty())) return nullptr;
+    auto* status = emitRuntimeFragmentRefBorrowCheck(
+        builder, module, reference, target);
+    if (status) finishRefIngressGate(builder, status, bodyEntry);
+    return status;
+}
+
+llvm::CallInst* CGHelpers::emitRuntimeFragmentRefOwnedIngressGate(
+    llvm::IRBuilder<>& builder, llvm::Module& module,
+    llvm::Value* sourceCell, llvm::Value* destinationCell,
+    const moon::DeclarationRef& target,
+    llvm::BasicBlock* bodyEntry) const {
+    if (!validRefIngressGate(builder, module, bodyEntry, i32Ty())) return nullptr;
+    auto* status = emitRuntimeFragmentRefOwnedTransfer(
+        builder, module, sourceCell, destinationCell, target);
+    if (status) finishRefIngressGate(builder, status, bodyEntry);
+    return status;
 }
 
 uint64_t typeSize(const TypePtr& type) {

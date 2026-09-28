@@ -349,6 +349,25 @@ canonical MoonIR 1／1 通过，WSL Arch Linux Clang 22.1.8 对改动涉及的�
 完成语法编译检查。设计状态、file guide inventory 和差异检查通过；这是本地验证，
 不代表远端 CI 或稳定发布批准。
 
+### Ref 宿主入口状态分支预备（2026-09-28）
+
+编译器内部新增借用和拥有两种入口状态门控，要求宿主 wrapper 返回 `i32` 状态。
+借用只检查句柄，不取得 Drop 权；拥有路径从调用方 carrier 转入独立且初始为空的
+被调用方 carrier。仅状态为零才进入函数体；失败时在执行用户代码前原样返回 Runtime
+状态。LLVM 定向回归核对两条分支、失败返回值、冻结 Slot／Contract 身份、拥有
+carrier 参数位置，并拒绝无状态返回值的 wrapper。拥有型测试的成功路径清理其
+被调用方 carrier。
+
+这仍是内部 LLVM 构件，不是已生成或执行的源码宿主 wrapper；源码通用返回／错误
+ABI、跨 callback 的借用期限、拥有返回交付、聚合 dropGlue 与跨包 import 均未定义完成。
+直接后端、MoonIR verifier 和 container codec 仍禁止源码 Ref 发布；
+`source-ref-apply` 继续保持 implementation-open。
+
+严格构建和非 hardware 回归 77／77 通过（205.65 秒），Windows ASan／UBSan
+canonical MoonIR 1／1 通过；WSL Arch Linux Clang 22.1.8 对改动的后端文件
+完成语法编译检查。设计状态、file guide inventory 与差异检查通过；这些是本地
+验证，不代表远端 CI 或稳定发布批准。
+
 ## 宿主控制的发现与注入
 
 目标指向 exported Slot 的 exported Fragment，凭名义关系成为候选；metadata 不授予

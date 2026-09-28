@@ -27,6 +27,17 @@ public:
         llvm::IRBuilder<>& builder, llvm::Module& module,
         llvm::Value* sourceCell, llvm::Value* destinationCell,
         const moon::DeclarationRef& target) const;
+    // Status-returning host entry only: success continues to bodyEntry;
+    // failure returns the unchanged native status before entering user code.
+    llvm::CallInst* emitRuntimeFragmentRefBorrowIngressGate(
+        llvm::IRBuilder<>& builder, llvm::Module& module,
+        llvm::Value* reference, const moon::DeclarationRef& target,
+        llvm::BasicBlock* bodyEntry) const;
+    llvm::CallInst* emitRuntimeFragmentRefOwnedIngressGate(
+        llvm::IRBuilder<>& builder, llvm::Module& module,
+        llvm::Value* sourceCell, llvm::Value* destinationCell,
+        const moon::DeclarationRef& target,
+        llvm::BasicBlock* bodyEntry) const;
     llvm::Type* i32Ty() const { return llvm::Type::getInt32Ty(mCtx); }
     llvm::Type* i64Ty() const { return llvm::Type::getInt64Ty(mCtx); }
     llvm::Type* f32Ty() const { return llvm::Type::getFloatTy(mCtx); }

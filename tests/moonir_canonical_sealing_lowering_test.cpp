@@ -155,6 +155,74 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             : nullptr;
         return data && data->isCString() && data->getAsCString() == value;
     };
+    auto* borrowWrapper = llvm::Function::Create(
+        llvm::FunctionType::get(
+            bridgeHelpers.i32Ty(), {bridgeHelpers.ptrTy()}, false),
+        llvm::Function::ExternalLinkage, "test_borrow_ref_ingress", bridgeModule);
+    auto* borrowEntry = llvm::BasicBlock::Create(
+        bridgeContext, "entry", borrowWrapper);
+    auto* borrowBody = llvm::BasicBlock::Create(
+        bridgeContext, "body", borrowWrapper);
+    bridgeBuilder.SetInsertPoint(borrowEntry);
+    auto* borrowStatus = bridgeHelpers.emitRuntimeFragmentRefBorrowIngressGate(
+        bridgeBuilder, bridgeModule, borrowWrapper->getArg(0),
+        *target, borrowBody);
+    bridgeBuilder.CreateRet(llvm::ConstantInt::get(bridgeHelpers.i32Ty(), 0));
+
+    auto* ownedWrapper = llvm::Function::Create(
+        llvm::FunctionType::get(
+            bridgeHelpers.i32Ty(), {bridgeHelpers.ptrTy()}, false),
+        llvm::Function::ExternalLinkage, "test_owned_ref_ingress", bridgeModule);
+    auto* ownedEntry = llvm::BasicBlock::Create(
+        bridgeContext, "entry", ownedWrapper);
+    auto* ownedBody = llvm::BasicBlock::Create(
+        bridgeContext, "body", ownedWrapper);
+    bridgeBuilder.SetInsertPoint(ownedEntry);
+    auto* ownedCell = bridgeBuilder.CreateAlloca(bridgeHelpers.ptrTy());
+    bridgeBuilder.CreateStore(
+        llvm::ConstantPointerNull::get(
+            llvm::cast<llvm::PointerType>(bridgeHelpers.ptrTy())), ownedCell);
+    auto* ownedStatus = bridgeHelpers.emitRuntimeFragmentRefOwnedIngressGate(
+        bridgeBuilder, bridgeModule, ownedWrapper->getArg(0),
+        ownedCell, *target, ownedBody);
+    bridgeHelpers.emitRuntimeFragmentRefDrop(
+        bridgeBuilder, bridgeModule, ownedCell);
+    bridgeBuilder.CreateRet(llvm::ConstantInt::get(bridgeHelpers.i32Ty(), 0));
+
+    auto* wrongStatusWrapper = llvm::Function::Create(
+        llvm::FunctionType::get(
+            bridgeHelpers.voidTy(), {bridgeHelpers.ptrTy()}, false),
+        llvm::Function::ExternalLinkage, "test_invalid_ref_ingress", bridgeModule);
+    auto* wrongStatusEntry = llvm::BasicBlock::Create(
+        bridgeContext, "entry", wrongStatusWrapper);
+    auto* wrongStatusBody = llvm::BasicBlock::Create(
+        bridgeContext, "body", wrongStatusWrapper);
+    bridgeBuilder.SetInsertPoint(wrongStatusEntry);
+    if (bridgeHelpers.emitRuntimeFragmentRefBorrowIngressGate(
+            bridgeBuilder, bridgeModule, wrongStatusWrapper->getArg(0),
+            *target, wrongStatusBody) || !wrongStatusEntry->empty())
+        return fail("LLVM Ref ingress accepted a wrapper without a status return");
+    bridgeBuilder.CreateRetVoid();
+    bridgeBuilder.SetInsertPoint(wrongStatusBody);
+    bridgeBuilder.CreateRetVoid();
+
+    const auto gatesBodyOnSuccess = [](const llvm::CallInst* status,
+                                       const llvm::BasicBlock* body) {
+        if (!status) return false;
+        const auto* branch = llvm::dyn_cast<llvm::BranchInst>(
+            status->getParent()->getTerminator());
+        if (!branch || !branch->isConditional() ||
+            branch->getSuccessor(0) != body) return false;
+        const auto* accepted = llvm::dyn_cast<llvm::ICmpInst>(
+            branch->getCondition());
+        const auto* failed = llvm::dyn_cast<llvm::ReturnInst>(
+            branch->getSuccessor(1)->getTerminator());
+        return accepted && accepted->getPredicate() == llvm::CmpInst::ICMP_EQ &&
+            accepted->getOperand(0) == status &&
+            llvm::isa<llvm::ConstantInt>(accepted->getOperand(1)) &&
+            llvm::cast<llvm::ConstantInt>(accepted->getOperand(1))->isZero() &&
+            failed && failed->getReturnValue() == status;
+    };
     if (!borrowCheck || !ownedTransfer ||
         !borrowCheck->getCalledFunction() ||
         borrowCheck->getCalledFunction()->getName() !=
@@ -169,6 +237,12 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         ownedTransfer->getArgOperand(3) != destinationCell ||
         !carriesIdentity(ownedTransfer, 1, target->symbol.value) ||
         !carriesIdentity(ownedTransfer, 2, target->contract.value) ||
+        !gatesBodyOnSuccess(borrowStatus, borrowBody) ||
+        !gatesBodyOnSuccess(ownedStatus, ownedBody) ||
+        ownedStatus->getArgOperand(0) != ownedWrapper->getArg(0) ||
+        ownedStatus->getArgOperand(3) != ownedCell ||
+        !carriesIdentity(borrowStatus, 1, target->symbol.value) ||
+        !carriesIdentity(ownedStatus, 2, target->contract.value) ||
         llvm::verifyModule(bridgeModule))
         return fail("LLVM Ref ingress preparation conflated borrow and owning carrier ABIs");
 
