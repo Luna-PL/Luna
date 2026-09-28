@@ -490,6 +490,7 @@ private:
             clone->slotName = statement->slotName;
             clone->fragmentName = statement->fragmentName;
             clone->resolvedFragmentName = statement->resolvedFragmentName;
+            clone->runtimeRefOperand = statement->runtimeRefOperand;
             for (const auto& argument : statement->environmentArgs)
                 clone->environmentArgs.push_back(cloneExpr(argument.get()));
             clone->body = cloneBlock(statement->body.get());

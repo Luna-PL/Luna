@@ -48,9 +48,9 @@ The selected direction lets Luna source act as a host: receive, select and local
 apply runtime references. Start with host-supplied verified Refs, without also
 adding a source loader, global candidate index, handler re-entry or keywords.
 The complete example remains **target syntax, not currently executable**.
-The source Ref type spelling, nominal checks, and private in-memory LLVM
-carrier proofs exist; source `apply` on a Ref, public import/return, and
-container publication still do not.
+The source Ref type spelling, nominal checks, Ref-apply frontend recognition,
+and private in-memory LLVM carrier proofs exist; executable Ref `apply`,
+public import/return, and container publication still do not.
 
 ```luna
 export slot pipeline(value: i32);
@@ -164,8 +164,10 @@ before optimizing; never remove validation or borrow callback-destroyable storag
    exact-target checks, borrowed context derivation and Runtime drop are complete
    below. Source import, owning/borrowed parameters, owning returns, compiler
    dropGlue and two-package carrier/contract validation remain unconnected.
-4. **Unimplemented source apply**: name resolution, once-only evaluation/region
-   borrow, effect fixed point, explicit-context lowering/independent verification;
+4. **Partially implemented source apply**: exact-Slot local Ref recognition,
+   rejection of environment arguments and lexical shared-loan checking are
+   prepared. Once-only evaluation/region context, effect fixed point,
+   explicit-context lowering/independent verification remain open;
    repeated/nested apply, shadowing, other Slots, normal/return/`?`/failure cleanup
    and rejected handler re-entry regressions.
 5. **End-to-end gate**: real two-package verified containers with Ref import/source
@@ -585,6 +587,24 @@ output guard, both frozen identities, body-to-output carrier flow and invalid
 body/contract rejection. This is not a published return ABI or a claim that
 an arbitrary supplied LLVM body implements the source CFG. The module is
 discarded; MoonIR/backend/container gates still reject source Ref publication.
+
+### Source Ref apply recognition and borrow gate (2026-09-28)
+
+The existing `apply name { ... }` spelling now distinguishes a local
+`RuntimeFragmentRef<S>` from a static Fragment. It resolves the exact exported
+Slot, rejects environment arguments, and borrows the owner for the lexical
+body; repeated apply is allowed while moving the owner inside that body is
+rejected. A dynamic binding masks an outer static binding for the same Slot
+in frontend analysis. This is **not executable source apply**: lowering reports
+an explicit context-override ABI diagnostic and cannot publish an artifact.
+The effect fixed point, runtime operand and context lowering, return/error
+cleanup and cross-package tests remain completion gates.
+
+The strict full build passes. The parallel non-hardware run passed 76/77;
+`luna.repl-smoke` timed out in process-tree cleanup under parallel load and
+passed when rerun alone. The final focused analysis, canonical, REPL,
+documentation and inventory gates pass 5/5. This is not a source Ref
+end-to-end acceptance or a new performance observation.
 
 ## Host-controlled discovery and injection
 

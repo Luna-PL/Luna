@@ -119,7 +119,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !std::any_of(verifier.errors().begin(), verifier.errors().end(),
             [](const auto& error) {
                 return error.message.find(
-                    "RuntimeFragmentRef host/drop bridge is not implemented") !=
+                    "RuntimeFragmentRef source import/dropGlue/wire ABI is not implemented") !=
                     std::string::npos;
             }))
         return fail("source Ref passed executable publication before its full bridge");
@@ -190,6 +190,28 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                     std::string::npos;
             }))
         return fail("forged Ref return relation escaped or appeared proven");
+
+    auto sourceApplySnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "export slot checkpoint(value: i32);\n"
+        "runtime fn host_entry(selected: RuntimeFragmentRef<checkpoint>) {\n"
+        "  apply selected { checkpoint(1) {} }\n"
+        "}\n",
+        "<canonical-source-ref-apply-gate>");
+    if (!sourceApplySnapshot.success())
+        return fail("frontend rejected exact-Slot source Ref apply preparation");
+    moon::LunaLowerer sourceApplyLowerer;
+    auto sourceApplyModule = sourceApplyLowerer.lower(
+        *sourceApplySnapshot.program(), *sourceApplySnapshot.symbolTable());
+    if (sourceApplyModule && sourceApplyLowerer.errors().empty())
+        return fail("source Ref apply escaped its closed executable lowering gate");
+    if (!std::any_of(sourceApplyLowerer.errors().begin(),
+                     sourceApplyLowerer.errors().end(),
+                     [](const auto& diagnostic) {
+                         return diagnostic.message.find(
+                             "RuntimeFragmentRef apply needs the source context-override ABI") !=
+                             std::string::npos;
+                     }))
+        return fail("source Ref apply gate lost its explicit ABI diagnostic");
 
     llvm::LLVMContext bridgeContext;
     CGHelpers bridgeHelpers(bridgeContext);

@@ -190,6 +190,20 @@ OwnershipChecker::FlowResult OwnershipChecker::checkStmt(Stmt* stmt) {
     setDiagnosticLocation(stmt);
     if (auto* slot = dynamic_cast<SlotInvokeStmt*>(stmt)) return checkSlotInvoke(slot);
     if (auto* apply = dynamic_cast<ApplyStmt*>(stmt)) {
+        if (apply->runtimeRefOperand) {
+            const Place operand{apply->fragmentName, {}};
+            const size_t loanCount = mLoansInScope.back().size();
+            if (!acquireLoan(operand, false)) return false;
+            mApplyScopes.emplace_back();
+            mApplyScopes.back()[apply->slotName] = nullptr;
+            const FlowResult result = checkBlock(apply->body.get());
+            mApplyScopes.pop_back();
+            while (mLoansInScope.back().size() > loanCount) {
+                releaseLoan(mLoansInScope.back().back());
+                mLoansInScope.back().pop_back();
+            }
+            return result;
+        }
         const std::string& fragmentName =
             apply->resolvedFragmentName.empty() ? apply->fragmentName : apply->resolvedFragmentName;
         auto fragment = mFragments.find(fragmentName);

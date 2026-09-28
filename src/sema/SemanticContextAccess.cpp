@@ -351,6 +351,10 @@ void ControlContextAccess::error(
     mOwner.error(message, line, column);
 }
 
+TypePtr ControlContextAccess::resolved(const TypePtr& type) {
+    return mOwner.resolved(type);
+}
+
 std::string ControlContextAccess::sourceDeclarationKey(
     const std::string& name, bool diagnoseVisibility) {
     return mOwner.sourceDeclarationKey(name, diagnoseVisibility);

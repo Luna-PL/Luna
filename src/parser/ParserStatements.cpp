@@ -137,7 +137,7 @@ std::unique_ptr<Stmt> Parser::parseApplyStmt() {
     const Token start = mTokens[mPos - 1]; // `apply` already consumed
     auto stmt = std::make_unique<ApplyStmt>();
     if (!parseQualifiedName(stmt->fragmentName)) {
-        addError("expected a statically named fragment after `apply`");
+        addError("expected a Fragment or RuntimeFragmentRef name after `apply`");
         synchronizeStatement();
         return nullptr;
     }
@@ -147,7 +147,8 @@ std::unique_ptr<Stmt> Parser::parseApplyStmt() {
     }
     if (!check(TokenKind::LBrace)) {
         addError("lexical `apply` requires a body",
-                 "write `apply fragment_name[environment] { ... }`; blockless apply was removed in Luna 0.3");
+                 "write `apply fragment_name[environment] { ... }` or "
+                 "`apply ref_name { ... }`; blockless apply was removed in Luna 0.3");
         synchronizeStatement();
         return nullptr;
     }

@@ -190,6 +190,7 @@ public:
         const TypeAST* ast,
         const std::unordered_map<std::string, TypePtr>& bindings);
     void error(const std::string& message, int line = 0, int column = 0);
+    TypePtr resolved(const TypePtr& type);
     std::string sourceDeclarationKey(
         const std::string& name, bool diagnoseVisibility = true);
 };

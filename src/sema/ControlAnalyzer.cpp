@@ -127,6 +127,51 @@ void ControlAnalyzer::analyzeSlotInvoke(SlotInvokeStmt* stmt, TypePtr expectedRe
 }
 
 void ControlAnalyzer::analyzeApply(ApplyStmt* stmt, TypePtr expectedReturn) {
+    // A local Ref shadows a fragment declaration with the same spelling.
+    // Treat it as a borrowed, exact-Slot lexical override, not as a
+    // fragment constructor with a second environment argument list.
+    auto* operand = mContext.mSymTable.lookup(stmt->fragmentName);
+    const auto operandType = operand && operand->kind == SymbolKind::Variable
+        ? mContext.resolved(operand->type) : nullptr;
+    if (operandType && operandType->kind == TypeKind::RuntimeFragmentRef) {
+        stmt->runtimeRefOperand = true;
+        if (!stmt->body) {
+            mContext.error("lexical `apply` requires a body", stmt->line, stmt->col);
+            return;
+        }
+        if (!stmt->environmentArgs.empty()) {
+            mContext.error("RuntimeFragmentRef apply does not accept environment arguments",
+                           stmt->line, stmt->col);
+            return;
+        }
+        const auto target = mContext.resolved(operandType->inner);
+        ControlContextAccess::SlotInfo* selected = nullptr;
+        if (target && target->kind == TypeKind::Slot)
+            for (auto& [key, slot] : mContext.mSlotScopes.front()) {
+                (void)key;
+                if (slot.structuralType &&
+                    slot.structuralType->nominalId == target->nominalId &&
+                    luna::types::isAbiCompatible(slot.structuralType, target)) {
+                    selected = &slot;
+                    break;
+                }
+            }
+        if (!selected || !selected->declaration ||
+            !selected->declaration->isExported) {
+            mContext.error("RuntimeFragmentRef apply requires its exact exported Slot",
+                           stmt->line, stmt->col);
+            return;
+        }
+        stmt->slotName = selected->name;
+        enterSlotScope();
+        // Null deliberately masks an outer static binding. The selected Ref
+        // will supply the runtime binding once lowering is implemented.
+        mContext.mApplyScopes.back()[
+            mContext.sourceDeclarationKey(selected->name)] = nullptr;
+        mContext.analyzeBlock(stmt->body.get(), expectedReturn);
+        exitSlotScope();
+        return;
+    }
     auto* fragment = selectFragment(stmt->fragmentName, stmt);
     if (!fragment) return;
     stmt->resolvedFragmentName = fragment->generatedSymbolName.empty()

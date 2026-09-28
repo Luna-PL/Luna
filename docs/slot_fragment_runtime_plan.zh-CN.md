@@ -43,9 +43,9 @@ export fragment trace[prefix: string](value) for pipeline {
 
 方向已确认：让 Luna 源码作为宿主，接收、选择并局部应用运行时引用。先打通宿主提供
 的已验证 Ref，不同时引入源码 loader、全局候选索引、handler 重入或新关键字。
-以下完整示例仍是**目标语法，当前不能执行**。源码 Ref 类型拼写、名义检查和私有的
-内存 LLVM carrier 验证已存在；对 Ref 的源码 `apply`、公开导入／返回及 container
-发布仍未实现。
+以下完整示例仍是**目标语法，当前不能执行**。源码 Ref 类型拼写、名义检查、Ref
+apply 前端识别和私有的内存 LLVM carrier 验证已存在；可执行的 Ref `apply`、公开
+导入／返回及 container 发布仍未实现。
 
 ```luna
 export slot pipeline(value: i32);
@@ -139,8 +139,9 @@ Ref-bearing exported Slot／Fragment payload、non-Copy 环境、non-unit 与 mu
 3. **部分实现的宿主桥**：native 严格 singleton owning handle、精确目标检查、借用派生
    context 与 Runtime drop 已完成，见下文；源码导入、拥有／借用参数、拥有返回、
    compiler dropGlue 和两包 carrier／contract 校验仍未接通。
-4. **待实现的源码 apply**：名字 operand 解析、一次求值与 region borrow、effect 固定点、
-   显式 context lowering／独立 verifier；重复／嵌套、同槽遮蔽、其他槽保留、正常退出／
+4. **部分实现的源码 apply**：局部 Ref 精确 Slot 识别、环境实参拒绝与词法共享借用检查
+   已准备；一次求值／region context、effect 固定点、显式 context lowering／独立
+   verifier 仍开放；重复／嵌套、同槽遮蔽、其他槽保留、正常退出／
    return／`?`／失败清理，以及禁止 handler 重入的回归。
 5. **端到端完成门**：真实两包 verified container 的 Ref 导入／源码应用、参数／返回
    transfer 与错误候选。只有这些通过才能将 `source-ref-apply` 标为 implemented；
@@ -464,6 +465,19 @@ module 验证。篡改结果的所有权用法会使证明失败。前一轮 uni
 流动和无效函数体／契约拒绝。这不是已发布的返回 ABI，也不证明任意传入的 LLVM
 函数体实现源码 CFG。临时 module 随即丢弃；MoonIR／后端／container 的源码 Ref
 发布门禁仍保持关闭。
+
+### 源码 Ref apply 的识别与借用门禁（2026-09-28）
+
+既有 `apply name { ... }` 拼写现可区分局部 `RuntimeFragmentRef<S>` 与静态
+Fragment：解析精确导出的 Slot、拒绝环境实参，并在词法 body 内共享借用 owner。
+同一 Ref 可以重复 apply，body 内移动 owner 会被拒绝。前端分析中，动态绑定会遮蔽
+同槽的外层静态绑定。这**不是可执行的源码 apply**：lowering 明确报告缺少源码
+context-override ABI，不能发布产物。Effect 固定点、运行时 operand／context
+lowering、return／错误清理及跨包测试仍是完成门。
+
+严格完整构建通过。并行非硬件回归 76／77 通过；`luna.repl-smoke` 的进程树清理在
+并行负载下超时，单独重跑通过。最终聚焦的分析、canonical、REPL、文档和清单
+门禁 5／5 通过。这不是源码 Ref 端到端验收，也不是新的性能观察。
 
 ## 宿主控制的发现与注入
 

@@ -261,6 +261,10 @@ struct ApplyStmt : Stmt {
     std::string slotName;
     std::string fragmentName;
     std::string resolvedFragmentName;
+    // A local RuntimeFragmentRef<S> uses the same lexical `apply` spelling.
+    // Its executable MoonIR lowering remains gated until the source carrier
+    // and context-override ABI are established.
+    bool runtimeRefOperand = false;
     // Constructor arguments for the fragment's explicit environment. They
     // are evaluated once when entering the lexical apply region, not once per
     // slot invocation.

@@ -50,9 +50,9 @@ int testRuntimeFragmentRefPreparation() {
     moon::Verifier verifier;
     if (verifier.verify(prepared) || !std::any_of(
             verifier.errors().begin(), verifier.errors().end(), [](const auto& error) {
-                return error.message.find("RuntimeFragmentRef host/drop bridge is not implemented") != std::string::npos;
+                return error.message.find("RuntimeFragmentRef source import/dropGlue/wire ABI is not implemented") != std::string::npos;
             }))
-        return fail("MoonIR publication accepted internal Ref preparation without a host/drop bridge");
+        return fail("MoonIR publication accepted internal Ref preparation without a source import/dropGlue/wire ABI");
     std::vector<uint8_t> bytes{1, 2, 3};
     std::string error;
     if (moon::ContainerModelCodec::encodeTypes(prepared, bytes, error) || !bytes.empty() ||

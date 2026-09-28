@@ -153,6 +153,96 @@ int main(int argc, char* argv[]) {
             return 24;
     }
 
+    auto refApply = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "export slot checkpoint(value: i32);\n"
+        "runtime fn host_entry(selected: RuntimeFragmentRef<checkpoint>) {\n"
+        "  apply selected { checkpoint(1) {} }\n"
+        "  apply selected { checkpoint(2) {} }\n"
+        "}\n",
+        "file:///workspace/runtime_ref_apply.luna");
+    if (!refApply.success())
+        for (const auto& diagnostic : refApply.errors())
+            std::cerr << diagnostic.message << '\n';
+    const auto* hostEntry = refApply.program() &&
+        refApply.program()->declarations.size() == 2
+        ? dynamic_cast<const FunctionDecl*>(
+              refApply.program()->declarations[1].get()) : nullptr;
+    const auto* firstApply = hostEntry && hostEntry->body &&
+        hostEntry->body->stmts.size() >= 2
+        ? dynamic_cast<const ApplyStmt*>(hostEntry->body->stmts[0].get())
+        : nullptr;
+    const auto* secondApply = hostEntry && hostEntry->body &&
+        hostEntry->body->stmts.size() >= 2
+        ? dynamic_cast<const ApplyStmt*>(hostEntry->body->stmts[1].get())
+        : nullptr;
+    if (!expect(refApply.success() && firstApply && secondApply &&
+                    firstApply->runtimeRefOperand &&
+                    secondApply->runtimeRefOperand &&
+                    firstApply->slotName == "checkpoint" &&
+                    secondApply->slotName == "checkpoint" &&
+                    firstApply->resolvedFragmentName.empty(),
+                "repeated source Ref apply lost lexical nominal resolution"))
+        return 25;
+    auto maskedApply = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "export slot checkpoint(value: i32);\n"
+        "export fragment trace(value) for checkpoint { resume; }\n"
+        "runtime fn host_entry(selected: RuntimeFragmentRef<checkpoint>) {\n"
+        "  apply trace { apply selected { checkpoint(1) {} } }\n"
+        "}\n",
+        "file:///workspace/runtime_ref_apply_shadow.luna");
+    const auto* maskedHost = maskedApply.program() &&
+        maskedApply.program()->declarations.size() == 3
+        ? dynamic_cast<const FunctionDecl*>(
+              maskedApply.program()->declarations[2].get()) : nullptr;
+    const auto* outerApply = maskedHost && maskedHost->body &&
+        !maskedHost->body->stmts.empty()
+        ? dynamic_cast<const ApplyStmt*>(maskedHost->body->stmts[0].get())
+        : nullptr;
+    const auto* innerApply = outerApply && outerApply->body &&
+        !outerApply->body->stmts.empty()
+        ? dynamic_cast<const ApplyStmt*>(outerApply->body->stmts[0].get())
+        : nullptr;
+    const auto* innerSlot = innerApply && innerApply->body &&
+        !innerApply->body->stmts.empty()
+        ? dynamic_cast<const SlotInvokeStmt*>(innerApply->body->stmts[0].get())
+        : nullptr;
+    if (!expect(maskedApply.success() && outerApply && innerApply && innerSlot &&
+                    !outerApply->runtimeRefOperand &&
+                    innerApply->runtimeRefOperand &&
+                    innerSlot->resolvedFragmentName.empty(),
+                "Ref apply failed to mask an outer static Fragment"))
+        return 26;
+    const std::array<const char*, 3> invalidRefApplies = {
+        "export slot checkpoint(value: i32); "
+        "runtime fn bad(selected: RuntimeFragmentRef<checkpoint>) "
+        "{ apply selected[1] { checkpoint(1) {} } }",
+        "slot checkpoint(value: i32); "
+        "runtime fn bad(selected: RuntimeFragmentRef<checkpoint>) "
+        "{ apply selected { checkpoint(1) {} } }",
+        "export slot checkpoint(value: i32); "
+        "runtime fn bad(selected: affine RuntimeFragmentRef<checkpoint>) "
+        "{ apply selected { let moved = move selected; checkpoint(1) {} } }",
+    };
+    const std::array<const char*, 3> expectedRefApplyErrors = {
+        "does not accept environment arguments",
+        "requires its exact exported Slot",
+        "borrow",
+    };
+    for (size_t index = 0; index < invalidRefApplies.size(); ++index) {
+        auto rejected = luna::tooling::AnalysisSnapshot::analyzeSource(
+            invalidRefApplies[index],
+            "file:///workspace/runtime_ref_apply_invalid.luna");
+        const bool diagnosed = std::any_of(
+            rejected.errors().begin(), rejected.errors().end(),
+            [&](const auto& diagnostic) {
+                return diagnostic.message.find(expectedRefApplyErrors[index]) !=
+                    std::string::npos;
+            });
+        if (!expect(!rejected.success() && diagnosed,
+                    "invalid source Ref apply passed semantic/ownership analysis"))
+            return 27;
+    }
+
     const std::string validSource =
         "package org.luna.test;\n"
         "module api;\n"
