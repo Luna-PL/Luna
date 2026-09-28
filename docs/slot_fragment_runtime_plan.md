@@ -316,6 +316,34 @@ and execution pass on WSL Arch Linux Clang 22.1.8. Design status, inventory
 and diff checks pass. These are local checks, not remote CI or stable-release
 approval.
 
+### Native owning-handle ingress/return transfer (2026-09-28)
+
+Additive C ABI `luna_runtime_fragment_ref_transfer_v1(void** source, SlotId,
+ContractId, void** destination)` prepares one primitive for both future owning
+arguments and owning returns. It requires distinct live carrier cells, a
+nonempty source and empty destination, then checks the exact SlotId/ContractId
+using the existing Ref check. Success clears the source and installs that same
+unique handle at the destination. Failure changes neither cell. No factory,
+environment/generation-pin copy or heap allocation occurs. Default shared-borrow
+parameters use `check` only: they must not gain Drop ownership through transfer.
+
+Native regression covers null/aliased/occupied cells, wrong Slot/Contract,
+consumed sources, owned/borrowed environments, host→argument→return→host
+round-trips, repeated checking and final once-only Drop. The C header compile
+fixture checks the new function-pointer signature; Windows and WSL Linux
+instrumented execution pass. This primitive is not wired to generated function
+ABI, exceptional/return/`?` paths or compiler dropGlue. It opens neither MoonIR
+verification nor container publication, and adds no source keyword or plugin
+selection policy.
+
+The strict full build and all 77 non-hardware gates pass (223.99 seconds).
+After making the carrier write order explicit (clear source, then install
+destination), affected targets are rebuilt and canonical MoonIR, Runtime ABI,
+Runtime Fragment/concurrency, design status and inventory pass 6/6. Windows
+ASan/UBSan Runtime gates pass 2/2, as does direct Runtime C++17 ASan/UBSan
+execution on WSL Arch Linux Clang 22.1.8. This is local verification, not
+remote CI or stable-release approval; old performance evidence is unchanged.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal

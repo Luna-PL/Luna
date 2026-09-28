@@ -27,10 +27,20 @@ enum LunaRuntimeFragmentRefStatusV1 {
     LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 = 0,
     LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1 = -1,
     LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1 = -2,
+    LUNA_RUNTIME_FRAGMENT_REF_INVALID_CARRIER_V1 = -3,
 };
 
 int32_t luna_runtime_fragment_ref_check_v1(
     const void* reference, const char* slot_id, const char* slot_contract_id);
+
+// Transfers one validated owning carrier (host argument or owning return).
+// Both cells must be distinct, source nonempty and destination empty. On any
+// failure neither cell changes; on success source is cleared before destination
+// becomes the sole owner. This is a native preparation API, not permission to
+// publish a source/container Ref ABI. Shared-borrow parameters use check only.
+int32_t luna_runtime_fragment_ref_transfer_v1(
+    void** source, const char* slot_id, const char* slot_contract_id,
+    void** destination);
 
 // Consumes the unique owning carrier, clearing it BEFORE environment/module
 // cleanup callbacks. Null carrier/address is a no-op. Reentrant drop through

@@ -254,6 +254,27 @@ single-shot、Copy-only 和具体化要求；未开放从任意声明地址构�
 Clang 22.1.8 C++17 直接编译／执行 builtin 类型与语义约束插桩测试通过。设计状态、文档
 inventory 与 diff 检查通过；这是本地验证，不表示远端 CI 或稳定发布批准。
 
+### Native 拥有句柄入口／返回转移（2026-09-28）
+
+新增 C ABI `luna_runtime_fragment_ref_transfer_v1(void** source, SlotId,
+ContractId, void** destination)`，为未来拥有型参数与返回值复用同一条原语。
+它要求来源／目标是不同的 live carrier cell、来源非空、目标为空，并先用已有 Ref
+检查核对确切 SlotId／ContractId；成功清空来源并将同一唯一句柄交给目标。
+失败不更改两端，不重跑 factory、不复制环境或 generation pin，也不分配 heap。
+默认 shared-borrow 参数仅做 `check`，不能误用 owning transfer 使借用方取得 Drop 权。
+
+Native 回归覆盖空／别名／占用 carrier、错误 Slot／Contract、已消费来源、owned／borrowed
+环境的宿主→参数→返回→宿主往返、重复校验与最终一次 Drop。C 头文件编译检查新增
+函数指针签名；Windows 与 WSL Linux 插桩执行通过。此原语尚未接到生成函数 ABI、
+异常／return／`?` 路径或 compiler dropGlue，不能据此解除 MoonIR verifier／container
+门禁，也不构成新的公开源码关键字或插件自动选取策略。
+
+严格完整构建与非 hardware 门禁 77／77 通过（223.99 秒）。最终将 carrier 写入顺序
+明确为“来源清空→目标安装”后，受影响目标重建并复测 canonical MoonIR、Runtime ABI、
+Runtime Fragment／并发、设计状态、inventory 六项 6／6；Windows ASan／UBSan Runtime
+两项 2／2 和 WSL Arch Linux Clang 22.1.8 C++17 直接 Runtime 插桩测试通过。
+上述为本地验证，不表示远端 CI 或稳定发布批准；不改变旧性能证据。
+
 ## 宿主控制的发现与注入
 
 目标指向 exported Slot 的 exported Fragment，凭名义关系成为候选；metadata 不授予

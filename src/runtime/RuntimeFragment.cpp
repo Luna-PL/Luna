@@ -1006,6 +1006,20 @@ extern "C" int32_t luna_runtime_fragment_ref_check_v1(
         : LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1;
 }
 
+extern "C" int32_t luna_runtime_fragment_ref_transfer_v1(
+    void** source, const char* slot_id, const char* slot_contract_id,
+    void** destination) {
+    if (!source || !destination || source == destination || *destination)
+        return LUNA_RUNTIME_FRAGMENT_REF_INVALID_CARRIER_V1;
+    const int32_t checked = luna_runtime_fragment_ref_check_v1(
+        *source, slot_id, slot_contract_id);
+    if (checked != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1) return checked;
+    void* moved = *source;
+    *source = nullptr;
+    *destination = moved;
+    return LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1;
+}
+
 extern "C" void luna_runtime_fragment_ref_drop_v1(void** reference) {
     if (!reference || !*reference) return;
     auto* retired = static_cast<

@@ -420,6 +420,63 @@ int testRefHandleBridge(const LunaRuntimeFragmentDescriptorV1& original) {
         moved = std::move(*sameHandle);
         if (handle || !moved) return fail("Ref bridge move/self-move lost ownership");
         void* carrier = moved.release();
+        void* argumentCarrier = nullptr;
+        void* returnCarrier = nullptr;
+        void* occupied = &factory; // A non-owning sentinel; never dereferenced.
+        const void* identity = carrier;
+        const unsigned beforeTransferFactory = factoryCalls;
+        const unsigned beforeTransferDestroy = destroyCalls;
+        if (luna_runtime_fragment_ref_transfer_v1(
+                nullptr, slot.slotId.c_str(), slot.contractId.c_str(),
+                &argumentCarrier) != LUNA_RUNTIME_FRAGMENT_REF_INVALID_CARRIER_V1 ||
+            luna_runtime_fragment_ref_transfer_v1(
+                &carrier, slot.slotId.c_str(), slot.contractId.c_str(),
+                nullptr) != LUNA_RUNTIME_FRAGMENT_REF_INVALID_CARRIER_V1 ||
+            luna_runtime_fragment_ref_transfer_v1(
+                &carrier, slot.slotId.c_str(), slot.contractId.c_str(),
+                &carrier) != LUNA_RUNTIME_FRAGMENT_REF_INVALID_CARRIER_V1 ||
+            luna_runtime_fragment_ref_transfer_v1(
+                &carrier, slot.slotId.c_str(), slot.contractId.c_str(),
+                &occupied) != LUNA_RUNTIME_FRAGMENT_REF_INVALID_CARRIER_V1 ||
+            luna_runtime_fragment_ref_transfer_v1(
+                &carrier, wrongSlot.slotId.c_str(), slot.contractId.c_str(),
+                &argumentCarrier) != LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1 ||
+            luna_runtime_fragment_ref_transfer_v1(
+                &carrier, slot.slotId.c_str(), wrongContract.contractId.c_str(),
+                &argumentCarrier) != LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1 ||
+            luna_runtime_fragment_ref_transfer_v1(
+                &carrier, nullptr, slot.contractId.c_str(),
+                &argumentCarrier) != LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1 ||
+            carrier != identity || argumentCarrier || occupied != &factory)
+            return fail("Ref bridge transfer changed a carrier on failure");
+        countDispatchAllocations = true;
+        dispatchAllocations = 0;
+        const auto argumentStatus = luna_runtime_fragment_ref_transfer_v1(
+            &carrier, slot.slotId.c_str(), slot.contractId.c_str(),
+            &argumentCarrier);
+        const auto returnStatus = luna_runtime_fragment_ref_transfer_v1(
+            &argumentCarrier, slot.slotId.c_str(), slot.contractId.c_str(),
+            &returnCarrier);
+        const auto hostStatus = luna_runtime_fragment_ref_transfer_v1(
+            &returnCarrier, slot.slotId.c_str(), slot.contractId.c_str(),
+            &carrier);
+        countDispatchAllocations = false;
+        if (argumentStatus != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
+            returnStatus != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
+            hostStatus != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
+            dispatchAllocations != 0 || carrier != identity ||
+            argumentCarrier || returnCarrier ||
+            factoryCalls != beforeTransferFactory ||
+            destroyCalls != beforeTransferDestroy ||
+            luna_runtime_fragment_ref_check_v1(
+                carrier, slot.slotId.c_str(), slot.contractId.c_str()) !=
+                LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
+            return fail("Ref bridge owning argument/return transfer lost its unique handle");
+        if (luna_runtime_fragment_ref_transfer_v1(
+                &argumentCarrier, slot.slotId.c_str(), slot.contractId.c_str(),
+                &returnCarrier) != LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1 ||
+            returnCarrier)
+            return fail("Ref bridge transfer accepted a consumed source");
         luna_runtime_fragment_ref_drop_v1(&carrier);
         luna_runtime_fragment_ref_drop_v1(&carrier);
         luna_runtime_fragment_ref_drop_v1(nullptr);
