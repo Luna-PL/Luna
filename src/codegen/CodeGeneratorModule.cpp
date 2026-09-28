@@ -1,4 +1,5 @@
 #include "CodeGenerator.h"
+#include "moonir/Verifier.h"
 
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/PassManager.h>
@@ -54,19 +55,120 @@ std::unique_ptr<llvm::TargetMachine> createHostOptimizationTarget(
 
 } // namespace
 
+bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
+    moon::Module& program, FunctionDecl& function, std::string& failure) {
+    // Never reuse the publishing CodeGenerator. Even a successful proof is
+    // destroyed here, so its raw-pointer body cannot reach emitObjectFile or
+    // materializeJitModule while the source/container gates remain closed.
+    CodeGenerator proof("private.ref.ingress.proof");
+    proof.mProgram = &program;
+    proof.mTypeMaterializer =
+        std::make_unique<moon::TypeMaterializer>(program);
+    if (function.generatedSymbolName.empty()) {
+        failure = "function has no generated symbol";
+        return false;
+    }
+    // The module-level verifier intentionally rejects all source Refs today.
+    // Validate the sealed CFG on its own before asking codegen to traverse it.
+    moon::Verifier cfgVerifier;
+    if (!function.controlFlow || !function.controlFlow->sealed ||
+        function.body || function.isExtern ||
+        !cfgVerifier.verify(*function.controlFlow, program)) {
+        failure = "function has no independently verified sealed CFG";
+        return false;
+    }
+    std::vector<llvm::Type*> parameters;
+    if (function.requiresFragmentContext)
+        parameters.push_back(proof.mHelpers->ptrTy());
+    parameters.push_back(proof.mHelpers->ptrTy());
+    auto* body = llvm::Function::Create(
+        llvm::FunctionType::get(proof.mHelpers->voidTy(), parameters, false),
+        llvm::Function::InternalLinkage,
+        function.generatedSymbolName, *proof.mModule);
+    proof.mFunctions[function.generatedSymbolName] = body;
+    proof.generateFunctionBody(&function);
+    if (!proof.mErrors.empty()) {
+        failure = proof.mErrors.front().message;
+        return false;
+    }
+    auto* wrapper = proof.mHelpers->emitRuntimeFragmentRefUnitIngressWrapper(
+        *proof.mModule, *body, program, function,
+        "__private_ref_ingress_proof");
+    if (!wrapper || body->empty() || !body->hasInternalLinkage() ||
+        !wrapper->hasInternalLinkage()) {
+        failure = "frozen signature/CFG did not pair with the generated body";
+        return false;
+    }
+    size_t bodyDropCalls = 0;
+    size_t wrapperBodyCalls = 0;
+    for (auto& block : *body)
+        for (auto& instruction : block)
+            if (auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
+                call && call->getCalledFunction() &&
+                call->getCalledFunction()->getName() ==
+                    "luna_runtime_fragment_ref_drop_v1")
+                ++bodyDropCalls;
+    for (auto& block : *wrapper)
+        for (auto& instruction : block)
+            if (auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
+                call && call->getCalledFunction() == body)
+                ++wrapperBodyCalls;
+    const bool owned = function.params.front().relation ==
+        luna::ownership::Relation::Owned;
+    if (wrapperBodyCalls != 1 ||
+        (owned ? bodyDropCalls == 0 : bodyDropCalls != 0)) {
+        failure = "generated body has no matching Ref Drop behavior";
+        return false;
+    }
+    std::string invalidIR;
+    llvm::raw_string_ostream stream(invalidIR);
+    if (llvm::verifyModule(*proof.mModule, &stream)) {
+        stream.flush();
+        failure = "generated body/wrapper LLVM IR is invalid: " + invalidIR;
+        return false;
+    }
+    failure.clear();
+    return true;
+}
+
 bool CodeGenerator::generate(moon::Module* program) {
     if (!program) {
         error("code generation has no MoonIR module");
         return false;
     }
+    bool containsRef = false;
     for (const auto& type : program->typeTable) {
         if (type.kind != TypeKind::RuntimeFragmentRef) continue;
+        containsRef = true;
         if (!program->resolveRuntimeFragmentRefTarget(type.id)) {
             error("RuntimeFragmentRef has no frozen nominal Slot/Contract target");
-        } else {
-            error("RuntimeFragmentRef host ingress/return ABI is not implemented; "
-                  "raw-pointer function publication is blocked");
+            return false;
         }
+    }
+    if (containsRef) {
+        size_t provenEntries = 0;
+        for (auto& declaration : program->declarations) {
+            auto* function = dynamic_cast<FunctionDecl*>(declaration.get());
+            if (!function || function->params.size() != 1) continue;
+            const auto* parameter = program->findType(
+                function->params.front().type);
+            const auto* result = program->findType(function->returnType);
+            if (!parameter || !result ||
+                parameter->kind != TypeKind::RuntimeFragmentRef ||
+                result->kind != TypeKind::Unit) continue;
+            std::string failure;
+            if (verifyPrivateRuntimeFragmentRefUnitIngress(
+                    *program, *function, failure)) {
+                ++provenEntries;
+            } else {
+                error("private RuntimeFragmentRef unit ingress proof failed for '" +
+                      function->name + "': " + failure);
+            }
+        }
+        error("RuntimeFragmentRef host ingress/return ABI is not implemented; "
+              "raw-pointer function publication is blocked; " +
+              std::to_string(provenEntries) +
+              " private unit body/wrapper pair(s) verified and discarded");
         return false;
     }
     mProgram = program;

@@ -136,6 +136,12 @@ private:
     };
 
     void generateFunctionBody(moon::FunctionDecl* decl);
+    // Proof-only lowering of one constrained Ref entry into a temporary LLVM
+    // module. The module is destroyed before this returns; no JIT/AOT artifact
+    // or runtime descriptor may escape while the source Ref gates are closed.
+    static bool verifyPrivateRuntimeFragmentRefUnitIngress(
+        moon::Module& program, moon::FunctionDecl& function,
+        std::string& failure);
     void generateControlFlowBody(moon::ControlFlowGraph& graph, llvm::Function* func,
                                  llvm::BasicBlock* abiEntry,
                                  size_t hiddenParameterCount);

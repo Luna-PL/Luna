@@ -400,7 +400,7 @@ unit 返回、完整的冻结 Function 类型及声明契约、匹配的唯一 c
 生成 wrapper；不相符的 LLVM 函数体名字亦被拒绝。
 
 这只证明内部所有权模式的选择，不证明任意传入的 LLVM 函数体实现了该 CFG。
-CodeGenerator 尚未把 helper 与自己生成的函数体配对，也未发布 descriptor；
+下文的私有生成体配对针对两种 unit 入口形状补上后一缺口，但不发布 descriptor；
 MoonIR／后端／container 的 Ref 门禁保持关闭。源码 import、返回、聚合清理和
 动态 `apply` 仍未完成。
 
@@ -408,6 +408,26 @@ MoonIR／后端／container 的 Ref 门禁保持关闭。源码 import、返回�
 ASan／UBSan canonical MoonIR 1／1 通过；WSL Arch Linux Clang 22.1.8
 对改动的后端文件完成语法编译检查。设计状态、file guide inventory 与差异
 检查通过；这些是本地验证，不代表远端 CI 或稳定发布批准。
+
+### 私有 Ref 入口与真实生成体配对（2026-09-28）
+
+直接绕过 MoonIR 总体验证而调用 CodeGenerator 时，单 Ref 参数／unit 返回的源码
+入口现在由真实 canonical CFG CodeGenerator 降低到一个独立、短命的 LLVM module。
+降低之前先独立验证 sealed CFG；冻结的源码签名及 CFG 决定私有 wrapper 的所有权
+模式和名义目标，wrapper 随后调用该次实际生成的函数体。验证要求两者均为 internal
+linkage、wrapper 恰调用该函数体一次、affine 拥有型参数的生成体含 Ref Drop、
+共享借用参数不含 Ref Drop，且完整 LLVM module 通过 IR 验证。canonical 回归证明
+两种源码入口均通过私有验证，篡改所有权关系则失败。
+
+即使验证成功，临时 module 和 wrapper 也会立即丢弃；发布用 CodeGenerator 仍返回
+阻断诊断，JIT／AOT 不能从这一步取得生成体。当前范围故意只覆盖一个 Ref 参数和
+unit 返回；需要其他函数体或额外 lowering 支持的入口可以在私有验证中失败，
+不会打开发布门禁。这还不是源码宿主 ABI、descriptor、import、返回值传输、wire
+往返、动态 `apply` 或跨包执行。`source-ref-apply` 仍为 implementation-open。
+
+严格 Windows 构建及本地 77 项测试全部通过，Windows ASan／UBSan canonical 测试
+亦通过；WSL Arch Linux Clang 22.1.8 对改动的后端文件完成语法编译。
+设计状态、file guide 和差异检查通过；这不是远端 CI 或发布批准。
 
 ## 宿主控制的发现与注入
 

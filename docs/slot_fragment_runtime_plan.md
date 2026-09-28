@@ -503,16 +503,43 @@ canonical callable type, Ref resource facts and context effect, and checks
 that no wrapper is created; a mismatched LLVM body name is also rejected.
 
 This establishes an internal ownership-selection proof, not proof that an
-arbitrary supplied LLVM body implements that CFG. CodeGenerator has not yet
-paired the helper with its own generated body or published a descriptor;
-MoonIR/backend/container Ref gates remain closed. Source import, return,
-aggregate cleanup and dynamic `apply` remain open.
+arbitrary supplied LLVM body implements that CFG. The private generated-body
+pairing described below addresses the latter gap for two unit-entry shapes;
+it does not publish a descriptor. MoonIR/backend/container Ref gates remain
+closed. Source import, return, aggregate cleanup and dynamic `apply` remain
+open.
 
 The strict build and all 77 non-hardware gates pass on the final code (193.67
 seconds), as does Windows ASan/UBSan canonical MoonIR (1/1). WSL Arch Linux
 Clang 22.1.8 syntax-compiles the changed backend file. Design status,
 file-guide inventory and diff checks pass. These are local checks, not remote
 CI or stable-release approval.
+
+### Private generated-body Ref ingress proof (2026-09-28)
+
+On the direct-codegen bypass path, a one-Ref/unit source entry is now lowered
+through the real canonical-CFG CodeGenerator into a separate, short-lived LLVM
+module. Before lowering, its sealed CFG is independently verified. The frozen
+source signature and CFG select the private wrapper mode and nominal target;
+the wrapper then calls that exact generated body. The proof requires internal
+linkage, one wrapper-to-body call, a generated Ref Drop for an affine owned
+parameter and no Ref Drop for a shared borrow, and valid LLVM module IR.
+Canonical regression confirms both source entry shapes pass this proof and
+that a forged ownership relation fails it.
+
+The temporary module and wrapper are discarded even when the proof succeeds.
+The publishing CodeGenerator still returns a blocking diagnostic and cannot
+emit this body via JIT or AOT. This is intentionally limited to a single Ref
+parameter with a unit result; a function needing other bodies or additional
+lowering support may fail the private proof without changing the closed gate.
+It is not a source host ABI, descriptor, import, return transport, wire
+round-trip, dynamic `apply`, or cross-package execution. `source-ref-apply`
+remains implementation-open.
+
+The strict Windows build and all 77 local tests pass, as does the Windows
+ASan/UBSan canonical test. WSL Arch Linux Clang 22.1.8 syntax-compiles the
+changed backend file. Design-status, file-guide and diff checks pass; these
+are not remote CI or release approval.
 
 ## Host-controlled discovery and injection
 

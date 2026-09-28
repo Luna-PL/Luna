@@ -126,8 +126,39 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 return diagnostic.message.find(
                     "raw-pointer function publication is blocked") !=
                     std::string::npos;
+            }) ||
+        !std::any_of(blockedRefCodegen.errors().begin(),
+            blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "2 private unit body/wrapper pair(s) verified and discarded") !=
+                    std::string::npos;
+            }) ||
+        std::any_of(blockedRefCodegen.errors().begin(),
+            blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "private RuntimeFragmentRef unit ingress proof failed") !=
+                    std::string::npos;
             }))
         return fail("direct codegen bypassed the unimplemented Ref host ingress ABI");
+    const auto originalRelation = accept->params.front().relation;
+    accept->params.front().relation = luna::ownership::Relation::SharedBorrow;
+    CodeGenerator forgedRefCodegen("canonical-forged-source-ref-codegen-gate");
+    const bool forgedPublished = forgedRefCodegen.generate(sourceRefModule.get());
+    accept->params.front().relation = originalRelation;
+    if (forgedPublished ||
+        !std::any_of(forgedRefCodegen.errors().begin(),
+            forgedRefCodegen.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "private RuntimeFragmentRef unit ingress proof failed for 'accept'") !=
+                    std::string::npos;
+            }) ||
+        !std::any_of(forgedRefCodegen.errors().begin(),
+            forgedRefCodegen.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "raw-pointer function publication is blocked") !=
+                    std::string::npos;
+            }))
+        return fail("forged Ref relation escaped or appeared proven by codegen");
 
     llvm::LLVMContext bridgeContext;
     CGHelpers bridgeHelpers(bridgeContext);
