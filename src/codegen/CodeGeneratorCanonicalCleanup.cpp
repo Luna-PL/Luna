@@ -16,11 +16,20 @@ void CodeGenerator::emitCleanup(
         error("cleanup references unknown local '" + place + "'");
         return;
     }
-    llvm::Value* pointer = mBuilder->CreateLoad(
-        local->second->getAllocatedType(), local->second, place + ".cleanup");
     TypePtr type;
     auto typed = mLocalTypes.find(place);
     if (typed != mLocalTypes.end()) type = typed->second;
+    if (type && type->kind == TypeKind::RuntimeFragmentRef) {
+        if (action != luna::ownership::CleanupAction::Drop) {
+            error("RuntimeFragmentRef cleanup requires a Drop action");
+            return;
+        }
+        mHelpers->emitRuntimeFragmentRefDrop(
+            *mBuilder, *mModule, local->second);
+        return;
+    }
+    llvm::Value* pointer = mBuilder->CreateLoad(
+        local->second->getAllocatedType(), local->second, place + ".cleanup");
     // String/cstr literals are immutable global constants and own no heap
     // allocation. Until the standard library introduces owned text, their
     // cleanup is a no-op (see emitOwnedPayloadCleanup).
@@ -287,6 +296,16 @@ void CodeGenerator::emitCanonicalCleanup(
     }
 
     auto emitValueCleanup = [this, &cleanup, type, &storage, label]() {
+        if (cleanup.kind == moon::CleanupKind::Value &&
+            type->kind == TypeKind::RuntimeFragmentRef) {
+            if (cleanup.action != luna::ownership::CleanupAction::Drop) {
+                error("canonical RuntimeFragmentRef cleanup requires a Drop action");
+                return;
+            }
+            mHelpers->emitRuntimeFragmentRefDrop(
+                *mBuilder, *mModule, storage);
+            return;
+        }
         llvm::Type* storageType = cleanup.kind == moon::CleanupKind::Allocation
             ? mHelpers->ptrTy() : mHelpers->toLLVMType(type);
         llvm::Value* value = mBuilder->CreateLoad(
@@ -340,6 +359,10 @@ void CodeGenerator::emitCanonicalCleanup(
     };
 
     if (cleanup.kind == moon::CleanupKind::Allocation) {
+        if (type->kind == TypeKind::RuntimeFragmentRef) {
+            error("RuntimeFragmentRef cannot use allocation cleanup");
+            return;
+        }
         if (!cleanup.place.projections.empty() || cleanup.guard) {
             error("canonical allocation cleanup is projected or guarded");
             return;

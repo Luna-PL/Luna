@@ -2,7 +2,6 @@
 #include "../core/TypeLayout.h"
 
 #include <algorithm>
-#include <stdexcept>
 #include <vector>
 
 CGHelpers::CGHelpers(llvm::LLVMContext& ctx) : mCtx(ctx) {}
@@ -12,7 +11,7 @@ llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
 
     switch (type->kind) {
         case TypeKind::RuntimeFragmentRef:
-            throw std::logic_error("RuntimeFragmentRef host/drop bridge is not implemented");
+            return ptrTy();
         case TypeKind::I8:    return llvm::Type::getInt8Ty(mCtx);
         case TypeKind::I16:   return llvm::Type::getInt16Ty(mCtx);
         case TypeKind::I32:   return i32Ty();
@@ -84,6 +83,14 @@ llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
         default:
             return i32Ty(); // fallback
     }
+}
+
+llvm::CallInst* CGHelpers::emitRuntimeFragmentRefDrop(
+    llvm::IRBuilder<>& builder, llvm::Module& module,
+    llvm::Value* carrierCell) const {
+    auto drop = module.getOrInsertFunction(
+        "luna_runtime_fragment_ref_drop_v1", voidTy(), ptrTy());
+    return builder.CreateCall(drop, {carrierCell});
 }
 
 uint64_t typeSize(const TypePtr& type) {

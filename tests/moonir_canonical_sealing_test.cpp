@@ -5,7 +5,7 @@
 #include "core/TypeRelations.h"
 
 #include <algorithm>
-#include <stdexcept>
+#include <llvm/IR/Verifier.h>
 
 namespace canonical_test {
 
@@ -67,12 +67,27 @@ int testRuntimeFragmentRefPreparation() {
         return fail("container publication bypassed the Ref bridge gate");
     llvm::LLVMContext llvmContext;
     CGHelpers helpers(llvmContext);
-    bool rejected = false;
-    try { helpers.toLLVMType(restored); }
-    catch (const std::logic_error& exception) {
-        rejected = std::string(exception.what()).find("RuntimeFragmentRef") != std::string::npos;
-    }
-    if (!rejected) return fail("LLVM type lowering silently used its scalar fallback for an internal Ref");
+    if (helpers.toLLVMType(restored) != helpers.ptrTy())
+        return fail("internal Ref has no opaque pointer carrier representation");
+    llvm::Module llvmModule("canonical.ref_drop_preparation", llvmContext);
+    auto* function = llvm::Function::Create(
+        llvm::FunctionType::get(helpers.voidTy(), false),
+        llvm::Function::ExternalLinkage, "test_ref_drop", llvmModule);
+    auto* entry = llvm::BasicBlock::Create(llvmContext, "entry", function);
+    llvm::IRBuilder<> builder(entry);
+    auto* carrier = builder.CreateAlloca(helpers.ptrTy(), nullptr, "ref.carrier");
+    builder.CreateStore(llvm::ConstantPointerNull::get(
+        llvm::cast<llvm::PointerType>(helpers.ptrTy())), carrier);
+    auto* drop = helpers.emitRuntimeFragmentRefDrop(
+        builder, llvmModule, carrier);
+    builder.CreateRetVoid();
+    if (!drop->getCalledFunction() ||
+        drop->getCalledFunction()->getName() !=
+            "luna_runtime_fragment_ref_drop_v1" ||
+        drop->getArgOperand(0) != carrier ||
+        llvmModule.getFunction("rt_dealloc") ||
+        llvm::verifyModule(llvmModule))
+        return fail("internal Ref Drop did not clear its original carrier via runtime ABI");
     // Forge the new ordinal into an otherwise old, canonical singleton type
     // section. Decoder rejection must preserve the caller's existing table.
     moon::Module old;

@@ -30,10 +30,15 @@ llvm::Function* CodeGenerator::getOrCreateDropCallback(
 
     if (type && type->kind != TypeKind::Unit &&
         type->kind != TypeKind::Never) {
-        llvm::Value* stored = mBuilder->CreateLoad(
-            mHelpers->toLLVMType(type), callback->getArg(0),
-            "stored.value");
-        emitOwnedPayloadCleanup(stored, type, "erased.value");
+        if (type->kind == TypeKind::RuntimeFragmentRef) {
+            mHelpers->emitRuntimeFragmentRefDrop(
+                *mBuilder, *mModule, callback->getArg(0));
+        } else {
+            llvm::Value* stored = mBuilder->CreateLoad(
+                mHelpers->toLLVMType(type), callback->getArg(0),
+                "stored.value");
+            emitOwnedPayloadCleanup(stored, type, "erased.value");
+        }
     }
     if (!mBuilder->GetInsertBlock()->getTerminator())
         mBuilder->CreateRetVoid();
@@ -285,6 +290,13 @@ void CodeGenerator::emitResourceContentsCleanup(
 void CodeGenerator::emitOwnedPayloadCleanup(
     llvm::Value* value, const TypePtr& type, const std::string& label) {
     if (!value || !type || !typeRequiresCleanup(type)) return;
+
+    if (type->kind == TypeKind::RuntimeFragmentRef) {
+        // This path only has a copied SSA value, not the original owning
+        // carrier cell. Never free a duplicate while the source stays live.
+        error("RuntimeFragmentRef cleanup requires its original carrier cell");
+        return;
+    }
 
     // String literals are pointers to immutable global constants; they own
     // no heap allocation and must not be passed to rt_dealloc. Until the

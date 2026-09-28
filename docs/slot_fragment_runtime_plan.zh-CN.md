@@ -189,7 +189,8 @@ Ref，LLVM helper 不用未知类型的 i32 fallback 偷跑。不能通过伪造
 回归位于 `core_contracts_test.cpp` 和 `moonir_canonical_sealing_test.cpp`，覆盖同形异槽、
 稳定身份与 contract shape 分离、七种包装、nominal aggregate 载荷变化、17 类伪造
 Ref 事实、无效／不具体目标、递归图遍历、冻结恢复与前端修改隔离、writer／container／
-LLVM 拒绝，以及将 ordinal 41 注入旧 type section 后 decoder 不发布半成品状态。
+当时 LLVM 拒绝（现已由下文的定向 carrier／Drop 调用预备替代），以及将 ordinal 41
+注入旧 type section 后 decoder 不发布半成品状态。
 `core-contracts-test` 现也在 sanitizer 配置中直接插桩自己的实现对象，不改变 installed
 Runtime archive。源码签名、借用 region、导入／返回／drop 和动态 apply 仍未完成；
 `source-ref-apply` 保持 implementation-open。
@@ -274,6 +275,24 @@ Native 回归覆盖空／别名／占用 carrier、错误 Slot／Contract、已�
 Runtime Fragment／并发、设计状态、inventory 六项 6／6；Windows ASan／UBSan Runtime
 两项 2／2 和 WSL Arch Linux Clang 22.1.8 C++17 直接 Runtime 插桩测试通过。
 上述为本地验证，不表示远端 CI 或稳定发布批准；不改变旧性能证据。
+
+### Compiler Ref Drop 调用预备（2026-09-28）
+
+LLVM 内部将 Ref 表示为 opaque pointer，不再落入未知类型的 i32 fallback。局部及
+canonical value cleanup 对直接 Ref 的 `Drop` 使用原始可写 carrier cell 调用
+`luna_runtime_fragment_ref_drop_v1(void**)`；callback 同样直接使用收到的 cell。
+聚合载荷若只有提取后的 SSA 值而无原始字段 cell，则显式报错，绝不复制句柄或调用
+`rt_dealloc` 释放 native handle。JIT 注册了相同 runtime 符号。测试检查生成的 LLVM 调用目标、
+cell 参数和模块有效性；native ABI 测试负责清空顺序与一次释放的语义。
+
+这只是编译器清理调用预备，不是完整的 compiler dropGlue：聚合清理仍需
+原始字段 cell 的清空和部分初始化／move 清理；源码函数入口、拥有型参数／返回
+转移、borrow region、动态 `apply`、跨包 wire round-trip 均未接通。MoonIR
+verifier 与 container gate 保持关闭，`source-ref-apply` 仍为 implementation-open。
+
+本地严格构建与非 hardware 回归 77／77 通过（220.43 秒）；Windows ASan／UBSan
+canonical MoonIR 1／1 通过。设计状态、file guide inventory 与差异检查通过。
+这不表示远端 CI 或稳定发布批准。
 
 ## 宿主控制的发现与注入
 

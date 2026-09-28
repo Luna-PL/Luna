@@ -344,6 +344,30 @@ ASan/UBSan Runtime gates pass 2/2, as does direct Runtime C++17 ASan/UBSan
 execution on WSL Arch Linux Clang 22.1.8. This is local verification, not
 remote CI or stable-release approval; old performance evidence is unchanged.
 
+### Compiler Ref Drop call preparation (2026-09-28)
+
+LLVM represents an internal Ref as an opaque pointer, never the unknown-type
+i32 fallback. Direct local and canonical value cleanup call
+`luna_runtime_fragment_ref_drop_v1(void**)` with the original writable carrier
+cell for a `Drop` action; a drop callback uses its supplied cell directly.
+An extracted aggregate payload with only an SSA copy and no original field
+cell is rejected explicitly, never duplicated or sent to `rt_dealloc`. The
+JIT binds the same runtime symbol. A focused test checks the LLVM call target,
+cell argument and module validity;
+native ABI tests cover clear-before-callback and exactly-once release.
+
+This is cleanup-call preparation, not complete compiler dropGlue. Aggregate
+cleanup still needs original-field clearing and partially initialized/moved
+cleanup. Source function ingress, owning parameter/return transfer, borrow
+regions, dynamic `apply` and cross-package wire round-trip remain unwired.
+MoonIR verifier and container gates stay closed; `source-ref-apply` remains
+implementation-open.
+
+The local strict build and all 77 non-hardware gates pass (220.43 seconds),
+as does the Windows ASan/UBSan canonical MoonIR test (1/1). Design status,
+file-guide inventory and diff checks pass. This is not remote CI or stable
+release approval.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal

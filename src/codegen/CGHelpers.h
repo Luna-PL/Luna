@@ -13,6 +13,9 @@ public:
     explicit CGHelpers(llvm::LLVMContext& ctx);
 
     llvm::Type* toLLVMType(const TypePtr& type) const;
+    llvm::CallInst* emitRuntimeFragmentRefDrop(
+        llvm::IRBuilder<>& builder, llvm::Module& module,
+        llvm::Value* carrierCell) const;
     llvm::Type* i32Ty() const { return llvm::Type::getInt32Ty(mCtx); }
     llvm::Type* i64Ty() const { return llvm::Type::getInt64Ty(mCtx); }
     llvm::Type* f32Ty() const { return llvm::Type::getFloatTy(mCtx); }

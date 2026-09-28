@@ -105,6 +105,8 @@ materializeLunaJit(std::unique_ptr<llvm::Module>& module,
                 &luna_runtime_fragment_activation_resume_v1);
     bindRuntime("luna_runtime_fragment_dispatch_v1",
                 &luna_runtime_fragment_dispatch_v1);
+    bindRuntime("luna_runtime_fragment_ref_drop_v1",
+                &luna_runtime_fragment_ref_drop_v1);
 #ifdef _WIN32
     runtimeSymbols[(*jit)->mangleAndIntern("__main")] =
         ExecutorSymbolDef::fromPtr(&lunaJitMingwMain, exported);
