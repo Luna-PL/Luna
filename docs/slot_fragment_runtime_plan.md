@@ -553,11 +553,34 @@ loaded from the parameter carrier, clear that carrier before returning, and
 pass LLVM module verification. A forged result ownership usage fails the
 proof. The earlier unit-result body/wrapper proof remains separate.
 
-This proves a narrow callee-side move, not a host return ABI: there is no
-status-bearing output carrier, destination validation, failure cleanup,
-cross-package import, descriptor or callable publication. Both proof modules
+This proves a narrow callee-side move, not a host return ABI. The next private
+slice adds a status-bearing output carrier and failure cleanup; cross-package
+import, descriptor and callable publication remain absent. Both proof modules
 are destroyed and direct codegen still rejects all source Ref publication.
 `source-ref-apply` remains implementation-open.
+
+### Private affine Ref return carrier wrapper (2026-09-28)
+
+The direct affine parameter-to-return proof now pairs its actual generated
+body with an internal `(source cell, empty output cell) -> status` wrapper.
+Before consuming the source, the wrapper rejects null or aliased carrier
+addresses and a nonempty output. It then uses the native exact Slot/Contract
+transfer into a private cell, takes that owner into the body, and transfers
+the returned owner into the host output using the same frozen target. The
+return-transfer failure branch drops the owner still held in the private
+return cell. The source CFG is restricted to callback-free direct parameter
+returns, so it cannot mutate the caller's output between the precheck and
+the second transfer; concurrent host carrier mutation remains forbidden.
+
+Pre-entry failures leave source and output unchanged. Once ingress succeeds,
+the source is consumed: an unexpected post-body transfer failure cleans up
+the returned owner rather than promising rollback of the source. The private
+proof requires one generated-body call, two native transfers, one failure
+Drop, internal linkage and valid LLVM IR. Structural regression checks the
+output guard, both frozen identities, body-to-output carrier flow and invalid
+body/contract rejection. This is not a published return ABI or a claim that
+an arbitrary supplied LLVM body implements the source CFG. The module is
+discarded; MoonIR/backend/container gates still reject source Ref publication.
 
 ## Host-controlled discovery and injection
 

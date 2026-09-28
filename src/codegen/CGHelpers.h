@@ -50,6 +50,13 @@ public:
         const moon::Module& sourceModule,
         const moon::FunctionDecl& sourceFunction,
         const std::string& name) const;
+    // Internal owned Ref -> owned Ref round-trip. Source/return carrier cells
+    // are distinct, and the output must be empty. This is not publication.
+    llvm::Function* emitRuntimeFragmentRefOwnedReturnWrapper(
+        llvm::Module& module, llvm::Function& body,
+        const moon::Module& sourceModule,
+        const moon::FunctionDecl& sourceFunction,
+        const std::string& name) const;
     llvm::Type* i32Ty() const { return llvm::Type::getInt32Ty(mCtx); }
     llvm::Type* i64Ty() const { return llvm::Type::getInt64Ty(mCtx); }
     llvm::Type* f32Ty() const { return llvm::Type::getFloatTy(mCtx); }

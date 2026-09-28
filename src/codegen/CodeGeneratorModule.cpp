@@ -264,6 +264,15 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefOwnedReturn(
     }
     size_t returnedHandles = 0;
     for (auto& block : *body) {
+        for (auto& instruction : block)
+            if (auto* call = llvm::dyn_cast<llvm::CallBase>(
+                    &instruction); call &&
+                (!call->getCalledFunction() ||
+                 call->getCalledFunction()->getName() !=
+                     "luna_runtime_fragment_ref_drop_v1")) {
+                failure = "owned Ref round-trip body contains a callback";
+                return false;
+            }
         auto* returned = llvm::dyn_cast_or_null<llvm::ReturnInst>(
             block.getTerminator());
         if (!returned) continue;
@@ -302,6 +311,33 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefOwnedReturn(
     }
     if (!body->hasInternalLinkage() || returnedHandles != directReturns) {
         failure = "generated owned Ref return does not match CFG return paths";
+        return false;
+    }
+    auto* wrapper = proof.mHelpers->emitRuntimeFragmentRefOwnedReturnWrapper(
+        *proof.mModule, *body, program, function,
+        "__private_ref_owned_return_proof");
+    if (!wrapper || !wrapper->hasInternalLinkage()) {
+        failure = "generated owned Ref body has no matching host carrier wrapper";
+        return false;
+    }
+    size_t bodyCalls = 0;
+    size_t transferCalls = 0;
+    size_t failureDrops = 0;
+    for (auto& block : *wrapper)
+        for (auto& instruction : block)
+            if (auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
+                call && call->getCalledFunction()) {
+                const auto* callee = call->getCalledFunction();
+                if (callee == body) ++bodyCalls;
+                else if (callee->getName() ==
+                         "luna_runtime_fragment_ref_transfer_v1")
+                    ++transferCalls;
+                else if (callee->getName() ==
+                         "luna_runtime_fragment_ref_drop_v1")
+                    ++failureDrops;
+            }
+    if (bodyCalls != 1 || transferCalls != 2 || failureDrops != 1) {
+        failure = "host return carrier has no single-owner transfer path";
         return false;
     }
     std::string invalidIR;
@@ -366,7 +402,7 @@ bool CodeGenerator::generate(moon::Module* program) {
               std::to_string(provenEntries) +
               " private unit body/wrapper pair(s) and " +
               std::to_string(provenReturns) +
-              " private owned return body/bodies verified and discarded");
+              " private owned return body/wrapper pair(s) verified and discarded");
         return false;
     }
     mProgram = program;

@@ -439,10 +439,28 @@ LLVM 函数体必须从参数 carrier 取出句柄、在返回前清空该 carri
 module 验证。篡改结果的所有权用法会使证明失败。前一轮 unit 返回的函数体／wrapper
 证明与本项分开。
 
-这仅证明被调用方狭义的所有权移动，不是宿主返回 ABI：还没有携带状态码的输出
-carrier、目标验证、失败清理、跨包 import、descriptor 或 callable 发布。两个证明
-module 均立即销毁，直接 codegen 仍拒绝所有源码 Ref 发布。
+这仅证明被调用方狭义的所有权移动，不是宿主返回 ABI。下一私有切片增加携带状态码
+的输出 carrier 与失败清理；跨包 import、descriptor 和 callable 发布仍不存在。两个
+证明 module 均立即销毁，直接 codegen 仍拒绝所有源码 Ref 发布。
 `source-ref-apply` 保持 implementation-open。
+
+### 私有 affine Ref 返回 carrier wrapper（2026-09-28）
+
+直接 affine 参数到返回值的证明，现在把真实生成的函数体与内部
+`(输入 cell, 空输出 cell) -> 状态码` wrapper 配对。消耗输入前先拒绝空地址、
+输入输出同址以及非空输出；随后按冻结 Slot／Contract 调用 native transfer，
+把输入移至私有 cell、取出 owner 交给函数体，再用同一目标把返回 owner 移至
+宿主输出。返回转移失败时，wrapper Drop 私有返回 cell 中仍拥有的句柄。
+源码 CFG 限定为无回调的直接参数返回，因此不会在输出预检与第二次转移之间
+修改调用方输出；宿主并发修改 carrier 依旧被禁止。
+
+进入函数体前的失败保持输入和输出不变；入口转移成功后输入即已消耗。
+如果之后返回转移意外失败，会清理返回 owner，而不承诺回滚输入。私有证明
+要求一次生成函数体调用、两次 native transfer、一次失败 Drop、internal linkage
+及有效 LLVM IR。结构回归核对输出空位、两次冻结身份、函数体到输出的 carrier
+流动和无效函数体／契约拒绝。这不是已发布的返回 ABI，也不证明任意传入的 LLVM
+函数体实现源码 CFG。临时 module 随即丢弃；MoonIR／后端／container 的源码 Ref
+发布门禁仍保持关闭。
 
 ## 宿主控制的发现与注入
 

@@ -199,14 +199,15 @@ llvm::CallInst* CGHelpers::emitRuntimeFragmentRefOwnedIngressGate(
 
 namespace {
 
-struct RefUnitIngressPlan {
+struct RefIngressPlan {
     moon::DeclarationRef target;
     bool owned = false;
     bool hasFragmentContext = false;
 };
 
-std::optional<RefUnitIngressPlan> resolveRefUnitIngressPlan(
-    const moon::Module& module, const moon::FunctionDecl& function) {
+std::optional<RefIngressPlan> resolveRefIngressPlan(
+    const moon::Module& module, const moon::FunctionDecl& function,
+    bool returnsOwnedRef) {
     if (!module.typeTableSealed || function.isExtern || function.isKernel ||
         function.isSelector || !function.typeParams.empty() ||
         function.generatedSymbolName.empty() || !function.linkName.empty() ||
@@ -224,8 +225,13 @@ std::optional<RefUnitIngressPlan> resolveRefUnitIngressPlan(
     const auto* refType = module.findType(parameter.type);
     const auto* returnType = module.findType(function.returnType);
     if (!target || !refType || !returnType ||
-        returnType->kind != TypeKind::Unit ||
-        function.returnUsage != luna::ownership::Usage::Copy ||
+        (returnsOwnedRef
+            ? returnType->kind != TypeKind::RuntimeFragmentRef ||
+              returnType->id != refType->id ||
+              function.returnUsage != luna::ownership::Usage::Affine ||
+              function.requiresFragmentContext
+            : returnType->kind != TypeKind::Unit ||
+              function.returnUsage != luna::ownership::Usage::Copy) ||
         function.returnsLinear ||
         refType->sysmeta.resource.management !=
             luna::sysmeta::ResourceManagement::Unique ||
@@ -314,6 +320,28 @@ std::optional<RefUnitIngressPlan> resolveRefUnitIngressPlan(
     if (matchingCleanups !=
         (parameter.relation == luna::ownership::Relation::Owned ? 1u : 0u))
         return std::nullopt;
+    if (returnsOwnedRef) {
+        if (parameter.relation != luna::ownership::Relation::Owned)
+            return std::nullopt;
+        size_t directReturns = 0;
+        for (const auto& block : graph.blocks) {
+            // No callback may mutate the host's output cell after the
+            // preflight check but before the returned owner is installed.
+            if (!block.operations.empty()) return std::nullopt;
+            if (block.terminator.kind != moon::TerminatorKind::Return) {
+                if (block.terminator.kind != moon::TerminatorKind::Jump &&
+                    block.terminator.kind != moon::TerminatorKind::Unreachable)
+                    return std::nullopt;
+                continue;
+            }
+            const auto* identifier = dynamic_cast<const moon::IdentifierExpr*>(
+                block.terminator.operand.get());
+            if (!identifier || identifier->local != parameterLocal->id)
+                return std::nullopt;
+            ++directReturns;
+        }
+        if (!directReturns) return std::nullopt;
+    }
     moon::Verifier verifier;
     if (!verifier.verify(graph, module)) return std::nullopt;
     const auto effects = moon::computeFragmentContextEffects(module);
@@ -322,7 +350,7 @@ std::optional<RefUnitIngressPlan> resolveRefUnitIngressPlan(
     if (function.requiresFragmentContext !=
         (effect != effects.end() && effect->second))
         return std::nullopt;
-    return RefUnitIngressPlan{
+    return RefIngressPlan{
         *target,
         parameter.relation == luna::ownership::Relation::Owned,
         function.requiresFragmentContext};
@@ -335,7 +363,8 @@ llvm::Function* CGHelpers::emitRuntimeFragmentRefUnitIngressWrapper(
     const moon::Module& sourceModule,
     const moon::FunctionDecl& sourceFunction,
     const std::string& name) const {
-    const auto plan = resolveRefUnitIngressPlan(sourceModule, sourceFunction);
+    const auto plan = resolveRefIngressPlan(
+        sourceModule, sourceFunction, false);
     if (!plan || name.empty() || module.getFunction(name) ||
         body.getParent() != &module || body.isVarArg() ||
         body.getName() != sourceFunction.generatedSymbolName ||
@@ -379,6 +408,89 @@ llvm::Function* CGHelpers::emitRuntimeFragmentRefUnitIngressWrapper(
     arguments.push_back(reference);
     auto* call = builder.CreateCall(&body, arguments);
     call->setCallingConv(body.getCallingConv());
+    builder.CreateRet(llvm::ConstantInt::get(
+        i32Ty(), LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1));
+    return wrapper;
+}
+
+llvm::Function* CGHelpers::emitRuntimeFragmentRefOwnedReturnWrapper(
+    llvm::Module& module, llvm::Function& body,
+    const moon::Module& sourceModule,
+    const moon::FunctionDecl& sourceFunction,
+    const std::string& name) const {
+    const auto plan = resolveRefIngressPlan(
+        sourceModule, sourceFunction, true);
+    if (!plan || !plan->owned || plan->hasFragmentContext || name.empty() ||
+        module.getFunction(name) || body.getParent() != &module ||
+        !body.hasInternalLinkage() || body.isVarArg() || body.getName() !=
+            sourceFunction.generatedSymbolName ||
+        body.getReturnType() != ptrTy() || body.arg_size() != 1 ||
+        body.getArg(0)->getType() != ptrTy())
+        return nullptr;
+
+    auto* wrapper = llvm::Function::Create(
+        llvm::FunctionType::get(i32Ty(), {ptrTy(), ptrTy()}, false),
+        llvm::Function::InternalLinkage, name, module);
+    auto* entry = llvm::BasicBlock::Create(mCtx, "entry", wrapper);
+    auto* outputCheck = llvm::BasicBlock::Create(
+        mCtx, "ref.output.check", wrapper);
+    auto* ingress = llvm::BasicBlock::Create(
+        mCtx, "ref.ingress", wrapper);
+    auto* bodyEntry = llvm::BasicBlock::Create(
+        mCtx, "ref.body", wrapper);
+    auto* invalidCarrier = llvm::BasicBlock::Create(
+        mCtx, "ref.invalid.carrier", wrapper);
+    llvm::IRBuilder<> builder(entry);
+    auto* source = wrapper->getArg(0);
+    auto* output = wrapper->getArg(1);
+    auto* nullHandle = llvm::ConstantPointerNull::get(
+        llvm::cast<llvm::PointerType>(ptrTy()));
+    auto* validAddresses = builder.CreateAnd(
+        builder.CreateAnd(builder.CreateICmpNE(source, nullHandle),
+                          builder.CreateICmpNE(output, nullHandle)),
+        builder.CreateICmpNE(source, output));
+    builder.CreateCondBr(validAddresses, outputCheck, invalidCarrier);
+    builder.SetInsertPoint(invalidCarrier);
+    builder.CreateRet(llvm::ConstantInt::getSigned(
+        i32Ty(), LUNA_RUNTIME_FRAGMENT_REF_INVALID_CARRIER_V1));
+    builder.SetInsertPoint(outputCheck);
+    auto* outputEmpty = builder.CreateICmpEQ(
+        builder.CreateLoad(ptrTy(), output, "ref.output.current"), nullHandle);
+    builder.CreateCondBr(outputEmpty, ingress, invalidCarrier);
+
+    builder.SetInsertPoint(ingress);
+    auto* privateOwner = builder.CreateAlloca(
+        ptrTy(), nullptr, "ref.private.owner");
+    builder.CreateStore(nullHandle, privateOwner);
+    if (!emitRuntimeFragmentRefOwnedIngressGate(
+            builder, module, source, privateOwner, plan->target, bodyEntry)) {
+        wrapper->eraseFromParent();
+        return nullptr;
+    }
+    auto* taken = emitRuntimeFragmentRefTake(builder, privateOwner);
+    auto* returned = builder.CreateCall(&body, {taken}, "ref.returned");
+    returned->setCallingConv(body.getCallingConv());
+    auto* returnedOwner = builder.CreateAlloca(
+        ptrTy(), nullptr, "ref.return.owner");
+    builder.CreateStore(returned, returnedOwner);
+    auto* status = emitRuntimeFragmentRefOwnedTransfer(
+        builder, module, returnedOwner, output, plan->target);
+    if (!status) {
+        wrapper->eraseFromParent();
+        return nullptr;
+    }
+    auto* success = llvm::BasicBlock::Create(
+        mCtx, "ref.return.accepted", wrapper);
+    auto* failure = llvm::BasicBlock::Create(
+        mCtx, "ref.return.failed", wrapper);
+    builder.CreateCondBr(builder.CreateICmpEQ(
+        status, llvm::ConstantInt::get(
+            i32Ty(), LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)),
+        success, failure);
+    builder.SetInsertPoint(failure);
+    emitRuntimeFragmentRefDrop(builder, module, returnedOwner);
+    builder.CreateRet(status);
+    builder.SetInsertPoint(success);
     builder.CreateRet(llvm::ConstantInt::get(
         i32Ty(), LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1));
     return wrapper;

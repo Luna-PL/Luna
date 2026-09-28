@@ -135,7 +135,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
                     "2 private unit body/wrapper pair(s) and 1 private owned "
-                    "return body/bodies verified and discarded") !=
+                    "return body/wrapper pair(s) verified and discarded") !=
                     std::string::npos;
             }) ||
         std::any_of(blockedRefCodegen.errors().begin(),
@@ -296,6 +296,14 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     bridgeHelpers.emitRuntimeFragmentRefDrop(
         bridgeBuilder, bridgeModule, bodyOwner);
     bridgeBuilder.CreateRetVoid();
+    auto* returningBodyFunction = llvm::Function::Create(
+        llvm::FunctionType::get(
+            bridgeHelpers.ptrTy(), {bridgeHelpers.ptrTy()}, false),
+        llvm::Function::InternalLinkage,
+        transfer->generatedSymbolName, bridgeModule);
+    bridgeBuilder.SetInsertPoint(llvm::BasicBlock::Create(
+        bridgeContext, "entry", returningBodyFunction));
+    bridgeBuilder.CreateRet(returningBodyFunction->getArg(0));
     auto* generatedBorrowWrapper =
         bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
             bridgeModule, *borrowedBodyFunction, *sourceRefModule, *observe,
@@ -304,6 +312,35 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
             bridgeModule, *owningBodyFunction, *sourceRefModule, *accept,
             "owning_ref_host_entry");
+    auto* generatedReturnWrapper =
+        bridgeHelpers.emitRuntimeFragmentRefOwnedReturnWrapper(
+            bridgeModule, *returningBodyFunction, *sourceRefModule, *transfer,
+            "returning_ref_host_entry");
+    if (bridgeHelpers.emitRuntimeFragmentRefOwnedReturnWrapper(
+            bridgeModule, *returningBodyFunction, *sourceRefModule, *transfer,
+            "returning_ref_host_entry"))
+        return fail("LLVM Ref return wrapper accepted a duplicate name");
+    returningBodyFunction->setLinkage(llvm::Function::ExternalLinkage);
+    const bool externalReturnBodyAccepted =
+        bridgeHelpers.emitRuntimeFragmentRefOwnedReturnWrapper(
+            bridgeModule, *returningBodyFunction, *sourceRefModule, *transfer,
+            "external_return_body") != nullptr;
+    returningBodyFunction->setLinkage(llvm::Function::InternalLinkage);
+    if (externalReturnBodyAccepted ||
+        bridgeModule.getFunction("external_return_body") ||
+        bridgeHelpers.emitRuntimeFragmentRefOwnedReturnWrapper(
+            bridgeModule, *borrowedBodyFunction, *sourceRefModule, *transfer,
+            "wrong_return_body"))
+        return fail("LLVM Ref return wrapper accepted an invalid body ABI");
+    const auto originalBridgeReturnUsage = transfer->returnUsage;
+    transfer->returnUsage = luna::ownership::Usage::Copy;
+    const bool forgedReturnWrapper =
+        bridgeHelpers.emitRuntimeFragmentRefOwnedReturnWrapper(
+            bridgeModule, *returningBodyFunction, *sourceRefModule, *transfer,
+            "forged_return_wrapper") != nullptr;
+    transfer->returnUsage = originalBridgeReturnUsage;
+    if (forgedReturnWrapper || bridgeModule.getFunction("forged_return_wrapper"))
+        return fail("LLVM Ref return wrapper accepted a forged return contract");
     if (bridgeHelpers.emitRuntimeFragmentRefUnitIngressWrapper(
             bridgeModule, *borrowedBodyFunction, *sourceRefModule, *observe,
             "borrowed_ref_host_entry"))
@@ -395,6 +432,106 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         }
         return nullptr;
     };
+    auto* generatedReturnCall = findCallTo(
+        generatedReturnWrapper, returningBodyFunction);
+    std::vector<llvm::CallInst*> returnTransfers;
+    llvm::CallInst* returnFailureDrop = nullptr;
+    llvm::BasicBlock* returnOutputCheck = nullptr;
+    llvm::BasicBlock* invalidCarrierBlock = nullptr;
+    if (generatedReturnWrapper) {
+        for (auto& block : *generatedReturnWrapper) {
+            if (block.getName() == "ref.output.check")
+                returnOutputCheck = &block;
+            if (block.getName() == "ref.invalid.carrier")
+                invalidCarrierBlock = &block;
+            for (auto& instruction : block)
+                if (auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
+                    call && call->getCalledFunction()) {
+                    if (call->getCalledFunction()->getName() ==
+                        "luna_runtime_fragment_ref_transfer_v1")
+                        returnTransfers.push_back(call);
+                    if (call->getCalledFunction()->getName() ==
+                        "luna_runtime_fragment_ref_drop_v1")
+                        returnFailureDrop = call;
+                }
+        }
+    }
+    llvm::LoadInst* outputLoad = nullptr;
+    if (returnOutputCheck && !returnOutputCheck->empty())
+        outputLoad = llvm::dyn_cast<llvm::LoadInst>(
+            &*returnOutputCheck->begin());
+    auto* returnOutputBranch = returnOutputCheck
+        ? llvm::dyn_cast_or_null<llvm::BranchInst>(
+              returnOutputCheck->getTerminator()) : nullptr;
+    auto* outputEmptyCondition =
+        returnOutputBranch && returnOutputBranch->isConditional()
+        ? llvm::dyn_cast<llvm::ICmpInst>(
+              returnOutputBranch->getCondition()) : nullptr;
+    auto* returnEntryBranch = generatedReturnWrapper
+        ? llvm::dyn_cast_or_null<llvm::BranchInst>(
+              generatedReturnWrapper->getEntryBlock().getTerminator())
+        : nullptr;
+    auto* invalidCarrierReturn = invalidCarrierBlock
+        ? llvm::dyn_cast_or_null<llvm::ReturnInst>(
+              invalidCarrierBlock->getTerminator()) : nullptr;
+    auto* invalidCarrierStatus = invalidCarrierReturn
+        ? llvm::dyn_cast<llvm::ConstantInt>(
+              invalidCarrierReturn->getReturnValue()) : nullptr;
+    bool returnsBodyHandle = false;
+    if (generatedReturnWrapper && generatedReturnCall &&
+        returnTransfers.size() == 2)
+        for (auto& block : *generatedReturnWrapper)
+            for (auto& instruction : block)
+                if (auto* store = llvm::dyn_cast<llvm::StoreInst>(
+                        &instruction); store &&
+                    store->getValueOperand() == generatedReturnCall &&
+                    store->getPointerOperand() ==
+                        returnTransfers[1]->getArgOperand(0))
+                    returnsBodyHandle = true;
+    auto* returnStatusBranch = returnTransfers.size() == 2
+        ? llvm::dyn_cast_or_null<llvm::BranchInst>(
+              returnTransfers[1]->getParent()->getTerminator()) : nullptr;
+    auto* returnFailureReturn = returnFailureDrop
+        ? llvm::dyn_cast_or_null<llvm::ReturnInst>(
+              returnFailureDrop->getParent()->getTerminator()) : nullptr;
+    if (!generatedReturnWrapper || !generatedReturnCall ||
+        !generatedReturnWrapper->hasInternalLinkage() ||
+        generatedReturnWrapper->arg_size() != 2 ||
+        returnTransfers.size() != 2 || !returnFailureDrop ||
+        returnTransfers[0]->getArgOperand(0) !=
+            generatedReturnWrapper->getArg(0) ||
+        returnTransfers[1]->getArgOperand(3) !=
+            generatedReturnWrapper->getArg(1) ||
+        !returnsBodyHandle ||
+        returnFailureDrop->getArgOperand(0) !=
+            returnTransfers[1]->getArgOperand(0) ||
+        !returnStatusBranch || !returnStatusBranch->isConditional() ||
+        returnStatusBranch->getSuccessor(1) !=
+            returnFailureDrop->getParent() ||
+        !returnFailureReturn ||
+        returnFailureReturn->getReturnValue() != returnTransfers[1] ||
+        !carriesIdentity(returnTransfers[0], 1, target->symbol.value) ||
+        !carriesIdentity(returnTransfers[0], 2, target->contract.value) ||
+        !carriesIdentity(returnTransfers[1], 1, target->symbol.value) ||
+        !carriesIdentity(returnTransfers[1], 2, target->contract.value) ||
+        !outputLoad || outputLoad->getPointerOperand() !=
+            generatedReturnWrapper->getArg(1) ||
+        !returnOutputBranch || !returnOutputBranch->isConditional() ||
+        !outputEmptyCondition ||
+        outputEmptyCondition->getPredicate() != llvm::CmpInst::ICMP_EQ ||
+        outputEmptyCondition->getOperand(0) != outputLoad ||
+        !llvm::isa<llvm::ConstantPointerNull>(
+            outputEmptyCondition->getOperand(1)) ||
+        !returnEntryBranch || !returnEntryBranch->isConditional() ||
+        returnEntryBranch->getSuccessor(0) != returnOutputCheck ||
+        returnEntryBranch->getSuccessor(1) != invalidCarrierBlock ||
+        returnOutputBranch->getSuccessor(0) !=
+            returnTransfers[0]->getParent() ||
+        returnOutputBranch->getSuccessor(1) != invalidCarrierBlock ||
+        !invalidCarrierStatus ||
+        invalidCarrierStatus->getSExtValue() !=
+            LUNA_RUNTIME_FRAGMENT_REF_INVALID_CARRIER_V1)
+        return fail("LLVM Ref return wrapper lost its carrier/identity checks");
     auto* generatedBorrowCall = findCallTo(
         generatedBorrowWrapper, borrowedBodyFunction);
     auto* generatedOwnedCall = findCallTo(
