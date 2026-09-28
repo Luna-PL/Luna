@@ -79,6 +79,30 @@ Contract，并不意味着 Luna 已有可传递的 `RuntimeFragmentRef<S>` 类�
 
 <!-- SLOT_FRAGMENT_V1_ACCEPTANCE_END -->
 
+## ABI 边界清单（2026-09-28）
+
+此清单区分已版本化的原生接口、编译器内部验证和未定稿的源码 ABI；不扩大 v1 验收
+快照，也不批准稳定版发布。
+
+| 层次 | 当前边界 |
+| --- | --- |
+| 原生 Fragment ABI | 已实现 v1 descriptor 与 dispatch C ABI（`LRF1`、版本 1）：精确 Slot／Contract 和实参／环境布局、factory/destroy/execute 回调、显式 dispatch context、single-shot 续体。已发布 execute 回调不传 context。 |
+| 原生 Ref 桥 | 已实现 v1 check/transfer/drop，作用于验证过的拥有型 handle cell；不接受任意指针，也不是 Luna 源码导入／返回 ABI。 |
+| 编译器内部源码 Ref 验证 | 已有 `RuntimeFragmentRef<S>` 拼写和精确 Slot 名义检查；一次性 LLVM module 验证私有 unit 与 affine-return carrier wrapper。这些 wrapper 不是公开符号或已发布 carrier 布局。 |
+| 跨包源码 Ref ABI | 未定稿且发布被阻止：源码签名／导入／返回、完整 drop glue、Moon Container 往返和 Ref operand `apply` 尚无可发布契约。 |
+
+`export` 决定外部可见性；`runtime` 决定声明保留或运行时 metadata 附着，二者都不是
+Slot/Fragment 专属修饰符：`runtime slot`、`runtime fragment` 会被拒绝。导出的
+public-control descriptor 不自动获得 runtime callable/executable 能力；metadata 的保留
+也不把这种能力授予其目标。Context 依赖由推导和验证确定，不由 `export` 或 metadata
+赋予。
+
+源码 Ref 设计已要求精确 Slot 名义身份及 sealed Contract 身份、affine owner 与借用
+参数区分、显式 generation pin 和宿主选定 binding。公开 ABI 仍需确定版本化入口／
+carrier 与状态契约、拥有权提交点及失败清理、借用寿命、跨包 proof／wire／drop-glue
+规则，以及 Ref operand `apply` lowering。内部 Ref 表示不是 wire 格式。这些未决项
+不意味着新关键字、全局 catalog 或 handler 重入。
+
 源码定位：[宿主 API](../src/runtime/RuntimeFragment.h)、
 [单 generation 查询](../src/runtime/RuntimeFragment.cpp)、
 [静态 apply parser](../src/parser/ParserStatements.cpp)及

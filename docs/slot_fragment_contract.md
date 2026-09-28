@@ -86,6 +86,34 @@ or release approval.
 
 <!-- SLOT_FRAGMENT_V1_ACCEPTANCE_END -->
 
+## ABI boundary ledger (2026-09-28)
+
+This ledger distinguishes a versioned native interface from compiler-internal
+proofs and an uncommitted source-language ABI. It does not expand the v1
+acceptance snapshot or approve a stable release.
+
+| Layer | Current boundary |
+| --- | --- |
+| Native Fragment ABI | Implemented v1 descriptor and dispatch C ABI (`LRF1`, version 1): exact Slot/Contract and argument/environment layouts, factory/destroy/execute callbacks, explicit dispatch context and single-shot continuation. Published execute callbacks have no context argument. |
+| Native Ref bridge | Implemented v1 check/transfer/drop on validated owning handle cells. This is not arbitrary-pointer adoption or a Luna source import/return ABI. |
+| Compiler-internal source Ref proofs | `RuntimeFragmentRef<S>` spelling and exact nominal Slot checking exist; disposable LLVM modules exercise private unit and affine-return carrier wrappers. Those wrappers are not public symbols or a published carrier layout. |
+| Cross-package source Ref ABI | Uncommitted and blocked: source signatures/imports/returns, complete drop glue, Moon Container round-trip and Ref-operand `apply` have no publishable contract yet. |
+
+`export` controls external visibility; `runtime` controls declaration retention or
+a runtime metadata attachment. Neither is a Slot/Fragment-specific modifier:
+`runtime slot` and `runtime fragment` are rejected. Exported public-control
+descriptors do not imply runtime callable/executable capability, and metadata
+retention does not confer that capability on its target. Context dependence is
+inferred and verified, not granted by `export` or by metadata.
+
+The source Ref design already requires exact nominal Slot and sealed Contract
+identities, an affine owner versus a borrowed parameter, explicit generation
+pinning, and host-selected binding. The public ABI still needs a versioned
+entry/carrier and status contract, ownership commit and failure cleanup rules,
+borrow lifetime, cross-package proof/wire/drop-glue rules, and Ref-operand
+`apply` lowering. Internal Ref representation is not a wire format. These
+open choices do not imply new keywords, a global catalog, or handler re-entry.
+
 Source pointers: [host APIs](../src/runtime/RuntimeFragment.h),
 [per-generation discovery](../src/runtime/RuntimeFragment.cpp),
 [static apply parser](../src/parser/ParserStatements.cpp) and

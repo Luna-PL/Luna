@@ -47,8 +47,10 @@ each slot invocation creates a fresh single-shot activation.
 The selected direction lets Luna source act as a host: receive, select and locally
 apply runtime references. Start with host-supplied verified Refs, without also
 adding a source loader, global candidate index, handler re-entry or keywords.
-This is **target syntax, not currently compilable**; only native snapshot support
-is implemented in this slice.
+The complete example remains **target syntax, not currently executable**.
+The source Ref type spelling, nominal checks, and private in-memory LLVM
+carrier proofs exist; source `apply` on a Ref, public import/return, and
+container publication still do not.
 
 ```luna
 export slot pipeline(value: i32);
@@ -99,8 +101,10 @@ Initially use the existing verified generation/factory path, then explicitly wra
 a native Ref in frozen state with exactly one Slot and one Fragment. Arbitrary
 BindingSets cannot stand in for source Refs. Ingress checks nominal Slot, sealed
 contract, carrier ABI and owning/borrowed convention before invoking source code.
-Import/return/drop bridge symbols and the carrier ABI remain unimplemented; this
-slice adds no C source-handle ingress and changes no v1 descriptor/execute signature.
+Native Ref check/transfer/drop functions and private generated wrappers exist.
+The **public source** import/return/drop bridge and carrier ABI remain
+uncommitted; there is no C source-handle ingress, and the v1
+descriptor/execute signatures are unchanged.
 
 The source owner uniquely owns its wrapper; internal environment/generation pins
 may be shared without exposing source Copy. Drop needs Runtime glue, never Luna
@@ -590,15 +594,17 @@ publishes a data-only `FragmentOffer` containing at least its FragmentId,
 target SlotId and ContractId, execution/factory contract, environment layout,
 generation identity, and retained policy metadata.
 
-Runtime exposes the semantics of a typed candidate catalog:
+The implemented v1 query is scoped to one explicitly supplied, verified
+generation and an exact Slot/Contract requirement:
 
 ```text
-candidates(SlotRequirement{SlotId, ContractId}) -> CandidateSnapshot<S>
+snapshotRuntimeFragmentCandidates(generation, slot, ...) -> pinned snapshot
 ```
 
-The specification does not require an eager global index. A runtime may scan,
-cache, lazily index, or merge per-generation catalogs as long as a snapshot is
-complete, deterministic, immutable, and generation-pinned.
+Its result is complete and deterministic for that generation, immutable and
+generation-pinned. The host tracks loaded generations and may merge their
+snapshots under its own policy. A cross-generation query or global index is
+not part of v1; a future convenience API could be considered separately.
 
 Discovery, policy, and execution are separate:
 

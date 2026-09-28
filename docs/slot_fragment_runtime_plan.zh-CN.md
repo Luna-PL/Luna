@@ -43,7 +43,9 @@ export fragment trace[prefix: string](value) for pipeline {
 
 方向已确认：让 Luna 源码作为宿主，接收、选择并局部应用运行时引用。先打通宿主提供
 的已验证 Ref，不同时引入源码 loader、全局候选索引、handler 重入或新关键字。
-以下是**目标语法，当前不能编译**；本轮只实现后述 native 快照支撑。
+以下完整示例仍是**目标语法，当前不能执行**。源码 Ref 类型拼写、名义检查和私有的
+内存 LLVM carrier 验证已存在；对 Ref 的源码 `apply`、公开导入／返回及 container
+发布仍未实现。
 
 ```luna
 export slot pipeline(value: i32);
@@ -87,8 +89,9 @@ Single-shot 限制续体，不限制 Ref 的总使用次数。借用期间移动
 首批通过现有 verified generation／factory 路径取得 native Ref，再显式封装为恰含
 一个精确 Slot 与一个 Fragment 的冻结状态；任意 BindingSet 不能冒充源码 Ref。入口
 检查 nominal Slot、sealed contract、carrier ABI 和拥有／借用方式，失败在进入源码
-回调前报告。导入／返回／drop 桥接符号及 carrier ABI 仍待实现；本轮不新增 C 可传入
-的源码 handle，不改 descriptor v1 或 execute 签名。
+回调前报告。原生 Ref check/transfer/drop 函数及私有生成 wrapper 已存在；**公开源码**
+导入／返回／drop 桥及 carrier ABI 尚未定稿，没有 C 可传入的源码 handle，也不改
+descriptor v1 或 execute 签名。
 
 源码 owner 独占封装句柄；内部可共享环境／generation pin，不暴露源码 Copy 能力。
 Drop 走 Runtime 专用桥，不能用 Luna `free` 释放 C++ 对象或插件环境。最后一个内部
@@ -469,14 +472,15 @@ module 验证。篡改结果的所有权用法会使证明失败。前一轮 uni
 SlotId/ContractId、执行/factory 契约、环境布局、generation identity 和保留的策略
 metadata。
 
-Runtime 对外保证强类型候选目录的语义：
+已实现的 v1 查询作用于显式传入的单个已验证 generation 和精确 Slot／Contract 要求：
 
 ```text
-candidates(SlotRequirement{SlotId, ContractId}) -> CandidateSnapshot<S>
+snapshotRuntimeFragmentCandidates(generation, slot, ...) -> 固定 generation 的快照
 ```
 
-规范不要求急切维护全局索引。Runtime 可以扫描、缓存、惰性建索引或合并各 generation
-目录，只要快照完整、确定、不可变并固定 generation。
+结果对该 generation 完整且确定，保持不可变并固定 generation。宿主自行追踪已加载的
+generation，可以按自身策略合并快照。跨 generation 查询或全局索引不属于 v1；未来
+可另行考虑便利 API。
 
 发现、策略与执行彼此分离：
 
