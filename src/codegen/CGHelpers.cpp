@@ -4,12 +4,15 @@
 #include "../moonir/FragmentContextEffects.h"
 #include "../moonir/Verifier.h"
 #include "../runtime/RuntimeFragmentABI.h"
+#include "../runtime/RuntimeFragmentCompilerBridge.h"
 
 #include <algorithm>
 #include <optional>
 #include <vector>
 
 CGHelpers::CGHelpers(llvm::LLVMContext& ctx) : mCtx(ctx) {}
+
+static_assert(LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS == 0);
 
 llvm::Type* CGHelpers::toLLVMType(const TypePtr& type) const {
     if (!type) return voidTy();
@@ -139,6 +142,36 @@ llvm::CallInst* CGHelpers::emitRuntimeFragmentRefOwnedTransfer(
         builder.CreateGlobalString(target.contract.value, "ref.target.contract"),
         destinationCell,
     });
+}
+
+llvm::CallInst* CGHelpers::emitRuntimeFragmentRefContextOverride(
+    llvm::IRBuilder<>& builder, llvm::Module& module,
+    llvm::Value* parentContext, llvm::Value* borrowedReference,
+    const moon::DeclarationRef& target, llvm::Value* outputCell) const {
+    if (!target.complete() || !parentContext || !borrowedReference ||
+        !outputCell || !parentContext->getType()->isPointerTy() ||
+        !borrowedReference->getType()->isPointerTy() ||
+        !outputCell->getType()->isPointerTy())
+        return nullptr;
+    auto override = module.getOrInsertFunction(
+        "luna_compiler_fragment_context_override_from_ref",
+        i32Ty(), ptrTy(), ptrTy(), ptrTy(), ptrTy(), ptrTy());
+    return builder.CreateCall(override, {
+        parentContext, borrowedReference,
+        builder.CreateGlobalString(target.symbol.value, "ref.apply.slot"),
+        builder.CreateGlobalString(target.contract.value, "ref.apply.contract"),
+        outputCell,
+    }, "ref.apply.context.status");
+}
+
+llvm::CallInst* CGHelpers::emitRuntimeFragmentContextDrop(
+    llvm::IRBuilder<>& builder, llvm::Module& module,
+    llvm::Value* contextCell) const {
+    if (!contextCell || !contextCell->getType()->isPointerTy())
+        return nullptr;
+    auto drop = module.getOrInsertFunction(
+        "luna_compiler_fragment_context_drop", voidTy(), ptrTy());
+    return builder.CreateCall(drop, {contextCell});
 }
 
 namespace {

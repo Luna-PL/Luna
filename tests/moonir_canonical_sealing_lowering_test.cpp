@@ -354,6 +354,117 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 earlyReturn->controlFlow->runtimeRefApplies[1].region,
                 earlyReturn->controlFlow->runtimeRefApplies[0].region})
         return fail("nested Ref apply return lost inner-before-outer cleanup order");
+    std::vector<moon::RegionId> applyEntryOrder;
+    for (const auto& edge : earlyFlow->edges)
+        applyEntryOrder.insert(applyEntryOrder.end(),
+                               edge.enters.begin(), edge.enters.end());
+    if (applyEntryOrder != std::vector<moon::RegionId>{
+            earlyReturn->controlFlow->runtimeRefApplies[0].region,
+            earlyReturn->controlFlow->runtimeRefApplies[1].region})
+        return fail("nested Ref apply flow lost outer-before-inner entry order");
+    // Disposable LLVM transition proof. This deliberately does not emit the
+    // source body or authorize publishing the function as an executable API.
+    llvm::LLVMContext contextIr;
+    CGHelpers contextHelpers(contextIr);
+    llvm::Module contextModule("private.ref.apply.transition", contextIr);
+    auto* contextProof = llvm::Function::Create(
+        llvm::FunctionType::get(contextHelpers.i32Ty(),
+            {contextHelpers.ptrTy(), contextHelpers.ptrTy()}, false),
+        llvm::Function::InternalLinkage, "private_ref_apply_transition",
+        contextModule);
+    auto* proofEntry = llvm::BasicBlock::Create(
+        contextIr, "entry", contextProof);
+    auto* outerReady = llvm::BasicBlock::Create(
+        contextIr, "outer.ready", contextProof);
+    auto* innerReady = llvm::BasicBlock::Create(
+        contextIr, "inner.ready", contextProof);
+    auto* outerFailed = llvm::BasicBlock::Create(
+        contextIr, "outer.failed", contextProof);
+    auto* innerFailed = llvm::BasicBlock::Create(
+        contextIr, "inner.failed", contextProof);
+    llvm::IRBuilder<> contextBuilder(proofEntry);
+    auto* outerCell = contextBuilder.CreateAlloca(
+        contextHelpers.ptrTy(), nullptr, "outer.context.owner");
+    auto* innerCell = contextBuilder.CreateAlloca(
+        contextHelpers.ptrTy(), nullptr, "inner.context.owner");
+    auto* nullContext = llvm::ConstantPointerNull::get(
+        llvm::cast<llvm::PointerType>(contextHelpers.ptrTy()));
+    contextBuilder.CreateStore(nullContext, outerCell);
+    contextBuilder.CreateStore(nullContext, innerCell);
+    const auto& exactApplySlot =
+        earlyReturn->controlFlow->runtimeRefApplies.front().slot;
+    if (contextHelpers.emitRuntimeFragmentRefContextOverride(
+            contextBuilder, contextModule, contextProof->getArg(0),
+            contextProof->getArg(1), {}, outerCell) ||
+        contextHelpers.emitRuntimeFragmentContextDrop(
+            contextBuilder, contextModule, nullptr))
+        return fail("private LLVM context bridge accepted missing operands");
+    auto* outerStatus = contextHelpers.emitRuntimeFragmentRefContextOverride(
+        contextBuilder, contextModule, contextProof->getArg(0),
+        contextProof->getArg(1), exactApplySlot, outerCell);
+    if (!outerStatus)
+        return fail("private LLVM outer Ref context derivation failed");
+    auto* success = llvm::ConstantInt::get(contextHelpers.i32Ty(), 0);
+    contextBuilder.CreateCondBr(
+        contextBuilder.CreateICmpEQ(outerStatus, success),
+        outerReady, outerFailed);
+    contextBuilder.SetInsertPoint(outerFailed);
+    contextBuilder.CreateRet(outerStatus);
+    contextBuilder.SetInsertPoint(outerReady);
+    auto* outerContext = contextBuilder.CreateLoad(
+        contextHelpers.ptrTy(), outerCell, "outer.context");
+    auto* innerStatus = contextHelpers.emitRuntimeFragmentRefContextOverride(
+        contextBuilder, contextModule, outerContext,
+        contextProof->getArg(1), exactApplySlot, innerCell);
+    if (!innerStatus)
+        return fail("private LLVM inner Ref context derivation failed");
+    contextBuilder.CreateCondBr(
+        contextBuilder.CreateICmpEQ(innerStatus, success),
+        innerReady, innerFailed);
+    contextBuilder.SetInsertPoint(innerFailed);
+    auto* failureDrop = contextHelpers.emitRuntimeFragmentContextDrop(
+        contextBuilder, contextModule, outerCell);
+    contextBuilder.CreateRet(innerStatus);
+    contextBuilder.SetInsertPoint(innerReady);
+    std::vector<llvm::CallInst*> returnDrops;
+    for (const auto region : earlyFlow->terminals.front().exits) {
+        auto* cell = region ==
+                earlyReturn->controlFlow->runtimeRefApplies[1].region
+            ? innerCell : region ==
+                earlyReturn->controlFlow->runtimeRefApplies[0].region
+                ? outerCell : nullptr;
+        if (!cell)
+            return fail("private LLVM proof saw an unknown Ref context region");
+        returnDrops.push_back(contextHelpers.emitRuntimeFragmentContextDrop(
+            contextBuilder, contextModule, cell));
+    }
+    contextBuilder.CreateRet(success);
+    const auto hasExactIdentity = [&](const llvm::CallInst* call,
+                                      unsigned index,
+                                      const std::string& expected) {
+        const auto* global = llvm::dyn_cast<llvm::GlobalVariable>(
+            call->getArgOperand(index));
+        const auto* data = global
+            ? llvm::dyn_cast<llvm::ConstantDataArray>(global->getInitializer())
+            : nullptr;
+        return data && data->isCString() && data->getAsCString() == expected;
+    };
+    if (!contextProof->hasInternalLinkage() || !failureDrop ||
+        failureDrop->getArgOperand(0) != outerCell ||
+        returnDrops.size() != 2 || !returnDrops[0] || !returnDrops[1] ||
+        returnDrops[0]->getArgOperand(0) != innerCell ||
+        returnDrops[1]->getArgOperand(0) != outerCell ||
+        outerStatus->getCalledFunction() !=
+            contextModule.getFunction(
+                "luna_compiler_fragment_context_override_from_ref") ||
+        innerStatus->getCalledFunction() !=
+            outerStatus->getCalledFunction() ||
+        !hasExactIdentity(outerStatus, 2, exactApplySlot.symbol.value) ||
+        !hasExactIdentity(outerStatus, 3, exactApplySlot.contract.value) ||
+        !hasExactIdentity(innerStatus, 2, exactApplySlot.symbol.value) ||
+        !hasExactIdentity(innerStatus, 3, exactApplySlot.contract.value) ||
+        llvm::verifyModule(contextModule))
+        return fail("private LLVM Ref context proof lost status or cleanup order");
 
     auto contextRefSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "export slot checkpoint(value: i32);\n"

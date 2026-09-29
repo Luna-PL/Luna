@@ -31,6 +31,15 @@ public:
         llvm::IRBuilder<>& builder, llvm::Module& module,
         llvm::Value* sourceCell, llvm::Value* destinationCell,
         const moon::DeclarationRef& target) const;
+    // Compiler-private context override. Caller owns the initialized output
+    // cell and must branch on status before using the derived context.
+    llvm::CallInst* emitRuntimeFragmentRefContextOverride(
+        llvm::IRBuilder<>& builder, llvm::Module& module,
+        llvm::Value* parentContext, llvm::Value* borrowedReference,
+        const moon::DeclarationRef& target, llvm::Value* outputCell) const;
+    llvm::CallInst* emitRuntimeFragmentContextDrop(
+        llvm::IRBuilder<>& builder, llvm::Module& module,
+        llvm::Value* contextCell) const;
     // Status-returning host entry only: success continues to bodyEntry;
     // failure returns the unchanged native status before entering user code.
     llvm::CallInst* emitRuntimeFragmentRefBorrowIngressGate(

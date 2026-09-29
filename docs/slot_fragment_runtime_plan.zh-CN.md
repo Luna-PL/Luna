@@ -520,6 +520,16 @@ context 栈。每条后继边记录按内到外释放、按外到内构造的 co
 **计划**，尚未生成清理指令：LLVM 仍拒绝该 region，运行时失败及被 outline 的
 continuation 尚未针对生成指令完成验证。不改 container 或公开 ABI。
 
+### 私有 LLVM Ref-apply context 转换证明（2026-09-29）
+
+可复用的 LLVM 辅助函数现可携带精确 Slot／Contract 常量，生成编译器私有的
+Ref-to-context 派生和拥有型 cell Drop 调用。一次性 internal LLVM 函数使用
+真实的嵌套 Ref-apply CFG 计划，验证先外后内的进入顺序、使用 context 前的
+状态检查、内层派生失败时释放外层，以及提前返回时先内后外 Drop。无效辅助函数
+实参被拒绝，生成的 module 通过 LLVM 校验。该函数只模拟 context 转换，
+**并未**生成源码 body 或被 outline 的 RuntimeSlot continuation。源码 module、
+container encoder 和公开 CodeGenerator 门禁仍关闭；稳定 ABI 与 wire 格式不变。
+
 ## 宿主控制的发现与注入
 
 目标指向 exported Slot 的 exported Fragment，凭名义关系成为候选；metadata 不授予

@@ -661,6 +661,19 @@ This is a placement **plan**, not emitted cleanup: LLVM still rejects the
 region, and runtime failures or outlined continuations have not yet been
 proven against generated instructions. No container or public ABI change.
 
+### Private LLVM Ref-apply context transition proof (2026-09-29)
+
+Reusable LLVM helpers now emit the compiler-private Ref-to-context derivation
+and owning-cell Drop calls with exact Slot/Contract constants. A disposable
+internal LLVM function uses a real nested Ref-apply CFG flow plan to prove the
+outer-before-inner entry sequence, status checks before context use, cleanup
+of the outer context when inner derivation fails, and inner-before-outer Drop
+on early return. Invalid helper operands are rejected and the generated module
+passes LLVM verification. This function models only context transitions: it
+does **not** generate the source body or its outlined RuntimeSlot continuation.
+The source module, container encoder and public CodeGenerator gates remain
+closed; no stable ABI or wire format is changed.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal
