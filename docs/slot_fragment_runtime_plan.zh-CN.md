@@ -548,6 +548,13 @@ RuntimeSlot 分派站点。它刻意比源码语法严格：嵌套 apply、非 J
 协议尚未定义。module verifier、container encoder 和公开 CodeGenerator 仍拒绝
 带 Ref 的发布，因此这并非端到端可执行源码支持，也不改变公开 ABI。
 
+canonical 回归目标另有仅在测试编译时启用的私有 JIT 入口。它把已经验证的源码
+body 放进内部测试 wrapper，以真实借用 Ref 和空父 context 执行正常退出、Slot
+分派后的提前 return，以及分派前的提前 return。generation lease 在调用期间
+保持固定，宿主随后释放 Ref handle 后即失效，证明这些路径没有留下派生 context
+的 pin。每个 body 都使用同一借用 Ref 连续调用两次，以核对重复 apply 不消耗
+宿主 handle。生产编译器目标不含此入口，也不生成公开 descriptor 或 container code。
+
 ## 宿主控制的发现与注入
 
 目标指向 exported Slot 的 exported Fragment，凭名义关系成为候选；metadata 不授予

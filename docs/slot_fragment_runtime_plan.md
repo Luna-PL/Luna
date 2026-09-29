@@ -698,6 +698,17 @@ The module verifier, container encoder and public CodeGenerator still reject
 Ref-bearing publication, so this is not end-to-end executable source support
 or a public ABI change.
 
+The canonical regression target additionally has a compile-time-only private
+JIT hook. It materializes the already verified source body behind an internal
+test wrapper, then executes normal exit, return after Slot dispatch, and return
+before dispatch against a real borrowed Ref and an empty parent context. A
+generation lease remains pinned during the call and expires after the host
+releases its Ref handle, demonstrating that the derived context leaves no
+retained pin on those paths. Each body is invoked twice with the same borrowed
+Ref, checking repeated application without consuming the host handle. This
+hook is absent from the production compiler
+target; no public descriptor or container code is emitted.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal

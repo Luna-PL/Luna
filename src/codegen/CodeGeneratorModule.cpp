@@ -67,10 +67,14 @@ bool matchesPrivateRefContextEffect(
 } // namespace
 
 bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
-    moon::Module& program, FunctionDecl& function, std::string& failure) {
-    // Never reuse the publishing CodeGenerator. Even a successful proof is
-    // destroyed here, so its raw-pointer body cannot reach emitObjectFile or
-    // materializeJitModule while the source/container gates remain closed.
+    moon::Module& program, FunctionDecl& function, std::string& failure
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    , std::shared_ptr<LunaJitModule>* executable
+#endif
+) {
+    // Never reuse the publishing CodeGenerator. Ordinary proofs are destroyed
+    // here; only the test-target hook may materialize the verified body behind
+    // a private wrapper while the source/container gates remain closed.
     CodeGenerator proof("private.ref.ingress.proof");
     proof.mProgram = &program;
     proof.mTypeMaterializer =
@@ -90,6 +94,12 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
     }
     const bool privateRefApply =
         !function.controlFlow->runtimeRefApplies.empty();
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    if (executable && !privateRefApply) {
+        failure = "private Ref apply JIT test requires an Apply region";
+        return false;
+    }
+#endif
     if (!matchesPrivateRefContextEffect(program, function)) {
         failure = "Ref entry context effect differs from the sealed CFG fixed point";
         return false;
@@ -236,12 +246,33 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 }
         }
         std::string invalidIR;
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+        if (executable) {
+            auto* entry = llvm::Function::Create(
+                body->getFunctionType(), llvm::Function::ExternalLinkage,
+                "__luna_private_ref_apply_jit_test", *proof.mModule);
+            auto* entryBlock = llvm::BasicBlock::Create(
+                *proof.mCtx, "entry", entry);
+            llvm::IRBuilder<> builder(entryBlock);
+            std::vector<llvm::Value*> arguments;
+            for (auto& argument : entry->args())
+                arguments.push_back(&argument);
+            builder.CreateCall(body, arguments);
+            builder.CreateRetVoid();
+        }
+#endif
         llvm::raw_string_ostream stream(invalidIR);
         if (llvm::verifyModule(*proof.mModule, &stream)) {
             stream.flush();
             failure = "generated Ref apply LLVM IR is invalid: " + invalidIR;
             return false;
         }
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+        if (executable) {
+            *executable = proof.materializeJitModule(failure);
+            return static_cast<bool>(*executable);
+        }
+#endif
         failure.clear();
         return true;
     }
@@ -284,6 +315,18 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
     failure.clear();
     return true;
 }
+
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+std::shared_ptr<LunaJitModule>
+CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
+    moon::Module& program, FunctionDecl& function, std::string& failure) {
+    std::shared_ptr<LunaJitModule> executable;
+    if (!verifyPrivateRuntimeFragmentRefUnitIngress(
+            program, function, failure, &executable))
+        return {};
+    return executable;
+}
+#endif
 
 bool CodeGenerator::verifyPrivateRuntimeFragmentRefOwnedReturn(
     moon::Module& program, FunctionDecl& function, std::string& failure) {

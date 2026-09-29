@@ -22,6 +22,143 @@
 
 namespace canonical_test {
 
+namespace {
+
+unsigned privateRefJitExecutions = 0;
+unsigned privateRefJitCompletedResumes = 0;
+int32_t privateRefJitResumeStatus = -1;
+
+void executePrivateRefJitFragment(void*, void* activation) {
+    ++privateRefJitExecutions;
+    privateRefJitResumeStatus =
+        luna_runtime_fragment_activation_resume_v1(activation);
+    if (privateRefJitResumeStatus ==
+        LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1)
+        ++privateRefJitCompletedResumes;
+}
+
+bool exercisePrivateRefApplyJit(
+    moon::Module& module, moon::FunctionDecl& function,
+    std::string& error, unsigned expectedDispatches = 1) {
+    const moon::SlotDecl* slot = nullptr;
+    for (const auto& declaration : module.declarations)
+        if (const auto* candidate = dynamic_cast<const moon::SlotDecl*>(
+                declaration.get()); candidate && candidate->name == "checkpoint")
+            slot = candidate;
+    const auto* arguments = slot ? module.findType(slot->argumentsType) : nullptr;
+    if (!slot || !arguments || function.params.size() != 1 ||
+        function.params.front().relation !=
+            luna::ownership::Relation::SharedBorrow) {
+        error = "private Ref JIT fixture lacks Slot/layout/borrowed parameter";
+        return false;
+    }
+    auto jit = CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
+        module, function, error);
+    if (!jit) return false;
+    const void* address = jit->lookup(
+        "__luna_private_ref_apply_jit_test", error);
+    if (!address) return false;
+
+    const std::string fragmentId = "fragment:private-ref-jit";
+    const std::string fragmentContract = "contract:private-ref-jit";
+    const std::string unitLayout = "layout:unit";
+    LunaRuntimeFragmentDescriptorV1 descriptor = {
+        LUNA_RUNTIME_FRAGMENT_MAGIC_V1,
+        LUNA_RUNTIME_FRAGMENT_ABI_V1,
+        sizeof(LunaRuntimeFragmentDescriptorV1),
+        LUNA_RUNTIME_FRAGMENT_CAPTURE_FREE_V1,
+        0, 0, 0, 0,
+        fragmentId.c_str(), fragmentContract.c_str(),
+        slot->symbolId.value.c_str(), slot->contractId.value.c_str(),
+        arguments->abiLayoutId.value.c_str(),
+        arguments->valueSize, arguments->valueAlignment,
+        "", unitLayout.c_str(), 0, 1,
+        nullptr, nullptr, executePrivateRefJitFragment,
+    };
+    if (!luna::runtime::validateRuntimeFragmentDescriptor(
+            descriptor, error))
+        return false;
+
+    luna::runtime::RuntimeFragmentRefHandle handle;
+    std::weak_ptr<int> generationLease;
+    {
+        luna::runtime::MoonRuntime runtime;
+        auto lease = std::make_shared<int>(1);
+        generationLease = lease;
+        luna::runtime::GenerationStagingRequest request{
+            "org.luna.private.ref-jit", std::string(64, 'a'), lease};
+        luna::runtime::MoonRuntime::StagedGeneration staged;
+        constexpr uint32_t flags =
+            luna::runtime::GenerationBindingFragmentExecutable |
+            luna::runtime::GenerationBindingPublicControl;
+        if (!runtime.stage(
+                request,
+                [](const auto&, std::string&) { return true; },
+                [&](const auto&, auto& bindings, std::string&) {
+                    bindings.push_back({fragmentId, fragmentContract,
+                        &descriptor, LUNA_RUNTIME_DECLARATION_FRAGMENT_V1,
+                        flags});
+                    return true;
+                }, {}, staged, error))
+            return false;
+        luna::runtime::MoonRuntime::PinnedGeneration loaded;
+        if (!runtime.loadOnce(staged, loaded, error)) return false;
+        const luna::runtime::GenerationBindingRequirement requirement{
+            fragmentId, fragmentContract,
+            LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, flags};
+        const auto binding = loaded.find(requirement);
+        luna::runtime::RuntimeFragmentRef reference;
+        const luna::runtime::RuntimeSlotRequirement target{
+            slot->symbolId.value, slot->contractId.value};
+        if (!binding || !luna::runtime::makeOwnedRuntimeFragmentRef(
+                binding, target, {"", nullptr}, reference, error) ||
+            !luna::runtime::makeRuntimeFragmentRefHandle(
+                reference, target, handle, error))
+            return false;
+    }
+    if (!handle || generationLease.expired()) {
+        error = "private Ref JIT fixture lost its owning generation pin";
+        return false;
+    }
+    luna::runtime::RuntimeFragmentBindingSet emptyBindings;
+    std::vector<luna::runtime::RuntimeFragmentRef> none;
+    luna::runtime::RuntimeFragmentExecutionContext parent;
+    if (!luna::runtime::makeRuntimeFragmentBindingSet(
+            std::move(none), emptyBindings, error) ||
+        !luna::runtime::makeRuntimeFragmentExecutionContext(
+            emptyBindings, parent, error))
+        return false;
+
+    using Entry = void (*)(const void*, void*);
+    const auto entry = reinterpret_cast<Entry>(const_cast<void*>(address));
+    const auto before = privateRefJitExecutions;
+    const auto resumesBefore = privateRefJitCompletedResumes;
+    privateRefJitResumeStatus = -1;
+    entry(parent.opaque(), const_cast<void*>(handle.opaque()));
+    if (luna_runtime_fragment_ref_check_v1(
+            handle.opaque(), slot->symbolId.value.c_str(),
+            slot->contractId.value.c_str()) !=
+            LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1) {
+        error = "private Ref JIT body consumed its borrowed Ref";
+        return false;
+    }
+    entry(parent.opaque(), const_cast<void*>(handle.opaque()));
+    handle.reset();
+    if (privateRefJitExecutions != before + expectedDispatches * 2 ||
+        privateRefJitCompletedResumes !=
+            resumesBefore + expectedDispatches * 2 ||
+        privateRefJitResumeStatus != (expectedDispatches
+            ? LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1 : -1) ||
+        !generationLease.expired()) {
+        error = "private Ref JIT body did not dispatch and release its generation";
+        return false;
+    }
+    error.clear();
+    return true;
+}
+
+} // namespace
+
 int runLoweredCompositionTests(SealingTestContext& context) {
     auto& cfgVerifier = context.cfgVerifier;
     auto& verifier = context.verifier;
@@ -317,6 +454,12 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                              std::string::npos;
                      }))
         return fail("private Ref apply body proof or public codegen gate failed");
+    std::string privateRefJitError;
+    if (!exercisePrivateRefApplyJit(
+            *sourceApplyModule, *sourceApplyEntry, privateRefJitError)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("normal-exit source Ref apply failed private JIT execution");
+    }
 
     auto sourceEarlyReturnSnapshot =
         luna::tooling::AnalysisSnapshot::analyzeSource(
@@ -379,6 +522,16 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (!singleEarlyModule || !singleEarlyLowerer.errors().empty() ||
         !singleEarlySealer.sealFunctionBodies(*singleEarlyModule))
         return fail("single Ref apply early return did not seal");
+    moon::FunctionDecl* singleEarly = nullptr;
+    for (auto& declaration : singleEarlyModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function && function->name == "early")
+            singleEarly = function;
+    if (!singleEarly || !exercisePrivateRefApplyJit(
+            *singleEarlyModule, *singleEarly, privateRefJitError)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("early-return source Ref apply failed private JIT execution");
+    }
     CodeGenerator blockedSingleEarly("canonical-single-ref-early-return-gate");
     const bool singleEarlyPublished =
         blockedSingleEarly.generate(singleEarlyModule.get());
@@ -419,6 +572,16 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                              std::string::npos;
                      }))
         return fail("mixed Ref apply exits failed private proof or public gate");
+    moon::FunctionDecl* mixedExit = nullptr;
+    for (auto& declaration : mixedExitModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function && function->name == "mixed")
+            mixedExit = function;
+    if (!mixedExit || !exercisePrivateRefApplyJit(
+            *mixedExitModule, *mixedExit, privateRefJitError, 0)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("pre-dispatch early Ref apply failed private JIT execution");
+    }
     auto multipleExitSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "export slot checkpoint(value: i32);\n"
         "runtime fn branches(selected: RuntimeFragmentRef<checkpoint>) {\n"

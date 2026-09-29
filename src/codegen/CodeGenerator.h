@@ -99,6 +99,15 @@ public:
 
     const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    // Test-target-only escape hatch. The caller must retain the returned JIT
+    // lease; it does not publish a source Ref ABI or a container artifact.
+    static std::shared_ptr<LunaJitModule>
+    materializePrivateRuntimeFragmentRefApplyForTest(
+        moon::Module& program, moon::FunctionDecl& function,
+        std::string& failure);
+#endif
+
 private:
     struct IteratorStep {
         IteratorOp op = IteratorOp::None;
@@ -137,11 +146,16 @@ private:
 
     void generateFunctionBody(moon::FunctionDecl* decl);
     // Proof-only lowering of one constrained Ref entry into a temporary LLVM
-    // module. The module is destroyed before this returns; no JIT/AOT artifact
-    // or runtime descriptor may escape while the source Ref gates are closed.
+    // module. Ordinary proofs destroy it before returning. The test-target-only
+    // hook may consume that same verified module into a private JIT lease;
+    // neither path publishes a source Ref ABI or runtime descriptor.
     static bool verifyPrivateRuntimeFragmentRefUnitIngress(
         moon::Module& program, moon::FunctionDecl& function,
-        std::string& failure);
+        std::string& failure
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+        , std::shared_ptr<LunaJitModule>* executable = nullptr
+#endif
+    );
     // Pass-through owned Ref returns are lowered only inside a disposable
     // proof module; no host return carrier or public function is emitted.
     static bool verifyPrivateRuntimeFragmentRefOwnedReturn(

@@ -457,7 +457,8 @@ add_executable(moonir-canonical-test
 target_include_directories(moonir-canonical-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_compile_definitions(moonir-canonical-test
-    PRIVATE LUNA_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}")
+    PRIVATE LUNA_TEST_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+            LUNA_PRIVATE_REF_JIT_TEST=1)
 file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/benchmarks/compiled_fragment_benchmark.cpp"
     LUNA_COMPILED_PROBE_SHA256)
 set(LUNA_COMPILED_WORKLOAD_HASH_INPUT "")
