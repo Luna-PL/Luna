@@ -672,7 +672,9 @@ on early return. Invalid helper operands are rejected and the generated module
 passes LLVM verification. This function models only context transitions: it
 does **not** generate the source body or its outlined RuntimeSlot continuation.
 The source module, container encoder and public CodeGenerator gates remain
-closed; no stable ABI or wire format is changed.
+closed; no stable ABI or wire format is changed. The private bridge symbols are
+registered in the explicit JIT runtime symbol map, but no publishable source
+module references them yet.
 
 ## Host-controlled discovery and injection
 

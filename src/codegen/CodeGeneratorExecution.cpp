@@ -2,6 +2,7 @@
 
 #include "../runtime/Runtime.h"
 #include "../runtime/RuntimeFragmentABI.h"
+#include "../runtime/RuntimeFragmentCompilerBridge.h"
 
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/LegacyPassManager.h>
@@ -111,6 +112,10 @@ materializeLunaJit(std::unique_ptr<llvm::Module>& module,
                 &luna_runtime_fragment_ref_check_v1);
     bindRuntime("luna_runtime_fragment_ref_transfer_v1",
                 &luna_runtime_fragment_ref_transfer_v1);
+    bindRuntime("luna_compiler_fragment_context_override_from_ref",
+                &luna_compiler_fragment_context_override_from_ref);
+    bindRuntime("luna_compiler_fragment_context_drop",
+                &luna_compiler_fragment_context_drop);
 #ifdef _WIN32
     runtimeSymbols[(*jit)->mangleAndIntern("__main")] =
         ExecutorSymbolDef::fromPtr(&lunaJitMingwMain, exported);

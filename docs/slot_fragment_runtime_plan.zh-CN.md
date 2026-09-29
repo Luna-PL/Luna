@@ -529,6 +529,7 @@ Ref-to-context 派生和拥有型 cell Drop 调用。一次性 internal LLVM 函
 实参被拒绝，生成的 module 通过 LLVM 校验。该函数只模拟 context 转换，
 **并未**生成源码 body 或被 outline 的 RuntimeSlot continuation。源码 module、
 container encoder 和公开 CodeGenerator 门禁仍关闭；稳定 ABI 与 wire 格式不变。
+私有桥接符号已登记到显式 JIT runtime 符号表，但尚无可发布的源码 module 引用它们。
 
 ## 宿主控制的发现与注入
 
