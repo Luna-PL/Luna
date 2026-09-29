@@ -264,6 +264,9 @@ private:
     // Non-null only while lowering a function whose verified
     // requires_fragment_context effect added the hidden leading ABI argument.
     llvm::Value* mCurrentFragmentContext = nullptr;
+    // Set only on a disposable private proof generator. Public generation
+    // continues to reject Ref-apply CFGs at the module boundary.
+    bool mPrivateRefApplyEnabled = false;
     bool mCurrentFunctionIsKernel = false;
     std::unordered_map<std::string, llvm::Function*> mFunctions;
     std::unordered_map<std::string, llvm::Function*> mDropCallbacks;

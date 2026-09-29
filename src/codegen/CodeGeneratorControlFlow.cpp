@@ -363,6 +363,48 @@ void CodeGenerator::generateControlFlowBody(
     if (parameterIndex != func->arg_size())
         error("canonical parameter table has the wrong LLVM arity");
 
+    std::optional<moon::RuntimeRefApplyFlowPlan> refApplyFlow;
+    llvm::AllocaInst* refContextCell = nullptr;
+    llvm::Value* parentFragmentContext = mCurrentFragmentContext;
+    if (!graph.runtimeRefApplies.empty()) {
+        std::string flowError;
+        if (!mPrivateRefApplyEnabled ||
+            graph.runtimeRefApplies.size() != 1 ||
+            !parentFragmentContext ||
+            !(refApplyFlow = moon::planRuntimeRefApplyFlow(graph, flowError)) ||
+            !refApplyFlow->terminals.empty()) {
+            error("private Ref apply body requires one normal-exit context region: " +
+                  flowError);
+            return;
+        }
+        const auto* apply = graph.findRegion(graph.runtimeRefApplies.front().region);
+        if (!apply || apply->parent != graph.rootRegion) {
+            error("private Ref apply body requires a top-level region");
+            return;
+        }
+        size_t entries = 0, exits = 0;
+        for (const auto& transition : refApplyFlow->edges) {
+            if (transition.enters.empty() && transition.exits.empty())
+                continue;
+            const auto* source = graph.findBlock(transition.source);
+            if (!source || source->terminator.kind != moon::TerminatorKind::Jump ||
+                transition.enters.size() + transition.exits.size() != 1) {
+                error("private Ref apply body cannot lower a non-jump context transition");
+                return;
+            }
+            entries += transition.enters.size();
+            exits += transition.exits.size();
+        }
+        if (entries != 1 || exits != 1) {
+            error("private Ref apply body has no unique entry and normal exit");
+            return;
+        }
+        refContextCell = createEntryBlockAlloca(
+            func, mHelpers->ptrTy(), "ref.apply.context.owner");
+        mBuilder->CreateStore(llvm::ConstantPointerNull::get(
+            llvm::cast<llvm::PointerType>(mHelpers->ptrTy())), refContextCell);
+    }
+
     std::vector<llvm::BasicBlock*> blocks;
     blocks.reserve(graph.blocks.size());
     for (const auto& block : graph.blocks)
@@ -387,13 +429,63 @@ void CodeGenerator::generateControlFlowBody(
             emitCanonicalCleanup(*record);
         }
     };
-    const auto emitEdge = [this, &blocks, &emitCleanups](
-        const moon::ControlEdge& edge, const std::string& context) {
+    const auto emitEdge = [this, &blocks, &emitCleanups, &graph,
+                           &refApplyFlow, refContextCell](
+        moon::BlockId source, const moon::ControlEdge& edge,
+        const std::string& context) {
         if (edge.target.empty() || edge.target.value >= blocks.size()) {
             error(context + " references no LLVM block");
             return;
         }
         emitCleanups(edge.cleanups, context);
+        if (refApplyFlow) {
+            const auto found = std::find_if(
+                refApplyFlow->edges.begin(), refApplyFlow->edges.end(),
+                [&](const moon::RuntimeRefApplyFlowEdge& transition) {
+                    return transition.source == source &&
+                        transition.target == edge.target;
+                });
+            if (found == refApplyFlow->edges.end()) {
+                error("private Ref apply edge has no verified transition");
+                return;
+            }
+            if (!found->exits.empty())
+                mHelpers->emitRuntimeFragmentContextDrop(
+                    *mBuilder, *mModule, refContextCell);
+            if (!found->enters.empty()) {
+                const auto& binding = graph.runtimeRefApplies.front();
+                if (binding.reference.value >= mCanonicalLocals.size() ||
+                    !mCanonicalLocals[binding.reference.value]) {
+                    error("private Ref apply has no local Ref carrier");
+                    return;
+                }
+                auto* borrowed = mBuilder->CreateLoad(
+                    mHelpers->ptrTy(),
+                    mCanonicalLocals[binding.reference.value],
+                    "ref.apply.borrowed");
+                auto* status = mHelpers->emitRuntimeFragmentRefContextOverride(
+                    *mBuilder, *mModule, mCurrentFragmentContext,
+                    borrowed, binding.slot, refContextCell);
+                if (!status) {
+                    error("private Ref apply could not emit context derivation");
+                    return;
+                }
+                auto* accepted = llvm::BasicBlock::Create(
+                    *mCtx, "ref.apply.accepted", mCurrentFunc);
+                auto* failed = llvm::BasicBlock::Create(
+                    *mCtx, "ref.apply.failed", mCurrentFunc);
+                mBuilder->CreateCondBr(
+                    mBuilder->CreateICmpEQ(status,
+                        llvm::ConstantInt::get(mHelpers->i32Ty(), 0)),
+                    accepted, failed);
+                mBuilder->SetInsertPoint(failed);
+                auto* trap = llvm::Intrinsic::getOrInsertDeclaration(
+                    mModule.get(), llvm::Intrinsic::trap);
+                mBuilder->CreateCall(trap);
+                mBuilder->CreateUnreachable();
+                mBuilder->SetInsertPoint(accepted);
+            }
+        }
         mBuilder->CreateBr(blocks[edge.target.value]);
     };
     const auto edgeTarget = [this, func, &blocks, &emitCleanups](
@@ -490,6 +582,11 @@ void CodeGenerator::generateControlFlowBody(
 
     for (auto& block : graph.blocks) {
         mBuilder->SetInsertPoint(blocks[block.id.value]);
+        mCurrentFragmentContext = parentFragmentContext;
+        if (refApplyFlow &&
+            !refApplyFlow->activeByBlock[block.id.value].empty())
+            mCurrentFragmentContext = mBuilder->CreateLoad(
+                mHelpers->ptrTy(), refContextCell, "ref.apply.context");
         for (auto& operation : block.operations) {
             if (auto* declaration =
                     dynamic_cast<moon::LetStmt*>(operation.get())) {
@@ -590,7 +687,7 @@ void CodeGenerator::generateControlFlowBody(
         const auto& terminator = block.terminator;
         switch (terminator.kind) {
             case moon::TerminatorKind::Jump:
-                emitEdge(terminator.primary, "canonical jump edge");
+                emitEdge(block.id, terminator.primary, "canonical jump edge");
                 break;
             case moon::TerminatorKind::Branch: {
                 llvm::Value* condition = generateExpr(
@@ -657,10 +754,10 @@ void CodeGenerator::generateControlFlowBody(
                 break;
             }
             case moon::TerminatorKind::Resume:
-                emitEdge(terminator.primary, "canonical resume edge");
+                emitEdge(block.id, terminator.primary, "canonical resume edge");
                 break;
             case moon::TerminatorKind::Discard:
-                emitEdge(terminator.primary, "canonical fragment discard edge");
+                emitEdge(block.id, terminator.primary, "canonical fragment discard edge");
                 break;
             case moon::TerminatorKind::Unreachable:
                 mBuilder->CreateUnreachable();

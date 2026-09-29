@@ -313,10 +313,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                      blockedSourceApply.errors().end(),
                      [](const auto& diagnostic) {
                          return diagnostic.message.find(
-                             "Ref apply context override is not executable") !=
+                             "1 private Ref apply body(s) verified and discarded") !=
                              std::string::npos;
                      }))
-        return fail("internal Ref apply CFG escaped its executable codegen gate");
+        return fail("private Ref apply body proof or public codegen gate failed");
 
     auto sourceEarlyReturnSnapshot =
         luna::tooling::AnalysisSnapshot::analyzeSource(
@@ -354,6 +354,31 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 earlyReturn->controlFlow->runtimeRefApplies[1].region,
                 earlyReturn->controlFlow->runtimeRefApplies[0].region})
         return fail("nested Ref apply return lost inner-before-outer cleanup order");
+    auto singleEarlySnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "export slot checkpoint(value: i32);\n"
+        "runtime fn early(selected: RuntimeFragmentRef<checkpoint>) {\n"
+        "  apply selected { return; }\n"
+        "}\n",
+        "<canonical-single-ref-early-return>");
+    if (!singleEarlySnapshot.success())
+        return fail("frontend rejected single Ref apply early-return fixture");
+    moon::LunaLowerer singleEarlyLowerer;
+    auto singleEarlyModule = singleEarlyLowerer.lower(
+        *singleEarlySnapshot.program(), *singleEarlySnapshot.symbolTable());
+    moon::Sealer singleEarlySealer;
+    if (!singleEarlyModule || !singleEarlyLowerer.errors().empty() ||
+        !singleEarlySealer.sealFunctionBodies(*singleEarlyModule))
+        return fail("single Ref apply early return did not seal");
+    CodeGenerator blockedSingleEarly("canonical-single-ref-early-return-gate");
+    if (blockedSingleEarly.generate(singleEarlyModule.get()) ||
+        !std::any_of(blockedSingleEarly.errors().begin(),
+                     blockedSingleEarly.errors().end(),
+                     [](const auto& diagnostic) {
+                         return diagnostic.message.find(
+                             "requires one normal-exit context region") !=
+                             std::string::npos;
+                     }))
+        return fail("single Ref apply early return escaped private body gate");
     std::vector<moon::RegionId> applyEntryOrder;
     for (const auto& edge : earlyFlow->edges)
         applyEntryOrder.insert(applyEntryOrder.end(),

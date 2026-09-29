@@ -676,6 +676,22 @@ closed; no stable ABI or wire format is changed. The private bridge symbols are
 registered in the explicit JIT runtime symbol map, but no publishable source
 module references them yet.
 
+### Private single-region source Ref-apply body (2026-09-29)
+
+A disposable CodeGenerator can now lower the **actual canonical source body**
+for one top-level Ref apply with one normal Jump entry and exit, an explicit
+parent Fragment context, and no return/unreachable terminal inside the apply.
+The entry derives a context from the borrowed local Ref; the RuntimeSlot site
+dispatches through a load of that same owned context cell; the exit drops it.
+An independent private proof checks the connected derive/dispatch/Drop LLVM
+operands and valid module IR, then destroys the module. It is deliberately
+stricter than the source grammar: nested applies, non-Jump transitions and
+early exits remain private-codegen errors. Derivation failure traps in this
+temporary proof; a recoverable source error/cleanup protocol is not defined.
+The module verifier, container encoder and public CodeGenerator still reject
+Ref-bearing publication, so this is not end-to-end executable source support
+or a public ABI change.
+
 ## Host-controlled discovery and injection
 
 An exported Fragment targeting an exported Slot is a candidate by nominal

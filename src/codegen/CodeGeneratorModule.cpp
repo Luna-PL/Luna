@@ -87,10 +87,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         failure = "function has no independently verified sealed CFG";
         return false;
     }
-    if (!function.controlFlow->runtimeRefApplies.empty()) {
-        failure = "Ref apply context override is not executable";
-        return false;
-    }
+    const bool privateRefApply =
+        !function.controlFlow->runtimeRefApplies.empty();
     if (!matchesPrivateRefContextEffect(program, function)) {
         failure = "Ref entry context effect differs from the sealed CFG fixed point";
         return false;
@@ -104,10 +102,58 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         llvm::Function::InternalLinkage,
         function.generatedSymbolName, *proof.mModule);
     proof.mFunctions[function.generatedSymbolName] = body;
+    proof.mPrivateRefApplyEnabled = privateRefApply;
     proof.generateFunctionBody(&function);
     if (!proof.mErrors.empty()) {
         failure = proof.mErrors.front().message;
         return false;
+    }
+    if (privateRefApply) {
+        size_t derivations = 0, contextDrops = 0, dispatches = 0;
+        llvm::CallInst* deriveCall = nullptr;
+        llvm::CallInst* dropCall = nullptr;
+        llvm::CallInst* dispatchCall = nullptr;
+        for (auto& block : *body)
+            for (auto& instruction : block)
+                if (auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
+                    call && call->getCalledFunction()) {
+                    const auto name = call->getCalledFunction()->getName();
+                    if (name ==
+                        "luna_compiler_fragment_context_override_from_ref") {
+                        ++derivations;
+                        deriveCall = call;
+                    } else if (name ==
+                        "luna_compiler_fragment_context_drop") {
+                        ++contextDrops;
+                        dropCall = call;
+                    } else if (name ==
+                        "luna_runtime_fragment_dispatch_v1") {
+                        ++dispatches;
+                        dispatchCall = call;
+                    }
+                }
+        const auto* dispatchContext = dispatchCall
+            ? llvm::dyn_cast<llvm::LoadInst>(dispatchCall->getArgOperand(0))
+            : nullptr;
+        if (!body->hasInternalLinkage() || derivations != 1 ||
+            contextDrops != 1 || dispatches != 1 || !deriveCall ||
+            !dropCall || !dispatchContext ||
+            deriveCall->getArgOperand(0) != body->getArg(0) ||
+            deriveCall->getArgOperand(4) != dropCall->getArgOperand(0) ||
+            dispatchContext->getPointerOperand() !=
+                deriveCall->getArgOperand(4)) {
+            failure = "generated Ref apply body lacks one connected context lifetime";
+            return false;
+        }
+        std::string invalidIR;
+        llvm::raw_string_ostream stream(invalidIR);
+        if (llvm::verifyModule(*proof.mModule, &stream)) {
+            stream.flush();
+            failure = "generated Ref apply LLVM IR is invalid: " + invalidIR;
+            return false;
+        }
+        failure.clear();
+        return true;
     }
     auto* wrapper = proof.mHelpers->emitRuntimeFragmentRefUnitIngressWrapper(
         *proof.mModule, *body, program, function,
@@ -394,6 +440,7 @@ bool CodeGenerator::generate(moon::Module* program) {
     if (containsRef) {
         size_t provenEntries = 0;
         size_t provenReturns = 0;
+        size_t provenApplies = 0;
         for (auto& declaration : program->declarations) {
             auto* function = dynamic_cast<FunctionDecl*>(declaration.get());
             if (!function || function->params.size() != 1) continue;
@@ -406,7 +453,11 @@ bool CodeGenerator::generate(moon::Module* program) {
             if (result->kind == TypeKind::Unit) {
                 if (verifyPrivateRuntimeFragmentRefUnitIngress(
                         *program, *function, failure)) {
-                    ++provenEntries;
+                    if (function->controlFlow &&
+                        !function->controlFlow->runtimeRefApplies.empty())
+                        ++provenApplies;
+                    else
+                        ++provenEntries;
                 } else {
                     error("private RuntimeFragmentRef unit ingress proof failed for '" +
                           function->name + "': " + failure);
@@ -428,7 +479,9 @@ bool CodeGenerator::generate(moon::Module* program) {
               std::to_string(provenEntries) +
               " private unit body/wrapper pair(s) and " +
               std::to_string(provenReturns) +
-              " private owned return body/wrapper pair(s) verified and discarded");
+              " private owned return body/wrapper pair(s) verified and discarded" +
+              (provenApplies ? "; " + std::to_string(provenApplies) +
+                  " private Ref apply body(s) verified and discarded" : ""));
         return false;
     }
     mProgram = program;

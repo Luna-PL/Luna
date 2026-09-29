@@ -531,6 +531,18 @@ Ref-to-context 派生和拥有型 cell Drop 调用。一次性 internal LLVM 函
 container encoder 和公开 CodeGenerator 门禁仍关闭；稳定 ABI 与 wire 格式不变。
 私有桥接符号已登记到显式 JIT runtime 符号表，但尚无可发布的源码 module 引用它们。
 
+### 私有单 region 源码 Ref-apply 函数体（2026-09-29）
+
+一次性 CodeGenerator 现可生成**真实 canonical 源码 body** 的受限情形：只有一个
+顶层 Ref apply、显式父 Fragment context、通过 Jump 正常进入和退出，且 apply
+内部没有 return／unreachable 终止路径。入口从借用的局部 Ref 派生 context；
+RuntimeSlot 站点从同一拥有型 context cell 加载并分派；出口 Drop 此 cell。
+独立私有证明检查派生／分派／Drop 的 LLVM operand 关联和 module IR 有效性，
+随后销毁 module。它刻意比源码语法严格：嵌套 apply、非 Jump 转换和提前退出
+仍被私有代码生成拒绝。这个临时证明在派生失败时 trap；可恢复的源码错误／清理
+协议尚未定义。module verifier、container encoder 和公开 CodeGenerator 仍拒绝
+带 Ref 的发布，因此这并非端到端可执行源码支持，也不改变公开 ABI。
+
 ## 宿主控制的发现与注入
 
 目标指向 exported Slot 的 exported Fragment，凭名义关系成为候选；metadata 不授予
