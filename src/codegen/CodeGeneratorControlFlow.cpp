@@ -371,9 +371,8 @@ void CodeGenerator::generateControlFlowBody(
         if (!mPrivateRefApplyEnabled ||
             graph.runtimeRefApplies.size() != 1 ||
             !parentFragmentContext ||
-            !(refApplyFlow = moon::planRuntimeRefApplyFlow(graph, flowError)) ||
-            !refApplyFlow->terminals.empty()) {
-            error("private Ref apply body requires one normal-exit context region: " +
+            !(refApplyFlow = moon::planRuntimeRefApplyFlow(graph, flowError))) {
+            error("private Ref apply body requires one context region: " +
                   flowError);
             return;
         }
@@ -395,8 +394,15 @@ void CodeGenerator::generateControlFlowBody(
             entries += transition.enters.size();
             exits += transition.exits.size();
         }
-        if (entries != 1 || exits != 1) {
-            error("private Ref apply body has no unique entry and normal exit");
+        const bool normalExit = exits == 1 && refApplyFlow->terminals.empty();
+        const bool earlyReturn = exits == 0 &&
+            refApplyFlow->terminals.size() == 1 &&
+            refApplyFlow->terminals.front().kind ==
+                moon::TerminatorKind::Return &&
+            refApplyFlow->terminals.front().exits ==
+                std::vector<moon::RegionId>{apply->id};
+        if (entries != 1 || (!normalExit && !earlyReturn)) {
+            error("private Ref apply body requires one normal exit or one early return");
             return;
         }
         refContextCell = createEntryBlockAlloca(
@@ -428,6 +434,61 @@ void CodeGenerator::generateControlFlowBody(
             }
             emitCanonicalCleanup(*record);
         }
+    };
+    const auto emitReturnCleanups =
+        [this, &graph, &refApplyFlow, refContextCell, &emitCleanups](
+            moon::BlockId source,
+            const std::vector<moon::CleanupId>& cleanups) -> bool {
+        const moon::RuntimeRefApplyFlowTerminal* terminal = nullptr;
+        if (refApplyFlow)
+            for (const auto& item : refApplyFlow->terminals)
+                if (item.block == source) terminal = &item;
+        if (!terminal) {
+            emitCleanups(cleanups, "canonical return cleanup");
+            return true;
+        }
+        const auto* apply = graph.findRegion(terminal->exits.front());
+        if (!apply) {
+            error("private Ref apply return has no exiting region");
+            return false;
+        }
+        std::vector<moon::CleanupId> inner, outer;
+        bool reachedOuter = false;
+        for (const auto cleanup : cleanups) {
+            const auto* record = graph.findCleanup(cleanup);
+            if (!record) {
+                error("private Ref apply return has no cleanup row");
+                return false;
+            }
+            bool withinApply = false;
+            for (auto scope = record->scope; !scope.empty();) {
+                if (scope == apply->scope) {
+                    withinApply = true;
+                    break;
+                }
+                const auto* parent = graph.findScope(scope);
+                if (!parent) {
+                    error("private Ref apply return has no cleanup scope");
+                    return false;
+                }
+                scope = parent->parent;
+            }
+            if (withinApply && reachedOuter) {
+                error("private Ref apply return interleaves inner and outer cleanups");
+                return false;
+            }
+            if (withinApply)
+                inner.push_back(cleanup);
+            else {
+                reachedOuter = true;
+                outer.push_back(cleanup);
+            }
+        }
+        emitCleanups(inner, "canonical Ref apply return inner cleanup");
+        mHelpers->emitRuntimeFragmentContextDrop(
+            *mBuilder, *mModule, refContextCell);
+        emitCleanups(outer, "canonical Ref apply return outer cleanup");
+        return true;
     };
     const auto emitEdge = [this, &blocks, &emitCleanups, &graph,
                            &refApplyFlow, refContextCell](
@@ -708,9 +769,9 @@ void CodeGenerator::generateControlFlowBody(
                 if (returnType->isVoidTy()) {
                     if (terminator.operand)
                         (void)generateExpr(terminator.operand.get());
-                    emitCleanups(
-                        terminator.exitCleanups,
-                        "canonical return cleanup");
+                    if (!emitReturnCleanups(
+                            block.id, terminator.exitCleanups))
+                        break;
                     if (!mBuilder->GetInsertBlock()->getTerminator())
                         mBuilder->CreateRetVoid();
                 } else {
@@ -745,9 +806,9 @@ void CodeGenerator::generateControlFlowBody(
                         error("canonical non-void return has no value");
                         break;
                     }
-                    emitCleanups(
-                        terminator.exitCleanups,
-                        "canonical return cleanup");
+                    if (!emitReturnCleanups(
+                            block.id, terminator.exitCleanups))
+                        break;
                     mBuilder->CreateRet(
                         coerceCallArgument(value, returnType));
                 }

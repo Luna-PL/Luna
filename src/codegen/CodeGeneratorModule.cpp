@@ -109,10 +109,18 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         return false;
     }
     if (privateRefApply) {
+        std::string flowError;
+        const auto flow = moon::planRuntimeRefApplyFlow(
+            *function.controlFlow, flowError);
+        if (!flow) {
+            failure = "verified Ref apply body lost its context flow: " + flowError;
+            return false;
+        }
         size_t derivations = 0, contextDrops = 0, dispatches = 0;
         llvm::CallInst* deriveCall = nullptr;
         llvm::CallInst* dropCall = nullptr;
         llvm::CallInst* dispatchCall = nullptr;
+        std::vector<llvm::CallInst*> refDrops;
         for (auto& block : *body)
             for (auto& instruction : block)
                 if (auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
@@ -130,6 +138,9 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         "luna_runtime_fragment_dispatch_v1") {
                         ++dispatches;
                         dispatchCall = call;
+                    } else if (name ==
+                        "luna_runtime_fragment_ref_drop_v1") {
+                        refDrops.push_back(call);
                     }
                 }
         const auto* dispatchContext = dispatchCall
@@ -144,6 +155,35 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 deriveCall->getArgOperand(4)) {
             failure = "generated Ref apply body lacks one connected context lifetime";
             return false;
+        }
+        if (!flow->terminals.empty()) {
+            llvm::BasicBlock* returnBlock = nullptr;
+            const auto blockName = "cfg." +
+                std::to_string(flow->terminals.front().block.value);
+            for (auto& block : *body)
+                if (block.getName() == blockName) returnBlock = &block;
+            auto* returnInst = returnBlock
+                ? llvm::dyn_cast<llvm::ReturnInst>(
+                    returnBlock->getTerminator())
+                : nullptr;
+            if (!returnInst || dropCall->getParent() != returnInst->getParent() ||
+                !dropCall->comesBefore(returnInst)) {
+                failure = "early Ref apply return does not release its context";
+                return false;
+            }
+            const auto* borrowed = llvm::dyn_cast<llvm::LoadInst>(
+                deriveCall->getArgOperand(1));
+            if (!borrowed) {
+                failure = "early Ref apply did not borrow a local Ref cell";
+                return false;
+            }
+            for (const auto* refDrop : refDrops)
+                if (refDrop->getParent() == returnInst->getParent() &&
+                    refDrop->getArgOperand(0) == borrowed->getPointerOperand() &&
+                    !dropCall->comesBefore(refDrop)) {
+                    failure = "early Ref apply released its Ref before its context";
+                    return false;
+                }
         }
         std::string invalidIR;
         llvm::raw_string_ostream stream(invalidIR);

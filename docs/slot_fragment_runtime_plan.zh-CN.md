@@ -534,12 +534,16 @@ container encoder 和公开 CodeGenerator 门禁仍关闭；稳定 ABI 与 wire 
 ### 私有单 region 源码 Ref-apply 函数体（2026-09-29）
 
 一次性 CodeGenerator 现可生成**真实 canonical 源码 body** 的受限情形：只有一个
-顶层 Ref apply、显式父 Fragment context、通过 Jump 正常进入和退出，且 apply
-内部没有 return／unreachable 终止路径。入口从借用的局部 Ref 派生 context；
-RuntimeSlot 站点从同一拥有型 context cell 加载并分派；出口 Drop 此 cell。
+顶层 Ref apply、显式父 Fragment context、通过 Jump 进入，并且只有一个正常
+Jump 出口或一个直接提前 return。入口从借用的局部 Ref 派生 context；
+RuntimeSlot 站点从同一拥有型 context cell 加载并分派。正常出口在 apply 局部
+edge cleanup 之后 Drop context；提前 return 则先做 apply 内部 cleanup，
+再 Drop context，最后做外层 cleanup（包括 Ref owner）。私有证明核对提前返回的
+LLVM block 在 return 和该 block 的 Ref Drop 之前释放 context。
 独立私有证明检查派生／分派／Drop 的 LLVM operand 关联和 module IR 有效性，
-随后销毁 module。它刻意比源码语法严格：嵌套 apply、非 Jump 转换和提前退出
-仍被私有代码生成拒绝。这个临时证明在派生失败时 trap；可恢复的源码错误／清理
+随后销毁 module。它刻意比源码语法严格：嵌套 apply、非 Jump 转换、
+unreachable 终止和正常／提前退出并存的路径仍被私有代码生成拒绝。
+这个临时证明在派生失败时 trap；可恢复的源码错误／清理
 协议尚未定义。module verifier、container encoder 和公开 CodeGenerator 仍拒绝
 带 Ref 的发布，因此这并非端到端可执行源码支持，也不改变公开 ABI。
 

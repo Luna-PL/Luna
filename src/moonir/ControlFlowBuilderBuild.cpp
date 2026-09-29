@@ -265,7 +265,8 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerApply(
         mStaticApplyScopes.emplace_back();
         // An empty binding masks any outer static Fragment; the body's Slot
         // sites then become RuntimeSlot terms and enter the existing effect
-        // fixed point. This is proof-only: no context override is emitted.
+        // fixed point. Context override is currently lowered only by a
+        // disposable private CodeGenerator, never into a published module.
         const std::string slotKey = statement->runtimeSlot.symbol.value +
             "/" + statement->runtimeSlot.contract.value;
         mStaticApplyScopes.back()[statement->slotName] = {};

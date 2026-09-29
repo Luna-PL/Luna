@@ -357,7 +357,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto singleEarlySnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "export slot checkpoint(value: i32);\n"
         "runtime fn early(selected: RuntimeFragmentRef<checkpoint>) {\n"
-        "  apply selected { return; }\n"
+        "  apply selected { checkpoint(1) {} return; }\n"
         "}\n",
         "<canonical-single-ref-early-return>");
     if (!singleEarlySnapshot.success())
@@ -370,15 +370,45 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !singleEarlySealer.sealFunctionBodies(*singleEarlyModule))
         return fail("single Ref apply early return did not seal");
     CodeGenerator blockedSingleEarly("canonical-single-ref-early-return-gate");
-    if (blockedSingleEarly.generate(singleEarlyModule.get()) ||
+    const bool singleEarlyPublished =
+        blockedSingleEarly.generate(singleEarlyModule.get());
+    if (singleEarlyPublished ||
         !std::any_of(blockedSingleEarly.errors().begin(),
                      blockedSingleEarly.errors().end(),
                      [](const auto& diagnostic) {
                          return diagnostic.message.find(
-                             "requires one normal-exit context region") !=
+                             "1 private Ref apply body(s) verified and discarded") !=
+                             std::string::npos;
+                     })) {
+        for (const auto& diagnostic : blockedSingleEarly.errors())
+            std::cerr << diagnostic.message << '\n';
+        return fail("single Ref apply early return failed private body proof or public gate");
+    }
+    auto mixedExitSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "export slot checkpoint(value: i32);\n"
+        "runtime fn mixed(selected: RuntimeFragmentRef<checkpoint>) {\n"
+        "  apply selected { if true { return; } checkpoint(1) {} }\n"
+        "}\n",
+        "<canonical-ref-mixed-exits>");
+    if (!mixedExitSnapshot.success())
+        return fail("frontend rejected mixed Ref apply exit fixture");
+    moon::LunaLowerer mixedExitLowerer;
+    auto mixedExitModule = mixedExitLowerer.lower(
+        *mixedExitSnapshot.program(), *mixedExitSnapshot.symbolTable());
+    moon::Sealer mixedExitSealer;
+    if (!mixedExitModule || !mixedExitLowerer.errors().empty() ||
+        !mixedExitSealer.sealFunctionBodies(*mixedExitModule))
+        return fail("mixed Ref apply exits did not seal");
+    CodeGenerator blockedMixedExit("canonical-ref-mixed-exits-gate");
+    if (blockedMixedExit.generate(mixedExitModule.get()) ||
+        !std::any_of(blockedMixedExit.errors().begin(),
+                     blockedMixedExit.errors().end(),
+                     [](const auto& diagnostic) {
+                         return diagnostic.message.find(
+                             "requires one normal exit or one early return") !=
                              std::string::npos;
                      }))
-        return fail("single Ref apply early return escaped private body gate");
+        return fail("mixed Ref apply exits escaped the private body gate");
     std::vector<moon::RegionId> applyEntryOrder;
     for (const auto& edge : earlyFlow->edges)
         applyEntryOrder.insert(applyEntryOrder.end(),
