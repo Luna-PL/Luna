@@ -12,6 +12,7 @@
 #include "moonir_canonical_test_support.h"
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -27,9 +28,27 @@ namespace {
 unsigned privateRefJitExecutions = 0;
 unsigned privateRefJitCompletedResumes = 0;
 int32_t privateRefJitResumeStatus = -1;
+const char* privateRefJitSlotId = nullptr;
+const char* privateRefJitSlotContract = nullptr;
+const char* privateRefJitLayoutId = nullptr;
+uint64_t privateRefJitArgumentsSize = 0;
+uint64_t privateRefJitArgumentsAlignment = 1;
+bool privateRefJitPayloadValid = true;
+std::vector<int32_t> privateRefJitObservedArguments;
 
 void executePrivateRefJitFragment(void*, void* activation) {
     ++privateRefJitExecutions;
+    const void* packed = luna_runtime_fragment_activation_arguments_v1(
+        activation, privateRefJitSlotId, privateRefJitSlotContract,
+        privateRefJitLayoutId, privateRefJitArgumentsSize,
+        privateRefJitArgumentsAlignment);
+    if (!packed || privateRefJitArgumentsSize < sizeof(int32_t)) {
+        privateRefJitPayloadValid = false;
+        return;
+    }
+    int32_t value = 0;
+    std::memcpy(&value, packed, sizeof(value));
+    privateRefJitObservedArguments.push_back(value);
     privateRefJitResumeStatus =
         luna_runtime_fragment_activation_resume_v1(activation);
     if (privateRefJitResumeStatus ==
@@ -46,7 +65,10 @@ bool exercisePrivateRefApplyJit(
                 declaration.get()); candidate && candidate->name == "checkpoint")
             slot = candidate;
     const auto* arguments = slot ? module.findType(slot->argumentsType) : nullptr;
+    const auto* valueType = arguments && arguments->fields.size() == 1
+        ? module.findType(arguments->fields.front().type) : nullptr;
     if (!slot || !arguments || function.params.size() != 1 ||
+        !valueType || valueType->kind != TypeKind::I32 ||
         function.params.front().relation !=
             luna::ownership::Relation::SharedBorrow) {
         error = "private Ref JIT fixture lacks Slot/layout/borrowed parameter";
@@ -133,6 +155,13 @@ bool exercisePrivateRefApplyJit(
     const auto entry = reinterpret_cast<Entry>(const_cast<void*>(address));
     const auto before = privateRefJitExecutions;
     const auto resumesBefore = privateRefJitCompletedResumes;
+    const auto argumentsBefore = privateRefJitObservedArguments.size();
+    privateRefJitSlotId = descriptor.slot_id;
+    privateRefJitSlotContract = descriptor.slot_contract_id;
+    privateRefJitLayoutId = descriptor.slot_arguments_layout_id;
+    privateRefJitArgumentsSize = descriptor.slot_arguments_size;
+    privateRefJitArgumentsAlignment = descriptor.slot_arguments_alignment;
+    privateRefJitPayloadValid = true;
     privateRefJitResumeStatus = -1;
     entry(parent.opaque(), const_cast<void*>(handle.opaque()));
     if (luna_runtime_fragment_ref_check_v1(
@@ -149,10 +178,21 @@ bool exercisePrivateRefApplyJit(
             resumesBefore + expectedDispatches * 2 ||
         privateRefJitResumeStatus != (expectedDispatches
             ? LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1 : -1) ||
+        !privateRefJitPayloadValid ||
+        privateRefJitObservedArguments.size() !=
+            argumentsBefore + expectedDispatches * 2 ||
         !generationLease.expired()) {
         error = "private Ref JIT body did not dispatch and release its generation";
         return false;
     }
+    for (unsigned repeat = 0; repeat < 2; ++repeat)
+        for (unsigned site = 0; site < expectedDispatches; ++site)
+            if (privateRefJitObservedArguments[
+                    argumentsBefore + repeat * expectedDispatches + site] !=
+                static_cast<int32_t>(site + 1)) {
+                error = "private Ref JIT Slot sites executed out of order";
+                return false;
+            }
     error.clear();
     return true;
 }
@@ -460,6 +500,51 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         std::cerr << privateRefJitError << '\n';
         return fail("normal-exit source Ref apply failed private JIT execution");
     }
+    auto sequentialSlotsSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "runtime fn sequence(selected: RuntimeFragmentRef<checkpoint>) {\n"
+            "  apply selected { checkpoint(1) {} checkpoint(2) {} }\n"
+            "}\n",
+            "<canonical-ref-sequential-slots>");
+    if (!sequentialSlotsSnapshot.success())
+        return fail("frontend rejected sequential Ref apply Slot sites");
+    moon::LunaLowerer sequentialSlotsLowerer;
+    auto sequentialSlotsModule = sequentialSlotsLowerer.lower(
+        *sequentialSlotsSnapshot.program(),
+        *sequentialSlotsSnapshot.symbolTable());
+    moon::Sealer sequentialSlotsSealer;
+    if (!sequentialSlotsModule || !sequentialSlotsLowerer.errors().empty() ||
+        !sequentialSlotsSealer.sealFunctionBodies(*sequentialSlotsModule))
+        return fail("sequential Ref apply Slot sites did not seal");
+    moon::FunctionDecl* sequence = nullptr;
+    for (auto& declaration : sequentialSlotsModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function && function->name == "sequence")
+            sequence = function;
+    if (!sequence || !sequence->controlFlow ||
+        std::count_if(sequence->controlFlow->blocks.begin(),
+                      sequence->controlFlow->blocks.end(),
+                      [](const auto& block) {
+                          return block.terminator.kind ==
+                              moon::TerminatorKind::RuntimeSlot;
+                      }) != 2)
+        return fail("sequential Ref apply lost one of its Slot CFG sites");
+    CodeGenerator blockedSequentialSlots("canonical-ref-sequential-slots-gate");
+    if (blockedSequentialSlots.generate(sequentialSlotsModule.get()) ||
+        !std::any_of(blockedSequentialSlots.errors().begin(),
+                     blockedSequentialSlots.errors().end(),
+                     [](const auto& diagnostic) {
+                         return diagnostic.message.find(
+                             "1 private Ref apply body(s) verified and discarded") !=
+                             std::string::npos;
+                     }))
+        return fail("sequential Ref apply Slot proof or public gate failed");
+    if (!exercisePrivateRefApplyJit(
+            *sequentialSlotsModule, *sequence, privateRefJitError, 2)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("sequential Ref apply Slots failed private JIT execution");
+    }
 
     auto sourceEarlyReturnSnapshot =
         luna::tooling::AnalysisSnapshot::analyzeSource(
@@ -531,6 +616,35 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             *singleEarlyModule, *singleEarly, privateRefJitError)) {
         std::cerr << privateRefJitError << '\n';
         return fail("early-return source Ref apply failed private JIT execution");
+    }
+    auto sequentialEarlySnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "runtime fn sequence_early(selected: RuntimeFragmentRef<checkpoint>) {\n"
+            "  apply selected { checkpoint(1) {} checkpoint(2) {} return; }\n"
+            "}\n",
+            "<canonical-ref-sequential-early>");
+    if (!sequentialEarlySnapshot.success())
+        return fail("frontend rejected sequential Ref apply early return");
+    moon::LunaLowerer sequentialEarlyLowerer;
+    auto sequentialEarlyModule = sequentialEarlyLowerer.lower(
+        *sequentialEarlySnapshot.program(),
+        *sequentialEarlySnapshot.symbolTable());
+    moon::Sealer sequentialEarlySealer;
+    if (!sequentialEarlyModule || !sequentialEarlyLowerer.errors().empty() ||
+        !sequentialEarlySealer.sealFunctionBodies(*sequentialEarlyModule))
+        return fail("sequential Ref apply early return did not seal");
+    moon::FunctionDecl* sequenceEarly = nullptr;
+    for (auto& declaration : sequentialEarlyModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function &&
+                function->name == "sequence_early")
+            sequenceEarly = function;
+    if (!sequenceEarly || !exercisePrivateRefApplyJit(
+            *sequentialEarlyModule, *sequenceEarly,
+            privateRefJitError, 2)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("sequential Ref apply early return failed private JIT execution");
     }
     CodeGenerator blockedSingleEarly("canonical-single-ref-early-return-gate");
     const bool singleEarlyPublished =

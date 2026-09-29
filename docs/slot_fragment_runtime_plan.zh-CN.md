@@ -541,19 +541,24 @@ edge cleanup 之后 Drop context；提前 return 则先做 apply 内部 cleanup�
 再 Drop context，最后做外层 cleanup（包括 Ref owner）。私有证明把每条 CFG
 退出义务映射到恰好一次 LLVM block 中派生 cell 的 Drop，确保它先于 Jump 或
 return；提前返回时还须先于被借用 Ref owner 的 Drop。证明另核对派生／分派
-operand 的关联和 module IR 有效性，随后销毁 module。此证明仍要求恰好一个
-RuntimeSlot 分派站点。它刻意比源码语法严格：嵌套 apply、非 Jump context
-转换和 unreachable 终止仍被私有代码生成拒绝。
+operand 的关联、每个直接 RuntimeSlot CFG 站点的分派是否读取同一派生 context
+cell，以及 module IR 有效性，随后销毁 module。顺序排列的直接站点已支持；
+outlined continuation 内的分派尚未进入此私有证明；证明体至少要有一个直接
+RuntimeSlot 站点，且全部位于这个 apply 内。它刻意比源码语法严格：
+嵌套 apply、非 Jump context 转换和 unreachable 终止仍被私有代码生成拒绝。
 这个临时证明在派生失败时 trap；可恢复的源码错误／清理
 协议尚未定义。module verifier、container encoder 和公开 CodeGenerator 仍拒绝
 带 Ref 的发布，因此这并非端到端可执行源码支持，也不改变公开 ABI。
 
 canonical 回归目标另有仅在测试编译时启用的私有 JIT 入口。它把已经验证的源码
 body 放进内部测试 wrapper，以真实借用 Ref 和空父 context 执行正常退出、Slot
-分派后的提前 return，以及分派前的提前 return。generation lease 在调用期间
+分派后的提前 return、分派前的提前 return，以及正常／提前退出路径上的两个
+顺序 Slot 站点。generation lease 在调用期间
 保持固定，宿主随后释放 Ref handle 后即失效，证明这些路径没有留下派生 context
 的 pin。每个 body 都使用同一借用 Ref 连续调用两次，以核对重复 apply 不消耗
-宿主 handle。生产编译器目标不含此入口，也不生成公开 descriptor 或 container code。
+宿主 handle。此入口还读取每次 activation 的打包参数，确认两个顺序站点在两次
+调用中均按 `1`、`2` 分派。生产编译器目标不含此入口，也不生成公开 descriptor
+或 container code。
 
 ## 宿主控制的发现与注入
 

@@ -688,12 +688,15 @@ cleanups, drops the context, then executes outer cleanups (including the Ref
 owner). The private proof maps every CFG exit obligation to exactly one LLVM
 block Drop of the derived cell, before its Jump or return, and checks that an
 early return releases the context before the borrowed Ref owner's Drop.
-It also checks the connected derive/dispatch operands and valid module IR,
-then destroys the module. This proof still requires exactly one RuntimeSlot
-dispatch site. It is deliberately stricter than the source grammar: nested
-applies, non-Jump context transitions and unreachable terminals remain
-private-codegen errors. Derivation failure traps in this
-temporary proof; a recoverable source error/cleanup protocol is not defined.
+It also checks every direct RuntimeSlot CFG site's dispatch against the same
+derived context cell and validates module IR, then destroys the module.
+Sequential direct sites are supported; dispatches emitted inside an outlined
+continuation are not yet part of this private proof. The proof body requires
+at least one direct RuntimeSlot site, all inside the one apply. It is stricter than
+the source grammar: nested applies, non-Jump context transitions and
+unreachable terminals remain private-codegen errors. Derivation failure traps
+in this temporary proof; a recoverable source error/cleanup protocol is not
+defined.
 The module verifier, container encoder and public CodeGenerator still reject
 Ref-bearing publication, so this is not end-to-end executable source support
 or a public ABI change.
@@ -701,13 +704,15 @@ or a public ABI change.
 The canonical regression target additionally has a compile-time-only private
 JIT hook. It materializes the already verified source body behind an internal
 test wrapper, then executes normal exit, return after Slot dispatch, and return
-before dispatch against a real borrowed Ref and an empty parent context. A
-generation lease remains pinned during the call and expires after the host
+before dispatch, including two sequential Slot sites on normal and early-exit
+paths, against a real borrowed Ref and an empty parent context. A generation
+lease remains pinned during the call and expires after the host
 releases its Ref handle, demonstrating that the derived context leaves no
 retained pin on those paths. Each body is invoked twice with the same borrowed
 Ref, checking repeated application without consuming the host handle. This
-hook is absent from the production compiler
-target; no public descriptor or container code is emitted.
+hook also reads each activation's packed argument to verify sequential sites
+dispatch `1`, then `2`, on both invocations. It is absent from the production
+compiler target; no public descriptor or container code is emitted.
 
 ## Host-controlled discovery and injection
 

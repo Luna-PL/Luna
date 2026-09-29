@@ -155,9 +155,21 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             returns[terminal.block.value] = &terminal;
             ++expectedDrops;
         }
-        size_t derivations = 0, dispatches = 0;
+        std::vector<const moon::BasicBlock*> slotSites;
+        for (const auto& block : function.controlFlow->blocks)
+            if (block.terminator.kind == moon::TerminatorKind::RuntimeSlot) {
+                if (block.id.value >= flow->activeByBlock.size() ||
+                    flow->activeByBlock[block.id.value] !=
+                        std::vector<moon::RegionId>{
+                            function.controlFlow->runtimeRefApplies.front().region}) {
+                    failure = "private Ref apply has a RuntimeSlot outside its context";
+                    return false;
+                }
+                slotSites.push_back(&block);
+            }
+        size_t derivations = 0;
         llvm::CallInst* deriveCall = nullptr;
-        llvm::CallInst* dispatchCall = nullptr;
+        std::vector<llvm::CallInst*> dispatchCalls;
         std::vector<llvm::CallInst*> dropCalls;
         std::vector<llvm::CallInst*> refDrops;
         for (auto& block : *body)
@@ -174,24 +186,38 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         dropCalls.push_back(call);
                     } else if (name ==
                         "luna_runtime_fragment_dispatch_v1") {
-                        ++dispatches;
-                        dispatchCall = call;
+                        dispatchCalls.push_back(call);
                     } else if (name ==
                         "luna_runtime_fragment_ref_drop_v1") {
                         refDrops.push_back(call);
                     }
                 }
-        const auto* dispatchContext = dispatchCall
-            ? llvm::dyn_cast<llvm::LoadInst>(dispatchCall->getArgOperand(0))
-            : nullptr;
         if (!body->hasInternalLinkage() || derivations != 1 ||
-            dropCalls.size() != expectedDrops || dispatches != 1 ||
-            !deriveCall || !dispatchContext ||
-            deriveCall->getArgOperand(0) != body->getArg(0) ||
-            dispatchContext->getPointerOperand() !=
-                deriveCall->getArgOperand(4)) {
+            dropCalls.size() != expectedDrops || slotSites.empty() ||
+            dispatchCalls.size() != slotSites.size() || !deriveCall ||
+            deriveCall->getArgOperand(0) != body->getArg(0)) {
             failure = "generated Ref apply body lacks one connected context lifetime";
             return false;
+        }
+        for (const auto* site : slotSites) {
+            llvm::CallInst* dispatch = nullptr;
+            const auto blockName = "cfg." + std::to_string(site->id.value);
+            for (auto* call : dispatchCalls)
+                if (call->getParent()->getName() == blockName) {
+                    if (dispatch) {
+                        failure = "private Ref apply emitted duplicate Slot dispatch";
+                        return false;
+                    }
+                    dispatch = call;
+                }
+            const auto* context = dispatch
+                ? llvm::dyn_cast<llvm::LoadInst>(dispatch->getArgOperand(0))
+                : nullptr;
+            if (!context || context->getPointerOperand() !=
+                    deriveCall->getArgOperand(4)) {
+                failure = "private Ref apply Slot site lost its derived context";
+                return false;
+            }
         }
         const auto* borrowed = llvm::dyn_cast<llvm::LoadInst>(
             deriveCall->getArgOperand(1));
