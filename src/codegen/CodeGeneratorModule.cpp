@@ -3,6 +3,7 @@
 #include "moonir/Verifier.h"
 
 #include <llvm/Config/llvm-config.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/PassManager.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/MC/TargetRegistry.h>
@@ -116,10 +117,38 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             failure = "verified Ref apply body lost its context flow: " + flowError;
             return false;
         }
-        size_t derivations = 0, contextDrops = 0, dispatches = 0;
+        const auto blockCount = function.controlFlow->blocks.size();
+        std::vector<const moon::RuntimeRefApplyFlowEdge*> edgeExits(
+            blockCount, nullptr);
+        std::vector<const moon::RuntimeRefApplyFlowTerminal*> returns(
+            blockCount, nullptr);
+        size_t expectedDrops = 0;
+        for (const auto& edge : flow->edges)
+            if (!edge.exits.empty()) {
+                if (edge.source.value >= blockCount ||
+                    edgeExits[edge.source.value] || edge.exits.size() != 1) {
+                    failure = "Ref apply has an ambiguous normal exit proof";
+                    return false;
+                }
+                edgeExits[edge.source.value] = &edge;
+                ++expectedDrops;
+            }
+        for (const auto& terminal : flow->terminals) {
+            if (terminal.block.value >= blockCount ||
+                edgeExits[terminal.block.value] ||
+                returns[terminal.block.value] ||
+                terminal.kind != moon::TerminatorKind::Return ||
+                terminal.exits.size() != 1) {
+                failure = "Ref apply has an ambiguous early return proof";
+                return false;
+            }
+            returns[terminal.block.value] = &terminal;
+            ++expectedDrops;
+        }
+        size_t derivations = 0, dispatches = 0;
         llvm::CallInst* deriveCall = nullptr;
-        llvm::CallInst* dropCall = nullptr;
         llvm::CallInst* dispatchCall = nullptr;
+        std::vector<llvm::CallInst*> dropCalls;
         std::vector<llvm::CallInst*> refDrops;
         for (auto& block : *body)
             for (auto& instruction : block)
@@ -132,8 +161,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         deriveCall = call;
                     } else if (name ==
                         "luna_compiler_fragment_context_drop") {
-                        ++contextDrops;
-                        dropCall = call;
+                        dropCalls.push_back(call);
                     } else if (name ==
                         "luna_runtime_fragment_dispatch_v1") {
                         ++dispatches;
@@ -147,40 +175,62 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             ? llvm::dyn_cast<llvm::LoadInst>(dispatchCall->getArgOperand(0))
             : nullptr;
         if (!body->hasInternalLinkage() || derivations != 1 ||
-            contextDrops != 1 || dispatches != 1 || !deriveCall ||
-            !dropCall || !dispatchContext ||
+            dropCalls.size() != expectedDrops || dispatches != 1 ||
+            !deriveCall || !dispatchContext ||
             deriveCall->getArgOperand(0) != body->getArg(0) ||
-            deriveCall->getArgOperand(4) != dropCall->getArgOperand(0) ||
             dispatchContext->getPointerOperand() !=
                 deriveCall->getArgOperand(4)) {
             failure = "generated Ref apply body lacks one connected context lifetime";
             return false;
         }
-        if (!flow->terminals.empty()) {
-            llvm::BasicBlock* returnBlock = nullptr;
-            const auto blockName = "cfg." +
-                std::to_string(flow->terminals.front().block.value);
+        const auto* borrowed = llvm::dyn_cast<llvm::LoadInst>(
+            deriveCall->getArgOperand(1));
+        if (!borrowed) {
+            failure = "Ref apply did not borrow a local Ref cell";
+            return false;
+        }
+        for (size_t index = 0; index < blockCount; ++index) {
+            if (!edgeExits[index] && !returns[index]) continue;
+            llvm::BasicBlock* exitBlock = nullptr;
+            const auto blockName = "cfg." + std::to_string(index);
             for (auto& block : *body)
-                if (block.getName() == blockName) returnBlock = &block;
-            auto* returnInst = returnBlock
-                ? llvm::dyn_cast<llvm::ReturnInst>(
-                    returnBlock->getTerminator())
-                : nullptr;
-            if (!returnInst || dropCall->getParent() != returnInst->getParent() ||
-                !dropCall->comesBefore(returnInst)) {
-                failure = "early Ref apply return does not release its context";
+                if (block.getName() == blockName) exitBlock = &block;
+            llvm::CallInst* contextDrop = nullptr;
+            for (auto* call : dropCalls)
+                if (exitBlock && call->getParent() == exitBlock) {
+                    if (contextDrop) {
+                        failure = "Ref apply exit releases its context twice";
+                        return false;
+                    }
+                    contextDrop = call;
+                }
+            if (!contextDrop || contextDrop->getArgOperand(0) !=
+                    deriveCall->getArgOperand(4)) {
+                failure = "Ref apply exit has no connected context Drop";
                 return false;
             }
-            const auto* borrowed = llvm::dyn_cast<llvm::LoadInst>(
-                deriveCall->getArgOperand(1));
-            if (!borrowed) {
-                failure = "early Ref apply did not borrow a local Ref cell";
+            if (const auto* edge = edgeExits[index]) {
+                const auto* branch = llvm::dyn_cast<llvm::BranchInst>(
+                    exitBlock->getTerminator());
+                if (!branch || !branch->isUnconditional() ||
+                    branch->getSuccessor(0)->getName() !=
+                        "cfg." + std::to_string(edge->target.value) ||
+                    !contextDrop->comesBefore(branch)) {
+                    failure = "normal Ref apply exit does not release before its Jump";
+                    return false;
+                }
+                continue;
+            }
+            const auto* returned = llvm::dyn_cast<llvm::ReturnInst>(
+                exitBlock->getTerminator());
+            if (!returned || !contextDrop->comesBefore(returned)) {
+                failure = "early Ref apply exit does not release before return";
                 return false;
             }
             for (const auto* refDrop : refDrops)
-                if (refDrop->getParent() == returnInst->getParent() &&
+                if (refDrop->getParent() == exitBlock &&
                     refDrop->getArgOperand(0) == borrowed->getPointerOperand() &&
-                    !dropCall->comesBefore(refDrop)) {
+                    !contextDrop->comesBefore(refDrop)) {
                     failure = "early Ref apply released its Ref before its context";
                     return false;
                 }

@@ -108,7 +108,7 @@ struct ScopeRecord {
 };
 
 // In-memory proof of a lexical Ref override. A disposable private codegen
-// proof covers one normal exit or one early return; publication and wire
+// proof covers normal exits and early returns; publication and wire
 // representation remain unimplemented.
 struct RuntimeRefApplyRecord {
     RegionId region;

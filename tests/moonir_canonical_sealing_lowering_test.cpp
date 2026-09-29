@@ -354,6 +354,16 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 earlyReturn->controlFlow->runtimeRefApplies[1].region,
                 earlyReturn->controlFlow->runtimeRefApplies[0].region})
         return fail("nested Ref apply return lost inner-before-outer cleanup order");
+    CodeGenerator blockedNestedEarly("canonical-nested-ref-early-return-gate");
+    if (blockedNestedEarly.generate(earlyReturnModule.get()) ||
+        !std::any_of(blockedNestedEarly.errors().begin(),
+                     blockedNestedEarly.errors().end(),
+                     [](const auto& diagnostic) {
+                         return diagnostic.message.find(
+                             "requires one context region") !=
+                             std::string::npos;
+                     }))
+        return fail("nested Ref apply escaped the private body gate");
     auto singleEarlySnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "export slot checkpoint(value: i32);\n"
         "runtime fn early(selected: RuntimeFragmentRef<checkpoint>) {\n"
@@ -405,10 +415,39 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                      blockedMixedExit.errors().end(),
                      [](const auto& diagnostic) {
                          return diagnostic.message.find(
-                             "requires one normal exit or one early return") !=
+                             "1 private Ref apply body(s) verified and discarded") !=
                              std::string::npos;
                      }))
-        return fail("mixed Ref apply exits escaped the private body gate");
+        return fail("mixed Ref apply exits failed private proof or public gate");
+    auto multipleExitSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "export slot checkpoint(value: i32);\n"
+        "runtime fn branches(selected: RuntimeFragmentRef<checkpoint>) {\n"
+        "  apply selected {\n"
+        "    if true { return; }\n"
+        "    if false { return; }\n"
+        "    checkpoint(1) {}\n"
+        "  }\n"
+        "}\n",
+        "<canonical-ref-multiple-exits>");
+    if (!multipleExitSnapshot.success())
+        return fail("frontend rejected multiple Ref apply exits");
+    moon::LunaLowerer multipleExitLowerer;
+    auto multipleExitModule = multipleExitLowerer.lower(
+        *multipleExitSnapshot.program(), *multipleExitSnapshot.symbolTable());
+    moon::Sealer multipleExitSealer;
+    if (!multipleExitModule || !multipleExitLowerer.errors().empty() ||
+        !multipleExitSealer.sealFunctionBodies(*multipleExitModule))
+        return fail("multiple Ref apply exits did not seal");
+    CodeGenerator blockedMultipleExit("canonical-ref-multiple-exits-gate");
+    if (blockedMultipleExit.generate(multipleExitModule.get()) ||
+        !std::any_of(blockedMultipleExit.errors().begin(),
+                     blockedMultipleExit.errors().end(),
+                     [](const auto& diagnostic) {
+                         return diagnostic.message.find(
+                             "1 private Ref apply body(s) verified and discarded") !=
+                             std::string::npos;
+                     }))
+        return fail("multiple Ref apply exits failed private proof or public gate");
     std::vector<moon::RegionId> applyEntryOrder;
     for (const auto& edge : earlyFlow->edges)
         applyEntryOrder.insert(applyEntryOrder.end(),

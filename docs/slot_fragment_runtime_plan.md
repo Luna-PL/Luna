@@ -680,18 +680,19 @@ module references them yet.
 
 A disposable CodeGenerator can now lower the **actual canonical source body**
 for one top-level Ref apply with one Jump entry, an explicit parent Fragment
-context, and either one normal Jump exit or one direct early return.
+context, and normal Jump exits and/or early returns.
 The entry derives a context from the borrowed local Ref; the RuntimeSlot site
 dispatches through a load of that same owned context cell. A normal exit drops
 it after apply-local edge cleanups; an early return executes apply-local
 cleanups, drops the context, then executes outer cleanups (including the Ref
-owner). The private proof checks that the early-return LLVM block releases
-the context before the return and before any Ref Drop in that block.
-An independent private proof checks the connected derive/dispatch/Drop LLVM
-operands and valid module IR, then destroys the module. It is deliberately
-stricter than the source grammar: nested applies, non-Jump transitions,
-unreachable terminals and mixed normal/early exits remain private-codegen
-errors. Derivation failure traps in this
+owner). The private proof maps every CFG exit obligation to exactly one LLVM
+block Drop of the derived cell, before its Jump or return, and checks that an
+early return releases the context before the borrowed Ref owner's Drop.
+It also checks the connected derive/dispatch operands and valid module IR,
+then destroys the module. This proof still requires exactly one RuntimeSlot
+dispatch site. It is deliberately stricter than the source grammar: nested
+applies, non-Jump context transitions and unreachable terminals remain
+private-codegen errors. Derivation failure traps in this
 temporary proof; a recoverable source error/cleanup protocol is not defined.
 The module verifier, container encoder and public CodeGenerator still reject
 Ref-bearing publication, so this is not end-to-end executable source support

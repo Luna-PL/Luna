@@ -394,15 +394,15 @@ void CodeGenerator::generateControlFlowBody(
             entries += transition.enters.size();
             exits += transition.exits.size();
         }
-        const bool normalExit = exits == 1 && refApplyFlow->terminals.empty();
-        const bool earlyReturn = exits == 0 &&
-            refApplyFlow->terminals.size() == 1 &&
-            refApplyFlow->terminals.front().kind ==
-                moon::TerminatorKind::Return &&
-            refApplyFlow->terminals.front().exits ==
-                std::vector<moon::RegionId>{apply->id};
-        if (entries != 1 || (!normalExit && !earlyReturn)) {
-            error("private Ref apply body requires one normal exit or one early return");
+        const bool validTerminals = std::all_of(
+            refApplyFlow->terminals.begin(), refApplyFlow->terminals.end(),
+            [apply](const auto& terminal) {
+                return terminal.kind == moon::TerminatorKind::Return &&
+                    terminal.exits == std::vector<moon::RegionId>{apply->id};
+            });
+        if (entries != 1 || exits + refApplyFlow->terminals.size() == 0 ||
+            !validTerminals) {
+            error("private Ref apply body requires one entry and verified return/Jump exits");
             return;
         }
         refContextCell = createEntryBlockAlloca(
