@@ -1093,25 +1093,26 @@ entry; `PinnedBinding::callI32NoArgs` calls while its generation retains the
 verified library lease. Load-once, activation and switchable requirements
 check profile stability. Four-field legacy requirements still match by
 identity/kind/flags, but an explicit unprofiled requirement cannot match a
-profiled export. A resealed test image with its v2 query symbol renamed
-exercises the optional query path. A separate C shared library built from
+profiled export. An earlier synthetic test image with its v2 query symbol
+renamed failed on macOS (consumer exit 24) and was removed; it depended on
+rewriting bytes in a linked library. A separate C shared library built from
 v1-only source, with its own sealed proof/trust record, also passes the
 independent proof oracle, v1 loader/call and unprofiled generation checks;
-its typed lookup is rejected because it has no v2 query. The focused Native
-artifact gate passes on Windows CLANG64 and WSL Arch Linux. This is an
-implemented local ABI experiment, not a frozen public ABI or a Ref wrapper
-export.
+its typed lookup is rejected because it has no v2 query. This independent
+fixture now covers the optional query path on all three 64-bit CI platforms.
+This is an implemented ABI experiment, not a frozen public ABI or a Ref
+wrapper export.
 The complete local CLANG64 and WSL Arch Linux CTest suites passed 77/77 and
 76/76 respectively after this integration, before the three compile-only
 layout tests were registered.
 
-The local candidate below pins the current profile layout, digest and version
+The candidate below records the current profile layout, digest and version
 rules. The existing release packages and CI matrix target 64-bit Linux,
 Windows and the macOS runner architecture; no 32-bit release target is listed.
-The macOS workflow runs the non-hardware CTest suite, including the Native
-artifact test, but implementation commit `a0bf2b5` has no corresponding
-Mach-O or remote platform CI result. Before a public ABI promise, run that CI on an
-immutable candidate and review the next-query rule with host users.
+The [release state](ecosystem_release.md) records successful Linux, Windows,
+and macOS CI on corrected implementation commit `8aac3a0`, including the
+Native artifact test. Before a public ABI promise, review the next-query rule
+and host pointer-lifetime obligations with host users.
 Keep source Ref publication gated until its context effect, exact Slot/Contract
 target, carrier status and ownership semantics are sealed and verified end to
 end.
@@ -1142,6 +1143,8 @@ V1 proof and query remain required and unchanged. The v2 query is optional:
 absence yields unprofiled v1 bindings; presence requires exact ABI 2,
 structure sizes, zero reserved fields, matching proof identity and a v2 row
 subset matching verified v1 identities, flags, linkage and entry addresses.
+Same-version tail extensions are rejected; a larger record needs a new query
+and schema version.
 Schema 2 recognizes only profile `C_I32_NOARGS_V1 = 1`, meaning a defined C
 calling-convention function `int32_t(void)`. Any unknown profile or malformed
 v2 row rejects the whole loaded image; it never falls back to v1.
@@ -1154,6 +1157,9 @@ separator. Pointers are not canonical row bytes; the v1 whole-artifact proof
 digest binds the linked image containing them. A changed row encoding,
 digest algorithm or new profile needs a new parallel query/schema version,
 because existing v2 loaders reject unknown fields and profiles.
+The candidate calls these identifier bytes UTF-8, but the loader currently
+checks only nonempty bounded strings without CR, LF or tab. Strict UTF-8
+rejection for independently produced v2 artifacts is an open host decision.
 
 Within MoonRuntime, binding profile 0 means unprofiled and profile 1 enables
 the pinned `i32()` call. `GenerationEntryAbiAny` is a requirement-only wildcard

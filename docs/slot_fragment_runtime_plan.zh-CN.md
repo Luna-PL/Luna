@@ -833,19 +833,20 @@ proof 摘要覆盖全部 v2 metadata。`VerifiedNativeLibrary::callI32NoArgs` �
 `PinnedBinding::callI32NoArgs` 调用期间由 generation 保留已验证库的 lease。
 load-once、activation 和 switchable requirement 均核对 profile 稳定性。
 旧式四字段 requirement 仍按身份／种类／flags 匹配，但显式要求无 profile 时
-不能匹配类型化导出。重新封装并改名 v2 query 的测试制品验证可选查询路径。
+不能匹配类型化导出。早期改名 v2 query 的合成制品在 macOS 失败（消费者退出码 24），
+且依赖改写已链接动态库字节，因此已删除该夹具。
 另一个从纯 v1 C 源码独立构建、拥有自身 proof／trust 的共享库，也通过独立
 proof oracle、v1 loader／调用及无 profile generation 检查；因无 v2 query，
-类型化 lookup 被拒绝。Windows CLANG64 与 WSL Arch Linux 的 Native artifact
-聚焦测试均通过。这是已实现的本地 ABI 实验，尚非冻结的公开 ABI 或 Ref wrapper 导出。
+类型化 lookup 被拒绝。这个独立夹具现于三个 64 位 CI 平台验证可选 query 路径。
+这是已实现的 ABI 实验，尚非冻结的公开 ABI 或 Ref wrapper 导出。
 此项接入后的本地 CLANG64 与 WSL Arch Linux 完整 CTest 分别通过 77／77 和
 76／76 项；该计数早于三项仅编译布局测试接入。
 
-下列本地候选已固定当前 profile 布局、摘要和版本规则。现有发布包与 CI 矩阵
+下列候选记录当前 profile 布局、摘要和版本规则。现有发布包与 CI 矩阵
 覆盖 64 位 Linux、Windows 及 macOS runner 架构，没有列出 32 位发布目标。
-macOS 工作流运行包括 Native artifact 测试在内的非硬件 CTest，但实施提交
-`a0bf2b5` 尚无对应的 Mach-O 或远程平台 CI 结果。公开 ABI 承诺前，须在不可变
-候选上运行这些 CI，并让宿主使用方审阅后续 query 版本规则。源码 Ref 发布仍须等 context effect、精确 Slot／Contract 目标、
+[发布状态](ecosystem_release.zh-CN.md)记录修正后实施提交 `8aac3a0` 的 Linux、
+Windows 和 macOS CI 均成功，包括 Native artifact 测试。公开 ABI 承诺前，
+仍须让宿主使用方审阅后续 query 版本规则与指针寿命义务。源码 Ref 发布仍须等 context effect、精确 Slot／Contract 目标、
 carrier 状态与所有权语义完成端到端封闭和核验。
 
 #### Native v2 本地布局与版本候选（2026-10-06）
@@ -870,6 +871,7 @@ Arch Linux 的三项布局 CTest 和文件清单测试均通过。接入这三�
 v1 proof／query 始终必需且保持不变。v2 query 可以缺席：此时 v1 binding 无
 profile；若存在，则必须符合精确的 ABI 2、结构大小、保留字段为零、proof 身份
 一致，且 v2 行是已验证 v1 行的子集，身份、flags、链接名和入口地址都一致。
+同版本追加尾字段会被拒绝；更长记录须使用新的 query 与 schema 版本。
 schema 2 只认 `C_I32_NOARGS_V1 = 1`，即遵守 C 调用约定的已定义
 `int32_t(void)` 函数。未知 profile 或异常 v2 行拒绝整份已加载映像，不退回 v1。
 
@@ -879,6 +881,8 @@ v2 descriptor 摘要采用 SHA-256：先编码小端 `u32` 行数，再对排序
 分隔符。进程内指针不进入规范化行；v1 整制品 proof 摘要绑定包含这些指针的
 链接映像。若改行编码、摘要算法或加入新 profile，必须采用新的并行 query／
 schema 版本；现有 v2 loader 会拒绝未知字段与 profile。
+候选规定这些标识符字节为 UTF-8，但加载器目前仅检查非空、有界且不含 CR、LF 或
+tab。是否严格拒绝独立生产的 v2 制品中的非法 UTF-8，仍待宿主决策。
 
 在 MoonRuntime 中，binding profile 0 表示无 profile，profile 1 允许固定的
 `i32()` 调用。`GenerationEntryAbiAny` 只能出现在 requirement，作为通配符保留

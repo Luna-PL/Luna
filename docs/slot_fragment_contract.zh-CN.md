@@ -208,9 +208,12 @@ Windows 系统的 `core.autocrlf=true`，将子工作树的 CRLF 检出误判为
 均通过。这是本机 Linux 覆盖，不是远程发布候选 CI。
 实施提交 `a0bf2b5` 包含后续 Native v2 候选、私有 Ref Apply 证明和仅编译 ABI
 布局测试。本地完整非硬件测试在 Windows CLANG64 通过 80／80，在 WSL Arch
-Linux 通过 79／79。该提交仍在本地；这些结果不提供 macOS 或远程发布候选 CI。
-只读就绪检查仍拒绝子组件验证的 Luna 源码 `41ce85e`，因为它不是
-`a0bf2b5` 的祖先。
+Linux 通过 79／79。该提交现位于远端 `main`。修正后的后继提交 `8aac3a0` 已通过
+[Linux](https://github.com/Luna-PL/Luna/actions/runs/37462447341)、
+[Windows](https://github.com/Luna-PL/Luna/actions/runs/37462447181) 和
+[macOS](https://github.com/Luna-PL/Luna/actions/runs/37462447103) CI；其后的纯文档提交
+`8f93ad4` 也通过三项工作流。只读就绪检查仍拒绝子组件验证的 Luna 源码
+`41ce85e`，因为它不是当前 `main` 的祖先。
 
 2026-10-06 的 [Native 类型化导出边界核查](slot_fragment_runtime_plan.zh-CN.md#native-类型化导出边界核查2026-10-06)
 确认 Native v1 callable 行仍保存裸函数体地址，没有 Ref 目标、context effect 或

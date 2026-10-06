@@ -59,6 +59,8 @@ typedef const LunaNativeLibraryDescriptorV1*
 
 // Optional parallel registry. V1 stays byte-for-byte compatible; V2 rows
 // describe only entries for which the producer can prove a concrete C ABI.
+// Loaders require exact abi_version, struct_size, and zero reserved fields;
+// a tail extension or new entry profile needs a new parallel query version.
 #define LUNA_NATIVE_DESCRIPTOR_MAGIC_V2 0x4c4e4432u /* "LND2" */
 #define LUNA_NATIVE_DESCRIPTOR_ABI_V2 2u
 #define LUNA_NATIVE_ENTRY_ABI_C_I32_NOARGS_V1 1u

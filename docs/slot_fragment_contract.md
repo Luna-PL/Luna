@@ -257,9 +257,13 @@ not remote release-candidate CI.
 Implementation commit `a0bf2b5` includes the subsequent Native v2 candidate,
 private Ref Apply proofs and compile-only ABI layout tests. Its complete local
 non-hardware suites passed 80/80 on Windows CLANG64 and 79/79 on WSL Arch
-Linux. The commit is still local; these runs do not provide macOS or remote
-release-candidate CI. Read-only readiness still rejects the child releases'
-verified Luna source `41ce85e` because it is not an ancestor of `a0bf2b5`.
+Linux. The commit is on remote `main`. Its corrected descendant `8aac3a0`
+passed [Linux](https://github.com/Luna-PL/Luna/actions/runs/37462447341),
+[Windows](https://github.com/Luna-PL/Luna/actions/runs/37462447181), and
+[macOS](https://github.com/Luna-PL/Luna/actions/runs/37462447103) CI; the
+subsequent documentation commit `8f93ad4` also passed all three workflows.
+Read-only readiness still rejects the child releases' verified Luna source
+`41ce85e` because it is not an ancestor of the current `main`.
 
 The 2026-10-06 [Native typed export boundary audit](slot_fragment_runtime_plan.md#native-typed-export-boundary-audit-2026-10-06)
 confirms that Native v1 callable rows still hold raw body addresses without

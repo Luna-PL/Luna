@@ -26,6 +26,32 @@ registry。Moon loader 还会在发布前把 registry 同独立验证的 Contain
 私有 callable 只能经 registry entry 到达，不允许 raw symbol lookup。纯静态程序既不发射
 registry，也不发射其 descriptor type。
 
+## Native 制品 descriptor 候选
+
+Native 制品 registry 是 `runtime/NativeArtifactABI.h` 中独立的内存 C 契约，
+目前是实验性宿主 ABI 候选，不是稳定的源码 Ref 入口。加载器先验证整个共享库制品
+及其 proof，再要求提供 `luna_native_library_descriptor_v1`。v1 query 不携带 callable
+签名；宿主不能仅凭 `CALLABLE` 标志推断 C 函数类型。并行的
+`luna_native_library_descriptor_v2` query 可缺省，因此独立构建的纯 v1 库仍可加载。
+若 v2 存在，头部或记录不合法会拒绝整个制品，不会退回 v1。
+
+v2 当前仅识别 `C_I32_NOARGS_V1 = 1`，对应 C 调用约定的 `int32_t(void)` 入口。
+每条 v2 记录必须与已验证 v1 导出的身份、种类、标志、链接名和入口地址完全匹配。
+descriptor digest 对经排序去重的规范行计算；行数与每行字节长度使用小端 32 位
+整数编码，v1 的全制品 proof 则绑定含该 descriptor 的已链接字节。
+加载器要求 ABI 版本、结构大小精确匹配，保留字段为零；同一版本不协商更长记录。
+新增字段、行编码、摘要规则或入口 profile 必须启用新的并行 query/schema 版本，
+公开前还需宿主审阅。
+候选规定标识符使用 UTF-8 字节，但当前加载器只检查字符串非空、有界且不含
+CR、LF 或 tab；宿主审阅需决定是否还要严格拒绝独立生产的 v2 库中的非法 UTF-8。
+
+descriptor 字符串与入口指针属于已加载镜像，只能在已验证 library 或固定 generation
+保留镜像期间使用。类型化 `i32()` 调用应经该 owner 完成；不能跨卸载或 generation
+切换保留原始 v1 入口。当前候选已由 64 位 Linux、Windows 与 macOS CI 验证；
+32 位 C 布局探针只编译结构记录，不能证明 32 位 producer、loader 或制品可用。
+证据见[当前发布状态](ecosystem_release.zh-CN.md)与
+[Native v2 候选规则](slot_fragment_runtime_plan.zh-CN.md)。
+
 ## 设计边界
 
 Runtime ABI 是分配合约，不是一套固定的分配算法。默认实现可以使用

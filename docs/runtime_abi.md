@@ -29,6 +29,40 @@ registry with the independently verified Container before publication; a private
 remains reachable only through its registry entry, not raw symbol lookup.
 Static-only programs emit neither the registry nor its descriptor types.
 
+## Native artifact descriptor candidate
+
+The Native artifact registry is a separate in-memory C contract in
+`runtime/NativeArtifactABI.h`. It is an experimental host ABI candidate, not a
+stable source Ref entry. After verifying the whole shared-library artifact and
+its proof, a loader requires `luna_native_library_descriptor_v1`. That query
+has no callable signature information; a host cannot infer a C function type
+from its `CALLABLE` flag. The parallel `luna_native_library_descriptor_v2`
+query is optional, so an independently built v1-only library remains loadable.
+If v2 is present, malformed headers or rows reject the image rather than
+falling back to v1.
+
+V2 currently recognizes only `C_I32_NOARGS_V1 = 1`, a C-callable
+`int32_t(void)` entry. Each v2 row must match a verified v1 export's identity,
+kind, flags, linkage and entry address. Its descriptor digest covers sorted,
+unique canonical rows, each framed by little-endian 32-bit count and byte length;
+the v1 whole-artifact proof binds the linked bytes containing that descriptor.
+The loader requires exact ABI versions and structure sizes and zero reserved
+fields. It does not negotiate a longer record under the same version. A new
+field, row encoding, digest rule or entry profile therefore needs a new
+parallel query/schema version with a host review before publication.
+The candidate specifies UTF-8 identifier bytes, but the current loader checks
+only bounded nonempty strings without CR, LF or tab; host review must decide
+whether independently produced v2 libraries also need strict UTF-8 rejection.
+
+Descriptor strings and entry pointers belong to the loaded image. They remain
+usable only while its verified library or pinned generation retains that
+image. Use the typed `i32()` call through that owner; do not retain a raw v1
+entry across unload or generation switch. The 64-bit Linux, Windows and macOS
+CI matrix exercises the current candidate. The 32-bit C layout probes only
+compile records and do not establish a 32-bit producer, loader or artifact.
+See the [current release state](ecosystem_release.md) and the
+[Native v2 candidate rules](slot_fragment_runtime_plan.md).
+
 ## Design boundary
 
 The Runtime ABI is an allocation contract, not a fixed allocation algorithm. The default

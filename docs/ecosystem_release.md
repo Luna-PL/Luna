@@ -169,8 +169,11 @@ generation and typed-rejection checks. On the corrected implementation commit
 [macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37462447103) all
 completed successfully. Linux C++17, C++23, sanitizer, and thread-sanitizer
 jobs passed; the macOS Native artifact test now passes. The next ABI gate is
-host review of the parallel query/version rule. A 32-bit runtime would require
-its own gate, and source Ref/apply remains private.
+host review of the parallel query/version rule, exact-size policy, pointer
+lifetime and whether v2 must reject invalid UTF-8 identifiers. The
+[host-facing candidate](runtime_abi.md)
+records the current behavior. A 32-bit runtime would require its own gate,
+and source Ref/apply remains private.
 Choose the final immutable Luna candidate after this review and any resulting
 changes, then build and verify new
 child release evidence against that exact commit without moving existing
