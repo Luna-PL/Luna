@@ -128,9 +128,12 @@ canonical 聚焦测试均通过。在 `9af653f` 重新构建全部目标后，Wi
 [Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37459306797) 和
 [macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37459306874)。
 Linux 与 Windows 已通过。macOS 仅 `luna.native-artifact` CTest 失败：独立 Python
-Native 消费者返回非零，但测试脚本未打印退出码。现在脚本会报告此码，以便在下一次
-macOS 运行中定位失败分支。此提交尚无通过的 macOS 平台证据。下一道 ABI 门是解决该
-失败，在不可变提交上完成平台 CI，并取得宿主对并行 query／版本规则的审阅；增加 32 位支持
+Native 消费者返回非零，但测试脚本未打印退出码。
+[诊断复跑](https://github.com/Luna-PL/Luna/actions/runs/37461051981)
+确定退出码 24，位于通过改写已链接动态库字节构造的“仅 v1 query”合成制品分支。
+现已删除该重复夹具；独立编译且封装的纯 v1 C 库仍验证 v1 加载、generation 与
+类型化拒绝。修正后的测试尚需 macOS CI 证据。下一道 ABI 门是在不可变提交上完成平台 CI，
+并取得宿主对并行 query／版本规则的审阅；增加 32 位支持
 需要独立的运行时门禁。
 下一步建立包含预期源码、测试与工作流的全新不可变 Luna 候选。子组件要
 针对这个精确提交重新生成并验证发布证据，不能移动既有 tag 或复用其源码提交声明。

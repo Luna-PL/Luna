@@ -159,9 +159,12 @@ non-hardware suites pass locally on Windows CLANG64 (80/80) and WSL Arch Linux
 [macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37459306874).
 Linux and Windows passed. macOS failed its sole `luna.native-artifact` CTest:
 the independent Python Native consumer returned nonzero, while the test harness
-did not print its exit code. The harness now reports that code so the macOS
-failure can be diagnosed in the next run. This commit has no passing macOS
-platform evidence. The next ABI gate is to resolve that failure and complete
+did not print its exit code. A [diagnostic rerun](https://github.com/Luna-PL/Luna/actions/runs/37461051981)
+identified exit 24 in the test's synthetic v1-only-query artifact, made by
+rewriting bytes in a linked dynamic library. That duplicate fixture is removed;
+the separately compiled and sealed v1 C library retains the actual v1 loader,
+generation and typed-rejection checks. The corrected test still needs macOS
+CI evidence. The next ABI gate is to complete
 platform CI on an immutable commit, then obtain host review of the
 parallel query/version rule; 32-bit support would require its own runtime gate.
 Establish a new immutable Luna candidate containing the intended source,

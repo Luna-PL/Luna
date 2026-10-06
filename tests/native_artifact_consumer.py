@@ -260,46 +260,9 @@ def main() -> int:
     finally:
         unknown_artifact.unlink(missing_ok=True)
         unknown_trust.unlink(missing_ok=True)
-    query_name = b"luna_native_library_descriptor_v2"
-    if binary.count(query_name) == 0:
-        return 23
-    legacy = bytearray(binary.replace(
-        query_name, b"luna_native_library_descriptor_vx"))
-    legacy_hash_input = bytearray(legacy)
-    legacy_hash_input[proof:proof + 504] = bytes(504)
-    legacy[proof + 24:proof + 56] = hashlib.sha256(
-        legacy_hash_input).digest()
-    legacy_artifact = artifact.with_name("v1-only-query" + artifact.suffix)
-    legacy_trust = artifact.with_name("v1-only-query.trust")
-    legacy_trust_fields = trust_fields.copy()
-    legacy_trust_fields[0] = bytes(legacy[proof + 24:proof + 56]).hex()
-    legacy_artifact.write_bytes(legacy)
-    legacy_trust.write_text(
-        "\t".join(legacy_trust_fields) + "\n", encoding="utf-8")
-    try:
-        legacy_load = subprocess.run(
-            [str(verifier), "--load-call", str(legacy_artifact),
-             str(legacy_trust), callable_symbol, callable_contract],
-            capture_output=True, text=True, check=False)
-        legacy_generation = subprocess.run(
-            [str(verifier), "--load-legacy-generation",
-             str(legacy_artifact), str(legacy_trust),
-             callable_symbol, callable_contract],
-            capture_output=True, text=True, check=False)
-        legacy_typed = subprocess.run(
-            [str(verifier), "--load-typed-call", str(legacy_artifact),
-             str(legacy_trust), callable_symbol, callable_contract],
-            capture_output=True, text=True, check=False)
-        if (legacy_load.returncode != 0 or
-                legacy_load.stdout.strip() != "42" or
-                legacy_generation.returncode != 0 or
-                legacy_generation.stdout.strip() != "v1-only" or
-                legacy_typed.returncode == 0 or
-                "no v2 typed descriptor" not in legacy_typed.stderr):
-            return 24
-    finally:
-        legacy_artifact.unlink(missing_ok=True)
-        legacy_trust.unlink(missing_ok=True)
+    # The independently linked and sealed C fixture in native_artifact.cmake
+    # exercises the v1-only query path. Byte-patching a linked dylib to hide
+    # its v2 query is not a portable way to construct that fixture.
     generation = subprocess.run(
         [str(verifier), "--generation-switch", str(artifact), str(trust),
          str(enemy), str(enemy_trust), callable_symbol, callable_contract],
