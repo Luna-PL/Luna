@@ -1,5 +1,6 @@
 #include "driver/NativeArtifact.h"
 #include "driver/NativeGeneration.h"
+#include "driver/NativeTypedDescriptor.h"
 
 #include <llvm/TargetParser/Host.h>
 
@@ -20,15 +21,17 @@ int fail(const char* message) {
     return 1;
 }
 
-int prepareLegacyFixture(int argc, char** argv) {
+int prepareIndependentFixture(int argc, char** argv) {
     if (argc != 4) return 2;
     const bool invalidUtf8 =
         std::string(argv[1]) == "--prepare-legacy-invalid-utf8";
+    const bool typedV2 =
+        std::string(argv[1]) == "--prepare-v2-fixture";
     const std::string targetAbi = llvm::sys::getProcessTriple();
     if (targetAbi.empty() || targetAbi.size() >= 128)
-        return fail("legacy fixture target ABI exceeds its bounded field");
+        return fail("independent Native fixture target ABI exceeds its bounded field");
     std::ifstream source(argv[2], std::ios::binary);
-    if (!source) return fail("cannot read independent v1 fixture");
+    if (!source) return fail("cannot read independent Native fixture");
     std::vector<uint8_t> bytes(
         (std::istreambuf_iterator<char>(source)),
         std::istreambuf_iterator<char>());
@@ -39,9 +42,28 @@ int prepareLegacyFixture(int argc, char** argv) {
         std::search(target + 1, bytes.end(),
                     marker.begin(), marker.end()) != bytes.end() ||
         static_cast<size_t>(bytes.end() - target) < 128)
-        return fail("independent v1 fixture has no unique target ABI field");
+        return fail("independent Native fixture has no unique target ABI field");
     std::fill_n(target, 128, 0);
     std::copy(targetAbi.begin(), targetAbi.end(), target);
+
+    if (typedV2) {
+        const std::string marker = "V2_DIGEST_PLACEHOLDER_0123456789";
+        static_assert(sizeof("V2_DIGEST_PLACEHOLDER_0123456789") - 1 ==
+                      LUNA_NATIVE_DESCRIPTOR_DIGEST_SIZE_V2);
+        const auto position = std::search(
+            bytes.begin(), bytes.end(), marker.begin(), marker.end());
+        if (position == bytes.end() ||
+            std::search(position + 1, bytes.end(), marker.begin(),
+                        marker.end()) != bytes.end())
+            return fail("independent v2 fixture has no unique descriptor digest placeholder");
+        const auto canonical = luna::driver::canonicalNativeTypedExport(
+            LUNA_NATIVE_DECLARATION_FUNCTION_V1,
+            LUNA_NATIVE_EXPORT_CALLABLE_V1,
+            LUNA_NATIVE_ENTRY_ABI_C_I32_NOARGS_V1,
+            "symbol:legacy-answer", "contract:legacy-v1", "legacy_answer");
+        const auto digest = luna::driver::digestNativeTypedExports({canonical});
+        std::copy(digest.begin(), digest.end(), position);
+    }
 
     const uint8_t magic[] = {'L', 'U', 'N', 'A', 'N', 'P', '1', 0};
     const auto proof = std::search(
@@ -50,7 +72,7 @@ int prepareLegacyFixture(int argc, char** argv) {
         std::search(proof + 1, bytes.end(),
                     std::begin(magic), std::end(magic)) != bytes.end() ||
         static_cast<size_t>(bytes.end() - proof) < sizeof(LunaNativeProofV1))
-        return fail("independent v1 fixture has no unique proof placeholder");
+        return fail("independent Native fixture has no unique proof placeholder");
     luna::driver::NativeExportSpec exported;
     exported.declarationKind = LUNA_NATIVE_DECLARATION_FUNCTION_V1;
     exported.flags = LUNA_NATIVE_EXPORT_CALLABLE_V1;
@@ -76,7 +98,7 @@ int prepareLegacyFixture(int argc, char** argv) {
     output.write(reinterpret_cast<const char*>(bytes.data()),
                  static_cast<std::streamsize>(bytes.size()));
     output.close();
-    if (!output) return fail("cannot write independent v1 fixture proof");
+    if (!output) return fail("cannot write independent Native fixture proof");
     luna::driver::NativeProofInfo sealed;
     if (!luna::driver::sealNativeArtifact(argv[2], argv[3],
                                           sealed, error)) {
@@ -315,8 +337,9 @@ int generationSwitch(int argc, char** argv) {
 
 int main(int argc, char** argv) {
     if (argc > 1 && (std::string(argv[1]) == "--prepare-legacy" ||
-                     std::string(argv[1]) == "--prepare-legacy-invalid-utf8"))
-        return prepareLegacyFixture(argc, argv);
+                     std::string(argv[1]) == "--prepare-legacy-invalid-utf8" ||
+                     std::string(argv[1]) == "--prepare-v2-fixture"))
+        return prepareIndependentFixture(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--generation-switch")
         return generationSwitch(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--load-call")

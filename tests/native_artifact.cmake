@@ -291,6 +291,79 @@ if(NOT invalid_utf8_seal_result EQUAL 0 OR
         "load: ${invalid_utf8_load_error}")
 endif()
 
+# Compile the parallel v2 query in C, patch only its canonical row digest,
+# then seal each linked image independently. This exercises a producer other
+# than Luna's LLVM descriptor emitter.
+foreach(v2_variant IN ITEMS valid bad-row-size)
+    if(WIN32)
+        set(v2_artifact "${work_dir}/independent-v2-${v2_variant}.dll")
+    elseif(APPLE)
+        set(v2_artifact "${work_dir}/libindependent-v2-${v2_variant}.dylib")
+    else()
+        set(v2_artifact "${work_dir}/libindependent-v2-${v2_variant}.so")
+    endif()
+    set(v2_trust "${v2_artifact}.trust")
+    set(v2_defines -DLUNA_TEST_V2_DESCRIPTOR)
+    if(v2_variant STREQUAL "bad-row-size")
+        list(APPEND v2_defines -DLUNA_TEST_V2_BAD_ROW_SIZE)
+    endif()
+    execute_process(
+        COMMAND "${LUNA_AOT_COMPILER}" -x c -std=c11 -fPIC
+            ${v2_defines} ${legacy_link_mode}
+            -I "${LUNA_SOURCE_DIR}/src"
+            "${LUNA_SOURCE_DIR}/tests/fixtures/native_v1_artifact_fixture.c"
+            -o "${v2_artifact}"
+        RESULT_VARIABLE v2_compile_result
+        ERROR_VARIABLE v2_compile_error)
+    if(NOT v2_compile_result EQUAL 0 OR NOT EXISTS "${v2_artifact}")
+        message(FATAL_ERROR "independent Native v2 fixture did not link.\n"
+            "${v2_compile_error}")
+    endif()
+    execute_process(
+        COMMAND "${LUNA_NATIVE_VERIFIER}" --prepare-v2-fixture
+            "${v2_artifact}" "${v2_trust}"
+        RESULT_VARIABLE v2_seal_result
+        ERROR_VARIABLE v2_seal_error)
+    if(NOT v2_seal_result EQUAL 0 OR NOT EXISTS "${v2_trust}")
+        message(FATAL_ERROR "independent Native v2 fixture did not seal.\n"
+            "${v2_seal_error}")
+    endif()
+    execute_process(
+        COMMAND "${LUNA_NATIVE_VERIFIER}" "${v2_artifact}" "${v2_trust}"
+        RESULT_VARIABLE v2_verify_result
+        ERROR_VARIABLE v2_verify_error)
+    if(NOT v2_verify_result EQUAL 0)
+        message(FATAL_ERROR "independent Native v2 proof did not verify.\n"
+            "${v2_verify_error}")
+    endif()
+    if(v2_variant STREQUAL "valid")
+        execute_process(
+            COMMAND "${LUNA_NATIVE_VERIFIER}" --load-typed-call
+                "${v2_artifact}" "${v2_trust}"
+                "symbol:legacy-answer" "contract:legacy-v1"
+            RESULT_VARIABLE v2_load_result
+            OUTPUT_VARIABLE v2_load_output
+            ERROR_VARIABLE v2_load_error)
+        if(NOT v2_load_result EQUAL 0 OR NOT v2_load_output STREQUAL "7\n")
+            message(FATAL_ERROR "independent Native v2 typed call failed.\n"
+                "${v2_load_output}\n${v2_load_error}")
+        endif()
+    else()
+        execute_process(
+            COMMAND "${LUNA_NATIVE_VERIFIER}" --load-only
+                "${v2_artifact}" "${v2_trust}"
+            RESULT_VARIABLE v2_load_result
+            ERROR_VARIABLE v2_load_error)
+        string(FIND "${v2_load_error}" "invalid export row"
+               v2_load_diagnostic)
+        if(v2_load_result EQUAL 0 OR v2_load_diagnostic EQUAL -1)
+            message(FATAL_ERROR
+                "independent Native v2 invalid row size was accepted.\n"
+                "${v2_load_error}")
+        endif()
+    endif()
+endforeach()
+
 execute_process(
     COMMAND "${Python3_EXECUTABLE}"
         "${LUNA_SOURCE_DIR}/tests/native_artifact_consumer.py"

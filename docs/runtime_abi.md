@@ -53,6 +53,9 @@ parallel query/schema version with a host review before publication.
 Descriptor strings must be bounded, nonempty UTF-8 without CR, LF or tab.
 The loader rejects malformed UTF-8 in both v1 and v2 rows, including an
 independently sealed artifact whose proof otherwise verifies.
+An independently compiled C library also supplies both queries: after its
+own proof and row digest are sealed, the host can make its typed `i32()` call.
+A second sealed C library with an oversized v2 row is rejected at load time.
 
 Descriptor strings and entry pointers belong to the loaded image. They remain
 usable only while its verified library or pinned generation retains that

@@ -44,6 +44,8 @@ descriptor digest 对经排序去重的规范行计算；行数与每行字节�
 公开前还需宿主审阅。
 descriptor 字符串必须非空、有界、采用有效 UTF-8，且不含 CR、LF 或 tab。
 加载器对 v1、v2 行都拒绝非法 UTF-8；即使独立封装制品的 proof 验证成功也如此。
+独立编译的 C 库还提供两个 query：生成自身的 proof 与行摘要后，宿主可以进行
+类型化 `i32()` 调用。另一份 v2 行结构大小过大的独立封装 C 库会在加载时被拒绝。
 
 descriptor 字符串与入口指针属于已加载镜像，只能在已验证 library 或固定 generation
 保留镜像期间使用。类型化 `i32()` 调用应经该 owner 完成；不能跨卸载或 generation

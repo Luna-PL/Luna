@@ -174,6 +174,16 @@ lifetime. Both v1 and v2 descriptor strings now reject invalid UTF-8. The
 [host-facing candidate](runtime_abi.md)
 records the current behavior. A 32-bit runtime would require its own gate,
 and source Ref/apply remains private.
+On `80f0e47`, [Linux CI](https://github.com/Luna-PL/Luna/actions/runs/37471375414),
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37471375402), and
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37471375423) passed
+after the host loader began rejecting malformed UTF-8 descriptor strings.
+The next worktree check adds an independently compiled and sealed C v2
+producer: a valid typed call succeeds and an oversized v2 row is rejected
+after its proof verifies. Its focused Windows CTest passes; cross-platform
+CI remains a gate for every final candidate. The lock's `release-ready` field
+describes the frozen September child evidence, not current HEAD readiness:
+the strict check fails because those children verified Luna `41ce85e`.
 Choose the final immutable Luna candidate after this review and any resulting
 changes, then build and verify new
 child release evidence against that exact commit without moving existing

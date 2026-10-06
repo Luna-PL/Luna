@@ -883,6 +883,9 @@ v2 descriptor 摘要采用 SHA-256：先编码小端 `u32` 行数，再对排序
 schema 版本；现有 v2 loader 会拒绝未知字段与 profile。
 加载器要求 v1、v2 descriptor 字符串非空、有界、采用有效 UTF-8 且不含 CR、LF 或
 tab。独立封装的 v1 测试制品若含非法 UTF-8 符号，离线验证可以成功，宿主加载则会拒绝。
+同一独立 C 夹具也能生产 v2 query：有效的封装制品支持宿主类型化调用；另一个
+v2 行结构大小过大的封装制品通过离线 proof 验证，却被宿主加载拒绝。该检查不依赖
+Luna 的 LLVM emitter，覆盖并行 query 与精确大小规则。
 
 在 MoonRuntime 中，binding profile 0 表示无 profile，profile 1 允许固定的
 `i32()` 调用。`GenerationEntryAbiAny` 只能出现在 requirement，作为通配符保留

@@ -141,6 +141,14 @@ Linux C++17、C++23、sanitizer 与 thread-sanitizer 作业均通过；macOS Nat
 审阅还须确认精确结构大小规则和指针寿命；v1、v2 descriptor 字符串现均拒绝非法 UTF-8。
 [宿主候选契约](runtime_abi.zh-CN.md)记录了当前行为。
 32 位运行时需要独立门禁，源码 Ref/apply 仍是私有实验。
+在 `80f0e47` 上，宿主开始拒绝非法 UTF-8 descriptor 字符串后，
+[Linux CI](https://github.com/Luna-PL/Luna/actions/runs/37471375414)、
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37471375402) 与
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37471375423) 均通过。
+随后工作树增加独立编译、封装的 C v2 生产者：有效制品可类型化调用，v2 行结构
+大小过大的制品在 proof 验证后被拒绝。本地 Windows 聚焦 CTest 已通过；最终候选
+仍须通过跨平台 CI。lock 中的 `release-ready` 字段描述九月冻结的子组件证据，并不表示
+当前 HEAD 已就绪：严格检查仍因子组件验证的 Luna `41ce85e` 而失败。
 完成该审阅及其引发的修改后，选定最终不可变 Luna 候选。子组件要
 针对这个精确提交重新生成并验证发布证据，不能移动既有 tag 或复用其源码提交声明。
 随后将匹配的证据写入 lock，通过根仓平台 CI、严格 readiness 与联网 Release evidence

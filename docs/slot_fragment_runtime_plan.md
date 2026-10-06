@@ -1160,6 +1160,10 @@ because existing v2 loaders reject unknown fields and profiles.
 The loader requires bounded, nonempty UTF-8 descriptor strings without CR,
 LF or tab in both v1 and v2. A separately sealed v1 fixture with an invalid
 UTF-8 symbol verifies offline but is rejected by the host loader.
+The independent C fixture also produces a v2 query. Its sealed valid form
+supports a typed host call; an independently sealed oversized v2 row passes
+offline proof verification but fails host loading. This exercises the query
+and exact-size rule without relying on Luna's LLVM emitter.
 
 Within MoonRuntime, binding profile 0 means unprofiled and profile 1 enables
 the pinned `i32()` call. `GenerationEntryAbiAny` is a requirement-only wildcard
