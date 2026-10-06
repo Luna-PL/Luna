@@ -41,7 +41,8 @@ extern "C" void luna_private_ref_drop_probe(int32_t marker) {
     else if (marker == 67) ++privateRefJitReturnedOkDropProbeCalls;
     else if (marker == 66) ++privateRefJitReturnedPairDropProbeCalls;
     else if (marker == 71 || marker == 73 ||
-             marker == 79 || marker == 81 || marker == 83)
+             marker == 79 || marker == 81 || marker == 83 ||
+             marker == 89 || marker == 91 || marker == 93)
         privateRefJitNestedDropOrder.push_back(marker);
     else privateRefJitDropProbeValid = false;
 }
@@ -1599,6 +1600,34 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "    resource.marker = 0;\n"
         "  }\n"
         "}\n"
+        "struct BranchLeft { marker: i32; }\n"
+        "impl Drop for BranchLeft {\n"
+        "  fn drop(resource: &mut BranchLeft) -> unit {\n"
+        "    luna_private_ref_drop_probe(resource.marker);\n"
+        "    resource.marker = 0;\n"
+        "  }\n"
+        "}\n"
+        "struct BranchRight { marker: i32; }\n"
+        "impl Drop for BranchRight {\n"
+        "  fn drop(resource: &mut BranchRight) -> unit {\n"
+        "    luna_private_ref_drop_probe(resource.marker);\n"
+        "    resource.marker = 0;\n"
+        "  }\n"
+        "}\n"
+        "struct BranchOuter { marker: i32; left: BranchLeft; right: BranchRight; }\n"
+        "impl Drop for BranchOuter {\n"
+        "  fn drop(resource: &mut BranchOuter) -> unit {\n"
+        "    luna_private_ref_drop_probe(resource.marker);\n"
+        "    resource.marker = 0;\n"
+        "  }\n"
+        "}\n"
+        "struct BranchTooDeep { marker: i32; left: DeepMiddle; right: BranchRight; }\n"
+        "impl Drop for BranchTooDeep {\n"
+        "  fn drop(resource: &mut BranchTooDeep) -> unit {\n"
+        "    luna_private_ref_drop_probe(resource.marker);\n"
+        "    resource.marker = 0;\n"
+        "  }\n"
+        "}\n"
         "export slot checkpoint(value: i32);\n"
         "runtime fn try_apply(selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, i32> {\n"
@@ -1759,6 +1788,37 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "    }\n"
         "  }\n"
         "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_branch_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, BranchOuter> {\n"
+        "  let left = new BranchLeft(91);\n"
+        "  let right = new BranchRight(93);\n"
+        "  let outer = new BranchOuter(89, move left, move right);\n"
+        "  let input = Err::<i32, BranchOuter>(move outer);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_oversized_branch_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, BranchTooDeep> {\n"
+        "  let inner = new DeepInner(83);\n"
+        "  let left = new DeepMiddle(81, move inner);\n"
+        "  let right = new BranchRight(93);\n"
+        "  let outer = new BranchTooDeep(89, move left, move right);\n"
+        "  let input = Err::<i32, BranchTooDeep>(move outer);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
         "}\n",
         "<canonical-nested-ref-try-cleanup>");
     if (!tryApplySnapshot.success())
@@ -1783,6 +1843,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyErrResourceScalarOk = nullptr;
     moon::FunctionDecl* tryApplyNestedResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyDeepResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyBranchResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyOversizedBranchReturn = nullptr;
     for (auto& declaration : tryApplyModule->declarations)
         if (auto* function = dynamic_cast<moon::FunctionDecl*>(
                 declaration.get()); function) {
@@ -1810,13 +1872,18 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyNestedResourceReturn = function;
             if (function->name == "try_apply_deep_resource_return")
                 tryApplyDeepResourceReturn = function;
+            if (function->name == "try_apply_branch_resource_return")
+                tryApplyBranchResourceReturn = function;
+            if (function->name == "try_apply_oversized_branch_return")
+                tryApplyOversizedBranchReturn = function;
         }
     if (!tryApply || !tryApplyOk || !tryApplyOutlinedReturn ||
         !tryApplyAfterSlot || !tryApplyLocalCleanup || !tryApplyFrom ||
         !tryApplyResourceReturn || !tryApplyOkResourceReturn ||
         !tryApplyPairResourceReturn || !tryApplyOkResourceScalarErr ||
         !tryApplyErrResourceScalarOk || !tryApplyNestedResourceReturn ||
-        !tryApplyDeepResourceReturn ||
+        !tryApplyDeepResourceReturn || !tryApplyBranchResourceReturn ||
+        !tryApplyOversizedBranchReturn ||
         !tryApply->controlFlow ||
         tryApply->controlFlow->runtimeRefApplies.size() != 2 ||
         !refApplyCfgVerifier.verify(*tryApply->controlFlow, *tryApplyModule))
@@ -2156,6 +2223,55 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                     std::array<int32_t, 12>{79, 81, 83, 79, 81, 83,
                                              79, 81, 83, 79, 81, 83}.begin()))
         return fail("Ref apply transferred resource lost ordered Drop chain");
+    if (!tryApplyBranchResourceReturn->controlFlow ||
+        tryApplyBranchResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyBranchResourceReturn->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply branching resource return did not verify");
+    const auto branchDropBefore = privateRefJitNestedDropOrder.size();
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyBranchResourceReturn,
+            privateRefJitError, 0, false, std::nullopt, false, false,
+            {}, {}, std::pair<bool, int32_t>{false, 89})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply branching resource failed private JIT execution");
+    }
+    if (!privateRefJitDropProbeValid ||
+        privateRefJitNestedDropOrder.size() != branchDropBefore + 6 ||
+        !std::equal(privateRefJitNestedDropOrder.begin() + branchDropBefore,
+                    privateRefJitNestedDropOrder.end(),
+                    std::array<int32_t, 6>{89, 91, 93, 89, 91, 93}.begin()))
+        return fail("Ref apply branching resource lost field-order Drop");
+    const auto transferredBranchDropBefore =
+        privateRefJitNestedDropOrder.size();
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyBranchResourceReturn,
+            privateRefJitError, 0, false, std::nullopt, false, false,
+            {}, {}, std::pair<bool, int32_t>{false, 89}, 3, true, true)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply branching resource transfer failed private JIT execution");
+    }
+    if (!privateRefJitDropProbeValid ||
+        privateRefJitNestedDropOrder.size() != transferredBranchDropBefore + 12 ||
+        !std::equal(privateRefJitNestedDropOrder.begin() + transferredBranchDropBefore,
+                    privateRefJitNestedDropOrder.end(),
+                    std::array<int32_t, 12>{89, 91, 93, 89, 91, 93,
+                                             89, 91, 93, 89, 91, 93}.begin()))
+        return fail("Ref apply branching resource transfer lost field-order Drop");
+    if (!tryApplyOversizedBranchReturn->controlFlow ||
+        tryApplyOversizedBranchReturn->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyOversizedBranchReturn->controlFlow,
+                                    *tryApplyModule))
+        return fail("oversized branching Ref apply fixture did not seal");
+    privateRefJitError.clear();
+    if (CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
+            *tryApplyModule, *tryApplyOversizedBranchReturn,
+            privateRefJitError) ||
+        privateRefJitError.find(
+            "outside the bounded cleanup proof") == std::string::npos)
+        return fail("four-node Ref apply owner graph escaped private shape gate");
+    privateRefJitError.clear();
     if (!exercisePrivateRefApplyJit(
             *tryApplyModule, *tryApplyErrResourceScalarOk,
             privateRefJitError, 1, false, 1, false, false,

@@ -88,7 +88,7 @@ and final tag publication use the same verification script so the two gates cann
 The checked-in lock records Toolchains and Lunax `v0.2.0` releases and marks the
 snapshot `release-ready` with `release.publish: true`. Those child releases are
 published, but their common verified Luna source commit `41ce85e` is not an
-ancestor of current Luna `main` (`8fae950`). The local
+ancestor of the implementation commit `a0bf2b5` on Luna `main`. The local
 `verify_release_readiness.cmake` check explicitly reports this blocker, and
 strict `REQUIRE_READY=ON` fails. The non-strict exit status means the blocking
 policy worked, not that publication is allowed. The root `v0.3.0` tag is absent.
@@ -102,9 +102,9 @@ suite passed 77/77 with four workers on 2026-10-04.
 After rebuilding the current worktree on 2026-10-06, the same local suite
 passed 77/77 with four workers in 71.18 seconds, including REPL and Native
 artifact gates. The read-only release-readiness check again reported that
-`41ce85e` is not an ancestor of `8fae950`; it returned success only because
-the fail-closed policy correctly blocked publication. The worktree remains
-uncommitted, so this run is not evidence for an immutable release candidate.
+`41ce85e` is not an ancestor of the then-current `8fae950`; it returned
+success only because the fail-closed policy correctly blocked publication.
+That run preceded commit `a0bf2b5` and was worktree evidence, not remote CI.
 An isolated WSL Arch Linux Clang/LLVM 22.1.8 build compiled all targets and
 passed the complete local Linux CTest suite 76/76 with four workers in 67.15
 seconds. The first run passed 75/76: `luna.ecosystem-frozen-baseline` saw the
@@ -113,7 +113,7 @@ Windows system `core.autocrlf=true` setting. Both child worktrees were clean
 under that setting; a process-local Git configuration made the failed test
 pass and the complete rerun pass. This does not replace the release
 candidate's required platform CI.
-The current worktree adds an experimental parallel Native v2 `i32()` entry
+The implementation worktree added an experimental parallel Native v2 `i32()` entry
 profile, with v1 proof/export compatibility preserved. Focused Native artifact
 and canonical tests pass on Windows CLANG64 and WSL Arch Linux. In the later
 complete local runs, Windows passed 76/77 and Linux 75/76; each sole failure
@@ -138,12 +138,22 @@ platforms after these checks. This remains a local candidate pending host ABI
 review and platform CI on an immutable commit.
 The release package list and CI workflows cover 64-bit Linux, Windows and the
 macOS runner architecture, with no listed 32-bit package. The macOS workflow
-already includes the Native artifact CTest; it has not run on this uncommitted
-worktree. The freestanding 32-bit C layout probe is now wired into Clang
+already includes the Native artifact CTest; it has not run on implementation
+commit `a0bf2b5`. The freestanding 32-bit C layout probe is now wired into Clang
 CTest for GNU/Linux, Windows GNU and Darwin targets. Its three tests and the
 file-guide inventory pass locally on Windows CLANG64 and WSL Arch Linux; it
 does not exercise a 32-bit loader or artifact. The complete non-hardware
 CTest suites now pass 80/80 and 79/79 respectively after this integration.
+Commit `a0bf2b5` contains this implementation and test evidence. It remains
+local, and the read-only readiness check still reports the verified child
+source `41ce85e` as non-ancestral; strict readiness fails as designed.
+A subsequent local worktree revision adds only a private three-node branching
+owner cleanup proof for `?` Err, injected post-body failure and host Drop.
+An independently sealed four-node fork is rejected before private JIT
+materialization by the bounded shape gate.
+Focused canonical tests pass in ordinary and ASAN builds on Windows CLANG64
+and WSL Arch Linux. The 80/80 and 79/79 full-suite counts above predate this
+revision; this revision has no remote platform result.
 The next ABI gate is immutable-candidate platform CI and host review of the
 parallel query/version rule; 32-bit support would require its own runtime gate.
 Establish a new immutable Luna candidate containing the intended source,

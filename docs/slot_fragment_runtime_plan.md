@@ -802,7 +802,7 @@ Each owner is dropped once per call. Scalar Ok and Err branches of those same
 Result shapes return `14` and `13` without invoking resource Drop. Each source
 Drop method clears `marker` after probing it, so the returned marker also
 checks that the wrapper observes the payload before finalization. The
-test-only wrapper accepts at most two top-level fields: an `i32` marker and
+initial test-only wrapper accepts at most two top-level fields: an `i32` marker and
 either an `i32` or the bounded nested resource described below. It consumes the owner inside
 the JIT module, and hands no resource pointer or ownership carrier to the
 host. The canonical ASAN target passes with these fixtures, subject to the
@@ -814,7 +814,18 @@ each with a frozen source Drop and an `i32` marker. The private LLVM check
 matches Drop calls from outer to inner, then deallocations from inner to
 outer. Two JIT calls observe `71, 73, 71, 73` for the two-struct chain and
 `79, 81, 83, 79, 81, 83` for the three-struct chain. The ASAN canonical
-target passes. Longer or branching ownership graphs remain outside this proof.
+target passes. At that checkpoint, longer or branching ownership graphs
+remained outside this proof.
+The next private fixture admits exactly three owned struct nodes in a bounded
+fork: an outer marker and two independently owned fields, each with its own
+marker and frozen Drop. The shape gate counts nodes across the whole tree and
+rejects a fourth before JIT materialization; a sealed four-node fork is the
+negative fixture. The `?` Err return observes `89, 91, 93` in field order on
+each of two JIT calls. The private LLVM check also requires outer Drop,
+left Drop/deallocation, right Drop/deallocation, then outer deallocation.
+The host-transfer experiment repeats this order for both injected post-body
+failure cleanup and successful exactly-once host Drop. The focused canonical
+test passes on Windows CLANG64 and WSL Arch Linux in ordinary and ASAN builds.
 On Windows Clang64 ASAN with LLVM 20.1.8, one of five canonical test
 invocations in the previous validation ended during LLVM COFF JIT loading with
 `IMAGE_REL_AMD64_ADDR32NB relocation requires an ordered section layout`;
@@ -862,7 +873,7 @@ the Drop thunk remains live through cleanup. This is a test-only protocol,
 with no published carrier or symbol contract. It does not establish
 production failure statuses or safe JIT teardown with an outstanding owner.
 The observation value is not a public return carrier or stable ABI.
-Longer or branching resource graphs and more
+More than three owned structs, wider resource graphs and more
 complex conversion bodies,
 `?` inside outlined Slot bodies and recoverable
 derive/dispatch failures are outside this execution proof; the source frontend
@@ -1098,8 +1109,8 @@ The local candidate below pins the current profile layout, digest and version
 rules. The existing release packages and CI matrix target 64-bit Linux,
 Windows and the macOS runner architecture; no 32-bit release target is listed.
 The macOS workflow runs the non-hardware CTest suite, including the Native
-artifact test, but this uncommitted worktree has no corresponding Mach-O or
-remote platform CI result. Before a public ABI promise, run that CI on an
+artifact test, but implementation commit `a0bf2b5` has no corresponding
+Mach-O or remote platform CI result. Before a public ABI promise, run that CI on an
 immutable candidate and review the next-query rule with host users.
 Keep source Ref publication gated until its context effect, exact Slot/Contract
 target, carrier status and ownership semantics are sealed and verified end to
@@ -1181,8 +1192,10 @@ not a public ABI decision or stable-release approval:
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches
    do not Drop. Up to three structs in one ownership chain now have recursive
-   cleanup and ordered Drop/deallocation proof. Longer or branching owned
-   fields remain outside the proof. A test-only host-transfer entry now proves
+   cleanup and ordered Drop/deallocation proof. A bounded three-node fork with
+   two independently owned fields now has ordered `?` Err and injected-failure
+   cleanup evidence on both local platforms, including focused ASAN runs.
+   Larger or wider owned-field graphs remain outside the proof. A test-only host-transfer entry now proves
    the empty owner-cell preflight, tag/owner commit, a separately retained
    JIT lease after the borrowed Ref pin expires, and explicit exactly-once
    Drop for the three-struct chain. A public host

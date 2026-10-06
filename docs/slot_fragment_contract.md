@@ -135,6 +135,11 @@ failure statuses or cover JIT teardown with an outstanding owner.
 Two- and three-struct return chains also run through the compiler's recursive
 cleanup: private LLVM checks Drop from outer to inner and deallocation from
 inner to outer, while JIT probes confirm each Drop once per call.
+A bounded three-node fork with two independently owned fields also passes
+the private `?` Err and post-body failure/host Drop proofs. The LLVM check
+requires field-order Drop/deallocation, and ordinary plus ASAN canonical tests
+pass on local Windows CLANG64 and WSL Arch Linux. A sealed four-node fork is
+explicitly rejected before private JIT materialization. Larger graphs stay gated.
 A separate test-only status entry composes a read-only parent-context check
 and an exact borrowed-Ref ingress check with one sealed unit Apply body. A
 live matching handle and parent enter the body; null parent, null handle and
@@ -249,6 +254,12 @@ ecosystem baseline check: WSL Git lacked the Windows system
 dirty. Both were clean with that setting; a process-local Git configuration
 made the single test and complete rerun pass. This is local Linux coverage,
 not remote release-candidate CI.
+Implementation commit `a0bf2b5` includes the subsequent Native v2 candidate,
+private Ref Apply proofs and compile-only ABI layout tests. Its complete local
+non-hardware suites passed 80/80 on Windows CLANG64 and 79/79 on WSL Arch
+Linux. The commit is still local; these runs do not provide macOS or remote
+release-candidate CI. Read-only readiness still rejects the child releases'
+verified Luna source `41ce85e` because it is not an ancestor of `a0bf2b5`.
 
 The 2026-10-06 [Native typed export boundary audit](slot_fragment_runtime_plan.md#native-typed-export-boundary-audit-2026-10-06)
 confirms that Native v1 callable rows still hold raw body addresses without

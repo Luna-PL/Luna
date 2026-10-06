@@ -74,7 +74,8 @@ workflow 与最终 tag 发布使用同一个验证脚本，避免两套门禁随
 
 入库的 lock 已录入 Toolchains 与 Lunax `v0.2.0` release，并将快照标为
 `release-ready`、`release.publish: true`。两项子组件 release 已发布，但它们共同
-验证的 Luna 源码提交 `41ce85e` 不是当前 Luna `main`（`8fae950`）的祖先。
+验证的 Luna 源码提交 `41ce85e` 不是当前 Luna `main` 上实施提交
+`a0bf2b5` 的祖先。
 本地 `verify_release_readiness.cmake` 明确报告此阻断，严格的
 `REQUIRE_READY=ON` 模式失败；非严格模式退出成功只表示阻断策略生效，不表示
 允许发布。根仓 `v0.3.0` tag 尚不存在。本次核对没有重跑
@@ -86,15 +87,15 @@ workflow 与最终 tag 发布使用同一个验证脚本，避免两套门禁随
 通过 77／77 项。
 2026-10-06 重建当前工作树后，同一套本地测试以四个 worker 在 71.18 秒内通过
 77／77 项，包括 REPL 和 Native artifact 门禁。只读 release-readiness 检查再次报告
-`41ce85e` 不是 `8fae950` 的祖先；退出成功只说明 fail-closed 策略正确阻断发布。
-工作树尚未提交，因此此次运行不是不可变发布候选的证据。
+`41ce85e` 不是当时的 `8fae950` 的祖先；退出成功只说明 fail-closed 策略正确
+阻断发布。该次测试早于提交 `a0bf2b5`，属于工作树证据，不是远程 CI。
 隔离的 WSL Arch Linux Clang／LLVM 22.1.8 构建完成全部目标，并以四个 worker
 在 67.15 秒内通过本地 Linux 完整 CTest 76／76 项。首次运行通过 75／76 项：
 `luna.ecosystem-frozen-baseline` 因 WSL Git 未继承 Windows 系统的
 `core.autocrlf=true` 设置，把 Windows 检出文件的 CRLF 误判为修改。在该设置下
 两个子工作树均为干净状态；通过仅对测试进程设置 Git 配置，失败项和整套复测均通过。
 这不能替代发布候选所需的平台 CI。
-当前工作树增加实验性的并行 Native v2 `i32()` 入口 profile，同时保留 v1 proof／
+实施工作树增加实验性的并行 Native v2 `i32()` 入口 profile，同时保留 v1 proof／
 导出兼容性。Windows CLANG64 和 WSL Arch Linux 的 Native artifact、canonical
 聚焦测试均通过。后续完整本地测试分别通过 Windows 76／77、Linux 75／76；
 两端唯一失败都是文件指南清单遗漏新增的辅助头文件。补齐清单后，两端该项复测
@@ -113,10 +114,17 @@ runtime-ABI 聚焦测试均通过。宿主 ABI 审阅与不可变提交的平台
 因此仍属本地候选。
 发布包清单与 CI 工作流覆盖 64 位 Linux、Windows 和 macOS runner 架构，
 没有列出 32 位发布包。macOS 工作流已包含 Native artifact CTest，但未在
-当前未提交工作树上运行。GNU/Linux、Windows GNU、Darwin 目标的 32 位
+实施提交 `a0bf2b5` 上运行。GNU/Linux、Windows GNU、Darwin 目标的 32 位
 freestanding C 布局探针现已接入 Clang CTest；本地 Windows CLANG64 与 WSL
 Arch Linux 的三项探针和文件清单测试均通过；接入后的完整非硬件 CTest
-分别通过 80／80 和 79／79。探针不验证 32 位加载器或制品。下一道 ABI 门是
+分别通过 80／80 和 79／79。提交 `a0bf2b5` 包含这些实现和测试证据，
+目前仍在本地；只读就绪检查仍报告子组件验证的 `41ce85e` 不在其祖先链上，
+严格模式按预期失败。探针不验证 32 位加载器或制品。
+其后的本地工作树只增加私有三节点分叉 owner 清理证明，覆盖 `?` Err、注入的
+body 后失败与宿主 Drop；独立封闭的四节点分叉在私有 JIT 物化前被有界形状
+门禁拒绝。Windows CLANG64 与 WSL Arch Linux 的普通及 ASAN
+canonical 聚焦测试均通过。上面的 80／80、79／79 全套计数早于此修订；它尚未
+取得远程平台结果。下一道 ABI 门是
 不可变候选的平台 CI 与宿主对并行 query／版本规则的审阅；增加 32 位支持
 需要独立的运行时门禁。
 下一步建立包含预期源码、测试与工作流的全新不可变 Luna 候选。子组件要

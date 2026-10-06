@@ -548,10 +548,11 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         errorPayload->kind == TypeKind::I32;
     const auto observedResource = [&program](
         const auto& self, const moon::TypeRecord* payload,
-        unsigned depth) -> bool {
+        unsigned& nodes) -> bool {
+        // Count every owned instance in a fork, not only its maximum depth.
         if (!payload || payload->kind != TypeKind::Struct ||
-            depth > 3 ||
-            payload->fields.empty() || payload->fields.size() > 2 ||
+            ++nodes > 3 ||
+            payload->fields.empty() || payload->fields.size() > 3 ||
             !payload->sysmeta.resource.needsDrop ||
             payload->dropGlue.empty())
             return false;
@@ -563,24 +564,32 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 if (type->kind != TypeKind::I32) return false;
                 marker = true;
             } else if (type->kind != TypeKind::I32 &&
-                       !self(self, type, depth + 1)) {
+                       !self(self, type, nodes)) {
                 return false;
             }
         }
         return marker;
     };
+    const auto observedResourceShape = [&](const moon::TypeRecord* payload) {
+        unsigned nodes = 0;
+        return observedResource(observedResource, payload, nodes);
+    };
     const bool privateErrResourceResultJit = okPayload && errorPayload &&
         okPayload->kind == TypeKind::I32 &&
-        observedResource(observedResource, errorPayload, 1);
+        observedResourceShape(errorPayload);
     const bool privateOkResourceResultJit = okPayload && errorPayload &&
         errorPayload->kind == TypeKind::I32 &&
-        observedResource(observedResource, okPayload, 1);
+        observedResourceShape(okPayload);
     const bool privateResourceResultJit = privateErrResourceResultJit ||
         privateOkResourceResultJit;
     const auto* resourcePayload = privateErrResourceResultJit
         ? errorPayload : (privateOkResourceResultJit ? okPayload : nullptr);
     const bool privateResultJit = privateScalarResultJit ||
         privateResourceResultJit;
+    if (resultShape && !privateResultJit) {
+        failure = "private Ref Result payload is outside the bounded cleanup proof";
+        return false;
+    }
 #endif
     if (!returnType || (returnType->kind != TypeKind::Unit
 #ifdef LUNA_PRIVATE_REF_JIT_TEST

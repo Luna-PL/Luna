@@ -622,7 +622,7 @@ context 退出。更窄的仅测试用 JIT wrapper 在源码 body 返回后观�
 按冻结的 product 偏移读取字段。每个 owner 每次调用各 Drop 一次。同一 Result 形状的
 标量 Ok／Err 分支分别返回 `14`／`13`，不调用资源 Drop。源码 Drop 方法在探针后把
 `marker` 清零，因此返回的 marker 还验证 wrapper 在最终清理前
-完成观察。此仅测试用 wrapper 最多接收两个顶层字段：一个 `i32` marker，另一个为
+完成观察。该阶段的仅测试用 wrapper 最多接收两个顶层字段：一个 `i32` marker，另一个为
 `i32` 或下述有界内嵌资源。它在 JIT module 内消费 owner，不向宿主交付资源指针或所有权
 carrier。这些夹具的 canonical ASAN 目标通过，但仍受下述独立的间歇性 COFF loader
 故障限制。
@@ -630,7 +630,15 @@ carrier。这些夹具的 canonical ASAN 目标通过，但仍受下述独立的
 编译器现有的递归拥有型 payload 清理；窄形状门禁最多准入三个各有冻结源码 Drop 与
 `i32` marker 的 struct。私有 LLVM 检查要求 Drop 从外到内、deallocation 从内到外。
 两次 JIT 调用分别观察到 `71, 73, 71, 73` 和 `79, 81, 83, 79, 81, 83`。
-ASAN canonical 目标通过。更长或分叉的所有权图仍不在此证明范围内。
+ASAN canonical 目标通过；在该检查点，更长或分叉的所有权图仍不在证明范围内。
+后续私有夹具将形状精确扩至三个拥有型 struct 节点的有界分叉：外层 marker 加上
+两个各自带 marker 和冻结 Drop 的独立拥有字段。形状门禁统计整棵树的节点；
+已封闭的四节点分叉负例在 JIT 物化前被拒绝。`?` Err 返回的两次 JIT 调用均按字段
+顺序观察到 `89, 91, 93`；私有 LLVM
+检查还要求外层 Drop、左字段 Drop／释放、右字段 Drop／释放，最后释放外层。
+宿主交接实验在注入的 body 后失败清理与成功交接后的恰好一次宿主 Drop 中重复
+验证该顺序。Windows CLANG64 和 WSL Arch Linux 的普通及 ASAN canonical 聚焦
+测试均通过。
 此前 Windows Clang64 ASAN（LLVM 20.1.8）canonical 测试共运行五次，其中一次在 LLVM COFF
 JIT 装载时以 `IMAGE_REL_AMD64_ADDR32NB relocation requires an ordered section layout`
 失败；紧接着的重试及其后三次重复运行均通过。增加资源返回 CFG 夹具后又有一次通过。
@@ -661,7 +669,8 @@ Drop 次数不变。随后释放原始 JIT 句柄，由另一份共享 LLJIT lea
 代码；公开 carrier 必须同时持有 owner 与代码 lease，直到清理完成。这仍只是私有
 实验，没有公开 carrier 或符号契约；尚未确定生产失败状态，也未验证 owner 未释放
 时安全关闭 JIT 的行为。
-该观测值不是公开返回 carrier 或稳定 ABI。更长或分叉的嵌套资源图、
+该观测值不是公开返回 carrier 或稳定 ABI。超过三个拥有型 struct 节点的图、
+更宽的资源图、
 更复杂的转换函数体、outlined Slot body 中的 `?`，以及可恢复的
 派生／分派失败，均不在此执行证明内；前端继续在
 outlined Slot 边界拒绝 `?`。
@@ -834,8 +843,8 @@ proof oracle、v1 loader／调用及无 profile generation 检查；因无 v2 qu
 
 下列本地候选已固定当前 profile 布局、摘要和版本规则。现有发布包与 CI 矩阵
 覆盖 64 位 Linux、Windows 及 macOS runner 架构，没有列出 32 位发布目标。
-macOS 工作流运行包括 Native artifact 测试在内的非硬件 CTest，但当前未提交
-工作树尚无对应的 Mach-O 或远程平台 CI 结果。公开 ABI 承诺前，须在不可变
+macOS 工作流运行包括 Native artifact 测试在内的非硬件 CTest，但实施提交
+`a0bf2b5` 尚无对应的 Mach-O 或远程平台 CI 结果。公开 ABI 承诺前，须在不可变
 候选上运行这些 CI，并让宿主使用方审阅后续 query 版本规则。源码 Ref 发布仍须等 context effect、精确 Slot／Contract 目标、
 carrier 状态与所有权语义完成端到端封闭和核验。
 
@@ -899,7 +908,9 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。
-   更长或分叉的拥有型字段仍在证明范围外。仅测试用的宿主交接入口已验证空 owner
+   两个独立拥有字段组成的三节点有界分叉，现也在两端普通及 ASAN 聚焦测试中
+   验证 `?` Err 和注入失败的有序清理。更大或更宽的拥有型字段图仍在证明范围外。
+   仅测试用的宿主交接入口已验证空 owner
    cell 预检、tag／owner 提交、借用 Ref pin 失效后单独保留 JIT lease，以及三层
    链的显式恰好一次 Drop。
    注入的 body 返回后失败现证明未提交 owner 的清理；公开宿主所有权 carrier 与

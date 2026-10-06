@@ -116,6 +116,10 @@ carrier 必须同时拥有两者。这并未发布宿主返回 ABI，也未确�
 owner 未释放时关闭 JIT。
 两层和三层 struct 返回链还经过编译器递归清理：私有 LLVM 检查 Drop 从外到内、
 deallocation 从内到外；JIT 探针确认每层每次各 Drop 一次。
+由两个独立拥有字段组成的有界三节点分叉，也通过了私有 `?` Err、body 后失败
+清理与宿主 Drop 证明。LLVM 检查要求按字段顺序 Drop／释放；本地 Windows
+CLANG64 与 WSL Arch Linux 的普通及 ASAN canonical 聚焦测试均通过。更大图形
+继续受门禁限制；已封闭的四节点分叉在私有 JIT 物化前被明确拒绝。
 另一个仅测试用的状态入口把只读 parent context 检查、精确借用 Ref 检查与一个
 封闭的 unit Apply body 组合。有效 parent 和目标相符的 handle 进入 body；空
 parent、空 handle 和指向另一 Slot 的有效 handle 都失败且不分派。通用 unit
@@ -202,6 +206,11 @@ fail-closed 策略正常，不表示 release-ready；这是独立生态证据／
 Windows 系统的 `core.autocrlf=true`，将子工作树的 CRLF 检出误判为修改。
 该设置下两个子工作树均干净；仅对测试进程设置 Git 配置后，单项与整套复测
 均通过。这是本机 Linux 覆盖，不是远程发布候选 CI。
+实施提交 `a0bf2b5` 包含后续 Native v2 候选、私有 Ref Apply 证明和仅编译 ABI
+布局测试。本地完整非硬件测试在 Windows CLANG64 通过 80／80，在 WSL Arch
+Linux 通过 79／79。该提交仍在本地；这些结果不提供 macOS 或远程发布候选 CI。
+只读就绪检查仍拒绝子组件验证的 Luna 源码 `41ce85e`，因为它不是
+`a0bf2b5` 的祖先。
 
 2026-10-06 的 [Native 类型化导出边界核查](slot_fragment_runtime_plan.zh-CN.md#native-类型化导出边界核查2026-10-06)
 确认 Native v1 callable 行仍保存裸函数体地址，没有 Ref 目标、context effect 或
