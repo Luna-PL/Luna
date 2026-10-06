@@ -169,8 +169,8 @@ generation and typed-rejection checks. On the corrected implementation commit
 [macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37462447103) all
 completed successfully. Linux C++17, C++23, sanitizer, and thread-sanitizer
 jobs passed; the macOS Native artifact test now passes. The next ABI gate is
-host review of the parallel query/version rule, exact-size policy, pointer
-lifetime and whether v2 must reject invalid UTF-8 identifiers. The
+host review of the parallel query/version rule, exact-size policy and pointer
+lifetime. Both v1 and v2 descriptor strings now reject invalid UTF-8. The
 [host-facing candidate](runtime_abi.md)
 records the current behavior. A 32-bit runtime would require its own gate,
 and source Ref/apply remains private.

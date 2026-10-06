@@ -138,7 +138,7 @@ Native 消费者返回非零，但测试脚本未打印退出码。
 [macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37462447103) 均已成功。
 Linux C++17、C++23、sanitizer 与 thread-sanitizer 作业均通过；macOS Native artifact
 测试也已通过。下一道 ABI 门是宿主对并行 query／版本规则的审阅。
-审阅还须确认精确结构大小规则、指针寿命及 v2 是否拒绝非法 UTF-8 标识符；
+审阅还须确认精确结构大小规则和指针寿命；v1、v2 descriptor 字符串现均拒绝非法 UTF-8。
 [宿主候选契约](runtime_abi.zh-CN.md)记录了当前行为。
 32 位运行时需要独立门禁，源码 Ref/apply 仍是私有实验。
 完成该审阅及其引发的修改后，选定最终不可变 Luna 候选。子组件要

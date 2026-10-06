@@ -240,6 +240,57 @@ if(NOT legacy_verify_result EQUAL 0 OR NOT legacy_oracle_result EQUAL 0 OR
         "generation: ${legacy_generation_output} ${legacy_generation_error}\n"
         "typed: ${legacy_typed_error}")
 endif()
+
+# A separately sealed v1 producer may supply byte strings that match its own
+# proof digest while violating the candidate descriptor's UTF-8 contract.
+if(WIN32)
+    set(invalid_utf8_artifact "${work_dir}/invalid-utf8-v1.dll")
+elseif(APPLE)
+    set(invalid_utf8_artifact "${work_dir}/libinvalid-utf8-v1.dylib")
+else()
+    set(invalid_utf8_artifact "${work_dir}/libinvalid-utf8-v1.so")
+endif()
+set(invalid_utf8_trust "${invalid_utf8_artifact}.trust")
+execute_process(
+    COMMAND "${LUNA_AOT_COMPILER}" -x c -std=c11 -fPIC
+        -DLUNA_TEST_INVALID_UTF8 ${legacy_link_mode}
+        -I "${LUNA_SOURCE_DIR}/src"
+        "${LUNA_SOURCE_DIR}/tests/fixtures/native_v1_artifact_fixture.c"
+        -o "${invalid_utf8_artifact}"
+    RESULT_VARIABLE invalid_utf8_compile_result
+    ERROR_VARIABLE invalid_utf8_compile_error)
+if(NOT invalid_utf8_compile_result EQUAL 0)
+    message(FATAL_ERROR "invalid UTF-8 Native fixture did not link.\n"
+        "${invalid_utf8_compile_error}")
+endif()
+execute_process(
+    COMMAND "${LUNA_NATIVE_VERIFIER}" --prepare-legacy-invalid-utf8
+        "${invalid_utf8_artifact}" "${invalid_utf8_trust}"
+    RESULT_VARIABLE invalid_utf8_seal_result
+    ERROR_VARIABLE invalid_utf8_seal_error)
+execute_process(
+    COMMAND "${LUNA_NATIVE_VERIFIER}"
+        "${invalid_utf8_artifact}" "${invalid_utf8_trust}"
+    RESULT_VARIABLE invalid_utf8_verify_result
+    ERROR_VARIABLE invalid_utf8_verify_error)
+execute_process(
+    COMMAND "${LUNA_NATIVE_VERIFIER}" --load-only
+        "${invalid_utf8_artifact}" "${invalid_utf8_trust}"
+    RESULT_VARIABLE invalid_utf8_load_result
+    ERROR_VARIABLE invalid_utf8_load_error)
+string(FIND "${invalid_utf8_load_error}" "invalid export row"
+       invalid_utf8_load_diagnostic)
+if(NOT invalid_utf8_seal_result EQUAL 0 OR
+   NOT invalid_utf8_verify_result EQUAL 0 OR
+   invalid_utf8_load_result EQUAL 0 OR
+   invalid_utf8_load_diagnostic EQUAL -1)
+    message(FATAL_ERROR
+        "sealed Native descriptor accepted invalid UTF-8.\n"
+        "seal: ${invalid_utf8_seal_error}\n"
+        "verify: ${invalid_utf8_verify_error}\n"
+        "load: ${invalid_utf8_load_error}")
+endif()
+
 execute_process(
     COMMAND "${Python3_EXECUTABLE}"
         "${LUNA_SOURCE_DIR}/tests/native_artifact_consumer.py"

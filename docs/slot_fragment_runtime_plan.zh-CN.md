@@ -881,8 +881,8 @@ v2 descriptor 摘要采用 SHA-256：先编码小端 `u32` 行数，再对排序
 分隔符。进程内指针不进入规范化行；v1 整制品 proof 摘要绑定包含这些指针的
 链接映像。若改行编码、摘要算法或加入新 profile，必须采用新的并行 query／
 schema 版本；现有 v2 loader 会拒绝未知字段与 profile。
-候选规定这些标识符字节为 UTF-8，但加载器目前仅检查非空、有界且不含 CR、LF 或
-tab。是否严格拒绝独立生产的 v2 制品中的非法 UTF-8，仍待宿主决策。
+加载器要求 v1、v2 descriptor 字符串非空、有界、采用有效 UTF-8 且不含 CR、LF 或
+tab。独立封装的 v1 测试制品若含非法 UTF-8 符号，离线验证可以成功，宿主加载则会拒绝。
 
 在 MoonRuntime 中，binding profile 0 表示无 profile，profile 1 允许固定的
 `i32()` 调用。`GenerationEntryAbiAny` 只能出现在 requirement，作为通配符保留

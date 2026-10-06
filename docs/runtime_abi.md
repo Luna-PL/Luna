@@ -50,9 +50,9 @@ The loader requires exact ABI versions and structure sizes and zero reserved
 fields. It does not negotiate a longer record under the same version. A new
 field, row encoding, digest rule or entry profile therefore needs a new
 parallel query/schema version with a host review before publication.
-The candidate specifies UTF-8 identifier bytes, but the current loader checks
-only bounded nonempty strings without CR, LF or tab; host review must decide
-whether independently produced v2 libraries also need strict UTF-8 rejection.
+Descriptor strings must be bounded, nonempty UTF-8 without CR, LF or tab.
+The loader rejects malformed UTF-8 in both v1 and v2 rows, including an
+independently sealed artifact whose proof otherwise verifies.
 
 Descriptor strings and entry pointers belong to the loaded image. They remain
 usable only while its verified library or pinned generation retains that

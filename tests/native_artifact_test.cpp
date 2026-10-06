@@ -22,6 +22,8 @@ int fail(const char* message) {
 
 int prepareLegacyFixture(int argc, char** argv) {
     if (argc != 4) return 2;
+    const bool invalidUtf8 =
+        std::string(argv[1]) == "--prepare-legacy-invalid-utf8";
     const std::string targetAbi = llvm::sys::getProcessTriple();
     if (targetAbi.empty() || targetAbi.size() >= 128)
         return fail("legacy fixture target ABI exceeds its bounded field");
@@ -52,7 +54,8 @@ int prepareLegacyFixture(int argc, char** argv) {
     luna::driver::NativeExportSpec exported;
     exported.declarationKind = LUNA_NATIVE_DECLARATION_FUNCTION_V1;
     exported.flags = LUNA_NATIVE_EXPORT_CALLABLE_V1;
-    exported.symbolId = "symbol:legacy-answer";
+    exported.symbolId = invalidUtf8
+        ? "symbol:\xc0\xaf" : "symbol:legacy-answer";
     exported.contractId = "contract:legacy-v1";
     exported.linkageName = "legacy_answer";
     luna::driver::NativeProofSpec spec;
@@ -311,7 +314,8 @@ int generationSwitch(int argc, char** argv) {
 } // namespace
 
 int main(int argc, char** argv) {
-    if (argc > 1 && std::string(argv[1]) == "--prepare-legacy")
+    if (argc > 1 && (std::string(argv[1]) == "--prepare-legacy" ||
+                     std::string(argv[1]) == "--prepare-legacy-invalid-utf8"))
         return prepareLegacyFixture(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--generation-switch")
         return generationSwitch(argc, argv);

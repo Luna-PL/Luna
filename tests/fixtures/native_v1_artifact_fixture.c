@@ -22,12 +22,18 @@ static int32_t legacy_answer(void) { return 7; }
 // before sealing. The producer and descriptor source are otherwise v1-only.
 static const char target_abi[128] = "LUNA_TEST_TARGET_ABI_PLACEHOLDER";
 
+#ifdef LUNA_TEST_INVALID_UTF8
+#define LUNA_TEST_SYMBOL_ID "symbol:\xc0\xaf"
+#else
+#define LUNA_TEST_SYMBOL_ID "symbol:legacy-answer"
+#endif
+
 static const LunaNativeExportDescriptorV1 exports[] = {{
     LUNA_NATIVE_DESCRIPTOR_ABI_V1,
     sizeof(LunaNativeExportDescriptorV1),
     LUNA_NATIVE_DECLARATION_FUNCTION_V1,
     LUNA_NATIVE_EXPORT_CALLABLE_V1,
-    "symbol:legacy-answer",
+    LUNA_TEST_SYMBOL_ID,
     "contract:legacy-v1",
     "legacy_answer",
     (const void*)&legacy_answer,

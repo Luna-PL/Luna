@@ -1157,9 +1157,9 @@ separator. Pointers are not canonical row bytes; the v1 whole-artifact proof
 digest binds the linked image containing them. A changed row encoding,
 digest algorithm or new profile needs a new parallel query/schema version,
 because existing v2 loaders reject unknown fields and profiles.
-The candidate calls these identifier bytes UTF-8, but the loader currently
-checks only nonempty bounded strings without CR, LF or tab. Strict UTF-8
-rejection for independently produced v2 artifacts is an open host decision.
+The loader requires bounded, nonempty UTF-8 descriptor strings without CR,
+LF or tab in both v1 and v2. A separately sealed v1 fixture with an invalid
+UTF-8 symbol verifies offline but is rejected by the host loader.
 
 Within MoonRuntime, binding profile 0 means unprofiled and profile 1 enables
 the pinned `i32()` call. `GenerationEntryAbiAny` is a requirement-only wildcard
