@@ -1,5 +1,6 @@
 #include "CodeGenerator.h"
 #include "driver/NativeArtifact.h"
+#include "driver/NativeTypedDescriptor.h"
 #include "runtime/RuntimeDescriptor.h"
 #include "runtime/RuntimeFragmentABI.h"
 
@@ -554,9 +555,91 @@ bool CodeGenerator::emitNativeLibraryDescriptor(
     const std::string& targetAbi, const std::string& compilerIdentity,
     const std::vector<luna::driver::NativeExportSpec>& exports) {
     if (!mModule ||
-        mModule->getFunction("luna_native_library_descriptor_v1")) {
+        mModule->getFunction("luna_native_library_descriptor_v1") ||
+        mModule->getFunction("luna_native_library_descriptor_v2")) {
         error("reserved Native descriptor symbol is already defined");
         return false;
+    }
+    // V1 has no entry ABI profile. Cross-check each requested row against the
+    // generated module's public declarations before placing a raw address in
+    // the registry.
+    if (!mProgram || mProgram->name != packageId) {
+        error("Native v1 descriptor has no matching sealed package");
+        return false;
+    }
+    std::vector<luna::driver::NativeExportSpec> typedExports;
+    for (const auto& exported : exports) {
+        const auto record = std::find_if(
+            mProgram->declarationTable.begin(), mProgram->declarationTable.end(),
+            [&](const moon::DeclarationRecord& candidate) {
+                return candidate.symbolId.value == exported.symbolId &&
+                    candidate.contractId.value == exported.contractId;
+            });
+        const bool publicRecord = record != mProgram->declarationTable.end() &&
+            std::any_of(mProgram->exports.begin(), mProgram->exports.end(),
+                [&](const moon::ExportRecord& candidate) {
+                    return candidate.declaration == moon::DeclarationRef{
+                        record->symbolId, record->contractId};
+                });
+        if (!publicRecord ||
+            exported.declarationKind != static_cast<uint32_t>(record->kind) + 1 ||
+            exported.linkageName != record->linkageName ||
+            exported.flags != (record->kind == moon::DeclarationKind::Function
+                ? LUNA_NATIVE_EXPORT_CALLABLE_V1 : 0)) {
+            error("Native v1 export row differs from its sealed public declaration");
+            return false;
+        }
+        if (record->kind == moon::DeclarationKind::Function) {
+            const moon::FunctionDecl* function = nullptr;
+            for (const auto& declaration : mProgram->declarations)
+                if (declaration && declaration->declarationId == record->id) {
+                    function = dynamic_cast<const moon::FunctionDecl*>(
+                        declaration.get());
+                    break;
+                }
+            if (!function || !function->isExported ||
+                function->packageId != packageId || function->isExtern ||
+                function->requiresFragmentContext) {
+                error("Native v1 callable export requires an unsupported entry ABI");
+                return false;
+            }
+            const auto* signature = mProgram->findType(record->type);
+            if (!signature || signature->kind != TypeKind::Function ||
+                signature->parameterTypeIds.size() != function->params.size() ||
+                signature->returnTypeId != function->returnType) {
+                error("Native v1 callable entry differs from its frozen function signature");
+                return false;
+            }
+            std::vector<llvm::Type*> parameters;
+            for (size_t index = 0; index < function->params.size(); ++index) {
+                if (signature->parameterTypeIds[index] !=
+                    function->params[index].type) {
+                    error("Native v1 callable entry differs from its frozen function signature");
+                    return false;
+                }
+                const TypePtr type = resolveType(signature->parameterTypeIds[index]);
+                if (!type) {
+                    error("Native v1 callable entry has an unresolved parameter type");
+                    return false;
+                }
+                parameters.push_back(mHelpers->toLLVMType(type));
+            }
+            const TypePtr result = resolveType(signature->returnTypeId);
+            auto* body = mModule->getFunction(exported.linkageName);
+            if (!result || !body || body->isDeclaration() ||
+                body->getCallingConv() != llvm::CallingConv::C ||
+                body->getFunctionType() != llvm::FunctionType::get(
+                    mHelpers->toLLVMType(result), parameters, false)) {
+                error("Native v1 callable entry differs from its generated LLVM signature");
+                return false;
+            }
+            if (signature->parameterTypeIds.empty() &&
+                signature->returnTypeId == function->returnType &&
+                result->kind == TypeKind::I32 &&
+                body->getFunctionType() == llvm::FunctionType::get(
+                    llvm::Type::getInt32Ty(*mCtx), false))
+                typedExports.push_back(exported);
+        }
     }
     auto* i32 = llvm::Type::getInt32Ty(*mCtx);
     auto* i64 = llvm::Type::getInt64Ty(*mCtx);
@@ -646,6 +729,80 @@ bool CodeGenerator::emitNativeLibraryDescriptor(
     builder.CreateRet(descriptor);
     std::vector<llvm::GlobalValue*> retained = {descriptor, query};
     if (exportsGlobal) retained.push_back(exportsGlobal);
+
+    auto* typedExportType = llvm::StructType::create(
+        *mCtx, "luna.native.export.v2");
+    typedExportType->setBody(
+        {i32, i32, i32, i32, i32, i32, ptr, ptr, ptr, ptr});
+    std::vector<llvm::Constant*> typedValues;
+    std::vector<std::string> canonicalTypedRows;
+    for (const auto& exported : typedExports) {
+        auto* body = mModule->getFunction(exported.linkageName);
+        typedValues.push_back(llvm::ConstantStruct::get(
+            typedExportType,
+            {llvm::ConstantInt::get(i32, LUNA_NATIVE_DESCRIPTOR_ABI_V2),
+             llvm::ConstantInt::get(i32, sizeof(LunaNativeExportDescriptorV2)),
+             llvm::ConstantInt::get(i32, exported.declarationKind),
+             llvm::ConstantInt::get(i32, exported.flags),
+             llvm::ConstantInt::get(i32, LUNA_NATIVE_ENTRY_ABI_C_I32_NOARGS_V1),
+             llvm::ConstantInt::get(i32, 0),
+             cString(exported.symbolId), cString(exported.contractId),
+             cString(exported.linkageName), body}));
+        canonicalTypedRows.push_back(luna::driver::canonicalNativeTypedExport(
+            exported.declarationKind, exported.flags,
+            LUNA_NATIVE_ENTRY_ABI_C_I32_NOARGS_V1,
+            exported.symbolId, exported.contractId, exported.linkageName));
+    }
+    llvm::Constant* typedExportsPointer = llvm::ConstantPointerNull::get(ptr);
+    if (!typedValues.empty()) {
+        auto* arrayType = llvm::ArrayType::get(typedExportType, typedValues.size());
+        auto* rows = new llvm::GlobalVariable(
+            *mModule, arrayType, true, llvm::GlobalValue::InternalLinkage,
+            llvm::ConstantArray::get(arrayType, typedValues),
+            "__luna_native_exports_v2");
+        typedExportsPointer = rows;
+        retained.push_back(rows);
+    }
+    const auto typedDigest = luna::driver::digestNativeTypedExports(
+        std::move(canonicalTypedRows));
+    auto* digestType = llvm::ArrayType::get(
+        llvm::Type::getInt8Ty(*mCtx), LUNA_NATIVE_DESCRIPTOR_DIGEST_SIZE_V2);
+    auto* typedDescriptorType = llvm::StructType::create(
+        *mCtx, "luna.native.library.v2");
+    typedDescriptorType->setBody(
+        {i32, i32, i32, i32, ptr, ptr, ptr, ptr, i64, ptr, digestType});
+    auto* typedDescriptor = new llvm::GlobalVariable(
+        *mModule, typedDescriptorType, true, llvm::GlobalValue::InternalLinkage,
+        llvm::ConstantStruct::get(
+            typedDescriptorType,
+            {llvm::ConstantInt::get(i32, LUNA_NATIVE_DESCRIPTOR_MAGIC_V2),
+             llvm::ConstantInt::get(i32, LUNA_NATIVE_DESCRIPTOR_ABI_V2),
+             llvm::ConstantInt::get(i32, sizeof(LunaNativeLibraryDescriptorV2)),
+             llvm::ConstantInt::get(i32, 0), cString(packageId),
+             cString(packageVersion), cString(targetAbi),
+             cString(compilerIdentity),
+             llvm::ConstantInt::get(i64, typedValues.size()),
+             typedExportsPointer,
+             llvm::ConstantDataArray::get(
+                 *mCtx, llvm::ArrayRef<uint8_t>(typedDigest))}),
+        "__luna_native_library_v2");
+    if (host.isOSBinFormatMachO())
+        typedDescriptor->setSection("__DATA,__luna_desc2");
+    else if (host.isOSBinFormatCOFF())
+        typedDescriptor->setSection(".luna$desc2");
+    else
+        typedDescriptor->setSection(".luna.native.descriptor.v2");
+    auto* typedQuery = llvm::Function::Create(
+        queryType, llvm::GlobalValue::ExternalLinkage,
+        "luna_native_library_descriptor_v2", *mModule);
+    if (host.isOSBinFormatCOFF())
+        typedQuery->setDLLStorageClass(
+            llvm::GlobalValue::DLLExportStorageClass);
+    auto* typedBlock = llvm::BasicBlock::Create(*mCtx, "entry", typedQuery);
+    llvm::IRBuilder<> typedBuilder(typedBlock);
+    typedBuilder.CreateRet(typedDescriptor);
+    retained.push_back(typedDescriptor);
+    retained.push_back(typedQuery);
     llvm::appendToCompilerUsed(*mModule, retained);
     return true;
 }

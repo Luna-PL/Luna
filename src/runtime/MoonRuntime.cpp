@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <atomic>
 #include <cctype>
+#include <cstring>
 #include <exception>
 #include <utility>
 
@@ -138,6 +139,26 @@ uint32_t MoonRuntime::PinnedBinding::flags() const {
     return binding_ ? binding_->flags : 0;
 }
 
+uint32_t MoonRuntime::PinnedBinding::entryAbi() const {
+    return binding_ ? binding_->entryAbi : GenerationEntryAbiUnprofiled;
+}
+
+bool MoonRuntime::PinnedBinding::callI32NoArgs(int32_t& result) const {
+    if (!generation_ || !binding_ ||
+        binding_->entryAbi != GenerationEntryAbiCI32NoArgsV1 ||
+        binding_->declarationKind != LUNA_RUNTIME_DECLARATION_FUNCTION_V1 ||
+        (binding_->flags & GenerationBindingCallable) == 0 ||
+        !binding_->implementation)
+        return false;
+    using Entry = int32_t (*)();
+    static_assert(sizeof(Entry) == sizeof(binding_->implementation),
+                  "host cannot represent a generation function pointer");
+    Entry function = nullptr;
+    std::memcpy(&function, &binding_->implementation, sizeof(function));
+    result = function();
+    return true;
+}
+
 uint64_t MoonRuntime::PinnedGeneration::generationId() const {
     return generation_ ? generation_->generationId : 0;
 }
@@ -180,7 +201,9 @@ MoonRuntime::PinnedBinding MoonRuntime::PinnedGeneration::find(
         generation_, requirement.symbolId, requirement.contractId);
     if (!binding || binding.declarationKind() != requirement.declarationKind ||
         (binding.flags() & requirement.requiredFlags) !=
-            requirement.requiredFlags)
+            requirement.requiredFlags ||
+        (requirement.entryAbi != GenerationEntryAbiAny &&
+         binding.entryAbi() != requirement.entryAbi))
         return {};
     return binding;
 }
@@ -205,8 +228,13 @@ MoonRuntime::PinnedGeneration::findAll(
 MoonRuntime::PinnedBinding MoonRuntime::SwitchableBinding::pin() const {
     if (!module_) return {};
     auto generation = module_->active.load();
-    return MoonRuntime::makePinnedBinding(
+    auto binding = MoonRuntime::makePinnedBinding(
         std::move(generation), symbolId_, contractId_);
+    if (!binding || binding.declarationKind() != declarationKind_ ||
+        (binding.flags() & requiredFlags_) != requiredFlags_ ||
+        binding.entryAbi() != entryAbi_)
+        return {};
+    return binding;
 }
 
 MoonRuntime::PinnedBinding MoonRuntime::makePinnedBinding(
@@ -279,6 +307,8 @@ bool MoonRuntime::stage(
             (binding.flags & GenerationBindingPublicControl) != 0;
         const bool fragmentContext =
             (binding.flags & GenerationBindingFragmentContext) != 0;
+        const bool profiled =
+            binding.entryAbi != GenerationEntryAbiUnprofiled;
         if (!validIdentity(binding.symbolId) ||
             !validIdentity(binding.contractId) || !binding.implementation ||
             (binding.flags & ~knownFlags) != 0 ||
@@ -290,6 +320,9 @@ bool MoonRuntime::stage(
             (fragmentContext &&
              (!callable || binding.declarationKind !=
                  LUNA_RUNTIME_DECLARATION_FUNCTION_V1)) ||
+            (profiled &&
+             (binding.entryAbi != GenerationEntryAbiCI32NoArgsV1 ||
+              !callable || fragmentContext)) ||
             (publicControl &&
              binding.declarationKind != LUNA_RUNTIME_DECLARATION_FRAGMENT_V1 &&
              binding.declarationKind != LUNA_RUNTIME_DECLARATION_SLOT_V1) ||
@@ -350,7 +383,8 @@ bool MoonRuntime::validatesRequirements(
         if (!binding ||
             binding->declarationKind != requirement.declarationKind ||
             (binding->flags & requirement.requiredFlags) !=
-                requirement.requiredFlags) {
+                requirement.requiredFlags ||
+            binding->entryAbi != requirement.entryAbi) {
             error = "generation does not satisfy an existing switchable binding";
             return false;
         }
@@ -394,7 +428,8 @@ bool MoonRuntime::loadOnce(
             if (current.symbolId != candidate.symbolId ||
                 current.contractId != candidate.contractId ||
                 current.declarationKind != candidate.declarationKind ||
-                current.flags != candidate.flags) {
+                current.flags != candidate.flags ||
+                current.entryAbi != candidate.entryAbi) {
                 error = "same-content generation resolved a different binding set";
                 return false;
             }
@@ -509,13 +544,16 @@ bool MoonRuntime::makeSwitchable(
         (requested.declarationKind != 0 &&
          activeBinding->declarationKind != requested.declarationKind) ||
         (activeBinding->flags & requested.requiredFlags) !=
-            requested.requiredFlags) {
+            requested.requiredFlags ||
+        (requested.entryAbi != GenerationEntryAbiAny &&
+         activeBinding->entryAbi != requested.entryAbi)) {
         error = "switchable binding identity is absent from the active generation";
         return false;
     }
     GenerationBindingRequirement requirement = requested;
     requirement.declarationKind = activeBinding->declarationKind;
     requirement.requiredFlags = activeBinding->flags;
+    requirement.entryAbi = activeBinding->entryAbi;
     auto& requirements = moduleIt->second->switchableRequirements;
     const auto duplicate = std::find_if(
         requirements.begin(), requirements.end(),
@@ -523,13 +561,17 @@ bool MoonRuntime::makeSwitchable(
             return existing.symbolId == requirement.symbolId &&
                 existing.contractId == requirement.contractId &&
                 existing.declarationKind == requirement.declarationKind &&
-                existing.requiredFlags == requirement.requiredFlags;
+                existing.requiredFlags == requirement.requiredFlags &&
+                existing.entryAbi == requirement.entryAbi;
         });
     if (duplicate == requirements.end())
         requirements.push_back(requirement);
     binding.module_ = moduleIt->second;
     binding.symbolId_ = requirement.symbolId;
     binding.contractId_ = requirement.contractId;
+    binding.declarationKind_ = requirement.declarationKind;
+    binding.requiredFlags_ = requirement.requiredFlags;
+    binding.entryAbi_ = requirement.entryAbi;
     return true;
 }
 

@@ -42,7 +42,27 @@ private:
     LunaJitModule();
     struct Impl;
     std::unique_ptr<Impl> mImpl;
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    // Bound at private materialization, before any loaded entry can look up code.
+    std::vector<uint8_t> mPrivateRefUnitApplyEntryRecord;
+#endif
 };
+
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+// Test-only loaded entry. A call keeps the JIT code lease alive even when the
+// caller releases its original materialization reference.
+class LunaPrivateRefUnitApplyLoadedEntry {
+public:
+    int32_t call(const void* parentContext, const void* borrowedRef) const;
+    const std::vector<uint8_t>& entryRecord() const { return record_; }
+
+private:
+    friend class CodeGenerator;
+    std::shared_ptr<LunaJitModule> lease_;
+    const void* entry_ = nullptr;
+    std::vector<uint8_t> record_;
+};
+#endif
 
 enum class LunaOptimizationLevel { O0, O2, O3 };
 
@@ -105,7 +125,18 @@ public:
     static std::shared_ptr<LunaJitModule>
     materializePrivateRuntimeFragmentRefApplyForTest(
         moon::Module& program, moon::FunctionDecl& function,
-        std::string& failure);
+        std::string& failure,
+        std::vector<uint8_t>* entryRecord = nullptr);
+    // Validates the pointer-free test record against current frozen source
+    // facts. This is neither a Native descriptor nor a public entry ABI.
+    static bool validatePrivateRuntimeFragmentRefApplyEntryRecordForTest(
+        const moon::Module& program, const moon::FunctionDecl& function,
+        const std::vector<uint8_t>& entryRecord, std::string& failure);
+    static std::unique_ptr<LunaPrivateRefUnitApplyLoadedEntry>
+    loadPrivateRuntimeFragmentRefApplyEntryForTest(
+        const moon::Module& program, const moon::FunctionDecl& function,
+        const std::vector<uint8_t>& entryRecord,
+        std::shared_ptr<LunaJitModule> executable, std::string& failure);
 #endif
 
 private:
@@ -153,7 +184,8 @@ private:
         moon::Module& program, moon::FunctionDecl& function,
         std::string& failure
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
-        , std::shared_ptr<LunaJitModule>* executable = nullptr
+        , std::shared_ptr<LunaJitModule>* executable = nullptr,
+        std::vector<uint8_t>* entryRecord = nullptr
 #endif
     );
     // Pass-through owned Ref returns are lowered only inside a disposable

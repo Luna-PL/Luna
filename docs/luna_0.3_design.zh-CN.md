@@ -1267,22 +1267,22 @@ Dynamic feature/opcode。标准库内部 console helper 也改用 0.3 v1 名称�
 `rt_compat_*_0_2`。external fragment-plugin/dynamic-apply 的公开头、Runtime/JIT ABI、
 MoonIR capability、canonical CFG 分支与构建目标均已删除；退役 feature bit 2 在 Container
 边界被拒绝。compiler-special Rc/Arc 与 dynamic 源码只存在于冻结迁移/负例 corpus，生产
-代码已无 0.2 compatibility branch。第 17 项正在进行：basic、9/20 workload CPU
-套件、单 workload analyzer 与最小 heterogeneous simulator 用例都已将源码作为
-临时 0.3 application package 实际构建并执行，默认 release smoke test 会持续守护
-该 AOT 路径。当前用户文档不再把已删除的 dynamic 路径当作可用功能，prebuilt
-workflow 也会对冻结的 0.2.1 生态快照 fail closed。2026-09-15 的本地验证形成了
-Luna 候选 `41ce85e`、Toolchains 0.2.0 候选 `63c8fe1` 与 Lunax 0.2.0 候选
-`42285e1`。Toolchains 已通过生成 grammar 与 12 个当前编译器 fixture、绑定真实
-编译器 Slot/Fragment analysis 的完整 Rust workspace、Clippy、release build、VS Code
-源码检查和 Windows VSIX 打包；Lunax 已通过 Luna 0.3 application 严格构建及全部
-6 项命令/后端/事务安装测试。子仓 workflow 也会生成带 checksum 与 attestation 的
-`LUNA-SOURCE-COMMIT` 资产。它们是工作树清洁的本地提交，尚不构成远程 CI 或发布证据。
-发布流程已增加两阶段提升：
-两个组件会针对同一个无 tag 的不可变 Luna 候选 commit 构建并发布
-`LUNA-SOURCE-COMMIT` 证据，之后仅允许 lock/状态文档变化，最后才创建 Luna tag，因而
-不存在互相等待或移动 tag 的闭环。完成该项仍需要远程 CI、两个组件已证明的不可变
-产物，随后把共同的候选 commit 与产物证据写入并显式升级 lock。
+代码已无 0.2 compatibility branch。第 17 项仍在进行：basic、9/20 workload CPU
+套件、单 workload analyzer 与最小 heterogeneous simulator 用例均能把源码作为
+临时 0.3 application package 构建并执行，release smoke test 守护该 AOT 路径；
+用户文档不再把已删除的 dynamic 源码当作可用功能。2026-09-15 的 Luna 候选
+`41ce85e` 已用于发布 Toolchains `v0.2.0`（`63c8fe1`）和 Lunax `v0.2.0`
+（`42285e1`）。当前 ecosystem lock 记录了两者的不可变制品、checksum、
+attestation 和已通过的 consumer 检查。
+
+但该 lock 不能授权当前 Luna 源码树。截至 2026-10-03，它写有 `release-ready`
+和 `release.publish: true`，其中已验证的 Luna 候选 `41ce85e` 却不是当前
+`main` 的祖先；严格 readiness 因此阻断根仓发布，根仓也尚无 `v0.3.0` tag。
+两阶段规则规定候选之后只允许 lock／状态文档变化。当前源码和测试开发需要建立
+新的不可变 Luna 候选，并重新取得与之匹配的子组件发布证据；不能重指向既有
+release 或只改 lock 标签。随后必须通过根仓平台 CI、严格 readiness 和联网
+release-evidence 门禁，才能创建根仓 tag。独立跟踪的源码 Ref／apply 仍未完成，
+子组件已经发布不意味着它已成为公开能力。
 这些剩余授权、发布等级与明确延后项已集中记录在
 [生态发布交接决策表](ecosystem_release.zh-CN.md#发布交接决策登记表2026-09-15)；
 历史的 `TBD-SF007`–`TBD-SF010` 决策边界继续排除在核心冻结契约之外；当前处置已在

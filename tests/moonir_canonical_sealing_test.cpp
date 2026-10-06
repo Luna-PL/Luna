@@ -144,10 +144,15 @@ int runSealingTests(
     SealingTestContext context{
         cfgBuilder, cfgVerifier, verifier, module, reverse,
         shortId, productId};
+    trace("function sealing tests");
     if (const int result = runFunctionSealingTests(context)) return result;
+    trace("composition sealing tests");
     if (const int result = runCompositionSealingTests(context)) return result;
+    trace("lowered composition tests");
     if (const int result = runLoweredCompositionTests(context)) return result;
+    trace("symbol sealing tests");
     if (const int result = runSymbolSealingTests(context)) return result;
+    trace("iterator sealing tests");
     if (const int result = runIteratorSealingTests(context)) return result;
     return testRuntimeFragmentRefPreparation();
 }

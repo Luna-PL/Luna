@@ -144,6 +144,7 @@ bool scopeWithin(const moon::ControlFlowGraph& graph, moon::ScopeId scope,
 
 struct RuntimeContinuationPlan {
     const moon::RegionRecord* region = nullptr;
+    std::vector<moon::BlockId> blocks;
     std::vector<moon::LocalId> captures;
 };
 
@@ -164,8 +165,21 @@ bool prepareRuntimeContinuation(
         reason = "runtime Slot has no exact continuation region";
         return false;
     }
+    std::vector<moon::BlockId> outlineBlocks;
     std::unordered_set<uint32_t> regionBlocks;
-    for (const auto block : region->blocks) regionBlocks.insert(block.value);
+    for (const auto& block : graph.blocks) {
+        for (auto ancestor = block.region; !ancestor.empty();) {
+            if (ancestor == region->id) {
+                outlineBlocks.push_back(block.id);
+                regionBlocks.insert(block.id.value);
+                break;
+            }
+            const auto* record = graph.findRegion(ancestor);
+            if (!record || record->kind == moon::RegionKind::Continuation)
+                break;
+            ancestor = record->parent;
+        }
+    }
     const auto hasOnlyLocalCleanups = [&](const auto& cleanups) {
         for (const auto cleanupId : cleanups) {
             const auto* cleanup = graph.findCleanup(cleanupId);
@@ -178,7 +192,7 @@ bool prepareRuntimeContinuation(
         return true;
     };
     std::unordered_set<uint32_t> referencedLocals;
-    for (const auto blockId : region->blocks) {
+    for (const auto blockId : outlineBlocks) {
         const auto* block = graph.findBlock(blockId);
         if (!block) return false;
         for (const auto& operation : block->operations) {
@@ -264,6 +278,13 @@ bool prepareRuntimeContinuation(
             return false;
         }
     }
+    // A Ref used only by an Apply entry has no ordinary expression operand.
+    // Its carrier still has to cross the outlined continuation frame.
+    for (const auto& binding : graph.runtimeRefApplies) {
+        const auto* apply = graph.findRegion(binding.region);
+        if (apply && regionBlocks.count(apply->entry.value))
+            referencedLocals.insert(binding.reference.value);
+    }
     for (const uint32_t localId : referencedLocals) {
         const auto* local = graph.findLocal(moon::LocalId{localId});
         if (!local) {
@@ -282,6 +303,7 @@ bool prepareRuntimeContinuation(
                   return left.value < right.value;
               });
     plan.region = region;
+    plan.blocks = std::move(outlineBlocks);
     return true;
 }
 
@@ -364,24 +386,50 @@ void CodeGenerator::generateControlFlowBody(
         error("canonical parameter table has the wrong LLVM arity");
 
     std::optional<moon::RuntimeRefApplyFlowPlan> refApplyFlow;
-    llvm::AllocaInst* refContextCell = nullptr;
+    std::vector<llvm::AllocaInst*> refContextCells(graph.regions.size(), nullptr);
     llvm::Value* parentFragmentContext = mCurrentFragmentContext;
     if (!graph.runtimeRefApplies.empty()) {
         std::string flowError;
         if (!mPrivateRefApplyEnabled ||
-            graph.runtimeRefApplies.size() != 1 ||
+            graph.runtimeRefApplies.size() > 2 ||
             !parentFragmentContext ||
             !(refApplyFlow = moon::planRuntimeRefApplyFlow(graph, flowError))) {
-            error("private Ref apply body requires one context region: " +
+            error("private Ref apply body requires one or two verified context regions: " +
                   flowError);
             return;
         }
-        const auto* apply = graph.findRegion(graph.runtimeRefApplies.front().region);
-        if (!apply || apply->parent != graph.rootRegion) {
-            error("private Ref apply body requires a top-level region");
-            return;
+        for (size_t index = 0; index < graph.runtimeRefApplies.size(); ++index) {
+            const auto& binding = graph.runtimeRefApplies[index];
+            const auto* apply = graph.findRegion(binding.region);
+            if (!apply) {
+                error("private Ref apply has no verified region");
+                return;
+            }
+            if (index == 0) {
+                if (apply->parent != graph.rootRegion) {
+                    error("private Ref apply body requires a top-level region");
+                    return;
+                }
+            } else {
+                bool insidePrevious = false;
+                for (auto parent = apply->parent; !parent.empty();) {
+                    if (parent == graph.runtimeRefApplies[index - 1].region) {
+                        insidePrevious = true;
+                        break;
+                    }
+                    const auto* enclosing = graph.findRegion(parent);
+                    if (!enclosing)
+                        break;
+                    parent = enclosing->parent;
+                }
+                if (!insidePrevious) {
+                    error("private nested Ref apply requires a child region");
+                    return;
+                }
+            }
         }
-        size_t entries = 0, exits = 0;
+        std::vector<size_t> entries(graph.regions.size(), 0);
+        std::vector<size_t> exits(graph.regions.size(), 0);
         for (const auto& transition : refApplyFlow->edges) {
             if (transition.enters.empty() && transition.exits.empty())
                 continue;
@@ -391,24 +439,45 @@ void CodeGenerator::generateControlFlowBody(
                 error("private Ref apply body cannot lower a non-jump context transition");
                 return;
             }
-            entries += transition.enters.size();
-            exits += transition.exits.size();
+            for (const auto region : transition.enters) ++entries[region.value];
+            for (const auto region : transition.exits) ++exits[region.value];
         }
         const bool validTerminals = std::all_of(
             refApplyFlow->terminals.begin(), refApplyFlow->terminals.end(),
-            [apply](const auto& terminal) {
-                return terminal.kind == moon::TerminatorKind::Return &&
-                    terminal.exits == std::vector<moon::RegionId>{apply->id};
+            [refApplyFlow, &graph, this](const auto& terminal) {
+                if (terminal.kind == moon::TerminatorKind::Unreachable &&
+                    mProgram && moon::isExhaustiveResultDefault(
+                        graph, *mProgram, *refApplyFlow, terminal.block))
+                    return true;
+                if (terminal.kind != moon::TerminatorKind::Return ||
+                    terminal.block.value >= refApplyFlow->activeByBlock.size())
+                    return false;
+                const auto& active = refApplyFlow->activeByBlock[terminal.block.value];
+                return std::equal(terminal.exits.begin(), terminal.exits.end(),
+                                  active.rbegin(), active.rend());
             });
-        if (entries != 1 || exits + refApplyFlow->terminals.size() == 0 ||
-            !validTerminals) {
-            error("private Ref apply body requires one entry and verified return/Jump exits");
+        if (!validTerminals) {
+            error("private Ref apply body requires verified return/Jump exits");
             return;
         }
-        refContextCell = createEntryBlockAlloca(
-            func, mHelpers->ptrTy(), "ref.apply.context.owner");
-        mBuilder->CreateStore(llvm::ConstantPointerNull::get(
-            llvm::cast<llvm::PointerType>(mHelpers->ptrTy())), refContextCell);
+        for (const auto& binding : graph.runtimeRefApplies) {
+            const auto region = binding.region;
+            size_t terminalExits = 0;
+            for (const auto& terminal : refApplyFlow->terminals)
+                terminalExits += std::count(
+                    terminal.exits.begin(), terminal.exits.end(), region);
+            if (entries[region.value] != 1 ||
+                exits[region.value] + terminalExits == 0) {
+                error("private Ref apply body requires one entry per region and an exit");
+                return;
+            }
+            auto* cell = createEntryBlockAlloca(
+                func, mHelpers->ptrTy(),
+                "ref.apply.context.owner." + std::to_string(region.value));
+            mBuilder->CreateStore(llvm::ConstantPointerNull::get(
+                llvm::cast<llvm::PointerType>(mHelpers->ptrTy())), cell);
+            refContextCells[region.value] = cell;
+        }
     }
 
     std::vector<llvm::BasicBlock*> blocks;
@@ -435,70 +504,97 @@ void CodeGenerator::generateControlFlowBody(
             emitCanonicalCleanup(*record);
         }
     };
+    const auto contextOwnersFor =
+        [&refApplyFlow, &refContextCells](moon::BlockId block) {
+            std::vector<llvm::Value*> owners;
+            if (!refApplyFlow || block.value >= refApplyFlow->activeByBlock.size())
+                return owners;
+            for (const auto region : refApplyFlow->activeByBlock[block.value])
+                owners.push_back(refContextCells[region.value]);
+            return owners;
+        };
+    const auto emitContextExitCleanups =
+        [this, &graph, &emitCleanups](
+            const std::vector<moon::CleanupId>& cleanups,
+            const std::vector<moon::RegionId>& exits,
+            const std::vector<llvm::Value*>& owners,
+            const std::string& label) -> bool {
+        if (owners.size() < exits.size()) {
+            error("private Ref apply exit lost its context owner stack");
+            return false;
+        }
+        std::vector<std::vector<moon::CleanupId>> ordered(exits.size() + 1);
+        size_t lastGroup = 0;
+        for (const auto cleanup : cleanups) {
+            const auto* record = graph.findCleanup(cleanup);
+            if (!record) {
+                error("private Ref apply exit has no cleanup row");
+                return false;
+            }
+            size_t group = exits.size();
+            for (size_t index = 0; index < exits.size(); ++index) {
+                const auto* apply = graph.findRegion(exits[index]);
+                if (!apply) {
+                    error("private Ref apply exit has no region");
+                    return false;
+                }
+                for (auto scope = record->scope; !scope.empty();) {
+                    if (scope == apply->scope) {
+                        group = index;
+                        break;
+                    }
+                    const auto* parent = graph.findScope(scope);
+                    if (!parent) {
+                        error("private Ref apply exit has no cleanup scope");
+                        return false;
+                    }
+                    scope = parent->parent;
+                }
+                if (group != exits.size()) break;
+            }
+            if (group < lastGroup) {
+                error("private Ref apply exit interleaves context cleanups");
+                return false;
+            }
+            lastGroup = group;
+            ordered[group].push_back(cleanup);
+        }
+        for (size_t index = 0; index < exits.size(); ++index) {
+            emitCleanups(ordered[index], label);
+            auto* owner = owners[owners.size() - 1 - index];
+            if (!owner) {
+                error("private Ref apply exit has no context owner cell");
+                return false;
+            }
+            mHelpers->emitRuntimeFragmentContextDrop(
+                *mBuilder, *mModule, owner);
+        }
+        emitCleanups(ordered.back(), label);
+        return true;
+    };
     const auto emitReturnCleanups =
-        [this, &graph, &refApplyFlow, refContextCell, &emitCleanups](
+        [&refApplyFlow, &emitContextExitCleanups](
             moon::BlockId source,
-            const std::vector<moon::CleanupId>& cleanups) -> bool {
+            const std::vector<moon::CleanupId>& cleanups,
+            const std::vector<llvm::Value*>& owners) -> bool {
         const moon::RuntimeRefApplyFlowTerminal* terminal = nullptr;
         if (refApplyFlow)
             for (const auto& item : refApplyFlow->terminals)
                 if (item.block == source) terminal = &item;
-        if (!terminal) {
-            emitCleanups(cleanups, "canonical return cleanup");
-            return true;
-        }
-        const auto* apply = graph.findRegion(terminal->exits.front());
-        if (!apply) {
-            error("private Ref apply return has no exiting region");
-            return false;
-        }
-        std::vector<moon::CleanupId> inner, outer;
-        bool reachedOuter = false;
-        for (const auto cleanup : cleanups) {
-            const auto* record = graph.findCleanup(cleanup);
-            if (!record) {
-                error("private Ref apply return has no cleanup row");
-                return false;
-            }
-            bool withinApply = false;
-            for (auto scope = record->scope; !scope.empty();) {
-                if (scope == apply->scope) {
-                    withinApply = true;
-                    break;
-                }
-                const auto* parent = graph.findScope(scope);
-                if (!parent) {
-                    error("private Ref apply return has no cleanup scope");
-                    return false;
-                }
-                scope = parent->parent;
-            }
-            if (withinApply && reachedOuter) {
-                error("private Ref apply return interleaves inner and outer cleanups");
-                return false;
-            }
-            if (withinApply)
-                inner.push_back(cleanup);
-            else {
-                reachedOuter = true;
-                outer.push_back(cleanup);
-            }
-        }
-        emitCleanups(inner, "canonical Ref apply return inner cleanup");
-        mHelpers->emitRuntimeFragmentContextDrop(
-            *mBuilder, *mModule, refContextCell);
-        emitCleanups(outer, "canonical Ref apply return outer cleanup");
-        return true;
+        return emitContextExitCleanups(
+            cleanups, terminal ? terminal->exits :
+                std::vector<moon::RegionId>{},
+            owners, "canonical Ref apply return cleanup");
     };
     const auto emitEdge = [this, &blocks, &emitCleanups, &graph,
-                           &refApplyFlow, refContextCell](
+                           &refApplyFlow, &refContextCells, &contextOwnersFor,
+                           &emitContextExitCleanups](
         moon::BlockId source, const moon::ControlEdge& edge,
         const std::string& context) {
         if (edge.target.empty() || edge.target.value >= blocks.size()) {
             error(context + " references no LLVM block");
             return;
         }
-        emitCleanups(edge.cleanups, context);
         if (refApplyFlow) {
             const auto found = std::find_if(
                 refApplyFlow->edges.begin(), refApplyFlow->edges.end(),
@@ -510,23 +606,34 @@ void CodeGenerator::generateControlFlowBody(
                 error("private Ref apply edge has no verified transition");
                 return;
             }
-            if (!found->exits.empty())
-                mHelpers->emitRuntimeFragmentContextDrop(
-                    *mBuilder, *mModule, refContextCell);
+            const auto owners = contextOwnersFor(source);
+            if (!emitContextExitCleanups(
+                    edge.cleanups, found->exits, owners, context))
+                return;
             if (!found->enters.empty()) {
-                const auto& binding = graph.runtimeRefApplies.front();
-                if (binding.reference.value >= mCanonicalLocals.size() ||
-                    !mCanonicalLocals[binding.reference.value]) {
+                const auto region = found->enters.front();
+                const auto binding = std::find_if(
+                    graph.runtimeRefApplies.begin(),
+                    graph.runtimeRefApplies.end(),
+                    [region](const auto& item) {
+                        return item.region == region;
+                    });
+                if (binding == graph.runtimeRefApplies.end()) {
+                    error("private Ref apply entry has no binding");
+                    return;
+                }
+                if (binding->reference.value >= mCanonicalLocals.size() ||
+                    !mCanonicalLocals[binding->reference.value]) {
                     error("private Ref apply has no local Ref carrier");
                     return;
                 }
                 auto* borrowed = mBuilder->CreateLoad(
                     mHelpers->ptrTy(),
-                    mCanonicalLocals[binding.reference.value],
+                    mCanonicalLocals[binding->reference.value],
                     "ref.apply.borrowed");
                 auto* status = mHelpers->emitRuntimeFragmentRefContextOverride(
                     *mBuilder, *mModule, mCurrentFragmentContext,
-                    borrowed, binding.slot, refContextCell);
+                    borrowed, binding->slot, refContextCells[region.value]);
                 if (!status) {
                     error("private Ref apply could not emit context derivation");
                     return;
@@ -540,13 +647,17 @@ void CodeGenerator::generateControlFlowBody(
                         llvm::ConstantInt::get(mHelpers->i32Ty(), 0)),
                     accepted, failed);
                 mBuilder->SetInsertPoint(failed);
+                for (auto it = owners.rbegin(); it != owners.rend(); ++it)
+                    mHelpers->emitRuntimeFragmentContextDrop(
+                        *mBuilder, *mModule, *it);
                 auto* trap = llvm::Intrinsic::getOrInsertDeclaration(
                     mModule.get(), llvm::Intrinsic::trap);
                 mBuilder->CreateCall(trap);
                 mBuilder->CreateUnreachable();
                 mBuilder->SetInsertPoint(accepted);
             }
-        }
+        } else
+            emitCleanups(edge.cleanups, context);
         mBuilder->CreateBr(blocks[edge.target.value]);
     };
     const auto edgeTarget = [this, func, &blocks, &emitCleanups](
@@ -647,7 +758,10 @@ void CodeGenerator::generateControlFlowBody(
         if (refApplyFlow &&
             !refApplyFlow->activeByBlock[block.id.value].empty())
             mCurrentFragmentContext = mBuilder->CreateLoad(
-                mHelpers->ptrTy(), refContextCell, "ref.apply.context");
+                mHelpers->ptrTy(),
+                refContextCells[
+                    refApplyFlow->activeByBlock[block.id.value].back().value],
+                "ref.apply.context");
         for (auto& operation : block.operations) {
             if (auto* declaration =
                     dynamic_cast<moon::LetStmt*>(operation.get())) {
@@ -770,7 +884,8 @@ void CodeGenerator::generateControlFlowBody(
                     if (terminator.operand)
                         (void)generateExpr(terminator.operand.get());
                     if (!emitReturnCleanups(
-                            block.id, terminator.exitCleanups))
+                            block.id, terminator.exitCleanups,
+                            contextOwnersFor(block.id)))
                         break;
                     if (!mBuilder->GetInsertBlock()->getTerminator())
                         mBuilder->CreateRetVoid();
@@ -807,7 +922,8 @@ void CodeGenerator::generateControlFlowBody(
                         break;
                     }
                     if (!emitReturnCleanups(
-                            block.id, terminator.exitCleanups))
+                            block.id, terminator.exitCleanups,
+                            contextOwnersFor(block.id)))
                         break;
                     mBuilder->CreateRet(
                         coerceCallArgument(value, returnType));
@@ -832,12 +948,14 @@ void CodeGenerator::generateControlFlowBody(
                 // materializes the source-level return value.
                 std::function<void(const moon::BasicBlock&, const moon::Terminator&,
                                    llvm::Function*, const RuntimeCompletionTarget&, llvm::Type*,
-                                   llvm::Value*, const std::function<void()>&)>
+                                   llvm::Value*, const std::vector<llvm::Value*>&,
+                                   const std::function<void()>&)>
                     emitRuntimeSlot;
                 emitRuntimeSlot = [&](const moon::BasicBlock& block,
                                       const moon::Terminator& terminator, llvm::Function* func,
                                       const RuntimeCompletionTarget& completionTarget,
                                       llvm::Type* sourceReturnType, llvm::Value* inheritedReturn,
+                                      const std::vector<llvm::Value*>& inheritedRefContextOwners,
                                       const std::function<void()>& propagateEscape) {
                     if (!mCurrentFragmentContext) {
                         error("runtime Slot has no explicit Fragment execution context");
@@ -870,8 +988,10 @@ void CodeGenerator::generateControlFlowBody(
                                                                    "runtime.slot.arguments");
                     mBuilder->CreateStore(arguments, argumentStorage);
 
-                    std::vector<llvm::Type*> frameFields(continuationPlan.captures.size() + 2,
-                                                         mHelpers->ptrTy());
+                    std::vector<llvm::Type*> frameFields(
+                        continuationPlan.captures.size() + 2 +
+                            inheritedRefContextOwners.size(),
+                        mHelpers->ptrTy());
                     auto* frameType = llvm::StructType::get(*mCtx, frameFields);
                     auto* frame = createEntryBlockAlloca(func, frameType, "runtime.slot.frame");
                     mBuilder->CreateStore(mCurrentFragmentContext,
@@ -900,6 +1020,15 @@ void CodeGenerator::generateControlFlowBody(
                                                       static_cast<unsigned>(index + 2),
                                                       "runtime.slot.frame.capture"));
                     }
+                    for (size_t index = 0;
+                         index < inheritedRefContextOwners.size(); ++index)
+                        mBuilder->CreateStore(
+                            inheritedRefContextOwners[index],
+                            mBuilder->CreateStructGEP(
+                                frameType, frame,
+                                static_cast<unsigned>(
+                                    continuationPlan.captures.size() + 2 + index),
+                                "runtime.slot.frame.ref.context.owner"));
 
                     auto* callbackType =
                         llvm::FunctionType::get(mHelpers->i32Ty(), {mHelpers->ptrTy()}, false);
@@ -928,6 +1057,71 @@ void CodeGenerator::generateControlFlowBody(
                         mBuilder->CreateStructGEP(frameType, callback->getArg(0), 0,
                                                   "runtime.slot.context.address"),
                         "fragment.context");
+                    llvm::Value* callbackBaseContext = mCurrentFragmentContext;
+                    std::vector<llvm::Value*> callbackRefContextOwners;
+                    callbackRefContextOwners.reserve(
+                        inheritedRefContextOwners.size());
+                    for (size_t index = 0;
+                         index < inheritedRefContextOwners.size(); ++index)
+                        callbackRefContextOwners.push_back(mBuilder->CreateLoad(
+                            mHelpers->ptrTy(),
+                            mBuilder->CreateStructGEP(
+                                frameType, callback->getArg(0),
+                                static_cast<unsigned>(
+                                    continuationPlan.captures.size() + 2 + index),
+                                "runtime.slot.ref.context.owner.address"),
+                            "runtime.slot.ref.context.owner"));
+                    std::vector<llvm::Value*> callbackOwnerByRegion(
+                        graph.regions.size(), nullptr);
+                    std::vector<moon::RegionId> callbackBaseRegions;
+                    if (refApplyFlow) {
+                        callbackBaseRegions =
+                            refApplyFlow->activeByBlock[block.id.value];
+                        if (callbackBaseRegions.size() !=
+                            callbackRefContextOwners.size())
+                            error("outlined Ref apply lost its inherited owner stack");
+                        for (size_t index = 0;
+                             index < callbackBaseRegions.size() &&
+                             index < callbackRefContextOwners.size(); ++index)
+                            callbackOwnerByRegion[
+                                callbackBaseRegions[index].value] =
+                                    callbackRefContextOwners[index];
+                        for (const auto& transition : refApplyFlow->edges) {
+                            if (transition.enters.empty() ||
+                                std::find(
+                                    continuationPlan.blocks.begin(),
+                                    continuationPlan.blocks.end(),
+                                    transition.source) ==
+                                    continuationPlan.blocks.end())
+                                continue;
+                            const auto region = transition.enters.front();
+                            if (callbackOwnerByRegion[region.value]) continue;
+                            auto* cell = createEntryBlockAlloca(
+                                callback, mHelpers->ptrTy(),
+                                "ref.apply.context.owner." +
+                                    std::to_string(region.value) + ".outlined");
+                            mBuilder->CreateStore(
+                                llvm::ConstantPointerNull::get(
+                                    llvm::cast<llvm::PointerType>(
+                                        mHelpers->ptrTy())),
+                                cell);
+                            callbackOwnerByRegion[region.value] = cell;
+                        }
+                    }
+                    const auto callbackOwnersFor =
+                        [&refApplyFlow, &callbackOwnerByRegion](
+                            moon::BlockId blockId) {
+                            std::vector<llvm::Value*> owners;
+                            if (!refApplyFlow ||
+                                blockId.value >=
+                                    refApplyFlow->activeByBlock.size())
+                                return owners;
+                            for (const auto region :
+                                 refApplyFlow->activeByBlock[blockId.value])
+                                owners.push_back(
+                                    callbackOwnerByRegion[region.value]);
+                            return owners;
+                        };
                     mCanonicalLocals.assign(graph.locals.size(), nullptr);
                     mCanonicalLocalTypes.assign(graph.locals.size(), nullptr);
                     mCanonicalDeviceBufferLengths.assign(graph.locals.size(), nullptr);
@@ -962,7 +1156,7 @@ void CodeGenerator::generateControlFlowBody(
                     }
 
                     std::vector<llvm::BasicBlock*> continuationBlocks(graph.blocks.size(), nullptr);
-                    for (const auto blockId : continuationPlan.region->blocks)
+                    for (const auto blockId : continuationPlan.blocks)
                         continuationBlocks[blockId.value] = llvm::BasicBlock::Create(
                             *mCtx, "runtime.slot.cfg." + std::to_string(blockId.value), callback);
                     auto* callbackCompletion =
@@ -995,6 +1189,102 @@ void CodeGenerator::generateControlFlowBody(
                         mBuilder->restoreIP(saved);
                         return bridge;
                     };
+                    const auto emitOutlinedJump =
+                        [&](moon::BlockId source,
+                            const moon::ControlEdge& edge) {
+                            auto* target = callbackTarget(edge.target);
+                            if (!target) {
+                                error("outlined Ref apply Jump has no target");
+                                mBuilder->CreateUnreachable();
+                                return;
+                            }
+                            if (!refApplyFlow) {
+                                mBuilder->CreateBr(outlinedEdgeTarget(
+                                    edge, "runtime.slot.jump.cleanup"));
+                                return;
+                            }
+                            const auto found = std::find_if(
+                                refApplyFlow->edges.begin(),
+                                refApplyFlow->edges.end(),
+                                [source, &edge](const auto& transition) {
+                                    return transition.source == source &&
+                                           transition.target == edge.target;
+                                });
+                            if (found == refApplyFlow->edges.end()) {
+                                error("outlined Ref apply Jump has no verified transition");
+                                mBuilder->CreateUnreachable();
+                                return;
+                            }
+                            const auto owners = callbackOwnersFor(source);
+                            if (std::any_of(owners.begin(), owners.end(),
+                                            [](llvm::Value* owner) {
+                                                return !owner;
+                                            }) ||
+                                !emitContextExitCleanups(
+                                    edge.cleanups, found->exits, owners,
+                                    "outlined Ref apply Jump cleanup")) {
+                                error("outlined Ref apply Jump lost an owner cell");
+                                mBuilder->CreateUnreachable();
+                                return;
+                            }
+                            if (!found->enters.empty()) {
+                                const auto region = found->enters.front();
+                                const auto binding = std::find_if(
+                                    graph.runtimeRefApplies.begin(),
+                                    graph.runtimeRefApplies.end(),
+                                    [region](const auto& item) {
+                                        return item.region == region;
+                                    });
+                                if (binding == graph.runtimeRefApplies.end() ||
+                                    !callbackOwnerByRegion[region.value] ||
+                                    binding->reference.value >=
+                                        mCanonicalLocals.size() ||
+                                    !mCanonicalLocals[
+                                        binding->reference.value]) {
+                                    error("outlined Ref apply entry lost its Ref or owner cell");
+                                    mBuilder->CreateUnreachable();
+                                    return;
+                                }
+                                auto* borrowed = mBuilder->CreateLoad(
+                                    mHelpers->ptrTy(),
+                                    mCanonicalLocals[
+                                        binding->reference.value],
+                                    "ref.apply.borrowed.outlined");
+                                auto* status =
+                                    mHelpers->emitRuntimeFragmentRefContextOverride(
+                                        *mBuilder, *mModule,
+                                        mCurrentFragmentContext, borrowed,
+                                        binding->slot,
+                                        callbackOwnerByRegion[region.value]);
+                                if (!status) {
+                                    error("outlined Ref apply could not derive its context");
+                                    mBuilder->CreateUnreachable();
+                                    return;
+                                }
+                                auto* accepted = llvm::BasicBlock::Create(
+                                    *mCtx, "ref.apply.accepted", callback);
+                                auto* failed = llvm::BasicBlock::Create(
+                                    *mCtx, "ref.apply.failed", callback);
+                                mBuilder->CreateCondBr(
+                                    mBuilder->CreateICmpEQ(
+                                        status,
+                                        llvm::ConstantInt::get(
+                                            mHelpers->i32Ty(), 0)),
+                                    accepted, failed);
+                                mBuilder->SetInsertPoint(failed);
+                                for (auto it = owners.rbegin();
+                                     it != owners.rend(); ++it)
+                                    mHelpers->emitRuntimeFragmentContextDrop(
+                                        *mBuilder, *mModule, *it);
+                                auto* trap =
+                                    llvm::Intrinsic::getOrInsertDeclaration(
+                                        mModule.get(), llvm::Intrinsic::trap);
+                                mBuilder->CreateCall(trap);
+                                mBuilder->CreateUnreachable();
+                                mBuilder->SetInsertPoint(accepted);
+                            }
+                            mBuilder->CreateBr(target);
+                        };
                     const auto emitCaptureWriteback = [&]() {
                         for (size_t index = 0; index < continuationPlan.captures.size(); ++index) {
                             const auto local = continuationPlan.captures[index];
@@ -1014,11 +1304,31 @@ void CodeGenerator::generateControlFlowBody(
                                 destination);
                         }
                     };
-                    for (const auto blockId : continuationPlan.region->blocks) {
+                    for (const auto blockId : continuationPlan.blocks) {
                         const auto* continuationBlock = graph.findBlock(blockId);
                         auto* llvmBlock = continuationBlocks[blockId.value];
                         if (!continuationBlock || !llvmBlock) continue;
                         mBuilder->SetInsertPoint(llvmBlock);
+                        if (refApplyFlow) {
+                            const auto& active =
+                                refApplyFlow->activeByBlock[blockId.value];
+                            const auto owners = callbackOwnersFor(blockId);
+                            if (owners.size() != active.size() ||
+                                std::any_of(owners.begin(), owners.end(),
+                                            [](llvm::Value* owner) {
+                                                return !owner;
+                                            })) {
+                                error("outlined Ref apply block lost its owner stack");
+                                mBuilder->CreateUnreachable();
+                                continue;
+                            }
+                            mCurrentFragmentContext =
+                                active == callbackBaseRegions
+                                    ? callbackBaseContext
+                                    : mBuilder->CreateLoad(
+                                        mHelpers->ptrTy(), owners.back(),
+                                        "ref.apply.context.outlined");
+                        }
                         for (const auto& operation : continuationBlock->operations) {
                             if (const auto* declaration =
                                     dynamic_cast<const moon::LetStmt*>(operation.get())) {
@@ -1066,8 +1376,8 @@ void CodeGenerator::generateControlFlowBody(
                         if (mBuilder->GetInsertBlock()->getTerminator()) continue;
                         const auto& callbackTerminator = continuationBlock->terminator;
                         if (callbackTerminator.kind == moon::TerminatorKind::Jump) {
-                            mBuilder->CreateBr(outlinedEdgeTarget(callbackTerminator.primary,
-                                                                  "runtime.slot.jump.cleanup"));
+                            emitOutlinedJump(continuationBlock->id,
+                                             callbackTerminator.primary);
                         } else if (callbackTerminator.kind == moon::TerminatorKind::Branch) {
                             llvm::Value* condition = generateExpr(callbackTerminator.operand.get());
                             auto* yes = outlinedEdgeTarget(callbackTerminator.primary,
@@ -1176,6 +1486,7 @@ void CodeGenerator::generateControlFlowBody(
                                 "runtime.slot.nested.return");
                             emitRuntimeSlot(*continuationBlock, callbackTerminator, callback,
                                             outlinedEdgeTarget, sourceReturnType, returnStorage,
+                                            callbackOwnersFor(continuationBlock->id),
                                             [&]() {
                                                 emitCaptureWriteback();
                                                 mBuilder->CreateRet(llvm::ConstantInt::get(
@@ -1186,12 +1497,12 @@ void CodeGenerator::generateControlFlowBody(
                             llvm::Value* returnValue = nullptr;
                             if (callbackTerminator.operand)
                                 returnValue = generateExpr(callbackTerminator.operand.get());
-                            for (const auto cleanupId : callbackTerminator.exitCleanups) {
-                                const auto* cleanup = graph.findCleanup(cleanupId);
-                                if (!cleanup)
-                                    error("runtime Slot return references no cleanup row");
-                                else
-                                    emitCanonicalCleanup(*cleanup);
+                            if (!emitReturnCleanups(
+                                    continuationBlock->id,
+                                    callbackTerminator.exitCleanups,
+                                    callbackOwnersFor(continuationBlock->id))) {
+                                mBuilder->CreateUnreachable();
+                                continue;
                             }
                             emitCaptureWriteback();
                             if (!sourceReturnType->isVoidTy()) {
@@ -1270,12 +1581,18 @@ void CodeGenerator::generateControlFlowBody(
                         mBuilder->CreateRet(mBuilder->CreateLoad(sourceReturnType, escapedReturn,
                                                                  "runtime.slot.escaped.value"));
                     mBuilder->SetInsertPoint(failed);
+                    for (auto it = inheritedRefContextOwners.rbegin();
+                         it != inheritedRefContextOwners.rend(); ++it)
+                        mHelpers->emitRuntimeFragmentContextDrop(
+                            *mBuilder, *mModule, *it);
                     auto* trap = llvm::Intrinsic::getOrInsertDeclaration(mModule.get(),
                                                                          llvm::Intrinsic::trap);
                     mBuilder->CreateCall(trap);
                     mBuilder->CreateUnreachable();
                 };
-                emitRuntimeSlot(block, terminator, func, edgeTarget, func->getReturnType(), nullptr,
+                emitRuntimeSlot(block, terminator, func, edgeTarget,
+                                func->getReturnType(), nullptr,
+                                contextOwnersFor(block.id),
                                 {});
                 break;
             }

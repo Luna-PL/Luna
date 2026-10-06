@@ -409,7 +409,12 @@ execute_process(
     RESULT_VARIABLE process_tree_result
     OUTPUT_VARIABLE process_tree_output
     ERROR_VARIABLE process_tree_errors
-    TIMEOUT 8
+    # This session performs several JIT runs before exercising process-tree
+    # cleanup. Parallel CTest load can make compilation exceed a short wall
+    # clock bound even when cleanup is correct; the slow atexit callback and
+    # descendant marker below still verify that shutdown actually kills the
+    # complete worker tree.
+    TIMEOUT 30
 )
 execute_process(COMMAND "${CMAKE_COMMAND}" -E sleep 3)
 string(REGEX MATCHALL "= 1([^0-9]|$)" process_local_sequence_results

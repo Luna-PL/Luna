@@ -4,6 +4,8 @@
 
 namespace moon {
 
+struct Module;
+
 // Canonical control-flow tables are intentionally local-based rather than
 // SSA-based. Table indices are the serialized identities; source names are
 // diagnostic payload only. Regions and scopes describe structure and
@@ -161,5 +163,12 @@ struct RuntimeRefApplyFlowPlan {
 
 std::optional<RuntimeRefApplyFlowPlan> planRuntimeRefApplyFlow(
     const ControlFlowGraph& graph, std::string& error);
+
+// True only for an unreachable default arm of an exhaustive Result tag switch.
+// This arm has no executable cleanup obligation: the tag is one bit and the
+// two cases cover both values. All incoming edges must satisfy that shape.
+bool isExhaustiveResultDefault(
+    const ControlFlowGraph& graph, const Module& module,
+    const RuntimeRefApplyFlowPlan& flow, BlockId block);
 
 } // namespace moon

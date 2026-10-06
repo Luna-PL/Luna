@@ -14,6 +14,10 @@ static_assert(
         static_cast<uint32_t>(LUNA_NATIVE_EXPORT_CALLABLE_V1),
     "Native and internal generation callable flags must agree");
 static_assert(
+    static_cast<uint32_t>(luna::runtime::GenerationEntryAbiCI32NoArgsV1) ==
+        static_cast<uint32_t>(LUNA_NATIVE_ENTRY_ABI_C_I32_NOARGS_V1),
+    "Native and internal generation entry profiles must agree");
+static_assert(
     static_cast<uint32_t>(LUNA_NATIVE_DECLARATION_FUNCTION_V1) ==
         static_cast<uint32_t>(LUNA_RUNTIME_DECLARATION_FUNCTION_V1) &&
     static_cast<uint32_t>(LUNA_NATIVE_DECLARATION_FRAGMENT_V1) ==
@@ -80,6 +84,8 @@ bool stageVerifiedNativeGeneration(
                     ? exported->entry : static_cast<const void*>(exported);
                 binding.declarationKind = exported->declaration_kind;
                 binding.flags = exported->flags;
+                binding.entryAbi = library->entryAbiForExport(
+                    binding.symbolId, binding.contractId);
                 bindings.push_back(std::move(binding));
             }
             return true;

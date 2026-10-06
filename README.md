@@ -170,7 +170,10 @@ before adding or moving implementation files.
 
 ## Platform and test status
 
-Linux and macOS are Luna's primary targets. Windows is supported through MSYS2 UCRT64. The stable core is exercised by native CI on all three platforms, and all repository changes are tested locally on Linux.
+Linux and macOS are Luna's primary targets. Windows CI uses MSYS2 UCRT64;
+MSYS2 CLANG64 is also supported for local development. The stable core has
+native CI workflows on all three platforms. Local and remote results for a
+particular change must be checked separately.
 
 The current local hardware validation environment is:
 
@@ -191,14 +194,20 @@ Alpha roadmap:
 
 1. priority item 16 has completed the repository-wide legacy production audit
    and removed the old Dynamic, Rc/Arc-special, slot/plugin, and console paths;
-2. priority item 17 is aligning formatter, LSP, Lunax, packaging, benchmarks,
-   documentation, and release gates with only the final 0.3 semantics; root
-   publication remains blocked until compatible toolchain and Lunax releases
-   are recorded in the ecosystem lock;
-3. priority item 18 will establish whole-toolchain performance budgets and
+2. priority item 17 has published Toolchains and Lunax 0.2.0 evidence in the
+   ecosystem lock. Root publication is still blocked: the locked Luna candidate
+   is not an ancestor of current `main`, so release readiness rejects the
+   snapshot despite its `release-ready` label. Reconcile the candidate lineage
+   and renew child evidence before attempting the root tag;
+3. source `RuntimeFragmentRef<S>` apply is under development. A private test
+   path executes a restricted body, while public ingress, container publication,
+   and complete cleanup remain open;
+4. priority item 18 will establish whole-toolchain performance budgets and
    address loop/array throughput first, without weakening safety checks.
 
-See the [0.3 implementation priorities](docs/luna_0.3_design.md#9-implementation-priority).
+See the [0.3 implementation priorities](docs/luna_0.3_design.md#9-implementation-priority),
+[ecosystem release state](docs/ecosystem_release.md), and
+[source Ref/apply gates](docs/slot_fragment_runtime_plan.md#next-source-refapply-gates-updated-2026-10-04).
 
 ## Documentation
 

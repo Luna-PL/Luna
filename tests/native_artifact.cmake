@@ -10,10 +10,15 @@ endif()
 if(NOT DEFINED Python3_EXECUTABLE OR NOT EXISTS "${Python3_EXECUTABLE}")
     message(FATAL_ERROR "Python3_EXECUTABLE is required")
 endif()
+if(NOT DEFINED LUNA_AOT_COMPILER OR NOT EXISTS "${LUNA_AOT_COMPILER}")
+    message(FATAL_ERROR "LUNA_AOT_COMPILER is required for the v1 fixture")
+endif()
 
 set(work_dir "${LUNA_BINARY_DIR}/native-artifact")
 set(package_dir "${work_dir}/native_library")
 set(enemy_package_dir "${work_dir}/native_enemy")
+set(context_package_dir "${work_dir}/native_context")
+set(ref_package_dir "${work_dir}/native_ref")
 file(REMOVE_RECURSE "${work_dir}")
 file(MAKE_DIRECTORY "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/cffi_typed_export"
@@ -22,6 +27,18 @@ file(RENAME "${work_dir}/cffi_typed_export" "${package_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/cffi_typed_export"
      DESTINATION "${work_dir}")
 file(RENAME "${work_dir}/cffi_typed_export" "${enemy_package_dir}")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/cffi_typed_export"
+     DESTINATION "${work_dir}")
+file(RENAME "${work_dir}/cffi_typed_export" "${context_package_dir}")
+file(APPEND "${context_package_dir}/src/api.luna"
+     "\nexport slot checkpoint(value: i32);\n"
+     "export runtime fn host_entry() { checkpoint(1) {} }\n")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/cffi_typed_export"
+     DESTINATION "${work_dir}")
+file(RENAME "${work_dir}/cffi_typed_export" "${ref_package_dir}")
+file(APPEND "${ref_package_dir}/src/api.luna"
+     "\nexport slot ref_checkpoint(value: i32);\n"
+     "export fn host_ref(selected: RuntimeFragmentRef<ref_checkpoint>) -> unit {}\n")
 
 file(READ "${enemy_package_dir}/src/api.luna" enemy_source)
 string(REPLACE "return 42;" "return 13;" enemy_source "${enemy_source}")
@@ -39,6 +56,39 @@ else()
 endif()
 set(ir "${artifact}.ll")
 set(trust "${artifact}.trust")
+string(REPLACE "${package_dir}" "${context_package_dir}"
+       context_artifact "${artifact}")
+string(REPLACE "${package_dir}" "${ref_package_dir}"
+       ref_artifact "${artifact}")
+
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${context_package_dir}" -t native -O2
+    RESULT_VARIABLE context_build_result
+    OUTPUT_VARIABLE context_build_output
+    ERROR_VARIABLE context_build_error)
+string(FIND "${context_build_output}\n${context_build_error}"
+       "has no runtime-aware public entry ABI" context_gate_diagnostic)
+if(context_build_result EQUAL 0 OR context_gate_diagnostic EQUAL -1 OR
+   EXISTS "${context_artifact}" OR EXISTS "${context_artifact}.trust")
+    message(FATAL_ERROR
+        "Native v1 published a context-dependent function without a typed entry ABI.\n"
+        "${context_build_output}\n${context_build_error}")
+endif()
+
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${ref_package_dir}" -t native -O2
+    RESULT_VARIABLE ref_build_result
+    OUTPUT_VARIABLE ref_build_output
+    ERROR_VARIABLE ref_build_error)
+string(FIND "${ref_build_output}\n${ref_build_error}"
+       "RuntimeFragmentRef source import/dropGlue/wire ABI is not implemented"
+       ref_gate_diagnostic)
+if(ref_build_result EQUAL 0 OR ref_gate_diagnostic EQUAL -1 OR
+   EXISTS "${ref_artifact}" OR EXISTS "${ref_artifact}.trust")
+    message(FATAL_ERROR
+        "Native v1 published a RuntimeFragmentRef source entry without a typed ABI.\n"
+        "${ref_build_output}\n${ref_build_error}")
+endif()
 
 execute_process(
     COMMAND "${LUNA_EXECUTABLE}" build "${package_dir}" -t native -O2
@@ -65,18 +115,23 @@ endif()
 file(READ "${ir}" ir_text)
 string(FIND "${ir_text}" "@luna_native_proof_v1" proof_symbol)
 string(FIND "${ir_text}" "@luna_native_library_descriptor_v1" descriptor_query)
+string(FIND "${ir_text}" "@luna_native_library_descriptor_v2" typed_descriptor_query)
 if(WIN32)
     string(FIND "${ir_text}" "section \".luna$proof\"" proof_section)
     string(FIND "${ir_text}" "section \".luna$desc\"" descriptor_section)
+    string(FIND "${ir_text}" "section \".luna$desc2\"" typed_descriptor_section)
 elseif(APPLE)
     string(FIND "${ir_text}" "section \"__DATA,__luna_proof\"" proof_section)
     string(FIND "${ir_text}" "section \"__DATA,__luna_desc\"" descriptor_section)
+    string(FIND "${ir_text}" "section \"__DATA,__luna_desc2\"" typed_descriptor_section)
 else()
     string(FIND "${ir_text}" "section \".luna.native.proof\"" proof_section)
     string(FIND "${ir_text}" "section \".luna.native.descriptor\"" descriptor_section)
+    string(FIND "${ir_text}" "section \".luna.native.descriptor.v2\"" typed_descriptor_section)
 endif()
 if(proof_symbol EQUAL -1 OR proof_section EQUAL -1 OR
-   descriptor_query EQUAL -1 OR descriptor_section EQUAL -1)
+   descriptor_query EQUAL -1 OR descriptor_section EQUAL -1 OR
+   typed_descriptor_query EQUAL -1 OR typed_descriptor_section EQUAL -1)
     message(FATAL_ERROR
         "Native proof or typed descriptor registry is missing from emitted IR")
 endif()
@@ -101,6 +156,89 @@ execute_process(
 if(NOT oracle_result EQUAL 0)
     message(FATAL_ERROR
         "independent Native proof oracle failed.\n${oracle_output}\n${oracle_error}")
+endif()
+
+# This separate C library implements only descriptor/proof v1. Its proof is
+# prepared and sealed after the platform compiler links it, so it exercises
+# compatibility with an independently produced artifact rather than a renamed
+# query inside the current Luna-generated v2 image.
+if(WIN32)
+    set(legacy_artifact "${work_dir}/independent-v1.dll")
+elseif(APPLE)
+    set(legacy_artifact "${work_dir}/libindependent-v1.dylib")
+else()
+    set(legacy_artifact "${work_dir}/libindependent-v1.so")
+endif()
+set(legacy_trust "${legacy_artifact}.trust")
+set(legacy_link_mode -shared)
+if(APPLE)
+    set(legacy_link_mode -dynamiclib)
+endif()
+execute_process(
+    COMMAND "${LUNA_AOT_COMPILER}" -x c -std=c11 -fPIC
+        ${legacy_link_mode}
+        -I "${LUNA_SOURCE_DIR}/src"
+        "${LUNA_SOURCE_DIR}/tests/fixtures/native_v1_artifact_fixture.c"
+        -o "${legacy_artifact}"
+    RESULT_VARIABLE legacy_compile_result
+    OUTPUT_VARIABLE legacy_compile_output
+    ERROR_VARIABLE legacy_compile_error)
+if(NOT legacy_compile_result EQUAL 0 OR NOT EXISTS "${legacy_artifact}")
+    message(FATAL_ERROR "independent Native v1 fixture did not link.\n"
+        "${legacy_compile_output}\n${legacy_compile_error}")
+endif()
+execute_process(
+    COMMAND "${LUNA_NATIVE_VERIFIER}" --prepare-legacy
+        "${legacy_artifact}" "${legacy_trust}"
+    RESULT_VARIABLE legacy_seal_result
+    ERROR_VARIABLE legacy_seal_error)
+if(NOT legacy_seal_result EQUAL 0 OR NOT EXISTS "${legacy_trust}")
+    message(FATAL_ERROR "independent Native v1 fixture did not seal.\n"
+        "${legacy_seal_error}")
+endif()
+execute_process(
+    COMMAND "${LUNA_NATIVE_VERIFIER}" "${legacy_artifact}" "${legacy_trust}"
+    RESULT_VARIABLE legacy_verify_result
+    ERROR_VARIABLE legacy_verify_error)
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+        "${LUNA_SOURCE_DIR}/tests/native_artifact_oracle.py"
+        "${legacy_artifact}" "${legacy_trust}"
+    RESULT_VARIABLE legacy_oracle_result
+    ERROR_VARIABLE legacy_oracle_error)
+execute_process(
+    COMMAND "${LUNA_NATIVE_VERIFIER}" --load-call
+        "${legacy_artifact}" "${legacy_trust}"
+        "symbol:legacy-answer" "contract:legacy-v1"
+    RESULT_VARIABLE legacy_call_result
+    OUTPUT_VARIABLE legacy_call_output
+    ERROR_VARIABLE legacy_call_error)
+execute_process(
+    COMMAND "${LUNA_NATIVE_VERIFIER}" --load-legacy-generation
+        "${legacy_artifact}" "${legacy_trust}"
+        "symbol:legacy-answer" "contract:legacy-v1"
+    RESULT_VARIABLE legacy_generation_result
+    OUTPUT_VARIABLE legacy_generation_output
+    ERROR_VARIABLE legacy_generation_error)
+execute_process(
+    COMMAND "${LUNA_NATIVE_VERIFIER}" --load-typed-call
+        "${legacy_artifact}" "${legacy_trust}"
+        "symbol:legacy-answer" "contract:legacy-v1"
+    RESULT_VARIABLE legacy_typed_result
+    ERROR_VARIABLE legacy_typed_error)
+string(FIND "${legacy_typed_error}" "no v2 typed descriptor"
+       legacy_typed_diagnostic)
+if(NOT legacy_verify_result EQUAL 0 OR NOT legacy_oracle_result EQUAL 0 OR
+   NOT legacy_call_result EQUAL 0 OR NOT legacy_call_output STREQUAL "7\n" OR
+   NOT legacy_generation_result EQUAL 0 OR
+   NOT legacy_generation_output STREQUAL "v1-only\n" OR
+   legacy_typed_result EQUAL 0 OR legacy_typed_diagnostic EQUAL -1)
+    message(FATAL_ERROR
+        "independent Native v1 compatibility fixture failed.\n"
+        "verify: ${legacy_verify_error}\noracle: ${legacy_oracle_error}\n"
+        "call: ${legacy_call_output} ${legacy_call_error}\n"
+        "generation: ${legacy_generation_output} ${legacy_generation_error}\n"
+        "typed: ${legacy_typed_error}")
 endif()
 execute_process(
     COMMAND "${Python3_EXECUTABLE}"

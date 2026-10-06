@@ -1,15 +1,16 @@
 # Ecosystem release snapshot
 
 `ecosystem.lock.json` is the authoritative snapshot connecting the otherwise independent
-Luna, LunaToolchain, and Lunax repositories. The checked-in snapshot is the promoted 0.3.0
-ecosystem release-candidate snapshot. The Luna component is the commit containing the lock file; child
-components use exact Git commits. Language, diagnostic, and analysis protocol versions are
+Luna, LunaToolchain, and Lunax repositories. The checked-in snapshot declares
+a promoted 0.3.0 ecosystem release candidate, subject to the lineage and
+readiness checks below. The Luna component is the commit containing the lock
+file; child components use exact Git commits. Language, diagnostic, and analysis protocol versions are
 recorded separately from component package versions.
 For a released child component, `commit` tracks the current verification source while
 `published_release.commit` records the immutable commit behind the public artifacts. Release
 URLs, publication time, the checksum manifest digest, and every artifact digest are retained as
-evidence. Consumer verification remains explicitly pending until clean runners have downloaded,
-checked, extracted, and executed all supported platform packages.
+evidence. The current lock records passed child consumer verification and attestations; those
+records refer to the Luna source candidate pinned by the child releases.
 
 The snapshot is not publishable while `release.publish` is false. Promotion requires
 `status: release-ready`, the locked language version and all Luna compatibility tags to equal
@@ -81,6 +82,78 @@ and before any platform package starts, it redownloads each child release's comp
 set, resolves lightweight or annotated tags to the final commit, and reverifies checksums,
 `LUNA-SOURCE-COMMIT`, and GitHub/Sigstore attestations. The independent Release evidence workflow
 and final tag publication use the same verification script so the two gates cannot drift.
+
+## Current lineage and next release gate (2026-10-06)
+
+The checked-in lock records Toolchains and Lunax `v0.2.0` releases and marks the
+snapshot `release-ready` with `release.publish: true`. Those child releases are
+published, but their common verified Luna source commit `41ce85e` is not an
+ancestor of current Luna `main` (`8fae950`). The local
+`verify_release_readiness.cmake` check explicitly reports this blocker, and
+strict `REQUIRE_READY=ON` fails. The non-strict exit status means the blocking
+policy worked, not that publication is allowed. The root `v0.3.0` tag is absent.
+This check did not rerun remote CI or online asset/attestation verification.
+
+On 2026-10-03 the local CLANG64 non-hardware suite passed 76/77 tests with
+four workers; `luna.repl-smoke` timed out during process-tree cleanup under
+parallel load and passed when rerun alone. Its wall-clock bound was then
+adjusted for JIT setup while preserving the cleanup assertions. The complete
+suite passed 77/77 with four workers on 2026-10-04.
+After rebuilding the current worktree on 2026-10-06, the same local suite
+passed 77/77 with four workers in 71.18 seconds, including REPL and Native
+artifact gates. The read-only release-readiness check again reported that
+`41ce85e` is not an ancestor of `8fae950`; it returned success only because
+the fail-closed policy correctly blocked publication. The worktree remains
+uncommitted, so this run is not evidence for an immutable release candidate.
+An isolated WSL Arch Linux Clang/LLVM 22.1.8 build compiled all targets and
+passed the complete local Linux CTest suite 76/76 with four workers in 67.15
+seconds. The first run passed 75/76: `luna.ecosystem-frozen-baseline` saw the
+Windows checkout's CRLF files as modified because WSL Git did not inherit the
+Windows system `core.autocrlf=true` setting. Both child worktrees were clean
+under that setting; a process-local Git configuration made the failed test
+pass and the complete rerun pass. This does not replace the release
+candidate's required platform CI.
+The current worktree adds an experimental parallel Native v2 `i32()` entry
+profile, with v1 proof/export compatibility preserved. Focused Native artifact
+and canonical tests pass on Windows CLANG64 and WSL Arch Linux. In the later
+complete local runs, Windows passed 76/77 and Linux 75/76; each sole failure
+was the file-guide inventory missing the new helper header. After adding that
+entry, the inventory test passed on both platforms. These are local worktree
+results, not evidence for an immutable release candidate or remote CI.
+The next worktree revision carries the validated v2 profile through Native
+generation bindings and typed pinned calls, and checks profile preservation
+across load-once and switching. A resealed v1-only-query variant loads through
+the old path but cannot satisfy a typed requirement. After rebuilding all
+targets, the full local CLANG64 suite passed 77/77 in 66.69 seconds and the
+full WSL Arch Linux suite passed 76/76 in 90.60 seconds. These runs still do
+not establish an immutable candidate or remote platform evidence.
+An independently compiled v1-only C library was then sealed with its own
+proof/trust record. The independent proof oracle, v1 call, unprofiled
+generation and typed-lookup rejection pass in the focused Native artifact
+CTest on both platforms; the preceding full-suite counts predate this fixture.
+The local v2 candidate now pins its 64-bit C record offsets and SHA-256 row
+framing; independently resealed unknown-profile artifacts are rejected.
+Native artifact, MoonRuntime and runtime-ABI focused tests pass on both local
+platforms after these checks. This remains a local candidate pending host ABI
+review and platform CI on an immutable commit.
+The release package list and CI workflows cover 64-bit Linux, Windows and the
+macOS runner architecture, with no listed 32-bit package. The macOS workflow
+already includes the Native artifact CTest; it has not run on this uncommitted
+worktree. The freestanding 32-bit C layout probe is now wired into Clang
+CTest for GNU/Linux, Windows GNU and Darwin targets. Its three tests and the
+file-guide inventory pass locally on Windows CLANG64 and WSL Arch Linux; it
+does not exercise a 32-bit loader or artifact. The complete non-hardware
+CTest suites now pass 80/80 and 79/79 respectively after this integration.
+The next ABI gate is immutable-candidate platform CI and host review of the
+parallel query/version rule; 32-bit support would require its own runtime gate.
+Establish a new immutable Luna candidate containing the intended source,
+tests and workflows.
+Build and verify new
+child release evidence against that exact commit without moving existing
+tags or reusing their source-commit claims. Then update the lock with the
+matching evidence and pass root platform CI, strict readiness and the online
+Release evidence gate before creating the Luna tag. A status-only lock edit
+cannot repair the current candidate lineage.
 
 ## Release handoff decision register (2026-09-15)
 

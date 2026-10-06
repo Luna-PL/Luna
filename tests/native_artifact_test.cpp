@@ -1,18 +1,86 @@
 #include "driver/NativeArtifact.h"
 #include "driver/NativeGeneration.h"
 
+#include <llvm/TargetParser/Host.h>
+
+#include <algorithm>
 #include <chrono>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <thread>
+#include <utility>
+#include <vector>
 
 namespace {
 
 int fail(const char* message) {
     std::cerr << message << '\n';
     return 1;
+}
+
+int prepareLegacyFixture(int argc, char** argv) {
+    if (argc != 4) return 2;
+    const std::string targetAbi = llvm::sys::getProcessTriple();
+    if (targetAbi.empty() || targetAbi.size() >= 128)
+        return fail("legacy fixture target ABI exceeds its bounded field");
+    std::ifstream source(argv[2], std::ios::binary);
+    if (!source) return fail("cannot read independent v1 fixture");
+    std::vector<uint8_t> bytes(
+        (std::istreambuf_iterator<char>(source)),
+        std::istreambuf_iterator<char>());
+    const std::string marker = "LUNA_TEST_TARGET_ABI_PLACEHOLDER";
+    const auto target = std::search(
+        bytes.begin(), bytes.end(), marker.begin(), marker.end());
+    if (target == bytes.end() ||
+        std::search(target + 1, bytes.end(),
+                    marker.begin(), marker.end()) != bytes.end() ||
+        static_cast<size_t>(bytes.end() - target) < 128)
+        return fail("independent v1 fixture has no unique target ABI field");
+    std::fill_n(target, 128, 0);
+    std::copy(targetAbi.begin(), targetAbi.end(), target);
+
+    const uint8_t magic[] = {'L', 'U', 'N', 'A', 'N', 'P', '1', 0};
+    const auto proof = std::search(
+        bytes.begin(), bytes.end(), std::begin(magic), std::end(magic));
+    if (proof == bytes.end() ||
+        std::search(proof + 1, bytes.end(),
+                    std::begin(magic), std::end(magic)) != bytes.end() ||
+        static_cast<size_t>(bytes.end() - proof) < sizeof(LunaNativeProofV1))
+        return fail("independent v1 fixture has no unique proof placeholder");
+    luna::driver::NativeExportSpec exported;
+    exported.declarationKind = LUNA_NATIVE_DECLARATION_FUNCTION_V1;
+    exported.flags = LUNA_NATIVE_EXPORT_CALLABLE_V1;
+    exported.symbolId = "symbol:legacy-answer";
+    exported.contractId = "contract:legacy-v1";
+    exported.linkageName = "legacy_answer";
+    luna::driver::NativeProofSpec spec;
+    spec.packageId = "org.luna.fixture.native_v1";
+    spec.packageVersion = "1.0.0";
+    spec.targetAbi = targetAbi;
+    spec.compilerIdentity = "luna-v1-compat-fixture";
+    spec.exportedDescriptors.push_back(
+        luna::driver::canonicalNativeExport(exported));
+    std::vector<uint8_t> record;
+    std::string error;
+    if (!luna::driver::makeNativeProofPlaceholder(spec, record, error)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    std::copy(record.begin(), record.end(), proof);
+    std::ofstream output(argv[2], std::ios::binary | std::ios::trunc);
+    output.write(reinterpret_cast<const char*>(bytes.data()),
+                 static_cast<std::streamsize>(bytes.size()));
+    output.close();
+    if (!output) return fail("cannot write independent v1 fixture proof");
+    luna::driver::NativeProofInfo sealed;
+    if (!luna::driver::sealNativeArtifact(argv[2], argv[3],
+                                          sealed, error)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    return 0;
 }
 
 struct LoadPause {
@@ -79,20 +147,67 @@ int loadAndCall(int argc, char** argv) {
     return 0;
 }
 
+int loadTypedAndCall(int argc, char** argv) {
+    if (argc != 6) return 2;
+    luna::driver::VerifiedNativeLibrary library;
+    std::string error;
+    if (!luna::driver::loadVerifiedNativeLibrary(
+            argv[2], argv[3], library, error)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    luna::driver::VerifiedNativeLibrary moved(std::move(library));
+    if (library || !moved) return fail("Native typed library move lost its lease");
+    int32_t answer = 0;
+    if (!moved.callI32NoArgs(argv[4], argv[5], answer, error)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    int32_t ignored = 0;
+    std::string absentError;
+    if (moved.callI32NoArgs(argv[4], "wrong-contract", ignored,
+                            absentError) || absentError.empty())
+        return fail("Native typed lookup accepted a wrong contract");
+    std::cout << answer << '\n';
+    return 0;
+}
+
+int loadLegacyGeneration(int argc, char** argv) {
+    if (argc != 6) return 2;
+    luna::runtime::MoonRuntime runtime;
+    luna::runtime::MoonRuntime::PinnedGeneration loaded;
+    std::string error;
+    if (!luna::driver::loadVerifiedNativeGenerationOnce(
+            runtime, argv[2], argv[3], loaded, error)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    const luna::runtime::GenerationBindingRequirement unprofiled{
+        argv[4], argv[5], LUNA_NATIVE_DECLARATION_FUNCTION_V1,
+        LUNA_NATIVE_EXPORT_CALLABLE_V1,
+        luna::runtime::GenerationEntryAbiUnprofiled};
+    auto typed = unprofiled;
+    typed.entryAbi = luna::runtime::GenerationEntryAbiCI32NoArgsV1;
+    auto binding = loaded.find(unprofiled);
+    int32_t ignored = 0;
+    if (!binding || binding.entryAbi() !=
+            luna::runtime::GenerationEntryAbiUnprofiled ||
+        loaded.find(typed) || binding.callI32NoArgs(ignored))
+        return fail("v1-only generation acquired a typed entry profile");
+    std::cout << "v1-only\n";
+    return 0;
+}
+
 int callGenerationBinding(
     const luna::runtime::MoonRuntime::PinnedBinding& binding) {
     if (!binding ||
         binding.declarationKind() != LUNA_NATIVE_DECLARATION_FUNCTION_V1 ||
         (binding.flags() & LUNA_NATIVE_EXPORT_CALLABLE_V1) == 0 ||
-        !binding.implementation())
+        binding.entryAbi() !=
+            luna::runtime::GenerationEntryAbiCI32NoArgsV1)
         return -1;
-    using AnswerFunction = int32_t (*)();
-    static_assert(sizeof(AnswerFunction) == sizeof(const void*),
-                  "test host cannot represent a Native entry pointer");
-    const void* entry = binding.implementation();
-    AnswerFunction answer = nullptr;
-    std::memcpy(&answer, &entry, sizeof(answer));
-    return answer();
+    int32_t result = 0;
+    return binding.callI32NoArgs(result) ? result : -1;
 }
 
 int generationSwitch(int argc, char** argv) {
@@ -112,11 +227,16 @@ int generationSwitch(int argc, char** argv) {
     }
     const luna::runtime::GenerationBindingRequirement typedFunction{
         argv[6], argv[7], LUNA_NATIVE_DECLARATION_FUNCTION_V1,
-        LUNA_NATIVE_EXPORT_CALLABLE_V1};
+        LUNA_NATIVE_EXPORT_CALLABLE_V1,
+        luna::runtime::GenerationEntryAbiCI32NoArgsV1};
     const auto firstLoadedBinding = loadedOnce.find(typedFunction);
     if (callGenerationBinding(firstLoadedBinding) != 42 ||
         loadOnceRuntime.retainedGenerationCount(loadedOnce.moduleId()) != 1)
         return fail("Native load-once did not expose one typed generation");
+    auto unprofiled = typedFunction;
+    unprofiled.entryAbi = luna::runtime::GenerationEntryAbiUnprofiled;
+    if (loadedOnce.find(unprofiled))
+        return fail("Native typed generation matched an unprofiled requirement");
     luna::runtime::MoonRuntime::PinnedGeneration duplicateLoaded;
     if (!luna::driver::loadVerifiedNativeGenerationOnce(
             loadOnceRuntime, argv[2], argv[3], duplicateLoaded, error) ||
@@ -158,7 +278,7 @@ int generationSwitch(int argc, char** argv) {
     auto pinnedFirst = runtime.pin(moduleId).find(argv[6], argv[7]);
     luna::runtime::MoonRuntime::SwitchableBinding switchable;
     if (!runtime.makeSwitchable(
-            moduleId, argv[6], argv[7],
+            moduleId, typedFunction,
             switchable, error)) {
         std::cerr << error << '\n';
         return 1;
@@ -191,10 +311,16 @@ int generationSwitch(int argc, char** argv) {
 } // namespace
 
 int main(int argc, char** argv) {
+    if (argc > 1 && std::string(argv[1]) == "--prepare-legacy")
+        return prepareLegacyFixture(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--generation-switch")
         return generationSwitch(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--load-call")
         return loadAndCall(argc, argv);
+    if (argc > 1 && std::string(argv[1]) == "--load-typed-call")
+        return loadTypedAndCall(argc, argv);
+    if (argc > 1 && std::string(argv[1]) == "--load-legacy-generation")
+        return loadLegacyGeneration(argc, argv);
     if (argc == 4 && std::string(argv[1]) == "--load-only") {
         luna::driver::VerifiedNativeLibrary library;
         std::string error;

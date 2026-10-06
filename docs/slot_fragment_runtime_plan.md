@@ -5,7 +5,7 @@ English | [简体中文](slot_fragment_runtime_plan.zh-CN.md)
 > Status: Confirmed implementation plan, 2026-09-23
 > Scope: type-safe, host-controlled runtime injection
 > Current acceptance view (2026-09-28): see the [v1 acceptance snapshot](slot_fragment_contract.md#v1-acceptance-snapshot-2026-09-28).
-> The native-host loop is implemented. Source Ref/apply was selected as the next direction on 2026-09-28. Source type spelling and constraints are prepared, but executable source Ref/apply remains unimplemented; the slices below distinguish these boundaries.
+> The native-host loop is implemented. A test-only private JIT now executes a restricted single-region source Ref/apply body, including sequential and outlined Slot sites. Public source ingress/return, container publication and the full cleanup contract remain unimplemented; the slices below distinguish these boundaries.
 
 ## Model
 
@@ -47,10 +47,10 @@ each slot invocation creates a fresh single-shot activation.
 The selected direction lets Luna source act as a host: receive, select and locally
 apply runtime references. Start with host-supplied verified Refs, without also
 adding a source loader, global candidate index, handler re-entry or keywords.
-The complete example remains **target syntax, not currently executable**.
-The source Ref type spelling, nominal checks, Ref-apply frontend recognition,
-and private in-memory LLVM carrier proofs exist; executable Ref `apply`,
-public import/return, and container publication still do not.
+The complete example remains **target syntax, not executable through the
+public compiler/package path**. Source Ref spelling, nominal and borrow
+checks, the canonical Apply region, and a restricted private JIT execution
+path exist. Public Ref ingress/return and container publication do not.
 
 ```luna
 export slot pipeline(value: i32);
@@ -157,21 +157,33 @@ before optimizing; never remove validation or borrow callback-destroyable storag
    source Refs multi-Fragment values.
 2. **Partially implemented types/artifacts**: internal nominal Ref/ownership/resource
    facts and in-memory freezing/materialization are complete as detailed below.
-   Source Slot declaration arguments, real Drop bridge and container round-trip
-   remain unimplemented. Old wire ordinals are unchanged; current readers/writers
-   explicitly reject the unsupported internal Ref.
+   Source fixtures parse exported Slots with typed arguments, and LLVM can emit
+   local Ref Drop/transfer. Complete compiler dropGlue and Ref container
+   round-trip remain unimplemented. Old wire ordinals are unchanged; current
+   readers/writers explicitly reject the internal Ref.
 3. **Partially implemented host bridge**: native strict singleton owning handles,
    exact-target checks, borrowed context derivation and Runtime drop are complete
-   below. Source import, owning/borrowed parameters, owning returns, compiler
-   dropGlue and two-package carrier/contract validation remain unconnected.
+   below. Disposable unit-ingress and direct affine-return wrappers exercise
+   private carrier transitions. Public source import, owning/borrowed parameter
+   and return ABI, compiler dropGlue and two-package carrier/contract validation
+   remain unconnected.
 4. **Partially implemented source apply**: exact-Slot local Ref recognition,
-   rejection of environment arguments and lexical shared-loan checking are
-   prepared. The existing CFG effect fixed point is proven for direct and
-   transitive Ref-carrying entries, but Ref-apply region connection,
-   once-only evaluation/context, explicit-context lowering/independent
-   verification remain open; executable repeated/nested apply, shadowing,
-   other Slots, normal/return/`?`/failure cleanup and rejected handler
-   re-entry regressions are not complete.
+   environment-argument rejection, lexical shared-loan checks, the canonical
+   Apply record, context-effect fixed point and independent CFG flow plan exist.
+   A disposable CodeGenerator and test-only JIT execute one top-level region
+   and, within it, one nested region using either the same borrowed Ref or a
+   second borrowed Ref for the same or a different exact Slot. Jump transitions derive/drop
+   each region's context from the active parent; normal and outlined returns
+   release the stack inner-to-outer.
+   Sequential and outlined Slot sites, repeated application and generation
+   pin release are exercised. A two-Slot JIT fixture checks preservation of
+   the outer Slot inside the inner region and restoration after its exit.
+   An inner Apply inside one outlined callback now has normal-exit and nested
+   return JIT coverage. Non-Jump context transitions and `?`/recoverable
+   failure cleanup remain unproved.
+   The production module
+   verifier, container encoder and public CodeGenerator still reject Ref
+   publication.
 5. **End-to-end gate**: real two-package verified containers with Ref import/source
    application, parameter/return transfer and invalid candidates. Only then may
    `source-ref-apply` become implemented. Direction approval/native support closes
@@ -592,14 +604,19 @@ discarded; MoonIR/backend/container gates still reject source Ref publication.
 
 ### Source Ref apply recognition and borrow gate (2026-09-28)
 
+The dated slices through the placement plan below record their state when
+landed. The current private execution boundary and remaining publication work
+are summarized in the delivery order above and the 2026-09-29 body proof below.
+
 The existing `apply name { ... }` spelling now distinguishes a local
 `RuntimeFragmentRef<S>` from a static Fragment. It resolves the exact exported
 Slot, rejects environment arguments, and borrows the owner for the lexical
 body; repeated apply is allowed while moving the owner inside that body is
 rejected. A dynamic binding masks an outer static binding for the same Slot
-in frontend analysis. This is **not executable source apply**: an internal
-canonical region and effect proof exist, but module publication reports an
-explicit context-override diagnostic. Runtime operand/context execution,
+in frontend analysis. At this checkpoint there was **no executable source
+apply**: the canonical region and effect proof did not yet lower a body, and
+module publication reported a context-override diagnostic. Later private JIT
+proofs execute a restricted body; public operand/context execution,
 return/error cleanup and cross-package tests remain completion gates.
 
 The strict full build passes. The parallel non-hardware run passed 76/77;
@@ -615,9 +632,10 @@ that directly invokes an exported Slot and a Ref-parameter caller reaching it.
 Private unit ingress now checks that independently recomputed effect before
 generating any LLVM body; a forged transitive effect is rejected. Frontend
 regressions also prove nested shared `apply` loans, release before an owning
-return, and rejection of an owner escaping from inside an active loan. This
-validates the machinery surrounding Ref apply, **not** the missing region
-override or executable lowering. No public ABI or wire format changes.
+return, and rejection of an owner escaping from inside an active loan. At this
+checkpoint this validated the machinery surrounding Ref apply, before the
+private region override and executable lowering. No public ABI or wire format
+changed.
 The strict full build and all 77 non-hardware gates pass (156.55 seconds).
 
 ### Internal canonical Ref-apply region (2026-09-28)
@@ -628,11 +646,12 @@ region with its local Ref owner and exact exported Slot. The CFG verifier checks
 the region kind and uniqueness, lexical scope, local Ref type, and nominal
 Slot/Contract match. Dynamic binding masks an outer static Fragment for that
 Slot, so Slot sites in the body become runtime dispatch and participate in the
-existing context-effect fixed point. This record is a proof boundary, not an
-executable context override: the sealed module verifier, container encoder,
-and code generator still reject it explicitly. The frozen Moon Container 0.3
-layout and public ABI have not changed. Operand/context execution, cleanup on
-all exits, wire/public ABI design and end-to-end acceptance remain open.
+existing context-effect fixed point. At this checkpoint the record was only a
+proof boundary. The sealed module verifier and container encoder still reject
+publication, as does the public code generator; the later disposable private
+CodeGenerator accepts a restricted region. The frozen Moon Container 0.3
+layout and public ABI have not changed. Complete exit/error cleanup,
+wire/public ABI design and end-to-end acceptance remain open.
 
 ### Compiler-private Ref context bridge (2026-09-28)
 
@@ -642,10 +661,11 @@ derived context pointer. It validates the exact Slot, preserves the parent's
 other bindings, uses the existing immutable snapshot override, and publishes
 the output only after all allocations succeed. An owning-cell Drop clears the
 cell before releasing the snapshot. Nested derivation and survival after Ref
-owner Drop are regression-tested. This is preparation for generated code, not
-source `apply` execution: LLVM still rejects Ref-apply CFGs, and generated
-entry/exit placement, return/error cleanup, wire format and public ABI remain
-open. The bridge is not part of the stable runtime Fragment ABI.
+owner Drop are regression-tested. At this checkpoint LLVM still rejected
+Ref-apply CFGs; later private proofs emit restricted source-body entry/exit
+code. The public generator still rejects Ref publication, and complete
+return/error cleanup, wire format and public ABI remain open. The bridge is
+not part of the stable runtime Fragment ABI.
 
 ### Canonical Ref-apply context placement plan (2026-09-28)
 
@@ -657,9 +677,11 @@ Ref-apply region is accepted only through that region's exact entry block.
 The independent CFG verifier runs this analysis, so a forged edge cannot
 bypass context construction. Regression covers normal entry/exit, a bypassed
 entry, and nested early return with inner-before-outer release obligations.
-This is a placement **plan**, not emitted cleanup: LLVM still rejects the
-region, and runtime failures or outlined continuations have not yet been
-proven against generated instructions. No container or public ABI change.
+At this checkpoint this was a placement **plan**, not emitted cleanup. Later
+private proofs emit one top-level region and verify outlined Slot context
+inheritance and return cleanup. A later private proof checks dispatch failure
+Drop before its trap; recoverable failure cleanup remains open. No
+container or public ABI change.
 
 ### Private LLVM Ref-apply context transition proof (2026-09-29)
 
@@ -676,27 +698,38 @@ closed; no stable ABI or wire format is changed. The private bridge symbols are
 registered in the explicit JIT runtime symbol map, but no publishable source
 module references them yet.
 
-### Private single-region source Ref-apply body (2026-09-29)
+### Private one- or two-region source Ref-apply body (updated 2026-10-04)
 
 A disposable CodeGenerator can now lower the **actual canonical source body**
-for one top-level Ref apply with one Jump entry, an explicit parent Fragment
-context, and normal Jump exits and/or early returns.
-The entry derives a context from the borrowed local Ref; the RuntimeSlot site
-dispatches through a load of that same owned context cell. A normal exit drops
-it after apply-local edge cleanups; an early return executes apply-local
-cleanups, drops the context, then executes outer cleanups (including the Ref
-owner). The private proof maps every CFG exit obligation to exactly one LLVM
-block Drop of the derived cell, before its Jump or return, and checks that an
-early return releases the context before the borrowed Ref owner's Drop.
-It also checks every direct RuntimeSlot CFG site's dispatch against the same
-derived context cell and validates module IR, then destroys the module.
-Sequential direct sites are supported; dispatches emitted inside an outlined
-continuation are not yet part of this private proof. The proof body requires
-at least one direct RuntimeSlot site, all inside the one apply. It is stricter than
-the source grammar: nested applies, non-Jump context transitions and
-unreachable terminals remain private-codegen errors. Derivation failure traps
-in this temporary proof; a recoverable source error/cleanup protocol is not
-defined.
+for one top-level Ref apply and optionally one nested Apply that borrows the
+same local Ref or a second borrowed Ref for the same or a different exact Slot.
+Each region has one owned context cell. The private proof checks each derivation against
+its own parameter carrier and exact Slot/Contract constants. Jump
+entry derives from the current parent; Jump exits and returns run cleanup and
+Drop each active cell in inner-to-outer order, before the borrowed Ref owner
+is released. The private proof maps every CFG entry/exit obligation to the
+corresponding LLVM derive/Drop, checks Slot dispatch against the innermost
+active cell, and follows every generated continuation callback. Each frame
+captures the full owner stack before dispatch; outlined returns release that
+stack before escaping. No generated dispatch may remain unverified.
+Sequential and nested outlined Slot sites are supported. The proof body
+requires at least one RuntimeSlot site. An inner Apply may enter and leave
+inside an outlined Slot callback through Jump edges; the callback captures its
+Ref carrier, derives a callback-local owner cell and passes the current owner
+stack to nested Slot callbacks. The private proof checks the callback copy of
+each derive, dispatch, Jump exit and Return, including failure Drops. Non-Jump
+context transitions and executable unreachable terminals remain private-codegen
+errors. The sole allowed unreachable terminal is the default arm of an
+exhaustive two-tag Result Switch with no context-changing incoming edge.
+Production ingress proof remains unit-return only; the test-only hook also
+accepts `Result<i32, i32>` for a restricted Ref-apply body.
+Derivation failure leaves its output cell empty, releases active parent cells,
+then traps. A negative Slot dispatch status drops all active cells in reverse
+order before trapping, in the source body and in outlined callbacks. The
+private proof connects each failure branch to its derive/dispatch and checks
+the owner stack and order. This includes a repeated Drop after a continuation
+return has already cleared a cell. Recoverable derivation/dispatch failures
+still have no source-level return protocol.
 The module verifier, container encoder and public CodeGenerator still reject
 Ref-bearing publication, so this is not end-to-end executable source support
 or a public ABI change.
@@ -704,15 +737,507 @@ or a public ABI change.
 The canonical regression target additionally has a compile-time-only private
 JIT hook. It materializes the already verified source body behind an internal
 test wrapper, then executes normal exit, return after Slot dispatch, and return
-before dispatch, including two sequential Slot sites on normal and early-exit
-paths, against a real borrowed Ref and an empty parent context. A generation
-lease remains pinned during the call and expires after the host
-releases its Ref handle, demonstrating that the derived context leaves no
+before dispatch, including two sequential Slot sites and one- and two-level
+outlined continuation nesting and returns inside those continuations, plus
+two nested Apply regions with normal exit and inner outlined return, against
+a real borrowed Ref and an empty parent context. A two-Ref fixture uses
+separate descriptors for the same Slot and checks outer-inner-outer dispatch
+origin and arguments. A two-Slot fixture checks outer `checkpoint`, inner
+`shadow`, and the retained outer `checkpoint` both inside and after the inner
+region, including exact Slot/Contract/layout and argument payloads. A second
+two-Slot fixture returns from the inner outlined continuation and checks the
+reverse owner cleanup path. Callback-local Apply fixtures check ordered Slot
+arguments on normal exit and that an inner outlined return escapes after the
+active owner stack is dropped. A generation
+lease remains pinned during the call and expires after the host releases its
+Ref handle or handles, demonstrating that the derived context leaves no
 retained pin on those paths. Each body is invoked twice with the same borrowed
-Ref, checking repeated application without consuming the host handle. This
+Ref handle or handles, checking repeated application without consuming them. This
 hook also reads each activation's packed argument to verify sequential sites
 dispatch `1`, then `2`, on both invocations. It is absent from the production
 compiler target; no public descriptor or container code is emitted.
+
+### Source `?` inside Ref apply: private execution (2026-10-05)
+
+A sealed source fixture now places `?` inside two nested Ref Apply regions.
+The generated Result Switch keeps both regions active on its Ok and Err edges;
+the Err arm is a Return terminal whose flow plan releases the inner context
+before the outer one. The ordinary CFG verifier accepts this path. A private
+JIT hook now lowers the actual Result-returning body and exposes its tag and
+`i32` payload through a test-only scalar observation value. Two source
+functions use local `Ok(9)` and `Err(7)` inputs: Ok dispatches `checkpoint(9)`
+and returns `Ok(0)`; Err returns `Err(7)` before dispatch. Both run twice
+against a real borrowed Ref. The proof accounts for each derived context and
+Drop, and the generation pin expires after the host handle is released.
+Additional private JIT fixtures return `Err(7)` from an outlined Slot
+continuation and propagate `?` after an earlier Slot dispatch has completed.
+The former verifies Result storage and escape through the callback frame; the
+latter verifies inner-before-outer cleanup when Err follows a completed
+dispatch. Both use a real borrowed Ref and check dispatch count and payload.
+One more Err fixture allocates an apply-local struct with a source `Drop`
+method before `?`. The test-only JIT imports that exact frozen Drop glue and
+an external probe. Each of two calls invokes Drop once with the expected
+payload. The private LLVM proof matches the local storage and checks Drop,
+`rt_dealloc`, then context Drop in that order. The ASAN canonical target passes.
+An additional Err fixture propagates a `Result<i32, SourceError>` through
+`From<SourceError> for i32` while the function still returns
+`Result<i32, i32>`. The test-only JIT imports only the exact frozen `From`
+method referenced by the canonical Err Return. Its private LLVM proof requires
+one conversion call before either context Drop. Two executions return
+`Err(47)` without Slot dispatch and release the borrowed Ref pin after the
+host handle is dropped. The source error is affine, has a source `Drop` method,
+and is consumed by the conversion method. The test-only JIT follows its
+frozen cleanup table to import that exact Drop glue; a probe observes one
+Drop per call. The returned payload remains scalar.
+Another source fixture returns `Result<i32, ReturnedResource>` from the same
+nested Ref Apply and `?` shape. The sealed CFG verifies an owned payload move
+and inner-before-outer context exits. A narrower test-only JIT wrapper now
+observes its resource Err after the source body returns, invokes the exact
+frozen Drop method, then calls `rt_dealloc`. Two calls return marker `59`
+without Slot dispatch, and the Drop probe fires once per call. The wrapper
+now also covers a resource Ok returned after a completed Slot dispatch
+(`marker = 67`) and a two-field resource Err whose `marker` is the second
+field (`marker = 61`); it reads that field through the frozen product offset.
+Each owner is dropped once per call. Scalar Ok and Err branches of those same
+Result shapes return `14` and `13` without invoking resource Drop. Each source
+Drop method clears `marker` after probing it, so the returned marker also
+checks that the wrapper observes the payload before finalization. The
+test-only wrapper accepts at most two top-level fields: an `i32` marker and
+either an `i32` or the bounded nested resource described below. It consumes the owner inside
+the JIT module, and hands no resource pointer or ownership carrier to the
+host. The canonical ASAN target passes with these fixtures, subject to the
+separate intermittent COFF loader failure below.
+Further Err fixtures return two- and three-struct ownership chains. After
+reading the outer marker, the wrapper uses the compiler's existing recursive
+owned-payload cleanup. Its narrow shape gate admits at most three structs,
+each with a frozen source Drop and an `i32` marker. The private LLVM check
+matches Drop calls from outer to inner, then deallocations from inner to
+outer. Two JIT calls observe `71, 73, 71, 73` for the two-struct chain and
+`79, 81, 83, 79, 81, 83` for the three-struct chain. The ASAN canonical
+target passes. Longer or branching ownership graphs remain outside this proof.
+On Windows Clang64 ASAN with LLVM 20.1.8, one of five canonical test
+invocations in the previous validation ended during LLVM COFF JIT loading with
+`IMAGE_REL_AMD64_ADDR32NB relocation requires an ordered section layout`;
+the immediate rerun and three subsequent repeated invocations passed. A
+further run after the resource-return CFG fixture also passed. The failure
+occurred in the earlier sealing-test stage, before the registered Ref fixtures.
+It was a JIT loader failure, not an ASAN memory diagnostic. The default
+Windows LLJIT object layer uses RuntimeDyld; the exact triggering JIT call
+has not been identified. The canonical test now marks each sealing subtest and
+the first three JIT calls so the next failure can be placed more precisely;
+12 consecutive ASAN reruns after that instrumentation passed without another
+relocation failure. Keep the ASAN result qualified until the COFF section
+layout failure is isolated.
+An isolated test-target opt-in trial replaced the Windows object layer with
+LLVM 20.1.8 JITLink. One ASAN canonical run failed earlier while linking a
+compiled-host fixture: `.pdata` to `.text` exceeded a `Pointer32` fixup range.
+The trial was reverted; the default RuntimeDyld build then passed the same
+canonical test. Directly switching to this JITLink configuration is therefore
+not a validated fix for the intermittent RuntimeDyld failure.
+The private JIT now also has a separate host-transfer experiment for admitted
+resource Result shapes. Its status entry checks nonnull, nonoverlapping tag and
+owner output cells and requires an empty owner cell before calling the source
+body. The scalar branch writes only the tag; the resource branch writes the tag
+and then the owner pointer as its final ownership commit. A separate JIT Drop
+entry clears that cell before running the exact frozen recursive Drop and
+deallocation sequence. The private LLVM proof requires one body call, permits
+cleanup calls only on the injected failure branch, and checks both Drop call
+sequences. A three-struct Err
+fixture proves that a successfully transferred owner is not Dropped before
+host Drop, then observes
+`79, 81, 83` exactly once per transferred owner; duplicate Drop fails. A
+resource Ok fixture also transfers and Drops its owner once per call. Scalar
+Ok and Err counterpart fixtures return a null owner and no resource Drop.
+Invalid occupied, aliased
+and null output storage fails before body dispatch without changing outputs.
+An injected failure after the source body returns a nonnull resource leaves
+both outputs untouched and runs the same exact cleanup inside the JIT before
+returning status `3`. On the second successful transfer, the host defers Drop,
+releases the borrowed Ref handle and observes its generation pin expire with
+no extra resource Drop. It then releases the original JIT handle while a
+separate shared LLJIT lease keeps the Drop entry executable; host Drop runs
+exactly once, after which that lease expires. The raw owner pointer does not
+retain JIT code itself. A public carrier must pair owner and code lease so
+the Drop thunk remains live through cleanup. This is a test-only protocol,
+with no published carrier or symbol contract. It does not establish
+production failure statuses or safe JIT teardown with an outstanding owner.
+The observation value is not a public return carrier or stable ABI.
+Longer or branching resource graphs and more
+complex conversion bodies,
+`?` inside outlined Slot bodies and recoverable
+derive/dispatch failures are outside this execution proof; the source frontend
+continues to reject `?` across the outlined Slot boundary.
+
+The current source builder enters and normally leaves each Ref Apply through
+Jump edges. It does not produce a source-level non-Jump context transition in
+these structured paths. The flow planner computes such obligations for all
+edge kinds, while private codegen rejects any non-Jump transition. Retain that
+gate until a future source lowering makes such an edge reachable and supplies
+an executable cleanup proof.
+
+A separate test-only status entry now composes a read-only parent-context
+preflight and the exact native borrowed-Ref check with one sealed
+unit-returning source Apply body. It derives the
+SlotId/ContractId from that body's frozen parameter target. Two calls using a
+real host-created Ref handle dispatch once each; a null handle and a live Ref
+for a different exact Slot return distinct private invalid-handle and
+invalid-target statuses without entering the body. A null parent context also
+fails before the Ref check and body. The private LLVM check requires one
+context check, one Ref check and one body call, and checks the exact status
+switch cases, destinations and return constants. The compiler-private context check accepts a
+live Runtime-created parent, rejects null, and allocates nothing. Both handles
+retain their generation until
+released, and the JIT lease covers the synchronous calls. This does not use
+`emitRuntimeFragmentRefUnitIngressWrapper`: that general helper deliberately
+rejects Apply regions. The composition is confined to the test build, and
+the production CodeGenerator and module verifier still reject publication.
+The native check reads a handle created by the runtime; it cannot validate an
+arbitrary or stale pointer; the same applies to the context preflight. The
+private status profile maps success/context/handle/target/unexpected check to
+`0/1/2/3/4`. Only exact known native results receive their named status;
+other check results use the unexpected branch and cannot enter the body.
+These numbers are not a public entry status contract, and the body has no
+recoverable execution-failure status. Publication still needs a public status
+ABI, symbol and descriptor mapping, and a code lease held for the full call.
+Before this test entry is generated, the private proof cross-checks the sealed
+Function declaration and callable TypeId/linkage/ownership contracts against
+its source signature, CFG root parameter and first exact Apply target.
+Mutating the frozen linkage or parameter borrow contract makes JIT
+materialization fail. The test hook now also emits a pointer-free candidate
+row: independent magic, version, total size, zero reserved word, fixed field
+counts, bounded length-prefixed module/package/function/Ref/Slot/entry
+identities, and explicit calling, borrow, result and private status-profile
+codes. It now also carries an explicit context-effect word derived from the
+fixed-point analysis of the exact function; both a false record word and a
+forged source effect fail. Its validator rechecks the sealed CFG and frozen
+facts. Tests reject
+truncation, extra bytes, altered identity or convention fields, changed source
+facts and a generic Native v1 export row. This row is test-only; no public
+descriptor, export digest or loader consumes it.
+The test-only loaded entry view revalidates this row against the frozen source
+and against the JIT module that emitted it before looking up the fixed ingress
+symbol. An otherwise valid row paired with a JIT module materialized without
+that row is rejected. The view holds the code lease and copies it for each
+synchronous call: the fixture releases its original JIT reference, calls the
+entry twice, then releases the view and observes the JIT lease expire. Both
+Runtime-created borrowed owners remain live during those calls. A third call
+uses a private duplicate handle shell sharing the original immutable Ref
+snapshot and a copied parent context. The fixture releases the original Ref
+and parent first, then observes the snapshot pin keep the generation alive
+through that call and release it afterward. Duplication starts from a live
+typed handle and rejects an occupied output; it does not accept arbitrary or
+stale opaque pointers. This is an in-process provenance and lifetime proof,
+not a verified artifact loader or public Runtime lookup.
+On 2026-10-05 the focused canonical test passed in the strict CLANG64 and
+Windows ASan/UBSan builds for the loaded-entry view; the production `luna`
+target built, design-status and file-guide inventory gates passed, and
+`git diff --check` found no errors. The later borrowed-owner pin extension
+has its own validation below.
+The borrowed-owner pin extension passes the strict CLANG64 and Windows
+ASan/UBSan canonical tests; the production `luna` target and both documentation
+gates build/pass with the test-only helper excluded from the production ABI.
+This local slice does not constitute a full-suite or cross-platform run.
+
+#### Candidate borrowed Ref/unit host entry contract (design only)
+
+The smallest publishable profile would use one synchronous entry with the
+logical shape `status(parent_context, borrowed_ref) -> i32`. Its parameter is
+`shared borrow RuntimeFragmentRef<S>` and its source result is `unit`. The
+host must keep both Runtime-created owners live throughout the call; no Ref
+ownership moves to the body. A pinned callable returned by lookup must keep
+the descriptor and machine code live until the call completes. The entry
+must check parent and exact Ref target before body execution. The private
+`0/1/2/3/4` profile is evidence that preflight failures can be separated,
+not the public status ABI.
+
+| Candidate contract fact | Required check before publication |
+| --- | --- |
+| Independent magic, ABI version, struct size, zeroed reserved fields | Reject unknown layout or version before reading any entry fields. |
+| Function SymbolId, ContractId, TypeId, linkage name and owning module identity from its verified registry | Match one sealed exported function and the verified artifact; do not infer the ABI from a raw symbol address. |
+| Exact target SlotId and Slot ContractId | Match the frozen `RuntimeFragmentRef<S>` target and the source parameter type. |
+| Calling convention, two pointer arguments in parent/Ref order, shared-borrow mode, unit result and versioned status domain | Match the generated wrapper and independently distinguish context, handle, target and execution failure. |
+| Loaded entry view: entry pointer and generation identity | Obtain only through a verified, pinned module lookup; retain the code lease across the synchronous call. |
+
+The existing generic Native export and Runtime declaration descriptors do
+not encode the Ref target or this ingress ABI. The Fragment descriptor
+describes factory/environment/activation execution, so it cannot stand in
+for a source function entry. Decide how the new typed record is attached to
+verified Moon/Native exports before changing production publication. The
+Moon Container 0.3 encoder still rejects Apply regions, and the module
+verifier and CodeGenerator still reject source Ref publication.
+
+The present Native verification path fixes the integration boundary:
+`buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration
+table, `canonicalNativeExport` serializes only kind, flags, SymbolId, ContractId
+and linkage for the proof export digest, and `emitNativeLibraryDescriptor`
+emits the corresponding v1 rows. On load, `validateNativeDescriptor` requires
+the exact v1 row size and recomputes that digest before the exports enter a
+generation. Therefore a Ref target or ingress convention attached only to a
+runtime binding would be unproved. Do not extend a v1 row in place. A new
+versioned typed row must derive from the verified frozen function signature
+and CFG, enter the canonical export digest and generated descriptor together,
+and be checked for field validity and identity ambiguity by the loader.
+The existing artifact digest and trust record then bind the rebuilt image and
+its export digest. `stageVerifiedNativeGeneration` currently copies only
+symbol/contract/entry/kind/flags into `GenerationBinding`; typed facts must
+also reach the pinned lookup result before a host can call the entry. Its
+generation already retains the verified library lease, but a caller must keep
+the `PinnedBinding` alive for the complete synchronous call.
+
+On 2026-10-06 an actual `-t native` build of an exported Runtime Slot caller
+failed at the MoonIR verifier with the missing runtime-aware public entry ABI
+diagnostic. Semantic and Native artifact regressions now pin that failure;
+the Native test also requires no library or trust record to be produced. The
+existing proof-v1 callable test covers a no-argument `i32` function and cannot
+validate Ref/unit ingress. This guard stays in place while the versioned typed
+export path is designed.
+The current CLANG64 worktree then rebuilt and passed all 77 local non-hardware
+CTest cases with four workers in 71.18 seconds on 2026-10-06; this is broader
+regression evidence, not a verified Native Ref/unit export or release approval.
+An isolated WSL Arch Linux build with Clang/LLVM 22.1.8 compiled all targets
+and passed the complete local Linux CTest suite 76/76 with four workers in
+67.15 seconds. The initial 75/76 run failed only the frozen ecosystem
+baseline: WSL Git lacked the Windows system `core.autocrlf=true` setting and
+misread the child worktrees' CRLF checkout as dirty. Both were clean under
+that setting; a process-local Git override made the failed test and complete
+rerun pass. This is local Linux evidence, not remote platform CI.
+
+#### Native typed export boundary audit (2026-10-06)
+
+The current Native v1 export row contains declaration kind, callable flag,
+SymbolId, ContractId, linkage name and a raw entry address. Its canonical
+export digest covers the pointer-free fields; the artifact digest binds the
+binary bytes, and the loader validates row structure and identity. However,
+neither path carries a callable signature, a Ref target or a Fragment-context
+effect. `stageVerifiedNativeGeneration` passes the row on as an untyped
+`GenerationBinding`. The code generator currently places the generated function
+body, rather than a Ref host wrapper, at a callable row's entry address. The
+structured verifier correctly rejects a context-dependent exported function,
+and the Native fixture requires this rejection before any library or trust
+record is emitted.
+
+The private two-argument `i32(parent_context, borrowed_ref)` wrapper and its
+test-only status profile cannot be exposed through that v1 row. Its pointer-free
+record checks frozen signature/Slot identities and the context effect, while
+the private loader requires identical record bytes in the retained JIT module.
+The record does not include a CFG or code digest; full body identity across
+separately built artifacts is not established by that record alone.
+
+The next independently reviewable slice is a versioned typed export contract
+with a distinct entry ABI profile. Define the exact two-argument calling
+convention, status values, parent-context and borrowed-handle lifetimes, Ref
+target identity and effect fields before emitting a callable descriptor.
+Adding a profile bit to a v1 callable row alone is insufficient: current host
+callers check `CALLABLE` and cast the raw address as `i32()`; a Ref entry must
+be reachable only through a lookup that enforces its exact profile.
+Bind all of those fields to the canonical export proof and verified wrapper;
+make loader validation and a pinned typed lookup reject missing, mixed-version
+or mismatched fields. Keep Native v1 generic entries and the source Ref export
+gate closed until that complete path and the Container wire rules pass.
+
+The Native v1 descriptor emitter now independently checks each requested row
+against the generated module's public export table and declaration identities:
+exact SymbolId/ContractId, declaration
+kind, linkage and callable flag before creating its registry. It also rejects
+a callable whose source declaration requires a Fragment context, even if an
+upstream caller bypasses the structured verifier. A canonical regression
+supplies a generated but unpublished `main`, then forges an export and context
+effect after code generation; both attempts are rejected. Ordinary Native
+artifact generation still passes. Focused canonical and Native artifact tests
+pass on Windows CLANG64 and WSL Arch Linux; the complete Linux CTest rerun
+passes 76/76 with four workers in 75.62 seconds. This is a v1 fail-closed
+guard, not a typed Ref entry or release-candidate CI.
+
+The Native artifact gate now also builds a package with an exported
+`RuntimeFragmentRef<Slot>` parameter. It requires the MoonIR Ref wire/ingress
+diagnostic and verifies that no shared library or trust record appears. This
+tests source Ref publication separately from the context-dependent Slot entry
+case; the verifier currently rejects it before the secondary codegen guard.
+The focused Native artifact CTest passes on Windows CLANG64 and WSL Arch Linux.
+
+Before a Native v1 callable address is emitted, the descriptor generator now
+also compares its frozen Function parameter/result TypeIds with the source
+declaration and the actual defined LLVM function type and C calling convention.
+A canonical regression changes both the source parameter and frozen function
+type after code generation; the unchanged LLVM body cannot be published under
+the forged signature. Canonical and Native artifact CTests pass on Windows
+CLANG64 and WSL Arch Linux. The complete Linux CTest rerun passes 76/76 with
+four workers in 74.36 seconds. This checks compiler-internal consistency; it
+does not tell an external v1 caller which signature to use.
+
+The first **parallel Native v2 descriptor/query** slice is implemented for
+verified no-argument `i32` exports. V1 rows, query and proof export digest
+remain unchanged for existing readers. The producer adds a
+`C_I32_NOARGS_V1` row only after checking the sealed source signature and the
+defined LLVM `i32()` C-callable function. The loader validates the v2 header,
+identity, row profile, canonical row digest, and exact correspondence with a
+verified v1 row. The existing artifact proof digest binds all v2 metadata.
+`VerifiedNativeLibrary::callI32NoArgs` invokes the typed entry while its
+owning library remains loaded; no new raw pointer escapes. The independent
+consumer checks both queries and digests, and a resealed v2-digest mutation
+is rejected by the loader on Windows CLANG64 and WSL Arch Linux. Native
+generation resolution now copies only validated v2 profiles into the separate
+`GenerationBinding.entryAbi` field. A profiled requirement finds the exact
+entry; `PinnedBinding::callI32NoArgs` calls while its generation retains the
+verified library lease. Load-once, activation and switchable requirements
+check profile stability. Four-field legacy requirements still match by
+identity/kind/flags, but an explicit unprofiled requirement cannot match a
+profiled export. A resealed test image with its v2 query symbol renamed
+exercises the optional query path. A separate C shared library built from
+v1-only source, with its own sealed proof/trust record, also passes the
+independent proof oracle, v1 loader/call and unprofiled generation checks;
+its typed lookup is rejected because it has no v2 query. The focused Native
+artifact gate passes on Windows CLANG64 and WSL Arch Linux. This is an
+implemented local ABI experiment, not a frozen public ABI or a Ref wrapper
+export.
+The complete local CLANG64 and WSL Arch Linux CTest suites passed 77/77 and
+76/76 respectively after this integration, before the three compile-only
+layout tests were registered.
+
+The local candidate below pins the current profile layout, digest and version
+rules. The existing release packages and CI matrix target 64-bit Linux,
+Windows and the macOS runner architecture; no 32-bit release target is listed.
+The macOS workflow runs the non-hardware CTest suite, including the Native
+artifact test, but this uncommitted worktree has no corresponding Mach-O or
+remote platform CI result. Before a public ABI promise, run that CI on an
+immutable candidate and review the next-query rule with host users.
+Keep source Ref publication gated until its context effect, exact Slot/Contract
+target, carrier status and ownership semantics are sealed and verified end to
+end.
+
+#### Native v2 local layout and version candidate (2026-10-06)
+
+The current 64-bit target matrix pins natural C layout: v1 export/library
+records are 48/64 bytes; v2 export/library records are 56/96 bytes. In a v2
+row, `entry_abi`, `symbol_id` and `entry` start at offsets 16, 24 and 48;
+in a v2 library, `export_count`, `exports` and the 32-byte descriptor digest
+start at 48, 56 and 64. The C header asserts these values; the independent
+consumer checks them. A freestanding compile-only probe of i386 GNU/Linux,
+i686 Windows GNU and i386 Darwin shows 32-bit v1 export size 32 and v2 export
+size 40; v2 row `entry_abi`, `symbol_id` and `entry` offsets are 16, 24 and
+36. The v2 library `export_count`, `exports` and digest offsets are 32, 40
+and 44. Library tail alignment differs: v1/v2 sizes are 44/76 on the probed
+GNU/Linux and Darwin targets, 48/80 on Windows. The repeatable probe is
+`tests/native_abi_layout_probe.c`; Clang CTest compiles it for all three
+triples on each configured host without a 32-bit linker or runtime. The
+three layout CTests and file-guide inventory pass on local Windows CLANG64
+and WSL Arch Linux. After registering them, the complete non-hardware CTest
+suites pass 80/80 on Windows CLANG64 and 79/79 on WSL Arch Linux.
+These observations do not establish a 32-bit artifact producer, loader,
+execution path or release promise. Adding a 32-bit target requires separate
+end-to-end artifact and runtime CI plus an explicit ABI/version decision.
+
+V1 proof and query remain required and unchanged. The v2 query is optional:
+absence yields unprofiled v1 bindings; presence requires exact ABI 2,
+structure sizes, zero reserved fields, matching proof identity and a v2 row
+subset matching verified v1 identities, flags, linkage and entry addresses.
+Schema 2 recognizes only profile `C_I32_NOARGS_V1 = 1`, meaning a defined C
+calling-convention function `int32_t(void)`. Any unknown profile or malformed
+v2 row rejects the whole loaded image; it never falls back to v1.
+
+The v2 descriptor digest is SHA-256 over a little-endian `u32` row count,
+followed by sorted, unique rows as `u32` byte length plus exact bytes. A row
+is `LUNA_NATIVE_EXPORT_V2\n` followed by decimal kind, flags and entry ABI,
+then SymbolId, ContractId and linkage, separated by `\n` with no trailing
+separator. Pointers are not canonical row bytes; the v1 whole-artifact proof
+digest binds the linked image containing them. A changed row encoding,
+digest algorithm or new profile needs a new parallel query/schema version,
+because existing v2 loaders reject unknown fields and profiles.
+
+Within MoonRuntime, binding profile 0 means unprofiled and profile 1 enables
+the pinned `i32()` call. `GenerationEntryAbiAny` is a requirement-only wildcard
+that keeps existing four-field callers source-compatible; explicit 0 or 1
+matches exactly. A switchable binding captures the active concrete profile
+and refuses a later generation that changes it. These rules describe a local
+candidate and do not publish a stable external ABI.
+
+The private typed-row encoder and validator above close only the local
+source-to-record check. Moon Container's Function code record already carries
+`requiresFragmentContext`, and the module verifier recomputes it from the
+CFG, but the Container encoder still rejects Apply graphs. The frozen
+`DeclarationRecord`/canonical contract and Native v1 export row omit the
+effect; the structured verifier also rejects an exported function that
+requires a Fragment context. The next boundary is therefore a public status
+mapping and a coordinated verifier/export rule for a context-dependent
+exported source function. Its effect and Ref target must enter sealed export
+metadata. Then extend the v2 profile, canonical hashing, loader validation
+and pinned Runtime lookup together, while keeping generic v1 rows untyped.
+
+### Next source Ref/apply gates (updated 2026-10-06)
+
+This is the proposed implementation order for the remaining source feature,
+not a public ABI decision or stable-release approval:
+
+1. **Close control-flow and cleanup proofs.** The private two-region Jump
+   path now has owner-stack and JIT evidence for one or two borrowed Refs,
+   with same or different exact Slots, including an inner Apply in an outlined
+   callback. The source builder currently makes Apply entry and normal exit
+   Jump transitions; retain the explicit rejection of non-Jump cross-region
+   edges until source lowering produces one. The narrow `Result<i32, i32>`
+   `?` path now has an inner-before-outer CFG proof and private Ok/Err JIT
+   evidence, including one affine source error converted to a scalar by its
+   frozen `From` method and cleaned by source `Drop`. Extend cleanup proof to
+   more complex conversions before admitting them. One- and two-field resource Err and one-field
+   resource Ok now have a private wrapper that observes and destroys the
+   returned owner after ordered context exits; scalar counterpart branches
+   do not Drop. Up to three structs in one ownership chain now have recursive
+   cleanup and ordered Drop/deallocation proof. Longer or branching owned
+   fields remain outside the proof. A test-only host-transfer entry now proves
+   the empty owner-cell preflight, tag/owner commit, a separately retained
+   JIT lease after the borrowed Ref pin expires, and explicit exactly-once
+   Drop for the three-struct chain. A public host
+   ownership carrier and production post-body failure statuses still need a
+   contract and executable proof; the private injected failure now proves
+   cleanup of an uncommitted returned owner.
+   Specify recoverable derivation/dispatch
+   failure cleanup before publishing a path that can return those failures.
+   Every admitted exit must release contexts in
+   inner-to-outer order exactly once, after apply-local cleanup and before a
+   borrowed Ref owner is dropped. Keep unsupported paths rejected meanwhile.
+   Independently capture the exact JIT call for the intermittent Windows LLVM
+   20.1.8 RuntimeDyld COFF relocation failure. The direct JITLink trial hit a
+   different `.pdata` `Pointer32` range failure; next test an ordered-section
+   allocator or newer LLVM in an isolated build, then repeat ASAN runs before
+   treating sanitizer results as stable evidence.
+2. **Freeze a publishable host boundary.** Specify a versioned Ref ingress
+   carrier, return carrier/status, exact Slot/Contract validation, borrowed
+   lifetime, ownership commit point and failure cleanup. Private wrappers and
+   the current opaque internal type are evidence, not that contract. The
+   smallest candidate is one synchronous shared-borrow Ref parameter and a
+   unit result, with a status-returning wrapper that validates the exact Slot
+   and live parent context before entering the body. The test-only composition
+   now executes both checks against live correct/wrong-target handles and a
+   null parent;
+   the general ingress helper still excludes Apply regions. Publication must
+   freeze the candidate typed record and status version, attach it to a
+   verified export, and carry the call-duration code lease through the public
+   lookup path, then update
+   the structured verifier,
+   export symbol metadata, CodeGenerator and dropGlue together; the existing
+   check/transfer/drop tests cover native carrier behavior but do not prove a
+   published source entry.
+   The separate test-only tag/owner-cell and JIT Drop entries now exercise the
+   candidate commit and lease rule. Before publishing a resource return
+   carrier, make the owner and JIT lease one lifetime unit; define status and
+   layout versioning, teardown behavior, and the
+   real failure conditions that use this precommit cleanup. The injected
+   post-body failure has an executable cleanup proof, but this experiment
+   does not publish an ABI.
+3. **Connect the verified artifact path.** Implement complete compiler
+   dropGlue and production codegen for the admitted flow subset, then define
+   and validate Ref type/Apply-region wire rules in the module verifier and
+   Moon Container encoder/decoder. Invalid or older artifacts must fail
+   without publishing a partial generation.
+4. **Pass the two-package execution gate.** Import a host-created, pinned Ref
+   from a verified generation; run source apply against an explicit parent
+   context; exercise borrowed ingress first, then owning parameter/return
+   transfer. Include nominal/contract mismatch, failed ingress, normal and
+   early exits, repeated apply and cleanup/pin-release regressions. Only after
+   this gate and the remaining control-flow cases pass may
+   `source-ref-apply` move out of `implementation-open`.
+
+Performance acceptance, durable evidence storage and stable-release approval
+remain separate gates in the v1 acceptance snapshot.
 
 ## Host-controlled discovery and injection
 

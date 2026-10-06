@@ -5,7 +5,7 @@
 > 状态：已确认实施计划，2026-09-23
 > 范围：类型安全、由宿主控制的运行时注入
 > 当前验收视图（2026-09-28）：见 [v1 验收快照](slot_fragment_contract.zh-CN.md#v1-验收快照2026-09-28)。
-> 原生宿主闭环已实现；2026-09-28 已选择继续源码级 Ref／apply，详细切片见下文。源码类型拼写和约束检查已准备，源码执行能力仍未实现，不把方向确认或 Runtime 支撑等同于源码完成。
+> 原生宿主闭环已实现。仅用于测试的私有 JIT 现可执行受限的单 region 源码 Ref／apply，包括顺序和 outlined Slot 站点。公开源码入口／返回、container 发布及完整清理契约仍未完成；详细边界见下文。
 
 ## 模型
 
@@ -43,9 +43,9 @@ export fragment trace[prefix: string](value) for pipeline {
 
 方向已确认：让 Luna 源码作为宿主，接收、选择并局部应用运行时引用。先打通宿主提供
 的已验证 Ref，不同时引入源码 loader、全局候选索引、handler 重入或新关键字。
-以下完整示例仍是**目标语法，当前不能执行**。源码 Ref 类型拼写、名义检查、Ref
-apply 前端识别和私有的内存 LLVM carrier 验证已存在；可执行的 Ref `apply`、公开
-导入／返回及 container 发布仍未实现。
+以下完整示例仍是**目标语法，不能通过公开编译／打包路径执行**。源码 Ref 拼写、
+名义和借用检查、canonical Apply region，以及受限的私有 JIT 执行路径已存在。
+公开 Ref 入口／返回和 container 发布仍未实现。
 
 ```luna
 export slot pipeline(value: i32);
@@ -134,16 +134,24 @@ Ref-bearing exported Slot／Fragment payload、non-Copy 环境、non-unit 与 mu
    从显式 parent 派生。输入不消费、失败不发布，与原 vector override 共用合并实现。
    Native 有序链不等于源码 Ref 可装多个 Fragment。
 2. **部分实现的类型／产物**：内部名义 Ref／ownership／资源事实和内存中冻结／恢复
-   已完成，见下文。Slot 声明参数的源码解析、完整 Drop 桥与 container round-trip 仍待
-   完成；旧 wire type 值不漂移，当前读写端明确拒绝尚未支持的内部 Ref。
+   已完成，见下文。源码夹具能解析带 `i32` 参数的 exported Slot，LLVM 也能生成局部
+   Ref Drop／transfer。完整 compiler dropGlue 和 Ref container round-trip 仍待完成；
+   旧 wire type 值不漂移，当前读写端明确拒绝内部 Ref。
 3. **部分实现的宿主桥**：native 严格 singleton owning handle、精确目标检查、借用派生
-   context 与 Runtime drop 已完成，见下文；源码导入、拥有／借用参数、拥有返回、
-   compiler dropGlue 和两包 carrier／contract 校验仍未接通。
-4. **部分实现的源码 apply**：局部 Ref 精确 Slot 识别、环境实参拒绝与词法共享借用检查
-   已准备；既有 CFG effect 固定点已对直接和传递的 Ref 参数入口验证，但 Ref apply
-   region 接入、一次求值／context、显式 context lowering／独立 verifier 仍开放；
-   可执行的重复／嵌套 apply、同槽遮蔽、其他槽保留、正常退出／return／`?`／失败清理，
-   以及禁止 handler 重入的回归尚未完成。
+   context 与 Runtime drop 已完成，见下文；一次性 unit 入口和直接 affine 返回
+   wrapper 已验证私有 carrier 转换。公开源码导入、拥有／借用参数和返回 ABI、
+   compiler dropGlue 与两包 carrier／contract 校验仍未接通。
+4. **部分实现的源码 apply**：局部 Ref 精确 Slot 识别、环境实参拒绝、词法共享借用、
+   canonical Apply 记录、context-effect 固定点和独立 CFG flow 计划已具备。一次性
+   CodeGenerator 与仅测试用的 JIT 能执行一个顶层 region，以及其中借用同一本地 Ref
+   或第二个借用 Ref、针对相同或不同精确 Slot 的一个内层 region。Jump 转换从有效父
+   context 派生／释放每层 context；正常及 outlined return 按内到外释放 context 栈。
+   顺序与 outlined Slot、
+   重复 apply 和 generation pin 释放均已有验证。双 Slot JIT 夹具验证了内层 region
+   保留外层 Slot，并在退出后恢复外层分派。outlined 回调中的内层 Apply 已有正常
+   退出和嵌套 return 的 JIT 证据。非 Jump context 转换和 `?`／可恢复失败清理仍未
+   证明。生产 module verifier、
+   container encoder 和公开 CodeGenerator 仍拒绝 Ref 发布。
 5. **端到端完成门**：真实两包 verified container 的 Ref 导入／源码应用、参数／返回
    transfer 与错误候选。只有这些通过才能将 `source-ref-apply` 标为 implemented；
    方向确认和 native 支撑不关闭源码缺口、历史 TBD 或发布批准。
@@ -469,12 +477,16 @@ module 验证。篡改结果的所有权用法会使证明失败。前一轮 uni
 
 ### 源码 Ref apply 的识别与借用门禁（2026-09-28）
 
+以下直到 context 安放计划的分节记录各切片落地时的状态。当前私有执行边界和发布缺口
+以上文交付顺序及下文 2026-09-29 的源码 body 证明为准。
+
 既有 `apply name { ... }` 拼写现可区分局部 `RuntimeFragmentRef<S>` 与静态
 Fragment：解析精确导出的 Slot、拒绝环境实参，并在词法 body 内共享借用 owner。
 同一 Ref 可以重复 apply，body 内移动 owner 会被拒绝。前端分析中，动态绑定会遮蔽
-同槽的外层静态绑定。这**不是可执行的源码 apply**：已有内部 canonical region 和
-effect 验证，但 module 发布会明确报告 context-override 尚未实现，不能发布产物。
-运行时 operand／context 执行、return／错误清理及跨包测试仍是完成门。
+同槽的外层静态绑定。在这一时间点**尚无可执行的源码 apply**：canonical region
+与 effect 验证还未生成函数体，module 发布会报告 context-override 尚未实现。
+后续私有 JIT 已能执行受限 body；公开 operand／context 执行、return／错误清理
+及跨包测试仍是完成门。
 
 严格完整构建通过。并行非硬件回归 76／77 通过；`luna.repl-smoke` 的进程树清理在
 并行负载下超时，单独重跑通过。最终聚焦的分析、canonical、REPL、文档和清单
@@ -485,8 +497,9 @@ effect 验证，但 module 发布会明确报告 context-override 尚未实现�
 既有的密封 CFG effect 固定点，现经回归验证可标记直接调用 exported Slot 的 Ref 参数
 函数，以及传递到它的 Ref 参数调用者。私有 unit 入口在生成 LLVM 函数体之前，会独立
 重算 effect 并拒绝伪造的传递标记。前端回归还证明嵌套共享 `apply` 借用、拥有型返回前
-释放借用，以及在借用作用域内带走 owner 会被拒绝。这验证 Ref apply 周边的机制，
-**不是**缺失的 region override 或可执行 lowering；不改公开 ABI 或 wire 格式。
+释放借用，以及在借用作用域内带走 owner 会被拒绝。当时这只验证 Ref apply 周边
+机制；私有 region override 和可执行 lowering 后续才落地。公开 ABI 与 wire 格式
+未改变。
 严格完整构建与全部 77 项非硬件门禁通过（156.55 秒）。
 
 ### 内部 canonical Ref-apply region（2026-09-28）
@@ -495,10 +508,11 @@ effect 验证，但 module 发布会明确报告 context-override 尚未实现�
 独立的 `RuntimeRefApplyRecord` 将该 region 与局部 Ref owner、精确导出的 Slot
 关联。CFG verifier 检查 region 类型与唯一性、词法作用域、局部 Ref 类型，以及
 Slot／Contract 的名义匹配。动态绑定遮蔽同槽外层静态 Fragment，因此 body 中的
-Slot 站点变为运行时分派，并参与既有 context-effect 固定点。这只是证明边界，
-不是可执行的 context override：密封 module verifier、container encoder 和
-code generator 仍明确拒绝它。冻结的 Moon Container 0.3 布局与公开 ABI 均未改变。
-operand／context 执行、所有退出路径的清理、wire／公开 ABI 设计及端到端验收仍未完成。
+Slot 站点变为运行时分派，并参与既有 context-effect 固定点。在这一时间点它只是
+证明边界。密封 module verifier、container encoder 和公开 CodeGenerator 仍拒绝
+发布；后续一次性私有 CodeGenerator 已接受受限 region。冻结的 Moon Container
+0.3 布局与公开 ABI 均未改变。完整退出／错误清理、wire／公开 ABI 设计及端到端
+验收仍未完成。
 
 ### 编译器私有的 Ref context 桥接（2026-09-28）
 
@@ -506,9 +520,9 @@ Native runtime 现提供未发布、仅供编译器使用的桥接：从借用�
 显式父 context 派生独立拥有的 context 指针。它核对精确 Slot，保留父 context 的
 其他绑定，复用不可变快照 override，且仅在全部分配成功后写入输出。拥有型 cell
 的 Drop 先清空 cell，再释放快照。嵌套派生和 Ref owner Drop 后仍可使用的行为已有
-回归验证。这是生成代码的准备，**不是**源码 `apply` 已可执行：LLVM 仍拒绝 Ref-apply
-CFG；生成的入口／出口安放、return／错误清理、wire 格式和公开 ABI 仍未完成。
-此桥接不属于稳定 runtime Fragment ABI。
+回归验证。在这一时间点 LLVM 仍拒绝 Ref-apply CFG；后续私有证明已生成受限源码
+body 的入口／出口代码。公开 CodeGenerator 仍拒绝 Ref 发布，完整 return／错误
+清理、wire 格式和公开 ABI 仍未完成。此桥接不属于稳定 runtime Fragment ABI。
 
 ### Canonical Ref-apply context 安放计划（2026-09-28）
 
@@ -516,9 +530,11 @@ CFG；生成的入口／出口安放、return／错误清理、wire 格式和公
 context 栈。每条后继边记录按内到外释放、按外到内构造的 context；`return` 与
 `unreachable` 终止路径单独记录。进入 Ref-apply region 只能经过其确切入口 block。
 独立 CFG verifier 执行此分析，因此伪造边不能绕过 context 构造。回归覆盖正常
-进入／退出、绕过入口，以及嵌套提前返回时内层先释放的义务。这仍只是安放
-**计划**，尚未生成清理指令：LLVM 仍拒绝该 region，运行时失败及被 outline 的
-continuation 尚未针对生成指令完成验证。不改 container 或公开 ABI。
+进入／退出、绕过入口，以及嵌套提前返回时内层先释放的义务。在这一时间点它仍只是
+安放**计划**，尚未生成清理指令。后续私有证明已生成一个顶层 region，并验证
+outlined Slot 的 context 继承与 return 清理。后续私有证明核对分派失败时先 Drop
+再 trap；可恢复失败清理仍开放。不改
+container 或公开 ABI。
 
 ### 私有 LLVM Ref-apply context 转换证明（2026-09-29）
 
@@ -531,34 +547,397 @@ Ref-to-context 派生和拥有型 cell Drop 调用。一次性 internal LLVM 函
 container encoder 和公开 CodeGenerator 门禁仍关闭；稳定 ABI 与 wire 格式不变。
 私有桥接符号已登记到显式 JIT runtime 符号表，但尚无可发布的源码 module 引用它们。
 
-### 私有单 region 源码 Ref-apply 函数体（2026-09-29）
+### 私有一至两层 region 源码 Ref-apply 函数体（更新于 2026-10-04）
 
-一次性 CodeGenerator 现可生成**真实 canonical 源码 body** 的受限情形：只有一个
-顶层 Ref apply、显式父 Fragment context、通过 Jump 进入，并可有正常 Jump
-出口和／或提前 return。入口从借用的局部 Ref 派生 context；
-RuntimeSlot 站点从同一拥有型 context cell 加载并分派。正常出口在 apply 局部
-edge cleanup 之后 Drop context；提前 return 则先做 apply 内部 cleanup，
-再 Drop context，最后做外层 cleanup（包括 Ref owner）。私有证明把每条 CFG
-退出义务映射到恰好一次 LLVM block 中派生 cell 的 Drop，确保它先于 Jump 或
-return；提前返回时还须先于被借用 Ref owner 的 Drop。证明另核对派生／分派
-operand 的关联、每个直接 RuntimeSlot CFG 站点的分派是否读取同一派生 context
-cell，以及 module IR 有效性，随后销毁 module。顺序排列的直接站点已支持；
-outlined continuation 内的分派尚未进入此私有证明；证明体至少要有一个直接
-RuntimeSlot 站点，且全部位于这个 apply 内。它刻意比源码语法严格：
-嵌套 apply、非 Jump context 转换和 unreachable 终止仍被私有代码生成拒绝。
-这个临时证明在派生失败时 trap；可恢复的源码错误／清理
-协议尚未定义。module verifier、container encoder 和公开 CodeGenerator 仍拒绝
+一次性 CodeGenerator 现可生成**真实 canonical 源码 body** 的受限情形：一个顶层
+Ref apply，以及可选的一个内层 Apply，两层借用同一本地 Ref 或各自借用一个 Ref，
+针对相同或不同的精确 Slot。每层 region 有独立拥有型 context cell。私有证明分别核对
+每次派生对应的参数 carrier 与精确 Slot／Contract 常量。Jump 入口从当前父 context
+派生；Jump 出口与 return 在借用 Ref owner 释放前，按内到外执行局部 cleanup 和 Drop。
+私有证明将每条 CFG 进入／退出义务对应到 LLVM derive／Drop，核对 Slot 分派使用
+最内层有效 cell，并递归检查生成的 continuation callback。每个 frame 在分派前
+捕获完整 owner 栈；outlined return 在逃逸前释放该栈，不能留下未验证的生成分派。
+顺序与嵌套 outlined Slot 站点均受支持；证明体至少有一个 RuntimeSlot 站点。
+内层 Apply 可经 Jump 边在 outlined Slot 回调内进入与退出；回调捕获其 Ref carrier，
+派生回调局部 owner cell，并把当前 owner 栈传给更深的 Slot 回调。私有证明核对
+回调副本的每次派生、分派、Jump 退出和 Return，包括失败分支 Drop。非 Jump context
+转换和可执行的 unreachable 终止仍被私有代码生成拒绝。唯一允许的 unreachable
+终止是穷尽两个标签、入边不改变 context 的 Result Switch 默认分支。
+生产入口证明仍仅支持 unit 返回；仅测试用的私有入口也接受受限 Ref-apply body 的
+`Result<i32, i32>` 返回。
+派生失败保持输出 cell 为空，释放有效父 cell 后 trap。Slot 分派返回负状态时，
+源码 body 与 outlined 回调都会先按逆序 Drop 全部有效 cell，再 trap。私有证明
+把每个失败分支连回对应派生／分派，并核对 owner 栈及顺序；续体 return 已清空
+cell 后重复 Drop 也安全。可恢复的派生／分派失败尚无源码级返回协议。module verifier、
+container encoder 和公开 CodeGenerator 仍拒绝
 带 Ref 的发布，因此这并非端到端可执行源码支持，也不改变公开 ABI。
 
 canonical 回归目标另有仅在测试编译时启用的私有 JIT 入口。它把已经验证的源码
 body 放进内部测试 wrapper，以真实借用 Ref 和空父 context 执行正常退出、Slot
-分派后的提前 return、分派前的提前 return，以及正常／提前退出路径上的两个
-顺序 Slot 站点。generation lease 在调用期间
-保持固定，宿主随后释放 Ref handle 后即失效，证明这些路径没有留下派生 context
-的 pin。每个 body 都使用同一借用 Ref 连续调用两次，以核对重复 apply 不消耗
-宿主 handle。此入口还读取每次 activation 的打包参数，确认两个顺序站点在两次
+分派后的提前 return、分派前的提前 return、两个顺序 Slot 站点，以及
+一层、两层 outlined continuation 内的嵌套 Slot 站点与其中的 return，以及两个
+嵌套 Apply region 的正常出口和内层 outlined return。双 Ref 夹具用同 Slot 的不同
+descriptor 核对外／内／外分派来源与参数。双 Slot 夹具核对外层 `checkpoint`、
+内层 `shadow`，以及内层之中和退出后的外层 `checkpoint`，包括精确 Slot／Contract／
+布局和参数 payload；第二个双 Slot 夹具从内层 outlined 续体 return，核对逆序 owner
+清理路径。
+回调局部 Apply 夹具核对正常退出时的 Slot 参数顺序，以及内层 outlined return 在
+释放有效 owner 栈后逃逸。generation lease 在调用期间保持固定，宿主随后释放一或两把
+Ref handle 后即失效，证明这些路径没有留下派生 context 的 pin。每个 body 都使用
+同一把或两把借用 Ref handle 连续调用两次，以核对重复 apply 不消耗宿主 handle。
+此入口还读取每次 activation 的打包参数，确认两个顺序站点在两次
 调用中均按 `1`、`2` 分派。生产编译器目标不含此入口，也不生成公开 descriptor
 或 container code。
+
+### Ref apply 内的源码 `?`：私有执行验证（2026-10-05）
+
+新增的真实源码夹具在两层嵌套 Ref Apply 内使用 `?`。生成的 Result Switch 在 Ok／Err
+边上仍保留两层有效 region；Err 分支是 Return 终止点，flow plan 要求先释放内层
+context，再释放外层 context。普通 CFG verifier 接受此路径。私有 JIT 入口现生成
+真实的 Result 返回 body，并通过仅用于测试的标量值观察标签和 `i32` payload。
+两个源码函数分别以本地 `Ok(9)` 和 `Err(7)` 为输入：Ok 分派 `checkpoint(9)`，
+返回 `Ok(0)`；Err 在分派前返回 `Err(7)`。两条路径都使用真实借用 Ref 各执行两次。
+私有证明核对派生 context 与 Drop，宿主释放 handle 后 generation pin 失效。
+另两个私有 JIT 夹具分别在 outlined Slot 续体内返回 `Err(7)`，以及在先前 Slot 分派
+正常完成后通过 `?` 传播错误。前者验证 Result 在回调 frame 中的存储与逃逸，后者
+验证已完成分派之后的 Err 仍按先内后外清理。两者都使用真实借用 Ref，并核对分派
+次数及返回 payload。
+另一个 Err 夹具在 `?` 之前分配带源码 `Drop` 方法的 apply 局部 struct。仅测试用的
+JIT 导入其精确冻结的 Drop glue 和外部探针；两次调用各以预期 payload 执行一次 Drop。
+私有 LLVM 证明核对该局部存储，并验证 Drop、`rt_dealloc`、context Drop 的顺序；
+ASAN canonical 目标通过。
+新增 Err 夹具将 `Result<i32, SourceError>` 的仿射源码错误经
+`From<SourceError> for i32` 转换，函数返回仍是 `Result<i32, i32>`。仅测试用的
+JIT 只导入 canonical Err Return 精确引用的冻结 `From` 方法；私有 LLVM 证明要求
+转换调用恰好一次且先于两层 context Drop。两次执行都在没有 Slot 分派时返回
+`Err(47)`，宿主释放 handle 后借用 Ref 的 pin 失效。仿射源码错误带有源码 `Drop`，
+由转换方法消费；仅测试用的 JIT 顺着该方法的冻结 cleanup 表导入精确的 Drop glue，
+探针证实每次调用各 Drop 一次。返回 payload 仍是标量。
+另一源码夹具在相同的两层 Ref Apply 和 `?` 结构中返回
+`Result<i32, ReturnedResource>`。封闭 CFG 验证拥有型 payload 的 move 与先内后外的
+context 退出。更窄的仅测试用 JIT wrapper 在源码 body 返回后观察资源 Err，调用精确
+冻结的 Drop 方法，再调用 `rt_dealloc`。两次调用都在没有 Slot 分派时得到 marker
+`59`，Drop 探针每次触发一次。wrapper 现还覆盖完成 Slot 分派后的资源 Ok
+（marker `67`），以及 marker 位于第二字段的双字段资源 Err（marker `61`）；后者
+按冻结的 product 偏移读取字段。每个 owner 每次调用各 Drop 一次。同一 Result 形状的
+标量 Ok／Err 分支分别返回 `14`／`13`，不调用资源 Drop。源码 Drop 方法在探针后把
+`marker` 清零，因此返回的 marker 还验证 wrapper 在最终清理前
+完成观察。此仅测试用 wrapper 最多接收两个顶层字段：一个 `i32` marker，另一个为
+`i32` 或下述有界内嵌资源。它在 JIT module 内消费 owner，不向宿主交付资源指针或所有权
+carrier。这些夹具的 canonical ASAN 目标通过，但仍受下述独立的间歇性 COFF loader
+故障限制。
+另两个 Err 夹具分别返回两层和三层 struct 所有权链。wrapper 在读取外层 marker 后复用
+编译器现有的递归拥有型 payload 清理；窄形状门禁最多准入三个各有冻结源码 Drop 与
+`i32` marker 的 struct。私有 LLVM 检查要求 Drop 从外到内、deallocation 从内到外。
+两次 JIT 调用分别观察到 `71, 73, 71, 73` 和 `79, 81, 83, 79, 81, 83`。
+ASAN canonical 目标通过。更长或分叉的所有权图仍不在此证明范围内。
+此前 Windows Clang64 ASAN（LLVM 20.1.8）canonical 测试共运行五次，其中一次在 LLVM COFF
+JIT 装载时以 `IMAGE_REL_AMD64_ADDR32NB relocation requires an ordered section layout`
+失败；紧接着的重试及其后三次重复运行均通过。增加资源返回 CFG 夹具后又有一次通过。
+失败发生在较早的 sealing-test 阶段，早于注册的 Ref 夹具；这是 JIT loader 失败，
+不是 ASAN 内存诊断。Windows LLJIT 默认 object layer 使用 RuntimeDyld，尚未锁定具体
+触发的 JIT 调用。canonical 测试现对各 sealing 子测试和最早三个 JIT 调用标记阶段；
+增加标记后连续 12 次 ASAN 重跑均通过，未再捕获重定位失败。定位这一 COFF section
+布局间歇故障前，ASAN 结果须附带此限制。
+一次只作用于测试目标的独立实验把 Windows object layer 改为 LLVM 20.1.8 的
+JITLink。ASAN canonical 的一次运行在更早的 compiled-host 夹具链接时失败：
+`.pdata` 到 `.text` 超出 `Pointer32` fixup 范围。该实验改动已撤回；默认
+RuntimeDyld 构建随后通过同一 canonical 测试。因此直接切换此 JITLink 配置
+不能作为已验证的间歇性 RuntimeDyld 故障修复。
+私有 JIT 另有一组仅测试用的宿主所有权交接入口。状态入口先检查 tag／owner 输出
+地址非空、互不重叠且 owner cell 为空，再调用源码 body。标量分支只写 tag；资源
+分支先写 tag，最后写 owner 指针作为所有权提交点。独立 JIT Drop 入口先清空 cell，
+再按冻结的递归 Drop 与 deallocation 顺序清理。私有 LLVM 检查要求交接入口只调用
+一次 body，且只有注入失败分支可额外调用清理函数，并核对两条 Drop 调用链。
+三层 struct Err 夹具证实成功交接
+的 owner 在宿主显式 Drop 前不被清理，之后每个 owner 恰好观察 `79, 81, 83` 一次；
+重复 Drop 失败。资源 Ok 分支也每次交接并 Drop 一个 owner；对应的标量 Ok 与 Err
+夹具保持 owner 为空且不执行资源 Drop。已占用、重叠或
+空输出地址在 body 分派前失败且不改动输出。注入的失败在源码 body 返回非空资源后
+触发，两个输出保持原值，JIT 在返回状态 `3` 前执行同样的精确清理。第二次成功
+交接后，宿主延迟 Drop，先释放借用 Ref handle，并确认 generation pin 失效而资源
+Drop 次数不变。随后释放原始 JIT 句柄，由另一份共享 LLJIT lease 保持 Drop 入口
+可执行；宿主恰好执行一次 Drop 后该 lease 才结束。裸 owner 指针本身不保留 JIT
+代码；公开 carrier 必须同时持有 owner 与代码 lease，直到清理完成。这仍只是私有
+实验，没有公开 carrier 或符号契约；尚未确定生产失败状态，也未验证 owner 未释放
+时安全关闭 JIT 的行为。
+该观测值不是公开返回 carrier 或稳定 ABI。更长或分叉的嵌套资源图、
+更复杂的转换函数体、outlined Slot body 中的 `?`，以及可恢复的
+派生／分派失败，均不在此执行证明内；前端继续在
+outlined Slot 边界拒绝 `?`。
+
+当前源码 builder 通过 Jump 边进入 Ref Apply，并在正常结束时通过 Jump 边退出；
+这些结构化路径不生成源码级的非 Jump context 转换。flow planner 会计算所有边类型
+的义务，但私有 codegen 明确拒绝非 Jump 转换。保留此门禁，直到未来的源码 lowering
+产生可达的相应边，并有可执行的清理证明。
+
+另一仅测试用的状态入口现把只读 parent context 预检、精确的 native 借用 Ref
+检查与一个已封闭、返回 unit 的
+源码 Apply body 组合；SlotId／ContractId 来自该 body 参数的冻结目标。真实宿主
+构造的 Ref handle 连续两次各成功分派一次；空 handle 与指向另一精确 Slot 的有效
+Ref 分别返回不同的私有无效句柄／目标状态，均不进入 body。空 parent context
+也在 Ref 检查和 body 前失败。私有 LLVM 检查要求一次 context 检查、一次 Ref
+检查及一次 body 调用，并核对精确的状态分支、目标 block 和返回常量。
+compiler-private context 检查接受 Runtime 构造的有效 parent，
+拒绝空值且不分配。两个 handle 在释放前都保留 generation，JIT lease
+覆盖同步调用。这条路径没有使用 `emitRuntimeFragmentRefUnitIngressWrapper`：该通用
+helper 有意拒绝 Apply region。组合入口仅编入测试目标，生产 CodeGenerator 与
+module verifier 仍拒绝发布。native check 会读取由 Runtime 构造的 handle，不能
+验证任意或已失效的 pointer；context 预检也有同样限制。私有状态配置将
+成功／context／handle／target／未预期检查结果分别映射为 `0/1/2/3/4`；
+只有精确的已知 native 结果获得相应名称，其他检查结果走未预期分支且不能进入
+body。这些数值不是公开入口状态契约，body 也没有可恢复的执行失败状态。发布
+仍须定义公开状态 ABI、符号／描述符映射及覆盖整次调用的代码 lease。
+生成这个测试入口前，私有证明会将封闭的 Function declaration、可调用
+TypeId／linkage／所有权契约，与源码签名、CFG 根参数和首个 Apply 的精确目标
+交叉核对。篡改冻结的 linkage 或参数借用契约会使 JIT 物化失败。测试钩子现在还
+生成一条不含指针的候选记录：独立 magic、版本、总长度、清零保留字、固定字段数、
+带长度且有界的 module／package／function／Ref／Slot／entry 身份，以及明确的
+调用、借用、结果和私有状态配置码，以及一个来自该精确函数 context-effect
+固定点分析的字段。将字段改为 false 或伪造源码 effect 都会失败。校验器重新
+检查封闭 CFG 与冻结事实。测试会
+拒绝截断、额外字节、身份或约定字段变异、源码事实变化，以及通用 Native v1
+导出行。此记录仅供测试；公开 descriptor、导出摘要和 loader 尚未使用它。
+仅测试用的已装载入口视图在查找固定入口符号前，会对照冻结源码及生成该记录的 JIT
+module 重新校验；有效记录配上未绑定该记录的 JIT module 也会被拒绝。视图持有代码
+lease，每次同步调用再临时复制一份；夹具释放原始 JIT 引用后仍调用两次，释放视图后
+确认 JIT lease 失效。两位由 Runtime 构造的借用 owner 在调用期间仍有效。第三次调用
+改用仅测试用的 Ref 句柄副本（共享原有不可变 snapshot）和 parent context 副本；
+夹具先释放原始 Ref 与 parent，再验证 snapshot pin 保持 generation 存活，释放 pin 后
+确认 generation 结束。副本只从有效的类型化句柄建立，并拒绝覆盖非空输出；不接受
+任意或失效的 opaque pointer。这只证明进程内来源绑定与寿命，不是 verified
+artifact loader 或公开 Runtime lookup。
+2026-10-05 的严格 CLANG64 与 Windows ASan／UBSan 构建均通过已装载入口视图的
+聚焦 canonical 测试；生产 `luna` 目标构建、设计状态和 file-guide inventory 门禁
+通过，`git diff --check` 无错误。后续借用 owner pin 扩展另行验证。这是本地切片
+验证，不等于完整测试集或跨平台验证。
+借用 owner pin 扩展也通过严格 CLANG64 和 Windows ASan／UBSan canonical 测试；
+生产 `luna` 目标构建及两个文档门禁通过，仅测试用 helper 未进入生产 ABI。
+
+#### 借用 Ref／unit 宿主入口候选契约（仅设计）
+
+最小可发布形态是一次同步调用，逻辑签名为
+`status(parent_context, borrowed_ref) -> i32`，源码参数为
+`shared borrow RuntimeFragmentRef<S>`，返回 `unit`。宿主在调用全程保留两个
+由 Runtime 构造的 owner；Ref 所有权不转交给 body。lookup 返回的固定 callable
+须保留描述符和机器码直到调用结束。入口先检查 parent 和精确 Ref 目标，再进入
+body。私有 `0/1/2/3/4` 配置只证明入口预检错误可以区分，不是公开状态 ABI。
+
+| 候选契约事实 | 发布前必须验证 |
+| --- | --- |
+| 独立 magic、ABI 版本、结构大小和清零保留字段 | 读取入口字段前拒绝未知布局或版本。 |
+| 函数 SymbolId、ContractId、TypeId、linkage 名称和已验证 registry 的所属 module 身份 | 对上一个封闭的导出函数与已验证产物；不能仅由原始符号地址推断 ABI。 |
+| 精确目标 SlotId 和 Slot ContractId | 与冻结的 `RuntimeFragmentRef<S>` 目标及源码参数类型一致。 |
+| 调用约定、parent／Ref 顺序的两个 pointer、共享借用模式、unit 结果与带版本状态域 | 与生成 wrapper 一致，并区分 context、handle、target 和执行失败。 |
+| 装载后的入口视图：入口地址及 generation 身份 | 只经已验证、固定 module 的 lookup 取得；同步调用期间保留代码 lease。 |
+
+现有通用 Native export 和 Runtime declaration 描述符未编码 Ref 目标或这套入口
+ABI。Fragment 描述符对应 factory／environment／activation 执行，不能代替源码
+函数入口。修改生产发布前须决定新类型化记录怎样附着在已验证 Moon／Native 导出上。
+Moon Container 0.3 编码器仍拒绝 Apply region，module verifier 和 CodeGenerator
+也仍拒绝发布源码 Ref。
+
+现有 Native 验证链路确定了接入边界：`buildNativeLibrary` 从封闭的 declaration
+table 构造各项 `NativeExportSpec`；`canonicalNativeExport` 只把 kind、flags、
+SymbolId、ContractId 和 linkage 序列化供 proof export digest 计算；
+`emitNativeLibraryDescriptor` 生成相应 v1 行。装载时，
+`validateNativeDescriptor` 要求精确的 v1 行大小，并重新计算该摘要，然后导出项
+才进入 generation。因此，仅在 Runtime binding 上附加 Ref 目标或入口约定，
+不能得到现有 proof 的验证。不得原地扩展 v1 行。新的带版本类型化行必须从已验证
+的冻结函数签名与 CFG 导出，同时进入规范化导出摘要和生成的 descriptor；loader
+须检查字段有效性和身份歧义。重建后的 artifact digest 与 trust 记录便能约束映像
+及其导出摘要。`stageVerifiedNativeGeneration` 当前只把 symbol／contract／entry／
+kind／flags 复制到 `GenerationBinding`；宿主调用前，类型化事实还须传到固定的
+lookup 结果。generation 已保留已验证库的 lease，但调用者须在整次同步调用期间
+持有 `PinnedBinding`。
+
+2026-10-06 实际以 `-t native` 构建导出且触达 Runtime Slot 的函数时，MoonIR
+verifier 因缺少 runtime-aware 公开入口 ABI 而拒绝。语义与 Native artifact 回归
+现固定了这项拒绝；Native 测试还要求不产生库文件或 trust 记录。现有 proof-v1
+callable 测试只覆盖无参 `i32` 函数，不能验证 Ref／unit 入口。带版本的类型化导出
+路径确定前继续保留此门禁。
+2026-10-06 当前 CLANG64 工作树随后重建并以四个 worker 在 71.18 秒内通过全部
+77 项本地非硬件 CTest；这是更广的回归证据，不是已验证 Native Ref／unit 导出或
+发布批准。
+隔离的 WSL Arch Linux Clang／LLVM 22.1.8 构建完成全部目标，并以四个 worker
+在 67.15 秒内通过本地 Linux 完整 CTest 76／76 项。首次运行 75／76，唯一
+失败的 frozen ecosystem baseline 检查是因为 WSL Git 未继承 Windows 系统的
+`core.autocrlf=true` 设置，将子工作树的 CRLF 检出误判为修改。该设置下两个
+子工作树均干净；仅对测试进程设置 Git 配置后，失败项与整套复测均通过。
+这是本地 Linux 证据，不是远程平台 CI。
+
+#### Native 类型化导出边界核查（2026-10-06）
+
+当前 Native v1 导出行包含声明种类、callable 标志、SymbolId、ContractId、链接名和
+裸入口地址。规范化导出摘要覆盖无指针字段，artifact 摘要绑定二进制字节，loader 核对
+行结构和身份；但这些路径均没有调用签名、
+Ref 目标或 Fragment context effect。`stageVerifiedNativeGeneration` 将该行继续
+作为无类型化 `GenerationBinding` 传递；codegen 放入 callable 行的仍是生成函数体，
+不是 Ref 宿主 wrapper。结构化 verifier 已拒绝依赖 context 的导出函数，Native 夹具
+要求此类输入在产生库或 trust 记录前失败。
+
+私有的双参数 `i32(parent_context, borrowed_ref)` wrapper 及其仅供测试的状态映射，
+不能通过该 v1 行发布。它的无指针记录核对冻结签名／Slot 身份及 context effect；
+私有 loader 还要求保留的 JIT module 携带完全相同的记录字节。该记录没有 CFG 或代码
+摘要，单靠它不能证明分别构建的 artifact 具有相同函数体。
+
+下一项可独立审查的切片是带版本和独立入口 ABI profile 的类型化导出契约：先定义双
+参数调用约定、状态值、parent context 与借用句柄的寿命、Ref 目标身份和 effect 字段，
+再生成可调用 descriptor。全部字段必须进入规范化导出 proof，并绑定已验证 wrapper；
+仅给 v1 callable 行增加 profile 位并不足够：现有宿主调用者只检查 `CALLABLE`，然后
+把裸地址转成 `i32()`；Ref 入口必须只能经强制核对其精确 profile 的 lookup 获取。
+loader 校验及带 generation pin 的类型化 lookup 要拒绝字段缺失、版本混用和身份不符。
+在整条链和 Container wire 规则通过前，Native v1 保持通用入口，源码 Ref 导出门禁
+继续关闭。
+
+Native v1 descriptor 生成器现于创建 registry 前，独立核对请求行是否对应已生成
+模块中的公开 export，以及精确的 SymbolId／ContractId、声明种类、链接名和 callable 标志。即使
+上游绕过结构化 verifier，它也会拒绝源码声明需要 Fragment context 的 callable。
+canonical 回归先提供已生成但未公开的 `main`，再在生成后伪造 export 与 context
+effect，两次均被拒绝；正常 Native artifact 生成仍通过。Windows CLANG64 与 WSL
+Arch Linux 的 canonical、Native artifact 聚焦测试通过；Linux 完整 CTest 以四个
+worker 在 75.62 秒内通过 76／76 项。这是 v1 的 fail-closed 门禁，不是类型化 Ref
+入口或发布候选 CI。
+
+Native artifact 门禁现在还构建带公开 `RuntimeFragmentRef<Slot>` 参数的 package，
+要求 MoonIR 报告 Ref wire／ingress 未实现，并确认没有生成共享库或 trust 记录。
+它将源码 Ref 发布与依赖 context 的 Slot 入口分开检验；当前由 verifier 先于后备
+codegen 门禁拒绝。Windows CLANG64 和 WSL Arch Linux 的 Native artifact 聚焦
+CTest 均通过。
+
+写入 Native v1 callable 地址前，descriptor 生成器现在还会核对冻结 Function 的参数／
+返回 TypeId、源码声明，以及实际已定义 LLVM 函数的类型和 C 调用约定。canonical
+回归在 codegen 后同时篡改源码参数和冻结函数类型，未改变的 LLVM 函数体不能按
+伪造签名发布。Windows CLANG64 与 WSL Arch Linux 的 canonical、Native artifact
+CTest 均通过；Linux 完整 CTest 以四个 worker 在 74.36 秒内通过 76／76 项。
+此项核对的是编译器内部一致性，不告诉外部 v1 调用者该用什么签名。
+
+首个**并行 Native v2 descriptor／query** 切片已对经过验证的无参 `i32` 导出实现。
+v1 行、查询符号和 proof 导出摘要保持不变。生成器先核对封闭的源码签名及实际已定义、
+遵守 C 调用约定的 LLVM `i32()` 函数，才加入 `C_I32_NOARGS_V1` 行。加载器核对
+v2 header、身份、profile、规范化行摘要及与已验证 v1 行的精确对应；现有 artifact
+proof 摘要覆盖全部 v2 metadata。`VerifiedNativeLibrary::callI32NoArgs` 在库
+持有期间执行类型化入口，不向外返回新的裸函数指针。独立消费者核对两版 query 与
+摘要；重新封装 proof／trust 的 v2 摘要变异在 Windows CLANG64 与 WSL Arch Linux
+上被加载器拒绝。Native generation 解析现在只把已验证的 v2 profile 写入独立的
+`GenerationBinding.entryAbi` 字段。带 profile 的 requirement 精确匹配入口；
+`PinnedBinding::callI32NoArgs` 调用期间由 generation 保留已验证库的 lease。
+load-once、activation 和 switchable requirement 均核对 profile 稳定性。
+旧式四字段 requirement 仍按身份／种类／flags 匹配，但显式要求无 profile 时
+不能匹配类型化导出。重新封装并改名 v2 query 的测试制品验证可选查询路径。
+另一个从纯 v1 C 源码独立构建、拥有自身 proof／trust 的共享库，也通过独立
+proof oracle、v1 loader／调用及无 profile generation 检查；因无 v2 query，
+类型化 lookup 被拒绝。Windows CLANG64 与 WSL Arch Linux 的 Native artifact
+聚焦测试均通过。这是已实现的本地 ABI 实验，尚非冻结的公开 ABI 或 Ref wrapper 导出。
+此项接入后的本地 CLANG64 与 WSL Arch Linux 完整 CTest 分别通过 77／77 和
+76／76 项；该计数早于三项仅编译布局测试接入。
+
+下列本地候选已固定当前 profile 布局、摘要和版本规则。现有发布包与 CI 矩阵
+覆盖 64 位 Linux、Windows 及 macOS runner 架构，没有列出 32 位发布目标。
+macOS 工作流运行包括 Native artifact 测试在内的非硬件 CTest，但当前未提交
+工作树尚无对应的 Mach-O 或远程平台 CI 结果。公开 ABI 承诺前，须在不可变
+候选上运行这些 CI，并让宿主使用方审阅后续 query 版本规则。源码 Ref 发布仍须等 context effect、精确 Slot／Contract 目标、
+carrier 状态与所有权语义完成端到端封闭和核验。
+
+#### Native v2 本地布局与版本候选（2026-10-06）
+
+当前 64 位目标矩阵固定自然 C 布局：v1 导出／库记录分别为 48／64 字节，v2 分别
+为 56／96 字节。v2 行中的 `entry_abi`、`symbol_id`、`entry` 偏移为 16、24、
+48；v2 库记录中的 `export_count`、`exports`、32 字节摘要偏移为 48、56、64。
+C 头文件对此作静态断言，独立消费者也会检查。对 i386 GNU/Linux、i686
+Windows GNU 和 i386 Darwin 的 freestanding 仅编译探针显示：32 位 v1／v2
+导出记录大小为 32／40 字节；v2 行的 `entry_abi`、`symbol_id`、`entry`
+偏移为 16、24、36，v2 库记录的 `export_count`、`exports`、摘要偏移为
+32、40、44。库记录的尾部对齐不同：所测 GNU/Linux、Darwin 的 v1／v2
+大小为 44／76 字节，Windows 为 48／80 字节。可复现探针见
+`tests/native_abi_layout_probe.c`；Clang CTest 会在每个配置的宿主上对三个
+triple 仅编译，不使用 32 位链接器或运行时。本地 Windows CLANG64 与 WSL
+Arch Linux 的三项布局 CTest 和文件清单测试均通过。接入这三项测试后，
+完整非硬件 CTest 在 Windows CLANG64 通过 80／80，在 WSL Arch Linux
+通过 79／79。这些结果
+不证明 32 位制品生产、加载、执行或发布支持。若将来增加 32 位目标，须另行
+完成端到端制品／运行时 CI，并明确决定 ABI／版本。
+
+v1 proof／query 始终必需且保持不变。v2 query 可以缺席：此时 v1 binding 无
+profile；若存在，则必须符合精确的 ABI 2、结构大小、保留字段为零、proof 身份
+一致，且 v2 行是已验证 v1 行的子集，身份、flags、链接名和入口地址都一致。
+schema 2 只认 `C_I32_NOARGS_V1 = 1`，即遵守 C 调用约定的已定义
+`int32_t(void)` 函数。未知 profile 或异常 v2 行拒绝整份已加载映像，不退回 v1。
+
+v2 descriptor 摘要采用 SHA-256：先编码小端 `u32` 行数，再对排序去重后的每行
+编码 `u32` 字节长度与原始字节。行内容是 `LUNA_NATIVE_EXPORT_V2\n`，再以 `\n`
+分隔十进制 kind、flags、entry ABI、SymbolId、ContractId 和链接名，末尾没有
+分隔符。进程内指针不进入规范化行；v1 整制品 proof 摘要绑定包含这些指针的
+链接映像。若改行编码、摘要算法或加入新 profile，必须采用新的并行 query／
+schema 版本；现有 v2 loader 会拒绝未知字段与 profile。
+
+在 MoonRuntime 中，binding profile 0 表示无 profile，profile 1 允许固定的
+`i32()` 调用。`GenerationEntryAbiAny` 只能出现在 requirement，作为通配符保留
+旧式四字段调用的源码兼容；显式 0 或 1 则精确匹配。switchable binding 会捕获
+当前具体 profile，拒绝以后切换到不同 profile 的 generation。这些规则是本地
+候选，并非已发布的稳定外部 ABI。
+
+上述私有类型化行编码与校验只完成了本地源码到记录的核对。Moon Container 的
+Function code 记录已保存 `requiresFragmentContext`，module verifier 会从 CFG
+重新推导它，但 Container 编码器仍拒绝 Apply graph。冻结的 `DeclarationRecord`／
+规范契约与 Native v1 导出行均未包含该 effect；structured verifier 还会拒绝
+要求 Fragment context 的导出函数。因此下一道边界是公开状态映射，以及针对依赖
+context 的源码导出函数一同调整的 verifier／export 规则。其 effect 和 Ref 目标
+须进入封闭的导出 metadata；随后一起扩展 v2 profile、规范化哈希、loader 校验
+和固定的 Runtime lookup，同时让通用 v1 行保持无类型化入口语义。
+
+### 下一步源码 Ref／apply 完成门（更新于 2026-10-06）
+
+以下是剩余源码功能的建议实施顺序，不是公开 ABI 决议或稳定版发布批准：
+
+1. **闭合控制流与清理证明。** 私有两层、仅经 Jump 转换的路径已有单或双借用 Ref、
+   相同或不同精确 Slot 的 owner 栈证明与 JIT 证据，包括 outlined 回调内的内层
+   Apply。当前源码 builder 使 Apply 入口和正常出口经 Jump 转换；在源码 lowering
+   产生非 Jump 跨区边前，继续明确拒绝它。受限的 `Result<i32, i32>` `?` 路径已有
+   先内后外的 CFG 证明和 Ok／Err 私有 JIT 证据，包括将一个仿射源码错误经冻结
+   `From` 方法转换为标量并由源码 `Drop` 清理。更复杂的转换仍需清理证明。
+   单／双字段资源 Err 与单字段资源 Ok 已由私有
+   wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
+   struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。
+   更长或分叉的拥有型字段仍在证明范围外。仅测试用的宿主交接入口已验证空 owner
+   cell 预检、tag／owner 提交、借用 Ref pin 失效后单独保留 JIT lease，以及三层
+   链的显式恰好一次 Drop。
+   注入的 body 返回后失败现证明未提交 owner 的清理；公开宿主所有权 carrier 与
+   生产失败状态仍需契约及可执行证明。发布可返回失败的
+   路径前，须明确可恢复的派生／分派失败清理。
+   每条准入的出口都须在 apply 局部清理之后、借用的
+   Ref owner Drop 之前，按内到外恰好一次释放有效 context；其余路径继续拒绝。
+   独立捕获 Windows LLVM 20.1.8 RuntimeDyld 间歇性 COFF 重定位失败所对应的
+   精确 JIT 调用。直接切换 JITLink 又遇到不同的 `.pdata` `Pointer32` 范围失败；
+   下一步在隔离构建中验证保序 section allocator 或较新版 LLVM，重复 ASAN
+   测试后再将 sanitizer 结果视为稳定证据。
+2. **冻结可发布的宿主边界。** 明确带版本的 Ref 入口 carrier、返回 carrier／状态、
+   精确 Slot／Contract 校验、借用寿命、所有权提交点及失败清理。现有私有 wrapper
+   与 opaque 内部类型只是验证证据，不是公开契约。最小候选是一个同步共享借用 Ref
+   参数和 unit 返回，由返回状态的 wrapper 在进入函数体前校验精确 Slot 和有效的
+   parent context。仅测试用的组合入口现已用真实正确／错误目标 handle 和空
+   parent 执行两项检查；通用入口 helper 仍排除 Apply region。发布前须冻结候选的
+   类型化记录与状态版本，把它附着到已验证导出，并将调用期代码 lease 接入公开
+   lookup 路径，再同步修改
+   structured verifier、导出符号
+   metadata、CodeGenerator 和 dropGlue；
+   现有 check／transfer／drop 测试覆盖 native carrier 行为，却不能证明源码入口
+   已发布。
+   独立的仅测试用 tag／owner-cell 与 JIT Drop 入口现已验证候选提交及 lease 规则。
+   发布资源返回 carrier 前须把 owner 与 JIT lease 合并为一个寿命单元，并定义
+   状态与布局版本、JIT 关闭行为，以及采用此
+   提交前清理的真实失败条件。注入的 body 返回后失败已有可执行清理证明，
+   此实验仍不构成公开 ABI。
+3. **接通 verified 产物路径。** 为已准入的控制流完成 compiler dropGlue 和生产
+   codegen，再于 module verifier 及 Moon Container 编解码中定义、验证 Ref 类型
+   和 Apply region 的 wire 规则。无效或旧产物必须在发布 generation 前整体拒绝。
+4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation
+   的 Ref，在显式 parent context 中执行源码 apply；先打通借用入口，再完成拥有型
+   参数／返回转移。覆盖名义／contract 错配、入口失败、正常／提前退出、重复 apply、
+   清理与 pin 释放。完成此门和剩余控制流用例后，`source-ref-apply` 才可脱离
+   `implementation-open`。
+
+性能验收、持久证据存储和稳定版发布批准仍是 v1 验收快照中的独立完成门。
 
 ## 宿主控制的发现与注入
 

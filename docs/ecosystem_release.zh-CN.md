@@ -1,13 +1,14 @@
 # 生态发布快照
 
 `ecosystem.lock.json` 是连接 Luna、LunaToolchain 与 Lunax 三个独立仓库的权威快照。
-当前入库的快照是已提升的 0.3.0 生态发布候选快照。Luna 组件由“包含该 lock 文件的
+当前入库的快照声明为已提升的 0.3.0 生态发布候选，仍须通过下述提交谱系与
+readiness 检查。Luna 组件由“包含该 lock 文件的
 commit”标识；子组件使用精确 Git commit。
 语言版本、诊断协议和分析协议与各组件 package 版本分别记录。
 对于已经发布的子组件，`commit` 跟踪当前验证源码，`published_release.commit` 则记录公开
 制品所对应的不可变 commit。快照同时保留 release URL、发布时间、checksum manifest 摘要
-以及每个制品的摘要作为证据。只有干净 runner 下载、校验、解包并运行所有受支持平台的
-package 后，consumer verification 才会从 pending 升级。
+以及每个制品的摘要作为证据。当前 lock 已记录子组件 consumer verification 与
+attestation 通过；这些记录对应子组件 release 固定的 Luna 源码候选。
 
 当 `release.publish` 为 false 时，该快照不可发布。升级前必须设置
 `status: release-ready`，lock 中语言版本及所有 Luna 兼容 tag 必须精确等于根仓
@@ -68,6 +69,60 @@ lock。
 打包前重新下载两组件的完整公开资产集合，解析轻量或 annotated tag 到最终 commit，复核
 checksum、`LUNA-SOURCE-COMMIT` 和 GitHub/Sigstore attestation。独立 Release evidence
 workflow 与最终 tag 发布使用同一个验证脚本，避免两套门禁随时间漂移。
+
+## 当前提交谱系与下一发布门（2026-10-06）
+
+入库的 lock 已录入 Toolchains 与 Lunax `v0.2.0` release，并将快照标为
+`release-ready`、`release.publish: true`。两项子组件 release 已发布，但它们共同
+验证的 Luna 源码提交 `41ce85e` 不是当前 Luna `main`（`8fae950`）的祖先。
+本地 `verify_release_readiness.cmake` 明确报告此阻断，严格的
+`REQUIRE_READY=ON` 模式失败；非严格模式退出成功只表示阻断策略生效，不表示
+允许发布。根仓 `v0.3.0` tag 尚不存在。本次核对没有重跑
+远程 CI 或联网制品／attestation 验证。
+
+2026-10-03 本地 CLANG64 非硬件测试以四个 worker 通过 76／77 项；
+`luna.repl-smoke` 在并行负载下于进程树清理阶段超时，单独重跑通过。随后按 JIT
+准备过程调整其时间上限，保留清理断言。2026-10-04 完整测试以四个 worker
+通过 77／77 项。
+2026-10-06 重建当前工作树后，同一套本地测试以四个 worker 在 71.18 秒内通过
+77／77 项，包括 REPL 和 Native artifact 门禁。只读 release-readiness 检查再次报告
+`41ce85e` 不是 `8fae950` 的祖先；退出成功只说明 fail-closed 策略正确阻断发布。
+工作树尚未提交，因此此次运行不是不可变发布候选的证据。
+隔离的 WSL Arch Linux Clang／LLVM 22.1.8 构建完成全部目标，并以四个 worker
+在 67.15 秒内通过本地 Linux 完整 CTest 76／76 项。首次运行通过 75／76 项：
+`luna.ecosystem-frozen-baseline` 因 WSL Git 未继承 Windows 系统的
+`core.autocrlf=true` 设置，把 Windows 检出文件的 CRLF 误判为修改。在该设置下
+两个子工作树均为干净状态；通过仅对测试进程设置 Git 配置，失败项和整套复测均通过。
+这不能替代发布候选所需的平台 CI。
+当前工作树增加实验性的并行 Native v2 `i32()` 入口 profile，同时保留 v1 proof／
+导出兼容性。Windows CLANG64 和 WSL Arch Linux 的 Native artifact、canonical
+聚焦测试均通过。后续完整本地测试分别通过 Windows 76／77、Linux 75／76；
+两端唯一失败都是文件指南清单遗漏新增的辅助头文件。补齐清单后，两端该项复测
+均通过。这些是本地工作树结果，不构成不可变发布候选或远程 CI 的证据。
+下一版工作树把已验证的 v2 profile 贯穿 Native generation binding 和类型化固定
+调用，并检查 load-once／切换期间的 profile 稳定性。重新封装的仅 v1 query 变体
+可走旧加载路径，但不能满足类型化 requirement。重新构建全部目标后，本地 CLANG64
+完整测试以 66.69 秒通过 77／77，WSL Arch Linux 以 90.60 秒通过 76／76。
+这些结果仍不构成不可变候选或远程平台证据。
+随后独立编译纯 v1 C 库并生成其自身的 proof／trust。独立 proof oracle、v1 调用、
+无 profile generation 与类型化 lookup 拒绝在两端 Native artifact 聚焦 CTest
+中通过；前述完整测试计数早于这一夹具。
+本地 v2 候选现固定 64 位 C 记录偏移及 SHA-256 行编码；独立重新封装的未知
+profile 制品会被拒绝。加入这些检查后，两端 Native artifact、MoonRuntime 与
+runtime-ABI 聚焦测试均通过。宿主 ABI 审阅与不可变提交的平台 CI 尚未完成，
+因此仍属本地候选。
+发布包清单与 CI 工作流覆盖 64 位 Linux、Windows 和 macOS runner 架构，
+没有列出 32 位发布包。macOS 工作流已包含 Native artifact CTest，但未在
+当前未提交工作树上运行。GNU/Linux、Windows GNU、Darwin 目标的 32 位
+freestanding C 布局探针现已接入 Clang CTest；本地 Windows CLANG64 与 WSL
+Arch Linux 的三项探针和文件清单测试均通过；接入后的完整非硬件 CTest
+分别通过 80／80 和 79／79。探针不验证 32 位加载器或制品。下一道 ABI 门是
+不可变候选的平台 CI 与宿主对并行 query／版本规则的审阅；增加 32 位支持
+需要独立的运行时门禁。
+下一步建立包含预期源码、测试与工作流的全新不可变 Luna 候选。子组件要
+针对这个精确提交重新生成并验证发布证据，不能移动既有 tag 或复用其源码提交声明。
+随后将匹配的证据写入 lock，通过根仓平台 CI、严格 readiness 与联网 Release evidence
+门禁，最后才创建 Luna tag。只修改 lock 状态不能修复当前候选谱系。
 
 ## 发布交接决策登记表（2026-09-15）
 

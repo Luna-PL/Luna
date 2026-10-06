@@ -459,6 +459,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/driver/NativeArtifactLoading.cpp`
 - `src/driver/NativeArtifactInternal.h`
 - `src/driver/NativeArtifact.h`
+- `src/driver/NativeTypedDescriptor.h`
 - `src/driver/NativeGeneration.cpp`
 - `src/driver/NativeGeneration.h`
 - `src/driver/Repl.cpp`
@@ -723,6 +724,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/fragment_nested_discard.luna`
 - `tests/fixtures/exported_fragment_dynamic_body_invalid.luna`
 - `tests/fixtures/exported_fragment_dynamic_call_invalid.luna`
+- `tests/fixtures/exported_runtime_slot_entry_invalid.luna`
 - `tests/fixtures/exported_fragment_unused_body_invalid.luna`
 - `tests/fixtures/exported_fragment_static_body.luna`
 - `tests/fixtures/exported_fragment_ownership.luna`
@@ -798,6 +800,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/legacy_fragment_invalid.luna`
 - `tests/fixtures/logical_short_circuit.luna`
 - `tests/fixtures/missing_return_invalid.luna`
+- `tests/fixtures/native_v1_artifact_fixture.c`
 - `tests/fixtures/named_record_construction.luna`
 - `tests/fixtures/named_record_missing_field_invalid.luna`
 - `tests/fixtures/named_record_unknown_field_invalid.luna`
@@ -968,6 +971,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fragment_lowering_abi.cmake`
 - `tests/cffi_artifact.cmake`
 - `tests/native_artifact.cmake`
+- `tests/native_abi_layout_probe.c`
 - `tests/native_artifact_consumer.py`
 - `tests/native_artifact_mutate.py`
 - `tests/native_artifact_oracle.py`

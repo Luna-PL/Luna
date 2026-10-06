@@ -37,7 +37,8 @@ bool stageOne(Runtime& runtime, const Request& request,
               std::string& phases, std::string& error,
               bool initializerSucceeds = true,
               uint32_t declarationKind = 1,
-              uint32_t flags = luna::runtime::GenerationBindingCallable) {
+              uint32_t flags = luna::runtime::GenerationBindingCallable,
+              uint32_t entryAbi = luna::runtime::GenerationEntryAbiUnprofiled) {
     return runtime.stage(
         request,
         [&](const Request&, std::string&) {
@@ -47,7 +48,7 @@ bool stageOne(Runtime& runtime, const Request& request,
         [&](const Request&, std::vector<Binding>& bindings, std::string&) {
             phases += 'R';
             bindings.push_back({symbolId, contractId, implementation,
-                                declarationKind, flags});
+                                declarationKind, flags, entryAbi});
             return true;
         },
         [&](const Request&, const std::vector<Binding>& bindings,
@@ -189,6 +190,62 @@ int main() {
             luna::runtime::GenerationBindingFragmentContext;
         if (loaded.find(fragmentContextFunction))
             return fail("ordinary callable binding satisfied fragment-context ABI");
+
+        Runtime typedRuntime;
+        Runtime::StagedGeneration profiledStage;
+        phases.clear();
+        if (!stageOne(typedRuntime, request, SymbolId, ContractId, &first,
+                      profiledStage, phases, error, true, 1,
+                      luna::runtime::GenerationBindingCallable,
+                      luna::runtime::GenerationEntryAbiCI32NoArgsV1))
+            return fail("runtime rejected a valid profiled function binding");
+        Runtime::PinnedGeneration profiled;
+        if (!typedRuntime.loadOnce(profiledStage, profiled, error))
+            return fail("profiled generation did not load once");
+        auto exactProfile = typedFunction;
+        exactProfile.entryAbi =
+            luna::runtime::GenerationEntryAbiCI32NoArgsV1;
+        auto exactUnprofiled = typedFunction;
+        exactUnprofiled.entryAbi =
+            luna::runtime::GenerationEntryAbiUnprofiled;
+        if (!profiled.find(exactProfile) ||
+            !profiled.find(typedFunction) ||
+            profiled.find(exactUnprofiled) ||
+            profiled.find(exactProfile).entryAbi() !=
+                luna::runtime::GenerationEntryAbiCI32NoArgsV1)
+            return fail("profiled generation requirement was not exact");
+        Runtime::SwitchableBinding profiledSwitchable;
+        if (!typedRuntime.makeSwitchable(ModuleId, exactProfile,
+                                         profiledSwitchable, error))
+            return fail("profiled switchable requirement was rejected");
+        Runtime::SwitchableBinding legacySwitchable;
+        if (!typedRuntime.makeSwitchable(ModuleId, typedFunction,
+                                         legacySwitchable, error))
+            return fail("legacy requirement did not capture the active profile");
+        Request changedProfileRequest = request;
+        changedProfileRequest.contentDigest = std::string(64, 'c');
+        Runtime::StagedGeneration unprofiledReplacement;
+        phases.clear();
+        if (!stageOne(typedRuntime, changedProfileRequest, SymbolId,
+                      ContractId, &second, unprofiledReplacement,
+                      phases, error))
+            return fail("unprofiled replacement fixture did not stage");
+        auto profileSafePoint = typedRuntime.safePoint();
+        if (typedRuntime.activate(unprofiledReplacement,
+                                  profileSafePoint, error) ||
+            error.find("switchable binding") == std::string::npos ||
+            profiledSwitchable.pin().entryAbi() !=
+                luna::runtime::GenerationEntryAbiCI32NoArgsV1 ||
+            legacySwitchable.pin().entryAbi() !=
+                luna::runtime::GenerationEntryAbiCI32NoArgsV1)
+            return fail("profiled switchable accepted an unprofiled generation");
+        Runtime::StagedGeneration unknownProfile;
+        phases.clear();
+        if (stageOne(typedRuntime, request, "symbol:unknown-profile",
+                     ContractId, &first, unknownProfile, phases, error,
+                     true, 1, luna::runtime::GenerationBindingCallable, 99) ||
+            error.find("invalid or duplicate binding") == std::string::npos)
+            return fail("runtime accepted an unknown entry profile");
 
         Runtime::StagedGeneration contextAware;
         phases.clear();

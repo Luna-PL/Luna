@@ -208,6 +208,7 @@ expect_error_with_source("exported Fragment direct dynamic body fails before cod
 expect_error_with_source("exported Fragment transitive dynamic body fails before codegen" "tests/fixtures/exported_fragment_dynamic_call_invalid.luna" "cannot pass an execution context to its handler body" "exported_fragment_dynamic_call_invalid.luna:7:1")
 expect_success("exported Fragment statically handled and private identity bodies remain executable" "tests/fixtures/exported_fragment_static_body.luna" "41\n42\n43\n44\nProgram exited with code: 0")
 expect_success("private static Fragment body may inherit the caller context" "tests/fixtures/fragment_static_dynamic_body.luna" "Program exited with code: 0")
+expect_error_with_source("exported context-dependent function requires a typed public entry ABI" "tests/fixtures/exported_runtime_slot_entry_invalid.luna" "has no runtime-aware public entry ABI" "exported_runtime_slot_entry_invalid.luna:3:1")
 foreach(source IN ITEMS exported_fragment_dynamic_body_invalid exported_fragment_dynamic_call_invalid)
     execute_process(
         COMMAND "${LUNA_EXECUTABLE}" check "${LUNA_SOURCE_DIR}/tests/fixtures/${source}.luna"

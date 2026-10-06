@@ -22,6 +22,7 @@
 #include <set>
 #include <sstream>
 #include <utility>
+#include <unordered_map>
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -38,6 +39,7 @@
 #endif
 
 #include "driver/NativeArtifactInternal.h"
+#include "driver/NativeTypedDescriptor.h"
 
 namespace luna::driver {
 
@@ -342,6 +344,87 @@ bool validateNativeDescriptor(
     return true;
 }
 
+bool validateNativeDescriptorV2(
+    void* handle, const NativeProofInfo& proof,
+    const LunaNativeLibraryDescriptorV1* v1,
+    const LunaNativeLibraryDescriptorV2*& descriptor, std::string& error) {
+    auto* rawQuery = loadNativeSymbol(
+        handle, "luna_native_library_descriptor_v2");
+    if (!rawQuery) return true; // Older, valid V1 artifacts remain loadable.
+    const auto query = reinterpret_cast<LunaNativeLibraryDescriptorFnV2>(rawQuery);
+    descriptor = query();
+    if (!descriptor || descriptor->magic != LUNA_NATIVE_DESCRIPTOR_MAGIC_V2 ||
+        descriptor->abi_version != LUNA_NATIVE_DESCRIPTOR_ABI_V2 ||
+        descriptor->struct_size != sizeof(LunaNativeLibraryDescriptorV2) ||
+        descriptor->reserved_zero != 0) {
+        error = "verified Native image returned an invalid v2 library descriptor";
+        return false;
+    }
+    std::string packageId, packageVersion, targetAbi, compilerIdentity;
+    if (!descriptorString(descriptor->package_id, packageId) ||
+        !descriptorString(descriptor->package_version, packageVersion) ||
+        !descriptorString(descriptor->target_abi, targetAbi) ||
+        !descriptorString(descriptor->compiler_identity, compilerIdentity) ||
+        packageId != proof.packageId || packageVersion != proof.packageVersion ||
+        targetAbi != proof.targetAbi || compilerIdentity != proof.compilerIdentity) {
+        error = "Native v2 library descriptor identity does not match its proof";
+        return false;
+    }
+    if (descriptor->export_count > v1->export_count ||
+        descriptor->export_count > MaxNativeExportCount ||
+        (descriptor->export_count != 0 && !descriptor->exports)) {
+        error = "Native v2 library descriptor has an invalid export table";
+        return false;
+    }
+    std::set<std::string> symbols;
+    std::set<std::string> linkages;
+    std::unordered_map<std::string, const LunaNativeExportDescriptorV1*>
+        oldRows;
+    oldRows.reserve(static_cast<size_t>(v1->export_count));
+    for (uint64_t index = 0; index < v1->export_count; ++index)
+        oldRows.emplace(v1->exports[index].symbol_id, &v1->exports[index]);
+    std::vector<std::string> canonicalRows;
+    canonicalRows.reserve(static_cast<size_t>(descriptor->export_count));
+    for (uint64_t index = 0; index < descriptor->export_count; ++index) {
+        const auto& row = descriptor->exports[index];
+        std::string symbol, contract, linkage;
+        if (row.abi_version != LUNA_NATIVE_DESCRIPTOR_ABI_V2 ||
+            row.struct_size != sizeof(LunaNativeExportDescriptorV2) ||
+            row.declaration_kind != LUNA_NATIVE_DECLARATION_FUNCTION_V1 ||
+            row.flags != LUNA_NATIVE_EXPORT_CALLABLE_V1 ||
+            row.entry_abi != LUNA_NATIVE_ENTRY_ABI_C_I32_NOARGS_V1 ||
+            row.reserved_zero != 0 || !row.entry ||
+            !descriptorString(row.symbol_id, symbol) ||
+            !descriptorString(row.contract_id, contract) ||
+            !descriptorString(row.linkage_name, linkage) ||
+            !symbols.insert(symbol).second ||
+            !linkages.insert(linkage).second) {
+            error = "Native v2 library descriptor contains an invalid export row";
+            return false;
+        }
+        const auto old = oldRows.find(symbol);
+        if (old == oldRows.end() ||
+            contract != old->second->contract_id ||
+            linkage != old->second->linkage_name ||
+            row.declaration_kind != old->second->declaration_kind ||
+            row.flags != old->second->flags ||
+            row.entry != old->second->entry) {
+            error = "Native v2 export row differs from its verified v1 row";
+            return false;
+        }
+        canonicalRows.push_back(canonicalNativeTypedExport(
+            row.declaration_kind, row.flags, row.entry_abi,
+            symbol, contract, linkage));
+    }
+    const auto digest = digestNativeTypedExports(std::move(canonicalRows));
+    if (!std::equal(digest.begin(), digest.end(),
+                    descriptor->export_descriptor_digest)) {
+        error = "Native v2 export rows do not match their descriptor digest";
+        return false;
+    }
+    return true;
+}
+
 
 } // namespace
 
@@ -363,6 +446,9 @@ VerifiedNativeLibrary& VerifiedNativeLibrary::operator=(
     stagedPath_ = std::move(other.stagedPath_);
     stagedDirectory_ = std::move(other.stagedDirectory_);
     descriptor_ = std::exchange(other.descriptor_, nullptr);
+    descriptorV2_ = std::exchange(other.descriptorV2_, nullptr);
+    typedExportsBySymbol_ = std::move(other.typedExportsBySymbol_);
+    other.typedExportsBySymbol_.clear();
     proof_ = std::move(other.proof_);
     return *this;
 }
@@ -371,6 +457,8 @@ void VerifiedNativeLibrary::reset() noexcept {
     closeNativeImage(nativeHandle_);
     nativeHandle_ = nullptr;
     descriptor_ = nullptr;
+    descriptorV2_ = nullptr;
+    typedExportsBySymbol_.clear();
     StagedNativeImage staged;
     staged.handle = std::exchange(stagingHandle_, -1);
     staged.path = std::move(stagedPath_);
@@ -388,6 +476,39 @@ const LunaNativeExportDescriptorV1* VerifiedNativeLibrary::findExport(
             return &exported;
     }
     return nullptr;
+}
+
+bool VerifiedNativeLibrary::callI32NoArgs(
+    const std::string& symbolId, const std::string& contractId,
+    int32_t& result, std::string& error) const {
+    if (!descriptorV2_) {
+        error = "Native library has no v2 typed descriptor";
+        return false;
+    }
+    const auto found = typedExportsBySymbol_.find(symbolId);
+    if (found == typedExportsBySymbol_.end() ||
+        contractId != found->second->contract_id ||
+        found->second->entry_abi !=
+            LUNA_NATIVE_ENTRY_ABI_C_I32_NOARGS_V1) {
+        error = "Native export has no C i32() entry profile";
+        return false;
+    }
+    const auto* row = found->second;
+    using Entry = int32_t (*)();
+    static_assert(sizeof(Entry) == sizeof(row->entry),
+                  "host cannot represent a Native function pointer");
+    Entry function = nullptr;
+    std::memcpy(&function, &row->entry, sizeof(function));
+    result = function();
+    return true;
+}
+
+uint32_t VerifiedNativeLibrary::entryAbiForExport(
+    const std::string& symbolId, const std::string& contractId) const {
+    const auto found = typedExportsBySymbol_.find(symbolId);
+    return found != typedExportsBySymbol_.end() &&
+        contractId == found->second->contract_id
+        ? found->second->entry_abi : 0;
 }
 
 uint64_t VerifiedNativeLibrary::exportCount() const {
@@ -429,7 +550,10 @@ bool loadVerifiedNativeLibrary(
         return false;
     }
     const LunaNativeLibraryDescriptorV1* descriptor = nullptr;
-    if (!validateNativeDescriptor(handle, proof, descriptor, error)) {
+    const LunaNativeLibraryDescriptorV2* descriptorV2 = nullptr;
+    if (!validateNativeDescriptor(handle, proof, descriptor, error) ||
+        !validateNativeDescriptorV2(handle, proof, descriptor,
+                                    descriptorV2, error)) {
         closeNativeImage(handle);
         releaseStagedImage(staged);
         return false;
@@ -441,8 +565,17 @@ bool loadVerifiedNativeLibrary(
     loaded.stagedPath_ = std::move(staged.path);
     loaded.stagedDirectory_ = std::move(staged.directory);
     loaded.descriptor_ = descriptor;
+    loaded.descriptorV2_ = descriptorV2;
     loaded.proof_ = std::move(proof);
     staged.handle = -1;
+    if (descriptorV2) {
+        loaded.typedExportsBySymbol_.reserve(
+            static_cast<size_t>(descriptorV2->export_count));
+        for (uint64_t index = 0; index < descriptorV2->export_count; ++index)
+            loaded.typedExportsBySymbol_.emplace(
+                descriptorV2->exports[index].symbol_id,
+                &descriptorV2->exports[index]);
+    }
     library = std::move(loaded);
     return true;
 }

@@ -1,0 +1,5 @@
+export slot checkpoint(value: i32);
+
+export runtime fn host_entry() {
+    checkpoint(1) {}
+}

@@ -1451,27 +1451,26 @@ fragment-plugin/dynamic-apply public header, Runtime/JIT ABI, MoonIR capability,
 canonical CFG branches, and build targets have been deleted; retired feature
 bit 2 is rejected at the Container boundary. Compiler-special Rc/Arc and
 dynamic source remain only in frozen migration/negative corpora, leaving no
-0.2 compatibility branch in production. Item 17 is in progress: the basic and
-9-/20-workload CPU suites, the single-workload analyzer, and a minimal
-heterogeneous simulator case all build and execute their sources as temporary
-0.3 application packages; a default release smoke test permanently guards that
-AOT path. Current user documentation no longer presents the removed dynamic
-path, and the prebuilt workflow now fails closed against the frozen 0.2.1
-ecosystem snapshot. Local validation on 2026-09-15 produced Luna candidate
-`41ce85e`, Toolchains 0.2.0 candidate `63c8fe1`, and Lunax 0.2.0 candidate
-`42285e1`. Toolchains passes its generated grammar and 12 current compiler
-fixtures, complete Rust workspace with real-compiler Slot/Fragment analysis,
-Clippy, release build, VS Code source validation, and Windows VSIX packaging.
-Lunax passes its strict Luna 0.3 application build and all six
-command/backend/transactional-install tests. The child workflows also emit
-checksummed, attested `LUNA-SOURCE-COMMIT` assets. These are clean local
-commits, not yet remote CI or release evidence. The release flow
-uses two-phase promotion: both components build against the same immutable,
-untagged Luna candidate commit and publish `LUNA-SOURCE-COMMIT` evidence; only
-lock/status-document changes may follow before the final Luna tag is created.
-This removes both circular waiting and any need to move a tag. Completion still
-requires remote CI, attested immutable artifacts for both child components,
-and explicit lock promotion with their common candidate commit and artifact evidence.
+0.2 compatibility branch in production. Item 17 remains in progress: the basic
+and 9-/20-workload CPU suites, the single-workload analyzer, and a minimal
+heterogeneous simulator case build and execute temporary 0.3 application
+packages; the release smoke test guards that AOT path. User documentation no
+longer presents removed dynamic source as usable. The 2026-09-15 Luna candidate
+`41ce85e` was used for the published Toolchains `v0.2.0` (`63c8fe1`) and Lunax
+`v0.2.0` (`42285e1`) releases. The current ecosystem lock records their
+immutable assets, checksums, attestations and passed consumer checks.
+
+The lock nevertheless does not authorize the current Luna tree. As checked on
+2026-10-03, it says `release-ready` and `release.publish: true`, but its verified
+Luna candidate `41ce85e` is not an ancestor of current `main`. Strict release
+readiness therefore blocks root publication; no root `v0.3.0` tag is present.
+The two-phase rule permits only lock/status changes after a candidate. Current
+source and test development requires a new immutable Luna candidate and fresh,
+matching child release evidence rather than repointing the existing releases
+or changing the lock label alone. After that, root platform CI, strict
+readiness and online release-evidence gates must pass before a root tag.
+The separately tracked source Ref/apply implementation remains open and does
+not become public merely because child releases exist.
 The remaining authorization, release-tier, and explicit-deferral choices are
 centralized in the [ecosystem release handoff decision register](ecosystem_release.md#release-handoff-decision-register-2026-09-15);
 the historical `TBD-SF007` through `TBD-SF010` decision boundary remains outside the core-freeze

@@ -5,6 +5,7 @@
 #include "moonir/Sealer.h"
 #include "moonir/Verifier.h"
 #include "codegen/CodeGenerator.h"
+#include "driver/NativeArtifact.h"
 #include "diagnostics/Diagnostic.h"
 #include "tooling/AnalysisSnapshot.h"
 #include "moonir_canonical_test_support.h"
@@ -193,6 +194,7 @@ fn main() -> i32 {
     auto cfgCodegenModule = cfgCodegenLowerer.lower(
         *cfgCodegenSnapshot.program(), *cfgCodegenSnapshot.symbolTable());
     CodeGenerator missingEntryCodegen("missing.jit.entry");
+    trace("function sealing: missing entry JIT");
     const auto missingEntryExecution = missingEntryCodegen.jitRun();
     if (missingEntryExecution.executed || missingEntryExecution.error.empty())
         return fail("JIT lookup failure was confused with a program exit code");
@@ -229,6 +231,93 @@ fn main() -> i32 {
             std::cerr << diagnostic << '\n';
         return fail("LLVM backend rejected the initial canonical CFG slice");
     }
+    const auto mainRecord = std::find_if(
+        cfgCodegenModule->declarationTable.begin(),
+        cfgCodegenModule->declarationTable.end(),
+        [](const moon::DeclarationRecord& record) {
+            return record.kind == moon::DeclarationKind::Function &&
+                record.sourceName == "main";
+        });
+    if (mainRecord == cfgCodegenModule->declarationTable.end())
+        return fail("Native v1 guard fixture lost its sealed main declaration");
+    luna::driver::NativeExportSpec forgedMain;
+    forgedMain.declarationKind = LUNA_NATIVE_DECLARATION_FUNCTION_V1;
+    forgedMain.flags = LUNA_NATIVE_EXPORT_CALLABLE_V1;
+    forgedMain.symbolId = mainRecord->symbolId.value;
+    forgedMain.contractId = mainRecord->contractId.value;
+    forgedMain.linkageName = mainRecord->linkageName;
+    if (cfgCodegen.emitNativeLibraryDescriptor(
+            cfgCodegenModule->name, "0", "test", "test", {forgedMain}) ||
+        !std::any_of(cfgCodegen.errors().begin(), cfgCodegen.errors().end(),
+            [](const diagnostic::Diagnostic& diagnostic) {
+                return diagnostic.message.find(
+                    "Native v1 export row differs from its sealed public declaration") !=
+                    std::string::npos;
+            }))
+        return fail("Native v1 descriptor accepted a forged public callable row");
+    auto mainDeclaration = std::find_if(
+        cfgCodegenModule->declarations.begin(),
+        cfgCodegenModule->declarations.end(),
+        [](const std::unique_ptr<moon::Decl>& declaration) {
+            return declaration && declaration->name == "main";
+        });
+    auto* mainFunction = mainDeclaration != cfgCodegenModule->declarations.end()
+        ? dynamic_cast<moon::FunctionDecl*>(mainDeclaration->get()) : nullptr;
+    if (!mainFunction)
+        return fail("Native v1 guard fixture lost its executable main");
+    moon::ExportRecord forgedExport;
+    forgedExport.name = mainRecord->sourceName;
+    forgedExport.declaration = {
+        mainRecord->symbolId, mainRecord->contractId};
+    forgedExport.type = mainRecord->type;
+    forgedExport.kind = mainRecord->kind;
+    cfgCodegenModule->exports.push_back(forgedExport);
+    mainFunction->isExported = true;
+    mainFunction->requiresFragmentContext = true;
+    const bool publishedContextEntry = cfgCodegen.emitNativeLibraryDescriptor(
+        cfgCodegenModule->name, "0", "test", "test", {forgedMain});
+    mainFunction->requiresFragmentContext = false;
+    mainFunction->isExported = false;
+    cfgCodegenModule->exports.pop_back();
+    if (publishedContextEntry ||
+        !std::any_of(cfgCodegen.errors().begin(), cfgCodegen.errors().end(),
+            [](const diagnostic::Diagnostic& diagnostic) {
+                return diagnostic.message.find(
+                    "Native v1 callable export requires an unsupported entry ABI") !=
+                    std::string::npos;
+            }))
+        return fail("Native v1 descriptor accepted a forged context entry");
+    auto mainSignature = std::find_if(
+        cfgCodegenModule->typeTable.begin(), cfgCodegenModule->typeTable.end(),
+        [&](const moon::TypeRecord& type) {
+            return type.id == mainRecord->type;
+        });
+    if (mainSignature == cfgCodegenModule->typeTable.end() ||
+        mainSignature->kind != TypeKind::Function)
+        return fail("Native v1 guard fixture lost its frozen function type");
+    moon::Param forgedParameter;
+    forgedParameter.name = "forged";
+    forgedParameter.type = mainFunction->returnType;
+    mainFunction->params.push_back(forgedParameter);
+    mainSignature->parameterTypeIds.push_back(forgedParameter.type);
+    cfgCodegenModule->exports.push_back(forgedExport);
+    mainFunction->isExported = true;
+    const bool publishedWrongMachineType =
+        cfgCodegen.emitNativeLibraryDescriptor(
+            cfgCodegenModule->name, "0", "test", "test", {forgedMain});
+    mainFunction->isExported = false;
+    cfgCodegenModule->exports.pop_back();
+    mainSignature->parameterTypeIds.pop_back();
+    mainFunction->params.pop_back();
+    if (publishedWrongMachineType ||
+        !std::any_of(cfgCodegen.errors().begin(), cfgCodegen.errors().end(),
+            [](const diagnostic::Diagnostic& diagnostic) {
+                return diagnostic.message.find(
+                    "Native v1 callable entry differs from its generated LLVM signature") !=
+                    std::string::npos;
+            }))
+        return fail("Native v1 descriptor accepted a forged LLVM callable type");
+    trace("function sealing: canonical CFG JIT");
     const auto cfgExecution = cfgCodegen.jitRun();
     if (!cfgExecution.executed || cfgExecution.exitCode != 42)
         return fail("canonical CFG JIT did not preserve branch/local semantics");
@@ -314,6 +403,7 @@ fn main() -> i32 {
             std::cerr << diagnostic << '\n';
         return fail("LLVM backend rejected canonical enum/Result switches");
     }
+    trace("function sealing: switch CFG JIT");
     const auto cfgSwitchExecution = cfgSwitchCodegen.jitRun();
     if (!cfgSwitchExecution.executed || cfgSwitchExecution.exitCode != 42)
         return fail("canonical switch JIT did not preserve payload bindings");

@@ -8,10 +8,13 @@
 #include "diagnostics/Diagnostic.h"
 #include "runtime/RuntimeDescriptor.h"
 #include "runtime/RuntimeFragment.h"
+#include "runtime/RuntimeFragmentCompilerBridge.h"
+#include "runtime/NativeArtifactABI.h"
 #include "tooling/AnalysisSnapshot.h"
 #include "moonir_canonical_test_support.h"
 
 #include <algorithm>
+#include <array>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -20,6 +23,28 @@
 #include <sstream>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Verifier.h>
+
+static unsigned privateRefJitDropProbeCalls = 0;
+static unsigned privateRefJitConversionDropProbeCalls = 0;
+static unsigned privateRefJitReturnedDropProbeCalls = 0;
+static unsigned privateRefJitReturnedOkDropProbeCalls = 0;
+static unsigned privateRefJitReturnedPairDropProbeCalls = 0;
+static unsigned privateRefJitAllDropProbeCalls = 0;
+static std::vector<int32_t> privateRefJitNestedDropOrder;
+static bool privateRefJitDropProbeValid = true;
+
+extern "C" void luna_private_ref_drop_probe(int32_t marker) {
+    ++privateRefJitAllDropProbeCalls;
+    if (marker == 31) ++privateRefJitDropProbeCalls;
+    else if (marker == 47) ++privateRefJitConversionDropProbeCalls;
+    else if (marker == 59) ++privateRefJitReturnedDropProbeCalls;
+    else if (marker == 67) ++privateRefJitReturnedOkDropProbeCalls;
+    else if (marker == 66) ++privateRefJitReturnedPairDropProbeCalls;
+    else if (marker == 71 || marker == 73 ||
+             marker == 79 || marker == 81 || marker == 83)
+        privateRefJitNestedDropOrder.push_back(marker);
+    else privateRefJitDropProbeValid = false;
+}
 
 namespace canonical_test {
 
@@ -35,20 +60,33 @@ uint64_t privateRefJitArgumentsSize = 0;
 uint64_t privateRefJitArgumentsAlignment = 1;
 bool privateRefJitPayloadValid = true;
 std::vector<int32_t> privateRefJitObservedArguments;
+std::vector<unsigned> privateRefJitObservedSources;
+std::array<const char*, 2> privateRefJitExpectedSlotIds{};
+std::array<const char*, 2> privateRefJitExpectedSlotContracts{};
+std::array<const char*, 2> privateRefJitExpectedLayoutIds{};
+std::array<uint64_t, 2> privateRefJitExpectedSizes{};
+std::array<uint64_t, 2> privateRefJitExpectedAlignments{};
 
-void executePrivateRefJitFragment(void*, void* activation) {
+void executePrivateRefJitFragmentFrom(unsigned source, void* activation) {
     ++privateRefJitExecutions;
+    if (source > 1) {
+        privateRefJitPayloadValid = false;
+        return;
+    }
     const void* packed = luna_runtime_fragment_activation_arguments_v1(
-        activation, privateRefJitSlotId, privateRefJitSlotContract,
-        privateRefJitLayoutId, privateRefJitArgumentsSize,
-        privateRefJitArgumentsAlignment);
-    if (!packed || privateRefJitArgumentsSize < sizeof(int32_t)) {
+        activation, privateRefJitExpectedSlotIds[source],
+        privateRefJitExpectedSlotContracts[source],
+        privateRefJitExpectedLayoutIds[source],
+        privateRefJitExpectedSizes[source],
+        privateRefJitExpectedAlignments[source]);
+    if (!packed || privateRefJitExpectedSizes[source] < sizeof(int32_t)) {
         privateRefJitPayloadValid = false;
         return;
     }
     int32_t value = 0;
     std::memcpy(&value, packed, sizeof(value));
     privateRefJitObservedArguments.push_back(value);
+    privateRefJitObservedSources.push_back(source);
     privateRefJitResumeStatus =
         luna_runtime_fragment_activation_resume_v1(activation);
     if (privateRefJitResumeStatus ==
@@ -56,33 +94,102 @@ void executePrivateRefJitFragment(void*, void* activation) {
         ++privateRefJitCompletedResumes;
 }
 
+void executePrivateRefJitFragment(void*, void* activation) {
+    executePrivateRefJitFragmentFrom(0, activation);
+}
+
+void executePrivateRefJitFragmentSecond(void*, void* activation) {
+    executePrivateRefJitFragmentFrom(1, activation);
+}
+
 bool exercisePrivateRefApplyJit(
     moon::Module& module, moon::FunctionDecl& function,
-    std::string& error, unsigned expectedDispatches = 1) {
+    std::string& error, unsigned expectedDispatches = 1,
+    bool expectEscape = false,
+    std::optional<unsigned> expectedCompletedDispatches = std::nullopt,
+    bool twoBorrowedReferences = false, bool differentSlots = false,
+    std::vector<int32_t> expectedValues = {},
+    std::vector<unsigned> expectedSources = {},
+    std::optional<std::pair<bool, int32_t>> expectedResult = std::nullopt,
+    std::optional<unsigned> transferredDropCalls = std::nullopt,
+    bool injectPostBodyFailure = false,
+    bool deferSecondHostDrop = false,
+    bool exerciseIngressGate = false,
+    std::vector<uint8_t>* entryRecord = nullptr) {
     const moon::SlotDecl* slot = nullptr;
+    const moon::SlotDecl* secondSlot = nullptr;
     for (const auto& declaration : module.declarations)
         if (const auto* candidate = dynamic_cast<const moon::SlotDecl*>(
-                declaration.get()); candidate && candidate->name == "checkpoint")
-            slot = candidate;
+                declaration.get()); candidate) {
+            if (candidate->name == "checkpoint") slot = candidate;
+            if (candidate->name == "shadow") secondSlot = candidate;
+        }
     const auto* arguments = slot ? module.findType(slot->argumentsType) : nullptr;
     const auto* valueType = arguments && arguments->fields.size() == 1
         ? module.findType(arguments->fields.front().type) : nullptr;
-    if (!slot || !arguments || function.params.size() != 1 ||
+    if (!slot || !arguments || (differentSlots && !secondSlot) ||
+        (exerciseIngressGate && (!differentSlots || twoBorrowedReferences ||
+                                 expectedResult || transferredDropCalls ||
+                                 !entryRecord)) ||
+        function.params.size() != (twoBorrowedReferences ? 2u : 1u) ||
         !valueType || valueType->kind != TypeKind::I32 ||
-        function.params.front().relation !=
-            luna::ownership::Relation::SharedBorrow) {
+        std::any_of(function.params.begin(), function.params.end(),
+            [](const auto& parameter) {
+                return parameter.relation !=
+                    luna::ownership::Relation::SharedBorrow;
+            })) {
         error = "private Ref JIT fixture lacks Slot/layout/borrowed parameter";
         return false;
     }
     auto jit = CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
-        module, function, error);
+        module, function, error, entryRecord);
     if (!jit) return false;
     const void* address = jit->lookup(
         "__luna_private_ref_apply_jit_test", error);
     if (!address) return false;
+    const void* transferAddress = transferredDropCalls
+        ? jit->lookup("__luna_private_ref_apply_transfer_test", error)
+        : nullptr;
+    if (transferredDropCalls && !transferAddress) return false;
+    const void* dropAddress = transferredDropCalls
+        ? jit->lookup("__luna_private_ref_apply_drop_test", error)
+        : nullptr;
+    if (transferredDropCalls && !dropAddress) return false;
+    std::unique_ptr<LunaPrivateRefUnitApplyLoadedEntry> loadedIngress;
+    if (exerciseIngressGate) {
+        loadedIngress = CodeGenerator::
+            loadPrivateRuntimeFragmentRefApplyEntryForTest(
+                module, function, *entryRecord, jit, error);
+        if (!loadedIngress || loadedIngress->entryRecord() != *entryRecord)
+            return false;
+        auto forgedRecord = *entryRecord;
+        forgedRecord[0] ^= 1;
+        if (CodeGenerator::loadPrivateRuntimeFragmentRefApplyEntryForTest(
+                module, function, forgedRecord, jit, error)) {
+            error = "private Ref loaded entry accepted a forged record";
+            return false;
+        }
+        auto unboundJit =
+            CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
+                module, function, error);
+        if (!unboundJit ||
+            CodeGenerator::loadPrivateRuntimeFragmentRefApplyEntryForTest(
+                module, function, *entryRecord, unboundJit, error) ||
+            error.find("not bound to this JIT module") ==
+                std::string::npos) {
+            error = "private Ref loaded entry accepted an unbound JIT module";
+            return false;
+        }
+        unboundJit.reset();
+        error.clear();
+    }
+    const bool needsSecondHandle = twoBorrowedReferences || exerciseIngressGate;
 
     const std::string fragmentId = "fragment:private-ref-jit";
     const std::string fragmentContract = "contract:private-ref-jit";
+    const std::string secondFragmentId = "fragment:private-ref-jit-second";
+    const std::string secondFragmentContract =
+        "contract:private-ref-jit-second";
     const std::string unitLayout = "layout:unit";
     LunaRuntimeFragmentDescriptorV1 descriptor = {
         LUNA_RUNTIME_FRAGMENT_MAGIC_V1,
@@ -97,11 +204,34 @@ bool exercisePrivateRefApplyJit(
         "", unitLayout.c_str(), 0, 1,
         nullptr, nullptr, executePrivateRefJitFragment,
     };
+    LunaRuntimeFragmentDescriptorV1 secondDescriptor = descriptor;
+    secondDescriptor.fragment_id = secondFragmentId.c_str();
+    secondDescriptor.fragment_contract_id = secondFragmentContract.c_str();
+    secondDescriptor.execute = executePrivateRefJitFragmentSecond;
+    const auto* secondArguments = differentSlots
+        ? module.findType(secondSlot->argumentsType) : arguments;
+    if (!secondArguments) {
+        error = "private Ref JIT fixture lacks second Slot layout";
+        return false;
+    }
+    if (differentSlots) {
+        secondDescriptor.slot_id = secondSlot->symbolId.value.c_str();
+        secondDescriptor.slot_contract_id = secondSlot->contractId.value.c_str();
+        secondDescriptor.slot_arguments_layout_id =
+            secondArguments->abiLayoutId.value.c_str();
+        secondDescriptor.slot_arguments_size = secondArguments->valueSize;
+        secondDescriptor.slot_arguments_alignment =
+            secondArguments->valueAlignment;
+    }
     if (!luna::runtime::validateRuntimeFragmentDescriptor(
-            descriptor, error))
+            descriptor, error) ||
+        (needsSecondHandle &&
+         !luna::runtime::validateRuntimeFragmentDescriptor(
+             secondDescriptor, error)))
         return false;
 
     luna::runtime::RuntimeFragmentRefHandle handle;
+    luna::runtime::RuntimeFragmentRefHandle secondHandle;
     std::weak_ptr<int> generationLease;
     {
         luna::runtime::MoonRuntime runtime;
@@ -120,6 +250,10 @@ bool exercisePrivateRefApplyJit(
                     bindings.push_back({fragmentId, fragmentContract,
                         &descriptor, LUNA_RUNTIME_DECLARATION_FRAGMENT_V1,
                         flags});
+                    if (needsSecondHandle)
+                        bindings.push_back({secondFragmentId,
+                            secondFragmentContract, &secondDescriptor,
+                            LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, flags});
                     return true;
                 }, {}, staged, error))
             return false;
@@ -137,8 +271,26 @@ bool exercisePrivateRefApplyJit(
             !luna::runtime::makeRuntimeFragmentRefHandle(
                 reference, target, handle, error))
             return false;
+        if (needsSecondHandle) {
+            const luna::runtime::GenerationBindingRequirement secondRequirement{
+                secondFragmentId, secondFragmentContract,
+                LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, flags};
+            const auto secondBinding = loaded.find(secondRequirement);
+            luna::runtime::RuntimeFragmentRef secondReference;
+            const auto* targetSlot = differentSlots ? secondSlot : slot;
+            const luna::runtime::RuntimeSlotRequirement secondTarget{
+                targetSlot->symbolId.value, targetSlot->contractId.value};
+            if (!secondBinding ||
+                !luna::runtime::makeOwnedRuntimeFragmentRef(
+                    secondBinding, secondTarget, {"", nullptr}, secondReference,
+                    error) ||
+                !luna::runtime::makeRuntimeFragmentRefHandle(
+                    secondReference, secondTarget, secondHandle, error))
+                return false;
+        }
     }
-    if (!handle || generationLease.expired()) {
+    if (!handle || (needsSecondHandle && !secondHandle) ||
+        generationLease.expired()) {
         error = "private Ref JIT fixture lost its owning generation pin";
         return false;
     }
@@ -151,48 +303,322 @@ bool exercisePrivateRefApplyJit(
             emptyBindings, parent, error))
         return false;
 
-    using Entry = void (*)(const void*, void*);
-    const auto entry = reinterpret_cast<Entry>(const_cast<void*>(address));
+    using EntryOne = void (*)(const void*, void*);
+    using EntryTwo = void (*)(const void*, void*, void*);
+    using EntryResultOne = uint64_t (*)(const void*, void*);
+    static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST == 0);
+    static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST == 1);
+    static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST == 2);
+    static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST == 3);
+    static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST == 4);
+    using EntryTransfer = int32_t (*)(
+        const void*, void*, uint32_t*, void**, uint32_t);
+    using EntryDrop = int32_t (*)(void**);
+    const auto entryOne = reinterpret_cast<EntryOne>(
+        const_cast<void*>(address));
+    const auto entryTwo = reinterpret_cast<EntryTwo>(
+        const_cast<void*>(address));
+    const auto entryResultOne = reinterpret_cast<EntryResultOne>(
+        const_cast<void*>(address));
+    const auto entryTransfer = reinterpret_cast<EntryTransfer>(
+        const_cast<void*>(transferAddress));
+    const auto entryDrop = reinterpret_cast<EntryDrop>(
+        const_cast<void*>(dropAddress));
+    std::shared_ptr<LunaJitModule> hostDropLease =
+        deferSecondHostDrop ? jit : nullptr;
+    std::weak_ptr<LunaJitModule> codeLifetime = jit;
+    if (exerciseIngressGate) {
+        jit.reset();
+        if (codeLifetime.expired()) {
+            error = "private Ref loaded entry lost its JIT code lease";
+            return false;
+        }
+    }
+    void* deferredOwner = nullptr;
+    unsigned deferredDropProbeBaseline = 0;
+    unsigned transferInvocations = 0;
+    const auto invoke = [&] {
+        if (exerciseIngressGate) {
+            const auto dispatchesBefore = privateRefJitExecutions;
+            if (loadedIngress->call(nullptr,
+                    const_cast<void*>(handle.opaque())) !=
+                    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST ||
+                loadedIngress->call(nullptr, nullptr) !=
+                    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST ||
+                loadedIngress->call(parent.opaque(), nullptr) !=
+                    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST ||
+                loadedIngress->call(parent.opaque(),
+                    const_cast<void*>(secondHandle.opaque())) !=
+                    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST ||
+                privateRefJitExecutions != dispatchesBefore ||
+                loadedIngress->call(parent.opaque(),
+                    const_cast<void*>(handle.opaque())) !=
+                    LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST) {
+                error = "private Ref host ingress bypassed context or exact target validation";
+                return false;
+            }
+            return true;
+        }
+        if (transferredDropCalls) {
+            const bool deferThisOwner =
+                deferSecondHostDrop && ++transferInvocations == 2;
+            if (!expectedResult || twoBorrowedReferences) {
+                error = "private Result transfer fixture requires one borrowed Ref";
+                return false;
+            }
+            const auto callsBefore = privateRefJitAllDropProbeCalls;
+            const auto dispatchesBefore = privateRefJitExecutions;
+            uint32_t tag = 42;
+            void* occupied = reinterpret_cast<void*>(uintptr_t{1});
+            if (entryTransfer(parent.opaque(),
+                    const_cast<void*>(handle.opaque()), &tag, &occupied, 0) == 0 ||
+                tag != 42 || occupied != reinterpret_cast<void*>(uintptr_t{1}) ||
+                privateRefJitExecutions != dispatchesBefore ||
+                privateRefJitAllDropProbeCalls != callsBefore) {
+                error = "private Result transfer mutated an occupied owner cell";
+                return false;
+            }
+            void* aliased = nullptr;
+            void* partlyAliased = nullptr;
+            if (entryTransfer(parent.opaque(),
+                    const_cast<void*>(handle.opaque()),
+                    reinterpret_cast<uint32_t*>(&aliased), &aliased, 0) == 0 ||
+                aliased != nullptr ||
+                entryTransfer(parent.opaque(),
+                    const_cast<void*>(handle.opaque()),
+                    reinterpret_cast<uint32_t*>(
+                        reinterpret_cast<unsigned char*>(&partlyAliased) +
+                        sizeof(uint32_t)), &partlyAliased, 0) == 0 ||
+                partlyAliased != nullptr ||
+                entryTransfer(parent.opaque(),
+                    const_cast<void*>(handle.opaque()), nullptr, &aliased, 0) == 0 ||
+                aliased != nullptr ||
+                entryTransfer(parent.opaque(),
+                    const_cast<void*>(handle.opaque()), &tag, nullptr, 0) == 0 ||
+                tag != 42 || privateRefJitExecutions != dispatchesBefore ||
+                privateRefJitAllDropProbeCalls != callsBefore ||
+                entryDrop(nullptr) == 0) {
+                error = "private Result transfer accepted invalid output storage";
+                return false;
+            }
+            void* owner = nullptr;
+            if (injectPostBodyFailure &&
+                (entryTransfer(parent.opaque(),
+                    const_cast<void*>(handle.opaque()), &tag, &owner, 1) != 3 ||
+                 tag != 42 || owner != nullptr ||
+                 privateRefJitAllDropProbeCalls !=
+                     callsBefore + *transferredDropCalls)) {
+                error = "private Result failed transfer did not clean before commit";
+                return false;
+            }
+            const auto callsAfterFailure = privateRefJitAllDropProbeCalls;
+            if (entryTransfer(parent.opaque(),
+                    const_cast<void*>(handle.opaque()), &tag, &owner, 0) != 0 ||
+                tag != static_cast<uint32_t>(expectedResult->first) ||
+                (owner != nullptr) != (*transferredDropCalls != 0) ||
+                privateRefJitAllDropProbeCalls != callsAfterFailure) {
+                error = "private Result transfer failed its ownership commit";
+                return false;
+            }
+            if (owner) {
+                if (deferThisOwner) {
+                    deferredOwner = owner;
+                    deferredDropProbeBaseline = privateRefJitAllDropProbeCalls;
+                    return true;
+                }
+                if (entryDrop(&owner) != 0 || owner != nullptr ||
+                    privateRefJitAllDropProbeCalls !=
+                        callsAfterFailure + *transferredDropCalls ||
+                    entryDrop(&owner) == 0 ||
+                    privateRefJitAllDropProbeCalls !=
+                        callsAfterFailure + *transferredDropCalls) {
+                    error = "private Result transferred owner was not dropped exactly once";
+                    return false;
+                }
+            } else if (entryDrop(&owner) == 0 ||
+                       privateRefJitAllDropProbeCalls != callsAfterFailure) {
+                error = "private Result scalar branch manufactured an owner";
+                return false;
+            }
+            return true;
+        }
+        if (expectedResult) {
+            if (twoBorrowedReferences) {
+                error = "private Result JIT fixture requires one borrowed Ref";
+                return false;
+            }
+            const uint64_t packed = entryResultOne(
+                parent.opaque(), const_cast<void*>(handle.opaque()));
+            const bool isOk = ((packed >> 32) & 1u) != 0;
+            const int32_t payload = static_cast<int32_t>(
+                static_cast<uint32_t>(packed));
+            if (isOk != expectedResult->first ||
+                payload != expectedResult->second) {
+                error = "private Ref JIT returned the wrong Result variant or payload";
+                return false;
+            }
+            return true;
+        }
+        if (twoBorrowedReferences)
+            entryTwo(parent.opaque(), const_cast<void*>(handle.opaque()),
+                const_cast<void*>(secondHandle.opaque()));
+        else
+            entryOne(parent.opaque(), const_cast<void*>(handle.opaque()));
+        return true;
+    };
     const auto before = privateRefJitExecutions;
     const auto resumesBefore = privateRefJitCompletedResumes;
     const auto argumentsBefore = privateRefJitObservedArguments.size();
+    const auto sourcesBefore = privateRefJitObservedSources.size();
     privateRefJitSlotId = descriptor.slot_id;
     privateRefJitSlotContract = descriptor.slot_contract_id;
     privateRefJitLayoutId = descriptor.slot_arguments_layout_id;
     privateRefJitArgumentsSize = descriptor.slot_arguments_size;
     privateRefJitArgumentsAlignment = descriptor.slot_arguments_alignment;
+    privateRefJitExpectedSlotIds = {descriptor.slot_id,
+        secondDescriptor.slot_id};
+    privateRefJitExpectedSlotContracts = {descriptor.slot_contract_id,
+        secondDescriptor.slot_contract_id};
+    privateRefJitExpectedLayoutIds = {descriptor.slot_arguments_layout_id,
+        secondDescriptor.slot_arguments_layout_id};
+    privateRefJitExpectedSizes = {descriptor.slot_arguments_size,
+        secondDescriptor.slot_arguments_size};
+    privateRefJitExpectedAlignments = {descriptor.slot_arguments_alignment,
+        secondDescriptor.slot_arguments_alignment};
     privateRefJitPayloadValid = true;
     privateRefJitResumeStatus = -1;
-    entry(parent.opaque(), const_cast<void*>(handle.opaque()));
-    if (luna_runtime_fragment_ref_check_v1(
-            handle.opaque(), slot->symbolId.value.c_str(),
-            slot->contractId.value.c_str()) !=
-            LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1) {
+    if (!invoke()) return false;
+    const auto handleCheck = luna_runtime_fragment_ref_check_v1(
+        handle.opaque(), slot->symbolId.value.c_str(),
+        slot->contractId.value.c_str());
+    const auto secondHandleCheck = needsSecondHandle
+        ? luna_runtime_fragment_ref_check_v1(
+            secondHandle.opaque(),
+            (differentSlots ? secondSlot : slot)->symbolId.value.c_str(),
+            (differentSlots ? secondSlot : slot)->contractId.value.c_str())
+        : LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1;
+    if (handleCheck != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
+        secondHandleCheck != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1) {
         error = "private Ref JIT body consumed its borrowed Ref";
         return false;
     }
-    entry(parent.opaque(), const_cast<void*>(handle.opaque()));
+    if (!invoke()) return false;
+    luna::runtime::RuntimeFragmentRefHandle callPin;
+    luna::runtime::RuntimeFragmentExecutionContext parentPin;
+    if (exerciseIngressGate) {
+        if (!luna::runtime::pinRuntimeFragmentRefHandleForTest(
+                handle, callPin, error))
+            return false;
+        parentPin = parent;
+        if (luna::runtime::pinRuntimeFragmentRefHandleForTest(
+                handle, callPin, error)) {
+            error = "private Ref call pin overwrote a live output";
+            return false;
+        }
+        error.clear();
+    }
     handle.reset();
-    if (privateRefJitExecutions != before + expectedDispatches * 2 ||
+    secondHandle.reset();
+    if (exerciseIngressGate) {
+        parent = {};
+        if (generationLease.expired() || !parentPin || !callPin ||
+            loadedIngress->call(parentPin.opaque(), callPin.opaque()) !=
+                LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST) {
+            error = "private Ref call pin failed after original owners were released";
+            return false;
+        }
+        callPin.reset();
+        parentPin = {};
+        if (!generationLease.expired()) {
+            error = "private Ref call pin failed to release its generation";
+            return false;
+        }
+    }
+    const bool generationExpiredBeforeHostDrop = generationLease.expired();
+    if (exerciseIngressGate) {
+        loadedIngress.reset();
+        if (!codeLifetime.expired()) {
+            error = "private Ref loaded entry failed to release its JIT lease";
+            return false;
+        }
+    }
+    if (deferSecondHostDrop) {
+        const auto callsBeforeDeferredDrop = privateRefJitAllDropProbeCalls;
+        jit.reset();
+        const bool codeLeaseRetained =
+            static_cast<bool>(hostDropLease) && !codeLifetime.expired();
+        const int32_t dropStatus = deferredOwner
+            ? entryDrop(&deferredOwner) : 1;
+        const int32_t repeatedDropStatus = entryDrop(&deferredOwner);
+        hostDropLease.reset();
+        if (!generationExpiredBeforeHostDrop || !codeLeaseRetained ||
+            callsBeforeDeferredDrop != deferredDropProbeBaseline ||
+            dropStatus != 0 || repeatedDropStatus == 0 ||
+            deferredOwner != nullptr ||
+            !codeLifetime.expired() ||
+            privateRefJitAllDropProbeCalls !=
+                callsBeforeDeferredDrop + transferredDropCalls.value_or(0)) {
+            error = "private Result owner did not outlive its Ref pin under a JIT lease";
+            return false;
+        }
+    }
+    const unsigned expectedCalls = exerciseIngressGate ? 3u : 2u;
+    if (privateRefJitExecutions != before + expectedDispatches * expectedCalls ||
         privateRefJitCompletedResumes !=
-            resumesBefore + expectedDispatches * 2 ||
+            resumesBefore + expectedCompletedDispatches.value_or(
+                expectEscape ? 0 : expectedDispatches) * expectedCalls ||
         privateRefJitResumeStatus != (expectedDispatches
-            ? LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1 : -1) ||
+            ? (expectEscape
+                ? LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1
+                : LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1)
+            : -1) ||
         !privateRefJitPayloadValid ||
         privateRefJitObservedArguments.size() !=
-            argumentsBefore + expectedDispatches * 2 ||
+            argumentsBefore + expectedDispatches * expectedCalls ||
+        privateRefJitObservedSources.size() !=
+            sourcesBefore + expectedDispatches * expectedCalls ||
         !generationLease.expired()) {
-        error = "private Ref JIT body did not dispatch and release its generation";
+        std::ostringstream details;
+        details << "private Ref JIT body did not dispatch and release its generation"
+                << " (executions=" << privateRefJitExecutions - before
+                << ", completed=" << privateRefJitCompletedResumes - resumesBefore
+                << ", status=" << privateRefJitResumeStatus
+                << ", payload=" << privateRefJitPayloadValid
+                << ", arguments=" << privateRefJitObservedArguments.size() -
+                       argumentsBefore
+                << ", leaseExpired=" << generationLease.expired() << ')';
+        error = details.str();
         return false;
     }
-    for (unsigned repeat = 0; repeat < 2; ++repeat)
+    if (expectedValues.empty())
+        for (unsigned site = 0; site < expectedDispatches; ++site)
+            expectedValues.push_back(static_cast<int32_t>(site + 1));
+    if (expectedSources.empty())
+        for (unsigned site = 0; site < expectedDispatches; ++site)
+            expectedSources.push_back(twoBorrowedReferences && site == 1
+                ? 1u : 0u);
+    if (expectedValues.size() != expectedDispatches ||
+        expectedSources.size() != expectedDispatches) {
+        error = "private Ref JIT fixture has incomplete per-site expectations";
+        return false;
+    }
+    for (unsigned repeat = 0; repeat < expectedCalls; ++repeat)
         for (unsigned site = 0; site < expectedDispatches; ++site)
             if (privateRefJitObservedArguments[
                     argumentsBefore + repeat * expectedDispatches + site] !=
-                static_cast<int32_t>(site + 1)) {
+                expectedValues[site]) {
                 error = "private Ref JIT Slot sites executed out of order";
                 return false;
             }
+    for (unsigned repeat = 0; repeat < expectedCalls; ++repeat)
+        for (unsigned site = 0; site < expectedDispatches; ++site) {
+            if (privateRefJitObservedSources[
+                    sourcesBefore + repeat * expectedDispatches + site] !=
+                expectedSources[site]) {
+                error = "private Ref nested apply dispatched from the wrong source";
+                return false;
+            }
+        }
     error.clear();
     return true;
 }
@@ -371,6 +797,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
 
     auto sourceApplySnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "export slot checkpoint(value: i32);\n"
+        "export slot shadow(value: i32);\n"
         "runtime fn host_entry(selected: RuntimeFragmentRef<checkpoint>) {\n"
         "  apply selected { checkpoint(1) {} }\n"
         "}\n",
@@ -492,14 +919,163 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                          return diagnostic.message.find(
                              "1 private Ref apply body(s) verified and discarded") !=
                              std::string::npos;
-                     }))
+                     })) {
+        for (const auto& diagnostic : blockedSourceApply.errors())
+            std::cerr << diagnostic.message << '\n';
         return fail("private Ref apply body proof or public codegen gate failed");
+    }
     std::string privateRefJitError;
+    std::vector<uint8_t> privateIngressRecord;
     if (!exercisePrivateRefApplyJit(
-            *sourceApplyModule, *sourceApplyEntry, privateRefJitError)) {
+            *sourceApplyModule, *sourceApplyEntry, privateRefJitError,
+            1, false, std::nullopt, false, true, {}, {},
+            std::nullopt, std::nullopt, false, false, true,
+            &privateIngressRecord)) {
         std::cerr << privateRefJitError << '\n';
         return fail("normal-exit source Ref apply failed private JIT execution");
     }
+    const auto validPrivateIngressRecord =
+        [&](const std::vector<uint8_t>& bytes) {
+            std::string reason;
+            return CodeGenerator::
+                validatePrivateRuntimeFragmentRefApplyEntryRecordForTest(
+                    *sourceApplyModule, *sourceApplyEntry, bytes, reason);
+        };
+    if (!validPrivateIngressRecord(privateIngressRecord))
+        return fail("private Ref Apply entry record did not round-trip");
+    const auto readPrivateU32 = [](const std::vector<uint8_t>& bytes,
+                                   size_t offset) -> uint32_t {
+        uint32_t value = 0;
+        for (unsigned index = 0; index < 4; ++index)
+            value |= static_cast<uint32_t>(bytes[offset + index]) <<
+                (8 * index);
+        return value;
+    };
+    const auto writePrivateU32 = [](std::vector<uint8_t>& bytes,
+                                    size_t offset, uint32_t value) {
+        for (unsigned index = 0; index < 4; ++index)
+            bytes[offset + index] =
+                static_cast<uint8_t>(value >> (8 * index));
+    };
+    if (privateIngressRecord.size() < 32 ||
+        readPrivateU32(privateIngressRecord, 20) != 11 ||
+        readPrivateU32(privateIngressRecord, 24) != 9)
+        return fail("private Ref Apply entry record lost its bounded field layout");
+    const auto rejectedPrivateIngressMutation = [&](size_t offset,
+                                                     uint32_t value) {
+        auto mutated = privateIngressRecord;
+        writePrivateU32(mutated, offset, value);
+        return !validPrivateIngressRecord(mutated);
+    };
+    if (!rejectedPrivateIngressMutation(8, 0) ||
+        !rejectedPrivateIngressMutation(12,
+            static_cast<uint32_t>(privateIngressRecord.size() - 1)) ||
+        !rejectedPrivateIngressMutation(16, 1) ||
+        !rejectedPrivateIngressMutation(20, 10) ||
+        !rejectedPrivateIngressMutation(20, 12) ||
+        !rejectedPrivateIngressMutation(24, 8) ||
+        !rejectedPrivateIngressMutation(24, 10) ||
+        !rejectedPrivateIngressMutation(28, 4097))
+        return fail("private Ref Apply entry accepted an invalid header or length");
+    auto malformedPrivateIngress = privateIngressRecord;
+    malformedPrivateIngress[0] = 'X';
+    if (validPrivateIngressRecord(malformedPrivateIngress))
+        return fail("private Ref Apply entry accepted a different record magic");
+    malformedPrivateIngress = privateIngressRecord;
+    malformedPrivateIngress.resize(30);
+    writePrivateU32(malformedPrivateIngress, 12,
+        static_cast<uint32_t>(malformedPrivateIngress.size()));
+    if (validPrivateIngressRecord(malformedPrivateIngress))
+        return fail("private Ref Apply entry accepted a truncated field length");
+    malformedPrivateIngress = privateIngressRecord;
+    malformedPrivateIngress.resize(
+        32 + readPrivateU32(privateIngressRecord, 28) - 1);
+    writePrivateU32(malformedPrivateIngress, 12,
+        static_cast<uint32_t>(malformedPrivateIngress.size()));
+    if (validPrivateIngressRecord(malformedPrivateIngress))
+        return fail("private Ref Apply entry accepted a truncated field value");
+    malformedPrivateIngress = privateIngressRecord;
+    malformedPrivateIngress.push_back(0);
+    writePrivateU32(malformedPrivateIngress, 12,
+        static_cast<uint32_t>(malformedPrivateIngress.size()));
+    if (validPrivateIngressRecord(malformedPrivateIngress))
+        return fail("private Ref Apply entry accepted trailing bytes");
+    size_t privateFieldCursor = 28;
+    for (unsigned field = 0; field < 11; ++field) {
+        if (privateFieldCursor + 4 > privateIngressRecord.size())
+            return fail("private Ref Apply entry has a truncated identity length");
+        const uint32_t length =
+            readPrivateU32(privateIngressRecord, privateFieldCursor);
+        privateFieldCursor += 4;
+        if (length == 0 || privateFieldCursor > privateIngressRecord.size() ||
+            length > privateIngressRecord.size() - privateFieldCursor)
+            return fail("private Ref Apply entry has a malformed identity field");
+        malformedPrivateIngress = privateIngressRecord;
+        malformedPrivateIngress[privateFieldCursor] =
+            malformedPrivateIngress[privateFieldCursor] == 'X' ? 'Y' : 'X';
+        if (validPrivateIngressRecord(malformedPrivateIngress))
+            return fail("private Ref Apply entry accepted a changed identity");
+        privateFieldCursor += length;
+    }
+    for (unsigned field = 0; field < 9; ++field) {
+        if (privateFieldCursor + 4 > privateIngressRecord.size() ||
+            !rejectedPrivateIngressMutation(privateFieldCursor,
+                readPrivateU32(privateIngressRecord, privateFieldCursor) + 1) ||
+            (field == 8 &&
+             !rejectedPrivateIngressMutation(privateFieldCursor, 0)))
+            return fail("private Ref Apply entry accepted a changed ABI convention");
+        privateFieldCursor += 4;
+    }
+    if (privateFieldCursor != privateIngressRecord.size())
+        return fail("private Ref Apply entry has an unaccounted field");
+    LunaNativeExportDescriptorV1 genericNativeV1{};
+    genericNativeV1.abi_version = LUNA_NATIVE_DESCRIPTOR_ABI_V1;
+    genericNativeV1.struct_size = sizeof(genericNativeV1);
+    genericNativeV1.declaration_kind =
+        LUNA_NATIVE_DECLARATION_FUNCTION_V1;
+    genericNativeV1.flags = LUNA_NATIVE_EXPORT_CALLABLE_V1;
+    const auto* genericBytes =
+        reinterpret_cast<const uint8_t*>(&genericNativeV1);
+    if (validPrivateIngressRecord(std::vector<uint8_t>(
+            genericBytes, genericBytes + sizeof(genericNativeV1))))
+        return fail("private Ref Apply entry interpreted a generic Native v1 row");
+    auto* ingressRecord = const_cast<moon::DeclarationRecord*>(
+        sourceApplyModule->findDeclarationById(sourceApplyEntry->declarationId));
+    auto* ingressCallable = ingressRecord
+        ? const_cast<moon::TypeRecord*>(
+            sourceApplyModule->findType(ingressRecord->type)) : nullptr;
+    if (!ingressRecord || !ingressCallable ||
+        ingressCallable->parameterContracts.size() != 1)
+        return fail("private Ref Apply entry lacks a frozen callable record");
+    const auto originalIngressLinkage = ingressRecord->linkageName;
+    ingressRecord->linkageName += ".forged";
+    const bool forgedIngressRecordAccepted =
+        validPrivateIngressRecord(privateIngressRecord);
+    const bool forgedIngressLinkageAccepted =
+        static_cast<bool>(CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
+            *sourceApplyModule, *sourceApplyEntry, privateRefJitError));
+    ingressRecord->linkageName = originalIngressLinkage;
+    const auto originalIngressContract =
+        ingressCallable->parameterContracts.front();
+    ingressCallable->parameterContracts.front().relation =
+        luna::ownership::Relation::Owned;
+    const bool forgedBorrowRecordAccepted =
+        validPrivateIngressRecord(privateIngressRecord);
+    const bool forgedIngressBorrowAccepted =
+        static_cast<bool>(CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
+            *sourceApplyModule, *sourceApplyEntry, privateRefJitError));
+    ingressCallable->parameterContracts.front() = originalIngressContract;
+    sourceApplyEntry->requiresFragmentContext = false;
+    const bool forgedContextRecordAccepted =
+        validPrivateIngressRecord(privateIngressRecord);
+    const bool forgedContextJitAccepted =
+        static_cast<bool>(CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
+            *sourceApplyModule, *sourceApplyEntry, privateRefJitError));
+    sourceApplyEntry->requiresFragmentContext = true;
+    if (forgedIngressRecordAccepted || forgedIngressLinkageAccepted ||
+        forgedBorrowRecordAccepted || forgedIngressBorrowAccepted ||
+        forgedContextRecordAccepted || forgedContextJitAccepted)
+        return fail("private Ref Apply ingress accepted forged frozen entry facts");
     auto sequentialSlotsSnapshot =
         luna::tooling::AnalysisSnapshot::analyzeSource(
             "export slot checkpoint(value: i32);\n"
@@ -545,6 +1121,379 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         std::cerr << privateRefJitError << '\n';
         return fail("sequential Ref apply Slots failed private JIT execution");
     }
+    auto outlinedSlotSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "runtime fn outlined(selected: RuntimeFragmentRef<checkpoint>) {\n"
+            "  apply selected { checkpoint(1) { checkpoint(2) {} } }\n"
+            "}\n",
+            "<canonical-ref-outlined-slot>");
+    if (!outlinedSlotSnapshot.success())
+        return fail("frontend rejected outlined Ref apply Slot site");
+    moon::LunaLowerer outlinedSlotLowerer;
+    auto outlinedSlotModule = outlinedSlotLowerer.lower(
+        *outlinedSlotSnapshot.program(),
+        *outlinedSlotSnapshot.symbolTable());
+    moon::Sealer outlinedSlotSealer;
+    if (!outlinedSlotModule || !outlinedSlotLowerer.errors().empty() ||
+        !outlinedSlotSealer.sealFunctionBodies(*outlinedSlotModule))
+        return fail("outlined Ref apply Slot site did not seal");
+    moon::FunctionDecl* outlined = nullptr;
+    for (auto& declaration : outlinedSlotModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function && function->name == "outlined")
+            outlined = function;
+    if (!outlined || !exercisePrivateRefApplyJit(
+            *outlinedSlotModule, *outlined, privateRefJitError, 2)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("outlined Ref apply Slot failed private JIT execution");
+    }
+    auto recursiveSlotSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "runtime fn recursive(selected: RuntimeFragmentRef<checkpoint>) {\n"
+            "  apply selected { checkpoint(1) { checkpoint(2) { checkpoint(3) {} } } }\n"
+            "}\n",
+            "<canonical-ref-recursive-slot>");
+    if (!recursiveSlotSnapshot.success())
+        return fail("frontend rejected recursive Ref apply Slot sites");
+    moon::LunaLowerer recursiveSlotLowerer;
+    auto recursiveSlotModule = recursiveSlotLowerer.lower(
+        *recursiveSlotSnapshot.program(),
+        *recursiveSlotSnapshot.symbolTable());
+    moon::Sealer recursiveSlotSealer;
+    if (!recursiveSlotModule || !recursiveSlotLowerer.errors().empty() ||
+        !recursiveSlotSealer.sealFunctionBodies(*recursiveSlotModule))
+        return fail("recursive Ref apply Slot sites did not seal");
+    moon::FunctionDecl* recursive = nullptr;
+    for (auto& declaration : recursiveSlotModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function && function->name == "recursive")
+            recursive = function;
+    if (!recursive || !exercisePrivateRefApplyJit(
+            *recursiveSlotModule, *recursive, privateRefJitError, 3)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("recursive Ref apply Slots failed private JIT execution");
+    }
+    auto nestedApplyJumpSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "runtime fn nested_apply_jump("
+                "selected: RuntimeFragmentRef<checkpoint>) {\n"
+            "  apply selected {\n"
+            "    checkpoint(1) {}\n"
+            "    apply selected { checkpoint(2) {} }\n"
+            "    checkpoint(3) {}\n"
+            "  }\n"
+            "}\n",
+            "<canonical-ref-nested-apply-jump>");
+    if (!nestedApplyJumpSnapshot.success())
+        return fail("frontend rejected same-Ref nested apply jump fixture");
+    moon::LunaLowerer nestedApplyJumpLowerer;
+    auto nestedApplyJumpModule = nestedApplyJumpLowerer.lower(
+        *nestedApplyJumpSnapshot.program(),
+        *nestedApplyJumpSnapshot.symbolTable());
+    moon::Sealer nestedApplyJumpSealer;
+    if (!nestedApplyJumpModule || !nestedApplyJumpLowerer.errors().empty() ||
+        !nestedApplyJumpSealer.sealFunctionBodies(*nestedApplyJumpModule))
+        return fail("same-Ref nested apply jump fixture did not seal");
+    moon::FunctionDecl* nestedApplyJump = nullptr;
+    for (auto& declaration : nestedApplyJumpModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function &&
+                function->name == "nested_apply_jump")
+            nestedApplyJump = function;
+    if (!nestedApplyJump || !exercisePrivateRefApplyJit(
+            *nestedApplyJumpModule, *nestedApplyJump,
+            privateRefJitError, 3)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("same-Ref nested apply jump failed private JIT execution");
+    }
+    auto nestedApplyReturnSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "runtime fn nested_apply_return("
+                "selected: RuntimeFragmentRef<checkpoint>) {\n"
+            "  apply selected {\n"
+            "    checkpoint(1) {}\n"
+            "    apply selected { checkpoint(2) { return; } }\n"
+            "    checkpoint(3) {}\n"
+            "  }\n"
+            "}\n",
+            "<canonical-ref-nested-apply-return>");
+    if (!nestedApplyReturnSnapshot.success())
+        return fail("frontend rejected same-Ref nested apply return fixture");
+    moon::LunaLowerer nestedApplyReturnLowerer;
+    auto nestedApplyReturnModule = nestedApplyReturnLowerer.lower(
+        *nestedApplyReturnSnapshot.program(),
+        *nestedApplyReturnSnapshot.symbolTable());
+    moon::Sealer nestedApplyReturnSealer;
+    if (!nestedApplyReturnModule ||
+        !nestedApplyReturnLowerer.errors().empty() ||
+        !nestedApplyReturnSealer.sealFunctionBodies(*nestedApplyReturnModule))
+        return fail("same-Ref nested apply return fixture did not seal");
+    moon::FunctionDecl* nestedApplyReturn = nullptr;
+    for (auto& declaration : nestedApplyReturnModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function &&
+                function->name == "nested_apply_return")
+            nestedApplyReturn = function;
+    if (!nestedApplyReturn || !exercisePrivateRefApplyJit(
+            *nestedApplyReturnModule, *nestedApplyReturn,
+            privateRefJitError, 2, true, 1)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("same-Ref nested apply return failed private JIT execution");
+    }
+    auto crossRefNestedApplySnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "runtime fn nested_apply_cross_ref("
+                "outer: RuntimeFragmentRef<checkpoint>, "
+                "inner: RuntimeFragmentRef<checkpoint>) {\n"
+            "  apply outer {\n"
+            "    checkpoint(1) {}\n"
+            "    apply inner { checkpoint(2) {} }\n"
+            "    checkpoint(3) {}\n"
+            "  }\n"
+            "}\n",
+            "<canonical-ref-nested-apply-cross-ref>");
+    if (!crossRefNestedApplySnapshot.success())
+        return fail("frontend rejected different-Ref nested apply fixture");
+    moon::LunaLowerer crossRefNestedApplyLowerer;
+    auto crossRefNestedApplyModule = crossRefNestedApplyLowerer.lower(
+        *crossRefNestedApplySnapshot.program(),
+        *crossRefNestedApplySnapshot.symbolTable());
+    moon::Sealer crossRefNestedApplySealer;
+    if (!crossRefNestedApplyModule ||
+        !crossRefNestedApplyLowerer.errors().empty() ||
+        !crossRefNestedApplySealer.sealFunctionBodies(
+            *crossRefNestedApplyModule))
+        return fail("different-Ref nested apply fixture did not seal");
+    moon::FunctionDecl* crossRefNestedApply = nullptr;
+    for (auto& declaration : crossRefNestedApplyModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function &&
+                function->name == "nested_apply_cross_ref")
+            crossRefNestedApply = function;
+    if (!crossRefNestedApply)
+        return fail("different-Ref nested apply function is missing");
+    if (!exercisePrivateRefApplyJit(
+            *crossRefNestedApplyModule, *crossRefNestedApply,
+            privateRefJitError, 3, false, std::nullopt, true)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("different-Ref nested apply failed private JIT execution");
+    }
+    auto crossSlotApplySnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "export slot shadow(value: i32);\n"
+            "runtime fn nested_apply_cross_slot("
+                "outer: RuntimeFragmentRef<checkpoint>, "
+                "inner: RuntimeFragmentRef<shadow>) {\n"
+            "  apply outer {\n"
+            "    checkpoint(1) {}\n"
+            "    apply inner { shadow(2) {} checkpoint(3) {} }\n"
+            "    checkpoint(4) {}\n"
+            "  }\n"
+            "}\n",
+            "<canonical-ref-nested-apply-cross-slot>");
+    if (!crossSlotApplySnapshot.success())
+        return fail("frontend rejected the different-Slot nested apply fixture");
+    moon::LunaLowerer crossSlotApplyLowerer;
+    auto crossSlotApplyModule = crossSlotApplyLowerer.lower(
+        *crossSlotApplySnapshot.program(), *crossSlotApplySnapshot.symbolTable());
+    moon::Sealer crossSlotApplySealer;
+    if (!crossSlotApplyModule || !crossSlotApplyLowerer.errors().empty() ||
+        !crossSlotApplySealer.sealFunctionBodies(*crossSlotApplyModule))
+        return fail("different-Slot nested apply fixture did not seal");
+    moon::FunctionDecl* crossSlotApply = nullptr;
+    for (auto& declaration : crossSlotApplyModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function &&
+                function->name == "nested_apply_cross_slot")
+            crossSlotApply = function;
+    std::string crossSlotGateError;
+    if (!crossSlotApply || !exercisePrivateRefApplyJit(
+            *crossSlotApplyModule, *crossSlotApply, crossSlotGateError,
+            4, false, std::nullopt, true, true,
+            {1, 2, 3, 4}, {0, 1, 0, 0})) {
+        std::cerr << crossSlotGateError << '\n';
+        return fail("different-Slot nested apply failed private JIT execution");
+    }
+    auto crossSlotReturnSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "export slot shadow(value: i32);\n"
+            "runtime fn nested_apply_cross_slot_return("
+                "outer: RuntimeFragmentRef<checkpoint>, "
+                "inner: RuntimeFragmentRef<shadow>) {\n"
+            "  apply outer {\n"
+            "    checkpoint(1) {}\n"
+            "    apply inner { shadow(2) { return; } }\n"
+            "    checkpoint(3) {}\n"
+            "  }\n"
+            "}\n",
+            "<canonical-ref-nested-apply-cross-slot-return>");
+    if (!crossSlotReturnSnapshot.success())
+        return fail("frontend rejected different-Slot nested apply return");
+    moon::LunaLowerer crossSlotReturnLowerer;
+    auto crossSlotReturnModule = crossSlotReturnLowerer.lower(
+        *crossSlotReturnSnapshot.program(), *crossSlotReturnSnapshot.symbolTable());
+    moon::Sealer crossSlotReturnSealer;
+    if (!crossSlotReturnModule || !crossSlotReturnLowerer.errors().empty() ||
+        !crossSlotReturnSealer.sealFunctionBodies(*crossSlotReturnModule))
+        return fail("different-Slot nested apply return did not seal");
+    moon::FunctionDecl* crossSlotReturn = nullptr;
+    for (auto& declaration : crossSlotReturnModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function &&
+                function->name == "nested_apply_cross_slot_return")
+            crossSlotReturn = function;
+    if (!crossSlotReturn || !exercisePrivateRefApplyJit(
+            *crossSlotReturnModule, *crossSlotReturn, privateRefJitError,
+            2, true, 1, true, true, {1, 2}, {0, 1})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("different-Slot nested return failed private JIT execution");
+    }
+    auto callbackApplySnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "runtime fn callback_apply("
+                "selected: RuntimeFragmentRef<checkpoint>) {\n"
+            "  apply selected {\n"
+            "    checkpoint(1) {\n"
+            "      apply selected { checkpoint(2) { checkpoint(3) {} } }\n"
+            "    }\n"
+            "    checkpoint(4) {}\n"
+            "  }\n"
+            "}\n",
+            "<canonical-ref-callback-apply>");
+    if (!callbackApplySnapshot.success())
+        return fail("frontend rejected callback-nested Ref apply fixture");
+    moon::LunaLowerer callbackApplyLowerer;
+    auto callbackApplyModule = callbackApplyLowerer.lower(
+        *callbackApplySnapshot.program(),
+        *callbackApplySnapshot.symbolTable());
+    moon::Sealer callbackApplySealer;
+    if (!callbackApplyModule || !callbackApplyLowerer.errors().empty() ||
+        !callbackApplySealer.sealFunctionBodies(*callbackApplyModule))
+        return fail("callback-nested Ref apply fixture did not seal");
+    moon::FunctionDecl* callbackApply = nullptr;
+    for (auto& declaration : callbackApplyModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function &&
+                function->name == "callback_apply")
+            callbackApply = function;
+    if (!callbackApply || !exercisePrivateRefApplyJit(
+            *callbackApplyModule, *callbackApply, privateRefJitError,
+            4, false, std::nullopt, false, false,
+            {1, 2, 3, 4}, {0, 0, 0, 0})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("callback-nested Ref apply failed private JIT execution");
+    }
+    auto callbackApplyReturnSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "runtime fn callback_apply_return("
+                "selected: RuntimeFragmentRef<checkpoint>) {\n"
+            "  apply selected {\n"
+            "    checkpoint(1) {\n"
+            "      apply selected { checkpoint(2) { return; } }\n"
+            "      checkpoint(3) {}\n"
+            "    }\n"
+            "    checkpoint(4) {}\n"
+            "  }\n"
+            "}\n",
+            "<canonical-ref-callback-apply-return>");
+    if (!callbackApplyReturnSnapshot.success())
+        return fail("frontend rejected callback-nested Ref apply return fixture");
+    moon::LunaLowerer callbackApplyReturnLowerer;
+    auto callbackApplyReturnModule = callbackApplyReturnLowerer.lower(
+        *callbackApplyReturnSnapshot.program(),
+        *callbackApplyReturnSnapshot.symbolTable());
+    moon::Sealer callbackApplyReturnSealer;
+    if (!callbackApplyReturnModule ||
+        !callbackApplyReturnLowerer.errors().empty() ||
+        !callbackApplyReturnSealer.sealFunctionBodies(
+            *callbackApplyReturnModule))
+        return fail("callback-nested Ref apply return fixture did not seal");
+    moon::FunctionDecl* callbackApplyReturn = nullptr;
+    for (auto& declaration : callbackApplyReturnModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function &&
+                function->name == "callback_apply_return")
+            callbackApplyReturn = function;
+    if (!callbackApplyReturn || !exercisePrivateRefApplyJit(
+            *callbackApplyReturnModule, *callbackApplyReturn,
+            privateRefJitError, 2, true, 0, false, false,
+            {1, 2}, {0, 0})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("callback-nested Ref apply return failed private JIT execution");
+    }
+    auto outlinedReturnSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "runtime fn outlined_return(selected: RuntimeFragmentRef<checkpoint>) {\n"
+            "  apply selected { checkpoint(1) { return; } checkpoint(2) {} }\n"
+            "}\n",
+            "<canonical-ref-outlined-return>");
+    if (!outlinedReturnSnapshot.success())
+        return fail("frontend rejected outlined Ref apply return fixture");
+    moon::LunaLowerer outlinedReturnLowerer;
+    auto outlinedReturnModule = outlinedReturnLowerer.lower(
+        *outlinedReturnSnapshot.program(),
+        *outlinedReturnSnapshot.symbolTable());
+    moon::Sealer outlinedReturnSealer;
+    if (!outlinedReturnModule || !outlinedReturnLowerer.errors().empty() ||
+        !outlinedReturnSealer.sealFunctionBodies(*outlinedReturnModule))
+        return fail("outlined Ref apply return fixture did not seal");
+    moon::FunctionDecl* outlinedReturn = nullptr;
+    for (auto& declaration : outlinedReturnModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function &&
+                function->name == "outlined_return")
+            outlinedReturn = function;
+    if (!outlinedReturn)
+        return fail("outlined Ref apply return fixture lost its function");
+    if (!exercisePrivateRefApplyJit(
+            *outlinedReturnModule, *outlinedReturn, privateRefJitError,
+            1, true)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("outlined Ref apply return failed private JIT execution");
+    }
+    auto nestedOutlinedReturnSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzeSource(
+            "export slot checkpoint(value: i32);\n"
+            "runtime fn nested_outlined_return("
+                "selected: RuntimeFragmentRef<checkpoint>) {\n"
+            "  apply selected { checkpoint(1) { checkpoint(2) { return; } } "
+                "checkpoint(3) {} }\n"
+            "}\n",
+            "<canonical-ref-nested-outlined-return>");
+    if (!nestedOutlinedReturnSnapshot.success())
+        return fail("frontend rejected nested outlined Ref return fixture");
+    moon::LunaLowerer nestedOutlinedReturnLowerer;
+    auto nestedOutlinedReturnModule = nestedOutlinedReturnLowerer.lower(
+        *nestedOutlinedReturnSnapshot.program(),
+        *nestedOutlinedReturnSnapshot.symbolTable());
+    moon::Sealer nestedOutlinedReturnSealer;
+    if (!nestedOutlinedReturnModule ||
+        !nestedOutlinedReturnLowerer.errors().empty() ||
+        !nestedOutlinedReturnSealer.sealFunctionBodies(
+            *nestedOutlinedReturnModule))
+        return fail("nested outlined Ref return fixture did not seal");
+    moon::FunctionDecl* nestedOutlinedReturn = nullptr;
+    for (auto& declaration : nestedOutlinedReturnModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function &&
+                function->name == "nested_outlined_return")
+            nestedOutlinedReturn = function;
+    if (!nestedOutlinedReturn || !exercisePrivateRefApplyJit(
+            *nestedOutlinedReturnModule, *nestedOutlinedReturn,
+            privateRefJitError, 2, true)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("nested outlined Ref return failed private JIT execution");
+    }
 
     auto sourceEarlyReturnSnapshot =
         luna::tooling::AnalysisSnapshot::analyzeSource(
@@ -582,16 +1531,685 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 earlyReturn->controlFlow->runtimeRefApplies[1].region,
                 earlyReturn->controlFlow->runtimeRefApplies[0].region})
         return fail("nested Ref apply return lost inner-before-outer cleanup order");
+    auto tryApplySnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "extern \"C\" fn luna_private_ref_drop_probe(marker: i32) -> unit;\n"
+        "struct ApplyLocal { marker: i32; }\n"
+        "impl Drop for ApplyLocal {\n"
+        "  fn drop(resource: &mut ApplyLocal) -> unit {\n"
+        "    luna_private_ref_drop_probe(resource.marker);\n"
+        "  }\n"
+        "}\n"
+        "struct SourceError { marker: i32; }\n"
+        "impl Drop for SourceError {\n"
+        "  fn drop(resource: &mut SourceError) -> unit {\n"
+        "    luna_private_ref_drop_probe(resource.marker);\n"
+        "  }\n"
+        "}\n"
+        "impl From<SourceError> for i32 {\n"
+        "  fn from(affine error: SourceError) -> i32 {\n"
+        "    return error.marker;\n"
+        "  }\n"
+        "}\n"
+        "struct ReturnedResource { marker: i32; }\n"
+        "impl Drop for ReturnedResource {\n"
+        "  fn drop(resource: &mut ReturnedResource) -> unit {\n"
+        "    luna_private_ref_drop_probe(resource.marker);\n"
+        "    resource.marker = 0;\n"
+        "  }\n"
+        "}\n"
+        "struct ReturnedPair { padding: i32; marker: i32; }\n"
+        "impl Drop for ReturnedPair {\n"
+        "  fn drop(resource: &mut ReturnedPair) -> unit {\n"
+        "    luna_private_ref_drop_probe(resource.padding + resource.marker);\n"
+        "    resource.marker = 0;\n"
+        "  }\n"
+        "}\n"
+        "struct ReturnedInner { marker: i32; }\n"
+        "impl Drop for ReturnedInner {\n"
+        "  fn drop(resource: &mut ReturnedInner) -> unit {\n"
+        "    luna_private_ref_drop_probe(resource.marker);\n"
+        "    resource.marker = 0;\n"
+        "  }\n"
+        "}\n"
+        "struct ReturnedOuter { marker: i32; inner: ReturnedInner; }\n"
+        "impl Drop for ReturnedOuter {\n"
+        "  fn drop(resource: &mut ReturnedOuter) -> unit {\n"
+        "    luna_private_ref_drop_probe(resource.marker);\n"
+        "    resource.marker = 0;\n"
+        "  }\n"
+        "}\n"
+        "struct DeepInner { marker: i32; }\n"
+        "impl Drop for DeepInner {\n"
+        "  fn drop(resource: &mut DeepInner) -> unit {\n"
+        "    luna_private_ref_drop_probe(resource.marker);\n"
+        "    resource.marker = 0;\n"
+        "  }\n"
+        "}\n"
+        "struct DeepMiddle { marker: i32; inner: DeepInner; }\n"
+        "impl Drop for DeepMiddle {\n"
+        "  fn drop(resource: &mut DeepMiddle) -> unit {\n"
+        "    luna_private_ref_drop_probe(resource.marker);\n"
+        "    resource.marker = 0;\n"
+        "  }\n"
+        "}\n"
+        "struct DeepOuter { marker: i32; middle: DeepMiddle; }\n"
+        "impl Drop for DeepOuter {\n"
+        "  fn drop(resource: &mut DeepOuter) -> unit {\n"
+        "    luna_private_ref_drop_probe(resource.marker);\n"
+        "    resource.marker = 0;\n"
+        "  }\n"
+        "}\n"
+        "export slot checkpoint(value: i32);\n"
+        "runtime fn try_apply(selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  let input = Err::<i32, i32>(7);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_ok(selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  let input = Ok::<i32, i32>(9);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_outlined_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      checkpoint(1) { return Err::<i32, i32>(7); }\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_after_slot("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  let input = Err::<i32, i32>(7);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      checkpoint(1) {}\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_local_cleanup("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  let input = Err::<i32, i32>(7);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let resource = new ApplyLocal(31);\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_from("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  let error = new SourceError(47);\n"
+        "  let input = Err::<i32, SourceError>(move error);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedResource> {\n"
+        "  let resource = new ReturnedResource(59);\n"
+        "  let input = Err::<i32, ReturnedResource>(move resource);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_ok_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<ReturnedResource, i32> {\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      checkpoint(1) {}\n"
+        "      let resource = new ReturnedResource(67);\n"
+        "      return Ok::<ReturnedResource, i32>(move resource);\n"
+        "    }\n"
+        "  }\n"
+        "  return Err::<ReturnedResource, i32>(0);\n"
+        "}\n"
+        "runtime fn try_apply_pair_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedPair> {\n"
+        "  let resource = new ReturnedPair(5, 61);\n"
+        "  let input = Err::<i32, ReturnedPair>(move resource);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_ok_resource_scalar_err("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<ReturnedResource, i32> {\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      checkpoint(1) {}\n"
+        "      return Err::<ReturnedResource, i32>(13);\n"
+        "    }\n"
+        "  }\n"
+        "  return Err::<ReturnedResource, i32>(0);\n"
+        "}\n"
+        "runtime fn try_apply_err_resource_scalar_ok("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedPair> {\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      checkpoint(1) {}\n"
+        "      return Ok::<i32, ReturnedPair>(14);\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok::<i32, ReturnedPair>(0);\n"
+        "}\n"
+        "runtime fn try_apply_nested_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedOuter> {\n"
+        "  let inner = new ReturnedInner(73);\n"
+        "  let outer = new ReturnedOuter(71, move inner);\n"
+        "  let input = Err::<i32, ReturnedOuter>(move outer);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_deep_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, DeepOuter> {\n"
+        "  let inner = new DeepInner(83);\n"
+        "  let middle = new DeepMiddle(81, move inner);\n"
+        "  let outer = new DeepOuter(79, move middle);\n"
+        "  let input = Err::<i32, DeepOuter>(move outer);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n",
+        "<canonical-nested-ref-try-cleanup>");
+    if (!tryApplySnapshot.success())
+        return fail("frontend rejected a Result propagation inside Ref apply");
+    moon::LunaLowerer tryApplyLowerer;
+    auto tryApplyModule = tryApplyLowerer.lower(
+        *tryApplySnapshot.program(), *tryApplySnapshot.symbolTable());
+    moon::Sealer tryApplySealer;
+    if (!tryApplyModule || !tryApplyLowerer.errors().empty() ||
+        !tryApplySealer.sealFunctionBodies(*tryApplyModule))
+        return fail("Ref apply Result propagation did not seal");
+    moon::FunctionDecl* tryApply = nullptr;
+    moon::FunctionDecl* tryApplyOk = nullptr;
+    moon::FunctionDecl* tryApplyOutlinedReturn = nullptr;
+    moon::FunctionDecl* tryApplyAfterSlot = nullptr;
+    moon::FunctionDecl* tryApplyLocalCleanup = nullptr;
+    moon::FunctionDecl* tryApplyFrom = nullptr;
+    moon::FunctionDecl* tryApplyResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyOkResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyPairResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyOkResourceScalarErr = nullptr;
+    moon::FunctionDecl* tryApplyErrResourceScalarOk = nullptr;
+    moon::FunctionDecl* tryApplyNestedResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyDeepResourceReturn = nullptr;
+    for (auto& declaration : tryApplyModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function) {
+            if (function->name == "try_apply") tryApply = function;
+            if (function->name == "try_apply_ok") tryApplyOk = function;
+            if (function->name == "try_apply_outlined_return")
+                tryApplyOutlinedReturn = function;
+            if (function->name == "try_apply_after_slot")
+                tryApplyAfterSlot = function;
+            if (function->name == "try_apply_local_cleanup")
+                tryApplyLocalCleanup = function;
+            if (function->name == "try_apply_from")
+                tryApplyFrom = function;
+            if (function->name == "try_apply_resource_return")
+                tryApplyResourceReturn = function;
+            if (function->name == "try_apply_ok_resource_return")
+                tryApplyOkResourceReturn = function;
+            if (function->name == "try_apply_pair_resource_return")
+                tryApplyPairResourceReturn = function;
+            if (function->name == "try_apply_ok_resource_scalar_err")
+                tryApplyOkResourceScalarErr = function;
+            if (function->name == "try_apply_err_resource_scalar_ok")
+                tryApplyErrResourceScalarOk = function;
+            if (function->name == "try_apply_nested_resource_return")
+                tryApplyNestedResourceReturn = function;
+            if (function->name == "try_apply_deep_resource_return")
+                tryApplyDeepResourceReturn = function;
+        }
+    if (!tryApply || !tryApplyOk || !tryApplyOutlinedReturn ||
+        !tryApplyAfterSlot || !tryApplyLocalCleanup || !tryApplyFrom ||
+        !tryApplyResourceReturn || !tryApplyOkResourceReturn ||
+        !tryApplyPairResourceReturn || !tryApplyOkResourceScalarErr ||
+        !tryApplyErrResourceScalarOk || !tryApplyNestedResourceReturn ||
+        !tryApplyDeepResourceReturn ||
+        !tryApply->controlFlow ||
+        tryApply->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApply->controlFlow, *tryApplyModule))
+        return fail("Ref apply Result propagation failed CFG verification");
+    const auto tryFlow = moon::planRuntimeRefApplyFlow(
+        *tryApply->controlFlow, refApplyFlowError);
+    const auto expectedTryExits = std::vector<moon::RegionId>{
+        tryApply->controlFlow->runtimeRefApplies[1].region,
+        tryApply->controlFlow->runtimeRefApplies[0].region};
+    size_t trySwitches = 0;
+    size_t propagatedErrors = 0;
+    moon::BasicBlock* trySwitchBlock = nullptr;
+    for (auto& block : tryApply->controlFlow->blocks) {
+        if (block.terminator.kind == moon::TerminatorKind::Switch) {
+            ++trySwitches;
+            trySwitchBlock = &block;
+            if (!tryFlow ||
+                tryFlow->activeByBlock[block.id.value] !=
+                    std::vector<moon::RegionId>{
+                        expectedTryExits[1], expectedTryExits[0]})
+                return fail("Ref apply Result switch lost its active contexts");
+            for (const auto& edge : tryFlow->edges)
+                if (edge.source == block.id &&
+                    (!edge.enters.empty() || !edge.exits.empty()))
+                    return fail("Ref apply Result switch crossed a context boundary");
+        }
+        if (block.terminator.kind == moon::TerminatorKind::Return) {
+            const auto* result = dynamic_cast<const moon::ResultConstructExpr*>(
+                block.terminator.operand.get());
+            if (!result || result->isOk) continue;
+            ++propagatedErrors;
+            if (!tryFlow || !std::any_of(
+                    tryFlow->terminals.begin(), tryFlow->terminals.end(),
+                    [&](const auto& terminal) {
+                        return terminal.block == block.id &&
+                            terminal.exits == expectedTryExits;
+                    }))
+                return fail("Ref apply '?' return lost ordered context exits");
+        }
+    }
+    if (!tryFlow || trySwitches != 1 || propagatedErrors != 1)
+        return fail("Ref apply '?' did not retain one Switch and Err return");
+    if (!trySwitchBlock || !moon::isExhaustiveResultDefault(
+            *tryApply->controlFlow, *tryApplyModule, *tryFlow,
+            trySwitchBlock->terminator.primary.target))
+        return fail("Ref apply '?' default is not an exhaustive Result arm");
+    const auto originalTryTag = trySwitchBlock->terminator.cases[1].tag;
+    trySwitchBlock->terminator.cases[1].tag =
+        trySwitchBlock->terminator.cases[0].tag;
+    const bool duplicateTagAccepted = moon::isExhaustiveResultDefault(
+        *tryApply->controlFlow, *tryApplyModule, *tryFlow,
+        trySwitchBlock->terminator.primary.target);
+    trySwitchBlock->terminator.cases[1].tag = originalTryTag;
+    if (duplicateTagAccepted)
+        return fail("non-exhaustive Result default bypassed private cleanup gate");
+    if (!tryApplyOk->controlFlow ||
+        tryApplyOk->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyOk->controlFlow, *tryApplyModule))
+        return fail("successful Ref apply Result propagation failed CFG verification");
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApply, privateRefJitError,
+            0, false, std::nullopt, false, false, {}, {},
+            std::pair<bool, int32_t>{false, 7})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply Err propagation failed private JIT execution");
+    }
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyOk, privateRefJitError,
+            1, false, std::nullopt, false, false, {9}, {},
+            std::pair<bool, int32_t>{true, 0})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply Ok propagation failed private JIT execution");
+    }
+    if (!tryApplyOutlinedReturn->controlFlow ||
+        tryApplyOutlinedReturn->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(
+            *tryApplyOutlinedReturn->controlFlow, *tryApplyModule) ||
+        !exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyOutlinedReturn,
+            privateRefJitError, 1, true, 0, false, false, {1}, {},
+            std::pair<bool, int32_t>{false, 7})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("outlined Ref apply Result return failed private JIT execution");
+    }
+    if (!tryApplyAfterSlot->controlFlow ||
+        tryApplyAfterSlot->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(
+            *tryApplyAfterSlot->controlFlow, *tryApplyModule) ||
+        !exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyAfterSlot,
+            privateRefJitError, 1, false, 1, false, false, {1}, {},
+            std::pair<bool, int32_t>{false, 7})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply '?' after Slot dispatch failed private JIT execution");
+    }
+    if (!tryApplyLocalCleanup->controlFlow ||
+        tryApplyLocalCleanup->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(
+            *tryApplyLocalCleanup->controlFlow, *tryApplyModule))
+        return fail("Ref apply '?' local resource did not verify");
+    bool hasLocalErrDrop = false;
+    for (const auto& block : tryApplyLocalCleanup->controlFlow->blocks) {
+        const auto* result = dynamic_cast<const moon::ResultConstructExpr*>(
+            block.terminator.operand.get());
+        if (block.terminator.kind != moon::TerminatorKind::Return ||
+            !result || result->isOk)
+            continue;
+        for (const auto cleanupId : block.terminator.exitCleanups) {
+            const auto* cleanup =
+                tryApplyLocalCleanup->controlFlow->findCleanup(cleanupId);
+            const auto* scope = cleanup
+                ? tryApplyLocalCleanup->controlFlow->findScope(cleanup->scope)
+                : nullptr;
+            if (!cleanup || !scope || cleanup->action !=
+                    luna::ownership::CleanupAction::Drop)
+                continue;
+            for (auto region = scope->region; !region.empty();) {
+                if (region ==
+                    tryApplyLocalCleanup->controlFlow->runtimeRefApplies[1]
+                        .region) {
+                    hasLocalErrDrop = true;
+                    break;
+                }
+                const auto* record =
+                    tryApplyLocalCleanup->controlFlow->findRegion(region);
+                if (!record) break;
+                region = record->parent;
+            }
+        }
+    }
+    if (!hasLocalErrDrop)
+        return fail("Ref apply '?' Err return lost local custom Drop cleanup");
+    const auto dropProbeBefore = privateRefJitDropProbeCalls;
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyLocalCleanup,
+            privateRefJitError, 0, false, 0, false, false, {}, {},
+            std::pair<bool, int32_t>{false, 7})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply '?' local cleanup failed private JIT execution");
+    }
+    if (privateRefJitDropProbeCalls != dropProbeBefore + 2 ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply '?' did not run exact local Drop once per call");
+    if (!tryApplyFrom->controlFlow ||
+        tryApplyFrom->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyFrom->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply '?' From conversion did not verify");
+    bool hasFrozenFromReturn = false;
+    for (const auto& block : tryApplyFrom->controlFlow->blocks) {
+        if (block.terminator.kind != moon::TerminatorKind::Return)
+            continue;
+        const auto* result = dynamic_cast<const moon::ResultConstructExpr*>(
+            block.terminator.operand.get());
+        const auto* conversion = result && !result->isOk
+            ? dynamic_cast<const moon::CallExpr*>(result->payload.get())
+            : nullptr;
+        const auto* frozen = conversion
+            ? tryApplyModule->findDeclaration(conversion->calleeRef)
+            : nullptr;
+        if (frozen && frozen->sourceName == "from")
+            hasFrozenFromReturn = true;
+    }
+    if (!hasFrozenFromReturn)
+        return fail("Ref apply '?' Err return lost its frozen From witness");
+    const auto conversionDropBefore = privateRefJitConversionDropProbeCalls;
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyFrom, privateRefJitError,
+            0, false, std::nullopt, false, false, {}, {},
+            std::pair<bool, int32_t>{false, 47})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply '?' From conversion failed private JIT execution");
+    }
+    if (privateRefJitConversionDropProbeCalls != conversionDropBefore + 2 ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply '?' From did not consume and Drop its source once per call");
+    if (!tryApplyResourceReturn->controlFlow ||
+        tryApplyResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyResourceReturn->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply '?' resource return did not verify");
+    const auto resourceFlow = moon::planRuntimeRefApplyFlow(
+        *tryApplyResourceReturn->controlFlow, refApplyFlowError);
+    const auto resourceExits = std::vector<moon::RegionId>{
+        tryApplyResourceReturn->controlFlow->runtimeRefApplies[1].region,
+        tryApplyResourceReturn->controlFlow->runtimeRefApplies[0].region};
+    const auto* resourceResultType = tryApplyModule->findType(
+        tryApplyResourceReturn->returnType);
+    if (!resourceResultType ||
+        resourceResultType->kind != TypeKind::Result ||
+        resourceResultType->typeArgumentIds.size() != 2)
+        return fail("resource Err return lost its frozen Result type");
+    bool hasResourceErrReturn = false;
+    for (const auto& block : tryApplyResourceReturn->controlFlow->blocks) {
+        if (block.terminator.kind != moon::TerminatorKind::Return)
+            continue;
+        const auto* result = dynamic_cast<const moon::ResultConstructExpr*>(
+            block.terminator.operand.get());
+        if (!result || result->isOk || !result->payload)
+            continue;
+        if (result->payload->type !=
+                resourceResultType->typeArgumentIds[1] ||
+            !dynamic_cast<const moon::MoveExpr*>(result->payload.get()))
+            return fail("resource Err return did not transfer its owned payload");
+        if (!resourceFlow || !std::any_of(
+                resourceFlow->terminals.begin(),
+                resourceFlow->terminals.end(),
+                [&](const auto& terminal) {
+                    return terminal.block == block.id &&
+                        terminal.exits == resourceExits;
+                }))
+            return fail("resource Err return lost ordered context exits");
+        hasResourceErrReturn = true;
+    }
+    if (!hasResourceErrReturn)
+        return fail("Ref apply '?' resource return lost its Err payload");
+    const auto returnedDropBefore = privateRefJitReturnedDropProbeCalls;
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyResourceReturn,
+            privateRefJitError, 0, false, std::nullopt, false, false,
+            {}, {}, std::pair<bool, int32_t>{false, 59})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply '?' resource return failed private JIT execution");
+    }
+    if (privateRefJitReturnedDropProbeCalls != returnedDropBefore + 2 ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply '?' returned resource was not dropped once per call");
+    if (!tryApplyOkResourceReturn->controlFlow ||
+        tryApplyOkResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyOkResourceReturn->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply Ok resource return did not verify");
+    const auto returnedOkDropBefore = privateRefJitReturnedOkDropProbeCalls;
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyOkResourceReturn,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{true, 67})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply Ok resource return failed private JIT execution");
+    }
+    if (privateRefJitReturnedOkDropProbeCalls != returnedOkDropBefore + 2 ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply Ok returned resource was not dropped once per call");
+    if (!tryApplyPairResourceReturn->controlFlow ||
+        tryApplyPairResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyPairResourceReturn->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply pair resource return did not verify");
+    const auto returnedPairDropBefore = privateRefJitReturnedPairDropProbeCalls;
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyPairResourceReturn,
+            privateRefJitError, 0, false, std::nullopt, false, false,
+            {}, {}, std::pair<bool, int32_t>{false, 61})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply pair resource return failed private JIT execution");
+    }
+    if (privateRefJitReturnedPairDropProbeCalls != returnedPairDropBefore + 2 ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply pair returned resource was not dropped once per call");
+    const auto scalarOkDropBefore = privateRefJitReturnedPairDropProbeCalls;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyErrResourceScalarOk,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{true, 14})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply scalar Ok in resource Result failed private JIT execution");
+    }
+    if (privateRefJitReturnedPairDropProbeCalls != scalarOkDropBefore)
+        return fail("Ref apply scalar Ok incorrectly dropped an Err resource");
+    const auto scalarErrDropBefore = privateRefJitReturnedOkDropProbeCalls;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyOkResourceScalarErr,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{false, 13})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply scalar Err in resource Result failed private JIT execution");
+    }
+    if (privateRefJitReturnedOkDropProbeCalls != scalarErrDropBefore)
+        return fail("Ref apply scalar Err incorrectly dropped an Ok resource");
+    if (!tryApplyNestedResourceReturn->controlFlow ||
+        tryApplyNestedResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyNestedResourceReturn->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply nested resource return did not verify");
+    const auto nestedDropBefore = privateRefJitNestedDropOrder.size();
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyNestedResourceReturn,
+            privateRefJitError, 0, false, std::nullopt, false, false,
+            {}, {}, std::pair<bool, int32_t>{false, 71})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply nested resource return failed private JIT execution");
+    }
+    if (!privateRefJitDropProbeValid ||
+        privateRefJitNestedDropOrder.size() != nestedDropBefore + 4 ||
+        !std::equal(privateRefJitNestedDropOrder.begin() + nestedDropBefore,
+                    privateRefJitNestedDropOrder.end(),
+                    std::array<int32_t, 4>{71, 73, 71, 73}.begin()))
+        return fail("Ref apply nested resource return lost outer-before-inner Drop order");
+    if (!tryApplyDeepResourceReturn->controlFlow ||
+        tryApplyDeepResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyDeepResourceReturn->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply deep resource return did not verify");
+    const auto deepDropBefore = privateRefJitNestedDropOrder.size();
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyDeepResourceReturn,
+            privateRefJitError, 0, false, std::nullopt, false, false,
+            {}, {}, std::pair<bool, int32_t>{false, 79})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply deep resource return failed private JIT execution");
+    }
+    if (!privateRefJitDropProbeValid ||
+        privateRefJitNestedDropOrder.size() != deepDropBefore + 6 ||
+        !std::equal(privateRefJitNestedDropOrder.begin() + deepDropBefore,
+                    privateRefJitNestedDropOrder.end(),
+                    std::array<int32_t, 6>{79, 81, 83, 79, 81, 83}.begin()))
+        return fail("Ref apply deep resource return lost ordered Drop chain");
+    const auto transferredDeepDropBefore = privateRefJitNestedDropOrder.size();
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyDeepResourceReturn,
+            privateRefJitError, 0, false, std::nullopt, false, false,
+            {}, {}, std::pair<bool, int32_t>{false, 79}, 3, true, true)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply deep resource host transfer failed private JIT execution");
+    }
+    if (!privateRefJitDropProbeValid ||
+        privateRefJitNestedDropOrder.size() != transferredDeepDropBefore + 12 ||
+        !std::equal(privateRefJitNestedDropOrder.begin() + transferredDeepDropBefore,
+                    privateRefJitNestedDropOrder.end(),
+                    std::array<int32_t, 12>{79, 81, 83, 79, 81, 83,
+                                             79, 81, 83, 79, 81, 83}.begin()))
+        return fail("Ref apply transferred resource lost ordered Drop chain");
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyErrResourceScalarOk,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{true, 14}, 0)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply scalar host transfer failed private JIT execution");
+    }
+    const auto transferredOkDropBefore =
+        privateRefJitReturnedOkDropProbeCalls;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyOkResourceReturn,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{true, 67}, 1)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply resource Ok host transfer failed private JIT execution");
+    }
+    if (privateRefJitReturnedOkDropProbeCalls !=
+            transferredOkDropBefore + 2 || !privateRefJitDropProbeValid)
+        return fail("Ref apply transferred Ok owner was not dropped once per call");
+    const auto transferredScalarErrDropBefore =
+        privateRefJitReturnedOkDropProbeCalls;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyOkResourceScalarErr,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{false, 13}, 0)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply scalar Err host transfer failed private JIT execution");
+    }
+    if (privateRefJitReturnedOkDropProbeCalls !=
+        transferredScalarErrDropBefore)
+        return fail("Ref apply transferred scalar Err manufactured a resource Drop");
+    CodeGenerator blockedTryApply("canonical-ref-try-publication-gate");
+    if (blockedTryApply.generate(tryApplyModule.get()) ||
+        !std::any_of(blockedTryApply.errors().begin(),
+                     blockedTryApply.errors().end(),
+                     [](const auto& diagnostic) {
+                         return diagnostic.message.find(
+                             "raw-pointer function publication is blocked") !=
+                             std::string::npos;
+                     }))
+        return fail("private Result Ref apply escaped the public codegen gate");
     CodeGenerator blockedNestedEarly("canonical-nested-ref-early-return-gate");
     if (blockedNestedEarly.generate(earlyReturnModule.get()) ||
         !std::any_of(blockedNestedEarly.errors().begin(),
                      blockedNestedEarly.errors().end(),
                      [](const auto& diagnostic) {
                          return diagnostic.message.find(
-                             "requires one context region") !=
+                             "requires an explicit Fragment context") !=
                              std::string::npos;
-                     }))
-        return fail("nested Ref apply escaped the private body gate");
+                     })) {
+        for (const auto& diagnostic : blockedNestedEarly.errors())
+            std::cerr << diagnostic.message << '\n';
+        return fail("Slotless nested Ref apply escaped the private body gate");
+    }
     auto singleEarlySnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "export slot checkpoint(value: i32);\n"
         "runtime fn early(selected: RuntimeFragmentRef<checkpoint>) {\n"

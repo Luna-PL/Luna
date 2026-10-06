@@ -7,10 +7,11 @@
 extern "C" {
 #endif
 
-// In-memory typed registry exposed only after an artifact's pointer-free proof
-// has been verified. These pointers are process-local and are never hashed as
-// binary bytes; the canonical field values are bound by
-// export_descriptor_digest in LunaNativeProofV1.
+// In-memory declaration registry exposed only after an artifact's pointer-free
+// proof has been verified. V1 records declaration kind and identity, but no
+// callable signature or entry ABI profile. These pointers are process-local
+// and are never hashed as binary bytes; the canonical field values are bound
+// by export_descriptor_digest in LunaNativeProofV1.
 #define LUNA_NATIVE_DESCRIPTOR_MAGIC_V1 0x4c4e4431u /* "LND1" */
 #define LUNA_NATIVE_DESCRIPTOR_ABI_V1 1u
 
@@ -55,6 +56,43 @@ typedef struct LunaNativeLibraryDescriptorV1 {
 
 typedef const LunaNativeLibraryDescriptorV1*
     (*LunaNativeLibraryDescriptorFnV1)(void);
+
+// Optional parallel registry. V1 stays byte-for-byte compatible; V2 rows
+// describe only entries for which the producer can prove a concrete C ABI.
+#define LUNA_NATIVE_DESCRIPTOR_MAGIC_V2 0x4c4e4432u /* "LND2" */
+#define LUNA_NATIVE_DESCRIPTOR_ABI_V2 2u
+#define LUNA_NATIVE_ENTRY_ABI_C_I32_NOARGS_V1 1u
+#define LUNA_NATIVE_DESCRIPTOR_DIGEST_SIZE_V2 32u
+
+typedef struct LunaNativeExportDescriptorV2 {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t declaration_kind;
+    uint32_t flags;
+    uint32_t entry_abi;
+    uint32_t reserved_zero;
+    const char* symbol_id;
+    const char* contract_id;
+    const char* linkage_name;
+    const void* entry;
+} LunaNativeExportDescriptorV2;
+
+typedef struct LunaNativeLibraryDescriptorV2 {
+    uint32_t magic;
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t reserved_zero;
+    const char* package_id;
+    const char* package_version;
+    const char* target_abi;
+    const char* compiler_identity;
+    uint64_t export_count;
+    const LunaNativeExportDescriptorV2* exports;
+    uint8_t export_descriptor_digest[LUNA_NATIVE_DESCRIPTOR_DIGEST_SIZE_V2];
+} LunaNativeLibraryDescriptorV2;
+
+typedef const LunaNativeLibraryDescriptorV2*
+    (*LunaNativeLibraryDescriptorFnV2)(void);
 
 // Pointer-free proof record embedded in a platform-native section. The
 // artifact digest is SHA-256 over the complete file with this entire record
@@ -103,7 +141,30 @@ typedef struct LUNA_NATIVE_PACKED LunaNativeProofV1 {
 }
 static_assert(sizeof(LunaNativeProofV1) == 504,
               "Luna Native proof v1 layout changed");
+#define LUNA_NATIVE_LAYOUT_ASSERT static_assert
 #else
 _Static_assert(sizeof(LunaNativeProofV1) == 504,
                "Luna Native proof v1 layout changed");
+#define LUNA_NATIVE_LAYOUT_ASSERT _Static_assert
 #endif
+
+// The current Native producer/loader targets use natural 64-bit C layout.
+// Keep these values stable for old v1 readers and the parallel v2 query.
+#if UINTPTR_MAX == UINT64_MAX
+LUNA_NATIVE_LAYOUT_ASSERT(sizeof(LunaNativeExportDescriptorV1) == 48,
+                          "Native v1 export layout changed");
+LUNA_NATIVE_LAYOUT_ASSERT(sizeof(LunaNativeLibraryDescriptorV1) == 64,
+                          "Native v1 library layout changed");
+LUNA_NATIVE_LAYOUT_ASSERT(sizeof(LunaNativeExportDescriptorV2) == 56 &&
+                          offsetof(LunaNativeExportDescriptorV2, entry_abi) == 16 &&
+                          offsetof(LunaNativeExportDescriptorV2, symbol_id) == 24 &&
+                          offsetof(LunaNativeExportDescriptorV2, entry) == 48,
+                          "Native v2 export layout changed");
+LUNA_NATIVE_LAYOUT_ASSERT(sizeof(LunaNativeLibraryDescriptorV2) == 96 &&
+                          offsetof(LunaNativeLibraryDescriptorV2, export_count) == 48 &&
+                          offsetof(LunaNativeLibraryDescriptorV2, exports) == 56 &&
+                          offsetof(LunaNativeLibraryDescriptorV2,
+                                   export_descriptor_digest) == 64,
+                          "Native v2 library layout changed");
+#endif
+#undef LUNA_NATIVE_LAYOUT_ASSERT

@@ -906,6 +906,27 @@ bool makeRuntimeFragmentRefHandle(
     return true;
 }
 
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+bool pinRuntimeFragmentRefHandleForTest(
+    const RuntimeFragmentRefHandle& source,
+    RuntimeFragmentRefHandle& output, std::string& error) {
+    error.clear();
+    const auto* original = static_cast<const RuntimeFragmentRefHandleState*>(
+        source.opaque());
+    if (output || !original ||
+        luna_runtime_fragment_ref_check_v1(
+            source.opaque(), original->slot.slotId.c_str(),
+            original->slot.contractId.c_str()) !=
+                LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1) {
+        error = "private Ref call pin requires one live handle and empty output";
+        return false;
+    }
+    auto pinned = std::make_unique<RuntimeFragmentRefHandleState>(*original);
+    output.handle_ = pinned.release();
+    return true;
+}
+#endif
+
 bool makeRuntimeFragmentExecutionContextOverrideFromRef(
     const RuntimeFragmentExecutionContext& base,
     const RuntimeSlotRequirement& slot,
@@ -1028,6 +1049,16 @@ extern "C" void luna_runtime_fragment_ref_drop_v1(void** reference) {
     *reference = nullptr;
     retired->magic = 0;
     delete retired;
+}
+
+extern "C" int32_t luna_compiler_fragment_context_check(
+    const void* parent_context) {
+    const auto* parent = static_cast<const
+        luna::runtime::RuntimeFragmentExecutionContextState*>(parent_context);
+    return parent && parent->magic ==
+        luna::runtime::RuntimeFragmentExecutionContextMagic
+        ? LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS
+        : LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT;
 }
 
 extern "C" int32_t luna_compiler_fragment_context_override_from_ref(

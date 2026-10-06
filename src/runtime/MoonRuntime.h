@@ -25,6 +25,12 @@ enum GenerationBindingFlag : uint32_t {
     GenerationBindingFragmentContext = 1u << 3,
 };
 
+enum GenerationEntryAbi : uint32_t {
+    GenerationEntryAbiUnprofiled = 0,
+    GenerationEntryAbiCI32NoArgsV1 = 1,
+    GenerationEntryAbiAny = UINT32_MAX,
+};
+
 // Public 0.3 C++ host control-plane input. The module lease keeps the verified
 // code and descriptor storage alive for every pinned reference.
 struct GenerationStagingRequest {
@@ -42,16 +48,20 @@ struct GenerationBinding {
     const void* implementation = nullptr;
     uint32_t declarationKind = 0;
     uint32_t flags = 0;
+    uint32_t entryAbi = GenerationEntryAbiUnprofiled;
 };
 
 // A runtime typed-reference requirement. ContractId carries the canonical
-// callable/value contract while declarationKind and requiredFlags prevent a
-// loader adapter from changing the representation class under that identity.
+// callable/value contract while declarationKind, requiredFlags and entryAbi
+// prevent a loader adapter from changing the representation under that identity.
 struct GenerationBindingRequirement {
     std::string symbolId;
     std::string contractId;
     uint32_t declarationKind = 0;
     uint32_t requiredFlags = 0;
+    // Existing four-field requirements accept any profile; explicit zero
+    // requires an unprofiled binding.
+    uint32_t entryAbi = GenerationEntryAbiAny;
 };
 
 using GenerationVerifier = std::function<bool(
@@ -111,6 +121,9 @@ public:
         const void* implementation() const;
         uint32_t declarationKind() const;
         uint32_t flags() const;
+        uint32_t entryAbi() const;
+        // Keeps the generation's module lease alive across this typed call.
+        bool callI32NoArgs(int32_t& result) const;
 
     private:
         friend class MoonRuntime;
@@ -151,6 +164,9 @@ public:
         std::shared_ptr<ModuleState> module_;
         std::string symbolId_;
         std::string contractId_;
+        uint32_t declarationKind_ = 0;
+        uint32_t requiredFlags_ = 0;
+        uint32_t entryAbi_ = GenerationEntryAbiUnprofiled;
     };
 
     // A host attestation that the process is at an application-defined point

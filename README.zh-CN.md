@@ -151,8 +151,9 @@ Package ID 的不同 image 会被拒绝，除非显式进入 evolution 路径。
 
 ## 平台与测试状态
 
-Linux 和 macOS 是 Luna 的最优先支持目标；Windows 通过 MSYS2 UCRT64 获得
-支持。稳定核心在三个平台上均有原生 CI，所有仓库改动也会在 Linux 本机验证。
+Linux 和 macOS 是 Luna 的最优先支持目标；Windows CI 使用 MSYS2 UCRT64，
+本地开发也支持 MSYS2 CLANG64。稳定核心在三个平台上都有原生 CI workflow；
+具体改动的本地与远程结果须分别核对。
 
 当前本地测试设备为：
 
@@ -171,12 +172,16 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
 
 1. 优先级第 16 项已完成全仓 legacy production 审计，并删除旧 Dynamic、Rc/Arc 特判、
    slot/plugin 与 console 路径；
-2. 优先级第 17 项正在让 formatter、LSP、Lunax、package、benchmark、文档与
-   release gate 只面向最终 0.3 语义；在兼容的 toolchain 与 Lunax release 写入
-   ecosystem lock 前，根仓发布保持阻断；
-3. 优先级第 18 项将建立全工具链性能预算，优先处理循环和数组吞吐，同时保持安全检查。
+2. 优先级第 17 项已在 ecosystem lock 录入 Toolchains 与 Lunax 0.2.0 的发布证据。
+   根仓发布仍被阻断：lock 固定的 Luna 候选不是当前 `main` 的祖先，因此 readiness
+   不接受其 `release-ready` 标签；需先修复候选谱系并重新取得子组件证据；
+3. 源码 `RuntimeFragmentRef<S>` apply 正在实施。私有测试路径已能执行受限 body，
+   公开入口、container 发布和完整清理仍开放；
+4. 优先级第 18 项将建立全工具链性能预算，优先处理循环和数组吞吐，同时保持安全检查。
 
-详细实现顺序与完成门见[0.3 总体设计](docs/luna_0.3_design.zh-CN.md#9-实现优先级)。
+详细完成门见[0.3 总体设计](docs/luna_0.3_design.zh-CN.md#9-实现优先级)、
+[生态发布状态](docs/ecosystem_release.zh-CN.md)和
+[源码 Ref／apply 计划](docs/slot_fragment_runtime_plan.zh-CN.md#下一步源码-refapply-完成门更新于-2026-10-04)。
 
 ## 文档
 

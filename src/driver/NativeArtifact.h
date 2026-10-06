@@ -3,6 +3,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "runtime/NativeArtifactABI.h"
@@ -49,6 +50,13 @@ public:
     const LunaNativeExportDescriptorV1* exportAt(uint64_t index) const;
     const LunaNativeExportDescriptorV1* findExport(
         const std::string& symbolId, const std::string& contractId) const;
+    // Looks up an explicitly profiled i32() entry and invokes it while this
+    // verified library owns the loaded code. No callable pointer escapes.
+    bool callI32NoArgs(const std::string& symbolId,
+                       const std::string& contractId,
+                       int32_t& result, std::string& error) const;
+    uint32_t entryAbiForExport(const std::string& symbolId,
+                               const std::string& contractId) const;
     explicit operator bool() const { return nativeHandle_ != nullptr; }
 
 private:
@@ -62,6 +70,9 @@ private:
     std::string stagedPath_;
     std::string stagedDirectory_;
     const LunaNativeLibraryDescriptorV1* descriptor_ = nullptr;
+    const LunaNativeLibraryDescriptorV2* descriptorV2_ = nullptr;
+    std::unordered_map<std::string, const LunaNativeExportDescriptorV2*>
+        typedExportsBySymbol_;
     NativeProofInfo proof_;
 };
 
@@ -75,7 +86,7 @@ bool verifyNativeArtifact(const std::string& artifactPath,
                           const std::string& trustStorePath,
                           NativeProofInfo& info, std::string& error);
 // Captures artifactPath into an immutable/private staging image, verifies that
-// exact image, then loads and validates its proof-bound typed registry. The
+// exact image, then loads and validates its proof-bound declaration registry. The
 // optional hook runs after verification while staging remains immutable; it is
 // intended for deterministic TOCTOU tests and receives no staging identity.
 bool loadVerifiedNativeLibrary(

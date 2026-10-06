@@ -19,6 +19,22 @@ enum LunaCompilerFragmentOverrideStatus {
     LUNA_COMPILER_FRAGMENT_OVERRIDE_FAILED = -4,
 };
 
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+// Versioned test-entry result profile. These values are deliberately separate
+// from the native Ref and compiler context-check status domains. No public ABI.
+enum LunaPrivateRefUnitApplyStatusV1Test {
+    LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST = 0,
+    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST = 1,
+    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST = 2,
+    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST = 3,
+    LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST = 4,
+};
+#endif
+
+// Read-only preflight for a borrowed, live Runtime-created parent context.
+// This checks the runtime tag, not the safety of arbitrary or stale pointers.
+int32_t luna_compiler_fragment_context_check(const void* parent_context);
+
 int32_t luna_compiler_fragment_context_override_from_ref(
     const void* parent_context, const void* reference,
     const char* slot_id, const char* slot_contract_id,

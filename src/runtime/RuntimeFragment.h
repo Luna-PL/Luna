@@ -210,6 +210,11 @@ private:
     friend bool makeRuntimeFragmentRefHandle(
         RuntimeFragmentRef&, const RuntimeSlotRequirement&,
         RuntimeFragmentRefHandle&, std::string&);
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    friend bool pinRuntimeFragmentRefHandleForTest(
+        const RuntimeFragmentRefHandle&, RuntimeFragmentRefHandle&,
+        std::string&);
+#endif
     void* handle_ = nullptr;
 };
 
@@ -218,6 +223,14 @@ private:
 bool makeRuntimeFragmentRefHandle(
     RuntimeFragmentRef& reference, const RuntimeSlotRequirement& slot,
     RuntimeFragmentRefHandle& output, std::string& error);
+
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+// Duplicates only the host handle shell; both handles pin the same immutable
+// singleton snapshot. This is private call-lifetime evidence, not a source ABI.
+bool pinRuntimeFragmentRefHandleForTest(
+    const RuntimeFragmentRefHandle& source,
+    RuntimeFragmentRefHandle& output, std::string& error);
+#endif
 
 // Immutable host policy result. The strict constructor models None/One while
 // the explicit chain constructor stores host-ordered bindings for each exact

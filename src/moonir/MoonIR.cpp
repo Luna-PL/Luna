@@ -425,6 +425,33 @@ std::optional<RuntimeRefApplyFlowPlan> planRuntimeRefApplyFlow(
     return plan;
 }
 
+bool isExhaustiveResultDefault(
+    const ControlFlowGraph& graph, const Module& module,
+    const RuntimeRefApplyFlowPlan& flow, BlockId block) {
+    const auto* target = graph.findBlock(block);
+    if (!target || target->terminator.kind != TerminatorKind::Unreachable)
+        return false;
+    bool hasIncomingDefault = false;
+    for (const auto& edge : flow.edges) {
+        if (edge.target != block) continue;
+        const auto* source = graph.findBlock(edge.source);
+        if (!source || source->terminator.kind != TerminatorKind::Switch ||
+            source->terminator.primary.target != block ||
+            !edge.enters.empty() || !edge.exits.empty())
+            return false;
+        const auto* type = module.findType(source->terminator.switchType);
+        const auto& cases = source->terminator.cases;
+        if (!type || type->kind != TypeKind::Result || cases.size() != 2 ||
+            cases[0].tag == cases[1].tag ||
+            (cases[0].tag != 0 && cases[0].tag != 1) ||
+            (cases[1].tag != 0 && cases[1].tag != 1) ||
+            cases[0].edge.target == block || cases[1].edge.target == block)
+            return false;
+        hasIncomingDefault = true;
+    }
+    return hasIncomingDefault;
+}
+
 const DeclarationRecord* Module::findDeclaration(
     const SymbolRef& symbol) const {
     auto found = declarationRecordsBySymbol.find(symbol.value);

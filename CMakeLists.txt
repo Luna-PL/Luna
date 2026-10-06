@@ -846,11 +846,28 @@ if(BUILD_TESTING)
         COMMAND ${CMAKE_COMMAND}
             -DLUNA_EXECUTABLE=$<TARGET_FILE:luna>
             -DLUNA_NATIVE_VERIFIER=$<TARGET_FILE:native-artifact-test>
+            -DLUNA_AOT_COMPILER=${LUNA_AOT_COMPILER}
             -DLUNA_SOURCE_DIR=${CMAKE_CURRENT_SOURCE_DIR}
             -DLUNA_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
             -DPython3_EXECUTABLE=${Python3_EXECUTABLE}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/native_artifact.cmake
     )
+    if(CMAKE_C_COMPILER_ID MATCHES "Clang")
+        foreach(native_abi_target IN ITEMS
+                i386-unknown-linux-gnu
+                i686-w64-windows-gnu
+                i386-apple-darwin)
+            add_test(
+                NAME luna.native-abi-layout-${native_abi_target}
+                COMMAND ${CMAKE_C_COMPILER}
+                    --target=${native_abi_target}
+                    -ffreestanding -std=c11
+                    -I${CMAKE_CURRENT_SOURCE_DIR}/src
+                    -fsyntax-only
+                    ${CMAKE_CURRENT_SOURCE_DIR}/tests/native_abi_layout_probe.c
+            )
+        endforeach()
+    endif()
     if(LUNA_ENABLE_FUZZING)
         set(LUNA_MOON_FUZZ_CORPUS
             "${CMAKE_CURRENT_BINARY_DIR}/moon-container-fuzz-corpus")

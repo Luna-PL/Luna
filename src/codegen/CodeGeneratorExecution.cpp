@@ -19,6 +19,10 @@
 #include <mutex>
 #include <utility>
 
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+extern "C" void luna_private_ref_drop_probe(int32_t marker);
+#endif
+
 namespace {
 
 using LunaJitEntry = int (*)();
@@ -112,10 +116,15 @@ materializeLunaJit(std::unique_ptr<llvm::Module>& module,
                 &luna_runtime_fragment_ref_check_v1);
     bindRuntime("luna_runtime_fragment_ref_transfer_v1",
                 &luna_runtime_fragment_ref_transfer_v1);
+    bindRuntime("luna_compiler_fragment_context_check",
+                &luna_compiler_fragment_context_check);
     bindRuntime("luna_compiler_fragment_context_override_from_ref",
                 &luna_compiler_fragment_context_override_from_ref);
     bindRuntime("luna_compiler_fragment_context_drop",
                 &luna_compiler_fragment_context_drop);
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    bindRuntime("luna_private_ref_drop_probe", &luna_private_ref_drop_probe);
+#endif
 #ifdef _WIN32
     runtimeSymbols[(*jit)->mangleAndIntern("__main")] =
         ExecutorSymbolDef::fromPtr(&lunaJitMingwMain, exported);

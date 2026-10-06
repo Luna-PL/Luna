@@ -40,6 +40,37 @@ class LibraryDescriptor(ctypes.Structure):
     ]
 
 
+class ExportDescriptorV2(ctypes.Structure):
+    _fields_ = [
+        ("abi_version", ctypes.c_uint32),
+        ("struct_size", ctypes.c_uint32),
+        ("declaration_kind", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+        ("entry_abi", ctypes.c_uint32),
+        ("reserved_zero", ctypes.c_uint32),
+        ("symbol_id", ctypes.c_char_p),
+        ("contract_id", ctypes.c_char_p),
+        ("linkage_name", ctypes.c_char_p),
+        ("entry", ctypes.c_void_p),
+    ]
+
+
+class LibraryDescriptorV2(ctypes.Structure):
+    _fields_ = [
+        ("magic", ctypes.c_uint32),
+        ("abi_version", ctypes.c_uint32),
+        ("struct_size", ctypes.c_uint32),
+        ("reserved_zero", ctypes.c_uint32),
+        ("package_id", ctypes.c_char_p),
+        ("package_version", ctypes.c_char_p),
+        ("target_abi", ctypes.c_char_p),
+        ("compiler_identity", ctypes.c_char_p),
+        ("export_count", ctypes.c_uint64),
+        ("exports", ctypes.POINTER(ExportDescriptorV2)),
+        ("export_descriptor_digest", ctypes.c_uint8 * 32),
+    ]
+
+
 def text(value: bytes) -> str:
     if value is None:
         raise ValueError("null Native descriptor string")
@@ -57,6 +88,27 @@ def digest_list(values):
 def main() -> int:
     if len(sys.argv) not in (2, 6):
         return 2
+    canonical_example = (
+        "LUNA_NATIVE_EXPORT_V2\n1\n1\n1\n"
+        "symbol:typed-answer\ncontract:typed-answer\ntyped_answer")
+    if digest_list([canonical_example]).hex() != (
+            "f38aa5dc10637aad46e28639e1a784cc"
+            "8c112f6cf06501a0d421479012575703"):
+        return 25
+    if digest_list([]).hex() != (
+            "df3f619804a92fdb4057192dc43dd748"
+            "ea778adc52bc498ce80524c014b81119"):
+        return 26
+    if ctypes.sizeof(ctypes.c_void_p) == 8 and (
+            ctypes.sizeof(ExportDescriptorV2) != 56 or
+            ExportDescriptorV2.entry_abi.offset != 16 or
+            ExportDescriptorV2.symbol_id.offset != 24 or
+            ExportDescriptorV2.entry.offset != 48 or
+            ctypes.sizeof(LibraryDescriptorV2) != 96 or
+            LibraryDescriptorV2.export_count.offset != 48 or
+            LibraryDescriptorV2.exports.offset != 56 or
+            LibraryDescriptorV2.export_descriptor_digest.offset != 64):
+        return 27
     artifact = pathlib.Path(sys.argv[1]).resolve()
     library = ctypes.CDLL(str(artifact))
     query = library.luna_native_library_descriptor_v1
@@ -94,6 +146,41 @@ def main() -> int:
         return 6
     if callable_entry is None:
         return 7
+    typed_query = library.luna_native_library_descriptor_v2
+    typed_query.argtypes = []
+    typed_query.restype = ctypes.POINTER(LibraryDescriptorV2)
+    typed = typed_query().contents
+    if (typed.magic, typed.abi_version, typed.struct_size,
+            typed.reserved_zero) != (
+                0x4C4E4432, 2, ctypes.sizeof(LibraryDescriptorV2), 0):
+        return 15
+    if (text(typed.package_id), text(typed.package_version),
+            text(typed.target_abi), text(typed.compiler_identity)) != (
+                text(descriptor.package_id), text(descriptor.package_version),
+                text(descriptor.target_abi), text(descriptor.compiler_identity)):
+        return 16
+    typed_rows = []
+    found_answer = False
+    for index in range(typed.export_count):
+        row = typed.exports[index]
+        if (row.abi_version, row.struct_size, row.declaration_kind,
+                row.flags, row.entry_abi, row.reserved_zero) != (
+                    2, ctypes.sizeof(ExportDescriptorV2), 1, 1, 1, 0):
+            return 17
+        symbol = text(row.symbol_id)
+        contract = text(row.contract_id)
+        linkage = text(row.linkage_name)
+        typed_rows.append(
+            f"LUNA_NATIVE_EXPORT_V2\n{row.declaration_kind}\n"
+            f"{row.flags}\n{row.entry_abi}\n"
+            f"{symbol}\n{contract}\n{linkage}")
+        if (symbol, contract, linkage, row.entry) == (
+                callable_symbol, callable_contract, "typed_answer",
+                callable_entry):
+            found_answer = True
+    if not found_answer or digest_list(typed_rows) != bytes(
+            typed.export_descriptor_digest):
+        return 18
     answer = ctypes.CFUNCTYPE(ctypes.c_int32)(callable_entry)
     if answer() != 42:
         return 8
@@ -109,6 +196,110 @@ def main() -> int:
     loaded = subprocess.run(command, capture_output=True, text=True, check=False)
     if loaded.returncode != 0 or loaded.stdout.strip() != "42":
         return 9
+    typed_loaded = subprocess.run(
+        [str(verifier), "--load-typed-call", str(artifact), str(trust),
+         callable_symbol, callable_contract],
+        capture_output=True, text=True, check=False)
+    if typed_loaded.returncode != 0 or typed_loaded.stdout.strip() != "42":
+        return 19
+    digest_bytes = bytes(typed.export_descriptor_digest)
+    if binary.count(digest_bytes) != 1:
+        return 20
+    corrupted = bytearray(binary)
+    corrupted[corrupted.index(digest_bytes)] ^= 1
+    hash_input = bytearray(corrupted)
+    hash_input[proof:proof + 504] = bytes(504)
+    corrupted[proof + 24:proof + 56] = hashlib.sha256(hash_input).digest()
+    corrupt_artifact = artifact.with_name("v2-digest-tampered" + artifact.suffix)
+    corrupt_trust = artifact.with_name("v2-digest-tampered.trust")
+    trust_fields = trust.read_text(encoding="utf-8").rstrip("\n").split("\t")
+    if len(trust_fields) != 7:
+        return 21
+    trust_fields[0] = bytes(corrupted[proof + 24:proof + 56]).hex()
+    corrupt_artifact.write_bytes(corrupted)
+    corrupt_trust.write_text("\t".join(trust_fields) + "\n", encoding="utf-8")
+    try:
+        malformed = subprocess.run(
+            [str(verifier), "--load-only", str(corrupt_artifact),
+             str(corrupt_trust)], capture_output=True, text=True,
+            check=False)
+        if malformed.returncode == 0 or (
+                "v2 export rows do not match" not in malformed.stderr):
+            return 22
+    finally:
+        corrupt_artifact.unlink(missing_ok=True)
+        corrupt_trust.unlink(missing_ok=True)
+    profile_row = struct.pack(
+        "<IIIIII", 2, ctypes.sizeof(ExportDescriptorV2), 1, 1, 1, 0)
+    if binary.count(profile_row) != 1:
+        return 28
+    unknown_profile = bytearray(binary)
+    profile_offset = unknown_profile.index(profile_row) + 16
+    unknown_profile[profile_offset:profile_offset + 4] = struct.pack("<I", 2)
+    unknown_hash_input = bytearray(unknown_profile)
+    unknown_hash_input[proof:proof + 504] = bytes(504)
+    unknown_profile[proof + 24:proof + 56] = hashlib.sha256(
+        unknown_hash_input).digest()
+    unknown_artifact = artifact.with_name("v2-unknown-profile" + artifact.suffix)
+    unknown_trust = artifact.with_name("v2-unknown-profile.trust")
+    unknown_trust_fields = trust_fields.copy()
+    unknown_trust_fields[0] = bytes(
+        unknown_profile[proof + 24:proof + 56]).hex()
+    unknown_artifact.write_bytes(unknown_profile)
+    unknown_trust.write_text(
+        "\t".join(unknown_trust_fields) + "\n", encoding="utf-8")
+    try:
+        rejected = subprocess.run(
+            [str(verifier), "--load-only", str(unknown_artifact),
+             str(unknown_trust)], capture_output=True, text=True,
+            check=False)
+        if rejected.returncode == 0 or (
+                "v2 library descriptor contains an invalid export row"
+                not in rejected.stderr):
+            return 29
+    finally:
+        unknown_artifact.unlink(missing_ok=True)
+        unknown_trust.unlink(missing_ok=True)
+    query_name = b"luna_native_library_descriptor_v2"
+    if binary.count(query_name) == 0:
+        return 23
+    legacy = bytearray(binary.replace(
+        query_name, b"luna_native_library_descriptor_vx"))
+    legacy_hash_input = bytearray(legacy)
+    legacy_hash_input[proof:proof + 504] = bytes(504)
+    legacy[proof + 24:proof + 56] = hashlib.sha256(
+        legacy_hash_input).digest()
+    legacy_artifact = artifact.with_name("v1-only-query" + artifact.suffix)
+    legacy_trust = artifact.with_name("v1-only-query.trust")
+    legacy_trust_fields = trust_fields.copy()
+    legacy_trust_fields[0] = bytes(legacy[proof + 24:proof + 56]).hex()
+    legacy_artifact.write_bytes(legacy)
+    legacy_trust.write_text(
+        "\t".join(legacy_trust_fields) + "\n", encoding="utf-8")
+    try:
+        legacy_load = subprocess.run(
+            [str(verifier), "--load-call", str(legacy_artifact),
+             str(legacy_trust), callable_symbol, callable_contract],
+            capture_output=True, text=True, check=False)
+        legacy_generation = subprocess.run(
+            [str(verifier), "--load-legacy-generation",
+             str(legacy_artifact), str(legacy_trust),
+             callable_symbol, callable_contract],
+            capture_output=True, text=True, check=False)
+        legacy_typed = subprocess.run(
+            [str(verifier), "--load-typed-call", str(legacy_artifact),
+             str(legacy_trust), callable_symbol, callable_contract],
+            capture_output=True, text=True, check=False)
+        if (legacy_load.returncode != 0 or
+                legacy_load.stdout.strip() != "42" or
+                legacy_generation.returncode != 0 or
+                legacy_generation.stdout.strip() != "v1-only" or
+                legacy_typed.returncode == 0 or
+                "no v2 typed descriptor" not in legacy_typed.stderr):
+            return 24
+    finally:
+        legacy_artifact.unlink(missing_ok=True)
+        legacy_trust.unlink(missing_ok=True)
     generation = subprocess.run(
         [str(verifier), "--generation-switch", str(artifact), str(trust),
          str(enemy), str(enemy_trust), callable_symbol, callable_contract],

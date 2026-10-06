@@ -418,6 +418,18 @@ int testRefHandleBridge(const LunaRuntimeFragmentDescriptorV1& original) {
         }
         void* compiledContext = nullptr;
         void* occupiedContext = &factory; // Never passed as a context.
+        countDispatchAllocations = true;
+        dispatchAllocations = 0;
+        const auto validContextStatus =
+            luna_compiler_fragment_context_check(parent.opaque());
+        const auto missingContextStatus =
+            luna_compiler_fragment_context_check(nullptr);
+        countDispatchAllocations = false;
+        if (validContextStatus != LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS ||
+            missingContextStatus !=
+                LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT ||
+            dispatchAllocations != 0)
+            return fail("compiler Ref context preflight rejected a live parent or allocated");
         if (luna_compiler_fragment_context_override_from_ref(
                 parent.opaque(), handle.opaque(), slot.slotId.c_str(),
                 slot.contractId.c_str(), nullptr) !=
