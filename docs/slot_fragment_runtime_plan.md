@@ -1164,6 +1164,9 @@ The independent C fixture also produces a v2 query. Its sealed valid form
 supports a typed host call; an independently sealed oversized v2 row passes
 offline proof verification but fails host loading. This exercises the query
 and exact-size rule without relying on Luna's LLVM emitter.
+The same v2 fixture calls through a pinned typed binding after `MoonRuntime`
+has been destroyed, checking that the generation's module lease keeps code
+alive independently of the runtime object.
 
 Within MoonRuntime, binding profile 0 means unprofiled and profile 1 enables
 the pinned `i32()` call. `GenerationEntryAbiAny` is a requirement-only wildcard

@@ -184,6 +184,11 @@ after its proof verifies. Its focused Windows CTest passes; cross-platform
 CI remains a gate for every final candidate. The lock's `release-ready` field
 describes the frozen September child evidence, not current HEAD readiness:
 the strict check fails because those children verified Luna `41ce85e`.
+For that independent C v2 producer at `716ec17`, [Linux CI](https://github.com/Luna-PL/Luna/actions/runs/37503367318),
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37503367279), and
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37503367316) passed.
+A subsequent focused Windows test also calls through its pinned binding after
+`MoonRuntime` destruction to check the library lease's lifetime.
 Choose the final immutable Luna candidate after this review and any resulting
 changes, then build and verify new
 child release evidence against that exact commit without moving existing

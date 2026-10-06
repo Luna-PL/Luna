@@ -348,6 +348,19 @@ foreach(v2_variant IN ITEMS valid bad-row-size)
             message(FATAL_ERROR "independent Native v2 typed call failed.\n"
                 "${v2_load_output}\n${v2_load_error}")
         endif()
+        execute_process(
+            COMMAND "${LUNA_NATIVE_VERIFIER}" --pinned-binding-outlives-runtime
+                "${v2_artifact}" "${v2_trust}"
+                "symbol:legacy-answer" "contract:legacy-v1"
+            RESULT_VARIABLE v2_pinned_result
+            OUTPUT_VARIABLE v2_pinned_output
+            ERROR_VARIABLE v2_pinned_error)
+        if(NOT v2_pinned_result EQUAL 0 OR
+           NOT v2_pinned_output STREQUAL "pinned-v2\n")
+            message(FATAL_ERROR
+                "independent Native v2 pinned binding lost its lease.\n"
+                "${v2_pinned_output}\n${v2_pinned_error}")
+        endif()
     else()
         execute_process(
             COMMAND "${LUNA_NATIVE_VERIFIER}" --load-only

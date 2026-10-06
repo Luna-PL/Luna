@@ -63,6 +63,8 @@ image. Use the typed `i32()` call through that owner; do not retain a raw v1
 entry across unload or generation switch. The 64-bit Linux, Windows and macOS
 CI matrix exercises the current candidate. The 32-bit C layout probes only
 compile records and do not establish a 32-bit producer, loader or artifact.
+The independent v2 C fixture also calls through a pinned typed binding after
+the owning `MoonRuntime` is destroyed, exercising the retained library lease.
 See the [current release state](ecosystem_release.md) and the
 [Native v2 candidate rules](slot_fragment_runtime_plan.md).
 

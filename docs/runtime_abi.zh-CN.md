@@ -51,6 +51,8 @@ descriptor 字符串与入口指针属于已加载镜像，只能在已验证 li
 保留镜像期间使用。类型化 `i32()` 调用应经该 owner 完成；不能跨卸载或 generation
 切换保留原始 v1 入口。当前候选已由 64 位 Linux、Windows 与 macOS CI 验证；
 32 位 C 布局探针只编译结构记录，不能证明 32 位 producer、loader 或制品可用。
+独立 v2 C 夹具还在所属 `MoonRuntime` 销毁后通过固定的类型化 binding 调用，
+验证动态库 lease 仍有效。
 证据见[当前发布状态](ecosystem_release.zh-CN.md)与
 [Native v2 候选规则](slot_fragment_runtime_plan.zh-CN.md)。
 

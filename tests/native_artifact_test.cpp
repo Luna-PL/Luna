@@ -235,6 +235,34 @@ int callGenerationBinding(
     return binding.callI32NoArgs(result) ? result : -1;
 }
 
+int pinnedBindingOutlivesRuntime(int argc, char** argv) {
+    if (argc != 6) return 2;
+    luna::runtime::MoonRuntime::PinnedBinding pinned;
+    {
+        luna::runtime::MoonRuntime runtime;
+        luna::runtime::MoonRuntime::PinnedGeneration loaded;
+        std::string error;
+        if (!luna::driver::loadVerifiedNativeGenerationOnce(
+                runtime, argv[2], argv[3], loaded, error)) {
+            std::cerr << error << '\n';
+            return 1;
+        }
+        const luna::runtime::GenerationBindingRequirement requirement{
+            argv[4], argv[5], LUNA_NATIVE_DECLARATION_FUNCTION_V1,
+            LUNA_NATIVE_EXPORT_CALLABLE_V1,
+            luna::runtime::GenerationEntryAbiCI32NoArgsV1};
+        pinned = loaded.find(requirement);
+        if (callGenerationBinding(pinned) != 7)
+            return fail("independent v2 generation did not expose a pinned call");
+    }
+    if (pinned.symbolId() != argv[4] ||
+        pinned.contractId() != argv[5] ||
+        callGenerationBinding(pinned) != 7)
+        return fail("pinned Native binding lost its library after runtime destruction");
+    std::cout << "pinned-v2\n";
+    return 0;
+}
+
 int generationSwitch(int argc, char** argv) {
     if (argc != 8) {
         std::cerr << "usage: native-artifact-test --generation-switch "
@@ -342,6 +370,8 @@ int main(int argc, char** argv) {
         return prepareIndependentFixture(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--generation-switch")
         return generationSwitch(argc, argv);
+    if (argc > 1 && std::string(argv[1]) == "--pinned-binding-outlives-runtime")
+        return pinnedBindingOutlivesRuntime(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--load-call")
         return loadAndCall(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--load-typed-call")

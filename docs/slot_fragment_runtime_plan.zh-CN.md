@@ -886,6 +886,8 @@ tab。独立封装的 v1 测试制品若含非法 UTF-8 符号，离线验证可
 同一独立 C 夹具也能生产 v2 query：有效的封装制品支持宿主类型化调用；另一个
 v2 行结构大小过大的封装制品通过离线 proof 验证，却被宿主加载拒绝。该检查不依赖
 Luna 的 LLVM emitter，覆盖并行 query 与精确大小规则。
+同一 v2 夹具还在 `MoonRuntime` 销毁后调用固定的类型化 binding，验证 generation
+的 module lease 独立于 runtime 对象保留代码。
 
 在 MoonRuntime 中，binding profile 0 表示无 profile，profile 1 允许固定的
 `i32()` 调用。`GenerationEntryAbiAny` 只能出现在 requirement，作为通配符保留
