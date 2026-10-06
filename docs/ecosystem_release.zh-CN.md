@@ -132,10 +132,14 @@ Native 消费者返回非零，但测试脚本未打印退出码。
 [诊断复跑](https://github.com/Luna-PL/Luna/actions/runs/37461051981)
 确定退出码 24，位于通过改写已链接动态库字节构造的“仅 v1 query”合成制品分支。
 现已删除该重复夹具；独立编译且封装的纯 v1 C 库仍验证 v1 加载、generation 与
-类型化拒绝。修正后的测试尚需 macOS CI 证据。下一道 ABI 门是在不可变提交上完成平台 CI，
-并取得宿主对并行 query／版本规则的审阅；增加 32 位支持
-需要独立的运行时门禁。
-下一步建立包含预期源码、测试与工作流的全新不可变 Luna 候选。子组件要
+类型化拒绝。修正后的实施提交 `8aac3a0` 上，
+[Linux CI](https://github.com/Luna-PL/Luna/actions/runs/37462447341)、
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37462447181) 和
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37462447103) 均已成功。
+Linux C++17、C++23、sanitizer 与 thread-sanitizer 作业均通过；macOS Native artifact
+测试也已通过。下一道 ABI 门是宿主对并行 query／版本规则的审阅。32 位运行时需要
+独立门禁，源码 Ref/apply 仍是私有实验。
+完成该审阅及其引发的修改后，选定最终不可变 Luna 候选。子组件要
 针对这个精确提交重新生成并验证发布证据，不能移动既有 tag 或复用其源码提交声明。
 随后将匹配的证据写入 lock，通过根仓平台 CI、严格 readiness 与联网 Release evidence
 门禁，最后才创建 Luna tag。只修改 lock 状态不能修复当前候选谱系。

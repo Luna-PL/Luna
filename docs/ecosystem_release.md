@@ -163,13 +163,16 @@ did not print its exit code. A [diagnostic rerun](https://github.com/Luna-PL/Lun
 identified exit 24 in the test's synthetic v1-only-query artifact, made by
 rewriting bytes in a linked dynamic library. That duplicate fixture is removed;
 the separately compiled and sealed v1 C library retains the actual v1 loader,
-generation and typed-rejection checks. The corrected test still needs macOS
-CI evidence. The next ABI gate is to complete
-platform CI on an immutable commit, then obtain host review of the
-parallel query/version rule; 32-bit support would require its own runtime gate.
-Establish a new immutable Luna candidate containing the intended source,
-tests and workflows.
-Build and verify new
+generation and typed-rejection checks. On the corrected implementation commit
+`8aac3a0`, [Linux CI](https://github.com/Luna-PL/Luna/actions/runs/37462447341),
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37462447181), and
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37462447103) all
+completed successfully. Linux C++17, C++23, sanitizer, and thread-sanitizer
+jobs passed; the macOS Native artifact test now passes. The next ABI gate is
+host review of the parallel query/version rule. A 32-bit runtime would require
+its own gate, and source Ref/apply remains private.
+Choose the final immutable Luna candidate after this review and any resulting
+changes, then build and verify new
 child release evidence against that exact commit without moving existing
 tags or reusing their source-commit claims. Then update the lock with the
 matching evidence and pass root platform CI, strict readiness and the online
