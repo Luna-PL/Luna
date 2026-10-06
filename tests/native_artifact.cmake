@@ -250,7 +250,7 @@ execute_process(
     ERROR_VARIABLE consumer_error)
 if(NOT consumer_result EQUAL 0)
     message(FATAL_ERROR
-        "independent Native library consumer failed.\n"
+        "independent Native library consumer failed (exit ${consumer_result}).\n"
         "${consumer_output}\n${consumer_error}")
 endif()
 foreach(expected IN ITEMS

@@ -88,11 +88,11 @@ and final tag publication use the same verification script so the two gates cann
 The checked-in lock records Toolchains and Lunax `v0.2.0` releases and marks the
 snapshot `release-ready` with `release.publish: true`. Those child releases are
 published, but their common verified Luna source commit `41ce85e` is not an
-ancestor of the implementation commit `a0bf2b5` on Luna `main`. The local
+ancestor of implementation commit `9af653f` on Luna `main`. The local
 `verify_release_readiness.cmake` check explicitly reports this blocker, and
 strict `REQUIRE_READY=ON` fails. The non-strict exit status means the blocking
 policy worked, not that publication is allowed. The root `v0.3.0` tag is absent.
-This check did not rerun remote CI or online asset/attestation verification.
+This local check did not rerun online asset/attestation verification.
 
 On 2026-10-03 the local CLANG64 non-hardware suite passed 76/77 tests with
 four workers; `luna.repl-smoke` timed out during process-tree cleanup under
@@ -131,30 +131,38 @@ An independently compiled v1-only C library was then sealed with its own
 proof/trust record. The independent proof oracle, v1 call, unprofiled
 generation and typed-lookup rejection pass in the focused Native artifact
 CTest on both platforms; the preceding full-suite counts predate this fixture.
-The local v2 candidate now pins its 64-bit C record offsets and SHA-256 row
+The v2 candidate now pins its 64-bit C record offsets and SHA-256 row
 framing; independently resealed unknown-profile artifacts are rejected.
 Native artifact, MoonRuntime and runtime-ABI focused tests pass on both local
-platforms after these checks. This remains a local candidate pending host ABI
-review and platform CI on an immutable commit.
+platforms after these checks. Host ABI review remains open.
 The release package list and CI workflows cover 64-bit Linux, Windows and the
 macOS runner architecture, with no listed 32-bit package. The macOS workflow
-already includes the Native artifact CTest; it has not run on implementation
-commit `a0bf2b5`. The freestanding 32-bit C layout probe is now wired into Clang
+already includes the Native artifact CTest. The freestanding 32-bit C layout
+probe is now wired into Clang
 CTest for GNU/Linux, Windows GNU and Darwin targets. Its three tests and the
 file-guide inventory pass locally on Windows CLANG64 and WSL Arch Linux; it
 does not exercise a 32-bit loader or artifact. The complete non-hardware
 CTest suites now pass 80/80 and 79/79 respectively after this integration.
-Commit `a0bf2b5` contains this implementation and test evidence. It remains
-local, and the read-only readiness check still reports the verified child
+Commit `a0bf2b5` contains this implementation and test evidence. It is on
+remote `main`, and the read-only readiness check still reports the verified child
 source `41ce85e` as non-ancestral; strict readiness fails as designed.
-A subsequent local worktree revision adds only a private three-node branching
+A subsequent commit `9af653f` adds only a private three-node branching
 owner cleanup proof for `?` Err, injected post-body failure and host Drop.
 An independently sealed four-node fork is rejected before private JIT
 materialization by the bounded shape gate.
 Focused canonical tests pass in ordinary and ASAN builds on Windows CLANG64
-and WSL Arch Linux. The 80/80 and 79/79 full-suite counts above predate this
-revision; this revision has no remote platform result.
-The next ABI gate is immutable-candidate platform CI and host review of the
+and WSL Arch Linux. After rebuilding all targets at `9af653f`, the complete
+non-hardware suites pass locally on Windows CLANG64 (80/80) and WSL Arch Linux
+(79/79). Both commits are on remote `main`; this push triggered
+[Linux CI](https://github.com/Luna-PL/Luna/actions/runs/37459306824),
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37459306797), and
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37459306874).
+Linux and Windows passed. macOS failed its sole `luna.native-artifact` CTest:
+the independent Python Native consumer returned nonzero, while the test harness
+did not print its exit code. The harness now reports that code so the macOS
+failure can be diagnosed in the next run. This commit has no passing macOS
+platform evidence. The next ABI gate is to resolve that failure and complete
+platform CI on an immutable commit, then obtain host review of the
 parallel query/version rule; 32-bit support would require its own runtime gate.
 Establish a new immutable Luna candidate containing the intended source,
 tests and workflows.

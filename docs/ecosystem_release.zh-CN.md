@@ -74,12 +74,12 @@ workflow 与最终 tag 发布使用同一个验证脚本，避免两套门禁随
 
 入库的 lock 已录入 Toolchains 与 Lunax `v0.2.0` release，并将快照标为
 `release-ready`、`release.publish: true`。两项子组件 release 已发布，但它们共同
-验证的 Luna 源码提交 `41ce85e` 不是当前 Luna `main` 上实施提交
-`a0bf2b5` 的祖先。
+验证的 Luna 源码提交 `41ce85e` 不是 Luna `main` 上实施提交
+`9af653f` 的祖先。
 本地 `verify_release_readiness.cmake` 明确报告此阻断，严格的
 `REQUIRE_READY=ON` 模式失败；非严格模式退出成功只表示阻断策略生效，不表示
-允许发布。根仓 `v0.3.0` tag 尚不存在。本次核对没有重跑
-远程 CI 或联网制品／attestation 验证。
+允许发布。根仓 `v0.3.0` tag 尚不存在。本地核对没有重跑
+联网制品／attestation 验证。
 
 2026-10-03 本地 CLANG64 非硬件测试以四个 worker 通过 76／77 项；
 `luna.repl-smoke` 在并行负载下于进程树清理阶段超时，单独重跑通过。随后按 JIT
@@ -108,24 +108,29 @@ workflow 与最终 tag 发布使用同一个验证脚本，避免两套门禁随
 随后独立编译纯 v1 C 库并生成其自身的 proof／trust。独立 proof oracle、v1 调用、
 无 profile generation 与类型化 lookup 拒绝在两端 Native artifact 聚焦 CTest
 中通过；前述完整测试计数早于这一夹具。
-本地 v2 候选现固定 64 位 C 记录偏移及 SHA-256 行编码；独立重新封装的未知
+v2 候选现固定 64 位 C 记录偏移及 SHA-256 行编码；独立重新封装的未知
 profile 制品会被拒绝。加入这些检查后，两端 Native artifact、MoonRuntime 与
-runtime-ABI 聚焦测试均通过。宿主 ABI 审阅与不可变提交的平台 CI 尚未完成，
-因此仍属本地候选。
+runtime-ABI 聚焦测试均通过。宿主 ABI 审阅仍待完成。
 发布包清单与 CI 工作流覆盖 64 位 Linux、Windows 和 macOS runner 架构，
-没有列出 32 位发布包。macOS 工作流已包含 Native artifact CTest，但未在
-实施提交 `a0bf2b5` 上运行。GNU/Linux、Windows GNU、Darwin 目标的 32 位
+没有列出 32 位发布包。macOS 工作流已包含 Native artifact CTest。
+GNU/Linux、Windows GNU、Darwin 目标的 32 位
 freestanding C 布局探针现已接入 Clang CTest；本地 Windows CLANG64 与 WSL
 Arch Linux 的三项探针和文件清单测试均通过；接入后的完整非硬件 CTest
 分别通过 80／80 和 79／79。提交 `a0bf2b5` 包含这些实现和测试证据，
-目前仍在本地；只读就绪检查仍报告子组件验证的 `41ce85e` 不在其祖先链上，
+现已位于远端 `main`；只读就绪检查仍报告子组件验证的 `41ce85e` 不在其祖先链上，
 严格模式按预期失败。探针不验证 32 位加载器或制品。
-其后的本地工作树只增加私有三节点分叉 owner 清理证明，覆盖 `?` Err、注入的
+其后的提交 `9af653f` 只增加私有三节点分叉 owner 清理证明，覆盖 `?` Err、注入的
 body 后失败与宿主 Drop；独立封闭的四节点分叉在私有 JIT 物化前被有界形状
 门禁拒绝。Windows CLANG64 与 WSL Arch Linux 的普通及 ASAN
-canonical 聚焦测试均通过。上面的 80／80、79／79 全套计数早于此修订；它尚未
-取得远程平台结果。下一道 ABI 门是
-不可变候选的平台 CI 与宿主对并行 query／版本规则的审阅；增加 32 位支持
+canonical 聚焦测试均通过。在 `9af653f` 重新构建全部目标后，Windows CLANG64
+和 WSL Arch Linux 的完整非硬件测试分别通过 80／80、79／79。两个提交均已推送至
+远端 `main`，触发了 [Linux CI](https://github.com/Luna-PL/Luna/actions/runs/37459306824)、
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37459306797) 和
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37459306874)。
+Linux 与 Windows 已通过。macOS 仅 `luna.native-artifact` CTest 失败：独立 Python
+Native 消费者返回非零，但测试脚本未打印退出码。现在脚本会报告此码，以便在下一次
+macOS 运行中定位失败分支。此提交尚无通过的 macOS 平台证据。下一道 ABI 门是解决该
+失败，在不可变提交上完成平台 CI，并取得宿主对并行 query／版本规则的审阅；增加 32 位支持
 需要独立的运行时门禁。
 下一步建立包含预期源码、测试与工作流的全新不可变 Luna 候选。子组件要
 针对这个精确提交重新生成并验证发布证据，不能移动既有 tag 或复用其源码提交声明。
