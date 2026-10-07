@@ -10,8 +10,8 @@ if(luna_version STREQUAL "")
     message(FATAL_ERROR "VERSION is empty")
 endif()
 set(expected_release_tag "v${luna_version}")
-set(expected_toolchain_version "0.2.0")
-set(expected_lunax_version "0.2.0")
+set(expected_toolchain_version "0.2.1")
+set(expected_lunax_version "0.2.1")
 set(expected_toolchain_release_tag "v${expected_toolchain_version}")
 set(expected_lunax_release_tag "v${expected_lunax_version}")
 set(expected_toolchain_release_url
@@ -20,19 +20,19 @@ set(expected_lunax_release_url
     "https://github.com/Luna-PL/Lunax/releases/tag/${expected_lunax_release_tag}")
 set(expected_toolchain_artifacts
     "LUNA-SOURCE-COMMIT"
-    "luna-language-v0.2.0-darwin-arm64.vsix"
-    "luna-language-v0.2.0-linux-x64.vsix"
-    "luna-language-v0.2.0-win32-x64.vsix"
-    "luna-toolchain-0.2.0-linux-x86_64.tar.gz"
-    "luna-toolchain-0.2.0-macos-arm64.tar.gz"
-    "luna-toolchain-0.2.0-windows-x86_64.zip")
+    "luna-language-v0.2.1-darwin-arm64.vsix"
+    "luna-language-v0.2.1-linux-x64.vsix"
+    "luna-language-v0.2.1-win32-x64.vsix"
+    "luna-toolchain-0.2.1-linux-x86_64.tar.gz"
+    "luna-toolchain-0.2.1-macos-arm64.tar.gz"
+    "luna-toolchain-0.2.1-windows-x86_64.zip")
 set(expected_lunax_artifacts
     "LUNA-SOURCE-COMMIT"
     "LUNA-SOURCE-COMMIT.sha256"
-    "lunax-0.2.0-ubuntu-24.04-x86_64.tar.gz"
-    "lunax-0.2.0-ubuntu-24.04-x86_64.tar.gz.sha256"
-    "lunax_0.2.0_amd64.deb"
-    "lunax_0.2.0_amd64.deb.sha256")
+    "lunax-0.2.1-ubuntu-24.04-x86_64.tar.gz"
+    "lunax-0.2.1-ubuntu-24.04-x86_64.tar.gz.sha256"
+    "lunax_0.2.1_amd64.deb"
+    "lunax_0.2.1_amd64.deb.sha256")
 list(SORT expected_toolchain_artifacts)
 list(SORT expected_lunax_artifacts)
 
