@@ -60,21 +60,21 @@ foreach(component IN ITEMS toolchain lunax)
 endforeach()
 
 string(JSON ready_lock SET "${ready_lock}"
-       components toolchain version "\"0.2.0\"")
+       components toolchain version "\"0.2.1\"")
 string(JSON ready_lock SET "${ready_lock}"
-       components toolchain published_release tag "\"v0.2.0\"")
+       components toolchain published_release tag "\"v0.2.1\"")
 string(JSON ready_lock SET "${ready_lock}"
        components toolchain published_release url
-       "\"https://github.com/Luna-PL/toolchains/releases/tag/v0.2.0\"")
+       "\"https://github.com/Luna-PL/toolchains/releases/tag/v0.2.1\"")
 set(toolchain_artifacts "{}")
 foreach(asset IN ITEMS
         "LUNA-SOURCE-COMMIT"
-        "luna-language-v0.2.0-darwin-arm64.vsix"
-        "luna-language-v0.2.0-linux-x64.vsix"
-        "luna-language-v0.2.0-win32-x64.vsix"
-        "luna-toolchain-0.2.0-linux-x86_64.tar.gz"
-        "luna-toolchain-0.2.0-macos-arm64.tar.gz"
-        "luna-toolchain-0.2.0-windows-x86_64.zip")
+        "luna-language-v0.2.1-darwin-arm64.vsix"
+        "luna-language-v0.2.1-linux-x64.vsix"
+        "luna-language-v0.2.1-win32-x64.vsix"
+        "luna-toolchain-0.2.1-linux-x86_64.tar.gz"
+        "luna-toolchain-0.2.1-macos-arm64.tar.gz"
+        "luna-toolchain-0.2.1-windows-x86_64.zip")
     string(JSON toolchain_artifacts SET "${toolchain_artifacts}"
            "${asset}" "\"${fixture_digest}\"")
 endforeach()
@@ -83,20 +83,20 @@ string(JSON ready_lock SET "${ready_lock}"
        "${toolchain_artifacts}")
 
 string(JSON ready_lock SET "${ready_lock}"
-       components lunax version "\"0.2.0\"")
+       components lunax version "\"0.2.1\"")
 string(JSON ready_lock SET "${ready_lock}"
-       components lunax published_release tag "\"v0.2.0\"")
+       components lunax published_release tag "\"v0.2.1\"")
 string(JSON ready_lock SET "${ready_lock}"
        components lunax published_release url
-       "\"https://github.com/Luna-PL/Lunax/releases/tag/v0.2.0\"")
+       "\"https://github.com/Luna-PL/Lunax/releases/tag/v0.2.1\"")
 set(lunax_artifacts "{}")
 foreach(asset IN ITEMS
         "LUNA-SOURCE-COMMIT"
         "LUNA-SOURCE-COMMIT.sha256"
-        "lunax-0.2.0-ubuntu-24.04-x86_64.tar.gz"
-        "lunax-0.2.0-ubuntu-24.04-x86_64.tar.gz.sha256"
-        "lunax_0.2.0_amd64.deb"
-        "lunax_0.2.0_amd64.deb.sha256")
+        "lunax-0.2.1-ubuntu-24.04-x86_64.tar.gz"
+        "lunax-0.2.1-ubuntu-24.04-x86_64.tar.gz.sha256"
+        "lunax_0.2.1_amd64.deb"
+        "lunax_0.2.1_amd64.deb.sha256")
     string(JSON lunax_artifacts SET "${lunax_artifacts}"
            "${asset}" "\"${fixture_digest}\"")
 endforeach()
