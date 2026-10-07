@@ -1271,17 +1271,17 @@ MoonIR capability、canonical CFG 分支与构建目标均已删除；退役 fea
 套件、单 workload analyzer 与最小 heterogeneous simulator 用例均能把源码作为
 临时 0.3 application package 构建并执行，release smoke test 守护该 AOT 路径；
 用户文档不再把已删除的 dynamic 源码当作可用功能。2026-09-15 的 Luna 候选
-`41ce85e` 已用于发布 Toolchains `v0.2.0`（`63c8fe1`）和 Lunax `v0.2.0`
-（`42285e1`）。当前 ecosystem lock 记录了两者的不可变制品、checksum、
-attestation 和已通过的 consumer 检查。
+`41ce85e` 曾用于发布 Toolchains `v0.2.0`（`63c8fe1`）和 Lunax `v0.2.0`
+（`42285e1`）。后来 Luna 源码继续发展，历史 lock 不再授权当前源码树。
 
-但该 lock 不能授权当前 Luna 源码树。截至 2026-10-03，它写有 `release-ready`
-和 `release.publish: true`，其中已验证的 Luna 候选 `41ce85e` 却不是当前
-`main` 的祖先；严格 readiness 因此阻断根仓发布，根仓也尚无 `v0.3.0` tag。
-两阶段规则规定候选之后只允许 lock／状态文档变化。当前源码和测试开发需要建立
-新的不可变 Luna 候选，并重新取得与之匹配的子组件发布证据；不能重指向既有
-release 或只改 lock 标签。随后必须通过根仓平台 CI、严格 readiness 和联网
-release-evidence 门禁，才能创建根仓 tag。独立跟踪的源码 Ref／apply 仍未完成，
+当前 2026-10-07 Luna 源码候选为 `06a438e`，Linux、Windows 与 macOS CI 均通过。
+Toolchains `v0.2.1`（`48ded79`）和 Lunax `v0.2.1`（`b71985e`）均固定该精确提交；
+两者的 release、消费者、checksum 与 attestation 门均通过。
+`luna-0.3.0-ecosystem-release.2` lock 记录了不可变制品，本地严格 readiness 也通过。
+独立的[联网 Release evidence 运行](https://github.com/Luna-PL/Luna/actions/runs/37573976362)
+完成两项子组件发布校验并通过。两阶段规则规定候选之后只允许 lock／状态文档变化；
+截至本检查点，根仓 `v0.3.0` tag 尚不存在，发布前还须通过最终根仓平台门禁。
+独立跟踪的源码 Ref／apply 仍未完成，
 子组件已经发布不意味着它已成为公开能力。
 这些剩余授权、发布等级与明确延后项已集中记录在
 [生态发布交接决策表](ecosystem_release.zh-CN.md#发布交接决策登记表2026-09-15)；

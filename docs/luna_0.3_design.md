@@ -1457,18 +1457,18 @@ heterogeneous simulator case build and execute temporary 0.3 application
 packages; the release smoke test guards that AOT path. User documentation no
 longer presents removed dynamic source as usable. The 2026-09-15 Luna candidate
 `41ce85e` was used for the published Toolchains `v0.2.0` (`63c8fe1`) and Lunax
-`v0.2.0` (`42285e1`) releases. The current ecosystem lock records their
-immutable assets, checksums, attestations and passed consumer checks.
+`v0.2.0` (`42285e1`) releases. That historical lock stopped authorizing the
+developed Luna tree as soon as its verified candidate no longer matched.
 
-The lock nevertheless does not authorize the current Luna tree. As checked on
-2026-10-03, it says `release-ready` and `release.publish: true`, but its verified
-Luna candidate `41ce85e` is not an ancestor of current `main`. Strict release
-readiness therefore blocks root publication; no root `v0.3.0` tag is present.
-The two-phase rule permits only lock/status changes after a candidate. Current
-source and test development requires a new immutable Luna candidate and fresh,
-matching child release evidence rather than repointing the existing releases
-or changing the lock label alone. After that, root platform CI, strict
-readiness and online release-evidence gates must pass before a root tag.
+The current 2026-10-07 Luna source candidate is `06a438e`, with Linux, Windows,
+and macOS CI passed. Toolchains `v0.2.1` (`48ded79`) and Lunax `v0.2.1`
+(`b71985e`) both pin that exact Luna commit; their release, consumer, checksum,
+and attestation gates passed. The `luna-0.3.0-ecosystem-release.2` lock records
+their immutable assets and passed local strict readiness. The independent
+[online Release evidence run](https://github.com/Luna-PL/Luna/actions/runs/37573976362)
+passed both child-release verification jobs. The two-phase rule permits only
+lock/status changes after the candidate; the root `v0.3.0` tag is still absent
+at this checkpoint and requires the final root platform gates before publication.
 The separately tracked source Ref/apply implementation remains open and does
 not become public merely because child releases exist.
 The remaining authorization, release-tier, and explicit-deferral choices are
