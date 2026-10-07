@@ -106,7 +106,7 @@ allowlist 之外，因此当前 `main` 按策略不能再次充当 `v0.3.0` 源�
 并继续调查 Windows LLVM 20 间歇性 COFF 重定位失败。随后依次冻结带版本的
 宿主 Ref 传入／返回及所有权／状态契约，接入生产级 drop glue 与 Moon Container
 验证，最后通过双包执行门禁。上述门禁通过前，该功能保持私有；具体接受条件见
-[源码 Ref／apply 计划](slot_fragment_runtime_plan.md#next-source-refapply-gates-updated-2026-10-06)。
+[源码 Ref／apply 计划](slot_fragment_runtime_plan.zh-CN.md)。
 
 2026-10-03 本地 CLANG64 非硬件测试以四个 worker 通过 76／77 项；
 `luna.repl-smoke` 在并行负载下于进程树清理阶段超时，单独重跑通过。随后按 JIT
