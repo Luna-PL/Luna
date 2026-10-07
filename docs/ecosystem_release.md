@@ -208,8 +208,8 @@ still constructing `0.2.0` assets. The corrected fixture passes locally at
 [Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37569424497), and
 [macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37569424458) passed.
 
-The Toolchains `0.2.1` branch at `48ded79` and Lunax `0.2.1` branch at
-`b71985e` both pin exact Luna source commit `06a438ed8f8d7110d805fe1ee4fa55972b97f97f`.
+Toolchains `main` at `48ded79` and Lunax `main` at `b71985e` both pin exact
+Luna source commit `06a438ed8f8d7110d805fe1ee4fa55972b97f97f`.
 Their exact-input [Toolchains CI](https://github.com/Luna-PL/toolchains/actions/runs/37569698482)
 and [Lunax CI](https://github.com/Luna-PL/Lunax/actions/runs/37569824458)
 passed. Toolchains CI includes Linux, Windows, macOS, and mandatory real-compiler

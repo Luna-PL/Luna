@@ -172,8 +172,7 @@ Linux C++17、C++23、sanitizer 与 thread-sanitizer 作业均通过；macOS Nat
 [Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37569424497) 与
 [macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37569424458) 均通过。
 
-Toolchains `0.2.1` 分支提交 `48ded79` 与 Lunax `0.2.1` 分支提交
-`b71985e` 均固定精确 Luna 源码提交
+Toolchains `main` 提交 `48ded79` 与 Lunax `main` 提交 `b71985e` 均固定精确 Luna 源码提交
 `06a438ed8f8d7110d805fe1ee4fa55972b97f97f`。指定该提交的
 [Toolchains CI](https://github.com/Luna-PL/toolchains/actions/runs/37569698482) 与
 [Lunax CI](https://github.com/Luna-PL/Lunax/actions/runs/37569824458) 均通过。
