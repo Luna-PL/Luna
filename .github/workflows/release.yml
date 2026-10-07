@@ -215,10 +215,17 @@ jobs:
           tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           test "$tag" = "v$version"
           llvm_prefix="$(brew --prefix llvm@22)"
+          # Clang 22 reports two intentional REPL warnings in the immutable
+          # v0.3.0 source; preserve -Werror for every other diagnostic.
+          warning_exceptions=""
+          if [ "$tag" = "v0.3.0" ]; then
+            warning_exceptions="-Wno-error=unused-parameter -Wno-error=unused-result"
+          fi
           cmake -S . -B build-release -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_COMPILER="$llvm_prefix/bin/clang" \
             -DCMAKE_CXX_COMPILER="$llvm_prefix/bin/clang++" \
+            -DCMAKE_CXX_FLAGS="$warning_exceptions" \
             -DLUNA_STRICT_WARNINGS=ON \
             -DLLVM_DIR="$llvm_prefix/lib/cmake/llvm"
 
