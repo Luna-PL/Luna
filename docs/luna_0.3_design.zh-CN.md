@@ -1279,8 +1279,13 @@ Toolchains `v0.2.1`（`48ded79`）和 Lunax `v0.2.1`（`b71985e`）均固定该�
 两者的 release、消费者、checksum 与 attestation 门均通过。
 `luna-0.3.0-ecosystem-release.2` lock 记录了不可变制品，本地严格 readiness 也通过。
 独立的[联网 Release evidence 运行](https://github.com/Luna-PL/Luna/actions/runs/37573976362)
-完成两项子组件发布校验并通过。两阶段规则规定候选之后只允许 lock／状态文档变化；
-截至本检查点，根仓 `v0.3.0` tag 尚不存在，发布前还须通过最终根仓平台门禁。
+完成两项子组件发布校验并通过。两阶段规则规定候选之后只允许 lock／状态文档变化。
+根仓 `v0.3.0` 标签现指向 `5641959`；首次打包因浅克隆历史不足和 macOS LLVM
+版本不受支持而失败。`main` 上仅修复工作流，并针对未改动的标签重新运行。
+[成功的恢复运行](https://github.com/Luna-PL/Luna/actions/runs/37655986456)
+已发布带有 Linux、macOS 和 Windows 验证安装包的
+[`v0.3.0` 预发布版](https://github.com/Luna-PL/Luna/releases/tag/v0.3.0)。
+详见[当前发布状态](ecosystem_release.zh-CN.md#当前提交谱系与发布恢复2026-10-08)。
 独立跟踪的源码 Ref／apply 仍未完成，
 子组件已经发布不意味着它已成为公开能力。
 这些剩余授权、发布等级与明确延后项已集中记录在

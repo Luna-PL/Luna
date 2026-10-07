@@ -71,7 +71,7 @@ lock。
 checksum、`LUNA-SOURCE-COMMIT` 和 GitHub/Sigstore attestation。独立 Release evidence
 workflow 与最终 tag 发布使用同一个验证脚本，避免两套门禁随时间漂移。
 
-## 当前提交谱系与下一发布门（2026-10-07）
+## 当前提交谱系与发布恢复（2026-10-08）
 
 `luna-0.3.0-ecosystem-release.2` lock 记录 Toolchains 与 Lunax
 `v0.2.1` release，两者都固定 Luna 源码候选 `06a438e`，快照状态为
@@ -80,8 +80,33 @@ workflow 与最终 tag 发布使用同一个验证脚本，避免两套门禁随
 [Windows](https://github.com/Luna-PL/Luna/actions/runs/37569424497) 与
 [macOS](https://github.com/Luna-PL/Luna/actions/runs/37569424458) CI 已通过。
 该 lock 已通过本地冻结快照检查、严格 `REQUIRE_READY=ON` 和三项发布策略
-CTest。创建根仓 `v0.3.0` tag 前，仍须通过独立的联网 Release evidence workflow；
-该 tag 当前尚不存在。
+CTest。独立的[联网 Release evidence 运行](https://github.com/Luna-PL/Luna/actions/runs/37575445770)
+通过后，根仓已在 `5641959` 创建附注标签 `v0.3.0`。
+[首次由标签触发的发布运行](https://github.com/Luna-PL/Luna/actions/runs/37576549753)
+失败：Linux 与 Windows 打包任务的浅克隆缺少发布策略 CTest 所需历史，macOS
+任务选中了不受支持的 Homebrew LLVM 23。`main` 上的工作流修复 `ed0ddee`
+改用完整历史和 macOS LLVM 22，并在包清单中记录实际检出的标签提交。
+[首次手动恢复运行](https://github.com/Luna-PL/Luna/actions/runs/37653830186)
+通过 readiness、子组件证据及 Linux／Windows 包验证；macOS 使用 LLVM 22
+完成配置，但两条 REPL 警告被升级为错误而停止。第二项仅修改工作流的修复
+`33de55f` 把这两类警告的豁免限定于 `v0.3.0`。
+[第二次手动恢复运行](https://github.com/Luna-PL/Luna/actions/runs/37655986456)
+通过 readiness、子组件发布证据、三平台构建／测试／打包／干净环境安装验证与发布。
+公开的 [`v0.3.0` 预发布版](https://github.com/Luna-PL/Luna/releases/tag/v0.3.0)
+于 2026-10-07 17:17 UTC 发布，包含 Linux x86_64、macOS arm64、Windows
+UCRT64 x86_64 安装包，以及各自的 SHA-256 文件。三个校验文件均与 GitHub
+报告的对应安装包 SHA-256 摘要一致。附注标签仍解析至 `5641959`。
+`33de55f` 推送还通过 [Linux](https://github.com/Luna-PL/Luna/actions/runs/37655880401)、
+[Windows](https://github.com/Luna-PL/Luna/actions/runs/37655879964) 和
+[macOS](https://github.com/Luna-PL/Luna/actions/runs/37655880045) CI。
+标签通过严格 readiness；工作流修复属于候选后的
+allowlist 之外，因此当前 `main` 按策略不能再次充当 `v0.3.0` 源码候选。
+
+此预发布版完成后，下一项实现门禁是私有源码 Ref／apply 的控制流与清理证明，
+并继续调查 Windows LLVM 20 间歇性 COFF 重定位失败。随后依次冻结带版本的
+宿主 Ref 传入／返回及所有权／状态契约，接入生产级 drop glue 与 Moon Container
+验证，最后通过双包执行门禁。上述门禁通过前，该功能保持私有；具体接受条件见
+[源码 Ref／apply 计划](slot_fragment_runtime_plan.md#next-source-refapply-gates-updated-2026-10-06)。
 
 2026-10-03 本地 CLANG64 非硬件测试以四个 worker 通过 76／77 项；
 `luna.repl-smoke` 在并行负载下于进程树清理阶段超时，单独重跑通过。随后按 JIT

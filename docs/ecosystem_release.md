@@ -83,7 +83,7 @@ set, resolves lightweight or annotated tags to the final commit, and reverifies 
 `LUNA-SOURCE-COMMIT`, and GitHub/Sigstore attestations. The independent Release evidence workflow
 and final tag publication use the same verification script so the two gates cannot drift.
 
-## Current lineage and next release gate (2026-10-07)
+## Current lineage and release recovery (2026-10-08)
 
 The `luna-0.3.0-ecosystem-release.2` lock records Toolchains and Lunax
 `v0.2.1` releases, both pinned to Luna source candidate `06a438e`, and marks the
@@ -93,8 +93,39 @@ snapshot `release-ready` with `release.publish: true`. The candidate's
 [macOS](https://github.com/Luna-PL/Luna/actions/runs/37569424458) CI passed.
 Local frozen-lock verification, strict `REQUIRE_READY=ON`, and the three focused
 release-policy CTests passed against this lock. The independent online
-Release evidence workflow must pass before the root
-`v0.3.0` tag is created; that tag is currently absent.
+[Release evidence run](https://github.com/Luna-PL/Luna/actions/runs/37575445770)
+passed before the annotated root `v0.3.0` tag was created at `5641959`.
+The [initial tag-triggered release](https://github.com/Luna-PL/Luna/actions/runs/37576549753)
+failed: Linux and Windows package jobs lacked the Git history needed by a
+release-policy CTest, and the macOS job selected unsupported Homebrew LLVM 23.
+The workflow repair at `ed0ddee` fetches full history, selects LLVM 22 on macOS,
+and records the checked-out tag commit in each package manifest. The
+[first manual recovery run](https://github.com/Luna-PL/Luna/actions/runs/37653830186)
+passed readiness, child evidence, and Linux/Windows package verification; macOS
+compiled under LLVM 22 but stopped on two REPL warnings promoted to errors.
+A second workflow-only repair at `33de55f` narrows this warning exception to
+`v0.3.0`. The [second manual recovery run](https://github.com/Luna-PL/Luna/actions/runs/37655986456)
+passed readiness, child-release evidence, all three platform build/test/package
+and clean-install gates, and publication. The public
+[`v0.3.0` prerelease](https://github.com/Luna-PL/Luna/releases/tag/v0.3.0)
+was published on 2026-10-07 at 17:17 UTC with Linux x86_64, macOS arm64, and
+Windows UCRT64 x86_64 archives plus one SHA-256 file per archive. The three
+checksum files match the SHA-256 digests reported for their archives by GitHub.
+The annotated tag still resolves to `5641959`. The `33de55f` push also passed
+[Linux](https://github.com/Luna-PL/Luna/actions/runs/37655880401),
+[Windows](https://github.com/Luna-PL/Luna/actions/runs/37655879964), and
+[macOS](https://github.com/Luna-PL/Luna/actions/runs/37655880045) CI.
+Strict readiness passes at the tag; current
+`main` intentionally fails the candidate allowlist after the workflow-only
+repair and cannot be used as a new `v0.3.0` source commit.
+
+After this prerelease, the next implementation gate is the private source
+Ref/apply control-flow and cleanup proof, including the intermittent Windows
+LLVM 20 COFF relocation investigation. Then freeze the versioned host Ref
+ingress/return and ownership/status contract, connect production drop glue and
+Moon Container verification, and pass the two-package execution gate in that
+order. Keep the feature private until those gates pass; the detailed acceptance
+conditions are in the [source Ref/apply plan](slot_fragment_runtime_plan.md#next-source-refapply-gates-updated-2026-10-06).
 
 On 2026-10-03 the local CLANG64 non-hardware suite passed 76/77 tests with
 four workers; `luna.repl-smoke` timed out during process-tree cleanup under

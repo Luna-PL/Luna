@@ -1467,8 +1467,13 @@ and attestation gates passed. The `luna-0.3.0-ecosystem-release.2` lock records
 their immutable assets and passed local strict readiness. The independent
 [online Release evidence run](https://github.com/Luna-PL/Luna/actions/runs/37573976362)
 passed both child-release verification jobs. The two-phase rule permits only
-lock/status changes after the candidate; the root `v0.3.0` tag is still absent
-at this checkpoint and requires the final root platform gates before publication.
+lock/status changes after the candidate. The root `v0.3.0` tag now points to
+`5641959`; the first tag-triggered packaging run failed on shallow history and
+an unsupported macOS LLVM version. Workflow-only repairs on `main` were run
+against the unchanged tag. The [successful recovery run](https://github.com/Luna-PL/Luna/actions/runs/37655986456)
+published the [`v0.3.0` prerelease](https://github.com/Luna-PL/Luna/releases/tag/v0.3.0)
+with verified Linux, macOS, and Windows archives. See the
+[current release status](ecosystem_release.md#current-lineage-and-release-recovery-2026-10-08).
 The separately tracked source Ref/apply implementation remains open and does
 not become public merely because child releases exist.
 The remaining authorization, release-tier, and explicit-deferral choices are
