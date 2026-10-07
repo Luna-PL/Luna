@@ -1,8 +1,8 @@
 # 生态发布快照
 
 `ecosystem.lock.json` 是连接 Luna、LunaToolchain 与 Lunax 三个独立仓库的权威快照。
-当前入库的快照保留此前提升的子组件发布证据，但其 `release-ready` 状态并不表示
-当前 Luna `main` 已就绪；实际状态由下述提交谱系与 readiness 检查决定。
+`release-ready` 状态仍须结合当前 Luna 提交谱系与发布证据核对；单凭状态字段
+不能授权创建 tag。
 Luna 组件由“包含该 lock 文件的
 commit”标识；子组件使用精确 Git commit。
 语言版本、诊断协议和分析协议与各组件 package 版本分别记录。
@@ -73,14 +73,15 @@ workflow 与最终 tag 发布使用同一个验证脚本，避免两套门禁随
 
 ## 当前提交谱系与下一发布门（2026-10-07）
 
-入库的 lock 已录入 Toolchains 与 Lunax `v0.2.0` release，并将快照标为
-`release-ready`、`release.publish: true`。两项子组件 release 已发布，但它们共同
-验证的 Luna 源码提交 `41ce85e` 不是 Luna `main` 上当前候选
-`06a438e` 的祖先。
-本地 `verify_release_readiness.cmake` 明确报告此阻断，严格的
-`REQUIRE_READY=ON` 模式失败；非严格模式退出成功只表示阻断策略生效，不表示
-允许发布。根仓 `v0.3.0` tag 尚不存在。本地核对没有重跑
-联网制品／attestation 验证。
+`luna-0.3.0-ecosystem-release.2` lock 记录 Toolchains 与 Lunax
+`v0.2.1` release，两者都固定 Luna 源码候选 `06a438e`，快照状态为
+`release-ready`、`release.publish: true`。候选的
+[Linux](https://github.com/Luna-PL/Luna/actions/runs/37569424493)、
+[Windows](https://github.com/Luna-PL/Luna/actions/runs/37569424497) 与
+[macOS](https://github.com/Luna-PL/Luna/actions/runs/37569424458) CI 已通过。
+该 lock 已通过本地冻结快照检查、严格 `REQUIRE_READY=ON` 和三项发布策略
+CTest。创建根仓 `v0.3.0` tag 前，仍须通过独立的联网 Release evidence workflow；
+该 tag 当前尚不存在。
 
 2026-10-03 本地 CLANG64 非硬件测试以四个 worker 通过 76／77 项；
 `luna.repl-smoke` 在并行负载下于进程树清理阶段超时，单独重跑通过。随后按 JIT
@@ -177,11 +178,15 @@ Toolchains `main` 提交 `48ded79` 与 Lunax `main` 提交 `b71985e` 均固定�
 [Toolchains CI](https://github.com/Luna-PL/toolchains/actions/runs/37569698482) 与
 [Lunax CI](https://github.com/Luna-PL/Lunax/actions/runs/37569824458) 均通过。
 Toolchains CI 包含 Linux、Windows、macOS 与强制真实编译器集成；Lunax CI 包含
-事务安装集成。这些是源码验证，不是发布证据；两个子仓均未创建 `v0.2.1` tag 或制品。
-入库 lock 仍记录旧的 `v0.2.0` 公共制品，严格 readiness 因版本、资产清单和候选谱系
-继续阻断发布。下一道门是发布新版子组件，验证其
-消费者、checksum 和 attestation，再提升 lock。根仓严格 readiness 与联网
-Release evidence 均通过后才能创建 Luna tag。只修改 lock 状态不能修复候选谱系。
+事务安装集成。这些是源码验证。[Toolchains `v0.2.1` 正式版](https://github.com/Luna-PL/toolchains/releases/tag/v0.2.1)
+和 [Lunax `v0.2.1` 预发布版](https://github.com/Luna-PL/Lunax/releases/tag/v0.2.1)
+已经从上述精确提交发布，两项 release workflow 均通过。
+[Toolchains 消费者验证](https://github.com/Luna-PL/toolchains/actions/runs/37573408078)
+通过 Linux、macOS arm64 与 Windows 包、checksum、源码标记及 attestation 检查；
+[Lunax 消费者验证](https://github.com/Luna-PL/Lunax/actions/runs/37573511968)
+通过 Ubuntu 压缩包与 Debian 包及其 checksum、源码标记和 attestation 检查。
+该 lock 记录了所有附加制品摘要及上述消费者运行。根仓联网
+Release evidence workflow 会重新下载并独立核验公共发布制品。
 
 ## 发布交接决策登记表（2026-09-15）
 

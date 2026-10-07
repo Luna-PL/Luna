@@ -1,10 +1,9 @@
 # Ecosystem release snapshot
 
 `ecosystem.lock.json` is the authoritative snapshot connecting the otherwise independent
-Luna, LunaToolchain, and Lunax repositories. The checked-in snapshot retains
-previously promoted child-release evidence, but its `release-ready` status does
-not establish readiness for current Luna `main`; the lineage and readiness
-checks below determine that. The Luna component is the commit containing the lock
+Luna, LunaToolchain, and Lunax repositories. Its `release-ready` status must be
+checked against the current Luna lineage and release evidence; the status field
+alone does not authorize a tag. The Luna component is the commit containing the lock
 file; child components use exact Git commits. Language, diagnostic, and analysis protocol versions are
 recorded separately from component package versions.
 For a released child component, `commit` tracks the current verification source while
@@ -86,14 +85,16 @@ and final tag publication use the same verification script so the two gates cann
 
 ## Current lineage and next release gate (2026-10-07)
 
-The checked-in lock records Toolchains and Lunax `v0.2.0` releases and marks the
-snapshot `release-ready` with `release.publish: true`. Those child releases are
-published, but their common verified Luna source commit `41ce85e` is not an
-ancestor of current candidate `06a438e` on Luna `main`. The local
-`verify_release_readiness.cmake` check explicitly reports this blocker, and
-strict `REQUIRE_READY=ON` fails. The non-strict exit status means the blocking
-policy worked, not that publication is allowed. The root `v0.3.0` tag is absent.
-This local check did not rerun online asset/attestation verification.
+The `luna-0.3.0-ecosystem-release.2` lock records Toolchains and Lunax
+`v0.2.1` releases, both pinned to Luna source candidate `06a438e`, and marks the
+snapshot `release-ready` with `release.publish: true`. The candidate's
+[Linux](https://github.com/Luna-PL/Luna/actions/runs/37569424493),
+[Windows](https://github.com/Luna-PL/Luna/actions/runs/37569424497), and
+[macOS](https://github.com/Luna-PL/Luna/actions/runs/37569424458) CI passed.
+Local frozen-lock verification, strict `REQUIRE_READY=ON`, and the three focused
+release-policy CTests passed against this lock. The independent online
+Release evidence workflow must pass before the root
+`v0.3.0` tag is created; that tag is currently absent.
 
 On 2026-10-03 the local CLANG64 non-hardware suite passed 76/77 tests with
 four workers; `luna.repl-smoke` timed out during process-tree cleanup under
@@ -214,14 +215,16 @@ Their exact-input [Toolchains CI](https://github.com/Luna-PL/toolchains/actions/
 and [Lunax CI](https://github.com/Luna-PL/Lunax/actions/runs/37569824458)
 passed. Toolchains CI includes Linux, Windows, macOS, and mandatory real-compiler
 integration; Lunax CI includes transactional-install integration. These are
-source checks, not release evidence. Neither `v0.2.1`
-child tag or artifact exists yet. The checked-in lock still records the old
-published `v0.2.0` artifacts, so strict readiness blocks publication by version,
-asset inventory, and candidate lineage. The next gate is to publish new child
-releases, verify their consumers,
-checksums and attestations, and promote the lock. Root strict readiness and
-online Release evidence must pass before the Luna tag. A status-only lock edit
-cannot repair the current candidate lineage.
+source checks. The [Toolchains `v0.2.1` release](https://github.com/Luna-PL/toolchains/releases/tag/v0.2.1)
+and [Lunax `v0.2.1` prerelease](https://github.com/Luna-PL/Lunax/releases/tag/v0.2.1)
+are published from those exact commits; both release workflows passed. The
+[Toolchains consumer](https://github.com/Luna-PL/toolchains/actions/runs/37573408078)
+verified its Linux, macOS arm64, and Windows packages, checksums, source marker,
+and attestations. The [Lunax consumer](https://github.com/Luna-PL/Lunax/actions/runs/37573511968)
+verified its Ubuntu archive and Debian package with their checksums, source marker,
+and attestations. The lock records all attached asset digests and these
+consumer runs. The root online Release evidence workflow
+independently redownloads and verifies the public releases.
 
 ## Release handoff decision register (2026-09-15)
 
