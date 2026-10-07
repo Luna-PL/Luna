@@ -65,6 +65,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
 
       - name: Install release toolchain
         run: |
@@ -160,7 +161,7 @@ jobs:
             echo "Bundled compiler dependency closure: $bundled_libraries"
             echo "AOT requirement: a compatible LLVM 22 clang++ linker driver"
             echo "Support scope: JIT/check are packaged; CUDA/ROCm require host drivers and runtimes"
-            echo "Source commit: $GITHUB_SHA"
+            echo "Source commit: $(git rev-parse HEAD)"
           } > "stage/$package/RELEASE-MANIFEST.txt"
           mkdir -p dist
           (
@@ -202,9 +203,10 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
 
       - name: Install release toolchain
-        run: brew install cmake dylibbundler ninja llvm
+        run: brew install cmake dylibbundler ninja llvm@22
 
       - name: Verify version and configure
         shell: bash
@@ -212,7 +214,7 @@ jobs:
           version="$(cat VERSION)"
           tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           test "$tag" = "v$version"
-          llvm_prefix="$(brew --prefix llvm)"
+          llvm_prefix="$(brew --prefix llvm@22)"
           cmake -S . -B build-release -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
             -DCMAKE_C_COMPILER="$llvm_prefix/bin/clang" \
@@ -224,7 +226,7 @@ jobs:
         shell: bash
         run: |
           cmake --build build-release --parallel --verbose
-          llvm_prefix="$(brew --prefix llvm)"
+          llvm_prefix="$(brew --prefix llvm@22)"
           export LUNA_CXX="$llvm_prefix/bin/clang++"
           export PATH="$llvm_prefix/bin:$PATH"
           ctest --test-dir build-release -LE hardware --output-on-failure
@@ -252,7 +254,7 @@ jobs:
             echo "Bundled compiler dependency: $llvm_name and its non-system dylib closure"
             echo "AOT requirement: a compatible Homebrew LLVM clang++ linker driver"
             echo "Support scope: JIT/check are packaged; CUDA/ROCm require host drivers and runtimes"
-            echo "Source commit: $GITHUB_SHA"
+            echo "Source commit: $(git rev-parse HEAD)"
           } > "stage/$package/RELEASE-MANIFEST.txt"
           mkdir -p dist
           (
@@ -315,6 +317,7 @@ jobs:
       - uses: actions/checkout@v6
         with:
           ref: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref }}
+          fetch-depth: 0
 
       - name: Install UCRT64 release toolchain
         uses: msys2/setup-msys2@v2
@@ -370,7 +373,7 @@ jobs:
             echo "Bundled compiler dependencies: UCRT64 DLL closure reported by ldd"
             echo "AOT requirement: a compatible MSYS2 UCRT64 LLVM clang++ linker driver"
             echo "Support scope: JIT/check are packaged; CUDA/ROCm require host drivers and runtimes"
-            echo "Source commit: $GITHUB_SHA"
+            echo "Source commit: $(git rev-parse HEAD)"
           } > "stage/$package/RELEASE-MANIFEST.txt"
           mkdir -p dist
           (
