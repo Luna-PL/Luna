@@ -1,9 +1,10 @@
 # Ecosystem release snapshot
 
 `ecosystem.lock.json` is the authoritative snapshot connecting the otherwise independent
-Luna, LunaToolchain, and Lunax repositories. The checked-in snapshot declares
-a promoted 0.3.0 ecosystem release candidate, subject to the lineage and
-readiness checks below. The Luna component is the commit containing the lock
+Luna, LunaToolchain, and Lunax repositories. The checked-in snapshot retains
+previously promoted child-release evidence, but its `release-ready` status does
+not establish readiness for current Luna `main`; the lineage and readiness
+checks below determine that. The Luna component is the commit containing the lock
 file; child components use exact Git commits. Language, diagnostic, and analysis protocol versions are
 recorded separately from component package versions.
 For a released child component, `commit` tracks the current verification source while
@@ -62,7 +63,7 @@ cmake -DLUNA_SOURCE_DIR="$PWD" \
 ```
 
 That command reports why publication is blocked and succeeds when the fail-closed policy is
-being enforced. Strict mode also checks the 0.3 snapshot name, Toolchain/Lunax 0.2.0 versions,
+being enforced. Strict mode also checks the 0.3 snapshot name, Toolchain/Lunax 0.2.1 versions,
 tags, URLs, source/published commit equality, consumer/attestation status, and the exact asset
 names and SHA-256 shape produced by both workflows. Merely changing `status` while retaining
 0.1.2 evidence therefore cannot be reported as ready. The prebuilt-release workflow invokes the
@@ -83,12 +84,12 @@ set, resolves lightweight or annotated tags to the final commit, and reverifies 
 `LUNA-SOURCE-COMMIT`, and GitHub/Sigstore attestations. The independent Release evidence workflow
 and final tag publication use the same verification script so the two gates cannot drift.
 
-## Current lineage and next release gate (2026-10-06)
+## Current lineage and next release gate (2026-10-07)
 
 The checked-in lock records Toolchains and Lunax `v0.2.0` releases and marks the
 snapshot `release-ready` with `release.publish: true`. Those child releases are
 published, but their common verified Luna source commit `41ce85e` is not an
-ancestor of implementation commit `9af653f` on Luna `main`. The local
+ancestor of current candidate `06a438e` on Luna `main`. The local
 `verify_release_readiness.cmake` check explicitly reports this blocker, and
 strict `REQUIRE_READY=ON` fails. The non-strict exit status means the blocking
 policy worked, not that publication is allowed. The root `v0.3.0` tag is absent.
@@ -188,13 +189,38 @@ For that independent C v2 producer at `716ec17`, [Linux CI](https://github.com/L
 [Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37503367279), and
 [macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37503367316) passed.
 A subsequent focused Windows test also calls through its pinned binding after
-`MoonRuntime` destruction to check the library lease's lifetime.
-Choose the final immutable Luna candidate after this review and any resulting
-changes, then build and verify new
-child release evidence against that exact commit without moving existing
-tags or reusing their source-commit claims. Then update the lock with the
-matching evidence and pass root platform CI, strict readiness and the online
-Release evidence gate before creating the Luna tag. A status-only lock edit
+`MoonRuntime` destruction to check the library lease's lifetime. That proof is
+committed at `1db2931`, whose [Linux CI](https://github.com/Luna-PL/Luna/actions/runs/37505248341),
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37505248266), and
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37505248282) passed.
+
+An exact-`1db2931` [Toolchains compatibility run](https://github.com/Luna-PL/toolchains/actions/runs/37507742264)
+found that the grammar rejected `examples/fragments.luna`. The Toolchains compatibility
+branch adds `fragment` to its declaration keywords; local corpus and Rust workspace
+tests pass. An exact-`1db2931` [Lunax compatibility run](https://github.com/Luna-PL/Lunax/actions/runs/37507837322)
+passed. Both children need new versions because their existing `v0.2.0` releases
+immutably record the older Luna candidate. The root readiness gate also encoded
+the old child version and asset names. Commit `129d593` updates those
+expectations to `0.2.1`. Its Linux CI exposed a release-policy test fixture
+still constructing `0.2.0` assets. The corrected fixture passes locally at
+`06a438e`, the current Luna source candidate. Its
+[Linux CI](https://github.com/Luna-PL/Luna/actions/runs/37569424493),
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37569424497), and
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37569424458) passed.
+
+The Toolchains `0.2.1` branch at `48ded79` and Lunax `0.2.1` branch at
+`b71985e` both pin exact Luna source commit `06a438ed8f8d7110d805fe1ee4fa55972b97f97f`.
+Their exact-input [Toolchains CI](https://github.com/Luna-PL/toolchains/actions/runs/37569698482)
+and [Lunax CI](https://github.com/Luna-PL/Lunax/actions/runs/37569824458)
+passed. Toolchains CI includes Linux, Windows, macOS, and mandatory real-compiler
+integration; Lunax CI includes transactional-install integration. These are
+source checks, not release evidence. Neither `v0.2.1`
+child tag or artifact exists yet. The checked-in lock still records the old
+published `v0.2.0` artifacts, so strict readiness blocks publication by version,
+asset inventory, and candidate lineage. The next gate is to publish new child
+releases, verify their consumers,
+checksums and attestations, and promote the lock. Root strict readiness and
+online Release evidence must pass before the Luna tag. A status-only lock edit
 cannot repair the current candidate lineage.
 
 ## Release handoff decision register (2026-09-15)

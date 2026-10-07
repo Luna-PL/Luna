@@ -1,8 +1,9 @@
 # 生态发布快照
 
 `ecosystem.lock.json` 是连接 Luna、LunaToolchain 与 Lunax 三个独立仓库的权威快照。
-当前入库的快照声明为已提升的 0.3.0 生态发布候选，仍须通过下述提交谱系与
-readiness 检查。Luna 组件由“包含该 lock 文件的
+当前入库的快照保留此前提升的子组件发布证据，但其 `release-ready` 状态并不表示
+当前 Luna `main` 已就绪；实际状态由下述提交谱系与 readiness 检查决定。
+Luna 组件由“包含该 lock 文件的
 commit”标识；子组件使用精确 Git commit。
 语言版本、诊断协议和分析协议与各组件 package 版本分别记录。
 对于已经发布的子组件，`commit` 跟踪当前验证源码，`published_release.commit` 则记录公开
@@ -52,7 +53,7 @@ cmake -DLUNA_SOURCE_DIR="$PWD" \
 ```
 
 该命令会报告发布被阻断的原因，并在 fail-closed 策略正常生效时成功。strict
-模式还会核对 0.3 snapshot 名、Toolchain/Lunax 0.2.0 version、tag、URL、source/published
+模式还会核对 0.3 snapshot 名、Toolchain/Lunax 0.2.1 version、tag、URL、source/published
 commit 一致性、consumer/attestation 状态，以及两个 workflow 会产生的精确资产名和
 SHA-256 形状，因而只修改 `status` 而保留 0.1.2 证据不会被误报为 ready。
 prebuilt-release workflow 使用同一脚本的 `-DREQUIRE_READY=ON` 模式，因此在快照
@@ -70,12 +71,12 @@ lock。
 checksum、`LUNA-SOURCE-COMMIT` 和 GitHub/Sigstore attestation。独立 Release evidence
 workflow 与最终 tag 发布使用同一个验证脚本，避免两套门禁随时间漂移。
 
-## 当前提交谱系与下一发布门（2026-10-06）
+## 当前提交谱系与下一发布门（2026-10-07）
 
 入库的 lock 已录入 Toolchains 与 Lunax `v0.2.0` release，并将快照标为
 `release-ready`、`release.publish: true`。两项子组件 release 已发布，但它们共同
-验证的 Luna 源码提交 `41ce85e` 不是 Luna `main` 上实施提交
-`9af653f` 的祖先。
+验证的 Luna 源码提交 `41ce85e` 不是 Luna `main` 上当前候选
+`06a438e` 的祖先。
 本地 `verify_release_readiness.cmake` 明确报告此阻断，严格的
 `REQUIRE_READY=ON` 模式失败；非严格模式退出成功只表示阻断策略生效，不表示
 允许发布。根仓 `v0.3.0` tag 尚不存在。本地核对没有重跑
@@ -154,11 +155,34 @@ Linux C++17、C++23、sanitizer 与 thread-sanitizer 作业均通过；macOS Nat
 [Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37503367279) 和
 [macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37503367316)。
 随后本地 Windows 聚焦测试还在 `MoonRuntime` 销毁后通过固定 binding 调用，
-核验动态库 lease 的寿命。
-完成该审阅及其引发的修改后，选定最终不可变 Luna 候选。子组件要
-针对这个精确提交重新生成并验证发布证据，不能移动既有 tag 或复用其源码提交声明。
-随后将匹配的证据写入 lock，通过根仓平台 CI、严格 readiness 与联网 Release evidence
-门禁，最后才创建 Luna tag。只修改 lock 状态不能修复当前候选谱系。
+核验动态库 lease 的寿命。该证明已提交于 `1db2931`，其
+[Linux CI](https://github.com/Luna-PL/Luna/actions/runs/37505248341)、
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37505248266) 与
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37505248282) 均通过。
+
+针对精确 `1db2931` 的 [Toolchains 兼容 CI](https://github.com/Luna-PL/toolchains/actions/runs/37507742264)
+发现 grammar 拒绝 `examples/fragments.luna`。Toolchains 兼容分支已加入 `fragment`
+声明关键字；本地语料与 Rust workspace 测试通过。针对相同候选的
+[Lunax 兼容 CI](https://github.com/Luna-PL/Lunax/actions/runs/37507837322) 通过。
+既有 `v0.2.0` release 不可变地记录了旧 Luna 候选，因此两个子组件都需要新版本。
+根仓 readiness 门禁也把旧子组件版本和资产名写死。提交 `129d593` 将预期更新为
+`0.2.1`，但 Linux CI 揭示发布策略测试夹具仍构造 `0.2.0` 制品。
+夹具修正已在本地通过，`06a438e` 是当前 Luna 源码候选。其
+[Linux CI](https://github.com/Luna-PL/Luna/actions/runs/37569424493)、
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/37569424497) 与
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/37569424458) 均通过。
+
+Toolchains `0.2.1` 分支提交 `48ded79` 与 Lunax `0.2.1` 分支提交
+`b71985e` 均固定精确 Luna 源码提交
+`06a438ed8f8d7110d805fe1ee4fa55972b97f97f`。指定该提交的
+[Toolchains CI](https://github.com/Luna-PL/toolchains/actions/runs/37569698482) 与
+[Lunax CI](https://github.com/Luna-PL/Lunax/actions/runs/37569824458) 均通过。
+Toolchains CI 包含 Linux、Windows、macOS 与强制真实编译器集成；Lunax CI 包含
+事务安装集成。这些是源码验证，不是发布证据；两个子仓均未创建 `v0.2.1` tag 或制品。
+入库 lock 仍记录旧的 `v0.2.0` 公共制品，严格 readiness 因版本、资产清单和候选谱系
+继续阻断发布。下一道门是发布新版子组件，验证其
+消费者、checksum 和 attestation，再提升 lock。根仓严格 readiness 与联网
+Release evidence 均通过后才能创建 Luna tag。只修改 lock 状态不能修复候选谱系。
 
 ## 发布交接决策登记表（2026-09-15）
 
