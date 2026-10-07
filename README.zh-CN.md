@@ -13,7 +13,10 @@ LLVM lowering 前用经过验证的 MoonIR 保存语言语义和安全边界。
 
 项目正在实施 clean-break `0.3.0` 主线。0.3 编译器不保留 `language=`
 或 edition 兼容模式；依赖 0.2.1 语义的源码应使用冻结的 0.2.1 编译器。
-当前设计仍是草案，实现按完成门分阶段推进。详见
+当前设计仍是草案，实现按完成门分阶段推进。
+[已发布的 `v0.3.0` 预发布版](https://github.com/Luna-PL/Luna/releases/tag/v0.3.0)
+提供经过验证的 Linux x86_64、macOS arm64 和 Windows UCRT64 x86_64 安装包；
+源码 Ref／apply 与稳定 Slot／Fragment 语义仍不在此次发布范围内。详见
 [0.3 总体设计](docs/luna_0.3_design.zh-CN.md)与
 [0.2 到 0.3 迁移指南](docs/migration_0.2_to_0.3.zh-CN.md)。
 

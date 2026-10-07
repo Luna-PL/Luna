@@ -1,6 +1,15 @@
 # Changelog
 
-## 0.3.0 — Development
+## Unreleased
+
+- Extended the private source Ref/apply `From` cleanup proof to a two-node
+  owned error. Windows and Linux ASAN JIT tests observe outer-before-inner
+  Drop on both calls; this does not publish a source Ref/apply ABI.
+
+## 0.3.0 — Prerelease (2026-10-07)
+
+The [prerelease](https://github.com/Luna-PL/Luna/releases/tag/v0.3.0)
+provides verified Linux x86_64, macOS arm64 and Windows UCRT64 x86_64 archives.
 
 - Established the Luna 0.3 core-freeze candidate boundary while deliberately
   keeping Slot and Fragment semantics open. Value-type formation is now checked

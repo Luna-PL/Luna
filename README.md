@@ -17,6 +17,9 @@ The project is implementing a clean-break `0.3.0` line. The 0.3 compiler
 does not carry a `language=` or edition compatibility mode; source that depends
 on 0.2.1 semantics should use the frozen 0.2.1 compiler. The design remains a
 draft and the implementation is advancing in gated phases.
+[The `v0.3.0` prerelease](https://github.com/Luna-PL/Luna/releases/tag/v0.3.0)
+provides verified Linux x86_64, macOS arm64 and Windows UCRT64 x86_64 archives.
+Source Ref/apply and stable Slot/Fragment semantics remain outside that release.
 [Read the 0.3 overall design](docs/luna_0.3_design.md) and
 [migration guide](docs/migration_0.2_to_0.3.md).
 
