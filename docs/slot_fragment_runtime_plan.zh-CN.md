@@ -622,6 +622,12 @@ JIT 只导入 canonical Err Return 精确引用的冻结 `From` 方法；私有 
 Clang64／LLVM 20 与 WSL Arch Linux／LLVM 22 的聚焦 canonical ASAN 测试均通过。
 这证明有界双节点转换的一次条件式整对象局部 move 和两条出口；部分字段转移、
 向宿主转移所有权及更宽的转换函数体仍未证明。
+一个含两个拥有型字段的源码探针在 `move pair.first` 后到达 MoonIR sealing，
+但因普通 struct 只有根对象清理记录、没有字段投影清理记录而明确拒绝。源码所有权
+检查器记录了被移动的字段，return 清理却仍指向根 owner。新增回归夹具固定当前
+拒绝行为。扩展 `From` 字段转移前，须生成互不重叠的字段清理记录与底层 allocation
+释放，沿每条终止分支传递精确的剩余清理义务，再由封闭 CFG 与 JIT 验证顺序及恰好
+执行一次。整对象的分支 move 不能替代这些证明。
 另一源码夹具在相同的两层 Ref Apply 和 `?` 结构中返回
 `Result<i32, ReturnedResource>`。封闭 CFG 验证拥有型 payload 的 move 与先内后外的
 context 退出。更窄的仅测试用 JIT wrapper 在源码 body 返回后观察资源 Err，调用精确
@@ -927,7 +933,8 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    `From` 方法转换为标量并由源码 `Drop` 清理。双节点拥有型转换参数也已在
    Windows 与 Linux 的 ASAN JIT 运行中证明两条标量返回分支均外层先于内层
    Drop，其中正值路径将整个 owner move 到分支局部绑定。部分字段转移、向宿主
-   转移所有权及更宽的转换仍需证明。
+   转移所有权及更宽的转换仍需证明。下一个部分字段步骤要先有字段投影的
+   canonical 清理记录及字段敏感的 return 清理义务，才能加入正向 JIT 夹具。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。

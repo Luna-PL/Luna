@@ -439,6 +439,7 @@ expect_error("slice prevents source write" "tests/fixtures/slice_write_source_in
 expect_success("affine values may be discarded" "tests/fixtures/ownership_affine_drop.luna" "Program exited with code: 7")
 expect_error("affine owning parameter requires move" "tests/fixtures/ownership_affine_requires_move_invalid.luna" "affine value 'token' must be moved explicitly when passed to an owning call")
 expect_error("partial move invalidates only selected place" "tests/fixtures/ownership_partial_move_invalid.luna" "use of moved place 'bundle.first'")
+expect_error("owned field move waits for projected cleanup" "tests/fixtures/ownership_partial_move_cleanup_unlowered_invalid.luna" "move partially consumes local 'pair' without projected cleanup rows")
 expect_success("disjoint field borrows" "tests/fixtures/ownership_disjoint_field_borrows.luna" "Program exited with code: 0")
 expect_error("overlapping field borrows" "tests/fixtures/ownership_overlapping_field_borrows_invalid.luna" "overlapping place is borrowed")
 expect_error("partial move branch state" "tests/fixtures/ownership_partial_move_branch_invalid.luna" "ownership state of 'bundle' differs across paths through `if`")

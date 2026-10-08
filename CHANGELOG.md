@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Pinned the current fail-closed boundary for moving an owned struct field:
+  semantic place tracking succeeds, but MoonIR sealing rejects the missing
+  projected cleanup rows. The Ref/apply plan now lists field-sensitive return
+  obligations and allocation release before a positive conversion fixture.
 - Extended the private source Ref/apply `From` cleanup proof to a two-node
   owned error with two scalar return branches, including a branch-local move of
   the whole owner. Windows and Linux ASAN JIT tests observe outer-before-inner

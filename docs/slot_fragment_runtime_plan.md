@@ -801,6 +801,14 @@ test passes on Windows Clang64/LLVM 20 and WSL Arch Linux/LLVM 22. This proves
 one bounded conditional whole-owner local move and both exits of the two-node
 conversion; partial-field or host ownership transfer and wider conversion
 bodies remain outside the proof.
+A direct two-owned-field source probe reaches MoonIR sealing but fails closed
+on `move pair.first`: the ordinary struct has one root cleanup and no projected
+field cleanup rows. The source checker tracks the moved field, but its return
+cleanup still names the root owner. A regression fixture pins this current
+rejection. Before extending `From` to field transfer, derive disjoint field
+cleanup rows plus allocation release, carry the precise remaining obligations
+through each terminal branch, and verify their order and single execution in
+the sealed CFG and JIT. A whole-owner branch move does not discharge this work.
 Another source fixture returns `Result<i32, ReturnedResource>` from the same
 nested Ref Apply and `?` shape. The sealed CFG verifies an owned payload move
 and inner-before-outer context exits. A narrower test-only JIT wrapper now
@@ -1217,7 +1225,9 @@ not a public ABI decision or stable-release approval:
    conversion parameter now also proves outer-before-inner Drop on both scalar
    return branches in Windows and Linux ASAN JIT runs, including a whole-owner
    move to a branch-local binding on the positive path. Partial-field or host
-   ownership transfer and wider conversions still need proof.
+   ownership transfer and wider conversions still need proof. The next
+   partial-field step requires projected canonical cleanup rows and
+   field-sensitive return obligations before a positive JIT fixture.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches
