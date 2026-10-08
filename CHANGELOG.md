@@ -3,9 +3,10 @@
 ## Unreleased
 
 - Extended the private source Ref/apply `From` cleanup proof to a two-node
-  owned error with two scalar return branches. Windows and Linux ASAN JIT tests
-  observe outer-before-inner Drop twice on each branch; this does not publish
-  a source Ref/apply ABI. Canonical allocation now resolves unary negation
+  owned error with two scalar return branches, including a branch-local move of
+  the whole owner. Windows and Linux ASAN JIT tests observe outer-before-inner
+  Drop twice on each branch; this does not publish a source Ref/apply ABI.
+  Canonical allocation now resolves unary negation
   initializer types before checking the frozen field layout.
 
 ## 0.3.0 — Prerelease (2026-10-07)

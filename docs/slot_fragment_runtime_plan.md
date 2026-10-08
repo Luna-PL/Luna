@@ -791,13 +791,16 @@ frozen cleanup table to import that exact Drop glue; a probe observes one
 Drop per call. The returned payload remains scalar.
 An additional `From<SourceNestedError> for i32` fixture consumes an affine
 outer error with one owned `SourceError` field inside the same nested Apply and
-`?` path. The conversion now has two scalar return branches. Each branch runs
-twice and returns `Err(43)` without Slot dispatch: the positive branch observes
-outer Drop `43` before inner Drop `47`, and the negative branch observes outer
-Drop `-43` before inner Drop `47`. The focused canonical ASAN test passes on
-Windows Clang64/LLVM 20 and WSL Arch Linux/LLVM 22. This proves both exits of
-the bounded two-node conversion; conditional ownership transfer and wider
-conversion bodies remain outside the proof.
+`?` path. The conversion has two scalar return branches. The positive branch
+moves the whole affine error into a branch-local owner before returning its
+marker; the negative branch returns from the original parameter. Each branch
+runs twice and returns `Err(43)` without Slot dispatch: the positive branch
+observes outer Drop `43` before inner Drop `47`, and the negative branch
+observes outer Drop `-43` before inner Drop `47`. The focused canonical ASAN
+test passes on Windows Clang64/LLVM 20 and WSL Arch Linux/LLVM 22. This proves
+one bounded conditional whole-owner local move and both exits of the two-node
+conversion; partial-field or host ownership transfer and wider conversion
+bodies remain outside the proof.
 Another source fixture returns `Result<i32, ReturnedResource>` from the same
 nested Ref Apply and `?` shape. The sealed CFG verifies an owned payload move
 and inner-before-outer context exits. A narrower test-only JIT wrapper now
@@ -884,8 +887,8 @@ with no published carrier or symbol contract. It does not establish
 production failure statuses or safe JIT teardown with an outstanding owner.
 The observation value is not a public return carrier or stable ABI.
 More than three owned structs, wider resource graphs, conversion bodies with
-conditional ownership transfer or wider ownership graphs, `?` inside outlined
-Slot bodies, and recoverable derive/dispatch failures are outside this
+conditional partial-field or host ownership transfer or wider ownership
+graphs, `?` inside outlined Slot bodies, and recoverable derive/dispatch failures are outside this
 execution proof; the source frontend
 continues to reject `?` across the outlined Slot boundary.
 
@@ -1212,8 +1215,9 @@ not a public ABI decision or stable-release approval:
    evidence, including one affine source error converted to a scalar by its
    frozen `From` method and cleaned by source `Drop`. A two-node owned
    conversion parameter now also proves outer-before-inner Drop on both scalar
-   return branches in Windows and Linux ASAN JIT runs. Conditional ownership
-   transfer and wider conversions still need proof.
+   return branches in Windows and Linux ASAN JIT runs, including a whole-owner
+   move to a branch-local binding on the positive path. Partial-field or host
+   ownership transfer and wider conversions still need proof.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches
