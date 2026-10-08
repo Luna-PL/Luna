@@ -816,9 +816,13 @@ release, or clean both fields before release when neither moves. The verifier
 rejects missing or duplicate field coverage, overlapping aggregate Drop,
 reversed field order, allocation-only leakage, and incorrect return cleanup
 lists. It also retains the root allocation row when a projected field moves.
-This is verifier evidence only: source lowering still emits a root cleanup,
-source field moves remain rejected, and the split path has no JIT Drop or
-deallocation execution proof yet.
+The initialized-local gate now also accepts the same verified split table:
+a hand-built CFG transfers a raw allocation into a two-field binding, then
+checks both whole-value cleanup and one-field return transfer. A negative
+mutation rejects a second release of the consumed raw allocation. This is
+verifier evidence only: the source builder still emits one root cleanup per
+local, source field moves remain rejected, and the split path has no JIT Drop
+or deallocation execution proof yet.
 Another source fixture returns `Result<i32, ReturnedResource>` from the same
 nested Ref Apply and `?` shape. The sealed CFG verifies an owned payload move
 and inner-before-outer context exits. A narrower test-only JIT wrapper now
@@ -1238,9 +1242,11 @@ not a public ABI decision or stable-release approval:
    ownership transfer and wider conversions still need proof. A hand-built
    canonical CFG now validates complete disjoint field rows, one backing
    allocation cleanup row, and the active return cleanup list after one field
-   moves. Next, lower those rows from an owned source struct, make return and
-   scope-exit obligations field-sensitive, then prove actual field Drop and
-   allocation release order exactly once in a positive JIT fixture.
+   moves. A second hand-built CFG now covers raw allocation transfer into an
+   initialized split local and rejects cleanup of the consumed raw identity.
+   Next, make the source builder emit multiple rows per owned struct and make
+   return, `?`, and scope-exit obligations field-sensitive. Then prove actual
+   field Drop and allocation release order exactly once in a positive JIT fixture.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

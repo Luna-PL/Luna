@@ -524,11 +524,26 @@ void Verifier::verifyControlFlowBlocks(
                         ? CleanupKind::Value
                         : CleanupKind::Allocation;
                     size_t cleanupCount = 0;
-                    for (const auto& cleanup : graph.cleanups)
-                        if (cleanup.place.root == declaration->local &&
-                            cleanup.kind == expectedKind)
+                    size_t allocationCount = 0;
+                    size_t rootValueCount = 0;
+                    for (const auto& cleanup : graph.cleanups) {
+                        if (cleanup.place.root != declaration->local)
+                            continue;
+                        if (cleanup.kind == expectedKind)
                             ++cleanupCount;
-                    if (cleanupCount != 1)
+                        if (cleanup.kind == CleanupKind::Allocation)
+                            ++allocationCount;
+                        else if (cleanup.place.projections.empty())
+                            ++rootValueCount;
+                    }
+                    // The table verifier separately proves complete, ordered
+                    // field coverage and one backing allocation for a split
+                    // named struct. Its initialized binding has several
+                    // cleanup rows instead of one aggregate value row.
+                    const bool splitStruct = type &&
+                        type->kind == TypeKind::Struct &&
+                        allocationCount == 1 && rootValueCount == 0;
+                    if (cleanupCount != 1 && !splitStruct)
                         error(declaration->location,
                               "initialized allocation binding does not own exactly one final cleanup");
                 }

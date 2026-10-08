@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Accepted a structurally verified split cleanup table for a canonical
+  initialized struct binding. A CFG regression checks raw allocation transfer,
+  remaining-field cleanup after a field move, and rejection of a second raw
+  allocation release; source lowering remains gated.
 - Verified a bounded split-struct cleanup contract in hand-built canonical
   CFGs: projected field moves retain the backing allocation row, complete field
   rows are ordered, and malformed cleanup tables or return lists are rejected.

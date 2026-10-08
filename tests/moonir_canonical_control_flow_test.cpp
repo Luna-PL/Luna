@@ -224,6 +224,109 @@ int runControlFlowTests(ControlFlowTestContext& context) {
     if (cfgVerifier.verify(splitCfg, splitModule))
         return fail("split struct cleanup accepted allocation-only leaked fields");
 
+    // Initialization consumes a raw allocation identity, then activates the
+    // split binding's field and backing-storage rows. This is the local-owner
+    // shape required before source lowering may emit a partial field move.
+    moon::ControlFlowGraph initializedSplitCfg;
+    initializedSplitCfg.entry = moon::BlockId{0};
+    initializedSplitCfg.rootRegion = moon::RegionId{0};
+    initializedSplitCfg.rootScope = moon::ScopeId{0};
+    initializedSplitCfg.regions.push_back({
+        initializedSplitCfg.rootRegion, {}, moon::RegionKind::Function,
+        initializedSplitCfg.rootScope, initializedSplitCfg.entry, {},
+        {initializedSplitCfg.entry}, {}, {}, {}});
+    initializedSplitCfg.scopes.push_back({
+        initializedSplitCfg.rootScope, {}, initializedSplitCfg.rootRegion,
+        {moon::LocalId{0}, moon::LocalId{1}},
+        {moon::CleanupId{0}, moon::CleanupId{1}, moon::CleanupId{2},
+         moon::CleanupId{3}}, {}});
+    initializedSplitCfg.locals.push_back({
+        moon::LocalId{0}, initializedSplitCfg.rootScope,
+        moon::LocalKind::Allocation, "raw", splitPairId,
+        luna::ownership::Usage::Affine,
+        luna::ownership::Relation::Owned});
+    initializedSplitCfg.locals.push_back({
+        moon::LocalId{1}, initializedSplitCfg.rootScope,
+        moon::LocalKind::Binding, "pair", splitPairId,
+        luna::ownership::Usage::Affine,
+        luna::ownership::Relation::Owned});
+    initializedSplitCfg.cleanups.push_back({
+        moon::CleanupId{0}, initializedSplitCfg.rootScope,
+        {moon::LocalId{0}, {}}, splitPairId,
+        moon::CleanupKind::Allocation,
+        luna::ownership::CleanupAction::Deallocate, {}});
+    initializedSplitCfg.cleanups.push_back({
+        moon::CleanupId{1}, initializedSplitCfg.rootScope,
+        {moon::LocalId{1}, {}}, splitPairId,
+        moon::CleanupKind::Allocation,
+        luna::ownership::CleanupAction::Deallocate, {}});
+    initializedSplitCfg.cleanups.push_back({
+        moon::CleanupId{2}, initializedSplitCfg.rootScope,
+        {moon::LocalId{1}, {{moon::ProjectionKind::Field, 1, {}}}},
+        splitStringId, moon::CleanupKind::Value,
+        luna::ownership::CleanupAction::Deallocate, {}});
+    initializedSplitCfg.cleanups.push_back({
+        moon::CleanupId{3}, initializedSplitCfg.rootScope,
+        {moon::LocalId{1}, {{moon::ProjectionKind::Field, 0, {}}}},
+        splitStringId, moon::CleanupKind::Value,
+        luna::ownership::CleanupAction::Deallocate, {}});
+    initializedSplitCfg.blocks.emplace_back();
+    auto& initializedSplitEntry = initializedSplitCfg.blocks.back();
+    initializedSplitEntry.id = initializedSplitCfg.entry;
+    initializedSplitEntry.region = initializedSplitCfg.rootRegion;
+    initializedSplitEntry.scope = initializedSplitCfg.rootScope;
+    auto rawAllocation = std::make_unique<moon::AllocateStmt>();
+    rawAllocation->local = moon::LocalId{0};
+    rawAllocation->allocatedType = splitPairId;
+    initializedSplitEntry.operations.push_back(std::move(rawAllocation));
+    auto initializedPair = std::make_unique<moon::LetStmt>();
+    initializedPair->name = "pair";
+    initializedPair->local = moon::LocalId{1};
+    initializedPair->usage = luna::ownership::Usage::Affine;
+    initializedPair->relation = luna::ownership::Relation::Owned;
+    initializedPair->type = splitPairId;
+    auto pairInitialization = std::make_unique<moon::InitAllocationExpr>();
+    pairInitialization->allocation = moon::LocalId{0};
+    pairInitialization->allocatedType = splitPairId;
+    pairInitialization->type = splitPairId;
+    for (uint32_t field = 0; field < 2; ++field) {
+        auto literal = std::make_unique<moon::StringLiteralExpr>();
+        literal->value = field == 0 ? "first" : "second";
+        literal->type = splitStringId;
+        pairInitialization->elements.push_back({field, std::move(literal)});
+    }
+    initializedPair->initializer = std::move(pairInitialization);
+    initializedSplitEntry.operations.push_back(std::move(initializedPair));
+    initializedSplitEntry.terminator.kind = moon::TerminatorKind::Return;
+    auto initializedMove = std::make_unique<moon::MoveExpr>();
+    initializedMove->type = splitStringId;
+    auto initializedField = std::make_unique<moon::FieldAccessExpr>();
+    initializedField->field = "first";
+    initializedField->type = splitStringId;
+    auto initializedRoot = std::make_unique<moon::IdentifierExpr>();
+    initializedRoot->name = "pair";
+    initializedRoot->local = moon::LocalId{1};
+    initializedRoot->type = splitPairId;
+    initializedField->object = std::move(initializedRoot);
+    initializedMove->operand = std::move(initializedField);
+    initializedSplitEntry.terminator.operand = std::move(initializedMove);
+    initializedSplitEntry.terminator.exitCleanups = {
+        moon::CleanupId{2}, moon::CleanupId{1}};
+    initializedSplitCfg.sealed = true;
+    if (!cfgVerifier.verify(initializedSplitCfg, splitModule))
+        return fail("initialized split struct did not transfer raw allocation and remaining field cleanup");
+    std::unique_ptr<moon::Expr> retainedInitializedMove;
+    initializedSplitEntry.terminator.operand.swap(retainedInitializedMove);
+    initializedSplitEntry.terminator.exitCleanups = {
+        moon::CleanupId{3}, moon::CleanupId{2}, moon::CleanupId{1}};
+    if (!cfgVerifier.verify(initializedSplitCfg, splitModule))
+        return fail("initialized split struct did not clean both fields before backing allocation");
+    initializedSplitEntry.terminator.operand.swap(retainedInitializedMove);
+    initializedSplitEntry.terminator.exitCleanups = {
+        moon::CleanupId{2}, moon::CleanupId{1}, moon::CleanupId{0}};
+    if (cfgVerifier.verify(initializedSplitCfg, splitModule))
+        return fail("initialized split struct cleaned transferred raw allocation twice");
+
     moon::Param guardedArrayParameter;
     guardedArrayParameter.name = "values";
     guardedArrayParameter.usage = luna::ownership::Usage::Affine;

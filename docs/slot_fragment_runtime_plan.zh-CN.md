@@ -632,8 +632,12 @@ allocation 释放，沿每条终止分支传递精确的剩余义务。手工构
 move 后的字段，并先清理剩余字段再释放 allocation；没有字段转移时则先清理两个
 字段再释放。verifier 拒绝遗漏或重复字段、重叠的整对象 Drop、颠倒的字段顺序、
 仅释放 allocation 而泄漏字段，以及错误的 return 清理列表；字段转移时根
-allocation 清理记录保持有效。这仅是 verifier 证据：源码 lowering 仍生成根清理
-记录，源码字段 move 仍被拒绝，分拆路径尚无 JIT 中 Drop 和释放的执行证明。
+allocation 清理记录保持有效。初始化局部绑定的校验现也接受同一套已验证的分拆表：
+手工 CFG 将 raw
+allocation 转交给两字段绑定，再检查完整清理与单字段返回转移；负向变体拒绝再次
+释放已消费的 raw allocation。这仍仅是 verifier 证据：源码 builder 每个局部变量
+仍只生成一条根清理记录，源码字段 move 仍被拒绝，分拆路径尚无 JIT 中 Drop 和释放
+的执行证明。
 另一源码夹具在相同的两层 Ref Apply 和 `?` 结构中返回
 `Result<i32, ReturnedResource>`。封闭 CFG 验证拥有型 payload 的 move 与先内后外的
 context 退出。更窄的仅测试用 JIT wrapper 在源码 body 返回后观察资源 Err，调用精确
@@ -941,8 +945,10 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    Drop，其中正值路径将整个 owner move 到分支局部绑定。部分字段转移、向宿主
    转移所有权及更宽的转换仍需证明。手工构造的 canonical CFG 现验证完整、互不
    重叠的字段清理记录、一条底层 allocation 清理记录，以及一个字段转移后的有效
-   return 清理列表。下一步从拥有型源码 struct 生成这些记录，使 return 与作用域
-   退出义务具备字段敏感性，再用正向 JIT 夹具证明字段 Drop 与 allocation 释放的
+   return 清理列表。第二个手工 CFG 现还覆盖 raw allocation 向已初始化的分拆局部
+   绑定转移，并拒绝再次清理已消费的 raw 身份。下一步使源码 builder 为拥有型
+   struct 生成多条记录，使 return、`?` 与作用域退出义务具备字段敏感性，再用正向
+   JIT 夹具证明字段 Drop 与 allocation 释放的
    实际顺序和恰好一次执行。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
