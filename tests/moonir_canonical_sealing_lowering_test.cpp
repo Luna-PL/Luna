@@ -40,10 +40,9 @@ extern "C" void luna_private_ref_drop_probe(int32_t marker) {
     else if (marker == 47) {
         ++privateRefJitConversionDropProbeCalls;
         privateRefJitConversionDropOrder.push_back(marker);
-    } else if (marker == 43) {
+    } else if (marker == 43 || marker == -43) {
         privateRefJitConversionDropOrder.push_back(marker);
-    }
-    else if (marker == 59) ++privateRefJitReturnedDropProbeCalls;
+    } else if (marker == 59) ++privateRefJitReturnedDropProbeCalls;
     else if (marker == 67) ++privateRefJitReturnedOkDropProbeCalls;
     else if (marker == 66) ++privateRefJitReturnedPairDropProbeCalls;
     else if (marker == 71 || marker == 73 ||
@@ -1565,7 +1564,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "}\n"
         "impl From<SourceNestedError> for i32 {\n"
         "  fn from(affine error: SourceNestedError) -> i32 {\n"
-        "    return error.marker;\n"
+        "    if error.marker > 0 { return error.marker; }\n"
+        "    return 0 - error.marker;\n"
         "  }\n"
         "}\n"
         "struct ReturnedResource { marker: i32; }\n"
@@ -1731,6 +1731,20 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  }\n"
         "  return Ok(0);\n"
         "}\n"
+        "runtime fn try_apply_nested_from_else("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  let inner = new SourceError(47);\n"
+        "  let error = new SourceNestedError(-43, move inner);\n"
+        "  let input = Err::<i32, SourceNestedError>(move error);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
         "runtime fn try_apply_resource_return("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, ReturnedResource> {\n"
@@ -1859,8 +1873,11 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         *tryApplySnapshot.program(), *tryApplySnapshot.symbolTable());
     moon::Sealer tryApplySealer;
     if (!tryApplyModule || !tryApplyLowerer.errors().empty() ||
-        !tryApplySealer.sealFunctionBodies(*tryApplyModule))
+        !tryApplySealer.sealFunctionBodies(*tryApplyModule)) {
+        for (const auto& diagnostic : tryApplySealer.errors())
+            std::cerr << diagnostic << '\n';
         return fail("Ref apply Result propagation did not seal");
+    }
     moon::FunctionDecl* tryApply = nullptr;
     moon::FunctionDecl* tryApplyOk = nullptr;
     moon::FunctionDecl* tryApplyOutlinedReturn = nullptr;
@@ -1868,6 +1885,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyLocalCleanup = nullptr;
     moon::FunctionDecl* tryApplyFrom = nullptr;
     moon::FunctionDecl* tryApplyNestedFrom = nullptr;
+    moon::FunctionDecl* tryApplyNestedFromElse = nullptr;
     moon::FunctionDecl* tryApplyResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyOkResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyPairResourceReturn = nullptr;
@@ -1892,6 +1910,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyFrom = function;
             if (function->name == "try_apply_nested_from")
                 tryApplyNestedFrom = function;
+            if (function->name == "try_apply_nested_from_else")
+                tryApplyNestedFromElse = function;
             if (function->name == "try_apply_resource_return")
                 tryApplyResourceReturn = function;
             if (function->name == "try_apply_ok_resource_return")
@@ -1913,7 +1933,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         }
     if (!tryApply || !tryApplyOk || !tryApplyOutlinedReturn ||
         !tryApplyAfterSlot || !tryApplyLocalCleanup || !tryApplyFrom ||
-        !tryApplyNestedFrom ||
+        !tryApplyNestedFrom || !tryApplyNestedFromElse ||
         !tryApplyResourceReturn || !tryApplyOkResourceReturn ||
         !tryApplyPairResourceReturn || !tryApplyOkResourceScalarErr ||
         !tryApplyErrResourceScalarOk || !tryApplyNestedResourceReturn ||
@@ -2115,6 +2135,24 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             std::vector<int32_t>{43, 47, 43, 47} ||
         !privateRefJitDropProbeValid)
         return fail("Ref apply '?' nested From lost ordered source cleanup");
+    if (!tryApplyNestedFromElse->controlFlow ||
+        tryApplyNestedFromElse->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyNestedFromElse->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply '?' nested From else branch did not verify");
+    privateRefJitConversionDropOrder.clear();
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyNestedFromElse, privateRefJitError,
+            0, false, std::nullopt, false, false, {}, {},
+            std::pair<bool, int32_t>{false, 43})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply '?' nested From else branch failed private JIT execution");
+    }
+    if (privateRefJitConversionDropOrder !=
+            std::vector<int32_t>{-43, 47, -43, 47} ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply '?' nested From else branch lost ordered cleanup");
     if (!tryApplyResourceReturn->controlFlow ||
         tryApplyResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
         !refApplyCfgVerifier.verify(*tryApplyResourceReturn->controlFlow,

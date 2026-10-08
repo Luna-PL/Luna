@@ -175,6 +175,9 @@ ControlFlowBuilder::lowerAllocationElements(
                     if (!t.empty()) return t;
                     return resolveType(binary->rhs.get());
                 }
+                if (auto* unary = dynamic_cast<UnaryExpr*>(e);
+                    unary && unary->op == Operator::Negate)
+                    return resolveType(unary->operand.get());
                 if (auto* field = dynamic_cast<FieldAccessExpr*>(e)) {
                     auto objectType = resolveType(field->object.get());
                     if (!objectType.empty()) {

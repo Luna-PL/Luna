@@ -791,10 +791,12 @@ frozen cleanup table to import that exact Drop glue; a probe observes one
 Drop per call. The returned payload remains scalar.
 An additional `From<SourceNestedError> for i32` fixture consumes an affine
 outer error with one owned `SourceError` field inside the same nested Apply and
-`?` path. Two JIT calls return `Err(43)` without Slot dispatch and observe
-outer Drop `43` before inner Drop `47` on each call. The focused canonical ASAN
-test passes on Windows Clang64/LLVM 20 and WSL Arch Linux/LLVM 22. This proves
-the bounded two-node conversion-parameter cleanup; branching or wider
+`?` path. The conversion now has two scalar return branches. Each branch runs
+twice and returns `Err(43)` without Slot dispatch: the positive branch observes
+outer Drop `43` before inner Drop `47`, and the negative branch observes outer
+Drop `-43` before inner Drop `47`. The focused canonical ASAN test passes on
+Windows Clang64/LLVM 20 and WSL Arch Linux/LLVM 22. This proves both exits of
+the bounded two-node conversion; conditional ownership transfer and wider
 conversion bodies remain outside the proof.
 Another source fixture returns `Result<i32, ReturnedResource>` from the same
 nested Ref Apply and `?` shape. The sealed CFG verifies an owned payload move
@@ -882,8 +884,9 @@ with no published carrier or symbol contract. It does not establish
 production failure statuses or safe JIT teardown with an outstanding owner.
 The observation value is not a public return carrier or stable ABI.
 More than three owned structs, wider resource graphs, conversion bodies with
-branching or wider ownership graphs, `?` inside outlined Slot bodies, and recoverable
-derive/dispatch failures are outside this execution proof; the source frontend
+conditional ownership transfer or wider ownership graphs, `?` inside outlined
+Slot bodies, and recoverable derive/dispatch failures are outside this
+execution proof; the source frontend
 continues to reject `?` across the outlined Slot boundary.
 
 The current source builder enters and normally leaves each Ref Apply through
@@ -1208,8 +1211,9 @@ not a public ABI decision or stable-release approval:
    `?` path now has an inner-before-outer CFG proof and private Ok/Err JIT
    evidence, including one affine source error converted to a scalar by its
    frozen `From` method and cleaned by source `Drop`. A two-node owned
-   conversion parameter now also proves outer-before-inner Drop in Windows
-   and Linux ASAN JIT runs; branching and wider conversions still need proof.
+   conversion parameter now also proves outer-before-inner Drop on both scalar
+   return branches in Windows and Linux ASAN JIT runs. Conditional ownership
+   transfer and wider conversions still need proof.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

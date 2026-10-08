@@ -614,10 +614,11 @@ JIT 只导入 canonical Err Return 精确引用的冻结 `From` 方法；私有 
 由转换方法消费；仅测试用的 JIT 顺着该方法的冻结 cleanup 表导入精确的 Drop glue，
 探针证实每次调用各 Drop 一次。返回 payload 仍是标量。
 另一个 `From<SourceNestedError> for i32` 夹具在相同的两层 Apply／`?` 路径
-消费带一个拥有型 `SourceError` 字段的仿射外层错误。两次 JIT 调用均不分派 Slot，
-返回 `Err(43)`，并各自先 Drop 外层 `43`、再 Drop 内层 `47`。Windows
+消费带一个拥有型 `SourceError` 字段的仿射外层错误。转换现有两条返回标量的分支，
+每条分支各执行两次，均不分派 Slot 且返回 `Err(43)`。正值分支先 Drop 外层 `43`、
+再 Drop 内层 `47`；负值分支先 Drop 外层 `-43`、再 Drop 内层 `47`。Windows
 Clang64／LLVM 20 与 WSL Arch Linux／LLVM 22 的聚焦 canonical ASAN 测试均通过。
-这只证明有界双节点转换参数清理；分支或更宽的转换函数体仍未证明。
+这证明有界双节点转换的两条出口；条件式所有权转移和更宽的转换函数体仍未证明。
 另一源码夹具在相同的两层 Ref Apply 和 `?` 结构中返回
 `Result<i32, ReturnedResource>`。封闭 CFG 验证拥有型 payload 的 move 与先内后外的
 context 退出。更窄的仅测试用 JIT wrapper 在源码 body 返回后观察资源 Err，调用精确
@@ -677,8 +678,8 @@ Drop 次数不变。随后释放原始 JIT 句柄，由另一份共享 LLJIT lea
 时安全关闭 JIT 的行为。
 该观测值不是公开返回 carrier 或稳定 ABI。超过三个拥有型 struct 节点的图、
 更宽的资源图、
-带分支或更宽所有权图的转换函数体、outlined Slot body 中的 `?`，以及可恢复的
-派生／分派失败，均不在此执行证明内；前端继续在
+带条件式所有权转移或更宽所有权图的转换函数体、outlined Slot body 中的 `?`，
+以及可恢复的派生／分派失败，均不在此执行证明内；前端继续在
 outlined Slot 边界拒绝 `?`。
 
 当前源码 builder 通过 Jump 边进入 Ref Apply，并在正常结束时通过 Jump 边退出；
@@ -920,8 +921,8 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    产生非 Jump 跨区边前，继续明确拒绝它。受限的 `Result<i32, i32>` `?` 路径已有
    先内后外的 CFG 证明和 Ok／Err 私有 JIT 证据，包括将一个仿射源码错误经冻结
    `From` 方法转换为标量并由源码 `Drop` 清理。双节点拥有型转换参数也已在
-   Windows 与 Linux 的 ASAN JIT 运行中证明外层先于内层 Drop；带分支和
-   更宽的转换仍需证明。
+   Windows 与 Linux 的 ASAN JIT 运行中证明两条标量返回分支均外层先于内层
+   Drop；条件式所有权转移和更宽的转换仍需证明。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。
