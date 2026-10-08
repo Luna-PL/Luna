@@ -541,6 +541,75 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             }
     }
 
+    // A named struct may replace its aggregate value cleanup with disjoint
+    // field rows only when one root row still releases its allocation. Check
+    // the complete shape before ownership dataflow can consume a field.
+    for (const auto& local : graph.locals) {
+        if (local.kind == LocalKind::Allocation) continue;
+        const auto* type = module.findType(local.type);
+        if (!type || type->kind != TypeKind::Struct) continue;
+        const auto* scope = graph.findScope(local.scope);
+        if (!scope) continue;
+        size_t allocationCount = 0;
+        size_t rootValueCount = 0;
+        std::vector<std::pair<uint64_t, size_t>> projectedFields;
+        size_t allocationPosition = 0;
+        for (const auto& cleanup : graph.cleanups) {
+            if (cleanup.place.root != local.id || cleanup.guard) continue;
+            if (cleanup.kind == CleanupKind::Allocation) {
+                ++allocationCount;
+                const auto position = std::find(
+                    scope->cleanups.begin(), scope->cleanups.end(),
+                    cleanup.id);
+                allocationPosition = static_cast<size_t>(
+                    position - scope->cleanups.begin());
+            } else if (cleanup.place.projections.empty()) {
+                ++rootValueCount;
+            } else {
+                if (cleanup.place.projections.size() != 1 ||
+                    cleanup.place.projections.front().kind !=
+                        ProjectionKind::Field) {
+                    error({}, "split struct cleanup requires direct field rows");
+                    continue;
+                }
+                const auto position = std::find(
+                    scope->cleanups.begin(), scope->cleanups.end(),
+                    cleanup.id);
+                projectedFields.emplace_back(
+                    cleanup.place.projections.front().index,
+                    static_cast<size_t>(position - scope->cleanups.begin()));
+            }
+        }
+        if (allocationCount == 0 && projectedFields.empty()) continue;
+        if (allocationCount != 1 || rootValueCount != 0 ||
+            type->sysmeta.resource.needsDrop) {
+            error({}, "split struct cleanup requires one allocation row, "
+                      "no aggregate Drop, and no root value cleanup");
+            continue;
+        }
+        std::sort(projectedFields.begin(), projectedFields.end());
+        size_t expectedCount = 0;
+        size_t previousPosition = scope->cleanups.size();
+        for (size_t field = 0; field < type->fields.size(); ++field) {
+            const auto* fieldType = module.findType(type->fields[field].type);
+            if (!fieldType ||
+                !fieldType->sysmeta.resource.cleanupRequired) continue;
+            if (expectedCount >= projectedFields.size() ||
+                projectedFields[expectedCount].first != field) {
+                error({}, "split struct cleanup omits a required field");
+                break;
+            }
+            if (projectedFields[expectedCount].second >= previousPosition)
+                error({}, "split struct cleanup changes field order");
+            previousPosition = projectedFields[expectedCount].second;
+            ++expectedCount;
+        }
+        if (expectedCount != projectedFields.size())
+            error({}, "split struct cleanup repeats or adds a field row");
+        if (allocationPosition >= previousPosition)
+            error({}, "split struct cleanup releases allocation before fields");
+    }
+
     std::vector<std::vector<BlockId>> successors;
     verifyControlFlowBlocks(
         graph, module, guardedCursorIds, successors);

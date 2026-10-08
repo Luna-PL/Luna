@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Verified a bounded split-struct cleanup contract in hand-built canonical
+  CFGs: projected field moves retain the backing allocation row, complete field
+  rows are ordered, and malformed cleanup tables or return lists are rejected.
+  Source field moves remain rejected until lowering and JIT cleanup are proved.
 - Moved the fail-closed diagnostic for owned struct field moves to source
   ownership checking, with the field location and a whole-struct move
   suggestion. The Ref/apply plan now lists projected cleanup rows,

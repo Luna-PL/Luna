@@ -131,7 +131,7 @@ void Verifier::verifyOwnershipDataflow(
             std::equal(prefix.projections.begin(), prefix.projections.end(),
                        value.projections.begin());
     };
-    const auto consumePlace = [this, &graph, &cleanupsByLocal,
+    const auto consumePlace = [this, &graph, &module, &cleanupsByLocal,
                                &markerStateByLocal, noMarker,
                                &projectionPrefix](
         const PlaceRef& place, CleanupState& state,
@@ -161,6 +161,8 @@ void Verifier::verifyOwnershipDataflow(
             return;
         }
         bool consumed = false;
+        const auto* rootType = module.findType(
+            graph.locals[place.root.value].type);
         const size_t marker = markerStateByLocal[place.root.value];
         if (marker != noMarker && place.projections.empty()) {
             if (marker >= state.size() || !state[marker])
@@ -180,7 +182,11 @@ void Verifier::verifyOwnershipDataflow(
                 projectionPrefix(place, cleanup.place)) {
                 state[cleanupId.value] = 0;
                 consumed = true;
-            } else if (cleanup.place.projections.empty()) {
+            // A projected struct move leaves its shared backing allocation
+            // live; the split-table check covers every owned field.
+            } else if (cleanup.place.projections.empty() &&
+                       !(cleanup.kind == CleanupKind::Allocation &&
+                         rootType && rootType->kind == TypeKind::Struct)) {
                 error(location, context + " partially consumes local '" +
                       graph.locals[place.root.value].name +
                       "' without projected cleanup rows");

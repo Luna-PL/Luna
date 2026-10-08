@@ -807,10 +807,18 @@ suggestion. Before this explicit rejection, the source checker tracked the
 moved field while return cleanup still named the root owner; MoonIR sealing
 then rejected the missing projected cleanup rows. The ordinary struct still
 has one root cleanup. A regression fixture pins the early rejection. Before
-extending `From` to field transfer, derive disjoint field
-cleanup rows plus allocation release, carry the precise remaining obligations
-through each terminal branch, and verify their order and single execution in
-the sealed CFG and JIT. A whole-owner branch move does not discharge this work.
+extending `From` to field transfer, source lowering must produce disjoint field
+cleanup rows plus allocation release and carry the precise remaining obligations
+through each terminal branch. A hand-built sealed CFG now verifies the first
+canonical table/dataflow slice: a two-String-field owned parameter may return
+one moved field while the other field is cleaned before backing allocation
+release, or clean both fields before release when neither moves. The verifier
+rejects missing or duplicate field coverage, overlapping aggregate Drop,
+reversed field order, allocation-only leakage, and incorrect return cleanup
+lists. It also retains the root allocation row when a projected field moves.
+This is verifier evidence only: source lowering still emits a root cleanup,
+source field moves remain rejected, and the split path has no JIT Drop or
+deallocation execution proof yet.
 Another source fixture returns `Result<i32, ReturnedResource>` from the same
 nested Ref Apply and `?` shape. The sealed CFG verifies an owned payload move
 and inner-before-outer context exits. A narrower test-only JIT wrapper now
@@ -1227,9 +1235,12 @@ not a public ABI decision or stable-release approval:
    conversion parameter now also proves outer-before-inner Drop on both scalar
    return branches in Windows and Linux ASAN JIT runs, including a whole-owner
    move to a branch-local binding on the positive path. Partial-field or host
-   ownership transfer and wider conversions still need proof. The next
-   partial-field step requires projected canonical cleanup rows and
-   field-sensitive return obligations before a positive JIT fixture.
+   ownership transfer and wider conversions still need proof. A hand-built
+   canonical CFG now validates complete disjoint field rows, one backing
+   allocation cleanup row, and the active return cleanup list after one field
+   moves. Next, lower those rows from an owned source struct, make return and
+   scope-exit obligations field-sensitive, then prove actual field Drop and
+   allocation release order exactly once in a positive JIT fixture.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

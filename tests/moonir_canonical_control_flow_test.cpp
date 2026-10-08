@@ -117,6 +117,113 @@ int runControlFlowTests(ControlFlowTestContext& context) {
         return fail("CFG verifier accepted an unresolved local identifier");
     loweredUseId->local = moon::LocalId{0};
 
+    // A split owned struct keeps its backing allocation live after one field
+    // transfers. The remaining field must be cleaned before that allocation.
+    moon::Module splitModule;
+    splitModule.name = "canonical.split-cleanup.test";
+    const auto splitStringId = splitModule.registerType(TyString);
+    const auto splitPairId = splitModule.registerType(Type::makeStruct(
+        "SplitPair", {{"first", TyString}, {"second", TyString}},
+        "canonical.split-cleanup.test::SplitPair"));
+    splitModule.sealTypeTable();
+    moon::ControlFlowGraph splitCfg;
+    splitCfg.entry = moon::BlockId{0};
+    splitCfg.rootRegion = moon::RegionId{0};
+    splitCfg.rootScope = moon::ScopeId{0};
+    splitCfg.regions.push_back({splitCfg.rootRegion, {},
+                                moon::RegionKind::Function, splitCfg.rootScope,
+                                splitCfg.entry, {}, {splitCfg.entry}, {}, {}, {}});
+    splitCfg.scopes.push_back({splitCfg.rootScope, {}, splitCfg.rootRegion,
+                               {moon::LocalId{0}},
+                               {moon::CleanupId{0}, moon::CleanupId{1},
+                                moon::CleanupId{2}}, {}});
+    splitCfg.locals.push_back({moon::LocalId{0}, splitCfg.rootScope,
+                               moon::LocalKind::Parameter, "pair", splitPairId,
+                               luna::ownership::Usage::Affine,
+                               luna::ownership::Relation::Owned});
+    splitCfg.cleanups.push_back({
+        moon::CleanupId{0}, splitCfg.rootScope, {moon::LocalId{0}, {}},
+        splitPairId, moon::CleanupKind::Allocation,
+        luna::ownership::CleanupAction::Deallocate, {}});
+    splitCfg.cleanups.push_back({
+        moon::CleanupId{1}, splitCfg.rootScope,
+        {moon::LocalId{0}, {{moon::ProjectionKind::Field, 1, {}}}},
+        splitStringId, moon::CleanupKind::Value,
+        luna::ownership::CleanupAction::Deallocate, {}});
+    splitCfg.cleanups.push_back({
+        moon::CleanupId{2}, splitCfg.rootScope,
+        {moon::LocalId{0}, {{moon::ProjectionKind::Field, 0, {}}}},
+        splitStringId, moon::CleanupKind::Value,
+        luna::ownership::CleanupAction::Deallocate, {}});
+    splitCfg.blocks.emplace_back();
+    auto& splitEntry = splitCfg.blocks.back();
+    splitEntry.id = splitCfg.entry;
+    splitEntry.region = splitCfg.rootRegion;
+    splitEntry.scope = splitCfg.rootScope;
+    splitEntry.terminator.kind = moon::TerminatorKind::Return;
+    auto splitMove = std::make_unique<moon::MoveExpr>();
+    splitMove->type = splitStringId;
+    auto splitField = std::make_unique<moon::FieldAccessExpr>();
+    splitField->field = "first";
+    splitField->type = splitStringId;
+    auto splitRoot = std::make_unique<moon::IdentifierExpr>();
+    splitRoot->name = "pair";
+    splitRoot->local = moon::LocalId{0};
+    splitRoot->type = splitPairId;
+    splitField->object = std::move(splitRoot);
+    splitMove->operand = std::move(splitField);
+    splitEntry.terminator.operand = std::move(splitMove);
+    splitEntry.terminator.exitCleanups = {
+        moon::CleanupId{1}, moon::CleanupId{0}};
+    splitCfg.sealed = true;
+    if (!cfgVerifier.verify(splitCfg, splitModule))
+        return fail("split field transfer did not preserve remaining field and allocation cleanup");
+    std::unique_ptr<moon::Expr> retainedSplitMove;
+    splitEntry.terminator.operand.swap(retainedSplitMove);
+    splitEntry.terminator.exitCleanups = {
+        moon::CleanupId{2}, moon::CleanupId{1}, moon::CleanupId{0}};
+    if (!cfgVerifier.verify(splitCfg, splitModule))
+        return fail("unmoved split struct did not clean both fields before allocation");
+    splitEntry.terminator.operand.swap(retainedSplitMove);
+    splitEntry.terminator.exitCleanups = {moon::CleanupId{0}};
+    if (cfgVerifier.verify(splitCfg, splitModule))
+        return fail("split field transfer omitted the remaining field cleanup");
+    splitEntry.terminator.exitCleanups = {
+        moon::CleanupId{2}, moon::CleanupId{1}, moon::CleanupId{0}};
+    if (cfgVerifier.verify(splitCfg, splitModule))
+        return fail("split field transfer cleaned the moved field twice");
+    splitEntry.terminator.exitCleanups = {
+        moon::CleanupId{0}, moon::CleanupId{1}};
+    if (cfgVerifier.verify(splitCfg, splitModule))
+        return fail("split field transfer released backing storage before its field");
+    splitEntry.terminator.exitCleanups = {
+        moon::CleanupId{1}, moon::CleanupId{0}};
+    splitCfg.cleanups[1].place.projections.front().index = 0;
+    splitEntry.terminator.exitCleanups = {moon::CleanupId{0}};
+    if (cfgVerifier.verify(splitCfg, splitModule))
+        return fail("split struct cleanup accepted duplicate field coverage");
+    splitCfg.cleanups[1].place.projections.front().index = 1;
+    splitEntry.terminator.exitCleanups = {
+        moon::CleanupId{1}, moon::CleanupId{0}};
+    splitCfg.scopes[0].cleanups = {
+        moon::CleanupId{0}, moon::CleanupId{2}, moon::CleanupId{1}};
+    if (cfgVerifier.verify(splitCfg, splitModule))
+        return fail("split struct cleanup accepted reversed field order");
+    splitCfg.scopes[0].cleanups = {
+        moon::CleanupId{0}, moon::CleanupId{1}, moon::CleanupId{2}};
+    splitCfg.cleanups[0].kind = moon::CleanupKind::Value;
+    splitCfg.cleanups[0].action = luna::ownership::CleanupAction::Drop;
+    if (cfgVerifier.verify(splitCfg, splitModule))
+        return fail("split struct cleanup accepted overlapping aggregate Drop");
+    splitCfg.cleanups[0].kind = moon::CleanupKind::Allocation;
+    splitCfg.cleanups[0].action = luna::ownership::CleanupAction::Deallocate;
+    splitEntry.terminator.operand.reset();
+    splitEntry.terminator.exitCleanups = {moon::CleanupId{0}};
+    splitCfg.cleanups.resize(1);
+    splitCfg.scopes[0].cleanups = {moon::CleanupId{0}};
+    if (cfgVerifier.verify(splitCfg, splitModule))
+        return fail("split struct cleanup accepted allocation-only leaked fields");
+
     moon::Param guardedArrayParameter;
     guardedArrayParameter.name = "values";
     guardedArrayParameter.usage = luna::ownership::Usage::Affine;
