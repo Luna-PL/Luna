@@ -1018,6 +1018,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/moonir_canonical_sealing_iterators_test.cpp`
 - `tests/moonir_canonical_sealing_lowering_test.cpp`
 - `tests/moonir_canonical_sealing_symbols_test.cpp`
+- `tests/moonir_canonical_split_allocation_test.cpp`
 - `tests/moonir_canonical_test.cpp`
 - `tests/moonir_canonical_pipeline_test.cpp`
 - `tests/moonir_canonical_sealing_test.cpp`

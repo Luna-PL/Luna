@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Counted backing allocation release through a test-only host allocator during
+  source JIT execution. Moving one or both direct fields releases each of the
+  two `Cell` allocations and the `Pair` allocation exactly once.
 - Admitted direct moves of cleanup-bearing fields from owned named structs
   without aggregate Drop. Return, `?`, and lexical-exit obligations now omit
   moved fields while retaining backing allocation cleanup, including when all

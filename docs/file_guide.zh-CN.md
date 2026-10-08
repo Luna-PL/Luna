@@ -1200,6 +1200,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/moonir_canonical_sealing_lowering_test.cpp`
 - `tests/moonir_canonical_sealing_symbols_test.cpp`
 - `tests/moonir_canonical_sealing_test.cpp`
+- `tests/moonir_canonical_split_allocation_test.cpp`
 - `tests/moonir_canonical_test.cpp`
 - `tests/moonir_canonical_test_support.h`
 - `tests/optimization_pipeline.cmake`

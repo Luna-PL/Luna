@@ -43,6 +43,8 @@ static_assert(std::is_same_v<decltype(moon::StructDecl::type), moon::TypeRef>);
 using namespace canonical_test;
 
 int main(int argc, char** argv) {
+    if (argc == 2 && std::string(argv[1]) == "--split-allocation-probe")
+        return runSplitAllocationProbe();
     if (argc > 1) return luna::benchmarks::runCompiledFragmentBenchmark(argc, argv);
     if (const int result = luna::benchmarks::checkCompiledFragmentWorkload()) return result;
     FunctionDecl unaryRoute;

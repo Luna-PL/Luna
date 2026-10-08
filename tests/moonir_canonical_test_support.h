@@ -11,6 +11,8 @@
 
 namespace canonical_test {
 
+int runSplitAllocationProbe();
+
 struct ControlFlowTestContext {
     moon::Module& module;
     moon::Verifier& verifier;

@@ -383,6 +383,7 @@ add_executable(moonir-canonical-test
     benchmarks/compiled_fragment_benchmark.cpp
     tests/moonir_canonical_test.cpp
     tests/moonir_canonical_control_flow_test.cpp
+    tests/moonir_canonical_split_allocation_test.cpp
     tests/moonir_canonical_iterator_test.cpp
     tests/moonir_canonical_iterator_recipes_test.cpp
     tests/moonir_canonical_iterator_terminals_test.cpp
@@ -801,6 +802,10 @@ if(BUILD_TESTING)
     add_test(
         NAME luna.moonir-canonical
         COMMAND $<TARGET_FILE:moonir-canonical-test>
+    )
+    add_test(
+        NAME luna.moonir-split-allocation
+        COMMAND $<TARGET_FILE:moonir-canonical-test> --split-allocation-probe
     )
     add_test(
         NAME luna.moon-container
