@@ -620,8 +620,13 @@ JIT 只导入 canonical Err Return 精确引用的冻结 `From` 方法；私有 
 正值分支先 Drop 外层 `43`、
 再 Drop 内层 `47`；负值分支先 Drop 外层 `-43`、再 Drop 内层 `47`。Windows
 Clang64／LLVM 20 与 WSL Arch Linux／LLVM 22 的聚焦 canonical ASAN 测试均通过。
-这证明有界双节点转换的一次条件式整对象局部 move 和两条出口；部分字段转移、
-向宿主转移所有权及更宽的转换函数体仍未证明。
+这证明有界双节点转换的一次条件式整对象局部 move 和两条出口。另一个双字段
+`SourceSplitError` 夹具在 `From<SourceSplitError> for i32` 内将第一个拥有型字段
+move 到局部绑定，再经同一私有 Ref/apply `?` Err 路径返回标量。两次 JIT 执行均
+不分派 Slot，返回 `Err(43)`，每次按 `43`、`47` 的顺序 Drop 字段。独立的源码
+JIT 宿主 allocator 探针确认两个字段与外层错误对象的 allocation 各释放一次。
+这证明转换函数体中的一次直接字段转移；条件式部分字段转移、向宿主转移所有权
+及更宽的转换函数体仍未证明。
 最初的双拥有字段源码探针在 `move pair.first` 处失败：源码检查器记录了被移动字段，
 return 清理却仍指向根 owner，MoonIR sealing 因缺少字段投影清理记录而拒绝。
 临时源码守卫曾将这一失败提前。现在，对于没有整对象 Drop 的合格拥有型命名
@@ -959,10 +964,13 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    先内后外的 CFG 证明和 Ok／Err 私有 JIT 证据，包括将一个仿射源码错误经冻结
    `From` 方法转换为标量并由源码 `Drop` 清理。双节点拥有型转换参数也已在
    Windows 与 Linux 的 ASAN JIT 运行中证明两条标量返回分支均外层先于内层
-   Drop，其中正值路径将整个 owner move 到分支局部绑定。部分字段转移、向宿主
-   转移所有权及更宽的转换仍需证明。手工构造的 canonical CFG 现验证完整、互不
-   重叠的字段清理记录、一条底层 allocation 清理记录，以及一个字段转移后的有效
-   return 清理列表。第二个手工 CFG 现还覆盖 raw allocation 向已初始化的分拆局部
+   Drop，其中正值路径将整个 owner move 到分支局部绑定。另一个双字段错误现于
+   私有 Ref/apply `?` Err 路径证明 `From` 内的直接字段 move：两次 JIT 执行均
+   返回 `Err(43)` 且不分派，按转移字段、剩余字段的顺序 Drop；独立的宿主
+   allocator 探针确认两个字段及外层错误对象的 allocation 各释放一次。条件式
+   部分字段转移、向宿主转移所有权及更宽的转换仍需证明。手工构造的 canonical
+   CFG 现验证完整、互不重叠的字段清理记录、一条底层 allocation 清理记录，
+   以及一个字段转移后的有效 return 清理列表。第二个手工 CFG 现还覆盖 raw allocation 向已初始化的分拆局部
    绑定转移，并拒绝再次清理已消费的 raw 身份。它还证明兄弟字段可继续转移，
    并拒绝字段转移后的整对象转移、失效字段普通读取及部分转移根对象的读取。
    源码 builder 现为含需清理字段、且没有整对象 Drop 的拥有型命名 struct 生成多条
@@ -973,8 +981,8 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    canonical 测试及四条源码 JIT 路径。独立的宿主 allocator 探针现于转移一个
    或全部字段后，直接验证每个 `Cell` 及 `Pair` 分配恰好释放一次，Windows
    Clang64 ASAN 亦通过。相同字段转移的分支合并、分别返回的分支及一侧提前
-   返回的分支现有精确 Drop 输出和逐侧 allocation 计数。下一步在私有
-   Ref/apply 测试路径中证明 `From` 转换函数体的一种有界字段转移。
+   返回的分支现有精确 Drop 输出和逐侧 allocation 计数。下一步证明 `From`
+   转换函数体中一种有界的条件式部分字段转移，覆盖两条出口及 allocation 释放。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。

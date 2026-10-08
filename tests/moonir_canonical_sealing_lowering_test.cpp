@@ -1571,6 +1571,13 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "    return 0 - error.marker;\n"
         "  }\n"
         "}\n"
+        "struct SourceSplitError { first: SourceError; second: SourceError; }\n"
+        "impl From<SourceSplitError> for i32 {\n"
+        "  fn from(affine error: SourceSplitError) -> i32 {\n"
+        "    let forwarded = move error.first;\n"
+        "    return forwarded.marker;\n"
+        "  }\n"
+        "}\n"
         "struct ReturnedResource { marker: i32; }\n"
         "impl Drop for ReturnedResource {\n"
         "  fn drop(resource: &mut ReturnedResource) -> unit {\n"
@@ -1748,6 +1755,21 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  }\n"
         "  return Ok(0);\n"
         "}\n"
+        "runtime fn try_apply_split_from("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  let first = new SourceError(43);\n"
+        "  let second = new SourceError(47);\n"
+        "  let error = new SourceSplitError(move first, move second);\n"
+        "  let input = Err::<i32, SourceSplitError>(move error);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
         "runtime fn try_apply_resource_return("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, ReturnedResource> {\n"
@@ -1889,6 +1911,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyFrom = nullptr;
     moon::FunctionDecl* tryApplyNestedFrom = nullptr;
     moon::FunctionDecl* tryApplyNestedFromElse = nullptr;
+    moon::FunctionDecl* tryApplySplitFrom = nullptr;
     moon::FunctionDecl* tryApplyResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyOkResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyPairResourceReturn = nullptr;
@@ -1915,6 +1938,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyNestedFrom = function;
             if (function->name == "try_apply_nested_from_else")
                 tryApplyNestedFromElse = function;
+            if (function->name == "try_apply_split_from")
+                tryApplySplitFrom = function;
             if (function->name == "try_apply_resource_return")
                 tryApplyResourceReturn = function;
             if (function->name == "try_apply_ok_resource_return")
@@ -1937,6 +1962,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (!tryApply || !tryApplyOk || !tryApplyOutlinedReturn ||
         !tryApplyAfterSlot || !tryApplyLocalCleanup || !tryApplyFrom ||
         !tryApplyNestedFrom || !tryApplyNestedFromElse ||
+        !tryApplySplitFrom ||
         !tryApplyResourceReturn || !tryApplyOkResourceReturn ||
         !tryApplyPairResourceReturn || !tryApplyOkResourceScalarErr ||
         !tryApplyErrResourceScalarOk || !tryApplyNestedResourceReturn ||
@@ -2156,6 +2182,24 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             std::vector<int32_t>{-43, 47, -43, 47} ||
         !privateRefJitDropProbeValid)
         return fail("Ref apply '?' nested From else branch lost ordered cleanup");
+    if (!tryApplySplitFrom->controlFlow ||
+        tryApplySplitFrom->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplySplitFrom->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply '?' split-field From conversion did not verify");
+    privateRefJitConversionDropOrder.clear();
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplySplitFrom, privateRefJitError,
+            0, false, std::nullopt, false, false, {}, {},
+            std::pair<bool, int32_t>{false, 43})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply '?' split-field From conversion failed private JIT execution");
+    }
+    if (privateRefJitConversionDropOrder !=
+            std::vector<int32_t>{43, 47, 43, 47} ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply '?' split-field From lost ordered field cleanup");
     if (!tryApplyResourceReturn->controlFlow ||
         tryApplyResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
         !refApplyCfgVerifier.verify(*tryApplyResourceReturn->controlFlow,

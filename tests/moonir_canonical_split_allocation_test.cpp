@@ -82,16 +82,8 @@ void probeDeallocate(
     std::free(pointer);
 }
 
-int runCase(AllocationProbe& probe, const char* name, const char* body) {
-    const std::string source = std::string(R"luna(
-struct Cell { marker: i32; }
-impl Drop for Cell {
-    fn drop(resource: &mut Cell) -> unit { resource.marker = 0; }
-}
-struct Pair { first: Cell; second: Cell; }
-fn main() -> i32 {
-    let pair = new Pair(move new Cell(41), move new Cell(43));
-)luna") + body + "\n}\n";
+int runSourceCase(AllocationProbe& probe, const char* name,
+                  const std::string& source, int expectedExitCode) {
     luna::driver::CompilerPipeline pipeline;
     if (!pipeline.compileSourceToMoonIR(source, name) ||
         !pipeline.generateCode({})) {
@@ -108,16 +100,16 @@ fn main() -> i32 {
     probe.tracking = true;
     const auto execution = pipeline.codeGenerator().jitRun();
     probe.tracking = false;
-    if (!execution.executed || execution.exitCode != 0) {
+    if (!execution.executed || execution.exitCode != expectedExitCode) {
         std::cerr << execution.error << '\n';
         return caseFail(name, "did not execute");
     }
     if (probe.records.size() != 3 || probe.releases != 3 ||
         probe.unmatchedReleases != 0 || probe.layoutMismatches != 0 ||
         probe.reallocations != 0)
-        return caseFail(name, "did not release each Cell and the Pair allocation once");
+        return caseFail(name, "did not release each field and outer allocation once");
     size_t cells = 0;
-    size_t pairs = 0;
+    size_t outers = 0;
     for (const auto& record : probe.records) {
         if (!record.released) {
             return caseFail(name, "retained an allocation after return");
@@ -125,11 +117,53 @@ fn main() -> i32 {
         if (record.size == 4 && record.alignment == 4)
             ++cells;
         else if (record.size == 16 && record.alignment == 8)
-            ++pairs;
+            ++outers;
     }
-    if (cells != 2 || pairs != 1)
-        return caseFail(name, "did not preserve the Cell/Pair allocation layout");
+    if (cells != 2 || outers != 1)
+        return caseFail(name, "did not preserve the field/outer allocation layout");
     return 0;
+}
+
+int runCase(AllocationProbe& probe, const char* name, const char* body) {
+    const std::string source = std::string(R"luna(
+struct Cell { marker: i32; }
+impl Drop for Cell {
+    fn drop(resource: &mut Cell) -> unit { resource.marker = 0; }
+}
+struct Pair { first: Cell; second: Cell; }
+fn main() -> i32 {
+    let pair = new Pair(move new Cell(41), move new Cell(43));
+)luna") + body + "\n}\n";
+    return runSourceCase(probe, name, source, 0);
+}
+
+int runFromCase(AllocationProbe& probe) {
+    const std::string source = R"luna(
+struct Cell { marker: i32; }
+impl Drop for Cell {
+    fn drop(resource: &mut Cell) -> unit { resource.marker = 0; }
+}
+struct SourceSplitError { first: Cell; second: Cell; }
+impl From<SourceSplitError> for i32 {
+    fn from(affine error: SourceSplitError) -> i32 {
+        let forwarded = move error.first;
+        return forwarded.marker;
+    }
+}
+fn converted() -> Result<i32, i32> {
+    let first = new Cell(43);
+    let second = new Cell(47);
+    let error = new SourceSplitError(move first, move second);
+    let input = Err::<i32, SourceSplitError>(move error);
+    let value = input?;
+    return Ok(value);
+}
+fn main() -> i32 {
+    let result = converted();
+    return unwrap_err(move result);
+}
+)luna";
+    return runSourceCase(probe, "<split-from-conversion>", source, 43);
 }
 
 } // namespace
@@ -176,6 +210,7 @@ int runSplitAllocationProbe() {
                 "if false { let first = move pair.first; return 0; }\n"
                 "else { let second = move pair.second; } return 0;"))
         return 1;
+    if (runFromCase(probe)) return 1;
     return 0;
 }
 
