@@ -819,6 +819,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/ownership_loop_local_resource_valid.luna`
 - `tests/fixtures/ownership_overlapping_field_borrows_invalid.luna`
 - `tests/fixtures/ownership_partial_move_branch_invalid.luna`
+- `tests/fixtures/ownership_partial_move_cleanup_unlowered_invalid.luna`
 - `tests/fixtures/ownership_partial_move_invalid.luna`
 - `tests/fixtures/ownership_return_cleanup.luna`
 - `tests/fixtures/ownership_return_path_leaks_invalid.luna`
