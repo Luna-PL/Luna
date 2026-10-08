@@ -152,6 +152,30 @@ int runSplitAllocationProbe() {
                 "let first = move pair.first;\n"
                 "let second = move pair.second; return 0;"))
         return 1;
+    if (runCase(probe, "<split-branch-merge-true>",
+                "if true { let first = move pair.first; }\n"
+                "else { let first = move pair.first; } return 0;"))
+        return 1;
+    if (runCase(probe, "<split-branch-merge-false>",
+                "if false { let first = move pair.first; }\n"
+                "else { let first = move pair.first; } return 0;"))
+        return 1;
+    if (runCase(probe, "<split-branch-returns-first>",
+                "if true { let first = move pair.first; return 0; }\n"
+                "else { let second = move pair.second; return 0; }"))
+        return 1;
+    if (runCase(probe, "<split-branch-returns-second>",
+                "if false { let first = move pair.first; return 0; }\n"
+                "else { let second = move pair.second; return 0; }"))
+        return 1;
+    if (runCase(probe, "<split-branch-early-return>",
+                "if true { let first = move pair.first; return 0; }\n"
+                "else { let second = move pair.second; } return 0;"))
+        return 1;
+    if (runCase(probe, "<split-branch-continues>",
+                "if false { let first = move pair.first; return 0; }\n"
+                "else { let second = move pair.second; } return 0;"))
+        return 1;
     return 0;
 }
 

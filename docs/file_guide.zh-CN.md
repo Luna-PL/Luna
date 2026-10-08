@@ -1067,6 +1067,9 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/resource_generic_drop_layout_invalid.luna`
 - `tests/fixtures/resource_recursive_named.luna`
 - `tests/fixtures/resource_split_all_fields_move.luna`
+- `tests/fixtures/resource_split_field_branch_early_return.luna`
+- `tests/fixtures/resource_split_field_branch_merge.luna`
+- `tests/fixtures/resource_split_field_branch_returns.luna`
 - `tests/fixtures/resource_split_field_move.luna`
 - `tests/fixtures/resource_split_field_scope_exit.luna`
 - `tests/fixtures/resource_split_field_try.luna`

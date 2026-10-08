@@ -1,0 +1,23 @@
+struct Cell { marker: i32; }
+
+impl Drop for Cell {
+    fn drop(resource: &mut Cell) -> unit { print(resource.marker); }
+}
+
+struct Pair { first: Cell; second: Cell; }
+
+fn branch(flag: bool, base: i32) -> i32 {
+    let pair = new Pair(move new Cell(base + 1), move new Cell(base + 3));
+    if flag {
+        let first = move pair.first;
+    } else {
+        let first = move pair.first;
+    }
+    return 0;
+}
+
+fn main() -> i32 {
+    branch(true, 10);
+    branch(false, 20);
+    return 0;
+}

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Proved direct field moves across conditional paths: matching moved fields
+  merge, distinct returning branches keep separate cleanup, and an early return
+  does not affect the continuing branch. Exact Drop transcripts and test-host
+  allocator counts cover both outcomes; divergent continuing states still fail.
 - Counted backing allocation release through a test-only host allocator during
   source JIT execution. Moving one or both direct fields releases each of the
   two `Cell` allocations and the `Pair` allocation exactly once.

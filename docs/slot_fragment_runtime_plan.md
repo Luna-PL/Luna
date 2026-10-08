@@ -827,7 +827,7 @@ scope exit. Direct field moves now pass source checking for this split shape.
 Source JIT fixtures observe exactly one Drop per field on return, lexical exit,
 and `?` propagation; another moves both fields and retains the allocation-only
 cleanup obligation. A builder CFG regression checks that return cleanup omits
-the moved field while retaining its sibling and backing allocation. Separate
+the moved field while retaining its sibling and backing allocation.
 The test-only host allocator now counts three allocations and three matching
 releases for both one-field and all-field source moves: two `Cell` allocations
 and the `Pair` backing allocation, each released exactly once.
@@ -835,14 +835,20 @@ The focused canonical test and all four source JIT paths also pass in the
 Windows Clang64 ASAN build, as does the allocation-counting probe. The latter
 is a separate test entry so it can install its host allocator before runtime
 activation.
+Three source branch fixtures now cover equal field-move states joining after
+`if`, different moved fields on separate returning arms, and an early return
+beside a continuing arm. Both runtime outcomes produce exact Drop transcripts.
+The host allocator probe runs both outcomes of each shape and pairs all three
+allocations with matching releases. Continuing branches that disagree on moved
+fields remain rejected by the existing ownership-state merge.
 Canonical ownership dataflow also rejects whole-owner transfer after a field
 has moved, ordinary reads of that field, and reads of the partially moved
 root. A disjoint sibling field remains transferable, and an intact split
 struct can still move as a whole. The negative CFG mutations reproduced both
 previously accepted stale reads and whole-owner transfer before the verifier
 checks were added. The builder rows above now supply both intact and partially
-moved source owner shapes. Nested projections, aggregate Drop, and branch
-states that disagree about moved fields remain outside the admitted source path.
+moved source owner shapes. Nested projections and aggregate Drop remain outside
+the admitted source path.
 Another source fixture returns `Result<i32, ReturnedResource>` from the same
 nested Ref Apply and `?` shape. The sealed CFG verifies an owned payload move
 and inner-before-outer context exits. A narrower test-only JIT wrapper now
@@ -1275,9 +1281,11 @@ not a public ABI decision or stable-release approval:
    CFG test checks the remaining return rows. Windows Clang64 ASAN passes the
    focused canonical test and four source JIT paths. A separate host-allocator
    probe now counts each `Cell` and `Pair` allocation and release exactly once
-   after one or both fields move, also under Windows Clang64 ASAN. Next,
-   extend the field-sensitive obligation
-   contract to conditional paths before admitting such moves in `From` bodies.
+   after one or both fields move, also under Windows Clang64 ASAN. Matching
+   conditional moves, distinct returning arms, and an early return beside a
+   continuing arm now have exact source Drop transcripts and per-outcome
+   allocation counts. Next, prove a bounded field transfer in a `From`
+   conversion body within the private Ref/apply test path.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

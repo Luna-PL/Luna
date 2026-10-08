@@ -646,11 +646,15 @@ CFG 回归检查分拆参数的 return 清理列表；源码 JIT 夹具转移完
 各恰好释放一次。
 Windows Clang64 ASAN 构建中的聚焦 canonical 测试、四条源码 JIT 路径及计数
 探针均通过；计数探针使用独立测试入口，以便在运行时激活前安装宿主 allocator。
+三个源码分支夹具现覆盖 `if` 两侧转移相同字段后的状态合并、两条返回路径转移
+不同字段，以及一侧提前返回而另一侧继续；两种运行结果均有精确的 Drop 输出。
+宿主 allocator 探针执行每种形状的两侧，逐一配对三次分配与释放。继续执行的
+分支若对已转移字段状态意见不一致，现有所有权状态合并仍会拒绝。
 canonical 所有权数据流现也拒绝一个字段转移后的整对象转移、该字段的普通读取，
 以及部分转移后对根对象的读取；不相交的兄弟字段仍可转移，完整的分拆 struct 仍可
 整对象转移。负向 CFG 变体在修复前复现了此前被接受的失效读取与整对象转移。
-上述 builder 记录现覆盖完整及部分转移的源码 owner。嵌套投影、整对象 Drop，
-以及对已转移字段状态意见不一致的分支仍不属于开放的源码路径。
+上述 builder 记录现覆盖完整及部分转移的源码 owner。嵌套投影和整对象 Drop
+仍不属于开放的源码路径。
 另一源码夹具在相同的两层 Ref Apply 和 `?` 结构中返回
 `Result<i32, ReturnedResource>`。封闭 CFG 验证拥有型 payload 的 move 与先内后外的
 context 退出。更窄的仅测试用 JIT wrapper 在源码 body 返回后观察资源 Err，调用精确
@@ -968,8 +972,9 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    builder CFG 测试核对剩余的 return 清理记录。Windows Clang64 ASAN 通过聚焦
    canonical 测试及四条源码 JIT 路径。独立的宿主 allocator 探针现于转移一个
    或全部字段后，直接验证每个 `Cell` 及 `Pair` 分配恰好释放一次，Windows
-   Clang64 ASAN 亦通过。下一步把
-   字段敏感义务扩展到条件路径，再考虑 `From` 函数体。
+   Clang64 ASAN 亦通过。相同字段转移的分支合并、分别返回的分支及一侧提前
+   返回的分支现有精确 Drop 输出和逐侧 allocation 计数。下一步在私有
+   Ref/apply 测试路径中证明 `From` 转换函数体的一种有界字段转移。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。
