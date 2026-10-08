@@ -327,6 +327,121 @@ int runControlFlowTests(ControlFlowTestContext& context) {
     if (cfgVerifier.verify(initializedSplitCfg, splitModule))
         return fail("initialized split struct cleaned transferred raw allocation twice");
 
+    auto moveWholePair = std::make_unique<moon::MoveExpr>();
+    moveWholePair->type = splitPairId;
+    auto wholePairRoot = std::make_unique<moon::IdentifierExpr>();
+    wholePairRoot->name = "pair";
+    wholePairRoot->local = moon::LocalId{1};
+    wholePairRoot->type = splitPairId;
+    moveWholePair->operand = std::move(wholePairRoot);
+    std::unique_ptr<moon::Expr> moveFirstField;
+    initializedSplitEntry.terminator.operand.swap(moveFirstField);
+    initializedSplitEntry.terminator.operand = std::move(moveWholePair);
+    initializedSplitEntry.terminator.exitCleanups.clear();
+    if (!cfgVerifier.verify(initializedSplitCfg, splitModule))
+        return fail("whole transfer of an intact split struct was rejected");
+    initializedSplitEntry.terminator.operand = std::move(moveFirstField);
+
+    // Keeping the first field in a new owner leaves the second field usable,
+    // but it must never restore whole-owner transfer of the original pair.
+    initializedSplitCfg.locals.push_back({
+        moon::LocalId{2}, initializedSplitCfg.rootScope,
+        moon::LocalKind::Binding, "moved", splitStringId,
+        luna::ownership::Usage::Affine,
+        luna::ownership::Relation::Owned});
+    initializedSplitCfg.scopes[0].locals.push_back(moon::LocalId{2});
+    initializedSplitCfg.cleanups.push_back({
+        moon::CleanupId{4}, initializedSplitCfg.rootScope,
+        {moon::LocalId{2}, {}}, splitStringId,
+        moon::CleanupKind::Value,
+        luna::ownership::CleanupAction::Deallocate, {}});
+    initializedSplitCfg.scopes[0].cleanups.push_back(moon::CleanupId{4});
+    auto movedFirst = std::make_unique<moon::LetStmt>();
+    movedFirst->name = "moved";
+    movedFirst->local = moon::LocalId{2};
+    movedFirst->usage = luna::ownership::Usage::Affine;
+    movedFirst->relation = luna::ownership::Relation::Owned;
+    movedFirst->type = splitStringId;
+    movedFirst->initializer = std::move(initializedSplitEntry.terminator.operand);
+    initializedSplitEntry.operations.push_back(std::move(movedFirst));
+    auto makePairMove = [&](const std::string& field) {
+        auto root = std::make_unique<moon::IdentifierExpr>();
+        root->name = "pair";
+        root->local = moon::LocalId{1};
+        root->type = splitPairId;
+        auto move = std::make_unique<moon::MoveExpr>();
+        if (field.empty()) {
+            move->type = splitPairId;
+            move->operand = std::move(root);
+        } else {
+            auto projected = std::make_unique<moon::FieldAccessExpr>();
+            projected->field = field;
+            projected->type = splitStringId;
+            projected->object = std::move(root);
+            move->type = splitStringId;
+            move->operand = std::move(projected);
+        }
+        return move;
+    };
+    initializedSplitEntry.terminator.operand = makePairMove("second");
+    initializedSplitEntry.terminator.exitCleanups = {moon::CleanupId{4},
+                                                      moon::CleanupId{1}};
+    if (!cfgVerifier.verify(initializedSplitCfg, splitModule))
+        return fail("split struct rejected a disjoint sibling field transfer");
+    initializedSplitEntry.terminator.operand = makePairMove("");
+    initializedSplitEntry.terminator.exitCleanups = {moon::CleanupId{4}};
+    const bool rejectedPartialWholeMove =
+        !cfgVerifier.verify(initializedSplitCfg, splitModule) &&
+        std::any_of(cfgVerifier.errors().begin(), cfgVerifier.errors().end(),
+                    [](const auto& diagnostic) {
+                        return diagnostic.message.find(
+                            "whole transfer of partially moved struct") !=
+                            std::string::npos;
+                    });
+    if (!rejectedPartialWholeMove)
+        return fail("split struct restored whole-owner transfer after a field move");
+    auto movedFieldRead = std::make_unique<moon::ExprStmt>();
+    auto movedField = std::make_unique<moon::FieldAccessExpr>();
+    movedField->field = "first";
+    movedField->type = splitStringId;
+    auto movedFieldRoot = std::make_unique<moon::IdentifierExpr>();
+    movedFieldRoot->name = "pair";
+    movedFieldRoot->local = moon::LocalId{1};
+    movedFieldRoot->type = splitPairId;
+    movedField->object = std::move(movedFieldRoot);
+    movedFieldRead->expr = std::move(movedField);
+    initializedSplitEntry.operations.push_back(std::move(movedFieldRead));
+    initializedSplitEntry.terminator.operand = makePairMove("second");
+    initializedSplitEntry.terminator.exitCleanups = {moon::CleanupId{4},
+                                                      moon::CleanupId{1}};
+    const bool rejectedMovedFieldRead =
+        !cfgVerifier.verify(initializedSplitCfg, splitModule) &&
+        std::any_of(cfgVerifier.errors().begin(), cfgVerifier.errors().end(),
+                    [](const auto& diagnostic) {
+                        return diagnostic.message.find(
+                            "reads inactive split struct field") !=
+                            std::string::npos;
+                    });
+    if (!rejectedMovedFieldRead)
+        return fail("split struct read a field after transferring it");
+    auto partialRootRead = std::make_unique<moon::ExprStmt>();
+    auto partialRoot = std::make_unique<moon::IdentifierExpr>();
+    partialRoot->name = "pair";
+    partialRoot->local = moon::LocalId{1};
+    partialRoot->type = splitPairId;
+    partialRootRead->expr = std::move(partialRoot);
+    initializedSplitEntry.operations.back() = std::move(partialRootRead);
+    const bool rejectedPartialRootRead =
+        !cfgVerifier.verify(initializedSplitCfg, splitModule) &&
+        std::any_of(cfgVerifier.errors().begin(), cfgVerifier.errors().end(),
+                    [](const auto& diagnostic) {
+                        return diagnostic.message.find(
+                            "reads split struct root after a field transfer") !=
+                            std::string::npos;
+                    });
+    if (!rejectedPartialRootRead)
+        return fail("split struct read its root after transferring a field");
+
     moon::Param guardedArrayParameter;
     guardedArrayParameter.name = "values";
     guardedArrayParameter.usage = luna::ownership::Usage::Affine;

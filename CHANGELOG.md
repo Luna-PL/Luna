@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Rejected canonical reads of a moved struct field or partially moved root,
+  and whole-owner transfer after a field move, while keeping disjoint sibling
+  field transfer and intact whole-owner transfer valid in CFG regressions.
 - Accepted a structurally verified split cleanup table for a canonical
   initialized struct binding. A CFG regression checks raw allocation transfer,
   remaining-field cleanup after a field move, and rejection of a second raw

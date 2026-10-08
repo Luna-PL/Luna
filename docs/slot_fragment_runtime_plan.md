@@ -823,6 +823,12 @@ mutation rejects a second release of the consumed raw allocation. This is
 verifier evidence only: the source builder still emits one root cleanup per
 local, source field moves remain rejected, and the split path has no JIT Drop
 or deallocation execution proof yet.
+Canonical ownership dataflow also rejects whole-owner transfer after a field
+has moved, ordinary reads of that field, and reads of the partially moved
+root. A disjoint sibling field remains transferable, and an intact split
+struct can still move as a whole. The negative CFG mutations reproduced both
+previously accepted stale reads and whole-owner transfer before the verifier
+checks were added. These checks do not create source-level field cleanup rows.
 Another source fixture returns `Result<i32, ReturnedResource>` from the same
 nested Ref Apply and `?` shape. The sealed CFG verifies an owned payload move
 and inner-before-outer context exits. A narrower test-only JIT wrapper now
@@ -1244,6 +1250,8 @@ not a public ABI decision or stable-release approval:
    allocation cleanup row, and the active return cleanup list after one field
    moves. A second hand-built CFG now covers raw allocation transfer into an
    initialized split local and rejects cleanup of the consumed raw identity.
+   It also proves sibling-field transfer while rejecting whole-owner transfer
+   and ordinary reads of a moved field or its partial root.
    Next, make the source builder emit multiple rows per owned struct and make
    return, `?`, and scope-exit obligations field-sensitive. Then prove actual
    field Drop and allocation release order exactly once in a positive JIT fixture.

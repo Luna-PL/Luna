@@ -163,6 +163,29 @@ void Verifier::verifyOwnershipDataflow(
         bool consumed = false;
         const auto* rootType = module.findType(
             graph.locals[place.root.value].type);
+        if (place.projections.empty() && rootType &&
+            rootType->kind == TypeKind::Struct &&
+            graph.locals[place.root.value].kind != LocalKind::Allocation) {
+            bool activeAllocation = false;
+            bool inactiveField = false;
+            for (const auto cleanupId : cleanupsByLocal[place.root.value]) {
+                if (cleanupId.value >= state.size()) continue;
+                const auto& cleanup = graph.cleanups[cleanupId.value];
+                if (cleanup.kind == CleanupKind::Allocation &&
+                    state[cleanupId.value])
+                    activeAllocation = true;
+                if (cleanup.kind == CleanupKind::Value &&
+                    !cleanup.place.projections.empty() &&
+                    !state[cleanupId.value])
+                    inactiveField = true;
+            }
+            if (activeAllocation && inactiveField) {
+                error(location, context +
+                      " attempts whole transfer of partially moved struct '" +
+                      graph.locals[place.root.value].name + "'");
+                return;
+            }
+        }
         const size_t marker = markerStateByLocal[place.root.value];
         if (marker != noMarker && place.projections.empty()) {
             if (marker >= state.size() || !state[marker])
@@ -197,8 +220,9 @@ void Verifier::verifyOwnershipDataflow(
                   graph.locals[place.root.value].name + "'");
     };
     std::function<void(const Expr*, CleanupState&)> transferExpr;
-    transferExpr = [&transferExpr, &placeOf, &consumePlace,
-                    &activateLocal, &graph, &module](
+    transferExpr = [this, &transferExpr, &placeOf, &consumePlace,
+                    &activateLocal, &graph, &module, &cleanupsByLocal,
+                    &projectionPrefix](
         const Expr* expression, CleanupState& state) {
         if (!expression) return;
         if (dynamic_cast<const IntLiteralExpr*>(expression) ||
@@ -207,8 +231,32 @@ void Verifier::verifyOwnershipDataflow(
             dynamic_cast<const BoolLiteralExpr*>(expression) ||
             dynamic_cast<const UnitExpr*>(expression))
             return;
+        if (const auto* identifier =
+                dynamic_cast<const IdentifierExpr*>(expression)) {
+            const auto* local = graph.findLocal(identifier->local);
+            const auto* type = local ? module.findType(local->type) : nullptr;
+            if (!local || !type || type->kind != TypeKind::Struct ||
+                local->id.value >= cleanupsByLocal.size())
+                return;
+            for (const auto cleanupId : cleanupsByLocal[local->id.value]) {
+                if (cleanupId.value >= state.size()) continue;
+                const auto& cleanup = graph.cleanups[cleanupId.value];
+                if (cleanup.kind == CleanupKind::Value &&
+                    !cleanup.place.projections.empty() &&
+                    !state[cleanupId.value]) {
+                    error(identifier->location,
+                          "identifier reads split struct root after a field transfer '" +
+                          local->name + "'");
+                    break;
+                }
+            }
+            return;
+        }
         if (const auto* move = dynamic_cast<const MoveExpr*>(expression)) {
-            transferExpr(move->operand.get(), state);
+            // A direct root transfer is checked by consumePlace, which can
+            // report the incomplete owner without treating it as a read.
+            if (!dynamic_cast<const IdentifierExpr*>(move->operand.get()))
+                transferExpr(move->operand.get(), state);
             const auto* movedType = move->operand
                 ? module.findType(move->operand->type) : nullptr;
             // `move` of a Copy projection reads the field value; it does not
@@ -248,7 +296,30 @@ void Verifier::verifyOwnershipDataflow(
             transferExpr(result->payload.get(), state);
         } else if (const auto* field =
                        dynamic_cast<const FieldAccessExpr*>(expression)) {
-            transferExpr(field->object.get(), state);
+            // The root identifier is an address base for this projection;
+            // only the selected field needs to remain active.
+            if (!dynamic_cast<const IdentifierExpr*>(field->object.get()))
+                transferExpr(field->object.get(), state);
+            const auto place = placeOf(field);
+            const auto* root = place ? graph.findLocal(place->root) : nullptr;
+            const auto* rootType = root ? module.findType(root->type) : nullptr;
+            if (rootType && rootType->kind == TypeKind::Struct &&
+                place->root.value < cleanupsByLocal.size()) {
+                for (const auto cleanupId :
+                     cleanupsByLocal[place->root.value]) {
+                    if (cleanupId.value >= state.size()) continue;
+                    const auto& cleanup = graph.cleanups[cleanupId.value];
+                    if (cleanup.kind == CleanupKind::Value &&
+                        !cleanup.place.projections.empty() &&
+                        projectionPrefix(cleanup.place, *place) &&
+                        !state[cleanupId.value]) {
+                        error(field->location,
+                              "field access reads inactive split struct field '" +
+                              root->name + "'");
+                        break;
+                    }
+                }
+            }
         } else if (const auto* index =
                        dynamic_cast<const IndexExpr*>(expression)) {
             transferExpr(index->object.get(), state);
