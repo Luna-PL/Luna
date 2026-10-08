@@ -277,7 +277,9 @@ OwnershipChecker::FlowResult OwnershipChecker::checkReturnStmt(ReturnStmt* ret) 
                     auto* variable = lookupCleanupVariable(place);
                 ret->cleanups.push_back({
                         place, cleanupActionForType(variable ? variable->type : nullptr),
-                        variable ? variable->type : nullptr});
+                        variable ? variable->type : nullptr,
+                        variable ? inactiveCleanupFields(*variable) :
+                            std::vector<std::string>{}});
                 }
                 CheckerState exit = captureState();
                 exit.scopes.resize(mCurrentFragmentScopeBase);
@@ -296,7 +298,9 @@ OwnershipChecker::FlowResult OwnershipChecker::checkReturnStmt(ReturnStmt* ret) 
                 auto* variable = lookupCleanupVariable(place);
                 ret->cleanups.push_back({
                     place, cleanupActionForType(variable ? variable->type : nullptr),
-                    variable ? variable->type : nullptr});
+                    variable ? variable->type : nullptr,
+                    variable ? inactiveCleanupFields(*variable) :
+                        std::vector<std::string>{}});
             }
         }
         if (mErrors.size() != errorsBeforeReturnValidation) ok = false;
@@ -353,6 +357,8 @@ OwnershipChecker::FlowResult OwnershipChecker::checkMatchStmt(MatchStmt* match) 
                     auto* variable = lookup(name);
                     cleanup->action = cleanupActionForType(
                         variable ? variable->type : nullptr);
+                    if (variable)
+                        cleanup->inactiveFields = inactiveCleanupFields(*variable);
                     arm.body->stmts.push_back(std::move(cleanup));
                 }
             }
@@ -601,6 +607,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkForStmt(ForStmt* loop) {
                             loop->varName);
                     cleanup->action =
                         cleanupActionForType(item->type);
+                    cleanup->inactiveFields = inactiveCleanupFields(*item);
                     loop->body->stmts.push_back(
                         std::move(cleanup));
                 }

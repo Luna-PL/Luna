@@ -1,0 +1,15 @@
+struct Cell { marker: i32; }
+
+impl Drop for Cell {
+    fn drop(resource: &mut Cell) -> unit { print(resource.marker); }
+}
+
+struct Pair { first: Cell; second: Cell; }
+
+fn main() -> i32 {
+    if true {
+        let pair = new Pair(move new Cell(21), move new Cell(23));
+        let moved = move pair.first;
+    }
+    return 0;
+}

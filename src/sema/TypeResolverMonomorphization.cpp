@@ -54,6 +54,7 @@ private:
         CleanupObligation clone;
         clone.place = source.place;
         clone.action = source.action;
+        clone.inactiveFields = source.inactiveFields;
         clone.type = substitute(source.type);
         return clone;
     }
@@ -460,6 +461,7 @@ private:
             auto clone = std::make_unique<FreeStmt>();
             clone->operand = cloneExpr(statement->operand.get());
             clone->action = statement->action;
+            clone->inactiveFields = statement->inactiveFields;
             clone->isImplicit = statement->isImplicit;
             return located(std::move(clone), src);
         }

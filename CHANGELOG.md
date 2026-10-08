@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Admitted direct moves of cleanup-bearing fields from owned named structs
+  without aggregate Drop. Return, `?`, and lexical-exit obligations now omit
+  moved fields while retaining backing allocation cleanup, including when all
+  fields move. Source JIT regressions cover each exit shape and moved-field
+  diagnostics; a builder CFG test checks the precise return cleanup list.
 - Emitted split cleanup rows for owned named structs without aggregate Drop,
   with a backing allocation row and ordered field rows. A builder CFG test
   and source JIT whole-owner transfer and lexical-exit regressions cover intact
@@ -16,7 +21,7 @@
 - Verified a bounded split-struct cleanup contract in hand-built canonical
   CFGs: projected field moves retain the backing allocation row, complete field
   rows are ordered, and malformed cleanup tables or return lists are rejected.
-  Source field moves remain rejected until lowering and JIT cleanup are proved.
+  This established the canonical contract before source field moves were enabled.
 - Moved the fail-closed diagnostic for owned struct field moves to source
   ownership checking, with the field location and a whole-struct move
   suggestion. The Ref/apply plan now lists projected cleanup rows,

@@ -105,8 +105,13 @@ std::vector<CleanupId> ControlFlowBuilder::lowerCleanupObligations(
                           mGraph->locals[local.value].name + "'");
                 continue;
             }
-            result.insert(
-                result.end(), split->second.begin(), split->second.end());
+            const auto rows = cleanupRowsForLocal(
+                local, obligation.inactiveFields);
+            result.insert(result.end(), rows.begin(), rows.end());
+            continue;
+        }
+        if (!obligation.inactiveFields.empty()) {
+            error({}, "inactive cleanup fields require a split struct local");
             continue;
         }
         const auto* cleanupType = mModule->findType(type);

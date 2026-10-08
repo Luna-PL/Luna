@@ -96,6 +96,8 @@ bool OwnershipChecker::checkFunction(FunctionDecl* decl) {
             auto* variable = lookup(name);
             freeStmt->action = cleanupActionForType(
                 variable ? variable->type : nullptr);
+            if (variable)
+                freeStmt->inactiveFields = inactiveCleanupFields(*variable);
             decl->body->stmts.push_back(std::move(freeStmt));
         }
     }
@@ -224,6 +226,8 @@ bool OwnershipChecker::checkLambda(LambdaExpr* lambda) {
             auto* variable = lookup(name);
             cleanup->action = cleanupActionForType(
                 variable ? variable->type : nullptr);
+            if (variable)
+                cleanup->inactiveFields = inactiveCleanupFields(*variable);
             lambda->body->stmts.push_back(
                 std::move(cleanup));
         }

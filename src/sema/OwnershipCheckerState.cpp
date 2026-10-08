@@ -229,6 +229,21 @@ bool OwnershipChecker::allDirectFieldsMoved(const VarInfo& var) const {
     return true;
 }
 
+std::vector<std::string> OwnershipChecker::inactiveCleanupFields(
+    const VarInfo& var) const {
+    std::vector<std::string> fields;
+    if (!var.type || var.type->kind != TypeKind::Struct) return fields;
+    for (const auto& moved : var.movedPlaces) {
+        if (moved.components.size() == 1 &&
+            !moved.components.front().empty() &&
+            moved.components.front().front() == '.')
+            fields.push_back(moved.components.front().substr(1));
+    }
+    std::sort(fields.begin(), fields.end());
+    fields.erase(std::unique(fields.begin(), fields.end()), fields.end());
+    return fields;
+}
+
 TypePtr OwnershipChecker::typeOfPlace(const Place& place) const {
     auto* self = const_cast<OwnershipChecker*>(this);
     auto* variable = self->lookup(place.root);
@@ -266,16 +281,28 @@ bool OwnershipChecker::consume(const Place& place, const std::string& action) {
               "' is not yet supported; move the whole record");
         return false;
     }
-    // Sema can track a moved field, but return/scope cleanup still owns the
-    // whole named allocation. Until MoonIR has disjoint field cleanup rows
-    // plus allocation release, accepting this move would reach sealing with
-    // an overlapping root cleanup obligation.
+    // Only a direct owned field of a split named struct can transfer while
+    // its sibling cleanup rows and backing allocation remain live.
     if (!place.components.empty() && var->type &&
         var->type->kind == TypeKind::Struct &&
         var->relation == luna::ownership::Relation::Owned) {
-        error("partial move from owned struct '" + place.root +
-              "' is not yet supported; move the whole struct");
-        return false;
+        bool splitField = false;
+        if (place.components.size() == 1 &&
+            !place.components.front().empty() &&
+            place.components.front().front() == '.' &&
+            !var->type->sysmeta.resource.needsDrop) {
+            const auto name = place.components.front().substr(1);
+            for (const auto& field : var->type->fields)
+                if (field.name == name && typeRequiresCleanup(field.type)) {
+                    splitField = true;
+                    break;
+                }
+        }
+        if (!splitField) {
+            error("partial move from owned struct '" + place.root +
+                  "' is not yet supported; move the whole struct");
+            return false;
+        }
     }
     // A reference binding owns no referent, but its local handle still has a
     // usage contract. Moving that complete handle consumes the binding while
@@ -404,7 +431,9 @@ std::vector<std::string> OwnershipChecker::collectFreesAtScopeExit() {
     std::vector<std::string> frees;
     for (auto& [name, info] : mScopes.back()) {
         if (info.isHeapAllocated && !luna::ownership::mustConsume(info.usage) &&
-            info.state == OwnState::Valid)
+            (info.state == OwnState::Valid ||
+             (info.state == OwnState::Moved &&
+              !inactiveCleanupFields(info).empty())))
             frees.push_back(name);
     }
     return frees;
@@ -418,7 +447,9 @@ std::vector<std::string> OwnershipChecker::collectFreesAtReturn() const {
         for (const auto& [name, info] : *scope) {
             const size_t ordinal = shadowOrdinals[name]++;
             if (info.isHeapAllocated && !luna::ownership::mustConsume(info.usage) &&
-                info.state == OwnState::Valid)
+                (info.state == OwnState::Valid ||
+                 (info.state == OwnState::Moved &&
+                  !inactiveCleanupFields(info).empty())))
                 frees.push_back(cleanupPlace(name, ordinal));
         }
     }
@@ -432,7 +463,9 @@ std::vector<std::string> OwnershipChecker::collectFreesAtFragmentExit() const {
         for (const auto& [name, info] : mScopes[index - 1]) {
             const size_t ordinal = shadowOrdinals[name]++;
             if (info.isHeapAllocated && !luna::ownership::mustConsume(info.usage) &&
-                info.state == OwnState::Valid)
+                (info.state == OwnState::Valid ||
+                 (info.state == OwnState::Moved &&
+                  !inactiveCleanupFields(info).empty())))
                 frees.push_back(cleanupPlace(name, ordinal));
         }
     }

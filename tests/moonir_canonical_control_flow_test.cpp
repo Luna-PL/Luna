@@ -129,7 +129,7 @@ int runControlFlowTests(ControlFlowTestContext& context) {
     auto splitSource = std::make_unique<moon::BlockStmt>();
     auto splitReturn = std::make_unique<moon::ReturnStmt>();
     splitReturn->cleanups.push_back({
-        "pair", luna::ownership::CleanupAction::Drop, splitPairId});
+        "pair", luna::ownership::CleanupAction::Drop, splitPairId, {}});
     splitSource->stmts.push_back(std::move(splitReturn));
     moon::Param splitParameter;
     splitParameter.name = "pair";
@@ -150,6 +150,32 @@ int runControlFlowTests(ControlFlowTestContext& context) {
                                          moon::CleanupId{0}} ||
         !cfgVerifier.verify(*loweredSplit, splitModule))
         return fail("source builder did not emit ordered split struct cleanup rows");
+    auto partialSource = std::make_unique<moon::BlockStmt>();
+    auto partialReturn = std::make_unique<moon::ReturnStmt>();
+    auto partialMove = std::make_unique<moon::MoveExpr>();
+    partialMove->type = splitStringId;
+    auto partialField = std::make_unique<moon::FieldAccessExpr>();
+    partialField->field = "first";
+    partialField->type = splitStringId;
+    auto partialObject = std::make_unique<moon::IdentifierExpr>();
+    partialObject->name = "pair";
+    partialObject->type = splitPairId;
+    partialField->object = std::move(partialObject);
+    partialMove->operand = std::move(partialField);
+    partialReturn->value = std::move(partialMove);
+    partialReturn->cleanups.push_back({
+        "pair", luna::ownership::CleanupAction::Drop, splitPairId,
+        {"first"}});
+    partialSource->stmts.push_back(std::move(partialReturn));
+    auto loweredPartial = cfgBuilder.build(
+        std::move(partialSource), {splitParameter},
+        moon::RegionKind::Function, splitModule);
+    if (!loweredPartial ||
+        loweredPartial->blocks[0].terminator.exitCleanups !=
+            std::vector<moon::CleanupId>{moon::CleanupId{2},
+                                         moon::CleanupId{0}} ||
+        !cfgVerifier.verify(*loweredPartial, splitModule))
+        return fail("source builder did not retain sibling and allocation cleanup after field move");
     moon::ControlFlowGraph splitCfg;
     splitCfg.entry = moon::BlockId{0};
     splitCfg.rootRegion = moon::RegionId{0};
@@ -496,7 +522,7 @@ int runControlFlowTests(ControlFlowTestContext& context) {
     guardedEarlyReturn->thenBlock = std::make_unique<moon::BlockStmt>();
     auto guardedLoopReturn = std::make_unique<moon::ReturnStmt>();
     guardedLoopReturn->cleanups.push_back({
-        "value", luna::ownership::CleanupAction::Deallocate, stringId});
+        "value", luna::ownership::CleanupAction::Deallocate, stringId, {}});
     guardedEarlyReturn->thenBlock->stmts.push_back(
         std::move(guardedLoopReturn));
     guardedLoop->body->stmts.push_back(
@@ -825,7 +851,7 @@ int runControlFlowTests(ControlFlowTestContext& context) {
     convertedPropagation->errorConversion = fromRef;
     convertedPropagation->cleanups.push_back({
         "outer", luna::ownership::CleanupAction::Deallocate,
-        convertedStringId});
+        convertedStringId, {}});
     auto convertedOperand = std::make_unique<moon::IdentifierExpr>();
     convertedOperand->name = "fallible";
     convertedOperand->type = sourceResultId;

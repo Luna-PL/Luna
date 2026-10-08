@@ -1,0 +1,24 @@
+struct Cell { marker: i32; }
+
+impl Drop for Cell {
+    fn drop(resource: &mut Cell) -> unit { print(resource.marker); }
+}
+
+struct Pair { first: Cell; second: Cell; }
+
+fn failure() -> Result<i32, i32> {
+    return Err(5);
+}
+
+fn pipeline() -> Result<i32, i32> {
+    let pair = new Pair(move new Cell(31), move new Cell(33));
+    let moved = move pair.first;
+    let value = failure()?;
+    return Ok(value);
+}
+
+fn main() -> i32 {
+    let result = pipeline();
+    print(unwrap_err(move result));
+    return 0;
+}

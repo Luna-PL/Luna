@@ -178,11 +178,49 @@ void ControlFlowBuilder::addSplitStructCleanups(LocalId local) {
 }
 
 std::vector<CleanupId> ControlFlowBuilder::cleanupRowsForLocal(
-    LocalId local) const {
+    LocalId local, const std::vector<std::string>& inactiveFields) {
     if (local.empty()) return {};
     if (const auto split = mSplitCleanupsByLocal.find(local.value);
-        split != mSplitCleanupsByLocal.end())
-        return split->second;
+        split != mSplitCleanupsByLocal.end()) {
+        const auto* type = mModule->findType(mGraph->locals[local.value].type);
+        std::unordered_set<uint64_t> inactive;
+        for (const auto& name : inactiveFields) {
+            bool found = false;
+            if (type) {
+                for (size_t index = 0; index < type->fields.size(); ++index) {
+                    if (type->fields[index].name != name) continue;
+                    for (const auto row : split->second) {
+                        const auto& cleanup = mGraph->cleanups[row.value];
+                        if (cleanup.kind == CleanupKind::Value &&
+                            cleanup.place.projections.size() == 1 &&
+                            cleanup.place.projections.front().index == index) {
+                            found = true;
+                            inactive.insert(index);
+                            break;
+                        }
+                    }
+                    break;
+                }
+            }
+            if (!found) {
+                error({}, "inactive cleanup field '" + name +
+                          "' has no split value row");
+                return {};
+            }
+        }
+        std::vector<CleanupId> rows;
+        for (const auto row : split->second) {
+            const auto& cleanup = mGraph->cleanups[row.value];
+            if (cleanup.place.projections.empty() ||
+                !inactive.count(cleanup.place.projections.front().index))
+                rows.push_back(row);
+        }
+        return rows;
+    }
+    if (!inactiveFields.empty()) {
+        error({}, "inactive cleanup fields require a split struct local");
+        return {};
+    }
     if (const auto root = mCleanupByLocal.find(local.value);
         root != mCleanupByLocal.end())
         return {root->second};
@@ -381,10 +419,16 @@ ControlFlowBuilder::lowerStatement(
                       "implicit split struct cleanup has an inconsistent action");
                 return std::nullopt;
             }
+            const auto rows = cleanupRowsForLocal(
+                identifier->local, release->inactiveFields);
             current.cleanups.insert(
-                current.cleanups.end(),
-                split->second.begin(), split->second.end());
+                current.cleanups.end(), rows.begin(), rows.end());
             return current;
+        }
+        if (!release->inactiveFields.empty()) {
+            error(release->location,
+                  "inactive cleanup fields require a split struct local");
+            return std::nullopt;
         }
         const CleanupKind cleanupKind =
             cleanupType && !cleanupType->sysmeta.resource.cleanupRequired &&

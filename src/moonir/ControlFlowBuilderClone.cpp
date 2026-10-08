@@ -383,6 +383,7 @@ std::unique_ptr<Stmt> cloneStructuredStmt(const Stmt* source) {
         auto result = clonedNode(statement);
         result->operand = cloneStructuredExpr(statement->operand.get());
         result->action = statement->action;
+        result->inactiveFields = statement->inactiveFields;
         result->isImplicit = statement->isImplicit;
         return result;
     }

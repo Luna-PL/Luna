@@ -622,12 +622,11 @@ JIT 只导入 canonical Err Return 精确引用的冻结 `From` 方法；私有 
 Clang64／LLVM 20 与 WSL Arch Linux／LLVM 22 的聚焦 canonical ASAN 测试均通过。
 这证明有界双节点转换的一次条件式整对象局部 move 和两条出口；部分字段转移、
 向宿主转移所有权及更宽的转换函数体仍未证明。
-一个含两个拥有型字段的源码探针现于 `move pair.first` 的源码所有权检查阶段
-明确拒绝，并指出位置及整对象 move 的替代做法。此前源码检查器记录了被移动字段，
-return 清理却仍指向根 owner，随后 MoonIR sealing 因缺少字段投影清理记录而拒绝。
-普通 struct 目前仍只有根对象清理记录。回归夹具固定了前移后的拒绝行为。
-扩展 `From` 字段转移前，源码 lowering 须生成互不重叠的字段清理记录与底层
-allocation 释放，沿每条终止分支传递精确的剩余义务。手工构造的封闭 CFG 现验证了
+最初的双拥有字段源码探针在 `move pair.first` 处失败：源码检查器记录了被移动字段，
+return 清理却仍指向根 owner，MoonIR sealing 因缺少字段投影清理记录而拒绝。
+临时源码守卫曾将这一失败提前。现在，对于没有整对象 Drop 的合格拥有型命名
+struct，lowering 生成互不重叠的直接字段清理记录与底层 allocation 释放，并在
+return、`?` 及词法退出时传递精确的剩余义务。手工构造的封闭 CFG 验证了
 第一步 canonical 表和数据流：含两个 String 字段的拥有型参数可以返回其中一个
 move 后的字段，并先清理剩余字段再释放 allocation；没有字段转移时则先清理两个
 字段再释放。verifier 拒绝遗漏或重复字段、重叠的整对象 Drop、颠倒的字段顺序、
@@ -639,13 +638,17 @@ allocation 转交给两字段绑定，再检查完整清理与单字段返回转
 拥有型命名 struct 生成一条 allocation 记录和按顺序排列的字段 value 记录。builder
 CFG 回归检查分拆参数的 return 清理列表；源码 JIT 夹具转移完整的双字段 owner，
 观察到两个字段各按源码顺序 Drop 一次，另一夹具在词法作用域退出时验证相同顺序。
-源码字段 move 仍被 Sema 拒绝；分拆路径
-尚无字段转移及单独观察 allocation 释放的执行证明。
+这一分拆形状现在允许直接字段 move。源码 JIT 夹具在 return、词法退出和 `?`
+传播路径上观察每个字段恰好 Drop 一次；两个字段都转移时仍保留仅释放 allocation
+的清理义务。builder CFG 回归验证 return 清理跳过已转移字段，同时保留兄弟字段
+和底层 allocation。独立观测 allocation 释放仍待完成。
+Windows Clang64 ASAN 构建中的聚焦 canonical 测试及四条源码 JIT 路径也通过；
+这些运行没有报告内存错误，但尚未独立计数 allocation 释放。
 canonical 所有权数据流现也拒绝一个字段转移后的整对象转移、该字段的普通读取，
 以及部分转移后对根对象的读取；不相交的兄弟字段仍可转移，完整的分拆 struct 仍可
 整对象转移。负向 CFG 变体在修复前复现了此前被接受的失效读取与整对象转移。
-上述 builder 记录现提供源码层完整 owner 的分拆形状，部分转移后的源码清理义务
-仍待完成。
+上述 builder 记录现覆盖完整及部分转移的源码 owner。嵌套投影、整对象 Drop，
+以及对已转移字段状态意见不一致的分支仍不属于开放的源码路径。
 另一源码夹具在相同的两层 Ref Apply 和 `?` 结构中返回
 `Result<i32, ReturnedResource>`。封闭 CFG 验证拥有型 payload 的 move 与先内后外的
 context 退出。更窄的仅测试用 JIT wrapper 在源码 body 返回后观察资源 Err，调用精确
@@ -958,8 +961,11 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    并拒绝字段转移后的整对象转移、失效字段普通读取及部分转移根对象的读取。
    源码 builder 现为含需清理字段、且没有整对象 Drop 的拥有型命名 struct 生成多条
    清理记录；参数 return CFG、完整 owner 转移及词法退出 JIT 夹具证明完整清理及
-   有序字段 Drop。下一步使 return、`?` 与作用域退出义务仅保留未转移字段，再开放源码字段
-   move，并用正向 JIT 夹具证明剩余字段 Drop 与底层 allocation 恰好释放一次。
+   有序字段 Drop。return、`?` 与作用域退出义务现跳过已转移的直接字段，但保留
+   allocation 释放。源码 JIT 夹具覆盖三种退出时转移一个字段及转移全部字段；
+   builder CFG 测试核对剩余的 return 清理记录。Windows Clang64 ASAN 通过聚焦
+   canonical 测试及四条源码 JIT 路径。下一步直接计数 allocation 释放，并把
+   字段敏感义务扩展到条件路径，再考虑 `From` 函数体。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。

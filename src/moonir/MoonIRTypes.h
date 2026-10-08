@@ -308,6 +308,7 @@ struct CleanupObligation {
     std::string place;
     luna::ownership::CleanupAction action = luna::ownership::CleanupAction::None;
     luna::types::TypeId typeId;
+    std::vector<std::string> inactiveFields;
 };
 
 struct Expr;

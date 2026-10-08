@@ -98,6 +98,7 @@ struct FreeStmt : Stmt {
     std::unique_ptr<Expr> operand;
     luna::ownership::CleanupAction action =
         luna::ownership::CleanupAction::Deallocate;
+    std::vector<std::string> inactiveFields;
     bool isImplicit = false;
 };
 

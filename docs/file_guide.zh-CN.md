@@ -1009,6 +1009,7 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/ownership_loop_local_resource_valid.luna`
 - `tests/fixtures/ownership_overlapping_field_borrows_invalid.luna`
 - `tests/fixtures/ownership_partial_move_branch_invalid.luna`
+- `tests/fixtures/ownership_partial_move_cleanup.luna`
 - `tests/fixtures/ownership_partial_move_invalid.luna`
 - `tests/fixtures/ownership_return_cleanup.luna`
 - `tests/fixtures/ownership_return_path_leaks_invalid.luna`
@@ -1065,6 +1066,10 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `tests/fixtures/resource_generic_drop.luna`
 - `tests/fixtures/resource_generic_drop_layout_invalid.luna`
 - `tests/fixtures/resource_recursive_named.luna`
+- `tests/fixtures/resource_split_all_fields_move.luna`
+- `tests/fixtures/resource_split_field_move.luna`
+- `tests/fixtures/resource_split_field_scope_exit.luna`
+- `tests/fixtures/resource_split_field_try.luna`
 - `tests/fixtures/resource_split_owner_transfer.luna`
 - `tests/fixtures/resource_split_scope_exit.luna`
 - `tests/fixtures/result_ambiguous_constructor_invalid.luna`

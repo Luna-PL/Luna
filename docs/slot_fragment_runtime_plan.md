@@ -801,15 +801,13 @@ test passes on Windows Clang64/LLVM 20 and WSL Arch Linux/LLVM 22. This proves
 one bounded conditional whole-owner local move and both exits of the two-node
 conversion; partial-field or host ownership transfer and wider conversion
 bodies remain outside the proof.
-A direct two-owned-field source probe now fails at source ownership checking
-on `move pair.first`, with the field-move location and a whole-struct move
-suggestion. Before this explicit rejection, the source checker tracked the
-moved field while return cleanup still named the root owner; MoonIR sealing
-then rejected the missing projected cleanup rows. The ordinary struct still
-has one root cleanup. A regression fixture pins the early rejection. Before
-extending `From` to field transfer, source lowering must produce disjoint field
-cleanup rows plus allocation release and carry the precise remaining obligations
-through each terminal branch. A hand-built sealed CFG now verifies the first
+The first direct two-owned-field source probe failed on `move pair.first`:
+the source checker tracked the moved field while return cleanup still named
+the root owner, and MoonIR sealing rejected the missing projected cleanup rows.
+The temporary source guard made that failure explicit. Source lowering now
+produces disjoint direct-field cleanup rows plus allocation release and carries
+the precise remaining obligations through return, `?`, and lexical exits for
+eligible owned named structs without aggregate Drop. A hand-built sealed CFG verifies the first
 canonical table/dataflow slice: a two-String-field owned parameter may return
 one moved field while the other field is cleaned before backing allocation
 release, or clean both fields before release when neither moves. The verifier
@@ -825,15 +823,23 @@ an owned named struct with cleanup-bearing fields and no aggregate Drop. A
 builder CFG regression checks the split parameter's return cleanup list, and
 a source JIT fixture moves the whole two-field owner and observes each field
 Drop once in source order. A second fixture checks the same order at lexical
-scope exit. Source field moves remain rejected by Sema; the
-split path has no field-move or separately observed allocation-release proof.
+scope exit. Direct field moves now pass source checking for this split shape.
+Source JIT fixtures observe exactly one Drop per field on return, lexical exit,
+and `?` propagation; another moves both fields and retains the allocation-only
+cleanup obligation. A builder CFG regression checks that return cleanup omits
+the moved field while retaining its sibling and backing allocation. Separate
+instrumentation of the allocation release remains pending.
+The focused canonical test and all four source JIT paths also pass in the
+Windows Clang64 ASAN build; these runs report no memory error but do not count
+allocation releases independently.
 Canonical ownership dataflow also rejects whole-owner transfer after a field
 has moved, ordinary reads of that field, and reads of the partially moved
 root. A disjoint sibling field remains transferable, and an intact split
 struct can still move as a whole. The negative CFG mutations reproduced both
 previously accepted stale reads and whole-owner transfer before the verifier
-checks were added. The builder rows above now supply the source-level intact
-owner shape, while partially moved source obligations remain pending.
+checks were added. The builder rows above now supply both intact and partially
+moved source owner shapes. Nested projections, aggregate Drop, and branch
+states that disagree about moved fields remain outside the admitted source path.
 Another source fixture returns `Result<i32, ReturnedResource>` from the same
 nested Ref Apply and `?` shape. The sealed CFG verifies an owned payload move
 and inner-before-outer context exits. A narrower test-only JIT wrapper now
@@ -1260,10 +1266,13 @@ not a public ABI decision or stable-release approval:
    The source builder now emits multiple cleanup rows for owned named structs
    with cleanup-bearing fields and no aggregate Drop. Its parameter-return
    CFG plus whole-owner move and lexical-exit JIT fixtures prove intact
-   cleanup and ordered field Drop. Next, make return, `?`, and scope-exit obligations omit only
-   transferred fields, then admit source field moves and prove the remaining
-   field Drop and backing allocation release exactly once in a positive JIT
-   fixture.
+   cleanup and ordered field Drop. Return, `?`, and scope-exit obligations now
+   omit transferred direct fields but retain allocation release. Source JIT
+   fixtures cover one field moved on each exit and both fields moved; a builder
+   CFG test checks the remaining return rows. Windows Clang64 ASAN passes the
+   focused canonical test and four source JIT paths. Next, count backing
+   allocation releases directly and extend the field-sensitive obligation
+   contract to conditional paths before admitting such moves in `From` bodies.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

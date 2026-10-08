@@ -44,6 +44,8 @@ OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
         auto* variable = lookup(name);
         freeStmt->action = cleanupActionForType(
             variable ? variable->type : nullptr);
+        if (variable)
+            freeStmt->inactiveFields = inactiveCleanupFields(*variable);
         freeStmts.push_back(std::move(freeStmt));
     }
 
@@ -59,6 +61,7 @@ OwnershipChecker::FlowResult OwnershipChecker::checkBlock(BlockStmt* block) {
             copy->isImplicit = true;
             copy->action = original ? original->action
                                     : luna::ownership::CleanupAction::Deallocate;
+            if (original) copy->inactiveFields = original->inactiveFields;
             if (original && original->operand) {
                 if (auto* id = dynamic_cast<IdentifierExpr*>(original->operand.get()))
                     copy->operand = std::make_unique<IdentifierExpr>(id->name);

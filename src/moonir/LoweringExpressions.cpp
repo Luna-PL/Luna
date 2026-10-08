@@ -345,6 +345,7 @@ std::unique_ptr<moon::Expr> LunaLowerer::lowerExpr(const ::Expr* expression) {
             moon::CleanupObligation lowered;
             lowered.place = cleanup.place;
             lowered.action = cleanup.action;
+            lowered.inactiveFields = cleanup.inactiveFields;
             lowered.typeId = cleanup.type
                 ? luna::types::typeId(cleanup.type)
                 : luna::types::TypeId{};
@@ -508,6 +509,7 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
             moon::CleanupObligation lowered;
             lowered.place = cleanup.place;
             lowered.action = cleanup.action;
+            lowered.inactiveFields = cleanup.inactiveFields;
             if (cleanup.type) {
                 if (mModule) mModule->registerType(cleanup.type);
                 lowered.typeId = luna::types::typeId(cleanup.type);
@@ -630,6 +632,7 @@ std::unique_ptr<moon::Stmt> LunaLowerer::lowerStmt(const ::Stmt* statement) {
         auto value = std::make_unique<moon::FreeStmt>();
         value->operand = lowerExpr(release->operand.get());
         value->action = release->action;
+        value->inactiveFields = release->inactiveFields;
         value->isImplicit = release->isImplicit;
         result = std::move(value);
     } else if (auto* slot = dynamic_cast<const ::SlotInvokeStmt*>(statement)) {

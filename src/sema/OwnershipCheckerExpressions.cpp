@@ -403,7 +403,9 @@ bool OwnershipChecker::checkExpr(Expr* expr) {
             auto* variable = lookupCleanupVariable(place);
             propagation->cleanups.push_back(
                 {place, cleanupActionForType(variable ? variable->type : nullptr),
-                 variable ? variable->type : nullptr});
+                 variable ? variable->type : nullptr,
+                 variable ? inactiveCleanupFields(*variable) :
+                     std::vector<std::string>{}});
         }
         return true;
     }

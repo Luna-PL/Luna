@@ -135,6 +135,7 @@ struct CleanupObligation {
     std::string place;
     luna::ownership::CleanupAction action = luna::ownership::CleanupAction::None;
     TypePtr type;
+    std::vector<std::string> inactiveFields;
 };
 
 struct ReturnStmt : Stmt {
@@ -228,6 +229,7 @@ struct FreeStmt : Stmt {
     std::unique_ptr<Expr> operand;
     luna::ownership::CleanupAction action =
         luna::ownership::CleanupAction::Deallocate;
+    std::vector<std::string> inactiveFields;
     // Set only for cleanup inserted by ownership analysis at a lexical
     // fallthrough. Canonical CFG lowering moves this operation onto the
     // corresponding successor edge; an explicit source `free` remains an

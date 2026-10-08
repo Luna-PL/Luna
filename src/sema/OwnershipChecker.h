@@ -129,6 +129,7 @@ private:
     bool isPlaceAvailable(const Place& place, const std::string& action);
     bool hasConflictingLoan(const Place& place, bool forMutation) const;
     bool allDirectFieldsMoved(const VarInfo& var) const;
+    std::vector<std::string> inactiveCleanupFields(const VarInfo& var) const;
     TypePtr typeOfPlace(const Place& place) const;
 
     VarInfo* lookup(const std::string& name);
