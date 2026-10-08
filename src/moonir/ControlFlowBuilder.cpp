@@ -87,11 +87,23 @@ LocalId ControlFlowBuilder::addLocal(
     mGraph->scopes[scope.value].locals.push_back(id);
     mBindings.back()[name] = id;
     if (const auto* frozen = mModule->findType(type);
-        inferTypeCleanup && frozen &&
+        inferTypeCleanup && frozen && kind != LocalKind::Allocation &&
         mGraph->locals[id.value].relation ==
             luna::ownership::Relation::Owned &&
-        frozen->sysmeta.resource.cleanupRequired)
-        addCleanup(id, type, frozen->sysmeta.resource.cleanup);
+        frozen->sysmeta.resource.cleanupRequired) {
+        const bool splitStruct = frozen->kind == TypeKind::Struct &&
+            !frozen->sysmeta.resource.needsDrop &&
+            std::any_of(frozen->fields.begin(), frozen->fields.end(),
+                        [this](const auto& field) {
+                const auto* fieldType = mModule->findType(field.type);
+                return fieldType &&
+                    fieldType->sysmeta.resource.cleanupRequired;
+            });
+        if (splitStruct)
+            addSplitStructCleanups(id);
+        else
+            addCleanup(id, type, frozen->sysmeta.resource.cleanup);
+    }
     return id;
 }
 
@@ -100,6 +112,11 @@ CleanupId ControlFlowBuilder::addCleanup(
     luna::ownership::CleanupAction action, CleanupKind kind) {
     if (local.empty() || local.value >= mGraph->locals.size()) {
         error({}, "cleanup references an unresolved canonical local");
+        return {};
+    }
+    if (mSplitCleanupsByLocal.count(local.value)) {
+        error({}, "split struct local '" + mGraph->locals[local.value].name +
+                  "' cannot add an overlapping root cleanup");
         return {};
     }
     if (auto found = mCleanupByLocal.find(local.value);
@@ -124,6 +141,52 @@ CleanupId ControlFlowBuilder::addCleanup(
     mGraph->scopes[cleanup.scope.value].cleanups.push_back(id);
     mCleanupByLocal[local.value] = id;
     return id;
+}
+
+void ControlFlowBuilder::addSplitStructCleanups(LocalId local) {
+    const auto& binding = mGraph->locals[local.value];
+    const auto* type = mModule->findType(binding.type);
+    if (!type || type->kind != TypeKind::Struct) return;
+    auto& rows = mSplitCleanupsByLocal[local.value];
+    const auto append = [this, &binding, &rows](
+        PlaceRef place, TypeRef rowType, CleanupKind kind,
+        luna::ownership::CleanupAction action) {
+        const CleanupId id{static_cast<uint32_t>(mGraph->cleanups.size())};
+        CleanupRecord cleanup;
+        cleanup.id = id;
+        cleanup.scope = binding.scope;
+        cleanup.place = std::move(place);
+        cleanup.type = rowType;
+        cleanup.kind = kind;
+        cleanup.action = action;
+        mGraph->cleanups.push_back(std::move(cleanup));
+        mGraph->scopes[binding.scope.value].cleanups.push_back(id);
+        rows.push_back(id);
+    };
+    append({local, {}}, binding.type, CleanupKind::Allocation,
+           luna::ownership::CleanupAction::Deallocate);
+    // Scope cleanup walks backward: register fields in reverse source order
+    // so their Drop actions execute in source order before the allocation.
+    for (size_t index = type->fields.size(); index-- > 0;) {
+        const auto& field = type->fields[index];
+        const auto* fieldType = mModule->findType(field.type);
+        if (!fieldType || !fieldType->sysmeta.resource.cleanupRequired)
+            continue;
+        append({local, {{ProjectionKind::Field, index, {}}}}, field.type,
+               CleanupKind::Value, fieldType->sysmeta.resource.cleanup);
+    }
+}
+
+std::vector<CleanupId> ControlFlowBuilder::cleanupRowsForLocal(
+    LocalId local) const {
+    if (local.empty()) return {};
+    if (const auto split = mSplitCleanupsByLocal.find(local.value);
+        split != mSplitCleanupsByLocal.end())
+        return split->second;
+    if (const auto root = mCleanupByLocal.find(local.value);
+        root != mCleanupByLocal.end())
+        return {root->second};
+    return {};
 }
 
 ControlFlowBuilder::BuiltBlock ControlFlowBuilder::lowerNestedBlock(
@@ -309,6 +372,20 @@ ControlFlowBuilder::lowerStatement(
         }
         const auto& local = mGraph->locals[identifier->local.value];
         const auto* cleanupType = mModule->findType(local.type);
+        if (const auto split =
+                mSplitCleanupsByLocal.find(identifier->local.value);
+            split != mSplitCleanupsByLocal.end()) {
+            if (!cleanupType ||
+                release->action != cleanupType->sysmeta.resource.cleanup) {
+                error(release->location,
+                      "implicit split struct cleanup has an inconsistent action");
+                return std::nullopt;
+            }
+            current.cleanups.insert(
+                current.cleanups.end(),
+                split->second.begin(), split->second.end());
+            return current;
+        }
         const CleanupKind cleanupKind =
             cleanupType && !cleanupType->sysmeta.resource.cleanupRequired &&
                 release->action ==
@@ -809,10 +886,10 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerFor(
     none.tag = statement->protocolNoneVariant;
     none.edge.target = exit;
     std::vector<CleanupId> loopCleanups;
-    if (auto cleanup = mCleanupByLocal.find(stateLocal.value);
-        cleanup != mCleanupByLocal.end() &&
-        mGraph->locals[stateLocal.value].scope == loopScope)
-        loopCleanups.push_back(cleanup->second);
+    if (mGraph->locals[stateLocal.value].scope == loopScope) {
+        const auto rows = cleanupRowsForLocal(stateLocal);
+        loopCleanups.insert(loopCleanups.end(), rows.begin(), rows.end());
+    }
     none.edge.cleanups = canonicalCleanupOrder(
         loopCleanups, loopScope, scope);
     SwitchEdge some;

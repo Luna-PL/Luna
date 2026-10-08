@@ -635,13 +635,17 @@ move 后的字段，并先清理剩余字段再释放 allocation；没有字段�
 allocation 清理记录保持有效。初始化局部绑定的校验现也接受同一套已验证的分拆表：
 手工 CFG 将 raw
 allocation 转交给两字段绑定，再检查完整清理与单字段返回转移；负向变体拒绝再次
-释放已消费的 raw allocation。这仍仅是 verifier 证据：源码 builder 每个局部变量
-仍只生成一条根清理记录，源码字段 move 仍被拒绝，分拆路径尚无 JIT 中 Drop 和释放
-的执行证明。
+释放已消费的 raw allocation。源码 builder 现对含需清理字段、且没有整对象 Drop 的
+拥有型命名 struct 生成一条 allocation 记录和按顺序排列的字段 value 记录。builder
+CFG 回归检查分拆参数的 return 清理列表；源码 JIT 夹具转移完整的双字段 owner，
+观察到两个字段各按源码顺序 Drop 一次，另一夹具在词法作用域退出时验证相同顺序。
+源码字段 move 仍被 Sema 拒绝；分拆路径
+尚无字段转移及单独观察 allocation 释放的执行证明。
 canonical 所有权数据流现也拒绝一个字段转移后的整对象转移、该字段的普通读取，
 以及部分转移后对根对象的读取；不相交的兄弟字段仍可转移，完整的分拆 struct 仍可
 整对象转移。负向 CFG 变体在修复前复现了此前被接受的失效读取与整对象转移。
-这些校验尚不会生成源码层的字段清理记录。
+上述 builder 记录现提供源码层完整 owner 的分拆形状，部分转移后的源码清理义务
+仍待完成。
 另一源码夹具在相同的两层 Ref Apply 和 `?` 结构中返回
 `Result<i32, ReturnedResource>`。封闭 CFG 验证拥有型 payload 的 move 与先内后外的
 context 退出。更窄的仅测试用 JIT wrapper 在源码 body 返回后观察资源 Err，调用精确
@@ -952,10 +956,10 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    return 清理列表。第二个手工 CFG 现还覆盖 raw allocation 向已初始化的分拆局部
    绑定转移，并拒绝再次清理已消费的 raw 身份。它还证明兄弟字段可继续转移，
    并拒绝字段转移后的整对象转移、失效字段普通读取及部分转移根对象的读取。
-   下一步使源码 builder 为拥有型 struct 生成多条记录，使 return、`?` 与作用域退出
-   义务具备字段敏感性，再用正向
-   JIT 夹具证明字段 Drop 与 allocation 释放的
-   实际顺序和恰好一次执行。
+   源码 builder 现为含需清理字段、且没有整对象 Drop 的拥有型命名 struct 生成多条
+   清理记录；参数 return CFG、完整 owner 转移及词法退出 JIT 夹具证明完整清理及
+   有序字段 Drop。下一步使 return、`?` 与作用域退出义务仅保留未转移字段，再开放源码字段
+   move，并用正向 JIT 夹具证明剩余字段 Drop 与底层 allocation 恰好释放一次。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。

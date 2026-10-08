@@ -95,6 +95,20 @@ std::vector<CleanupId> ControlFlowBuilder::lowerCleanupObligations(
         }
         const TypeRef type = obligation.typeId.empty()
             ? mGraph->locals[local.value].type : obligation.typeId;
+        if (const auto split = mSplitCleanupsByLocal.find(local.value);
+            split != mSplitCleanupsByLocal.end()) {
+            const auto* rootType = mModule->findType(
+                mGraph->locals[local.value].type);
+            if (type != mGraph->locals[local.value].type || !rootType ||
+                obligation.action != rootType->sysmeta.resource.cleanup) {
+                error({}, "split struct cleanup obligation disagrees with local '" +
+                          mGraph->locals[local.value].name + "'");
+                continue;
+            }
+            result.insert(
+                result.end(), split->second.begin(), split->second.end());
+            continue;
+        }
         const auto* cleanupType = mModule->findType(type);
         const CleanupKind cleanupKind =
             cleanupType && !cleanupType->sysmeta.resource.cleanupRequired &&
@@ -238,8 +252,19 @@ void ControlFlowBuilder::canonicalizeCleanupTable() {
     };
     for (auto& scope : mGraph->scopes) {
         rewrite(scope.cleanups);
+        // Canonical table IDs sort projected fields upward, while cleanup
+        // execution walks this list backward and must visit fields in source
+        // order before releasing the shared allocation.
         std::sort(scope.cleanups.begin(), scope.cleanups.end(),
-                  [](CleanupId lhs, CleanupId rhs) {
+                  [this](CleanupId lhs, CleanupId rhs) {
+            const auto& left = mGraph->cleanups[lhs.value];
+            const auto& right = mGraph->cleanups[rhs.value];
+            if (left.place.root == right.place.root &&
+                mSplitCleanupsByLocal.count(left.place.root.value) &&
+                !left.place.projections.empty() &&
+                !right.place.projections.empty())
+                return left.place.projections.front().index >
+                    right.place.projections.front().index;
             return lhs.value < rhs.value;
         });
     }

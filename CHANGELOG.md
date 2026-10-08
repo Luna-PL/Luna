@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Emitted split cleanup rows for owned named structs without aggregate Drop,
+  with a backing allocation row and ordered field rows. A builder CFG test
+  and source JIT whole-owner transfer and lexical-exit regressions cover intact
+  cleanup.
 - Rejected canonical reads of a moved struct field or partially moved root,
   and whole-owner transfer after a field move, while keeping disjoint sibling
   field transfer and intact whole-owner transfer valid in CFG regressions.

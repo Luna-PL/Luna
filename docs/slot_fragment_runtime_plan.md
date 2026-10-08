@@ -819,16 +819,21 @@ lists. It also retains the root allocation row when a projected field moves.
 The initialized-local gate now also accepts the same verified split table:
 a hand-built CFG transfers a raw allocation into a two-field binding, then
 checks both whole-value cleanup and one-field return transfer. A negative
-mutation rejects a second release of the consumed raw allocation. This is
-verifier evidence only: the source builder still emits one root cleanup per
-local, source field moves remain rejected, and the split path has no JIT Drop
-or deallocation execution proof yet.
+mutation rejects a second release of the consumed raw allocation. The source
+builder now emits one allocation row and ordered direct-field value rows for
+an owned named struct with cleanup-bearing fields and no aggregate Drop. A
+builder CFG regression checks the split parameter's return cleanup list, and
+a source JIT fixture moves the whole two-field owner and observes each field
+Drop once in source order. A second fixture checks the same order at lexical
+scope exit. Source field moves remain rejected by Sema; the
+split path has no field-move or separately observed allocation-release proof.
 Canonical ownership dataflow also rejects whole-owner transfer after a field
 has moved, ordinary reads of that field, and reads of the partially moved
 root. A disjoint sibling field remains transferable, and an intact split
 struct can still move as a whole. The negative CFG mutations reproduced both
 previously accepted stale reads and whole-owner transfer before the verifier
-checks were added. These checks do not create source-level field cleanup rows.
+checks were added. The builder rows above now supply the source-level intact
+owner shape, while partially moved source obligations remain pending.
 Another source fixture returns `Result<i32, ReturnedResource>` from the same
 nested Ref Apply and `?` shape. The sealed CFG verifies an owned payload move
 and inner-before-outer context exits. A narrower test-only JIT wrapper now
@@ -1252,9 +1257,13 @@ not a public ABI decision or stable-release approval:
    initialized split local and rejects cleanup of the consumed raw identity.
    It also proves sibling-field transfer while rejecting whole-owner transfer
    and ordinary reads of a moved field or its partial root.
-   Next, make the source builder emit multiple rows per owned struct and make
-   return, `?`, and scope-exit obligations field-sensitive. Then prove actual
-   field Drop and allocation release order exactly once in a positive JIT fixture.
+   The source builder now emits multiple cleanup rows for owned named structs
+   with cleanup-bearing fields and no aggregate Drop. Its parameter-return
+   CFG plus whole-owner move and lexical-exit JIT fixtures prove intact
+   cleanup and ordered field Drop. Next, make return, `?`, and scope-exit obligations omit only
+   transferred fields, then admit source field moves and prove the remaining
+   field Drop and backing allocation release exactly once in a positive JIT
+   fixture.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

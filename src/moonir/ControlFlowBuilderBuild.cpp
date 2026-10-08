@@ -43,6 +43,7 @@ std::unique_ptr<ControlFlowGraph> ControlFlowBuilder::build(
     mActiveApplyEnvironmentCleanups.clear();
     mFragmentFrames.clear();
     mCleanupByLocal.clear();
+    mSplitCleanupsByLocal.clear();
     mActiveExpressionCleanups.clear();
     mGuardedConsumingRecipeNames.clear();
     mBindingIteratorRecipe = false;
@@ -358,12 +359,12 @@ std::optional<ControlFlowBuilder::OpenBlock> ControlFlowBuilder::lowerApply(
                 body = std::nullopt;
             } else {
                 binding.environmentLocals.push_back(local);
-                if (auto cleanup = mCleanupByLocal.find(local.value);
-                    cleanup != mCleanupByLocal.end()) {
-                    environmentCleanups.push_back(cleanup->second);
-                    mActiveApplyEnvironmentCleanups.back().push_back(
-                        cleanup->second);
-                }
+                const auto rows = cleanupRowsForLocal(local);
+                environmentCleanups.insert(
+                    environmentCleanups.end(), rows.begin(), rows.end());
+                mActiveApplyEnvironmentCleanups.back().insert(
+                    mActiveApplyEnvironmentCleanups.back().end(),
+                    rows.begin(), rows.end());
             }
         }
     }

@@ -128,6 +128,8 @@ private:
     CleanupId addCleanup(LocalId local, const TypeRef& type,
                          luna::ownership::CleanupAction action,
                          CleanupKind kind = CleanupKind::Value);
+    void addSplitStructCleanups(LocalId local);
+    std::vector<CleanupId> cleanupRowsForLocal(LocalId local) const;
 
     BuiltBlock lowerNestedBlock(std::unique_ptr<BlockStmt> block,
                                 RegionId parentRegion,
@@ -272,6 +274,7 @@ private:
     // enclosing Luna function.
     std::vector<FragmentFrame> mFragmentFrames;
     std::unordered_map<uint32_t, CleanupId> mCleanupByLocal;
+    std::unordered_map<uint32_t, std::vector<CleanupId>> mSplitCleanupsByLocal;
     // Cleanup-bearing synthetic operands are active from their generated let
     // until the parent expression consumes them. Structured early exits built
     // in that interval must carry these obligations even though the frontend

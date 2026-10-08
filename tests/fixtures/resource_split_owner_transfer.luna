@@ -1,0 +1,13 @@
+struct Leaf { marker: i32; }
+
+impl Drop for Leaf {
+    fn drop(leaf: &mut Leaf) -> unit { print(leaf.marker); }
+}
+
+struct Pair { first: Leaf; second: Leaf; }
+
+fn main() -> i32 {
+    let pair = new Pair(move new Leaf(61), move new Leaf(62));
+    let moved = move pair;
+    return 0;
+}

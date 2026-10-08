@@ -126,6 +126,30 @@ int runControlFlowTests(ControlFlowTestContext& context) {
         "SplitPair", {{"first", TyString}, {"second", TyString}},
         "canonical.split-cleanup.test::SplitPair"));
     splitModule.sealTypeTable();
+    auto splitSource = std::make_unique<moon::BlockStmt>();
+    auto splitReturn = std::make_unique<moon::ReturnStmt>();
+    splitReturn->cleanups.push_back({
+        "pair", luna::ownership::CleanupAction::Drop, splitPairId});
+    splitSource->stmts.push_back(std::move(splitReturn));
+    moon::Param splitParameter;
+    splitParameter.name = "pair";
+    splitParameter.type = splitPairId;
+    splitParameter.usage = luna::ownership::Usage::Affine;
+    splitParameter.relation = luna::ownership::Relation::Owned;
+    auto loweredSplit = cfgBuilder.build(
+        std::move(splitSource), {splitParameter},
+        moon::RegionKind::Function, splitModule);
+    if (!loweredSplit || loweredSplit->cleanups.size() != 3 ||
+        loweredSplit->scopes[0].cleanups !=
+            std::vector<moon::CleanupId>{moon::CleanupId{0},
+                                         moon::CleanupId{2},
+                                         moon::CleanupId{1}} ||
+        loweredSplit->blocks[0].terminator.exitCleanups !=
+            std::vector<moon::CleanupId>{moon::CleanupId{1},
+                                         moon::CleanupId{2},
+                                         moon::CleanupId{0}} ||
+        !cfgVerifier.verify(*loweredSplit, splitModule))
+        return fail("source builder did not emit ordered split struct cleanup rows");
     moon::ControlFlowGraph splitCfg;
     splitCfg.entry = moon::BlockId{0};
     splitCfg.rootRegion = moon::RegionId{0};

@@ -258,6 +258,8 @@ expect_success("borrowed safe slice" "tests/fixtures/slice_borrow.luna" "Program
 expect_success("empty tail slice" "tests/fixtures/slice_empty_tail.luna" "Program exited with code: 0")
 expect_success("compiler-known Drop trait" "tests/fixtures/drop_intrinsic.luna" "92\n91")
 expect_success("named products recursively clean owned fields" "tests/fixtures/resource_recursive_named.luna" "31\n32")
+expect_success("split cleanup survives whole-owner transfer" "tests/fixtures/resource_split_owner_transfer.luna" "61\n62")
+expect_success("split cleanup runs at lexical scope exit" "tests/fixtures/resource_split_scope_exit.luna" "71\n72")
 expect_success("generic Drop composes with recursive field cleanup" "tests/fixtures/resource_generic_drop.luna" "41\n42")
 expect_success("Drop contract is independent of declaration order" "tests/fixtures/resource_drop_after_use.luna" "51")
 expect_error("Drop requires an infallible unit signature" "tests/fixtures/resource_drop_signature_invalid.luna" "Drop::drop must return unit")

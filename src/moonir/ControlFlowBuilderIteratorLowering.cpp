@@ -665,9 +665,9 @@ ControlFlowBuilder::lowerIteratorRecipeFor(
             adapterTerminator.secondary.target = exit;
         }
         std::vector<CleanupId> rejectedCleanups;
-        if (const auto cleanup = mCleanupByLocal.find(currentItem.value);
-            cleanup != mCleanupByLocal.end())
-            rejectedCleanups.push_back(cleanup->second);
+        const auto itemRows = cleanupRowsForLocal(currentItem);
+        rejectedCleanups.insert(
+            rejectedCleanups.end(), itemRows.begin(), itemRows.end());
         if (adapterTerminator.secondary.target == exit)
             rejectedCleanups.insert(
                 rejectedCleanups.end(), sourceTailCleanups.begin(),

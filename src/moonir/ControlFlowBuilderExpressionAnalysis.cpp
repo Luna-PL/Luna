@@ -356,13 +356,14 @@ bool ControlFlowBuilder::hoistOrderedOperand(
     mGraph->blocks[current.block.value].operations.push_back(
         std::move(declaration));
     if (type->sysmeta.resource.cleanupRequired) {
-        const auto cleanup = mCleanupByLocal.find(local.value);
-        if (cleanup == mCleanupByLocal.end()) {
+        const auto rows = cleanupRowsForLocal(local);
+        if (rows.empty()) {
             error(expressionLocation,
                   "cleanup-bearing expression sibling has no canonical cleanup row");
             return false;
         }
-        mActiveExpressionCleanups.push_back(cleanup->second);
+        mActiveExpressionCleanups.insert(
+            mActiveExpressionCleanups.end(), rows.begin(), rows.end());
     }
 
     auto identifier = std::make_unique<IdentifierExpr>();

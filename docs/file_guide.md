@@ -879,6 +879,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/resource_generic_drop.luna`
 - `tests/fixtures/resource_generic_drop_layout_invalid.luna`
 - `tests/fixtures/resource_recursive_named.luna`
+- `tests/fixtures/resource_split_owner_transfer.luna`
+- `tests/fixtures/resource_split_scope_exit.luna`
 - `tests/fixtures/result_ambiguous_constructor_invalid.luna`
 - `tests/fixtures/result_basic.luna`
 - `tests/fixtures/result_from_borrowed_source_invalid.luna`
