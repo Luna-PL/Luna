@@ -801,11 +801,13 @@ test passes on Windows Clang64/LLVM 20 and WSL Arch Linux/LLVM 22. This proves
 one bounded conditional whole-owner local move and both exits of the two-node
 conversion; partial-field or host ownership transfer and wider conversion
 bodies remain outside the proof.
-A direct two-owned-field source probe reaches MoonIR sealing but fails closed
-on `move pair.first`: the ordinary struct has one root cleanup and no projected
-field cleanup rows. The source checker tracks the moved field, but its return
-cleanup still names the root owner. A regression fixture pins this current
-rejection. Before extending `From` to field transfer, derive disjoint field
+A direct two-owned-field source probe now fails at source ownership checking
+on `move pair.first`, with the field-move location and a whole-struct move
+suggestion. Before this explicit rejection, the source checker tracked the
+moved field while return cleanup still named the root owner; MoonIR sealing
+then rejected the missing projected cleanup rows. The ordinary struct still
+has one root cleanup. A regression fixture pins the early rejection. Before
+extending `From` to field transfer, derive disjoint field
 cleanup rows plus allocation release, carry the precise remaining obligations
 through each terminal branch, and verify their order and single execution in
 the sealed CFG and JIT. A whole-owner branch move does not discharge this work.

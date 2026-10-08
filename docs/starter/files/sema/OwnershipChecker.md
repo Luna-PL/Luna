@@ -70,8 +70,8 @@ Luna's ownership system resembles Rust's affine/linear types: Copy values can be
 - Loan tracking: lifetimes and conflicts of shared/mutable references (`hasConflictingLoan`).
 - Partial moves: field-level moves (prefix-overlap detection on `Place`) and
   "a value whose fields have all been moved is unavailable as a whole". This is
-  semantic state tracking; owned struct field transfer still lacks projected
-  cleanup rows in MoonIR.
+  semantic state tracking. Owned struct field moves currently receive a source
+  error because MoonIR still lacks projected cleanup rows.
 - Linear resources: collects what must be freed at scope exit/return (`collectFreesAtScopeExit`/`collectFreesAtReturn`) and automatically inserts an implicit `FreeStmt` at the end of the function body.
 - Control-flow merging: merges branch states for if/match/loop (`mergeFallthroughStates`/`loopPreservesOuterState`), distinguishing "normal continuation" from "return-terminated paths" (`FlowResult.fallsThrough`).
 - Closure/lambda captures: Copy local variables are copied into the lambda scope as capture candidates; Affine/Linear/borrowed captures are diagnosed.

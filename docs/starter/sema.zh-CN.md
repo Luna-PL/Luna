@@ -125,8 +125,8 @@ mControlAnalyzer(make_unique<ControlAnalyzer>(mContext->controlAccess()));
 ### C++ 类比
 - 存储所有权/借用 ~ `unique_ptr`（Owned/Affine）+ 裸引用（Borrow）；不能 copy、能借用 `get`、借用活不得比 owner 久。
 - Affine vs Linear：`unique_ptr`（可丢）vs `scoped_lock`（必须释放）。
-- Place 部分 move：语义检查器能追踪单个字段的移动与借用冲突；带清理义务的
-  struct 目前尚缺 MoonIR 字段投影清理记录，不能把此分析能力当作可执行的字段转移。
+- Place 部分 move：语义检查器含单字段状态与借用冲突分析；拥有型 struct 字段
+  move 现于源码阶段拒绝，因为 MoonIR 尚缺字段投影清理记录。
 - 循环约束：循环体不得改变外层变量所有权状态。
 
 ---

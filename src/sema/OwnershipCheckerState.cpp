@@ -266,6 +266,17 @@ bool OwnershipChecker::consume(const Place& place, const std::string& action) {
               "' is not yet supported; move the whole record");
         return false;
     }
+    // Sema can track a moved field, but return/scope cleanup still owns the
+    // whole named allocation. Until MoonIR has disjoint field cleanup rows
+    // plus allocation release, accepting this move would reach sealing with
+    // an overlapping root cleanup obligation.
+    if (!place.components.empty() && var->type &&
+        var->type->kind == TypeKind::Struct &&
+        var->relation == luna::ownership::Relation::Owned) {
+        error("partial move from owned struct '" + place.root +
+              "' is not yet supported; move the whole struct");
+        return false;
+    }
     // A reference binding owns no referent, but its local handle still has a
     // usage contract. Moving that complete handle consumes the binding while
     // the lexical loan remains attached to the source scope. Projections or

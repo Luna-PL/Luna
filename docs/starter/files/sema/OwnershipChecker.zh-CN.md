@@ -68,7 +68,8 @@ Luna 的所有权系统类似 Rust 的 affine/linear 类型：Copy 值可复制�
 - 变量状态机：`Valid` → `Moved`/`Freed`，防止 use-after-move、重复 free。
 - 借用（loan）记录：共享/可变引用的存活期与冲突（`hasConflictingLoan`）。
 - 部分移动：字段级移动（`Place` 前缀重叠判定）与「全字段已移动则整体不可用」。
-  这里是语义状态追踪；带清理义务的 struct 字段转移仍缺 MoonIR 字段投影清理记录。
+  这里是语义状态追踪；拥有型 struct 字段 move 现于源码阶段拒绝，因为 MoonIR
+  仍缺字段投影清理记录。
 - 线性资源：作用域退出/返回时收集待释放（`collectFreesAtScopeExit`/`collectFreesAtReturn`），并自动在函数体尾部插入隐式 `FreeStmt`。
 - 控制流合并：if/match/loop 的分支状态合并（`mergeFallthroughStates`/`loopPreservesOuterState`），区分「正常继续」与「return 终止路径」（`FlowResult.fallsThrough`）。
 - 闭包/lambda 捕获：Copy 本地变量作为捕获候选复制进 lambda 作用域；Affine/Linear/借用捕获被诊断。
