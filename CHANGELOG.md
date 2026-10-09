@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added a private six-argument C candidate entry for Native v3 Ref/owned-Result
+  calls and fixed its candidate status values. A pointer-free JIT entry proof
+  binds generated entry and Drop linkage, ABI profile and status domain to
+  sealed source facts before the loaded adapter looks up code. V3 metadata
+  remains validation-only; the public typed lookup and descriptor binding are
+  still gated.
 - Replaced the private generated Result wrapper's pointer to a host
   `std::shared_ptr` with a Runtime-issued opaque code-lease token. Runtime
   rejects stale or foreign tokens before body dispatch, copies the retained

@@ -1190,8 +1190,8 @@ preflight; null parent/Ref and a live foreign-target handle return distinct
 test-only statuses without body dispatch or output mutation. The generated
 proof checks one context check, one Ref check and one body call. A Runtime-owned
 opaque handle now exists as a separate host carrier, while this lower-level
-test entry still writes a raw owner pointer. Production status codes and a v3
-descriptor binding are still required.
+test entry still writes a raw owner pointer. A typed v3 descriptor binding and
+real recoverable execution-failure proof are still required.
 The private generated seven-argument C host wrapper now checks its three
 output cells and Runtime-issued live lease token before calling the transfer entry with
 private cells. It returns scalar Ok directly, or passes resource Err with the
@@ -1203,8 +1203,12 @@ binds the frozen source facts to the materialized JIT module, prepares a stable
 empty owner cell before dispatch, and moves that cell into the caller's handle
 after success. Resource Err and scalar Ok, forged source, wrong Ref target,
 occupied or aliased outputs, invalid lease, and failed adoption have executable
-checks. This wrapper is still limited to the private JIT candidate shape; it
-does not create a Native v3 export or production callable contract.
+checks. A separate six-argument C candidate entry fixes test injection to
+zero. Its pointer-free private proof pairs the generated entry, injection and
+Drop linkage names, ABI profile and status domain with the sealed source facts;
+the loaded adapter checks that proof before looking up code in the same JIT
+module. The six-argument entry is still limited to the private JIT candidate
+shape and does not create a Native v3 export.
 Runtime now also has an internal C adoption entry that takes a returned owner,
 generated Drop pointer, Runtime-issued live code-lease token and stable empty
 owner cell. The token is resolved in Runtime's live table without dereferencing
@@ -1223,8 +1227,15 @@ On current 64-bit targets the v3 export/library records are 136/96 bytes;
 length framing but a distinct `LUNA_NATIVE_EXPORT_V3\n` row prefix. Decimal
 kind, flags, entry ABI, Ref mode, Result mode, status domain, error size and
 alignment precede the ten identifiers in C field order, separated by `\n`.
-The status-domain number only names the candidate domain; numeric failure
-codes and the callable C prototype remain to be fixed before publication.
+The candidate domain now has a six-argument C typedef in
+`NativeArtifactABI.h`: parent context, borrowed Ref, tag output, scalar
+output, stable owner cell and Runtime-issued code-lease token. Candidate
+statuses are success 0, invalid output 1, invalid resource 2, execution
+failure 3, invalid context 4, invalid handle 5, invalid target 6, unexpected
+check 7, adoption failure 8 and invalid lease 9. Execution failure is reserved
+for a real recoverable body/dispatch path; the private seven-argument test
+entry uses that value for injection. These values define the candidate profile,
+while the loader still treats v3 rows as validation-only metadata.
 
 The proposed result output is a tag, an `i32` scalar cell and one empty
 opaque owner-handle cell. The invocation status is separate from the source
@@ -1246,9 +1257,9 @@ the source export gate is lifted.
 | Derivation or dispatch failure | Maybe | Leave outputs unchanged; run all active context and local cleanup. |
 | Invalid resource return, handle allocation or later post-body failure | Yes | Leave outputs unchanged; clean any uncommitted returned owner under the code lease. |
 
-The groups name required distinctions, not numeric status assignments. A
-failed body may already have executed effects; the status makes no rollback
-promise.
+The candidate status enum assigns the values above; failure after body entry
+may already have executed effects and makes no rollback promise. Before public
+lookup, real recoverable execution failures need generated cleanup evidence.
 
 The host owns only the opaque handle, never a separately copied owner pointer
 or Drop address. Its Drop operation consumes a unique handle cell, clears it
@@ -1266,10 +1277,13 @@ Windows Clang64 ASAN canonical test on rerun. One invocation stopped earlier
 at the known LLVM 20.1.8 COFF ordered-section relocation failure, before the
 carrier path; Linux ASAN remains to be checked. The private generated C host
 wrapper now proves the candidate commit and lease behavior for one admitted
-shape using an opaque Runtime-issued lease token. The next production step is
-to freeze its callable prototype and status
-domain, bind the generated host entry and linkage to the frozen source facts,
-and carry that typed proof into a v3 row and `PinnedBinding`. Generated entry
+shape using an opaque Runtime-issued lease token. A private six-argument
+candidate entry and status domain are now fixed and bound to frozen source
+facts in the retained JIT module. The next production step is to carry that
+typed proof into a v3 row and `PinnedBinding`: the current v3 loader requires
+the candidate entry and linkage to mirror a verified v1 callable row, whose
+existing host callers still cast it as `i32()`. A distinct typed-only lookup
+and descriptor binding must remove that unsafe alias before publication. Generated entry
 tests for every real failure phase, plus Runtime-owned handle/Drop behavior
 across supported targets, are required before opening the narrow verifier and
 export gate. Native v1 rows must not be extended in place.

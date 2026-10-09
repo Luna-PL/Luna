@@ -904,7 +904,8 @@ cell，注入失败时三个输出保持不变。parent context 与精确借用 
 输出预检后执行；空 parent／Ref
 及有效的外来目标 handle 返回不同的仅测试用状态，不执行 body 或改写输出。
 生成证明要求恰好一次 context check、一次 Ref check 和一次源码 body 调用。
-这个底层 JIT 测试入口仍输出裸 owner 指针；生产状态码及 v3 descriptor 绑定尚未实现。
+这个底层 JIT 测试入口仍输出裸 owner 指针；类型化 v3 descriptor 绑定及真实可恢复
+执行失败的证明尚未实现。
 私有生成的七参数 C 宿主 wrapper 现于调用 transfer 前检查三个输出 cell 和由
 Runtime 发放的有效 lease token，并使用私有 cell 接收 transfer 结果。标量 Ok 直接提交；资源 Err
 连同精确生成的 Drop 入口交给 Runtime 的 C 收养桥。收养失败时在代码 lease
@@ -912,8 +913,10 @@ Runtime 发放的有效 lease token，并使用私有 cell 接收 transfer 结�
 一次收养调用和两条 Drop 清理路径。仅测试用的已装载适配层把冻结源码事实绑定到
 验证后的 JIT module，在分派前准备稳定空 owner cell，成功后将其移入调用方
 handle。资源 Err、标量 Ok、伪造源码身份、错误 Ref 目标、已占用或别名输出、
-无效 lease 及收养失败均有可执行检查。此 wrapper 仍限于私有 JIT 候选形态，
-不生成 Native v3 导出或生产可调用契约。
+无效 lease 及收养失败均有可执行检查。另一个六参数 C 候选入口将测试注入参数固定为
+零；其私有无指针证明将生成入口、注入入口及 Drop 的 linkage、ABI profile、状态域
+与封闭源码事实配对。已装载适配层在同一个 JIT module 查找代码前核对该证明。
+六参数入口仍限于私有 JIT 候选形态，不生成 Native v3 导出。
 Runtime 现还提供内部 C 收养入口，接收返回 owner、生成的 Drop 指针、Runtime
 发放的有效代码 lease token，以及稳定且为空的 owner cell。入口通过 Runtime
 存活表解析 token，无须读取宿主 C++ 对象；发布唯一 owner token 前校验这些输入。
@@ -928,8 +931,12 @@ body 执行前被拒绝；失败收养清理及成功 owner Drop 全程保持代
 沿用 v2 的排序去重及小端长度 framing，但行前缀改为
 `LUNA_NATIVE_EXPORT_V3\n`。kind、flags、入口 ABI、Ref 模式、Result 模式、
 状态域、错误值大小和对齐以十进制书写，后接按 C 字段顺序排列的十个标识符，
-字段之间用 `\n` 分隔。状态域编号只标识候选域；具体失败码及可调用的 C
-函数原型须在发布前确定。
+字段之间用 `\n` 分隔。`NativeArtifactABI.h` 现给候选域定义六参数 C 原型：
+parent context、借用 Ref、tag 输出、标量输出、稳定 owner cell 及 Runtime 发放的
+代码 lease token。候选状态值依次为成功 0、输出无效 1、资源无效 2、执行失败 3、
+context 无效 4、handle 无效 5、目标无效 6、异常检查 7、收养失败 8、lease 无效 9。
+执行失败值预留给真实可恢复的 body／dispatch 失败；私有七参数测试入口用该值表示
+注入失败。v3 loader 仍仅把记录作为需验证的 metadata。
 
 建议的输出包含 tag、一个 `i32` 标量 cell 和一个空的 opaque owner-handle
 cell；调用状态与源码 Result tag 分开。body 分派前检查所有输出地址和空 handle
@@ -947,8 +954,8 @@ handle cell 为空。入口前失败不修改输出或源 owner。body 启动后
 | 派生或分派失败 | 可能 | 输出保持原状；执行所有有效 context 和局部清理。 |
 | 资源返回无效、handle 分配或后续 body 后失败 | 是 | 输出保持原状；在代码 lease 保持时清理任何未提交的返回 owner。 |
 
-这些状态组列出必须区分的情况，并未分配数值。失败前 body 可能已执行 effect；
-状态不承诺回滚。
+候选状态枚举已分配上述数值。body 进入后的失败可能已执行 effect，状态不承诺回滚；
+公开 lookup 前仍需证明真实可恢复执行失败的生成清理路径。
 
 宿主只持有 opaque handle，不分别复制 owner 指针或 Drop 地址。Drop 操作消费
 唯一的 handle cell，先清空 cell，再在代码 lease 保持期间执行递归 Drop／释放，
@@ -961,9 +968,11 @@ Drop。私有夹具已改用该 carrier，并在借用 Ref pin 失效后证明�
 Drop。Runtime carrier 在重跑时通过 Windows Clang64 ASAN 聚焦 canonical 测试；
 另一次运行在进入该路径前遇到已知的 LLVM 20.1.8 COFF 保序 section 重定位
 失败。Linux ASAN 仍待核验。私有生成的 C 宿主 wrapper 现已借助 Runtime 发放的
-不透明 lease token，在单一准入形态下证明候选提交点及 lease 行为。下一步须冻结
-生产可调用原型与状态域，将生成宿主入口及
-linkage 绑定到冻结源码事实，再把类型化证明纳入 v3 行与 `PinnedBinding`。
+不透明 lease token，在单一准入形态下证明候选提交点及 lease 行为。私有六参数
+候选入口与状态域现已固定，并在保留的 JIT module 中绑定冻结源码事实。下一步将
+该类型化证明纳入 v3 行与 `PinnedBinding`：现有 v3 loader 要求候选入口及 linkage
+镜像已验证的 v1 callable 行，而 v1 宿主仍将其转换为 `i32()` 调用。发布前须建立
+独立的类型化 lookup 与 descriptor 绑定，消除这一不安全的入口别名。
 覆盖每个真实失败阶段的生成入口测试，以及 Runtime 所有的 handle／Drop 在各支持
 目标上的验证完成后，才能开放窄形态的 verifier／export 门禁。不能
 原地扩展 Native v1 行。

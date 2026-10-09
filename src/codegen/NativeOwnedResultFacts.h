@@ -4,6 +4,8 @@
 #include <string>
 #include <tuple>
 
+#include "runtime/NativeArtifactABI.h"
+
 namespace moon {
 struct Module;
 struct FunctionDecl;
@@ -12,8 +14,8 @@ struct FunctionDecl;
 namespace luna::codegen {
 
 // Frozen source facts required by the candidate Native v3 Ref/Result row.
-// This deliberately has no entry pointer or wrapper linkage: the current
-// private transfer wrapper is not the proposed host ABI.
+// Source facts deliberately have no entry pointer or wrapper linkage. The
+// separate generated-entry proof pairs those identities after IR verification.
 struct NativeOwnedResultSourceFacts {
     std::string functionSymbolId;
     std::string functionContractId;
@@ -43,6 +45,17 @@ struct NativeOwnedResultSourceFacts {
                    right.errorDropSymbolId, right.errorDropContractId,
                    right.errorValueSize, right.errorValueAlignment);
     }
+};
+
+// Test-only pointer-free pairing of a verified generated host entry with its
+// sealed source facts. A real v3 row still needs artifact and loader binding.
+struct NativeOwnedResultEntryProof {
+    NativeOwnedResultSourceFacts source;
+    std::string entryLinkageName;
+    std::string injectionLinkageName;
+    std::string dropLinkageName;
+    uint32_t entryAbi = LUNA_NATIVE_ENTRY_ABI_REF_RESULT_OWNER_V1;
+    uint32_t statusDomain = LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1;
 };
 
 bool deriveNativeOwnedResultSourceFacts(

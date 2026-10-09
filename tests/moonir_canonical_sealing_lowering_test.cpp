@@ -365,10 +365,22 @@ bool exercisePrivateRefApplyJit(
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST == 4);
     static_assert(LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST == 8);
     static_assert(LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_LEASE_V1_TEST == 9);
+    static_assert(static_cast<int>(LUNA_NATIVE_REF_RESULT_OWNER_SUCCESS_V1) ==
+                  LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST);
+    static_assert(static_cast<int>(LUNA_NATIVE_REF_RESULT_OWNER_INVALID_OUTPUT_V1) ==
+                  LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST);
+    static_assert(static_cast<int>(LUNA_NATIVE_REF_RESULT_OWNER_INVALID_CONTEXT_V1) ==
+                  LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST);
+    static_assert(static_cast<int>(LUNA_NATIVE_REF_RESULT_OWNER_INVALID_HANDLE_V1) ==
+                  LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST);
+    static_assert(static_cast<int>(LUNA_NATIVE_REF_RESULT_OWNER_INVALID_TARGET_V1) ==
+                  LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST);
+    static_assert(static_cast<int>(LUNA_NATIVE_REF_RESULT_OWNER_ADOPTION_FAILURE_V1) ==
+                  LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST);
+    static_assert(static_cast<int>(LUNA_NATIVE_REF_RESULT_OWNER_INVALID_LEASE_V1) ==
+                  LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_LEASE_V1_TEST);
     using EntryTransfer = int32_t (*)(
         const void*, void*, uint32_t*, int32_t*, void**, uint32_t);
-    using EntryHostTransfer = int32_t (*)(
-        const void*, void*, uint32_t*, int32_t*, void**, const void*, uint32_t);
     using EntryDrop = int32_t (*)(void**);
     const auto entryOne = reinterpret_cast<EntryOne>(
         const_cast<void*>(address));
@@ -381,10 +393,11 @@ bool exercisePrivateRefApplyJit(
     const auto entryDrop = reinterpret_cast<EntryDrop>(
         const_cast<void*>(dropAddress));
     const void* hostTransferAddress = loadedResult
-        ? jit->lookup("__luna_private_ref_apply_host_transfer_test", error)
+        ? jit->lookup("__luna_private_ref_apply_entry_v1_test", error)
         : nullptr;
     if (loadedResult && !hostTransferAddress) return false;
-    const auto entryHostTransfer = reinterpret_cast<EntryHostTransfer>(
+    const auto entryHostTransfer =
+        reinterpret_cast<LunaNativeRefResultOwnerEntryV1>(
         const_cast<void*>(hostTransferAddress));
     std::weak_ptr<LunaJitModule> codeLifetime = jit;
     if (exerciseIngressGate) {
@@ -441,25 +454,25 @@ bool exercisePrivateRefApplyJit(
                 retiredLease.reset();
                 if (entryHostTransfer(parent.opaque(),
                         const_cast<void*>(handle.opaque()), &tag, &scalar,
-                        &rawOwnerCell, nullptr, 0) !=
+                        &rawOwnerCell, nullptr) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_LEASE_V1_TEST ||
                     entryHostTransfer(parent.opaque(),
                         const_cast<void*>(handle.opaque()), &tag, &scalar,
-                        &rawOwnerCell, invalidLease, 0) !=
+                        &rawOwnerCell, invalidLease) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_LEASE_V1_TEST ||
                     entryHostTransfer(parent.opaque(),
                         const_cast<void*>(handle.opaque()), &tag, &scalar,
                         &rawOwnerCell,
-                        reinterpret_cast<const void*>(~uintptr_t{0}), 0) !=
+                        reinterpret_cast<const void*>(~uintptr_t{0})) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_LEASE_V1_TEST ||
                     entryHostTransfer(parent.opaque(),
                         const_cast<void*>(handle.opaque()), nullptr, &scalar,
-                        &rawOwnerCell, codeLease.opaque(), 0) !=
+                        &rawOwnerCell, codeLease.opaque()) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST ||
                     entryHostTransfer(parent.opaque(),
                         const_cast<void*>(handle.opaque()), &tag, &scalar,
                         reinterpret_cast<void**>(&tag),
-                        codeLease.opaque(), 0) !=
+                        codeLease.opaque()) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST ||
                     tag != 42 || scalar != unchangedScalar || rawOwnerCell ||
                     privateRefJitExecutions != dispatchesBefore ||

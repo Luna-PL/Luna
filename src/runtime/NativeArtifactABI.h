@@ -107,6 +107,27 @@ typedef const LunaNativeLibraryDescriptorV2*
 #define LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1 1u
 #define LUNA_NATIVE_DESCRIPTOR_DIGEST_SIZE_V3 32u
 
+// Candidate callable contract for the v3 metadata profile. The host supplies
+// a Runtime-issued live code-lease token and an empty, stable owner cell.
+// This typedef does not make v3 rows callable through the current loader.
+typedef int32_t (*LunaNativeRefResultOwnerEntryV1)(
+    const void* parent_context, const void* borrowed_ref,
+    uint32_t* tag_output, int32_t* scalar_output,
+    void** owner_cell, const void* code_lease);
+
+enum LunaNativeRefResultOwnerStatusV1 {
+    LUNA_NATIVE_REF_RESULT_OWNER_SUCCESS_V1 = 0,
+    LUNA_NATIVE_REF_RESULT_OWNER_INVALID_OUTPUT_V1 = 1,
+    LUNA_NATIVE_REF_RESULT_OWNER_INVALID_RESOURCE_V1 = 2,
+    LUNA_NATIVE_REF_RESULT_OWNER_EXECUTION_FAILURE_V1 = 3,
+    LUNA_NATIVE_REF_RESULT_OWNER_INVALID_CONTEXT_V1 = 4,
+    LUNA_NATIVE_REF_RESULT_OWNER_INVALID_HANDLE_V1 = 5,
+    LUNA_NATIVE_REF_RESULT_OWNER_INVALID_TARGET_V1 = 6,
+    LUNA_NATIVE_REF_RESULT_OWNER_UNEXPECTED_CHECK_V1 = 7,
+    LUNA_NATIVE_REF_RESULT_OWNER_ADOPTION_FAILURE_V1 = 8,
+    LUNA_NATIVE_REF_RESULT_OWNER_INVALID_LEASE_V1 = 9,
+};
+
 typedef struct LunaNativeExportDescriptorV3 {
     uint32_t abi_version;
     uint32_t struct_size;

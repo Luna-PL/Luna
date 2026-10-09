@@ -52,8 +52,8 @@ private:
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     // Bound at private materialization, before any loaded entry can look up code.
     std::vector<uint8_t> mPrivateRefUnitApplyEntryRecord;
-    std::optional<luna::codegen::NativeOwnedResultSourceFacts>
-        mPrivateOwnedResultSourceFacts;
+    std::optional<luna::codegen::NativeOwnedResultEntryProof>
+        mPrivateOwnedResultEntryProof;
 #endif
 };
 
@@ -73,7 +73,8 @@ private:
 };
 
 // Test-only loaded Ref/Result host adapter. It supplies a Runtime-issued code
-// lease token and stable owner cell to the verified generated host wrapper.
+// lease token and stable owner cell to the verified six-argument candidate
+// entry; failure injection remains on a separate test entry.
 class LunaPrivateRefResultLoadedEntry {
 public:
     int32_t call(const void* parentContext, const void* borrowedRef,
@@ -85,6 +86,7 @@ private:
     friend class CodeGenerator;
     std::shared_ptr<LunaJitModule> lease_;
     const void* entry_ = nullptr;
+    const void* injectionEntry_ = nullptr;
     const void* drop_ = nullptr;
 };
 #endif

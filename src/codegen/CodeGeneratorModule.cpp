@@ -481,7 +481,7 @@ int32_t LunaPrivateRefResultLoadedEntry::call(
     luna::runtime::RuntimeOwnedResultHandle& ownerOutput,
     bool failAdoptionForTest) const {
     auto keepCodeAlive = lease_;
-    if (!keepCodeAlive || !entry_ || !drop_)
+    if (!keepCodeAlive || !entry_ || !injectionEntry_ || !drop_)
         return LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST;
     if (!tagOutput || !scalarOutput || ownerOutput)
         return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST;
@@ -504,9 +504,13 @@ int32_t LunaPrivateRefResultLoadedEntry::call(
              !separated(scalarAddress, sizeof(int32_t),
                         ownerAddress, sizeof(void*)))))
         return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST;
-    using Entry = int32_t (*)(const void*, void*, uint32_t*, int32_t*,
-                             void**, const void*, uint32_t);
-    const auto entry = reinterpret_cast<Entry>(const_cast<void*>(entry_));
+    using InjectionEntry = int32_t (*)(
+        const void*, void*, uint32_t*, int32_t*, void**,
+        const void*, uint32_t);
+    const auto entry = reinterpret_cast<LunaNativeRefResultOwnerEntryV1>(
+        const_cast<void*>(entry_));
+    const auto injectionEntry = reinterpret_cast<InjectionEntry>(
+        const_cast<void*>(injectionEntry_));
     luna::runtime::RuntimeOwnedResultHandle stagedOwner;
     std::string adoptionError;
     if (!stagedOwner.prepareEmptyCell(adoptionError))
@@ -514,10 +518,12 @@ int32_t LunaPrivateRefResultLoadedEntry::call(
     luna::runtime::RuntimeOwnedResultCodeLease codeLease;
     if (!codeLease.prepare(keepCodeAlive, adoptionError))
         return LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST;
-    const int32_t status = entry(parentContext,
-        const_cast<void*>(borrowedRef), tagOutput, scalarOutput,
-        stagedOwner.cell(), codeLease.opaque(),
-        failAdoptionForTest ? 1u : 0u);
+    const int32_t status = failAdoptionForTest
+        ? injectionEntry(parentContext, const_cast<void*>(borrowedRef),
+            tagOutput, scalarOutput, stagedOwner.cell(),
+            codeLease.opaque(), 1u)
+        : entry(parentContext, borrowedRef, tagOutput, scalarOutput,
+            stagedOwner.cell(), codeLease.opaque());
     if (status == LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST &&
         stagedOwner)
         ownerOutput = std::move(stagedOwner);
@@ -560,22 +566,38 @@ CodeGenerator::loadPrivateRuntimeFragmentRefResultEntryForTest(
     const moon::Module& program, const FunctionDecl& function,
     std::shared_ptr<LunaJitModule> executable, std::string& failure) {
     luna::codegen::NativeOwnedResultSourceFacts facts;
-    if (!executable || !executable->mPrivateOwnedResultSourceFacts ||
+    if (!executable || !executable->mPrivateOwnedResultEntryProof ||
         !luna::codegen::deriveNativeOwnedResultSourceFacts(
             program, function, facts, failure) ||
-        !(facts == *executable->mPrivateOwnedResultSourceFacts)) {
+        !(facts == executable->mPrivateOwnedResultEntryProof->source)) {
         failure = "private Ref Result entry is not bound to these frozen source facts";
         return {};
     }
+    const auto& proof = *executable->mPrivateOwnedResultEntryProof;
+    if (proof.entryAbi != LUNA_NATIVE_ENTRY_ABI_REF_RESULT_OWNER_V1 ||
+        proof.statusDomain !=
+            LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1 ||
+        proof.entryLinkageName !=
+            "__luna_private_ref_apply_entry_v1_test" ||
+        proof.injectionLinkageName !=
+            "__luna_private_ref_apply_host_transfer_test" ||
+        proof.dropLinkageName !=
+            "__luna_private_ref_apply_drop_test") {
+        failure = "private Ref Result entry lost its verified profile or linkage";
+        return {};
+    }
     const void* entry = executable->lookup(
-        "__luna_private_ref_apply_host_transfer_test", failure);
+        proof.entryLinkageName, failure);
     if (!entry) return {};
-    const void* drop = executable->lookup(
-        "__luna_private_ref_apply_drop_test", failure);
+    const void* injectionEntry = executable->lookup(
+        proof.injectionLinkageName, failure);
+    if (!injectionEntry) return {};
+    const void* drop = executable->lookup(proof.dropLinkageName, failure);
     if (!drop) return {};
     auto loaded = std::make_unique<LunaPrivateRefResultLoadedEntry>();
     loaded->lease_ = std::move(executable);
     loaded->entry_ = entry;
+    loaded->injectionEntry_ = injectionEntry;
     loaded->drop_ = drop;
     failure.clear();
     return loaded;
@@ -666,6 +688,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         ? errorPayload : (privateOkResourceResultJit ? okPayload : nullptr);
     std::optional<luna::codegen::NativeOwnedResultSourceFacts>
         privateOwnedResultFacts;
+    std::optional<luna::codegen::NativeOwnedResultEntryProof>
+        privateOwnedResultEntryProof;
     if (privateErrResourceResultJit && function.params.size() == 1) {
         luna::codegen::NativeOwnedResultSourceFacts facts;
         if (!luna::codegen::deriveNativeOwnedResultSourceFacts(
@@ -2650,6 +2674,55 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         failure = "private Ref Result host transfer lost its commit or cleanup path";
                         return false;
                     }
+                    // The candidate callable profile has no test injection
+                    // argument. Its one call fixes that argument to zero.
+                    auto* candidateEntry = llvm::Function::Create(
+                        llvm::FunctionType::get(i32Ty,
+                            {ptrTy, ptrTy, ptrTy, ptrTy, ptrTy, ptrTy},
+                            false),
+                        llvm::Function::ExternalLinkage,
+                        "__luna_private_ref_apply_entry_v1_test",
+                        *proof.mModule);
+                    if (candidateEntry->getCallingConv() !=
+                            llvm::CallingConv::C ||
+                        candidateEntry->arg_size() != 6 ||
+                        candidateEntry->getReturnType() != i32Ty ||
+                        candidateEntry->getName() !=
+                            "__luna_private_ref_apply_entry_v1_test") {
+                        failure = "private Ref Result candidate entry lost its fixed C prototype";
+                        return false;
+                    }
+                    auto* candidateStart = llvm::BasicBlock::Create(
+                        *proof.mCtx, "entry", candidateEntry);
+                    llvm::IRBuilder<> candidateBuilder(candidateStart);
+                    std::vector<llvm::Value*> candidateArguments;
+                    for (auto& argument : candidateEntry->args()) {
+                        if (argument.getType() != ptrTy) {
+                            failure = "private Ref Result candidate entry changed an argument type";
+                            return false;
+                        }
+                        candidateArguments.push_back(&argument);
+                    }
+                    candidateArguments.push_back(
+                        llvm::ConstantInt::get(i32Ty, 0));
+                    auto* candidateCall = candidateBuilder.CreateCall(
+                        hostEntry, candidateArguments);
+                    candidateBuilder.CreateRet(candidateCall);
+                    if (candidateCall->getCalledFunction() != hostEntry ||
+                        candidateCall->arg_size() != 7 ||
+                        candidateCall->getArgOperand(6) !=
+                            candidateArguments.back()) {
+                        failure = "private Ref Result candidate entry lost its host transfer binding";
+                        return false;
+                    }
+                    privateOwnedResultEntryProof =
+                        luna::codegen::NativeOwnedResultEntryProof{
+                            *privateOwnedResultFacts,
+                            candidateEntry->getName().str(),
+                            hostEntry->getName().str(),
+                            dropEntry->getName().str(),
+                            LUNA_NATIVE_ENTRY_ABI_REF_RESULT_OWNER_V1,
+                            LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1};
                 }
             }
             if (returnType->kind == TypeKind::Unit &&
@@ -2858,9 +2931,15 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             }
             *executable = proof.materializeJitModule(failure);
             if (!*executable) return false;
-            if (privateOwnedResultFacts)
-                (*executable)->mPrivateOwnedResultSourceFacts =
-                    *privateOwnedResultFacts;
+            if (privateOwnedResultFacts) {
+                if (!privateOwnedResultEntryProof) {
+                    failure = "private Ref Result lost its generated entry proof";
+                    executable->reset();
+                    return false;
+                }
+                (*executable)->mPrivateOwnedResultEntryProof =
+                    *privateOwnedResultEntryProof;
+            }
             if (entryRecord) {
                 (*executable)->mPrivateRefUnitApplyEntryRecord = *encodedEntry;
                 *entryRecord = std::move(*encodedEntry);
