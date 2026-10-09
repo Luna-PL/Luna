@@ -31,6 +31,7 @@ static unsigned privateRefJitReturnedOkDropProbeCalls = 0;
 static unsigned privateRefJitReturnedPairDropProbeCalls = 0;
 static unsigned privateRefJitAllDropProbeCalls = 0;
 static std::vector<int32_t> privateRefJitConversionDropOrder;
+static std::vector<int32_t> privateRefJitFromResourceDropOrder;
 static std::vector<int32_t> privateRefJitFromBranchMarkers;
 static std::vector<int32_t> privateRefJitNestedDropOrder;
 static bool privateRefJitDropProbeValid = true;
@@ -41,11 +42,15 @@ extern "C" void luna_private_ref_drop_probe(int32_t marker) {
     else if (marker == 47) {
         ++privateRefJitConversionDropProbeCalls;
         privateRefJitConversionDropOrder.push_back(marker);
+        privateRefJitFromResourceDropOrder.push_back(marker);
     } else if (marker == 43 || marker == -43) {
         privateRefJitConversionDropOrder.push_back(marker);
     } else if (marker == 51 || marker == 53) {
         privateRefJitFromBranchMarkers.push_back(marker);
-    } else if (marker == 59) ++privateRefJitReturnedDropProbeCalls;
+    } else if (marker == 59) {
+        ++privateRefJitReturnedDropProbeCalls;
+        privateRefJitFromResourceDropOrder.push_back(marker);
+    }
     else if (marker == 67) ++privateRefJitReturnedOkDropProbeCalls;
     else if (marker == 66) ++privateRefJitReturnedPairDropProbeCalls;
     else if (marker == 71 || marker == 73 ||
@@ -1619,6 +1624,12 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "    resource.marker = 0;\n"
         "  }\n"
         "}\n"
+        "impl From<SourceError> for ReturnedResource {\n"
+        "  fn from(affine error: SourceError) -> ReturnedResource {\n"
+        "    let returned = new ReturnedResource(error.marker + 12);\n"
+        "    return move returned;\n"
+        "  }\n"
+        "}\n"
         "struct ReturnedPair { padding: i32; marker: i32; }\n"
         "impl Drop for ReturnedPair {\n"
         "  fn drop(resource: &mut ReturnedPair) -> unit {\n"
@@ -1892,6 +1903,19 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  }\n"
         "  return Ok(0);\n"
         "}\n"
+        "runtime fn try_apply_from_resource_return("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedResource> {\n"
+        "  let source = new SourceError(47);\n"
+        "  let input = Err::<i32, SourceError>(move source);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
         "runtime fn try_apply_ok_resource_return("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<ReturnedResource, i32> {\n"
@@ -2027,6 +2051,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyEarlyContinueFrom = nullptr;
     moon::FunctionDecl* tryApplyEarlyContinueFromElse = nullptr;
     moon::FunctionDecl* tryApplyResourceReturn = nullptr;
+    moon::FunctionDecl* tryApplyFromResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyOkResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyPairResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyOkResourceScalarErr = nullptr;
@@ -2066,6 +2091,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyEarlyContinueFromElse = function;
             if (function->name == "try_apply_resource_return")
                 tryApplyResourceReturn = function;
+            if (function->name == "try_apply_from_resource_return")
+                tryApplyFromResourceReturn = function;
             if (function->name == "try_apply_ok_resource_return")
                 tryApplyOkResourceReturn = function;
             if (function->name == "try_apply_pair_resource_return")
@@ -2089,7 +2116,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplySplitFrom || !tryApplySplitFromElse ||
         !tryApplyMergeFrom || !tryApplyMergeFromElse ||
         !tryApplyEarlyContinueFrom || !tryApplyEarlyContinueFromElse ||
-        !tryApplyResourceReturn || !tryApplyOkResourceReturn ||
+        !tryApplyResourceReturn || !tryApplyFromResourceReturn ||
+        !tryApplyOkResourceReturn ||
         !tryApplyPairResourceReturn || !tryApplyOkResourceScalarErr ||
         !tryApplyErrResourceScalarOk || !tryApplyNestedResourceReturn ||
         !tryApplyDeepResourceReturn || !tryApplyBranchResourceReturn ||
@@ -2476,6 +2504,53 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (privateRefJitReturnedDropProbeCalls != returnedDropBefore + 2 ||
         !privateRefJitDropProbeValid)
         return fail("Ref apply '?' returned resource was not dropped once per call");
+    if (!tryApplyFromResourceReturn->controlFlow ||
+        tryApplyFromResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyFromResourceReturn->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply '?' From resource return did not verify");
+    const auto* fromResourceResultType = tryApplyModule->findType(
+        tryApplyFromResourceReturn->returnType);
+    if (!fromResourceResultType ||
+        fromResourceResultType->kind != TypeKind::Result ||
+        fromResourceResultType->typeArgumentIds.size() != 2)
+        return fail("Ref apply '?' From resource return lost its Result type");
+    bool hasFrozenOwnedFromReturn = false;
+    for (const auto& block : tryApplyFromResourceReturn->controlFlow->blocks) {
+        if (block.terminator.kind != moon::TerminatorKind::Return)
+            continue;
+        const auto* result = dynamic_cast<const moon::ResultConstructExpr*>(
+            block.terminator.operand.get());
+        const auto* conversion = result && !result->isOk
+            ? dynamic_cast<const moon::CallExpr*>(result->payload.get())
+            : nullptr;
+        const auto* frozen = conversion
+            ? tryApplyModule->findDeclaration(conversion->calleeRef)
+            : nullptr;
+        if (frozen && frozen->sourceName == "from" &&
+            conversion->type ==
+                fromResourceResultType->typeArgumentIds[1])
+            hasFrozenOwnedFromReturn = true;
+    }
+    if (!hasFrozenOwnedFromReturn)
+        return fail("Ref apply '?' owned Err lost its frozen From witness");
+    const auto fromResourceSourceDrops = privateRefJitConversionDropProbeCalls;
+    const auto fromResourceReturnedDrops = privateRefJitReturnedDropProbeCalls;
+    privateRefJitFromResourceDropOrder.clear();
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyFromResourceReturn, privateRefJitError,
+            0, false, std::nullopt, false, false, {}, {},
+            std::pair<bool, int32_t>{false, 59})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply '?' From resource return failed private JIT execution");
+    }
+    if (privateRefJitConversionDropProbeCalls != fromResourceSourceDrops + 2 ||
+        privateRefJitReturnedDropProbeCalls != fromResourceReturnedDrops + 2 ||
+        privateRefJitFromResourceDropOrder !=
+            std::vector<int32_t>{47, 59, 47, 59} ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply '?' From resource return lost source/owner Drop order");
     if (!tryApplyOkResourceReturn->controlFlow ||
         tryApplyOkResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
         !refApplyCfgVerifier.verify(*tryApplyOkResourceReturn->controlFlow,

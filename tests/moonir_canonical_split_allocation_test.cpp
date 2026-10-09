@@ -83,7 +83,8 @@ void probeDeallocate(
 }
 
 int runSourceCase(AllocationProbe& probe, const char* name,
-                  const std::string& source, int expectedExitCode) {
+                  const std::string& source, int expectedExitCode,
+                  size_t expectedCells = 2, size_t expectedOuters = 1) {
     luna::driver::CompilerPipeline pipeline;
     if (!pipeline.compileSourceToMoonIR(source, name) ||
         !pipeline.generateCode({})) {
@@ -104,7 +105,9 @@ int runSourceCase(AllocationProbe& probe, const char* name,
         std::cerr << execution.error << '\n';
         return caseFail(name, "did not execute");
     }
-    if (probe.records.size() != 3 || probe.releases != 3 ||
+    const size_t expectedAllocations = expectedCells + expectedOuters;
+    if (probe.records.size() != expectedAllocations ||
+        probe.releases != expectedAllocations ||
         probe.unmatchedReleases != 0 || probe.layoutMismatches != 0 ||
         probe.reallocations != 0)
         return caseFail(name, "did not release each field and outer allocation once");
@@ -119,7 +122,7 @@ int runSourceCase(AllocationProbe& probe, const char* name,
         else if (record.size == 16 && record.alignment == 8)
             ++outers;
     }
-    if (cells != 2 || outers != 1)
+    if (cells != expectedCells || outers != expectedOuters)
         return caseFail(name, "did not preserve the field/outer allocation layout");
     return 0;
 }
@@ -240,6 +243,37 @@ fn main() -> i32 {
     return runSourceCase(probe, name, source, 43);
 }
 
+int runFromOwnedResultCase(AllocationProbe& probe) {
+    const std::string source = R"luna(
+struct SourceError { marker: i32; }
+impl Drop for SourceError {
+    fn drop(resource: &mut SourceError) -> unit { resource.marker = 0; }
+}
+struct ReturnedResource { marker: i32; }
+impl Drop for ReturnedResource {
+    fn drop(resource: &mut ReturnedResource) -> unit { resource.marker = 0; }
+}
+impl From<SourceError> for ReturnedResource {
+    fn from(affine error: SourceError) -> ReturnedResource {
+        let returned = new ReturnedResource(error.marker + 12);
+        return move returned;
+    }
+}
+fn converted() -> Result<i32, ReturnedResource> {
+    let source = new SourceError(47);
+    let input = Err::<i32, SourceError>(move source);
+    let value = input?;
+    return Ok(value);
+}
+fn main() -> i32 {
+    let result = converted();
+    let returned = unwrap_err(move result);
+    return returned.marker;
+}
+)luna";
+    return runSourceCase(probe, "<from-owned-result>", source, 59, 2, 0);
+}
+
 } // namespace
 
 int runSplitAllocationProbe() {
@@ -292,6 +326,7 @@ int runSplitAllocationProbe() {
         return 1;
     if (runFromEarlyContinueCase(probe, "<split-from-continue>", -43))
         return 1;
+    if (runFromOwnedResultCase(probe)) return 1;
     return 0;
 }
 

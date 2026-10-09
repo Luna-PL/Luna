@@ -896,6 +896,16 @@ either an `i32` or the bounded nested resource described below. It consumes the 
 the JIT module, and hands no resource pointer or ownership carrier to the
 host. The canonical ASAN target passes with these fixtures, subject to the
 separate intermittent COFF loader failure below.
+A bounded `From<SourceError> for ReturnedResource` fixture now combines the
+frozen conversion call with the same owned Err wrapper. Its canonical Err
+Return references the frozen `From` declaration and carries a call result of
+the exact owned error type. The conversion allocates marker `59` from source
+marker `47`; each of two private JIT calls observes `Err(59)` without Slot
+dispatch, Drops the source `47` inside the conversion, then Drops the returned
+resource `59` in the wrapper. A separate source JIT host allocator probe
+counts exactly two 4-byte allocations, each released once with the original
+layout and no reallocation. Focused Windows Clang64 ASAN tests pass. This
+remains a test-only wrapper that consumes the returned owner inside the JIT.
 Further Err fixtures return two- and three-struct ownership chains. After
 reading the outer marker, the wrapper uses the compiler's existing recursive
 owned-payload cleanup. Its narrow shape gate admits at most three structs,
@@ -1310,7 +1320,12 @@ not a public ABI decision or stable-release approval:
    continuing after the conditional to read the surviving first field. Both
    paths return `Err(43)` with distinct branch markers and ordered Drops of
    `43, 47` or `47, -43`; each path releases three allocations once under the
-   host probe and Windows ASAN. A hand-built
+   host probe and Windows ASAN. A bounded `From<SourceError> for
+   ReturnedResource` now returns one owned Err through the existing private
+   wrapper. The canonical Err Return names the frozen `From` call with the
+   exact owned payload type; two JIT calls Drop source `47` before returned
+   owner `59`. The independent host allocator pairs both 4-byte allocations
+   with one release each, also under Windows ASAN. A hand-built
    canonical CFG now validates complete disjoint field rows, one backing
    allocation cleanup row, and the active return cleanup list after one field
    moves. A second hand-built CFG now covers raw allocation transfer into an
@@ -1329,8 +1344,8 @@ not a public ABI decision or stable-release approval:
    after one or both fields move, also under Windows Clang64 ASAN. Matching
    conditional moves, distinct returning arms, and an early return beside a
    continuing arm now have exact source Drop transcripts and per-outcome
-   allocation counts. Next, prove a bounded `From` conversion that returns
-   one owned Err payload through the existing private wrapper.
+   allocation counts. Next, prove a bounded `From` conversion that moves one
+   owned field from a split source error into an owned Err payload.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

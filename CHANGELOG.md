@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Proved an owned Err produced by `From<SourceError> for ReturnedResource` on
+  the private Ref/apply `?` path. The frozen conversion returns an owned
+  payload; two JIT calls Drop source `47` before the wrapper Drops result `59`.
+  An independent host allocator probe pairs both allocations and releases,
+  including under Windows ASAN.
 - Proved one early-returning and one continuing field-transfer branch inside
   `From<SourceEarlyContinueError> for i32` on the private Ref/apply `?` Err
   path. The continuing arm moves and Drops the second field inside `else`,

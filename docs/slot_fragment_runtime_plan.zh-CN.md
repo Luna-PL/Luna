@@ -688,6 +688,13 @@ context 退出。更窄的仅测试用 JIT wrapper 在源码 body 返回后观�
 `i32` 或下述有界内嵌资源。它在 JIT module 内消费 owner，不向宿主交付资源指针或所有权
 carrier。这些夹具的 canonical ASAN 目标通过，但仍受下述独立的间歇性 COFF loader
 故障限制。
+有界的 `From<SourceError> for ReturnedResource` 夹具现将冻结的转换调用与同一
+拥有型 Err wrapper 组合。canonical Err Return 引用冻结的 `From` 声明，调用结果
+类型与拥有型错误 payload 完全一致。转换从源 marker `47` 分配 marker `59` 的
+返回资源；两次私有 JIT 调用均不分派 Slot，得到 `Err(59)`，先在转换体内 Drop
+源错误 `47`，再由 wrapper Drop 返回资源 `59`。独立的源码 JIT 宿主 allocator
+探针确认两笔 4 字节分配各按原布局释放一次，且没有 reallocation；Windows
+Clang64 ASAN 聚焦测试通过。wrapper 仍仅在 JIT 内消费返回 owner。
 另两个 Err 夹具分别返回两层和三层 struct 所有权链。wrapper 在读取外层 marker 后复用
 编译器现有的递归拥有型 payload 清理；窄形状门禁最多准入三个各有冻结源码 Drop 与
 `i32` marker 的 struct。私有 LLVM 检查要求 Drop 从外到内、deallocation 从内到外。
@@ -992,6 +999,11 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    字段后提前返回、另一侧在 `else` 中转移并 Drop 第二字段后继续读取第一字段；
    两条路径均返回 `Err(43)`，有不同的分支标记，Drop 顺序分别为 `43, 47` 和
    `47, -43`，宿主探针及 Windows ASAN 均确认三笔 allocation 各释放一次。
+   有界的 `From<SourceError> for ReturnedResource` 现经既有私有 wrapper 返回
+   一个拥有型 Err。canonical Err Return 引用精确冻结的 `From`，调用结果类型
+   与拥有型 payload 一致；两次 JIT 调用均先 Drop 源错误 `47`，再 Drop 返回
+   owner `59`。独立的宿主探针确认两笔 4 字节分配各释放一次，Windows ASAN
+   亦通过。
    手工构造的 canonical CFG 现验证完整、互不重叠的字段清理
    记录、一条底层 allocation 清理记录，以及一个字段转移后的有效 return 清理
    列表。第二个手工 CFG 还覆盖 raw allocation 向已初始化的分拆局部绑定转移，
@@ -1005,8 +1017,8 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    canonical 测试及四条源码 JIT 路径。独立的宿主 allocator 探针现于转移一个
    或全部字段后，直接验证每个 `Cell` 及 `Pair` 分配恰好释放一次，Windows
    Clang64 ASAN 亦通过。相同字段转移的分支合并、分别返回的分支及一侧提前
-   返回的分支现有精确 Drop 输出和逐侧 allocation 计数。下一步证明一次有界的
-   `From` 转换将一个拥有型 Err payload 经既有私有 wrapper 返回。
+   返回的分支现有精确 Drop 输出和逐侧 allocation 计数。下一步证明有界的
+   `From` 转换从分拆源错误转移一个拥有型字段进入拥有型 Err payload。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。
