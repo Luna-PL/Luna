@@ -1,4 +1,5 @@
 #include "CodeGenerator.h"
+#include "NativeOwnedResultFacts.h"
 #include "core/TypeLayout.h"
 #include "core/TypeRelations.h"
 #include "moonir/FragmentContextEffects.h"
@@ -584,6 +585,15 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         privateOkResourceResultJit;
     const auto* resourcePayload = privateErrResourceResultJit
         ? errorPayload : (privateOkResourceResultJit ? okPayload : nullptr);
+    std::optional<luna::codegen::NativeOwnedResultSourceFacts>
+        privateOwnedResultFacts;
+    if (privateErrResourceResultJit && function.params.size() == 1) {
+        luna::codegen::NativeOwnedResultSourceFacts facts;
+        if (!luna::codegen::deriveNativeOwnedResultSourceFacts(
+                program, function, facts, failure))
+            return false;
+        privateOwnedResultFacts = std::move(facts);
+    }
     const bool privateResultJit = privateScalarResultJit ||
         privateResourceResultJit;
     if (resultShape && !privateResultJit) {
@@ -1963,11 +1973,22 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     body->getFunctionType()->params().begin(),
                     body->getFunctionType()->params().end());
                 transferParams.insert(transferParams.end(),
-                                      {ptrTy, ptrTy, i32Ty});
+                                      {ptrTy, ptrTy, ptrTy, i32Ty});
                 auto* transfer = llvm::Function::Create(
                     llvm::FunctionType::get(i32Ty, transferParams, false),
                     llvm::Function::ExternalLinkage,
                     "__luna_private_ref_apply_transfer_test", *proof.mModule);
+                if (privateOwnedResultFacts &&
+                    (body->getName() !=
+                        privateOwnedResultFacts->sourceLinkageName ||
+                     resourcePayload->id.value !=
+                        privateOwnedResultFacts->errorTypeId ||
+                     transfer->getCallingConv() != llvm::CallingConv::C ||
+                     transfer->arg_size() != 6 ||
+                     transfer->getReturnType() != i32Ty)) {
+                    failure = "private Ref Result transfer differs from its frozen source facts";
+                    return false;
+                }
                 auto* transferEntry = llvm::BasicBlock::Create(
                     *proof.mCtx, "entry", transfer);
                 auto* checkOwner = llvm::BasicBlock::Create(
@@ -1996,29 +2017,57 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 for (size_t i = 0; i < function.params.size() + 1; ++i)
                     bodyArguments.push_back(&*argument++);
                 auto* tagOut = &*argument++;
+                auto* scalarOut = &*argument++;
                 auto* ownerOut = &*argument++;
                 auto* failAfterBody = &*argument;
-                auto* tagAddress = transferBuilder.CreatePtrToInt(
-                    tagOut, proof.mHelpers->sizeTy());
-                auto* ownerAddress = transferBuilder.CreatePtrToInt(
-                    ownerOut, proof.mHelpers->sizeTy());
-                auto* tagBeforeOwner = transferBuilder.CreateICmpULT(
-                    tagAddress, ownerAddress);
-                auto* gap = transferBuilder.CreateSelect(tagBeforeOwner,
-                    transferBuilder.CreateSub(ownerAddress, tagAddress),
-                    transferBuilder.CreateSub(tagAddress, ownerAddress));
-                auto* overlap = transferBuilder.CreateSelect(tagBeforeOwner,
-                    transferBuilder.CreateICmpULT(gap,
-                        llvm::ConstantInt::get(proof.mHelpers->sizeTy(),
-                                               sizeof(uint32_t))),
-                    transferBuilder.CreateICmpULT(gap,
-                        llvm::ConstantInt::get(proof.mHelpers->sizeTy(),
-                                               sizeof(void*))));
+                const auto disjoint = [&](llvm::Value* left, size_t leftSize,
+                                          llvm::Value* right, size_t rightSize) {
+                    auto* leftAddress = transferBuilder.CreatePtrToInt(
+                        left, proof.mHelpers->sizeTy());
+                    auto* rightAddress = transferBuilder.CreatePtrToInt(
+                        right, proof.mHelpers->sizeTy());
+                    auto* leftBeforeRight = transferBuilder.CreateICmpULT(
+                        leftAddress, rightAddress);
+                    auto* gap = transferBuilder.CreateSelect(leftBeforeRight,
+                        transferBuilder.CreateSub(rightAddress, leftAddress),
+                        transferBuilder.CreateSub(leftAddress, rightAddress));
+                    return transferBuilder.CreateSelect(leftBeforeRight,
+                        transferBuilder.CreateICmpUGE(gap,
+                            llvm::ConstantInt::get(proof.mHelpers->sizeTy(),
+                                                   leftSize)),
+                        transferBuilder.CreateICmpUGE(gap,
+                            llvm::ConstantInt::get(proof.mHelpers->sizeTy(),
+                                                   rightSize)));
+                };
                 auto* validPointers = transferBuilder.CreateAnd(
                     transferBuilder.CreateAnd(
                         transferBuilder.CreateIsNotNull(tagOut),
-                        transferBuilder.CreateIsNotNull(ownerOut)),
-                    transferBuilder.CreateNot(overlap));
+                        transferBuilder.CreateIsNotNull(scalarOut)),
+                    transferBuilder.CreateAnd(
+                        transferBuilder.CreateIsNotNull(ownerOut),
+                        transferBuilder.CreateAnd(
+                            disjoint(tagOut, sizeof(uint32_t),
+                                     scalarOut, sizeof(int32_t)),
+                            transferBuilder.CreateAnd(
+                                disjoint(tagOut, sizeof(uint32_t),
+                                         ownerOut, sizeof(void*)),
+                                disjoint(scalarOut, sizeof(int32_t),
+                                         ownerOut, sizeof(void*))))));
+                const auto aligned = [&](llvm::Value* pointer, size_t alignment) {
+                    auto* address = transferBuilder.CreatePtrToInt(
+                        pointer, proof.mHelpers->sizeTy());
+                    return transferBuilder.CreateICmpEQ(
+                        transferBuilder.CreateAnd(address,
+                            llvm::ConstantInt::get(proof.mHelpers->sizeTy(),
+                                                   alignment - 1)),
+                        llvm::ConstantInt::get(proof.mHelpers->sizeTy(), 0));
+                };
+                validPointers = transferBuilder.CreateAnd(validPointers,
+                    transferBuilder.CreateAnd(
+                        aligned(tagOut, alignof(uint32_t)),
+                        transferBuilder.CreateAnd(
+                            aligned(scalarOut, alignof(int32_t)),
+                            aligned(ownerOut, alignof(void*)))));
                 transferBuilder.CreateCondBr(validPointers, checkOwner, invalid);
                 transferBuilder.SetInsertPoint(checkOwner);
                 transferBuilder.CreateCondBr(
@@ -2043,6 +2092,11 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 transferBuilder.SetInsertPoint(scalarCommit);
                 transferBuilder.CreateStore(llvm::ConstantInt::get(i32Ty,
                     privateErrResourceResultJit ? 1 : 0), tagOut);
+                transferBuilder.CreateStore(
+                    transferBuilder.CreateIntCast(
+                        transferBuilder.CreateExtractValue(transferred, {1, 0}),
+                        i32Ty, true),
+                    scalarOut);
                 transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty, 0));
                 transferBuilder.SetInsertPoint(resource);
                 auto* transferredOwner = transferBuilder.CreateIntToPtr(

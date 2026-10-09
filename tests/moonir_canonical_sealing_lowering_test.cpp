@@ -360,7 +360,7 @@ bool exercisePrivateRefApplyJit(
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST == 3);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST == 4);
     using EntryTransfer = int32_t (*)(
-        const void*, void*, uint32_t*, void**, uint32_t);
+        const void*, void*, uint32_t*, int32_t*, void**, uint32_t);
     using EntryDrop = int32_t (*)(void**);
     const auto entryOne = reinterpret_cast<EntryOne>(
         const_cast<void*>(address));
@@ -415,10 +415,19 @@ bool exercisePrivateRefApplyJit(
             const auto callsBefore = privateRefJitAllDropProbeCalls;
             const auto dispatchesBefore = privateRefJitExecutions;
             uint32_t tag = 42;
+            constexpr int32_t unchangedScalar = 0x12345678;
+            int32_t scalar = unchangedScalar;
+            const auto rejectsOutput = [&](uint32_t* tagCell,
+                                           int32_t* scalarCell,
+                                           void** ownerCell) {
+                return entryTransfer(parent.opaque(),
+                    const_cast<void*>(handle.opaque()), tagCell, scalarCell,
+                    ownerCell, 0) == 1;
+            };
             void* occupied = reinterpret_cast<void*>(uintptr_t{1});
-            if (entryTransfer(parent.opaque(),
-                    const_cast<void*>(handle.opaque()), &tag, &occupied, 0) == 0 ||
-                tag != 42 || occupied != reinterpret_cast<void*>(uintptr_t{1}) ||
+            if (!rejectsOutput(&tag, &scalar, &occupied) ||
+                tag != 42 || scalar != unchangedScalar ||
+                occupied != reinterpret_cast<void*>(uintptr_t{1}) ||
                 privateRefJitExecutions != dispatchesBefore ||
                 privateRefJitAllDropProbeCalls != callsBefore) {
                 error = "private Result transfer mutated an occupied owner cell";
@@ -426,22 +435,38 @@ bool exercisePrivateRefApplyJit(
             }
             void* aliased = nullptr;
             void* partlyAliased = nullptr;
-            if (entryTransfer(parent.opaque(),
-                    const_cast<void*>(handle.opaque()),
-                    reinterpret_cast<uint32_t*>(&aliased), &aliased, 0) == 0 ||
+            alignas(void*) unsigned char unalignedOutput[2 * sizeof(void*)]{};
+            const auto unalignedOutputUnchanged = [&] {
+                for (unsigned char byte : unalignedOutput)
+                    if (byte != 0) return false;
+                return true;
+            };
+            if (!rejectsOutput(reinterpret_cast<uint32_t*>(&aliased),
+                               &scalar, &aliased) ||
                 aliased != nullptr ||
-                entryTransfer(parent.opaque(),
-                    const_cast<void*>(handle.opaque()),
-                    reinterpret_cast<uint32_t*>(
+                !rejectsOutput(reinterpret_cast<uint32_t*>(
                         reinterpret_cast<unsigned char*>(&partlyAliased) +
-                        sizeof(uint32_t)), &partlyAliased, 0) == 0 ||
+                        sizeof(uint32_t)), &scalar, &partlyAliased) ||
                 partlyAliased != nullptr ||
-                entryTransfer(parent.opaque(),
-                    const_cast<void*>(handle.opaque()), nullptr, &aliased, 0) == 0 ||
+                !rejectsOutput(&tag, reinterpret_cast<int32_t*>(&tag),
+                               &aliased) ||
+                !rejectsOutput(&tag, reinterpret_cast<int32_t*>(&aliased),
+                               &aliased) ||
+                !rejectsOutput(nullptr, &scalar, &aliased) ||
                 aliased != nullptr ||
-                entryTransfer(parent.opaque(),
-                    const_cast<void*>(handle.opaque()), &tag, nullptr, 0) == 0 ||
-                tag != 42 || privateRefJitExecutions != dispatchesBefore ||
+                !rejectsOutput(&tag, nullptr, &aliased) ||
+                !rejectsOutput(&tag, &scalar, nullptr) ||
+                !rejectsOutput(
+                    reinterpret_cast<uint32_t*>(unalignedOutput + 1),
+                    &scalar, &aliased) ||
+                !rejectsOutput(&tag,
+                    reinterpret_cast<int32_t*>(unalignedOutput + 1),
+                    &aliased) ||
+                !rejectsOutput(&tag, &scalar,
+                    reinterpret_cast<void**>(unalignedOutput + 1)) ||
+                tag != 42 || scalar != unchangedScalar ||
+                !unalignedOutputUnchanged() ||
+                privateRefJitExecutions != dispatchesBefore ||
                 privateRefJitAllDropProbeCalls != callsBefore ||
                 entryDrop(nullptr) == 0) {
                 error = "private Result transfer accepted invalid output storage";
@@ -450,8 +475,9 @@ bool exercisePrivateRefApplyJit(
             void* owner = nullptr;
             if (injectPostBodyFailure &&
                 (entryTransfer(parent.opaque(),
-                    const_cast<void*>(handle.opaque()), &tag, &owner, 1) != 3 ||
-                 tag != 42 || owner != nullptr ||
+                    const_cast<void*>(handle.opaque()), &tag, &scalar,
+                    &owner, 1) != 3 ||
+                 tag != 42 || scalar != unchangedScalar || owner != nullptr ||
                  privateRefJitAllDropProbeCalls !=
                      callsBefore + bodyDropCalls + *transferredDropCalls)) {
                 error = "private Result failed transfer did not clean before commit";
@@ -459,8 +485,11 @@ bool exercisePrivateRefApplyJit(
             }
             const auto callsAfterFailure = privateRefJitAllDropProbeCalls;
             if (entryTransfer(parent.opaque(),
-                    const_cast<void*>(handle.opaque()), &tag, &owner, 0) != 0 ||
+                    const_cast<void*>(handle.opaque()), &tag, &scalar,
+                    &owner, 0) != 0 ||
                 tag != static_cast<uint32_t>(expectedResult->first) ||
+                scalar != (*transferredDropCalls == 0
+                    ? expectedResult->second : unchangedScalar) ||
                 (owner != nullptr) != (*transferredDropCalls != 0) ||
                 privateRefJitAllDropProbeCalls !=
                     callsAfterFailure + bodyDropCalls) {
@@ -2971,8 +3000,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     privateRefJitError.clear();
     if (!exercisePrivateRefApplyJit(
             *tryApplyModule, *tryApplyErrResourceScalarOk,
-            privateRefJitError, 1, false, 1, false, false,
-            {1}, {}, std::pair<bool, int32_t>{true, 14}, 0)) {
+            privateRefJitError, 2, false, 2, false, false,
+            {1, 1}, {}, std::pair<bool, int32_t>{true, 14}, 0, true)) {
         std::cerr << privateRefJitError << '\n';
         return fail("Ref apply scalar host transfer failed private JIT execution");
     }

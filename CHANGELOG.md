@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Extended the private generated Ref/Result transfer entry to separate tag,
+  `i32` scalar and owner output cells. It now rejects null, overlapping or
+  misaligned cells before body dispatch, preserves all outputs on injected
+  failure, and writes the scalar on the scalar arm. Candidate owned-error
+  generation also checks its emitted test entry against frozen source facts.
+  The owner cell still holds a raw test pointer; this does not publish v3.
 - Derived candidate Native v3 Ref/owned-Result source facts from sealed MoonIR:
   exact function and Slot identities, Result/error type and bounded layout,
   and frozen Drop identity. The private Ref/apply fixture checks those facts

@@ -969,11 +969,12 @@ The trial was reverted; the default RuntimeDyld build then passed the same
 canonical test. Directly switching to this JITLink configuration is therefore
 not a validated fix for the intermittent RuntimeDyld failure.
 The private JIT now also has a separate host-transfer experiment for admitted
-resource Result shapes. Its status entry checks nonnull, nonoverlapping tag and
-owner output cells and requires an empty owner cell before calling the source
-body. The scalar branch writes only the tag; the resource branch writes the tag
-and then the owner pointer as its final ownership commit. A separate JIT Drop
-entry clears that cell before running the exact frozen recursive Drop and
+resource Result shapes. Its status entry checks nonnull, pairwise disjoint and
+aligned tag, `i32` scalar and owner output cells and requires an empty owner
+cell before calling the source body. The scalar branch writes tag and scalar;
+the resource branch writes the tag and then the owner pointer as its final
+ownership commit. A separate JIT Drop entry clears that cell before running
+the exact frozen recursive Drop and
 deallocation sequence. The private LLVM proof requires one body call, permits
 cleanup calls only on the injected failure branch, and checks both Drop call
 sequences. A three-struct Err
@@ -982,10 +983,10 @@ host Drop, then observes
 `79, 81, 83` exactly once per transferred owner; duplicate Drop fails. A
 resource Ok fixture also transfers and Drops its owner once per call. Scalar
 Ok and Err counterpart fixtures return a null owner and no resource Drop.
-Invalid occupied, aliased
-and null output storage fails before body dispatch without changing outputs.
+Invalid occupied, aliased, misaligned and null output storage fails before body
+dispatch without changing outputs.
 An injected failure after the source body returns a nonnull resource leaves
-both outputs untouched and runs the same exact cleanup inside the JIT before
+all three outputs untouched and runs the same exact cleanup inside the JIT before
 returning status `3`. On the second successful transfer, the host defers Drop,
 releases the borrowed Ref handle and observes its generation pin expire with
 no extra resource Drop. It then releases the original JIT handle while a
@@ -1174,6 +1175,16 @@ target fail closed; a scalar Result error is outside this shape. These facts
 contain the source body's linkage, not a v3 host wrapper entry or pointer.
 Luna still emits no v3 row or callable generation profile.
 
+The private generated transfer entry now consumes those source facts for the
+candidate owned-error shape and checks its emitted C calling convention,
+argument count, result type, source linkage and error type. Its six arguments
+are parent, borrowed Ref, tag output, scalar output, raw owner output and a
+test-only failure-injection flag. The three output cells are checked for null,
+overlap and alignment before body dispatch; scalar success writes the `i32`
+cell, while injected failures preserve all outputs. This remains a JIT test
+entry: parent/Ref preflight, a Runtime-owned opaque handle, production status
+codes and a v3 descriptor binding are still required.
+
 On current 64-bit targets the v3 export/library records are 136/96 bytes;
 `entry_abi`, error size, first identifier and entry pointer begin at offsets
 16, 32, 48 and 128. Its SHA-256 digest uses the v2 sorted unique, little-endian
@@ -1214,10 +1225,11 @@ then releases the lease. A repeated Drop on the cleared cell is distinguishable
 from a live Drop; copied, stale or foreign raw addresses are not valid handles.
 The private fixture now binds owner and JIT lease in one noncopyable test
 carrier and proves deferred exactly-once Drop after the borrowed Ref pin
-expires, including Windows ASAN. The next implementation step is a generated
-host wrapper with a fixed C prototype, separate status and Result tag, scalar
-output and unique owner-handle cell. Its failure paths must retain the JIT
-lease through cleanup. Only after verifying the generated wrapper and binding
+expires, including Windows ASAN. The next production step is a generated
+host wrapper with a fixed C prototype, parent/Ref preflight, separate status
+and Result tag, scalar output and unique owner-handle cell. Its failure paths
+must retain the JIT lease through cleanup. Only after verifying the generated
+wrapper and binding
 its distinct entry and linkage to the frozen source facts can the producer emit
 a v3 row and propagate its typed proof to `PinnedBinding`. Generated entry tests
 for every failure
@@ -1485,10 +1497,10 @@ not a public ABI decision or stable-release approval:
    passes. A narrow versioned public carrier and failure-status candidate is
    specified above. Native v1 now rejects cleanup-bearing public parameters
    and returns before producing an artifact. Existing v2 covers only `i32()`.
-   A validation-only parallel v3 row and loader check now bind candidate Ref
-   and Result facts; next, derive and emit those facts from the frozen
-   signature and verified generated wrapper before admitting this shape
-   beyond the private test entry.
+   A validation-only parallel v3 row and loader check bind candidate Ref and
+   Result facts. Source-fact derivation now checks the frozen signature and
+   the private generated transfer entry's shape; emitting a v3 row still
+   requires a verified production wrapper and Runtime owner handle.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches
@@ -1496,8 +1508,9 @@ not a public ABI decision or stable-release approval:
    cleanup and ordered Drop/deallocation proof. A bounded three-node fork with
    two independently owned fields now has ordered `?` Err and injected-failure
    cleanup evidence on both local platforms, including focused ASAN runs.
-   Larger or wider owned-field graphs remain outside the proof. A test-only host-transfer entry now proves
-   the empty owner-cell preflight, tag/owner commit, a separately retained
+   Larger or wider owned-field graphs remain outside the proof. A test-only
+   host-transfer entry now proves three disjoint output cells, the empty
+   owner-cell preflight, tag/scalar or tag/owner commit, a separately retained
    JIT lease after the borrowed Ref pin expires, and explicit exactly-once
    Drop for the three-struct chain. A public host
    ownership carrier and production post-body failure statuses still need a
@@ -1530,7 +1543,7 @@ not a public ABI decision or stable-release approval:
    export symbol metadata, CodeGenerator and dropGlue together; the existing
    check/transfer/drop tests cover native carrier behavior but do not prove a
    published source entry.
-   The separate test-only tag/owner-cell and JIT Drop entries now exercise the
+   The separate test-only tag/scalar/owner-cell and JIT Drop entries exercise the
    candidate commit and lease rule. Before publishing a resource return
    carrier, make the owner and JIT lease one lifetime unit; define status and
    layout versioning, teardown behavior, and the

@@ -739,17 +739,18 @@ JITLink。ASAN canonical 的一次运行在更早的 compiled-host 夹具链接�
 `.pdata` 到 `.text` 超出 `Pointer32` fixup 范围。该实验改动已撤回；默认
 RuntimeDyld 构建随后通过同一 canonical 测试。因此直接切换此 JITLink 配置
 不能作为已验证的间歇性 RuntimeDyld 故障修复。
-私有 JIT 另有一组仅测试用的宿主所有权交接入口。状态入口先检查 tag／owner 输出
-地址非空、互不重叠且 owner cell 为空，再调用源码 body。标量分支只写 tag；资源
+私有 JIT 另有一组仅测试用的宿主所有权交接入口。状态入口先检查 tag／`i32`
+标量／owner 三个输出地址非空、两两不重叠、对齐且 owner cell 为空，再调用源码
+body。标量分支写 tag 与标量；资源
 分支先写 tag，最后写 owner 指针作为所有权提交点。独立 JIT Drop 入口先清空 cell，
 再按冻结的递归 Drop 与 deallocation 顺序清理。私有 LLVM 检查要求交接入口只调用
 一次 body，且只有注入失败分支可额外调用清理函数，并核对两条 Drop 调用链。
 三层 struct Err 夹具证实成功交接
 的 owner 在宿主显式 Drop 前不被清理，之后每个 owner 恰好观察 `79, 81, 83` 一次；
 重复 Drop 失败。资源 Ok 分支也每次交接并 Drop 一个 owner；对应的标量 Ok 与 Err
-夹具保持 owner 为空且不执行资源 Drop。已占用、重叠或
+夹具保持 owner 为空且不执行资源 Drop。已占用、重叠、未对齐或
 空输出地址在 body 分派前失败且不改动输出。注入的失败在源码 body 返回非空资源后
-触发，两个输出保持原值，JIT 在返回状态 `3` 前执行同样的精确清理。第二次成功
+触发，三个输出保持原值，JIT 在返回状态 `3` 前执行同样的精确清理。第二次成功
 交接后，宿主延迟 Drop，先释放借用 Ref handle，并确认 generation pin 失效而资源
 Drop 次数不变。随后释放原始 JIT 句柄；不可复制的测试 carrier 将 owner、精确
 Drop 入口和共享 LLJIT lease 绑定，宿主恰好执行一次 Drop 后该 lease 才结束。
@@ -893,6 +894,13 @@ producer 现可在私有单 Ref、`Result<i32, E>` fixture 上从封闭的 MoonI
 此形态内。这些事实中的 linkage 属于源码函数体，不是 v3 宿主 wrapper 的入口
 或指针。Luna 仍不生成 v3 行，也不赋予可调用的 generation profile。
 
+私有生成的 transfer 入口现对候选拥有型 Err 形态消费这些源码事实，核对生成的 C
+调用约定、参数数目、返回类型、源码 linkage 及错误类型。它的六个参数依次是
+parent、借用 Ref、tag 输出、标量输出、裸 owner 输出和仅测试用的故障注入标志。
+body 分派前三个输出 cell 均检查空地址、相互重叠和对齐；标量成功时写入 `i32`
+cell，注入失败时三个输出保持不变。这仍是 JIT 测试入口：parent／Ref 预检、
+Runtime 所有的 opaque handle、生产状态码及 v3 descriptor 绑定尚未实现。
+
 当前 64 位目标的 v3 export／library 记录大小为 136／96 字节；`entry_abi`、
 错误值大小、首个标识符与入口指针的偏移依次为 16、32、48、128。SHA-256 摘要
 沿用 v2 的排序去重及小端长度 framing，但行前缀改为
@@ -925,9 +933,10 @@ handle cell 为空。入口前失败不修改输出或源 owner。body 启动后
 最后释放 lease。同一已清空 cell 的重复 Drop 应与有效 Drop 可区分；复制的、
 失效的或外来的裸地址不是有效 handle。私有夹具现用一个不可复制的测试 carrier
 绑定 owner 与 JIT lease，并在借用 Ref pin 失效后证明延迟且恰好一次的 Drop，
-Windows ASAN 亦通过。下一步先实现具有固定 C 原型、独立状态／Result tag、
-标量输出及唯一 owner-handle cell 的生成宿主 wrapper，并在失败清理期间保持
-JIT lease。核验生成的 wrapper 并把其独立入口与 linkage 绑定到冻结源码事实后，
+Windows ASAN 亦通过。下一步是实现具有固定 C 原型、parent／Ref 预检、独立
+状态／Result tag、标量输出及唯一 owner-handle cell 的生产宿主 wrapper，并在
+失败清理期间保持 JIT lease。核验生成的 wrapper 并把其独立入口与 linkage 绑定
+到冻结源码事实后，
 producer 才能生成 v3 行并把类型化证明传至 `PinnedBinding`。Runtime 所有的
 handle／Drop 操作和覆盖各失败阶段的生成入口测试完成后，才能开放窄形态的
 verifier／export 门禁。不能
@@ -1127,15 +1136,16 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    carrier 连同 JIT lease 保持有效；Windows ASAN 聚焦测试通过。上文已列出
    带版本的公开 carrier 与失败状态候选。Native v1 现于生成 artifact 前拒绝
    需清理的公开参数和返回值。现有 v2 仅覆盖 `i32()`；并行 v3 候选行及 loader
-   校验现已覆盖 Ref 与 Result metadata，但尚无 Luna producer。下一步从冻结
-   签名和已验证 wrapper 推导并发射这些信息，再考虑开放此形状。
+   校验现已覆盖 Ref 与 Result metadata。源码事实推导已核对冻结签名及私有生成
+   transfer 入口形态；发射 v3 行仍须验证生产 wrapper 与 Runtime owner handle。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。
    两个独立拥有字段组成的三节点有界分叉，现也在两端普通及 ASAN 聚焦测试中
    验证 `?` Err 和注入失败的有序清理。更大或更宽的拥有型字段图仍在证明范围外。
    仅测试用的宿主交接入口已验证空 owner
-   cell 预检、tag／owner 提交、借用 Ref pin 失效后单独保留 JIT lease，以及三层
+   cell 预检、三个互不重叠的输出 cell、tag／scalar 或 tag／owner 提交、借用 Ref
+   pin 失效后单独保留 JIT lease，以及三层
    链的显式恰好一次 Drop。
    注入的 body 返回后失败现证明未提交 owner 的清理；公开宿主所有权 carrier 与
    生产失败状态仍需契约及可执行证明。发布可返回失败的
@@ -1158,7 +1168,8 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    metadata、CodeGenerator 和 dropGlue；
    现有 check／transfer／drop 测试覆盖 native carrier 行为，却不能证明源码入口
    已发布。
-   独立的仅测试用 tag／owner-cell 与 JIT Drop 入口现已验证候选提交及 lease 规则。
+   独立的仅测试用 tag／scalar／owner-cell 与 JIT Drop 入口已验证候选提交及
+   lease 规则。
    发布资源返回 carrier 前须把 owner 与 JIT lease 合并为一个寿命单元，并定义
    状态与布局版本、JIT 关闭行为，以及采用此
    提交前清理的真实失败条件。注入的 body 返回后失败已有可执行清理证明，
