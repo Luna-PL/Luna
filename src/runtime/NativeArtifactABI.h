@@ -96,6 +96,58 @@ typedef struct LunaNativeLibraryDescriptorV2 {
 typedef const LunaNativeLibraryDescriptorV2*
     (*LunaNativeLibraryDescriptorFnV2)(void);
 
+// Optional parallel candidate for one Ref ingress and owned Result return.
+// This metadata is validation-only: no public host entry or owner-handle
+// invocation is enabled by its presence. V1/V2 layouts remain unchanged.
+#define LUNA_NATIVE_DESCRIPTOR_MAGIC_V3 0x4c4e4433u /* "LND3" */
+#define LUNA_NATIVE_DESCRIPTOR_ABI_V3 3u
+#define LUNA_NATIVE_ENTRY_ABI_REF_RESULT_OWNER_V1 2u
+#define LUNA_NATIVE_REF_SHARED_BORROW_V1 1u
+#define LUNA_NATIVE_RESULT_I32_OWNED_ERROR_V1 1u
+#define LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1 1u
+#define LUNA_NATIVE_DESCRIPTOR_DIGEST_SIZE_V3 32u
+
+typedef struct LunaNativeExportDescriptorV3 {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t declaration_kind;
+    uint32_t flags;
+    uint32_t entry_abi;
+    uint32_t ref_mode;
+    uint32_t result_mode;
+    uint32_t status_domain;
+    uint64_t error_value_size;
+    uint64_t error_value_alignment;
+    const char* symbol_id;
+    const char* contract_id;
+    const char* linkage_name;
+    const char* ref_slot_symbol_id;
+    const char* ref_slot_contract_id;
+    const char* result_type_id;
+    const char* error_type_id;
+    const char* error_abi_layout_id;
+    const char* error_drop_symbol_id;
+    const char* error_drop_contract_id;
+    const void* entry;
+} LunaNativeExportDescriptorV3;
+
+typedef struct LunaNativeLibraryDescriptorV3 {
+    uint32_t magic;
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t reserved_zero;
+    const char* package_id;
+    const char* package_version;
+    const char* target_abi;
+    const char* compiler_identity;
+    uint64_t export_count;
+    const LunaNativeExportDescriptorV3* exports;
+    uint8_t export_descriptor_digest[LUNA_NATIVE_DESCRIPTOR_DIGEST_SIZE_V3];
+} LunaNativeLibraryDescriptorV3;
+
+typedef const LunaNativeLibraryDescriptorV3*
+    (*LunaNativeLibraryDescriptorFnV3)(void);
+
 // Pointer-free proof record embedded in a platform-native section. The
 // artifact digest is SHA-256 over the complete file with this entire record
 // replaced by zero bytes. This removes the proof section's self-reference
@@ -168,5 +220,15 @@ LUNA_NATIVE_LAYOUT_ASSERT(sizeof(LunaNativeLibraryDescriptorV2) == 96 &&
                           offsetof(LunaNativeLibraryDescriptorV2,
                                    export_descriptor_digest) == 64,
                           "Native v2 library layout changed");
+LUNA_NATIVE_LAYOUT_ASSERT(sizeof(LunaNativeExportDescriptorV3) == 136 &&
+                          offsetof(LunaNativeExportDescriptorV3, entry_abi) == 16 &&
+                          offsetof(LunaNativeExportDescriptorV3, error_value_size) == 32 &&
+                          offsetof(LunaNativeExportDescriptorV3, symbol_id) == 48 &&
+                          offsetof(LunaNativeExportDescriptorV3, entry) == 128,
+                          "Native v3 export layout changed");
+LUNA_NATIVE_LAYOUT_ASSERT(sizeof(LunaNativeLibraryDescriptorV3) == 96 &&
+                          offsetof(LunaNativeLibraryDescriptorV3,
+                                   export_descriptor_digest) == 64,
+                          "Native v3 library layout changed");
 #endif
 #undef LUNA_NATIVE_LAYOUT_ASSERT

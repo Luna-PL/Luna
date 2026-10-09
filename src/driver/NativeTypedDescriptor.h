@@ -47,4 +47,21 @@ digestNativeTypedExports(
     return hash.final();
 }
 
+// V3 uses the same length-framed SHA-256 list algorithm as V2 but a distinct
+// row domain. These ten UTF-8 identifiers are ordered exactly as in the V3
+// C record, from symbol_id through error_drop_contract_id.
+inline std::string canonicalNativeOwnedResultExportV3(
+    uint32_t kind, uint32_t flags, uint32_t entryAbi, uint32_t refMode,
+    uint32_t resultMode, uint32_t statusDomain, uint64_t errorSize,
+    uint64_t errorAlignment, const std::array<std::string, 10>& identifiers) {
+    std::string row = "LUNA_NATIVE_EXPORT_V3\n" +
+        std::to_string(kind) + '\n' + std::to_string(flags) + '\n' +
+        std::to_string(entryAbi) + '\n' + std::to_string(refMode) + '\n' +
+        std::to_string(resultMode) + '\n' + std::to_string(statusDomain) + '\n' +
+        std::to_string(errorSize) + '\n' + std::to_string(errorAlignment);
+    for (const auto& identifier : identifiers)
+        row += '\n' + identifier;
+    return row;
+}
+
 } // namespace luna::driver

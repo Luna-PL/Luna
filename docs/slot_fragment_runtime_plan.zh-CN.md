@@ -873,8 +873,25 @@ Result 类型、`E` 的布局与 Drop 身份、调用约定、状态域、函数
 绑定进已验证的导出摘要。固定的 lookup 视图在调用期间保留代码。这是候选契约，
 不是已发布 ABI，也不改变当前源码导出门禁。
 现有并行 Native v2 query 已仅对 `C_I32_NOARGS_V1` 建立证明；其精确行大小、
-profile 和摘要编码不能携带 Ref 目标或拥有型 Result 布局。因此下一项 metadata
-实验须使用新的并行 query 版本，暂称 v3，同时保留 v1／v2 的可读性。
+profile 和摘要编码不能携带 Ref 目标或拥有型 Result 布局。因此 metadata
+实验使用新的并行 v3 query，同时保留 v1／v2 的可读性。
+并行 v3 metadata 候选行及 loader 校验现已实现，但 Luna 尚不生成该行，也不把
+它赋予可调用的 generation profile。精确行绑定公开函数的 SymbolId／ContractId／
+linkage 和入口、共享借用 Ref 的 SlotId／ContractId、Result 与 `E` TypeId、
+`E` 的 AbiLayoutId 与大小／对齐、Drop SymbolId／ContractId、入口 profile 和
+状态域。loader 要求精确行大小与已知 profile，检查 UTF-8 字段和布局边界，
+对照已验证 v1 的 callable 身份与入口指针，禁止与 v2 重叠，并核对独立域标记的
+行摘要。独立链接并封装的 C fixture 证明有效 metadata 在 `GenerationBinding`
+中仍未类型化；错误行大小、未知 profile、Ref Slot 摘要变化及 v1 身份变化均在
+离线 proof 成功后被 loader 拒绝。这只验证候选记录，不证明生成的 Ref／Result
+入口、宿主 owner handle、失败状态行为或源码发布。
+当前 64 位目标的 v3 export／library 记录大小为 136／96 字节；`entry_abi`、
+错误值大小、首个标识符与入口指针的偏移依次为 16、32、48、128。SHA-256 摘要
+沿用 v2 的排序去重及小端长度 framing，但行前缀改为
+`LUNA_NATIVE_EXPORT_V3\n`。kind、flags、入口 ABI、Ref 模式、Result 模式、
+状态域、错误值大小和对齐以十进制书写，后接按 C 字段顺序排列的十个标识符，
+字段之间用 `\n` 分隔。状态域编号只标识候选域；具体失败码及可调用的 C
+函数原型须在发布前确定。
 
 建议的输出包含 tag、一个 `i32` 标量 cell 和一个空的 opaque owner-handle
 cell；调用状态与源码 Result tag 分开。body 分派前检查所有输出地址和空 handle
@@ -1098,8 +1115,9 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    由宿主恰好一次 Drop。第二个 owner 在借用 Ref pin 结束后由不可复制的测试
    carrier 连同 JIT lease 保持有效；Windows ASAN 聚焦测试通过。上文已列出
    带版本的公开 carrier 与失败状态候选。Native v1 现于生成 artifact 前拒绝
-   需清理的公开参数和返回值。现有 v2 仅覆盖 `i32()`；下一步定义并行 v3 行与
-   loader 校验，核对精确 Ref 与 Result 信息，再考虑开放此形状。
+   需清理的公开参数和返回值。现有 v2 仅覆盖 `i32()`；并行 v3 候选行及 loader
+   校验现已覆盖 Ref 与 Result metadata，但尚无 Luna producer。下一步从冻结
+   签名和已验证 wrapper 推导并发射这些信息，再考虑开放此形状。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added a validation-only parallel Native v3 candidate row for one shared Ref
+  ingress and `Result<i32, owned E>` return. It binds target Slot/Contract,
+  Result/error type and layout, Drop identity, status domain and v1 callable
+  identity through a separate descriptor digest. Independently linked and
+  sealed C fixtures check valid metadata and reject bad size, profile, digest
+  and v1 identity; v3 does not yet create a callable generation profile.
 - Closed the matching Native v1 publication gap for owned parameters. A real
   `OwnedInput` package previously built and sealed an exported by-value
   callable without a host ownership carrier. Descriptor emission now rejects

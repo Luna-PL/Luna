@@ -71,6 +71,32 @@ class LibraryDescriptorV2(ctypes.Structure):
     ]
 
 
+class ExportDescriptorV3(ctypes.Structure):
+    _fields_ = [
+        ("abi_version", ctypes.c_uint32),
+        ("struct_size", ctypes.c_uint32),
+        ("declaration_kind", ctypes.c_uint32),
+        ("flags", ctypes.c_uint32),
+        ("entry_abi", ctypes.c_uint32),
+        ("ref_mode", ctypes.c_uint32),
+        ("result_mode", ctypes.c_uint32),
+        ("status_domain", ctypes.c_uint32),
+        ("error_value_size", ctypes.c_uint64),
+        ("error_value_alignment", ctypes.c_uint64),
+        ("symbol_id", ctypes.c_char_p),
+        ("contract_id", ctypes.c_char_p),
+        ("linkage_name", ctypes.c_char_p),
+        ("ref_slot_symbol_id", ctypes.c_char_p),
+        ("ref_slot_contract_id", ctypes.c_char_p),
+        ("result_type_id", ctypes.c_char_p),
+        ("error_type_id", ctypes.c_char_p),
+        ("error_abi_layout_id", ctypes.c_char_p),
+        ("error_drop_symbol_id", ctypes.c_char_p),
+        ("error_drop_contract_id", ctypes.c_char_p),
+        ("entry", ctypes.c_void_p),
+    ]
+
+
 def text(value: bytes) -> str:
     if value is None:
         raise ValueError("null Native descriptor string")
@@ -99,6 +125,17 @@ def main() -> int:
             "df3f619804a92fdb4057192dc43dd748"
             "ea778adc52bc498ce80524c014b81119"):
         return 26
+    canonical_v3 = "\n".join([
+        "LUNA_NATIVE_EXPORT_V3", "1", "1", "2", "1", "1", "1", "8", "8",
+        "symbol:legacy-answer", "contract:legacy-v1", "legacy_answer",
+        "symbol:slot-checkpoint", "contract:slot-checkpoint",
+        "type:result-i32-owned", "type:owned-error",
+        "layout:owned-error-v1", "symbol:drop-owned-error",
+        "contract:drop-owned-error"])
+    if digest_list([canonical_v3]).hex() != (
+            "639257db39d219ba62573d28e5658d09"
+            "196d0a3c5d17c441fc3c4e38383e5737"):
+        return 30
     if ctypes.sizeof(ctypes.c_void_p) == 8 and (
             ctypes.sizeof(ExportDescriptorV2) != 56 or
             ExportDescriptorV2.entry_abi.offset != 16 or
@@ -109,6 +146,13 @@ def main() -> int:
             LibraryDescriptorV2.exports.offset != 56 or
             LibraryDescriptorV2.export_descriptor_digest.offset != 64):
         return 27
+    if ctypes.sizeof(ctypes.c_void_p) == 8 and (
+            ctypes.sizeof(ExportDescriptorV3) != 136 or
+            ExportDescriptorV3.entry_abi.offset != 16 or
+            ExportDescriptorV3.error_value_size.offset != 32 or
+            ExportDescriptorV3.symbol_id.offset != 48 or
+            ExportDescriptorV3.entry.offset != 128):
+        return 31
     artifact = pathlib.Path(sys.argv[1]).resolve()
     library = ctypes.CDLL(str(artifact))
     query = library.luna_native_library_descriptor_v1

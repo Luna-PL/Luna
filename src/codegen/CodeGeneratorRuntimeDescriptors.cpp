@@ -556,7 +556,8 @@ bool CodeGenerator::emitNativeLibraryDescriptor(
     const std::vector<luna::driver::NativeExportSpec>& exports) {
     if (!mModule ||
         mModule->getFunction("luna_native_library_descriptor_v1") ||
-        mModule->getFunction("luna_native_library_descriptor_v2")) {
+        mModule->getFunction("luna_native_library_descriptor_v2") ||
+        mModule->getFunction("luna_native_library_descriptor_v3")) {
         error("reserved Native descriptor symbol is already defined");
         return false;
     }

@@ -1149,8 +1149,29 @@ call. This is a candidate contract, not a published ABI or a change to the
 current source export gate.
 The existing parallel Native v2 query already proves only `C_I32_NOARGS_V1`;
 its exact row size, profile and digest spelling cannot carry a Ref target or
-owned Result layout. The next metadata experiment therefore needs a new
-parallel query version, provisionally v3, while v1 and v2 remain readable.
+owned Result layout. The metadata experiment therefore uses a new parallel
+v3 query while v1 and v2 remain readable.
+That parallel v3 metadata candidate and loader check now exist without a Luna
+producer or callable generation profile. Its exact row binds the public
+function's SymbolId/ContractId/linkage and entry, shared Ref SlotId/ContractId,
+Result and `E` TypeIds, `E` AbiLayoutId plus size/alignment, Drop
+SymbolId/ContractId, entry profile and status domain. The loader requires an
+exact v3 row size and known profile, checks bounded UTF-8 fields and layout
+bounds, matches the callable identity and entry pointer against verified v1,
+forbids overlap with v2, and verifies a separate domain-tagged row digest.
+An independently linked and sealed C fixture proves valid metadata remains
+unprofiled in `GenerationBinding`; bad row size, unknown profile, changed Ref
+Slot digest and changed v1 identity are rejected after offline proof succeeds.
+This validates the candidate record only. No generated Ref/Result entry, host
+owner handle, failure-status behavior or source publication is claimed.
+On current 64-bit targets the v3 export/library records are 136/96 bytes;
+`entry_abi`, error size, first identifier and entry pointer begin at offsets
+16, 32, 48 and 128. Its SHA-256 digest uses the v2 sorted unique, little-endian
+length framing but a distinct `LUNA_NATIVE_EXPORT_V3\n` row prefix. Decimal
+kind, flags, entry ABI, Ref mode, Result mode, status domain, error size and
+alignment precede the ten identifiers in C field order, separated by `\n`.
+The status-domain number only names the candidate domain; numeric failure
+codes and the callable C prototype remain to be fixed before publication.
 
 The proposed result output is a tag, an `i32` scalar cell and one empty
 opaque owner-handle cell. The invocation status is separate from the source
@@ -1183,11 +1204,11 @@ then releases the lease. A repeated Drop on the cleared cell is distinguishable
 from a live Drop; copied, stale or foreign raw addresses are not valid handles.
 The private fixture now binds owner and JIT lease in one noncopyable test
 carrier and proves deferred exactly-once Drop after the borrowed Ref pin
-expires, including Windows ASAN. Publication still requires a versioned
-export row and loader check, propagation to `PinnedBinding`, a Runtime-owned
-handle and status implementation, and generated entry tests for every failure
-phase before opening the narrow verifier/export gate. Native v1 rows must not
-be extended in place.
+expires, including Windows ASAN. Publication still requires producer-side
+derivation of the candidate v3 row from verified frozen facts, propagation to
+`PinnedBinding`, a Runtime-owned handle and status implementation, and
+generated entry tests for every failure phase before opening the narrow
+verifier/export gate. Native v1 rows must not be extended in place.
 An audit build exposed a nearer fail-closed requirement: Native v1 accepted
 an exported `Result<i32, OwnedError>` and sealed a library and trust record
 even though no host carrier could release its owner. Descriptor emission now
@@ -1450,9 +1471,11 @@ not a public ABI decision or stable-release approval:
    its JIT lease after the borrowed Ref pin expires; focused Windows ASAN
    passes. A narrow versioned public carrier and failure-status candidate is
    specified above. Native v1 now rejects cleanup-bearing public parameters
-   and returns before producing an artifact. Existing v2 covers only `i32()`; next,
-   define a parallel v3 row and loader checks for exact Ref and Result facts
-   before admitting this shape beyond the private test entry.
+   and returns before producing an artifact. Existing v2 covers only `i32()`.
+   A validation-only parallel v3 row and loader check now bind candidate Ref
+   and Result facts; next, derive and emit those facts from the frozen
+   signature and verified generated wrapper before admitting this shape
+   beyond the private test entry.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

@@ -27,6 +27,8 @@ int prepareIndependentFixture(int argc, char** argv) {
         std::string(argv[1]) == "--prepare-legacy-invalid-utf8";
     const bool typedV2 =
         std::string(argv[1]) == "--prepare-v2-fixture";
+    const bool typedV3 =
+        std::string(argv[1]) == "--prepare-v3-fixture";
     const std::string targetAbi = llvm::sys::getProcessTriple();
     if (targetAbi.empty() || targetAbi.size() >= 128)
         return fail("independent Native fixture target ABI exceeds its bounded field");
@@ -61,6 +63,33 @@ int prepareIndependentFixture(int argc, char** argv) {
             LUNA_NATIVE_EXPORT_CALLABLE_V1,
             LUNA_NATIVE_ENTRY_ABI_C_I32_NOARGS_V1,
             "symbol:legacy-answer", "contract:legacy-v1", "legacy_answer");
+        const auto digest = luna::driver::digestNativeTypedExports({canonical});
+        std::copy(digest.begin(), digest.end(), position);
+    }
+    if (typedV3) {
+        const std::string marker = "V3_DIGEST_PLACEHOLDER_0123456789";
+        static_assert(sizeof("V3_DIGEST_PLACEHOLDER_0123456789") - 1 ==
+                      LUNA_NATIVE_DESCRIPTOR_DIGEST_SIZE_V3);
+        const auto position = std::search(
+            bytes.begin(), bytes.end(), marker.begin(), marker.end());
+        if (position == bytes.end() ||
+            std::search(position + 1, bytes.end(), marker.begin(),
+                        marker.end()) != bytes.end())
+            return fail("independent v3 fixture has no unique descriptor digest placeholder");
+        const std::array<std::string, 10> identifiers = {
+            "symbol:legacy-answer", "contract:legacy-v1", "legacy_answer",
+            "symbol:slot-checkpoint", "contract:slot-checkpoint",
+            "type:result-i32-owned", "type:owned-error",
+            "layout:owned-error-v1", "symbol:drop-owned-error",
+            "contract:drop-owned-error"};
+        const auto canonical = luna::driver::canonicalNativeOwnedResultExportV3(
+            LUNA_NATIVE_DECLARATION_FUNCTION_V1,
+            LUNA_NATIVE_EXPORT_CALLABLE_V1,
+            LUNA_NATIVE_ENTRY_ABI_REF_RESULT_OWNER_V1,
+            LUNA_NATIVE_REF_SHARED_BORROW_V1,
+            LUNA_NATIVE_RESULT_I32_OWNED_ERROR_V1,
+            LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1,
+            8, 8, identifiers);
         const auto digest = luna::driver::digestNativeTypedExports({canonical});
         std::copy(digest.begin(), digest.end(), position);
     }
@@ -366,7 +395,8 @@ int generationSwitch(int argc, char** argv) {
 int main(int argc, char** argv) {
     if (argc > 1 && (std::string(argv[1]) == "--prepare-legacy" ||
                      std::string(argv[1]) == "--prepare-legacy-invalid-utf8" ||
-                     std::string(argv[1]) == "--prepare-v2-fixture"))
+                     std::string(argv[1]) == "--prepare-v2-fixture" ||
+                     std::string(argv[1]) == "--prepare-v3-fixture"))
         return prepareIndependentFixture(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--generation-switch")
         return generationSwitch(argc, argv);

@@ -460,6 +460,104 @@ bool validateNativeDescriptorV2(
     return true;
 }
 
+bool validateNativeDescriptorV3(
+    void* handle, const NativeProofInfo& proof,
+    const LunaNativeLibraryDescriptorV1* v1,
+    const LunaNativeLibraryDescriptorV2* v2, std::string& error) {
+    auto* rawQuery = loadNativeSymbol(
+        handle, "luna_native_library_descriptor_v3");
+    if (!rawQuery) return true;
+    const auto query = reinterpret_cast<LunaNativeLibraryDescriptorFnV3>(rawQuery);
+    const auto* descriptor = query();
+    if (!descriptor || descriptor->magic != LUNA_NATIVE_DESCRIPTOR_MAGIC_V3 ||
+        descriptor->abi_version != LUNA_NATIVE_DESCRIPTOR_ABI_V3 ||
+        descriptor->struct_size != sizeof(LunaNativeLibraryDescriptorV3) ||
+        descriptor->reserved_zero != 0) {
+        error = "verified Native image returned an invalid v3 library descriptor";
+        return false;
+    }
+    std::string packageId, packageVersion, targetAbi, compilerIdentity;
+    if (!descriptorString(descriptor->package_id, packageId) ||
+        !descriptorString(descriptor->package_version, packageVersion) ||
+        !descriptorString(descriptor->target_abi, targetAbi) ||
+        !descriptorString(descriptor->compiler_identity, compilerIdentity) ||
+        packageId != proof.packageId || packageVersion != proof.packageVersion ||
+        targetAbi != proof.targetAbi || compilerIdentity != proof.compilerIdentity) {
+        error = "Native v3 library descriptor identity does not match its proof";
+        return false;
+    }
+    if (descriptor->export_count > v1->export_count ||
+        descriptor->export_count > MaxNativeExportCount ||
+        (descriptor->export_count != 0 && !descriptor->exports)) {
+        error = "Native v3 library descriptor has an invalid export table";
+        return false;
+    }
+    std::unordered_map<std::string, const LunaNativeExportDescriptorV1*> oldRows;
+    oldRows.reserve(static_cast<size_t>(v1->export_count));
+    for (uint64_t index = 0; index < v1->export_count; ++index)
+        oldRows.emplace(v1->exports[index].symbol_id, &v1->exports[index]);
+    std::set<std::string> v2Symbols;
+    if (v2)
+        for (uint64_t index = 0; index < v2->export_count; ++index)
+            v2Symbols.insert(v2->exports[index].symbol_id);
+    std::set<std::string> symbols, linkages;
+    std::vector<std::string> canonicalRows;
+    canonicalRows.reserve(static_cast<size_t>(descriptor->export_count));
+    for (uint64_t index = 0; index < descriptor->export_count; ++index) {
+        const auto& row = descriptor->exports[index];
+        const char* rawIdentifiers[] = {
+            row.symbol_id, row.contract_id, row.linkage_name,
+            row.ref_slot_symbol_id, row.ref_slot_contract_id,
+            row.result_type_id, row.error_type_id, row.error_abi_layout_id,
+            row.error_drop_symbol_id, row.error_drop_contract_id};
+        std::array<std::string, 10> identifiers;
+        bool validIdentifiers = true;
+        for (size_t field = 0; field < identifiers.size(); ++field)
+            validIdentifiers &= descriptorString(
+                rawIdentifiers[field], identifiers[field]);
+        if (row.abi_version != LUNA_NATIVE_DESCRIPTOR_ABI_V3 ||
+            row.struct_size != sizeof(LunaNativeExportDescriptorV3) ||
+            row.declaration_kind != LUNA_NATIVE_DECLARATION_FUNCTION_V1 ||
+            row.flags != LUNA_NATIVE_EXPORT_CALLABLE_V1 ||
+            row.entry_abi != LUNA_NATIVE_ENTRY_ABI_REF_RESULT_OWNER_V1 ||
+            row.ref_mode != LUNA_NATIVE_REF_SHARED_BORROW_V1 ||
+            row.result_mode != LUNA_NATIVE_RESULT_I32_OWNED_ERROR_V1 ||
+            row.status_domain != LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1 ||
+            row.error_value_size == 0 || row.error_value_size > (1u << 20) ||
+            row.error_value_alignment == 0 ||
+            row.error_value_alignment > 4096 ||
+            (row.error_value_alignment & (row.error_value_alignment - 1)) != 0 ||
+            !row.entry || !validIdentifiers ||
+            !symbols.insert(identifiers[0]).second ||
+            !linkages.insert(identifiers[2]).second ||
+            v2Symbols.count(identifiers[0]) != 0) {
+            error = "Native v3 library descriptor contains an invalid export row";
+            return false;
+        }
+        const auto old = oldRows.find(identifiers[0]);
+        if (old == oldRows.end() ||
+            identifiers[1] != old->second->contract_id ||
+            identifiers[2] != old->second->linkage_name ||
+            row.declaration_kind != old->second->declaration_kind ||
+            row.flags != old->second->flags ||
+            row.entry != old->second->entry) {
+            error = "Native v3 export row differs from its verified v1 row";
+            return false;
+        }
+        canonicalRows.push_back(canonicalNativeOwnedResultExportV3(
+            row.declaration_kind, row.flags, row.entry_abi, row.ref_mode,
+            row.result_mode, row.status_domain, row.error_value_size,
+            row.error_value_alignment, identifiers));
+    }
+    const auto digest = digestNativeTypedExports(std::move(canonicalRows));
+    if (!std::equal(digest.begin(), digest.end(),
+                    descriptor->export_descriptor_digest)) {
+        error = "Native v3 export rows do not match their descriptor digest";
+        return false;
+    }
+    return true;
+}
+
 
 } // namespace
 
@@ -588,6 +686,8 @@ bool loadVerifiedNativeLibrary(
     const LunaNativeLibraryDescriptorV2* descriptorV2 = nullptr;
     if (!validateNativeDescriptor(handle, proof, descriptor, error) ||
         !validateNativeDescriptorV2(handle, proof, descriptor,
+                                    descriptorV2, error) ||
+        !validateNativeDescriptorV3(handle, proof, descriptor,
                                     descriptorV2, error)) {
         closeNativeImage(handle);
         releaseStagedImage(staged);

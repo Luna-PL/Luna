@@ -177,6 +177,7 @@ file(READ "${ir}" ir_text)
 string(FIND "${ir_text}" "@luna_native_proof_v1" proof_symbol)
 string(FIND "${ir_text}" "@luna_native_library_descriptor_v1" descriptor_query)
 string(FIND "${ir_text}" "@luna_native_library_descriptor_v2" typed_descriptor_query)
+string(FIND "${ir_text}" "@luna_native_library_descriptor_v3" owned_descriptor_query)
 if(WIN32)
     string(FIND "${ir_text}" "section \".luna$proof\"" proof_section)
     string(FIND "${ir_text}" "section \".luna$desc\"" descriptor_section)
@@ -192,9 +193,10 @@ else()
 endif()
 if(proof_symbol EQUAL -1 OR proof_section EQUAL -1 OR
    descriptor_query EQUAL -1 OR descriptor_section EQUAL -1 OR
-   typed_descriptor_query EQUAL -1 OR typed_descriptor_section EQUAL -1)
+   typed_descriptor_query EQUAL -1 OR typed_descriptor_section EQUAL -1 OR
+   NOT owned_descriptor_query EQUAL -1)
     message(FATAL_ERROR
-        "Native proof or typed descriptor registry is missing from emitted IR")
+        "Native proof/typed registry is missing or candidate v3 was emitted")
 endif()
 
 execute_process(
@@ -434,6 +436,96 @@ foreach(v2_variant IN ITEMS valid bad-row-size)
             message(FATAL_ERROR
                 "independent Native v2 invalid row size was accepted.\n"
                 "${v2_load_error}")
+        endif()
+    endif()
+endforeach()
+
+# An independently linked v3 candidate carries Ref/Result metadata but is
+# validation-only until the generated host carrier and status path exist.
+foreach(v3_variant IN ITEMS valid bad-row-size bad-profile bad-slot-digest bad-identity)
+    if(WIN32)
+        set(v3_artifact "${work_dir}/independent-v3-${v3_variant}.dll")
+    elseif(APPLE)
+        set(v3_artifact "${work_dir}/libindependent-v3-${v3_variant}.dylib")
+    else()
+        set(v3_artifact "${work_dir}/libindependent-v3-${v3_variant}.so")
+    endif()
+    set(v3_trust "${v3_artifact}.trust")
+    set(v3_defines -DLUNA_TEST_V3_DESCRIPTOR)
+    if(v3_variant STREQUAL "bad-row-size")
+        list(APPEND v3_defines -DLUNA_TEST_V3_BAD_ROW_SIZE)
+    elseif(v3_variant STREQUAL "bad-profile")
+        list(APPEND v3_defines -DLUNA_TEST_V3_BAD_PROFILE)
+    elseif(v3_variant STREQUAL "bad-slot-digest")
+        list(APPEND v3_defines -DLUNA_TEST_V3_BAD_SLOT_DIGEST)
+    elseif(v3_variant STREQUAL "bad-identity")
+        list(APPEND v3_defines -DLUNA_TEST_V3_BAD_IDENTITY)
+    endif()
+    execute_process(
+        COMMAND "${LUNA_AOT_COMPILER}" -x c -std=c11 -fPIC
+            ${v3_defines} ${legacy_link_mode}
+            -I "${LUNA_SOURCE_DIR}/src"
+            "${LUNA_SOURCE_DIR}/tests/fixtures/native_v1_artifact_fixture.c"
+            -o "${v3_artifact}"
+        RESULT_VARIABLE v3_compile_result
+        ERROR_VARIABLE v3_compile_error)
+    if(NOT v3_compile_result EQUAL 0 OR NOT EXISTS "${v3_artifact}")
+        message(FATAL_ERROR "independent Native v3 fixture did not link.\n"
+            "${v3_compile_error}")
+    endif()
+    execute_process(
+        COMMAND "${LUNA_NATIVE_VERIFIER}" --prepare-v3-fixture
+            "${v3_artifact}" "${v3_trust}"
+        RESULT_VARIABLE v3_seal_result
+        ERROR_VARIABLE v3_seal_error)
+    if(NOT v3_seal_result EQUAL 0 OR NOT EXISTS "${v3_trust}")
+        message(FATAL_ERROR "independent Native v3 fixture did not seal.\n"
+            "${v3_seal_error}")
+    endif()
+    execute_process(
+        COMMAND "${LUNA_NATIVE_VERIFIER}" "${v3_artifact}" "${v3_trust}"
+        RESULT_VARIABLE v3_verify_result
+        ERROR_VARIABLE v3_verify_error)
+    if(NOT v3_verify_result EQUAL 0)
+        message(FATAL_ERROR "independent Native v3 proof did not verify.\n"
+            "${v3_verify_error}")
+    endif()
+    execute_process(
+        COMMAND "${LUNA_NATIVE_VERIFIER}" --load-only
+            "${v3_artifact}" "${v3_trust}"
+        RESULT_VARIABLE v3_load_result
+        ERROR_VARIABLE v3_load_error)
+    if(v3_variant STREQUAL "valid")
+        execute_process(
+            COMMAND "${LUNA_NATIVE_VERIFIER}" --load-legacy-generation
+                "${v3_artifact}" "${v3_trust}"
+                "symbol:legacy-answer" "contract:legacy-v1"
+            RESULT_VARIABLE v3_generation_result
+            OUTPUT_VARIABLE v3_generation_output
+            ERROR_VARIABLE v3_generation_error)
+        if(NOT v3_load_result EQUAL 0 OR
+           NOT v3_generation_result EQUAL 0 OR
+           NOT v3_generation_output STREQUAL "v1-only\n")
+            message(FATAL_ERROR
+                "independent v3 metadata escaped the unprofiled generation gate.\n"
+                "load: ${v3_load_error}\n"
+                "generation: ${v3_generation_error}")
+        endif()
+    else()
+        if(v3_variant STREQUAL "bad-row-size" OR
+           v3_variant STREQUAL "bad-profile")
+            set(v3_expected "invalid export row")
+        elseif(v3_variant STREQUAL "bad-slot-digest")
+            set(v3_expected "rows do not match their descriptor digest")
+        else()
+            set(v3_expected "differs from its verified v1 row")
+        endif()
+        string(FIND "${v3_load_error}" "${v3_expected}"
+               v3_load_diagnostic)
+        if(v3_load_result EQUAL 0 OR v3_load_diagnostic EQUAL -1)
+            message(FATAL_ERROR
+                "independent Native v3 ${v3_variant} row was accepted.\n"
+                "${v3_load_error}")
         endif()
     endif()
 endforeach()
