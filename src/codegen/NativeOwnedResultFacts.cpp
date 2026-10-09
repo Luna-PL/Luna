@@ -15,8 +15,12 @@ namespace luna::codegen {
 namespace {
 
 bool boundedIdentity(const std::string& value) {
-    return !value.empty() && value.size() <= 4096 &&
-        value.find_first_of("\r\n\t") == std::string::npos;
+    if (value.empty() || value.size() > 4096)
+        return false;
+    for (char ch : value)
+        if (ch == '\r' || ch == '\n' || ch == '\t')
+            return false;
+    return true;
 }
 
 } // namespace
