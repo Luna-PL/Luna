@@ -1954,17 +1954,23 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             } else {
                 builder.CreateRetVoid();
             }
-            if (privateResourceResultJit) {
-                // Private host-transfer experiment. Status 0 succeeds, 1
-                // rejects preflight, 2 rejects a null returned resource, and
-                // 3 injects a post-body failure. The owner cell is the commit
-                // point; the JIT module must remain live until Drop.
+            if (privateResourceResultJit && function.params.size() == 1) {
+                // Private host-transfer experiment. The owner cell is the
+                // commit point; the JIT module must remain live until Drop.
                 const auto resourceType = proof.resolveType(
                     privateErrResourceResultJit
                         ? returnType->typeArgumentIds[1]
                         : returnType->typeArgumentIds[0]);
-                if (!resourceType) {
-                    failure = "private Ref Result transfer lost its resource type";
+                const auto transferTarget =
+                    program.resolveRuntimeFragmentRefTarget(
+                        function.params.front().type);
+                if (!resourceType || !transferTarget ||
+                    (privateOwnedResultFacts &&
+                     (privateOwnedResultFacts->refSlotSymbolId !=
+                          transferTarget->symbol.value ||
+                      privateOwnedResultFacts->refSlotContractId !=
+                          transferTarget->contract.value))) {
+                    failure = "private Ref Result transfer lost its frozen resource or Ref target";
                     return false;
                 }
                 auto* ptrTy = proof.mHelpers->ptrTy();
@@ -1993,6 +1999,18 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     *proof.mCtx, "entry", transfer);
                 auto* checkOwner = llvm::BasicBlock::Create(
                     *proof.mCtx, "check.owner", transfer);
+                auto* checkContext = llvm::BasicBlock::Create(
+                    *proof.mCtx, "check.context", transfer);
+                auto* checkedContext = llvm::BasicBlock::Create(
+                    *proof.mCtx, "context.accepted", transfer);
+                auto* invalidContext = llvm::BasicBlock::Create(
+                    *proof.mCtx, "context.invalid", transfer);
+                auto* invalidHandle = llvm::BasicBlock::Create(
+                    *proof.mCtx, "ref.invalid.handle", transfer);
+                auto* invalidTarget = llvm::BasicBlock::Create(
+                    *proof.mCtx, "ref.invalid.target", transfer);
+                auto* unexpectedCheck = llvm::BasicBlock::Create(
+                    *proof.mCtx, "check.unexpected", transfer);
                 auto* callBody = llvm::BasicBlock::Create(
                     *proof.mCtx, "call.body", transfer);
                 auto* invalid = llvm::BasicBlock::Create(
@@ -2073,9 +2091,54 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 transferBuilder.CreateCondBr(
                     transferBuilder.CreateIsNull(
                         transferBuilder.CreateLoad(ptrTy, ownerOut)),
-                    callBody, invalid);
+                    checkContext, invalid);
                 transferBuilder.SetInsertPoint(invalid);
-                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty, 1));
+                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST));
+                transferBuilder.SetInsertPoint(checkContext);
+                auto contextCheck = proof.mModule->getOrInsertFunction(
+                    "luna_compiler_fragment_context_check", i32Ty, ptrTy);
+                auto* contextCall = transferBuilder.CreateCall(
+                    contextCheck, {bodyArguments.front()});
+                auto* statusType = llvm::cast<llvm::IntegerType>(i32Ty);
+                auto* contextBranch = transferBuilder.CreateSwitch(
+                    contextCall, unexpectedCheck, 2);
+                contextBranch->addCase(llvm::ConstantInt::getSigned(statusType,
+                    LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS), checkedContext);
+                contextBranch->addCase(llvm::ConstantInt::getSigned(statusType,
+                    LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT),
+                    invalidContext);
+                transferBuilder.SetInsertPoint(invalidContext);
+                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST));
+                transferBuilder.SetInsertPoint(checkedContext);
+                auto* refCheck =
+                    proof.mHelpers->emitRuntimeFragmentRefBorrowCheck(
+                        transferBuilder, *proof.mModule, bodyArguments[1],
+                        *transferTarget);
+                if (!refCheck) {
+                    failure = "private Ref Result transfer lost its exact borrowed check";
+                    return false;
+                }
+                auto* refBranch = transferBuilder.CreateSwitch(
+                    refCheck, unexpectedCheck, 3);
+                refBranch->addCase(llvm::ConstantInt::getSigned(statusType,
+                    LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1), callBody);
+                refBranch->addCase(llvm::ConstantInt::getSigned(statusType,
+                    LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1),
+                    invalidHandle);
+                refBranch->addCase(llvm::ConstantInt::getSigned(statusType,
+                    LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1),
+                    invalidTarget);
+                transferBuilder.SetInsertPoint(invalidHandle);
+                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST));
+                transferBuilder.SetInsertPoint(invalidTarget);
+                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST));
+                transferBuilder.SetInsertPoint(unexpectedCheck);
+                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST));
                 transferBuilder.SetInsertPoint(callBody);
                 auto* transferred = transferBuilder.CreateCall(body, bodyArguments);
                 transferBuilder.CreateCondBr(
@@ -2088,7 +2151,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         llvm::ConstantInt::get(i32Ty, 0)),
                     injectedScalarFailure, scalarCommit);
                 transferBuilder.SetInsertPoint(injectedScalarFailure);
-                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty, 3));
+                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST));
                 transferBuilder.SetInsertPoint(scalarCommit);
                 transferBuilder.CreateStore(llvm::ConstantInt::get(i32Ty,
                     privateErrResourceResultJit ? 1 : 0), tagOut);
@@ -2097,7 +2161,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         transferBuilder.CreateExtractValue(transferred, {1, 0}),
                         i32Ty, true),
                     scalarOut);
-                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty, 0));
+                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST));
                 transferBuilder.SetInsertPoint(resource);
                 auto* transferredOwner = transferBuilder.CreateIntToPtr(
                     transferBuilder.CreateExtractValue(transferred, {1, 0}),
@@ -2108,7 +2173,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     transferBuilder.CreateIsNotNull(transferredOwner),
                     resourceValid, nullResource);
                 transferBuilder.SetInsertPoint(nullResource);
-                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty, 2));
+                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST));
                 transferBuilder.SetInsertPoint(resourceValid);
                 transferBuilder.CreateCondBr(
                     transferBuilder.CreateICmpNE(failAfterBody,
@@ -2118,7 +2184,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 transferBuilder.CreateStore(llvm::ConstantInt::get(i32Ty,
                     privateOkResourceResultJit ? 1 : 0), tagOut);
                 transferBuilder.CreateStore(transferredOwner, ownerOut);
-                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty, 0));
+                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST));
 
                 const auto failureSavedIP = proof.mBuilder->saveIP();
                 auto* failureSavedFunction = proof.mCurrentFunc;
@@ -2145,7 +2212,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     return false;
                 }
                 transferBuilder.SetInsertPoint(failureCleanupEnd);
-                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty, 3));
+                transferBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST));
 
                 auto* dropEntry = llvm::Function::Create(
                     llvm::FunctionType::get(i32Ty, {ptrTy}, false),
@@ -2246,19 +2314,30 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     return false;
                 }
                 size_t transferBodyCalls = 0;
+                size_t contextChecks = 0;
+                size_t refChecks = 0;
                 for (const auto& block : *transfer)
                     for (const auto& instruction : block)
                         if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
                                 &instruction)) {
                             if (&block == injectedResourceFailure) continue;
-                            if (call->getCalledFunction() != body) {
+                            if (call == contextCall) {
+                                ++contextChecks;
+                            } else if (call == refCheck) {
+                                ++refChecks;
+                            } else if (call->getCalledFunction() == body) {
+                                ++transferBodyCalls;
+                            } else {
                                 failure = "private Ref Result transfer has an unexpected call";
                                 return false;
                             }
-                            ++transferBodyCalls;
                         }
-                if (transferBodyCalls != 1) {
-                    failure = "private Ref Result transfer did not call its body exactly once";
+                if (transferBodyCalls != 1 || contextChecks != 1 ||
+                    refChecks != 1 || contextCall->getParent() != checkContext ||
+                    refCheck->getParent() != checkedContext ||
+                    contextCall->getArgOperand(0) != bodyArguments.front() ||
+                    refCheck->getArgOperand(0) != bodyArguments[1]) {
+                    failure = "private Ref Result transfer lost preflight or one body call";
                     return false;
                 }
                 dropBuilder.SetInsertPoint(cleanupEnd);

@@ -29,6 +29,19 @@ enum LunaPrivateRefUnitApplyStatusV1Test {
     LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST = 3,
     LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST = 4,
 };
+
+// Private Result transfer experiment; these numbers are not the Native v3
+// status domain and must not be used as a published callable contract.
+enum LunaPrivateRefResultTransferStatusV1Test {
+    LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST = 0,
+    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST = 1,
+    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST = 2,
+    LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST = 3,
+    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST = 4,
+    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST = 5,
+    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST = 6,
+    LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST = 7,
+};
 #endif
 
 // Read-only preflight for a borrowed, live Runtime-created parent context.

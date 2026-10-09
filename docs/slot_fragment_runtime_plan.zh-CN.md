@@ -741,7 +741,9 @@ RuntimeDyld 构建随后通过同一 canonical 测试。因此直接切换此 JI
 不能作为已验证的间歇性 RuntimeDyld 故障修复。
 私有 JIT 另有一组仅测试用的宿主所有权交接入口。状态入口先检查 tag／`i32`
 标量／owner 三个输出地址非空、两两不重叠、对齐且 owner cell 为空，再调用源码
-body。标量分支写 tag 与标量；资源
+body。输出预检后，入口还核验有效 parent context 和冻结 Slot 的精确借用 Ref
+目标；空 parent／Ref 或有效但指向外来 Slot 的 Ref 返回不同私有状态，不修改输出，
+也不执行 body 或 Drop。标量分支写 tag 与标量；资源
 分支先写 tag，最后写 owner 指针作为所有权提交点。独立 JIT Drop 入口先清空 cell，
 再按冻结的递归 Drop 与 deallocation 顺序清理。私有 LLVM 检查要求交接入口只调用
 一次 body，且只有注入失败分支可额外调用清理函数，并核对两条 Drop 调用链。
@@ -898,8 +900,12 @@ producer 现可在私有单 Ref、`Result<i32, E>` fixture 上从封闭的 MoonI
 调用约定、参数数目、返回类型、源码 linkage 及错误类型。它的六个参数依次是
 parent、借用 Ref、tag 输出、标量输出、裸 owner 输出和仅测试用的故障注入标志。
 body 分派前三个输出 cell 均检查空地址、相互重叠和对齐；标量成功时写入 `i32`
-cell，注入失败时三个输出保持不变。这仍是 JIT 测试入口：parent／Ref 预检、
-Runtime 所有的 opaque handle、生产状态码及 v3 descriptor 绑定尚未实现。
+cell，注入失败时三个输出保持不变。parent context 与精确借用 Ref 预检现已在
+输出预检后执行；空 parent／Ref
+及有效的外来目标 handle 返回不同的仅测试用状态，不执行 body 或改写输出。
+生成证明要求恰好一次 context check、一次 Ref check 和一次源码 body 调用。
+这仍是 JIT 测试入口；Runtime 所有的 opaque handle、生产状态码及 v3 descriptor
+绑定尚未实现。
 
 当前 64 位目标的 v3 export／library 记录大小为 136／96 字节；`entry_abi`、
 错误值大小、首个标识符与入口指针的偏移依次为 16、32、48、128。SHA-256 摘要
@@ -933,8 +939,8 @@ handle cell 为空。入口前失败不修改输出或源 owner。body 启动后
 最后释放 lease。同一已清空 cell 的重复 Drop 应与有效 Drop 可区分；复制的、
 失效的或外来的裸地址不是有效 handle。私有夹具现用一个不可复制的测试 carrier
 绑定 owner 与 JIT lease，并在借用 Ref pin 失效后证明延迟且恰好一次的 Drop，
-Windows ASAN 亦通过。下一步是实现具有固定 C 原型、parent／Ref 预检、独立
-状态／Result tag、标量输出及唯一 owner-handle cell 的生产宿主 wrapper，并在
+Windows ASAN 亦通过。下一步是实现具有固定 C 原型、已证明的 parent／Ref
+预检、独立状态／Result tag、标量输出及唯一 owner-handle cell 的生产宿主 wrapper，并在
 失败清理期间保持 JIT lease。核验生成的 wrapper 并把其独立入口与 linkage 绑定
 到冻结源码事实后，
 producer 才能生成 v3 行并把类型化证明传至 `PinnedBinding`。Runtime 所有的

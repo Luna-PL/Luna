@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Added parent-context and exact borrowed-Ref preflight to the private
+  Ref/Result transfer entry. Live foreign-target and null-handle fixtures
+  require distinct test-only statuses, unchanged outputs and no body or Drop
+  work before a valid call. The generated proof checks exactly one context
+  check, one Ref check and one source-body call; Native v3 stays unpublished.
 - Extended the private generated Ref/Result transfer entry to separate tag,
   `i32` scalar and owner output cells. It now rejects null, overlapping or
   misaligned cells before body dispatch, preserves all outputs on injected

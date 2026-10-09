@@ -971,14 +971,17 @@ not a validated fix for the intermittent RuntimeDyld failure.
 The private JIT now also has a separate host-transfer experiment for admitted
 resource Result shapes. Its status entry checks nonnull, pairwise disjoint and
 aligned tag, `i32` scalar and owner output cells and requires an empty owner
-cell before calling the source body. The scalar branch writes tag and scalar;
+cell, then checks the live parent context and exact frozen borrowed Ref target
+before calling the source body. Null parent/Ref and a live foreign-target Ref
+return distinct private statuses without changing outputs, running the body
+or triggering Drop. The scalar branch writes tag and scalar;
 the resource branch writes the tag and then the owner pointer as its final
 ownership commit. A separate JIT Drop entry clears that cell before running
-the exact frozen recursive Drop and
-deallocation sequence. The private LLVM proof requires one body call, permits
+the exact frozen recursive Drop and deallocation sequence. The private LLVM
+proof requires one body call, permits
 cleanup calls only on the injected failure branch, and checks both Drop call
-sequences. A three-struct Err
-fixture proves that a successfully transferred owner is not Dropped before
+sequences. A three-struct Err fixture proves that a successfully transferred
+owner is not Dropped before
 host Drop, then observes
 `79, 81, 83` exactly once per transferred owner; duplicate Drop fails. A
 resource Ok fixture also transfers and Drops its owner once per call. Scalar
@@ -1182,8 +1185,12 @@ are parent, borrowed Ref, tag output, scalar output, raw owner output and a
 test-only failure-injection flag. The three output cells are checked for null,
 overlap and alignment before body dispatch; scalar success writes the `i32`
 cell, while injected failures preserve all outputs. This remains a JIT test
-entry: parent/Ref preflight, a Runtime-owned opaque handle, production status
-codes and a v3 descriptor binding are still required.
+entry. Parent-context and exact borrowed-Ref preflight now run after output
+preflight; null parent/Ref and a live foreign-target handle return distinct
+test-only statuses without body dispatch or output mutation. The generated
+proof checks one context check, one Ref check and one body call. A Runtime-owned
+opaque handle, production status codes and a v3 descriptor binding are still
+required.
 
 On current 64-bit targets the v3 export/library records are 136/96 bytes;
 `entry_abi`, error size, first identifier and entry pointer begin at offsets
@@ -1226,14 +1233,14 @@ from a live Drop; copied, stale or foreign raw addresses are not valid handles.
 The private fixture now binds owner and JIT lease in one noncopyable test
 carrier and proves deferred exactly-once Drop after the borrowed Ref pin
 expires, including Windows ASAN. The next production step is a generated
-host wrapper with a fixed C prototype, parent/Ref preflight, separate status
-and Result tag, scalar output and unique owner-handle cell. Its failure paths
+host wrapper with a fixed C prototype, the proven parent/Ref preflight,
+separate status and Result tag, scalar output and unique owner-handle cell.
+Its failure paths
 must retain the JIT lease through cleanup. Only after verifying the generated
-wrapper and binding
-its distinct entry and linkage to the frozen source facts can the producer emit
-a v3 row and propagate its typed proof to `PinnedBinding`. Generated entry tests
-for every failure
-phase and the Runtime-owned handle/Drop operation are required before opening
+wrapper and binding its distinct entry and linkage to the frozen source facts,
+the producer can emit a v3 row and propagate its typed proof to `PinnedBinding`.
+Generated entry tests for every failure phase and the Runtime-owned handle/Drop
+operation are required before opening
 the narrow verifier/export gate. Native v1 rows must not be extended in place.
 An audit build exposed a nearer fail-closed requirement: Native v1 accepted
 an exported `Result<i32, OwnedError>` and sealed a library and trust record

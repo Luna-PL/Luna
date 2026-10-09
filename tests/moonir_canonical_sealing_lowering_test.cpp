@@ -175,7 +175,10 @@ bool exercisePrivateRefApplyJit(
     const auto* arguments = slot ? module.findType(slot->argumentsType) : nullptr;
     const auto* valueType = arguments && arguments->fields.size() == 1
         ? module.findType(arguments->fields.front().type) : nullptr;
-    if (!slot || !arguments || (differentSlots && !secondSlot) ||
+    const bool syntheticTransferTarget =
+        differentSlots && !secondSlot && transferredDropCalls.has_value();
+    if (!slot || !arguments ||
+        (differentSlots && !secondSlot && !syntheticTransferTarget) ||
         (exerciseIngressGate && (!differentSlots || twoBorrowedReferences ||
                                  expectedResult || transferredDropCalls ||
                                  !entryRecord)) ||
@@ -231,7 +234,8 @@ bool exercisePrivateRefApplyJit(
         unboundJit.reset();
         error.clear();
     }
-    const bool needsSecondHandle = twoBorrowedReferences || exerciseIngressGate;
+    const bool needsSecondHandle = twoBorrowedReferences || exerciseIngressGate ||
+        (transferredDropCalls && differentSlots);
 
     const std::string fragmentId = "fragment:private-ref-jit";
     const std::string fragmentContract = "contract:private-ref-jit";
@@ -239,6 +243,16 @@ bool exercisePrivateRefApplyJit(
     const std::string secondFragmentContract =
         "contract:private-ref-jit-second";
     const std::string unitLayout = "layout:unit";
+    // The Result fixture has one source Slot. A separate Runtime descriptor
+    // supplies a live foreign-target handle solely for ingress rejection.
+    const std::string secondSlotId = differentSlots
+        ? (secondSlot ? secondSlot->symbolId.value
+                      : slot->symbolId.value + ".foreign")
+        : slot->symbolId.value;
+    const std::string secondSlotContract = differentSlots
+        ? (secondSlot ? secondSlot->contractId.value
+                      : slot->contractId.value + ".foreign")
+        : slot->contractId.value;
     LunaRuntimeFragmentDescriptorV1 descriptor = {
         LUNA_RUNTIME_FRAGMENT_MAGIC_V1,
         LUNA_RUNTIME_FRAGMENT_ABI_V1,
@@ -256,15 +270,15 @@ bool exercisePrivateRefApplyJit(
     secondDescriptor.fragment_id = secondFragmentId.c_str();
     secondDescriptor.fragment_contract_id = secondFragmentContract.c_str();
     secondDescriptor.execute = executePrivateRefJitFragmentSecond;
-    const auto* secondArguments = differentSlots
+    const auto* secondArguments = differentSlots && secondSlot
         ? module.findType(secondSlot->argumentsType) : arguments;
     if (!secondArguments) {
         error = "private Ref JIT fixture lacks second Slot layout";
         return false;
     }
     if (differentSlots) {
-        secondDescriptor.slot_id = secondSlot->symbolId.value.c_str();
-        secondDescriptor.slot_contract_id = secondSlot->contractId.value.c_str();
+        secondDescriptor.slot_id = secondSlotId.c_str();
+        secondDescriptor.slot_contract_id = secondSlotContract.c_str();
         secondDescriptor.slot_arguments_layout_id =
             secondArguments->abiLayoutId.value.c_str();
         secondDescriptor.slot_arguments_size = secondArguments->valueSize;
@@ -325,9 +339,8 @@ bool exercisePrivateRefApplyJit(
                 LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, flags};
             const auto secondBinding = loaded.find(secondRequirement);
             luna::runtime::RuntimeFragmentRef secondReference;
-            const auto* targetSlot = differentSlots ? secondSlot : slot;
             const luna::runtime::RuntimeSlotRequirement secondTarget{
-                targetSlot->symbolId.value, targetSlot->contractId.value};
+                secondSlotId, secondSlotContract};
             if (!secondBinding ||
                 !luna::runtime::makeOwnedRuntimeFragmentRef(
                     secondBinding, secondTarget, {"", nullptr}, secondReference,
@@ -422,7 +435,8 @@ bool exercisePrivateRefApplyJit(
                                            void** ownerCell) {
                 return entryTransfer(parent.opaque(),
                     const_cast<void*>(handle.opaque()), tagCell, scalarCell,
-                    ownerCell, 0) == 1;
+                    ownerCell, 0) ==
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST;
             };
             void* occupied = reinterpret_cast<void*>(uintptr_t{1});
             if (!rejectsOutput(&tag, &scalar, &occupied) ||
@@ -473,10 +487,33 @@ bool exercisePrivateRefApplyJit(
                 return false;
             }
             void* owner = nullptr;
+            const auto rejectsIngress = [&](const void* context,
+                                            void* reference,
+                                            int32_t expectedStatus) {
+                return entryTransfer(context, reference, &tag, &scalar,
+                    &owner, 0) == expectedStatus;
+            };
+            if (!rejectsIngress(nullptr,
+                    const_cast<void*>(handle.opaque()),
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST) ||
+                !rejectsIngress(nullptr, nullptr,
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST) ||
+                !rejectsIngress(parent.opaque(), nullptr,
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST) ||
+                (differentSlots && !rejectsIngress(parent.opaque(),
+                    const_cast<void*>(secondHandle.opaque()),
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST)) ||
+                tag != 42 || scalar != unchangedScalar || owner != nullptr ||
+                privateRefJitExecutions != dispatchesBefore ||
+                privateRefJitAllDropProbeCalls != callsBefore) {
+                error = "private Result transfer bypassed parent or exact Ref preflight";
+                return false;
+            }
             if (injectPostBodyFailure &&
                 (entryTransfer(parent.opaque(),
                     const_cast<void*>(handle.opaque()), &tag, &scalar,
-                    &owner, 1) != 3 ||
+                    &owner, 1) !=
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_INJECTED_FAILURE_V1_TEST ||
                  tag != 42 || scalar != unchangedScalar || owner != nullptr ||
                  privateRefJitAllDropProbeCalls !=
                      callsBefore + bodyDropCalls + *transferredDropCalls)) {
@@ -486,7 +523,8 @@ bool exercisePrivateRefApplyJit(
             const auto callsAfterFailure = privateRefJitAllDropProbeCalls;
             if (entryTransfer(parent.opaque(),
                     const_cast<void*>(handle.opaque()), &tag, &scalar,
-                    &owner, 0) != 0 ||
+                    &owner, 0) !=
+                    LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST ||
                 tag != static_cast<uint32_t>(expectedResult->first) ||
                 scalar != (*transferredDropCalls == 0
                     ? expectedResult->second : unchangedScalar) ||
@@ -574,8 +612,7 @@ bool exercisePrivateRefApplyJit(
     const auto secondHandleCheck = needsSecondHandle
         ? luna_runtime_fragment_ref_check_v1(
             secondHandle.opaque(),
-            (differentSlots ? secondSlot : slot)->symbolId.value.c_str(),
-            (differentSlots ? secondSlot : slot)->contractId.value.c_str())
+            secondSlotId.c_str(), secondSlotContract.c_str())
         : LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1;
     if (handleCheck != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
         secondHandleCheck != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1) {
@@ -2824,7 +2861,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         privateRefJitDropProbeValid = true;
         if (!exercisePrivateRefApplyJit(
                 *tryApplyModule, *transferCase.first, privateRefJitError,
-                0, false, std::nullopt, false, false, {}, {},
+                0, false, std::nullopt, false, true, {}, {},
                 std::pair<bool, int32_t>{false, 59}, 2, true, true,
                 false, nullptr, 1)) {
             std::cerr << privateRefJitError << '\n';
