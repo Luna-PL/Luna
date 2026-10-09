@@ -906,6 +906,13 @@ cell，注入失败时三个输出保持不变。parent context 与精确借用 
 生成证明要求恰好一次 context check、一次 Ref check 和一次源码 body 调用。
 这仍是 JIT 测试入口，输出仍为裸 owner 指针。Runtime 已有单独的 opaque owner
 handle；生成的宿主 wrapper、生产状态码及 v3 descriptor 绑定尚未实现。
+仅测试用的已装载宿主适配层现把冻结的拥有型 Result 源码事实绑定到验证后的 JIT
+module，同时查找该 module 的生成 transfer 与 Drop 入口。它在调用前检查宿主输出，
+用私有 cell 调用生成入口，仅在收养成功后提交 Runtime handle；收养失败时在同一
+代码 lease 下 Drop 未提交 owner。收养失败状态只供测试使用。资源 Err、标量 Ok、
+伪造源码身份、错误 Ref 目标、已占用 owner 与输出 cell 别名均有可执行检查。
+该适配层已通过 Windows Clang64 ASAN 聚焦 canonical 测试，但尚不是 Native v3
+所需的固定 C 原型或生成的宿主 wrapper。
 
 当前 64 位目标的 v3 export／library 记录大小为 136／96 字节；`entry_abi`、
 错误值大小、首个标识符与入口指针的偏移依次为 16、32、48、128。SHA-256 摘要

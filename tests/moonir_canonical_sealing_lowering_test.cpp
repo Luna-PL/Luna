@@ -133,7 +133,8 @@ bool exercisePrivateRefApplyJit(
     bool deferSecondHostDrop = false,
     bool exerciseIngressGate = false,
     std::vector<uint8_t>* entryRecord = nullptr,
-    unsigned bodyDropCalls = 0) {
+    unsigned bodyDropCalls = 0,
+    bool exerciseLoadedResult = false) {
     const moon::SlotDecl* slot = nullptr;
     const moon::SlotDecl* secondSlot = nullptr;
     for (const auto& declaration : module.declarations)
@@ -152,6 +153,8 @@ bool exercisePrivateRefApplyJit(
         (exerciseIngressGate && (!differentSlots || twoBorrowedReferences ||
                                  expectedResult || transferredDropCalls ||
                                  !entryRecord)) ||
+        (exerciseLoadedResult && (!transferredDropCalls ||
+                                  !expectedResult || twoBorrowedReferences)) ||
         function.params.size() != (twoBorrowedReferences ? 2u : 1u) ||
         !valueType || valueType->kind != TypeKind::I32 ||
         std::any_of(function.params.begin(), function.params.end(),
@@ -176,6 +179,24 @@ bool exercisePrivateRefApplyJit(
         ? jit->lookup("__luna_private_ref_apply_drop_test", error)
         : nullptr;
     if (transferredDropCalls && !dropAddress) return false;
+    std::unique_ptr<LunaPrivateRefResultLoadedEntry> loadedResult;
+    if (exerciseLoadedResult) {
+        loadedResult = CodeGenerator::
+            loadPrivateRuntimeFragmentRefResultEntryForTest(
+                module, function, jit, error);
+        if (!loadedResult) return false;
+        const auto originalSymbol = function.symbolId;
+        function.symbolId.value += ".forged";
+        const bool acceptedForgedSource = static_cast<bool>(CodeGenerator::
+            loadPrivateRuntimeFragmentRefResultEntryForTest(
+                module, function, jit, error));
+        function.symbolId = originalSymbol;
+        if (acceptedForgedSource) {
+            error = "private loaded Result entry accepted forged source facts";
+            return false;
+        }
+        error.clear();
+    }
     std::unique_ptr<LunaPrivateRefUnitApplyLoadedEntry> loadedIngress;
     if (exerciseIngressGate) {
         loadedIngress = CodeGenerator::
@@ -342,6 +363,7 @@ bool exercisePrivateRefApplyJit(
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST == 2);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST == 3);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST == 4);
+    static_assert(LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST == 8);
     using EntryTransfer = int32_t (*)(
         const void*, void*, uint32_t*, int32_t*, void**, uint32_t);
     using EntryDrop = int32_t (*)(void**);
@@ -394,6 +416,106 @@ bool exercisePrivateRefApplyJit(
             if (!expectedResult || twoBorrowedReferences) {
                 error = "private Result transfer fixture requires one borrowed Ref";
                 return false;
+            }
+            if (loadedResult) {
+                const auto callsBefore = privateRefJitAllDropProbeCalls;
+                const auto dispatchesBefore = privateRefJitExecutions;
+                uint32_t tag = 42;
+                constexpr int32_t unchangedScalar = 0x12345678;
+                int32_t scalar = unchangedScalar;
+                luna::runtime::RuntimeOwnedResultHandle returnedOwner;
+                if (loadedResult->call(parent.opaque(), handle.opaque(),
+                        nullptr, &scalar, returnedOwner) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST ||
+                    loadedResult->call(parent.opaque(), handle.opaque(),
+                        &tag, reinterpret_cast<int32_t*>(&tag),
+                        returnedOwner) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST ||
+                    loadedResult->call(nullptr, handle.opaque(),
+                        &tag, &scalar, returnedOwner) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_CONTEXT_V1_TEST ||
+                    loadedResult->call(parent.opaque(), nullptr,
+                        &tag, &scalar, returnedOwner) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_HANDLE_V1_TEST ||
+                    (differentSlots && loadedResult->call(parent.opaque(),
+                        secondHandle.opaque(), &tag, &scalar,
+                        returnedOwner) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST) ||
+                    tag != 42 || scalar != unchangedScalar || returnedOwner ||
+                    privateRefJitExecutions != dispatchesBefore ||
+                    privateRefJitAllDropProbeCalls != callsBefore) {
+                    error = "private loaded Result entry bypassed preflight";
+                    return false;
+                }
+                if (expectedResult->first) {
+                    if (loadedResult->call(parent.opaque(), handle.opaque(),
+                            &tag, &scalar, returnedOwner, true) !=
+                            LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST ||
+                        tag != 1 || scalar != expectedResult->second ||
+                        returnedOwner ||
+                        privateRefJitAllDropProbeCalls !=
+                            callsBefore + bodyDropCalls ||
+                        privateRefJitExecutions !=
+                            dispatchesBefore + expectedDispatches) {
+                        error = "private loaded Result scalar arm changed owner semantics";
+                        return false;
+                    }
+                    return true;
+                }
+                if (loadedResult->call(parent.opaque(), handle.opaque(),
+                        &tag, &scalar, returnedOwner, true) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST ||
+                    tag != 42 || scalar != unchangedScalar || returnedOwner ||
+                    privateRefJitAllDropProbeCalls !=
+                        callsBefore + bodyDropCalls + *transferredDropCalls ||
+                    privateRefJitExecutions !=
+                        dispatchesBefore + expectedDispatches) {
+                    error = "private loaded Result failed adoption lost cleanup";
+                    return false;
+                }
+                const auto callsAfterAdoptionFailure =
+                    privateRefJitAllDropProbeCalls;
+                if (loadedResult->call(parent.opaque(), handle.opaque(),
+                        &tag, &scalar, returnedOwner) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST ||
+                    tag != static_cast<uint32_t>(expectedResult->first) ||
+                    scalar != unchangedScalar || !returnedOwner ||
+                    privateRefJitAllDropProbeCalls !=
+                        callsAfterAdoptionFailure + bodyDropCalls) {
+                    error = "private loaded Result did not commit Runtime owner";
+                    return false;
+                }
+                if (loadedResult->call(parent.opaque(), handle.opaque(),
+                        &tag, &scalar, returnedOwner) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST ||
+                    privateRefJitAllDropProbeCalls !=
+                        callsAfterAdoptionFailure + bodyDropCalls) {
+                    error = "private loaded Result accepted an occupied owner";
+                    return false;
+                }
+                if (deferThisOwner) {
+                    deferredOwner.emplace(std::move(returnedOwner));
+                    deferredDropProbeBaseline = privateRefJitAllDropProbeCalls;
+                    return true;
+                }
+                if (returnedOwner.dropOnce() !=
+                        LUNA_RUNTIME_OWNED_RESULT_DROP_SUCCESS_V1 ||
+                    privateRefJitAllDropProbeCalls !=
+                        callsAfterAdoptionFailure + bodyDropCalls +
+                            *transferredDropCalls ||
+                    returnedOwner.dropOnce() !=
+                        LUNA_RUNTIME_OWNED_RESULT_DROP_EMPTY_V1 ||
+                    loadedResult->call(parent.opaque(), handle.opaque(),
+                        reinterpret_cast<uint32_t*>(returnedOwner.cell()),
+                        &scalar, returnedOwner) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST ||
+                    privateRefJitAllDropProbeCalls !=
+                        callsAfterAdoptionFailure + bodyDropCalls +
+                            *transferredDropCalls) {
+                    error = "private loaded Result owner was not dropped once";
+                    return false;
+                }
+                return true;
             }
             const auto callsBefore = privateRefJitAllDropProbeCalls;
             const auto dispatchesBefore = privateRefJitExecutions;
@@ -674,6 +796,7 @@ bool exercisePrivateRefApplyJit(
         }
     }
     const bool generationExpiredBeforeHostDrop = generationLease.expired();
+    loadedResult.reset();
     if (exerciseIngressGate) {
         loadedIngress.reset();
         if (!codeLifetime.expired()) {
@@ -2760,6 +2883,18 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (privateRefJitReturnedDropProbeCalls != returnedDropBefore + 2 ||
         !privateRefJitDropProbeValid)
         return fail("Ref apply '?' returned resource was not dropped once per call");
+    const auto loadedReturnedDropBefore = privateRefJitReturnedDropProbeCalls;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyResourceReturn,
+            privateRefJitError, 0, false, std::nullopt, false, true,
+            {}, {}, std::pair<bool, int32_t>{false, 59}, 1,
+            false, true, false, nullptr, 0, true)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply loaded Result host adoption failed private JIT execution");
+    }
+    if (privateRefJitReturnedDropProbeCalls != loadedReturnedDropBefore + 4 ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply loaded Result lost failed-adoption or deferred Drop");
     if (!tryApplyFromResourceReturn->controlFlow ||
         tryApplyFromResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
         !refApplyCfgVerifier.verify(*tryApplyFromResourceReturn->controlFlow,
@@ -2944,6 +3079,16 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     }
     if (privateRefJitReturnedPairDropProbeCalls != scalarOkDropBefore)
         return fail("Ref apply scalar Ok incorrectly dropped an Err resource");
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyErrResourceScalarOk,
+            privateRefJitError, 1, false, 1, false, false,
+            {1}, {}, std::pair<bool, int32_t>{true, 14}, 0,
+            false, false, false, nullptr, 0, true)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply loaded Result scalar arm failed private JIT execution");
+    }
+    if (privateRefJitReturnedPairDropProbeCalls != scalarOkDropBefore)
+        return fail("Ref apply loaded Result scalar arm manufactured an owner");
     const auto scalarErrDropBefore = privateRefJitReturnedOkDropProbeCalls;
     if (!exercisePrivateRefApplyJit(
             *tryApplyModule, *tryApplyOkResourceScalarErr,

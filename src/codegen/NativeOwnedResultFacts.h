@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <string>
+#include <tuple>
 
 namespace moon {
 struct Module;
@@ -26,6 +27,22 @@ struct NativeOwnedResultSourceFacts {
     std::string errorDropContractId;
     uint64_t errorValueSize = 0;
     uint64_t errorValueAlignment = 0;
+
+    friend bool operator==(const NativeOwnedResultSourceFacts& left,
+                           const NativeOwnedResultSourceFacts& right) {
+        return std::tie(left.functionSymbolId, left.functionContractId,
+                   left.sourceLinkageName, left.refSlotSymbolId,
+                   left.refSlotContractId, left.resultTypeId,
+                   left.errorTypeId, left.errorAbiLayoutId,
+                   left.errorDropSymbolId, left.errorDropContractId,
+                   left.errorValueSize, left.errorValueAlignment) ==
+               std::tie(right.functionSymbolId, right.functionContractId,
+                   right.sourceLinkageName, right.refSlotSymbolId,
+                   right.refSlotContractId, right.resultTypeId,
+                   right.errorTypeId, right.errorAbiLayoutId,
+                   right.errorDropSymbolId, right.errorDropContractId,
+                   right.errorValueSize, right.errorValueAlignment);
+    }
 };
 
 bool deriveNativeOwnedResultSourceFacts(

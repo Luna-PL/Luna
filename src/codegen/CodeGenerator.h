@@ -4,6 +4,9 @@
 
 #include "../moonir/MoonIR.h"
 #include "CGHelpers.h"
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+#include "NativeOwnedResultFacts.h"
+#endif
 #include <cstdint>
 #include <functional>
 #include <llvm/ExecutionEngine/ExecutionEngine.h>
@@ -17,6 +20,7 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/TargetSelect.h>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -24,6 +28,9 @@
 
 namespace luna::driver {
 struct NativeExportSpec;
+}
+namespace luna::runtime {
+class RuntimeOwnedResultHandle;
 }
 
 // Internal ownership boundary for ORC materializations. Keeping this object
@@ -45,6 +52,8 @@ private:
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     // Bound at private materialization, before any loaded entry can look up code.
     std::vector<uint8_t> mPrivateRefUnitApplyEntryRecord;
+    std::optional<luna::codegen::NativeOwnedResultSourceFacts>
+        mPrivateOwnedResultSourceFacts;
 #endif
 };
 
@@ -61,6 +70,23 @@ private:
     std::shared_ptr<LunaJitModule> lease_;
     const void* entry_ = nullptr;
     std::vector<uint8_t> record_;
+};
+
+// Test-only loaded Ref/Result host adapter. The verified generated transfer
+// entry still returns a raw owner; this adapter commits it to Runtime's
+// unique handle while retaining the exact JIT module through all cleanup.
+class LunaPrivateRefResultLoadedEntry {
+public:
+    int32_t call(const void* parentContext, const void* borrowedRef,
+                 uint32_t* tagOutput, int32_t* scalarOutput,
+                 luna::runtime::RuntimeOwnedResultHandle& ownerOutput,
+                 bool failAdoptionForTest = false) const;
+
+private:
+    friend class CodeGenerator;
+    std::shared_ptr<LunaJitModule> lease_;
+    const void* entry_ = nullptr;
+    const void* drop_ = nullptr;
 };
 #endif
 
@@ -136,6 +162,10 @@ public:
     loadPrivateRuntimeFragmentRefApplyEntryForTest(
         const moon::Module& program, const moon::FunctionDecl& function,
         const std::vector<uint8_t>& entryRecord,
+        std::shared_ptr<LunaJitModule> executable, std::string& failure);
+    static std::unique_ptr<LunaPrivateRefResultLoadedEntry>
+    loadPrivateRuntimeFragmentRefResultEntryForTest(
+        const moon::Module& program, const moon::FunctionDecl& function,
         std::shared_ptr<LunaJitModule> executable, std::string& failure);
 #endif
 

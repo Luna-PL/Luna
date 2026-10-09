@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a test-only loaded Ref/owned-Result host adapter bound to the sealed
+  source facts retained with its verified JIT module. It preflights caller
+  outputs, calls the generated transfer entry with private cells, commits a
+  Runtime owner handle only after successful adoption, and invokes generated
+  Drop under the code lease if adoption fails. Resource Err, scalar Ok,
+  forged-source, wrong-target and output-alias regressions cover the path.
+  The public generated C wrapper and Native v3 export gate remain closed.
 - Added a Runtime-owned, move-only Result owner handle backed by a stable
   unique cell. Runtime retains the returned payload, exact generated Drop
   entry and code lease together, clears the cell before Drop callbacks, and

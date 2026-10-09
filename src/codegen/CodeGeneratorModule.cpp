@@ -6,6 +6,9 @@
 #include "moonir/Verifier.h"
 #include "runtime/RuntimeFragmentABI.h"
 #include "runtime/RuntimeFragmentCompilerBridge.h"
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+#include "runtime/RuntimeOwnedResult.h"
+#endif
 
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/Config/llvm-config.h>
@@ -21,6 +24,7 @@
 #include <llvm/TargetParser/Host.h>
 
 #include <array>
+#include <exception>
 #include <memory>
 #include <optional>
 #include <unordered_set>
@@ -471,6 +475,72 @@ int32_t LunaPrivateRefUnitApplyLoadedEntry::call(
     return entry(parentContext, const_cast<void*>(borrowedRef));
 }
 
+int32_t LunaPrivateRefResultLoadedEntry::call(
+    const void* parentContext, const void* borrowedRef,
+    uint32_t* tagOutput, int32_t* scalarOutput,
+    luna::runtime::RuntimeOwnedResultHandle& ownerOutput,
+    bool failAdoptionForTest) const {
+    auto keepCodeAlive = lease_;
+    if (!keepCodeAlive || !entry_ || !drop_)
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_UNEXPECTED_CHECK_V1_TEST;
+    if (!tagOutput || !scalarOutput || ownerOutput)
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST;
+    const auto tagAddress = reinterpret_cast<uintptr_t>(tagOutput);
+    const auto scalarAddress = reinterpret_cast<uintptr_t>(scalarOutput);
+    const auto separated = [](uintptr_t left, size_t leftSize,
+                              uintptr_t right, size_t rightSize) {
+        return left < right ? right - left >= leftSize
+                            : left - right >= rightSize;
+    };
+    const auto ownerCell = ownerOutput.cell();
+    const auto ownerAddress = reinterpret_cast<uintptr_t>(ownerCell);
+    if ((tagAddress & (alignof(uint32_t) - 1)) != 0 ||
+        (scalarAddress & (alignof(int32_t) - 1)) != 0 ||
+        !separated(tagAddress, sizeof(uint32_t),
+                   scalarAddress, sizeof(int32_t)) ||
+        (ownerCell &&
+            (!separated(tagAddress, sizeof(uint32_t),
+                        ownerAddress, sizeof(void*)) ||
+             !separated(scalarAddress, sizeof(int32_t),
+                        ownerAddress, sizeof(void*)))))
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST;
+    using Entry = int32_t (*)(const void*, void*, uint32_t*, int32_t*,
+                             void**, uint32_t);
+    using Drop = int32_t (*)(void**);
+    const auto entry = reinterpret_cast<Entry>(const_cast<void*>(entry_));
+    const auto drop = reinterpret_cast<Drop>(const_cast<void*>(drop_));
+    uint32_t tag = 0;
+    int32_t scalar = 0;
+    void* rawOwner = nullptr;
+    const int32_t status = entry(parentContext,
+        const_cast<void*>(borrowedRef), &tag, &scalar, &rawOwner, 0);
+    const auto discardOwner = [&] {
+        if (rawOwner && (drop(&rawOwner) != 0 || rawOwner))
+            std::terminate();
+    };
+    if (status != LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST) {
+        if (rawOwner) discardOwner();
+        return status;
+    }
+    if ((tag == 0 && !rawOwner) || (tag == 1 && rawOwner) || tag > 1) {
+        discardOwner();
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST;
+    }
+    if (rawOwner) {
+        std::string adoptionError;
+        if (failAdoptionForTest ||
+            !luna::runtime::makeRuntimeOwnedResultHandle(
+                rawOwner, drop, keepCodeAlive, ownerOutput, adoptionError)) {
+            discardOwner();
+            return LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST;
+        }
+    } else {
+        *scalarOutput = scalar;
+    }
+    *tagOutput = tag;
+    return LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST;
+}
+
 std::unique_ptr<LunaPrivateRefUnitApplyLoadedEntry>
 CodeGenerator::loadPrivateRuntimeFragmentRefApplyEntryForTest(
     const moon::Module& program, const FunctionDecl& function,
@@ -498,6 +568,32 @@ CodeGenerator::loadPrivateRuntimeFragmentRefApplyEntryForTest(
     loaded->lease_ = std::move(executable);
     loaded->entry_ = entry;
     loaded->record_ = entryRecord;
+    failure.clear();
+    return loaded;
+}
+
+std::unique_ptr<LunaPrivateRefResultLoadedEntry>
+CodeGenerator::loadPrivateRuntimeFragmentRefResultEntryForTest(
+    const moon::Module& program, const FunctionDecl& function,
+    std::shared_ptr<LunaJitModule> executable, std::string& failure) {
+    luna::codegen::NativeOwnedResultSourceFacts facts;
+    if (!executable || !executable->mPrivateOwnedResultSourceFacts ||
+        !luna::codegen::deriveNativeOwnedResultSourceFacts(
+            program, function, facts, failure) ||
+        !(facts == *executable->mPrivateOwnedResultSourceFacts)) {
+        failure = "private Ref Result entry is not bound to these frozen source facts";
+        return {};
+    }
+    const void* entry = executable->lookup(
+        "__luna_private_ref_apply_transfer_test", failure);
+    if (!entry) return {};
+    const void* drop = executable->lookup(
+        "__luna_private_ref_apply_drop_test", failure);
+    if (!drop) return {};
+    auto loaded = std::make_unique<LunaPrivateRefResultLoadedEntry>();
+    loaded->lease_ = std::move(executable);
+    loaded->entry_ = entry;
+    loaded->drop_ = drop;
     failure.clear();
     return loaded;
 }
@@ -2549,6 +2645,9 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             }
             *executable = proof.materializeJitModule(failure);
             if (!*executable) return false;
+            if (privateOwnedResultFacts)
+                (*executable)->mPrivateOwnedResultSourceFacts =
+                    *privateOwnedResultFacts;
             if (entryRecord) {
                 (*executable)->mPrivateRefUnitApplyEntryRecord = *encodedEntry;
                 *entryRecord = std::move(*encodedEntry);

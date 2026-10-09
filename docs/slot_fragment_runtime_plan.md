@@ -1192,6 +1192,16 @@ proof checks one context check, one Ref check and one body call. A Runtime-owned
 opaque handle now exists as a separate host carrier, but this test entry still
 writes a raw owner pointer. A generated host wrapper, production status codes
 and a v3 descriptor binding are still required.
+The test-only loaded host adapter now binds the frozen owned-Result source
+facts to the materialized JIT module and looks up that module's generated
+transfer and Drop entries together. It checks caller outputs before invoking
+the transfer entry with private cells, commits the Runtime handle after
+adoption, and Drops an uncommitted owner under the same code lease when
+adoption fails. Its adoption-failure status is test-only. Resource Err and
+scalar Ok paths, forged source identity, wrong Ref target, occupied owner and
+aliased output cells have executable checks. This adapter is not the fixed C
+prototype or generated wrapper required for Native v3. The focused Windows
+Clang64 ASAN canonical run passes with this adapter.
 
 On current 64-bit targets the v3 export/library records are 136/96 bytes;
 `entry_abi`, error size, first identifier and entry pointer begin at offsets
