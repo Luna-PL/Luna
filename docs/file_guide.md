@@ -170,6 +170,9 @@ script-defined special inputs.
   exact-Slot candidate snapshots without embedding host selection policy.
   `RuntimeFragmentCompilerBridge.h` declares the unpublished compiler-only
   borrowed-Ref context derivation and owning-cell cleanup bridge.
+  `RuntimeOwnedResult.h` declares the internal unique-cell owner carrier and
+  Drop status; the Runtime implementation retains its generated Drop entry
+  and code lease until cleanup completes. It is not a Native export ABI.
 
 SemanticAnalyzer is the stable tooling/compiler facade and exposes the read-only Symbol Catalog.
 SemanticContext is the single internal
@@ -553,6 +556,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/runtime/RuntimeFragment.h`
 - `src/runtime/RuntimeFragmentABI.h`
 - `src/runtime/RuntimeFragmentCompilerBridge.h`
+- `src/runtime/RuntimeOwnedResult.h`
 - `src/runtime/ApplicationHostServices.cpp`
 - `src/runtime/ApplicationHostServices.h`
 - `src/runtime/Runtime.cpp`

@@ -1189,8 +1189,9 @@ entry. Parent-context and exact borrowed-Ref preflight now run after output
 preflight; null parent/Ref and a live foreign-target handle return distinct
 test-only statuses without body dispatch or output mutation. The generated
 proof checks one context check, one Ref check and one body call. A Runtime-owned
-opaque handle, production status codes and a v3 descriptor binding are still
-required.
+opaque handle now exists as a separate host carrier, but this test entry still
+writes a raw owner pointer. A generated host wrapper, production status codes
+and a v3 descriptor binding are still required.
 
 On current 64-bit targets the v3 export/library records are 136/96 bytes;
 `entry_abi`, error size, first identifier and entry pointer begin at offsets
@@ -1230,9 +1231,17 @@ or Drop address. Its Drop operation consumes a unique handle cell, clears it
 before callbacks, keeps the code lease through recursive Drop/deallocation,
 then releases the lease. A repeated Drop on the cleared cell is distinguishable
 from a live Drop; copied, stale or foreign raw addresses are not valid handles.
-The private fixture now binds owner and JIT lease in one noncopyable test
-carrier and proves deferred exactly-once Drop after the borrowed Ref pin
-expires, including Windows ASAN. The next production step is a generated
+Runtime now owns a move-only handle with a stable cell and a live-token table.
+The cell address is bound at adoption: copying a token into another cell,
+using a stale token, or passing a foreign token is rejected without invoking
+Drop. Runtime clears the bound cell and removes the token before calling the
+exact generated Drop entry, while the JIT lease remains in the retired state.
+The private fixture uses this carrier and proves deferred exactly-once Drop
+after the borrowed Ref pin expires. The Runtime carrier passes the focused
+Windows Clang64 ASAN canonical test on rerun. One invocation stopped earlier
+at the known LLVM 20.1.8 COFF ordered-section relocation failure, before the
+carrier path; Linux ASAN remains to be checked. The
+next production step is a generated
 host wrapper with a fixed C prototype, the proven parent/Ref preflight,
 separate status and Result tag, scalar output and unique owner-handle cell.
 Its failure paths
@@ -1240,7 +1249,7 @@ must retain the JIT lease through cleanup. Only after verifying the generated
 wrapper and binding its distinct entry and linkage to the frozen source facts,
 the producer can emit a v3 row and propagate its typed proof to `PinnedBinding`.
 Generated entry tests for every failure phase and the Runtime-owned handle/Drop
-operation are required before opening
+operation across supported targets are required before opening
 the narrow verifier/export gate. Native v1 rows must not be extended in place.
 An audit build exposed a nearer fail-closed requirement: Native v1 accepted
 an exported `Result<i32, OwnedError>` and sealed a library and trust record
@@ -1249,7 +1258,8 @@ rejects callable exports whose frozen return requires cleanup or has non-Copy
 usage. A real Native package regression requires that rejection before any
 library or trust record is written; ordinary `i32()` publication remains
 covered by the existing Native artifact test. The resource-return source gate
-stays closed while the wrapper, Runtime handle and status path are implemented.
+stays closed while the wrapper and production status path are implemented and
+the Runtime handle is bound to the verified callable.
 A follow-up real build found the symmetric ingress gap: a by-value
 `OwnedInput` parameter with Drop also produced a Native library and trust
 record through the untyped v1 callable row. Descriptor emission now rejects
@@ -1499,15 +1509,16 @@ not a public ABI decision or stable-release approval:
    host probe and Windows ASAN. Both arms now pass the private host handoff:
    preflight rejects invalid owner cells, injected post-body failure cleans
    the uncommitted owner, and successful commit leaves it for exactly-once
-   host Drop. The second owner remains live in a noncopyable test carrier with
-   its JIT lease after the borrowed Ref pin expires; focused Windows ASAN
-   passes. A narrow versioned public carrier and failure-status candidate is
+   host Drop. The second owner now remains live in a Runtime-owned carrier
+   with its JIT lease after the borrowed Ref pin expires; the earlier test
+   carrier passed focused Windows ASAN. A narrow versioned public carrier and
+   failure-status candidate is
    specified above. Native v1 now rejects cleanup-bearing public parameters
    and returns before producing an artifact. Existing v2 covers only `i32()`.
    A validation-only parallel v3 row and loader check bind candidate Ref and
    Result facts. Source-fact derivation now checks the frozen signature and
    the private generated transfer entry's shape; emitting a v3 row still
-   requires a verified production wrapper and Runtime owner handle.
+   requires a verified production wrapper bound to the Runtime owner handle.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

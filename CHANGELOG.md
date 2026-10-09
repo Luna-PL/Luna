@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a Runtime-owned, move-only Result owner handle backed by a stable
+  unique cell. Runtime retains the returned payload, exact generated Drop
+  entry and code lease together, clears the cell before Drop callbacks, and
+  rejects copied, stale and foreign tokens. The private JIT transfer fixture
+  now uses this carrier and checks deferred Drop after its Ref pin expires,
+  including in the Windows Clang64 ASAN canonical test.
+  The generated host wrapper and Native v3 callable binding remain gated.
 - Added parent-context and exact borrowed-Ref preflight to the private
   Ref/Result transfer entry. Live foreign-target and null-handle fixtures
   require distinct test-only statuses, unchanged outputs and no body or Drop

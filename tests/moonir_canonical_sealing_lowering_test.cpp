@@ -10,6 +10,7 @@
 #include "runtime/RuntimeDescriptor.h"
 #include "runtime/RuntimeFragment.h"
 #include "runtime/RuntimeFragmentCompilerBridge.h"
+#include "runtime/RuntimeOwnedResult.h"
 #include "runtime/NativeArtifactABI.h"
 #include "tooling/AnalysisSnapshot.h"
 #include "moonir_canonical_test_support.h"
@@ -82,37 +83,6 @@ std::array<const char*, 2> privateRefJitExpectedSlotContracts{};
 std::array<const char*, 2> privateRefJitExpectedLayoutIds{};
 std::array<uint64_t, 2> privateRefJitExpectedSizes{};
 std::array<uint64_t, 2> privateRefJitExpectedAlignments{};
-
-// Test-only owner cell: its JIT code lease lives until the frozen Drop thunk
-// has consumed the owner. Copies cannot create a second owning carrier.
-struct PrivateRefReturnedOwner {
-    using DropEntry = int32_t (*)(void**);
-
-    PrivateRefReturnedOwner(void* owned, DropEntry thunk,
-                            std::shared_ptr<LunaJitModule> code)
-        : owner(owned), drop(thunk), lease(std::move(code)) {}
-    PrivateRefReturnedOwner(const PrivateRefReturnedOwner&) = delete;
-    PrivateRefReturnedOwner& operator=(const PrivateRefReturnedOwner&) = delete;
-    ~PrivateRefReturnedOwner() {
-        if (owner && lease && drop) drop(&owner);
-    }
-
-    bool live() const { return owner && drop && lease; }
-    int32_t dropOnce() {
-        if (!live()) return 1;
-        const int32_t status = drop(&owner);
-        if (status == 0 && !owner) {
-            drop = nullptr;
-            lease.reset();
-        }
-        return status;
-    }
-
-private:
-    void* owner = nullptr;
-    DropEntry drop = nullptr;
-    std::shared_ptr<LunaJitModule> lease;
-};
 
 void executePrivateRefJitFragmentFrom(unsigned source, void* activation) {
     ++privateRefJitExecutions;
@@ -393,7 +363,7 @@ bool exercisePrivateRefApplyJit(
             return false;
         }
     }
-    std::optional<PrivateRefReturnedOwner> deferredOwner;
+    std::optional<luna::runtime::RuntimeOwnedResultHandle> deferredOwner;
     unsigned deferredDropProbeBaseline = 0;
     unsigned transferInvocations = 0;
     const auto invoke = [&] {
@@ -536,16 +506,68 @@ bool exercisePrivateRefApplyJit(
             }
             if (owner) {
                 if (deferThisOwner) {
-                    deferredOwner.emplace(owner, entryDrop, jit);
+                    deferredOwner.emplace();
+                    if (!luna::runtime::makeRuntimeOwnedResultHandle(
+                            owner, entryDrop, jit, *deferredOwner, error)) {
+                        entryDrop(&owner);
+                        return false;
+                    }
                     owner = nullptr;
                     deferredDropProbeBaseline = privateRefJitAllDropProbeCalls;
                     return true;
                 }
-                if (entryDrop(&owner) != 0 || owner != nullptr ||
+                luna::runtime::RuntimeOwnedResultHandle rejectedOwner;
+                std::string adoptionError;
+                if (luna::runtime::makeRuntimeOwnedResultHandle(
+                        nullptr, entryDrop, jit, rejectedOwner,
+                        adoptionError) ||
+                    luna::runtime::makeRuntimeOwnedResultHandle(
+                        owner, nullptr, jit, rejectedOwner,
+                        adoptionError) ||
+                    luna::runtime::makeRuntimeOwnedResultHandle(
+                        owner, entryDrop, {}, rejectedOwner,
+                        adoptionError) || rejectedOwner) {
+                    entryDrop(&owner);
+                    error = "runtime owned Result adopted incomplete inputs";
+                    return false;
+                }
+                luna::runtime::RuntimeOwnedResultHandle returnedOwner;
+                if (!luna::runtime::makeRuntimeOwnedResultHandle(
+                        owner, entryDrop, jit, returnedOwner, error)) {
+                    entryDrop(&owner);
+                    return false;
+                }
+                void* copiedHandle = const_cast<void*>(returnedOwner.opaque());
+                if (luna::runtime::makeRuntimeOwnedResultHandle(
+                        owner, entryDrop, jit, returnedOwner,
+                        adoptionError) ||
+                    copiedHandle != returnedOwner.opaque()) {
+                    error = "runtime owned Result overwrote a live handle";
+                    return false;
+                }
+                luna::runtime::RuntimeOwnedResultHandle movedOwner(
+                    std::move(returnedOwner));
+                owner = nullptr;
+                void* foreignHandle = reinterpret_cast<void*>(~uintptr_t{0});
+                if (luna_runtime_owned_result_drop_v1(&copiedHandle) !=
+                        LUNA_RUNTIME_OWNED_RESULT_DROP_INVALID_HANDLE_V1 ||
+                    copiedHandle != movedOwner.opaque() ||
+                    luna_runtime_owned_result_drop_v1(&foreignHandle) !=
+                        LUNA_RUNTIME_OWNED_RESULT_DROP_INVALID_HANDLE_V1 ||
+                    foreignHandle != reinterpret_cast<void*>(~uintptr_t{0}) ||
+                    luna_runtime_owned_result_drop_v1(nullptr) !=
+                        LUNA_RUNTIME_OWNED_RESULT_DROP_INVALID_HANDLE_V1 ||
+                    returnedOwner || !movedOwner ||
+                    movedOwner.dropOnce() !=
+                        LUNA_RUNTIME_OWNED_RESULT_DROP_SUCCESS_V1 ||
+                    movedOwner ||
+                    luna_runtime_owned_result_drop_v1(&copiedHandle) !=
+                        LUNA_RUNTIME_OWNED_RESULT_DROP_INVALID_HANDLE_V1 ||
                     privateRefJitAllDropProbeCalls !=
                         callsAfterFailure + bodyDropCalls +
                             *transferredDropCalls ||
-                    entryDrop(&owner) == 0 ||
+                    movedOwner.dropOnce() !=
+                        LUNA_RUNTIME_OWNED_RESULT_DROP_EMPTY_V1 ||
                     privateRefJitAllDropProbeCalls !=
                         callsAfterFailure + bodyDropCalls +
                             *transferredDropCalls) {
@@ -663,16 +685,17 @@ bool exercisePrivateRefApplyJit(
         const auto callsBeforeDeferredDrop = privateRefJitAllDropProbeCalls;
         jit.reset();
         const bool codeLeaseRetained =
-            deferredOwner && deferredOwner->live() &&
+            deferredOwner && static_cast<bool>(*deferredOwner) &&
             !codeLifetime.expired();
         const int32_t dropStatus = deferredOwner
-            ? deferredOwner->dropOnce() : 1;
+            ? deferredOwner->dropOnce() : LUNA_RUNTIME_OWNED_RESULT_DROP_EMPTY_V1;
         const int32_t repeatedDropStatus = deferredOwner
-            ? deferredOwner->dropOnce() : 1;
+            ? deferredOwner->dropOnce() : LUNA_RUNTIME_OWNED_RESULT_DROP_EMPTY_V1;
         if (!generationExpiredBeforeHostDrop || !codeLeaseRetained ||
             callsBeforeDeferredDrop != deferredDropProbeBaseline ||
-            dropStatus != 0 || repeatedDropStatus == 0 ||
-            !deferredOwner || deferredOwner->live() ||
+            dropStatus != LUNA_RUNTIME_OWNED_RESULT_DROP_SUCCESS_V1 ||
+            repeatedDropStatus != LUNA_RUNTIME_OWNED_RESULT_DROP_EMPTY_V1 ||
+            !deferredOwner || static_cast<bool>(*deferredOwner) ||
             !codeLifetime.expired() ||
             privateRefJitAllDropProbeCalls !=
                 callsBeforeDeferredDrop + transferredDropCalls.value_or(0)) {

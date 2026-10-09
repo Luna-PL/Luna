@@ -1,5 +1,6 @@
 #include "RuntimeFragment.h"
 #include "RuntimeFragmentCompilerBridge.h"
+#include "RuntimeOwnedResult.h"
 
 #include "RuntimeDescriptorABI.h"
 
@@ -7,6 +8,8 @@
 #include <atomic>
 #include <cstring>
 #include <exception>
+#include <mutex>
+#include <unordered_map>
 #include <utility>
 
 namespace luna::runtime {
@@ -62,6 +65,17 @@ constexpr uint64_t RuntimeFragmentExecutionContextMagic =
     0x4c554e4145584331ULL; // "LUNAEXC1"
 constexpr uint64_t RuntimeFragmentRefHandleMagic =
     0x4c554e4152454631ULL; // "LUNAREF1"
+
+struct OwnedResultState {
+    void* payload = nullptr;
+    RuntimeOwnedResultHandle::DropEntry drop = nullptr;
+    std::shared_ptr<const void> codeLease;
+    void** boundCell = nullptr;
+};
+
+std::mutex ownedResultMutex;
+std::unordered_map<uintptr_t, std::unique_ptr<OwnedResultState>> ownedResults;
+uintptr_t nextOwnedResultToken = 1;
 
 const std::string& emptyString() {
     static const std::string empty;
@@ -1009,7 +1023,91 @@ RuntimeFragmentBindingSet MoonRuntime::pinFragmentBindings() const {
     return result;
 }
 
+RuntimeOwnedResultHandle& RuntimeOwnedResultHandle::operator=(
+    RuntimeOwnedResultHandle&& other) noexcept {
+    if (this != &other) {
+        auto retired = std::move(cell_);
+        cell_ = std::move(other.cell_);
+        if (retired) luna_runtime_owned_result_drop_v1(retired.get());
+    }
+    return *this;
+}
+
+RuntimeOwnedResultHandle::~RuntimeOwnedResultHandle() { reset(); }
+
+int32_t RuntimeOwnedResultHandle::dropOnce() noexcept {
+    return cell_ ? luna_runtime_owned_result_drop_v1(cell_.get())
+                 : LUNA_RUNTIME_OWNED_RESULT_DROP_EMPTY_V1;
+}
+
+void RuntimeOwnedResultHandle::reset() noexcept {
+    auto retired = std::move(cell_);
+    if (retired) luna_runtime_owned_result_drop_v1(retired.get());
+}
+
+bool makeRuntimeOwnedResultHandle(
+    void* payload, RuntimeOwnedResultHandle::DropEntry drop,
+    std::shared_ptr<const void> codeLease,
+    RuntimeOwnedResultHandle& output, std::string& error) {
+    error.clear();
+    if (!payload || !drop || !codeLease || output) {
+        error = "runtime owned Result requires a payload, Drop entry, code lease and empty output";
+        return false;
+    }
+    try {
+        auto newCell = output.cell_ ? nullptr :
+            std::make_unique<void*>(nullptr);
+        void** boundCell = newCell ? newCell.get() : output.cell_.get();
+        auto state = std::make_unique<OwnedResultState>();
+        state->payload = payload;
+        state->drop = drop;
+        state->codeLease = std::move(codeLease);
+        state->boundCell = boundCell;
+        std::lock_guard<std::mutex> lock(ownedResultMutex);
+        if (nextOwnedResultToken == 0) {
+            error = "runtime owned Result handle space is exhausted";
+            return false;
+        }
+        const uintptr_t token = nextOwnedResultToken;
+        ownedResults.emplace(token, std::move(state));
+        ++nextOwnedResultToken;
+        *boundCell = reinterpret_cast<void*>(token);
+        if (newCell) output.cell_ = std::move(newCell);
+        return true;
+    } catch (...) {
+        error = "runtime owned Result handle allocation failed";
+        return false;
+    }
+}
+
 } // namespace luna::runtime
+
+extern "C" int32_t luna_runtime_owned_result_drop_v1(void** owner_cell) {
+    if (!owner_cell) return LUNA_RUNTIME_OWNED_RESULT_DROP_INVALID_HANDLE_V1;
+    std::unique_ptr<luna::runtime::OwnedResultState> retired;
+    {
+        std::lock_guard<std::mutex> lock(luna::runtime::ownedResultMutex);
+        if (!*owner_cell) return LUNA_RUNTIME_OWNED_RESULT_DROP_EMPTY_V1;
+        const auto token = reinterpret_cast<uintptr_t>(*owner_cell);
+        const auto found = luna::runtime::ownedResults.find(token);
+        if (found == luna::runtime::ownedResults.end() ||
+            found->second->boundCell != owner_cell)
+            return LUNA_RUNTIME_OWNED_RESULT_DROP_INVALID_HANDLE_V1;
+        retired = std::move(found->second);
+        luna::runtime::ownedResults.erase(found);
+        *owner_cell = nullptr;
+    }
+    // The code lease stays in retired through the entire generated Drop call.
+    // A verified Drop thunk must consume its payload without throwing. If it
+    // violates that contract, unloading its code would be unsafe.
+    try {
+        if (retired->drop(&retired->payload) != 0 || retired->payload)
+            std::terminate();
+    } catch (...) {
+        std::terminate();
+    }
+    return LUNA_RUNTIME_OWNED_RESULT_DROP_SUCCESS_V1;
+}
 
 extern "C" int32_t luna_runtime_fragment_ref_check_v1(
     const void* reference, const char* slot_id, const char* slot_contract_id) {

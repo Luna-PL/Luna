@@ -904,8 +904,8 @@ cell，注入失败时三个输出保持不变。parent context 与精确借用 
 输出预检后执行；空 parent／Ref
 及有效的外来目标 handle 返回不同的仅测试用状态，不执行 body 或改写输出。
 生成证明要求恰好一次 context check、一次 Ref check 和一次源码 body 调用。
-这仍是 JIT 测试入口；Runtime 所有的 opaque handle、生产状态码及 v3 descriptor
-绑定尚未实现。
+这仍是 JIT 测试入口，输出仍为裸 owner 指针。Runtime 已有单独的 opaque owner
+handle；生成的宿主 wrapper、生产状态码及 v3 descriptor 绑定尚未实现。
 
 当前 64 位目标的 v3 export／library 记录大小为 136／96 字节；`entry_abi`、
 错误值大小、首个标识符与入口指针的偏移依次为 16、32、48、128。SHA-256 摘要
@@ -937,9 +937,14 @@ handle cell 为空。入口前失败不修改输出或源 owner。body 启动后
 宿主只持有 opaque handle，不分别复制 owner 指针或 Drop 地址。Drop 操作消费
 唯一的 handle cell，先清空 cell，再在代码 lease 保持期间执行递归 Drop／释放，
 最后释放 lease。同一已清空 cell 的重复 Drop 应与有效 Drop 可区分；复制的、
-失效的或外来的裸地址不是有效 handle。私有夹具现用一个不可复制的测试 carrier
-绑定 owner 与 JIT lease，并在借用 Ref pin 失效后证明延迟且恰好一次的 Drop，
-Windows ASAN 亦通过。下一步是实现具有固定 C 原型、已证明的 parent／Ref
+失效的或外来的裸地址不是有效 handle。Runtime 现有可移动而不可复制的 handle，
+以稳定 cell 和有效 token 表持有 owner、精确生成的 Drop 入口及 JIT lease。
+收养时绑定 cell 地址：将 token 复制到另一个 cell、使用失效或外来 token 都被拒绝，
+且不调用 Drop。Runtime 先清空绑定的 cell 并移除 token，再在 lease 存活期间调用
+Drop。私有夹具已改用该 carrier，并在借用 Ref pin 失效后证明延迟且恰好一次的
+Drop。Runtime carrier 在重跑时通过 Windows Clang64 ASAN 聚焦 canonical 测试；
+另一次运行在进入该路径前遇到已知的 LLVM 20.1.8 COFF 保序 section 重定位
+失败。Linux ASAN 仍待核验。下一步是实现具有固定 C 原型、已证明的 parent／Ref
 预检、独立状态／Result tag、标量输出及唯一 owner-handle cell 的生产宿主 wrapper，并在
 失败清理期间保持 JIT lease。核验生成的 wrapper 并把其独立入口与 linkage 绑定
 到冻结源码事实后，
@@ -952,7 +957,8 @@ verifier／export 门禁。不能
 返回 owner 的 carrier。descriptor 发射端现拒绝冻结返回类型需要清理或返回
 usage 非 Copy 的 callable 导出。真实 Native package 回归要求在写入库文件或
 trust 记录之前被拒绝；现有 Native artifact 测试继续覆盖普通 `i32()` 发布。
-在 wrapper、Runtime handle 和状态路径完成前，资源返回源码门禁保持关闭。
+在 wrapper 与生产状态路径完成、Runtime handle 绑定至验证过的入口前，资源返回
+源码门禁保持关闭。
 后续真实构建又发现对称的入口缺口：带 Drop 的按值 `OwnedInput` 参数也曾通过
 无类型 v1 callable 行生成 Native 库和 trust 记录。descriptor 发射端现拒绝
 冻结参数类型需要清理，或源码／冻结参数契约 usage 非 Copy 的导出。Native
@@ -1138,12 +1144,12 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    另一返回分支转移第二字段，两次观察到 `-43, 59, 47`；宿主探针和 Windows
    ASAN 同样确认四笔分配各释放一次。两条分支现均通过私有宿主交接：预检
    拒绝无效 owner cell，注入的 body 后失败清理未提交 owner，成功提交后
-   由宿主恰好一次 Drop。第二个 owner 在借用 Ref pin 结束后由不可复制的测试
-   carrier 连同 JIT lease 保持有效；Windows ASAN 聚焦测试通过。上文已列出
+   由宿主恰好一次 Drop。第二个 owner 在借用 Ref pin 结束后现由 Runtime carrier
+   连同 JIT lease 保持有效；此前测试 carrier 的 Windows ASAN 聚焦测试通过。上文已列出
    带版本的公开 carrier 与失败状态候选。Native v1 现于生成 artifact 前拒绝
    需清理的公开参数和返回值。现有 v2 仅覆盖 `i32()`；并行 v3 候选行及 loader
    校验现已覆盖 Ref 与 Result metadata。源码事实推导已核对冻结签名及私有生成
-   transfer 入口形态；发射 v3 行仍须验证生产 wrapper 与 Runtime owner handle。
+   transfer 入口形态；发射 v3 行仍须验证生产 wrapper 与 Runtime owner handle 的绑定。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。
