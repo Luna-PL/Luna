@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Bound the private returned owner, frozen Drop entry and JIT code lease in
+  one noncopyable test carrier. Deferred host Drop consumes the owner cell
+  while code remains live, then releases the lease; duplicate Drop fails.
+  Documented a narrow, versioned `Result<i32, E>` host-return candidate with
+  an opaque Runtime-owned handle and explicit failure/commit rules.
 - Extended the private host-transfer experiment to both returning arms of
   `From<SourceSplitError> for ReturnedFromSplit`. Preflight rejects invalid
   owner cells without running the body. Each injected post-body failure Drops

@@ -989,11 +989,11 @@ both outputs untouched and runs the same exact cleanup inside the JIT before
 returning status `3`. On the second successful transfer, the host defers Drop,
 releases the borrowed Ref handle and observes its generation pin expire with
 no extra resource Drop. It then releases the original JIT handle while a
-separate shared LLJIT lease keeps the Drop entry executable; host Drop runs
-exactly once, after which that lease expires. The raw owner pointer does not
-retain JIT code itself. A public carrier must pair owner and code lease so
-the Drop thunk remains live through cleanup. This is a test-only protocol,
-with no published carrier or symbol contract. It does not establish
+noncopyable test carrier binds the owner, exact Drop entry and shared LLJIT
+lease. Host Drop runs exactly once, after which that lease expires. The raw
+owner pointer does not retain JIT code itself. A public carrier must pair
+owner and code lease so the Drop thunk remains live through cleanup. This
+test-only protocol has no published carrier or symbol contract. It does not establish
 production failure statuses or safe JIT teardown with an outstanding owner.
 The observation value is not a public return carrier or stable ABI.
 More than three owned structs, wider resource graphs, conversion bodies with
@@ -1135,6 +1135,55 @@ baseline: WSL Git lacked the Windows system `core.autocrlf=true` setting and
 misread the child worktrees' CRLF checkout as dirty. Both were clean under
 that setting; a process-local Git override made the failed test and complete
 rerun pass. This is local Linux evidence, not remote platform CI.
+
+#### Candidate owned Result return carrier (design only, 2026-10-09)
+
+The first resource-return profile should stay narrow: one synchronous
+`shared borrow RuntimeFragmentRef<S>` parameter and a source result
+`Result<i32, E>`, where `E` has a verified bounded owned-struct layout and
+frozen recursive Drop glue. A versioned typed export row must bind the exact
+Ref Slot/Contract, Result type, `E` layout and Drop identity, calling
+convention, status domain, function identity and owning module to the
+verified export digest. Its pinned lookup view must retain code during the
+call. This is a candidate contract, not a published ABI or a change to the
+current source export gate.
+
+The proposed result output is a tag, an `i32` scalar cell and one empty
+opaque owner-handle cell. The invocation status is separate from the source
+Result tag. All output addresses and the empty handle cell are checked before
+body dispatch. A successful resource arm constructs a Runtime-owned handle
+that binds the returned pointer, exact Drop entry and a code lease; writing
+that handle into the output cell is the final ownership commit. A scalar arm
+leaves the handle cell empty. A pre-entry failure changes no output or source
+owner. After the body starts, derivation/dispatch, invalid-return, handle
+allocation or post-body failures leave outputs unchanged and clean any
+uncommitted returned owner while its code is pinned. Executed effects are
+not rolled back. The status version must distinguish those failures before
+the source export gate is lifted.
+
+| Candidate status group | Body entered? | Output and ownership rule |
+| --- | --- | --- |
+| Success | Yes | Commit one Result tag and either scalar value or unique owner handle. |
+| Invalid parent, Ref, target or output | No | Leave all outputs and caller-owned inputs unchanged. |
+| Derivation or dispatch failure | Maybe | Leave outputs unchanged; run all active context and local cleanup. |
+| Invalid resource return, handle allocation or later post-body failure | Yes | Leave outputs unchanged; clean any uncommitted returned owner under the code lease. |
+
+The groups name required distinctions, not numeric status assignments. A
+failed body may already have executed effects; the status makes no rollback
+promise.
+
+The host owns only the opaque handle, never a separately copied owner pointer
+or Drop address. Its Drop operation consumes a unique handle cell, clears it
+before callbacks, keeps the code lease through recursive Drop/deallocation,
+then releases the lease. A repeated Drop on the cleared cell is distinguishable
+from a live Drop; copied, stale or foreign raw addresses are not valid handles.
+The private fixture now binds owner and JIT lease in one noncopyable test
+carrier and proves deferred exactly-once Drop after the borrowed Ref pin
+expires, including Windows ASAN. Publication still requires a versioned
+export row and loader check, propagation to `PinnedBinding`, a Runtime-owned
+handle and status implementation, and generated entry tests for every failure
+phase before opening the narrow verifier/export gate. Native v1 rows must not
+be extended in place.
 
 #### Native typed export boundary audit (2026-10-06)
 
@@ -1376,10 +1425,11 @@ not a public ABI decision or stable-release approval:
    host probe and Windows ASAN. Both arms now pass the private host handoff:
    preflight rejects invalid owner cells, injected post-body failure cleans
    the uncommitted owner, and successful commit leaves it for exactly-once
-   host Drop. The second owner remains live under a separate JIT lease after
-   the borrowed Ref pin expires; focused Windows ASAN passes. Next, define
-   a versioned public owner-and-lease carrier and production failure statuses
-   before admitting this shape beyond the private test entry.
+   host Drop. The second owner remains live in a noncopyable test carrier with
+   its JIT lease after the borrowed Ref pin expires; focused Windows ASAN
+   passes. A narrow versioned public carrier and failure-status candidate is
+   specified above. Next, implement its verified typed export row and loader
+   checks before admitting this shape beyond the private test entry.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

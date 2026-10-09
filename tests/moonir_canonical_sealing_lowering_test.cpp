@@ -82,6 +82,37 @@ std::array<const char*, 2> privateRefJitExpectedLayoutIds{};
 std::array<uint64_t, 2> privateRefJitExpectedSizes{};
 std::array<uint64_t, 2> privateRefJitExpectedAlignments{};
 
+// Test-only owner cell: its JIT code lease lives until the frozen Drop thunk
+// has consumed the owner. Copies cannot create a second owning carrier.
+struct PrivateRefReturnedOwner {
+    using DropEntry = int32_t (*)(void**);
+
+    PrivateRefReturnedOwner(void* owned, DropEntry thunk,
+                            std::shared_ptr<LunaJitModule> code)
+        : owner(owned), drop(thunk), lease(std::move(code)) {}
+    PrivateRefReturnedOwner(const PrivateRefReturnedOwner&) = delete;
+    PrivateRefReturnedOwner& operator=(const PrivateRefReturnedOwner&) = delete;
+    ~PrivateRefReturnedOwner() {
+        if (owner && lease && drop) drop(&owner);
+    }
+
+    bool live() const { return owner && drop && lease; }
+    int32_t dropOnce() {
+        if (!live()) return 1;
+        const int32_t status = drop(&owner);
+        if (status == 0 && !owner) {
+            drop = nullptr;
+            lease.reset();
+        }
+        return status;
+    }
+
+private:
+    void* owner = nullptr;
+    DropEntry drop = nullptr;
+    std::shared_ptr<LunaJitModule> lease;
+};
+
 void executePrivateRefJitFragmentFrom(unsigned source, void* activation) {
     ++privateRefJitExecutions;
     if (source > 1) {
@@ -340,8 +371,6 @@ bool exercisePrivateRefApplyJit(
         const_cast<void*>(transferAddress));
     const auto entryDrop = reinterpret_cast<EntryDrop>(
         const_cast<void*>(dropAddress));
-    std::shared_ptr<LunaJitModule> hostDropLease =
-        deferSecondHostDrop ? jit : nullptr;
     std::weak_ptr<LunaJitModule> codeLifetime = jit;
     if (exerciseIngressGate) {
         jit.reset();
@@ -350,7 +379,7 @@ bool exercisePrivateRefApplyJit(
             return false;
         }
     }
-    void* deferredOwner = nullptr;
+    std::optional<PrivateRefReturnedOwner> deferredOwner;
     unsigned deferredDropProbeBaseline = 0;
     unsigned transferInvocations = 0;
     const auto invoke = [&] {
@@ -439,7 +468,8 @@ bool exercisePrivateRefApplyJit(
             }
             if (owner) {
                 if (deferThisOwner) {
-                    deferredOwner = owner;
+                    deferredOwner.emplace(owner, entryDrop, jit);
+                    owner = nullptr;
                     deferredDropProbeBaseline = privateRefJitAllDropProbeCalls;
                     return true;
                 }
@@ -566,15 +596,16 @@ bool exercisePrivateRefApplyJit(
         const auto callsBeforeDeferredDrop = privateRefJitAllDropProbeCalls;
         jit.reset();
         const bool codeLeaseRetained =
-            static_cast<bool>(hostDropLease) && !codeLifetime.expired();
+            deferredOwner && deferredOwner->live() &&
+            !codeLifetime.expired();
         const int32_t dropStatus = deferredOwner
-            ? entryDrop(&deferredOwner) : 1;
-        const int32_t repeatedDropStatus = entryDrop(&deferredOwner);
-        hostDropLease.reset();
+            ? deferredOwner->dropOnce() : 1;
+        const int32_t repeatedDropStatus = deferredOwner
+            ? deferredOwner->dropOnce() : 1;
         if (!generationExpiredBeforeHostDrop || !codeLeaseRetained ||
             callsBeforeDeferredDrop != deferredDropProbeBaseline ||
             dropStatus != 0 || repeatedDropStatus == 0 ||
-            deferredOwner != nullptr ||
+            !deferredOwner || deferredOwner->live() ||
             !codeLifetime.expired() ||
             privateRefJitAllDropProbeCalls !=
                 callsBeforeDeferredDrop + transferredDropCalls.value_or(0)) {

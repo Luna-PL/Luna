@@ -751,9 +751,10 @@ RuntimeDyld 构建随后通过同一 canonical 测试。因此直接切换此 JI
 空输出地址在 body 分派前失败且不改动输出。注入的失败在源码 body 返回非空资源后
 触发，两个输出保持原值，JIT 在返回状态 `3` 前执行同样的精确清理。第二次成功
 交接后，宿主延迟 Drop，先释放借用 Ref handle，并确认 generation pin 失效而资源
-Drop 次数不变。随后释放原始 JIT 句柄，由另一份共享 LLJIT lease 保持 Drop 入口
-可执行；宿主恰好执行一次 Drop 后该 lease 才结束。裸 owner 指针本身不保留 JIT
-代码；公开 carrier 必须同时持有 owner 与代码 lease，直到清理完成。这仍只是私有
+Drop 次数不变。随后释放原始 JIT 句柄；不可复制的测试 carrier 将 owner、精确
+Drop 入口和共享 LLJIT lease 绑定，宿主恰好执行一次 Drop 后该 lease 才结束。
+裸 owner 指针本身不保留 JIT 代码；公开 carrier 必须同时持有 owner 与代码
+lease，直到清理完成。这仍只是私有
 实验，没有公开 carrier 或符号契约；尚未确定生产失败状态，也未验证 owner 未释放
 时安全关闭 JIT 的行为。
 该观测值不是公开返回 carrier 或稳定 ABI。超过三个拥有型 struct 节点的图、
@@ -862,6 +863,44 @@ callable 测试只覆盖无参 `i32` 函数，不能验证 Ref／unit 入口。�
 `core.autocrlf=true` 设置，将子工作树的 CRLF 检出误判为修改。该设置下两个
 子工作树均干净；仅对测试进程设置 Git 配置后，失败项与整套复测均通过。
 这是本地 Linux 证据，不是远程平台 CI。
+
+#### 拥有型 Result 返回 carrier 候选契约（仅设计，2026-10-09）
+
+首个资源返回形态应限定为一个同步的 `shared borrow RuntimeFragmentRef<S>`
+参数，以及源码结果 `Result<i32, E>`；`E` 须有已验证的有界拥有型 struct 布局
+和冻结的递归 Drop glue。带版本的类型化导出行须把精确的 Ref Slot／Contract、
+Result 类型、`E` 的布局与 Drop 身份、调用约定、状态域、函数身份和所属 module
+绑定进已验证的导出摘要。固定的 lookup 视图在调用期间保留代码。这是候选契约，
+不是已发布 ABI，也不改变当前源码导出门禁。
+
+建议的输出包含 tag、一个 `i32` 标量 cell 和一个空的 opaque owner-handle
+cell；调用状态与源码 Result tag 分开。body 分派前检查所有输出地址和空 handle
+cell。资源分支成功时，Runtime 构造同时持有返回指针、精确 Drop 入口和代码
+lease 的 handle；将该 handle 写入输出 cell 是最终所有权提交点。标量分支保持
+handle cell 为空。入口前失败不修改输出或源 owner。body 启动后的派生／分派、
+无效返回、handle 分配及 body 后失败均保持输出不变，并在代码仍固定时清理
+未提交的返回 owner；已经执行的 effect 不回滚。开放源码导出门禁之前，带版本
+状态域须区分这些失败。
+
+| 候选状态组 | body 是否进入 | 输出与所有权规则 |
+| --- | --- | --- |
+| 成功 | 是 | 提交一个 Result tag，以及标量值或唯一 owner handle。 |
+| parent、Ref、目标或输出无效 | 否 | 所有输出与调用方拥有的输入保持原状。 |
+| 派生或分派失败 | 可能 | 输出保持原状；执行所有有效 context 和局部清理。 |
+| 资源返回无效、handle 分配或后续 body 后失败 | 是 | 输出保持原状；在代码 lease 保持时清理任何未提交的返回 owner。 |
+
+这些状态组列出必须区分的情况，并未分配数值。失败前 body 可能已执行 effect；
+状态不承诺回滚。
+
+宿主只持有 opaque handle，不分别复制 owner 指针或 Drop 地址。Drop 操作消费
+唯一的 handle cell，先清空 cell，再在代码 lease 保持期间执行递归 Drop／释放，
+最后释放 lease。同一已清空 cell 的重复 Drop 应与有效 Drop 可区分；复制的、
+失效的或外来的裸地址不是有效 handle。私有夹具现用一个不可复制的测试 carrier
+绑定 owner 与 JIT lease，并在借用 Ref pin 失效后证明延迟且恰好一次的 Drop，
+Windows ASAN 亦通过。发布仍须实现带版本导出行及 loader 校验、向
+`PinnedBinding` 传递类型化事实、Runtime 所有的 handle 与状态、以及覆盖各失败
+阶段的生成入口测试，最后才能开放窄形态的 verifier／export 门禁。不能原地扩展
+Native v1 行。
 
 #### Native 类型化导出边界核查（2026-10-06）
 
@@ -1041,9 +1080,10 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    另一返回分支转移第二字段，两次观察到 `-43, 59, 47`；宿主探针和 Windows
    ASAN 同样确认四笔分配各释放一次。两条分支现均通过私有宿主交接：预检
    拒绝无效 owner cell，注入的 body 后失败清理未提交 owner，成功提交后
-   由宿主恰好一次 Drop。第二个 owner 在借用 Ref pin 结束后由独立 JIT
-   lease 保持有效；Windows ASAN 聚焦测试通过。下一步定义带版本的公开
-   owner 与 lease 共同寿命 carrier，以及生产失败状态，再考虑开放此形状。
+   由宿主恰好一次 Drop。第二个 owner 在借用 Ref pin 结束后由不可复制的测试
+   carrier 连同 JIT lease 保持有效；Windows ASAN 聚焦测试通过。上文已列出
+   带版本的公开 carrier 与失败状态候选。下一步实现已验证的类型化导出行和
+   loader 检查，再考虑开放此形状。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。
