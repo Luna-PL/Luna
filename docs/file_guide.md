@@ -428,6 +428,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `src/codegen/CodeGeneratorIterator.cpp`
 - `src/codegen/CodeGeneratorIteratorTerminals.cpp`
 - `src/codegen/CodeGeneratorModule.cpp`
+- `src/codegen/NativeOwnedResultFacts.cpp`
+- `src/codegen/NativeOwnedResultFacts.h`
 - `src/codegen/CodeGeneratorOwnershipExpressions.cpp`
 - `src/codegen/CodeGeneratorRangeAnalysis.cpp`
 - `src/codegen/CodeGeneratorRangeAnalysis.h`

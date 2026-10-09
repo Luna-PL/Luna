@@ -885,6 +885,14 @@ linkage 和入口、共享借用 Ref 的 SlotId／ContractId、Result 与 `E` Ty
 中仍未类型化；错误行大小、未知 profile、Ref Slot 摘要变化及 v1 身份变化均在
 离线 proof 成功后被 loader 拒绝。这只验证候选记录，不证明生成的 Ref／Result
 入口、宿主 owner handle、失败状态行为或源码发布。
+
+producer 现可在私有单 Ref、`Result<i32, E>` fixture 上从封闭的 MoonIR 推导
+有界源码事实：独立核验 CFG 和 context effect，核对声明的冻结调用签名，
+重算 Ref 的 nominal Slot 目标、`E` 的类型／布局身份，并核对冻结的 Drop 身份。
+回归篡改布局、移除 Drop、改变 Ref 目标均被拒绝；标量 Result 错误类型也不在
+此形态内。这些事实中的 linkage 属于源码函数体，不是 v3 宿主 wrapper 的入口
+或指针。Luna 仍不生成 v3 行，也不赋予可调用的 generation profile。
+
 当前 64 位目标的 v3 export／library 记录大小为 136／96 字节；`entry_abi`、
 错误值大小、首个标识符与入口指针的偏移依次为 16、32、48、128。SHA-256 摘要
 沿用 v2 的排序去重及小端长度 framing，但行前缀改为
@@ -917,16 +925,19 @@ handle cell 为空。入口前失败不修改输出或源 owner。body 启动后
 最后释放 lease。同一已清空 cell 的重复 Drop 应与有效 Drop 可区分；复制的、
 失效的或外来的裸地址不是有效 handle。私有夹具现用一个不可复制的测试 carrier
 绑定 owner 与 JIT lease，并在借用 Ref pin 失效后证明延迟且恰好一次的 Drop，
-Windows ASAN 亦通过。发布仍须实现带版本导出行及 loader 校验、向
-`PinnedBinding` 传递类型化事实、Runtime 所有的 handle 与状态、以及覆盖各失败
-阶段的生成入口测试，最后才能开放窄形态的 verifier／export 门禁。不能原地扩展
-Native v1 行。
+Windows ASAN 亦通过。下一步先实现具有固定 C 原型、独立状态／Result tag、
+标量输出及唯一 owner-handle cell 的生成宿主 wrapper，并在失败清理期间保持
+JIT lease。核验生成的 wrapper 并把其独立入口与 linkage 绑定到冻结源码事实后，
+producer 才能生成 v3 行并把类型化证明传至 `PinnedBinding`。Runtime 所有的
+handle／Drop 操作和覆盖各失败阶段的生成入口测试完成后，才能开放窄形态的
+verifier／export 门禁。不能
+原地扩展 Native v1 行。
 审查构建还发现更近的一项封闭要求：Native v1 曾接受公开的
 `Result<i32, OwnedError>`，并生成共享库与 trust 记录，却没有宿主可用于释放
 返回 owner 的 carrier。descriptor 发射端现拒绝冻结返回类型需要清理或返回
 usage 非 Copy 的 callable 导出。真实 Native package 回归要求在写入库文件或
 trust 记录之前被拒绝；现有 Native artifact 测试继续覆盖普通 `i32()` 发布。
-在新 query、loader、Runtime handle 和状态路径完成前，资源返回源码门禁保持关闭。
+在 wrapper、Runtime handle 和状态路径完成前，资源返回源码门禁保持关闭。
 后续真实构建又发现对称的入口缺口：带 Drop 的按值 `OwnedInput` 参数也曾通过
 无类型 v1 callable 行生成 Native 库和 trust 记录。descriptor 发射端现拒绝
 冻结参数类型需要清理，或源码／冻结参数契约 usage 非 Copy 的导出。Native

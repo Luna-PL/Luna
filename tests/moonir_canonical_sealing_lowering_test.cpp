@@ -5,6 +5,7 @@
 #include "moonir/Sealer.h"
 #include "moonir/Verifier.h"
 #include "codegen/CodeGenerator.h"
+#include "codegen/NativeOwnedResultFacts.h"
 #include "diagnostics/Diagnostic.h"
 #include "runtime/RuntimeDescriptor.h"
 #include "runtime/RuntimeFragment.h"
@@ -2561,6 +2562,79 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         resourceResultType->kind != TypeKind::Result ||
         resourceResultType->typeArgumentIds.size() != 2)
         return fail("resource Err return lost its frozen Result type");
+    luna::codegen::NativeOwnedResultSourceFacts ownedSourceFacts;
+    std::string ownedSourceError;
+    const auto* ownedErrorType = tryApplyModule->findType(
+        resourceResultType->typeArgumentIds[1]);
+    const auto refTarget = tryApplyModule->resolveRuntimeFragmentRefTarget(
+        tryApplyResourceReturn->params.front().type);
+    if (!ownedErrorType || !refTarget ||
+        !luna::codegen::deriveNativeOwnedResultSourceFacts(
+            *tryApplyModule, *tryApplyResourceReturn,
+            ownedSourceFacts, ownedSourceError)) {
+        std::cerr << ownedSourceError << '\n';
+        return fail("Native v3 candidate could not derive frozen Ref/Result facts");
+    }
+    if (ownedSourceFacts.functionSymbolId !=
+            tryApplyResourceReturn->symbolId.value ||
+        ownedSourceFacts.functionContractId !=
+            tryApplyResourceReturn->contractId.value ||
+        ownedSourceFacts.sourceLinkageName !=
+            tryApplyResourceReturn->generatedSymbolName ||
+        ownedSourceFacts.refSlotSymbolId != refTarget->symbol.value ||
+        ownedSourceFacts.refSlotContractId != refTarget->contract.value ||
+        ownedSourceFacts.resultTypeId != resourceResultType->id.value ||
+        ownedSourceFacts.errorTypeId != ownedErrorType->id.value ||
+        ownedSourceFacts.errorAbiLayoutId !=
+            ownedErrorType->abiLayoutId.value ||
+        ownedSourceFacts.errorValueSize != ownedErrorType->valueSize ||
+        ownedSourceFacts.errorValueAlignment !=
+            ownedErrorType->valueAlignment ||
+        ownedSourceFacts.errorDropSymbolId !=
+            ownedErrorType->dropGlue.symbol.value ||
+        ownedSourceFacts.errorDropContractId !=
+            ownedErrorType->dropGlue.contract.value)
+        return fail("Native v3 source facts lost frozen identities or layout");
+    auto mutableOwnedError = std::find_if(
+        tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
+        [&](const moon::TypeRecord& type) {
+            return type.id == ownedErrorType->id;
+        });
+    if (mutableOwnedError == tryApplyModule->typeTable.end())
+        return fail("Native v3 candidate lost its mutable test copy");
+    const auto frozenLayoutId = mutableOwnedError->abiLayoutId;
+    mutableOwnedError->abiLayoutId.value = "forged-layout";
+    const bool acceptedForgedLayout =
+        luna::codegen::deriveNativeOwnedResultSourceFacts(
+            *tryApplyModule, *tryApplyResourceReturn,
+            ownedSourceFacts, ownedSourceError);
+    mutableOwnedError->abiLayoutId = frozenLayoutId;
+    if (acceptedForgedLayout)
+        return fail("Native v3 candidate accepted a forged owner layout");
+    const auto frozenDropGlue = mutableOwnedError->dropGlue;
+    mutableOwnedError->dropGlue = {};
+    const bool acceptedMissingDrop =
+        luna::codegen::deriveNativeOwnedResultSourceFacts(
+            *tryApplyModule, *tryApplyResourceReturn,
+            ownedSourceFacts, ownedSourceError);
+    mutableOwnedError->dropGlue = frozenDropGlue;
+    if (acceptedMissingDrop)
+        return fail("Native v3 candidate accepted missing frozen Drop glue");
+    const auto frozenApplySlot =
+        tryApplyResourceReturn->controlFlow->runtimeRefApplies.front().slot;
+    tryApplyResourceReturn->controlFlow->runtimeRefApplies.front().slot = {};
+    const bool acceptedChangedTarget =
+        luna::codegen::deriveNativeOwnedResultSourceFacts(
+            *tryApplyModule, *tryApplyResourceReturn,
+            ownedSourceFacts, ownedSourceError);
+    tryApplyResourceReturn->controlFlow->runtimeRefApplies.front().slot =
+        frozenApplySlot;
+    if (acceptedChangedTarget)
+        return fail("Native v3 candidate accepted a changed Ref target");
+    if (luna::codegen::deriveNativeOwnedResultSourceFacts(
+            *tryApplyModule, *tryApplyFrom,
+            ownedSourceFacts, ownedSourceError))
+        return fail("Native v3 candidate accepted a scalar Result error");
     bool hasResourceErrReturn = false;
     for (const auto& block : tryApplyResourceReturn->controlFlow->blocks) {
         if (block.terminator.kind != moon::TerminatorKind::Return)

@@ -268,6 +268,7 @@ obligation，不能重新推导所有权。
 | `src/codegen/CodeGenerator.h` | codegen façade、共享 lowering 状态、可保留 JIT lease 和子过程声明 |
 | `src/codegen/CodeGenerator.cpp` | façade 初始化和小型共用实现 |
 | `src/codegen/CodeGeneratorModule.cpp` | module 级声明收集、host/kernel 编排与验证 |
+| `src/codegen/NativeOwnedResultFacts.h/.cpp` | 从封闭 MoonIR 核验并推导候选 Native v3 Ref／拥有型 Result 源码事实；不生成宿主入口或元数据行 |
 | `src/codegen/CodeGeneratorFunctions.cpp` | canonical-only 单函数入口、状态与隐式返回 lowering |
 | `src/codegen/CodeGeneratorExpressions.cpp` | 普通 expression/value lowering |
 | `src/codegen/CodeGeneratorCleanup.cpp` | cleanup、ADT payload、共享/数组资源释放 |
@@ -638,6 +639,8 @@ install 或 release 边界。一个新测试若只需加入现有矩阵，应扩
 - `src/codegen/CodeGeneratorIterator.cpp`
 - `src/codegen/CodeGeneratorIteratorTerminals.cpp`
 - `src/codegen/CodeGeneratorModule.cpp`
+- `src/codegen/NativeOwnedResultFacts.cpp`
+- `src/codegen/NativeOwnedResultFacts.h`
 - `src/codegen/CodeGeneratorOwnershipExpressions.cpp`
 - `src/codegen/CodeGeneratorRangeAnalysis.cpp`
 - `src/codegen/CodeGeneratorRangeAnalysis.h`

@@ -1164,6 +1164,16 @@ unprofiled in `GenerationBinding`; bad row size, unknown profile, changed Ref
 Slot digest and changed v1 identity are rejected after offline proof succeeds.
 This validates the candidate record only. No generated Ref/Result entry, host
 owner handle, failure-status behavior or source publication is claimed.
+
+The producer now has a bounded source-fact derivation over sealed MoonIR for
+the private one-Ref, `Result<i32, E>` fixture. It independently verifies the
+CFG and context effect, matches the declaration's frozen callable signature,
+recomputes the Ref's nominal Slot target and `E`'s type/layout identities,
+and checks frozen Drop identity. Regression mutations of layout, Drop and Ref
+target fail closed; a scalar Result error is outside this shape. These facts
+contain the source body's linkage, not a v3 host wrapper entry or pointer.
+Luna still emits no v3 row or callable generation profile.
+
 On current 64-bit targets the v3 export/library records are 136/96 bytes;
 `entry_abi`, error size, first identifier and entry pointer begin at offsets
 16, 32, 48 and 128. Its SHA-256 digest uses the v2 sorted unique, little-endian
@@ -1204,11 +1214,15 @@ then releases the lease. A repeated Drop on the cleared cell is distinguishable
 from a live Drop; copied, stale or foreign raw addresses are not valid handles.
 The private fixture now binds owner and JIT lease in one noncopyable test
 carrier and proves deferred exactly-once Drop after the borrowed Ref pin
-expires, including Windows ASAN. Publication still requires producer-side
-derivation of the candidate v3 row from verified frozen facts, propagation to
-`PinnedBinding`, a Runtime-owned handle and status implementation, and
-generated entry tests for every failure phase before opening the narrow
-verifier/export gate. Native v1 rows must not be extended in place.
+expires, including Windows ASAN. The next implementation step is a generated
+host wrapper with a fixed C prototype, separate status and Result tag, scalar
+output and unique owner-handle cell. Its failure paths must retain the JIT
+lease through cleanup. Only after verifying the generated wrapper and binding
+its distinct entry and linkage to the frozen source facts can the producer emit
+a v3 row and propagate its typed proof to `PinnedBinding`. Generated entry tests
+for every failure
+phase and the Runtime-owned handle/Drop operation are required before opening
+the narrow verifier/export gate. Native v1 rows must not be extended in place.
 An audit build exposed a nearer fail-closed requirement: Native v1 accepted
 an exported `Result<i32, OwnedError>` and sealed a library and trust record
 even though no host carrier could release its owner. Descriptor emission now
@@ -1216,8 +1230,7 @@ rejects callable exports whose frozen return requires cleanup or has non-Copy
 usage. A real Native package regression requires that rejection before any
 library or trust record is written; ordinary `i32()` publication remains
 covered by the existing Native artifact test. The resource-return source gate
-stays closed while the new query, loader, Runtime handle and status path are
-implemented.
+stays closed while the wrapper, Runtime handle and status path are implemented.
 A follow-up real build found the symmetric ingress gap: a by-value
 `OwnedInput` parameter with Drop also produced a Native library and trust
 record through the untyped v1 callable row. Descriptor emission now rejects

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Derived candidate Native v3 Ref/owned-Result source facts from sealed MoonIR:
+  exact function and Slot identities, Result/error type and bounded layout,
+  and frozen Drop identity. The private Ref/apply fixture checks those facts
+  and rejects forged layout, missing Drop, changed Ref target and scalar error.
+  This derivation supplies no callable entry or v3 row; source publication
+  remains gated until the host wrapper and ownership/status ABI are verified.
 - Added a validation-only parallel Native v3 candidate row for one shared Ref
   ingress and `Result<i32, owned E>` return. It binds target Slot/Contract,
   Result/error type and layout, Drop identity, status domain and v1 callable
