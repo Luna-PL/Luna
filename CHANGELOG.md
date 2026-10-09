@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Closed the matching Native v1 publication gap for owned parameters. A real
+  `OwnedInput` package previously built and sealed an exported by-value
+  callable without a host ownership carrier. Descriptor emission now rejects
+  cleanup-bearing or non-Copy parameter contracts, with a Native artifact
+  regression requiring no output library or trust record.
 - Closed a Native v1 publication gap for cleanup-bearing returns. A real
   `Result<i32, OwnedError>` package previously built a shared library and
   trust record without a host ownership carrier; descriptor emission now

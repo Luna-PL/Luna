@@ -20,6 +20,7 @@ set(enemy_package_dir "${work_dir}/native_enemy")
 set(context_package_dir "${work_dir}/native_context")
 set(ref_package_dir "${work_dir}/native_ref")
 set(owned_return_package_dir "${work_dir}/native_owned_return")
+set(owned_parameter_package_dir "${work_dir}/native_owned_parameter")
 file(REMOVE_RECURSE "${work_dir}")
 file(MAKE_DIRECTORY "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/cffi_typed_export"
@@ -52,6 +53,17 @@ file(APPEND "${owned_return_package_dir}/src/api.luna"
      "    let error = new OwnedError(17);\n"
      "    return Err::<i32, OwnedError>(move error);\n"
      "}\n")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/cffi_typed_export"
+     DESTINATION "${work_dir}")
+file(RENAME "${work_dir}/cffi_typed_export" "${owned_parameter_package_dir}")
+file(APPEND "${owned_parameter_package_dir}/src/api.luna"
+     "\nexport struct OwnedInput { marker: i32; }\n"
+     "impl Drop for OwnedInput {\n"
+     "    fn drop(input: &mut OwnedInput) -> unit { input.marker = 0; }\n"
+     "}\n"
+     "export fn host_owned_input(input: OwnedInput) -> i32 {\n"
+     "    return input.marker;\n"
+     "}\n")
 
 file(READ "${enemy_package_dir}/src/api.luna" enemy_source)
 string(REPLACE "return 42;" "return 13;" enemy_source "${enemy_source}")
@@ -75,6 +87,8 @@ string(REPLACE "${package_dir}" "${ref_package_dir}"
        ref_artifact "${artifact}")
 string(REPLACE "${package_dir}" "${owned_return_package_dir}"
        owned_return_artifact "${artifact}")
+string(REPLACE "${package_dir}" "${owned_parameter_package_dir}"
+       owned_parameter_artifact "${artifact}")
 
 execute_process(
     COMMAND "${LUNA_EXECUTABLE}" build "${context_package_dir}" -t native -O2
@@ -118,6 +132,23 @@ if(owned_return_build_result EQUAL 0 OR owned_return_gate_diagnostic EQUAL -1 OR
     message(FATAL_ERROR
         "Native v1 published an owned Result without a host carrier ABI.\n"
         "${owned_return_build_output}\n${owned_return_build_error}")
+endif()
+
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${owned_parameter_package_dir}" -t native -O2
+    RESULT_VARIABLE owned_parameter_build_result
+    OUTPUT_VARIABLE owned_parameter_build_output
+    ERROR_VARIABLE owned_parameter_build_error)
+string(FIND "${owned_parameter_build_output}\n${owned_parameter_build_error}"
+       "accepts a resource parameter without a host carrier ABI"
+       owned_parameter_gate_diagnostic)
+if(owned_parameter_build_result EQUAL 0 OR
+   owned_parameter_gate_diagnostic EQUAL -1 OR
+   EXISTS "${owned_parameter_artifact}" OR
+   EXISTS "${owned_parameter_artifact}.trust")
+    message(FATAL_ERROR
+        "Native v1 published an owned parameter without a host carrier ABI.\n"
+        "${owned_parameter_build_output}\n${owned_parameter_build_error}")
 endif()
 
 execute_process(

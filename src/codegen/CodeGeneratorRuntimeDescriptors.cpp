@@ -606,6 +606,7 @@ bool CodeGenerator::emitNativeLibraryDescriptor(
             const auto* signature = mProgram->findType(record->type);
             if (!signature || signature->kind != TypeKind::Function ||
                 signature->parameterTypeIds.size() != function->params.size() ||
+                signature->parameterContracts.size() != function->params.size() ||
                 signature->returnTypeId != function->returnType) {
                 error("Native v1 callable entry differs from its frozen function signature");
                 return false;
@@ -620,6 +621,17 @@ bool CodeGenerator::emitNativeLibraryDescriptor(
                 const TypePtr type = resolveType(signature->parameterTypeIds[index]);
                 if (!type) {
                     error("Native v1 callable entry has an unresolved parameter type");
+                    return false;
+                }
+                const auto* parameterRecord = mProgram->findType(
+                    signature->parameterTypeIds[index]);
+                if ((parameterRecord &&
+                     parameterRecord->sysmeta.resource.cleanupRequired) ||
+                    typeRequiresCleanup(type) ||
+                    function->params[index].usage != luna::ownership::Usage::Copy ||
+                    signature->parameterContracts[index].usage !=
+                        luna::ownership::Usage::Copy) {
+                    error("Native v1 callable export accepts a resource parameter without a host carrier ABI");
                     return false;
                 }
                 parameters.push_back(mHelpers->toLLVMType(type));

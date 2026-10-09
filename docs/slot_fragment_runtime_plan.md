@@ -1197,6 +1197,14 @@ library or trust record is written; ordinary `i32()` publication remains
 covered by the existing Native artifact test. The resource-return source gate
 stays closed while the new query, loader, Runtime handle and status path are
 implemented.
+A follow-up real build found the symmetric ingress gap: a by-value
+`OwnedInput` parameter with Drop also produced a Native library and trust
+record through the untyped v1 callable row. Descriptor emission now rejects
+parameters whose frozen type requires cleanup or whose source/frozen contract
+has non-Copy usage. The Native artifact regression requires the owned-input
+package to fail before creating a library or trust record; the ordinary
+`i32()` export still builds. The v3 design must define ingress ownership as
+well as the Ref/Result return carrier before either resource direction opens.
 
 #### Native typed export boundary audit (2026-10-06)
 
@@ -1441,8 +1449,8 @@ not a public ABI decision or stable-release approval:
    host Drop. The second owner remains live in a noncopyable test carrier with
    its JIT lease after the borrowed Ref pin expires; focused Windows ASAN
    passes. A narrow versioned public carrier and failure-status candidate is
-   specified above. Native v1 now rejects cleanup-bearing public returns
-   before producing an artifact. Existing v2 covers only `i32()`; next,
+   specified above. Native v1 now rejects cleanup-bearing public parameters
+   and returns before producing an artifact. Existing v2 covers only `i32()`; next,
    define a parallel v3 row and loader checks for exact Ref and Result facts
    before admitting this shape beyond the private test entry.
    One- and two-field resource Err and one-field

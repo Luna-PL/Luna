@@ -910,6 +910,12 @@ Native v1 行。
 usage 非 Copy 的 callable 导出。真实 Native package 回归要求在写入库文件或
 trust 记录之前被拒绝；现有 Native artifact 测试继续覆盖普通 `i32()` 发布。
 在新 query、loader、Runtime handle 和状态路径完成前，资源返回源码门禁保持关闭。
+后续真实构建又发现对称的入口缺口：带 Drop 的按值 `OwnedInput` 参数也曾通过
+无类型 v1 callable 行生成 Native 库和 trust 记录。descriptor 发射端现拒绝
+冻结参数类型需要清理，或源码／冻结参数契约 usage 非 Copy 的导出。Native
+artifact 回归要求此 package 在生成库或 trust 记录前失败，普通 `i32()` 导出
+仍可构建。v3 设计在开放任一资源方向前，还须明确入口所有权以及 Ref／Result
+返回 carrier。
 
 #### Native 类型化导出边界核查（2026-10-06）
 
@@ -1092,7 +1098,7 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    由宿主恰好一次 Drop。第二个 owner 在借用 Ref pin 结束后由不可复制的测试
    carrier 连同 JIT lease 保持有效；Windows ASAN 聚焦测试通过。上文已列出
    带版本的公开 carrier 与失败状态候选。Native v1 现于生成 artifact 前拒绝
-   需清理的公开返回值。现有 v2 仅覆盖 `i32()`；下一步定义并行 v3 行与
+   需清理的公开参数和返回值。现有 v2 仅覆盖 `i32()`；下一步定义并行 v3 行与
    loader 校验，核对精确 Ref 与 Result 信息，再考虑开放此形状。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
