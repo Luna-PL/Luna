@@ -808,8 +808,18 @@ observes Drop `47`, `-43`. An independent source JIT host-allocator probe
 counts one release for each field allocation and the outer error allocation
 on both paths. The focused Windows Clang64 ASAN tests pass. This proves both
 returning branches of one bounded conditional field transfer inside the
-conversion body. Branch merges within that conversion, host ownership
-transfer, and wider conversion bodies remain outside the proof.
+conversion body.
+An additional `SourceMergeError` fixture moves the same first field in both
+arms of `From<SourceMergeError> for i32`, then joins before reading the
+remaining second field and returning `Err(47)` through private Ref/apply `?`.
+Test-only branch markers distinguish the positive and negative arms on two
+executions each, without Slot dispatch. The positive path Drops `43`, `47`;
+the negative path Drops `-43`, `47`. A separate host-allocator source JIT probe
+confirms both field allocations and the outer allocation each release once
+on either path. Focused Windows Clang64 ASAN tests pass. This proves a merge
+of matching field-transfer states inside the conversion. Divergent continuing
+states, host ownership transfer, and wider conversion bodies remain outside
+the proof.
 The first direct two-owned-field source probe failed on `move pair.first`:
 the source checker tracked the moved field while return cleanup still named
 the root owner, and MoonIR sealing rejected the missing projected cleanup rows.
@@ -944,7 +954,7 @@ with no published carrier or symbol contract. It does not establish
 production failure statuses or safe JIT teardown with an outstanding owner.
 The observation value is not a public return carrier or stable ABI.
 More than three owned structs, wider resource graphs, conversion bodies with
-branch merges after field transfers, host ownership transfer, or wider
+divergent continuing field-transfer states, host ownership transfer, or wider
 ownership graphs, `?` inside outlined Slot bodies, and recoverable
 derive/dispatch failures are outside this execution proof; the source frontend
 continues to reject `?` across the outlined Slot boundary.
@@ -1279,8 +1289,12 @@ not a public ABI decision or stable-release approval:
    dispatch: the first returns `Err(43)` and Drops `43, 47`, while the second
    returns `Err(47)` and Drops `47, -43`. The independent host-allocator probe
    counts each field and outer error allocation released once on both paths;
-   focused Windows Clang64 ASAN passes. Branch merges within that conversion,
-   host ownership transfer, and wider conversions still need proof. A hand-built
+   focused Windows Clang64 ASAN passes. A separate `From<SourceMergeError>`
+   moves the same field on either arm and joins before reading the remaining
+   field. Distinct branch markers prove each arm ran twice; Drop order is
+   `43, 47` or `-43, 47`, and the host allocator counts three paired releases
+   on each path, also under Windows ASAN. Divergent continuing states, host
+   ownership transfer, and wider conversions still need proof. A hand-built
    canonical CFG now validates complete disjoint field rows, one backing
    allocation cleanup row, and the active return cleanup list after one field
    moves. A second hand-built CFG now covers raw allocation transfer into an
@@ -1299,8 +1313,8 @@ not a public ABI decision or stable-release approval:
    after one or both fields move, also under Windows Clang64 ASAN. Matching
    conditional moves, distinct returning arms, and an early return beside a
    continuing arm now have exact source Drop transcripts and per-outcome
-   allocation counts. Next, prove a bounded branch merge after a conditional
-   field move inside `From`, including the surviving cleanup obligations.
+   allocation counts. Next, prove a bounded `From` body with one returning
+   branch and one continuing branch after a field move.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

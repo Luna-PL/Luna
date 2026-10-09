@@ -171,6 +171,40 @@ fn main() -> i32 {
     return runSourceCase(probe, name, source, expectedExitCode);
 }
 
+int runFromMergeCase(AllocationProbe& probe, const char* name,
+                     int firstMarker) {
+    const std::string source = std::string(R"luna(
+struct Cell { marker: i32; }
+impl Drop for Cell {
+    fn drop(resource: &mut Cell) -> unit { resource.marker = 0; }
+}
+struct SourceMergeError { first: Cell; second: Cell; }
+impl From<SourceMergeError> for i32 {
+    fn from(affine error: SourceMergeError) -> i32 {
+        if error.first.marker > 0 {
+            let forwarded = move error.first;
+        } else {
+            let forwarded = move error.first;
+        }
+        return error.second.marker;
+    }
+}
+fn converted() -> Result<i32, i32> {
+)luna") + "    let first = new Cell(" + std::to_string(firstMarker) + R"luna();
+    let second = new Cell(47);
+    let error = new SourceMergeError(move first, move second);
+    let input = Err::<i32, SourceMergeError>(move error);
+    let value = input?;
+    return Ok(value);
+}
+fn main() -> i32 {
+    let result = converted();
+    return unwrap_err(move result);
+}
+)luna";
+    return runSourceCase(probe, name, source, 47);
+}
+
 } // namespace
 
 int runSplitAllocationProbe() {
@@ -217,6 +251,8 @@ int runSplitAllocationProbe() {
         return 1;
     if (runFromCase(probe, "<split-from-first>", 43, 43)) return 1;
     if (runFromCase(probe, "<split-from-second>", -43, 47)) return 1;
+    if (runFromMergeCase(probe, "<split-from-merge-first>", 43)) return 1;
+    if (runFromMergeCase(probe, "<split-from-merge-second>", -43)) return 1;
     return 0;
 }
 

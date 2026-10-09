@@ -31,6 +31,7 @@ static unsigned privateRefJitReturnedOkDropProbeCalls = 0;
 static unsigned privateRefJitReturnedPairDropProbeCalls = 0;
 static unsigned privateRefJitAllDropProbeCalls = 0;
 static std::vector<int32_t> privateRefJitConversionDropOrder;
+static std::vector<int32_t> privateRefJitFromBranchMarkers;
 static std::vector<int32_t> privateRefJitNestedDropOrder;
 static bool privateRefJitDropProbeValid = true;
 
@@ -42,6 +43,8 @@ extern "C" void luna_private_ref_drop_probe(int32_t marker) {
         privateRefJitConversionDropOrder.push_back(marker);
     } else if (marker == 43 || marker == -43) {
         privateRefJitConversionDropOrder.push_back(marker);
+    } else if (marker == 51 || marker == 53) {
+        privateRefJitFromBranchMarkers.push_back(marker);
     } else if (marker == 59) ++privateRefJitReturnedDropProbeCalls;
     else if (marker == 67) ++privateRefJitReturnedOkDropProbeCalls;
     else if (marker == 66) ++privateRefJitReturnedPairDropProbeCalls;
@@ -1582,6 +1585,19 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "    return forwarded.marker;\n"
         "  }\n"
         "}\n"
+        "struct SourceMergeError { first: SourceError; second: SourceError; }\n"
+        "impl From<SourceMergeError> for i32 {\n"
+        "  fn from(affine error: SourceMergeError) -> i32 {\n"
+        "    if error.first.marker > 0 {\n"
+        "      luna_private_ref_drop_probe(51);\n"
+        "      let forwarded = move error.first;\n"
+        "    } else {\n"
+        "      luna_private_ref_drop_probe(53);\n"
+        "      let forwarded = move error.first;\n"
+        "    }\n"
+        "    return error.second.marker;\n"
+        "  }\n"
+        "}\n"
         "struct ReturnedResource { marker: i32; }\n"
         "impl Drop for ReturnedResource {\n"
         "  fn drop(resource: &mut ReturnedResource) -> unit {\n"
@@ -1789,6 +1805,36 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  }\n"
         "  return Ok(0);\n"
         "}\n"
+        "runtime fn try_apply_merge_from("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  let first = new SourceError(43);\n"
+        "  let second = new SourceError(47);\n"
+        "  let error = new SourceMergeError(move first, move second);\n"
+        "  let input = Err::<i32, SourceMergeError>(move error);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_merge_from_else("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  let first = new SourceError(-43);\n"
+        "  let second = new SourceError(47);\n"
+        "  let error = new SourceMergeError(move first, move second);\n"
+        "  let input = Err::<i32, SourceMergeError>(move error);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
         "runtime fn try_apply_resource_return("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, ReturnedResource> {\n"
@@ -1932,6 +1978,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyNestedFromElse = nullptr;
     moon::FunctionDecl* tryApplySplitFrom = nullptr;
     moon::FunctionDecl* tryApplySplitFromElse = nullptr;
+    moon::FunctionDecl* tryApplyMergeFrom = nullptr;
+    moon::FunctionDecl* tryApplyMergeFromElse = nullptr;
     moon::FunctionDecl* tryApplyResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyOkResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyPairResourceReturn = nullptr;
@@ -1962,6 +2010,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplySplitFrom = function;
             if (function->name == "try_apply_split_from_else")
                 tryApplySplitFromElse = function;
+            if (function->name == "try_apply_merge_from")
+                tryApplyMergeFrom = function;
+            if (function->name == "try_apply_merge_from_else")
+                tryApplyMergeFromElse = function;
             if (function->name == "try_apply_resource_return")
                 tryApplyResourceReturn = function;
             if (function->name == "try_apply_ok_resource_return")
@@ -1985,6 +2037,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplyAfterSlot || !tryApplyLocalCleanup || !tryApplyFrom ||
         !tryApplyNestedFrom || !tryApplyNestedFromElse ||
         !tryApplySplitFrom || !tryApplySplitFromElse ||
+        !tryApplyMergeFrom || !tryApplyMergeFromElse ||
         !tryApplyResourceReturn || !tryApplyOkResourceReturn ||
         !tryApplyPairResourceReturn || !tryApplyOkResourceScalarErr ||
         !tryApplyErrResourceScalarOk || !tryApplyNestedResourceReturn ||
@@ -2240,6 +2293,46 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             std::vector<int32_t>{47, -43, 47, -43} ||
         !privateRefJitDropProbeValid)
         return fail("Ref apply '?' split-field From else branch lost ordered cleanup");
+    if (!tryApplyMergeFrom->controlFlow ||
+        tryApplyMergeFrom->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyMergeFrom->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply '?' merged-field From conversion did not verify");
+    privateRefJitConversionDropOrder.clear();
+    privateRefJitFromBranchMarkers.clear();
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyMergeFrom, privateRefJitError,
+            0, false, std::nullopt, false, false, {}, {},
+            std::pair<bool, int32_t>{false, 47})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply '?' merged-field From conversion failed private JIT execution");
+    }
+    if (privateRefJitConversionDropOrder !=
+            std::vector<int32_t>{43, 47, 43, 47} ||
+        privateRefJitFromBranchMarkers != std::vector<int32_t>{51, 51} ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply '?' merged-field From lost ordered cleanup");
+    if (!tryApplyMergeFromElse->controlFlow ||
+        tryApplyMergeFromElse->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyMergeFromElse->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply '?' merged-field From else branch did not verify");
+    privateRefJitConversionDropOrder.clear();
+    privateRefJitFromBranchMarkers.clear();
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyMergeFromElse, privateRefJitError,
+            0, false, std::nullopt, false, false, {}, {},
+            std::pair<bool, int32_t>{false, 47})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply '?' merged-field From else branch failed private JIT execution");
+    }
+    if (privateRefJitConversionDropOrder !=
+            std::vector<int32_t>{-43, 47, -43, 47} ||
+        privateRefJitFromBranchMarkers != std::vector<int32_t>{53, 53} ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply '?' merged-field From else branch lost ordered cleanup");
     if (!tryApplyResourceReturn->controlFlow ||
         tryApplyResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
         !refApplyCfgVerifier.verify(*tryApplyResourceReturn->controlFlow,

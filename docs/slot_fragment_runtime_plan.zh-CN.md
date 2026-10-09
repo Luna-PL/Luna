@@ -627,7 +627,14 @@ Clang64／LLVM 20 与 WSL Arch Linux／LLVM 22 的聚焦 canonical ASAN 测试�
 转移第二字段时返回 `Err(47)`，按 `47`、`-43` Drop。独立的源码 JIT 宿主
 allocator 探针确认两条路径中两个字段与外层错误对象的 allocation 各释放一次；
 Windows Clang64 ASAN 聚焦测试通过。这证明转换函数体内条件式字段转移的两条
-返回分支；转换体内的分支汇合、向宿主转移所有权及更宽的转换函数体仍未证明。
+返回分支。
+另一个 `SourceMergeError` 夹具在 `From<SourceMergeError> for i32` 的两条分支中
+均转移第一个字段，汇合后读取剩余的第二字段，并经私有 Ref/apply `?` 返回
+`Err(47)`。仅测试用的分支标记分别证实正、负两条路径各执行两次，且没有 Slot
+分派。正值路径按 `43`、`47` Drop，负值路径按 `-43`、`47` Drop；独立的宿主
+allocator 探针确认两条路径的两个字段和外层对象三笔 allocation 各释放一次。
+Windows Clang64 ASAN 聚焦测试通过。这证明转换体内相同字段转移状态的分支
+汇合；不同字段转移状态继续执行、向宿主转移所有权和更宽的转换体仍未证明。
 最初的双拥有字段源码探针在 `move pair.first` 处失败：源码检查器记录了被移动字段，
 return 清理却仍指向根 owner，MoonIR sealing 因缺少字段投影清理记录而拒绝。
 临时源码守卫曾将这一失败提前。现在，对于没有整对象 Drop 的合格拥有型命名
@@ -720,7 +727,7 @@ Drop 次数不变。随后释放原始 JIT 句柄，由另一份共享 LLJIT lea
 时安全关闭 JIT 的行为。
 该观测值不是公开返回 carrier 或稳定 ABI。超过三个拥有型 struct 节点的图、
 更宽的资源图、
-带字段转移后分支汇合、向宿主转移所有权或更宽所有权图的转换函数体、
+带不同字段转移状态继续执行、向宿主转移所有权或更宽所有权图的转换函数体、
 outlined Slot body 中的 `?`，
 以及可恢复的派生／分派失败，均不在此执行证明内；前端继续在
 outlined Slot 边界拒绝 `?`。
@@ -970,8 +977,11 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    每条分支执行两次且不分派；转移第一字段时返回 `Err(43)`、Drop `43, 47`，
    转移第二字段时返回 `Err(47)`、Drop `47, -43`。独立的宿主 allocator 探针
    确认两条路径中两个字段及外层错误对象的 allocation 各释放一次；Windows
-   Clang64 ASAN 聚焦测试通过。转换体内的分支汇合、向宿主转移所有权及更宽的
-   转换仍需证明。手工构造的 canonical CFG 现验证完整、互不重叠的字段清理
+   Clang64 ASAN 聚焦测试通过。另一个 `From<SourceMergeError>` 在两条分支均
+   转移第一字段，汇合后读取第二字段；分支标记证实各路径执行两次，Drop 顺序
+   分别为 `43, 47` 和 `-43, 47`。宿主 allocator 在每条路径都核对三笔分配与
+   释放，Windows ASAN 亦通过。不同字段转移状态继续执行、向宿主转移所有权
+   及更宽的转换仍需证明。手工构造的 canonical CFG 现验证完整、互不重叠的字段清理
    记录、一条底层 allocation 清理记录，以及一个字段转移后的有效 return 清理
    列表。第二个手工 CFG 还覆盖 raw allocation 向已初始化的分拆局部绑定转移，
    并拒绝再次清理已消费的 raw 身份。它还证明兄弟字段可继续转移，
@@ -985,7 +995,7 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    或全部字段后，直接验证每个 `Cell` 及 `Pair` 分配恰好释放一次，Windows
    Clang64 ASAN 亦通过。相同字段转移的分支合并、分别返回的分支及一侧提前
    返回的分支现有精确 Drop 输出和逐侧 allocation 计数。下一步证明 `From`
-   转换函数体中条件式字段转移后的有界分支汇合及其剩余清理义务。
+   转换函数体中一个分支转移字段后直接返回、另一分支继续执行的有界路径。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。

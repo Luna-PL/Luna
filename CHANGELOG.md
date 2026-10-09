@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Proved a matching field move across a branch merge inside a `From`
+  conversion on the private Ref/apply `?` Err path. Distinct branch probes
+  identify both arms; each Drops its moved field before the merged return
+  Drops the remaining field. A host allocator probe confirms all three
+  allocations release once on each path, including under Windows ASAN.
 - Proved conditional direct field moves inside `From<SourceSplitError> for i32`
   on the private Ref/apply `?` Err path. Each branch runs twice without Slot
   dispatch: moving the first field returns `Err(43)` and Drops `43, 47`, while
