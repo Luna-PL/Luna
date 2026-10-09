@@ -442,7 +442,7 @@ endforeach()
 
 # An independently linked v3 candidate carries Ref/Result metadata but is
 # validation-only until the generated host carrier and status path exist.
-foreach(v3_variant IN ITEMS valid bad-row-size bad-profile bad-slot-digest bad-identity)
+foreach(v3_variant IN ITEMS valid bad-row-size bad-profile bad-slot-digest bad-identity bad-entry-pointer bad-linkage)
     if(WIN32)
         set(v3_artifact "${work_dir}/independent-v3-${v3_variant}.dll")
     elseif(APPLE)
@@ -460,6 +460,10 @@ foreach(v3_variant IN ITEMS valid bad-row-size bad-profile bad-slot-digest bad-i
         list(APPEND v3_defines -DLUNA_TEST_V3_BAD_SLOT_DIGEST)
     elseif(v3_variant STREQUAL "bad-identity")
         list(APPEND v3_defines -DLUNA_TEST_V3_BAD_IDENTITY)
+    elseif(v3_variant STREQUAL "bad-entry-pointer")
+        list(APPEND v3_defines -DLUNA_TEST_V3_BAD_ENTRY_POINTER)
+    elseif(v3_variant STREQUAL "bad-linkage")
+        list(APPEND v3_defines -DLUNA_TEST_V3_BAD_LINKAGE)
     endif()
     execute_process(
         COMMAND "${LUNA_AOT_COMPILER}" -x c -std=c11 -fPIC
@@ -497,6 +501,19 @@ foreach(v3_variant IN ITEMS valid bad-row-size bad-profile bad-slot-digest bad-i
         ERROR_VARIABLE v3_load_error)
     if(v3_variant STREQUAL "valid")
         execute_process(
+            COMMAND "${LUNA_NATIVE_VERIFIER}" --load-call
+                "${v3_artifact}" "${v3_trust}"
+                "symbol:legacy-answer" "contract:legacy-v1"
+            RESULT_VARIABLE v3_legacy_call_result
+            OUTPUT_VARIABLE v3_legacy_call_output
+            ERROR_VARIABLE v3_legacy_call_error)
+        execute_process(
+            COMMAND "${LUNA_NATIVE_VERIFIER}" --inspect-v3-candidate
+                "${v3_artifact}" "${v3_trust}"
+            RESULT_VARIABLE v3_candidate_result
+            OUTPUT_VARIABLE v3_candidate_output
+            ERROR_VARIABLE v3_candidate_error)
+        execute_process(
             COMMAND "${LUNA_NATIVE_VERIFIER}" --load-legacy-generation
                 "${v3_artifact}" "${v3_trust}"
                 "symbol:legacy-answer" "contract:legacy-v1"
@@ -504,21 +521,30 @@ foreach(v3_variant IN ITEMS valid bad-row-size bad-profile bad-slot-digest bad-i
             OUTPUT_VARIABLE v3_generation_output
             ERROR_VARIABLE v3_generation_error)
         if(NOT v3_load_result EQUAL 0 OR
+           NOT v3_legacy_call_result EQUAL 0 OR
+           NOT v3_legacy_call_output STREQUAL "7\n" OR
+           NOT v3_candidate_result EQUAL 0 OR
+           NOT v3_candidate_output STREQUAL "v3-metadata-only\n" OR
            NOT v3_generation_result EQUAL 0 OR
            NOT v3_generation_output STREQUAL "v1-only\n")
             message(FATAL_ERROR
                 "independent v3 metadata escaped the unprofiled generation gate.\n"
                 "load: ${v3_load_error}\n"
+                "legacy call: ${v3_legacy_call_error}\n"
+                "candidate: ${v3_candidate_error}\n"
                 "generation: ${v3_generation_error}")
         endif()
     else()
         if(v3_variant STREQUAL "bad-row-size" OR
            v3_variant STREQUAL "bad-profile")
             set(v3_expected "invalid export row")
-        elseif(v3_variant STREQUAL "bad-slot-digest")
+        elseif(v3_variant STREQUAL "bad-slot-digest" OR
+               v3_variant STREQUAL "bad-identity")
             set(v3_expected "rows do not match their descriptor digest")
+        elseif(v3_variant STREQUAL "bad-linkage")
+            set(v3_expected "entry does not match its resolved symbol")
         else()
-            set(v3_expected "differs from its verified v1 row")
+            set(v3_expected "invalid export row")
         endif()
         string(FIND "${v3_load_error}" "${v3_expected}"
                v3_load_diagnostic)

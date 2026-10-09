@@ -57,6 +57,9 @@ public:
                        int32_t& result, std::string& error) const;
     uint32_t entryAbiForExport(const std::string& symbolId,
                                const std::string& contractId) const;
+    // Validated v3 metadata lookup. Does not expose or invoke its entry.
+    bool hasRefResultOwnerCandidate(const std::string& symbolId,
+                                    const std::string& contractId) const;
     explicit operator bool() const { return nativeHandle_ != nullptr; }
 
 private:
@@ -71,6 +74,7 @@ private:
     std::string stagedDirectory_;
     const LunaNativeLibraryDescriptorV1* descriptor_ = nullptr;
     const LunaNativeLibraryDescriptorV2* descriptorV2_ = nullptr;
+    const LunaNativeLibraryDescriptorV3* descriptorV3_ = nullptr;
     std::unordered_map<std::string, const LunaNativeExportDescriptorV2*>
         typedExportsBySymbol_;
     NativeProofInfo proof_;

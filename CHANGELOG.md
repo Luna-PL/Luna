@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Separated validation-only Native v3 candidate entries from v1 `i32()`
+  exports. The loader checks a distinct resolved six-argument symbol, rejects
+  v1 entry aliases, and provides a read-only candidate lookup; C fixtures
+  cover the separation and malformed bindings. Generated v3 publication and
+  typed invocation remain gated.
 - Added a private six-argument C candidate entry for Native v3 Ref/owned-Result
   calls and fixed its candidate status values. A pointer-free JIT entry proof
   binds generated entry and Drop linkage, ABI profile and status domain to
@@ -54,10 +59,10 @@
   remains gated until the host wrapper and ownership/status ABI are verified.
 - Added a validation-only parallel Native v3 candidate row for one shared Ref
   ingress and `Result<i32, owned E>` return. It binds target Slot/Contract,
-  Result/error type and layout, Drop identity, status domain and v1 callable
+  Result/error type and layout, Drop identity, status domain and candidate function
   identity through a separate descriptor digest. Independently linked and
   sealed C fixtures check valid metadata and reject bad size, profile, digest
-  and v1 identity; v3 does not yet create a callable generation profile.
+  and function identity; v3 does not yet create a callable generation profile.
 - Closed the matching Native v1 publication gap for owned parameters. A real
   `OwnedInput` package previously built and sealed an exported by-value
   callable without a host ownership carrier. Descriptor emission now rejects

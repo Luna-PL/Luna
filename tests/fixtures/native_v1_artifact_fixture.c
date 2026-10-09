@@ -22,15 +22,16 @@
 
 #define LUNA_TEST_SECTION(name) __attribute__((section(name), used))
 
+static int32_t legacy_answer(void) { return 7; }
 #ifdef LUNA_TEST_V3_DESCRIPTOR
 typedef struct OwnedError { uint64_t marker; } OwnedError;
-static int32_t legacy_answer(const void* parent, const void* ref,
-                             uint32_t* tag, int32_t* scalar, void** owner) {
-    (void)parent; (void)ref; (void)tag; (void)scalar; (void)owner;
-    return 1; // The candidate entry is deliberately never invoked by the host.
+LUNA_TEST_EXPORT int32_t owned_answer(
+    const void* parent, const void* ref, uint32_t* tag,
+    int32_t* scalar, void** owner, const void* code_lease) {
+    (void)parent; (void)ref; (void)tag; (void)scalar;
+    (void)owner; (void)code_lease;
+    return LUNA_NATIVE_REF_RESULT_OWNER_INVALID_CONTEXT_V1;
 }
-#else
-static int32_t legacy_answer(void) { return 7; }
 #endif
 
 // The test helper replaces this bounded field with the process target triple
@@ -62,7 +63,17 @@ static const char target_abi[128] = "LUNA_TEST_TARGET_ABI_PLACEHOLDER";
 #ifdef LUNA_TEST_V3_BAD_IDENTITY
 #define LUNA_TEST_V3_CONTRACT "contract:other-function"
 #else
-#define LUNA_TEST_V3_CONTRACT "contract:legacy-v1"
+#define LUNA_TEST_V3_CONTRACT "contract:owned-v3"
+#endif
+#ifdef LUNA_TEST_V3_BAD_LINKAGE
+#define LUNA_TEST_V3_LINKAGE "missing_owned_answer"
+#else
+#define LUNA_TEST_V3_LINKAGE "owned_answer"
+#endif
+#ifdef LUNA_TEST_V3_BAD_ENTRY_POINTER
+#define LUNA_TEST_V3_ENTRY (const void*)&legacy_answer
+#else
+#define LUNA_TEST_V3_ENTRY (const void*)&owned_answer
 #endif
 
 static const LunaNativeExportDescriptorV3 owned_exports[] = {{
@@ -76,9 +87,9 @@ static const LunaNativeExportDescriptorV3 owned_exports[] = {{
     LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1,
     sizeof(OwnedError),
     _Alignof(OwnedError),
-    LUNA_TEST_SYMBOL_ID,
+    "symbol:owned-answer",
     LUNA_TEST_V3_CONTRACT,
-    "legacy_answer",
+    LUNA_TEST_V3_LINKAGE,
     "symbol:slot-checkpoint",
     LUNA_TEST_V3_SLOT_CONTRACT,
     "type:result-i32-owned",
@@ -86,7 +97,7 @@ static const LunaNativeExportDescriptorV3 owned_exports[] = {{
     "layout:owned-error-v1",
     "symbol:drop-owned-error",
     "contract:drop-owned-error",
-    (const void*)&legacy_answer,
+    LUNA_TEST_V3_ENTRY,
 }};
 
 static const LunaNativeLibraryDescriptorV3 owned_library

@@ -127,14 +127,14 @@ def main() -> int:
         return 26
     canonical_v3 = "\n".join([
         "LUNA_NATIVE_EXPORT_V3", "1", "1", "2", "1", "1", "1", "8", "8",
-        "symbol:legacy-answer", "contract:legacy-v1", "legacy_answer",
+        "symbol:owned-answer", "contract:owned-v3", "owned_answer",
         "symbol:slot-checkpoint", "contract:slot-checkpoint",
         "type:result-i32-owned", "type:owned-error",
         "layout:owned-error-v1", "symbol:drop-owned-error",
         "contract:drop-owned-error"])
     if digest_list([canonical_v3]).hex() != (
-            "639257db39d219ba62573d28e5658d09"
-            "196d0a3c5d17c441fc3c4e38383e5737"):
+            "28b2482cdf64af7ade97331b571a994c"
+            "c39be1a53061e879a1af9d2bf1b0641f"):
         return 30
     if ctypes.sizeof(ctypes.c_void_p) == 8 and (
             ctypes.sizeof(ExportDescriptorV2) != 56 or

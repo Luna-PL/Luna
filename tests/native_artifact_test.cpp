@@ -77,7 +77,7 @@ int prepareIndependentFixture(int argc, char** argv) {
                         marker.end()) != bytes.end())
             return fail("independent v3 fixture has no unique descriptor digest placeholder");
         const std::array<std::string, 10> identifiers = {
-            "symbol:legacy-answer", "contract:legacy-v1", "legacy_answer",
+            "symbol:owned-answer", "contract:owned-v3", "owned_answer",
             "symbol:slot-checkpoint", "contract:slot-checkpoint",
             "type:result-i32-owned", "type:owned-error",
             "layout:owned-error-v1", "symbol:drop-owned-error",
@@ -223,6 +223,36 @@ int loadTypedAndCall(int argc, char** argv) {
                             absentError) || absentError.empty())
         return fail("Native typed lookup accepted a wrong contract");
     std::cout << answer << '\n';
+    return 0;
+}
+
+int inspectV3Candidate(int argc, char** argv) {
+    if (argc != 4) return 2;
+    luna::driver::VerifiedNativeLibrary library;
+    std::string error;
+    if (!luna::driver::loadVerifiedNativeLibrary(
+            argv[2], argv[3], library, error)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    luna::driver::VerifiedNativeLibrary moved(std::move(library));
+    if (library || !moved ||
+        library.hasRefResultOwnerCandidate(
+            "symbol:owned-answer", "contract:owned-v3") ||
+        !moved.hasRefResultOwnerCandidate(
+            "symbol:owned-answer", "contract:owned-v3") ||
+        moved.hasRefResultOwnerCandidate(
+            "symbol:owned-answer", "contract:legacy-v1") ||
+        moved.hasRefResultOwnerCandidate(
+            "symbol:legacy-answer", "contract:legacy-v1") ||
+        moved.findExport("symbol:owned-answer", "contract:owned-v3") ||
+        moved.entryAbiForExport("symbol:owned-answer", "contract:owned-v3"))
+        return fail("Native v3 candidate escaped its separate metadata lookup");
+    int32_t ignored = 0;
+    if (moved.callI32NoArgs("symbol:owned-answer", "contract:owned-v3",
+                            ignored, error) || error.empty())
+        return fail("Native v3 candidate acquired an i32() call profile");
+    std::cout << "v3-metadata-only\n";
     return 0;
 }
 
@@ -406,6 +436,8 @@ int main(int argc, char** argv) {
         return loadAndCall(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--load-typed-call")
         return loadTypedAndCall(argc, argv);
+    if (argc > 1 && std::string(argv[1]) == "--inspect-v3-candidate")
+        return inspectV3Candidate(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--load-legacy-generation")
         return loadLegacyGeneration(argc, argv);
     if (argc == 4 && std::string(argv[1]) == "--load-only") {
