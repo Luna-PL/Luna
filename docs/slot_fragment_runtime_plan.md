@@ -1147,6 +1147,10 @@ convention, status domain, function identity and owning module to the
 verified export digest. Its pinned lookup view must retain code during the
 call. This is a candidate contract, not a published ABI or a change to the
 current source export gate.
+The existing parallel Native v2 query already proves only `C_I32_NOARGS_V1`;
+its exact row size, profile and digest spelling cannot carry a Ref target or
+owned Result layout. The next metadata experiment therefore needs a new
+parallel query version, provisionally v3, while v1 and v2 remain readable.
 
 The proposed result output is a tag, an `i32` scalar cell and one empty
 opaque owner-handle cell. The invocation status is separate from the source
@@ -1184,6 +1188,15 @@ export row and loader check, propagation to `PinnedBinding`, a Runtime-owned
 handle and status implementation, and generated entry tests for every failure
 phase before opening the narrow verifier/export gate. Native v1 rows must not
 be extended in place.
+An audit build exposed a nearer fail-closed requirement: Native v1 accepted
+an exported `Result<i32, OwnedError>` and sealed a library and trust record
+even though no host carrier could release its owner. Descriptor emission now
+rejects callable exports whose frozen return requires cleanup or has non-Copy
+usage. A real Native package regression requires that rejection before any
+library or trust record is written; ordinary `i32()` publication remains
+covered by the existing Native artifact test. The resource-return source gate
+stays closed while the new query, loader, Runtime handle and status path are
+implemented.
 
 #### Native typed export boundary audit (2026-10-06)
 
@@ -1428,8 +1441,10 @@ not a public ABI decision or stable-release approval:
    host Drop. The second owner remains live in a noncopyable test carrier with
    its JIT lease after the borrowed Ref pin expires; focused Windows ASAN
    passes. A narrow versioned public carrier and failure-status candidate is
-   specified above. Next, implement its verified typed export row and loader
-   checks before admitting this shape beyond the private test entry.
+   specified above. Native v1 now rejects cleanup-bearing public returns
+   before producing an artifact. Existing v2 covers only `i32()`; next,
+   define a parallel v3 row and loader checks for exact Ref and Result facts
+   before admitting this shape beyond the private test entry.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

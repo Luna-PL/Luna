@@ -625,6 +625,15 @@ bool CodeGenerator::emitNativeLibraryDescriptor(
                 parameters.push_back(mHelpers->toLLVMType(type));
             }
             const TypePtr result = resolveType(signature->returnTypeId);
+            const auto* returnRecord = mProgram->findType(
+                signature->returnTypeId);
+            if ((returnRecord &&
+                 returnRecord->sysmeta.resource.cleanupRequired) ||
+                (result && typeRequiresCleanup(result)) ||
+                function->returnUsage != luna::ownership::Usage::Copy) {
+                error("Native v1 callable export returns an owned value without a host carrier ABI");
+                return false;
+            }
             auto* body = mModule->getFunction(exported.linkageName);
             if (!result || !body || body->isDeclaration() ||
                 body->getCallingConv() != llvm::CallingConv::C ||

@@ -19,6 +19,7 @@ set(package_dir "${work_dir}/native_library")
 set(enemy_package_dir "${work_dir}/native_enemy")
 set(context_package_dir "${work_dir}/native_context")
 set(ref_package_dir "${work_dir}/native_ref")
+set(owned_return_package_dir "${work_dir}/native_owned_return")
 file(REMOVE_RECURSE "${work_dir}")
 file(MAKE_DIRECTORY "${work_dir}")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/cffi_typed_export"
@@ -39,6 +40,18 @@ file(RENAME "${work_dir}/cffi_typed_export" "${ref_package_dir}")
 file(APPEND "${ref_package_dir}/src/api.luna"
      "\nexport slot ref_checkpoint(value: i32);\n"
      "export fn host_ref(selected: RuntimeFragmentRef<ref_checkpoint>) -> unit {}\n")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/cffi_typed_export"
+     DESTINATION "${work_dir}")
+file(RENAME "${work_dir}/cffi_typed_export" "${owned_return_package_dir}")
+file(APPEND "${owned_return_package_dir}/src/api.luna"
+     "\nexport struct OwnedError { marker: i32; }\n"
+     "impl Drop for OwnedError {\n"
+     "    fn drop(error: &mut OwnedError) -> unit { error.marker = 0; }\n"
+     "}\n"
+     "export fn host_owned_error() -> Result<i32, OwnedError> {\n"
+     "    let error = new OwnedError(17);\n"
+     "    return Err::<i32, OwnedError>(move error);\n"
+     "}\n")
 
 file(READ "${enemy_package_dir}/src/api.luna" enemy_source)
 string(REPLACE "return 42;" "return 13;" enemy_source "${enemy_source}")
@@ -60,6 +73,8 @@ string(REPLACE "${package_dir}" "${context_package_dir}"
        context_artifact "${artifact}")
 string(REPLACE "${package_dir}" "${ref_package_dir}"
        ref_artifact "${artifact}")
+string(REPLACE "${package_dir}" "${owned_return_package_dir}"
+       owned_return_artifact "${artifact}")
 
 execute_process(
     COMMAND "${LUNA_EXECUTABLE}" build "${context_package_dir}" -t native -O2
@@ -88,6 +103,21 @@ if(ref_build_result EQUAL 0 OR ref_gate_diagnostic EQUAL -1 OR
     message(FATAL_ERROR
         "Native v1 published a RuntimeFragmentRef source entry without a typed ABI.\n"
         "${ref_build_output}\n${ref_build_error}")
+endif()
+
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${owned_return_package_dir}" -t native -O2
+    RESULT_VARIABLE owned_return_build_result
+    OUTPUT_VARIABLE owned_return_build_output
+    ERROR_VARIABLE owned_return_build_error)
+string(FIND "${owned_return_build_output}\n${owned_return_build_error}"
+       "returns an owned value without a host carrier ABI"
+       owned_return_gate_diagnostic)
+if(owned_return_build_result EQUAL 0 OR owned_return_gate_diagnostic EQUAL -1 OR
+   EXISTS "${owned_return_artifact}" OR EXISTS "${owned_return_artifact}.trust")
+    message(FATAL_ERROR
+        "Native v1 published an owned Result without a host carrier ABI.\n"
+        "${owned_return_build_output}\n${owned_return_build_error}")
 endif()
 
 execute_process(

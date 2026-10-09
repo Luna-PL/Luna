@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Closed a Native v1 publication gap for cleanup-bearing returns. A real
+  `Result<i32, OwnedError>` package previously built a shared library and
+  trust record without a host ownership carrier; descriptor emission now
+  rejects that export, and the Native artifact regression requires no output
+  artifact or trust record. Documented that the existing v2 query is fixed
+  to `i32()` and an owned Result needs a new parallel descriptor version.
 - Bound the private returned owner, frozen Drop entry and JIT code lease in
   one noncopyable test carrier. Deferred host Drop consumes the owner cell
   while code remains live, then releases the lease; duplicate Drop fails.

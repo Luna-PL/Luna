@@ -872,6 +872,9 @@ callable 测试只覆盖无参 `i32` 函数，不能验证 Ref／unit 入口。�
 Result 类型、`E` 的布局与 Drop 身份、调用约定、状态域、函数身份和所属 module
 绑定进已验证的导出摘要。固定的 lookup 视图在调用期间保留代码。这是候选契约，
 不是已发布 ABI，也不改变当前源码导出门禁。
+现有并行 Native v2 query 已仅对 `C_I32_NOARGS_V1` 建立证明；其精确行大小、
+profile 和摘要编码不能携带 Ref 目标或拥有型 Result 布局。因此下一项 metadata
+实验须使用新的并行 query 版本，暂称 v3，同时保留 v1／v2 的可读性。
 
 建议的输出包含 tag、一个 `i32` 标量 cell 和一个空的 opaque owner-handle
 cell；调用状态与源码 Result tag 分开。body 分派前检查所有输出地址和空 handle
@@ -901,6 +904,12 @@ Windows ASAN 亦通过。发布仍须实现带版本导出行及 loader 校验�
 `PinnedBinding` 传递类型化事实、Runtime 所有的 handle 与状态、以及覆盖各失败
 阶段的生成入口测试，最后才能开放窄形态的 verifier／export 门禁。不能原地扩展
 Native v1 行。
+审查构建还发现更近的一项封闭要求：Native v1 曾接受公开的
+`Result<i32, OwnedError>`，并生成共享库与 trust 记录，却没有宿主可用于释放
+返回 owner 的 carrier。descriptor 发射端现拒绝冻结返回类型需要清理或返回
+usage 非 Copy 的 callable 导出。真实 Native package 回归要求在写入库文件或
+trust 记录之前被拒绝；现有 Native artifact 测试继续覆盖普通 `i32()` 发布。
+在新 query、loader、Runtime handle 和状态路径完成前，资源返回源码门禁保持关闭。
 
 #### Native 类型化导出边界核查（2026-10-06）
 
@@ -1082,8 +1091,9 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    拒绝无效 owner cell，注入的 body 后失败清理未提交 owner，成功提交后
    由宿主恰好一次 Drop。第二个 owner 在借用 Ref pin 结束后由不可复制的测试
    carrier 连同 JIT lease 保持有效；Windows ASAN 聚焦测试通过。上文已列出
-   带版本的公开 carrier 与失败状态候选。下一步实现已验证的类型化导出行和
-   loader 检查，再考虑开放此形状。
+   带版本的公开 carrier 与失败状态候选。Native v1 现于生成 artifact 前拒绝
+   需清理的公开返回值。现有 v2 仅覆盖 `i32()`；下一步定义并行 v3 行与
+   loader 校验，核对精确 Ref 与 Result 信息，再考虑开放此形状。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。
