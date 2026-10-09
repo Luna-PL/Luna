@@ -300,6 +300,8 @@ fn main() -> i32 {
     forgedParameter.type = mainFunction->returnType;
     mainFunction->params.push_back(forgedParameter);
     mainSignature->parameterTypeIds.push_back(forgedParameter.type);
+    mainSignature->parameterContracts.push_back(
+        {forgedParameter.relation, forgedParameter.usage});
     cfgCodegenModule->exports.push_back(forgedExport);
     mainFunction->isExported = true;
     const bool publishedWrongMachineType =
@@ -308,6 +310,7 @@ fn main() -> i32 {
     mainFunction->isExported = false;
     cfgCodegenModule->exports.pop_back();
     mainSignature->parameterTypeIds.pop_back();
+    mainSignature->parameterContracts.pop_back();
     mainFunction->params.pop_back();
     if (publishedWrongMachineType ||
         !std::any_of(cfgCodegen.errors().begin(), cfgCodegen.errors().end(),
