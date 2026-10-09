@@ -274,8 +274,9 @@ fn main() -> i32 {
     return runSourceCase(probe, "<from-owned-result>", source, 59, 2, 0);
 }
 
-int runFromSplitOwnedResultCase(AllocationProbe& probe) {
-    const std::string source = R"luna(
+int runFromSplitOwnedResultCase(AllocationProbe& probe, const char* name,
+                                int firstMarker, int expectedCarriedMarker) {
+    const std::string source = std::string(R"luna(
 struct Cell { marker: i32; }
 impl Drop for Cell {
     fn drop(resource: &mut Cell) -> unit { resource.marker = 0; }
@@ -287,13 +288,18 @@ impl Drop for ReturnedFromSplit {
 }
 impl From<SourceSplitError> for ReturnedFromSplit {
     fn from(affine error: SourceSplitError) -> ReturnedFromSplit {
-        let carried = move error.first;
+        if error.first.marker > 0 {
+            let carried = move error.first;
+            let returned = new ReturnedFromSplit(59, move carried);
+            return move returned;
+        }
+        let carried = move error.second;
         let returned = new ReturnedFromSplit(59, move carried);
         return move returned;
     }
 }
 fn converted() -> Result<i32, ReturnedFromSplit> {
-    let first = new Cell(43);
+    let first = new Cell()luna") + std::to_string(firstMarker) + R"luna();
     let second = new Cell(47);
     let error = new SourceSplitError(move first, move second);
     let input = Err::<i32, SourceSplitError>(move error);
@@ -303,10 +309,10 @@ fn converted() -> Result<i32, ReturnedFromSplit> {
 fn main() -> i32 {
     let result = converted();
     let returned = unwrap_err(move result);
-    return returned.marker;
+    return returned.inner.marker;
 }
 )luna";
-    return runSourceCase(probe, "<split-from-owned-result>", source, 59, 2, 2);
+    return runSourceCase(probe, name, source, expectedCarriedMarker, 2, 2);
 }
 
 } // namespace
@@ -362,7 +368,10 @@ int runSplitAllocationProbe() {
     if (runFromEarlyContinueCase(probe, "<split-from-continue>", -43))
         return 1;
     if (runFromOwnedResultCase(probe)) return 1;
-    if (runFromSplitOwnedResultCase(probe)) return 1;
+    if (runFromSplitOwnedResultCase(probe, "<split-from-owned-first>", 43, 43))
+        return 1;
+    if (runFromSplitOwnedResultCase(probe, "<split-from-owned-second>", -43, 47))
+        return 1;
     return 0;
 }
 

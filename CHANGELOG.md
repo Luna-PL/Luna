@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Covered both arms of `From<SourceSplitError> for ReturnedFromSplit` on the
+  private Ref/apply `?` owned Err path. Moving the first or second source
+  field produces exact Drop orders `47, 59, 43` or `-43, 59, 47` on each of
+  two JIT calls. The host allocator probe checks the carried marker and pairs
+  all four allocations and releases on each arm under Windows ASAN.
 - Proved a split source error transferring one owned field into an owned Err
   payload through `From` on the private Ref/apply `?` path. Two JIT calls Drop
   the remaining source field `47`, then the returned outer `59` and carried

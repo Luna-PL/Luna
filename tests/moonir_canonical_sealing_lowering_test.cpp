@@ -1640,7 +1640,12 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "}\n"
         "impl From<SourceSplitError> for ReturnedFromSplit {\n"
         "  fn from(affine error: SourceSplitError) -> ReturnedFromSplit {\n"
-        "    let carried = move error.first;\n"
+        "    if error.first.marker > 0 {\n"
+        "      let carried = move error.first;\n"
+        "      let returned = new ReturnedFromSplit(59, move carried);\n"
+        "      return move returned;\n"
+        "    }\n"
+        "    let carried = move error.second;\n"
         "    let returned = new ReturnedFromSplit(59, move carried);\n"
         "    return move returned;\n"
         "  }\n"
@@ -1946,6 +1951,21 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  }\n"
         "  return Ok(0);\n"
         "}\n"
+        "runtime fn try_apply_split_owned_from_else("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, ReturnedFromSplit> {\n"
+        "  let first = new SourceError(-43);\n"
+        "  let second = new SourceError(47);\n"
+        "  let error = new SourceSplitError(move first, move second);\n"
+        "  let input = Err::<i32, SourceSplitError>(move error);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
         "runtime fn try_apply_ok_resource_return("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<ReturnedResource, i32> {\n"
@@ -2083,6 +2103,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplyResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyFromResourceReturn = nullptr;
     moon::FunctionDecl* tryApplySplitOwnedFrom = nullptr;
+    moon::FunctionDecl* tryApplySplitOwnedFromElse = nullptr;
     moon::FunctionDecl* tryApplyOkResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyPairResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyOkResourceScalarErr = nullptr;
@@ -2126,6 +2147,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyFromResourceReturn = function;
             if (function->name == "try_apply_split_owned_from")
                 tryApplySplitOwnedFrom = function;
+            if (function->name == "try_apply_split_owned_from_else")
+                tryApplySplitOwnedFromElse = function;
             if (function->name == "try_apply_ok_resource_return")
                 tryApplyOkResourceReturn = function;
             if (function->name == "try_apply_pair_resource_return")
@@ -2150,7 +2173,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplyMergeFrom || !tryApplyMergeFromElse ||
         !tryApplyEarlyContinueFrom || !tryApplyEarlyContinueFromElse ||
         !tryApplyResourceReturn || !tryApplyFromResourceReturn ||
-        !tryApplySplitOwnedFrom ||
+        !tryApplySplitOwnedFrom || !tryApplySplitOwnedFromElse ||
         !tryApplyOkResourceReturn ||
         !tryApplyPairResourceReturn || !tryApplyOkResourceScalarErr ||
         !tryApplyErrResourceScalarOk || !tryApplyNestedResourceReturn ||
@@ -2585,37 +2608,39 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             std::vector<int32_t>{47, 59, 47, 59} ||
         !privateRefJitDropProbeValid)
         return fail("Ref apply '?' From resource return lost source/owner Drop order");
-    if (!tryApplySplitOwnedFrom->controlFlow ||
-        tryApplySplitOwnedFrom->controlFlow->runtimeRefApplies.size() != 2 ||
-        !refApplyCfgVerifier.verify(*tryApplySplitOwnedFrom->controlFlow,
-                                    *tryApplyModule))
-        return fail("Ref apply '?' split-owned From return did not verify");
-    const auto* splitOwnedResultType = tryApplyModule->findType(
-        tryApplySplitOwnedFrom->returnType);
-    if (!splitOwnedResultType ||
-        splitOwnedResultType->kind != TypeKind::Result ||
-        splitOwnedResultType->typeArgumentIds.size() != 2)
-        return fail("Ref apply '?' split-owned From return lost its Result type");
-    bool hasFrozenSplitOwnedFromReturn = false;
-    for (const auto& block : tryApplySplitOwnedFrom->controlFlow->blocks) {
-        if (block.terminator.kind != moon::TerminatorKind::Return)
-            continue;
-        const auto* result = dynamic_cast<const moon::ResultConstructExpr*>(
-            block.terminator.operand.get());
-        const auto* conversion = result && !result->isOk
-            ? dynamic_cast<const moon::CallExpr*>(result->payload.get())
-            : nullptr;
-        const auto* frozen = conversion
-            ? tryApplyModule->findDeclaration(conversion->calleeRef)
-            : nullptr;
-        if (frozen && frozen->sourceName == "from" &&
-            conversion->type == splitOwnedResultType->typeArgumentIds[1])
-            hasFrozenSplitOwnedFromReturn = true;
+    for (auto* function : {tryApplySplitOwnedFrom,
+                           tryApplySplitOwnedFromElse}) {
+        if (!function->controlFlow ||
+            function->controlFlow->runtimeRefApplies.size() != 2 ||
+            !refApplyCfgVerifier.verify(*function->controlFlow,
+                                        *tryApplyModule))
+            return fail("Ref apply '?' split-owned From return did not verify");
+        const auto* resultType = tryApplyModule->findType(function->returnType);
+        if (!resultType || resultType->kind != TypeKind::Result ||
+            resultType->typeArgumentIds.size() != 2)
+            return fail("Ref apply '?' split-owned From return lost its Result type");
+        bool hasFrozenFromReturn = false;
+        for (const auto& block : function->controlFlow->blocks) {
+            if (block.terminator.kind != moon::TerminatorKind::Return)
+                continue;
+            const auto* result = dynamic_cast<const moon::ResultConstructExpr*>(
+                block.terminator.operand.get());
+            const auto* conversion = result && !result->isOk
+                ? dynamic_cast<const moon::CallExpr*>(result->payload.get())
+                : nullptr;
+            const auto* frozen = conversion
+                ? tryApplyModule->findDeclaration(conversion->calleeRef)
+                : nullptr;
+            if (frozen && frozen->sourceName == "from" &&
+                conversion->type == resultType->typeArgumentIds[1])
+                hasFrozenFromReturn = true;
+        }
+        if (!hasFrozenFromReturn)
+            return fail("Ref apply '?' split-owned Err lost its frozen From witness");
     }
-    if (!hasFrozenSplitOwnedFromReturn)
-        return fail("Ref apply '?' split-owned Err lost its frozen From witness");
     const auto splitOwnedRemainingDrops = privateRefJitConversionDropProbeCalls;
     const auto splitOwnedReturnedDrops = privateRefJitReturnedDropProbeCalls;
+    const auto splitOwnedAllDrops = privateRefJitAllDropProbeCalls;
     privateRefJitFromResourceDropOrder.clear();
     privateRefJitDropProbeValid = true;
     if (!exercisePrivateRefApplyJit(
@@ -2627,10 +2652,28 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     }
     if (privateRefJitConversionDropProbeCalls != splitOwnedRemainingDrops + 2 ||
         privateRefJitReturnedDropProbeCalls != splitOwnedReturnedDrops + 2 ||
+        privateRefJitAllDropProbeCalls != splitOwnedAllDrops + 6 ||
         privateRefJitFromResourceDropOrder !=
             std::vector<int32_t>{47, 59, 43, 47, 59, 43} ||
         !privateRefJitDropProbeValid)
         return fail("Ref apply '?' split-owned From return lost field/owner Drop order");
+    const auto splitOwnedElseAllDrops = privateRefJitAllDropProbeCalls;
+    const auto splitOwnedElseReturnedDrops = privateRefJitReturnedDropProbeCalls;
+    privateRefJitFromResourceDropOrder.clear();
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplySplitOwnedFromElse, privateRefJitError,
+            0, false, std::nullopt, false, false, {}, {},
+            std::pair<bool, int32_t>{false, 59})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply '?' split-owned From else failed private JIT execution");
+    }
+    if (privateRefJitAllDropProbeCalls != splitOwnedElseAllDrops + 6 ||
+        privateRefJitReturnedDropProbeCalls != splitOwnedElseReturnedDrops + 2 ||
+        privateRefJitFromResourceDropOrder !=
+            std::vector<int32_t>{-43, 59, 47, -43, 59, 47} ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply '?' split-owned From else lost field/owner Drop order");
     if (!tryApplyOkResourceReturn->controlFlow ||
         tryApplyOkResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
         !refApplyCfgVerifier.verify(*tryApplyOkResourceReturn->controlFlow,

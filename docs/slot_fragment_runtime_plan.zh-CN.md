@@ -701,7 +701,11 @@ Clang64 ASAN 聚焦测试通过。wrapper 仍仅在 JIT 内消费返回 owner。
 Drop 源对象剩余字段 `47`，wrapper 再依次 Drop 返回对象外层 `59` 和携带的
 字段 `43`。独立的源码 JIT 宿主 allocator 探针核对两笔 4 字节字段分配和两笔
 16 字节外层分配均按原布局各释放一次，没有 reallocation；Windows Clang64
-ASAN 聚焦测试通过。返回 owner 仍由私有 JIT wrapper 消费。
+ASAN 聚焦测试通过。转换现覆盖两条返回分支：源第一字段为 `43` 时转移它，
+Drop 顺序仍为 `47, 59, 43`；其值为 `-43` 时转移第二字段，Drop 顺序为
+`-43, 59, 47`。两种顺序均在两次私有 JIT 调用中重复。宿主 allocator 探针
+分别确认携带的 marker 为 `43` 或 `47`，且每条路径的四笔分配各释放一次；
+Windows ASAN 聚焦测试通过。返回 owner 仍由私有 JIT wrapper 消费。
 另两个 Err 夹具分别返回两层和三层 struct 所有权链。wrapper 在读取外层 marker 后复用
 编译器现有的递归拥有型 payload 清理；窄形状门禁最多准入三个各有冻结源码 Drop 与
 `i32` marker 的 struct。私有 LLVM 检查要求 Drop 从外到内、deallocation 从内到外。
@@ -1028,7 +1032,9 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    `From<SourceSplitError> for ReturnedFromSplit` 现将第一个拥有型字段转移至
    拥有型 Err payload；私有 wrapper 两次观察到 `47, 59, 43` 的有序 Drop，
    独立宿主探针核对两笔字段及两笔外层分配和释放，Windows ASAN 亦通过。
-   下一步验证依条件转移任一源字段至同一拥有型 Err payload 的两条清理路径。
+   另一返回分支转移第二字段，两次观察到 `-43, 59, 47`；宿主探针和 Windows
+   ASAN 同样确认四笔分配各释放一次。下一步将此返回字段形状纳入私有宿主
+   交接及注入 body 后失败的清理证明。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。

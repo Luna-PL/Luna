@@ -914,7 +914,13 @@ before the wrapper Drops the returned outer `59` and carried field `43`.
 An independent source JIT host allocator probe pairs both 4-byte field
 allocations and both 16-byte outer allocations with exactly one matching
 release each and no reallocation. Focused Windows Clang64 ASAN tests pass.
-The returned owner remains inside the private JIT wrapper.
+The conversion now takes either returning arm. With first marker `43`, it
+moves the first field and preserves the `47, 59, 43` Drop order. With first
+marker `-43`, it moves the second field and Drops `-43, 59, 47`; each order
+repeats on two private JIT calls. The host allocator probe checks that the
+carried marker is `43` or `47` and pairs all four allocations and releases
+on both arms, including under Windows ASAN. The returned owner remains
+inside the private JIT wrapper.
 Further Err fixtures return two- and three-struct ownership chains. After
 reading the outer marker, the wrapper uses the compiler's existing recursive
 owned-payload cleanup. Its narrow shape gate admits at most three structs,
@@ -1357,8 +1363,10 @@ not a public ABI decision or stable-release approval:
    moves the first owned field into an owned Err payload. The private wrapper
    observes ordered Drops `47, 59, 43` twice; the independent host probe
    pairs two field and two outer allocations with their releases, including
-   under Windows ASAN. Next, test branch-dependent transfer of either source
-   field into the same owned Err payload and verify both cleanup paths.
+   under Windows ASAN. The alternate returning arm moves the second field,
+   observes `-43, 59, 47` twice, and pairs the same four releases under the
+   host probe and Windows ASAN. Next, extend the private host handoff and
+   injected post-body failure proof to this returned field shape.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches
