@@ -904,21 +904,22 @@ cell，注入失败时三个输出保持不变。parent context 与精确借用 
 输出预检后执行；空 parent／Ref
 及有效的外来目标 handle 返回不同的仅测试用状态，不执行 body 或改写输出。
 生成证明要求恰好一次 context check、一次 Ref check 和一次源码 body 调用。
-这仍是 JIT 测试入口，输出仍为裸 owner 指针。Runtime 已有单独的 opaque owner
-handle；生成的宿主 wrapper、生产状态码及 v3 descriptor 绑定尚未实现。
-仅测试用的已装载宿主适配层现把冻结的拥有型 Result 源码事实绑定到验证后的 JIT
-module，同时查找该 module 的生成 transfer 与 Drop 入口。它在调用前检查宿主输出，
-用私有 cell 调用生成入口，仅在收养成功后提交 Runtime handle；收养失败时在同一
-代码 lease 下 Drop 未提交 owner。收养失败状态只供测试使用。资源 Err、标量 Ok、
-伪造源码身份、错误 Ref 目标、已占用 owner 与输出 cell 别名均有可执行检查。
-该适配层已通过 Windows Clang64 ASAN 聚焦 canonical 测试，但尚不是 Native v3
-所需的固定 C 原型或生成的宿主 wrapper。
+这个底层 JIT 测试入口仍输出裸 owner 指针；生产状态码及 v3 descriptor 绑定尚未实现。
+私有生成的七参数 C 宿主 wrapper 现于调用 transfer 前检查三个输出 cell 和有效
+lease 上下文，并使用私有 cell 接收 transfer 结果。标量 Ok 直接提交；资源 Err
+连同精确生成的 Drop 入口交给 Runtime 的 C 收养桥。收养失败时在代码 lease
+有效期间 Drop 未提交 owner；成功时最后写入 tag。生成证明检查一次 transfer、
+一次收养调用和两条 Drop 清理路径。仅测试用的已装载适配层把冻结源码事实绑定到
+验证后的 JIT module，在分派前准备稳定空 owner cell，成功后将其移入调用方
+handle。资源 Err、标量 Ok、伪造源码身份、错误 Ref 目标、已占用或别名输出、
+无效 lease 及收养失败均有可执行检查。此 wrapper 仍限于私有 JIT 候选形态，
+不生成 Native v3 导出或生产可调用契约。
 Runtime 现还提供内部 C 收养入口，接收返回 owner、生成的 Drop 指针、宿主提供的
 有效代码 lease 上下文，以及稳定且为空的 owner cell。入口在发布唯一 token 前
-校验这些输入；失败时裸 owner 仍归调用方。已装载适配层现调用该入口，并在收养
-资源返回后才准备单独的稳定 cell。预检失败、标量返回或收养失败都不改变调用方
-的 handle 对象；收养成功后将已绑定的 cell 移入该对象，地址不变。收养失败时
-适配层保持租约并执行生成的 Drop。此桥接入口本身尚不构成可发布的 wrapper ABI。
+校验这些输入；失败时裸 owner 仍归生成入口。已装载适配层在调用生成 wrapper 前
+预留稳定 cell。预检失败、标量返回或收养失败都不改变调用方的 handle 对象；
+收养成功后将已绑定的 cell 移入该对象，地址不变。此桥接入口本身尚不构成可发布
+的 wrapper ABI。
 
 当前 64 位目标的 v3 export／library 记录大小为 136／96 字节；`entry_abi`、
 错误值大小、首个标识符与入口指针的偏移依次为 16、32、48、128。SHA-256 摘要
@@ -957,13 +958,11 @@ handle cell 为空。入口前失败不修改输出或源 owner。body 启动后
 Drop。私有夹具已改用该 carrier，并在借用 Ref pin 失效后证明延迟且恰好一次的
 Drop。Runtime carrier 在重跑时通过 Windows Clang64 ASAN 聚焦 canonical 测试；
 另一次运行在进入该路径前遇到已知的 LLVM 20.1.8 COFF 保序 section 重定位
-失败。Linux ASAN 仍待核验。下一步是实现具有固定 C 原型、已证明的 parent／Ref
-预检、独立状态／Result tag、标量输出及唯一 owner-handle cell 的生产宿主 wrapper，并在
-失败清理期间保持 JIT lease。核验生成的 wrapper 并把其独立入口与 linkage 绑定
-到冻结源码事实后，
-producer 才能生成 v3 行并把类型化证明传至 `PinnedBinding`。Runtime 所有的
-handle／Drop 操作和覆盖各失败阶段的生成入口测试完成后，才能开放窄形态的
-verifier／export 门禁。不能
+失败。Linux ASAN 仍待核验。私有生成的 C 宿主 wrapper 现已在单一准入形态下证明
+候选提交点及 lease 行为。下一步须冻结生产可调用原型与状态域，将生成宿主入口及
+linkage 绑定到冻结源码事实，再把类型化证明纳入 v3 行与 `PinnedBinding`。
+覆盖每个真实失败阶段的生成入口测试，以及 Runtime 所有的 handle／Drop 在各支持
+目标上的验证完成后，才能开放窄形态的 verifier／export 门禁。不能
 原地扩展 Native v1 行。
 审查构建还发现更近的一项封闭要求：Native v1 曾接受公开的
 `Result<i32, OwnedError>`，并生成共享库与 trust 记录，却没有宿主可用于释放

@@ -505,48 +505,20 @@ int32_t LunaPrivateRefResultLoadedEntry::call(
                         ownerAddress, sizeof(void*)))))
         return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST;
     using Entry = int32_t (*)(const void*, void*, uint32_t*, int32_t*,
-                             void**, uint32_t);
-    using Drop = int32_t (*)(void**);
+                             void**, const void*, uint32_t);
     const auto entry = reinterpret_cast<Entry>(const_cast<void*>(entry_));
-    const auto drop = reinterpret_cast<Drop>(const_cast<void*>(drop_));
-    uint32_t tag = 0;
-    int32_t scalar = 0;
-    void* rawOwner = nullptr;
+    luna::runtime::RuntimeOwnedResultHandle stagedOwner;
+    std::string adoptionError;
+    if (!stagedOwner.prepareEmptyCell(adoptionError))
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST;
+    std::shared_ptr<const void> codeLease = keepCodeAlive;
     const int32_t status = entry(parentContext,
-        const_cast<void*>(borrowedRef), &tag, &scalar, &rawOwner, 0);
-    const auto discardOwner = [&] {
-        if (rawOwner && (drop(&rawOwner) != 0 || rawOwner))
-            std::terminate();
-    };
-    if (status != LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST) {
-        if (rawOwner) discardOwner();
-        return status;
-    }
-    if ((tag == 0 && !rawOwner) || (tag == 1 && rawOwner) || tag > 1) {
-        discardOwner();
-        return LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST;
-    }
-    if (rawOwner) {
-        std::string adoptionError;
-        luna::runtime::RuntimeOwnedResultHandle stagedOwner;
-        if (!stagedOwner.prepareEmptyCell(adoptionError)) {
-            discardOwner();
-            return LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST;
-        }
-        std::shared_ptr<const void> codeLease = keepCodeAlive;
-        if (failAdoptionForTest ||
-            luna_runtime_owned_result_adopt_v1(
-                rawOwner, drop, &codeLease, stagedOwner.cell()) !=
-                LUNA_RUNTIME_OWNED_RESULT_ADOPT_SUCCESS_V1) {
-            discardOwner();
-            return LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST;
-        }
+        const_cast<void*>(borrowedRef), tagOutput, scalarOutput,
+        stagedOwner.cell(), &codeLease, failAdoptionForTest ? 1u : 0u);
+    if (status == LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST &&
+        stagedOwner)
         ownerOutput = std::move(stagedOwner);
-    } else {
-        *scalarOutput = scalar;
-    }
-    *tagOutput = tag;
-    return LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST;
+    return status;
 }
 
 std::unique_ptr<LunaPrivateRefUnitApplyLoadedEntry>
@@ -593,7 +565,7 @@ CodeGenerator::loadPrivateRuntimeFragmentRefResultEntryForTest(
         return {};
     }
     const void* entry = executable->lookup(
-        "__luna_private_ref_apply_transfer_test", failure);
+        "__luna_private_ref_apply_host_transfer_test", failure);
     if (!entry) return {};
     const void* drop = executable->lookup(
         "__luna_private_ref_apply_drop_test", failure);
@@ -2446,6 +2418,239 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 }
                 dropBuilder.SetInsertPoint(cleanupEnd);
                 dropBuilder.CreateRet(llvm::ConstantInt::get(i32Ty, 0));
+                if (privateOwnedResultFacts) {
+                    // The private C host boundary owns the complete return
+                    // transaction. The loader supplies a live code lease and
+                    // a stable, empty Runtime owner cell.
+                    auto* hostEntry = llvm::Function::Create(
+                        llvm::FunctionType::get(i32Ty,
+                            {ptrTy, ptrTy, ptrTy, ptrTy, ptrTy, ptrTy, i32Ty},
+                            false),
+                        llvm::Function::ExternalLinkage,
+                        "__luna_private_ref_apply_host_transfer_test",
+                        *proof.mModule);
+                    if (hostEntry->getCallingConv() != llvm::CallingConv::C ||
+                        hostEntry->arg_size() != 7 ||
+                        hostEntry->getReturnType() != i32Ty) {
+                        failure = "private Ref Result host transfer lost its C contract";
+                        return false;
+                    }
+                    auto* hostStart = llvm::BasicBlock::Create(
+                        *proof.mCtx, "entry", hostEntry);
+                    auto* hostCheckOwner = llvm::BasicBlock::Create(
+                        *proof.mCtx, "check.owner", hostEntry);
+                    auto* hostCheckLease = llvm::BasicBlock::Create(
+                        *proof.mCtx, "check.lease", hostEntry);
+                    auto* hostTransfer = llvm::BasicBlock::Create(
+                        *proof.mCtx, "transfer", hostEntry);
+                    auto* hostTransferred = llvm::BasicBlock::Create(
+                        *proof.mCtx, "transferred", hostEntry);
+                    auto* hostScalar = llvm::BasicBlock::Create(
+                        *proof.mCtx, "scalar", hostEntry);
+                    auto* hostScalarCommit = llvm::BasicBlock::Create(
+                        *proof.mCtx, "scalar.commit", hostEntry);
+                    auto* hostResource = llvm::BasicBlock::Create(
+                        *proof.mCtx, "resource", hostEntry);
+                    auto* hostAdopt = llvm::BasicBlock::Create(
+                        *proof.mCtx, "adopt", hostEntry);
+                    auto* hostAdoptCheck = llvm::BasicBlock::Create(
+                        *proof.mCtx, "adopt.check", hostEntry);
+                    auto* hostResourceCommit = llvm::BasicBlock::Create(
+                        *proof.mCtx, "resource.commit", hostEntry);
+                    auto* hostInvalidResourceCheck = llvm::BasicBlock::Create(
+                        *proof.mCtx, "resource.invalid.check", hostEntry);
+                    auto* hostInvalidResourceDrop = llvm::BasicBlock::Create(
+                        *proof.mCtx, "resource.invalid.drop", hostEntry);
+                    auto* hostAdoptionDrop = llvm::BasicBlock::Create(
+                        *proof.mCtx, "adoption.drop", hostEntry);
+                    auto* hostInvalidOutput = llvm::BasicBlock::Create(
+                        *proof.mCtx, "output.invalid", hostEntry);
+                    auto* hostInvalidLease = llvm::BasicBlock::Create(
+                        *proof.mCtx, "lease.invalid", hostEntry);
+                    auto* hostInvalidResource = llvm::BasicBlock::Create(
+                        *proof.mCtx, "resource.invalid", hostEntry);
+                    llvm::IRBuilder<> hostBuilder(hostStart);
+                    auto hostArg = hostEntry->arg_begin();
+                    auto* hostParent = &*hostArg++;
+                    auto* hostRef = &*hostArg++;
+                    auto* hostTagOut = &*hostArg++;
+                    auto* hostScalarOut = &*hostArg++;
+                    auto* hostOwnerOut = &*hostArg++;
+                    auto* hostLease = &*hostArg++;
+                    auto* hostFailAdoption = &*hostArg;
+                    auto* localTag = hostBuilder.CreateAlloca(i32Ty);
+                    auto* localScalar = hostBuilder.CreateAlloca(i32Ty);
+                    auto* localOwner = hostBuilder.CreateAlloca(ptrTy);
+                    const auto hostAligned = [&](llvm::Value* pointer,
+                                                 size_t alignment) {
+                        auto* address = hostBuilder.CreatePtrToInt(
+                            pointer, proof.mHelpers->sizeTy());
+                        return hostBuilder.CreateICmpEQ(
+                            hostBuilder.CreateAnd(address,
+                                llvm::ConstantInt::get(
+                                    proof.mHelpers->sizeTy(), alignment - 1)),
+                            llvm::ConstantInt::get(proof.mHelpers->sizeTy(), 0));
+                    };
+                    const auto hostDisjoint = [&](llvm::Value* left,
+                                                   size_t leftSize,
+                                                   llvm::Value* right,
+                                                   size_t rightSize) {
+                        auto* leftAddress = hostBuilder.CreatePtrToInt(
+                            left, proof.mHelpers->sizeTy());
+                        auto* rightAddress = hostBuilder.CreatePtrToInt(
+                            right, proof.mHelpers->sizeTy());
+                        auto* leftBeforeRight = hostBuilder.CreateICmpULT(
+                            leftAddress, rightAddress);
+                        auto* gap = hostBuilder.CreateSelect(leftBeforeRight,
+                            hostBuilder.CreateSub(rightAddress, leftAddress),
+                            hostBuilder.CreateSub(leftAddress, rightAddress));
+                        return hostBuilder.CreateSelect(leftBeforeRight,
+                            hostBuilder.CreateICmpUGE(gap,
+                                llvm::ConstantInt::get(
+                                    proof.mHelpers->sizeTy(), leftSize)),
+                            hostBuilder.CreateICmpUGE(gap,
+                                llvm::ConstantInt::get(
+                                    proof.mHelpers->sizeTy(), rightSize)));
+                    };
+                    auto* outputsValid = hostBuilder.CreateAnd(
+                        hostBuilder.CreateIsNotNull(hostTagOut),
+                        hostBuilder.CreateAnd(
+                            hostBuilder.CreateIsNotNull(hostScalarOut),
+                            hostBuilder.CreateIsNotNull(hostOwnerOut)));
+                    outputsValid = hostBuilder.CreateAnd(outputsValid,
+                        hostBuilder.CreateAnd(
+                            hostAligned(hostTagOut, alignof(uint32_t)),
+                            hostBuilder.CreateAnd(
+                                hostAligned(hostScalarOut, alignof(int32_t)),
+                                hostAligned(hostOwnerOut, alignof(void*)))));
+                    outputsValid = hostBuilder.CreateAnd(outputsValid,
+                        hostBuilder.CreateAnd(
+                            hostDisjoint(hostTagOut, sizeof(uint32_t),
+                                         hostScalarOut, sizeof(int32_t)),
+                            hostBuilder.CreateAnd(
+                                hostDisjoint(hostTagOut, sizeof(uint32_t),
+                                             hostOwnerOut, sizeof(void*)),
+                                hostDisjoint(hostScalarOut, sizeof(int32_t),
+                                             hostOwnerOut, sizeof(void*)))));
+                    hostBuilder.CreateCondBr(outputsValid, hostCheckOwner,
+                                             hostInvalidOutput);
+                    hostBuilder.SetInsertPoint(hostCheckOwner);
+                    hostBuilder.CreateCondBr(hostBuilder.CreateIsNull(
+                        hostBuilder.CreateLoad(ptrTy, hostOwnerOut)),
+                        hostCheckLease, hostInvalidOutput);
+                    hostBuilder.SetInsertPoint(hostCheckLease);
+                    auto* leaseValid = hostBuilder.CreateAnd(
+                        hostBuilder.CreateIsNotNull(hostLease),
+                        hostAligned(hostLease,
+                            alignof(std::shared_ptr<const void>)));
+                    leaseValid = hostBuilder.CreateAnd(leaseValid,
+                        hostBuilder.CreateAnd(
+                            hostDisjoint(hostTagOut, sizeof(uint32_t),
+                                hostLease, sizeof(std::shared_ptr<const void>)),
+                            hostBuilder.CreateAnd(
+                                hostDisjoint(hostScalarOut, sizeof(int32_t),
+                                    hostLease,
+                                    sizeof(std::shared_ptr<const void>)),
+                                hostDisjoint(hostOwnerOut, sizeof(void*),
+                                    hostLease,
+                                    sizeof(std::shared_ptr<const void>)))));
+                    hostBuilder.CreateCondBr(leaseValid, hostTransfer,
+                                             hostInvalidLease);
+                    hostBuilder.SetInsertPoint(hostInvalidOutput);
+                    hostBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST));
+                    hostBuilder.SetInsertPoint(hostInvalidLease);
+                    hostBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_LEASE_V1_TEST));
+                    hostBuilder.SetInsertPoint(hostTransfer);
+                    hostBuilder.CreateStore(
+                        llvm::Constant::getNullValue(ptrTy), localOwner);
+                    auto* transferredStatus = hostBuilder.CreateCall(transfer,
+                        {hostParent, hostRef, localTag, localScalar, localOwner,
+                         llvm::ConstantInt::get(i32Ty, 0)});
+                    auto* hostTransferFailed = llvm::BasicBlock::Create(
+                        *proof.mCtx, "transfer.failed", hostEntry);
+                    hostBuilder.CreateCondBr(hostBuilder.CreateICmpEQ(
+                        transferredStatus, llvm::ConstantInt::get(i32Ty, 0)),
+                        hostTransferred, hostTransferFailed);
+                    hostBuilder.SetInsertPoint(hostTransferFailed);
+                    hostBuilder.CreateRet(transferredStatus);
+                    hostBuilder.SetInsertPoint(hostTransferred);
+                    auto* returnedTag = hostBuilder.CreateLoad(i32Ty, localTag);
+                    auto* returnedOwner = hostBuilder.CreateLoad(ptrTy, localOwner);
+                    hostBuilder.CreateCondBr(hostBuilder.CreateICmpEQ(
+                        returnedTag, llvm::ConstantInt::get(i32Ty, 0)),
+                        hostResource, hostScalar);
+                    hostBuilder.SetInsertPoint(hostScalar);
+                    hostBuilder.CreateCondBr(hostBuilder.CreateAnd(
+                        hostBuilder.CreateICmpEQ(returnedTag,
+                            llvm::ConstantInt::get(i32Ty, 1)),
+                        hostBuilder.CreateIsNull(returnedOwner)),
+                        hostScalarCommit, hostInvalidResourceCheck);
+                    hostBuilder.SetInsertPoint(hostScalarCommit);
+                    hostBuilder.CreateStore(
+                        hostBuilder.CreateLoad(i32Ty, localScalar), hostScalarOut);
+                    hostBuilder.CreateStore(returnedTag, hostTagOut);
+                    hostBuilder.CreateRet(llvm::ConstantInt::get(i32Ty, 0));
+                    hostBuilder.SetInsertPoint(hostResource);
+                    hostBuilder.CreateCondBr(
+                        hostBuilder.CreateIsNotNull(returnedOwner),
+                        hostAdopt, hostInvalidResource);
+                    hostBuilder.SetInsertPoint(hostAdopt);
+                    hostBuilder.CreateCondBr(hostBuilder.CreateICmpEQ(
+                        hostFailAdoption, llvm::ConstantInt::get(i32Ty, 0)),
+                        hostAdoptCheck, hostAdoptionDrop);
+                    auto adoption = proof.mModule->getOrInsertFunction(
+                        "luna_runtime_owned_result_adopt_v1", i32Ty,
+                        ptrTy, ptrTy, ptrTy, ptrTy);
+                    hostBuilder.SetInsertPoint(hostAdoptCheck);
+                    auto* adoptStatus = hostBuilder.CreateCall(adoption,
+                        {returnedOwner, dropEntry, hostLease, hostOwnerOut});
+                    hostBuilder.CreateCondBr(hostBuilder.CreateICmpEQ(
+                        adoptStatus, llvm::ConstantInt::get(i32Ty,
+                            LUNA_RUNTIME_OWNED_RESULT_ADOPT_SUCCESS_V1)),
+                        hostResourceCommit, hostAdoptionDrop);
+                    hostBuilder.SetInsertPoint(hostResourceCommit);
+                    hostBuilder.CreateStore(returnedTag, hostTagOut);
+                    hostBuilder.CreateRet(llvm::ConstantInt::get(i32Ty, 0));
+                    hostBuilder.SetInsertPoint(hostInvalidResourceCheck);
+                    hostBuilder.CreateCondBr(
+                        hostBuilder.CreateIsNotNull(returnedOwner),
+                        hostInvalidResourceDrop, hostInvalidResource);
+                    hostBuilder.SetInsertPoint(hostInvalidResourceDrop);
+                    hostBuilder.CreateCall(dropEntry, {localOwner});
+                    hostBuilder.CreateBr(hostInvalidResource);
+                    hostBuilder.SetInsertPoint(hostInvalidResource);
+                    hostBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_RESOURCE_V1_TEST));
+                    hostBuilder.SetInsertPoint(hostAdoptionDrop);
+                    hostBuilder.CreateCall(dropEntry, {localOwner});
+                    hostBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST));
+                    size_t hostTransferCalls = 0;
+                    size_t hostAdoptCalls = 0;
+                    size_t hostDropCalls = 0;
+                    for (const auto& block : *hostEntry)
+                        for (const auto& instruction : block)
+                            if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                                    &instruction)) {
+                                const auto* callee = call->getCalledFunction();
+                                if (callee == transfer) ++hostTransferCalls;
+                                else if (callee == dropEntry) ++hostDropCalls;
+                                else if (callee && callee->getName() ==
+                                    "luna_runtime_owned_result_adopt_v1")
+                                    ++hostAdoptCalls;
+                                else {
+                                    failure = "private Ref Result host transfer has an unexpected call";
+                                    return false;
+                                }
+                            }
+                    if (hostTransferCalls != 1 || hostAdoptCalls != 1 ||
+                        hostDropCalls != 2) {
+                        failure = "private Ref Result host transfer lost its commit or cleanup path";
+                        return false;
+                    }
+                }
             }
             if (returnType->kind == TypeKind::Unit &&
                 function.params.size() == 1) {

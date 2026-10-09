@@ -3,6 +3,7 @@
 #include "../runtime/Runtime.h"
 #include "../runtime/RuntimeFragmentABI.h"
 #include "../runtime/RuntimeFragmentCompilerBridge.h"
+#include "../runtime/RuntimeOwnedResult.h"
 
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/LegacyPassManager.h>
@@ -122,6 +123,8 @@ materializeLunaJit(std::unique_ptr<llvm::Module>& module,
                 &luna_compiler_fragment_context_override_from_ref);
     bindRuntime("luna_compiler_fragment_context_drop",
                 &luna_compiler_fragment_context_drop);
+    bindRuntime("luna_runtime_owned_result_adopt_v1",
+                &luna_runtime_owned_result_adopt_v1);
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     bindRuntime("luna_private_ref_drop_probe", &luna_private_ref_drop_probe);
 #endif

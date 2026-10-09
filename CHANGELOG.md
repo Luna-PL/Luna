@@ -2,26 +2,29 @@
 
 ## Unreleased
 
+- Added a private generated C host wrapper for the admitted borrowed-Ref,
+  owned-Result JIT fixture. It preflights outputs and lease, invokes the
+  generated transfer, adopts a resource through Runtime with its exact Drop
+  entry, and cleans an uncommitted resource on failure. The loaded adapter now
+  calls this wrapper; Native v3 publication remains gated.
 - Added an internal C adoption bridge for the Runtime Result owner cell. It
   validates an empty aligned cell and supplied owner, Drop entry and live
   host code lease before publishing a unique token; failed adoption leaves
-  ownership with the caller. The private loaded Ref/Result adapter now calls
-  this bridge, and its failure path Drops the uncommitted owner while the JIT
-  code stays pinned. The public generated wrapper is still gated.
+  ownership with the generated caller. The private generated wrapper calls
+  this bridge and Drops an uncommitted owner while the JIT code stays pinned.
 - Added a test-only loaded Ref/owned-Result host adapter bound to the sealed
   source facts retained with its verified JIT module. It preflights caller
-  outputs, calls the generated transfer entry with private cells, commits a
-  Runtime owner handle only after successful adoption, and invokes generated
-  Drop under the code lease if adoption fails. Resource Err, scalar Ok,
+  outputs and invokes the generated host wrapper with a stable empty cell;
+  successful adoption moves that cell into the caller's handle. Resource Err, scalar Ok,
   forged-source, wrong-target and output-alias regressions cover the path.
-  The public generated C wrapper and Native v3 export gate remain closed.
+  The Native v3 export gate remains closed.
 - Added a Runtime-owned, move-only Result owner handle backed by a stable
   unique cell. Runtime retains the returned payload, exact generated Drop
   entry and code lease together, clears the cell before Drop callbacks, and
   rejects copied, stale and foreign tokens. The private JIT transfer fixture
   now uses this carrier and checks deferred Drop after its Ref pin expires,
   including in the Windows Clang64 ASAN canonical test.
-  The generated host wrapper and Native v3 callable binding remain gated.
+  Native v3 callable binding remains gated.
 - Added parent-context and exact borrowed-Ref preflight to the private
   Ref/Result transfer entry. Live foreign-target and null-handle fixtures
   require distinct test-only statuses, unchanged outputs and no body or Drop

@@ -1189,29 +1189,31 @@ entry. Parent-context and exact borrowed-Ref preflight now run after output
 preflight; null parent/Ref and a live foreign-target handle return distinct
 test-only statuses without body dispatch or output mutation. The generated
 proof checks one context check, one Ref check and one body call. A Runtime-owned
-opaque handle now exists as a separate host carrier, but this test entry still
-writes a raw owner pointer. A generated host wrapper, production status codes
-and a v3 descriptor binding are still required.
-The test-only loaded host adapter now binds the frozen owned-Result source
-facts to the materialized JIT module and looks up that module's generated
-transfer and Drop entries together. It checks caller outputs before invoking
-the transfer entry with private cells, commits the Runtime handle after
-adoption, and Drops an uncommitted owner under the same code lease when
-adoption fails. Its adoption-failure status is test-only. Resource Err and
-scalar Ok paths, forged source identity, wrong Ref target, occupied owner and
-aliased output cells have executable checks. This adapter is not the fixed C
-prototype or generated wrapper required for Native v3. The focused Windows
-Clang64 ASAN canonical run passes with this adapter.
+opaque handle now exists as a separate host carrier, while this lower-level
+test entry still writes a raw owner pointer. Production status codes and a v3
+descriptor binding are still required.
+The private generated seven-argument C host wrapper now checks its three
+output cells and live lease context before calling the transfer entry with
+private cells. It returns scalar Ok directly, or passes resource Err with the
+exact generated Drop entry to Runtime's C adoption bridge. Failed adoption
+drops the uncommitted owner while the code lease remains live; successful
+adoption writes the tag last. The generated proof checks one transfer call,
+one adoption call and both Drop cleanup paths. The test-only loaded adapter
+binds the frozen source facts to the materialized JIT module, prepares a stable
+empty owner cell before dispatch, and moves that cell into the caller's handle
+after success. Resource Err and scalar Ok, forged source, wrong Ref target,
+occupied or aliased outputs, invalid lease, and failed adoption have executable
+checks. This wrapper is still limited to the private JIT candidate shape; it
+does not create a Native v3 export or production callable contract.
 Runtime now also has an internal C adoption entry that takes a returned owner,
 generated Drop pointer, host-provided live code-lease context and stable empty
 owner cell. It validates these before publishing a unique token; failure
-leaves the raw owner with the caller. The loaded adapter calls this entry and
-stages a separate stable cell only after a resource return. Failed preflight,
-scalar return or failed adoption leaves the caller's handle object unchanged;
+leaves the raw owner with the generated caller. The loaded adapter reserves a
+stable cell before invoking the generated wrapper. Failed preflight, scalar
+return or failed adoption leaves the caller's handle object unchanged;
 successful adoption moves the bound cell into that object without changing
-its address. The adapter keeps the lease through generated Drop cleanup on
-adoption failure. This
-bridge is private and does not itself establish a publishable wrapper ABI.
+its address. This bridge is private and does not itself establish a publishable
+wrapper ABI.
 
 On current 64-bit targets the v3 export/library records are 136/96 bytes;
 `entry_abi`, error size, first identifier and entry pointer begin at offsets
@@ -1260,17 +1262,14 @@ The private fixture uses this carrier and proves deferred exactly-once Drop
 after the borrowed Ref pin expires. The Runtime carrier passes the focused
 Windows Clang64 ASAN canonical test on rerun. One invocation stopped earlier
 at the known LLVM 20.1.8 COFF ordered-section relocation failure, before the
-carrier path; Linux ASAN remains to be checked. The
-next production step is a generated
-host wrapper with a fixed C prototype, the proven parent/Ref preflight,
-separate status and Result tag, scalar output and unique owner-handle cell.
-Its failure paths
-must retain the JIT lease through cleanup. Only after verifying the generated
-wrapper and binding its distinct entry and linkage to the frozen source facts,
-the producer can emit a v3 row and propagate its typed proof to `PinnedBinding`.
-Generated entry tests for every failure phase and the Runtime-owned handle/Drop
-operation across supported targets are required before opening
-the narrow verifier/export gate. Native v1 rows must not be extended in place.
+carrier path; Linux ASAN remains to be checked. The private generated C host
+wrapper now proves the candidate commit and lease behavior for one admitted
+shape. The next production step is to freeze its callable prototype and status
+domain, bind the generated host entry and linkage to the frozen source facts,
+and carry that typed proof into a v3 row and `PinnedBinding`. Generated entry
+tests for every real failure phase, plus Runtime-owned handle/Drop behavior
+across supported targets, are required before opening the narrow verifier and
+export gate. Native v1 rows must not be extended in place.
 An audit build exposed a nearer fail-closed requirement: Native v1 accepted
 an exported `Result<i32, OwnedError>` and sealed a library and trust record
 even though no host carrier could release its owner. Descriptor emission now
