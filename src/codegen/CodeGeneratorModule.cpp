@@ -511,10 +511,13 @@ int32_t LunaPrivateRefResultLoadedEntry::call(
     std::string adoptionError;
     if (!stagedOwner.prepareEmptyCell(adoptionError))
         return LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST;
-    std::shared_ptr<const void> codeLease = keepCodeAlive;
+    luna::runtime::RuntimeOwnedResultCodeLease codeLease;
+    if (!codeLease.prepare(keepCodeAlive, adoptionError))
+        return LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST;
     const int32_t status = entry(parentContext,
         const_cast<void*>(borrowedRef), tagOutput, scalarOutput,
-        stagedOwner.cell(), &codeLease, failAdoptionForTest ? 1u : 0u);
+        stagedOwner.cell(), codeLease.opaque(),
+        failAdoptionForTest ? 1u : 0u);
     if (status == LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST &&
         stagedOwner)
         ownerOutput = std::move(stagedOwner);
@@ -2539,23 +2542,15 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         hostBuilder.CreateLoad(ptrTy, hostOwnerOut)),
                         hostCheckLease, hostInvalidOutput);
                     hostBuilder.SetInsertPoint(hostCheckLease);
-                    auto* leaseValid = hostBuilder.CreateAnd(
-                        hostBuilder.CreateIsNotNull(hostLease),
-                        hostAligned(hostLease,
-                            alignof(std::shared_ptr<const void>)));
-                    leaseValid = hostBuilder.CreateAnd(leaseValid,
-                        hostBuilder.CreateAnd(
-                            hostDisjoint(hostTagOut, sizeof(uint32_t),
-                                hostLease, sizeof(std::shared_ptr<const void>)),
-                            hostBuilder.CreateAnd(
-                                hostDisjoint(hostScalarOut, sizeof(int32_t),
-                                    hostLease,
-                                    sizeof(std::shared_ptr<const void>)),
-                                hostDisjoint(hostOwnerOut, sizeof(void*),
-                                    hostLease,
-                                    sizeof(std::shared_ptr<const void>)))));
-                    hostBuilder.CreateCondBr(leaseValid, hostTransfer,
-                                             hostInvalidLease);
+                    auto leaseCheck = proof.mModule->getOrInsertFunction(
+                        "luna_runtime_owned_result_lease_check_v1", i32Ty,
+                        ptrTy);
+                    auto* leaseStatus = hostBuilder.CreateCall(leaseCheck,
+                        {hostLease});
+                    hostBuilder.CreateCondBr(hostBuilder.CreateICmpEQ(
+                        leaseStatus, llvm::ConstantInt::get(i32Ty,
+                            LUNA_RUNTIME_OWNED_RESULT_LEASE_LIVE_V1)),
+                        hostTransfer, hostInvalidLease);
                     hostBuilder.SetInsertPoint(hostInvalidOutput);
                     hostBuilder.CreateRet(llvm::ConstantInt::get(i32Ty,
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST));
@@ -2630,6 +2625,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     size_t hostTransferCalls = 0;
                     size_t hostAdoptCalls = 0;
                     size_t hostDropCalls = 0;
+                    size_t hostLeaseChecks = 0;
                     for (const auto& block : *hostEntry)
                         for (const auto& instruction : block)
                             if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
@@ -2640,13 +2636,17 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                                 else if (callee && callee->getName() ==
                                     "luna_runtime_owned_result_adopt_v1")
                                     ++hostAdoptCalls;
+                                else if (callee && callee->getName() ==
+                                    "luna_runtime_owned_result_lease_check_v1")
+                                    ++hostLeaseChecks;
                                 else {
                                     failure = "private Ref Result host transfer has an unexpected call";
                                     return false;
                                 }
                             }
                     if (hostTransferCalls != 1 || hostAdoptCalls != 1 ||
-                        hostDropCalls != 2) {
+                        hostDropCalls != 2 || hostLeaseChecks != 1 ||
+                        leaseStatus->getParent() != hostCheckLease) {
                         failure = "private Ref Result host transfer lost its commit or cleanup path";
                         return false;
                     }

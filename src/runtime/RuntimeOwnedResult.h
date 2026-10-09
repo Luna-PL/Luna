@@ -23,13 +23,21 @@ enum LunaRuntimeOwnedResultAdoptStatusV1 {
     LUNA_RUNTIME_OWNED_RESULT_ADOPT_FAILED_V1 = 3,
 };
 
-// Internal compiler bridge. code_lease points to a live C++
-// std::shared_ptr<const void> supplied by the verified host caller. Runtime
-// copies it before publishing the token. The cell must stay at one address
-// until Drop and be empty on entry. No arbitrary-pointer import is supported.
+// Internal compiler bridge. code_lease is a live Runtime-issued opaque token,
+// never a pointer to a C++ object. Runtime copies the retained lease before
+// publishing the owner token. The owner cell must stay at one address until
+// Drop and be empty on entry. No arbitrary-pointer import is supported.
 int32_t luna_runtime_owned_result_adopt_v1(
     void* payload, LunaRuntimeOwnedResultDropEntryV1 drop,
     const void* code_lease, void** owner_cell);
+
+enum LunaRuntimeOwnedResultLeaseStatusV1 {
+    LUNA_RUNTIME_OWNED_RESULT_LEASE_LIVE_V1 = 0,
+    LUNA_RUNTIME_OWNED_RESULT_LEASE_INVALID_V1 = 1,
+};
+
+// Read-only preflight for a Runtime-issued lease token.
+int32_t luna_runtime_owned_result_lease_check_v1(const void* code_lease);
 
 int32_t luna_runtime_owned_result_drop_v1(void** owner_cell);
 
@@ -40,6 +48,28 @@ int32_t luna_runtime_owned_result_drop_v1(void** owner_cell);
 #include <string>
 
 namespace luna::runtime {
+
+// Keeps a Runtime-issued code-lease token live for one host call. The token
+// can cross the generated C boundary without exposing std::shared_ptr layout.
+class RuntimeOwnedResultCodeLease {
+public:
+    RuntimeOwnedResultCodeLease() = default;
+    RuntimeOwnedResultCodeLease(const RuntimeOwnedResultCodeLease&) = delete;
+    RuntimeOwnedResultCodeLease& operator=(const RuntimeOwnedResultCodeLease&) = delete;
+    RuntimeOwnedResultCodeLease(RuntimeOwnedResultCodeLease&& other) noexcept;
+    RuntimeOwnedResultCodeLease& operator=(RuntimeOwnedResultCodeLease&& other) noexcept;
+    ~RuntimeOwnedResultCodeLease();
+
+    bool prepare(std::shared_ptr<const void> codeLease, std::string& error);
+    const void* opaque() const noexcept {
+        return reinterpret_cast<const void*>(token_);
+    }
+    explicit operator bool() const noexcept { return token_ != 0; }
+    void reset() noexcept;
+
+private:
+    uintptr_t token_ = 0;
+};
 
 // Owns a stable, unique handle cell. The returned payload, exact generated
 // Drop entry and code lease are retained as one Runtime lifetime unit.

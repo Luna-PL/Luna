@@ -72,9 +72,8 @@ private:
     std::vector<uint8_t> record_;
 };
 
-// Test-only loaded Ref/Result host adapter. The verified generated transfer
-// entry still returns a raw owner; this adapter commits it to Runtime's
-// unique handle while retaining the exact JIT module through all cleanup.
+// Test-only loaded Ref/Result host adapter. It supplies a Runtime-issued code
+// lease token and stable owner cell to the verified generated host wrapper.
 class LunaPrivateRefResultLoadedEntry {
 public:
     int32_t call(const void* parentContext, const void* borrowedRef,

@@ -433,9 +433,12 @@ bool exercisePrivateRefApplyJit(
                 constexpr int32_t unchangedScalar = 0x12345678;
                 int32_t scalar = unchangedScalar;
                 void* rawOwnerCell = nullptr;
-                std::shared_ptr<const void> codeLease = jit;
-                const auto invalidLease = reinterpret_cast<const void*>(
-                    reinterpret_cast<uintptr_t>(&codeLease) + 1);
+                luna::runtime::RuntimeOwnedResultCodeLease codeLease;
+                luna::runtime::RuntimeOwnedResultCodeLease retiredLease;
+                if (!codeLease.prepare(jit, error) ||
+                    !retiredLease.prepare(jit, error)) return false;
+                const void* invalidLease = retiredLease.opaque();
+                retiredLease.reset();
                 if (entryHostTransfer(parent.opaque(),
                         const_cast<void*>(handle.opaque()), &tag, &scalar,
                         &rawOwnerCell, nullptr, 0) !=
@@ -445,12 +448,18 @@ bool exercisePrivateRefApplyJit(
                         &rawOwnerCell, invalidLease, 0) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_LEASE_V1_TEST ||
                     entryHostTransfer(parent.opaque(),
+                        const_cast<void*>(handle.opaque()), &tag, &scalar,
+                        &rawOwnerCell,
+                        reinterpret_cast<const void*>(~uintptr_t{0}), 0) !=
+                        LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_LEASE_V1_TEST ||
+                    entryHostTransfer(parent.opaque(),
                         const_cast<void*>(handle.opaque()), nullptr, &scalar,
-                        &rawOwnerCell, &codeLease, 0) !=
+                        &rawOwnerCell, codeLease.opaque(), 0) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST ||
                     entryHostTransfer(parent.opaque(),
                         const_cast<void*>(handle.opaque()), &tag, &scalar,
-                        reinterpret_cast<void**>(&tag), &codeLease, 0) !=
+                        reinterpret_cast<void**>(&tag),
+                        codeLease.opaque(), 0) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_OUTPUT_V1_TEST ||
                     tag != 42 || scalar != unchangedScalar || rawOwnerCell ||
                     privateRefJitExecutions != dispatchesBefore ||
@@ -664,33 +673,45 @@ bool exercisePrivateRefApplyJit(
                 return false;
             }
             if (owner) {
-                std::shared_ptr<const void> codeLease = jit;
-                std::shared_ptr<const void> emptyLease;
+                luna::runtime::RuntimeOwnedResultCodeLease codeLease;
+                luna::runtime::RuntimeOwnedResultCodeLease retiredLease;
+                if (!codeLease.prepare(jit, error) ||
+                    !retiredLease.prepare(jit, error)) {
+                    entryDrop(&owner);
+                    return false;
+                }
+                const void* staleLease = retiredLease.opaque();
+                retiredLease.reset();
                 void* emptyCell = nullptr;
                 void* occupiedCell = reinterpret_cast<void*>(uintptr_t{1});
                 alignas(void*) unsigned char unalignedCell[2 * sizeof(void*)]{};
                 if (luna_runtime_owned_result_adopt_v1(
-                        owner, entryDrop, &codeLease, nullptr) !=
+                        owner, entryDrop, codeLease.opaque(), nullptr) !=
                         LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_OUTPUT_V1 ||
                     luna_runtime_owned_result_adopt_v1(
-                        owner, entryDrop, &codeLease, &occupiedCell) !=
+                        owner, entryDrop, codeLease.opaque(), &occupiedCell) !=
                         LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_OUTPUT_V1 ||
                     luna_runtime_owned_result_adopt_v1(
-                        owner, entryDrop, &codeLease,
+                        owner, entryDrop, codeLease.opaque(),
                         reinterpret_cast<void**>(unalignedCell + 1)) !=
                         LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_OUTPUT_V1 ||
                     luna_runtime_owned_result_adopt_v1(
-                        nullptr, entryDrop, &codeLease, &emptyCell) !=
+                        nullptr, entryDrop, codeLease.opaque(), &emptyCell) !=
                         LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1 ||
                     luna_runtime_owned_result_adopt_v1(
-                        owner, nullptr, &codeLease, &emptyCell) !=
+                        owner, nullptr, codeLease.opaque(), &emptyCell) !=
                         LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1 ||
                     luna_runtime_owned_result_adopt_v1(
                         owner, entryDrop, nullptr, &emptyCell) !=
                         LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1 ||
                     luna_runtime_owned_result_adopt_v1(
-                        owner, entryDrop, &emptyLease, &emptyCell) !=
+                        owner, entryDrop, staleLease, &emptyCell) !=
                         LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1 ||
+                    luna_runtime_owned_result_lease_check_v1(staleLease) == 0 ||
+                    luna_runtime_owned_result_lease_check_v1(
+                        reinterpret_cast<const void*>(~uintptr_t{0})) == 0 ||
+                    luna_runtime_owned_result_lease_check_v1(
+                        codeLease.opaque()) != 0 ||
                     emptyCell ||
                     occupiedCell != reinterpret_cast<void*>(uintptr_t{1}) ||
                     std::any_of(std::begin(unalignedCell),

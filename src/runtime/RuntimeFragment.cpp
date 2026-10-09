@@ -76,6 +76,8 @@ struct OwnedResultState {
 std::mutex ownedResultMutex;
 std::unordered_map<uintptr_t, std::unique_ptr<OwnedResultState>> ownedResults;
 uintptr_t nextOwnedResultToken = 1;
+std::unordered_map<uintptr_t, std::shared_ptr<const void>> ownedResultCodeLeases;
+uintptr_t nextOwnedResultCodeLeaseToken = 1;
 
 const std::string& emptyString() {
     static const std::string empty;
@@ -1033,6 +1035,62 @@ RuntimeOwnedResultHandle& RuntimeOwnedResultHandle::operator=(
     return *this;
 }
 
+RuntimeOwnedResultCodeLease::RuntimeOwnedResultCodeLease(
+    RuntimeOwnedResultCodeLease&& other) noexcept
+    : token_(std::exchange(other.token_, 0)) {}
+
+RuntimeOwnedResultCodeLease& RuntimeOwnedResultCodeLease::operator=(
+    RuntimeOwnedResultCodeLease&& other) noexcept {
+    if (this != &other) {
+        reset();
+        token_ = std::exchange(other.token_, 0);
+    }
+    return *this;
+}
+
+RuntimeOwnedResultCodeLease::~RuntimeOwnedResultCodeLease() { reset(); }
+
+bool RuntimeOwnedResultCodeLease::prepare(
+    std::shared_ptr<const void> codeLease, std::string& error) {
+    error.clear();
+    if (!codeLease || token_) {
+        error = "runtime owned Result code lease requires a live, empty carrier";
+        return false;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(ownedResultMutex);
+        if (nextOwnedResultCodeLeaseToken == 0) {
+            error = "runtime owned Result code lease tokens exhausted";
+            return false;
+        }
+        const auto token = nextOwnedResultCodeLeaseToken;
+        if (!ownedResultCodeLeases.emplace(token, std::move(codeLease)).second) {
+            error = "runtime owned Result code lease token collision";
+            return false;
+        }
+        ++nextOwnedResultCodeLeaseToken;
+        token_ = token;
+        return true;
+    } catch (...) {
+        error = "runtime owned Result code lease allocation failed";
+        return false;
+    }
+}
+
+void RuntimeOwnedResultCodeLease::reset() noexcept {
+    const auto token = std::exchange(token_, 0);
+    if (!token) return;
+    std::shared_ptr<const void> retired;
+    {
+        std::lock_guard<std::mutex> lock(ownedResultMutex);
+        const auto found = ownedResultCodeLeases.find(token);
+        if (found != ownedResultCodeLeases.end()) {
+            retired = std::move(found->second);
+            ownedResultCodeLeases.erase(found);
+        }
+    }
+}
+
 RuntimeOwnedResultHandle::~RuntimeOwnedResultHandle() { reset(); }
 
 bool RuntimeOwnedResultHandle::prepareEmptyCell(std::string& error) {
@@ -1074,8 +1132,10 @@ bool makeRuntimeOwnedResultHandle(
         auto newCell = output.cell_ ? nullptr :
             std::make_unique<void*>(nullptr);
         void** boundCell = newCell ? newCell.get() : output.cell_.get();
+        RuntimeOwnedResultCodeLease leaseToken;
+        if (!leaseToken.prepare(std::move(codeLease), error)) return false;
         if (luna_runtime_owned_result_adopt_v1(
-                payload, drop, &codeLease, boundCell) !=
+                payload, drop, leaseToken.opaque(), boundCell) !=
                 LUNA_RUNTIME_OWNED_RESULT_ADOPT_SUCCESS_V1) {
             error = "runtime owned Result handle adoption failed";
             return false;
@@ -1097,14 +1157,18 @@ extern "C" int32_t luna_runtime_owned_result_adopt_v1(
         (reinterpret_cast<uintptr_t>(owner_cell) & (alignof(void*) - 1)) != 0 ||
         *owner_cell)
         return LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_OUTPUT_V1;
-    if (!payload || !drop || !code_lease ||
-        (reinterpret_cast<uintptr_t>(code_lease) &
-            (alignof(std::shared_ptr<const void>) - 1)) != 0)
+    if (!payload || !drop || !code_lease)
         return LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1;
     try {
-        const auto& lease = *static_cast<const std::shared_ptr<const void>*>(
-            code_lease);
-        if (!lease) return LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1;
+        std::shared_ptr<const void> lease;
+        {
+            std::lock_guard<std::mutex> lock(luna::runtime::ownedResultMutex);
+            const auto found = luna::runtime::ownedResultCodeLeases.find(
+                reinterpret_cast<uintptr_t>(code_lease));
+            if (found == luna::runtime::ownedResultCodeLeases.end())
+                return LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1;
+            lease = found->second;
+        }
         auto state = std::make_unique<luna::runtime::OwnedResultState>();
         state->payload = payload;
         state->drop = drop;
@@ -1123,6 +1187,20 @@ extern "C" int32_t luna_runtime_owned_result_adopt_v1(
         return LUNA_RUNTIME_OWNED_RESULT_ADOPT_SUCCESS_V1;
     } catch (...) {
         return LUNA_RUNTIME_OWNED_RESULT_ADOPT_FAILED_V1;
+    }
+}
+
+extern "C" int32_t luna_runtime_owned_result_lease_check_v1(
+    const void* code_lease) {
+    if (!code_lease) return LUNA_RUNTIME_OWNED_RESULT_LEASE_INVALID_V1;
+    try {
+        std::lock_guard<std::mutex> lock(luna::runtime::ownedResultMutex);
+        return luna::runtime::ownedResultCodeLeases.count(
+            reinterpret_cast<uintptr_t>(code_lease))
+            ? LUNA_RUNTIME_OWNED_RESULT_LEASE_LIVE_V1
+            : LUNA_RUNTIME_OWNED_RESULT_LEASE_INVALID_V1;
+    } catch (...) {
+        return LUNA_RUNTIME_OWNED_RESULT_LEASE_INVALID_V1;
     }
 }
 

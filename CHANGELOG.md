@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Replaced the private generated Result wrapper's pointer to a host
+  `std::shared_ptr` with a Runtime-issued opaque code-lease token. Runtime
+  rejects stale or foreign tokens before body dispatch, copies the retained
+  lease during adoption, and keeps code pinned through generated Drop.
 - Added a private generated C host wrapper for the admitted borrowed-Ref,
   owned-Result JIT fixture. It preflights outputs and lease, invokes the
   generated transfer, adopts a resource through Runtime with its exact Drop

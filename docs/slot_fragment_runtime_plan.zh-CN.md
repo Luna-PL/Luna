@@ -905,8 +905,8 @@ cell，注入失败时三个输出保持不变。parent context 与精确借用 
 及有效的外来目标 handle 返回不同的仅测试用状态，不执行 body 或改写输出。
 生成证明要求恰好一次 context check、一次 Ref check 和一次源码 body 调用。
 这个底层 JIT 测试入口仍输出裸 owner 指针；生产状态码及 v3 descriptor 绑定尚未实现。
-私有生成的七参数 C 宿主 wrapper 现于调用 transfer 前检查三个输出 cell 和有效
-lease 上下文，并使用私有 cell 接收 transfer 结果。标量 Ok 直接提交；资源 Err
+私有生成的七参数 C 宿主 wrapper 现于调用 transfer 前检查三个输出 cell 和由
+Runtime 发放的有效 lease token，并使用私有 cell 接收 transfer 结果。标量 Ok 直接提交；资源 Err
 连同精确生成的 Drop 入口交给 Runtime 的 C 收养桥。收养失败时在代码 lease
 有效期间 Drop 未提交 owner；成功时最后写入 tag。生成证明检查一次 transfer、
 一次收养调用和两条 Drop 清理路径。仅测试用的已装载适配层把冻结源码事实绑定到
@@ -914,12 +914,14 @@ lease 上下文，并使用私有 cell 接收 transfer 结果。标量 Ok 直接
 handle。资源 Err、标量 Ok、伪造源码身份、错误 Ref 目标、已占用或别名输出、
 无效 lease 及收养失败均有可执行检查。此 wrapper 仍限于私有 JIT 候选形态，
 不生成 Native v3 导出或生产可调用契约。
-Runtime 现还提供内部 C 收养入口，接收返回 owner、生成的 Drop 指针、宿主提供的
-有效代码 lease 上下文，以及稳定且为空的 owner cell。入口在发布唯一 token 前
-校验这些输入；失败时裸 owner 仍归生成入口。已装载适配层在调用生成 wrapper 前
+Runtime 现还提供内部 C 收养入口，接收返回 owner、生成的 Drop 指针、Runtime
+发放的有效代码 lease token，以及稳定且为空的 owner cell。入口通过 Runtime
+存活表解析 token，无须读取宿主 C++ 对象；发布唯一 owner token 前校验这些输入。
+失败时裸 owner 仍归生成入口。已装载适配层在调用生成 wrapper 前
 预留稳定 cell。预检失败、标量返回或收养失败都不改变调用方的 handle 对象；
-收养成功后将已绑定的 cell 移入该对象，地址不变。此桥接入口本身尚不构成可发布
-的 wrapper ABI。
+收养成功后将已绑定的 cell 移入该对象，地址不变。失效或外来 lease token 在
+body 执行前被拒绝；失败收养清理及成功 owner Drop 全程保持代码固定。此桥接
+入口本身尚不构成可发布的 wrapper ABI。
 
 当前 64 位目标的 v3 export／library 记录大小为 136／96 字节；`entry_abi`、
 错误值大小、首个标识符与入口指针的偏移依次为 16、32、48、128。SHA-256 摘要
@@ -958,8 +960,9 @@ handle cell 为空。入口前失败不修改输出或源 owner。body 启动后
 Drop。私有夹具已改用该 carrier，并在借用 Ref pin 失效后证明延迟且恰好一次的
 Drop。Runtime carrier 在重跑时通过 Windows Clang64 ASAN 聚焦 canonical 测试；
 另一次运行在进入该路径前遇到已知的 LLVM 20.1.8 COFF 保序 section 重定位
-失败。Linux ASAN 仍待核验。私有生成的 C 宿主 wrapper 现已在单一准入形态下证明
-候选提交点及 lease 行为。下一步须冻结生产可调用原型与状态域，将生成宿主入口及
+失败。Linux ASAN 仍待核验。私有生成的 C 宿主 wrapper 现已借助 Runtime 发放的
+不透明 lease token，在单一准入形态下证明候选提交点及 lease 行为。下一步须冻结
+生产可调用原型与状态域，将生成宿主入口及
 linkage 绑定到冻结源码事实，再把类型化证明纳入 v3 行与 `PinnedBinding`。
 覆盖每个真实失败阶段的生成入口测试，以及 Runtime 所有的 handle／Drop 在各支持
 目标上的验证完成后，才能开放窄形态的 verifier／export 门禁。不能

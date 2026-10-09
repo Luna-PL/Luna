@@ -125,6 +125,8 @@ materializeLunaJit(std::unique_ptr<llvm::Module>& module,
                 &luna_compiler_fragment_context_drop);
     bindRuntime("luna_runtime_owned_result_adopt_v1",
                 &luna_runtime_owned_result_adopt_v1);
+    bindRuntime("luna_runtime_owned_result_lease_check_v1",
+                &luna_runtime_owned_result_lease_check_v1);
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     bindRuntime("luna_private_ref_drop_probe", &luna_private_ref_drop_probe);
 #endif

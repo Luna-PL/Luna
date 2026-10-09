@@ -1193,7 +1193,7 @@ opaque handle now exists as a separate host carrier, while this lower-level
 test entry still writes a raw owner pointer. Production status codes and a v3
 descriptor binding are still required.
 The private generated seven-argument C host wrapper now checks its three
-output cells and live lease context before calling the transfer entry with
+output cells and Runtime-issued live lease token before calling the transfer entry with
 private cells. It returns scalar Ok directly, or passes resource Err with the
 exact generated Drop entry to Runtime's C adoption bridge. Failed adoption
 drops the uncommitted owner while the code lease remains live; successful
@@ -1206,14 +1206,16 @@ occupied or aliased outputs, invalid lease, and failed adoption have executable
 checks. This wrapper is still limited to the private JIT candidate shape; it
 does not create a Native v3 export or production callable contract.
 Runtime now also has an internal C adoption entry that takes a returned owner,
-generated Drop pointer, host-provided live code-lease context and stable empty
-owner cell. It validates these before publishing a unique token; failure
+generated Drop pointer, Runtime-issued live code-lease token and stable empty
+owner cell. The token is resolved in Runtime's live table without dereferencing
+host C++ state. It validates these before publishing a unique owner token; failure
 leaves the raw owner with the generated caller. The loaded adapter reserves a
 stable cell before invoking the generated wrapper. Failed preflight, scalar
 return or failed adoption leaves the caller's handle object unchanged;
 successful adoption moves the bound cell into that object without changing
-its address. This bridge is private and does not itself establish a publishable
-wrapper ABI.
+its address. Stale or foreign lease tokens fail before body dispatch; a lease
+remains pinned through failed adoption cleanup and successful owner Drop. This
+bridge is private and does not itself establish a publishable wrapper ABI.
 
 On current 64-bit targets the v3 export/library records are 136/96 bytes;
 `entry_abi`, error size, first identifier and entry pointer begin at offsets
@@ -1264,7 +1266,8 @@ Windows Clang64 ASAN canonical test on rerun. One invocation stopped earlier
 at the known LLVM 20.1.8 COFF ordered-section relocation failure, before the
 carrier path; Linux ASAN remains to be checked. The private generated C host
 wrapper now proves the candidate commit and lease behavior for one admitted
-shape. The next production step is to freeze its callable prototype and status
+shape using an opaque Runtime-issued lease token. The next production step is
+to freeze its callable prototype and status
 domain, bind the generated host entry and linkage to the frozen source facts,
 and carry that typed proof into a v3 row and `PinnedBinding`. Generated entry
 tests for every real failure phase, plus Runtime-owned handle/Drop behavior
