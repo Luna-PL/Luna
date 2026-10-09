@@ -137,8 +137,9 @@ fn main() -> i32 {
     return runSourceCase(probe, name, source, 0);
 }
 
-int runFromCase(AllocationProbe& probe) {
-    const std::string source = R"luna(
+int runFromCase(AllocationProbe& probe, const char* name,
+                int firstMarker, int expectedExitCode) {
+    const std::string source = std::string(R"luna(
 struct Cell { marker: i32; }
 impl Drop for Cell {
     fn drop(resource: &mut Cell) -> unit { resource.marker = 0; }
@@ -146,12 +147,16 @@ impl Drop for Cell {
 struct SourceSplitError { first: Cell; second: Cell; }
 impl From<SourceSplitError> for i32 {
     fn from(affine error: SourceSplitError) -> i32 {
-        let forwarded = move error.first;
+        if error.first.marker > 0 {
+            let forwarded = move error.first;
+            return forwarded.marker;
+        }
+        let forwarded = move error.second;
         return forwarded.marker;
     }
 }
 fn converted() -> Result<i32, i32> {
-    let first = new Cell(43);
+)luna") + "    let first = new Cell(" + std::to_string(firstMarker) + R"luna();
     let second = new Cell(47);
     let error = new SourceSplitError(move first, move second);
     let input = Err::<i32, SourceSplitError>(move error);
@@ -163,7 +168,7 @@ fn main() -> i32 {
     return unwrap_err(move result);
 }
 )luna";
-    return runSourceCase(probe, "<split-from-conversion>", source, 43);
+    return runSourceCase(probe, name, source, expectedExitCode);
 }
 
 } // namespace
@@ -210,7 +215,8 @@ int runSplitAllocationProbe() {
                 "if false { let first = move pair.first; return 0; }\n"
                 "else { let second = move pair.second; } return 0;"))
         return 1;
-    if (runFromCase(probe)) return 1;
+    if (runFromCase(probe, "<split-from-first>", 43, 43)) return 1;
+    if (runFromCase(probe, "<split-from-second>", -43, 47)) return 1;
     return 0;
 }
 

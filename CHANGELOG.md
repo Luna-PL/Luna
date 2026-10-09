@@ -2,11 +2,12 @@
 
 ## Unreleased
 
-- Proved a direct field move inside `From<SourceSplitError> for i32` on the
-  private Ref/apply `?` Err path. Two JIT calls return `Err(43)` without Slot
-  dispatch and Drop the moved and remaining fields in `43, 47` order. A
-  separate host allocator probe confirms both field allocations and the outer
-  error allocation are each released exactly once.
+- Proved conditional direct field moves inside `From<SourceSplitError> for i32`
+  on the private Ref/apply `?` Err path. Each branch runs twice without Slot
+  dispatch: moving the first field returns `Err(43)` and Drops `43, 47`, while
+  moving the second returns `Err(47)` and Drops `47, -43`. A separate host
+  allocator probe confirms both field allocations and the outer error
+  allocation are each released once on each path, also under Windows ASAN.
 - Proved direct field moves across conditional paths: matching moved fields
   merge, distinct returning branches keep separate cleanup, and an early return
   does not affect the continuing branch. Exact Drop transcripts and test-host

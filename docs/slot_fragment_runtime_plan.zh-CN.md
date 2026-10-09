@@ -621,12 +621,13 @@ JIT 只导入 canonical Err Return 精确引用的冻结 `From` 方法；私有 
 再 Drop 内层 `47`；负值分支先 Drop 外层 `-43`、再 Drop 内层 `47`。Windows
 Clang64／LLVM 20 与 WSL Arch Linux／LLVM 22 的聚焦 canonical ASAN 测试均通过。
 这证明有界双节点转换的一次条件式整对象局部 move 和两条出口。另一个双字段
-`SourceSplitError` 夹具在 `From<SourceSplitError> for i32` 内将第一个拥有型字段
-move 到局部绑定，再经同一私有 Ref/apply `?` Err 路径返回标量。两次 JIT 执行均
-不分派 Slot，返回 `Err(43)`，每次按 `43`、`47` 的顺序 Drop 字段。独立的源码
-JIT 宿主 allocator 探针确认两个字段与外层错误对象的 allocation 各释放一次。
-这证明转换函数体中的一次直接字段转移；条件式部分字段转移、向宿主转移所有权
-及更宽的转换函数体仍未证明。
+`SourceSplitError` 夹具在 `From<SourceSplitError> for i32` 内按条件将一个拥有型
+字段 move 到局部绑定，再经同一私有 Ref/apply `?` Err 路径返回标量。每条分支均
+执行两次且不分派 Slot：转移第一字段时返回 `Err(43)`，按 `43`、`47` Drop；
+转移第二字段时返回 `Err(47)`，按 `47`、`-43` Drop。独立的源码 JIT 宿主
+allocator 探针确认两条路径中两个字段与外层错误对象的 allocation 各释放一次；
+Windows Clang64 ASAN 聚焦测试通过。这证明转换函数体内条件式字段转移的两条
+返回分支；转换体内的分支汇合、向宿主转移所有权及更宽的转换函数体仍未证明。
 最初的双拥有字段源码探针在 `move pair.first` 处失败：源码检查器记录了被移动字段，
 return 清理却仍指向根 owner，MoonIR sealing 因缺少字段投影清理记录而拒绝。
 临时源码守卫曾将这一失败提前。现在，对于没有整对象 Drop 的合格拥有型命名
@@ -719,7 +720,7 @@ Drop 次数不变。随后释放原始 JIT 句柄，由另一份共享 LLJIT lea
 时安全关闭 JIT 的行为。
 该观测值不是公开返回 carrier 或稳定 ABI。超过三个拥有型 struct 节点的图、
 更宽的资源图、
-带条件式部分字段转移、向宿主转移所有权或更宽所有权图的转换函数体、
+带字段转移后分支汇合、向宿主转移所有权或更宽所有权图的转换函数体、
 outlined Slot body 中的 `?`，
 以及可恢复的派生／分派失败，均不在此执行证明内；前端继续在
 outlined Slot 边界拒绝 `?`。
@@ -965,13 +966,15 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    `From` 方法转换为标量并由源码 `Drop` 清理。双节点拥有型转换参数也已在
    Windows 与 Linux 的 ASAN JIT 运行中证明两条标量返回分支均外层先于内层
    Drop，其中正值路径将整个 owner move 到分支局部绑定。另一个双字段错误现于
-   私有 Ref/apply `?` Err 路径证明 `From` 内的直接字段 move：两次 JIT 执行均
-   返回 `Err(43)` 且不分派，按转移字段、剩余字段的顺序 Drop；独立的宿主
-   allocator 探针确认两个字段及外层错误对象的 allocation 各释放一次。条件式
-   部分字段转移、向宿主转移所有权及更宽的转换仍需证明。手工构造的 canonical
-   CFG 现验证完整、互不重叠的字段清理记录、一条底层 allocation 清理记录，
-   以及一个字段转移后的有效 return 清理列表。第二个手工 CFG 现还覆盖 raw allocation 向已初始化的分拆局部
-   绑定转移，并拒绝再次清理已消费的 raw 身份。它还证明兄弟字段可继续转移，
+   私有 Ref/apply `?` Err 路径证明 `From` 内条件式字段转移的两条返回分支：
+   每条分支执行两次且不分派；转移第一字段时返回 `Err(43)`、Drop `43, 47`，
+   转移第二字段时返回 `Err(47)`、Drop `47, -43`。独立的宿主 allocator 探针
+   确认两条路径中两个字段及外层错误对象的 allocation 各释放一次；Windows
+   Clang64 ASAN 聚焦测试通过。转换体内的分支汇合、向宿主转移所有权及更宽的
+   转换仍需证明。手工构造的 canonical CFG 现验证完整、互不重叠的字段清理
+   记录、一条底层 allocation 清理记录，以及一个字段转移后的有效 return 清理
+   列表。第二个手工 CFG 还覆盖 raw allocation 向已初始化的分拆局部绑定转移，
+   并拒绝再次清理已消费的 raw 身份。它还证明兄弟字段可继续转移，
    并拒绝字段转移后的整对象转移、失效字段普通读取及部分转移根对象的读取。
    源码 builder 现为含需清理字段、且没有整对象 Drop 的拥有型命名 struct 生成多条
    清理记录；参数 return CFG、完整 owner 转移及词法退出 JIT 夹具证明完整清理及
@@ -982,7 +985,7 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    或全部字段后，直接验证每个 `Cell` 及 `Pair` 分配恰好释放一次，Windows
    Clang64 ASAN 亦通过。相同字段转移的分支合并、分别返回的分支及一侧提前
    返回的分支现有精确 Drop 输出和逐侧 allocation 计数。下一步证明 `From`
-   转换函数体中一种有界的条件式部分字段转移，覆盖两条出口及 allocation 释放。
+   转换函数体中条件式字段转移后的有界分支汇合及其剩余清理义务。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。

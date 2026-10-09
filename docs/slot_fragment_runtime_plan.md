@@ -799,15 +799,17 @@ observes outer Drop `43` before inner Drop `47`, and the negative branch
 observes outer Drop `-43` before inner Drop `47`. The focused canonical ASAN
 test passes on Windows Clang64/LLVM 20 and WSL Arch Linux/LLVM 22. This proves
 one bounded conditional whole-owner local move and both exits of the two-node
-conversion. A separate two-field `SourceSplitError` fixture now moves its
-first owned field into a local inside `From<SourceSplitError> for i32` before
-returning a scalar through the same private Ref/apply `?` Err path. Two JIT
-executions return `Err(43)` without Slot dispatch and observe Drop `43` then
-`47` on each call. An independent source JIT host-allocator probe counts one
-release for each of the two field allocations and the outer error allocation.
-This proves one direct field transfer inside the conversion body. Conditional
-partial-field or host ownership transfer and wider conversion bodies remain
-outside the proof.
+conversion. A separate two-field `SourceSplitError` fixture now conditionally
+moves one owned field into a local inside `From<SourceSplitError> for i32`, then
+returns a scalar through the same private Ref/apply `?` Err path. Each branch
+runs twice without Slot dispatch: the first-field branch returns `Err(43)`
+and observes Drop `43`, `47`; the second-field branch returns `Err(47)` and
+observes Drop `47`, `-43`. An independent source JIT host-allocator probe
+counts one release for each field allocation and the outer error allocation
+on both paths. The focused Windows Clang64 ASAN tests pass. This proves both
+returning branches of one bounded conditional field transfer inside the
+conversion body. Branch merges within that conversion, host ownership
+transfer, and wider conversion bodies remain outside the proof.
 The first direct two-owned-field source probe failed on `move pair.first`:
 the source checker tracked the moved field while return cleanup still named
 the root owner, and MoonIR sealing rejected the missing projected cleanup rows.
@@ -942,9 +944,9 @@ with no published carrier or symbol contract. It does not establish
 production failure statuses or safe JIT teardown with an outstanding owner.
 The observation value is not a public return carrier or stable ABI.
 More than three owned structs, wider resource graphs, conversion bodies with
-conditional partial-field or host ownership transfer or wider ownership
-graphs, `?` inside outlined Slot bodies, and recoverable derive/dispatch failures are outside this
-execution proof; the source frontend
+branch merges after field transfers, host ownership transfer, or wider
+ownership graphs, `?` inside outlined Slot bodies, and recoverable
+derive/dispatch failures are outside this execution proof; the source frontend
 continues to reject `?` across the outlined Slot boundary.
 
 The current source builder enters and normally leaves each Ref Apply through
@@ -1272,13 +1274,15 @@ not a public ABI decision or stable-release approval:
    conversion parameter now also proves outer-before-inner Drop on both scalar
    return branches in Windows and Linux ASAN JIT runs, including a whole-owner
    move to a branch-local binding on the positive path. A separate two-field
-   error now proves a direct field move inside `From` on the private Ref/apply
-   `?` Err path: two JIT executions return `Err(43)` without dispatch and Drop
-   the moved field before the remaining field. The independent host-allocator
-   probe counts each field and outer error allocation released once. Conditional
-   partial-field or host ownership transfer and wider conversions still need
-   proof. A hand-built canonical CFG now validates complete disjoint field
-   rows, one backing allocation cleanup row, and the active return cleanup list after one field
+   error now proves both returning branches of a conditional field move inside
+   `From` on the private Ref/apply `?` Err path. Each branch runs twice without
+   dispatch: the first returns `Err(43)` and Drops `43, 47`, while the second
+   returns `Err(47)` and Drops `47, -43`. The independent host-allocator probe
+   counts each field and outer error allocation released once on both paths;
+   focused Windows Clang64 ASAN passes. Branch merges within that conversion,
+   host ownership transfer, and wider conversions still need proof. A hand-built
+   canonical CFG now validates complete disjoint field rows, one backing
+   allocation cleanup row, and the active return cleanup list after one field
    moves. A second hand-built CFG now covers raw allocation transfer into an
    initialized split local and rejects cleanup of the consumed raw identity.
    It also proves sibling-field transfer while rejecting whole-owner transfer
@@ -1295,8 +1299,8 @@ not a public ABI decision or stable-release approval:
    after one or both fields move, also under Windows Clang64 ASAN. Matching
    conditional moves, distinct returning arms, and an early return beside a
    continuing arm now have exact source Drop transcripts and per-outcome
-   allocation counts. Next, prove a bounded conditional partial-field move
-   inside `From`, including both exits and allocation release.
+   allocation counts. Next, prove a bounded branch merge after a conditional
+   field move inside `From`, including the surviving cleanup obligations.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches
