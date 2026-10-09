@@ -442,6 +442,7 @@ bool exercisePrivateRefApplyJit(
                         returnedOwner) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_TARGET_V1_TEST) ||
                     tag != 42 || scalar != unchangedScalar || returnedOwner ||
+                    returnedOwner.cell() != nullptr ||
                     privateRefJitExecutions != dispatchesBefore ||
                     privateRefJitAllDropProbeCalls != callsBefore) {
                     error = "private loaded Result entry bypassed preflight";
@@ -452,7 +453,7 @@ bool exercisePrivateRefApplyJit(
                             &tag, &scalar, returnedOwner, true) !=
                             LUNA_PRIVATE_REF_RESULT_TRANSFER_SUCCESS_V1_TEST ||
                         tag != 1 || scalar != expectedResult->second ||
-                        returnedOwner ||
+                        returnedOwner || returnedOwner.cell() != nullptr ||
                         privateRefJitAllDropProbeCalls !=
                             callsBefore + bodyDropCalls ||
                         privateRefJitExecutions !=
@@ -466,6 +467,7 @@ bool exercisePrivateRefApplyJit(
                         &tag, &scalar, returnedOwner, true) !=
                         LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST ||
                     tag != 42 || scalar != unchangedScalar || returnedOwner ||
+                    returnedOwner.cell() != nullptr ||
                     privateRefJitAllDropProbeCalls !=
                         callsBefore + bodyDropCalls + *transferredDropCalls ||
                     privateRefJitExecutions !=
@@ -627,6 +629,41 @@ bool exercisePrivateRefApplyJit(
                 return false;
             }
             if (owner) {
+                std::shared_ptr<const void> codeLease = jit;
+                std::shared_ptr<const void> emptyLease;
+                void* emptyCell = nullptr;
+                void* occupiedCell = reinterpret_cast<void*>(uintptr_t{1});
+                alignas(void*) unsigned char unalignedCell[2 * sizeof(void*)]{};
+                if (luna_runtime_owned_result_adopt_v1(
+                        owner, entryDrop, &codeLease, nullptr) !=
+                        LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_OUTPUT_V1 ||
+                    luna_runtime_owned_result_adopt_v1(
+                        owner, entryDrop, &codeLease, &occupiedCell) !=
+                        LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_OUTPUT_V1 ||
+                    luna_runtime_owned_result_adopt_v1(
+                        owner, entryDrop, &codeLease,
+                        reinterpret_cast<void**>(unalignedCell + 1)) !=
+                        LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_OUTPUT_V1 ||
+                    luna_runtime_owned_result_adopt_v1(
+                        nullptr, entryDrop, &codeLease, &emptyCell) !=
+                        LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1 ||
+                    luna_runtime_owned_result_adopt_v1(
+                        owner, nullptr, &codeLease, &emptyCell) !=
+                        LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1 ||
+                    luna_runtime_owned_result_adopt_v1(
+                        owner, entryDrop, nullptr, &emptyCell) !=
+                        LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1 ||
+                    luna_runtime_owned_result_adopt_v1(
+                        owner, entryDrop, &emptyLease, &emptyCell) !=
+                        LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1 ||
+                    emptyCell ||
+                    occupiedCell != reinterpret_cast<void*>(uintptr_t{1}) ||
+                    std::any_of(std::begin(unalignedCell),
+                                std::end(unalignedCell),
+                                [](unsigned char byte) { return byte != 0; })) {
+                    error = "Runtime owned Result C adoption changed invalid inputs";
+                    return false;
+                }
                 if (deferThisOwner) {
                     deferredOwner.emplace();
                     if (!luna::runtime::makeRuntimeOwnedResultHandle(

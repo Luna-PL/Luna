@@ -528,12 +528,20 @@ int32_t LunaPrivateRefResultLoadedEntry::call(
     }
     if (rawOwner) {
         std::string adoptionError;
-        if (failAdoptionForTest ||
-            !luna::runtime::makeRuntimeOwnedResultHandle(
-                rawOwner, drop, keepCodeAlive, ownerOutput, adoptionError)) {
+        luna::runtime::RuntimeOwnedResultHandle stagedOwner;
+        if (!stagedOwner.prepareEmptyCell(adoptionError)) {
             discardOwner();
             return LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST;
         }
+        std::shared_ptr<const void> codeLease = keepCodeAlive;
+        if (failAdoptionForTest ||
+            luna_runtime_owned_result_adopt_v1(
+                rawOwner, drop, &codeLease, stagedOwner.cell()) !=
+                LUNA_RUNTIME_OWNED_RESULT_ADOPT_SUCCESS_V1) {
+            discardOwner();
+            return LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST;
+        }
+        ownerOutput = std::move(stagedOwner);
     } else {
         *scalarOutput = scalar;
     }

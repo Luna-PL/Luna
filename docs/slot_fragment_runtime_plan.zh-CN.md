@@ -913,6 +913,12 @@ module，同时查找该 module 的生成 transfer 与 Drop 入口。它在调�
 伪造源码身份、错误 Ref 目标、已占用 owner 与输出 cell 别名均有可执行检查。
 该适配层已通过 Windows Clang64 ASAN 聚焦 canonical 测试，但尚不是 Native v3
 所需的固定 C 原型或生成的宿主 wrapper。
+Runtime 现还提供内部 C 收养入口，接收返回 owner、生成的 Drop 指针、宿主提供的
+有效代码 lease 上下文，以及稳定且为空的 owner cell。入口在发布唯一 token 前
+校验这些输入；失败时裸 owner 仍归调用方。已装载适配层现调用该入口，并在收养
+资源返回后才准备单独的稳定 cell。预检失败、标量返回或收养失败都不改变调用方
+的 handle 对象；收养成功后将已绑定的 cell 移入该对象，地址不变。收养失败时
+适配层保持租约并执行生成的 Drop。此桥接入口本身尚不构成可发布的 wrapper ABI。
 
 当前 64 位目标的 v3 export／library 记录大小为 136／96 字节；`entry_abi`、
 错误值大小、首个标识符与入口指针的偏移依次为 16、32、48、128。SHA-256 摘要

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added an internal C adoption bridge for the Runtime Result owner cell. It
+  validates an empty aligned cell and supplied owner, Drop entry and live
+  host code lease before publishing a unique token; failed adoption leaves
+  ownership with the caller. The private loaded Ref/Result adapter now calls
+  this bridge, and its failure path Drops the uncommitted owner while the JIT
+  code stays pinned. The public generated wrapper is still gated.
 - Added a test-only loaded Ref/owned-Result host adapter bound to the sealed
   source facts retained with its verified JIT module. It preflights caller
   outputs, calls the generated transfer entry with private cells, commits a

@@ -1035,6 +1035,22 @@ RuntimeOwnedResultHandle& RuntimeOwnedResultHandle::operator=(
 
 RuntimeOwnedResultHandle::~RuntimeOwnedResultHandle() { reset(); }
 
+bool RuntimeOwnedResultHandle::prepareEmptyCell(std::string& error) {
+    error.clear();
+    if (*this) {
+        error = "runtime owned Result cell is already occupied";
+        return false;
+    }
+    if (cell_) return true;
+    try {
+        cell_ = std::make_unique<void*>(nullptr);
+        return true;
+    } catch (...) {
+        error = "runtime owned Result cell allocation failed";
+        return false;
+    }
+}
+
 int32_t RuntimeOwnedResultHandle::dropOnce() noexcept {
     return cell_ ? luna_runtime_owned_result_drop_v1(cell_.get())
                  : LUNA_RUNTIME_OWNED_RESULT_DROP_EMPTY_V1;
@@ -1058,20 +1074,12 @@ bool makeRuntimeOwnedResultHandle(
         auto newCell = output.cell_ ? nullptr :
             std::make_unique<void*>(nullptr);
         void** boundCell = newCell ? newCell.get() : output.cell_.get();
-        auto state = std::make_unique<OwnedResultState>();
-        state->payload = payload;
-        state->drop = drop;
-        state->codeLease = std::move(codeLease);
-        state->boundCell = boundCell;
-        std::lock_guard<std::mutex> lock(ownedResultMutex);
-        if (nextOwnedResultToken == 0) {
-            error = "runtime owned Result handle space is exhausted";
+        if (luna_runtime_owned_result_adopt_v1(
+                payload, drop, &codeLease, boundCell) !=
+                LUNA_RUNTIME_OWNED_RESULT_ADOPT_SUCCESS_V1) {
+            error = "runtime owned Result handle adoption failed";
             return false;
         }
-        const uintptr_t token = nextOwnedResultToken;
-        ownedResults.emplace(token, std::move(state));
-        ++nextOwnedResultToken;
-        *boundCell = reinterpret_cast<void*>(token);
         if (newCell) output.cell_ = std::move(newCell);
         return true;
     } catch (...) {
@@ -1081,6 +1089,42 @@ bool makeRuntimeOwnedResultHandle(
 }
 
 } // namespace luna::runtime
+
+extern "C" int32_t luna_runtime_owned_result_adopt_v1(
+    void* payload, LunaRuntimeOwnedResultDropEntryV1 drop,
+    const void* code_lease, void** owner_cell) {
+    if (!owner_cell ||
+        (reinterpret_cast<uintptr_t>(owner_cell) & (alignof(void*) - 1)) != 0 ||
+        *owner_cell)
+        return LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_OUTPUT_V1;
+    if (!payload || !drop || !code_lease ||
+        (reinterpret_cast<uintptr_t>(code_lease) &
+            (alignof(std::shared_ptr<const void>) - 1)) != 0)
+        return LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1;
+    try {
+        const auto& lease = *static_cast<const std::shared_ptr<const void>*>(
+            code_lease);
+        if (!lease) return LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1;
+        auto state = std::make_unique<luna::runtime::OwnedResultState>();
+        state->payload = payload;
+        state->drop = drop;
+        state->codeLease = lease;
+        state->boundCell = owner_cell;
+        std::lock_guard<std::mutex> lock(luna::runtime::ownedResultMutex);
+        if (luna::runtime::nextOwnedResultToken == 0)
+            return LUNA_RUNTIME_OWNED_RESULT_ADOPT_FAILED_V1;
+        const uintptr_t token = luna::runtime::nextOwnedResultToken;
+        const auto inserted = luna::runtime::ownedResults.emplace(
+            token, std::move(state));
+        if (!inserted.second)
+            return LUNA_RUNTIME_OWNED_RESULT_ADOPT_FAILED_V1;
+        ++luna::runtime::nextOwnedResultToken;
+        *owner_cell = reinterpret_cast<void*>(token);
+        return LUNA_RUNTIME_OWNED_RESULT_ADOPT_SUCCESS_V1;
+    } catch (...) {
+        return LUNA_RUNTIME_OWNED_RESULT_ADOPT_FAILED_V1;
+    }
+}
 
 extern "C" int32_t luna_runtime_owned_result_drop_v1(void** owner_cell) {
     if (!owner_cell) return LUNA_RUNTIME_OWNED_RESULT_DROP_INVALID_HANDLE_V1;

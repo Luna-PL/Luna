@@ -1202,6 +1202,16 @@ scalar Ok paths, forged source identity, wrong Ref target, occupied owner and
 aliased output cells have executable checks. This adapter is not the fixed C
 prototype or generated wrapper required for Native v3. The focused Windows
 Clang64 ASAN canonical run passes with this adapter.
+Runtime now also has an internal C adoption entry that takes a returned owner,
+generated Drop pointer, host-provided live code-lease context and stable empty
+owner cell. It validates these before publishing a unique token; failure
+leaves the raw owner with the caller. The loaded adapter calls this entry and
+stages a separate stable cell only after a resource return. Failed preflight,
+scalar return or failed adoption leaves the caller's handle object unchanged;
+successful adoption moves the bound cell into that object without changing
+its address. The adapter keeps the lease through generated Drop cleanup on
+adoption failure. This
+bridge is private and does not itself establish a publishable wrapper ABI.
 
 On current 64-bit targets the v3 export/library records are 136/96 bytes;
 `entry_abi`, error size, first identifier and entry pointer begin at offsets

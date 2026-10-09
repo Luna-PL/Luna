@@ -14,6 +14,23 @@ enum LunaRuntimeOwnedResultDropStatusV1 {
     LUNA_RUNTIME_OWNED_RESULT_DROP_INVALID_HANDLE_V1 = 2,
 };
 
+typedef int32_t (*LunaRuntimeOwnedResultDropEntryV1)(void**);
+
+enum LunaRuntimeOwnedResultAdoptStatusV1 {
+    LUNA_RUNTIME_OWNED_RESULT_ADOPT_SUCCESS_V1 = 0,
+    LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_OUTPUT_V1 = 1,
+    LUNA_RUNTIME_OWNED_RESULT_ADOPT_INVALID_RESOURCE_V1 = 2,
+    LUNA_RUNTIME_OWNED_RESULT_ADOPT_FAILED_V1 = 3,
+};
+
+// Internal compiler bridge. code_lease points to a live C++
+// std::shared_ptr<const void> supplied by the verified host caller. Runtime
+// copies it before publishing the token. The cell must stay at one address
+// until Drop and be empty on entry. No arbitrary-pointer import is supported.
+int32_t luna_runtime_owned_result_adopt_v1(
+    void* payload, LunaRuntimeOwnedResultDropEntryV1 drop,
+    const void* code_lease, void** owner_cell);
+
 int32_t luna_runtime_owned_result_drop_v1(void** owner_cell);
 
 #ifdef __cplusplus
@@ -28,7 +45,7 @@ namespace luna::runtime {
 // Drop entry and code lease are retained as one Runtime lifetime unit.
 class RuntimeOwnedResultHandle {
 public:
-    using DropEntry = int32_t (*)(void**);
+    using DropEntry = LunaRuntimeOwnedResultDropEntryV1;
 
     RuntimeOwnedResultHandle() = default;
     RuntimeOwnedResultHandle(const RuntimeOwnedResultHandle&) = delete;
@@ -40,6 +57,8 @@ public:
     explicit operator bool() const { return cell_ && *cell_; }
     const void* opaque() const { return cell_ ? *cell_ : nullptr; }
     void** cell() noexcept { return cell_.get(); }
+    // Reserves a stable empty cell for a generated C entry before body call.
+    bool prepareEmptyCell(std::string& error);
     int32_t dropOnce() noexcept;
     void reset() noexcept;
 
