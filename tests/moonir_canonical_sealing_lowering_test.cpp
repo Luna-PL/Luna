@@ -130,7 +130,8 @@ bool exercisePrivateRefApplyJit(
     bool injectPostBodyFailure = false,
     bool deferSecondHostDrop = false,
     bool exerciseIngressGate = false,
-    std::vector<uint8_t>* entryRecord = nullptr) {
+    std::vector<uint8_t>* entryRecord = nullptr,
+    unsigned bodyDropCalls = 0) {
     const moon::SlotDecl* slot = nullptr;
     const moon::SlotDecl* secondSlot = nullptr;
     for (const auto& declaration : module.declarations)
@@ -422,7 +423,7 @@ bool exercisePrivateRefApplyJit(
                     const_cast<void*>(handle.opaque()), &tag, &owner, 1) != 3 ||
                  tag != 42 || owner != nullptr ||
                  privateRefJitAllDropProbeCalls !=
-                     callsBefore + *transferredDropCalls)) {
+                     callsBefore + bodyDropCalls + *transferredDropCalls)) {
                 error = "private Result failed transfer did not clean before commit";
                 return false;
             }
@@ -431,7 +432,8 @@ bool exercisePrivateRefApplyJit(
                     const_cast<void*>(handle.opaque()), &tag, &owner, 0) != 0 ||
                 tag != static_cast<uint32_t>(expectedResult->first) ||
                 (owner != nullptr) != (*transferredDropCalls != 0) ||
-                privateRefJitAllDropProbeCalls != callsAfterFailure) {
+                privateRefJitAllDropProbeCalls !=
+                    callsAfterFailure + bodyDropCalls) {
                 error = "private Result transfer failed its ownership commit";
                 return false;
             }
@@ -443,15 +445,18 @@ bool exercisePrivateRefApplyJit(
                 }
                 if (entryDrop(&owner) != 0 || owner != nullptr ||
                     privateRefJitAllDropProbeCalls !=
-                        callsAfterFailure + *transferredDropCalls ||
+                        callsAfterFailure + bodyDropCalls +
+                            *transferredDropCalls ||
                     entryDrop(&owner) == 0 ||
                     privateRefJitAllDropProbeCalls !=
-                        callsAfterFailure + *transferredDropCalls) {
+                        callsAfterFailure + bodyDropCalls +
+                            *transferredDropCalls) {
                     error = "private Result transferred owner was not dropped exactly once";
                     return false;
                 }
             } else if (entryDrop(&owner) == 0 ||
-                       privateRefJitAllDropProbeCalls != callsAfterFailure) {
+                       privateRefJitAllDropProbeCalls !=
+                           callsAfterFailure + bodyDropCalls) {
                 error = "private Result scalar branch manufactured an owner";
                 return false;
             }
@@ -2674,6 +2679,33 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             std::vector<int32_t>{-43, 59, 47, -43, 59, 47} ||
         !privateRefJitDropProbeValid)
         return fail("Ref apply '?' split-owned From else lost field/owner Drop order");
+    for (const auto& transferCase : {
+             std::pair{tryApplySplitOwnedFrom,
+                       std::vector<int32_t>{47, 59, 43}},
+             std::pair{tryApplySplitOwnedFromElse,
+                       std::vector<int32_t>{-43, 59, 47}}}) {
+        const auto allDropsBefore = privateRefJitAllDropProbeCalls;
+        const auto returnedDropsBefore = privateRefJitReturnedDropProbeCalls;
+        privateRefJitFromResourceDropOrder.clear();
+        privateRefJitDropProbeValid = true;
+        if (!exercisePrivateRefApplyJit(
+                *tryApplyModule, *transferCase.first, privateRefJitError,
+                0, false, std::nullopt, false, false, {}, {},
+                std::pair<bool, int32_t>{false, 59}, 2, true, true,
+                false, nullptr, 1)) {
+            std::cerr << privateRefJitError << '\n';
+            return fail("Ref apply split-owned From host transfer failed private JIT execution");
+        }
+        std::vector<int32_t> expectedOrder;
+        for (unsigned call = 0; call < 4; ++call)
+            expectedOrder.insert(expectedOrder.end(),
+                transferCase.second.begin(), transferCase.second.end());
+        if (privateRefJitAllDropProbeCalls != allDropsBefore + 12 ||
+            privateRefJitReturnedDropProbeCalls != returnedDropsBefore + 4 ||
+            privateRefJitFromResourceDropOrder != expectedOrder ||
+            !privateRefJitDropProbeValid)
+            return fail("Ref apply split-owned From host transfer lost Drop order");
+    }
     if (!tryApplyOkResourceReturn->controlFlow ||
         tryApplyOkResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
         !refApplyCfgVerifier.verify(*tryApplyOkResourceReturn->controlFlow,

@@ -919,8 +919,16 @@ moves the first field and preserves the `47, 59, 43` Drop order. With first
 marker `-43`, it moves the second field and Drops `-43, 59, 47`; each order
 repeats on two private JIT calls. The host allocator probe checks that the
 carried marker is `43` or `47` and pairs all four allocations and releases
-on both arms, including under Windows ASAN. The returned owner remains
-inside the private JIT wrapper.
+on both arms, including under Windows ASAN. The ordinary result wrapper
+consumes the returned owner inside the JIT. A separate private transfer
+experiment now covers both arms: invalid owner cells fail before body dispatch;
+injected post-body failure leaves outputs untouched and Drops the remaining
+source field, then the returned outer and carried field. Successful transfer
+Drops only the remaining source field before commit; host Drop later clears
+the owner cell and Drops the returned outer and carried field once. The
+second owner survives the borrowed Ref pin under a separate JIT lease.
+Each arm repeats its three-marker Drop order four times across the injected
+failure and host cleanup paths. Focused Windows Clang64 ASAN passes.
 Further Err fixtures return two- and three-struct ownership chains. After
 reading the outer marker, the wrapper uses the compiler's existing recursive
 owned-payload cleanup. Its narrow shape gate admits at most three structs,
@@ -989,8 +997,8 @@ with no published carrier or symbol contract. It does not establish
 production failure statuses or safe JIT teardown with an outstanding owner.
 The observation value is not a public return carrier or stable ABI.
 More than three owned structs, wider resource graphs, conversion bodies with
-divergent continuing field-transfer states, host ownership transfer, or wider
-ownership graphs, `?` inside outlined Slot bodies, and recoverable
+divergent continuing field-transfer states, public host ownership transfer,
+`?` inside outlined Slot bodies, and recoverable
 derive/dispatch failures are outside this execution proof; the source frontend
 continues to reject `?` across the outlined Slot boundary.
 
@@ -1365,8 +1373,13 @@ not a public ABI decision or stable-release approval:
    pairs two field and two outer allocations with their releases, including
    under Windows ASAN. The alternate returning arm moves the second field,
    observes `-43, 59, 47` twice, and pairs the same four releases under the
-   host probe and Windows ASAN. Next, extend the private host handoff and
-   injected post-body failure proof to this returned field shape.
+   host probe and Windows ASAN. Both arms now pass the private host handoff:
+   preflight rejects invalid owner cells, injected post-body failure cleans
+   the uncommitted owner, and successful commit leaves it for exactly-once
+   host Drop. The second owner remains live under a separate JIT lease after
+   the borrowed Ref pin expires; focused Windows ASAN passes. Next, define
+   a versioned public owner-and-lease carrier and production failure statuses
+   before admitting this shape beyond the private test entry.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

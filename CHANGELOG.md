@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Extended the private host-transfer experiment to both returning arms of
+  `From<SourceSplitError> for ReturnedFromSplit`. Preflight rejects invalid
+  owner cells without running the body. Each injected post-body failure Drops
+  the remaining source field and uncommitted returned owner; each successful
+  transfer Drops the source field before later, exactly-once host cleanup of
+  the outer and carried field. The second owner survives the borrowed Ref pin
+  under a separate JIT lease. Focused Windows ASAN passes.
 - Covered both arms of `From<SourceSplitError> for ReturnedFromSplit` on the
   private Ref/apply `?` owned Err path. Moving the first or second source
   field produces exact Drop orders `47, 59, 43` or `-43, 59, 47` on each of

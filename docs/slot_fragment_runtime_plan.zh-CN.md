@@ -705,7 +705,13 @@ ASAN 聚焦测试通过。转换现覆盖两条返回分支：源第一字段为
 Drop 顺序仍为 `47, 59, 43`；其值为 `-43` 时转移第二字段，Drop 顺序为
 `-43, 59, 47`。两种顺序均在两次私有 JIT 调用中重复。宿主 allocator 探针
 分别确认携带的 marker 为 `43` 或 `47`，且每条路径的四笔分配各释放一次；
-Windows ASAN 聚焦测试通过。返回 owner 仍由私有 JIT wrapper 消费。
+Windows ASAN 聚焦测试通过。普通结果 wrapper 仍在 JIT 内消费返回 owner。
+另一个私有交接实验现覆盖两条分支：无效 owner cell 在 body 分派前被拒绝；
+注入的 body 后失败不修改输出，先 Drop 剩余源字段，再 Drop 未提交返回对象的
+外层与携带字段。成功交接在提交前只 Drop 剩余源字段，宿主随后清空 owner
+cell，并恰好一次 Drop 返回对象的外层与携带字段。第二个 owner 在借用 Ref
+pin 结束后由独立 JIT lease 保持可清理。两条分支各在注入失败与宿主清理路径
+中重复四次三 marker 顺序；Windows Clang64 ASAN 聚焦测试通过。
 另两个 Err 夹具分别返回两层和三层 struct 所有权链。wrapper 在读取外层 marker 后复用
 编译器现有的递归拥有型 payload 清理；窄形状门禁最多准入三个各有冻结源码 Drop 与
 `i32` marker 的 struct。私有 LLVM 检查要求 Drop 从外到内、deallocation 从内到外。
@@ -752,7 +758,7 @@ Drop 次数不变。随后释放原始 JIT 句柄，由另一份共享 LLJIT lea
 时安全关闭 JIT 的行为。
 该观测值不是公开返回 carrier 或稳定 ABI。超过三个拥有型 struct 节点的图、
 更宽的资源图、
-带不同字段转移状态继续执行、向宿主转移所有权或更宽所有权图的转换函数体、
+带不同字段转移状态继续执行的转换函数体、公开宿主所有权交接、
 outlined Slot body 中的 `?`，
 以及可恢复的派生／分派失败，均不在此执行证明内；前端继续在
 outlined Slot 边界拒绝 `?`。
@@ -1033,8 +1039,11 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    拥有型 Err payload；私有 wrapper 两次观察到 `47, 59, 43` 的有序 Drop，
    独立宿主探针核对两笔字段及两笔外层分配和释放，Windows ASAN 亦通过。
    另一返回分支转移第二字段，两次观察到 `-43, 59, 47`；宿主探针和 Windows
-   ASAN 同样确认四笔分配各释放一次。下一步将此返回字段形状纳入私有宿主
-   交接及注入 body 后失败的清理证明。
+   ASAN 同样确认四笔分配各释放一次。两条分支现均通过私有宿主交接：预检
+   拒绝无效 owner cell，注入的 body 后失败清理未提交 owner，成功提交后
+   由宿主恰好一次 Drop。第二个 owner 在借用 Ref pin 结束后由独立 JIT
+   lease 保持有效；Windows ASAN 聚焦测试通过。下一步定义带版本的公开
+   owner 与 lease 共同寿命 carrier，以及生产失败状态，再考虑开放此形状。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。
