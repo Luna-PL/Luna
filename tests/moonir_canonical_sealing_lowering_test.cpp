@@ -1598,6 +1598,20 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "    return error.second.marker;\n"
         "  }\n"
         "}\n"
+        "struct SourceEarlyContinueError { first: SourceError; second: SourceError; }\n"
+        "impl From<SourceEarlyContinueError> for i32 {\n"
+        "  fn from(affine error: SourceEarlyContinueError) -> i32 {\n"
+        "    if error.first.marker > 0 {\n"
+        "      luna_private_ref_drop_probe(51);\n"
+        "      let forwarded = move error.first;\n"
+        "      return forwarded.marker;\n"
+        "    } else {\n"
+        "      luna_private_ref_drop_probe(53);\n"
+        "      let forwarded = move error.second;\n"
+        "    }\n"
+        "    return 0 - error.first.marker;\n"
+        "  }\n"
+        "}\n"
         "struct ReturnedResource { marker: i32; }\n"
         "impl Drop for ReturnedResource {\n"
         "  fn drop(resource: &mut ReturnedResource) -> unit {\n"
@@ -1835,6 +1849,36 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "  }\n"
         "  return Ok(0);\n"
         "}\n"
+        "runtime fn try_apply_early_continue_from("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  let first = new SourceError(43);\n"
+        "  let second = new SourceError(47);\n"
+        "  let error = new SourceEarlyContinueError(move first, move second);\n"
+        "  let input = Err::<i32, SourceEarlyContinueError>(move error);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
+        "runtime fn try_apply_early_continue_from_else("
+            "selected: RuntimeFragmentRef<checkpoint>) "
+            "-> Result<i32, i32> {\n"
+        "  let first = new SourceError(-43);\n"
+        "  let second = new SourceError(47);\n"
+        "  let error = new SourceEarlyContinueError(move first, move second);\n"
+        "  let input = Err::<i32, SourceEarlyContinueError>(move error);\n"
+        "  apply selected {\n"
+        "    apply selected {\n"
+        "      let value = input?;\n"
+        "      checkpoint(value) {}\n"
+        "    }\n"
+        "  }\n"
+        "  return Ok(0);\n"
+        "}\n"
         "runtime fn try_apply_resource_return("
             "selected: RuntimeFragmentRef<checkpoint>) "
             "-> Result<i32, ReturnedResource> {\n"
@@ -1980,6 +2024,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* tryApplySplitFromElse = nullptr;
     moon::FunctionDecl* tryApplyMergeFrom = nullptr;
     moon::FunctionDecl* tryApplyMergeFromElse = nullptr;
+    moon::FunctionDecl* tryApplyEarlyContinueFrom = nullptr;
+    moon::FunctionDecl* tryApplyEarlyContinueFromElse = nullptr;
     moon::FunctionDecl* tryApplyResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyOkResourceReturn = nullptr;
     moon::FunctionDecl* tryApplyPairResourceReturn = nullptr;
@@ -2014,6 +2060,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 tryApplyMergeFrom = function;
             if (function->name == "try_apply_merge_from_else")
                 tryApplyMergeFromElse = function;
+            if (function->name == "try_apply_early_continue_from")
+                tryApplyEarlyContinueFrom = function;
+            if (function->name == "try_apply_early_continue_from_else")
+                tryApplyEarlyContinueFromElse = function;
             if (function->name == "try_apply_resource_return")
                 tryApplyResourceReturn = function;
             if (function->name == "try_apply_ok_resource_return")
@@ -2038,6 +2088,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !tryApplyNestedFrom || !tryApplyNestedFromElse ||
         !tryApplySplitFrom || !tryApplySplitFromElse ||
         !tryApplyMergeFrom || !tryApplyMergeFromElse ||
+        !tryApplyEarlyContinueFrom || !tryApplyEarlyContinueFromElse ||
         !tryApplyResourceReturn || !tryApplyOkResourceReturn ||
         !tryApplyPairResourceReturn || !tryApplyOkResourceScalarErr ||
         !tryApplyErrResourceScalarOk || !tryApplyNestedResourceReturn ||
@@ -2333,6 +2384,46 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         privateRefJitFromBranchMarkers != std::vector<int32_t>{53, 53} ||
         !privateRefJitDropProbeValid)
         return fail("Ref apply '?' merged-field From else branch lost ordered cleanup");
+    if (!tryApplyEarlyContinueFrom->controlFlow ||
+        tryApplyEarlyContinueFrom->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyEarlyContinueFrom->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply '?' early/continuing From branch did not verify");
+    privateRefJitConversionDropOrder.clear();
+    privateRefJitFromBranchMarkers.clear();
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyEarlyContinueFrom, privateRefJitError,
+            0, false, std::nullopt, false, false, {}, {},
+            std::pair<bool, int32_t>{false, 43})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply '?' early-return From branch failed private JIT execution");
+    }
+    if (privateRefJitConversionDropOrder !=
+            std::vector<int32_t>{43, 47, 43, 47} ||
+        privateRefJitFromBranchMarkers != std::vector<int32_t>{51, 51} ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply '?' early-return From branch lost ordered cleanup");
+    if (!tryApplyEarlyContinueFromElse->controlFlow ||
+        tryApplyEarlyContinueFromElse->controlFlow->runtimeRefApplies.size() != 2 ||
+        !refApplyCfgVerifier.verify(*tryApplyEarlyContinueFromElse->controlFlow,
+                                    *tryApplyModule))
+        return fail("Ref apply '?' continuing From branch did not verify");
+    privateRefJitConversionDropOrder.clear();
+    privateRefJitFromBranchMarkers.clear();
+    privateRefJitDropProbeValid = true;
+    if (!exercisePrivateRefApplyJit(
+            *tryApplyModule, *tryApplyEarlyContinueFromElse, privateRefJitError,
+            0, false, std::nullopt, false, false, {}, {},
+            std::pair<bool, int32_t>{false, 43})) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("Ref apply '?' continuing From branch failed private JIT execution");
+    }
+    if (privateRefJitConversionDropOrder !=
+            std::vector<int32_t>{47, -43, 47, -43} ||
+        privateRefJitFromBranchMarkers != std::vector<int32_t>{53, 53} ||
+        !privateRefJitDropProbeValid)
+        return fail("Ref apply '?' continuing From branch lost ordered cleanup");
     if (!tryApplyResourceReturn->controlFlow ||
         tryApplyResourceReturn->controlFlow->runtimeRefApplies.size() != 2 ||
         !refApplyCfgVerifier.verify(*tryApplyResourceReturn->controlFlow,

@@ -820,6 +820,16 @@ on either path. Focused Windows Clang64 ASAN tests pass. This proves a merge
 of matching field-transfer states inside the conversion. Divergent continuing
 states, host ownership transfer, and wider conversion bodies remain outside
 the proof.
+The bounded `From<SourceEarlyContinueError> for i32` fixture adds one
+early-returning arm and one arm that continues after the conditional. The
+positive arm moves the first field and returns `Err(43)`, Dropping `43`,
+`47`. The negative arm moves and Drops the second field inside `else`, then
+reads the surviving first field after the conditional and returns `Err(43)`,
+Dropping `47`, `-43`. Branch markers confirm each arm on two private Ref/apply
+JIT calls without Slot dispatch. The independent host allocator probe counts
+all three allocations released once on each path, including under Windows
+Clang64 ASAN. This proves the surviving cleanup obligation through a
+single continuing arm after a conditional field transfer.
 The first direct two-owned-field source probe failed on `move pair.first`:
 the source checker tracked the moved field while return cleanup still named
 the root owner, and MoonIR sealing rejected the missing projected cleanup rows.
@@ -1294,7 +1304,13 @@ not a public ABI decision or stable-release approval:
    field. Distinct branch markers prove each arm ran twice; Drop order is
    `43, 47` or `-43, 47`, and the host allocator counts three paired releases
    on each path, also under Windows ASAN. Divergent continuing states, host
-   ownership transfer, and wider conversions still need proof. A hand-built
+   ownership transfer, and wider conversions still need proof. A bounded
+   `From<SourceEarlyContinueError>` adds one early return after moving the
+   first field and an `else` arm that moves and Drops the second field before
+   continuing after the conditional to read the surviving first field. Both
+   paths return `Err(43)` with distinct branch markers and ordered Drops of
+   `43, 47` or `47, -43`; each path releases three allocations once under the
+   host probe and Windows ASAN. A hand-built
    canonical CFG now validates complete disjoint field rows, one backing
    allocation cleanup row, and the active return cleanup list after one field
    moves. A second hand-built CFG now covers raw allocation transfer into an
@@ -1313,8 +1329,8 @@ not a public ABI decision or stable-release approval:
    after one or both fields move, also under Windows Clang64 ASAN. Matching
    conditional moves, distinct returning arms, and an early return beside a
    continuing arm now have exact source Drop transcripts and per-outcome
-   allocation counts. Next, prove a bounded `From` body with one returning
-   branch and one continuing branch after a field move.
+   allocation counts. Next, prove a bounded `From` conversion that returns
+   one owned Err payload through the existing private wrapper.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

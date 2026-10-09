@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Proved one early-returning and one continuing field-transfer branch inside
+  `From<SourceEarlyContinueError> for i32` on the private Ref/apply `?` Err
+  path. The continuing arm moves and Drops the second field inside `else`,
+  then reads the surviving first field after the conditional. Branch probes,
+  exact Drop order, and host allocator counts cover both arms under Windows
+  ASAN.
 - Proved a matching field move across a branch merge inside a `From`
   conversion on the private Ref/apply `?` Err path. Distinct branch probes
   identify both arms; each Drops its moved field before the merged return
