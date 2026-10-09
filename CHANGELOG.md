@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Proved a split source error transferring one owned field into an owned Err
+  payload through `From` on the private Ref/apply `?` path. Two JIT calls Drop
+  the remaining source field `47`, then the returned outer `59` and carried
+  field `43`. An independent host allocator probe pairs all four allocations
+  and releases with their original layouts, including under Windows ASAN.
 - Proved an owned Err produced by `From<SourceError> for ReturnedResource` on
   the private Ref/apply `?` path. The frozen conversion returns an owned
   payload; two JIT calls Drop source `47` before the wrapper Drops result `59`.

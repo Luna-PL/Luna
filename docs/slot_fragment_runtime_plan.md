@@ -906,6 +906,15 @@ resource `59` in the wrapper. A separate source JIT host allocator probe
 counts exactly two 4-byte allocations, each released once with the original
 layout and no reallocation. Focused Windows Clang64 ASAN tests pass. This
 remains a test-only wrapper that consumes the returned owner inside the JIT.
+A bounded `From<SourceSplitError> for ReturnedFromSplit` fixture then moves
+one owned source field into the owned Err payload. Its canonical Err Return
+keeps the frozen `From` call and exact payload type. On each of two private
+Ref/apply `?` JIT calls, the conversion Drops the remaining source field `47`
+before the wrapper Drops the returned outer `59` and carried field `43`.
+An independent source JIT host allocator probe pairs both 4-byte field
+allocations and both 16-byte outer allocations with exactly one matching
+release each and no reallocation. Focused Windows Clang64 ASAN tests pass.
+The returned owner remains inside the private JIT wrapper.
 Further Err fixtures return two- and three-struct ownership chains. After
 reading the outer marker, the wrapper uses the compiler's existing recursive
 owned-payload cleanup. Its narrow shape gate admits at most three structs,
@@ -1344,8 +1353,12 @@ not a public ABI decision or stable-release approval:
    after one or both fields move, also under Windows Clang64 ASAN. Matching
    conditional moves, distinct returning arms, and an early return beside a
    continuing arm now have exact source Drop transcripts and per-outcome
-   allocation counts. Next, prove a bounded `From` conversion that moves one
-   owned field from a split source error into an owned Err payload.
+   allocation counts. A bounded `From<SourceSplitError> for ReturnedFromSplit`
+   moves the first owned field into an owned Err payload. The private wrapper
+   observes ordered Drops `47, 59, 43` twice; the independent host probe
+   pairs two field and two outer allocations with their releases, including
+   under Windows ASAN. Next, test branch-dependent transfer of either source
+   field into the same owned Err payload and verify both cleanup paths.
    One- and two-field resource Err and one-field
    resource Ok now have a private wrapper that observes and destroys the
    returned owner after ordered context exits; scalar counterpart branches

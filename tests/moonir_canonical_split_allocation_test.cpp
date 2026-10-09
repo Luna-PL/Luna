@@ -274,6 +274,41 @@ fn main() -> i32 {
     return runSourceCase(probe, "<from-owned-result>", source, 59, 2, 0);
 }
 
+int runFromSplitOwnedResultCase(AllocationProbe& probe) {
+    const std::string source = R"luna(
+struct Cell { marker: i32; }
+impl Drop for Cell {
+    fn drop(resource: &mut Cell) -> unit { resource.marker = 0; }
+}
+struct SourceSplitError { first: Cell; second: Cell; }
+struct ReturnedFromSplit { marker: i32; inner: Cell; }
+impl Drop for ReturnedFromSplit {
+    fn drop(resource: &mut ReturnedFromSplit) -> unit { resource.marker = 0; }
+}
+impl From<SourceSplitError> for ReturnedFromSplit {
+    fn from(affine error: SourceSplitError) -> ReturnedFromSplit {
+        let carried = move error.first;
+        let returned = new ReturnedFromSplit(59, move carried);
+        return move returned;
+    }
+}
+fn converted() -> Result<i32, ReturnedFromSplit> {
+    let first = new Cell(43);
+    let second = new Cell(47);
+    let error = new SourceSplitError(move first, move second);
+    let input = Err::<i32, SourceSplitError>(move error);
+    let value = input?;
+    return Ok(value);
+}
+fn main() -> i32 {
+    let result = converted();
+    let returned = unwrap_err(move result);
+    return returned.marker;
+}
+)luna";
+    return runSourceCase(probe, "<split-from-owned-result>", source, 59, 2, 2);
+}
+
 } // namespace
 
 int runSplitAllocationProbe() {
@@ -327,6 +362,7 @@ int runSplitAllocationProbe() {
     if (runFromEarlyContinueCase(probe, "<split-from-continue>", -43))
         return 1;
     if (runFromOwnedResultCase(probe)) return 1;
+    if (runFromSplitOwnedResultCase(probe)) return 1;
     return 0;
 }
 

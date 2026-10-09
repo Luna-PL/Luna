@@ -695,6 +695,13 @@ carrier。这些夹具的 canonical ASAN 目标通过，但仍受下述独立的
 源错误 `47`，再由 wrapper Drop 返回资源 `59`。独立的源码 JIT 宿主 allocator
 探针确认两笔 4 字节分配各按原布局释放一次，且没有 reallocation；Windows
 Clang64 ASAN 聚焦测试通过。wrapper 仍仅在 JIT 内消费返回 owner。
+有界的 `From<SourceSplitError> for ReturnedFromSplit` 夹具进一步将分拆源错误
+的一个拥有型字段转移到拥有型 Err payload。canonical Err Return 保留冻结的
+`From` 调用及精确的 payload 类型。两次私有 Ref/apply `?` JIT 调用中，转换先
+Drop 源对象剩余字段 `47`，wrapper 再依次 Drop 返回对象外层 `59` 和携带的
+字段 `43`。独立的源码 JIT 宿主 allocator 探针核对两笔 4 字节字段分配和两笔
+16 字节外层分配均按原布局各释放一次，没有 reallocation；Windows Clang64
+ASAN 聚焦测试通过。返回 owner 仍由私有 JIT wrapper 消费。
 另两个 Err 夹具分别返回两层和三层 struct 所有权链。wrapper 在读取外层 marker 后复用
 编译器现有的递归拥有型 payload 清理；窄形状门禁最多准入三个各有冻结源码 Drop 与
 `i32` marker 的 struct。私有 LLVM 检查要求 Drop 从外到内、deallocation 从内到外。
@@ -1017,8 +1024,11 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    canonical 测试及四条源码 JIT 路径。独立的宿主 allocator 探针现于转移一个
    或全部字段后，直接验证每个 `Cell` 及 `Pair` 分配恰好释放一次，Windows
    Clang64 ASAN 亦通过。相同字段转移的分支合并、分别返回的分支及一侧提前
-   返回的分支现有精确 Drop 输出和逐侧 allocation 计数。下一步证明有界的
-   `From` 转换从分拆源错误转移一个拥有型字段进入拥有型 Err payload。
+   返回的分支现有精确 Drop 输出和逐侧 allocation 计数。有界的
+   `From<SourceSplitError> for ReturnedFromSplit` 现将第一个拥有型字段转移至
+   拥有型 Err payload；私有 wrapper 两次观察到 `47, 59, 43` 的有序 Drop，
+   独立宿主探针核对两笔字段及两笔外层分配和释放，Windows ASAN 亦通过。
+   下一步验证依条件转移任一源字段至同一拥有型 Err payload 的两条清理路径。
    单／双字段资源 Err 与单字段资源 Ok 已由私有
    wrapper 在有序 context 退出后观察并销毁；对应标量分支不执行 Drop。三个
    struct 以内的一条所有权链现有递归清理及有序 Drop／deallocation 证明。
