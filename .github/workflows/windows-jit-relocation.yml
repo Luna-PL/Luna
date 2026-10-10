@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@v6
 
-      - name: Install CLANG64 LLVM and ASan runtime
+      - name: Install versioned CLANG64 LLVM 22
         uses: msys2/setup-msys2@v2
         with:
           msystem: CLANG64
@@ -28,46 +28,53 @@ jobs:
           install: >-
             mingw-w64-clang-x86_64-cmake
             mingw-w64-clang-x86_64-ninja
-            mingw-w64-clang-x86_64-llvm
-            mingw-w64-clang-x86_64-clang
-            mingw-w64-clang-x86_64-compiler-rt
+            mingw-w64-clang-x86_64-llvm22
+            mingw-w64-clang-x86_64-clang22
             mingw-w64-clang-x86_64-zstd
 
-      - name: Require matching LLVM and Clang 22 with ASan
+      - name: Restore verified LLVM 22 sanitizer runtime
         run: |
-          export PATH="/clang64/bin:$PATH"
+          export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
           llvm_version="$(llvm-config --version)"
           clang_version="$(clang++ -dumpversion)"
           if [[ "$llvm_version" != 22.* || "$clang_version" != 22.* ]]; then
             printf 'This probe requires LLVM and Clang 22; found LLVM %s, Clang %s\n' "$llvm_version" "$clang_version" >&2
             exit 1
           fi
+          runtime_dir="$(mktemp -d)"
+          archive="$runtime_dir/compiler-rt-22.1.8-3.pkg.tar.zst"
+          curl --fail --location --silent --show-error \
+            'https://repo.msys2.org/mingw/clang64/mingw-w64-clang-x86_64-compiler-rt-22.1.8-3-any.pkg.tar.zst' \
+            --output "$archive"
+          printf '4018e4b6e72563b35001c6c3edcb77d6624b32ffa095d8b03149d504c827f5bc  %s\n' "$archive" | sha256sum --check
+          tar -xf "$archive" -C "$runtime_dir"
           resource_dir="$(clang++ -print-resource-dir)"
-          if ! find "$resource_dir" -name 'libclang_rt.asan_dynamic.dll.a' -print -quit | grep -q .; then
-            printf 'Clang 22 ASan import library is missing under %s\n' "$resource_dir" >&2
-            exit 1
-          fi
+          cp "$runtime_dir/clang64/lib/clang/22/lib/windows/"libclang_rt.asan* "$resource_dir/lib/windows/"
+          cp "$runtime_dir/clang64/lib/clang/22/lib/windows/"libclang_rt.ubsan* "$resource_dir/lib/windows/"
+          cp "$runtime_dir/clang64/bin/libclang_rt.asan_dynamic-x86_64.dll" /clang64/bin/
+          test -f "$resource_dir/lib/windows/libclang_rt.asan_dynamic-x86_64.dll.a"
+          test -f "$resource_dir/lib/windows/libclang_rt.ubsan_standalone-x86_64.a"
 
       - name: Configure sanitized canonical JIT target
         run: |
-          export PATH="/clang64/bin:$PATH"
+          export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
           cmake -S . -B build-jit-asan -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
-            -DCMAKE_C_COMPILER=/clang64/bin/clang.exe \
-            -DCMAKE_CXX_COMPILER=/clang64/bin/clang++.exe \
-            -DLLVM_DIR=/clang64/lib/cmake/llvm \
+            -DCMAKE_C_COMPILER=/clang64/opt/llvm22/bin/clang.exe \
+            -DCMAKE_CXX_COMPILER=/clang64/opt/llvm22/bin/clang++.exe \
+            -DLLVM_DIR=/clang64/opt/llvm22/lib/cmake/llvm \
             -DLUNA_ENABLE_SANITIZERS=ON \
             -DLUNA_STRICT_WARNINGS=ON
 
       - name: Build canonical JIT target
         run: |
-          export PATH="/clang64/bin:$PATH"
+          export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
           cmake --build build-jit-asan --target moonir-canonical-test --parallel 4
 
       - name: Repeat sanitized canonical JIT
         run: |
-          export PATH="/clang64/bin:$PATH"
-          export LUNA_CXX=/clang64/bin/clang++.exe
+          export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
+          export LUNA_CXX=/clang64/opt/llvm22/bin/clang++.exe
           export ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0
           export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
           count='${{ inputs.iterations }}'
