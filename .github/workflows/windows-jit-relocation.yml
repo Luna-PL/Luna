@@ -26,6 +26,15 @@ on:
         required: true
         default: false
         type: boolean
+      fragment_probe_variant:
+        description: Diagnostic exception variant for the non-JIT Fragment test
+        required: true
+        default: standard
+        type: choice
+        options:
+          - standard
+          - scalar_throw
+          - skip_nested
 
 jobs:
   canonical-asan:
@@ -163,6 +172,7 @@ jobs:
           export LIBRARY_PATH="/clang64/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
           export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
           export LUNA_ASAN_PROBE_PHASES=1
+          export LUNA_ASAN_PROBE_VARIANT='${{ inputs.fragment_probe_variant }}'
           mode='${{ inputs.allocation_mode }}'
           case "$mode" in
             default) unset LUNA_JIT_RESERVE_SECTIONS ;;
@@ -177,6 +187,7 @@ jobs:
             llvm-config --version
             printf 'allocation_mode=%s\n' "$mode"
             printf 'scope=nonjit_asan\n'
+            printf 'fragment_probe_variant=%s\n' "$LUNA_ASAN_PROBE_VARIANT"
           } > "$directory/context.txt"
           failures=0
           for target in moon-container-model runtime-fragment; do
