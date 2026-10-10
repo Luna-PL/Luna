@@ -81,7 +81,7 @@ int prepareIndependentFixture(int argc, char** argv) {
             return fail("independent v3 fixture has no unique descriptor digest placeholder");
         const std::array<std::string, 10> identifiers = {
             "symbol:owned-answer", "contract:owned-v3",
-            dependencyV3 ? "puts" : "owned_answer",
+            dependencyV3 ? "getpid" : "owned_answer",
             "symbol:slot-checkpoint", "contract:slot-checkpoint",
             "type:result-i32-owned", "type:owned-error",
             "layout:owned-error-v1", "symbol:drop-owned-error",

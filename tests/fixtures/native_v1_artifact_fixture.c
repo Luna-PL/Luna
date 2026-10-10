@@ -1,6 +1,6 @@
 #include "runtime/NativeArtifactABI.h"
 #ifdef LUNA_TEST_V3_DEPENDENCY_ENTRY
-#include <stdio.h>
+#include <unistd.h>
 #endif
 
 #if defined(_WIN32)
@@ -71,14 +71,14 @@ static const char target_abi[128] = "LUNA_TEST_TARGET_ABI_PLACEHOLDER";
 #ifdef LUNA_TEST_V3_BAD_LINKAGE
 #define LUNA_TEST_V3_LINKAGE "missing_owned_answer"
 #elif defined(LUNA_TEST_V3_DEPENDENCY_ENTRY)
-#define LUNA_TEST_V3_LINKAGE "puts"
+#define LUNA_TEST_V3_LINKAGE "getpid"
 #else
 #define LUNA_TEST_V3_LINKAGE "owned_answer"
 #endif
 #ifdef LUNA_TEST_V3_BAD_ENTRY_POINTER
 #define LUNA_TEST_V3_ENTRY (const void*)&legacy_answer
 #elif defined(LUNA_TEST_V3_DEPENDENCY_ENTRY)
-#define LUNA_TEST_V3_ENTRY (const void*)&puts
+#define LUNA_TEST_V3_ENTRY (const void*)&getpid
 #else
 #define LUNA_TEST_V3_ENTRY (const void*)&owned_answer
 #endif
