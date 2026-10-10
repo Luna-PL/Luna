@@ -184,7 +184,7 @@ ROCm 路径；CUDA 代码生成已经存在，但仍需要更广泛的 NVIDIA �
 
 详细完成门见[0.3 总体设计](docs/luna_0.3_design.zh-CN.md#9-实现优先级)、
 [生态发布状态](docs/ecosystem_release.zh-CN.md)和
-[源码 Ref／apply 计划](docs/slot_fragment_runtime_plan.zh-CN.md#下一步源码-refapply-完成门更新于-2026-10-04)。
+[源码 Ref／apply 计划](docs/slot_fragment_runtime_plan.zh-CN.md#下一步源码-refapply-完成门更新于-2026-10-10)。
 
 ## 文档
 

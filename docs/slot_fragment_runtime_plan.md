@@ -1024,7 +1024,16 @@ spans is 13,588 bytes. The seven default-mode failures are the seven runs
 with an over-range object. These are two diagnostic series, not a measured
 failure probability or a full-suite validation of reserved mode.
 The manual probe can additionally build and run the full sanitized stable-core
-suite with its `full_suite` input; that follow-up result is still pending.
+suite with its `full_suite` input. Its first completed run at commit `397ace5`
+([run 38038956962](https://github.com/Luna-PL/Luna/actions/runs/38038956962))
+passed the reserved canonical probe and built every test target, then passed
+76 of 80 tests. Two failures were probe setup gaps: shallow checkout prevented
+the release policy test from finding the parent commit, and the nested install
+consumer lacked the CLANG64 libc++ include path. The other failures were an
+ASAN process segfault in `luna.moon-container-model` and a Windows heap
+termination in `luna.runtime-fragment-v1`; neither test target links the JIT
+allocation path. The setup gaps are corrected in the probe, and its full
+CTest log is now retained. The full sanitized suite remains unproven.
 The private JIT now also has a separate host-transfer experiment for admitted
 resource Result shapes. Its status entry checks nonnull, pairwise disjoint and
 aligned tag, `i32` scalar and owner output cells and requires an empty owner
@@ -1649,8 +1658,10 @@ not a public ABI decision or stable-release approval:
    page permissions and unwind registration. Paired 12-run LLVM 22 ASAN
    canonical probes now show 7/12 relocation failures in default mode and
    0/12 in reserved mode; no reserved-mode object spans 4 GiB. Next run the
-   complete Windows stable-core suite with reserved allocation, including its
-   sanitizer gate, before considering a default-JIT change.
+   complete Windows stable-core suite with reserved allocation before
+   considering a default-JIT change. The first full ASAN attempt passed 76/80;
+   after correcting its checkout and libc++ setup, isolate two remaining
+   sanitizer process crashes in non-JIT targets and rerun the gate.
    The LLVM 23
    IR failure is a separate compiler migration, not evidence that a newer JIT
    fixes this relocation.

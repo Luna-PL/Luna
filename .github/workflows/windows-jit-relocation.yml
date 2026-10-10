@@ -31,6 +31,8 @@ jobs:
         shell: msys2 {0}
     steps:
       - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: Install versioned CLANG64 LLVM 22
         uses: msys2/setup-msys2@v2
@@ -151,12 +153,22 @@ jobs:
           export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
           export LIBRARY_PATH="/clang64/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
           export LUNA_CXX=/clang64/opt/llvm22/bin/clang++.exe
+          export CXXFLAGS="-nostdinc++ -I$(cygpath -m /clang64/include/c++/v1)"
           export ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0
           export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
           if [[ '${{ inputs.allocation_mode }}' == reserved ]]; then
             export LUNA_JIT_RESERVE_SECTIONS=1
           fi
           ctest --test-dir build-jit-asan -LE hardware --output-on-failure
+
+      - name: Retain complete suite diagnostics
+        if: ${{ always() && inputs.full_suite }}
+        run: |
+          mkdir -p build-jit-asan/relocation-probe
+          if [[ -f build-jit-asan/Testing/Temporary/LastTest.log ]]; then
+            cp build-jit-asan/Testing/Temporary/LastTest.log \
+              build-jit-asan/relocation-probe/full-suite-last-test.log
+          fi
 
       - name: Retain JIT relocation probe logs
         if: always()

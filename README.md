@@ -210,7 +210,7 @@ Alpha roadmap:
 
 See the [0.3 implementation priorities](docs/luna_0.3_design.md#9-implementation-priority),
 [ecosystem release state](docs/ecosystem_release.md), and
-[source Ref/apply gates](docs/slot_fragment_runtime_plan.md#next-source-refapply-gates-updated-2026-10-04).
+[source Ref/apply gates](docs/slot_fragment_runtime_plan.md#next-source-refapply-gates-updated-2026-10-10).
 
 ## Documentation
 

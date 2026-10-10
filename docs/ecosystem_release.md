@@ -125,7 +125,7 @@ LLVM 20 COFF relocation investigation. Then freeze the versioned host Ref
 ingress/return and ownership/status contract, connect production drop glue and
 Moon Container verification, and pass the two-package execution gate in that
 order. Keep the feature private until those gates pass; the detailed acceptance
-conditions are in the [source Ref/apply plan](slot_fragment_runtime_plan.md#next-source-refapply-gates-updated-2026-10-08).
+conditions are in the [source Ref/apply plan](slot_fragment_runtime_plan.md#next-source-refapply-gates-updated-2026-10-10).
 
 On 2026-10-03 the local CLANG64 non-hardware suite passed 76/77 tests with
 four workers; `luna.repl-smoke` timed out during process-tree cleanup under
