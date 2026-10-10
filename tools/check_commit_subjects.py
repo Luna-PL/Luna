@@ -11,11 +11,18 @@ SUBJECT = re.compile(
     r"Benchmark|Build|CI|Chore)\] \S.*$"
 )
 ZERO_SHA = re.compile(r"^0+$")
+# Last commit before the bracketed-subject policy was applied to main.
+POLICY_BASE = "b8a677771053907a96569e7f7230181010b30fb9"
 
 
 def git(*args):
     return subprocess.run(["git", *args], check=True, capture_output=True,
                           text=True).stdout.rstrip("\r\n")
+
+
+def is_ancestor(base, head):
+    return subprocess.run(["git", "merge-base", "--is-ancestor", base, head],
+                          capture_output=True).returncode == 0
 
 
 def main():
@@ -26,6 +33,13 @@ def main():
     if ZERO_SHA.fullmatch(base):
         commits = git("rev-list", "--reverse", "--no-merges", head).splitlines()
     else:
+        if not is_ancestor(base, head):
+            # A force push can make the event's previous tip unavailable to
+            # checkout; still check every commit subject in the rewritten era.
+            if not is_ancestor(POLICY_BASE, head):
+                print("Cannot find the commit-subject policy base", file=sys.stderr)
+                return 2
+            base = POLICY_BASE
         commits = git("rev-list", "--reverse", "--no-merges",
                       f"{base}..{head}").splitlines()
     bad = []
