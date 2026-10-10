@@ -4,7 +4,10 @@
 
 - Added a Windows-only LLVM 22 diagnostic opt-in for contiguous RuntimeDyld
   section allocation and a reserved-mode choice in the sanitized JIT probe.
-  The default JIT path remains unchanged pending probe results.
+  Paired 12-run LLVM 22 ASAN probes passed 12/12 with reserved allocation;
+  default allocation failed 7/12 with the known COFF relocation error. The
+  manual probe now offers a full sanitized stable-core run. The default JIT
+  path remains unchanged pending that validation.
 - Kept Windows CI and release builds on MSYS2's versioned LLVM 22 UCRT64
   toolchain after the unversioned package advanced to LLVM 23. The project
   continues to require LLVM 20 through 22.

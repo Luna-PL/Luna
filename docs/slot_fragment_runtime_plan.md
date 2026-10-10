@@ -1013,8 +1013,18 @@ retaining LLVM's own page-protection and EH-frame handling. A Windows-only
 `LUNA_JIT_RESERVE_SECTIONS=1` diagnostic opt-in now selects that mode; the
 ordinary JIT remains unchanged. The manual probe can select `reserved` or
 `default` allocation and still records per-section addresses. LLVM 20 rejects
-the reserve opt-in because it lacks this API. The reserved mode has not yet
-been validated by the LLVM 22 ASAN probe.
+the reserve opt-in because it lacks this API. On 2026-10-10, paired 12-run
+LLVM 22 ASAN probes at commit `077ef1c` recorded [5 passes and 7 relocation
+failures in default mode](https://github.com/Luna-PL/Luna/actions/runs/38037817676),
+versus [12 passes in reserved mode](https://github.com/Luna-PL/Luna/actions/runs/38037817706).
+Across the retained address logs, seven default-mode objects span at least
+4 GiB, with a maximum observed section span of 18,141,962,834,872 bytes.
+No reserved-mode object reaches 4 GiB; the maximum of 900 observed object
+spans is 13,588 bytes. The seven default-mode failures are the seven runs
+with an over-range object. These are two diagnostic series, not a measured
+failure probability or a full-suite validation of reserved mode.
+The manual probe can additionally build and run the full sanitized stable-core
+suite with its `full_suite` input; that follow-up result is still pending.
 The private JIT now also has a separate host-transfer experiment for admitted
 resource Result shapes. Its status entry checks nonnull, pairwise disjoint and
 aligned tag, `i32` scalar and owner output cells and requires an empty owner
@@ -1636,9 +1646,11 @@ not a public ABI decision or stable-release approval:
    failure places `.text` and `.xdata` about 16,896 GiB apart in the same
    object. A Windows-only diagnostic opt-in now uses LLVM 22's built-in
    `SectionMemoryManager` reserve mode for one object allocation; LLVM retains
-   page permissions and unwind registration. Next compare its traced addresses
-   and 12-run ASAN canonical result with the default mode, then run the full
-   canonical gate before considering a default-JIT change.
+   page permissions and unwind registration. Paired 12-run LLVM 22 ASAN
+   canonical probes now show 7/12 relocation failures in default mode and
+   0/12 in reserved mode; no reserved-mode object spans 4 GiB. Next run the
+   complete Windows stable-core suite with reserved allocation, including its
+   sanitizer gate, before considering a default-JIT change.
    The LLVM 23
    IR failure is a separate compiler migration, not evidence that a newer JIT
    fixes this relocation.
