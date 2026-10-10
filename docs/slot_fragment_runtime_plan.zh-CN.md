@@ -751,6 +751,12 @@ ASan／UBSan 库。它只构建 ASan canonical JIT 目标，并保留每次运�
 `compiler-rt22` 包均缺少 ASan import library：首次 UCRT64 探针未能链接，
 第二次 CLANG64 探针则因非版本化包升级到 LLVM 23 而在版本检查处停止；
 两次均未执行 JIT 测试。
+首次完成 ASan 构建的 LLVM 22 探针（提交 `000193a`，
+[运行 38032759836](https://github.com/Luna-PL/Luna/actions/runs/38032759836)）
+第 1 次 canonical 运行通过，第 2 次因同一条 `IMAGE_REL_AMD64_ADDR32NB`
+保序 section 布局错误失败。保留日志在首个 canonical 阶段标记前中止，定位到起始的
+compiled Fragment 工作负载检查，但尚未锁定具体 ORC 物化调用。探针现加入可选的
+profile／加载／查找阶段日志，并完成全部指定次数，以在下次运行定位边界和计数。
 私有 JIT 另有一组仅测试用的宿主所有权交接入口。状态入口先检查 tag／`i32`
 标量／owner 三个输出地址非空、两两不重叠、对齐且 owner cell 为空，再调用源码
 body。输出预检后，入口还核验有效 parent context 和冻结 Slot 的精确借用 Ref

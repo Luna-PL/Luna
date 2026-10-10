@@ -16,6 +16,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
 #include <filesystem>
 #include <iomanip>
 #include <iostream>
@@ -43,6 +44,11 @@ const char* profileName(MoonJitOptimization profile) {
     case MoonJitOptimization::O3: return "O3";
     }
     throw std::runtime_error("invalid compiled probe profile");
+}
+
+void relocationTrace(MoonJitOptimization profile, const std::string& stage) {
+    if (std::getenv("LUNA_JIT_RELOCATION_TRACE"))
+        std::cerr << "[jit-relocation] " << profileName(profile) << ' ' << stage << std::endl;
 }
 constexpr std::array<const char*, 9> Cases{
     "plain", "private_erased", "static_resume", "static_discard", "dynamic_none",
@@ -95,11 +101,13 @@ struct Sample { double nanoseconds; uint64_t calls; uint64_t checksum; };
 class Fixture {
 public:
     explicit Fixture(MoonJitOptimization profile, bool observeSetup = false) {
+        relocationTrace(profile, "compile inputs");
         const auto compileStart = observeSetup ? Clock::now() : Clock::time_point{};
         const auto root = std::filesystem::path(LUNA_TEST_SOURCE_DIR) / "benchmarks/compiled_fragment";
         driver::CompilerPipeline hostPipeline, pluginPipeline;
         compile(root / "host", hostPipeline);
         compile(root / "plugin", pluginPipeline);
+        relocationTrace(profile, "encode containers");
         initializeLunaLLVMTargets();
         auto target = llvm::orc::JITTargetMachineBuilder::detectHost();
         require(static_cast<bool>(target), "compiled probe could not detect host");
@@ -136,8 +144,10 @@ public:
         const auto loadStart = observeSetup ? Clock::now() : Clock::time_point{};
         MoonRuntime runtime;
         MoonRuntime::PinnedGeneration host, plugin;
+        relocationTrace(profile, "load host");
         require(driver::loadVerifiedMoonGenerationOnce(runtime, hostBytes,
             targetTriple, dataLayout, host, error, {}, profile), "host verified load failed", error);
+        relocationTrace(profile, "load plugin");
         require(driver::loadVerifiedMoonGenerationOnce(runtime, pluginBytes,
             targetTriple, dataLayout, plugin, error, dependencies, profile), "plugin verified load failed", error);
         require(host.generationId() != plugin.generationId(), "compiled generations were not independent");
@@ -150,17 +160,20 @@ public:
         const auto bindStart = observeSetup ? Clock::now() : Clock::time_point{};
         for (size_t index = 0; index < 4; ++index) {
             const auto& row = findRecord(owner, moon::DeclarationKind::Function, Cases[index]);
+            relocationTrace(profile, std::string("find host ") + Cases[index]);
             entries[index] = host.find(row.symbolId.value, row.contractId.value);
             require(entries[index] && entries[index].implementation() &&
                 (entries[index].flags() & runtime::GenerationBindingFragmentContext) == 0,
                 "baseline unexpectedly requires a context");
         }
         const auto& dynamic = findRecord(owner, moon::DeclarationKind::Function, "dynamic_probe");
+        relocationTrace(profile, "find host dynamic_probe");
         entries[4] = host.find(dynamic.symbolId.value, dynamic.contractId.value);
         require(entries[4] && entries[4].implementation() &&
             (entries[4].flags() & runtime::GenerationBindingFragmentContext) != 0,
             "dynamic workload lost context ABI");
         for (size_t index = 5; index < entries.size(); ++index) entries[index] = entries[4];
+        relocationTrace(profile, "snapshot plugin candidates");
         runtime::RuntimeFragmentCandidateSnapshot candidates;
         require(runtime::snapshotRuntimeFragmentCandidates(plugin, requirement, candidates, error) &&
             candidates.size() == 4, "compiled candidate discovery failed", error);
@@ -243,6 +256,7 @@ public:
             // A separately staged candidate exercises Runtime's locked loadOnce
             // path as well as the adapter's early cache check.
             MoonRuntime::StagedGeneration staged;
+            relocationTrace(profile, "stage alternate host profile");
             require(driver::stageVerifiedMoonGeneration(runtime, hostBytes,
                 targetTriple, dataLayout, {}, staged, error, {}, other), "alternate profile did not stage", error);
             const auto stagedId = staged.generationId();
@@ -253,9 +267,11 @@ public:
                 runtime.retainedGenerationCount(host.moduleId()) == 1,
                 "locked cross-profile rejection changed generation state");
             auto generationPoint = runtime.safePoint();
+            relocationTrace(profile, "activate alternate host profile");
             require(runtime.activate(staged, generationPoint, error) && !staged,
                 "explicit JIT profile activation failed", error);
             const auto switched = runtime.pin(host.moduleId());
+            relocationTrace(profile, "find alternate host dynamic_probe");
             const auto switchedDynamic = switched.find(dynamic.symbolId.value, dynamic.contractId.value);
             require(switched.generationId() == stagedId && switched.materializationKey() != materializationKey &&
                 switched.contentDigest() == hostDigest && switchedDynamic &&
@@ -284,6 +300,7 @@ public:
         }
         // Runtime and pipelines die here. Entries and contexts alone own the
         // generated code/factory environments during correctness and timing.
+        relocationTrace(profile, "fixture ready");
     }
 
     int32_t invoke(size_t index, int32_t value) const {
@@ -343,8 +360,10 @@ int checkCompiledFragmentWorkload() {
     try {
         std::string hostDigest, pluginDigest;
         for (const auto profile : Profiles) {
+            relocationTrace(profile, "fixture begin");
             Fixture fixture(profile);
             fixture.check();
+            relocationTrace(profile, "fixture checked");
             if (hostDigest.empty()) { hostDigest = fixture.hostDigest; pluginDigest = fixture.pluginDigest; }
             require(fixture.hostDigest == hostDigest && fixture.pluginDigest == pluginDigest,
                 "LLVM profiles did not load identical containers");

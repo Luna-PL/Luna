@@ -983,6 +983,14 @@ UCRT64 and CLANG64 `compiler-rt22` packages lack ASan import libraries: the
 first UCRT64 probe could not link, and the next CLANG64 probe stopped at its
 version guard after the unversioned packages advanced to LLVM 23. Neither ran
 JIT tests.
+The first LLVM 22 probe that completed its sanitized build (commit `000193a`,
+[run 38032759836](https://github.com/Luna-PL/Luna/actions/runs/38032759836))
+passed its first canonical run and failed its second with the same
+`IMAGE_REL_AMD64_ADDR32NB` ordered-section-layout error. The retained log has no
+canonical phase marker before the failure, placing it in the initial compiled
+Fragment workload check, but it does not identify the exact ORC materialization.
+The probe now emits opt-in profile/loading/lookup traces and completes all
+requested repetitions so the next run can locate the boundary and count failures.
 The private JIT now also has a separate host-transfer experiment for admitted
 resource Result shapes. Its status entry checks nonnull, pairwise disjoint and
 aligned tag, `i32` scalar and owner output cells and requires an empty owner
