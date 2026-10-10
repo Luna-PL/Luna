@@ -843,6 +843,7 @@ int32_t scopedActivationBase(void* context) {
     for (size_t index = 0; index < probe.depth; ++index)
         probe.valid &= probe.matches(probe.live[index]);
     if (probe.nest && !probe.nested) {
+        asanProbePhase("scoped-outer-base");
         probe.nested = true;
         std::string error;
         auto outcome = luna::runtime::RuntimeFragmentDispatchOutcome::Completed;
@@ -851,17 +852,20 @@ int32_t scopedActivationBase(void* context) {
             probe.callerArguments ? **probe.callerArguments : *probe.arguments,
             scopedActivationBase, &probe,
             outcome, error) && error.empty();
+        asanProbePhase("scoped-inner-returned");
         probe.valid &= (outcome ==
             luna::runtime::RuntimeFragmentDispatchOutcome::ContinuationEscaped) ==
             (probe.control == LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1);
         for (size_t index = 0; index < probe.depth; ++index)
             probe.valid &= probe.matches(probe.live[index]);
     } else if (probe.callerSlot) {
+        asanProbePhase("scoped-inner-base");
         // Destroy the very records passed to both outer and inner dispatch
         // while every activation is suspended. The expected identities and
         // payload used by matches() remain independent, host-owned fixtures.
         probe.callerSlot->reset();
         probe.callerArguments->reset();
+        asanProbePhase("scoped-caller-released");
         for (size_t index = 0; index < probe.depth; ++index)
             probe.valid &= probe.matches(probe.live[index]);
     }
@@ -980,6 +984,8 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
         // another 64 handlers. All 128 live activation addresses must differ.
         for (int32_t control : {LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1,
                                 LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1}) {
+            asanProbePhase(control == LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1
+                ? "scoped-nested-completed-enter" : "scoped-nested-escaped-enter");
             probe.depth = 0;
             probe.entered = probe.returned = probe.baseCalls = 0;
             probe.nest = true;
@@ -993,6 +999,7 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
             auto outcome = luna::runtime::RuntimeFragmentDispatchOutcome::Completed;
             const bool nested = bindings.dispatchWithOutcome(
                 *callerSlot, *callerArguments, scopedActivationBase, &probe, outcome, error);
+            asanProbePhase("scoped-nested-returned");
             activeScopedActivationProbe = nullptr;
             probe.callerSlot = nullptr;
             probe.callerArguments = nullptr;
