@@ -199,7 +199,7 @@ public:
     ~WorkerPreparer() {
         if (!mFuture.valid()) return;
         try {
-            mFuture.get();
+            (void)mFuture.get();
         } catch (...) {}
     }
 
