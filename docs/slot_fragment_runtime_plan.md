@@ -999,6 +999,14 @@ requires each `ADDR32NB` target to lie within the 32-bit image-base offset and
 notes that the memory manager must order code, read-only and read-write
 sections. The traces identify the failing load boundary but do not yet prove
 which section addresses violate that constraint.
+The next [address-traced LLVM 22 ASAN probe](https://github.com/Luna-PL/Luna/actions/runs/38034838586)
+at commit `483a4a5` used the same RuntimeDyld layer and ordinary
+`SectionMemoryManager` behind a diagnostic opt-in wrapper. Four of 12 runs
+failed with the same error. In each failing object, `.text` and `.xdata` were
+about 16,896 GiB apart; the largest such gap in the eight passing runs was
+under 0.1 GiB. The observed failing allocations exceed the resolver's 32-bit
+image-base range. The wrapper may change allocation timing, so the two probe
+series do not establish a stable failure rate.
 The private JIT now also has a separate host-transfer experiment for admitted
 resource Result shapes. Its status entry checks nonnull, pairwise disjoint and
 aligned tag, `i32` scalar and owner output cells and requires an empty owner
@@ -1616,10 +1624,13 @@ not a public ABI decision or stable-release approval:
    The Windows LLVM 20.1.8 RuntimeDyld COFF relocation failure now also
    reproduces on LLVM 22 ASAN: 7 of 12 canonical runs, at O0 host/plugin or O2
    host load. The direct JITLink trial hit a different `.pdata` `Pointer32`
-   range failure. Next capture section allocation addresses at those load
-   boundaries, then test an isolated ordered-section RuntimeDyld memory
-   manager on LLVM 20 or 22 against the same 12-run manual probe. Keep it
-   outside the default JIT until the relocation and full canonical gate pass.
+   range failure. Address tracing now confirms that each observed LLVM 22
+   failure places `.text` and `.xdata` about 16,896 GiB apart in the same
+   object. Next test a Windows-only, opt-in RuntimeDyld memory manager that
+   reserves one object allocation, places code then read-only then read-write
+   sections within the 32-bit range, and applies page permissions and unwind
+   registration correctly. Compare the same 12-run ASAN probe and full
+   canonical gate before considering a default-JIT change.
    The LLVM 23
    IR failure is a separate compiler migration, not evidence that a newer JIT
    fixes this relocation.

@@ -765,6 +765,12 @@ profile／加载／查找阶段日志，并完成全部指定次数。
 要求 `ADDR32NB` 目标位于 image base 起 32 位偏移范围内，并指出内存管理器需按
 代码、只读、读写 section 排序。阶段日志已定位失败的加载边界，尚未证明是哪一组
 section 地址违反此约束。
+随后在提交 `483a4a5` 的 [LLVM 22 ASan 地址探针](https://github.com/Luna-PL/Luna/actions/runs/38034838586)
+中，诊断包装层保留相同的 RuntimeDyld 层与普通 `SectionMemoryManager`，
+12 次有 4 次因同一错误失败。每个失败对象的 `.text` 与 `.xdata` 相距约
+16,896 GiB；8 次通过的运行中，同类最大间距不足 0.1 GiB。观察到的失败
+分配超出了重定位器的 32 位 image-base 偏移范围。包装层可能改变分配时序，
+两组探针不能据此推断稳定失败概率。
 私有 JIT 另有一组仅测试用的宿主所有权交接入口。状态入口先检查 tag／`i32`
 标量／owner 三个输出地址非空、两两不重叠、对齐且 owner cell 为空，再调用源码
 body。输出预检后，入口还核验有效 parent context 和冻结 Slot 的精确借用 Ref
@@ -1221,10 +1227,12 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    Ref owner Drop 之前，按内到外恰好一次释放有效 context；其余路径继续拒绝。
    Windows LLVM 20.1.8 的 RuntimeDyld COFF 重定位故障现也在 LLVM 22 ASan
    复现：12 次 canonical 中失败 7 次，位于 O0 宿主／插件或 O2 宿主加载。
-   直接切换 JITLink 又遇到不同的 `.pdata` `Pointer32` 范围失败。下一步先在这些
-   加载边界记录 section 分配地址，再于 LLVM 20 或 22 的隔离构建中验证保序
-   RuntimeDyld 内存管理器，并用同一 12 次手动探针对照。重定位及完整 canonical
-   门禁通过前，不应把它并入默认 JIT。LLVM 23 的 IR 故障
+   直接切换 JITLink 又遇到不同的 `.pdata` `Pointer32` 范围失败。地址日志现已
+   确认，每个观察到的 LLVM 22 失败对象中 `.text` 与 `.xdata` 相距约
+   16,896 GiB。下一步在 Windows 上仅以可选诊断方式验证 RuntimeDyld
+   内存管理器：为同一对象预留连续内存，依次放置代码、只读、读写 section，
+   保证 32 位范围，并正确设置页权限与 unwind 注册。先用同一 12 次 ASan
+   探针和完整 canonical 门禁对照，再考虑修改默认 JIT。LLVM 23 的 IR 故障
    属于独立的编译器迁移，不能用来证明较新版 JIT 已修复这项重定位问题。
 2. **冻结可发布的宿主边界。** 明确带版本的 Ref 入口 carrier、返回 carrier／状态、
    精确 Slot／Contract 校验、借用寿命、所有权提交点及失败清理。现有私有 wrapper
