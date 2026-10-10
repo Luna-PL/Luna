@@ -2,7 +2,9 @@
 #include "../core/TypeLayout.h"
 #include "../runtime/RuntimeFragmentABI.h"
 
+#include <llvm/Config/llvm-config.h>
 #include <llvm/IR/Constants.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/Metadata.h>
 
@@ -12,15 +14,23 @@
 
 namespace {
 
+#if LLVM_VERSION_MAJOR >= 23
+using CanonicalLatchBranch = llvm::UncondBrInst;
+#else
+using CanonicalLatchBranch = llvm::BranchInst;
+#endif
+
 std::string localName(const moon::LocalRecord& local) {
     return "local." + std::to_string(local.id.value) + "." + local.name;
 }
 
 bool shouldUnrollCanonicalLatch(const llvm::BasicBlock* body,
-                                const llvm::BranchInst* latch) {
-    if (!body || !latch || latch->getParent() != body ||
-        !latch->isUnconditional())
+                                const CanonicalLatchBranch* latch) {
+    if (!body || !latch || latch->getParent() != body)
         return false;
+#if LLVM_VERSION_MAJOR < 23
+    if (!latch->isUnconditional()) return false;
+#endif
     unsigned instructionCount = 0;
     for (const llvm::Instruction& instruction : *body) {
         if (++instructionCount > 48 ||
@@ -36,7 +46,7 @@ bool shouldUnrollCanonicalLatch(const llvm::BasicBlock* body,
     return instructionCount >= 24;
 }
 
-void setCanonicalLoopUnrollCount(llvm::BranchInst* latch,
+void setCanonicalLoopUnrollCount(CanonicalLatchBranch* latch,
                                  llvm::LLVMContext& context,
                                  unsigned count) {
     auto temporary = llvm::MDNode::getTemporary(context, {});
@@ -1750,7 +1760,7 @@ void CodeGenerator::generateControlFlowBody(
                 terminator.primary.target.empty() ||
                 terminator.primary.target.value > block.id.value)
                 continue;
-            auto* latch = llvm::dyn_cast_or_null<llvm::BranchInst>(
+            auto* latch = llvm::dyn_cast_or_null<CanonicalLatchBranch>(
                 blocks[block.id.value]->getTerminator());
             if (shouldUnrollCanonicalLatch(blocks[block.id.value], latch))
                 setCanonicalLoopUnrollCount(latch, *mCtx, 4);
