@@ -15,9 +15,15 @@ if(LLVM_VERSION_MAJOR LESS 20 OR LLVM_VERSION_MAJOR GREATER 22)
         "Luna requires LLVM 20 through 22; found LLVM ${LLVM_PACKAGE_VERSION}.")
 endif()
 if(NOT TARGET LLVM)
-    message(FATAL_ERROR
-        "This LLVM installation does not export the monolithic LLVM target. "
-        "Set LLVM_DIR to the matching LLVM CMake package or install LLVM development files.")
+    # Versioned MSYS2 LLVM packages export static component libraries instead
+    # of the monolithic target used by most platform packages.
+    llvm_map_components_to_libnames(LUNA_LLVM_COMPONENT_LIBS all)
+    if(NOT LUNA_LLVM_COMPONENT_LIBS)
+        message(FATAL_ERROR
+            "This LLVM installation exports neither the LLVM target nor component libraries.")
+    endif()
+    add_library(LLVM INTERFACE)
+    target_link_libraries(LLVM INTERFACE ${LUNA_LLVM_COMPONENT_LIBS})
 endif()
 message(STATUS "Luna LLVM compatibility: ${LLVM_PACKAGE_VERSION} (supported majors 20-22)")
 
