@@ -87,6 +87,7 @@ script-defined special inputs.
   tests scripts.
 - VERSION is the sole complete release-version source.
 - CHANGELOG.md records user-visible changes and migration; it does not replace references.
+- CONTRIBUTING.md defines contribution and commit-subject conventions.
 - README.md is the English project entry; README.zh-CN.md is its Chinese counterpart.
 - CI workflows own platform gates; release.yml owns tag checks, prebuilt packages, checksums,
   and prerelease publication. release-evidence.yml independently checks locked public release
@@ -225,6 +226,7 @@ above; the inventory proves coverage and does not repeat semantic explanations. 
 Git internals, and ignored generated artifacts are excluded.
 
 <!-- FILE_INVENTORY_BEGIN --><!-- FILE_INVENTORY_BEGIN -->
+- `.github/workflows/commit-subjects.yml`
 - `.github/workflows/linux-ci.yml`
 - `.github/workflows/macos-ci.yml`
 - `.github/workflows/release-evidence.yml`
@@ -235,6 +237,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `.gitignore`
 - `CHANGELOG.md`
 - `CMakeLists.txt`
+- `CONTRIBUTING.md`
 - `LICENSE-APACHE`
 - `LICENSE-MIT`
 - `README.md`
@@ -1085,6 +1088,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `tools/benchmark_analyze.sh`
 - `tools/benchmark_heterogeneous.sh`
 - `tools/benchmark_probe.py`
+- `tools/check_commit_subjects.py`
 - `tools/gen_cpu_bench_sources.py`
 - `tools/gen_heterogeneous_scale.py`
 - `tools/verify_ecosystem_lock.cmake`
