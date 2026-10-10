@@ -3,10 +3,11 @@
 ## Unreleased
 
 - Separated validation-only Native v3 candidate entries from v1 `i32()`
-  exports. The loader checks a distinct resolved six-argument symbol, rejects
-  v1 entry aliases, and provides a read-only candidate lookup; C fixtures
-  cover the separation and malformed bindings. Generated v3 publication and
-  typed invocation remain gated.
+  exports. The loader checks a distinct resolved six-argument symbol inside
+  the verified staged image, rejects v1 entry aliases, and provides a read-only
+  candidate lookup. C fixtures cover the separation, malformed bindings and
+  dependency-symbol rejection. Generated v3 publication and typed invocation
+  remain gated.
 - Added a private six-argument C candidate entry for Native v3 Ref/owned-Result
   calls and fixed its candidate status values. A pointer-free JIT entry proof
   binds generated entry and Drop linkage, ABI profile and status domain to

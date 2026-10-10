@@ -884,11 +884,13 @@ linkage 和入口、共享借用 Ref 的 SlotId／ContractId、Result 与 `E` Ty
 `E` 的 AbiLayoutId 与大小／对齐、Drop SymbolId／ContractId、入口 profile 和
 状态域。loader 要求精确行大小与已知 profile，检查 UTF-8 字段和布局边界，
 拒绝 v1／v2 的 SymbolId 重叠和 v1 callable 的 linkage／入口别名，核对 v3
-入口指针与其解析出的符号，并核对独立域标记的行摘要。独立链接并封装的 C fixture
+入口指针与其解析出的符号，确认 v3 query 和入口位于已验证的暂存镜像，并核对独立
+域标记的行摘要。独立链接并封装的 C fixture
 证明有效 metadata 在 `GenerationBinding` 中仍未类型化，而独立的只读类型化查询
 可找到 v3 候选；其 v1 行保持真正的 `i32()` 入口。错误行大小、未知 profile、
 Ref Slot 或函数身份变化、v1 入口别名和缺失 linkage 均在离线 proof 成功后被
-loader 拒绝。后续可调用路径还须确认符号来自已封装镜像而非动态依赖。
+loader 拒绝。POSIX 夹具还证明动态依赖中的入口会被拒绝。此镜像来源检查尚未把
+metadata 行绑定到生产生成的 wrapper。
 这只验证候选记录，不证明生成的 Ref／Result
 入口、宿主 owner handle、失败状态行为或源码发布。
 
@@ -974,8 +976,8 @@ Drop。Runtime carrier 在重跑时通过 Windows Clang64 ASAN 聚焦 canonical 
 不透明 lease token，在单一准入形态下证明候选提交点及 lease 行为。私有六参数
 候选入口与状态域现已固定，并在保留的 JIT module 中绑定冻结源码事实。下一步将
 该类型化证明纳入生产生成的 v3 行与 `PinnedBinding`。v3 loader 现拒绝 v1
-入口别名，并验证独立解析的六参数符号。只读查询仅暴露候选存在性；仍须实现
-生产 descriptor 绑定及固定的类型化调用路径。
+入口别名，并验证暂存镜像内独立解析的六参数符号。只读查询仅暴露候选存在性；
+仍须实现生产 descriptor 绑定及固定的类型化调用路径。
 覆盖每个真实失败阶段的生成入口测试，以及 Runtime 所有的 handle／Drop 在各支持
 目标上的验证完成后，才能开放窄形态的 verifier／export 门禁。不能
 原地扩展 Native v1 行。

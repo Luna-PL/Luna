@@ -259,6 +259,26 @@ void* loadNativeSymbol(void* library, const char* name) {
 #endif
 }
 
+bool nativeAddressInStagedImage(void* library, const std::string& stagedPath,
+                                const void* address) {
+    if (!address) return false;
+#ifdef _WIN32
+    (void)stagedPath;
+    MEMORY_BASIC_INFORMATION region{};
+    return VirtualQuery(address, &region, sizeof(region)) == sizeof(region) &&
+        region.Type == MEM_IMAGE &&
+        region.AllocationBase == library;
+#else
+    (void)library;
+    Dl_info origin{};
+    struct stat staged{}, resolved{};
+    return dladdr(address, &origin) != 0 && origin.dli_fname &&
+        ::stat(stagedPath.c_str(), &staged) == 0 &&
+        ::stat(origin.dli_fname, &resolved) == 0 &&
+        staged.st_dev == resolved.st_dev && staged.st_ino == resolved.st_ino;
+#endif
+}
+
 bool validDescriptorUtf8(const char* source, size_t length) {
     size_t index = 0;
     while (index < length) {
@@ -461,13 +481,17 @@ bool validateNativeDescriptorV2(
 }
 
 bool validateNativeDescriptorV3(
-    void* handle, const NativeProofInfo& proof,
+    void* handle, const std::string& stagedPath, const NativeProofInfo& proof,
     const LunaNativeLibraryDescriptorV1* v1,
     const LunaNativeLibraryDescriptorV2* v2,
     const LunaNativeLibraryDescriptorV3*& descriptor, std::string& error) {
     auto* rawQuery = loadNativeSymbol(
         handle, "luna_native_library_descriptor_v3");
     if (!rawQuery) return true;
+    if (!nativeAddressInStagedImage(handle, stagedPath, rawQuery)) {
+        error = "Native v3 descriptor query is outside its verified image";
+        return false;
+    }
     const auto query = reinterpret_cast<LunaNativeLibraryDescriptorFnV3>(rawQuery);
     descriptor = query();
     if (!descriptor || descriptor->magic != LUNA_NATIVE_DESCRIPTOR_MAGIC_V3 ||
@@ -545,6 +569,10 @@ bool validateNativeDescriptorV3(
         }
         if (row.entry != loadNativeSymbol(handle, identifiers[2].c_str())) {
             error = "Native v3 entry does not match its resolved symbol";
+            return false;
+        }
+        if (!nativeAddressInStagedImage(handle, stagedPath, row.entry)) {
+            error = "Native v3 entry is outside its verified image";
             return false;
         }
         canonicalRows.push_back(canonicalNativeOwnedResultExportV3(
@@ -706,7 +734,7 @@ bool loadVerifiedNativeLibrary(
     if (!validateNativeDescriptor(handle, proof, descriptor, error) ||
         !validateNativeDescriptorV2(handle, proof, descriptor,
                                     descriptorV2, error) ||
-        !validateNativeDescriptorV3(handle, proof, descriptor,
+        !validateNativeDescriptorV3(handle, staged.path, proof, descriptor,
                                     descriptorV2, descriptorV3, error)) {
         closeNativeImage(handle);
         releaseStagedImage(staged);

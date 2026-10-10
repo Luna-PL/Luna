@@ -1162,15 +1162,16 @@ Result and `E` TypeIds, `E` AbiLayoutId plus size/alignment, Drop
 SymbolId/ContractId, entry profile and status domain. The loader requires an
 exact v3 row size and known profile, checks bounded UTF-8 fields and layout
 bounds, rejects v1/v2 SymbolId overlap and v1 callable linkage or entry
-aliases, matches the v3 entry pointer to its resolved linkage, and verifies a
+aliases, matches the v3 entry pointer to its resolved linkage, checks that the
+v3 query and entry resolve inside the staged verified image, and verifies a
 separate domain-tagged row digest.
 An independently linked and sealed C fixture proves valid metadata remains
 unprofiled in `GenerationBinding` while a separate read-only typed lookup finds
 the v3 candidate. Its v1 row remains a genuine `i32()` entry. Bad row size,
 unknown profile, changed Ref Slot or function identity, v1 entry alias and
-missing linkage are rejected after offline proof succeeds. A later callable
-path must also establish that resolution belongs to the sealed image rather
-than one of its dynamic dependencies.
+missing linkage are rejected after offline proof succeeds. A POSIX fixture
+also rejects an entry resolved from a dynamic dependency. This module-origin
+check does not bind the metadata row to a generated production wrapper.
 This validates the candidate record only. No generated Ref/Result entry, host
 owner handle, failure-status behavior or source publication is claimed.
 
@@ -1287,8 +1288,9 @@ candidate entry and status domain are now fixed and bound to frozen source
 facts in the retained JIT module. The next production step is to carry that
 typed proof into a generated v3 row and `PinnedBinding`. The v3 loader now
 rejects v1 entry aliases and validates an independently resolved six-argument
-symbol. Its read-only lookup exposes only candidate presence; a production
-descriptor binding and pinned typed call path are still required. Generated entry
+symbol in the staged image. Its read-only lookup exposes only candidate
+presence; a production descriptor binding and pinned typed call path are still
+required. Generated entry
 tests for every real failure phase, plus Runtime-owned handle/Drop behavior
 across supported targets, are required before opening the narrow verifier and
 export gate. Native v1 rows must not be extended in place.

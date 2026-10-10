@@ -442,7 +442,12 @@ endforeach()
 
 # An independently linked v3 candidate carries Ref/Result metadata but is
 # validation-only until the generated host carrier and status path exist.
-foreach(v3_variant IN ITEMS valid bad-row-size bad-profile bad-slot-digest bad-identity bad-entry-pointer bad-linkage)
+set(v3_variants valid bad-row-size bad-profile bad-slot-digest bad-identity
+    bad-entry-pointer bad-linkage)
+if(NOT WIN32)
+    list(APPEND v3_variants dependency-entry)
+endif()
+foreach(v3_variant IN LISTS v3_variants)
     if(WIN32)
         set(v3_artifact "${work_dir}/independent-v3-${v3_variant}.dll")
     elseif(APPLE)
@@ -464,6 +469,8 @@ foreach(v3_variant IN ITEMS valid bad-row-size bad-profile bad-slot-digest bad-i
         list(APPEND v3_defines -DLUNA_TEST_V3_BAD_ENTRY_POINTER)
     elseif(v3_variant STREQUAL "bad-linkage")
         list(APPEND v3_defines -DLUNA_TEST_V3_BAD_LINKAGE)
+    elseif(v3_variant STREQUAL "dependency-entry")
+        list(APPEND v3_defines -DLUNA_TEST_V3_DEPENDENCY_ENTRY)
     endif()
     execute_process(
         COMMAND "${LUNA_AOT_COMPILER}" -x c -std=c11 -fPIC
@@ -477,8 +484,12 @@ foreach(v3_variant IN ITEMS valid bad-row-size bad-profile bad-slot-digest bad-i
         message(FATAL_ERROR "independent Native v3 fixture did not link.\n"
             "${v3_compile_error}")
     endif()
+    set(v3_prepare_mode --prepare-v3-fixture)
+    if(v3_variant STREQUAL "dependency-entry")
+        set(v3_prepare_mode --prepare-v3-dependency-fixture)
+    endif()
     execute_process(
-        COMMAND "${LUNA_NATIVE_VERIFIER}" --prepare-v3-fixture
+        COMMAND "${LUNA_NATIVE_VERIFIER}" ${v3_prepare_mode}
             "${v3_artifact}" "${v3_trust}"
         RESULT_VARIABLE v3_seal_result
         ERROR_VARIABLE v3_seal_error)
@@ -543,6 +554,8 @@ foreach(v3_variant IN ITEMS valid bad-row-size bad-profile bad-slot-digest bad-i
             set(v3_expected "rows do not match their descriptor digest")
         elseif(v3_variant STREQUAL "bad-linkage")
             set(v3_expected "entry does not match its resolved symbol")
+        elseif(v3_variant STREQUAL "dependency-entry")
+            set(v3_expected "entry is outside its verified image")
         else()
             set(v3_expected "invalid export row")
         endif()

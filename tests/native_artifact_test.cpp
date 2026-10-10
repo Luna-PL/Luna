@@ -28,7 +28,10 @@ int prepareIndependentFixture(int argc, char** argv) {
     const bool typedV2 =
         std::string(argv[1]) == "--prepare-v2-fixture";
     const bool typedV3 =
-        std::string(argv[1]) == "--prepare-v3-fixture";
+        std::string(argv[1]) == "--prepare-v3-fixture" ||
+        std::string(argv[1]) == "--prepare-v3-dependency-fixture";
+    const bool dependencyV3 =
+        std::string(argv[1]) == "--prepare-v3-dependency-fixture";
     const std::string targetAbi = llvm::sys::getProcessTriple();
     if (targetAbi.empty() || targetAbi.size() >= 128)
         return fail("independent Native fixture target ABI exceeds its bounded field");
@@ -77,7 +80,8 @@ int prepareIndependentFixture(int argc, char** argv) {
                         marker.end()) != bytes.end())
             return fail("independent v3 fixture has no unique descriptor digest placeholder");
         const std::array<std::string, 10> identifiers = {
-            "symbol:owned-answer", "contract:owned-v3", "owned_answer",
+            "symbol:owned-answer", "contract:owned-v3",
+            dependencyV3 ? "puts" : "owned_answer",
             "symbol:slot-checkpoint", "contract:slot-checkpoint",
             "type:result-i32-owned", "type:owned-error",
             "layout:owned-error-v1", "symbol:drop-owned-error",
@@ -426,7 +430,8 @@ int main(int argc, char** argv) {
     if (argc > 1 && (std::string(argv[1]) == "--prepare-legacy" ||
                      std::string(argv[1]) == "--prepare-legacy-invalid-utf8" ||
                      std::string(argv[1]) == "--prepare-v2-fixture" ||
-                     std::string(argv[1]) == "--prepare-v3-fixture"))
+                     std::string(argv[1]) == "--prepare-v3-fixture" ||
+                     std::string(argv[1]) == "--prepare-v3-dependency-fixture"))
         return prepareIndependentFixture(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--generation-switch")
         return generationSwitch(argc, argv);
