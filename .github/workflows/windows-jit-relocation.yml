@@ -21,6 +21,11 @@ on:
         required: true
         default: false
         type: boolean
+      nonjit_asan:
+        description: Build and repeat the two non-JIT sanitizer failures with crash backtraces
+        required: true
+        default: false
+        type: boolean
 
 jobs:
   canonical-asan:
@@ -48,6 +53,7 @@ jobs:
             mingw-w64-clang-x86_64-libc++
             mingw-w64-clang-x86_64-libunwind
             mingw-w64-clang-x86_64-zstd
+            mingw-w64-clang-x86_64-gdb
 
       - name: Restore verified LLVM 22 sanitizer runtime
         run: |
@@ -90,12 +96,14 @@ jobs:
             -DLUNA_STRICT_WARNINGS=ON
 
       - name: Build canonical JIT target
+        if: ${{ !inputs.nonjit_asan }}
         run: |
           export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
           export LIBRARY_PATH="/clang64/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
           cmake --build build-jit-asan --target moonir-canonical-test --parallel 4
 
       - name: Repeat sanitized canonical JIT
+        if: ${{ !inputs.nonjit_asan }}
         run: |
           export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
           export LIBRARY_PATH="/clang64/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
@@ -138,6 +146,64 @@ jobs:
             fi
           done
           printf 'failures=%d/%d\n' "$failures" "$count" | tee build-jit-asan/relocation-probe/summary.txt
+          (( failures == 0 ))
+
+      - name: Build non-JIT ASAN targets
+        if: ${{ inputs.nonjit_asan }}
+        run: |
+          export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
+          export LIBRARY_PATH="/clang64/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+          cmake --build build-jit-asan --target \
+            moon-container-model-test runtime-fragment-test --parallel 4
+
+      - name: Repeat non-JIT ASAN targets and capture crash backtraces
+        if: ${{ inputs.nonjit_asan }}
+        run: |
+          export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
+          export LIBRARY_PATH="/clang64/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
+          export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+          mode='${{ inputs.allocation_mode }}'
+          case "$mode" in
+            default) unset LUNA_JIT_RESERVE_SECTIONS ;;
+            reserved) export LUNA_JIT_RESERVE_SECTIONS=1 ;;
+            *) echo "allocation_mode must be default or reserved" >&2; exit 1 ;;
+          esac
+          directory=build-jit-asan/relocation-probe
+          mkdir -p "$directory"
+          {
+            git rev-parse HEAD
+            clang++ --version | head -n 1
+            llvm-config --version
+            printf 'allocation_mode=%s\n' "$mode"
+            printf 'scope=nonjit_asan\n'
+          } > "$directory/context.txt"
+          failures=0
+          for target in moon-container-model runtime-fragment; do
+            debugged=0
+            for (( run = 1; run <= 5; ++run )); do
+              printf -v label '%03d' "$run"
+              log="$directory/${target}-${mode}-${label}.log"
+              export ASAN_OPTIONS="detect_leaks=0:alloc_dealloc_mismatch=0:log_path=${directory}/asan-${target}-${mode}-${label}"
+              if "./build-jit-asan/${target}-test.exe" > "$log" 2>&1; then
+                status=0
+              else
+                status=$?
+                failures=$((failures + 1))
+                if (( debugged == 0 )); then
+                  timeout 60s gdb --batch --quiet \
+                    -ex 'set pagination off' -ex run \
+                    -ex 'thread apply all bt 30' \
+                    --args "./build-jit-asan/${target}-test.exe" \
+                    > "$directory/${target}-${mode}-gdb.log" 2>&1 || true
+                  debugged=1
+                fi
+              fi
+              printf '%s\t%s\t%s\t%s\n' "$target" "$mode" "$label" "$status" \
+                | tee -a "$directory/nonjit-results.tsv"
+            done
+          done
+          printf 'nonjit_failures=%s/10\n' "$failures" \
+            | tee "$directory/nonjit-summary.txt"
           (( failures == 0 ))
 
       - name: Build complete sanitized stable core suite
