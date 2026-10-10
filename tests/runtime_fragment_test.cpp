@@ -6,7 +6,6 @@
 #include <atomic>
 #include <cstdio>
 #include <cstdlib>
-#include <cstring>
 #include <iostream>
 #include <memory>
 #include <new>
@@ -24,12 +23,6 @@ void asanProbePhase(const char* phase) {
     std::fputs(phase, stderr);
     std::fputc('\n', stderr);
     std::fflush(stderr);
-}
-
-bool asanProbeVariant(const char* variant) {
-    const char* selected = std::getenv("LUNA_ASAN_PROBE_VARIANT");
-    return std::getenv("LUNA_ASAN_PROBE_PHASES") && selected &&
-        std::strcmp(selected, variant) == 0;
 }
 
 // Test-only ordinary C++ allocation counter, enabled only across synchronous
@@ -839,8 +832,11 @@ void executeScopedActivationProbe(void*, void* activation) {
     ++probe.returned;
     if (probe.throwHandler && probe.depth == probe.throwDepth) {
         asanProbePhase("scoped-handler-throw");
-        if (asanProbeVariant("scalar_throw")) throw 42;
-        throw std::runtime_error("scoped activation handler probe");
+        // Depth one checks the std::exception message; longer chains check
+        // catch-all propagation and recovery after deeper unwinding.
+        if (probe.throwDepth == 0)
+            throw std::runtime_error("scoped activation handler probe");
+        throw 42;
     }
     // A failed downstream handler is deliberately ignored here, as native
     // execute has no result channel. Outer dispatch must retain that failure.
@@ -994,7 +990,6 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
         // another 64 handlers. All 128 live activation addresses must differ.
         for (int32_t control : {LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1,
                                 LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1}) {
-            if (asanProbeVariant("skip_nested")) continue;
             asanProbePhase(control == LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1
                 ? "scoped-nested-completed-enter" : "scoped-nested-escaped-enter");
             probe.depth = 0;
@@ -1032,9 +1027,9 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
         const bool threw = bindings.dispatch(
             slot, arguments, scopedActivationBase, &probe, error);
         asanProbePhase("scoped-throw-dispatch-returned");
-        const bool diagnosed = error.find(asanProbeVariant("scalar_throw")
-            ? "runtime Fragment execution threw"
-            : "scoped activation handler probe") != std::string::npos;
+        const bool diagnosed = error.find(chainLength == 1
+            ? "scoped activation handler probe"
+            : "runtime Fragment execution threw") != std::string::npos;
         probe.throwHandler = false;
         asanProbePhase("scoped-recovery-dispatch-enter");
         const bool recovered = bindings.dispatch(
