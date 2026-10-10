@@ -817,7 +817,12 @@ Clang 20 Debug ASan 复现了容器模型测试编码允许的 256 层表达式�
 及重新分派；嵌套 continuation 检查保留。[默认模式最终定向运行](https://github.com/Luna-PL/Luna/actions/runs/38054325205)
 中两个目标各通过 5/5；[预留模式完整运行](https://github.com/Luna-PL/Luna/actions/runs/38054336440)
 的 canonical JIT 探针和全部 80 项稳定核心测试均通过。这满足 Windows LLVM 22
-默认模式切换前的测试门槛；接下来核对切换后的 Windows CI 和 ASan 运行。
+默认模式切换前的测试门槛。在提交 `ae43577` 上，切换后的
+[`automatic` ASan 运行](https://github.com/Luna-PL/Luna/actions/runs/38069877559)
+未设置两个分配覆盖开关，canonical JIT 重复测试通过 12／12，稳定核心通过
+80／80；[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/38069869830)、
+[Linux CI](https://github.com/Luna-PL/Luna/actions/runs/38069869855) 和
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/38069869947) 也全部通过。
 私有 JIT 另有一组仅测试用的宿主所有权交接入口。状态入口先检查 tag／`i32`
 标量／owner 三个输出地址非空、两两不重叠、对齐且 owner cell 为空，再调用源码
 body。输出预检后，入口还核验有效 parent context 和冻结 Slot 的精确借用 Ref
@@ -1283,8 +1288,9 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    78／80。定向探针把两个非 JIT 测试故障分别定位为插桩深层 codec 测试的
    栈溢出及 Fragment 夹具的异常对象退出。仅测试用修正后，预留模式的
    canonical 探针和完整 80／80 稳定核心测试均通过。Windows LLVM 22 JIT
-   现默认使用预留模式，保留旧模式诊断开关；下一步核对切换后的 Windows CI
-   与默认 ASan 路径，再关闭此重定位任务。LLVM 23 的 IR 故障
+   现默认使用预留模式，保留旧模式诊断开关。切换后的 Windows CI 和未设置覆盖
+   开关的 ASan 探针已通过（canonical 12／12、稳定核心 80／80），此默认切换
+   门槛已完成；后续诊断仍保留旧模式开关。LLVM 23 的 IR 故障
    属于独立的编译器迁移，不能用来证明较新版 JIT 已修复这项重定位问题。
 2. **冻结可发布的宿主边界。** 明确带版本的 Ref 入口 carrier、返回 carrier／状态、
    精确 Slot／Contract 校验、借用寿命、所有权提交点及失败清理。现有私有 wrapper

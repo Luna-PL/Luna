@@ -12,7 +12,8 @@
   the instrumented container codec test retain its 256/257-level boundary.
   The Fragment fixture now checks `std::exception` at one handler and catch-all
   recovery in longer chains. The reserved LLVM 22 full suite passed 80/80;
-  post-default-switch CI remains to be checked.
+  after the default switch, the override-free ASAN probe passed 12/12 canonical
+  JIT runs and all 80 stable-core tests. Windows, Linux and macOS CI passed.
 - Kept Windows CI and release builds on MSYS2's versioned LLVM 22 UCRT64
   toolchain after the unversioned package advanced to LLVM 23. The project
   continues to require LLVM 20 through 22.

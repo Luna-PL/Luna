@@ -1068,8 +1068,12 @@ propagation and recovery with four and 64 handlers; the nested continuation
 checks remain. The [final default-mode focused run](https://github.com/Luna-PL/Luna/actions/runs/38054325205)
 passed both targets 5/5, and the [reserved full-suite run](https://github.com/Luna-PL/Luna/actions/runs/38054336440)
 passed its canonical JIT probe and all 80 stable-core tests. This cleared the
-test gate for the Windows LLVM 22 default switch. Post-switch Windows CI and
-ASAN validation are the next checks.
+test gate for the Windows LLVM 22 default switch. At commit `ae43577`, the
+[post-switch `automatic` ASAN run](https://github.com/Luna-PL/Luna/actions/runs/38069877559)
+left both allocation overrides unset, passed 12/12 canonical JIT repetitions,
+and passed all 80 stable-core tests. [Windows CI](https://github.com/Luna-PL/Luna/actions/runs/38069869830),
+[Linux CI](https://github.com/Luna-PL/Luna/actions/runs/38069869855), and
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/38069869947) also passed.
 The private JIT now also has a separate host-transfer experiment for admitted
 resource Result shapes. Its status entry checks nonnull, pairwise disjoint and
 aligned tag, `i32` scalar and owner output cells and requires an empty owner
@@ -1699,8 +1703,10 @@ not a public ABI decision or stable-release approval:
    and an exception-object exit in the Fragment fixture. After test-only
    corrections, the reserved canonical probe and full 80/80 stable-core suite
    passed. Windows LLVM 22 JIT now defaults to reserved allocation, with a
-   legacy diagnostic override. Verify post-switch Windows CI and the default
-   ASAN path before closing this relocation task.
+   legacy diagnostic override. Post-switch Windows CI and the override-free
+   ASAN probe passed (12/12 canonical, 80/80 stable core); the relocation
+   default-change gate is complete. Retain the legacy switch for future
+   diagnostic comparisons.
    The LLVM 23
    IR failure is a separate compiler migration, not evidence that a newer JIT
    fixes this relocation.
