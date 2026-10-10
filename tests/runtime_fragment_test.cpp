@@ -920,6 +920,7 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
     luna::runtime::RuntimeFragmentBindingSet none;
     if (!luna::runtime::makeRuntimeFragmentBindingSet({}, none, error))
         return fail("scoped activation None fixture did not initialize");
+    asanProbePhase("scoped-none-bound");
     unsigned noneResumes = 0;
     dispatchAllocations = 0;
     countDispatchAllocations = true;
@@ -929,8 +930,11 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
     const size_t noneAllocations = dispatchAllocations;
     if (!ranNone || !error.empty() || noneResumes != 1)
         return fail("scoped activation None fixture did not dispatch");
+    asanProbePhase("scoped-none-dispatched");
     size_t oneAllocations = 0;
     for (unsigned chainLength : {1u, 4u, 64u}) {
+        if (chainLength == 1) asanProbePhase("scoped-chain-1");
+        if (chainLength == 4) asanProbePhase("scoped-chain-4");
         if (chainLength == 64) asanProbePhase("scoped-chain-64");
         std::vector<luna::runtime::RuntimeFragmentRef> references;
         for (unsigned index = 0; index < chainLength; ++index) {
@@ -940,10 +944,12 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
                 return fail("scoped activation reference did not bind");
             references.push_back(std::move(reference));
         }
+        asanProbePhase("scoped-references-built");
         luna::runtime::RuntimeFragmentBindingSet bindings;
         if (!luna::runtime::makeRuntimeFragmentChainBindingSet(
                 std::move(references), bindings, error))
             return fail("scoped activation chain did not initialize");
+        asanProbePhase("scoped-chain-bound");
         ScopedActivationProbe probe;
         probe.bindings = &bindings;
         probe.slot = &slot;
@@ -953,6 +959,7 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
         countDispatchAllocations = true;
         const bool dispatched = bindings.dispatch(
             slot, arguments, scopedActivationBase, &probe, error);
+        asanProbePhase("scoped-chain-dispatched");
         countDispatchAllocations = false;
         activeScopedActivationProbe = nullptr;
         if (!dispatched || !error.empty() || !probe.valid || probe.depth != 0 ||
