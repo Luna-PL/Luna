@@ -41,8 +41,8 @@ using LunaJitEntry = int (*)();
 #ifdef _WIN32
 void lunaJitMingwMain();
 
-// Diagnostic opt-ins: mirror LLJIT's COFF RuntimeDyld layer and optionally
-// reserve one contiguous allocation per object with LLVM 22's memory manager.
+// Mirror LLJIT's COFF RuntimeDyld layer, keeping each LLVM 22 object in one
+// reserved allocation. Tracing and the legacy allocator remain diagnostic.
 class TracedSectionMemoryManager final : public llvm::SectionMemoryManager {
 public:
     TracedSectionMemoryManager(bool trace, bool reserve)
@@ -101,16 +101,28 @@ materializeLunaJit(std::unique_ptr<llvm::Module>& module,
 
     LLJITBuilder builder;
 #ifdef _WIN32
+    const bool explicitReserve =
+        std::getenv("LUNA_JIT_RESERVE_SECTIONS") != nullptr;
+    const bool legacySections =
+        std::getenv("LUNA_JIT_LEGACY_SECTIONS") != nullptr;
+    if (explicitReserve && legacySections) {
+        return make_error<StringError>(
+            "LUNA_JIT_RESERVE_SECTIONS conflicts with LUNA_JIT_LEGACY_SECTIONS",
+            inconvertibleErrorCode());
+    }
 #if LLVM_VERSION_MAJOR < 22
-    if (std::getenv("LUNA_JIT_RESERVE_SECTIONS")) {
+    if (explicitReserve) {
         return make_error<StringError>(
             "LUNA_JIT_RESERVE_SECTIONS requires LLVM 22 or newer",
             inconvertibleErrorCode());
     }
 #endif
     const bool traceSections = std::getenv("LUNA_JIT_SECTION_TRACE") != nullptr;
-    const bool reserveSections =
-        std::getenv("LUNA_JIT_RESERVE_SECTIONS") != nullptr;
+#if LLVM_VERSION_MAJOR >= 22
+    const bool reserveSections = !legacySections;
+#else
+    const bool reserveSections = false;
+#endif
     if (traceSections || reserveSections) {
         builder.setObjectLinkingLayerCreator(
             [traceSections, reserveSections](ExecutionSession& session, auto&&...)

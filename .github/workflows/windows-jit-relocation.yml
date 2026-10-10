@@ -9,11 +9,12 @@ on:
         default: '20'
         type: number
       allocation_mode:
-        description: RuntimeDyld section allocation mode
+        description: LLVM RuntimeDyld allocation (automatic uses the production default)
         required: true
-        default: default
+        default: automatic
         type: choice
         options:
+          - automatic
           - default
           - reserved
       full_suite:
@@ -114,9 +115,10 @@ jobs:
           export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
           mode='${{ inputs.allocation_mode }}'
           case "$mode" in
-            default) ;;
-            reserved) export LUNA_JIT_RESERVE_SECTIONS=1 ;;
-            *) echo "allocation_mode must be default or reserved" >&2; exit 1 ;;
+            automatic) unset LUNA_JIT_LEGACY_SECTIONS LUNA_JIT_RESERVE_SECTIONS ;;
+            default) export LUNA_JIT_LEGACY_SECTIONS=1; unset LUNA_JIT_RESERVE_SECTIONS ;;
+            reserved) unset LUNA_JIT_LEGACY_SECTIONS; export LUNA_JIT_RESERVE_SECTIONS=1 ;;
+            *) echo "allocation_mode must be automatic, default or reserved" >&2; exit 1 ;;
           esac
           count='${{ inputs.iterations }}'
           if ! [[ "$count" =~ ^[0-9]+$ ]] || (( count < 1 || count > 100 )); then
@@ -165,9 +167,10 @@ jobs:
           export LUNA_ASAN_PROBE_PHASES=1
           mode='${{ inputs.allocation_mode }}'
           case "$mode" in
-            default) unset LUNA_JIT_RESERVE_SECTIONS ;;
-            reserved) export LUNA_JIT_RESERVE_SECTIONS=1 ;;
-            *) echo "allocation_mode must be default or reserved" >&2; exit 1 ;;
+            automatic) unset LUNA_JIT_LEGACY_SECTIONS LUNA_JIT_RESERVE_SECTIONS ;;
+            default) export LUNA_JIT_LEGACY_SECTIONS=1; unset LUNA_JIT_RESERVE_SECTIONS ;;
+            reserved) unset LUNA_JIT_LEGACY_SECTIONS; export LUNA_JIT_RESERVE_SECTIONS=1 ;;
+            *) echo "allocation_mode must be automatic, default or reserved" >&2; exit 1 ;;
           esac
           directory=build-jit-asan/relocation-probe
           mkdir -p "$directory"
@@ -224,9 +227,12 @@ jobs:
           export CXXFLAGS="-nostdinc++ -I$(cygpath -m /clang64/include/c++/v1)"
           export ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0
           export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
-          if [[ '${{ inputs.allocation_mode }}' == reserved ]]; then
-            export LUNA_JIT_RESERVE_SECTIONS=1
-          fi
+          case '${{ inputs.allocation_mode }}' in
+            automatic) unset LUNA_JIT_LEGACY_SECTIONS LUNA_JIT_RESERVE_SECTIONS ;;
+            default) export LUNA_JIT_LEGACY_SECTIONS=1; unset LUNA_JIT_RESERVE_SECTIONS ;;
+            reserved) unset LUNA_JIT_LEGACY_SECTIONS; export LUNA_JIT_RESERVE_SECTIONS=1 ;;
+            *) echo "allocation_mode must be automatic, default or reserved" >&2; exit 1 ;;
+          esac
           ctest --test-dir build-jit-asan -LE hardware --output-on-failure
 
       - name: Retain complete suite diagnostics

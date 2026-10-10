@@ -1013,10 +1013,14 @@ series do not establish a stable failure rate.
 LLVM 22 exposes `SectionMemoryManager`'s `ReserveAlloc` mode, which reserves
 one allocation for an object's code, read-only and read-write sections while
 retaining LLVM's own page-protection and EH-frame handling. A Windows-only
-`LUNA_JIT_RESERVE_SECTIONS=1` diagnostic opt-in now selects that mode; the
-ordinary JIT remains unchanged. The manual probe can select `reserved` or
-`default` allocation and still records per-section addresses. LLVM 20 rejects
-the reserve opt-in because it lacks this API. On 2026-10-10, paired 12-run
+Windows LLVM 22 JIT now selects that mode by default.
+`LUNA_JIT_LEGACY_SECTIONS=1` retains the former allocation for diagnostics;
+`LUNA_JIT_RESERVE_SECTIONS=1` remains an explicit reserve request. The manual
+probe selects `automatic` by default, leaving both overrides unset. Its
+historical `default` choice forces LLVM's legacy allocator, and `reserved`
+explicitly requests reservation; all choices record per-section addresses.
+LLVM 20 keeps its prior default and rejects
+the reserve request because it lacks this API. On 2026-10-10, paired 12-run
 LLVM 22 ASAN probes at commit `077ef1c` recorded [5 passes and 7 relocation
 failures in default mode](https://github.com/Luna-PL/Luna/actions/runs/38037817676),
 versus [12 passes in reserved mode](https://github.com/Luna-PL/Luna/actions/runs/38037817706).
@@ -1055,9 +1059,17 @@ rerun](https://github.com/Luna-PL/Luna/actions/runs/38052592568) passed 79/80,
 including the container model; `luna.runtime-fragment-v1` still terminated
 with Windows status `0xc0000374`. Its opt-in phase trace reaches the nested
 four-handler chain's deliberate `std::runtime_error` throw and stops before
-the dispatch returns. The stack reserve did not resolve that exit. Isolate
-the exception/allocator boundary, then rerun the full sanitized suite before
-changing the default JIT allocation mode.
+the dispatch returns. The stack reserve did not resolve that exit. A
+[scalar-throw focused run](https://github.com/Luna-PL/Luna/actions/runs/38053955045)
+passed both targets 5/5, whereas [skipping the earlier nested dispatch](https://github.com/Luna-PL/Luna/actions/runs/38053958973)
+still failed at the four-handler `std::runtime_error` throw. The fixture now
+checks the detailed `std::exception` path with one handler and catch-all
+propagation and recovery with four and 64 handlers; the nested continuation
+checks remain. The [final default-mode focused run](https://github.com/Luna-PL/Luna/actions/runs/38054325205)
+passed both targets 5/5, and the [reserved full-suite run](https://github.com/Luna-PL/Luna/actions/runs/38054336440)
+passed its canonical JIT probe and all 80 stable-core tests. This cleared the
+test gate for the Windows LLVM 22 default switch. Post-switch Windows CI and
+ASAN validation are the next checks.
 The private JIT now also has a separate host-transfer experiment for admitted
 resource Result shapes. Its status entry checks nonnull, pairwise disjoint and
 aligned tag, `i32` scalar and owner output cells and requires an empty owner
@@ -1677,17 +1689,18 @@ not a public ABI decision or stable-release approval:
    host load. The direct JITLink trial hit a different `.pdata` `Pointer32`
    range failure. Address tracing now confirms that each observed LLVM 22
    failure places `.text` and `.xdata` about 16,896 GiB apart in the same
-   object. A Windows-only diagnostic opt-in now uses LLVM 22's built-in
-   `SectionMemoryManager` reserve mode for one object allocation; LLVM retains
-   page permissions and unwind registration. Paired 12-run LLVM 22 ASAN
-   canonical probes now show 7/12 relocation failures in default mode and
-   0/12 in reserved mode; no reserved-mode object spans 4 GiB. Next run the
-   complete Windows stable-core suite with reserved allocation before
-   considering a default-JIT change. The first full ASAN attempt passed 76/80;
-   a follow-up run after correcting checkout and libc++ setup passed 78/80,
-   leaving the same two sanitizer process crashes in non-JIT targets. Compare
-   those targets under default allocation, isolate the crashes, and rerun the
-   gate.
+   object. LLVM 22's built-in `SectionMemoryManager` reserve mode keeps one
+   object allocation contiguous while LLVM retains page permissions and
+   unwind registration. Paired 12-run LLVM 22 ASAN canonical probes showed
+   7/12 relocation failures in the legacy mode and 0/12 in reserve mode; no
+   reserved-mode object spanned 4 GiB. The first full ASAN attempt passed
+   76/80; a follow-up after fixing setup passed 78/80. Focused probes isolated
+   the two non-JIT test failures: an instrumented deep-codec stack overflow
+   and an exception-object exit in the Fragment fixture. After test-only
+   corrections, the reserved canonical probe and full 80/80 stable-core suite
+   passed. Windows LLVM 22 JIT now defaults to reserved allocation, with a
+   legacy diagnostic override. Verify post-switch Windows CI and the default
+   ASAN path before closing this relocation task.
    The LLVM 23
    IR failure is a separate compiler migration, not evidence that a newer JIT
    fixes this relocation.

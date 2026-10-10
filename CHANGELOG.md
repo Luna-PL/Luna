@@ -2,18 +2,17 @@
 
 ## Unreleased
 
-- Added a Windows-only LLVM 22 diagnostic opt-in for contiguous RuntimeDyld
-  section allocation and a reserved-mode choice in the sanitized JIT probe.
-  Paired 12-run LLVM 22 ASAN probes passed 12/12 with reserved allocation;
-  default allocation failed 7/12 with the known COFF relocation error. The
-  manual probe now offers a full sanitized stable-core run. The default JIT
-  path remains unchanged: a follow-up full-suite attempt passed 78/80 after
-  fixing two probe setup gaps, with two non-JIT sanitizer process crashes
-  under investigation. Focused default and reserved probes reproduced both
-  crashes independently of JIT allocation. A Windows Debug ASAN test-only
-  stack reserve now lets the 256-level container codec boundary pass; the
-  reserved full suite advanced to 79/80. The remaining Fragment test still
-  terminates in its intentional exception-recovery fixture.
+- Made LLVM 22 Windows JIT use contiguous RuntimeDyld section reservation by
+  default, retaining `LUNA_JIT_LEGACY_SECTIONS=1` for diagnostic comparison.
+  Earlier paired ASAN probes passed 12/12 with reservation; LLVM's legacy
+  allocation failed 7/12 with COFF relocation errors. LLVM 20 keeps its
+  existing allocation path.
+- Extended the manual Windows ASAN probe to the full stable-core suite and
+  isolated two unrelated test-process failures. An 8 MiB stack reserve lets
+  the instrumented container codec test retain its 256/257-level boundary.
+  The Fragment fixture now checks `std::exception` at one handler and catch-all
+  recovery in longer chains. The reserved LLVM 22 full suite passed 80/80;
+  post-default-switch CI remains to be checked.
 - Kept Windows CI and release builds on MSYS2's versioned LLVM 22 UCRT64
   toolchain after the unversioned package advanced to LLVM 23. The project
   continues to require LLVM 20 through 22.

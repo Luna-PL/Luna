@@ -776,9 +776,12 @@ section 地址违反此约束。
 两组探针不能据此推断稳定失败概率。
 LLVM 22 的 `SectionMemoryManager` 提供 `ReserveAlloc` 模式，可为同一对象的
 代码、只读和读写 section 预留一块内存，同时沿用 LLVM 自身的页权限和 EH frame
-处理。现已加入仅限 Windows 的 `LUNA_JIT_RESERVE_SECTIONS=1` 诊断开关；默认
-JIT 未变。手动探针可选择 `reserved` 或 `default`，并继续记录各 section 地址。
-LLVM 20 缺少该接口，会明确拒绝预留开关。2026-10-10 在提交 `077ef1c`
+处理。Windows LLVM 22 JIT 现默认使用预留模式；
+`LUNA_JIT_LEGACY_SECTIONS=1` 可用于诊断旧分配方式，
+`LUNA_JIT_RESERVE_SECTIONS=1` 仍可显式请求预留模式。手动探针现默认使用
+`automatic`，即不设置两个覆盖开关；原有 `default` 强制 LLVM 旧分配器，
+`reserved` 则显式请求预留模式，各模式继续记录 section 地址。LLVM 20 保留原默认
+路径，因缺少接口而明确拒绝预留请求。2026-10-10 在提交 `077ef1c`
 对照两组各 12 次 LLVM 22 ASan 探针：[默认模式](https://github.com/Luna-PL/Luna/actions/runs/38037817676)
 通过 5 次、重定位失败 7 次；[预留模式](https://github.com/Luna-PL/Luna/actions/runs/38037817706)
 全部通过。保留的地址日志中，默认模式有 7 个对象的 section 跨度至少 4 GiB，
@@ -807,8 +810,14 @@ Clang 20 Debug ASan 复现了容器模型测试编码允许的 256 层表达式�
 已通过 79/80，容器模型也通过；仅 `luna.runtime-fragment-v1` 仍以 Windows
 状态 `0xc0000374` 终止。可选阶段日志显示，程序执行到四条 handler 嵌套链
 故意抛出 `std::runtime_error`，但尚未从分派返回。扩栈没有解决该退出。
-下一步须隔离异常处理与分配器边界，并重跑完整 ASan 测试后，才评估修改
-默认 JIT 分配方式。
+改用标量异常的[定向运行](https://github.com/Luna-PL/Luna/actions/runs/38053955045)
+使两个目标各通过 5/5，而[跳过此前嵌套分派](https://github.com/Luna-PL/Luna/actions/runs/38053958973)
+仍在四条 handler 链的 `std::runtime_error` 处失败。最终夹具用单 handler
+验证 `std::exception` 的详细信息，用四条和 64 条链验证 catch-all、异常传播
+及重新分派；嵌套 continuation 检查保留。[默认模式最终定向运行](https://github.com/Luna-PL/Luna/actions/runs/38054325205)
+中两个目标各通过 5/5；[预留模式完整运行](https://github.com/Luna-PL/Luna/actions/runs/38054336440)
+的 canonical JIT 探针和全部 80 项稳定核心测试均通过。这满足 Windows LLVM 22
+默认模式切换前的测试门槛；接下来核对切换后的 Windows CI 和 ASan 运行。
 私有 JIT 另有一组仅测试用的宿主所有权交接入口。状态入口先检查 tag／`i32`
 标量／owner 三个输出地址非空、两两不重叠、对齐且 owner cell 为空，再调用源码
 body。输出预检后，入口还核验有效 parent context 和冻结 Slot 的精确借用 Ref
@@ -1267,14 +1276,15 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    复现：12 次 canonical 中失败 7 次，位于 O0 宿主／插件或 O2 宿主加载。
    直接切换 JITLink 又遇到不同的 `.pdata` `Pointer32` 范围失败。地址日志现已
    确认，每个观察到的 LLVM 22 失败对象中 `.text` 与 `.xdata` 相距约
-   16,896 GiB。现已加入 Windows 专用诊断开关，使用 LLVM 22 自带的
-   `SectionMemoryManager` 预留模式为同一对象分配一块内存；页权限和 unwind
-   注册仍由 LLVM 处理。两组各 12 次 LLVM 22 ASan canonical 对照显示：
-   默认模式有 7 次重定位失败，预留模式 0 次；预留模式没有对象跨越 4 GiB。
-   下一步在预留模式下通过完整 Windows 稳定核心测试集，才考虑修改默认
-   JIT。首次完整 ASan 运行通过 76／80；修正浅克隆与 libc++ 环境后通过
-   78／80，余下两个非 JIT 目标的 sanitizer 进程崩溃仍需默认分配对照、定位
-   并重跑门禁。LLVM 23 的 IR 故障
+   16,896 GiB。LLVM 22 自带的 `SectionMemoryManager` 预留模式为同一对象
+   分配连续内存，页权限和 unwind 注册仍由 LLVM 处理。两组各 12 次 LLVM 22
+   ASan canonical 对照显示：旧模式有 7 次重定位失败，预留模式 0 次；预留
+   模式没有对象跨越 4 GiB。首次完整 ASan 运行通过 76／80；修正环境后通过
+   78／80。定向探针把两个非 JIT 测试故障分别定位为插桩深层 codec 测试的
+   栈溢出及 Fragment 夹具的异常对象退出。仅测试用修正后，预留模式的
+   canonical 探针和完整 80／80 稳定核心测试均通过。Windows LLVM 22 JIT
+   现默认使用预留模式，保留旧模式诊断开关；下一步核对切换后的 Windows CI
+   与默认 ASan 路径，再关闭此重定位任务。LLVM 23 的 IR 故障
    属于独立的编译器迁移，不能用来证明较新版 JIT 已修复这项重定位问题。
 2. **冻结可发布的宿主边界。** 明确带版本的 Ref 入口 carrier、返回 carrier／状态、
    精确 Slot／Contract 校验、借用寿命、所有权提交点及失败清理。现有私有 wrapper
