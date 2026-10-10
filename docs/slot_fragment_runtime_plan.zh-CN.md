@@ -739,6 +739,13 @@ JITLink。ASAN canonical 的一次运行在更早的 compiled-host 夹具链接�
 `.pdata` 到 `.text` 超出 `Pointer32` fixup 范围。该实验改动已撤回；默认
 RuntimeDyld 构建随后通过同一 canonical 测试。因此直接切换此 JITLink 配置
 不能作为已验证的间歇性 RuntimeDyld 故障修复。
+2026-10-10 的另一次 Windows LLVM 23 CI 试验虽完成编译，但 Fragment 成本探针的
+LLVM IR 校验失败：包括 `static_discard` 在内的多个生成函数含无终结指令的 block。
+该实验已撤回。Windows CI 现使用 MSYS2 带版本的 LLVM 22；普通构建、JIT/AOT
+边界和 80 项稳定核心测试通过。这不是 Windows ASAN 重跑，也没有解决 LLVM 20
+RuntimeDyld 的重定位故障。
+手动触发的 [Windows JIT relocation probe](../.github/workflows/windows-jit-relocation.yml) 在 LLVM 22 上只构建 ASAN canonical JIT
+目标，并保留每次运行的阶段日志；其结果属于诊断证据，不能替代完整 CI 门禁。
 私有 JIT 另有一组仅测试用的宿主所有权交接入口。状态入口先检查 tag／`i32`
 标量／owner 三个输出地址非空、两两不重叠、对齐且 owner cell 为空，再调用源码
 body。输出预检后，入口还核验有效 parent context 和冻结 Slot 的精确借用 Ref
@@ -1124,7 +1131,7 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
 须进入封闭的导出 metadata；随后一起扩展 v2 profile、规范化哈希、loader 校验
 和固定的 Runtime lookup，同时让通用 v1 行保持无类型化入口语义。
 
-### 下一步源码 Ref／apply 完成门（更新于 2026-10-08）
+### 下一步源码 Ref／apply 完成门（更新于 2026-10-10）
 
 以下是剩余源码功能的建议实施顺序，不是公开 ABI 决议或稳定版发布批准：
 
@@ -1195,8 +1202,9 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    Ref owner Drop 之前，按内到外恰好一次释放有效 context；其余路径继续拒绝。
    独立捕获 Windows LLVM 20.1.8 RuntimeDyld 间歇性 COFF 重定位失败所对应的
    精确 JIT 调用。直接切换 JITLink 又遇到不同的 `.pdata` `Pointer32` 范围失败；
-   下一步在隔离构建中验证保序 section allocator 或较新版 LLVM，重复 ASAN
-   测试后再将 sanitizer 结果视为稳定证据。
+   下一步在 LLVM 20 或 22 的隔离构建中验证保序 section allocator，用手动重定位
+   探针记录具体失败的 JIT 物化调用，再重复 Windows ASAN 测试。LLVM 23 的 IR 故障
+   属于独立的编译器迁移，不能用来证明较新版 JIT 已修复这项重定位问题。
 2. **冻结可发布的宿主边界。** 明确带版本的 Ref 入口 carrier、返回 carrier／状态、
    精确 Slot／Contract 校验、借用寿命、所有权提交点及失败清理。现有私有 wrapper
    与 opaque 内部类型只是验证证据，不是公开契约。最小候选是一个同步共享借用 Ref

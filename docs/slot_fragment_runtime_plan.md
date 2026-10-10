@@ -968,6 +968,15 @@ compiled-host fixture: `.pdata` to `.text` exceeded a `Pointer32` fixup range.
 The trial was reverted; the default RuntimeDyld build then passed the same
 canonical test. Directly switching to this JITLink configuration is therefore
 not a validated fix for the intermittent RuntimeDyld failure.
+On 2026-10-10, a separate LLVM 23 Windows CI trial compiled but its Fragment
+cost probe failed LLVM IR verification: several generated functions, including
+`static_discard`, had blocks without terminators. That trial was reverted.
+Windows CI now uses MSYS2's versioned LLVM 22 toolchain; its ordinary build,
+JIT/AOT boundaries and 80 stable-core tests pass. This is not a Windows ASAN
+rerun and does not resolve the LLVM 20 RuntimeDyld relocation failure.
+The manually dispatched [Windows JIT relocation probe](../.github/workflows/windows-jit-relocation.yml) builds only the
+sanitized canonical JIT target on LLVM 22 and retains each run's phase trace;
+its result is diagnostic evidence, not a replacement for the full CI gate.
 The private JIT now also has a separate host-transfer experiment for admitted
 resource Result shapes. Its status entry checks nonnull, pairwise disjoint and
 aligned tag, `i32` scalar and owner output cells and requires an empty owner
@@ -1486,7 +1495,7 @@ exported source function. Its effect and Ref target must enter sealed export
 metadata. Then extend the v2 profile, canonical hashing, loader validation
 and pinned Runtime lookup together, while keeping generic v1 rows untyped.
 
-### Next source Ref/apply gates (updated 2026-10-08)
+### Next source Ref/apply gates (updated 2026-10-10)
 
 This is the proposed implementation order for the remaining source feature,
 not a public ABI decision or stable-release approval:
@@ -1584,9 +1593,11 @@ not a public ABI decision or stable-release approval:
    borrowed Ref owner is dropped. Keep unsupported paths rejected meanwhile.
    Independently capture the exact JIT call for the intermittent Windows LLVM
    20.1.8 RuntimeDyld COFF relocation failure. The direct JITLink trial hit a
-   different `.pdata` `Pointer32` range failure; next test an ordered-section
-   allocator or newer LLVM in an isolated build, then repeat ASAN runs before
-   treating sanitizer results as stable evidence.
+   different `.pdata` `Pointer32` range failure. Next isolate an ordered-section
+   allocator with LLVM 20 or 22, use the manual relocation probe to record the
+   exact failing JIT materialization, and repeat Windows ASAN runs. The LLVM 23
+   IR failure is a separate compiler migration, not evidence that a newer JIT
+   fixes this relocation.
 2. **Freeze a publishable host boundary.** Specify a versioned Ref ingress
    carrier, return carrier/status, exact Slot/Contract validation, borrowed
    lifetime, ownership commit point and failure cleanup. Private wrappers and

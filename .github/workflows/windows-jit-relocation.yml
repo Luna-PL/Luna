@@ -1,0 +1,88 @@
+name: Windows JIT relocation probe
+
+on:
+  workflow_dispatch:
+    inputs:
+      iterations:
+        description: Number of sanitized canonical JIT runs
+        required: true
+        default: '20'
+        type: number
+
+jobs:
+  canonical-asan:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Install UCRT64 LLVM 22 and build tools
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          path-type: inherit
+          install: >-
+            mingw-w64-ucrt-x86_64-cmake
+            mingw-w64-ucrt-x86_64-ninja
+            mingw-w64-ucrt-x86_64-llvm22
+            mingw-w64-ucrt-x86_64-clang22
+            mingw-w64-ucrt-x86_64-zstd
+
+      - name: Configure sanitized canonical JIT target
+        run: |
+          export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
+          cmake -S . -B build-jit-asan -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_C_COMPILER=/ucrt64/opt/llvm22/bin/clang.exe \
+            -DCMAKE_CXX_COMPILER=/ucrt64/opt/llvm22/bin/clang++.exe \
+            -DLLVM_DIR=/ucrt64/opt/llvm22/lib/cmake/llvm \
+            -DLUNA_ENABLE_SANITIZERS=ON \
+            -DLUNA_STRICT_WARNINGS=ON
+
+      - name: Build canonical JIT target
+        run: |
+          export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
+          cmake --build build-jit-asan --target moonir-canonical-test --parallel 4
+
+      - name: Repeat sanitized canonical JIT
+        run: |
+          export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
+          export LUNA_CXX=/ucrt64/opt/llvm22/bin/clang++.exe
+          export ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0
+          export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+          count='${{ inputs.iterations }}'
+          if ! [[ "$count" =~ ^[0-9]+$ ]] || (( count < 1 || count > 100 )); then
+            echo "iterations must be between 1 and 100" >&2
+            exit 1
+          fi
+          mkdir -p build-jit-asan/relocation-probe
+          {
+            git rev-parse HEAD
+            clang++ --version | head -n 1
+            llvm-config --version
+            printf 'iterations=%s\n' "$count"
+          } > build-jit-asan/relocation-probe/context.txt
+          for (( run = 1; run <= count; ++run )); do
+            printf -v label '%03d' "$run"
+            log="build-jit-asan/relocation-probe/run-${label}.log"
+            if ./build-jit-asan/moonir-canonical-test.exe > "$log" 2>&1; then
+              printf 'canonical JIT run %d/%d passed\n' "$run" "$count"
+            else
+              printf 'canonical JIT run %d/%d failed; last trace:\n' "$run" "$count" >&2
+              tail -n 100 "$log" >&2
+              exit 1
+            fi
+          done
+
+      - name: Retain JIT relocation probe logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-jit-relocation-attempt${{ github.run_attempt }}
+          path: build-jit-asan/relocation-probe/
+          if-no-files-found: warn
+          retention-days: 14
