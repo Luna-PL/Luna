@@ -6,6 +6,10 @@
 #include "../runtime/RuntimeOwnedResult.h"
 
 #include <llvm/Config/llvm-config.h>
+#ifdef _WIN32
+#include <llvm/ExecutionEngine/Orc/RTDyldObjectLinkingLayer.h>
+#include <llvm/ExecutionEngine/SectionMemoryManager.h>
+#endif
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Support/CodeGen.h>
@@ -16,6 +20,11 @@
 #include <llvm/TargetParser/Host.h>
 
 #include <chrono>
+#include <cstdlib>
+#ifdef _WIN32
+#include <atomic>
+#include <cstdio>
+#endif
 #include <memory>
 #include <mutex>
 #include <utility>
@@ -30,6 +39,49 @@ using LunaJitEntry = int (*)();
 
 #ifdef _WIN32
 void lunaJitMingwMain();
+
+// Diagnostic opt-in: mirror LLJIT's COFF RuntimeDyld layer and record the
+// section addresses supplied by its ordinary SectionMemoryManager.
+class TracedSectionMemoryManager final : public llvm::SectionMemoryManager {
+public:
+    TracedSectionMemoryManager() : objectId(nextId++) {}
+
+    uint8_t* allocateCodeSection(uintptr_t size, unsigned alignment,
+                                 unsigned sectionId,
+                                 llvm::StringRef name) override {
+        auto* address = SectionMemoryManager::allocateCodeSection(
+            size, alignment, sectionId, name);
+        record("code", name, address, size, alignment);
+        return address;
+    }
+
+    uint8_t* allocateDataSection(uintptr_t size, unsigned alignment,
+                                 unsigned sectionId, llvm::StringRef name,
+                                 bool readOnly) override {
+        auto* address = SectionMemoryManager::allocateDataSection(
+            size, alignment, sectionId, name, readOnly);
+        record(readOnly ? "read-only" : "read-write", name, address, size,
+               alignment);
+        return address;
+    }
+
+private:
+    void record(const char* kind, llvm::StringRef name, const void* address,
+                uintptr_t size, unsigned alignment) const {
+        static std::mutex outputMutex;
+        const std::lock_guard<std::mutex> lock(outputMutex);
+        std::fprintf(stderr,
+                     "[jit-section] object=%llu kind=%s name=%.*s address=%p size=%zu align=%u\n",
+                     objectId, kind, static_cast<int>(name.size()),
+                     name.data(), address, static_cast<size_t>(size), alignment);
+        std::fflush(stderr);
+    }
+
+    static std::atomic<unsigned long long> nextId;
+    const unsigned long long objectId;
+};
+
+std::atomic<unsigned long long> TracedSectionMemoryManager::nextId{1};
 #endif
 
 llvm::Expected<std::unique_ptr<llvm::orc::LLJIT>>
@@ -38,7 +90,25 @@ materializeLunaJit(std::unique_ptr<llvm::Module>& module,
     using namespace llvm;
     using namespace llvm::orc;
 
-    auto jit = LLJITBuilder().create();
+    LLJITBuilder builder;
+#ifdef _WIN32
+    if (std::getenv("LUNA_JIT_SECTION_TRACE")) {
+        builder.setObjectLinkingLayerCreator(
+            [](ExecutionSession& session, auto&&...)
+                -> Expected<std::unique_ptr<ObjectLayer>> {
+                auto memoryManager = [](auto&&...)
+                    -> std::unique_ptr<RuntimeDyld::MemoryManager> {
+                    return std::make_unique<TracedSectionMemoryManager>();
+                };
+                auto layer = std::make_unique<RTDyldObjectLinkingLayer>(
+                    session, std::move(memoryManager));
+                layer->setOverrideObjectFlagsWithResponsibilityFlags(true);
+                layer->setAutoClaimResponsibilityForObjectSymbols(true);
+                return std::unique_ptr<ObjectLayer>(std::move(layer));
+            });
+    }
+#endif
+    auto jit = builder.create();
     if (!jit) return jit.takeError();
 
     SymbolMap runtimeSymbols;

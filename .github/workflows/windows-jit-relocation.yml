@@ -86,6 +86,7 @@ jobs:
           export LIBRARY_PATH="/clang64/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
           export LUNA_CXX=/clang64/opt/llvm22/bin/clang++.exe
           export LUNA_JIT_RELOCATION_TRACE=1
+          export LUNA_JIT_SECTION_TRACE=1
           export ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0
           export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
           count='${{ inputs.iterations }}'
