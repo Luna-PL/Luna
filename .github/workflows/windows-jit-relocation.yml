@@ -55,10 +55,12 @@ jobs:
           cp "$runtime_dir/clang64/bin/libclang_rt.asan_dynamic-x86_64.dll" /clang64/bin/
           test -f "$resource_dir/lib/windows/libclang_rt.asan_dynamic-x86_64.dll.a"
           test -f "$resource_dir/lib/windows/libclang_rt.ubsan_standalone-x86_64.a"
+          test -f /clang64/lib/libunwind.a
 
       - name: Configure sanitized canonical JIT target
         run: |
           export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
+          export LIBRARY_PATH="/clang64/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
           cmake -S . -B build-jit-asan -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=/clang64/opt/llvm22/bin/clang.exe \
@@ -70,11 +72,13 @@ jobs:
       - name: Build canonical JIT target
         run: |
           export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
+          export LIBRARY_PATH="/clang64/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
           cmake --build build-jit-asan --target moonir-canonical-test --parallel 4
 
       - name: Repeat sanitized canonical JIT
         run: |
           export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
+          export LIBRARY_PATH="/clang64/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
           export LUNA_CXX=/clang64/opt/llvm22/bin/clang++.exe
           export ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0
           export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
