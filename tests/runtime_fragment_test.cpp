@@ -4,6 +4,7 @@
 
 #include <array>
 #include <atomic>
+#include <cstdio>
 #include <cstdlib>
 #include <iostream>
 #include <memory>
@@ -15,6 +16,14 @@
 #include <vector>
 
 namespace {
+
+void asanProbePhase(const char* phase) {
+    if (!std::getenv("LUNA_ASAN_PROBE_PHASES")) return;
+    std::fputs("asan-probe:runtime-fragment:", stderr);
+    std::fputs(phase, stderr);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
+}
 
 // Test-only ordinary C++ allocation counter, enabled only across synchronous
 // dispatch. It is not a timer or a claim about plugin/OS/aligned allocations.
@@ -1577,6 +1586,7 @@ int testCleanupReentry(const LunaRuntimeFragmentDescriptorV1& original) {
 } // namespace
 
 int main() {
+    asanProbePhase("main-entry");
     LunaRuntimeFragmentDescriptorV1 descriptor = {
         LUNA_RUNTIME_FRAGMENT_MAGIC_V1,
         LUNA_RUNTIME_FRAGMENT_ABI_V1,
@@ -1601,6 +1611,7 @@ int main() {
     std::string error;
     if (!luna::runtime::validateRuntimeFragmentDescriptor(descriptor, error))
         return fail("valid runtime Fragment descriptor was rejected");
+    asanProbePhase("descriptor");
 
     auto malformed = descriptor;
     malformed.flags = LUNA_RUNTIME_FRAGMENT_CAPTURE_FREE_V1;
@@ -2479,10 +2490,18 @@ int main() {
             return fail("local Fragment override mutated its base BindingSet");
     }
 
+    asanProbePhase("main-body-exit");
     if (testScopedActivation(descriptor) != 0) return 1;
+    asanProbePhase("scoped-activation");
     if (testSnapshotOverrides(descriptor) != 0) return 1;
+    asanProbePhase("snapshot-overrides");
     if (testRefHandleBridge(descriptor) != 0) return 1;
+    asanProbePhase("ref-handle-bridge");
     if (testDispatchLifetime(descriptor) != 0) return 1;
+    asanProbePhase("dispatch-lifetime");
     if (testFactoryLifetime(descriptor) != 0) return 1;
-    return testCleanupReentry(descriptor);
+    asanProbePhase("factory-lifetime");
+    const int result = testCleanupReentry(descriptor);
+    asanProbePhase("main-exit");
+    return result;
 }

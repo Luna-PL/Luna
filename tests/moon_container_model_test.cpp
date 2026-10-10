@@ -3,6 +3,8 @@
 #include "core/TypeRelations.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <cstdlib>
 #include <cstdint>
 #include <fstream>
 #include <iostream>
@@ -11,6 +13,14 @@
 #include <vector>
 
 namespace {
+
+void asanProbePhase(const char* phase) {
+    if (!std::getenv("LUNA_ASAN_PROBE_PHASES")) return;
+    std::fputs("asan-probe:moon-container-model:", stderr);
+    std::fputs(phase, stderr);
+    std::fputc('\n', stderr);
+    std::fflush(stderr);
+}
 
 static_assert(static_cast<uint32_t>(moon::CodeOperationOpcode::Let) == 1);
 static_assert(static_cast<uint32_t>(moon::CodeOperationOpcode::Await) == 5);
@@ -100,6 +110,7 @@ std::optional<size_t> firstOperationOpcodeOffset(
 } // namespace
 
 int main(int argc, char* argv[]) {
+    asanProbePhase("main-entry");
     std::string error;
 
     moon::LetStmt canonicalLet;
@@ -153,6 +164,7 @@ int main(int argc, char* argv[]) {
     if (moon::ContainerModelCodec::decodeManifest(
             malformedManifest, decodedManifest, error))
         return fail("manifest decoder accepted unknown feature flags");
+    asanProbePhase("manifest");
     malformedManifest = manifestBytes;
     writeU32(malformedManifest, malformedManifest.size() - 4, 1u << 1);
     if (moon::ContainerModelCodec::decodeManifest(
@@ -830,5 +842,6 @@ int main(int argc, char* argv[]) {
                     " [code.bin module.moon]]]]");
     }
 
+    asanProbePhase("main-exit");
     return 0;
 }
