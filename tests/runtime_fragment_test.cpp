@@ -869,6 +869,7 @@ int32_t scopedActivationBase(void* context) {
 }
 
 int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
+    asanProbePhase("scoped-entry");
     // Exercise nothrow allocation with both ordinary release (the STL path)
     // and nothrow cleanup release, even on libraries whose sort uses no buffer.
     dispatchAllocations = 0;
@@ -885,6 +886,7 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
     ::operator delete(scalarCleanup, std::nothrow);
     ::operator delete[](arrayCleanup, std::nothrow);
     if (!counted) return fail("ordinary nothrow allocation counter is not paired or counted");
+    asanProbePhase("scoped-allocation-family");
 
     // Deliberately exceed typical SSO capacities; short names would hide the
     // former per-handler identity/carrier copies from allocation counting.
@@ -910,6 +912,7 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
     Runtime::PinnedBinding binding;
     if (!stageFragment(runtime, std::make_shared<int>(1), &descriptor, binding, error))
         return fail("scoped activation fixture did not stage");
+    asanProbePhase("scoped-staged");
     const luna::runtime::RuntimeSlotRequirement slot{slotId, contractId};
     int payload = 42;
     const luna::runtime::RuntimeFragmentArguments arguments{
@@ -928,6 +931,7 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
         return fail("scoped activation None fixture did not dispatch");
     size_t oneAllocations = 0;
     for (unsigned chainLength : {1u, 4u, 64u}) {
+        if (chainLength == 64) asanProbePhase("scoped-chain-64");
         std::vector<luna::runtime::RuntimeFragmentRef> references;
         for (unsigned index = 0; index < chainLength; ++index) {
             luna::runtime::RuntimeFragmentRef reference;
@@ -955,6 +959,7 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
             probe.entered != chainLength || probe.returned != chainLength ||
             probe.baseCalls != 1)
             return fail("scoped activation lost arguments or distinct live state");
+        if (chainLength == 64) asanProbePhase("scoped-dispatch-64");
         if (chainLength == 1) oneAllocations = dispatchAllocations;
         else if (dispatchAllocations != oneAllocations)
             return fail("synchronous activation allocations grew with chain length");
@@ -991,6 +996,7 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
                 (outcome == luna::runtime::RuntimeFragmentDispatchOutcome::ContinuationEscaped) !=
                     (control == LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1))
                 return fail("nested scoped activation state or escape was not isolated");
+            if (chainLength == 64) asanProbePhase("scoped-nested-64");
         }
         probe.nest = false;
         probe.control = LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1;
@@ -1007,6 +1013,7 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
         if (threw || !diagnosed || !recovered || !error.empty() || !probe.valid || probe.depth != 0)
             return fail("scoped activation handler failure poisoned a fresh dispatch");
     }
+    asanProbePhase("scoped-chains-exit");
 
     // Public activation still owns identity/carrier values across caller
     // mutation and moves; only payload storage keeps the host lifetime duty.
@@ -1034,6 +1041,7 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
             LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1 ||
         !assigned.resumed() || resumes != 1)
         return fail("public activation stopped owning identity/carrier values");
+    asanProbePhase("scoped-exit");
     return 0;
 }
 

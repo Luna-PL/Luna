@@ -333,6 +333,7 @@ int main(int argc, char* argv[]) {
     exported.abi = "C";
     exported.location = handler->location;
     source.exports.push_back(exported);
+    asanProbePhase("source-built");
 
     std::vector<uint8_t> typeBytes;
     if (!moon::ContainerModelCodec::encodeTypes(source, typeBytes, error))
@@ -343,6 +344,7 @@ int main(int argc, char* argv[]) {
     decoded.features = decodedManifest.features;
     if (!moon::ContainerModelCodec::decodeTypes(typeBytes, decoded, error))
         return fail(error);
+    asanProbePhase("types-decoded");
     if (!decoded.typeTableSealed ||
         decoded.typeTable.size() != source.typeTable.size())
         return fail("type decoder did not construct a sealed independent table");
@@ -448,6 +450,7 @@ int main(int argc, char* argv[]) {
     decoded.rebuildIndexes();
     if (!verifier.verify(decoded))
         return fail("interface verifier rejected the restored local export");
+    asanProbePhase("interfaces-verified");
 
     std::vector<uint8_t> codeBytes;
     if (!moon::ContainerModelCodec::encodeCode(
@@ -457,6 +460,7 @@ int main(int argc, char* argv[]) {
         return fail(error);
     if (decoded.declarations.size() != 1)
         return fail("code decoder lost its function row");
+    asanProbePhase("code-decoded");
     const auto* decodedFunction = dynamic_cast<const moon::FunctionDecl*>(
         decoded.declarations[0].get());
     if (!decodedFunction || !decodedFunction->controlFlow ||
@@ -598,6 +602,7 @@ int main(int argc, char* argv[]) {
         loadedModule.name != source.name ||
         loadedModule.declarations.size() != 1)
         return fail("whole-container decode lost manifest or executable state");
+    asanProbePhase("container-decoded");
     moon::ContainerManifest mismatchedTargetManifest;
     mismatchedTargetManifest.packageId = "untouched.target";
     moon::Module mismatchedTargetModule;
@@ -692,6 +697,7 @@ int main(int argc, char* argv[]) {
     }
     if (authenticatedMutationCount < 100)
         return fail("payload mutation suite did not reach its minimum case count");
+    asanProbePhase("mutations-authenticated");
 
     auto forgedSections = parsedContainer.sections();
     auto* sourceGraph = dynamic_cast<moon::FunctionDecl*>(
@@ -725,11 +731,13 @@ int main(int argc, char* argv[]) {
         source.declarations[0].get());
     if (!sourceFunction || !sourceFunction->controlFlow)
         return fail("source function disappeared before nesting test");
+    asanProbePhase("nesting-test-entry");
     sourceFunction->typeParams.push_back("T");
     if (moon::ContainerModelCodec::encodeContainer(
             containerManifest, source, canonicalContainerBytes, error) ||
         error.find("generic") == std::string::npos)
         return fail("whole-container encoder accepted a generic recipe");
+    asanProbePhase("generic-rejected");
     sourceFunction->typeParams.clear();
     auto& sourceTerminator =
         sourceFunction->controlFlow->blocks[0].terminator;
@@ -745,9 +753,11 @@ int main(int argc, char* argv[]) {
         nested = std::move(unary);
     }
     sourceTerminator.operand = std::move(nested);
+    asanProbePhase("nested-built");
     if (!moon::ContainerModelCodec::encodeCode(
             source, canonicalCodeBytes, error))
         return fail("code encoder rejected exactly 256 expression levels: " + error);
+    asanProbePhase("nesting-limit-accepted");
     auto tooDeep = std::make_unique<moon::UnaryExpr>();
     tooDeep->op = moon::Operator::Negate;
     tooDeep->type = i32Ref;
@@ -757,7 +767,9 @@ int main(int argc, char* argv[]) {
             source, canonicalCodeBytes, error) ||
         error.find("nesting") == std::string::npos)
         return fail("code encoder accepted 257 expression levels");
+    asanProbePhase("nesting-limit-rejected");
     sourceTerminator.operand = std::move(originalReturn);
+    asanProbePhase("nested-released");
 
     auto truncatedExports = exportBytes;
     truncatedExports.pop_back();

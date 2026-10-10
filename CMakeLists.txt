@@ -716,6 +716,13 @@ if(LUNA_ENABLE_SANITIZERS)
     target_link_options(moon-container-model-test PRIVATE
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
+    if(WIN32 AND MINGW)
+        # Deep codec and nested dispatch fixtures need more than the default
+        # PE stack reserve when every recursive frame has Debug ASAN redzones.
+        foreach(target IN ITEMS moon-container-model-test runtime-fragment-test)
+            target_link_options(${target} PRIVATE -Wl,--stack,8388608)
+        endforeach()
+    endif()
     target_link_options(moon-runtime-test PRIVATE
         -fsanitize=address,undefined
         -fno-omit-frame-pointer)
