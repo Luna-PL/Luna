@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Added a Windows-only LLVM 22 diagnostic opt-in for contiguous RuntimeDyld
+  section allocation and a reserved-mode choice in the sanitized JIT probe.
+  The default JIT path remains unchanged pending probe results.
 - Kept Windows CI and release builds on MSYS2's versioned LLVM 22 UCRT64
   toolchain after the unversioned package advanced to LLVM 23. The project
   continues to require LLVM 20 through 22.

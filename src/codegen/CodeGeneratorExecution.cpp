@@ -14,6 +14,7 @@
 #include <llvm/MC/TargetRegistry.h>
 #include <llvm/Support/CodeGen.h>
 #include <llvm/Support/Compiler.h>
+#include <llvm/Support/Error.h>
 #include <llvm/Support/FileSystem.h>
 #include <llvm/Support/raw_ostream.h>
 #include <llvm/Target/TargetMachine.h>
@@ -40,11 +41,17 @@ using LunaJitEntry = int (*)();
 #ifdef _WIN32
 void lunaJitMingwMain();
 
-// Diagnostic opt-in: mirror LLJIT's COFF RuntimeDyld layer and record the
-// section addresses supplied by its ordinary SectionMemoryManager.
+// Diagnostic opt-ins: mirror LLJIT's COFF RuntimeDyld layer and optionally
+// reserve one contiguous allocation per object with LLVM 22's memory manager.
 class TracedSectionMemoryManager final : public llvm::SectionMemoryManager {
 public:
-    TracedSectionMemoryManager() : objectId(nextId++) {}
+    TracedSectionMemoryManager(bool trace, bool reserve)
+#if LLVM_VERSION_MAJOR >= 22
+        : SectionMemoryManager(nullptr, reserve), traceEnabled(trace),
+          objectId(nextId++) {}
+#else
+        : traceEnabled(trace), objectId(nextId++) { (void)reserve; }
+#endif
 
     uint8_t* allocateCodeSection(uintptr_t size, unsigned alignment,
                                  unsigned sectionId,
@@ -68,6 +75,7 @@ public:
 private:
     void record(const char* kind, llvm::StringRef name, const void* address,
                 uintptr_t size, unsigned alignment) const {
+        if (!traceEnabled) return;
         static std::mutex outputMutex;
         const std::lock_guard<std::mutex> lock(outputMutex);
         std::fprintf(stderr,
@@ -78,6 +86,7 @@ private:
     }
 
     static std::atomic<unsigned long long> nextId;
+    const bool traceEnabled;
     const unsigned long long objectId;
 };
 
@@ -92,13 +101,24 @@ materializeLunaJit(std::unique_ptr<llvm::Module>& module,
 
     LLJITBuilder builder;
 #ifdef _WIN32
-    if (std::getenv("LUNA_JIT_SECTION_TRACE")) {
+#if LLVM_VERSION_MAJOR < 22
+    if (std::getenv("LUNA_JIT_RESERVE_SECTIONS")) {
+        return make_error<StringError>(
+            "LUNA_JIT_RESERVE_SECTIONS requires LLVM 22 or newer",
+            inconvertibleErrorCode());
+    }
+#endif
+    const bool traceSections = std::getenv("LUNA_JIT_SECTION_TRACE") != nullptr;
+    const bool reserveSections =
+        std::getenv("LUNA_JIT_RESERVE_SECTIONS") != nullptr;
+    if (traceSections || reserveSections) {
         builder.setObjectLinkingLayerCreator(
-            [](ExecutionSession& session, auto&&...)
+            [traceSections, reserveSections](ExecutionSession& session, auto&&...)
                 -> Expected<std::unique_ptr<ObjectLayer>> {
-                auto memoryManager = [](auto&&...)
+                auto memoryManager = [traceSections, reserveSections](auto&&...)
                     -> std::unique_ptr<RuntimeDyld::MemoryManager> {
-                    return std::make_unique<TracedSectionMemoryManager>();
+                    return std::make_unique<TracedSectionMemoryManager>(
+                        traceSections, reserveSections);
                 };
                 auto layer = std::make_unique<RTDyldObjectLinkingLayer>(
                     session, std::move(memoryManager));

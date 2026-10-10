@@ -8,6 +8,14 @@ on:
         required: true
         default: '20'
         type: number
+      allocation_mode:
+        description: RuntimeDyld section allocation mode
+        required: true
+        default: default
+        type: choice
+        options:
+          - default
+          - reserved
 
 jobs:
   canonical-asan:
@@ -89,6 +97,12 @@ jobs:
           export LUNA_JIT_SECTION_TRACE=1
           export ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0
           export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
+          mode='${{ inputs.allocation_mode }}'
+          case "$mode" in
+            default) ;;
+            reserved) export LUNA_JIT_RESERVE_SECTIONS=1 ;;
+            *) echo "allocation_mode must be default or reserved" >&2; exit 1 ;;
+          esac
           count='${{ inputs.iterations }}'
           if ! [[ "$count" =~ ^[0-9]+$ ]] || (( count < 1 || count > 100 )); then
             echo "iterations must be between 1 and 100" >&2
@@ -100,6 +114,7 @@ jobs:
             clang++ --version | head -n 1
             llvm-config --version
             printf 'iterations=%s\n' "$count"
+            printf 'allocation_mode=%s\n' "$mode"
           } > build-jit-asan/relocation-probe/context.txt
           failures=0
           for (( run = 1; run <= count; ++run )); do

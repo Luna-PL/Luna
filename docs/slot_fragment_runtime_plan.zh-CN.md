@@ -771,6 +771,12 @@ section 地址违反此约束。
 16,896 GiB；8 次通过的运行中，同类最大间距不足 0.1 GiB。观察到的失败
 分配超出了重定位器的 32 位 image-base 偏移范围。包装层可能改变分配时序，
 两组探针不能据此推断稳定失败概率。
+LLVM 22 的 `SectionMemoryManager` 提供 `ReserveAlloc` 模式，可为同一对象的
+代码、只读和读写 section 预留一块内存，同时沿用 LLVM 自身的页权限和 EH frame
+处理。现已加入仅限 Windows 的 `LUNA_JIT_RESERVE_SECTIONS=1` 诊断开关；默认
+JIT 未变。手动探针可选择 `reserved` 或 `default`，并继续记录各 section 地址。
+LLVM 20 缺少该接口，会明确拒绝预留开关。尚未取得 LLVM 22 ASan 探针的预留
+模式验证结果。
 私有 JIT 另有一组仅测试用的宿主所有权交接入口。状态入口先检查 tag／`i32`
 标量／owner 三个输出地址非空、两两不重叠、对齐且 owner cell 为空，再调用源码
 body。输出预检后，入口还核验有效 parent context 和冻结 Slot 的精确借用 Ref
@@ -1229,10 +1235,10 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    复现：12 次 canonical 中失败 7 次，位于 O0 宿主／插件或 O2 宿主加载。
    直接切换 JITLink 又遇到不同的 `.pdata` `Pointer32` 范围失败。地址日志现已
    确认，每个观察到的 LLVM 22 失败对象中 `.text` 与 `.xdata` 相距约
-   16,896 GiB。下一步在 Windows 上仅以可选诊断方式验证 RuntimeDyld
-   内存管理器：为同一对象预留连续内存，依次放置代码、只读、读写 section，
-   保证 32 位范围，并正确设置页权限与 unwind 注册。先用同一 12 次 ASan
-   探针和完整 canonical 门禁对照，再考虑修改默认 JIT。LLVM 23 的 IR 故障
+   16,896 GiB。现已加入 Windows 专用诊断开关，使用 LLVM 22 自带的
+   `SectionMemoryManager` 预留模式为同一对象分配一块内存；页权限和 unwind
+   注册仍由 LLVM 处理。下一步对照地址日志及 12 次 ASan canonical 结果，
+   再运行完整 canonical 门禁，然后才考虑修改默认 JIT。LLVM 23 的 IR 故障
    属于独立的编译器迁移，不能用来证明较新版 JIT 已修复这项重定位问题。
 2. **冻结可发布的宿主边界。** 明确带版本的 Ref 入口 carrier、返回 carrier／状态、
    精确 Slot／Contract 校验、借用寿命、所有权提交点及失败清理。现有私有 wrapper

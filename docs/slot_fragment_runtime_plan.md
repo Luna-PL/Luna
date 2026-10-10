@@ -1007,6 +1007,14 @@ about 16,896 GiB apart; the largest such gap in the eight passing runs was
 under 0.1 GiB. The observed failing allocations exceed the resolver's 32-bit
 image-base range. The wrapper may change allocation timing, so the two probe
 series do not establish a stable failure rate.
+LLVM 22 exposes `SectionMemoryManager`'s `ReserveAlloc` mode, which reserves
+one allocation for an object's code, read-only and read-write sections while
+retaining LLVM's own page-protection and EH-frame handling. A Windows-only
+`LUNA_JIT_RESERVE_SECTIONS=1` diagnostic opt-in now selects that mode; the
+ordinary JIT remains unchanged. The manual probe can select `reserved` or
+`default` allocation and still records per-section addresses. LLVM 20 rejects
+the reserve opt-in because it lacks this API. The reserved mode has not yet
+been validated by the LLVM 22 ASAN probe.
 The private JIT now also has a separate host-transfer experiment for admitted
 resource Result shapes. Its status entry checks nonnull, pairwise disjoint and
 aligned tag, `i32` scalar and owner output cells and requires an empty owner
@@ -1626,10 +1634,10 @@ not a public ABI decision or stable-release approval:
    host load. The direct JITLink trial hit a different `.pdata` `Pointer32`
    range failure. Address tracing now confirms that each observed LLVM 22
    failure places `.text` and `.xdata` about 16,896 GiB apart in the same
-   object. Next test a Windows-only, opt-in RuntimeDyld memory manager that
-   reserves one object allocation, places code then read-only then read-write
-   sections within the 32-bit range, and applies page permissions and unwind
-   registration correctly. Compare the same 12-run ASAN probe and full
+   object. A Windows-only diagnostic opt-in now uses LLVM 22's built-in
+   `SectionMemoryManager` reserve mode for one object allocation; LLVM retains
+   page permissions and unwind registration. Next compare its traced addresses
+   and 12-run ASAN canonical result with the default mode, then run the full
    canonical gate before considering a default-JIT change.
    The LLVM 23
    IR failure is a separate compiler migration, not evidence that a newer JIT
