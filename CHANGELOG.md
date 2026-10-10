@@ -7,9 +7,9 @@
   Paired 12-run LLVM 22 ASAN probes passed 12/12 with reserved allocation;
   default allocation failed 7/12 with the known COFF relocation error. The
   manual probe now offers a full sanitized stable-core run. The default JIT
-  path remains unchanged: the first full-suite attempt passed 76/80, with two
-  probe setup failures and two non-JIT sanitizer process crashes still under
-  investigation.
+  path remains unchanged: a follow-up full-suite attempt passed 78/80 after
+  fixing two probe setup gaps, with two non-JIT sanitizer process crashes
+  still under investigation.
 - Kept Windows CI and release builds on MSYS2's versioned LLVM 22 UCRT64
   toolchain after the unversioned package advanced to LLVM 23. The project
   continues to require LLVM 20 through 22.
