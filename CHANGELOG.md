@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Kept Windows CI and release builds on MSYS2's versioned LLVM 22 UCRT64
+  toolchain after the unversioned package advanced to LLVM 23. The project
+  continues to require LLVM 20 through 22.
 - Separated validation-only Native v3 candidate entries from v1 `i32()`
   exports. The loader checks a distinct resolved six-argument symbol inside
   the verified staged image, rejects v1 entry aliases, and provides a read-only

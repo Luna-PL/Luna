@@ -12,14 +12,15 @@ pacman -Syu
 pacman -S --needed \
   mingw-w64-ucrt-x86_64-cmake \
   mingw-w64-ucrt-x86_64-ninja \
-  mingw-w64-ucrt-x86_64-llvm \
-  mingw-w64-ucrt-x86_64-clang
+  mingw-w64-ucrt-x86_64-llvm22 \
+  mingw-w64-ucrt-x86_64-clang22
 
+export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCMAKE_C_COMPILER=/ucrt64/bin/clang.exe \
-  -DCMAKE_CXX_COMPILER=/ucrt64/bin/clang++.exe \
-  -DLLVM_DIR=/ucrt64/lib/cmake/llvm
+  -DCMAKE_C_COMPILER=/ucrt64/opt/llvm22/bin/clang.exe \
+  -DCMAKE_CXX_COMPILER=/ucrt64/opt/llvm22/bin/clang++.exe \
+  -DLLVM_DIR=/ucrt64/opt/llvm22/lib/cmake/llvm
 cmake --build build --parallel
 ctest --test-dir build -LE hardware --output-on-failure
 ```
@@ -42,9 +43,12 @@ not a default CI gate.
 
 Luna accepts LLVM/Clang 20 through 22; LLVM 20 and 22 are the currently tested API
 baselines. Keep `clang++`, `LLVM_DIR`, and the DLLs on `PATH` from the same MSYS2
-environment. An existing **CLANG64** installation is also suitable for local native
-development builds by replacing `/ucrt64` with `/clang64` in the commands above. Do not
-mix an MSYS2 LLVM package with MSVC object files or with a different MSYS2 prefix.
+environment. The versioned LLVM 22 package keeps this toolchain stable when
+MSYS2's unversioned LLVM package advances to a newer major. An existing
+**CLANG64** installation with LLVM 20 through 22 is also suitable for local
+native development; select its own matching compiler, CMake package and `PATH`.
+Do not mix an MSYS2 LLVM package with MSVC object files or with a different
+MSYS2 prefix.
 For a recognized flat x86-64 CLANG64 executable toolchain, Luna bypasses the
 redundant clang driver subprocess and streams the companion lld output through
 its integrity hasher. Other layouts and shared-library links retain the normal

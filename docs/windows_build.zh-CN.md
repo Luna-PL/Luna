@@ -12,14 +12,15 @@ pacman -Syu
 pacman -S --needed \
   mingw-w64-ucrt-x86_64-cmake \
   mingw-w64-ucrt-x86_64-ninja \
-  mingw-w64-ucrt-x86_64-llvm \
-  mingw-w64-ucrt-x86_64-clang
+  mingw-w64-ucrt-x86_64-llvm22 \
+  mingw-w64-ucrt-x86_64-clang22
 
+export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
 cmake -S . -B build -G Ninja \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCMAKE_C_COMPILER=/ucrt64/bin/clang.exe \
-  -DCMAKE_CXX_COMPILER=/ucrt64/bin/clang++.exe \
-  -DLLVM_DIR=/ucrt64/lib/cmake/llvm
+  -DCMAKE_C_COMPILER=/ucrt64/opt/llvm22/bin/clang.exe \
+  -DCMAKE_CXX_COMPILER=/ucrt64/opt/llvm22/bin/clang++.exe \
+  -DLLVM_DIR=/ucrt64/opt/llvm22/lib/cmake/llvm
 cmake --build build --parallel
 ctest --test-dir build -LE hardware --output-on-failure
 ```
@@ -40,8 +41,9 @@ Alpha 的 Windows CI 只验证 CPU、JIT/AOT、FFI、插件 ABI 和模拟器回�
 
 Luna 接受 LLVM/Clang 20 至 22；目前经过兼容验证的 API 基线为 LLVM 20
 和 22。`clang++`、`LLVM_DIR` 与 `PATH` 中的 DLL 必须来自同一个 MSYS2 环境。
-已有 **CLANG64** 环境也可以用于本机原生开发构建，只需把上述命令中的
-`/ucrt64` 替换为 `/clang64`。不要把 MSYS2 LLVM 包与 MSVC 目标文件或另一个
+带版本的 LLVM 22 包可在 MSYS2 无版本包升级后保持工具链稳定。已有 LLVM 20
+至 22 的 **CLANG64** 环境也可用于本机原生开发，但编译器、CMake 包与 `PATH`
+须分别选用同一环境中的对应路径。不要把 MSYS2 LLVM 包与 MSVC 目标文件或另一个
 MSYS2 前缀混用。
 对于可识别的扁平 x86-64 CLANG64 executable 工具链，Luna 会绕过冗余 clang driver
 子进程，并让配套 lld 的输出流经完整性摘要器；其他布局与 shared-library 链接继续使用

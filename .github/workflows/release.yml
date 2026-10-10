@@ -335,25 +335,26 @@ jobs:
           install: >-
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-llvm
-            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-llvm22
+            mingw-w64-ucrt-x86_64-clang22
 
       - name: Verify version and configure
         run: |
           version="$(cat VERSION)"
           tag="${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}"
           test "$tag" = "v$version"
+          export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
           cmake -S . -B build-release -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_C_COMPILER=/ucrt64/bin/clang.exe \
-            -DCMAKE_CXX_COMPILER=/ucrt64/bin/clang++.exe \
+            -DCMAKE_C_COMPILER=/ucrt64/opt/llvm22/bin/clang.exe \
+            -DCMAKE_CXX_COMPILER=/ucrt64/opt/llvm22/bin/clang++.exe \
             -DLUNA_STRICT_WARNINGS=ON \
-            -DLLVM_DIR=/ucrt64/lib/cmake/llvm
+            -DLLVM_DIR=/ucrt64/opt/llvm22/lib/cmake/llvm
 
       - name: Build and test
         run: |
-          export PATH="/ucrt64/bin:$PATH"
-          export LUNA_CXX=/ucrt64/bin/clang++.exe
+          export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
+          export LUNA_CXX=/ucrt64/opt/llvm22/bin/clang++.exe
           cmake --build build-release --parallel --verbose
           ctest --test-dir build-release -LE hardware --output-on-failure
 
