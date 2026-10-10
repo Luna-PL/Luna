@@ -54,6 +54,14 @@ if(NOT TARGET LLVM)
     endforeach()
     add_library(LLVM INTERFACE)
     target_link_libraries(LLVM INTERFACE ${LUNA_LLVM_NORMALIZED_LIBRARIES})
+    if(LLVM_ENABLE_ZSTD)
+        # Keep zstd after static LLVMSupport even when llvm-config omits or
+        # misorders the import library in its system flags.
+        if(NOT TARGET zstd::libzstd)
+            find_package(zstd REQUIRED CONFIG)
+        endif()
+        target_link_libraries(LLVM INTERFACE zstd::libzstd)
+    endif()
 endif()
 message(STATUS "Luna LLVM compatibility: ${LLVM_PACKAGE_VERSION} (supported majors 20-22)")
 

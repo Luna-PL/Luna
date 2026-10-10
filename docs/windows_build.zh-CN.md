@@ -13,7 +13,8 @@ pacman -S --needed \
   mingw-w64-ucrt-x86_64-cmake \
   mingw-w64-ucrt-x86_64-ninja \
   mingw-w64-ucrt-x86_64-llvm22 \
-  mingw-w64-ucrt-x86_64-clang22
+  mingw-w64-ucrt-x86_64-clang22 \
+  mingw-w64-ucrt-x86_64-zstd
 
 export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
 cmake -S . -B build -G Ninja \
