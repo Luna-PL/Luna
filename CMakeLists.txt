@@ -17,13 +17,33 @@ endif()
 if(NOT TARGET LLVM)
     # Versioned MSYS2 LLVM packages export static component libraries instead
     # of the monolithic target used by most platform packages.
-    llvm_map_components_to_libnames(LUNA_LLVM_COMPONENT_LIBS all)
-    if(NOT LUNA_LLVM_COMPONENT_LIBS)
+    find_program(LUNA_LLVM_CONFIG NAMES llvm-config llvm-config.exe
+        HINTS "${LLVM_TOOLS_BINARY_DIR}" NO_DEFAULT_PATH)
+    if(NOT LUNA_LLVM_CONFIG)
         message(FATAL_ERROR
-            "This LLVM installation exports neither the LLVM target nor component libraries.")
+            "This LLVM installation exports no LLVM target and has no llvm-config in ${LLVM_TOOLS_BINARY_DIR}.")
     endif()
+    execute_process(
+        COMMAND "${LUNA_LLVM_CONFIG}" --version
+        OUTPUT_VARIABLE LUNA_LLVM_CONFIG_VERSION
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE LUNA_LLVM_CONFIG_RESULT)
+    if(NOT LUNA_LLVM_CONFIG_RESULT EQUAL 0 OR
+       NOT LUNA_LLVM_CONFIG_VERSION VERSION_EQUAL LLVM_PACKAGE_VERSION)
+        message(FATAL_ERROR
+            "llvm-config (${LUNA_LLVM_CONFIG_VERSION}) does not match LLVM ${LLVM_PACKAGE_VERSION}.")
+    endif()
+    execute_process(
+        COMMAND "${LUNA_LLVM_CONFIG}" --libfiles --system-libs --link-static all
+        OUTPUT_VARIABLE LUNA_LLVM_LINK_FLAGS
+        OUTPUT_STRIP_TRAILING_WHITESPACE
+        RESULT_VARIABLE LUNA_LLVM_CONFIG_RESULT)
+    if(NOT LUNA_LLVM_CONFIG_RESULT EQUAL 0 OR NOT LUNA_LLVM_LINK_FLAGS)
+        message(FATAL_ERROR "llvm-config could not list LLVM static and system libraries.")
+    endif()
+    separate_arguments(LUNA_LLVM_LINK_LIBRARIES NATIVE_COMMAND "${LUNA_LLVM_LINK_FLAGS}")
     add_library(LLVM INTERFACE)
-    target_link_libraries(LLVM INTERFACE ${LUNA_LLVM_COMPONENT_LIBS})
+    target_link_libraries(LLVM INTERFACE ${LUNA_LLVM_LINK_LIBRARIES})
 endif()
 message(STATUS "Luna LLVM compatibility: ${LLVM_PACKAGE_VERSION} (supported majors 20-22)")
 
