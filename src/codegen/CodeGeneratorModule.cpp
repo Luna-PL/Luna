@@ -34,26 +34,6 @@ using moon::ImplDecl;
 
 namespace {
 
-#if LLVM_VERSION_MAJOR >= 23
-using VerifiedConditionalBranch = llvm::CondBrInst;
-using VerifiedUnconditionalBranch = llvm::UncondBrInst;
-static bool isVerifiedConditionalBranch(const VerifiedConditionalBranch* branch) {
-    return branch != nullptr;
-}
-static bool isVerifiedUnconditionalBranch(const VerifiedUnconditionalBranch* branch) {
-    return branch != nullptr;
-}
-#else
-using VerifiedConditionalBranch = llvm::BranchInst;
-using VerifiedUnconditionalBranch = llvm::BranchInst;
-static bool isVerifiedConditionalBranch(const VerifiedConditionalBranch* branch) {
-    return branch && branch->isConditional();
-}
-static bool isVerifiedUnconditionalBranch(const VerifiedUnconditionalBranch* branch) {
-    return branch && branch->isUnconditional();
-}
-#endif
-
 std::unique_ptr<llvm::TargetMachine> createHostOptimizationTarget(
     llvm::Module& module, LunaOptimizationLevel level, std::string& error) {
     const std::string targetTriple = llvm::sys::getProcessTriple();
@@ -374,15 +354,15 @@ bool dispatchFailureDropsOwners(
             compare->getOperand(0) == &dispatch && value &&
             value->equalsInt(expected);
     };
-    const auto* first = llvm::dyn_cast<VerifiedConditionalBranch>(
+    const auto* first = llvm::dyn_cast<llvm::BranchInst>(
         dispatch.getParent()->getTerminator());
-    if (!isVerifiedConditionalBranch(first) ||
+    if (!first || !first->isConditional() ||
         !matchesStatus(first->getCondition(),
                        LUNA_RUNTIME_FRAGMENT_DISPATCH_SUCCESS_V1))
         return false;
-    const auto* second = llvm::dyn_cast<VerifiedConditionalBranch>(
+    const auto* second = llvm::dyn_cast<llvm::BranchInst>(
         first->getSuccessor(1)->getTerminator());
-    if (!isVerifiedConditionalBranch(second) ||
+    if (!second || !second->isConditional() ||
         !matchesStatus(second->getCondition(),
                        LUNA_RUNTIME_FRAGMENT_DISPATCH_CONTINUATION_ESCAPED_V1))
         return false;
@@ -419,13 +399,13 @@ bool overrideFailureDropsOwners(
     const llvm::CallInst& overrideCall,
     const std::vector<const llvm::Value*>& ownerCells,
     std::unordered_set<const llvm::CallInst*>* accounted = nullptr) {
-    const auto* branch = llvm::dyn_cast<VerifiedConditionalBranch>(
+    const auto* branch = llvm::dyn_cast<llvm::BranchInst>(
         overrideCall.getParent()->getTerminator());
-    const auto* compare = isVerifiedConditionalBranch(branch)
+    const auto* compare = branch && branch->isConditional()
         ? llvm::dyn_cast<llvm::ICmpInst>(branch->getCondition()) : nullptr;
     const auto* success = compare
         ? llvm::dyn_cast<llvm::ConstantInt>(compare->getOperand(1)) : nullptr;
-    if (!isVerifiedConditionalBranch(branch) || !compare || !success ||
+    if (!branch || !branch->isConditional() || !compare || !success ||
         compare->getPredicate() != llvm::CmpInst::ICMP_EQ ||
         compare->getOperand(0) != &overrideCall || !success->isZero())
         return false;
@@ -1642,9 +1622,9 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     accountedContextDrops.insert(contextDrops[dropIndex]);
                 }
                 if (edge) {
-                    const auto* branch = llvm::dyn_cast<VerifiedUnconditionalBranch>(
+                    const auto* branch = llvm::dyn_cast<llvm::BranchInst>(
                         llvmBlock.getTerminator());
-                    if (!isVerifiedUnconditionalBranch(branch) ||
+                    if (!branch || !branch->isUnconditional() ||
                         std::any_of(contextDrops.begin(), contextDrops.end(),
                             [branch](const auto* drop) {
                                 return !drop->comesBefore(branch);
@@ -1741,9 +1721,9 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 accountedContextDrops.insert(contextDrops[dropIndex]);
             }
             if (const auto* edge = edgeExits[index]) {
-                const auto* branch = llvm::dyn_cast<VerifiedUnconditionalBranch>(
+                const auto* branch = llvm::dyn_cast<llvm::BranchInst>(
                     exitBlock->getTerminator());
-                if (!isVerifiedUnconditionalBranch(branch) ||
+                if (!branch || !branch->isUnconditional() ||
                     branch->getSuccessor(0)->getName() !=
                         "cfg." + std::to_string(edge->target.value) ||
                     std::any_of(contextDrops.begin(), contextDrops.end(),

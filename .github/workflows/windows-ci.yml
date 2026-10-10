@@ -26,26 +26,26 @@ jobs:
           install: >-
             mingw-w64-ucrt-x86_64-cmake
             mingw-w64-ucrt-x86_64-ninja
-            mingw-w64-ucrt-x86_64-llvm
-            mingw-w64-ucrt-x86_64-clang
+            mingw-w64-ucrt-x86_64-llvm22
+            mingw-w64-ucrt-x86_64-clang22
 
       - name: Configure
         run: |
           cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-            -DCMAKE_C_COMPILER=/ucrt64/bin/clang.exe \
-            -DCMAKE_CXX_COMPILER=/ucrt64/bin/clang++.exe \
-            -DLLVM_DIR=/ucrt64/lib/cmake/llvm \
+            -DCMAKE_C_COMPILER=/ucrt64/opt/llvm22/bin/clang.exe \
+            -DCMAKE_CXX_COMPILER=/ucrt64/opt/llvm22/bin/clang++.exe \
+            -DLLVM_DIR=/ucrt64/opt/llvm22/lib/cmake/llvm \
             -DLUNA_STRICT_WARNINGS=ON
 
       - name: Build
         run: |
-          export PATH="/ucrt64/bin:$PATH"
+          export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
           cmake --build build --parallel --verbose
 
       - name: Runtime Fragment cost-probe smoke
         run: |
-          export PATH="/ucrt64/bin:$PATH"
+          export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
           cmake --build build --target runtime-fragment-benchmark --parallel
           ./build/runtime-fragment-benchmark.exe 10 4
           ./build/runtime-fragment-benchmark.exe 11 64
@@ -70,7 +70,7 @@ jobs:
 
       - name: Verify archived compiled Fragment bundle
         run: |
-          export PATH="/ucrt64/bin:$PATH"
+          export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
           cmake -Werror=dev -DLUNA_COMPILED_BUNDLE_DIR="$PWD/build/compiled-fragment-series" \
             -DLUNA_COMPILED_BUNDLE_EXPECTED_COMMIT="${{ github.sha }}" \
             -P tests/compiled_fragment_bundle.cmake
@@ -82,7 +82,7 @@ jobs:
 
       - name: Package portable compiled Fragment evidence
         run: |
-          export PATH="/ucrt64/bin:$PATH"
+          export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
           manifest_sha="$(sha256sum build/compiled-fragment-series/manifest.csv | cut -d ' ' -f1)"
           cmake -Werror=dev -DLUNA_COMPILED_EVIDENCE_BUNDLE_DIR="$PWD/build/compiled-fragment-series" \
             -DLUNA_COMPILED_EVIDENCE_OUTPUT_DIR="$PWD/build/compiled-fragment-evidence" \
@@ -111,14 +111,14 @@ jobs:
 
       - name: JIT, AOT, and runtime boundaries
         run: |
-          export PATH="/ucrt64/bin:$PATH"
-          export LUNA_CXX=/ucrt64/bin/clang++.exe
+          export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
+          export LUNA_CXX=/ucrt64/opt/llvm22/bin/clang++.exe
           ctest --test-dir build \
             -R 'jit-aot|jit-runtime-symbols|gpu-target-split|aot-runtime-boundary|moon-cost-boundaries' \
             --output-on-failure
 
       - name: Stable core regression suite
         run: |
-          export PATH="/ucrt64/bin:$PATH"
-          export LUNA_CXX=/ucrt64/bin/clang++.exe
+          export PATH="/ucrt64/opt/llvm22/bin:/ucrt64/bin:$PATH"
+          export LUNA_CXX=/ucrt64/opt/llvm22/bin/clang++.exe
           ctest --test-dir build -LE hardware --output-on-failure

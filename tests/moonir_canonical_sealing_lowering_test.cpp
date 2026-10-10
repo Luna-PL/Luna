@@ -23,22 +23,8 @@
 #include <iostream>
 #include <optional>
 #include <sstream>
-#include <llvm/Config/llvm-config.h>
 #include <llvm/IR/Constants.h>
-#include <llvm/IR/Instructions.h>
 #include <llvm/IR/Verifier.h>
-
-#if LLVM_VERSION_MAJOR >= 23
-using TestedConditionalBranch = llvm::CondBrInst;
-static bool isTestedConditionalBranch(const TestedConditionalBranch* branch) {
-    return branch != nullptr;
-}
-#else
-using TestedConditionalBranch = llvm::BranchInst;
-static bool isTestedConditionalBranch(const TestedConditionalBranch* branch) {
-    return branch && branch->isConditional();
-}
-#endif
 
 static unsigned privateRefJitDropProbeCalls = 0;
 static unsigned privateRefJitConversionDropProbeCalls = 0;
@@ -84,6 +70,11 @@ namespace {
 unsigned privateRefJitExecutions = 0;
 unsigned privateRefJitCompletedResumes = 0;
 int32_t privateRefJitResumeStatus = -1;
+const char* privateRefJitSlotId = nullptr;
+const char* privateRefJitSlotContract = nullptr;
+const char* privateRefJitLayoutId = nullptr;
+uint64_t privateRefJitArgumentsSize = 0;
+uint64_t privateRefJitArgumentsAlignment = 1;
 bool privateRefJitPayloadValid = true;
 std::vector<int32_t> privateRefJitObservedArguments;
 std::vector<unsigned> privateRefJitObservedSources;
@@ -847,6 +838,11 @@ bool exercisePrivateRefApplyJit(
     const auto resumesBefore = privateRefJitCompletedResumes;
     const auto argumentsBefore = privateRefJitObservedArguments.size();
     const auto sourcesBefore = privateRefJitObservedSources.size();
+    privateRefJitSlotId = descriptor.slot_id;
+    privateRefJitSlotContract = descriptor.slot_contract_id;
+    privateRefJitLayoutId = descriptor.slot_arguments_layout_id;
+    privateRefJitArgumentsSize = descriptor.slot_arguments_size;
+    privateRefJitArgumentsAlignment = descriptor.slot_arguments_alignment;
     privateRefJitExpectedSlotIds = {descriptor.slot_id,
         secondDescriptor.slot_id};
     privateRefJitExpectedSlotContracts = {descriptor.slot_contract_id,
@@ -3941,14 +3937,14 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         outputLoad = llvm::dyn_cast<llvm::LoadInst>(
             &*returnOutputCheck->begin());
     auto* returnOutputBranch = returnOutputCheck
-        ? llvm::dyn_cast_or_null<TestedConditionalBranch>(
+        ? llvm::dyn_cast_or_null<llvm::BranchInst>(
               returnOutputCheck->getTerminator()) : nullptr;
     auto* outputEmptyCondition =
-        isTestedConditionalBranch(returnOutputBranch)
+        returnOutputBranch && returnOutputBranch->isConditional()
         ? llvm::dyn_cast<llvm::ICmpInst>(
               returnOutputBranch->getCondition()) : nullptr;
     auto* returnEntryBranch = generatedReturnWrapper
-        ? llvm::dyn_cast_or_null<TestedConditionalBranch>(
+        ? llvm::dyn_cast_or_null<llvm::BranchInst>(
               generatedReturnWrapper->getEntryBlock().getTerminator())
         : nullptr;
     auto* invalidCarrierReturn = invalidCarrierBlock
@@ -3969,7 +3965,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                         returnTransfers[1]->getArgOperand(0))
                     returnsBodyHandle = true;
     auto* returnStatusBranch = returnTransfers.size() == 2
-        ? llvm::dyn_cast_or_null<TestedConditionalBranch>(
+        ? llvm::dyn_cast_or_null<llvm::BranchInst>(
               returnTransfers[1]->getParent()->getTerminator()) : nullptr;
     auto* returnFailureReturn = returnFailureDrop
         ? llvm::dyn_cast_or_null<llvm::ReturnInst>(
@@ -3985,7 +3981,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !returnsBodyHandle ||
         returnFailureDrop->getArgOperand(0) !=
             returnTransfers[1]->getArgOperand(0) ||
-        !isTestedConditionalBranch(returnStatusBranch) ||
+        !returnStatusBranch || !returnStatusBranch->isConditional() ||
         returnStatusBranch->getSuccessor(1) !=
             returnFailureDrop->getParent() ||
         !returnFailureReturn ||
@@ -3996,13 +3992,13 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !carriesIdentity(returnTransfers[1], 2, target->contract.value) ||
         !outputLoad || outputLoad->getPointerOperand() !=
             generatedReturnWrapper->getArg(1) ||
-        !isTestedConditionalBranch(returnOutputBranch) ||
+        !returnOutputBranch || !returnOutputBranch->isConditional() ||
         !outputEmptyCondition ||
         outputEmptyCondition->getPredicate() != llvm::CmpInst::ICMP_EQ ||
         outputEmptyCondition->getOperand(0) != outputLoad ||
         !llvm::isa<llvm::ConstantPointerNull>(
             outputEmptyCondition->getOperand(1)) ||
-        !isTestedConditionalBranch(returnEntryBranch) ||
+        !returnEntryBranch || !returnEntryBranch->isConditional() ||
         returnEntryBranch->getSuccessor(0) != returnOutputCheck ||
         returnEntryBranch->getSuccessor(1) != invalidCarrierBlock ||
         returnOutputBranch->getSuccessor(0) !=
@@ -4040,9 +4036,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     const auto gatesBodyOnSuccess = [](const llvm::CallInst* status,
                                        const llvm::BasicBlock* body) {
         if (!status) return false;
-        const auto* branch = llvm::dyn_cast<TestedConditionalBranch>(
+        const auto* branch = llvm::dyn_cast<llvm::BranchInst>(
             status->getParent()->getTerminator());
-        if (!isTestedConditionalBranch(branch) ||
+        if (!branch || !branch->isConditional() ||
             branch->getSuccessor(0) != body) return false;
         const auto* accepted = llvm::dyn_cast<llvm::ICmpInst>(
             branch->getCondition());
