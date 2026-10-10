@@ -230,6 +230,7 @@ Git internals, and ignored generated artifacts are excluded.
 - `.github/workflows/release-evidence.yml`
 - `.github/workflows/release.yml`
 - `.github/workflows/windows-ci.yml`
+- `.github/workflows/windows-jit-relocation.yml`
 - `.gitattributes`
 - `.gitignore`
 - `CHANGELOG.md`

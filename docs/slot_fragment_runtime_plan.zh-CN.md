@@ -744,8 +744,11 @@ LLVM IR 校验失败：包括 `static_discard` 在内的多个生成函数含无
 该实验已撤回。Windows CI 现使用 MSYS2 带版本的 LLVM 22；普通构建、JIT/AOT
 边界和 80 项稳定核心测试通过。这不是 Windows ASAN 重跑，也没有解决 LLVM 20
 RuntimeDyld 的重定位故障。
-手动触发的 [Windows JIT relocation probe](../.github/workflows/windows-jit-relocation.yml) 在 LLVM 22 上只构建 ASAN canonical JIT
-目标，并保留每次运行的阶段日志；其结果属于诊断证据，不能替代完整 CI 门禁。
+手动触发的 [Windows JIT relocation probe](../.github/workflows/windows-jit-relocation.yml) 使用 CLANG64 LLVM／Clang 22，
+显式检查主版本和 ASan 运行库，只构建 ASan canonical JIT 目标，并保留每次运行的
+阶段日志；其结果属于诊断证据，不能替代完整 CI 门禁。带版本的 UCRT64
+`compiler-rt22` 包缺少 ASan import library，因此首次 UCRT64 探针未能链接，
+也没有执行 JIT 测试。
 私有 JIT 另有一组仅测试用的宿主所有权交接入口。状态入口先检查 tag／`i32`
 标量／owner 三个输出地址非空、两两不重叠、对齐且 owner cell 为空，再调用源码
 body。输出预检后，入口还核验有效 parent context 和冻结 Slot 的精确借用 Ref

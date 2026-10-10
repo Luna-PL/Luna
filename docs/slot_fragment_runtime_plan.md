@@ -974,9 +974,12 @@ cost probe failed LLVM IR verification: several generated functions, including
 Windows CI now uses MSYS2's versioned LLVM 22 toolchain; its ordinary build,
 JIT/AOT boundaries and 80 stable-core tests pass. This is not a Windows ASAN
 rerun and does not resolve the LLVM 20 RuntimeDyld relocation failure.
-The manually dispatched [Windows JIT relocation probe](../.github/workflows/windows-jit-relocation.yml) builds only the
-sanitized canonical JIT target on LLVM 22 and retains each run's phase trace;
-its result is diagnostic evidence, not a replacement for the full CI gate.
+The manually dispatched [Windows JIT relocation probe](../.github/workflows/windows-jit-relocation.yml) uses the
+CLANG64 LLVM/Clang 22 packages with an explicit major-version and ASan-runtime
+check, builds only the sanitized canonical JIT target, and retains each run's
+phase trace. Its result is diagnostic evidence, not a replacement for the full
+CI gate. The versioned UCRT64 `compiler-rt22` package lacks the ASan import
+libraries, so the initial UCRT64 probe could not link and ran no JIT tests.
 The private JIT now also has a separate host-transfer experiment for admitted
 resource Result shapes. Its status entry checks nonnull, pairwise disjoint and
 aligned tag, `i32` scalar and owner output cells and requires an empty owner
