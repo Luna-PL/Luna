@@ -63,11 +63,11 @@ jobs:
         run: |
           export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
           export LIBRARY_PATH="/clang64/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
-          export CPLUS_INCLUDE_PATH="/clang64/include/c++/v1${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
           cmake -S . -B build-jit-asan -G Ninja \
             -DCMAKE_BUILD_TYPE=Debug \
             -DCMAKE_C_COMPILER=/clang64/opt/llvm22/bin/clang.exe \
             -DCMAKE_CXX_COMPILER=/clang64/opt/llvm22/bin/clang++.exe \
+            -DCMAKE_CXX_FLAGS="-isystem /clang64/include/c++/v1" \
             -DLLVM_DIR=/clang64/opt/llvm22/lib/cmake/llvm \
             -DLUNA_ENABLE_SANITIZERS=ON \
             -DLUNA_STRICT_WARNINGS=ON
@@ -76,14 +76,12 @@ jobs:
         run: |
           export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
           export LIBRARY_PATH="/clang64/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
-          export CPLUS_INCLUDE_PATH="/clang64/include/c++/v1${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
           cmake --build build-jit-asan --target moonir-canonical-test --parallel 4
 
       - name: Repeat sanitized canonical JIT
         run: |
           export PATH="/clang64/opt/llvm22/bin:/clang64/bin:$PATH"
           export LIBRARY_PATH="/clang64/lib${LIBRARY_PATH:+:$LIBRARY_PATH}"
-          export CPLUS_INCLUDE_PATH="/clang64/include/c++/v1${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}"
           export LUNA_CXX=/clang64/opt/llvm22/bin/clang++.exe
           export ASAN_OPTIONS=detect_leaks=0:alloc_dealloc_mismatch=0
           export UBSAN_OPTIONS=print_stacktrace=1:halt_on_error=1
