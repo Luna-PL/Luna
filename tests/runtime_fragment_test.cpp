@@ -830,8 +830,10 @@ void executeScopedActivationProbe(void*, void* activation) {
     probe.valid &= probe.matches(activation);
     --probe.depth;
     ++probe.returned;
-    if (probe.throwHandler && probe.depth == probe.throwDepth)
+    if (probe.throwHandler && probe.depth == probe.throwDepth) {
+        asanProbePhase("scoped-handler-throw");
         throw std::runtime_error("scoped activation handler probe");
+    }
     // A failed downstream handler is deliberately ignored here, as native
     // execute has no result channel. Outer dispatch must retain that failure.
     if (!probe.throwHandler) probe.valid &= result == probe.control;
@@ -1017,15 +1019,20 @@ int testScopedActivation(const LunaRuntimeFragmentDescriptorV1& prototype) {
         probe.throwHandler = true;
         probe.throwDepth = chainLength - 1;
         activeScopedActivationProbe = &probe;
+        asanProbePhase("scoped-throw-dispatch-enter");
         const bool threw = bindings.dispatch(
             slot, arguments, scopedActivationBase, &probe, error);
+        asanProbePhase("scoped-throw-dispatch-returned");
         const bool diagnosed = error.find("scoped activation handler probe") != std::string::npos;
         probe.throwHandler = false;
+        asanProbePhase("scoped-recovery-dispatch-enter");
         const bool recovered = bindings.dispatch(
             slot, arguments, scopedActivationBase, &probe, error);
+        asanProbePhase("scoped-recovery-dispatch-returned");
         activeScopedActivationProbe = nullptr;
         if (threw || !diagnosed || !recovered || !error.empty() || !probe.valid || probe.depth != 0)
             return fail("scoped activation handler failure poisoned a fresh dispatch");
+        asanProbePhase("scoped-throw-recovered");
     }
     asanProbePhase("scoped-chains-exit");
 
