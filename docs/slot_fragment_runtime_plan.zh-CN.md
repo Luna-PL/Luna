@@ -795,9 +795,20 @@ ASan 进程段错误和 `luna.runtime-fragment-v1` 的 Windows heap 终止；这
 测试目标均不链接 JIT 分配路径。探针已修正环境并保留完整 CTest 日志。
 随后在原 `d0322b4` 提交的[完整测试复核](https://github.com/Luna-PL/Luna/actions/runs/38040174771)
 中，80 项通过 78 项：两项环境故障均已消失，同样两个非 JIT 进程再次崩溃；
-保留的 CTest 条目没有程序输出或 sanitizer 调用栈。完整 ASan 测试集仍未
-得到通过结果。须先用默认分配对照这两个目标，并定位 Windows LLVM 22
-ASan 进程故障，才能将其视为默认 JIT 的验收门禁。
+保留的 CTest 条目没有程序输出或 sanitizer 调用栈。完整 ASan 测试集当时
+尚未通过，因此在决定默认 JIT 分配方式前须对照默认分配模式。
+随后在 LLVM 22 ASan 的[默认模式定向探针](https://github.com/Luna-PL/Luna/actions/runs/38051716351)
+和[预留模式定向探针](https://github.com/Luna-PL/Luna/actions/runs/38051719812)中，
+两个非 JIT 目标各自均异常退出 5/5；切换 section 分配方式不改变结果。本机
+Clang 20 Debug ASan 复现了容器模型测试编码允许的 256 层表达式时的栈溢出，
+普通 Debug 构建则通过。仅为插桩测试进程预留 8 MiB PE 栈后，保留了
+256/257 层边界检查；[LLVM 22 默认模式定向复核](https://github.com/Luna-PL/Luna/actions/runs/38052588553)
+中容器模型通过 5/5。[预留模式完整测试复核](https://github.com/Luna-PL/Luna/actions/runs/38052592568)
+已通过 79/80，容器模型也通过；仅 `luna.runtime-fragment-v1` 仍以 Windows
+状态 `0xc0000374` 终止。可选阶段日志显示，程序执行到四条 handler 嵌套链
+故意抛出 `std::runtime_error`，但尚未从分派返回。扩栈没有解决该退出。
+下一步须隔离异常处理与分配器边界，并重跑完整 ASan 测试后，才评估修改
+默认 JIT 分配方式。
 私有 JIT 另有一组仅测试用的宿主所有权交接入口。状态入口先检查 tag／`i32`
 标量／owner 三个输出地址非空、两两不重叠、对齐且 owner cell 为空，再调用源码
 body。输出预检后，入口还核验有效 parent context 和冻结 Slot 的精确借用 Ref

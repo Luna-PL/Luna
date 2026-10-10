@@ -9,7 +9,11 @@
   manual probe now offers a full sanitized stable-core run. The default JIT
   path remains unchanged: a follow-up full-suite attempt passed 78/80 after
   fixing two probe setup gaps, with two non-JIT sanitizer process crashes
-  still under investigation.
+  under investigation. Focused default and reserved probes reproduced both
+  crashes independently of JIT allocation. A Windows Debug ASAN test-only
+  stack reserve now lets the 256-level container codec boundary pass; the
+  reserved full suite advanced to 79/80. The remaining Fragment test still
+  terminates in its intentional exception-recovery fixture.
 - Kept Windows CI and release builds on MSYS2's versioned LLVM 22 UCRT64
   toolchain after the unversioned package advanced to LLVM 23. The project
   continues to require LLVM 20 through 22.

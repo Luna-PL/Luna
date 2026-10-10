@@ -1040,9 +1040,24 @@ CTest log is now retained. The [follow-up full-suite run](https://github.com/Lun
 at the former `d0322b4` tip passed 78 of 80 tests: both setup failures were
 resolved, but the same two non-JIT processes crashed. Their retained CTest
 entries contain no program output or sanitizer stack. The full sanitized
-suite remains unproven; compare these two targets under default allocation
-and isolate their Windows LLVM 22 ASAN process failures before treating this
-as a default-JIT gate.
+suite remained unproven, so the two targets required a default-allocation
+comparison before any default-JIT decision.
+The [focused default](https://github.com/Luna-PL/Luna/actions/runs/38051716351)
+and [focused reserved](https://github.com/Luna-PL/Luna/actions/runs/38051719812)
+LLVM 22 ASAN probes each reproduced both non-JIT exits in five direct runs;
+the section allocation choice did not change either result. A matching local
+Windows Clang 20 Debug ASAN build exposed a stack overflow while encoding the
+test's admitted 256-level expression, whereas the ordinary Debug build passed.
+An 8 MiB PE stack reserve for the instrumented test executable preserved the
+256/257-level boundary checks. The [LLVM 22 focused rerun](https://github.com/Luna-PL/Luna/actions/runs/38052588553)
+passed `moon-container-model` 5/5 in default mode. The [reserved full-suite
+rerun](https://github.com/Luna-PL/Luna/actions/runs/38052592568) passed 79/80,
+including the container model; `luna.runtime-fragment-v1` still terminated
+with Windows status `0xc0000374`. Its opt-in phase trace reaches the nested
+four-handler chain's deliberate `std::runtime_error` throw and stops before
+the dispatch returns. The stack reserve did not resolve that exit. Isolate
+the exception/allocator boundary, then rerun the full sanitized suite before
+changing the default JIT allocation mode.
 The private JIT now also has a separate host-transfer experiment for admitted
 resource Result shapes. Its status entry checks nonnull, pairwise disjoint and
 aligned tag, `i32` scalar and owner output cells and requires an empty owner
