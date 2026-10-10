@@ -989,8 +989,16 @@ passed its first canonical run and failed its second with the same
 `IMAGE_REL_AMD64_ADDR32NB` ordered-section-layout error. The retained log has no
 canonical phase marker before the failure, placing it in the initial compiled
 Fragment workload check, but it does not identify the exact ORC materialization.
-The probe now emits opt-in profile/loading/lookup traces and completes all
-requested repetitions so the next run can locate the boundary and count failures.
+The subsequent [12-run LLVM 22 probe](https://github.com/Luna-PL/Luna/actions/runs/38033509074)
+at commit `975a1ba` recorded 5 passes and 7 failures with the same relocation
+message. Its opt-in traces place one failure in O0 host load, four in O0 plugin
+load, and two in O2 host load, all in the compiled Fragment workload before
+the first canonical phase marker. This is one diagnostic series, not a
+measured failure probability. LLVM 22's [COFF resolver](https://github.com/llvm/llvm-project/blob/llvmorg-22.1.8/llvm/lib/ExecutionEngine/RuntimeDyld/Targets/RuntimeDyldCOFFX86_64.h#L101-L110)
+requires each `ADDR32NB` target to lie within the 32-bit image-base offset and
+notes that the memory manager must order code, read-only and read-write
+sections. The traces identify the failing load boundary but do not yet prove
+which section addresses violate that constraint.
 The private JIT now also has a separate host-transfer experiment for admitted
 resource Result shapes. Its status entry checks nonnull, pairwise disjoint and
 aligned tag, `i32` scalar and owner output cells and requires an empty owner
@@ -1605,11 +1613,14 @@ not a public ABI decision or stable-release approval:
    Every admitted exit must release contexts in
    inner-to-outer order exactly once, after apply-local cleanup and before a
    borrowed Ref owner is dropped. Keep unsupported paths rejected meanwhile.
-   Independently capture the exact JIT call for the intermittent Windows LLVM
-   20.1.8 RuntimeDyld COFF relocation failure. The direct JITLink trial hit a
-   different `.pdata` `Pointer32` range failure. Next isolate an ordered-section
-   allocator with LLVM 20 or 22, use the manual relocation probe to record the
-   exact failing JIT materialization, and repeat Windows ASAN runs. The LLVM 23
+   The Windows LLVM 20.1.8 RuntimeDyld COFF relocation failure now also
+   reproduces on LLVM 22 ASAN: 7 of 12 canonical runs, at O0 host/plugin or O2
+   host load. The direct JITLink trial hit a different `.pdata` `Pointer32`
+   range failure. Next capture section allocation addresses at those load
+   boundaries, then test an isolated ordered-section RuntimeDyld memory
+   manager on LLVM 20 or 22 against the same 12-run manual probe. Keep it
+   outside the default JIT until the relocation and full canonical gate pass.
+   The LLVM 23
    IR failure is a separate compiler migration, not evidence that a newer JIT
    fixes this relocation.
 2. **Freeze a publishable host boundary.** Specify a versioned Ref ingress

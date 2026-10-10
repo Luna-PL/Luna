@@ -756,7 +756,15 @@ ASan／UBSan 库。它只构建 ASan canonical JIT 目标，并保留每次运�
 第 1 次 canonical 运行通过，第 2 次因同一条 `IMAGE_REL_AMD64_ADDR32NB`
 保序 section 布局错误失败。保留日志在首个 canonical 阶段标记前中止，定位到起始的
 compiled Fragment 工作负载检查，但尚未锁定具体 ORC 物化调用。探针现加入可选的
-profile／加载／查找阶段日志，并完成全部指定次数，以在下次运行定位边界和计数。
+profile／加载／查找阶段日志，并完成全部指定次数。
+随后在提交 `975a1ba` 的 [12 次 LLVM 22 探针](https://github.com/Luna-PL/Luna/actions/runs/38033509074)
+中，5 次通过、7 次以同一重定位错误失败。可选阶段日志把失败分别定位到 O0
+宿主加载 1 次、O0 插件加载 4 次、O2 宿主加载 2 次，均在首个 canonical
+阶段标记前的 compiled Fragment 工作负载中。这只是一次诊断系列，不能当作稳定
+失败概率。LLVM 22 的 [COFF 重定位实现](https://github.com/llvm/llvm-project/blob/llvmorg-22.1.8/llvm/lib/ExecutionEngine/RuntimeDyld/Targets/RuntimeDyldCOFFX86_64.h#L101-L110)
+要求 `ADDR32NB` 目标位于 image base 起 32 位偏移范围内，并指出内存管理器需按
+代码、只读、读写 section 排序。阶段日志已定位失败的加载边界，尚未证明是哪一组
+section 地址违反此约束。
 私有 JIT 另有一组仅测试用的宿主所有权交接入口。状态入口先检查 tag／`i32`
 标量／owner 三个输出地址非空、两两不重叠、对齐且 owner cell 为空，再调用源码
 body。输出预检后，入口还核验有效 parent context 和冻结 Slot 的精确借用 Ref
@@ -1211,10 +1219,12 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    路径前，须明确可恢复的派生／分派失败清理。
    每条准入的出口都须在 apply 局部清理之后、借用的
    Ref owner Drop 之前，按内到外恰好一次释放有效 context；其余路径继续拒绝。
-   独立捕获 Windows LLVM 20.1.8 RuntimeDyld 间歇性 COFF 重定位失败所对应的
-   精确 JIT 调用。直接切换 JITLink 又遇到不同的 `.pdata` `Pointer32` 范围失败；
-   下一步在 LLVM 20 或 22 的隔离构建中验证保序 section allocator，用手动重定位
-   探针记录具体失败的 JIT 物化调用，再重复 Windows ASAN 测试。LLVM 23 的 IR 故障
+   Windows LLVM 20.1.8 的 RuntimeDyld COFF 重定位故障现也在 LLVM 22 ASan
+   复现：12 次 canonical 中失败 7 次，位于 O0 宿主／插件或 O2 宿主加载。
+   直接切换 JITLink 又遇到不同的 `.pdata` `Pointer32` 范围失败。下一步先在这些
+   加载边界记录 section 分配地址，再于 LLVM 20 或 22 的隔离构建中验证保序
+   RuntimeDyld 内存管理器，并用同一 12 次手动探针对照。重定位及完整 canonical
+   门禁通过前，不应把它并入默认 JIT。LLVM 23 的 IR 故障
    属于独立的编译器迁移，不能用来证明较新版 JIT 已修复这项重定位问题。
 2. **冻结可发布的宿主边界。** 明确带版本的 Ref 入口 carrier、返回 carrier／状态、
    精确 Slot／Contract 校验、借用寿命、所有权提交点及失败清理。现有私有 wrapper
