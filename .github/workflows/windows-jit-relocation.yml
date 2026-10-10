@@ -57,6 +57,7 @@ jobs:
           test -f "$resource_dir/lib/windows/libclang_rt.asan_dynamic-x86_64.dll.a"
           test -f "$resource_dir/lib/windows/libclang_rt.ubsan_standalone-x86_64.a"
           test -f /clang64/lib/libunwind.a
+          test -f /clang64/lib/libmsvcrt-os.a
           test -f /clang64/include/c++/v1/string
 
       - name: Configure sanitized canonical JIT target
@@ -68,6 +69,7 @@ jobs:
             -DCMAKE_C_COMPILER=/clang64/opt/llvm22/bin/clang.exe \
             -DCMAKE_CXX_COMPILER=/clang64/opt/llvm22/bin/clang++.exe \
             -DCMAKE_CXX_FLAGS="-nostdinc++ -I$(cygpath -m /clang64/include/c++/v1)" \
+            -DCMAKE_EXE_LINKER_FLAGS=-lmsvcrt-os \
             -DLLVM_DIR=/clang64/opt/llvm22/lib/cmake/llvm \
             -DLUNA_ENABLE_SANITIZERS=ON \
             -DLUNA_STRICT_WARNINGS=ON
