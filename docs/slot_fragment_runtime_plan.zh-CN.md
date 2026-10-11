@@ -940,11 +940,17 @@ loader 可用。
 生产配对检查现重新推导候选行并检查生成的 LLVM module：独立的外部 wrapper
 必须具有精确的 C `i32(ptr, ptr)` 形状，内部源码 body 为 `void(ptr, ptr)`；
 wrapper 必须各调用一次 context 检查、带冻结 Slot／Contract 常量的 Ref 检查
-和按序传参的 body，且不得有其他调用。生产侧前置状态证明还要求 context 和 Ref
-switch 使用各自的检查结果、分支和返回码精确一致，且 wrapper 不含额外指令。
+和按序传参的 body，且不得有其他调用。两项 runtime 检查函数还必须是具有精确
+指针原型的外部 C 声明，不能由同名本地实现替代。生产侧前置状态证明还要求
+context 和 Ref switch 使用各自的检查结果、分支和返回码精确一致，且 wrapper
+不含额外指令。
 私有 JIT 路径执行这两项检查。IR 变异测试拒绝 body 参数、Slot 常量、context
 参数、body linkage、额外调用和状态控制流的改变。生产发布仍须生成 wrapper、
 处理可恢复的 body 执行失败并绑定产物。
+当前私有 Apply body 在 context 派生或 Slot 派发失败时先 Drop 活跃 context
+owner，然后执行 `llvm.trap`／`unreachable`。`void` body 一旦陷入 trap，
+wrapper 无法返回预留的状态码 `5`。生产生成须先让 body 和 outlined
+continuation 通过失败通道传播状态并保持清理顺序，才能发布该行。
 
 | 候选契约事实 | 发布前必须验证 |
 | --- | --- |

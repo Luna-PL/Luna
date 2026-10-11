@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Tightened Native v4 Ref/unit wrapper pairing to require the context and Ref
+  checks to be exact external C declarations with fixed pointer signatures.
+  Calls to local same-name implementations or altered prototypes now fail the
+  producer-side check. Documented the generated body's trap-based failure
+  exits as the remaining execution-failure blocker.
 - Moved the Native v4 Ref/unit preflight status proof into production codegen.
   It requires exact context and Ref switch conditions, five status returns,
   one guarded body block and no extra wrapper instructions. The private JIT

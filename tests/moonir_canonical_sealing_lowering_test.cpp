@@ -1508,6 +1508,23 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     v4Body->setLinkage(llvm::Function::ExternalLinkage);
     const bool externalBodyAccepted = pairedV4();
     v4Body->setLinkage(llvm::Function::InternalLinkage);
+    auto* v4ContextHelper = v4ContextCheck->getCalledFunction();
+    v4ContextHelper->setLinkage(llvm::Function::InternalLinkage);
+    const bool internalContextHelperAccepted = pairedV4();
+    v4ContextHelper->setLinkage(llvm::Function::ExternalLinkage);
+    auto* forgedHelperBody = llvm::BasicBlock::Create(
+        v4Context, "forged.check", v4ContextHelper);
+    v4Builder.SetInsertPoint(forgedHelperBody);
+    v4Builder.CreateRet(llvm::ConstantInt::get(v4I32, 0));
+    const bool localContextHelperAccepted = pairedV4();
+    forgedHelperBody->eraseFromParent();
+    v4ContextHelper->setCallingConv(llvm::CallingConv::Fast);
+    const bool fastContextHelperAccepted = pairedV4();
+    v4ContextHelper->setCallingConv(llvm::CallingConv::C);
+    auto* v4RefHelper = v4RefCheck->getCalledFunction();
+    v4RefHelper->setLinkage(llvm::Function::InternalLinkage);
+    const bool internalRefHelperAccepted = pairedV4();
+    v4RefHelper->setLinkage(llvm::Function::ExternalLinkage);
     v4Builder.SetInsertPoint(v4Wrapper->getEntryBlock().getTerminator());
     auto* v4ExtraCall = v4Builder.CreateCall(
         v4ContextCheck->getCalledFunction(), {v4Wrapper->getArg(0)});
@@ -1515,6 +1532,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     v4ExtraCall->eraseFromParent();
     if (changedBodyAccepted || changedSlotAccepted ||
         changedContextAccepted || externalBodyAccepted ||
+        internalContextHelperAccepted || localContextHelperAccepted ||
+        fastContextHelperAccepted || internalRefHelperAccepted ||
         extraCheckAccepted || !pairedV4())
         return fail("Native v4 wrapper pairing accepted changed IR identities");
     const std::string guardedV4Name = unitWrapper + ".preflight";

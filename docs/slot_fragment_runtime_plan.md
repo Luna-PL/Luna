@@ -1238,14 +1238,22 @@ The production pairing check now rederives the candidate and inspects the
 generated LLVM module: the distinct external wrapper must have the exact C
 `i32(ptr, ptr)` shape, the internal source body `void(ptr, ptr)`, and the
 wrapper must call the context check, exact Slot/Contract Ref check and body
-once each with ordered arguments and no other calls. The production preflight
-proof then requires the context and Ref switch conditions to consume those
-check results, exact success/error destinations and returns, and no extra
+once each with ordered arguments and no other calls. Both runtime check
+functions must remain external C declarations with their exact pointer
+prototypes; a local same-name implementation cannot stand in for either check.
+The production preflight proof then requires the context and Ref switches to
+consume those check results, exact success/error destinations and returns, and no extra
 wrapper instructions. The private JIT path invokes both checks. IR mutation
 tests reject changed body arguments, Slot constants, context arguments,
 body linkage, extra calls and changed status control flow. Production
 publication still needs a generated wrapper path, recoverable body failure
 and artifact binding.
+The generated private Apply body currently Drops active context owners and
+uses `llvm.trap`/`unreachable` on context-derivation or Slot-dispatch failure.
+Its `void` call cannot report reserved status `5` to the wrapper after a trap.
+Production generation therefore needs a failure channel through the body and
+outlined continuations that preserves cleanup order before this row can be
+published.
 
 | Candidate contract fact | Required check before publication |
 | --- | --- |

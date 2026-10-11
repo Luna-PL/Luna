@@ -202,6 +202,10 @@ bool derivePairedNativeRefUnitDescriptorV4Candidate(
     const auto* wrapper = generated.getFunction(wrapperLinkageName);
     const auto* body = generated.getFunction(
         verified.source.sourceLinkageName);
+    const auto* contextHelper = generated.getFunction(
+        "luna_compiler_fragment_context_check");
+    const auto* refHelper = generated.getFunction(
+        "luna_runtime_fragment_ref_check_v1");
     const auto exactPointerPair = [](const llvm::Function* entry,
                                      bool returnsStatus) {
         return entry && !entry->isDeclaration() && !entry->isVarArg() &&
@@ -216,6 +220,22 @@ bool derivePairedNativeRefUnitDescriptorV4Candidate(
         !exactPointerPair(body, false) ||
         !wrapper->hasExternalLinkage() || !body->hasInternalLinkage())
         return reject("Native v4 wrapper/body lacks the exact generated C profile");
+    const auto exactRuntimeHelper = [](const llvm::Function* helper,
+                                       unsigned pointerCount) {
+        if (!helper || !helper->isDeclaration() ||
+            !helper->hasExternalLinkage() || helper->isVarArg() ||
+            helper->getCallingConv() != llvm::CallingConv::C ||
+            !helper->getReturnType()->isIntegerTy(32) ||
+            helper->arg_size() != pointerCount)
+            return false;
+        return std::all_of(helper->arg_begin(), helper->arg_end(),
+            [](const llvm::Argument& argument) {
+                return argument.getType()->isPointerTy();
+            });
+    };
+    if (!exactRuntimeHelper(contextHelper, 1) ||
+        !exactRuntimeHelper(refHelper, 3))
+        return reject("Native v4 wrapper lacks exact external runtime checks");
 
     size_t contextChecks = 0, refChecks = 0, bodyCalls = 0;
     for (const auto& block : *wrapper)
@@ -224,6 +244,7 @@ bool derivePairedNativeRefUnitDescriptorV4Candidate(
                     &instruction)) {
                 const auto* callee = call->getCalledFunction();
                 if (!llvm::isa<llvm::CallInst>(call) || !callee ||
+                    call->getFunctionType() != callee->getFunctionType() ||
                     call->getCallingConv() != llvm::CallingConv::C)
                     return reject("Native v4 wrapper has an indirect or non-C call");
                 if (callee == body) {
@@ -232,15 +253,13 @@ bool derivePairedNativeRefUnitDescriptorV4Candidate(
                         call->getArgOperand(1) != wrapper->getArg(1))
                         return reject("Native v4 wrapper changed its source body arguments");
                     ++bodyCalls;
-                } else if (callee->getName() ==
-                           "luna_compiler_fragment_context_check") {
+                } else if (callee == contextHelper) {
                     if (call->arg_size() != 1 ||
                         call->getArgOperand(0) != wrapper->getArg(0) ||
                         !callee->getReturnType()->isIntegerTy(32))
                         return reject("Native v4 wrapper changed its context check");
                     ++contextChecks;
-                } else if (callee->getName() ==
-                           "luna_runtime_fragment_ref_check_v1") {
+                } else if (callee == refHelper) {
                     llvm::StringRef slot, contract;
                     if (call->arg_size() != 3 ||
                         call->getArgOperand(0) != wrapper->getArg(1) ||
