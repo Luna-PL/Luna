@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Moved borrowed Ref/unit candidate source-fact derivation into production
+  codegen. It independently checks the sealed CFG, fixed-point context effect,
+  frozen callable and exact Apply target before a private test entry is paired
+  with those facts. Native typed export publication remains gated.
 - Fixed a candidate C profile for synchronous shared-borrow Ref/unit host
   entries: two borrowed pointers, versioned status values, and a reserved
   execution-failure status. The private JIT proof now binds that profile in its

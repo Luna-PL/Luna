@@ -6,6 +6,7 @@
 #include "moonir/Verifier.h"
 #include "codegen/CodeGenerator.h"
 #include "codegen/NativeOwnedResultFacts.h"
+#include "codegen/NativeRefUnitFacts.h"
 #include "diagnostics/Diagnostic.h"
 #include "runtime/RuntimeDescriptor.h"
 #include "runtime/RuntimeFragment.h"
@@ -1297,6 +1298,24 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             std::cerr << diagnostic.message << '\n';
         return fail("private Ref apply body proof or public codegen gate failed");
     }
+    luna::codegen::NativeRefUnitSourceFacts unitSourceFacts;
+    std::string unitSourceError;
+    const auto unitTarget = sourceApplyModule->resolveRuntimeFragmentRefTarget(
+        sourceApplyEntry->params.front().type);
+    if (!unitTarget ||
+        !luna::codegen::deriveNativeRefUnitSourceFacts(
+            *sourceApplyModule, *sourceApplyEntry,
+            unitSourceFacts, unitSourceError) ||
+        unitSourceFacts.functionSymbolId !=
+            sourceApplyEntry->symbolId.value ||
+        unitSourceFacts.functionContractId !=
+            sourceApplyEntry->contractId.value ||
+        unitSourceFacts.sourceLinkageName !=
+            sourceApplyEntry->generatedSymbolName ||
+        unitSourceFacts.slotSymbolId != unitTarget->symbol.value ||
+        unitSourceFacts.slotContractId != unitTarget->contract.value ||
+        unitSourceFacts.contextEffect != 1)
+        return fail("Native Ref/unit source facts lost frozen entry identity");
     std::string privateRefJitError;
     std::vector<uint8_t> privateIngressRecord;
     if (!exercisePrivateRefApplyJit(
@@ -1424,6 +1443,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     ingressRecord->linkageName += ".forged";
     const bool forgedIngressRecordAccepted =
         validPrivateIngressRecord(privateIngressRecord);
+    const bool forgedSourceLinkageAccepted =
+        luna::codegen::deriveNativeRefUnitSourceFacts(
+            *sourceApplyModule, *sourceApplyEntry,
+            unitSourceFacts, unitSourceError);
     const bool forgedIngressLinkageAccepted =
         static_cast<bool>(CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
             *sourceApplyModule, *sourceApplyEntry, privateRefJitError));
@@ -1434,6 +1457,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         luna::ownership::Relation::Owned;
     const bool forgedBorrowRecordAccepted =
         validPrivateIngressRecord(privateIngressRecord);
+    const bool forgedSourceBorrowAccepted =
+        luna::codegen::deriveNativeRefUnitSourceFacts(
+            *sourceApplyModule, *sourceApplyEntry,
+            unitSourceFacts, unitSourceError);
     const bool forgedIngressBorrowAccepted =
         static_cast<bool>(CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
             *sourceApplyModule, *sourceApplyEntry, privateRefJitError));
@@ -1441,13 +1468,19 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     sourceApplyEntry->requiresFragmentContext = false;
     const bool forgedContextRecordAccepted =
         validPrivateIngressRecord(privateIngressRecord);
+    const bool forgedSourceContextAccepted =
+        luna::codegen::deriveNativeRefUnitSourceFacts(
+            *sourceApplyModule, *sourceApplyEntry,
+            unitSourceFacts, unitSourceError);
     const bool forgedContextJitAccepted =
         static_cast<bool>(CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
             *sourceApplyModule, *sourceApplyEntry, privateRefJitError));
     sourceApplyEntry->requiresFragmentContext = true;
-    if (forgedIngressRecordAccepted || forgedIngressLinkageAccepted ||
-        forgedBorrowRecordAccepted || forgedIngressBorrowAccepted ||
-        forgedContextRecordAccepted || forgedContextJitAccepted)
+    if (forgedIngressRecordAccepted || forgedSourceLinkageAccepted ||
+        forgedIngressLinkageAccepted || forgedBorrowRecordAccepted ||
+        forgedSourceBorrowAccepted || forgedIngressBorrowAccepted ||
+        forgedContextRecordAccepted || forgedSourceContextAccepted ||
+        forgedContextJitAccepted)
         return fail("private Ref Apply ingress accepted forged frozen entry facts");
     auto sequentialSlotsSnapshot =
         luna::tooling::AnalysisSnapshot::analyzeSource(

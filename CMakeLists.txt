@@ -487,6 +487,7 @@ add_executable(moonir-canonical-test
     src/codegen/CodeGeneratorIteratorTerminals.cpp
     src/codegen/CodeGeneratorModule.cpp
     src/codegen/NativeOwnedResultFacts.cpp
+    src/codegen/NativeRefUnitFacts.cpp
     src/codegen/CodeGeneratorOwnershipExpressions.cpp
     src/codegen/CodeGeneratorRangeAnalysis.cpp
     src/codegen/CodeGeneratorRuntimeDescriptors.cpp
@@ -595,6 +596,7 @@ add_executable(luna
     src/codegen/CodeGeneratorIteratorTerminals.cpp
     src/codegen/CodeGeneratorModule.cpp
     src/codegen/NativeOwnedResultFacts.cpp
+    src/codegen/NativeRefUnitFacts.cpp
     src/codegen/CodeGeneratorOwnershipExpressions.cpp
     src/codegen/CodeGeneratorRangeAnalysis.cpp
     src/codegen/CodeGeneratorRuntimeDescriptors.cpp

@@ -1163,6 +1163,14 @@ facts and a generic Native v1 export row. This row is test-only; no public
 descriptor, export digest or loader consumes it. Its convention fields now
 bind candidate entry ABI `3` and Ref/unit status domain `1` as well as the
 existing argument, borrow, result and context-effect facts.
+The Ref/unit source-fact derivation now lives in production codegen, separate
+from that test record. It independently verifies the sealed CFG, inferred
+context effect, frozen function signature, bounded identities and every Apply
+site's exact borrowed Ref/Slot target. It carries no host wrapper symbol or
+entry pointer. Production codegen checks it for the one-Ref/unit Apply shape
+before discarding the private proof; the test-only record appends its fixed
+ingress symbol after deriving the source facts. The public export gate remains
+closed.
 The test-only loaded entry view revalidates this row against the frozen source
 and against the JIT module that emitted it before looking up the fixed ingress
 symbol. An otherwise valid row paired with a JIT module materialized without

@@ -1,5 +1,6 @@
 #include "CodeGenerator.h"
 #include "NativeOwnedResultFacts.h"
+#include "NativeRefUnitFacts.h"
 #include "core/TypeLayout.h"
 #include "core/TypeRelations.h"
 #include "moonir/FragmentContextEffects.h"
@@ -90,93 +91,20 @@ struct PrivateRefUnitApplyEntryFacts {
 
 std::optional<PrivateRefUnitApplyEntryFacts> privateRefUnitApplyEntryFacts(
     const moon::Module& program, const FunctionDecl& function) {
-    if (!program.typeTableSealed || !function.controlFlow ||
-        !function.controlFlow->sealed || function.controlFlow->runtimeRefApplies.empty() ||
-        function.isExtern || function.isKernel || function.isSelector ||
-        !function.typeParams.empty() || !function.abi.empty() ||
-        !function.linkName.empty() ||
-        function.generatedSymbolName.empty() || function.body ||
-        !function.requiresFragmentContext ||
-        !matchesPrivateRefContextEffect(program, function) ||
-        function.params.size() != 1 ||
-        function.returnsLinear ||
-        function.returnUsage != luna::ownership::Usage::Copy)
+    luna::codegen::NativeRefUnitSourceFacts source;
+    std::string failure;
+    if (!luna::codegen::deriveNativeRefUnitSourceFacts(
+            program, function, source, failure))
         return std::nullopt;
-    if (!std::any_of(program.declarations.begin(), program.declarations.end(),
-            [&function](const auto& declaration) {
-                return declaration.get() == &function;
-            }))
-        return std::nullopt;
-    const auto& parameter = function.params.front();
-    const auto* refType = program.findType(parameter.type);
-    const auto* returnType = program.findType(function.returnType);
-    const auto target = program.resolveRuntimeFragmentRefTarget(parameter.type);
-    const auto* slot = target ? program.findDeclaration(*target) : nullptr;
-    if (!refType || !returnType || returnType->kind != TypeKind::Unit ||
-        !target || !slot || slot->kind != moon::DeclarationKind::Slot ||
-        parameter.isLinear ||
-        parameter.relation != luna::ownership::Relation::SharedBorrow ||
-        parameter.usage != luna::ownership::Usage::Copy)
-        return std::nullopt;
-    const auto* record = program.findDeclarationById(function.declarationId);
-    const auto* callable = record ? program.findType(record->type) : nullptr;
-    moon::TypeMaterializer materializer(program);
-    const TypePtr restoredCallable = callable
-        ? materializer.materialize(record->type) : nullptr;
-    if (!record || record->kind != moon::DeclarationKind::Function ||
-        record->id != function.declarationId ||
-        record->symbolId != function.symbolId ||
-        record->symbolId != luna::identity::symbolIdFromCanonical(record->id) ||
-        record->contractId != function.contractId ||
-        record->canonicalContract != moon::canonicalContract(*record) ||
-        record->contractId != luna::identity::contractIdFromCanonical(
-            record->canonicalContract) ||
-        record->sysmeta.identity.symbol != record->symbolId ||
-        record->sysmeta.identity.contract != record->contractId ||
-        record->linkageName != function.generatedSymbolName ||
-        !callable || callable->kind != TypeKind::Function ||
-        !restoredCallable ||
-        luna::types::typeId(restoredCallable) != callable->id ||
-        luna::types::canonicalType(restoredCallable) != callable->canonicalType ||
-        callable->parameterTypeIds.size() != 1 ||
-        callable->parameterTypeIds.front() != parameter.type ||
-        callable->returnTypeId != function.returnType ||
-        callable->parameterContracts.size() != 1 ||
-        callable->parameterContracts.front() !=
-            luna::ownership::Contract{parameter.relation, parameter.usage} ||
-        callable->returnContract != luna::ownership::Contract{
-            luna::ownership::Relation::Owned, function.returnUsage} ||
-        record->sysmeta.resource.parameters.size() != 1 ||
-        record->sysmeta.resource.parameters.front() !=
-            callable->parameterContracts.front() ||
-        record->sysmeta.resource.result != callable->returnContract)
-        return std::nullopt;
-    const auto& graph = *function.controlFlow;
-    const moon::LocalRecord* parameterLocal = nullptr;
-    for (const auto& local : graph.locals)
-        if (local.kind == moon::LocalKind::Parameter) {
-            if (parameterLocal) return std::nullopt;
-            parameterLocal = &local;
-        }
-    if (!parameterLocal || parameterLocal->scope != graph.rootScope ||
-        parameterLocal->name != parameter.name ||
-        parameterLocal->type != parameter.type ||
-        parameterLocal->relation != parameter.relation ||
-        parameterLocal->usage != parameter.usage ||
-        graph.runtimeRefApplies.front().reference != parameterLocal->id ||
-        graph.runtimeRefApplies.front().slot != *target)
-        return std::nullopt;
-    PrivateRefUnitApplyEntryFacts facts{
-        *target,
-        {program.name, function.packageId, record->symbolId.value,
-         record->contractId.value, callable->id.value, record->linkageName,
-         refType->id.value, target->symbol.value,
-         target->contract.value, slot->type.value,
-         "__luna_private_ref_apply_ingress_test"},
-        static_cast<uint32_t>(function.requiresFragmentContext)};
-    if (std::any_of(facts.identities.begin(), facts.identities.end(),
-            [](const std::string& value) { return value.empty(); }))
-        return std::nullopt;
+    const auto target = program.resolveRuntimeFragmentRefTarget(
+        function.params.front().type);
+    if (!target) return std::nullopt;
+    PrivateRefUnitApplyEntryFacts facts;
+    facts.target = *target;
+    const auto identities = source.identities();
+    std::copy(identities.begin(), identities.end(), facts.identities.begin());
+    facts.identities.back() = "__luna_private_ref_apply_ingress_test";
+    facts.contextEffect = source.contextEffect;
     return facts;
 }
 
@@ -740,6 +668,13 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
     if (!matchesPrivateRefContextEffect(program, function)) {
         failure = "Ref entry context effect differs from the sealed CFG fixed point";
         return false;
+    }
+    if (privateRefApply && returnType->kind == TypeKind::Unit &&
+        function.params.size() == 1) {
+        luna::codegen::NativeRefUnitSourceFacts source;
+        if (!luna::codegen::deriveNativeRefUnitSourceFacts(
+                program, function, source, failure))
+            return false;
     }
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     std::optional<PrivateRefUnitApplyEntryFacts> privateUnitApplyFacts;
