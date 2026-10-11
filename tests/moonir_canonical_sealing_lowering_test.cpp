@@ -7,6 +7,7 @@
 #include "codegen/CodeGenerator.h"
 #include "codegen/NativeOwnedResultFacts.h"
 #include "codegen/NativeRefUnitFacts.h"
+#include "driver/NativeTypedDescriptor.h"
 #include "diagnostics/Diagnostic.h"
 #include "runtime/RuntimeDescriptor.h"
 #include "runtime/RuntimeFragment.h"
@@ -205,6 +206,59 @@ bool exercisePrivateRefApplyJit(
     }
     std::unique_ptr<LunaPrivateRefUnitApplyLoadedEntry> loadedIngress;
     if (exerciseIngressGate) {
+        const void* queryAddress = jit->lookup(
+            "luna_native_library_descriptor_v4", error);
+        if (!queryAddress) return false;
+        const auto query = reinterpret_cast<LunaNativeLibraryDescriptorFnV4>(
+            const_cast<void*>(queryAddress));
+        const auto* descriptor = query();
+        luna::codegen::NativeRefUnitDescriptorV4Candidate candidate;
+        if (!luna::codegen::deriveNativeRefUnitDescriptorV4Candidate(
+                module, function, "__luna_private_ref_apply_ingress_test",
+                candidate, error))
+            return false;
+        const auto expectedDigest = luna::driver::digestNativeTypedExports(
+            {candidate.canonicalRow()});
+        const void* wrapperAddress = jit->lookup(
+            candidate.wrapperLinkageName, error);
+        if (!wrapperAddress || !descriptor ||
+            descriptor->magic != LUNA_NATIVE_DESCRIPTOR_MAGIC_V4 ||
+            descriptor->abi_version != LUNA_NATIVE_DESCRIPTOR_ABI_V4 ||
+            descriptor->struct_size != sizeof(*descriptor) ||
+            descriptor->reserved_zero != 0 ||
+            descriptor->export_count != 1 || !descriptor->exports ||
+            std::string(descriptor->package_id) != module.name ||
+            std::string(descriptor->package_version) != "private-test" ||
+            std::string(descriptor->compiler_identity) != "luna/private-test" ||
+            !std::equal(expectedDigest.begin(), expectedDigest.end(),
+                        descriptor->export_descriptor_digest)) {
+            error = "private generated Native v4 descriptor lost its sealed row";
+            return false;
+        }
+        const auto& row = descriptor->exports[0];
+        const auto identities = candidate.descriptorIdentities();
+        const std::array<const char*, 10> emitted = {
+            row.symbol_id, row.contract_id, row.linkage_name,
+            row.module_name, row.package_id, row.function_type_id,
+            row.ref_type_id, row.ref_slot_symbol_id,
+            row.ref_slot_contract_id, row.ref_slot_type_id};
+        if (row.abi_version != LUNA_NATIVE_DESCRIPTOR_ABI_V4 ||
+            row.struct_size != sizeof(row) ||
+            row.declaration_kind != LUNA_NATIVE_DECLARATION_FUNCTION_V1 ||
+            row.flags != LUNA_NATIVE_EXPORT_CALLABLE_V1 ||
+            row.entry_abi != LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1 ||
+            row.ref_mode != LUNA_NATIVE_REF_SHARED_BORROW_V1 ||
+            row.result_mode != LUNA_NATIVE_RESULT_UNIT_V1 ||
+            row.status_domain != LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1 ||
+            row.entry != wrapperAddress ||
+            !std::equal(identities.begin(), identities.end(),
+                        emitted.begin(), [](const auto& expected,
+                                            const char* actual) {
+                return actual && expected == actual;
+            })) {
+            error = "private generated Native v4 row differs from its entry";
+            return false;
+        }
         loadedIngress = CodeGenerator::
             loadPrivateRuntimeFragmentRefApplyEntryForTest(
                 module, function, *entryRecord, jit, error);
@@ -1667,6 +1721,31 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         constantBodyAccepted || wrongFailureAccepted ||
         extraInstructionAccepted || !preflightV4())
         return fail("Native v4 preflight accepted changed status control flow");
+    guardedFailure->setOperand(0, v4Status(LUNA_NATIVE_REF_UNIT_SUCCESS_V1));
+    const bool forgedDescriptorEmitted =
+        luna::codegen::emitNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry, v4Module,
+            guardedV4Name, "private-test", "synthetic-target",
+            "luna/private-test", unitSourceError);
+    guardedFailure->setOperand(0,
+        v4Status(LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1));
+    if (forgedDescriptorEmitted ||
+        v4Module.getFunction("luna_native_library_descriptor_v4"))
+        return fail("Native v4 emitted a descriptor before its status proof");
+    if (!luna::codegen::emitNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry, v4Module,
+            guardedV4Name, "private-test", "synthetic-target",
+            "luna/private-test", unitSourceError) ||
+        !v4Module.getFunction("luna_native_library_descriptor_v4") ||
+        !v4Module.getNamedGlobal("__luna_native_exports_v4") ||
+        !v4Module.getNamedGlobal("__luna_native_library_v4") ||
+        llvm::verifyModule(v4Module))
+        return fail("Native v4 candidate descriptor IR is invalid");
+    if (luna::codegen::emitNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry, v4Module,
+            guardedV4Name, "private-test", "synthetic-target",
+            "luna/private-test", unitSourceError))
+        return fail("Native v4 emitted a duplicate query");
     for (unsigned field = 0; field < 10; ++field) {
         if (privateFieldCursor + 4 > privateIngressRecord.size() ||
             !rejectedPrivateIngressMutation(privateFieldCursor,

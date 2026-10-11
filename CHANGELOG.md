@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added production codegen support for a single Native v4 Ref/unit descriptor
+  row after sealed-source, generated-wrapper and preflight revalidation. The
+  private JIT proof now emits and checks the actual query, row address and
+  canonical digest; malformed status paths and duplicate queries are rejected.
+  Public Ref source publication, Native artifact binding and typed invocation
+  remain gated.
 - Added a recoverable status channel to the private single-Ref/unit Apply
   body: normal exits return `0`, derivation and dispatch failures return `-1`
   after ordered context Drops, and the guarded host wrapper maps failure to

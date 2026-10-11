@@ -1234,7 +1234,7 @@ from the source body, orders the ten
 identifiers as the v4 C row and fixes the canonical profile. The private JIT
 fixture checks that row against its verified ingress name and rejects a
 source-body or malformed linkage. This prepares the source-to-row mapping;
-production descriptor emission does not yet consume it. The 32-bit
+ordinary Native artifact generation does not yet consume it. The 32-bit
 C probes also pin v4 field offsets on Linux, macOS and Windows targets; they
 do not establish 32-bit loader support.
 The production pairing check now rederives the candidate and inspects the
@@ -1261,9 +1261,14 @@ maps zero to success and nonzero to reserved Native v4 status `5`. A real JIT
 probe triggers dispatch failure through repeated resume and observes `5`.
 The v4 source-fact gate admits only CFGs without other lexical cleanup
 obligations; those require a separate failure-path proof.
-The root-body proof rejects traps and unproved return values, while the
-candidate still remains private and discarded. Native generation, verified
-descriptor emission and artifact binding remain before publication.
+The root-body proof rejects traps and unproved return values. Production
+codegen can now emit a single v4 descriptor row after rederiving the sealed
+source, exact generated wrapper and preflight status proof. The private JIT
+path emits that query into its disposable module and checks its real C layout,
+entry address, identities and canonical digest. A forged status return emits
+no query, and a second emission is rejected. The descriptor has no Native
+artifact proof in that JIT module and is discarded with it. Public Ref source
+publication, Native artifact binding and typed invocation remain before release.
 
 | Candidate contract fact | Required check before publication |
 | --- | --- |
@@ -1276,9 +1281,10 @@ descriptor emission and artifact binding remain before publication.
 The existing generic Native v1/v2 export and Runtime declaration descriptors
 do not encode the Ref target or this ingress ABI. The Fragment descriptor
 describes factory/environment/activation execution, so it cannot stand in
-for a source function entry. The next step is to use the preflight-verified v4
-candidate in Native generation, then connect its typed facts to a pinned
-lookup and call path before changing publication. The Moon Container 0.3
+for a source function entry. The next step is to admit the narrow sealed Ref
+source through MoonIR and Native generation, bind its emitted v4 row to the
+artifact proof, then connect its typed facts to a pinned lookup and call path.
+The Moon Container 0.3
 encoder still rejects Apply regions, and the module
 verifier and CodeGenerator still reject source Ref publication.
 
@@ -1293,8 +1299,9 @@ runtime binding would be unproved. Do not extend a v1 row in place. A new
 versioned typed row must derive from the verified frozen function signature
 and CFG, enter the canonical export digest and generated descriptor together,
 and be checked for field validity and identity ambiguity by the loader. The
-independent v4 fixture exercises the latter checks; the source-derived row
-builder is not yet connected to descriptor emission.
+independent v4 fixture exercises the latter checks. The source-derived row
+builder now feeds a disposable JIT descriptor, but not the ordinary Native
+artifact path.
 The existing artifact digest and trust record then bind the rebuilt image and
 its export digest. `stageVerifiedNativeGeneration` currently copies only
 symbol/contract/entry/kind/flags into `GenerationBinding`; typed facts must

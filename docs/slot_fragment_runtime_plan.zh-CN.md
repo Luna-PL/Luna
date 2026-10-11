@@ -935,7 +935,7 @@ LLVM IR 证明还检查未预期结果分支；当前没有生产 Native 生成�
 且与源码 body 不同的 wrapper linkage，按 v4 C 行排列十个身份，并固定规范配置。
 私有 JIT 夹具用已验证的入口名称
 核对该行，并拒绝源码 body 名称或畸形 linkage。这完成了源码到候选行的映射；
-生产描述符生成尚未消费它。32 位 C
+普通 Native 产物生成仍未消费它。32 位 C
 探针也固定 Linux、macOS 和 Windows 目标上的 v4 字段偏移，但不证明 32 位
 loader 可用。
 生产配对检查现重新推导候选行并检查生成的 LLVM module：独立的外部 wrapper
@@ -955,8 +955,11 @@ context owner，再返回显式失败值 `-1`。Runtime 将其映射为分派执
 零映射为成功、非零映射为预留的 Native v4 状态码 `5`；真实 JIT 探针通过重复
 resume 触发分派失败并观察到 `5`。根 body 证明拒绝 trap 和未经证明的返回值，
 v4 源码事实仅准入没有其他词法清理义务的 CFG；其余清理须另行证明失败路径。
-候选产物仍仅供私有验证并被丢弃。发布前仍须接入 Native 生成、经过验证的
-descriptor 发射和产物绑定。
+生产 codegen 现可在重新推导封闭源码、精确生成的 wrapper 及前置状态证明后，
+发射单行 v4 descriptor。私有 JIT 路径将查询写入一次性 module，并核对实际 C
+布局、入口地址、身份和规范摘要；伪造状态返回不会产生查询，重复发射也被拒绝。
+该 JIT module 中的 descriptor 没有 Native 产物 proof，随 module 一同丢弃。
+公开 Ref 源码发布、Native 产物绑定和类型化调用仍须完成。
 
 | 候选契约事实 | 发布前必须验证 |
 | --- | --- |
@@ -968,9 +971,8 @@ descriptor 发射和产物绑定。
 
 现有通用 Native v1/v2 export 和 Runtime declaration 描述符未编码 Ref 目标或这套入口
 ABI。Fragment 描述符对应 factory／environment／activation 执行，不能代替源码
-函数入口。下一步须在 Native 生成阶段使用已验证前置状态的 v4 候选行，
-再把类型化事实接入固定 lookup 与调用路径，
-然后才能修改生产发布。
+函数入口。下一步须让限定的封闭 Ref 源码通过 MoonIR 与 Native 生成，
+将已发射的 v4 行绑定到产物 proof，再把类型化事实接入固定 lookup 与调用路径。
 Moon Container 0.3 编码器仍拒绝 Apply region，module verifier 和 CodeGenerator
 也仍拒绝发布源码 Ref。
 

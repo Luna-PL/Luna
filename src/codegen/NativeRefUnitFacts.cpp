@@ -10,8 +10,12 @@
 #include "runtime/RuntimeFragmentCompilerBridge.h"
 
 #include <llvm/Analysis/ValueTracking.h>
+#include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
+#include <llvm/Transforms/Utils/ModuleUtils.h>
+#include <llvm/TargetParser/Host.h>
+#include <llvm/TargetParser/Triple.h>
 
 #include <algorithm>
 #include <unordered_set>
@@ -398,6 +402,108 @@ bool derivePreflightNativeRefUnitDescriptorV4Candidate(
             LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1))
         return reject("Native v4 preflight changed its status returns");
     candidate = std::move(verified);
+    error.clear();
+    return true;
+}
+
+bool emitNativeRefUnitDescriptorV4Candidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    llvm::Module& generated, const std::string& wrapperLinkageName,
+    const std::string& packageVersion, const std::string& targetAbi,
+    const std::string& compilerIdentity, std::string& error) {
+    NativeRefUnitDescriptorV4Candidate candidate;
+    if (!derivePreflightNativeRefUnitDescriptorV4Candidate(
+            program, function, generated, wrapperLinkageName,
+            candidate, error))
+        return false;
+    if (!boundedIdentity(packageVersion) || !boundedIdentity(targetAbi) ||
+        !boundedIdentity(compilerIdentity)) {
+        error = "Native v4 descriptor has an invalid library identity";
+        return false;
+    }
+    if (generated.getFunction("luna_native_library_descriptor_v4") ||
+        generated.getNamedGlobal("__luna_native_library_v4") ||
+        generated.getNamedGlobal("__luna_native_exports_v4")) {
+        error = "reserved Native v4 descriptor symbol is already defined";
+        return false;
+    }
+
+    auto& context = generated.getContext();
+    auto* i32 = llvm::Type::getInt32Ty(context);
+    auto* i64 = llvm::Type::getInt64Ty(context);
+    auto* ptr = llvm::PointerType::getUnqual(context);
+    size_t stringIndex = 0;
+    auto cString = [&](const std::string& value) -> llvm::Constant* {
+        auto* initializer = llvm::ConstantDataArray::getString(
+            context, value, true);
+        return new llvm::GlobalVariable(
+            generated, initializer->getType(), true,
+            llvm::GlobalValue::PrivateLinkage, initializer,
+            "__luna_native_v4_string_" + std::to_string(stringIndex++));
+    };
+    auto* rowType = llvm::StructType::create(context, "luna.native.export.v4");
+    rowType->setBody({i32, i32, i32, i32, i32, i32, i32, i32,
+                      ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr, ptr});
+    std::vector<llvm::Constant*> fields = {
+        llvm::ConstantInt::get(i32, LUNA_NATIVE_DESCRIPTOR_ABI_V4),
+        llvm::ConstantInt::get(i32, sizeof(LunaNativeExportDescriptorV4)),
+        llvm::ConstantInt::get(i32, LUNA_NATIVE_DECLARATION_FUNCTION_V1),
+        llvm::ConstantInt::get(i32, LUNA_NATIVE_EXPORT_CALLABLE_V1),
+        llvm::ConstantInt::get(i32, LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1),
+        llvm::ConstantInt::get(i32, LUNA_NATIVE_REF_SHARED_BORROW_V1),
+        llvm::ConstantInt::get(i32, LUNA_NATIVE_RESULT_UNIT_V1),
+        llvm::ConstantInt::get(i32, LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1)};
+    for (const auto& identity : candidate.descriptorIdentities())
+        fields.push_back(cString(identity));
+    auto* wrapper = generated.getFunction(wrapperLinkageName);
+    fields.push_back(wrapper);
+    auto* rowsType = llvm::ArrayType::get(rowType, 1);
+    auto* rows = new llvm::GlobalVariable(
+        generated, rowsType, true, llvm::GlobalValue::InternalLinkage,
+        llvm::ConstantArray::get(rowsType,
+            {llvm::ConstantStruct::get(rowType, fields)}),
+        "__luna_native_exports_v4");
+
+    const auto digest = luna::driver::digestNativeTypedExports(
+        {candidate.canonicalRow()});
+    auto* digestType = llvm::ArrayType::get(
+        llvm::Type::getInt8Ty(context), LUNA_NATIVE_DESCRIPTOR_DIGEST_SIZE_V4);
+    auto* descriptorType = llvm::StructType::create(
+        context, "luna.native.library.v4");
+    descriptorType->setBody(
+        {i32, i32, i32, i32, ptr, ptr, ptr, ptr, i64, ptr, digestType});
+    auto* descriptor = new llvm::GlobalVariable(
+        generated, descriptorType, true, llvm::GlobalValue::InternalLinkage,
+        llvm::ConstantStruct::get(descriptorType,
+            {llvm::ConstantInt::get(i32, LUNA_NATIVE_DESCRIPTOR_MAGIC_V4),
+             llvm::ConstantInt::get(i32, LUNA_NATIVE_DESCRIPTOR_ABI_V4),
+             llvm::ConstantInt::get(i32, sizeof(LunaNativeLibraryDescriptorV4)),
+             llvm::ConstantInt::get(i32, 0),
+             cString(candidate.source.packageId), cString(packageVersion),
+             cString(targetAbi), cString(compilerIdentity),
+             llvm::ConstantInt::get(i64, 1), rows,
+             llvm::ConstantDataArray::get(
+                 context, llvm::ArrayRef<uint8_t>(digest))}),
+        "__luna_native_library_v4");
+    const llvm::Triple host(llvm::sys::getProcessTriple());
+    if (host.isOSBinFormatMachO())
+        descriptor->setSection("__DATA,__luna_desc4");
+    else if (host.isOSBinFormatCOFF())
+        descriptor->setSection(".luna$desc4");
+    else
+        descriptor->setSection(".luna.native.descriptor.v4");
+
+    auto* query = llvm::Function::Create(
+        llvm::FunctionType::get(ptr, false),
+        llvm::GlobalValue::ExternalLinkage,
+        "luna_native_library_descriptor_v4", generated);
+    if (host.isOSBinFormatCOFF()) {
+        query->setDLLStorageClass(llvm::GlobalValue::DLLExportStorageClass);
+        wrapper->setDLLStorageClass(llvm::GlobalValue::DLLExportStorageClass);
+    }
+    llvm::IRBuilder<> builder(llvm::BasicBlock::Create(context, "entry", query));
+    builder.CreateRet(descriptor);
+    llvm::appendToCompilerUsed(generated, {rows, descriptor, query});
     error.clear();
     return true;
 }

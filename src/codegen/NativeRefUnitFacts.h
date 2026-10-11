@@ -71,4 +71,13 @@ bool derivePreflightNativeRefUnitDescriptorV4Candidate(
     const llvm::Module& generated, const std::string& wrapperLinkageName,
     NativeRefUnitDescriptorV4Candidate& candidate, std::string& error);
 
+// Emits one v4 candidate only after rederiving its sealed source and exact
+// generated preflight. The caller must separately prove the body failure path
+// and bind the resulting image to a Native proof before publication.
+bool emitNativeRefUnitDescriptorV4Candidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    llvm::Module& generated, const std::string& wrapperLinkageName,
+    const std::string& packageVersion, const std::string& targetAbi,
+    const std::string& compilerIdentity, std::string& error);
+
 } // namespace luna::codegen

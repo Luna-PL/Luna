@@ -2854,6 +2854,12 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                             ingressEntry->getName().str(), verifiedV4,
                             failure))
                     return false;
+                if (!luna::codegen::emitNativeRefUnitDescriptorV4Candidate(
+                        program, function, *proof.mModule,
+                        ingressEntry->getName().str(), "private-test",
+                        llvm::sys::getProcessTriple(), "luna/private-test",
+                        failure))
+                    return false;
             }
         }
 #endif
