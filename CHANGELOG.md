@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Paired the source-derived Native v4 Ref/unit candidate with its generated
+  LLVM wrapper in production codegen. The check requires exact C pointer
+  signatures, an internal source body, one context check, one Ref check with
+  frozen Slot/Contract constants, and one body call with ordered arguments.
+  The private JIT path invokes it after its status-branch proof; malformed IR
+  pairing is rejected. Native descriptor emission and invocation remain gated.
 - Added a production-side Ref/unit v4 candidate row builder that rederives
   frozen source facts before ordering them with a distinct wrapper linkage and
   the fixed ABI profile. The private JIT proof checks the exact row spelling

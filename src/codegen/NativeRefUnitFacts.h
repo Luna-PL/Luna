@@ -8,6 +8,9 @@ namespace moon {
 struct Module;
 struct FunctionDecl;
 }
+namespace llvm {
+class Module;
+}
 
 namespace luna::codegen {
 
@@ -51,6 +54,14 @@ bool deriveNativeRefUnitSourceFacts(
 bool deriveNativeRefUnitDescriptorV4Candidate(
     const moon::Module& program, const moon::FunctionDecl& function,
     const std::string& wrapperLinkageName,
+    NativeRefUnitDescriptorV4Candidate& candidate, std::string& error);
+
+// Pairs a freshly derived row with defined LLVM body/wrapper symbols and
+// exact borrowed target constants. Status CFG and failure containment remain
+// separate publication checks.
+bool derivePairedNativeRefUnitDescriptorV4Candidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    const llvm::Module& generated, const std::string& wrapperLinkageName,
     NativeRefUnitDescriptorV4Candidate& candidate, std::string& error);
 
 } // namespace luna::codegen

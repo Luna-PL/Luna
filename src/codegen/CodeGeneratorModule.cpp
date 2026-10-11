@@ -2845,6 +2845,13 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     failure = "private Ref ingress lost context/ref/body call pairing";
                     return false;
                 }
+                luna::codegen::NativeRefUnitDescriptorV4Candidate verifiedV4;
+                if (!luna::codegen::
+                        derivePairedNativeRefUnitDescriptorV4Candidate(
+                            program, function, *proof.mModule,
+                            ingressEntry->getName().str(), verifiedV4,
+                            failure))
+                    return false;
             }
         }
 #endif

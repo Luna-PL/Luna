@@ -1231,10 +1231,18 @@ from the source body, orders the ten
 identifiers as the v4 C row and fixes the canonical profile. The private JIT
 fixture checks that row against its verified ingress name and rejects a
 source-body or malformed linkage. This prepares the source-to-row mapping;
-production descriptor emission still needs to prove that the generated
-wrapper calls that exact body and has the fixed machine signature. The 32-bit
+production descriptor emission does not yet consume it. The 32-bit
 C probes also pin v4 field offsets on Linux, macOS and Windows targets; they
 do not establish 32-bit loader support.
+The production pairing check now rederives the candidate and inspects the
+generated LLVM module: the distinct external wrapper must have the exact C
+`i32(ptr, ptr)` shape, the internal source body `void(ptr, ptr)`, and the
+wrapper must call the context check, exact Slot/Contract Ref check and body
+once each with ordered arguments and no other calls. The private JIT proof
+runs this check after its separate status-branch validation. IR mutation
+tests reject changed body arguments, Slot constants, context arguments,
+body linkage and extra calls. Production publication still needs a generated wrapper path,
+complete status/failure proof and artifact binding.
 
 | Candidate contract fact | Required check before publication |
 | --- | --- |
@@ -1247,9 +1255,9 @@ do not establish 32-bit loader support.
 The existing generic Native v1/v2 export and Runtime declaration descriptors
 do not encode the Ref target or this ingress ABI. The Fragment descriptor
 describes factory/environment/activation execution, so it cannot stand in
-for a source function entry. The next step is to pair the derived v4 candidate
-row with a verified generated wrapper during Native generation, then connect
-its typed facts to a pinned lookup and a recoverable call path before changing
+for a source function entry. The next step is to use the paired v4 candidate
+in Native generation with a complete status/failure proof, then connect its
+typed facts to a pinned lookup and recoverable call path before changing
 publication. The Moon Container 0.3 encoder still rejects Apply regions, and the module
 verifier and CodeGenerator still reject source Ref publication.
 

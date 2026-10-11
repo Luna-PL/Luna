@@ -6,6 +6,10 @@
 #include "moonir/MoonIRModule.h"
 #include "moonir/Verifier.h"
 
+#include <llvm/Analysis/ValueTracking.h>
+#include <llvm/IR/Instructions.h>
+#include <llvm/IR/Module.h>
+
 #include <algorithm>
 #include <utility>
 
@@ -174,6 +178,83 @@ bool deriveNativeRefUnitDescriptorV4Candidate(
     NativeRefUnitDescriptorV4Candidate verified;
     verified.source = std::move(source);
     verified.wrapperLinkageName = wrapperLinkageName;
+    candidate = std::move(verified);
+    error.clear();
+    return true;
+}
+
+bool derivePairedNativeRefUnitDescriptorV4Candidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    const llvm::Module& generated, const std::string& wrapperLinkageName,
+    NativeRefUnitDescriptorV4Candidate& candidate, std::string& error) {
+    NativeRefUnitDescriptorV4Candidate verified;
+    if (!deriveNativeRefUnitDescriptorV4Candidate(
+            program, function, wrapperLinkageName, verified, error))
+        return false;
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* wrapper = generated.getFunction(wrapperLinkageName);
+    const auto* body = generated.getFunction(
+        verified.source.sourceLinkageName);
+    const auto exactPointerPair = [](const llvm::Function* entry,
+                                     bool returnsStatus) {
+        return entry && !entry->isDeclaration() && !entry->isVarArg() &&
+            entry->getCallingConv() == llvm::CallingConv::C &&
+            entry->arg_size() == 2 &&
+            entry->getArg(0)->getType()->isPointerTy() &&
+            entry->getArg(1)->getType()->isPointerTy() &&
+            (returnsStatus ? entry->getReturnType()->isIntegerTy(32)
+                           : entry->getReturnType()->isVoidTy());
+    };
+    if (!exactPointerPair(wrapper, true) ||
+        !exactPointerPair(body, false) ||
+        !wrapper->hasExternalLinkage() || !body->hasInternalLinkage())
+        return reject("Native v4 wrapper/body lacks the exact generated C profile");
+
+    size_t contextChecks = 0, refChecks = 0, bodyCalls = 0;
+    for (const auto& block : *wrapper)
+        for (const auto& instruction : block)
+            if (const auto* call = llvm::dyn_cast<llvm::CallBase>(
+                    &instruction)) {
+                const auto* callee = call->getCalledFunction();
+                if (!llvm::isa<llvm::CallInst>(call) || !callee ||
+                    call->getCallingConv() != llvm::CallingConv::C)
+                    return reject("Native v4 wrapper has an indirect or non-C call");
+                if (callee == body) {
+                    if (call->arg_size() != 2 ||
+                        call->getArgOperand(0) != wrapper->getArg(0) ||
+                        call->getArgOperand(1) != wrapper->getArg(1))
+                        return reject("Native v4 wrapper changed its source body arguments");
+                    ++bodyCalls;
+                } else if (callee->getName() ==
+                           "luna_compiler_fragment_context_check") {
+                    if (call->arg_size() != 1 ||
+                        call->getArgOperand(0) != wrapper->getArg(0) ||
+                        !callee->getReturnType()->isIntegerTy(32))
+                        return reject("Native v4 wrapper changed its context check");
+                    ++contextChecks;
+                } else if (callee->getName() ==
+                           "luna_runtime_fragment_ref_check_v1") {
+                    llvm::StringRef slot, contract;
+                    if (call->arg_size() != 3 ||
+                        call->getArgOperand(0) != wrapper->getArg(1) ||
+                        !callee->getReturnType()->isIntegerTy(32) ||
+                        !llvm::getConstantStringInfo(
+                            call->getArgOperand(1), slot) ||
+                        !llvm::getConstantStringInfo(
+                            call->getArgOperand(2), contract) ||
+                        slot.str() != verified.source.slotSymbolId ||
+                        contract.str() != verified.source.slotContractId)
+                        return reject("Native v4 wrapper changed its exact borrowed Slot target");
+                    ++refChecks;
+                } else {
+                    return reject("Native v4 wrapper has an unproved call");
+                }
+            }
+    if (contextChecks != 1 || refChecks != 1 || bodyCalls != 1)
+        return reject("Native v4 wrapper lost its context/Ref/body pairing");
     candidate = std::move(verified);
     error.clear();
     return true;

@@ -1453,6 +1453,70 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             *sourceApplyModule, *sourceApplyEntry,
             std::string(4096, 'x'), unitV4, unitSourceError))
         return fail("Native v4 candidate accepted an invalid wrapper or row mapping");
+    llvm::LLVMContext v4Context;
+    llvm::Module v4Module("native-v4-wrapper-pairing", v4Context);
+    auto* v4Pointer = llvm::PointerType::getUnqual(v4Context);
+    auto* v4I32 = llvm::Type::getInt32Ty(v4Context);
+    auto* v4Body = llvm::Function::Create(
+        llvm::FunctionType::get(llvm::Type::getVoidTy(v4Context),
+                                {v4Pointer, v4Pointer}, false),
+        llvm::Function::InternalLinkage,
+        unitSourceFacts.sourceLinkageName, v4Module);
+    llvm::IRBuilder<> v4Builder(llvm::BasicBlock::Create(
+        v4Context, "entry", v4Body));
+    v4Builder.CreateRetVoid();
+    auto* v4Wrapper = llvm::Function::Create(
+        llvm::FunctionType::get(v4I32, {v4Pointer, v4Pointer}, false),
+        llvm::Function::ExternalLinkage, unitWrapper, v4Module);
+    v4Builder.SetInsertPoint(llvm::BasicBlock::Create(
+        v4Context, "entry", v4Wrapper));
+    auto* v4ContextCheck = v4Builder.CreateCall(
+        v4Module.getOrInsertFunction(
+            "luna_compiler_fragment_context_check", v4I32, v4Pointer),
+        {v4Wrapper->getArg(0)});
+    auto* v4Slot = v4Builder.CreateGlobalString(
+        unitSourceFacts.slotSymbolId, "v4.slot");
+    auto* v4Contract = v4Builder.CreateGlobalString(
+        unitSourceFacts.slotContractId, "v4.contract");
+    auto* v4RefCheck = v4Builder.CreateCall(
+        v4Module.getOrInsertFunction(
+            "luna_runtime_fragment_ref_check_v1", v4I32,
+            v4Pointer, v4Pointer, v4Pointer),
+        {v4Wrapper->getArg(1), v4Slot, v4Contract});
+    auto* v4BodyCall = v4Builder.CreateCall(v4Body,
+        {v4Wrapper->getArg(0), v4Wrapper->getArg(1)});
+    v4Builder.CreateRet(llvm::ConstantInt::get(v4I32, 0));
+    const auto pairedV4 = [&] {
+        luna::codegen::NativeRefUnitDescriptorV4Candidate paired;
+        return luna::codegen::derivePairedNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry, v4Module,
+            unitWrapper, paired, unitSourceError) &&
+            paired.canonicalRow() == expectedUnitV4Row;
+    };
+    if (!pairedV4())
+        return fail("Native v4 candidate did not pair with its generated wrapper");
+    v4BodyCall->setArgOperand(1, v4Wrapper->getArg(0));
+    const bool changedBodyAccepted = pairedV4();
+    v4BodyCall->setArgOperand(1, v4Wrapper->getArg(1));
+    v4RefCheck->setArgOperand(1,
+        v4Builder.CreateGlobalString("symbol:forged-slot", "v4.forged"));
+    const bool changedSlotAccepted = pairedV4();
+    v4RefCheck->setArgOperand(1, v4Slot);
+    v4ContextCheck->setArgOperand(0, v4Wrapper->getArg(1));
+    const bool changedContextAccepted = pairedV4();
+    v4ContextCheck->setArgOperand(0, v4Wrapper->getArg(0));
+    v4Body->setLinkage(llvm::Function::ExternalLinkage);
+    const bool externalBodyAccepted = pairedV4();
+    v4Body->setLinkage(llvm::Function::InternalLinkage);
+    v4Builder.SetInsertPoint(v4Wrapper->getEntryBlock().getTerminator());
+    auto* v4ExtraCall = v4Builder.CreateCall(
+        v4ContextCheck->getCalledFunction(), {v4Wrapper->getArg(0)});
+    const bool extraCheckAccepted = pairedV4();
+    v4ExtraCall->eraseFromParent();
+    if (changedBodyAccepted || changedSlotAccepted ||
+        changedContextAccepted || externalBodyAccepted ||
+        extraCheckAccepted || !pairedV4())
+        return fail("Native v4 wrapper pairing accepted changed IR identities");
     for (unsigned field = 0; field < 10; ++field) {
         if (privateFieldCursor + 4 > privateIngressRecord.size() ||
             !rejectedPrivateIngressMutation(privateFieldCursor,

@@ -934,9 +934,15 @@ LLVM IR 证明还检查未预期结果分支；当前没有生产 Native 生成�
 且与源码 body 不同的 wrapper linkage，按 v4 C 行排列十个身份，并固定规范配置。
 私有 JIT 夹具用已验证的入口名称
 核对该行，并拒绝源码 body 名称或畸形 linkage。这完成了源码到候选行的映射；
-生产描述符生成仍须证明生成的 wrapper 调用精确 body 且机器签名一致。32 位 C
+生产描述符生成尚未消费它。32 位 C
 探针也固定 Linux、macOS 和 Windows 目标上的 v4 字段偏移，但不证明 32 位
 loader 可用。
+生产配对检查现重新推导候选行并检查生成的 LLVM module：独立的外部 wrapper
+必须具有精确的 C `i32(ptr, ptr)` 形状，内部源码 body 为 `void(ptr, ptr)`；
+wrapper 必须各调用一次 context 检查、带冻结 Slot／Contract 常量的 Ref 检查
+和按序传参的 body，且不得有其他调用。私有 JIT 证明在另行验证状态分支后
+执行这项检查。IR 变异测试拒绝 body 参数、Slot 常量、context 参数、body
+linkage 的改变和额外调用。生产发布仍须生成 wrapper、完成状态／失败证明并绑定产物。
 
 | 候选契约事实 | 发布前必须验证 |
 | --- | --- |
@@ -948,8 +954,8 @@ loader 可用。
 
 现有通用 Native v1/v2 export 和 Runtime declaration 描述符未编码 Ref 目标或这套入口
 ABI。Fragment 描述符对应 factory／environment／activation 执行，不能代替源码
-函数入口。下一步须在 Native 生成阶段把已推导的 v4 候选行与经过验证的
-生成 wrapper 配对，再把类型化事实接入固定 lookup 与可恢复调用路径，
+函数入口。下一步须在 Native 生成阶段用已配对的 v4 候选行完成状态／失败证明，
+再把类型化事实接入固定 lookup 与可恢复调用路径，
 然后才能修改生产发布。
 Moon Container 0.3 编码器仍拒绝 Apply region，module verifier 和 CodeGenerator
 也仍拒绝发布源码 Ref。
