@@ -929,6 +929,14 @@ LLVM IR 证明还检查未预期结果分支；当前没有生产 Native 生成�
 证明有效元数据能装载，身份、摘要、配置、别名及依赖库入口异常均被拒绝。
 只读候选查询不会把入口指针交给类型化调用或 generation binding。这些检查把
 声明的元数据绑定到产物，但尚未证明声明来自封闭的源码函数。
+生产 codegen 现提供不含指针的 v4 候选行构造器：它从封闭源码函数重新推导
+`NativeRefUnitSourceFacts`，要求 package 与 module 匹配，并要求有界 UTF-8
+且与源码 body 不同的 wrapper linkage，按 v4 C 行排列十个身份，并固定规范配置。
+私有 JIT 夹具用已验证的入口名称
+核对该行，并拒绝源码 body 名称或畸形 linkage。这完成了源码到候选行的映射；
+生产描述符生成仍须证明生成的 wrapper 调用精确 body 且机器签名一致。32 位 C
+探针也固定 Linux、macOS 和 Windows 目标上的 v4 字段偏移，但不证明 32 位
+loader 可用。
 
 | 候选契约事实 | 发布前必须验证 |
 | --- | --- |
@@ -940,8 +948,9 @@ LLVM IR 证明还检查未预期结果分支；当前没有生产 Native 生成�
 
 现有通用 Native v1/v2 export 和 Runtime declaration 描述符未编码 Ref 目标或这套入口
 ABI。Fragment 描述符对应 factory／environment／activation 执行，不能代替源码
-函数入口。下一步须在生成阶段从已验证的 `NativeRefUnitFacts` 推导 v4 行，再把
-类型化事实接入固定 lookup 与可恢复调用路径，然后才能修改生产发布。
+函数入口。下一步须在 Native 生成阶段把已推导的 v4 候选行与经过验证的
+生成 wrapper 配对，再把类型化事实接入固定 lookup 与可恢复调用路径，
+然后才能修改生产发布。
 Moon Container 0.3 编码器仍拒绝 Apply region，module verifier 和 CodeGenerator
 也仍拒绝发布源码 Ref。
 
@@ -953,8 +962,8 @@ SymbolId、ContractId 和 linkage 序列化供 proof export digest 计算；
 才进入 generation。因此，仅在 Runtime binding 上附加 Ref 目标或入口约定，
 不能得到现有 proof 的验证。不得原地扩展 v1 行。新的带版本类型化行必须从已验证
 的冻结函数签名与 CFG 导出，同时进入规范化导出摘要和生成的 descriptor；loader
-须检查字段有效性和身份歧义。独立 v4 夹具已覆盖后者，尚无从源码事实推导行的
-生产生成器。重建后的 artifact digest 与 trust 记录便能约束映像
+须检查字段有效性和身份歧义。独立 v4 夹具已覆盖后者；源码推导出的候选行尚未
+接入描述符生成。重建后的 artifact digest 与 trust 记录便能约束映像
 及其导出摘要。`stageVerifiedNativeGeneration` 当前只把 symbol／contract／entry／
 kind／flags 复制到 `GenerationBinding`；宿主调用前，类型化事实还须传到固定的
 lookup 结果。generation 已保留已验证库的 lease，但调用者须在整次同步调用期间
@@ -1189,7 +1198,9 @@ Windows GNU 和 i386 Darwin 的 freestanding 仅编译探针显示：32 位 v1�
 32、40、44。库记录的尾部对齐不同：所测 GNU/Linux、Darwin 的 v1／v2
 大小为 44／76 字节，Windows 为 48／80 字节。可复现探针见
 `tests/native_abi_layout_probe.c`；Clang CTest 会在每个配置的宿主上对三个
-triple 仅编译，不使用 32 位链接器或运行时。本地 Windows CLANG64 与 WSL
+triple 仅编译，不使用 32 位链接器或运行时。探针现在还核对 v4 候选导出记录
+大小 76 字节，以及 `entry_abi`、`symbol_id`、`entry` 偏移 16、32、72；
+库记录的偏移和平台大小与 v2 相同。此前本地 Windows CLANG64 与 WSL
 Arch Linux 的三项布局 CTest 和文件清单测试均通过。接入这三项测试后，
 完整非硬件 CTest 在 Windows CLANG64 通过 80／80，在 WSL Arch Linux
 通过 79／79。这些结果

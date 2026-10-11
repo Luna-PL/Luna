@@ -30,4 +30,21 @@ _Static_assert(sizeof(LunaNativeLibraryDescriptorV2) == 80,
 _Static_assert(sizeof(LunaNativeLibraryDescriptorV2) == 76,
                "32-bit Native v2 library size changed");
 #endif
+_Static_assert(sizeof(LunaNativeExportDescriptorV4) == 76 &&
+                   offsetof(LunaNativeExportDescriptorV4, entry_abi) == 16 &&
+                   offsetof(LunaNativeExportDescriptorV4, symbol_id) == 32 &&
+                   offsetof(LunaNativeExportDescriptorV4, entry) == 72,
+               "32-bit Native v4 export layout changed");
+_Static_assert(offsetof(LunaNativeLibraryDescriptorV4, export_count) == 32 &&
+                   offsetof(LunaNativeLibraryDescriptorV4, exports) == 40 &&
+                   offsetof(LunaNativeLibraryDescriptorV4,
+                            export_descriptor_digest) == 44,
+               "32-bit Native v4 library field offsets changed");
+#if defined(_WIN32)
+_Static_assert(sizeof(LunaNativeLibraryDescriptorV4) == 80,
+               "32-bit Windows Native v4 library size changed");
+#else
+_Static_assert(sizeof(LunaNativeLibraryDescriptorV4) == 76,
+               "32-bit Native v4 library size changed");
+#endif
 #endif

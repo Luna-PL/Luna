@@ -1393,6 +1393,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (validPrivateIngressRecord(malformedPrivateIngress))
         return fail("private Ref Apply entry accepted trailing bytes");
     size_t privateFieldCursor = 28;
+    std::string unitWrapper;
     for (unsigned field = 0; field < 11; ++field) {
         if (privateFieldCursor + 4 > privateIngressRecord.size())
             return fail("private Ref Apply entry has a truncated identity length");
@@ -1402,6 +1403,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         if (length == 0 || privateFieldCursor > privateIngressRecord.size() ||
             length > privateIngressRecord.size() - privateFieldCursor)
             return fail("private Ref Apply entry has a malformed identity field");
+        if (field == 10)
+            unitWrapper.assign(
+                reinterpret_cast<const char*>(
+                    privateIngressRecord.data() + privateFieldCursor), length);
         malformedPrivateIngress = privateIngressRecord;
         malformedPrivateIngress[privateFieldCursor] =
             malformedPrivateIngress[privateFieldCursor] == 'X' ? 'Y' : 'X';
@@ -1409,6 +1414,45 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             return fail("private Ref Apply entry accepted a changed identity");
         privateFieldCursor += length;
     }
+    luna::codegen::NativeRefUnitDescriptorV4Candidate unitV4;
+    if (!luna::codegen::deriveNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry, unitWrapper,
+            unitV4, unitSourceError)) {
+        std::cerr << unitSourceError << '\n';
+        return fail("Native v4 candidate lost its sealed Ref/unit source");
+    }
+    const std::array<std::string, 10> expectedUnitV4 = {
+        unitSourceFacts.functionSymbolId,
+        unitSourceFacts.functionContractId,
+        unitWrapper,
+        unitSourceFacts.moduleName,
+        unitSourceFacts.packageId,
+        unitSourceFacts.functionTypeId,
+        unitSourceFacts.refTypeId,
+        unitSourceFacts.slotSymbolId,
+        unitSourceFacts.slotContractId,
+        unitSourceFacts.slotTypeId};
+    std::string expectedUnitV4Row = "LUNA_NATIVE_EXPORT_V4\n1\n1\n3\n1\n2\n1";
+    for (const auto& identity : expectedUnitV4)
+        expectedUnitV4Row += '\n' + identity;
+    if (unitV4.descriptorIdentities() != expectedUnitV4 ||
+        unitV4.canonicalRow() != expectedUnitV4Row ||
+        unitV4.source.sourceLinkageName !=
+            unitSourceFacts.sourceLinkageName ||
+        unitV4.source.contextEffect != 1 ||
+        luna::codegen::deriveNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry,
+            unitSourceFacts.sourceLinkageName, unitV4, unitSourceError) ||
+        luna::codegen::deriveNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry,
+            "bad\nwrapper", unitV4, unitSourceError) ||
+        luna::codegen::deriveNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry,
+            "bad\xc0\xaf", unitV4, unitSourceError) ||
+        luna::codegen::deriveNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry,
+            std::string(4096, 'x'), unitV4, unitSourceError))
+        return fail("Native v4 candidate accepted an invalid wrapper or row mapping");
     for (unsigned field = 0; field < 10; ++field) {
         if (privateFieldCursor + 4 > privateIngressRecord.size() ||
             !rejectedPrivateIngressMutation(privateFieldCursor,
@@ -1447,6 +1491,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         luna::codegen::deriveNativeRefUnitSourceFacts(
             *sourceApplyModule, *sourceApplyEntry,
             unitSourceFacts, unitSourceError);
+    const bool forgedV4LinkageAccepted =
+        luna::codegen::deriveNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry,
+            unitWrapper, unitV4, unitSourceError);
     const bool forgedIngressLinkageAccepted =
         static_cast<bool>(CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
             *sourceApplyModule, *sourceApplyEntry, privateRefJitError));
@@ -1461,6 +1509,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         luna::codegen::deriveNativeRefUnitSourceFacts(
             *sourceApplyModule, *sourceApplyEntry,
             unitSourceFacts, unitSourceError);
+    const bool forgedV4BorrowAccepted =
+        luna::codegen::deriveNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry,
+            unitWrapper, unitV4, unitSourceError);
     const bool forgedIngressBorrowAccepted =
         static_cast<bool>(CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
             *sourceApplyModule, *sourceApplyEntry, privateRefJitError));
@@ -1472,14 +1524,28 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         luna::codegen::deriveNativeRefUnitSourceFacts(
             *sourceApplyModule, *sourceApplyEntry,
             unitSourceFacts, unitSourceError);
+    const bool forgedV4ContextAccepted =
+        luna::codegen::deriveNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry,
+            unitWrapper, unitV4, unitSourceError);
     const bool forgedContextJitAccepted =
         static_cast<bool>(CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
             *sourceApplyModule, *sourceApplyEntry, privateRefJitError));
     sourceApplyEntry->requiresFragmentContext = true;
+    const auto originalIngressPackage = sourceApplyEntry->packageId;
+    sourceApplyEntry->packageId = "forged.package";
+    const bool forgedV4PackageAccepted =
+        luna::codegen::deriveNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry,
+            unitWrapper, unitV4, unitSourceError);
+    sourceApplyEntry->packageId = originalIngressPackage;
     if (forgedIngressRecordAccepted || forgedSourceLinkageAccepted ||
+        forgedV4LinkageAccepted ||
         forgedIngressLinkageAccepted || forgedBorrowRecordAccepted ||
-        forgedSourceBorrowAccepted || forgedIngressBorrowAccepted ||
+        forgedSourceBorrowAccepted || forgedV4BorrowAccepted ||
+        forgedIngressBorrowAccepted ||
         forgedContextRecordAccepted || forgedSourceContextAccepted ||
+        forgedV4ContextAccepted || forgedV4PackageAccepted ||
         forgedContextJitAccepted)
         return fail("private Ref Apply ingress accepted forged frozen entry facts");
     auto sequentialSlotsSnapshot =

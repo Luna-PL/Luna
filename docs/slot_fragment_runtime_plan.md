@@ -1224,6 +1224,17 @@ profile, alias and dependency entries fail. The read-only candidate lookup
 does not expose its pointer to typed calls or generation bindings. These
 checks bind declared metadata to the artifact; they do not yet establish that
 the declarations were derived from a sealed source function.
+Production codegen now has a pointer-free v4 candidate row builder. It
+rederives `NativeRefUnitSourceFacts` from the sealed source function, requires
+a package matching its module and a bounded UTF-8 wrapper linkage distinct
+from the source body, orders the ten
+identifiers as the v4 C row and fixes the canonical profile. The private JIT
+fixture checks that row against its verified ingress name and rejects a
+source-body or malformed linkage. This prepares the source-to-row mapping;
+production descriptor emission still needs to prove that the generated
+wrapper calls that exact body and has the fixed machine signature. The 32-bit
+C probes also pin v4 field offsets on Linux, macOS and Windows targets; they
+do not establish 32-bit loader support.
 
 | Candidate contract fact | Required check before publication |
 | --- | --- |
@@ -1236,10 +1247,10 @@ the declarations were derived from a sealed source function.
 The existing generic Native v1/v2 export and Runtime declaration descriptors
 do not encode the Ref target or this ingress ABI. The Fragment descriptor
 describes factory/environment/activation execution, so it cannot stand in
-for a source function entry. The next step is to derive v4 rows from verified
-`NativeRefUnitFacts` during generation, then connect their typed facts to a
-pinned lookup and a recoverable call path before changing publication. The
-Moon Container 0.3 encoder still rejects Apply regions, and the module
+for a source function entry. The next step is to pair the derived v4 candidate
+row with a verified generated wrapper during Native generation, then connect
+its typed facts to a pinned lookup and a recoverable call path before changing
+publication. The Moon Container 0.3 encoder still rejects Apply regions, and the module
 verifier and CodeGenerator still reject source Ref publication.
 
 The present Native verification path fixes the integration boundary:
@@ -1253,8 +1264,8 @@ runtime binding would be unproved. Do not extend a v1 row in place. A new
 versioned typed row must derive from the verified frozen function signature
 and CFG, enter the canonical export digest and generated descriptor together,
 and be checked for field validity and identity ambiguity by the loader. The
-independent v4 fixture exercises the latter checks; no producer derives its
-rows from source facts yet.
+independent v4 fixture exercises the latter checks; the source-derived row
+builder is not yet connected to descriptor emission.
 The existing artifact digest and trust record then bind the rebuilt image and
 its export digest. `stageVerifiedNativeGeneration` currently copies only
 symbol/contract/entry/kind/flags into `GenerationBinding`; typed facts must
@@ -1571,8 +1582,11 @@ and 44. Library tail alignment differs: v1/v2 sizes are 44/76 on the probed
 GNU/Linux and Darwin targets, 48/80 on Windows. The repeatable probe is
 `tests/native_abi_layout_probe.c`; Clang CTest compiles it for all three
 triples on each configured host without a 32-bit linker or runtime. The
-three layout CTests and file-guide inventory pass on local Windows CLANG64
-and WSL Arch Linux. After registering them, the complete non-hardware CTest
+probe now also checks the v4 candidate export size of 76 bytes and its
+`entry_abi`, `symbol_id` and `entry` offsets of 16, 32 and 72. Its library
+offsets and platform sizes match v2. Earlier local Windows CLANG64 and WSL
+Arch Linux runs passed the three layout CTests and file-guide inventory.
+After registering them, the complete non-hardware CTest
 suites pass 80/80 on Windows CLANG64 and 79/79 on WSL Arch Linux.
 These observations do not establish a 32-bit artifact producer, loader,
 execution path or release promise. Adding a 32-bit target requires separate

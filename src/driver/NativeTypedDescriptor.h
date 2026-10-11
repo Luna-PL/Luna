@@ -4,6 +4,7 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <llvm/ADT/ArrayRef.h>
@@ -12,6 +13,41 @@
 #include "runtime/NativeArtifactABI.h"
 
 namespace luna::driver {
+
+inline bool validNativeDescriptorUtf8(std::string_view value) {
+    size_t index = 0;
+    while (index < value.size()) {
+        const unsigned char first =
+            static_cast<unsigned char>(value[index++]);
+        if (first <= 0x7f) continue;
+        uint32_t scalar = 0;
+        size_t remaining = 0;
+        if (first >= 0xc2 && first <= 0xdf) {
+            scalar = first & 0x1f;
+            remaining = 1;
+        } else if (first >= 0xe0 && first <= 0xef) {
+            scalar = first & 0x0f;
+            remaining = 2;
+        } else if (first >= 0xf0 && first <= 0xf4) {
+            scalar = first & 0x07;
+            remaining = 3;
+        } else {
+            return false;
+        }
+        if (remaining > value.size() - index) return false;
+        for (size_t offset = 0; offset < remaining; ++offset) {
+            const unsigned char next =
+                static_cast<unsigned char>(value[index++]);
+            if ((next & 0xc0) != 0x80) return false;
+            scalar = (scalar << 6) | (next & 0x3f);
+        }
+        if ((remaining == 2 && scalar < 0x800) ||
+            (remaining == 3 && scalar < 0x10000) ||
+            (scalar >= 0xd800 && scalar <= 0xdfff) || scalar > 0x10ffff)
+            return false;
+    }
+    return true;
+}
 
 // Descriptor ABI v2 fixes this UTF-8 row spelling and SHA-256 framing. A
 // different spelling, digest algorithm, or entry profile requires a new query

@@ -1,6 +1,7 @@
 #include "codegen/NativeRefUnitFacts.h"
 
 #include "core/TypeRelations.h"
+#include "driver/NativeTypedDescriptor.h"
 #include "moonir/FragmentContextEffects.h"
 #include "moonir/MoonIRModule.h"
 #include "moonir/Verifier.h"
@@ -13,11 +14,11 @@ namespace luna::codegen {
 namespace {
 
 bool boundedIdentity(const std::string& value) {
-    return !value.empty() && value.size() <= 4096 &&
+    return !value.empty() && value.size() < 4096 &&
         std::none_of(value.begin(), value.end(), [](char byte) {
             return byte == '\0' || byte == '\r' ||
                    byte == '\n' || byte == '\t';
-        });
+        }) && luna::driver::validNativeDescriptorUtf8(value);
 }
 
 } // namespace
@@ -134,6 +135,46 @@ bool deriveNativeRefUnitSourceFacts(
     if (!std::all_of(identities.begin(), identities.end(), boundedIdentity))
         return reject("Native Ref/unit candidate has an invalid identity");
     facts = std::move(candidate);
+    error.clear();
+    return true;
+}
+
+std::array<std::string, 10>
+NativeRefUnitDescriptorV4Candidate::descriptorIdentities() const {
+    return {source.functionSymbolId, source.functionContractId,
+            wrapperLinkageName, source.moduleName, source.packageId,
+            source.functionTypeId, source.refTypeId, source.slotSymbolId,
+            source.slotContractId, source.slotTypeId};
+}
+
+std::string NativeRefUnitDescriptorV4Candidate::canonicalRow() const {
+    return luna::driver::canonicalNativeRefUnitExportV4(
+        LUNA_NATIVE_DECLARATION_FUNCTION_V1,
+        LUNA_NATIVE_EXPORT_CALLABLE_V1,
+        LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1,
+        LUNA_NATIVE_REF_SHARED_BORROW_V1,
+        LUNA_NATIVE_RESULT_UNIT_V1,
+        LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1,
+        descriptorIdentities());
+}
+
+bool deriveNativeRefUnitDescriptorV4Candidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    const std::string& wrapperLinkageName,
+    NativeRefUnitDescriptorV4Candidate& candidate, std::string& error) {
+    NativeRefUnitSourceFacts source;
+    if (!deriveNativeRefUnitSourceFacts(program, function, source, error))
+        return false;
+    if (source.packageId != program.name ||
+        !boundedIdentity(wrapperLinkageName) ||
+        wrapperLinkageName == source.sourceLinkageName) {
+        error = "Native v4 candidate has no matching package or distinct wrapper linkage";
+        return false;
+    }
+    NativeRefUnitDescriptorV4Candidate verified;
+    verified.source = std::move(source);
+    verified.wrapperLinkageName = wrapperLinkageName;
+    candidate = std::move(verified);
     error.clear();
     return true;
 }

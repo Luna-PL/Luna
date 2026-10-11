@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Added a production-side Ref/unit v4 candidate row builder that rederives
+  frozen source facts before ordering them with a distinct wrapper linkage and
+  the fixed ABI profile. The private JIT proof checks the exact row spelling
+  and rejects an invalid, non-UTF-8 or source-body linkage; 32-bit layout probes now
+  cover v4 on Linux, macOS and Windows targets. Descriptor emission remains
+  gated until generated wrapper pairing is verified.
 - Added a validation-only Native v4 descriptor for borrowed Ref/unit candidate
   entries. The loader checks exact row layout, source identity fields, profile,
   canonical digest, resolved wrapper symbol and staged-image origin. An

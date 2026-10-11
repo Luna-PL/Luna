@@ -33,8 +33,24 @@ struct NativeRefUnitSourceFacts {
     }
 };
 
+// Producer-side candidate row. The source facts are rederived from the sealed
+// function; the wrapper linkage remains a separate claim until generated IR
+// proves that it calls that exact source body. No pointer or export is emitted.
+struct NativeRefUnitDescriptorV4Candidate {
+    NativeRefUnitSourceFacts source;
+    std::string wrapperLinkageName;
+
+    std::array<std::string, 10> descriptorIdentities() const;
+    std::string canonicalRow() const;
+};
+
 bool deriveNativeRefUnitSourceFacts(
     const moon::Module& program, const moon::FunctionDecl& function,
     NativeRefUnitSourceFacts& facts, std::string& error);
+
+bool deriveNativeRefUnitDescriptorV4Candidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    const std::string& wrapperLinkageName,
+    NativeRefUnitDescriptorV4Candidate& candidate, std::string& error);
 
 } // namespace luna::codegen
