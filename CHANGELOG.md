@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Fixed a candidate C profile for synchronous shared-borrow Ref/unit host
+  entries: two borrowed pointers, versioned status values, and a reserved
+  execution-failure status. The private JIT proof now binds that profile in its
+  pointer-free record and loaded call. Native export and invocation remain gated.
 - Made LLVM 22 Windows JIT use contiguous RuntimeDyld section reservation by
   default, retaining `LUNA_JIT_LEGACY_SECTIONS=1` for diagnostic comparison.
   Earlier paired ASAN probes passed 12/12 with reservation; LLVM's legacy

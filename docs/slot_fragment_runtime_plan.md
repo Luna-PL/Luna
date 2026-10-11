@@ -1140,9 +1140,12 @@ arbitrary or stale pointer; the same applies to the context preflight. The
 private status profile maps success/context/handle/target/unexpected check to
 `0/1/2/3/4`. Only exact known native results receive their named status;
 other check results use the unexpected branch and cannot enter the body.
-These numbers are not a public entry status contract, and the body has no
-recoverable execution-failure status. Publication still needs a public status
-ABI, symbol and descriptor mapping, and a code lease held for the full call.
+The candidate C profile in `NativeArtifactABI.h` now assigns these values to
+success/context/handle/target/unexpected check and reserves `5` for a future
+recoverable execution failure. The private entry still cannot return that last
+status. Publication still needs a verified typed export row, symbol and
+descriptor mapping, generated failure cleanup, and a code lease held for the
+full call.
 Before this test entry is generated, the private proof cross-checks the sealed
 Function declaration and callable TypeId/linkage/ownership contracts against
 its source signature, CFG root parameter and first exact Apply target.
@@ -1150,14 +1153,16 @@ Mutating the frozen linkage or parameter borrow contract makes JIT
 materialization fail. The test hook now also emits a pointer-free candidate
 row: independent magic, version, total size, zero reserved word, fixed field
 counts, bounded length-prefixed module/package/function/Ref/Slot/entry
-identities, and explicit calling, borrow, result and private status-profile
+identities, and explicit calling, borrow, result and candidate status-profile
 codes. It now also carries an explicit context-effect word derived from the
 fixed-point analysis of the exact function; both a false record word and a
 forged source effect fail. Its validator rechecks the sealed CFG and frozen
 facts. Tests reject
 truncation, extra bytes, altered identity or convention fields, changed source
 facts and a generic Native v1 export row. This row is test-only; no public
-descriptor, export digest or loader consumes it.
+descriptor, export digest or loader consumes it. Its convention fields now
+bind candidate entry ABI `3` and Ref/unit status domain `1` as well as the
+existing argument, borrow, result and context-effect facts.
 The test-only loaded entry view revalidates this row against the frozen source
 and against the JIT module that emitted it before looking up the fixed ingress
 symbol. An otherwise valid row paired with a JIT module materialized without
@@ -1182,7 +1187,7 @@ ASan/UBSan canonical tests; the production `luna` target and both documentation
 gates build/pass with the test-only helper excluded from the production ABI.
 This local slice does not constitute a full-suite or cross-platform run.
 
-#### Candidate borrowed Ref/unit host entry contract (design only)
+#### Candidate borrowed Ref/unit host entry contract (unpublished)
 
 The smallest publishable profile would use one synchronous entry with the
 logical shape `status(parent_context, borrowed_ref) -> i32`. Its parameter is
@@ -1190,9 +1195,13 @@ logical shape `status(parent_context, borrowed_ref) -> i32`. Its parameter is
 host must keep both Runtime-created owners live throughout the call; no Ref
 ownership moves to the body. A pinned callable returned by lookup must keep
 the descriptor and machine code live until the call completes. The entry
-must check parent and exact Ref target before body execution. The private
-`0/1/2/3/4` profile is evidence that preflight failures can be separated,
-not the public status ABI.
+must check parent and exact Ref target before body execution. The candidate
+`LunaNativeRefUnitEntryV1` uses two `const void*` arguments and an `i32`
+status: `0` success, `1` invalid context, `2` invalid handle, `3` invalid
+target, `4` unexpected check, and reserved `5` execution failure. The private
+JIT fixture executes success and the three named preflight failures, and its
+IR proof checks the unexpected-result branch. No Native descriptor currently
+publishes this profile or provides a recoverable body-failure path.
 
 | Candidate contract fact | Required check before publication |
 | --- | --- |
@@ -1719,9 +1728,10 @@ not a public ABI decision or stable-release approval:
    and live parent context before entering the body. The test-only composition
    now executes both checks against live correct/wrong-target handles and a
    null parent;
-   the general ingress helper still excludes Apply regions. Publication must
-   freeze the candidate typed record and status version, attach it to a
-   verified export, and carry the call-duration code lease through the public
+   the general ingress helper still excludes Apply regions. The candidate C
+   entry and status version are fixed, but publication must bind them in a
+   typed record attached to a verified export and carry the call-duration
+   code lease through the public
    lookup path, then update
    the structured verifier,
    export symbol metadata, CodeGenerator and dropGlue together; the existing

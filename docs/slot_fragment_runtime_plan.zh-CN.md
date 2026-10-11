@@ -871,18 +871,21 @@ module verifier 仍拒绝发布。native check 会读取由 Runtime 构造的 ha
 验证任意或已失效的 pointer；context 预检也有同样限制。私有状态配置将
 成功／context／handle／target／未预期检查结果分别映射为 `0/1/2/3/4`；
 只有精确的已知 native 结果获得相应名称，其他检查结果走未预期分支且不能进入
-body。这些数值不是公开入口状态契约，body 也没有可恢复的执行失败状态。发布
-仍须定义公开状态 ABI、符号／描述符映射及覆盖整次调用的代码 lease。
+body。`NativeArtifactABI.h` 的候选 C 配置现将这五个值固定为
+成功／context／handle／target／未预期检查，并预留 `5` 给未来可恢复的执行失败。
+私有入口尚不能返回最后一种状态。发布仍须接入已验证的类型化导出行、符号和描述符
+映射、生成式失败清理，以及覆盖整次调用的代码 lease。
 生成这个测试入口前，私有证明会将封闭的 Function declaration、可调用
 TypeId／linkage／所有权契约，与源码签名、CFG 根参数和首个 Apply 的精确目标
 交叉核对。篡改冻结的 linkage 或参数借用契约会使 JIT 物化失败。测试钩子现在还
 生成一条不含指针的候选记录：独立 magic、版本、总长度、清零保留字、固定字段数、
 带长度且有界的 module／package／function／Ref／Slot／entry 身份，以及明确的
-调用、借用、结果和私有状态配置码，以及一个来自该精确函数 context-effect
+调用、借用、结果和候选状态配置码，以及一个来自该精确函数 context-effect
 固定点分析的字段。将字段改为 false 或伪造源码 effect 都会失败。校验器重新
 检查封闭 CFG 与冻结事实。测试会
 拒绝截断、额外字节、身份或约定字段变异、源码事实变化，以及通用 Native v1
-导出行。此记录仅供测试；公开 descriptor、导出摘要和 loader 尚未使用它。
+导出行。约定字段现还绑定候选入口 ABI `3` 与 Ref／unit 状态域 `1`。此记录仅供
+测试；公开 descriptor、导出摘要和 loader 尚未使用它。
 仅测试用的已装载入口视图在查找固定入口符号前，会对照冻结源码及生成该记录的 JIT
 module 重新校验；有效记录配上未绑定该记录的 JIT module 也会被拒绝。视图持有代码
 lease，每次同步调用再临时复制一份；夹具释放原始 JIT 引用后仍调用两次，释放视图后
@@ -899,14 +902,18 @@ artifact loader 或公开 Runtime lookup。
 借用 owner pin 扩展也通过严格 CLANG64 和 Windows ASan／UBSan canonical 测试；
 生产 `luna` 目标构建及两个文档门禁通过，仅测试用 helper 未进入生产 ABI。
 
-#### 借用 Ref／unit 宿主入口候选契约（仅设计）
+#### 借用 Ref／unit 宿主入口候选契约（尚未发布）
 
 最小可发布形态是一次同步调用，逻辑签名为
 `status(parent_context, borrowed_ref) -> i32`，源码参数为
 `shared borrow RuntimeFragmentRef<S>`，返回 `unit`。宿主在调用全程保留两个
 由 Runtime 构造的 owner；Ref 所有权不转交给 body。lookup 返回的固定 callable
 须保留描述符和机器码直到调用结束。入口先检查 parent 和精确 Ref 目标，再进入
-body。私有 `0/1/2/3/4` 配置只证明入口预检错误可以区分，不是公开状态 ABI。
+body。候选 `LunaNativeRefUnitEntryV1` 使用两个 `const void*` 参数和 `i32`
+状态：成功 `0`、context 无效 `1`、handle 无效 `2`、目标无效 `3`、未预期检查
+`4`，并预留执行失败 `5`。私有 JIT 夹具实际执行成功及三种具名预检失败，
+LLVM IR 证明还检查未预期结果分支；当前没有 Native descriptor 发布此配置，
+也没有可恢复的 body 失败路径。
 
 | 候选契约事实 | 发布前必须验证 |
 | --- | --- |
@@ -1297,8 +1304,9 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    与 opaque 内部类型只是验证证据，不是公开契约。最小候选是一个同步共享借用 Ref
    参数和 unit 返回，由返回状态的 wrapper 在进入函数体前校验精确 Slot 和有效的
    parent context。仅测试用的组合入口现已用真实正确／错误目标 handle 和空
-   parent 执行两项检查；通用入口 helper 仍排除 Apply region。发布前须冻结候选的
-   类型化记录与状态版本，把它附着到已验证导出，并将调用期代码 lease 接入公开
+   parent 执行两项检查；通用入口 helper 仍排除 Apply region。候选 C 入口与
+   状态版本已经固定；发布前仍须将其绑定在类型化记录中、附着到已验证导出，并将
+   调用期代码 lease 接入公开
    lookup 路径，再同步修改
    structured verifier、导出符号
    metadata、CodeGenerator 和 dropGlue；

@@ -96,6 +96,26 @@ typedef struct LunaNativeLibraryDescriptorV2 {
 typedef const LunaNativeLibraryDescriptorV2*
     (*LunaNativeLibraryDescriptorFnV2)(void);
 
+// Candidate synchronous shared-borrow Ref/unit entry. A future typed export
+// row must bind the exact Ref Slot/Contract and this profile before a loader
+// may expose the entry. Both arguments are Runtime-issued live capabilities;
+// the host retains their owners and the pinned code view for the whole call.
+// No current Native descriptor publishes this profile.
+#define LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1 3u
+#define LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1 1u
+typedef int32_t (*LunaNativeRefUnitEntryV1)(
+    const void* parent_context, const void* borrowed_ref);
+
+enum LunaNativeRefUnitStatusV1 {
+    LUNA_NATIVE_REF_UNIT_SUCCESS_V1 = 0,
+    LUNA_NATIVE_REF_UNIT_INVALID_CONTEXT_V1 = 1,
+    LUNA_NATIVE_REF_UNIT_INVALID_HANDLE_V1 = 2,
+    LUNA_NATIVE_REF_UNIT_INVALID_TARGET_V1 = 3,
+    LUNA_NATIVE_REF_UNIT_UNEXPECTED_CHECK_V1 = 4,
+    // Reserved until generated body/dispatch cleanup can return this status.
+    LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1 = 5,
+};
+
 // Optional parallel candidate for one Ref ingress and owned Result return.
 // This metadata is validation-only: no public host entry or owner-handle
 // invocation is enabled by its presence. V1/V2 layouts remain unchanged.

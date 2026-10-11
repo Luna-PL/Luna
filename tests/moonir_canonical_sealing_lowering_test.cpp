@@ -363,6 +363,9 @@ bool exercisePrivateRefApplyJit(
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST == 2);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST == 3);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST == 4);
+    static_assert(LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1 == 3);
+    static_assert(LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1 == 1);
+    static_assert(LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1 == 5);
     static_assert(LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST == 8);
     static_assert(LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_LEASE_V1_TEST == 9);
     static_assert(static_cast<int>(LUNA_NATIVE_REF_RESULT_OWNER_SUCCESS_V1) ==
@@ -1329,7 +1332,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     };
     if (privateIngressRecord.size() < 32 ||
         readPrivateU32(privateIngressRecord, 20) != 11 ||
-        readPrivateU32(privateIngressRecord, 24) != 9)
+        readPrivateU32(privateIngressRecord, 24) != 10)
         return fail("private Ref Apply entry record lost its bounded field layout");
     const auto rejectedPrivateIngressMutation = [&](size_t offset,
                                                      uint32_t value) {
@@ -1343,8 +1346,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !rejectedPrivateIngressMutation(16, 1) ||
         !rejectedPrivateIngressMutation(20, 10) ||
         !rejectedPrivateIngressMutation(20, 12) ||
-        !rejectedPrivateIngressMutation(24, 8) ||
-        !rejectedPrivateIngressMutation(24, 10) ||
+        !rejectedPrivateIngressMutation(24, 9) ||
+        !rejectedPrivateIngressMutation(24, 11) ||
         !rejectedPrivateIngressMutation(28, 4097))
         return fail("private Ref Apply entry accepted an invalid header or length");
     auto malformedPrivateIngress = privateIngressRecord;
@@ -1387,11 +1390,11 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             return fail("private Ref Apply entry accepted a changed identity");
         privateFieldCursor += length;
     }
-    for (unsigned field = 0; field < 9; ++field) {
+    for (unsigned field = 0; field < 10; ++field) {
         if (privateFieldCursor + 4 > privateIngressRecord.size() ||
             !rejectedPrivateIngressMutation(privateFieldCursor,
                 readPrivateU32(privateIngressRecord, privateFieldCursor) + 1) ||
-            (field == 8 &&
+            (field == 9 &&
              !rejectedPrivateIngressMutation(privateFieldCursor, 0)))
             return fail("private Ref Apply entry accepted a changed ABI convention");
         privateFieldCursor += 4;

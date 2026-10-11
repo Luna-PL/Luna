@@ -1,6 +1,9 @@
 #pragma once
 
 #include <stdint.h>
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+#include "NativeArtifactABI.h"
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -20,14 +23,19 @@ enum LunaCompilerFragmentOverrideStatus {
 };
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
-// Versioned test-entry result profile. These values are deliberately separate
-// from the native Ref and compiler context-check status domains. No public ABI.
+// Private implementation of the candidate Native Ref/unit status domain.
+// The executable proof does not publish a Native entry or handle body failure.
 enum LunaPrivateRefUnitApplyStatusV1Test {
-    LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST = 0,
-    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST = 1,
-    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST = 2,
-    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST = 3,
-    LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST = 4,
+    LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST =
+        LUNA_NATIVE_REF_UNIT_SUCCESS_V1,
+    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST =
+        LUNA_NATIVE_REF_UNIT_INVALID_CONTEXT_V1,
+    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST =
+        LUNA_NATIVE_REF_UNIT_INVALID_HANDLE_V1,
+    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST =
+        LUNA_NATIVE_REF_UNIT_INVALID_TARGET_V1,
+    LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST =
+        LUNA_NATIVE_REF_UNIT_UNEXPECTED_CHECK_V1,
 };
 
 // Private Result transfer experiment; these numbers are not the Native v3

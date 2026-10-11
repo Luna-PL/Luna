@@ -180,18 +180,19 @@ std::optional<PrivateRefUnitApplyEntryFacts> privateRefUnitApplyEntryFacts(
     return facts;
 }
 
-// Pointer-free, test-only candidate row. Its status profile names the private
-// JIT result mapping, not a Native or source ABI version.
+// Pointer-free, test-only candidate row. It binds the candidate C entry and
+// status profile, but no Native descriptor or source export publishes it.
 constexpr std::array<uint8_t, 8> PrivateRefEntryMagic =
     {'L', 'U', 'N', 'A', 'R', 'U', '1', 0};
-constexpr std::array<uint32_t, 8> PrivateRefEntryConventions = {
+constexpr std::array<uint32_t, 9> PrivateRefEntryConventions = {
     1, // Function declaration
     1, // One source parameter
     2, // Two machine arguments
     1, // Parent context, then Ref
     1, // Shared borrow
     1, // Unit result
-    1, // Private test status profile
+    LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1,
+    LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1,
     0, // LLVM C calling convention
 };
 constexpr uint32_t PrivateRefEntryVersion = 1;
@@ -470,9 +471,9 @@ int32_t LunaPrivateRefUnitApplyLoadedEntry::call(
     auto keepCodeAlive = lease_;
     if (!keepCodeAlive || !entry_)
         return LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST;
-    using Entry = int32_t (*)(const void*, void*);
-    const auto entry = reinterpret_cast<Entry>(const_cast<void*>(entry_));
-    return entry(parentContext, const_cast<void*>(borrowedRef));
+    const auto entry = reinterpret_cast<LunaNativeRefUnitEntryV1>(
+        const_cast<void*>(entry_));
+    return entry(parentContext, borrowedRef);
 }
 
 int32_t LunaPrivateRefResultLoadedEntry::call(
