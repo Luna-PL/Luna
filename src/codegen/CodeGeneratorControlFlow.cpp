@@ -650,10 +650,16 @@ void CodeGenerator::generateControlFlowBody(
                 for (auto it = owners.rbegin(); it != owners.rend(); ++it)
                     mHelpers->emitRuntimeFragmentContextDrop(
                         *mBuilder, *mModule, *it);
-                auto* trap = llvm::Intrinsic::getOrInsertDeclaration(
-                    mModule.get(), llvm::Intrinsic::trap);
-                mBuilder->CreateCall(trap);
-                mBuilder->CreateUnreachable();
+                if (mPrivateRefUnitStatusBody)
+                    mBuilder->CreateRet(llvm::ConstantInt::getSigned(
+                        mHelpers->i32Ty(),
+                        LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1));
+                else {
+                    auto* trap = llvm::Intrinsic::getOrInsertDeclaration(
+                        mModule.get(), llvm::Intrinsic::trap);
+                    mBuilder->CreateCall(trap);
+                    mBuilder->CreateUnreachable();
+                }
                 mBuilder->SetInsertPoint(accepted);
             }
         } else
@@ -880,15 +886,19 @@ void CodeGenerator::generateControlFlowBody(
             }
             case moon::TerminatorKind::Return: {
                 llvm::Type* returnType = func->getReturnType();
-                if (returnType->isVoidTy()) {
+                if (returnType->isVoidTy() || mPrivateRefUnitStatusBody) {
                     if (terminator.operand)
                         (void)generateExpr(terminator.operand.get());
                     if (!emitReturnCleanups(
                             block.id, terminator.exitCleanups,
                             contextOwnersFor(block.id)))
                         break;
-                    if (!mBuilder->GetInsertBlock()->getTerminator())
-                        mBuilder->CreateRetVoid();
+                    if (!mBuilder->GetInsertBlock()->getTerminator()) {
+                        if (mPrivateRefUnitStatusBody)
+                            mBuilder->CreateRet(llvm::ConstantInt::get(
+                                mHelpers->i32Ty(), 0));
+                        else mBuilder->CreateRetVoid();
+                    }
                 } else {
                     llvm::Value* value = nullptr;
                     const TypePtr operandType = terminator.operand
@@ -1573,8 +1583,12 @@ void CodeGenerator::generateControlFlowBody(
                     mBuilder->SetInsertPoint(escaped);
                     if (propagateEscape)
                         propagateEscape();
-                    else if (sourceReturnType->isVoidTy())
-                        mBuilder->CreateRetVoid();
+                    else if (sourceReturnType->isVoidTy()) {
+                        if (mPrivateRefUnitStatusBody)
+                            mBuilder->CreateRet(llvm::ConstantInt::get(
+                                mHelpers->i32Ty(), 0));
+                        else mBuilder->CreateRetVoid();
+                    }
                     else
                         mBuilder->CreateRet(mBuilder->CreateLoad(sourceReturnType, escapedReturn,
                                                                  "runtime.slot.escaped.value"));
@@ -1583,7 +1597,8 @@ void CodeGenerator::generateControlFlowBody(
                          it != inheritedRefContextOwners.rend(); ++it)
                         mHelpers->emitRuntimeFragmentContextDrop(
                             *mBuilder, *mModule, *it);
-                    if (refApplyFlow && propagateEscape)
+                    if (refApplyFlow &&
+                        (propagateEscape || mPrivateRefUnitStatusBody))
                         mBuilder->CreateRet(llvm::ConstantInt::getSigned(
                             mHelpers->i32Ty(),
                             LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1));
@@ -1595,7 +1610,9 @@ void CodeGenerator::generateControlFlowBody(
                     }
                 };
                 emitRuntimeSlot(block, terminator, func, edgeTarget,
-                                func->getReturnType(), nullptr,
+                                mPrivateRefUnitStatusBody
+                                    ? mHelpers->voidTy()
+                                    : func->getReturnType(), nullptr,
                                 contextOwnersFor(block.id),
                                 {});
                 break;

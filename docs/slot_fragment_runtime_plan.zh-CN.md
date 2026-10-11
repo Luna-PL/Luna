@@ -566,10 +566,11 @@ Ref apply，以及可选的一个内层 Apply，两层借用同一本地 Ref 或
 生产入口证明仍仅支持 unit 返回；仅测试用的私有入口也接受受限 Ref-apply body 的
 `Result<i32, i32>` 返回。
 派生失败保持输出 cell 为空，并释放有效父 cell。Slot 分派返回负状态时，
-先按逆序 Drop 全部有效 cell。源码 body 随后 trap；outlined 回调返回显式续体
-失败值 `-1`。私有证明把每个失败分支连回对应派生／分派，并核对 owner 栈、
-顺序和终止指令；续体 return 已清空 cell 后重复 Drop 也安全。跨源码 body 的
-可恢复失败仍无返回协议。module verifier、
+先按逆序 Drop 全部有效 cell。outlined 回调返回显式续体失败值 `-1`；
+单借用 Ref／unit 的私有根 body 现在也在清理后返回 `-1`，其他已准入的 Result
+或双 Ref 源码 body 仍保留 trap 出口。私有证明把每个失败分支连回对应派生／
+分派，并核对 owner 栈、顺序和终止指令；续体 return 已清空 cell 后重复 Drop
+也安全。其他私有 body 形态尚无可恢复返回协议。module verifier、
 container encoder 和公开 CodeGenerator 仍拒绝
 带 Ref 的发布，因此这并非端到端可执行源码支持，也不代表公开 Native 发布。
 
@@ -873,9 +874,9 @@ module verifier 仍拒绝发布。native check 会读取由 Runtime 构造的 ha
 成功／context／handle／target／未预期检查结果分别映射为 `0/1/2/3/4`；
 只有精确的已知 native 结果获得相应名称，其他检查结果走未预期分支且不能进入
 body。`NativeArtifactABI.h` 的候选 C 配置现将这五个值固定为
-成功／context／handle／target／未预期检查，并预留 `5` 给未来可恢复的执行失败。
-私有入口尚不能返回最后一种状态。发布仍须接入已验证的类型化导出行、符号和描述符
-映射、生成式失败清理，以及覆盖整次调用的代码 lease。
+成功／context／handle／target／未预期检查，并将 `5` 用于可恢复的执行失败。
+有界 unit body 报告分派失败后，私有入口现可返回 `5`。发布仍须接入生产 wrapper、
+已验证的类型化导出行、符号和描述符映射，以及覆盖整次调用的代码 lease。
 生成这个测试入口前，私有证明会将封闭的 Function declaration、可调用
 TypeId／linkage／所有权契约，与源码签名、CFG 根参数和首个 Apply 的精确目标
 交叉核对。篡改冻结的 linkage 或参数借用契约会使 JIT 物化失败。测试钩子现在还
@@ -917,9 +918,8 @@ artifact loader 或公开 Runtime lookup。
 须保留描述符和机器码直到调用结束。入口先检查 parent 和精确 Ref 目标，再进入
 body。候选 `LunaNativeRefUnitEntryV1` 使用两个 `const void*` 参数和 `i32`
 状态：成功 `0`、context 无效 `1`、handle 无效 `2`、目标无效 `3`、未预期检查
-`4`，并预留执行失败 `5`。私有 JIT 夹具实际执行成功及三种具名预检失败，
-LLVM IR 证明还检查未预期结果分支；当前没有生产 Native 生成器发布此配置，
-也没有可恢复的 body 失败路径。
+`4`、执行失败 `5`。私有 JIT 夹具实际执行成功、三种具名预检失败及真实分派失败，
+LLVM IR 证明还检查未预期结果分支；当前没有生产 Native 生成器发布此配置。
 
 仅验证用的 Native v4 描述符现把这个候选配置与 v1/v2 可调用导出及 v3
 拥有型 Result 候选记录分开。其规范 SHA-256 行绑定固定配置和十个 UTF-8
@@ -939,21 +939,24 @@ LLVM IR 证明还检查未预期结果分支；当前没有生产 Native 生成�
 探针也固定 Linux、macOS 和 Windows 目标上的 v4 字段偏移，但不证明 32 位
 loader 可用。
 生产配对检查现重新推导候选行并检查生成的 LLVM module：独立的外部 wrapper
-必须具有精确的 C `i32(ptr, ptr)` 形状，内部源码 body 为 `void(ptr, ptr)`；
+必须具有精确的 C `i32(ptr, ptr)` 形状，内部状态 body 也为 `i32(ptr, ptr)`；
 wrapper 必须各调用一次 context 检查、带冻结 Slot／Contract 常量的 Ref 检查
 和按序传参的 body，且不得有其他调用。两项 runtime 检查函数还必须是具有精确
 指针原型的外部 C 声明，不能由同名本地实现替代。生产侧前置状态证明还要求
-context 和 Ref switch 使用各自的检查结果、分支和返回码精确一致，且 wrapper
-不含额外指令。
+context 和 Ref switch 使用各自的检查结果，受保护的 body 调用按零／非零结果
+选择精确的成功／执行失败返回码，且 wrapper 不含额外指令。
 私有 JIT 路径执行这两项检查。IR 变异测试拒绝 body 参数、Slot 常量、context
-参数、body linkage、额外调用和状态控制流的改变。生产发布仍须生成 wrapper、
-处理可恢复的 body 执行失败并绑定产物。
+参数、body linkage、额外调用和状态控制流的改变。生产发布仍须生成 wrapper
+并绑定产物。
 生成的 outlined Apply 续体在 context 派生或 Slot 派发失败时先 Drop 活跃
 context owner，再返回显式失败值 `-1`。Runtime 将其映射为分派执行失败，
-包括嵌套 resume；它不算续体逃逸。根源码 body 在这些失败路径仍先 Drop，
-再执行 `llvm.trap`／`unreachable`。`void` body 一旦陷入 trap，wrapper
-无法返回预留的状态码 `5`。生产生成仍须为根 body 建立可验证清理顺序的
-失败通道，才能发布该行。
+包括嵌套 resume；它不算续体逃逸。私有单 Ref／unit 根 body 正常返回 `0`，
+派生或分派失败时按序 Drop context owner 后返回 `-1`。私有宿主 wrapper 将
+零映射为成功、非零映射为预留的 Native v4 状态码 `5`；真实 JIT 探针通过重复
+resume 触发分派失败并观察到 `5`。根 body 证明拒绝 trap 和未经证明的返回值，
+v4 源码事实仅准入没有其他词法清理义务的 CFG；其余清理须另行证明失败路径。
+候选产物仍仅供私有验证并被丢弃。发布前仍须接入 Native 生成、经过验证的
+descriptor 发射和产物绑定。
 
 | 候选契约事实 | 发布前必须验证 |
 | --- | --- |
@@ -966,7 +969,7 @@ context owner，再返回显式失败值 `-1`。Runtime 将其映射为分派执
 现有通用 Native v1/v2 export 和 Runtime declaration 描述符未编码 Ref 目标或这套入口
 ABI。Fragment 描述符对应 factory／environment／activation 执行，不能代替源码
 函数入口。下一步须在 Native 生成阶段使用已验证前置状态的 v4 候选行，
-完成可恢复的 body 失败收敛，再把类型化事实接入固定 lookup 与调用路径，
+再把类型化事实接入固定 lookup 与调用路径，
 然后才能修改生产发布。
 Moon Container 0.3 编码器仍拒绝 Apply region，module verifier 和 CodeGenerator
 也仍拒绝发布源码 Ref。

@@ -344,6 +344,8 @@ private:
     // Set only on a disposable private proof generator. Public generation
     // continues to reject Ref-apply CFGs at the module boundary.
     bool mPrivateRefApplyEnabled = false;
+    // Internal status result for the single-borrowed-Ref/unit proof body.
+    bool mPrivateRefUnitStatusBody = false;
     bool mCurrentFunctionIsKernel = false;
     std::unordered_map<std::string, llvm::Function*> mFunctions;
     std::unordered_map<std::string, llvm::Function*> mDropCallbacks;

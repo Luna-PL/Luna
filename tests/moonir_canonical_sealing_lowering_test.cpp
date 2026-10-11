@@ -79,6 +79,8 @@ uint64_t privateRefJitArgumentsAlignment = 1;
 bool privateRefJitPayloadValid = true;
 std::vector<int32_t> privateRefJitObservedArguments;
 std::vector<unsigned> privateRefJitObservedSources;
+bool privateRefJitInjectRepeatedResumeFailure = false;
+int32_t privateRefJitRepeatedResumeStatus = 0;
 std::array<const char*, 2> privateRefJitExpectedSlotIds{};
 std::array<const char*, 2> privateRefJitExpectedSlotContracts{};
 std::array<const char*, 2> privateRefJitExpectedLayoutIds{};
@@ -110,6 +112,9 @@ void executePrivateRefJitFragmentFrom(unsigned source, void* activation) {
     if (privateRefJitResumeStatus ==
         LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1)
         ++privateRefJitCompletedResumes;
+    if (privateRefJitInjectRepeatedResumeFailure)
+        privateRefJitRepeatedResumeStatus =
+            luna_runtime_fragment_activation_resume_v1(activation);
 }
 
 void executePrivateRefJitFragment(void*, void* activation) {
@@ -356,7 +361,7 @@ bool exercisePrivateRefApplyJit(
             emptyBindings, parent, error))
         return false;
 
-    using EntryOne = void (*)(const void*, void*);
+    using EntryOne = int32_t (*)(const void*, void*);
     using EntryTwo = void (*)(const void*, void*, void*);
     using EntryResultOne = uint64_t (*)(const void*, void*);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST == 0);
@@ -367,6 +372,7 @@ bool exercisePrivateRefApplyJit(
     static_assert(LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1 == 3);
     static_assert(LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1 == 1);
     static_assert(LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1 == 5);
+    static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_EXECUTION_FAILURE_V1_TEST == 5);
     static_assert(LUNA_PRIVATE_REF_RESULT_TRANSFER_ADOPTION_FAILURE_V1_TEST == 8);
     static_assert(LUNA_PRIVATE_REF_RESULT_TRANSFER_INVALID_LEASE_V1_TEST == 9);
     static_assert(static_cast<int>(LUNA_NATIVE_REF_RESULT_OWNER_SUCCESS_V1) ==
@@ -432,6 +438,19 @@ bool exercisePrivateRefApplyJit(
                     const_cast<void*>(handle.opaque())) !=
                     LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST) {
                 error = "private Ref host ingress bypassed context or exact target validation";
+                return false;
+            }
+            privateRefJitRepeatedResumeStatus = 0;
+            privateRefJitInjectRepeatedResumeFailure = true;
+            const auto failedStatus = loadedIngress->call(parent.opaque(),
+                const_cast<void*>(handle.opaque()));
+            privateRefJitInjectRepeatedResumeFailure = false;
+            if (failedStatus !=
+                    LUNA_PRIVATE_REF_UNIT_APPLY_EXECUTION_FAILURE_V1_TEST ||
+                privateRefJitRepeatedResumeStatus !=
+                    LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+                privateRefJitExecutions != dispatchesBefore + 2) {
+                error = "private Ref host ingress lost a recoverable body failure";
                 return false;
             }
             return true;
@@ -834,8 +853,11 @@ bool exercisePrivateRefApplyJit(
         if (twoBorrowedReferences)
             entryTwo(parent.opaque(), const_cast<void*>(handle.opaque()),
                 const_cast<void*>(secondHandle.opaque()));
-        else
-            entryOne(parent.opaque(), const_cast<void*>(handle.opaque()));
+        else if (entryOne(parent.opaque(),
+                     const_cast<void*>(handle.opaque())) != 0) {
+            error = "private Ref unit body did not return success";
+            return false;
+        }
         return true;
     };
     const auto before = privateRefJitExecutions;
@@ -936,7 +958,7 @@ bool exercisePrivateRefApplyJit(
             return false;
         }
     }
-    const unsigned expectedCalls = exerciseIngressGate ? 3u : 2u;
+    const unsigned expectedCalls = exerciseIngressGate ? 5u : 2u;
     if (privateRefJitExecutions != before + expectedDispatches * expectedCalls ||
         privateRefJitCompletedResumes !=
             resumesBefore + expectedCompletedDispatches.value_or(
@@ -1458,13 +1480,13 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* v4Pointer = llvm::PointerType::getUnqual(v4Context);
     auto* v4I32 = llvm::Type::getInt32Ty(v4Context);
     auto* v4Body = llvm::Function::Create(
-        llvm::FunctionType::get(llvm::Type::getVoidTy(v4Context),
+        llvm::FunctionType::get(v4I32,
                                 {v4Pointer, v4Pointer}, false),
         llvm::Function::InternalLinkage,
         unitSourceFacts.sourceLinkageName, v4Module);
     llvm::IRBuilder<> v4Builder(llvm::BasicBlock::Create(
         v4Context, "entry", v4Body));
-    v4Builder.CreateRetVoid();
+    v4Builder.CreateRet(llvm::ConstantInt::get(v4I32, 0));
     auto* v4Wrapper = llvm::Function::Create(
         llvm::FunctionType::get(v4I32, {v4Pointer, v4Pointer}, false),
         llvm::Function::ExternalLinkage, unitWrapper, v4Module);
@@ -1553,6 +1575,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         v4Context, "check.unexpected", guardedV4);
     auto* guardedBody = llvm::BasicBlock::Create(
         v4Context, "ref.body", guardedV4);
+    auto* guardedBodySucceeded = llvm::BasicBlock::Create(
+        v4Context, "body.succeeded", guardedV4);
+    auto* guardedBodyFailed = llvm::BasicBlock::Create(
+        v4Context, "body.failed", guardedV4);
     v4Builder.SetInsertPoint(guardedEntry);
     auto* guardedContextCall = v4Builder.CreateCall(
         v4ContextCheck->getCalledFunction(), {guardedV4->getArg(0)});
@@ -1590,10 +1616,18 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     v4Builder.SetInsertPoint(guardedUnexpected);
     v4Builder.CreateRet(v4Status(LUNA_NATIVE_REF_UNIT_UNEXPECTED_CHECK_V1));
     v4Builder.SetInsertPoint(guardedBody);
-    v4Builder.CreateCall(v4Body,
+    auto* guardedBodyCall = v4Builder.CreateCall(v4Body,
         {guardedV4->getArg(0), guardedV4->getArg(1)});
+    auto* guardedBodySuccess = llvm::cast<llvm::ICmpInst>(
+        v4Builder.CreateICmpEQ(guardedBodyCall, v4Status(0)));
+    v4Builder.CreateCondBr(guardedBodySuccess,
+        guardedBodySucceeded, guardedBodyFailed);
+    v4Builder.SetInsertPoint(guardedBodySucceeded);
     auto* guardedSuccess = v4Builder.CreateRet(
         v4Status(LUNA_NATIVE_REF_UNIT_SUCCESS_V1));
+    v4Builder.SetInsertPoint(guardedBodyFailed);
+    auto* guardedFailure = v4Builder.CreateRet(
+        v4Status(LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1));
     const auto preflightV4 = [&] {
         luna::codegen::NativeRefUnitDescriptorV4Candidate guarded;
         return luna::codegen::derivePreflightNativeRefUnitDescriptorV4Candidate(
@@ -1616,6 +1650,13 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         v4Status(LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1));
     const bool wrongSuccessAccepted = preflightV4();
     guardedSuccess->setOperand(0, v4Status(LUNA_NATIVE_REF_UNIT_SUCCESS_V1));
+    guardedBodySuccess->setOperand(0, v4Status(0));
+    const bool constantBodyAccepted = preflightV4();
+    guardedBodySuccess->setOperand(0, guardedBodyCall);
+    guardedFailure->setOperand(0, v4Status(LUNA_NATIVE_REF_UNIT_SUCCESS_V1));
+    const bool wrongFailureAccepted = preflightV4();
+    guardedFailure->setOperand(0,
+        v4Status(LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1));
     v4Builder.SetInsertPoint(guardedSuccess);
     auto* guardedExtraStore = v4Builder.CreateStore(
         guardedV4->getArg(0), guardedV4->getArg(0));
@@ -1623,6 +1664,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     guardedExtraStore->eraseFromParent();
     if (constantContextAccepted || constantRefAccepted ||
         unexpectedToBodyAccepted || wrongSuccessAccepted ||
+        constantBodyAccepted || wrongFailureAccepted ||
         extraInstructionAccepted || !preflightV4())
         return fail("Native v4 preflight accepted changed status control flow");
     for (unsigned field = 0; field < 10; ++field) {

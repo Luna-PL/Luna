@@ -108,6 +108,10 @@ bool deriveNativeRefUnitSourceFacts(
         return reject("Native Ref/unit candidate differs from its frozen signature");
 
     const auto& graph = *function.controlFlow;
+    // The private failure channel releases context owners. Other lexical
+    // cleanup obligations need their own failure-path proof before v4 pairing.
+    if (!graph.cleanups.empty())
+        return reject("Native Ref/unit candidate has unproved failure cleanup");
     const moon::LocalRecord* parameterLocal = nullptr;
     for (const auto& local : graph.locals)
         if (local.kind == moon::LocalKind::Parameter) {
@@ -206,18 +210,15 @@ bool derivePairedNativeRefUnitDescriptorV4Candidate(
         "luna_compiler_fragment_context_check");
     const auto* refHelper = generated.getFunction(
         "luna_runtime_fragment_ref_check_v1");
-    const auto exactPointerPair = [](const llvm::Function* entry,
-                                     bool returnsStatus) {
+    const auto exactPointerPair = [](const llvm::Function* entry) {
         return entry && !entry->isDeclaration() && !entry->isVarArg() &&
             entry->getCallingConv() == llvm::CallingConv::C &&
             entry->arg_size() == 2 &&
             entry->getArg(0)->getType()->isPointerTy() &&
             entry->getArg(1)->getType()->isPointerTy() &&
-            (returnsStatus ? entry->getReturnType()->isIntegerTy(32)
-                           : entry->getReturnType()->isVoidTy());
+            entry->getReturnType()->isIntegerTy(32);
     };
-    if (!exactPointerPair(wrapper, true) ||
-        !exactPointerPair(body, false) ||
+    if (!exactPointerPair(wrapper) || !exactPointerPair(body) ||
         !wrapper->hasExternalLinkage() || !body->hasInternalLinkage())
         return reject("Native v4 wrapper/body lacks the exact generated C profile");
     const auto exactRuntimeHelper = [](const llvm::Function* helper,
@@ -297,7 +298,7 @@ bool derivePreflightNativeRefUnitDescriptorV4Candidate(
         return false;
     };
     const auto* wrapper = generated.getFunction(wrapperLinkageName);
-    if (wrapper->size() != 7)
+    if (wrapper->size() != 9)
         return reject("Native v4 preflight has an unexpected block");
     const auto* entry = &wrapper->getEntryBlock();
     const auto* contextCall = entry->size() == 2
@@ -344,14 +345,28 @@ bool derivePreflightNativeRefUnitDescriptorV4Candidate(
         refBranch, LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1);
     const auto* body = generated.getFunction(
         verified.source.sourceLinkageName);
-    const auto* bodyCall = bodyBlock && bodyBlock->size() == 2
+    const auto* bodyCall = bodyBlock && bodyBlock->size() == 3
         ? llvm::dyn_cast<llvm::CallInst>(&bodyBlock->front()) : nullptr;
     if (!bodyCall || bodyCall->getCalledFunction() != body)
         return reject("Native v4 preflight lost its guarded body call");
+    const auto* bodySuccess = llvm::dyn_cast<llvm::ICmpInst>(
+        bodyCall->getNextNode());
+    const auto* bodyBranch = llvm::dyn_cast_or_null<llvm::BranchInst>(
+        bodyBlock->getTerminator());
+    if (!bodySuccess || bodySuccess->getPredicate() !=
+            llvm::CmpInst::ICMP_EQ ||
+        bodySuccess->getOperand(0) != bodyCall ||
+        !llvm::isa<llvm::ConstantInt>(bodySuccess->getOperand(1)) ||
+        !llvm::cast<llvm::ConstantInt>(bodySuccess->getOperand(1))->isZero() ||
+        !bodyBranch || !bodyBranch->isConditional() ||
+        bodyBranch->getCondition() != bodySuccess)
+        return reject("Native v4 preflight lost its body status branch");
+    const auto* bodySucceeded = bodyBranch->getSuccessor(0);
+    const auto* bodyFailed = bodyBranch->getSuccessor(1);
     const std::unordered_set<const llvm::BasicBlock*> blocks = {
         entry, checkedContext, invalidContext, invalidHandle,
-        invalidTarget, unexpected, bodyBlock};
-    if (blocks.size() != 7 || blocks.count(nullptr) ||
+        invalidTarget, unexpected, bodyBlock, bodySucceeded, bodyFailed};
+    if (blocks.size() != 9 || blocks.count(nullptr) ||
         std::any_of(blocks.begin(), blocks.end(),
             [wrapper](const auto* block) {
                 return block->getParent() != wrapper;
@@ -369,12 +384,6 @@ bool derivePreflightNativeRefUnitDescriptorV4Candidate(
             : nullptr;
         return status && status->getSExtValue() == expected;
     };
-    const auto* successReturn = llvm::dyn_cast_or_null<llvm::ReturnInst>(
-        bodyBlock->getTerminator());
-    const auto* successStatus = successReturn
-        ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
-            successReturn->getReturnValue())
-        : nullptr;
     if (!returnsStatus(invalidContext,
             LUNA_NATIVE_REF_UNIT_INVALID_CONTEXT_V1) ||
         !returnsStatus(invalidHandle,
@@ -383,8 +392,10 @@ bool derivePreflightNativeRefUnitDescriptorV4Candidate(
             LUNA_NATIVE_REF_UNIT_INVALID_TARGET_V1) ||
         !returnsStatus(unexpected,
             LUNA_NATIVE_REF_UNIT_UNEXPECTED_CHECK_V1) ||
-        !successStatus ||
-        successStatus->getSExtValue() != LUNA_NATIVE_REF_UNIT_SUCCESS_V1)
+        !returnsStatus(bodySucceeded,
+            LUNA_NATIVE_REF_UNIT_SUCCESS_V1) ||
+        !returnsStatus(bodyFailed,
+            LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1))
         return reject("Native v4 preflight changed its status returns");
     candidate = std::move(verified);
     error.clear();

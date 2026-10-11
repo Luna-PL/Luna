@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- Added a recoverable status channel to the private single-Ref/unit Apply
+  body: normal exits return `0`, derivation and dispatch failures return `-1`
+  after ordered context Drops, and the guarded host wrapper maps failure to
+  Native v4 status `5`. A JIT repeated-resume probe exercises the real failure
+  path; production proof rejects traps and unproved body returns. V4 source
+  facts reject other lexical cleanup obligations until their failure paths
+  are proved. Native generation and descriptor publication remain gated.
 - Propagated generated outlined Ref-apply continuation failures as an explicit
   `-1` result after ordered context Drops. Runtime reports this as dispatch
   execution failure, including nested resume, while the private LLVM proof

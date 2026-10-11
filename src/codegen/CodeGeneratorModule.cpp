@@ -719,6 +719,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
     parameters.insert(parameters.end(),
                       privateRefApply ? function.params.size() : 1,
                       proof.mHelpers->ptrTy());
+    const bool privateUnitStatusBody = privateRefApply &&
+        returnType->kind == TypeKind::Unit && function.params.size() == 1;
     auto* body = llvm::Function::Create(
         llvm::FunctionType::get(
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
@@ -727,11 +729,14 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     proof.resolveType(function.returnType))
                 :
 #endif
-                  proof.mHelpers->voidTy(), parameters, false),
+                  (privateUnitStatusBody ? proof.mHelpers->i32Ty()
+                                         : proof.mHelpers->voidTy()),
+            parameters, false),
         llvm::Function::InternalLinkage,
         function.generatedSymbolName, *proof.mModule);
     proof.mFunctions[function.generatedSymbolName] = body;
     proof.mPrivateRefApplyEnabled = privateRefApply;
+    proof.mPrivateRefUnitStatusBody = privateUnitStatusBody;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     if (privateResultJit) {
         // Import only frozen auxiliary bodies named by the canonical cleanup
@@ -1162,7 +1167,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 parents.push_back(found->second);
             }
             if (!overrideFailureDropsOwners(
-                    *derivation, parents, false, &accountedContextDrops)) {
+                    *derivation, parents, privateUnitStatusBody,
+                    &accountedContextDrops)) {
                 failure = "Ref apply derivation failure did not release its parent stack";
                 return false;
             }
@@ -1205,9 +1211,45 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             }
             std::vector<const llvm::Value*> failedOwners = owners;
             if (!dispatchFailureDropsOwners(
-                    *dispatch, failedOwners, false,
+                    *dispatch, failedOwners, privateUnitStatusBody,
                     &accountedContextDrops)) {
                 failure = "private Ref apply dispatch failure lost its owner stack";
+                return false;
+            }
+        }
+        if (privateUnitStatusBody) {
+            size_t succeeded = 0;
+            size_t failed = 0;
+            for (const auto& block : *body) {
+                for (const auto& instruction : block)
+                    if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
+                            &instruction); call && call->getCalledFunction() &&
+                        call->getCalledFunction()->getName() == "llvm.trap") {
+                        failure = "private Ref unit status body retained a trap";
+                        return false;
+                    }
+                const auto* returned = llvm::dyn_cast<llvm::ReturnInst>(
+                    block.getTerminator());
+                if (!returned) continue;
+                const auto* status = llvm::dyn_cast_or_null<llvm::ConstantInt>(
+                    returned->getReturnValue());
+                if (!status) {
+                    failure = "private Ref unit body returned a dynamic status";
+                    return false;
+                }
+                if (status->isZero()) ++succeeded;
+                else if (status->getSExtValue() ==
+                        LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 &&
+                    (block.getName().starts_with("ref.apply.failed") ||
+                     block.getName().starts_with("runtime.slot.failed")))
+                    ++failed;
+                else {
+                    failure = "private Ref unit body returned an unproved status";
+                    return false;
+                }
+            }
+            if (!succeeded || failed != bindings.size() + slotSites.size()) {
+                failure = "private Ref unit body lost a recoverable failure exit";
                 return false;
             }
         }
@@ -1496,7 +1538,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         return false;
                     }
                     if (!dispatchFailureDropsOwners(
-                            *dispatch, owners, current.function != body,
+                            *dispatch, owners,
+                            current.function != body || privateUnitStatusBody,
                             &accountedContextDrops)) {
                         failure = "private Ref apply dispatch failure lost its owner stack";
                         return false;
@@ -2015,6 +2058,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     llvm::ConstantInt::get(proof.mHelpers->i64Ty(),
                         privateOkResourceResultJit ? uint64_t{1} << 32 : 0),
                     packedMarker));
+            } else if (privateUnitStatusBody) {
+                builder.CreateRet(returned);
             } else {
                 builder.CreateRetVoid();
             }
@@ -2709,7 +2754,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     ingressEntry->getReturnType() != proof.mHelpers->i32Ty() ||
                     body->getCallingConv() != llvm::CallingConv::C ||
                     body->arg_size() != 2 ||
-                    !body->getReturnType()->isVoidTy()) {
+                    body->getReturnType() != proof.mHelpers->i32Ty()) {
                     failure = "private Ref entry record differs from generated LLVM ABI";
                     return false;
                 }
@@ -2727,6 +2772,10 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     *proof.mCtx, "check.unexpected", ingressEntry);
                 auto* ingressBody = llvm::BasicBlock::Create(
                     *proof.mCtx, "ref.body", ingressEntry);
+                auto* bodySucceeded = llvm::BasicBlock::Create(
+                    *proof.mCtx, "body.succeeded", ingressEntry);
+                auto* bodyFailed = llvm::BasicBlock::Create(
+                    *proof.mCtx, "body.failed", ingressEntry);
                 llvm::IRBuilder<> ingressBuilder(ingressStart);
                 auto contextCheck = proof.mModule->getOrInsertFunction(
                     "luna_compiler_fragment_context_check",
@@ -2786,9 +2835,18 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 auto* ingressCall = ingressBuilder.CreateCall(body,
                     {ingressEntry->getArg(0), ingressEntry->getArg(1)});
                 ingressCall->setCallingConv(body->getCallingConv());
+                ingressBuilder.CreateCondBr(
+                    ingressBuilder.CreateICmpEQ(ingressCall,
+                        llvm::ConstantInt::get(proof.mHelpers->i32Ty(), 0)),
+                    bodySucceeded, bodyFailed);
+                ingressBuilder.SetInsertPoint(bodySucceeded);
                 ingressBuilder.CreateRet(llvm::ConstantInt::get(
                     proof.mHelpers->i32Ty(),
                     LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST));
+                ingressBuilder.SetInsertPoint(bodyFailed);
+                ingressBuilder.CreateRet(llvm::ConstantInt::get(
+                    proof.mHelpers->i32Ty(),
+                    LUNA_PRIVATE_REF_UNIT_APPLY_EXECUTION_FAILURE_V1_TEST));
                 luna::codegen::NativeRefUnitDescriptorV4Candidate verifiedV4;
                 if (!luna::codegen::
                         derivePreflightNativeRefUnitDescriptorV4Candidate(

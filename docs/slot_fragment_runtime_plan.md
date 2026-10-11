@@ -725,11 +725,14 @@ Production ingress proof remains unit-return only; the test-only hook also
 accepts `Result<i32, i32>` for a restricted Ref-apply body.
 Derivation failure leaves its output cell empty and releases active parent
 cells. A negative Slot dispatch status drops all active cells in reverse
-order. The source body then traps; outlined callbacks return the explicit
-continuation failure result `-1`. The private proof connects each failure
-branch to its derive/dispatch and checks the owner stack, order and terminal.
+order. Outlined callbacks return the explicit continuation failure result
+`-1`. The single-borrowed-Ref/unit private root body now also returns `-1`
+after cleanup, while other admitted Result or two-Ref source bodies retain
+their trap exits. The private proof connects each failure branch to its
+derive/dispatch and checks the owner stack, order and terminal.
 This includes a repeated Drop after a continuation return has already cleared
-a cell. Recoverable failure across the source body still has no return protocol.
+a cell. This does not yet establish a recoverable protocol for the other
+private body shapes.
 The module verifier, container encoder and public CodeGenerator still reject
 Ref-bearing publication, so this is not end-to-end executable source support
 or public Native publication.
@@ -1141,11 +1144,11 @@ private status profile maps success/context/handle/target/unexpected check to
 `0/1/2/3/4`. Only exact known native results receive their named status;
 other check results use the unexpected branch and cannot enter the body.
 The candidate C profile in `NativeArtifactABI.h` now assigns these values to
-success/context/handle/target/unexpected check and reserves `5` for a future
-recoverable execution failure. The private entry still cannot return that last
-status. Publication still needs a verified typed export row, symbol and
-descriptor mapping, generated failure cleanup, and a code lease held for the
-full call.
+success/context/handle/target/unexpected check and assigns `5` to recoverable
+execution failure. The private entry now returns `5` after the bounded unit
+body reports dispatch failure. Publication still needs a production wrapper,
+verified typed export row, symbol and descriptor mapping, and a code lease
+held for the full call.
 Before this test entry is generated, the private proof cross-checks the sealed
 Function declaration and callable TypeId/linkage/ownership contracts against
 its source signature, CFG root parameter and first exact Apply target.
@@ -1206,10 +1209,10 @@ the descriptor and machine code live until the call completes. The entry
 must check parent and exact Ref target before body execution. The candidate
 `LunaNativeRefUnitEntryV1` uses two `const void*` arguments and an `i32`
 status: `0` success, `1` invalid context, `2` invalid handle, `3` invalid
-target, `4` unexpected check, and reserved `5` execution failure. The private
-JIT fixture executes success and the three named preflight failures, and its
-IR proof checks the unexpected-result branch. No production Native generator
-publishes this profile or provides a recoverable body-failure path.
+target, `4` unexpected check, and `5` execution failure. The private JIT
+fixture executes success, the three named preflight failures and a real
+dispatch failure; its IR proof checks the unexpected-result branch. No
+production Native generator publishes this profile yet.
 
 The validation-only Native v4 descriptor now records this candidate separately
 from v1/v2 callable exports and v3 owned-Result candidates. Its canonical
@@ -1235,27 +1238,32 @@ production descriptor emission does not yet consume it. The 32-bit
 C probes also pin v4 field offsets on Linux, macOS and Windows targets; they
 do not establish 32-bit loader support.
 The production pairing check now rederives the candidate and inspects the
-generated LLVM module: the distinct external wrapper must have the exact C
-`i32(ptr, ptr)` shape, the internal source body `void(ptr, ptr)`, and the
-wrapper must call the context check, exact Slot/Contract Ref check and body
+generated LLVM module: the distinct external wrapper and internal status body
+must each have the exact C `i32(ptr, ptr)` shape. The wrapper must call the
+context check, exact Slot/Contract Ref check and body
 once each with ordered arguments and no other calls. Both runtime check
 functions must remain external C declarations with their exact pointer
 prototypes; a local same-name implementation cannot stand in for either check.
 The production preflight proof then requires the context and Ref switches to
-consume those check results, exact success/error destinations and returns, and no extra
-wrapper instructions. The private JIT path invokes both checks. IR mutation
+consume those check results and the guarded body call's zero/nonzero result
+to choose exact success/execution-failure returns, with no extra wrapper
+instructions. The private JIT path invokes both checks. IR mutation
 tests reject changed body arguments, Slot constants, context arguments,
 body linkage, extra calls and changed status control flow. Production
-publication still needs a generated wrapper path, recoverable body failure
-and artifact binding.
+publication still needs a generated wrapper path and artifact binding.
 Generated outlined Apply continuations now Drop active context owners and
 return the explicit continuation failure result `-1` on context-derivation or
 Slot-dispatch failure. Runtime maps that result to dispatch execution failure,
-including a nested resume; it does not treat it as an escape. The root source
-body still Drops its owners and uses `llvm.trap`/`unreachable` on these failures.
-Its `void` call cannot report reserved status `5` to the wrapper after a trap.
-Production generation still needs a failure channel through the root body,
-with verified cleanup before this row can be published.
+including a nested resume; it does not treat it as an escape. The private
+single-Ref/unit root body now returns `0` on success and `-1` after ordered
+context Drops on derivation or dispatch failure. Its private host wrapper
+maps zero to success and nonzero to reserved Native v4 status `5`. A real JIT
+probe triggers dispatch failure through repeated resume and observes `5`.
+The v4 source-fact gate admits only CFGs without other lexical cleanup
+obligations; those require a separate failure-path proof.
+The root-body proof rejects traps and unproved return values, while the
+candidate still remains private and discarded. Native generation, verified
+descriptor emission and artifact binding remain before publication.
 
 | Candidate contract fact | Required check before publication |
 | --- | --- |
@@ -1269,9 +1277,9 @@ The existing generic Native v1/v2 export and Runtime declaration descriptors
 do not encode the Ref target or this ingress ABI. The Fragment descriptor
 describes factory/environment/activation execution, so it cannot stand in
 for a source function entry. The next step is to use the preflight-verified v4
-candidate in Native generation with recoverable body-failure containment,
-then connect its typed facts to a pinned lookup and call path before changing
-publication. The Moon Container 0.3 encoder still rejects Apply regions, and the module
+candidate in Native generation, then connect its typed facts to a pinned
+lookup and call path before changing publication. The Moon Container 0.3
+encoder still rejects Apply regions, and the module
 verifier and CodeGenerator still reject source Ref publication.
 
 The present Native verification path fixes the integration boundary:

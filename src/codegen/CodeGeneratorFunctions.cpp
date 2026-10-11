@@ -82,8 +82,11 @@ void CodeGenerator::generateFunctionBody(FunctionDecl* decl) {
         *decl->controlFlow, func, entryBB,
         decl->requiresFragmentContext ? 1u : 0u);
 
-    if (retLLVMType == mHelpers->voidTy() && !mBuilder->GetInsertBlock()->getTerminator()) {
-        mBuilder->CreateRetVoid();
+    if (retLLVMType == mHelpers->voidTy() &&
+        !mBuilder->GetInsertBlock()->getTerminator()) {
+        if (mPrivateRefUnitStatusBody)
+            mBuilder->CreateRet(llvm::ConstantInt::get(mHelpers->i32Ty(), 0));
+        else mBuilder->CreateRetVoid();
     }
 
     mCurrentFunc = nullptr;

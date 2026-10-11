@@ -24,7 +24,7 @@ enum LunaCompilerFragmentOverrideStatus {
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 // Private implementation of the candidate Native Ref/unit status domain.
-// The executable proof does not publish a Native entry or handle body failure.
+// The executable proof does not publish a Native entry.
 enum LunaPrivateRefUnitApplyStatusV1Test {
     LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST =
         LUNA_NATIVE_REF_UNIT_SUCCESS_V1,
@@ -36,6 +36,8 @@ enum LunaPrivateRefUnitApplyStatusV1Test {
         LUNA_NATIVE_REF_UNIT_INVALID_TARGET_V1,
     LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST =
         LUNA_NATIVE_REF_UNIT_UNEXPECTED_CHECK_V1,
+    LUNA_PRIVATE_REF_UNIT_APPLY_EXECUTION_FAILURE_V1_TEST =
+        LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1,
 };
 
 // Private Result transfer experiment; these numbers are not the Native v3
