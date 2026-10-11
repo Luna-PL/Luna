@@ -917,8 +917,18 @@ artifact loader 或公开 Runtime lookup。
 body。候选 `LunaNativeRefUnitEntryV1` 使用两个 `const void*` 参数和 `i32`
 状态：成功 `0`、context 无效 `1`、handle 无效 `2`、目标无效 `3`、未预期检查
 `4`，并预留执行失败 `5`。私有 JIT 夹具实际执行成功及三种具名预检失败，
-LLVM IR 证明还检查未预期结果分支；当前没有 Native descriptor 发布此配置，
+LLVM IR 证明还检查未预期结果分支；当前没有生产 Native 生成器发布此配置，
 也没有可恢复的 body 失败路径。
+
+仅验证用的 Native v4 描述符现把这个候选配置与 v1/v2 可调用导出及 v3
+拥有型 Result 候选记录分开。其规范 SHA-256 行绑定固定配置和十个 UTF-8
+身份：函数 SymbolId、ContractId 与 wrapper linkage；module 与 package；
+函数和 Ref TypeId；目标 Slot 的 SymbolId、ContractId 与 TypeId。loader 要求
+精确 v4 布局、与 proof 一致的 package 身份、无歧义的身份和入口、与既有可调用
+记录不重叠、在已验证暂存映像内解析出的入口，以及匹配的行摘要。独立 C 夹具
+证明有效元数据能装载，身份、摘要、配置、别名及依赖库入口异常均被拒绝。
+只读候选查询不会把入口指针交给类型化调用或 generation binding。这些检查把
+声明的元数据绑定到产物，但尚未证明声明来自封闭的源码函数。
 
 | 候选契约事实 | 发布前必须验证 |
 | --- | --- |
@@ -928,9 +938,10 @@ LLVM IR 证明还检查未预期结果分支；当前没有 Native descriptor �
 | 调用约定、parent／Ref 顺序的两个 pointer、共享借用模式、unit 结果与带版本状态域 | 与生成 wrapper 一致，并区分 context、handle、target 和执行失败。 |
 | 装载后的入口视图：入口地址及 generation 身份 | 只经已验证、固定 module 的 lookup 取得；同步调用期间保留代码 lease。 |
 
-现有通用 Native export 和 Runtime declaration 描述符未编码 Ref 目标或这套入口
+现有通用 Native v1/v2 export 和 Runtime declaration 描述符未编码 Ref 目标或这套入口
 ABI。Fragment 描述符对应 factory／environment／activation 执行，不能代替源码
-函数入口。修改生产发布前须决定新类型化记录怎样附着在已验证 Moon／Native 导出上。
+函数入口。下一步须在生成阶段从已验证的 `NativeRefUnitFacts` 推导 v4 行，再把
+类型化事实接入固定 lookup 与可恢复调用路径，然后才能修改生产发布。
 Moon Container 0.3 编码器仍拒绝 Apply region，module verifier 和 CodeGenerator
 也仍拒绝发布源码 Ref。
 
@@ -942,7 +953,8 @@ SymbolId、ContractId 和 linkage 序列化供 proof export digest 计算；
 才进入 generation。因此，仅在 Runtime binding 上附加 Ref 目标或入口约定，
 不能得到现有 proof 的验证。不得原地扩展 v1 行。新的带版本类型化行必须从已验证
 的冻结函数签名与 CFG 导出，同时进入规范化导出摘要和生成的 descriptor；loader
-须检查字段有效性和身份歧义。重建后的 artifact digest 与 trust 记录便能约束映像
+须检查字段有效性和身份歧义。独立 v4 夹具已覆盖后者，尚无从源码事实推导行的
+生产生成器。重建后的 artifact digest 与 trust 记录便能约束映像
 及其导出摘要。`stageVerifiedNativeGeneration` 当前只把 symbol／contract／entry／
 kind／flags 复制到 `GenerationBinding`；宿主调用前，类型化事实还须传到固定的
 lookup 结果。generation 已保留已验证库的 lease，但调用者须在整次同步调用期间

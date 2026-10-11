@@ -569,6 +569,136 @@ foreach(v3_variant IN LISTS v3_variants)
     endif()
 endforeach()
 
+# Independently linked v4 Ref/unit metadata is accepted only for inspection.
+# Its entry never becomes a v1 callable, typed call or generation binding.
+set(v4_variants valid bad-row-size bad-profile bad-slot-digest bad-identity
+    bad-package bad-entry-pointer bad-linkage)
+if(NOT WIN32)
+    list(APPEND v4_variants dependency-entry)
+endif()
+foreach(v4_variant IN LISTS v4_variants)
+    if(WIN32)
+        set(v4_artifact "${work_dir}/independent-v4-${v4_variant}.dll")
+    elseif(APPLE)
+        set(v4_artifact "${work_dir}/libindependent-v4-${v4_variant}.dylib")
+    else()
+        set(v4_artifact "${work_dir}/libindependent-v4-${v4_variant}.so")
+    endif()
+    set(v4_trust "${v4_artifact}.trust")
+    set(v4_defines -DLUNA_TEST_V4_DESCRIPTOR)
+    if(v4_variant STREQUAL "bad-row-size")
+        list(APPEND v4_defines -DLUNA_TEST_V4_BAD_ROW_SIZE)
+    elseif(v4_variant STREQUAL "bad-profile")
+        list(APPEND v4_defines -DLUNA_TEST_V4_BAD_PROFILE)
+    elseif(v4_variant STREQUAL "bad-slot-digest")
+        list(APPEND v4_defines -DLUNA_TEST_V4_BAD_SLOT_DIGEST)
+    elseif(v4_variant STREQUAL "bad-identity")
+        list(APPEND v4_defines -DLUNA_TEST_V4_BAD_IDENTITY)
+    elseif(v4_variant STREQUAL "bad-package")
+        list(APPEND v4_defines -DLUNA_TEST_V4_BAD_PACKAGE)
+    elseif(v4_variant STREQUAL "bad-entry-pointer")
+        list(APPEND v4_defines -DLUNA_TEST_V4_BAD_ENTRY_POINTER)
+    elseif(v4_variant STREQUAL "bad-linkage")
+        list(APPEND v4_defines -DLUNA_TEST_V4_BAD_LINKAGE)
+    elseif(v4_variant STREQUAL "dependency-entry")
+        list(APPEND v4_defines -DLUNA_TEST_V4_DEPENDENCY_ENTRY)
+    endif()
+    execute_process(
+        COMMAND "${LUNA_AOT_COMPILER}" -x c -std=c11 -fPIC
+            ${v4_defines} ${legacy_link_mode}
+            -I "${LUNA_SOURCE_DIR}/src"
+            "${LUNA_SOURCE_DIR}/tests/fixtures/native_v1_artifact_fixture.c"
+            -o "${v4_artifact}"
+        RESULT_VARIABLE v4_compile_result
+        ERROR_VARIABLE v4_compile_error)
+    if(NOT v4_compile_result EQUAL 0 OR NOT EXISTS "${v4_artifact}")
+        message(FATAL_ERROR "independent Native v4 fixture did not link.\n"
+            "${v4_compile_error}")
+    endif()
+    set(v4_prepare_mode --prepare-v4-fixture)
+    if(v4_variant STREQUAL "dependency-entry")
+        set(v4_prepare_mode --prepare-v4-dependency-fixture)
+    endif()
+    execute_process(
+        COMMAND "${LUNA_NATIVE_VERIFIER}" ${v4_prepare_mode}
+            "${v4_artifact}" "${v4_trust}"
+        RESULT_VARIABLE v4_seal_result
+        ERROR_VARIABLE v4_seal_error)
+    if(NOT v4_seal_result EQUAL 0 OR NOT EXISTS "${v4_trust}")
+        message(FATAL_ERROR "independent Native v4 fixture did not seal.\n"
+            "${v4_seal_error}")
+    endif()
+    execute_process(
+        COMMAND "${LUNA_NATIVE_VERIFIER}" "${v4_artifact}" "${v4_trust}"
+        RESULT_VARIABLE v4_verify_result
+        ERROR_VARIABLE v4_verify_error)
+    if(NOT v4_verify_result EQUAL 0)
+        message(FATAL_ERROR "independent Native v4 proof did not verify.\n"
+            "${v4_verify_error}")
+    endif()
+    execute_process(
+        COMMAND "${LUNA_NATIVE_VERIFIER}" --load-only
+            "${v4_artifact}" "${v4_trust}"
+        RESULT_VARIABLE v4_load_result
+        ERROR_VARIABLE v4_load_error)
+    if(v4_variant STREQUAL "valid")
+        execute_process(
+            COMMAND "${LUNA_NATIVE_VERIFIER}" --load-call
+                "${v4_artifact}" "${v4_trust}"
+                "symbol:legacy-answer" "contract:legacy-v1"
+            RESULT_VARIABLE v4_legacy_result
+            OUTPUT_VARIABLE v4_legacy_output
+            ERROR_VARIABLE v4_legacy_error)
+        execute_process(
+            COMMAND "${LUNA_NATIVE_VERIFIER}" --inspect-v4-candidate
+                "${v4_artifact}" "${v4_trust}"
+            RESULT_VARIABLE v4_candidate_result
+            OUTPUT_VARIABLE v4_candidate_output
+            ERROR_VARIABLE v4_candidate_error)
+        execute_process(
+            COMMAND "${LUNA_NATIVE_VERIFIER}" --load-legacy-generation
+                "${v4_artifact}" "${v4_trust}"
+                "symbol:legacy-answer" "contract:legacy-v1"
+            RESULT_VARIABLE v4_generation_result
+            OUTPUT_VARIABLE v4_generation_output
+            ERROR_VARIABLE v4_generation_error)
+        if(NOT v4_load_result EQUAL 0 OR
+           NOT v4_legacy_result EQUAL 0 OR
+           NOT v4_legacy_output STREQUAL "7\n" OR
+           NOT v4_candidate_result EQUAL 0 OR
+           NOT v4_candidate_output STREQUAL "v4-metadata-only\n" OR
+           NOT v4_generation_result EQUAL 0 OR
+           NOT v4_generation_output STREQUAL "v1-only\n")
+            message(FATAL_ERROR
+                "independent v4 metadata escaped the unprofiled generation gate.\n"
+                "load: ${v4_load_error}\n"
+                "legacy call: ${v4_legacy_error}\n"
+                "candidate: ${v4_candidate_error}\n"
+                "generation: ${v4_generation_error}")
+        endif()
+    else()
+        if(v4_variant STREQUAL "bad-row-size" OR
+           v4_variant STREQUAL "bad-profile" OR
+           v4_variant STREQUAL "bad-package" OR
+           v4_variant STREQUAL "bad-entry-pointer")
+            set(v4_expected "invalid export row")
+        elseif(v4_variant STREQUAL "bad-slot-digest" OR
+               v4_variant STREQUAL "bad-identity")
+            set(v4_expected "rows do not match their descriptor digest")
+        elseif(v4_variant STREQUAL "bad-linkage")
+            set(v4_expected "entry does not match its resolved symbol")
+        else()
+            set(v4_expected "entry is outside its verified image")
+        endif()
+        string(FIND "${v4_load_error}" "${v4_expected}" v4_load_diagnostic)
+        if(v4_load_result EQUAL 0 OR v4_load_diagnostic EQUAL -1)
+            message(FATAL_ERROR
+                "independent Native v4 ${v4_variant} row was accepted.\n"
+                "${v4_load_error}")
+        endif()
+    endif()
+endforeach()
+
 execute_process(
     COMMAND "${Python3_EXECUTABLE}"
         "${LUNA_SOURCE_DIR}/tests/native_artifact_consumer.py"

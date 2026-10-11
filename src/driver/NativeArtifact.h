@@ -60,6 +60,9 @@ public:
     // Validated v3 metadata lookup. Does not expose or invoke its entry.
     bool hasRefResultOwnerCandidate(const std::string& symbolId,
                                     const std::string& contractId) const;
+    // Validated v4 metadata only; never returns or invokes the entry pointer.
+    bool hasRefUnitCandidate(const std::string& symbolId,
+                             const std::string& contractId) const;
     explicit operator bool() const { return nativeHandle_ != nullptr; }
 
 private:
@@ -75,6 +78,7 @@ private:
     const LunaNativeLibraryDescriptorV1* descriptor_ = nullptr;
     const LunaNativeLibraryDescriptorV2* descriptorV2_ = nullptr;
     const LunaNativeLibraryDescriptorV3* descriptorV3_ = nullptr;
+    const LunaNativeLibraryDescriptorV4* descriptorV4_ = nullptr;
     std::unordered_map<std::string, const LunaNativeExportDescriptorV2*>
         typedExportsBySymbol_;
     NativeProofInfo proof_;

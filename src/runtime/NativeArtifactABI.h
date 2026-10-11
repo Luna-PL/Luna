@@ -189,6 +189,53 @@ typedef struct LunaNativeLibraryDescriptorV3 {
 typedef const LunaNativeLibraryDescriptorV3*
     (*LunaNativeLibraryDescriptorFnV3)(void);
 
+// Parallel validation-only record for the borrowed Ref/unit candidate. It
+// carries declared source identity and a distinct wrapper linkage, but cannot
+// make a source Ref export callable through the current loader or generation.
+#define LUNA_NATIVE_DESCRIPTOR_MAGIC_V4 0x4c4e4434u /* "LND4" */
+#define LUNA_NATIVE_DESCRIPTOR_ABI_V4 4u
+#define LUNA_NATIVE_RESULT_UNIT_V1 2u
+#define LUNA_NATIVE_DESCRIPTOR_DIGEST_SIZE_V4 32u
+
+typedef struct LunaNativeExportDescriptorV4 {
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t declaration_kind;
+    uint32_t flags;
+    uint32_t entry_abi;
+    uint32_t ref_mode;
+    uint32_t result_mode;
+    uint32_t status_domain;
+    const char* symbol_id;
+    const char* contract_id;
+    const char* linkage_name;
+    const char* module_name;
+    const char* package_id;
+    const char* function_type_id;
+    const char* ref_type_id;
+    const char* ref_slot_symbol_id;
+    const char* ref_slot_contract_id;
+    const char* ref_slot_type_id;
+    const void* entry;
+} LunaNativeExportDescriptorV4;
+
+typedef struct LunaNativeLibraryDescriptorV4 {
+    uint32_t magic;
+    uint32_t abi_version;
+    uint32_t struct_size;
+    uint32_t reserved_zero;
+    const char* package_id;
+    const char* package_version;
+    const char* target_abi;
+    const char* compiler_identity;
+    uint64_t export_count;
+    const LunaNativeExportDescriptorV4* exports;
+    uint8_t export_descriptor_digest[LUNA_NATIVE_DESCRIPTOR_DIGEST_SIZE_V4];
+} LunaNativeLibraryDescriptorV4;
+
+typedef const LunaNativeLibraryDescriptorV4*
+    (*LunaNativeLibraryDescriptorFnV4)(void);
+
 // Pointer-free proof record embedded in a platform-native section. The
 // artifact digest is SHA-256 over the complete file with this entire record
 // replaced by zero bytes. This removes the proof section's self-reference
@@ -271,5 +318,14 @@ LUNA_NATIVE_LAYOUT_ASSERT(sizeof(LunaNativeLibraryDescriptorV3) == 96 &&
                           offsetof(LunaNativeLibraryDescriptorV3,
                                    export_descriptor_digest) == 64,
                           "Native v3 library layout changed");
+LUNA_NATIVE_LAYOUT_ASSERT(sizeof(LunaNativeExportDescriptorV4) == 120 &&
+                          offsetof(LunaNativeExportDescriptorV4, entry_abi) == 16 &&
+                          offsetof(LunaNativeExportDescriptorV4, symbol_id) == 32 &&
+                          offsetof(LunaNativeExportDescriptorV4, entry) == 112,
+                          "Native v4 export layout changed");
+LUNA_NATIVE_LAYOUT_ASSERT(sizeof(LunaNativeLibraryDescriptorV4) == 96 &&
+                          offsetof(LunaNativeLibraryDescriptorV4,
+                                   export_descriptor_digest) == 64,
+                          "Native v4 library layout changed");
 #endif
 #undef LUNA_NATIVE_LAYOUT_ASSERT

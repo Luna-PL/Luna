@@ -1208,8 +1208,22 @@ must check parent and exact Ref target before body execution. The candidate
 status: `0` success, `1` invalid context, `2` invalid handle, `3` invalid
 target, `4` unexpected check, and reserved `5` execution failure. The private
 JIT fixture executes success and the three named preflight failures, and its
-IR proof checks the unexpected-result branch. No Native descriptor currently
+IR proof checks the unexpected-result branch. No production Native generator
 publishes this profile or provides a recoverable body-failure path.
+
+The validation-only Native v4 descriptor now records this candidate separately
+from v1/v2 callable exports and v3 owned-Result candidates. Its canonical
+SHA-256 row binds the fixed profile and ten UTF-8 identifiers: function
+SymbolId, ContractId and wrapper linkage; module and package; function and Ref
+TypeIds; target Slot SymbolId, ContractId and TypeId. The loader requires the
+exact v4 layout, package identity matching the proof, unique identities and
+entry, no alias with earlier callable records, a resolved entry in the staged
+verified image and a matching row digest. The independent C fixture proves
+that valid metadata survives loading while malformed identity, digest,
+profile, alias and dependency entries fail. The read-only candidate lookup
+does not expose its pointer to typed calls or generation bindings. These
+checks bind declared metadata to the artifact; they do not yet establish that
+the declarations were derived from a sealed source function.
 
 | Candidate contract fact | Required check before publication |
 | --- | --- |
@@ -1219,11 +1233,12 @@ publishes this profile or provides a recoverable body-failure path.
 | Calling convention, two pointer arguments in parent/Ref order, shared-borrow mode, unit result and versioned status domain | Match the generated wrapper and independently distinguish context, handle, target and execution failure. |
 | Loaded entry view: entry pointer and generation identity | Obtain only through a verified, pinned module lookup; retain the code lease across the synchronous call. |
 
-The existing generic Native export and Runtime declaration descriptors do
-not encode the Ref target or this ingress ABI. The Fragment descriptor
+The existing generic Native v1/v2 export and Runtime declaration descriptors
+do not encode the Ref target or this ingress ABI. The Fragment descriptor
 describes factory/environment/activation execution, so it cannot stand in
-for a source function entry. Decide how the new typed record is attached to
-verified Moon/Native exports before changing production publication. The
+for a source function entry. The next step is to derive v4 rows from verified
+`NativeRefUnitFacts` during generation, then connect their typed facts to a
+pinned lookup and a recoverable call path before changing publication. The
 Moon Container 0.3 encoder still rejects Apply regions, and the module
 verifier and CodeGenerator still reject source Ref publication.
 
@@ -1237,7 +1252,9 @@ generation. Therefore a Ref target or ingress convention attached only to a
 runtime binding would be unproved. Do not extend a v1 row in place. A new
 versioned typed row must derive from the verified frozen function signature
 and CFG, enter the canonical export digest and generated descriptor together,
-and be checked for field validity and identity ambiguity by the loader.
+and be checked for field validity and identity ambiguity by the loader. The
+independent v4 fixture exercises the latter checks; no producer derives its
+rows from source facts yet.
 The existing artifact digest and trust record then bind the rebuilt image and
 its export digest. `stageVerifiedNativeGeneration` currently copies only
 symbol/contract/entry/kind/flags into `GenerationBinding`; typed facts must

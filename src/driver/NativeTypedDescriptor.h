@@ -64,4 +64,19 @@ inline std::string canonicalNativeOwnedResultExportV3(
     return row;
 }
 
+// V4 binds the borrowed Ref/unit source and wrapper identities without
+// serializing process-local pointers. The ten identifiers follow the C row.
+inline std::string canonicalNativeRefUnitExportV4(
+    uint32_t kind, uint32_t flags, uint32_t entryAbi, uint32_t refMode,
+    uint32_t resultMode, uint32_t statusDomain,
+    const std::array<std::string, 10>& identifiers) {
+    std::string row = "LUNA_NATIVE_EXPORT_V4\n" +
+        std::to_string(kind) + '\n' + std::to_string(flags) + '\n' +
+        std::to_string(entryAbi) + '\n' + std::to_string(refMode) + '\n' +
+        std::to_string(resultMode) + '\n' + std::to_string(statusDomain);
+    for (const auto& identifier : identifiers)
+        row += '\n' + identifier;
+    return row;
+}
+
 } // namespace luna::driver

@@ -32,6 +32,11 @@ int prepareIndependentFixture(int argc, char** argv) {
         std::string(argv[1]) == "--prepare-v3-dependency-fixture";
     const bool dependencyV3 =
         std::string(argv[1]) == "--prepare-v3-dependency-fixture";
+    const bool typedV4 =
+        std::string(argv[1]) == "--prepare-v4-fixture" ||
+        std::string(argv[1]) == "--prepare-v4-dependency-fixture";
+    const bool dependencyV4 =
+        std::string(argv[1]) == "--prepare-v4-dependency-fixture";
     const std::string targetAbi = llvm::sys::getProcessTriple();
     if (targetAbi.empty() || targetAbi.size() >= 128)
         return fail("independent Native fixture target ABI exceeds its bounded field");
@@ -94,6 +99,33 @@ int prepareIndependentFixture(int argc, char** argv) {
             LUNA_NATIVE_RESULT_I32_OWNED_ERROR_V1,
             LUNA_NATIVE_STATUS_DOMAIN_REF_RESULT_OWNER_V1,
             8, 8, identifiers);
+        const auto digest = luna::driver::digestNativeTypedExports({canonical});
+        std::copy(digest.begin(), digest.end(), position);
+    }
+    if (typedV4) {
+        const std::string marker = "V4_DIGEST_PLACEHOLDER_0123456789";
+        static_assert(sizeof("V4_DIGEST_PLACEHOLDER_0123456789") - 1 ==
+                      LUNA_NATIVE_DESCRIPTOR_DIGEST_SIZE_V4);
+        const auto position = std::search(
+            bytes.begin(), bytes.end(), marker.begin(), marker.end());
+        if (position == bytes.end() ||
+            std::search(position + 1, bytes.end(), marker.begin(),
+                        marker.end()) != bytes.end())
+            return fail("independent v4 fixture has no unique descriptor digest placeholder");
+        const std::array<std::string, 10> identifiers = {
+            "symbol:unit-apply", "contract:unit-v4",
+            dependencyV4 ? "getpid" : "unit_apply",
+            "org.luna.fixture.native_v1", "org.luna.fixture.native_v1",
+            "type:unit-fn", "type:ref-checkpoint",
+            "symbol:slot-checkpoint", "contract:slot-checkpoint",
+            "type:slot-checkpoint"};
+        const auto canonical = luna::driver::canonicalNativeRefUnitExportV4(
+            LUNA_NATIVE_DECLARATION_FUNCTION_V1,
+            LUNA_NATIVE_EXPORT_CALLABLE_V1,
+            LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1,
+            LUNA_NATIVE_REF_SHARED_BORROW_V1,
+            LUNA_NATIVE_RESULT_UNIT_V1,
+            LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1, identifiers);
         const auto digest = luna::driver::digestNativeTypedExports({canonical});
         std::copy(digest.begin(), digest.end(), position);
     }
@@ -260,6 +292,32 @@ int inspectV3Candidate(int argc, char** argv) {
     return 0;
 }
 
+int inspectV4Candidate(int argc, char** argv) {
+    if (argc != 4) return 2;
+    luna::driver::VerifiedNativeLibrary library;
+    std::string error;
+    if (!luna::driver::loadVerifiedNativeLibrary(
+            argv[2], argv[3], library, error)) {
+        std::cerr << error << '\n';
+        return 1;
+    }
+    luna::driver::VerifiedNativeLibrary moved(std::move(library));
+    if (library || !moved ||
+        library.hasRefUnitCandidate("symbol:unit-apply", "contract:unit-v4") ||
+        !moved.hasRefUnitCandidate("symbol:unit-apply", "contract:unit-v4") ||
+        moved.hasRefUnitCandidate("symbol:unit-apply", "wrong-contract") ||
+        moved.hasRefUnitCandidate("symbol:legacy-answer", "contract:legacy-v1") ||
+        moved.findExport("symbol:unit-apply", "contract:unit-v4") ||
+        moved.entryAbiForExport("symbol:unit-apply", "contract:unit-v4"))
+        return fail("Native v4 candidate escaped its separate metadata lookup");
+    int32_t ignored = 0;
+    if (moved.callI32NoArgs("symbol:unit-apply", "contract:unit-v4",
+                            ignored, error) || error.empty())
+        return fail("Native v4 candidate acquired an i32() call profile");
+    std::cout << "v4-metadata-only\n";
+    return 0;
+}
+
 int loadLegacyGeneration(int argc, char** argv) {
     if (argc != 6) return 2;
     luna::runtime::MoonRuntime runtime;
@@ -276,11 +334,17 @@ int loadLegacyGeneration(int argc, char** argv) {
         luna::runtime::GenerationEntryAbiUnprofiled};
     auto typed = unprofiled;
     typed.entryAbi = luna::runtime::GenerationEntryAbiCI32NoArgsV1;
+    const luna::runtime::GenerationBindingRequirement v4Candidate{
+        "symbol:unit-apply", "contract:unit-v4",
+        LUNA_NATIVE_DECLARATION_FUNCTION_V1,
+        LUNA_NATIVE_EXPORT_CALLABLE_V1,
+        luna::runtime::GenerationEntryAbiUnprofiled};
     auto binding = loaded.find(unprofiled);
     int32_t ignored = 0;
     if (!binding || binding.entryAbi() !=
             luna::runtime::GenerationEntryAbiUnprofiled ||
-        loaded.find(typed) || binding.callI32NoArgs(ignored))
+        loaded.find(typed) || loaded.find(v4Candidate) ||
+        binding.callI32NoArgs(ignored))
         return fail("v1-only generation acquired a typed entry profile");
     std::cout << "v1-only\n";
     return 0;
@@ -431,7 +495,9 @@ int main(int argc, char** argv) {
                      std::string(argv[1]) == "--prepare-legacy-invalid-utf8" ||
                      std::string(argv[1]) == "--prepare-v2-fixture" ||
                      std::string(argv[1]) == "--prepare-v3-fixture" ||
-                     std::string(argv[1]) == "--prepare-v3-dependency-fixture"))
+                     std::string(argv[1]) == "--prepare-v3-dependency-fixture" ||
+                     std::string(argv[1]) == "--prepare-v4-fixture" ||
+                     std::string(argv[1]) == "--prepare-v4-dependency-fixture"))
         return prepareIndependentFixture(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--generation-switch")
         return generationSwitch(argc, argv);
@@ -443,6 +509,8 @@ int main(int argc, char** argv) {
         return loadTypedAndCall(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--inspect-v3-candidate")
         return inspectV3Candidate(argc, argv);
+    if (argc > 1 && std::string(argv[1]) == "--inspect-v4-candidate")
+        return inspectV4Candidate(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--load-legacy-generation")
         return loadLegacyGeneration(argc, argv);
     if (argc == 4 && std::string(argv[1]) == "--load-only") {

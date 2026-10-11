@@ -1,5 +1,5 @@
 #include "runtime/NativeArtifactABI.h"
-#ifdef LUNA_TEST_V3_DEPENDENCY_ENTRY
+#if defined(LUNA_TEST_V3_DEPENDENCY_ENTRY) || defined(LUNA_TEST_V4_DEPENDENCY_ENTRY)
 #include <unistd.h>
 #endif
 
@@ -9,18 +9,21 @@
 #define LUNA_TEST_DESCRIPTOR_SECTION ".luna$desc"
 #define LUNA_TEST_DESCRIPTOR_V2_SECTION ".luna$desc2"
 #define LUNA_TEST_DESCRIPTOR_V3_SECTION ".luna$desc3"
+#define LUNA_TEST_DESCRIPTOR_V4_SECTION ".luna$desc4"
 #elif defined(__APPLE__)
 #define LUNA_TEST_EXPORT __attribute__((visibility("default")))
 #define LUNA_TEST_PROOF_SECTION "__DATA,__luna_proof"
 #define LUNA_TEST_DESCRIPTOR_SECTION "__DATA,__luna_desc"
 #define LUNA_TEST_DESCRIPTOR_V2_SECTION "__DATA,__luna_desc2"
 #define LUNA_TEST_DESCRIPTOR_V3_SECTION "__DATA,__luna_desc3"
+#define LUNA_TEST_DESCRIPTOR_V4_SECTION "__DATA,__luna_desc4"
 #else
 #define LUNA_TEST_EXPORT __attribute__((visibility("default")))
 #define LUNA_TEST_PROOF_SECTION ".luna.native.proof"
 #define LUNA_TEST_DESCRIPTOR_SECTION ".luna.native.descriptor"
 #define LUNA_TEST_DESCRIPTOR_V2_SECTION ".luna.native.descriptor.v2"
 #define LUNA_TEST_DESCRIPTOR_V3_SECTION ".luna.native.descriptor.v3"
+#define LUNA_TEST_DESCRIPTOR_V4_SECTION ".luna.native.descriptor.v4"
 #endif
 
 #define LUNA_TEST_SECTION(name) __attribute__((section(name), used))
@@ -34,6 +37,13 @@ LUNA_TEST_EXPORT int32_t owned_answer(
     (void)parent; (void)ref; (void)tag; (void)scalar;
     (void)owner; (void)code_lease;
     return LUNA_NATIVE_REF_RESULT_OWNER_INVALID_CONTEXT_V1;
+}
+#endif
+
+#ifdef LUNA_TEST_V4_DESCRIPTOR
+LUNA_TEST_EXPORT int32_t unit_apply(const void* parent, const void* ref) {
+    (void)parent; (void)ref;
+    return LUNA_NATIVE_REF_UNIT_INVALID_CONTEXT_V1;
 }
 #endif
 
@@ -125,6 +135,90 @@ static const LunaNativeLibraryDescriptorV3 owned_library
 LUNA_TEST_EXPORT const LunaNativeLibraryDescriptorV3*
 luna_native_library_descriptor_v3(void) {
     return &owned_library;
+}
+#endif
+
+#ifdef LUNA_TEST_V4_DESCRIPTOR
+#ifdef LUNA_TEST_V4_BAD_ROW_SIZE
+#define LUNA_TEST_V4_ROW_SIZE (sizeof(LunaNativeExportDescriptorV4) + 8)
+#else
+#define LUNA_TEST_V4_ROW_SIZE sizeof(LunaNativeExportDescriptorV4)
+#endif
+#ifdef LUNA_TEST_V4_BAD_PROFILE
+#define LUNA_TEST_V4_ENTRY_ABI 99u
+#else
+#define LUNA_TEST_V4_ENTRY_ABI LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1
+#endif
+#ifdef LUNA_TEST_V4_BAD_SLOT_DIGEST
+#define LUNA_TEST_V4_SLOT_CONTRACT "contract:other-slot"
+#else
+#define LUNA_TEST_V4_SLOT_CONTRACT "contract:slot-checkpoint"
+#endif
+#ifdef LUNA_TEST_V4_BAD_IDENTITY
+#define LUNA_TEST_V4_CONTRACT "contract:other-function"
+#else
+#define LUNA_TEST_V4_CONTRACT "contract:unit-v4"
+#endif
+#ifdef LUNA_TEST_V4_BAD_PACKAGE
+#define LUNA_TEST_V4_PACKAGE "org.luna.fixture.other"
+#else
+#define LUNA_TEST_V4_PACKAGE "org.luna.fixture.native_v1"
+#endif
+#ifdef LUNA_TEST_V4_BAD_LINKAGE
+#define LUNA_TEST_V4_LINKAGE "missing_unit_apply"
+#elif defined(LUNA_TEST_V4_DEPENDENCY_ENTRY)
+#define LUNA_TEST_V4_LINKAGE "getpid"
+#else
+#define LUNA_TEST_V4_LINKAGE "unit_apply"
+#endif
+#ifdef LUNA_TEST_V4_BAD_ENTRY_POINTER
+#define LUNA_TEST_V4_ENTRY (const void*)&legacy_answer
+#elif defined(LUNA_TEST_V4_DEPENDENCY_ENTRY)
+#define LUNA_TEST_V4_ENTRY (const void*)&getpid
+#else
+#define LUNA_TEST_V4_ENTRY (const void*)&unit_apply
+#endif
+
+static const LunaNativeExportDescriptorV4 unit_exports[] = {{
+    LUNA_NATIVE_DESCRIPTOR_ABI_V4,
+    LUNA_TEST_V4_ROW_SIZE,
+    LUNA_NATIVE_DECLARATION_FUNCTION_V1,
+    LUNA_NATIVE_EXPORT_CALLABLE_V1,
+    LUNA_TEST_V4_ENTRY_ABI,
+    LUNA_NATIVE_REF_SHARED_BORROW_V1,
+    LUNA_NATIVE_RESULT_UNIT_V1,
+    LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1,
+    "symbol:unit-apply",
+    LUNA_TEST_V4_CONTRACT,
+    LUNA_TEST_V4_LINKAGE,
+    "org.luna.fixture.native_v1",
+    LUNA_TEST_V4_PACKAGE,
+    "type:unit-fn",
+    "type:ref-checkpoint",
+    "symbol:slot-checkpoint",
+    LUNA_TEST_V4_SLOT_CONTRACT,
+    "type:slot-checkpoint",
+    LUNA_TEST_V4_ENTRY,
+}};
+
+static const LunaNativeLibraryDescriptorV4 unit_library
+    LUNA_TEST_SECTION(LUNA_TEST_DESCRIPTOR_V4_SECTION) = {
+        LUNA_NATIVE_DESCRIPTOR_MAGIC_V4,
+        LUNA_NATIVE_DESCRIPTOR_ABI_V4,
+        sizeof(LunaNativeLibraryDescriptorV4),
+        0,
+        "org.luna.fixture.native_v1",
+        "1.0.0",
+        target_abi,
+        "luna-v1-compat-fixture",
+        1,
+        unit_exports,
+        "V4_DIGEST_PLACEHOLDER_0123456789",
+    };
+
+LUNA_TEST_EXPORT const LunaNativeLibraryDescriptorV4*
+luna_native_library_descriptor_v4(void) {
+    return &unit_library;
 }
 #endif
 
