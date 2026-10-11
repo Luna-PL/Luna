@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Propagated generated outlined Ref-apply continuation failures as an explicit
+  `-1` result after ordered context Drops. Runtime reports this as dispatch
+  execution failure, including nested resume, while the private LLVM proof
+  checks the callback's return and the root body's trap separately. The root
+  `void` body still cannot return Native v4's reserved execution-failure status.
 - Tightened Native v4 Ref/unit wrapper pairing to require the context and Ref
   checks to be exact external C declarations with fixed pointer signatures.
   Calls to local same-name implementations or altered prototypes now fail the

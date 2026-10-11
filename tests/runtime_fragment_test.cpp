@@ -2009,6 +2009,36 @@ int main() {
         if (context.dispatch(slot, arguments, countedControl, &invalidControl, error) ||
             invalidControl.calls != 1 || error.find("invalid control result") == std::string::npos)
             return fail("activation failure overwrote a downstream continuation diagnostic");
+        CountedControlProbe reportedFailure{
+            0, LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1};
+        if (context.dispatch(slot, arguments, countedControl,
+                &reportedFailure, error) ||
+            reportedFailure.calls != 1 ||
+            error.find("reported execution failure") == std::string::npos ||
+            repeatedResumeResults[0] !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+            repeatedResumeResults[1] !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+            repeatedResumeResults[2] !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+            luna_runtime_fragment_dispatch_v1(
+                context.opaque(), slot.slotId.c_str(), slot.contractId.c_str(),
+                arguments.layoutId.c_str(), arguments.size,
+                arguments.alignment, arguments.data,
+                countedControl, &reportedFailure) !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+            reportedFailure.calls != 2)
+            return fail("explicit continuation failure escaped its dispatch boundary");
+        luna::runtime::RuntimeFragmentBindingSet emptyBindings;
+        CountedControlProbe noneFailure{
+            0, LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1};
+        if (!luna::runtime::makeRuntimeFragmentBindingSet(
+                {}, emptyBindings, error) ||
+            emptyBindings.dispatch(slot, arguments,
+                countedControl, &noneFailure, error) ||
+            noneFailure.calls != 1 ||
+            error.find("reported execution failure") == std::string::npos)
+            return fail("None continuation failure lost its explicit status");
         repeatResumeProbe = false;
         CountedControlProbe recovered;
         if (!context.dispatch(slot, arguments, countedControl, &recovered, error) ||

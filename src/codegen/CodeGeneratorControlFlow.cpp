@@ -1276,11 +1276,9 @@ void CodeGenerator::generateControlFlowBody(
                                      it != owners.rend(); ++it)
                                     mHelpers->emitRuntimeFragmentContextDrop(
                                         *mBuilder, *mModule, *it);
-                                auto* trap =
-                                    llvm::Intrinsic::getOrInsertDeclaration(
-                                        mModule.get(), llvm::Intrinsic::trap);
-                                mBuilder->CreateCall(trap);
-                                mBuilder->CreateUnreachable();
+                                mBuilder->CreateRet(llvm::ConstantInt::getSigned(
+                                    mHelpers->i32Ty(),
+                                    LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1));
                                 mBuilder->SetInsertPoint(accepted);
                             }
                             mBuilder->CreateBr(target);
@@ -1585,10 +1583,16 @@ void CodeGenerator::generateControlFlowBody(
                          it != inheritedRefContextOwners.rend(); ++it)
                         mHelpers->emitRuntimeFragmentContextDrop(
                             *mBuilder, *mModule, *it);
-                    auto* trap = llvm::Intrinsic::getOrInsertDeclaration(mModule.get(),
-                                                                         llvm::Intrinsic::trap);
-                    mBuilder->CreateCall(trap);
-                    mBuilder->CreateUnreachable();
+                    if (refApplyFlow && propagateEscape)
+                        mBuilder->CreateRet(llvm::ConstantInt::getSigned(
+                            mHelpers->i32Ty(),
+                            LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1));
+                    else {
+                        auto* trap = llvm::Intrinsic::getOrInsertDeclaration(
+                            mModule.get(), llvm::Intrinsic::trap);
+                        mBuilder->CreateCall(trap);
+                        mBuilder->CreateUnreachable();
+                    }
                 };
                 emitRuntimeSlot(block, terminator, func, edgeTarget,
                                 func->getReturnType(), nullptr,

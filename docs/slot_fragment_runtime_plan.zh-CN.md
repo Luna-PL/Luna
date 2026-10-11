@@ -565,12 +565,13 @@ Ref apply，以及可选的一个内层 Apply，两层借用同一本地 Ref 或
 终止是穷尽两个标签、入边不改变 context 的 Result Switch 默认分支。
 生产入口证明仍仅支持 unit 返回；仅测试用的私有入口也接受受限 Ref-apply body 的
 `Result<i32, i32>` 返回。
-派生失败保持输出 cell 为空，释放有效父 cell 后 trap。Slot 分派返回负状态时，
-源码 body 与 outlined 回调都会先按逆序 Drop 全部有效 cell，再 trap。私有证明
-把每个失败分支连回对应派生／分派，并核对 owner 栈及顺序；续体 return 已清空
-cell 后重复 Drop 也安全。可恢复的派生／分派失败尚无源码级返回协议。module verifier、
+派生失败保持输出 cell 为空，并释放有效父 cell。Slot 分派返回负状态时，
+先按逆序 Drop 全部有效 cell。源码 body 随后 trap；outlined 回调返回显式续体
+失败值 `-1`。私有证明把每个失败分支连回对应派生／分派，并核对 owner 栈、
+顺序和终止指令；续体 return 已清空 cell 后重复 Drop 也安全。跨源码 body 的
+可恢复失败仍无返回协议。module verifier、
 container encoder 和公开 CodeGenerator 仍拒绝
-带 Ref 的发布，因此这并非端到端可执行源码支持，也不改变公开 ABI。
+带 Ref 的发布，因此这并非端到端可执行源码支持，也不代表公开 Native 发布。
 
 canonical 回归目标另有仅在测试编译时启用的私有 JIT 入口。它把已经验证的源码
 body 放进内部测试 wrapper，以真实借用 Ref 和空父 context 执行正常退出、Slot
@@ -947,10 +948,12 @@ context 和 Ref switch 使用各自的检查结果、分支和返回码精确一
 私有 JIT 路径执行这两项检查。IR 变异测试拒绝 body 参数、Slot 常量、context
 参数、body linkage、额外调用和状态控制流的改变。生产发布仍须生成 wrapper、
 处理可恢复的 body 执行失败并绑定产物。
-当前私有 Apply body 在 context 派生或 Slot 派发失败时先 Drop 活跃 context
-owner，然后执行 `llvm.trap`／`unreachable`。`void` body 一旦陷入 trap，
-wrapper 无法返回预留的状态码 `5`。生产生成须先让 body 和 outlined
-continuation 通过失败通道传播状态并保持清理顺序，才能发布该行。
+生成的 outlined Apply 续体在 context 派生或 Slot 派发失败时先 Drop 活跃
+context owner，再返回显式失败值 `-1`。Runtime 将其映射为分派执行失败，
+包括嵌套 resume；它不算续体逃逸。根源码 body 在这些失败路径仍先 Drop，
+再执行 `llvm.trap`／`unreachable`。`void` body 一旦陷入 trap，wrapper
+无法返回预留的状态码 `5`。生产生成仍须为根 body 建立可验证清理顺序的
+失败通道，才能发布该行。
 
 | 候选契约事实 | 发布前必须验证 |
 | --- | --- |

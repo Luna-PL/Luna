@@ -87,6 +87,9 @@ typedef void (*LunaRuntimeFragmentExecuteFnV1)(
 enum LunaRuntimeFragmentContinuationResultV1 {
     LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1 = 0,
     LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1 = 1,
+    // A generated continuation may report a cleaned-up execution failure.
+    // Dispatch maps it to EXECUTION_FAILED; it never counts as an escape.
+    LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 = -1,
 };
 
 typedef int32_t (*LunaRuntimeFragmentContinuationFnV1)(void* context);

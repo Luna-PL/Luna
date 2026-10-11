@@ -598,6 +598,12 @@ bool dispatchRuntimeFragmentChain(RuntimeFragmentChainDispatch& dispatch) {
                 LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1) {
                 dispatch.outcome =
                     RuntimeFragmentDispatchOutcome::ContinuationEscaped;
+            } else if (result ==
+                       LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1) {
+                *dispatch.error =
+                    "runtime Fragment base continuation reported execution failure";
+                dispatch.failed = true;
+                return false;
             } else if (result !=
                        LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1) {
                 *dispatch.error =
@@ -798,6 +804,11 @@ bool RuntimeFragmentBindingSet::dispatchWithOutcome(
             const int32_t result = baseContinuation(continuationContext);
             if (result == LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1)
                 outcome = RuntimeFragmentDispatchOutcome::ContinuationEscaped;
+            else if (result ==
+                     LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1) {
+                error = "runtime Fragment base continuation reported execution failure";
+                return false;
+            }
             else if (result !=
                      LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1) {
                 error = "runtime Fragment base continuation returned an invalid control result";

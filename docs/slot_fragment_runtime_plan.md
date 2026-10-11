@@ -723,16 +723,16 @@ errors. The sole allowed unreachable terminal is the default arm of an
 exhaustive two-tag Result Switch with no context-changing incoming edge.
 Production ingress proof remains unit-return only; the test-only hook also
 accepts `Result<i32, i32>` for a restricted Ref-apply body.
-Derivation failure leaves its output cell empty, releases active parent cells,
-then traps. A negative Slot dispatch status drops all active cells in reverse
-order before trapping, in the source body and in outlined callbacks. The
-private proof connects each failure branch to its derive/dispatch and checks
-the owner stack and order. This includes a repeated Drop after a continuation
-return has already cleared a cell. Recoverable derivation/dispatch failures
-still have no source-level return protocol.
+Derivation failure leaves its output cell empty and releases active parent
+cells. A negative Slot dispatch status drops all active cells in reverse
+order. The source body then traps; outlined callbacks return the explicit
+continuation failure result `-1`. The private proof connects each failure
+branch to its derive/dispatch and checks the owner stack, order and terminal.
+This includes a repeated Drop after a continuation return has already cleared
+a cell. Recoverable failure across the source body still has no return protocol.
 The module verifier, container encoder and public CodeGenerator still reject
 Ref-bearing publication, so this is not end-to-end executable source support
-or a public ABI change.
+or public Native publication.
 
 The canonical regression target additionally has a compile-time-only private
 JIT hook. It materializes the already verified source body behind an internal
@@ -1248,12 +1248,14 @@ tests reject changed body arguments, Slot constants, context arguments,
 body linkage, extra calls and changed status control flow. Production
 publication still needs a generated wrapper path, recoverable body failure
 and artifact binding.
-The generated private Apply body currently Drops active context owners and
-uses `llvm.trap`/`unreachable` on context-derivation or Slot-dispatch failure.
+Generated outlined Apply continuations now Drop active context owners and
+return the explicit continuation failure result `-1` on context-derivation or
+Slot-dispatch failure. Runtime maps that result to dispatch execution failure,
+including a nested resume; it does not treat it as an escape. The root source
+body still Drops its owners and uses `llvm.trap`/`unreachable` on these failures.
 Its `void` call cannot report reserved status `5` to the wrapper after a trap.
-Production generation therefore needs a failure channel through the body and
-outlined continuations that preserves cleanup order before this row can be
-published.
+Production generation still needs a failure channel through the root body,
+with verified cleanup before this row can be published.
 
 | Candidate contract fact | Required check before publication |
 | --- | --- |

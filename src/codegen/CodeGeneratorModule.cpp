@@ -272,6 +272,7 @@ bool frameCapturesValue(llvm::Function& parent, llvm::Value* frame,
 bool dispatchFailureDropsOwners(
     const llvm::CallInst& dispatch,
     const std::vector<const llvm::Value*>& ownerCells,
+    bool continuationFailure,
     std::unordered_set<const llvm::CallInst*>* accounted = nullptr) {
     const auto matchesStatus = [&dispatch](const llvm::Value* condition,
                                            uint64_t expected) {
@@ -296,7 +297,15 @@ bool dispatchFailureDropsOwners(
                        LUNA_RUNTIME_FRAGMENT_DISPATCH_CONTINUATION_ESCAPED_V1))
         return false;
     const auto* failed = second->getSuccessor(1);
-    if (!llvm::isa<llvm::UnreachableInst>(failed->getTerminator()))
+    const auto* returned = llvm::dyn_cast<llvm::ReturnInst>(
+        failed->getTerminator());
+    const auto* returnedStatus = returned
+        ? llvm::dyn_cast_or_null<llvm::ConstantInt>(returned->getReturnValue())
+        : nullptr;
+    if (continuationFailure
+            ? !returnedStatus || returnedStatus->getSExtValue() !=
+                LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1
+            : !llvm::isa<llvm::UnreachableInst>(failed->getTerminator()))
         return false;
     std::vector<const llvm::CallInst*> drops;
     const llvm::CallInst* trap = nullptr;
@@ -311,13 +320,15 @@ bool dispatchFailureDropsOwners(
             } else if (name == "llvm.trap") {
                 if (trap) return false;
                 trap = call;
-            }
+            } else return false;
         }
-    if (!trap || drops.size() != ownerCells.size()) return false;
+    if ((continuationFailure ? trap != nullptr : trap == nullptr) ||
+        drops.size() != ownerCells.size()) return false;
     for (size_t index = 0; index < drops.size(); ++index)
         if (drops[index]->getArgOperand(0) !=
                 ownerCells[ownerCells.size() - 1 - index] ||
-            !drops[index]->comesBefore(trap))
+            !drops[index]->comesBefore(
+                continuationFailure ? failed->getTerminator() : trap))
             return false;
     if (accounted)
         accounted->insert(drops.begin(), drops.end());
@@ -327,6 +338,7 @@ bool dispatchFailureDropsOwners(
 bool overrideFailureDropsOwners(
     const llvm::CallInst& overrideCall,
     const std::vector<const llvm::Value*>& ownerCells,
+    bool continuationFailure,
     std::unordered_set<const llvm::CallInst*>* accounted = nullptr) {
     const auto* branch = llvm::dyn_cast<llvm::BranchInst>(
         overrideCall.getParent()->getTerminator());
@@ -339,7 +351,15 @@ bool overrideFailureDropsOwners(
         compare->getOperand(0) != &overrideCall || !success->isZero())
         return false;
     const auto* failed = branch->getSuccessor(1);
-    if (!llvm::isa<llvm::UnreachableInst>(failed->getTerminator()))
+    const auto* returned = llvm::dyn_cast<llvm::ReturnInst>(
+        failed->getTerminator());
+    const auto* returnedStatus = returned
+        ? llvm::dyn_cast_or_null<llvm::ConstantInt>(returned->getReturnValue())
+        : nullptr;
+    if (continuationFailure
+            ? !returnedStatus || returnedStatus->getSExtValue() !=
+                LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1
+            : !llvm::isa<llvm::UnreachableInst>(failed->getTerminator()))
         return false;
     std::vector<const llvm::CallInst*> drops;
     const llvm::CallInst* trap = nullptr;
@@ -353,13 +373,15 @@ bool overrideFailureDropsOwners(
             } else if (name == "llvm.trap") {
                 if (trap) return false;
                 trap = call;
-            }
+            } else return false;
         }
-    if (!trap || drops.size() != ownerCells.size()) return false;
+    if ((continuationFailure ? trap != nullptr : trap == nullptr) ||
+        drops.size() != ownerCells.size()) return false;
     for (size_t index = 0; index < drops.size(); ++index)
         if (drops[index]->getArgOperand(0) !=
                 ownerCells[ownerCells.size() - 1 - index] ||
-            !drops[index]->comesBefore(trap))
+            !drops[index]->comesBefore(
+                continuationFailure ? failed->getTerminator() : trap))
             return false;
     if (accounted)
         accounted->insert(drops.begin(), drops.end());
@@ -1140,7 +1162,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 parents.push_back(found->second);
             }
             if (!overrideFailureDropsOwners(
-                    *derivation, parents, &accountedContextDrops)) {
+                    *derivation, parents, false, &accountedContextDrops)) {
                 failure = "Ref apply derivation failure did not release its parent stack";
                 return false;
             }
@@ -1183,7 +1205,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             }
             std::vector<const llvm::Value*> failedOwners = owners;
             if (!dispatchFailureDropsOwners(
-                    *dispatch, failedOwners, &accountedContextDrops)) {
+                    *dispatch, failedOwners, false,
+                    &accountedContextDrops)) {
                 failure = "private Ref apply dispatch failure lost its owner stack";
                 return false;
             }
@@ -1378,7 +1401,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     auto* cell = llvm::dyn_cast<llvm::AllocaInst>(
                         derivation->getArgOperand(4));
                     if (!cell || !overrideFailureDropsOwners(
-                            *derivation, parents, &accountedContextDrops)) {
+                            *derivation, parents, true,
+                            &accountedContextDrops)) {
                         failure = "outlined Ref apply derivation failure lost its parent stack";
                         return false;
                     }
@@ -1472,7 +1496,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         return false;
                     }
                     if (!dispatchFailureDropsOwners(
-                            *dispatch, owners, &accountedContextDrops)) {
+                            *dispatch, owners, current.function != body,
+                            &accountedContextDrops)) {
                         failure = "private Ref apply dispatch failure lost its owner stack";
                         return false;
                     }
