@@ -940,9 +940,11 @@ loader 可用。
 生产配对检查现重新推导候选行并检查生成的 LLVM module：独立的外部 wrapper
 必须具有精确的 C `i32(ptr, ptr)` 形状，内部源码 body 为 `void(ptr, ptr)`；
 wrapper 必须各调用一次 context 检查、带冻结 Slot／Contract 常量的 Ref 检查
-和按序传参的 body，且不得有其他调用。私有 JIT 证明在另行验证状态分支后
-执行这项检查。IR 变异测试拒绝 body 参数、Slot 常量、context 参数、body
-linkage 的改变和额外调用。生产发布仍须生成 wrapper、完成状态／失败证明并绑定产物。
+和按序传参的 body，且不得有其他调用。生产侧前置状态证明还要求 context 和 Ref
+switch 使用各自的检查结果、分支和返回码精确一致，且 wrapper 不含额外指令。
+私有 JIT 路径执行这两项检查。IR 变异测试拒绝 body 参数、Slot 常量、context
+参数、body linkage、额外调用和状态控制流的改变。生产发布仍须生成 wrapper、
+处理可恢复的 body 执行失败并绑定产物。
 
 | 候选契约事实 | 发布前必须验证 |
 | --- | --- |
@@ -954,8 +956,8 @@ linkage 的改变和额外调用。生产发布仍须生成 wrapper、完成状�
 
 现有通用 Native v1/v2 export 和 Runtime declaration 描述符未编码 Ref 目标或这套入口
 ABI。Fragment 描述符对应 factory／environment／activation 执行，不能代替源码
-函数入口。下一步须在 Native 生成阶段用已配对的 v4 候选行完成状态／失败证明，
-再把类型化事实接入固定 lookup 与可恢复调用路径，
+函数入口。下一步须在 Native 生成阶段使用已验证前置状态的 v4 候选行，
+完成可恢复的 body 失败收敛，再把类型化事实接入固定 lookup 与调用路径，
 然后才能修改生产发布。
 Moon Container 0.3 编码器仍拒绝 Apply region，module verifier 和 CodeGenerator
 也仍拒绝发布源码 Ref。

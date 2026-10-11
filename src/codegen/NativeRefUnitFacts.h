@@ -64,4 +64,11 @@ bool derivePairedNativeRefUnitDescriptorV4Candidate(
     const llvm::Module& generated, const std::string& wrapperLinkageName,
     NativeRefUnitDescriptorV4Candidate& candidate, std::string& error);
 
+// Proves the five preflight status paths and that only successful context and
+// Ref checks reach the body. Body execution failure remains a separate gate.
+bool derivePreflightNativeRefUnitDescriptorV4Candidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    const llvm::Module& generated, const std::string& wrapperLinkageName,
+    NativeRefUnitDescriptorV4Candidate& candidate, std::string& error);
+
 } // namespace luna::codegen

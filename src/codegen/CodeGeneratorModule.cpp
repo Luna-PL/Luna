@@ -2764,90 +2764,9 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 ingressBuilder.CreateRet(llvm::ConstantInt::get(
                     proof.mHelpers->i32Ty(),
                     LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST));
-                const auto switchDestination = [](llvm::SwitchInst* branch,
-                    int32_t status) -> llvm::BasicBlock* {
-                    for (const auto choice : branch->cases())
-                        if (choice.getCaseValue()->getSExtValue() == status)
-                            return choice.getCaseSuccessor();
-                    return nullptr;
-                };
-                const auto returnsStatus = [](llvm::BasicBlock* block,
-                    int32_t expected) {
-                    const auto* returned = llvm::dyn_cast<llvm::ReturnInst>(
-                        block->getTerminator());
-                    const auto* status = returned
-                        ? llvm::dyn_cast<llvm::ConstantInt>(
-                            returned->getReturnValue()) : nullptr;
-                    return status && status->getSExtValue() == expected;
-                };
-                if (contextStatus->getParent() != ingressStart ||
-                    contextBranch->getParent() != ingressStart ||
-                    contextBranch->getDefaultDest() != unexpectedCheck ||
-                    contextBranch->getNumCases() != 2 ||
-                    switchDestination(contextBranch,
-                        LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS) !=
-                        checkedContext ||
-                    switchDestination(contextBranch,
-                        LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT) !=
-                        invalidContext ||
-                    checkedContext->getSinglePredecessor() != ingressStart ||
-                    check->getParent() != checkedContext ||
-                    refBranch->getParent() != checkedContext ||
-                    refBranch->getDefaultDest() != unexpectedCheck ||
-                    refBranch->getNumCases() != 3 ||
-                    switchDestination(refBranch,
-                        LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1) != ingressBody ||
-                    switchDestination(refBranch,
-                        LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1) !=
-                        invalidHandle ||
-                    switchDestination(refBranch,
-                        LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1) !=
-                        invalidTarget ||
-                    ingressBody->getSinglePredecessor() != checkedContext ||
-                    ingressCall->getParent() != ingressBody ||
-                    !returnsStatus(invalidContext,
-                        LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST) ||
-                    !returnsStatus(invalidHandle,
-                        LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST) ||
-                    !returnsStatus(invalidTarget,
-                        LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST) ||
-                    !returnsStatus(unexpectedCheck,
-                        LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST) ||
-                    !returnsStatus(ingressBody,
-                        LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)) {
-                    failure = "private Ref ingress status profile lost its exact branches";
-                    return false;
-                }
-                size_t contextCheckCalls = 0;
-                size_t refCheckCalls = 0;
-                size_t bodyCalls = 0;
-                for (const auto& block : *ingressEntry)
-                    for (const auto& instruction : block)
-                        if (const auto* call = llvm::dyn_cast<llvm::CallInst>(
-                                &instruction)) {
-                            if (call->getCalledFunction() == body)
-                                ++bodyCalls;
-                            else if (call->getCalledFunction() &&
-                                     call->getCalledFunction()->getName() ==
-                                         "luna_compiler_fragment_context_check")
-                                ++contextCheckCalls;
-                            else if (call->getCalledFunction() &&
-                                     call->getCalledFunction()->getName() ==
-                                         "luna_runtime_fragment_ref_check_v1")
-                                ++refCheckCalls;
-                            else {
-                                failure = "private Ref ingress has an unexpected call";
-                                return false;
-                            }
-                        }
-                if (contextCheckCalls != 1 || refCheckCalls != 1 ||
-                    bodyCalls != 1) {
-                    failure = "private Ref ingress lost context/ref/body call pairing";
-                    return false;
-                }
                 luna::codegen::NativeRefUnitDescriptorV4Candidate verifiedV4;
                 if (!luna::codegen::
-                        derivePairedNativeRefUnitDescriptorV4Candidate(
+                        derivePreflightNativeRefUnitDescriptorV4Candidate(
                             program, function, *proof.mModule,
                             ingressEntry->getName().str(), verifiedV4,
                             failure))

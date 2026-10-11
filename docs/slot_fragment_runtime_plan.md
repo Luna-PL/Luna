@@ -1238,11 +1238,14 @@ The production pairing check now rederives the candidate and inspects the
 generated LLVM module: the distinct external wrapper must have the exact C
 `i32(ptr, ptr)` shape, the internal source body `void(ptr, ptr)`, and the
 wrapper must call the context check, exact Slot/Contract Ref check and body
-once each with ordered arguments and no other calls. The private JIT proof
-runs this check after its separate status-branch validation. IR mutation
+once each with ordered arguments and no other calls. The production preflight
+proof then requires the context and Ref switch conditions to consume those
+check results, exact success/error destinations and returns, and no extra
+wrapper instructions. The private JIT path invokes both checks. IR mutation
 tests reject changed body arguments, Slot constants, context arguments,
-body linkage and extra calls. Production publication still needs a generated wrapper path,
-complete status/failure proof and artifact binding.
+body linkage, extra calls and changed status control flow. Production
+publication still needs a generated wrapper path, recoverable body failure
+and artifact binding.
 
 | Candidate contract fact | Required check before publication |
 | --- | --- |
@@ -1255,9 +1258,9 @@ complete status/failure proof and artifact binding.
 The existing generic Native v1/v2 export and Runtime declaration descriptors
 do not encode the Ref target or this ingress ABI. The Fragment descriptor
 describes factory/environment/activation execution, so it cannot stand in
-for a source function entry. The next step is to use the paired v4 candidate
-in Native generation with a complete status/failure proof, then connect its
-typed facts to a pinned lookup and recoverable call path before changing
+for a source function entry. The next step is to use the preflight-verified v4
+candidate in Native generation with recoverable body-failure containment,
+then connect its typed facts to a pinned lookup and call path before changing
 publication. The Moon Container 0.3 encoder still rejects Apply regions, and the module
 verifier and CodeGenerator still reject source Ref publication.
 

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Moved the Native v4 Ref/unit preflight status proof into production codegen.
+  It requires exact context and Ref switch conditions, five status returns,
+  one guarded body block and no extra wrapper instructions. The private JIT
+  path exercises this proof; recoverable body failure and Native publication
+  remain gated.
 - Paired the source-derived Native v4 Ref/unit candidate with its generated
   LLVM wrapper in production codegen. The check requires exact C pointer
   signatures, an internal source body, one context check, one Ref check with

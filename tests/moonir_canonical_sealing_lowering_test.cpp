@@ -1517,6 +1517,95 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         changedContextAccepted || externalBodyAccepted ||
         extraCheckAccepted || !pairedV4())
         return fail("Native v4 wrapper pairing accepted changed IR identities");
+    const std::string guardedV4Name = unitWrapper + ".preflight";
+    auto* guardedV4 = llvm::Function::Create(
+        v4Wrapper->getFunctionType(), llvm::Function::ExternalLinkage,
+        guardedV4Name, v4Module);
+    auto* guardedEntry = llvm::BasicBlock::Create(v4Context, "entry", guardedV4);
+    auto* guardedContext = llvm::BasicBlock::Create(
+        v4Context, "context.accepted", guardedV4);
+    auto* guardedInvalidContext = llvm::BasicBlock::Create(
+        v4Context, "context.invalid", guardedV4);
+    auto* guardedInvalidHandle = llvm::BasicBlock::Create(
+        v4Context, "ref.invalid.handle", guardedV4);
+    auto* guardedInvalidTarget = llvm::BasicBlock::Create(
+        v4Context, "ref.invalid.target", guardedV4);
+    auto* guardedUnexpected = llvm::BasicBlock::Create(
+        v4Context, "check.unexpected", guardedV4);
+    auto* guardedBody = llvm::BasicBlock::Create(
+        v4Context, "ref.body", guardedV4);
+    v4Builder.SetInsertPoint(guardedEntry);
+    auto* guardedContextCall = v4Builder.CreateCall(
+        v4ContextCheck->getCalledFunction(), {guardedV4->getArg(0)});
+    auto* guardedContextSwitch = v4Builder.CreateSwitch(
+        guardedContextCall, guardedUnexpected, 2);
+    const auto v4Status = [&](int32_t value) {
+        return llvm::ConstantInt::getSigned(
+            llvm::cast<llvm::IntegerType>(v4I32), value);
+    };
+    guardedContextSwitch->addCase(
+        v4Status(LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS), guardedContext);
+    guardedContextSwitch->addCase(
+        v4Status(LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT),
+        guardedInvalidContext);
+    v4Builder.SetInsertPoint(guardedContext);
+    auto* guardedRefCall = v4Builder.CreateCall(
+        v4RefCheck->getCalledFunction(),
+        {guardedV4->getArg(1), v4Slot, v4Contract});
+    auto* guardedRefSwitch = v4Builder.CreateSwitch(
+        guardedRefCall, guardedUnexpected, 3);
+    guardedRefSwitch->addCase(
+        v4Status(LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1), guardedBody);
+    guardedRefSwitch->addCase(
+        v4Status(LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1),
+        guardedInvalidHandle);
+    guardedRefSwitch->addCase(
+        v4Status(LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1),
+        guardedInvalidTarget);
+    v4Builder.SetInsertPoint(guardedInvalidContext);
+    v4Builder.CreateRet(v4Status(LUNA_NATIVE_REF_UNIT_INVALID_CONTEXT_V1));
+    v4Builder.SetInsertPoint(guardedInvalidHandle);
+    v4Builder.CreateRet(v4Status(LUNA_NATIVE_REF_UNIT_INVALID_HANDLE_V1));
+    v4Builder.SetInsertPoint(guardedInvalidTarget);
+    v4Builder.CreateRet(v4Status(LUNA_NATIVE_REF_UNIT_INVALID_TARGET_V1));
+    v4Builder.SetInsertPoint(guardedUnexpected);
+    v4Builder.CreateRet(v4Status(LUNA_NATIVE_REF_UNIT_UNEXPECTED_CHECK_V1));
+    v4Builder.SetInsertPoint(guardedBody);
+    v4Builder.CreateCall(v4Body,
+        {guardedV4->getArg(0), guardedV4->getArg(1)});
+    auto* guardedSuccess = v4Builder.CreateRet(
+        v4Status(LUNA_NATIVE_REF_UNIT_SUCCESS_V1));
+    const auto preflightV4 = [&] {
+        luna::codegen::NativeRefUnitDescriptorV4Candidate guarded;
+        return luna::codegen::derivePreflightNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry, v4Module,
+            guardedV4Name, guarded, unitSourceError) &&
+            guarded.wrapperLinkageName == guardedV4Name;
+    };
+    if (!preflightV4())
+        return fail("Native v4 preflight rejected its guarded status paths");
+    guardedContextSwitch->setCondition(v4Status(0));
+    const bool constantContextAccepted = preflightV4();
+    guardedContextSwitch->setCondition(guardedContextCall);
+    guardedRefSwitch->setCondition(v4Status(0));
+    const bool constantRefAccepted = preflightV4();
+    guardedRefSwitch->setCondition(guardedRefCall);
+    guardedRefSwitch->setDefaultDest(guardedBody);
+    const bool unexpectedToBodyAccepted = preflightV4();
+    guardedRefSwitch->setDefaultDest(guardedUnexpected);
+    guardedSuccess->setOperand(0,
+        v4Status(LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1));
+    const bool wrongSuccessAccepted = preflightV4();
+    guardedSuccess->setOperand(0, v4Status(LUNA_NATIVE_REF_UNIT_SUCCESS_V1));
+    v4Builder.SetInsertPoint(guardedSuccess);
+    auto* guardedExtraStore = v4Builder.CreateStore(
+        guardedV4->getArg(0), guardedV4->getArg(0));
+    const bool extraInstructionAccepted = preflightV4();
+    guardedExtraStore->eraseFromParent();
+    if (constantContextAccepted || constantRefAccepted ||
+        unexpectedToBodyAccepted || wrongSuccessAccepted ||
+        extraInstructionAccepted || !preflightV4())
+        return fail("Native v4 preflight accepted changed status control flow");
     for (unsigned field = 0; field < 10; ++field) {
         if (privateFieldCursor + 4 > privateIngressRecord.size() ||
             !rejectedPrivateIngressMutation(privateFieldCursor,

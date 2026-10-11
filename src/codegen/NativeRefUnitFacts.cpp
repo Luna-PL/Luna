@@ -5,12 +5,16 @@
 #include "moonir/FragmentContextEffects.h"
 #include "moonir/MoonIRModule.h"
 #include "moonir/Verifier.h"
+#include "runtime/NativeArtifactABI.h"
+#include "runtime/RuntimeFragmentABI.h"
+#include "runtime/RuntimeFragmentCompilerBridge.h"
 
 #include <llvm/Analysis/ValueTracking.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/Module.h>
 
 #include <algorithm>
+#include <unordered_set>
 #include <utility>
 
 namespace luna::codegen {
@@ -255,6 +259,114 @@ bool derivePairedNativeRefUnitDescriptorV4Candidate(
             }
     if (contextChecks != 1 || refChecks != 1 || bodyCalls != 1)
         return reject("Native v4 wrapper lost its context/Ref/body pairing");
+    candidate = std::move(verified);
+    error.clear();
+    return true;
+}
+
+bool derivePreflightNativeRefUnitDescriptorV4Candidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    const llvm::Module& generated, const std::string& wrapperLinkageName,
+    NativeRefUnitDescriptorV4Candidate& candidate, std::string& error) {
+    NativeRefUnitDescriptorV4Candidate verified;
+    if (!derivePairedNativeRefUnitDescriptorV4Candidate(
+            program, function, generated, wrapperLinkageName,
+            verified, error))
+        return false;
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* wrapper = generated.getFunction(wrapperLinkageName);
+    if (wrapper->size() != 7)
+        return reject("Native v4 preflight has an unexpected block");
+    const auto* entry = &wrapper->getEntryBlock();
+    const auto* contextCall = entry->size() == 2
+        ? llvm::dyn_cast<llvm::CallInst>(&entry->front()) : nullptr;
+    const auto* contextBranch = llvm::dyn_cast_or_null<llvm::SwitchInst>(
+        entry->getTerminator());
+    const auto switchDestination = [](const llvm::SwitchInst* branch,
+                                      int32_t status) -> const llvm::BasicBlock* {
+        if (!branch) return nullptr;
+        for (const auto choice : branch->cases())
+            if (choice.getCaseValue()->getSExtValue() == status)
+                return choice.getCaseSuccessor();
+        return nullptr;
+    };
+    if (!contextCall || !contextCall->getCalledFunction() ||
+        contextCall->getCalledFunction()->getName() !=
+            "luna_compiler_fragment_context_check" ||
+        !contextBranch || contextBranch->getCondition() != contextCall ||
+        contextBranch->getNumCases() != 2)
+        return reject("Native v4 preflight lost its context status switch");
+    const auto* checkedContext = switchDestination(
+        contextBranch, LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS);
+    const auto* invalidContext = switchDestination(
+        contextBranch, LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT);
+    const auto* unexpected = contextBranch->getDefaultDest();
+    const auto* refCall = checkedContext && checkedContext->size() == 2
+        ? llvm::dyn_cast<llvm::CallInst>(&checkedContext->front()) : nullptr;
+    const auto* refBranch = checkedContext
+        ? llvm::dyn_cast_or_null<llvm::SwitchInst>(
+            checkedContext->getTerminator())
+        : nullptr;
+    if (!refCall || !refCall->getCalledFunction() ||
+        refCall->getCalledFunction()->getName() !=
+            "luna_runtime_fragment_ref_check_v1" ||
+        !refBranch || refBranch->getCondition() != refCall ||
+        refBranch->getNumCases() != 3 ||
+        refBranch->getDefaultDest() != unexpected)
+        return reject("Native v4 preflight lost its Ref status switch");
+    const auto* bodyBlock = switchDestination(
+        refBranch, LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1);
+    const auto* invalidHandle = switchDestination(
+        refBranch, LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1);
+    const auto* invalidTarget = switchDestination(
+        refBranch, LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1);
+    const auto* body = generated.getFunction(
+        verified.source.sourceLinkageName);
+    const auto* bodyCall = bodyBlock && bodyBlock->size() == 2
+        ? llvm::dyn_cast<llvm::CallInst>(&bodyBlock->front()) : nullptr;
+    if (!bodyCall || bodyCall->getCalledFunction() != body)
+        return reject("Native v4 preflight lost its guarded body call");
+    const std::unordered_set<const llvm::BasicBlock*> blocks = {
+        entry, checkedContext, invalidContext, invalidHandle,
+        invalidTarget, unexpected, bodyBlock};
+    if (blocks.size() != 7 || blocks.count(nullptr) ||
+        std::any_of(blocks.begin(), blocks.end(),
+            [wrapper](const auto* block) {
+                return block->getParent() != wrapper;
+            }))
+        return reject("Native v4 preflight aliases a status path");
+    const auto returnsStatus = [](const llvm::BasicBlock* block,
+                                  int32_t expected) {
+        const auto* returned = block && block->size() == 1
+            ? llvm::dyn_cast_or_null<llvm::ReturnInst>(
+                block->getTerminator())
+            : nullptr;
+        const auto* status = returned
+            ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+                returned->getReturnValue())
+            : nullptr;
+        return status && status->getSExtValue() == expected;
+    };
+    const auto* successReturn = llvm::dyn_cast_or_null<llvm::ReturnInst>(
+        bodyBlock->getTerminator());
+    const auto* successStatus = successReturn
+        ? llvm::dyn_cast_or_null<llvm::ConstantInt>(
+            successReturn->getReturnValue())
+        : nullptr;
+    if (!returnsStatus(invalidContext,
+            LUNA_NATIVE_REF_UNIT_INVALID_CONTEXT_V1) ||
+        !returnsStatus(invalidHandle,
+            LUNA_NATIVE_REF_UNIT_INVALID_HANDLE_V1) ||
+        !returnsStatus(invalidTarget,
+            LUNA_NATIVE_REF_UNIT_INVALID_TARGET_V1) ||
+        !returnsStatus(unexpected,
+            LUNA_NATIVE_REF_UNIT_UNEXPECTED_CHECK_V1) ||
+        !successStatus ||
+        successStatus->getSExtValue() != LUNA_NATIVE_REF_UNIT_SUCCESS_V1)
+        return reject("Native v4 preflight changed its status returns");
     candidate = std::move(verified);
     error.clear();
     return true;
