@@ -178,6 +178,7 @@ string(FIND "${ir_text}" "@luna_native_proof_v1" proof_symbol)
 string(FIND "${ir_text}" "@luna_native_library_descriptor_v1" descriptor_query)
 string(FIND "${ir_text}" "@luna_native_library_descriptor_v2" typed_descriptor_query)
 string(FIND "${ir_text}" "@luna_native_library_descriptor_v3" owned_descriptor_query)
+string(FIND "${ir_text}" "@luna_native_library_descriptor_v4" unit_descriptor_query)
 if(WIN32)
     string(FIND "${ir_text}" "section \".luna$proof\"" proof_section)
     string(FIND "${ir_text}" "section \".luna$desc\"" descriptor_section)
@@ -194,9 +195,10 @@ endif()
 if(proof_symbol EQUAL -1 OR proof_section EQUAL -1 OR
    descriptor_query EQUAL -1 OR descriptor_section EQUAL -1 OR
    typed_descriptor_query EQUAL -1 OR typed_descriptor_section EQUAL -1 OR
-   NOT owned_descriptor_query EQUAL -1)
+   NOT owned_descriptor_query EQUAL -1 OR
+   NOT unit_descriptor_query EQUAL -1)
     message(FATAL_ERROR
-        "Native proof/typed registry is missing or candidate v3 was emitted")
+        "Native proof/typed registry is missing or a candidate descriptor was emitted")
 endif()
 
 execute_process(

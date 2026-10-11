@@ -7,7 +7,8 @@
   canonical digest, resolved wrapper symbol and staged-image origin. An
   independent C fixture exercises valid metadata, malformed rows, aliases and
   dependency entries. Candidate lookup remains read-only; generated export,
-  generation binding and typed invocation are still gated.
+  generation binding and typed invocation are still gated. The producer reserves
+  the v4 query name and the Native IR test requires no generated v4 record.
 - Moved borrowed Ref/unit candidate source-fact derivation into production
   codegen. It independently checks the sealed CFG, fixed-point context effect,
   frozen callable and exact Apply target before a private test entry is paired
