@@ -1191,6 +1191,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     // publish an executable Ref until ingress, dropGlue and wire validation
     // are connected. Test the actual frontend -> lowerer -> verifier path.
     auto sourceRefSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "struct RefBox { marker: i32; selected: RuntimeFragmentRef<checkpoint>; }\n"
         "slot checkpoint(value: i32);\n"
         "slot shadow(value: i32);\n"
         "enum RefChoice { Empty; Item(i32, RuntimeFragmentRef<checkpoint>); }\n"
@@ -1226,6 +1227,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "fn cleanup_enum_pair_empty(first: affine RuntimeFragmentRef<checkpoint>, "
         "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
         "let picked = RefChoice::Empty(); }\n"
+        "fn cleanup_struct_pair(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let packed = RefBox { marker: 7, selected: move first }; }\n"
         "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
@@ -1251,6 +1255,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* cleanupEnum = nullptr;
     moon::FunctionDecl* cleanupEnumPairItem = nullptr;
     moon::FunctionDecl* cleanupEnumPairEmpty = nullptr;
+    moon::FunctionDecl* cleanupStructPair = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
     for (auto& declaration : sourceRefModule->declarations) {
@@ -1274,6 +1279,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 cleanupEnumPairItem = function;
             if (function->name == "cleanup_enum_pair_empty")
                 cleanupEnumPairEmpty = function;
+            if (function->name == "cleanup_struct_pair")
+                cleanupStructPair = function;
             if (function->name == "transfer") transfer = function;
         }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
@@ -1285,6 +1292,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !cleanupTwoArrayTail ||
         !cleanupCountArrayTail ||
         !cleanupEnum || !cleanupEnumPairItem || !cleanupEnumPairEmpty ||
+        !cleanupStructPair ||
         !transfer ||
         observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
@@ -1517,6 +1525,36 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         std::cerr << pairJitError << '\n';
         return fail("empty source Ref enum failed private JIT cleanup");
     }
+    if (!cleanupStructPair->controlFlow)
+        return fail("source Ref struct has no sealed CFG");
+    bool projectedStructRef = false;
+    bool structAllocationRelease = false;
+    moon::LocalId structOwner;
+    for (const auto& cleanup : cleanupStructPair->controlFlow->cleanups) {
+        if (cleanup.place.projections.size() == 1 &&
+            cleanup.place.projections.front().kind ==
+                moon::ProjectionKind::Field &&
+            cleanup.place.projections.front().index == 1 &&
+            cleanup.action == luna::ownership::CleanupAction::Drop &&
+            cleanup.kind == moon::CleanupKind::Value &&
+            cleanup.type == refId) {
+            projectedStructRef = true;
+            structOwner = cleanup.place.root;
+        }
+    }
+    for (const auto& cleanup : cleanupStructPair->controlFlow->cleanups)
+        if (projectedStructRef && cleanup.place.root == structOwner &&
+            cleanup.place.projections.empty() &&
+            cleanup.kind == moon::CleanupKind::Allocation &&
+            cleanup.action == luna::ownership::CleanupAction::Deallocate)
+            structAllocationRelease = true;
+    if (!projectedStructRef || !structAllocationRelease)
+        return fail("source Ref struct lacks split field/allocation cleanup");
+    if (!exercisePrivateOwnedPairCleanupJit(
+            *sourceRefModule, *cleanupStructPair, pairJitError)) {
+        std::cerr << pairJitError << '\n';
+        return fail("source Ref struct failed private JIT cleanup");
+    }
     std::vector<uint8_t> refV3Types{1};
     std::string refWireError;
     if (moon::ContainerModelCodec::encodeTypes(
@@ -1659,7 +1697,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !std::any_of(blockedRefCodegen.errors().begin(),
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
-                    "12 private unit body/wrapper pair(s) and 1 private owned "
+                    "13 private unit body/wrapper pair(s) and 1 private owned "
                     "return body/wrapper pair(s) verified and discarded") !=
                     std::string::npos;
             }) ||

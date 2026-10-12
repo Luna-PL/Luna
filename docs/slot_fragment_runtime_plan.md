@@ -1367,9 +1367,15 @@ the active variant's original payload fields. The private two-owner JIT now
 executes both `Item` and `Empty` source variants with distinct Runtime-issued
 Ref handles. Each call releases both handles exactly once and expires their
 generation pin; `Item` owns one handle inside the enum, while `Empty` leaves
-both handles in their parameter cells. Next, prove named struct field cleanup
-from original cells; closure environments still require their own original-cell
-or partial-state proofs. Public Ref publication remains gated. The updated strict
+both handles in their parameter cells. A non-generic named `RefBox` source
+struct now precedes its Slot declaration and places Ref after an `i32` field.
+Its sealed CFG contains a projected
+Drop for the original second field cell and one backing-allocation release row.
+The private two-owner JIT moves one Runtime-issued handle into the struct,
+keeps the other in its parameter cell, and releases both exactly once before
+the generation pin expires. Next, prove partially moved named Ref structs;
+closure environments still require their own original-cell or partial-state
+proofs. Public Ref publication remains gated. The updated strict
 build passes all 81 tests, and the focused frontend/canonical tests pass under
 ASAN/UBSan.
 
