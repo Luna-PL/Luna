@@ -1012,11 +1012,14 @@ tag，仅沿活跃分支的 payload cell 调用 Drop；真实 Ok／Err 夹具封
 元素 cell；真实源码夹具封闭了 `ArrayDrop` 并通过一次性 LLVM 入口证明。
 单元素消费迭代器的真实 `take(0)` 夹具现在封闭了带守卫的投影 Ref Drop，并通过
 一次性 LLVM 证明：索引 move 先从原始元素 cell 取走并清空 Ref，再推进
-`nextUnread`。多元素及旧版逐元素标记路径仍需独立的部分状态证据。含 Ref 的
-泛型 enum 现从原始 tag 分派，仅沿活跃变体的原始 payload 字段清理；Ref 位于
+`nextUnread`。两元素 `take(1)` 真实源码夹具现把两条投影 Drop 记录封闭到同一个
+`nextUnread` 游标；一次性双 owner body/wrapper LLVM 证明验证了函数体与
+两处静态 Ref Drop 路径。公开双 owner 入口 ABI 和动态恰好一次释放结论仍未
+获得，旧版逐元素标记清理也仍需独立证据。含 Ref 的泛型 enum 现从原始 tag
+分派，仅沿活跃变体的原始 payload 字段清理；Ref 位于
 整数字段后的真实源码夹具封闭了 `EnumDrop` 并通过一次性 LLVM 证明。直接声明
-Ref 字段的非泛型 enum
-仍被源码类型约束拒绝。命名 struct 和 closure 环境仍需各自的原位 cell 或
+Ref 字段的非泛型 enum 仍被源码类型约束拒绝。命名 struct 和 closure 环境仍需
+各自的原位 cell 或
 部分状态证明，公开 Ref 发布门禁不变。
 
 现有 Native 验证链路确定了接入边界：`buildNativeLibrary` 从封闭的 declaration

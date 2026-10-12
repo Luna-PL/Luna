@@ -663,6 +663,19 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         failure = "private Ref unit ingress proof requires a unit return";
         return false;
     }
+    const bool privateOwnedPair = !privateRefApply &&
+        !function.requiresFragmentContext && function.params.size() == 2 &&
+        std::all_of(function.params.begin(), function.params.end(),
+            [&program](const auto& parameter) {
+                const auto* type = program.findType(parameter.type);
+                return type && type->kind == TypeKind::RuntimeFragmentRef &&
+                    parameter.relation == luna::ownership::Relation::Owned;
+            });
+    if (!privateRefApply && function.params.size() != 1 &&
+        !privateOwnedPair) {
+        failure = "private Ref unit ingress proof requires one Ref or two owned Refs";
+        return false;
+    }
     if (privateRefApply) {
         if (!function.requiresFragmentContext) {
             failure = "private Ref apply proof requires an explicit Fragment context";
@@ -716,8 +729,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
     std::vector<llvm::Type*> parameters;
     if (function.requiresFragmentContext)
         parameters.push_back(proof.mHelpers->ptrTy());
-    parameters.insert(parameters.end(),
-                      privateRefApply ? function.params.size() : 1,
+    parameters.insert(parameters.end(), function.params.size(),
                       proof.mHelpers->ptrTy());
     const bool privateUnitStatusBody = privateRefApply &&
         returnType->kind == TypeKind::Unit && function.params.size() == 1;
@@ -2901,9 +2913,27 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         failure.clear();
         return true;
     }
-    auto* wrapper = proof.mHelpers->emitRuntimeFragmentRefUnitIngressWrapper(
-        *proof.mModule, *body, program, function,
-        "__private_ref_ingress_proof");
+    llvm::Function* wrapper = nullptr;
+    if (privateOwnedPair) {
+        // This disposable pair proves only the two-owner body shape. Its
+        // wrapper never becomes a host ingress ABI or published symbol.
+        wrapper = llvm::Function::Create(
+            llvm::FunctionType::get(
+                proof.mHelpers->i32Ty(),
+                {proof.mHelpers->ptrTy(), proof.mHelpers->ptrTy()}, false),
+            llvm::Function::InternalLinkage,
+            "__private_ref_pair_proof", *proof.mModule);
+        auto* entry = llvm::BasicBlock::Create(
+            *proof.mCtx, "entry", wrapper);
+        llvm::IRBuilder<> builder(entry);
+        builder.CreateCall(body, {wrapper->getArg(0), wrapper->getArg(1)});
+        builder.CreateRet(llvm::ConstantInt::get(
+            proof.mHelpers->i32Ty(), LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1));
+    } else {
+        wrapper = proof.mHelpers->emitRuntimeFragmentRefUnitIngressWrapper(
+            *proof.mModule, *body, program, function,
+            "__private_ref_ingress_proof");
+    }
     if (!wrapper || body->empty() || !body->hasInternalLinkage() ||
         !wrapper->hasInternalLinkage()) {
         failure = "frozen signature/CFG did not pair with the generated body";
@@ -2925,8 +2955,10 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 ++wrapperBodyCalls;
     const bool owned = function.params.front().relation ==
         luna::ownership::Relation::Owned;
-    if (wrapperBodyCalls != 1 ||
-        (owned ? bodyDropCalls == 0 : bodyDropCalls != 0)) {
+    const bool wrongDropCount = privateOwnedPair
+        ? bodyDropCalls < 2
+        : (owned ? bodyDropCalls == 0 : bodyDropCalls != 0);
+    if (wrapperBodyCalls != 1 || wrongDropCount) {
         failure = "generated body has no matching Ref Drop behavior";
         return false;
     }
@@ -3202,7 +3234,21 @@ bool CodeGenerator::generate(moon::Module* program) {
         size_t provenApplies = 0;
         for (auto& declaration : program->declarations) {
             auto* function = dynamic_cast<FunctionDecl*>(declaration.get());
-            if (!function || function->params.size() != 1) continue;
+            if (!function || function->params.empty() ||
+                function->params.size() > 2) continue;
+            const bool privateOwnedPair = function->params.size() == 2 &&
+                !function->requiresFragmentContext &&
+                function->controlFlow &&
+                function->controlFlow->runtimeRefApplies.empty() &&
+                std::all_of(function->params.begin(), function->params.end(),
+                    [program](const auto& parameter) {
+                        const auto* type = program->findType(parameter.type);
+                        return type &&
+                            type->kind == TypeKind::RuntimeFragmentRef &&
+                            parameter.relation ==
+                                luna::ownership::Relation::Owned;
+                    });
+            if (function->params.size() == 2 && !privateOwnedPair) continue;
             const auto* parameter = program->findType(
                 function->params.front().type);
             const auto* result = program->findType(function->returnType);

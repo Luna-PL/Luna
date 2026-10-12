@@ -2,10 +2,14 @@
 
 ## Unreleased
 
+- Added a disposable two-owned-Ref body/wrapper proof for a two-element
+  consuming array with `take(1)`. Its sealed cleanup rows share one
+  `nextUnread` cursor, and generated LLVM contains both Ref Drop paths.
+  Public multi-owner ingress and legacy flag-based cleanup remain gated.
 - Proved a private guarded Ref array-tail cleanup from a real consuming
   iterator source fixture. The indexed move takes and clears the original
   element cell before advancing `nextUnread`; the projected Drop remains
-  guarded. Multi-element and legacy flag-based partial states remain gated.
+  guarded. This fixture covers the one-element `take(0)` path.
 - Lowered private Ref-bearing generic enum cleanup through the active
   variant's original payload fields. A real source fixture places Ref after
   an integer field, seals `EnumDrop` and passes the disposable LLVM proof;
