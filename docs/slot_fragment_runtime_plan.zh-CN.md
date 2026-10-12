@@ -998,6 +998,11 @@ glue 与可执行线格式接纳仍未完成。
 具体容器投影现在会沿每个可达 Ref 类型保留其已验证的 nominal Slot 声明；即使
 目标 Slot 为私有且无其他代码引用，也不会在投影中消失。同形 Slot 替换会在容器
 发布前被拒绝。这为后续导入保留了 Type 到 Contract 的连接，未开放源码 Ref 发布。
+冻结模块 verifier 现在将 Ref 的原始 carrier cell Runtime Drop 视作内建契约，
+不接受伪造的源码 `DeclarationRef` Drop glue。其他具有源码 Drop 的类型必须
+指向冻结签名为 `&mut T -> unit` 的函数。非泛型目标须有相同 TypeId；泛型 Drop
+实现须匹配同一名义声明及一致的直接类型参数绑定。改指另一资源类型的 Drop
+函数会被拒绝。这尚未完成 Ref 聚合清理，也不改变发布门禁。
 
 现有 Native 验证链路确定了接入边界：`buildNativeLibrary` 从封闭的 declaration
 table 构造各项 `NativeExportSpec`；`canonicalNativeExport` 只把 kind、flags、

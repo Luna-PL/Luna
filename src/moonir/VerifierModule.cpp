@@ -16,6 +16,48 @@ namespace moon {
 
 using namespace verifier_detail;
 
+namespace {
+bool matchesDropTarget(
+    const Module& module, const TypeRecord& pattern,
+    const TypeRecord& target) {
+    if (pattern.id == target.id) return true;
+    if (pattern.kind != target.kind ||
+        pattern.nominalDeclarationId.empty() ||
+        pattern.nominalDeclarationId != target.nominalDeclarationId ||
+        pattern.typeArgumentIds.empty())
+        return false;
+    // A generic declaration row has parameter names but no applied arguments;
+    // its Drop method names those parameters in the nominal target type.
+    if (target.typeArgumentIds.empty() &&
+        pattern.typeArgumentIds.size() == target.typeParameterNames.size()) {
+        std::unordered_set<std::string> parameters;
+        for (const auto& argument : pattern.typeArgumentIds) {
+            const auto* parameter = module.findType(argument);
+            if (!parameter || parameter->kind != TypeKind::TypeParam ||
+                !parameters.insert(argument.value).second)
+                return false;
+        }
+        return true;
+    }
+    if (pattern.typeArgumentIds.size() != target.typeArgumentIds.size())
+        return false;
+    std::unordered_map<std::string, std::string> bindings;
+    for (size_t index = 0; index < pattern.typeArgumentIds.size(); ++index) {
+        const auto& argument = pattern.typeArgumentIds[index];
+        const auto& concrete = target.typeArgumentIds[index];
+        if (argument == concrete) continue;
+        const auto* parameter = module.findType(argument);
+        if (!parameter || parameter->kind != TypeKind::TypeParam)
+            return false;
+        const auto [bound, inserted] = bindings.emplace(
+            argument.value, concrete.value);
+        if (!inserted && bound->second != concrete.value)
+            return false;
+    }
+    return true;
+}
+} // namespace
+
 bool Verifier::verify(const Module& module) {
     mErrors.clear();
     mVerifiedTypeIds.clear();
@@ -173,13 +215,51 @@ bool Verifier::verify(const Module& module) {
         if (!type.sysmeta.abi.dropGlueSymbol.empty())
             error({}, "type '" + type.id.value +
                       "' retains a linkage-string Drop reference");
-        if (type.sysmeta.resource.needsDrop != type.dropGlue.complete())
+        // A Ref is released by the compiler's cell-based runtime intrinsic.
+        // Source Drop glue uses an ordinary frozen function declaration.
+        if (type.kind == TypeKind::RuntimeFragmentRef) {
+            if (type.sysmeta.resource.management !=
+                    luna::sysmeta::ResourceManagement::Unique ||
+                type.sysmeta.resource.releaseDomain !=
+                    luna::sysmeta::ReleaseDomain::Executable ||
+                type.sysmeta.resource.lifetime !=
+                    luna::sysmeta::ResourceLifetime::Lexical ||
+                type.sysmeta.resource.usage !=
+                    luna::ownership::Usage::Affine ||
+                type.sysmeta.resource.cleanup !=
+                    luna::ownership::CleanupAction::Drop ||
+                !type.sysmeta.resource.cleanupRequired ||
+                !type.sysmeta.resource.needsDrop ||
+                !type.dropGlue.empty())
+                error({}, "RuntimeFragmentRef has inconsistent intrinsic Drop contract for type '" +
+                          type.id.value + "'");
+        } else if (type.sysmeta.resource.needsDrop != type.dropGlue.complete()) {
             error({}, "type '" + type.id.value +
                       "' has inconsistent Drop sysmeta");
-        if (!type.dropGlue.empty())
+        }
+        if (!type.dropGlue.empty()) {
             verifyDeclarationRef(
                 type.dropGlue, {}, "Drop glue for type '" +
                 type.id.value + "'", module, DeclarationKind::Function);
+            if (const auto* glue = module.findDeclaration(type.dropGlue)) {
+                const auto* function = module.findType(glue->type);
+                const auto* parameter = function &&
+                    function->parameterTypeIds.size() == 1
+                    ? module.findType(function->parameterTypeIds.front())
+                    : nullptr;
+                const auto* result = function
+                    ? module.findType(function->returnTypeId) : nullptr;
+                const auto* dropTarget = parameter
+                    ? module.findType(parameter->innerTypeId) : nullptr;
+                if (!function || function->kind != TypeKind::Function ||
+                    !parameter || parameter->kind != TypeKind::Reference ||
+                    !parameter->isMutable || !dropTarget ||
+                    !matchesDropTarget(module, *dropTarget, type) ||
+                    !result || result->kind != TypeKind::Unit)
+                    error({}, "Drop glue for type '" + type.id.value +
+                              "' must have the frozen signature '&mut T -> unit'");
+            }
+        }
         if (type.sysmeta.resource.cleanupRequired !=
             (type.sysmeta.resource.cleanup !=
              luna::ownership::CleanupAction::None))

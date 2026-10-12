@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Verified frozen source Drop glue against `&mut T -> unit`, including exact
+  targets and consistent direct generic parameter bindings. Ref uses its runtime
+  Drop intrinsic and rejects a forged source glue reference; its public
+  import and aggregate cleanup gates remain closed.
 - Kept a reachable `RuntimeFragmentRef<S>` type's exact nominal Slot declaration
   in the concrete container projection, even when that Slot is private. The
   projection rejects same-shaped target substitution before publication;

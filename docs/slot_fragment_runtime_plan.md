@@ -1319,6 +1319,14 @@ nominal Slot declaration, retaining a private target even if no other code
 references it. It rejects a same-shaped replacement Slot before any container
 can be published. This preserves the Type-to-Contract join for later import
 work; it does not admit source Ref publication.
+The frozen verifier now treats Ref's cell-based runtime Drop as an intrinsic
+contract, with no source `DeclarationRef` Drop glue. Other types with source
+Drop must resolve to a function whose frozen signature is `&mut T -> unit`.
+Nongeneric targets require the same TypeId; generic Drop implementations match
+the same nominal declaration with consistent direct type-parameter bindings.
+A Ref with forged source glue or a resource redirected to another type's Drop
+function is rejected. This does not complete Ref aggregate cleanup or change
+the publication gate.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration

@@ -1258,8 +1258,39 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 return error.message.find(
                     "RuntimeFragmentRef source import/dropGlue/wire ABI is not implemented") !=
                     std::string::npos;
+            }) ||
+        std::any_of(verifier.errors().begin(), verifier.errors().end(),
+            [&](const auto& error) {
+                return error.message.find("type '" + refId.value +
+                    "' has inconsistent Drop sysmeta") != std::string::npos;
             }))
         return fail("source Ref passed executable publication before its full bridge");
+    refRecord->dropGlue = {observe->symbolId, observe->contractId};
+    verifier.verify(*sourceRefModule);
+    const bool forgedRefDropDiagnosed = std::any_of(
+        verifier.errors().begin(), verifier.errors().end(),
+        [](const auto& error) {
+            return error.message.find(
+                "RuntimeFragmentRef has inconsistent intrinsic Drop contract") !=
+                std::string::npos;
+        });
+    refRecord->dropGlue = {};
+    if (!forgedRefDropDiagnosed)
+        return fail("source Ref accepted a forged source Drop glue declaration");
+    const auto refReleaseDomain = refRecord->sysmeta.resource.releaseDomain;
+    refRecord->sysmeta.resource.releaseDomain =
+        luna::sysmeta::ReleaseDomain::HostService;
+    verifier.verify(*sourceRefModule);
+    const bool forgedRefReleaseDiagnosed = std::any_of(
+        verifier.errors().begin(), verifier.errors().end(),
+        [](const auto& error) {
+            return error.message.find(
+                "RuntimeFragmentRef has inconsistent intrinsic Drop contract") !=
+                std::string::npos;
+        });
+    refRecord->sysmeta.resource.releaseDomain = refReleaseDomain;
+    if (!forgedRefReleaseDiagnosed)
+        return fail("source Ref accepted a forged runtime release domain");
     moon::ContainerManifest blockedRefManifest;
     blockedRefManifest.packageId = sourceRefModule->name;
     blockedRefManifest.features = sourceRefModule->features;
@@ -3465,6 +3496,37 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         });
     if (mutableOwnedError == tryApplyModule->typeTable.end())
         return fail("Native v3 candidate lost its mutable test copy");
+    const auto foreignDrop = std::find_if(
+        tryApplyModule->typeTable.begin(), tryApplyModule->typeTable.end(),
+        [&](const moon::TypeRecord& type) {
+            return type.id != ownedErrorType->id &&
+                type.kind == TypeKind::Struct && type.dropGlue.complete();
+        });
+    if (foreignDrop == tryApplyModule->typeTable.end())
+        return fail("Drop signature fixture has no second owned type");
+    moon::Verifier dropContractVerifier;
+    dropContractVerifier.verify(*tryApplyModule);
+    if (std::any_of(dropContractVerifier.errors().begin(),
+            dropContractVerifier.errors().end(), [](const auto& error) {
+                return error.message.find(
+                    "must have the frozen signature '&mut T -> unit'") !=
+                    std::string::npos;
+            }))
+        return fail("valid frozen Drop glue lost its source signature");
+    const auto expectedDrop = mutableOwnedError->dropGlue;
+    mutableOwnedError->dropGlue = foreignDrop->dropGlue;
+    dropContractVerifier.verify(*tryApplyModule);
+    const bool wrongTargetDropDiagnosed = std::any_of(
+        dropContractVerifier.errors().begin(),
+        dropContractVerifier.errors().end(),
+        [](const auto& error) {
+            return error.message.find(
+                "must have the frozen signature '&mut T -> unit'") !=
+                std::string::npos;
+        });
+    mutableOwnedError->dropGlue = expectedDrop;
+    if (!wrongTargetDropDiagnosed)
+        return fail("frozen Drop glue accepted a different owned TypeId");
     const auto frozenLayoutId = mutableOwnedError->abiLayoutId;
     mutableOwnedError->abiLayoutId.value = "forged-layout";
     const bool acceptedForgedLayout =
