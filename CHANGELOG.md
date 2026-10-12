@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Lowered private `Result<Ref, T>` and `Result<T, Ref>` cleanup through the
+  original tagged payload cell. The active tag alone selects the Drop path;
+  real Ok and Err source fixtures seal `ResultDrop` and pass disposable LLVM
+  proofs while public Ref publication remains gated.
 - Lowered private Ref-containing anonymous Record cleanup from its original
   field cells, so each Ref calls the cell-based Runtime Drop without first
   copying its carrier. The source fixture seals a RecordDrop cleanup and the

@@ -1092,6 +1092,12 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "fn accept(selected: affine RuntimeFragmentRef<checkpoint>) -> unit {}\n"
         "fn cleanup_record(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> unit { let packed = { selected: move selected }; }\n"
+        "fn cleanup_result(selected: affine RuntimeFragmentRef<checkpoint>) "
+        "-> unit { let packed = "
+        "Ok::<RuntimeFragmentRef<checkpoint>, i32>(move selected); }\n"
+        "fn cleanup_error_result(selected: affine RuntimeFragmentRef<checkpoint>) "
+        "-> unit { let packed = "
+        "Err::<i32, RuntimeFragmentRef<checkpoint> >(move selected); }\n"
         "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
@@ -1105,6 +1111,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* observe = nullptr;
     moon::FunctionDecl* accept = nullptr;
     moon::FunctionDecl* cleanupRecord = nullptr;
+    moon::FunctionDecl* cleanupResult = nullptr;
+    moon::FunctionDecl* cleanupErrorResult = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
     for (auto& declaration : sourceRefModule->declarations) {
@@ -1113,13 +1121,17 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             if (function->name == "observe") observe = function;
             if (function->name == "accept") accept = function;
             if (function->name == "cleanup_record") cleanupRecord = function;
+            if (function->name == "cleanup_result") cleanupResult = function;
+            if (function->name == "cleanup_error_result")
+                cleanupErrorResult = function;
             if (function->name == "transfer") transfer = function;
         }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
                 declaration.get()); slot && slot->name == "shadow")
             shadow = slot;
     }
-    if (!observe || !accept || !cleanupRecord || !transfer ||
+    if (!observe || !accept || !cleanupRecord || !cleanupResult ||
+        !cleanupErrorResult || !transfer ||
         observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
         return fail("source Ref target fixture has no frozen function/Slot");
@@ -1190,6 +1202,34 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                         });
             }))
         return fail("source Ref record has no canonical aggregate cleanup");
+    if (!cleanupResult->controlFlow ||
+        !std::any_of(cleanupResult->controlFlow->cleanups.begin(),
+            cleanupResult->controlFlow->cleanups.end(),
+            [&](const moon::CleanupRecord& cleanup) {
+                const auto* type = sourceRefModule->findType(cleanup.type);
+                const auto* value = type && type->kind == TypeKind::Result &&
+                    type->typeArgumentIds.size() == 2
+                    ? sourceRefModule->findType(type->typeArgumentIds[0])
+                    : nullptr;
+                return type && value &&
+                    cleanup.action == luna::ownership::CleanupAction::ResultDrop &&
+                    value->kind == TypeKind::RuntimeFragmentRef;
+            }))
+        return fail("source Ref Result has no canonical tagged cleanup");
+    if (!cleanupErrorResult->controlFlow ||
+        !std::any_of(cleanupErrorResult->controlFlow->cleanups.begin(),
+            cleanupErrorResult->controlFlow->cleanups.end(),
+            [&](const moon::CleanupRecord& cleanup) {
+                const auto* type = sourceRefModule->findType(cleanup.type);
+                const auto* value = type && type->kind == TypeKind::Result &&
+                    type->typeArgumentIds.size() == 2
+                    ? sourceRefModule->findType(type->typeArgumentIds[1])
+                    : nullptr;
+                return type && value &&
+                    cleanup.action == luna::ownership::CleanupAction::ResultDrop &&
+                    value->kind == TypeKind::RuntimeFragmentRef;
+            }))
+        return fail("source Ref Err has no canonical tagged cleanup");
     std::vector<uint8_t> refV3Types{1};
     std::string refWireError;
     if (moon::ContainerModelCodec::encodeTypes(
@@ -1332,7 +1372,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !std::any_of(blockedRefCodegen.errors().begin(),
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
-                    "3 private unit body/wrapper pair(s) and 1 private owned "
+                    "5 private unit body/wrapper pair(s) and 1 private owned "
                     "return body/wrapper pair(s) verified and discarded") !=
                     std::string::npos;
             }) ||

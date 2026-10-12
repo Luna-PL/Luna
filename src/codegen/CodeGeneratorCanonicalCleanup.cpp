@@ -29,9 +29,11 @@ void CodeGenerator::emitCleanup(
         return;
     }
     if (type && luna::types::containsRuntimeFragmentRef(type)) {
-        if (type->kind != TypeKind::Record ||
-            action != luna::ownership::CleanupAction::RecordDrop) {
-            error("Ref aggregate cleanup requires supported Record storage");
+        if (!((type->kind == TypeKind::Record &&
+               action == luna::ownership::CleanupAction::RecordDrop) ||
+              (type->kind == TypeKind::Result &&
+               action == luna::ownership::CleanupAction::ResultDrop))) {
+            error("Ref aggregate cleanup requires supported Record/Result storage");
             return;
         }
         emitStoredPayloadCleanup(
@@ -318,9 +320,11 @@ void CodeGenerator::emitCanonicalCleanup(
         }
         if (cleanup.kind == moon::CleanupKind::Value &&
             luna::types::containsRuntimeFragmentRef(type)) {
-            if (type->kind != TypeKind::Record ||
-                cleanup.action != luna::ownership::CleanupAction::RecordDrop) {
-                error("canonical Ref aggregate cleanup requires supported Record storage");
+            if (!((type->kind == TypeKind::Record &&
+                   cleanup.action == luna::ownership::CleanupAction::RecordDrop) ||
+                  (type->kind == TypeKind::Result &&
+                   cleanup.action == luna::ownership::CleanupAction::ResultDrop))) {
+                error("canonical Ref aggregate cleanup requires supported Record/Result storage");
                 return;
             }
             emitStoredPayloadCleanup(storage, type, label + ".aggregate");

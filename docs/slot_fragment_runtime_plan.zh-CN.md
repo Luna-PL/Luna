@@ -1006,8 +1006,10 @@ glue 与可执行线格式接纳仍未完成。
 私有 codegen 现在可沿完整匿名 Record 的原始字段 cell 清理其中的 Ref，并在该
 cell 上调用 Runtime Drop，不先复制 carrier。真实源码夹具封闭了 `RecordDrop`
 义务并通过一次性 LLVM 入口证明；ownership checker 仍禁止匿名 Record 的
-部分 move。含 Ref 的数组、带标签载荷、命名 struct 和 closure 环境仍需各自的
-原位 cell 与部分状态证明，公开 Ref 发布门禁不变。
+部分 move。私有 `Result<Ref, T>` 与 `Result<T, Ref>` 清理现从原始存储读取
+tag，仅沿活跃分支的 payload cell 调用 Drop；真实 Ok／Err 夹具封闭了
+`ResultDrop` 并通过一次性 LLVM 证明。含 Ref 的数组、enum、命名 struct 和
+closure 环境仍需各自的原位 cell 与部分状态证明，公开 Ref 发布门禁不变。
 
 现有 Native 验证链路确定了接入边界：`buildNativeLibrary` 从封闭的 declaration
 table 构造各项 `NativeExportSpec`；`canonicalNativeExport` 只把 kind、flags、

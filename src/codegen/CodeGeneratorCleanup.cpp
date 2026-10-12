@@ -16,6 +16,9 @@ bool supportsStoredRefCleanup(const TypePtr& type) {
             [](const auto& field) {
                 return supportsStoredRefCleanup(field.type);
             });
+    if (type->kind == TypeKind::Result && type->typeArgs.size() == 2)
+        return supportsStoredRefCleanup(type->typeArgs[0]) &&
+            supportsStoredRefCleanup(type->typeArgs[1]);
     return false;
 }
 } // namespace
@@ -107,6 +110,41 @@ void CodeGenerator::emitStoredPayloadCleanup(
                     label + "." + field.name + ".cell"),
                 field.type, label + "." + field.name);
         }
+        return;
+    }
+    if (type->kind == TypeKind::Result && type->typeArgs.size() == 2) {
+        auto* layout = llvm::dyn_cast<llvm::StructType>(
+            mHelpers->toLLVMType(type));
+        if (!layout || layout->getNumElements() != 2 ||
+            !llvm::isa<llvm::ArrayType>(layout->getElementType(1))) {
+            error("Ref Result '" + label +
+                  "' has no validated tagged payload storage");
+            return;
+        }
+        auto* tagCell = mBuilder->CreateStructGEP(
+            layout, storage, 0, label + ".tag.cell");
+        auto* payloadCell = mBuilder->CreateStructGEP(
+            layout, storage, 1, label + ".payload.cell");
+        auto* isOk = mBuilder->CreateLoad(
+            mHelpers->boolTy(), tagCell, label + ".is_ok");
+        auto* okBlock = llvm::BasicBlock::Create(
+            *mCtx, label + ".drop_ok", mCurrentFunc);
+        auto* errorBlock = llvm::BasicBlock::Create(
+            *mCtx, label + ".drop_err", mCurrentFunc);
+        auto* continueBlock = llvm::BasicBlock::Create(
+            *mCtx, label + ".dropped", mCurrentFunc);
+        mBuilder->CreateCondBr(isOk, okBlock, errorBlock);
+        mBuilder->SetInsertPoint(okBlock);
+        emitStoredPayloadCleanup(
+            payloadCell, type->typeArgs[0], label + ".ok");
+        if (!mBuilder->GetInsertBlock()->getTerminator())
+            mBuilder->CreateBr(continueBlock);
+        mBuilder->SetInsertPoint(errorBlock);
+        emitStoredPayloadCleanup(
+            payloadCell, type->typeArgs[1], label + ".err");
+        if (!mBuilder->GetInsertBlock()->getTerminator())
+            mBuilder->CreateBr(continueBlock);
+        mBuilder->SetInsertPoint(continueBlock);
         return;
     }
     error("Ref aggregate '" + label +

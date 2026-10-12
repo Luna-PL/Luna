@@ -1331,9 +1331,12 @@ Private codegen now follows the original field cells for a complete anonymous
 Record containing Ref and calls the cell-based Runtime Drop there. A real
 source fixture seals its `RecordDrop` obligation and passes the disposable LLVM
 ingress proof. Anonymous Record partial moves remain forbidden by ownership
-checking. Arrays, tagged payloads, named structs and closure environments
-containing Ref still require separate original-cell and partial-state proofs;
-public Ref publication remains gated.
+checking. Private `Result<Ref, T>` and `Result<T, Ref>` cleanup now reads the
+tag from original storage and Drops only the active branch through its payload
+cell. Real Ok and Err fixtures seal `ResultDrop` and pass disposable LLVM
+proofs. Ref-bearing arrays, enums, named structs and closure environments
+still require separate original-cell and partial-state proofs; public Ref
+publication remains gated.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration
