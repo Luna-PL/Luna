@@ -1300,9 +1300,12 @@ preserves the exact inner Slot TypeId, type arguments and canonical identities;
 the Code row preserves the region, owner local and exact Slot reference. The
 Code decoder rejects incomplete or unordered bindings, and the resulting CFG
 passes exact-target verification. The 0.3 defaults still reject both records,
-and unspecified wire versions are rejected. These section-only paths do not
-change the 0.3 container writer/reader; the whole-module verifier and public
-codegen gate remain in force.
+and unspecified wire versions are rejected. The container envelope now accepts
+an explicitly selected 0.4 header and dispatches Type and Code decoding from
+that header. A verified non-Ref module round-trips as a complete 0.4 container;
+the default writer remains 0.3. The whole-module verifier still rejects source
+Ref publication, so this is not yet an executable Ref container or a public
+codegen path.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration

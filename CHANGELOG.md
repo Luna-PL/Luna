@@ -2,11 +2,14 @@
 
 ## Unreleased
 
+- Added explicit 0.4 Moon Container envelope and whole-model version dispatch.
+  Verified non-Ref modules round-trip byte-canonically through 0.4; the default
+  writer remains 0.3 and unsupported versions fail. Source Ref publication
+  remains gated pending its import, drop-glue, wire ABI and runtime bridge.
 - Added explicit 0.4 Type- and Code-section codec paths for frozen
   `RuntimeFragmentRef<S>` types and their exact Slot Apply bindings. Real source
   records round-trip with their target identities and canonical bytes; the
-  default 0.3 codecs still reject them. Complete 0.4 containers and public Ref
-  publication remain gated.
+  default 0.3 codecs still reject them. Public Ref publication remains gated.
 - Required Native v4 descriptor and export-table pointers to originate in the
   staged verified image before reading their metadata. Independent POSIX
   fixtures now reject references into a dependency while a local descriptor

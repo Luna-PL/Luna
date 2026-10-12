@@ -126,7 +126,8 @@ public:
     static bool encodeContainer(
         const ContainerManifest& manifest, const Module& module,
         std::vector<uint8_t>& output, std::string& error,
-        const ContainerLimits& limits = {});
+        const ContainerLimits& limits = {},
+        uint32_t formatMinor = FormatMinor);
     // Dependencies are explicit immutable evidence from independently decoded
     // owner containers. No filesystem resolution, re-export or Runtime loading
     // is implied; hashes/verification do not establish publisher authenticity.

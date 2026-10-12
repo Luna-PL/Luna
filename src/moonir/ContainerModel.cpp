@@ -47,8 +47,12 @@ bool validateSlotDependencies(const ContainerManifest& manifest, const Module& m
 bool ContainerModelCodec::encodeContainer(
     const ContainerManifest& manifest, const Module& module,
     std::vector<uint8_t>& output, std::string& error,
-    const ContainerLimits& limits) {
+    const ContainerLimits& limits, uint32_t formatMinor) {
     output.clear();
+    if (formatMinor != FormatMinor && formatMinor != RefWireFormatMinor) {
+        error = "Moon Container format version is unsupported";
+        return false;
+    }
     if (module.name != manifest.packageId ||
         featureBits(module.features) != featureBits(manifest.features)) {
         error = "Moon Container manifest disagrees with its MoonIR module";
@@ -66,6 +70,7 @@ bool ContainerModelCodec::encodeContainer(
     Module projection;
     if (!buildConcreteProjection(
             manifest, module, projection, error)) return false;
+    projection.formatMinor = formatMinor;
     // Source composites still have compiler-authoritative SlotDecls. This
     // evidence is used only while verifying the concrete export projection;
     // artifact consumers must obtain it from independently verified owners.
@@ -127,7 +132,7 @@ bool ContainerModelCodec::encodeContainer(
             return encodeManifest(manifest, payload, error, limits);
         }) ||
         !append(ContainerSectionId::Type, [&](auto& payload) {
-            return encodeTypes(projection, payload, error, limits);
+            return encodeTypes(projection, payload, error, limits, formatMinor);
         }) ||
         !append(ContainerSectionId::Symbol, [&](auto& payload) {
             return encodeSymbols(projection, payload, error, limits);
@@ -137,7 +142,7 @@ bool ContainerModelCodec::encodeContainer(
         }) ||
         !append(ContainerSectionId::Code, [&](auto& payload) {
             return encodeCodeRows(
-                module, projection, payload, error, limits);
+                module, projection, payload, error, limits, formatMinor);
         }) ||
         !append(ContainerSectionId::Imports, [&](auto& payload) {
             return encodeImports(projection, payload, error, limits);
@@ -151,7 +156,8 @@ bool ContainerModelCodec::encodeContainer(
         output.clear();
         return false;
     }
-    if (!ContainerWriter::encode(std::move(sections), output, error, limits))
+    if (!ContainerWriter::encode(
+            std::move(sections), output, error, limits, formatMinor))
         return false;
     // Self-verify while the already-verified source projection's transient
     // dependency facts are still available. They never escape this encoding
@@ -202,13 +208,15 @@ bool ContainerModelCodec::decodeContainer(
     decodedModule.name = decodedManifest.packageId;
     decodedModule.isPackage = true;
     decodedModule.features = decodedManifest.features;
-    if (!decodeTypes(*typeBytes, decodedModule, error, limits) ||
+    if (!decodeTypes(*typeBytes, decodedModule, error, limits,
+                     reader.formatMinor()) ||
         !decodeDeclarations(
             *symbolBytes, *contractBytes, *sysmetaBytes,
             decodedModule, error, limits) ||
         !decodeInterfaces(
             *importBytes, *exportBytes, decodedModule, error, limits) ||
-        !decodeCode(*codeBytes, decodedModule, error, limits)) return false;
+        !decodeCode(*codeBytes, decodedModule, error, limits,
+                    reader.formatMinor())) return false;
     if (!validateSlotDependencies(decodedManifest, decodedModule, dependencies,
             error, limits)) return false;
     decodedModule.dependencySlotPublications = dependencies;

@@ -40,13 +40,15 @@ public:
         std::vector<ContainerSection> sections,
         std::vector<uint8_t>& output,
         std::string& error,
-        const ContainerLimits& limits = {});
+        const ContainerLimits& limits = {},
+        uint32_t formatMinor = FormatMinor);
 
     static bool writeFile(
         const std::string& path,
         std::vector<ContainerSection> sections,
         std::string& error,
-        const ContainerLimits& limits = {});
+        const ContainerLimits& limits = {},
+        uint32_t formatMinor = FormatMinor);
 };
 
 class ContainerReader {

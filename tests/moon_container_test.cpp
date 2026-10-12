@@ -56,11 +56,34 @@ int main(int argc, char* argv[]) {
 
     moon::ContainerReader reader;
     if (!reader.parse(first, error) || reader.sections().size() != 9 ||
+        reader.formatMinor() != moon::FormatMinor ||
         !reader.find(static_cast<uint32_t>(moon::ContainerSectionId::Code)) ||
         !reader.find(moon::OptionalSectionBit | 17u)) {
         std::cerr << error << '\n';
         return fail("Moon Container reader did not recover canonical sections");
     }
+    std::vector<uint8_t> preview;
+    if (!moon::ContainerWriter::encode(
+            fixtureSections(true), preview, error, {},
+            moon::RefWireFormatMinor) ||
+        preview == first ||
+        !reader.parse(preview, error) ||
+        reader.formatMinor() != moon::RefWireFormatMinor ||
+        reader.sections().size() != 9)
+        return fail("versioned Moon Container envelope did not round-trip");
+    std::vector<uint8_t> unsupported{1};
+    if (moon::ContainerWriter::encode(
+            fixtureSections(), unsupported, error, {},
+            moon::RefWireFormatMinor + 1) ||
+        !unsupported.empty() ||
+        error.find("version is unsupported") == std::string::npos)
+        return fail("Moon Container writer accepted an unspecified version");
+    auto unsupportedHeader = preview;
+    writeU32(unsupportedHeader, 12, moon::RefWireFormatMinor + 1);
+    if (reader.parse(unsupportedHeader, error) ||
+        error.find("version is unsupported") == std::string::npos ||
+        !reader.sections().empty() || reader.formatMinor() != 0)
+        return fail("Moon Container reader accepted an unspecified version");
 
     auto malformed = first;
     malformed[0] ^= 1;

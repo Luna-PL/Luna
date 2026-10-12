@@ -1220,6 +1220,16 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                     std::string::npos;
             }))
         return fail("source Ref passed executable publication before its full bridge");
+    moon::ContainerManifest blockedRefManifest;
+    blockedRefManifest.packageId = sourceRefModule->name;
+    blockedRefManifest.features = sourceRefModule->features;
+    std::vector<uint8_t> blockedRefContainer{1};
+    if (moon::ContainerModelCodec::encodeContainer(
+            blockedRefManifest, *sourceRefModule, blockedRefContainer,
+            refWireError, {}, moon::RefWireFormatMinor) ||
+        !blockedRefContainer.empty() ||
+        refWireError.find("MoonIR verification failed") == std::string::npos)
+        return fail("0.4 whole-container path published an unverified source Ref");
     CodeGenerator blockedRefCodegen("canonical-source-ref-codegen-gate");
     if (blockedRefCodegen.generate(sourceRefModule.get()) ||
         !std::any_of(blockedRefCodegen.errors().begin(),

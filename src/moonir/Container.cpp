@@ -116,9 +116,12 @@ bool ContainerWriter::encode(
     std::vector<ContainerSection> sections,
     std::vector<uint8_t>& output,
     std::string& error,
-    const ContainerLimits& limits) {
+    const ContainerLimits& limits,
+    uint32_t formatMinor) {
     output.clear();
     error.clear();
+    if (formatMinor != FormatMinor && formatMinor != RefWireFormatMinor)
+        return fail(error, "Moon Container format version is unsupported");
     if (sections.size() > limits.maximumSections)
         return fail(error, "Moon Container has too many sections");
 
@@ -175,7 +178,7 @@ bool ContainerWriter::encode(
     output.assign(static_cast<size_t>(cursor), uint8_t{0});
     std::copy(Magic.begin(), Magic.end(), output.begin());
     writeU32(output, 8, FormatMajor);
-    writeU32(output, 12, FormatMinor);
+    writeU32(output, 12, formatMinor);
     writeU32(output, 16, HeaderSize);
     writeU32(output, 20, 0);
     writeU32(output, 24, static_cast<uint32_t>(sections.size()));
@@ -205,9 +208,11 @@ bool ContainerWriter::writeFile(
     const std::string& path,
     std::vector<ContainerSection> sections,
     std::string& error,
-    const ContainerLimits& limits) {
+    const ContainerLimits& limits,
+    uint32_t formatMinor) {
     std::vector<uint8_t> encoded;
-    if (!encode(std::move(sections), encoded, error, limits)) return false;
+    if (!encode(std::move(sections), encoded, error, limits, formatMinor))
+        return false;
     std::ofstream file(path, std::ios::binary | std::ios::trunc);
     if (!file) return fail(error, "cannot open Moon Container output file");
     file.write(
@@ -234,7 +239,9 @@ bool ContainerReader::parse(
 
     const uint32_t decodedFormatMajor = readU32(input, 8);
     const uint32_t decodedFormatMinor = readU32(input, 12);
-    if (decodedFormatMajor != FormatMajor || decodedFormatMinor != FormatMinor)
+    if (decodedFormatMajor != FormatMajor ||
+        (decodedFormatMinor != FormatMinor &&
+         decodedFormatMinor != RefWireFormatMinor))
         return fail(error, "Moon Container format version is unsupported");
     if (readU32(input, 16) != HeaderSize)
         return fail(error, "Moon Container header size is invalid");

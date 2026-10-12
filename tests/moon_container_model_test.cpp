@@ -618,6 +618,37 @@ int main(int argc, char* argv[]) {
             loadedManifest, loadedModule, canonicalContainerBytes, error) ||
         canonicalContainerBytes != containerBytes)
         return fail("whole-container codec is not byte-canonical");
+    std::vector<uint8_t> previewContainerBytes;
+    if (!moon::ContainerModelCodec::encodeContainer(
+            containerManifest, source, previewContainerBytes, error, {},
+            moon::RefWireFormatMinor) ||
+        previewContainerBytes == containerBytes)
+        return fail("explicit 0.4 container did not encode independently");
+    moon::ContainerReader previewReader;
+    if (!previewReader.parse(previewContainerBytes, error) ||
+        previewReader.formatMinor() != moon::RefWireFormatMinor)
+        return fail("explicit 0.4 container lost its header version");
+    moon::ContainerManifest previewManifest;
+    moon::Module previewModule;
+    if (!moon::ContainerModelCodec::decodeContainerForTarget(
+            previewContainerBytes, containerManifest.targetTriple,
+            containerManifest.dataLayout, previewManifest, previewModule,
+            error) ||
+        previewModule.formatMinor != moon::RefWireFormatMinor ||
+        previewManifest.entrypoint != containerManifest.entrypoint)
+        return fail("0.4 container did not dispatch its Type and Code sections");
+    std::vector<uint8_t> repeatedPreviewBytes;
+    if (!moon::ContainerModelCodec::encodeContainer(
+            previewManifest, previewModule, repeatedPreviewBytes, error, {},
+            moon::RefWireFormatMinor) ||
+        repeatedPreviewBytes != previewContainerBytes)
+        return fail("0.4 whole-container codec is not byte-canonical");
+    if (moon::ContainerModelCodec::encodeContainer(
+            containerManifest, source, repeatedPreviewBytes, error, {},
+            moon::RefWireFormatMinor + 1) ||
+        !repeatedPreviewBytes.empty() ||
+        error.find("version is unsupported") == std::string::npos)
+        return fail("whole-container encoder accepted an unspecified version");
 
     moon::ContainerReader parsedContainer;
     if (!parsedContainer.parse(containerBytes, error)) return fail(error);

@@ -985,8 +985,10 @@ Moon Container 0.3 编码器仍拒绝 Apply region，module verifier 和 CodeGen
 `RuntimeFragmentRef<S>` 记录及其内部 Apply 绑定。Type 行保留精确的内层
 Slot TypeId、类型参数和规范身份；Code 行保留 region、持有者 local 和精确
 Slot 引用。Code 解码器拒绝不完整或乱序绑定，读回的 CFG 通过精确目标校验。
-默认 0.3 路径仍拒绝这两类记录，未指定的线格式版本也被拒绝。这些路径仅覆盖
-section；完整容器仍写读 0.3，module verifier 和公开 codegen 门禁尚未放开。
+默认 0.3 路径仍拒绝这两类记录，未指定的线格式版本也被拒绝。容器封装现可显式
+写入 0.4 头，并依头部版本分发 Type 与 Code 解码；已验证的非 Ref 模块可作为
+完整 0.4 容器往返，默认写入版本仍为 0.3。整模块 verifier 仍拒绝发布源码
+Ref，因此这尚不是可执行的 Ref 容器，也没有放开公开 codegen。
 
 现有 Native 验证链路确定了接入边界：`buildNativeLibrary` 从封闭的 declaration
 table 构造各项 `NativeExportSpec`；`canonicalNativeExport` 只把 kind、flags、
