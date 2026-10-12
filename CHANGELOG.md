@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Proved a private guarded Ref array-tail cleanup from a real consuming
+  iterator source fixture. The indexed move takes and clears the original
+  element cell before advancing `nextUnread`; the projected Drop remains
+  guarded. Multi-element and legacy flag-based partial states remain gated.
 - Lowered private Ref-bearing generic enum cleanup through the active
   variant's original payload fields. A real source fixture places Ref after
   an integer field, seals `EnumDrop` and passes the disposable LLVM proof;

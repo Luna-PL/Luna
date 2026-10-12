@@ -1101,6 +1101,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "Err::<i32, RuntimeFragmentRef<checkpoint> >(move selected); }\n"
         "fn cleanup_array(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> unit { let packed = [move selected]; }\n"
+        "fn cleanup_array_tail(selected: affine RuntimeFragmentRef<checkpoint>) "
+        "-> unit { let values = [move selected]; "
+        "for item in values.into_iter().take(0) {} }\n"
         "fn cleanup_enum(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> unit { let picked = "
         "RefChoice::<RuntimeFragmentRef<checkpoint> >::Item(7, move selected); }\n"
@@ -1120,6 +1123,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* cleanupResult = nullptr;
     moon::FunctionDecl* cleanupErrorResult = nullptr;
     moon::FunctionDecl* cleanupArray = nullptr;
+    moon::FunctionDecl* cleanupArrayTail = nullptr;
     moon::FunctionDecl* cleanupEnum = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
@@ -1133,6 +1137,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             if (function->name == "cleanup_error_result")
                 cleanupErrorResult = function;
             if (function->name == "cleanup_array") cleanupArray = function;
+            if (function->name == "cleanup_array_tail")
+                cleanupArrayTail = function;
             if (function->name == "cleanup_enum") cleanupEnum = function;
             if (function->name == "transfer") transfer = function;
         }
@@ -1141,7 +1147,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             shadow = slot;
     }
     if (!observe || !accept || !cleanupRecord || !cleanupResult ||
-        !cleanupErrorResult || !cleanupArray || !cleanupEnum || !transfer ||
+        !cleanupErrorResult || !cleanupArray || !cleanupArrayTail ||
+        !cleanupEnum || !transfer ||
         observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
         return fail("source Ref target fixture has no frozen function/Slot");
@@ -1253,6 +1260,20 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                     element->kind == TypeKind::RuntimeFragmentRef;
             }))
         return fail("source Ref array has no canonical element cleanup");
+    if (!cleanupArrayTail->controlFlow ||
+        !std::any_of(cleanupArrayTail->controlFlow->cleanups.begin(),
+            cleanupArrayTail->controlFlow->cleanups.end(),
+            [&](const moon::CleanupRecord& cleanup) {
+                const auto* type = sourceRefModule->findType(cleanup.type);
+                return type && type->kind == TypeKind::RuntimeFragmentRef &&
+                    cleanup.action == luna::ownership::CleanupAction::Drop &&
+                    cleanup.guard && cleanup.guard->elementIndex == 0 &&
+                    cleanup.place.projections.size() == 1 &&
+                    cleanup.place.projections.front().kind ==
+                        moon::ProjectionKind::ConstantIndex &&
+                    cleanup.place.projections.front().index == 0;
+            }))
+        return fail("source Ref array tail has no guarded element cleanup");
     if (!cleanupEnum->controlFlow ||
         !std::any_of(cleanupEnum->controlFlow->cleanups.begin(),
             cleanupEnum->controlFlow->cleanups.end(),
@@ -1414,7 +1435,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !std::any_of(blockedRefCodegen.errors().begin(),
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
-                    "7 private unit body/wrapper pair(s) and 1 private owned "
+                    "8 private unit body/wrapper pair(s) and 1 private owned "
                     "return body/wrapper pair(s) verified and discarded") !=
                     std::string::npos;
             }) ||
@@ -1429,8 +1450,13 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 return diagnostic.message.find(
                     "private RuntimeFragmentRef owned return proof failed") !=
                     std::string::npos;
-            }))
-        return fail("direct codegen bypassed the unimplemented Ref host ingress ABI");
+            })) {
+        std::string details;
+        for (const auto& diagnostic : blockedRefCodegen.errors())
+            details += "\n" + diagnostic.message;
+        return fail(("direct codegen bypassed the unimplemented Ref host ingress ABI" +
+                     details).c_str());
+    }
     const auto originalRelation = accept->params.front().relation;
     accept->params.front().relation = luna::ownership::Relation::SharedBorrow;
     CodeGenerator forgedRefCodegen("canonical-forged-source-ref-codegen-gate");

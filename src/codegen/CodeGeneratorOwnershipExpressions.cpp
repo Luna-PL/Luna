@@ -320,14 +320,60 @@ llvm::Value* CodeGenerator::generateMove(MoveExpr* mv) {
         if (movedType && movedType->kind == TypeKind::RuntimeFragmentRef) {
             auto* id = dynamic_cast<IdentifierExpr*>(mv->operand.get());
             llvm::Value* cell = nullptr;
-            if (id && !id->local.empty() &&
+            if (id && mv->nextUnread.empty() && !id->local.empty() &&
                 id->local.value < mCanonicalLocals.size())
                 cell = mCanonicalLocals[id->local.value];
-            else if (id) {
+            else if (id && mv->nextUnread.empty()) {
                 auto found = mLocals.find(id->name);
                 if (found != mLocals.end()) cell = found->second;
             }
-            if (!cell || !mv->nextUnread.empty()) {
+            if (auto* index = dynamic_cast<IndexExpr*>(mv->operand.get());
+                index && !mv->nextUnread.empty()) {
+                auto* array = dynamic_cast<IdentifierExpr*>(
+                    index->object.get());
+                auto* cursor = dynamic_cast<IdentifierExpr*>(
+                    index->index.get());
+                const TypePtr arrayType = array
+                    ? resolveType(array->type) : nullptr;
+                if (!array || array->local.empty() ||
+                    !cursor || cursor->local != mv->nextUnread ||
+                    array->local.value >= mCanonicalLocals.size() ||
+                    !mCanonicalLocals[array->local.value] ||
+                    !arrayType || arrayType->kind != TypeKind::Array ||
+                    !arrayType->inner ||
+                    arrayType->inner->kind != TypeKind::RuntimeFragmentRef ||
+                    mv->nextUnread.value >= mCanonicalLocals.size() ||
+                    !mCanonicalLocals[mv->nextUnread.value]) {
+                    error("guarded RuntimeFragmentRef move has no original array element cell");
+                    return llvm::PoisonValue::get(mHelpers->ptrTy());
+                }
+                auto* storage = mCanonicalLocals[array->local.value];
+                auto* layout = llvm::dyn_cast<llvm::ArrayType>(
+                    storage->getAllocatedType());
+                if (!layout ||
+                    layout->getNumElements() != arrayType->arrayLength ||
+                    layout->getElementType() != mHelpers->ptrTy()) {
+                    error("guarded RuntimeFragmentRef move has no validated array storage");
+                    return llvm::PoisonValue::get(mHelpers->ptrTy());
+                }
+                auto* rawIndex = coerceCallArgument(
+                    generateExpr(index->index.get()), mHelpers->i32Ty());
+                llvm::Value* checked = rawIndex;
+                if (!luna::codegen::isProvablySafeArrayIndex(
+                        index->index.get(), arrayType->arrayLength,
+                        mLocalKnownUpperBounds)) {
+                    checked = emitCheckedArrayIndex(
+                        rawIndex,
+                        llvm::ConstantInt::get(
+                            mHelpers->sizeTy(), arrayType->arrayLength),
+                        "ref.array.index");
+                }
+                cell = mBuilder->CreateInBoundsGEP(
+                    layout, storage,
+                    {llvm::ConstantInt::get(mHelpers->i32Ty(), 0), checked},
+                    "ref.array.element.cell");
+            }
+            if (!cell) {
                 error("RuntimeFragmentRef move requires a direct local carrier");
                 return llvm::PoisonValue::get(mHelpers->ptrTy());
             }

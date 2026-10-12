@@ -1010,9 +1010,12 @@ cell 上调用 Runtime Drop，不先复制 carrier。真实源码夹具封闭了
 tag，仅沿活跃分支的 payload cell 调用 Drop；真实 Ok／Err 夹具封闭了
 `ResultDrop` 并通过一次性 LLVM 证明。完整定长数组的私有清理现逐个访问原始
 元素 cell；真实源码夹具封闭了 `ArrayDrop` 并通过一次性 LLVM 入口证明。
-已部分消费的数组仍需部分状态证明。含 Ref 的泛型 enum 现从原始 tag 分派，
-仅沿活跃变体的原始 payload 字段清理；Ref 位于整数字段后的真实源码夹具
-封闭了 `EnumDrop` 并通过一次性 LLVM 证明。直接声明 Ref 字段的非泛型 enum
+单元素消费迭代器的真实 `take(0)` 夹具现在封闭了带守卫的投影 Ref Drop，并通过
+一次性 LLVM 证明：索引 move 先从原始元素 cell 取走并清空 Ref，再推进
+`nextUnread`。多元素及旧版逐元素标记路径仍需独立的部分状态证据。含 Ref 的
+泛型 enum 现从原始 tag 分派，仅沿活跃变体的原始 payload 字段清理；Ref 位于
+整数字段后的真实源码夹具封闭了 `EnumDrop` 并通过一次性 LLVM 证明。直接声明
+Ref 字段的非泛型 enum
 仍被源码类型约束拒绝。命名 struct 和 closure 环境仍需各自的原位 cell 或
 部分状态证明，公开 Ref 发布门禁不变。
 
