@@ -1,5 +1,6 @@
 #include "moonir/MoonIR.h"
 #include "moonir/ContainerModel.h"
+#include "moonir/ContainerModelInternal.h"
 #include "moonir/ControlFlowBuilder.h"
 #include "moonir/Lowering.h"
 #include "moonir/Sealer.h"
@@ -1204,6 +1205,29 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             moon::RefWireFormatMinor) ||
         repeatedRefV4Types != refV4Types)
         return fail("versioned Ref Type section is not byte-canonical");
+    moon::ContainerManifest refProjectionManifest;
+    refProjectionManifest.entrypoint = {
+        observe->symbolId, observe->contractId};
+    moon::Module refProjection;
+    if (!moon::container_detail::buildConcreteProjection(
+            refProjectionManifest, *sourceRefModule, refProjection,
+            refWireError) ||
+        !refProjection.findType(refId) ||
+        !refProjection.findDeclaration(*target) ||
+        refProjection.findDeclarationById(shadowRecord->id) ||
+        refProjection.resolveRuntimeFragmentRefTarget(refId) != target)
+        return fail("Ref projection lost its exact private Slot declaration");
+    refRecord->innerTypeId = shadowRecord->type;
+    moon::Module retargetedRefProjection;
+    const bool retargetedRefProjected =
+        moon::container_detail::buildConcreteProjection(
+            refProjectionManifest, *sourceRefModule,
+            retargetedRefProjection, refWireError);
+    refRecord->innerTypeId = originalInner;
+    if (retargetedRefProjected ||
+        refWireError.find("no exact frozen Slot/Contract target") ==
+            std::string::npos)
+        return fail("Ref projection accepted a same-shaped Slot retarget");
     const size_t decodedTypeCount = decodedRefTypes.typeTable.size();
     if (moon::ContainerModelCodec::decodeTypes(
             refV4Types, decodedRefTypes, refWireError) ||

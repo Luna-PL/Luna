@@ -135,8 +135,9 @@ Ref-bearing exported Slot／Fragment payload、non-Copy 环境、non-unit 与 mu
    Native 有序链不等于源码 Ref 可装多个 Fragment。
 2. **部分实现的类型／产物**：内部名义 Ref／ownership／资源事实和内存中冻结／恢复
    已完成，见下文。源码夹具能解析带 `i32` 参数的 exported Slot，LLVM 也能生成局部
-   Ref Drop／transfer。完整 compiler dropGlue 和 Ref container round-trip 仍待完成；
-   旧 wire type 值不漂移，当前读写端明确拒绝内部 Ref。
+   Ref Drop／transfer。完整 compiler dropGlue 和可执行 Ref container round-trip 仍待完成；
+   旧 wire type 值不漂移。显式 0.4 Type／Code section 与非 Ref 容器可往返，
+   默认 0.3 和公开 Ref 发布仍受门禁限制。
 3. **部分实现的宿主桥**：native 严格 singleton owning handle、精确目标检查、借用派生
    context 与 Runtime drop 已完成，见下文；一次性 unit 入口和直接 affine 返回
    wrapper 已验证私有 carrier 转换。公开源码导入、拥有／借用参数和返回 ABI、
@@ -194,9 +195,10 @@ TypeMaterializer 可以独立恢复身份和资源事实；修改前端对象不
 此类型切片尚未接通 Drop bridge／dropGlue，不能将“能冻结”当成“已 verified／可执行”；
 后续 native 桥见下一节，源码 Drop 门禁仍关闭。
 
-旧 enum 的 Slot=27、Fragment=28、Unknown=40 不变，内部 Ref 仅追加为 41。Wire decoder
-仍以旧上限 fail closed，writer 也拒绝输出此 kind；Module verifier 明确拒绝 published
-Ref，LLVM helper 不用未知类型的 i32 fallback 偷跑。不能通过伪造 Drop/sysmeta 或填一个
+旧 enum 的 Slot=27、Fragment=28、Unknown=40 不变，内部 Ref 仅追加为 41。在当时的
+检查点，0.3 wire decoder 和 writer 都拒绝此 kind；显式 0.4 section 路径见下文。
+Module verifier 明确拒绝公开 Ref，LLVM helper 不用未知类型的 i32 fallback 偷跑。
+不能通过伪造 Drop/sysmeta 或填一个
 不存在的释放符号绕过这项边界；将来解除门禁须同时接通真实宿主／释放桥与跨包验证。
 
 回归位于 `core_contracts_test.cpp` 和 `moonir_canonical_sealing_test.cpp`，覆盖同形异槽、
@@ -993,6 +995,9 @@ Ref，因此这尚不是可执行的 Ref 容器，也没有放开公开 codegen�
 然后才报告现有发布门禁。解码后的 0.4 Type 快照接入声明表后与源码解析到
 同一目标；把内层 TypeId 改为同形 Slot 会得到专门的校验错误。import、Drop
 glue 与可执行线格式接纳仍未完成。
+具体容器投影现在会沿每个可达 Ref 类型保留其已验证的 nominal Slot 声明；即使
+目标 Slot 为私有且无其他代码引用，也不会在投影中消失。同形 Slot 替换会在容器
+发布前被拒绝。这为后续导入保留了 Type 到 Contract 的连接，未开放源码 Ref 发布。
 
 现有 Native 验证链路确定了接入边界：`buildNativeLibrary` 从封闭的 declaration
 table 构造各项 `NativeExportSpec`；`canonicalNativeExport` 只把 kind、flags、

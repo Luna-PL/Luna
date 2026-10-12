@@ -408,6 +408,15 @@ bool buildConcreteProjection(
             for (const auto& dependency : type.referencedTypeIds)
                 selectType(TypeRef{dependency.value});
             selectDeclaration(type.dropGlue);
+            if (type.kind == TypeKind::RuntimeFragmentRef) {
+                const auto target = source.resolveRuntimeFragmentRefTarget(
+                    type.id);
+                if (!target) {
+                    error = "Moon Container reachable Ref has no exact frozen Slot/Contract target";
+                    return false;
+                }
+                selectDeclaration(*target);
+            }
         }
         while (schemaCursor < pendingSchemas.size()) {
             const auto id = pendingSchemas[schemaCursor++];

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Kept a reachable `RuntimeFragmentRef<S>` type's exact nominal Slot declaration
+  in the concrete container projection, even when that Slot is private. The
+  projection rejects same-shaped target substitution before publication;
+  public Ref import and Drop glue remain gated.
 - Required the whole-module verifier to re-derive every frozen Ref type's exact
   Slot/Contract target before reporting the existing publication gate. A 0.4
   Type-section snapshot joined to declaration records preserves that target;

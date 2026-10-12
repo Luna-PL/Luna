@@ -158,9 +158,10 @@ before optimizing; never remove validation or borrow callback-destroyable storag
 2. **Partially implemented types/artifacts**: internal nominal Ref/ownership/resource
    facts and in-memory freezing/materialization are complete as detailed below.
    Source fixtures parse exported Slots with typed arguments, and LLVM can emit
-   local Ref Drop/transfer. Complete compiler dropGlue and Ref container
-   round-trip remain unimplemented. Old wire ordinals are unchanged; current
-   readers/writers explicitly reject the internal Ref.
+   local Ref Drop/transfer. Complete compiler dropGlue and executable Ref
+   container round-trip remain unimplemented. Old wire ordinals are unchanged;
+   explicit 0.4 Type/Code sections and non-Ref containers round-trip, while
+   default 0.3 and public Ref publication remain gated.
 3. **Partially implemented host bridge**: native strict singleton owning handles,
    exact-target checks, borrowed context derivation and Runtime drop are complete
    below. Disposable unit-ingress and direct affine-return wrappers exercise
@@ -238,11 +239,12 @@ not connect Drop/dropGlue: freezing is not verified/executable publication.
 The subsequent native bridge below still leaves source Drop gates closed.
 
 Old enum ordinals Slot=27, Fragment=28 and Unknown=40 remain; internal Ref is appended
-as 41. The wire decoder still rejects beyond its old limit, and the writer rejects
-this kind too. Module verification explicitly rejects published Refs; LLVM helpers
-cannot silently use the unknown-type i32 fallback. Forged Drop/sysmeta or a nonexistent
-release symbol grants no bypass. Lifting the gate requires real host/release bridges
-and cross-package verification together.
+as 41. At this checkpoint the 0.3 wire decoder and writer rejected this kind;
+the explicit 0.4 section path is described below. Module verification explicitly
+rejects published Refs; LLVM helpers cannot silently use the unknown-type i32
+fallback. Forged Drop/sysmeta or a nonexistent release symbol grants no bypass.
+Lifting the gate requires real host/release bridges and cross-package
+verification together.
 
 Regressions in `core_contracts_test.cpp` and `moonir_canonical_sealing_test.cpp`
 cover distinct same-shaped Slots, stable identity versus contract shape, seven
@@ -1312,6 +1314,11 @@ snapshot joined to its declaration table resolves the same target as the
 source module; changing the inner TypeId to a same-shaped Slot produces a
 specific verification error. Import, Drop glue and executable wire acceptance
 remain open.
+The concrete projection now follows each reachable Ref type to its verified
+nominal Slot declaration, retaining a private target even if no other code
+references it. It rejects a same-shaped replacement Slot before any container
+can be published. This preserves the Type-to-Contract join for later import
+work; it does not admit source Ref publication.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration
