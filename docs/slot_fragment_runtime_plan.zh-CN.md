@@ -981,6 +981,12 @@ ABI。Fragment 描述符对应 factory／environment／activation 执行，不�
 将已发射的 v4 行绑定到产物 proof，再把类型化事实接入固定 lookup 与调用路径。
 Moon Container 0.3 编码器仍拒绝 Apply region，module verifier 和 CodeGenerator
 也仍拒绝发布源码 Ref。
+显式选择的 0.4 Type 与 Code section 编解码现可往返封闭源码的
+`RuntimeFragmentRef<S>` 记录及其内部 Apply 绑定。Type 行保留精确的内层
+Slot TypeId、类型参数和规范身份；Code 行保留 region、持有者 local 和精确
+Slot 引用。Code 解码器拒绝不完整或乱序绑定，读回的 CFG 通过精确目标校验。
+默认 0.3 路径仍拒绝这两类记录，未指定的线格式版本也被拒绝。这些路径仅覆盖
+section；完整容器仍写读 0.3，module verifier 和公开 codegen 门禁尚未放开。
 
 现有 Native 验证链路确定了接入边界：`buildNativeLibrary` 从封闭的 declaration
 table 构造各项 `NativeExportSpec`；`canonicalNativeExport` 只把 kind、flags、

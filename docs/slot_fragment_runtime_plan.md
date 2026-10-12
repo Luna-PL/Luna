@@ -1294,6 +1294,15 @@ artifact proof, then connect its typed facts to a pinned lookup and call path.
 The Moon Container 0.3
 encoder still rejects Apply regions, and the module
 verifier and CodeGenerator still reject source Ref publication.
+Explicit 0.4 Type- and Code-section codecs now round-trip a sealed source
+`RuntimeFragmentRef<S>` record and its internal Apply binding. The Type row
+preserves the exact inner Slot TypeId, type arguments and canonical identities;
+the Code row preserves the region, owner local and exact Slot reference. The
+Code decoder rejects incomplete or unordered bindings, and the resulting CFG
+passes exact-target verification. The 0.3 defaults still reject both records,
+and unspecified wire versions are rejected. These section-only paths do not
+change the 0.3 container writer/reader; the whole-module verifier and public
+codegen gate remain in force.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration

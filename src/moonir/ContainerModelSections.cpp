@@ -203,13 +203,15 @@ bool decodeStringRows(Decoder& decoder, std::vector<std::string>& values) {
     return true;
 }
 
-bool decodeType(Decoder& decoder, TypeRecord& type) {
+bool decodeType(Decoder& decoder, TypeRecord& type,
+                TypeKind maximumKind) {
     if (!decoder.string(type.id.value) ||
         !decoder.string(type.shapeId.value) ||
         !decoder.string(type.abiLayoutId.value) ||
         !decoder.enumeration(type.domain, 4) ||
         !decoder.enumeration(type.identityMode, 6) ||
-        !decoder.enumeration(type.kind, static_cast<uint32_t>(TypeKind::Unknown)) ||
+        !decoder.enumeration(type.kind,
+                             static_cast<uint32_t>(maximumKind)) ||
         !decodeFacts(decoder, type.sysmeta) ||
         !decoder.string(type.displayName) ||
         !decoder.string(type.sourceName) ||
@@ -491,15 +493,24 @@ bool ContainerModelCodec::encodeTypes(
     const Module& module,
     std::vector<uint8_t>& output,
     std::string& error,
-    const ContainerLimits& limits) {
+    const ContainerLimits& limits, uint32_t formatMinor) {
+    if (formatMinor != FormatMinor &&
+        formatMinor != RefWireFormatMinor) {
+        error = "Moon Container type wire version is unsupported";
+        output.clear();
+        return false;
+    }
     if (!module.typeTableSealed) {
         error = "Moon Container type table must be sealed before encoding";
         output.clear();
         return false;
     }
+    const auto maximumKind = formatMinor == FormatMinor
+        ? TypeKind::Unknown : TypeKind::RuntimeFragmentRef;
     std::string previousId;
     for (const auto& type : module.typeTable) {
-        if (static_cast<uint32_t>(type.kind) > static_cast<uint32_t>(TypeKind::Unknown)) {
+        if (static_cast<uint32_t>(type.kind) >
+            static_cast<uint32_t>(maximumKind)) {
             error = "Moon Container RuntimeFragmentRef or unknown type kind is not supported by the wire type ABI";
             output.clear();
             return false;
@@ -530,7 +541,12 @@ bool ContainerModelCodec::decodeTypes(
     const std::vector<uint8_t>& input,
     Module& module,
     std::string& error,
-    const ContainerLimits& limits) {
+    const ContainerLimits& limits, uint32_t formatMinor) {
+    if (formatMinor != FormatMinor &&
+        formatMinor != RefWireFormatMinor) {
+        error = "Moon Container type wire version is unsupported";
+        return false;
+    }
     if (input.size() > limits.maximumContainerBytes) {
         error = "Moon Container type payload exceeds the configured byte limit";
         return false;
@@ -542,10 +558,12 @@ bool ContainerModelCodec::decodeTypes(
         return false;
     }
     std::vector<TypeRecord> decoded;
+    const auto maximumKind = formatMinor == FormatMinor
+        ? TypeKind::Unknown : TypeKind::RuntimeFragmentRef;
     std::string previousId;
     for (uint32_t index = 0; index < count; ++index) {
         TypeRecord type;
-        if (!decodeType(decoder, type)) {
+        if (!decodeType(decoder, type, maximumKind)) {
             error = decoder.error().empty()
                 ? "Moon Container type record contains an invalid scalar"
                 : decoder.error();

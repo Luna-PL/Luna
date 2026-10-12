@@ -63,7 +63,8 @@ public:
         const Module& module,
         std::vector<uint8_t>& output,
         std::string& error,
-        const ContainerLimits& limits = {});
+        const ContainerLimits& limits = {},
+        uint32_t formatMinor = FormatMinor);
 
     // Decodes into a fresh module type snapshot. Existing non-type module
     // fields are retained, but the type table and its indexes are replaced.
@@ -71,7 +72,8 @@ public:
         const std::vector<uint8_t>& input,
         Module& module,
         std::string& error,
-        const ContainerLimits& limits = {});
+        const ContainerLimits& limits = {},
+        uint32_t formatMinor = FormatMinor);
 
     static bool encodeSymbols(
         const Module& module, std::vector<uint8_t>& output,
@@ -107,12 +109,14 @@ public:
 
     static bool encodeCode(
         const Module& module, std::vector<uint8_t>& output,
-        std::string& error, const ContainerLimits& limits = {});
+        std::string& error, const ContainerLimits& limits = {},
+        uint32_t formatMinor = FormatMinor);
     // Atomically replaces executable declarations after all function rows
     // have joined the already-decoded declaration table successfully.
     static bool decodeCode(
         const std::vector<uint8_t>& input, Module& module,
-        std::string& error, const ContainerLimits& limits = {});
+        std::string& error, const ContainerLimits& limits = {},
+        uint32_t formatMinor = FormatMinor);
 
     // Encodes or decodes all eight required sections as one integrity-checked
     // container. Decode publishes neither manifest nor module until the

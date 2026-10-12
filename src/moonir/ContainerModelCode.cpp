@@ -642,9 +642,21 @@ bool decodeTerminator(Decoder& decoder, Terminator& terminator,
 
 bool encodeGraph(Encoder& encoder, const ControlFlowGraph& graph,
                  uint32_t depth, const ContainerLimits& limits) {
-    if (!graph.runtimeRefApplies.empty())
+    if (encoder.formatMinor() == FormatMinor &&
+        !graph.runtimeRefApplies.empty())
         return encoder.reject(
             "Moon Container 0.3 cannot encode internal RuntimeFragmentRef apply regions");
+    if (encoder.formatMinor() == RefWireFormatMinor) {
+        for (size_t index = 0; index < graph.runtimeRefApplies.size(); ++index) {
+            const auto& binding = graph.runtimeRefApplies[index];
+            if (binding.region.empty() || binding.reference.empty() ||
+                !binding.slot.complete() ||
+                (index != 0 && binding.region.value <=
+                    graph.runtimeRefApplies[index - 1].region.value))
+                return encoder.reject(
+                    "Moon Container Ref apply table is incomplete or out of order");
+        }
+    }
     if (depth >= limits.maximumNestingDepth)
         return encoder.reject("Moon Container code exceeds the nesting limit");
     if (!graph.sealed)
@@ -710,6 +722,12 @@ bool encodeGraph(Encoder& encoder, const ControlFlowGraph& graph,
             encoder.u64(cleanup.guard->elementIndex);
         }
     });
+    if (encoder.formatMinor() == RefWireFormatMinor)
+        encoder.rows(graph.runtimeRefApplies, [&](const auto& binding) {
+            encodeTableRef(encoder, binding.region);
+            encodeTableRef(encoder, binding.reference);
+            encodeReference(encoder, binding.slot);
+        });
     return encoder.good();
 }
 
@@ -806,6 +824,22 @@ bool decodeGraph(Decoder& decoder, std::unique_ptr<ControlFlowGraph>& graph,
         }
         decoded->cleanups.push_back(std::move(cleanup));
     }
+    if (decoder.formatMinor() == RefWireFormatMinor) {
+        if (!decoder.rowCount(count)) return false;
+        for (uint32_t index = 0; index < count; ++index) {
+            RuntimeRefApplyRecord binding;
+            if (!decodeTableRef(decoder, binding.region) ||
+                !decodeTableRef(decoder, binding.reference) ||
+                !decodeReference(decoder, binding.slot)) return false;
+            if (binding.region.empty() || binding.reference.empty() ||
+                !binding.slot.complete() ||
+                (index != 0 && binding.region.value <=
+                    decoded->runtimeRefApplies.back().region.value))
+                return decoder.reject(
+                    "Moon Container Ref apply table is incomplete or out of order");
+            decoded->runtimeRefApplies.push_back(std::move(binding));
+        }
+    }
     graph = std::move(decoded);
     return true;
 }
@@ -899,7 +933,14 @@ bool decodeFunction(
 bool container_detail::encodeCodeRows(
     const Module& source, const Module& declarationModel,
     std::vector<uint8_t>& output,
-    std::string& error, const ContainerLimits& limits) {
+    std::string& error, const ContainerLimits& limits,
+    uint32_t formatMinor) {
+    if (formatMinor != FormatMinor &&
+        formatMinor != RefWireFormatMinor) {
+        error = "Moon Container code wire version is unsupported";
+        output.clear();
+        return false;
+    }
     std::vector<const FunctionDecl*> functions;
     collectConcreteFunctions(source.declarations, functions);
     functions.erase(std::remove_if(
@@ -951,7 +992,7 @@ bool container_detail::encodeCodeRows(
         }
     }
 
-    Encoder encoder(limits);
+    Encoder encoder(limits, formatMinor);
     encoder.rows(functions, [&](const auto* function) {
         if (encoder.good()) encodeFunction(encoder, *function, limits);
     });
@@ -963,18 +1004,26 @@ bool container_detail::encodeCodeRows(
 
 bool ContainerModelCodec::encodeCode(
     const Module& module, std::vector<uint8_t>& output,
-    std::string& error, const ContainerLimits& limits) {
-    return encodeCodeRows(module, module, output, error, limits);
+    std::string& error, const ContainerLimits& limits,
+    uint32_t formatMinor) {
+    return encodeCodeRows(module, module, output, error, limits,
+                          formatMinor);
 }
 
 bool ContainerModelCodec::decodeCode(
     const std::vector<uint8_t>& input, Module& module,
-    std::string& error, const ContainerLimits& limits) {
+    std::string& error, const ContainerLimits& limits,
+    uint32_t formatMinor) {
+    if (formatMinor != FormatMinor &&
+        formatMinor != RefWireFormatMinor) {
+        error = "Moon Container code wire version is unsupported";
+        return false;
+    }
     if (input.size() > limits.maximumContainerBytes) {
         error = "Moon Container code payload exceeds the configured byte limit";
         return false;
     }
-    Decoder decoder(input, limits);
+    Decoder decoder(input, limits, formatMinor);
     uint32_t count = 0;
     if (!decoder.rowCount(count)) {
         error = decoder.error(); return false;

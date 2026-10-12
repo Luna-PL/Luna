@@ -1169,6 +1169,49 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::Sealer sourceRefSealer;
     if (!sourceRefSealer.sealFunctionBodies(*sourceRefModule))
         return fail("source Ref functions did not seal ownership CFGs");
+    std::vector<uint8_t> refV3Types{1};
+    std::string refWireError;
+    if (moon::ContainerModelCodec::encodeTypes(
+            *sourceRefModule, refV3Types, refWireError) ||
+        !refV3Types.empty() ||
+        refWireError.find("RuntimeFragmentRef") == std::string::npos)
+        return fail("frozen 0.3 Type section accepted a source Ref");
+    std::vector<uint8_t> refV4Types;
+    if (!moon::ContainerModelCodec::encodeTypes(
+            *sourceRefModule, refV4Types, refWireError, {},
+            moon::RefWireFormatMinor))
+        return fail("versioned Ref Type section did not encode");
+    moon::Module decodedRefTypes;
+    if (!moon::ContainerModelCodec::decodeTypes(
+            refV4Types, decodedRefTypes, refWireError, {},
+            moon::RefWireFormatMinor))
+        return fail("versioned Ref Type section did not decode");
+    const auto* decodedRef = decodedRefTypes.findType(refId);
+    if (!decodedRef || decodedRef->kind != TypeKind::RuntimeFragmentRef ||
+        decodedRef->innerTypeId != refRecord->innerTypeId ||
+        decodedRef->typeArgumentIds != refRecord->typeArgumentIds ||
+        decodedRef->canonicalType != refRecord->canonicalType ||
+        decodedRef->canonicalShape != refRecord->canonicalShape ||
+        decodedRef->canonicalAbiLayout != refRecord->canonicalAbiLayout)
+        return fail("versioned Ref Type section lost frozen target identity");
+    std::vector<uint8_t> repeatedRefV4Types;
+    if (!moon::ContainerModelCodec::encodeTypes(
+            decodedRefTypes, repeatedRefV4Types, refWireError, {},
+            moon::RefWireFormatMinor) ||
+        repeatedRefV4Types != refV4Types)
+        return fail("versioned Ref Type section is not byte-canonical");
+    const size_t decodedTypeCount = decodedRefTypes.typeTable.size();
+    if (moon::ContainerModelCodec::decodeTypes(
+            refV4Types, decodedRefTypes, refWireError) ||
+        decodedRefTypes.typeTable.size() != decodedTypeCount ||
+        !decodedRefTypes.findType(refId))
+        return fail("0.3 Type decoder accepted Ref or changed its prior snapshot");
+    if (moon::ContainerModelCodec::encodeTypes(
+            *sourceRefModule, repeatedRefV4Types, refWireError, {},
+            moon::RefWireFormatMinor + 1) ||
+        !repeatedRefV4Types.empty() ||
+        refWireError.find("version is unsupported") == std::string::npos)
+        return fail("Type section encoder accepted an unspecified wire version");
     if (verifier.verify(*sourceRefModule) ||
         !std::any_of(verifier.errors().begin(), verifier.errors().end(),
             [](const auto& error) {
@@ -1338,7 +1381,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     refApplyBinding.reference = originalApplyLocal;
     if (missingRefLocalAccepted)
         return fail("internal Ref apply CFG accepted a missing owner local");
-    sourceApplyEntry->controlFlow->runtimeRefApplies.push_back(refApplyBinding);
+    const auto expectedRefApplyBinding = refApplyBinding;
+    sourceApplyEntry->controlFlow->runtimeRefApplies.push_back(
+        expectedRefApplyBinding);
     const bool duplicateRefApplyAccepted = refApplyCfgVerifier.verify(
         *sourceApplyEntry->controlFlow, *sourceApplyModule);
     sourceApplyEntry->controlFlow->runtimeRefApplies.pop_back();
@@ -1353,6 +1398,61 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             "cannot encode internal RuntimeFragmentRef apply regions") ==
             std::string::npos)
         return fail("internal Ref apply CFG escaped the frozen code wire gate");
+    std::vector<uint8_t> refV4Code;
+    if (!moon::ContainerModelCodec::encodeCode(
+            *sourceApplyModule, refV4Code, blockedApplyWireError, {},
+            moon::RefWireFormatMinor))
+        return fail("versioned Ref apply Code section did not encode");
+    moon::Module decodedApply;
+    decodedApply.name = sourceApplyModule->name;
+    decodedApply.typeTable = sourceApplyModule->typeTable;
+    decodedApply.typeTableSealed = sourceApplyModule->typeTableSealed;
+    decodedApply.declarationTable = sourceApplyModule->declarationTable;
+    decodedApply.exports = sourceApplyModule->exports;
+    decodedApply.features = sourceApplyModule->features;
+    decodedApply.rebuildIndexes();
+    if (!moon::ContainerModelCodec::decodeCode(
+            refV4Code, decodedApply, blockedApplyWireError, {},
+            moon::RefWireFormatMinor))
+        return fail("versioned Ref apply Code section did not decode");
+    const moon::FunctionDecl* decodedApplyEntry = nullptr;
+    for (const auto& declaration : decodedApply.declarations)
+        if (const auto* function = dynamic_cast<const moon::FunctionDecl*>(
+                declaration.get()); function && function->name == "host_entry")
+            decodedApplyEntry = function;
+    if (!decodedApplyEntry || !decodedApplyEntry->controlFlow ||
+        decodedApplyEntry->controlFlow->runtimeRefApplies.size() != 1 ||
+        decodedApplyEntry->controlFlow->runtimeRefApplies.front().region !=
+            expectedRefApplyBinding.region ||
+        decodedApplyEntry->controlFlow->runtimeRefApplies.front().reference !=
+            expectedRefApplyBinding.reference ||
+        decodedApplyEntry->controlFlow->runtimeRefApplies.front().slot !=
+            expectedRefApplyBinding.slot ||
+        !refApplyCfgVerifier.verify(*decodedApplyEntry->controlFlow,
+                                    decodedApply))
+        return fail("versioned Ref apply Code section lost its verified binding");
+    std::vector<uint8_t> repeatedRefV4Code;
+    if (!moon::ContainerModelCodec::encodeCode(
+            decodedApply, repeatedRefV4Code, blockedApplyWireError, {},
+            moon::RefWireFormatMinor) ||
+        repeatedRefV4Code != refV4Code)
+        return fail("versioned Ref apply Code section is not byte-canonical");
+    sourceApplyEntry->controlFlow->runtimeRefApplies.push_back(
+        expectedRefApplyBinding);
+    const bool duplicateRefApplyEncoded =
+        moon::ContainerModelCodec::encodeCode(
+            *sourceApplyModule, repeatedRefV4Code, blockedApplyWireError, {},
+            moon::RefWireFormatMinor);
+    sourceApplyEntry->controlFlow->runtimeRefApplies.pop_back();
+    if (duplicateRefApplyEncoded || !repeatedRefV4Code.empty() ||
+        blockedApplyWireError.find("incomplete or out of order") ==
+            std::string::npos)
+        return fail("versioned Ref apply Code section accepted duplicate binding");
+    if (moon::ContainerModelCodec::decodeCode(
+            refV4Code, decodedApply, blockedApplyWireError) ||
+        !decodedApplyEntry->controlFlow ||
+        decodedApplyEntry->controlFlow->runtimeRefApplies.size() != 1)
+        return fail("0.3 Code decoder accepted Ref apply or changed its snapshot");
     if (verifier.verify(*sourceApplyModule) ||
         !std::any_of(verifier.errors().begin(), verifier.errors().end(),
                      [](const auto& diagnostic) {

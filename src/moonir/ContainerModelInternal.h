@@ -49,9 +49,12 @@ inline bool isValidUtf8(const uint8_t* bytes, size_t size) {
 
 class Encoder {
 public:
-    explicit Encoder(const ContainerLimits& limits) : mLimits(limits) {}
+    explicit Encoder(const ContainerLimits& limits,
+                     uint32_t formatMinor = FormatMinor)
+        : mLimits(limits), mFormatMinor(formatMinor) {}
 
     bool good() const { return mError.empty(); }
+    uint32_t formatMinor() const { return mFormatMinor; }
     const std::string& error() const { return mError; }
     std::vector<uint8_t> finish() { return std::move(mBytes); }
     bool reject(std::string message) {
@@ -126,16 +129,19 @@ private:
     }
 
     const ContainerLimits& mLimits;
+    uint32_t mFormatMinor;
     std::vector<uint8_t> mBytes;
     std::string mError;
 };
 
 class Decoder {
 public:
-    Decoder(const std::vector<uint8_t>& bytes, const ContainerLimits& limits)
-        : mBytes(bytes), mLimits(limits) {}
+    Decoder(const std::vector<uint8_t>& bytes, const ContainerLimits& limits,
+            uint32_t formatMinor = FormatMinor)
+        : mBytes(bytes), mLimits(limits), mFormatMinor(formatMinor) {}
 
     bool good() const { return mError.empty(); }
+    uint32_t formatMinor() const { return mFormatMinor; }
     bool atEnd() const { return mOffset == mBytes.size(); }
     const std::string& error() const { return mError; }
     bool reject(std::string message) { return fail(std::move(message)); }
@@ -229,6 +235,7 @@ private:
 
     const std::vector<uint8_t>& mBytes;
     const ContainerLimits& mLimits;
+    uint32_t mFormatMinor;
     size_t mOffset = 0;
     std::string mError;
 };
@@ -276,6 +283,7 @@ bool buildConcreteProjection(
 bool encodeCodeRows(
     const Module& source, const Module& declarationModel,
     std::vector<uint8_t>& output, std::string& error,
-    const ContainerLimits& limits);
+    const ContainerLimits& limits,
+    uint32_t formatMinor = FormatMinor);
 
 } // namespace moon::container_detail

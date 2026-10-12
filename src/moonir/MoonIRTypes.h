@@ -15,6 +15,8 @@ namespace moon {
 
 inline constexpr uint32_t FormatMajor = 0;
 inline constexpr uint32_t FormatMinor = 3;
+// Section-only preparation. The complete container writer still emits 0.3.
+inline constexpr uint32_t RefWireFormatMinor = 4;
 
 // Every semantic type edge in sealed MoonIR is a stable table reference.
 // An empty reference represents the absence of a type, never an unresolved
