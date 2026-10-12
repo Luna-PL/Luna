@@ -141,8 +141,12 @@ bool Verifier::verify(const Module& module) {
         if (type.kind == TypeKind::SymbolSet)
             error({}, "compiler-only symbol_set type '" + type.id.value +
                       "' was not erased before MoonIR");
-        if (type.kind == TypeKind::RuntimeFragmentRef)
+        if (type.kind == TypeKind::RuntimeFragmentRef) {
+            if (!module.resolveRuntimeFragmentRefTarget(type.id))
+                error({}, "RuntimeFragmentRef has no exact frozen Slot/Contract target for type '" +
+                          type.id.value + "'");
             error({}, "RuntimeFragmentRef source import/dropGlue/wire ABI is not implemented; internal type preparation cannot be published");
+        }
         if (type.kind == TypeKind::Enum &&
             type.domain == luna::types::TypeDomain::Compiler &&
             type.nominalDeclarationId == luna::sysmeta::OptionTypeId)

@@ -1186,6 +1186,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             refV4Types, decodedRefTypes, refWireError, {},
             moon::RefWireFormatMinor))
         return fail("versioned Ref Type section did not decode");
+    decodedRefTypes.declarationTable = sourceRefModule->declarationTable;
+    decodedRefTypes.rebuildIndexes();
+    if (decodedRefTypes.resolveRuntimeFragmentRefTarget(refId) != target)
+        return fail("versioned Ref Type section lost its exact Slot/Contract join");
     const auto* decodedRef = decodedRefTypes.findType(refId);
     if (!decodedRef || decodedRef->kind != TypeKind::RuntimeFragmentRef ||
         decodedRef->innerTypeId != refRecord->innerTypeId ||
@@ -1212,6 +1216,18 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !repeatedRefV4Types.empty() ||
         refWireError.find("version is unsupported") == std::string::npos)
         return fail("Type section encoder accepted an unspecified wire version");
+    refRecord->innerTypeId = shadowRecord->type;
+    const bool retargetedRefVerified = verifier.verify(*sourceRefModule);
+    const bool retargetedRefDiagnosed = std::any_of(
+        verifier.errors().begin(), verifier.errors().end(),
+        [](const auto& diagnostic) {
+            return diagnostic.message.find(
+                "RuntimeFragmentRef has no exact frozen Slot/Contract target") !=
+                std::string::npos;
+        });
+    refRecord->innerTypeId = originalInner;
+    if (retargetedRefVerified || !retargetedRefDiagnosed)
+        return fail("whole-module verifier missed a retargeted Ref wire identity");
     if (verifier.verify(*sourceRefModule) ||
         !std::any_of(verifier.errors().begin(), verifier.errors().end(),
             [](const auto& error) {

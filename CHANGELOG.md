@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Required the whole-module verifier to re-derive every frozen Ref type's exact
+  Slot/Contract target before reporting the existing publication gate. A 0.4
+  Type-section snapshot joined to declaration records preserves that target;
+  same-shaped Slot retargeting now has a dedicated verifier diagnostic.
 - Added explicit 0.4 Moon Container envelope and whole-model version dispatch.
   Verified non-Ref modules round-trip byte-canonically through 0.4; the default
   writer remains 0.3 and unsupported versions fail. Source Ref publication

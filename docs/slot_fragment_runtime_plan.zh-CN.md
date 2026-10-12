@@ -989,6 +989,10 @@ Slot 引用。Code 解码器拒绝不完整或乱序绑定，读回的 CFG 通�
 写入 0.4 头，并依头部版本分发 Type 与 Code 解码；已验证的非 Ref 模块可作为
 完整 0.4 容器往返，默认写入版本仍为 0.3。整模块 verifier 仍拒绝发布源码
 Ref，因此这尚不是可执行的 Ref 容器，也没有放开公开 codegen。
+整模块 verifier 现也对每条冻结 Ref 记录重新推导精确的 Slot/Contract 目标，
+然后才报告现有发布门禁。解码后的 0.4 Type 快照接入声明表后与源码解析到
+同一目标；把内层 TypeId 改为同形 Slot 会得到专门的校验错误。import、Drop
+glue 与可执行线格式接纳仍未完成。
 
 现有 Native 验证链路确定了接入边界：`buildNativeLibrary` 从封闭的 declaration
 table 构造各项 `NativeExportSpec`；`canonicalNativeExport` 只把 kind、flags、

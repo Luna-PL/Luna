@@ -1306,6 +1306,12 @@ that header. A verified non-Ref module round-trips as a complete 0.4 container;
 the default writer remains 0.3. The whole-module verifier still rejects source
 Ref publication, so this is not yet an executable Ref container or a public
 codegen path.
+The verifier now also re-derives the exact Slot/Contract target for every
+frozen Ref record before reporting that publication gate. A decoded 0.4 Type
+snapshot joined to its declaration table resolves the same target as the
+source module; changing the inner TypeId to a same-shaped Slot produces a
+specific verification error. Import, Drop glue and executable wire acceptance
+remain open.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration
