@@ -225,7 +225,7 @@ bool exercisePrivateOwnedPairCleanupJit(
         luna::runtime::runtimeFragmentRefDropCountForTest();
     if (status != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
         droppedAfter != droppedBefore + 2 || !generationLease.expired()) {
-        error = "private two-owner array tail did not release both Runtime handles";
+        error = "private two-owner cleanup did not release both Runtime handles";
         return false;
     }
     error.clear();
@@ -1220,11 +1220,20 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "fn cleanup_enum(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> unit { let picked = "
         "RefChoice::Item(7, move selected); }\n"
+        "fn cleanup_enum_pair_item(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let picked = RefChoice::Item(7, move first); }\n"
+        "fn cleanup_enum_pair_empty(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let picked = RefChoice::Empty(); }\n"
         "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
-    if (!sourceRefSnapshot.success())
+    if (!sourceRefSnapshot.success()) {
+        for (const auto& diagnostic : sourceRefSnapshot.errors())
+            std::cerr << diagnostic.message << '\n';
         return fail("frontend rejected a well-formed nominal source Ref type");
+    }
     moon::LunaLowerer sourceRefLowerer;
     auto sourceRefModule = sourceRefLowerer.lower(
         *sourceRefSnapshot.program(), *sourceRefSnapshot.symbolTable());
@@ -1240,6 +1249,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* cleanupTwoArrayTail = nullptr;
     moon::FunctionDecl* cleanupCountArrayTail = nullptr;
     moon::FunctionDecl* cleanupEnum = nullptr;
+    moon::FunctionDecl* cleanupEnumPairItem = nullptr;
+    moon::FunctionDecl* cleanupEnumPairEmpty = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
     for (auto& declaration : sourceRefModule->declarations) {
@@ -1259,6 +1270,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             if (function->name == "cleanup_count_array_tail")
                 cleanupCountArrayTail = function;
             if (function->name == "cleanup_enum") cleanupEnum = function;
+            if (function->name == "cleanup_enum_pair_item")
+                cleanupEnumPairItem = function;
+            if (function->name == "cleanup_enum_pair_empty")
+                cleanupEnumPairEmpty = function;
             if (function->name == "transfer") transfer = function;
         }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
@@ -1269,7 +1284,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !cleanupErrorResult || !cleanupArray || !cleanupArrayTail ||
         !cleanupTwoArrayTail ||
         !cleanupCountArrayTail ||
-        !cleanupEnum || !transfer ||
+        !cleanupEnum || !cleanupEnumPairItem || !cleanupEnumPairEmpty ||
+        !transfer ||
         observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
         return fail("source Ref target fixture has no frozen function/Slot");
@@ -1464,28 +1480,43 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         std::cerr << pairJitError << '\n';
         return fail("source Ref count terminal failed private JIT cleanup");
     }
-    if (!cleanupEnum->controlFlow ||
-        !std::any_of(cleanupEnum->controlFlow->cleanups.begin(),
-            cleanupEnum->controlFlow->cleanups.end(),
-            [&](const moon::CleanupRecord& cleanup) {
-                const auto* type = sourceRefModule->findType(cleanup.type);
-                if (!type || type->kind != TypeKind::Enum ||
-                    cleanup.action != luna::ownership::CleanupAction::EnumDrop)
-                    return false;
-                return std::any_of(type->variants.begin(), type->variants.end(),
-                    [&](const auto& variant) {
-                        if (variant.name != "Item" ||
-                            variant.fields.size() != 2) return false;
-                        const auto* field = sourceRefModule->findType(
-                            variant.fields[1]);
-                        return field &&
-                            field->kind == TypeKind::RuntimeFragmentRef &&
-                            field->id == refId &&
-                            sourceRefModule->resolveRuntimeFragmentRefTarget(
-                                field->id) == target;
-                    });
-            }))
+    const auto hasExactEnumCleanup = [&](const moon::FunctionDecl* function) {
+        return function->controlFlow &&
+            std::any_of(function->controlFlow->cleanups.begin(),
+                function->controlFlow->cleanups.end(),
+                [&](const moon::CleanupRecord& cleanup) {
+                    const auto* type = sourceRefModule->findType(cleanup.type);
+                    if (!type || type->kind != TypeKind::Enum ||
+                        cleanup.action != luna::ownership::CleanupAction::EnumDrop)
+                        return false;
+                    return std::any_of(type->variants.begin(), type->variants.end(),
+                        [&](const auto& variant) {
+                            if (variant.name != "Item" ||
+                                variant.fields.size() != 2) return false;
+                            const auto* field = sourceRefModule->findType(
+                                variant.fields[1]);
+                            return field &&
+                                field->kind == TypeKind::RuntimeFragmentRef &&
+                                field->id == refId &&
+                                sourceRefModule->resolveRuntimeFragmentRefTarget(
+                                    field->id) == target;
+                        });
+                });
+    };
+    if (!hasExactEnumCleanup(cleanupEnum) ||
+        !hasExactEnumCleanup(cleanupEnumPairItem) ||
+        !hasExactEnumCleanup(cleanupEnumPairEmpty))
         return fail("source Ref enum has no canonical variant cleanup");
+    if (!exercisePrivateOwnedPairCleanupJit(
+            *sourceRefModule, *cleanupEnumPairItem, pairJitError)) {
+        std::cerr << pairJitError << '\n';
+        return fail("active source Ref enum failed private JIT cleanup");
+    }
+    if (!exercisePrivateOwnedPairCleanupJit(
+            *sourceRefModule, *cleanupEnumPairEmpty, pairJitError)) {
+        std::cerr << pairJitError << '\n';
+        return fail("empty source Ref enum failed private JIT cleanup");
+    }
     std::vector<uint8_t> refV3Types{1};
     std::string refWireError;
     if (moon::ContainerModelCodec::encodeTypes(
@@ -1628,7 +1659,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !std::any_of(blockedRefCodegen.errors().begin(),
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
-                    "10 private unit body/wrapper pair(s) and 1 private owned "
+                    "12 private unit body/wrapper pair(s) and 1 private owned "
                     "return body/wrapper pair(s) verified and discarded") !=
                     std::string::npos;
             }) ||

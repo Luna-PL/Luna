@@ -1363,11 +1363,13 @@ MoonIR preserves
 the resolved field type, freezes its exact Slot/Contract target, seals
 `EnumDrop`, and passes the disposable LLVM proof. Ref-bearing generic enums
 also use this cleanup path: it dispatches on the original tag and cleans only
-the active variant's original payload fields. Next, exercise both active and empty
-variants with Runtime-issued handles through the private JIT and verify exact
-cleanup counts. Named structs and closure environments
-still require separate original-cell or
-partial-state proofs; public Ref publication remains gated. The updated strict
+the active variant's original payload fields. The private two-owner JIT now
+executes both `Item` and `Empty` source variants with distinct Runtime-issued
+Ref handles. Each call releases both handles exactly once and expires their
+generation pin; `Item` owns one handle inside the enum, while `Empty` leaves
+both handles in their parameter cells. Next, prove named struct field cleanup
+from original cells; closure environments still require their own original-cell
+or partial-state proofs. Public Ref publication remains gated. The updated strict
 build passes all 81 tests, and the focused frontend/canonical tests pass under
 ASAN/UBSan.
 

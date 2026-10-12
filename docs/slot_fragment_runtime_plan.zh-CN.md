@@ -1029,11 +1029,12 @@ iterator codegen。现于名义类型字段解析前预登记 Slot 身份，名�
 循环类型图上现可终止。MoonIR 保留已解析的字段类型，
 冻结精确 Slot／Contract 目标，封闭 `EnumDrop`，通过一次性 LLVM 证明。
 含 Ref 的泛型 enum 也使用此清理路径：从原始 tag 分派，仅沿活跃变体的原始
-payload 字段清理。下一步用 Runtime 发放句柄在私有
-JIT 中分别执行活跃与空变体，核对精确清理次数。
-命名 struct 和 closure 环境仍需
-各自的原位 cell 或
-部分状态证明，公开 Ref 发布门禁不变。更新后的严格构建与全部 81 项测试通过，
+payload 字段清理。私有双 owner JIT 现用两个不同的 Runtime 发放句柄执行
+`Item` 和 `Empty` 源码变体：每次调用均恰好释放两个句柄，随后 generation pin
+失效；`Item` 在枚举内持有其中一个句柄，`Empty` 则让两个句柄留在参数 cell 中。
+下一步验证命名 struct 字段从原始 cell 清理。
+closure 环境仍需单独的原位 cell 或部分状态证明，公开 Ref 发布门禁不变。
+更新后的严格构建与全部 81 项测试通过，
 前端／canonical 聚焦测试亦通过 ASAN／UBSan。
 
 现有 Native 验证链路确定了接入边界：`buildNativeLibrary` 从封闭的 declaration
