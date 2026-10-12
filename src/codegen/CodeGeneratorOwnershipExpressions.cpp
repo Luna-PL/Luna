@@ -327,6 +327,39 @@ llvm::Value* CodeGenerator::generateMove(MoveExpr* mv) {
                 auto found = mLocals.find(id->name);
                 if (found != mLocals.end()) cell = found->second;
             }
+            if (auto* field = dynamic_cast<FieldAccessExpr*>(
+                    mv->operand.get());
+                field && mv->nextUnread.empty()) {
+                auto* owner = dynamic_cast<IdentifierExpr*>(
+                    field->object.get());
+                if (owner && !owner->local.empty() &&
+                    owner->local.value < mCanonicalLocals.size() &&
+                    owner->local.value < mCanonicalLocalTypes.size()) {
+                    auto* storage = mCanonicalLocals[owner->local.value];
+                    const TypePtr ownerType =
+                        mCanonicalLocalTypes[owner->local.value];
+                    const size_t index = fieldIndex(ownerType, field->field);
+                    if (storage && ownerType &&
+                        ownerType->kind == TypeKind::Struct &&
+                        index != static_cast<size_t>(-1) &&
+                        ownerType->fields[index].type &&
+                        ownerType->fields[index].type->kind ==
+                            TypeKind::RuntimeFragmentRef) {
+                        cell = mBuilder->CreateLoad(
+                            mHelpers->ptrTy(), storage,
+                            "ref.field.owner");
+                        const uint64_t offset =
+                            luna::layout::productFieldOffset(
+                                ownerType, index);
+                        if (offset != 0)
+                            cell = mBuilder->CreateGEP(
+                                llvm::Type::getInt8Ty(*mCtx), cell,
+                                llvm::ConstantInt::get(
+                                    mHelpers->sizeTy(), offset),
+                                "ref.field.cell");
+                    }
+                }
+            }
             if (auto* index = dynamic_cast<IndexExpr*>(mv->operand.get());
                 index && !mv->nextUnread.empty()) {
                 auto* array = dynamic_cast<IdentifierExpr*>(

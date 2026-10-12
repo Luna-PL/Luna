@@ -1373,11 +1373,16 @@ Its sealed CFG contains a projected
 Drop for the original second field cell and one backing-allocation release row.
 The private two-owner JIT moves one Runtime-issued handle into the struct,
 keeps the other in its parameter cell, and releases both exactly once before
-the generation pin expires. Next, prove partially moved named Ref structs;
-closure environments still require their own original-cell or partial-state
-proofs. Public Ref publication remains gated. The updated strict
-build passes all 81 tests, and the focused frontend/canonical tests pass under
-ASAN/UBSan.
+the generation pin expires. A second named struct holds two Ref fields. The
+source moves its second field into a local; the sealed exit drops that local
+and the untouched first field, omits the moved field's projected Drop, and
+still releases the backing allocation. Codegen now takes the Ref from its
+original field cell at a nonzero offset and clears that cell. The private
+two-owner JIT releases both Runtime-issued handles exactly once and expires
+their generation pin. Next, prove original-cell and partial-state cleanup in
+closure environments. Public Ref publication remains gated. The updated
+strict build passes all 81 tests, and the focused frontend/canonical tests
+pass under ASAN/UBSan.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration

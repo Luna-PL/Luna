@@ -1192,6 +1192,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     // are connected. Test the actual frontend -> lowerer -> verifier path.
     auto sourceRefSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "struct RefBox { marker: i32; selected: RuntimeFragmentRef<checkpoint>; }\n"
+        "struct RefPair { first: RuntimeFragmentRef<checkpoint>; "
+        "second: RuntimeFragmentRef<checkpoint>; }\n"
         "slot checkpoint(value: i32);\n"
         "slot shadow(value: i32);\n"
         "enum RefChoice { Empty; Item(i32, RuntimeFragmentRef<checkpoint>); }\n"
@@ -1230,6 +1232,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "fn cleanup_struct_pair(first: affine RuntimeFragmentRef<checkpoint>, "
         "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
         "let packed = RefBox { marker: 7, selected: move first }; }\n"
+        "fn cleanup_struct_partial_pair(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let packed = RefPair { first: move first, second: move second }; "
+        "let moved = move packed.second; }\n"
         "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
@@ -1256,6 +1262,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* cleanupEnumPairItem = nullptr;
     moon::FunctionDecl* cleanupEnumPairEmpty = nullptr;
     moon::FunctionDecl* cleanupStructPair = nullptr;
+    moon::FunctionDecl* cleanupStructPartialPair = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
     for (auto& declaration : sourceRefModule->declarations) {
@@ -1281,6 +1288,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 cleanupEnumPairEmpty = function;
             if (function->name == "cleanup_struct_pair")
                 cleanupStructPair = function;
+            if (function->name == "cleanup_struct_partial_pair")
+                cleanupStructPartialPair = function;
             if (function->name == "transfer") transfer = function;
         }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
@@ -1292,7 +1301,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !cleanupTwoArrayTail ||
         !cleanupCountArrayTail ||
         !cleanupEnum || !cleanupEnumPairItem || !cleanupEnumPairEmpty ||
-        !cleanupStructPair ||
+        !cleanupStructPair || !cleanupStructPartialPair ||
         !transfer ||
         observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
@@ -1555,6 +1564,59 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         std::cerr << pairJitError << '\n';
         return fail("source Ref struct failed private JIT cleanup");
     }
+    if (!cleanupStructPartialPair->controlFlow)
+        return fail("partially moved source Ref struct has no sealed CFG");
+    const auto& partialGraph = *cleanupStructPartialPair->controlFlow;
+    moon::LocalId partialOwner;
+    moon::LocalId movedOwner;
+    for (const auto& local : partialGraph.locals) {
+        if (local.name == "packed") partialOwner = local.id;
+        if (local.name == "moved") movedOwner = local.id;
+    }
+    bool partialExitVerified = false;
+    for (const auto& block : partialGraph.blocks) {
+        if (block.terminator.kind != moon::TerminatorKind::Return)
+            continue;
+        size_t movedDrops = 0;
+        size_t siblingDrops = 0;
+        size_t allocationReleases = 0;
+        size_t movedFieldDrops = 0;
+        for (const auto cleanupId : block.terminator.exitCleanups) {
+            const auto* cleanup = partialGraph.findCleanup(cleanupId);
+            if (!cleanup) continue;
+            if (cleanup->place.root == movedOwner &&
+                cleanup->place.projections.empty() &&
+                cleanup->type == refId &&
+                cleanup->action == luna::ownership::CleanupAction::Drop)
+                ++movedDrops;
+            if (cleanup->place.root != partialOwner) continue;
+            if (cleanup->place.projections.empty() &&
+                cleanup->kind == moon::CleanupKind::Allocation &&
+                cleanup->action == luna::ownership::CleanupAction::Deallocate)
+                ++allocationReleases;
+            if (cleanup->place.projections.size() != 1 ||
+                cleanup->place.projections.front().kind !=
+                    moon::ProjectionKind::Field ||
+                cleanup->kind != moon::CleanupKind::Value ||
+                cleanup->action != luna::ownership::CleanupAction::Drop ||
+                cleanup->type != refId)
+                continue;
+            if (cleanup->place.projections.front().index == 0)
+                ++siblingDrops;
+            if (cleanup->place.projections.front().index == 1)
+                ++movedFieldDrops;
+        }
+        partialExitVerified = !partialOwner.empty() && !movedOwner.empty() &&
+            movedDrops == 1 && siblingDrops == 1 &&
+            allocationReleases == 1 && movedFieldDrops == 0;
+    }
+    if (!partialExitVerified)
+        return fail("partially moved source Ref struct has incorrect exit cleanup");
+    if (!exercisePrivateOwnedPairCleanupJit(
+            *sourceRefModule, *cleanupStructPartialPair, pairJitError)) {
+        std::cerr << pairJitError << '\n';
+        return fail("partially moved source Ref struct failed private JIT cleanup");
+    }
     std::vector<uint8_t> refV3Types{1};
     std::string refWireError;
     if (moon::ContainerModelCodec::encodeTypes(
@@ -1697,7 +1759,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !std::any_of(blockedRefCodegen.errors().begin(),
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
-                    "13 private unit body/wrapper pair(s) and 1 private owned "
+                    "14 private unit body/wrapper pair(s) and 1 private owned "
                     "return body/wrapper pair(s) verified and discarded") !=
                     std::string::npos;
             }) ||

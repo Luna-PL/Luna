@@ -1036,8 +1036,12 @@ payload 字段清理。私有双 owner JIT 现用两个不同的 Runtime 发放�
 字段之后。封闭 CFG 为原始
 第二字段 cell 生成投影 Drop，并为同一对象生成一条底层分配释放记录。私有双
 owner JIT 将一个 Runtime 发放句柄移入 struct，另一个留在参数 cell 中；调用后
-两个句柄各释放一次，generation pin 随之失效。下一步验证命名 Ref struct 的部分
-字段 move；closure 环境仍需单独的原位 cell 或部分状态证明，公开 Ref 发布门禁不变。
+两个句柄各释放一次，generation pin 随之失效。另一个命名 struct 含两个 Ref 字段；
+源码将第二字段移入局部变量后，封闭退出边清理该局部变量及未移动的第一字段，
+跳过已移动字段的投影 Drop，仍释放底层 struct 分配。codegen 现从非零偏移的
+原始字段 cell 取出 Ref 并将该 cell 清零。私有双 owner JIT 恰好释放两个 Runtime
+发放句柄，generation pin 随之失效。下一步验证 closure 环境的原位 cell 与部分
+状态清理；公开 Ref 发布门禁不变。
 更新后的严格构建与全部 81 项测试通过，
 前端／canonical 聚焦测试亦通过 ASAN／UBSan。
 
