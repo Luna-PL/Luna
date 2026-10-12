@@ -1223,7 +1223,12 @@ exact v4 layout, package identity matching the proof, unique identities and
 entry, no alias with earlier callable records, a resolved entry in the staged
 verified image and a matching row digest. The independent C fixture proves
 that valid metadata survives loading while malformed identity, digest,
-profile, alias and dependency entries fail. The read-only candidate lookup
+profile, alias and dependency entries fail. The loader now also requires the
+exact target Slot SymbolId and ContractId in the proof-bound v1 public
+registry. A separately sealed fixture with a valid v4 digest but no v1 Slot
+is rejected. It also requires the row module identity to equal the proof
+package identity; a valid-digest foreign-module fixture is rejected. The
+read-only candidate lookup
 does not expose its pointer to typed calls or generation bindings. These
 checks bind declared metadata to the artifact; they do not yet establish that
 the declarations were derived from a sealed source function.

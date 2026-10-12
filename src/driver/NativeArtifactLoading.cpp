@@ -594,9 +594,12 @@ bool validateNativeDescriptorV4(
     }
     std::set<std::string> priorSymbols, priorLinkages;
     std::set<const void*> priorEntries;
+    std::set<std::pair<std::string, std::string>> proofBoundSlots;
     for (uint64_t index = 0; index < v1->export_count; ++index) {
         const auto& row = v1->exports[index];
         priorSymbols.insert(row.symbol_id);
+        if (row.declaration_kind == LUNA_NATIVE_DECLARATION_SLOT_V1)
+            proofBoundSlots.emplace(row.symbol_id, row.contract_id);
         if ((row.flags & LUNA_NATIVE_EXPORT_CALLABLE_V1) != 0) {
             priorLinkages.insert(row.linkage_name);
             priorEntries.insert(row.entry);
@@ -637,6 +640,7 @@ bool validateNativeDescriptorV4(
             row.result_mode != LUNA_NATIVE_RESULT_UNIT_V1 ||
             row.status_domain != LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1 ||
             !row.entry || !validIdentifiers ||
+            identifiers[3] != proof.packageId ||
             identifiers[4] != proof.packageId ||
             !symbols.insert(identifiers[0]).second ||
             !linkages.insert(identifiers[2]).second ||
@@ -664,6 +668,14 @@ bool validateNativeDescriptorV4(
                     descriptor->export_descriptor_digest)) {
         error = "Native v4 export rows do not match their descriptor digest";
         return false;
+    }
+    for (uint64_t index = 0; index < descriptor->export_count; ++index) {
+        const auto& row = descriptor->exports[index];
+        if (proofBoundSlots.count(
+                {row.ref_slot_symbol_id, row.ref_slot_contract_id}) == 0) {
+            error = "Native v4 Ref target has no proof-bound public Slot";
+            return false;
+        }
     }
     return true;
 }

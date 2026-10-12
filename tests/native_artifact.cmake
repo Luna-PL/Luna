@@ -574,7 +574,7 @@ endforeach()
 # Independently linked v4 Ref/unit metadata is accepted only for inspection.
 # Its entry never becomes a v1 callable, typed call or generation binding.
 set(v4_variants valid bad-row-size bad-profile bad-slot-digest bad-identity
-    bad-package bad-entry-pointer bad-linkage)
+    bad-package bad-module bad-entry-pointer bad-linkage missing-slot-export)
 if(NOT WIN32)
     list(APPEND v4_variants dependency-entry)
 endif()
@@ -602,6 +602,10 @@ foreach(v4_variant IN LISTS v4_variants)
         list(APPEND v4_defines -DLUNA_TEST_V4_BAD_ENTRY_POINTER)
     elseif(v4_variant STREQUAL "bad-linkage")
         list(APPEND v4_defines -DLUNA_TEST_V4_BAD_LINKAGE)
+    elseif(v4_variant STREQUAL "bad-module")
+        list(APPEND v4_defines -DLUNA_TEST_V4_BAD_MODULE)
+    elseif(v4_variant STREQUAL "missing-slot-export")
+        list(APPEND v4_defines -DLUNA_TEST_V4_MISSING_SLOT_EXPORT)
     elseif(v4_variant STREQUAL "dependency-entry")
         list(APPEND v4_defines -DLUNA_TEST_V4_DEPENDENCY_ENTRY)
     endif()
@@ -620,6 +624,10 @@ foreach(v4_variant IN LISTS v4_variants)
     set(v4_prepare_mode --prepare-v4-fixture)
     if(v4_variant STREQUAL "dependency-entry")
         set(v4_prepare_mode --prepare-v4-dependency-fixture)
+    elseif(v4_variant STREQUAL "bad-module")
+        set(v4_prepare_mode --prepare-v4-bad-module-fixture)
+    elseif(v4_variant STREQUAL "missing-slot-export")
+        set(v4_prepare_mode --prepare-v4-missing-slot-fixture)
     endif()
     execute_process(
         COMMAND "${LUNA_NATIVE_VERIFIER}" ${v4_prepare_mode}
@@ -682,6 +690,7 @@ foreach(v4_variant IN LISTS v4_variants)
         if(v4_variant STREQUAL "bad-row-size" OR
            v4_variant STREQUAL "bad-profile" OR
            v4_variant STREQUAL "bad-package" OR
+           v4_variant STREQUAL "bad-module" OR
            v4_variant STREQUAL "bad-entry-pointer")
             set(v4_expected "invalid export row")
         elseif(v4_variant STREQUAL "bad-slot-digest" OR
@@ -689,6 +698,8 @@ foreach(v4_variant IN LISTS v4_variants)
             set(v4_expected "rows do not match their descriptor digest")
         elseif(v4_variant STREQUAL "bad-linkage")
             set(v4_expected "entry does not match its resolved symbol")
+        elseif(v4_variant STREQUAL "missing-slot-export")
+            set(v4_expected "no proof-bound public Slot")
         else()
             set(v4_expected "entry is outside its verified image")
         endif()

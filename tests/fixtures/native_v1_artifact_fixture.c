@@ -164,6 +164,11 @@ luna_native_library_descriptor_v3(void) {
 #else
 #define LUNA_TEST_V4_PACKAGE "org.luna.fixture.native_v1"
 #endif
+#ifdef LUNA_TEST_V4_BAD_MODULE
+#define LUNA_TEST_V4_MODULE "org.luna.fixture.other"
+#else
+#define LUNA_TEST_V4_MODULE "org.luna.fixture.native_v1"
+#endif
 #ifdef LUNA_TEST_V4_BAD_LINKAGE
 #define LUNA_TEST_V4_LINKAGE "missing_unit_apply"
 #elif defined(LUNA_TEST_V4_DEPENDENCY_ENTRY)
@@ -191,7 +196,7 @@ static const LunaNativeExportDescriptorV4 unit_exports[] = {{
     "symbol:unit-apply",
     LUNA_TEST_V4_CONTRACT,
     LUNA_TEST_V4_LINKAGE,
-    "org.luna.fixture.native_v1",
+    LUNA_TEST_V4_MODULE,
     LUNA_TEST_V4_PACKAGE,
     "type:unit-fn",
     "type:ref-checkpoint",
@@ -222,16 +227,30 @@ luna_native_library_descriptor_v4(void) {
 }
 #endif
 
-static const LunaNativeExportDescriptorV1 exports[] = {{
-    LUNA_NATIVE_DESCRIPTOR_ABI_V1,
-    sizeof(LunaNativeExportDescriptorV1),
-    LUNA_NATIVE_DECLARATION_FUNCTION_V1,
-    LUNA_NATIVE_EXPORT_CALLABLE_V1,
-    LUNA_TEST_SYMBOL_ID,
-    "contract:legacy-v1",
-    "legacy_answer",
-    (const void*)&legacy_answer,
-}};
+static const LunaNativeExportDescriptorV1 exports[] = {
+    {
+        LUNA_NATIVE_DESCRIPTOR_ABI_V1,
+        sizeof(LunaNativeExportDescriptorV1),
+        LUNA_NATIVE_DECLARATION_FUNCTION_V1,
+        LUNA_NATIVE_EXPORT_CALLABLE_V1,
+        LUNA_TEST_SYMBOL_ID,
+        "contract:legacy-v1",
+        "legacy_answer",
+        (const void*)&legacy_answer,
+    },
+#if defined(LUNA_TEST_V4_DESCRIPTOR) && !defined(LUNA_TEST_V4_MISSING_SLOT_EXPORT)
+    {
+        LUNA_NATIVE_DESCRIPTOR_ABI_V1,
+        sizeof(LunaNativeExportDescriptorV1),
+        LUNA_NATIVE_DECLARATION_SLOT_V1,
+        0,
+        "symbol:slot-checkpoint",
+        "contract:slot-checkpoint",
+        "checkpoint",
+        NULL,
+    },
+#endif
+};
 
 static const LunaNativeLibraryDescriptorV1 library
     LUNA_TEST_SECTION(LUNA_TEST_DESCRIPTOR_SECTION) = {
@@ -243,7 +262,7 @@ static const LunaNativeLibraryDescriptorV1 library
         "1.0.0",
         target_abi,
         "luna-v1-compat-fixture",
-        1,
+        sizeof(exports) / sizeof(exports[0]),
         exports,
     };
 

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Required each Native v4 Ref/unit metadata row to target a public Slot in the
+  v1 registry already bound by the artifact proof, and its module identity to
+  match the proof package. Independently sealed fixtures with a valid v4 digest
+  but no v1 Slot or a foreign module now fail loading; v4 remains metadata-only
+  and public Ref publication stays gated.
 - Added production codegen support for a single Native v4 Ref/unit descriptor
   row after sealed-source, generated-wrapper and preflight revalidation. The
   private JIT proof now emits and checks the actual query, row address and

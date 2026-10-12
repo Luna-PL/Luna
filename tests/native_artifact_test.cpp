@@ -34,9 +34,15 @@ int prepareIndependentFixture(int argc, char** argv) {
         std::string(argv[1]) == "--prepare-v3-dependency-fixture";
     const bool typedV4 =
         std::string(argv[1]) == "--prepare-v4-fixture" ||
-        std::string(argv[1]) == "--prepare-v4-dependency-fixture";
+        std::string(argv[1]) == "--prepare-v4-dependency-fixture" ||
+        std::string(argv[1]) == "--prepare-v4-bad-module-fixture" ||
+        std::string(argv[1]) == "--prepare-v4-missing-slot-fixture";
     const bool dependencyV4 =
         std::string(argv[1]) == "--prepare-v4-dependency-fixture";
+    const bool missingV4Slot =
+        std::string(argv[1]) == "--prepare-v4-missing-slot-fixture";
+    const bool badV4Module =
+        std::string(argv[1]) == "--prepare-v4-bad-module-fixture";
     const std::string targetAbi = llvm::sys::getProcessTriple();
     if (targetAbi.empty() || targetAbi.size() >= 128)
         return fail("independent Native fixture target ABI exceeds its bounded field");
@@ -115,7 +121,9 @@ int prepareIndependentFixture(int argc, char** argv) {
         const std::array<std::string, 10> identifiers = {
             "symbol:unit-apply", "contract:unit-v4",
             dependencyV4 ? "getpid" : "unit_apply",
-            "org.luna.fixture.native_v1", "org.luna.fixture.native_v1",
+            badV4Module ? "org.luna.fixture.other" :
+                          "org.luna.fixture.native_v1",
+            "org.luna.fixture.native_v1",
             "type:unit-fn", "type:ref-checkpoint",
             "symbol:slot-checkpoint", "contract:slot-checkpoint",
             "type:slot-checkpoint"};
@@ -152,6 +160,15 @@ int prepareIndependentFixture(int argc, char** argv) {
     spec.compilerIdentity = "luna-v1-compat-fixture";
     spec.exportedDescriptors.push_back(
         luna::driver::canonicalNativeExport(exported));
+    if (typedV4 && !missingV4Slot) {
+        luna::driver::NativeExportSpec slot;
+        slot.declarationKind = LUNA_NATIVE_DECLARATION_SLOT_V1;
+        slot.symbolId = "symbol:slot-checkpoint";
+        slot.contractId = "contract:slot-checkpoint";
+        slot.linkageName = "checkpoint";
+        spec.exportedDescriptors.push_back(
+            luna::driver::canonicalNativeExport(slot));
+    }
     std::vector<uint8_t> record;
     std::string error;
     if (!luna::driver::makeNativeProofPlaceholder(spec, record, error)) {
@@ -302,7 +319,11 @@ int inspectV4Candidate(int argc, char** argv) {
         return 1;
     }
     luna::driver::VerifiedNativeLibrary moved(std::move(library));
+    const auto* slot = moved.findExport(
+        "symbol:slot-checkpoint", "contract:slot-checkpoint");
     if (library || !moved ||
+        !slot || slot->declaration_kind != LUNA_NATIVE_DECLARATION_SLOT_V1 ||
+        slot->flags != 0 || slot->entry != nullptr ||
         library.hasRefUnitCandidate("symbol:unit-apply", "contract:unit-v4") ||
         !moved.hasRefUnitCandidate("symbol:unit-apply", "contract:unit-v4") ||
         moved.hasRefUnitCandidate("symbol:unit-apply", "wrong-contract") ||
@@ -497,7 +518,9 @@ int main(int argc, char** argv) {
                      std::string(argv[1]) == "--prepare-v3-fixture" ||
                      std::string(argv[1]) == "--prepare-v3-dependency-fixture" ||
                      std::string(argv[1]) == "--prepare-v4-fixture" ||
-                     std::string(argv[1]) == "--prepare-v4-dependency-fixture"))
+                     std::string(argv[1]) == "--prepare-v4-dependency-fixture" ||
+                     std::string(argv[1]) == "--prepare-v4-bad-module-fixture" ||
+                     std::string(argv[1]) == "--prepare-v4-missing-slot-fixture"))
         return prepareIndependentFixture(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--generation-switch")
         return generationSwitch(argc, argv);
