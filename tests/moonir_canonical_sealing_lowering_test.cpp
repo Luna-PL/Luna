@@ -1088,6 +1088,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto sourceRefSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "slot checkpoint(value: i32);\n"
         "slot shadow(value: i32);\n"
+        "enum RefChoice<T> { Empty; Item(i32, T); }\n"
         "fn observe(selected: RuntimeFragmentRef<checkpoint>) -> unit {}\n"
         "fn accept(selected: affine RuntimeFragmentRef<checkpoint>) -> unit {}\n"
         "fn cleanup_record(selected: affine RuntimeFragmentRef<checkpoint>) "
@@ -1100,6 +1101,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "Err::<i32, RuntimeFragmentRef<checkpoint> >(move selected); }\n"
         "fn cleanup_array(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> unit { let packed = [move selected]; }\n"
+        "fn cleanup_enum(selected: affine RuntimeFragmentRef<checkpoint>) "
+        "-> unit { let picked = "
+        "RefChoice::<RuntimeFragmentRef<checkpoint> >::Item(7, move selected); }\n"
         "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
@@ -1116,6 +1120,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* cleanupResult = nullptr;
     moon::FunctionDecl* cleanupErrorResult = nullptr;
     moon::FunctionDecl* cleanupArray = nullptr;
+    moon::FunctionDecl* cleanupEnum = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
     for (auto& declaration : sourceRefModule->declarations) {
@@ -1128,6 +1133,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             if (function->name == "cleanup_error_result")
                 cleanupErrorResult = function;
             if (function->name == "cleanup_array") cleanupArray = function;
+            if (function->name == "cleanup_enum") cleanupEnum = function;
             if (function->name == "transfer") transfer = function;
         }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
@@ -1135,7 +1141,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             shadow = slot;
     }
     if (!observe || !accept || !cleanupRecord || !cleanupResult ||
-        !cleanupErrorResult || !cleanupArray || !transfer ||
+        !cleanupErrorResult || !cleanupArray || !cleanupEnum || !transfer ||
         observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
         return fail("source Ref target fixture has no frozen function/Slot");
@@ -1247,6 +1253,25 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                     element->kind == TypeKind::RuntimeFragmentRef;
             }))
         return fail("source Ref array has no canonical element cleanup");
+    if (!cleanupEnum->controlFlow ||
+        !std::any_of(cleanupEnum->controlFlow->cleanups.begin(),
+            cleanupEnum->controlFlow->cleanups.end(),
+            [&](const moon::CleanupRecord& cleanup) {
+                const auto* type = sourceRefModule->findType(cleanup.type);
+                if (!type || type->kind != TypeKind::Enum ||
+                    cleanup.action != luna::ownership::CleanupAction::EnumDrop)
+                    return false;
+                return std::any_of(type->variants.begin(), type->variants.end(),
+                    [&](const auto& variant) {
+                        if (variant.name != "Item" ||
+                            variant.fields.size() != 2) return false;
+                        const auto* field = sourceRefModule->findType(
+                            variant.fields[1]);
+                        return field &&
+                            field->kind == TypeKind::RuntimeFragmentRef;
+                    });
+            }))
+        return fail("source Ref enum has no canonical variant cleanup");
     std::vector<uint8_t> refV3Types{1};
     std::string refWireError;
     if (moon::ContainerModelCodec::encodeTypes(
@@ -1389,7 +1414,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !std::any_of(blockedRefCodegen.errors().begin(),
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
-                    "6 private unit body/wrapper pair(s) and 1 private owned "
+                    "7 private unit body/wrapper pair(s) and 1 private owned "
                     "return body/wrapper pair(s) verified and discarded") !=
                     std::string::npos;
             }) ||

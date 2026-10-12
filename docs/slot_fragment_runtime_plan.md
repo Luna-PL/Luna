@@ -1336,9 +1336,14 @@ tag from original storage and Drops only the active branch through its payload
 cell. Real Ok and Err fixtures seal `ResultDrop` and pass disposable LLVM
 proofs. Private cleanup of a complete fixed array containing Ref now visits
 each original element cell; a real source fixture seals `ArrayDrop` and passes
-the disposable LLVM ingress proof. Partially consumed arrays, Ref-bearing
-enums, named structs and closure environments still require separate
-original-cell or partial-state proofs; public Ref publication remains gated.
+the disposable LLVM ingress proof. Partially consumed arrays still require a
+partial-state proof. Ref-bearing generic enums now dispatch on the original
+tag and clean only the active variant's original payload fields. A real source
+fixture with an integer before Ref seals `EnumDrop` and passes the disposable
+LLVM proof. Direct
+non-generic Ref enum declarations still fail source type constraints. Named
+structs and closure environments still require separate original-cell or
+partial-state proofs; public Ref publication remains gated.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration

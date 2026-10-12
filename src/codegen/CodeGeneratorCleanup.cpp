@@ -21,6 +21,15 @@ bool supportsStoredRefCleanup(const TypePtr& type) {
             supportsStoredRefCleanup(type->typeArgs[1]);
     if (type->kind == TypeKind::Array && type->inner)
         return supportsStoredRefCleanup(type->inner);
+    if (type->kind == TypeKind::Enum)
+        return std::all_of(type->variants.begin(), type->variants.end(),
+            [](const auto& variant) {
+                return std::all_of(
+                    variant.fields.begin(), variant.fields.end(),
+                    [](const auto& field) {
+                        return supportsStoredRefCleanup(field);
+                    });
+            });
     return false;
 }
 } // namespace
@@ -109,6 +118,81 @@ void CodeGenerator::emitStoredPayloadCleanup(
             emitStoredPayloadCleanup(
                 elementCell, type->inner, elementLabel);
         }
+        return;
+    }
+    if (type->kind == TypeKind::Enum) {
+        auto* layout = llvm::dyn_cast<llvm::StructType>(
+            mHelpers->toLLVMType(type));
+        auto* payloadLayout = layout && layout->getNumElements() == 2
+            ? llvm::dyn_cast<llvm::ArrayType>(layout->getElementType(1))
+            : nullptr;
+        if (!payloadLayout || layout->getElementType(0) != mHelpers->i32Ty()) {
+            error("Ref enum '" + label +
+                  "' has no validated tagged payload storage");
+            return;
+        }
+        const uint64_t payloadSize = payloadLayout->getNumElements() * 8;
+        for (const auto& variant : type->variants) {
+            for (size_t fieldIndex = 0;
+                 fieldIndex < variant.fields.size(); ++fieldIndex) {
+                const auto offset = luna::layout::variantFieldOffset(
+                    variant, fieldIndex);
+                const auto fieldSize = luna::layout::valueSize(
+                    variant.fields[fieldIndex]);
+                if (offset > payloadSize ||
+                    fieldSize > payloadSize - offset) {
+                    error("Ref enum '" + label +
+                          "' has a field outside its payload storage");
+                    return;
+                }
+            }
+        }
+        auto* tagCell = mBuilder->CreateStructGEP(
+            layout, storage, 0, label + ".tag.cell");
+        auto* payloadCell = mBuilder->CreateStructGEP(
+            layout, storage, 1, label + ".payload.cell");
+        auto* tag = mBuilder->CreateLoad(
+            mHelpers->i32Ty(), tagCell, label + ".tag");
+        auto* continueBlock = llvm::BasicBlock::Create(
+            *mCtx, label + ".dropped", mCurrentFunc);
+        auto* invalidBlock = llvm::BasicBlock::Create(
+            *mCtx, label + ".invalid_tag", mCurrentFunc);
+        auto* dispatch = mBuilder->CreateSwitch(
+            tag, invalidBlock, type->variants.size());
+        for (size_t variantIndex = 0;
+             variantIndex < type->variants.size(); ++variantIndex) {
+            const auto& variant = type->variants[variantIndex];
+            auto* variantBlock = llvm::BasicBlock::Create(
+                *mCtx, label + "." + variant.name, mCurrentFunc);
+            dispatch->addCase(llvm::ConstantInt::get(
+                llvm::Type::getInt32Ty(*mCtx), variantIndex), variantBlock);
+            mBuilder->SetInsertPoint(variantBlock);
+            for (size_t fieldIndex = 0;
+                 fieldIndex < variant.fields.size(); ++fieldIndex) {
+                auto* fieldCell = payloadCell;
+                const auto offset = luna::layout::variantFieldOffset(
+                    variant, fieldIndex);
+                if (offset != 0)
+                    fieldCell = mBuilder->CreateGEP(
+                        llvm::Type::getInt8Ty(*mCtx), payloadCell,
+                        llvm::ConstantInt::get(mHelpers->sizeTy(), offset),
+                        label + ".field.cell");
+                emitStoredPayloadCleanup(
+                    fieldCell, variant.fields[fieldIndex],
+                    label + "." + variant.name + "." +
+                        std::to_string(fieldIndex));
+            }
+            if (!mBuilder->GetInsertBlock()->getTerminator())
+                mBuilder->CreateBr(continueBlock);
+        }
+        mBuilder->SetInsertPoint(invalidBlock);
+        auto panic = mModule->getOrInsertFunction(
+            "rt_panic_cstr", mHelpers->voidTy(), mHelpers->ptrTy());
+        auto* message = mBuilder->CreateGlobalString(
+            "invalid inline enum tag", "enum.invalid_tag.message");
+        mBuilder->CreateCall(panic, {message});
+        mBuilder->CreateUnreachable();
+        mBuilder->SetInsertPoint(continueBlock);
         return;
     }
     if (type->kind == TypeKind::Record) {

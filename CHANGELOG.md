@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Lowered private Ref-bearing generic enum cleanup through the active
+  variant's original payload fields. A real source fixture places Ref after
+  an integer field, seals `EnumDrop` and passes the disposable LLVM proof;
+  public Ref publication remains gated.
 - Lowered private Ref-bearing fixed-array cleanup through each original
   element cell. A real source array fixture seals `ArrayDrop` and passes the
   disposable LLVM ingress proof; partially consumed array state and public
