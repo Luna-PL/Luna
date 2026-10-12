@@ -127,6 +127,111 @@ void executePrivateRefJitFragmentSecond(void*, void* activation) {
     executePrivateRefJitFragmentFrom(1, activation);
 }
 
+bool exercisePrivateOwnedPairCleanupJit(
+    moon::Module& module, moon::FunctionDecl& function,
+    std::string& error) {
+    const moon::SlotDecl* slot = nullptr;
+    for (const auto& declaration : module.declarations)
+        if (const auto* candidate = dynamic_cast<const moon::SlotDecl*>(
+                declaration.get()); candidate &&
+            candidate->name == "checkpoint")
+            slot = candidate;
+    const auto* arguments = slot ? module.findType(slot->argumentsType) : nullptr;
+    if (!slot || !arguments || function.params.size() != 2) {
+        error = "private owned Ref pair lacks its frozen Slot/parameter shape";
+        return false;
+    }
+    auto jit = CodeGenerator::
+        materializePrivateRuntimeFragmentRefOwnedPairForTest(
+            module, function, error);
+    if (!jit) return false;
+    const void* address = jit->lookup(
+        "__luna_private_ref_pair_jit_test", error);
+    if (!address) return false;
+
+    const std::string fragmentId = "fragment:private-ref-pair";
+    const std::string fragmentContract = "contract:private-ref-pair";
+    const std::string unitLayout = "layout:unit";
+    LunaRuntimeFragmentDescriptorV1 descriptor = {
+        LUNA_RUNTIME_FRAGMENT_MAGIC_V1,
+        LUNA_RUNTIME_FRAGMENT_ABI_V1,
+        sizeof(LunaRuntimeFragmentDescriptorV1),
+        LUNA_RUNTIME_FRAGMENT_CAPTURE_FREE_V1,
+        0, 0, 0, 0,
+        fragmentId.c_str(), fragmentContract.c_str(),
+        slot->symbolId.value.c_str(), slot->contractId.value.c_str(),
+        arguments->abiLayoutId.value.c_str(),
+        arguments->valueSize, arguments->valueAlignment,
+        "", unitLayout.c_str(), 0, 1,
+        nullptr, nullptr, executePrivateRefJitFragment,
+    };
+    if (!luna::runtime::validateRuntimeFragmentDescriptor(
+            descriptor, error))
+        return false;
+    luna::runtime::RuntimeFragmentRefHandle first;
+    luna::runtime::RuntimeFragmentRefHandle second;
+    std::weak_ptr<int> generationLease;
+    {
+        luna::runtime::MoonRuntime runtime;
+        auto lease = std::make_shared<int>(1);
+        generationLease = lease;
+        luna::runtime::GenerationStagingRequest request{
+            "org.luna.private.ref-pair", std::string(64, 'b'), lease};
+        luna::runtime::MoonRuntime::StagedGeneration staged;
+        constexpr uint32_t flags =
+            luna::runtime::GenerationBindingFragmentExecutable |
+            luna::runtime::GenerationBindingPublicControl;
+        if (!runtime.stage(
+                request,
+                [](const auto&, std::string&) { return true; },
+                [&](const auto&, auto& bindings, std::string&) {
+                    bindings.push_back({fragmentId, fragmentContract,
+                        &descriptor, LUNA_RUNTIME_DECLARATION_FRAGMENT_V1,
+                        flags});
+                    return true;
+                }, {}, staged, error))
+            return false;
+        luna::runtime::MoonRuntime::PinnedGeneration loaded;
+        if (!runtime.loadOnce(staged, loaded, error)) return false;
+        const luna::runtime::GenerationBindingRequirement requirement{
+            fragmentId, fragmentContract,
+            LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, flags};
+        const auto binding = loaded.find(requirement);
+        const luna::runtime::RuntimeSlotRequirement target{
+            slot->symbolId.value, slot->contractId.value};
+        luna::runtime::RuntimeFragmentRef firstRef;
+        luna::runtime::RuntimeFragmentRef secondRef;
+        if (!binding ||
+            !luna::runtime::makeOwnedRuntimeFragmentRef(
+                binding, target, {"", nullptr}, firstRef, error) ||
+            !luna::runtime::makeOwnedRuntimeFragmentRef(
+                binding, target, {"", nullptr}, secondRef, error) ||
+            !luna::runtime::makeRuntimeFragmentRefHandle(
+                firstRef, target, first, error) ||
+            !luna::runtime::makeRuntimeFragmentRefHandle(
+                secondRef, target, second, error))
+            return false;
+    }
+    if (!first || !second || generationLease.expired()) {
+        error = "private owned Ref pair lost its Runtime generation pins";
+        return false;
+    }
+    const auto droppedBefore =
+        luna::runtime::runtimeFragmentRefDropCountForTest();
+    using Entry = int32_t (*)(void*, void*);
+    const auto entry = reinterpret_cast<Entry>(const_cast<void*>(address));
+    const int32_t status = entry(first.release(), second.release());
+    const auto droppedAfter =
+        luna::runtime::runtimeFragmentRefDropCountForTest();
+    if (status != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
+        droppedAfter != droppedBefore + 2 || !generationLease.expired()) {
+        error = "private two-owner array tail did not release both Runtime handles";
+        return false;
+    }
+    error.clear();
+    return true;
+}
+
 bool exercisePrivateRefApplyJit(
     moon::Module& module, moon::FunctionDecl& function,
     std::string& error, unsigned expectedDispatches = 1,
@@ -1311,6 +1416,12 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     }
     if (!guardedFirst || !guardedSecond || guardedCursor.empty())
         return fail("source two-Ref array tail has no shared guarded cleanup");
+    std::string pairJitError;
+    if (!exercisePrivateOwnedPairCleanupJit(
+            *sourceRefModule, *cleanupTwoArrayTail, pairJitError)) {
+        std::cerr << pairJitError << '\n';
+        return fail("source two-Ref array tail failed private JIT cleanup");
+    }
     if (!cleanupEnum->controlFlow ||
         !std::any_of(cleanupEnum->controlFlow->cleanups.begin(),
             cleanupEnum->controlFlow->cleanups.end(),

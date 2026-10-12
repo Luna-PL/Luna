@@ -14,6 +14,10 @@
 
 namespace luna::runtime {
 
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+static std::atomic<uint64_t> privateRuntimeFragmentRefDropCount{0};
+#endif
+
 struct RuntimeFragmentBindingSetState {
     struct Entry {
         RuntimeSlotRequirement slot;
@@ -934,6 +938,10 @@ bool makeRuntimeFragmentRefHandle(
 }
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
+uint64_t runtimeFragmentRefDropCountForTest() noexcept {
+    return privateRuntimeFragmentRefDropCount.load(std::memory_order_relaxed);
+}
+
 bool pinRuntimeFragmentRefHandleForTest(
     const RuntimeFragmentRefHandle& source,
     RuntimeFragmentRefHandle& output, std::string& error) {
@@ -1279,6 +1287,10 @@ extern "C" void luna_runtime_fragment_ref_drop_v1(void** reference) {
         luna::runtime::RuntimeFragmentRefHandleState*>(*reference);
     *reference = nullptr;
     retired->magic = 0;
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    luna::runtime::privateRuntimeFragmentRefDropCount.fetch_add(
+        1, std::memory_order_relaxed);
+#endif
     delete retired;
 }
 

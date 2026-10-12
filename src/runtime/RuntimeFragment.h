@@ -230,6 +230,7 @@ bool makeRuntimeFragmentRefHandle(
 bool pinRuntimeFragmentRefHandleForTest(
     const RuntimeFragmentRefHandle& source,
     RuntimeFragmentRefHandle& output, std::string& error);
+uint64_t runtimeFragmentRefDropCountForTest() noexcept;
 #endif
 
 // Immutable host policy result. The strict constructor models None/One while

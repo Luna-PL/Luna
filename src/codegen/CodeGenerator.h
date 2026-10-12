@@ -154,6 +154,10 @@ public:
         moon::Module& program, moon::FunctionDecl& function,
         std::string& failure,
         std::vector<uint8_t>* entryRecord = nullptr);
+    static std::shared_ptr<LunaJitModule>
+    materializePrivateRuntimeFragmentRefOwnedPairForTest(
+        moon::Module& program, moon::FunctionDecl& function,
+        std::string& failure);
     // Validates the pointer-free test record against current frozen source
     // facts. This is neither a Native descriptor nor a public entry ABI.
     static bool validatePrivateRuntimeFragmentRefApplyEntryRecordForTest(

@@ -695,8 +695,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         }
     }
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
-    if (executable && !privateRefApply) {
-        failure = "private Ref apply JIT test requires an Apply region";
+    if (executable && !privateRefApply && !privateOwnedPair) {
+        failure = "private Ref JIT test requires Apply or two owned Refs";
         return false;
     }
 #endif
@@ -2969,6 +2969,28 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         failure = "generated body/wrapper LLVM IR is invalid: " + invalidIR;
         return false;
     }
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    if (executable) {
+        // Only the test target exports a callable trampoline. The proven
+        // body and pair wrapper stay internal to this disposable JIT module.
+        auto* entry = llvm::Function::Create(
+            wrapper->getFunctionType(), llvm::Function::ExternalLinkage,
+            "__luna_private_ref_pair_jit_test", *proof.mModule);
+        llvm::IRBuilder<> builder(
+            llvm::BasicBlock::Create(*proof.mCtx, "entry", entry));
+        builder.CreateRet(builder.CreateCall(
+            wrapper, {entry->getArg(0), entry->getArg(1)}));
+        std::string invalidEntry;
+        llvm::raw_string_ostream entryStream(invalidEntry);
+        if (llvm::verifyModule(*proof.mModule, &entryStream)) {
+            entryStream.flush();
+            failure = "private Ref pair JIT entry is invalid: " + invalidEntry;
+            return false;
+        }
+        *executable = proof.materializeJitModule(failure);
+        return static_cast<bool>(*executable);
+    }
+#endif
     failure.clear();
     return true;
 }
@@ -2981,6 +3003,21 @@ CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
     std::shared_ptr<LunaJitModule> executable;
     if (!verifyPrivateRuntimeFragmentRefUnitIngress(
             program, function, failure, &executable, entryRecord))
+        return {};
+    return executable;
+}
+
+std::shared_ptr<LunaJitModule>
+CodeGenerator::materializePrivateRuntimeFragmentRefOwnedPairForTest(
+    moon::Module& program, FunctionDecl& function, std::string& failure) {
+    std::shared_ptr<LunaJitModule> executable;
+    if (function.controlFlow &&
+        !function.controlFlow->runtimeRefApplies.empty()) {
+        failure = "private owned Ref pair test cannot execute Apply";
+        return {};
+    }
+    if (!verifyPrivateRuntimeFragmentRefUnitIngress(
+            program, function, failure, &executable, nullptr))
         return {};
     return executable;
 }

@@ -1014,8 +1014,13 @@ tag，仅沿活跃分支的 payload cell 调用 Drop；真实 Ok／Err 夹具封
 一次性 LLVM 证明：索引 move 先从原始元素 cell 取走并清空 Ref，再推进
 `nextUnread`。两元素 `take(1)` 真实源码夹具现把两条投影 Drop 记录封闭到同一个
 `nextUnread` 游标；一次性双 owner body/wrapper LLVM 证明验证了函数体与
-两处静态 Ref Drop 路径。公开双 owner 入口 ABI 和动态恰好一次释放结论仍未
-获得，旧版逐元素标记清理也仍需独立证据。含 Ref 的泛型 enum 现从原始 tag
+两处静态 Ref Drop 路径。仅测试用的 JIT 跳板现以两个独立的 Runtime 发放句柄
+执行该函数体：Runtime Drop 计数恰好增加 2，调用后 generation pin 失效。
+这只证明有界 `take(1)` 夹具的动态清理，不提供公开双 owner 入口 ABI。
+严格完整构建及 81 项非硬件测试通过，Windows Clang64 ASAN/UBSan 聚焦
+canonical 测试也通过。
+下一步须单独证明旧版逐元素标记的部分数组清理，再扩大准入的源码形态。
+含 Ref 的泛型 enum 现从原始 tag
 分派，仅沿活跃变体的原始 payload 字段清理；Ref 位于
 整数字段后的真实源码夹具封闭了 `EnumDrop` 并通过一次性 LLVM 证明。直接声明
 Ref 字段的非泛型 enum 仍被源码类型约束拒绝。命名 struct 和 closure 环境仍需
