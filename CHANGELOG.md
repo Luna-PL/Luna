@@ -2,12 +2,16 @@
 
 ## Unreleased
 
+- Covered a two-owned-Ref consuming array through the canonical `take(0).count()`
+  terminal. Its sealed CFG has two projected cleanup rows sharing one cursor;
+  the private JIT releases both Runtime-issued handles exactly once. The
+  legacy flag-based iterator code is bypassed by this sealed source path.
 - Executed the two-owned-Ref `take(1)` array-tail fixture through a private
   JIT entry using two Runtime-issued handles. Its sealed cleanup rows share
   one `nextUnread` cursor; generated LLVM contains both Ref Drop paths; the
   Runtime observes exactly two handle releases and the generation pin expires.
   The entry exists only in the canonical test target. Public multi-owner
-  ingress and legacy flag-based cleanup remain gated.
+  ingress remains gated.
 - Proved a private guarded Ref array-tail cleanup from a real consuming
   iterator source fixture. The indexed move takes and clears the original
   element cell before advancing `nextUnread`; the projected Drop remains

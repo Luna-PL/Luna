@@ -1213,6 +1213,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
         "let values = [move first, move second]; "
         "for item in values.into_iter().take(1) {} }\n"
+        "fn cleanup_count_array_tail(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let values = [move first, move second]; "
+        "let counted = values.into_iter().take(0).count(); }\n"
         "fn cleanup_enum(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> unit { let picked = "
         "RefChoice::<RuntimeFragmentRef<checkpoint> >::Item(7, move selected); }\n"
@@ -1234,6 +1238,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* cleanupArray = nullptr;
     moon::FunctionDecl* cleanupArrayTail = nullptr;
     moon::FunctionDecl* cleanupTwoArrayTail = nullptr;
+    moon::FunctionDecl* cleanupCountArrayTail = nullptr;
     moon::FunctionDecl* cleanupEnum = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
@@ -1251,6 +1256,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 cleanupArrayTail = function;
             if (function->name == "cleanup_two_array_tail")
                 cleanupTwoArrayTail = function;
+            if (function->name == "cleanup_count_array_tail")
+                cleanupCountArrayTail = function;
             if (function->name == "cleanup_enum") cleanupEnum = function;
             if (function->name == "transfer") transfer = function;
         }
@@ -1261,6 +1268,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (!observe || !accept || !cleanupRecord || !cleanupResult ||
         !cleanupErrorResult || !cleanupArray || !cleanupArrayTail ||
         !cleanupTwoArrayTail ||
+        !cleanupCountArrayTail ||
         !cleanupEnum || !transfer ||
         observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
@@ -1421,6 +1429,40 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             *sourceRefModule, *cleanupTwoArrayTail, pairJitError)) {
         std::cerr << pairJitError << '\n';
         return fail("source two-Ref array tail failed private JIT cleanup");
+    }
+    if (!cleanupCountArrayTail->controlFlow)
+        return fail("source Ref count terminal has no sealed CFG");
+    bool countFirst = false;
+    bool countSecond = false;
+    moon::LocalId countCursor;
+    moon::LocalId countSource;
+    for (const auto& cleanup : cleanupCountArrayTail->controlFlow->cleanups) {
+        const auto* type = sourceRefModule->findType(cleanup.type);
+        if (!type || type->kind != TypeKind::RuntimeFragmentRef ||
+            cleanup.action != luna::ownership::CleanupAction::Drop ||
+            !cleanup.guard || cleanup.place.projections.size() != 1 ||
+            cleanup.place.projections.front().kind !=
+                moon::ProjectionKind::ConstantIndex)
+            continue;
+        const auto index = cleanup.place.projections.front().index;
+        if (index > 1 || cleanup.guard->elementIndex != index)
+            continue;
+        if (countCursor.empty()) {
+            countCursor = cleanup.guard->nextUnread;
+            countSource = cleanup.place.root;
+        } else if (countCursor != cleanup.guard->nextUnread ||
+                   countSource != cleanup.place.root) {
+            return fail("source Ref count terminal split its guarded tail state");
+        }
+        if (index == 0) countFirst = true;
+        if (index == 1) countSecond = true;
+    }
+    if (!countFirst || !countSecond || countCursor.empty())
+        return fail("source Ref count terminal has no guarded tail cleanup");
+    if (!exercisePrivateOwnedPairCleanupJit(
+            *sourceRefModule, *cleanupCountArrayTail, pairJitError)) {
+        std::cerr << pairJitError << '\n';
+        return fail("source Ref count terminal failed private JIT cleanup");
     }
     if (!cleanupEnum->controlFlow ||
         !std::any_of(cleanupEnum->controlFlow->cleanups.begin(),
@@ -1583,7 +1625,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !std::any_of(blockedRefCodegen.errors().begin(),
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
-                    "9 private unit body/wrapper pair(s) and 1 private owned "
+                    "10 private unit body/wrapper pair(s) and 1 private owned "
                     "return body/wrapper pair(s) verified and discarded") !=
                     std::string::npos;
             }) ||

@@ -1348,12 +1348,19 @@ generation pin expires after the call. This proves dynamic cleanup for the
 bounded `take(1)` fixture; it does not provide a public multi-owner ingress ABI.
 The strict full build and all 81 non-hardware tests pass, as does the focused
 Windows Clang64 ASAN/UBSan canonical test.
-Next, prove legacy flag-based partial array cleanup separately before widening
-the accepted source shapes. Ref-bearing generic enums now dispatch on the original tag
+The same two-owner source now has a `take(0).count()` terminal fixture. Its
+sealed CFG shares one cursor across two projected Ref Drop rows, and private
+JIT execution releases both Runtime-issued handles exactly once. Sealing
+lowers this terminal to canonical control flow; the older flag-based iterator
+code is not exercised by this fixture. Next, resolve direct
+non-generic Ref enum field types after Slot declarations are registered, then
+prove their frozen target and cleanup path. Ref-bearing generic enums now
+dispatch on the original tag
 and clean only the active variant's original payload
 fields. A real source fixture with an integer before Ref seals `EnumDrop` and
 passes the disposable LLVM proof. Direct non-generic Ref enum declarations
-still fail source type constraints. Named structs and closure environments
+still fail source type constraints because enum fields are resolved before
+Slot declarations are registered. Named structs and closure environments
 still require separate original-cell or
 partial-state proofs; public Ref publication remains gated.
 

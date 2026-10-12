@@ -1019,11 +1019,16 @@ tag，仅沿活跃分支的 payload cell 调用 Drop；真实 Ok／Err 夹具封
 这只证明有界 `take(1)` 夹具的动态清理，不提供公开双 owner 入口 ABI。
 严格完整构建及 81 项非硬件测试通过，Windows Clang64 ASAN/UBSan 聚焦
 canonical 测试也通过。
-下一步须单独证明旧版逐元素标记的部分数组清理，再扩大准入的源码形态。
+同一双 owner 源码现增加 `take(0).count()` 终端夹具：封闭 CFG 的两条投影 Ref
+Drop 记录共用一个游标，私有 JIT 执行后两个 Runtime 发放的句柄各释放一次。
+封闭阶段已将该终端展开为规范控制流；此夹具不走旧版逐元素标记的
+iterator codegen。下一步须在 Slot 声明登记后解析直接含 Ref 的非泛型 enum
+字段，再证明冻结目标与清理路径。
 含 Ref 的泛型 enum 现从原始 tag
 分派，仅沿活跃变体的原始 payload 字段清理；Ref 位于
 整数字段后的真实源码夹具封闭了 `EnumDrop` 并通过一次性 LLVM 证明。直接声明
-Ref 字段的非泛型 enum 仍被源码类型约束拒绝。命名 struct 和 closure 环境仍需
+Ref 字段的非泛型 enum 因字段早于 Slot 声明登记而被源码类型约束拒绝。
+命名 struct 和 closure 环境仍需
 各自的原位 cell 或
 部分状态证明，公开 Ref 发布门禁不变。
 
