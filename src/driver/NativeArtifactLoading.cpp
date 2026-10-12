@@ -570,6 +570,11 @@ bool validateNativeDescriptorV4(
     }
     const auto query = reinterpret_cast<LunaNativeLibraryDescriptorFnV4>(rawQuery);
     descriptor = query();
+    if (descriptor &&
+        !nativeAddressInStagedImage(handle, stagedPath, descriptor)) {
+        error = "Native v4 descriptor is outside its verified image";
+        return false;
+    }
     if (!descriptor || descriptor->magic != LUNA_NATIVE_DESCRIPTOR_MAGIC_V4 ||
         descriptor->abi_version != LUNA_NATIVE_DESCRIPTOR_ABI_V4 ||
         descriptor->struct_size != sizeof(LunaNativeLibraryDescriptorV4) ||
@@ -590,6 +595,12 @@ bool validateNativeDescriptorV4(
     if (descriptor->export_count > MaxNativeExportCount ||
         (descriptor->export_count != 0 && !descriptor->exports)) {
         error = "Native v4 library descriptor has an invalid export table";
+        return false;
+    }
+    if (descriptor->exports &&
+        !nativeAddressInStagedImage(handle, stagedPath,
+                                    descriptor->exports)) {
+        error = "Native v4 export table is outside its verified image";
         return false;
     }
     std::set<std::string> priorSymbols, priorLinkages;

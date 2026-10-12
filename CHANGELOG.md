@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Required Native v4 descriptor and export-table pointers to originate in the
+  staged verified image before reading their metadata. Independent POSIX
+  fixtures now reject references into a dependency while a local descriptor
+  remains loadable.
 - Required each Native v4 Ref/unit metadata row to target a public Slot in the
   v1 registry already bound by the artifact proof, and its module identity to
   match the proof package. Independently sealed fixtures with a valid v4 digest

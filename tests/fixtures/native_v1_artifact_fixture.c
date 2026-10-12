@@ -1,5 +1,8 @@
 #include "runtime/NativeArtifactABI.h"
-#if defined(LUNA_TEST_V3_DEPENDENCY_ENTRY) || defined(LUNA_TEST_V4_DEPENDENCY_ENTRY)
+#if defined(LUNA_TEST_V3_DEPENDENCY_ENTRY) || \
+    defined(LUNA_TEST_V4_DEPENDENCY_ENTRY) || \
+    defined(LUNA_TEST_V4_FOREIGN_DESCRIPTOR) || \
+    defined(LUNA_TEST_V4_FOREIGN_EXPORT_TABLE)
 #include <unistd.h>
 #endif
 
@@ -183,6 +186,12 @@ luna_native_library_descriptor_v3(void) {
 #else
 #define LUNA_TEST_V4_ENTRY (const void*)&unit_apply
 #endif
+#ifdef LUNA_TEST_V4_FOREIGN_EXPORT_TABLE
+#define LUNA_TEST_V4_EXPORT_TABLE \
+    (const LunaNativeExportDescriptorV4*)(const void*)&getpid
+#else
+#define LUNA_TEST_V4_EXPORT_TABLE unit_exports
+#endif
 
 static const LunaNativeExportDescriptorV4 unit_exports[] = {{
     LUNA_NATIVE_DESCRIPTOR_ABI_V4,
@@ -217,13 +226,17 @@ static const LunaNativeLibraryDescriptorV4 unit_library
         target_abi,
         "luna-v1-compat-fixture",
         1,
-        unit_exports,
+        LUNA_TEST_V4_EXPORT_TABLE,
         "V4_DIGEST_PLACEHOLDER_0123456789",
     };
 
 LUNA_TEST_EXPORT const LunaNativeLibraryDescriptorV4*
 luna_native_library_descriptor_v4(void) {
+#ifdef LUNA_TEST_V4_FOREIGN_DESCRIPTOR
+    return (const LunaNativeLibraryDescriptorV4*)(const void*)&getpid;
+#else
     return &unit_library;
+#endif
 }
 #endif
 
