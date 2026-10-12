@@ -64,40 +64,50 @@ TypePtr ConstraintSolver::fresh() {
 }
 
 TypePtr ConstraintSolver::resolve(const TypePtr& type) {
-    if (!type) return TyUnknown;
-    if (type->kind == TypeKind::InferenceVar) {
-        auto it = mBindings.find(type->inferenceId);
-        if (it == mBindings.end()) return type;
-        TypePtr resolved = resolve(it->second);
-        it->second = resolved;
-        return resolved;
-    }
+    std::unordered_set<const Type*> active;
+    std::function<TypePtr(const TypePtr&)> visit = [&](const TypePtr& item) -> TypePtr {
+        if (!item) return TyUnknown;
+        if (!active.insert(item.get()).second) return item;
+        if (item->kind == TypeKind::InferenceVar) {
+            auto it = mBindings.find(item->inferenceId);
+            if (it == mBindings.end()) {
+                active.erase(item.get());
+                return item;
+            }
+            TypePtr result = visit(it->second);
+            it->second = result;
+            active.erase(item.get());
+            return result;
+        }
 
-    if ((type->kind == TypeKind::Reference || type->kind == TypeKind::RawPointer ||
-         type->kind == TypeKind::DeviceBuffer || type->kind == TypeKind::Array ||
-         type->kind == TypeKind::Slice || type->kind == TypeKind::MetadataView ||
-         type->kind == TypeKind::SymbolSet ||
-         type->kind == TypeKind::DeclarationView ||
-         type->kind == TypeKind::DeclarationRef ||
-         type->kind == TypeKind::RuntimeFragmentRef ||
-         type->kind == TypeKind::Iterator) && type->inner)
-        type->inner = resolve(type->inner);
-    else if (type->kind == TypeKind::Function || type->kind == TypeKind::Slot ||
-             type->kind == TypeKind::Fragment ||
-             type->kind == TypeKind::Closure) {
-        for (auto& param : type->paramTypes) param = resolve(param);
-        type->returnType = resolve(type->returnType);
-        if (type->kind == TypeKind::Closure)
-            for (auto& field : type->capturedFields)
-                field.type = resolve(field.type);
-    } else if (type->kind == TypeKind::Record || type->kind == TypeKind::Struct) {
-        for (auto& field : type->fields) field.type = resolve(field.type);
-    } else if (type->kind == TypeKind::Enum) {
-        for (auto& variant : type->variants)
-            for (auto& field : variant.fields) field = resolve(field);
-    }
-    for (auto& arg : type->typeArgs) arg = resolve(arg);
-    return type;
+        if ((item->kind == TypeKind::Reference || item->kind == TypeKind::RawPointer ||
+             item->kind == TypeKind::DeviceBuffer || item->kind == TypeKind::Array ||
+             item->kind == TypeKind::Slice || item->kind == TypeKind::MetadataView ||
+             item->kind == TypeKind::SymbolSet ||
+             item->kind == TypeKind::DeclarationView ||
+             item->kind == TypeKind::DeclarationRef ||
+             item->kind == TypeKind::RuntimeFragmentRef ||
+             item->kind == TypeKind::Iterator) && item->inner)
+            item->inner = visit(item->inner);
+        else if (item->kind == TypeKind::Function || item->kind == TypeKind::Slot ||
+                 item->kind == TypeKind::Fragment ||
+                 item->kind == TypeKind::Closure) {
+            for (auto& param : item->paramTypes) param = visit(param);
+            item->returnType = visit(item->returnType);
+            if (item->kind == TypeKind::Closure)
+                for (auto& field : item->capturedFields)
+                    field.type = visit(field.type);
+        } else if (item->kind == TypeKind::Record || item->kind == TypeKind::Struct) {
+            for (auto& field : item->fields) field.type = visit(field.type);
+        } else if (item->kind == TypeKind::Enum) {
+            for (auto& variant : item->variants)
+                for (auto& field : variant.fields) field = visit(field);
+        }
+        for (auto& arg : item->typeArgs) arg = visit(arg);
+        active.erase(item.get());
+        return item;
+    };
+    return visit(type);
 }
 
 bool ConstraintSolver::contains(const TypePtr& type, int id) {

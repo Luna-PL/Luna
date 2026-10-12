@@ -226,8 +226,12 @@ std::unique_ptr<moon::Decl> LunaLowerer::lowerDecl(const ::Decl* declaration) {
         for (const auto& variant : enumeration->variants) {
             moon::EnumDecl::Variant lowered;
             lowered.name = variant.name;
-            for (const auto& field : variant.fields)
-                lowered.fields.push_back(typeRef(lowerType(field.get())));
+            for (size_t index = 0; index < variant.fields.size(); ++index) {
+                const auto& resolved = index < variant.inferredFields.size()
+                    ? variant.inferredFields[index] : nullptr;
+                lowered.fields.push_back(typeRef(resolved
+                    ? resolved : lowerType(variant.fields[index].get())));
+            }
             result->variants.push_back(std::move(lowered));
         }
         TypePtr declarationType = mSymbols

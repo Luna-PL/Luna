@@ -208,6 +208,31 @@ bool SemanticContext::analyze(Program* program) {
             declareTrait(t);
         }
     }
+    // A nominal field may contain RuntimeFragmentRef<S> even when S is a
+    // later Slot declaration. Bind the Slot identity now, but leave its
+    // parameter contract unresolved until all nominal shapes are populated.
+    // Ref fields keep this same Type object, so the final contract cannot be
+    // replaced by an empty, declaration-order-dependent snapshot.
+    for (size_t i = 0; i < sourceDeclarationCount; ++i) {
+        auto* slot = dynamic_cast<SlotDecl*>(program->declarations[i].get());
+        if (!slot) continue;
+        setDeclarationContext(slot);
+        const std::string sourceKey = sourceDeclarationKey(slot->name);
+        if (mDeclaredTypes.count(sourceKey)) continue;
+        auto type = Type::makeSlot({}, TyUnit);
+        const std::string symbolName = slot->generatedSymbolName.empty()
+            ? slot->name : slot->generatedSymbolName;
+        type->identityMode = luna::types::IdentityMode::Nominal;
+        type->nominalId = nominalDeclarationIdentity(
+            program, "slot", symbolName, slot);
+        type->name = slot->name;
+        type->declarationLinkageName = symbolName;
+        SymbolInfo symbol;
+        symbol.kind = SymbolKind::Slot;
+        symbol.type = type;
+        if (mSymTable.defineAtRoot(sourceKey, symbol))
+            slot->structuralType = std::move(type);
+    }
     // Pass 1b: populate every product/sum shape before any function or impl
     // can instantiate a generic nominal type.  Merely prebinding the nominal
     // name above is insufficient: an early Option<i32> instantiation would
@@ -231,6 +256,23 @@ bool SemanticContext::analyze(Program* program) {
             setDeclarationContext(slot);
             setDiagnosticLocation(slot);
             declareSlot(slot);
+        }
+    }
+    // Slot parameter types and Copy contracts are now final. Recheck every
+    // nominal Ref field against the completed target, including a target that
+    // became invalid because its parameters depend on the containing type.
+    for (size_t i = 0; i < sourceDeclarationCount; ++i) {
+        auto* declaration = program->declarations[i].get();
+        TypePtr type;
+        if (auto* nominal = dynamic_cast<StructDecl*>(declaration))
+            type = mDeclaredTypes[nominal->generatedSymbolName];
+        else if (auto* nominal = dynamic_cast<EnumDecl*>(declaration))
+            type = mDeclaredTypes[nominal->generatedSymbolName];
+        if (!type || !luna::types::containsRuntimeFragmentRef(type)) continue;
+        std::string reason;
+        if (!luna::types::isWellFormedTypeDomain(type, &reason)) {
+            setDeclarationContext(declaration);
+            error(reason, declaration->line, declaration->col);
         }
     }
     for (size_t i = 0; i < sourceDeclarationCount; ++i) {

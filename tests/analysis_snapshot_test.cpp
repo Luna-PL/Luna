@@ -137,6 +137,57 @@ int main(int argc, char* argv[]) {
                 "source Ref lost its exact nominal Slot or default borrow"))
         return 23;
     for (const auto& source : {
+        "slot checkpoint(value: i32);\n"
+        "enum DirectRefChoice { Empty; Item(RuntimeFragmentRef<checkpoint>); }\n",
+        "enum DirectRefChoice { Empty; Item(RuntimeFragmentRef<checkpoint>); }\n"
+        "slot checkpoint(value: i32);\n",
+    }) {
+        auto direct = luna::tooling::AnalysisSnapshot::analyzeSource(
+            source, "file:///workspace/direct_runtime_ref_enum.luna");
+        if (!direct.success())
+            for (const auto& diagnostic : direct.errors())
+                std::cerr << diagnostic.message << '\n';
+        const EnumDecl* choice = nullptr;
+        const SlotDecl* checkpoint = nullptr;
+        if (direct.program())
+            for (const auto& declaration : direct.program()->declarations) {
+                if (auto* item = dynamic_cast<const EnumDecl*>(declaration.get()))
+                    choice = item;
+                if (auto* item = dynamic_cast<const SlotDecl*>(declaration.get()))
+                    checkpoint = item;
+            }
+        if (!expect(direct.success() && choice && checkpoint &&
+                        choice->variants.size() == 2 &&
+                        choice->variants[1].inferredFields.size() == 1 &&
+                        choice->variants[1].inferredFields[0] &&
+                        choice->variants[1].inferredFields[0]->kind ==
+                            TypeKind::RuntimeFragmentRef &&
+                        choice->variants[1].inferredFields[0]->inner ==
+                            checkpoint->structuralType &&
+                        checkpoint->structuralType->paramTypes.size() == 1 &&
+                        checkpoint->structuralType->paramTypes[0] == TyI32,
+                    "direct Ref enum lost its completed exact Slot contract"))
+            return 48;
+    }
+    for (const auto& source : {
+        "enum DirectRefChoice { Item(RuntimeFragmentRef<checkpoint>); }\n"
+        "slot checkpoint(value: string);\n",
+        "enum DirectRefChoice { Item(RuntimeFragmentRef<checkpoint>); }\n"
+        "slot checkpoint(value: DirectRefChoice);\n",
+    }) {
+        auto invalidDirect = luna::tooling::AnalysisSnapshot::analyzeSource(
+            source, "file:///workspace/invalid_direct_runtime_ref_enum.luna");
+        if (!expect(!invalidDirect.success() &&
+                        std::any_of(invalidDirect.errors().begin(),
+                            invalidDirect.errors().end(), [](const auto& diagnostic) {
+                                return diagnostic.message.find(
+                                    "RuntimeFragmentRef requires") !=
+                                    std::string::npos;
+                            }),
+                    "direct Ref enum accepted an incomplete Slot contract"))
+            return 49;
+    }
+    for (const auto& source : {
         "fn wrong(selected: RuntimeFragmentRef<i32>) -> unit {}\n",
         "fn missing(selected: RuntimeFragmentRef) -> unit {}\n",
         "slot checkpoint(); fn extra(selected: RuntimeFragmentRef<checkpoint, checkpoint>) -> unit {}\n",

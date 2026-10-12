@@ -1352,17 +1352,24 @@ The same two-owner source now has a `take(0).count()` terminal fixture. Its
 sealed CFG shares one cursor across two projected Ref Drop rows, and private
 JIT execution releases both Runtime-issued handles exactly once. Sealing
 lowers this terminal to canonical control flow; the older flag-based iterator
-code is not exercised by this fixture. Next, resolve direct
-non-generic Ref enum field types after Slot declarations are registered, then
-prove their frozen target and cleanup path. Ref-bearing generic enums now
-dispatch on the original tag
-and clean only the active variant's original payload
-fields. A real source fixture with an integer before Ref seals `EnumDrop` and
-passes the disposable LLVM proof. Direct non-generic Ref enum declarations
-still fail source type constraints because enum fields are resolved before
-Slot declarations are registered. Named structs and closure environments
+code is not exercised by this fixture. Slot identities are now prebound before
+nominal fields, and their parameter contracts are completed in place after
+nominal shapes are known. Ref-bearing nominal shapes are then revalidated
+against the completed Slot contract. The non-generic `RefChoice` source enum
+now carries a direct `RuntimeFragmentRef<checkpoint>` field: frontend tests
+cover both declaration orders and reject non-Copy and self-dependent Slot
+targets. Constraint resolution now terminates on that cyclic type graph;
+MoonIR preserves
+the resolved field type, freezes its exact Slot/Contract target, seals
+`EnumDrop`, and passes the disposable LLVM proof. Ref-bearing generic enums
+also use this cleanup path: it dispatches on the original tag and cleans only
+the active variant's original payload fields. Next, exercise both active and empty
+variants with Runtime-issued handles through the private JIT and verify exact
+cleanup counts. Named structs and closure environments
 still require separate original-cell or
-partial-state proofs; public Ref publication remains gated.
+partial-state proofs; public Ref publication remains gated. The updated strict
+build passes all 81 tests, and the focused frontend/canonical tests pass under
+ASAN/UBSan.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration

@@ -1193,7 +1193,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto sourceRefSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "slot checkpoint(value: i32);\n"
         "slot shadow(value: i32);\n"
-        "enum RefChoice<T> { Empty; Item(i32, T); }\n"
+        "enum RefChoice { Empty; Item(i32, RuntimeFragmentRef<checkpoint>); }\n"
         "fn observe(selected: RuntimeFragmentRef<checkpoint>) -> unit {}\n"
         "fn accept(selected: affine RuntimeFragmentRef<checkpoint>) -> unit {}\n"
         "fn cleanup_record(selected: affine RuntimeFragmentRef<checkpoint>) "
@@ -1219,7 +1219,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "let counted = values.into_iter().take(0).count(); }\n"
         "fn cleanup_enum(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> unit { let picked = "
-        "RefChoice::<RuntimeFragmentRef<checkpoint> >::Item(7, move selected); }\n"
+        "RefChoice::Item(7, move selected); }\n"
         "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
@@ -1479,7 +1479,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                         const auto* field = sourceRefModule->findType(
                             variant.fields[1]);
                         return field &&
-                            field->kind == TypeKind::RuntimeFragmentRef;
+                            field->kind == TypeKind::RuntimeFragmentRef &&
+                            field->id == refId &&
+                            sourceRefModule->resolveRuntimeFragmentRefTarget(
+                                field->id) == target;
                     });
             }))
         return fail("source Ref enum has no canonical variant cleanup");

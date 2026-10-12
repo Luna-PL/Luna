@@ -50,22 +50,34 @@ void ControlAnalyzer::declareSlot(SlotDecl* decl) {
     info.paramTypes = params;
     info.paramContracts = contracts;
     for (const auto& param : decl->params) info.paramNames.push_back(param.name);
-    info.structuralType = Type::makeSlot(
-        params, TyUnit, contracts);
+    auto completedType = Type::makeSlot(params, TyUnit, contracts);
     const std::string symbolName = decl->generatedSymbolName.empty()
         ? decl->name : decl->generatedSymbolName;
-    info.structuralType->identityMode = luna::types::IdentityMode::Nominal;
-    info.structuralType->nominalId = nominalDeclarationIdentity(
+    completedType->identityMode = luna::types::IdentityMode::Nominal;
+    completedType->nominalId = nominalDeclarationIdentity(
         mContext.mProgram, "slot", symbolName, decl);
-    info.structuralType->name = decl->name;
-    info.structuralType->declarationLinkageName = symbolName;
+    completedType->name = decl->name;
+    completedType->declarationLinkageName = symbolName;
+    const bool prebound = decl->structuralType != nullptr;
+    if (prebound) {
+        *decl->structuralType = *completedType;
+        info.structuralType = decl->structuralType;
+    } else {
+        info.structuralType = std::move(completedType);
+    }
     decl->structuralType = info.structuralType;
     mContext.mSlotScopes.front().emplace(sourceKey, info);
 
     SymbolInfo symbol;
     symbol.kind = SymbolKind::Slot;
     symbol.type = decl->structuralType;
-    if (!mContext.mSymTable.defineAtRoot(sourceKey, symbol))
+    if (prebound) {
+        auto* existing = mContext.mSymTable.lookup(sourceKey);
+        if (!existing || existing->kind != SymbolKind::Slot ||
+            existing->type != decl->structuralType)
+            mContext.error("slot name '" + decl->name +
+                "' conflicts with an existing declaration", decl->line, decl->col);
+    } else if (!mContext.mSymTable.defineAtRoot(sourceKey, symbol))
         mContext.error("slot name '" + decl->name + "' conflicts with an existing declaration", decl->line, decl->col);
 }
 
