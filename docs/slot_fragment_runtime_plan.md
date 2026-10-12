@@ -1327,6 +1327,13 @@ the same nominal declaration with consistent direct type-parameter bindings.
 A Ref with forged source glue or a resource redirected to another type's Drop
 function is rejected. This does not complete Ref aggregate cleanup or change
 the publication gate.
+Private codegen now follows the original field cells for a complete anonymous
+Record containing Ref and calls the cell-based Runtime Drop there. A real
+source fixture seals its `RecordDrop` obligation and passes the disposable LLVM
+ingress proof. Anonymous Record partial moves remain forbidden by ownership
+checking. Arrays, tagged payloads, named structs and closure environments
+containing Ref still require separate original-cell and partial-state proofs;
+public Ref publication remains gated.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration

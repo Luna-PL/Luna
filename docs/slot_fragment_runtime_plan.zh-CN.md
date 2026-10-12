@@ -1003,6 +1003,11 @@ glue 与可执行线格式接纳仍未完成。
 指向冻结签名为 `&mut T -> unit` 的函数。非泛型目标须有相同 TypeId；泛型 Drop
 实现须匹配同一名义声明及一致的直接类型参数绑定。改指另一资源类型的 Drop
 函数会被拒绝。这尚未完成 Ref 聚合清理，也不改变发布门禁。
+私有 codegen 现在可沿完整匿名 Record 的原始字段 cell 清理其中的 Ref，并在该
+cell 上调用 Runtime Drop，不先复制 carrier。真实源码夹具封闭了 `RecordDrop`
+义务并通过一次性 LLVM 入口证明；ownership checker 仍禁止匿名 Record 的
+部分 move。含 Ref 的数组、带标签载荷、命名 struct 和 closure 环境仍需各自的
+原位 cell 与部分状态证明，公开 Ref 发布门禁不变。
 
 现有 Native 验证链路确定了接入边界：`buildNativeLibrary` 从封闭的 declaration
 table 构造各项 `NativeExportSpec`；`canonicalNativeExport` 只把 kind、flags、

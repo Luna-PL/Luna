@@ -28,6 +28,16 @@ void CodeGenerator::emitCleanup(
             *mBuilder, *mModule, local->second);
         return;
     }
+    if (type && luna::types::containsRuntimeFragmentRef(type)) {
+        if (type->kind != TypeKind::Record ||
+            action != luna::ownership::CleanupAction::RecordDrop) {
+            error("Ref aggregate cleanup requires supported Record storage");
+            return;
+        }
+        emitStoredPayloadCleanup(
+            local->second, type, place + ".aggregate");
+        return;
+    }
     llvm::Value* pointer = mBuilder->CreateLoad(
         local->second->getAllocatedType(), local->second, place + ".cleanup");
     // String/cstr literals are immutable global constants and own no heap
@@ -304,6 +314,16 @@ void CodeGenerator::emitCanonicalCleanup(
             }
             mHelpers->emitRuntimeFragmentRefDrop(
                 *mBuilder, *mModule, storage);
+            return;
+        }
+        if (cleanup.kind == moon::CleanupKind::Value &&
+            luna::types::containsRuntimeFragmentRef(type)) {
+            if (type->kind != TypeKind::Record ||
+                cleanup.action != luna::ownership::CleanupAction::RecordDrop) {
+                error("canonical Ref aggregate cleanup requires supported Record storage");
+                return;
+            }
+            emitStoredPayloadCleanup(storage, type, label + ".aggregate");
             return;
         }
         llvm::Type* storageType = cleanup.kind == moon::CleanupKind::Allocation

@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Lowered private Ref-containing anonymous Record cleanup from its original
+  field cells, so each Ref calls the cell-based Runtime Drop without first
+  copying its carrier. The source fixture seals a RecordDrop cleanup and the
+  disposable LLVM proof succeeds; unsupported aggregate shapes still fail.
 - Verified frozen source Drop glue against `&mut T -> unit`, including exact
   targets and consistent direct generic parameter bindings. Ref uses its runtime
   Drop intrinsic and rejects a forged source glue reference; its public

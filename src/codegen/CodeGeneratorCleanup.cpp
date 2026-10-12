@@ -5,6 +5,21 @@
 
 #include <algorithm>
 
+namespace {
+bool supportsStoredRefCleanup(const TypePtr& type) {
+    if (!type || !typeRequiresCleanup(type) ||
+        !luna::types::containsRuntimeFragmentRef(type)) return true;
+    if (type->kind == TypeKind::RuntimeFragmentRef) return true;
+    if (type->sysmeta.resource.needsDrop) return false;
+    if (type->kind == TypeKind::Record)
+        return std::all_of(type->fields.begin(), type->fields.end(),
+            [](const auto& field) {
+                return supportsStoredRefCleanup(field.type);
+            });
+    return false;
+}
+} // namespace
+
 llvm::Function* CodeGenerator::getOrCreateDropCallback(
     const TypePtr& type) {
     const std::string typeId = luna::types::typeId(type).value;
@@ -33,6 +48,9 @@ llvm::Function* CodeGenerator::getOrCreateDropCallback(
         if (type->kind == TypeKind::RuntimeFragmentRef) {
             mHelpers->emitRuntimeFragmentRefDrop(
                 *mBuilder, *mModule, callback->getArg(0));
+        } else if (luna::types::containsRuntimeFragmentRef(type)) {
+            emitStoredPayloadCleanup(
+                callback->getArg(0), type, "erased.value");
         } else {
             llvm::Value* stored = mBuilder->CreateLoad(
                 mHelpers->toLLVMType(type), callback->getArg(0),
@@ -47,6 +65,52 @@ llvm::Function* CodeGenerator::getOrCreateDropCallback(
     mCurrentFunctionIsKernel = savedKernel;
     mBuilder->restoreIP(savedInsertionPoint);
     return callback;
+}
+
+void CodeGenerator::emitStoredPayloadCleanup(
+    llvm::Value* storage, const TypePtr& type, const std::string& label) {
+    if (!storage || !type || !typeRequiresCleanup(type)) return;
+    if (!supportsStoredRefCleanup(type)) {
+        error("Ref aggregate '" + label +
+              "' requires unsupported original payload storage");
+        return;
+    }
+    if (type->kind == TypeKind::RuntimeFragmentRef) {
+        mHelpers->emitRuntimeFragmentRefDrop(*mBuilder, *mModule, storage);
+        return;
+    }
+    if (!luna::types::containsRuntimeFragmentRef(type)) {
+        emitOwnedPayloadCleanup(
+            mBuilder->CreateLoad(
+                mHelpers->toLLVMType(type), storage, label + ".value"),
+            type, label);
+        return;
+    }
+    if (type->kind == TypeKind::Record) {
+        if (type->sysmeta.resource.needsDrop) {
+            error("Ref aggregate '" + label +
+                  "' has unsupported source Drop glue");
+            return;
+        }
+        auto* layout = llvm::dyn_cast<llvm::StructType>(
+            mHelpers->toLLVMType(type));
+        if (!layout || layout->getNumElements() != type->fields.size()) {
+            error("Ref record '" + label +
+                  "' has no validated field storage");
+            return;
+        }
+        for (size_t index = 0; index < type->fields.size(); ++index) {
+            const auto& field = type->fields[index];
+            emitStoredPayloadCleanup(
+                mBuilder->CreateStructGEP(
+                    layout, storage, static_cast<unsigned>(index),
+                    label + "." + field.name + ".cell"),
+                field.type, label + "." + field.name);
+        }
+        return;
+    }
+    error("Ref aggregate '" + label +
+          "' requires an unsupported original payload cell");
 }
 
 void CodeGenerator::emitLunaDeallocation(llvm::Value* pointer, const TypePtr& type) {

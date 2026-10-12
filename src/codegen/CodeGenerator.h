@@ -298,6 +298,8 @@ private:
     void emitResourceContentsCleanup(llvm::Value* value, const TypePtr& type,
                                      const std::string& label);
     void emitOwnedPayloadCleanup(llvm::Value* value, const TypePtr& type, const std::string& label);
+    void emitStoredPayloadCleanup(llvm::Value* storage, const TypePtr& type,
+                                  const std::string& label);
     llvm::Function* getOrCreateDropCallback(const TypePtr& type);
     bool emitKernelPTX(moon::FunctionDecl* kernel);
     bool emitKernelHSACO(moon::FunctionDecl* kernel);

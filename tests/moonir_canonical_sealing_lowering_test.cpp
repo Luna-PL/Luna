@@ -1090,6 +1090,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "slot shadow(value: i32);\n"
         "fn observe(selected: RuntimeFragmentRef<checkpoint>) -> unit {}\n"
         "fn accept(selected: affine RuntimeFragmentRef<checkpoint>) -> unit {}\n"
+        "fn cleanup_record(selected: affine RuntimeFragmentRef<checkpoint>) "
+        "-> unit { let packed = { selected: move selected }; }\n"
         "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
@@ -1102,6 +1104,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         return fail("source Ref type did not lower into private MoonIR preparation");
     moon::FunctionDecl* observe = nullptr;
     moon::FunctionDecl* accept = nullptr;
+    moon::FunctionDecl* cleanupRecord = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
     for (auto& declaration : sourceRefModule->declarations) {
@@ -1109,13 +1112,15 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 declaration.get())) {
             if (function->name == "observe") observe = function;
             if (function->name == "accept") accept = function;
+            if (function->name == "cleanup_record") cleanupRecord = function;
             if (function->name == "transfer") transfer = function;
         }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
                 declaration.get()); slot && slot->name == "shadow")
             shadow = slot;
     }
-    if (!observe || !accept || !transfer || observe->params.size() != 1 ||
+    if (!observe || !accept || !cleanupRecord || !transfer ||
+        observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
         return fail("source Ref target fixture has no frozen function/Slot");
     const auto refId = observe->params.front().type;
@@ -1170,6 +1175,21 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::Sealer sourceRefSealer;
     if (!sourceRefSealer.sealFunctionBodies(*sourceRefModule))
         return fail("source Ref functions did not seal ownership CFGs");
+    if (!cleanupRecord->controlFlow ||
+        !std::any_of(cleanupRecord->controlFlow->cleanups.begin(),
+            cleanupRecord->controlFlow->cleanups.end(),
+            [&](const moon::CleanupRecord& cleanup) {
+                const auto* type = sourceRefModule->findType(cleanup.type);
+                return type && type->kind == TypeKind::Record &&
+                    cleanup.action == luna::ownership::CleanupAction::RecordDrop &&
+                    std::any_of(type->fields.begin(), type->fields.end(),
+                        [&](const auto& field) {
+                            const auto* fieldType = sourceRefModule->findType(field.type);
+                            return fieldType &&
+                                fieldType->kind == TypeKind::RuntimeFragmentRef;
+                        });
+            }))
+        return fail("source Ref record has no canonical aggregate cleanup");
     std::vector<uint8_t> refV3Types{1};
     std::string refWireError;
     if (moon::ContainerModelCodec::encodeTypes(
@@ -1312,7 +1332,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !std::any_of(blockedRefCodegen.errors().begin(),
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
-                    "2 private unit body/wrapper pair(s) and 1 private owned "
+                    "3 private unit body/wrapper pair(s) and 1 private owned "
                     "return body/wrapper pair(s) verified and discarded") !=
                     std::string::npos;
             }) ||
