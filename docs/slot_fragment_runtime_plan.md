@@ -1334,9 +1334,11 @@ ingress proof. Anonymous Record partial moves remain forbidden by ownership
 checking. Private `Result<Ref, T>` and `Result<T, Ref>` cleanup now reads the
 tag from original storage and Drops only the active branch through its payload
 cell. Real Ok and Err fixtures seal `ResultDrop` and pass disposable LLVM
-proofs. Ref-bearing arrays, enums, named structs and closure environments
-still require separate original-cell and partial-state proofs; public Ref
-publication remains gated.
+proofs. Private cleanup of a complete fixed array containing Ref now visits
+each original element cell; a real source fixture seals `ArrayDrop` and passes
+the disposable LLVM ingress proof. Partially consumed arrays, Ref-bearing
+enums, named structs and closure environments still require separate
+original-cell or partial-state proofs; public Ref publication remains gated.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration

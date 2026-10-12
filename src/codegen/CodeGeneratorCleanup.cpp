@@ -19,6 +19,8 @@ bool supportsStoredRefCleanup(const TypePtr& type) {
     if (type->kind == TypeKind::Result && type->typeArgs.size() == 2)
         return supportsStoredRefCleanup(type->typeArgs[0]) &&
             supportsStoredRefCleanup(type->typeArgs[1]);
+    if (type->kind == TypeKind::Array && type->inner)
+        return supportsStoredRefCleanup(type->inner);
     return false;
 }
 } // namespace
@@ -87,6 +89,26 @@ void CodeGenerator::emitStoredPayloadCleanup(
             mBuilder->CreateLoad(
                 mHelpers->toLLVMType(type), storage, label + ".value"),
             type, label);
+        return;
+    }
+    if (type->kind == TypeKind::Array && type->inner) {
+        auto* layout = llvm::dyn_cast<llvm::ArrayType>(
+            mHelpers->toLLVMType(type));
+        if (!layout || layout->getNumElements() != type->arrayLength) {
+            error("Ref array '" + label +
+                  "' has no validated element storage");
+            return;
+        }
+        for (uint64_t index = 0; index < type->arrayLength; ++index) {
+            const auto elementLabel = label + "." + std::to_string(index);
+            auto* elementCell = mBuilder->CreateInBoundsGEP(
+                layout, storage,
+                {llvm::ConstantInt::get(mHelpers->i32Ty(), 0),
+                 llvm::ConstantInt::get(mHelpers->i32Ty(), index)},
+                elementLabel + ".cell");
+            emitStoredPayloadCleanup(
+                elementCell, type->inner, elementLabel);
+        }
         return;
     }
     if (type->kind == TypeKind::Record) {

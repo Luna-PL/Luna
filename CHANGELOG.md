@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Lowered private Ref-bearing fixed-array cleanup through each original
+  element cell. A real source array fixture seals `ArrayDrop` and passes the
+  disposable LLVM ingress proof; partially consumed array state and public
+  Ref publication remain gated.
 - Lowered private `Result<Ref, T>` and `Result<T, Ref>` cleanup through the
   original tagged payload cell. The active tag alone selects the Drop path;
   real Ok and Err source fixtures seal `ResultDrop` and pass disposable LLVM

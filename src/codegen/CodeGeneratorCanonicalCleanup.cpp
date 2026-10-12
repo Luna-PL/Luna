@@ -32,8 +32,14 @@ void CodeGenerator::emitCleanup(
         if (!((type->kind == TypeKind::Record &&
                action == luna::ownership::CleanupAction::RecordDrop) ||
               (type->kind == TypeKind::Result &&
-               action == luna::ownership::CleanupAction::ResultDrop))) {
-            error("Ref aggregate cleanup requires supported Record/Result storage");
+               action == luna::ownership::CleanupAction::ResultDrop) ||
+              (type->kind == TypeKind::Array &&
+               action == luna::ownership::CleanupAction::ArrayDrop))) {
+            error("Ref aggregate cleanup requires supported Record/Result/Array storage");
+            return;
+        }
+        if (type->kind == TypeKind::Array && mArrayDropFlags.count(place)) {
+            error("Ref array cleanup requires supported partial element state");
             return;
         }
         emitStoredPayloadCleanup(
@@ -323,8 +329,10 @@ void CodeGenerator::emitCanonicalCleanup(
             if (!((type->kind == TypeKind::Record &&
                    cleanup.action == luna::ownership::CleanupAction::RecordDrop) ||
                   (type->kind == TypeKind::Result &&
-                   cleanup.action == luna::ownership::CleanupAction::ResultDrop))) {
-                error("canonical Ref aggregate cleanup requires supported Record/Result storage");
+                   cleanup.action == luna::ownership::CleanupAction::ResultDrop) ||
+                  (type->kind == TypeKind::Array &&
+                   cleanup.action == luna::ownership::CleanupAction::ArrayDrop))) {
+                error("canonical Ref aggregate cleanup requires supported Record/Result/Array storage");
                 return;
             }
             emitStoredPayloadCleanup(storage, type, label + ".aggregate");
