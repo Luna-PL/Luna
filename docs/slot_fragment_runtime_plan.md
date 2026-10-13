@@ -1277,26 +1277,27 @@ wrapper, an exact public function record, the target public Slot in the v1
 registry and matching v1 proof rows. A synthetic publication fixture embeds
 the resulting canonical v4 row in a Native proof placeholder and checks its
 digest; missing, changed, duplicate or aliased Slot rows and forged public
-records fail. The claim helper is not yet called by ordinary Native build;
-ordinary codegen still rejects Ref modules before artifact generation.
+records fail. The Native build now calls this helper for its one admitted
+Ref/unit source and retains the claim in a private proof preview.
 The candidate descriptor and proof claim now have a coordinated producer
 entry: it validates the prospective proof placeholder, emits the one-row v4
 descriptor from the same source and wrapper, and only then appends the row to
 the proof specification. Synthetic tests check the descriptor and proof digest
 together; an invalid proof identity or duplicate query leaves the proof
-specification unchanged. Embedding and sealing a real artifact remain gated.
+specification unchanged. The Native build now embeds and seals a temporary
+preview; public output remains gated.
 Native library builds now select a preparation-only verifier policy. Before
 CFG sealing it admits the exported shared-borrow Ref/unit signature only with
 an exact public Slot; after optimization the pipeline rederives the sealed
 Apply source facts and rejects another Ref type, callable, local carrier or
 import. General `check` and Moon builds retain the publication gate. A real
-Native package with one eligible Apply reaches the artifact proof gate
-without emitting an artifact; a second Ref callable fails during preparation.
+Native package with one eligible Apply reaches a temporary artifact proof
+preview; a second Ref callable fails during preparation.
 This admits a source candidate to the Native pipeline, not a public entry.
 Ordinary Native codegen now emits and preflights the corresponding v4 status
 wrapper in an isolated proof module for that public candidate. After validation,
-the body and wrapper remain in the in-memory codegen module. No artifact is
-written while the proof publication gate is closed.
+the body and wrapper remain in the in-memory codegen module. The build removes
+its temporary proof preview and writes no public artifact.
 Native library export collection now runs before codegen and keeps that Ref/unit
 candidate out of the v1 export rows. The isolated proof uses the actual
 manifest, target ABI, compiler identity and remaining v1 rows to coordinate a
@@ -1304,9 +1305,10 @@ v4 descriptor with its proof claim. Ordinary codegen continues in that
 verified module to generate the package's remaining functions. It now retains
 the canonical v4 claim, places it in the in-memory artifact proof record and
 emits v1/v2 beside v4 in the same LLVM module. The module is verified after
-descriptor emission. The artifact link gate remains closed until the sealed
-image and loader validate the proof-bound v4 entry; the integration test
-checks the refusal and absence of an artifact.
+descriptor emission. The Native build now links a temporary preview, seals
+its proof and loads it through the v4 validator. The preview is removed after
+validation. Public output remains gated on pinned typed lookup and invocation;
+the integration test checks the refusal and absence of output artifacts.
 Generated outlined Apply continuations now Drop active context owners and
 return the explicit continuation failure result `-1` on context-derivation or
 Slot-dispatch failure. Runtime maps that result to dispatch execution failure,
@@ -1337,10 +1339,9 @@ publication, Native artifact binding and typed invocation remain before release.
 The existing generic Native v1/v2 export and Runtime declaration descriptors
 do not encode the Ref target or this ingress ABI. The Fragment descriptor
 describes factory/environment/activation execution, so it cannot stand in
-for a source function entry. The in-memory Native module now holds the v4 row
-in its proof placeholder beside v1/v2 and v4 descriptors. The next step is to
-validate the sealed image and loaded v4 entry against that proof, then connect
-its typed facts to a pinned lookup and call path.
+for a source function entry. The Native build now checks the sealed image and
+loaded v4 entry against its proof in a temporary preview. The next step is to
+connect the validated typed facts to a pinned lookup and call path.
 The Moon Container 0.3
 encoder still rejects Apply regions, and the default module verifier and
 CodeGenerator still reject source Ref publication.
@@ -1484,9 +1485,9 @@ declaration table, and `emitNativeLibraryDescriptor` emits those rows. The
 loader now binds any separate v4 Ref/unit candidate rows, as well as the v1
 rows, to the proof export digest. The ordinary Native build now prepares a
 proof-bound in-memory module with the verified source-derived v4 row, generated
-wrapper and proof claim beside the v1 rows. It blocks artifact linking until
-the sealed image and loaded v4 entry can be checked against that proof, then
-typed facts must pass through pinned lookup without exposing a raw pointer.
+wrapper and proof claim beside the v1 rows. It links and validates a temporary
+preview, then removes it. Public output remains gated until typed facts pass
+through pinned lookup without exposing a raw pointer.
 The existing artifact digest and trust record then bind the rebuilt image and
 its export digest. `stageVerifiedNativeGeneration` currently copies only
 symbol/contract/entry/kind/flags into `GenerationBinding`; typed facts must

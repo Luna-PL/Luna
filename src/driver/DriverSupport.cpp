@@ -12,6 +12,7 @@
 #include "package/Package.h"
 #include "runtime/Runtime.h"
 #include "tooling/AnalysisSnapshot.h"
+#include <llvm/ADT/SmallString.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 #include <llvm/Support/DynamicLibrary.h>
 #include <llvm/Support/FileSystem.h>
@@ -513,16 +514,6 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
         return 1;
     }
 
-    if (surface.refUnitSource) {
-        std::cerr << diagnostic::format(
-            "native-proof",
-            "Native Ref/unit artifact link awaits v4 proof-bound loader validation",
-            inputPath, 0, 0,
-            "validate the retained v4 query against the sealed artifact before publication")
-                  << "\n";
-        return 1;
-    }
-
     const std::string artifactName = packageArtifactName(package.id);
     fs::path outputPath;
     if (!outputOverride.empty()) {
@@ -537,18 +528,103 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
         outputPath /= "lib" + artifactName + ".so";
 #endif
     }
-    if (AotLinker::build(codeGenerator, {
+    auto buildAt = [&](const fs::path& path) {
+        return AotLinker::build(codeGenerator, {
                                             inputPath,
                                             pipeline.declaredPackageName(),
                                             linkLibraries,
                                             runtimeLibrary,
                                             aotCompiler,
-                                            outputPath.string(),
+                                            path.string(),
                                             optimizationLevel,
                                             AotArtifactKind::SharedLibrary,
                                             std::nullopt,
                                             {},
-                                        }) != 0)
+                                        });
+    };
+    if (surface.refUnitSource) {
+        std::error_code tempError;
+        const fs::path tempRoot = fs::temp_directory_path(tempError);
+        if (tempError) {
+            std::cerr << diagnostic::format(
+                "native-proof", "cannot locate Native Ref/unit proof preview directory: " +
+                    tempError.message(), inputPath, 0, 0,
+                "check the temporary directory") << "\n";
+            return 1;
+        }
+        llvm::SmallString<256> previewDirectoryText;
+        std::error_code directoryError = llvm::sys::fs::createUniqueDirectory(
+            (tempRoot / "luna-native-ref-proof").string(),
+            previewDirectoryText);
+        if (directoryError) {
+            std::cerr << diagnostic::format(
+                "native-proof", "cannot create Native Ref/unit proof preview: " +
+                    directoryError.message(), inputPath, 0, 0,
+                "check the temporary directory") << "\n";
+            return 1;
+        }
+        struct PreviewCleanup {
+            fs::path directory;
+            ~PreviewCleanup() {
+                if (directory.empty()) return;
+                std::error_code ignored;
+                fs::remove_all(directory, ignored);
+            }
+        } cleanup{fs::path(previewDirectoryText.str().str())};
+        fs::path previewArtifact = cleanup.directory;
+#ifdef _WIN32
+        previewArtifact /= "luna_ref_unit_preview.dll";
+#elif defined(__APPLE__)
+        previewArtifact /= "libluna_ref_unit_preview.dylib";
+#else
+        previewArtifact /= "libluna_ref_unit_preview.so";
+#endif
+        if (buildAt(previewArtifact) != 0) return 1;
+        const fs::path previewTrust = previewArtifact.string() + ".trust";
+        NativeProofInfo previewProof;
+        if (!sealNativeArtifact(previewArtifact.string(), previewTrust.string(),
+                                previewProof, proofError)) {
+            std::cerr << diagnostic::format(
+                "native-proof", proofError, previewArtifact.string(), 0, 0,
+                "inspect the Native Ref/unit proof preview") << "\n";
+            return 1;
+        }
+        VerifiedNativeLibrary previewLoaded;
+        if (!loadVerifiedNativeLibrary(previewArtifact.string(),
+                                       previewTrust.string(), previewLoaded,
+                                       proofError) ||
+            !previewLoaded.hasRefUnitCandidate(
+                surface.refUnitSource->symbolId.value,
+                surface.refUnitSource->contractId.value)) {
+            std::cerr << diagnostic::format(
+                "native-proof",
+                proofError.empty()
+                    ? "Native Ref/unit entry is absent from the verified preview"
+                    : proofError,
+                previewArtifact.string(), 0, 0,
+                "keep the Native Ref/unit artifact unpublished") << "\n";
+            return 1;
+        }
+        previewLoaded = VerifiedNativeLibrary{};
+        std::error_code cleanupError;
+        fs::remove_all(cleanup.directory, cleanupError);
+        if (cleanupError) {
+            std::cerr << diagnostic::format(
+                "native-proof", "cannot remove Native Ref/unit proof preview: " +
+                    cleanupError.message(), cleanup.directory.string(), 0, 0,
+                "remove the private preview before building again") << "\n";
+            return 1;
+        }
+        cleanup.directory.clear();
+        std::cerr << diagnostic::format(
+            "native-proof",
+            "Native Ref/unit typed invocation remains gated after proof-bound artifact validation",
+            inputPath, 0, 0,
+            "complete pinned typed lookup and invocation before publication")
+                  << "\n";
+        return 1;
+    }
+    if (buildAt(outputPath) != 0)
         return 1;
 
     NativeProofInfo proofInfo;

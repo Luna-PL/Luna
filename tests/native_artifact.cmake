@@ -165,10 +165,12 @@ execute_process(
     OUTPUT_VARIABLE ref_apply_build_output
     ERROR_VARIABLE ref_apply_build_error)
 string(FIND "${ref_apply_build_output}\n${ref_apply_build_error}"
-       "Native Ref/unit artifact link awaits v4 proof-bound loader validation"
+       "Native Ref/unit typed invocation remains gated after proof-bound artifact validation"
        ref_apply_publication_gate)
 if(ref_apply_build_result EQUAL 0 OR ref_apply_publication_gate EQUAL -1 OR
-   EXISTS "${ref_apply_artifact}" OR EXISTS "${ref_apply_artifact}.trust")
+   EXISTS "${ref_apply_artifact}" OR EXISTS "${ref_apply_artifact}.trust" OR
+   EXISTS "${ref_apply_artifact}.ll" OR EXISTS "${ref_apply_artifact}.o" OR
+   EXISTS "${ref_apply_artifact}.luna-link-state")
     message(FATAL_ERROR
         "Native Ref/unit generation bypassed the artifact proof gate.\n"
         "${ref_apply_build_output}\n${ref_apply_build_error}")
