@@ -573,8 +573,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         failure = "function has no generated symbol";
         return false;
     }
-    // The module-level verifier intentionally rejects all source Refs today.
-    // Validate the sealed CFG on its own before asking codegen to traverse it.
+    // Native library preparation can now admit one source Ref candidate.
+    // Validate its sealed CFG independently before codegen traverses it.
     moon::Verifier cfgVerifier;
     if (!function.controlFlow || !function.controlFlow->sealed ||
         function.body || function.isExtern ||

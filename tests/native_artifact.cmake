@@ -143,6 +143,22 @@ if(ref_apply_check_result EQUAL 0 OR ref_apply_check_gate EQUAL -1)
         "General source checking admitted the Native-only Ref/unit preparation.\n"
         "${ref_apply_check_output}\n${ref_apply_check_error}")
 endif()
+foreach(non_native_target moon cffi)
+    execute_process(
+        COMMAND "${LUNA_EXECUTABLE}" build "${ref_apply_package_dir}"
+                -t "${non_native_target}" -O2
+        RESULT_VARIABLE ref_apply_other_result
+        OUTPUT_VARIABLE ref_apply_other_output
+        ERROR_VARIABLE ref_apply_other_error)
+    string(FIND "${ref_apply_other_output}\n${ref_apply_other_error}"
+           "RuntimeFragmentRef source import/dropGlue/wire ABI is not implemented"
+           ref_apply_other_gate)
+    if(ref_apply_other_result EQUAL 0 OR ref_apply_other_gate EQUAL -1)
+        message(FATAL_ERROR
+            "${non_native_target} build admitted Native-only Ref/unit preparation.\n"
+            "${ref_apply_other_output}\n${ref_apply_other_error}")
+    endif()
+endforeach()
 execute_process(
     COMMAND "${LUNA_EXECUTABLE}" build "${ref_apply_package_dir}" -t native -O2
     RESULT_VARIABLE ref_apply_build_result
