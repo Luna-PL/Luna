@@ -3,6 +3,9 @@
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
+
+#include "driver/NativeArtifact.h"
 
 namespace moon {
 struct Module;
@@ -78,6 +81,16 @@ bool emitNativeRefUnitStatusWrapper(
     const moon::Module& program, const moon::FunctionDecl& function,
     llvm::Module& generated, const std::string& wrapperLinkageName,
     std::string& error);
+
+// Derives the v4 proof row only for a sealed public function whose exact
+// target Slot is already present in the proof-bound v1 public registry. The
+// caller appends the returned row before embedding the artifact proof.
+bool deriveNativeRefUnitV4ProofClaim(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    const llvm::Module& generated, const std::string& wrapperLinkageName,
+    const std::vector<luna::driver::NativeExportSpec>& v1Exports,
+    const luna::driver::NativeProofSpec& proof,
+    std::string& claim, std::string& error);
 
 // Emits one v4 candidate only after rederiving its sealed source and exact
 // generated preflight. The caller must separately prove the body failure path

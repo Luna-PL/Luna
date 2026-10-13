@@ -2763,6 +2763,96 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             *sourceApplyModule, *sourceApplyEntry, v4Module,
             emittedV4Name, unitSourceError))
         return fail("Native v4 reusable status wrapper lost its source pairing");
+    const auto* proofSlot = sourceApplyModule->findDeclaration(*unitTarget);
+    if (!proofSlot || proofSlot->kind != moon::DeclarationKind::Slot)
+        return fail("Native v4 proof source lost its target Slot");
+    luna::driver::NativeExportSpec proofSlotExport;
+    proofSlotExport.declarationKind = LUNA_NATIVE_DECLARATION_SLOT_V1;
+    proofSlotExport.symbolId = proofSlot->symbolId.value;
+    proofSlotExport.contractId = proofSlot->contractId.value;
+    proofSlotExport.linkageName = proofSlot->linkageName;
+    luna::driver::NativeProofSpec v4Proof;
+    v4Proof.packageId = sourceApplyModule->name;
+    v4Proof.packageVersion = "private-test";
+    v4Proof.targetAbi = "private-test";
+    v4Proof.compilerIdentity = "luna/private-test";
+    v4Proof.exportedDescriptors.push_back(
+        luna::driver::canonicalNativeExport(proofSlotExport));
+    moon::ExportRecord publicApply;
+    publicApply.name = sourceApplyEntry->generatedSymbolName;
+    publicApply.declaration = {
+        sourceApplyEntry->symbolId, sourceApplyEntry->contractId};
+    publicApply.type = sourceApplyModule->findDeclarationById(
+        sourceApplyEntry->declarationId)->type;
+    publicApply.kind = moon::DeclarationKind::Function;
+    sourceApplyEntry->isExported = true;
+    sourceApplyModule->exports.push_back(publicApply);
+    std::string v4Claim;
+    if (!luna::codegen::deriveNativeRefUnitV4ProofClaim(
+            *sourceApplyModule, *sourceApplyEntry, v4Module,
+            emittedV4Name, {proofSlotExport}, v4Proof,
+            v4Claim, unitSourceError) ||
+        v4Claim != emittedV4.canonicalRow())
+        return fail("Native v4 proof claim lost its public source and Slot");
+    v4Proof.exportedDescriptors.push_back(v4Claim);
+    std::vector<uint8_t> v4ProofRecord;
+    if (!luna::driver::makeNativeProofPlaceholder(
+            v4Proof, v4ProofRecord, unitSourceError))
+        return fail("Native v4 claim could not enter an artifact proof");
+    const auto expectedProofDigest = luna::driver::digestNativeTypedExports(
+        v4Proof.exportedDescriptors);
+    if (v4ProofRecord.size() < 56 + expectedProofDigest.size() ||
+        !std::equal(expectedProofDigest.begin(), expectedProofDigest.end(),
+                    v4ProofRecord.begin() + 56))
+        return fail("Native v4 proof claim changed the artifact export digest");
+    v4Proof.exportedDescriptors.pop_back();
+    const auto rejectedClaim = [&](
+        const std::vector<luna::driver::NativeExportSpec>& exports,
+        const luna::driver::NativeProofSpec& proof) {
+        std::string rejected = "unchanged";
+        std::string reason;
+        return !luna::codegen::deriveNativeRefUnitV4ProofClaim(
+                   *sourceApplyModule, *sourceApplyEntry, v4Module,
+                   emittedV4Name, exports, proof, rejected, reason) &&
+            rejected == "unchanged";
+    };
+    auto changedSlotExport = proofSlotExport;
+    changedSlotExport.contractId = "wrong-contract";
+    auto aliasedFunction = proofSlotExport;
+    aliasedFunction.symbolId = sourceApplyEntry->symbolId.value;
+    if (!rejectedClaim({}, v4Proof) ||
+        !rejectedClaim({changedSlotExport}, v4Proof) ||
+        !rejectedClaim({proofSlotExport, proofSlotExport}, v4Proof) ||
+        !rejectedClaim({proofSlotExport, aliasedFunction}, v4Proof))
+        return fail("Native v4 proof claim accepted a missing or aliased v1 Slot");
+    auto missingSlotProof = v4Proof;
+    missingSlotProof.exportedDescriptors.clear();
+    auto wrongPackageProof = v4Proof;
+    wrongPackageProof.packageId = "foreign-package";
+    if (!rejectedClaim({proofSlotExport}, missingSlotProof) ||
+        !rejectedClaim({proofSlotExport}, wrongPackageProof))
+        return fail("Native v4 proof claim omitted its package or v1 row");
+    sourceApplyModule->exports.back().type = proofSlot->type;
+    const bool forgedFunctionExportRejected =
+        rejectedClaim({proofSlotExport}, v4Proof);
+    sourceApplyModule->exports.back().type = publicApply.type;
+    auto publicSlot = std::find_if(
+        sourceApplyModule->exports.begin(), sourceApplyModule->exports.end(),
+        [&](const moon::ExportRecord& exported) {
+            return exported.declaration == *unitTarget;
+        });
+    if (publicSlot == sourceApplyModule->exports.end())
+        return fail("Native v4 proof source has no exported Slot record");
+    publicSlot->kind = moon::DeclarationKind::Function;
+    const bool forgedSlotExportRejected =
+        rejectedClaim({proofSlotExport}, v4Proof);
+    publicSlot->kind = moon::DeclarationKind::Slot;
+    if (!forgedFunctionExportRejected || !forgedSlotExportRejected)
+        return fail("Native v4 proof claim accepted a forged public record");
+    sourceApplyEntry->isExported = false;
+    if (!rejectedClaim({proofSlotExport}, v4Proof))
+        return fail("Native v4 proof claim accepted a private source function");
+    sourceApplyModule->exports.pop_back();
     auto* v4Wrapper = llvm::Function::Create(
         llvm::FunctionType::get(v4I32, {v4Pointer, v4Pointer}, false),
         llvm::Function::ExternalLinkage, unitWrapper, v4Module);

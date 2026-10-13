@@ -1272,6 +1272,14 @@ pairing and preflight checks. The private JIT uses that emitter and retains
 its disposable v4 descriptor proof. Ordinary Native build still needs to
 invoke it with a public export, emit the matching proof claim and bind the
 artifact before any typed host lookup.
+Producer-side v4 proof-claim derivation now requires the preflight-proven
+wrapper, an exact public function record, the target public Slot in the v1
+registry and matching v1 proof rows. A synthetic publication fixture embeds
+the resulting canonical v4 row in a Native proof placeholder and checks its
+digest; missing, changed, duplicate or aliased Slot rows and forged public
+records fail. This does not enter ordinary Native build: the source verifier
+still gates context-dependent exports and executable Ref publication, while
+ordinary codegen rejects Ref modules before artifact generation.
 Generated outlined Apply continuations now Drop active context owners and
 return the explicit continuation failure result `-1` on context-derivation or
 Slot-dispatch failure. Runtime maps that result to dispatch execution failure,

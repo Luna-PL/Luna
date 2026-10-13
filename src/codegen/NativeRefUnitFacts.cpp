@@ -512,6 +512,68 @@ bool emitNativeRefUnitStatusWrapper(
     return true;
 }
 
+bool deriveNativeRefUnitV4ProofClaim(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    const llvm::Module& generated, const std::string& wrapperLinkageName,
+    const std::vector<luna::driver::NativeExportSpec>& v1Exports,
+    const luna::driver::NativeProofSpec& proof,
+    std::string& claim, std::string& error) {
+    NativeRefUnitDescriptorV4Candidate candidate;
+    if (!derivePreflightNativeRefUnitDescriptorV4Candidate(
+            program, function, generated, wrapperLinkageName,
+            candidate, error))
+        return false;
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto publicDeclaration = [&](const moon::DeclarationRecord& record) {
+        return std::any_of(program.exports.begin(), program.exports.end(),
+            [&](const moon::ExportRecord& exported) {
+                return exported.declaration == moon::DeclarationRef{
+                           record.symbolId, record.contractId} &&
+                    exported.kind == record.kind &&
+                    exported.type == record.type && exported.abi.empty();
+            });
+    };
+    const auto* sourceRecord = program.findDeclarationById(
+        function.declarationId);
+    if (!function.isExported || proof.packageId != program.name ||
+        !sourceRecord || !publicDeclaration(*sourceRecord))
+        return reject("Native v4 proof claim has no sealed public function");
+    const auto target = moon::DeclarationRef{
+        luna::identity::SymbolId{candidate.source.slotSymbolId},
+        luna::identity::ContractId{candidate.source.slotContractId}};
+    const auto* slot = program.findDeclaration(target);
+    if (!slot || slot->kind != moon::DeclarationKind::Slot ||
+        !publicDeclaration(*slot))
+        return reject("Native v4 proof claim has no public target Slot");
+    std::vector<std::string> v1Claims;
+    v1Claims.reserve(v1Exports.size());
+    size_t matchedSlots = 0;
+    for (const auto& exported : v1Exports) {
+        v1Claims.push_back(luna::driver::canonicalNativeExport(exported));
+        if (exported.symbolId == candidate.source.functionSymbolId ||
+            exported.linkageName == wrapperLinkageName)
+            return reject("Native v4 proof claim aliases a v1 export");
+        if (exported.symbolId != candidate.source.slotSymbolId) continue;
+        if (exported.contractId != candidate.source.slotContractId ||
+            exported.declarationKind != LUNA_NATIVE_DECLARATION_SLOT_V1 ||
+            exported.flags != 0 ||
+            exported.linkageName != slot->linkageName)
+            return reject("Native v4 proof claim changed its v1 Slot target");
+        ++matchedSlots;
+    }
+    auto proofClaims = proof.exportedDescriptors;
+    std::sort(v1Claims.begin(), v1Claims.end());
+    std::sort(proofClaims.begin(), proofClaims.end());
+    if (matchedSlots != 1 || v1Claims != proofClaims)
+        return reject("Native v4 proof claim has no exact proof-bound v1 Slot");
+    claim = candidate.canonicalRow();
+    error.clear();
+    return true;
+}
+
 bool emitNativeRefUnitDescriptorV4Candidate(
     const moon::Module& program, const moon::FunctionDecl& function,
     llvm::Module& generated, const std::string& wrapperLinkageName,

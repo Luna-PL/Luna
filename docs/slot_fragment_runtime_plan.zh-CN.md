@@ -963,6 +963,12 @@ context 和 Ref switch 使用各自的检查结果，受保护的 body 调用按
 随后再次执行配对与前置状态证明。私有 JIT 改用该生成器，其 v4 描述符证明仍随
 一次性 module 丢弃。普通 Native 构建仍须将它接到公开导出、发射相应 proof
 声明并绑定产物，之后才能提供类型化宿主 lookup。
+生产侧现可推导 v4 proof 声明候选，但须先证明 wrapper 的前置状态路径，并核对
+精确的公开函数记录、v1 登记表中的公开目标 Slot 及对应的 v1 proof 行。合成发布
+测试将规范 v4 行写入 Native proof 占位记录并核对摘要；缺失、篡改、重复或别名的
+Slot 行及伪造的公开记录均被拒绝。这一步尚未接入普通 Native 构建：源码验证器
+仍阻止依赖 context 的公开函数及可执行 Ref 发布，普通 codegen 也会在产物生成
+前拒绝包含 Ref 的 module。
 生成的 outlined Apply 续体在 context 派生或 Slot 派发失败时先 Drop 活跃
 context owner，再返回显式失败值 `-1`。Runtime 将其映射为分派执行失败，
 包括嵌套 resume；它不算续体逃逸。私有单 Ref／unit 根 body 正常返回 `0`，
