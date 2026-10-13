@@ -270,7 +270,8 @@ bool OwnershipChecker::mergeFallthroughStates(const CheckerState& before,
                                               const CheckerState& right,
                                               const ASTNode* controlFlow) {
     const char* construct =
-        dynamic_cast<const SlotInvokeStmt*>(controlFlow) ? "slot" : "if";
+        dynamic_cast<const SlotInvokeStmt*>(controlFlow) ? "slot" :
+        dynamic_cast<const MatchStmt*>(controlFlow) ? "match" : "if";
     if (before.scopes.size() != left.scopes.size() ||
         before.scopes.size() != right.scopes.size()) {
         error("internal ownership-state mismatch while merging control-flow paths",

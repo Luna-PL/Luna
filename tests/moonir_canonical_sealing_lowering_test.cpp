@@ -1219,6 +1219,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "slot checkpoint(value: i32);\n"
         "slot shadow(value: i32);\n"
         "enum RefChoice { Empty; Item(i32, RuntimeFragmentRef<checkpoint>); }\n"
+        "enum RefRoute { Left; Right; }\n"
         "fn observe(selected: RuntimeFragmentRef<checkpoint>) -> unit {}\n"
         "fn accept(selected: affine RuntimeFragmentRef<checkpoint>) -> unit {}\n"
         "fn cleanup_record(selected: affine RuntimeFragmentRef<checkpoint>) "
@@ -1327,6 +1328,19 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "if choose { let moved = move selected; spare; return 17; } "
         "let moved = move selected; spare; return 23; }; "
         "return delayed(); }\n"
+        "fn invoke_runtime_match_closure_pair(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>, choose: bool) -> i32 { "
+        "let selected = move first; let delayed = fn() -> unit { selected; }; "
+        "let route = RefRoute::Left(); "
+        "if choose { route = RefRoute::Right(); } "
+        "match route { "
+        "RefRoute::Left => { delayed(); return 23; }, "
+        "RefRoute::Right => { delayed(); return 17; } } }\n"
+        "fn invoke_runtime_loop_closure_pair(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>, choose: bool) -> i32 { "
+        "let selected = move first; let delayed = fn() -> unit { selected; }; "
+        "while choose { delayed(); return 17; } "
+        "delayed(); return 23; }\n"
         "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
@@ -1369,6 +1383,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* invokeRuntimeBranchClosurePair = nullptr;
     moon::FunctionDecl* invokeRuntimeReturnClosurePair = nullptr;
     moon::FunctionDecl* invokeRuntimePartialClosurePair = nullptr;
+    moon::FunctionDecl* invokeRuntimeMatchClosurePair = nullptr;
+    moon::FunctionDecl* invokeRuntimeLoopClosurePair = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
     for (auto& declaration : sourceRefModule->declarations) {
@@ -1426,6 +1442,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 invokeRuntimeReturnClosurePair = function;
             if (function->name == "invoke_runtime_partial_closure_pair")
                 invokeRuntimePartialClosurePair = function;
+            if (function->name == "invoke_runtime_match_closure_pair")
+                invokeRuntimeMatchClosurePair = function;
+            if (function->name == "invoke_runtime_loop_closure_pair")
+                invokeRuntimeLoopClosurePair = function;
             if (function->name == "transfer") transfer = function;
         }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
@@ -1446,6 +1466,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !invokeBranchPartialClosureTrue || !invokeBranchPartialClosureFalse ||
         !invokeRuntimeBranchClosurePair || !invokeRuntimeReturnClosurePair ||
         !invokeRuntimePartialClosurePair ||
+        !invokeRuntimeMatchClosurePair || !invokeRuntimeLoopClosurePair ||
         !transfer ||
         observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
@@ -1955,7 +1976,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                            invokeReturnBranchClosureTrue,
                            invokeReturnBranchClosureFalse,
                            invokeRuntimeBranchClosurePair,
-                           invokeRuntimeReturnClosurePair}) {
+                           invokeRuntimeReturnClosurePair,
+                           invokeRuntimeMatchClosurePair,
+                           invokeRuntimeLoopClosurePair}) {
         if (!function->controlFlow)
             return fail("branch-invoked source Ref closure has no sealed CFG");
         const auto& graph = *function->controlFlow;
@@ -2027,6 +2050,39 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                     "some paths through `if`") != std::string::npos;
             }))
         return fail("source Ref closure retained inconsistent branch ownership");
+    auto oneSidedMatchClosure = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "slot checkpoint(value: i32);\n"
+        "enum RefRoute { Left; Right; }\n"
+        "fn one_sided_match(first: affine RuntimeFragmentRef<checkpoint>) "
+        "-> unit { let selected = move first; "
+        "let delayed = fn() -> unit { selected; }; "
+        "match RefRoute::Left() { "
+        "RefRoute::Left => { delayed(); }, "
+        "RefRoute::Right => {} } }\n",
+        "<one-sided-match-source-ref-closure>");
+    if (oneSidedMatchClosure.success() ||
+        !std::any_of(oneSidedMatchClosure.errors().begin(),
+            oneSidedMatchClosure.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "owned heap value 'delayed' is freed or moved on only "
+                    "some paths through `match`") != std::string::npos;
+            }))
+        return fail("source Ref closure retained inconsistent match ownership");
+    auto loopConsumedClosure = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "slot checkpoint(value: i32);\n"
+        "fn loop_consumed(first: affine RuntimeFragmentRef<checkpoint>) "
+        "-> unit { let selected = move first; "
+        "let delayed = fn() -> unit { selected; }; "
+        "while false { delayed(); } }\n",
+        "<loop-consumed-source-ref-closure>");
+    if (loopConsumedClosure.success() ||
+        !std::any_of(loopConsumedClosure.errors().begin(),
+            loopConsumedClosure.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "loop body changes ownership, borrow, or in-flight state "
+                    "of 'delayed'") != std::string::npos;
+            }))
+        return fail("source Ref closure consumed outside a returning loop path");
     auto repeatedBranchClosure = luna::tooling::AnalysisSnapshot::analyzeSource(
         "slot checkpoint(value: i32);\n"
         "fn repeated_branch(first: affine RuntimeFragmentRef<checkpoint>) "

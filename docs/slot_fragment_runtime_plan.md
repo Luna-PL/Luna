@@ -1412,9 +1412,16 @@ move functions return markers `23` and `17` for the selected paths; each run
 also releases both fresh Runtime-issued Ref handles once and expires its
 generation pin. The selector and scalar result are accepted only by the
 disposable test proof; the ordinary proof and public Ref ingress remain
-gated. Next, check affine closure ownership joins across `match` and loop
-control flow. The updated strict build passes all 81 tests,
-and the focused frontend/canonical tests pass under ASAN/UBSan.
+gated. The same selector probe now covers a `match` over a runtime-selected
+copyable enum and a `while` whose body consumes the closure and returns.
+Both paths through each CFG return the expected scalar marker, release two
+fresh Runtime-issued Ref handles once, and expire the generation pin. The
+frontend rejects a `match` that consumes the closure in only one continuing
+arm and a loop body that consumes an outer closure but could run again; the
+`match` ownership diagnostic now names the correct construct. Next, check
+partial captured-field moves under `match` and returning loops, then finish
+the typed Ref ingress/export contract. The updated strict build passes all
+81 tests, and the focused frontend/canonical tests pass under ASAN/UBSan.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration
