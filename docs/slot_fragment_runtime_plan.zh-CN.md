@@ -966,13 +966,18 @@ context 和 Ref switch 使用各自的检查结果，受保护的 body 调用按
 生产侧现可推导 v4 proof 声明候选，但须先证明 wrapper 的前置状态路径，并核对
 精确的公开函数记录、v1 登记表中的公开目标 Slot 及对应的 v1 proof 行。合成发布
 测试将规范 v4 行写入 Native proof 占位记录并核对摘要；缺失、篡改、重复或别名的
-Slot 行及伪造的公开记录均被拒绝。这一步尚未接入普通 Native 构建：源码验证器
-仍阻止依赖 context 的公开函数及可执行 Ref 发布，普通 codegen 也会在产物生成
-前拒绝包含 Ref 的 module。
+Slot 行及伪造的公开记录均被拒绝。proof 声明的生成入口尚未被普通 Native 构建
+调用；普通 codegen 仍会在生成产物前拒绝包含 Ref 的 module。
 现有协同生成入口先验证待写入的 proof 占位记录，再从同一源码和 wrapper 发射单行
 v4 descriptor，成功后才向 proof 规格附加规范行。合成测试一起核对 descriptor 和
 proof 摘要；无效的 proof 身份或重复查询不会改写 proof 规格。真实产物的嵌入与封印
 仍受发布门禁限制。
+Native 库构建现选择仅用于准备阶段的验证模式：CFG 封闭前，只对具有精确公开
+Slot 的公开 shared-borrow Ref／unit 签名放行；优化后，管线重新推导封闭 Apply
+源码事实，并拒绝其他 Ref 类型、函数、局部载体或导入。普通 `check` 与 Moon 构建
+仍使用发布门禁。真实 Native 包中的单个合格 Apply 会到达普通 codegen 的拒绝，
+不会产生制品；第二个 Ref 函数在准备阶段被拒绝。此模式只允许源码候选进入
+Native 管线，尚未开放公开入口。
 生成的 outlined Apply 续体在 context 派生或 Slot 派发失败时先 Drop 活跃
 context owner，再返回显式失败值 `-1`。Runtime 将其映射为分派执行失败，
 包括嵌套 resume；它不算续体逃逸。私有单 Ref／unit 根 body 正常返回 `0`，
@@ -998,7 +1003,7 @@ v4 源码事实仅准入没有其他词法清理义务的 CFG；其余清理须�
 ABI。Fragment 描述符对应 factory／environment／activation 执行，不能代替源码
 函数入口。下一步须让限定的封闭 Ref 源码通过 MoonIR 与 Native 生成，
 将已发射的 v4 行绑定到产物 proof，再把类型化事实接入固定 lookup 与调用路径。
-Moon Container 0.3 编码器仍拒绝 Apply region，module verifier 和 CodeGenerator
+Moon Container 0.3 编码器仍拒绝 Apply region，默认 module verifier 和 CodeGenerator
 也仍拒绝发布源码 Ref。
 显式选择的 0.4 Type 与 Code section 编解码现可往返封闭源码的
 `RuntimeFragmentRef<S>` 记录及其内部 Apply 绑定。Type 行保留精确的内层

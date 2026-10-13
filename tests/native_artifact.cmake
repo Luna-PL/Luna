@@ -19,6 +19,7 @@ set(package_dir "${work_dir}/native_library")
 set(enemy_package_dir "${work_dir}/native_enemy")
 set(context_package_dir "${work_dir}/native_context")
 set(ref_package_dir "${work_dir}/native_ref")
+set(ref_apply_package_dir "${work_dir}/native_ref_apply")
 set(owned_return_package_dir "${work_dir}/native_owned_return")
 set(owned_parameter_package_dir "${work_dir}/native_owned_parameter")
 file(REMOVE_RECURSE "${work_dir}")
@@ -41,6 +42,14 @@ file(RENAME "${work_dir}/cffi_typed_export" "${ref_package_dir}")
 file(APPEND "${ref_package_dir}/src/api.luna"
      "\nexport slot ref_checkpoint(value: i32);\n"
      "export fn host_ref(selected: RuntimeFragmentRef<ref_checkpoint>) -> unit {}\n")
+file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/cffi_typed_export"
+     DESTINATION "${work_dir}")
+file(RENAME "${work_dir}/cffi_typed_export" "${ref_apply_package_dir}")
+file(APPEND "${ref_apply_package_dir}/src/api.luna"
+     "\nexport slot ref_checkpoint(value: i32);\n"
+     "export runtime fn host_ref(selected: RuntimeFragmentRef<ref_checkpoint>) -> unit {\n"
+     "  apply selected { ref_checkpoint(1) {} }\n"
+     "}\n")
 file(COPY "${LUNA_SOURCE_DIR}/tests/fixtures/packages/cffi_typed_export"
      DESTINATION "${work_dir}")
 file(RENAME "${work_dir}/cffi_typed_export" "${owned_return_package_dir}")
@@ -85,6 +94,8 @@ string(REPLACE "${package_dir}" "${context_package_dir}"
        context_artifact "${artifact}")
 string(REPLACE "${package_dir}" "${ref_package_dir}"
        ref_artifact "${artifact}")
+string(REPLACE "${package_dir}" "${ref_apply_package_dir}"
+       ref_apply_artifact "${artifact}")
 string(REPLACE "${package_dir}" "${owned_return_package_dir}"
        owned_return_artifact "${artifact}")
 string(REPLACE "${package_dir}" "${owned_parameter_package_dir}"
@@ -110,13 +121,57 @@ execute_process(
     OUTPUT_VARIABLE ref_build_output
     ERROR_VARIABLE ref_build_error)
 string(FIND "${ref_build_output}\n${ref_build_error}"
-       "RuntimeFragmentRef source import/dropGlue/wire ABI is not implemented"
+       "Native Ref/unit candidate has no sealed source callable"
        ref_gate_diagnostic)
 if(ref_build_result EQUAL 0 OR ref_gate_diagnostic EQUAL -1 OR
    EXISTS "${ref_artifact}" OR EXISTS "${ref_artifact}.trust")
     message(FATAL_ERROR
         "Native v1 published a RuntimeFragmentRef source entry without a typed ABI.\n"
         "${ref_build_output}\n${ref_build_error}")
+endif()
+
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" check "${ref_apply_package_dir}"
+    RESULT_VARIABLE ref_apply_check_result
+    OUTPUT_VARIABLE ref_apply_check_output
+    ERROR_VARIABLE ref_apply_check_error)
+string(FIND "${ref_apply_check_output}\n${ref_apply_check_error}"
+       "RuntimeFragmentRef source import/dropGlue/wire ABI is not implemented"
+       ref_apply_check_gate)
+if(ref_apply_check_result EQUAL 0 OR ref_apply_check_gate EQUAL -1)
+    message(FATAL_ERROR
+        "General source checking admitted the Native-only Ref/unit preparation.\n"
+        "${ref_apply_check_output}\n${ref_apply_check_error}")
+endif()
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${ref_apply_package_dir}" -t native -O2
+    RESULT_VARIABLE ref_apply_build_result
+    OUTPUT_VARIABLE ref_apply_build_output
+    ERROR_VARIABLE ref_apply_build_error)
+string(FIND "${ref_apply_build_output}\n${ref_apply_build_error}"
+       "1 private Ref apply body(s) verified and discarded"
+       ref_apply_codegen_gate)
+if(ref_apply_build_result EQUAL 0 OR ref_apply_codegen_gate EQUAL -1 OR
+   EXISTS "${ref_apply_artifact}" OR EXISTS "${ref_apply_artifact}.trust")
+    message(FATAL_ERROR
+        "Native Ref/unit preparation bypassed the codegen publication gate.\n"
+        "${ref_apply_build_output}\n${ref_apply_build_error}")
+endif()
+file(APPEND "${ref_apply_package_dir}/src/api.luna"
+     "\nfn extra_ref(value: RuntimeFragmentRef<ref_checkpoint>) -> unit {}\n")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${ref_apply_package_dir}" -t native -O2
+    RESULT_VARIABLE extra_ref_build_result
+    OUTPUT_VARIABLE extra_ref_build_output
+    ERROR_VARIABLE extra_ref_build_error)
+string(FIND "${extra_ref_build_output}\n${extra_ref_build_error}"
+       "Native Ref/unit preparation has another Ref callable"
+       extra_ref_gate)
+if(extra_ref_build_result EQUAL 0 OR extra_ref_gate EQUAL -1 OR
+   EXISTS "${ref_apply_artifact}" OR EXISTS "${ref_apply_artifact}.trust")
+    message(FATAL_ERROR
+        "Native Ref/unit preparation admitted another Ref callable.\n"
+        "${extra_ref_build_output}\n${extra_ref_build_error}")
 endif()
 
 execute_process(

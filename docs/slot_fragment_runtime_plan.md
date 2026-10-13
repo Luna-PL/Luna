@@ -1277,15 +1277,22 @@ wrapper, an exact public function record, the target public Slot in the v1
 registry and matching v1 proof rows. A synthetic publication fixture embeds
 the resulting canonical v4 row in a Native proof placeholder and checks its
 digest; missing, changed, duplicate or aliased Slot rows and forged public
-records fail. This does not enter ordinary Native build: the source verifier
-still gates context-dependent exports and executable Ref publication, while
-ordinary codegen rejects Ref modules before artifact generation.
+records fail. The claim helper is not yet called by ordinary Native build;
+ordinary codegen still rejects Ref modules before artifact generation.
 The candidate descriptor and proof claim now have a coordinated producer
 entry: it validates the prospective proof placeholder, emits the one-row v4
 descriptor from the same source and wrapper, and only then appends the row to
 the proof specification. Synthetic tests check the descriptor and proof digest
 together; an invalid proof identity or duplicate query leaves the proof
 specification unchanged. Embedding and sealing a real artifact remain gated.
+Native library builds now select a preparation-only verifier policy. Before
+CFG sealing it admits the exported shared-borrow Ref/unit signature only with
+an exact public Slot; after optimization the pipeline rederives the sealed
+Apply source facts and rejects another Ref type, callable, local carrier or
+import. General `check` and Moon builds retain the publication gate. A real
+Native package with one eligible Apply reaches the ordinary codegen refusal
+without emitting an artifact; a second Ref callable fails during preparation.
+This admits a source candidate to the Native pipeline, not a public entry.
 Generated outlined Apply continuations now Drop active context owners and
 return the explicit continuation failure result `-1` on context-derivation or
 Slot-dispatch failure. Runtime maps that result to dispatch execution failure,
@@ -1320,8 +1327,8 @@ for a source function entry. The next step is to admit the narrow sealed Ref
 source through MoonIR and Native generation, bind its emitted v4 row to the
 artifact proof, then connect its typed facts to a pinned lookup and call path.
 The Moon Container 0.3
-encoder still rejects Apply regions, and the module
-verifier and CodeGenerator still reject source Ref publication.
+encoder still rejects Apply regions, and the default module verifier and
+CodeGenerator still reject source Ref publication.
 Explicit 0.4 Type- and Code-section codecs now round-trip a sealed source
 `RuntimeFragmentRef<S>` record and its internal Apply binding. The Type row
 preserves the exact inner Slot TypeId, type arguments and canonical identities;

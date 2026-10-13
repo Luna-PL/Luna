@@ -202,8 +202,11 @@ void Verifier::verifyFunction(
     if (function.isKernel && function.isCodegenReachable && !module.features.kernel)
         error(function.location, "kernel '" + function.name +
                                  "' is present without the kernel feature");
+    const bool nativeRefUnitCandidate =
+        nativeRefUnitCandidateShape(function, module);
     if (function.requiresFragmentContext &&
-        (function.isExtern || function.isKernel || function.isExported ||
+        (function.isExtern || function.isKernel ||
+         (function.isExported && !nativeRefUnitCandidate) ||
          function.name == "main"))
         error(function.location, "function '" + function.name +
               "' reaches a runtime Slot but has no runtime-aware public entry ABI");
@@ -213,7 +216,8 @@ void Verifier::verifyFunction(
     if (function.body) {
         verifyBlock(function.body.get(), module, function.name);
     } else if (function.controlFlow) {
-        if (!function.controlFlow->runtimeRefApplies.empty())
+        if (!function.controlFlow->runtimeRefApplies.empty() &&
+            !nativeRefUnitCandidate)
             error(function.location,
                   "RuntimeFragmentRef apply context override is internal-only; "
                   "executable source lowering is not implemented");

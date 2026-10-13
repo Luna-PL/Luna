@@ -156,6 +156,102 @@ bool deriveNativeRefUnitSourceFacts(
     return true;
 }
 
+bool verifyNativeRefUnitModulePreparation(
+    const moon::Module& program, std::string& error) {
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const moon::TypeRecord* ref = nullptr;
+    for (const auto& type : program.typeTable) {
+        if (type.kind != TypeKind::RuntimeFragmentRef) continue;
+        if (ref)
+            return reject("Native Ref/unit preparation requires one exact Ref type");
+        ref = &type;
+    }
+    if (!ref) {
+        error.clear();
+        return true;
+    }
+    const moon::FunctionDecl* source = nullptr;
+    const auto inspectFunction = [&](const moon::FunctionDecl& function) {
+        const bool signatureUsesRef = function.returnType == ref->id ||
+            std::any_of(function.params.begin(), function.params.end(),
+                [&](const moon::Param& parameter) {
+                    return parameter.type == ref->id;
+                });
+        const bool localsUseRef = function.controlFlow &&
+            std::any_of(function.controlFlow->locals.begin(),
+                function.controlFlow->locals.end(),
+                [&](const moon::LocalRecord& local) {
+                    return local.type == ref->id;
+                });
+        if (!signatureUsesRef && !localsUseRef) return true;
+        if (source || !function.isExported ||
+            function.params.size() != 1 ||
+            function.params.front().type != ref->id ||
+            !function.controlFlow ||
+            std::any_of(function.controlFlow->locals.begin(),
+                function.controlFlow->locals.end(),
+                [&](const moon::LocalRecord& local) {
+                    return local.type == ref->id &&
+                        local.kind != moon::LocalKind::Parameter;
+                }))
+            return false;
+        source = &function;
+        return true;
+    };
+    for (const auto& declaration : program.declarations) {
+        if (const auto* function = dynamic_cast<const moon::FunctionDecl*>(
+                declaration.get())) {
+            if (!inspectFunction(*function))
+                return reject("Native Ref/unit preparation has another Ref callable");
+        } else if (const auto* implementation =
+                       dynamic_cast<const moon::ImplDecl*>(declaration.get())) {
+            for (const auto& method : implementation->methods)
+                if (method && !inspectFunction(*method))
+                    return reject("Native Ref/unit preparation has another Ref callable");
+        }
+    }
+    if (!source)
+        return reject("Native Ref/unit preparation has no public source");
+    NativeRefUnitSourceFacts facts;
+    if (!deriveNativeRefUnitSourceFacts(program, *source, facts, error))
+        return false;
+    const auto* sourceRecord = program.findDeclarationById(
+        source->declarationId);
+    const auto target = moon::DeclarationRef{
+        luna::identity::SymbolId{facts.slotSymbolId},
+        luna::identity::ContractId{facts.slotContractId}};
+    const auto* slot = program.findDeclaration(target);
+    const auto publicRecord = [&](const moon::DeclarationRecord& record) {
+        return std::any_of(program.exports.begin(), program.exports.end(),
+            [&](const moon::ExportRecord& exported) {
+                return exported.declaration == moon::DeclarationRef{
+                           record.symbolId, record.contractId} &&
+                    exported.kind == record.kind &&
+                    exported.type == record.type && exported.abi.empty();
+            });
+    };
+    if (!sourceRecord || !slot ||
+        !publicRecord(*sourceRecord) || !publicRecord(*slot))
+        return reject("Native Ref/unit preparation has no exact public records");
+    for (const auto& type : program.typeTable) {
+        if (type.id == sourceRecord->type) continue;
+        if (std::find(type.referencedTypeIds.begin(),
+                      type.referencedTypeIds.end(), ref->id) !=
+            type.referencedTypeIds.end())
+            return reject("Native Ref/unit preparation has another Ref type use");
+    }
+    if (std::any_of(program.imports.begin(), program.imports.end(),
+            [&](const moon::ImportRecord& imported) {
+                return imported.type == ref->id;
+            }))
+        return reject("Native Ref/unit preparation imports a Ref carrier");
+    error.clear();
+    return true;
+}
+
 std::array<std::string, 10>
 NativeRefUnitDescriptorV4Candidate::descriptorIdentities() const {
     return {source.functionSymbolId, source.functionContractId,

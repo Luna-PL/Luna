@@ -18,6 +18,7 @@ struct CompilerPipelineOptions {
     LunaOptimizationLevel optimizationLevel = LunaOptimizationLevel::O0;
     bool reserveKernelRuntime = false;
     bool aheadOfTime = false;
+    bool prepareNativeRefUnit = false;
 };
 
 struct CompilerPipelineTimings {

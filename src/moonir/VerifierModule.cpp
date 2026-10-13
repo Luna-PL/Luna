@@ -58,6 +58,39 @@ bool matchesDropTarget(
 }
 } // namespace
 
+bool Verifier::nativeRefUnitCandidateShape(
+    const FunctionDecl& function, const Module& module) const {
+    if (mPolicy != VerificationPolicy::NativeRefUnitPreparation ||
+        !function.isExported || function.packageId != module.name ||
+        function.isExtern || function.isKernel || function.isSelector ||
+        !function.typeParams.empty() || !function.abi.empty() ||
+        !function.linkName.empty() || function.params.size() != 1 ||
+        function.returnsLinear ||
+        function.returnUsage != luna::ownership::Usage::Copy)
+        return false;
+    const auto& parameter = function.params.front();
+    const auto* ref = module.findType(parameter.type);
+    const auto* result = module.findType(function.returnType);
+    const auto target = module.resolveRuntimeFragmentRefTarget(parameter.type);
+    const auto* record = module.findDeclarationById(function.declarationId);
+    if (!ref || ref->kind != TypeKind::RuntimeFragmentRef ||
+        !result || result->kind != TypeKind::Unit || !target ||
+        !isPublicSlotTarget(module, *target) || parameter.isLinear ||
+        parameter.relation != luna::ownership::Relation::SharedBorrow ||
+        parameter.usage != luna::ownership::Usage::Copy || !record ||
+        record->kind != DeclarationKind::Function ||
+        record->symbolId != function.symbolId ||
+        record->contractId != function.contractId)
+        return false;
+    return std::any_of(module.exports.begin(), module.exports.end(),
+        [&](const ExportRecord& exported) {
+            return exported.kind == DeclarationKind::Function &&
+                exported.declaration == DeclarationRef{
+                    function.symbolId, function.contractId} &&
+                exported.type == record->type && exported.abi.empty();
+        });
+}
+
 bool Verifier::verify(const Module& module) {
     mErrors.clear();
     mVerifiedTypeIds.clear();
@@ -187,7 +220,17 @@ bool Verifier::verify(const Module& module) {
             if (!module.resolveRuntimeFragmentRefTarget(type.id))
                 error({}, "RuntimeFragmentRef has no exact frozen Slot/Contract target for type '" +
                           type.id.value + "'");
-            error({}, "RuntimeFragmentRef source import/dropGlue/wire ABI is not implemented; internal type preparation cannot be published");
+            const bool nativeCandidateType = std::any_of(
+                module.declarations.begin(), module.declarations.end(),
+                [&](const auto& declaration) {
+                    const auto* function = dynamic_cast<const FunctionDecl*>(
+                        declaration.get());
+                    return function && nativeRefUnitCandidateShape(
+                        *function, module) &&
+                        function->params.front().type == type.id;
+                });
+            if (!nativeCandidateType)
+                error({}, "RuntimeFragmentRef source import/dropGlue/wire ABI is not implemented; internal type preparation cannot be published");
         }
         if (type.kind == TypeKind::Enum &&
             type.domain == luna::types::TypeDomain::Compiler &&

@@ -1,5 +1,6 @@
 #include "driver/CompilerPipeline.h"
 
+#include "codegen/NativeRefUnitFacts.h"
 #include "moonir/Lowering.h"
 #include "moonir/Optimizer.h"
 #include "moonir/Sealer.h"
@@ -72,7 +73,11 @@ bool CompilerPipeline::lowerAnalyzedProgram(const CompilerPipelineOptions& optio
     mTimings.loweringMicroseconds = elapsedMicroseconds(loweringStart);
     if (!lowerer.errors().empty()) return fail(lowerer.errors(), "moon-lower");
 
-    moon::Verifier verifier;
+    const bool nativeRefPreparation = options.prepareNativeRefUnit &&
+        mAnalysisSnapshot->packageManifest().kind == PackageKind::Library;
+    moon::Verifier verifier(nativeRefPreparation
+        ? moon::VerificationPolicy::NativeRefUnitPreparation
+        : moon::VerificationPolicy::Published);
     auto verificationStart = std::chrono::steady_clock::now();
     const bool initialVerificationSucceeded = verifier.verify(*mMoonModule);
     mTimings.verificationMicroseconds += elapsedMicroseconds(verificationStart);
@@ -118,6 +123,17 @@ bool CompilerPipeline::lowerAnalyzedProgram(const CompilerPipelineOptions& optio
     const bool optimizedVerificationSucceeded = verifier.verify(*mMoonModule);
     mTimings.verificationMicroseconds += elapsedMicroseconds(verificationStart);
     if (!optimizedVerificationSucceeded) return fail(verifier.errors(), "moon-verify");
+    if (nativeRefPreparation) {
+        std::string preparationError;
+        if (!luna::codegen::verifyNativeRefUnitModulePreparation(
+                *mMoonModule, preparationError)) {
+            diagnostic::Diagnostic diag;
+            diag.phase = "moon-verify";
+            diag.code = diagnostic::errorCode("moon", preparationError);
+            diag.message = preparationError;
+            return fail({std::move(diag)}, "moon-verify");
+        }
+    }
 
     return true;
 }

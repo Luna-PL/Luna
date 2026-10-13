@@ -2788,6 +2788,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     publicApply.kind = moon::DeclarationKind::Function;
     sourceApplyEntry->isExported = true;
     sourceApplyModule->exports.push_back(publicApply);
+    if (!luna::codegen::verifyNativeRefUnitModulePreparation(
+            *sourceApplyModule, unitSourceError))
+        return fail("Native Ref/unit preparation rejected its sealed source");
     std::string v4Claim;
     if (!luna::codegen::deriveNativeRefUnitV4ProofClaim(
             *sourceApplyModule, *sourceApplyEntry, v4Module,

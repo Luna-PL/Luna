@@ -219,7 +219,8 @@ int run(int argc, char* argv[]) {
 
     CompilerPipeline pipeline;
     if (!pipeline.compileToMoonIR(
-            {filePath, optimizationLevel, reserveKernelRuntime, cmd == "build"})) {
+            {filePath, optimizationLevel, reserveKernelRuntime, cmd == "build",
+             cmd == "build" && artifactTarget == ArtifactTarget::Native})) {
         if (jsonDiagnostics) {
             printJsonDiagnostics(pipeline.errors());
             printJsonSummary(pipeline.errors().size());

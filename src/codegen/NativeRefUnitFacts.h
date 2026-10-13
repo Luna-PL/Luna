@@ -54,6 +54,11 @@ bool deriveNativeRefUnitSourceFacts(
     const moon::Module& program, const moon::FunctionDecl& function,
     NativeRefUnitSourceFacts& facts, std::string& error);
 
+// After Native-only MoonIR preparation, admits at most one public Ref/unit
+// source and rejects other Ref uses before ordinary codegen is reached.
+bool verifyNativeRefUnitModulePreparation(
+    const moon::Module& program, std::string& error);
+
 bool deriveNativeRefUnitDescriptorV4Candidate(
     const moon::Module& program, const moon::FunctionDecl& function,
     const std::string& wrapperLinkageName,

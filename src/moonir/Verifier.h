@@ -10,13 +10,25 @@
 
 namespace moon {
 
+enum class VerificationPolicy {
+    Published,
+    // Native library preparation only. A caller must still rederive the
+    // sealed Ref/unit source facts; this never authorizes publication.
+    NativeRefUnitPreparation,
+};
+
 class Verifier {
 public:
+    explicit Verifier(
+        VerificationPolicy policy = VerificationPolicy::Published)
+        : mPolicy(policy) {}
     bool verify(const Module& module);
     bool verify(const ControlFlowGraph& graph, const Module& module);
     const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
 private:
+    bool nativeRefUnitCandidateShape(
+        const FunctionDecl& function, const Module& module) const;
     void verifyDeclaration(const Decl& declaration, const Module& module);
     void verifyFunction(const FunctionDecl& function, const Module& module,
                         bool inheritsTypeParameters = false);
@@ -60,6 +72,7 @@ private:
     std::unordered_set<std::string> mVerifiedTypeIds;
     std::unordered_set<std::string> mActiveTypeIds;
     bool mAllowTypeParameters = false;
+    VerificationPolicy mPolicy = VerificationPolicy::Published;
 };
 
 } // namespace moon
