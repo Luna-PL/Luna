@@ -2798,6 +2798,12 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             v4Claim, unitSourceError) ||
         v4Claim != emittedV4.canonicalRow())
         return fail("Native v4 proof claim lost its public source and Slot");
+    CodeGenerator proofBoundNativeModule("native-ref-unit-package");
+    const std::vector<luna::driver::NativeExportSpec> proofBoundV1Exports{
+        proofSlotExport};
+    if (!proofBoundNativeModule.generate(
+            sourceApplyModule.get(), &v4Proof, &proofBoundV1Exports))
+        return fail("Native Ref/unit source did not join ordinary codegen");
     auto claimedV4Module = llvm::CloneModule(v4Module);
     auto claimedV4Proof = v4Proof;
     if (!luna::codegen::emitNativeRefUnitV4ClaimedDescriptorCandidate(

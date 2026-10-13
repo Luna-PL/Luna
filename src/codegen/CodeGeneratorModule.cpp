@@ -558,15 +558,26 @@ CodeGenerator::loadPrivateRuntimeFragmentRefResultEntryForTest(
 bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
     moon::Module& program, FunctionDecl& function, std::string& failure,
     const luna::driver::NativeProofSpec* nativeProof,
-    const std::vector<luna::driver::NativeExportSpec>* nativeV1Exports
+    const std::vector<luna::driver::NativeExportSpec>* nativeV1Exports,
+    CodeGenerator* preparedModule
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     , std::shared_ptr<LunaJitModule>* executable,
     std::vector<uint8_t>* entryRecord
 #endif
 ) {
-    // Never reuse the publishing CodeGenerator. Ordinary proofs are destroyed
-    // here; only the test-target hook may materialize the verified body behind
-    // a private wrapper while the source/container gates remain closed.
+    // Lower in isolation first. Only a proof-bound Native library source may
+    // transfer the verified module into ordinary codegen; the test target can
+    // instead materialize its own private JIT lease.
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    if (preparedModule && executable) {
+        failure = "Native Ref/unit module preparation cannot retain a JIT lease";
+        return false;
+    }
+#endif
+    if (preparedModule && !preparedModule->mModule) {
+        failure = "Native Ref/unit module preparation has no destination";
+        return false;
+    }
     CodeGenerator proof("private.ref.ingress.proof");
     proof.mProgram = &program;
     proof.mTypeMaterializer =
@@ -2829,6 +2840,23 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             failure = "generated Ref apply LLVM IR is invalid: " + invalidIR;
             return false;
         }
+        if (preparedModule) {
+            if (!publicUnitPreflight || !nativeProof || !nativeV1Exports) {
+                failure = "Native Ref/unit module preparation has no proof-bound source";
+                return false;
+            }
+            const auto moduleName =
+                preparedModule->mModule->getModuleIdentifier();
+            preparedModule->mBuilder.reset();
+            preparedModule->mHelpers.reset();
+            preparedModule->mModule.reset();
+            preparedModule->mCtx.reset();
+            preparedModule->mCtx = std::move(proof.mCtx);
+            preparedModule->mModule = std::move(proof.mModule);
+            preparedModule->mBuilder = std::move(proof.mBuilder);
+            preparedModule->mHelpers = std::move(proof.mHelpers);
+            preparedModule->mModule->setModuleIdentifier(moduleName);
+        }
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
         if (executable) {
             std::optional<std::vector<uint8_t>> encodedEntry;
@@ -2983,7 +3011,7 @@ CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
     std::vector<uint8_t>* entryRecord) {
     std::shared_ptr<LunaJitModule> executable;
     if (!verifyPrivateRuntimeFragmentRefUnitIngress(
-            program, function, failure, nullptr, nullptr,
+            program, function, failure, nullptr, nullptr, nullptr,
             &executable, entryRecord))
         return {};
     return executable;
@@ -2999,7 +3027,7 @@ CodeGenerator::materializePrivateRuntimeFragmentRefOwnedPairForTest(
         return {};
     }
     if (!verifyPrivateRuntimeFragmentRefUnitIngress(
-            program, function, failure, nullptr, nullptr,
+            program, function, failure, nullptr, nullptr, nullptr,
             &executable, nullptr))
         return {};
     return executable;
@@ -3256,7 +3284,16 @@ bool CodeGenerator::generate(
             return false;
         }
     }
+    FunctionDecl* preparedRefSource = nullptr;
     if (containsRef) {
+        if (nativeProof) {
+            std::string preparationError;
+            if (!luna::codegen::verifyNativeRefUnitModulePreparation(
+                    *program, preparationError)) {
+                error(preparationError);
+                return false;
+            }
+        }
         size_t provenEntries = 0;
         size_t provenReturns = 0;
         size_t provenApplies = 0;
@@ -3288,14 +3325,18 @@ bool CodeGenerator::generate(
             if (result->kind == TypeKind::Unit) {
                 if (verifyPrivateRuntimeFragmentRefUnitIngress(
                         *program, *function, failure,
-                        nativeProof, nativeV1Exports)) {
+                        nativeProof, nativeV1Exports,
+                        nativeProof ? this : nullptr)) {
                     if (function->controlFlow &&
                         !function->controlFlow->runtimeRefApplies.empty()) {
                         ++provenApplies;
                         if (function->isExported &&
                             function->packageId == program->name) {
                             ++provenPublicWrappers;
-                            if (nativeProof) ++provenPublicClaims;
+                            if (nativeProof) {
+                                ++provenPublicClaims;
+                                preparedRefSource = function;
+                            }
                         }
                     } else
                         ++provenEntries;
@@ -3315,21 +3356,26 @@ bool CodeGenerator::generate(
                 continue;
             }
         }
-        error("RuntimeFragmentRef host ingress/return ABI is not implemented; "
-              "raw-pointer function publication is blocked; " +
-              std::to_string(provenEntries) +
-              " private unit body/wrapper pair(s) and " +
-              std::to_string(provenReturns) +
-              " private owned return body/wrapper pair(s) verified and discarded" +
-              (provenApplies ? "; " + std::to_string(provenApplies) +
-                  " private Ref apply body(s) verified and discarded" : "") +
-              (provenPublicWrappers ? "; " +
-                  std::to_string(provenPublicWrappers) +
-                  " public Native Ref/unit preflight wrapper(s) verified and discarded" : "") +
-              (provenPublicClaims ? "; " +
-                  std::to_string(provenPublicClaims) +
-                  " public Native Ref/unit v4 descriptor/proof claim(s) verified and discarded" : ""));
-        return false;
+        if (!preparedRefSource || provenPublicClaims != 1 ||
+            provenApplies != 1 || !mErrors.empty()) {
+            error("RuntimeFragmentRef host ingress/return ABI is not implemented; "
+                  "raw-pointer function publication is blocked; " +
+                  std::to_string(provenEntries) +
+                  " private unit body/wrapper pair(s) and " +
+                  std::to_string(provenReturns) +
+                  " private owned return body/wrapper pair(s) verified and discarded" +
+                  (provenApplies ? "; " + std::to_string(provenApplies) +
+                      " private Ref apply body(s) verified and discarded" : "") +
+                  (provenPublicWrappers ? "; " +
+                      std::to_string(provenPublicWrappers) +
+                      " public Native Ref/unit preflight wrapper(s) verified and discarded" : "") +
+                  (provenPublicClaims ? "; " +
+                      std::to_string(provenPublicClaims) +
+                      " public Native Ref/unit v4 descriptor/proof claim(s) verified and discarded" : ""));
+            return false;
+        }
+        // Continue in the proof-bound module; artifact publication has a
+        // separate gate until its v4 claim can be retained and sealed.
     }
     mProgram = program;
     mHostTargetMachine.reset();
@@ -3340,6 +3386,7 @@ bool CodeGenerator::generate(
     mKernelHSACO.clear();
 
     auto declareFunc = [&](FunctionDecl* f) {
+        if (f == preparedRefSource) return;
         if (f->isSelector) return;
         if (f->isKernel && !f->isCodegenReachable) return;
         if (!f->typeParams.empty() && !f->isTemplateInstance) return;
@@ -3374,6 +3421,11 @@ bool CodeGenerator::generate(
         const std::string internalName = f->generatedSymbolName.empty()
             ? f->name : f->generatedSymbolName;
         const std::string symbolName = f->linkName.empty() ? internalName : f->linkName;
+        if (preparedRefSource && mModule->getFunction(symbolName)) {
+            error("Native Ref/unit module has a generated symbol collision: " +
+                  symbolName);
+            return;
+        }
         auto* function = llvm::Function::Create(
             funcType, linkage, symbolName, mModule.get());
         if (returnType && returnType->kind == TypeKind::Never)
@@ -3385,7 +3437,7 @@ bool CodeGenerator::generate(
     auto generateBodies = [&](bool kernels) {
         for (auto& decl : program->declarations) {
             if (auto* function = dynamic_cast<FunctionDecl*>(decl.get())) {
-                if (!function->isSelector &&
+                if (function != preparedRefSource && !function->isSelector &&
                     (!function->isKernel || function->isCodegenReachable) &&
                     function->isKernel == kernels &&
                     (function->typeParams.empty() || function->isTemplateInstance))
@@ -3410,6 +3462,7 @@ bool CodeGenerator::generate(
             for (auto& m : i->methods) declareFunc(m.get());
         }
     }
+    if (!mErrors.empty()) return false;
 
     emitRuntimeDescriptors();
 

@@ -1290,18 +1290,21 @@ CFG sealing it admits the exported shared-borrow Ref/unit signature only with
 an exact public Slot; after optimization the pipeline rederives the sealed
 Apply source facts and rejects another Ref type, callable, local carrier or
 import. General `check` and Moon builds retain the publication gate. A real
-Native package with one eligible Apply reaches the ordinary codegen refusal
+Native package with one eligible Apply reaches the artifact proof gate
 without emitting an artifact; a second Ref callable fails during preparation.
 This admits a source candidate to the Native pipeline, not a public entry.
 Ordinary Native codegen now emits and preflights the corresponding v4 status
-wrapper in its disposable proof module for that public candidate. The body
-and wrapper are both discarded before artifact generation; the integration
-test requires this preflight evidence in the refusal diagnostic.
+wrapper in an isolated proof module for that public candidate. After validation,
+the body and wrapper remain in the in-memory codegen module. No artifact is
+written while the proof publication gate is closed.
 Native library export collection now runs before codegen and keeps that Ref/unit
-candidate out of the v1 export rows. The disposable proof uses the actual
+candidate out of the v1 export rows. The isolated proof uses the actual
 manifest, target ABI, compiler identity and remaining v1 rows to coordinate a
-v4 descriptor with its proof claim. The integration test requires both checks
-to succeed before codegen refuses publication.
+v4 descriptor with its proof claim. Ordinary codegen now continues in that
+verified module to generate the package's remaining functions. The artifact
+proof gate still refuses to publish it because the v4 claim is not retained
+in the final proof record; the integration test checks that refusal and the
+absence of an artifact.
 Generated outlined Apply continuations now Drop active context owners and
 return the explicit continuation failure result `-1` on context-derivation or
 Slot-dispatch failure. Runtime maps that result to dispatch execution failure,
@@ -1332,9 +1335,9 @@ publication, Native artifact binding and typed invocation remain before release.
 The existing generic Native v1/v2 export and Runtime declaration descriptors
 do not encode the Ref target or this ingress ABI. The Fragment descriptor
 describes factory/environment/activation execution, so it cannot stand in
-for a source function entry. The next step is to move the proven body and
-wrapper into ordinary Native generation, retain the coordinated v4 row in the
-artifact proof, then connect its typed facts to a pinned lookup and call path.
+for a source function entry. The next step is to retain the coordinated v4 row
+in the artifact proof, emit v1 and v4 descriptors together, then connect its
+typed facts to a pinned lookup and call path.
 The Moon Container 0.3
 encoder still rejects Apply regions, and the default module verifier and
 CodeGenerator still reject source Ref publication.
