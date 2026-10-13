@@ -1379,10 +1379,15 @@ and the untouched first field, omits the moved field's projected Drop, and
 still releases the backing allocation. Codegen now takes the Ref from its
 original field cell at a nonzero offset and clears that cell. The private
 two-owner JIT releases both Runtime-issued handles exactly once and expires
-their generation pin. Next, prove original-cell and partial-state cleanup in
-closure environments. Public Ref publication remains gated. The updated
-strict build passes all 81 tests, and the focused frontend/canonical tests
-pass under ASAN/UBSan.
+their generation pin. A source closure now captures one direct Ref owner and
+is dropped without invocation. Its sealed exit cleans the closure and the
+other Ref parameter, omitting the transferred source local. Codegen takes the
+capture from its original owner cell, and recursive closure cleanup drops the
+original environment field cell. The private two-owner JIT releases both
+Runtime-issued handles exactly once and expires their generation pin. Next,
+prove invoked closure cleanup and partially consumed captures. Public Ref
+publication remains gated. The updated strict build passes all 81 tests, and
+the focused frontend/canonical tests pass under ASAN/UBSan.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration

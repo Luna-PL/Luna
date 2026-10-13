@@ -1040,8 +1040,12 @@ owner JIT 将一个 Runtime 发放句柄移入 struct，另一个留在参数 ce
 源码将第二字段移入局部变量后，封闭退出边清理该局部变量及未移动的第一字段，
 跳过已移动字段的投影 Drop，仍释放底层 struct 分配。codegen 现从非零偏移的
 原始字段 cell 取出 Ref 并将该 cell 清零。私有双 owner JIT 恰好释放两个 Runtime
-发放句柄，generation pin 随之失效。下一步验证 closure 环境的原位 cell 与部分
-状态清理；公开 Ref 发布门禁不变。
+发放句柄，generation pin 随之失效。源码 closure 现捕获一个直接 Ref owner，并在
+未调用时退出清理。封闭退出边只清理 closure 与另一个 Ref 参数，跳过已转移的
+源局部变量。codegen 从原始 owner cell 取出捕获值，递归 closure 清理则在环境
+字段的原始 cell 上执行 Drop。私有双 owner JIT 恰好释放两个 Runtime 发放
+句柄，generation pin 随之失效。下一步验证调用后的 closure 清理及部分消费的
+捕获字段；公开 Ref 发布门禁不变。
 更新后的严格构建与全部 81 项测试通过，
 前端／canonical 聚焦测试亦通过 ASAN／UBSan。
 

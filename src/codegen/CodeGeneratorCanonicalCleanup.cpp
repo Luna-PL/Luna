@@ -36,8 +36,10 @@ void CodeGenerator::emitCleanup(
               (type->kind == TypeKind::Array &&
                action == luna::ownership::CleanupAction::ArrayDrop) ||
               (type->kind == TypeKind::Enum &&
-               action == luna::ownership::CleanupAction::EnumDrop))) {
-            error("Ref aggregate cleanup requires supported Record/Result/Array/Enum storage");
+               action == luna::ownership::CleanupAction::EnumDrop) ||
+              (type->kind == TypeKind::Closure &&
+               action == luna::ownership::CleanupAction::Drop))) {
+            error("Ref aggregate cleanup requires supported Record/Result/Array/Enum/Closure storage");
             return;
         }
         if (type->kind == TypeKind::Array && mArrayDropFlags.count(place)) {
@@ -335,8 +337,10 @@ void CodeGenerator::emitCanonicalCleanup(
                   (type->kind == TypeKind::Array &&
                    cleanup.action == luna::ownership::CleanupAction::ArrayDrop) ||
                   (type->kind == TypeKind::Enum &&
-                   cleanup.action == luna::ownership::CleanupAction::EnumDrop))) {
-                error("canonical Ref aggregate cleanup requires supported Record/Result/Array/Enum storage");
+                   cleanup.action == luna::ownership::CleanupAction::EnumDrop) ||
+                  (type->kind == TypeKind::Closure &&
+                   cleanup.action == luna::ownership::CleanupAction::Drop))) {
+                error("canonical Ref aggregate cleanup requires supported Record/Result/Array/Enum/Closure storage");
                 return;
             }
             emitStoredPayloadCleanup(storage, type, label + ".aggregate");

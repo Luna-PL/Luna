@@ -1236,6 +1236,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
         "let packed = RefPair { first: move first, second: move second }; "
         "let moved = move packed.second; }\n"
+        "fn cleanup_closure_pair(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let selected = move first; "
+        "let delayed = fn() -> unit { selected; }; }\n"
         "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
@@ -1263,6 +1267,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* cleanupEnumPairEmpty = nullptr;
     moon::FunctionDecl* cleanupStructPair = nullptr;
     moon::FunctionDecl* cleanupStructPartialPair = nullptr;
+    moon::FunctionDecl* cleanupClosurePair = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
     for (auto& declaration : sourceRefModule->declarations) {
@@ -1290,6 +1295,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 cleanupStructPair = function;
             if (function->name == "cleanup_struct_partial_pair")
                 cleanupStructPartialPair = function;
+            if (function->name == "cleanup_closure_pair")
+                cleanupClosurePair = function;
             if (function->name == "transfer") transfer = function;
         }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
@@ -1302,6 +1309,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !cleanupCountArrayTail ||
         !cleanupEnum || !cleanupEnumPairItem || !cleanupEnumPairEmpty ||
         !cleanupStructPair || !cleanupStructPartialPair ||
+        !cleanupClosurePair ||
         !transfer ||
         observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
@@ -1356,8 +1364,11 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (!sourceRefModule->resolveRuntimeFragmentRefTarget(refId))
         return fail("frozen Ref target did not recover after rejected mutations");
     moon::Sealer sourceRefSealer;
-    if (!sourceRefSealer.sealFunctionBodies(*sourceRefModule))
+    if (!sourceRefSealer.sealFunctionBodies(*sourceRefModule)) {
+        for (const auto& message : sourceRefSealer.errors())
+            std::cerr << message << '\n';
         return fail("source Ref functions did not seal ownership CFGs");
+    }
     if (!cleanupRecord->controlFlow ||
         !std::any_of(cleanupRecord->controlFlow->cleanups.begin(),
             cleanupRecord->controlFlow->cleanups.end(),
@@ -1617,6 +1628,51 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         std::cerr << pairJitError << '\n';
         return fail("partially moved source Ref struct failed private JIT cleanup");
     }
+    if (!cleanupClosurePair->controlFlow)
+        return fail("source Ref closure has no sealed CFG");
+    const auto& closureGraph = *cleanupClosurePair->controlFlow;
+    moon::LocalId delayedOwner;
+    moon::LocalId selectedOwner;
+    for (const auto& local : closureGraph.locals) {
+        if (local.name == "delayed") delayedOwner = local.id;
+        if (local.name == "selected") selectedOwner = local.id;
+    }
+    bool closureExitVerified = false;
+    for (const auto& block : closureGraph.blocks) {
+        if (block.terminator.kind != moon::TerminatorKind::Return)
+            continue;
+        size_t closureDrops = 0;
+        size_t remainingRefDrops = 0;
+        size_t staleRefDrops = 0;
+        for (const auto cleanupId : block.terminator.exitCleanups) {
+            const auto* cleanup = closureGraph.findCleanup(cleanupId);
+            const auto* type = cleanup
+                ? sourceRefModule->findType(cleanup->type) : nullptr;
+            if (!cleanup || !type || cleanup->action !=
+                    luna::ownership::CleanupAction::Drop)
+                continue;
+            if (cleanup->place.root == delayedOwner &&
+                type->kind == TypeKind::Closure &&
+                type->capturedFields.size() == 1 &&
+                type->capturedFields.front().type == refId)
+                ++closureDrops;
+            if (cleanup->place.root == selectedOwner)
+                ++staleRefDrops;
+            if (type->kind == TypeKind::RuntimeFragmentRef &&
+                cleanup->place.root != selectedOwner)
+                ++remainingRefDrops;
+        }
+        closureExitVerified = !delayedOwner.empty() &&
+            !selectedOwner.empty() && closureDrops == 1 &&
+            remainingRefDrops == 1 && staleRefDrops == 0;
+    }
+    if (!closureExitVerified)
+        return fail("source Ref closure has incorrect capture/exit cleanup");
+    if (!exercisePrivateOwnedPairCleanupJit(
+            *sourceRefModule, *cleanupClosurePair, pairJitError)) {
+        std::cerr << pairJitError << '\n';
+        return fail("source Ref closure failed private JIT cleanup");
+    }
     std::vector<uint8_t> refV3Types{1};
     std::string refWireError;
     if (moon::ContainerModelCodec::encodeTypes(
@@ -1759,7 +1815,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !std::any_of(blockedRefCodegen.errors().begin(),
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
-                    "14 private unit body/wrapper pair(s) and 1 private owned "
+                    "15 private unit body/wrapper pair(s) and 1 private owned "
                     "return body/wrapper pair(s) verified and discarded") !=
                     std::string::npos;
             }) ||

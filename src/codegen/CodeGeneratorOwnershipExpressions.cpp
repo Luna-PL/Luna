@@ -719,12 +719,32 @@ llvm::Value* CodeGenerator::generateMakeClosure(moon::MakeClosureExpr* closure) 
                 closureLLVMType, closureStorage, 0));
         for (size_t fieldIndex = 0;
              fieldIndex < closure->capturedValues.size(); ++fieldIndex) {
-            llvm::Value* value =
-                generateExpr(closure->capturedValues[fieldIndex].get());
             TypePtr fieldType;
             if (closureType &&
                 fieldIndex < closureType->capturedFields.size())
                 fieldType = closureType->capturedFields[fieldIndex].type;
+            llvm::Value* value = nullptr;
+            if (fieldType &&
+                fieldType->kind == TypeKind::RuntimeFragmentRef) {
+                auto* captured = dynamic_cast<IdentifierExpr*>(
+                    closure->capturedValues[fieldIndex].get());
+                if (captured && !captured->local.empty() &&
+                    captured->local.value < mCanonicalLocals.size() &&
+                    captured->local.value < mCanonicalLocalTypes.size() &&
+                    mCanonicalLocalTypes[captured->local.value] &&
+                    mCanonicalLocalTypes[captured->local.value]->kind ==
+                        TypeKind::RuntimeFragmentRef &&
+                    mCanonicalLocals[captured->local.value])
+                    value = mHelpers->emitRuntimeFragmentRefTake(
+                        *mBuilder, mCanonicalLocals[captured->local.value]);
+                else {
+                    error("RuntimeFragmentRef closure capture requires an owned local cell");
+                    value = llvm::PoisonValue::get(mHelpers->ptrTy());
+                }
+            } else {
+                value = generateExpr(
+                    closure->capturedValues[fieldIndex].get());
+            }
             auto* fieldPointer = mBuilder->CreateStructGEP(
                 closureLLVMType, closureStorage, fieldIndex + 1);
             if (fieldType)

@@ -16,6 +16,11 @@ bool supportsStoredRefCleanup(const TypePtr& type) {
             [](const auto& field) {
                 return supportsStoredRefCleanup(field.type);
             });
+    if (type->kind == TypeKind::Closure)
+        return std::all_of(type->capturedFields.begin(),
+            type->capturedFields.end(), [](const auto& field) {
+                return supportsStoredRefCleanup(field.type);
+            });
     if (type->kind == TypeKind::Result && type->typeArgs.size() == 2)
         return supportsStoredRefCleanup(type->typeArgs[0]) &&
             supportsStoredRefCleanup(type->typeArgs[1]);
@@ -213,6 +218,26 @@ void CodeGenerator::emitStoredPayloadCleanup(
             emitStoredPayloadCleanup(
                 mBuilder->CreateStructGEP(
                     layout, storage, static_cast<unsigned>(index),
+                    label + "." + field.name + ".cell"),
+                field.type, label + "." + field.name);
+        }
+        return;
+    }
+    if (type->kind == TypeKind::Closure) {
+        auto* layout = llvm::dyn_cast<llvm::StructType>(
+            mHelpers->toLLVMType(type));
+        if (!layout ||
+            layout->getNumElements() != type->capturedFields.size() + 1 ||
+            layout->getElementType(0) != mHelpers->ptrTy()) {
+            error("Ref closure '" + label +
+                  "' has no validated environment storage");
+            return;
+        }
+        for (size_t index = 0; index < type->capturedFields.size(); ++index) {
+            const auto& field = type->capturedFields[index];
+            emitStoredPayloadCleanup(
+                mBuilder->CreateStructGEP(
+                    layout, storage, static_cast<unsigned>(index + 1),
                     label + "." + field.name + ".cell"),
                 field.type, label + "." + field.name);
         }
