@@ -1418,10 +1418,17 @@ Both paths through each CFG return the expected scalar marker, release two
 fresh Runtime-issued Ref handles once, and expire the generation pin. The
 frontend rejects a `match` that consumes the closure in only one continuing
 arm and a loop body that consumes an outer closure but could run again; the
-`match` ownership diagnostic now names the correct construct. Next, check
-partial captured-field moves under `match` and returning loops, then finish
-the typed Ref ingress/export contract. The updated strict build passes all
-81 tests, and the focused frontend/canonical tests pass under ASAN/UBSan.
+`match` ownership diagnostic now names the correct construct. Two more
+runtime-selected functions move one captured Ref into a branch-local variable
+under `match` or a returning `while`, while retaining a sibling Ref capture.
+Each sealed lambda has two distinct return exits: each drops its own moved
+local and the sibling environment field, and skips the moved environment
+field. Both paths release two fresh Runtime-issued handles once in the
+private JIT and expire the generation pin. The frontend rejects a captured
+Ref moved in only one continuing `match` arm or in a loop body that could
+run again. Next, finish the typed Ref ingress/export contract. The updated
+strict build passes all 81 tests, and the focused frontend/canonical tests
+pass under ASAN/UBSan.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration

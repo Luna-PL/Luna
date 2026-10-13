@@ -1341,6 +1341,23 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "let selected = move first; let delayed = fn() -> unit { selected; }; "
         "while choose { delayed(); return 17; } "
         "delayed(); return 23; }\n"
+        "fn invoke_runtime_match_partial_closure_pair(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>, choose: bool) -> i32 { "
+        "let selected = move first; let spare = move second; "
+        "let delayed = fn() -> i32 { "
+        "let route = RefRoute::Left(); "
+        "if choose { route = RefRoute::Right(); } "
+        "match route { "
+        "RefRoute::Left => { let moved = move selected; spare; return 23; }, "
+        "RefRoute::Right => { let moved = move selected; spare; return 17; } } "
+        "}; return delayed(); }\n"
+        "fn invoke_runtime_loop_partial_closure_pair(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>, choose: bool) -> i32 { "
+        "let selected = move first; let spare = move second; "
+        "let delayed = fn() -> i32 { "
+        "while choose { let moved = move selected; spare; return 17; } "
+        "let moved = move selected; spare; return 23; "
+        "}; return delayed(); }\n"
         "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
@@ -1385,6 +1402,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* invokeRuntimePartialClosurePair = nullptr;
     moon::FunctionDecl* invokeRuntimeMatchClosurePair = nullptr;
     moon::FunctionDecl* invokeRuntimeLoopClosurePair = nullptr;
+    moon::FunctionDecl* invokeRuntimeMatchPartialClosurePair = nullptr;
+    moon::FunctionDecl* invokeRuntimeLoopPartialClosurePair = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
     for (auto& declaration : sourceRefModule->declarations) {
@@ -1446,6 +1465,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 invokeRuntimeMatchClosurePair = function;
             if (function->name == "invoke_runtime_loop_closure_pair")
                 invokeRuntimeLoopClosurePair = function;
+            if (function->name == "invoke_runtime_match_partial_closure_pair")
+                invokeRuntimeMatchPartialClosurePair = function;
+            if (function->name == "invoke_runtime_loop_partial_closure_pair")
+                invokeRuntimeLoopPartialClosurePair = function;
             if (function->name == "transfer") transfer = function;
         }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
@@ -1467,6 +1490,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !invokeRuntimeBranchClosurePair || !invokeRuntimeReturnClosurePair ||
         !invokeRuntimePartialClosurePair ||
         !invokeRuntimeMatchClosurePair || !invokeRuntimeLoopClosurePair ||
+        !invokeRuntimeMatchPartialClosurePair ||
+        !invokeRuntimeLoopPartialClosurePair ||
         !transfer ||
         observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
@@ -1877,7 +1902,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     }
     if (!invokePartialClosurePair->controlFlow)
         return fail("partially consumed source Ref closure has no sealed CFG");
-    const auto verifyPartialCaptureExit = [&](const moon::FunctionDecl& function) {
+    const auto verifyPartialCaptureExit = [&](const moon::FunctionDecl& function,
+                                              size_t minimumExits = 1) {
         const moon::ControlFlowGraph* lambdaGraph = nullptr;
         for (const auto& block : function.controlFlow->blocks)
             for (const auto& operation : block.operations)
@@ -1891,13 +1917,13 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                         lambdaGraph = closure->lambda->controlFlow.get();
         if (!lambdaGraph) return false;
         moon::LocalId envOwner;
-        moon::LocalId movedOwner;
+        std::vector<moon::LocalId> movedOwners;
         size_t selectedIndex = 0;
         size_t spareIndex = 0;
         bool foundSelected = false;
         bool foundSpare = false;
         for (const auto& local : lambdaGraph->locals) {
-            if (local.name == "moved") movedOwner = local.id;
+            if (local.name == "moved") movedOwners.push_back(local.id);
             const auto* type = sourceRefModule->findType(local.type);
             if (local.kind != moon::LocalKind::Parameter || !type ||
                 type->kind != TypeKind::Closure) continue;
@@ -1913,8 +1939,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 }
             }
         }
-        if (envOwner.empty() || movedOwner.empty() || !foundSelected ||
-            !foundSpare) return false;
+        if (envOwner.empty() || movedOwners.size() < minimumExits ||
+            !foundSelected || !foundSpare) return false;
         size_t selectedRows = 0;
         size_t spareRows = 0;
         for (const auto& cleanup : lambdaGraph->cleanups) {
@@ -1933,6 +1959,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         }
         if (selectedRows != 1 || spareRows != 1) return false;
         size_t exits = 0;
+        std::vector<moon::LocalId> cleanedMovedOwners;
         for (const auto& block : lambdaGraph->blocks) {
             if (block.terminator.kind != moon::TerminatorKind::Return)
                 continue;
@@ -1942,9 +1969,16 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             for (const auto id : block.terminator.exitCleanups) {
                 const auto* cleanup = lambdaGraph->findCleanup(id);
                 if (!cleanup) return false;
-                if (cleanup->place.root == movedOwner &&
-                    cleanup->action == luna::ownership::CleanupAction::Drop)
+                if (std::find(movedOwners.begin(), movedOwners.end(),
+                        cleanup->place.root) != movedOwners.end() &&
+                    cleanup->action == luna::ownership::CleanupAction::Drop &&
+                    cleanup->type == refId) {
                     ++movedDrops;
+                    if (std::find(cleanedMovedOwners.begin(),
+                            cleanedMovedOwners.end(), cleanup->place.root) ==
+                        cleanedMovedOwners.end())
+                        cleanedMovedOwners.push_back(cleanup->place.root);
+                }
                 if (cleanup->place.root != envOwner) continue;
                 if (cleanup->place.projections.empty() ||
                     cleanup->place.projections.front().index != spareIndex)
@@ -1953,7 +1987,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             }
             if (movedDrops != 1 || spareDrops != 1) return false;
         }
-        return exits != 0;
+        return exits >= minimumExits &&
+            cleanedMovedOwners.size() >= minimumExits;
     };
     if (!verifyPartialCaptureExit(*invokePartialClosurePair))
         return fail("partially consumed closure has incorrect captured-field exit rows");
@@ -1971,6 +2006,17 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             pairJitError)) {
         std::cerr << pairJitError << '\n';
         return fail("returning partially consumed source Ref closure failed private JIT cleanup");
+    }
+    for (auto* function : {invokeRuntimeMatchPartialClosurePair,
+                           invokeRuntimeLoopPartialClosurePair}) {
+        if (!function->controlFlow ||
+            !verifyPartialCaptureExit(*function, 2))
+            return fail("match/loop partial closure has incorrect captured-field exit rows");
+        if (!exercisePrivateOwnedPairCleanupJit(
+                *sourceRefModule, *function, pairJitError)) {
+            std::cerr << pairJitError << '\n';
+            return fail("match/loop partial closure failed private JIT cleanup");
+        }
     }
     for (auto* function : {invokeBranchClosureTrue, invokeBranchClosureFalse,
                            invokeReturnBranchClosureTrue,
@@ -2083,6 +2129,41 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                     "of 'delayed'") != std::string::npos;
             }))
         return fail("source Ref closure consumed outside a returning loop path");
+    auto oneSidedMatchCapture = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "slot checkpoint(value: i32);\n"
+        "enum RefRoute { Left; Right; }\n"
+        "fn one_sided_capture(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let selected = move first; let spare = move second; "
+        "let delayed = fn() -> unit { "
+        "match RefRoute::Left() { "
+        "RefRoute::Left => { let moved = move selected; spare; }, "
+        "RefRoute::Right => { spare; } } }; delayed(); }\n",
+        "<one-sided-match-source-ref-capture>");
+    if (oneSidedMatchCapture.success() ||
+        !std::any_of(oneSidedMatchCapture.errors().begin(),
+            oneSidedMatchCapture.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "only some paths through `match`") != std::string::npos;
+            }))
+        return fail("source Ref capture retained inconsistent match ownership");
+    auto loopMovedCapture = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "slot checkpoint(value: i32);\n"
+        "fn loop_moved_capture(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let selected = move first; let spare = move second; "
+        "let delayed = fn() -> unit { "
+        "while false { let moved = move selected; spare; } "
+        "}; delayed(); }\n",
+        "<loop-moved-source-ref-capture>");
+    if (loopMovedCapture.success() ||
+        !std::any_of(loopMovedCapture.errors().begin(),
+            loopMovedCapture.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "loop body changes ownership, borrow, or in-flight state "
+                    "of 'selected'") != std::string::npos;
+            }))
+        return fail("source Ref capture moved in a repeating loop body");
     auto repeatedBranchClosure = luna::tooling::AnalysisSnapshot::analyzeSource(
         "slot checkpoint(value: i32);\n"
         "fn repeated_branch(first: affine RuntimeFragmentRef<checkpoint>) "
