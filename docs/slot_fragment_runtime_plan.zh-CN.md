@@ -983,9 +983,11 @@ Native 管线，尚未开放公开入口。
 产物 proof 发布门禁尚未开启，因此不会写出制品。
 Native 库的导出收集现提前到 codegen 前，并将该 Ref／unit 候选排除在 v1 导出行外。
 隔离的证明 module 使用真实 manifest、目标 ABI、编译器身份和其余 v1 行，协同生成
-v4 descriptor 与 proof 声明。普通 codegen 现继续在这个已验证的 module 中生成包内
-其他函数。由于 v4 声明尚未保留到最终 proof 记录，产物 proof 门禁仍拒绝发布；
-集成测试核对这一拒绝及无制品输出。
+v4 descriptor 与 proof 声明。普通 codegen 继续在这个已验证的 module 中生成包内
+其他函数，现也保留规范 v4 声明，将其写入内存中的产物 proof 记录，并在同一 LLVM
+module 中发射 v1／v2 与 v4 descriptor。描述符发射后再次验证 module。封闭镜像和
+装载器尚未验证绑定 proof 的 v4 入口，因此链接发布门禁仍关闭；集成测试核对拒绝
+及无制品输出。
 生成的 outlined Apply 续体在 context 派生或 Slot 派发失败时先 Drop 活跃
 context owner，再返回显式失败值 `-1`。Runtime 将其映射为分派执行失败，
 包括嵌套 resume；它不算续体逃逸。私有单 Ref／unit 根 body 正常返回 `0`，
@@ -1009,8 +1011,8 @@ v4 源码事实仅准入没有其他词法清理义务的 CFG；其余清理须�
 
 现有通用 Native v1/v2 export 和 Runtime declaration 描述符未编码 Ref 目标或这套入口
 ABI。Fragment 描述符对应 factory／environment／activation 执行，不能代替源码
-函数入口。下一步须将协同生成的 v4 行保留在产物 proof，并同时发射 v1、v4
-descriptor，再把类型化事实接入固定 lookup 与调用路径。
+函数入口。下一步须验证封闭产物及装载后的 v4 入口与 proof 绑定，再把类型化事实
+接入固定 lookup 与调用路径。
 Moon Container 0.3 编码器仍拒绝 Apply region，默认 module verifier 和 CodeGenerator
 也仍拒绝发布源码 Ref。
 显式选择的 0.4 Type 与 Code section 编解码现可往返封闭源码的
@@ -1110,9 +1112,9 @@ pin 失效。前端拒绝只在一个继续执行的 `match` 分支移出捕获 
 现有 Native 验证链路确定了接入边界：`buildNativeLibrary` 从封闭的 declaration
 table 构造 v1 `NativeExportSpec`，并由 `emitNativeLibraryDescriptor` 生成对应行。
 loader 现将独立的 v4 Ref／unit 候选行与 v1 行一起绑定到 proof 导出摘要。
-普通 Native 构建仍只生成 v1 行：源码推导的 v4 行构造器仅用于可丢弃的 JIT
-描述符，公开 Ref 入口仍受门禁约束。下一步须将已验证的源码行、生成的 wrapper
-和 proof 声明同时接入，再通过固定的 lookup 传递类型化事实，避免暴露裸指针。
+普通 Native 构建现于内存中生成绑定 proof 的 module，其中包含已验证的 v4 源码行、
+wrapper、声明及 v1 行。封闭镜像及装载后的 v4 入口尚未与 proof 核对，因此产物链接
+仍受门禁约束；随后还须通过固定 lookup 传递类型化事实，避免暴露裸指针。
 重建后的 artifact digest 与 trust 记录便能约束映像及其导出摘要。
 `stageVerifiedNativeGeneration` 当前只把 symbol／contract／entry／
 kind／flags 复制到 `GenerationBinding`；宿主调用前，类型化事实还须传到固定的

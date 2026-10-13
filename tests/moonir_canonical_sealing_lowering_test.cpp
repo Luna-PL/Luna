@@ -2804,6 +2804,28 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (!proofBoundNativeModule.generate(
             sourceApplyModule.get(), &v4Proof, &proofBoundV1Exports))
         return fail("Native Ref/unit source did not join ordinary codegen");
+    const std::string publicWrapperName =
+        "__luna_native_ref_unit_entry_v1_" + sourceApplyEntry->symbolId.value;
+    luna::codegen::NativeRefUnitDescriptorV4Candidate publicV4Candidate;
+    if (!luna::codegen::deriveNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry, publicWrapperName,
+            publicV4Candidate, unitSourceError) ||
+        !proofBoundNativeModule.nativeRefUnitV4Claim() ||
+        *proofBoundNativeModule.nativeRefUnitV4Claim() !=
+            publicV4Candidate.canonicalRow())
+        return fail("Native Ref/unit codegen did not retain its canonical v4 claim");
+    auto joinedNativeProof = v4Proof;
+    joinedNativeProof.exportedDescriptors.push_back(
+        *proofBoundNativeModule.nativeRefUnitV4Claim());
+    std::vector<uint8_t> joinedProofRecord;
+    if (!luna::driver::makeNativeProofPlaceholder(
+            joinedNativeProof, joinedProofRecord, unitSourceError) ||
+        !proofBoundNativeModule.emitNativeProofPlaceholder(joinedProofRecord) ||
+        !proofBoundNativeModule.emitNativeLibraryDescriptor(
+            joinedNativeProof.packageId, joinedNativeProof.packageVersion,
+            joinedNativeProof.targetAbi, joinedNativeProof.compilerIdentity,
+            proofBoundV1Exports))
+        return fail("Native Ref/unit module did not combine v1/v4 descriptors and proof");
     auto claimedV4Module = llvm::CloneModule(v4Module);
     auto claimedV4Proof = v4Proof;
     if (!luna::codegen::emitNativeRefUnitV4ClaimedDescriptorCandidate(

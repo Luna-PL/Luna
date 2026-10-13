@@ -558,8 +558,18 @@ bool CodeGenerator::emitNativeLibraryDescriptor(
         mModule->getFunction("luna_native_library_descriptor_v1") ||
         mModule->getFunction("luna_native_library_descriptor_v2") ||
         mModule->getFunction("luna_native_library_descriptor_v3") ||
-        mModule->getFunction("luna_native_library_descriptor_v4")) {
+        static_cast<bool>(mModule->getFunction(
+            "luna_native_library_descriptor_v4")) !=
+            static_cast<bool>(mNativeRefUnitV4Claim)) {
         error("reserved Native descriptor symbol is already defined");
+        return false;
+    }
+    if (mNativeRefUnitV4Claim &&
+        (!mModule->getNamedGlobal("__luna_native_library_v4") ||
+         !mModule->getNamedGlobal("__luna_native_exports_v4") ||
+         mModule->getFunction("luna_native_library_descriptor_v4")
+             ->isDeclaration())) {
+        error("Native Ref/unit v4 descriptor is incomplete");
         return false;
     }
     // V1 has no entry ABI profile. Cross-check each requested row against the
@@ -827,5 +837,15 @@ bool CodeGenerator::emitNativeLibraryDescriptor(
     retained.push_back(typedDescriptor);
     retained.push_back(typedQuery);
     llvm::appendToCompilerUsed(*mModule, retained);
+    if (mNativeRefUnitV4Claim) {
+        std::string invalidIR;
+        llvm::raw_string_ostream stream(invalidIR);
+        if (llvm::verifyModule(*mModule, &stream)) {
+            stream.flush();
+            error("Native Ref/unit combined descriptor LLVM IR is invalid: " +
+                  invalidIR);
+            return false;
+        }
+    }
     return true;
 }

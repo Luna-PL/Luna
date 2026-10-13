@@ -2819,6 +2819,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
         if (executable) publicUnitPreflight = false;
 #endif
+        std::optional<std::string> preparedClaim;
         if (publicUnitPreflight) {
             const std::string wrapperName =
                 "__luna_native_ref_unit_entry_v1_" + function.symbolId.value;
@@ -2832,6 +2833,12 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                         program, function, *proof.mModule, wrapperName,
                         *nativeV1Exports, claimedProof, failure))
                     return false;
+                if (claimedProof.exportedDescriptors.size() !=
+                        nativeProof->exportedDescriptors.size() + 1) {
+                    failure = "Native Ref/unit descriptor produced no single proof claim";
+                    return false;
+                }
+                preparedClaim = claimedProof.exportedDescriptors.back();
             }
         }
         llvm::raw_string_ostream stream(invalidIR);
@@ -2841,7 +2848,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             return false;
         }
         if (preparedModule) {
-            if (!publicUnitPreflight || !nativeProof || !nativeV1Exports) {
+            if (!publicUnitPreflight || !nativeProof || !nativeV1Exports ||
+                !preparedClaim) {
                 failure = "Native Ref/unit module preparation has no proof-bound source";
                 return false;
             }
@@ -2856,6 +2864,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             preparedModule->mBuilder = std::move(proof.mBuilder);
             preparedModule->mHelpers = std::move(proof.mHelpers);
             preparedModule->mModule->setModuleIdentifier(moduleName);
+            preparedModule->mNativeRefUnitV4Claim = std::move(preparedClaim);
         }
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
         if (executable) {
@@ -3266,6 +3275,7 @@ bool CodeGenerator::generate(
     moon::Module* program,
     const luna::driver::NativeProofSpec* nativeProof,
     const std::vector<luna::driver::NativeExportSpec>* nativeV1Exports) {
+    mNativeRefUnitV4Claim.reset();
     if (!program) {
         error("code generation has no MoonIR module");
         return false;
@@ -3375,7 +3385,7 @@ bool CodeGenerator::generate(
             return false;
         }
         // Continue in the proof-bound module; artifact publication has a
-        // separate gate until its v4 claim can be retained and sealed.
+        // separate gate until the linked image and loader validate the v4 entry.
     }
     mProgram = program;
     mHostTargetMachine.reset();

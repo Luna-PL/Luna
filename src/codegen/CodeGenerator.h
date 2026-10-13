@@ -147,6 +147,9 @@ public:
                                      const std::string& targetAbi,
                                      const std::string& compilerIdentity,
                                      const std::vector<luna::driver::NativeExportSpec>& exports);
+    const std::optional<std::string>& nativeRefUnitV4Claim() const {
+        return mNativeRefUnitV4Claim;
+    }
 
     const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
@@ -331,6 +334,8 @@ private:
     std::unique_ptr<CGHelpers> mHelpers;
 
     moon::Module* mProgram = nullptr;
+    // The canonical row emitted with the retained v4 query in the same module.
+    std::optional<std::string> mNativeRefUnitV4Claim;
     std::unique_ptr<moon::TypeMaterializer> mTypeMaterializer;
 
     // Current state

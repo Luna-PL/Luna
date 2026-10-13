@@ -482,16 +482,18 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
                               LunaOptimizationLevel optimizationLevel) {
     namespace fs = std::filesystem;
     const auto& package = pipeline.analysisSnapshot().packageManifest();
-    const auto& spec = surface.proof;
+    auto spec = surface.proof;
     const auto& nativeExports = surface.v1Exports;
     if (surface.refUnitSource) {
-        std::cerr << diagnostic::format(
-            "native-proof",
-            "Native Ref/unit v4 claim is not retained in the artifact proof",
-            inputPath, 0, 0,
-            "complete Native Ref/unit artifact proof binding before publication")
-                  << "\n";
-        return 1;
+        if (!codeGenerator.nativeRefUnitV4Claim()) {
+            std::cerr << diagnostic::format(
+                "native-proof", "Native Ref/unit module has no v4 proof claim",
+                inputPath, 0, 0, "recheck Native Ref/unit code generation")
+                      << "\n";
+            return 1;
+        }
+        spec.exportedDescriptors.push_back(
+            *codeGenerator.nativeRefUnitV4Claim());
     }
 
     std::vector<uint8_t> proofRecord;
@@ -508,6 +510,16 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
                       << "\n";
         else
             printErrors(codeGenerator.errors(), "native-proof");
+        return 1;
+    }
+
+    if (surface.refUnitSource) {
+        std::cerr << diagnostic::format(
+            "native-proof",
+            "Native Ref/unit artifact link awaits v4 proof-bound loader validation",
+            inputPath, 0, 0,
+            "validate the retained v4 query against the sealed artifact before publication")
+                  << "\n";
         return 1;
     }
 
