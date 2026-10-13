@@ -210,11 +210,9 @@ private:
     friend bool makeRuntimeFragmentRefHandle(
         RuntimeFragmentRef&, const RuntimeSlotRequirement&,
         RuntimeFragmentRefHandle&, std::string&);
-#ifdef LUNA_PRIVATE_REF_JIT_TEST
-    friend bool pinRuntimeFragmentRefHandleForTest(
+    friend bool pinRuntimeFragmentRefHandle(
         const RuntimeFragmentRefHandle&, RuntimeFragmentRefHandle&,
         std::string&);
-#endif
     void* handle_ = nullptr;
 };
 
@@ -224,12 +222,13 @@ bool makeRuntimeFragmentRefHandle(
     RuntimeFragmentRef& reference, const RuntimeSlotRequirement& slot,
     RuntimeFragmentRefHandle& output, std::string& error);
 
-#ifdef LUNA_PRIVATE_REF_JIT_TEST
-// Duplicates only the host handle shell; both handles pin the same immutable
-// singleton snapshot. This is private call-lifetime evidence, not a source ABI.
-bool pinRuntimeFragmentRefHandleForTest(
+// Duplicates only the Runtime-owned handle shell. Both handles retain the same
+// immutable singleton snapshot, so a synchronous callee can borrow the pin
+// even if a callback releases the caller's handle. No source ABI is published.
+bool pinRuntimeFragmentRefHandle(
     const RuntimeFragmentRefHandle& source,
     RuntimeFragmentRefHandle& output, std::string& error);
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
 uint64_t runtimeFragmentRefDropCountForTest() noexcept;
 #endif
 

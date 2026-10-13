@@ -1116,13 +1116,17 @@ table 构造 v1 `NativeExportSpec`，并由 `emitNativeLibraryDescriptor` 生成
 loader 现将独立的 v4 Ref／unit 候选行与 v1 行一起绑定到 proof 导出摘要。
 普通 Native 构建现于内存中生成绑定 proof 的 module，其中包含已验证的 v4 源码行、
 wrapper、声明及 v1 行。构建现链接并验证一次性预览，之后将其删除。独立的
-generation 固定 lookup 现保留已验证 v4 事实且不暴露裸指针；正式输出仍等待同步
-类型化调用路径。
+generation 固定 lookup 现保留已验证 v4 事实且不暴露裸指针；正式输出仍等待与该
+generation 绑定的调用路径及源码预览实际执行。
 重建后的 artifact digest 与 trust 记录便能约束映像及其导出摘要。
 `stageVerifiedNativeGeneration` 仍只把 v1 行放入 `GenerationBinding`，另将已验证
 v4 事实复制到 `PinnedRefUnitCandidate` 视图。该视图保留已验证库的 lease，且不包含
-可调用指针。宿主调用前，还须验证 Runtime 签发的 parent／Ref 能力，并在整次同步
-调用期间持有 pin。
+可调用指针。独立的 `callVerifiedNativeRefUnit` 现可对已验证 v4 库进行类型化宿主
+调用：它核对入口 profile 和 Ref 的准确 Slot，仅接收 Runtime 签发的 parent／Ref
+持有者，复制 parent 快照与 Ref 句柄，并在整次同步调用中持有库 lease。独立 v4
+fixture 验证成功调用，以及缺失或不匹配能力在调用前被拒绝。generation lookup
+仍仅提供元数据。下一步是从同一个固定 generation 产生调用句柄，并实际调用源码
+链接预览；在端到端证明完成前继续封闭正式源码 Native 输出。
 
 2026-10-06 实际以 `-t native` 构建导出且触达 Runtime Slot 的函数时，MoonIR
 verifier 因缺少 runtime-aware 公开入口 ABI 而拒绝。语义与 Native artifact 回归

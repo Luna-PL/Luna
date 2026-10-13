@@ -96,12 +96,10 @@ typedef struct LunaNativeLibraryDescriptorV2 {
 typedef const LunaNativeLibraryDescriptorV2*
     (*LunaNativeLibraryDescriptorFnV2)(void);
 
-// Candidate synchronous shared-borrow Ref/unit entry. A future typed export
-// row must bind the exact Ref Slot/Contract and this profile before a loader
-// may expose the entry. Both arguments are Runtime-issued live capabilities;
-// the host retains their owners and the pinned code view for the whole call.
-// V4 records this profile for validation; ordinary Native artifacts do not
-// expose it as a callable entry.
+// Candidate synchronous shared-borrow Ref/unit entry. A v4 row binds the
+// exact Ref Slot/Contract and this profile. The verified-library host call
+// retains Runtime-issued owners and the loaded code for the whole call.
+// Ordinary source Native builds do not yet publish this export.
 #define LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1 3u
 #define LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1 1u
 typedef int32_t (*LunaNativeRefUnitEntryV1)(
@@ -190,9 +188,10 @@ typedef struct LunaNativeLibraryDescriptorV3 {
 typedef const LunaNativeLibraryDescriptorV3*
     (*LunaNativeLibraryDescriptorFnV3)(void);
 
-// Parallel validation-only record for the borrowed Ref/unit candidate. It
-// carries declared source identity and a distinct wrapper linkage, but cannot
-// make a source Ref export callable through the current loader or generation.
+// Parallel descriptor for the borrowed Ref/unit candidate. It carries source
+// identity and a distinct wrapper linkage. The typed verified-library call
+// can invoke the bound entry; generation lookup remains metadata-only, and
+// ordinary source Native output remains gated.
 #define LUNA_NATIVE_DESCRIPTOR_MAGIC_V4 0x4c4e4434u /* "LND4" */
 #define LUNA_NATIVE_DESCRIPTOR_ABI_V4 4u
 #define LUNA_NATIVE_RESULT_UNIT_V1 2u

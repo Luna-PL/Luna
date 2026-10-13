@@ -941,8 +941,9 @@ bool makeRuntimeFragmentRefHandle(
 uint64_t runtimeFragmentRefDropCountForTest() noexcept {
     return privateRuntimeFragmentRefDropCount.load(std::memory_order_relaxed);
 }
+#endif
 
-bool pinRuntimeFragmentRefHandleForTest(
+bool pinRuntimeFragmentRefHandle(
     const RuntimeFragmentRefHandle& source,
     RuntimeFragmentRefHandle& output, std::string& error) {
     error.clear();
@@ -953,14 +954,13 @@ bool pinRuntimeFragmentRefHandleForTest(
             source.opaque(), original->slot.slotId.c_str(),
             original->slot.contractId.c_str()) !=
                 LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1) {
-        error = "private Ref call pin requires one live handle and empty output";
+        error = "Ref call pin requires one live handle and empty output";
         return false;
     }
     auto pinned = std::make_unique<RuntimeFragmentRefHandleState>(*original);
     output.handle_ = pinned.release();
     return true;
 }
-#endif
 
 bool makeRuntimeFragmentExecutionContextOverrideFromRef(
     const RuntimeFragmentExecutionContext& base,

@@ -45,8 +45,8 @@ LUNA_TEST_EXPORT int32_t owned_answer(
 
 #ifdef LUNA_TEST_V4_DESCRIPTOR
 LUNA_TEST_EXPORT int32_t unit_apply(const void* parent, const void* ref) {
-    (void)parent; (void)ref;
-    return LUNA_NATIVE_REF_UNIT_INVALID_CONTEXT_V1;
+    return parent && ref ? LUNA_NATIVE_REF_UNIT_SUCCESS_V1 :
+        LUNA_NATIVE_REF_UNIT_INVALID_CONTEXT_V1;
 }
 #endif
 

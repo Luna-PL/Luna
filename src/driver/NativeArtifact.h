@@ -2,12 +2,18 @@
 
 #include <array>
 #include <cstdint>
+#include <memory>
 #include <string>
 #include <unordered_map>
 #include <vector>
 
 #include "runtime/NativeArtifactABI.h"
 #include "runtime/MoonRuntime.h"
+
+namespace luna::runtime {
+class RuntimeFragmentExecutionContext;
+class RuntimeFragmentRefHandle;
+}
 
 namespace luna::driver {
 
@@ -62,7 +68,7 @@ public:
     // Validated v3 metadata lookup. Does not expose or invoke its entry.
     bool hasRefResultOwnerCandidate(const std::string& symbolId,
                                     const std::string& contractId) const;
-    // Validated v4 metadata only; never returns or invokes the entry pointer.
+    // This lookup returns only validated v4 metadata, never an entry pointer.
     bool hasRefUnitCandidate(const std::string& symbolId,
                              const std::string& contractId) const;
     uint64_t refUnitCandidateCount() const;
@@ -72,6 +78,17 @@ public:
     explicit operator bool() const { return nativeHandle_ != nullptr; }
 
 private:
+    friend bool callVerifiedNativeRefUnit(
+        const std::shared_ptr<const VerifiedNativeLibrary>&,
+        const std::string&, const std::string&,
+        const luna::runtime::RuntimeFragmentExecutionContext&,
+        const luna::runtime::RuntimeFragmentRefHandle&,
+        int32_t&, std::string&);
+    bool callRefUnit(
+        const std::string& symbolId, const std::string& contractId,
+        const luna::runtime::RuntimeFragmentExecutionContext& parent,
+        const luna::runtime::RuntimeFragmentRefHandle& reference,
+        int32_t& status, std::string& error) const;
     friend bool loadVerifiedNativeLibrary(
         const std::string&, const std::string&, VerifiedNativeLibrary&,
         std::string&, void (*)(void*), void*);
@@ -89,6 +106,15 @@ private:
         typedExportsBySymbol_;
     NativeProofInfo proof_;
 };
+
+// Keeps the verified image, parent snapshot and Ref shell pinned through the
+// complete synchronous v4 call. No entry pointer or opaque borrow escapes.
+bool callVerifiedNativeRefUnit(
+    const std::shared_ptr<const VerifiedNativeLibrary>& library,
+    const std::string& symbolId, const std::string& contractId,
+    const luna::runtime::RuntimeFragmentExecutionContext& parent,
+    const luna::runtime::RuntimeFragmentRefHandle& reference,
+    int32_t& status, std::string& error);
 
 bool makeNativeProofPlaceholder(const NativeProofSpec& spec,
                                 std::vector<uint8_t>& record,

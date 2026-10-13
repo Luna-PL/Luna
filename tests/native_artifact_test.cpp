@@ -1,6 +1,7 @@
 #include "driver/NativeArtifact.h"
 #include "driver/NativeGeneration.h"
 #include "driver/NativeTypedDescriptor.h"
+#include "runtime/RuntimeFragment.h"
 
 #include <llvm/TargetParser/Host.h>
 
@@ -20,6 +21,8 @@ int fail(const char* message) {
     std::cerr << message << '\n';
     return 1;
 }
+
+void fixtureFragmentExecute(void*, void*) {}
 
 int prepareIndependentFixture(int argc, char** argv) {
     if (argc != 4) return 2;
@@ -341,6 +344,94 @@ int inspectV4Candidate(int argc, char** argv) {
     if (moved.callI32NoArgs("symbol:unit-apply", "contract:unit-v4",
                             ignored, error) || error.empty())
         return fail("Native v4 candidate acquired an i32() call profile");
+    std::shared_ptr<const luna::driver::VerifiedNativeLibrary> callLibrary =
+        std::make_shared<luna::driver::VerifiedNativeLibrary>(std::move(moved));
+    const LunaRuntimeFragmentDescriptorV1 fragment = {
+        LUNA_RUNTIME_FRAGMENT_MAGIC_V1,
+        LUNA_RUNTIME_FRAGMENT_ABI_V1,
+        sizeof(LunaRuntimeFragmentDescriptorV1),
+        LUNA_RUNTIME_FRAGMENT_CAPTURE_FREE_V1,
+        0, 0, 0, 0,
+        "fragment:native-ref-fixture", "contract:native-ref-fixture",
+        "symbol:slot-checkpoint", "contract:slot-checkpoint",
+        "layout:unit", 0, 1, "", "layout:unit", 0, 1,
+        nullptr, nullptr, fixtureFragmentExecute};
+    auto otherFragment = fragment;
+    otherFragment.fragment_id = "fragment:native-ref-other";
+    otherFragment.slot_id = "symbol:other-slot";
+    luna::runtime::MoonRuntime hostRuntime;
+    const luna::runtime::GenerationStagingRequest hostRequest{
+        "org.luna.fixture.ref-host", std::string(64, 'a'),
+        std::make_shared<int>(1)};
+    luna::runtime::MoonRuntime::StagedGeneration hostStaged;
+    if (!hostRuntime.stage(
+            hostRequest,
+            [](const auto&, std::string&) { return true; },
+            [&](const auto&, auto& bindings, std::string&) {
+                const LunaRuntimeFragmentDescriptorV1* descriptors[] = {
+                    &fragment, &otherFragment};
+                for (const auto* descriptor : descriptors)
+                    bindings.push_back({
+                        descriptor->fragment_id,
+                        descriptor->fragment_contract_id,
+                        descriptor, LUNA_NATIVE_DECLARATION_FRAGMENT_V1,
+                        luna::runtime::GenerationBindingFragmentExecutable |
+                            luna::runtime::GenerationBindingPublicControl});
+                return true;
+            }, {}, hostStaged, error))
+        return fail("Native Ref/unit fixture host generation did not stage");
+    luna::runtime::MoonRuntime::PinnedGeneration hostPinned;
+    if (!hostRuntime.loadOnce(hostStaged, hostPinned, error))
+        return fail("Native Ref/unit fixture host generation did not load");
+    auto makeHandle = [&](const LunaRuntimeFragmentDescriptorV1& descriptor,
+                          luna::runtime::RuntimeFragmentRefHandle& output) {
+        const luna::runtime::GenerationBindingRequirement requirement{
+            descriptor.fragment_id, descriptor.fragment_contract_id,
+            LUNA_NATIVE_DECLARATION_FRAGMENT_V1,
+            luna::runtime::GenerationBindingFragmentExecutable |
+                luna::runtime::GenerationBindingPublicControl};
+        const auto binding = hostPinned.find(requirement);
+        const luna::runtime::RuntimeSlotRequirement slot{
+            descriptor.slot_id, descriptor.slot_contract_id};
+        luna::runtime::RuntimeFragmentRef reference;
+        return binding && luna::runtime::makeOwnedRuntimeFragmentRef(
+                binding, slot, {}, reference, error) &&
+            luna::runtime::makeRuntimeFragmentRefHandle(
+                reference, slot, output, error);
+    };
+    luna::runtime::RuntimeFragmentRefHandle reference, wrongReference;
+    luna::runtime::RuntimeFragmentRefHandle missingReference;
+    if (!makeHandle(fragment, reference) ||
+        !makeHandle(otherFragment, wrongReference))
+        return fail("Native Ref/unit fixture could not issue live Ref handles");
+    luna::runtime::RuntimeFragmentBindingSet emptySet;
+    luna::runtime::RuntimeFragmentExecutionContext parent, missingParent;
+    if (!luna::runtime::makeRuntimeFragmentBindingSet(
+            {}, emptySet, error) ||
+        !luna::runtime::makeRuntimeFragmentExecutionContext(
+            emptySet, parent, error))
+        return fail("Native Ref/unit fixture could not issue a live parent");
+    int32_t status = -1;
+    if (luna::driver::callVerifiedNativeRefUnit(
+            callLibrary, "symbol:unit-apply", "wrong-contract",
+            parent, reference, status, error) || error.empty() ||
+        luna::driver::callVerifiedNativeRefUnit(
+            callLibrary, "symbol:unit-apply", "contract:unit-v4",
+            missingParent, reference, status, error) || error.empty() ||
+        luna::driver::callVerifiedNativeRefUnit(
+            callLibrary, "symbol:unit-apply", "contract:unit-v4",
+            parent, missingReference, status, error) || error.empty() ||
+        luna::driver::callVerifiedNativeRefUnit(
+            callLibrary, "symbol:unit-apply", "contract:unit-v4",
+            parent, wrongReference, status, error) || error.empty() ||
+        status != -1)
+        return fail("Native Ref/unit call accepted an invalid capability or target");
+    if (!luna::driver::callVerifiedNativeRefUnit(
+            callLibrary, "symbol:unit-apply", "contract:unit-v4",
+            parent, reference, status, error) ||
+        status != LUNA_NATIVE_REF_UNIT_SUCCESS_V1 || !error.empty())
+        return fail("Native Ref/unit call rejected live Runtime-issued capabilities");
+    callLibrary.reset();
     luna::runtime::MoonRuntime::PinnedRefUnitCandidate pinnedCandidate;
     {
         luna::runtime::MoonRuntime runtime;
@@ -367,7 +458,7 @@ int inspectV4Candidate(int argc, char** argv) {
         pinnedFacts->slotContractId != "contract:slot-checkpoint" ||
         pinnedFacts->slotTypeId != "type:slot-checkpoint")
         return fail("Native v4 pinned facts lost their verified target or lease");
-    std::cout << "v4-metadata-only\n";
+    std::cout << "v4-typed-host-call\n";
     return 0;
 }
 

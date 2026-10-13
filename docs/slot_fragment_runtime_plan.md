@@ -1216,7 +1216,7 @@ fixture executes success, the three named preflight failures and a real
 dispatch failure; its IR proof checks the unexpected-result branch. No
 production Native generator publishes this profile yet.
 
-The validation-only Native v4 descriptor now records this candidate separately
+The Native v4 descriptor records this candidate separately
 from v1/v2 callable exports and v3 owned-Result candidates. Its canonical
 SHA-256 row binds the fixed profile and ten UTF-8 identifiers: function
 SymbolId, ContractId and wrapper linkage; module and package; function and Ref
@@ -1492,14 +1492,21 @@ proof-bound in-memory module with the verified source-derived v4 row, generated
 wrapper and proof claim beside the v1 rows. It links and validates a temporary
 preview, then removes it. A separate pinned generation lookup now carries
 verified v4 facts without exposing a raw pointer. Public output remains gated
-on the synchronous typed call path.
+on a call path tied to that generation and an executed source preview.
 The existing artifact digest and trust record then bind the rebuilt image and
 its export digest. `stageVerifiedNativeGeneration` still places only v1 rows
 in `GenerationBinding`; it copies validated v4 facts into a separate
 `PinnedRefUnitCandidate` view. That view retains the verified library lease
-and has no callable pointer. Before a host can invoke the entry, the call
-path must validate Runtime-issued parent/Ref capabilities and keep its pin
-alive for the complete synchronous call.
+and has no callable pointer. `callVerifiedNativeRefUnit` now provides a
+separate typed host call for an independently verified v4 library. It checks
+the exact candidate profile and Ref Slot, accepts only Runtime-issued parent
+and Ref owners, copies the parent snapshot and Ref shell, and holds a shared
+library lease through the synchronous entry. The independent v4 fixture proves
+success and rejects absent or mismatched capabilities before invocation.
+The generation lookup remains metadata-only. The next integration step is a
+call handle produced from the same pinned generation and a real linked source
+preview invocation. Public source Native output remains gated until that path
+is proven end to end.
 
 On 2026-10-06 an actual `-t native` build of an exported Runtime Slot caller
 failed at the MoonIR verifier with the missing runtime-aware public entry ABI

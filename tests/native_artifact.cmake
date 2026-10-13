@@ -756,11 +756,11 @@ foreach(v4_variant IN LISTS v4_variants)
            NOT v4_legacy_result EQUAL 0 OR
            NOT v4_legacy_output STREQUAL "7\n" OR
            NOT v4_candidate_result EQUAL 0 OR
-           NOT v4_candidate_output STREQUAL "v4-metadata-only\n" OR
+           NOT v4_candidate_output STREQUAL "v4-typed-host-call\n" OR
            NOT v4_generation_result EQUAL 0 OR
            NOT v4_generation_output STREQUAL "v1-only\n")
             message(FATAL_ERROR
-                "independent v4 metadata escaped the unprofiled generation gate.\n"
+                "independent v4 host call or generation metadata gate failed.\n"
                 "load: ${v4_load_error}\n"
                 "legacy call: ${v4_legacy_error}\n"
                 "candidate: ${v4_candidate_error}\n"

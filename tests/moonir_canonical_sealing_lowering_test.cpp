@@ -1082,11 +1082,11 @@ bool exercisePrivateRefApplyJit(
     luna::runtime::RuntimeFragmentRefHandle callPin;
     luna::runtime::RuntimeFragmentExecutionContext parentPin;
     if (exerciseIngressGate) {
-        if (!luna::runtime::pinRuntimeFragmentRefHandleForTest(
+        if (!luna::runtime::pinRuntimeFragmentRefHandle(
                 handle, callPin, error))
             return false;
         parentPin = parent;
-        if (luna::runtime::pinRuntimeFragmentRefHandleForTest(
+        if (luna::runtime::pinRuntimeFragmentRefHandle(
                 handle, callPin, error)) {
             error = "private Ref call pin overwrote a live output";
             return false;

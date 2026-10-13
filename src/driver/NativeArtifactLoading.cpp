@@ -40,6 +40,8 @@
 
 #include "driver/NativeArtifactInternal.h"
 #include "driver/NativeTypedDescriptor.h"
+#include "runtime/RuntimeFragment.h"
+#include "runtime/RuntimeFragmentCompilerBridge.h"
 
 namespace luna::driver {
 
@@ -822,6 +824,81 @@ bool VerifiedNativeLibrary::refUnitCandidateAt(
         row.ref_slot_type_id, row.entry_abi, row.ref_mode,
         row.result_mode, row.status_domain};
     return true;
+}
+
+bool VerifiedNativeLibrary::callRefUnit(
+    const std::string& symbolId, const std::string& contractId,
+    const luna::runtime::RuntimeFragmentExecutionContext& parent,
+    const luna::runtime::RuntimeFragmentRefHandle& reference,
+    int32_t& status, std::string& error) const {
+    error.clear();
+    if (!descriptorV4_) {
+        error = "Native library has no v4 Ref/unit descriptor";
+        return false;
+    }
+    const LunaNativeExportDescriptorV4* selected = nullptr;
+    for (uint64_t index = 0; index < descriptorV4_->export_count; ++index) {
+        const auto& row = descriptorV4_->exports[index];
+        if (symbolId == row.symbol_id && contractId == row.contract_id) {
+            selected = &row;
+            break;
+        }
+    }
+    if (!selected ||
+        selected->entry_abi != LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1 ||
+        selected->ref_mode != LUNA_NATIVE_REF_SHARED_BORROW_V1 ||
+        selected->result_mode != LUNA_NATIVE_RESULT_UNIT_V1 ||
+        selected->status_domain != LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1) {
+        error = "Native export has no Ref/unit entry profile";
+        return false;
+    }
+    const auto pinnedParent = parent;
+    if (!pinnedParent ||
+        luna_compiler_fragment_context_check(pinnedParent.opaque()) !=
+            LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS) {
+        error = "Native Ref/unit parent context is not live";
+        return false;
+    }
+    luna::runtime::RuntimeFragmentRefHandle pinnedReference;
+    if (!luna::runtime::pinRuntimeFragmentRefHandle(
+            reference, pinnedReference, error))
+        return false;
+    if (luna_runtime_fragment_ref_check_v1(
+            pinnedReference.opaque(), selected->ref_slot_symbol_id,
+            selected->ref_slot_contract_id) !=
+            LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1) {
+        error = "Native Ref/unit reference does not match its declared Slot";
+        return false;
+    }
+    using Entry = LunaNativeRefUnitEntryV1;
+    static_assert(sizeof(Entry) == sizeof(selected->entry),
+                  "host cannot represent a Native Ref/unit function pointer");
+    Entry function = nullptr;
+    std::memcpy(&function, &selected->entry, sizeof(function));
+    const int32_t returned =
+        function(pinnedParent.opaque(), pinnedReference.opaque());
+    if (returned < LUNA_NATIVE_REF_UNIT_SUCCESS_V1 ||
+        returned > LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1) {
+        error = "Native Ref/unit entry returned an unknown status";
+        return false;
+    }
+    status = returned;
+    return true;
+}
+
+bool callVerifiedNativeRefUnit(
+    const std::shared_ptr<const VerifiedNativeLibrary>& library,
+    const std::string& symbolId, const std::string& contractId,
+    const luna::runtime::RuntimeFragmentExecutionContext& parent,
+    const luna::runtime::RuntimeFragmentRefHandle& reference,
+    int32_t& status, std::string& error) {
+    const auto pinnedLibrary = library;
+    if (!pinnedLibrary || !*pinnedLibrary) {
+        error = "Native Ref/unit call has no loaded verified library";
+        return false;
+    }
+    return pinnedLibrary->callRefUnit(
+        symbolId, contractId, parent, reference, status, error);
 }
 
 uint64_t VerifiedNativeLibrary::exportCount() const {
