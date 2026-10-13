@@ -958,8 +958,11 @@ wrapper 必须各调用一次 context 检查、带冻结 Slot／Contract 常量�
 context 和 Ref switch 使用各自的检查结果，受保护的 body 调用按零／非零结果
 选择精确的成功／执行失败返回码，且 wrapper 不含额外指令。
 私有 JIT 路径执行这两项检查。IR 变异测试拒绝 body 参数、Slot 常量、context
-参数、body linkage、额外调用和状态控制流的改变。生产发布仍须生成 wrapper
-并绑定产物。
+参数、body linkage、额外调用和状态控制流的改变。生产 codegen 现有可复用的
+状态 wrapper 生成器：先重新推导封闭源码行，生成 parent／Ref／body 状态路径，
+随后再次执行配对与前置状态证明。私有 JIT 改用该生成器，其 v4 描述符证明仍随
+一次性 module 丢弃。普通 Native 构建仍须将它接到公开导出、发射相应 proof
+声明并绑定产物，之后才能提供类型化宿主 lookup。
 生成的 outlined Apply 续体在 context 派生或 Slot 派发失败时先 Drop 活跃
 context owner，再返回显式失败值 `-1`。Runtime 将其映射为分派执行失败，
 包括嵌套 resume；它不算续体逃逸。私有单 Ref／unit 根 body 正常返回 `0`，

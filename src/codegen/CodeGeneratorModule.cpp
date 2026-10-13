@@ -2778,129 +2778,23 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             if (returnType->kind == TypeKind::Unit &&
                 function.params.size() == 1) {
                 // Apply CFGs are intentionally excluded from the generic
-                // ingress wrapper. Compose its exact borrow gate here only
-                // for the private executable proof.
+                // ingress wrapper. Exercise the reusable status wrapper only
+                // in this private executable proof.
                 if (!privateUnitApplyFacts) {
                     failure = "private Ref apply lost its frozen ingress target";
                     return false;
                 }
-                auto* ingressEntry = llvm::Function::Create(
-                    llvm::FunctionType::get(proof.mHelpers->i32Ty(),
-                        {proof.mHelpers->ptrTy(), proof.mHelpers->ptrTy()},
-                        false),
-                    llvm::Function::ExternalLinkage,
-                    "__luna_private_ref_apply_ingress_test",
-                    *proof.mModule);
-                if (ingressEntry->getName() !=
+                const std::string ingressName =
+                    "__luna_private_ref_apply_ingress_test";
+                if (ingressName !=
                         privateUnitApplyFacts->identities.back() ||
-                    ingressEntry->getCallingConv() != llvm::CallingConv::C ||
-                    ingressEntry->arg_size() != 2 ||
-                    ingressEntry->getReturnType() != proof.mHelpers->i32Ty() ||
-                    body->getCallingConv() != llvm::CallingConv::C ||
-                    body->arg_size() != 2 ||
-                    body->getReturnType() != proof.mHelpers->i32Ty()) {
-                    failure = "private Ref entry record differs from generated LLVM ABI";
-                    return false;
-                }
-                auto* ingressStart = llvm::BasicBlock::Create(
-                    *proof.mCtx, "entry", ingressEntry);
-                auto* checkedContext = llvm::BasicBlock::Create(
-                    *proof.mCtx, "context.accepted", ingressEntry);
-                auto* invalidContext = llvm::BasicBlock::Create(
-                    *proof.mCtx, "context.invalid", ingressEntry);
-                auto* invalidHandle = llvm::BasicBlock::Create(
-                    *proof.mCtx, "ref.invalid.handle", ingressEntry);
-                auto* invalidTarget = llvm::BasicBlock::Create(
-                    *proof.mCtx, "ref.invalid.target", ingressEntry);
-                auto* unexpectedCheck = llvm::BasicBlock::Create(
-                    *proof.mCtx, "check.unexpected", ingressEntry);
-                auto* ingressBody = llvm::BasicBlock::Create(
-                    *proof.mCtx, "ref.body", ingressEntry);
-                auto* bodySucceeded = llvm::BasicBlock::Create(
-                    *proof.mCtx, "body.succeeded", ingressEntry);
-                auto* bodyFailed = llvm::BasicBlock::Create(
-                    *proof.mCtx, "body.failed", ingressEntry);
-                llvm::IRBuilder<> ingressBuilder(ingressStart);
-                auto contextCheck = proof.mModule->getOrInsertFunction(
-                    "luna_compiler_fragment_context_check",
-                    proof.mHelpers->i32Ty(), proof.mHelpers->ptrTy());
-                auto* contextStatus = ingressBuilder.CreateCall(contextCheck,
-                    {ingressEntry->getArg(0)});
-                auto* statusType = llvm::cast<llvm::IntegerType>(
-                    proof.mHelpers->i32Ty());
-                auto* contextBranch = ingressBuilder.CreateSwitch(
-                    contextStatus, unexpectedCheck, 2);
-                contextBranch->addCase(llvm::ConstantInt::getSigned(
-                    statusType,
-                    LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS), checkedContext);
-                contextBranch->addCase(llvm::ConstantInt::getSigned(
-                    statusType,
-                    LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT),
-                    invalidContext);
-                ingressBuilder.SetInsertPoint(invalidContext);
-                ingressBuilder.CreateRet(llvm::ConstantInt::getSigned(
-                    proof.mHelpers->i32Ty(),
-                    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST));
-                ingressBuilder.SetInsertPoint(checkedContext);
-                auto* check =
-                    proof.mHelpers->emitRuntimeFragmentRefBorrowCheck(
-                        ingressBuilder, *proof.mModule,
-                        ingressEntry->getArg(1), privateUnitApplyFacts->target);
-                if (!check) {
-                    failure = "private Ref apply lost its exact borrowed check";
-                    return false;
-                }
-                auto* refBranch = ingressBuilder.CreateSwitch(
-                    check, unexpectedCheck, 3);
-                refBranch->addCase(llvm::ConstantInt::getSigned(
-                    statusType,
-                    LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1), ingressBody);
-                refBranch->addCase(llvm::ConstantInt::getSigned(
-                    statusType,
-                    LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1),
-                    invalidHandle);
-                refBranch->addCase(llvm::ConstantInt::getSigned(
-                    statusType,
-                    LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1),
-                    invalidTarget);
-                ingressBuilder.SetInsertPoint(invalidHandle);
-                ingressBuilder.CreateRet(llvm::ConstantInt::get(
-                    proof.mHelpers->i32Ty(),
-                    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST));
-                ingressBuilder.SetInsertPoint(invalidTarget);
-                ingressBuilder.CreateRet(llvm::ConstantInt::get(
-                    proof.mHelpers->i32Ty(),
-                    LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST));
-                ingressBuilder.SetInsertPoint(unexpectedCheck);
-                ingressBuilder.CreateRet(llvm::ConstantInt::get(
-                    proof.mHelpers->i32Ty(),
-                    LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST));
-                ingressBuilder.SetInsertPoint(ingressBody);
-                auto* ingressCall = ingressBuilder.CreateCall(body,
-                    {ingressEntry->getArg(0), ingressEntry->getArg(1)});
-                ingressCall->setCallingConv(body->getCallingConv());
-                ingressBuilder.CreateCondBr(
-                    ingressBuilder.CreateICmpEQ(ingressCall,
-                        llvm::ConstantInt::get(proof.mHelpers->i32Ty(), 0)),
-                    bodySucceeded, bodyFailed);
-                ingressBuilder.SetInsertPoint(bodySucceeded);
-                ingressBuilder.CreateRet(llvm::ConstantInt::get(
-                    proof.mHelpers->i32Ty(),
-                    LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST));
-                ingressBuilder.SetInsertPoint(bodyFailed);
-                ingressBuilder.CreateRet(llvm::ConstantInt::get(
-                    proof.mHelpers->i32Ty(),
-                    LUNA_PRIVATE_REF_UNIT_APPLY_EXECUTION_FAILURE_V1_TEST));
-                luna::codegen::NativeRefUnitDescriptorV4Candidate verifiedV4;
-                if (!luna::codegen::
-                        derivePreflightNativeRefUnitDescriptorV4Candidate(
-                            program, function, *proof.mModule,
-                            ingressEntry->getName().str(), verifiedV4,
-                            failure))
+                    !luna::codegen::emitNativeRefUnitStatusWrapper(
+                        program, function, *proof.mModule,
+                        ingressName, failure))
                     return false;
                 if (!luna::codegen::emitNativeRefUnitDescriptorV4Candidate(
                         program, function, *proof.mModule,
-                        ingressEntry->getName().str(), "private-test",
+                        ingressName, "private-test",
                         llvm::sys::getProcessTriple(), "luna/private-test",
                         failure))
                     return false;

@@ -1266,7 +1266,12 @@ to choose exact success/execution-failure returns, with no extra wrapper
 instructions. The private JIT path invokes both checks. IR mutation
 tests reject changed body arguments, Slot constants, context arguments,
 body linkage, extra calls and changed status control flow. Production
-publication still needs a generated wrapper path and artifact binding.
+codegen now has a reusable status-wrapper emitter that first rederives the
+sealed source row, builds the parent/Ref/body status paths, then reruns the
+pairing and preflight checks. The private JIT uses that emitter and retains
+its disposable v4 descriptor proof. Ordinary Native build still needs to
+invoke it with a public export, emit the matching proof claim and bind the
+artifact before any typed host lookup.
 Generated outlined Apply continuations now Drop active context owners and
 return the explicit continuation failure result `-1` on context-derivation or
 Slot-dispatch failure. Runtime maps that result to dispatch execution failure,

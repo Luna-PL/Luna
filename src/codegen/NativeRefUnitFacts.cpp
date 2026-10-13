@@ -1,5 +1,6 @@
 #include "codegen/NativeRefUnitFacts.h"
 
+#include "codegen/CGHelpers.h"
 #include "core/TypeRelations.h"
 #include "driver/NativeTypedDescriptor.h"
 #include "moonir/FragmentContextEffects.h"
@@ -402,6 +403,111 @@ bool derivePreflightNativeRefUnitDescriptorV4Candidate(
             LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1))
         return reject("Native v4 preflight changed its status returns");
     candidate = std::move(verified);
+    error.clear();
+    return true;
+}
+
+bool emitNativeRefUnitStatusWrapper(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    llvm::Module& generated, const std::string& wrapperLinkageName,
+    std::string& error) {
+    NativeRefUnitDescriptorV4Candidate source;
+    if (!deriveNativeRefUnitDescriptorV4Candidate(
+            program, function, wrapperLinkageName, source, error))
+        return false;
+    auto* body = generated.getFunction(source.source.sourceLinkageName);
+    auto& context = generated.getContext();
+    auto* i32 = llvm::Type::getInt32Ty(context);
+    auto* ptr = llvm::PointerType::getUnqual(context);
+    auto* entryType = llvm::FunctionType::get(i32, {ptr, ptr}, false);
+    if (generated.getFunction(wrapperLinkageName) || !body ||
+        body->isDeclaration() ||
+        body->getLinkage() != llvm::GlobalValue::InternalLinkage ||
+        body->getCallingConv() != llvm::CallingConv::C ||
+        body->getFunctionType() != entryType) {
+        error = "Native v4 wrapper has no distinct internal Ref/unit body";
+        return false;
+    }
+    const auto target = program.resolveRuntimeFragmentRefTarget(
+        function.params.front().type);
+    if (!target) {
+        error = "Native v4 wrapper lost its frozen Ref target";
+        return false;
+    }
+    auto* entry = llvm::Function::Create(
+        entryType, llvm::Function::ExternalLinkage,
+        wrapperLinkageName, generated);
+    auto* start = llvm::BasicBlock::Create(context, "entry", entry);
+    auto* checkedContext = llvm::BasicBlock::Create(
+        context, "context.accepted", entry);
+    auto* invalidContext = llvm::BasicBlock::Create(
+        context, "context.invalid", entry);
+    auto* invalidHandle = llvm::BasicBlock::Create(
+        context, "ref.invalid.handle", entry);
+    auto* invalidTarget = llvm::BasicBlock::Create(
+        context, "ref.invalid.target", entry);
+    auto* unexpected = llvm::BasicBlock::Create(
+        context, "check.unexpected", entry);
+    auto* bodyBlock = llvm::BasicBlock::Create(context, "ref.body", entry);
+    auto* bodySucceeded = llvm::BasicBlock::Create(
+        context, "body.succeeded", entry);
+    auto* bodyFailed = llvm::BasicBlock::Create(
+        context, "body.failed", entry);
+    llvm::IRBuilder<> builder(start);
+    auto checkContext = generated.getOrInsertFunction(
+        "luna_compiler_fragment_context_check", i32, ptr);
+    auto* contextStatus = builder.CreateCall(
+        checkContext, {entry->getArg(0)});
+    auto* contextBranch = builder.CreateSwitch(contextStatus, unexpected, 2);
+    auto status = [i32](int32_t value) {
+        return llvm::ConstantInt::getSigned(
+            llvm::cast<llvm::IntegerType>(i32), value);
+    };
+    contextBranch->addCase(status(LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS),
+                           checkedContext);
+    contextBranch->addCase(status(LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT),
+                           invalidContext);
+    builder.SetInsertPoint(invalidContext);
+    builder.CreateRet(status(LUNA_NATIVE_REF_UNIT_INVALID_CONTEXT_V1));
+    builder.SetInsertPoint(checkedContext);
+    CGHelpers helpers(context);
+    auto* refStatus = helpers.emitRuntimeFragmentRefBorrowCheck(
+        builder, generated, entry->getArg(1), *target);
+    if (!refStatus) {
+        entry->eraseFromParent();
+        error = "Native v4 wrapper lost its exact borrowed Ref check";
+        return false;
+    }
+    auto* refBranch = builder.CreateSwitch(refStatus, unexpected, 3);
+    refBranch->addCase(status(LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1),
+                       bodyBlock);
+    refBranch->addCase(status(LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1),
+                       invalidHandle);
+    refBranch->addCase(status(LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1),
+                       invalidTarget);
+    builder.SetInsertPoint(invalidHandle);
+    builder.CreateRet(status(LUNA_NATIVE_REF_UNIT_INVALID_HANDLE_V1));
+    builder.SetInsertPoint(invalidTarget);
+    builder.CreateRet(status(LUNA_NATIVE_REF_UNIT_INVALID_TARGET_V1));
+    builder.SetInsertPoint(unexpected);
+    builder.CreateRet(status(LUNA_NATIVE_REF_UNIT_UNEXPECTED_CHECK_V1));
+    builder.SetInsertPoint(bodyBlock);
+    auto* result = builder.CreateCall(
+        body, {entry->getArg(0), entry->getArg(1)});
+    builder.CreateCondBr(
+        builder.CreateICmpEQ(result, status(0)),
+        bodySucceeded, bodyFailed);
+    builder.SetInsertPoint(bodySucceeded);
+    builder.CreateRet(status(LUNA_NATIVE_REF_UNIT_SUCCESS_V1));
+    builder.SetInsertPoint(bodyFailed);
+    builder.CreateRet(status(LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1));
+    NativeRefUnitDescriptorV4Candidate verified;
+    if (!derivePreflightNativeRefUnitDescriptorV4Candidate(
+            program, function, generated, wrapperLinkageName,
+            verified, error)) {
+        entry->eraseFromParent();
+        return false;
+    }
     error.clear();
     return true;
 }

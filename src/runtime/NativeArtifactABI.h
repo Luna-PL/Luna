@@ -100,7 +100,8 @@ typedef const LunaNativeLibraryDescriptorV2*
 // row must bind the exact Ref Slot/Contract and this profile before a loader
 // may expose the entry. Both arguments are Runtime-issued live capabilities;
 // the host retains their owners and the pinned code view for the whole call.
-// No current Native descriptor publishes this profile.
+// V4 records this profile for validation; ordinary Native artifacts do not
+// expose it as a callable entry.
 #define LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1 3u
 #define LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1 1u
 typedef int32_t (*LunaNativeRefUnitEntryV1)(
@@ -112,7 +113,7 @@ enum LunaNativeRefUnitStatusV1 {
     LUNA_NATIVE_REF_UNIT_INVALID_HANDLE_V1 = 2,
     LUNA_NATIVE_REF_UNIT_INVALID_TARGET_V1 = 3,
     LUNA_NATIVE_REF_UNIT_UNEXPECTED_CHECK_V1 = 4,
-    // Reserved until generated body/dispatch cleanup can return this status.
+    // The guarded wrapper maps nonzero body status here; public use is gated.
     LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1 = 5,
 };
 

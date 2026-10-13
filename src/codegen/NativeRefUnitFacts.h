@@ -71,6 +71,14 @@ bool derivePreflightNativeRefUnitDescriptorV4Candidate(
     const llvm::Module& generated, const std::string& wrapperLinkageName,
     NativeRefUnitDescriptorV4Candidate& candidate, std::string& error);
 
+// Builds the guarded C status entry from one sealed Ref/unit Apply body, then
+// verifies its exact source/body pairing and preflight CFG. The caller still
+// owns publication, artifact proof and lifetime policy.
+bool emitNativeRefUnitStatusWrapper(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    llvm::Module& generated, const std::string& wrapperLinkageName,
+    std::string& error);
+
 // Emits one v4 candidate only after rederiving its sealed source and exact
 // generated preflight. The caller must separately prove the body failure path
 // and bind the resulting image to a Native proof before publication.

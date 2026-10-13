@@ -2749,6 +2749,20 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     llvm::IRBuilder<> v4Builder(llvm::BasicBlock::Create(
         v4Context, "entry", v4Body));
     v4Builder.CreateRet(llvm::ConstantInt::get(v4I32, 0));
+    const std::string emittedV4Name = unitWrapper + ".generated";
+    luna::codegen::NativeRefUnitDescriptorV4Candidate emittedV4;
+    if (!luna::codegen::emitNativeRefUnitStatusWrapper(
+            *sourceApplyModule, *sourceApplyEntry, v4Module,
+            emittedV4Name, unitSourceError) ||
+        !luna::codegen::derivePreflightNativeRefUnitDescriptorV4Candidate(
+            *sourceApplyModule, *sourceApplyEntry, v4Module,
+            emittedV4Name, emittedV4, unitSourceError) ||
+        emittedV4.wrapperLinkageName != emittedV4Name ||
+        llvm::verifyModule(v4Module) ||
+        luna::codegen::emitNativeRefUnitStatusWrapper(
+            *sourceApplyModule, *sourceApplyEntry, v4Module,
+            emittedV4Name, unitSourceError))
+        return fail("Native v4 reusable status wrapper lost its source pairing");
     auto* v4Wrapper = llvm::Function::Create(
         llvm::FunctionType::get(v4I32, {v4Pointer, v4Pointer}, false),
         llvm::Function::ExternalLinkage, unitWrapper, v4Module);
@@ -2795,7 +2809,14 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     auto* v4ContextHelper = v4ContextCheck->getCalledFunction();
     v4ContextHelper->setLinkage(llvm::Function::InternalLinkage);
     const bool internalContextHelperAccepted = pairedV4();
+    const std::string rejectedV4Name = unitWrapper + ".local-check";
+    const bool localCheckWrapperEmitted =
+        luna::codegen::emitNativeRefUnitStatusWrapper(
+            *sourceApplyModule, *sourceApplyEntry, v4Module,
+            rejectedV4Name, unitSourceError);
     v4ContextHelper->setLinkage(llvm::Function::ExternalLinkage);
+    if (localCheckWrapperEmitted || v4Module.getFunction(rejectedV4Name))
+        return fail("Native v4 status wrapper retained an unproved local check");
     auto* forgedHelperBody = llvm::BasicBlock::Create(
         v4Context, "forged.check", v4ContextHelper);
     v4Builder.SetInsertPoint(forgedHelperBody);
