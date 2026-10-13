@@ -23,6 +23,7 @@ struct NativeProofSpec {
     std::string packageVersion;
     std::string targetAbi;
     std::string compilerIdentity;
+    // Canonical v1 rows plus any separately described v4 Ref/unit rows.
     std::vector<std::string> exportedDescriptors;
 };
 

@@ -1236,6 +1236,13 @@ dependency. The read-only candidate lookup does not expose its pointer to
 typed calls or generation bindings. These
 checks bind declared metadata to the artifact; they do not yet establish that
 the declarations were derived from a sealed source function.
+The independent v4 fixture now includes its canonical typed row in the Native
+proof export digest alongside the v1 rows. After validating both descriptors,
+the loader recomputes that combined digest before accepting the library. A
+separately sealed fixture whose v4 descriptor digest is valid but whose proof
+omits the typed row is rejected. Older artifacts without v4 retain the v1
+digest calculation. This binds the candidate metadata to the proof without
+making its entry callable.
 Production codegen now has a pointer-free v4 candidate row builder. It
 rederives `NativeRefUnitSourceFacts` from the sealed source function, requires
 a package matching its module and a bounded UTF-8 wrapper linkage distinct
@@ -1431,19 +1438,14 @@ strict build passes all 81 tests, and the focused frontend/canonical tests
 pass under ASAN/UBSan.
 
 The present Native verification path fixes the integration boundary:
-`buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration
-table, `canonicalNativeExport` serializes only kind, flags, SymbolId, ContractId
-and linkage for the proof export digest, and `emitNativeLibraryDescriptor`
-emits the corresponding v1 rows. On load, `validateNativeDescriptor` requires
-the exact v1 row size and recomputes that digest before the exports enter a
-generation. Therefore a Ref target or ingress convention attached only to a
-runtime binding would be unproved. Do not extend a v1 row in place. A new
-versioned typed row must derive from the verified frozen function signature
-and CFG, enter the canonical export digest and generated descriptor together,
-and be checked for field validity and identity ambiguity by the loader. The
-independent v4 fixture exercises the latter checks. The source-derived row
-builder now feeds a disposable JIT descriptor, but not the ordinary Native
-artifact path.
+`buildNativeLibrary` forms each v1 `NativeExportSpec` from the sealed
+declaration table, and `emitNativeLibraryDescriptor` emits those rows. The
+loader now binds any separate v4 Ref/unit candidate rows, as well as the v1
+rows, to the proof export digest. The ordinary Native build still produces
+only v1 rows: its source-derived v4 builder feeds a disposable JIT descriptor,
+and the public Ref entry remains gated. The next integration step must emit
+the verified source-derived row, generated wrapper and proof claim together,
+then carry typed facts through pinned lookup without exposing a raw pointer.
 The existing artifact digest and trust record then bind the rebuilt image and
 its export digest. `stageVerifiedNativeGeneration` currently copies only
 symbol/contract/entry/kind/flags into `GenerationBinding`; typed facts must

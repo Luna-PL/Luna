@@ -573,7 +573,7 @@ endforeach()
 
 # Independently linked v4 Ref/unit metadata is accepted only for inspection.
 # Its entry never becomes a v1 callable, typed call or generation binding.
-set(v4_variants valid bad-row-size bad-profile bad-slot-digest bad-identity
+set(v4_variants valid unbound-proof bad-row-size bad-profile bad-slot-digest bad-identity
     bad-package bad-module bad-entry-pointer bad-linkage missing-slot-export)
 if(NOT WIN32)
     list(APPEND v4_variants dependency-entry foreign-descriptor
@@ -627,7 +627,9 @@ foreach(v4_variant IN LISTS v4_variants)
             "${v4_compile_error}")
     endif()
     set(v4_prepare_mode --prepare-v4-fixture)
-    if(v4_variant STREQUAL "dependency-entry")
+    if(v4_variant STREQUAL "unbound-proof")
+        set(v4_prepare_mode --prepare-v4-unbound-fixture)
+    elseif(v4_variant STREQUAL "dependency-entry")
         set(v4_prepare_mode --prepare-v4-dependency-fixture)
     elseif(v4_variant STREQUAL "bad-module")
         set(v4_prepare_mode --prepare-v4-bad-module-fixture)
@@ -692,7 +694,9 @@ foreach(v4_variant IN LISTS v4_variants)
                 "generation: ${v4_generation_error}")
         endif()
     else()
-        if(v4_variant STREQUAL "bad-row-size" OR
+        if(v4_variant STREQUAL "unbound-proof")
+            set(v4_expected "does not match its proof export digest")
+        elseif(v4_variant STREQUAL "bad-row-size" OR
            v4_variant STREQUAL "bad-profile" OR
            v4_variant STREQUAL "bad-package" OR
            v4_variant STREQUAL "bad-module" OR

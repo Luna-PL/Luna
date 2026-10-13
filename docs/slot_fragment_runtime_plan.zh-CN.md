@@ -938,6 +938,10 @@ v4 描述符和导出表指针还必须来自暂存的已验证映像；独立 P
 指针指向依赖库时会被拒绝。
 只读候选查询不会把入口指针交给类型化调用或 generation binding。这些检查把
 声明的元数据绑定到产物，但尚未证明声明来自封闭的源码函数。
+独立 v4 夹具现将其规范类型化行与 v1 行一起写入 Native proof 的导出摘要。
+loader 校验两个描述符后重新计算组合摘要，再接受库。另一个已封闭夹具的 v4
+描述符摘要有效，但 proof 缺少该类型化行，因此会被拒绝。没有 v4 的旧产物仍按
+原有 v1 行计算摘要。这一步把候选元数据绑定到 proof，但不开放其入口调用。
 生产 codegen 现提供不含指针的 v4 候选行构造器：它从封闭源码函数重新推导
 `NativeRefUnitSourceFacts`，要求 package 与 module 匹配，并要求有界 UTF-8
 且与源码 body 不同的 wrapper linkage，按 v4 C 行排列十个身份，并固定规范配置。
@@ -1078,16 +1082,13 @@ pin 失效。前端拒绝只在一个继续执行的 `match` 分支移出捕获 
 前端／canonical 聚焦测试亦通过 ASAN／UBSan。
 
 现有 Native 验证链路确定了接入边界：`buildNativeLibrary` 从封闭的 declaration
-table 构造各项 `NativeExportSpec`；`canonicalNativeExport` 只把 kind、flags、
-SymbolId、ContractId 和 linkage 序列化供 proof export digest 计算；
-`emitNativeLibraryDescriptor` 生成相应 v1 行。装载时，
-`validateNativeDescriptor` 要求精确的 v1 行大小，并重新计算该摘要，然后导出项
-才进入 generation。因此，仅在 Runtime binding 上附加 Ref 目标或入口约定，
-不能得到现有 proof 的验证。不得原地扩展 v1 行。新的带版本类型化行必须从已验证
-的冻结函数签名与 CFG 导出，同时进入规范化导出摘要和生成的 descriptor；loader
-须检查字段有效性和身份歧义。独立 v4 夹具已覆盖后者；源码推导出的候选行尚未
-接入描述符生成。重建后的 artifact digest 与 trust 记录便能约束映像
-及其导出摘要。`stageVerifiedNativeGeneration` 当前只把 symbol／contract／entry／
+table 构造 v1 `NativeExportSpec`，并由 `emitNativeLibraryDescriptor` 生成对应行。
+loader 现将独立的 v4 Ref／unit 候选行与 v1 行一起绑定到 proof 导出摘要。
+普通 Native 构建仍只生成 v1 行：源码推导的 v4 行构造器仅用于可丢弃的 JIT
+描述符，公开 Ref 入口仍受门禁约束。下一步须将已验证的源码行、生成的 wrapper
+和 proof 声明同时接入，再通过固定的 lookup 传递类型化事实，避免暴露裸指针。
+重建后的 artifact digest 与 trust 记录便能约束映像及其导出摘要。
+`stageVerifiedNativeGeneration` 当前只把 symbol／contract／entry／
 kind／flags 复制到 `GenerationBinding`；宿主调用前，类型化事实还须传到固定的
 lookup 结果。generation 已保留已验证库的 lease，但调用者须在整次同步调用期间
 持有 `PinnedBinding`。

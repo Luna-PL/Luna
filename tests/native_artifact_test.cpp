@@ -34,11 +34,14 @@ int prepareIndependentFixture(int argc, char** argv) {
         std::string(argv[1]) == "--prepare-v3-dependency-fixture";
     const bool typedV4 =
         std::string(argv[1]) == "--prepare-v4-fixture" ||
+        std::string(argv[1]) == "--prepare-v4-unbound-fixture" ||
         std::string(argv[1]) == "--prepare-v4-dependency-fixture" ||
         std::string(argv[1]) == "--prepare-v4-bad-module-fixture" ||
         std::string(argv[1]) == "--prepare-v4-missing-slot-fixture";
     const bool dependencyV4 =
         std::string(argv[1]) == "--prepare-v4-dependency-fixture";
+    const bool unboundV4 =
+        std::string(argv[1]) == "--prepare-v4-unbound-fixture";
     const bool missingV4Slot =
         std::string(argv[1]) == "--prepare-v4-missing-slot-fixture";
     const bool badV4Module =
@@ -108,6 +111,7 @@ int prepareIndependentFixture(int argc, char** argv) {
         const auto digest = luna::driver::digestNativeTypedExports({canonical});
         std::copy(digest.begin(), digest.end(), position);
     }
+    std::string v4Canonical;
     if (typedV4) {
         const std::string marker = "V4_DIGEST_PLACEHOLDER_0123456789";
         static_assert(sizeof("V4_DIGEST_PLACEHOLDER_0123456789") - 1 ==
@@ -127,14 +131,14 @@ int prepareIndependentFixture(int argc, char** argv) {
             "type:unit-fn", "type:ref-checkpoint",
             "symbol:slot-checkpoint", "contract:slot-checkpoint",
             "type:slot-checkpoint"};
-        const auto canonical = luna::driver::canonicalNativeRefUnitExportV4(
+        v4Canonical = luna::driver::canonicalNativeRefUnitExportV4(
             LUNA_NATIVE_DECLARATION_FUNCTION_V1,
             LUNA_NATIVE_EXPORT_CALLABLE_V1,
             LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1,
             LUNA_NATIVE_REF_SHARED_BORROW_V1,
             LUNA_NATIVE_RESULT_UNIT_V1,
             LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1, identifiers);
-        const auto digest = luna::driver::digestNativeTypedExports({canonical});
+        const auto digest = luna::driver::digestNativeTypedExports({v4Canonical});
         std::copy(digest.begin(), digest.end(), position);
     }
 
@@ -169,6 +173,8 @@ int prepareIndependentFixture(int argc, char** argv) {
         spec.exportedDescriptors.push_back(
             luna::driver::canonicalNativeExport(slot));
     }
+    if (typedV4 && !unboundV4)
+        spec.exportedDescriptors.push_back(v4Canonical);
     std::vector<uint8_t> record;
     std::string error;
     if (!luna::driver::makeNativeProofPlaceholder(spec, record, error)) {
@@ -518,6 +524,7 @@ int main(int argc, char** argv) {
                      std::string(argv[1]) == "--prepare-v3-fixture" ||
                      std::string(argv[1]) == "--prepare-v3-dependency-fixture" ||
                      std::string(argv[1]) == "--prepare-v4-fixture" ||
+                     std::string(argv[1]) == "--prepare-v4-unbound-fixture" ||
                      std::string(argv[1]) == "--prepare-v4-dependency-fixture" ||
                      std::string(argv[1]) == "--prepare-v4-bad-module-fixture" ||
                      std::string(argv[1]) == "--prepare-v4-missing-slot-fixture"))

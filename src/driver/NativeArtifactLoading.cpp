@@ -292,7 +292,8 @@ bool descriptorString(const char* source, std::string& value) {
 
 bool validateNativeDescriptor(
     void* handle, const NativeProofInfo& proof,
-    const LunaNativeLibraryDescriptorV1*& descriptor, std::string& error) {
+    const LunaNativeLibraryDescriptorV1*& descriptor,
+    std::vector<std::string>& proofExports, std::string& error) {
     auto* rawQuery = loadNativeSymbol(
         handle, "luna_native_library_descriptor_v1");
     if (!rawQuery) {
@@ -326,8 +327,7 @@ bool validateNativeDescriptor(
         error = "Native library descriptor has an invalid export table";
         return false;
     }
-    std::vector<std::string> canonicalExports;
-    canonicalExports.reserve(static_cast<size_t>(descriptor->export_count));
+    proofExports.reserve(static_cast<size_t>(descriptor->export_count));
     std::set<std::string> symbolIds;
     std::set<std::string> callableLinkages;
     for (uint64_t index = 0; index < descriptor->export_count; ++index) {
@@ -356,11 +356,7 @@ bool validateNativeDescriptor(
             error = "Native library descriptor contains an ambiguous export row";
             return false;
         }
-        canonicalExports.push_back(canonicalNativeExport(spec));
-    }
-    if (digestList(std::move(canonicalExports)) != proof.exportDigest) {
-        error = "Native library descriptor does not match its proof export digest";
-        return false;
+        proofExports.push_back(canonicalNativeExport(spec));
     }
     return true;
 }
@@ -560,7 +556,8 @@ bool validateNativeDescriptorV4(
     const LunaNativeLibraryDescriptorV1* v1,
     const LunaNativeLibraryDescriptorV2* v2,
     const LunaNativeLibraryDescriptorV3* v3,
-    const LunaNativeLibraryDescriptorV4*& descriptor, std::string& error) {
+    const LunaNativeLibraryDescriptorV4*& descriptor,
+    std::vector<std::string>& proofExports, std::string& error) {
     auto* rawQuery = loadNativeSymbol(
         handle, "luna_native_library_descriptor_v4");
     if (!rawQuery) return true;
@@ -674,7 +671,7 @@ bool validateNativeDescriptorV4(
             row.declaration_kind, row.flags, row.entry_abi, row.ref_mode,
             row.result_mode, row.status_domain, identifiers));
     }
-    const auto digest = digestNativeTypedExports(std::move(canonicalRows));
+    const auto digest = digestNativeTypedExports(canonicalRows);
     if (!std::equal(digest.begin(), digest.end(),
                     descriptor->export_descriptor_digest)) {
         error = "Native v4 export rows do not match their descriptor digest";
@@ -688,6 +685,8 @@ bool validateNativeDescriptorV4(
             return false;
         }
     }
+    proofExports.insert(proofExports.end(),
+                        canonicalRows.begin(), canonicalRows.end());
     return true;
 }
 
@@ -849,14 +848,24 @@ bool loadVerifiedNativeLibrary(
     const LunaNativeLibraryDescriptorV2* descriptorV2 = nullptr;
     const LunaNativeLibraryDescriptorV3* descriptorV3 = nullptr;
     const LunaNativeLibraryDescriptorV4* descriptorV4 = nullptr;
-    if (!validateNativeDescriptor(handle, proof, descriptor, error) ||
+    std::vector<std::string> proofExports;
+    if (!validateNativeDescriptor(handle, proof, descriptor,
+                                  proofExports, error) ||
         !validateNativeDescriptorV2(handle, proof, descriptor,
                                     descriptorV2, error) ||
         !validateNativeDescriptorV3(handle, staged.path, proof, descriptor,
                                     descriptorV2, descriptorV3, error) ||
         !validateNativeDescriptorV4(handle, staged.path, proof, descriptor,
                                     descriptorV2, descriptorV3,
-                                    descriptorV4, error)) {
+                                    descriptorV4, proofExports, error)) {
+        closeNativeImage(handle);
+        releaseStagedImage(staged);
+        return false;
+    }
+    // V4 candidates share the proof claim with the v1 public Slot registry.
+    // Older libraries without v4 retain their original v1-only digest.
+    if (digestList(std::move(proofExports)) != proof.exportDigest) {
+        error = "Native library descriptor does not match its proof export digest";
         closeNativeImage(handle);
         releaseStagedImage(staged);
         return false;
