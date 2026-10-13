@@ -3,6 +3,7 @@
 #include "codegen/CodeGenerator.h"
 #include "diagnostics/Diagnostic.h"
 #include "driver/CompilerPipeline.h"
+#include "driver/NativeArtifact.h"
 #include "package/Package.h"
 #include "tooling/AnalysisSnapshot.h"
 
@@ -25,6 +26,14 @@ bool collectCffiExports(
     const CompilerPipeline& pipeline,
     std::vector<const moon::FunctionDecl*>& exports,
     std::string& error);
+struct NativeLibraryProofSurface {
+    NativeProofSpec proof;
+    std::vector<NativeExportSpec> v1Exports;
+    const moon::FunctionDecl* refUnitSource = nullptr;
+};
+bool prepareNativeLibraryProofSurface(
+    const CompilerPipeline& pipeline, NativeLibraryProofSurface& surface,
+    diagnostic::Diagnostic& error);
 int buildCffiLibrary(
     const CompilerPipeline& pipeline, CodeGenerator& codeGenerator,
     const std::string& inputPath,
@@ -34,6 +43,7 @@ int buildCffiLibrary(
     LunaOptimizationLevel optimizationLevel);
 int buildNativeLibrary(
     const CompilerPipeline& pipeline, CodeGenerator& codeGenerator,
+    const NativeLibraryProofSurface& surface,
     const std::string& inputPath,
     const std::vector<std::string>& linkLibraries,
     const std::string& runtimeLibrary, const std::string& aotCompiler,

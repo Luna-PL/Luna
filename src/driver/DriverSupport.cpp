@@ -5,6 +5,7 @@
 #include "driver/CommandLine.h"
 #include "driver/CompilerPipeline.h"
 #include "driver/NativeArtifact.h"
+#include "codegen/NativeRefUnitFacts.h"
 #include "driver/Repl.h"
 #include "moonir/ContainerModel.h"
 #include "moonir/Printer.h"
@@ -18,6 +19,7 @@
 #include <llvm/Support/TargetSelect.h>
 #include <llvm/TargetParser/Host.h>
 
+#include <algorithm>
 #include <cctype>
 #include <cstdio>
 #include <filesystem>
@@ -389,7 +391,90 @@ int buildCffiLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGenera
     return 0;
 }
 
+bool prepareNativeLibraryProofSurface(
+    const CompilerPipeline& pipeline, NativeLibraryProofSurface& surface,
+    diagnostic::Diagnostic& error) {
+    const auto& package = pipeline.analysisSnapshot().packageManifest();
+    NativeLibraryProofSurface prepared;
+    prepared.proof.packageId = package.id;
+    prepared.proof.packageVersion = package.version;
+    prepared.proof.targetAbi = llvm::sys::getProcessTriple();
+    prepared.proof.compilerIdentity =
+        std::string("luna/") + LUNA_VERSION_STRING + "@" + LUNA_COMPILER_COMMIT;
+
+    for (const auto& declaration : pipeline.moonModule().declarations) {
+        if (!declaration || !declaration->isExported ||
+            declaration->packageId != package.id)
+            continue;
+        const auto* function =
+            dynamic_cast<const moon::FunctionDecl*>(declaration.get());
+        if (function && (function->isExtern || function->abi == "C")) {
+            error = diagnostic::format(
+                "native-proof",
+                "Native public surface contains foreign C export '" +
+                    function->name + "'",
+                function->location.path, function->location.line,
+                function->location.column,
+                "use ordinary `export fn` for trusted Native ABI or build `-t cffi`");
+            return false;
+        }
+        const auto* record = pipeline.moonModule().findDeclaration(
+            {declaration->symbolId, declaration->contractId});
+        if (!record || record->id != declaration->declarationId) {
+            error = diagnostic::format(
+                "native-proof", "Native export has no exact sealed declaration record",
+                declaration->location.path, declaration->location.line,
+                declaration->location.column,
+                "report this compiler defect with the package");
+            return false;
+        }
+        if (function) {
+            const auto hasRef = [&](const moon::TypeRef& typeId) {
+                const auto* type = pipeline.moonModule().findType(typeId);
+                return type && type->kind == TypeKind::RuntimeFragmentRef;
+            };
+            const bool usesRef = hasRef(function->returnType) ||
+                std::any_of(function->params.begin(), function->params.end(),
+                    [&](const moon::Param& param) {
+                        return hasRef(param.type);
+                    });
+            if (usesRef) {
+                luna::codegen::NativeRefUnitSourceFacts facts;
+                std::string sourceError;
+                if (prepared.refUnitSource ||
+                    !luna::codegen::deriveNativeRefUnitSourceFacts(
+                        pipeline.moonModule(), *function, facts, sourceError)) {
+                    error = diagnostic::format(
+                        "native-proof",
+                        prepared.refUnitSource
+                            ? "Native proof surface has another Ref callable"
+                            : sourceError,
+                        function->location.path, function->location.line,
+                        function->location.column,
+                        "check the Native Ref/unit source and public Slot");
+                    return false;
+                }
+                prepared.refUnitSource = function;
+                continue;
+            }
+        }
+        NativeExportSpec nativeExport;
+        nativeExport.declarationKind = static_cast<uint32_t>(record->kind) + 1;
+        nativeExport.flags = function ? LUNA_NATIVE_EXPORT_CALLABLE_V1 : 0;
+        nativeExport.symbolId = record->symbolId.value;
+        nativeExport.contractId = record->contractId.value;
+        nativeExport.linkageName = record->linkageName;
+        prepared.proof.exportedDescriptors.push_back(
+            canonicalNativeExport(nativeExport));
+        prepared.v1Exports.push_back(std::move(nativeExport));
+    }
+    surface = std::move(prepared);
+    error = {};
+    return true;
+}
+
 int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGenerator,
+                              const NativeLibraryProofSurface& surface,
                               const std::string& inputPath,
                               const std::vector<std::string>& linkLibraries,
                               const std::string& runtimeLibrary, const std::string& aotCompiler,
@@ -397,56 +482,16 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
                               LunaOptimizationLevel optimizationLevel) {
     namespace fs = std::filesystem;
     const auto& package = pipeline.analysisSnapshot().packageManifest();
-    NativeProofSpec spec;
-    spec.packageId = package.id;
-    spec.packageVersion = package.version;
-    spec.targetAbi = llvm::sys::getProcessTriple();
-    spec.compilerIdentity = std::string("luna/") + LUNA_VERSION_STRING + "@" + LUNA_COMPILER_COMMIT;
-    std::vector<NativeExportSpec> nativeExports;
-
-    for (const auto& declaration : pipeline.moonModule().declarations) {
-        if (!declaration) continue;
-        if (declaration->isExported && declaration->packageId == package.id) {
-            if (const auto* function = dynamic_cast<const moon::FunctionDecl*>(declaration.get());
-                function && (function->isExtern || function->abi == "C")) {
-                std::cerr
-                    << diagnostic::format(
-                           "native-proof",
-                           "Native public surface contains foreign C export '" + function->name +
-                               "'",
-                           function->location.path, function->location.line,
-                           function->location.column,
-                           "use ordinary `export fn` for trusted Native ABI or build `-t cffi`")
-                    << "\n";
-                return 1;
-            }
-            const moon::DeclarationRecord* record = nullptr;
-            for (const auto& candidate : pipeline.moonModule().declarationTable) {
-                if (candidate.symbolId == declaration->symbolId) {
-                    record = &candidate;
-                    break;
-                }
-            }
-            if (!record) {
-                std::cerr << diagnostic::format(
-                                 "native-proof", "Native export has no sealed declaration record",
-                                 declaration->location.path, declaration->location.line,
-                                 declaration->location.column,
-                                 "report this compiler defect with the package")
-                          << "\n";
-                return 1;
-            }
-            NativeExportSpec nativeExport;
-            nativeExport.declarationKind = static_cast<uint32_t>(record->kind) + 1;
-            nativeExport.flags = dynamic_cast<const moon::FunctionDecl*>(declaration.get())
-                                     ? LUNA_NATIVE_EXPORT_CALLABLE_V1
-                                     : 0;
-            nativeExport.symbolId = record->symbolId.value;
-            nativeExport.contractId = record->contractId.value;
-            nativeExport.linkageName = record->linkageName;
-            spec.exportedDescriptors.push_back(canonicalNativeExport(nativeExport));
-            nativeExports.push_back(std::move(nativeExport));
-        }
+    const auto& spec = surface.proof;
+    const auto& nativeExports = surface.v1Exports;
+    if (surface.refUnitSource) {
+        std::cerr << diagnostic::format(
+            "native-proof",
+            "Native Ref/unit v4 claim is not retained in the artifact proof",
+            inputPath, 0, 0,
+            "complete Native Ref/unit artifact proof binding before publication")
+                  << "\n";
+        return 1;
     }
 
     std::vector<uint8_t> proofRecord;

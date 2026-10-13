@@ -981,6 +981,9 @@ Native 管线，尚未开放公开入口。
 普通 Native codegen 现对该公开候选在一次性证明 module 中发射并前置验证对应
 的 v4 状态 wrapper。body 与 wrapper 均在制品生成前丢弃；集成测试要求拒绝诊断
 包含这次前置验证的证据。
+Native 库的导出收集现提前到 codegen 前，并将该 Ref／unit 候选排除在 v1 导出行外。
+一次性证明 module 使用真实 manifest、目标 ABI、编译器身份和其余 v1 行，协同生成
+v4 descriptor 与 proof 声明。集成测试要求两项检查均成功后才到达 codegen 发布门禁。
 生成的 outlined Apply 续体在 context 派生或 Slot 派发失败时先 Drop 活跃
 context owner，再返回显式失败值 `-1`。Runtime 将其映射为分派执行失败，
 包括嵌套 resume；它不算续体逃逸。私有单 Ref／unit 根 body 正常返回 `0`，
@@ -1005,7 +1008,7 @@ v4 源码事实仅准入没有其他词法清理义务的 CFG；其余清理须�
 现有通用 Native v1/v2 export 和 Runtime declaration 描述符未编码 Ref 目标或这套入口
 ABI。Fragment 描述符对应 factory／environment／activation 执行，不能代替源码
 函数入口。下一步须将已证明的 body 与 wrapper 接入普通 Native 生成，
-将已发射的 v4 行绑定到产物 proof，再把类型化事实接入固定 lookup 与调用路径。
+将协同生成的 v4 行保留在产物 proof，再把类型化事实接入固定 lookup 与调用路径。
 Moon Container 0.3 编码器仍拒绝 Apply region，默认 module verifier 和 CodeGenerator
 也仍拒绝发布源码 Ref。
 显式选择的 0.4 Type 与 Code section 编解码现可往返封闭源码的

@@ -28,6 +28,7 @@
 
 namespace luna::driver {
 struct NativeExportSpec;
+struct NativeProofSpec;
 }
 namespace luna::runtime {
 class RuntimeOwnedResultHandle;
@@ -123,7 +124,10 @@ public:
     CodeGenerator(const std::string& moduleName);
     ~CodeGenerator();
 
-    bool generate(moon::Module* module);
+    bool generate(
+        moon::Module* module,
+        const luna::driver::NativeProofSpec* nativeProof = nullptr,
+        const std::vector<luna::driver::NativeExportSpec>* nativeV1Exports = nullptr);
     void setOptimizationLevel(LunaOptimizationLevel level) { mOptimizationLevel = level; }
     void setGpuTargets(LunaGpuTargetConfig targets);
 
@@ -212,12 +216,14 @@ private:
 
     void generateFunctionBody(moon::FunctionDecl* decl);
     // Proof-only lowering of one constrained Ref entry into a temporary LLVM
-    // module. Ordinary proofs destroy it before returning. The test-target-only
-    // hook may consume that same verified module into a private JIT lease;
-    // neither path publishes a source Ref ABI or runtime descriptor.
+    // module. Ordinary proofs can preflight a v4 descriptor/proof claim, then
+    // destroy that module before artifact generation. The test-target-only
+    // hook may consume its verified module into a private JIT lease.
     static bool verifyPrivateRuntimeFragmentRefUnitIngress(
         moon::Module& program, moon::FunctionDecl& function,
-        std::string& failure
+        std::string& failure,
+        const luna::driver::NativeProofSpec* nativeProof = nullptr,
+        const std::vector<luna::driver::NativeExportSpec>* nativeV1Exports = nullptr
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
         , std::shared_ptr<LunaJitModule>* executable = nullptr,
         std::vector<uint8_t>* entryRecord = nullptr

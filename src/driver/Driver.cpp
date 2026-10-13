@@ -193,6 +193,7 @@ int run(int argc, char* argv[]) {
 
     std::optional<AotBuildCacheOptions> nativeBuildCache;
     std::string nativeBuildInputState;
+    std::optional<NativeLibraryProofSurface> nativeProofSurface;
     if (cmd == "build" && artifactTarget == ArtifactTarget::Native &&
         moonIrOutput.empty() && !printMoonCostReport) {
         static int mainExecutableAnchor = 0;
@@ -320,7 +321,23 @@ int run(int argc, char* argv[]) {
         }
     }
 
-    if (!pipeline.generateCode(std::move(gpuTargets))) {
+    if (cmd == "build" && artifactTarget == ArtifactTarget::Native &&
+        pipeline.analysisSnapshot().packageManifest().kind == PackageKind::Library) {
+        nativeProofSurface.emplace();
+        diagnostic::Diagnostic proofError;
+        if (!prepareNativeLibraryProofSurface(
+                pipeline, *nativeProofSurface, proofError)) {
+            std::cerr << proofError << "\n";
+            return 1;
+        }
+    }
+
+    const bool hasNativeRefSource = nativeProofSurface &&
+        nativeProofSurface->refUnitSource;
+    if (!pipeline.generateCode(
+            std::move(gpuTargets),
+            hasNativeRefSource ? &nativeProofSurface->proof : nullptr,
+            hasNativeRefSource ? &nativeProofSurface->v1Exports : nullptr)) {
         printErrors(pipeline.errors());
         return 1;
     }
@@ -347,7 +364,8 @@ int run(int argc, char* argv[]) {
 
     if (cmd == "build" && artifactTarget == ArtifactTarget::Native &&
         pipeline.analysisSnapshot().packageManifest().kind == PackageKind::Library)
-        return buildNativeLibrary(pipeline, cg, filePath, linkLibraries, runtimeLibrary,
+        return buildNativeLibrary(pipeline, cg, *nativeProofSurface,
+                                  filePath, linkLibraries, runtimeLibrary,
                                   aotCompiler, outputPath, optimizationLevel);
 
     if (cmd == "build") {

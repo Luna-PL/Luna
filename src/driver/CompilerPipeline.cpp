@@ -138,14 +138,17 @@ bool CompilerPipeline::lowerAnalyzedProgram(const CompilerPipelineOptions& optio
     return true;
 }
 
-bool CompilerPipeline::generateCode(LunaGpuTargetConfig gpuTargets) {
+bool CompilerPipeline::generateCode(
+    LunaGpuTargetConfig gpuTargets, const NativeProofSpec* nativeProof,
+    const std::vector<NativeExportSpec>* nativeV1Exports) {
     mErrors.clear();
     mErrorStage.clear();
     mCodeGenerator = std::make_unique<CodeGenerator>(mModuleName);
     mCodeGenerator->setOptimizationLevel(mOptimizationLevel);
     mCodeGenerator->setGpuTargets(std::move(gpuTargets));
     const auto codegenStart = std::chrono::steady_clock::now();
-    const bool codegenSucceeded = mCodeGenerator->generate(mMoonModule.get());
+    const bool codegenSucceeded = mCodeGenerator->generate(
+        mMoonModule.get(), nativeProof, nativeV1Exports);
     mTimings.codegenMicroseconds = elapsedMicroseconds(codegenStart);
     if (!codegenSucceeded) return fail(mCodeGenerator->errors());
     return true;

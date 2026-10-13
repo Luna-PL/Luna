@@ -35,7 +35,10 @@ public:
     bool compileToMoonIR(const CompilerPipelineOptions& options);
     bool compileSourceToMoonIR(const std::string& source, const std::string& virtualPath,
                                const CompilerPipelineOptions& options = {});
-    bool generateCode(LunaGpuTargetConfig gpuTargets);
+    bool generateCode(
+        LunaGpuTargetConfig gpuTargets,
+        const NativeProofSpec* nativeProof = nullptr,
+        const std::vector<NativeExportSpec>* nativeV1Exports = nullptr);
 
     const moon::Module& moonModule() const;
     CodeGenerator& codeGenerator();

@@ -556,7 +556,9 @@ CodeGenerator::loadPrivateRuntimeFragmentRefResultEntryForTest(
 #endif
 
 bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
-    moon::Module& program, FunctionDecl& function, std::string& failure
+    moon::Module& program, FunctionDecl& function, std::string& failure,
+    const luna::driver::NativeProofSpec* nativeProof,
+    const std::vector<luna::driver::NativeExportSpec>* nativeV1Exports
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     , std::shared_ptr<LunaJitModule>* executable,
     std::vector<uint8_t>* entryRecord
@@ -2808,11 +2810,18 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
 #endif
         if (publicUnitPreflight) {
             const std::string wrapperName =
-                "__luna_native_ref_unit_preflight_" + function.symbolId.value;
+                "__luna_native_ref_unit_entry_v1_" + function.symbolId.value;
             if (!luna::codegen::emitNativeRefUnitStatusWrapper(
                     program, function, *proof.mModule,
                     wrapperName, failure))
                 return false;
+            if (nativeProof && nativeV1Exports) {
+                auto claimedProof = *nativeProof;
+                if (!luna::codegen::emitNativeRefUnitV4ClaimedDescriptorCandidate(
+                        program, function, *proof.mModule, wrapperName,
+                        *nativeV1Exports, claimedProof, failure))
+                    return false;
+            }
         }
         llvm::raw_string_ostream stream(invalidIR);
         if (llvm::verifyModule(*proof.mModule, &stream)) {
@@ -2974,7 +2983,8 @@ CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
     std::vector<uint8_t>* entryRecord) {
     std::shared_ptr<LunaJitModule> executable;
     if (!verifyPrivateRuntimeFragmentRefUnitIngress(
-            program, function, failure, &executable, entryRecord))
+            program, function, failure, nullptr, nullptr,
+            &executable, entryRecord))
         return {};
     return executable;
 }
@@ -2989,7 +2999,8 @@ CodeGenerator::materializePrivateRuntimeFragmentRefOwnedPairForTest(
         return {};
     }
     if (!verifyPrivateRuntimeFragmentRefUnitIngress(
-            program, function, failure, &executable, nullptr))
+            program, function, failure, nullptr, nullptr,
+            &executable, nullptr))
         return {};
     return executable;
 }
@@ -3223,9 +3234,17 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefOwnedReturn(
     return true;
 }
 
-bool CodeGenerator::generate(moon::Module* program) {
+bool CodeGenerator::generate(
+    moon::Module* program,
+    const luna::driver::NativeProofSpec* nativeProof,
+    const std::vector<luna::driver::NativeExportSpec>* nativeV1Exports) {
     if (!program) {
         error("code generation has no MoonIR module");
+        return false;
+    }
+    if (static_cast<bool>(nativeProof) !=
+        static_cast<bool>(nativeV1Exports)) {
+        error("Native Ref/unit preflight has an incomplete proof surface");
         return false;
     }
     bool containsRef = false;
@@ -3242,6 +3261,7 @@ bool CodeGenerator::generate(moon::Module* program) {
         size_t provenReturns = 0;
         size_t provenApplies = 0;
         size_t provenPublicWrappers = 0;
+        size_t provenPublicClaims = 0;
         for (auto& declaration : program->declarations) {
             auto* function = dynamic_cast<FunctionDecl*>(declaration.get());
             if (!function || function->params.empty() ||
@@ -3267,13 +3287,16 @@ bool CodeGenerator::generate(moon::Module* program) {
             std::string failure;
             if (result->kind == TypeKind::Unit) {
                 if (verifyPrivateRuntimeFragmentRefUnitIngress(
-                        *program, *function, failure)) {
+                        *program, *function, failure,
+                        nativeProof, nativeV1Exports)) {
                     if (function->controlFlow &&
                         !function->controlFlow->runtimeRefApplies.empty()) {
                         ++provenApplies;
                         if (function->isExported &&
-                            function->packageId == program->name)
+                            function->packageId == program->name) {
                             ++provenPublicWrappers;
+                            if (nativeProof) ++provenPublicClaims;
+                        }
                     } else
                         ++provenEntries;
                 } else {
@@ -3302,7 +3325,10 @@ bool CodeGenerator::generate(moon::Module* program) {
                   " private Ref apply body(s) verified and discarded" : "") +
               (provenPublicWrappers ? "; " +
                   std::to_string(provenPublicWrappers) +
-                  " public Native Ref/unit preflight wrapper(s) verified and discarded" : ""));
+                  " public Native Ref/unit preflight wrapper(s) verified and discarded" : "") +
+              (provenPublicClaims ? "; " +
+                  std::to_string(provenPublicClaims) +
+                  " public Native Ref/unit v4 descriptor/proof claim(s) verified and discarded" : ""));
         return false;
     }
     mProgram = program;

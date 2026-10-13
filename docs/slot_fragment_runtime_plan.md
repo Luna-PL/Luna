@@ -1297,6 +1297,11 @@ Ordinary Native codegen now emits and preflights the corresponding v4 status
 wrapper in its disposable proof module for that public candidate. The body
 and wrapper are both discarded before artifact generation; the integration
 test requires this preflight evidence in the refusal diagnostic.
+Native library export collection now runs before codegen and keeps that Ref/unit
+candidate out of the v1 export rows. The disposable proof uses the actual
+manifest, target ABI, compiler identity and remaining v1 rows to coordinate a
+v4 descriptor with its proof claim. The integration test requires both checks
+to succeed before codegen refuses publication.
 Generated outlined Apply continuations now Drop active context owners and
 return the explicit continuation failure result `-1` on context-derivation or
 Slot-dispatch failure. Runtime maps that result to dispatch execution failure,
@@ -1328,7 +1333,7 @@ The existing generic Native v1/v2 export and Runtime declaration descriptors
 do not encode the Ref target or this ingress ABI. The Fragment descriptor
 describes factory/environment/activation execution, so it cannot stand in
 for a source function entry. The next step is to move the proven body and
-wrapper into ordinary Native generation, bind its emitted v4 row to the
+wrapper into ordinary Native generation, retain the coordinated v4 row in the
 artifact proof, then connect its typed facts to a pinned lookup and call path.
 The Moon Container 0.3
 encoder still rejects Apply regions, and the default module verifier and
