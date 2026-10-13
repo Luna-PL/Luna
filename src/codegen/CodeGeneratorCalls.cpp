@@ -430,8 +430,38 @@ llvm::Value* CodeGenerator::generateCall(CallExpr* call) {
                                     returnType->isVoidTy() ? "" : "indirect.call");
     }
     if (callableType && callableType->kind == TypeKind::Closure) {
-        llvm::Value* closureValue = generateExpr(call->callee.get());
         llvm::Type* closureType = mHelpers->toLLVMType(callableType);
+        llvm::Value* closureValue = nullptr;
+        if (luna::ownership::isMoveOnly(
+                callableType->sysmeta.resource.usage)) {
+            auto* explicitMove = dynamic_cast<MoveExpr*>(
+                call->callee.get());
+            auto* identifier = dynamic_cast<IdentifierExpr*>(
+                explicitMove ? explicitMove->operand.get() :
+                    call->callee.get());
+            llvm::AllocaInst* owner = nullptr;
+            if (identifier && !identifier->local.empty() &&
+                identifier->local.value < mCanonicalLocals.size())
+                owner = mCanonicalLocals[identifier->local.value];
+            if (!owner && identifier) {
+                const auto found = mLocals.find(identifier->name);
+                if (found != mLocals.end()) owner = found->second;
+            }
+            if (owner && owner->getAllocatedType() == closureType) {
+                closureValue = mBuilder->CreateLoad(
+                    closureType, owner, "closure.call.take");
+                mBuilder->CreateStore(
+                    llvm::Constant::getNullValue(closureType), owner);
+            } else if (dynamic_cast<moon::MakeClosureExpr*>(
+                           call->callee.get())) {
+                closureValue = generateExpr(call->callee.get());
+            } else {
+                error("affine closure call requires its original local cell");
+                return llvm::PoisonValue::get(mHelpers->i32Ty());
+            }
+        } else {
+            closureValue = generateExpr(call->callee.get());
+        }
         auto* closureStorage = createEntryBlockAlloca(mCurrentFunc, closureType, "closure.call");
         mBuilder->CreateStore(closureValue, closureStorage);
         llvm::Value* codePointer = mBuilder->CreateLoad(

@@ -1044,8 +1044,13 @@ owner JIT 将一个 Runtime 发放句柄移入 struct，另一个留在参数 ce
 未调用时退出清理。封闭退出边只清理 closure 与另一个 Ref 参数，跳过已转移的
 源局部变量。codegen 从原始 owner cell 取出捕获值，递归 closure 清理则在环境
 字段的原始 cell 上执行 Drop。私有双 owner JIT 恰好释放两个 Runtime 发放
-句柄，generation pin 随之失效。下一步验证调用后的 closure 清理及部分消费的
-捕获字段；公开 Ref 发布门禁不变。
+句柄，generation pin 随之失效。仿射 closure 调用现消费其 owner：Sema 拒绝
+第二次调用，封闭退出边跳过已消费 closure 的清理，codegen 在把环境交给 lambda
+前清空调用方原始 cell。
+私有双 owner JIT 实际执行 lambda，恰好释放捕获的 Ref 和另一个参数 Ref，
+generation pin 随之失效。直接调用临时 closure 与显式 `move` 调用也通过相同的
+一次性路径。下一步验证部分消费的捕获字段及分支敏感的 closure
+调用；公开 Ref 发布门禁不变。
 更新后的严格构建与全部 81 项测试通过，
 前端／canonical 聚焦测试亦通过 ASAN／UBSan。
 

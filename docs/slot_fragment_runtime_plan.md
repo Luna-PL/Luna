@@ -1384,10 +1384,16 @@ is dropped without invocation. Its sealed exit cleans the closure and the
 other Ref parameter, omitting the transferred source local. Codegen takes the
 capture from its original owner cell, and recursive closure cleanup drops the
 original environment field cell. The private two-owner JIT releases both
-Runtime-issued handles exactly once and expires their generation pin. Next,
-prove invoked closure cleanup and partially consumed captures. Public Ref
-publication remains gated. The updated strict build passes all 81 tests, and
-the focused frontend/canonical tests pass under ASAN/UBSan.
+Runtime-issued handles exactly once and expires their generation pin. An
+invoked affine closure now consumes its owner. Sema rejects a second call,
+the sealed exit omits that consumed closure's cleanup, and codegen clears the
+caller's original cell before passing the environment to the lambda. The
+private two-owner JIT executes the lambda and releases its captured Ref plus
+the separate parameter Ref exactly once; the generation pin expires. Direct
+temporary calls and explicit `move` calls use the same one-shot path. Next,
+prove partially consumed captures and branch-sensitive closure calls. Public
+Ref publication remains gated. The updated strict build passes all 81 tests,
+and the focused frontend/canonical tests pass under ASAN/UBSan.
 
 The present Native verification path fixes the integration boundary:
 `buildNativeLibrary` forms each `NativeExportSpec` from the sealed declaration

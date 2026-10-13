@@ -280,6 +280,21 @@ void Verifier::verifyOwnershipDataflow(
         } else if (const auto* call =
                        dynamic_cast<const CallExpr*>(expression)) {
             transferExpr(call->callee.get(), state);
+            const auto* callable = call->callee
+                ? module.findType(call->callee->type) : nullptr;
+            if (callable && callable->kind == TypeKind::Closure &&
+                luna::ownership::isMoveOnly(
+                    callable->sysmeta.resource.usage)) {
+                if (auto place = placeOf(call->callee.get()))
+                    consumePlace(*place, state, call->location,
+                                 "affine closure call");
+                else if (!dynamic_cast<const MakeClosureExpr*>(
+                             call->callee.get()) &&
+                         !dynamic_cast<const MoveExpr*>(
+                             call->callee.get()))
+                    error(call->location,
+                          "affine closure call has no consumable local");
+            }
             for (const auto& argument : call->args)
                 transferExpr(argument.get(), state);
         } else if (const auto* launch =

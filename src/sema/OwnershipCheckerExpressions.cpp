@@ -108,6 +108,14 @@ bool OwnershipChecker::checkCallExpr(CallExpr* call) {
         return true;
     }
     if (!checkExpr(call->callee.get())) return false;
+    if (auto place = extractPlace(call->callee.get())) {
+        auto* variable = lookup(place->root);
+        if (variable && variable->type &&
+            variable->type->kind == TypeKind::Closure &&
+            luna::ownership::isMoveOnly(variable->usage) &&
+            !consume(*place, "affine closure call"))
+            return false;
+    }
     if (auto* callee = dynamic_cast<IdentifierExpr*>(call->callee.get());
         callee &&
         (callee->name == "clone" || callee->name == "is_ok" || callee->name == "is_err")) {

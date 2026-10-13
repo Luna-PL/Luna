@@ -2940,6 +2940,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         return false;
     }
     size_t bodyDropCalls = 0;
+    size_t closureDropCalls = 0;
     size_t wrapperBodyCalls = 0;
     for (auto& block : *body)
         for (auto& instruction : block)
@@ -2948,6 +2949,22 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 call->getCalledFunction()->getName() ==
                     "luna_runtime_fragment_ref_drop_v1")
                 ++bodyDropCalls;
+    // An invoked affine closure transfers its owner to the generated lambda;
+    // its Ref Drop lives there rather than in the caller's body.
+    if (privateOwnedPair)
+        for (auto& generated : *proof.mModule) {
+            if (!generated.hasInternalLinkage() ||
+                !generated.getName().starts_with("__lambda_"))
+                continue;
+            for (auto& block : generated)
+                for (auto& instruction : block)
+                    if (auto* call = llvm::dyn_cast<llvm::CallInst>(
+                            &instruction);
+                        call && call->getCalledFunction() &&
+                        call->getCalledFunction()->getName() ==
+                            "luna_runtime_fragment_ref_drop_v1")
+                        ++closureDropCalls;
+        }
     for (auto& block : *wrapper)
         for (auto& instruction : block)
             if (auto* call = llvm::dyn_cast<llvm::CallInst>(&instruction);
@@ -2956,7 +2973,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
     const bool owned = function.params.front().relation ==
         luna::ownership::Relation::Owned;
     const bool wrongDropCount = privateOwnedPair
-        ? bodyDropCalls < 2
+        ? bodyDropCalls + closureDropCalls < 2
         : (owned ? bodyDropCalls == 0 : bodyDropCalls != 0);
     if (wrapperBodyCalls != 1 || wrongDropCount) {
         failure = "generated body has no matching Ref Drop behavior";
