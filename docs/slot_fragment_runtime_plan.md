@@ -1397,8 +1397,17 @@ captured fields; implicit fallthrough and explicit `return` drop the moved
 local and only the remaining field. Codegen takes the moved Ref from its
 original environment cell and clears that cell. Both paths pass a private
 two-owner JIT check with one release per Runtime-issued handle and an expired
-generation pin. The frontend rejects a read after the capture moves. Next,
-prove branch-sensitive closure calls. Public
+generation pin. The frontend rejects a read after the capture moves.
+Complementary branch fixtures now prove that an affine closure can be called
+once on either branch before the paths merge, or called on a returning branch
+while the continuing branch calls it later. Each sealed exit omits the
+consumed closure owner, and the private two-owner JIT releases both handles
+once on the selected path. The frontend rejects a call on only one continuing
+path and a second call after both branches have consumed the closure. Paired
+branch fixtures also move one captured Ref in either lambda arm while keeping
+the sibling capture; both pass the private JIT release check. Next, exercise
+the same ownership joins with a runtime-selected condition in the private
+probe. Public
 Ref publication remains gated. The updated strict build passes all 81 tests,
 and the focused frontend/canonical tests pass under ASAN/UBSan.
 

@@ -1261,6 +1261,34 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "let selected = move first; let spare = move second; "
         "let delayed = fn() -> unit { let moved = move selected; spare; return; }; "
         "delayed(); }\n"
+        "fn invoke_branch_closure_true(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let selected = move first; let delayed = fn() -> unit { selected; }; "
+        "if true { delayed(); } else { delayed(); } }\n"
+        "fn invoke_branch_closure_false(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let selected = move first; let delayed = fn() -> unit { selected; }; "
+        "if false { delayed(); } else { delayed(); } }\n"
+        "fn invoke_return_branch_closure_true(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let selected = move first; let delayed = fn() -> unit { selected; }; "
+        "if true { delayed(); return; } delayed(); }\n"
+        "fn invoke_return_branch_closure_false(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let selected = move first; let delayed = fn() -> unit { selected; }; "
+        "if false { delayed(); return; } delayed(); }\n"
+        "fn invoke_branch_partial_closure_true(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let selected = move first; let spare = move second; "
+        "let delayed = fn() -> unit { "
+        "if true { let moved = move selected; } "
+        "else { let moved = move selected; } spare; }; delayed(); }\n"
+        "fn invoke_branch_partial_closure_false(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let selected = move first; let spare = move second; "
+        "let delayed = fn() -> unit { "
+        "if false { let moved = move selected; } "
+        "else { let moved = move selected; } spare; }; delayed(); }\n"
         "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
@@ -1294,6 +1322,12 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* invokeMovedClosurePair = nullptr;
     moon::FunctionDecl* invokePartialClosurePair = nullptr;
     moon::FunctionDecl* invokeReturnPartialClosurePair = nullptr;
+    moon::FunctionDecl* invokeBranchClosureTrue = nullptr;
+    moon::FunctionDecl* invokeBranchClosureFalse = nullptr;
+    moon::FunctionDecl* invokeReturnBranchClosureTrue = nullptr;
+    moon::FunctionDecl* invokeReturnBranchClosureFalse = nullptr;
+    moon::FunctionDecl* invokeBranchPartialClosureTrue = nullptr;
+    moon::FunctionDecl* invokeBranchPartialClosureFalse = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
     for (auto& declaration : sourceRefModule->declarations) {
@@ -1333,6 +1367,18 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 invokePartialClosurePair = function;
             if (function->name == "invoke_return_partial_closure_pair")
                 invokeReturnPartialClosurePair = function;
+            if (function->name == "invoke_branch_closure_true")
+                invokeBranchClosureTrue = function;
+            if (function->name == "invoke_branch_closure_false")
+                invokeBranchClosureFalse = function;
+            if (function->name == "invoke_return_branch_closure_true")
+                invokeReturnBranchClosureTrue = function;
+            if (function->name == "invoke_return_branch_closure_false")
+                invokeReturnBranchClosureFalse = function;
+            if (function->name == "invoke_branch_partial_closure_true")
+                invokeBranchPartialClosureTrue = function;
+            if (function->name == "invoke_branch_partial_closure_false")
+                invokeBranchPartialClosureFalse = function;
             if (function->name == "transfer") transfer = function;
         }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
@@ -1348,6 +1394,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !cleanupClosurePair || !invokeClosurePair ||
         !invokeDirectClosurePair || !invokeMovedClosurePair ||
         !invokePartialClosurePair || !invokeReturnPartialClosurePair ||
+        !invokeBranchClosureTrue || !invokeBranchClosureFalse ||
+        !invokeReturnBranchClosureTrue || !invokeReturnBranchClosureFalse ||
+        !invokeBranchPartialClosureTrue || !invokeBranchPartialClosureFalse ||
         !transfer ||
         observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
@@ -1853,6 +1902,51 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         std::cerr << pairJitError << '\n';
         return fail("returning partially consumed source Ref closure failed private JIT cleanup");
     }
+    for (auto* function : {invokeBranchClosureTrue, invokeBranchClosureFalse,
+                           invokeReturnBranchClosureTrue,
+                           invokeReturnBranchClosureFalse}) {
+        if (!function->controlFlow)
+            return fail("branch-invoked source Ref closure has no sealed CFG");
+        const auto& graph = *function->controlFlow;
+        moon::LocalId owner;
+        for (const auto& local : graph.locals)
+            if (local.name == "delayed") owner = local.id;
+        size_t exits = 0;
+        for (const auto& block : graph.blocks) {
+            if (block.terminator.kind != moon::TerminatorKind::Return)
+                continue;
+            ++exits;
+            size_t remainingRefDrops = 0;
+            for (const auto id : block.terminator.exitCleanups) {
+                const auto* cleanup = graph.findCleanup(id);
+                if (!cleanup) return fail("branch closure has an invalid exit row");
+                if (cleanup->place.root == owner)
+                    return fail("branch closure exit retained a consumed owner");
+                if (cleanup->type == refId &&
+                    cleanup->action == luna::ownership::CleanupAction::Drop)
+                    ++remainingRefDrops;
+            }
+            if (remainingRefDrops != 1)
+                return fail("branch closure exit lost its remaining Ref cleanup");
+        }
+        if (owner.empty() || exits == 0)
+            return fail("branch closure has no consumed owner or return exit");
+        if (!exercisePrivateOwnedPairCleanupJit(
+                *sourceRefModule, *function, pairJitError)) {
+            std::cerr << pairJitError << '\n';
+            return fail("branch-invoked source Ref closure failed private JIT cleanup");
+        }
+    }
+    for (auto* function : {invokeBranchPartialClosureTrue,
+                           invokeBranchPartialClosureFalse}) {
+        if (!function->controlFlow)
+            return fail("branch-moved captured Ref has no sealed CFG");
+        if (!exercisePrivateOwnedPairCleanupJit(
+                *sourceRefModule, *function, pairJitError)) {
+            std::cerr << pairJitError << '\n';
+            return fail("branch-moved captured Ref failed private JIT cleanup");
+        }
+    }
     auto repeatedClosure = luna::tooling::AnalysisSnapshot::analyzeSource(
         "slot checkpoint(value: i32);\n"
         "fn repeated(first: affine RuntimeFragmentRef<checkpoint>) -> unit { "
@@ -1866,6 +1960,35 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                     "after move of 'delayed'") != std::string::npos;
             }))
         return fail("source Ref closure was invoked after its owner was consumed");
+    auto oneSidedClosure = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "slot checkpoint(value: i32);\n"
+        "fn one_sided(first: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let selected = move first; "
+        "let delayed = fn() -> unit { selected; }; "
+        "if true { delayed(); } delayed(); }\n",
+        "<one-sided-source-ref-closure>");
+    if (oneSidedClosure.success() ||
+        !std::any_of(oneSidedClosure.errors().begin(),
+            oneSidedClosure.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "owned heap value 'delayed' is freed or moved on only "
+                    "some paths through `if`") != std::string::npos;
+            }))
+        return fail("source Ref closure retained inconsistent branch ownership");
+    auto repeatedBranchClosure = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "slot checkpoint(value: i32);\n"
+        "fn repeated_branch(first: affine RuntimeFragmentRef<checkpoint>) "
+        "-> unit { let selected = move first; "
+        "let delayed = fn() -> unit { selected; }; "
+        "if true { delayed(); } else { delayed(); } delayed(); }\n",
+        "<repeated-branch-source-ref-closure>");
+    if (repeatedBranchClosure.success() ||
+        !std::any_of(repeatedBranchClosure.errors().begin(),
+            repeatedBranchClosure.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "after move of 'delayed'") != std::string::npos;
+            }))
+        return fail("source Ref closure was invoked after both branches consumed it");
     auto repeatedCapture = luna::tooling::AnalysisSnapshot::analyzeSource(
         "slot checkpoint(value: i32);\n"
         "fn repeated_capture(first: affine RuntimeFragmentRef<checkpoint>) "
@@ -2022,7 +2145,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !std::any_of(blockedRefCodegen.errors().begin(),
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
-                    "20 private unit body/wrapper pair(s) and 1 private owned "
+                    "26 private unit body/wrapper pair(s) and 1 private owned "
                     "return body/wrapper pair(s) verified and discarded") !=
                     std::string::npos;
             }) ||
