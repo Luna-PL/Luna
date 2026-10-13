@@ -1307,7 +1307,9 @@ the canonical v4 claim, places it in the in-memory artifact proof record and
 emits v1/v2 beside v4 in the same LLVM module. The module is verified after
 descriptor emission. The Native build now links a temporary preview, seals
 its proof and loads it through the v4 validator. The preview is removed after
-validation. Public output remains gated on pinned typed lookup and invocation;
+validation. The verified candidate's pointer-free v4 identities and profile
+now enter a separate pinned generation lookup, while v1 callable bindings keep
+their existing profile. Public output remains gated on typed invocation;
 the integration test checks the refusal and absence of output artifacts.
 Generated outlined Apply continuations now Drop active context owners and
 return the explicit continuation failure result `-1` on context-derivation or
@@ -1340,8 +1342,10 @@ The existing generic Native v1/v2 export and Runtime declaration descriptors
 do not encode the Ref target or this ingress ABI. The Fragment descriptor
 describes factory/environment/activation execution, so it cannot stand in
 for a source function entry. The Native build now checks the sealed image and
-loaded v4 entry against its proof in a temporary preview. The next step is to
-connect the validated typed facts to a pinned lookup and call path.
+loaded v4 entry against its proof in a temporary preview. The pinned lookup
+now carries its type, target Slot and ABI facts without exposing an entry
+pointer. The next step is a call path that owns Runtime-issued capabilities
+and the code lease for the complete synchronous invocation.
 The Moon Container 0.3
 encoder still rejects Apply regions, and the default module verifier and
 CodeGenerator still reject source Ref publication.
@@ -1486,14 +1490,16 @@ loader now binds any separate v4 Ref/unit candidate rows, as well as the v1
 rows, to the proof export digest. The ordinary Native build now prepares a
 proof-bound in-memory module with the verified source-derived v4 row, generated
 wrapper and proof claim beside the v1 rows. It links and validates a temporary
-preview, then removes it. Public output remains gated until typed facts pass
-through pinned lookup without exposing a raw pointer.
+preview, then removes it. A separate pinned generation lookup now carries
+verified v4 facts without exposing a raw pointer. Public output remains gated
+on the synchronous typed call path.
 The existing artifact digest and trust record then bind the rebuilt image and
-its export digest. `stageVerifiedNativeGeneration` currently copies only
-symbol/contract/entry/kind/flags into `GenerationBinding`; typed facts must
-also reach the pinned lookup result before a host can call the entry. Its
-generation already retains the verified library lease, but a caller must keep
-the `PinnedBinding` alive for the complete synchronous call.
+its export digest. `stageVerifiedNativeGeneration` still places only v1 rows
+in `GenerationBinding`; it copies validated v4 facts into a separate
+`PinnedRefUnitCandidate` view. That view retains the verified library lease
+and has no callable pointer. Before a host can invoke the entry, the call
+path must validate Runtime-issued parent/Ref capabilities and keep its pin
+alive for the complete synchronous call.
 
 On 2026-10-06 an actual `-t native` build of an exported Runtime Slot caller
 failed at the MoonIR verifier with the missing runtime-aware public entry ABI

@@ -1,4 +1,5 @@
 #include "runtime/Evolution.h"
+#include "runtime/RuntimeDescriptorABI.h"
 
 #include <atomic>
 #include <iostream>
@@ -137,6 +138,39 @@ int main() {
         if (!Runtime::StagedGeneration{}.materializationKey().empty() ||
             !Runtime::PinnedGeneration{}.materializationKey().empty())
             return fail("empty generation exposed a configuration key");
+    }
+
+    // A v4 metadata pin needs a matching public Slot in the same generation;
+    // it never becomes a callable binding by sharing a SymbolId.
+    {
+        Runtime runtime;
+        Request request{ModuleId, std::string(64, 'a'),
+                        std::make_shared<int>(1)};
+        luna::runtime::GenerationRefUnitCandidate candidate{
+            "symbol:ref-unit", "contract:ref-unit", "ref_unit_entry",
+            ModuleId, ModuleId, "type:ref-unit-fn", "type:ref-slot",
+            "symbol:slot", "contract:slot", "type:slot",
+            luna::runtime::GenerationEntryAbiRefUnitV1, 1, 2, 1};
+        request.refUnitCandidates.push_back(candidate);
+        Runtime::StagedGeneration staged;
+        std::string phases;
+        if (!stageOne(runtime, request, "symbol:slot", "contract:slot",
+                      &first, staged, phases, error, true,
+                      LUNA_RUNTIME_DECLARATION_SLOT_V1, 0))
+            return fail("matching Ref/unit Slot could not stage");
+        Runtime::PinnedGeneration loaded;
+        if (!runtime.loadOnce(staged, loaded, error) ||
+            !loaded.findRefUnitCandidate(candidate.symbolId,
+                                         candidate.contractId) ||
+            loaded.find(candidate.symbolId, candidate.contractId))
+            return fail("Ref/unit metadata did not stay separate from callable bindings");
+        request.refUnitCandidates.front().slotContractId = "contract:other";
+        phases.clear();
+        if (stageOne(runtime, request, "symbol:slot", "contract:slot",
+                     &first, staged, phases, error, true,
+                     LUNA_RUNTIME_DECLARATION_SLOT_V1, 0) ||
+            staged || phases != "VR" || error.empty())
+            return fail("Ref/unit metadata accepted a mismatched public Slot");
     }
 
     // Runtime IDs also cross null-terminated C ABI descriptors. A C++ string

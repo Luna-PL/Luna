@@ -806,6 +806,24 @@ bool VerifiedNativeLibrary::hasRefUnitCandidate(
     return false;
 }
 
+uint64_t VerifiedNativeLibrary::refUnitCandidateCount() const {
+    return descriptorV4_ ? descriptorV4_->export_count : 0;
+}
+
+bool VerifiedNativeLibrary::refUnitCandidateAt(
+    uint64_t index,
+    luna::runtime::GenerationRefUnitCandidate& candidate) const {
+    if (!descriptorV4_ || index >= descriptorV4_->export_count) return false;
+    const auto& row = descriptorV4_->exports[index];
+    candidate = {
+        row.symbol_id, row.contract_id, row.linkage_name,
+        row.module_name, row.package_id, row.function_type_id,
+        row.ref_type_id, row.ref_slot_symbol_id, row.ref_slot_contract_id,
+        row.ref_slot_type_id, row.entry_abi, row.ref_mode,
+        row.result_mode, row.status_domain};
+    return true;
+}
+
 uint64_t VerifiedNativeLibrary::exportCount() const {
     return descriptor_ ? descriptor_->export_count : 0;
 }

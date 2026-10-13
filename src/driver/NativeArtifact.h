@@ -7,6 +7,7 @@
 #include <vector>
 
 #include "runtime/NativeArtifactABI.h"
+#include "runtime/MoonRuntime.h"
 
 namespace luna::driver {
 
@@ -64,6 +65,10 @@ public:
     // Validated v4 metadata only; never returns or invokes the entry pointer.
     bool hasRefUnitCandidate(const std::string& symbolId,
                              const std::string& contractId) const;
+    uint64_t refUnitCandidateCount() const;
+    bool refUnitCandidateAt(
+        uint64_t index,
+        luna::runtime::GenerationRefUnitCandidate& candidate) const;
     explicit operator bool() const { return nativeHandle_ != nullptr; }
 
 private:

@@ -18,6 +18,10 @@ static_assert(
         static_cast<uint32_t>(LUNA_NATIVE_ENTRY_ABI_C_I32_NOARGS_V1),
     "Native and internal generation entry profiles must agree");
 static_assert(
+    static_cast<uint32_t>(luna::runtime::GenerationEntryAbiRefUnitV1) ==
+        static_cast<uint32_t>(LUNA_NATIVE_ENTRY_ABI_REF_UNIT_V1),
+    "Native and internal Ref/unit candidate profiles must agree");
+static_assert(
     static_cast<uint32_t>(LUNA_NATIVE_DECLARATION_FUNCTION_V1) ==
         static_cast<uint32_t>(LUNA_RUNTIME_DECLARATION_FUNCTION_V1) &&
     static_cast<uint32_t>(LUNA_NATIVE_DECLARATION_FRAGMENT_V1) ==
@@ -55,6 +59,16 @@ bool stageVerifiedNativeGeneration(
     request.moduleId = library->proof().packageId;
     request.contentDigest = nativeDigestHex(library->proof().artifactDigest);
     request.moduleLease = library;
+    request.refUnitCandidates.reserve(
+        static_cast<size_t>(library->refUnitCandidateCount()));
+    for (uint64_t index = 0; index < library->refUnitCandidateCount(); ++index) {
+        luna::runtime::GenerationRefUnitCandidate candidate;
+        if (!library->refUnitCandidateAt(index, candidate)) {
+            error = "verified Native Ref/unit registry changed during staging";
+            return false;
+        }
+        request.refUnitCandidates.push_back(std::move(candidate));
+    }
     return runtime.stage(
         request,
         [library](const auto& candidate, std::string& verificationError) {

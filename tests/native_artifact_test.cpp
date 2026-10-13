@@ -341,6 +341,32 @@ int inspectV4Candidate(int argc, char** argv) {
     if (moved.callI32NoArgs("symbol:unit-apply", "contract:unit-v4",
                             ignored, error) || error.empty())
         return fail("Native v4 candidate acquired an i32() call profile");
+    luna::runtime::MoonRuntime::PinnedRefUnitCandidate pinnedCandidate;
+    {
+        luna::runtime::MoonRuntime runtime;
+        luna::runtime::MoonRuntime::PinnedGeneration loaded;
+        if (!luna::driver::loadVerifiedNativeGenerationOnce(
+                runtime, argv[2], argv[3], loaded, error))
+            return fail("Native v4 candidate could not enter a pinned generation");
+        pinnedCandidate = loaded.findRefUnitCandidate(
+            "symbol:unit-apply", "contract:unit-v4");
+        if (!pinnedCandidate ||
+            pinnedCandidate.generationId() != loaded.generationId() ||
+            loaded.findRefUnitCandidate("symbol:unit-apply", "wrong-contract") ||
+            loaded.find("symbol:unit-apply", "contract:unit-v4"))
+            return fail("Native v4 candidate escaped its separate pinned lookup");
+    }
+    moved = luna::driver::VerifiedNativeLibrary{};
+    const auto pinnedFacts = pinnedCandidate.facts();
+    if (!pinnedFacts ||
+        pinnedFacts->entryAbi !=
+            luna::runtime::GenerationEntryAbiRefUnitV1 ||
+        pinnedFacts->functionTypeId != "type:unit-fn" ||
+        pinnedFacts->refTypeId != "type:ref-checkpoint" ||
+        pinnedFacts->slotSymbolId != "symbol:slot-checkpoint" ||
+        pinnedFacts->slotContractId != "contract:slot-checkpoint" ||
+        pinnedFacts->slotTypeId != "type:slot-checkpoint")
+        return fail("Native v4 pinned facts lost their verified target or lease");
     std::cout << "v4-metadata-only\n";
     return 0;
 }

@@ -987,7 +987,8 @@ v4 descriptor 与 proof 声明。普通 codegen 继续在这个已验证的 modu
 其他函数，现也保留规范 v4 声明，将其写入内存中的产物 proof 记录，并在同一 LLVM
 module 中发射 v1／v2 与 v4 descriptor。描述符发射后再次验证 module。Native 构建
 现链接一次性预览产物，封印 proof 并交给 loader 验证 v4 入口，随后删除预览。
-正式输出仍须等待固定的类型化 lookup 与调用；集成测试核对拒绝及无制品输出。
+已验证 v4 候选的无指针身份与约定现进入独立的 generation 固定 lookup，v1 callable
+binding 仍保持原有约定。正式输出仍须等待类型化调用；集成测试核对拒绝及无制品输出。
 生成的 outlined Apply 续体在 context 派生或 Slot 派发失败时先 Drop 活跃
 context owner，再返回显式失败值 `-1`。Runtime 将其映射为分派执行失败，
 包括嵌套 resume；它不算续体逃逸。私有单 Ref／unit 根 body 正常返回 `0`，
@@ -1011,8 +1012,9 @@ v4 源码事实仅准入没有其他词法清理义务的 CFG；其余清理须�
 
 现有通用 Native v1/v2 export 和 Runtime declaration 描述符未编码 Ref 目标或这套入口
 ABI。Fragment 描述符对应 factory／environment／activation 执行，不能代替源码
-函数入口。一次性预览现验证封闭产物及装载后的 v4 入口与 proof 绑定。下一步须把
-已验证的类型化事实接入固定 lookup 与调用路径。
+函数入口。一次性预览现验证封闭产物及装载后的 v4 入口与 proof 绑定。固定 lookup
+现保留其类型、目标 Slot 和 ABI 事实，不暴露入口指针。下一步须使调用路径在整次
+同步调用期间持有 Runtime 签发的能力与代码 lease。
 Moon Container 0.3 编码器仍拒绝 Apply region，默认 module verifier 和 CodeGenerator
 也仍拒绝发布源码 Ref。
 显式选择的 0.4 Type 与 Code section 编解码现可往返封闭源码的
@@ -1113,13 +1115,14 @@ pin 失效。前端拒绝只在一个继续执行的 `match` 分支移出捕获 
 table 构造 v1 `NativeExportSpec`，并由 `emitNativeLibraryDescriptor` 生成对应行。
 loader 现将独立的 v4 Ref／unit 候选行与 v1 行一起绑定到 proof 导出摘要。
 普通 Native 构建现于内存中生成绑定 proof 的 module，其中包含已验证的 v4 源码行、
-wrapper、声明及 v1 行。构建现链接并验证一次性预览，之后将其删除。正式输出仍须
-等待固定 lookup 传递类型化事实，避免暴露裸指针。
+wrapper、声明及 v1 行。构建现链接并验证一次性预览，之后将其删除。独立的
+generation 固定 lookup 现保留已验证 v4 事实且不暴露裸指针；正式输出仍等待同步
+类型化调用路径。
 重建后的 artifact digest 与 trust 记录便能约束映像及其导出摘要。
-`stageVerifiedNativeGeneration` 当前只把 symbol／contract／entry／
-kind／flags 复制到 `GenerationBinding`；宿主调用前，类型化事实还须传到固定的
-lookup 结果。generation 已保留已验证库的 lease，但调用者须在整次同步调用期间
-持有 `PinnedBinding`。
+`stageVerifiedNativeGeneration` 仍只把 v1 行放入 `GenerationBinding`，另将已验证
+v4 事实复制到 `PinnedRefUnitCandidate` 视图。该视图保留已验证库的 lease，且不包含
+可调用指针。宿主调用前，还须验证 Runtime 签发的 parent／Ref 能力，并在整次同步
+调用期间持有 pin。
 
 2026-10-06 实际以 `-t native` 构建导出且触达 Runtime Slot 的函数时，MoonIR
 verifier 因缺少 runtime-aware 公开入口 ABI 而拒绝。语义与 Native artifact 回归

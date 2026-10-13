@@ -5,6 +5,7 @@
 #include "driver/CommandLine.h"
 #include "driver/CompilerPipeline.h"
 #include "driver/NativeArtifact.h"
+#include "driver/NativeGeneration.h"
 #include "codegen/NativeRefUnitFacts.h"
 #include "driver/Repl.h"
 #include "moonir/ContainerModel.h"
@@ -604,6 +605,42 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
                 previewArtifact.string(), 0, 0,
                 "keep the Native Ref/unit artifact unpublished") << "\n";
             return 1;
+        }
+        {
+            luna::runtime::MoonRuntime previewRuntime;
+            luna::runtime::MoonRuntime::PinnedGeneration pinned;
+            if (!loadVerifiedNativeGenerationOnce(
+                    previewRuntime, previewArtifact.string(),
+                    previewTrust.string(), pinned, proofError)) {
+                std::cerr << diagnostic::format(
+                    "native-proof", proofError, previewArtifact.string(), 0, 0,
+                    "keep the Native Ref/unit artifact unpublished") << "\n";
+                return 1;
+            }
+            const auto candidate = pinned.findRefUnitCandidate(
+                surface.refUnitSource->symbolId.value,
+                surface.refUnitSource->contractId.value);
+            const auto facts = candidate.facts();
+            luna::codegen::NativeRefUnitSourceFacts source;
+            if (!luna::codegen::deriveNativeRefUnitSourceFacts(
+                    pipeline.moonModule(), *surface.refUnitSource,
+                    source, proofError) ||
+                !facts || candidate.generationId() != pinned.generationId() ||
+                facts->functionTypeId != source.functionTypeId ||
+                facts->refTypeId != source.refTypeId ||
+                facts->slotSymbolId != source.slotSymbolId ||
+                facts->slotContractId != source.slotContractId ||
+                facts->slotTypeId != source.slotTypeId ||
+                facts->linkageName !=
+                    "__luna_native_ref_unit_entry_v1_" +
+                        source.functionSymbolId) {
+                std::cerr << diagnostic::format(
+                    "native-proof",
+                    "Native Ref/unit pinned facts differ from the sealed source",
+                    previewArtifact.string(), 0, 0,
+                    "keep the Native Ref/unit artifact unpublished") << "\n";
+                return 1;
+            }
         }
         previewLoaded = VerifiedNativeLibrary{};
         std::error_code cleanupError;

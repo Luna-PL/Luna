@@ -1,6 +1,7 @@
 #include "MoonRuntime.h"
 
 #include "RuntimeDescriptorABI.h"
+#include "NativeArtifactABI.h"
 
 #include <algorithm>
 #include <atomic>
@@ -27,6 +28,7 @@ struct MoonRuntime::GenerationState {
     std::string materializationKey;
     std::shared_ptr<const void> moduleLease;
     std::vector<GenerationBinding> bindings;
+    std::vector<GenerationRefUnitCandidate> refUnitCandidates;
 };
 
 struct MoonRuntime::ModuleState {
@@ -119,6 +121,16 @@ uint64_t MoonRuntime::PinnedBinding::generationId() const {
     return generation_ ? generation_->generationId : 0;
 }
 
+uint64_t MoonRuntime::PinnedRefUnitCandidate::generationId() const {
+    return generation_ ? generation_->generationId : 0;
+}
+
+std::optional<GenerationRefUnitCandidate>
+MoonRuntime::PinnedRefUnitCandidate::facts() const {
+    if (!generation_ || !candidate_) return std::nullopt;
+    return *candidate_;
+}
+
 const std::string& MoonRuntime::PinnedBinding::symbolId() const {
     return binding_ ? binding_->symbolId : emptyString();
 }
@@ -206,6 +218,26 @@ MoonRuntime::PinnedBinding MoonRuntime::PinnedGeneration::find(
          binding.entryAbi() != requirement.entryAbi))
         return {};
     return binding;
+}
+
+MoonRuntime::PinnedRefUnitCandidate
+MoonRuntime::PinnedGeneration::findRefUnitCandidate(
+    const std::string& symbolId, const std::string& contractId) const {
+    PinnedRefUnitCandidate result;
+    if (!generation_) return result;
+    const auto& candidates = generation_->refUnitCandidates;
+    const auto found = std::lower_bound(
+        candidates.begin(), candidates.end(), symbolId,
+        [](const GenerationRefUnitCandidate& candidate,
+           const std::string& identity) {
+            return candidate.symbolId < identity;
+        });
+    if (found == candidates.end() || found->symbolId != symbolId ||
+        found->contractId != contractId)
+        return result;
+    result.candidate_ = &*found;
+    result.generation_ = generation_;
+    return result;
 }
 
 std::vector<MoonRuntime::PinnedBinding>
@@ -331,6 +363,53 @@ bool MoonRuntime::stage(
             return false;
         }
     }
+    auto refUnitCandidates = request.refUnitCandidates;
+    std::sort(refUnitCandidates.begin(), refUnitCandidates.end(),
+              [](const GenerationRefUnitCandidate& left,
+                 const GenerationRefUnitCandidate& right) {
+                  return left.symbolId < right.symbolId;
+              });
+    for (size_t index = 0; index < refUnitCandidates.size(); ++index) {
+        const auto& candidate = refUnitCandidates[index];
+        const auto slot = std::lower_bound(
+            bindings.begin(), bindings.end(), candidate.slotSymbolId,
+            [](const GenerationBinding& binding, const std::string& identity) {
+                return binding.symbolId < identity;
+            });
+        const auto alias = std::lower_bound(
+            bindings.begin(), bindings.end(), candidate.symbolId,
+            [](const GenerationBinding& binding, const std::string& identity) {
+                return binding.symbolId < identity;
+            });
+        if (!validIdentity(candidate.symbolId) ||
+            !validIdentity(candidate.contractId) ||
+            !validIdentity(candidate.linkageName) ||
+            !validIdentity(candidate.moduleName) ||
+            !validIdentity(candidate.packageId) ||
+            !validIdentity(candidate.functionTypeId) ||
+            !validIdentity(candidate.refTypeId) ||
+            !validIdentity(candidate.slotSymbolId) ||
+            !validIdentity(candidate.slotContractId) ||
+            !validIdentity(candidate.slotTypeId) ||
+            candidate.moduleName != request.moduleId ||
+            candidate.packageId != request.moduleId ||
+            candidate.entryAbi != GenerationEntryAbiRefUnitV1 ||
+            candidate.refMode != LUNA_NATIVE_REF_SHARED_BORROW_V1 ||
+            candidate.resultMode != LUNA_NATIVE_RESULT_UNIT_V1 ||
+            candidate.statusDomain != LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1 ||
+            slot == bindings.end() ||
+            slot->symbolId != candidate.slotSymbolId ||
+            slot->contractId != candidate.slotContractId ||
+            slot->declarationKind != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
+            slot->flags != 0 ||
+            (alias != bindings.end() &&
+             alias->symbolId == candidate.symbolId) ||
+            (index != 0 && refUnitCandidates[index - 1].symbolId ==
+                               candidate.symbolId)) {
+            error = "generation resolution produced an invalid Ref/unit candidate";
+            return false;
+        }
+    }
     try {
         if (initializer && !initializer(request, bindings, error)) {
             if (error.empty()) error = "generation initializer failed";
@@ -359,6 +438,7 @@ bool MoonRuntime::stage(
     generation->materializationKey = request.materializationKey;
     generation->moduleLease = request.moduleLease;
     generation->bindings = std::move(bindings);
+    generation->refUnitCandidates = std::move(refUnitCandidates);
     staged.owner_ = this;
     staged.generation_ = std::move(generation);
     return true;

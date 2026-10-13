@@ -5,6 +5,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -28,7 +29,28 @@ enum GenerationBindingFlag : uint32_t {
 enum GenerationEntryAbi : uint32_t {
     GenerationEntryAbiUnprofiled = 0,
     GenerationEntryAbiCI32NoArgsV1 = 1,
+    GenerationEntryAbiRefUnitV1 = 3,
     GenerationEntryAbiAny = UINT32_MAX,
+};
+
+// Pointer-free, loader-verified facts for a v4 Ref/unit candidate. This is
+// separate from callable GenerationBinding rows until the host call contract
+// can safely own Runtime-issued capabilities and the generation lease.
+struct GenerationRefUnitCandidate {
+    std::string symbolId;
+    std::string contractId;
+    std::string linkageName;
+    std::string moduleName;
+    std::string packageId;
+    std::string functionTypeId;
+    std::string refTypeId;
+    std::string slotSymbolId;
+    std::string slotContractId;
+    std::string slotTypeId;
+    uint32_t entryAbi = 0;
+    uint32_t refMode = 0;
+    uint32_t resultMode = 0;
+    uint32_t statusDomain = 0;
 };
 
 // Public 0.3 C++ host control-plane input. The module lease keeps the verified
@@ -40,6 +62,7 @@ struct GenerationStagingRequest {
     // Optional loader-owned code-generation identity, separate from the
     // artifact digest. Empty preserves the original unprofiled host behavior.
     std::string materializationKey = {};
+    std::vector<GenerationRefUnitCandidate> refUnitCandidates = {};
 };
 
 struct GenerationBinding {
@@ -78,6 +101,19 @@ class MoonRuntime {
     struct ModuleState;
 
 public:
+    class PinnedGeneration;
+    class PinnedRefUnitCandidate {
+    public:
+        explicit operator bool() const { return candidate_ != nullptr; }
+        uint64_t generationId() const;
+        std::optional<GenerationRefUnitCandidate> facts() const;
+
+    private:
+        friend class PinnedGeneration;
+        std::shared_ptr<const GenerationState> generation_;
+        const GenerationRefUnitCandidate* candidate_ = nullptr;
+    };
+
     class SafePoint {
     public:
         SafePoint(const SafePoint&) = delete;
@@ -144,6 +180,8 @@ public:
                            const std::string& contractId) const;
         PinnedBinding find(
             const GenerationBindingRequirement& requirement) const;
+        PinnedRefUnitCandidate findRefUnitCandidate(
+            const std::string& symbolId, const std::string& contractId) const;
         std::vector<PinnedBinding> findAll(
             uint32_t declarationKind, uint32_t requiredFlags) const;
 
