@@ -2778,8 +2778,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             if (returnType->kind == TypeKind::Unit &&
                 function.params.size() == 1) {
                 // Apply CFGs are intentionally excluded from the generic
-                // ingress wrapper. Exercise the reusable status wrapper only
-                // in this private executable proof.
+                // ingress wrapper. This executable proof also emits the
+                // reusable descriptor candidate for its private JIT module.
                 if (!privateUnitApplyFacts) {
                     failure = "private Ref apply lost its frozen ingress target";
                     return false;
@@ -2801,6 +2801,19 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             }
         }
 #endif
+        bool publicUnitPreflight = privateUnitStatusBody &&
+            function.isExported && function.packageId == program.name;
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+        if (executable) publicUnitPreflight = false;
+#endif
+        if (publicUnitPreflight) {
+            const std::string wrapperName =
+                "__luna_native_ref_unit_preflight_" + function.symbolId.value;
+            if (!luna::codegen::emitNativeRefUnitStatusWrapper(
+                    program, function, *proof.mModule,
+                    wrapperName, failure))
+                return false;
+        }
         llvm::raw_string_ostream stream(invalidIR);
         if (llvm::verifyModule(*proof.mModule, &stream)) {
             stream.flush();
@@ -3228,6 +3241,7 @@ bool CodeGenerator::generate(moon::Module* program) {
         size_t provenEntries = 0;
         size_t provenReturns = 0;
         size_t provenApplies = 0;
+        size_t provenPublicWrappers = 0;
         for (auto& declaration : program->declarations) {
             auto* function = dynamic_cast<FunctionDecl*>(declaration.get());
             if (!function || function->params.empty() ||
@@ -3255,9 +3269,12 @@ bool CodeGenerator::generate(moon::Module* program) {
                 if (verifyPrivateRuntimeFragmentRefUnitIngress(
                         *program, *function, failure)) {
                     if (function->controlFlow &&
-                        !function->controlFlow->runtimeRefApplies.empty())
+                        !function->controlFlow->runtimeRefApplies.empty()) {
                         ++provenApplies;
-                    else
+                        if (function->isExported &&
+                            function->packageId == program->name)
+                            ++provenPublicWrappers;
+                    } else
                         ++provenEntries;
                 } else {
                     error("private RuntimeFragmentRef unit ingress proof failed for '" +
@@ -3282,7 +3299,10 @@ bool CodeGenerator::generate(moon::Module* program) {
               std::to_string(provenReturns) +
               " private owned return body/wrapper pair(s) verified and discarded" +
               (provenApplies ? "; " + std::to_string(provenApplies) +
-                  " private Ref apply body(s) verified and discarded" : ""));
+                  " private Ref apply body(s) verified and discarded" : "") +
+              (provenPublicWrappers ? "; " +
+                  std::to_string(provenPublicWrappers) +
+                  " public Native Ref/unit preflight wrapper(s) verified and discarded" : ""));
         return false;
     }
     mProgram = program;

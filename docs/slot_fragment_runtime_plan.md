@@ -1293,6 +1293,10 @@ import. General `check` and Moon builds retain the publication gate. A real
 Native package with one eligible Apply reaches the ordinary codegen refusal
 without emitting an artifact; a second Ref callable fails during preparation.
 This admits a source candidate to the Native pipeline, not a public entry.
+Ordinary Native codegen now emits and preflights the corresponding v4 status
+wrapper in its disposable proof module for that public candidate. The body
+and wrapper are both discarded before artifact generation; the integration
+test requires this preflight evidence in the refusal diagnostic.
 Generated outlined Apply continuations now Drop active context owners and
 return the explicit continuation failure result `-1` on context-derivation or
 Slot-dispatch failure. Runtime maps that result to dispatch execution failure,
@@ -1323,8 +1327,8 @@ publication, Native artifact binding and typed invocation remain before release.
 The existing generic Native v1/v2 export and Runtime declaration descriptors
 do not encode the Ref target or this ingress ABI. The Fragment descriptor
 describes factory/environment/activation execution, so it cannot stand in
-for a source function entry. The next step is to admit the narrow sealed Ref
-source through MoonIR and Native generation, bind its emitted v4 row to the
+for a source function entry. The next step is to move the proven body and
+wrapper into ordinary Native generation, bind its emitted v4 row to the
 artifact proof, then connect its typed facts to a pinned lookup and call path.
 The Moon Container 0.3
 encoder still rejects Apply regions, and the default module verifier and

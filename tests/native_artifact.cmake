@@ -167,7 +167,11 @@ execute_process(
 string(FIND "${ref_apply_build_output}\n${ref_apply_build_error}"
        "1 private Ref apply body(s) verified and discarded"
        ref_apply_codegen_gate)
+string(FIND "${ref_apply_build_output}\n${ref_apply_build_error}"
+       "1 public Native Ref/unit preflight wrapper(s) verified and discarded"
+       ref_apply_wrapper_preflight)
 if(ref_apply_build_result EQUAL 0 OR ref_apply_codegen_gate EQUAL -1 OR
+   ref_apply_wrapper_preflight EQUAL -1 OR
    EXISTS "${ref_apply_artifact}" OR EXISTS "${ref_apply_artifact}.trust")
     message(FATAL_ERROR
         "Native Ref/unit preparation bypassed the codegen publication gate.\n"
