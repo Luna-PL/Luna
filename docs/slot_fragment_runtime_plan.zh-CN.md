@@ -969,6 +969,10 @@ context 和 Ref switch 使用各自的检查结果，受保护的 body 调用按
 Slot 行及伪造的公开记录均被拒绝。这一步尚未接入普通 Native 构建：源码验证器
 仍阻止依赖 context 的公开函数及可执行 Ref 发布，普通 codegen 也会在产物生成
 前拒绝包含 Ref 的 module。
+现有协同生成入口先验证待写入的 proof 占位记录，再从同一源码和 wrapper 发射单行
+v4 descriptor，成功后才向 proof 规格附加规范行。合成测试一起核对 descriptor 和
+proof 摘要；无效的 proof 身份或重复查询不会改写 proof 规格。真实产物的嵌入与封印
+仍受发布门禁限制。
 生成的 outlined Apply 续体在 context 派生或 Slot 派发失败时先 Drop 活跃
 context owner，再返回显式失败值 `-1`。Runtime 将其映射为分派执行失败，
 包括嵌套 resume；它不算续体逃逸。私有单 Ref／unit 根 body 正常返回 `0`，

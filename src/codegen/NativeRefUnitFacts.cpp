@@ -676,4 +676,29 @@ bool emitNativeRefUnitDescriptorV4Candidate(
     return true;
 }
 
+bool emitNativeRefUnitV4ClaimedDescriptorCandidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    llvm::Module& generated, const std::string& wrapperLinkageName,
+    const std::vector<luna::driver::NativeExportSpec>& v1Exports,
+    luna::driver::NativeProofSpec& proof, std::string& error) {
+    std::string claim;
+    if (!deriveNativeRefUnitV4ProofClaim(
+            program, function, generated, wrapperLinkageName,
+            v1Exports, proof, claim, error))
+        return false;
+    auto claimedProof = proof;
+    claimedProof.exportedDescriptors.push_back(std::move(claim));
+    std::vector<uint8_t> proofRecord;
+    if (!luna::driver::makeNativeProofPlaceholder(
+            claimedProof, proofRecord, error) ||
+        !emitNativeRefUnitDescriptorV4Candidate(
+            program, function, generated, wrapperLinkageName,
+            claimedProof.packageVersion, claimedProof.targetAbi,
+            claimedProof.compilerIdentity, error))
+        return false;
+    proof = std::move(claimedProof);
+    error.clear();
+    return true;
+}
+
 } // namespace luna::codegen

@@ -92,6 +92,15 @@ bool deriveNativeRefUnitV4ProofClaim(
     const luna::driver::NativeProofSpec& proof,
     std::string& claim, std::string& error);
 
+// Coordinates the one-row v4 descriptor with its canonical proof claim.
+// On failure proof is unchanged; the caller owns proof embedding, artifact
+// sealing and the still-gated public Ref execution path.
+bool emitNativeRefUnitV4ClaimedDescriptorCandidate(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    llvm::Module& generated, const std::string& wrapperLinkageName,
+    const std::vector<luna::driver::NativeExportSpec>& v1Exports,
+    luna::driver::NativeProofSpec& proof, std::string& error);
+
 // Emits one v4 candidate only after rederiving its sealed source and exact
 // generated preflight. The caller must separately prove the body failure path
 // and bind the resulting image to a Native proof before publication.

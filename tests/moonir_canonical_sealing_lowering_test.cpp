@@ -28,6 +28,7 @@
 #include <sstream>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Verifier.h>
+#include <llvm/Transforms/Utils/Cloning.h>
 
 static unsigned privateRefJitDropProbeCalls = 0;
 static unsigned privateRefJitConversionDropProbeCalls = 0;
@@ -2794,18 +2795,73 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             v4Claim, unitSourceError) ||
         v4Claim != emittedV4.canonicalRow())
         return fail("Native v4 proof claim lost its public source and Slot");
-    v4Proof.exportedDescriptors.push_back(v4Claim);
+    auto claimedV4Module = llvm::CloneModule(v4Module);
+    auto claimedV4Proof = v4Proof;
+    if (!luna::codegen::emitNativeRefUnitV4ClaimedDescriptorCandidate(
+            *sourceApplyModule, *sourceApplyEntry, *claimedV4Module,
+            emittedV4Name, {proofSlotExport}, claimedV4Proof,
+            unitSourceError) ||
+        claimedV4Proof.exportedDescriptors.size() != 2 ||
+        claimedV4Proof.exportedDescriptors.back() != v4Claim ||
+        !claimedV4Module->getFunction(
+            "luna_native_library_descriptor_v4") ||
+        llvm::verifyModule(*claimedV4Module))
+        return fail("Native v4 descriptor and proof claim did not publish together");
+    const auto* claimedDescriptor = claimedV4Module->getNamedGlobal(
+        "__luna_native_library_v4");
+    const auto* claimedFields = claimedDescriptor
+        ? llvm::dyn_cast<llvm::ConstantStruct>(
+            claimedDescriptor->getInitializer()) : nullptr;
+    const auto* claimedDigest = claimedFields
+        ? llvm::dyn_cast<llvm::ConstantDataSequential>(
+            claimedFields->getAggregateElement(10u)) : nullptr;
+    const auto expectedDescriptorDigest =
+        luna::driver::digestNativeTypedExports({v4Claim});
+    if (!claimedDigest ||
+        claimedDigest->getNumElements() != expectedDescriptorDigest.size() ||
+        !std::all_of(expectedDescriptorDigest.begin(),
+                     expectedDescriptorDigest.end(),
+                    [index = size_t{0}, claimedDigest](uint8_t byte) mutable {
+                        return byte ==
+                            claimedDigest->getElementAsInteger(index++);
+                    }))
+        return fail("Native v4 descriptor digest differs from its proof claim");
     std::vector<uint8_t> v4ProofRecord;
     if (!luna::driver::makeNativeProofPlaceholder(
-            v4Proof, v4ProofRecord, unitSourceError))
+            claimedV4Proof, v4ProofRecord, unitSourceError))
         return fail("Native v4 claim could not enter an artifact proof");
     const auto expectedProofDigest = luna::driver::digestNativeTypedExports(
-        v4Proof.exportedDescriptors);
+        claimedV4Proof.exportedDescriptors);
     if (v4ProofRecord.size() < 56 + expectedProofDigest.size() ||
         !std::equal(expectedProofDigest.begin(), expectedProofDigest.end(),
                     v4ProofRecord.begin() + 56))
         return fail("Native v4 proof claim changed the artifact export digest");
-    v4Proof.exportedDescriptors.pop_back();
+    const auto duplicateClaimedProof = claimedV4Proof.exportedDescriptors;
+    if (luna::codegen::emitNativeRefUnitV4ClaimedDescriptorCandidate(
+            *sourceApplyModule, *sourceApplyEntry, *claimedV4Module,
+            emittedV4Name, {proofSlotExport}, claimedV4Proof,
+            unitSourceError) ||
+        claimedV4Proof.exportedDescriptors != duplicateClaimedProof)
+        return fail("Native v4 duplicate descriptor changed its proof claim");
+    auto duplicateQueryProof = v4Proof;
+    if (luna::codegen::emitNativeRefUnitV4ClaimedDescriptorCandidate(
+            *sourceApplyModule, *sourceApplyEntry, *claimedV4Module,
+            emittedV4Name, {proofSlotExport}, duplicateQueryProof,
+            unitSourceError) ||
+        duplicateQueryProof.exportedDescriptors !=
+            v4Proof.exportedDescriptors)
+        return fail("Native v4 existing query appended an unissued proof claim");
+    auto rejectedV4Module = llvm::CloneModule(v4Module);
+    auto invalidV4Proof = v4Proof;
+    invalidV4Proof.packageVersion = std::string(256, 'x');
+    if (luna::codegen::emitNativeRefUnitV4ClaimedDescriptorCandidate(
+            *sourceApplyModule, *sourceApplyEntry, *rejectedV4Module,
+            emittedV4Name, {proofSlotExport}, invalidV4Proof,
+            unitSourceError) ||
+        rejectedV4Module->getFunction(
+            "luna_native_library_descriptor_v4") ||
+        invalidV4Proof.exportedDescriptors != v4Proof.exportedDescriptors)
+        return fail("Native v4 invalid proof identity emitted a descriptor");
     const auto rejectedClaim = [&](
         const std::vector<luna::driver::NativeExportSpec>& exports,
         const luna::driver::NativeProofSpec& proof) {

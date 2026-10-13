@@ -1270,8 +1270,8 @@ codegen now has a reusable status-wrapper emitter that first rederives the
 sealed source row, builds the parent/Ref/body status paths, then reruns the
 pairing and preflight checks. The private JIT uses that emitter and retains
 its disposable v4 descriptor proof. Ordinary Native build still needs to
-invoke it with a public export, emit the matching proof claim and bind the
-artifact before any typed host lookup.
+invoke it with a public export and bind the artifact before any typed host
+lookup.
 Producer-side v4 proof-claim derivation now requires the preflight-proven
 wrapper, an exact public function record, the target public Slot in the v1
 registry and matching v1 proof rows. A synthetic publication fixture embeds
@@ -1280,6 +1280,12 @@ digest; missing, changed, duplicate or aliased Slot rows and forged public
 records fail. This does not enter ordinary Native build: the source verifier
 still gates context-dependent exports and executable Ref publication, while
 ordinary codegen rejects Ref modules before artifact generation.
+The candidate descriptor and proof claim now have a coordinated producer
+entry: it validates the prospective proof placeholder, emits the one-row v4
+descriptor from the same source and wrapper, and only then appends the row to
+the proof specification. Synthetic tests check the descriptor and proof digest
+together; an invalid proof identity or duplicate query leaves the proof
+specification unchanged. Embedding and sealing a real artifact remain gated.
 Generated outlined Apply continuations now Drop active context owners and
 return the explicit continuation failure result `-1` on context-derivation or
 Slot-dispatch failure. Runtime maps that result to dispatch execution failure,
