@@ -360,6 +360,26 @@ llvm::Value* CodeGenerator::generateMove(MoveExpr* mv) {
                     }
                 }
             }
+            if (auto* env = dynamic_cast<EnvLoadExpr*>(mv->operand.get());
+                env && mv->nextUnread.empty() &&
+                !env->envLocal.empty() &&
+                env->envLocal.value < mCanonicalLocals.size() &&
+                env->envLocal.value < mCanonicalLocalTypes.size()) {
+                const TypePtr closureType =
+                    mCanonicalLocalTypes[env->envLocal.value];
+                if (mCanonicalLocals[env->envLocal.value] && closureType &&
+                    closureType->kind == TypeKind::Closure &&
+                    env->fieldIndex < closureType->capturedFields.size() &&
+                    closureType->capturedFields[env->fieldIndex].type &&
+                    closureType->capturedFields[env->fieldIndex].type->kind ==
+                        TypeKind::RuntimeFragmentRef) {
+                    cell = mBuilder->CreateStructGEP(
+                        mHelpers->toLLVMType(closureType),
+                        mCanonicalLocals[env->envLocal.value],
+                        static_cast<unsigned>(env->fieldIndex + 1),
+                        "ref.capture.cell");
+                }
+            }
             if (auto* index = dynamic_cast<IndexExpr*>(mv->operand.get());
                 index && !mv->nextUnread.empty()) {
                 auto* array = dynamic_cast<IdentifierExpr*>(

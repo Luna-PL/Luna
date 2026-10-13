@@ -1251,6 +1251,16 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
         "let selected = move first; "
         "let delayed = fn() -> unit { selected; }; (move delayed)(); }\n"
+        "fn invoke_partial_closure_pair(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let selected = move first; let spare = move second; "
+        "let delayed = fn() -> unit { let moved = move selected; spare; }; "
+        "delayed(); }\n"
+        "fn invoke_return_partial_closure_pair(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>) -> unit { "
+        "let selected = move first; let spare = move second; "
+        "let delayed = fn() -> unit { let moved = move selected; spare; return; }; "
+        "delayed(); }\n"
         "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
@@ -1282,6 +1292,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* invokeClosurePair = nullptr;
     moon::FunctionDecl* invokeDirectClosurePair = nullptr;
     moon::FunctionDecl* invokeMovedClosurePair = nullptr;
+    moon::FunctionDecl* invokePartialClosurePair = nullptr;
+    moon::FunctionDecl* invokeReturnPartialClosurePair = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
     for (auto& declaration : sourceRefModule->declarations) {
@@ -1317,6 +1329,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 invokeDirectClosurePair = function;
             if (function->name == "invoke_moved_closure_pair")
                 invokeMovedClosurePair = function;
+            if (function->name == "invoke_partial_closure_pair")
+                invokePartialClosurePair = function;
+            if (function->name == "invoke_return_partial_closure_pair")
+                invokeReturnPartialClosurePair = function;
             if (function->name == "transfer") transfer = function;
         }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
@@ -1331,6 +1347,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !cleanupStructPair || !cleanupStructPartialPair ||
         !cleanupClosurePair || !invokeClosurePair ||
         !invokeDirectClosurePair || !invokeMovedClosurePair ||
+        !invokePartialClosurePair || !invokeReturnPartialClosurePair ||
         !transfer ||
         observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
@@ -1739,6 +1756,103 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         std::cerr << pairJitError << '\n';
         return fail("explicitly moved source Ref closure failed private JIT cleanup");
     }
+    if (!invokePartialClosurePair->controlFlow)
+        return fail("partially consumed source Ref closure has no sealed CFG");
+    const auto verifyPartialCaptureExit = [&](const moon::FunctionDecl& function) {
+        const moon::ControlFlowGraph* lambdaGraph = nullptr;
+        for (const auto& block : function.controlFlow->blocks)
+            for (const auto& operation : block.operations)
+                if (const auto* binding =
+                        dynamic_cast<const moon::LetStmt*>(operation.get());
+                    binding && binding->name == "delayed")
+                    if (const auto* closure =
+                            dynamic_cast<const moon::MakeClosureExpr*>(
+                                binding->initializer.get());
+                        closure && closure->lambda)
+                        lambdaGraph = closure->lambda->controlFlow.get();
+        if (!lambdaGraph) return false;
+        moon::LocalId envOwner;
+        moon::LocalId movedOwner;
+        size_t selectedIndex = 0;
+        size_t spareIndex = 0;
+        bool foundSelected = false;
+        bool foundSpare = false;
+        for (const auto& local : lambdaGraph->locals) {
+            if (local.name == "moved") movedOwner = local.id;
+            const auto* type = sourceRefModule->findType(local.type);
+            if (local.kind != moon::LocalKind::Parameter || !type ||
+                type->kind != TypeKind::Closure) continue;
+            envOwner = local.id;
+            for (size_t index = 0; index < type->capturedFields.size(); ++index) {
+                if (type->capturedFields[index].name == "selected") {
+                    selectedIndex = index;
+                    foundSelected = true;
+                }
+                if (type->capturedFields[index].name == "spare") {
+                    spareIndex = index;
+                    foundSpare = true;
+                }
+            }
+        }
+        if (envOwner.empty() || movedOwner.empty() || !foundSelected ||
+            !foundSpare) return false;
+        size_t selectedRows = 0;
+        size_t spareRows = 0;
+        for (const auto& cleanup : lambdaGraph->cleanups) {
+            if (cleanup.place.root != envOwner) continue;
+            if (cleanup.place.projections.size() != 1 ||
+                cleanup.place.projections.front().kind !=
+                    moon::ProjectionKind::Field ||
+                cleanup.action != luna::ownership::CleanupAction::Drop ||
+                cleanup.type != refId) return false;
+            if (cleanup.place.projections.front().index == selectedIndex)
+                ++selectedRows;
+            else if (cleanup.place.projections.front().index == spareIndex)
+                ++spareRows;
+            else
+                return false;
+        }
+        if (selectedRows != 1 || spareRows != 1) return false;
+        size_t exits = 0;
+        for (const auto& block : lambdaGraph->blocks) {
+            if (block.terminator.kind != moon::TerminatorKind::Return)
+                continue;
+            ++exits;
+            size_t movedDrops = 0;
+            size_t spareDrops = 0;
+            for (const auto id : block.terminator.exitCleanups) {
+                const auto* cleanup = lambdaGraph->findCleanup(id);
+                if (!cleanup) return false;
+                if (cleanup->place.root == movedOwner &&
+                    cleanup->action == luna::ownership::CleanupAction::Drop)
+                    ++movedDrops;
+                if (cleanup->place.root != envOwner) continue;
+                if (cleanup->place.projections.empty() ||
+                    cleanup->place.projections.front().index != spareIndex)
+                    return false;
+                ++spareDrops;
+            }
+            if (movedDrops != 1 || spareDrops != 1) return false;
+        }
+        return exits != 0;
+    };
+    if (!verifyPartialCaptureExit(*invokePartialClosurePair))
+        return fail("partially consumed closure has incorrect captured-field exit rows");
+    if (!exercisePrivateOwnedPairCleanupJit(
+            *sourceRefModule, *invokePartialClosurePair, pairJitError)) {
+        std::cerr << pairJitError << '\n';
+        return fail("partially consumed source Ref closure failed private JIT cleanup");
+    }
+    if (!invokeReturnPartialClosurePair->controlFlow)
+        return fail("returning partially consumed source Ref closure has no sealed CFG");
+    if (!verifyPartialCaptureExit(*invokeReturnPartialClosurePair))
+        return fail("returning partially consumed closure has incorrect exit rows");
+    if (!exercisePrivateOwnedPairCleanupJit(
+            *sourceRefModule, *invokeReturnPartialClosurePair,
+            pairJitError)) {
+        std::cerr << pairJitError << '\n';
+        return fail("returning partially consumed source Ref closure failed private JIT cleanup");
+    }
     auto repeatedClosure = luna::tooling::AnalysisSnapshot::analyzeSource(
         "slot checkpoint(value: i32);\n"
         "fn repeated(first: affine RuntimeFragmentRef<checkpoint>) -> unit { "
@@ -1752,6 +1866,20 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                     "after move of 'delayed'") != std::string::npos;
             }))
         return fail("source Ref closure was invoked after its owner was consumed");
+    auto repeatedCapture = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "slot checkpoint(value: i32);\n"
+        "fn repeated_capture(first: affine RuntimeFragmentRef<checkpoint>) "
+        "-> unit { let selected = move first; "
+        "let delayed = fn() -> unit { let moved = move selected; selected; }; "
+        "delayed(); }\n",
+        "<repeated-source-ref-capture>");
+    if (repeatedCapture.success() ||
+        !std::any_of(repeatedCapture.errors().begin(),
+            repeatedCapture.errors().end(), [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "after move of 'selected'") != std::string::npos;
+            }))
+        return fail("source Ref closure read a captured field after moving it");
     std::vector<uint8_t> refV3Types{1};
     std::string refWireError;
     if (moon::ContainerModelCodec::encodeTypes(
@@ -1894,7 +2022,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !std::any_of(blockedRefCodegen.errors().begin(),
             blockedRefCodegen.errors().end(), [](const auto& diagnostic) {
                 return diagnostic.message.find(
-                    "18 private unit body/wrapper pair(s) and 1 private owned "
+                    "20 private unit body/wrapper pair(s) and 1 private owned "
                     "return body/wrapper pair(s) verified and discarded") !=
                     std::string::npos;
             }) ||

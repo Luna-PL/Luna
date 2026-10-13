@@ -205,6 +205,19 @@ void CodeGenerator::emitCanonicalCleanup(
         }
         switch (projection.kind) {
             case moon::ProjectionKind::Field: {
+                if (currentType->kind == TypeKind::Closure) {
+                    if (projection.index >= currentType->capturedFields.size()) {
+                        error("canonical cleanup closure field is outside its type");
+                        return;
+                    }
+                    storage = mBuilder->CreateStructGEP(
+                        mHelpers->toLLVMType(currentType), storage,
+                        static_cast<unsigned>(projection.index + 1),
+                        label + ".capture");
+                    currentType =
+                        currentType->capturedFields[projection.index].type;
+                    break;
+                }
                 if (projection.index >= currentType->fields.size()) {
                     error("canonical cleanup field projection is outside its type");
                     return;

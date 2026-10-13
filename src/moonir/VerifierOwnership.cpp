@@ -70,6 +70,11 @@ void Verifier::verifyOwnershipDataflow(
             if (identifier->local.empty()) return std::nullopt;
             return PlaceRef{identifier->local, {}};
         }
+        if (const auto* env = dynamic_cast<const EnvLoadExpr*>(expression)) {
+            if (env->envLocal.empty()) return std::nullopt;
+            return PlaceRef{env->envLocal,
+                            {{ProjectionKind::Field, env->fieldIndex, {}}}};
+        }
         if (const auto* field =
                 dynamic_cast<const FieldAccessExpr*>(expression)) {
             auto place = placeOf(field->object.get());
@@ -247,6 +252,22 @@ void Verifier::verifyOwnershipDataflow(
                     error(identifier->location,
                           "identifier reads split struct root after a field transfer '" +
                           local->name + "'");
+                    break;
+                }
+            }
+            return;
+        }
+        if (const auto* env = dynamic_cast<const EnvLoadExpr*>(expression)) {
+            const auto place = placeOf(env);
+            if (!place || place->root.value >= cleanupsByLocal.size()) return;
+            for (const auto cleanupId : cleanupsByLocal[place->root.value]) {
+                if (cleanupId.value >= state.size()) continue;
+                const auto& cleanup = graph.cleanups[cleanupId.value];
+                if (cleanup.kind == CleanupKind::Value &&
+                    projectionPrefix(cleanup.place, *place) &&
+                    !state[cleanupId.value]) {
+                    error(env->location,
+                          "environment load reads inactive captured field");
                     break;
                 }
             }

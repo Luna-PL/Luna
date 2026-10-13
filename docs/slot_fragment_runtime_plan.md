@@ -1390,8 +1390,15 @@ the sealed exit omits that consumed closure's cleanup, and codegen clears the
 caller's original cell before passing the environment to the lambda. The
 private two-owner JIT executes the lambda and releases its captured Ref plus
 the separate parameter Ref exactly once; the generation pin expires. Direct
-temporary calls and explicit `move` calls use the same one-shot path. Next,
-prove partially consumed captures and branch-sensitive closure calls. Public
+temporary calls and explicit `move` calls use the same one-shot path. A lambda
+can now move one captured Ref into a local while retaining a sibling capture.
+Its environment parameter carries separate projected cleanup rows for the
+captured fields; implicit fallthrough and explicit `return` drop the moved
+local and only the remaining field. Codegen takes the moved Ref from its
+original environment cell and clears that cell. Both paths pass a private
+two-owner JIT check with one release per Runtime-issued handle and an expired
+generation pin. The frontend rejects a read after the capture moves. Next,
+prove branch-sensitive closure calls. Public
 Ref publication remains gated. The updated strict build passes all 81 tests,
 and the focused frontend/canonical tests pass under ASAN/UBSan.
 

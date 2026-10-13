@@ -404,7 +404,11 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
                 }
                 switch (projection.kind) {
                     case ProjectionKind::Field:
-                        if (projection.index >= projected->fields.size()) {
+                        if (projected->kind == TypeKind::Closure &&
+                            projection.index < projected->capturedFields.size()) {
+                            projectedType = projected->capturedFields[
+                                static_cast<size_t>(projection.index)].type;
+                        } else if (projection.index >= projected->fields.size()) {
                             validProjection = false;
                         } else {
                             projectedType = projected->fields[
@@ -608,6 +612,59 @@ bool Verifier::verify(const ControlFlowGraph& graph, const Module& module) {
             error({}, "split struct cleanup repeats or adds a field row");
         if (allocationPosition >= previousPosition)
             error({}, "split struct cleanup releases allocation before fields");
+    }
+
+    // A lambda environment may clean its captures separately so a move from
+    // one capture leaves sibling obligations active. Require complete,
+    // disjoint field coverage whenever projected closure rows are present.
+    for (const auto& local : graph.locals) {
+        const auto* type = module.findType(local.type);
+        if (!type || type->kind != TypeKind::Closure) continue;
+        const auto* scope = graph.findScope(local.scope);
+        if (!scope) continue;
+        size_t rootRows = 0;
+        std::vector<std::pair<uint64_t, size_t>> fields;
+        for (const auto& cleanup : graph.cleanups) {
+            if (cleanup.place.root != local.id || cleanup.guard) continue;
+            if (cleanup.place.projections.empty()) {
+                ++rootRows;
+                continue;
+            }
+            if (cleanup.kind != CleanupKind::Value ||
+                cleanup.place.projections.size() != 1 ||
+                cleanup.place.projections.front().kind !=
+                    ProjectionKind::Field) {
+                error({}, "split closure cleanup requires direct value field rows");
+                continue;
+            }
+            const auto position = std::find(
+                scope->cleanups.begin(), scope->cleanups.end(), cleanup.id);
+            fields.emplace_back(
+                cleanup.place.projections.front().index,
+                static_cast<size_t>(position - scope->cleanups.begin()));
+        }
+        if (fields.empty()) continue;
+        if (rootRows != 0)
+            error({}, "split closure cleanup overlaps a root cleanup");
+        std::sort(fields.begin(), fields.end());
+        size_t expected = 0;
+        size_t previousPosition = scope->cleanups.size();
+        for (size_t index = 0; index < type->capturedFields.size(); ++index) {
+            const auto* fieldType = module.findType(
+                type->capturedFields[index].type);
+            if (!fieldType ||
+                !fieldType->sysmeta.resource.cleanupRequired) continue;
+            if (expected >= fields.size() || fields[expected].first != index) {
+                error({}, "split closure cleanup omits a captured field");
+                break;
+            }
+            if (fields[expected].second >= previousPosition)
+                error({}, "split closure cleanup changes capture order");
+            previousPosition = fields[expected].second;
+            ++expected;
+        }
+        if (expected != fields.size())
+            error({}, "split closure cleanup repeats or adds a field row");
     }
 
     std::vector<std::vector<BlockId>> successors;

@@ -101,6 +101,9 @@ LocalId ControlFlowBuilder::addLocal(
             });
         if (splitStruct)
             addSplitStructCleanups(id);
+        else if (frozen->kind == TypeKind::Closure &&
+                 name == mCaptureEnvParamName)
+            addSplitClosureEnvCleanups(id);
         else
             addCleanup(id, type, frozen->sysmeta.resource.cleanup);
     }
@@ -115,7 +118,7 @@ CleanupId ControlFlowBuilder::addCleanup(
         return {};
     }
     if (mSplitCleanupsByLocal.count(local.value)) {
-        error({}, "split struct local '" + mGraph->locals[local.value].name +
+        error({}, "split field local '" + mGraph->locals[local.value].name +
                   "' cannot add an overlapping root cleanup");
         return {};
     }
@@ -177,6 +180,30 @@ void ControlFlowBuilder::addSplitStructCleanups(LocalId local) {
     }
 }
 
+void ControlFlowBuilder::addSplitClosureEnvCleanups(LocalId local) {
+    const auto& binding = mGraph->locals[local.value];
+    const auto* type = mModule->findType(binding.type);
+    if (!type || type->kind != TypeKind::Closure) return;
+    auto& rows = mSplitCleanupsByLocal[local.value];
+    for (size_t index = type->capturedFields.size(); index-- > 0;) {
+        const auto& field = type->capturedFields[index];
+        const auto* fieldType = mModule->findType(field.type);
+        if (!fieldType || !fieldType->sysmeta.resource.cleanupRequired)
+            continue;
+        const CleanupId id{static_cast<uint32_t>(mGraph->cleanups.size())};
+        CleanupRecord cleanup;
+        cleanup.id = id;
+        cleanup.scope = binding.scope;
+        cleanup.place = {local, {{ProjectionKind::Field, index, {}}}};
+        cleanup.type = field.type;
+        cleanup.kind = CleanupKind::Value;
+        cleanup.action = fieldType->sysmeta.resource.cleanup;
+        mGraph->cleanups.push_back(std::move(cleanup));
+        mGraph->scopes[binding.scope.value].cleanups.push_back(id);
+        rows.push_back(id);
+    }
+}
+
 std::vector<CleanupId> ControlFlowBuilder::cleanupRowsForLocal(
     LocalId local, const std::vector<std::string>& inactiveFields) {
     if (local.empty()) return {};
@@ -187,8 +214,10 @@ std::vector<CleanupId> ControlFlowBuilder::cleanupRowsForLocal(
         for (const auto& name : inactiveFields) {
             bool found = false;
             if (type) {
-                for (size_t index = 0; index < type->fields.size(); ++index) {
-                    if (type->fields[index].name != name) continue;
+                const auto& fields = type->kind == TypeKind::Closure
+                    ? type->capturedFields : type->fields;
+                for (size_t index = 0; index < fields.size(); ++index) {
+                    if (fields[index].name != name) continue;
                     for (const auto row : split->second) {
                         const auto& cleanup = mGraph->cleanups[row.value];
                         if (cleanup.kind == CleanupKind::Value &&
@@ -218,12 +247,27 @@ std::vector<CleanupId> ControlFlowBuilder::cleanupRowsForLocal(
         return rows;
     }
     if (!inactiveFields.empty()) {
-        error({}, "inactive cleanup fields require a split struct local");
+        error({}, "inactive cleanup fields require split field rows");
         return {};
     }
     if (const auto root = mCleanupByLocal.find(local.value);
         root != mCleanupByLocal.end())
         return {root->second};
+    return {};
+}
+
+CleanupId ControlFlowBuilder::captureCleanupRow(size_t fieldIndex) const {
+    if (mCaptureEnvLocal.empty()) return {};
+    const auto found = mSplitCleanupsByLocal.find(mCaptureEnvLocal.value);
+    if (found == mSplitCleanupsByLocal.end()) return {};
+    for (const auto row : found->second) {
+        const auto& cleanup = mGraph->cleanups[row.value];
+        if (cleanup.place.projections.size() == 1 &&
+            cleanup.place.projections.front().kind ==
+                ProjectionKind::Field &&
+            cleanup.place.projections.front().index == fieldIndex)
+            return row;
+    }
     return {};
 }
 
@@ -379,25 +423,22 @@ ControlFlowBuilder::lowerStatement(
             return current;
         }
         // After capture-read rewriting, an implicit FreeStmt for a captured
-        // binding has an EnvLoadExpr operand. The captured binding's cleanup
-        // is owned by the closure value (the environment parameter), not by
-        // the lambda function. Redirect the cleanup to the environment
-        // parameter's own cleanup obligation (C016 CL010).
+        // binding has an EnvLoadExpr operand. Clean only that captured field;
+        // a sibling may already have moved into a lambda local.
         auto* envLoad = dynamic_cast<EnvLoadExpr*>(release->operand.get());
         if (envLoad) {
-            if (mCaptureEnvLocal.empty())
-                return current; // no environment parameter to clean
-            const auto* closureType =
-                mModule->findType(mGraph->locals[
-                    mCaptureEnvLocal.value].type);
-            if (!closureType ||
-                !closureType->sysmeta.resource.cleanupRequired)
-                return current;
-            const CleanupId cleanup = addCleanup(
-                mCaptureEnvLocal,
-                mGraph->locals[mCaptureEnvLocal.value].type,
-                closureType->sysmeta.resource.cleanup,
-                CleanupKind::Value);
+            if (!release->inactiveFields.empty()) {
+                error(release->location,
+                      "partial cleanup inside a captured field is unsupported");
+                return std::nullopt;
+            }
+            const CleanupId cleanup = captureCleanupRow(envLoad->fieldIndex);
+            if (!cleanup.empty() &&
+                mGraph->cleanups[cleanup.value].action != release->action) {
+                error(release->location,
+                      "captured field cleanup has an inconsistent action");
+                return std::nullopt;
+            }
             if (!cleanup.empty()) current.cleanups.push_back(cleanup);
             return current;
         }
@@ -455,23 +496,6 @@ ControlFlowBuilder::lowerStatement(
         current = std::move(*normalized);
         if (!bindExpr(returned->value.get())) return std::nullopt;
         auto cleanups = lowerCleanupObligations(returned->cleanups, scope);
-        // The closure environment parameter is an owned local whose cleanup
-        // must run on every exit edge, including return. It is not in the
-        // structured return-cleanup list because the OwnershipChecker does not
-        // know about the synthetic environment parameter (C016 CL010).
-        if (!mCaptureEnvLocal.empty()) {
-            const auto* closureType = mModule->findType(
-                mGraph->locals[mCaptureEnvLocal.value].type);
-            if (closureType &&
-                closureType->sysmeta.resource.cleanupRequired) {
-                const CleanupId envCleanup = addCleanup(
-                    mCaptureEnvLocal,
-                    mGraph->locals[mCaptureEnvLocal.value].type,
-                    closureType->sysmeta.resource.cleanup,
-                    CleanupKind::Value);
-                if (!envCleanup.empty()) cleanups.push_back(envCleanup);
-            }
-        }
         cleanups.insert(cleanups.end(), current.cleanups.begin(),
                         current.cleanups.end());
         cleanups.insert(cleanups.end(),

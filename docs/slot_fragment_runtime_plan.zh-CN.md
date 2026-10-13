@@ -1049,8 +1049,12 @@ owner JIT 将一个 Runtime 发放句柄移入 struct，另一个留在参数 ce
 前清空调用方原始 cell。
 私有双 owner JIT 实际执行 lambda，恰好释放捕获的 Ref 和另一个参数 Ref，
 generation pin 随之失效。直接调用临时 closure 与显式 `move` 调用也通过相同的
-一次性路径。下一步验证部分消费的捕获字段及分支敏感的 closure
-调用；公开 Ref 发布门禁不变。
+一次性路径。lambda 现在可以把一个捕获的 Ref 移入局部变量，同时保留另一个捕获字段。
+环境参数为捕获字段分别记录投影清理义务；隐式退出和显式 `return` 都清理移入的
+局部变量及剩余字段，跳过已移出的字段。codegen 从原始环境字段 cell 取出 Ref 并
+清空该 cell。两条路径的私有双 owner JIT 均观察到 Runtime 发放的两个句柄各释放
+一次，generation pin 随之失效；前端拒绝移动后再次读取捕获字段。下一步验证
+分支敏感的 closure 调用；公开 Ref 发布门禁不变。
 更新后的严格构建与全部 81 项测试通过，
 前端／canonical 聚焦测试亦通过 ASAN／UBSan。
 

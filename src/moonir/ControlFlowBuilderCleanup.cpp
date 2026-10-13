@@ -69,23 +69,24 @@ std::vector<CleanupId> ControlFlowBuilder::lowerCleanupObligations(
                 }
                 continue;
             }
-            // A cleanup obligation for a captured binding has no canonical
-            // local (the capture was rewritten to an EnvLoad). The closure
-            // value (environment parameter) owns the cleanup, so redirect
-            // to the environment parameter's cleanup (C016 CL010).
+            // A captured binding is represented by one environment field.
             if (!mCaptureEnvLocal.empty() &&
                 std::find(mCaptureNames.begin(), mCaptureNames.end(),
-                          obligation.place) != mCaptureNames.end()) {
-                const auto* closureType = mModule->findType(
-                    mGraph->locals[mCaptureEnvLocal.value].type);
-                if (closureType &&
-                    closureType->sysmeta.resource.cleanupRequired) {
-                    const CleanupId cleanup = addCleanup(
-                        mCaptureEnvLocal,
-                        mGraph->locals[mCaptureEnvLocal.value].type,
-                        closureType->sysmeta.resource.cleanup,
-                        CleanupKind::Value);
-                    if (!cleanup.empty()) result.push_back(cleanup);
+                          cleanupName) != mCaptureNames.end()) {
+                const auto index = static_cast<size_t>(
+                    std::find(mCaptureNames.begin(), mCaptureNames.end(),
+                              cleanupName) - mCaptureNames.begin());
+                if (!obligation.inactiveFields.empty()) {
+                    error({}, "partial cleanup inside a captured field is unsupported");
+                    continue;
+                }
+                const CleanupId cleanup = captureCleanupRow(index);
+                if (!cleanup.empty()) {
+                    if (mGraph->cleanups[cleanup.value].action !=
+                        obligation.action)
+                        error({}, "captured field cleanup has an inconsistent action");
+                    else
+                        result.push_back(cleanup);
                 }
                 continue;
             }

@@ -129,9 +129,11 @@ private:
                          luna::ownership::CleanupAction action,
                          CleanupKind kind = CleanupKind::Value);
     void addSplitStructCleanups(LocalId local);
+    void addSplitClosureEnvCleanups(LocalId local);
     std::vector<CleanupId> cleanupRowsForLocal(
         LocalId local,
         const std::vector<std::string>& inactiveFields = {});
+    CleanupId captureCleanupRow(size_t fieldIndex) const;
 
     BuiltBlock lowerNestedBlock(std::unique_ptr<BlockStmt> block,
                                 RegionId parentRegion,
