@@ -137,7 +137,12 @@ bool exercisePrivateOwnedPairCleanupJit(
             candidate->name == "checkpoint")
             slot = candidate;
     const auto* arguments = slot ? module.findType(slot->argumentsType) : nullptr;
-    if (!slot || !arguments || function.params.size() != 2) {
+    const bool runtimeSelector = function.params.size() == 3;
+    const auto* resultType = module.findType(function.returnType);
+    const bool scalarSelector = runtimeSelector && resultType &&
+        resultType->kind == TypeKind::I32;
+    if (!slot || !arguments ||
+        (function.params.size() != 2 && !runtimeSelector)) {
         error = "private owned Ref pair lacks its frozen Slot/parameter shape";
         return false;
     }
@@ -168,65 +173,82 @@ bool exercisePrivateOwnedPairCleanupJit(
     if (!luna::runtime::validateRuntimeFragmentDescriptor(
             descriptor, error))
         return false;
-    luna::runtime::RuntimeFragmentRefHandle first;
-    luna::runtime::RuntimeFragmentRefHandle second;
-    std::weak_ptr<int> generationLease;
-    {
-        luna::runtime::MoonRuntime runtime;
-        auto lease = std::make_shared<int>(1);
-        generationLease = lease;
-        luna::runtime::GenerationStagingRequest request{
-            "org.luna.private.ref-pair", std::string(64, 'b'), lease};
-        luna::runtime::MoonRuntime::StagedGeneration staged;
-        constexpr uint32_t flags =
-            luna::runtime::GenerationBindingFragmentExecutable |
-            luna::runtime::GenerationBindingPublicControl;
-        if (!runtime.stage(
-                request,
-                [](const auto&, std::string&) { return true; },
-                [&](const auto&, auto& bindings, std::string&) {
-                    bindings.push_back({fragmentId, fragmentContract,
-                        &descriptor, LUNA_RUNTIME_DECLARATION_FRAGMENT_V1,
-                        flags});
-                    return true;
-                }, {}, staged, error))
+    for (uint8_t selector = 0; selector < (runtimeSelector ? 2 : 1);
+         ++selector) {
+        luna::runtime::RuntimeFragmentRefHandle first;
+        luna::runtime::RuntimeFragmentRefHandle second;
+        std::weak_ptr<int> generationLease;
+        {
+            luna::runtime::MoonRuntime runtime;
+            auto lease = std::make_shared<int>(1);
+            generationLease = lease;
+            luna::runtime::GenerationStagingRequest request{
+                "org.luna.private.ref-pair", std::string(64, 'b'), lease};
+            luna::runtime::MoonRuntime::StagedGeneration staged;
+            constexpr uint32_t flags =
+                luna::runtime::GenerationBindingFragmentExecutable |
+                luna::runtime::GenerationBindingPublicControl;
+            if (!runtime.stage(
+                    request,
+                    [](const auto&, std::string&) { return true; },
+                    [&](const auto&, auto& bindings, std::string&) {
+                        bindings.push_back({fragmentId, fragmentContract,
+                            &descriptor, LUNA_RUNTIME_DECLARATION_FRAGMENT_V1,
+                            flags});
+                        return true;
+                    }, {}, staged, error))
+                return false;
+            luna::runtime::MoonRuntime::PinnedGeneration loaded;
+            if (!runtime.loadOnce(staged, loaded, error)) return false;
+            const luna::runtime::GenerationBindingRequirement requirement{
+                fragmentId, fragmentContract,
+                LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, flags};
+            const auto binding = loaded.find(requirement);
+            const luna::runtime::RuntimeSlotRequirement target{
+                slot->symbolId.value, slot->contractId.value};
+            luna::runtime::RuntimeFragmentRef firstRef;
+            luna::runtime::RuntimeFragmentRef secondRef;
+            if (!binding ||
+                !luna::runtime::makeOwnedRuntimeFragmentRef(
+                    binding, target, {"", nullptr}, firstRef, error) ||
+                !luna::runtime::makeOwnedRuntimeFragmentRef(
+                    binding, target, {"", nullptr}, secondRef, error) ||
+                !luna::runtime::makeRuntimeFragmentRefHandle(
+                    firstRef, target, first, error) ||
+                !luna::runtime::makeRuntimeFragmentRefHandle(
+                    secondRef, target, second, error))
+                return false;
+        }
+        if (!first || !second || generationLease.expired()) {
+            error = "private owned Ref pair lost its Runtime generation pins";
             return false;
-        luna::runtime::MoonRuntime::PinnedGeneration loaded;
-        if (!runtime.loadOnce(staged, loaded, error)) return false;
-        const luna::runtime::GenerationBindingRequirement requirement{
-            fragmentId, fragmentContract,
-            LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, flags};
-        const auto binding = loaded.find(requirement);
-        const luna::runtime::RuntimeSlotRequirement target{
-            slot->symbolId.value, slot->contractId.value};
-        luna::runtime::RuntimeFragmentRef firstRef;
-        luna::runtime::RuntimeFragmentRef secondRef;
-        if (!binding ||
-            !luna::runtime::makeOwnedRuntimeFragmentRef(
-                binding, target, {"", nullptr}, firstRef, error) ||
-            !luna::runtime::makeOwnedRuntimeFragmentRef(
-                binding, target, {"", nullptr}, secondRef, error) ||
-            !luna::runtime::makeRuntimeFragmentRefHandle(
-                firstRef, target, first, error) ||
-            !luna::runtime::makeRuntimeFragmentRefHandle(
-                secondRef, target, second, error))
+        }
+        const auto droppedBefore =
+            luna::runtime::runtimeFragmentRefDropCountForTest();
+        void* firstRaw = first.release();
+        void* secondRaw = second.release();
+        int32_t status = 0;
+        if (runtimeSelector) {
+            using Entry = int32_t (*)(void*, void*, uint8_t);
+            const auto entry = reinterpret_cast<Entry>(
+                const_cast<void*>(address));
+            status = entry(firstRaw, secondRaw, selector);
+        } else {
+            using Entry = int32_t (*)(void*, void*);
+            const auto entry = reinterpret_cast<Entry>(
+                const_cast<void*>(address));
+            status = entry(firstRaw, secondRaw);
+        }
+        const auto droppedAfter =
+            luna::runtime::runtimeFragmentRefDropCountForTest();
+        const int32_t expected = scalarSelector
+            ? (selector ? 17 : 23)
+            : LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1;
+        if (status != expected ||
+            droppedAfter != droppedBefore + 2 || !generationLease.expired()) {
+            error = "private two-owner selector/result or cleanup was incorrect";
             return false;
-    }
-    if (!first || !second || generationLease.expired()) {
-        error = "private owned Ref pair lost its Runtime generation pins";
-        return false;
-    }
-    const auto droppedBefore =
-        luna::runtime::runtimeFragmentRefDropCountForTest();
-    using Entry = int32_t (*)(void*, void*);
-    const auto entry = reinterpret_cast<Entry>(const_cast<void*>(address));
-    const int32_t status = entry(first.release(), second.release());
-    const auto droppedAfter =
-        luna::runtime::runtimeFragmentRefDropCountForTest();
-    if (status != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
-        droppedAfter != droppedBefore + 2 || !generationLease.expired()) {
-        error = "private two-owner cleanup did not release both Runtime handles";
-        return false;
+        }
     }
     error.clear();
     return true;
@@ -1289,6 +1311,22 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         "let delayed = fn() -> unit { "
         "if false { let moved = move selected; } "
         "else { let moved = move selected; } spare; }; delayed(); }\n"
+        "fn invoke_runtime_branch_closure_pair(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>, choose: bool) -> i32 { "
+        "let selected = move first; let delayed = fn() -> unit { selected; }; "
+        "if choose { delayed(); return 17; } "
+        "else { delayed(); return 23; } }\n"
+        "fn invoke_runtime_return_closure_pair(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>, choose: bool) -> i32 { "
+        "let selected = move first; let delayed = fn() -> unit { selected; }; "
+        "if choose { delayed(); return 17; } delayed(); return 23; }\n"
+        "fn invoke_runtime_partial_closure_pair(first: affine RuntimeFragmentRef<checkpoint>, "
+        "second: affine RuntimeFragmentRef<checkpoint>, choose: bool) -> i32 { "
+        "let selected = move first; let spare = move second; "
+        "let delayed = fn() -> i32 { "
+        "if choose { let moved = move selected; spare; return 17; } "
+        "let moved = move selected; spare; return 23; }; "
+        "return delayed(); }\n"
         "fn transfer(selected: affine RuntimeFragmentRef<checkpoint>) "
         "-> affine RuntimeFragmentRef<checkpoint> { return selected; }\n",
         "<canonical-source-ref-gate>");
@@ -1328,6 +1366,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     moon::FunctionDecl* invokeReturnBranchClosureFalse = nullptr;
     moon::FunctionDecl* invokeBranchPartialClosureTrue = nullptr;
     moon::FunctionDecl* invokeBranchPartialClosureFalse = nullptr;
+    moon::FunctionDecl* invokeRuntimeBranchClosurePair = nullptr;
+    moon::FunctionDecl* invokeRuntimeReturnClosurePair = nullptr;
+    moon::FunctionDecl* invokeRuntimePartialClosurePair = nullptr;
     moon::FunctionDecl* transfer = nullptr;
     const moon::SlotDecl* shadow = nullptr;
     for (auto& declaration : sourceRefModule->declarations) {
@@ -1379,6 +1420,12 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 invokeBranchPartialClosureTrue = function;
             if (function->name == "invoke_branch_partial_closure_false")
                 invokeBranchPartialClosureFalse = function;
+            if (function->name == "invoke_runtime_branch_closure_pair")
+                invokeRuntimeBranchClosurePair = function;
+            if (function->name == "invoke_runtime_return_closure_pair")
+                invokeRuntimeReturnClosurePair = function;
+            if (function->name == "invoke_runtime_partial_closure_pair")
+                invokeRuntimePartialClosurePair = function;
             if (function->name == "transfer") transfer = function;
         }
         if (const auto* slot = dynamic_cast<const moon::SlotDecl*>(
@@ -1397,6 +1444,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !invokeBranchClosureTrue || !invokeBranchClosureFalse ||
         !invokeReturnBranchClosureTrue || !invokeReturnBranchClosureFalse ||
         !invokeBranchPartialClosureTrue || !invokeBranchPartialClosureFalse ||
+        !invokeRuntimeBranchClosurePair || !invokeRuntimeReturnClosurePair ||
+        !invokeRuntimePartialClosurePair ||
         !transfer ||
         observe->params.size() != 1 ||
         accept->params.size() != 1 || !shadow)
@@ -1904,7 +1953,9 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     }
     for (auto* function : {invokeBranchClosureTrue, invokeBranchClosureFalse,
                            invokeReturnBranchClosureTrue,
-                           invokeReturnBranchClosureFalse}) {
+                           invokeReturnBranchClosureFalse,
+                           invokeRuntimeBranchClosurePair,
+                           invokeRuntimeReturnClosurePair}) {
         if (!function->controlFlow)
             return fail("branch-invoked source Ref closure has no sealed CFG");
         const auto& graph = *function->controlFlow;
@@ -1938,7 +1989,8 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         }
     }
     for (auto* function : {invokeBranchPartialClosureTrue,
-                           invokeBranchPartialClosureFalse}) {
+                           invokeBranchPartialClosureFalse,
+                           invokeRuntimePartialClosurePair}) {
         if (!function->controlFlow)
             return fail("branch-moved captured Ref has no sealed CFG");
         if (!exercisePrivateOwnedPairCleanupJit(

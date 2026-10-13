@@ -1405,10 +1405,15 @@ consumed closure owner, and the private two-owner JIT releases both handles
 once on the selected path. The frontend rejects a call on only one continuing
 path and a second call after both branches have consumed the closure. Paired
 branch fixtures also move one captured Ref in either lambda arm while keeping
-the sibling capture; both pass the private JIT release check. Next, exercise
-the same ownership joins with a runtime-selected condition in the private
-probe. Public
-Ref publication remains gated. The updated strict build passes all 81 tests,
+the sibling capture; both pass the private JIT release check. A test-only
+three-argument probe now runs one sealed CFG and one JIT entry twice with a
+runtime `u8` selector. Separate branch-call, early-return, and captured-field
+move functions return markers `23` and `17` for the selected paths; each run
+also releases both fresh Runtime-issued Ref handles once and expires its
+generation pin. The selector and scalar result are accepted only by the
+disposable test proof; the ordinary proof and public Ref ingress remain
+gated. Next, check affine closure ownership joins across `match` and loop
+control flow. The updated strict build passes all 81 tests,
 and the focused frontend/canonical tests pass under ASAN/UBSan.
 
 The present Native verification path fixes the integration boundary:

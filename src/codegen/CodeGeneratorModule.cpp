@@ -587,8 +587,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
     const auto* returnType = program.findType(function.returnType);
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     // The production ingress proof stays unit-only. The canonical test target
-    // may execute scalar Results and narrow resource variants behind a private
-    // wrapper that consumes the returned owner after observation.
+    // may execute scalar Results, narrow resource variants, and a two-Ref
+    // branch selector behind private wrappers.
     const bool resultShape = executable && privateRefApply && returnType &&
         returnType->kind == TypeKind::Result &&
         returnType->typeArgumentIds.size() == 2;
@@ -655,14 +655,6 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         return false;
     }
 #endif
-    if (!returnType || (returnType->kind != TypeKind::Unit
-#ifdef LUNA_PRIVATE_REF_JIT_TEST
-        && !privateResultJit
-#endif
-        )) {
-        failure = "private Ref unit ingress proof requires a unit return";
-        return false;
-    }
     const bool privateOwnedPair = !privateRefApply &&
         !function.requiresFragmentContext && function.params.size() == 2 &&
         std::all_of(function.params.begin(), function.params.end(),
@@ -671,8 +663,45 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 return type && type->kind == TypeKind::RuntimeFragmentRef &&
                     parameter.relation == luna::ownership::Relation::Owned;
             });
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    // A disposable test entry may add one Copy selector to the two owned
+    // Refs. The ordinary proof and publication paths do not accept it.
+    const bool privateOwnedPairSelector = executable && !privateRefApply &&
+        !function.requiresFragmentContext && function.params.size() == 3 &&
+        std::all_of(function.params.begin(), function.params.begin() + 2,
+            [&program](const auto& parameter) {
+                const auto* type = program.findType(parameter.type);
+                return type && type->kind == TypeKind::RuntimeFragmentRef &&
+                    parameter.relation == luna::ownership::Relation::Owned;
+            }) &&
+        [&program, &function] {
+            const auto& selector = function.params[2];
+            const auto* type = program.findType(selector.type);
+            return type && type->kind == TypeKind::Bool &&
+                selector.relation == luna::ownership::Relation::Owned &&
+                selector.usage == luna::ownership::Usage::Copy;
+        }();
+#else
+    const bool privateOwnedPairSelector = false;
+#endif
+    const bool privateOwnedRefProbe =
+        privateOwnedPair || privateOwnedPairSelector;
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    const bool privateSelectorScalarResult = privateOwnedPairSelector &&
+        returnType && returnType->kind == TypeKind::I32;
+#else
+    const bool privateSelectorScalarResult = false;
+#endif
+    if (!returnType || (returnType->kind != TypeKind::Unit
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+        && !privateResultJit
+#endif
+        && !privateSelectorScalarResult)) {
+        failure = "private Ref unit ingress proof requires a unit return";
+        return false;
+    }
     if (!privateRefApply && function.params.size() != 1 &&
-        !privateOwnedPair) {
+        !privateOwnedRefProbe) {
         failure = "private Ref unit ingress proof requires one Ref or two owned Refs";
         return false;
     }
@@ -695,7 +724,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         }
     }
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
-    if (executable && !privateRefApply && !privateOwnedPair) {
+    if (executable && !privateRefApply && !privateOwnedRefProbe) {
         failure = "private Ref JIT test requires Apply or two owned Refs";
         return false;
     }
@@ -731,6 +760,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         parameters.push_back(proof.mHelpers->ptrTy());
     parameters.insert(parameters.end(), function.params.size(),
                       proof.mHelpers->ptrTy());
+    if (privateOwnedPairSelector)
+        parameters.back() = proof.mHelpers->boolTy();
     const bool privateUnitStatusBody = privateRefApply &&
         returnType->kind == TypeKind::Unit && function.params.size() == 1;
     auto* body = llvm::Function::Create(
@@ -741,8 +772,9 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     proof.resolveType(function.returnType))
                 :
 #endif
-                  (privateUnitStatusBody ? proof.mHelpers->i32Ty()
-                                         : proof.mHelpers->voidTy()),
+                  ((privateUnitStatusBody || privateSelectorScalarResult)
+                      ? proof.mHelpers->i32Ty()
+                      : proof.mHelpers->voidTy()),
             parameters, false),
         llvm::Function::InternalLinkage,
         function.generatedSymbolName, *proof.mModule);
@@ -2914,21 +2946,34 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         return true;
     }
     llvm::Function* wrapper = nullptr;
-    if (privateOwnedPair) {
-        // This disposable pair proves only the two-owner body shape. Its
-        // wrapper never becomes a host ingress ABI or published symbol.
+    if (privateOwnedRefProbe) {
+        // This disposable pair proves the two-owner body shape. A test-only
+        // selector wrapper returns the scalar branch marker for observation.
+        // Neither wrapper becomes a published host ingress ABI.
+        std::vector<llvm::Type*> wrapperParameters{
+            proof.mHelpers->ptrTy(), proof.mHelpers->ptrTy()};
+        if (privateOwnedPairSelector)
+            wrapperParameters.push_back(llvm::Type::getInt8Ty(*proof.mCtx));
         wrapper = llvm::Function::Create(
             llvm::FunctionType::get(
-                proof.mHelpers->i32Ty(),
-                {proof.mHelpers->ptrTy(), proof.mHelpers->ptrTy()}, false),
+                proof.mHelpers->i32Ty(), wrapperParameters, false),
             llvm::Function::InternalLinkage,
             "__private_ref_pair_proof", *proof.mModule);
         auto* entry = llvm::BasicBlock::Create(
             *proof.mCtx, "entry", wrapper);
         llvm::IRBuilder<> builder(entry);
-        builder.CreateCall(body, {wrapper->getArg(0), wrapper->getArg(1)});
-        builder.CreateRet(llvm::ConstantInt::get(
-            proof.mHelpers->i32Ty(), LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1));
+        std::vector<llvm::Value*> bodyArguments{
+            wrapper->getArg(0), wrapper->getArg(1)};
+        if (privateOwnedPairSelector)
+            bodyArguments.push_back(builder.CreateTrunc(
+                wrapper->getArg(2), proof.mHelpers->boolTy(),
+                "private.ref.selector"));
+        auto* result = builder.CreateCall(body, bodyArguments);
+        if (privateSelectorScalarResult)
+            builder.CreateRet(result);
+        else
+            builder.CreateRet(llvm::ConstantInt::get(
+                proof.mHelpers->i32Ty(), LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1));
     } else {
         wrapper = proof.mHelpers->emitRuntimeFragmentRefUnitIngressWrapper(
             *proof.mModule, *body, program, function,
@@ -2951,7 +2996,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 ++bodyDropCalls;
     // An invoked affine closure transfers its owner to the generated lambda;
     // its Ref Drop lives there rather than in the caller's body.
-    if (privateOwnedPair)
+    if (privateOwnedRefProbe)
         for (auto& generated : *proof.mModule) {
             if (!generated.hasInternalLinkage() ||
                 !generated.getName().starts_with("__lambda_"))
@@ -2972,7 +3017,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 ++wrapperBodyCalls;
     const bool owned = function.params.front().relation ==
         luna::ownership::Relation::Owned;
-    const bool wrongDropCount = privateOwnedPair
+    const bool wrongDropCount = privateOwnedRefProbe
         ? bodyDropCalls + closureDropCalls < 2
         : (owned ? bodyDropCalls == 0 : bodyDropCalls != 0);
     if (wrapperBodyCalls != 1 || wrongDropCount) {
@@ -2995,8 +3040,11 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             "__luna_private_ref_pair_jit_test", *proof.mModule);
         llvm::IRBuilder<> builder(
             llvm::BasicBlock::Create(*proof.mCtx, "entry", entry));
-        builder.CreateRet(builder.CreateCall(
-            wrapper, {entry->getArg(0), entry->getArg(1)}));
+        std::vector<llvm::Value*> arguments{
+            entry->getArg(0), entry->getArg(1)};
+        if (privateOwnedPairSelector)
+            arguments.push_back(entry->getArg(2));
+        builder.CreateRet(builder.CreateCall(wrapper, arguments));
         std::string invalidEntry;
         llvm::raw_string_ostream entryStream(invalidEntry);
         if (llvm::verifyModule(*proof.mModule, &entryStream)) {
