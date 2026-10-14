@@ -1968,14 +1968,17 @@ Canonical Ref Apply CFG verification now accepts a record-only foreign Slot
 when an exact Slot publication snapshot from an independently verified owner
 container and a direct package dependency are present. A focused regression
 rejects missing evidence, an undeclared owner, and a changed ContractId. The
-cross-package container proof remains preparation-only. The source-lowered
-consumer is also materialized from that decoded module through the private
-test JIT and calls a Runtime-issued borrowed Ref from an independently
-verified plugin generation with an explicit parent context. Invalid
-parent/handle calls fail, and repeated calls succeed after Runtime teardown
-with the borrowed Ref as the remaining plugin-generation pin. This executes
-the two-package source body privately; the Ref consumer is not loaded as a
-verified generation or published artifact.
+cross-package container proof remains preparation-only. A test-only adapter
+redecodes the 0.4 bytes and stages the source consumer as a quarantined
+generation with its owner evidence and JIT lease. It exposes no callable
+binding or Ref/unit candidate; public load-once rejects its bytes even when
+the private generation is already loaded. A generation pin retains the private
+entry after Runtime teardown and releases it when dropped. That entry calls a
+Runtime-issued borrowed Ref from an independently verified plugin generation
+with an explicit parent context. Invalid parent/handle calls fail, and
+repeated calls succeed after Runtime teardown. This executes the two-package
+source body privately; public generation import and artifact publication
+remain closed.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and
@@ -2130,11 +2133,12 @@ not a public ABI decision or stable-release approval:
    Moon Container encoder/decoder. Invalid or older artifacts must fail
    without publishing a partial generation. The source consumer and separate
    owner evidence now pass the private 0.4 artifact encode and independent
-   decode under a single-Ref-callable admission rule. The private JIT of that
-   decoded source calls a borrowed Ref
-   issued from a verified plugin generation. Next load the Ref consumer itself through a
-   verified generation import with validated owner evidence. The default
-   publication verifier stays closed during that work.
+   decode under a single-Ref-callable admission rule. The decoded source can
+   enter a quarantined test generation whose pin retains its private JIT while
+   it calls a borrowed Ref issued from a verified plugin generation. Next
+   define a typed imported-Slot candidate rule bound to the owner generation;
+   the current Runtime candidate requires a same-generation Slot binding.
+   The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref
    from a verified generation; run source apply against an explicit parent
    context. The private JIT now covers borrowed ingress, invalid capability

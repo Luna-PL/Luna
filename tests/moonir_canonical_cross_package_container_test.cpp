@@ -290,21 +290,49 @@ int runCrossPackageContainerTest() {
         if (auto* function = dynamic_cast<moon::FunctionDecl*>(
                 declaration.get()); function && function->name == "apply_ref")
             refSource = function;
-    std::vector<uint8_t> refEntryRecord;
     if (!refSource || !refSource->controlFlow)
         return fail("cross-package Ref/apply decoded module lost its executable function");
-    auto refJit = CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
-        preparedRefModule, *refSource, error, &refEntryRecord);
-    if (!refJit) {
-        std::cerr << error << '\n';
-        return fail("cross-package Ref/apply private JIT did not materialize");
+    luna::runtime::MoonRuntime::PinnedGeneration refConsumerGeneration;
+    std::weak_ptr<LunaPrivateRefUnitApplyLoadedEntry> refEntryWeak;
+    {
+        luna::runtime::MoonRuntime runtime;
+        luna::runtime::MoonRuntime::StagedGeneration staged;
+        if (luna::driver::stagePrivateNativeRefUnitPreparationForTest(
+                runtime, refBytes, refManifest.targetTriple,
+                refManifest.dataLayout, {changedContract}, staged,
+                refEntryWeak, error) || staged || !refEntryWeak.expired() ||
+            runtime.pin(refManifest.packageId))
+            return fail("private Ref consumer staged with changed owner evidence");
+        if (!luna::driver::stagePrivateNativeRefUnitPreparationForTest(
+                runtime, refBytes, refManifest.targetTriple,
+                refManifest.dataLayout, dependencies, staged,
+                refEntryWeak, error)) {
+            std::cerr << error << '\n';
+            return fail("private Ref consumer generation did not stage");
+        }
+        if (!staged || staged.moduleId() != refManifest.packageId ||
+            staged.contentDigest().size() != 64 || refEntryWeak.expired() ||
+            runtime.pin(refManifest.packageId))
+            return fail("private Ref consumer staging published or lost its lease");
+        if (!runtime.loadOnce(staged, refConsumerGeneration, error)) {
+            std::cerr << error << '\n';
+            return fail("private Ref consumer generation did not load");
+        }
+        if (!refConsumerGeneration ||
+            refConsumerGeneration.find(
+                refSource->symbolId.value, refSource->contractId.value) ||
+            refConsumerGeneration.findRefUnitCandidate(
+                refSource->symbolId.value, refSource->contractId.value))
+            return fail("private Ref consumer generation published a callable");
+        luna::runtime::MoonRuntime::PinnedGeneration rejectedPublished;
+        if (luna::driver::loadVerifiedMoonGenerationOnce(runtime, refBytes,
+                refManifest.targetTriple, refManifest.dataLayout,
+                rejectedPublished, error, dependencies) || rejectedPublished)
+            return fail("public load-once reused a private Ref consumer generation");
     }
-    auto refEntry = CodeGenerator::loadPrivateRuntimeFragmentRefApplyEntryForTest(
-        preparedRefModule, *refSource, refEntryRecord, std::move(refJit), error);
-    if (!refEntry) {
-        std::cerr << error << '\n';
-        return fail("cross-package Ref/apply private entry did not load");
-    }
+    auto refEntry = refEntryWeak.lock();
+    if (!refEntry)
+        return fail("private Ref consumer generation lost its code after Runtime teardown");
     moon::Module plugin;
     plugin.name = "unchanged.sentinel";
     decodedManifest.packageId = "unchanged.sentinel";
@@ -472,6 +500,10 @@ int runCrossPackageContainerTest() {
                 const_cast<void*>(borrowedRef.opaque())) !=
                 LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
             return fail("cross-package Ref/apply lost its pinned borrowed call");
+    refEntry.reset();
+    refConsumerGeneration = {};
+    if (!refEntryWeak.expired())
+        return fail("private Ref consumer generation retained code after pin release");
     return 0;
 }
 

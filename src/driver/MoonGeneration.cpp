@@ -29,6 +29,15 @@ struct LoadedMoonGeneration {
     luna::runtime::RuntimeDescriptorRegistryView runtimeDescriptors;
 };
 
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+struct PrivatePreparedRefGeneration {
+    moon::ContainerManifest manifest;
+    moon::Module module;
+    std::string contentDigest;
+    std::shared_ptr<LunaPrivateRefUnitApplyLoadedEntry> entry;
+};
+#endif
+
 bool jitConfiguration(MoonJitOptimization optimization,
                       LunaOptimizationLevel& level, std::string& key,
                       std::string& error) {
@@ -406,6 +415,83 @@ bool stageVerifiedMoonGeneration(
         },
         initializer, staged, error);
 }
+
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+bool stagePrivateNativeRefUnitPreparationForTest(
+    luna::runtime::MoonRuntime& runtime,
+    const std::vector<uint8_t>& containerBytes,
+    const std::string& expectedTargetTriple,
+    const std::string& expectedDataLayout,
+    const moon::SlotPublicationDependencies& ownerEvidence,
+    luna::runtime::MoonRuntime::StagedGeneration& staged,
+    std::weak_ptr<LunaPrivateRefUnitApplyLoadedEntry>& entry,
+    std::string& error) {
+    error.clear();
+    if (staged) {
+        error = "private Ref/unit staging output already owns a generation";
+        return false;
+    }
+    auto loaded = std::make_shared<PrivatePreparedRefGeneration>();
+    if (!moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTargetForTest(
+            containerBytes, expectedTargetTriple, expectedDataLayout,
+            ownerEvidence, loaded->manifest, loaded->module, error))
+        return false;
+    moon::FunctionDecl* source = nullptr;
+    for (auto& declaration : loaded->module.declarations) {
+        auto* function = dynamic_cast<moon::FunctionDecl*>(declaration.get());
+        if (!function || !function->controlFlow ||
+            function->controlFlow->runtimeRefApplies.empty()) continue;
+        source = function;
+        break;
+    }
+    if (!source) {
+        error = "private Ref/unit generation lost its Apply source";
+        return false;
+    }
+    std::vector<uint8_t> entryRecord;
+    auto executable = CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
+        loaded->module, *source, error, &entryRecord);
+    if (!executable) return false;
+    auto loadedEntry = CodeGenerator::loadPrivateRuntimeFragmentRefApplyEntryForTest(
+        loaded->module, *source, entryRecord, std::move(executable), error);
+    if (!loadedEntry) return false;
+    loaded->entry = std::move(loadedEntry);
+    loaded->contentDigest = containerDigest(containerBytes);
+
+    luna::runtime::GenerationStagingRequest request;
+    request.moduleId = loaded->manifest.packageId;
+    request.contentDigest = loaded->contentDigest;
+    request.materializationKey =
+        std::string("luna.private-ref-unit-preparation.v1:llvm=") +
+        LLVM_VERSION_STRING + ":ir=O0:orc=default";
+    request.moduleLease = loaded;
+    if (!runtime.stage(
+            request,
+            [loaded](const auto& candidate, std::string& verificationError) {
+                if (candidate.moduleId != loaded->manifest.packageId ||
+                    candidate.contentDigest != loaded->contentDigest ||
+                    candidate.moduleLease.get() != loaded.get() ||
+                    !candidate.refUnitCandidates.empty() || candidate.refUnitCaller) {
+                    verificationError =
+                        "private Ref/unit generation identity changed before staging";
+                    return false;
+                }
+                return true;
+            },
+            [](const auto&, auto& bindings, std::string& resolutionError) {
+                if (!bindings.empty()) {
+                    resolutionError =
+                        "private Ref/unit generation cannot publish bindings";
+                    return false;
+                }
+                return true;
+            },
+            {}, staged, error))
+        return false;
+    entry = loaded->entry;
+    return true;
+}
+#endif
 
 bool loadVerifiedMoonGenerationOnce(
     luna::runtime::MoonRuntime& runtime,
