@@ -22,8 +22,7 @@
 
 namespace luna::driver {
 
-#ifdef LUNA_PRIVATE_REF_JIT_TEST
-struct PrivateVerifiedSlotOwnerStateForTest {
+struct VerifiedMoonSlotOwnerState {
     luna::runtime::MoonRuntime runtime;
     luna::runtime::MoonRuntime::PinnedGeneration generation;
     moon::ContainerManifest manifest;
@@ -31,6 +30,7 @@ struct PrivateVerifiedSlotOwnerStateForTest {
     std::string contentDigest;
 };
 
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
 struct PrivatePreparedRefGenerationForTest {
     moon::ContainerManifest manifest;
     moon::Module module;
@@ -430,29 +430,33 @@ bool stageVerifiedMoonGeneration(
         initializer, staged, error);
 }
 
-#ifdef LUNA_PRIVATE_REF_JIT_TEST
-uint64_t PrivateVerifiedSlotOwnerForTest::generationId() const {
+uint64_t VerifiedMoonSlotOwner::generationId() const {
     return state_ ? state_->generation.generationId() : 0;
 }
 
-bool loadPrivateVerifiedSlotOwnerForTest(
+bool loadVerifiedMoonSlotOwner(
     const std::vector<uint8_t>& ownerContainerBytes,
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
-    PrivateVerifiedSlotOwnerForTest& owner,
+    VerifiedMoonSlotOwner& owner,
     std::string& error) {
     error.clear();
     if (owner) {
-        error = "private Slot owner output already owns a verified generation";
+        error = "verified Slot owner output already owns a generation";
         return false;
     }
-    auto verified = std::make_shared<PrivateVerifiedSlotOwnerStateForTest>();
+    auto verified = std::make_shared<VerifiedMoonSlotOwnerState>();
     if (!moon::ContainerModelCodec::decodeContainerForTarget(
             ownerContainerBytes, expectedTargetTriple, expectedDataLayout,
             verified->manifest, verified->module, error))
         return false;
-    if (!verified->module.localSlotPublication) {
-        error = "private Slot owner artifact has no verified Slot publication";
+    if (!verified->module.localSlotPublication ||
+        !std::any_of(verified->module.exports.begin(),
+                     verified->module.exports.end(),
+                     [](const moon::ExportRecord& exported) {
+                         return exported.kind == moon::DeclarationKind::Slot;
+                     })) {
+        error = "verified Slot owner artifact has no Slot publication";
         return false;
     }
     verified->contentDigest = containerDigest(ownerContainerBytes);
@@ -465,17 +469,18 @@ bool loadPrivateVerifiedSlotOwnerForTest(
         staged.contentDigest() != verified->contentDigest ||
         !verified->runtime.loadOnce(staged, verified->generation, error)) {
         if (error.empty())
-            error = "private Slot owner staging changed its verified artifact";
+            error = "verified Slot owner staging changed its artifact";
         return false;
     }
     owner.state_ = std::move(verified);
     return true;
 }
 
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
 bool stagePrivateNativeRefUnitPreparationForTest(
     luna::runtime::MoonRuntime& runtime,
     const std::vector<uint8_t>& containerBytes,
-    const PrivateVerifiedSlotOwnerForTest& owner,
+    const VerifiedMoonSlotOwner& owner,
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
     luna::runtime::MoonRuntime::StagedGeneration& staged,

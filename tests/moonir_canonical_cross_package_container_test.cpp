@@ -299,17 +299,31 @@ int runCrossPackageContainerTest() {
     luna::driver::PrivateImportedSlotRefUnitCandidateForTest refCandidate;
     {
         luna::runtime::MoonRuntime runtime;
-        luna::driver::PrivateVerifiedSlotOwnerForTest rejectedOwner;
-        if (luna::driver::loadPrivateVerifiedSlotOwnerForTest(
+        luna::driver::VerifiedMoonSlotOwner rejectedOwner;
+        if (luna::driver::loadVerifiedMoonSlotOwner(
                 corruptedOwner, hostManifest.targetTriple,
                 hostManifest.dataLayout, rejectedOwner, error) || rejectedOwner)
             return fail("corrupt owner artifact issued a private loader proof");
-        if (luna::driver::loadPrivateVerifiedSlotOwnerForTest(
+        if (luna::driver::loadVerifiedMoonSlotOwner(
                 otherTargetBytes, hostManifest.targetTriple,
                 hostManifest.dataLayout, rejectedOwner, error) || rejectedOwner)
             return fail("wrong-target owner artifact issued a private loader proof");
-        luna::driver::PrivateVerifiedSlotOwnerForTest ownerProof;
-        if (!luna::driver::loadPrivateVerifiedSlotOwnerForTest(
+        luna::driver::CompilerPipeline slotlessPipeline;
+        std::vector<uint8_t> slotlessBytes;
+        if (!slotlessPipeline.compileSourceToMoonIR(
+                "package canonical.container.slotless; module effects;",
+                "<slotless-owner>") ||
+            !moon::ContainerModelCodec::encodeContainer(
+                makeManifest(slotlessPipeline.moonModule()),
+                slotlessPipeline.moonModule(), slotlessBytes, error))
+            return fail("slotless owner artifact did not encode");
+        if (luna::driver::loadVerifiedMoonSlotOwner(
+                slotlessBytes, hostManifest.targetTriple,
+                hostManifest.dataLayout, rejectedOwner, error) || rejectedOwner ||
+            error.find("no Slot publication") == std::string::npos)
+            return fail("artifact without a local Slot issued an owner proof");
+        luna::driver::VerifiedMoonSlotOwner ownerProof;
+        if (!luna::driver::loadVerifiedMoonSlotOwner(
                 hostBytes, hostManifest.targetTriple,
                 hostManifest.dataLayout, ownerProof, error)) {
             std::cerr << error << '\n';
@@ -317,7 +331,7 @@ int runCrossPackageContainerTest() {
         }
         const uint64_t ownerGenerationId = ownerProof.generationId();
         if (!ownerGenerationId ||
-            luna::driver::loadPrivateVerifiedSlotOwnerForTest(
+            luna::driver::loadVerifiedMoonSlotOwner(
                 hostBytes, hostManifest.targetTriple,
                 hostManifest.dataLayout, ownerProof, error) ||
             ownerProof.generationId() != ownerGenerationId)
@@ -325,12 +339,12 @@ int runCrossPackageContainerTest() {
         auto compatibleOwnerManifest = hostManifest;
         compatibleOwnerManifest.packageVersion = "0.3.1";
         std::vector<uint8_t> compatibleOwnerBytes;
-        luna::driver::PrivateVerifiedSlotOwnerForTest compatibleOwner;
+        luna::driver::VerifiedMoonSlotOwner compatibleOwner;
         if (!moon::ContainerModelCodec::encodeContainer(
                 compatibleOwnerManifest, hostPipeline.moonModule(),
                 compatibleOwnerBytes, error) ||
             compatibleOwnerBytes == hostBytes ||
-            !luna::driver::loadPrivateVerifiedSlotOwnerForTest(
+            !luna::driver::loadVerifiedMoonSlotOwner(
                 compatibleOwnerBytes, hostManifest.targetTriple,
                 hostManifest.dataLayout, compatibleOwner, error)) {
             std::cerr << error << '\n';

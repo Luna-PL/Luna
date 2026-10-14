@@ -54,40 +54,44 @@ bool loadVerifiedMoonGenerationOnce(
     const moon::SlotPublicationDependencies& dependencies = {},
     MoonJitOptimization optimization = MoonJitOptimization::O0);
 
+struct VerifiedMoonSlotOwnerState;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 struct PrivatePreparedRefGenerationForTest;
-struct PrivateVerifiedSlotOwnerStateForTest;
+#endif
 
-// Issued only after the production verified Moon adapter stages and loads an
-// owner artifact in a fresh, loader-owned Runtime. Callers cannot pair
-// arbitrary container bytes with a host-staged generation.
-class PrivateVerifiedSlotOwnerForTest {
+// Internal loader-issued owner provenance. A fresh loader-owned Runtime stages
+// and loads the verified artifact, so host-staged generations cannot be paired
+// with unrelated bytes. This is not a standalone host SDK or Ref publication.
+class VerifiedMoonSlotOwner {
 public:
     explicit operator bool() const { return state_ != nullptr; }
     uint64_t generationId() const;
 
 private:
-    friend bool loadPrivateVerifiedSlotOwnerForTest(
+    friend bool loadVerifiedMoonSlotOwner(
         const std::vector<uint8_t>&, const std::string&,
-        const std::string&, PrivateVerifiedSlotOwnerForTest&, std::string&);
+        const std::string&, VerifiedMoonSlotOwner&, std::string&);
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
     friend bool stagePrivateNativeRefUnitPreparationForTest(
         luna::runtime::MoonRuntime&, const std::vector<uint8_t>&,
-        const PrivateVerifiedSlotOwnerForTest&, const std::string&,
+        const VerifiedMoonSlotOwner&, const std::string&,
         const std::string&,
         luna::runtime::MoonRuntime::StagedGeneration&,
         std::weak_ptr<LunaPrivateRefUnitApplyLoadedEntry>&,
         std::weak_ptr<PrivatePreparedRefGenerationForTest>&,
         std::string&);
-    std::shared_ptr<PrivateVerifiedSlotOwnerStateForTest> state_;
+#endif
+    std::shared_ptr<const VerifiedMoonSlotOwnerState> state_;
 };
 
-bool loadPrivateVerifiedSlotOwnerForTest(
+bool loadVerifiedMoonSlotOwner(
     const std::vector<uint8_t>& ownerContainerBytes,
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
-    PrivateVerifiedSlotOwnerForTest& owner,
+    VerifiedMoonSlotOwner& owner,
     std::string& error);
 
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
 // Compiler-private typed candidate. The consumer pin must own exactly the
 // preparation lease that holds its decoded facts, owner pin and JIT entry.
 class PrivateImportedSlotRefUnitCandidateForTest {
@@ -129,7 +133,7 @@ bool pinPrivateImportedSlotRefUnitCandidateForTest(
 bool stagePrivateNativeRefUnitPreparationForTest(
     luna::runtime::MoonRuntime& runtime,
     const std::vector<uint8_t>& containerBytes,
-    const PrivateVerifiedSlotOwnerForTest& owner,
+    const VerifiedMoonSlotOwner& owner,
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
     luna::runtime::MoonRuntime::StagedGeneration& staged,
