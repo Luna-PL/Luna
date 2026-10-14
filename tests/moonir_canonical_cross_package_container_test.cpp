@@ -463,7 +463,11 @@ int runCrossPackageContainerTest() {
         wrongConsumerRequest.moduleId = refConsumerGeneration.moduleId();
         wrongConsumerRequest.contentDigest =
             refConsumerGeneration.contentDigest();
-        wrongConsumerRequest.moduleLease = std::make_shared<int>(2);
+        auto preparedLease = refPreparationWeak.lock();
+        if (!preparedLease)
+            return fail("private Ref preparation lease expired before binding");
+        wrongConsumerRequest.moduleLease = std::shared_ptr<const void>(
+            preparedLease.get(), [](const void*) {});
         luna::runtime::MoonRuntime::StagedGeneration wrongConsumerStage;
         luna::runtime::MoonRuntime::PinnedGeneration wrongConsumerGeneration;
         if (!wrongConsumerRuntime.stage(wrongConsumerRequest,
@@ -477,7 +481,8 @@ int runCrossPackageContainerTest() {
                 wrongConsumerGeneration, refPreparationWeak,
                 refSource->symbolId.value, refSource->contractId.value,
                 importedSlot, refCandidate, error) || refCandidate)
-            return fail("private imported-Slot candidate mixed generation leases");
+            return fail("private imported-Slot candidate mixed lease ownership");
+        preparedLease.reset();
         if (!luna::driver::pinPrivateImportedSlotRefUnitCandidateForTest(
                 refConsumerGeneration, refPreparationWeak,
                 refSource->symbolId.value, refSource->contractId.value,

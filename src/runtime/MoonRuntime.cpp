@@ -202,11 +202,13 @@ const std::string& MoonRuntime::PinnedGeneration::materializationKey() const {
     return generation_ ? generation_->materializationKey : emptyString();
 }
 
-#ifdef LUNA_PRIVATE_REF_JIT_TEST
-const void* MoonRuntime::PinnedGeneration::moduleLeaseIdentityForTest() const {
-    return generation_ ? generation_->moduleLease.get() : nullptr;
+bool MoonRuntime::PinnedGeneration::matchesModuleLease(
+    const std::shared_ptr<const void>& lease) const {
+    if (!generation_ || !lease) return false;
+    const auto& retained = generation_->moduleLease;
+    return retained.get() == lease.get() &&
+        !retained.owner_before(lease) && !lease.owner_before(retained);
 }
-#endif
 
 const GenerationBinding* MoonRuntime::findBinding(
     const GenerationState& generation, const std::string& symbolId,

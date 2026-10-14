@@ -1490,14 +1490,16 @@ generation 签发的借用 Ref；无效 parent／handle 被拒绝，销毁 Runti
 这证明私有双包源码执行；公开 generation 导入和产物发布仍关闭。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
-candidate。包名和摘要相同但 lease 不同的 generation 不能借用入口。该 candidate 在 Runtime
+candidate。普通构建中的 generation 核验现同时比较 lease 地址与 `shared_ptr` 的共享所有权；
+私有 candidate 复用它。即使包名、摘要和裸地址相同，另一个控制块持有的 generation 仍
+不能借用入口。此检查自身不证明 lease 内容。该 candidate 在 Runtime
 销毁后仍保留 consumer 与 owner 并重复类型化调用；普通 Runtime candidate 查询仍为空。
 此路径不发布 callable 或 Container candidate 行。
 MoonRuntime 的通用 staging API 仍接收宿主提供的身份事实。编译器内部的 loader 凭据现有
 普通构建路径，但普通加载流程还未用它接纳导入的 Ref candidate。生产 candidate 发布前须
 要求此凭据，将其绑定到精确 consumer lease 与导入 Slot，并保留 owner pin。
 凭据的精确 Slot 固定检查现可用于普通 driver，但它自身不证明 consumer 记录的来源；
-consumer lease 绑定和 Runtime candidate 准入仍是独立完成门。
+生产 consumer lease 的签发／绑定和 Runtime candidate 准入仍是独立完成门。
 冻结的 `DeclarationRecord`／
 规范契约和 Native v1
 导出行仍不添加依赖 context 的可调用入口。通用源码 import 与 Moon／Container
@@ -1612,8 +1614,9 @@ consumer lease 绑定和 Runtime candidate 准入仍是独立完成门。
    generation，同时保留精确 verified owner generation，并调用 verified plugin generation
    签发的借用 Ref。私有类型化 candidate 已绑定解码源码事实、精确 consumer lease，以及
    由编译器内部 verified owner loader 签发的凭据；该 loader 现无需测试开关也能编译。
-   普通构建的精确 Slot 检查可固定已验证 owner generation；下一步须将此 pin 与生产
-   consumer lease 及 Runtime candidate 绑定。
+   普通构建的精确 Slot 检查可固定已验证 owner generation，generation lease 检查
+   同时比较地址与共享所有权；下一步须签发生产 consumer lease，并将此 pin 接入
+   Runtime candidate。
    当前 Runtime candidate 要求同一 generation 的 Slot binding。期间默认发布验证继续关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation
    的 Ref，在显式 parent context 中执行源码 apply。私有 JIT 已覆盖借用入口、无效

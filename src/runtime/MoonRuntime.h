@@ -189,10 +189,9 @@ public:
         const std::string& moduleId() const;
         const std::string& contentDigest() const;
         const std::string& materializationKey() const;
-#ifdef LUNA_PRIVATE_REF_JIT_TEST
-        // Test-only identity check for a compiler-private generation lease.
-        const void* moduleLeaseIdentityForTest() const;
-#endif
+        // Requires both the retained address and its shared ownership to
+        // match. Trusted adapters can bind decoded facts to this exact lease.
+        bool matchesModuleLease(const std::shared_ptr<const void>& lease) const;
         PinnedBinding find(const std::string& symbolId,
                            const std::string& contractId) const;
         PinnedBinding find(

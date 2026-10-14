@@ -100,6 +100,16 @@ int main() {
         if (!runtime.loadOnce(staged, loaded, error) ||
             loaded.materializationKey() != "fixture:O0")
             return fail("load-once lost materialization identity");
+        const std::shared_ptr<const void> sameAddressDifferentOwner(
+            request.moduleLease.get(), [](const void*) {});
+        int alternateAddress = 0;
+        const std::shared_ptr<const void> sameOwnerDifferentAddress(
+            request.moduleLease, &alternateAddress);
+        if (!loaded.matchesModuleLease(request.moduleLease) ||
+            loaded.matchesModuleLease(sameAddressDifferentOwner) ||
+            loaded.matchesModuleLease(sameOwnerDifferentAddress) ||
+            Runtime::PinnedGeneration{}.matchesModuleLease(request.moduleLease))
+            return fail("generation lease identity ignored ownership or address");
         request.materializationKey = "fixture:O2";
         phases.clear();
         if (!stageOne(runtime, request, SymbolId, ContractId, &second, staged, phases, error))

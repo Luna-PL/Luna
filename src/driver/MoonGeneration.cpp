@@ -636,7 +636,7 @@ std::optional<luna::codegen::NativeRefUnitSourceFacts>
 PrivateImportedSlotRefUnitCandidateForTest::facts() const {
     const auto prepared = preparation_.lock();
     if (!prepared || !consumer_ ||
-        consumer_.moduleLeaseIdentityForTest() != prepared.get())
+        !consumer_.matchesModuleLease(prepared))
         return std::nullopt;
     return prepared->facts;
 }
@@ -647,7 +647,7 @@ bool PrivateImportedSlotRefUnitCandidateForTest::call(
     int32_t& status, std::string& error) const {
     const auto prepared = preparation_.lock();
     if (!prepared || !consumer_ ||
-        consumer_.moduleLeaseIdentityForTest() != prepared.get() ||
+        !consumer_.matchesModuleLease(prepared) ||
         !prepared->entry) {
         error = "private imported-Slot Ref/unit candidate lost its generation lease";
         return false;
@@ -668,7 +668,7 @@ bool pinPrivateImportedSlotRefUnitCandidateForTest(
     error.clear();
     const auto prepared = preparation.lock();
     if (candidate || !prepared || !consumerGeneration ||
-        consumerGeneration.moduleLeaseIdentityForTest() != prepared.get() ||
+        !consumerGeneration.matchesModuleLease(prepared) ||
         consumerGeneration.moduleId() != prepared->manifest.packageId ||
         consumerGeneration.contentDigest() != prepared->contentDigest ||
         !prepared->ownerGeneration || !prepared->entry ||

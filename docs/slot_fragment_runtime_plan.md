@@ -1998,8 +1998,11 @@ remain closed.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
-module lease. A same-package, same-digest generation with a different lease
-cannot borrow the entry. The candidate retains the consumer and owner through
+module lease. A normal-build generation check now compares both the retained
+address and shared ownership of that lease. The private candidate uses it;
+a same-package, same-digest generation with the same raw address but a separate
+ownership control block cannot borrow the entry. This check alone does not
+authenticate the lease contents. The candidate retains the consumer and owner through
 Runtime teardown and repeats the typed call; the ordinary Runtime candidate
 lookup still returns empty. This does not publish a callable or a Container
 candidate row.
@@ -2009,8 +2012,8 @@ ordinary loading does not yet use it for imported Ref candidates. Production
 candidate admission must require this proof, bind it to the exact consumer
 lease and imported Slot, and retain the owner pin before publication. The
 proof's exact-Slot pin check is available in the ordinary driver; it does not
-authenticate the consumer record. Consumer lease binding and Runtime candidate
-admission remain separate gates.
+authenticate the consumer record. Production consumer lease issuance/binding
+and Runtime candidate admission remain separate gates.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and
@@ -2171,8 +2174,9 @@ not a public ABI decision or stable-release approval:
    from a verified plugin generation. A private typed candidate now binds
    decoded source facts, the exact consumer lease and a proof issued by the
    compiler-internal verified owner loader, now built without the test flag.
-   Its ordinary-build exact-Slot check pins the verified owner generation;
-   next bind this pin to the production consumer lease and Runtime
+   Its ordinary-build exact-Slot check pins the verified owner generation,
+   and the generation lease check compares address plus shared ownership;
+   next issue the production consumer lease and bind this pin to Runtime
    candidates. The current Runtime candidate requires a same-generation Slot
    binding.
    The default publication verifier stays closed during that work.
