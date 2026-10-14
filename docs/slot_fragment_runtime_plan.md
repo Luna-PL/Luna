@@ -1946,8 +1946,11 @@ beside the v1 exports; the loader validates its canonical proof row, and a
 pinned Runtime lookup retains the verified code for a typed call. Moon
 Container's Function code record carries `requiresFragmentContext`, and its
 module verifier recomputes that fact from the CFG. The default 0.3 Code
-encoder rejects Apply graphs; the 0.4 Ref Type/Code section preview can
-round-trip them, but whole-container publication still fails verification.
+encoder rejects Apply graphs. The 0.4 Ref Type/Code sections round-trip them;
+an internal whole-container preparation preview now also encodes, decodes and
+re-encodes one same-package Ref/apply module byte-identically. It returns no
+container bytes or executable module. Ordinary whole-container encode/decode
+still use publication verification and reject the Ref module.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and

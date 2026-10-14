@@ -2570,6 +2570,74 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                              std::string::npos;
                      }))
         return fail("internal Ref apply CFG escaped module publication gating");
+    moon::ContainerManifest refApplyPreviewManifest;
+    refApplyPreviewManifest.packageId = sourceApplyModule->name;
+    refApplyPreviewManifest.packageVersion = "0.0.0";
+    refApplyPreviewManifest.packageKind = moon::ContainerPackageKind::Application;
+    refApplyPreviewManifest.targetTriple = "ref-preview-test-target";
+    refApplyPreviewManifest.dataLayout = "e-p:64:64";
+    refApplyPreviewManifest.entrypoint = {
+        sourceApplyEntry->symbolId, sourceApplyEntry->contractId};
+    refApplyPreviewManifest.features = sourceApplyModule->features;
+    const auto* previewEntryRecord = sourceApplyModule->findDeclarationById(
+        sourceApplyEntry->declarationId);
+    if (!previewEntryRecord)
+        return fail("Ref/apply preview fixture lost its function record");
+    moon::ExportRecord previewFunctionExport;
+    previewFunctionExport.name = sourceApplyEntry->generatedSymbolName;
+    previewFunctionExport.declaration = {
+        sourceApplyEntry->symbolId, sourceApplyEntry->contractId};
+    previewFunctionExport.type = previewEntryRecord->type;
+    previewFunctionExport.kind = moon::DeclarationKind::Function;
+    sourceApplyEntry->isExported = true;
+    const auto previewExportKey = [](const moon::ExportRecord& exported) {
+        return exported.name + "\n" + exported.declaration.symbol.value;
+    };
+    const auto previewExportPosition = std::lower_bound(
+        sourceApplyModule->exports.begin(), sourceApplyModule->exports.end(),
+        previewExportKey(previewFunctionExport),
+        [&](const moon::ExportRecord& exported, const std::string& key) {
+            return previewExportKey(exported) < key;
+        });
+    const auto previewExportIndex = static_cast<size_t>(
+        previewExportPosition - sourceApplyModule->exports.begin());
+    sourceApplyModule->exports.insert(previewExportPosition,
+        previewFunctionExport);
+    moon::Verifier refApplyPreparationVerifier(
+        moon::VerificationPolicy::NativeRefUnitPreparation);
+    if (!refApplyPreparationVerifier.verify(*sourceApplyModule)) {
+        for (const auto& diagnostic : refApplyPreparationVerifier.errors())
+            std::cerr << diagnostic.message << '\n';
+        sourceApplyEntry->isExported = false;
+        sourceApplyModule->exports.erase(
+            sourceApplyModule->exports.begin() + previewExportIndex);
+        return fail("Native Ref/unit preparation verifier rejected the preview fixture");
+    }
+    std::vector<uint8_t> rejectedRefApplyContainer{1, 2, 3};
+    std::string refApplyContainerError;
+    if (moon::ContainerModelCodec::encodeContainer(
+            refApplyPreviewManifest, *sourceApplyModule,
+            rejectedRefApplyContainer, refApplyContainerError) ||
+        !rejectedRefApplyContainer.empty() ||
+        refApplyContainerError.find("MoonIR verification failed") ==
+            std::string::npos) {
+        sourceApplyEntry->isExported = false;
+        sourceApplyModule->exports.erase(
+            sourceApplyModule->exports.begin() + previewExportIndex);
+        return fail("ordinary whole-container encoder accepted internal Ref apply");
+    }
+    if (!moon::ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
+            refApplyPreviewManifest, *sourceApplyModule,
+            refApplyContainerError)) {
+        std::cerr << refApplyContainerError << '\n';
+        sourceApplyEntry->isExported = false;
+        sourceApplyModule->exports.erase(
+            sourceApplyModule->exports.begin() + previewExportIndex);
+        return fail("Native Ref/unit preparation whole-container preview failed");
+    }
+    sourceApplyEntry->isExported = false;
+    sourceApplyModule->exports.erase(
+        sourceApplyModule->exports.begin() + previewExportIndex);
     CodeGenerator blockedSourceApply("canonical-ref-apply-codegen-gate");
     if (blockedSourceApply.generate(sourceApplyModule.get()) ||
         !std::any_of(blockedSourceApply.errors().begin(),

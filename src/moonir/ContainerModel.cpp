@@ -11,6 +11,15 @@ namespace moon {
 
 using namespace container_detail;
 
+std::shared_ptr<const SlotPublicationEvidence>
+ContainerModelCodec::makeSlotPublicationEvidence(
+    std::string owner, std::string target, std::string dataLayout,
+    std::vector<DeclarationRecord> slots) {
+    return std::shared_ptr<const SlotPublicationEvidence>(
+        new SlotPublicationEvidence(std::move(owner), std::move(target),
+            std::move(dataLayout), std::move(slots)));
+}
+
 namespace {
 bool validateSlotDependencies(const ContainerManifest& manifest, const Module& module,
                               const SlotPublicationDependencies& dependencies,
@@ -42,12 +51,17 @@ bool validateSlotDependencies(const ContainerManifest& manifest, const Module& m
     }
     return true;
 }
+
 } // namespace
 
-bool ContainerModelCodec::encodeContainer(
+bool ContainerModelCodec::encodeContainerWithPolicy(
     const ContainerManifest& manifest, const Module& module,
     std::vector<uint8_t>& output, std::string& error,
-    const ContainerLimits& limits, uint32_t formatMinor) {
+    const ContainerLimits& limits, uint32_t formatMinor,
+    bool nativeRefUnitPreparation) {
+    const auto policy = nativeRefUnitPreparation
+        ? VerificationPolicy::NativeRefUnitPreparation
+        : VerificationPolicy::Published;
     output.clear();
     if (formatMinor != FormatMinor && formatMinor != RefWireFormatMinor) {
         error = "Moon Container format version is unsupported";
@@ -58,13 +72,25 @@ bool ContainerModelCodec::encodeContainer(
         error = "Moon Container manifest disagrees with its MoonIR module";
         return false;
     }
-    Verifier verifier;
+    Verifier verifier(policy);
     if (!verifier.verify(module)) {
         error = verifier.errors().empty()
             ? "Moon Container MoonIR verification failed"
             : "Moon Container MoonIR verification failed: " +
                 verifier.errors().front().message;
         return false;
+    }
+    if (nativeRefUnitPreparation) {
+        for (const auto& type : module.typeTable) {
+            if (type.kind != TypeKind::RuntimeFragmentRef) continue;
+            const auto target = module.resolveRuntimeFragmentRefTarget(type.id);
+            const auto* slot = target
+                ? module.findDeclaration(*target) : nullptr;
+            if (!slot || slot->id.rfind(module.name + "::", 0) != 0) {
+                error = "Native Ref/unit preparation preview requires a same-package Slot target";
+                return false;
+            }
+        }
     }
 
     Module projection;
@@ -96,8 +122,9 @@ bool ContainerModelCodec::encodeContainer(
                     return evidence && evidence->ownerPackageId() == owner;
                 })) continue;
         projection.dependencySlotPublications.push_back(
-            std::shared_ptr<const SlotPublicationEvidence>(new SlotPublicationEvidence(
-                owner, manifest.targetTriple, manifest.dataLayout, std::move(slots))));
+            ContainerModelCodec::makeSlotPublicationEvidence(
+                owner, manifest.targetTriple, manifest.dataLayout,
+                std::move(slots)));
     }
     if (!validateSlotDependencies(manifest, projection,
             projection.dependencySlotPublications, error, limits)) return false;
@@ -110,14 +137,20 @@ bool ContainerModelCodec::encodeContainer(
                 "generic recipes are not executable container entries";
         return false;
     }
-    Verifier projectionVerifier;
-    if (!projectionVerifier.verify(projection)) {
-        error = projectionVerifier.errors().empty()
-            ? "Moon Container concrete projection verification failed"
-            : "Moon Container concrete projection verification failed: " +
-                projectionVerifier.errors().front().message;
-        return false;
+    if (!nativeRefUnitPreparation) {
+        Verifier projectionVerifier(policy);
+        if (!projectionVerifier.verify(projection)) {
+            error = projectionVerifier.errors().empty()
+                ? "Moon Container concrete projection verification failed"
+                : "Moon Container concrete projection verification failed: " +
+                    projectionVerifier.errors().front().message;
+            return false;
+        }
     }
+    // The concrete projection keeps frozen records but not executable
+    // FunctionDecl bodies. Its Native candidate check therefore cannot see
+    // the Ref/unit source function. The source module was verified above and
+    // the complete decoded executable module is verified below.
 
     std::vector<ContainerSection> sections;
     const auto append = [&](ContainerSectionId id,
@@ -132,7 +165,8 @@ bool ContainerModelCodec::encodeContainer(
             return encodeManifest(manifest, payload, error, limits);
         }) ||
         !append(ContainerSectionId::Type, [&](auto& payload) {
-            return encodeTypes(projection, payload, error, limits, formatMinor);
+            return encodeTypes(projection, payload, error, limits,
+                               formatMinor);
         }) ||
         !append(ContainerSectionId::Symbol, [&](auto& payload) {
             return encodeSymbols(projection, payload, error, limits);
@@ -164,20 +198,30 @@ bool ContainerModelCodec::encodeContainer(
     // operation; runtime consumers still need independent owner artifacts.
     ContainerManifest verifiedManifest;
     Module verifiedModule;
-    if (!decodeContainerForTarget(output, manifest.targetTriple, manifest.dataLayout,
-            verifiedManifest, verifiedModule, error, limits,
-            projection.dependencySlotPublications)) {
+    if (!decodeContainerWithPolicy(output, verifiedManifest, verifiedModule,
+            error, limits, projection.dependencySlotPublications,
+            nativeRefUnitPreparation)) {
         error = "generated Moon Container failed self-verification: " + error;
+        output.clear();
+        return false;
+    }
+    if (verifiedManifest.targetTriple != manifest.targetTriple ||
+        verifiedManifest.dataLayout != manifest.dataLayout) {
+        error = "generated Moon Container target differs from its source manifest";
         output.clear();
         return false;
     }
     return true;
 }
 
-bool ContainerModelCodec::decodeContainer(
+bool ContainerModelCodec::decodeContainerWithPolicy(
     const std::vector<uint8_t>& input, ContainerManifest& manifest,
     Module& module, std::string& error, const ContainerLimits& limits,
-    const SlotPublicationDependencies& dependencies) {
+    const SlotPublicationDependencies& dependencies,
+    bool nativeRefUnitPreparation) {
+    const auto policy = nativeRefUnitPreparation
+        ? VerificationPolicy::NativeRefUnitPreparation
+        : VerificationPolicy::Published;
     ContainerReader reader;
     if (!reader.parse(input, error, limits)) return false;
     const auto section = [&](ContainerSectionId id)
@@ -254,7 +298,7 @@ bool ContainerModelCodec::decodeContainer(
             return false;
         }
     }
-    Verifier verifier;
+    Verifier verifier(policy);
     if (!verifier.verify(decodedModule)) {
         error = verifier.errors().empty()
             ? "Moon Container MoonIR verification failed"
@@ -270,12 +314,72 @@ bool ContainerModelCodec::decodeContainer(
             publicSlots.push_back(*record);
     }
     decodedModule.localSlotPublication =
-        std::shared_ptr<const SlotPublicationEvidence>(new SlotPublicationEvidence(
+        ContainerModelCodec::makeSlotPublicationEvidence(
             decodedManifest.packageId, decodedManifest.targetTriple,
-            decodedManifest.dataLayout, std::move(publicSlots)));
+            decodedManifest.dataLayout, std::move(publicSlots));
     manifest = std::move(decodedManifest);
     module = std::move(decodedModule);
     module.rebuildIndexes();
+    error.clear();
+    return true;
+}
+
+bool ContainerModelCodec::encodeContainer(
+    const ContainerManifest& manifest, const Module& module,
+    std::vector<uint8_t>& output, std::string& error,
+    const ContainerLimits& limits, uint32_t formatMinor) {
+    return encodeContainerWithPolicy(
+        manifest, module, output, error, limits, formatMinor,
+        false);
+}
+
+bool ContainerModelCodec::decodeContainer(
+    const std::vector<uint8_t>& input, ContainerManifest& manifest,
+    Module& module, std::string& error, const ContainerLimits& limits,
+    const SlotPublicationDependencies& dependencies) {
+    return decodeContainerWithPolicy(input, manifest, module, error,
+        limits, dependencies, false);
+}
+
+bool ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
+    const ContainerManifest& manifest, const Module& module,
+    std::string& error, const ContainerLimits& limits) {
+    const auto refTypes = std::count_if(
+        module.typeTable.begin(), module.typeTable.end(), [](const auto& type) {
+            return type.kind == TypeKind::RuntimeFragmentRef;
+        });
+    const auto refApplyFunctions = std::count_if(
+        module.declarations.begin(), module.declarations.end(),
+        [](const auto& declaration) {
+            const auto* function = dynamic_cast<const FunctionDecl*>(
+                declaration.get());
+            return function && function->controlFlow &&
+                !function->controlFlow->runtimeRefApplies.empty();
+        });
+    if (refTypes != 1 || refApplyFunctions != 1) {
+        error = "Native Ref/unit preparation preview requires one Ref type and Apply function";
+        return false;
+    }
+    std::vector<uint8_t> first;
+    if (!encodeContainerWithPolicy(manifest, module, first, error, limits,
+            RefWireFormatMinor,
+            true))
+        return false;
+    ContainerManifest decodedManifest;
+    Module decodedModule;
+    if (!decodeContainerWithPolicy(first, decodedManifest, decodedModule,
+            error, limits, module.dependencySlotPublications,
+            true))
+        return false;
+    std::vector<uint8_t> repeated;
+    if (!encodeContainerWithPolicy(decodedManifest, decodedModule, repeated,
+            error, limits, RefWireFormatMinor,
+            true))
+        return false;
+    if (repeated != first) {
+        error = "Native Ref/unit preparation container is not byte-canonical";
+        return false;
+    }
     error.clear();
     return true;
 }

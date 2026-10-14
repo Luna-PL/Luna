@@ -128,6 +128,13 @@ public:
         std::vector<uint8_t>& output, std::string& error,
         const ContainerLimits& limits = {},
         uint32_t formatMinor = FormatMinor);
+    // Internal acceptance preview for Native Ref/unit preparation. This
+    // validates a 0.4 whole-container encode/decode/re-encode cycle using the
+    // preparation verifier, but returns no bytes or decoded Module and does
+    // not authorize publication.
+    static bool verifyNativeRefUnitPreparationRoundTrip(
+        const ContainerManifest& manifest, const Module& module,
+        std::string& error, const ContainerLimits& limits = {});
     // Dependencies are explicit immutable evidence from independently decoded
     // owner containers. No filesystem resolution, re-export or Runtime loading
     // is implied; hashes/verification do not establish publisher authenticity.
@@ -145,6 +152,22 @@ public:
         ContainerManifest& manifest, Module& module,
         std::string& error, const ContainerLimits& limits = {},
         const SlotPublicationDependencies& dependencies = {});
+
+private:
+    static bool encodeContainerWithPolicy(
+        const ContainerManifest& manifest, const Module& module,
+        std::vector<uint8_t>& output, std::string& error,
+        const ContainerLimits& limits, uint32_t formatMinor,
+        bool nativeRefUnitPreparation);
+    static bool decodeContainerWithPolicy(
+        const std::vector<uint8_t>& input, ContainerManifest& manifest,
+        Module& module, std::string& error, const ContainerLimits& limits,
+        const SlotPublicationDependencies& dependencies,
+        bool nativeRefUnitPreparation);
+    static std::shared_ptr<const SlotPublicationEvidence>
+    makeSlotPublicationEvidence(
+        std::string owner, std::string target, std::string dataLayout,
+        std::vector<DeclarationRecord> slots);
 };
 
 } // namespace moon
