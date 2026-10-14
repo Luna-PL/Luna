@@ -24,6 +24,40 @@ int fail(const char* message) {
 
 void fixtureFragmentExecute(void*, void*) {}
 
+struct ProducedRefProbe {
+    std::string slotId;
+    std::string slotContractId;
+    std::string layoutId;
+    uint64_t argumentsSize = 0;
+    uint64_t argumentsAlignment = 0;
+    unsigned calls = 0;
+    bool sawExpectedValue = false;
+    bool repeatResume = false;
+    int32_t resumeStatus = 0;
+    int32_t repeatedResumeStatus = 0;
+};
+
+thread_local ProducedRefProbe* activeProducedRefProbe = nullptr;
+
+void executeProducedRefFragment(void*, void* activation) {
+    auto* probe = activeProducedRefProbe;
+    if (!probe) return;
+    ++probe->calls;
+    const void* arguments = luna_runtime_fragment_activation_arguments_v1(
+        activation, probe->slotId.c_str(), probe->slotContractId.c_str(),
+        probe->layoutId.c_str(), probe->argumentsSize,
+        probe->argumentsAlignment);
+    if (arguments && probe->argumentsSize >= sizeof(int32_t)) {
+        int32_t value = 0;
+        std::memcpy(&value, arguments, sizeof(value));
+        probe->sawExpectedValue = value == 1;
+    }
+    probe->resumeStatus = luna_runtime_fragment_activation_resume_v1(activation);
+    if (probe->repeatResume)
+        probe->repeatedResumeStatus =
+            luna_runtime_fragment_activation_resume_v1(activation);
+}
+
 int prepareIndependentFixture(int argc, char** argv) {
     if (argc != 4) return 2;
     const bool invalidUtf8 =
@@ -315,6 +349,182 @@ int inspectV3Candidate(int argc, char** argv) {
                             ignored, error) || error.empty())
         return fail("Native v3 candidate acquired an i32() call profile");
     std::cout << "v3-metadata-only\n";
+    return 0;
+}
+
+int callProducedRefUnit(int argc, char** argv) {
+    if (argc != 7) return 2;
+    uint64_t argumentsSize = 0;
+    uint64_t argumentsAlignment = 0;
+    try {
+        argumentsSize = std::stoull(argv[5]);
+        argumentsAlignment = std::stoull(argv[6]);
+    } catch (...) {
+        return fail("Native Ref/unit consumer received an invalid Slot layout");
+    }
+    if (!*argv[4] || argumentsSize < sizeof(int32_t) ||
+        argumentsSize > 4096 || argumentsAlignment == 0 ||
+        argumentsAlignment > 4096)
+        return fail("Native Ref/unit consumer received an unsupported Slot layout");
+
+    std::string error;
+    luna::driver::VerifiedNativeLibrary library;
+    if (!luna::driver::loadVerifiedNativeLibrary(
+            argv[2], argv[3], library, error) ||
+        library.refUnitCandidateCount() != 1)
+        return fail("produced Native Ref/unit image has no unique verified candidate");
+    luna::runtime::GenerationRefUnitCandidate facts;
+    if (!library.refUnitCandidateAt(0, facts))
+        return fail("produced Native Ref/unit candidate could not be read");
+    const auto* slot = library.findExport(
+        facts.slotSymbolId, facts.slotContractId);
+    if (!slot || slot->declaration_kind != LUNA_NATIVE_DECLARATION_SLOT_V1 ||
+        slot->flags != 0 || slot->entry ||
+        library.findExport(facts.symbolId, facts.contractId))
+        return fail("produced Native Ref/unit candidate lost its separate Slot");
+
+    luna::runtime::MoonRuntime::PinnedRefUnitCandidate candidate;
+    {
+        luna::runtime::MoonRuntime runtime;
+        luna::runtime::MoonRuntime::PinnedGeneration generation;
+        if (!luna::driver::loadVerifiedNativeGenerationOnce(
+                runtime, argv[2], argv[3], generation, error))
+            return fail("produced Native Ref/unit image could not enter a generation");
+        candidate = generation.findRefUnitCandidate(
+            facts.symbolId, facts.contractId);
+        if (!candidate ||
+            generation.find(facts.symbolId, facts.contractId))
+            return fail("produced Native Ref/unit candidate escaped its typed lookup");
+    }
+    library = luna::driver::VerifiedNativeLibrary{};
+
+    const LunaRuntimeFragmentDescriptorV1 fragment = {
+        LUNA_RUNTIME_FRAGMENT_MAGIC_V1,
+        LUNA_RUNTIME_FRAGMENT_ABI_V1,
+        sizeof(LunaRuntimeFragmentDescriptorV1),
+        LUNA_RUNTIME_FRAGMENT_CAPTURE_FREE_V1,
+        0, 0, 0, 0,
+        "fragment:produced-ref-consumer",
+        "contract:produced-ref-consumer",
+        facts.slotSymbolId.c_str(), facts.slotContractId.c_str(),
+        argv[4], argumentsSize, argumentsAlignment,
+        "", "layout:unit", 0, 1,
+        nullptr, nullptr, executeProducedRefFragment};
+    const std::string foreignSlot = facts.slotSymbolId + ".foreign";
+    const std::string foreignContract = facts.slotContractId + ".foreign";
+    auto foreignFragment = fragment;
+    foreignFragment.fragment_id = "fragment:produced-ref-foreign";
+    foreignFragment.slot_id = foreignSlot.c_str();
+    foreignFragment.slot_contract_id = foreignContract.c_str();
+    if (!luna::runtime::validateRuntimeFragmentDescriptor(fragment, error) ||
+        !luna::runtime::validateRuntimeFragmentDescriptor(
+            foreignFragment, error))
+        return fail("produced Native Ref/unit consumer has an invalid fragment");
+
+    luna::runtime::MoonRuntime hostRuntime;
+    const luna::runtime::GenerationStagingRequest hostRequest{
+        "org.luna.native.ref-consumer", std::string(64, 'b'),
+        std::make_shared<int>(1)};
+    luna::runtime::MoonRuntime::StagedGeneration hostStaged;
+    constexpr uint32_t fragmentFlags =
+        luna::runtime::GenerationBindingFragmentExecutable |
+        luna::runtime::GenerationBindingPublicControl;
+    if (!hostRuntime.stage(
+            hostRequest,
+            [](const auto&, std::string&) { return true; },
+            [&](const auto&, auto& bindings, std::string&) {
+                const LunaRuntimeFragmentDescriptorV1* descriptors[] = {
+                    &fragment, &foreignFragment};
+                for (const auto* descriptor : descriptors)
+                    bindings.push_back({descriptor->fragment_id,
+                        descriptor->fragment_contract_id, descriptor,
+                        LUNA_NATIVE_DECLARATION_FRAGMENT_V1, fragmentFlags});
+                return true;
+            }, {}, hostStaged, error))
+        return fail("produced Native Ref/unit consumer host did not stage");
+    luna::runtime::MoonRuntime::PinnedGeneration hostPinned;
+    if (!hostRuntime.loadOnce(hostStaged, hostPinned, error))
+        return fail("produced Native Ref/unit consumer host did not load");
+    auto makeHandle = [&](const LunaRuntimeFragmentDescriptorV1& descriptor,
+                          luna::runtime::RuntimeFragmentRefHandle& output) {
+        const luna::runtime::GenerationBindingRequirement requirement{
+            descriptor.fragment_id, descriptor.fragment_contract_id,
+            LUNA_NATIVE_DECLARATION_FRAGMENT_V1, fragmentFlags};
+        const auto binding = hostPinned.find(requirement);
+        const luna::runtime::RuntimeSlotRequirement target{
+            descriptor.slot_id, descriptor.slot_contract_id};
+        luna::runtime::RuntimeFragmentRef reference;
+        return binding && luna::runtime::makeOwnedRuntimeFragmentRef(
+                binding, target, {}, reference, error) &&
+            luna::runtime::makeRuntimeFragmentRefHandle(
+                reference, target, output, error);
+    };
+    luna::runtime::RuntimeFragmentRefHandle reference, foreignReference;
+    if (!makeHandle(fragment, reference) ||
+        !makeHandle(foreignFragment, foreignReference))
+        return fail("produced Native Ref/unit consumer could not issue Ref handles");
+    luna::runtime::RuntimeFragmentBindingSet empty;
+    luna::runtime::RuntimeFragmentExecutionContext parent, missingParent;
+    luna::runtime::RuntimeFragmentRefHandle missingReference;
+    if (!luna::runtime::makeRuntimeFragmentBindingSet({}, empty, error) ||
+        !luna::runtime::makeRuntimeFragmentExecutionContext(
+            empty, parent, error))
+        return fail("produced Native Ref/unit consumer could not issue a parent");
+
+    ProducedRefProbe probe{
+        facts.slotSymbolId, facts.slotContractId, argv[4],
+        argumentsSize, argumentsAlignment};
+    struct ScopedProbe {
+        ProducedRefProbe* previous;
+        explicit ScopedProbe(ProducedRefProbe& current)
+            : previous(activeProducedRefProbe) {
+            activeProducedRefProbe = &current;
+        }
+        ~ScopedProbe() { activeProducedRefProbe = previous; }
+    } active(probe);
+    int32_t status = -1;
+    const auto rejectsBeforeEntry = [&](const auto& testParent,
+                                        const auto& testReference) {
+        error.clear();
+        status = -1;
+        return !candidate.call(testParent, testReference, status, error) &&
+            !error.empty() && status == -1 && probe.calls == 0;
+    };
+    if (!rejectsBeforeEntry(missingParent, reference) ||
+        !rejectsBeforeEntry(parent, missingReference) ||
+        !rejectsBeforeEntry(parent, foreignReference))
+        return fail("produced Native Ref/unit consumer admitted an invalid capability");
+    error.clear();
+    status = -1;
+    if (!candidate.call(parent, reference, status, error) ||
+        status != LUNA_NATIVE_REF_UNIT_SUCCESS_V1 || !error.empty() ||
+        probe.calls != 1 || !probe.sawExpectedValue ||
+        probe.resumeStatus != LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1)
+        return fail("produced Native Ref/unit consumer did not complete Apply");
+    probe.calls = 0;
+    probe.sawExpectedValue = false;
+    probe.repeatResume = true;
+    probe.repeatedResumeStatus = 0;
+    error.clear();
+    status = -1;
+    if (!candidate.call(parent, reference, status, error) ||
+        status != LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1 ||
+        !error.empty() || probe.calls != 1 || !probe.sawExpectedValue ||
+        probe.resumeStatus != LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1 ||
+        probe.repeatedResumeStatus !=
+            LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1)
+        return fail("produced Native Ref/unit consumer lost execution failure");
+    probe.calls = 0;
+    probe.sawExpectedValue = false;
+    probe.repeatResume = false;
+    error.clear();
+    status = -1;
+    if (!candidate.call(parent, reference, status, error) ||
+        status != LUNA_NATIVE_REF_UNIT_SUCCESS_V1 || !error.empty() ||
+        probe.calls != 1 || !probe.sawExpectedValue ||
+        probe.resumeStatus != LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1)
+        return fail("produced Native Ref/unit consumer did not recover");
+    std::cout << "produced-v4-host-call\n";
     return 0;
 }
 
@@ -667,6 +877,8 @@ int main(int argc, char** argv) {
         return inspectV3Candidate(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--inspect-v4-candidate")
         return inspectV4Candidate(argc, argv);
+    if (argc > 1 && std::string(argv[1]) == "--call-produced-ref-unit")
+        return callProducedRefUnit(argc, argv);
     if (argc > 1 && std::string(argv[1]) == "--load-legacy-generation")
         return loadLegacyGeneration(argc, argv);
     if (argc == 4 && std::string(argv[1]) == "--load-only") {

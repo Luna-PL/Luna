@@ -248,6 +248,37 @@ if(NOT ref_apply_verify_result EQUAL 0 OR
         "${ref_apply_load_output}\n${ref_apply_load_error}\n"
         "${ref_apply_oracle_output}\n${ref_apply_oracle_error}")
 endif()
+string(REGEX MATCH "Native Ref/unit test Slot layout: [^\r\n]*"
+       ref_apply_layout_line "${ref_apply_output_output}")
+string(REPLACE "Native Ref/unit test Slot layout: " ""
+       ref_apply_layout_line "${ref_apply_layout_line}")
+string(REPLACE "\t" ";" ref_apply_layout_fields
+       "${ref_apply_layout_line}")
+list(LENGTH ref_apply_layout_fields ref_apply_layout_count)
+if(NOT ref_apply_layout_count EQUAL 3)
+    message(FATAL_ERROR
+        "Native Ref/unit test output did not report one Slot layout.\n"
+        "${ref_apply_output_output}")
+endif()
+list(GET ref_apply_layout_fields 0 ref_apply_layout_id)
+list(GET ref_apply_layout_fields 1 ref_apply_layout_size)
+list(GET ref_apply_layout_fields 2 ref_apply_layout_alignment)
+execute_process(
+    COMMAND "${LUNA_NATIVE_VERIFIER}" --call-produced-ref-unit
+            "${ref_apply_artifact}" "${ref_apply_artifact}.trust"
+            "${ref_apply_layout_id}" "${ref_apply_layout_size}"
+            "${ref_apply_layout_alignment}"
+    RESULT_VARIABLE ref_apply_consumer_result
+    OUTPUT_VARIABLE ref_apply_consumer_output
+    ERROR_VARIABLE ref_apply_consumer_error)
+string(FIND "${ref_apply_consumer_output}"
+       "produced-v4-host-call" ref_apply_consumer_marker)
+if(NOT ref_apply_consumer_result EQUAL 0 OR
+   ref_apply_consumer_marker EQUAL -1)
+    message(FATAL_ERROR
+        "Native Ref/unit sealed output failed the independent host call.\n"
+        "${ref_apply_consumer_output}\n${ref_apply_consumer_error}")
+endif()
 file(REMOVE "${ref_apply_artifact}" "${ref_apply_artifact}.trust"
      "${ref_apply_artifact}.ll" "${ref_apply_artifact}.o"
      "${ref_apply_artifact}.luna-link-state")

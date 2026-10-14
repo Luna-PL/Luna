@@ -1134,7 +1134,9 @@ v4 事实复制到 `PinnedRefUnitCandidate` 视图。该视图保留已验证库
 同一源码的普通构建另经回归确认：仍受门禁约束，无探针诊断或输出产物。另一个
 内部测试开关现将已证明的 module 重新链接到 package 输出路径，签封产物，再经
 新装载的固定 generation 调用链接 Ref 函数。独立进程随后使用 Native verifier
-与独立 oracle 核对 proof，并装载其 v4 描述符。测试移除输出后，确认即使开启
+与独立 oracle 核对 proof；另一个宿主进程在 producer 退出后装载并调用 v4
+入口，签发有效 Runtime 能力，入门前拒绝错误能力，并检查成功 Apply、重复 resume
+执行失败及恢复。测试移除输出后，确认即使开启
 测试开关，额外的 Ref callable 仍被拒绝。这验证了启用后的 producer 路径，
 普通发布门禁不变；解除门禁前仍需审议公开 ABI。
 
@@ -1156,11 +1158,12 @@ v4 事实复制到 `PinnedRefUnitCandidate` 视图。该视图保留已验证库
 
 内部测试启用的 producer 路径现于私有预览通过后，在 package 目标位置再次
 链接产物。它签封并重新加载该输出，经固定宿主 API 调用成功、预检失败、执行
-失败与恢复，再由独立进程验证 proof 与 loader。默认构建仍拒绝发布。新的路径
+失败与恢复，再由独立进程验证 proof、loader，并于 producer 退出后调用同一
+链接入口。默认构建仍拒绝发布。新的路径
 仍须经跨平台 CI，宿主使用方也须审议 ABI 草案，然后才能改变默认门禁。
-2026-10-14，新输出路径在 Windows CLANG64、其 ASAN／UBSan 配置和 Arch Linux
-WSL C++23 的 Native artifact 聚焦测试均通过；本地文件清单及 0.3 设计契约检查
-也通过。
+2026-10-14，新输出路径及独立宿主调用在 Windows CLANG64、其 ASAN／UBSan 配置
+和 Arch Linux WSL C++23 的 Native artifact 聚焦测试均通过；本地文件清单及
+0.3 设计契约检查也通过。
 
 2026-10-14，CLANG64 构建的 81 项 CTest 全部通过；包含链接源码探针的 Native
 artifact 聚焦测试也在 ASAN／UBSan 下通过。

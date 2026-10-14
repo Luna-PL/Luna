@@ -519,7 +519,7 @@ bool exerciseNativeRefPreviewForTest(
     const moon::Module& module,
     const luna::codegen::NativeRefUnitSourceFacts& source,
     const luna::runtime::MoonRuntime::PinnedRefUnitCandidate& candidate,
-    std::string& error) {
+    std::string& error, std::string* slotLayout = nullptr) {
     const moon::SlotDecl* slot = nullptr;
     for (const auto& declaration : module.declarations) {
         const auto* current =
@@ -535,6 +535,10 @@ bool exerciseNativeRefPreviewForTest(
         error = "Native Ref/unit preview lacks the sealed Slot argument layout";
         return false;
     }
+    if (slotLayout)
+        *slotLayout = arguments->abiLayoutId.value + '\t' +
+            std::to_string(arguments->valueSize) + '\t' +
+            std::to_string(arguments->valueAlignment);
     const LunaRuntimeFragmentDescriptorV1 fragment = {
         LUNA_RUNTIME_FRAGMENT_MAGIC_V1,
         LUNA_RUNTIME_FRAGMENT_ABI_V1,
@@ -910,10 +914,11 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
                 outputGeneration.findRefUnitCandidate(
                     surface.refUnitSource->symbolId.value,
                     surface.refUnitSource->contractId.value);
+            std::string slotLayout;
             if (!outputCandidate ||
                 !exerciseNativeRefPreviewForTest(
                     pipeline.moonModule(), source, outputCandidate,
-                    proofError)) {
+                    proofError, &slotLayout)) {
                 std::cerr << diagnostic::format(
                     "native-proof",
                     proofError.empty()
@@ -925,6 +930,8 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
             }
             std::cout << "Sealed test-only Native Ref/unit output: sha256="
                       << nativeDigestHex(outputProof.artifactDigest) << "\n"
+                      << "Native Ref/unit test Slot layout: " << slotLayout
+                      << "\n"
                       << "Generated trust candidate: " << trustPath.string()
                       << "\n";
             return 0;

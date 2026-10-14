@@ -1517,9 +1517,12 @@ Native build invokes a known source preview only with the internal test opt-in;
 the ordinary build of that same source is checked to remain gated without the
 probe or output artifacts. A separate internal test opt-in now rebuilds the
 proved module at its package output path, seals it and calls the linked Ref
-function through a freshly loaded pinned generation. A separate process then
-checks its proof with the Native verifier and independent oracle and loads its
-v4 descriptor. The test removes the output and confirms that adding another
+function through a freshly loaded pinned generation. Separate processes then
+check its proof with the Native verifier and independent oracle, and load and
+call its v4 entry after the producer exits. The external host builds live
+Runtime capabilities, rejects invalid ones before entry, and checks successful
+Apply, repeated-resume execution failure and recovery. The test removes the
+output and confirms that adding another
 Ref callable is rejected even with the opt-in. This tests the enabled producer
 path without changing the ordinary publication gate. Public ABI review remains
 before removing that gate.
@@ -1545,13 +1548,15 @@ other Ref uses and owned Result returns need their own profiles and proofs.
 The internal test-enabled producer path now links a second artifact at the
 package destination after the private preview passes. It seals and reloads
 that output, calls success, preflight failures, execution failure and recovery
-through the pinned host API, then lets a separate process validate the proof
-and loader. The default build still refuses publication. Cross-platform CI
-must cover this new path, and host consumers must review the ABI draft before
+through the pinned host API, then lets separate processes validate the proof,
+loader and same linked entry after the producer exits. The default build still
+refuses publication. Cross-platform CI must cover this new path, and host
+consumers must review the ABI draft before
 the default gate changes.
-On 2026-10-14 the focused Native artifact test passed with this output path on
-Windows CLANG64, its ASAN/UBSan configuration, and Arch Linux WSL C++23. The
-file-guide inventory and 0.3 design-contract checks also passed locally.
+On 2026-10-14 the focused Native artifact test passed with this output path and
+external host call on Windows CLANG64, its ASAN/UBSan configuration, and Arch
+Linux WSL C++23. The file-guide inventory and 0.3 design-contract checks also
+passed locally.
 
 On 2026-10-14 the CLANG64 build passed all 81 CTest cases, and the focused
 Native artifact case passed under ASAN/UBSan with the linked source probe.
