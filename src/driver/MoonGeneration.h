@@ -50,14 +50,16 @@ bool loadVerifiedMoonGenerationOnce(
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 // Quarantined test-only staging of a prepared 0.4 Ref/unit consumer. The
 // retained entry is reachable only through the returned weak reference while
-// the staged or pinned generation owns its module lease. No callable binding
-// or Ref/unit candidate is published to the Runtime.
+// the staged or pinned generation owns its module lease. The verified owner
+// bytes must identify the pinned owner generation and its exported Slot. No
+// callable binding or Ref/unit candidate is published to the Runtime.
 bool stagePrivateNativeRefUnitPreparationForTest(
     luna::runtime::MoonRuntime& runtime,
     const std::vector<uint8_t>& containerBytes,
+    const std::vector<uint8_t>& ownerContainerBytes,
+    const luna::runtime::MoonRuntime::PinnedGeneration& ownerGeneration,
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
-    const moon::SlotPublicationDependencies& ownerEvidence,
     luna::runtime::MoonRuntime::StagedGeneration& staged,
     std::weak_ptr<LunaPrivateRefUnitApplyLoadedEntry>& entry,
     std::string& error);

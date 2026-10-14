@@ -34,6 +34,7 @@ struct PrivatePreparedRefGeneration {
     moon::ContainerManifest manifest;
     moon::Module module;
     std::string contentDigest;
+    luna::runtime::MoonRuntime::PinnedGeneration ownerGeneration;
     std::shared_ptr<LunaPrivateRefUnitApplyLoadedEntry> entry;
 };
 #endif
@@ -420,9 +421,10 @@ bool stageVerifiedMoonGeneration(
 bool stagePrivateNativeRefUnitPreparationForTest(
     luna::runtime::MoonRuntime& runtime,
     const std::vector<uint8_t>& containerBytes,
+    const std::vector<uint8_t>& ownerContainerBytes,
+    const luna::runtime::MoonRuntime::PinnedGeneration& ownerGeneration,
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
-    const moon::SlotPublicationDependencies& ownerEvidence,
     luna::runtime::MoonRuntime::StagedGeneration& staged,
     std::weak_ptr<LunaPrivateRefUnitApplyLoadedEntry>& entry,
     std::string& error) {
@@ -431,11 +433,51 @@ bool stagePrivateNativeRefUnitPreparationForTest(
         error = "private Ref/unit staging output already owns a generation";
         return false;
     }
+    moon::ContainerManifest ownerManifest;
+    moon::Module ownerModule;
+    if (!moon::ContainerModelCodec::decodeContainerForTarget(
+            ownerContainerBytes, expectedTargetTriple, expectedDataLayout,
+            ownerManifest, ownerModule, error))
+        return false;
+    if (!ownerGeneration || !ownerModule.localSlotPublication ||
+        ownerGeneration.moduleId() != ownerManifest.packageId ||
+        ownerGeneration.contentDigest() != containerDigest(ownerContainerBytes)) {
+        error = "private Ref/unit owner generation does not match verified owner artifact";
+        return false;
+    }
     auto loaded = std::make_shared<PrivatePreparedRefGeneration>();
     if (!moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTargetForTest(
             containerBytes, expectedTargetTriple, expectedDataLayout,
-            ownerEvidence, loaded->manifest, loaded->module, error))
+            {ownerModule.localSlotPublication}, loaded->manifest,
+            loaded->module, error))
         return false;
+    if (loaded->manifest.packageId == ownerManifest.packageId) {
+        error = "private Ref/unit consumer must have a separate owner generation";
+        return false;
+    }
+    bool foundImportedSlot = false;
+    for (const auto& record : loaded->module.declarationTable) {
+        if (record.kind != moon::DeclarationKind::Slot ||
+            !ownerModule.localSlotPublication->matches(record)) continue;
+        const auto* ownerRecord = ownerModule.findDeclaration(
+            {record.symbolId, record.contractId});
+        const auto binding = ownerGeneration.find(
+            record.symbolId.value, record.contractId.value);
+        if (!ownerRecord || !binding ||
+            !ownerModule.localSlotPublication->matches(*ownerRecord) ||
+            binding.declarationKind() != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
+            binding.flags() != luna::runtime::GenerationBindingPublicControl ||
+            !binding.implementation()) {
+            error = "private Ref/unit owner generation lost its exported Slot";
+            return false;
+        }
+        foundImportedSlot = true;
+    }
+    if (!foundImportedSlot) {
+        error = "private Ref/unit consumer has no imported owner Slot";
+        return false;
+    }
+    loaded->ownerGeneration = ownerGeneration;
     moon::FunctionDecl* source = nullptr;
     for (auto& declaration : loaded->module.declarations) {
         auto* function = dynamic_cast<moon::FunctionDecl*>(declaration.get());

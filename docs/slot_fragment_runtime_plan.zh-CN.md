@@ -1471,12 +1471,19 @@ callable 没有 Apply region，也会被拒绝。带有额外导出 Ref 参数�
 规范 Ref Apply CFG 校验现仅在存在独立验证的 owner 容器签发的精确 Slot
 发布快照及直接包依赖时接受仅有冻结记录的外包 Slot。聚焦回归拒绝缺失证据、
 未声明的 owner 和改变的 ContractId。跨包容器证明仍只处于准备态。仅测试用的 adapter
-重新解码 0.4 字节，将源码 consumer 连同 owner 证据及 JIT lease 放入隔离 generation，
-不发布 callable binding 或 Ref／unit candidate；即使私有 generation 已加载，公开
+重新解码 0.4 字节，将源码 consumer 连同 owner 证据及 JIT lease 放入隔离 generation。
+私有 adapter 还会重新解码 owner 容器，要求其摘要和包身份与独立加载并固定的 owner
+generation 相符，并核对该 generation 发布了精确的导入 Slot。consumer lease 保留此
+owner pin。同一 owner 包的另一 verified 修订、错误目标的 owner 产物，以及摘要正确却缺少
+Slot 的 generation 均在 staging 前拒绝。
+隔离 generation 不发布 callable binding 或 Ref／unit candidate；即使私有 generation 已加载，公开
 load-once 也拒绝其字节。generation pin 在 Runtime 销毁后仍保留
 私有入口，释放 pin 后入口随之失效。该入口以显式 parent context 调用独立 verified plugin
 generation 签发的借用 Ref；无效 parent／handle 被拒绝，销毁 Runtime 后仍可重复调用。
-这证明私有双包源码执行；公开 generation 导入和产物发布仍关闭。冻结的 `DeclarationRecord`／
+这证明私有双包源码执行；公开 generation 导入和产物发布仍关闭。
+MoonRuntime 的通用 staging API 仍接收宿主提供的身份事实，因此这项私有核对不构成公开的
+来源凭据。发布导入 candidate 前，仍须绑定 loader 持有的 owner generation 证明。
+冻结的 `DeclarationRecord`／
 规范契约和 Native v1
 导出行仍不添加依赖 context 的可调用入口。通用源码 import 与 Moon／Container
 发布仍需各自的导入、清理及整模块 verifier 规则；v4 Native 公开 ABI 仍待审议。
@@ -1587,7 +1594,8 @@ generation 签发的借用 Ref；无效 parent／handle 被拒绝，销毁 Runti
    和 Apply region 的 wire 规则。无效或旧产物必须在发布 generation 前整体拒绝。
    源码 consumer 与独立 owner 证据现已在单一 Ref callable 准入规则下通过私有 0.4
    产物编码及独立解码。解码源码可进入由 generation pin 固定私有 JIT 的隔离测试
-   generation，并调用 verified plugin generation 签发的借用 Ref。下一步须定义与 owner
+   generation，同时保留精确 verified owner generation，并调用 verified plugin generation
+   签发的借用 Ref。下一步须定义与 owner
    generation 绑定的类型化外包 Slot candidate 规则；当前 Runtime candidate 要求同一
    generation 的 Slot binding。期间默认发布验证继续关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation

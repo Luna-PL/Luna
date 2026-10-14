@@ -1970,7 +1970,13 @@ container and a direct package dependency are present. A focused regression
 rejects missing evidence, an undeclared owner, and a changed ContractId. The
 cross-package container proof remains preparation-only. A test-only adapter
 redecodes the 0.4 bytes and stages the source consumer as a quarantined
-generation with its owner evidence and JIT lease. It exposes no callable
+generation with its owner evidence and JIT lease. The private adapter now
+redecodes the owner container too, requires its digest and package identity
+to match a pinned, separately loaded owner generation, and checks that this
+generation publishes the exact imported Slot. The consumer lease retains
+that owner pin. A different verified revision of the same owner package, a
+wrong-target owner artifact, and a generation with the right digest but no
+Slot all fail before consumer staging. It exposes no callable
 binding or Ref/unit candidate; public load-once rejects its bytes even when
 the private generation is already loaded. A generation pin retains the private
 entry after Runtime teardown and releases it when dropped. That entry calls a
@@ -1979,6 +1985,9 @@ with an explicit parent context. Invalid parent/handle calls fail, and
 repeated calls succeed after Runtime teardown. This executes the two-package
 source body privately; public generation import and artifact publication
 remain closed.
+MoonRuntime's generic staging API still takes host-supplied identity facts, so
+this private check is not a public provenance token. An imported candidate
+must bind to loader-owned owner-generation proof before publication.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and
@@ -2134,8 +2143,9 @@ not a public ABI decision or stable-release approval:
    without publishing a partial generation. The source consumer and separate
    owner evidence now pass the private 0.4 artifact encode and independent
    decode under a single-Ref-callable admission rule. The decoded source can
-   enter a quarantined test generation whose pin retains its private JIT while
-   it calls a borrowed Ref issued from a verified plugin generation. Next
+   enter a quarantined test generation whose pin retains its private JIT and
+   the exact verified owner generation while it calls a borrowed Ref issued
+   from a verified plugin generation. Next
    define a typed imported-Slot candidate rule bound to the owner generation;
    the current Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.

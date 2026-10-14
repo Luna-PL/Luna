@@ -296,16 +296,63 @@ int runCrossPackageContainerTest() {
     std::weak_ptr<LunaPrivateRefUnitApplyLoadedEntry> refEntryWeak;
     {
         luna::runtime::MoonRuntime runtime;
+        luna::runtime::MoonRuntime::PinnedGeneration ownerGeneration;
+        if (!luna::driver::loadVerifiedMoonGenerationOnce(runtime, hostBytes,
+                hostManifest.targetTriple, hostManifest.dataLayout,
+                ownerGeneration, error)) {
+            std::cerr << error << '\n';
+            return fail("private Ref consumer owner generation did not load");
+        }
+        auto alternateOwnerManifest = hostManifest;
+        alternateOwnerManifest.packageVersion = "0.3.1";
+        std::vector<uint8_t> alternateOwnerBytes;
+        luna::runtime::MoonRuntime alternateRuntime;
+        luna::runtime::MoonRuntime::PinnedGeneration alternateOwnerGeneration;
+        if (!moon::ContainerModelCodec::encodeContainer(
+                alternateOwnerManifest, hostPipeline.moonModule(),
+                alternateOwnerBytes, error) ||
+            !luna::driver::loadVerifiedMoonGenerationOnce(alternateRuntime,
+                alternateOwnerBytes, hostManifest.targetTriple,
+                hostManifest.dataLayout, alternateOwnerGeneration, error)) {
+            std::cerr << error << '\n';
+            return fail("alternate verified owner generation did not load");
+        }
+        luna::runtime::MoonRuntime emptyOwnerRuntime;
+        luna::runtime::GenerationStagingRequest emptyOwnerRequest;
+        emptyOwnerRequest.moduleId = ownerGeneration.moduleId();
+        emptyOwnerRequest.contentDigest = ownerGeneration.contentDigest();
+        emptyOwnerRequest.moduleLease = std::make_shared<int>(1);
+        luna::runtime::MoonRuntime::StagedGeneration emptyOwnerStage;
+        luna::runtime::MoonRuntime::PinnedGeneration emptyOwnerGeneration;
+        if (!emptyOwnerRuntime.stage(emptyOwnerRequest,
+                [](const auto&, std::string&) { return true; },
+                [](const auto&, auto&, std::string&) { return true; },
+                {}, emptyOwnerStage, error) ||
+            !emptyOwnerRuntime.loadOnce(
+                emptyOwnerStage, emptyOwnerGeneration, error))
+            return fail("empty owner generation fixture did not load");
         luna::runtime::MoonRuntime::StagedGeneration staged;
         if (luna::driver::stagePrivateNativeRefUnitPreparationForTest(
-                runtime, refBytes, refManifest.targetTriple,
-                refManifest.dataLayout, {changedContract}, staged,
+                runtime, refBytes, hostBytes, emptyOwnerGeneration,
+                refManifest.targetTriple, refManifest.dataLayout, staged,
                 refEntryWeak, error) || staged || !refEntryWeak.expired() ||
             runtime.pin(refManifest.packageId))
-            return fail("private Ref consumer staged with changed owner evidence");
+            return fail("private Ref consumer accepted an owner without its Slot");
+        if (luna::driver::stagePrivateNativeRefUnitPreparationForTest(
+                runtime, refBytes, hostBytes, alternateOwnerGeneration,
+                refManifest.targetTriple, refManifest.dataLayout, staged,
+                refEntryWeak, error) || staged || !refEntryWeak.expired() ||
+            runtime.pin(refManifest.packageId))
+            return fail("private Ref consumer staged with a different owner artifact");
+        if (luna::driver::stagePrivateNativeRefUnitPreparationForTest(
+                runtime, refBytes, otherTargetBytes, ownerGeneration,
+                refManifest.targetTriple, refManifest.dataLayout, staged,
+                refEntryWeak, error) || staged || !refEntryWeak.expired() ||
+            runtime.pin(refManifest.packageId))
+            return fail("private Ref consumer staged with a wrong-target owner");
         if (!luna::driver::stagePrivateNativeRefUnitPreparationForTest(
-                runtime, refBytes, refManifest.targetTriple,
-                refManifest.dataLayout, dependencies, staged,
+                runtime, refBytes, hostBytes, ownerGeneration,
+                refManifest.targetTriple, refManifest.dataLayout, staged,
                 refEntryWeak, error)) {
             std::cerr << error << '\n';
             return fail("private Ref consumer generation did not stage");
