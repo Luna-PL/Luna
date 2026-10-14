@@ -153,6 +153,12 @@ public:
 
     const std::vector<diagnostic::Diagnostic>& errors() const { return mErrors; }
 
+    // Verifies isolated LLVM lowering of one sealed Ref/unit Apply source.
+    // No executable, host entry or Runtime publication is produced.
+    static bool verifyNativeRefUnitPreparationLowering(
+        moon::Module& program, moon::FunctionDecl& function,
+        std::string& failure);
+
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     // Test-target-only escape hatch. The caller must retain the returned JIT
     // lease; it does not publish a source Ref ABI or a container artifact.

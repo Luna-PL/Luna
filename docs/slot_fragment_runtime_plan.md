@@ -1997,7 +1997,8 @@ repeated calls succeed after Runtime teardown. This executes the two-package
 source body privately; public generation import and artifact publication
 remain closed.
 A compiler-internal consumer preparation factory now independently decodes the
-canonical 0.4 artifact, derives its exact Ref/unit source facts, pins the
+canonical 0.4 artifact, derives its exact Ref/unit source facts, verifies
+isolated LLVM lowering in the ordinary build, pins the
 matching owner Slot and issues an opaque read-only preparation proof. The
 private adapter creates that proof before its separate mutable JIT decode and
 checks the digest and source facts again. Its private generation lease retains
@@ -2185,7 +2186,8 @@ not a public ABI decision or stable-release approval:
    decoded source facts, the exact consumer lease and a proof issued by the
    compiler-internal verified owner loader, now built without the test flag.
    The ordinary-build consumer preparation proof independently decodes the
-   artifact, derives source facts and retains that exact owner pin. The private
+   artifact, derives source facts, verifies isolated LLVM IR and retains that
+   exact owner pin. The private
    generation lease now retains that proof, and its candidate checks both the
    proof identity and lease ownership. Next materialize production code, bind
    its lease to the proof and admit Runtime candidates. The current Runtime

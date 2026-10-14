@@ -3013,6 +3013,16 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
     return true;
 }
 
+bool CodeGenerator::verifyNativeRefUnitPreparationLowering(
+    moon::Module& program, FunctionDecl& function, std::string& failure) {
+    luna::codegen::NativeRefUnitSourceFacts facts;
+    if (!luna::codegen::deriveNativeRefUnitSourceFacts(
+            program, function, facts, failure))
+        return false;
+    return verifyPrivateRuntimeFragmentRefUnitIngress(
+        program, function, failure);
+}
+
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 std::shared_ptr<LunaJitModule>
 CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(

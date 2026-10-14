@@ -579,6 +579,9 @@ bool loadVerifiedMoonRefUnitPreparation(
     if (!luna::codegen::deriveNativeRefUnitSourceFacts(
             verified->module, *source, verified->facts, error))
         return false;
+    if (!CodeGenerator::verifyNativeRefUnitPreparationLowering(
+            verified->module, *source, error))
+        return false;
     const moon::DeclarationRef slotReference{
         luna::identity::SymbolId{verified->facts.slotSymbolId},
         luna::identity::ContractId{verified->facts.slotContractId}};
