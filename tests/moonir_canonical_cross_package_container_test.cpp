@@ -223,7 +223,7 @@ int runCrossPackageContainerTest() {
         rejectedManifest.packageId = "unchanged.sentinel";
         moon::Module rejectedModule;
         rejectedModule.name = "unchanged.sentinel";
-        return !moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTargetForTest(
+        return !moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTarget(
                    bytes, targetTriple, dataLayout, ownerEvidence,
                    rejectedManifest, rejectedModule, error) &&
             rejectedManifest.packageId == "unchanged.sentinel" &&
@@ -244,10 +244,10 @@ int runCrossPackageContainerTest() {
             refManifest.dataLayout + "-wrong", dependencies) ||
         !rejectedPrivateDecode(corruptedRefBytes, refManifest.targetTriple,
             refManifest.dataLayout, dependencies))
-        return fail("cross-package Ref/apply private decoder accepted an invalid artifact");
+        return fail("cross-package Ref/apply preparation decoder accepted an invalid artifact");
     moon::ContainerManifest preparedRefManifest;
     moon::Module preparedRefModule;
-    if (!moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTargetForTest(
+    if (!moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTarget(
             refBytes, refManifest.targetTriple, refManifest.dataLayout,
             dependencies, preparedRefManifest, preparedRefModule, error)) {
         std::cerr << error << '\n';
@@ -371,6 +371,33 @@ int runCrossPackageContainerTest() {
                 hostManifest.dataLayout, rejectedSlotPin, error) || rejectedSlotPin)
             return fail("verified owner proof accepted a wrong target or empty proof");
         exportedOwnerPin = {};
+        luna::driver::VerifiedMoonRefUnitPreparation rejectedPreparation;
+        if (luna::driver::loadVerifiedMoonRefUnitPreparation(
+                refBytes, rejectedOwner, refManifest.targetTriple,
+                refManifest.dataLayout, rejectedPreparation, error) ||
+            rejectedPreparation ||
+            luna::driver::loadVerifiedMoonRefUnitPreparation(
+                refBytes, ownerProof, refManifest.targetTriple + "-wrong",
+                refManifest.dataLayout, rejectedPreparation, error) ||
+            rejectedPreparation)
+            return fail("unissued or wrong-target owner prepared a Ref consumer");
+        auto corruptedConsumer = refBytes;
+        corruptedConsumer.back() ^= 1;
+        if (luna::driver::loadVerifiedMoonRefUnitPreparation(
+                corruptedConsumer, ownerProof, refManifest.targetTriple,
+                refManifest.dataLayout, rejectedPreparation, error) ||
+            rejectedPreparation)
+            return fail("corrupt Ref consumer issued a preparation proof");
+        luna::driver::VerifiedMoonRefUnitPreparation consumerPreparation;
+        if (!luna::driver::loadVerifiedMoonRefUnitPreparation(
+                refBytes, ownerProof, refManifest.targetTriple,
+                refManifest.dataLayout, consumerPreparation, error) ||
+            consumerPreparation.ownerGenerationId() != ownerGenerationId ||
+            luna::driver::loadVerifiedMoonRefUnitPreparation(
+                refBytes, ownerProof, refManifest.targetTriple,
+                refManifest.dataLayout, consumerPreparation, error) ||
+            consumerPreparation.ownerGenerationId() != ownerGenerationId)
+            return fail("verified Ref consumer preparation lost or replaced its owner");
         auto compatibleOwnerManifest = hostManifest;
         compatibleOwnerManifest.packageVersion = "0.3.1";
         std::vector<uint8_t> compatibleOwnerBytes;
@@ -517,6 +544,9 @@ int runCrossPackageContainerTest() {
                 rejectedPublished, error, dependencies) || rejectedPublished)
             return fail("public load-once reused a private Ref consumer generation");
         ownerProof = {};
+        if (consumerPreparation.ownerGenerationId() != ownerGenerationId)
+            return fail("verified Ref preparation lost its owner after loader teardown");
+        consumerPreparation = {};
         if (refCandidate.ownerGenerationId() != ownerGenerationId)
             return fail("private Ref candidate lost its owner after loader teardown");
     }

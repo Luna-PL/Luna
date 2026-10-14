@@ -1955,10 +1955,11 @@ container; it rejects missing or changed evidence, an undeclared owner and a
 different target. The Boolean preview returns no container bytes or executable
 module. Ordinary whole-container encode/decode still use publication
 verification and reject the Ref module. A test-build-only encoder now returns
-canonical 0.4 bytes after that round-trip. A separate private decoder checks
-the host target, explicit owner evidence and byte-canonical re-encoding before
-returning a module to the test JIT. Missing or changed owner evidence, target
-mismatch and corrupted bytes fail without publishing a partial module; the
+canonical 0.4 bytes after that round-trip. The compiler-internal preparation
+decoder now runs in ordinary builds and checks the host target, explicit owner
+evidence and byte-canonical re-encoding before returning a module. Missing or
+changed owner evidence, target mismatch and corrupted bytes fail without
+publishing a partial module; the
 ordinary decoder and public generation loader reject those private bytes.
 The private preparation admission now also rejects any second Ref-bearing
 callable in source bodies or frozen function records, even if it has no Apply
@@ -1995,6 +1996,12 @@ with an explicit parent context. Invalid parent/handle calls fail, and
 repeated calls succeed after Runtime teardown. This executes the two-package
 source body privately; public generation import and artifact publication
 remain closed.
+A compiler-internal consumer preparation factory now independently decodes the
+canonical 0.4 artifact, derives its exact Ref/unit source facts, pins the
+matching owner Slot and issues an opaque read-only preparation proof. The
+private adapter creates that proof before its separate mutable JIT decode and
+checks the digest and source facts again. A corrupt consumer or an empty or
+wrong-target owner proof cannot issue a consumer preparation proof.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
@@ -2007,13 +2014,13 @@ Runtime teardown and repeats the typed call; the ordinary Runtime candidate
 lookup still returns empty. This does not publish a callable or a Container
 candidate row.
 MoonRuntime's generic staging API still takes host-supplied identity facts.
-The compiler-internal loader-issued proof now has a production build path, but
-ordinary loading does not yet use it for imported Ref candidates. Production
-candidate admission must require this proof, bind it to the exact consumer
+The owner and consumer preparation proofs now have ordinary build paths, but
+ordinary loading does not yet use them for imported Ref candidates. Production
+candidate admission must require the consumer proof, bind it to the exact consumer
 lease and imported Slot, and retain the owner pin before publication. The
-proof's exact-Slot pin check is available in the ordinary driver; it does not
-authenticate the consumer record. Production consumer lease issuance/binding
-and Runtime candidate admission remain separate gates.
+consumer proof verifies its decoded record and owner Slot, but contains
+no executable code lease. Production code materialization, lease binding and
+Runtime candidate admission remain separate gates.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and
@@ -2174,9 +2181,10 @@ not a public ABI decision or stable-release approval:
    from a verified plugin generation. A private typed candidate now binds
    decoded source facts, the exact consumer lease and a proof issued by the
    compiler-internal verified owner loader, now built without the test flag.
-   Its ordinary-build exact-Slot check pins the verified owner generation,
-   and the generation lease check compares address plus shared ownership;
-   next issue the production consumer lease and bind this pin to Runtime
+   The ordinary-build consumer preparation proof independently decodes the
+   artifact, derives source facts and retains that exact owner pin. The
+   generation lease check compares address plus shared ownership; next
+   materialize production code, bind its lease to the proof and admit Runtime
    candidates. The current Runtime candidate requires a same-generation Slot
    binding.
    The default publication verifier stays closed during that work.

@@ -55,6 +55,8 @@ bool loadVerifiedMoonGenerationOnce(
     MoonJitOptimization optimization = MoonJitOptimization::O0);
 
 struct VerifiedMoonSlotOwnerState;
+struct VerifiedMoonRefUnitPreparationState;
+class VerifiedMoonRefUnitPreparation;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 struct PrivatePreparedRefGenerationForTest;
 #endif
@@ -80,6 +82,10 @@ private:
     friend bool loadVerifiedMoonSlotOwner(
         const std::vector<uint8_t>&, const std::string&,
         const std::string&, VerifiedMoonSlotOwner&, std::string&);
+    friend bool loadVerifiedMoonRefUnitPreparation(
+        const std::vector<uint8_t>&, const VerifiedMoonSlotOwner&,
+        const std::string&, const std::string&,
+        VerifiedMoonRefUnitPreparation&, std::string&);
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     friend bool stagePrivateNativeRefUnitPreparationForTest(
         luna::runtime::MoonRuntime&, const std::vector<uint8_t>&,
@@ -98,6 +104,40 @@ bool loadVerifiedMoonSlotOwner(
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
     VerifiedMoonSlotOwner& owner,
+    std::string& error);
+
+// Compiler-internal provenance for a canonical 0.4 Ref/unit consumer. This
+// retains the decoded artifact and exact verified owner pin without JIT code,
+// callable bindings or Runtime candidate publication.
+class VerifiedMoonRefUnitPreparation {
+public:
+    explicit operator bool() const { return state_ != nullptr; }
+    uint64_t ownerGenerationId() const;
+
+private:
+    friend bool loadVerifiedMoonRefUnitPreparation(
+        const std::vector<uint8_t>&, const VerifiedMoonSlotOwner&,
+        const std::string&, const std::string&,
+        VerifiedMoonRefUnitPreparation&, std::string&);
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    friend bool stagePrivateNativeRefUnitPreparationForTest(
+        luna::runtime::MoonRuntime&, const std::vector<uint8_t>&,
+        const VerifiedMoonSlotOwner&, const std::string&,
+        const std::string&,
+        luna::runtime::MoonRuntime::StagedGeneration&,
+        std::weak_ptr<LunaPrivateRefUnitApplyLoadedEntry>&,
+        std::weak_ptr<PrivatePreparedRefGenerationForTest>&,
+        std::string&);
+#endif
+    std::shared_ptr<const VerifiedMoonRefUnitPreparationState> state_;
+};
+
+bool loadVerifiedMoonRefUnitPreparation(
+    const std::vector<uint8_t>& consumerContainerBytes,
+    const VerifiedMoonSlotOwner& owner,
+    const std::string& expectedTargetTriple,
+    const std::string& expectedDataLayout,
+    VerifiedMoonRefUnitPreparation& preparation,
     std::string& error);
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST

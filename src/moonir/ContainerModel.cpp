@@ -375,8 +375,9 @@ bool ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
     return verifyNativeRefUnitPreparationRoundTripImpl(
         manifest, source, &encoded, error, limits);
 }
+#endif
 
-bool ContainerModelCodec::decodeNativeRefUnitPreparationForTargetForTest(
+bool ContainerModelCodec::decodeNativeRefUnitPreparationForTarget(
     const std::vector<uint8_t>& input,
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
@@ -412,7 +413,6 @@ bool ContainerModelCodec::decodeNativeRefUnitPreparationForTargetForTest(
     error.clear();
     return true;
 }
-#endif
 
 bool ContainerModelCodec::verifyNativeRefUnitPreparationRoundTripImpl(
     const ContainerManifest& manifest, const Module& module,

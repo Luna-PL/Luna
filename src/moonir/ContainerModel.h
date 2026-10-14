@@ -137,22 +137,23 @@ public:
         const ContainerManifest& manifest, const Module& module,
         std::string& error, const ContainerLimits& limits = {});
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
-    // Test-only 0.4 artifact path. Encoding releases bytes only after the
-    // canonical preparation round-trip; decoding independently checks owner
-    // evidence, the host target and canonical bytes before returning a module.
-    // Neither operation authorizes public generation publication.
+    // Test-only 0.4 encoder releases bytes after the canonical preparation
+    // round-trip. It does not authorize public generation publication.
     static bool encodeNativeRefUnitPreparationForTest(
         const ContainerManifest& manifest, const Module& source,
         std::vector<uint8_t>& encoded, std::string& error,
         const ContainerLimits& limits = {});
-    static bool decodeNativeRefUnitPreparationForTargetForTest(
+#endif
+    // Compiler-internal preparation decoder. It checks owner evidence, the
+    // host target and canonical bytes, then returns a verified module for
+    // provenance admission. Ordinary publication still uses Published policy.
+    static bool decodeNativeRefUnitPreparationForTarget(
         const std::vector<uint8_t>& input,
         const std::string& expectedTargetTriple,
         const std::string& expectedDataLayout,
         const SlotPublicationDependencies& ownerEvidence,
         ContainerManifest& manifest, Module& module, std::string& error,
         const ContainerLimits& limits = {});
-#endif
     // Dependencies are explicit immutable evidence from independently decoded
     // owner containers. No filesystem resolution, re-export or Runtime loading
     // is implied; hashes/verification do not establish publisher authenticity.

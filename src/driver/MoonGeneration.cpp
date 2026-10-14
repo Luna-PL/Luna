@@ -1,9 +1,7 @@
 #include "driver/MoonGeneration.h"
 
 #include "codegen/CodeGenerator.h"
-#ifdef LUNA_PRIVATE_REF_JIT_TEST
 #include "codegen/NativeRefUnitFacts.h"
-#endif
 #include "diagnostics/Diagnostic.h"
 #include "moonir/ContainerModel.h"
 #include "runtime/RuntimeDescriptor.h"
@@ -28,6 +26,14 @@ struct VerifiedMoonSlotOwnerState {
     moon::ContainerManifest manifest;
     moon::Module module;
     std::string contentDigest;
+};
+
+struct VerifiedMoonRefUnitPreparationState {
+    moon::ContainerManifest manifest;
+    moon::Module module;
+    std::string contentDigest;
+    luna::runtime::MoonRuntime::PinnedGeneration ownerGeneration;
+    luna::codegen::NativeRefUnitSourceFacts facts;
 };
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
@@ -515,6 +521,70 @@ bool loadVerifiedMoonSlotOwner(
     return true;
 }
 
+uint64_t VerifiedMoonRefUnitPreparation::ownerGenerationId() const {
+    return state_ ? state_->ownerGeneration.generationId() : 0;
+}
+
+bool loadVerifiedMoonRefUnitPreparation(
+    const std::vector<uint8_t>& consumerContainerBytes,
+    const VerifiedMoonSlotOwner& owner,
+    const std::string& expectedTargetTriple,
+    const std::string& expectedDataLayout,
+    VerifiedMoonRefUnitPreparation& preparation,
+    std::string& error) {
+    error.clear();
+    if (preparation) {
+        error = "verified Ref/unit preparation output already owns an artifact";
+        return false;
+    }
+    if (!owner || !owner.state_->generation ||
+        owner.state_->manifest.targetTriple != expectedTargetTriple ||
+        owner.state_->manifest.dataLayout != expectedDataLayout) {
+        error = "verified Ref/unit preparation requires an owner for the target";
+        return false;
+    }
+    auto verified = std::make_shared<VerifiedMoonRefUnitPreparationState>();
+    if (!moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTarget(
+            consumerContainerBytes, expectedTargetTriple, expectedDataLayout,
+            {owner.state_->module.localSlotPublication},
+            verified->manifest, verified->module, error))
+        return false;
+    if (verified->manifest.packageId == owner.state_->manifest.packageId) {
+        error = "verified Ref/unit consumer must have a separate owner package";
+        return false;
+    }
+    moon::FunctionDecl* source = nullptr;
+    for (auto& declaration : verified->module.declarations) {
+        auto* function = dynamic_cast<moon::FunctionDecl*>(declaration.get());
+        if (!function || !function->controlFlow ||
+            function->controlFlow->runtimeRefApplies.empty()) continue;
+        source = function;
+        break;
+    }
+    if (!source) {
+        error = "verified Ref/unit consumer lost its Apply source";
+        return false;
+    }
+    if (!luna::codegen::deriveNativeRefUnitSourceFacts(
+            verified->module, *source, verified->facts, error))
+        return false;
+    const moon::DeclarationRef slotReference{
+        luna::identity::SymbolId{verified->facts.slotSymbolId},
+        luna::identity::ContractId{verified->facts.slotContractId}};
+    const auto* importedSlot = verified->module.findDeclaration(slotReference);
+    if (!importedSlot ||
+        importedSlot->type.value != verified->facts.slotTypeId ||
+        !owner.pinImportedSlot(
+            *importedSlot, expectedTargetTriple, expectedDataLayout,
+            verified->ownerGeneration, error)) {
+        error = "verified Ref/unit owner lost its exact imported Slot";
+        return false;
+    }
+    verified->contentDigest = containerDigest(consumerContainerBytes);
+    preparation.state_ = std::move(verified);
+    return true;
+}
+
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 bool stagePrivateNativeRefUnitPreparationForTest(
     luna::runtime::MoonRuntime& runtime,
@@ -531,22 +601,23 @@ bool stagePrivateNativeRefUnitPreparationForTest(
         error = "private Ref/unit staging output already owns a generation";
         return false;
     }
-    if (!owner || !owner.state_->generation ||
-        owner.state_->manifest.targetTriple != expectedTargetTriple ||
-        owner.state_->manifest.dataLayout != expectedDataLayout) {
-        error = "private Ref/unit staging requires a verified owner for the target";
+    VerifiedMoonRefUnitPreparation verifiedPreparation;
+    if (!loadVerifiedMoonRefUnitPreparation(
+            containerBytes, owner, expectedTargetTriple,
+            expectedDataLayout, verifiedPreparation, error))
         return false;
-    }
-    const auto& ownerManifest = owner.state_->manifest;
     const auto& ownerModule = owner.state_->module;
     auto loaded = std::make_shared<PrivatePreparedRefGenerationForTest>();
-    if (!moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTargetForTest(
+    if (!moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTarget(
             containerBytes, expectedTargetTriple, expectedDataLayout,
             {ownerModule.localSlotPublication}, loaded->manifest,
             loaded->module, error))
         return false;
-    if (loaded->manifest.packageId == ownerManifest.packageId) {
-        error = "private Ref/unit consumer must have a separate owner generation";
+    if (loaded->manifest.packageId !=
+            verifiedPreparation.state_->manifest.packageId ||
+        containerDigest(containerBytes) !=
+            verifiedPreparation.state_->contentDigest) {
+        error = "private Ref/unit consumer changed after preparation";
         return false;
     }
     moon::FunctionDecl* source = nullptr;
@@ -565,18 +636,14 @@ bool stagePrivateNativeRefUnitPreparationForTest(
     if (!luna::codegen::deriveNativeRefUnitSourceFacts(
             loaded->module, *source, sourceFacts, error))
         return false;
-    const moon::DeclarationRef slotReference{
-        luna::identity::SymbolId{sourceFacts.slotSymbolId},
-        luna::identity::ContractId{sourceFacts.slotContractId}};
-    const auto* importedSlot = loaded->module.findDeclaration(slotReference);
-    if (!importedSlot ||
-        importedSlot->type.value != sourceFacts.slotTypeId ||
-        !owner.pinImportedSlot(
-            *importedSlot, expectedTargetTriple, expectedDataLayout,
-            loaded->ownerGeneration, error)) {
-        error = "private Ref/unit owner generation lost its exact imported Slot";
+    if (sourceFacts.identities() !=
+            verifiedPreparation.state_->facts.identities() ||
+        sourceFacts.contextEffect !=
+            verifiedPreparation.state_->facts.contextEffect) {
+        error = "private Ref/unit source changed after preparation";
         return false;
     }
+    loaded->ownerGeneration = verifiedPreparation.state_->ownerGeneration;
     loaded->facts = std::move(sourceFacts);
     std::vector<uint8_t> entryRecord;
     auto executable = CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
@@ -586,7 +653,7 @@ bool stagePrivateNativeRefUnitPreparationForTest(
         loaded->module, *source, entryRecord, std::move(executable), error);
     if (!loadedEntry) return false;
     loaded->entry = std::move(loadedEntry);
-    loaded->contentDigest = containerDigest(containerBytes);
+    loaded->contentDigest = verifiedPreparation.state_->contentDigest;
 
     luna::runtime::GenerationStagingRequest request;
     request.moduleId = loaded->manifest.packageId;
