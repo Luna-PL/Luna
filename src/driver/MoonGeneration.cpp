@@ -1,6 +1,9 @@
 #include "driver/MoonGeneration.h"
 
 #include "codegen/CodeGenerator.h"
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+#include "codegen/NativeRefUnitFacts.h"
+#endif
 #include "diagnostics/Diagnostic.h"
 #include "moonir/ContainerModel.h"
 #include "runtime/RuntimeDescriptor.h"
@@ -18,6 +21,18 @@
 #include <utility>
 
 namespace luna::driver {
+
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+struct PrivatePreparedRefGenerationForTest {
+    moon::ContainerManifest manifest;
+    moon::Module module;
+    std::string contentDigest;
+    luna::runtime::MoonRuntime::PinnedGeneration ownerGeneration;
+    luna::codegen::NativeRefUnitSourceFacts facts;
+    std::shared_ptr<LunaPrivateRefUnitApplyLoadedEntry> entry;
+};
+#endif
+
 namespace {
 
 struct LoadedMoonGeneration {
@@ -28,16 +43,6 @@ struct LoadedMoonGeneration {
     std::shared_ptr<LunaJitModule> jitLease;
     luna::runtime::RuntimeDescriptorRegistryView runtimeDescriptors;
 };
-
-#ifdef LUNA_PRIVATE_REF_JIT_TEST
-struct PrivatePreparedRefGeneration {
-    moon::ContainerManifest manifest;
-    moon::Module module;
-    std::string contentDigest;
-    luna::runtime::MoonRuntime::PinnedGeneration ownerGeneration;
-    std::shared_ptr<LunaPrivateRefUnitApplyLoadedEntry> entry;
-};
-#endif
 
 bool jitConfiguration(MoonJitOptimization optimization,
                       LunaOptimizationLevel& level, std::string& key,
@@ -427,9 +432,10 @@ bool stagePrivateNativeRefUnitPreparationForTest(
     const std::string& expectedDataLayout,
     luna::runtime::MoonRuntime::StagedGeneration& staged,
     std::weak_ptr<LunaPrivateRefUnitApplyLoadedEntry>& entry,
+    std::weak_ptr<PrivatePreparedRefGenerationForTest>& preparation,
     std::string& error) {
     error.clear();
-    if (staged) {
+    if (staged || !entry.expired() || !preparation.expired()) {
         error = "private Ref/unit staging output already owns a generation";
         return false;
     }
@@ -445,7 +451,7 @@ bool stagePrivateNativeRefUnitPreparationForTest(
         error = "private Ref/unit owner generation does not match verified owner artifact";
         return false;
     }
-    auto loaded = std::make_shared<PrivatePreparedRefGeneration>();
+    auto loaded = std::make_shared<PrivatePreparedRefGenerationForTest>();
     if (!moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTargetForTest(
             containerBytes, expectedTargetTriple, expectedDataLayout,
             {ownerModule.localSlotPublication}, loaded->manifest,
@@ -455,29 +461,6 @@ bool stagePrivateNativeRefUnitPreparationForTest(
         error = "private Ref/unit consumer must have a separate owner generation";
         return false;
     }
-    bool foundImportedSlot = false;
-    for (const auto& record : loaded->module.declarationTable) {
-        if (record.kind != moon::DeclarationKind::Slot ||
-            !ownerModule.localSlotPublication->matches(record)) continue;
-        const auto* ownerRecord = ownerModule.findDeclaration(
-            {record.symbolId, record.contractId});
-        const auto binding = ownerGeneration.find(
-            record.symbolId.value, record.contractId.value);
-        if (!ownerRecord || !binding ||
-            !ownerModule.localSlotPublication->matches(*ownerRecord) ||
-            binding.declarationKind() != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
-            binding.flags() != luna::runtime::GenerationBindingPublicControl ||
-            !binding.implementation()) {
-            error = "private Ref/unit owner generation lost its exported Slot";
-            return false;
-        }
-        foundImportedSlot = true;
-    }
-    if (!foundImportedSlot) {
-        error = "private Ref/unit consumer has no imported owner Slot";
-        return false;
-    }
-    loaded->ownerGeneration = ownerGeneration;
     moon::FunctionDecl* source = nullptr;
     for (auto& declaration : loaded->module.declarations) {
         auto* function = dynamic_cast<moon::FunctionDecl*>(declaration.get());
@@ -490,6 +473,31 @@ bool stagePrivateNativeRefUnitPreparationForTest(
         error = "private Ref/unit generation lost its Apply source";
         return false;
     }
+    luna::codegen::NativeRefUnitSourceFacts sourceFacts;
+    if (!luna::codegen::deriveNativeRefUnitSourceFacts(
+            loaded->module, *source, sourceFacts, error))
+        return false;
+    const moon::DeclarationRef slotReference{
+        luna::identity::SymbolId{sourceFacts.slotSymbolId},
+        luna::identity::ContractId{sourceFacts.slotContractId}};
+    const auto* importedSlot = loaded->module.findDeclaration(slotReference);
+    const auto* ownerRecord = ownerModule.findDeclaration(slotReference);
+    const auto ownerBinding = ownerGeneration.find(
+        sourceFacts.slotSymbolId, sourceFacts.slotContractId);
+    if (!importedSlot || !ownerRecord ||
+        importedSlot->type.value != sourceFacts.slotTypeId ||
+        !ownerModule.localSlotPublication->matches(*importedSlot) ||
+        !ownerModule.localSlotPublication->matches(*ownerRecord) ||
+        !ownerBinding ||
+        ownerBinding.declarationKind() != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
+        ownerBinding.flags() !=
+            luna::runtime::GenerationBindingPublicControl ||
+        !ownerBinding.implementation()) {
+        error = "private Ref/unit owner generation lost its exact imported Slot";
+        return false;
+    }
+    loaded->ownerGeneration = ownerGeneration;
+    loaded->facts = std::move(sourceFacts);
     std::vector<uint8_t> entryRecord;
     auto executable = CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
         loaded->module, *source, error, &entryRecord);
@@ -531,6 +539,68 @@ bool stagePrivateNativeRefUnitPreparationForTest(
             {}, staged, error))
         return false;
     entry = loaded->entry;
+    preparation = loaded;
+    return true;
+}
+
+uint64_t PrivateImportedSlotRefUnitCandidateForTest::consumerGenerationId() const {
+    return consumer_.generationId();
+}
+
+uint64_t PrivateImportedSlotRefUnitCandidateForTest::ownerGenerationId() const {
+    const auto prepared = preparation_.lock();
+    return prepared ? prepared->ownerGeneration.generationId() : 0;
+}
+
+std::optional<luna::codegen::NativeRefUnitSourceFacts>
+PrivateImportedSlotRefUnitCandidateForTest::facts() const {
+    const auto prepared = preparation_.lock();
+    if (!prepared || !consumer_ ||
+        consumer_.moduleLeaseIdentityForTest() != prepared.get())
+        return std::nullopt;
+    return prepared->facts;
+}
+
+bool PrivateImportedSlotRefUnitCandidateForTest::call(
+    const luna::runtime::RuntimeFragmentExecutionContext& parent,
+    const luna::runtime::RuntimeFragmentRefHandle& reference,
+    int32_t& status, std::string& error) const {
+    const auto prepared = preparation_.lock();
+    if (!prepared || !consumer_ ||
+        consumer_.moduleLeaseIdentityForTest() != prepared.get() ||
+        !prepared->entry) {
+        error = "private imported-Slot Ref/unit candidate lost its generation lease";
+        return false;
+    }
+    status = prepared->entry->call(
+        parent.opaque(), const_cast<void*>(reference.opaque()));
+    error.clear();
+    return true;
+}
+
+bool pinPrivateImportedSlotRefUnitCandidateForTest(
+    const luna::runtime::MoonRuntime::PinnedGeneration& consumerGeneration,
+    const std::weak_ptr<PrivatePreparedRefGenerationForTest>& preparation,
+    const std::string& sourceSymbolId, const std::string& sourceContractId,
+    const luna::runtime::RuntimeSlotRequirement& slot,
+    PrivateImportedSlotRefUnitCandidateForTest& candidate,
+    std::string& error) {
+    error.clear();
+    const auto prepared = preparation.lock();
+    if (candidate || !prepared || !consumerGeneration ||
+        consumerGeneration.moduleLeaseIdentityForTest() != prepared.get() ||
+        consumerGeneration.moduleId() != prepared->manifest.packageId ||
+        consumerGeneration.contentDigest() != prepared->contentDigest ||
+        !prepared->ownerGeneration || !prepared->entry ||
+        prepared->facts.functionSymbolId != sourceSymbolId ||
+        prepared->facts.functionContractId != sourceContractId ||
+        prepared->facts.slotSymbolId != slot.slotId ||
+        prepared->facts.slotContractId != slot.contractId) {
+        error = "private imported-Slot Ref/unit candidate identity does not match its generation";
+        return false;
+    }
+    candidate.consumer_ = consumerGeneration;
+    candidate.preparation_ = preparation;
     return true;
 }
 #endif

@@ -1985,6 +1985,14 @@ with an explicit parent context. Invalid parent/handle calls fail, and
 repeated calls succeed after Runtime teardown. This executes the two-package
 source body privately; public generation import and artifact publication
 remain closed.
+The test-only driver now derives exact Ref/unit source facts from that decoded
+consumer, then pins a typed imported-Slot candidate only when the requested
+source and Slot identities match and the consumer pin owns the same private
+module lease. A same-package, same-digest generation with a different lease
+cannot borrow the entry. The candidate retains the consumer and owner through
+Runtime teardown and repeats the typed call; the ordinary Runtime candidate
+lookup still returns empty. This does not publish a callable or a Container
+candidate row.
 MoonRuntime's generic staging API still takes host-supplied identity facts, so
 this private check is not a public provenance token. An imported candidate
 must bind to loader-owned owner-generation proof before publication.
@@ -2145,9 +2153,11 @@ not a public ABI decision or stable-release approval:
    decode under a single-Ref-callable admission rule. The decoded source can
    enter a quarantined test generation whose pin retains its private JIT and
    the exact verified owner generation while it calls a borrowed Ref issued
-   from a verified plugin generation. Next
-   define a typed imported-Slot candidate rule bound to the owner generation;
-   the current Runtime candidate requires a same-generation Slot binding.
+   from a verified plugin generation. A private typed candidate now binds
+   decoded source facts, the exact consumer lease and owner pin; next define
+   the loader-owned provenance and imported-Slot rule for production Runtime
+   candidates. The current Runtime candidate requires a same-generation Slot
+   binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref
    from a verified generation; run source apply against an explicit parent

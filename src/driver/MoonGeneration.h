@@ -2,6 +2,9 @@
 
 #include "runtime/MoonRuntime.h"
 #include "moonir/MoonIRModule.h"
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+#include "codegen/NativeRefUnitFacts.h"
+#endif
 
 #include <cstdint>
 #include <memory>
@@ -11,6 +14,10 @@
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 class LunaPrivateRefUnitApplyLoadedEntry;
 #endif
+
+namespace luna::runtime {
+struct RuntimeSlotRequirement;
+}
 
 namespace luna::driver {
 
@@ -48,6 +55,41 @@ bool loadVerifiedMoonGenerationOnce(
     MoonJitOptimization optimization = MoonJitOptimization::O0);
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
+struct PrivatePreparedRefGenerationForTest;
+
+// Compiler-private typed candidate. The consumer pin must own exactly the
+// preparation lease that holds its decoded facts, owner pin and JIT entry.
+class PrivateImportedSlotRefUnitCandidateForTest {
+public:
+    explicit operator bool() const {
+        return static_cast<bool>(consumer_) && !preparation_.expired();
+    }
+    uint64_t consumerGenerationId() const;
+    uint64_t ownerGenerationId() const;
+    std::optional<luna::codegen::NativeRefUnitSourceFacts> facts() const;
+    bool call(const luna::runtime::RuntimeFragmentExecutionContext& parent,
+              const luna::runtime::RuntimeFragmentRefHandle& reference,
+              int32_t& status, std::string& error) const;
+
+private:
+    friend bool pinPrivateImportedSlotRefUnitCandidateForTest(
+        const luna::runtime::MoonRuntime::PinnedGeneration&,
+        const std::weak_ptr<PrivatePreparedRefGenerationForTest>&,
+        const std::string&, const std::string&,
+        const luna::runtime::RuntimeSlotRequirement&,
+        PrivateImportedSlotRefUnitCandidateForTest&, std::string&);
+    luna::runtime::MoonRuntime::PinnedGeneration consumer_;
+    std::weak_ptr<PrivatePreparedRefGenerationForTest> preparation_;
+};
+
+bool pinPrivateImportedSlotRefUnitCandidateForTest(
+    const luna::runtime::MoonRuntime::PinnedGeneration& consumerGeneration,
+    const std::weak_ptr<PrivatePreparedRefGenerationForTest>& preparation,
+    const std::string& sourceSymbolId, const std::string& sourceContractId,
+    const luna::runtime::RuntimeSlotRequirement& slot,
+    PrivateImportedSlotRefUnitCandidateForTest& candidate,
+    std::string& error);
+
 // Quarantined test-only staging of a prepared 0.4 Ref/unit consumer. The
 // retained entry is reachable only through the returned weak reference while
 // the staged or pinned generation owns its module lease. The verified owner
@@ -62,6 +104,7 @@ bool stagePrivateNativeRefUnitPreparationForTest(
     const std::string& expectedDataLayout,
     luna::runtime::MoonRuntime::StagedGeneration& staged,
     std::weak_ptr<LunaPrivateRefUnitApplyLoadedEntry>& entry,
+    std::weak_ptr<PrivatePreparedRefGenerationForTest>& preparation,
     std::string& error);
 #endif
 

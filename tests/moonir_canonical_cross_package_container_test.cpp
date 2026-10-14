@@ -294,6 +294,9 @@ int runCrossPackageContainerTest() {
         return fail("cross-package Ref/apply decoded module lost its executable function");
     luna::runtime::MoonRuntime::PinnedGeneration refConsumerGeneration;
     std::weak_ptr<LunaPrivateRefUnitApplyLoadedEntry> refEntryWeak;
+    std::weak_ptr<luna::driver::PrivatePreparedRefGenerationForTest>
+        refPreparationWeak;
+    luna::driver::PrivateImportedSlotRefUnitCandidateForTest refCandidate;
     {
         luna::runtime::MoonRuntime runtime;
         luna::runtime::MoonRuntime::PinnedGeneration ownerGeneration;
@@ -335,30 +338,34 @@ int runCrossPackageContainerTest() {
         if (luna::driver::stagePrivateNativeRefUnitPreparationForTest(
                 runtime, refBytes, hostBytes, emptyOwnerGeneration,
                 refManifest.targetTriple, refManifest.dataLayout, staged,
-                refEntryWeak, error) || staged || !refEntryWeak.expired() ||
+                refEntryWeak, refPreparationWeak, error) || staged ||
+            !refEntryWeak.expired() || !refPreparationWeak.expired() ||
             runtime.pin(refManifest.packageId))
             return fail("private Ref consumer accepted an owner without its Slot");
         if (luna::driver::stagePrivateNativeRefUnitPreparationForTest(
                 runtime, refBytes, hostBytes, alternateOwnerGeneration,
                 refManifest.targetTriple, refManifest.dataLayout, staged,
-                refEntryWeak, error) || staged || !refEntryWeak.expired() ||
+                refEntryWeak, refPreparationWeak, error) || staged ||
+            !refEntryWeak.expired() || !refPreparationWeak.expired() ||
             runtime.pin(refManifest.packageId))
             return fail("private Ref consumer staged with a different owner artifact");
         if (luna::driver::stagePrivateNativeRefUnitPreparationForTest(
                 runtime, refBytes, otherTargetBytes, ownerGeneration,
                 refManifest.targetTriple, refManifest.dataLayout, staged,
-                refEntryWeak, error) || staged || !refEntryWeak.expired() ||
+                refEntryWeak, refPreparationWeak, error) || staged ||
+            !refEntryWeak.expired() || !refPreparationWeak.expired() ||
             runtime.pin(refManifest.packageId))
             return fail("private Ref consumer staged with a wrong-target owner");
         if (!luna::driver::stagePrivateNativeRefUnitPreparationForTest(
                 runtime, refBytes, hostBytes, ownerGeneration,
                 refManifest.targetTriple, refManifest.dataLayout, staged,
-                refEntryWeak, error)) {
+                refEntryWeak, refPreparationWeak, error)) {
             std::cerr << error << '\n';
             return fail("private Ref consumer generation did not stage");
         }
         if (!staged || staged.moduleId() != refManifest.packageId ||
             staged.contentDigest().size() != 64 || refEntryWeak.expired() ||
+            refPreparationWeak.expired() ||
             runtime.pin(refManifest.packageId))
             return fail("private Ref consumer staging published or lost its lease");
         if (!runtime.loadOnce(staged, refConsumerGeneration, error)) {
@@ -371,6 +378,75 @@ int runCrossPackageContainerTest() {
             refConsumerGeneration.findRefUnitCandidate(
                 refSource->symbolId.value, refSource->contractId.value))
             return fail("private Ref consumer generation published a callable");
+        const luna::runtime::RuntimeSlotRequirement importedSlot{
+            refSource->controlFlow->runtimeRefApplies.front().slot.symbol.value,
+            refSource->controlFlow->runtimeRefApplies.front().slot.contract.value};
+        if (luna::driver::pinPrivateImportedSlotRefUnitCandidateForTest(
+                refConsumerGeneration, refPreparationWeak,
+                refSource->symbolId.value + "-wrong",
+                refSource->contractId.value, importedSlot,
+                refCandidate, error) || refCandidate)
+            return fail("private imported-Slot candidate accepted a changed source symbol");
+        if (luna::driver::pinPrivateImportedSlotRefUnitCandidateForTest(
+                refConsumerGeneration, refPreparationWeak,
+                refSource->symbolId.value, refSource->contractId.value + "-wrong",
+                importedSlot, refCandidate, error) || refCandidate)
+            return fail("private imported-Slot candidate accepted a changed source contract");
+        auto changedSlot = importedSlot;
+        changedSlot.contractId += "-wrong";
+        if (luna::driver::pinPrivateImportedSlotRefUnitCandidateForTest(
+                refConsumerGeneration, refPreparationWeak,
+                refSource->symbolId.value, refSource->contractId.value,
+                changedSlot, refCandidate, error) || refCandidate)
+            return fail("private imported-Slot candidate accepted a changed Slot contract");
+        luna::runtime::MoonRuntime wrongConsumerRuntime;
+        luna::runtime::GenerationStagingRequest wrongConsumerRequest;
+        wrongConsumerRequest.moduleId = refConsumerGeneration.moduleId();
+        wrongConsumerRequest.contentDigest =
+            refConsumerGeneration.contentDigest();
+        wrongConsumerRequest.moduleLease = std::make_shared<int>(2);
+        luna::runtime::MoonRuntime::StagedGeneration wrongConsumerStage;
+        luna::runtime::MoonRuntime::PinnedGeneration wrongConsumerGeneration;
+        if (!wrongConsumerRuntime.stage(wrongConsumerRequest,
+                [](const auto&, std::string&) { return true; },
+                [](const auto&, auto&, std::string&) { return true; },
+                {}, wrongConsumerStage, error) ||
+            !wrongConsumerRuntime.loadOnce(
+                wrongConsumerStage, wrongConsumerGeneration, error))
+            return fail("wrong consumer generation fixture did not load");
+        if (luna::driver::pinPrivateImportedSlotRefUnitCandidateForTest(
+                wrongConsumerGeneration, refPreparationWeak,
+                refSource->symbolId.value, refSource->contractId.value,
+                importedSlot, refCandidate, error) || refCandidate)
+            return fail("private imported-Slot candidate mixed generation leases");
+        if (!luna::driver::pinPrivateImportedSlotRefUnitCandidateForTest(
+                refConsumerGeneration, refPreparationWeak,
+                refSource->symbolId.value, refSource->contractId.value,
+                importedSlot, refCandidate, error)) {
+            std::cerr << error << '\n';
+            return fail("private imported-Slot candidate did not pin");
+        }
+        const auto refFacts = refCandidate.facts();
+        const auto* sourceRecord = preparedRefModule.findDeclarationById(
+            refSource->declarationId);
+        const auto* importedRecord = preparedRefModule.findDeclaration(
+            refSource->controlFlow->runtimeRefApplies.front().slot);
+        if (!refFacts ||
+            refFacts->functionSymbolId != refSource->symbolId.value ||
+            refFacts->functionContractId != refSource->contractId.value ||
+            refFacts->sourceLinkageName != refSource->generatedSymbolName ||
+            !sourceRecord ||
+            refFacts->functionTypeId != sourceRecord->type.value ||
+            refFacts->refTypeId != refSource->params.front().type.value ||
+            refFacts->slotSymbolId != importedSlot.slotId ||
+            refFacts->slotContractId != importedSlot.contractId ||
+            !importedRecord ||
+            refFacts->slotTypeId != importedRecord->type.value ||
+            refFacts->contextEffect != 1 ||
+            refCandidate.consumerGenerationId() !=
+                refConsumerGeneration.generationId() ||
+            refCandidate.ownerGenerationId() != ownerGeneration.generationId())
+            return fail("private imported-Slot candidate lost verified identities");
         luna::runtime::MoonRuntime::PinnedGeneration rejectedPublished;
         if (luna::driver::loadVerifiedMoonGenerationOnce(runtime, refBytes,
                 refManifest.targetTriple, refManifest.dataLayout,
@@ -549,8 +625,27 @@ int runCrossPackageContainerTest() {
             return fail("cross-package Ref/apply lost its pinned borrowed call");
     refEntry.reset();
     refConsumerGeneration = {};
-    if (!refEntryWeak.expired())
-        return fail("private Ref consumer generation retained code after pin release");
+    if (!refCandidate || refCandidate.ownerGenerationId() == 0 ||
+        !refCandidate.facts())
+        return fail("typed imported-Slot candidate lost its owner after Runtime teardown");
+    int32_t candidateStatus = 777;
+    luna::runtime::RuntimeFragmentExecutionContext invalidContext;
+    luna::runtime::RuntimeFragmentRefHandle invalidRef;
+    if (!refCandidate.call(invalidContext, borrowedRef,
+            candidateStatus, error) ||
+        candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST ||
+        !refCandidate.call(noneContext, invalidRef,
+            candidateStatus, error) ||
+        candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST)
+        return fail("typed imported-Slot candidate accepted invalid ingress");
+    for (int iteration = 0; iteration < 16; ++iteration)
+        if (!refCandidate.call(noneContext, borrowedRef,
+                candidateStatus, error) ||
+            candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+            return fail("typed imported-Slot candidate lost its pinned call");
+    refCandidate = {};
+    if (!refEntryWeak.expired() || !refPreparationWeak.expired())
+        return fail("private Ref consumer candidate retained code after pin release");
     return 0;
 }
 

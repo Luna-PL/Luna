@@ -189,6 +189,10 @@ public:
         const std::string& moduleId() const;
         const std::string& contentDigest() const;
         const std::string& materializationKey() const;
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+        // Test-only identity check for a compiler-private generation lease.
+        const void* moduleLeaseIdentityForTest() const;
+#endif
         PinnedBinding find(const std::string& symbolId,
                            const std::string& contractId) const;
         PinnedBinding find(
