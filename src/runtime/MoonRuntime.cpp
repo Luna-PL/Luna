@@ -29,6 +29,7 @@ struct MoonRuntime::GenerationState {
     std::shared_ptr<const void> moduleLease;
     std::vector<GenerationBinding> bindings;
     std::vector<GenerationRefUnitCandidate> refUnitCandidates;
+    GenerationRefUnitCaller refUnitCaller;
 };
 
 struct MoonRuntime::ModuleState {
@@ -129,6 +130,20 @@ std::optional<GenerationRefUnitCandidate>
 MoonRuntime::PinnedRefUnitCandidate::facts() const {
     if (!generation_ || !candidate_) return std::nullopt;
     return *candidate_;
+}
+
+bool MoonRuntime::PinnedRefUnitCandidate::call(
+    const RuntimeFragmentExecutionContext& parent,
+    const RuntimeFragmentRefHandle& reference,
+    int32_t& status, std::string& error) const {
+    const auto pinned = generation_;
+    if (!pinned || !candidate_ || !pinned->refUnitCaller) {
+        error = "pinned Ref/unit candidate has no typed call adapter";
+        return false;
+    }
+    return pinned->refUnitCaller(
+        candidate_->symbolId, candidate_->contractId,
+        parent, reference, status, error);
 }
 
 const std::string& MoonRuntime::PinnedBinding::symbolId() const {
@@ -301,6 +316,10 @@ bool MoonRuntime::stage(
         error = "generation staging requires verification and resolution";
         return false;
     }
+    if (request.refUnitCaller && request.refUnitCandidates.empty()) {
+        error = "generation Ref/unit call adapter has no candidate";
+        return false;
+    }
     std::vector<GenerationBinding> bindings;
     try {
         if (!verifier(request, error)) {
@@ -439,6 +458,7 @@ bool MoonRuntime::stage(
     generation->moduleLease = request.moduleLease;
     generation->bindings = std::move(bindings);
     generation->refUnitCandidates = std::move(refUnitCandidates);
+    generation->refUnitCaller = request.refUnitCaller;
     staged.owner_ = this;
     staged.generation_ = std::move(generation);
     return true;

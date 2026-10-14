@@ -14,6 +14,8 @@ namespace luna::runtime {
 
 class RuntimeFragmentBindingSet;
 struct RuntimeFragmentBindingSetState;
+class RuntimeFragmentExecutionContext;
+class RuntimeFragmentRefHandle;
 
 enum GenerationBindingFlag : uint32_t {
     GenerationBindingCallable = 1u << 0,
@@ -33,9 +35,9 @@ enum GenerationEntryAbi : uint32_t {
     GenerationEntryAbiAny = UINT32_MAX,
 };
 
-// Pointer-free, loader-verified facts for a v4 Ref/unit candidate. This is
-// separate from callable GenerationBinding rows until the host call contract
-// can safely own Runtime-issued capabilities and the generation lease.
+// Pointer-free, loader-verified facts for a v4 Ref/unit candidate. These stay
+// separate from ordinary callable GenerationBinding rows; a trusted adapter
+// owns the typed call and its generation lease.
 struct GenerationRefUnitCandidate {
     std::string symbolId;
     std::string contractId;
@@ -53,6 +55,11 @@ struct GenerationRefUnitCandidate {
     uint32_t statusDomain = 0;
 };
 
+using GenerationRefUnitCaller = std::function<bool(
+    const std::string&, const std::string&,
+    const RuntimeFragmentExecutionContext&, const RuntimeFragmentRefHandle&,
+    int32_t&, std::string&)>;
+
 // Public 0.3 C++ host control-plane input. The module lease keeps the verified
 // code and descriptor storage alive for every pinned reference.
 struct GenerationStagingRequest {
@@ -63,6 +70,9 @@ struct GenerationStagingRequest {
     // artifact digest. Empty preserves the original unprofiled host behavior.
     std::string materializationKey = {};
     std::vector<GenerationRefUnitCandidate> refUnitCandidates = {};
+    // Trusted loader adapter. Kept apart from pointer-free candidate facts
+    // and ordinary callable bindings; it must retain the same module lease.
+    GenerationRefUnitCaller refUnitCaller = {};
 };
 
 struct GenerationBinding {
@@ -107,6 +117,9 @@ public:
         explicit operator bool() const { return candidate_ != nullptr; }
         uint64_t generationId() const;
         std::optional<GenerationRefUnitCandidate> facts() const;
+        bool call(const RuntimeFragmentExecutionContext& parent,
+                  const RuntimeFragmentRefHandle& reference,
+                  int32_t& status, std::string& error) const;
 
     private:
         friend class PinnedGeneration;

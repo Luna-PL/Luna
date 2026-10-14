@@ -69,6 +69,17 @@ bool stageVerifiedNativeGeneration(
         }
         request.refUnitCandidates.push_back(std::move(candidate));
     }
+    if (!request.refUnitCandidates.empty()) {
+        request.refUnitCaller = [library](
+            const std::string& symbolId, const std::string& contractId,
+            const luna::runtime::RuntimeFragmentExecutionContext& parent,
+            const luna::runtime::RuntimeFragmentRefHandle& reference,
+            int32_t& status, std::string& callError) {
+            return callVerifiedNativeRefUnit(
+                library, symbolId, contractId,
+                parent, reference, status, callError);
+        };
+    }
     return runtime.stage(
         request,
         [library](const auto& candidate, std::string& verificationError) {

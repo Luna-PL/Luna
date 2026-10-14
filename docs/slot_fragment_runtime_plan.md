@@ -1491,22 +1491,25 @@ rows, to the proof export digest. The ordinary Native build now prepares a
 proof-bound in-memory module with the verified source-derived v4 row, generated
 wrapper and proof claim beside the v1 rows. It links and validates a temporary
 preview, then removes it. A separate pinned generation lookup now carries
-verified v4 facts without exposing a raw pointer. Public output remains gated
-on a call path tied to that generation and an executed source preview.
+verified v4 facts without exposing a raw pointer. A test-only probe now calls
+the linked source preview through that generation and checks one resumed Apply
+with the expected argument. Public output remains gated.
 The existing artifact digest and trust record then bind the rebuilt image and
 its export digest. `stageVerifiedNativeGeneration` still places only v1 rows
 in `GenerationBinding`; it copies validated v4 facts into a separate
 `PinnedRefUnitCandidate` view. That view retains the verified library lease
-and has no callable pointer. `callVerifiedNativeRefUnit` now provides a
-separate typed host call for an independently verified v4 library. It checks
-the exact candidate profile and Ref Slot, accepts only Runtime-issued parent
+and has no callable pointer. Its `call` method uses an adapter that captures
+the same verified library as the generation's module lease. The adapter uses
+`callVerifiedNativeRefUnit` to check the exact candidate profile and Ref Slot,
+accepts only Runtime-issued parent
 and Ref owners, copies the parent snapshot and Ref shell, and holds a shared
 library lease through the synchronous entry. The independent v4 fixture proves
-success and rejects absent or mismatched capabilities before invocation.
-The generation lookup remains metadata-only. The next integration step is a
-call handle produced from the same pinned generation and a real linked source
-preview invocation. Public source Native output remains gated until that path
-is proven end to end.
+success, rejects absent or mismatched capabilities before invocation, and calls
+after the original Runtime and direct library view have been released. The
+Native build invokes a known source preview only with the internal test opt-in;
+ordinary builds do not execute user source. The next steps are negative status
+and lifetime probes on the linked source path, cross-platform verification,
+and a reviewed public ABI policy before removing the publication gate.
 
 On 2026-10-06 an actual `-t native` build of an exported Runtime Slot caller
 failed at the MoonIR verifier with the missing runtime-aware public entry ABI

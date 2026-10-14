@@ -190,8 +190,8 @@ typedef const LunaNativeLibraryDescriptorV3*
 
 // Parallel descriptor for the borrowed Ref/unit candidate. It carries source
 // identity and a distinct wrapper linkage. The typed verified-library call
-// can invoke the bound entry; generation lookup remains metadata-only, and
-// ordinary source Native output remains gated.
+// can invoke the bound entry; pinned generation lookup uses a separate typed
+// adapter, and ordinary source Native output remains gated.
 #define LUNA_NATIVE_DESCRIPTOR_MAGIC_V4 0x4c4e4434u /* "LND4" */
 #define LUNA_NATIVE_DESCRIPTOR_ABI_V4 4u
 #define LUNA_NATIVE_RESULT_UNIT_V1 2u

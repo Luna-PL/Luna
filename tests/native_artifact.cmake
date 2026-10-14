@@ -160,14 +160,20 @@ foreach(non_native_target moon cffi)
     endif()
 endforeach()
 execute_process(
-    COMMAND "${LUNA_EXECUTABLE}" build "${ref_apply_package_dir}" -t native -O2
+    COMMAND "${CMAKE_COMMAND}" -E env
+            "LUNA_NATIVE_REF_UNIT_PREVIEW_CALL_TEST=1"
+            "${LUNA_EXECUTABLE}" build "${ref_apply_package_dir}" -t native -O2
     RESULT_VARIABLE ref_apply_build_result
     OUTPUT_VARIABLE ref_apply_build_output
     ERROR_VARIABLE ref_apply_build_error)
 string(FIND "${ref_apply_build_output}\n${ref_apply_build_error}"
-       "Native Ref/unit typed invocation remains gated after proof-bound artifact validation"
+       "Native Ref/unit publication remains gated after pinned typed preview validation"
        ref_apply_publication_gate)
+string(FIND "${ref_apply_build_output}\n${ref_apply_build_error}"
+       "Native Ref/unit private linked preview executed one Apply"
+       ref_apply_preview_execution)
 if(ref_apply_build_result EQUAL 0 OR ref_apply_publication_gate EQUAL -1 OR
+   ref_apply_preview_execution EQUAL -1 OR
    EXISTS "${ref_apply_artifact}" OR EXISTS "${ref_apply_artifact}.trust" OR
    EXISTS "${ref_apply_artifact}.ll" OR EXISTS "${ref_apply_artifact}.o" OR
    EXISTS "${ref_apply_artifact}.luna-link-state")
@@ -644,8 +650,8 @@ foreach(v3_variant IN LISTS v3_variants)
     endif()
 endforeach()
 
-# Independently linked v4 Ref/unit metadata is accepted only for inspection.
-# Its entry never becomes a v1 callable, typed call or generation binding.
+# Independently linked v4 Ref/unit metadata also exercises typed host calls.
+# Its entry never becomes a v1 callable or ordinary GenerationBinding.
 set(v4_variants valid unbound-proof bad-row-size bad-profile bad-slot-digest bad-identity
     bad-package bad-module bad-entry-pointer bad-linkage missing-slot-export)
 if(NOT WIN32)

@@ -458,6 +458,15 @@ int inspectV4Candidate(int argc, char** argv) {
         pinnedFacts->slotContractId != "contract:slot-checkpoint" ||
         pinnedFacts->slotTypeId != "type:slot-checkpoint")
         return fail("Native v4 pinned facts lost their verified target or lease");
+    status = -1;
+    if (pinnedCandidate.call(missingParent, reference, status, error) ||
+        error.empty() ||
+        pinnedCandidate.call(parent, wrongReference, status, error) ||
+        error.empty() || status != -1)
+        return fail("pinned Native Ref/unit call accepted an invalid capability");
+    if (!pinnedCandidate.call(parent, reference, status, error) ||
+        status != LUNA_NATIVE_REF_UNIT_SUCCESS_V1 || !error.empty())
+        return fail("pinned Native Ref/unit call lost its generation library");
     std::cout << "v4-typed-host-call\n";
     return 0;
 }

@@ -12,6 +12,8 @@
 #include "moonir/Printer.h"
 #include "package/Package.h"
 #include "runtime/Runtime.h"
+#include "runtime/RuntimeFragment.h"
+#include "runtime/RuntimeDescriptorABI.h"
 #include "tooling/AnalysisSnapshot.h"
 #include <llvm/ADT/SmallString.h>
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
@@ -24,6 +26,8 @@
 #include <algorithm>
 #include <cctype>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
@@ -475,6 +479,140 @@ bool prepareNativeLibraryProofSurface(
     return true;
 }
 
+namespace {
+
+struct NativeRefPreviewProbe {
+    const char* slotId = nullptr;
+    const char* slotContractId = nullptr;
+    const char* layoutId = nullptr;
+    uint64_t argumentsSize = 0;
+    uint64_t argumentsAlignment = 0;
+    unsigned calls = 0;
+    bool sawExpectedValue = false;
+    int32_t resumeStatus = LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1;
+};
+
+thread_local NativeRefPreviewProbe* activeNativeRefPreviewProbe = nullptr;
+
+void executeNativeRefPreviewFragment(void*, void* activation) {
+    auto* probe = activeNativeRefPreviewProbe;
+    if (!probe) return;
+    ++probe->calls;
+    const void* arguments = luna_runtime_fragment_activation_arguments_v1(
+        activation, probe->slotId, probe->slotContractId,
+        probe->layoutId, probe->argumentsSize, probe->argumentsAlignment);
+    if (arguments && probe->argumentsSize >= sizeof(int32_t)) {
+        int32_t value = 0;
+        std::memcpy(&value, arguments, sizeof(value));
+        probe->sawExpectedValue = value == 1;
+    }
+    probe->resumeStatus =
+        luna_runtime_fragment_activation_resume_v1(activation);
+}
+
+bool exerciseNativeRefPreviewForTest(
+    const moon::Module& module,
+    const luna::codegen::NativeRefUnitSourceFacts& source,
+    const luna::runtime::MoonRuntime::PinnedRefUnitCandidate& candidate,
+    std::string& error) {
+    const moon::SlotDecl* slot = nullptr;
+    for (const auto& declaration : module.declarations) {
+        const auto* current =
+            dynamic_cast<const moon::SlotDecl*>(declaration.get());
+        if (current && current->symbolId.value == source.slotSymbolId &&
+            current->contractId.value == source.slotContractId) {
+            slot = current;
+            break;
+        }
+    }
+    const auto* arguments = slot ? module.findType(slot->argumentsType) : nullptr;
+    if (!slot || !arguments) {
+        error = "Native Ref/unit preview lacks the sealed Slot argument layout";
+        return false;
+    }
+    const LunaRuntimeFragmentDescriptorV1 fragment = {
+        LUNA_RUNTIME_FRAGMENT_MAGIC_V1,
+        LUNA_RUNTIME_FRAGMENT_ABI_V1,
+        sizeof(LunaRuntimeFragmentDescriptorV1),
+        LUNA_RUNTIME_FRAGMENT_CAPTURE_FREE_V1,
+        0, 0, 0, 0,
+        "fragment:native-ref-preview", "contract:native-ref-preview",
+        source.slotSymbolId.c_str(), source.slotContractId.c_str(),
+        arguments->abiLayoutId.value.c_str(),
+        arguments->valueSize, arguments->valueAlignment,
+        "", "layout:unit", 0, 1,
+        nullptr, nullptr, executeNativeRefPreviewFragment};
+    if (!luna::runtime::validateRuntimeFragmentDescriptor(fragment, error))
+        return false;
+    luna::runtime::MoonRuntime hostRuntime;
+    const luna::runtime::GenerationStagingRequest hostRequest{
+        "org.luna.native.ref-preview", std::string(64, 'a'),
+        std::make_shared<int>(1)};
+    luna::runtime::MoonRuntime::StagedGeneration staged;
+    constexpr uint32_t fragmentFlags =
+        luna::runtime::GenerationBindingFragmentExecutable |
+        luna::runtime::GenerationBindingPublicControl;
+    if (!hostRuntime.stage(
+            hostRequest,
+            [](const auto&, std::string&) { return true; },
+            [&](const auto&, auto& bindings, std::string&) {
+                bindings.push_back({fragment.fragment_id,
+                    fragment.fragment_contract_id, &fragment,
+                    LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, fragmentFlags});
+                return true;
+            }, {}, staged, error))
+        return false;
+    luna::runtime::MoonRuntime::PinnedGeneration hostPinned;
+    if (!hostRuntime.loadOnce(staged, hostPinned, error)) return false;
+    const luna::runtime::GenerationBindingRequirement requirement{
+        fragment.fragment_id, fragment.fragment_contract_id,
+        LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, fragmentFlags};
+    const auto binding = hostPinned.find(requirement);
+    const luna::runtime::RuntimeSlotRequirement target{
+        source.slotSymbolId, source.slotContractId};
+    luna::runtime::RuntimeFragmentRef reference;
+    luna::runtime::RuntimeFragmentRefHandle handle;
+    if (!binding ||
+        !luna::runtime::makeOwnedRuntimeFragmentRef(
+            binding, target, {}, reference, error) ||
+        !luna::runtime::makeRuntimeFragmentRefHandle(
+            reference, target, handle, error))
+        return false;
+    luna::runtime::RuntimeFragmentBindingSet empty;
+    luna::runtime::RuntimeFragmentExecutionContext parent;
+    if (!luna::runtime::makeRuntimeFragmentBindingSet({}, empty, error) ||
+        !luna::runtime::makeRuntimeFragmentExecutionContext(
+            empty, parent, error))
+        return false;
+    NativeRefPreviewProbe probe{
+        source.slotSymbolId.c_str(), source.slotContractId.c_str(),
+        arguments->abiLayoutId.value.c_str(),
+        arguments->valueSize, arguments->valueAlignment};
+    int32_t status = -1;
+    bool called = false;
+    {
+        struct ScopedProbe {
+            NativeRefPreviewProbe* previous;
+            explicit ScopedProbe(NativeRefPreviewProbe& current)
+                : previous(activeNativeRefPreviewProbe) {
+                activeNativeRefPreviewProbe = &current;
+            }
+            ~ScopedProbe() { activeNativeRefPreviewProbe = previous; }
+        } active(probe);
+        called = candidate.call(parent, handle, status, error);
+    }
+    if (!called || status != LUNA_NATIVE_REF_UNIT_SUCCESS_V1 ||
+        probe.calls != 1 || !probe.sawExpectedValue || probe.resumeStatus !=
+            LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1) {
+        if (error.empty())
+            error = "Native Ref/unit linked preview did not complete one Apply";
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
 int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGenerator,
                               const NativeLibraryProofSurface& surface,
                               const std::string& inputPath,
@@ -641,6 +779,25 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
                     "keep the Native Ref/unit artifact unpublished") << "\n";
                 return 1;
             }
+            const char* previewCall =
+                std::getenv("LUNA_NATIVE_REF_UNIT_PREVIEW_CALL_TEST");
+            if (previewCall && std::string(previewCall) == "1") {
+                if (!exerciseNativeRefPreviewForTest(
+                        pipeline.moonModule(), source, candidate,
+                        proofError)) {
+                    std::cerr << diagnostic::format(
+                        "native-proof", proofError, previewArtifact.string(),
+                        0, 0, "keep the Native Ref/unit artifact unpublished")
+                              << "\n";
+                    return 1;
+                }
+                std::cerr << diagnostic::format(
+                    "native-proof",
+                    "Native Ref/unit private linked preview executed one Apply",
+                    previewArtifact.string(), 0, 0,
+                    "keep the Native Ref/unit artifact unpublished")
+                          << "\n";
+            }
         }
         previewLoaded = VerifiedNativeLibrary{};
         std::error_code cleanupError;
@@ -655,9 +812,9 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
         cleanup.directory.clear();
         std::cerr << diagnostic::format(
             "native-proof",
-            "Native Ref/unit typed invocation remains gated after proof-bound artifact validation",
+            "Native Ref/unit publication remains gated after pinned typed preview validation",
             inputPath, 0, 0,
-            "complete pinned typed lookup and invocation before publication")
+            "complete public ABI policy and cross-platform validation before publication")
                   << "\n";
         return 1;
     }
