@@ -158,11 +158,14 @@ int runCrossPackageContainerTest() {
             std::string::npos)
         return fail("cross-package Ref/apply preview accepted missing owner evidence");
     refModule->dependencySlotPublications = {changedContract};
-    if (moon::ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
-            refManifest, *refModule, error) ||
+    moon::Module rejectedPreparedRefModule;
+    rejectedPreparedRefModule.name = "unchanged.sentinel";
+    if (moon::ContainerModelCodec::prepareNativeRefUnitModuleForTest(
+            refManifest, *refModule, rejectedPreparedRefModule, error) ||
+        rejectedPreparedRefModule.name != "unchanged.sentinel" ||
         error.find("requires verified owner Slot evidence") ==
             std::string::npos)
-        return fail("cross-package Ref/apply preview accepted a changed Slot contract");
+        return fail("cross-package Ref/apply preparation published a changed Slot contract");
     refModule->dependencySlotPublications = {
         otherTarget.localSlotPublication};
     if (moon::ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
@@ -176,11 +179,16 @@ int runCrossPackageContainerTest() {
             refManifest, *refModule, error))
         return fail("cross-package Ref/apply preview accepted an undeclared owner");
     refModule->packageUses = refPackageUses;
-    if (!moon::ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
-            refManifest, *refModule, error)) {
+    moon::Module preparedRefModule;
+    if (!moon::ContainerModelCodec::prepareNativeRefUnitModuleForTest(
+            refManifest, *refModule, preparedRefModule, error)) {
         std::cerr << error << '\n';
         return fail("cross-package Ref/apply owner-backed 0.4 preview failed");
     }
+    if (preparedRefModule.formatMinor != moon::RefWireFormatMinor ||
+        preparedRefModule.name != refManifest.packageId ||
+        preparedRefModule.dependencySlotPublications.size() != 1)
+        return fail("cross-package Ref/apply JIT input was not the verified 0.4 decode");
     std::vector<uint8_t> rejectedRefContainer{1, 2, 3};
     if (moon::ContainerModelCodec::encodeContainer(
             refManifest, *refModule, rejectedRefContainer, error,
@@ -189,21 +197,21 @@ int runCrossPackageContainerTest() {
         error.find("MoonIR verification failed") == std::string::npos)
         return fail("ordinary container encoder published cross-package Ref/apply");
     moon::FunctionDecl* refSource = nullptr;
-    for (auto& declaration : refModule->declarations)
+    for (auto& declaration : preparedRefModule.declarations)
         if (auto* function = dynamic_cast<moon::FunctionDecl*>(
                 declaration.get()); function && function->name == "apply_ref")
             refSource = function;
     std::vector<uint8_t> refEntryRecord;
     if (!refSource || !refSource->controlFlow)
-        return fail("cross-package Ref/apply source lost its executable function");
+        return fail("cross-package Ref/apply decoded module lost its executable function");
     auto refJit = CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
-        *refModule, *refSource, error, &refEntryRecord);
+        preparedRefModule, *refSource, error, &refEntryRecord);
     if (!refJit) {
         std::cerr << error << '\n';
         return fail("cross-package Ref/apply private JIT did not materialize");
     }
     auto refEntry = CodeGenerator::loadPrivateRuntimeFragmentRefApplyEntryForTest(
-        *refModule, *refSource, refEntryRecord, std::move(refJit), error);
+        preparedRefModule, *refSource, refEntryRecord, std::move(refJit), error);
     if (!refEntry) {
         std::cerr << error << '\n';
         return fail("cross-package Ref/apply private entry did not load");

@@ -136,6 +136,15 @@ public:
     static bool verifyNativeRefUnitPreparationRoundTrip(
         const ContainerManifest& manifest, const Module& module,
         std::string& error, const ContainerLimits& limits = {});
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    // Test-only preparation result. The module is returned only after the
+    // complete private 0.4 round-trip has passed; it cannot enter the
+    // published container decoder or generation loader.
+    static bool prepareNativeRefUnitModuleForTest(
+        const ContainerManifest& manifest, const Module& source,
+        Module& prepared, std::string& error,
+        const ContainerLimits& limits = {});
+#endif
     // Dependencies are explicit immutable evidence from independently decoded
     // owner containers. No filesystem resolution, re-export or Runtime loading
     // is implied; hashes/verification do not establish publisher authenticity.
@@ -155,6 +164,9 @@ public:
         const SlotPublicationDependencies& dependencies = {});
 
 private:
+    static bool verifyNativeRefUnitPreparationRoundTripImpl(
+        const ContainerManifest& manifest, const Module& module,
+        Module* prepared, std::string& error, const ContainerLimits& limits);
     static bool encodeContainerWithPolicy(
         const ContainerManifest& manifest, const Module& module,
         std::vector<uint8_t>& output, std::string& error,

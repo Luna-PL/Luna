@@ -1952,19 +1952,24 @@ re-encodes a same-package Ref/apply module and a source-lowered consumer with
 an imported owner Slot byte-identically. The cross-package preview requires an
 exact Slot publication snapshot decoded from a separate verified owner
 container; it rejects missing or changed evidence, an undeclared owner and a
-different target. It returns no container bytes or executable module. Ordinary
-whole-container encode/decode still use publication verification and reject
-the Ref module.
+different target. The Boolean preview returns no container bytes or executable
+module. Ordinary whole-container encode/decode still use publication
+verification and reject the Ref module. A test-build-only preparation result
+now returns the decoded module after that full canonical round-trip. The
+private JIT consumes this
+decoded module; failed owner-Contract validation leaves the caller's output
+untouched. No container bytes or module enter the public generation loader.
 Canonical Ref Apply CFG verification now accepts a record-only foreign Slot
 when an exact Slot publication snapshot from an independently verified owner
 container and a direct package dependency are present. A focused regression
 rejects missing evidence, an undeclared owner, and a changed ContractId. The
 cross-package container proof remains preparation-only. The source-lowered
-consumer is also materialized through the private test JIT and calls a
-Runtime-issued borrowed Ref from an independently verified plugin generation
-with an explicit parent context. Invalid parent/handle calls fail, and repeated
-calls succeed after Runtime teardown with the borrowed Ref as the remaining
-plugin-generation pin. This executes the two-package source body privately;
+consumer is also materialized from that decoded module through the private
+test JIT and calls a Runtime-issued borrowed Ref from an independently
+verified plugin generation with an explicit parent context. Invalid
+parent/handle calls fail, and repeated calls succeed after Runtime teardown
+with the borrowed Ref as the remaining plugin-generation pin. This executes
+the two-package source body privately;
 the Ref consumer is not loaded as a verified generation or published artifact.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
@@ -2120,10 +2125,10 @@ not a public ABI decision or stable-release approval:
    Moon Container encoder/decoder. Invalid or older artifacts must fail
    without publishing a partial generation. The source consumer and separate
    owner evidence now pass the private 0.4 preparation round-trip, and the
-   private source JIT calls a borrowed Ref issued from a verified plugin
-   generation. Next load the Ref consumer itself through a verified generation
-   import with validated owner evidence. The default publication verifier
-   stays closed during that work.
+   private JIT of the wire-decoded source calls a borrowed Ref issued from a
+   verified plugin generation. Next load the Ref consumer itself through a
+   verified generation import with validated owner evidence. The default
+   publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref
    from a verified generation; run source apply against an explicit parent
    context. The private JIT now covers borrowed ingress, invalid capability

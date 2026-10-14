@@ -362,6 +362,22 @@ bool ContainerModelCodec::decodeContainer(
 bool ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
     const ContainerManifest& manifest, const Module& module,
     std::string& error, const ContainerLimits& limits) {
+    return verifyNativeRefUnitPreparationRoundTripImpl(
+        manifest, module, nullptr, error, limits);
+}
+
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+bool ContainerModelCodec::prepareNativeRefUnitModuleForTest(
+    const ContainerManifest& manifest, const Module& source,
+    Module& prepared, std::string& error, const ContainerLimits& limits) {
+    return verifyNativeRefUnitPreparationRoundTripImpl(
+        manifest, source, &prepared, error, limits);
+}
+#endif
+
+bool ContainerModelCodec::verifyNativeRefUnitPreparationRoundTripImpl(
+    const ContainerManifest& manifest, const Module& module,
+    Module* prepared, std::string& error, const ContainerLimits& limits) {
     const auto refTypes = std::count_if(
         module.typeTable.begin(), module.typeTable.end(), [](const auto& type) {
             return type.kind == TypeKind::RuntimeFragmentRef;
@@ -398,6 +414,7 @@ bool ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
         error = "Native Ref/unit preparation container is not byte-canonical";
         return false;
     }
+    if (prepared) *prepared = std::move(decodedModule);
     error.clear();
     return true;
 }

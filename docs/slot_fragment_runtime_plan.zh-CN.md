@@ -1461,11 +1461,13 @@ Runtime lookup 为类型化调用保留已验证代码。Moon Container 的 Func
 内部整包准备态预览现能将同包 Ref／apply 模块，以及从源码降低、导入 owner Slot
 的 consumer 编码、解码并逐字节一致地重新编码。跨包预览要求从独立验证的 owner
 容器解码得到精确的 Slot 发布快照；缺失或改变的证据、未声明的 owner 及目标不一致
-都会被拒绝。预览不返回容器字节或可执行模块；普通整包编解码仍使用发布验证并拒绝该 Ref
-模块。规范 Ref Apply CFG 校验现仅在存在独立验证的 owner 容器签发的精确 Slot
+都会被拒绝。布尔预览不返回容器字节或可执行模块；普通整包编解码仍使用发布验证并拒绝该 Ref
+模块。仅测试构建的准备态结果现于完整规范往返后返回解码模块；私有 JIT 使用该模块，owner
+Contract 验证失败时调用者的输出保持原状。容器字节及模块均不进入公开 generation loader。
+规范 Ref Apply CFG 校验现仅在存在独立验证的 owner 容器签发的精确 Slot
 发布快照及直接包依赖时接受仅有冻结记录的外包 Slot。聚焦回归拒绝缺失证据、
 未声明的 owner 和改变的 ContractId。跨包容器证明仍只处于准备态。源码降低的 consumer
-另经私有测试 JIT 实体化，以显式 parent context 调用由独立 verified plugin generation
+另从往返解码模块经私有测试 JIT 实体化，以显式 parent context 调用由独立 verified plugin generation
 签发的借用 Ref；无效 parent／handle 被拒绝，Runtime 销毁后仅保留该 Ref 对 plugin
 generation 的 pin 时仍可重复调用。这证明私有双包源码执行；Ref consumer 尚未作为 verified
 generation 或公开产物加载。冻结的 `DeclarationRecord`／
@@ -1577,7 +1579,7 @@ generation 或公开产物加载。冻结的 `DeclarationRecord`／
 3. **接通 verified 产物路径。** 为已准入的控制流完成 compiler dropGlue 和生产
    codegen，再于 module verifier 及 Moon Container 编解码中定义、验证 Ref 类型
    和 Apply region 的 wire 规则。无效或旧产物必须在发布 generation 前整体拒绝。
-   源码 consumer 与独立 owner 证据现已通过私有 0.4 准备态往返，私有源码 JIT 也已调用
+   源码 consumer 与独立 owner 证据现已通过私有 0.4 准备态往返，解码后的私有源码 JIT 也已调用
    verified plugin generation 签发的借用 Ref。下一步须将 Ref consumer 本身连同验证过的
    owner 证据通过 verified generation 导入；期间默认发布验证继续关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation
