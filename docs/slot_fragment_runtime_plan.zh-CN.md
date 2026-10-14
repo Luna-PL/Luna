@@ -1456,10 +1456,11 @@ Luna 的 LLVM emitter，覆盖并行 query 与精确大小规则。
 上述 v2 无参数 profile 保持不变。独立的 v4 Native Ref／unit 行现把受限源码函数的
 effect 与精确 Ref 目标同 v1 导出一起签封；loader 验证其规范 proof 行，固定的
 Runtime lookup 为类型化调用保留已验证代码。Moon Container 的 Function code
-记录已保存 `requiresFragmentContext`，module verifier 会从 CFG 重新推导它，
-但 Container 编码器仍拒绝 Apply graph。冻结的 `DeclarationRecord`／规范契约和
-Native v1 导出行仍不添加依赖 context 的可调用入口。通用源码 import 与
-Moon／Container 发布仍需各自的 wire 和 verifier 规则；v4 Native 公开 ABI 仍待审议。
+记录已保存 `requiresFragmentContext`，module verifier 会从 CFG 重新推导它。
+默认 0.3 Code 编码器拒绝 Apply graph；0.4 Ref Type／Code 单节预览可以往返，
+但整包发布仍无法通过验证。冻结的 `DeclarationRecord`／规范契约和 Native v1
+导出行仍不添加依赖 context 的可调用入口。通用源码 import 与 Moon／Container
+发布仍需各自的导入、清理及整模块 verifier 规则；v4 Native 公开 ABI 仍待审议。
 
 ### 下一步源码 Ref／apply 完成门（更新于 2026-10-14）
 
