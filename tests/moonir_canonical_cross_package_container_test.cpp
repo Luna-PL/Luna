@@ -299,65 +299,75 @@ int runCrossPackageContainerTest() {
     luna::driver::PrivateImportedSlotRefUnitCandidateForTest refCandidate;
     {
         luna::runtime::MoonRuntime runtime;
-        luna::runtime::MoonRuntime::PinnedGeneration ownerGeneration;
-        if (!luna::driver::loadVerifiedMoonGenerationOnce(runtime, hostBytes,
-                hostManifest.targetTriple, hostManifest.dataLayout,
-                ownerGeneration, error)) {
+        luna::driver::PrivateVerifiedSlotOwnerForTest rejectedOwner;
+        if (luna::driver::loadPrivateVerifiedSlotOwnerForTest(
+                corruptedOwner, hostManifest.targetTriple,
+                hostManifest.dataLayout, rejectedOwner, error) || rejectedOwner)
+            return fail("corrupt owner artifact issued a private loader proof");
+        if (luna::driver::loadPrivateVerifiedSlotOwnerForTest(
+                otherTargetBytes, hostManifest.targetTriple,
+                hostManifest.dataLayout, rejectedOwner, error) || rejectedOwner)
+            return fail("wrong-target owner artifact issued a private loader proof");
+        luna::driver::PrivateVerifiedSlotOwnerForTest ownerProof;
+        if (!luna::driver::loadPrivateVerifiedSlotOwnerForTest(
+                hostBytes, hostManifest.targetTriple,
+                hostManifest.dataLayout, ownerProof, error)) {
             std::cerr << error << '\n';
-            return fail("private Ref consumer owner generation did not load");
+            return fail("private Ref consumer owner loader did not issue proof");
         }
-        auto alternateOwnerManifest = hostManifest;
-        alternateOwnerManifest.packageVersion = "0.3.1";
-        std::vector<uint8_t> alternateOwnerBytes;
-        luna::runtime::MoonRuntime alternateRuntime;
-        luna::runtime::MoonRuntime::PinnedGeneration alternateOwnerGeneration;
+        const uint64_t ownerGenerationId = ownerProof.generationId();
+        if (!ownerGenerationId ||
+            luna::driver::loadPrivateVerifiedSlotOwnerForTest(
+                hostBytes, hostManifest.targetTriple,
+                hostManifest.dataLayout, ownerProof, error) ||
+            ownerProof.generationId() != ownerGenerationId)
+            return fail("private Slot owner proof was empty or replaced");
+        auto compatibleOwnerManifest = hostManifest;
+        compatibleOwnerManifest.packageVersion = "0.3.1";
+        std::vector<uint8_t> compatibleOwnerBytes;
+        luna::driver::PrivateVerifiedSlotOwnerForTest compatibleOwner;
         if (!moon::ContainerModelCodec::encodeContainer(
-                alternateOwnerManifest, hostPipeline.moonModule(),
-                alternateOwnerBytes, error) ||
-            !luna::driver::loadVerifiedMoonGenerationOnce(alternateRuntime,
-                alternateOwnerBytes, hostManifest.targetTriple,
-                hostManifest.dataLayout, alternateOwnerGeneration, error)) {
+                compatibleOwnerManifest, hostPipeline.moonModule(),
+                compatibleOwnerBytes, error) ||
+            compatibleOwnerBytes == hostBytes ||
+            !luna::driver::loadPrivateVerifiedSlotOwnerForTest(
+                compatibleOwnerBytes, hostManifest.targetTriple,
+                hostManifest.dataLayout, compatibleOwner, error)) {
             std::cerr << error << '\n';
-            return fail("alternate verified owner generation did not load");
+            return fail("compatible owner revision did not issue a separate proof");
         }
-        luna::runtime::MoonRuntime emptyOwnerRuntime;
-        luna::runtime::GenerationStagingRequest emptyOwnerRequest;
-        emptyOwnerRequest.moduleId = ownerGeneration.moduleId();
-        emptyOwnerRequest.contentDigest = ownerGeneration.contentDigest();
-        emptyOwnerRequest.moduleLease = std::make_shared<int>(1);
-        luna::runtime::MoonRuntime::StagedGeneration emptyOwnerStage;
-        luna::runtime::MoonRuntime::PinnedGeneration emptyOwnerGeneration;
-        if (!emptyOwnerRuntime.stage(emptyOwnerRequest,
-                [](const auto&, std::string&) { return true; },
-                [](const auto&, auto&, std::string&) { return true; },
-                {}, emptyOwnerStage, error) ||
-            !emptyOwnerRuntime.loadOnce(
-                emptyOwnerStage, emptyOwnerGeneration, error))
-            return fail("empty owner generation fixture did not load");
+        luna::runtime::MoonRuntime compatibleRuntime;
+        luna::runtime::MoonRuntime::StagedGeneration compatibleStage;
+        std::weak_ptr<LunaPrivateRefUnitApplyLoadedEntry> compatibleEntry;
+        std::weak_ptr<luna::driver::PrivatePreparedRefGenerationForTest>
+            compatiblePreparation;
+        if (!luna::driver::stagePrivateNativeRefUnitPreparationForTest(
+                compatibleRuntime, refBytes, compatibleOwner,
+                refManifest.targetTriple, refManifest.dataLayout,
+                compatibleStage, compatibleEntry, compatiblePreparation,
+                error) || !compatibleStage || compatibleEntry.expired() ||
+            compatiblePreparation.expired() ||
+            compatibleRuntime.pin(refManifest.packageId)) {
+            std::cerr << error << '\n';
+            return fail("compatible owner Slot revision did not stage privately");
+        }
         luna::runtime::MoonRuntime::StagedGeneration staged;
         if (luna::driver::stagePrivateNativeRefUnitPreparationForTest(
-                runtime, refBytes, hostBytes, emptyOwnerGeneration,
-                refManifest.targetTriple, refManifest.dataLayout, staged,
+                runtime, refBytes, rejectedOwner, refManifest.targetTriple,
+                refManifest.dataLayout, staged,
                 refEntryWeak, refPreparationWeak, error) || staged ||
             !refEntryWeak.expired() || !refPreparationWeak.expired() ||
             runtime.pin(refManifest.packageId))
-            return fail("private Ref consumer accepted an owner without its Slot");
+            return fail("private Ref consumer accepted an unissued owner proof");
         if (luna::driver::stagePrivateNativeRefUnitPreparationForTest(
-                runtime, refBytes, hostBytes, alternateOwnerGeneration,
-                refManifest.targetTriple, refManifest.dataLayout, staged,
+                runtime, refBytes, ownerProof,
+                refManifest.targetTriple + "-wrong", refManifest.dataLayout, staged,
                 refEntryWeak, refPreparationWeak, error) || staged ||
             !refEntryWeak.expired() || !refPreparationWeak.expired() ||
             runtime.pin(refManifest.packageId))
-            return fail("private Ref consumer staged with a different owner artifact");
-        if (luna::driver::stagePrivateNativeRefUnitPreparationForTest(
-                runtime, refBytes, otherTargetBytes, ownerGeneration,
-                refManifest.targetTriple, refManifest.dataLayout, staged,
-                refEntryWeak, refPreparationWeak, error) || staged ||
-            !refEntryWeak.expired() || !refPreparationWeak.expired() ||
-            runtime.pin(refManifest.packageId))
-            return fail("private Ref consumer staged with a wrong-target owner");
+            return fail("private Ref consumer staged with a wrong-target proof");
         if (!luna::driver::stagePrivateNativeRefUnitPreparationForTest(
-                runtime, refBytes, hostBytes, ownerGeneration,
+                runtime, refBytes, ownerProof,
                 refManifest.targetTriple, refManifest.dataLayout, staged,
                 refEntryWeak, refPreparationWeak, error)) {
             std::cerr << error << '\n';
@@ -445,13 +455,16 @@ int runCrossPackageContainerTest() {
             refFacts->contextEffect != 1 ||
             refCandidate.consumerGenerationId() !=
                 refConsumerGeneration.generationId() ||
-            refCandidate.ownerGenerationId() != ownerGeneration.generationId())
+            refCandidate.ownerGenerationId() != ownerGenerationId)
             return fail("private imported-Slot candidate lost verified identities");
         luna::runtime::MoonRuntime::PinnedGeneration rejectedPublished;
         if (luna::driver::loadVerifiedMoonGenerationOnce(runtime, refBytes,
                 refManifest.targetTriple, refManifest.dataLayout,
                 rejectedPublished, error, dependencies) || rejectedPublished)
             return fail("public load-once reused a private Ref consumer generation");
+        ownerProof = {};
+        if (refCandidate.ownerGenerationId() != ownerGenerationId)
+            return fail("private Ref candidate lost its owner after loader teardown");
     }
     auto refEntry = refEntryWeak.lock();
     if (!refEntry)

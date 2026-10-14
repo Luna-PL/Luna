@@ -56,6 +56,37 @@ bool loadVerifiedMoonGenerationOnce(
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 struct PrivatePreparedRefGenerationForTest;
+struct PrivateVerifiedSlotOwnerStateForTest;
+
+// Issued only after the production verified Moon adapter stages and loads an
+// owner artifact in a fresh, loader-owned Runtime. Callers cannot pair
+// arbitrary container bytes with a host-staged generation.
+class PrivateVerifiedSlotOwnerForTest {
+public:
+    explicit operator bool() const { return state_ != nullptr; }
+    uint64_t generationId() const;
+
+private:
+    friend bool loadPrivateVerifiedSlotOwnerForTest(
+        const std::vector<uint8_t>&, const std::string&,
+        const std::string&, PrivateVerifiedSlotOwnerForTest&, std::string&);
+    friend bool stagePrivateNativeRefUnitPreparationForTest(
+        luna::runtime::MoonRuntime&, const std::vector<uint8_t>&,
+        const PrivateVerifiedSlotOwnerForTest&, const std::string&,
+        const std::string&,
+        luna::runtime::MoonRuntime::StagedGeneration&,
+        std::weak_ptr<LunaPrivateRefUnitApplyLoadedEntry>&,
+        std::weak_ptr<PrivatePreparedRefGenerationForTest>&,
+        std::string&);
+    std::shared_ptr<PrivateVerifiedSlotOwnerStateForTest> state_;
+};
+
+bool loadPrivateVerifiedSlotOwnerForTest(
+    const std::vector<uint8_t>& ownerContainerBytes,
+    const std::string& expectedTargetTriple,
+    const std::string& expectedDataLayout,
+    PrivateVerifiedSlotOwnerForTest& owner,
+    std::string& error);
 
 // Compiler-private typed candidate. The consumer pin must own exactly the
 // preparation lease that holds its decoded facts, owner pin and JIT entry.
@@ -92,14 +123,13 @@ bool pinPrivateImportedSlotRefUnitCandidateForTest(
 
 // Quarantined test-only staging of a prepared 0.4 Ref/unit consumer. The
 // retained entry is reachable only through the returned weak reference while
-// the staged or pinned generation owns its module lease. The verified owner
-// bytes must identify the pinned owner generation and its exported Slot. No
+// the staged or pinned generation owns its module lease. The loader-issued
+// owner proof supplies its exact exported Slot and pinned generation. No
 // callable binding or Ref/unit candidate is published to the Runtime.
 bool stagePrivateNativeRefUnitPreparationForTest(
     luna::runtime::MoonRuntime& runtime,
     const std::vector<uint8_t>& containerBytes,
-    const std::vector<uint8_t>& ownerContainerBytes,
-    const luna::runtime::MoonRuntime::PinnedGeneration& ownerGeneration,
+    const PrivateVerifiedSlotOwnerForTest& owner,
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
     luna::runtime::MoonRuntime::StagedGeneration& staged,

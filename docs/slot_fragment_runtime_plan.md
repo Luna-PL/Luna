@@ -1970,13 +1970,17 @@ container and a direct package dependency are present. A focused regression
 rejects missing evidence, an undeclared owner, and a changed ContractId. The
 cross-package container proof remains preparation-only. A test-only adapter
 redecodes the 0.4 bytes and stages the source consumer as a quarantined
-generation with its owner evidence and JIT lease. The private adapter now
-redecodes the owner container too, requires its digest and package identity
-to match a pinned, separately loaded owner generation, and checks that this
-generation publishes the exact imported Slot. The consumer lease retains
-that owner pin. A different verified revision of the same owner package, a
-wrong-target owner artifact, and a generation with the right digest but no
-Slot all fail before consumer staging. It exposes no callable
+generation with its owner evidence and JIT lease. A test-only owner loader
+now decodes the owner artifact, then stages and loads it through the verified
+Moon adapter in a fresh, loader-owned Runtime. Only that path issues an opaque
+owner proof containing its pinned generation and Slot publication evidence;
+the consumer adapter accepts this proof instead of independently supplied
+bytes and a host-staged generation. Corrupt or wrong-target owner artifacts
+cannot issue a proof, and an empty proof cannot stage the consumer. Staging
+checks the exact imported Slot, and the consumer lease keeps the owner pin
+after the proof and its Runtime are destroyed. A separately verified revision
+of the same owner package can issue its own proof and stage the consumer when
+the exact Slot contract is unchanged. It exposes no callable
 binding or Ref/unit candidate; public load-once rejects its bytes even when
 the private generation is already loaded. A generation pin retains the private
 entry after Runtime teardown and releases it when dropped. That entry calls a
@@ -1993,15 +1997,15 @@ cannot borrow the entry. The candidate retains the consumer and owner through
 Runtime teardown and repeats the typed call; the ordinary Runtime candidate
 lookup still returns empty. This does not publish a callable or a Container
 candidate row.
-MoonRuntime's generic staging API still takes host-supplied identity facts, so
-this private check is not a public provenance token. An imported candidate
-must bind to loader-owned owner-generation proof before publication.
+MoonRuntime's generic staging API still takes host-supplied identity facts.
+This loader-issued proof is test-only; production imported candidates still
+need a loader-owned provenance rule before publication.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and
 whole-module verifier rules; the v4 Native public ABI remains under review.
 
-### Next source Ref/apply gates (updated 2026-10-14)
+### Next source Ref/apply gates (updated 2026-10-15)
 
 This is the proposed implementation order for the remaining source feature,
 not a public ABI decision or stable-release approval:
@@ -2154,8 +2158,9 @@ not a public ABI decision or stable-release approval:
    enter a quarantined test generation whose pin retains its private JIT and
    the exact verified owner generation while it calls a borrowed Ref issued
    from a verified plugin generation. A private typed candidate now binds
-   decoded source facts, the exact consumer lease and owner pin; next define
-   the loader-owned provenance and imported-Slot rule for production Runtime
+   decoded source facts, the exact consumer lease and a proof issued by the
+   test-only verified owner loader; next define that provenance and the
+   imported-Slot rule for production Runtime
    candidates. The current Runtime candidate requires a same-generation Slot
    binding.
    The default publication verifier stays closed during that work.

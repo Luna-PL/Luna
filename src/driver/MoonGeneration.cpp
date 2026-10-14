@@ -23,6 +23,14 @@
 namespace luna::driver {
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
+struct PrivateVerifiedSlotOwnerStateForTest {
+    luna::runtime::MoonRuntime runtime;
+    luna::runtime::MoonRuntime::PinnedGeneration generation;
+    moon::ContainerManifest manifest;
+    moon::Module module;
+    std::string contentDigest;
+};
+
 struct PrivatePreparedRefGenerationForTest {
     moon::ContainerManifest manifest;
     moon::Module module;
@@ -423,11 +431,51 @@ bool stageVerifiedMoonGeneration(
 }
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
+uint64_t PrivateVerifiedSlotOwnerForTest::generationId() const {
+    return state_ ? state_->generation.generationId() : 0;
+}
+
+bool loadPrivateVerifiedSlotOwnerForTest(
+    const std::vector<uint8_t>& ownerContainerBytes,
+    const std::string& expectedTargetTriple,
+    const std::string& expectedDataLayout,
+    PrivateVerifiedSlotOwnerForTest& owner,
+    std::string& error) {
+    error.clear();
+    if (owner) {
+        error = "private Slot owner output already owns a verified generation";
+        return false;
+    }
+    auto verified = std::make_shared<PrivateVerifiedSlotOwnerStateForTest>();
+    if (!moon::ContainerModelCodec::decodeContainerForTarget(
+            ownerContainerBytes, expectedTargetTriple, expectedDataLayout,
+            verified->manifest, verified->module, error))
+        return false;
+    if (!verified->module.localSlotPublication) {
+        error = "private Slot owner artifact has no verified Slot publication";
+        return false;
+    }
+    verified->contentDigest = containerDigest(ownerContainerBytes);
+    luna::runtime::MoonRuntime::StagedGeneration staged;
+    if (!stageVerifiedMoonGeneration(
+            verified->runtime, ownerContainerBytes, expectedTargetTriple,
+            expectedDataLayout, {}, staged, error))
+        return false;
+    if (!staged || staged.moduleId() != verified->manifest.packageId ||
+        staged.contentDigest() != verified->contentDigest ||
+        !verified->runtime.loadOnce(staged, verified->generation, error)) {
+        if (error.empty())
+            error = "private Slot owner staging changed its verified artifact";
+        return false;
+    }
+    owner.state_ = std::move(verified);
+    return true;
+}
+
 bool stagePrivateNativeRefUnitPreparationForTest(
     luna::runtime::MoonRuntime& runtime,
     const std::vector<uint8_t>& containerBytes,
-    const std::vector<uint8_t>& ownerContainerBytes,
-    const luna::runtime::MoonRuntime::PinnedGeneration& ownerGeneration,
+    const PrivateVerifiedSlotOwnerForTest& owner,
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
     luna::runtime::MoonRuntime::StagedGeneration& staged,
@@ -439,18 +487,15 @@ bool stagePrivateNativeRefUnitPreparationForTest(
         error = "private Ref/unit staging output already owns a generation";
         return false;
     }
-    moon::ContainerManifest ownerManifest;
-    moon::Module ownerModule;
-    if (!moon::ContainerModelCodec::decodeContainerForTarget(
-            ownerContainerBytes, expectedTargetTriple, expectedDataLayout,
-            ownerManifest, ownerModule, error))
-        return false;
-    if (!ownerGeneration || !ownerModule.localSlotPublication ||
-        ownerGeneration.moduleId() != ownerManifest.packageId ||
-        ownerGeneration.contentDigest() != containerDigest(ownerContainerBytes)) {
-        error = "private Ref/unit owner generation does not match verified owner artifact";
+    if (!owner || !owner.state_->generation ||
+        owner.state_->manifest.targetTriple != expectedTargetTriple ||
+        owner.state_->manifest.dataLayout != expectedDataLayout) {
+        error = "private Ref/unit staging requires a verified owner for the target";
         return false;
     }
+    const auto& ownerManifest = owner.state_->manifest;
+    const auto& ownerModule = owner.state_->module;
+    const auto& ownerGeneration = owner.state_->generation;
     auto loaded = std::make_shared<PrivatePreparedRefGenerationForTest>();
     if (!moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTargetForTest(
             containerBytes, expectedTargetTriple, expectedDataLayout,
