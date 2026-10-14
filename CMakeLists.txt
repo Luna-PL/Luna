@@ -163,6 +163,11 @@ add_library(runtime STATIC
     src/runtime/RuntimeFragment.cpp
     src/runtime/Runtime.cpp
     src/runtime/RuntimeGpu.cpp)
+if(UNIX)
+    # Native shared artifacts link this static archive, including the
+    # proof-sealed Ref/unit preview built during Native publication checks.
+    set_target_properties(runtime PROPERTIES POSITION_INDEPENDENT_CODE ON)
+endif()
 if(CMAKE_CXX_COMPILER_ID MATCHES "Clang|GNU")
     # The runtime is a static archive consumed by AOT applications. Keep each
     # function and datum independently discardable so the final native link
