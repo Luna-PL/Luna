@@ -418,21 +418,73 @@ bool ContainerModelCodec::verifyNativeRefUnitPreparationRoundTripImpl(
     const ContainerManifest& manifest, const Module& module,
     std::vector<uint8_t>* encoded, std::string& error,
     const ContainerLimits& limits) {
-    const auto refTypes = std::count_if(
-        module.typeTable.begin(), module.typeTable.end(), [](const auto& type) {
-            return type.kind == TypeKind::RuntimeFragmentRef;
-        });
-    const auto refApplyFunctions = std::count_if(
-        module.declarations.begin(), module.declarations.end(),
-        [](const auto& declaration) {
-            const auto* function = dynamic_cast<const FunctionDecl*>(
-                declaration.get());
-            return function && function->controlFlow &&
-                !function->controlFlow->runtimeRefApplies.empty();
-        });
-    if (refTypes != 1 || refApplyFunctions != 1) {
+    const TypeRecord* refType = nullptr;
+    for (const auto& type : module.typeTable) {
+        if (type.kind != TypeKind::RuntimeFragmentRef) continue;
+        if (refType) {
+            error = "Native Ref/unit preparation requires one Ref type";
+            return false;
+        }
+        refType = &type;
+    }
+    const FunctionDecl* applySource = nullptr;
+    for (const auto& declaration : module.declarations) {
+        const auto* function = dynamic_cast<const FunctionDecl*>(
+            declaration.get());
+        if (!function || !function->controlFlow ||
+            function->controlFlow->runtimeRefApplies.empty()) continue;
+        if (applySource) {
+            error = "Native Ref/unit preparation requires one Apply function";
+            return false;
+        }
+        applySource = function;
+    }
+    if (!refType || !applySource) {
         error = "Native Ref/unit preparation preview requires one Ref type and Apply function";
         return false;
+    }
+    const auto usesRef = [&](const FunctionDecl& function) {
+        return function.returnType == refType->id ||
+            std::any_of(function.params.begin(), function.params.end(),
+                [&](const auto& parameter) {
+                    return parameter.type == refType->id;
+                }) ||
+            (function.controlFlow &&
+             std::any_of(function.controlFlow->locals.begin(),
+                 function.controlFlow->locals.end(), [&](const auto& local) {
+                     return local.type == refType->id;
+                 }));
+    };
+    for (const auto& declaration : module.declarations) {
+        if (const auto* function = dynamic_cast<const FunctionDecl*>(
+                declaration.get())) {
+            if (function != applySource && usesRef(*function)) {
+                error = "Native Ref/unit preparation has another Ref callable";
+                return false;
+            }
+        } else if (const auto* implementation = dynamic_cast<const ImplDecl*>(
+                       declaration.get())) {
+            for (const auto& method : implementation->methods)
+                if (method && usesRef(*method)) {
+                    error = "Native Ref/unit preparation has another Ref callable";
+                    return false;
+                }
+        }
+    }
+    for (const auto& record : module.declarationTable) {
+        if (record.kind != DeclarationKind::Function) continue;
+        const auto* signature = module.findType(record.type);
+        if (!signature || signature->kind != TypeKind::Function) continue;
+        const bool referencesRef = signature->returnTypeId == refType->id ||
+            std::find(signature->parameterTypeIds.begin(),
+                signature->parameterTypeIds.end(), refType->id) !=
+                signature->parameterTypeIds.end();
+        if (referencesRef &&
+            (record.symbolId != applySource->symbolId ||
+             record.contractId != applySource->contractId)) {
+            error = "Native Ref/unit preparation has another Ref callable";
+            return false;
+        }
     }
     std::vector<uint8_t> first;
     if (!encodeContainerWithPolicy(manifest, module, first, error, limits,

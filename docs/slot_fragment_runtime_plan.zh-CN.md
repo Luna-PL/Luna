@@ -1465,7 +1465,9 @@ Runtime lookup 为类型化调用保留已验证代码。Moon Container 的 Func
 模块。仅测试构建的编码器现于完整规范往返后返回 0.4 字节；独立的私有解码器核对宿主目标、
 显式 owner 证据和再次编码的字节规范性，然后将模块交给测试 JIT。缺失或改变的 owner
 证据、目标不符及损坏字节均不会写出部分模块；普通解码器和公开 generation loader 均拒绝
-这些私有字节。
+这些私有字节。私有准备态准入现还会检查源码函数体和冻结函数记录中的 Ref 使用；即使第二个
+callable 没有 Apply region，也会被拒绝。带有额外导出 Ref 参数函数的真实源码 overlay
+证明在输出任何容器字节前即失败。
 规范 Ref Apply CFG 校验现仅在存在独立验证的 owner 容器签发的精确 Slot
 发布快照及直接包依赖时接受仅有冻结记录的外包 Slot。聚焦回归拒绝缺失证据、
 未声明的 owner 和改变的 ContractId。跨包容器证明仍只处于准备态。源码降低的 consumer
@@ -1581,7 +1583,8 @@ generation 或公开产物加载。冻结的 `DeclarationRecord`／
 3. **接通 verified 产物路径。** 为已准入的控制流完成 compiler dropGlue 和生产
    codegen，再于 module verifier 及 Moon Container 编解码中定义、验证 Ref 类型
    和 Apply region 的 wire 规则。无效或旧产物必须在发布 generation 前整体拒绝。
-   源码 consumer 与独立 owner 证据现已通过私有 0.4 产物编码及独立解码，解码后的私有源码 JIT 也已调用
+   源码 consumer 与独立 owner 证据现已在单一 Ref callable 准入规则下通过私有 0.4
+   产物编码及独立解码，解码后的私有源码 JIT 也已调用
    verified plugin generation 签发的借用 Ref。下一步须将 Ref consumer 本身连同验证过的
    owner 证据通过 verified generation 导入；期间默认发布验证继续关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation

@@ -16,6 +16,8 @@
 
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -178,6 +180,36 @@ int runCrossPackageContainerTest() {
             refManifest, *refModule, error))
         return fail("cross-package Ref/apply preview accepted an undeclared owner");
     refModule->packageUses = refPackageUses;
+    const auto refSourcePath = fixtures / "refprep/src/effects.luna";
+    std::ifstream refSourceInput(refSourcePath);
+    std::string extraRefSource(
+        std::istreambuf_iterator<char>{refSourceInput}, {});
+    if (extraRefSource.empty())
+        return fail("cross-package Ref/apply fixture source is missing");
+    extraRefSource +=
+        "\nexport runtime fn hold_ref(selected: "
+        "RuntimeFragmentRef<host::effects::audit_slot>) -> unit {}\n";
+    auto extraRefSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzePathWithOverlay(
+            (fixtures / "refprep").string(), refSourcePath.string(),
+            extraRefSource);
+    if (!extraRefSnapshot.success())
+        return fail("cross-package extra Ref callable did not analyze");
+    moon::LunaLowerer extraRefLowerer;
+    auto extraRefModule = extraRefLowerer.lower(
+        *extraRefSnapshot.program(), *extraRefSnapshot.symbolTable());
+    moon::Sealer extraRefSealer;
+    if (!extraRefModule || !extraRefLowerer.errors().empty() ||
+        !extraRefSealer.sealFunctionBodies(*extraRefModule))
+        return fail("cross-package extra Ref callable did not lower and seal");
+    extraRefModule->dependencySlotPublications = dependencies;
+    std::vector<uint8_t> rejectedExtraRefBytes{1, 2, 3};
+    if (moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
+            makeManifest(*extraRefModule), *extraRefModule,
+            rejectedExtraRefBytes, error) ||
+        !rejectedExtraRefBytes.empty() ||
+        error.find("another Ref callable") == std::string::npos)
+        return fail("cross-package preparation admitted an extra Ref callable");
     std::vector<uint8_t> refBytes;
     if (!moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
             refManifest, *refModule, refBytes, error) || refBytes.empty()) {

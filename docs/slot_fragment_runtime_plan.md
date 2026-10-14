@@ -1960,6 +1960,10 @@ the host target, explicit owner evidence and byte-canonical re-encoding before
 returning a module to the test JIT. Missing or changed owner evidence, target
 mismatch and corrupted bytes fail without publishing a partial module; the
 ordinary decoder and public generation loader reject those private bytes.
+The private preparation admission now also rejects any second Ref-bearing
+callable in source bodies or frozen function records, even if it has no Apply
+region. A source overlay with an additional exported Ref parameter proves this
+failure before any container bytes are returned.
 Canonical Ref Apply CFG verification now accepts a record-only foreign Slot
 when an exact Slot publication snapshot from an independently verified owner
 container and a direct package dependency are present. A focused regression
@@ -2126,7 +2130,8 @@ not a public ABI decision or stable-release approval:
    Moon Container encoder/decoder. Invalid or older artifacts must fail
    without publishing a partial generation. The source consumer and separate
    owner evidence now pass the private 0.4 artifact encode and independent
-   decode, and the private JIT of that decoded source calls a borrowed Ref
+   decode under a single-Ref-callable admission rule. The private JIT of that
+   decoded source calls a borrowed Ref
    issued from a verified plugin generation. Next load the Ref consumer itself through a
    verified generation import with validated owner evidence. The default
    publication verifier stays closed during that work.
