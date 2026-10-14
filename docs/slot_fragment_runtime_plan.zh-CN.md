@@ -1490,7 +1490,9 @@ generation 签发的借用 Ref；无效 parent／handle 被拒绝，销毁 Runti
 这证明私有双包源码执行；公开 generation 导入和产物发布仍关闭。
 编译器内部的 consumer 准备态工厂现独立解码规范的 0.4 产物、派生精确 Ref／unit 源码事实、
 固定匹配的 owner Slot，并签发只读的不透明准备凭据。私有 adapter 先创建此凭据，再另行
-解码供 JIT 修改的模块，核对摘要及源码事实。损坏的 consumer 或空的、目标不符的 owner
+解码供 JIT 修改的模块，核对摘要及源码事实。私有 generation lease 直接保留签发的准备
+凭据；candidate 准入从该凭据读取源码事实和 owner pin，准入与调用均核对 consumer 身份
+及精确 generation lease。损坏的 consumer 或空的、目标不符的 owner
 凭据均不能签发 consumer 准备凭据。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
@@ -1619,7 +1621,8 @@ lease 绑定和 Runtime candidate 准入仍是独立完成门。
    签发的借用 Ref。私有类型化 candidate 已绑定解码源码事实、精确 consumer lease，以及
    由编译器内部 verified owner loader 签发的凭据；该 loader 现无需测试开关也能编译。
    普通构建的 consumer 准备凭据现独立解码产物、派生源码事实并保留精确 owner pin。
-   generation lease 检查同时比较地址与共享所有权；下一步须物化生产代码，将其
+   私有 generation lease 现直接保留该凭据，candidate 同时核对凭据身份和 lease 所有权；
+   下一步须物化生产代码，将其
    lease 与凭据绑定，再接入 Runtime candidate。
    当前 Runtime candidate 要求同一 generation 的 Slot binding。期间默认发布验证继续关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation

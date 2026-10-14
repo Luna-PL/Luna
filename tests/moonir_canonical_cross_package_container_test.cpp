@@ -464,6 +464,14 @@ int runCrossPackageContainerTest() {
             refConsumerGeneration.findRefUnitCandidate(
                 refSource->symbolId.value, refSource->contractId.value))
             return fail("private Ref consumer generation published a callable");
+        const auto preparedFacts = consumerPreparation.facts();
+        if (!consumerPreparation.matchesConsumer(refConsumerGeneration) ||
+            !preparedFacts ||
+            preparedFacts->functionSymbolId != refSource->symbolId.value ||
+            preparedFacts->functionContractId != refSource->contractId.value ||
+            rejectedPreparation.matchesConsumer(refConsumerGeneration) ||
+            rejectedPreparation.facts())
+            return fail("verified Ref preparation lost its consumer identity");
         const luna::runtime::RuntimeSlotRequirement importedSlot{
             refSource->controlFlow->runtimeRefApplies.front().slot.symbol.value,
             refSource->controlFlow->runtimeRefApplies.front().slot.contract.value};

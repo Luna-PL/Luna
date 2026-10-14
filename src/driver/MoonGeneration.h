@@ -2,12 +2,11 @@
 
 #include "runtime/MoonRuntime.h"
 #include "moonir/MoonIRModule.h"
-#ifdef LUNA_PRIVATE_REF_JIT_TEST
 #include "codegen/NativeRefUnitFacts.h"
-#endif
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 
@@ -113,6 +112,10 @@ class VerifiedMoonRefUnitPreparation {
 public:
     explicit operator bool() const { return state_ != nullptr; }
     uint64_t ownerGenerationId() const;
+    std::optional<luna::codegen::NativeRefUnitSourceFacts> facts() const;
+    // Artifact identity is necessary but does not replace the module lease check.
+    bool matchesConsumer(
+        const luna::runtime::MoonRuntime::PinnedGeneration& consumer) const;
 
 private:
     friend bool loadVerifiedMoonRefUnitPreparation(

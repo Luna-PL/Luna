@@ -2000,7 +2000,10 @@ A compiler-internal consumer preparation factory now independently decodes the
 canonical 0.4 artifact, derives its exact Ref/unit source facts, pins the
 matching owner Slot and issues an opaque read-only preparation proof. The
 private adapter creates that proof before its separate mutable JIT decode and
-checks the digest and source facts again. A corrupt consumer or an empty or
+checks the digest and source facts again. Its private generation lease retains
+the issued preparation proof itself. Candidate admission reads source facts and
+owner pin from that proof; admission and calls compare its consumer identity
+with the exact generation lease. A corrupt consumer or an empty or
 wrong-target owner proof cannot issue a consumer preparation proof.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
@@ -2182,10 +2185,11 @@ not a public ABI decision or stable-release approval:
    decoded source facts, the exact consumer lease and a proof issued by the
    compiler-internal verified owner loader, now built without the test flag.
    The ordinary-build consumer preparation proof independently decodes the
-   artifact, derives source facts and retains that exact owner pin. The
-   generation lease check compares address plus shared ownership; next
-   materialize production code, bind its lease to the proof and admit Runtime
-   candidates. The current Runtime candidate requires a same-generation Slot
+   artifact, derives source facts and retains that exact owner pin. The private
+   generation lease now retains that proof, and its candidate checks both the
+   proof identity and lease ownership. Next materialize production code, bind
+   its lease to the proof and admit Runtime candidates. The current Runtime
+   candidate requires a same-generation Slot
    binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref
