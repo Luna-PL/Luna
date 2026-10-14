@@ -8,6 +8,7 @@
 #include "codegen/CodeGenerator.h"
 #include "codegen/NativeOwnedResultFacts.h"
 #include "codegen/NativeRefUnitFacts.h"
+#include "driver/CompilerPipeline.h"
 #include "driver/NativeTypedDescriptor.h"
 #include "diagnostics/Diagnostic.h"
 #include "runtime/RuntimeDescriptor.h"
@@ -2435,6 +2436,74 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         !refApplyCfgVerifier.verify(*sourceApplyEntry->controlFlow,
                                     *sourceApplyModule))
         return fail("internal Ref apply CFG failed exact-target verification");
+    const auto* refApplySlot = sourceApplyModule->findDeclaration(
+        refApplyBinding.slot);
+    if (!refApplySlot || refApplySlot->kind != moon::DeclarationKind::Slot)
+        return fail("Ref apply fixture lost its frozen Slot record");
+    // Check the record-only consumer route: its foreign Slot has no local
+    // SlotDecl, and the owner's verified publication evidence is supplied
+    // separately. This exercises the same Apply gate as runtime Slot calls.
+    moon::Module foreignRefConsumer;
+    foreignRefConsumer.name = sourceApplyModule->name + ".consumer";
+    foreignRefConsumer.typeTable = sourceApplyModule->typeTable;
+    foreignRefConsumer.typeTableSealed = true;
+    foreignRefConsumer.declarationTable = sourceApplyModule->declarationTable;
+    foreignRefConsumer.packageUses.push_back({
+        foreignRefConsumer.name, sourceApplyModule->name, "owner"});
+    foreignRefConsumer.rebuildIndexes();
+    luna::driver::CompilerPipeline refOwnerPipeline;
+    if (!refOwnerPipeline.compileSourceToMoonIR(
+            "export slot checkpoint(value: i32);\n"
+            "export slot shadow(value: i32);\n",
+            "<canonical-source-ref-owner>"))
+        return fail("Ref apply owner Slot source did not compile");
+    moon::ContainerManifest refOwnerManifest;
+    refOwnerManifest.packageId = refOwnerPipeline.moonModule().name;
+    refOwnerManifest.packageVersion = "0.3.0";
+    refOwnerManifest.packageKind = moon::ContainerPackageKind::Library;
+    refOwnerManifest.targetTriple = "ref-preview-test-target";
+    refOwnerManifest.dataLayout = "e-p:64:64";
+    refOwnerManifest.features = refOwnerPipeline.moonModule().features;
+    std::vector<uint8_t> refOwnerBytes;
+    std::string refOwnerError;
+    moon::ContainerManifest decodedRefOwnerManifest;
+    moon::Module decodedRefOwner;
+    if (!moon::ContainerModelCodec::encodeContainer(
+            refOwnerManifest, refOwnerPipeline.moonModule(),
+            refOwnerBytes, refOwnerError) ||
+        !moon::ContainerModelCodec::decodeContainer(
+            refOwnerBytes, decodedRefOwnerManifest, decodedRefOwner,
+            refOwnerError) ||
+        decodedRefOwnerManifest.packageId != sourceApplyModule->name ||
+        !decodedRefOwner.localSlotPublication ||
+        !decodedRefOwner.localSlotPublication->matches(*refApplySlot)) {
+        std::cerr << refOwnerError << '\n';
+        return fail("Ref apply owner artifact did not verify its exact Slot");
+    }
+    if (refApplyCfgVerifier.verify(*sourceApplyEntry->controlFlow,
+                                   foreignRefConsumer))
+        return fail("foreign Ref apply accepted a Slot without owner evidence");
+    foreignRefConsumer.dependencySlotPublications = {
+        decodedRefOwner.localSlotPublication};
+    if (!refApplyCfgVerifier.verify(*sourceApplyEntry->controlFlow,
+                                    foreignRefConsumer)) {
+        for (const auto& diagnostic : refApplyCfgVerifier.errors())
+            std::cerr << diagnostic.message << '\n';
+        return fail("foreign Ref apply rejected exact owner Slot evidence");
+    }
+    foreignRefConsumer.packageUses.clear();
+    if (refApplyCfgVerifier.verify(*sourceApplyEntry->controlFlow,
+                                   foreignRefConsumer))
+        return fail("foreign Ref apply accepted an undeclared owner package");
+    foreignRefConsumer.packageUses.push_back({
+        foreignRefConsumer.name, sourceApplyModule->name, "owner"});
+    for (auto& record : foreignRefConsumer.declarationTable)
+        if (record.id == refApplySlot->id)
+            record.contractId.value += "-wrong";
+    foreignRefConsumer.rebuildIndexes();
+    if (refApplyCfgVerifier.verify(*sourceApplyEntry->controlFlow,
+                                   foreignRefConsumer))
+        return fail("foreign Ref apply accepted mismatched owner Slot evidence");
     std::string refApplyFlowError;
     const auto refApplyFlow = moon::planRuntimeRefApplyFlow(
         *sourceApplyEntry->controlFlow, refApplyFlowError);

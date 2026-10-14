@@ -234,16 +234,11 @@ void Verifier::verifyRegions(const ControlFlowGraph& graph, const Module& module
             continue;
         }
         const auto target = module.resolveRuntimeFragmentRefTarget(local->type);
-        const bool exported = std::any_of(
-            module.exports.begin(), module.exports.end(),
-            [&](const ExportRecord& entry) {
-                return entry.kind == DeclarationKind::Slot &&
-                    entry.declaration == binding.slot;
-            });
         if (!target || target->symbol != binding.slot.symbol ||
-            target->contract != binding.slot.contract || !exported) {
+            target->contract != binding.slot.contract ||
+            !isPublicSlotTarget(module, binding.slot)) {
             error(region->location,
-                  "canonical Ref apply local does not target its exported Slot");
+                  "canonical Ref apply local does not target a public Slot");
         }
         bool inScope = false;
         for (auto* scope = graph.findScope(region->scope); scope;

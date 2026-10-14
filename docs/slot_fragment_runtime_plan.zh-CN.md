@@ -1460,7 +1460,11 @@ Runtime lookup 为类型化调用保留已验证代码。Moon Container 的 Func
 默认 0.3 Code 编码器拒绝 Apply graph。0.4 Ref Type／Code 单节可以往返；
 内部整包准备态预览现也能将一个同包 Ref／apply 模块编码、解码并逐字节一致地重新
 编码。它不返回容器字节或可执行模块；普通整包编解码仍使用发布验证并拒绝该 Ref
-模块。冻结的 `DeclarationRecord`／规范契约和 Native v1
+模块。规范 Ref Apply CFG 校验现仅在存在独立验证的 owner 容器签发的精确 Slot
+发布快照及直接包依赖时接受仅有冻结记录的外包 Slot。聚焦回归拒绝缺失证据、
+未声明的 owner 和改变的 ContractId。此处只开放 CFG 目标校验；0.4 整包准备态
+预览仍要求同包 Slot，跨包 Ref 导入与执行仍未实现。冻结的 `DeclarationRecord`／
+规范契约和 Native v1
 导出行仍不添加依赖 context 的可调用入口。通用源码 import 与 Moon／Container
 发布仍需各自的导入、清理及整模块 verifier 规则；v4 Native 公开 ABI 仍待审议。
 
@@ -1568,6 +1572,8 @@ Runtime lookup 为类型化调用保留已验证代码。Moon Container 的 Func
 3. **接通 verified 产物路径。** 为已准入的控制流完成 compiler dropGlue 和生产
    codegen，再于 module verifier 及 Moon Container 编解码中定义、验证 Ref 类型
    和 Apply region 的 wire 规则。无效或旧产物必须在发布 generation 前整体拒绝。
+   下一个受限切片是包含导入 owner Slot 与 Ref／apply 函数体的源码 consumer，
+   在 0.4 准备态中核对由独立 owner 容器解码所得的发布证据；期间默认发布验证继续关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation
    的 Ref，在显式 parent context 中执行源码 apply；先打通借用入口，再完成拥有型
    参数／返回转移。覆盖名义／contract 错配、入口失败、正常／提前退出、重复 apply、

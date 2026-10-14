@@ -1951,6 +1951,13 @@ an internal whole-container preparation preview now also encodes, decodes and
 re-encodes one same-package Ref/apply module byte-identically. It returns no
 container bytes or executable module. Ordinary whole-container encode/decode
 still use publication verification and reject the Ref module.
+Canonical Ref Apply CFG verification now accepts a record-only foreign Slot
+when an exact Slot publication snapshot from an independently verified owner
+container and a direct package dependency are present. A focused regression
+rejects missing evidence, an undeclared owner, and a changed ContractId. This
+is CFG target admission only; the 0.4 whole-container preparation preview
+still requires a same-package Slot, and cross-package Ref import and execution
+remain open.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and
@@ -2103,7 +2110,10 @@ not a public ABI decision or stable-release approval:
    dropGlue and production codegen for the admitted flow subset, then define
    and validate Ref type/Apply-region wire rules in the module verifier and
    Moon Container encoder/decoder. Invalid or older artifacts must fail
-   without publishing a partial generation.
+   without publishing a partial generation. The next narrow slice is a source
+   consumer with an imported owner Slot and Ref/apply body, checked against
+   evidence decoded from a separate owner container in the 0.4 preparation
+   path. The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref
    from a verified generation; run source apply against an explicit parent
    context; exercise borrowed ingress first, then owning parameter/return
