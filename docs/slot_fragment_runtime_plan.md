@@ -1511,9 +1511,9 @@ success, rejects absent or mismatched capabilities before invocation, and calls
 after the original Runtime and direct library view have been released. The
 Native build invokes a known source preview only with the internal test opt-in;
 the ordinary build of that same source is checked to remain gated without the
-probe or output artifacts. The next steps are macOS CI verification of this
-linked source path and a reviewed public ABI policy before removing the
-publication gate.
+probe or output artifacts. The next step is a reviewed public ABI policy
+before removing the publication gate.
+
 On 2026-10-14 the CLANG64 build passed all 81 CTest cases, and the focused
 Native artifact case passed under ASAN/UBSan with the linked source probe.
 An Arch Linux WSL build with Clang/LLVM 22.1.8 rebuilt all targets and passed
@@ -1522,6 +1522,20 @@ An Arch Linux WSL build with Clang/LLVM 22.1.8 rebuilt all targets and passed
 worktrees consistently; without it, only the frozen ecosystem baseline failed
 on apparent line-ending changes. Focused Native artifact cases passed on both
 Windows and Linux after the ordinary-build regression was added.
+
+The `06497ed` macOS and Windows CI runs passed, but its Ubuntu Linux CI
+rejected the temporary shared preview while linking non-PIC objects from the
+static `libruntime.a`; no source probe ran there. This same linker failure
+first appeared with the private preview in `880f31f` and persisted across
+six consecutive Linux CI runs. The `runtime` target now explicitly enables
+PIC on Unix. In a WSL C++23 configuration without global PIC, its compile
+command includes `-fPIC` and the focused Native artifact test passes. A
+separate Linux ASAN/UBSan configuration without global PIC and the Windows
+CLANG64 build pass the same focused test. The `5d2033d` rerun passed
+[Linux CI](https://github.com/Luna-PL/Luna/actions/runs/38494440468) across
+C++17, C++23, ASAN/UBSan and ThreadSanitizer, as well as
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/38494440477) and
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/38494440446).
 
 On 2026-10-06 an actual `-t native` build of an exported Runtime Slot caller
 failed at the MoonIR verifier with the missing runtime-aware public entry ABI

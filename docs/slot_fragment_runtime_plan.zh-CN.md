@@ -1128,14 +1128,26 @@ v4 事实复制到 `PinnedRefUnitCandidate` 视图。该视图保留已验证库
 签发的 parent／Ref 持有者，复制 parent 快照与 Ref 句柄，并在整次同步调用中持有
 库 lease。独立 v4 fixture 验证成功调用、错误能力在调用前被拒绝，以及原 Runtime
 与直接库视图释放后仍能调用。Native 构建只在内部测试显式启用时调用已知源码预览；
-同一源码的普通构建另经回归确认：仍受门禁约束，无探针诊断或输出产物。下一步在
-macOS CI 验证这条链接源码路径，并审议公开 ABI 策略与正式输出门禁。
+同一源码的普通构建另经回归确认：仍受门禁约束，无探针诊断或输出产物。下一步
+审议公开 ABI 策略，再决定正式输出门禁。
+
 2026-10-14，CLANG64 构建的 81 项 CTest 全部通过；包含链接源码探针的 Native
 artifact 聚焦测试也在 ASAN／UBSan 下通过。
 同日以 Clang／LLVM 22.1.8 在 Arch Linux WSL 重编全部目标，80 项 CTest 全部通过。
 WSL 测试进程使用 `core.autocrlf=true`，使 Git 一致解读 Windows 检出的冻结子
 工作树；若不设置，仅冻结生态基线因表面换行差异失败。增加普通构建对照回归后，
 Windows 与 Linux 的 Native artifact 聚焦测试均通过。
+
+`06497ed` 的 macOS 与 Windows CI 通过，但 Ubuntu Linux CI 在链接临时共享预览时，
+因静态 `libruntime.a` 中的对象没有 PIC 而被拒绝，未进入源码探针。相同链接错误
+从 `880f31f` 引入私有预览起连续影响六次 Linux CI。现已在 Unix 上显式为
+`runtime` 目标启用 PIC。不使用全局 PIC 的 WSL C++23 配置确认其编译命令包含
+`-fPIC`，Native artifact 聚焦测试通过；同样无全局 PIC 的 Linux ASAN／UBSan
+配置及 Windows CLANG64 构建的聚焦测试亦通过。`5d2033d` 的
+[Linux CI](https://github.com/Luna-PL/Luna/actions/runs/38494440468) 四项作业
+（C++17、C++23、ASAN／UBSan、ThreadSanitizer）、
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/38494440477) 与
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/38494440446) 全部通过。
 
 2026-10-06 实际以 `-t native` 构建导出且触达 Runtime Slot 的函数时，MoonIR
 verifier 因缺少 runtime-aware 公开入口 ABI 而拒绝。语义与 Native artifact 回归
