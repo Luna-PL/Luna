@@ -170,7 +170,7 @@ string(FIND "${ref_apply_build_output}\n${ref_apply_build_error}"
        "Native Ref/unit publication remains gated after pinned typed preview validation"
        ref_apply_publication_gate)
 string(FIND "${ref_apply_build_output}\n${ref_apply_build_error}"
-       "Native Ref/unit private linked preview executed one Apply"
+       "Native Ref/unit private linked preview proved ingress, failure and recovery"
        ref_apply_preview_execution)
 if(ref_apply_build_result EQUAL 0 OR ref_apply_publication_gate EQUAL -1 OR
    ref_apply_preview_execution EQUAL -1 OR

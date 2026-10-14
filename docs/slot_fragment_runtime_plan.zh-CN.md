@@ -1117,7 +1117,9 @@ loader 现将独立的 v4 Ref／unit 候选行与 v1 行一起绑定到 proof �
 普通 Native 构建现于内存中生成绑定 proof 的 module，其中包含已验证的 v4 源码行、
 wrapper、声明及 v1 行。构建现链接并验证一次性预览，之后将其删除。独立的
 generation 固定 lookup 保留已验证 v4 事实且不暴露裸指针。仅测试启用的探针现经
-该 generation 调用源码链接预览，核对一次 Apply 的参数与 resume；正式输出仍封闭。
+该 generation 在原 Runtime 与直接库视图释放后调用源码链接预览。探针验证缺失
+parent、缺失 Ref 与错误 Slot 在进入源码前遭拒，然后验证成功 Apply、重复 resume
+导致的执行失败，以及随后再次成功 Apply，逐次核对参数；正式输出仍封闭。
 重建后的 artifact digest 与 trust 记录便能约束映像及其导出摘要。
 `stageVerifiedNativeGeneration` 仍只把 v1 行放入 `GenerationBinding`，另将已验证
 v4 事实复制到 `PinnedRefUnitCandidate` 视图。该视图保留已验证库的 lease，且不包含
@@ -1126,8 +1128,10 @@ v4 事实复制到 `PinnedRefUnitCandidate` 视图。该视图保留已验证库
 签发的 parent／Ref 持有者，复制 parent 快照与 Ref 句柄，并在整次同步调用中持有
 库 lease。独立 v4 fixture 验证成功调用、错误能力在调用前被拒绝，以及原 Runtime
 与直接库视图释放后仍能调用。Native 构建只在内部测试显式启用时调用已知源码预览；
-普通构建不会执行用户源码。下一步补齐链接源码路径的失败状态与寿命探针、跨平台验证
-及公开 ABI 策略，再审议正式输出门禁。
+普通构建不会执行用户源码。下一步进行跨平台验证并审议公开 ABI 策略，再审议
+正式输出门禁。
+2026-10-14，CLANG64 构建的 81 项 CTest 全部通过；包含链接源码探针的 Native
+artifact 聚焦测试也在 ASAN／UBSan 下通过。
 
 2026-10-06 实际以 `-t native` 构建导出且触达 Runtime Slot 的函数时，MoonIR
 verifier 因缺少 runtime-aware 公开入口 ABI 而拒绝。语义与 Native artifact 回归

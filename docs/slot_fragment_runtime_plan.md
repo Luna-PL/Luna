@@ -1492,8 +1492,11 @@ proof-bound in-memory module with the verified source-derived v4 row, generated
 wrapper and proof claim beside the v1 rows. It links and validates a temporary
 preview, then removes it. A separate pinned generation lookup now carries
 verified v4 facts without exposing a raw pointer. A test-only probe now calls
-the linked source preview through that generation and checks one resumed Apply
-with the expected argument. Public output remains gated.
+the linked source preview through that generation after the original Runtime
+and direct library view are released. It rejects missing parent, missing Ref,
+and wrong Slot before source entry, then checks successful Apply, a repeated
+resume execution failure, and a subsequent successful Apply with the expected
+argument. Public output remains gated.
 The existing artifact digest and trust record then bind the rebuilt image and
 its export digest. `stageVerifiedNativeGeneration` still places only v1 rows
 in `GenerationBinding`; it copies validated v4 facts into a separate
@@ -1507,9 +1510,11 @@ library lease through the synchronous entry. The independent v4 fixture proves
 success, rejects absent or mismatched capabilities before invocation, and calls
 after the original Runtime and direct library view have been released. The
 Native build invokes a known source preview only with the internal test opt-in;
-ordinary builds do not execute user source. The next steps are negative status
-and lifetime probes on the linked source path, cross-platform verification,
-and a reviewed public ABI policy before removing the publication gate.
+ordinary builds do not execute user source. The next steps are cross-platform
+verification and a reviewed public ABI policy before removing the publication
+gate.
+On 2026-10-14 the CLANG64 build passed all 81 CTest cases, and the focused
+Native artifact case passed under ASAN/UBSan with the linked source probe.
 
 On 2026-10-06 an actual `-t native` build of an exported Runtime Slot caller
 failed at the MoonIR verifier with the missing runtime-aware public entry ABI

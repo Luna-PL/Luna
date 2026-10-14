@@ -489,7 +489,9 @@ struct NativeRefPreviewProbe {
     uint64_t argumentsAlignment = 0;
     unsigned calls = 0;
     bool sawExpectedValue = false;
+    bool repeatResume = false;
     int32_t resumeStatus = LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1;
+    int32_t repeatedResumeStatus = 0;
 };
 
 thread_local NativeRefPreviewProbe* activeNativeRefPreviewProbe = nullptr;
@@ -508,6 +510,9 @@ void executeNativeRefPreviewFragment(void*, void* activation) {
     }
     probe->resumeStatus =
         luna_runtime_fragment_activation_resume_v1(activation);
+    if (probe->repeatResume)
+        probe->repeatedResumeStatus =
+            luna_runtime_fragment_activation_resume_v1(activation);
 }
 
 bool exerciseNativeRefPreviewForTest(
@@ -542,7 +547,16 @@ bool exerciseNativeRefPreviewForTest(
         arguments->valueSize, arguments->valueAlignment,
         "", "layout:unit", 0, 1,
         nullptr, nullptr, executeNativeRefPreviewFragment};
-    if (!luna::runtime::validateRuntimeFragmentDescriptor(fragment, error))
+    const std::string foreignSlotId = source.slotSymbolId + ".foreign";
+    const std::string foreignSlotContract =
+        source.slotContractId + ".foreign";
+    auto foreignFragment = fragment;
+    foreignFragment.fragment_id = "fragment:native-ref-preview-foreign";
+    foreignFragment.slot_id = foreignSlotId.c_str();
+    foreignFragment.slot_contract_id = foreignSlotContract.c_str();
+    if (!luna::runtime::validateRuntimeFragmentDescriptor(fragment, error) ||
+        !luna::runtime::validateRuntimeFragmentDescriptor(
+            foreignFragment, error))
         return false;
     luna::runtime::MoonRuntime hostRuntime;
     const luna::runtime::GenerationStagingRequest hostRequest{
@@ -556,9 +570,12 @@ bool exerciseNativeRefPreviewForTest(
             hostRequest,
             [](const auto&, std::string&) { return true; },
             [&](const auto&, auto& bindings, std::string&) {
-                bindings.push_back({fragment.fragment_id,
-                    fragment.fragment_contract_id, &fragment,
-                    LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, fragmentFlags});
+                const LunaRuntimeFragmentDescriptorV1* descriptors[] = {
+                    &fragment, &foreignFragment};
+                for (const auto* descriptor : descriptors)
+                    bindings.push_back({descriptor->fragment_id,
+                        descriptor->fragment_contract_id, descriptor,
+                        LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, fragmentFlags});
                 return true;
             }, {}, staged, error))
         return false;
@@ -568,15 +585,26 @@ bool exerciseNativeRefPreviewForTest(
         fragment.fragment_id, fragment.fragment_contract_id,
         LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, fragmentFlags};
     const auto binding = hostPinned.find(requirement);
+    auto foreignRequirement = requirement;
+    foreignRequirement.symbolId = foreignFragment.fragment_id;
+    const auto foreignBinding = hostPinned.find(foreignRequirement);
     const luna::runtime::RuntimeSlotRequirement target{
         source.slotSymbolId, source.slotContractId};
+    const luna::runtime::RuntimeSlotRequirement foreignTarget{
+        foreignSlotId, foreignSlotContract};
     luna::runtime::RuntimeFragmentRef reference;
+    luna::runtime::RuntimeFragmentRef foreignReference;
     luna::runtime::RuntimeFragmentRefHandle handle;
-    if (!binding ||
+    luna::runtime::RuntimeFragmentRefHandle foreignHandle;
+    if (!binding || !foreignBinding ||
         !luna::runtime::makeOwnedRuntimeFragmentRef(
             binding, target, {}, reference, error) ||
         !luna::runtime::makeRuntimeFragmentRefHandle(
-            reference, target, handle, error))
+            reference, target, handle, error) ||
+        !luna::runtime::makeOwnedRuntimeFragmentRef(
+            foreignBinding, foreignTarget, {}, foreignReference, error) ||
+        !luna::runtime::makeRuntimeFragmentRefHandle(
+            foreignReference, foreignTarget, foreignHandle, error))
         return false;
     luna::runtime::RuntimeFragmentBindingSet empty;
     luna::runtime::RuntimeFragmentExecutionContext parent;
@@ -584,28 +612,71 @@ bool exerciseNativeRefPreviewForTest(
         !luna::runtime::makeRuntimeFragmentExecutionContext(
             empty, parent, error))
         return false;
+    luna::runtime::RuntimeFragmentExecutionContext missingParent;
+    luna::runtime::RuntimeFragmentRefHandle missingHandle;
     NativeRefPreviewProbe probe{
         source.slotSymbolId.c_str(), source.slotContractId.c_str(),
         arguments->abiLayoutId.value.c_str(),
         arguments->valueSize, arguments->valueAlignment};
+    struct ScopedProbe {
+        NativeRefPreviewProbe* previous;
+        explicit ScopedProbe(NativeRefPreviewProbe& current)
+            : previous(activeNativeRefPreviewProbe) {
+            activeNativeRefPreviewProbe = &current;
+        }
+        ~ScopedProbe() { activeNativeRefPreviewProbe = previous; }
+    } active(probe);
     int32_t status = -1;
-    bool called = false;
-    {
-        struct ScopedProbe {
-            NativeRefPreviewProbe* previous;
-            explicit ScopedProbe(NativeRefPreviewProbe& current)
-                : previous(activeNativeRefPreviewProbe) {
-                activeNativeRefPreviewProbe = &current;
-            }
-            ~ScopedProbe() { activeNativeRefPreviewProbe = previous; }
-        } active(probe);
-        called = candidate.call(parent, handle, status, error);
+    const auto rejectsBeforeEntry = [&](const auto& testParent,
+                                        const auto& testHandle) {
+        error.clear();
+        status = -1;
+        return !candidate.call(testParent, testHandle, status, error) &&
+            !error.empty() && status == -1 && probe.calls == 0;
+    };
+    if (!rejectsBeforeEntry(missingParent, handle) ||
+        !rejectsBeforeEntry(parent, missingHandle) ||
+        !rejectsBeforeEntry(parent, foreignHandle)) {
+        error = "Native Ref/unit linked preview admitted an invalid capability";
+        return false;
     }
+    error.clear();
+    status = -1;
+    const bool called = candidate.call(parent, handle, status, error);
     if (!called || status != LUNA_NATIVE_REF_UNIT_SUCCESS_V1 ||
         probe.calls != 1 || !probe.sawExpectedValue || probe.resumeStatus !=
             LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1) {
         if (error.empty())
             error = "Native Ref/unit linked preview did not complete one Apply";
+        return false;
+    }
+    probe.calls = 0;
+    probe.sawExpectedValue = false;
+    probe.repeatResume = true;
+    probe.repeatedResumeStatus = 0;
+    error.clear();
+    status = -1;
+    if (!candidate.call(parent, handle, status, error) ||
+        status != LUNA_NATIVE_REF_UNIT_EXECUTION_FAILURE_V1 ||
+        probe.calls != 1 || !probe.sawExpectedValue ||
+        probe.resumeStatus != LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1 ||
+        probe.repeatedResumeStatus !=
+            LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1) {
+        if (error.empty())
+            error = "Native Ref/unit linked preview lost its execution failure";
+        return false;
+    }
+    probe.calls = 0;
+    probe.sawExpectedValue = false;
+    probe.repeatResume = false;
+    error.clear();
+    status = -1;
+    if (!candidate.call(parent, handle, status, error) ||
+        status != LUNA_NATIVE_REF_UNIT_SUCCESS_V1 ||
+        probe.calls != 1 || !probe.sawExpectedValue ||
+        probe.resumeStatus != LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1) {
+        if (error.empty())
+            error = "Native Ref/unit linked preview did not recover after failure";
         return false;
     }
     return true;
@@ -744,6 +815,8 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
                 "keep the Native Ref/unit artifact unpublished") << "\n";
             return 1;
         }
+        luna::runtime::MoonRuntime::PinnedRefUnitCandidate candidate;
+        luna::codegen::NativeRefUnitSourceFacts source;
         {
             luna::runtime::MoonRuntime previewRuntime;
             luna::runtime::MoonRuntime::PinnedGeneration pinned;
@@ -755,11 +828,10 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
                     "keep the Native Ref/unit artifact unpublished") << "\n";
                 return 1;
             }
-            const auto candidate = pinned.findRefUnitCandidate(
+            candidate = pinned.findRefUnitCandidate(
                 surface.refUnitSource->symbolId.value,
                 surface.refUnitSource->contractId.value);
             const auto facts = candidate.facts();
-            luna::codegen::NativeRefUnitSourceFacts source;
             if (!luna::codegen::deriveNativeRefUnitSourceFacts(
                     pipeline.moonModule(), *surface.refUnitSource,
                     source, proofError) ||
@@ -779,27 +851,28 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
                     "keep the Native Ref/unit artifact unpublished") << "\n";
                 return 1;
             }
-            const char* previewCall =
-                std::getenv("LUNA_NATIVE_REF_UNIT_PREVIEW_CALL_TEST");
-            if (previewCall && std::string(previewCall) == "1") {
-                if (!exerciseNativeRefPreviewForTest(
-                        pipeline.moonModule(), source, candidate,
-                        proofError)) {
-                    std::cerr << diagnostic::format(
-                        "native-proof", proofError, previewArtifact.string(),
-                        0, 0, "keep the Native Ref/unit artifact unpublished")
-                              << "\n";
-                    return 1;
-                }
-                std::cerr << diagnostic::format(
-                    "native-proof",
-                    "Native Ref/unit private linked preview executed one Apply",
-                    previewArtifact.string(), 0, 0,
-                    "keep the Native Ref/unit artifact unpublished")
-                          << "\n";
-            }
         }
         previewLoaded = VerifiedNativeLibrary{};
+        const char* previewCall =
+            std::getenv("LUNA_NATIVE_REF_UNIT_PREVIEW_CALL_TEST");
+        if (previewCall && std::string(previewCall) == "1") {
+            if (!exerciseNativeRefPreviewForTest(
+                    pipeline.moonModule(), source, candidate,
+                    proofError)) {
+                std::cerr << diagnostic::format(
+                    "native-proof", proofError, previewArtifact.string(),
+                    0, 0, "keep the Native Ref/unit artifact unpublished")
+                          << "\n";
+                return 1;
+            }
+            std::cerr << diagnostic::format(
+                "native-proof",
+                "Native Ref/unit private linked preview proved ingress, failure and recovery",
+                previewArtifact.string(), 0, 0,
+                "keep the Native Ref/unit artifact unpublished")
+                      << "\n";
+        }
+        candidate = {};
         std::error_code cleanupError;
         fs::remove_all(cleanup.directory, cleanupError);
         if (cleanupError) {
