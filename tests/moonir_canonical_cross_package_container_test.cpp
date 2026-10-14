@@ -336,6 +336,41 @@ int runCrossPackageContainerTest() {
                 hostManifest.dataLayout, ownerProof, error) ||
             ownerProof.generationId() != ownerGenerationId)
             return fail("private Slot owner proof was empty or replaced");
+        const auto* importedOwnerRecord = preparedRefModule.findDeclaration(
+            refSource->controlFlow->runtimeRefApplies.front().slot);
+        luna::runtime::MoonRuntime::PinnedGeneration exportedOwnerPin;
+        if (!importedOwnerRecord ||
+            !ownerProof.pinImportedSlot(
+                *importedOwnerRecord, hostManifest.targetTriple,
+                hostManifest.dataLayout, exportedOwnerPin, error) ||
+            exportedOwnerPin.generationId() != ownerGenerationId)
+            return fail("verified owner proof did not pin its imported Slot");
+        if (ownerProof.pinImportedSlot(
+                *importedOwnerRecord, hostManifest.targetTriple,
+                hostManifest.dataLayout, exportedOwnerPin, error) ||
+            exportedOwnerPin.generationId() != ownerGenerationId)
+            return fail("verified owner proof replaced an existing output pin");
+        luna::runtime::MoonRuntime::PinnedGeneration rejectedSlotPin;
+        auto changedImportedRecord = *importedOwnerRecord;
+        changedImportedRecord.contractId.value += "-wrong";
+        if (ownerProof.pinImportedSlot(
+                changedImportedRecord, hostManifest.targetTriple,
+                hostManifest.dataLayout, rejectedSlotPin, error) || rejectedSlotPin)
+            return fail("verified owner proof accepted a changed Slot contract");
+        changedImportedRecord = *importedOwnerRecord;
+        changedImportedRecord.type.value += "-wrong";
+        if (ownerProof.pinImportedSlot(
+                changedImportedRecord, hostManifest.targetTriple,
+                hostManifest.dataLayout, rejectedSlotPin, error) || rejectedSlotPin)
+            return fail("verified owner proof accepted a changed Slot type");
+        if (ownerProof.pinImportedSlot(
+                *importedOwnerRecord, hostManifest.targetTriple + "-wrong",
+                hostManifest.dataLayout, rejectedSlotPin, error) || rejectedSlotPin ||
+            rejectedOwner.pinImportedSlot(
+                *importedOwnerRecord, hostManifest.targetTriple,
+                hostManifest.dataLayout, rejectedSlotPin, error) || rejectedSlotPin)
+            return fail("verified owner proof accepted a wrong target or empty proof");
+        exportedOwnerPin = {};
         auto compatibleOwnerManifest = hostManifest;
         compatibleOwnerManifest.packageVersion = "0.3.1";
         std::vector<uint8_t> compatibleOwnerBytes;

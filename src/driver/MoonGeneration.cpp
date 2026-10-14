@@ -434,6 +434,45 @@ uint64_t VerifiedMoonSlotOwner::generationId() const {
     return state_ ? state_->generation.generationId() : 0;
 }
 
+bool VerifiedMoonSlotOwner::pinImportedSlot(
+    const moon::DeclarationRecord& importedSlot,
+    const std::string& expectedTargetTriple,
+    const std::string& expectedDataLayout,
+    luna::runtime::MoonRuntime::PinnedGeneration& pinned,
+    std::string& error) const {
+    error.clear();
+    if (pinned) {
+        error = "verified Slot owner output already owns a generation";
+        return false;
+    }
+    if (!state_ || !state_->generation ||
+        state_->manifest.targetTriple != expectedTargetTriple ||
+        state_->manifest.dataLayout != expectedDataLayout ||
+        importedSlot.kind != moon::DeclarationKind::Slot ||
+        !state_->module.localSlotPublication ||
+        !state_->module.localSlotPublication->matches(importedSlot)) {
+        error = "verified Slot owner does not match the imported Slot or target";
+        return false;
+    }
+    const moon::DeclarationRef slotReference{
+        importedSlot.symbolId, importedSlot.contractId};
+    const auto* ownerRecord = state_->module.findDeclaration(slotReference);
+    const auto ownerBinding = state_->generation.find(
+        importedSlot.symbolId.value, importedSlot.contractId.value);
+    if (!ownerRecord ||
+        !state_->module.localSlotPublication->matches(*ownerRecord) ||
+        !ownerBinding ||
+        ownerBinding.declarationKind() != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
+        ownerBinding.flags() !=
+            luna::runtime::GenerationBindingPublicControl ||
+        !ownerBinding.implementation()) {
+        error = "verified Slot owner lost its exported runtime binding";
+        return false;
+    }
+    pinned = state_->generation;
+    return true;
+}
+
 bool loadVerifiedMoonSlotOwner(
     const std::vector<uint8_t>& ownerContainerBytes,
     const std::string& expectedTargetTriple,
@@ -500,7 +539,6 @@ bool stagePrivateNativeRefUnitPreparationForTest(
     }
     const auto& ownerManifest = owner.state_->manifest;
     const auto& ownerModule = owner.state_->module;
-    const auto& ownerGeneration = owner.state_->generation;
     auto loaded = std::make_shared<PrivatePreparedRefGenerationForTest>();
     if (!moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTargetForTest(
             containerBytes, expectedTargetTriple, expectedDataLayout,
@@ -531,22 +569,14 @@ bool stagePrivateNativeRefUnitPreparationForTest(
         luna::identity::SymbolId{sourceFacts.slotSymbolId},
         luna::identity::ContractId{sourceFacts.slotContractId}};
     const auto* importedSlot = loaded->module.findDeclaration(slotReference);
-    const auto* ownerRecord = ownerModule.findDeclaration(slotReference);
-    const auto ownerBinding = ownerGeneration.find(
-        sourceFacts.slotSymbolId, sourceFacts.slotContractId);
-    if (!importedSlot || !ownerRecord ||
+    if (!importedSlot ||
         importedSlot->type.value != sourceFacts.slotTypeId ||
-        !ownerModule.localSlotPublication->matches(*importedSlot) ||
-        !ownerModule.localSlotPublication->matches(*ownerRecord) ||
-        !ownerBinding ||
-        ownerBinding.declarationKind() != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
-        ownerBinding.flags() !=
-            luna::runtime::GenerationBindingPublicControl ||
-        !ownerBinding.implementation()) {
+        !owner.pinImportedSlot(
+            *importedSlot, expectedTargetTriple, expectedDataLayout,
+            loaded->ownerGeneration, error)) {
         error = "private Ref/unit owner generation lost its exact imported Slot";
         return false;
     }
-    loaded->ownerGeneration = ownerGeneration;
     loaded->facts = std::move(sourceFacts);
     std::vector<uint8_t> entryRecord;
     auto executable = CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(

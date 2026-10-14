@@ -1978,8 +1978,12 @@ owner proof containing its pinned generation and Slot publication evidence;
 the test-only consumer adapter accepts this proof instead of independently
 supplied bytes and a host-staged generation. Corrupt, wrong-target or valid
 but Slotless owner artifacts cannot issue a proof; an empty proof cannot stage
-the consumer. Staging
-checks the exact imported Slot, and the consumer lease keeps the owner pin
+the consumer. The ordinary-build proof now pins its owner generation only when
+a supplied imported record matches the verified exported Slot, host target and
+loaded public-control binding. Private staging supplies an independently
+decoded consumer record and uses that same check; changed
+Slot contract/type, wrong target and empty proof do not yield a pin. The
+consumer lease keeps the owner pin
 after the proof and its Runtime are destroyed. A separately verified revision
 of the same owner package can issue its own proof and stage the consumer when
 the exact Slot contract is unchanged. It exposes no callable
@@ -2003,7 +2007,10 @@ MoonRuntime's generic staging API still takes host-supplied identity facts.
 The compiler-internal loader-issued proof now has a production build path, but
 ordinary loading does not yet use it for imported Ref candidates. Production
 candidate admission must require this proof, bind it to the exact consumer
-lease and imported Slot, and retain the owner pin before publication.
+lease and imported Slot, and retain the owner pin before publication. The
+proof's exact-Slot pin check is available in the ordinary driver; it does not
+authenticate the consumer record. Consumer lease binding and Runtime candidate
+admission remain separate gates.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and
@@ -2163,8 +2170,9 @@ not a public ABI decision or stable-release approval:
    the exact verified owner generation while it calls a borrowed Ref issued
    from a verified plugin generation. A private typed candidate now binds
    decoded source facts, the exact consumer lease and a proof issued by the
-   compiler-internal verified owner loader, now built without the test flag;
-   next connect that provenance and the imported-Slot rule to production Runtime
+   compiler-internal verified owner loader, now built without the test flag.
+   Its ordinary-build exact-Slot check pins the verified owner generation;
+   next bind this pin to the production consumer lease and Runtime
    candidates. The current Runtime candidate requires a same-generation Slot
    binding.
    The default publication verifier stays closed during that work.

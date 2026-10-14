@@ -66,6 +66,15 @@ class VerifiedMoonSlotOwner {
 public:
     explicit operator bool() const { return state_ != nullptr; }
     uint64_t generationId() const;
+    // The caller must verify the consumer artifact and its direct dependency.
+    // Pins the owner only when its verified export, supplied import record and
+    // loaded public-control binding describe the same Slot for this target.
+    bool pinImportedSlot(
+        const moon::DeclarationRecord& importedSlot,
+        const std::string& expectedTargetTriple,
+        const std::string& expectedDataLayout,
+        luna::runtime::MoonRuntime::PinnedGeneration& pinned,
+        std::string& error) const;
 
 private:
     friend bool loadVerifiedMoonSlotOwner(
