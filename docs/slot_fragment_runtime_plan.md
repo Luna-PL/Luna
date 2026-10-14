@@ -1522,8 +1522,8 @@ check its proof with the Native verifier and independent oracle, and load and
 call its v4 entry after the producer exits. The external host builds live
 Runtime capabilities, rejects invalid ones before entry, and checks successful
 Apply, repeated-resume execution failure and recovery. The test removes the
-output and confirms that adding another
-Ref callable is rejected even with the opt-in. This tests the enabled producer
+output and confirms that adding another Ref callable is rejected even with the
+opt-in. This tests the enabled producer
 path without changing the ordinary publication gate. Public ABI review remains
 before removing that gate.
 
@@ -1543,16 +1543,20 @@ other Ref uses and owned Result returns need their own profiles and proofs.
 | Status | Freeze `0` success, `1` invalid context, `2` invalid handle, `3` invalid target, `4` unexpected check, `5` execution failure for this profile. The host treats a known nonzero status as a completed call with a classified failure; an unknown status is a host-call error. No exception or owner crosses the C boundary. |
 | Host lifetime | Use an explicit trust record and matching host target ABI. The supported typed host path pins the verified image and generation, accepts only Runtime-issued live parent and Ref owners, verifies the exact Slot before entry, and keeps both owners and the code lease through the synchronous call. A caller must not retain descriptor, entry or opaque capability pointers beyond that lease. |
 | Compatibility | V1 proof/query remain required; v4 is optional for artifacts without this profile. If v4 is present but malformed, reject the entire image. Its canonical row participates in the proof export digest, so a loader that ignores v4 cannot silently downgrade a v4 artifact to v1. Change the layout, row encoding, calling convention or status semantics only through a new query/profile version; do not append fields to v4 in place. |
-| Platform scope | Limit the initial ABI promise to the 64-bit Linux, Windows and macOS release matrix. The 32-bit C layout probes establish offsets only. Review target triples and host C ABI with consumers; require the test-enabled source artifact to build, seal, load and call on each supported platform before lifting the gate. |
+| Platform scope | Limit the initial ABI promise to the 64-bit Linux, Windows and macOS release matrix. The 32-bit C layout probes establish offsets only. The test-enabled source artifact now builds, seals, loads and calls on all three platforms in CI. Review target triples and host C ABI with consumers before lifting the gate. |
 
 The internal test-enabled producer path now links a second artifact at the
 package destination after the private preview passes. It seals and reloads
 that output, calls success, preflight failures, execution failure and recovery
 through the pinned host API, then lets separate processes validate the proof,
 loader and same linked entry after the producer exits. The default build still
-refuses publication. Cross-platform CI must cover this new path, and host
-consumers must review the ABI draft before
-the default gate changes.
+refuses publication. At `ef66bad`, the full [Linux CI](https://github.com/Luna-PL/Luna/actions/runs/38522961403)
+(C++17, C++23, ASAN/UBSan and ThreadSanitizer),
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/38522961370) and
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/38522961366) passed with
+this external host call in the Native artifact test. The commit-subject check
+also passed. Host consumers still need to review the proposed ABI, including
+target triples and C calling convention, before the default gate changes.
 On 2026-10-14 the focused Native artifact test passed with this output path and
 external host call on Windows CLANG64, its ASAN/UBSan configuration, and Arch
 Linux WSL C++23. The file-guide inventory and 0.3 design-contract checks also
@@ -1936,19 +1940,18 @@ matches exactly. A switchable binding captures the active concrete profile
 and refuses a later generation that changes it. These rules describe a local
 candidate and do not publish a stable external ABI.
 
-The private typed-row encoder and validator above close only the local
-source-to-record check. Moon Container's Function code record already carries
-`requiresFragmentContext`, and the module verifier recomputes it from the
-CFG, but the Container encoder still rejects Apply graphs. The frozen
-`DeclarationRecord`/canonical contract and Native v1 export row omit the
-effect; the structured verifier also rejects an exported function that
-requires a Fragment context. The next boundary is therefore a public status
-mapping and a coordinated verifier/export rule for a context-dependent
-exported source function. Its effect and Ref target must enter sealed export
-metadata. Then extend the v2 profile, canonical hashing, loader validation
-and pinned Runtime lookup together, while keeping generic v1 rows untyped.
+The v2 no-argument profile above remains unchanged. A separate v4 Native
+Ref/unit row now seals the narrow source function's effect and exact Ref target
+beside the v1 exports; the loader validates its canonical proof row, and a
+pinned Runtime lookup retains the verified code for a typed call. Moon
+Container's Function code record carries `requiresFragmentContext`, and its
+module verifier recomputes that fact from the CFG, but the Container encoder
+still rejects Apply graphs. The frozen `DeclarationRecord`/canonical contract
+and Native v1 export row do not gain a context-dependent callable entry.
+General source import and Moon/Container publication still require their own
+wire and verifier rules; the v4 Native public ABI remains under review.
 
-### Next source Ref/apply gates (updated 2026-10-10)
+### Next source Ref/apply gates (updated 2026-10-14)
 
 This is the proposed implementation order for the remaining source feature,
 not a public ABI decision or stable-release approval:
@@ -2075,15 +2078,15 @@ not a public ABI decision or stable-release approval:
    and live parent context before entering the body. The test-only composition
    now executes both checks against live correct/wrong-target handles and a
    null parent;
-   the general ingress helper still excludes Apply regions. The candidate C
-   entry and status version are fixed, but publication must bind them in a
-   typed record attached to a verified export and carry the call-duration
-   code lease through the public
-   lookup path, then update
-   the structured verifier,
-   export symbol metadata, CodeGenerator and dropGlue together; the existing
-   check/transfer/drop tests cover native carrier behavior but do not prove a
-   published source entry.
+   the general ingress helper still excludes Apply regions. For this narrow
+   Ref/unit profile, the candidate C entry and status domain are now bound to
+   a proof-covered v4 typed row and a generated source wrapper. The loader
+   validates the row, and a pinned generation lookup calls it with Runtime-
+   issued owners and a call-duration library lease. A test-only producer
+   builds a sealed output; an independent host process loads and calls it.
+   Ordinary source publication still waits for review of the public ABI draft
+   above. The broader Ref and owned-Result paths require their own verifier,
+   export, codegen and cleanup contracts.
    The separate test-only tag/scalar/owner-cell and JIT Drop entries exercise the
    candidate commit and lease rule. Before publishing a resource return
    carrier, make the owner and JIT lease one lifetime unit; define status and

@@ -1136,8 +1136,8 @@ v4 事实复制到 `PinnedRefUnitCandidate` 视图。该视图保留已验证库
 新装载的固定 generation 调用链接 Ref 函数。独立进程随后使用 Native verifier
 与独立 oracle 核对 proof；另一个宿主进程在 producer 退出后装载并调用 v4
 入口，签发有效 Runtime 能力，入门前拒绝错误能力，并检查成功 Apply、重复 resume
-执行失败及恢复。测试移除输出后，确认即使开启
-测试开关，额外的 Ref callable 仍被拒绝。这验证了启用后的 producer 路径，
+执行失败及恢复。测试移除输出后，确认即使开启测试开关，额外的 Ref callable 仍被
+拒绝。这验证了启用后的 producer 路径，
 普通发布门禁不变；解除门禁前仍需审议公开 ABI。
 
 #### Native Ref／unit 公开 ABI 审议草案（2026-10-14）
@@ -1154,13 +1154,18 @@ v4 事实复制到 `PinnedRefUnitCandidate` 视图。该视图保留已验证库
 | 状态 | 此 profile 固定 `0` 成功、`1` context 无效、`2` handle 无效、`3` 目标无效、`4` 未预期检查、`5` 执行失败。已知非零状态表示调用完成并得到分类失败；未知状态是宿主调用错误。不得让异常或 owner 穿越 C 边界。 |
 | 宿主寿命 | 使用显式 trust 记录及与宿主匹配的目标 ABI。受支持的类型化宿主路径固定已验证映像及 generation，只接收 Runtime 签发的有效 parent／Ref owner，入门前核对精确 Slot，并在同步调用全程持有两个 owner 与代码 lease。调用方不得在 lease 以外保留 descriptor、入口或 opaque 能力指针。 |
 | 兼容性 | v1 proof／query 仍必需；不含该 profile 的产物可缺少 v4。若存在畸形 v4，则整份映像被拒绝。v4 规范行参与 proof 导出摘要，因此忽略 v4 的旧 loader 不能将该产物静默降级成 v1。布局、行编码、调用约定或状态语义变更必须使用新 query／profile 版本，不得在 v4 原位追加字段。 |
-| 平台范围 | 首次 ABI 承诺限于 64 位 Linux、Windows 和 macOS 发布矩阵。32 位 C 布局探针只证明偏移。须与宿主使用方审议目标 triple 和宿主 C ABI；解除门禁前，测试启用的源码产物还须在各支持平台完成构建、签封、加载和调用。 |
+| 平台范围 | 首次 ABI 承诺限于 64 位 Linux、Windows 和 macOS 发布矩阵。32 位 C 布局探针只证明偏移。测试启用的源码产物现已在三平台 CI 完成构建、签封、加载和调用；解除门禁前仍须与宿主使用方审议目标 triple 和宿主 C ABI。 |
 
 内部测试启用的 producer 路径现于私有预览通过后，在 package 目标位置再次
 链接产物。它签封并重新加载该输出，经固定宿主 API 调用成功、预检失败、执行
 失败与恢复，再由独立进程验证 proof、loader，并于 producer 退出后调用同一
-链接入口。默认构建仍拒绝发布。新的路径
-仍须经跨平台 CI，宿主使用方也须审议 ABI 草案，然后才能改变默认门禁。
+链接入口。默认构建仍拒绝发布。`ef66bad` 的完整
+[Linux CI](https://github.com/Luna-PL/Luna/actions/runs/38522961403)
+（C++17、C++23、ASAN／UBSan 与 ThreadSanitizer）、
+[Windows CI](https://github.com/Luna-PL/Luna/actions/runs/38522961370) 和
+[macOS CI](https://github.com/Luna-PL/Luna/actions/runs/38522961366) 均通过，
+Native artifact 测试包含该独立宿主调用；提交主题检查亦通过。改变默认门禁前，
+宿主使用方仍须审议拟议 ABI，包括目标 triple 与 C 调用约定。
 2026-10-14，新输出路径及独立宿主调用在 Windows CLANG64、其 ASAN／UBSan 配置
 和 Arch Linux WSL C++23 的 Native artifact 聚焦测试均通过；本地文件清单及
 0.3 设计契约检查也通过。
@@ -1448,16 +1453,15 @@ Luna 的 LLVM emitter，覆盖并行 query 与精确大小规则。
 当前具体 profile，拒绝以后切换到不同 profile 的 generation。这些规则是本地
 候选，并非已发布的稳定外部 ABI。
 
-上述私有类型化行编码与校验只完成了本地源码到记录的核对。Moon Container 的
-Function code 记录已保存 `requiresFragmentContext`，module verifier 会从 CFG
-重新推导它，但 Container 编码器仍拒绝 Apply graph。冻结的 `DeclarationRecord`／
-规范契约与 Native v1 导出行均未包含该 effect；structured verifier 还会拒绝
-要求 Fragment context 的导出函数。因此下一道边界是公开状态映射，以及针对依赖
-context 的源码导出函数一同调整的 verifier／export 规则。其 effect 和 Ref 目标
-须进入封闭的导出 metadata；随后一起扩展 v2 profile、规范化哈希、loader 校验
-和固定的 Runtime lookup，同时让通用 v1 行保持无类型化入口语义。
+上述 v2 无参数 profile 保持不变。独立的 v4 Native Ref／unit 行现把受限源码函数的
+effect 与精确 Ref 目标同 v1 导出一起签封；loader 验证其规范 proof 行，固定的
+Runtime lookup 为类型化调用保留已验证代码。Moon Container 的 Function code
+记录已保存 `requiresFragmentContext`，module verifier 会从 CFG 重新推导它，
+但 Container 编码器仍拒绝 Apply graph。冻结的 `DeclarationRecord`／规范契约和
+Native v1 导出行仍不添加依赖 context 的可调用入口。通用源码 import 与
+Moon／Container 发布仍需各自的 wire 和 verifier 规则；v4 Native 公开 ABI 仍待审议。
 
-### 下一步源码 Ref／apply 完成门（更新于 2026-10-10）
+### 下一步源码 Ref／apply 完成门（更新于 2026-10-14）
 
 以下是剩余源码功能的建议实施顺序，不是公开 ABI 决议或稳定版发布批准：
 
@@ -1546,14 +1550,12 @@ context 的源码导出函数一同调整的 verifier／export 规则。其 effe
    与 opaque 内部类型只是验证证据，不是公开契约。最小候选是一个同步共享借用 Ref
    参数和 unit 返回，由返回状态的 wrapper 在进入函数体前校验精确 Slot 和有效的
    parent context。仅测试用的组合入口现已用真实正确／错误目标 handle 和空
-   parent 执行两项检查；通用入口 helper 仍排除 Apply region。候选 C 入口与
-   状态版本已经固定；发布前仍须将其绑定在类型化记录中、附着到已验证导出，并将
-   调用期代码 lease 接入公开
-   lookup 路径，再同步修改
-   structured verifier、导出符号
-   metadata、CodeGenerator 和 dropGlue；
-   现有 check／transfer／drop 测试覆盖 native carrier 行为，却不能证明源码入口
-   已发布。
+   parent 执行两项检查；通用入口 helper 仍排除 Apply region。对于这项受限的
+   Ref／unit profile，候选 C 入口与状态域现已绑定到 proof 覆盖的 v4 类型化行和
+   生成的源码 wrapper。loader 验证该行，固定 generation 的 lookup 以 Runtime
+   签发的 owner 和贯穿调用期的库 lease 执行它。仅测试用 producer 生成签封产物；
+   独立宿主进程加载并调用。普通源码发布仍须审议上面的公开 ABI 草案。更广的 Ref
+   与拥有型 Result 路径仍需各自的 verifier、导出、codegen 和清理契约。
    独立的仅测试用 tag／scalar／owner-cell 与 JIT Drop 入口已验证候选提交及
    lease 规则。
    发布资源返回 carrier 前须把 owner 与 JIT lease 合并为一个寿命单元，并定义
