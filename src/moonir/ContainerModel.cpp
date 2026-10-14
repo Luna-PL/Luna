@@ -86,8 +86,24 @@ bool ContainerModelCodec::encodeContainerWithPolicy(
             const auto target = module.resolveRuntimeFragmentRefTarget(type.id);
             const auto* slot = target
                 ? module.findDeclaration(*target) : nullptr;
-            if (!slot || slot->id.rfind(module.name + "::", 0) != 0) {
-                error = "Native Ref/unit preparation preview requires a same-package Slot target";
+            if (!slot) {
+                error = "Native Ref/unit preparation preview has no exact Slot target";
+                return false;
+            }
+            if (slot->id.rfind(module.name + "::", 0) == 0) continue;
+            const bool evidenced = std::any_of(
+                module.dependencySlotPublications.begin(),
+                module.dependencySlotPublications.end(), [&](const auto& owner) {
+                    return owner && owner->matches(*slot) &&
+                        slot->id.rfind(owner->ownerPackageId() + "::", 0) == 0 &&
+                        std::any_of(module.packageUses.begin(),
+                            module.packageUses.end(), [&](const auto& use) {
+                                return use.ownerPackageId == module.name &&
+                                    use.packageId == owner->ownerPackageId();
+                            });
+                });
+            if (!evidenced) {
+                error = "Native Ref/unit preparation preview requires verified owner Slot evidence";
                 return false;
             }
         }
@@ -97,34 +113,36 @@ bool ContainerModelCodec::encodeContainerWithPolicy(
     if (!buildConcreteProjection(
             manifest, module, projection, error)) return false;
     projection.formatMinor = formatMinor;
-    // Source composites still have compiler-authoritative SlotDecls. This
-    // evidence is used only while verifying the concrete export projection;
-    // artifact consumers must obtain it from independently verified owners.
+    // Published source composites still have compiler-authoritative SlotDecls.
+    // The private Ref preparation preview requires independently decoded owner
+    // evidence and never synthesizes it from the consumer's declarations.
     std::map<std::string, std::vector<DeclarationRecord>> sourceSlots;
-    for (const auto& executable : module.declarations) {
-        const auto* slot = dynamic_cast<const SlotDecl*>(executable.get());
-        if (!slot || !slot->isExported || slot->packageId == module.name) continue;
-        if (!std::any_of(module.packageUses.begin(), module.packageUses.end(),
-                [&](const auto& use) {
-                    return use.ownerPackageId == module.name &&
-                        use.packageId == slot->packageId;
-                })) continue;
-        const auto* record = projection.findDeclaration(
-            DeclarationRef{slot->symbolId, slot->contractId});
-        if (record && record->id.rfind(slot->packageId + "::", 0) == 0)
-            sourceSlots[slot->packageId].push_back(*record);
-    }
-    for (auto& group : sourceSlots) {
-        const auto& owner = group.first;
-        auto& slots = group.second;
-        if (std::any_of(projection.dependencySlotPublications.begin(),
-                projection.dependencySlotPublications.end(), [&](const auto& evidence) {
-                    return evidence && evidence->ownerPackageId() == owner;
-                })) continue;
-        projection.dependencySlotPublications.push_back(
-            ContainerModelCodec::makeSlotPublicationEvidence(
-                owner, manifest.targetTriple, manifest.dataLayout,
-                std::move(slots)));
+    if (!nativeRefUnitPreparation) {
+        for (const auto& executable : module.declarations) {
+            const auto* slot = dynamic_cast<const SlotDecl*>(executable.get());
+            if (!slot || !slot->isExported || slot->packageId == module.name) continue;
+            if (!std::any_of(module.packageUses.begin(), module.packageUses.end(),
+                    [&](const auto& use) {
+                        return use.ownerPackageId == module.name &&
+                            use.packageId == slot->packageId;
+                    })) continue;
+            const auto* record = projection.findDeclaration(
+                DeclarationRef{slot->symbolId, slot->contractId});
+            if (record && record->id.rfind(slot->packageId + "::", 0) == 0)
+                sourceSlots[slot->packageId].push_back(*record);
+        }
+        for (auto& group : sourceSlots) {
+            const auto& owner = group.first;
+            auto& slots = group.second;
+            if (std::any_of(projection.dependencySlotPublications.begin(),
+                    projection.dependencySlotPublications.end(), [&](const auto& evidence) {
+                        return evidence && evidence->ownerPackageId() == owner;
+                    })) continue;
+            projection.dependencySlotPublications.push_back(
+                ContainerModelCodec::makeSlotPublicationEvidence(
+                    owner, manifest.targetTriple, manifest.dataLayout,
+                    std::move(slots)));
+        }
     }
     if (!validateSlotDependencies(manifest, projection,
             projection.dependencySlotPublications, error, limits)) return false;

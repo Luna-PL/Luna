@@ -4,7 +4,11 @@
 #include "driver/CompilerPipeline.h"
 #include "driver/MoonGeneration.h"
 #include "moonir/ContainerModel.h"
+#include "moonir/Lowering.h"
+#include "moonir/Sealer.h"
+#include "moonir/Verifier.h"
 #include "runtime/RuntimeFragment.h"
+#include "tooling/AnalysisSnapshot.h"
 
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 
@@ -117,6 +121,71 @@ int runCrossPackageContainerTest() {
         !moon::ContainerModelCodec::decodeContainer(otherTargetBytes,
             otherDecodedManifest, otherTarget, error))
         return fail("negative publication-evidence owners did not verify");
+    auto refSnapshot = luna::tooling::AnalysisSnapshot::analyzePath(
+        (fixtures / "refprep").string());
+    if (!refSnapshot.success()) {
+        for (const auto& issue : refSnapshot.errors())
+            std::cerr << diagnostic::render(issue) << '\n';
+        return fail("cross-package Ref/apply source did not analyze");
+    }
+    moon::LunaLowerer refLowerer;
+    auto refModule = refLowerer.lower(
+        *refSnapshot.program(), *refSnapshot.symbolTable());
+    if (!refModule || !refLowerer.errors().empty()) {
+        for (const auto& issue : refLowerer.errors())
+            std::cerr << diagnostic::render(issue) << '\n';
+        return fail("cross-package Ref/apply source did not lower");
+    }
+    moon::Sealer refSealer;
+    if (!refSealer.sealFunctionBodies(*refModule)) {
+        for (const auto& message : refSealer.errors())
+            std::cerr << message << '\n';
+        return fail("cross-package Ref/apply body did not seal");
+    }
+    moon::Verifier refPreparationVerifier(
+        moon::VerificationPolicy::NativeRefUnitPreparation);
+    if (!refPreparationVerifier.verify(*refModule)) {
+        for (const auto& diagnostic : refPreparationVerifier.errors())
+            std::cerr << diagnostic.message << '\n';
+        return fail("cross-package Ref/apply preparation did not verify");
+    }
+    const auto refManifest = makeManifest(*refModule);
+    if (moon::ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
+            refManifest, *refModule, error) ||
+        error.find("requires verified owner Slot evidence") ==
+            std::string::npos)
+        return fail("cross-package Ref/apply preview accepted missing owner evidence");
+    refModule->dependencySlotPublications = {changedContract};
+    if (moon::ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
+            refManifest, *refModule, error) ||
+        error.find("requires verified owner Slot evidence") ==
+            std::string::npos)
+        return fail("cross-package Ref/apply preview accepted a changed Slot contract");
+    refModule->dependencySlotPublications = {
+        otherTarget.localSlotPublication};
+    if (moon::ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
+            refManifest, *refModule, error) ||
+        error.find("target does not match") == std::string::npos)
+        return fail("cross-package Ref/apply preview accepted a wrong-target owner");
+    refModule->dependencySlotPublications = dependencies;
+    const auto refPackageUses = refModule->packageUses;
+    refModule->packageUses.clear();
+    if (moon::ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
+            refManifest, *refModule, error))
+        return fail("cross-package Ref/apply preview accepted an undeclared owner");
+    refModule->packageUses = refPackageUses;
+    if (!moon::ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
+            refManifest, *refModule, error)) {
+        std::cerr << error << '\n';
+        return fail("cross-package Ref/apply owner-backed 0.4 preview failed");
+    }
+    std::vector<uint8_t> rejectedRefContainer{1, 2, 3};
+    if (moon::ContainerModelCodec::encodeContainer(
+            refManifest, *refModule, rejectedRefContainer, error,
+            {}, moon::RefWireFormatMinor) ||
+        !rejectedRefContainer.empty() ||
+        error.find("MoonIR verification failed") == std::string::npos)
+        return fail("ordinary container encoder published cross-package Ref/apply");
     moon::Module plugin;
     plugin.name = "unchanged.sentinel";
     decodedManifest.packageId = "unchanged.sentinel";

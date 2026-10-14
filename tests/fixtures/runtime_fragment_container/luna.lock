@@ -9,3 +9,9 @@ id = "canonical.container.plugin"
 version = "0.3.0"
 source = "workspace:plugin"
 hash = "runtime-fragment-container-plugin-0.3.0"
+
+[[package]]
+id = "canonical.container.refprep"
+version = "0.3.0"
+source = "workspace:refprep"
+hash = "runtime-fragment-container-refprep-0.3.0"

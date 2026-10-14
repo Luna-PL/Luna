@@ -1,2 +1,2 @@
 [workspace]
-members = ["host", "plugin"]
+members = ["host", "plugin", "refprep"]

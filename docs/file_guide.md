@@ -718,6 +718,8 @@ Git internals, and ignored generated artifacts are excluded.
 - `tests/fixtures/runtime_fragment_container/luna.workspace`
 - `tests/fixtures/runtime_fragment_container/plugin/luna.package`
 - `tests/fixtures/runtime_fragment_container/plugin/src/effects.luna`
+- `tests/fixtures/runtime_fragment_container/refprep/luna.package`
+- `tests/fixtures/runtime_fragment_container/refprep/src/effects.luna`
 - `tests/fixtures/runtime_slot_cost.luna`
 - `tests/fixtures/enum_match.luna`
 - `tests/fixtures/enum_match_arity_invalid.luna`

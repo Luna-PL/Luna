@@ -130,8 +130,9 @@ public:
         uint32_t formatMinor = FormatMinor);
     // Internal acceptance preview for Native Ref/unit preparation. This
     // validates a 0.4 whole-container encode/decode/re-encode cycle using the
-    // preparation verifier, but returns no bytes or decoded Module and does
-    // not authorize publication.
+    // preparation verifier. Foreign Slot targets require evidence decoded
+    // from the owner's verified container. The preview returns no bytes or
+    // decoded Module and does not authorize publication.
     static bool verifyNativeRefUnitPreparationRoundTrip(
         const ContainerManifest& manifest, const Module& module,
         std::string& error, const ContainerLimits& limits = {});
