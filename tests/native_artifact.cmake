@@ -181,6 +181,27 @@ if(ref_apply_build_result EQUAL 0 OR ref_apply_publication_gate EQUAL -1 OR
         "Native Ref/unit generation bypassed the artifact proof gate.\n"
         "${ref_apply_build_output}\n${ref_apply_build_error}")
 endif()
+set(ENV{LUNA_NATIVE_REF_UNIT_PREVIEW_CALL_TEST} "")
+execute_process(
+    COMMAND "${LUNA_EXECUTABLE}" build "${ref_apply_package_dir}" -t native -O2
+    RESULT_VARIABLE ref_apply_ordinary_result
+    OUTPUT_VARIABLE ref_apply_ordinary_output
+    ERROR_VARIABLE ref_apply_ordinary_error)
+string(FIND "${ref_apply_ordinary_output}\n${ref_apply_ordinary_error}"
+       "Native Ref/unit publication remains gated after pinned typed preview validation"
+       ref_apply_ordinary_gate)
+string(FIND "${ref_apply_ordinary_output}\n${ref_apply_ordinary_error}"
+       "Native Ref/unit private linked preview proved ingress, failure and recovery"
+       ref_apply_ordinary_probe)
+if(ref_apply_ordinary_result EQUAL 0 OR ref_apply_ordinary_gate EQUAL -1 OR
+   NOT ref_apply_ordinary_probe EQUAL -1 OR
+   EXISTS "${ref_apply_artifact}" OR EXISTS "${ref_apply_artifact}.trust" OR
+   EXISTS "${ref_apply_artifact}.ll" OR EXISTS "${ref_apply_artifact}.o" OR
+   EXISTS "${ref_apply_artifact}.luna-link-state")
+    message(FATAL_ERROR
+        "Ordinary Native Ref/unit build ran the private probe or bypassed the publication gate.\n"
+        "${ref_apply_ordinary_output}\n${ref_apply_ordinary_error}")
+endif()
 file(APPEND "${ref_apply_package_dir}/src/api.luna"
      "\nfn extra_ref(value: RuntimeFragmentRef<ref_checkpoint>) -> unit {}\n")
 execute_process(

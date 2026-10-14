@@ -1510,11 +1510,18 @@ library lease through the synchronous entry. The independent v4 fixture proves
 success, rejects absent or mismatched capabilities before invocation, and calls
 after the original Runtime and direct library view have been released. The
 Native build invokes a known source preview only with the internal test opt-in;
-ordinary builds do not execute user source. The next steps are cross-platform
-verification and a reviewed public ABI policy before removing the publication
-gate.
+the ordinary build of that same source is checked to remain gated without the
+probe or output artifacts. The next steps are macOS CI verification of this
+linked source path and a reviewed public ABI policy before removing the
+publication gate.
 On 2026-10-14 the CLANG64 build passed all 81 CTest cases, and the focused
 Native artifact case passed under ASAN/UBSan with the linked source probe.
+An Arch Linux WSL build with Clang/LLVM 22.1.8 rebuilt all targets and passed
+80/80 CTest cases on the same date. The WSL test process used
+`core.autocrlf=true` so Git interpreted the Windows checkout of frozen child
+worktrees consistently; without it, only the frozen ecosystem baseline failed
+on apparent line-ending changes. Focused Native artifact cases passed on both
+Windows and Linux after the ordinary-build regression was added.
 
 On 2026-10-06 an actual `-t native` build of an exported Runtime Slot caller
 failed at the MoonIR verifier with the missing runtime-aware public entry ABI
