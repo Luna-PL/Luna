@@ -367,17 +367,57 @@ bool ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
 }
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
-bool ContainerModelCodec::prepareNativeRefUnitModuleForTest(
+bool ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
     const ContainerManifest& manifest, const Module& source,
-    Module& prepared, std::string& error, const ContainerLimits& limits) {
+    std::vector<uint8_t>& encoded, std::string& error,
+    const ContainerLimits& limits) {
+    encoded.clear();
     return verifyNativeRefUnitPreparationRoundTripImpl(
-        manifest, source, &prepared, error, limits);
+        manifest, source, &encoded, error, limits);
+}
+
+bool ContainerModelCodec::decodeNativeRefUnitPreparationForTargetForTest(
+    const std::vector<uint8_t>& input,
+    const std::string& expectedTargetTriple,
+    const std::string& expectedDataLayout,
+    const SlotPublicationDependencies& ownerEvidence,
+    ContainerManifest& manifest, Module& module, std::string& error,
+    const ContainerLimits& limits) {
+    if (expectedTargetTriple.empty() || expectedDataLayout.empty()) {
+        error = "Native Ref/unit preparation target expectation is incomplete";
+        return false;
+    }
+    ContainerManifest decodedManifest;
+    Module decodedModule;
+    if (!decodeContainerWithPolicy(input, decodedManifest, decodedModule,
+            error, limits, ownerEvidence, true))
+        return false;
+    if (decodedModule.formatMinor != RefWireFormatMinor ||
+        decodedManifest.targetTriple != expectedTargetTriple ||
+        decodedManifest.dataLayout != expectedDataLayout) {
+        error = "Native Ref/unit preparation container target or format does not match the host";
+        return false;
+    }
+    std::vector<uint8_t> canonical;
+    if (!verifyNativeRefUnitPreparationRoundTripImpl(
+            decodedManifest, decodedModule, &canonical, error, limits))
+        return false;
+    if (canonical != input) {
+        error = "Native Ref/unit preparation container is not byte-canonical";
+        return false;
+    }
+    manifest = std::move(decodedManifest);
+    module = std::move(decodedModule);
+    module.rebuildIndexes();
+    error.clear();
+    return true;
 }
 #endif
 
 bool ContainerModelCodec::verifyNativeRefUnitPreparationRoundTripImpl(
     const ContainerManifest& manifest, const Module& module,
-    Module* prepared, std::string& error, const ContainerLimits& limits) {
+    std::vector<uint8_t>* encoded, std::string& error,
+    const ContainerLimits& limits) {
     const auto refTypes = std::count_if(
         module.typeTable.begin(), module.typeTable.end(), [](const auto& type) {
             return type.kind == TypeKind::RuntimeFragmentRef;
@@ -414,7 +454,7 @@ bool ContainerModelCodec::verifyNativeRefUnitPreparationRoundTripImpl(
         error = "Native Ref/unit preparation container is not byte-canonical";
         return false;
     }
-    if (prepared) *prepared = std::move(decodedModule);
+    if (encoded) *encoded = std::move(first);
     error.clear();
     return true;
 }

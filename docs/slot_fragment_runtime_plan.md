@@ -1954,11 +1954,12 @@ exact Slot publication snapshot decoded from a separate verified owner
 container; it rejects missing or changed evidence, an undeclared owner and a
 different target. The Boolean preview returns no container bytes or executable
 module. Ordinary whole-container encode/decode still use publication
-verification and reject the Ref module. A test-build-only preparation result
-now returns the decoded module after that full canonical round-trip. The
-private JIT consumes this
-decoded module; failed owner-Contract validation leaves the caller's output
-untouched. No container bytes or module enter the public generation loader.
+verification and reject the Ref module. A test-build-only encoder now returns
+canonical 0.4 bytes after that round-trip. A separate private decoder checks
+the host target, explicit owner evidence and byte-canonical re-encoding before
+returning a module to the test JIT. Missing or changed owner evidence, target
+mismatch and corrupted bytes fail without publishing a partial module; the
+ordinary decoder and public generation loader reject those private bytes.
 Canonical Ref Apply CFG verification now accepts a record-only foreign Slot
 when an exact Slot publication snapshot from an independently verified owner
 container and a direct package dependency are present. A focused regression
@@ -1969,8 +1970,8 @@ test JIT and calls a Runtime-issued borrowed Ref from an independently
 verified plugin generation with an explicit parent context. Invalid
 parent/handle calls fail, and repeated calls succeed after Runtime teardown
 with the borrowed Ref as the remaining plugin-generation pin. This executes
-the two-package source body privately;
-the Ref consumer is not loaded as a verified generation or published artifact.
+the two-package source body privately; the Ref consumer is not loaded as a
+verified generation or published artifact.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and
@@ -2124,9 +2125,9 @@ not a public ABI decision or stable-release approval:
    and validate Ref type/Apply-region wire rules in the module verifier and
    Moon Container encoder/decoder. Invalid or older artifacts must fail
    without publishing a partial generation. The source consumer and separate
-   owner evidence now pass the private 0.4 preparation round-trip, and the
-   private JIT of the wire-decoded source calls a borrowed Ref issued from a
-   verified plugin generation. Next load the Ref consumer itself through a
+   owner evidence now pass the private 0.4 artifact encode and independent
+   decode, and the private JIT of that decoded source calls a borrowed Ref
+   issued from a verified plugin generation. Next load the Ref consumer itself through a
    verified generation import with validated owner evidence. The default
    publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref

@@ -158,14 +158,13 @@ int runCrossPackageContainerTest() {
             std::string::npos)
         return fail("cross-package Ref/apply preview accepted missing owner evidence");
     refModule->dependencySlotPublications = {changedContract};
-    moon::Module rejectedPreparedRefModule;
-    rejectedPreparedRefModule.name = "unchanged.sentinel";
-    if (moon::ContainerModelCodec::prepareNativeRefUnitModuleForTest(
-            refManifest, *refModule, rejectedPreparedRefModule, error) ||
-        rejectedPreparedRefModule.name != "unchanged.sentinel" ||
+    std::vector<uint8_t> rejectedPreparedRefBytes{1, 2, 3};
+    if (moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
+            refManifest, *refModule, rejectedPreparedRefBytes, error) ||
+        !rejectedPreparedRefBytes.empty() ||
         error.find("requires verified owner Slot evidence") ==
             std::string::npos)
-        return fail("cross-package Ref/apply preparation published a changed Slot contract");
+        return fail("cross-package Ref/apply preparation emitted a changed Slot contract");
     refModule->dependencySlotPublications = {
         otherTarget.localSlotPublication};
     if (moon::ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
@@ -179,16 +178,74 @@ int runCrossPackageContainerTest() {
             refManifest, *refModule, error))
         return fail("cross-package Ref/apply preview accepted an undeclared owner");
     refModule->packageUses = refPackageUses;
-    moon::Module preparedRefModule;
-    if (!moon::ContainerModelCodec::prepareNativeRefUnitModuleForTest(
-            refManifest, *refModule, preparedRefModule, error)) {
+    std::vector<uint8_t> refBytes;
+    if (!moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
+            refManifest, *refModule, refBytes, error) || refBytes.empty()) {
         std::cerr << error << '\n';
-        return fail("cross-package Ref/apply owner-backed 0.4 preview failed");
+        return fail("cross-package Ref/apply owner-backed 0.4 encoding failed");
+    }
+    auto rejectedPrivateDecode = [&](const std::vector<uint8_t>& bytes,
+            const std::string& targetTriple, const std::string& dataLayout,
+            const moon::SlotPublicationDependencies& ownerEvidence) {
+        moon::ContainerManifest rejectedManifest;
+        rejectedManifest.packageId = "unchanged.sentinel";
+        moon::Module rejectedModule;
+        rejectedModule.name = "unchanged.sentinel";
+        return !moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTargetForTest(
+                   bytes, targetTriple, dataLayout, ownerEvidence,
+                   rejectedManifest, rejectedModule, error) &&
+            rejectedManifest.packageId == "unchanged.sentinel" &&
+            rejectedModule.name == "unchanged.sentinel" &&
+            !rejectedModule.localSlotPublication;
+    };
+    auto corruptedRefBytes = refBytes;
+    corruptedRefBytes.back() ^= 1;
+    if (!rejectedPrivateDecode(refBytes, refManifest.targetTriple,
+            refManifest.dataLayout, {}) ||
+        !rejectedPrivateDecode(refBytes, refManifest.targetTriple,
+            refManifest.dataLayout, {changedContract}) ||
+        !rejectedPrivateDecode(refBytes, refManifest.targetTriple,
+            refManifest.dataLayout, {otherTarget.localSlotPublication}) ||
+        !rejectedPrivateDecode(refBytes, refManifest.targetTriple + "-wrong",
+            refManifest.dataLayout, dependencies) ||
+        !rejectedPrivateDecode(refBytes, refManifest.targetTriple,
+            refManifest.dataLayout + "-wrong", dependencies) ||
+        !rejectedPrivateDecode(corruptedRefBytes, refManifest.targetTriple,
+            refManifest.dataLayout, dependencies))
+        return fail("cross-package Ref/apply private decoder accepted an invalid artifact");
+    moon::ContainerManifest preparedRefManifest;
+    moon::Module preparedRefModule;
+    if (!moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTargetForTest(
+            refBytes, refManifest.targetTriple, refManifest.dataLayout,
+            dependencies, preparedRefManifest, preparedRefModule, error)) {
+        std::cerr << error << '\n';
+        return fail("cross-package Ref/apply owner-backed 0.4 decode failed");
     }
     if (preparedRefModule.formatMinor != moon::RefWireFormatMinor ||
         preparedRefModule.name != refManifest.packageId ||
+        preparedRefManifest.packageId != refManifest.packageId ||
         preparedRefModule.dependencySlotPublications.size() != 1)
         return fail("cross-package Ref/apply JIT input was not the verified 0.4 decode");
+    moon::ContainerManifest rejectedPublishedRefManifest;
+    rejectedPublishedRefManifest.packageId = "unchanged.sentinel";
+    moon::Module rejectedPublishedRefModule;
+    rejectedPublishedRefModule.name = "unchanged.sentinel";
+    if (moon::ContainerModelCodec::decodeContainerForTarget(refBytes,
+            refManifest.targetTriple, refManifest.dataLayout,
+            rejectedPublishedRefManifest, rejectedPublishedRefModule,
+            error, {}, dependencies) ||
+        rejectedPublishedRefManifest.packageId != "unchanged.sentinel" ||
+        rejectedPublishedRefModule.name != "unchanged.sentinel")
+        return fail("ordinary container decoder published cross-package Ref/apply");
+    {
+        luna::runtime::MoonRuntime runtime;
+        luna::runtime::MoonRuntime::PinnedGeneration rejectedGeneration;
+        if (luna::driver::loadVerifiedMoonGenerationOnce(runtime, refBytes,
+                refManifest.targetTriple, refManifest.dataLayout,
+                rejectedGeneration, error, dependencies) || rejectedGeneration ||
+            runtime.pin(refManifest.packageId))
+            return fail("private Ref/apply artifact entered the public generation loader");
+    }
     std::vector<uint8_t> rejectedRefContainer{1, 2, 3};
     if (moon::ContainerModelCodec::encodeContainer(
             refManifest, *refModule, rejectedRefContainer, error,
