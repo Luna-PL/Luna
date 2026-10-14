@@ -1,5 +1,6 @@
 #include "moonir_canonical_test_support.h"
 
+#include "codegen/CodeGenerator.h"
 #include "diagnostics/Diagnostic.h"
 #include "driver/CompilerPipeline.h"
 #include "driver/MoonGeneration.h"
@@ -8,6 +9,7 @@
 #include "moonir/Sealer.h"
 #include "moonir/Verifier.h"
 #include "runtime/RuntimeFragment.h"
+#include "runtime/RuntimeFragmentCompilerBridge.h"
 #include "tooling/AnalysisSnapshot.h"
 
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
@@ -186,6 +188,26 @@ int runCrossPackageContainerTest() {
         !rejectedRefContainer.empty() ||
         error.find("MoonIR verification failed") == std::string::npos)
         return fail("ordinary container encoder published cross-package Ref/apply");
+    moon::FunctionDecl* refSource = nullptr;
+    for (auto& declaration : refModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function && function->name == "apply_ref")
+            refSource = function;
+    std::vector<uint8_t> refEntryRecord;
+    if (!refSource || !refSource->controlFlow)
+        return fail("cross-package Ref/apply source lost its executable function");
+    auto refJit = CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
+        *refModule, *refSource, error, &refEntryRecord);
+    if (!refJit) {
+        std::cerr << error << '\n';
+        return fail("cross-package Ref/apply private JIT did not materialize");
+    }
+    auto refEntry = CodeGenerator::loadPrivateRuntimeFragmentRefApplyEntryForTest(
+        *refModule, *refSource, refEntryRecord, std::move(refJit), error);
+    if (!refEntry) {
+        std::cerr << error << '\n';
+        return fail("cross-package Ref/apply private entry did not load");
+    }
     moon::Module plugin;
     plugin.name = "unchanged.sentinel";
     decodedManifest.packageId = "unchanged.sentinel";
@@ -264,6 +286,7 @@ int runCrossPackageContainerTest() {
         return fail("verified evidence aliased mutable owner export rows");
 
     luna::runtime::MoonRuntime::PinnedBinding hostBinding, pluginBinding;
+    luna::runtime::RuntimeFragmentRefHandle borrowedRef;
     luna::runtime::RuntimeFragmentExecutionContext noneContext, oneContext;
     const luna::runtime::RuntimeSlotRequirement requirement{
         slot->symbolId.value, slot->contractId.value};
@@ -306,9 +329,15 @@ int runCrossPackageContainerTest() {
                 pluginGeneration, requirement, candidates, error) || candidates.size() != 1)
             return fail("cross-package verified candidate discovery failed");
         luna::runtime::RuntimeFragmentRef reference;
+        luna::runtime::RuntimeFragmentRef borrowedSource;
         if (!luna::runtime::makeOwnedRuntimeFragmentRef(*candidates.at(0),
-                requirement, {"", nullptr}, reference, error))
+                requirement, {"", nullptr}, reference, error) ||
+            !luna::runtime::makeOwnedRuntimeFragmentRef(*candidates.at(0),
+                requirement, {"", nullptr}, borrowedSource, error))
             return fail("host could not choose the verified plugin Fragment");
+        if (!luna::runtime::makeRuntimeFragmentRefHandle(
+                borrowedSource, requirement, borrowedRef, error))
+            return fail("verified plugin Fragment could not enter borrowed Ref ingress");
         std::vector<luna::runtime::RuntimeFragmentRef> selected;
         selected.push_back(std::move(reference));
         luna::runtime::RuntimeFragmentBindingSet one;
@@ -332,6 +361,20 @@ int runCrossPackageContainerTest() {
                 return fail("verified cross-generation dispatch failed after Runtime teardown");
         }
     }
+    // Leave the borrowed Ref as the only remaining pin on the plugin generation.
+    pluginBinding = {};
+    oneContext = {};
+    if (!borrowedRef ||
+        refEntry->call(nullptr, const_cast<void*>(borrowedRef.opaque())) !=
+            LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST ||
+        refEntry->call(noneContext.opaque(), nullptr) !=
+            LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST)
+        return fail("cross-package Ref/apply borrowed ingress accepted an invalid capability");
+    for (int iteration = 0; iteration < 16; ++iteration)
+        if (refEntry->call(noneContext.opaque(),
+                const_cast<void*>(borrowedRef.opaque())) !=
+                LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+            return fail("cross-package Ref/apply lost its pinned borrowed call");
     return 0;
 }
 

@@ -1959,8 +1959,13 @@ Canonical Ref Apply CFG verification now accepts a record-only foreign Slot
 when an exact Slot publication snapshot from an independently verified owner
 container and a direct package dependency are present. A focused regression
 rejects missing evidence, an undeclared owner, and a changed ContractId. The
-cross-package source and container proof remains preparation-only; pinned Ref
-ingress, execution and publication remain open.
+cross-package container proof remains preparation-only. The source-lowered
+consumer is also materialized through the private test JIT and calls a
+Runtime-issued borrowed Ref from an independently verified plugin generation
+with an explicit parent context. Invalid parent/handle calls fail, and repeated
+calls succeed after Runtime teardown with the borrowed Ref as the remaining
+plugin-generation pin. This executes the two-package source body privately;
+the Ref consumer is not loaded as a verified generation or published artifact.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and
@@ -2114,16 +2119,19 @@ not a public ABI decision or stable-release approval:
    and validate Ref type/Apply-region wire rules in the module verifier and
    Moon Container encoder/decoder. Invalid or older artifacts must fail
    without publishing a partial generation. The source consumer and separate
-   owner evidence now pass the private 0.4 preparation round-trip. Next bind
-   that evidence through a verified generation import, then exercise borrowed
-   Ref ingress with an explicit parent context. The default publication
-   verifier stays closed during that work.
+   owner evidence now pass the private 0.4 preparation round-trip, and the
+   private source JIT calls a borrowed Ref issued from a verified plugin
+   generation. Next load the Ref consumer itself through a verified generation
+   import with validated owner evidence. The default publication verifier
+   stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref
    from a verified generation; run source apply against an explicit parent
-   context; exercise borrowed ingress first, then owning parameter/return
-   transfer. Include nominal/contract mismatch, failed ingress, normal and
-   early exits, repeated apply and cleanup/pin-release regressions. Only after
-   this gate and the remaining control-flow cases pass may
+   context. The private JIT now covers borrowed ingress, invalid capability
+   rejection and repeated calls after Runtime teardown. Complete the verified
+   consumer generation path and owning parameter/return transfer. Include
+   nominal/contract mismatch, failed ingress, normal and early exits, and
+   cleanup/pin-release regressions. Only after this gate and the remaining
+   control-flow cases pass may
    `source-ref-apply` move out of `implementation-open`.
 
 Performance acceptance, durable evidence storage and stable-release approval
