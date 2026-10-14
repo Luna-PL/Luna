@@ -270,7 +270,7 @@ obligation，不能重新推导所有权。
 | `src/codegen/CodeGenerator.cpp` | façade 初始化和小型共用实现 |
 | `src/codegen/CodeGeneratorModule.cpp` | module 级声明收集、host/kernel 编排与验证 |
 | `src/codegen/NativeOwnedResultFacts.h/.cpp` | 从封闭 MoonIR 核验并推导候选 Native v3 Ref／拥有型 Result 源码事实；不生成宿主入口或元数据行 |
-| `src/codegen/NativeRefUnitFacts.h/.cpp` | 从封闭 MoonIR 核验并推导候选借用 Ref／unit 入口的源码身份；不发布宿主入口 |
+| `src/codegen/NativeRefUnitFacts.h/.cpp` | 从封闭 MoonIR 推导借用 Ref／unit 源码身份并证明 v4 入口；普通构建仅验证一次性预览，内部测试路径另验证目标位置的签封产物，默认发布门禁仍关闭 |
 | `src/codegen/CodeGeneratorFunctions.cpp` | canonical-only 单函数入口、状态与隐式返回 lowering |
 | `src/codegen/CodeGeneratorExpressions.cpp` | 普通 expression/value lowering |
 | `src/codegen/CodeGeneratorCleanup.cpp` | cleanup、ADT payload、共享/数组资源释放 |

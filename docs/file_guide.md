@@ -116,9 +116,10 @@ script-defined special inputs.
 - Codegen files are split by module, function, statement, expression, cleanup, execution,
   fragments, GPU, iterators, range analysis, descriptors, and helper concerns.
   `NativeRefUnitFacts.h/.cpp` derives borrowed Ref/unit source identities from
-  sealed MoonIR and can emit a v4 descriptor after generated-entry proof. Its
-  current emitter caller is the disposable private JIT path; no Native artifact
-  or public host entry is published.
+  sealed MoonIR and emits a v4 descriptor after generated-entry proof. Ordinary
+  Native builds validate a disposable linked preview; the internal test output
+  path also exercises a sealed artifact at its package destination. The default
+  source publication gate remains closed.
 - Runtime files own versioned C ABIs and host/GPU/plugin services.
   The opt-in native `runtime_fragment_benchmark.cpp` supports separate uncontrolled
   and measurement-thread-pinned records. `runtime_fragment_benchmark.cmake`

@@ -1515,8 +1515,14 @@ success, rejects absent or mismatched capabilities before invocation, and calls
 after the original Runtime and direct library view have been released. The
 Native build invokes a known source preview only with the internal test opt-in;
 the ordinary build of that same source is checked to remain gated without the
-probe or output artifacts. The next step is a reviewed public ABI policy
-before removing the publication gate.
+probe or output artifacts. A separate internal test opt-in now rebuilds the
+proved module at its package output path, seals it and calls the linked Ref
+function through a freshly loaded pinned generation. A separate process then
+checks its proof with the Native verifier and independent oracle and loads its
+v4 descriptor. The test removes the output and confirms that adding another
+Ref callable is rejected even with the opt-in. This tests the enabled producer
+path without changing the ordinary publication gate. Public ABI review remains
+before removing that gate.
 
 #### Native Ref/unit public ABI review draft (2026-10-14)
 
@@ -1534,16 +1540,18 @@ other Ref uses and owned Result returns need their own profiles and proofs.
 | Status | Freeze `0` success, `1` invalid context, `2` invalid handle, `3` invalid target, `4` unexpected check, `5` execution failure for this profile. The host treats a known nonzero status as a completed call with a classified failure; an unknown status is a host-call error. No exception or owner crosses the C boundary. |
 | Host lifetime | Use an explicit trust record and matching host target ABI. The supported typed host path pins the verified image and generation, accepts only Runtime-issued live parent and Ref owners, verifies the exact Slot before entry, and keeps both owners and the code lease through the synchronous call. A caller must not retain descriptor, entry or opaque capability pointers beyond that lease. |
 | Compatibility | V1 proof/query remain required; v4 is optional for artifacts without this profile. If v4 is present but malformed, reject the entire image. Its canonical row participates in the proof export digest, so a loader that ignores v4 cannot silently downgrade a v4 artifact to v1. Change the layout, row encoding, calling convention or status semantics only through a new query/profile version; do not append fields to v4 in place. |
-| Platform scope | Limit the initial ABI promise to the 64-bit Linux, Windows and macOS release matrix. The 32-bit C layout probes establish offsets only. Review target triples and host C ABI with consumers; require an ordinary enabled source artifact to build, seal, load and call on each supported platform before lifting the gate. |
+| Platform scope | Limit the initial ABI promise to the 64-bit Linux, Windows and macOS release matrix. The 32-bit C layout probes establish offsets only. Review target triples and host C ABI with consumers; require the test-enabled source artifact to build, seal, load and call on each supported platform before lifting the gate. |
 
-The immediate implementation step after review is a narrowly enabled producer
-path that writes the already proven v4 artifact and trust record instead of
-deleting its preview. Its integration gate must load that ordinary output,
-call success, preflight failures, execution failure and recovery through the
-pinned host API, and check that unsupported Ref shapes still fail without an
-artifact. The existing private preview and cross-platform CI establish the
-mechanism, but they do not test an enabled publication path. Public ABI review
-and that new gate must both complete before changing the current refusal.
+The internal test-enabled producer path now links a second artifact at the
+package destination after the private preview passes. It seals and reloads
+that output, calls success, preflight failures, execution failure and recovery
+through the pinned host API, then lets a separate process validate the proof
+and loader. The default build still refuses publication. Cross-platform CI
+must cover this new path, and host consumers must review the ABI draft before
+the default gate changes.
+On 2026-10-14 the focused Native artifact test passed with this output path on
+Windows CLANG64, its ASAN/UBSan configuration, and Arch Linux WSL C++23. The
+file-guide inventory and 0.3 design-contract checks also passed locally.
 
 On 2026-10-14 the CLANG64 build passed all 81 CTest cases, and the focused
 Native artifact case passed under ASAN/UBSan with the linked source probe.

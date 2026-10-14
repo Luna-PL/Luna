@@ -202,6 +202,55 @@ if(ref_apply_ordinary_result EQUAL 0 OR ref_apply_ordinary_gate EQUAL -1 OR
         "Ordinary Native Ref/unit build ran the private probe or bypassed the publication gate.\n"
         "${ref_apply_ordinary_output}\n${ref_apply_ordinary_error}")
 endif()
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env
+            "LUNA_NATIVE_REF_UNIT_OUTPUT_TEST=1"
+            "${LUNA_EXECUTABLE}" build "${ref_apply_package_dir}" -t native -O2
+    RESULT_VARIABLE ref_apply_output_result
+    OUTPUT_VARIABLE ref_apply_output_output
+    ERROR_VARIABLE ref_apply_output_error)
+string(FIND "${ref_apply_output_output}\n${ref_apply_output_error}"
+       "Sealed test-only Native Ref/unit output: sha256="
+       ref_apply_output_diagnostic)
+if(NOT ref_apply_output_result EQUAL 0 OR
+   ref_apply_output_diagnostic EQUAL -1 OR
+   NOT EXISTS "${ref_apply_artifact}" OR
+   NOT EXISTS "${ref_apply_artifact}.trust")
+    message(FATAL_ERROR
+        "Native Ref/unit test output did not build, seal and call.\n"
+        "${ref_apply_output_output}\n${ref_apply_output_error}")
+endif()
+execute_process(
+    COMMAND "${LUNA_NATIVE_VERIFIER}" "${ref_apply_artifact}"
+            "${ref_apply_artifact}.trust"
+    RESULT_VARIABLE ref_apply_verify_result
+    OUTPUT_VARIABLE ref_apply_verify_output
+    ERROR_VARIABLE ref_apply_verify_error)
+execute_process(
+    COMMAND "${LUNA_NATIVE_VERIFIER}" --load-only
+            "${ref_apply_artifact}" "${ref_apply_artifact}.trust"
+    RESULT_VARIABLE ref_apply_load_result
+    OUTPUT_VARIABLE ref_apply_load_output
+    ERROR_VARIABLE ref_apply_load_error)
+execute_process(
+    COMMAND "${Python3_EXECUTABLE}"
+            "${LUNA_SOURCE_DIR}/tests/native_artifact_oracle.py"
+            "${ref_apply_artifact}" "${ref_apply_artifact}.trust"
+    RESULT_VARIABLE ref_apply_oracle_result
+    OUTPUT_VARIABLE ref_apply_oracle_output
+    ERROR_VARIABLE ref_apply_oracle_error)
+if(NOT ref_apply_verify_result EQUAL 0 OR
+   NOT ref_apply_load_result EQUAL 0 OR
+   NOT ref_apply_oracle_result EQUAL 0)
+    message(FATAL_ERROR
+        "Native Ref/unit test output failed independent proof or loader checks.\n"
+        "${ref_apply_verify_output}\n${ref_apply_verify_error}\n"
+        "${ref_apply_load_output}\n${ref_apply_load_error}\n"
+        "${ref_apply_oracle_output}\n${ref_apply_oracle_error}")
+endif()
+file(REMOVE "${ref_apply_artifact}" "${ref_apply_artifact}.trust"
+     "${ref_apply_artifact}.ll" "${ref_apply_artifact}.o"
+     "${ref_apply_artifact}.luna-link-state")
 file(APPEND "${ref_apply_package_dir}/src/api.luna"
      "\nfn extra_ref(value: RuntimeFragmentRef<ref_checkpoint>) -> unit {}\n")
 execute_process(
@@ -217,6 +266,22 @@ if(extra_ref_build_result EQUAL 0 OR extra_ref_gate EQUAL -1 OR
     message(FATAL_ERROR
         "Native Ref/unit preparation admitted another Ref callable.\n"
         "${extra_ref_build_output}\n${extra_ref_build_error}")
+endif()
+execute_process(
+    COMMAND "${CMAKE_COMMAND}" -E env
+            "LUNA_NATIVE_REF_UNIT_OUTPUT_TEST=1"
+            "${LUNA_EXECUTABLE}" build "${ref_apply_package_dir}" -t native -O2
+    RESULT_VARIABLE extra_ref_output_result
+    OUTPUT_VARIABLE extra_ref_output_output
+    ERROR_VARIABLE extra_ref_output_error)
+string(FIND "${extra_ref_output_output}\n${extra_ref_output_error}"
+       "Native Ref/unit preparation has another Ref callable"
+       extra_ref_output_gate)
+if(extra_ref_output_result EQUAL 0 OR extra_ref_output_gate EQUAL -1 OR
+   EXISTS "${ref_apply_artifact}" OR EXISTS "${ref_apply_artifact}.trust")
+    message(FATAL_ERROR
+        "Native Ref/unit test output admitted another Ref callable.\n"
+        "${extra_ref_output_output}\n${extra_ref_output_error}")
 endif()
 
 execute_process(

@@ -883,6 +883,52 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
             return 1;
         }
         cleanup.directory.clear();
+        const char* outputTest =
+            std::getenv("LUNA_NATIVE_REF_UNIT_OUTPUT_TEST");
+        if (outputTest && std::string(outputTest) == "1") {
+            if (buildAt(outputPath) != 0) return 1;
+            const fs::path trustPath = outputPath.string() + ".trust";
+            NativeProofInfo outputProof;
+            if (!sealNativeArtifact(outputPath.string(), trustPath.string(),
+                                    outputProof, proofError)) {
+                std::cerr << diagnostic::format(
+                    "native-proof", proofError, outputPath.string(), 0, 0,
+                    "discard the test-only Native Ref/unit output") << "\n";
+                return 1;
+            }
+            luna::runtime::MoonRuntime outputRuntime;
+            luna::runtime::MoonRuntime::PinnedGeneration outputGeneration;
+            if (!loadVerifiedNativeGenerationOnce(
+                    outputRuntime, outputPath.string(), trustPath.string(),
+                    outputGeneration, proofError)) {
+                std::cerr << diagnostic::format(
+                    "native-proof", proofError, outputPath.string(), 0, 0,
+                    "discard the test-only Native Ref/unit output") << "\n";
+                return 1;
+            }
+            const auto outputCandidate =
+                outputGeneration.findRefUnitCandidate(
+                    surface.refUnitSource->symbolId.value,
+                    surface.refUnitSource->contractId.value);
+            if (!outputCandidate ||
+                !exerciseNativeRefPreviewForTest(
+                    pipeline.moonModule(), source, outputCandidate,
+                    proofError)) {
+                std::cerr << diagnostic::format(
+                    "native-proof",
+                    proofError.empty()
+                        ? "test-only Native Ref/unit output lost its typed entry"
+                        : proofError,
+                    outputPath.string(), 0, 0,
+                    "discard the test-only Native Ref/unit output") << "\n";
+                return 1;
+            }
+            std::cout << "Sealed test-only Native Ref/unit output: sha256="
+                      << nativeDigestHex(outputProof.artifactDigest) << "\n"
+                      << "Generated trust candidate: " << trustPath.string()
+                      << "\n";
+            return 0;
+        }
         std::cerr << diagnostic::format(
             "native-proof",
             "Native Ref/unit publication remains gated after pinned typed preview validation",
