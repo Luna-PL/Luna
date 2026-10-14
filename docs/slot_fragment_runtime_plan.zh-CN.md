@@ -913,6 +913,9 @@ artifact loader 或公开 Runtime lookup。
 
 #### 借用 Ref／unit 宿主入口候选契约（尚未发布）
 
+本节按实施先后记录各阶段门禁。当前 producer、loader、宿主调用状态及尚待审议的
+发布决策，以后文的 Native 验证边界为准。
+
 最小可发布形态是一次同步调用，逻辑签名为
 `status(parent_context, borrowed_ref) -> i32`，源码参数为
 `shared borrow RuntimeFragmentRef<S>`，返回 `unit`。宿主在调用全程保留两个
@@ -1013,8 +1016,8 @@ v4 源码事实仅准入没有其他词法清理义务的 CFG；其余清理须�
 现有通用 Native v1/v2 export 和 Runtime declaration 描述符未编码 Ref 目标或这套入口
 ABI。Fragment 描述符对应 factory／environment／activation 执行，不能代替源码
 函数入口。一次性预览现验证封闭产物及装载后的 v4 入口与 proof 绑定。固定 lookup
-现保留其类型、目标 Slot 和 ABI 事实，不暴露入口指针。下一步须使调用路径在整次
-同步调用期间持有 Runtime 签发的能力与代码 lease。
+现保留其类型、目标 Slot 和 ABI 事实，不暴露入口指针。后文当前边界所述的固定
+调用路径现已在整次同步调用期间持有 Runtime 签发的能力与代码 lease。
 Moon Container 0.3 编码器仍拒绝 Apply region，默认 module verifier 和 CodeGenerator
 也仍拒绝发布源码 Ref。
 显式选择的 0.4 Type 与 Code section 编解码现可往返封闭源码的
@@ -1130,6 +1133,28 @@ v4 事实复制到 `PinnedRefUnitCandidate` 视图。该视图保留已验证库
 与直接库视图释放后仍能调用。Native 构建只在内部测试显式启用时调用已知源码预览；
 同一源码的普通构建另经回归确认：仍受门禁约束，无探针诊断或输出产物。下一步
 审议公开 ABI 策略，再决定正式输出门禁。
+
+#### Native Ref／unit 公开 ABI 审议草案（2026-10-14）
+
+**状态：提案，尚未批准或发布。** 上述代码与 CI 证据足以审议这项受限契约，
+但未开放普通源码产物。建议首发范围仅为一个公开同步函数：接收一个共享借用
+`RuntimeFragmentRef<S>`，返回 `unit`，精确的公开目标 Slot 位于同一个经 proof
+绑定的 package。现有单候选及源码 effect 限制仍是 producer 条件；其他 Ref 用法
+及拥有型 Result 返回须另设 profile 和证明。
+
+| 审议项 | 建议契约与仍需的证据 |
+| --- | --- |
+| 二进制入口 | 沿用并行 v4 query 与 C `int32_t(const void*, const void*)` 入口，parent 在 Ref 前。要求精确 v4 大小、保留字段为零、profile `3`、共享借用模式 `1`、unit 模式 `2`、状态域 `1`、十个 proof 绑定身份及位于已验证映像内的解析入口。Ref 函数不得加入无 profile 的 v1 可调用登记表。 |
+| 状态 | 此 profile 固定 `0` 成功、`1` context 无效、`2` handle 无效、`3` 目标无效、`4` 未预期检查、`5` 执行失败。已知非零状态表示调用完成并得到分类失败；未知状态是宿主调用错误。不得让异常或 owner 穿越 C 边界。 |
+| 宿主寿命 | 使用显式 trust 记录及与宿主匹配的目标 ABI。受支持的类型化宿主路径固定已验证映像及 generation，只接收 Runtime 签发的有效 parent／Ref owner，入门前核对精确 Slot，并在同步调用全程持有两个 owner 与代码 lease。调用方不得在 lease 以外保留 descriptor、入口或 opaque 能力指针。 |
+| 兼容性 | v1 proof／query 仍必需；不含该 profile 的产物可缺少 v4。若存在畸形 v4，则整份映像被拒绝。v4 规范行参与 proof 导出摘要，因此忽略 v4 的旧 loader 不能将该产物静默降级成 v1。布局、行编码、调用约定或状态语义变更必须使用新 query／profile 版本，不得在 v4 原位追加字段。 |
+| 平台范围 | 首次 ABI 承诺限于 64 位 Linux、Windows 和 macOS 发布矩阵。32 位 C 布局探针只证明偏移。须与宿主使用方审议目标 triple 和宿主 C ABI；解除门禁前，普通启用的源码产物还须在各支持平台完成构建、签封、加载和调用。 |
+
+审议后的直接实施步骤是受限地启用 producer：写出已经证明的 v4 产物和 trust
+记录，而非删除预览。集成门禁须加载普通输出，经固定宿主 API 调用成功、预检失败、
+执行失败及恢复，并确认不支持的 Ref 形态仍失败且不留产物。现有私有预览和跨平台
+CI 证明了机制，却未覆盖启用后的发布路径。公开 ABI 审议及新增门禁都完成前，
+维持现有拒绝。
 
 2026-10-14，CLANG64 构建的 81 项 CTest 全部通过；包含链接源码探针的 Native
 artifact 聚焦测试也在 ASAN／UBSan 下通过。

@@ -887,7 +887,7 @@ int buildNativeLibrary(const CompilerPipeline& pipeline, CodeGenerator& codeGene
             "native-proof",
             "Native Ref/unit publication remains gated after pinned typed preview validation",
             inputPath, 0, 0,
-            "complete public ABI policy and cross-platform validation before publication")
+            "review the public Ref/unit ABI contract and validate the enabled publication path")
                   << "\n";
         return 1;
     }

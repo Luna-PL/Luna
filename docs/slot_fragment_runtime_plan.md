@@ -1202,6 +1202,10 @@ This local slice does not constitute a full-suite or cross-platform run.
 
 #### Candidate borrowed Ref/unit host entry contract (unpublished)
 
+This section records successive implementation gates. The current producer,
+loader and host-call state, including the remaining publication decision, is
+summarized under the Native verification boundary below.
+
 The smallest publishable profile would use one synchronous entry with the
 logical shape `status(parent_context, borrowed_ref) -> i32`. Its parameter is
 `shared borrow RuntimeFragmentRef<S>` and its source result is `unit`. The
@@ -1344,8 +1348,8 @@ describes factory/environment/activation execution, so it cannot stand in
 for a source function entry. The Native build now checks the sealed image and
 loaded v4 entry against its proof in a temporary preview. The pinned lookup
 now carries its type, target Slot and ABI facts without exposing an entry
-pointer. The next step is a call path that owns Runtime-issued capabilities
-and the code lease for the complete synchronous invocation.
+pointer. The pinned call path described in the current boundary below now
+retains Runtime-issued capabilities and the code lease through invocation.
 The Moon Container 0.3
 encoder still rejects Apply regions, and the default module verifier and
 CodeGenerator still reject source Ref publication.
@@ -1513,6 +1517,33 @@ Native build invokes a known source preview only with the internal test opt-in;
 the ordinary build of that same source is checked to remain gated without the
 probe or output artifacts. The next step is a reviewed public ABI policy
 before removing the publication gate.
+
+#### Native Ref/unit public ABI review draft (2026-10-14)
+
+**Status: proposed, not approved or published.** The code and CI evidence above
+support review of this narrow contract. They do not enable ordinary source
+publication. The proposed first release scope is one synchronous public
+function taking one shared-borrow `RuntimeFragmentRef<S>` and returning `unit`,
+with the exact public Slot in the same proof-bound package. The existing
+single-candidate and source-effect restrictions remain producer requirements;
+other Ref uses and owned Result returns need their own profiles and proofs.
+
+| Review decision | Proposed contract and evidence still required |
+| --- | --- |
+| Binary entry | Use the existing v4 parallel query and C `int32_t(const void*, const void*)` entry, with parent before Ref. Require exact v4 sizes, reserved zero, profile `3`, shared-borrow mode `1`, unit mode `2`, status domain `1`, the ten proof-bound identifiers, and the resolved entry in the verified image. Do not add a Ref function to the unprofiled v1 callable registry. |
+| Status | Freeze `0` success, `1` invalid context, `2` invalid handle, `3` invalid target, `4` unexpected check, `5` execution failure for this profile. The host treats a known nonzero status as a completed call with a classified failure; an unknown status is a host-call error. No exception or owner crosses the C boundary. |
+| Host lifetime | Use an explicit trust record and matching host target ABI. The supported typed host path pins the verified image and generation, accepts only Runtime-issued live parent and Ref owners, verifies the exact Slot before entry, and keeps both owners and the code lease through the synchronous call. A caller must not retain descriptor, entry or opaque capability pointers beyond that lease. |
+| Compatibility | V1 proof/query remain required; v4 is optional for artifacts without this profile. If v4 is present but malformed, reject the entire image. Its canonical row participates in the proof export digest, so a loader that ignores v4 cannot silently downgrade a v4 artifact to v1. Change the layout, row encoding, calling convention or status semantics only through a new query/profile version; do not append fields to v4 in place. |
+| Platform scope | Limit the initial ABI promise to the 64-bit Linux, Windows and macOS release matrix. The 32-bit C layout probes establish offsets only. Review target triples and host C ABI with consumers; require an ordinary enabled source artifact to build, seal, load and call on each supported platform before lifting the gate. |
+
+The immediate implementation step after review is a narrowly enabled producer
+path that writes the already proven v4 artifact and trust record instead of
+deleting its preview. Its integration gate must load that ordinary output,
+call success, preflight failures, execution failure and recovery through the
+pinned host API, and check that unsupported Ref shapes still fail without an
+artifact. The existing private preview and cross-platform CI establish the
+mechanism, but they do not test an enabled publication path. Public ABI review
+and that new gate must both complete before changing the current refusal.
 
 On 2026-10-14 the CLANG64 build passed all 81 CTest cases, and the focused
 Native artifact case passed under ASAN/UBSan with the linked source probe.
