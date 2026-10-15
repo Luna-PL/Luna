@@ -803,14 +803,120 @@ bool VerifiedMoonImportedSlotGeneration::hasImportedSlotBinding() const {
     return binding &&
         binding.declarationKind() == LUNA_RUNTIME_DECLARATION_SLOT_V1 &&
         binding.flags() == 0 && binding.implementation() &&
-        !generation_.find(candidate->symbolId, candidate->contractId) &&
-        !generation_.findRefUnitCandidate(
-            candidate->symbolId, candidate->contractId);
+        !generation_.find(candidate->symbolId, candidate->contractId);
+}
+
+bool VerifiedMoonImportedSlotGeneration::hasMetadataCandidate() const {
+    if (!hasImportedSlotBinding()) return false;
+    const auto expected = proof_->candidateFacts();
+    if (!expected) return false;
+    const auto pinned = generation_.findRefUnitCandidate(
+        expected->symbolId, expected->contractId);
+    const auto actual = pinned.facts();
+    return actual && actual->linkageName == expected->linkageName &&
+        actual->moduleName == expected->moduleName &&
+        actual->packageId == expected->packageId &&
+        actual->functionTypeId == expected->functionTypeId &&
+        actual->refTypeId == expected->refTypeId &&
+        actual->slotSymbolId == expected->slotSymbolId &&
+        actual->slotContractId == expected->slotContractId &&
+        actual->slotTypeId == expected->slotTypeId &&
+        actual->entryAbi == expected->entryAbi &&
+        actual->refMode == expected->refMode &&
+        actual->resultMode == expected->resultMode &&
+        actual->statusDomain == expected->statusDomain;
 }
 
 std::optional<luna::runtime::GenerationRefUnitCandidate>
 VerifiedMoonImportedSlotGeneration::candidateFacts() const {
     return *this ? proof_->candidateFacts() : std::nullopt;
+}
+
+bool VerifiedMoonImportedSlotGeneration::admitMetadataCandidateOnce(
+    std::string& error) {
+    error.clear();
+    if (!hasImportedSlotBinding() || hasMetadataCandidate() ||
+        !generation_.matchesModuleLease(proof_) ||
+        runtime_->activeGenerationId(generation_.moduleId()) !=
+            generation_.generationId()) {
+        error = "verified imported-Slot candidate requires the active proxy generation";
+        return false;
+    }
+    const auto expected = proof_->candidateFacts();
+    const auto slotBinding = generation_.find(
+        expected->slotSymbolId, expected->slotContractId);
+    luna::runtime::GenerationStagingRequest request;
+    request.moduleId = generation_.moduleId();
+    request.contentDigest = generation_.contentDigest();
+    request.materializationKey = generation_.materializationKey();
+    request.moduleLease = proof_;
+    request.refUnitCandidates.push_back(*expected);
+    luna::runtime::MoonRuntime::StagedGeneration staged;
+    if (!runtime_->stage(
+            request,
+            [this, &request, &expected](const auto& candidate,
+                                        std::string& verificationError) {
+                if (candidate.moduleId != request.moduleId ||
+                    candidate.contentDigest != request.contentDigest ||
+                    candidate.materializationKey != request.materializationKey ||
+                    !generation_.matchesModuleLease(candidate.moduleLease) ||
+                    candidate.refUnitCandidates.size() != 1 ||
+                    candidate.refUnitCandidates.front().symbolId !=
+                        expected->symbolId ||
+                    candidate.refUnitCandidates.front().contractId !=
+                        expected->contractId ||
+                    candidate.refUnitCaller) {
+                    verificationError =
+                        "verified imported-Slot candidate changed before staging";
+                    return false;
+                }
+                return true;
+            },
+            [expected, slotBinding](const auto&, auto& bindings,
+                                    std::string& resolutionError) {
+                if (!bindings.empty()) {
+                    resolutionError =
+                        "verified imported-Slot candidate cannot replace bindings";
+                    return false;
+                }
+                luna::runtime::GenerationBinding binding;
+                binding.symbolId = expected->slotSymbolId;
+                binding.contractId = expected->slotContractId;
+                binding.implementation = slotBinding.implementation();
+                binding.declarationKind = LUNA_RUNTIME_DECLARATION_SLOT_V1;
+                bindings.push_back(std::move(binding));
+                return true;
+            },
+            {}, staged, error))
+        return false;
+    const auto previous = generation_;
+    auto safePoint = runtime_->safePoint();
+    if (!runtime_->activate(staged, safePoint, error)) return false;
+    auto activated = runtime_->pin(request.moduleId);
+    const auto activeSlot = activated.find(
+        expected->slotSymbolId, expected->slotContractId);
+    const auto activeCandidate = activated.findRefUnitCandidate(
+        expected->symbolId, expected->contractId);
+    const bool validActivation = activated &&
+        runtime_->activeGenerationId(request.moduleId) ==
+            activated.generationId() &&
+        activated.matchesModuleLease(proof_) &&
+        activeSlot && activeSlot.flags() == 0 &&
+        activeSlot.implementation() == slotBinding.implementation() &&
+        !activated.find(expected->symbolId, expected->contractId) &&
+        activeCandidate;
+    if (validActivation) generation_ = std::move(activated);
+    if (!validActivation || !hasMetadataCandidate()) {
+        generation_ = previous;
+        auto rollbackPoint = runtime_->safePoint();
+        std::string rollbackError;
+        runtime_->rollback(request.moduleId, previous.generationId(),
+                           rollbackPoint, rollbackError);
+        error = "verified imported-Slot candidate activation lost its proof";
+        if (!rollbackError.empty()) error += ": " + rollbackError;
+        return false;
+    }
+    return true;
 }
 
 bool VerifiedMoonImportedSlotRefUnitProof::loadBindingOnce(

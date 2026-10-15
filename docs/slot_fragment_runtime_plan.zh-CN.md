@@ -1512,21 +1512,23 @@ generation pin。错误的源码或 Slot 身份，以及同一字节另行签发
 导入 Slot 凭据现可在另一个 loader 自有的内部 Runtime 中加载仅含一个不可调用 Slot 代理
 binding 的 generation。其 implementation 指向已固定 owner 的 verified Slot 声明，module
 lease 保留已签发的导入凭据及两侧 generation pin；物化键还包含 owner 产物摘要。不透明的
-结果在原 owner loader 销毁后继续保留 Runtime 与 binding pin，但没有 callable 或 Ref／unit
-candidate。这仅在内部建立 Runtime 要求的同 generation Slot binding，不改变公开 Ref 准入。
+结果在原 owner loader 销毁后继续保留 Runtime 与 binding pin。它现可在 loader 自有的
+safe point 激活第二个内部 generation，保留同一个 Slot 代理，仅接纳不含指针的 Ref／unit
+candidate 事实；旧 pin 仍无 candidate。尚未安装 typed caller，公开 Ref 准入不变。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
 candidate。普通构建中的 generation 核验现同时比较 lease 地址与 `shared_ptr` 的共享所有权；
 私有 candidate 复用它。即使包名、摘要和裸地址相同，另一个控制块持有的 generation 仍
 不能借用入口。此检查自身不证明 lease 内容。该 candidate 在 Runtime
-销毁后仍保留 consumer 与 owner 并重复类型化调用；普通 Runtime candidate 查询仍为空。
+销毁后仍保留 consumer 与 owner 并重复类型化调用；该测试 generation 的 Runtime candidate
+查询仍为空。
 此路径不发布 callable 或 Container candidate 行。
 MoonRuntime 的通用 staging API 仍接收宿主提供的身份事实。owner、consumer 准备凭据及
 不可调用的 consumer generation 现有普通构建路径，但普通公开加载流程还未用它们接纳
 导入的 Ref candidate。生产 candidate 发布前须要求 consumer 与导入 Slot 凭据，绑定精确
 consumer lease，并保留 owner pin。
-consumer 凭据保留已物化的代码 lease，但不暴露入口指针或 Runtime candidate。
-把代码绑定为 callable，以及 Runtime candidate 准入仍是独立完成门。
+consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入口指针或 candidate。
+为内部 candidate 安装 typed caller，以及公开 Runtime candidate 准入仍是独立完成门。
 普通入口目前只由隔离的类型化 candidate 测试调用。
 冻结的 `DeclarationRecord`／
 规范契约和 Native v1
@@ -1648,8 +1650,9 @@ consumer 凭据保留已物化的代码 lease，但不暴露入口指针或 Runt
    随后调用普通 wrapper。普通构建现于 loader 自有 Runtime 中将精确凭据加载为不可调用的
    consumer generation，并为精确导入 Slot 与已固定的 owner binding 签发只含元数据的
    凭据，并从中派生不含指针的 candidate 事实；另一个内部 generation 现加载一个不可调用的
-   导入 Slot 代理 binding。下一步在该 verified 代理上准入 Runtime candidate，公开加载仍受限。
-   当前 Runtime candidate 要求同一 generation 的 Slot binding。期间默认发布验证继续关闭。
+   导入 Slot 代理 binding。loader 自有 safe point 现激活保留同一 binding 且含元数据 candidate
+   的新内部 generation，但不安装 caller。下一步将已验证 wrapper 绑定至内部 typed caller，
+   公开加载继续受限。Runtime candidate 要求同一 generation 的 Slot binding；默认发布验证仍关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation
    的 Ref，在显式 parent context 中执行源码 apply。私有 JIT 已覆盖借用入口、无效
    capability 拒绝及 Runtime 销毁后的重复调用。仍须将不可调用的 verified consumer

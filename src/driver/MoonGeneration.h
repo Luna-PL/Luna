@@ -219,7 +219,11 @@ public:
     }
     uint64_t generationId() const;
     bool hasImportedSlotBinding() const;
+    bool hasMetadataCandidate() const;
     std::optional<luna::runtime::GenerationRefUnitCandidate> candidateFacts() const;
+    // Activates a new internal generation with the same Slot proxy and one
+    // pointer-free Ref/unit candidate. No typed caller is installed.
+    bool admitMetadataCandidateOnce(std::string& error);
 
 private:
     friend class VerifiedMoonImportedSlotRefUnitProof;

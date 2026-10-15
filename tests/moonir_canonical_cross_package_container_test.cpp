@@ -501,10 +501,25 @@ int runCrossPackageContainerTest() {
         if (!verifiedSlotGeneration ||
             !verifiedSlotGeneration.generationId() ||
             !verifiedSlotGeneration.hasImportedSlotBinding() ||
+            verifiedSlotGeneration.hasMetadataCandidate() ||
             !verifiedSlotGeneration.candidateFacts() ||
             verifiedImport.loadBindingOnce(verifiedSlotGeneration, error) ||
             !verifiedSlotGeneration.hasImportedSlotBinding())
             return fail("verified imported-Slot binding lost or replaced its pin");
+        {
+            auto oldProxy = verifiedSlotGeneration;
+            if (!verifiedSlotGeneration.admitMetadataCandidateOnce(error)) {
+                std::cerr << error << '\n';
+                return fail("verified imported-Slot metadata candidate did not activate");
+            }
+            if (!verifiedSlotGeneration.hasImportedSlotBinding() ||
+                !verifiedSlotGeneration.hasMetadataCandidate() ||
+                verifiedSlotGeneration.admitMetadataCandidateOnce(error) ||
+                !oldProxy.hasImportedSlotBinding() ||
+                oldProxy.hasMetadataCandidate() ||
+                oldProxy.admitMetadataCandidateOnce(error))
+                return fail("verified imported-Slot candidate replaced or reused a pin");
+        }
         sameArtifactOtherProof = {};
         auto compatibleOwnerManifest = hostManifest;
         compatibleOwnerManifest.packageVersion = "0.3.1";
@@ -676,6 +691,7 @@ int runCrossPackageContainerTest() {
         verifiedConsumerGeneration = {};
         if (!verifiedSlotGeneration ||
             !verifiedSlotGeneration.hasImportedSlotBinding() ||
+            !verifiedSlotGeneration.hasMetadataCandidate() ||
             !verifiedSlotGeneration.candidateFacts())
             return fail("verified imported-Slot binding lost its owner after loader teardown");
         if (refCandidate.ownerGenerationId() != ownerGenerationId)
