@@ -30,6 +30,7 @@ struct MoonRuntime::GenerationState {
     std::vector<GenerationBinding> bindings;
     std::vector<GenerationRefUnitCandidate> refUnitCandidates;
     GenerationRefUnitCaller refUnitCaller;
+    std::shared_ptr<const void> refUnitCallerLease;
 };
 
 struct MoonRuntime::ModuleState {
@@ -328,6 +329,15 @@ bool MoonRuntime::stage(
         error = "generation Ref/unit call adapter has no candidate";
         return false;
     }
+    if (static_cast<bool>(request.refUnitCaller) !=
+            static_cast<bool>(request.refUnitCallerLease) ||
+        (request.refUnitCallerLease &&
+         (request.refUnitCallerLease.get() != request.moduleLease.get() ||
+          request.refUnitCallerLease.owner_before(request.moduleLease) ||
+          request.moduleLease.owner_before(request.refUnitCallerLease)))) {
+        error = "generation Ref/unit call adapter has no exact module lease";
+        return false;
+    }
     std::vector<GenerationBinding> bindings;
     try {
         if (!verifier(request, error)) {
@@ -467,6 +477,7 @@ bool MoonRuntime::stage(
     generation->bindings = std::move(bindings);
     generation->refUnitCandidates = std::move(refUnitCandidates);
     generation->refUnitCaller = request.refUnitCaller;
+    generation->refUnitCallerLease = request.refUnitCallerLease;
     staged.owner_ = this;
     staged.generation_ = std::move(generation);
     return true;
@@ -512,12 +523,22 @@ bool MoonRuntime::loadOnce(
         error = "load-once requires a staged generation from the same runtime";
         return false;
     }
+    if (staged.generation_->refUnitCaller) {
+        error = "callable Ref/unit candidate requires explicit activation";
+        return false;
+    }
 
     std::lock_guard<std::mutex> lock(mutex_);
     auto& module = modules_[staged.generation_->moduleId];
     if (!module) module = std::make_shared<ModuleState>();
     const auto active = module->active.load();
     if (active) {
+        if (!active->refUnitCandidates.empty() ||
+            !staged.generation_->refUnitCandidates.empty() ||
+            active->refUnitCaller) {
+            error = "Ref/unit candidate cannot use the load-once cache";
+            return false;
+        }
         if (active->contentDigest != staged.generation_->contentDigest) {
             error = "module is already loaded with different content";
             return false;

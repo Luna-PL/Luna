@@ -2067,6 +2067,13 @@ through Runtime teardown and repeats the typed call; that test generation's
 Runtime candidate lookup still returns empty. This does not publish a callable
 or a Container candidate row.
 MoonRuntime's generic staging API still takes host-supplied identity facts.
+It now requires a typed Ref/unit caller to provide a lease witness with the
+same address and shared owner as the generation's module lease. The generation
+retains that witness. Callable Ref/unit candidates require explicit safe-point
+activation, and any Ref/unit candidate prevents load-once cache reuse, so an
+older candidate or adapter cannot silently replace a new staged request.
+These runtime checks establish lifetime and activation rules; a host-supplied
+witness alone does not authenticate the artifact or callback.
 The owner and consumer preparation proofs and inert consumer generation now
 have ordinary build paths, but ordinary public loading does not yet use them
 for imported Ref candidates. Production candidate admission must require the
@@ -2252,8 +2259,10 @@ not a public ABI decision or stable-release approval:
    survives Runtime teardown through its candidate pin. An ordinary-build
    internal load function now connects those stages from verified consumer
    bytes to an admitted candidate and rejects bad evidence atomically. Public
-   loading remains gated; next specify and verify the caller-supplied Runtime
-   admission boundary before any public candidate publication.
+   loading remains gated. Generic Runtime staging now requires an exact typed
+   caller lease and explicit activation, without Ref/unit load-once reuse.
+   Next tie caller-supplied Runtime staging to the compiler-issued artifact and
+   owner proofs before any public candidate publication.
    The Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref

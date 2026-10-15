@@ -71,8 +71,10 @@ struct GenerationStagingRequest {
     std::string materializationKey = {};
     std::vector<GenerationRefUnitCandidate> refUnitCandidates = {};
     // Trusted loader adapter. Kept apart from pointer-free candidate facts
-    // and ordinary callable bindings; it must retain the same module lease.
+    // and ordinary callable bindings. The witness must be the exact module
+    // lease (address and shared ownership); Runtime retains it with the caller.
     GenerationRefUnitCaller refUnitCaller = {};
+    std::shared_ptr<const void> refUnitCallerLease = {};
 };
 
 struct GenerationBinding {

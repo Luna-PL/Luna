@@ -174,6 +174,18 @@ int main() {
                                          candidate.contractId) ||
             loaded.find(candidate.symbolId, candidate.contractId))
             return fail("Ref/unit metadata did not stay separate from callable bindings");
+        phases.clear();
+        if (!stageOne(runtime, request, "symbol:slot", "contract:slot",
+                      &first, staged, phases, error, true,
+                      LUNA_RUNTIME_DECLARATION_SLOT_V1, 0) ||
+            runtime.loadOnce(staged, loaded, error) || !staged ||
+            error != "load-once output already owns a generation")
+            return fail("Ref/unit metadata reuse changed a pinned output");
+        loaded = {};
+        if (runtime.loadOnce(staged, loaded, error) || loaded || !staged ||
+            error != "Ref/unit candidate cannot use the load-once cache")
+            return fail("Ref/unit metadata reused a load-once cache entry");
+        staged = {};
         request.refUnitCandidates.front().slotContractId = "contract:other";
         phases.clear();
         if (stageOne(runtime, request, "symbol:slot", "contract:slot",
@@ -182,6 +194,86 @@ int main() {
             staged || phases != "VR" || error.empty())
             return fail("Ref/unit metadata accepted a mismatched public Slot");
     }
+
+    // A typed adapter needs the exact module lease and an explicit safe-point
+    // activation; a cache hit must never substitute a different adapter.
+    Runtime::PinnedRefUnitCandidate retainedCandidate;
+    std::weak_ptr<const void> retainedLease;
+    {
+        Runtime runtime;
+        Request request{ModuleId, std::string(64, 'a'),
+                        std::make_shared<int>(1)};
+        retainedLease = request.moduleLease;
+        const luna::runtime::GenerationRefUnitCandidate candidate{
+            "symbol:ref-unit", "contract:ref-unit", "ref_unit_entry",
+            ModuleId, ModuleId, "type:ref-unit-fn", "type:ref-slot",
+            "symbol:slot", "contract:slot", "type:slot",
+            luna::runtime::GenerationEntryAbiRefUnitV1, 1, 2, 1};
+        request.refUnitCandidates.push_back(candidate);
+        request.refUnitCaller = [](
+            const std::string&, const std::string&,
+            const luna::runtime::RuntimeFragmentExecutionContext&,
+            const luna::runtime::RuntimeFragmentRefHandle&,
+            int32_t& status, std::string& callError) {
+            callError.clear();
+            status = 0;
+            return true;
+        };
+        Runtime::StagedGeneration staged;
+        std::string phases;
+        if (stageOne(runtime, request, "symbol:slot", "contract:slot",
+                     &first, staged, phases, error, true,
+                     LUNA_RUNTIME_DECLARATION_SLOT_V1, 0) ||
+            staged || !phases.empty() ||
+            error != "generation Ref/unit call adapter has no exact module lease")
+            return fail("Ref/unit adapter staged without its lease witness");
+        const std::shared_ptr<const void> differentOwner(
+            request.moduleLease.get(), [](const void*) {});
+        request.refUnitCallerLease = differentOwner;
+        if (stageOne(runtime, request, "symbol:slot", "contract:slot",
+                     &first, staged, phases, error, true,
+                     LUNA_RUNTIME_DECLARATION_SLOT_V1, 0) ||
+            staged || !phases.empty())
+            return fail("Ref/unit adapter accepted a separate lease owner");
+        int alternateAddress = 0;
+        const std::shared_ptr<const void> differentAddress(
+            request.moduleLease, &alternateAddress);
+        request.refUnitCallerLease = differentAddress;
+        if (stageOne(runtime, request, "symbol:slot", "contract:slot",
+                     &first, staged, phases, error, true,
+                     LUNA_RUNTIME_DECLARATION_SLOT_V1, 0) ||
+            staged || !phases.empty())
+            return fail("Ref/unit adapter accepted a different lease address");
+        request.refUnitCallerLease = request.moduleLease;
+        if (!stageOne(runtime, request, "symbol:slot", "contract:slot",
+                      &first, staged, phases, error, true,
+                      LUNA_RUNTIME_DECLARATION_SLOT_V1, 0))
+            return fail("Ref/unit adapter with exact lease did not stage");
+        Runtime::PinnedGeneration loaded;
+        if (runtime.loadOnce(staged, loaded, error) || loaded || !staged ||
+            runtime.pin(ModuleId) ||
+            error != "callable Ref/unit candidate requires explicit activation")
+            return fail("callable Ref/unit adapter entered load-once");
+        auto safePoint = runtime.safePoint();
+        if (!runtime.activate(staged, safePoint, error))
+            return fail("callable Ref/unit adapter did not activate explicitly");
+        loaded = runtime.pin(ModuleId);
+        retainedCandidate = loaded.findRefUnitCandidate(
+            candidate.symbolId, candidate.contractId);
+        if (!retainedCandidate)
+            return fail("activated Ref/unit adapter lost its candidate");
+        loaded = {};
+        request.refUnitCaller = {};
+        request.refUnitCallerLease.reset();
+        request.moduleLease.reset();
+    }
+    const auto retainedFacts = retainedCandidate.facts();
+    if (retainedLease.expired() || !retainedFacts ||
+        retainedFacts->symbolId != "symbol:ref-unit")
+        return fail("Ref/unit adapter lost its pinned lease after Runtime teardown");
+    retainedCandidate = {};
+    if (!retainedLease.expired())
+        return fail("Ref/unit adapter retained its lease after pin release");
 
     // Runtime IDs also cross null-terminated C ABI descriptors. A C++ string
     // with an embedded NUL must not become a second identity for one C name.

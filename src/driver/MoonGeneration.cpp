@@ -1016,6 +1016,7 @@ bool VerifiedMoonImportedSlotGeneration::installTypedCallerOnce(
         status = returned;
         return true;
     };
+    request.refUnitCallerLease = proofLease;
     luna::runtime::MoonRuntime::StagedGeneration staged;
     if (!runtime_->stage(
             request,
@@ -1054,7 +1055,9 @@ bool VerifiedMoonImportedSlotGeneration::installTypedCallerOnce(
                         expected->resultMode ||
                     candidate.refUnitCandidates.front().statusDomain !=
                         expected->statusDomain ||
-                    !candidate.refUnitCaller) {
+                    !candidate.refUnitCaller ||
+                    !generation_.matchesModuleLease(
+                        candidate.refUnitCallerLease)) {
                     verificationError =
                         "verified imported-Slot caller changed before staging";
                     return false;

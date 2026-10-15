@@ -1532,7 +1532,12 @@ candidate。普通构建中的 generation 核验现同时比较 lease 地址与 
 销毁后仍保留 consumer 与 owner 并重复类型化调用；该测试 generation 的 Runtime candidate
 查询仍为空。
 此路径不发布 callable 或 Container candidate 行。
-MoonRuntime 的通用 staging API 仍接收宿主提供的身份事实。owner、consumer 准备凭据及
+MoonRuntime 的通用 staging API 仍接收宿主提供的身份事实。类型化 Ref／unit caller
+现在必须提供与 generation module lease 地址及共享所有权均相同的 lease 凭据，generation
+会保留它。可调用 Ref／unit candidate 必须经显式 safe point 激活；只要存在 Ref／unit
+candidate，就不得复用 load-once 缓存，避免旧 candidate 或 adapter 悄然替换新 staging
+请求。这些 Runtime 检查规定生命周期与激活规则；宿主提供的 lease 凭据本身不能认证产物
+或 callback。owner、consumer 准备凭据及
 不可调用的 consumer generation 现有普通构建路径，但普通公开加载流程还未用它们接纳
 导入的 Ref candidate。生产 candidate 发布前须要求 consumer 与导入 Slot 凭据，绑定精确
 consumer lease，并保留 owner pin。
@@ -1663,8 +1668,10 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    的新内部 generation。再一个内部 generation 安装 typed caller，固定精确凭据及 wrapper
    lease，检查 parent 和 Ref capability，且其 candidate pin 在 Runtime 销毁后仍能调用。
    普通构建的内部装载函数现把 verified consumer 字节接至已准入 candidate，并在证据错误时
-   整体拒绝。公开加载继续受限；下一步先规定并验证调用方 Runtime 的准入边界，再考虑公开
-   candidate 发布。Runtime candidate 要求同一 generation 的 Slot binding；
+   整体拒绝。公开加载继续受限。通用 Runtime staging 现要求精确的 typed caller lease
+   和显式激活，禁止 Ref／unit 的 load-once 复用。下一步将调用方 Runtime staging 绑定到
+   编译器签发的产物与 owner 凭据，再考虑公开 candidate 发布。Runtime candidate 要求同一
+   generation 的 Slot binding；
    默认发布验证仍关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation
    的 Ref，在显式 parent context 中执行源码 apply。私有 JIT 已覆盖借用入口、无效
