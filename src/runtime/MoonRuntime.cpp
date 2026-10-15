@@ -119,6 +119,10 @@ const std::string& MoonRuntime::StagedGeneration::materializationKey() const {
     return generation_ ? generation_->materializationKey : emptyString();
 }
 
+bool MoonRuntime::StagedGeneration::hasRefUnitCaller() const {
+    return generation_ && static_cast<bool>(generation_->refUnitCaller);
+}
+
 uint64_t MoonRuntime::PinnedBinding::generationId() const {
     return generation_ ? generation_->generationId : 0;
 }

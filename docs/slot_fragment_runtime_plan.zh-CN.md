@@ -1543,8 +1543,11 @@ MoonRuntime 的通用 staging API 仍接收宿主提供的身份事实。类型�
 会保留它。可调用 Ref／unit candidate 必须经显式 safe point 激活；只要存在 Ref／unit
 candidate，就不得复用 load-once 缓存，避免旧 candidate 或 adapter 悄然替换新 staging
 请求。这些 Runtime 检查规定生命周期与激活规则；宿主提供的 lease 凭据本身不能认证产物
-或 callback。owner、consumer 准备凭据及
-不可调用的 consumer generation 现有普通构建路径，但普通公开加载流程还未用它们接纳
+或 callback。
+已签封的 Native Ref／unit 预览 loader 现用其 verified library 作为精确 caller lease，
+并显式激活类型化 candidate。私有调用与仅测试用输出路径仍先于默认源码发布门禁；该门禁保持关闭。
+owner、consumer 准备凭据及不可调用的 consumer generation 现有普通构建路径，
+但普通公开加载流程还未用它们接纳
 导入的 Ref candidate。生产 candidate 发布前须要求 consumer 与导入 Slot 凭据，绑定精确
 consumer lease，并保留 owner pin。
 consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入口指针或 candidate。

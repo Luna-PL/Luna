@@ -156,6 +156,7 @@ public:
         const std::string& moduleId() const;
         const std::string& contentDigest() const;
         const std::string& materializationKey() const;
+        bool hasRefUnitCaller() const;
 
     private:
         friend class MoonRuntime;

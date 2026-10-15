@@ -2084,6 +2084,10 @@ activation, and any Ref/unit candidate prevents load-once cache reuse, so an
 older candidate or adapter cannot silently replace a new staged request.
 These runtime checks establish lifetime and activation rules; a host-supplied
 witness alone does not authenticate the artifact or callback.
+The sealed Native Ref/unit preview loader now supplies its verified library as
+that exact caller lease and explicitly activates the typed candidate. Its
+private call and test-only output paths still run before the default source
+publication gate, which remains closed.
 The owner and consumer preparation proofs and inert consumer generation now
 have ordinary build paths, but ordinary public loading does not yet use them
 for imported Ref candidates. Production candidate admission must require the

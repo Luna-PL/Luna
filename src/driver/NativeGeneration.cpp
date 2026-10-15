@@ -79,6 +79,7 @@ bool stageVerifiedNativeGeneration(
                 library, symbolId, contractId,
                 parent, reference, status, callError);
         };
+        request.refUnitCallerLease = library;
     }
     return runtime.stage(
         request,
@@ -144,6 +145,19 @@ bool loadVerifiedNativeGenerationOnce(
     if (!stageVerifiedNativeGeneration(
             runtime, artifactPath, trustStorePath, {}, staged, error))
         return false;
+    if (staged.hasRefUnitCaller()) {
+        const uint64_t stagedId = staged.generationId();
+        auto safePoint = runtime.safePoint();
+        if (!runtime.activate(staged, safePoint, error)) return false;
+        auto activated = runtime.pin(proof.packageId);
+        if (!activated || activated.generationId() != stagedId ||
+            activated.contentDigest() != nativeDigestHex(proof.artifactDigest)) {
+            error = "verified Native Ref/unit activation lost its proof";
+            return false;
+        }
+        loaded = std::move(activated);
+        return true;
+    }
     return runtime.loadOnce(staged, loaded, error);
 }
 
