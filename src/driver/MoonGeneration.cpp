@@ -790,6 +790,135 @@ bool pinVerifiedMoonImportedSlotRefUnitProof(
     return true;
 }
 
+uint64_t VerifiedMoonImportedSlotGeneration::generationId() const {
+    return generation_.generationId();
+}
+
+bool VerifiedMoonImportedSlotGeneration::hasImportedSlotBinding() const {
+    if (!*this) return false;
+    const auto candidate = proof_->candidateFacts();
+    if (!candidate) return false;
+    const auto binding = generation_.find(
+        candidate->slotSymbolId, candidate->slotContractId);
+    return binding &&
+        binding.declarationKind() == LUNA_RUNTIME_DECLARATION_SLOT_V1 &&
+        binding.flags() == 0 && binding.implementation() &&
+        !generation_.find(candidate->symbolId, candidate->contractId) &&
+        !generation_.findRefUnitCandidate(
+            candidate->symbolId, candidate->contractId);
+}
+
+std::optional<luna::runtime::GenerationRefUnitCandidate>
+VerifiedMoonImportedSlotGeneration::candidateFacts() const {
+    return *this ? proof_->candidateFacts() : std::nullopt;
+}
+
+bool VerifiedMoonImportedSlotRefUnitProof::loadBindingOnce(
+    VerifiedMoonImportedSlotGeneration& loaded,
+    std::string& error) const {
+    error.clear();
+    if (loaded) {
+        error = "verified imported-Slot generation output already owns a binding";
+        return false;
+    }
+    const auto candidateFacts = this->candidateFacts();
+    if (!*this || !candidateFacts ||
+        !consumer_.matchesPreparation(consumer_.preparation_)) {
+        error = "verified imported-Slot generation requires an issued proof";
+        return false;
+    }
+    const auto& state = *consumer_.preparation_.state_;
+    const moon::DeclarationRef slotReference{
+        luna::identity::SymbolId{candidateFacts->slotSymbolId},
+        luna::identity::ContractId{candidateFacts->slotContractId}};
+    const auto* imported = state.module.findDeclaration(slotReference);
+    const auto ownerBinding = state.ownerGeneration.find(
+        candidateFacts->slotSymbolId, candidateFacts->slotContractId);
+    if (!imported || imported->kind != moon::DeclarationKind::Slot ||
+        imported->type.value != candidateFacts->slotTypeId ||
+        !ownerBinding ||
+        ownerBinding.declarationKind() != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
+        ownerBinding.flags() !=
+            luna::runtime::GenerationBindingPublicControl ||
+        !ownerBinding.implementation()) {
+        error = "verified imported-Slot generation lost its owner binding";
+        return false;
+    }
+    auto proofLease =
+        std::make_shared<const VerifiedMoonImportedSlotRefUnitProof>(*this);
+    const std::shared_ptr<const void> lease = proofLease;
+    luna::runtime::GenerationStagingRequest request;
+    request.moduleId = candidateFacts->packageId;
+    request.contentDigest = state.contentDigest;
+    request.materializationKey =
+        std::string("luna.internal-ref-import-slot.v1:llvm=") +
+        LLVM_VERSION_STRING + ":ir=O0:orc=default:owner=" +
+        state.ownerGeneration.contentDigest();
+    request.moduleLease = lease;
+
+    auto runtime = std::make_shared<luna::runtime::MoonRuntime>();
+    luna::runtime::MoonRuntime::StagedGeneration staged;
+    if (!runtime->stage(
+            request,
+            [lease, &request](const auto& candidate,
+                              std::string& verificationError) {
+                if (candidate.moduleId != request.moduleId ||
+                    candidate.contentDigest != request.contentDigest ||
+                    candidate.materializationKey != request.materializationKey ||
+                    candidate.moduleLease.get() != lease.get() ||
+                    candidate.moduleLease.owner_before(lease) ||
+                    lease.owner_before(candidate.moduleLease) ||
+                    !candidate.refUnitCandidates.empty() ||
+                    candidate.refUnitCaller) {
+                    verificationError =
+                        "verified imported-Slot generation changed before staging";
+                    return false;
+                }
+                return true;
+            },
+            [candidateFacts, ownerBinding](const auto&, auto& bindings,
+                                           std::string& resolutionError) {
+                if (!bindings.empty()) {
+                    resolutionError =
+                        "verified imported-Slot generation cannot replace bindings";
+                    return false;
+                }
+                luna::runtime::GenerationBinding binding;
+                binding.symbolId = candidateFacts->slotSymbolId;
+                binding.contractId = candidateFacts->slotContractId;
+                binding.implementation = ownerBinding.implementation();
+                binding.declarationKind = LUNA_RUNTIME_DECLARATION_SLOT_V1;
+                bindings.push_back(std::move(binding));
+                return true;
+            },
+            {}, staged, error))
+        return false;
+    if (!staged || staged.moduleId() != request.moduleId ||
+        staged.contentDigest() != request.contentDigest ||
+        staged.materializationKey() != request.materializationKey) {
+        error = "verified imported-Slot staging changed its artifact";
+        return false;
+    }
+    luna::runtime::MoonRuntime::PinnedGeneration generation;
+    if (!runtime->loadOnce(staged, generation, error)) return false;
+    const auto binding = generation.find(
+        candidateFacts->slotSymbolId, candidateFacts->slotContractId);
+    if (!generation.matchesModuleLease(lease) || !binding ||
+        binding.declarationKind() != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
+        binding.flags() != 0 ||
+        binding.implementation() != ownerBinding.implementation() ||
+        generation.find(candidateFacts->symbolId, candidateFacts->contractId) ||
+        generation.findRefUnitCandidate(
+            candidateFacts->symbolId, candidateFacts->contractId)) {
+        error = "verified imported-Slot generation published an invalid binding";
+        return false;
+    }
+    loaded.proof_ = std::move(proofLease);
+    loaded.runtime_ = std::move(runtime);
+    loaded.generation_ = std::move(generation);
+    return true;
+}
+
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 bool stagePrivateNativeRefUnitPreparationForTest(
     luna::runtime::MoonRuntime& runtime,

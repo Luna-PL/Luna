@@ -58,6 +58,7 @@ struct VerifiedMoonRefUnitPreparationState;
 class VerifiedMoonRefUnitPreparation;
 class VerifiedMoonRefUnitGeneration;
 class VerifiedMoonImportedSlotRefUnitProof;
+class VerifiedMoonImportedSlotGeneration;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 struct PrivatePreparedRefGenerationForTest;
 #endif
@@ -198,6 +199,8 @@ public:
     std::optional<luna::codegen::NativeRefUnitSourceFacts> facts() const;
     std::optional<luna::runtime::GenerationRefUnitCandidate> candidateFacts() const;
     bool matchesPreparation(const VerifiedMoonRefUnitPreparation& preparation) const;
+    bool loadBindingOnce(VerifiedMoonImportedSlotGeneration& loaded,
+                         std::string& error) const;
 
 private:
     friend bool pinVerifiedMoonImportedSlotRefUnitProof(
@@ -205,6 +208,24 @@ private:
         const std::string&, const luna::runtime::RuntimeSlotRequirement&,
         VerifiedMoonImportedSlotRefUnitProof&, std::string&);
     VerifiedMoonRefUnitGeneration consumer_;
+};
+
+// Loader-owned proxy for a verified imported Slot. It retains the owner and
+// consumer proofs and publishes only a noncallable Slot binding internally.
+class VerifiedMoonImportedSlotGeneration {
+public:
+    explicit operator bool() const {
+        return proof_ && runtime_ && static_cast<bool>(generation_);
+    }
+    uint64_t generationId() const;
+    bool hasImportedSlotBinding() const;
+    std::optional<luna::runtime::GenerationRefUnitCandidate> candidateFacts() const;
+
+private:
+    friend class VerifiedMoonImportedSlotRefUnitProof;
+    std::shared_ptr<const VerifiedMoonImportedSlotRefUnitProof> proof_;
+    std::shared_ptr<luna::runtime::MoonRuntime> runtime_;
+    luna::runtime::MoonRuntime::PinnedGeneration generation_;
 };
 
 bool pinVerifiedMoonImportedSlotRefUnitProof(

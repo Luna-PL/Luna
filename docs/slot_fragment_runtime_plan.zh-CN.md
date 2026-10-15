@@ -1509,6 +1509,11 @@ generation pin。错误的源码或 Slot 身份，以及同一字节另行签发
 准入凭据。它从已验证源码派生不含指针的 Ref／unit candidate 事实和 ABI profile；
 其中的 linkage name 来自 JIT 查找成功后保留的状态 wrapper，而不是源码函数本体。
 凭据没有调用方法，也不发布 Runtime candidate 行。
+导入 Slot 凭据现可在另一个 loader 自有的内部 Runtime 中加载仅含一个不可调用 Slot 代理
+binding 的 generation。其 implementation 指向已固定 owner 的 verified Slot 声明，module
+lease 保留已签发的导入凭据及两侧 generation pin；物化键还包含 owner 产物摘要。不透明的
+结果在原 owner loader 销毁后继续保留 Runtime 与 binding pin，但没有 callable 或 Ref／unit
+candidate。这仅在内部建立 Runtime 要求的同 generation Slot binding，不改变公开 Ref 准入。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
 candidate。普通构建中的 generation 核验现同时比较 lease 地址与 `shared_ptr` 的共享所有权；
@@ -1642,8 +1647,8 @@ consumer 凭据保留已物化的代码 lease，但不暴露入口指针或 Runt
    私有 generation lease 现直接保留该凭据，类型化 candidate 同时核对凭据身份和 lease 所有权，
    随后调用普通 wrapper。普通构建现于 loader 自有 Runtime 中将精确凭据加载为不可调用的
    consumer generation，并为精确导入 Slot 与已固定的 owner binding 签发只含元数据的
-   凭据，并从中派生不含指针的 candidate 事实；下一步定义导入 Slot binding 的表示，
-   再接入 Runtime candidate。
+   凭据，并从中派生不含指针的 candidate 事实；另一个内部 generation 现加载一个不可调用的
+   导入 Slot 代理 binding。下一步在该 verified 代理上准入 Runtime candidate，公开加载仍受限。
    当前 Runtime candidate 要求同一 generation 的 Slot binding。期间默认发布验证继续关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation
    的 Ref，在显式 parent context 中执行源码 apply。私有 JIT 已覆盖借用入口、无效

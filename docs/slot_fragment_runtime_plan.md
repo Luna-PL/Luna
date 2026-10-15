@@ -2030,6 +2030,14 @@ Ref/unit candidate facts and ABI profile from the verified source, using the
 status wrapper name retained from the successful JIT lookup rather than the
 source-body linkage name. The proof has no call method and publishes no Runtime
 candidate row.
+The imported-Slot proof can now load a separate loader-owned internal
+generation with exactly one noncallable Slot proxy binding. Its implementation
+is the pinned owner's verified Slot declaration, while its module lease owns
+the issued import proof and both generation pins. The materialization key
+includes the owner artifact digest. The opaque result keeps its Runtime and
+binding pin alive after the original owner loader is destroyed; it still has
+no callable or Ref/unit candidate. This establishes the same-generation Slot
+binding prerequisite internally without changing public Ref admission.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
@@ -2219,8 +2227,9 @@ not a public ABI decision or stable-release approval:
    ordinary wrapper. The ordinary build now loads that exact proof as an inert
    consumer generation in a loader-owned Runtime, then issues a metadata-only
    proof for its exact imported Slot and pinned owner binding. That proof also
-   derives pointer-free candidate facts. Next define the imported Slot binding
-   representation and admit Runtime candidates.
+   derives pointer-free candidate facts and loads a separate private generation
+   with one noncallable imported-Slot proxy binding. Next admit a Runtime
+   candidate against that verified proxy while keeping public loading gated.
    The current Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref

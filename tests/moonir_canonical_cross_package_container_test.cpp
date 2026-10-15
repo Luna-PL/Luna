@@ -299,6 +299,7 @@ int runCrossPackageContainerTest() {
     luna::driver::PrivateImportedSlotRefUnitCandidateForTest refCandidate;
     luna::driver::VerifiedMoonRefUnitGeneration verifiedConsumerGeneration;
     luna::driver::VerifiedMoonImportedSlotRefUnitProof verifiedImport;
+    luna::driver::VerifiedMoonImportedSlotGeneration verifiedSlotGeneration;
     {
         luna::runtime::MoonRuntime runtime;
         luna::driver::VerifiedMoonSlotOwner rejectedOwner;
@@ -491,6 +492,19 @@ int runCrossPackageContainerTest() {
                 verifiedImport, error) ||
             !verifiedImport.matchesPreparation(consumerPreparation))
             return fail("verified imported-Slot proof lost or replaced its owner");
+        if (rejectedImport.loadBindingOnce(verifiedSlotGeneration, error) ||
+            verifiedSlotGeneration ||
+            !verifiedImport.loadBindingOnce(verifiedSlotGeneration, error)) {
+            std::cerr << error << '\n';
+            return fail("verified imported-Slot binding did not load privately");
+        }
+        if (!verifiedSlotGeneration ||
+            !verifiedSlotGeneration.generationId() ||
+            !verifiedSlotGeneration.hasImportedSlotBinding() ||
+            !verifiedSlotGeneration.candidateFacts() ||
+            verifiedImport.loadBindingOnce(verifiedSlotGeneration, error) ||
+            !verifiedSlotGeneration.hasImportedSlotBinding())
+            return fail("verified imported-Slot binding lost or replaced its pin");
         sameArtifactOtherProof = {};
         auto compatibleOwnerManifest = hostManifest;
         compatibleOwnerManifest.packageVersion = "0.3.1";
@@ -658,6 +672,12 @@ int runCrossPackageContainerTest() {
             !verifiedImport.facts() ||
             !verifiedImport.candidateFacts())
             return fail("verified imported-Slot proof lost its owner after loader teardown");
+        verifiedImport = {};
+        verifiedConsumerGeneration = {};
+        if (!verifiedSlotGeneration ||
+            !verifiedSlotGeneration.hasImportedSlotBinding() ||
+            !verifiedSlotGeneration.candidateFacts())
+            return fail("verified imported-Slot binding lost its owner after loader teardown");
         if (refCandidate.ownerGenerationId() != ownerGenerationId)
             return fail("private Ref candidate lost its owner after loader teardown");
     }
