@@ -56,6 +56,7 @@ bool loadVerifiedMoonGenerationOnce(
 struct VerifiedMoonSlotOwnerState;
 struct VerifiedMoonRefUnitPreparationState;
 class VerifiedMoonRefUnitPreparation;
+class VerifiedMoonRefUnitGeneration;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 struct PrivatePreparedRefGenerationForTest;
 #endif
@@ -118,6 +119,10 @@ public:
         const luna::runtime::MoonRuntime::PinnedGeneration& consumer) const;
 
 private:
+    friend class VerifiedMoonRefUnitGeneration;
+    friend bool loadVerifiedMoonRefUnitGenerationOnce(
+        const VerifiedMoonRefUnitPreparation&,
+        VerifiedMoonRefUnitGeneration&, std::string&);
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     friend class PrivateImportedSlotRefUnitCandidateForTest;
 #endif
@@ -144,6 +149,32 @@ bool loadVerifiedMoonRefUnitPreparation(
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
     VerifiedMoonRefUnitPreparation& preparation,
+    std::string& error);
+
+// Internal, inert consumer generation. A loader-owned Runtime loads the exact
+// preparation lease without publishing bindings or a Ref/unit candidate.
+// Generation IDs are scoped to that Runtime; use matchesPreparation for proof.
+class VerifiedMoonRefUnitGeneration {
+public:
+    explicit operator bool() const {
+        return static_cast<bool>(preparation_) && static_cast<bool>(consumer_);
+    }
+    uint64_t generationId() const;
+    uint64_t ownerGenerationId() const;
+    std::optional<luna::codegen::NativeRefUnitSourceFacts> facts() const;
+    bool matchesPreparation(const VerifiedMoonRefUnitPreparation& preparation) const;
+
+private:
+    friend bool loadVerifiedMoonRefUnitGenerationOnce(
+        const VerifiedMoonRefUnitPreparation&,
+        VerifiedMoonRefUnitGeneration&, std::string&);
+    VerifiedMoonRefUnitPreparation preparation_;
+    luna::runtime::MoonRuntime::PinnedGeneration consumer_;
+};
+
+bool loadVerifiedMoonRefUnitGenerationOnce(
+    const VerifiedMoonRefUnitPreparation& preparation,
+    VerifiedMoonRefUnitGeneration& loaded,
     std::string& error);
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST

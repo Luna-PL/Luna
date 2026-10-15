@@ -1498,6 +1498,11 @@ generation 签发的借用 Ref；无效 parent／handle 被拒绝，销毁 Runti
 直接的私有测试入口仍调用独立的仅测试用 JIT。私有类型化 candidate 现仅在 consumer pin
 匹配精确的私有 generation lease 后，才调用普通构建代码 lease 中的 wrapper。
 回归在 Runtime 销毁后重复类型化调用前，先释放独立的测试入口。
+普通构建现也把已签发的准备凭据加载到新的、由 loader 自有的 Runtime，形成不可调用的
+consumer generation。其 module lease 就是准备凭据本身，保留精确 owner pin 和已物化代码；
+返回的不透明凭据核对共享 lease 所有权，而不只比较包 ID 与摘要。staging 不解析任何 binding
+或 Ref／unit candidate，凭据也不暴露代码入口或 Runtime pin。空凭据及针对同一产物另行签发的
+凭据不能借用或替换已加载 generation。generation ID 只在 loader 自有 Runtime 内有意义。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
 candidate。普通构建中的 generation 核验现同时比较 lease 地址与 `shared_ptr` 的共享所有权；
@@ -1505,11 +1510,12 @@ candidate。普通构建中的 generation 核验现同时比较 lease 地址与 
 不能借用入口。此检查自身不证明 lease 内容。该 candidate 在 Runtime
 销毁后仍保留 consumer 与 owner 并重复类型化调用；普通 Runtime candidate 查询仍为空。
 此路径不发布 callable 或 Container candidate 行。
-MoonRuntime 的通用 staging API 仍接收宿主提供的身份事实。owner 与 consumer 准备凭据现有
-普通构建路径，但普通加载流程还未用它们接纳导入的 Ref candidate。生产 candidate 发布前须
-要求 consumer 凭据，将其绑定到精确 consumer lease 与导入 Slot，并保留 owner pin。
-consumer 凭据现保留已物化的代码 lease，但不暴露入口指针或 Runtime candidate。
-把代码接入普通的 verified consumer generation，以及 Runtime candidate 准入仍是独立完成门。
+MoonRuntime 的通用 staging API 仍接收宿主提供的身份事实。owner、consumer 准备凭据及
+不可调用的 consumer generation 现有普通构建路径，但普通公开加载流程还未用它们接纳
+导入的 Ref candidate。生产 candidate 发布前须要求 consumer 凭据，将其绑定到精确
+consumer lease 与导入 Slot，并保留 owner pin。
+consumer 凭据保留已物化的代码 lease，但不暴露入口指针或 Runtime candidate。
+把代码绑定为 callable，以及 Runtime candidate 准入仍是独立完成门。
 普通入口目前只由隔离的类型化 candidate 测试调用。
 冻结的 `DeclarationRecord`／
 规范契约和 Native v1
@@ -1628,14 +1634,15 @@ consumer 凭据现保留已物化的代码 lease，但不暴露入口指针或 R
    普通构建的 consumer 准备凭据现独立解码产物、派生源码事实、物化并查找隔离且通过预检的
    wrapper，并保留精确 owner pin 和代码 lease。
    私有 generation lease 现直接保留该凭据，类型化 candidate 同时核对凭据身份和 lease 所有权，
-   随后调用普通 wrapper；下一步须建立普通的 verified consumer generation 路径，
-   再接入 Runtime candidate。
+   随后调用普通 wrapper。普通构建现于 loader 自有 Runtime 中将精确凭据加载为不可调用的
+   consumer generation；下一步定义导入 Slot binding，再接入 Runtime candidate。
    当前 Runtime candidate 要求同一 generation 的 Slot binding。期间默认发布验证继续关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation
    的 Ref，在显式 parent context 中执行源码 apply。私有 JIT 已覆盖借用入口、无效
-   capability 拒绝及 Runtime 销毁后的重复调用。仍须完成 verified consumer generation
-   路径和拥有型参数／返回转移，并覆盖名义／contract 错配、入口失败、正常／提前退出及
-   清理与 pin 释放。完成此门和剩余控制流用例后，`source-ref-apply` 才可脱离
+   capability 拒绝及 Runtime 销毁后的重复调用。仍须将不可调用的 verified consumer
+   generation 接入准入的 candidate，完成拥有型参数／返回转移，并覆盖名义／contract
+   错配、入口失败、正常／提前退出及清理与 pin 释放。完成此门和剩余控制流用例后，
+   `source-ref-apply` 才可脱离
    `implementation-open`。
 
 性能验收、持久证据存储和稳定版发布批准仍是 v1 验收快照中的独立完成门。

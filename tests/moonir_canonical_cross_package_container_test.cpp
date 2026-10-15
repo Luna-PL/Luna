@@ -297,6 +297,7 @@ int runCrossPackageContainerTest() {
     std::weak_ptr<luna::driver::PrivatePreparedRefGenerationForTest>
         refPreparationWeak;
     luna::driver::PrivateImportedSlotRefUnitCandidateForTest refCandidate;
+    luna::driver::VerifiedMoonRefUnitGeneration verifiedConsumerGeneration;
     {
         luna::runtime::MoonRuntime runtime;
         luna::driver::VerifiedMoonSlotOwner rejectedOwner;
@@ -398,6 +399,37 @@ int runCrossPackageContainerTest() {
                 refManifest.dataLayout, consumerPreparation, error) ||
             consumerPreparation.ownerGenerationId() != ownerGenerationId)
             return fail("verified Ref consumer preparation lost or replaced its owner");
+        if (luna::driver::loadVerifiedMoonRefUnitGenerationOnce(
+                rejectedPreparation, verifiedConsumerGeneration, error) ||
+            verifiedConsumerGeneration ||
+            !luna::driver::loadVerifiedMoonRefUnitGenerationOnce(
+                consumerPreparation, verifiedConsumerGeneration, error)) {
+            std::cerr << error << '\n';
+            return fail("verified Ref consumer did not load its inert generation");
+        }
+        const auto loadedFacts = verifiedConsumerGeneration.facts();
+        if (!verifiedConsumerGeneration ||
+            !verifiedConsumerGeneration.generationId() ||
+            verifiedConsumerGeneration.ownerGenerationId() != ownerGenerationId ||
+            !verifiedConsumerGeneration.matchesPreparation(consumerPreparation) ||
+            !loadedFacts ||
+            loadedFacts->functionSymbolId != refSource->symbolId.value ||
+            loadedFacts->functionContractId != refSource->contractId.value ||
+            luna::driver::loadVerifiedMoonRefUnitGenerationOnce(
+                consumerPreparation, verifiedConsumerGeneration, error) ||
+            !verifiedConsumerGeneration.matchesPreparation(consumerPreparation))
+            return fail("verified Ref consumer generation lost or replaced its proof");
+        luna::driver::VerifiedMoonRefUnitPreparation sameArtifactOtherProof;
+        if (!luna::driver::loadVerifiedMoonRefUnitPreparation(
+                refBytes, ownerProof, refManifest.targetTriple,
+                refManifest.dataLayout, sameArtifactOtherProof, error)) {
+            std::cerr << error << '\n';
+            return fail("same Ref artifact did not issue a separate preparation");
+        }
+        if (verifiedConsumerGeneration.matchesPreparation(sameArtifactOtherProof) ||
+            verifiedConsumerGeneration.matchesPreparation(rejectedPreparation))
+            return fail("verified Ref consumer borrowed another preparation lease");
+        sameArtifactOtherProof = {};
         auto compatibleOwnerManifest = hostManifest;
         compatibleOwnerManifest.packageVersion = "0.3.1";
         std::vector<uint8_t> compatibleOwnerBytes;
@@ -555,6 +587,10 @@ int runCrossPackageContainerTest() {
         if (consumerPreparation.ownerGenerationId() != ownerGenerationId)
             return fail("verified Ref preparation lost its owner after loader teardown");
         consumerPreparation = {};
+        if (!verifiedConsumerGeneration ||
+            verifiedConsumerGeneration.ownerGenerationId() != ownerGenerationId ||
+            !verifiedConsumerGeneration.facts())
+            return fail("verified Ref consumer generation lost its proof after loader teardown");
         if (refCandidate.ownerGenerationId() != ownerGenerationId)
             return fail("private Ref candidate lost its owner after loader teardown");
     }

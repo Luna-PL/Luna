@@ -2013,6 +2013,14 @@ The private typed candidate now calls the wrapper from the ordinary-build code
 lease only after its consumer pin matches that exact private generation lease.
 The regression drops the separate test entry before repeating typed calls after
 Runtime teardown.
+The ordinary build now also loads the issued preparation into a fresh,
+loader-owned Runtime as an inert consumer generation. Its module lease is the
+preparation proof itself, retaining the exact owner pin and materialized code;
+the returned opaque token checks shared lease ownership, not just package ID
+and digest. Staging resolves no bindings or Ref/unit candidates, and the token
+does not expose the code entry or Runtime pin. Empty and independently issued
+proofs cannot borrow or replace that loaded generation. Its generation ID is
+local to the loader-owned Runtime.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
@@ -2025,13 +2033,14 @@ through Runtime teardown and repeats the typed call; the ordinary Runtime candid
 lookup still returns empty. This does not publish a callable or a Container
 candidate row.
 MoonRuntime's generic staging API still takes host-supplied identity facts.
-The owner and consumer preparation proofs now have ordinary build paths, but
-ordinary loading does not yet use them for imported Ref candidates. Production
-candidate admission must require the consumer proof, bind it to the exact consumer
-lease and imported Slot, and retain the owner pin before publication. The
-consumer proof now retains a materialized code lease, but no entry pointer or
-Runtime candidate is exposed. Binding that code through an ordinary verified
-consumer generation and admitting a Runtime candidate remain separate gates.
+The owner and consumer preparation proofs and inert consumer generation now
+have ordinary build paths, but ordinary public loading does not yet use them
+for imported Ref candidates. Production candidate admission must require the
+consumer proof, bind it to the exact consumer lease and imported Slot, and
+retain the owner pin before publication. The
+consumer proof retains a materialized code lease, but no entry pointer or
+Runtime candidate is exposed. Binding that code as a callable and admitting a
+Runtime candidate remain separate gates.
 The ordinary entry is exercised only by the quarantined typed candidate test.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
@@ -2198,15 +2207,17 @@ not a public ABI decision or stable-release approval:
    preflight-verified wrapper, and retains that exact owner pin and code lease.
    The private generation lease now retains that proof, and its typed candidate
    checks both the proof identity and lease ownership before calling the
-   ordinary wrapper. Next provide a verified ordinary consumer generation path
-   and admit Runtime candidates.
+   ordinary wrapper. The ordinary build now loads that exact proof as an inert
+   consumer generation in a loader-owned Runtime. Next define the imported
+   Slot binding and admit Runtime candidates.
    The current Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref
    from a verified generation; run source apply against an explicit parent
    context. The private JIT now covers borrowed ingress, invalid capability
-   rejection and repeated calls after Runtime teardown. Complete the verified
-   consumer generation path and owning parameter/return transfer. Include
+   rejection and repeated calls after Runtime teardown. Connect the inert
+   verified consumer generation to an admitted candidate and complete owning
+   parameter/return transfer. Include
    nominal/contract mismatch, failed ingress, normal and early exits, and
    cleanup/pin-release regressions. Only after this gate and the remaining
    control-flow cases pass may

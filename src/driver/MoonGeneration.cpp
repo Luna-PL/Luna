@@ -604,6 +604,102 @@ bool loadVerifiedMoonRefUnitPreparation(
     return true;
 }
 
+uint64_t VerifiedMoonRefUnitGeneration::generationId() const {
+    return consumer_.generationId();
+}
+
+uint64_t VerifiedMoonRefUnitGeneration::ownerGenerationId() const {
+    return preparation_.ownerGenerationId();
+}
+
+std::optional<luna::codegen::NativeRefUnitSourceFacts>
+VerifiedMoonRefUnitGeneration::facts() const {
+    return preparation_.facts();
+}
+
+bool VerifiedMoonRefUnitGeneration::matchesPreparation(
+    const VerifiedMoonRefUnitPreparation& preparation) const {
+    return *this && preparation.state_ &&
+           consumer_.matchesModuleLease(preparation.state_) &&
+           preparation.matchesConsumer(consumer_);
+}
+
+bool loadVerifiedMoonRefUnitGenerationOnce(
+    const VerifiedMoonRefUnitPreparation& preparation,
+    VerifiedMoonRefUnitGeneration& loaded,
+    std::string& error) {
+    error.clear();
+    if (loaded) {
+        error = "verified Ref/unit generation output already owns a generation";
+        return false;
+    }
+    if (!preparation.state_ || !preparation.state_->ownerGeneration ||
+        !preparation.state_->codeLease || !preparation.state_->codeEntry) {
+        error = "verified Ref/unit generation requires a complete preparation";
+        return false;
+    }
+    const auto lease = std::shared_ptr<const void>(preparation.state_);
+    luna::runtime::GenerationStagingRequest request;
+    request.moduleId = preparation.state_->manifest.packageId;
+    request.contentDigest = preparation.state_->contentDigest;
+    request.materializationKey =
+        std::string("luna.internal-ref-unit-preparation.v1:llvm=") +
+        LLVM_VERSION_STRING + ":ir=O0:orc=default";
+    request.moduleLease = lease;
+
+    luna::runtime::MoonRuntime runtime;
+    luna::runtime::MoonRuntime::StagedGeneration staged;
+    const auto& state = *preparation.state_;
+    if (!runtime.stage(
+            request,
+            [&state, &lease](const auto& candidate,
+                             std::string& verificationError) {
+                if (candidate.moduleId != state.manifest.packageId ||
+                    candidate.contentDigest != state.contentDigest ||
+                    candidate.moduleLease.get() != lease.get() ||
+                    candidate.moduleLease.owner_before(lease) ||
+                    lease.owner_before(candidate.moduleLease) ||
+                    !candidate.refUnitCandidates.empty() ||
+                    candidate.refUnitCaller) {
+                    verificationError =
+                        "verified Ref/unit generation changed before staging";
+                    return false;
+                }
+                return true;
+            },
+            [](const auto&, auto& bindings, std::string& resolutionError) {
+                if (!bindings.empty()) {
+                    resolutionError =
+                        "verified Ref/unit generation cannot publish bindings";
+                    return false;
+                }
+                return true;
+            },
+            {}, staged, error))
+        return false;
+    if (!staged || staged.moduleId() != state.manifest.packageId ||
+        staged.contentDigest() != state.contentDigest ||
+        staged.materializationKey() != request.materializationKey) {
+        error = "verified Ref/unit staging changed its artifact";
+        return false;
+    }
+    luna::runtime::MoonRuntime::PinnedGeneration consumer;
+    if (!runtime.loadOnce(staged, consumer, error)) return false;
+    if (!consumer.matchesModuleLease(lease) ||
+        !preparation.matchesConsumer(consumer) ||
+        consumer.materializationKey() != request.materializationKey ||
+        consumer.find(state.facts.functionSymbolId,
+                      state.facts.functionContractId) ||
+        consumer.findRefUnitCandidate(state.facts.functionSymbolId,
+                                      state.facts.functionContractId)) {
+        error = "verified Ref/unit generation lost its inert preparation lease";
+        return false;
+    }
+    loaded.preparation_ = preparation;
+    loaded.consumer_ = std::move(consumer);
+    return true;
+}
+
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 bool stagePrivateNativeRefUnitPreparationForTest(
     luna::runtime::MoonRuntime& runtime,
