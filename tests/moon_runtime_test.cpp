@@ -150,6 +150,113 @@ int main() {
             return fail("empty generation exposed a configuration key");
     }
 
+    // A staged generation's module exclusion is checked at publication, in
+    // both directions, and again when rolling back to a retained generation.
+    {
+        constexpr const char* OwnerId = "org.luna.test.owner";
+        Runtime runtime;
+        Request consumer{ModuleId, std::string(64, 'c'),
+                         std::make_shared<int>(1)};
+        consumer.requiredAbsentModuleIds = {OwnerId};
+        Request owner{OwnerId, std::string(64, 'd'),
+                      std::make_shared<int>(2)};
+        Runtime::StagedGeneration consumerStage;
+        Runtime::StagedGeneration ownerStage;
+        std::string phases;
+        if (!stageOne(runtime, consumer, SymbolId, ContractId, &first,
+                      consumerStage, phases, error) ||
+            !stageOne(runtime, owner, "symbol:owner", ContractId, &second,
+                      ownerStage, phases, error))
+            return fail("module exclusion fixture did not stage");
+        Runtime::PinnedGeneration ownerPin;
+        if (!runtime.loadOnce(ownerStage, ownerPin, error))
+            return fail("owner did not load after dependent staging");
+        auto conflictPoint = runtime.safePoint();
+        if (runtime.activate(consumerStage, conflictPoint, error) ||
+            error != "generation conflicts with an active module" ||
+            !consumerStage || runtime.activeGenerationId(ModuleId) != 0 ||
+            runtime.activeGenerationId(OwnerId) != ownerPin.generationId())
+            return fail("activation ignored a newly active excluded module");
+    }
+    {
+        constexpr const char* OwnerId = "org.luna.test.owner";
+        Runtime runtime;
+        Request consumer{ModuleId, std::string(64, 'c'),
+                         std::make_shared<int>(1)};
+        consumer.requiredAbsentModuleIds = {OwnerId};
+        Request owner{OwnerId, std::string(64, 'd'),
+                      std::make_shared<int>(2)};
+        Runtime::StagedGeneration consumerStage;
+        Runtime::StagedGeneration ownerStage;
+        std::string phases;
+        if (!stageOne(runtime, consumer, SymbolId, ContractId, &first,
+                      consumerStage, phases, error) ||
+            !stageOne(runtime, owner, "symbol:owner", ContractId, &second,
+                      ownerStage, phases, error))
+            return fail("reverse module exclusion fixture did not stage");
+        Runtime::PinnedGeneration consumerPin;
+        if (!runtime.loadOnce(consumerStage, consumerPin, error))
+            return fail("excluded-module consumer did not load");
+        Request changedExclusion = consumer;
+        changedExclusion.requiredAbsentModuleIds.clear();
+        Runtime::StagedGeneration changedStage;
+        if (!stageOne(runtime, changedExclusion, SymbolId, ContractId,
+                      &first, changedStage, phases, error))
+            return fail("changed module exclusion fixture did not stage");
+        Runtime::PinnedGeneration rejectedCache;
+        if (runtime.loadOnce(changedStage, rejectedCache, error) ||
+            error != "same-content generation changed module exclusions" ||
+            rejectedCache || !changedStage)
+            return fail("load-once reused a generation with different exclusions");
+        Runtime::PinnedGeneration rejectedOwner;
+        if (runtime.loadOnce(ownerStage, rejectedOwner, error) ||
+            error != "generation conflicts with an active module" ||
+            rejectedOwner || !ownerStage)
+            return fail("load-once ignored an active module exclusion");
+        auto conflictPoint = runtime.safePoint();
+        if (runtime.activate(ownerStage, conflictPoint, error) ||
+            error != "generation conflicts with an active module" ||
+            runtime.activeGenerationId(OwnerId) != 0)
+            return fail("activation ignored the active generation's exclusion");
+        Request replacement{ModuleId, std::string(64, 'e'),
+                            std::make_shared<int>(3)};
+        Runtime::StagedGeneration replacementStage;
+        if (!stageOne(runtime, replacement, SymbolId, ContractId, &third,
+                      replacementStage, phases, error))
+            return fail("module exclusion replacement did not stage");
+        const auto replacementId = replacementStage.generationId();
+        auto replacePoint = runtime.safePoint();
+        if (!runtime.activate(replacementStage, replacePoint, error))
+            return fail("module exclusion replacement did not activate");
+        Runtime::PinnedGeneration ownerPin;
+        if (!runtime.loadOnce(ownerStage, ownerPin, error))
+            return fail("owner did not load after exclusion became inactive");
+        auto rollbackPoint = runtime.safePoint();
+        if (runtime.rollback(ModuleId, consumerPin.generationId(),
+                             rollbackPoint, error) ||
+            error != "generation conflicts with an active module" ||
+            runtime.activeGenerationId(ModuleId) != replacementId ||
+            implementationOf(consumerPin.find(SymbolId, ContractId)) != &first)
+            return fail("rollback restored an excluded module or lost the old pin");
+    }
+    {
+        Runtime runtime;
+        Request request{ModuleId, std::string(64, 'c'),
+                        std::make_shared<int>(1)};
+        for (const auto& invalid : {
+                 std::vector<std::string>{ModuleId},
+                 std::vector<std::string>{"org.luna.test.owner", "org.luna.test.owner"},
+                 std::vector<std::string>{"bad\nmodule"}}) {
+            request.requiredAbsentModuleIds = invalid;
+            Runtime::StagedGeneration staged;
+            std::string phases;
+            if (stageOne(runtime, request, SymbolId, ContractId, &first,
+                         staged, phases, error) || staged || !phases.empty() ||
+                error != "generation required-absent module list is invalid")
+                return fail("invalid module exclusion reached generation verification");
+        }
+    }
+
     // A v4 metadata pin needs a matching public Slot in the same generation;
     // it never becomes a callable binding by sharing a SymbolId.
     {

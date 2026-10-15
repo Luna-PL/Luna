@@ -31,6 +31,7 @@ struct MoonRuntime::GenerationState {
     std::vector<GenerationRefUnitCandidate> refUnitCandidates;
     GenerationRefUnitCaller refUnitCaller;
     std::shared_ptr<const void> refUnitCallerLease;
+    std::vector<std::string> requiredAbsentModuleIds;
 };
 
 struct MoonRuntime::ModuleState {
@@ -342,6 +343,20 @@ bool MoonRuntime::stage(
         error = "generation Ref/unit call adapter has no exact module lease";
         return false;
     }
+    auto requiredAbsentModuleIds = request.requiredAbsentModuleIds;
+    std::sort(requiredAbsentModuleIds.begin(), requiredAbsentModuleIds.end());
+    if (std::any_of(requiredAbsentModuleIds.begin(),
+                    requiredAbsentModuleIds.end(),
+                    [&](const std::string& moduleId) {
+                        return !validIdentity(moduleId) ||
+                            moduleId == request.moduleId;
+                    }) ||
+        std::adjacent_find(requiredAbsentModuleIds.begin(),
+                           requiredAbsentModuleIds.end()) !=
+            requiredAbsentModuleIds.end()) {
+        error = "generation required-absent module list is invalid";
+        return false;
+    }
     std::vector<GenerationBinding> bindings;
     try {
         if (!verifier(request, error)) {
@@ -482,6 +497,8 @@ bool MoonRuntime::stage(
     generation->refUnitCandidates = std::move(refUnitCandidates);
     generation->refUnitCaller = request.refUnitCaller;
     generation->refUnitCallerLease = request.refUnitCallerLease;
+    generation->requiredAbsentModuleIds =
+        std::move(requiredAbsentModuleIds);
     staged.owner_ = this;
     staged.generation_ = std::move(generation);
     return true;
@@ -509,6 +526,25 @@ bool MoonRuntime::validatesRequirements(
                 requirement.requiredFlags ||
             binding->entryAbi != requirement.entryAbi) {
             error = "generation does not satisfy an existing switchable binding";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool MoonRuntime::validatesModuleExclusions(
+    const GenerationState& generation, std::string& error) const {
+    for (const auto& [moduleId, module] : modules_) {
+        if (moduleId == generation.moduleId) continue;
+        const auto active = module->active.load();
+        if (!active) continue;
+        if (std::binary_search(generation.requiredAbsentModuleIds.begin(),
+                               generation.requiredAbsentModuleIds.end(),
+                               moduleId) ||
+            std::binary_search(active->requiredAbsentModuleIds.begin(),
+                               active->requiredAbsentModuleIds.end(),
+                               generation.moduleId)) {
+            error = "generation conflicts with an active module";
             return false;
         }
     }
@@ -551,6 +587,11 @@ bool MoonRuntime::loadOnce(
             error = "module is already loaded with different materialization configuration";
             return false;
         }
+        if (active->requiredAbsentModuleIds !=
+            staged.generation_->requiredAbsentModuleIds) {
+            error = "same-content generation changed module exclusions";
+            return false;
+        }
         if (active->bindings.size() != staged.generation_->bindings.size()) {
             error = "same-content generation resolved a different binding set";
             return false;
@@ -576,6 +617,7 @@ bool MoonRuntime::loadOnce(
         error = "load-once module has retained generations but no active generation";
         return false;
     }
+    if (!validatesModuleExclusions(*staged.generation_, error)) return false;
     module->history.push_back(staged.generation_);
     module->active.store(staged.generation_);
     loaded.generation_ = staged.generation_;
@@ -596,6 +638,8 @@ bool MoonRuntime::activate(
     auto& module = modules_[staged.generation_->moduleId];
     if (!module) module = std::make_shared<ModuleState>();
     if (!validatesRequirements(*module, *staged.generation_, error))
+        return false;
+    if (!validatesModuleExclusions(*staged.generation_, error))
         return false;
     module->history.push_back(staged.generation_);
     module->active.store(staged.generation_);
@@ -626,6 +670,7 @@ bool MoonRuntime::rollback(
         return false;
     }
     if (!validatesRequirements(module, **generation, error)) return false;
+    if (!validatesModuleExclusions(**generation, error)) return false;
     module.active.store(*generation);
     return true;
 }

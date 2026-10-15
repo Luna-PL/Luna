@@ -1534,6 +1534,12 @@ Runtime 销毁后仍可重复调用。公开 Ref 准入不变。
 candidate 查询消失时，旧 candidate pin 仍可调用；随后在 safe point 回滚，并调用恢复的当前
 candidate。这验证宿主 Runtime 切换与 pin 生命周期契约。替换 generation 只使用夹具 verifier，
 并非经编译器验证的发布，也不证明 owner 共同发布。
+私有宿主请求现声明已验证 owner 的 module 必须未激活。Runtime 在发布锁内双向核验：
+candidate staging 后才加载 owner 会阻止 candidate 激活；candidate 已激活时会阻止 owner
+load 或 activation。owner 激活期间回滚至被排斥的 candidate 也会拒绝，旧 pin 仍有效。
+无效排斥列表及排斥声明不同的 load-once 缓存请求同样被拒绝。这关闭了私有探针从 staging
+到 activation 的间隙；宿主提供的排斥声明本身不认证产物，也不定义 owner／consumer
+原子共同发布。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
 candidate。普通构建中的 generation 核验现同时比较 lease 地址与 `shared_ptr` 的共享所有权；
@@ -1684,7 +1690,8 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    整体拒绝。公开加载继续受限。通用 Runtime staging 现要求精确的 typed caller lease
    和显式激活，禁止 Ref／unit 的 load-once 复用。仅测试用探针现通过编译器签发的 consumer
    与 owner 凭据向调用方 Runtime staging，并保留类型化 pin。宿主切换／回滚回归现用合成
-   空 replacement 验证当前查询和旧 pin 行为。下一步确定生产发布 verifier 与 owner 共同
+   空 replacement 验证当前查询和旧 pin 行为。Runtime 现于 activation、load-once 与
+   rollback 双向执行私有 owner 的未激活约束。下一步确定生产发布 verifier 与 owner 共同
    发布规则，包括经验证 generation 间的回滚，再考虑公开 candidate 发布。Runtime candidate 要求同一
    generation 的 Slot binding；
    默认发布验证仍关闭。

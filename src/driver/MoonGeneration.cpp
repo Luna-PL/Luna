@@ -1174,6 +1174,7 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTest(
         return pinnedCaller.call(parent, reference, status, callError);
     };
     request.refUnitCallerLease = proofLease;
+    request.requiredAbsentModuleIds = {state.ownerGeneration.moduleId()};
     if (!target.stage(
             request,
             [this, &request, &expected](const auto& candidate,
@@ -1187,7 +1188,9 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTest(
                     candidate.refUnitCandidates.size() != 1 ||
                     !sameRefUnitCandidateFacts(
                         candidate.refUnitCandidates.front(), *expected) ||
-                    !candidate.refUnitCaller) {
+                    !candidate.refUnitCaller ||
+                    candidate.requiredAbsentModuleIds !=
+                        request.requiredAbsentModuleIds) {
                     verificationError =
                         "private Ref/unit host candidate changed before staging";
                     return false;

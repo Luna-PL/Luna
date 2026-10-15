@@ -993,6 +993,24 @@ int runCrossPackageContainerTest() {
                 conflictingHost, rejectedStage, error) || rejectedStage)
             return fail("private host Ref staging accepted a separate owner module");
     }
+    {
+        luna::runtime::MoonRuntime activationRaceHost;
+        luna::runtime::MoonRuntime::StagedGeneration staged;
+        luna::runtime::MoonRuntime::PinnedGeneration hostOwner;
+        if (!integratedRefGeneration.stageInRuntimeForTest(
+                activationRaceHost, staged, error) ||
+            !luna::driver::loadVerifiedMoonGenerationOnce(
+                activationRaceHost, hostBytes, hostManifest.targetTriple,
+                hostManifest.dataLayout, hostOwner, error))
+            return fail("private host Ref activation conflict fixture did not load");
+        auto safePoint = activationRaceHost.safePoint();
+        if (activationRaceHost.activate(staged, safePoint, error) ||
+            error != "generation conflicts with an active module" ||
+            !staged ||
+            activationRaceHost.activeGenerationId(
+                hostOwner.moduleId()) != hostOwner.generationId())
+            return fail("private host Ref activation ignored a late owner module");
+    }
     luna::runtime::MoonRuntime::PinnedRefUnitCandidate hostRuntimePin;
     {
         luna::runtime::MoonRuntime hostRuntime;
@@ -1029,6 +1047,15 @@ int runCrossPackageContainerTest() {
             integratedRefGeneration.stageInRuntimeForTest(
                 hostRuntime, staged, error) || staged)
             return fail("host Ref admission lost its proof or allowed replacement");
+        luna::runtime::MoonRuntime::PinnedGeneration rejectedHostOwner;
+        if (luna::driver::loadVerifiedMoonGenerationOnce(
+                hostRuntime, hostBytes, hostManifest.targetTriple,
+                hostManifest.dataLayout, rejectedHostOwner, error) ||
+            rejectedHostOwner ||
+            error != "generation conflicts with an active module" ||
+            hostRuntime.activeGenerationId(hostFacts->packageId) !=
+                hostGeneration.generationId())
+            return fail("private host owner loaded across an active Ref candidate");
         luna::runtime::GenerationStagingRequest inertRequest;
         inertRequest.moduleId = hostFacts->packageId;
         inertRequest.contentDigest = hostGeneration.contentDigest();

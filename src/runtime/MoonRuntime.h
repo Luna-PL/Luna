@@ -75,6 +75,9 @@ struct GenerationStagingRequest {
     // lease (address and shared ownership); Runtime retains it with the caller.
     GenerationRefUnitCaller refUnitCaller = {};
     std::shared_ptr<const void> refUnitCallerLease = {};
+    // Active generations of these modules are incompatible with this
+    // generation. Runtime checks both sides of the exclusion at publication.
+    std::vector<std::string> requiredAbsentModuleIds = {};
 };
 
 struct GenerationBinding {
@@ -238,8 +241,8 @@ public:
                StagedGeneration& staged, std::string& error);
     bool activate(StagedGeneration& staged, SafePoint& safePoint,
                   std::string& error);
-    // Publishes the first generation for a module. Repeating the same content
-    // and materialization key returns the already-pinned generation;
+    // Publishes the first generation for a module. Repeating the same content,
+    // materialization key and module exclusions returns the active generation;
     // different content/configuration is rejected and must use activate().
     bool loadOnce(StagedGeneration& staged, PinnedGeneration& loaded,
                   std::string& error);
@@ -275,6 +278,10 @@ private:
     static bool validatesRequirements(
         const ModuleState& module, const GenerationState& generation,
         std::string& error);
+    // Caller holds mutex_. Checks the candidate and all currently active
+    // generations so publication cannot invalidate an existing exclusion.
+    bool validatesModuleExclusions(
+        const GenerationState& generation, std::string& error) const;
     bool consumeSafePoint(SafePoint& safePoint, std::string& error) const;
 
     mutable std::mutex mutex_;
