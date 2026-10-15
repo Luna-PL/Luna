@@ -2077,8 +2077,8 @@ activation, and an active candidate blocks owner load or activation. Rollback
 to an excluded candidate is also rejected while the owner is active; the old
 pin remains valid. Invalid exclusion lists and a load-once cache request with
 changed exclusions are rejected. These checks close the staging-to-activation
-gap for the private probe; they do not authenticate host-supplied exclusions
-or define atomic owner/consumer co-publication.
+gap for the private probe; these exclusion checks alone do not authenticate
+host-supplied exclusions or define owner/consumer co-publication.
 Runtime now also accepts an exact required-active module generation. Under the
 same publication lock, it rejects a missing or changed dependency and blocks
 replacement of an owner required by an active consumer. A load-once cache hit
@@ -2114,9 +2114,17 @@ before publishing either generation. `pinTogether` reads both active pins
 under that publication lock; concurrent regression checks it never observes
 a mixed pair across repeated switches. Individual `pin` and switchable reads
 remain per-module and may observe an intermediate pair during the two stores.
-The runtime policy does not verify artifact provenance. The private loader
-still stages its Ref candidate against an already active owner, so the
-proof-backed owner and consumer are not yet staged for paired activation.
+The runtime policy does not verify artifact provenance. The private loader can
+now stage its Ref candidate against a verified owner that is staged in the
+same host Runtime. A read-only Runtime check compares the staged generation's
+Runtime, exact owner-state lease and full public Slot binding without exposing
+an unactivated callable pin. The candidate requires that staged owner ID;
+single activation fails, while paired activation and `pinTogether` succeed.
+The cross-package regression rejects a foreign staged owner, a separately
+loaded proof of the same owner bytes, and pair activation with that other
+stage after the consumer is prepared. It executes the typed call and retains
+its candidate pin across host teardown. This remains test-only; the production
+verifier and public candidate gate stay closed.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
@@ -2336,9 +2344,10 @@ not a public ABI decision or stable-release approval:
    private verified owner proof can independently stage the full binding set;
    candidate admission binds to that exact active owner generation and blocks
    independent owner switching. Runtime now has paired activation and paired
-   pinning, with final-set dependency validation. Next stage the proof-backed
-   consumer against a staged owner, exercise paired activation, and define
-   the production verifier before any public candidate publication.
+   pinning, with final-set dependency validation. The private verified consumer
+   now stages against its exact staged owner and exercises paired activation.
+   Next define the production verifier and its public admission boundary before
+   any public candidate publication.
    The Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref

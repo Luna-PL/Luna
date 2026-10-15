@@ -189,6 +189,23 @@ int main() {
         if (!stageOne(runtime, owner, "symbol:owner", ContractId, &first,
                       ownerStage, phases, error))
             return fail("paired owner did not stage");
+        const Binding ownerBinding{
+            "symbol:owner", ContractId, &first, 1,
+            luna::runtime::GenerationBindingCallable};
+        const std::shared_ptr<const void> forgedLease(
+            owner.moduleLease.get(), [](const void*) {});
+        auto changedBinding = ownerBinding;
+        changedBinding.implementation = &second;
+        Runtime otherOwnerRuntime;
+        if (!runtime.matchesStagedGeneration(
+                ownerStage, owner.moduleLease, ownerBinding) ||
+            runtime.matchesStagedGeneration(
+                ownerStage, forgedLease, ownerBinding) ||
+            runtime.matchesStagedGeneration(
+                ownerStage, owner.moduleLease, changedBinding) ||
+            otherOwnerRuntime.matchesStagedGeneration(
+                ownerStage, owner.moduleLease, ownerBinding))
+            return fail("staged owner attestation ignored Runtime, lease or binding");
         Request consumer{ModuleId, std::string(64, 'b'),
                          std::make_shared<int>(2)};
         consumer.requiredActiveModules = {{OwnerId, ownerStage.generationId()}};
@@ -201,7 +218,9 @@ int main() {
         auto firstPoint = runtime.safePoint();
         if (!runtime.activateTogether(ownerStage, consumerStage,
                                       firstPoint, error) ||
-            ownerStage || consumerStage)
+            ownerStage || consumerStage ||
+            runtime.matchesStagedGeneration(
+                ownerStage, owner.moduleLease, ownerBinding))
             return fail("initial owner and consumer did not activate together");
         auto oldPair = runtime.pinTogether(OwnerId, ModuleId);
         if (!oldPair.first || !oldPair.second ||

@@ -1130,6 +1130,86 @@ int runCrossPackageContainerTest() {
             candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
             return fail("host Ref rollback did not restore the callable candidate");
     }
+    luna::runtime::MoonRuntime::PinnedRefUnitCandidate pairedOwnerPin;
+    {
+        luna::runtime::MoonRuntime pairedHost;
+        luna::runtime::MoonRuntime::StagedGeneration ownerStage;
+        luna::runtime::MoonRuntime::StagedGeneration candidateStage;
+        luna::runtime::MoonRuntime::StagedGeneration alternateOwner;
+        if (!integratedRefGeneration.stageOwnerInRuntimeForTest(
+                pairedHost, ownerStage, error))
+            return fail("paired verified owner did not stage");
+        {
+            luna::runtime::MoonRuntime foreignHost;
+            luna::runtime::MoonRuntime::StagedGeneration foreignOwner;
+            if (!integratedRefGeneration.stageOwnerInRuntimeForTest(
+                    foreignHost, foreignOwner, error) ||
+                integratedRefGeneration.stageWithStagedOwnerInRuntimeForTest(
+                    pairedHost, candidateStage, error, foreignOwner) ||
+                candidateStage ||
+                error != "private Ref/unit host staging requires its exact staged owner")
+                return fail("foreign staged owner impersonated the paired owner");
+        }
+        {
+            luna::driver::VerifiedMoonSlotOwner separateProof;
+            if (!luna::driver::loadVerifiedMoonSlotOwner(
+                    hostBytes, hostManifest.targetTriple,
+                    hostManifest.dataLayout, separateProof, error) ||
+                !separateProof.stageInRuntimeForTest(
+                    pairedHost, alternateOwner, error) ||
+                integratedRefGeneration.stageWithStagedOwnerInRuntimeForTest(
+                    pairedHost, candidateStage, error, alternateOwner) ||
+                candidateStage ||
+                error != "private Ref/unit host staging requires its exact staged owner")
+                return fail("separate staged owner proof impersonated the paired owner");
+        }
+        if (!integratedRefGeneration.stageWithStagedOwnerInRuntimeForTest(
+                pairedHost, candidateStage, error, ownerStage))
+            return fail("verified consumer did not stage against its staged owner");
+        auto earlyPoint = pairedHost.safePoint();
+        if (pairedHost.activate(candidateStage, earlyPoint, error) ||
+            error != "generation requires a different active module generation" ||
+            !candidateStage ||
+            pairedHost.activeGenerationId(hostManifest.packageId) != 0)
+            return fail("paired consumer activated before its owner");
+        auto wrongPairPoint = pairedHost.safePoint();
+        if (pairedHost.activateTogether(
+                alternateOwner, candidateStage, wrongPairPoint, error) ||
+            error != "generation requires a different active module generation" ||
+            !alternateOwner || !candidateStage ||
+            pairedHost.activeGenerationId(hostManifest.packageId) != 0)
+            return fail("paired consumer activated with a different owner stage");
+        const auto ownerId = ownerStage.generationId();
+        const auto consumerId = candidateStage.generationId();
+        auto pairPoint = pairedHost.safePoint();
+        if (!pairedHost.activateTogether(
+                ownerStage, candidateStage, pairPoint, error))
+            return fail("verified owner and consumer did not activate together");
+        const auto facts = integratedRefGeneration.candidateFacts();
+        if (!facts)
+            return fail("paired verified consumer lost its facts");
+        const auto paired = pairedHost.pinTogether(
+            hostManifest.packageId, facts->packageId);
+        pairedOwnerPin = paired.second.findRefUnitCandidate(
+            facts->symbolId, facts->contractId);
+        if (!paired.first || !paired.second || !pairedOwnerPin ||
+            paired.first.generationId() != ownerId ||
+            paired.second.generationId() != consumerId ||
+            !paired.first.find(facts->slotSymbolId,
+                               facts->slotContractId))
+            return fail("paired verified publication lost owner or candidate");
+        candidateStatus = 777;
+        if (!pairedOwnerPin.call(noneContext, borrowedRef,
+                                 candidateStatus, error) ||
+            candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+            return fail("paired verified Ref candidate lost its typed call");
+    }
+    candidateStatus = 777;
+    if (!pairedOwnerPin.call(noneContext, borrowedRef,
+                             candidateStatus, error) ||
+        candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+        return fail("paired Ref candidate did not survive host teardown");
+    pairedOwnerPin = {};
     luna::runtime::MoonRuntime::PinnedRefUnitCandidate ownerBoundPin;
     {
         luna::runtime::MoonRuntime projectedHost;

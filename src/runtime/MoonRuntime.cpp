@@ -834,6 +834,24 @@ MoonRuntime::pinTogether(
     return result;
 }
 
+bool MoonRuntime::matchesStagedGeneration(
+    const StagedGeneration& staged,
+    const std::shared_ptr<const void>& lease,
+    const GenerationBinding& binding) const {
+    if (staged.owner_ != this || !staged.generation_ || !lease)
+        return false;
+    const auto& retained = staged.generation_->moduleLease;
+    if (retained.get() != lease.get() ||
+        retained.owner_before(lease) || lease.owner_before(retained))
+        return false;
+    const auto* actual = findBinding(
+        *staged.generation_, binding.symbolId, binding.contractId);
+    return actual && actual->implementation == binding.implementation &&
+        actual->declarationKind == binding.declarationKind &&
+        actual->flags == binding.flags &&
+        actual->entryAbi == binding.entryAbi;
+}
+
 bool MoonRuntime::makeSwitchable(
     const std::string& moduleId, const std::string& symbolId,
     const std::string& contractId, SwitchableBinding& binding,

@@ -1538,8 +1538,8 @@ candidate。这验证宿主 Runtime 切换与 pin 生命周期契约。替换 ge
 candidate staging 后才加载 owner 会阻止 candidate 激活；candidate 已激活时会阻止 owner
 load 或 activation。owner 激活期间回滚至被排斥的 candidate 也会拒绝，旧 pin 仍有效。
 无效排斥列表及排斥声明不同的 load-once 缓存请求同样被拒绝。这关闭了私有探针从 staging
-到 activation 的间隙；宿主提供的排斥声明本身不认证产物，也不定义 owner／consumer
-原子共同发布。
+到 activation 的间隙；这些排斥检查自身不认证宿主声明，也不定义 owner／consumer
+共同发布。
 Runtime 现也接受精确的必需活跃 module generation。在同一发布锁内，它拒绝缺失或已切换的
 依赖，并阻止活跃 consumer 所依赖的 owner 被替换；load-once 缓存命中必须保留相同的依赖声明。
 仅测试用的 verified 凭据可向宿主 staging 原始 owner 产物的完整发布绑定集快照。owner 状态
@@ -1562,8 +1562,13 @@ MoonRuntime 现提供 `activateTogether`，用一个 safe point 发布两个不�
 generation。它在发布任一 generation 前检查 switchable 要求与最终模块集合，包括其他活跃
 module 持有的依赖和排斥条件。`pinTogether` 在同一发布锁内读取两枚活跃 pin；并发回归验证
 连续成对切换时不会读到混合配对。单独 `pin` 与 switchable 查询仍按 module 读取，可能在
-两次存储之间看到中间配对。运行时规则自身不认证产物。私有 loader 仍要求 owner 先激活
-再 staging Ref candidate，因此凭据绑定的 owner／consumer 尚未接入成对激活。
+两次存储之间看到中间配对。运行时规则自身不认证产物。私有 loader 现可对同一宿主 Runtime
+中尚未激活的 verified owner staging Ref candidate。Runtime 的只读核验同时比较 staged
+generation 所属 Runtime、精确 owner 状态 lease 与完整 public Slot 绑定行，且不暴露未激活
+的 callable pin。candidate 声明依赖该 staged owner ID；单独激活失败，成对激活及
+`pinTogether` 成功。跨包回归拒绝外来 staged owner、同字节另行加载的凭据，以及 consumer
+准备后与另一枚 owner stage 成对激活；它还执行类型化调用，并验证宿主销毁后的 candidate
+pin。此路径仍只用于测试；生产 verifier 与公开 candidate 发布门继续关闭。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
 candidate。普通构建中的 generation 核验现同时比较 lease 地址与 `shared_ptr` 的共享所有权；
@@ -1717,8 +1722,9 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    空 replacement 验证当前查询和旧 pin 行为。Runtime 现于 activation、load-once 与
    rollback 双向执行私有 owner 的未激活约束。私有 verified owner 凭据现可独立 staging
    完整绑定集，并将宿主 candidate 绑定到该精确活跃 owner generation，阻止 owner 独立切换。
-   Runtime 现有最终集合校验的成对激活与成对 pin。下一步将凭据绑定的 consumer 对 staged
-   owner 进行 staging，验证成对激活，并定义生产 verifier，再考虑公开 candidate 发布。
+   Runtime 现有最终集合校验的成对激活与成对 pin。私有 verified consumer 已对其精确 staged
+   owner 进行 staging 并验证成对激活。下一步定义生产 verifier 与公开准入边界，再考虑公开
+   candidate 发布。
    Runtime candidate 要求同一
    generation 的 Slot binding；
    默认发布验证仍关闭。

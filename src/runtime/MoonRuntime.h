@@ -249,8 +249,9 @@ public:
     };
 
     // A host attestation that the process is at an application-defined point
-    // where one atomic generation publication is permitted. Tokens are
-    // single-use and belong to the runtime that created them.
+    // where one generation publication transition is permitted. A transition
+    // may publish one module or a paired set. Tokens are single-use and belong
+    // to the runtime that created them.
     SafePoint safePoint() const { return SafePoint(this); }
 
     bool stage(const GenerationStagingRequest& request,
@@ -286,6 +287,13 @@ public:
     std::pair<PinnedGeneration, PinnedGeneration> pinTogether(
         const std::string& firstModuleId,
         const std::string& secondModuleId) const;
+    // Read-only staging attestation for trusted loaders. It checks Runtime
+    // ownership, exact lease ownership/address, and one complete binding row
+    // without exposing an unactivated callable pin.
+    bool matchesStagedGeneration(
+        const StagedGeneration& staged,
+        const std::shared_ptr<const void>& lease,
+        const GenerationBinding& binding) const;
     bool makeSwitchable(const std::string& moduleId,
                         const std::string& symbolId,
                         const std::string& contractId,

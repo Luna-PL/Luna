@@ -242,8 +242,8 @@ public:
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     luna::runtime::MoonRuntime::PinnedRefUnitCandidate pinCandidateForTest() const;
     // Stages a private snapshot of every binding published by the verified
-    // owner artifact. The host must activate it before staging the consumer
-    // with that pinned owner. This remains a test-only loader path.
+    // owner artifact. The host may stage a paired consumer before activation.
+    // This remains a test-only loader path.
     bool stageOwnerInRuntimeForTest(
         luna::runtime::MoonRuntime& target,
         luna::runtime::MoonRuntime::StagedGeneration& staged,
@@ -255,10 +255,25 @@ public:
         luna::runtime::MoonRuntime::StagedGeneration& staged,
         std::string& error,
         const luna::runtime::MoonRuntime::PinnedGeneration& hostOwner = {}) const;
+    // Pairs a verified consumer with an owner staged in this host Runtime.
+    // Neither generation may be active before activateTogether().
+    bool stageWithStagedOwnerInRuntimeForTest(
+        luna::runtime::MoonRuntime& target,
+        luna::runtime::MoonRuntime::StagedGeneration& staged,
+        std::string& error,
+        const luna::runtime::MoonRuntime::StagedGeneration& hostOwner) const;
 #endif
 
 private:
     friend class VerifiedMoonImportedSlotRefUnitProof;
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    bool stageInRuntimeForTestImpl(
+        luna::runtime::MoonRuntime& target,
+        luna::runtime::MoonRuntime::StagedGeneration& staged,
+        std::string& error,
+        const luna::runtime::MoonRuntime::PinnedGeneration& hostOwner,
+        const luna::runtime::MoonRuntime::StagedGeneration* stagedHostOwner) const;
+#endif
     std::shared_ptr<const VerifiedMoonImportedSlotRefUnitProof> proof_;
     std::shared_ptr<luna::runtime::MoonRuntime> runtime_;
     luna::runtime::MoonRuntime::PinnedGeneration generation_;

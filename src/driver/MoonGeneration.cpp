@@ -1274,6 +1274,25 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTest(
     luna::runtime::MoonRuntime::StagedGeneration& staged,
     std::string& error,
     const luna::runtime::MoonRuntime::PinnedGeneration& hostOwner) const {
+    return stageInRuntimeForTestImpl(
+        target, staged, error, hostOwner, nullptr);
+}
+
+bool VerifiedMoonImportedSlotGeneration::stageWithStagedOwnerInRuntimeForTest(
+    luna::runtime::MoonRuntime& target,
+    luna::runtime::MoonRuntime::StagedGeneration& staged,
+    std::string& error,
+    const luna::runtime::MoonRuntime::StagedGeneration& hostOwner) const {
+    return stageInRuntimeForTestImpl(
+        target, staged, error, {}, &hostOwner);
+}
+
+bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTestImpl(
+    luna::runtime::MoonRuntime& target,
+    luna::runtime::MoonRuntime::StagedGeneration& staged,
+    std::string& error,
+    const luna::runtime::MoonRuntime::PinnedGeneration& hostOwner,
+    const luna::runtime::MoonRuntime::StagedGeneration* stagedHostOwner) const {
     error.clear();
     if (staged || !hasTypedCaller() || &target == runtime_.get() ||
         !generation_.matchesModuleLease(proof_) ||
@@ -1292,7 +1311,8 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTest(
     }
     const auto& state = *consumer.preparation_.state_;
     const auto activeOwner = target.pin(state.ownerGeneration.moduleId());
-    if (!hostOwner && activeOwner) {
+    if ((!hostOwner && activeOwner) ||
+        (stagedHostOwner && (hostOwner || activeOwner))) {
         error = "private Ref/unit host staging conflicts with an owner module";
         return false;
     }
@@ -1337,6 +1357,26 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTest(
             return false;
         }
     }
+    luna::runtime::GenerationBinding stagedOwnerSlot;
+    if (stagedHostOwner) {
+        stagedOwnerSlot.symbolId = expected->slotSymbolId;
+        stagedOwnerSlot.contractId = expected->slotContractId;
+        stagedOwnerSlot.implementation = ownerBinding.implementation();
+        stagedOwnerSlot.declarationKind = ownerBinding.declarationKind();
+        stagedOwnerSlot.flags = ownerBinding.flags();
+        stagedOwnerSlot.entryAbi = ownerBinding.entryAbi();
+        if (stagedHostOwner->moduleId() !=
+                state.ownerGeneration.moduleId() ||
+            stagedHostOwner->contentDigest() !=
+                state.ownerGeneration.contentDigest() ||
+            stagedHostOwner->materializationKey() !=
+                privateRefHostOwnerArtifactKey() ||
+            !target.matchesStagedGeneration(
+                *stagedHostOwner, state.ownerState, stagedOwnerSlot)) {
+            error = "private Ref/unit host staging requires its exact staged owner";
+            return false;
+        }
+    }
     const auto proofLease = proof_;
     luna::runtime::GenerationStagingRequest request;
     request.moduleId = generation_.moduleId();
@@ -1359,9 +1399,11 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTest(
         return pinnedCaller.call(parent, reference, status, callError);
     };
     request.refUnitCallerLease = proofLease;
-    if (hostOwner) {
+    if (hostOwner || stagedHostOwner) {
         request.requiredActiveModules = {
-            {state.ownerGeneration.moduleId(), hostOwner.generationId()}};
+            {state.ownerGeneration.moduleId(), hostOwner
+                ? hostOwner.generationId()
+                : stagedHostOwner->generationId()}};
     } else {
         request.requiredAbsentModuleIds = {state.ownerGeneration.moduleId()};
     }
@@ -1412,7 +1454,11 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTest(
         target.activeGenerationId(request.moduleId) != 0 ||
         (hostOwner &&
          target.activeGenerationId(state.ownerGeneration.moduleId()) !=
-             hostOwner.generationId())) {
+             hostOwner.generationId()) ||
+        (stagedHostOwner &&
+         (target.activeGenerationId(state.ownerGeneration.moduleId()) != 0 ||
+          !target.matchesStagedGeneration(
+              *stagedHostOwner, state.ownerState, stagedOwnerSlot)))) {
         staged = {};
         error = "private Ref/unit host staging changed its verified artifact";
         return false;
