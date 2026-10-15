@@ -2038,8 +2038,14 @@ includes the owner artifact digest. The opaque result keeps its Runtime and
 binding pin alive after the original owner loader is destroyed. It can now
 activate a second internal generation at a loader-owned safe point, retaining
 the same Slot proxy and admitting only the pointer-free Ref/unit candidate
-facts. The previous pin remains metadata-free. No typed caller is installed,
-and public Ref admission is unchanged.
+facts. The previous pin remains metadata-free. A further internal activation
+installs a typed caller on the same candidate facts and Slot proxy. Its
+callback retains the exact import proof, consumer preparation, verified owner
+pin and JIT code lease. It checks the parent context and pinned Ref handle
+against the declared Slot before calling the verified status wrapper. The
+metadata-only pin remains noncallable; a candidate pin from the new generation
+continues to call after the loader-owned Runtime is destroyed. Public Ref
+admission is unchanged.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
@@ -2057,11 +2063,10 @@ have ordinary build paths, but ordinary public loading does not yet use them
 for imported Ref candidates. Production candidate admission must require the
 consumer and imported-Slot proofs, bind them to the exact consumer lease, and
 retain the owner pin before publication. The consumer proof retains a
-materialized code lease, but no entry pointer or
-candidate is exposed through ordinary public loading. Installing a typed
-caller on the internal candidate and admitting a public Runtime candidate
-remain separate gates.
-The ordinary entry is exercised only by the quarantined typed candidate test.
+materialized code lease, but no entry pointer or candidate is exposed through
+ordinary public loading. Admitting a public Runtime candidate remains a
+separate gate. The ordinary wrapper is exercised by the quarantined typed
+candidate and the internal Runtime callback tests.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and
@@ -2233,8 +2238,11 @@ not a public ABI decision or stable-release approval:
    derives pointer-free candidate facts and loads a separate private generation
    with one noncallable imported-Slot proxy binding. A loader-owned safe point
    now activates a new internal generation with the same binding and a metadata
-   candidate, but no caller. Next bind the verified wrapper to a typed internal
-   caller while keeping public loading gated.
+   candidate. A further internal generation installs a typed caller that pins
+   the exact proofs and wrapper lease, checks parent and Ref capabilities, and
+   survives Runtime teardown through its candidate pin. Public loading remains
+   gated; next connect this admitted candidate to the ordinary verified
+   consumer load path without exposing a caller through the public loader.
    The Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref

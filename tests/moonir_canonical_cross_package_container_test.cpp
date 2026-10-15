@@ -890,6 +890,46 @@ int runCrossPackageContainerTest() {
                 candidateStatus, error) ||
             candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
             return fail("typed imported-Slot candidate lost its pinned call");
+    if (!verifiedSlotGeneration.hasMetadataCandidate() ||
+        verifiedSlotGeneration.hasTypedCaller())
+        return fail("verified imported-Slot metadata generation changed before caller installation");
+    auto oldMetadata = verifiedSlotGeneration;
+    auto metadataPin = oldMetadata.pinCandidateForTest();
+    candidateStatus = 777;
+    if (!metadataPin ||
+        metadataPin.call(noneContext, borrowedRef, candidateStatus, error) ||
+        error != "pinned Ref/unit candidate has no typed call adapter" ||
+        candidateStatus != 777)
+        return fail("metadata-only candidate became callable before installation");
+    if (!verifiedSlotGeneration.installTypedCallerOnce(error)) {
+        std::cerr << error << '\n';
+        return fail("verified imported-Slot typed caller did not activate");
+    }
+    if (!verifiedSlotGeneration.hasTypedCaller() ||
+        verifiedSlotGeneration.installTypedCallerOnce(error) ||
+        oldMetadata.installTypedCallerOnce(error) ||
+        oldMetadata.hasTypedCaller() ||
+        metadataPin.call(noneContext, borrowedRef, candidateStatus, error) ||
+        candidateStatus != 777)
+        return fail("verified imported-Slot caller reused or changed an old pin");
+    auto typedPin = verifiedSlotGeneration.pinCandidateForTest();
+    if (!typedPin ||
+        typedPin.generationId() != verifiedSlotGeneration.generationId())
+        return fail("verified imported-Slot caller lost its new generation pin");
+    verifiedSlotGeneration = {};
+    oldMetadata = {};
+    metadataPin = {};
+    candidateStatus = 777;
+    if (typedPin.call(invalidContext, borrowedRef, candidateStatus, error) ||
+        error != "verified Ref/unit parent context is not live" ||
+        candidateStatus != 777 ||
+        typedPin.call(noneContext, invalidRef, candidateStatus, error) ||
+        candidateStatus != 777)
+        return fail("verified imported-Slot caller accepted invalid ingress");
+    for (int iteration = 0; iteration < 16; ++iteration)
+        if (!typedPin.call(noneContext, borrowedRef, candidateStatus, error) ||
+            candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+            return fail("verified imported-Slot caller lost its pinned call");
     refCandidate = {};
     if (!refEntryWeak.expired() || !refPreparationWeak.expired())
         return fail("private Ref consumer candidate retained code after pin release");

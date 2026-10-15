@@ -121,6 +121,7 @@ public:
         const luna::runtime::MoonRuntime::PinnedGeneration& consumer) const;
 
 private:
+    friend class VerifiedMoonImportedSlotGeneration;
     friend class VerifiedMoonRefUnitGeneration;
     friend class VerifiedMoonImportedSlotRefUnitProof;
     friend bool loadVerifiedMoonRefUnitGenerationOnce(
@@ -172,6 +173,7 @@ public:
     bool matchesPreparation(const VerifiedMoonRefUnitPreparation& preparation) const;
 
 private:
+    friend class VerifiedMoonImportedSlotGeneration;
     friend class VerifiedMoonImportedSlotRefUnitProof;
     friend bool loadVerifiedMoonRefUnitGenerationOnce(
         const VerifiedMoonRefUnitPreparation&,
@@ -203,6 +205,7 @@ public:
                          std::string& error) const;
 
 private:
+    friend class VerifiedMoonImportedSlotGeneration;
     friend bool pinVerifiedMoonImportedSlotRefUnitProof(
         const VerifiedMoonRefUnitGeneration&, const std::string&,
         const std::string&, const luna::runtime::RuntimeSlotRequirement&,
@@ -220,16 +223,24 @@ public:
     uint64_t generationId() const;
     bool hasImportedSlotBinding() const;
     bool hasMetadataCandidate() const;
+    bool hasTypedCaller() const;
     std::optional<luna::runtime::GenerationRefUnitCandidate> candidateFacts() const;
     // Activates a new internal generation with the same Slot proxy and one
     // pointer-free Ref/unit candidate. No typed caller is installed.
     bool admitMetadataCandidateOnce(std::string& error);
+    // Activates a further internal generation whose typed adapter holds the
+    // exact verified preparation and owner leases for the whole call.
+    bool installTypedCallerOnce(std::string& error);
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    luna::runtime::MoonRuntime::PinnedRefUnitCandidate pinCandidateForTest() const;
+#endif
 
 private:
     friend class VerifiedMoonImportedSlotRefUnitProof;
     std::shared_ptr<const VerifiedMoonImportedSlotRefUnitProof> proof_;
     std::shared_ptr<luna::runtime::MoonRuntime> runtime_;
     luna::runtime::MoonRuntime::PinnedGeneration generation_;
+    bool typedCallerInstalled_ = false;
 };
 
 bool pinVerifiedMoonImportedSlotRefUnitProof(
