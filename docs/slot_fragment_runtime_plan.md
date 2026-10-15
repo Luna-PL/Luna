@@ -2096,17 +2096,19 @@ changes the host owner between staging and activation, restores it for a typed
 call, and rejects an owner rollback while the candidate is active. Its
 candidate pin still calls after host teardown.
 The cross-package regression compares every published binding kind with an
-ordinary verified owner load, including non-Slot rows. This test-only path
-does not independently recompile the owner in the host Runtime. Generic
+ordinary verified owner load, including non-Slot rows. The host snapshot
+does not independently recompile the owner in its Runtime. Generic
 required-active facts are host assertions, not artifact authentication.
 The verified owner proof can now stage that complete host snapshot without a
-consumer token. The consumer token's owner staging uses the same helper, while
-candidate admission still requires the exact owner-state lease retained by
+consumer token in ordinary builds. The verified consumer token's owner
+staging uses the same ordinary-build helper, while candidate admission still
+requires the exact owner-state lease retained by
 its verified preparation. The independent proof probe checks that an empty
 proof cannot stage, an active owner cannot be staged again, and a non-Slot
 Function binding is present. A separately loaded proof of the same owner bytes
-cannot pair with the consumer, because its owner-state lease differs. This
-remains a private test path.
+cannot pair with the consumer, because its owner-state lease differs. Owner
+staging alone publishes no Ref candidate; host Ref candidate staging remains
+test-only.
 MoonRuntime now provides `activateTogether` for two distinct staged modules
 under one safe point. It checks switchable requirements and the final module
 set, including dependencies and exclusions held by other active modules,
@@ -2341,16 +2343,19 @@ not a public ABI decision or stable-release approval:
    bytes to an admitted candidate and rejects bad evidence atomically. Public
    loading remains gated. Generic Runtime staging now requires an exact typed
    caller lease and explicit activation, without Ref/unit load-once reuse.
-   A test-only probe now stages into a caller-supplied Runtime through the
-   compiler-issued consumer and owner proofs, with explicit activation and a
-   retained typed pin. The host switch/rollback regression checks current
-   lookup and old pin behavior against a synthetic empty replacement. Runtime
+   A test-only Ref candidate probe now stages into a caller-supplied Runtime
+   through the compiler-issued consumer and owner proofs, with explicit
+   activation and a retained typed pin. The host switch/rollback regression
+   checks current lookup and old pin behavior against a synthetic empty
+   replacement. Runtime
    now enforces the private owner's required absence through activation,
    load-once and rollback, including both publication orders. An explicit
-   private verified owner proof can independently stage the full binding set;
+   verified owner proof can independently stage the full binding set;
    candidate admission binds to that exact active owner generation and blocks
-   independent owner switching. Runtime now has paired activation and paired
-   pinning, with final-set dependency validation. The private verified consumer
+   independent owner switching. Both the verified owner proof and consumer-bound
+   owner projection now stage in ordinary builds without admitting a Ref
+   candidate. Runtime now has paired activation and paired pinning, with
+   final-set dependency validation. The private verified consumer
    now stages against its exact staged owner and exercises paired activation.
    Owner staging admission checks the entire verified binding snapshot and
    rejects extra rows and hidden module relations. Active-owner admission now

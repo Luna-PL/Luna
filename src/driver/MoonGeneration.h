@@ -79,14 +79,13 @@ public:
         const std::string& expectedDataLayout,
         luna::runtime::MoonRuntime::PinnedGeneration& pinned,
         std::string& error) const;
-#ifdef LUNA_PRIVATE_REF_JIT_TEST
-    // Publishes the verified owner's complete binding snapshot in a separate
-    // host Runtime. The returned stage still requires explicit activation.
-    bool stageInRuntimeForTest(
+    // Compiler-internal projection of the verified owner's complete binding
+    // snapshot into a separate Runtime. Explicit activation is still required;
+    // this does not admit or publish a Ref candidate.
+    bool stageInRuntime(
         luna::runtime::MoonRuntime& target,
         luna::runtime::MoonRuntime::StagedGeneration& staged,
         std::string& error) const;
-#endif
 
 private:
     friend bool loadVerifiedMoonSlotOwner(
@@ -239,15 +238,14 @@ public:
     // Activates a further internal generation whose typed adapter holds the
     // exact verified preparation and owner leases for the whole call.
     bool installTypedCallerOnce(std::string& error);
-#ifdef LUNA_PRIVATE_REF_JIT_TEST
-    luna::runtime::MoonRuntime::PinnedRefUnitCandidate pinCandidateForTest() const;
-    // Stages a private snapshot of every binding published by the verified
-    // owner artifact. The host may stage a paired consumer before activation.
-    // This remains a test-only loader path.
-    bool stageOwnerInRuntimeForTest(
+    // Compiler-internal owner projection, tied to this verified consumer
+    // proof. It stages no Ref candidate in the host Runtime.
+    bool stageOwnerInRuntime(
         luna::runtime::MoonRuntime& target,
         luna::runtime::MoonRuntime::StagedGeneration& staged,
         std::string& error) const;
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    luna::runtime::MoonRuntime::PinnedRefUnitCandidate pinCandidateForTest() const;
     // Quarantined host-Runtime staging probe. Only an admitted internal token
     // can sign this request; the caller must activate it at a safe point.
     bool stageInRuntimeForTest(

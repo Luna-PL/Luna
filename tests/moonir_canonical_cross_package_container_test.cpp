@@ -719,9 +719,9 @@ int runCrossPackageContainerTest() {
         {
             luna::runtime::MoonRuntime ownerHost;
             luna::runtime::MoonRuntime::StagedGeneration ownerStage;
-            if (rejectedOwner.stageInRuntimeForTest(
+            if (rejectedOwner.stageInRuntime(
                     ownerHost, ownerStage, error) || ownerStage ||
-                !ownerProof.stageInRuntimeForTest(
+                !ownerProof.stageInRuntime(
                     ownerHost, ownerStage, error))
                 return fail("verified owner proof did not stage independently");
             auto ownerPoint = ownerHost.safePoint();
@@ -732,7 +732,7 @@ int runCrossPackageContainerTest() {
                 activeOwner.findAll(
                     static_cast<uint32_t>(moon::DeclarationKind::Function) + 1,
                     0).empty() ||
-                ownerProof.stageInRuntimeForTest(
+                ownerProof.stageInRuntime(
                     ownerHost, ownerStage, error) || ownerStage)
                 return fail("independent verified owner lost its artifact bindings");
         }
@@ -1136,13 +1136,13 @@ int runCrossPackageContainerTest() {
         luna::runtime::MoonRuntime::StagedGeneration ownerStage;
         luna::runtime::MoonRuntime::StagedGeneration candidateStage;
         luna::runtime::MoonRuntime::StagedGeneration alternateOwner;
-        if (!integratedRefGeneration.stageOwnerInRuntimeForTest(
+        if (!integratedRefGeneration.stageOwnerInRuntime(
                 pairedHost, ownerStage, error))
             return fail("paired verified owner did not stage");
         {
             luna::runtime::MoonRuntime foreignHost;
             luna::runtime::MoonRuntime::StagedGeneration foreignOwner;
-            if (!integratedRefGeneration.stageOwnerInRuntimeForTest(
+            if (!integratedRefGeneration.stageOwnerInRuntime(
                     foreignHost, foreignOwner, error) ||
                 integratedRefGeneration.stageWithStagedOwnerInRuntimeForTest(
                     pairedHost, candidateStage, error, foreignOwner) ||
@@ -1155,7 +1155,7 @@ int runCrossPackageContainerTest() {
             if (!luna::driver::loadVerifiedMoonSlotOwner(
                     hostBytes, hostManifest.targetTriple,
                     hostManifest.dataLayout, separateProof, error) ||
-                !separateProof.stageInRuntimeForTest(
+                !separateProof.stageInRuntime(
                     pairedHost, alternateOwner, error) ||
                 integratedRefGeneration.stageWithStagedOwnerInRuntimeForTest(
                     pairedHost, candidateStage, error, alternateOwner) ||
@@ -1215,9 +1215,9 @@ int runCrossPackageContainerTest() {
         luna::runtime::MoonRuntime projectedHost;
         luna::driver::VerifiedMoonImportedSlotGeneration emptyImport;
         luna::runtime::MoonRuntime::StagedGeneration ownerStage;
-        if (emptyImport.stageOwnerInRuntimeForTest(
+        if (emptyImport.stageOwnerInRuntime(
                 projectedHost, ownerStage, error) || ownerStage ||
-            !integratedRefGeneration.stageOwnerInRuntimeForTest(
+            !integratedRefGeneration.stageOwnerInRuntime(
                 projectedHost, ownerStage, error))
             return fail("verified owner artifact did not stage privately");
         auto ownerPoint = projectedHost.safePoint();
@@ -1271,7 +1271,7 @@ int runCrossPackageContainerTest() {
             if (!luna::driver::loadVerifiedMoonSlotOwner(
                     hostBytes, hostManifest.targetTriple,
                     hostManifest.dataLayout, separateProof, error) ||
-                !separateProof.stageInRuntimeForTest(
+                !separateProof.stageInRuntime(
                     separateHost, separateStage, error))
                 return fail("separate verified owner proof did not stage");
             auto separatePoint = separateHost.safePoint();
@@ -1292,7 +1292,7 @@ int runCrossPackageContainerTest() {
         {
             luna::runtime::MoonRuntime foreignHost;
             luna::runtime::MoonRuntime::StagedGeneration foreignStage;
-            if (!integratedRefGeneration.stageOwnerInRuntimeForTest(
+            if (!integratedRefGeneration.stageOwnerInRuntime(
                     foreignHost, foreignStage, error))
                 return fail("second verified owner artifact did not stage");
             auto foreignPoint = foreignHost.safePoint();
