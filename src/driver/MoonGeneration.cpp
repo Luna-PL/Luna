@@ -53,6 +53,25 @@ struct PrivatePreparedRefGenerationForTest {
 
 namespace {
 
+bool sameRefUnitCandidateFacts(
+    const luna::runtime::GenerationRefUnitCandidate& actual,
+    const luna::runtime::GenerationRefUnitCandidate& expected) {
+    return actual.symbolId == expected.symbolId &&
+        actual.contractId == expected.contractId &&
+        actual.linkageName == expected.linkageName &&
+        actual.moduleName == expected.moduleName &&
+        actual.packageId == expected.packageId &&
+        actual.functionTypeId == expected.functionTypeId &&
+        actual.refTypeId == expected.refTypeId &&
+        actual.slotSymbolId == expected.slotSymbolId &&
+        actual.slotContractId == expected.slotContractId &&
+        actual.slotTypeId == expected.slotTypeId &&
+        actual.entryAbi == expected.entryAbi &&
+        actual.refMode == expected.refMode &&
+        actual.resultMode == expected.resultMode &&
+        actual.statusDomain == expected.statusDomain;
+}
+
 struct LoadedMoonGeneration {
     moon::ContainerManifest manifest;
     moon::Module module;
@@ -814,18 +833,7 @@ bool VerifiedMoonImportedSlotGeneration::hasMetadataCandidate() const {
     const auto pinned = generation_.findRefUnitCandidate(
         expected->symbolId, expected->contractId);
     const auto actual = pinned.facts();
-    return actual && actual->linkageName == expected->linkageName &&
-        actual->moduleName == expected->moduleName &&
-        actual->packageId == expected->packageId &&
-        actual->functionTypeId == expected->functionTypeId &&
-        actual->refTypeId == expected->refTypeId &&
-        actual->slotSymbolId == expected->slotSymbolId &&
-        actual->slotContractId == expected->slotContractId &&
-        actual->slotTypeId == expected->slotTypeId &&
-        actual->entryAbi == expected->entryAbi &&
-        actual->refMode == expected->refMode &&
-        actual->resultMode == expected->resultMode &&
-        actual->statusDomain == expected->statusDomain;
+    return actual && sameRefUnitCandidateFacts(*actual, *expected);
 }
 
 bool VerifiedMoonImportedSlotGeneration::hasTypedCaller() const {
@@ -866,10 +874,8 @@ bool VerifiedMoonImportedSlotGeneration::admitMetadataCandidateOnce(
                     candidate.materializationKey != request.materializationKey ||
                     !generation_.matchesModuleLease(candidate.moduleLease) ||
                     candidate.refUnitCandidates.size() != 1 ||
-                    candidate.refUnitCandidates.front().symbolId !=
-                        expected->symbolId ||
-                    candidate.refUnitCandidates.front().contractId !=
-                        expected->contractId ||
+                    !sameRefUnitCandidateFacts(
+                        candidate.refUnitCandidates.front(), *expected) ||
                     candidate.refUnitCaller) {
                     verificationError =
                         "verified imported-Slot candidate changed before staging";
@@ -1027,34 +1033,8 @@ bool VerifiedMoonImportedSlotGeneration::installTypedCallerOnce(
                     candidate.materializationKey != request.materializationKey ||
                     !generation_.matchesModuleLease(candidate.moduleLease) ||
                     candidate.refUnitCandidates.size() != 1 ||
-                    candidate.refUnitCandidates.front().symbolId !=
-                        expected->symbolId ||
-                    candidate.refUnitCandidates.front().contractId !=
-                        expected->contractId ||
-                    candidate.refUnitCandidates.front().linkageName !=
-                        expected->linkageName ||
-                    candidate.refUnitCandidates.front().moduleName !=
-                        expected->moduleName ||
-                    candidate.refUnitCandidates.front().packageId !=
-                        expected->packageId ||
-                    candidate.refUnitCandidates.front().functionTypeId !=
-                        expected->functionTypeId ||
-                    candidate.refUnitCandidates.front().refTypeId !=
-                        expected->refTypeId ||
-                    candidate.refUnitCandidates.front().slotSymbolId !=
-                        expected->slotSymbolId ||
-                    candidate.refUnitCandidates.front().slotContractId !=
-                        expected->slotContractId ||
-                    candidate.refUnitCandidates.front().slotTypeId !=
-                        expected->slotTypeId ||
-                    candidate.refUnitCandidates.front().entryAbi !=
-                        expected->entryAbi ||
-                    candidate.refUnitCandidates.front().refMode !=
-                        expected->refMode ||
-                    candidate.refUnitCandidates.front().resultMode !=
-                        expected->resultMode ||
-                    candidate.refUnitCandidates.front().statusDomain !=
-                        expected->statusDomain ||
+                    !sameRefUnitCandidateFacts(
+                        candidate.refUnitCandidates.front(), *expected) ||
                     !candidate.refUnitCaller ||
                     !generation_.matchesModuleLease(
                         candidate.refUnitCallerLease)) {
@@ -1127,6 +1107,119 @@ VerifiedMoonImportedSlotGeneration::pinCandidateForTest() const {
     const auto expected = proof_->candidateFacts();
     return generation_.findRefUnitCandidate(
         expected->symbolId, expected->contractId);
+}
+
+bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTest(
+    luna::runtime::MoonRuntime& target,
+    luna::runtime::MoonRuntime::StagedGeneration& staged,
+    std::string& error) const {
+    error.clear();
+    if (staged || !hasTypedCaller() || &target == runtime_.get() ||
+        !generation_.matchesModuleLease(proof_) ||
+        runtime_->activeGenerationId(generation_.moduleId()) !=
+            generation_.generationId() ||
+        target.activeGenerationId(generation_.moduleId()) != 0) {
+        error = "private Ref/unit host staging requires a fresh verified caller";
+        return false;
+    }
+    const auto expected = proof_->candidateFacts();
+    const auto& consumer = proof_->consumer_;
+    if (!expected || !consumer.matchesPreparation(consumer.preparation_) ||
+        !consumer.preparation_.state_) {
+        error = "private Ref/unit host staging lost its consumer proof";
+        return false;
+    }
+    const auto& state = *consumer.preparation_.state_;
+    if (target.activeGenerationId(state.ownerGeneration.moduleId()) != 0) {
+        error = "private Ref/unit host staging conflicts with an owner module";
+        return false;
+    }
+    const auto ownerBinding = state.ownerGeneration.find(
+        expected->slotSymbolId, expected->slotContractId);
+    const auto proxyBinding = generation_.find(
+        expected->slotSymbolId, expected->slotContractId);
+    const auto pinnedCaller = generation_.findRefUnitCandidate(
+        expected->symbolId, expected->contractId);
+    if (!state.codeLease || !state.codeEntry ||
+        state.codeLinkageName != expected->linkageName ||
+        !ownerBinding || !proxyBinding || !pinnedCaller ||
+        ownerBinding.declarationKind() != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
+        ownerBinding.flags() !=
+            luna::runtime::GenerationBindingPublicControl ||
+        proxyBinding.flags() != 0 ||
+        ownerBinding.implementation() != proxyBinding.implementation() ||
+        pinnedCaller.generationId() != generation_.generationId()) {
+        error = "private Ref/unit host staging lost its owner or caller pin";
+        return false;
+    }
+    const auto proofLease = proof_;
+    luna::runtime::GenerationStagingRequest request;
+    request.moduleId = generation_.moduleId();
+    request.contentDigest = generation_.contentDigest();
+    request.materializationKey =
+        std::string("luna.private-ref-host-admission.v1:llvm=") +
+        LLVM_VERSION_STRING + ":ir=O0:orc=default:owner=" +
+        state.ownerGeneration.contentDigest();
+    request.moduleLease = proofLease;
+    request.refUnitCandidates.push_back(*expected);
+    request.refUnitCaller = [pinnedCaller, facts = *expected](
+        const std::string& symbolId, const std::string& contractId,
+        const luna::runtime::RuntimeFragmentExecutionContext& parent,
+        const luna::runtime::RuntimeFragmentRefHandle& reference,
+        int32_t& status, std::string& callError) {
+        if (symbolId != facts.symbolId || contractId != facts.contractId) {
+            callError = "private Ref/unit host candidate changed identity";
+            return false;
+        }
+        return pinnedCaller.call(parent, reference, status, callError);
+    };
+    request.refUnitCallerLease = proofLease;
+    if (!target.stage(
+            request,
+            [this, &request, &expected](const auto& candidate,
+                                        std::string& verificationError) {
+                if (candidate.moduleId != request.moduleId ||
+                    candidate.contentDigest != request.contentDigest ||
+                    candidate.materializationKey != request.materializationKey ||
+                    !generation_.matchesModuleLease(candidate.moduleLease) ||
+                    !generation_.matchesModuleLease(
+                        candidate.refUnitCallerLease) ||
+                    candidate.refUnitCandidates.size() != 1 ||
+                    !sameRefUnitCandidateFacts(
+                        candidate.refUnitCandidates.front(), *expected) ||
+                    !candidate.refUnitCaller) {
+                    verificationError =
+                        "private Ref/unit host candidate changed before staging";
+                    return false;
+                }
+                return true;
+            },
+            [expected, ownerBinding](const auto&, auto& bindings,
+                                     std::string& resolutionError) {
+                if (!bindings.empty()) {
+                    resolutionError =
+                        "private Ref/unit host staging cannot replace bindings";
+                    return false;
+                }
+                luna::runtime::GenerationBinding binding;
+                binding.symbolId = expected->slotSymbolId;
+                binding.contractId = expected->slotContractId;
+                binding.implementation = ownerBinding.implementation();
+                binding.declarationKind = LUNA_RUNTIME_DECLARATION_SLOT_V1;
+                bindings.push_back(std::move(binding));
+                return true;
+            },
+            {}, staged, error))
+        return false;
+    if (staged.moduleId() != request.moduleId ||
+        staged.contentDigest() != request.contentDigest ||
+        staged.materializationKey() != request.materializationKey ||
+        target.activeGenerationId(request.moduleId) != 0) {
+        staged = {};
+        error = "private Ref/unit host staging changed its verified artifact";
+        return false;
+    }
+    return true;
 }
 #endif
 

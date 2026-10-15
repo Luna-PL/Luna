@@ -1524,6 +1524,12 @@ Runtime 销毁后仍可重复调用。公开 Ref 准入不变。
 最后激活 typed caller。所有门禁成功后才赋值输出。跨包回归验证损坏的 consumer 字节、
 空 owner 凭据、错误源码身份和错误 Slot contract 均不会留下部分输出；内部结果和 loader
 自有 Runtime 释放后，固定的 candidate 仍能调用。此函数不向调用方提供的 Runtime 发布。
+隔离的测试构建现允许仅由这个完整内部凭据向调用方 Runtime 签发 staging 请求。该方法重验
+精确的 consumer 与 owner 凭据、同一 generation 的 Slot 代理和 typed candidate，再 staging
+一个经固定的内部 candidate 转发的回调。宿主 Runtime 必须另行在 safe point 激活。只含元数据
+的凭据无法 staging；激活后的宿主 candidate 在内部凭据与宿主 Runtime 均释放后仍可调用。
+调用方 Runtime 若已加载 owner module，探针也会拒绝，直至定义 owner 共同发布契约。
+普通构建不包含此探针，公开 Ref loader 与 Container 发布门禁仍关闭。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
 candidate。普通构建中的 generation 核验现同时比较 lease 地址与 `shared_ptr` 的共享所有权；
@@ -1669,8 +1675,9 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    lease，检查 parent 和 Ref capability，且其 candidate pin 在 Runtime 销毁后仍能调用。
    普通构建的内部装载函数现把 verified consumer 字节接至已准入 candidate，并在证据错误时
    整体拒绝。公开加载继续受限。通用 Runtime staging 现要求精确的 typed caller lease
-   和显式激活，禁止 Ref／unit 的 load-once 复用。下一步将调用方 Runtime staging 绑定到
-   编译器签发的产物与 owner 凭据，再考虑公开 candidate 发布。Runtime candidate 要求同一
+   和显式激活，禁止 Ref／unit 的 load-once 复用。仅测试用探针现通过编译器签发的 consumer
+   与 owner 凭据向调用方 Runtime staging，并保留类型化 pin。下一步先确定生产发布
+   verifier 与 rollback 契约，再考虑公开 candidate 发布。Runtime candidate 要求同一
    generation 的 Slot binding；
    默认发布验证仍关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation

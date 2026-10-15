@@ -2055,6 +2055,16 @@ consumer bytes, an empty owner proof, wrong source identity and wrong Slot
 contract without a partial output. Its pinned candidate then calls after the
 internal result and loader-owned Runtime are released. This function does not
 publish into a caller-supplied Runtime.
+A quarantined test-build staging method now accepts that completed internal
+token as the sole issuer for a caller-supplied Runtime. It rechecks the exact
+consumer and owner proofs, same-generation Slot proxy and typed candidate,
+then stages a callback that forwards through the pinned internal candidate.
+The host Runtime requires its own safe-point activation. A metadata-only token
+cannot stage; a target Runtime already carrying an owner module is rejected
+until an owner co-publication contract exists. The activated host candidate
+survives release of both the
+internal token and host Runtime. This probe is absent from ordinary builds;
+it does not open the public Ref loader or Container publication gate.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
@@ -2261,8 +2271,10 @@ not a public ABI decision or stable-release approval:
    bytes to an admitted candidate and rejects bad evidence atomically. Public
    loading remains gated. Generic Runtime staging now requires an exact typed
    caller lease and explicit activation, without Ref/unit load-once reuse.
-   Next tie caller-supplied Runtime staging to the compiler-issued artifact and
-   owner proofs before any public candidate publication.
+   A test-only probe now stages into a caller-supplied Runtime through the
+   compiler-issued consumer and owner proofs, with explicit activation and a
+   retained typed pin. Next settle the production publication verifier and
+   rollback contract before any public candidate publication.
    The Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref

@@ -953,6 +953,12 @@ int runCrossPackageContainerTest() {
         metadataPin.call(noneContext, borrowedRef, candidateStatus, error) ||
         candidateStatus != 777)
         return fail("verified imported-Slot caller reused or changed an old pin");
+    luna::runtime::MoonRuntime rejectedHostRuntime;
+    luna::runtime::MoonRuntime::StagedGeneration rejectedHostStage;
+    if (oldMetadata.stageInRuntimeForTest(
+            rejectedHostRuntime, rejectedHostStage, error) ||
+        rejectedHostStage)
+        return fail("metadata-only Ref proof staged in a host Runtime");
     auto typedPin = verifiedSlotGeneration.pinCandidateForTest();
     if (!typedPin ||
         typedPin.generationId() != verifiedSlotGeneration.generationId())
@@ -975,6 +981,54 @@ int runCrossPackageContainerTest() {
     if (!integratedPin ||
         integratedPin.generationId() != integratedRefGeneration.generationId())
         return fail("integrated verified Ref loader lost its candidate pin");
+    {
+        luna::runtime::MoonRuntime conflictingHost;
+        luna::runtime::MoonRuntime::PinnedGeneration hostOwner;
+        luna::runtime::MoonRuntime::StagedGeneration rejectedStage;
+        if (!luna::driver::loadVerifiedMoonGenerationOnce(
+                conflictingHost, hostBytes, hostManifest.targetTriple,
+                hostManifest.dataLayout, hostOwner, error) ||
+            integratedRefGeneration.stageInRuntimeForTest(
+                conflictingHost, rejectedStage, error) || rejectedStage)
+            return fail("private host Ref staging accepted a separate owner module");
+    }
+    luna::runtime::MoonRuntime::PinnedRefUnitCandidate hostRuntimePin;
+    {
+        luna::runtime::MoonRuntime hostRuntime;
+        luna::driver::VerifiedMoonImportedSlotGeneration emptyImport;
+        luna::runtime::MoonRuntime::StagedGeneration staged;
+        if (emptyImport.stageInRuntimeForTest(hostRuntime, staged, error) ||
+            staged ||
+            !integratedRefGeneration.stageInRuntimeForTest(
+                hostRuntime, staged, error)) {
+            std::cerr << error << '\n';
+            return fail("verified Ref proof did not stage in a host Runtime");
+        }
+        luna::runtime::MoonRuntime::PinnedGeneration rejectedLoaded;
+        if (hostRuntime.loadOnce(staged, rejectedLoaded, error) ||
+            rejectedLoaded || !staged ||
+            error != "callable Ref/unit candidate requires explicit activation")
+            return fail("host Ref candidate bypassed explicit activation");
+        auto safePoint = hostRuntime.safePoint();
+        if (!hostRuntime.activate(staged, safePoint, error)) {
+            std::cerr << error << '\n';
+            return fail("verified host Ref candidate did not activate");
+        }
+        const auto hostFacts = integratedRefGeneration.candidateFacts();
+        if (!hostFacts)
+            return fail("verified host Ref candidate lost its source facts");
+        const auto hostGeneration = hostRuntime.pin(hostFacts->packageId);
+        const auto hostSlot = hostGeneration.find(
+            hostFacts->slotSymbolId, hostFacts->slotContractId);
+        hostRuntimePin = hostGeneration.findRefUnitCandidate(
+            hostFacts->symbolId, hostFacts->contractId);
+        if (!hostGeneration || !hostSlot || hostSlot.flags() != 0 ||
+            !hostRuntimePin ||
+            hostRuntimePin.generationId() != hostGeneration.generationId() ||
+            integratedRefGeneration.stageInRuntimeForTest(
+                hostRuntime, staged, error) || staged)
+            return fail("host Ref admission lost its proof or allowed replacement");
+    }
     integratedRefGeneration = {};
     candidateStatus = 777;
     if (integratedPin.call(invalidContext, borrowedRef,
@@ -989,6 +1043,20 @@ int runCrossPackageContainerTest() {
                 candidateStatus, error) ||
             candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
             return fail("integrated verified Ref candidate lost its pinned call");
+    integratedPin = {};
+    candidateStatus = 777;
+    if (hostRuntimePin.call(invalidContext, borrowedRef,
+            candidateStatus, error) ||
+        error != "verified Ref/unit parent context is not live" ||
+        candidateStatus != 777 ||
+        hostRuntimePin.call(noneContext, invalidRef,
+            candidateStatus, error) || candidateStatus != 777)
+        return fail("host Runtime Ref candidate accepted invalid ingress");
+    for (int iteration = 0; iteration < 16; ++iteration)
+        if (!hostRuntimePin.call(noneContext, borrowedRef,
+                candidateStatus, error) ||
+            candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+            return fail("host Runtime Ref candidate lost its pinned call");
     refCandidate = {};
     if (!refEntryWeak.expired() || !refPreparationWeak.expired())
         return fail("private Ref consumer candidate retained code after pin release");
