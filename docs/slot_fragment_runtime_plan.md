@@ -2046,6 +2046,15 @@ against the declared Slot before calling the verified status wrapper. The
 metadata-only pin remains noncallable; a candidate pin from the new generation
 continues to call after the loader-owned Runtime is destroyed. Public Ref
 admission is unchanged.
+An ordinary-build internal load function now runs the complete chain from
+verified consumer bytes and an issued owner proof: prepare and load the inert
+consumer, pin its exact imported-Slot proof, load the Slot proxy, admit the
+candidate facts, and activate the typed caller. It assigns its output only
+after every gate succeeds. The cross-package regression rejects corrupted
+consumer bytes, an empty owner proof, wrong source identity and wrong Slot
+contract without a partial output. Its pinned candidate then calls after the
+internal result and loader-owned Runtime are released. This function does not
+publish into a caller-supplied Runtime.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
@@ -2240,9 +2249,11 @@ not a public ABI decision or stable-release approval:
    now activates a new internal generation with the same binding and a metadata
    candidate. A further internal generation installs a typed caller that pins
    the exact proofs and wrapper lease, checks parent and Ref capabilities, and
-   survives Runtime teardown through its candidate pin. Public loading remains
-   gated; next connect this admitted candidate to the ordinary verified
-   consumer load path without exposing a caller through the public loader.
+   survives Runtime teardown through its candidate pin. An ordinary-build
+   internal load function now connects those stages from verified consumer
+   bytes to an admitted candidate and rejects bad evidence atomically. Public
+   loading remains gated; next specify and verify the caller-supplied Runtime
+   admission boundary before any public candidate publication.
    The Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref

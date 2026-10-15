@@ -1233,6 +1233,53 @@ bool VerifiedMoonImportedSlotRefUnitProof::loadBindingOnce(
     return true;
 }
 
+bool loadVerifiedMoonImportedSlotRefUnitOnce(
+    const std::vector<uint8_t>& consumerContainerBytes,
+    const VerifiedMoonSlotOwner& owner,
+    const std::string& expectedTargetTriple,
+    const std::string& expectedDataLayout,
+    const std::string& sourceSymbolId,
+    const std::string& sourceContractId,
+    const luna::runtime::RuntimeSlotRequirement& slot,
+    VerifiedMoonImportedSlotGeneration& loaded,
+    std::string& error) {
+    error.clear();
+    if (loaded) {
+        error = "verified imported-Slot Ref/unit output already owns a generation";
+        return false;
+    }
+    VerifiedMoonRefUnitPreparation preparation;
+    if (!loadVerifiedMoonRefUnitPreparation(
+            consumerContainerBytes, owner, expectedTargetTriple,
+            expectedDataLayout, preparation, error))
+        return false;
+    VerifiedMoonRefUnitGeneration consumer;
+    if (!loadVerifiedMoonRefUnitGenerationOnce(
+            preparation, consumer, error))
+        return false;
+    VerifiedMoonImportedSlotRefUnitProof proof;
+    if (!pinVerifiedMoonImportedSlotRefUnitProof(
+            consumer, sourceSymbolId, sourceContractId,
+            slot, proof, error))
+        return false;
+    VerifiedMoonImportedSlotGeneration internal;
+    if (!proof.loadBindingOnce(internal, error) ||
+        !internal.admitMetadataCandidateOnce(error) ||
+        !internal.installTypedCallerOnce(error))
+        return false;
+    const auto facts = internal.candidateFacts();
+    if (!internal.hasTypedCaller() || !facts ||
+        facts->symbolId != sourceSymbolId ||
+        facts->contractId != sourceContractId ||
+        facts->slotSymbolId != slot.slotId ||
+        facts->slotContractId != slot.contractId) {
+        error = "verified imported-Slot Ref/unit load lost its admitted candidate";
+        return false;
+    }
+    loaded = std::move(internal);
+    return true;
+}
+
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 bool stagePrivateNativeRefUnitPreparationForTest(
     luna::runtime::MoonRuntime& runtime,

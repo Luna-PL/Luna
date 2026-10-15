@@ -1519,6 +1519,11 @@ candidate 事实；旧 pin 仍无 candidate。再激活一个内部 generation�
 及 JIT 代码 lease；调用已验证状态 wrapper 前，先检查 parent context 和固定的 Ref handle 是否
 匹配声明的 Slot。仅含元数据的旧 pin 仍不可调用；新 generation 的 candidate pin 在 loader 自有
 Runtime 销毁后仍可重复调用。公开 Ref 准入不变。
+普通构建的内部装载函数现从已验证的 consumer 字节及已签发 owner 凭据走完整条链：
+准备并加载不可调用 consumer、固定精确导入 Slot 凭据、加载 Slot 代理、接纳 candidate 事实，
+最后激活 typed caller。所有门禁成功后才赋值输出。跨包回归验证损坏的 consumer 字节、
+空 owner 凭据、错误源码身份和错误 Slot contract 均不会留下部分输出；内部结果和 loader
+自有 Runtime 释放后，固定的 candidate 仍能调用。此函数不向调用方提供的 Runtime 发布。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
 candidate。普通构建中的 generation 核验现同时比较 lease 地址与 `shared_ptr` 的共享所有权；
@@ -1657,8 +1662,9 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    导入 Slot 代理 binding。loader 自有 safe point 现激活保留同一 binding 且含元数据 candidate
    的新内部 generation。再一个内部 generation 安装 typed caller，固定精确凭据及 wrapper
    lease，检查 parent 和 Ref capability，且其 candidate pin 在 Runtime 销毁后仍能调用。
-   公开加载继续受限；下一步把已准入的 candidate 接到普通 verified consumer 加载路径，
-   不经公开 loader 暴露 caller。Runtime candidate 要求同一 generation 的 Slot binding；
+   普通构建的内部装载函数现把 verified consumer 字节接至已准入 candidate，并在证据错误时
+   整体拒绝。公开加载继续受限；下一步先规定并验证调用方 Runtime 的准入边界，再考虑公开
+   candidate 发布。Runtime candidate 要求同一 generation 的 Slot binding；
    默认发布验证仍关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation
    的 Ref，在显式 parent context 中执行源码 apply。私有 JIT 已覆盖借用入口、无效

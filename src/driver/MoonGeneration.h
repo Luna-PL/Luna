@@ -243,6 +243,20 @@ private:
     bool typedCallerInstalled_ = false;
 };
 
+// Compiler-internal complete load of a verified imported-Slot Ref/unit source.
+// The output is assigned only after preparation, proof admission and typed
+// caller activation all succeed; it does not publish a public Runtime row.
+bool loadVerifiedMoonImportedSlotRefUnitOnce(
+    const std::vector<uint8_t>& consumerContainerBytes,
+    const VerifiedMoonSlotOwner& owner,
+    const std::string& expectedTargetTriple,
+    const std::string& expectedDataLayout,
+    const std::string& sourceSymbolId,
+    const std::string& sourceContractId,
+    const luna::runtime::RuntimeSlotRequirement& slot,
+    VerifiedMoonImportedSlotGeneration& loaded,
+    std::string& error);
+
 bool pinVerifiedMoonImportedSlotRefUnitProof(
     const VerifiedMoonRefUnitGeneration& consumer,
     const std::string& sourceSymbolId,

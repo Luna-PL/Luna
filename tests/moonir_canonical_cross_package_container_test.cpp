@@ -300,6 +300,7 @@ int runCrossPackageContainerTest() {
     luna::driver::VerifiedMoonRefUnitGeneration verifiedConsumerGeneration;
     luna::driver::VerifiedMoonImportedSlotRefUnitProof verifiedImport;
     luna::driver::VerifiedMoonImportedSlotGeneration verifiedSlotGeneration;
+    luna::driver::VerifiedMoonImportedSlotGeneration integratedRefGeneration;
     {
         luna::runtime::MoonRuntime runtime;
         luna::driver::VerifiedMoonSlotOwner rejectedOwner;
@@ -520,6 +521,46 @@ int runCrossPackageContainerTest() {
                 oldProxy.admitMetadataCandidateOnce(error))
                 return fail("verified imported-Slot candidate replaced or reused a pin");
         }
+        if (luna::driver::loadVerifiedMoonImportedSlotRefUnitOnce(
+                corruptedConsumer, ownerProof, refManifest.targetTriple,
+                refManifest.dataLayout, refSource->symbolId.value,
+                refSource->contractId.value, verifiedSlot,
+                integratedRefGeneration, error) || integratedRefGeneration ||
+            luna::driver::loadVerifiedMoonImportedSlotRefUnitOnce(
+                refBytes, rejectedOwner, refManifest.targetTriple,
+                refManifest.dataLayout, refSource->symbolId.value,
+                refSource->contractId.value, verifiedSlot,
+                integratedRefGeneration, error) || integratedRefGeneration ||
+            luna::driver::loadVerifiedMoonImportedSlotRefUnitOnce(
+                refBytes, ownerProof, refManifest.targetTriple,
+                refManifest.dataLayout, refSource->symbolId.value + "-wrong",
+                refSource->contractId.value, verifiedSlot,
+                integratedRefGeneration, error) || integratedRefGeneration ||
+            luna::driver::loadVerifiedMoonImportedSlotRefUnitOnce(
+                refBytes, ownerProof, refManifest.targetTriple,
+                refManifest.dataLayout, refSource->symbolId.value,
+                refSource->contractId.value, wrongVerifiedSlot,
+                integratedRefGeneration, error) || integratedRefGeneration)
+            return fail("integrated verified Ref loader admitted invalid evidence");
+        if (!luna::driver::loadVerifiedMoonImportedSlotRefUnitOnce(
+                refBytes, ownerProof, refManifest.targetTriple,
+                refManifest.dataLayout, refSource->symbolId.value,
+                refSource->contractId.value, verifiedSlot,
+                integratedRefGeneration, error)) {
+            std::cerr << error << '\n';
+            return fail("integrated verified Ref loader did not complete admission");
+        }
+        const uint64_t integratedGenerationId =
+            integratedRefGeneration.generationId();
+        if (!integratedRefGeneration.hasTypedCaller() ||
+            !integratedRefGeneration.hasImportedSlotBinding() ||
+            luna::driver::loadVerifiedMoonImportedSlotRefUnitOnce(
+                refBytes, ownerProof, refManifest.targetTriple,
+                refManifest.dataLayout, refSource->symbolId.value,
+                refSource->contractId.value, verifiedSlot,
+                integratedRefGeneration, error) ||
+            integratedRefGeneration.generationId() != integratedGenerationId)
+            return fail("integrated verified Ref loader replaced its admitted pin");
         sameArtifactOtherProof = {};
         auto compatibleOwnerManifest = hostManifest;
         compatibleOwnerManifest.packageVersion = "0.3.1";
@@ -930,6 +971,24 @@ int runCrossPackageContainerTest() {
         if (!typedPin.call(noneContext, borrowedRef, candidateStatus, error) ||
             candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
             return fail("verified imported-Slot caller lost its pinned call");
+    auto integratedPin = integratedRefGeneration.pinCandidateForTest();
+    if (!integratedPin ||
+        integratedPin.generationId() != integratedRefGeneration.generationId())
+        return fail("integrated verified Ref loader lost its candidate pin");
+    integratedRefGeneration = {};
+    candidateStatus = 777;
+    if (integratedPin.call(invalidContext, borrowedRef,
+            candidateStatus, error) ||
+        error != "verified Ref/unit parent context is not live" ||
+        candidateStatus != 777 ||
+        integratedPin.call(noneContext, invalidRef,
+            candidateStatus, error) || candidateStatus != 777)
+        return fail("integrated verified Ref candidate accepted invalid ingress");
+    for (int iteration = 0; iteration < 16; ++iteration)
+        if (!integratedPin.call(noneContext, borrowedRef,
+                candidateStatus, error) ||
+            candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+            return fail("integrated verified Ref candidate lost its pinned call");
     refCandidate = {};
     if (!refEntryWeak.expired() || !refPreparationWeak.expired())
         return fail("private Ref consumer candidate retained code after pin release");
