@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 namespace luna::runtime {
@@ -259,6 +260,12 @@ public:
                StagedGeneration& staged, std::string& error);
     bool activate(StagedGeneration& staged, SafePoint& safePoint,
                   std::string& error);
+    // Publishes two staged modules at one safe point after validating the
+    // complete resulting module set. Readers needing a coherent pair must use
+    // pinTogether(); individual pin()/switchable reads remain per-module.
+    bool activateTogether(StagedGeneration& first,
+                          StagedGeneration& second,
+                          SafePoint& safePoint, std::string& error);
     // Publishes the first generation for a module. Repeating the same content,
     // materialization key and module requirements returns the active generation;
     // different content/configuration is rejected and must use activate().
@@ -276,6 +283,9 @@ public:
     RuntimeFragmentBindingSet pinFragmentBindings() const;
 
     PinnedGeneration pin(const std::string& moduleId) const;
+    std::pair<PinnedGeneration, PinnedGeneration> pinTogether(
+        const std::string& firstModuleId,
+        const std::string& secondModuleId) const;
     bool makeSwitchable(const std::string& moduleId,
                         const std::string& symbolId,
                         const std::string& contractId,
@@ -300,6 +310,10 @@ private:
     // generations so publication cannot invalidate a module relation.
     bool validatesModuleRelations(
         const GenerationState& generation, std::string& error) const;
+    bool validatesPairedModuleRelations(
+        const std::shared_ptr<const GenerationState>& first,
+        const std::shared_ptr<const GenerationState>& second,
+        std::string& error) const;
     bool consumeSafePoint(SafePoint& safePoint, std::string& error) const;
 
     mutable std::mutex mutex_;

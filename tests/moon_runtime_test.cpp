@@ -1,11 +1,13 @@
 #include "runtime/Evolution.h"
 #include "runtime/RuntimeDescriptorABI.h"
 
+#include <algorithm>
 #include <atomic>
 #include <iostream>
 #include <memory>
 #include <string>
 #include <thread>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -177,6 +179,188 @@ int main() {
             !consumerStage || runtime.activeGenerationId(ModuleId) != 0 ||
             runtime.activeGenerationId(OwnerId) != ownerPin.generationId())
             return fail("activation ignored a newly active excluded module");
+    }
+    {
+        constexpr const char* OwnerId = "org.luna.test.paired-owner";
+        Runtime runtime;
+        std::string phases;
+        Request owner{OwnerId, std::string(64, 'a'), std::make_shared<int>(1)};
+        Runtime::StagedGeneration ownerStage;
+        if (!stageOne(runtime, owner, "symbol:owner", ContractId, &first,
+                      ownerStage, phases, error))
+            return fail("paired owner did not stage");
+        Request consumer{ModuleId, std::string(64, 'b'),
+                         std::make_shared<int>(2)};
+        consumer.requiredActiveModules = {{OwnerId, ownerStage.generationId()}};
+        Runtime::StagedGeneration consumerStage;
+        if (!stageOne(runtime, consumer, SymbolId, ContractId, &first,
+                      consumerStage, phases, error))
+            return fail("paired consumer did not stage");
+        const auto firstOwnerId = ownerStage.generationId();
+        const auto firstConsumerId = consumerStage.generationId();
+        auto firstPoint = runtime.safePoint();
+        if (!runtime.activateTogether(ownerStage, consumerStage,
+                                      firstPoint, error) ||
+            ownerStage || consumerStage)
+            return fail("initial owner and consumer did not activate together");
+        auto oldPair = runtime.pinTogether(OwnerId, ModuleId);
+        if (!oldPair.first || !oldPair.second ||
+            oldPair.first.generationId() != firstOwnerId ||
+            oldPair.second.generationId() != firstConsumerId)
+            return fail("paired publication lost its first pins");
+
+        owner.contentDigest = std::string(64, 'c');
+        consumer.contentDigest = std::string(64, 'd');
+        Runtime::StagedGeneration nextOwner, nextConsumer;
+        if (!stageOne(runtime, owner, "symbol:owner", ContractId, &second,
+                      nextOwner, phases, error))
+            return fail("replacement paired owner did not stage");
+        consumer.requiredActiveModules = {{OwnerId, nextOwner.generationId()}};
+        if (!stageOne(runtime, consumer, SymbolId, ContractId, &second,
+                      nextConsumer, phases, error))
+            return fail("replacement paired consumer did not stage");
+        if (runtime.activateTogether(nextOwner, nextConsumer,
+                                     firstPoint, error) ||
+            error != "activation requires a fresh safe point from the same runtime" ||
+            !nextOwner || !nextConsumer)
+            return fail("paired activation reused a consumed safe point");
+        auto ownerOnlyPoint = runtime.safePoint();
+        if (runtime.activate(nextOwner, ownerOnlyPoint, error) ||
+            !nextOwner ||
+            error != "generation replacement breaks an active module dependency")
+            return fail("owner changed independently of its active consumer");
+        auto consumerOnlyPoint = runtime.safePoint();
+        if (runtime.activate(nextConsumer, consumerOnlyPoint, error) ||
+            !nextConsumer ||
+            error != "generation requires a different active module generation")
+            return fail("consumer changed before its paired owner");
+        const auto nextOwnerId = nextOwner.generationId();
+        const auto nextConsumerId = nextConsumer.generationId();
+        auto pairPoint = runtime.safePoint();
+        if (!runtime.activateTogether(nextOwner, nextConsumer,
+                                      pairPoint, error))
+            return fail("replacement owner and consumer did not activate together");
+        const auto current = runtime.pinTogether(OwnerId, ModuleId);
+        if (current.first.generationId() != nextOwnerId ||
+            current.second.generationId() != nextConsumerId ||
+            oldPair.first.generationId() != firstOwnerId ||
+            oldPair.second.generationId() != firstConsumerId)
+            return fail("paired replacement lost current or historical pins");
+
+        owner.contentDigest = std::string(64, 'e');
+        consumer.contentDigest = std::string(64, 'f');
+        Runtime::StagedGeneration rejectedOwner, rejectedConsumer;
+        if (!stageOne(runtime, owner, "symbol:owner", ContractId, &third,
+                      rejectedOwner, phases, error) ||
+            !stageOne(runtime, consumer, SymbolId, ContractId, &third,
+                      rejectedConsumer, phases, error))
+            return fail("invalid paired replacement did not stage");
+        auto rejectedPoint = runtime.safePoint();
+        if (runtime.activateTogether(rejectedOwner, rejectedConsumer,
+                                     rejectedPoint, error) ||
+            error != "generation requires a different active module generation" ||
+            !rejectedOwner || !rejectedConsumer ||
+            runtime.activeGenerationId(OwnerId) != nextOwnerId ||
+            runtime.activeGenerationId(ModuleId) != nextConsumerId ||
+            runtime.retainedGenerationCount(OwnerId) != 2 ||
+            runtime.retainedGenerationCount(ModuleId) != 2)
+            return fail("invalid paired dependency partially published");
+        constexpr const char* ObserverId = "org.luna.test.paired-observer";
+        Request observer{ObserverId, std::string(64, '9'),
+                         std::make_shared<int>(9)};
+        observer.requiredActiveModules = {{OwnerId, nextOwnerId}};
+        Runtime::StagedGeneration observerStage;
+        if (!stageOne(runtime, observer, "symbol:observer", ContractId,
+                      &first, observerStage, phases, error))
+            return fail("paired observer did not stage");
+        Runtime::PinnedGeneration observerPin;
+        if (!runtime.loadOnce(observerStage, observerPin, error))
+            return fail("paired observer did not load");
+        consumer.requiredActiveModules = {
+            {OwnerId, rejectedOwner.generationId()}};
+        Runtime::StagedGeneration matchingConsumer;
+        if (!stageOne(runtime, consumer, SymbolId, ContractId, &third,
+                      matchingConsumer, phases, error))
+            return fail("observer replacement consumer did not stage");
+        auto observerPoint = runtime.safePoint();
+        if (runtime.activateTogether(rejectedOwner, matchingConsumer,
+                                     observerPoint, error) ||
+            error != "generation requires a different active module generation" ||
+            !rejectedOwner || !matchingConsumer ||
+            runtime.activeGenerationId(OwnerId) != nextOwnerId ||
+            runtime.activeGenerationId(ModuleId) != nextConsumerId)
+            return fail("paired replacement broke a third module dependency");
+        Runtime otherRuntime;
+        Runtime::StagedGeneration foreignStage;
+        if (!stageOne(otherRuntime, owner, "symbol:owner", ContractId,
+                      &third, foreignStage, phases, error))
+            return fail("foreign paired generation did not stage");
+        auto foreignPoint = runtime.safePoint();
+        if (runtime.activateTogether(foreignStage, rejectedConsumer,
+                                     foreignPoint, error) ||
+            !foreignStage || !rejectedConsumer)
+            return fail("paired activation accepted a foreign staged module");
+    }
+    {
+        constexpr const char* OwnerId = "org.luna.test.concurrent-owner";
+        constexpr size_t PairCount = 64;
+        Runtime runtime;
+        std::vector<Runtime::StagedGeneration> owners(PairCount);
+        std::vector<Runtime::StagedGeneration> consumers(PairCount);
+        std::vector<std::pair<uint64_t, uint64_t>> pairIds;
+        pairIds.reserve(PairCount);
+        std::string phases;
+        for (size_t index = 0; index < PairCount; ++index) {
+            Request owner{OwnerId, std::string(64, "0123456789abcdef"[index % 16]),
+                          std::make_shared<int>(static_cast<int>(index))};
+            if (!stageOne(runtime, owner, "symbol:owner", ContractId, &first,
+                          owners[index], phases, error))
+                return fail("concurrent paired owner did not stage");
+            Request consumer{ModuleId,
+                             std::string(64, "fedcba9876543210"[index % 16]),
+                             std::make_shared<int>(static_cast<int>(index))};
+            consumer.requiredActiveModules = {
+                {OwnerId, owners[index].generationId()}};
+            if (!stageOne(runtime, consumer, SymbolId, ContractId, &second,
+                          consumers[index], phases, error))
+                return fail("concurrent paired consumer did not stage");
+            pairIds.emplace_back(owners[index].generationId(),
+                                 consumers[index].generationId());
+        }
+        auto initialPoint = runtime.safePoint();
+        if (!runtime.activateTogether(owners[0], consumers[0],
+                                      initialPoint, error))
+            return fail("concurrent paired initial activation failed");
+        std::atomic<bool> stopReader{false};
+        std::atomic<bool> mixedPair{false};
+        std::thread reader([&] {
+            while (!stopReader.load(std::memory_order_acquire)) {
+                const auto pinned = runtime.pinTogether(OwnerId, ModuleId);
+                const auto found = std::find(
+                    pairIds.begin(), pairIds.end(),
+                    std::pair<uint64_t, uint64_t>{
+                        pinned.first.generationId(),
+                        pinned.second.generationId()});
+                if (found == pairIds.end()) {
+                    mixedPair.store(true, std::memory_order_release);
+                    break;
+                }
+            }
+        });
+        bool published = true;
+        for (size_t index = 1; index < PairCount; ++index) {
+            auto point = runtime.safePoint();
+            if (!runtime.activateTogether(owners[index], consumers[index],
+                                          point, error)) {
+                published = false;
+                break;
+            }
+            std::this_thread::yield();
+        }
+        stopReader.store(true, std::memory_order_release);
+        reader.join();
+        if (!published || mixedPair.load(std::memory_order_acquire))
+            return fail("concurrent pair pin observed a mixed publication");
     }
     {
         constexpr const char* OwnerId = "org.luna.test.owner";

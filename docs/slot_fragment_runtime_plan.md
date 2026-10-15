@@ -2098,8 +2098,7 @@ candidate pin still calls after host teardown.
 The cross-package regression compares every published binding kind with an
 ordinary verified owner load, including non-Slot rows. This test-only path
 does not independently recompile the owner in the host Runtime. Generic
-required-active facts are host assertions, not artifact authentication or an
-atomic two-module switch; those remain production verifier decisions.
+required-active facts are host assertions, not artifact authentication.
 The verified owner proof can now stage that complete host snapshot without a
 consumer token. The consumer token's owner staging uses the same helper, while
 candidate admission still requires the exact owner-state lease retained by
@@ -2108,6 +2107,16 @@ proof cannot stage, an active owner cannot be staged again, and a non-Slot
 Function binding is present. A separately loaded proof of the same owner bytes
 cannot pair with the consumer, because its owner-state lease differs. This
 remains a private test path.
+MoonRuntime now provides `activateTogether` for two distinct staged modules
+under one safe point. It checks switchable requirements and the final module
+set, including dependencies and exclusions held by other active modules,
+before publishing either generation. `pinTogether` reads both active pins
+under that publication lock; concurrent regression checks it never observes
+a mixed pair across repeated switches. Individual `pin` and switchable reads
+remain per-module and may observe an intermediate pair during the two stores.
+The runtime policy does not verify artifact provenance. The private loader
+still stages its Ref candidate against an already active owner, so the
+proof-backed owner and consumer are not yet staged for paired activation.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
@@ -2326,9 +2335,10 @@ not a public ABI decision or stable-release approval:
    load-once and rollback, including both publication orders. An explicit
    private verified owner proof can independently stage the full binding set;
    candidate admission binds to that exact active owner generation and blocks
-   independent owner switching. Next define the production verifier and an
-   atomic owner/consumer transition policy before any public candidate
-   publication.
+   independent owner switching. Runtime now has paired activation and paired
+   pinning, with final-set dependency validation. Next stage the proof-backed
+   consumer against a staged owner, exercise paired activation, and define
+   the production verifier before any public candidate publication.
    The Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref

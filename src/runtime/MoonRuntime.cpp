@@ -597,6 +597,43 @@ bool MoonRuntime::validatesModuleRelations(
     return true;
 }
 
+bool MoonRuntime::validatesPairedModuleRelations(
+    const std::shared_ptr<const GenerationState>& first,
+    const std::shared_ptr<const GenerationState>& second,
+    std::string& error) const {
+    const auto finalActive = [&](const std::string& moduleId)
+        -> std::shared_ptr<const GenerationState> {
+        if (moduleId == first->moduleId) return first;
+        if (moduleId == second->moduleId) return second;
+        const auto found = modules_.find(moduleId);
+        return found == modules_.end() ? nullptr : found->second->active.load();
+    };
+    const auto validates = [&](const GenerationState& generation) {
+        for (const auto& requirement : generation.requiredActiveModules) {
+            const auto active = finalActive(requirement.moduleId);
+            if (!active || active->generationId != requirement.generationId) {
+                error = "generation requires a different active module generation";
+                return false;
+            }
+        }
+        for (const auto& moduleId : generation.requiredAbsentModuleIds) {
+            if (finalActive(moduleId)) {
+                error = "generation conflicts with an active module";
+                return false;
+            }
+        }
+        return true;
+    };
+    if (!validates(*first) || !validates(*second)) return false;
+    for (const auto& [moduleId, module] : modules_) {
+        if (moduleId == first->moduleId || moduleId == second->moduleId)
+            continue;
+        const auto active = module->active.load();
+        if (active && !validates(*active)) return false;
+    }
+    return true;
+}
+
 bool MoonRuntime::loadOnce(
     StagedGeneration& staged, PinnedGeneration& loaded,
     std::string& error) {
@@ -699,6 +736,48 @@ bool MoonRuntime::activate(
     return true;
 }
 
+bool MoonRuntime::activateTogether(
+    StagedGeneration& first, StagedGeneration& second,
+    SafePoint& safePoint, std::string& error) {
+    error.clear();
+    if (&first == &second || first.owner_ != this || second.owner_ != this ||
+        !first.generation_ || !second.generation_ ||
+        first.generation_->moduleId == second.generation_->moduleId) {
+        error = "paired activation requires distinct staged modules from the same runtime";
+        return false;
+    }
+    if (!consumeSafePoint(safePoint, error)) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto firstFound = modules_.find(first.generation_->moduleId);
+    const auto secondFound = modules_.find(second.generation_->moduleId);
+    const bool firstMissing = firstFound == modules_.end();
+    const bool secondMissing = secondFound == modules_.end();
+    auto firstModule = firstMissing
+        ? std::make_shared<ModuleState>() : firstFound->second;
+    auto secondModule = secondMissing
+        ? std::make_shared<ModuleState>() : secondFound->second;
+    if (!validatesRequirements(*firstModule, *first.generation_, error) ||
+        !validatesRequirements(*secondModule, *second.generation_, error) ||
+        !validatesPairedModuleRelations(
+            first.generation_, second.generation_, error))
+        return false;
+    firstModule->history.reserve(firstModule->history.size() + 1);
+    secondModule->history.reserve(secondModule->history.size() + 1);
+    if (firstMissing)
+        modules_.emplace(first.generation_->moduleId, firstModule);
+    if (secondMissing)
+        modules_.emplace(second.generation_->moduleId, secondModule);
+    firstModule->history.push_back(first.generation_);
+    secondModule->history.push_back(second.generation_);
+    firstModule->active.store(first.generation_);
+    secondModule->active.store(second.generation_);
+    first.generation_.reset();
+    second.generation_.reset();
+    first.owner_ = nullptr;
+    second.owner_ = nullptr;
+    return true;
+}
+
 bool MoonRuntime::rollback(
     const std::string& moduleId, uint64_t generationId,
     SafePoint& safePoint, std::string& error) {
@@ -737,6 +816,21 @@ MoonRuntime::PinnedGeneration MoonRuntime::pin(
         module = found->second;
     }
     result.generation_ = module->active.load();
+    return result;
+}
+
+std::pair<MoonRuntime::PinnedGeneration, MoonRuntime::PinnedGeneration>
+MoonRuntime::pinTogether(
+    const std::string& firstModuleId,
+    const std::string& secondModuleId) const {
+    std::pair<PinnedGeneration, PinnedGeneration> result;
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto first = modules_.find(firstModuleId);
+    const auto second = modules_.find(secondModuleId);
+    if (first != modules_.end())
+        result.first.generation_ = first->second->active.load();
+    if (second != modules_.end())
+        result.second.generation_ = second->second->active.load();
     return result;
 }
 

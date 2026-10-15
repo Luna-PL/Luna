@@ -1552,13 +1552,18 @@ staging 与 activation 之间切换 owner，恢复后执行类型化调用，并
 owner 回滚被拒绝。其 candidate pin 在宿主销毁后仍可调用。跨包回归把每种发布绑定与普通
 verified owner 加载逐项比较，也覆盖非 Slot 行。此测试路径并未在宿主 Runtime 中独立重编译
 owner。
-通用必需活跃事实仍是宿主声明，不能代替产物认证或两个 module 的原子切换；这些属于生产
-verifier 的后续决策。
+通用必需活跃事实仍是宿主声明，不能代替产物认证。
 verified owner 凭据现在无需 consumer token 即可向宿主 staging 该完整快照。consumer token
 的 owner staging 复用同一实现；candidate 准入仍要求其已验证 preparation 保留的精确
 owner 状态 lease。独立凭据回归检查空凭据不能 staging、活跃 owner 不能重复 staging，且
 存在非 Slot 的 Function 绑定。同一 owner 字节另行加载所得的凭据也不能与原 consumer
 配对，因为其 owner 状态 lease 不同。此路径仍只用于私有测试。
+MoonRuntime 现提供 `activateTogether`，用一个 safe point 发布两个不同 module 的 staged
+generation。它在发布任一 generation 前检查 switchable 要求与最终模块集合，包括其他活跃
+module 持有的依赖和排斥条件。`pinTogether` 在同一发布锁内读取两枚活跃 pin；并发回归验证
+连续成对切换时不会读到混合配对。单独 `pin` 与 switchable 查询仍按 module 读取，可能在
+两次存储之间看到中间配对。运行时规则自身不认证产物。私有 loader 仍要求 owner 先激活
+再 staging Ref candidate，因此凭据绑定的 owner／consumer 尚未接入成对激活。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
 candidate。普通构建中的 generation 核验现同时比较 lease 地址与 `shared_ptr` 的共享所有权；
@@ -1712,8 +1717,8 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    空 replacement 验证当前查询和旧 pin 行为。Runtime 现于 activation、load-once 与
    rollback 双向执行私有 owner 的未激活约束。私有 verified owner 凭据现可独立 staging
    完整绑定集，并将宿主 candidate 绑定到该精确活跃 owner generation，阻止 owner 独立切换。
-   下一步定义
-   生产 verifier 和 owner／consumer 原子转换策略，再考虑公开 candidate 发布。
+   Runtime 现有最终集合校验的成对激活与成对 pin。下一步将凭据绑定的 consumer 对 staged
+   owner 进行 staging，验证成对激活，并定义生产 verifier，再考虑公开 candidate 发布。
    Runtime candidate 要求同一
    generation 的 Slot binding；
    默认发布验证仍关闭。
