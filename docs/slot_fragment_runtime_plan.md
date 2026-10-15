@@ -2065,6 +2065,12 @@ until an owner co-publication contract exists. The activated host candidate
 survives release of both the
 internal token and host Runtime. This probe is absent from ordinary builds;
 it does not open the public Ref loader or Container publication gate.
+The test-only host probe now activates a synthetic empty generation for the
+same module, confirms that current Slot and Ref candidate lookups disappear
+while the old candidate pin remains callable, then rolls back at a safe point
+and calls the restored current candidate. This covers the host Runtime switch
+and pin lifetime contract. The replacement has only a fixture verifier; it is
+not a compiler-verified publication or an owner co-publication proof.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
@@ -2277,8 +2283,11 @@ not a public ABI decision or stable-release approval:
    caller lease and explicit activation, without Ref/unit load-once reuse.
    A test-only probe now stages into a caller-supplied Runtime through the
    compiler-issued consumer and owner proofs, with explicit activation and a
-   retained typed pin. Next settle the production publication verifier and
-   rollback contract before any public candidate publication.
+   retained typed pin. The host switch/rollback regression checks current
+   lookup and old pin behavior against a synthetic empty replacement. Next
+   settle the production publication verifier and owner co-publication rules,
+   including rollback across verified generations, before any public candidate
+   publication.
    The Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref

@@ -18,6 +18,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iterator>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -1028,6 +1029,53 @@ int runCrossPackageContainerTest() {
             integratedRefGeneration.stageInRuntimeForTest(
                 hostRuntime, staged, error) || staged)
             return fail("host Ref admission lost its proof or allowed replacement");
+        luna::runtime::GenerationStagingRequest inertRequest;
+        inertRequest.moduleId = hostFacts->packageId;
+        inertRequest.contentDigest = hostGeneration.contentDigest();
+        inertRequest.materializationKey = hostGeneration.materializationKey();
+        inertRequest.moduleLease = std::make_shared<int>(1);
+        luna::runtime::MoonRuntime::StagedGeneration inertStage;
+        if (!hostRuntime.stage(
+                inertRequest,
+                [](const auto&, std::string&) { return true; },
+                [](const auto&, auto&, std::string&) { return true; },
+                {}, inertStage, error))
+            return fail("host Ref rollback fixture could not stage an inert generation");
+        auto replacePoint = hostRuntime.safePoint();
+        if (!hostRuntime.activate(inertStage, replacePoint, error))
+            return fail("host Ref rollback fixture could not activate an inert generation");
+        const auto inertActive = hostRuntime.pin(hostFacts->packageId);
+        if (!inertActive ||
+            inertActive.find(hostFacts->slotSymbolId,
+                             hostFacts->slotContractId) ||
+            inertActive.findRefUnitCandidate(
+                hostFacts->symbolId, hostFacts->contractId) ||
+            hostRuntimePin.generationId() == inertActive.generationId())
+            return fail("host Ref replacement left the candidate active");
+        candidateStatus = 777;
+        if (!hostRuntimePin.call(noneContext, borrowedRef,
+                                 candidateStatus, error) ||
+            candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+            return fail("host Ref candidate pin failed across replacement");
+        auto rollbackPoint = hostRuntime.safePoint();
+        if (!hostRuntime.rollback(hostFacts->packageId,
+                                  hostGeneration.generationId(),
+                                  rollbackPoint, error))
+            return fail("host Ref candidate generation did not roll back");
+        const auto restored = hostRuntime.pin(hostFacts->packageId);
+        const auto restoredCandidate = restored.findRefUnitCandidate(
+            hostFacts->symbolId, hostFacts->contractId);
+        if (!restored || !restoredCandidate ||
+            !restored.find(hostFacts->slotSymbolId,
+                           hostFacts->slotContractId) ||
+            restored.generationId() != hostGeneration.generationId() ||
+            restoredCandidate.generationId() != hostRuntimePin.generationId())
+            return fail("host Ref rollback restored the wrong candidate");
+        candidateStatus = 777;
+        if (!restoredCandidate.call(noneContext, borrowedRef,
+                                    candidateStatus, error) ||
+            candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+            return fail("host Ref rollback did not restore the callable candidate");
     }
     integratedRefGeneration = {};
     candidateStatus = 777;
