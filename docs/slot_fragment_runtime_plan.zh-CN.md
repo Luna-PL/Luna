@@ -1554,6 +1554,11 @@ verified owner 加载逐项比较，也覆盖非 Slot 行。此测试路径并�
 owner。
 通用必需活跃事实仍是宿主声明，不能代替产物认证或两个 module 的原子切换；这些属于生产
 verifier 的后续决策。
+verified owner 凭据现在无需 consumer token 即可向宿主 staging 该完整快照。consumer token
+的 owner staging 复用同一实现；candidate 准入仍要求其已验证 preparation 保留的精确
+owner 状态 lease。独立凭据回归检查空凭据不能 staging、活跃 owner 不能重复 staging，且
+存在非 Slot 的 Function 绑定。同一 owner 字节另行加载所得的凭据也不能与原 consumer
+配对，因为其 owner 状态 lease 不同。此路径仍只用于私有测试。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
 candidate。普通构建中的 generation 核验现同时比较 lease 地址与 `shared_ptr` 的共享所有权；
@@ -1705,8 +1710,9 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    和显式激活，禁止 Ref／unit 的 load-once 复用。仅测试用探针现通过编译器签发的 consumer
    与 owner 凭据向调用方 Runtime staging，并保留类型化 pin。宿主切换／回滚回归现用合成
    空 replacement 验证当前查询和旧 pin 行为。Runtime 现于 activation、load-once 与
-   rollback 双向执行私有 owner 的未激活约束。私有 verified owner 发布现复制完整绑定集，
-   将宿主 candidate 绑定到该精确活跃 owner generation，并阻止 owner 独立切换。下一步定义
+   rollback 双向执行私有 owner 的未激活约束。私有 verified owner 凭据现可独立 staging
+   完整绑定集，并将宿主 candidate 绑定到该精确活跃 owner generation，阻止 owner 独立切换。
+   下一步定义
    生产 verifier 和 owner／consumer 原子转换策略，再考虑公开 candidate 发布。
    Runtime candidate 要求同一
    generation 的 Slot binding；

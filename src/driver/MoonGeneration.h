@@ -79,6 +79,14 @@ public:
         const std::string& expectedDataLayout,
         luna::runtime::MoonRuntime::PinnedGeneration& pinned,
         std::string& error) const;
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    // Publishes the verified owner's complete binding snapshot in a separate
+    // host Runtime. The returned stage still requires explicit activation.
+    bool stageInRuntimeForTest(
+        luna::runtime::MoonRuntime& target,
+        luna::runtime::MoonRuntime::StagedGeneration& staged,
+        std::string& error) const;
+#endif
 
 private:
     friend bool loadVerifiedMoonSlotOwner(

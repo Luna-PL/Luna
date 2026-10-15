@@ -716,6 +716,26 @@ int runCrossPackageContainerTest() {
                 refManifest.targetTriple, refManifest.dataLayout,
                 rejectedPublished, error, dependencies) || rejectedPublished)
             return fail("public load-once reused a private Ref consumer generation");
+        {
+            luna::runtime::MoonRuntime ownerHost;
+            luna::runtime::MoonRuntime::StagedGeneration ownerStage;
+            if (rejectedOwner.stageInRuntimeForTest(
+                    ownerHost, ownerStage, error) || ownerStage ||
+                !ownerProof.stageInRuntimeForTest(
+                    ownerHost, ownerStage, error))
+                return fail("verified owner proof did not stage independently");
+            auto ownerPoint = ownerHost.safePoint();
+            if (!ownerHost.activate(ownerStage, ownerPoint, error))
+                return fail("independent verified owner did not activate");
+            const auto activeOwner = ownerHost.pin(hostManifest.packageId);
+            if (!activeOwner ||
+                activeOwner.findAll(
+                    static_cast<uint32_t>(moon::DeclarationKind::Function) + 1,
+                    0).empty() ||
+                ownerProof.stageInRuntimeForTest(
+                    ownerHost, ownerStage, error) || ownerStage)
+                return fail("independent verified owner lost its artifact bindings");
+        }
         ownerProof = {};
         if (consumerPreparation.ownerGenerationId() != ownerGenerationId)
             return fail("verified Ref preparation lost its owner after loader teardown");
@@ -1164,6 +1184,31 @@ int runCrossPackageContainerTest() {
                                noneContext.opaque()) != 42)
             return fail("verified host owner lost its published callable entry");
         luna::runtime::MoonRuntime::StagedGeneration candidateStage;
+        {
+            luna::driver::VerifiedMoonSlotOwner separateProof;
+            luna::runtime::MoonRuntime separateHost;
+            luna::runtime::MoonRuntime::StagedGeneration separateStage;
+            if (!luna::driver::loadVerifiedMoonSlotOwner(
+                    hostBytes, hostManifest.targetTriple,
+                    hostManifest.dataLayout, separateProof, error) ||
+                !separateProof.stageInRuntimeForTest(
+                    separateHost, separateStage, error))
+                return fail("separate verified owner proof did not stage");
+            auto separatePoint = separateHost.safePoint();
+            if (!separateHost.activate(separateStage, separatePoint, error))
+                return fail("separate verified owner proof did not activate");
+            const auto separateOwner = separateHost.pin(hostManifest.packageId);
+            if (!separateOwner ||
+                separateOwner.contentDigest() != hostOwner.contentDigest() ||
+                separateOwner.materializationKey() !=
+                    hostOwner.materializationKey() ||
+                integratedRefGeneration.stageInRuntimeForTest(
+                    separateHost, candidateStage, error, separateOwner) ||
+                candidateStage ||
+                error !=
+                    "private Ref/unit host staging requires its exact verified owner")
+                return fail("separate verified owner proof impersonated consumer owner");
+        }
         {
             luna::runtime::MoonRuntime foreignHost;
             luna::runtime::MoonRuntime::StagedGeneration foreignStage;
