@@ -295,6 +295,12 @@ public:
         const StagedGeneration& staged,
         const std::shared_ptr<const void>& lease,
         const std::vector<GenerationBinding>& bindings) const;
+    // Also requires the pinned owner to be the currently active generation
+    // of this Runtime. A retained pin from an older publication does not pass.
+    bool matchesActiveOwnerSnapshot(
+        const PinnedGeneration& active,
+        const std::shared_ptr<const void>& lease,
+        const std::vector<GenerationBinding>& bindings) const;
     bool makeSwitchable(const std::string& moduleId,
                         const std::string& symbolId,
                         const std::string& contractId,
@@ -306,6 +312,10 @@ public:
     size_t retainedGenerationCount(const std::string& moduleId) const;
 
 private:
+    static bool matchesOwnerSnapshot(
+        const GenerationState& generation,
+        const std::shared_ptr<const void>& lease,
+        const std::vector<GenerationBinding>& bindings);
     static const GenerationBinding* findBinding(
         const GenerationState& generation, const std::string& symbolId,
         const std::string& contractId);

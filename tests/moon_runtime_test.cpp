@@ -248,8 +248,35 @@ int main() {
         auto oldPair = runtime.pinTogether(OwnerId, ModuleId);
         if (!oldPair.first || !oldPair.second ||
             oldPair.first.generationId() != firstOwnerId ||
-            oldPair.second.generationId() != firstConsumerId)
+            oldPair.second.generationId() != firstConsumerId ||
+            !runtime.matchesActiveOwnerSnapshot(
+                oldPair.first, owner.moduleLease, ownerSnapshot) ||
+            runtime.matchesActiveOwnerSnapshot(
+                oldPair.first, forgedLease, ownerSnapshot) ||
+            otherOwnerRuntime.matchesActiveOwnerSnapshot(
+                oldPair.first, owner.moduleLease, ownerSnapshot))
             return fail("paired publication lost its first pins");
+        Runtime forgedRuntime;
+        Runtime::StagedGeneration forgedActiveStage;
+        if (!forgedRuntime.stage(
+                owner,
+                [](const Request&, std::string&) { return true; },
+                [&](const Request&, std::vector<Binding>& bindings,
+                    std::string&) {
+                    bindings = ownerSnapshot;
+                    bindings.push_back({"symbol:extra", ContractId, &second,
+                                        1, luna::runtime::GenerationBindingCallable});
+                    return true;
+                }, {}, forgedActiveStage, error))
+            return fail("forged active owner did not stage");
+        Runtime::PinnedGeneration forgedActiveOwner;
+        if (!forgedRuntime.loadOnce(
+                forgedActiveStage, forgedActiveOwner, error) ||
+            forgedRuntime.matchesActiveOwnerSnapshot(
+                forgedActiveOwner, owner.moduleLease, ownerSnapshot) ||
+            runtime.matchesActiveOwnerSnapshot(
+                forgedActiveOwner, owner.moduleLease, ownerSnapshot))
+            return fail("active owner snapshot accepted an extra binding");
 
         owner.contentDigest = std::string(64, 'c');
         consumer.contentDigest = std::string(64, 'd');
@@ -283,10 +310,16 @@ int main() {
                                       pairPoint, error))
             return fail("replacement owner and consumer did not activate together");
         const auto current = runtime.pinTogether(OwnerId, ModuleId);
+        auto nextOwnerBinding = ownerBinding;
+        nextOwnerBinding.implementation = &second;
         if (current.first.generationId() != nextOwnerId ||
             current.second.generationId() != nextConsumerId ||
             oldPair.first.generationId() != firstOwnerId ||
-            oldPair.second.generationId() != firstConsumerId)
+            oldPair.second.generationId() != firstConsumerId ||
+            runtime.matchesActiveOwnerSnapshot(
+                oldPair.first, owner.moduleLease, ownerSnapshot) ||
+            !runtime.matchesActiveOwnerSnapshot(
+                current.first, owner.moduleLease, {nextOwnerBinding}))
             return fail("paired replacement lost current or historical pins");
 
         owner.contentDigest = std::string(64, 'e');

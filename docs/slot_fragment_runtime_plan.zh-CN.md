@@ -1545,7 +1545,7 @@ Runtime 现也接受精确的必需活跃 module generation。在同一发布锁
 仅测试用的 verified 凭据可向宿主 staging 原始 owner 产物的完整发布绑定集快照。owner 状态
 lease 保留原始 verified 代码与解码产物；发布清单与普通 loader 共用，宿主绑定复制内部已验证
 generation 的身份、flags、ABI 配置及实现指针。该 owner 激活后，Ref candidate 仅在精确
-owner 状态 lease、产物摘要、物化配置键、public Slot binding 和宿主 generation 实例全部吻合
+owner 状态 lease、产物摘要、物化配置键、完整 owner 绑定快照和宿主 generation 实例全部吻合
 时才能 staging；请求记录宿主 owner generation ID。即使第二个 Runtime 的 ID、凭据和绑定
 快照相同，也不能冒用该 pin。跨包回归在
 staging 与 activation 之间切换 owner，恢复后执行类型化调用，并验证 candidate 活跃时
@@ -1567,7 +1567,9 @@ module 持有的依赖和排斥条件。`pinTogether` 在同一发布锁内读�
 generation 所属 Runtime、精确 owner 状态 lease 与完整 owner 绑定快照，并拒绝暗藏的 Ref
 candidate、回调或 module 依赖，且不暴露未激活的 callable pin。仅 Slot 行正确却多出其他
 绑定的 stage 也会失败。candidate 声明依赖该 staged owner ID；单独激活失败，成对激活及
-`pinTogether` 成功。跨包回归拒绝外来 staged owner、同字节另行加载的凭据，以及 consumer
+`pinTogether` 成功。owner 已激活时也核验完整快照：Slot 正确但多出绑定的 generation 会被
+拒绝，切换后保留的旧 pin 不再证明当前 owner。consumer staging 完成后会再次复核，再由宿主
+决定是否激活 candidate。跨包回归拒绝外来 staged owner、同字节另行加载的凭据，以及 consumer
 准备后与另一枚 owner stage 成对激活；它还执行类型化调用，并验证宿主销毁后的 candidate
 pin。此路径仍只用于测试；生产 verifier 与公开 candidate 发布门继续关闭。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
@@ -1725,7 +1727,8 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    完整绑定集，并将宿主 candidate 绑定到该精确活跃 owner generation，阻止 owner 独立切换。
    Runtime 现有最终集合校验的成对激活与成对 pin。私有 verified consumer 已对其精确 staged
    owner 进行 staging 并验证成对激活。owner staging 准入现核验完整的 verified 绑定快照，
-   拒绝额外绑定及暗藏的 module 依赖；只核验 Slot 行不足以证明 owner stage。下一步定义生产
+   拒绝额外绑定及暗藏的 module 依赖。已激活 owner 的准入也采用完整快照，切换后的旧 pin 会
+   被拒绝。下一步定义生产
    verifier 与公开准入边界，再考虑公开 candidate 发布。
    Runtime candidate 要求同一
    generation 的 Slot binding；

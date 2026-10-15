@@ -2089,8 +2089,8 @@ the owner publication list is shared with the ordinary loader, and the host
 rows copy the internal verified generation's binding identities, flags, ABI
 profiles and implementations. With that owner active, the token stages a Ref
 candidate only after matching the exact owner-state lease, owner artifact
-digest, materialization key, public Slot binding and retained host generation
-object; the request records the host owner's generation ID. A second Runtime with the same ID,
+digest, materialization key, complete owner binding snapshot and retained host
+generation object; the request records the host owner's generation ID. A second Runtime with the same ID,
 proof and projection cannot impersonate that pin. The cross-package regression
 changes the host owner between staging and activation, restores it for a typed
 call, and rejects an owner rollback while the candidate is active. Its
@@ -2122,6 +2122,10 @@ rejects hidden Ref candidates, callbacks or module relations without exposing
 an unactivated callable pin. A stage with the correct Slot row but an extra
 binding fails. The candidate requires that staged owner ID;
 single activation fails, while paired activation and `pinTogether` succeed.
+The same full-snapshot rule now applies when the owner is already active: a
+generation with the right Slot but extra bindings fails, and an older retained
+pin ceases to attest the owner after replacement. The check runs again after
+consumer staging, before the host can activate the candidate.
 The cross-package regression rejects a foreign staged owner, a separately
 loaded proof of the same owner bytes, and pair activation with that other
 stage after the consumer is prepared. It executes the typed call and retains
@@ -2349,8 +2353,8 @@ not a public ABI decision or stable-release approval:
    pinning, with final-set dependency validation. The private verified consumer
    now stages against its exact staged owner and exercises paired activation.
    Owner staging admission checks the entire verified binding snapshot and
-   rejects extra rows and hidden module relations; a Slot-only match is
-   insufficient.
+   rejects extra rows and hidden module relations. Active-owner admission now
+   applies the same snapshot rule and rejects a stale pin after switching.
    Next define the production verifier and its public admission boundary before
    any public candidate publication.
    The Runtime candidate requires a same-generation Slot binding.

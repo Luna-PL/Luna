@@ -838,9 +838,27 @@ bool MoonRuntime::matchesStagedOwnerSnapshot(
     const StagedGeneration& staged,
     const std::shared_ptr<const void>& lease,
     const std::vector<GenerationBinding>& bindings) const {
-    if (staged.owner_ != this || !staged.generation_ || !lease)
-        return false;
-    const auto& generation = *staged.generation_;
+    return staged.owner_ == this && staged.generation_ &&
+        matchesOwnerSnapshot(*staged.generation_, lease, bindings);
+}
+
+bool MoonRuntime::matchesActiveOwnerSnapshot(
+    const PinnedGeneration& active,
+    const std::shared_ptr<const void>& lease,
+    const std::vector<GenerationBinding>& bindings) const {
+    if (!active.generation_) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    const auto found = modules_.find(active.generation_->moduleId);
+    return found != modules_.end() &&
+        found->second->active.load() == active.generation_ &&
+        matchesOwnerSnapshot(*active.generation_, lease, bindings);
+}
+
+bool MoonRuntime::matchesOwnerSnapshot(
+    const GenerationState& generation,
+    const std::shared_ptr<const void>& lease,
+    const std::vector<GenerationBinding>& bindings) {
+    if (!lease) return false;
     if (generation.moduleLease.get() != lease.get() ||
         generation.moduleLease.owner_before(lease) ||
         lease.owner_before(generation.moduleLease) ||
