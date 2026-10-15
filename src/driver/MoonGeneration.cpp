@@ -165,6 +165,33 @@ std::vector<moon::DeclarationRef> publishedDeclarations(
 }
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
+bool verifiedOwnerBindingSnapshotForTest(
+    const VerifiedMoonSlotOwnerState& ownerState,
+    std::vector<luna::runtime::GenerationBinding>& bindings,
+    std::string& error) {
+    const auto published = publishedDeclarations(
+        ownerState.manifest, ownerState.module);
+    bindings.clear();
+    bindings.reserve(published.size());
+    for (const auto& reference : published) {
+        const auto* record = ownerState.module.findDeclaration(reference);
+        const auto binding = ownerState.generation.find(
+            reference.symbol.value, reference.contract.value);
+        if (!record || !binding ||
+            binding.declarationKind() !=
+                static_cast<uint32_t>(record->kind) + 1) {
+            error = "private verified owner staging lost an artifact binding";
+            bindings.clear();
+            return false;
+        }
+        bindings.push_back({
+            binding.symbolId(), binding.contractId(),
+            binding.implementation(), binding.declarationKind(),
+            binding.flags(), binding.entryAbi()});
+    }
+    return true;
+}
+
 bool stageVerifiedOwnerArtifactForTest(
     const std::shared_ptr<const VerifiedMoonSlotOwnerState>& ownerState,
     luna::runtime::MoonRuntime& target,
@@ -186,24 +213,9 @@ bool stageVerifiedOwnerArtifactForTest(
     request.materializationKey = privateRefHostOwnerArtifactKey();
     request.moduleLease = ownerState;
     std::vector<luna::runtime::GenerationBinding> ownerBindings;
-    const auto published = publishedDeclarations(
-        ownerState->manifest, ownerState->module);
-    ownerBindings.reserve(published.size());
-    for (const auto& reference : published) {
-        const auto* record = ownerState->module.findDeclaration(reference);
-        const auto binding = ownerState->generation.find(
-            reference.symbol.value, reference.contract.value);
-        if (!record || !binding ||
-            binding.declarationKind() !=
-                static_cast<uint32_t>(record->kind) + 1) {
-            error = "private verified owner staging lost an artifact binding";
-            return false;
-        }
-        ownerBindings.push_back({
-            binding.symbolId(), binding.contractId(),
-            binding.implementation(), binding.declarationKind(),
-            binding.flags(), binding.entryAbi()});
-    }
+    if (!verifiedOwnerBindingSnapshotForTest(
+            *ownerState, ownerBindings, error))
+        return false;
     if (!target.stage(
             request,
             [ownerState, &request](const auto& candidate,
@@ -225,7 +237,7 @@ bool stageVerifiedOwnerArtifactForTest(
                 }
                 return true;
             },
-            [ownerBindings = std::move(ownerBindings)](
+            [ownerBindings](
                 const auto&, auto& bindings, std::string& resolutionError) {
                 if (!bindings.empty()) {
                     resolutionError =
@@ -240,7 +252,9 @@ bool stageVerifiedOwnerArtifactForTest(
     if (staged.moduleId() != request.moduleId ||
         staged.contentDigest() != request.contentDigest ||
         staged.materializationKey() != request.materializationKey ||
-        target.activeGenerationId(request.moduleId) != 0) {
+        target.activeGenerationId(request.moduleId) != 0 ||
+        !target.matchesStagedOwnerSnapshot(
+            staged, ownerState, ownerBindings)) {
         staged = {};
         error = "private verified owner staging changed its artifact";
         return false;
@@ -1357,22 +1371,18 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTestImpl(
             return false;
         }
     }
-    luna::runtime::GenerationBinding stagedOwnerSlot;
+    std::vector<luna::runtime::GenerationBinding> stagedOwnerBindings;
     if (stagedHostOwner) {
-        stagedOwnerSlot.symbolId = expected->slotSymbolId;
-        stagedOwnerSlot.contractId = expected->slotContractId;
-        stagedOwnerSlot.implementation = ownerBinding.implementation();
-        stagedOwnerSlot.declarationKind = ownerBinding.declarationKind();
-        stagedOwnerSlot.flags = ownerBinding.flags();
-        stagedOwnerSlot.entryAbi = ownerBinding.entryAbi();
-        if (stagedHostOwner->moduleId() !=
+        if (!verifiedOwnerBindingSnapshotForTest(
+                *state.ownerState, stagedOwnerBindings, error) ||
+            stagedHostOwner->moduleId() !=
                 state.ownerGeneration.moduleId() ||
             stagedHostOwner->contentDigest() !=
                 state.ownerGeneration.contentDigest() ||
             stagedHostOwner->materializationKey() !=
                 privateRefHostOwnerArtifactKey() ||
-            !target.matchesStagedGeneration(
-                *stagedHostOwner, state.ownerState, stagedOwnerSlot)) {
+            !target.matchesStagedOwnerSnapshot(
+                *stagedHostOwner, state.ownerState, stagedOwnerBindings)) {
             error = "private Ref/unit host staging requires its exact staged owner";
             return false;
         }
@@ -1457,8 +1467,8 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTestImpl(
              hostOwner.generationId()) ||
         (stagedHostOwner &&
          (target.activeGenerationId(state.ownerGeneration.moduleId()) != 0 ||
-          !target.matchesStagedGeneration(
-              *stagedHostOwner, state.ownerState, stagedOwnerSlot)))) {
+          !target.matchesStagedOwnerSnapshot(
+              *stagedHostOwner, state.ownerState, stagedOwnerBindings)))) {
         staged = {};
         error = "private Ref/unit host staging changed its verified artifact";
         return false;

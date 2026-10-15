@@ -2117,8 +2117,10 @@ remain per-module and may observe an intermediate pair during the two stores.
 The runtime policy does not verify artifact provenance. The private loader can
 now stage its Ref candidate against a verified owner that is staged in the
 same host Runtime. A read-only Runtime check compares the staged generation's
-Runtime, exact owner-state lease and full public Slot binding without exposing
-an unactivated callable pin. The candidate requires that staged owner ID;
+Runtime, exact owner-state lease and complete owner binding snapshot, and
+rejects hidden Ref candidates, callbacks or module relations without exposing
+an unactivated callable pin. A stage with the correct Slot row but an extra
+binding fails. The candidate requires that staged owner ID;
 single activation fails, while paired activation and `pinTogether` succeed.
 The cross-package regression rejects a foreign staged owner, a separately
 loaded proof of the same owner bytes, and pair activation with that other
@@ -2346,6 +2348,9 @@ not a public ABI decision or stable-release approval:
    independent owner switching. Runtime now has paired activation and paired
    pinning, with final-set dependency validation. The private verified consumer
    now stages against its exact staged owner and exercises paired activation.
+   Owner staging admission checks the entire verified binding snapshot and
+   rejects extra rows and hidden module relations; a Slot-only match is
+   insufficient.
    Next define the production verifier and its public admission boundary before
    any public candidate publication.
    The Runtime candidate requires a same-generation Slot binding.

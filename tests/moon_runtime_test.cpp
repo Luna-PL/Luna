@@ -192,20 +192,43 @@ int main() {
         const Binding ownerBinding{
             "symbol:owner", ContractId, &first, 1,
             luna::runtime::GenerationBindingCallable};
+        const std::vector<Binding> ownerSnapshot{ownerBinding};
         const std::shared_ptr<const void> forgedLease(
             owner.moduleLease.get(), [](const void*) {});
         auto changedBinding = ownerBinding;
         changedBinding.implementation = &second;
         Runtime otherOwnerRuntime;
-        if (!runtime.matchesStagedGeneration(
-                ownerStage, owner.moduleLease, ownerBinding) ||
-            runtime.matchesStagedGeneration(
-                ownerStage, forgedLease, ownerBinding) ||
-            runtime.matchesStagedGeneration(
-                ownerStage, owner.moduleLease, changedBinding) ||
-            otherOwnerRuntime.matchesStagedGeneration(
-                ownerStage, owner.moduleLease, ownerBinding))
+        if (!runtime.matchesStagedOwnerSnapshot(
+                ownerStage, owner.moduleLease, ownerSnapshot) ||
+            runtime.matchesStagedOwnerSnapshot(
+                ownerStage, forgedLease, ownerSnapshot) ||
+            runtime.matchesStagedOwnerSnapshot(
+                ownerStage, owner.moduleLease, {changedBinding}) ||
+            otherOwnerRuntime.matchesStagedOwnerSnapshot(
+                ownerStage, owner.moduleLease, ownerSnapshot))
             return fail("staged owner attestation ignored Runtime, lease or binding");
+        Runtime::StagedGeneration extraBindingStage;
+        if (!runtime.stage(
+                owner,
+                [](const Request&, std::string&) { return true; },
+                [&](const Request&, std::vector<Binding>& bindings,
+                    std::string&) {
+                    bindings = ownerSnapshot;
+                    bindings.push_back({"symbol:extra", ContractId, &second,
+                                        1, luna::runtime::GenerationBindingCallable});
+                    return true;
+                }, {}, extraBindingStage, error) ||
+            runtime.matchesStagedOwnerSnapshot(
+                extraBindingStage, owner.moduleLease, ownerSnapshot))
+            return fail("staged owner snapshot accepted an extra binding");
+        Request relatedOwner = owner;
+        relatedOwner.requiredActiveModules = {{"org.luna.test.required", 1}};
+        Runtime::StagedGeneration relatedStage;
+        if (!stageOne(runtime, relatedOwner, "symbol:owner", ContractId,
+                      &first, relatedStage, phases, error) ||
+            runtime.matchesStagedOwnerSnapshot(
+                relatedStage, owner.moduleLease, ownerSnapshot))
+            return fail("staged owner snapshot accepted a hidden dependency");
         Request consumer{ModuleId, std::string(64, 'b'),
                          std::make_shared<int>(2)};
         consumer.requiredActiveModules = {{OwnerId, ownerStage.generationId()}};
@@ -219,8 +242,8 @@ int main() {
         if (!runtime.activateTogether(ownerStage, consumerStage,
                                       firstPoint, error) ||
             ownerStage || consumerStage ||
-            runtime.matchesStagedGeneration(
-                ownerStage, owner.moduleLease, ownerBinding))
+            runtime.matchesStagedOwnerSnapshot(
+                ownerStage, owner.moduleLease, ownerSnapshot))
             return fail("initial owner and consumer did not activate together");
         auto oldPair = runtime.pinTogether(OwnerId, ModuleId);
         if (!oldPair.first || !oldPair.second ||

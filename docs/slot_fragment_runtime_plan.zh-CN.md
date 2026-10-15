@@ -1564,8 +1564,9 @@ module 持有的依赖和排斥条件。`pinTogether` 在同一发布锁内读�
 连续成对切换时不会读到混合配对。单独 `pin` 与 switchable 查询仍按 module 读取，可能在
 两次存储之间看到中间配对。运行时规则自身不认证产物。私有 loader 现可对同一宿主 Runtime
 中尚未激活的 verified owner staging Ref candidate。Runtime 的只读核验同时比较 staged
-generation 所属 Runtime、精确 owner 状态 lease 与完整 public Slot 绑定行，且不暴露未激活
-的 callable pin。candidate 声明依赖该 staged owner ID；单独激活失败，成对激活及
+generation 所属 Runtime、精确 owner 状态 lease 与完整 owner 绑定快照，并拒绝暗藏的 Ref
+candidate、回调或 module 依赖，且不暴露未激活的 callable pin。仅 Slot 行正确却多出其他
+绑定的 stage 也会失败。candidate 声明依赖该 staged owner ID；单独激活失败，成对激活及
 `pinTogether` 成功。跨包回归拒绝外来 staged owner、同字节另行加载的凭据，以及 consumer
 准备后与另一枚 owner stage 成对激活；它还执行类型化调用，并验证宿主销毁后的 candidate
 pin。此路径仍只用于测试；生产 verifier 与公开 candidate 发布门继续关闭。
@@ -1723,8 +1724,9 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    rollback 双向执行私有 owner 的未激活约束。私有 verified owner 凭据现可独立 staging
    完整绑定集，并将宿主 candidate 绑定到该精确活跃 owner generation，阻止 owner 独立切换。
    Runtime 现有最终集合校验的成对激活与成对 pin。私有 verified consumer 已对其精确 staged
-   owner 进行 staging 并验证成对激活。下一步定义生产 verifier 与公开准入边界，再考虑公开
-   candidate 发布。
+   owner 进行 staging 并验证成对激活。owner staging 准入现核验完整的 verified 绑定快照，
+   拒绝额外绑定及暗藏的 module 依赖；只核验 Slot 行不足以证明 owner stage。下一步定义生产
+   verifier 与公开准入边界，再考虑公开 candidate 发布。
    Runtime candidate 要求同一
    generation 的 Slot binding；
    默认发布验证仍关闭。

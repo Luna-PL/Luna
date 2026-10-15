@@ -287,13 +287,14 @@ public:
     std::pair<PinnedGeneration, PinnedGeneration> pinTogether(
         const std::string& firstModuleId,
         const std::string& secondModuleId) const;
-    // Read-only staging attestation for trusted loaders. It checks Runtime
-    // ownership, exact lease ownership/address, and one complete binding row
-    // without exposing an unactivated callable pin.
-    bool matchesStagedGeneration(
+    // Read-only attestation of an inert owner's full staged binding set.
+    // The rows must come from independently verified artifact evidence. It
+    // checks Runtime and exact lease ownership/address, and excludes candidate
+    // callbacks and module relations without exposing an unactivated pin.
+    bool matchesStagedOwnerSnapshot(
         const StagedGeneration& staged,
         const std::shared_ptr<const void>& lease,
-        const GenerationBinding& binding) const;
+        const std::vector<GenerationBinding>& bindings) const;
     bool makeSwitchable(const std::string& moduleId,
                         const std::string& symbolId,
                         const std::string& contractId,

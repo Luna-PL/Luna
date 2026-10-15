@@ -834,22 +834,40 @@ MoonRuntime::pinTogether(
     return result;
 }
 
-bool MoonRuntime::matchesStagedGeneration(
+bool MoonRuntime::matchesStagedOwnerSnapshot(
     const StagedGeneration& staged,
     const std::shared_ptr<const void>& lease,
-    const GenerationBinding& binding) const {
+    const std::vector<GenerationBinding>& bindings) const {
     if (staged.owner_ != this || !staged.generation_ || !lease)
         return false;
-    const auto& retained = staged.generation_->moduleLease;
-    if (retained.get() != lease.get() ||
-        retained.owner_before(lease) || lease.owner_before(retained))
+    const auto& generation = *staged.generation_;
+    if (generation.moduleLease.get() != lease.get() ||
+        generation.moduleLease.owner_before(lease) ||
+        lease.owner_before(generation.moduleLease) ||
+        generation.bindings.size() != bindings.size() ||
+        !generation.refUnitCandidates.empty() || generation.refUnitCaller ||
+        generation.refUnitCallerLease ||
+        !generation.requiredAbsentModuleIds.empty() ||
+        !generation.requiredActiveModules.empty())
         return false;
-    const auto* actual = findBinding(
-        *staged.generation_, binding.symbolId, binding.contractId);
-    return actual && actual->implementation == binding.implementation &&
-        actual->declarationKind == binding.declarationKind &&
-        actual->flags == binding.flags &&
-        actual->entryAbi == binding.entryAbi;
+    auto expected = bindings;
+    std::sort(expected.begin(), expected.end(),
+              [](const GenerationBinding& left,
+                 const GenerationBinding& right) {
+                  return left.symbolId < right.symbolId;
+              });
+    for (size_t index = 0; index < expected.size(); ++index) {
+        const auto& actual = generation.bindings[index];
+        const auto& binding = expected[index];
+        if (actual.symbolId != binding.symbolId ||
+            actual.contractId != binding.contractId ||
+            actual.implementation != binding.implementation ||
+            actual.declarationKind != binding.declarationKind ||
+            actual.flags != binding.flags ||
+            actual.entryAbi != binding.entryAbi)
+            return false;
+    }
+    return true;
 }
 
 bool MoonRuntime::makeSwitchable(
