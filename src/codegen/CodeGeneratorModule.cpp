@@ -3053,8 +3053,10 @@ bool CodeGenerator::verifyNativeRefUnitPreparationLowering(
 std::shared_ptr<LunaJitModule>
 CodeGenerator::materializeNativeRefUnitPreparationLowering(
     moon::Module& program, FunctionDecl& function,
-    const void*& entry, std::string& failure) {
+    const void*& entry, std::string& wrapperLinkageName,
+    std::string& failure) {
     entry = nullptr;
+    wrapperLinkageName.clear();
     luna::codegen::NativeRefUnitSourceFacts facts;
     if (!luna::codegen::deriveNativeRefUnitSourceFacts(
             program, function, facts, failure))
@@ -3072,6 +3074,7 @@ CodeGenerator::materializeNativeRefUnitPreparationLowering(
         "__luna_native_ref_unit_entry_v1_" + function.symbolId.value;
     entry = executable->lookup(wrapperName, failure);
     if (!entry) return {};
+    wrapperLinkageName = wrapperName;
     return executable;
 }
 

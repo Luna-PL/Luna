@@ -2021,6 +2021,15 @@ and digest. Staging resolves no bindings or Ref/unit candidates, and the token
 does not expose the code entry or Runtime pin. Empty and independently issued
 proofs cannot borrow or replace that loaded generation. Its generation ID is
 local to the loader-owned Runtime.
+An ordinary-build, metadata-only imported-Slot proof now binds that loaded
+consumer to its exact source identity and Slot requirement, rechecks the
+decoded import record and the pinned owner's public Slot binding, and retains
+both generation pins. Wrong source or Slot identities and a second preparation
+for identical bytes cannot borrow the issued proof. It derives the pointer-free
+Ref/unit candidate facts and ABI profile from the verified source, using the
+status wrapper name retained from the successful JIT lookup rather than the
+source-body linkage name. The proof has no call method and publishes no Runtime
+candidate row.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
@@ -2036,7 +2045,7 @@ MoonRuntime's generic staging API still takes host-supplied identity facts.
 The owner and consumer preparation proofs and inert consumer generation now
 have ordinary build paths, but ordinary public loading does not yet use them
 for imported Ref candidates. Production candidate admission must require the
-consumer proof, bind it to the exact consumer lease and imported Slot, and
+consumer and imported-Slot proofs, bind them to the exact consumer lease, and
 retain the owner pin before publication. The
 consumer proof retains a materialized code lease, but no entry pointer or
 Runtime candidate is exposed. Binding that code as a callable and admitting a
@@ -2208,8 +2217,10 @@ not a public ABI decision or stable-release approval:
    The private generation lease now retains that proof, and its typed candidate
    checks both the proof identity and lease ownership before calling the
    ordinary wrapper. The ordinary build now loads that exact proof as an inert
-   consumer generation in a loader-owned Runtime. Next define the imported
-   Slot binding and admit Runtime candidates.
+   consumer generation in a loader-owned Runtime, then issues a metadata-only
+   proof for its exact imported Slot and pinned owner binding. That proof also
+   derives pointer-free candidate facts. Next define the imported Slot binding
+   representation and admit Runtime candidates.
    The current Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref

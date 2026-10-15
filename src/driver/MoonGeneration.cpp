@@ -37,6 +37,7 @@ struct VerifiedMoonRefUnitPreparationState {
     luna::codegen::NativeRefUnitSourceFacts facts;
     std::shared_ptr<LunaJitModule> codeLease;
     const void* codeEntry = nullptr;
+    std::string codeLinkageName;
 };
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
@@ -596,8 +597,10 @@ bool loadVerifiedMoonRefUnitPreparation(
     }
     verified->codeLease =
         CodeGenerator::materializeNativeRefUnitPreparationLowering(
-            verified->module, *source, verified->codeEntry, error);
-    if (!verified->codeLease || !verified->codeEntry)
+            verified->module, *source, verified->codeEntry,
+            verified->codeLinkageName, error);
+    if (!verified->codeLease || !verified->codeEntry ||
+        verified->codeLinkageName.empty())
         return false;
     verified->contentDigest = containerDigest(consumerContainerBytes);
     preparation.state_ = std::move(verified);
@@ -634,7 +637,8 @@ bool loadVerifiedMoonRefUnitGenerationOnce(
         return false;
     }
     if (!preparation.state_ || !preparation.state_->ownerGeneration ||
-        !preparation.state_->codeLease || !preparation.state_->codeEntry) {
+        !preparation.state_->codeLease || !preparation.state_->codeEntry ||
+        preparation.state_->codeLinkageName.empty()) {
         error = "verified Ref/unit generation requires a complete preparation";
         return false;
     }
@@ -697,6 +701,92 @@ bool loadVerifiedMoonRefUnitGenerationOnce(
     }
     loaded.preparation_ = preparation;
     loaded.consumer_ = std::move(consumer);
+    return true;
+}
+
+uint64_t VerifiedMoonImportedSlotRefUnitProof::consumerGenerationId() const {
+    return consumer_.generationId();
+}
+
+uint64_t VerifiedMoonImportedSlotRefUnitProof::ownerGenerationId() const {
+    return consumer_.ownerGenerationId();
+}
+
+std::optional<luna::codegen::NativeRefUnitSourceFacts>
+VerifiedMoonImportedSlotRefUnitProof::facts() const {
+    return consumer_.facts();
+}
+
+std::optional<luna::runtime::GenerationRefUnitCandidate>
+VerifiedMoonImportedSlotRefUnitProof::candidateFacts() const {
+    if (!*this) return std::nullopt;
+    const auto source = consumer_.facts();
+    if (!source) return std::nullopt;
+    luna::runtime::GenerationRefUnitCandidate candidate;
+    candidate.symbolId = source->functionSymbolId;
+    candidate.contractId = source->functionContractId;
+    candidate.linkageName =
+        consumer_.preparation_.state_->codeLinkageName;
+    candidate.moduleName = source->moduleName;
+    candidate.packageId = source->packageId;
+    candidate.functionTypeId = source->functionTypeId;
+    candidate.refTypeId = source->refTypeId;
+    candidate.slotSymbolId = source->slotSymbolId;
+    candidate.slotContractId = source->slotContractId;
+    candidate.slotTypeId = source->slotTypeId;
+    candidate.entryAbi = luna::runtime::GenerationEntryAbiRefUnitV1;
+    candidate.refMode = LUNA_NATIVE_REF_SHARED_BORROW_V1;
+    candidate.resultMode = LUNA_NATIVE_RESULT_UNIT_V1;
+    candidate.statusDomain = LUNA_NATIVE_STATUS_DOMAIN_REF_UNIT_V1;
+    return candidate;
+}
+
+bool VerifiedMoonImportedSlotRefUnitProof::matchesPreparation(
+    const VerifiedMoonRefUnitPreparation& preparation) const {
+    return consumer_.matchesPreparation(preparation);
+}
+
+bool pinVerifiedMoonImportedSlotRefUnitProof(
+    const VerifiedMoonRefUnitGeneration& consumer,
+    const std::string& sourceSymbolId,
+    const std::string& sourceContractId,
+    const luna::runtime::RuntimeSlotRequirement& slot,
+    VerifiedMoonImportedSlotRefUnitProof& proof,
+    std::string& error) {
+    error.clear();
+    if (proof) {
+        error = "verified imported-Slot Ref/unit proof output already owns a consumer";
+        return false;
+    }
+    const auto facts = consumer.facts();
+    if (!consumer ||
+        !consumer.matchesPreparation(consumer.preparation_) ||
+        !facts ||
+        facts->functionSymbolId != sourceSymbolId ||
+        facts->functionContractId != sourceContractId ||
+        facts->slotSymbolId != slot.slotId ||
+        facts->slotContractId != slot.contractId) {
+        error = "verified imported-Slot Ref/unit source or consumer does not match";
+        return false;
+    }
+    const auto& state = *consumer.preparation_.state_;
+    const moon::DeclarationRef slotReference{
+        luna::identity::SymbolId{slot.slotId},
+        luna::identity::ContractId{slot.contractId}};
+    const auto* imported = state.module.findDeclaration(slotReference);
+    const auto ownerBinding = state.ownerGeneration.find(
+        slot.slotId, slot.contractId);
+    if (!imported || imported->kind != moon::DeclarationKind::Slot ||
+        imported->type.value != facts->slotTypeId ||
+        !ownerBinding ||
+        ownerBinding.declarationKind() != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
+        ownerBinding.flags() !=
+            luna::runtime::GenerationBindingPublicControl ||
+        !ownerBinding.implementation()) {
+        error = "verified imported-Slot Ref/unit owner binding does not match";
+        return false;
+    }
+    proof.consumer_ = consumer;
     return true;
 }
 

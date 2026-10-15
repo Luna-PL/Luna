@@ -298,6 +298,7 @@ int runCrossPackageContainerTest() {
         refPreparationWeak;
     luna::driver::PrivateImportedSlotRefUnitCandidateForTest refCandidate;
     luna::driver::VerifiedMoonRefUnitGeneration verifiedConsumerGeneration;
+    luna::driver::VerifiedMoonImportedSlotRefUnitProof verifiedImport;
     {
         luna::runtime::MoonRuntime runtime;
         luna::driver::VerifiedMoonSlotOwner rejectedOwner;
@@ -429,6 +430,67 @@ int runCrossPackageContainerTest() {
         if (verifiedConsumerGeneration.matchesPreparation(sameArtifactOtherProof) ||
             verifiedConsumerGeneration.matchesPreparation(rejectedPreparation))
             return fail("verified Ref consumer borrowed another preparation lease");
+        const luna::runtime::RuntimeSlotRequirement verifiedSlot{
+            refSource->controlFlow->runtimeRefApplies.front().slot.symbol.value,
+            refSource->controlFlow->runtimeRefApplies.front().slot.contract.value};
+        luna::driver::VerifiedMoonImportedSlotRefUnitProof rejectedImport;
+        auto wrongVerifiedSlot = verifiedSlot;
+        wrongVerifiedSlot.slotId += "-wrong";
+        if (luna::driver::pinVerifiedMoonImportedSlotRefUnitProof(
+                {}, refSource->symbolId.value, refSource->contractId.value,
+                verifiedSlot, rejectedImport, error) || rejectedImport ||
+            luna::driver::pinVerifiedMoonImportedSlotRefUnitProof(
+                verifiedConsumerGeneration, refSource->symbolId.value + "-wrong",
+                refSource->contractId.value, verifiedSlot,
+                rejectedImport, error) || rejectedImport ||
+            luna::driver::pinVerifiedMoonImportedSlotRefUnitProof(
+                verifiedConsumerGeneration, refSource->symbolId.value,
+                refSource->contractId.value + "-wrong", verifiedSlot,
+                rejectedImport, error) || rejectedImport ||
+            luna::driver::pinVerifiedMoonImportedSlotRefUnitProof(
+                verifiedConsumerGeneration, refSource->symbolId.value,
+                refSource->contractId.value, wrongVerifiedSlot,
+                rejectedImport, error) || rejectedImport)
+            return fail("verified imported-Slot proof accepted a mismatched identity");
+        wrongVerifiedSlot = verifiedSlot;
+        wrongVerifiedSlot.contractId += "-wrong";
+        if (luna::driver::pinVerifiedMoonImportedSlotRefUnitProof(
+                verifiedConsumerGeneration, refSource->symbolId.value,
+                refSource->contractId.value, wrongVerifiedSlot,
+                rejectedImport, error) || rejectedImport ||
+            rejectedImport.candidateFacts())
+            return fail("verified imported-Slot proof accepted a changed Slot contract");
+        if (!luna::driver::pinVerifiedMoonImportedSlotRefUnitProof(
+                verifiedConsumerGeneration, refSource->symbolId.value,
+                refSource->contractId.value, verifiedSlot,
+                verifiedImport, error)) {
+            std::cerr << error << '\n';
+            return fail("verified imported-Slot proof did not pin");
+        }
+        const auto importedCandidate = verifiedImport.candidateFacts();
+        if (!verifiedImport ||
+            verifiedImport.consumerGenerationId() !=
+                verifiedConsumerGeneration.generationId() ||
+            verifiedImport.ownerGenerationId() != ownerGenerationId ||
+            !verifiedImport.matchesPreparation(consumerPreparation) ||
+            verifiedImport.matchesPreparation(sameArtifactOtherProof) ||
+            !verifiedImport.facts() ||
+            !importedCandidate ||
+            importedCandidate->symbolId != refSource->symbolId.value ||
+            importedCandidate->contractId != refSource->contractId.value ||
+            importedCandidate->linkageName !=
+                "__luna_native_ref_unit_entry_v1_" + refSource->symbolId.value ||
+            importedCandidate->linkageName == loadedFacts->sourceLinkageName ||
+            importedCandidate->slotSymbolId != verifiedSlot.slotId ||
+            importedCandidate->slotContractId != verifiedSlot.contractId ||
+            importedCandidate->entryAbi !=
+                luna::runtime::GenerationEntryAbiRefUnitV1 ||
+            luna::driver::pinVerifiedMoonImportedSlotRefUnitProof(
+                verifiedConsumerGeneration, refSource->symbolId.value,
+                refSource->contractId.value, verifiedSlot,
+                verifiedImport, error) ||
+            !verifiedImport.matchesPreparation(consumerPreparation))
+            return fail("verified imported-Slot proof lost or replaced its owner");
         sameArtifactOtherProof = {};
         auto compatibleOwnerManifest = hostManifest;
         compatibleOwnerManifest.packageVersion = "0.3.1";
@@ -591,6 +653,11 @@ int runCrossPackageContainerTest() {
             verifiedConsumerGeneration.ownerGenerationId() != ownerGenerationId ||
             !verifiedConsumerGeneration.facts())
             return fail("verified Ref consumer generation lost its proof after loader teardown");
+        if (!verifiedImport ||
+            verifiedImport.ownerGenerationId() != ownerGenerationId ||
+            !verifiedImport.facts() ||
+            !verifiedImport.candidateFacts())
+            return fail("verified imported-Slot proof lost its owner after loader teardown");
         if (refCandidate.ownerGenerationId() != ownerGenerationId)
             return fail("private Ref candidate lost its owner after loader teardown");
     }

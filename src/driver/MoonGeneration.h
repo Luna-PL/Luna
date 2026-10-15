@@ -57,6 +57,7 @@ struct VerifiedMoonSlotOwnerState;
 struct VerifiedMoonRefUnitPreparationState;
 class VerifiedMoonRefUnitPreparation;
 class VerifiedMoonRefUnitGeneration;
+class VerifiedMoonImportedSlotRefUnitProof;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 struct PrivatePreparedRefGenerationForTest;
 #endif
@@ -120,9 +121,14 @@ public:
 
 private:
     friend class VerifiedMoonRefUnitGeneration;
+    friend class VerifiedMoonImportedSlotRefUnitProof;
     friend bool loadVerifiedMoonRefUnitGenerationOnce(
         const VerifiedMoonRefUnitPreparation&,
         VerifiedMoonRefUnitGeneration&, std::string&);
+    friend bool pinVerifiedMoonImportedSlotRefUnitProof(
+        const VerifiedMoonRefUnitGeneration&, const std::string&,
+        const std::string&, const luna::runtime::RuntimeSlotRequirement&,
+        VerifiedMoonImportedSlotRefUnitProof&, std::string&);
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     friend class PrivateImportedSlotRefUnitCandidateForTest;
 #endif
@@ -165,9 +171,14 @@ public:
     bool matchesPreparation(const VerifiedMoonRefUnitPreparation& preparation) const;
 
 private:
+    friend class VerifiedMoonImportedSlotRefUnitProof;
     friend bool loadVerifiedMoonRefUnitGenerationOnce(
         const VerifiedMoonRefUnitPreparation&,
         VerifiedMoonRefUnitGeneration&, std::string&);
+    friend bool pinVerifiedMoonImportedSlotRefUnitProof(
+        const VerifiedMoonRefUnitGeneration&, const std::string&,
+        const std::string&, const luna::runtime::RuntimeSlotRequirement&,
+        VerifiedMoonImportedSlotRefUnitProof&, std::string&);
     VerifiedMoonRefUnitPreparation preparation_;
     luna::runtime::MoonRuntime::PinnedGeneration consumer_;
 };
@@ -175,6 +186,33 @@ private:
 bool loadVerifiedMoonRefUnitGenerationOnce(
     const VerifiedMoonRefUnitPreparation& preparation,
     VerifiedMoonRefUnitGeneration& loaded,
+    std::string& error);
+
+// Internal imported-Slot admission proof. The verified consumer and its owner
+// binding remain pinned, but this proof has no callable or Runtime candidate.
+class VerifiedMoonImportedSlotRefUnitProof {
+public:
+    explicit operator bool() const { return static_cast<bool>(consumer_); }
+    uint64_t consumerGenerationId() const;
+    uint64_t ownerGenerationId() const;
+    std::optional<luna::codegen::NativeRefUnitSourceFacts> facts() const;
+    std::optional<luna::runtime::GenerationRefUnitCandidate> candidateFacts() const;
+    bool matchesPreparation(const VerifiedMoonRefUnitPreparation& preparation) const;
+
+private:
+    friend bool pinVerifiedMoonImportedSlotRefUnitProof(
+        const VerifiedMoonRefUnitGeneration&, const std::string&,
+        const std::string&, const luna::runtime::RuntimeSlotRequirement&,
+        VerifiedMoonImportedSlotRefUnitProof&, std::string&);
+    VerifiedMoonRefUnitGeneration consumer_;
+};
+
+bool pinVerifiedMoonImportedSlotRefUnitProof(
+    const VerifiedMoonRefUnitGeneration& consumer,
+    const std::string& sourceSymbolId,
+    const std::string& sourceContractId,
+    const luna::runtime::RuntimeSlotRequirement& slot,
+    VerifiedMoonImportedSlotRefUnitProof& proof,
     std::string& error);
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST

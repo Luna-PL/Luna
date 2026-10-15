@@ -1503,6 +1503,12 @@ consumer generation。其 module lease 就是准备凭据本身，保留精确 o
 返回的不透明凭据核对共享 lease 所有权，而不只比较包 ID 与摘要。staging 不解析任何 binding
 或 Ref／unit candidate，凭据也不暴露代码入口或 Runtime pin。空凭据及针对同一产物另行签发的
 凭据不能借用或替换已加载 generation。generation ID 只在 loader 自有 Runtime 内有意义。
+普通构建现还签发只含元数据的导入 Slot 准入凭据：它将已加载 consumer 绑定至精确源码身份
+及 Slot 要求，复核解码的 import 记录与已固定 owner 的公开 Slot binding，并保留两侧
+generation pin。错误的源码或 Slot 身份，以及同一字节另行签发的准备凭据，都无法借用已签发的
+准入凭据。它从已验证源码派生不含指针的 Ref／unit candidate 事实和 ABI profile；
+其中的 linkage name 来自 JIT 查找成功后保留的状态 wrapper，而不是源码函数本体。
+凭据没有调用方法，也不发布 Runtime candidate 行。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
 candidate。普通构建中的 generation 核验现同时比较 lease 地址与 `shared_ptr` 的共享所有权；
@@ -1512,8 +1518,8 @@ candidate。普通构建中的 generation 核验现同时比较 lease 地址与 
 此路径不发布 callable 或 Container candidate 行。
 MoonRuntime 的通用 staging API 仍接收宿主提供的身份事实。owner、consumer 准备凭据及
 不可调用的 consumer generation 现有普通构建路径，但普通公开加载流程还未用它们接纳
-导入的 Ref candidate。生产 candidate 发布前须要求 consumer 凭据，将其绑定到精确
-consumer lease 与导入 Slot，并保留 owner pin。
+导入的 Ref candidate。生产 candidate 发布前须要求 consumer 与导入 Slot 凭据，绑定精确
+consumer lease，并保留 owner pin。
 consumer 凭据保留已物化的代码 lease，但不暴露入口指针或 Runtime candidate。
 把代码绑定为 callable，以及 Runtime candidate 准入仍是独立完成门。
 普通入口目前只由隔离的类型化 candidate 测试调用。
@@ -1635,7 +1641,9 @@ consumer 凭据保留已物化的代码 lease，但不暴露入口指针或 Runt
    wrapper，并保留精确 owner pin 和代码 lease。
    私有 generation lease 现直接保留该凭据，类型化 candidate 同时核对凭据身份和 lease 所有权，
    随后调用普通 wrapper。普通构建现于 loader 自有 Runtime 中将精确凭据加载为不可调用的
-   consumer generation；下一步定义导入 Slot binding，再接入 Runtime candidate。
+   consumer generation，并为精确导入 Slot 与已固定的 owner binding 签发只含元数据的
+   凭据，并从中派生不含指针的 candidate 事实；下一步定义导入 Slot binding 的表示，
+   再接入 Runtime candidate。
    当前 Runtime candidate 要求同一 generation 的 Slot binding。期间默认发布验证继续关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation
    的 Ref，在显式 parent context 中执行源码 apply。私有 JIT 已覆盖借用入口、无效
