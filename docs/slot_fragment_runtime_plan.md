@@ -2060,9 +2060,8 @@ token as the sole issuer for a caller-supplied Runtime. It rechecks the exact
 consumer and owner proofs, same-generation Slot proxy and typed candidate,
 then stages a callback that forwards through the pinned internal candidate.
 The host Runtime requires its own safe-point activation. A metadata-only token
-cannot stage; a target Runtime already carrying an owner module is rejected
-until an owner co-publication contract exists. The activated host candidate
-survives release of both the
+cannot stage; the owner-absent path rejects a target Runtime already carrying
+an owner module. The activated host candidate survives release of both the
 internal token and host Runtime. This probe is absent from ordinary builds;
 it does not open the public Ref loader or Container publication gate.
 The test-only host probe now activates a synthetic empty generation for the
@@ -2080,6 +2079,22 @@ pin remains valid. Invalid exclusion lists and a load-once cache request with
 changed exclusions are rejected. These checks close the staging-to-activation
 gap for the private probe; they do not authenticate host-supplied exclusions
 or define atomic owner/consumer co-publication.
+Runtime now also accepts an exact required-active module generation. Under the
+same publication lock, it rejects a missing or changed dependency and blocks
+replacement of an owner required by an active consumer. A load-once cache hit
+must keep identical dependency declarations. The test-only verified token can
+stage a one-Slot host owner projection whose lease retains the original
+verified owner code. With that projection active, it stages a Ref candidate
+only after matching the exact proof lease, owner artifact digest, projection
+key, public Slot binding and retained host generation object; the request
+records the host owner's generation ID. A second Runtime with the same ID,
+proof and projection cannot impersonate that pin. The cross-package regression
+changes the host owner between staging and activation, restores it for a typed
+call, and rejects an owner rollback while
+the candidate is active. Its candidate pin still calls after host teardown.
+The projection does not publish the complete owner artifact. Generic
+required-active facts are host assertions, not artifact authentication or an
+atomic two-module switch; those remain production verifier decisions.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
@@ -2295,9 +2310,11 @@ not a public ABI decision or stable-release approval:
    retained typed pin. The host switch/rollback regression checks current
    lookup and old pin behavior against a synthetic empty replacement. Runtime
    now enforces the private owner's required absence through activation,
-   load-once and rollback, including both publication orders. Next settle the
-   production publication verifier and owner co-publication rules,
-   including rollback across verified generations, before any public candidate
+   load-once and rollback, including both publication orders. An explicit
+   private one-Slot owner projection now binds a host candidate to that exact
+   active owner generation and blocks independent owner switching. Next define
+   full verified owner artifact publication, the production verifier and an
+   atomic owner/consumer transition policy before any public candidate
    publication.
    The Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.

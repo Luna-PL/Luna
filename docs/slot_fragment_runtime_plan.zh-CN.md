@@ -1528,7 +1528,7 @@ Runtime 销毁后仍可重复调用。公开 Ref 准入不变。
 精确的 consumer 与 owner 凭据、同一 generation 的 Slot 代理和 typed candidate，再 staging
 一个经固定的内部 candidate 转发的回调。宿主 Runtime 必须另行在 safe point 激活。只含元数据
 的凭据无法 staging；激活后的宿主 candidate 在内部凭据与宿主 Runtime 均释放后仍可调用。
-调用方 Runtime 若已加载 owner module，探针也会拒绝，直至定义 owner 共同发布契约。
+默认的 owner 缺席路径会拒绝已加载 owner module 的调用方 Runtime。
 普通构建不包含此探针，公开 Ref loader 与 Container 发布门禁仍关闭。
 仅测试用的宿主探针现为同一 module 激活一个合成的空 generation，确认当前 Slot 与 Ref
 candidate 查询消失时，旧 candidate pin 仍可调用；随后在 safe point 回滚，并调用恢复的当前
@@ -1540,6 +1540,16 @@ load 或 activation。owner 激活期间回滚至被排斥的 candidate 也会�
 无效排斥列表及排斥声明不同的 load-once 缓存请求同样被拒绝。这关闭了私有探针从 staging
 到 activation 的间隙；宿主提供的排斥声明本身不认证产物，也不定义 owner／consumer
 原子共同发布。
+Runtime 现也接受精确的必需活跃 module generation。在同一发布锁内，它拒绝缺失或已切换的
+依赖，并阻止活跃 consumer 所依赖的 owner 被替换；load-once 缓存命中必须保留相同的依赖声明。
+仅测试用的 verified 凭据可向宿主 staging 一个单 Slot owner 投影，其 lease 保留原始 verified
+owner 代码。该投影激活后，Ref candidate 仅在精确凭据 lease、owner 产物摘要、投影配置键及
+public Slot binding 和宿主 generation 实例全部吻合时才能 staging；请求记录宿主 owner
+generation ID。即使第二个 Runtime 的 ID、凭据和投影相同，也不能冒用该 pin。跨包回归在
+staging 与 activation 之间切换 owner，恢复后执行类型化调用，并验证 candidate 活跃时
+owner 回滚被拒绝。其 candidate pin 在宿主销毁后仍可调用。投影并未发布完整 owner 产物。
+通用必需活跃事实仍是宿主声明，不能代替产物认证或两个 module 的原子切换；这些属于生产
+verifier 的后续决策。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
 candidate。普通构建中的 generation 核验现同时比较 lease 地址与 `shared_ptr` 的共享所有权；
@@ -1691,8 +1701,10 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    和显式激活，禁止 Ref／unit 的 load-once 复用。仅测试用探针现通过编译器签发的 consumer
    与 owner 凭据向调用方 Runtime staging，并保留类型化 pin。宿主切换／回滚回归现用合成
    空 replacement 验证当前查询和旧 pin 行为。Runtime 现于 activation、load-once 与
-   rollback 双向执行私有 owner 的未激活约束。下一步确定生产发布 verifier 与 owner 共同
-   发布规则，包括经验证 generation 间的回滚，再考虑公开 candidate 发布。Runtime candidate 要求同一
+   rollback 双向执行私有 owner 的未激活约束。显式私有单 Slot owner 投影现将宿主 candidate
+   绑定到该精确活跃 owner generation，并阻止 owner 独立切换。下一步定义完整的 verified
+   owner 产物发布、生产 verifier 和 owner／consumer 原子转换策略，再考虑公开 candidate 发布。
+   Runtime candidate 要求同一
    generation 的 Slot binding；
    默认发布验证仍关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation

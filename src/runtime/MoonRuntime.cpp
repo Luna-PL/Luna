@@ -32,6 +32,7 @@ struct MoonRuntime::GenerationState {
     GenerationRefUnitCaller refUnitCaller;
     std::shared_ptr<const void> refUnitCallerLease;
     std::vector<std::string> requiredAbsentModuleIds;
+    std::vector<GenerationActiveModuleRequirement> requiredActiveModules;
 };
 
 struct MoonRuntime::ModuleState {
@@ -357,6 +358,29 @@ bool MoonRuntime::stage(
         error = "generation required-absent module list is invalid";
         return false;
     }
+    auto requiredActiveModules = request.requiredActiveModules;
+    std::sort(requiredActiveModules.begin(), requiredActiveModules.end(),
+              [](const auto& left, const auto& right) {
+                  return left.moduleId < right.moduleId;
+              });
+    if (std::any_of(requiredActiveModules.begin(),
+                    requiredActiveModules.end(),
+                    [&](const auto& requirement) {
+                        return !validIdentity(requirement.moduleId) ||
+                            requirement.moduleId == request.moduleId ||
+                            requirement.generationId == 0 ||
+                            std::binary_search(requiredAbsentModuleIds.begin(),
+                                               requiredAbsentModuleIds.end(),
+                                               requirement.moduleId);
+                    }) ||
+        std::adjacent_find(requiredActiveModules.begin(),
+                           requiredActiveModules.end(),
+                           [](const auto& left, const auto& right) {
+                               return left.moduleId == right.moduleId;
+                           }) != requiredActiveModules.end()) {
+        error = "generation required-active module list is invalid";
+        return false;
+    }
     std::vector<GenerationBinding> bindings;
     try {
         if (!verifier(request, error)) {
@@ -499,6 +523,7 @@ bool MoonRuntime::stage(
     generation->refUnitCallerLease = request.refUnitCallerLease;
     generation->requiredAbsentModuleIds =
         std::move(requiredAbsentModuleIds);
+    generation->requiredActiveModules = std::move(requiredActiveModules);
     staged.owner_ = this;
     staged.generation_ = std::move(generation);
     return true;
@@ -532,8 +557,17 @@ bool MoonRuntime::validatesRequirements(
     return true;
 }
 
-bool MoonRuntime::validatesModuleExclusions(
+bool MoonRuntime::validatesModuleRelations(
     const GenerationState& generation, std::string& error) const {
+    for (const auto& requirement : generation.requiredActiveModules) {
+        const auto found = modules_.find(requirement.moduleId);
+        const auto active = found == modules_.end()
+            ? nullptr : found->second->active.load();
+        if (!active || active->generationId != requirement.generationId) {
+            error = "generation requires a different active module generation";
+            return false;
+        }
+    }
     for (const auto& [moduleId, module] : modules_) {
         if (moduleId == generation.moduleId) continue;
         const auto active = module->active.load();
@@ -545,6 +579,18 @@ bool MoonRuntime::validatesModuleExclusions(
                                active->requiredAbsentModuleIds.end(),
                                generation.moduleId)) {
             error = "generation conflicts with an active module";
+            return false;
+        }
+        const auto requirement = std::lower_bound(
+            active->requiredActiveModules.begin(),
+            active->requiredActiveModules.end(), generation.moduleId,
+            [](const auto& candidate, const std::string& moduleId) {
+                return candidate.moduleId < moduleId;
+            });
+        if (requirement != active->requiredActiveModules.end() &&
+            requirement->moduleId == generation.moduleId &&
+            requirement->generationId != generation.generationId) {
+            error = "generation replacement breaks an active module dependency";
             return false;
         }
     }
@@ -592,6 +638,11 @@ bool MoonRuntime::loadOnce(
             error = "same-content generation changed module exclusions";
             return false;
         }
+        if (active->requiredActiveModules !=
+            staged.generation_->requiredActiveModules) {
+            error = "same-content generation changed module dependencies";
+            return false;
+        }
         if (active->bindings.size() != staged.generation_->bindings.size()) {
             error = "same-content generation resolved a different binding set";
             return false;
@@ -617,7 +668,7 @@ bool MoonRuntime::loadOnce(
         error = "load-once module has retained generations but no active generation";
         return false;
     }
-    if (!validatesModuleExclusions(*staged.generation_, error)) return false;
+    if (!validatesModuleRelations(*staged.generation_, error)) return false;
     module->history.push_back(staged.generation_);
     module->active.store(staged.generation_);
     loaded.generation_ = staged.generation_;
@@ -639,7 +690,7 @@ bool MoonRuntime::activate(
     if (!module) module = std::make_shared<ModuleState>();
     if (!validatesRequirements(*module, *staged.generation_, error))
         return false;
-    if (!validatesModuleExclusions(*staged.generation_, error))
+    if (!validatesModuleRelations(*staged.generation_, error))
         return false;
     module->history.push_back(staged.generation_);
     module->active.store(staged.generation_);
@@ -670,7 +721,7 @@ bool MoonRuntime::rollback(
         return false;
     }
     if (!validatesRequirements(module, **generation, error)) return false;
-    if (!validatesModuleExclusions(**generation, error)) return false;
+    if (!validatesModuleRelations(**generation, error)) return false;
     module.active.store(*generation);
     return true;
 }

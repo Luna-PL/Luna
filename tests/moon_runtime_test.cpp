@@ -256,6 +256,119 @@ int main() {
                 return fail("invalid module exclusion reached generation verification");
         }
     }
+    {
+        constexpr const char* OwnerId = "org.luna.test.owner";
+        Runtime runtime;
+        Request owner{OwnerId, std::string(64, 'a'),
+                      std::make_shared<int>(1)};
+        Runtime::StagedGeneration ownerStage;
+        std::string phases;
+        if (!stageOne(runtime, owner, "symbol:owner", ContractId, &first,
+                      ownerStage, phases, error))
+            return fail("required-active owner did not stage");
+        Request consumer{ModuleId, std::string(64, 'b'),
+                         std::make_shared<int>(2)};
+        consumer.requiredActiveModules = {
+            {OwnerId, ownerStage.generationId()}};
+        Runtime::StagedGeneration consumerStage;
+        if (!stageOne(runtime, consumer, SymbolId, ContractId, &second,
+                      consumerStage, phases, error))
+            return fail("required-active consumer did not stage");
+        auto missingOwnerPoint = runtime.safePoint();
+        if (runtime.activate(consumerStage, missingOwnerPoint, error) ||
+            error != "generation requires a different active module generation" ||
+            !consumerStage || runtime.activeGenerationId(ModuleId) != 0)
+            return fail("consumer activated before its exact owner generation");
+        Runtime::PinnedGeneration ownerPin;
+        if (!runtime.loadOnce(ownerStage, ownerPin, error))
+            return fail("required-active owner did not load");
+        auto consumerPoint = runtime.safePoint();
+        if (!runtime.activate(consumerStage, consumerPoint, error))
+            return fail("consumer did not activate with its exact owner");
+        const auto consumerPin = runtime.pin(ModuleId);
+        Request changedDependency = consumer;
+        changedDependency.requiredActiveModules.clear();
+        Runtime::StagedGeneration changedStage;
+        if (!stageOne(runtime, changedDependency, SymbolId, ContractId,
+                      &second, changedStage, phases, error))
+            return fail("changed dependency fixture did not stage");
+        Runtime::PinnedGeneration rejectedCache;
+        if (runtime.loadOnce(changedStage, rejectedCache, error) ||
+            error != "same-content generation changed module dependencies" ||
+            rejectedCache || !changedStage)
+            return fail("load-once reused a generation with different dependencies");
+        Request newOwner{OwnerId, std::string(64, 'c'),
+                         std::make_shared<int>(3)};
+        Runtime::StagedGeneration newOwnerStage;
+        if (!stageOne(runtime, newOwner, "symbol:owner", ContractId, &third,
+                      newOwnerStage, phases, error))
+            return fail("replacement owner did not stage");
+        auto blockedOwnerPoint = runtime.safePoint();
+        if (runtime.activate(newOwnerStage, blockedOwnerPoint, error) ||
+            error != "generation replacement breaks an active module dependency" ||
+            !newOwnerStage ||
+            runtime.activeGenerationId(OwnerId) != ownerPin.generationId())
+            return fail("owner changed while an active consumer required it");
+        Request inert{ModuleId, std::string(64, 'd'),
+                      std::make_shared<int>(4)};
+        Runtime::StagedGeneration inertStage;
+        if (!stageOne(runtime, inert, SymbolId, ContractId, &third,
+                      inertStage, phases, error))
+            return fail("independent consumer replacement did not stage");
+        auto inertPoint = runtime.safePoint();
+        if (!runtime.activate(inertStage, inertPoint, error))
+            return fail("independent consumer replacement did not activate");
+        const auto inertId = runtime.activeGenerationId(ModuleId);
+        auto newOwnerPoint = runtime.safePoint();
+        if (!runtime.activate(newOwnerStage, newOwnerPoint, error))
+            return fail("owner did not switch after its consumer became inactive");
+        const auto newOwnerId = runtime.activeGenerationId(OwnerId);
+        if (!newOwnerId || newOwnerId == ownerPin.generationId())
+            return fail("owner replacement reused the previous generation");
+        auto blockedRollback = runtime.safePoint();
+        if (runtime.rollback(ModuleId, consumerPin.generationId(),
+                             blockedRollback, error) ||
+            error != "generation requires a different active module generation" ||
+            runtime.activeGenerationId(ModuleId) != inertId ||
+            implementationOf(consumerPin.find(SymbolId, ContractId)) != &second)
+            return fail("rollback ignored a changed owner or lost the old pin");
+        auto ownerRollback = runtime.safePoint();
+        if (!runtime.rollback(OwnerId, ownerPin.generationId(),
+                              ownerRollback, error) ||
+            runtime.activeGenerationId(OwnerId) != ownerPin.generationId())
+            return fail("owner did not roll back after consumer replacement");
+        auto consumerRollback = runtime.safePoint();
+        if (!runtime.rollback(ModuleId, consumerPin.generationId(),
+                              consumerRollback, error) ||
+            runtime.activeGenerationId(ModuleId) != consumerPin.generationId())
+            return fail("consumer did not roll back with its exact owner restored");
+    }
+    {
+        constexpr const char* OwnerId = "org.luna.test.owner";
+        Runtime runtime;
+        Request request{ModuleId, std::string(64, 'a'),
+                        std::make_shared<int>(1)};
+        for (const auto& invalid : {
+                 std::vector<luna::runtime::GenerationActiveModuleRequirement>{{ModuleId, 1}},
+                 std::vector<luna::runtime::GenerationActiveModuleRequirement>{{OwnerId, 0}},
+                 std::vector<luna::runtime::GenerationActiveModuleRequirement>{{OwnerId, 1}, {OwnerId, 2}}}) {
+            request.requiredActiveModules = invalid;
+            Runtime::StagedGeneration staged;
+            std::string phases;
+            if (stageOne(runtime, request, SymbolId, ContractId, &first,
+                         staged, phases, error) || staged || !phases.empty() ||
+                error != "generation required-active module list is invalid")
+                return fail("invalid module dependency reached generation verification");
+        }
+        request.requiredActiveModules = {{OwnerId, 1}};
+        request.requiredAbsentModuleIds = {OwnerId};
+        Runtime::StagedGeneration staged;
+        std::string phases;
+        if (stageOne(runtime, request, SymbolId, ContractId, &first,
+                     staged, phases, error) || staged || !phases.empty() ||
+            error != "generation required-active module list is invalid")
+            return fail("conflicting module requirements reached verification");
+    }
 
     // A v4 metadata pin needs a matching public Slot in the same generation;
     // it never becomes a callable binding by sharing a SymbolId.

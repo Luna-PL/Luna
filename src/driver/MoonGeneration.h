@@ -233,12 +233,20 @@ public:
     bool installTypedCallerOnce(std::string& error);
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     luna::runtime::MoonRuntime::PinnedRefUnitCandidate pinCandidateForTest() const;
+    // Stages the exact verified owner's imported Slot as a private host
+    // projection. The host must activate it before staging the consumer with
+    // that pinned owner; this is not full owner artifact publication.
+    bool stageOwnerInRuntimeForTest(
+        luna::runtime::MoonRuntime& target,
+        luna::runtime::MoonRuntime::StagedGeneration& staged,
+        std::string& error) const;
     // Quarantined host-Runtime staging probe. Only an admitted internal token
     // can sign this request; the caller must activate it at a safe point.
     bool stageInRuntimeForTest(
         luna::runtime::MoonRuntime& target,
         luna::runtime::MoonRuntime::StagedGeneration& staged,
-        std::string& error) const;
+        std::string& error,
+        const luna::runtime::MoonRuntime::PinnedGeneration& hostOwner = {}) const;
 #endif
 
 private:

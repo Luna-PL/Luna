@@ -60,6 +60,16 @@ using GenerationRefUnitCaller = std::function<bool(
     const RuntimeFragmentExecutionContext&, const RuntimeFragmentRefHandle&,
     int32_t&, std::string&)>;
 
+struct GenerationActiveModuleRequirement {
+    std::string moduleId;
+    uint64_t generationId = 0;
+
+    bool operator==(const GenerationActiveModuleRequirement& other) const {
+        return moduleId == other.moduleId &&
+            generationId == other.generationId;
+    }
+};
+
 // Public 0.3 C++ host control-plane input. The module lease keeps the verified
 // code and descriptor storage alive for every pinned reference.
 struct GenerationStagingRequest {
@@ -78,6 +88,9 @@ struct GenerationStagingRequest {
     // Active generations of these modules are incompatible with this
     // generation. Runtime checks both sides of the exclusion at publication.
     std::vector<std::string> requiredAbsentModuleIds = {};
+    // Exact active generations required by this generation. The trusted
+    // loader must separately authenticate and retain their code leases.
+    std::vector<GenerationActiveModuleRequirement> requiredActiveModules = {};
 };
 
 struct GenerationBinding {
@@ -195,6 +208,11 @@ public:
         const std::string& moduleId() const;
         const std::string& contentDigest() const;
         const std::string& materializationKey() const;
+        // Exact retained generation object, including Runtime provenance;
+        // generation IDs alone are scoped to one Runtime.
+        bool sameGeneration(const PinnedGeneration& other) const {
+            return generation_ && generation_ == other.generation_;
+        }
         // Requires both the retained address and its shared ownership to
         // match. Trusted adapters can bind decoded facts to this exact lease.
         bool matchesModuleLease(const std::shared_ptr<const void>& lease) const;
@@ -242,7 +260,7 @@ public:
     bool activate(StagedGeneration& staged, SafePoint& safePoint,
                   std::string& error);
     // Publishes the first generation for a module. Repeating the same content,
-    // materialization key and module exclusions returns the active generation;
+    // materialization key and module requirements returns the active generation;
     // different content/configuration is rejected and must use activate().
     bool loadOnce(StagedGeneration& staged, PinnedGeneration& loaded,
                   std::string& error);
@@ -279,8 +297,8 @@ private:
         const ModuleState& module, const GenerationState& generation,
         std::string& error);
     // Caller holds mutex_. Checks the candidate and all currently active
-    // generations so publication cannot invalidate an existing exclusion.
-    bool validatesModuleExclusions(
+    // generations so publication cannot invalidate a module relation.
+    bool validatesModuleRelations(
         const GenerationState& generation, std::string& error) const;
     bool consumeSafePoint(SafePoint& safePoint, std::string& error) const;
 

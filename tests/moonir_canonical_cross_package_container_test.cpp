@@ -990,7 +990,11 @@ int runCrossPackageContainerTest() {
                 conflictingHost, hostBytes, hostManifest.targetTriple,
                 hostManifest.dataLayout, hostOwner, error) ||
             integratedRefGeneration.stageInRuntimeForTest(
-                conflictingHost, rejectedStage, error) || rejectedStage)
+                conflictingHost, rejectedStage, error) || rejectedStage ||
+            integratedRefGeneration.stageInRuntimeForTest(
+                conflictingHost, rejectedStage, error, hostOwner) ||
+            rejectedStage ||
+            error != "private Ref/unit host staging requires its exact owner projection")
             return fail("private host Ref staging accepted a separate owner module");
     }
     {
@@ -1104,6 +1108,105 @@ int runCrossPackageContainerTest() {
             candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
             return fail("host Ref rollback did not restore the callable candidate");
     }
+    luna::runtime::MoonRuntime::PinnedRefUnitCandidate ownerBoundPin;
+    {
+        luna::runtime::MoonRuntime projectedHost;
+        luna::driver::VerifiedMoonImportedSlotGeneration emptyImport;
+        luna::runtime::MoonRuntime::StagedGeneration ownerStage;
+        if (emptyImport.stageOwnerInRuntimeForTest(
+                projectedHost, ownerStage, error) || ownerStage ||
+            !integratedRefGeneration.stageOwnerInRuntimeForTest(
+                projectedHost, ownerStage, error))
+            return fail("verified owner projection did not stage privately");
+        auto ownerPoint = projectedHost.safePoint();
+        if (!projectedHost.activate(ownerStage, ownerPoint, error))
+            return fail("verified owner projection did not activate");
+        const auto facts = integratedRefGeneration.candidateFacts();
+        if (!facts)
+            return fail("verified owner projection lost its consumer facts");
+        const auto hostOwner = projectedHost.pin(hostManifest.packageId);
+        const auto hostSlot = hostOwner.find(
+            facts->slotSymbolId, facts->slotContractId);
+        if (!hostOwner || !hostSlot ||
+            hostSlot.flags() !=
+                luna::runtime::GenerationBindingPublicControl)
+            return fail("verified owner projection lost its public Slot");
+        luna::runtime::MoonRuntime::StagedGeneration candidateStage;
+        {
+            luna::runtime::MoonRuntime foreignHost;
+            luna::runtime::MoonRuntime::StagedGeneration foreignStage;
+            if (!integratedRefGeneration.stageOwnerInRuntimeForTest(
+                    foreignHost, foreignStage, error))
+                return fail("second verified owner projection did not stage");
+            auto foreignPoint = foreignHost.safePoint();
+            if (!foreignHost.activate(foreignStage, foreignPoint, error))
+                return fail("second verified owner projection did not activate");
+            const auto foreignOwner = foreignHost.pin(hostManifest.packageId);
+            if (!foreignOwner ||
+                foreignOwner.generationId() != hostOwner.generationId() ||
+                foreignOwner.sameGeneration(hostOwner) ||
+                foreignOwner.contentDigest() != hostOwner.contentDigest() ||
+                foreignOwner.materializationKey() !=
+                    hostOwner.materializationKey() ||
+                integratedRefGeneration.stageInRuntimeForTest(
+                    projectedHost, candidateStage, error, foreignOwner) ||
+                candidateStage ||
+                error != "private Ref/unit host staging requires its exact owner projection")
+                return fail("foreign host pin impersonated the active owner projection");
+        }
+        if (integratedRefGeneration.stageInRuntimeForTest(
+                projectedHost, candidateStage, error) || candidateStage ||
+            !integratedRefGeneration.stageInRuntimeForTest(
+                projectedHost, candidateStage, error, hostOwner))
+            return fail("exact host owner did not admit the private Ref candidate");
+        luna::runtime::GenerationStagingRequest alternateOwner;
+        alternateOwner.moduleId = hostOwner.moduleId();
+        alternateOwner.contentDigest = hostOwner.contentDigest();
+        alternateOwner.materializationKey = "fixture:alternate-owner";
+        alternateOwner.moduleLease = std::make_shared<int>(2);
+        luna::runtime::MoonRuntime::StagedGeneration alternateStage;
+        if (!projectedHost.stage(
+                alternateOwner,
+                [](const auto&, std::string&) { return true; },
+                [](const auto&, auto&, std::string&) { return true; },
+                {}, alternateStage, error))
+            return fail("private owner replacement fixture did not stage");
+        const auto alternateId = alternateStage.generationId();
+        auto replacePoint = projectedHost.safePoint();
+        if (!projectedHost.activate(alternateStage, replacePoint, error))
+            return fail("private owner replacement fixture did not activate");
+        auto blockedCandidatePoint = projectedHost.safePoint();
+        if (projectedHost.activate(
+                candidateStage, blockedCandidatePoint, error) ||
+            error != "generation requires a different active module generation" ||
+            !candidateStage ||
+            projectedHost.activeGenerationId(facts->packageId) != 0)
+            return fail("private Ref candidate ignored a changed host owner");
+        auto restoreOwnerPoint = projectedHost.safePoint();
+        if (!projectedHost.rollback(hostOwner.moduleId(),
+                                    hostOwner.generationId(),
+                                    restoreOwnerPoint, error))
+            return fail("private host owner did not roll back for Ref activation");
+        auto candidatePoint = projectedHost.safePoint();
+        if (!projectedHost.activate(candidateStage, candidatePoint, error))
+            return fail("private Ref candidate did not activate with exact host owner");
+        ownerBoundPin = projectedHost.pin(facts->packageId)
+            .findRefUnitCandidate(facts->symbolId, facts->contractId);
+        if (!ownerBoundPin)
+            return fail("owner-bound private Ref candidate was not pinned");
+        auto blockedOwnerPoint = projectedHost.safePoint();
+        if (projectedHost.rollback(hostOwner.moduleId(), alternateId,
+                                   blockedOwnerPoint, error) ||
+            error != "generation replacement breaks an active module dependency" ||
+            projectedHost.activeGenerationId(hostOwner.moduleId()) !=
+                hostOwner.generationId())
+            return fail("private host owner switched under an active Ref candidate");
+        candidateStatus = 777;
+        if (!ownerBoundPin.call(noneContext, borrowedRef,
+                                 candidateStatus, error) ||
+            candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+            return fail("owner-bound private Ref candidate lost its typed call");
+    }
     integratedRefGeneration = {};
     candidateStatus = 777;
     if (integratedPin.call(invalidContext, borrowedRef,
@@ -1119,6 +1222,12 @@ int runCrossPackageContainerTest() {
             candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
             return fail("integrated verified Ref candidate lost its pinned call");
     integratedPin = {};
+    candidateStatus = 777;
+    if (!ownerBoundPin.call(noneContext, borrowedRef,
+                             candidateStatus, error) ||
+        candidateStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+        return fail("owner-bound Ref pin lost its caller after host teardown");
+    ownerBoundPin = {};
     candidateStatus = 777;
     if (hostRuntimePin.call(invalidContext, borrowedRef,
             candidateStatus, error) ||
