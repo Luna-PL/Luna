@@ -1997,15 +1997,19 @@ repeated calls succeed after Runtime teardown. This executes the two-package
 source body privately; public generation import and artifact publication
 remain closed.
 A compiler-internal consumer preparation factory now independently decodes the
-canonical 0.4 artifact, derives its exact Ref/unit source facts, verifies
-isolated LLVM lowering in the ordinary build, pins the
-matching owner Slot and issues an opaque read-only preparation proof. The
-private adapter creates that proof before its separate mutable JIT decode and
+canonical 0.4 artifact, derives its exact Ref/unit source facts, pins the
+matching owner Slot, then materializes and looks up its isolated
+preflight-verified LLVM wrapper in the ordinary build before issuing an opaque
+read-only preparation proof. The private adapter creates that proof before its
+separate mutable JIT decode and
 checks the digest and source facts again. Its private generation lease retains
-the issued preparation proof itself. Candidate admission reads source facts and
-owner pin from that proof; admission and calls compare its consumer identity
-with the exact generation lease. A corrupt consumer or an empty or
+the issued preparation proof itself, including its internal JIT code lease.
+Candidate admission reads source facts and owner pin from that proof; admission
+and calls compare its consumer identity with the exact generation lease. A
+corrupt consumer or an empty or
 wrong-target owner proof cannot issue a consumer preparation proof.
+The private candidate continues to call its separate test-only JIT entry;
+the ordinary-build code lease has no exposed call path.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
@@ -2022,9 +2026,9 @@ The owner and consumer preparation proofs now have ordinary build paths, but
 ordinary loading does not yet use them for imported Ref candidates. Production
 candidate admission must require the consumer proof, bind it to the exact consumer
 lease and imported Slot, and retain the owner pin before publication. The
-consumer proof verifies its decoded record and owner Slot, but contains
-no executable code lease. Production code materialization, lease binding and
-Runtime candidate admission remain separate gates.
+consumer proof now retains a materialized code lease, but no entry pointer or
+Runtime candidate is exposed. Binding that code to the exact consumer generation
+lease and admitting a Runtime candidate remain separate gates.
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and
@@ -2186,13 +2190,12 @@ not a public ABI decision or stable-release approval:
    decoded source facts, the exact consumer lease and a proof issued by the
    compiler-internal verified owner loader, now built without the test flag.
    The ordinary-build consumer preparation proof independently decodes the
-   artifact, derives source facts, verifies isolated LLVM IR and retains that
-   exact owner pin. The private
-   generation lease now retains that proof, and its candidate checks both the
-   proof identity and lease ownership. Next materialize production code, bind
-   its lease to the proof and admit Runtime candidates. The current Runtime
-   candidate requires a same-generation Slot
-   binding.
+   artifact, derives source facts, materializes and looks up an isolated
+   preflight-verified wrapper, and retains that exact owner pin and code lease.
+   The private generation lease now retains that proof, and its candidate
+   checks both the proof identity and lease ownership. Next bind the ordinary
+   code lease to the exact consumer generation and admit Runtime candidates.
+   The current Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref
    from a verified generation; run source apply against an explicit parent

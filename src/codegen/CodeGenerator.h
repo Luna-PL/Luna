@@ -29,6 +29,12 @@
 namespace luna::driver {
 struct NativeExportSpec;
 struct NativeProofSpec;
+class VerifiedMoonSlotOwner;
+class VerifiedMoonRefUnitPreparation;
+bool loadVerifiedMoonRefUnitPreparation(
+    const std::vector<uint8_t>&, const VerifiedMoonSlotOwner&,
+    const std::string&, const std::string&,
+    VerifiedMoonRefUnitPreparation&, std::string&);
 }
 namespace luna::runtime {
 class RuntimeOwnedResultHandle;
@@ -158,7 +164,6 @@ public:
     static bool verifyNativeRefUnitPreparationLowering(
         moon::Module& program, moon::FunctionDecl& function,
         std::string& failure);
-
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     // Test-target-only escape hatch. The caller must retain the returned JIT
     // lease; it does not publish a source Ref ABI or a container artifact.
@@ -188,6 +193,16 @@ public:
 #endif
 
 private:
+    friend bool luna::driver::loadVerifiedMoonRefUnitPreparation(
+        const std::vector<uint8_t>&, const luna::driver::VerifiedMoonSlotOwner&,
+        const std::string&, const std::string&,
+        luna::driver::VerifiedMoonRefUnitPreparation&, std::string&);
+    // Only the verified consumer loader may retain this internal JIT lease.
+    static std::shared_ptr<LunaJitModule>
+    materializeNativeRefUnitPreparationLowering(
+        moon::Module& program, moon::FunctionDecl& function,
+        std::string& failure);
+
     struct IteratorStep {
         IteratorOp op = IteratorOp::None;
         moon::Expr* argument = nullptr;
@@ -233,7 +248,8 @@ private:
         std::string& failure,
         const luna::driver::NativeProofSpec* nativeProof = nullptr,
         const std::vector<luna::driver::NativeExportSpec>* nativeV1Exports = nullptr,
-        CodeGenerator* preparedModule = nullptr
+        CodeGenerator* preparedModule = nullptr,
+        std::shared_ptr<LunaJitModule>* preparedExecutable = nullptr
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
         , std::shared_ptr<LunaJitModule>* executable = nullptr,
         std::vector<uint8_t>* entryRecord = nullptr

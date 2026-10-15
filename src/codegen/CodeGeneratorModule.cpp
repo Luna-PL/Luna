@@ -559,7 +559,8 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
     moon::Module& program, FunctionDecl& function, std::string& failure,
     const luna::driver::NativeProofSpec* nativeProof,
     const std::vector<luna::driver::NativeExportSpec>* nativeV1Exports,
-    CodeGenerator* preparedModule
+    CodeGenerator* preparedModule,
+    std::shared_ptr<LunaJitModule>* preparedExecutable
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     , std::shared_ptr<LunaJitModule>* executable,
     std::vector<uint8_t>* entryRecord
@@ -574,6 +575,20 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         return false;
     }
 #endif
+    if (preparedModule && preparedExecutable) {
+        failure = "Native Ref/unit preparation cannot retain two code outputs";
+        return false;
+    }
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    if (preparedExecutable && executable) {
+        failure = "Native Ref/unit preparation cannot mix JIT entry modes";
+        return false;
+    }
+#endif
+    if (preparedExecutable && *preparedExecutable) {
+        failure = "Native Ref/unit preparation output already owns JIT code";
+        return false;
+    }
     if (preparedModule && !preparedModule->mModule) {
         failure = "Native Ref/unit module preparation has no destination";
         return false;
@@ -2866,6 +2881,18 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             preparedModule->mModule->setModuleIdentifier(moduleName);
             preparedModule->mNativeRefUnitV4Claim = std::move(preparedClaim);
         }
+        if (preparedExecutable) {
+            if (!publicUnitPreflight || nativeProof || nativeV1Exports) {
+                failure = "isolated Ref/unit preparation has no public source preflight";
+                return false;
+            }
+            auto materialized = proof.materializeJitModule(failure);
+            if (!materialized) return false;
+            const std::string wrapperName =
+                "__luna_native_ref_unit_entry_v1_" + function.symbolId.value;
+            if (!materialized->lookup(wrapperName, failure)) return false;
+            *preparedExecutable = std::move(materialized);
+        }
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
         if (executable) {
             std::optional<std::vector<uint8_t>> encodedEntry;
@@ -3023,6 +3050,21 @@ bool CodeGenerator::verifyNativeRefUnitPreparationLowering(
         program, function, failure);
 }
 
+std::shared_ptr<LunaJitModule>
+CodeGenerator::materializeNativeRefUnitPreparationLowering(
+    moon::Module& program, FunctionDecl& function, std::string& failure) {
+    luna::codegen::NativeRefUnitSourceFacts facts;
+    if (!luna::codegen::deriveNativeRefUnitSourceFacts(
+            program, function, facts, failure))
+        return {};
+    std::shared_ptr<LunaJitModule> executable;
+    if (!verifyPrivateRuntimeFragmentRefUnitIngress(
+            program, function, failure, nullptr, nullptr, nullptr,
+            &executable))
+        return {};
+    return executable;
+}
+
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 std::shared_ptr<LunaJitModule>
 CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
@@ -3031,7 +3073,7 @@ CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
     std::shared_ptr<LunaJitModule> executable;
     if (!verifyPrivateRuntimeFragmentRefUnitIngress(
             program, function, failure, nullptr, nullptr, nullptr,
-            &executable, entryRecord))
+            nullptr, &executable, entryRecord))
         return {};
     return executable;
 }
@@ -3047,7 +3089,7 @@ CodeGenerator::materializePrivateRuntimeFragmentRefOwnedPairForTest(
     }
     if (!verifyPrivateRuntimeFragmentRefUnitIngress(
             program, function, failure, nullptr, nullptr, nullptr,
-            &executable, nullptr))
+            nullptr, &executable, nullptr))
         return {};
     return executable;
 }

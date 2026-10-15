@@ -34,6 +34,7 @@ struct VerifiedMoonRefUnitPreparationState {
     std::string contentDigest;
     luna::runtime::MoonRuntime::PinnedGeneration ownerGeneration;
     luna::codegen::NativeRefUnitSourceFacts facts;
+    std::shared_ptr<LunaJitModule> codeLease;
 };
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
@@ -531,7 +532,7 @@ VerifiedMoonRefUnitPreparation::facts() const {
 
 bool VerifiedMoonRefUnitPreparation::matchesConsumer(
     const luna::runtime::MoonRuntime::PinnedGeneration& consumer) const {
-    return state_ && consumer &&
+    return state_ && state_->codeLease && consumer &&
            consumer.moduleId() == state_->manifest.packageId &&
            consumer.contentDigest() == state_->contentDigest;
 }
@@ -579,9 +580,6 @@ bool loadVerifiedMoonRefUnitPreparation(
     if (!luna::codegen::deriveNativeRefUnitSourceFacts(
             verified->module, *source, verified->facts, error))
         return false;
-    if (!CodeGenerator::verifyNativeRefUnitPreparationLowering(
-            verified->module, *source, error))
-        return false;
     const moon::DeclarationRef slotReference{
         luna::identity::SymbolId{verified->facts.slotSymbolId},
         luna::identity::ContractId{verified->facts.slotContractId}};
@@ -594,6 +592,11 @@ bool loadVerifiedMoonRefUnitPreparation(
         error = "verified Ref/unit owner lost its exact imported Slot";
         return false;
     }
+    verified->codeLease =
+        CodeGenerator::materializeNativeRefUnitPreparationLowering(
+            verified->module, *source, error);
+    if (!verified->codeLease)
+        return false;
     verified->contentDigest = containerDigest(consumerContainerBytes);
     preparation.state_ = std::move(verified);
     return true;
