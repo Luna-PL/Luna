@@ -106,8 +106,8 @@ bool loadVerifiedMoonSlotOwner(
     std::string& error);
 
 // Compiler-internal provenance for a canonical 0.4 Ref/unit consumer. This
-// retains the decoded artifact and exact verified owner pin without JIT code,
-// callable bindings or Runtime candidate publication.
+// retains the decoded artifact, exact verified owner pin and isolated JIT
+// code without callable bindings or Runtime candidate publication.
 class VerifiedMoonRefUnitPreparation {
 public:
     explicit operator bool() const { return state_ != nullptr; }
@@ -118,6 +118,9 @@ public:
         const luna::runtime::MoonRuntime::PinnedGeneration& consumer) const;
 
 private:
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    friend class PrivateImportedSlotRefUnitCandidateForTest;
+#endif
     friend bool loadVerifiedMoonRefUnitPreparation(
         const std::vector<uint8_t>&, const VerifiedMoonSlotOwner&,
         const std::string&, const std::string&,
@@ -191,6 +194,12 @@ bool stagePrivateNativeRefUnitPreparationForTest(
     luna::runtime::MoonRuntime::StagedGeneration& staged,
     std::weak_ptr<LunaPrivateRefUnitApplyLoadedEntry>& entry,
     std::weak_ptr<PrivatePreparedRefGenerationForTest>& preparation,
+    std::string& error);
+
+// Drops only the separate test JIT entry. The typed candidate must still call
+// through the verified preparation's ordinary-build code lease.
+bool discardPrivateRefUnitTestEntryForTest(
+    const std::weak_ptr<PrivatePreparedRefGenerationForTest>& preparation,
     std::string& error);
 #endif
 

@@ -1495,7 +1495,9 @@ generation 签发的借用 Ref；无效 parent／handle 被拒绝，销毁 Runti
 其中还保留内部 JIT 代码 lease；candidate 准入从该凭据读取源码事实和 owner pin，
 准入与调用均核对 consumer 身份及精确 generation lease。损坏的 consumer 或空的、
 目标不符的 owner 凭据均不能签发 consumer 准备凭据。
-私有 candidate 仍调用独立的仅测试用 JIT 入口；普通构建的代码 lease 没有对外调用路径。
+直接的私有测试入口仍调用独立的仅测试用 JIT。私有类型化 candidate 现仅在 consumer pin
+匹配精确的私有 generation lease 后，才调用普通构建代码 lease 中的 wrapper。
+回归在 Runtime 销毁后重复类型化调用前，先释放独立的测试入口。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
 Slot 身份相符，且 consumer pin 持有同一个私有 module lease 时，才能固定类型化外包 Slot
 candidate。普通构建中的 generation 核验现同时比较 lease 地址与 `shared_ptr` 的共享所有权；
@@ -1507,7 +1509,8 @@ MoonRuntime 的通用 staging API 仍接收宿主提供的身份事实。owner �
 普通构建路径，但普通加载流程还未用它们接纳导入的 Ref candidate。生产 candidate 发布前须
 要求 consumer 凭据，将其绑定到精确 consumer lease 与导入 Slot，并保留 owner pin。
 consumer 凭据现保留已物化的代码 lease，但不暴露入口指针或 Runtime candidate。
-把代码绑定到精确 consumer generation lease，以及 Runtime candidate 准入仍是独立完成门。
+把代码接入普通的 verified consumer generation，以及 Runtime candidate 准入仍是独立完成门。
+普通入口目前只由隔离的类型化 candidate 测试调用。
 冻结的 `DeclarationRecord`／
 规范契约和 Native v1
 导出行仍不添加依赖 context 的可调用入口。通用源码 import 与 Moon／Container
@@ -1624,8 +1627,9 @@ consumer 凭据现保留已物化的代码 lease，但不暴露入口指针或 R
    由编译器内部 verified owner loader 签发的凭据；该 loader 现无需测试开关也能编译。
    普通构建的 consumer 准备凭据现独立解码产物、派生源码事实、物化并查找隔离且通过预检的
    wrapper，并保留精确 owner pin 和代码 lease。
-   私有 generation lease 现直接保留该凭据，candidate 同时核对凭据身份和 lease 所有权；
-   下一步须将普通代码 lease 绑定到精确 consumer generation，再接入 Runtime candidate。
+   私有 generation lease 现直接保留该凭据，类型化 candidate 同时核对凭据身份和 lease 所有权，
+   随后调用普通 wrapper；下一步须建立普通的 verified consumer generation 路径，
+   再接入 Runtime candidate。
    当前 Runtime candidate 要求同一 generation 的 Slot binding。期间默认发布验证继续关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation
    的 Ref，在显式 parent context 中执行源码 apply。私有 JIT 已覆盖借用入口、无效

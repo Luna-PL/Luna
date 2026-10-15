@@ -4,6 +4,7 @@
 #include "codegen/NativeRefUnitFacts.h"
 #include "diagnostics/Diagnostic.h"
 #include "moonir/ContainerModel.h"
+#include "runtime/NativeArtifactABI.h"
 #include "runtime/RuntimeDescriptor.h"
 #include "runtime/RuntimeFragment.h"
 
@@ -35,6 +36,7 @@ struct VerifiedMoonRefUnitPreparationState {
     luna::runtime::MoonRuntime::PinnedGeneration ownerGeneration;
     luna::codegen::NativeRefUnitSourceFacts facts;
     std::shared_ptr<LunaJitModule> codeLease;
+    const void* codeEntry = nullptr;
 };
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
@@ -532,7 +534,7 @@ VerifiedMoonRefUnitPreparation::facts() const {
 
 bool VerifiedMoonRefUnitPreparation::matchesConsumer(
     const luna::runtime::MoonRuntime::PinnedGeneration& consumer) const {
-    return state_ && state_->codeLease && consumer &&
+    return state_ && state_->codeLease && state_->codeEntry && consumer &&
            consumer.moduleId() == state_->manifest.packageId &&
            consumer.contentDigest() == state_->contentDigest;
 }
@@ -594,8 +596,8 @@ bool loadVerifiedMoonRefUnitPreparation(
     }
     verified->codeLease =
         CodeGenerator::materializeNativeRefUnitPreparationLowering(
-            verified->module, *source, error);
-    if (!verified->codeLease)
+            verified->module, *source, verified->codeEntry, error);
+    if (!verified->codeLease || !verified->codeEntry)
         return false;
     verified->contentDigest = containerDigest(consumerContainerBytes);
     preparation.state_ = std::move(verified);
@@ -706,6 +708,19 @@ bool stagePrivateNativeRefUnitPreparationForTest(
     return true;
 }
 
+bool discardPrivateRefUnitTestEntryForTest(
+    const std::weak_ptr<PrivatePreparedRefGenerationForTest>& preparation,
+    std::string& error) {
+    const auto loaded = preparation.lock();
+    if (!loaded || !loaded->entry) {
+        error = "private Ref/unit test entry is already unavailable";
+        return false;
+    }
+    loaded->entry.reset();
+    error.clear();
+    return true;
+}
+
 uint64_t PrivateImportedSlotRefUnitCandidateForTest::consumerGenerationId() const {
     return consumer_.generationId();
 }
@@ -731,13 +746,15 @@ bool PrivateImportedSlotRefUnitCandidateForTest::call(
     const auto prepared = preparation_.lock();
     if (!prepared || !consumer_.matchesModuleLease(prepared) ||
         !prepared->verifiedPreparation.matchesConsumer(consumer_) ||
-        !prepared->verifiedPreparation.ownerGenerationId() ||
-        !prepared->entry) {
+        !prepared->verifiedPreparation.ownerGenerationId()) {
         error = "private imported-Slot Ref/unit candidate lost its generation lease";
         return false;
     }
-    status = prepared->entry->call(
-        parent.opaque(), const_cast<void*>(reference.opaque()));
+    static_assert(sizeof(LunaNativeRefUnitEntryV1) == sizeof(const void*));
+    LunaNativeRefUnitEntryV1 entry = nullptr;
+    const void* codeEntry = prepared->verifiedPreparation.state_->codeEntry;
+    std::memcpy(&entry, &codeEntry, sizeof(entry));
+    status = entry(parent.opaque(), reference.opaque());
     error.clear();
     return true;
 }
@@ -759,7 +776,7 @@ bool pinPrivateImportedSlotRefUnitCandidateForTest(
         consumerGeneration.contentDigest() != prepared->contentDigest ||
         !prepared->verifiedPreparation.matchesConsumer(consumerGeneration) ||
         !prepared->verifiedPreparation.ownerGenerationId() ||
-        !facts || !prepared->entry ||
+        !facts ||
         facts->functionSymbolId != sourceSymbolId ||
         facts->functionContractId != sourceContractId ||
         facts->slotSymbolId != slot.slotId ||

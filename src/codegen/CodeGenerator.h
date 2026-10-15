@@ -201,7 +201,7 @@ private:
     static std::shared_ptr<LunaJitModule>
     materializeNativeRefUnitPreparationLowering(
         moon::Module& program, moon::FunctionDecl& function,
-        std::string& failure);
+        const void*& entry, std::string& failure);
 
     struct IteratorStep {
         IteratorOp op = IteratorOp::None;

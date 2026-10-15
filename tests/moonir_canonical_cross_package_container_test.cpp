@@ -729,6 +729,9 @@ int runCrossPackageContainerTest() {
                 LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
             return fail("cross-package Ref/apply lost its pinned borrowed call");
     refEntry.reset();
+    if (!luna::driver::discardPrivateRefUnitTestEntryForTest(
+            refPreparationWeak, error) || !refEntryWeak.expired())
+        return fail("typed Ref candidate retained the separate test JIT entry");
     refConsumerGeneration = {};
     if (!refCandidate || refCandidate.ownerGenerationId() == 0 ||
         !refCandidate.facts())
