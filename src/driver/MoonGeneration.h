@@ -233,9 +233,9 @@ public:
     bool installTypedCallerOnce(std::string& error);
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     luna::runtime::MoonRuntime::PinnedRefUnitCandidate pinCandidateForTest() const;
-    // Stages the exact verified owner's imported Slot as a private host
-    // projection. The host must activate it before staging the consumer with
-    // that pinned owner; this is not full owner artifact publication.
+    // Stages a private snapshot of every binding published by the verified
+    // owner artifact. The host must activate it before staging the consumer
+    // with that pinned owner. This remains a test-only loader path.
     bool stageOwnerInRuntimeForTest(
         luna::runtime::MoonRuntime& target,
         luna::runtime::MoonRuntime::StagedGeneration& staged,

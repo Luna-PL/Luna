@@ -2083,16 +2083,21 @@ Runtime now also accepts an exact required-active module generation. Under the
 same publication lock, it rejects a missing or changed dependency and blocks
 replacement of an owner required by an active consumer. A load-once cache hit
 must keep identical dependency declarations. The test-only verified token can
-stage a one-Slot host owner projection whose lease retains the original
-verified owner code. With that projection active, it stages a Ref candidate
-only after matching the exact proof lease, owner artifact digest, projection
-key, public Slot binding and retained host generation object; the request
-records the host owner's generation ID. A second Runtime with the same ID,
+stage a host snapshot of all bindings published by the verified owner artifact.
+The owner-state lease retains the original verified code and decoded artifact;
+the owner publication list is shared with the ordinary loader, and the host
+rows copy the internal verified generation's binding identities, flags, ABI
+profiles and implementations. With that owner active, the token stages a Ref
+candidate only after matching the exact owner-state lease, owner artifact
+digest, materialization key, public Slot binding and retained host generation
+object; the request records the host owner's generation ID. A second Runtime with the same ID,
 proof and projection cannot impersonate that pin. The cross-package regression
 changes the host owner between staging and activation, restores it for a typed
-call, and rejects an owner rollback while
-the candidate is active. Its candidate pin still calls after host teardown.
-The projection does not publish the complete owner artifact. Generic
+call, and rejects an owner rollback while the candidate is active. Its
+candidate pin still calls after host teardown.
+The cross-package regression compares every published binding kind with an
+ordinary verified owner load, including non-Slot rows. This test-only path
+does not independently recompile the owner in the host Runtime. Generic
 required-active facts are host assertions, not artifact authentication or an
 atomic two-module switch; those remain production verifier decisions.
 The test-only driver now derives exact Ref/unit source facts from that decoded
@@ -2311,9 +2316,9 @@ not a public ABI decision or stable-release approval:
    lookup and old pin behavior against a synthetic empty replacement. Runtime
    now enforces the private owner's required absence through activation,
    load-once and rollback, including both publication orders. An explicit
-   private one-Slot owner projection now binds a host candidate to that exact
-   active owner generation and blocks independent owner switching. Next define
-   full verified owner artifact publication, the production verifier and an
+   private verified owner publication now copies the full binding set and
+   binds a host candidate to that exact active owner generation while blocking
+   independent owner switching. Next define the production verifier and an
    atomic owner/consumer transition policy before any public candidate
    publication.
    The Runtime candidate requires a same-generation Slot binding.

@@ -35,6 +35,7 @@ struct VerifiedMoonRefUnitPreparationState {
     moon::Module module;
     std::string contentDigest;
     luna::runtime::MoonRuntime::PinnedGeneration ownerGeneration;
+    std::shared_ptr<const VerifiedMoonSlotOwnerState> ownerState;
     luna::codegen::NativeRefUnitSourceFacts facts;
     std::shared_ptr<LunaJitModule> codeLease;
     const void* codeEntry = nullptr;
@@ -73,8 +74,8 @@ bool sameRefUnitCandidateFacts(
 }
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
-std::string privateRefHostOwnerProjectionKey() {
-    return std::string("luna.private-ref-host-owner-proxy.v1:llvm=") +
+std::string privateRefHostOwnerArtifactKey() {
+    return std::string("luna.private-ref-host-owner-artifact.v1:llvm=") +
         LLVM_VERSION_STRING + ":ir=O0:orc=default";
 }
 #endif
@@ -140,6 +141,27 @@ bool hasRuntimeDescriptor(
     return record.retention != moon::Retention::CompileTime ||
         hasRetainedMetadata(record) ||
         isExportedRuntimeControl(module, record);
+}
+
+std::vector<moon::DeclarationRef> publishedDeclarations(
+    const moon::ContainerManifest& manifest, const moon::Module& module) {
+    std::vector<moon::DeclarationRef> published;
+    published.reserve(module.exports.size() + 1);
+    for (const auto& exported : module.exports)
+        published.push_back(exported.declaration);
+    if (manifest.entrypoint.complete() &&
+        std::find(published.begin(), published.end(),
+                  manifest.entrypoint) == published.end())
+        published.push_back(manifest.entrypoint);
+    for (const auto& declaration : module.declarationTable) {
+        if (!hasRuntimeDescriptor(module, declaration)) continue;
+        const moon::DeclarationRef reference{
+            declaration.symbolId, declaration.contractId};
+        if (std::find(published.begin(), published.end(), reference) ==
+            published.end())
+            published.push_back(reference);
+    }
+    return published;
 }
 
 bool matchesRuntimeMetadataValue(
@@ -363,22 +385,8 @@ bool stageVerifiedMoonGeneration(
             return true;
         },
         [loaded](const auto&, auto& bindings, std::string& resolutionError) {
-            std::vector<moon::DeclarationRef> published;
-            published.reserve(loaded->module.exports.size() + 1);
-            for (const auto& exported : loaded->module.exports)
-                published.push_back(exported.declaration);
-            if (loaded->manifest.entrypoint.complete() &&
-                std::find(published.begin(), published.end(),
-                          loaded->manifest.entrypoint) == published.end())
-                published.push_back(loaded->manifest.entrypoint);
-            for (const auto& declaration : loaded->module.declarationTable) {
-                if (!hasRuntimeDescriptor(loaded->module, declaration)) continue;
-                const moon::DeclarationRef reference{
-                    declaration.symbolId, declaration.contractId};
-                if (std::find(published.begin(), published.end(), reference) ==
-                    published.end())
-                    published.push_back(reference);
-            }
+            const auto published = publishedDeclarations(
+                loaded->manifest, loaded->module);
 
             bindings.reserve(published.size());
             for (const auto& reference : published) {
@@ -622,6 +630,7 @@ bool loadVerifiedMoonRefUnitPreparation(
         error = "verified Ref/unit owner lost its exact imported Slot";
         return false;
     }
+    verified->ownerState = owner.state_;
     verified->codeLease =
         CodeGenerator::materializeNativeRefUnitPreparationLowering(
             verified->module, *source, verified->codeEntry,
@@ -959,7 +968,10 @@ bool VerifiedMoonImportedSlotGeneration::installTypedCallerOnce(
         expected->slotSymbolId, expected->slotContractId);
     const auto ownerBinding = state.ownerGeneration.find(
         expected->slotSymbolId, expected->slotContractId);
-    if (!state.codeLease || !state.codeEntry ||
+    if (!state.ownerState ||
+        !state.ownerGeneration.sameGeneration(
+            state.ownerState->generation) ||
+        !state.codeLease || !state.codeEntry ||
         state.codeLinkageName != expected->linkageName ||
         !slotBinding || !ownerBinding ||
         ownerBinding.declarationKind() != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
@@ -1136,6 +1148,15 @@ bool VerifiedMoonImportedSlotGeneration::stageOwnerInRuntimeForTest(
         return false;
     }
     const auto& state = *consumer.preparation_.state_;
+    if (!state.ownerState ||
+        !state.ownerGeneration.sameGeneration(
+            state.ownerState->generation) ||
+        state.ownerState->runtime.activeGenerationId(
+            state.ownerGeneration.moduleId()) !=
+            state.ownerGeneration.generationId()) {
+        error = "private Ref/unit owner staging lost its owner proof";
+        return false;
+    }
     const auto ownerBinding = state.ownerGeneration.find(
         expected->slotSymbolId, expected->slotContractId);
     const auto proxyBinding = generation_.find(
@@ -1153,41 +1174,58 @@ bool VerifiedMoonImportedSlotGeneration::stageOwnerInRuntimeForTest(
     luna::runtime::GenerationStagingRequest request;
     request.moduleId = state.ownerGeneration.moduleId();
     request.contentDigest = state.ownerGeneration.contentDigest();
-    request.materializationKey = privateRefHostOwnerProjectionKey();
-    request.moduleLease = proof_;
+    request.materializationKey = privateRefHostOwnerArtifactKey();
+    request.moduleLease = state.ownerState;
+    std::vector<luna::runtime::GenerationBinding> ownerBindings;
+    const auto published = publishedDeclarations(
+        state.ownerState->manifest, state.ownerState->module);
+    ownerBindings.reserve(published.size());
+    for (const auto& reference : published) {
+        const auto* record =
+            state.ownerState->module.findDeclaration(reference);
+        const auto binding = state.ownerGeneration.find(
+            reference.symbol.value, reference.contract.value);
+        if (!record || !binding ||
+            binding.declarationKind() !=
+                static_cast<uint32_t>(record->kind) + 1) {
+            error = "private Ref/unit owner staging lost an artifact binding";
+            return false;
+        }
+        ownerBindings.push_back({
+            binding.symbolId(), binding.contractId(),
+            binding.implementation(), binding.declarationKind(),
+            binding.flags(), binding.entryAbi()});
+    }
     if (!target.stage(
             request,
-            [this, &request](const auto& candidate,
-                             std::string& verificationError) {
+            [ownerState = state.ownerState, &request](const auto& candidate,
+                std::string& verificationError) {
                 if (candidate.moduleId != request.moduleId ||
                     candidate.contentDigest != request.contentDigest ||
                     candidate.materializationKey != request.materializationKey ||
-                    !generation_.matchesModuleLease(candidate.moduleLease) ||
+                    !candidate.moduleLease ||
+                    candidate.moduleLease.get() != ownerState.get() ||
+                    candidate.moduleLease.owner_before(ownerState) ||
+                    ownerState.owner_before(candidate.moduleLease) ||
                     !candidate.requiredAbsentModuleIds.empty() ||
                     !candidate.requiredActiveModules.empty() ||
                     !candidate.refUnitCandidates.empty() ||
                     candidate.refUnitCaller) {
                     verificationError =
-                        "private Ref/unit owner projection changed before staging";
+                        "private Ref/unit owner artifact changed before staging";
                     return false;
                 }
                 return true;
             },
-            [expected, ownerBinding](const auto&, auto& bindings,
-                                     std::string& resolutionError) {
+            [ownerBindings = std::move(ownerBindings)](
+                const auto&, auto& bindings,
+                std::string& resolutionError) {
                 if (!bindings.empty()) {
                     resolutionError =
-                        "private Ref/unit owner projection cannot replace bindings";
+                        "private Ref/unit owner artifact cannot replace bindings";
                     return false;
                 }
-                luna::runtime::GenerationBinding binding;
-                binding.symbolId = expected->slotSymbolId;
-                binding.contractId = expected->slotContractId;
-                binding.implementation = ownerBinding.implementation();
-                binding.declarationKind = LUNA_RUNTIME_DECLARATION_SLOT_V1;
-                binding.flags =
-                    luna::runtime::GenerationBindingPublicControl;
-                bindings.push_back(std::move(binding));
+                bindings = ownerBindings;
                 return true;
             },
             {}, staged, error))
@@ -1197,7 +1235,7 @@ bool VerifiedMoonImportedSlotGeneration::stageOwnerInRuntimeForTest(
         staged.materializationKey() != request.materializationKey ||
         target.activeGenerationId(request.moduleId) != 0) {
         staged = {};
-        error = "private Ref/unit owner projection changed its artifact";
+        error = "private Ref/unit owner staging changed its artifact";
         return false;
     }
     return true;
@@ -1236,7 +1274,10 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTest(
         expected->slotSymbolId, expected->slotContractId);
     const auto pinnedCaller = generation_.findRefUnitCandidate(
         expected->symbolId, expected->contractId);
-    if (!state.codeLease || !state.codeEntry ||
+    if (!state.ownerState ||
+        !state.ownerGeneration.sameGeneration(
+            state.ownerState->generation) ||
+        !state.codeLease || !state.codeEntry ||
         state.codeLinkageName != expected->linkageName ||
         !ownerBinding || !proxyBinding || !pinnedCaller ||
         ownerBinding.declarationKind() != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
@@ -1253,18 +1294,18 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTest(
             expected->slotSymbolId, expected->slotContractId);
         if (!activeOwner ||
             !activeOwner.sameGeneration(hostOwner) ||
-            !activeOwner.matchesModuleLease(proof_) ||
-            !hostOwner.matchesModuleLease(proof_) ||
+            !activeOwner.matchesModuleLease(state.ownerState) ||
+            !hostOwner.matchesModuleLease(state.ownerState) ||
             activeOwner.contentDigest() !=
                 state.ownerGeneration.contentDigest() ||
             activeOwner.materializationKey() !=
-                privateRefHostOwnerProjectionKey() ||
+                privateRefHostOwnerArtifactKey() ||
             !hostBinding ||
             hostBinding.declarationKind() != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
             hostBinding.flags() !=
                 luna::runtime::GenerationBindingPublicControl ||
             hostBinding.implementation() != ownerBinding.implementation()) {
-            error = "private Ref/unit host staging requires its exact owner projection";
+            error = "private Ref/unit host staging requires its exact verified owner";
             return false;
         }
     }

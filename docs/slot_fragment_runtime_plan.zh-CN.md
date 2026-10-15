@@ -1542,12 +1542,16 @@ load 或 activation。owner 激活期间回滚至被排斥的 candidate 也会�
 原子共同发布。
 Runtime 现也接受精确的必需活跃 module generation。在同一发布锁内，它拒绝缺失或已切换的
 依赖，并阻止活跃 consumer 所依赖的 owner 被替换；load-once 缓存命中必须保留相同的依赖声明。
-仅测试用的 verified 凭据可向宿主 staging 一个单 Slot owner 投影，其 lease 保留原始 verified
-owner 代码。该投影激活后，Ref candidate 仅在精确凭据 lease、owner 产物摘要、投影配置键及
-public Slot binding 和宿主 generation 实例全部吻合时才能 staging；请求记录宿主 owner
-generation ID。即使第二个 Runtime 的 ID、凭据和投影相同，也不能冒用该 pin。跨包回归在
+仅测试用的 verified 凭据可向宿主 staging 原始 owner 产物的完整发布绑定集快照。owner 状态
+lease 保留原始 verified 代码与解码产物；发布清单与普通 loader 共用，宿主绑定复制内部已验证
+generation 的身份、flags、ABI 配置及实现指针。该 owner 激活后，Ref candidate 仅在精确
+owner 状态 lease、产物摘要、物化配置键、public Slot binding 和宿主 generation 实例全部吻合
+时才能 staging；请求记录宿主 owner generation ID。即使第二个 Runtime 的 ID、凭据和绑定
+快照相同，也不能冒用该 pin。跨包回归在
 staging 与 activation 之间切换 owner，恢复后执行类型化调用，并验证 candidate 活跃时
-owner 回滚被拒绝。其 candidate pin 在宿主销毁后仍可调用。投影并未发布完整 owner 产物。
+owner 回滚被拒绝。其 candidate pin 在宿主销毁后仍可调用。跨包回归把每种发布绑定与普通
+verified owner 加载逐项比较，也覆盖非 Slot 行。此测试路径并未在宿主 Runtime 中独立重编译
+owner。
 通用必需活跃事实仍是宿主声明，不能代替产物认证或两个 module 的原子切换；这些属于生产
 verifier 的后续决策。
 仅测试用的 driver 现从解码后的 consumer 重新派生精确 Ref／unit 源码事实；只有请求的源码、
@@ -1701,9 +1705,9 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    和显式激活，禁止 Ref／unit 的 load-once 复用。仅测试用探针现通过编译器签发的 consumer
    与 owner 凭据向调用方 Runtime staging，并保留类型化 pin。宿主切换／回滚回归现用合成
    空 replacement 验证当前查询和旧 pin 行为。Runtime 现于 activation、load-once 与
-   rollback 双向执行私有 owner 的未激活约束。显式私有单 Slot owner 投影现将宿主 candidate
-   绑定到该精确活跃 owner generation，并阻止 owner 独立切换。下一步定义完整的 verified
-   owner 产物发布、生产 verifier 和 owner／consumer 原子转换策略，再考虑公开 candidate 发布。
+   rollback 双向执行私有 owner 的未激活约束。私有 verified owner 发布现复制完整绑定集，
+   将宿主 candidate 绑定到该精确活跃 owner generation，并阻止 owner 独立切换。下一步定义
+   生产 verifier 和 owner／consumer 原子转换策略，再考虑公开 candidate 发布。
    Runtime candidate 要求同一
    generation 的 Slot binding；
    默认发布验证仍关闭。

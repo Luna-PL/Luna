@@ -820,6 +820,7 @@ int runCrossPackageContainerTest() {
         return fail("verified evidence aliased mutable owner export rows");
 
     luna::runtime::MoonRuntime::PinnedBinding hostBinding, pluginBinding;
+    luna::runtime::MoonRuntime::PinnedGeneration ordinaryOwnerPin;
     luna::runtime::RuntimeFragmentRefHandle borrowedRef;
     luna::runtime::RuntimeFragmentExecutionContext noneContext, oneContext;
     const luna::runtime::RuntimeSlotRequirement requirement{
@@ -848,6 +849,7 @@ int runCrossPackageContainerTest() {
         }
         if (hostGeneration.generationId() == pluginGeneration.generationId())
             return fail("owner and consumer were not independent generations");
+        ordinaryOwnerPin = hostGeneration;
         hostBinding = hostGeneration.find(hostEntry->symbolId.value, hostEntry->contractId.value);
         pluginBinding = pluginGeneration.find(pluginEntry->symbolId.value, pluginEntry->contractId.value);
         for (const auto* binding : {&hostBinding, &pluginBinding})
@@ -994,7 +996,7 @@ int runCrossPackageContainerTest() {
             integratedRefGeneration.stageInRuntimeForTest(
                 conflictingHost, rejectedStage, error, hostOwner) ||
             rejectedStage ||
-            error != "private Ref/unit host staging requires its exact owner projection")
+            error != "private Ref/unit host staging requires its exact verified owner")
             return fail("private host Ref staging accepted a separate owner module");
     }
     {
@@ -1117,30 +1119,60 @@ int runCrossPackageContainerTest() {
                 projectedHost, ownerStage, error) || ownerStage ||
             !integratedRefGeneration.stageOwnerInRuntimeForTest(
                 projectedHost, ownerStage, error))
-            return fail("verified owner projection did not stage privately");
+            return fail("verified owner artifact did not stage privately");
         auto ownerPoint = projectedHost.safePoint();
         if (!projectedHost.activate(ownerStage, ownerPoint, error))
-            return fail("verified owner projection did not activate");
+            return fail("verified owner artifact did not activate");
         const auto facts = integratedRefGeneration.candidateFacts();
         if (!facts)
-            return fail("verified owner projection lost its consumer facts");
+            return fail("verified owner artifact lost its consumer facts");
         const auto hostOwner = projectedHost.pin(hostManifest.packageId);
         const auto hostSlot = hostOwner.find(
             facts->slotSymbolId, facts->slotContractId);
         if (!hostOwner || !hostSlot ||
             hostSlot.flags() !=
                 luna::runtime::GenerationBindingPublicControl)
-            return fail("verified owner projection lost its public Slot");
+            return fail("verified owner artifact lost its public Slot");
+        size_t nonSlotRows = 0;
+        for (uint32_t kind = 1;
+             kind <= static_cast<uint32_t>(moon::DeclarationKind::Slot) + 1;
+             ++kind) {
+            const auto originalRows = ordinaryOwnerPin.findAll(kind, 0);
+            const auto hostRows = hostOwner.findAll(kind, 0);
+            if (originalRows.size() != hostRows.size())
+                return fail("verified host owner lost an artifact binding kind");
+            for (const auto& original : originalRows) {
+                const auto copied = hostOwner.find(
+                    original.symbolId(), original.contractId());
+                if (!copied || copied.declarationKind() != kind ||
+                    copied.flags() != original.flags() ||
+                    copied.entryAbi() != original.entryAbi() ||
+                    static_cast<bool>(copied.implementation()) !=
+                        static_cast<bool>(original.implementation()))
+                    return fail("verified host owner changed an artifact binding");
+                if (kind !=
+                    static_cast<uint32_t>(moon::DeclarationKind::Slot) + 1)
+                    ++nonSlotRows;
+            }
+        }
+        if (nonSlotRows == 0)
+            return fail("verified host owner fixture did not exercise full publication");
+        const auto hostEntryBinding = hostOwner.find(
+            hostEntry->symbolId.value, hostEntry->contractId.value);
+        if (!hostEntryBinding ||
+            invokeContextEntry(hostEntryBinding.implementation(),
+                               noneContext.opaque()) != 42)
+            return fail("verified host owner lost its published callable entry");
         luna::runtime::MoonRuntime::StagedGeneration candidateStage;
         {
             luna::runtime::MoonRuntime foreignHost;
             luna::runtime::MoonRuntime::StagedGeneration foreignStage;
             if (!integratedRefGeneration.stageOwnerInRuntimeForTest(
                     foreignHost, foreignStage, error))
-                return fail("second verified owner projection did not stage");
+                return fail("second verified owner artifact did not stage");
             auto foreignPoint = foreignHost.safePoint();
             if (!foreignHost.activate(foreignStage, foreignPoint, error))
-                return fail("second verified owner projection did not activate");
+                return fail("second verified owner artifact did not activate");
             const auto foreignOwner = foreignHost.pin(hostManifest.packageId);
             if (!foreignOwner ||
                 foreignOwner.generationId() != hostOwner.generationId() ||
@@ -1151,8 +1183,8 @@ int runCrossPackageContainerTest() {
                 integratedRefGeneration.stageInRuntimeForTest(
                     projectedHost, candidateStage, error, foreignOwner) ||
                 candidateStage ||
-                error != "private Ref/unit host staging requires its exact owner projection")
-                return fail("foreign host pin impersonated the active owner projection");
+                error != "private Ref/unit host staging requires its exact verified owner")
+                return fail("foreign host pin impersonated the active verified owner");
         }
         if (integratedRefGeneration.stageInRuntimeForTest(
                 projectedHost, candidateStage, error) || candidateStage ||
