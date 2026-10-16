@@ -2116,6 +2116,12 @@ materialization key and full owner binding snapshot. The private candidate
 stager uses these preflights before constructing a request. The independent
 proof, foreign Runtime and separately loaded same-byte owner fail preflight;
 no preflight creates a candidate or changes host publication.
+An ordinary-build private plan now constructs the host-bound candidate request
+only after that preflight. It carries the exact decoded facts, pinned typed
+caller, consumer proof lease, Slot implementation and active-generation
+requirement for either owner state. The test-only stager consumes this plan;
+the owner-absent experiment stays test-only. The plan is not exposed as a
+public staging or publication API.
 MoonRuntime now provides `activateTogether` for two distinct staged modules
 under one safe point. It checks switchable requirements and the final module
 set, including dependencies and exclusions held by other active modules,
@@ -2368,7 +2374,9 @@ not a public ABI decision or stable-release approval:
    rejects extra rows and hidden module relations. Active-owner admission now
    applies the same snapshot rule and rejects a stale pin after switching.
    Ordinary-build read-only preflights now validate the active or staged host
-   owner against the complete verified consumer proof. Next define the
+   owner against the complete verified consumer proof. A private ordinary-build
+   plan now constructs the host-bound request and typed caller from that proof.
+   Next verify the complete staged candidate snapshot, then define the
    production candidate verifier and its public admission boundary before
    any public candidate publication.
    The Runtime candidate requires a same-generation Slot binding.

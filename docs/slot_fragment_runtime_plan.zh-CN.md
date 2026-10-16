@@ -1565,6 +1565,10 @@ verified consumer token 现于普通构建提供已激活或待激活宿主 owne
 物化配置键和完整 owner 绑定快照。私有 candidate stager 在构造请求前调用它。空凭据、
 外来 Runtime 及同字节另行加载的 owner 均无法通过预检；预检不创建 candidate，也不改变
 宿主发布状态。
+普通构建的私有计划现仅在预检通过后构造绑定宿主的 candidate 请求，携带精确解码事实、
+已固定的类型化 caller、consumer 凭据 lease、Slot 实现及所需的 owner generation。
+测试专用 stager 使用此计划；owner 缺席实验仍只在测试宏下。该计划不提供公开 staging
+或发布接口。
 MoonRuntime 现提供 `activateTogether`，用一个 safe point 发布两个不同 module 的 staged
 generation。它在发布任一 generation 前检查 switchable 要求与最终模块集合，包括其他活跃
 module 持有的依赖和排斥条件。`pinTogether` 在同一发布锁内读取两枚活跃 pin；并发回归验证
@@ -1738,7 +1742,9 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    owner 进行 staging 并验证成对激活。owner staging 准入现核验完整的 verified 绑定快照，
    拒绝额外绑定及暗藏的 module 依赖。已激活 owner 的准入也采用完整快照，切换后的旧 pin 会
    被拒绝。普通构建的只读预检现以完整 verified consumer 凭据核验活跃或 staged 宿主 owner。
-   下一步定义生产 candidate verifier 与公开准入边界，再考虑公开 candidate 发布。
+   普通构建的私有计划现从该凭据构造绑定宿主的请求与类型化 caller。下一步核验完整的
+   staged candidate 快照，再定义生产 candidate verifier 与公开准入边界，之后才考虑公开
+   candidate 发布。
    Runtime candidate 要求同一
    generation 的 Slot binding；
    默认发布验证仍关闭。

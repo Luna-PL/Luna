@@ -275,11 +275,24 @@ public:
 
 private:
     friend class VerifiedMoonImportedSlotRefUnitProof;
+    struct HostCandidatePlan {
+        luna::runtime::GenerationStagingRequest request;
+        luna::runtime::GenerationRefUnitCandidate facts;
+        std::vector<luna::runtime::GenerationBinding> ownerBindings;
+        const void* slotImplementation = nullptr;
+    };
     bool verifyHostOwnerInRuntimeImpl(
         const luna::runtime::MoonRuntime& target,
         const luna::runtime::MoonRuntime::PinnedGeneration* activeOwner,
         const luna::runtime::MoonRuntime::StagedGeneration* stagedOwner,
         std::string& error) const;
+    // Construct a trusted host-bound request without staging or publication.
+    // Only the private test gate currently consumes this plan.
+    bool prepareHostCandidatePlan(
+        const luna::runtime::MoonRuntime& target,
+        const luna::runtime::MoonRuntime::PinnedGeneration* activeOwner,
+        const luna::runtime::MoonRuntime::StagedGeneration* stagedOwner,
+        HostCandidatePlan& plan, std::string& error) const;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     bool stageInRuntimeForTestImpl(
         luna::runtime::MoonRuntime& target,
