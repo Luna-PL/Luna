@@ -2129,6 +2129,13 @@ callback presence and type, and the full module relation set. The private
 stager requires this snapshot before returning a stage. The opaque callback's
 behavior still depends on the trusted plan constructor; the structural check
 does not authenticate an arbitrary callback supplied by a host.
+The ordinary-build private request verifier now runs inside Runtime staging.
+It repeats the exact owner preflight and derives the candidate identity,
+digest, materialization key, caller lease, decoded fact row and owner-generation
+requirement from the pinned consumer proof. A test-only read-only mutation
+probe rejects changed Slot type facts, owner dependency and callback type.
+This verifier still consumes only the trusted private plan; it is not a
+public candidate admission API.
 MoonRuntime now provides `activateTogether` for two distinct staged modules
 under one safe point. It checks switchable requirements and the final module
 set, including dependencies and exclusions held by other active modules,
@@ -2384,8 +2391,10 @@ not a public ABI decision or stable-release approval:
    owner against the complete verified consumer proof. A private ordinary-build
    plan now constructs the host-bound request and typed caller from that proof.
    Runtime now checks the complete staged candidate structure before the
-   private stager returns. Next define the production candidate verifier and
-   its public admission boundary before any public candidate publication.
+   private stager returns. An ordinary-build private request verifier also
+   rechecks the proof and exact owner during staging. Next specify the trusted
+   callback and public admission contract before any public candidate
+   publication.
    The Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref

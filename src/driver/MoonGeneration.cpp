@@ -78,6 +78,11 @@ std::string verifiedSlotOwnerSnapshotKey() {
         LLVM_VERSION_STRING + ":ir=O0:orc=default";
 }
 
+std::string privateRefHostCandidateKey(const std::string& ownerDigest) {
+    return std::string("luna.private-ref-host-admission.v1:llvm=") +
+        LLVM_VERSION_STRING + ":ir=O0:orc=default:owner=" + ownerDigest;
+}
+
 struct LoadedMoonGeneration {
     moon::ContainerManifest manifest;
     moon::Module module;
@@ -1395,10 +1400,8 @@ bool VerifiedMoonImportedSlotGeneration::prepareHostCandidatePlan(
     auto& request = prepared.request;
     request.moduleId = generation_.moduleId();
     request.contentDigest = generation_.contentDigest();
-    request.materializationKey =
-        std::string("luna.private-ref-host-admission.v1:llvm=") +
-        LLVM_VERSION_STRING + ":ir=O0:orc=default:owner=" +
-        state.ownerGeneration.contentDigest();
+    request.materializationKey = privateRefHostCandidateKey(
+        state.ownerGeneration.contentDigest());
     request.moduleLease = proofLease;
     request.refUnitCandidates.push_back(prepared.facts);
     request.refUnitCaller = [pinnedCaller, facts = prepared.facts](
@@ -1421,7 +1424,79 @@ bool VerifiedMoonImportedSlotGeneration::prepareHostCandidatePlan(
     return true;
 }
 
+bool VerifiedMoonImportedSlotGeneration::verifyHostCandidateRequest(
+    const luna::runtime::MoonRuntime& target,
+    const luna::runtime::GenerationStagingRequest& candidate,
+    const HostCandidatePlan& plan,
+    const luna::runtime::MoonRuntime::PinnedGeneration* activeOwner,
+    const luna::runtime::MoonRuntime::StagedGeneration* stagedOwner,
+    std::string& error) const {
+    if (!verifyHostOwnerInRuntimeImpl(
+            target, activeOwner, stagedOwner, error))
+        return false;
+    const auto expected = proof_->candidateFacts();
+    const auto& state = *proof_->consumer_.preparation_.state_;
+    const auto ownerBinding = state.ownerGeneration.find(
+        expected->slotSymbolId, expected->slotContractId);
+    const auto ownerId = activeOwner
+        ? activeOwner->generationId() : stagedOwner->generationId();
+    const auto key = privateRefHostCandidateKey(
+        state.ownerGeneration.contentDigest());
+    const bool matchesPlanOwner = activeOwner
+        ? target.matchesActiveOwnerSnapshot(
+            *activeOwner, state.ownerState, plan.ownerBindings)
+        : target.matchesStagedOwnerSnapshot(
+            *stagedOwner, state.ownerState, plan.ownerBindings);
+    const auto matchesProof = [&](const auto& request) {
+        return request.moduleId == generation_.moduleId() &&
+            request.contentDigest == generation_.contentDigest() &&
+            request.materializationKey == key &&
+            generation_.matchesModuleLease(request.moduleLease) &&
+            generation_.matchesModuleLease(request.refUnitCallerLease) &&
+            request.refUnitCandidates.size() == 1 &&
+            sameRefUnitCandidateFacts(
+                request.refUnitCandidates.front(), *expected) &&
+            static_cast<bool>(request.refUnitCaller) &&
+            request.requiredAbsentModuleIds.empty() &&
+            request.requiredActiveModules.size() == 1 &&
+            request.requiredActiveModules.front().moduleId ==
+                state.ownerGeneration.moduleId() &&
+            request.requiredActiveModules.front().generationId == ownerId;
+    };
+    if (!matchesPlanOwner || !ownerBinding ||
+        !sameRefUnitCandidateFacts(plan.facts, *expected) ||
+        plan.slotImplementation != ownerBinding.implementation() ||
+        !matchesProof(plan.request) || !matchesProof(candidate) ||
+        candidate.refUnitCaller.target_type() !=
+            plan.request.refUnitCaller.target_type()) {
+        error = "verified Ref/unit host candidate request lost its proof";
+        return false;
+    }
+    return true;
+}
+
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
+bool VerifiedMoonImportedSlotGeneration::verifyActiveOwnerCandidateMutationForTest(
+    const luna::runtime::MoonRuntime& target,
+    const luna::runtime::MoonRuntime::PinnedGeneration& hostOwner,
+    const std::function<void(luna::runtime::GenerationStagingRequest&)>&
+        mutate,
+    std::string& error) const {
+    error.clear();
+    if (!mutate) {
+        error = "private Ref/unit host request probe requires a mutation";
+        return false;
+    }
+    HostCandidatePlan plan;
+    if (!prepareHostCandidatePlan(
+            target, &hostOwner, nullptr, plan, error))
+        return false;
+    auto candidate = plan.request;
+    mutate(candidate);
+    return verifyHostCandidateRequest(
+        target, candidate, plan, &hostOwner, nullptr, error);
+}
+
 bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTest(
     luna::runtime::MoonRuntime& target,
     luna::runtime::MoonRuntime::StagedGeneration& staged,
@@ -1500,19 +1575,16 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTestImpl(
             : "private Ref/unit host staging requires its exact staged owner";
         return false;
     }
-    std::vector<luna::runtime::GenerationBinding> ownerBindings =
-        std::move(hostPlan.ownerBindings);
+    const auto ownerBindings = hostPlan.ownerBindings;
     luna::runtime::GenerationStagingRequest request;
     if (hostOwner || stagedHostOwner) {
-        request = std::move(hostPlan.request);
+        request = hostPlan.request;
     } else {
         const auto proofLease = proof_;
         request.moduleId = generation_.moduleId();
         request.contentDigest = generation_.contentDigest();
-        request.materializationKey =
-            std::string("luna.private-ref-host-admission.v1:llvm=") +
-            LLVM_VERSION_STRING + ":ir=O0:orc=default:owner=" +
-            state.ownerGeneration.contentDigest();
+        request.materializationKey = privateRefHostCandidateKey(
+            state.ownerGeneration.contentDigest());
         request.moduleLease = proofLease;
         request.refUnitCandidates.push_back(*expected);
         request.refUnitCaller = [pinnedCaller, facts = *expected](
@@ -1537,10 +1609,16 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTestImpl(
     const luna::runtime::GenerationBinding trustedSlotBinding{
         trustedFacts.slotSymbolId, trustedFacts.slotContractId,
         trustedSlotImplementation, LUNA_RUNTIME_DECLARATION_SLOT_V1, 0};
+    const auto* verifiedActiveOwner = hostOwner ? &hostOwner : nullptr;
     if (!target.stage(
             request,
-            [this, &request, trustedFacts](const auto& candidate,
-                                           std::string& verificationError) {
+            [this, &target, &request, &hostPlan, verifiedActiveOwner,
+             stagedHostOwner, trustedFacts](
+                const auto& candidate, std::string& verificationError) {
+                if (verifiedActiveOwner || stagedHostOwner)
+                    return verifyHostCandidateRequest(
+                        target, candidate, hostPlan, verifiedActiveOwner,
+                        stagedHostOwner, verificationError);
                 if (candidate.moduleId != request.moduleId ||
                     candidate.contentDigest != request.contentDigest ||
                     candidate.materializationKey != request.materializationKey ||

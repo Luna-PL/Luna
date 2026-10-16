@@ -5,6 +5,7 @@
 #include "codegen/NativeRefUnitFacts.h"
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -257,6 +258,13 @@ public:
         std::string& error) const;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     luna::runtime::MoonRuntime::PinnedRefUnitCandidate pinCandidateForTest() const;
+    // Read-only test probe for the ordinary-build host request verifier.
+    bool verifyActiveOwnerCandidateMutationForTest(
+        const luna::runtime::MoonRuntime& target,
+        const luna::runtime::MoonRuntime::PinnedGeneration& hostOwner,
+        const std::function<void(luna::runtime::GenerationStagingRequest&)>&
+            mutate,
+        std::string& error) const;
     // Quarantined host-Runtime staging probe. Only an admitted internal token
     // can sign this request; the caller must activate it at a safe point.
     bool stageInRuntimeForTest(
@@ -293,6 +301,14 @@ private:
         const luna::runtime::MoonRuntime::PinnedGeneration* activeOwner,
         const luna::runtime::MoonRuntime::StagedGeneration* stagedOwner,
         HostCandidatePlan& plan, std::string& error) const;
+    // Recheck the trusted plan and exact owner during Runtime staging.
+    bool verifyHostCandidateRequest(
+        const luna::runtime::MoonRuntime& target,
+        const luna::runtime::GenerationStagingRequest& candidate,
+        const HostCandidatePlan& plan,
+        const luna::runtime::MoonRuntime::PinnedGeneration* activeOwner,
+        const luna::runtime::MoonRuntime::StagedGeneration* stagedOwner,
+        std::string& error) const;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     bool stageInRuntimeForTestImpl(
         luna::runtime::MoonRuntime& target,

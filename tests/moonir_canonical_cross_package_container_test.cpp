@@ -1244,6 +1244,36 @@ int runCrossPackageContainerTest() {
             emptyImport.verifyActiveOwnerInRuntime(
                 projectedHost, hostOwner, error))
             return fail("verified owner artifact lost its public Slot");
+        if (!integratedRefGeneration.verifyActiveOwnerCandidateMutationForTest(
+                projectedHost, hostOwner, [](auto&) {}, error))
+            return fail("exact host candidate request failed proof verification");
+        if (integratedRefGeneration.verifyActiveOwnerCandidateMutationForTest(
+                projectedHost, hostOwner,
+                [](auto& request) {
+                    request.refUnitCandidates.front().slotTypeId =
+                        "type:forged-slot";
+                }, error) ||
+            error != "verified Ref/unit host candidate request lost its proof")
+            return fail("forged Ref/unit facts passed host request verification");
+        if (integratedRefGeneration.verifyActiveOwnerCandidateMutationForTest(
+                projectedHost, hostOwner,
+                [](auto& request) {
+                    ++request.requiredActiveModules.front().generationId;
+                }, error) ||
+            error != "verified Ref/unit host candidate request lost its proof")
+            return fail("forged owner dependency passed host request verification");
+        if (integratedRefGeneration.verifyActiveOwnerCandidateMutationForTest(
+                projectedHost, hostOwner,
+                [](auto& request) {
+                    request.refUnitCaller = [](
+                        const std::string&, const std::string&,
+                        const luna::runtime::RuntimeFragmentExecutionContext&,
+                        const luna::runtime::RuntimeFragmentRefHandle&,
+                        int32_t&, std::string&) { return true; };
+                }, error) ||
+            error != "verified Ref/unit host candidate request lost its proof" ||
+            projectedHost.activeGenerationId(facts->packageId) != 0)
+            return fail("forged Ref/unit caller passed host request verification");
         size_t nonSlotRows = 0;
         for (uint32_t kind = 1;
              kind <= static_cast<uint32_t>(moon::DeclarationKind::Slot) + 1;
