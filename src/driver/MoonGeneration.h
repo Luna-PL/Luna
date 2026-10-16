@@ -244,6 +244,17 @@ public:
         luna::runtime::MoonRuntime& target,
         luna::runtime::MoonRuntime::StagedGeneration& staged,
         std::string& error) const;
+    // Read-only host owner preflight. Both forms bind this verified consumer's
+    // exact owner-state lease to the host's complete owner publication. They
+    // issue no candidate row and do not authorize public Ref publication.
+    bool verifyActiveOwnerInRuntime(
+        const luna::runtime::MoonRuntime& target,
+        const luna::runtime::MoonRuntime::PinnedGeneration& hostOwner,
+        std::string& error) const;
+    bool verifyStagedOwnerInRuntime(
+        const luna::runtime::MoonRuntime& target,
+        const luna::runtime::MoonRuntime::StagedGeneration& hostOwner,
+        std::string& error) const;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     luna::runtime::MoonRuntime::PinnedRefUnitCandidate pinCandidateForTest() const;
     // Quarantined host-Runtime staging probe. Only an admitted internal token
@@ -264,6 +275,11 @@ public:
 
 private:
     friend class VerifiedMoonImportedSlotRefUnitProof;
+    bool verifyHostOwnerInRuntimeImpl(
+        const luna::runtime::MoonRuntime& target,
+        const luna::runtime::MoonRuntime::PinnedGeneration* activeOwner,
+        const luna::runtime::MoonRuntime::StagedGeneration* stagedOwner,
+        std::string& error) const;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     bool stageInRuntimeForTestImpl(
         luna::runtime::MoonRuntime& target,

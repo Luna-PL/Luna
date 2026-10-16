@@ -2109,6 +2109,13 @@ Function binding is present. A separately loaded proof of the same owner bytes
 cannot pair with the consumer, because its owner-state lease differs. Owner
 staging alone publishes no Ref candidate; host Ref candidate staging remains
 test-only.
+The verified consumer token now has ordinary-build, read-only preflights for
+an active or staged host owner. They recheck its complete consumer proof and
+typed caller lease, exact imported Slot, original owner state, host Runtime,
+materialization key and full owner binding snapshot. The private candidate
+stager uses these preflights before constructing a request. The independent
+proof, foreign Runtime and separately loaded same-byte owner fail preflight;
+no preflight creates a candidate or changes host publication.
 MoonRuntime now provides `activateTogether` for two distinct staged modules
 under one safe point. It checks switchable requirements and the final module
 set, including dependencies and exclusions held by other active modules,
@@ -2131,8 +2138,8 @@ consumer staging, before the host can activate the candidate.
 The cross-package regression rejects a foreign staged owner, a separately
 loaded proof of the same owner bytes, and pair activation with that other
 stage after the consumer is prepared. It executes the typed call and retains
-its candidate pin across host teardown. This remains test-only; the production
-verifier and public candidate gate stay closed.
+its candidate pin across host teardown. Host candidate staging remains
+test-only; a production candidate verifier and public gate remain closed.
 The test-only driver now derives exact Ref/unit source facts from that decoded
 consumer, then pins a typed imported-Slot candidate only when the requested
 source and Slot identities match and the consumer pin owns the same private
@@ -2360,7 +2367,9 @@ not a public ABI decision or stable-release approval:
    Owner staging admission checks the entire verified binding snapshot and
    rejects extra rows and hidden module relations. Active-owner admission now
    applies the same snapshot rule and rejects a stale pin after switching.
-   Next define the production verifier and its public admission boundary before
+   Ordinary-build read-only preflights now validate the active or staged host
+   owner against the complete verified consumer proof. Next define the
+   production candidate verifier and its public admission boundary before
    any public candidate publication.
    The Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.

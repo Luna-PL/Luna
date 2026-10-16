@@ -1139,11 +1139,16 @@ int runCrossPackageContainerTest() {
         if (!integratedRefGeneration.stageOwnerInRuntime(
                 pairedHost, ownerStage, error))
             return fail("paired verified owner did not stage");
+        if (!integratedRefGeneration.verifyStagedOwnerInRuntime(
+                pairedHost, ownerStage, error))
+            return fail("verified staged owner failed read-only preflight");
         {
             luna::runtime::MoonRuntime foreignHost;
             luna::runtime::MoonRuntime::StagedGeneration foreignOwner;
             if (!integratedRefGeneration.stageOwnerInRuntime(
                     foreignHost, foreignOwner, error) ||
+                integratedRefGeneration.verifyStagedOwnerInRuntime(
+                    pairedHost, foreignOwner, error) ||
                 integratedRefGeneration.stageWithStagedOwnerInRuntimeForTest(
                     pairedHost, candidateStage, error, foreignOwner) ||
                 candidateStage ||
@@ -1156,6 +1161,8 @@ int runCrossPackageContainerTest() {
                     hostBytes, hostManifest.targetTriple,
                     hostManifest.dataLayout, separateProof, error) ||
                 !separateProof.stageInRuntime(
+                    pairedHost, alternateOwner, error) ||
+                integratedRefGeneration.verifyStagedOwnerInRuntime(
                     pairedHost, alternateOwner, error) ||
                 integratedRefGeneration.stageWithStagedOwnerInRuntimeForTest(
                     pairedHost, candidateStage, error, alternateOwner) ||
@@ -1231,7 +1238,11 @@ int runCrossPackageContainerTest() {
             facts->slotSymbolId, facts->slotContractId);
         if (!hostOwner || !hostSlot ||
             hostSlot.flags() !=
-                luna::runtime::GenerationBindingPublicControl)
+                luna::runtime::GenerationBindingPublicControl ||
+            !integratedRefGeneration.verifyActiveOwnerInRuntime(
+                projectedHost, hostOwner, error) ||
+            emptyImport.verifyActiveOwnerInRuntime(
+                projectedHost, hostOwner, error))
             return fail("verified owner artifact lost its public Slot");
         size_t nonSlotRows = 0;
         for (uint32_t kind = 1;
@@ -1282,6 +1293,8 @@ int runCrossPackageContainerTest() {
                 separateOwner.contentDigest() != hostOwner.contentDigest() ||
                 separateOwner.materializationKey() !=
                     hostOwner.materializationKey() ||
+                integratedRefGeneration.verifyActiveOwnerInRuntime(
+                    separateHost, separateOwner, error) ||
                 integratedRefGeneration.stageInRuntimeForTest(
                     separateHost, candidateStage, error, separateOwner) ||
                 candidateStage ||
@@ -1305,6 +1318,8 @@ int runCrossPackageContainerTest() {
                 foreignOwner.contentDigest() != hostOwner.contentDigest() ||
                 foreignOwner.materializationKey() !=
                     hostOwner.materializationKey() ||
+                integratedRefGeneration.verifyActiveOwnerInRuntime(
+                    projectedHost, foreignOwner, error) ||
                 integratedRefGeneration.stageInRuntimeForTest(
                     projectedHost, candidateStage, error, foreignOwner) ||
                 candidateStage ||
@@ -1332,6 +1347,10 @@ int runCrossPackageContainerTest() {
         auto replacePoint = projectedHost.safePoint();
         if (!projectedHost.activate(alternateStage, replacePoint, error))
             return fail("private owner replacement fixture did not activate");
+        if (integratedRefGeneration.verifyActiveOwnerInRuntime(
+                projectedHost, hostOwner, error) ||
+            error != "verified Ref/unit owner preflight requires its exact active owner")
+            return fail("stale host owner passed read-only preflight");
         auto blockedCandidatePoint = projectedHost.safePoint();
         if (projectedHost.activate(
                 candidateStage, blockedCandidatePoint, error) ||
@@ -1344,6 +1363,9 @@ int runCrossPackageContainerTest() {
                                     hostOwner.generationId(),
                                     restoreOwnerPoint, error))
             return fail("private host owner did not roll back for Ref activation");
+        if (!integratedRefGeneration.verifyActiveOwnerInRuntime(
+                projectedHost, hostOwner, error))
+            return fail("restored host owner failed read-only preflight");
         auto candidatePoint = projectedHost.safePoint();
         if (!projectedHost.activate(candidateStage, candidatePoint, error))
             return fail("private Ref candidate did not activate with exact host owner");
