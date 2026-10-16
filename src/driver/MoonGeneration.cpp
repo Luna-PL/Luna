@@ -110,6 +110,42 @@ bool sameVerifiedHostCaller(
         !expectedState.owner_before(actualState);
 }
 
+struct VerifiedImportedSlotCallerState {
+    luna::runtime::GenerationRefUnitCaller invoke;
+};
+
+struct VerifiedImportedSlotCaller {
+    std::shared_ptr<const VerifiedImportedSlotCallerState> state;
+
+    bool operator()(
+        const std::string& symbolId, const std::string& contractId,
+        const luna::runtime::RuntimeFragmentExecutionContext& parent,
+        const luna::runtime::RuntimeFragmentRefHandle& reference,
+        int32_t& status, std::string& callError) const {
+        if (!state || !state->invoke) {
+            callError = "verified imported-Slot caller lost its adapter";
+            return false;
+        }
+        return state->invoke(
+            symbolId, contractId, parent, reference, status, callError);
+    }
+};
+
+bool sameVerifiedImportedSlotCaller(
+    const luna::runtime::GenerationRefUnitCaller& actual,
+    const luna::runtime::GenerationRefUnitCaller& expected) {
+    const auto* actualCaller = actual.target<VerifiedImportedSlotCaller>();
+    const auto* expectedCaller = expected.target<VerifiedImportedSlotCaller>();
+    if (!actualCaller || !expectedCaller || !actualCaller->state ||
+        !expectedCaller->state)
+        return false;
+    const auto& actualState = actualCaller->state;
+    const auto& expectedState = expectedCaller->state;
+    return actualState.get() == expectedState.get() &&
+        !actualState.owner_before(expectedState) &&
+        !expectedState.owner_before(actualState);
+}
+
 std::string verifiedSlotOwnerSnapshotKey() {
     return std::string("luna.verified-slot-owner-snapshot.v1:llvm=") +
         LLVM_VERSION_STRING + ":ir=O0:orc=default";
@@ -1092,6 +1128,18 @@ bool VerifiedMoonImportedSlotGeneration::admitMetadataCandidateOnce(
 
 bool VerifiedMoonImportedSlotGeneration::installTypedCallerOnce(
     std::string& error) {
+    return installTypedCallerOnceImpl(error, false);
+}
+
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+bool VerifiedMoonImportedSlotGeneration::installAlternateTypedCallerForTest(
+    std::string& error) {
+    return installTypedCallerOnceImpl(error, true);
+}
+#endif
+
+bool VerifiedMoonImportedSlotGeneration::installTypedCallerOnceImpl(
+    std::string& error, bool replaceCallerForTest) {
     error.clear();
     if (!hasMetadataCandidate() || typedCallerInstalled_ ||
         !generation_.matchesModuleLease(proof_) ||
@@ -1133,7 +1181,7 @@ bool VerifiedMoonImportedSlotGeneration::installTypedCallerOnce(
     request.materializationKey = generation_.materializationKey();
     request.moduleLease = proofLease;
     request.refUnitCandidates.push_back(*expected);
-    request.refUnitCaller = [proofLease, facts = *expected](
+    const auto typedAdapter = [proofLease, facts = *expected](
         const std::string& symbolId, const std::string& contractId,
         const luna::runtime::RuntimeFragmentExecutionContext& parent,
         const luna::runtime::RuntimeFragmentRefHandle& reference,
@@ -1185,11 +1233,24 @@ bool VerifiedMoonImportedSlotGeneration::installTypedCallerOnce(
         status = returned;
         return true;
     };
+    request.refUnitCaller = VerifiedImportedSlotCaller{
+        std::make_shared<const VerifiedImportedSlotCallerState>(
+            VerifiedImportedSlotCallerState{typedAdapter})};
+    const auto trustedCaller = request.refUnitCaller;
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    if (replaceCallerForTest) {
+        request.refUnitCaller = VerifiedImportedSlotCaller{
+            std::make_shared<const VerifiedImportedSlotCallerState>(
+                VerifiedImportedSlotCallerState{typedAdapter})};
+    }
+#else
+    static_cast<void>(replaceCallerForTest);
+#endif
     request.refUnitCallerLease = proofLease;
     luna::runtime::MoonRuntime::StagedGeneration staged;
     if (!runtime_->stage(
             request,
-            [this, &request, &expected](const auto& candidate,
+            [this, &request, &expected, trustedCaller](const auto& candidate,
                                         std::string& verificationError) {
                 if (candidate.moduleId != request.moduleId ||
                     candidate.contentDigest != request.contentDigest ||
@@ -1198,7 +1259,8 @@ bool VerifiedMoonImportedSlotGeneration::installTypedCallerOnce(
                     candidate.refUnitCandidates.size() != 1 ||
                     !sameRefUnitCandidateFacts(
                         candidate.refUnitCandidates.front(), *expected) ||
-                    !candidate.refUnitCaller ||
+                    !sameVerifiedImportedSlotCaller(
+                        candidate.refUnitCaller, trustedCaller) ||
                     !generation_.matchesModuleLease(
                         candidate.refUnitCallerLease)) {
                     verificationError =

@@ -2043,6 +2043,10 @@ installs a typed caller on the same candidate facts and Slot proxy. Its
 callback retains the exact import proof, consumer preparation, verified owner
 pin and JIT code lease. It checks the parent context and pinned Ref handle
 against the declared Slot before calling the verified status wrapper. The
+internal staging verifier binds the callback to the exact immutable adapter
+state constructed from that proof; an independently wrapped callback with the
+same type and proof fails before activation. The cross-package regression
+checks that rejection and then installs the original caller successfully. The
 metadata-only pin remains noncallable; a candidate pin from the new generation
 continues to call after the loader-owned Runtime is destroyed. Public Ref
 admission is unchanged.

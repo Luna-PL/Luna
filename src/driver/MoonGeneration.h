@@ -239,6 +239,11 @@ public:
     // Activates a further internal generation whose typed adapter holds the
     // exact verified preparation and owner leases for the whole call.
     bool installTypedCallerOnce(std::string& error);
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    // Attempt to stage an independently wrapped caller with the same adapter
+    // and proof. The ordinary verifier must reject it before activation.
+    bool installAlternateTypedCallerForTest(std::string& error);
+#endif
     // Compiler-internal owner projection, tied to this verified consumer
     // proof. It stages no Ref candidate in the host Runtime.
     bool stageOwnerInRuntime(
@@ -289,6 +294,8 @@ public:
 
 private:
     friend class VerifiedMoonImportedSlotRefUnitProof;
+    bool installTypedCallerOnceImpl(
+        std::string& error, bool replaceCallerForTest);
     struct HostCandidatePlan {
         luna::runtime::GenerationStagingRequest request;
         luna::runtime::GenerationRefUnitCandidate facts;

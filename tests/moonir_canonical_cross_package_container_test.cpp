@@ -965,6 +965,13 @@ int runCrossPackageContainerTest() {
         error != "pinned Ref/unit candidate has no typed call adapter" ||
         candidateStatus != 777)
         return fail("metadata-only candidate became callable before installation");
+    if (verifiedSlotGeneration.installAlternateTypedCallerForTest(error) ||
+        error != "verified imported-Slot caller changed before staging" ||
+        verifiedSlotGeneration.hasTypedCaller() ||
+        verifiedSlotGeneration.generationId() != oldMetadata.generationId() ||
+        metadataPin.call(noneContext, borrowedRef, candidateStatus, error) ||
+        candidateStatus != 777)
+        return fail("alternate same-type imported-Slot caller passed staging");
     if (!verifiedSlotGeneration.installTypedCallerOnce(error)) {
         std::cerr << error << '\n';
         return fail("verified imported-Slot typed caller did not activate");
