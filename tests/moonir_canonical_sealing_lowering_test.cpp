@@ -271,7 +271,8 @@ bool exercisePrivateRefApplyJit(
     bool exerciseIngressGate = false,
     std::vector<uint8_t>* entryRecord = nullptr,
     unsigned bodyDropCalls = 0,
-    bool exerciseLoadedResult = false) {
+    bool exerciseLoadedResult = false,
+    std::optional<bool> branchSelector = std::nullopt) {
     const moon::SlotDecl* slot = nullptr;
     const moon::SlotDecl* secondSlot = nullptr;
     for (const auto& declaration : module.declarations)
@@ -292,13 +293,23 @@ bool exercisePrivateRefApplyJit(
                                  !entryRecord)) ||
         (exerciseLoadedResult && (!transferredDropCalls ||
                                   !expectedResult || twoBorrowedReferences)) ||
-        function.params.size() != (twoBorrowedReferences ? 2u : 1u) ||
+        (branchSelector && twoBorrowedReferences) ||
+        function.params.size() !=
+            ((twoBorrowedReferences || branchSelector) ? 2u : 1u) ||
         !valueType || valueType->kind != TypeKind::I32 ||
-        std::any_of(function.params.begin(), function.params.end(),
+        std::any_of(function.params.begin(),
+            branchSelector ? function.params.end() - 1 : function.params.end(),
             [](const auto& parameter) {
                 return parameter.relation !=
                     luna::ownership::Relation::SharedBorrow;
-            })) {
+            }) ||
+        (branchSelector && [&] {
+            const auto& selector = function.params.back();
+            const auto* type = module.findType(selector.type);
+            return !type || type->kind != TypeKind::Bool ||
+                selector.relation != luna::ownership::Relation::Owned ||
+                selector.usage != luna::ownership::Usage::Copy;
+        }())) {
         error = "private Ref JIT fixture lacks Slot/layout/borrowed parameter";
         return false;
     }
@@ -547,6 +558,7 @@ bool exercisePrivateRefApplyJit(
 
     using EntryOne = int32_t (*)(const void*, void*);
     using EntryTwo = void (*)(const void*, void*, void*);
+    using EntrySelector = void (*)(const void*, void*, bool);
     using EntryResultOne = uint64_t (*)(const void*, void*);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST == 0);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST == 1);
@@ -579,6 +591,8 @@ bool exercisePrivateRefApplyJit(
     const auto entryOne = reinterpret_cast<EntryOne>(
         const_cast<void*>(address));
     const auto entryTwo = reinterpret_cast<EntryTwo>(
+        const_cast<void*>(address));
+    const auto entrySelector = reinterpret_cast<EntrySelector>(
         const_cast<void*>(address));
     const auto entryResultOne = reinterpret_cast<EntryResultOne>(
         const_cast<void*>(address));
@@ -1034,7 +1048,10 @@ bool exercisePrivateRefApplyJit(
             }
             return true;
         }
-        if (twoBorrowedReferences)
+        if (branchSelector)
+            entrySelector(parent.opaque(), const_cast<void*>(handle.opaque()),
+                *branchSelector);
+        else if (twoBorrowedReferences)
             entryTwo(parent.opaque(), const_cast<void*>(handle.opaque()),
                 const_cast<void*>(secondHandle.opaque()));
         else if (entryOne(parent.opaque(),
@@ -5450,6 +5467,39 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             *mixedExitModule, *mixedExit, privateRefJitError, 0)) {
         std::cerr << privateRefJitError << '\n';
         return fail("pre-dispatch early Ref apply failed private JIT execution");
+    }
+    auto dynamicExitSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "export slot checkpoint(value: i32);\n"
+        "runtime fn mixed_dynamic(selected: RuntimeFragmentRef<checkpoint>, leave: bool) {\n"
+        "  apply selected { if leave { return; } checkpoint(1) {} }\n"
+        "}\n",
+        "<canonical-ref-dynamic-exits>");
+    if (!dynamicExitSnapshot.success())
+        return fail("frontend rejected runtime-selected Ref apply exits");
+    moon::LunaLowerer dynamicExitLowerer;
+    auto dynamicExitModule = dynamicExitLowerer.lower(
+        *dynamicExitSnapshot.program(), *dynamicExitSnapshot.symbolTable());
+    moon::Sealer dynamicExitSealer;
+    if (!dynamicExitModule || !dynamicExitLowerer.errors().empty() ||
+        !dynamicExitSealer.sealFunctionBodies(*dynamicExitModule))
+        return fail("runtime-selected Ref apply exits did not seal");
+    moon::FunctionDecl* dynamicExit = nullptr;
+    for (auto& declaration : dynamicExitModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function &&
+                function->name == "mixed_dynamic")
+            dynamicExit = function;
+    const auto runDynamicExit = [&](bool leave, unsigned dispatches) {
+        return exercisePrivateRefApplyJit(
+            *dynamicExitModule, *dynamicExit, privateRefJitError,
+            dispatches, false, std::nullopt, false, false, {}, {},
+            std::nullopt, std::nullopt, false, false, false, nullptr, 0,
+            false, leave);
+    };
+    if (!dynamicExit || !runDynamicExit(true, 0) ||
+        !runDynamicExit(false, 1)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("runtime-selected Ref apply exits failed private JIT execution");
     }
     auto multipleExitSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "export slot checkpoint(value: i32);\n"

@@ -692,6 +692,19 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                     parameter.relation == luna::ownership::Relation::Owned;
             });
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
+    const bool privateRefApplySelector = executable && privateRefApply &&
+        function.params.size() == 2 &&
+        [&program, &function] {
+            const auto& reference = function.params.front();
+            const auto& selector = function.params.back();
+            const auto* refType = program.findType(reference.type);
+            const auto* selectorType = program.findType(selector.type);
+            return refType && refType->kind == TypeKind::RuntimeFragmentRef &&
+                reference.relation == luna::ownership::Relation::SharedBorrow &&
+                selectorType && selectorType->kind == TypeKind::Bool &&
+                selector.relation == luna::ownership::Relation::Owned &&
+                selector.usage == luna::ownership::Usage::Copy;
+        }();
     // A disposable test entry may add one Copy selector to the two owned
     // Refs. The ordinary proof and publication paths do not accept it.
     const bool privateOwnedPairSelector = executable && !privateRefApply &&
@@ -710,6 +723,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
                 selector.usage == luna::ownership::Usage::Copy;
         }();
 #else
+    const bool privateRefApplySelector = false;
     const bool privateOwnedPairSelector = false;
 #endif
     const bool privateOwnedRefProbe =
@@ -742,7 +756,10 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
             failure = "private Ref apply proof requires one or two borrowed Ref parameters";
             return false;
         }
-        for (const auto& parameter : function.params) {
+        const auto borrowedCount = function.params.size() -
+            static_cast<size_t>(privateRefApplySelector);
+        for (size_t index = 0; index < borrowedCount; ++index) {
+            const auto& parameter = function.params[index];
             const auto* type = program.findType(parameter.type);
             if (!type || type->kind != TypeKind::RuntimeFragmentRef ||
                 parameter.relation != luna::ownership::Relation::SharedBorrow) {
@@ -788,7 +805,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         parameters.push_back(proof.mHelpers->ptrTy());
     parameters.insert(parameters.end(), function.params.size(),
                       proof.mHelpers->ptrTy());
-    if (privateOwnedPairSelector)
+    if (privateOwnedPairSelector || privateRefApplySelector)
         parameters.back() = proof.mHelpers->boolTy();
     const bool privateUnitStatusBody = privateRefApply &&
         returnType->kind == TypeKind::Unit && function.params.size() == 1;
