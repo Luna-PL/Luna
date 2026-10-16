@@ -1636,6 +1636,30 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
 导出行仍不添加依赖 context 的可调用入口。通用源码 import 与 Moon／Container
 发布仍需各自的导入、清理及整模块 verifier 规则；v4 Native 公开 ABI 仍待审议。
 
+### 拟定的 Moon 宿主 candidate 准入边界
+
+以下是下一版 loader API 的审查契约，尚未启用公开发布。普通构建中的
+`loadVerifiedMoonImportedSlotRefUnitOnce` 已签发不透明的 consumer 凭据。
+后续宿主准入操作应接收该凭据、调用方 Runtime，以及其中精确的 active owner pin
+或 staged owner handle，并返回只暴露无指针 candidate 事实的不透明、仅可移动准入对象。
+宿主不能为此操作提供 `GenerationStagingRequest`、回调、入口指针或 lease；
+这些内容只能由 loader 从已验证字节、导入凭据和固定的代码中推导。
+
+| 边界 | 必需证据与行为 |
+| --- | --- |
+| 签发 | 按目标解码规范 consumer 字节，验证唯一准入的 Ref／unit 配置及与 owner 凭据一致的精确导入 Slot，并物化已检查的状态 wrapper。将 consumer 摘要、准备态 lease、导入 Slot 凭据、owner 状态和 JIT 代码 lease 绑定到不透明凭据。 |
+| 宿主准入 | 重验凭据当前的内部 generation 与 typed caller、完整 owner binding 快照及宿主 Runtime 中精确的 owner-state lease。把宿主 Runtime 身份与 owner generation 绑定到准入对象。active owner 必须仍为当前版本；staged owner 必须属于该 Runtime 且尚未激活。 |
+| 暂存 | loader 内部推导唯一 candidate 事实行、同 generation 的 Slot 代理、绑定 owner 摘要的宿主物化键和精确的凭据／回调 lease。`MoonRuntime::stage` 中的 verifier 重新推导事实并比较回调的精确状态；暂存后核对存储快照。宿主对请求或 resolver 输出的修改不能改变发布事实。 |
+| 发布 | 可调用 candidate 需要宿主 safe point 和显式激活。staged owner 与 candidate 使用 `activateTogether`；active owner 则作为精确 generation 依赖。暂存前重验 owner 是否仍为当前版本，激活时由 Runtime 校验最终依赖集合。Ref candidate 不使用 `loadOnce`。 |
+| 失败与生命周期 | 准备或暂存失败时输出为空且不发布。激活失败时暂存 handle 仍在，但 safe point 已消耗；宿主可放弃，或在复核当前 owner 后用新的 safe point 重试。成功后的 candidate pin 在 loader 与 Runtime 销毁后仍保留 consumer 凭据、代码 lease 和 owner pin。发布后的回滚是另一次受 module 依赖约束的宿主 safe-point 转换。 |
+
+只有源码 import、清理、整模块 verifier 规则和受限 v4 宿主 ABI 审查均通过后，
+才暴露暂存操作。首个公开配置仍限于一个同步共享借用 Ref 参数和 unit 结果。
+验收须在普通构建 API 上覆盖畸形或过期的 consumer 证据、同字节的外来 owner、
+准入与激活之间的 owner 替换、同类型的外来回调、配对激活失败且无部分发布，
+以及 Windows、Linux、macOS 上销毁 loader 与 Runtime 后的固定调用。已有私有探针
+覆盖其中一部分，但不能代替公开 loader 契约。
+
 ### 下一步源码 Ref／apply 完成门（更新于 2026-10-16）
 
 以下是剩余源码功能的建议实施顺序，不是公开 ABI 决议或稳定版发布批准：
@@ -1770,8 +1794,8 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    普通构建的私有计划现从该凭据构造绑定宿主的请求与类型化 caller。Runtime 现于私有
    stager 返回前核验完整的 staged candidate 结构。普通构建的私有请求 verifier 也于
    staging 时复核凭据、精确 owner 与计划创建的不可变回调状态。私有的宿主 staging
-   消费者现也在普通构建中编译，入口仍仅供测试。下一步定义公开产物与回调准入 API，
-   之后才考虑公开 candidate 发布。
+   消费者现也在普通构建中编译，入口仍仅供测试。上文拟定的宿主准入边界记录了产物、
+   回调及生命周期契约；相关源码与 ABI 完成门通过后，再实现不透明的准入 API。
    Runtime candidate 要求同一
    generation 的 Slot binding；
    默认发布验证仍关闭。

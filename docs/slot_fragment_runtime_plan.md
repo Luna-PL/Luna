@@ -2226,6 +2226,36 @@ do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and
 whole-module verifier rules; the v4 Native public ABI remains under review.
 
+### Proposed Moon host candidate admission boundary
+
+This is a review contract for the next loader API, not an enabled publication
+path. The ordinary-build `loadVerifiedMoonImportedSlotRefUnitOnce` already
+issues the opaque consumer token. A future host admission operation should
+accept that token, a caller-supplied Runtime, and either its exact active owner
+pin or its staged owner handle. It should return an opaque, move-only admission
+object with pointer-free candidate facts for host policy. Hosts must not supply
+`GenerationStagingRequest`, a callback, an entry pointer, or a lease for this
+operation. Only the loader may derive those from the token's verified bytes,
+import proof and pinned code.
+
+| Boundary | Required evidence and behavior |
+| --- | --- |
+| Issuance | Decode canonical consumer bytes for the expected target; verify the one admitted Ref/unit profile and exact imported Slot against the issued owner proof; materialize the checked status wrapper. Bind the consumer digest, preparation lease, imported-Slot proof, owner state and JIT code lease into the opaque token. |
+| Host admission | Recheck the token's current internal generation and typed caller, the complete owner binding snapshot and exact owner-state lease in the supplied Runtime. Bind the host Runtime identity and owner generation to the admission object. An active owner must still be current; a staged owner must belong to that Runtime and be inactive. |
+| Staging | Derive one candidate fact row, one same-generation Slot proxy, a host materialization key bound to the owner digest, and exact proof/caller leases inside the loader. The verifier must rederive these facts and compare the precise callback state during `MoonRuntime::stage`; post-stage attestation must compare the stored snapshot. No host mutation of a request or resolver output may change publication facts. |
+| Publication | A callable candidate requires a host safe point and explicit activation. A staged owner and candidate use `activateTogether`; an active owner is an exact required-generation dependency. Recheck owner freshness immediately before staging, and let Runtime validate the final dependency set at activation. Do not use `loadOnce` for a Ref candidate. |
+| Failure and lifetime | Preparation or staging failure leaves the output empty and publishes nothing. Failed activation leaves staged handles intact but consumes its safe point; the host may abandon them or retry with a new safe point after checking current owner state. A successful candidate pin retains the consumer proof, code lease and owner pin across loader and Runtime teardown. Rollback after publication is a separate host safe-point transition subject to module dependencies. |
+
+Expose the staging operation only after the source import, cleanup and
+whole-module verifier rules and the narrow v4 host ABI review pass. The first
+public profile remains one synchronous shared-borrow Ref parameter and unit
+result. Acceptance needs ordinary-build API tests for malformed or stale
+consumer evidence, a same-byte foreign owner, owner replacement between
+admission and activation, a same-type foreign callback, failed paired
+activation without partial publication, and a pinned call after teardown on
+Windows, Linux and macOS. Existing private probes cover parts of this matrix;
+they do not establish the public loader contract.
+
 ### Next source Ref/apply gates (updated 2026-10-16)
 
 This is the proposed implementation order for the remaining source feature,
@@ -2424,8 +2454,9 @@ not a public ABI decision or stable-release approval:
    rechecks the proof and exact owner during staging, including the exact
    immutable callback state created by its plan. The private host-bound stage
    consumer now also compiles in ordinary builds while its only entry remains
-   test-only. Next define the public artifact and callback admission API before
-   any public candidate publication.
+   test-only. The proposed host admission boundary above records the required
+   artifact, callback and lifetime contract; implement its opaque API only
+   after the stated source and ABI gates pass.
    The Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref
