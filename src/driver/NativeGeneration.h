@@ -15,6 +15,17 @@ bool stageVerifiedNativeGeneration(
     luna::runtime::MoonRuntime::StagedGeneration& staged,
     std::string& error);
 
+#ifdef LUNA_NATIVE_ADMISSION_TEST
+// Read-only probe of the production verifier against a verified artifact.
+bool verifyNativeRequestMutationForTest(
+    const std::string& artifactPath, const std::string& trustStorePath,
+    const std::function<void(luna::runtime::GenerationStagingRequest&)>& mutate,
+    std::string& error);
+bool verifyAlternateNativeCallerForTest(
+    const std::string& artifactPath, const std::string& trustStorePath,
+    std::string& error);
+#endif
+
 // Complete verified artifact -> pinned module loop for the non-evolving case.
 // Re-loading identical content returns the existing generation; another image
 // with the same Package ID is rejected until the evolution API is requested.

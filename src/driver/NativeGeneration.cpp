@@ -44,18 +44,53 @@ static_assert(
         static_cast<uint32_t>(LUNA_RUNTIME_DESCRIPTOR_CALLABLE_V1),
     "Native and Runtime descriptor callable flags must agree");
 
-bool stageVerifiedNativeGeneration(
-    luna::runtime::MoonRuntime& runtime,
-    const std::string& artifactPath, const std::string& trustStorePath,
-    const luna::runtime::GenerationInitializer& initializer,
-    luna::runtime::MoonRuntime::StagedGeneration& staged,
-    std::string& error) {
-    auto library = std::make_shared<VerifiedNativeLibrary>();
-    if (!loadVerifiedNativeLibrary(
-            artifactPath, trustStorePath, *library, error))
-        return false;
+namespace {
 
-    luna::runtime::GenerationStagingRequest request;
+using NativeLibraryPin = std::shared_ptr<const VerifiedNativeLibrary>;
+
+bool sameLibraryLease(
+    const std::shared_ptr<const void>& actual,
+    const NativeLibraryPin& expected) {
+    return actual && actual.get() == expected.get() &&
+        !actual.owner_before(expected) && !expected.owner_before(actual);
+}
+
+bool sameRefUnitFacts(
+    const luna::runtime::GenerationRefUnitCandidate& actual,
+    const luna::runtime::GenerationRefUnitCandidate& expected) {
+    return actual.symbolId == expected.symbolId &&
+        actual.contractId == expected.contractId &&
+        actual.linkageName == expected.linkageName &&
+        actual.moduleName == expected.moduleName &&
+        actual.packageId == expected.packageId &&
+        actual.functionTypeId == expected.functionTypeId &&
+        actual.refTypeId == expected.refTypeId &&
+        actual.slotSymbolId == expected.slotSymbolId &&
+        actual.slotContractId == expected.slotContractId &&
+        actual.slotTypeId == expected.slotTypeId &&
+        actual.entryAbi == expected.entryAbi &&
+        actual.refMode == expected.refMode &&
+        actual.resultMode == expected.resultMode &&
+        actual.statusDomain == expected.statusDomain;
+}
+
+struct VerifiedNativeRefUnitCaller {
+    NativeLibraryPin library;
+
+    bool operator()(
+        const std::string& symbolId, const std::string& contractId,
+        const luna::runtime::RuntimeFragmentExecutionContext& parent,
+        const luna::runtime::RuntimeFragmentRefHandle& reference,
+        int32_t& status, std::string& error) const {
+        return callVerifiedNativeRefUnit(
+            library, symbolId, contractId, parent, reference, status, error);
+    }
+};
+
+bool prepareNativeRequest(
+    const NativeLibraryPin& library,
+    luna::runtime::GenerationStagingRequest& request,
+    std::string& error) {
     request.moduleId = library->proof().packageId;
     request.contentDigest = nativeDigestHex(library->proof().artifactDigest);
     request.moduleLease = library;
@@ -70,29 +105,81 @@ bool stageVerifiedNativeGeneration(
         request.refUnitCandidates.push_back(std::move(candidate));
     }
     if (!request.refUnitCandidates.empty()) {
-        request.refUnitCaller = [library](
-            const std::string& symbolId, const std::string& contractId,
-            const luna::runtime::RuntimeFragmentExecutionContext& parent,
-            const luna::runtime::RuntimeFragmentRefHandle& reference,
-            int32_t& status, std::string& callError) {
-            return callVerifiedNativeRefUnit(
-                library, symbolId, contractId,
-                parent, reference, status, callError);
-        };
+        request.refUnitCaller = VerifiedNativeRefUnitCaller{library};
         request.refUnitCallerLease = library;
     }
+    return true;
+}
+
+bool verifyNativeRequest(
+    const luna::runtime::GenerationStagingRequest& candidate,
+    const NativeLibraryPin& library, std::string& error) {
+    if (!library || !*library) {
+        error = "verified Native generation request lost its artifact proof";
+        return false;
+    }
+    const bool hasCandidates = library->refUnitCandidateCount() != 0;
+    const auto* caller =
+        candidate.refUnitCaller.target<VerifiedNativeRefUnitCaller>();
+    if (candidate.moduleId != library->proof().packageId ||
+        candidate.contentDigest != nativeDigestHex(
+            library->proof().artifactDigest) ||
+        !sameLibraryLease(candidate.moduleLease, library) ||
+        !candidate.materializationKey.empty() ||
+        !candidate.requiredAbsentModuleIds.empty() ||
+        !candidate.requiredActiveModules.empty() ||
+        candidate.refUnitCandidates.size() !=
+            library->refUnitCandidateCount() ||
+        (hasCandidates &&
+         (!caller || !sameLibraryLease(caller->library, library) ||
+          !sameLibraryLease(candidate.refUnitCallerLease, library))) ||
+        (!hasCandidates &&
+         (candidate.refUnitCaller || candidate.refUnitCallerLease))) {
+        error = "verified Native generation request lost its artifact proof";
+        return false;
+    }
+    for (size_t index = 0; index < candidate.refUnitCandidates.size(); ++index) {
+        luna::runtime::GenerationRefUnitCandidate expected;
+        if (!library->refUnitCandidateAt(index, expected) ||
+            !sameRefUnitFacts(candidate.refUnitCandidates[index], expected)) {
+            error = "verified Native generation request lost its artifact proof";
+            return false;
+        }
+    }
+    return true;
+}
+
+bool loadNativeRequest(
+    const std::string& artifactPath, const std::string& trustStorePath,
+    NativeLibraryPin& library,
+    luna::runtime::GenerationStagingRequest& request,
+    std::string& error) {
+    auto loaded = std::make_shared<VerifiedNativeLibrary>();
+    if (!loadVerifiedNativeLibrary(
+            artifactPath, trustStorePath, *loaded, error))
+        return false;
+    library = std::move(loaded);
+    return prepareNativeRequest(library, request, error);
+}
+
+} // namespace
+
+bool stageVerifiedNativeGeneration(
+    luna::runtime::MoonRuntime& runtime,
+    const std::string& artifactPath, const std::string& trustStorePath,
+    const luna::runtime::GenerationInitializer& initializer,
+    luna::runtime::MoonRuntime::StagedGeneration& staged,
+    std::string& error) {
+    NativeLibraryPin library;
+    luna::runtime::GenerationStagingRequest request;
+    if (!loadNativeRequest(
+            artifactPath, trustStorePath, library, request, error))
+        return false;
     return runtime.stage(
         request,
         [library](const auto& candidate, std::string& verificationError) {
-            if (!*library ||
-                candidate.moduleId != library->proof().packageId ||
-                candidate.contentDigest != nativeDigestHex(
-                    library->proof().artifactDigest)) {
-                verificationError =
-                    "verified Native generation identity changed before staging";
-                return false;
-            }
-            return true;
+            return verifyNativeRequest(
+                candidate, library, verificationError);
         },
         [library](const auto&, auto& bindings, std::string& resolutionError) {
             bindings.reserve(static_cast<size_t>(library->exportCount()));
@@ -118,6 +205,49 @@ bool stageVerifiedNativeGeneration(
         },
         initializer, staged, error);
 }
+
+#ifdef LUNA_NATIVE_ADMISSION_TEST
+bool verifyNativeRequestMutationForTest(
+    const std::string& artifactPath, const std::string& trustStorePath,
+    const std::function<void(luna::runtime::GenerationStagingRequest&)>&
+        mutate,
+    std::string& error) {
+    error.clear();
+    if (!mutate) {
+        error = "Native request probe requires a mutation";
+        return false;
+    }
+    NativeLibraryPin library;
+    luna::runtime::GenerationStagingRequest request;
+    if (!loadNativeRequest(
+            artifactPath, trustStorePath, library, request, error))
+        return false;
+    mutate(request);
+    return verifyNativeRequest(request, library, error);
+}
+
+bool verifyAlternateNativeCallerForTest(
+    const std::string& artifactPath, const std::string& trustStorePath,
+    std::string& error) {
+    error.clear();
+    NativeLibraryPin library;
+    NativeLibraryPin alternateLibrary;
+    luna::runtime::GenerationStagingRequest request;
+    luna::runtime::GenerationStagingRequest alternate;
+    if (!loadNativeRequest(
+            artifactPath, trustStorePath, library, request, error) ||
+        !loadNativeRequest(
+            artifactPath, trustStorePath, alternateLibrary,
+            alternate, error))
+        return false;
+    if (!request.refUnitCaller || !alternate.refUnitCaller) {
+        error = "Native alternate caller probe requires a Ref/unit candidate";
+        return false;
+    }
+    request.refUnitCaller = alternate.refUnitCaller;
+    return verifyNativeRequest(request, library, error);
+}
+#endif
 
 bool loadVerifiedNativeGenerationOnce(
     luna::runtime::MoonRuntime& runtime,

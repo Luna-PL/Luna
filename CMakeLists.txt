@@ -297,6 +297,8 @@ add_executable(native-artifact-test
     src/driver/NativeGeneration.cpp
     src/runtime/MoonRuntime.cpp
     src/runtime/RuntimeFragment.cpp)
+target_compile_definitions(native-artifact-test PRIVATE
+    LUNA_NATIVE_ADMISSION_TEST=1)
 target_include_directories(native-artifact-test
     PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
 target_include_directories(native-artifact-test SYSTEM PRIVATE

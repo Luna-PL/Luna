@@ -376,6 +376,44 @@ int callProducedRefUnit(int argc, char** argv) {
     luna::runtime::GenerationRefUnitCandidate facts;
     if (!library.refUnitCandidateAt(0, facts))
         return fail("produced Native Ref/unit candidate could not be read");
+    if (!luna::driver::verifyNativeRequestMutationForTest(
+            argv[2], argv[3], [](auto&) {}, error))
+        return fail("verified Native request rejected its artifact proof");
+    const std::string lostProof =
+        "verified Native generation request lost its artifact proof";
+    if (luna::driver::verifyNativeRequestMutationForTest(
+            argv[2], argv[3],
+            [](auto& request) {
+                request.refUnitCandidates.front().slotTypeId =
+                    "type:forged-slot";
+            }, error) || error != lostProof)
+        return fail("forged Native Ref/unit facts passed request verification");
+    if (luna::driver::verifyNativeRequestMutationForTest(
+            argv[2], argv[3],
+            [](auto& request) {
+                request.moduleLease = std::shared_ptr<const void>(
+                    request.moduleLease.get(), [](const void*) {});
+            }, error) || error != lostProof)
+        return fail("Native module lease with foreign ownership passed request verification");
+    if (luna::driver::verifyNativeRequestMutationForTest(
+            argv[2], argv[3],
+            [](auto& request) {
+                request.refUnitCaller = [](
+                    const std::string&, const std::string&,
+                    const luna::runtime::RuntimeFragmentExecutionContext&,
+                    const luna::runtime::RuntimeFragmentRefHandle&,
+                    int32_t&, std::string&) { return true; };
+            }, error) || error != lostProof)
+        return fail("forged Native Ref/unit caller passed request verification");
+    if (luna::driver::verifyAlternateNativeCallerForTest(
+            argv[2], argv[3], error) || error != lostProof)
+        return fail("alternate same-type Native caller passed request verification");
+    if (luna::driver::verifyNativeRequestMutationForTest(
+            argv[2], argv[3],
+            [](auto& request) {
+                request.requiredAbsentModuleIds.push_back("package:forged");
+            }, error) || error != lostProof)
+        return fail("hidden Native module relation passed request verification");
     const auto* slot = library.findExport(
         facts.slotSymbolId, facts.slotContractId);
     if (!slot || slot->declaration_kind != LUNA_NATIVE_DECLARATION_SLOT_V1 ||

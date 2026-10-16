@@ -2188,6 +2188,15 @@ The sealed Native Ref/unit preview loader now supplies its verified library as
 that exact caller lease and explicitly activates the typed candidate. Its
 private call and test-only output paths still run before the default source
 publication gate, which remains closed.
+For this Native path, the trust record authenticates the staged image; the
+loader alone builds the in-process request from that verified library. Its
+staging verifier now derives identity and every Ref/unit fact row again from
+the same library, requires the exact library lease and typed callback owner,
+and rejects added module relations. Runtime continues to enforce candidate
+shape and activation. A read-only mutation probe covers facts, lease, callback
+and module relations, including a same-type callback from a separately loaded
+copy of the artifact. This is a loader boundary, not a transferable signature
+or authorization for Moon source candidates.
 The owner and consumer preparation proofs and inert consumer generation now
 have ordinary build paths, but ordinary public loading does not yet use them
 for imported Ref candidates. Production candidate admission must require the
@@ -2202,7 +2211,7 @@ do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and
 whole-module verifier rules; the v4 Native public ABI remains under review.
 
-### Next source Ref/apply gates (updated 2026-10-15)
+### Next source Ref/apply gates (updated 2026-10-16)
 
 This is the proposed implementation order for the remaining source feature,
 not a public ABI decision or stable-release approval:

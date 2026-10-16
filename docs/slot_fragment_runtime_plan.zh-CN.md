@@ -1610,6 +1610,11 @@ candidate，就不得复用 load-once 缓存，避免旧 candidate 或 adapter �
 或 callback。
 已签封的 Native Ref／unit 预览 loader 现用其 verified library 作为精确 caller lease，
 并显式激活类型化 candidate。私有调用与仅测试用输出路径仍先于默认源码发布门禁；该门禁保持关闭。
+在这条 Native 路径中，信任记录认证待加载镜像；只有 loader 从同一 verified library 构造
+进程内请求。staging verifier 现重新从该库推导身份及每条 Ref／unit 事实，要求精确的库
+lease 与类型化回调所有者，并拒绝附加的 module 关系。Runtime 继续检查 candidate 结构与
+激活规则；只读篡改探针覆盖事实、lease、回调及 module 关系，包括另一份同字节镜像的
+同类型回调。这是 loader 边界，不是可转让签名，也不授权 Moon 源码 candidate。
 owner、consumer 准备凭据及不可调用的 consumer generation 现有普通构建路径，
 但普通公开加载流程还未用它们接纳
 导入的 Ref candidate。生产 candidate 发布前须要求 consumer 与导入 Slot 凭据，绑定精确
@@ -1622,7 +1627,7 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
 导出行仍不添加依赖 context 的可调用入口。通用源码 import 与 Moon／Container
 发布仍需各自的导入、清理及整模块 verifier 规则；v4 Native 公开 ABI 仍待审议。
 
-### 下一步源码 Ref／apply 完成门（更新于 2026-10-15）
+### 下一步源码 Ref／apply 完成门（更新于 2026-10-16）
 
 以下是剩余源码功能的建议实施顺序，不是公开 ABI 决议或稳定版发布批准：
 
