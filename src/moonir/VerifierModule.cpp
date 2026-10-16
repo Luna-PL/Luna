@@ -11,6 +11,7 @@
 #include <functional>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 namespace moon {
 
@@ -55,6 +56,22 @@ bool matchesDropTarget(
             return false;
     }
     return true;
+}
+
+bool containsRuntimeFragmentRef(const Module& module, const TypeRef& root) {
+    std::unordered_set<std::string> visited;
+    std::vector<TypeRef> pending{root};
+    while (!pending.empty()) {
+        const auto current = pending.back();
+        pending.pop_back();
+        if (!visited.insert(current.value).second) continue;
+        const auto* type = module.findType(current);
+        if (!type) continue; // Missing type edges are reported separately.
+        if (type->kind == TypeKind::RuntimeFragmentRef) return true;
+        pending.insert(pending.end(), type->referencedTypeIds.begin(),
+                       type->referencedTypeIds.end());
+    }
+    return false;
 }
 } // namespace
 
@@ -710,6 +727,10 @@ bool Verifier::verify(const Module& module) {
                 error(import.location, "host import references a missing function contract");
             else if (declaration->type != import.type)
                 error(import.location, "host import type differs from its declaration contract");
+            if (mPolicy == VerificationPolicy::NativeRefUnitPreparation &&
+                containsRuntimeFragmentRef(module, import.type))
+                error(import.location,
+                      "Native Ref/unit preparation host import carries a Ref type");
             auto [found, inserted] = hostLinkContracts.emplace(
                 import.linkSymbol, import.declaration.contract.value);
             if (!inserted && found->second != import.declaration.contract.value)

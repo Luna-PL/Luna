@@ -283,6 +283,16 @@ int runCrossPackageContainerTest() {
     refHostImport.declaration = refModule->exports.front().declaration;
     refHostImport.type = refModule->exports.front().type;
     refModule->imports.push_back(refHostImport);
+    moon::Verifier refImportVerifier(
+        moon::VerificationPolicy::NativeRefUnitPreparation);
+    if (refImportVerifier.verify(*refModule) ||
+        std::none_of(refImportVerifier.errors().begin(),
+                     refImportVerifier.errors().end(),
+                     [](const auto& diagnostic) {
+            return diagnostic.message ==
+                "Native Ref/unit preparation host import carries a Ref type";
+        }))
+        return fail("MoonIR preparation verifier admitted a Ref-bearing host import");
     if (moon::ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
             refManifest, *refModule, error) ||
         error != "Native Ref/unit preparation has a Ref-bearing host import")

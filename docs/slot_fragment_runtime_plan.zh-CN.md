@@ -1646,6 +1646,9 @@ Apply 源函数。回归测试使用这一匹配声明，并确认两个准备�
 独立的 Native v4 源码／codegen 准备门现也沿冻结类型图检查 Host import。回归测试让
 Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成前拒绝它。源码侧门槛由此
 与私有容器门槛一致，公开 candidate 发布仍保持关闭。
+`NativeRefUnitPreparation` MoonIR verifier 策略现也在更早的模块边界拒绝同一导入，
+早于 CFG 签封和容器编码。回归测试直接检查该策略，使仅调用模块 verifier 的路径
+也受相同的 Ref 导入限制。
 
 冻结的 `DeclarationRecord`／
 规范契约和 Native v1

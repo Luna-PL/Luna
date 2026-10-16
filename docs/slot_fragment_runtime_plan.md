@@ -2244,6 +2244,10 @@ frozen type-graph check to Host imports. A regression points a Host import at
 the admitted Apply signature and confirms that preparation rejects it before
 code generation. This keeps the source-side gate aligned with the private
 container gate while public candidate publication remains closed.
+The `NativeRefUnitPreparation` MoonIR verifier policy now rejects that same
+import at its earlier module boundary, before sealing or container encoding.
+The regression checks the policy directly, so callers using only the module
+verifier receive the same Ref import restriction.
 
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
