@@ -500,6 +500,16 @@ bool ContainerModelCodec::verifyNativeRefUnitPreparationRoundTripImpl(
             return false;
         }
     }
+    for (const auto& exported : module.exports) {
+        if (exported.kind == DeclarationKind::Function &&
+            exported.declaration.symbol == applySource->symbolId &&
+            exported.declaration.contract == applySource->contractId)
+            continue;
+        if (containsRef(exported.type)) {
+            error = "Native Ref/unit preparation has another Ref export";
+            return false;
+        }
+    }
     std::vector<uint8_t> first;
     if (!encodeContainerWithPolicy(manifest, module, first, error, limits,
             RefWireFormatMinor,

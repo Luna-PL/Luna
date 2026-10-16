@@ -239,6 +239,38 @@ int runCrossPackageContainerTest() {
         !rejectedCompositeRefBytes.empty() ||
         error.find("another Ref callable") == std::string::npos)
         return fail("cross-package preparation admitted a composite Ref callable");
+    std::string exportedRefSource = refSourceText;
+    exportedRefSource +=
+        "\nstruct RefBox { selected: "
+        "RuntimeFragmentRef<host::effects::audit_slot>; }\n"
+        "export struct RefEnvelope { box: RefBox; }\n";
+    auto exportedRefSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzePathWithOverlay(
+            (fixtures / "refprep").string(), refSourcePath.string(),
+            exportedRefSource);
+    if (!exportedRefSnapshot.success())
+        return fail("cross-package exported Ref composite did not analyze");
+    moon::LunaLowerer exportedRefLowerer;
+    auto exportedRefModule = exportedRefLowerer.lower(
+        *exportedRefSnapshot.program(), *exportedRefSnapshot.symbolTable());
+    moon::Sealer exportedRefSealer;
+    if (!exportedRefModule || !exportedRefLowerer.errors().empty() ||
+        !exportedRefSealer.sealFunctionBodies(*exportedRefModule))
+        return fail("cross-package exported Ref composite did not lower and seal");
+    exportedRefModule->dependencySlotPublications = dependencies;
+    if (moon::ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
+            makeManifest(*exportedRefModule), *exportedRefModule, error) ||
+        error != "Native Ref/unit preparation has another Ref export")
+        return fail("ordinary preparation verifier admitted an exported Ref composite");
+    std::vector<uint8_t> rejectedExportedRefBytes{1, 2, 3};
+    if (moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
+            makeManifest(*exportedRefModule), *exportedRefModule,
+            rejectedExportedRefBytes, error) ||
+        !rejectedExportedRefBytes.empty() ||
+        error.find("another Ref export") == std::string::npos) {
+        std::cerr << error << '\n';
+        return fail("cross-package preparation admitted an exported Ref composite");
+    }
     std::vector<uint8_t> refBytes;
     if (!moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
             refManifest, *refModule, refBytes, error) || refBytes.empty()) {

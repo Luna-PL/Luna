@@ -2229,6 +2229,10 @@ inside a composite type. A cross-package regression rejects a second callable
 whose parameter reaches the Ref through two struct layers. This closes that
 whole-module shape bypass for the private profile; it does not enable general
 Ref imports or public publication.
+The same private profile now checks every export's frozen type graph. Only the
+admitted Apply source may export a Ref-bearing signature; a separate exported
+struct whose type reaches Ref through two struct layers fails the ordinary
+preparation verifier and the test encoder before either produces bytes.
 
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
