@@ -152,6 +152,44 @@ int main() {
             return fail("empty generation exposed a configuration key");
     }
 
+    // Staging publishes the values that passed validation even if later
+    // callbacks still hold aliases to the caller's request or resolver output.
+    {
+        Runtime runtime;
+        const auto lease = std::make_shared<int>(1);
+        Request request{ModuleId, std::string(64, 'a'), lease};
+        const Binding original{
+            SymbolId, ContractId, &first,
+            LUNA_RUNTIME_DECLARATION_FUNCTION_V1,
+            luna::runtime::GenerationBindingCallable};
+        std::vector<Binding>* resolved = nullptr;
+        Runtime::StagedGeneration staged;
+        if (!runtime.stage(
+                request,
+                [&](const Request& verified, std::string&) {
+                    return verified.moduleId == ModuleId;
+                },
+                [&](const Request&, std::vector<Binding>& bindings,
+                    std::string&) {
+                    bindings.push_back(original);
+                    resolved = &bindings;
+                    return true;
+                },
+                [&](const Request& verified,
+                    const std::vector<Binding>& approved, std::string&) {
+                    request.moduleId = "org.luna.test.forged";
+                    request.contentDigest = std::string(64, 'f');
+                    request.moduleLease = std::make_shared<int>(2);
+                    resolved->front().implementation = &second;
+                    return verified.moduleId == ModuleId &&
+                        approved.front().implementation == &first;
+                }, staged, error) ||
+            staged.moduleId() != ModuleId ||
+            !runtime.matchesStagedOwnerSnapshot(
+                staged, lease, {original}))
+            return fail("staging published a post-verification request or binding mutation");
+    }
+
     // A staged generation's module exclusion is checked at publication, in
     // both directions, and again when rolling back to a retained generation.
     {

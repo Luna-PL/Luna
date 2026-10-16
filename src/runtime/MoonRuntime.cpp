@@ -310,7 +310,7 @@ MoonRuntime::PinnedBinding MoonRuntime::makePinnedBinding(
 }
 
 bool MoonRuntime::stage(
-    const GenerationStagingRequest& request,
+    const GenerationStagingRequest& suppliedRequest,
     const GenerationVerifier& verifier,
     const GenerationResolver& resolver,
     const GenerationInitializer& initializer,
@@ -320,6 +320,9 @@ bool MoonRuntime::stage(
         error = "staging output already owns a generation";
         return false;
     }
+    // Loader callbacks may retain aliases to the supplied request. Validate
+    // and publish only this entry snapshot if a callback changes the original.
+    const GenerationStagingRequest request = suppliedRequest;
     if (!validIdentity(request.moduleId) ||
         !validDigest(request.contentDigest) || !request.moduleLease ||
         (!request.materializationKey.empty() &&
@@ -490,8 +493,11 @@ bool MoonRuntime::stage(
             return false;
         }
     }
+    // A resolver may retain an alias to its output vector. The initializer
+    // sees and publication uses a separate copy of the validated rows.
+    const std::vector<GenerationBinding> verifiedBindings = bindings;
     try {
-        if (initializer && !initializer(request, bindings, error)) {
+        if (initializer && !initializer(request, verifiedBindings, error)) {
             if (error.empty()) error = "generation initializer failed";
             return false;
         }
@@ -517,7 +523,7 @@ bool MoonRuntime::stage(
     generation->contentDigest = request.contentDigest;
     generation->materializationKey = request.materializationKey;
     generation->moduleLease = request.moduleLease;
-    generation->bindings = std::move(bindings);
+    generation->bindings = verifiedBindings;
     generation->refUnitCandidates = std::move(refUnitCandidates);
     generation->refUnitCaller = request.refUnitCaller;
     generation->refUnitCallerLease = request.refUnitCallerLease;

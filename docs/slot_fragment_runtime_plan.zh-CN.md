@@ -1611,6 +1611,10 @@ MoonRuntime 的通用 staging API 仍接收宿主提供的身份事实。类型�
 candidate，就不得复用 load-once 缓存，避免旧 candidate 或 adapter 悄然替换新 staging
 请求。这些 Runtime 检查规定生命周期与激活规则；宿主提供的 lease 凭据本身不能认证产物
 或 callback。
+staging 现于调用 verifier、resolver、initializer 前复制请求，并在 initializer 前复制已
+验证的 binding，发布时使用这些副本。回调即使保留调用方请求或 resolver 输出的引用，也
+不能在校验后改写将发布的事实。这并不认证不透明回调的行为；该信任边界仍由 loader 凭据
+提供。
 已签封的 Native Ref／unit 预览 loader 现用其 verified library 作为精确 caller lease，
 并显式激活类型化 candidate。私有调用与仅测试用输出路径仍先于默认源码发布门禁；该门禁保持关闭。
 在这条 Native 路径中，信任记录认证待加载镜像；只有 loader 从同一 verified library 构造
