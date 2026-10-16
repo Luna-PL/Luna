@@ -1639,6 +1639,10 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
 同一私有配置现检查每个导出项的冻结类型图。只有准入的 Apply 源函数可导出含 Ref 的签名；
 另一导出结构体即使经两层结构体才到达 Ref，也会在普通准备态 verifier 与测试编码器
 产出字节前被拒绝。
+私有 verifier 还会拒绝冻结类型图可达 Ref 的 Host import，即使其声明指向已准入的
+Apply 源函数。回归测试使用这一匹配声明，并确认两个准备态入口都在编码前拒绝该导入。
+下一步准入工作须让含 Ref 的宿主契约留在这个受限 Ref／unit 配置之外，并把未来公开 candidate
+绑定到经验证的 owner 与 consumer 凭据。
 
 冻结的 `DeclarationRecord`／
 规范契约和 Native v1

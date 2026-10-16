@@ -500,6 +500,12 @@ bool ContainerModelCodec::verifyNativeRefUnitPreparationRoundTripImpl(
             return false;
         }
     }
+    for (const auto& imported : module.imports) {
+        if (imported.kind == ImportKind::Host && containsRef(imported.type)) {
+            error = "Native Ref/unit preparation has a Ref-bearing host import";
+            return false;
+        }
+    }
     for (const auto& exported : module.exports) {
         if (exported.kind == DeclarationKind::Function &&
             exported.declaration.symbol == applySource->symbolId &&

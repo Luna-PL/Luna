@@ -271,6 +271,31 @@ int runCrossPackageContainerTest() {
         std::cerr << error << '\n';
         return fail("cross-package preparation admitted an exported Ref composite");
     }
+    if (refModule->exports.size() != 1)
+        return fail("cross-package Ref/apply fixture has unexpected exports");
+    moon::ImportRecord refHostImport;
+    refHostImport.kind = moon::ImportKind::Host;
+    refHostImport.ownerPackageId = refModule->name;
+    refHostImport.localName = "host::apply_ref";
+    refHostImport.capabilityId = "org.luna.host.apply_ref";
+    refHostImport.linkSymbol = "host_apply_ref";
+    refHostImport.abi = "C";
+    refHostImport.declaration = refModule->exports.front().declaration;
+    refHostImport.type = refModule->exports.front().type;
+    refModule->imports.push_back(refHostImport);
+    if (moon::ContainerModelCodec::verifyNativeRefUnitPreparationRoundTrip(
+            refManifest, *refModule, error) ||
+        error != "Native Ref/unit preparation has a Ref-bearing host import")
+        return fail("ordinary preparation verifier admitted a Ref-bearing host import");
+    std::vector<uint8_t> rejectedRefHostImportBytes{1, 2, 3};
+    if (moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
+            refManifest, *refModule, rejectedRefHostImportBytes, error) ||
+        !rejectedRefHostImportBytes.empty() ||
+        error != "Native Ref/unit preparation has a Ref-bearing host import") {
+        std::cerr << error << '\n';
+        return fail("cross-package preparation admitted a Ref-bearing host import");
+    }
+    refModule->imports.pop_back();
     std::vector<uint8_t> refBytes;
     if (!moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
             refManifest, *refModule, refBytes, error) || refBytes.empty()) {

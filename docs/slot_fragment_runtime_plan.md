@@ -2233,6 +2233,12 @@ The same private profile now checks every export's frozen type graph. Only the
 admitted Apply source may export a Ref-bearing signature; a separate exported
 struct whose type reaches Ref through two struct layers fails the ordinary
 preparation verifier and the test encoder before either produces bytes.
+The private verifier also rejects a Host import whose frozen type graph reaches
+Ref, even if its declaration points at the admitted Apply source. A regression
+uses that matching declaration and confirms both preparation entry points reject
+the import before encoding. The next admission work must keep Ref-bearing host
+contracts outside this narrow Ref/unit profile and bind the eventual public
+candidate to verified owner and consumer evidence.
 
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
