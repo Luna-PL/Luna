@@ -2229,6 +2229,10 @@ inside a composite type. A cross-package regression rejects a second callable
 whose parameter reaches the Ref through two struct layers. This closes that
 whole-module shape bypass for the private profile; it does not enable general
 Ref imports or public publication.
+The `NativeRefUnitPreparation` MoonIR verifier now applies the executable
+callable restriction at its earlier module boundary. It rejects a second
+callable with either a direct Ref parameter or a parameter that reaches Ref
+through two struct layers, while the admitted source still verifies.
 The same private profile now checks every export's frozen type graph. Only the
 admitted Apply source may export a Ref-bearing signature; a separate exported
 struct whose type reaches Ref through two struct layers fails the ordinary

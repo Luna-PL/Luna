@@ -141,6 +141,13 @@ int runCrossPackageContainerTest() {
             std::cerr << diagnostic::render(issue) << '\n';
         return fail("cross-package Ref/apply source did not lower");
     }
+    moon::Verifier unsealedRefPreparationVerifier(
+        moon::VerificationPolicy::NativeRefUnitPreparation);
+    if (!unsealedRefPreparationVerifier.verify(*refModule)) {
+        for (const auto& diagnostic : unsealedRefPreparationVerifier.errors())
+            std::cerr << diagnostic.message << '\n';
+        return fail("cross-package Ref/apply source failed pre-seal preparation verification");
+    }
     moon::Sealer refSealer;
     if (!refSealer.sealFunctionBodies(*refModule)) {
         for (const auto& message : refSealer.errors())
@@ -205,6 +212,16 @@ int runCrossPackageContainerTest() {
         !extraRefSealer.sealFunctionBodies(*extraRefModule))
         return fail("cross-package extra Ref callable did not lower and seal");
     extraRefModule->dependencySlotPublications = dependencies;
+    moon::Verifier extraRefVerifier(
+        moon::VerificationPolicy::NativeRefUnitPreparation);
+    if (extraRefVerifier.verify(*extraRefModule) ||
+        std::none_of(extraRefVerifier.errors().begin(),
+                     extraRefVerifier.errors().end(),
+                     [](const auto& diagnostic) {
+            return diagnostic.message ==
+                "Native Ref/unit preparation has another Ref callable";
+        }))
+        return fail("MoonIR preparation verifier admitted a second Ref callable");
     std::vector<uint8_t> rejectedExtraRefBytes{1, 2, 3};
     if (moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
             makeManifest(*extraRefModule), *extraRefModule,
@@ -232,6 +249,16 @@ int runCrossPackageContainerTest() {
         !compositeRefSealer.sealFunctionBodies(*compositeRefModule))
         return fail("cross-package composite Ref callable did not lower and seal");
     compositeRefModule->dependencySlotPublications = dependencies;
+    moon::Verifier compositeRefVerifier(
+        moon::VerificationPolicy::NativeRefUnitPreparation);
+    if (compositeRefVerifier.verify(*compositeRefModule) ||
+        std::none_of(compositeRefVerifier.errors().begin(),
+                     compositeRefVerifier.errors().end(),
+                     [](const auto& diagnostic) {
+            return diagnostic.message ==
+                "Native Ref/unit preparation has another Ref callable";
+        }))
+        return fail("MoonIR preparation verifier admitted a composite Ref callable");
     std::vector<uint8_t> rejectedCompositeRefBytes{1, 2, 3};
     if (moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
             makeManifest(*compositeRefModule), *compositeRefModule,

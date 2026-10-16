@@ -73,6 +73,20 @@ bool containsRuntimeFragmentRef(const Module& module, const TypeRef& root) {
     }
     return false;
 }
+
+bool functionUsesRuntimeFragmentRef(
+    const Module& module, const FunctionDecl& function) {
+    return containsRuntimeFragmentRef(module, function.returnType) ||
+        std::any_of(function.params.begin(), function.params.end(),
+            [&](const auto& parameter) {
+                return containsRuntimeFragmentRef(module, parameter.type);
+            }) ||
+        (function.controlFlow &&
+         std::any_of(function.controlFlow->locals.begin(),
+             function.controlFlow->locals.end(), [&](const auto& local) {
+                 return containsRuntimeFragmentRef(module, local.type);
+             }));
+}
 } // namespace
 
 bool Verifier::nativeRefUnitCandidateShape(
@@ -828,6 +842,30 @@ bool Verifier::verify(const Module& module) {
                                              declaration->declarationId + "'");
         }
         verifyDeclaration(*declaration, module);
+    }
+
+    if (mPolicy == VerificationPolicy::NativeRefUnitPreparation) {
+        const FunctionDecl* admittedRefCallable = nullptr;
+        const auto inspectRefCallable = [&](const FunctionDecl& function) {
+            if (!functionUsesRuntimeFragmentRef(module, function)) return;
+            if (admittedRefCallable ||
+                !nativeRefUnitCandidateShape(function, module)) {
+                error(function.location,
+                      "Native Ref/unit preparation has another Ref callable");
+                return;
+            }
+            admittedRefCallable = &function;
+        };
+        for (const auto& declaration : module.declarations) {
+            if (const auto* function =
+                    dynamic_cast<const FunctionDecl*>(declaration.get())) {
+                inspectRefCallable(*function);
+            } else if (const auto* implementation =
+                           dynamic_cast<const ImplDecl*>(declaration.get())) {
+                for (const auto& method : implementation->methods)
+                    if (method) inspectRefCallable(*method);
+            }
+        }
     }
 
     const auto fragmentContextEffects = computeFragmentContextEffects(module);
