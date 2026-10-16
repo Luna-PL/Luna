@@ -1576,7 +1576,10 @@ MoonRuntime 现还核验 staged Ref/unit candidate 的完整存储结构：所�
 普通构建的私有请求 verifier 现于 Runtime staging 回调中运行，重新预检精确 owner，
 并从已固定的 consumer 凭据推导 candidate 身份、摘要、物化键、caller lease、解码事实行
 和 owner generation 依赖。仅测试用的只读篡改探针验证 Slot 类型事实、owner 依赖及回调
-类型变化均被拒绝。此 verifier 仍只消费受信的私有计划，不提供公开 candidate 准入接口。
+类型变化均被拒绝。计划现将固定的 caller 与解码事实置于共享的不可变状态；verifier 要求
+candidate 回调持有该精确状态及相同共享所有权，因此同类型、同凭据的另一回调也不能替换。
+只读回归独立构造两份计划核对此情形，不 staging candidate。此 verifier 仍只消费受信的
+私有计划，不提供公开 candidate 准入接口。
 MoonRuntime 现提供 `activateTogether`，用一个 safe point 发布两个不同 module 的 staged
 generation。它在发布任一 generation 前检查 switchable 要求与最终模块集合，包括其他活跃
 module 持有的依赖和排斥条件。`pinTogether` 在同一发布锁内读取两枚活跃 pin；并发回归验证
@@ -1752,8 +1755,8 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    被拒绝。普通构建的只读预检现以完整 verified consumer 凭据核验活跃或 staged 宿主 owner。
    普通构建的私有计划现从该凭据构造绑定宿主的请求与类型化 caller。Runtime 现于私有
    stager 返回前核验完整的 staged candidate 结构。普通构建的私有请求 verifier 也于
-   staging 时复核凭据与精确 owner。下一步明确受信回调与公开准入契约，之后才考虑公开
-   candidate 发布。
+   staging 时复核凭据、精确 owner 与计划创建的不可变回调状态。下一步明确公开产物、
+   caller lease 及回调准入契约由谁签发和验证，之后才考虑公开 candidate 发布。
    Runtime candidate 要求同一
    generation 的 Slot binding；
    默认发布验证仍关闭。

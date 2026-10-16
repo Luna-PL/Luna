@@ -1274,6 +1274,11 @@ int runCrossPackageContainerTest() {
             error != "verified Ref/unit host candidate request lost its proof" ||
             projectedHost.activeGenerationId(facts->packageId) != 0)
             return fail("forged Ref/unit caller passed host request verification");
+        if (integratedRefGeneration.verifyAlternateHostCandidateCallerForTest(
+                projectedHost, hostOwner, error) ||
+            error != "verified Ref/unit host candidate request lost its proof" ||
+            projectedHost.activeGenerationId(facts->packageId) != 0)
+            return fail("alternate same-type Ref/unit caller passed host request verification");
         size_t nonSlotRows = 0;
         for (uint32_t kind = 1;
              kind <= static_cast<uint32_t>(moon::DeclarationKind::Slot) + 1;

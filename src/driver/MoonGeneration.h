@@ -265,6 +265,12 @@ public:
         const std::function<void(luna::runtime::GenerationStagingRequest&)>&
             mutate,
         std::string& error) const;
+    // Replace a plan's caller with an independently prepared caller of the
+    // same type and proof, while leaving all request facts unchanged.
+    bool verifyAlternateHostCandidateCallerForTest(
+        const luna::runtime::MoonRuntime& target,
+        const luna::runtime::MoonRuntime::PinnedGeneration& hostOwner,
+        std::string& error) const;
     // Quarantined host-Runtime staging probe. Only an admitted internal token
     // can sign this request; the caller must activate it at a safe point.
     bool stageInRuntimeForTest(

@@ -73,6 +73,43 @@ bool sameRefUnitCandidateFacts(
         actual.statusDomain == expected.statusDomain;
 }
 
+struct VerifiedHostCandidateCallerState {
+    luna::runtime::MoonRuntime::PinnedRefUnitCandidate pinnedCaller;
+    luna::runtime::GenerationRefUnitCandidate facts;
+};
+
+struct VerifiedHostCandidateCaller {
+    std::shared_ptr<const VerifiedHostCandidateCallerState> state;
+
+    bool operator()(
+        const std::string& symbolId, const std::string& contractId,
+        const luna::runtime::RuntimeFragmentExecutionContext& parent,
+        const luna::runtime::RuntimeFragmentRefHandle& reference,
+        int32_t& status, std::string& callError) const {
+        if (!state || symbolId != state->facts.symbolId ||
+            contractId != state->facts.contractId) {
+            callError = "private Ref/unit host candidate changed identity";
+            return false;
+        }
+        return state->pinnedCaller.call(parent, reference, status, callError);
+    }
+};
+
+bool sameVerifiedHostCaller(
+    const luna::runtime::GenerationRefUnitCaller& actual,
+    const luna::runtime::GenerationRefUnitCaller& expected) {
+    const auto* actualCaller = actual.target<VerifiedHostCandidateCaller>();
+    const auto* expectedCaller = expected.target<VerifiedHostCandidateCaller>();
+    if (!actualCaller || !expectedCaller || !actualCaller->state ||
+        !expectedCaller->state)
+        return false;
+    const auto& actualState = actualCaller->state;
+    const auto& expectedState = expectedCaller->state;
+    return actualState.get() == expectedState.get() &&
+        !actualState.owner_before(expectedState) &&
+        !expectedState.owner_before(actualState);
+}
+
 std::string verifiedSlotOwnerSnapshotKey() {
     return std::string("luna.verified-slot-owner-snapshot.v1:llvm=") +
         LLVM_VERSION_STRING + ":ir=O0:orc=default";
@@ -1404,17 +1441,9 @@ bool VerifiedMoonImportedSlotGeneration::prepareHostCandidatePlan(
         state.ownerGeneration.contentDigest());
     request.moduleLease = proofLease;
     request.refUnitCandidates.push_back(prepared.facts);
-    request.refUnitCaller = [pinnedCaller, facts = prepared.facts](
-        const std::string& symbolId, const std::string& contractId,
-        const luna::runtime::RuntimeFragmentExecutionContext& parent,
-        const luna::runtime::RuntimeFragmentRefHandle& reference,
-        int32_t& status, std::string& callError) {
-        if (symbolId != facts.symbolId || contractId != facts.contractId) {
-            callError = "private Ref/unit host candidate changed identity";
-            return false;
-        }
-        return pinnedCaller.call(parent, reference, status, callError);
-    };
+    request.refUnitCaller = VerifiedHostCandidateCaller{
+        std::make_shared<const VerifiedHostCandidateCallerState>(
+            VerifiedHostCandidateCallerState{pinnedCaller, prepared.facts})};
     request.refUnitCallerLease = proofLease;
     request.requiredActiveModules = {{
         state.ownerGeneration.moduleId(),
@@ -1467,8 +1496,8 @@ bool VerifiedMoonImportedSlotGeneration::verifyHostCandidateRequest(
         !sameRefUnitCandidateFacts(plan.facts, *expected) ||
         plan.slotImplementation != ownerBinding.implementation() ||
         !matchesProof(plan.request) || !matchesProof(candidate) ||
-        candidate.refUnitCaller.target_type() !=
-            plan.request.refUnitCaller.target_type()) {
+        !sameVerifiedHostCaller(
+            candidate.refUnitCaller, plan.request.refUnitCaller)) {
         error = "verified Ref/unit host candidate request lost its proof";
         return false;
     }
@@ -1493,6 +1522,24 @@ bool VerifiedMoonImportedSlotGeneration::verifyActiveOwnerCandidateMutationForTe
         return false;
     auto candidate = plan.request;
     mutate(candidate);
+    return verifyHostCandidateRequest(
+        target, candidate, plan, &hostOwner, nullptr, error);
+}
+
+bool VerifiedMoonImportedSlotGeneration::verifyAlternateHostCandidateCallerForTest(
+    const luna::runtime::MoonRuntime& target,
+    const luna::runtime::MoonRuntime::PinnedGeneration& hostOwner,
+    std::string& error) const {
+    error.clear();
+    HostCandidatePlan plan;
+    HostCandidatePlan alternate;
+    if (!prepareHostCandidatePlan(
+            target, &hostOwner, nullptr, plan, error) ||
+        !prepareHostCandidatePlan(
+            target, &hostOwner, nullptr, alternate, error))
+        return false;
+    auto candidate = plan.request;
+    candidate.refUnitCaller = alternate.request.refUnitCaller;
     return verifyHostCandidateRequest(
         target, candidate, plan, &hostOwner, nullptr, error);
 }

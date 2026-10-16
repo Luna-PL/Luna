@@ -2134,6 +2134,11 @@ It repeats the exact owner preflight and derives the candidate identity,
 digest, materialization key, caller lease, decoded fact row and owner-generation
 requirement from the pinned consumer proof. A test-only read-only mutation
 probe rejects changed Slot type facts, owner dependency and callback type.
+The plan now stores its pinned caller and decoded facts in a shared immutable
+state. The verifier requires the candidate callback to hold that exact state,
+including shared ownership, so a second callback of the same type and proof
+cannot replace it. A read-only regression constructs two independent plans and
+checks this case without staging a candidate.
 This verifier still consumes only the trusted private plan; it is not a
 public candidate admission API.
 MoonRuntime now provides `activateTogether` for two distinct staged modules
@@ -2392,9 +2397,10 @@ not a public ABI decision or stable-release approval:
    plan now constructs the host-bound request and typed caller from that proof.
    Runtime now checks the complete staged candidate structure before the
    private stager returns. An ordinary-build private request verifier also
-   rechecks the proof and exact owner during staging. Next specify the trusted
-   callback and public admission contract before any public candidate
-   publication.
+   rechecks the proof and exact owner during staging, including the exact
+   immutable callback state created by its plan. Next define who signs and
+   verifies the public artifact, caller lease and callback admission contract
+   before any public candidate publication.
    The Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref
