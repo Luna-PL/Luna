@@ -1569,6 +1569,9 @@ verified consumer token 现于普通构建提供已激活或待激活宿主 owne
 已固定的类型化 caller、consumer 凭据 lease、Slot 实现及所需的 owner generation。
 测试专用 stager 使用此计划；owner 缺席实验仍只在测试宏下。该计划不提供公开 staging
 或发布接口。
+绑定宿主的 staging 步骤现也在普通构建中编译为私有的计划消费者：它用受信 verifier 和
+一条派生 Slot binding 调用 Runtime，并在返回前核验 staged candidate 与精确 owner 快照。
+现有仅测试用入口是其唯一调用者；owner 缺席实验仍隔离在测试宏下。
 MoonRuntime 现还核验 staged Ref/unit candidate 的完整存储结构：所属 Runtime、内容与物化
 身份、精确 module 和 caller lease、单一 Slot 绑定、单一 candidate 事实行、类型化回调的
 存在与类型，以及完整的 module 关系。私有 stager 返回 stage 前必须通过该快照核验。
@@ -1760,8 +1763,9 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
    被拒绝。普通构建的只读预检现以完整 verified consumer 凭据核验活跃或 staged 宿主 owner。
    普通构建的私有计划现从该凭据构造绑定宿主的请求与类型化 caller。Runtime 现于私有
    stager 返回前核验完整的 staged candidate 结构。普通构建的私有请求 verifier 也于
-   staging 时复核凭据、精确 owner 与计划创建的不可变回调状态。下一步明确公开产物、
-   caller lease 及回调准入契约由谁签发和验证，之后才考虑公开 candidate 发布。
+   staging 时复核凭据、精确 owner 与计划创建的不可变回调状态。私有的宿主 staging
+   消费者现也在普通构建中编译，入口仍仅供测试。下一步定义公开产物与回调准入 API，
+   之后才考虑公开 candidate 发布。
    Runtime candidate 要求同一
    generation 的 Slot binding；
    默认发布验证仍关闭。

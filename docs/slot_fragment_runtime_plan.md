@@ -2122,6 +2122,11 @@ caller, consumer proof lease, Slot implementation and active-generation
 requirement for either owner state. The test-only stager consumes this plan;
 the owner-absent experiment stays test-only. The plan is not exposed as a
 public staging or publication API.
+The host-bound staging step now also compiles in ordinary builds as a private
+plan consumer. It calls Runtime with the trusted verifier and one derived Slot
+binding, then checks the staged candidate and exact owner snapshot before
+returning. The existing test-only entry is its sole caller. Its separate
+owner-absent experiment remains behind the test gate.
 MoonRuntime now also attests the staged Ref/unit candidate's complete stored
 structure: Runtime provenance, content and materialization identities, exact
 module and caller leases, one Slot binding, one candidate fact row, typed
@@ -2407,9 +2412,10 @@ not a public ABI decision or stable-release approval:
    Runtime now checks the complete staged candidate structure before the
    private stager returns. An ordinary-build private request verifier also
    rechecks the proof and exact owner during staging, including the exact
-   immutable callback state created by its plan. Next define who signs and
-   verifies the public artifact, caller lease and callback admission contract
-   before any public candidate publication.
+   immutable callback state created by its plan. The private host-bound stage
+   consumer now also compiles in ordinary builds while its only entry remains
+   test-only. Next define the public artifact and callback admission API before
+   any public candidate publication.
    The Runtime candidate requires a same-generation Slot binding.
    The default publication verifier stays closed during that work.
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref

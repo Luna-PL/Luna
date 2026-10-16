@@ -1504,6 +1504,58 @@ bool VerifiedMoonImportedSlotGeneration::verifyHostCandidateRequest(
     return true;
 }
 
+bool VerifiedMoonImportedSlotGeneration::stageHostCandidatePlan(
+    luna::runtime::MoonRuntime& target,
+    const HostCandidatePlan& plan,
+    const luna::runtime::MoonRuntime::PinnedGeneration* activeOwner,
+    const luna::runtime::MoonRuntime::StagedGeneration* stagedOwner,
+    luna::runtime::MoonRuntime::StagedGeneration& staged,
+    std::string& error) const {
+    if (staged) {
+        error = "verified Ref/unit host staging output already owns a generation";
+        return false;
+    }
+    const luna::runtime::GenerationBinding slotBinding{
+        plan.facts.slotSymbolId, plan.facts.slotContractId,
+        plan.slotImplementation, LUNA_RUNTIME_DECLARATION_SLOT_V1, 0};
+    if (!target.stage(
+            plan.request,
+            [this, &target, &plan, activeOwner, stagedOwner](
+                const auto& candidate, std::string& verificationError) {
+                return verifyHostCandidateRequest(
+                    target, candidate, plan, activeOwner,
+                    stagedOwner, verificationError);
+            },
+            [slotBinding](const auto&, auto& bindings,
+                          std::string& resolutionError) {
+                if (!bindings.empty()) {
+                    resolutionError =
+                        "verified Ref/unit host staging cannot replace bindings";
+                    return false;
+                }
+                bindings.push_back(slotBinding);
+                return true;
+            },
+            {}, staged, error))
+        return false;
+    const auto& state = *proof_->consumer_.preparation_.state_;
+    if (!target.matchesStagedRefUnitCandidateSnapshot(
+            staged, plan.request, slotBinding) ||
+        target.activeGenerationId(plan.request.moduleId) != 0 ||
+        (activeOwner &&
+         !target.matchesActiveOwnerSnapshot(
+             *activeOwner, state.ownerState, plan.ownerBindings)) ||
+        (stagedOwner &&
+         (target.activeGenerationId(state.ownerGeneration.moduleId()) != 0 ||
+          !target.matchesStagedOwnerSnapshot(
+              *stagedOwner, state.ownerState, plan.ownerBindings)))) {
+        staged = {};
+        error = "verified Ref/unit host staging changed its verified artifact";
+        return false;
+    }
+    return true;
+}
+
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 bool VerifiedMoonImportedSlotGeneration::verifyActiveOwnerCandidateMutationForTest(
     const luna::runtime::MoonRuntime& target,
@@ -1622,50 +1674,40 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTestImpl(
             : "private Ref/unit host staging requires its exact staged owner";
         return false;
     }
-    const auto ownerBindings = hostPlan.ownerBindings;
+    if (hostOwner || stagedHostOwner)
+        return stageHostCandidatePlan(
+            target, hostPlan, hostOwner ? &hostOwner : nullptr,
+            stagedHostOwner, staged, error);
+
     luna::runtime::GenerationStagingRequest request;
-    if (hostOwner || stagedHostOwner) {
-        request = hostPlan.request;
-    } else {
-        const auto proofLease = proof_;
-        request.moduleId = generation_.moduleId();
-        request.contentDigest = generation_.contentDigest();
-        request.materializationKey = privateRefHostCandidateKey(
-            state.ownerGeneration.contentDigest());
-        request.moduleLease = proofLease;
-        request.refUnitCandidates.push_back(*expected);
-        request.refUnitCaller = [pinnedCaller, facts = *expected](
-            const std::string& symbolId, const std::string& contractId,
-            const luna::runtime::RuntimeFragmentExecutionContext& parent,
-            const luna::runtime::RuntimeFragmentRefHandle& reference,
-            int32_t& status, std::string& callError) {
-            if (symbolId != facts.symbolId ||
-                contractId != facts.contractId) {
-                callError = "private Ref/unit host candidate changed identity";
-                return false;
-            }
-            return pinnedCaller.call(parent, reference, status, callError);
-        };
-        request.refUnitCallerLease = proofLease;
-        request.requiredAbsentModuleIds = {state.ownerGeneration.moduleId()};
-    }
-    const auto trustedFacts = hostOwner || stagedHostOwner
-        ? hostPlan.facts : *expected;
-    const auto trustedSlotImplementation = hostOwner || stagedHostOwner
-        ? hostPlan.slotImplementation : ownerBinding.implementation();
+    const auto proofLease = proof_;
+    request.moduleId = generation_.moduleId();
+    request.contentDigest = generation_.contentDigest();
+    request.materializationKey = privateRefHostCandidateKey(
+        state.ownerGeneration.contentDigest());
+    request.moduleLease = proofLease;
+    request.refUnitCandidates.push_back(*expected);
+    request.refUnitCaller = [pinnedCaller, facts = *expected](
+        const std::string& symbolId, const std::string& contractId,
+        const luna::runtime::RuntimeFragmentExecutionContext& parent,
+        const luna::runtime::RuntimeFragmentRefHandle& reference,
+        int32_t& status, std::string& callError) {
+        if (symbolId != facts.symbolId ||
+            contractId != facts.contractId) {
+            callError = "private Ref/unit host candidate changed identity";
+            return false;
+        }
+        return pinnedCaller.call(parent, reference, status, callError);
+    };
+    request.refUnitCallerLease = proofLease;
+    request.requiredAbsentModuleIds = {state.ownerGeneration.moduleId()};
     const luna::runtime::GenerationBinding trustedSlotBinding{
-        trustedFacts.slotSymbolId, trustedFacts.slotContractId,
-        trustedSlotImplementation, LUNA_RUNTIME_DECLARATION_SLOT_V1, 0};
-    const auto* verifiedActiveOwner = hostOwner ? &hostOwner : nullptr;
+        expected->slotSymbolId, expected->slotContractId,
+        ownerBinding.implementation(), LUNA_RUNTIME_DECLARATION_SLOT_V1, 0};
     if (!target.stage(
             request,
-            [this, &target, &request, &hostPlan, verifiedActiveOwner,
-             stagedHostOwner, trustedFacts](
+            [this, &request, facts = *expected](
                 const auto& candidate, std::string& verificationError) {
-                if (verifiedActiveOwner || stagedHostOwner)
-                    return verifyHostCandidateRequest(
-                        target, candidate, hostPlan, verifiedActiveOwner,
-                        stagedHostOwner, verificationError);
                 if (candidate.moduleId != request.moduleId ||
                     candidate.contentDigest != request.contentDigest ||
                     candidate.materializationKey != request.materializationKey ||
@@ -1674,7 +1716,7 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTestImpl(
                         candidate.refUnitCallerLease) ||
                     candidate.refUnitCandidates.size() != 1 ||
                     !sameRefUnitCandidateFacts(
-                        candidate.refUnitCandidates.front(), trustedFacts) ||
+                        candidate.refUnitCandidates.front(), facts) ||
                     !candidate.refUnitCaller ||
                     candidate.requiredAbsentModuleIds !=
                         request.requiredAbsentModuleIds ||
@@ -1700,14 +1742,7 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTestImpl(
         return false;
     if (!target.matchesStagedRefUnitCandidateSnapshot(
             staged, request, trustedSlotBinding) ||
-        target.activeGenerationId(request.moduleId) != 0 ||
-        (hostOwner &&
-         !target.matchesActiveOwnerSnapshot(
-             hostOwner, state.ownerState, ownerBindings)) ||
-        (stagedHostOwner &&
-         (target.activeGenerationId(state.ownerGeneration.moduleId()) != 0 ||
-          !target.matchesStagedOwnerSnapshot(
-              *stagedHostOwner, state.ownerState, ownerBindings)))) {
+        target.activeGenerationId(request.moduleId) != 0) {
         staged = {};
         error = "private Ref/unit host staging changed its verified artifact";
         return false;

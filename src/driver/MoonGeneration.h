@@ -301,7 +301,6 @@ private:
         const luna::runtime::MoonRuntime::StagedGeneration* stagedOwner,
         std::string& error) const;
     // Construct a trusted host-bound request without staging or publication.
-    // Only the private test gate currently consumes this plan.
     bool prepareHostCandidatePlan(
         const luna::runtime::MoonRuntime& target,
         const luna::runtime::MoonRuntime::PinnedGeneration* activeOwner,
@@ -314,6 +313,15 @@ private:
         const HostCandidatePlan& plan,
         const luna::runtime::MoonRuntime::PinnedGeneration* activeOwner,
         const luna::runtime::MoonRuntime::StagedGeneration* stagedOwner,
+        std::string& error) const;
+    // Stage a prepared plan under its exact owner. Only the test gate invokes
+    // this ordinary-build helper until public candidate admission is defined.
+    bool stageHostCandidatePlan(
+        luna::runtime::MoonRuntime& target,
+        const HostCandidatePlan& plan,
+        const luna::runtime::MoonRuntime::PinnedGeneration* activeOwner,
+        const luna::runtime::MoonRuntime::StagedGeneration* stagedOwner,
+        luna::runtime::MoonRuntime::StagedGeneration& staged,
         std::string& error) const;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
     bool stageInRuntimeForTestImpl(
