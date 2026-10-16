@@ -272,7 +272,8 @@ bool exercisePrivateRefApplyJit(
     std::vector<uint8_t>* entryRecord = nullptr,
     unsigned bodyDropCalls = 0,
     bool exerciseLoadedResult = false,
-    std::optional<bool> branchSelector = std::nullopt) {
+    std::optional<bool> branchSelector = std::nullopt,
+    bool exerciseSelectorFailure = false) {
     const moon::SlotDecl* slot = nullptr;
     const moon::SlotDecl* secondSlot = nullptr;
     for (const auto& declaration : module.declarations)
@@ -294,6 +295,7 @@ bool exercisePrivateRefApplyJit(
         (exerciseLoadedResult && (!transferredDropCalls ||
                                   !expectedResult || twoBorrowedReferences)) ||
         (branchSelector && twoBorrowedReferences) ||
+        (exerciseSelectorFailure && (!branchSelector || *branchSelector)) ||
         function.params.size() !=
             ((twoBorrowedReferences || branchSelector) ? 2u : 1u) ||
         !valueType || valueType->kind != TypeKind::I32 ||
@@ -558,7 +560,7 @@ bool exercisePrivateRefApplyJit(
 
     using EntryOne = int32_t (*)(const void*, void*);
     using EntryTwo = void (*)(const void*, void*, void*);
-    using EntrySelector = void (*)(const void*, void*, bool);
+    using EntrySelector = int32_t (*)(const void*, void*, bool);
     using EntryResultOne = uint64_t (*)(const void*, void*);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST == 0);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST == 1);
@@ -1048,10 +1050,14 @@ bool exercisePrivateRefApplyJit(
             }
             return true;
         }
-        if (branchSelector)
-            entrySelector(parent.opaque(), const_cast<void*>(handle.opaque()),
-                *branchSelector);
-        else if (twoBorrowedReferences)
+        if (branchSelector) {
+            if (entrySelector(parent.opaque(),
+                    const_cast<void*>(handle.opaque()),
+                    *branchSelector) != 0) {
+                error = "private Ref selector body did not return success";
+                return false;
+            }
+        } else if (twoBorrowedReferences)
             entryTwo(parent.opaque(), const_cast<void*>(handle.opaque()),
                 const_cast<void*>(secondHandle.opaque()));
         else if (entryOne(parent.opaque(),
@@ -1061,10 +1067,10 @@ bool exercisePrivateRefApplyJit(
         }
         return true;
     };
-    const auto before = privateRefJitExecutions;
-    const auto resumesBefore = privateRefJitCompletedResumes;
-    const auto argumentsBefore = privateRefJitObservedArguments.size();
-    const auto sourcesBefore = privateRefJitObservedSources.size();
+    auto before = privateRefJitExecutions;
+    auto resumesBefore = privateRefJitCompletedResumes;
+    auto argumentsBefore = privateRefJitObservedArguments.size();
+    auto sourcesBefore = privateRefJitObservedSources.size();
     privateRefJitSlotId = descriptor.slot_id;
     privateRefJitSlotContract = descriptor.slot_contract_id;
     privateRefJitLayoutId = descriptor.slot_arguments_layout_id;
@@ -1082,6 +1088,35 @@ bool exercisePrivateRefApplyJit(
         secondDescriptor.slot_arguments_alignment};
     privateRefJitPayloadValid = true;
     privateRefJitResumeStatus = -1;
+    if (exerciseSelectorFailure) {
+        privateRefJitRepeatedResumeStatus = 0;
+        privateRefJitInjectRepeatedResumeFailure = true;
+        const auto failedStatus = entrySelector(parent.opaque(),
+            const_cast<void*>(handle.opaque()), false);
+        privateRefJitInjectRepeatedResumeFailure = false;
+        if (failedStatus != LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
+            privateRefJitRepeatedResumeStatus !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+            privateRefJitExecutions != before + 1 ||
+            privateRefJitCompletedResumes != resumesBefore + 1 ||
+            generationLease.expired()) {
+            std::ostringstream details;
+            details << "private Ref selector failure lost its recoverable context"
+                    << " (status=" << failedStatus
+                    << ", resume=" << privateRefJitRepeatedResumeStatus
+                    << ", executions=" << privateRefJitExecutions - before
+                    << ", completed="
+                    << privateRefJitCompletedResumes - resumesBefore
+                    << ", leaseExpired=" << generationLease.expired() << ')';
+            error = details.str();
+            return false;
+        }
+        before = privateRefJitExecutions;
+        resumesBefore = privateRefJitCompletedResumes;
+        argumentsBefore = privateRefJitObservedArguments.size();
+        sourcesBefore = privateRefJitObservedSources.size();
+        privateRefJitResumeStatus = -1;
+    }
     if (!invoke()) return false;
     const auto handleCheck = luna_runtime_fragment_ref_check_v1(
         handle.opaque(), slot->symbolId.value.c_str(),
@@ -5489,17 +5524,33 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                 declaration.get()); function &&
                 function->name == "mixed_dynamic")
             dynamicExit = function;
-    const auto runDynamicExit = [&](bool leave, unsigned dispatches) {
+    const auto runDynamicExit = [&](bool leave, unsigned dispatches,
+                                    bool failDispatch = false) {
         return exercisePrivateRefApplyJit(
             *dynamicExitModule, *dynamicExit, privateRefJitError,
             dispatches, false, std::nullopt, false, false, {}, {},
             std::nullopt, std::nullopt, false, false, false, nullptr, 0,
-            false, leave);
+            false, leave, failDispatch);
     };
     if (!dynamicExit || !runDynamicExit(true, 0) ||
-        !runDynamicExit(false, 1)) {
+        !runDynamicExit(false, 1, true)) {
         std::cerr << privateRefJitError << '\n';
         return fail("runtime-selected Ref apply exits failed private JIT execution");
+    }
+    CodeGenerator blockedDynamicExit("canonical-ref-dynamic-exits-gate");
+    const bool dynamicPublished =
+        blockedDynamicExit.generate(dynamicExitModule.get());
+    if (dynamicPublished ||
+        std::none_of(blockedDynamicExit.errors().begin(),
+                     blockedDynamicExit.errors().end(),
+                     [](const auto& diagnostic) {
+            return diagnostic.message.find(
+                "raw-pointer function publication is blocked") !=
+                std::string::npos;
+        })) {
+        for (const auto& diagnostic : blockedDynamicExit.errors())
+            std::cerr << diagnostic.message << '\n';
+        return fail("runtime-selected private selector escaped the public codegen gate");
     }
     auto multipleExitSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "export slot checkpoint(value: i32);\n"

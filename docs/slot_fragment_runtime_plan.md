@@ -2301,10 +2301,13 @@ not a public ABI decision or stable-release approval:
    edges until source lowering produces one. A disposable two-parameter JIT
    entry now executes both values of a runtime `bool` selector inside one
    Apply region: early return skips Slot dispatch, while the continuing arm
-   dispatches once. Each arm runs twice and releases its derived generation
-   pin. The public one-Ref/unit entry profile remains unchanged. The narrow
-   `Result<i32, i32>`
-   `?` path now has an inner-before-outer CFG proof and private Ok/Err JIT
+   dispatches once. The continuing arm also injects a failed repeated resume:
+   its private body returns the raw failure status, retains the borrowed Ref,
+   and succeeds on two subsequent calls. The structural proof accounts for
+   the failed dispatch context Drop; the fixture releases its generation pin.
+   Ordinary codegen still rejects the selector, and the public one-Ref/unit
+   entry profile is unchanged. The narrow `Result<i32, i32>` `?` path now has
+   an inner-before-outer CFG proof and private Ok/Err JIT
    evidence, including one affine source error converted to a scalar by its
    frozen `From` method and cleaned by source `Drop`. A two-node owned
    conversion parameter now also proves outer-before-inner Drop on both scalar
