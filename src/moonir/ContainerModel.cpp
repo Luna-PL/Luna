@@ -443,16 +443,31 @@ bool ContainerModelCodec::verifyNativeRefUnitPreparationRoundTripImpl(
         error = "Native Ref/unit preparation preview requires one Ref type and Apply function";
         return false;
     }
+    const auto containsRef = [&](const TypeRef& root) {
+        std::unordered_set<std::string> visited;
+        std::vector<TypeRef> pending{root};
+        while (!pending.empty()) {
+            const auto current = pending.back();
+            pending.pop_back();
+            if (current == refType->id) return true;
+            if (!visited.insert(current.value).second) continue;
+            const auto* type = module.findType(current);
+            if (!type) continue; // The module verifier reports missing types.
+            pending.insert(pending.end(), type->referencedTypeIds.begin(),
+                           type->referencedTypeIds.end());
+        }
+        return false;
+    };
     const auto usesRef = [&](const FunctionDecl& function) {
-        return function.returnType == refType->id ||
+        return containsRef(function.returnType) ||
             std::any_of(function.params.begin(), function.params.end(),
                 [&](const auto& parameter) {
-                    return parameter.type == refType->id;
+                    return containsRef(parameter.type);
                 }) ||
             (function.controlFlow &&
              std::any_of(function.controlFlow->locals.begin(),
                  function.controlFlow->locals.end(), [&](const auto& local) {
-                     return local.type == refType->id;
+                     return containsRef(local.type);
                  }));
     };
     for (const auto& declaration : module.declarations) {
@@ -475,10 +490,9 @@ bool ContainerModelCodec::verifyNativeRefUnitPreparationRoundTripImpl(
         if (record.kind != DeclarationKind::Function) continue;
         const auto* signature = module.findType(record.type);
         if (!signature || signature->kind != TypeKind::Function) continue;
-        const bool referencesRef = signature->returnTypeId == refType->id ||
-            std::find(signature->parameterTypeIds.begin(),
-                signature->parameterTypeIds.end(), refType->id) !=
-                signature->parameterTypeIds.end();
+        const bool referencesRef = containsRef(signature->returnTypeId) ||
+            std::any_of(signature->parameterTypeIds.begin(),
+                signature->parameterTypeIds.end(), containsRef);
         if (referencesRef &&
             (record.symbolId != applySource->symbolId ||
              record.contractId != applySource->contractId)) {

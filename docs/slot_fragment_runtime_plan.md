@@ -2221,6 +2221,15 @@ materialized code lease, but no entry pointer or candidate is exposed through
 ordinary public loading. Admitting a public Runtime candidate remains a
 separate gate. The ordinary wrapper is exercised by the quarantined typed
 candidate and the internal Runtime callback tests.
+
+The narrow preparation round-trip now walks frozen type-table edges when
+checking whether another callable uses its sole Ref type. Function parameters,
+results and locals, including declaration-table signatures, cannot hide a Ref
+inside a composite type. A cross-package regression rejects a second callable
+whose parameter reaches the Ref through two struct layers. This closes that
+whole-module shape bypass for the private profile; it does not enable general
+Ref imports or public publication.
+
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and
 Moon/Container publication still require their own import, cleanup and

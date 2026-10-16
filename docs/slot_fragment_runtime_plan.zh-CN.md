@@ -1631,6 +1631,12 @@ consumer lease，并保留 owner pin。
 consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入口指针或 candidate。
 公开 Runtime candidate 准入仍是独立完成门。普通 wrapper 现由隔离的类型化 candidate
 及内部 Runtime 回调测试调用。
+
+受限准备态 round-trip 现沿冻结类型表的边，检查其他 callable 是否使用唯一 Ref 类型。
+函数参数、结果和局部变量（包括声明表签名）不能把 Ref 隐藏在复合类型中。跨包回归拒绝
+参数经两层结构体才到达 Ref 的第二个 callable。这堵住私有配置的整模块形状绕过，
+不启用通用 Ref import 或公开发布。
+
 冻结的 `DeclarationRecord`／
 规范契约和 Native v1
 导出行仍不添加依赖 context 的可调用入口。通用源码 import 与 Moon／Container

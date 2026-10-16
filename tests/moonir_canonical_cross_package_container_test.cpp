@@ -183,10 +183,11 @@ int runCrossPackageContainerTest() {
     refModule->packageUses = refPackageUses;
     const auto refSourcePath = fixtures / "refprep/src/effects.luna";
     std::ifstream refSourceInput(refSourcePath);
-    std::string extraRefSource(
+    const std::string refSourceText(
         std::istreambuf_iterator<char>{refSourceInput}, {});
-    if (extraRefSource.empty())
+    if (refSourceText.empty())
         return fail("cross-package Ref/apply fixture source is missing");
+    std::string extraRefSource = refSourceText;
     extraRefSource +=
         "\nexport runtime fn hold_ref(selected: "
         "RuntimeFragmentRef<host::effects::audit_slot>) -> unit {}\n";
@@ -211,6 +212,33 @@ int runCrossPackageContainerTest() {
         !rejectedExtraRefBytes.empty() ||
         error.find("another Ref callable") == std::string::npos)
         return fail("cross-package preparation admitted an extra Ref callable");
+    std::string compositeRefSource = refSourceText;
+    compositeRefSource +=
+        "\nstruct RefBox { selected: "
+        "RuntimeFragmentRef<host::effects::audit_slot>; }\n"
+        "struct RefEnvelope { box: RefBox; }\n"
+        "export runtime fn hold_box(box: affine RefEnvelope) -> unit {}\n";
+    auto compositeRefSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzePathWithOverlay(
+            (fixtures / "refprep").string(), refSourcePath.string(),
+            compositeRefSource);
+    if (!compositeRefSnapshot.success())
+        return fail("cross-package composite Ref callable did not analyze");
+    moon::LunaLowerer compositeRefLowerer;
+    auto compositeRefModule = compositeRefLowerer.lower(
+        *compositeRefSnapshot.program(), *compositeRefSnapshot.symbolTable());
+    moon::Sealer compositeRefSealer;
+    if (!compositeRefModule || !compositeRefLowerer.errors().empty() ||
+        !compositeRefSealer.sealFunctionBodies(*compositeRefModule))
+        return fail("cross-package composite Ref callable did not lower and seal");
+    compositeRefModule->dependencySlotPublications = dependencies;
+    std::vector<uint8_t> rejectedCompositeRefBytes{1, 2, 3};
+    if (moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
+            makeManifest(*compositeRefModule), *compositeRefModule,
+            rejectedCompositeRefBytes, error) ||
+        !rejectedCompositeRefBytes.empty() ||
+        error.find("another Ref callable") == std::string::npos)
+        return fail("cross-package preparation admitted a composite Ref callable");
     std::vector<uint8_t> refBytes;
     if (!moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
             refManifest, *refModule, refBytes, error) || refBytes.empty()) {
