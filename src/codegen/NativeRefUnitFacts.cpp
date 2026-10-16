@@ -220,6 +220,31 @@ bool verifyNativeRefUnitModulePreparation(
         return false;
     const auto* sourceRecord = program.findDeclarationById(
         source->declarationId);
+    const auto containsRef = [&](const moon::TypeRef& root) {
+        std::unordered_set<std::string> visited;
+        std::vector<moon::TypeRef> pending{root};
+        while (!pending.empty()) {
+            const auto current = pending.back();
+            pending.pop_back();
+            if (current == ref->id) return true;
+            if (!visited.insert(current.value).second) continue;
+            const auto* type = program.findType(current);
+            if (!type) continue; // The module verifier reports missing types.
+            pending.insert(pending.end(), type->referencedTypeIds.begin(),
+                           type->referencedTypeIds.end());
+        }
+        return false;
+    };
+    if (std::any_of(program.declarationTable.begin(),
+                    program.declarationTable.end(),
+            [&](const moon::DeclarationRecord& record) {
+                return containsRef(record.type) &&
+                    (&record != sourceRecord ||
+                     record.kind != moon::DeclarationKind::Function ||
+                     record.symbolId != source->symbolId ||
+                     record.contractId != source->contractId);
+            }))
+        return reject("Native Ref/unit preparation has another Ref declaration");
     const auto target = moon::DeclarationRef{
         luna::identity::SymbolId{facts.slotSymbolId},
         luna::identity::ContractId{facts.slotContractId}};
@@ -243,21 +268,6 @@ bool verifyNativeRefUnitModulePreparation(
             type.referencedTypeIds.end())
             return reject("Native Ref/unit preparation has another Ref type use");
     }
-    const auto containsRef = [&](const moon::TypeRef& root) {
-        std::unordered_set<std::string> visited;
-        std::vector<moon::TypeRef> pending{root};
-        while (!pending.empty()) {
-            const auto current = pending.back();
-            pending.pop_back();
-            if (current == ref->id) return true;
-            if (!visited.insert(current.value).second) continue;
-            const auto* type = program.findType(current);
-            if (!type) continue; // The module verifier reports missing types.
-            pending.insert(pending.end(), type->referencedTypeIds.begin(),
-                           type->referencedTypeIds.end());
-        }
-        return false;
-    };
     if (std::any_of(program.imports.begin(), program.imports.end(),
             [&](const moon::ImportRecord& imported) {
                 return imported.kind == moon::ImportKind::Host &&

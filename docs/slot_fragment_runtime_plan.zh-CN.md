@@ -1639,6 +1639,8 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
 `NativeRefUnitPreparation` MoonIR verifier 现也在更早的模块边界执行可执行 callable
 限制：第二个直接 Ref 参数，以及参数经两层结构体才到达 Ref 的第二个 callable，
 都会被拒绝；已准入的源码函数仍可通过验证。
+MoonIR 验证和 Native 整模块准备检查现还拒绝第二条含 Ref 的冻结声明记录，
+即使已移除其可执行体和导出项；容器检查原本就会拒绝该记录。
 同一私有配置现检查每个导出项的冻结类型图。只有准入的 Apply 源函数可导出含 Ref 的签名；
 另一导出结构体即使经两层结构体才到达 Ref，也会在普通准备态 verifier 与测试编码器
 产出字节前被拒绝。

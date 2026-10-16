@@ -1,6 +1,7 @@
 #include "moonir_canonical_test_support.h"
 
 #include "codegen/CodeGenerator.h"
+#include "codegen/NativeRefUnitFacts.h"
 #include "diagnostics/Diagnostic.h"
 #include "driver/CompilerPipeline.h"
 #include "driver/MoonGeneration.h"
@@ -229,6 +230,38 @@ int runCrossPackageContainerTest() {
         !rejectedExtraRefBytes.empty() ||
         error.find("another Ref callable") == std::string::npos)
         return fail("cross-package preparation admitted an extra Ref callable");
+    const auto extraExecutable = std::find_if(
+        extraRefModule->declarations.begin(),
+        extraRefModule->declarations.end(), [](const auto& declaration) {
+            const auto* function = dynamic_cast<const moon::FunctionDecl*>(
+                declaration.get());
+            return function && function->name == "hold_ref";
+        });
+    if (extraExecutable == extraRefModule->declarations.end())
+        return fail("cross-package extra Ref callable lost its declaration");
+    const auto extraSymbol = (*extraExecutable)->symbolId;
+    extraRefModule->declarations.erase(extraExecutable);
+    extraRefModule->exports.erase(std::remove_if(
+        extraRefModule->exports.begin(), extraRefModule->exports.end(),
+        [&](const auto& exported) {
+            return exported.declaration.symbol == extraSymbol;
+        }), extraRefModule->exports.end());
+    extraRefModule->rebuildIndexes();
+    if (extraRefVerifier.verify(*extraRefModule) ||
+        std::none_of(extraRefVerifier.errors().begin(),
+                     extraRefVerifier.errors().end(),
+                     [](const auto& diagnostic) {
+            return diagnostic.message ==
+                "Native Ref/unit preparation has another Ref declaration";
+        }))
+        return fail("MoonIR preparation admitted an inert second Ref declaration");
+    const bool inertAccepted = luna::codegen::verifyNativeRefUnitModulePreparation(
+        *extraRefModule, error);
+    if (inertAccepted ||
+        error != "Native Ref/unit preparation has another Ref declaration") {
+        std::cerr << "inert accepted=" << inertAccepted << ", reason=" << error << '\n';
+        return fail("Native preparation admitted an inert second Ref declaration");
+    }
     std::string compositeRefSource = refSourceText;
     compositeRefSource +=
         "\nstruct RefBox { selected: "

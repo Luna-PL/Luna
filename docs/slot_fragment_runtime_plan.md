@@ -2442,7 +2442,10 @@ not a public ABI decision or stable-release approval:
    Moon Container encoder/decoder. Invalid or older artifacts must fail
    without publishing a partial generation. The source consumer and separate
    owner evidence now pass the private 0.4 artifact encode and independent
-   decode under a single-Ref-callable admission rule. The decoded source can
+   decode under a single-Ref-callable admission rule. MoonIR verification and
+   Native module preparation also reject a second Ref-bearing declaration
+   record without an executable body or export; the container check already
+   rejects that record. The decoded source can
    enter a quarantined test generation whose pin retains its private JIT and
    the exact verified owner generation while it calls a borrowed Ref issued
    from a verified plugin generation. A private typed candidate now binds

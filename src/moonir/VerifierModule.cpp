@@ -866,6 +866,16 @@ bool Verifier::verify(const Module& module) {
                     if (method) inspectRefCallable(*method);
             }
         }
+        for (const auto& record : module.declarationTable) {
+            if (!containsRuntimeFragmentRef(module, record.type)) continue;
+            if (!admittedRefCallable ||
+                record.kind != DeclarationKind::Function ||
+                record.id != admittedRefCallable->declarationId ||
+                record.symbolId != admittedRefCallable->symbolId ||
+                record.contractId != admittedRefCallable->contractId)
+                error(record.location,
+                      "Native Ref/unit preparation has another Ref declaration");
+        }
     }
 
     const auto fragmentContextEffects = computeFragmentContextEffects(module);
