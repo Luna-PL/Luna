@@ -2239,6 +2239,11 @@ uses that matching declaration and confirms both preparation entry points reject
 the import before encoding. The next admission work must keep Ref-bearing host
 contracts outside this narrow Ref/unit profile and bind the eventual public
 candidate to verified owner and consumer evidence.
+The separate Native v4 source/codegen preparation gate now applies the same
+frozen type-graph check to Host imports. A regression points a Host import at
+the admitted Apply signature and confirms that preparation rejects it before
+code generation. This keeps the source-side gate aligned with the private
+container gate while public candidate publication remains closed.
 
 The frozen `DeclarationRecord`/canonical contract and Native v1 export row
 do not gain a context-dependent callable entry. General source import and

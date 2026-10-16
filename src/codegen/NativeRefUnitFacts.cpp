@@ -243,9 +243,25 @@ bool verifyNativeRefUnitModulePreparation(
             type.referencedTypeIds.end())
             return reject("Native Ref/unit preparation has another Ref type use");
     }
+    const auto containsRef = [&](const moon::TypeRef& root) {
+        std::unordered_set<std::string> visited;
+        std::vector<moon::TypeRef> pending{root};
+        while (!pending.empty()) {
+            const auto current = pending.back();
+            pending.pop_back();
+            if (current == ref->id) return true;
+            if (!visited.insert(current.value).second) continue;
+            const auto* type = program.findType(current);
+            if (!type) continue; // The module verifier reports missing types.
+            pending.insert(pending.end(), type->referencedTypeIds.begin(),
+                           type->referencedTypeIds.end());
+        }
+        return false;
+    };
     if (std::any_of(program.imports.begin(), program.imports.end(),
             [&](const moon::ImportRecord& imported) {
-                return imported.type == ref->id;
+                return imported.kind == moon::ImportKind::Host &&
+                    containsRef(imported.type);
             }))
         return reject("Native Ref/unit preparation imports a Ref carrier");
     error.clear();

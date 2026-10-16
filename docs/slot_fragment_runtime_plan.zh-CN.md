@@ -1643,6 +1643,9 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
 Apply 源函数。回归测试使用这一匹配声明，并确认两个准备态入口都在编码前拒绝该导入。
 下一步准入工作须让含 Ref 的宿主契约留在这个受限 Ref／unit 配置之外，并把未来公开 candidate
 绑定到经验证的 owner 与 consumer 凭据。
+独立的 Native v4 源码／codegen 准备门现也沿冻结类型图检查 Host import。回归测试让
+Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成前拒绝它。源码侧门槛由此
+与私有容器门槛一致，公开 candidate 发布仍保持关闭。
 
 冻结的 `DeclarationRecord`／
 规范契约和 Native v1

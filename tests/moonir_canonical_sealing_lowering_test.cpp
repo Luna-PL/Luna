@@ -2928,6 +2928,21 @@ int runLoweredCompositionTests(SealingTestContext& context) {
     if (!luna::codegen::verifyNativeRefUnitModulePreparation(
             *sourceApplyModule, unitSourceError))
         return fail("Native Ref/unit preparation rejected its sealed source");
+    moon::ImportRecord refHostImport;
+    refHostImport.kind = moon::ImportKind::Host;
+    refHostImport.ownerPackageId = sourceApplyModule->name;
+    refHostImport.localName = "host::apply_ref";
+    refHostImport.capabilityId = "org.luna.host.apply_ref";
+    refHostImport.linkSymbol = "host_apply_ref";
+    refHostImport.abi = "C";
+    refHostImport.declaration = publicApply.declaration;
+    refHostImport.type = publicApply.type;
+    sourceApplyModule->imports.push_back(refHostImport);
+    if (luna::codegen::verifyNativeRefUnitModulePreparation(
+            *sourceApplyModule, unitSourceError) ||
+        unitSourceError != "Native Ref/unit preparation imports a Ref carrier")
+        return fail("Native Ref/unit preparation admitted a Ref-bearing host import");
+    sourceApplyModule->imports.pop_back();
     std::string v4Claim;
     if (!luna::codegen::deriveNativeRefUnitV4ProofClaim(
             *sourceApplyModule, *sourceApplyEntry, v4Module,
