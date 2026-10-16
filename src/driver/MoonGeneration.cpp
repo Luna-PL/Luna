@@ -1534,6 +1534,9 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTestImpl(
         ? hostPlan.facts : *expected;
     const auto trustedSlotImplementation = hostOwner || stagedHostOwner
         ? hostPlan.slotImplementation : ownerBinding.implementation();
+    const luna::runtime::GenerationBinding trustedSlotBinding{
+        trustedFacts.slotSymbolId, trustedFacts.slotContractId,
+        trustedSlotImplementation, LUNA_RUNTIME_DECLARATION_SLOT_V1, 0};
     if (!target.stage(
             request,
             [this, &request, trustedFacts](const auto& candidate,
@@ -1558,27 +1561,20 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTestImpl(
                 }
                 return true;
             },
-            [trustedFacts, trustedSlotImplementation](
-                const auto&, auto& bindings,
-                std::string& resolutionError) {
+            [trustedSlotBinding](const auto&, auto& bindings,
+                                 std::string& resolutionError) {
                 if (!bindings.empty()) {
                     resolutionError =
                         "private Ref/unit host staging cannot replace bindings";
                     return false;
                 }
-                luna::runtime::GenerationBinding binding;
-                binding.symbolId = trustedFacts.slotSymbolId;
-                binding.contractId = trustedFacts.slotContractId;
-                binding.implementation = trustedSlotImplementation;
-                binding.declarationKind = LUNA_RUNTIME_DECLARATION_SLOT_V1;
-                bindings.push_back(std::move(binding));
+                bindings.push_back(trustedSlotBinding);
                 return true;
             },
             {}, staged, error))
         return false;
-    if (staged.moduleId() != request.moduleId ||
-        staged.contentDigest() != request.contentDigest ||
-        staged.materializationKey() != request.materializationKey ||
+    if (!target.matchesStagedRefUnitCandidateSnapshot(
+            staged, request, trustedSlotBinding) ||
         target.activeGenerationId(request.moduleId) != 0 ||
         (hostOwner &&
          !target.matchesActiveOwnerSnapshot(

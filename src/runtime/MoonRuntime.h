@@ -301,6 +301,13 @@ public:
         const PinnedGeneration& active,
         const std::shared_ptr<const void>& lease,
         const std::vector<GenerationBinding>& bindings) const;
+    // Read-only structural attestation for one staged typed Ref/unit candidate.
+    // The expected request and Slot row must come from a trusted loader; this
+    // cannot authenticate the behavior of an opaque std::function callback.
+    bool matchesStagedRefUnitCandidateSnapshot(
+        const StagedGeneration& staged,
+        const GenerationStagingRequest& expected,
+        const GenerationBinding& slotBinding) const;
     bool makeSwitchable(const std::string& moduleId,
                         const std::string& symbolId,
                         const std::string& contractId,

@@ -854,6 +854,72 @@ bool MoonRuntime::matchesActiveOwnerSnapshot(
         matchesOwnerSnapshot(*active.generation_, lease, bindings);
 }
 
+bool MoonRuntime::matchesStagedRefUnitCandidateSnapshot(
+    const StagedGeneration& staged,
+    const GenerationStagingRequest& expected,
+    const GenerationBinding& slotBinding) const {
+    if (staged.owner_ != this || !staged.generation_ ||
+        !expected.refUnitCaller || expected.refUnitCandidates.size() != 1)
+        return false;
+    const auto& generation = *staged.generation_;
+    const auto sameLease = [](const std::shared_ptr<const void>& left,
+                              const std::shared_ptr<const void>& right) {
+        return left && right && left.get() == right.get() &&
+            !left.owner_before(right) && !right.owner_before(left);
+    };
+    if (generation.moduleId != expected.moduleId ||
+        generation.contentDigest != expected.contentDigest ||
+        generation.materializationKey != expected.materializationKey ||
+        !sameLease(generation.moduleLease, expected.moduleLease) ||
+        !sameLease(generation.refUnitCallerLease,
+                   expected.refUnitCallerLease) ||
+        !sameLease(generation.moduleLease,
+                   generation.refUnitCallerLease) ||
+        !generation.refUnitCaller ||
+        generation.refUnitCaller.target_type() !=
+            expected.refUnitCaller.target_type() ||
+        generation.bindings.size() != 1 ||
+        generation.refUnitCandidates.size() != 1)
+        return false;
+    const auto& actualBinding = generation.bindings.front();
+    const auto& actualCandidate = generation.refUnitCandidates.front();
+    const auto& expectedCandidate = expected.refUnitCandidates.front();
+    if (slotBinding.declarationKind != LUNA_RUNTIME_DECLARATION_SLOT_V1 ||
+        slotBinding.flags != 0 || !slotBinding.implementation ||
+        slotBinding.symbolId != expectedCandidate.slotSymbolId ||
+        slotBinding.contractId != expectedCandidate.slotContractId ||
+        actualBinding.symbolId != slotBinding.symbolId ||
+        actualBinding.contractId != slotBinding.contractId ||
+        actualBinding.implementation != slotBinding.implementation ||
+        actualBinding.declarationKind != slotBinding.declarationKind ||
+        actualBinding.flags != slotBinding.flags ||
+        actualBinding.entryAbi != slotBinding.entryAbi ||
+        actualCandidate.symbolId != expectedCandidate.symbolId ||
+        actualCandidate.contractId != expectedCandidate.contractId ||
+        actualCandidate.linkageName != expectedCandidate.linkageName ||
+        actualCandidate.moduleName != expectedCandidate.moduleName ||
+        actualCandidate.packageId != expectedCandidate.packageId ||
+        actualCandidate.functionTypeId != expectedCandidate.functionTypeId ||
+        actualCandidate.refTypeId != expectedCandidate.refTypeId ||
+        actualCandidate.slotSymbolId != expectedCandidate.slotSymbolId ||
+        actualCandidate.slotContractId != expectedCandidate.slotContractId ||
+        actualCandidate.slotTypeId != expectedCandidate.slotTypeId ||
+        actualCandidate.entryAbi != expectedCandidate.entryAbi ||
+        actualCandidate.refMode != expectedCandidate.refMode ||
+        actualCandidate.resultMode != expectedCandidate.resultMode ||
+        actualCandidate.statusDomain != expectedCandidate.statusDomain)
+        return false;
+    auto absent = expected.requiredAbsentModuleIds;
+    std::sort(absent.begin(), absent.end());
+    auto active = expected.requiredActiveModules;
+    std::sort(active.begin(), active.end(),
+              [](const auto& left, const auto& right) {
+                  return left.moduleId < right.moduleId;
+              });
+    return generation.requiredAbsentModuleIds == absent &&
+        generation.requiredActiveModules == active;
+}
+
 bool MoonRuntime::matchesOwnerSnapshot(
     const GenerationState& generation,
     const std::shared_ptr<const void>& lease,

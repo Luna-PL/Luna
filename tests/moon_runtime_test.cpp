@@ -728,6 +728,88 @@ int main() {
                       &first, staged, phases, error, true,
                       LUNA_RUNTIME_DECLARATION_SLOT_V1, 0))
             return fail("Ref/unit adapter with exact lease did not stage");
+        const Binding slotSnapshot{
+            "symbol:slot", "contract:slot", &first,
+            LUNA_RUNTIME_DECLARATION_SLOT_V1, 0};
+        Runtime foreignRuntime;
+        Request changedFacts = request;
+        changedFacts.refUnitCandidates.front().slotTypeId = "type:other-slot";
+        Request changedRelation = request;
+        changedRelation.requiredAbsentModuleIds = {"org.luna.test.absent"};
+        Request changedCaller = request;
+        changedCaller.refUnitCaller = [](
+            const std::string&, const std::string&,
+            const luna::runtime::RuntimeFragmentExecutionContext&,
+            const luna::runtime::RuntimeFragmentRefHandle&,
+            int32_t&, std::string&) { return false; };
+        if (!runtime.matchesStagedRefUnitCandidateSnapshot(
+                staged, request, slotSnapshot) ||
+            foreignRuntime.matchesStagedRefUnitCandidateSnapshot(
+                staged, request, slotSnapshot) ||
+            runtime.matchesStagedRefUnitCandidateSnapshot(
+                staged, changedFacts, slotSnapshot) ||
+            runtime.matchesStagedRefUnitCandidateSnapshot(
+                staged, changedRelation, slotSnapshot) ||
+            runtime.matchesStagedRefUnitCandidateSnapshot(
+                staged, changedCaller, slotSnapshot) ||
+            runtime.matchesStagedRefUnitCandidateSnapshot(
+                staged, request,
+                {"symbol:slot", "contract:slot", &second,
+                 LUNA_RUNTIME_DECLARATION_SLOT_V1, 0}))
+            return fail("staged Ref/unit snapshot ignored its trusted fields");
+        const std::shared_ptr<const void> forgedSnapshotLease(
+            request.moduleLease.get(), [](const void*) {});
+        Request changedLease = request;
+        changedLease.moduleLease = forgedSnapshotLease;
+        if (runtime.matchesStagedRefUnitCandidateSnapshot(
+                staged, changedLease, slotSnapshot))
+            return fail("staged Ref/unit snapshot accepted a forged lease");
+        Request extraCandidateRequest = request;
+        auto extraCandidate = candidate;
+        extraCandidate.symbolId = "symbol:ref-unit-extra";
+        extraCandidateRequest.refUnitCandidates.push_back(extraCandidate);
+        Runtime::StagedGeneration extraCandidateStage;
+        if (!stageOne(runtime, extraCandidateRequest,
+                      "symbol:slot", "contract:slot", &first,
+                      extraCandidateStage, phases, error, true,
+                      LUNA_RUNTIME_DECLARATION_SLOT_V1, 0) ||
+            runtime.matchesStagedRefUnitCandidateSnapshot(
+                extraCandidateStage, request, slotSnapshot))
+            return fail("staged Ref/unit snapshot accepted an extra candidate");
+        Runtime::StagedGeneration hiddenRelationStage;
+        if (!stageOne(runtime, changedRelation,
+                      "symbol:slot", "contract:slot", &first,
+                      hiddenRelationStage, phases, error, true,
+                      LUNA_RUNTIME_DECLARATION_SLOT_V1, 0) ||
+            runtime.matchesStagedRefUnitCandidateSnapshot(
+                hiddenRelationStage, request, slotSnapshot))
+            return fail("staged Ref/unit snapshot accepted a hidden relation");
+        Request hiddenActiveRequest = request;
+        hiddenActiveRequest.requiredActiveModules = {
+            {"org.luna.test.owner", 1}};
+        Runtime::StagedGeneration hiddenActiveStage;
+        if (!stageOne(runtime, hiddenActiveRequest,
+                      "symbol:slot", "contract:slot", &first,
+                      hiddenActiveStage, phases, error, true,
+                      LUNA_RUNTIME_DECLARATION_SLOT_V1, 0) ||
+            runtime.matchesStagedRefUnitCandidateSnapshot(
+                hiddenActiveStage, request, slotSnapshot))
+            return fail("staged Ref/unit snapshot accepted a hidden active owner");
+        Runtime::StagedGeneration extraBindingStage;
+        if (!runtime.stage(
+                request,
+                [](const Request&, std::string&) { return true; },
+                [&](const Request&, std::vector<Binding>& bindings,
+                    std::string&) {
+                    bindings.push_back(slotSnapshot);
+                    bindings.push_back({"symbol:extra", ContractId, &second,
+                                        LUNA_RUNTIME_DECLARATION_FUNCTION_V1,
+                                        luna::runtime::GenerationBindingCallable});
+                    return true;
+                }, {}, extraBindingStage, error) ||
+            runtime.matchesStagedRefUnitCandidateSnapshot(
+                extraBindingStage, request, slotSnapshot))
+            return fail("staged Ref/unit snapshot accepted an extra binding");
         Runtime::PinnedGeneration loaded;
         if (runtime.loadOnce(staged, loaded, error) || loaded || !staged ||
             runtime.pin(ModuleId) ||
