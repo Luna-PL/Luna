@@ -306,7 +306,7 @@ bool exercisePrivateRefApplyJit(
         (failSecondDispatch &&
          (!exerciseSelectorFailure || expectedDispatches != 2)) ||
         (injectedDispatchFailure &&
-         (branchSelector || twoBorrowedReferences || expectedResult ||
+         (branchSelector || differentSlots || expectedResult ||
           transferredDropCalls || exerciseIngressGate ||
           exerciseSelectorFailure || expectedDispatches < 2 ||
           injectedDispatchFailure->second == 0 ||
@@ -575,7 +575,7 @@ bool exercisePrivateRefApplyJit(
         return false;
 
     using EntryOne = int32_t (*)(const void*, void*);
-    using EntryTwo = void (*)(const void*, void*, void*);
+    using EntryTwo = int32_t (*)(const void*, void*, void*);
     using EntrySelector = int32_t (*)(const void*, void*, bool);
     using EntryResultOne = uint64_t (*)(const void*, void*);
     static_assert(LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST == 0);
@@ -1073,10 +1073,13 @@ bool exercisePrivateRefApplyJit(
                 error = "private Ref selector body did not return success";
                 return false;
             }
-        } else if (twoBorrowedReferences)
-            entryTwo(parent.opaque(), const_cast<void*>(handle.opaque()),
-                const_cast<void*>(secondHandle.opaque()));
-        else if (entryOne(parent.opaque(),
+        } else if (twoBorrowedReferences) {
+            if (entryTwo(parent.opaque(), const_cast<void*>(handle.opaque()),
+                    const_cast<void*>(secondHandle.opaque())) != 0) {
+                error = "private two-Ref unit body did not return success";
+                return false;
+            }
+        } else if (entryOne(parent.opaque(),
                      const_cast<void*>(handle.opaque())) != 0) {
             error = "private Ref unit body did not return success";
             return false;
@@ -1109,13 +1112,19 @@ bool exercisePrivateRefApplyJit(
         privateRefJitRepeatedResumeFailureValue =
             injectedDispatchFailure->first;
         privateRefJitInjectRepeatedResumeFailure = true;
-        const auto failedStatus = entryOne(
-            parent.opaque(), const_cast<void*>(handle.opaque()));
+        const auto failedStatus = twoBorrowedReferences
+            ? entryTwo(parent.opaque(), const_cast<void*>(handle.opaque()),
+                const_cast<void*>(secondHandle.opaque()))
+            : entryOne(parent.opaque(), const_cast<void*>(handle.opaque()));
         privateRefJitInjectRepeatedResumeFailure = false;
         privateRefJitRepeatedResumeFailureValue = 0;
         const auto refStatus = luna_runtime_fragment_ref_check_v1(
             handle.opaque(), slot->symbolId.value.c_str(),
             slot->contractId.value.c_str());
+        const auto secondRefStatus = twoBorrowedReferences
+            ? luna_runtime_fragment_ref_check_v1(secondHandle.opaque(),
+                slot->symbolId.value.c_str(), slot->contractId.value.c_str())
+            : LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1;
         if (failedStatus != LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
             privateRefJitRepeatedResumeStatus !=
                 LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
@@ -1124,6 +1133,7 @@ bool exercisePrivateRefApplyJit(
             privateRefJitCompletedResumes != resumesBefore +
                 injectedDispatchFailure->second ||
             refStatus != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
+            secondRefStatus != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
             generationLease.expired()) {
             error = "nested Ref apply dispatch failure lost its owner stack or borrowed Ref";
             return false;
@@ -3722,7 +3732,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         return fail("different-Ref nested apply function is missing");
     if (!exercisePrivateRefApplyJit(
             *crossRefNestedApplyModule, *crossRefNestedApply,
-            privateRefJitError, 3, false, std::nullopt, true)) {
+            privateRefJitError, 3, false, std::nullopt, true,
+            false, {}, {}, std::nullopt, std::nullopt,
+            false, false, false, nullptr, 0, false, std::nullopt,
+            false, false, std::pair<int32_t, unsigned>{2, 2})) {
         std::cerr << privateRefJitError << '\n';
         return fail("different-Ref nested apply failed private JIT execution");
     }

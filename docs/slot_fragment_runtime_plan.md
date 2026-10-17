@@ -728,9 +728,9 @@ accepts `Result<i32, i32>` for a restricted Ref-apply body.
 Derivation failure leaves its output cell empty and releases active parent
 cells. A negative Slot dispatch status drops all active cells in reverse
 order. Outlined callbacks return the explicit continuation failure result
-`-1`. The single-borrowed-Ref/unit private root body now also returns `-1`
-after cleanup, while other admitted Result or two-Ref source bodies retain
-their trap exits. The private proof connects each failure branch to its
+`-1`. The one- or two-borrowed-Ref/unit private root body now also returns
+`-1` after cleanup, while admitted Result source bodies retain their trap
+exits. The private proof connects each failure branch to its
 derive/dispatch and checks the owner stack, order and terminal.
 This includes a repeated Drop after a continuation return has already cleared
 a cell. This does not yet establish a recoverable protocol for the other
@@ -2523,9 +2523,12 @@ not a public ABI decision or stable-release approval:
    rejection and repeated calls after Runtime teardown. Promote the verified
    consumer and its private admitted candidate only after public host ABI
    review, and complete owning parameter/return transfer. The original
-   imported-Slot consumer fixture dispatches one Slot on a normal exit. Two
-   separately encoded and verified 0.4 consumer variants now cover an early
-   return after the first Slot and a failure at the second Slot. The early
+   imported-Slot consumer fixture now dispatches one Slot with argument `0`
+   on a normal exit, so the verified plugin's legal `resume` runs through the
+   generated source continuation after Runtime teardown; repeated calls retain
+   the borrowed Ref. Two separately encoded and verified 0.4 consumer variants
+   now cover an early return after the first Slot and a failure at the second
+   Slot. The early
    variant accepts the verified plugin's borrowed Ref and skips its later
    dispatch under an observable Runtime-issued probe Ref. The failure variant
    pairs its exact verified owner and consumer in a host Runtime, then reports
@@ -2534,9 +2537,16 @@ not a public ABI decision or stable-release approval:
    now invokes the independently verified Moon plugin generation after host
    Runtime teardown: its single legal resume propagates an injected base-
    continuation failure, two fresh dispatches succeed, and discard skips the
-   base continuation. That proves the verified plugin's pin and failure path,
-   while a failed source Ref/apply dispatch using that verified plugin and
-   owning transfer remain outside this private proof. The focused Windows
+   base continuation. A separate test-only two-borrowed-Ref/unit source JIT
+   uses that verified plugin as its outer Ref and a Runtime-issued probe as
+   its inner Ref. During the plugin's legal resume, the generated source
+   continuation enters the inner Apply; an injected inner dispatch failure
+   returns through the plugin to the outer source status. Two fresh calls
+   recover, and neither borrowed Ref is consumed. This two-Ref source has a
+   sealed CFG and a private LLVM proof, but the one-Ref Native Ref/unit
+   preparation verifier rejects it; no verified 0.4 consumer artifact or
+   admitted host candidate is claimed for this shape. Owning transfer also
+   remains open. The focused Windows
    Clang 20 ASan `--cross-package-container-test` mode passes. Two full local
    ASan canonical attempts stopped earlier at the known LLVM 20 COFF
    `IMAGE_REL_AMD64_ADDR32NB` relocation failure, so they do not establish a
@@ -2544,9 +2554,9 @@ not a public ABI decision or stable-release approval:
    A legal source Fragment cannot produce the repeated-resume failure: Sema
    and the sealed CFG verifier enforce one resume per path. The current Native
    v1 export registry also has no executable Fragment binding profile; its
-   Fragment rows carry no entry. A source Ref/apply failure path with a verified
-   plugin still needs a legal generated continuation failure or a separately
-   specified and verified executable Native Fragment profile.
+   Fragment rows carry no entry. Promoting the test-only two-Ref source failure
+   path requires a bounded verifier/container profile, typed ingress and host
+   ABI review; the injected inner probe is not a publishable Fragment.
    Include nominal/contract mismatch, failed ingress, normal and early exits,
    and cleanup/pin-release regressions. Only after this gate and the remaining
    control-flow cases pass may

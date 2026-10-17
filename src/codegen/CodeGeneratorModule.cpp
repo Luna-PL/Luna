@@ -809,7 +809,7 @@ bool CodeGenerator::verifyPrivateRuntimeFragmentRefUnitIngress(
         parameters.back() = proof.mHelpers->boolTy();
     const bool privateUnitStatusBody = privateRefApply &&
         returnType->kind == TypeKind::Unit &&
-        (function.params.size() == 1 || privateRefApplySelector);
+        function.params.size() <= 2;
     auto* body = llvm::Function::Create(
         llvm::FunctionType::get(
 #ifdef LUNA_PRIVATE_REF_JIT_TEST

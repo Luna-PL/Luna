@@ -4,5 +4,5 @@ module effects;
 using canonical.container.host as host;
 
 export runtime fn apply_ref(selected: RuntimeFragmentRef<host::effects::audit_slot>) -> unit {
-    apply selected { host::effects::audit_slot(1) {} }
+    apply selected { host::effects::audit_slot(0) {} }
 }

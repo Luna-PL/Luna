@@ -427,7 +427,7 @@ int runCrossPackageContainerTest() {
             std::string& contractId) {
         std::string source = refSourceText;
         const std::string original =
-            "apply selected { host::effects::audit_slot(1) {} }";
+            "apply selected { host::effects::audit_slot(0) {} }";
         const auto site = source.find(original);
         if (site == std::string::npos ||
             source.find(original, site + original.size()) != std::string::npos)
@@ -1334,6 +1334,90 @@ int runCrossPackageContainerTest() {
             return fail("verified Ref flow probe did not issue its live handle");
     }
     activeVerifiedRefFlowProbe = &flowProbe;
+    const std::string nestedPluginSource =
+        "package canonical.container.refprep; module effects; "
+        "using canonical.container.host as host; "
+        "export runtime fn nested_plugin_ref("
+        "outer: RuntimeFragmentRef<host::effects::audit_slot>, "
+        "inner: RuntimeFragmentRef<host::effects::audit_slot>) -> unit { "
+        "apply outer { host::effects::audit_slot(0) { "
+        "apply inner { host::effects::audit_slot(2) {} } } } }";
+    auto nestedPluginSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzePathWithOverlay(
+            (fixtures / "refprep").string(), refSourcePath.string(),
+            nestedPluginSource);
+    if (!nestedPluginSnapshot.success())
+        return fail("cross-package nested Ref/plugin source did not analyze");
+    moon::LunaLowerer nestedPluginLowerer;
+    auto nestedPluginModule = nestedPluginLowerer.lower(
+        *nestedPluginSnapshot.program(), *nestedPluginSnapshot.symbolTable());
+    moon::Sealer nestedPluginSealer;
+    if (!nestedPluginModule || !nestedPluginLowerer.errors().empty() ||
+        !nestedPluginSealer.sealFunctionBodies(*nestedPluginModule))
+        return fail("cross-package nested Ref/plugin source did not seal");
+    nestedPluginModule->dependencySlotPublications = dependencies;
+    moon::Verifier nestedPluginPublicationVerifier(
+        moon::VerificationPolicy::NativeRefUnitPreparation);
+    if (nestedPluginPublicationVerifier.verify(*nestedPluginModule) ||
+        std::none_of(nestedPluginPublicationVerifier.errors().begin(),
+                     nestedPluginPublicationVerifier.errors().end(),
+                     [](const auto& diagnostic) {
+            return diagnostic.message ==
+                "Native Ref/unit preparation has another Ref callable";
+        }))
+        return fail("two-Ref source escaped the one-Ref preparation boundary");
+    moon::FunctionDecl* nestedPluginSourceFunction = nullptr;
+    for (auto& declaration : nestedPluginModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function &&
+            function->name == "nested_plugin_ref")
+            nestedPluginSourceFunction = function;
+    if (!nestedPluginSourceFunction)
+        return fail("cross-package nested Ref/plugin source is missing");
+    auto nestedPluginJit =
+        CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
+            *nestedPluginModule, *nestedPluginSourceFunction, error);
+    const void* nestedPluginAddress = nestedPluginJit
+        ? nestedPluginJit->lookup("__luna_private_ref_apply_jit_test", error)
+        : nullptr;
+    if (!nestedPluginAddress) {
+        std::cerr << error << '\n';
+        return fail("cross-package nested Ref/plugin source did not JIT");
+    }
+    using NestedPluginEntry = int32_t (*)(const void*, void*, void*);
+    const auto nestedPluginEntry = reinterpret_cast<NestedPluginEntry>(
+        const_cast<void*>(nestedPluginAddress));
+    const auto callNestedPlugin = [&] {
+        return nestedPluginEntry(noneContext.opaque(),
+            const_cast<void*>(borrowedRef.opaque()),
+            const_cast<void*>(flowRef.opaque()));
+    };
+    flowProbe.failSecondDispatch = true;
+    flowProbe.values.clear();
+    flowProbe.repeatedResumeStatus = 0;
+    if (callNestedPlugin() != LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
+        flowProbe.values != std::vector<int32_t>{2} ||
+        flowProbe.repeatedResumeStatus !=
+            LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+        !flowProbe.valid)
+        return fail("verified plugin resume lost nested source Ref failure");
+    flowProbe.failSecondDispatch = false;
+    for (int iteration = 0; iteration < 2; ++iteration) {
+        flowProbe.values.clear();
+        if (callNestedPlugin() != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST ||
+            flowProbe.values != std::vector<int32_t>{2} ||
+            !flowProbe.valid)
+            return fail("verified plugin nested source Ref did not recover");
+    }
+    if (luna_runtime_fragment_ref_check_v1(
+            borrowedRef.opaque(), requirement.slotId.c_str(),
+            requirement.contractId.c_str()) !=
+            LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
+        luna_runtime_fragment_ref_check_v1(
+            flowRef.opaque(), requirement.slotId.c_str(),
+            requirement.contractId.c_str()) !=
+            LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
+        return fail("nested source Ref failure consumed a borrowed owner");
     for (int iteration = 0; iteration < 2; ++iteration) {
         flowProbe.values.clear();
         flowProbe.resumeStatus = 0;

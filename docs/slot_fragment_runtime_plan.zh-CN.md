@@ -569,8 +569,8 @@ Ref apply，以及可选的一个内层 Apply，两层借用同一本地 Ref 或
 `Result<i32, i32>` 返回。
 派生失败保持输出 cell 为空，并释放有效父 cell。Slot 分派返回负状态时，
 先按逆序 Drop 全部有效 cell。outlined 回调返回显式续体失败值 `-1`；
-单借用 Ref／unit 的私有根 body 现在也在清理后返回 `-1`，其他已准入的 Result
-或双 Ref 源码 body 仍保留 trap 出口。私有证明把每个失败分支连回对应派生／
+单或双借用 Ref／unit 的私有根 body 现在也在清理后返回 `-1`，其他已准入的 Result
+源码 body 仍保留 trap 出口。私有证明把每个失败分支连回对应派生／
 分派，并核对 owner 栈、顺序和终止指令；续体 return 已清空 cell 后重复 Drop
 也安全。其他私有 body 形态尚无可恢复返回协议。module verifier、
 container encoder 和公开 CodeGenerator 仍拒绝
@@ -1843,25 +1843,33 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    的 Ref，在显式 parent context 中执行源码 apply。私有 JIT 已覆盖借用入口、无效
    capability 拒绝及 Runtime 销毁后的重复调用。公开宿主 ABI 审查通过后，才能将
    verified consumer 及其私有准入 candidate 提升至公开路径；还须完成拥有型
-   参数／返回转移。原有 imported-Slot consumer 夹具只在正常出口分派一次 Slot。
-   另两份独立编码并验证的 0.4 consumer 现覆盖首次 Slot 后提前返回、第二次 Slot
-   分派失败。提前返回变体接受 verified plugin 的借用 Ref；使用 Runtime 发放的
+   参数／返回转移。原有 imported-Slot consumer 夹具用参数 `0` 在正常出口
+   分派一次 Slot，因此宿主 Runtime 销毁后，已验证插件的合法 `resume` 会进入生成的
+   源码续体；重复调用保留借用 Ref。另两份独立编码并验证的 0.4 consumer 现覆盖
+   首次 Slot 后提前返回、第二次 Slot 分派失败。提前返回变体接受 verified plugin
+   的借用 Ref；使用 Runtime 发放的
    可观测探针 Ref 时确认后续 Slot 被跳过。失败变体在宿主 Runtime 中配对激活精确的
    verified owner 与 consumer；该 Runtime 销毁后，探针 Ref 触发执行失败，同一 Ref
    随后两次全新调用成功。另一个直接 Runtime 分派现于宿主 Runtime 销毁后执行
    独立验证的 Moon plugin generation：合法的单次 resume 传播注入的 base
    continuation 失败，随后两次全新分派成功，discard 路径跳过 base 续体。
-   这证明已验证插件的 pin 和失败路径；使用该插件的源码 Ref/apply 失败分派及
-   拥有型转移仍不在此私有证明内。Windows Clang 20 ASan 的定向
+   另一个仅测试用的双借用 Ref／unit 源码 JIT 以该已验证插件为外层 Ref，
+   以 Runtime 发放的探针为内层 Ref。插件合法 resume 时，生成的源码续体进入
+   内层 Apply；注入的内层分派失败经插件回到外层源码状态。两次全新调用恢复，
+   两个借用 Ref 均未被消耗。该双 Ref 源码有 sealed CFG 和私有 LLVM 证明，
+   但单 Ref Native Ref/unit preparation 验证器拒绝此形状；不能声称它已有
+   verified 0.4 consumer 产物或宿主准入 candidate。拥有型转移仍待完成。
+   Windows Clang 20 ASan 的定向
    `--cross-package-container-test` 模式通过。两次本地完整 ASan canonical
    均更早停在已知的 LLVM 20 COFF `IMAGE_REL_AMD64_ADDR32NB` 重定位错误，
    因此不能声称本次完整的 sanitizer canonical 通过。合法源码 Fragment
    不能产生重复 resume 失败：Sema 与
    sealed CFG 验证器都限制每条路径至多一次 resume。当前 Native v1 export
    registry 也没有可执行 Fragment binding profile，其 Fragment 行不带 entry。
-   源码 Ref/apply 的 verified plugin 失败路径仍需合法的生成续体失败，或另行
-   定义并验证可执行 Native Fragment profile；仍须覆盖名义／contract
-   错配、入口失败、正常／提前退出及清理与 pin 释放。完成此门和剩余控制流用例后，
+   将仅测试用的双 Ref 源码失败路径提升为公开能力，仍需有界的 verifier／container
+   profile、类型化入口及宿主 ABI 审查；注入的内层探针不是可发布 Fragment。
+   仍须覆盖名义／contract 错配、入口失败、正常／提前退出及清理与 pin 释放。
+   完成此门和剩余控制流用例后，
    `source-ref-apply` 才可脱离
    `implementation-open`。
 
