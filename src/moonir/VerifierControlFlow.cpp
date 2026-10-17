@@ -933,6 +933,46 @@ void Verifier::verifyControlFlowBlocks(
                       std::to_string(localDefinitions[index]) +
                       " definitions; expected " + std::to_string(expected));
     }
+
+    // A Resume enters a sibling continuation and then returns to the same
+    // Fragment body. Check the full CFG path, including that detour, so a
+    // sealed graph cannot bypass the source-level single-shot rule.
+    struct ResumePath {
+        BlockId block;
+        bool resumed;
+    };
+    for (const auto& fragment : graph.regions) {
+        if (fragment.kind != RegionKind::Fragment ||
+            fragment.entry.empty())
+            continue;
+        std::vector<uint8_t> visited(graph.blocks.size(), 0);
+        std::vector<ResumePath> pending{{fragment.entry, false}};
+        bool repeated = false;
+        while (!pending.empty() && !repeated) {
+            const auto path = pending.back();
+            pending.pop_back();
+            if (path.block.empty() ||
+                path.block.value >= graph.blocks.size() ||
+                path.block == fragment.exit)
+                continue;
+            const uint8_t state = path.resumed ? 2u : 1u;
+            if ((visited[path.block.value] & state) != 0) continue;
+            visited[path.block.value] |= state;
+            const auto& block = graph.blocks[path.block.value];
+            const auto* owner = enclosingRegion(
+                block.region, RegionKind::Fragment);
+            const bool ownResume = owner && owner->id == fragment.id &&
+                block.terminator.kind == TerminatorKind::Resume;
+            if (ownResume && path.resumed) {
+                error(block.terminator.location,
+                      "canonical fragment path resumes its continuation more than once");
+                repeated = true;
+                break;
+            }
+            for (const auto successor : successors[path.block.value])
+                pending.push_back({successor, path.resumed || ownResume});
+        }
+    }
 }
 
 } // namespace moon

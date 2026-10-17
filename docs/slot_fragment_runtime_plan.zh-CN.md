@@ -1845,7 +1845,11 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    可观测探针 Ref 时确认后续 Slot 被跳过。失败变体在宿主 Runtime 中配对激活精确的
    verified owner 与 consumer；该 Runtime 销毁后，探针 Ref 触发执行失败，同一 Ref
    随后两次全新调用成功。由 verified plugin generation 触发的失败和拥有型转移
-   尚不在此私有证明内；仍须覆盖名义／contract
+   尚不在此私有证明内。合法源码 Fragment 不能产生重复 resume 失败：Sema 与
+   sealed CFG 验证器都限制每条路径至多一次 resume。当前 Native v1 export
+   registry 也没有可执行 Fragment binding profile，其 Fragment 行不带 entry。
+   在声称 verified plugin 失败门通过之前，须定义并验证相应 profile，或采用
+   合法源码可触发的失败路径；仍须覆盖名义／contract
    错配、入口失败、正常／提前退出及清理与 pin 释放。完成此门和剩余控制流用例后，
    `source-ref-apply` 才可脱离
    `implementation-open`。

@@ -328,6 +328,24 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     contextApply->body->stmts.push_back(std::move(contextInvocation));
     contextCompositionBody->stmts.push_back(std::move(contextApply));
 
+    executableContext->body->stmts.push_back(
+        std::make_unique<moon::ResumeStmt>());
+    auto repeatedResumeCfg = cfgBuilder.build(
+        *contextCompositionBody, {}, moon::RegionKind::Function,
+        compositionModule);
+    executableContext->body->stmts.pop_back();
+    if (!repeatedResumeCfg)
+        return fail("canonical builder lost repeated-resume verifier fixture");
+    if (cfgVerifier.verify(*repeatedResumeCfg, compositionModule) ||
+        !std::any_of(
+            cfgVerifier.errors().begin(), cfgVerifier.errors().end(),
+            [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "fragment path resumes its continuation more than once") !=
+                    std::string::npos;
+            }))
+        return fail("CFG verifier accepted a second resume in one fragment path");
+
     auto contextCfg = cfgBuilder.build(
         std::move(contextCompositionBody), {},
         moon::RegionKind::Function, compositionModule);

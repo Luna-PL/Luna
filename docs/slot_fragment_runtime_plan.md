@@ -2527,6 +2527,11 @@ not a public ABI decision or stable-release approval:
    execution failure under a probe Ref after that Runtime is destroyed; two
    fresh calls succeed with the same Ref. A failed dispatch from a verified
    plugin generation and owning transfer remain outside this private proof.
+   A legal source Fragment cannot produce the repeated-resume failure: Sema
+   and the sealed CFG verifier enforce one resume per path. The current Native
+   v1 export registry also has no executable Fragment binding profile; its
+   Fragment rows carry no entry. Specify and verify such a profile, or use a
+   legal source-level failure, before claiming the verified-plugin failure gate.
    Include nominal/contract mismatch, failed ingress, normal and early exits,
    and cleanup/pin-release regressions. Only after this gate and the remaining
    control-flow cases pass may

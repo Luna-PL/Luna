@@ -14,6 +14,7 @@
 | --- | --- | --- |
 | 静态嵌套 `apply` | 最内层词法绑定生效，退出后恢复外层绑定；不会隐式构造 runtime chain。 | `luna.semantic-regressions` |
 | 静态正文展开 | 直接和相互递归展开均由 Sema 与 CFG builder fail closed，伪造的 structured MoonIR 也被拒绝。 | `luna.semantic-regressions`、`luna.moonir-canonical` |
+| 静态 Fragment 单次续体 | 源码 Sema 拒绝同一路径上的两次 `resume`；sealed CFG 验证器也会拒绝经过同级续体返回后可达的第二个 `Resume`。不同调用和嵌套 Fragment 各自计数。 | `luna.semantic-regressions`、`luna.moonir-canonical` |
 | 静态同 Slot 续体嵌套 | 有限嵌套合法。内层 discard 只跳过自己的续体；内层续体 return 则退出发起调用的函数，并跳过内外 handler 的 post-resume 代码。 | `luna.semantic-regressions` |
 | 未绑定 private Slot | Identity 降为普通词法块，在 handler 内也如此；不会引入 runtime context 依赖。 | `luna.semantic-regressions`、`luna.moonir-canonical` |
 | Runtime ordered chain | `resume` 按宿主明确给出的顺序前进，post-resume 按逆序返回；catalog 顺序和加载顺序不决定 chain。 | `luna.runtime-fragment-v1` |
