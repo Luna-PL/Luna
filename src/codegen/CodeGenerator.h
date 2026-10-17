@@ -38,6 +38,8 @@ bool loadVerifiedMoonRefUnitPreparation(
 }
 namespace luna::runtime {
 class RuntimeOwnedResultHandle;
+class RuntimeFragmentExecutionContext;
+class RuntimeFragmentRefHandle;
 }
 
 // Internal ownership boundary for ORC materializations. Keeping this object
@@ -77,6 +79,23 @@ private:
     std::shared_ptr<LunaJitModule> lease_;
     const void* entry_ = nullptr;
     std::vector<uint8_t> record_;
+};
+
+// Test-only two-Ref ingress. It retains the exact JIT lease and validates
+// both Runtime-issued borrowed handles before calling the decoded source.
+class LunaPrivateRefPairUnitLoadedEntry {
+public:
+    int32_t call(
+        const luna::runtime::RuntimeFragmentExecutionContext& parent,
+        const luna::runtime::RuntimeFragmentRefHandle& first,
+        const luna::runtime::RuntimeFragmentRefHandle& second) const;
+
+private:
+    friend class CodeGenerator;
+    std::shared_ptr<LunaJitModule> lease_;
+    const void* entry_ = nullptr;
+    std::string slotSymbolId_;
+    std::string slotContractId_;
 };
 
 // Test-only loaded Ref/Result host adapter. It supplies a Runtime-issued code
@@ -174,7 +193,7 @@ public:
         std::vector<uint8_t>* entryRecord = nullptr);
     // A decoded two-Ref preparation must rederive its separate source facts
     // before the disposable JIT is allowed to lower either Apply.
-    static std::shared_ptr<LunaJitModule>
+    static std::unique_ptr<LunaPrivateRefPairUnitLoadedEntry>
     materializePrivateNativeRefPairUnitPreparationForTest(
         moon::Module& program, moon::FunctionDecl& function,
         std::string& failure);

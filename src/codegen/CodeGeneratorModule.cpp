@@ -9,6 +9,7 @@
 #include "runtime/RuntimeFragmentCompilerBridge.h"
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 #include "runtime/RuntimeOwnedResult.h"
+#include "runtime/RuntimeFragment.h"
 #endif
 
 #include <llvm/Analysis/ValueTracking.h>
@@ -424,6 +425,36 @@ int32_t LunaPrivateRefUnitApplyLoadedEntry::call(
     const auto entry = reinterpret_cast<LunaNativeRefUnitEntryV1>(
         const_cast<void*>(entry_));
     return entry(parentContext, borrowedRef);
+}
+
+int32_t LunaPrivateRefPairUnitLoadedEntry::call(
+    const luna::runtime::RuntimeFragmentExecutionContext& parent,
+    const luna::runtime::RuntimeFragmentRefHandle& first,
+    const luna::runtime::RuntimeFragmentRefHandle& second) const {
+    auto keepCodeAlive = lease_;
+    if (!keepCodeAlive || !entry_)
+        return LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST;
+    const auto checkedContext =
+        luna_compiler_fragment_context_check(parent.opaque());
+    if (checkedContext == LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT)
+        return LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST;
+    if (checkedContext != LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS)
+        return LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST;
+    for (const auto* borrowed : {first.opaque(), second.opaque()}) {
+        const auto checked = luna_runtime_fragment_ref_check_v1(
+            borrowed, slotSymbolId_.c_str(), slotContractId_.c_str());
+        if (checked == LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1)
+            return LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST;
+        if (checked == LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1)
+            return LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST;
+        if (checked != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
+            return LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST;
+    }
+    using Entry = int32_t (*)(const void*, const void*, const void*);
+    const auto entry = reinterpret_cast<Entry>(const_cast<void*>(entry_));
+    return entry(parent.opaque(), first.opaque(), second.opaque()) == 0
+        ? LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST
+        : LUNA_PRIVATE_REF_UNIT_APPLY_EXECUTION_FAILURE_V1_TEST;
 }
 
 int32_t LunaPrivateRefResultLoadedEntry::call(
@@ -3109,15 +3140,26 @@ CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
     return executable;
 }
 
-std::shared_ptr<LunaJitModule>
+std::unique_ptr<LunaPrivateRefPairUnitLoadedEntry>
 CodeGenerator::materializePrivateNativeRefPairUnitPreparationForTest(
     moon::Module& program, FunctionDecl& function, std::string& failure) {
     luna::codegen::NativeRefPairUnitSourceFacts facts;
     if (!luna::codegen::deriveNativeRefPairUnitSourceFacts(
             program, function, facts, failure))
         return {};
-    return materializePrivateRuntimeFragmentRefApplyForTest(
+    auto executable = materializePrivateRuntimeFragmentRefApplyForTest(
         program, function, failure);
+    if (!executable) return {};
+    const void* entry = executable->lookup(
+        "__luna_private_ref_apply_jit_test", failure);
+    if (!entry) return {};
+    auto loaded = std::make_unique<LunaPrivateRefPairUnitLoadedEntry>();
+    loaded->lease_ = std::move(executable);
+    loaded->entry_ = entry;
+    loaded->slotSymbolId_ = std::move(facts.slotSymbolId);
+    loaded->slotContractId_ = std::move(facts.slotContractId);
+    failure.clear();
+    return loaded;
 }
 
 std::shared_ptr<LunaJitModule>

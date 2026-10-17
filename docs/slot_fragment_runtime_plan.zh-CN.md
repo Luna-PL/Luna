@@ -1864,6 +1864,9 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    loader 仍拒绝该双 Ref 产物。独立的双 Ref 源码事实推导绑定解码后的函数签名和
    两个 Apply 参数；专用测试 JIT 在 lowering 前重推这些事实，并在生成可执行代码前
    拒绝伪造复用的 Apply 绑定。它不签发 caller capability，因此不能声称已有宿主准入 candidate。
+   仅测试用的类型化入口保留 JIT 租约，在进入函数体前检查父 context 与两个由 Runtime
+   签发的借用 handle，并将非零函数体状态映射为执行失败。无效 context 或任一无效 handle
+   均不触发分派；这不定义公开的双 Ref ABI。
    拥有型转移仍待完成。
    Windows Clang 20 ASan 的定向
    `--cross-package-container-test` 模式通过。两次本地完整 ASan canonical
@@ -1873,7 +1876,7 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    sealed CFG 验证器都限制每条路径至多一次 resume。当前 Native v1 export
    registry 也没有可执行 Fragment binding profile，其 Fragment 行不带 entry。
    将已准备的双 Ref 源码失败路径提升为公开能力，仍需 candidate 签发、
-   类型化入口及宿主 ABI 审查；注入的内层探针不是可发布 Fragment。
+   公开类型化入口及宿主 ABI 审查；注入的内层探针不是可发布 Fragment。
    仍须覆盖名义／contract 错配、入口失败、正常／提前退出及清理与 pin 释放。
    完成此门和剩余控制流用例后，
    `source-ref-apply` 才可脱离

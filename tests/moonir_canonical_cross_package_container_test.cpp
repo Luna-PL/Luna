@@ -1437,28 +1437,32 @@ int runCrossPackageContainerTest() {
             nestedPluginVerified, *nestedPluginSourceFunction,
             wrongSingleFacts, error))
         return fail("decoded two-Ref source lost its separate source facts");
-    auto nestedPluginJit =
+    auto nestedPluginEntry =
         CodeGenerator::materializePrivateNativeRefPairUnitPreparationForTest(
             nestedPluginVerified, *nestedPluginSourceFunction, error);
-    const void* nestedPluginAddress = nestedPluginJit
-        ? nestedPluginJit->lookup("__luna_private_ref_apply_jit_test", error)
-        : nullptr;
-    if (!nestedPluginAddress) {
+    if (!nestedPluginEntry) {
         std::cerr << error << '\n';
         return fail("cross-package nested Ref/plugin source did not JIT");
     }
-    using NestedPluginEntry = int32_t (*)(const void*, void*, void*);
-    const auto nestedPluginEntry = reinterpret_cast<NestedPluginEntry>(
-        const_cast<void*>(nestedPluginAddress));
     const auto callNestedPlugin = [&] {
-        return nestedPluginEntry(noneContext.opaque(),
-            const_cast<void*>(borrowedRef.opaque()),
-            const_cast<void*>(flowRef.opaque()));
+        return nestedPluginEntry->call(noneContext, borrowedRef, flowRef);
     };
+    luna::runtime::RuntimeFragmentExecutionContext invalidPairContext;
+    luna::runtime::RuntimeFragmentRefHandle invalidPairRef;
+    flowProbe.values.clear();
+    if (nestedPluginEntry->call(invalidPairContext, borrowedRef, flowRef) !=
+            LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST ||
+        nestedPluginEntry->call(noneContext, invalidPairRef, flowRef) !=
+            LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST ||
+        nestedPluginEntry->call(noneContext, borrowedRef, invalidPairRef) !=
+            LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST ||
+        !flowProbe.values.empty())
+        return fail("two-Ref typed ingress executed after a failed preflight");
     flowProbe.failSecondDispatch = true;
     flowProbe.values.clear();
     flowProbe.repeatedResumeStatus = 0;
-    if (callNestedPlugin() != LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
+    if (callNestedPlugin() !=
+            LUNA_PRIVATE_REF_UNIT_APPLY_EXECUTION_FAILURE_V1_TEST ||
         flowProbe.values != std::vector<int32_t>{2} ||
         flowProbe.repeatedResumeStatus !=
             LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
