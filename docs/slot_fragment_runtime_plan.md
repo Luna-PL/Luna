@@ -1551,7 +1551,15 @@ A post-stage attestation also checks the generation actually returned by
 load-once or activation. A deterministic pre-publication hook stages a
 same-digest, same-row foreign lease after verified staging; Runtime's generic
 load-once reuses it, and the Native adapter rejects the returned pin with an
-empty output while leaving that competing active generation intact.
+empty output while leaving that competing active generation intact. The library
+lease alone does not establish who published a generation: a host can retain
+that lease from the verified staging callback and publish an otherwise exact
+clone. Cache reuse therefore also requires a weak record of the exact
+generation issued by Native load-once. The initial load records it only after
+checking the returned generation ID against its own staged ID, and Native
+load-once calls serialize publication with registration. Regressions reject
+both an exact host-published clone under the verified lease and an exact clone
+published between verified staging and load-once return.
 
 | Review decision | Proposed contract and evidence still required |
 | --- | --- |

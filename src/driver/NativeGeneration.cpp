@@ -53,11 +53,17 @@ using NativeLibraryPin = std::shared_ptr<const VerifiedNativeLibrary>;
 struct VerifiedNativeLeaseRegistry {
     std::mutex mutex;
     std::vector<std::weak_ptr<const VerifiedNativeLibrary>> libraries;
+    std::vector<std::weak_ptr<const void>> publishedGenerations;
 };
 
 VerifiedNativeLeaseRegistry& nativeLeaseRegistry() {
     static VerifiedNativeLeaseRegistry registry;
     return registry;
+}
+
+std::mutex& nativeLoadOnceMutex() {
+    static std::mutex mutex;
+    return mutex;
 }
 
 bool sameNativeProof(const NativeProofInfo& left,
@@ -79,6 +85,34 @@ void rememberNativeLibrary(const NativeLibraryPin& library) {
         [](const auto& weak) { return weak.expired(); }),
         registry.libraries.end());
     registry.libraries.push_back(library);
+}
+
+void rememberPublishedNativeGeneration(
+    const luna::runtime::MoonRuntime::PinnedGeneration& generation) {
+    auto& registry = nativeLeaseRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    registry.publishedGenerations.erase(std::remove_if(
+        registry.publishedGenerations.begin(),
+        registry.publishedGenerations.end(),
+        [](const auto& weak) { return weak.expired(); }),
+        registry.publishedGenerations.end());
+    registry.publishedGenerations.push_back(generation.weakIdentity());
+}
+
+bool wasPublishedByNativeLoader(
+    const luna::runtime::MoonRuntime::PinnedGeneration& generation) {
+    auto& registry = nativeLeaseRegistry();
+    std::lock_guard<std::mutex> lock(registry.mutex);
+    for (auto it = registry.publishedGenerations.begin();
+         it != registry.publishedGenerations.end();) {
+        if (it->expired()) {
+            it = registry.publishedGenerations.erase(it);
+            continue;
+        }
+        if (generation.matchesIdentity(*it)) return true;
+        ++it;
+    }
+    return false;
 }
 
 NativeLibraryPin findNativeLibraryLease(
@@ -348,6 +382,9 @@ bool loadVerifiedNativeGenerationOnceImpl(
     luna::runtime::MoonRuntime::PinnedGeneration& loaded,
     std::string& error,
     const NativeBeforePublication& beforePublication) {
+    // Publish and register an issued generation before another Native
+    // load-once call can observe it as a cache hit.
+    std::lock_guard<std::mutex> loadLock(nativeLoadOnceMutex());
     if (loaded) {
         error = "Native load-once output already owns a generation";
         return false;
@@ -375,6 +412,10 @@ bool loadVerifiedNativeGenerationOnceImpl(
         if (!matchesVerifiedNativeSnapshot(
                 runtime, existing, expected, bindings)) {
             error = "same-content Native generation changed its verified snapshot";
+            return false;
+        }
+        if (!wasPublishedByNativeLoader(existing)) {
+            error = "same-content Native generation was not published by verified loader";
             return false;
         }
         loaded = std::move(existing);
@@ -409,15 +450,19 @@ bool loadVerifiedNativeGenerationOnceImpl(
             return false;
         }
         loaded = std::move(activated);
+        rememberPublishedNativeGeneration(loaded);
         return true;
     }
+    const uint64_t stagedId = staged.generationId();
     if (!runtime.loadOnce(staged, loaded, error)) return false;
-    if (!matchesVerifiedNativeSnapshot(
+    if (loaded.generationId() != stagedId ||
+        !matchesVerifiedNativeSnapshot(
             runtime, loaded, stagedRequest, stagedBindings)) {
         loaded = {};
         error = "verified Native load-once changed its staged snapshot";
         return false;
     }
+    rememberPublishedNativeGeneration(loaded);
     return true;
 }
 

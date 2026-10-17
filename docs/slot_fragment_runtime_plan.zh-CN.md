@@ -1158,7 +1158,11 @@ generation 仍复用原 pin。当前缓存来源缺口已封闭，提议中的�
 暂存后的核对还检查 load-once 或 activation 实际返回的 generation。确定性预发布钩子
 在已验证暂存后发布同摘要、同 binding 行但 lease 来自外部的 generation；Runtime 的
 通用 load-once 会复用它，Native 适配器则拒绝返回的 pin，保持输出为空，竞争的 active
-generation 不受改动。
+generation 不受改动。仅有库 lease 不能证明 generation 的发布方：宿主可从已验证暂存
+回调保留同一 lease，再自行发布字段完全相同的副本。缓存复用现还要求 Native load-once
+签发的精确 generation 身份弱记录；首次加载仅在返回的 generation ID 等于自身暂存
+ID 后登记，Native load-once 调用将发布与登记串行化。回归还拒绝同 lease、同字段的
+宿主副本，以及在已验证暂存与 load-once 返回之间发布的同样副本。
 
 | 审议项 | 建议契约与仍需的证据 |
 | --- | --- |

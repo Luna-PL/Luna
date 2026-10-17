@@ -37,9 +37,9 @@ bool loadVerifiedNativeGenerationOnceWithPrePublishHookForTest(
 #endif
 
 // Complete verified artifact -> pinned module loop for the non-evolving case.
-// Re-loading reuses only an active generation with the exact verified library
-// lease and full snapshot; another image or foreign same-digest generation is
-// rejected until the evolution API is requested.
+// Re-loading reuses only an active generation previously issued by this
+// adapter, with the exact verified library lease and full snapshot. A foreign
+// same-digest generation is rejected.
 bool loadVerifiedNativeGenerationOnce(
     luna::runtime::MoonRuntime& runtime,
     const std::string& artifactPath, const std::string& trustStorePath,

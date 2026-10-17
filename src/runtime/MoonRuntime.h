@@ -214,6 +214,19 @@ public:
         bool sameGeneration(const PinnedGeneration& other) const {
             return generation_ && generation_ == other.generation_;
         }
+        // Lets a trusted loader remember an issued generation without
+        // extending its lifetime or relying on Runtime-scoped numeric IDs.
+        std::weak_ptr<const void> weakIdentity() const {
+            return generation_;
+        }
+        bool matchesIdentity(
+            const std::weak_ptr<const void>& identity) const {
+            const auto retained = identity.lock();
+            return generation_ && retained &&
+                generation_.get() == retained.get() &&
+                !generation_.owner_before(retained) &&
+                !retained.owner_before(generation_);
+        }
         // Requires both the retained address and its shared ownership to
         // match. Trusted adapters can bind decoded facts to this exact lease.
         bool matchesModuleLease(const std::shared_ptr<const void>& lease) const;

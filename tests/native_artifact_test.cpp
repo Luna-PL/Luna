@@ -872,6 +872,27 @@ int generationSwitch(int argc, char** argv) {
         callGenerationBinding(duplicateLoaded.find(typedFunction)) != 42 ||
         loadOnceRuntime.retainedGenerationCount(loadedOnce.moduleId()) != 1)
         return fail("Native same-content load did not reuse its first generation");
+    luna::runtime::MoonRuntime concurrentRuntime;
+    luna::runtime::MoonRuntime::PinnedGeneration concurrentFirst,
+        concurrentSecond;
+    std::string firstError, secondError;
+    bool firstSucceeded = false, secondSucceeded = false;
+    std::thread firstLoad([&] {
+        firstSucceeded = luna::driver::loadVerifiedNativeGenerationOnce(
+            concurrentRuntime, argv[2], argv[3], concurrentFirst,
+            firstError);
+    });
+    std::thread secondLoad([&] {
+        secondSucceeded = luna::driver::loadVerifiedNativeGenerationOnce(
+            concurrentRuntime, argv[2], argv[3], concurrentSecond,
+            secondError);
+    });
+    firstLoad.join();
+    secondLoad.join();
+    if (!firstSucceeded || !secondSucceeded ||
+        !concurrentFirst.sameGeneration(concurrentSecond) ||
+        concurrentRuntime.retainedGenerationCount(loadedOnce.moduleId()) != 1)
+        return fail("concurrent Native load-once lost verified cache reuse");
     luna::runtime::MoonRuntime::PinnedGeneration changedLoaded;
     if (luna::driver::loadVerifiedNativeGenerationOnce(
             loadOnceRuntime, argv[4], argv[5], changedLoaded, error) ||
@@ -917,18 +938,38 @@ int generationSwitch(int argc, char** argv) {
         return fail("Native cache accepted a same-digest foreign generation");
 
     luna::runtime::MoonRuntime sourceRuntime;
+    luna::runtime::GenerationStagingRequest verifiedRequest;
     std::shared_ptr<const void> verifiedLease;
     std::vector<luna::runtime::GenerationBinding> verifiedRows;
     luna::runtime::MoonRuntime::StagedGeneration sourceStaged;
     if (!luna::driver::stageVerifiedNativeGeneration(
             sourceRuntime, argv[2], argv[3],
             [&](const auto& request, const auto& rows, auto&) {
+                verifiedRequest = request;
                 verifiedLease = request.moduleLease;
                 verifiedRows = rows;
                 return true;
             }, sourceStaged, error) ||
         !verifiedLease || verifiedRows.empty())
         return fail("Native cache snapshot fixture lost its verified lease");
+    luna::runtime::MoonRuntime clonedRuntime;
+    luna::runtime::MoonRuntime::StagedGeneration clonedStaged;
+    luna::runtime::MoonRuntime::PinnedGeneration clonedActive, clonedAccepted;
+    if (!clonedRuntime.stage(
+            verifiedRequest, [](const auto&, auto&) { return true; },
+            [verifiedRows](const auto&, auto& rows, auto&) {
+                rows = verifiedRows;
+                return true;
+            }, {}, clonedStaged, error) ||
+        !clonedRuntime.loadOnce(clonedStaged, clonedActive, error))
+        return fail("Native cache clone fixture could not publish exact rows");
+    if (luna::driver::loadVerifiedNativeGenerationOnce(
+            clonedRuntime, argv[2], argv[3], clonedAccepted, error) ||
+        clonedAccepted ||
+        error != "same-content Native generation was not published by verified loader" ||
+        !clonedRuntime.pin(verifiedRequest.moduleId)
+             .sameGeneration(clonedActive))
+        return fail("Native cache accepted an exact host-published clone");
     luna::runtime::MoonRuntime changedSnapshotRuntime;
     auto changedRequest = foreignRequest;
     changedRequest.moduleLease = verifiedLease;
@@ -978,6 +1019,29 @@ int generationSwitch(int argc, char** argv) {
         !racingRuntime.pin(loadedOnce.moduleId())
              .sameGeneration(competingActive))
         return fail("Native load-once reused a generation published during staging");
+
+    luna::runtime::MoonRuntime exactRaceRuntime;
+    luna::runtime::MoonRuntime::PinnedGeneration exactCompeting, exactOutput;
+    if (luna::driver::loadVerifiedNativeGenerationOnceWithPrePublishHookForTest(
+            exactRaceRuntime, argv[2], argv[3], exactOutput, error,
+            [&](const auto& stagedRequest, const auto& stagedRows,
+                std::string& hookError) {
+                luna::runtime::MoonRuntime::StagedGeneration competingStaged;
+                return exactRaceRuntime.stage(
+                           stagedRequest,
+                           [](const auto&, auto&) { return true; },
+                           [stagedRows](const auto&, auto& rows, auto&) {
+                               rows = stagedRows;
+                               return true;
+                           }, {}, competingStaged, hookError) &&
+                    exactRaceRuntime.loadOnce(
+                        competingStaged, exactCompeting, hookError);
+            }) || exactOutput ||
+        error != "verified Native load-once changed its staged snapshot" ||
+        !exactCompeting ||
+        !exactRaceRuntime.pin(loadedOnce.moduleId())
+             .sameGeneration(exactCompeting))
+        return fail("Native load-once reused an exact host-published clone");
 
     luna::runtime::MoonRuntime runtime;
     luna::runtime::MoonRuntime::StagedGeneration first;
