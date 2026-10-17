@@ -434,25 +434,42 @@ int32_t LunaPrivateRefPairUnitLoadedEntry::call(
     auto keepCodeAlive = lease_;
     if (!keepCodeAlive || !entry_)
         return LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST;
+    const auto pinnedParent = parent;
     const auto checkedContext =
-        luna_compiler_fragment_context_check(parent.opaque());
+        luna_compiler_fragment_context_check(pinnedParent.opaque());
     if (checkedContext == LUNA_COMPILER_FRAGMENT_OVERRIDE_INVALID_CONTEXT)
         return LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST;
     if (checkedContext != LUNA_COMPILER_FRAGMENT_OVERRIDE_SUCCESS)
         return LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST;
-    for (const auto* borrowed : {first.opaque(), second.opaque()}) {
+    luna::runtime::RuntimeFragmentRefHandle pinnedFirst;
+    luna::runtime::RuntimeFragmentRefHandle pinnedSecond;
+    std::string pinError;
+    // The outer handler can release caller handles before the inner Apply.
+    const auto pinAndCheck = [&](const auto& source, auto& pinned) {
+        if (!luna::runtime::pinRuntimeFragmentRefHandle(
+                source, pinned, pinError))
+            return LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST;
         const auto checked = luna_runtime_fragment_ref_check_v1(
-            borrowed, slotSymbolId_.c_str(), slotContractId_.c_str());
+            pinned.opaque(), slotSymbolId_.c_str(),
+            slotContractId_.c_str());
         if (checked == LUNA_RUNTIME_FRAGMENT_REF_INVALID_HANDLE_V1)
             return LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST;
         if (checked == LUNA_RUNTIME_FRAGMENT_REF_INVALID_TARGET_V1)
             return LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST;
         if (checked != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
             return LUNA_PRIVATE_REF_UNIT_APPLY_UNEXPECTED_CHECK_V1_TEST;
-    }
+        return LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST;
+    };
+    const auto firstCheck = pinAndCheck(first, pinnedFirst);
+    if (firstCheck != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+        return firstCheck;
+    const auto secondCheck = pinAndCheck(second, pinnedSecond);
+    if (secondCheck != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+        return secondCheck;
     using Entry = int32_t (*)(const void*, const void*, const void*);
     const auto entry = reinterpret_cast<Entry>(const_cast<void*>(entry_));
-    return entry(parent.opaque(), first.opaque(), second.opaque()) == 0
+    return entry(pinnedParent.opaque(), pinnedFirst.opaque(),
+                 pinnedSecond.opaque()) == 0
         ? LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST
         : LUNA_PRIVATE_REF_UNIT_APPLY_EXECUTION_FAILURE_V1_TEST;
 }

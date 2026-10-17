@@ -61,6 +61,9 @@ struct VerifiedRefFlowProbe {
         releasePairCandidate = nullptr;
     std::weak_ptr<const void> releasePairLease;
     bool retainedPairLeaseDuringDispatch = false;
+    luna::runtime::RuntimeFragmentRefHandle* releaseOuterRef = nullptr;
+    luna::runtime::RuntimeFragmentRefHandle* releaseInnerRef = nullptr;
+    bool releasedRefsBeforeResume = false;
     bool valid = true;
 };
 
@@ -93,6 +96,13 @@ void executeVerifiedRefFlowProbe(void*, void* activation) {
     int32_t value = 0;
     std::memcpy(&value, arguments, sizeof(value));
     probe->values.push_back(value);
+    if (value == 0 && probe->releaseOuterRef && probe->releaseInnerRef) {
+        probe->releaseOuterRef->reset();
+        probe->releaseInnerRef->reset();
+        probe->releasedRefsBeforeResume = true;
+        probe->releaseOuterRef = nullptr;
+        probe->releaseInnerRef = nullptr;
+    }
     if (probe->releasePairCandidate) {
         auto* candidate = probe->releasePairCandidate;
         probe->releasePairCandidate = nullptr;
@@ -1643,6 +1653,33 @@ int runCrossPackageContainerTest() {
             !flowProbe.valid)
             return fail("verified plugin nested source Ref did not recover");
     }
+    luna::runtime::RuntimeFragmentRefHandle releaseOuterRef;
+    luna::runtime::RuntimeFragmentRefHandle releaseInnerRef;
+    if (!luna::runtime::pinRuntimeFragmentRefHandle(
+            flowRef, releaseOuterRef, error) ||
+        !luna::runtime::pinRuntimeFragmentRefHandle(
+            flowRef, releaseInnerRef, error))
+        return fail("two-Ref callback release lacked Runtime-issued handles");
+    flowProbe.releaseOuterRef = &releaseOuterRef;
+    flowProbe.releaseInnerRef = &releaseInnerRef;
+    flowProbe.releasedRefsBeforeResume = false;
+    flowProbe.values.clear();
+    const auto dropsBeforeRelease =
+        luna::runtime::runtimeFragmentRefDropCountForTest();
+    int32_t releasedRefStatus = 777;
+    const bool releasedRefCall = pairCandidate.call(
+        noneContext, releaseOuterRef, releaseInnerRef,
+        releasedRefStatus, error);
+    flowProbe.releaseOuterRef = nullptr;
+    flowProbe.releaseInnerRef = nullptr;
+    if (!releasedRefCall ||
+        releasedRefStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST ||
+        flowProbe.values != std::vector<int32_t>{0, 2} ||
+        !flowProbe.releasedRefsBeforeResume ||
+        releaseOuterRef || releaseInnerRef || !flowProbe.valid ||
+        luna::runtime::runtimeFragmentRefDropCountForTest() !=
+            dropsBeforeRelease + 4)
+        return fail("two-Ref ingress lost borrowed pins after outer callback release");
     const auto earlyPairLease = earlyPairCandidate.artifactLeaseForTest();
     flowProbe.values.clear();
     flowProbe.resumeStatus = 0;

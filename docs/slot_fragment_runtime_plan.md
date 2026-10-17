@@ -2560,6 +2560,12 @@ not a public ABI decision or stable-release approval:
    a nonzero body status to execution failure. Invalid context, either empty
    handle, and Runtime-issued handles with a mismatched Slot or Contract in
    either position do not dispatch. This does not define a public pair ABI.
+   The private ingress now pins the parent context and duplicates both
+   Runtime-owned handle shells before entering source code. An outer host
+   callback can release both caller handles before resuming into the inner
+   Apply; its Slot `0` and the inner Slot `2` still dispatch. The test counts
+   both caller-shell drops and both temporary pin drops on return. This does
+   not transfer ownership of either caller handle.
    A separate private loader independently decodes the same 0.4 bytes against
    the exact verified owner, rederives pair facts, pins its imported Slot and
    an inert consumer generation to the artifact lease, then issues a typed
