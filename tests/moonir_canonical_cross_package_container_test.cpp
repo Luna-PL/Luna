@@ -1429,6 +1429,30 @@ int runCrossPackageContainerTest() {
             LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
         return fail("wrong-target Ref probes were not Runtime-issued handles");
     activeVerifiedRefFlowProbe = &flowProbe;
+    auto singleCandidate = integratedRefGeneration.pinCandidateForTest();
+    flowProbe.values.clear();
+    const auto rejectsSingleTarget = [&](const auto& reference) {
+        const auto dropsBefore =
+            luna::runtime::runtimeFragmentRefDropCountForTest();
+        int32_t status = 777;
+        return !singleCandidate.call(
+                   noneContext, reference, status, error) &&
+            status == 777 &&
+            error == "verified Ref/unit reference does not match its declared Slot" &&
+            luna::runtime::runtimeFragmentRefDropCountForTest() ==
+                dropsBefore + 1 && flowProbe.values.empty();
+    };
+    if (!singleCandidate || !rejectsSingleTarget(wrongSlotRef) ||
+        !rejectsSingleTarget(wrongContractRef) ||
+        luna_runtime_fragment_ref_check_v1(wrongSlotRef.opaque(),
+            wrongSlotRequirement.slotId.c_str(),
+            wrongSlotRequirement.contractId.c_str()) !=
+            LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
+        luna_runtime_fragment_ref_check_v1(wrongContractRef.opaque(),
+            wrongContractRequirement.slotId.c_str(),
+            wrongContractRequirement.contractId.c_str()) !=
+            LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
+        return fail("verified single-Ref caller admitted a foreign Slot or Contract");
     luna::runtime::RuntimeFragmentRefHandle singleCallerRef;
     if (!luna::runtime::pinRuntimeFragmentRefHandle(
             flowRef, singleCallerRef, error))
@@ -1438,7 +1462,6 @@ int runCrossPackageContainerTest() {
     flowProbe.values.clear();
     const auto singleDropsBefore =
         luna::runtime::runtimeFragmentRefDropCountForTest();
-    auto singleCandidate = integratedRefGeneration.pinCandidateForTest();
     int32_t singleStatus = 777;
     const bool singleCall = singleCandidate.call(
         noneContext, singleCallerRef, singleStatus, error);

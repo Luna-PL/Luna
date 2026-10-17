@@ -2224,7 +2224,9 @@ separate gate. The ordinary wrapper is exercised by the quarantined typed
 candidate and the internal Runtime callback tests. The ordinary typed caller
 also survives a host Fragment callback releasing its caller's borrowed Ref
 handle before resume: its temporary pin keeps the source call live, and both
-handle shells drop exactly once.
+handle shells drop exactly once. Runtime-issued handles with a wrong Slot or
+Contract fail before source dispatch, leave status and caller handles intact,
+and release the temporary pin.
 
 The narrow preparation round-trip now walks frozen type-table edges when
 checking whether another callable uses its sole Ref type. Function parameters,

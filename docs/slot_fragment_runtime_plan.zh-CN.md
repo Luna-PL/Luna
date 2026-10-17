@@ -1633,6 +1633,8 @@ consumer 凭据保留已物化的代码 lease；普通公开加载不暴露入�
 公开 Runtime candidate 准入仍是独立完成门。普通 wrapper 现由隔离的类型化 candidate
 及内部 Runtime 回调测试调用。普通类型化 caller 现也覆盖宿主 Fragment 回调于 resume 前
 释放调用方借用 Ref handle：临时 pin 保持源码调用有效，两个 handle 外壳各释放一次。
+Runtime 签发但 Slot 或 Contract 错误的 handle 在源码分派前被拒绝；状态和调用方 handle
+保持不变，临时 pin 释放。
 
 受限准备态 round-trip 现沿冻结类型表的边，检查其他 callable 是否使用唯一 Ref 类型。
 函数参数、结果和局部变量（包括声明表签名）不能把 Ref 隐藏在复合类型中。跨包回归拒绝
