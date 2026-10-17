@@ -277,7 +277,9 @@ bool exercisePrivateRefApplyJit(
     bool exerciseLoadedResult = false,
     std::optional<bool> branchSelector = std::nullopt,
     bool exerciseSelectorFailure = false,
-    bool failSecondDispatch = false) {
+    bool failSecondDispatch = false,
+    std::optional<std::pair<int32_t, unsigned>> injectedDispatchFailure =
+        std::nullopt) {
     const moon::SlotDecl* slot = nullptr;
     const moon::SlotDecl* secondSlot = nullptr;
     for (const auto& declaration : module.declarations)
@@ -303,6 +305,12 @@ bool exercisePrivateRefApplyJit(
         (exerciseSelectorFailure && (!branchSelector || *branchSelector)) ||
         (failSecondDispatch &&
          (!exerciseSelectorFailure || expectedDispatches != 2)) ||
+        (injectedDispatchFailure &&
+         (branchSelector || twoBorrowedReferences || expectedResult ||
+          transferredDropCalls || exerciseIngressGate ||
+          exerciseSelectorFailure || expectedDispatches < 2 ||
+          injectedDispatchFailure->second == 0 ||
+          injectedDispatchFailure->second > expectedDispatches)) ||
         function.params.size() !=
             ((twoBorrowedReferences || branchSelector) ? 2u : 1u) ||
         !valueType || valueType->kind != TypeKind::I32 ||
@@ -1096,6 +1104,36 @@ bool exercisePrivateRefApplyJit(
         secondDescriptor.slot_arguments_alignment};
     privateRefJitPayloadValid = true;
     privateRefJitResumeStatus = -1;
+    if (injectedDispatchFailure) {
+        privateRefJitRepeatedResumeStatus = 0;
+        privateRefJitRepeatedResumeFailureValue =
+            injectedDispatchFailure->first;
+        privateRefJitInjectRepeatedResumeFailure = true;
+        const auto failedStatus = entryOne(
+            parent.opaque(), const_cast<void*>(handle.opaque()));
+        privateRefJitInjectRepeatedResumeFailure = false;
+        privateRefJitRepeatedResumeFailureValue = 0;
+        const auto refStatus = luna_runtime_fragment_ref_check_v1(
+            handle.opaque(), slot->symbolId.value.c_str(),
+            slot->contractId.value.c_str());
+        if (failedStatus != LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
+            privateRefJitRepeatedResumeStatus !=
+                LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+            privateRefJitExecutions != before +
+                injectedDispatchFailure->second ||
+            privateRefJitCompletedResumes != resumesBefore +
+                injectedDispatchFailure->second ||
+            refStatus != LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
+            generationLease.expired()) {
+            error = "nested Ref apply dispatch failure lost its owner stack or borrowed Ref";
+            return false;
+        }
+        before = privateRefJitExecutions;
+        resumesBefore = privateRefJitCompletedResumes;
+        argumentsBefore = privateRefJitObservedArguments.size();
+        sourcesBefore = privateRefJitObservedSources.size();
+        privateRefJitResumeStatus = -1;
+    }
     if (exerciseSelectorFailure) {
         const auto invalidStatus = entrySelector(parent.opaque(), nullptr, false);
         const auto wrongTargetStatus = differentSlots
@@ -3607,7 +3645,10 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             nestedApplyJump = function;
     if (!nestedApplyJump || !exercisePrivateRefApplyJit(
             *nestedApplyJumpModule, *nestedApplyJump,
-            privateRefJitError, 3)) {
+            privateRefJitError, 3, false, std::nullopt,
+            false, false, {}, {}, std::nullopt, std::nullopt,
+            false, false, false, nullptr, 0, false, std::nullopt,
+            false, false, std::pair<int32_t, unsigned>{2, 2})) {
         std::cerr << privateRefJitError << '\n';
         return fail("same-Ref nested apply jump failed private JIT execution");
     }

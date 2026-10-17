@@ -2312,6 +2312,10 @@ not a public ABI decision or stable-release approval:
    before its early return or twice when it continues. The later dispatch can
    fail after the first completed resume; the private status body releases the
    active context and the same borrowed Ref succeeds on two later calls.
+   The same-Ref nested Apply JIT now also fails at its inner Slot dispatch
+   after the outer Slot has resumed. Its raw failure status leaves the borrowed
+   Ref live, and two fresh calls complete all three dispatches; the structural
+   proof still checks the inner-to-outer context Drop stack.
    The narrow `Result<i32, i32>` `?` path now has
    an inner-before-outer CFG proof and private Ok/Err JIT
    evidence, including one affine source error converted to a scalar by its
