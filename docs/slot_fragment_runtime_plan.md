@@ -2574,7 +2574,8 @@ not a public ABI decision or stable-release approval:
    an inert consumer generation to the artifact lease, then issues a typed
    pair candidate. The caller now names the exact source SymbolId/ContractId
    and imported SlotId/ContractId; all four must match the decoded facts before
-   JIT materialization. Wrong function or Slot requests leave the output empty.
+   JIT materialization. Wrong function or Slot requests leave the output empty;
+   corrupted consumer bytes leave no candidate or artifact lease.
    Missing owner evidence, a wrong target, a one-Ref artifact
    and reuse of an initialized output are rejected. Calls remain valid after
    the original owner proof is released. A copied candidate remains callable

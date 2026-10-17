@@ -1562,6 +1562,8 @@ int runCrossPackageContainerTest() {
     luna::driver::PrivateImportedSlotRefPairUnitCandidateForTest pairCandidate;
     luna::driver::PrivateImportedSlotRefPairUnitCandidateForTest earlyPairCandidate;
     luna::driver::PrivateImportedSlotRefPairUnitCandidateForTest rejectedPair;
+    auto corruptedNestedPluginBytes = nestedPluginBytes;
+    corruptedNestedPluginBytes.back() ^= 1;
     const auto loadExpectedPair = [&](const auto& bytes,
             const luna::driver::VerifiedMoonSlotOwner& issuer,
             const auto& target, auto& output) {
@@ -1588,6 +1590,9 @@ int runCrossPackageContainerTest() {
         rejectedPair ||
         loadExpectedPair(refBytes, nestedPluginOwner, refManifest.targetTriple,
             rejectedPair) || rejectedPair ||
+        loadExpectedPair(corruptedNestedPluginBytes, nestedPluginOwner,
+            refManifest.targetTriple, rejectedPair) || rejectedPair ||
+        !rejectedPair.artifactLeaseForTest().expired() ||
         !rejectsPairRequest(pairFacts.functionSymbolId + "-wrong",
             pairFacts.functionContractId, requirement) ||
         !rejectsPairRequest(pairFacts.functionSymbolId,

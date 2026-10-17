@@ -1877,7 +1877,8 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    固定 imported Slot 和绑定产物租约的无公开绑定 consumer generation，再签发类型化
    双 Ref candidate。调用方现须明确指定源码 SymbolId／ContractId 和 imported
    SlotId／ContractId；四项均须在 JIT 物化前匹配解码事实。错误函数或 Slot 请求
-   保持输出为空。缺失 owner 证据、错误 target、单 Ref 产物和复用已初始化输出均被拒绝；
+   保持输出为空；损坏的 consumer 字节不产生 candidate 或产物租约。
+   缺失 owner 证据、错误 target、单 Ref 产物和复用已初始化输出均被拒绝；
    释放原始 owner proof 后仍可调用。复制 candidate 并清空原对象后，副本仍可调用；
    弱引用确认最后一个 candidate 清空后私有产物／代码租约释放，空 candidate 的调用
    不改写传入状态。现有单 Ref candidate loader 仍拒绝双 Ref 产物，
