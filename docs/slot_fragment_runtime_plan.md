@@ -2517,13 +2517,18 @@ not a public ABI decision or stable-release approval:
    context. The private JIT now covers borrowed ingress, invalid capability
    rejection and repeated calls after Runtime teardown. Promote the verified
    consumer and its private admitted candidate only after public host ABI
-   review, and complete owning parameter/return transfer. The current verified
-   imported-Slot consumer fixture dispatches one Slot on a normal exit. Next
-   prove an early exit and a recoverable dispatch failure through separately
-   verified consumer bytes,
-   keeping the exact owner proof across paired activation and teardown. Include
-   nominal/contract mismatch, failed ingress, normal and early exits, and
-   cleanup/pin-release regressions. Only after this gate and the remaining
+   review, and complete owning parameter/return transfer. The original
+   imported-Slot consumer fixture dispatches one Slot on a normal exit. Two
+   separately encoded and verified 0.4 consumer variants now cover an early
+   return after the first Slot and a failure at the second Slot. The early
+   variant accepts the verified plugin's borrowed Ref and skips its later
+   dispatch under an observable Runtime-issued probe Ref. The failure variant
+   pairs its exact verified owner and consumer in a host Runtime, then reports
+   execution failure under a probe Ref after that Runtime is destroyed; two
+   fresh calls succeed with the same Ref. A failed dispatch from a verified
+   plugin generation and owning transfer remain outside this private proof.
+   Include nominal/contract mismatch, failed ingress, normal and early exits,
+   and cleanup/pin-release regressions. Only after this gate and the remaining
    control-flow cases pass may
    `source-ref-apply` move out of `implementation-open`.
 

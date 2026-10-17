@@ -11,11 +11,13 @@
 #include "moonir/Verifier.h"
 #include "runtime/RuntimeFragment.h"
 #include "runtime/RuntimeFragmentCompilerBridge.h"
+#include "runtime/RuntimeDescriptorABI.h"
 #include "tooling/AnalysisSnapshot.h"
 
 #include <llvm/ExecutionEngine/Orc/JITTargetMachineBuilder.h>
 
 #include <algorithm>
+#include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -43,6 +45,41 @@ bool compilePackage(const std::filesystem::path& path,
     for (const auto& error : pipeline.errors())
         std::cerr << diagnostic::render(error) << '\n';
     return false;
+}
+
+struct VerifiedRefFlowProbe {
+    const char* slotId = nullptr;
+    const char* slotContract = nullptr;
+    const char* argumentsLayout = nullptr;
+    uint64_t argumentsSize = 0;
+    uint64_t argumentsAlignment = 1;
+    std::vector<int32_t> values;
+    int32_t resumeStatus = 0;
+    int32_t repeatedResumeStatus = 0;
+    bool failSecondDispatch = false;
+    bool valid = true;
+};
+
+thread_local VerifiedRefFlowProbe* activeVerifiedRefFlowProbe = nullptr;
+
+void executeVerifiedRefFlowProbe(void*, void* activation) {
+    auto* probe = activeVerifiedRefFlowProbe;
+    if (!probe) return;
+    const void* arguments = luna_runtime_fragment_activation_arguments_v1(
+        activation, probe->slotId, probe->slotContract,
+        probe->argumentsLayout, probe->argumentsSize,
+        probe->argumentsAlignment);
+    if (!arguments || probe->argumentsSize < sizeof(int32_t)) {
+        probe->valid = false;
+        return;
+    }
+    int32_t value = 0;
+    std::memcpy(&value, arguments, sizeof(value));
+    probe->values.push_back(value);
+    probe->resumeStatus = luna_runtime_fragment_activation_resume_v1(activation);
+    if (probe->failSecondDispatch && value == 2)
+        probe->repeatedResumeStatus =
+            luna_runtime_fragment_activation_resume_v1(activation);
 }
 
 } // namespace
@@ -372,6 +409,54 @@ int runCrossPackageContainerTest() {
         std::cerr << error << '\n';
         return fail("cross-package Ref/apply owner-backed 0.4 encoding failed");
     }
+    const auto buildRefFlowVariant = [&](const std::string& body,
+            std::vector<uint8_t>& bytes, std::string& symbolId,
+            std::string& contractId) {
+        std::string source = refSourceText;
+        const std::string original =
+            "apply selected { host::effects::audit_slot(1) {} }";
+        const auto site = source.find(original);
+        if (site == std::string::npos ||
+            source.find(original, site + original.size()) != std::string::npos)
+            return false;
+        source.replace(site, original.size(), body);
+        auto snapshot = luna::tooling::AnalysisSnapshot::analyzePathWithOverlay(
+            (fixtures / "refprep").string(), refSourcePath.string(), source);
+        if (!snapshot.success()) return false;
+        moon::LunaLowerer lowerer;
+        auto module = lowerer.lower(*snapshot.program(), *snapshot.symbolTable());
+        if (!module || !lowerer.errors().empty()) return false;
+        module->dependencySlotPublications = dependencies;
+        moon::Verifier verifier(moon::VerificationPolicy::NativeRefUnitPreparation);
+        moon::Sealer sealer;
+        if (!verifier.verify(*module) ||
+            !sealer.sealFunctionBodies(*module) ||
+            !verifier.verify(*module)) return false;
+        for (const auto& declaration : module->declarations)
+            if (const auto* function = dynamic_cast<const moon::FunctionDecl*>(
+                    declaration.get()); function && function->name == "apply_ref") {
+                symbolId = function->symbolId.value;
+                contractId = function->contractId.value;
+            }
+        if (symbolId.empty() || contractId.empty() ||
+            !moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
+                makeManifest(*module), *module, bytes, error))
+            return false;
+        return !bytes.empty() && bytes != refBytes;
+    };
+    std::vector<uint8_t> earlyRefBytes, failureRefBytes;
+    std::string earlySymbolId, earlyContractId;
+    std::string failureSymbolId, failureContractId;
+    if (!buildRefFlowVariant(
+            "apply selected { host::effects::audit_slot(0) { return; } "
+            "host::effects::audit_slot(2) {} }",
+            earlyRefBytes, earlySymbolId, earlyContractId) ||
+        !buildRefFlowVariant(
+            "apply selected { host::effects::audit_slot(1) {} "
+            "host::effects::audit_slot(2) {} }",
+            failureRefBytes, failureSymbolId, failureContractId) ||
+        earlyRefBytes == failureRefBytes)
+        return fail("cross-package Ref flow variants did not seal and encode separately");
     auto rejectedPrivateDecode = [&](const std::vector<uint8_t>& bytes,
             const std::string& targetTriple, const std::string& dataLayout,
             const moon::SlotPublicationDependencies& ownerEvidence) {
@@ -457,6 +542,8 @@ int runCrossPackageContainerTest() {
     luna::driver::VerifiedMoonImportedSlotRefUnitProof verifiedImport;
     luna::driver::VerifiedMoonImportedSlotGeneration verifiedSlotGeneration;
     luna::driver::VerifiedMoonImportedSlotGeneration integratedRefGeneration;
+    luna::driver::VerifiedMoonImportedSlotGeneration earlyRefGeneration;
+    luna::driver::VerifiedMoonImportedSlotGeneration failureRefGeneration;
     {
         luna::runtime::MoonRuntime runtime;
         luna::driver::VerifiedMoonSlotOwner rejectedOwner;
@@ -705,6 +792,19 @@ int runCrossPackageContainerTest() {
                 integratedRefGeneration, error)) {
             std::cerr << error << '\n';
             return fail("integrated verified Ref loader did not complete admission");
+        }
+        if (!luna::driver::loadVerifiedMoonImportedSlotRefUnitOnce(
+                earlyRefBytes, ownerProof, refManifest.targetTriple,
+                refManifest.dataLayout, earlySymbolId, earlyContractId,
+                verifiedSlot, earlyRefGeneration, error) ||
+            !luna::driver::loadVerifiedMoonImportedSlotRefUnitOnce(
+                failureRefBytes, ownerProof, refManifest.targetTriple,
+                refManifest.dataLayout, failureSymbolId, failureContractId,
+                verifiedSlot, failureRefGeneration, error) ||
+            !earlyRefGeneration.hasTypedCaller() ||
+            !failureRefGeneration.hasTypedCaller()) {
+            std::cerr << error << '\n';
+            return fail("verified Ref flow variants did not acquire independent candidates");
         }
         const uint64_t integratedGenerationId =
             integratedRefGeneration.generationId();
@@ -1086,6 +1186,144 @@ int runCrossPackageContainerTest() {
                 const_cast<void*>(borrowedRef.opaque())) !=
                 LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
             return fail("cross-package Ref/apply lost its pinned borrowed call");
+    auto earlyFlowPin = earlyRefGeneration.pinCandidateForTest();
+    luna::runtime::MoonRuntime::PinnedRefUnitCandidate failureFlowPin;
+    {
+        luna::runtime::MoonRuntime pairedFlowRuntime;
+        luna::runtime::MoonRuntime::StagedGeneration ownerStage;
+        luna::runtime::MoonRuntime::StagedGeneration consumerStage;
+        if (!failureRefGeneration.stageOwnerInRuntime(
+                pairedFlowRuntime, ownerStage, error) ||
+            !failureRefGeneration.stageWithStagedOwnerInRuntimeForTest(
+                pairedFlowRuntime, consumerStage, error, ownerStage) ||
+            pairedFlowRuntime.pin(hostManifest.packageId) ||
+            pairedFlowRuntime.pin(refManifest.packageId)) {
+            std::cerr << error << '\n';
+            return fail("verified failure variant published before paired activation");
+        }
+        auto safePoint = pairedFlowRuntime.safePoint();
+        if (!pairedFlowRuntime.activateTogether(
+                ownerStage, consumerStage, safePoint, error)) {
+            std::cerr << error << '\n';
+            return fail("verified failure variant did not activate with its owner");
+        }
+        const auto facts = failureRefGeneration.candidateFacts();
+        if (!facts)
+            return fail("verified failure variant lost its source facts");
+        const auto paired = pairedFlowRuntime.pinTogether(
+            hostManifest.packageId, facts->packageId);
+        failureFlowPin = paired.second.findRefUnitCandidate(
+            facts->symbolId, facts->contractId);
+        if (!paired.first || !paired.second || !failureFlowPin ||
+            !paired.first.find(facts->slotSymbolId,
+                               facts->slotContractId))
+            return fail("verified failure variant lost its paired owner pin");
+    }
+    int32_t flowStatus = 777;
+    if (!earlyFlowPin || !failureFlowPin ||
+        !earlyFlowPin.call(noneContext, borrowedRef, flowStatus, error) ||
+        flowStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST)
+        return fail("verified early-exit consumer lost its plugin-owned Ref call");
+    const auto* flowArguments = owner.findType(slot->controlArgumentsType);
+    if (!flowArguments || flowArguments->valueSize < sizeof(int32_t))
+        return fail("verified Ref flow probe lost its Slot arguments layout");
+    VerifiedRefFlowProbe flowProbe;
+    flowProbe.slotId = slot->symbolId.value.c_str();
+    flowProbe.slotContract = slot->contractId.value.c_str();
+    flowProbe.argumentsLayout = flowArguments->abiLayoutId.value.c_str();
+    flowProbe.argumentsSize = flowArguments->valueSize;
+    flowProbe.argumentsAlignment = flowArguments->valueAlignment;
+    const std::string flowFragmentId = "fragment:verified-ref-flow";
+    const std::string flowFragmentContract = "contract:verified-ref-flow";
+    const std::string unitLayout = "layout:unit";
+    LunaRuntimeFragmentDescriptorV1 flowDescriptor = {
+        LUNA_RUNTIME_FRAGMENT_MAGIC_V1,
+        LUNA_RUNTIME_FRAGMENT_ABI_V1,
+        sizeof(LunaRuntimeFragmentDescriptorV1),
+        LUNA_RUNTIME_FRAGMENT_CAPTURE_FREE_V1,
+        0, 0, 0, 0,
+        flowFragmentId.c_str(), flowFragmentContract.c_str(),
+        flowProbe.slotId, flowProbe.slotContract,
+        flowProbe.argumentsLayout,
+        flowProbe.argumentsSize, flowProbe.argumentsAlignment,
+        "", unitLayout.c_str(), 0, 1,
+        nullptr, nullptr, executeVerifiedRefFlowProbe,
+    };
+    luna::runtime::RuntimeFragmentRefHandle flowRef;
+    {
+        luna::runtime::MoonRuntime flowRuntime;
+        auto lease = std::make_shared<int>(1);
+        luna::runtime::GenerationStagingRequest request{
+            "org.luna.private.ref-flow", std::string(64, 'b'), lease};
+        luna::runtime::MoonRuntime::StagedGeneration staged;
+        constexpr uint32_t flags =
+            luna::runtime::GenerationBindingFragmentExecutable |
+            luna::runtime::GenerationBindingPublicControl;
+        if (!luna::runtime::validateRuntimeFragmentDescriptor(
+                flowDescriptor, error) ||
+            !flowRuntime.stage(request,
+                [](const auto&, std::string&) { return true; },
+                [&](const auto&, auto& bindings, std::string&) {
+                    bindings.push_back({flowFragmentId, flowFragmentContract,
+                        &flowDescriptor, LUNA_RUNTIME_DECLARATION_FRAGMENT_V1,
+                        flags});
+                    return true;
+                }, {}, staged, error))
+            return fail("verified Ref flow probe did not stage");
+        luna::runtime::MoonRuntime::PinnedGeneration generation;
+        if (!flowRuntime.loadOnce(staged, generation, error))
+            return fail("verified Ref flow probe did not load");
+        const luna::runtime::GenerationBindingRequirement bindingRequirement{
+            flowFragmentId, flowFragmentContract,
+            LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, flags};
+        const auto binding = generation.find(bindingRequirement);
+        luna::runtime::RuntimeFragmentRef selected;
+        if (!binding || !luna::runtime::makeOwnedRuntimeFragmentRef(
+                binding, requirement, {"", nullptr}, selected, error) ||
+            !luna::runtime::makeRuntimeFragmentRefHandle(
+                selected, requirement, flowRef, error))
+            return fail("verified Ref flow probe did not issue its live handle");
+    }
+    activeVerifiedRefFlowProbe = &flowProbe;
+    for (int iteration = 0; iteration < 2; ++iteration) {
+        flowProbe.values.clear();
+        flowProbe.resumeStatus = 0;
+        flowStatus = 777;
+        if (!earlyFlowPin.call(noneContext, flowRef, flowStatus, error) ||
+            flowStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST ||
+            flowProbe.values != std::vector<int32_t>{0} ||
+            flowProbe.resumeStatus !=
+                LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1 ||
+            !flowProbe.valid)
+            return fail("verified early-exit consumer dispatched after return");
+    }
+    flowProbe.values.clear();
+    flowProbe.repeatedResumeStatus = 0;
+    flowProbe.failSecondDispatch = true;
+    flowStatus = 777;
+    if (!failureFlowPin.call(noneContext, flowRef, flowStatus, error) ||
+        flowStatus != LUNA_PRIVATE_REF_UNIT_APPLY_EXECUTION_FAILURE_V1_TEST ||
+        flowProbe.values != std::vector<int32_t>{1, 2} ||
+        flowProbe.repeatedResumeStatus !=
+            LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+        !flowProbe.valid)
+        return fail("verified consumer lost its second-dispatch failure");
+    flowProbe.failSecondDispatch = false;
+    for (int iteration = 0; iteration < 2; ++iteration) {
+        flowProbe.values.clear();
+        flowStatus = 777;
+        if (!failureFlowPin.call(noneContext, flowRef, flowStatus, error) ||
+            flowStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST ||
+            flowProbe.values != std::vector<int32_t>{1, 2} ||
+            !flowProbe.valid)
+            return fail("verified consumer did not recover after dispatch failure");
+    }
+    activeVerifiedRefFlowProbe = nullptr;
+    if (luna_runtime_fragment_ref_check_v1(
+            flowRef.opaque(), requirement.slotId.c_str(),
+            requirement.contractId.c_str()) !=
+            LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
+        return fail("verified consumer failure consumed its borrowed Ref");
     refEntry.reset();
     if (!luna::driver::discardPrivateRefUnitTestEntryForTest(
             refPreparationWeak, error) || !refEntryWeak.expired())

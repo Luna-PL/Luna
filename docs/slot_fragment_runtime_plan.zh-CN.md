@@ -1839,10 +1839,13 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    的 Ref，在显式 parent context 中执行源码 apply。私有 JIT 已覆盖借用入口、无效
    capability 拒绝及 Runtime 销毁后的重复调用。公开宿主 ABI 审查通过后，才能将
    verified consumer 及其私有准入 candidate 提升至公开路径；还须完成拥有型
-   参数／返回转移。目前已验证的
-   imported-Slot consumer 夹具仅在正常出口分派一次 Slot。下一步用单独验证的
-   consumer 字节证明提前退出与可恢复的分派失败，并让精确 owner 凭据贯穿配对激活
-   和 Runtime 销毁；同时覆盖名义／contract
+   参数／返回转移。原有 imported-Slot consumer 夹具只在正常出口分派一次 Slot。
+   另两份独立编码并验证的 0.4 consumer 现覆盖首次 Slot 后提前返回、第二次 Slot
+   分派失败。提前返回变体接受 verified plugin 的借用 Ref；使用 Runtime 发放的
+   可观测探针 Ref 时确认后续 Slot 被跳过。失败变体在宿主 Runtime 中配对激活精确的
+   verified owner 与 consumer；该 Runtime 销毁后，探针 Ref 触发执行失败，同一 Ref
+   随后两次全新调用成功。由 verified plugin generation 触发的失败和拥有型转移
+   尚不在此私有证明内；仍须覆盖名义／contract
    错配、入口失败、正常／提前退出及清理与 pin 释放。完成此门和剩余控制流用例后，
    `source-ref-apply` 才可脱离
    `implementation-open`。
