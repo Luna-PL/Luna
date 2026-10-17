@@ -1680,6 +1680,37 @@ int runCrossPackageContainerTest() {
         luna::runtime::runtimeFragmentRefDropCountForTest() !=
             dropsBeforeRelease + 4)
         return fail("two-Ref ingress lost borrowed pins after outer callback release");
+    if (!luna::runtime::pinRuntimeFragmentRefHandle(
+            flowRef, releaseOuterRef, error) ||
+        !luna::runtime::pinRuntimeFragmentRefHandle(
+            flowRef, releaseInnerRef, error))
+        return fail("two-Ref failure cleanup lacked Runtime-issued handles");
+    flowProbe.releaseOuterRef = &releaseOuterRef;
+    flowProbe.releaseInnerRef = &releaseInnerRef;
+    flowProbe.releasedRefsBeforeResume = false;
+    flowProbe.failSecondDispatch = true;
+    flowProbe.repeatedResumeStatus = 0;
+    flowProbe.values.clear();
+    const auto dropsBeforeFailure =
+        luna::runtime::runtimeFragmentRefDropCountForTest();
+    releasedRefStatus = 777;
+    const bool failedRefCall = pairCandidate.call(
+        noneContext, releaseOuterRef, releaseInnerRef,
+        releasedRefStatus, error);
+    flowProbe.releaseOuterRef = nullptr;
+    flowProbe.releaseInnerRef = nullptr;
+    flowProbe.failSecondDispatch = false;
+    if (!failedRefCall ||
+        releasedRefStatus !=
+            LUNA_PRIVATE_REF_UNIT_APPLY_EXECUTION_FAILURE_V1_TEST ||
+        flowProbe.values != std::vector<int32_t>{0, 2} ||
+        flowProbe.repeatedResumeStatus !=
+            LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
+        !flowProbe.releasedRefsBeforeResume ||
+        releaseOuterRef || releaseInnerRef || !flowProbe.valid ||
+        luna::runtime::runtimeFragmentRefDropCountForTest() !=
+            dropsBeforeFailure + 4)
+        return fail("two-Ref failed Apply retained borrowed pins after callback release");
     const auto earlyPairLease = earlyPairCandidate.artifactLeaseForTest();
     flowProbe.values.clear();
     flowProbe.resumeStatus = 0;

@@ -2565,7 +2565,10 @@ not a public ABI decision or stable-release approval:
    callback can release both caller handles before resuming into the inner
    Apply; its Slot `0` and the inner Slot `2` still dispatch. The test counts
    both caller-shell drops and both temporary pin drops on return. This does
-   not transfer ownership of either caller handle.
+   not transfer ownership of either caller handle. With the same callback
+   release, an injected inner dispatch failure propagates as execution failure;
+   all four shells drop exactly once again, and later calls with the original
+   Runtime-issued Ref recover.
    A separate private loader independently decodes the same 0.4 bytes against
    the exact verified owner, rederives pair facts, pins its imported Slot and
    an inert consumer generation to the artifact lease, then issues a typed

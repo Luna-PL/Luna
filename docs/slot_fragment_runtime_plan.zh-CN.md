@@ -1871,7 +1871,8 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    私有入口现于进入源码前固定父 context，并复制两个 Runtime 所有的 handle 外壳。
    外层宿主回调可在恢复内层 Apply 前释放调用方的两个 handle；外层 Slot `0` 和内层
    Slot `2` 仍分派；测试确认两个调用方外壳及两个临时 pin 都被释放。这不转移调用方
-   handle 的所有权。
+   handle 的所有权。相同回调释放场景下注入的内层分派失败会传播为执行失败；
+   四个外壳仍各释放一次，随后使用原始 Runtime 签发 Ref 的调用可恢复。
    独立的私有 loader 以精确 verified owner 证据重新解码同一 0.4 字节，重推双 Ref 事实，
    固定 imported Slot 和绑定产物租约的无公开绑定 consumer generation，再签发类型化
    双 Ref candidate。缺失 owner 证据、错误 target、单 Ref 产物和复用已初始化输出均被拒绝；
