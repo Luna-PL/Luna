@@ -2557,8 +2557,9 @@ not a public ABI decision or stable-release approval:
    a forged reused Apply binding without materializing executable code.
    Its test-only typed ingress retains the JIT lease, checks the parent
    context and each Runtime-issued borrowed handle before the body, and maps
-   a nonzero body status to execution failure. Invalid context and either
-   invalid handle do not dispatch. This does not define a public pair ABI.
+   a nonzero body status to execution failure. Invalid context, either empty
+   handle, and Runtime-issued handles with a mismatched Slot or Contract in
+   either position do not dispatch. This does not define a public pair ABI.
    The existing one-Ref candidate loader still rejects the two-Ref artifact,
    so no admitted host candidate is claimed. Owning transfer remains open.
    The focused Windows
@@ -2572,8 +2573,9 @@ not a public ABI decision or stable-release approval:
    Fragment rows carry no entry. Promoting the prepared two-Ref source failure
    path still requires candidate issuance, public typed ingress and host ABI review;
    the injected inner probe is not a publishable Fragment.
-   Include nominal/contract mismatch, failed ingress, normal and early exits,
-   and cleanup/pin-release regressions. Only after this gate and the remaining
+   Extend nominal/contract mismatch and failed-ingress evidence to public
+   candidate loading, then cover normal and early exits plus cleanup and
+   pin-release regressions. Only after this gate and the remaining
    control-flow cases pass may
    `source-ref-apply` move out of `implementation-open`.
 

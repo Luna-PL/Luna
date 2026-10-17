@@ -1333,6 +1333,73 @@ int runCrossPackageContainerTest() {
                 selected, requirement, flowRef, error))
             return fail("verified Ref flow probe did not issue its live handle");
     }
+    const std::string wrongSlotId = requirement.slotId + ".foreign";
+    const std::string wrongContractId = requirement.contractId + ".foreign";
+    const std::string wrongSlotFragmentId = flowFragmentId + ".wrong-slot";
+    const std::string wrongContractFragmentId =
+        flowFragmentId + ".wrong-contract";
+    auto wrongSlotDescriptor = flowDescriptor;
+    wrongSlotDescriptor.fragment_id = wrongSlotFragmentId.c_str();
+    wrongSlotDescriptor.slot_id = wrongSlotId.c_str();
+    auto wrongContractDescriptor = flowDescriptor;
+    wrongContractDescriptor.fragment_id = wrongContractFragmentId.c_str();
+    wrongContractDescriptor.slot_contract_id = wrongContractId.c_str();
+    const luna::runtime::RuntimeSlotRequirement wrongSlotRequirement{
+        wrongSlotId, requirement.contractId};
+    const luna::runtime::RuntimeSlotRequirement wrongContractRequirement{
+        requirement.slotId, wrongContractId};
+    const auto issueWrongTargetRef = [&error](
+        const LunaRuntimeFragmentDescriptorV1& descriptor,
+        const luna::runtime::RuntimeSlotRequirement& slot,
+        const std::string& packageId,
+        luna::runtime::RuntimeFragmentRefHandle& output) {
+        luna::runtime::MoonRuntime runtime;
+        auto lease = std::make_shared<int>(1);
+        luna::runtime::GenerationStagingRequest request{
+            packageId, std::string(64, 'c'), lease};
+        luna::runtime::MoonRuntime::StagedGeneration staged;
+        constexpr uint32_t flags =
+            luna::runtime::GenerationBindingFragmentExecutable |
+            luna::runtime::GenerationBindingPublicControl;
+        if (!luna::runtime::validateRuntimeFragmentDescriptor(
+                descriptor, error) ||
+            !runtime.stage(request,
+                [](const auto&, std::string&) { return true; },
+                [&](const auto&, auto& bindings, std::string&) {
+                    bindings.push_back({descriptor.fragment_id,
+                        descriptor.fragment_contract_id, &descriptor,
+                        LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, flags});
+                    return true;
+                }, {}, staged, error))
+            return false;
+        luna::runtime::MoonRuntime::PinnedGeneration generation;
+        if (!runtime.loadOnce(staged, generation, error)) return false;
+        const luna::runtime::GenerationBindingRequirement bindingRequirement{
+            descriptor.fragment_id, descriptor.fragment_contract_id,
+            LUNA_RUNTIME_DECLARATION_FRAGMENT_V1, flags};
+        const auto binding = generation.find(bindingRequirement);
+        luna::runtime::RuntimeFragmentRef selected;
+        return binding && luna::runtime::makeOwnedRuntimeFragmentRef(
+            binding, slot, {"", nullptr}, selected, error) &&
+            luna::runtime::makeRuntimeFragmentRefHandle(
+                selected, slot, output, error);
+    };
+    luna::runtime::RuntimeFragmentRefHandle wrongSlotRef;
+    luna::runtime::RuntimeFragmentRefHandle wrongContractRef;
+    if (!issueWrongTargetRef(wrongSlotDescriptor, wrongSlotRequirement,
+            "org.luna.private.ref-flow-wrong-slot", wrongSlotRef) ||
+        !issueWrongTargetRef(wrongContractDescriptor,
+            wrongContractRequirement,
+            "org.luna.private.ref-flow-wrong-contract", wrongContractRef) ||
+        luna_runtime_fragment_ref_check_v1(wrongSlotRef.opaque(),
+            wrongSlotRequirement.slotId.c_str(),
+            wrongSlotRequirement.contractId.c_str()) !=
+            LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
+        luna_runtime_fragment_ref_check_v1(wrongContractRef.opaque(),
+            wrongContractRequirement.slotId.c_str(),
+            wrongContractRequirement.contractId.c_str()) !=
+            LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
+        return fail("wrong-target Ref probes were not Runtime-issued handles");
     activeVerifiedRefFlowProbe = &flowProbe;
     const std::string nestedPluginSource =
         "package canonical.container.refprep; module effects; "
@@ -1456,8 +1523,25 @@ int runCrossPackageContainerTest() {
             LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST ||
         nestedPluginEntry->call(noneContext, borrowedRef, invalidPairRef) !=
             LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST ||
+        nestedPluginEntry->call(noneContext, wrongSlotRef, flowRef) !=
+            LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST ||
+        nestedPluginEntry->call(noneContext, borrowedRef, wrongSlotRef) !=
+            LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST ||
+        nestedPluginEntry->call(noneContext, wrongContractRef, flowRef) !=
+            LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST ||
+        nestedPluginEntry->call(noneContext, borrowedRef, wrongContractRef) !=
+            LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST ||
         !flowProbe.values.empty())
         return fail("two-Ref typed ingress executed after a failed preflight");
+    if (luna_runtime_fragment_ref_check_v1(wrongSlotRef.opaque(),
+            wrongSlotRequirement.slotId.c_str(),
+            wrongSlotRequirement.contractId.c_str()) !=
+            LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1 ||
+        luna_runtime_fragment_ref_check_v1(wrongContractRef.opaque(),
+            wrongContractRequirement.slotId.c_str(),
+            wrongContractRequirement.contractId.c_str()) !=
+            LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
+        return fail("two-Ref rejected ingress consumed a foreign borrowed owner");
     flowProbe.failSecondDispatch = true;
     flowProbe.values.clear();
     flowProbe.repeatedResumeStatus = 0;
