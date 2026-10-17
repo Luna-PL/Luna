@@ -2570,7 +2570,11 @@ not a public ABI decision or stable-release approval:
    artifact/code lease expires after the final candidate is cleared, and the
    empty candidate fails without changing the caller's status. The existing
    one-Ref candidate loader still rejects the two-Ref artifact; no public host
-   candidate is claimed.
+   candidate is claimed. A separately sealed and encoded two-Ref variant now
+   returns from the inner Apply continuation. Its owner-backed candidate
+   observes Slot argument `2`, skips the later argument `3`, reports a
+   continuation escape at the inner handler, and releases its artifact lease
+   when cleared.
    Owning transfer remains open.
    The focused Windows
    Clang 20 ASan `--cross-package-container-test` mode passes. Two full local
@@ -2584,8 +2588,8 @@ not a public ABI decision or stable-release approval:
    path still requires public candidate issuance, public typed ingress and host ABI review;
    the injected inner probe is not a publishable Fragment.
    Extend nominal/contract mismatch and failed-ingress evidence to public
-   candidate loading, then cover normal and early exits plus broader cleanup
-   and pin-release regressions. Only after this gate and the remaining
+   candidate loading, then broaden normal/early-exit and cleanup/pin-release
+   regressions. Only after this gate and the remaining
    control-flow cases pass may
    `source-ref-apply` move out of `implementation-open`.
 

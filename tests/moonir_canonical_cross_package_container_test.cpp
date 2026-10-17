@@ -1440,6 +1440,40 @@ int runCrossPackageContainerTest() {
         std::cerr << error << '\n';
         return fail("two-Ref source failed owner-backed 0.4 preparation roundtrip");
     }
+    std::string earlyNestedPluginSource = nestedPluginSource;
+    const std::string innerApply =
+        "apply inner { host::effects::audit_slot(2) {} }";
+    const auto innerApplySite = earlyNestedPluginSource.find(innerApply);
+    if (innerApplySite == std::string::npos ||
+        earlyNestedPluginSource.find(innerApply,
+            innerApplySite + innerApply.size()) != std::string::npos)
+        return fail("two-Ref early-exit source lost its inner Apply site");
+    earlyNestedPluginSource.replace(innerApplySite, innerApply.size(),
+        "apply inner { host::effects::audit_slot(2) { return; } "
+        "host::effects::audit_slot(3) {} }");
+    auto earlyNestedSnapshot =
+        luna::tooling::AnalysisSnapshot::analyzePathWithOverlay(
+            (fixtures / "refprep").string(), refSourcePath.string(),
+            earlyNestedPluginSource);
+    if (!earlyNestedSnapshot.success())
+        return fail("two-Ref early-exit source did not analyze");
+    moon::LunaLowerer earlyNestedLowerer;
+    auto earlyNestedModule = earlyNestedLowerer.lower(
+        *earlyNestedSnapshot.program(), *earlyNestedSnapshot.symbolTable());
+    moon::Sealer earlyNestedSealer;
+    if (!earlyNestedModule || !earlyNestedLowerer.errors().empty() ||
+        !earlyNestedSealer.sealFunctionBodies(*earlyNestedModule))
+        return fail("two-Ref early-exit source did not seal");
+    earlyNestedModule->dependencySlotPublications = dependencies;
+    moon::Verifier earlyNestedVerifier(
+        moon::VerificationPolicy::NativeRefUnitPreparation);
+    std::vector<uint8_t> earlyNestedBytes;
+    if (!earlyNestedVerifier.verify(*earlyNestedModule) ||
+        !moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
+            makeManifest(*earlyNestedModule), *earlyNestedModule,
+            earlyNestedBytes, error) ||
+        earlyNestedBytes.empty() || earlyNestedBytes == nestedPluginBytes)
+        return fail("two-Ref early-exit source did not encode separately");
     luna::driver::VerifiedMoonSlotOwner nestedPluginOwner;
     luna::driver::VerifiedMoonRefUnitPreparation rejectedTwoRefCandidate;
     if (!luna::driver::loadVerifiedMoonSlotOwner(hostBytes,
@@ -1505,6 +1539,7 @@ int runCrossPackageContainerTest() {
             wrongSingleFacts, error))
         return fail("decoded two-Ref source lost its separate source facts");
     luna::driver::PrivateImportedSlotRefPairUnitCandidateForTest pairCandidate;
+    luna::driver::PrivateImportedSlotRefPairUnitCandidateForTest earlyPairCandidate;
     luna::driver::PrivateImportedSlotRefPairUnitCandidateForTest rejectedPair;
     if (luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
             nestedPluginBytes, {}, refManifest.targetTriple,
@@ -1518,16 +1553,25 @@ int runCrossPackageContainerTest() {
             refManifest.dataLayout, rejectedPair, error) || rejectedPair ||
         !luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
             nestedPluginBytes, nestedPluginOwner, refManifest.targetTriple,
-            refManifest.dataLayout, pairCandidate, error)) {
+            refManifest.dataLayout, pairCandidate, error) ||
+        !luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
+            earlyNestedBytes, nestedPluginOwner, refManifest.targetTriple,
+            refManifest.dataLayout, earlyPairCandidate, error)) {
         std::cerr << error << '\n';
         return fail("cross-package two-Ref candidate lost its owner-backed artifact");
     }
     const auto loadedPairFacts = pairCandidate.facts();
-    if (!loadedPairFacts ||
+    const auto earlyPairFacts = earlyPairCandidate.facts();
+    if (!loadedPairFacts || !earlyPairFacts ||
         loadedPairFacts->identities() != pairFacts.identities() ||
         loadedPairFacts->contextEffect != pairFacts.contextEffect ||
+        earlyPairFacts->identities() != pairFacts.identities() ||
+        earlyPairFacts->contextEffect != pairFacts.contextEffect ||
         !pairCandidate.consumerGenerationId() ||
+        !earlyPairCandidate.consumerGenerationId() ||
         pairCandidate.ownerGenerationId() != nestedPluginOwner.generationId() ||
+        earlyPairCandidate.ownerGenerationId() !=
+            nestedPluginOwner.generationId() ||
         luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
             nestedPluginBytes, nestedPluginOwner, refManifest.targetTriple,
             refManifest.dataLayout, pairCandidate, error))
@@ -1588,6 +1632,21 @@ int runCrossPackageContainerTest() {
             !flowProbe.valid)
             return fail("verified plugin nested source Ref did not recover");
     }
+    const auto earlyPairLease = earlyPairCandidate.artifactLeaseForTest();
+    flowProbe.values.clear();
+    flowProbe.resumeStatus = 0;
+    int32_t earlyPairStatus = 777;
+    if (!earlyPairCandidate.call(noneContext, borrowedRef, flowRef,
+                                 earlyPairStatus, error) ||
+        earlyPairStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST ||
+        flowProbe.values != std::vector<int32_t>{2} ||
+        flowProbe.resumeStatus !=
+            LUNA_RUNTIME_FRAGMENT_CONTINUATION_ESCAPED_V1 ||
+        !flowProbe.valid)
+        return fail("verified two-Ref early exit dispatched after return");
+    earlyPairCandidate = {};
+    if (!earlyPairLease.expired())
+        return fail("two-Ref early-exit candidate retained its artifact lease");
     if (luna_runtime_fragment_ref_check_v1(
             borrowedRef.opaque(), requirement.slotId.c_str(),
             requirement.contractId.c_str()) !=

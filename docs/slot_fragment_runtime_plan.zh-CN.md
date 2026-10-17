@@ -1874,7 +1874,9 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    释放原始 owner proof 后仍可调用。复制 candidate 并清空原对象后，副本仍可调用；
    弱引用确认最后一个 candidate 清空后私有产物／代码租约释放，空 candidate 的调用
    不改写传入状态。现有单 Ref candidate loader 仍拒绝双 Ref 产物，
-   因而不能声称公开宿主 candidate 已准入。
+   因而不能声称公开宿主 candidate 已准入。另一份独立密封、编码的双 Ref 变体从内层
+   Apply 续体返回；其 owner-backed candidate 仅观察到 Slot 参数 `2`，跳过后续参数
+   `3`，内层 handler 报告续体逃逸，清空候选后产物租约释放。
    拥有型转移仍待完成。
    Windows Clang 20 ASan 的定向
    `--cross-package-container-test` 模式通过。两次本地完整 ASan canonical
@@ -1886,7 +1888,7 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    将已准备的双 Ref 源码失败路径提升为公开能力，仍需公开 candidate 签发、
    公开类型化入口及宿主 ABI 审查；注入的内层探针不是可发布 Fragment。
    仍须将名义／contract 错配和入口失败证据扩展至公开 candidate 加载，
-   并覆盖正常／提前退出及更广泛的清理与 pin 释放。
+   并覆盖更广泛的正常／提前退出、清理与 pin 释放。
    完成此门和剩余控制流用例后，
    `source-ref-apply` 才可脱离
    `implementation-open`。
