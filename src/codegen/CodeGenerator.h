@@ -172,6 +172,12 @@ public:
         moon::Module& program, moon::FunctionDecl& function,
         std::string& failure,
         std::vector<uint8_t>* entryRecord = nullptr);
+    // A decoded two-Ref preparation must rederive its separate source facts
+    // before the disposable JIT is allowed to lower either Apply.
+    static std::shared_ptr<LunaJitModule>
+    materializePrivateNativeRefPairUnitPreparationForTest(
+        moon::Module& program, moon::FunctionDecl& function,
+        std::string& failure);
     static std::shared_ptr<LunaJitModule>
     materializePrivateRuntimeFragmentRefOwnedPairForTest(
         moon::Module& program, moon::FunctionDecl& function,

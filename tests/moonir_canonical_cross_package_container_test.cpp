@@ -1407,8 +1407,11 @@ int runCrossPackageContainerTest() {
         luna::codegen::deriveNativeRefPairUnitSourceFacts(
             nestedPluginVerified, *nestedPluginSourceFunction,
             forgedPairFacts, error);
+    const bool materializedForgedPair = static_cast<bool>(
+        CodeGenerator::materializePrivateNativeRefPairUnitPreparationForTest(
+            nestedPluginVerified, *nestedPluginSourceFunction, error));
     nestedRefApplies[1].reference = innerReference;
-    if (admittedForgedPair || derivedForgedPair ||
+    if (admittedForgedPair || derivedForgedPair || materializedForgedPair ||
         std::none_of(forgedPairVerifier.errors().begin(),
                      forgedPairVerifier.errors().end(),
                      [](const auto& diagnostic) {
@@ -1435,7 +1438,7 @@ int runCrossPackageContainerTest() {
             wrongSingleFacts, error))
         return fail("decoded two-Ref source lost its separate source facts");
     auto nestedPluginJit =
-        CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
+        CodeGenerator::materializePrivateNativeRefPairUnitPreparationForTest(
             nestedPluginVerified, *nestedPluginSourceFunction, error);
     const void* nestedPluginAddress = nestedPluginJit
         ? nestedPluginJit->lookup("__luna_private_ref_apply_jit_test", error)

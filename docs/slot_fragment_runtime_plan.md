@@ -2553,6 +2553,8 @@ not a public ABI decision or stable-release approval:
    exact Ref type, each used by its own Apply; a forged reused binding fails.
    An independent two-Ref source-fact derivation binds the decoded function
    signature and both Apply parameters without issuing a caller capability.
+   The dedicated test JIT rederives those facts before lowering and rejects
+   a forged reused Apply binding without materializing executable code.
    The existing one-Ref candidate loader still rejects the two-Ref artifact,
    so no admitted host candidate is claimed. Owning transfer remains open.
    The focused Windows

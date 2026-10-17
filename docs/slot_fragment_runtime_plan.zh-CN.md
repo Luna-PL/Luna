@@ -1862,7 +1862,8 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    JIT 执行独立解码后的模块。准备阶段只接受同一种精确 Ref 类型的两个借用参数，
    且每个参数各由一次 Apply 使用；伪造复用绑定会被拒绝。现有单 Ref candidate
    loader 仍拒绝该双 Ref 产物。独立的双 Ref 源码事实推导绑定解码后的函数签名和
-   两个 Apply 参数，但不签发 caller capability，因此不能声称它已有宿主准入 candidate。
+   两个 Apply 参数；专用测试 JIT 在 lowering 前重推这些事实，并在生成可执行代码前
+   拒绝伪造复用的 Apply 绑定。它不签发 caller capability，因此不能声称已有宿主准入 candidate。
    拥有型转移仍待完成。
    Windows Clang 20 ASan 的定向
    `--cross-package-container-test` 模式通过。两次本地完整 ASan canonical

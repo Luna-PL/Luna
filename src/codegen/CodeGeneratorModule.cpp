@@ -3110,6 +3110,17 @@ CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
 }
 
 std::shared_ptr<LunaJitModule>
+CodeGenerator::materializePrivateNativeRefPairUnitPreparationForTest(
+    moon::Module& program, FunctionDecl& function, std::string& failure) {
+    luna::codegen::NativeRefPairUnitSourceFacts facts;
+    if (!luna::codegen::deriveNativeRefPairUnitSourceFacts(
+            program, function, facts, failure))
+        return {};
+    return materializePrivateRuntimeFragmentRefApplyForTest(
+        program, function, failure);
+}
+
+std::shared_ptr<LunaJitModule>
 CodeGenerator::materializePrivateRuntimeFragmentRefOwnedPairForTest(
     moon::Module& program, FunctionDecl& function, std::string& failure) {
     std::shared_ptr<LunaJitModule> executable;
