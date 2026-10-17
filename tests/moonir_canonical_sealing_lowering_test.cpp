@@ -285,10 +285,11 @@ bool exercisePrivateRefApplyJit(
     const auto* arguments = slot ? module.findType(slot->argumentsType) : nullptr;
     const auto* valueType = arguments && arguments->fields.size() == 1
         ? module.findType(arguments->fields.front().type) : nullptr;
-    const bool syntheticTransferTarget =
-        differentSlots && !secondSlot && transferredDropCalls.has_value();
+    const bool syntheticSecondTarget =
+        differentSlots && !secondSlot &&
+        (transferredDropCalls.has_value() || exerciseSelectorFailure);
     if (!slot || !arguments ||
-        (differentSlots && !secondSlot && !syntheticTransferTarget) ||
+        (differentSlots && !secondSlot && !syntheticSecondTarget) ||
         (exerciseIngressGate && (!differentSlots || twoBorrowedReferences ||
                                  expectedResult || transferredDropCalls ||
                                  !entryRecord)) ||
@@ -429,7 +430,8 @@ bool exercisePrivateRefApplyJit(
         error.clear();
     }
     const bool needsSecondHandle = twoBorrowedReferences || exerciseIngressGate ||
-        (transferredDropCalls && differentSlots);
+        (transferredDropCalls && differentSlots) ||
+        (exerciseSelectorFailure && differentSlots);
 
     const std::string fragmentId = "fragment:private-ref-jit";
     const std::string fragmentContract = "contract:private-ref-jit";
@@ -1089,6 +1091,20 @@ bool exercisePrivateRefApplyJit(
     privateRefJitPayloadValid = true;
     privateRefJitResumeStatus = -1;
     if (exerciseSelectorFailure) {
+        const auto invalidStatus = entrySelector(parent.opaque(), nullptr, false);
+        const auto wrongTargetStatus = differentSlots
+            ? entrySelector(parent.opaque(),
+                  const_cast<void*>(secondHandle.opaque()), false)
+            : LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1;
+        if (invalidStatus != LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
+            wrongTargetStatus !=
+                LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
+            privateRefJitExecutions != before ||
+            privateRefJitCompletedResumes != resumesBefore ||
+            generationLease.expired()) {
+            error = "private Ref selector accepted an invalid derivation handle";
+            return false;
+        }
         privateRefJitRepeatedResumeStatus = 0;
         privateRefJitInjectRepeatedResumeFailure = true;
         const auto failedStatus = entrySelector(parent.opaque(),
@@ -5528,7 +5544,7 @@ int runLoweredCompositionTests(SealingTestContext& context) {
                                     bool failDispatch = false) {
         return exercisePrivateRefApplyJit(
             *dynamicExitModule, *dynamicExit, privateRefJitError,
-            dispatches, false, std::nullopt, false, false, {}, {},
+            dispatches, false, std::nullopt, false, failDispatch, {}, {},
             std::nullopt, std::nullopt, false, false, false, nullptr, 0,
             false, leave, failDispatch);
     };

@@ -1693,7 +1693,9 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    Apply。当前源码 builder 使 Apply 入口和正常出口经 Jump 转换；在源码 lowering
    产生非 Jump 跨区边前，继续明确拒绝它。一次性双参数 JIT 入口现执行同一
    Apply 区域中运行时 `bool` 条件的两个取值：提前返回跳过 Slot 分派，继续分支
-   分派一次。继续分支还注入一次重复 resume 失败：私有 body 返回原始失败状态，
+   分派一次。进入该分支前，空 Ref 和目标 Slot 错误的 live Ref 均使 context 派生失败，
+   不发生 Slot 分派，也不消耗有效的借用 owner。继续分支还注入一次重复 resume 失败：
+   私有 body 返回原始失败状态，
    借用 Ref 仍有效，随后两次调用均成功。结构证明核对失败分派的 context Drop，
    fixture 最终释放 generation pin。普通 codegen 仍拒绝此 selector，公开的单 Ref／
    unit 入口配置未改变。受限的 `Result<i32, i32>` `?` 路径已有

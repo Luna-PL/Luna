@@ -2301,7 +2301,9 @@ not a public ABI decision or stable-release approval:
    edges until source lowering produces one. A disposable two-parameter JIT
    entry now executes both values of a runtime `bool` selector inside one
    Apply region: early return skips Slot dispatch, while the continuing arm
-   dispatches once. The continuing arm also injects a failed repeated resume:
+   dispatches once. Before entering that arm, missing and wrong-Slot live Ref
+   handles both fail context derivation without Slot dispatch or consuming the
+   valid borrowed owner. The continuing arm also injects a failed repeated resume:
    its private body returns the raw failure status, retains the borrowed Ref,
    and succeeds on two subsequent calls. The structural proof accounts for
    the failed dispatch context Drop; the fixture releases its generation pin.
