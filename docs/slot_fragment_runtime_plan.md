@@ -2036,9 +2036,11 @@ generation with exactly one noncallable Slot proxy binding. Its implementation
 is the pinned owner's verified Slot declaration, while its module lease owns
 the issued import proof and both generation pins. The materialization key
 includes the owner artifact digest. The opaque result keeps its Runtime and
-binding pin alive after the original owner loader is destroyed. It can now
-activate a second internal generation at a loader-owned safe point, retaining
-the same Slot proxy and admitting only the pointer-free Ref/unit candidate
+binding pin alive after the original owner loader is destroyed. Its Slot proxy
+staging verifier requires empty module relations: an added absent-module
+dependency leaves the output empty, and the unmodified proof still loads.
+It can now activate a second internal generation at a loader-owned safe point,
+retaining the same Slot proxy and admitting only the pointer-free Ref/unit candidate
 facts. The previous pin remains metadata-free. A further internal activation
 installs a typed caller on the same candidate facts and Slot proxy. Its
 callback retains the exact import proof, consumer preparation, verified owner

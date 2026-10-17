@@ -1513,7 +1513,9 @@ generation pin。错误的源码或 Slot 身份，以及同一字节另行签发
 导入 Slot 凭据现可在另一个 loader 自有的内部 Runtime 中加载仅含一个不可调用 Slot 代理
 binding 的 generation。其 implementation 指向已固定 owner 的 verified Slot 声明，module
 lease 保留已签发的导入凭据及两侧 generation pin；物化键还包含 owner 产物摘要。不透明的
-结果在原 owner loader 销毁后继续保留 Runtime 与 binding pin。它现可在 loader 自有的
+结果在原 owner loader 销毁后继续保留 Runtime 与 binding pin。Slot 代理 staging verifier
+要求 module 关系列表为空：额外 absent-module 依赖使输出保持为空，未篡改的凭据仍可加载。
+它现可在 loader 自有的
 safe point 激活第二个内部 generation，保留同一个 Slot 代理，仅接纳不含指针的 Ref／unit
 candidate 事实；旧 pin 仍无 candidate。再激活一个内部 generation，在相同的 candidate 事实
 和 Slot 代理上安装 typed caller。回调保留精确的导入凭据、consumer 准备态、已验证 owner pin

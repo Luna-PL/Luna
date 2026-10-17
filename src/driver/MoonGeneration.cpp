@@ -1839,6 +1839,20 @@ bool VerifiedMoonImportedSlotGeneration::stageInRuntimeForTestImpl(
 bool VerifiedMoonImportedSlotRefUnitProof::loadBindingOnce(
     VerifiedMoonImportedSlotGeneration& loaded,
     std::string& error) const {
+    return loadBindingOnceImpl(loaded, error, false);
+}
+
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+bool VerifiedMoonImportedSlotRefUnitProof::loadBindingWithRelationForTest(
+    VerifiedMoonImportedSlotGeneration& loaded,
+    std::string& error) const {
+    return loadBindingOnceImpl(loaded, error, true);
+}
+#endif
+
+bool VerifiedMoonImportedSlotRefUnitProof::loadBindingOnceImpl(
+    VerifiedMoonImportedSlotGeneration& loaded,
+    std::string& error, bool addRelationForTest) const {
     error.clear();
     if (loaded) {
         error = "verified imported-Slot generation output already owns a binding";
@@ -1878,6 +1892,12 @@ bool VerifiedMoonImportedSlotRefUnitProof::loadBindingOnce(
         LLVM_VERSION_STRING + ":ir=O0:orc=default:owner=" +
         state.ownerGeneration.contentDigest();
     request.moduleLease = lease;
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    if (addRelationForTest)
+        request.requiredAbsentModuleIds = {"org.luna.test.foreign-owner"};
+#else
+    static_cast<void>(addRelationForTest);
+#endif
 
     auto runtime = std::make_shared<luna::runtime::MoonRuntime>();
     luna::runtime::MoonRuntime::StagedGeneration staged;
@@ -1892,7 +1912,9 @@ bool VerifiedMoonImportedSlotRefUnitProof::loadBindingOnce(
                     candidate.moduleLease.owner_before(lease) ||
                     lease.owner_before(candidate.moduleLease) ||
                     !candidate.refUnitCandidates.empty() ||
-                    candidate.refUnitCaller) {
+                    candidate.refUnitCaller ||
+                    !candidate.requiredAbsentModuleIds.empty() ||
+                    !candidate.requiredActiveModules.empty()) {
                     verificationError =
                         "verified imported-Slot generation changed before staging";
                     return false;

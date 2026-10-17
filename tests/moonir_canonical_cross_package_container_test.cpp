@@ -779,6 +779,10 @@ int runCrossPackageContainerTest() {
             return fail("verified imported-Slot proof lost or replaced its owner");
         if (rejectedImport.loadBindingOnce(verifiedSlotGeneration, error) ||
             verifiedSlotGeneration ||
+            verifiedImport.loadBindingWithRelationForTest(
+                verifiedSlotGeneration, error) ||
+            verifiedSlotGeneration ||
+            error != "verified imported-Slot generation changed before staging" ||
             !verifiedImport.loadBindingOnce(verifiedSlotGeneration, error)) {
             std::cerr << error << '\n';
             return fail("verified imported-Slot binding did not load privately");

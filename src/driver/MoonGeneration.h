@@ -220,6 +220,12 @@ public:
     bool matchesPreparation(const VerifiedMoonRefUnitPreparation& preparation) const;
     bool loadBindingOnce(VerifiedMoonImportedSlotGeneration& loaded,
                          std::string& error) const;
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+    // Inject a module dependency into the loader-owned Slot proxy request.
+    bool loadBindingWithRelationForTest(
+        VerifiedMoonImportedSlotGeneration& loaded,
+        std::string& error) const;
+#endif
 
 private:
     friend class VerifiedMoonImportedSlotGeneration;
@@ -227,6 +233,9 @@ private:
         const VerifiedMoonRefUnitGeneration&, const std::string&,
         const std::string&, const luna::runtime::RuntimeSlotRequirement&,
         VerifiedMoonImportedSlotRefUnitProof&, std::string&);
+    bool loadBindingOnceImpl(VerifiedMoonImportedSlotGeneration& loaded,
+                             std::string& error,
+                             bool addRelationForTest) const;
     VerifiedMoonRefUnitGeneration consumer_;
 };
 
