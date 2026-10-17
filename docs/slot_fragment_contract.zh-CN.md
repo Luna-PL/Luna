@@ -62,7 +62,7 @@ Contract，并不意味着 Luna 已有可传递的 `RuntimeFragmentRef<S>` 类�
 | 边界 | 状态 | 已有证据／实际剩余项 |
 | --- | --- | --- |
 | `host-ref` | `implemented` | C++ move-only 引用、owned／borrowed 环境、factory／cleanup、generation pin 及已校验的 native 拥有 carrier 转移；`luna.runtime-fragment-v1`。 |
-| `source-ref-apply` | `implementation-open` | 前端名义与词法借用检查、canonical Apply CFG／context effect，以及私有 JIT／codegen 已覆盖一至两个借用 Ref、嵌套／outlined Slot 站点、正常／提前退出和部分可恢复分派失败。仅测试用 MoonIR 0.4 codec 以精确的 verified owner 证据往返一个 imported-Slot Ref／unit consumer；普通构建中的内部 loader 可物化其 wrapper，并暂存绑定 owner 的类型化 candidate，包含配对激活。绑定 proof 的同包 Native v4 测试 producer 也已由独立宿主进程调用。这些仍是私有证明。公开源码发布尚需批准 Ref 入口／状态 ABI、完整 import／参数／返回与 Drop 契约、更广的失败清理和所有权转移，以及公开的两包执行门；见实施计划。 |
+| `source-ref-apply` | `implementation-open` | 前端名义与词法借用检查、canonical Apply CFG／context effect，以及私有 JIT／codegen 已覆盖一至两个借用 Ref、嵌套／outlined Slot 站点、正常／提前退出和部分可恢复分派失败。仅测试用 MoonIR 0.4 codec 以精确的 verified owner 证据往返一个 imported-Slot Ref／unit consumer。普通构建中的内部 loader 可物化其 wrapper，并在内部 Runtime 安装类型化 candidate；仅测试用的宿主暂存检查 owner 绑定与配对激活。绑定 proof 的同包 Native v4 测试 producer 也已由独立宿主进程调用。这些仍是私有证明。公开源码发布尚需批准 Ref 入口／状态 ABI、完整 import／参数／返回与 Drop 契约、更广的失败清理和所有权转移，以及公开的两包执行门；见实施计划。 |
 | `candidate-snapshot` | `implemented` | `snapshotRuntimeFragmentCandidates(generation, slot, ...)` 按精确 Slot／Contract 过滤显式给定的单个 generation，快照不可变且固定 generation；不是所有已加载包的全局查询。 |
 | `candidate-aggregation` | `host-managed` | 宿主知道自己加载的包并可组合各 generation 的候选；Runtime 没有内建全局候选集合或跨 generation 聚合查询。便利 API 是后续范围选择，不是当前热路径缺陷。 |
 | `candidate-notification` | `host-managed` | 加载／激活结果和 generation identity 供宿主观察；没有内建候选变化事件总线，不自动发现、排序、选胜者或注入。 |
@@ -89,7 +89,7 @@ Contract，并不意味着 Luna 已有可传递的 `RuntimeFragmentRef<S>` 类�
 | 原生 Fragment ABI | 已实现 v1 descriptor 与 dispatch C ABI（`LRF1`、版本 1）：精确 Slot／Contract 和实参／环境布局、factory/destroy/execute 回调、显式 dispatch context、single-shot 续体。已发布 execute 回调不传 context。 |
 | 原生 Ref 桥 | 已实现 v1 check/transfer/drop，作用于验证过的拥有型 handle cell；不接受任意指针，也不是 Luna 源码导入／返回 ABI。 |
 | 编译器内部源码 Ref 验证 | 源码 `RuntimeFragmentRef<S>` 已有名义与词法检查。私有 CodeGenerator／JIT 证明覆盖受限 Ref／unit Apply、嵌套／outlined Slot 站点、部分失败清理与有界拥有型返回。这些路径不发布源码 ABI。 |
-| 跨包源码 Ref ABI | 未定稿的公开 ABI。仅测试用 MoonIR 0.4 imported-Slot Ref／unit container 可凭 verified owner 证据往返。普通构建中的内部 loader 可物化 wrapper 并暂存绑定 owner 的类型化 candidate；公开加载仍关闭。同包 Native v4 producer 与独立宿主调用也只在测试中启用。源码 import／export／return 与宿主 ABI 批准、完整 Drop／失败契约和公开两包准入仍待完成。 |
+| 跨包源码 Ref ABI | 未定稿的公开 ABI。仅测试用 MoonIR 0.4 imported-Slot Ref／unit container 可凭 verified owner 证据往返。普通构建中的内部 loader 可物化 wrapper，并在内部 Runtime 安装类型化 candidate；宿主暂存与配对激活仅供测试，公开加载仍关闭。同包 Native v4 producer 与独立宿主调用也只在测试中启用。源码 import／export／return 与宿主 ABI 批准、完整 Drop／失败契约和公开两包准入仍待完成。 |
 
 真实的两层 Ref-apply 源码夹具现验证 `?` 的 CFG：Result Switch 留在两层 context 内，
 Err Return 记录先内后外的 context 退出。仅测试用的 JIT 入口也执行本地 Ok／Err 输入
