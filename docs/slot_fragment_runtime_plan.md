@@ -2574,7 +2574,10 @@ not a public ABI decision or stable-release approval:
    returns from the inner Apply continuation. Its owner-backed candidate
    observes Slot argument `2`, skips the later argument `3`, reports a
    continuation escape at the inner handler, and releases its artifact lease
-   when cleared.
+   when cleared. During another nested dispatch, the inner host callback may
+   clear the last pair candidate. The call retains local artifact and consumer
+   generation pins until it returns: the artifact is live inside the callback
+   and expires afterward, while the source call completes normally.
    Owning transfer remains open.
    The focused Windows
    Clang 20 ASan `--cross-package-container-test` mode passes. Two full local

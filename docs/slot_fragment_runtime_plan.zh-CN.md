@@ -1876,7 +1876,9 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    不改写传入状态。现有单 Ref candidate loader 仍拒绝双 Ref 产物，
    因而不能声称公开宿主 candidate 已准入。另一份独立密封、编码的双 Ref 变体从内层
    Apply 续体返回；其 owner-backed candidate 仅观察到 Slot 参数 `2`，跳过后续参数
-   `3`，内层 handler 报告续体逃逸，清空候选后产物租约释放。
+   `3`，内层 handler 报告续体逃逸，清空候选后产物租约释放。另一轮嵌套分派中，
+   内层宿主回调可清空最后一个双 Ref candidate；调用在返回前持有局部产物及 consumer
+   generation pin，回调内产物仍有效，调用返回后租约才失效，源码调用正常完成。
    拥有型转移仍待完成。
    Windows Clang 20 ASan 的定向
    `--cross-package-container-test` 模式通过。两次本地完整 ASan canonical

@@ -57,6 +57,10 @@ struct VerifiedRefFlowProbe {
     int32_t resumeStatus = 0;
     int32_t repeatedResumeStatus = 0;
     bool failSecondDispatch = false;
+    luna::driver::PrivateImportedSlotRefPairUnitCandidateForTest*
+        releasePairCandidate = nullptr;
+    std::weak_ptr<const void> releasePairLease;
+    bool retainedPairLeaseDuringDispatch = false;
     bool valid = true;
 };
 
@@ -89,6 +93,13 @@ void executeVerifiedRefFlowProbe(void*, void* activation) {
     int32_t value = 0;
     std::memcpy(&value, arguments, sizeof(value));
     probe->values.push_back(value);
+    if (probe->releasePairCandidate) {
+        auto* candidate = probe->releasePairCandidate;
+        probe->releasePairCandidate = nullptr;
+        *candidate = {};
+        probe->retainedPairLeaseDuringDispatch =
+            !probe->releasePairLease.expired();
+    }
     probe->resumeStatus = luna_runtime_fragment_activation_resume_v1(activation);
     if (probe->failSecondDispatch && value == 2)
         probe->repeatedResumeStatus =
@@ -1667,7 +1678,20 @@ int runCrossPackageContainerTest() {
         retainedPairStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST ||
         flowProbe.values != std::vector<int32_t>{2} || !flowProbe.valid)
         return fail("copied two-Ref candidate lost its artifact or JIT lease");
-    retainedPair = {};
+    flowProbe.releasePairCandidate = &retainedPair;
+    flowProbe.releasePairLease = pairLease;
+    flowProbe.retainedPairLeaseDuringDispatch = false;
+    flowProbe.values.clear();
+    retainedPairStatus = 777;
+    const bool reentrantCall = retainedPair.call(
+        noneContext, borrowedRef, flowRef, retainedPairStatus, error);
+    flowProbe.releasePairCandidate = nullptr;
+    flowProbe.releasePairLease.reset();
+    if (!reentrantCall ||
+        retainedPairStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST ||
+        flowProbe.values != std::vector<int32_t>{2} || !flowProbe.valid ||
+        !flowProbe.retainedPairLeaseDuringDispatch || retainedPair)
+        return fail("two-Ref callback release lost its in-flight artifact lease");
     retainedPairStatus = 777;
     if (!pairLease.expired() || pairCandidate || pairCandidate.facts() ||
         pairCandidate.call(noneContext, borrowedRef, flowRef,

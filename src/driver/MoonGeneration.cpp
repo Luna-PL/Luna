@@ -2002,15 +2002,18 @@ bool PrivateImportedSlotRefPairUnitCandidateForTest::call(
     const luna::runtime::RuntimeFragmentRefHandle& first,
     const luna::runtime::RuntimeFragmentRefHandle& second,
     int32_t& status, std::string& error) const {
-    const auto lease = std::shared_ptr<const void>(state_);
-    if (!state_ || !state_->ownerGeneration || !state_->entry ||
-        !consumer_.matchesModuleLease(lease) ||
-        consumer_.moduleId() != state_->manifest.packageId ||
-        consumer_.contentDigest() != state_->contentDigest) {
+    // Nested host callbacks may clear the last candidate before this returns.
+    const auto state = state_;
+    const auto consumer = consumer_;
+    const auto lease = std::shared_ptr<const void>(state);
+    if (!state || !state->ownerGeneration || !state->entry ||
+        !consumer.matchesModuleLease(lease) ||
+        consumer.moduleId() != state->manifest.packageId ||
+        consumer.contentDigest() != state->contentDigest) {
         error = "private two-Ref candidate lost its owner or consumer lease";
         return false;
     }
-    status = state_->entry->call(parent, first, second);
+    status = state->entry->call(parent, first, second);
     error.clear();
     return true;
 }
