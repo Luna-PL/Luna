@@ -2565,8 +2565,12 @@ not a public ABI decision or stable-release approval:
    an inert consumer generation to the artifact lease, then issues a typed
    pair candidate. Missing owner evidence, a wrong target, a one-Ref artifact
    and reuse of an initialized output are rejected. Calls remain valid after
-   the original owner proof is released. The existing one-Ref candidate
-   loader still rejects the two-Ref artifact; no public host candidate is claimed.
+   the original owner proof is released. A copied candidate remains callable
+   after the original is cleared; a weak observer confirms the private
+   artifact/code lease expires after the final candidate is cleared, and the
+   empty candidate fails without changing the caller's status. The existing
+   one-Ref candidate loader still rejects the two-Ref artifact; no public host
+   candidate is claimed.
    Owning transfer remains open.
    The focused Windows
    Clang 20 ASan `--cross-package-container-test` mode passes. Two full local
@@ -2580,8 +2584,8 @@ not a public ABI decision or stable-release approval:
    path still requires public candidate issuance, public typed ingress and host ABI review;
    the injected inner probe is not a publishable Fragment.
    Extend nominal/contract mismatch and failed-ingress evidence to public
-   candidate loading, then cover normal and early exits plus cleanup and
-   pin-release regressions. Only after this gate and the remaining
+   candidate loading, then cover normal and early exits plus broader cleanup
+   and pin-release regressions. Only after this gate and the remaining
    control-flow cases pass may
    `source-ref-apply` move out of `implementation-open`.
 

@@ -384,6 +384,8 @@ public:
     uint64_t consumerGenerationId() const;
     uint64_t ownerGenerationId() const;
     std::optional<luna::codegen::NativeRefPairUnitSourceFacts> facts() const;
+    // Observe the private artifact/code lease without retaining it.
+    std::weak_ptr<const void> artifactLeaseForTest() const;
     bool call(const luna::runtime::RuntimeFragmentExecutionContext& parent,
               const luna::runtime::RuntimeFragmentRefHandle& first,
               const luna::runtime::RuntimeFragmentRefHandle& second,

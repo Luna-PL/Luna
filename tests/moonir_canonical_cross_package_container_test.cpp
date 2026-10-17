@@ -1597,6 +1597,24 @@ int runCrossPackageContainerTest() {
             requirement.contractId.c_str()) !=
             LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
         return fail("nested source Ref failure consumed a borrowed owner");
+    const auto pairLease = pairCandidate.artifactLeaseForTest();
+    auto retainedPair = pairCandidate;
+    pairCandidate = {};
+    flowProbe.values.clear();
+    int32_t retainedPairStatus = 777;
+    if (pairLease.expired() || !retainedPair ||
+        !retainedPair.call(noneContext, borrowedRef, flowRef,
+                           retainedPairStatus, error) ||
+        retainedPairStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST ||
+        flowProbe.values != std::vector<int32_t>{2} || !flowProbe.valid)
+        return fail("copied two-Ref candidate lost its artifact or JIT lease");
+    retainedPair = {};
+    retainedPairStatus = 777;
+    if (!pairLease.expired() || pairCandidate || pairCandidate.facts() ||
+        pairCandidate.call(noneContext, borrowedRef, flowRef,
+                           retainedPairStatus, error) ||
+        retainedPairStatus != 777 || error.empty())
+        return fail("released two-Ref candidate retained or called its artifact");
     for (int iteration = 0; iteration < 2; ++iteration) {
         flowProbe.values.clear();
         flowProbe.resumeStatus = 0;

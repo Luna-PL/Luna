@@ -1992,6 +1992,11 @@ PrivateImportedSlotRefPairUnitCandidateForTest::facts() const {
         ? std::optional{state_->facts} : std::nullopt;
 }
 
+std::weak_ptr<const void>
+PrivateImportedSlotRefPairUnitCandidateForTest::artifactLeaseForTest() const {
+    return state_;
+}
+
 bool PrivateImportedSlotRefPairUnitCandidateForTest::call(
     const luna::runtime::RuntimeFragmentExecutionContext& parent,
     const luna::runtime::RuntimeFragmentRefHandle& first,
