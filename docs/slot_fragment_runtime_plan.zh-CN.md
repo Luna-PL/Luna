@@ -1805,7 +1805,8 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    codegen，再于 module verifier 及 Moon Container 编解码中定义、验证 Ref 类型
    和 Apply region 的 wire 规则。无效或旧产物必须在发布 generation 前整体拒绝。
    源码 consumer 与独立 owner 证据现已在单一 Ref callable 准入规则下通过私有 0.4
-   产物编码及独立解码。解码源码可进入由 generation pin 固定私有 JIT 的隔离测试
+   产物编码及独立解码。另一有界形状以同一 Ref 类型的两个借用参数通过仅测试用的
+   preparation 往返；单 Ref candidate facts 仍拒绝它。解码源码可进入由 generation pin 固定私有 JIT 的隔离测试
    generation，同时保留精确 verified owner generation，并调用 verified plugin generation
    签发的借用 Ref。私有类型化 candidate 已绑定解码源码事实、精确 consumer lease，以及
    由编译器内部 verified owner loader 签发的凭据；该 loader 现无需测试开关也能编译。
@@ -1856,9 +1857,11 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    另一个仅测试用的双借用 Ref／unit 源码 JIT 以该已验证插件为外层 Ref，
    以 Runtime 发放的探针为内层 Ref。插件合法 resume 时，生成的源码续体进入
    内层 Apply；注入的内层分派失败经插件回到外层源码状态。两次全新调用恢复，
-   两个借用 Ref 均未被消耗。该双 Ref 源码有 sealed CFG 和私有 LLVM 证明，
-   但单 Ref Native Ref/unit preparation 验证器拒绝此形状；不能声称它已有
-   verified 0.4 consumer 产物或宿主准入 candidate。拥有型转移仍待完成。
+   两个借用 Ref 均未被消耗。该源码现经 owner-backed 0.4 preparation 往返；
+   JIT 执行独立解码后的模块。准备阶段只接受同一种精确 Ref 类型的两个借用参数，
+   且每个参数各由一次 Apply 使用；伪造复用绑定会被拒绝。现有单 Ref candidate
+   loader 仍拒绝该双 Ref 产物，因此不能声称它已有宿主准入 candidate。
+   拥有型转移仍待完成。
    Windows Clang 20 ASan 的定向
    `--cross-package-container-test` 模式通过。两次本地完整 ASan canonical
    均更早停在已知的 LLVM 20 COFF `IMAGE_REL_AMD64_ADDR32NB` 重定位错误，
@@ -1866,8 +1869,8 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    不能产生重复 resume 失败：Sema 与
    sealed CFG 验证器都限制每条路径至多一次 resume。当前 Native v1 export
    registry 也没有可执行 Fragment binding profile，其 Fragment 行不带 entry。
-   将仅测试用的双 Ref 源码失败路径提升为公开能力，仍需有界的 verifier／container
-   profile、类型化入口及宿主 ABI 审查；注入的内层探针不是可发布 Fragment。
+   将已准备的双 Ref 源码失败路径提升为公开能力，仍需 candidate facts、
+   类型化入口及宿主 ABI 审查；注入的内层探针不是可发布 Fragment。
    仍须覆盖名义／contract 错配、入口失败、正常／提前退出及清理与 pin 释放。
    完成此门和剩余控制流用例后，
    `source-ref-apply` 才可脱离

@@ -2460,7 +2460,10 @@ not a public ABI decision or stable-release approval:
    Moon Container encoder/decoder. Invalid or older artifacts must fail
    without publishing a partial generation. The source consumer and separate
    owner evidence now pass the private 0.4 artifact encode and independent
-   decode under a single-Ref-callable admission rule. MoonIR verification and
+   decode under a single-Ref-callable admission rule. A second bounded form
+   with two borrowed parameters of the same Ref type now round-trips only
+   through test preparation; the one-Ref candidate facts still reject it.
+   MoonIR verification and
    Native module preparation also reject a second Ref-bearing declaration
    record without an executable body or export; the container check already
    rejects that record. The decoded source can
@@ -2542,11 +2545,13 @@ not a public ABI decision or stable-release approval:
    its inner Ref. During the plugin's legal resume, the generated source
    continuation enters the inner Apply; an injected inner dispatch failure
    returns through the plugin to the outer source status. Two fresh calls
-   recover, and neither borrowed Ref is consumed. This two-Ref source has a
-   sealed CFG and a private LLVM proof, but the one-Ref Native Ref/unit
-   preparation verifier rejects it; no verified 0.4 consumer artifact or
-   admitted host candidate is claimed for this shape. Owning transfer also
-   remains open. The focused Windows
+   recover, and neither borrowed Ref is consumed. This source now round-trips
+   through owner-backed 0.4 preparation; the JIT runs its independently
+   decoded module. Preparation accepts only two borrowed parameters of one
+   exact Ref type, each used by its own Apply; a forged reused binding fails.
+   The existing one-Ref candidate loader still rejects the two-Ref artifact,
+   so no admitted host candidate is claimed. Owning transfer remains open.
+   The focused Windows
    Clang 20 ASan `--cross-package-container-test` mode passes. Two full local
    ASan canonical attempts stopped earlier at the known LLVM 20 COFF
    `IMAGE_REL_AMD64_ADDR32NB` relocation failure, so they do not establish a
@@ -2554,9 +2559,9 @@ not a public ABI decision or stable-release approval:
    A legal source Fragment cannot produce the repeated-resume failure: Sema
    and the sealed CFG verifier enforce one resume per path. The current Native
    v1 export registry also has no executable Fragment binding profile; its
-   Fragment rows carry no entry. Promoting the test-only two-Ref source failure
-   path requires a bounded verifier/container profile, typed ingress and host
-   ABI review; the injected inner probe is not a publishable Fragment.
+   Fragment rows carry no entry. Promoting the prepared two-Ref source failure
+   path still requires candidate facts, typed ingress and host ABI review;
+   the injected inner probe is not a publishable Fragment.
    Include nominal/contract mismatch, failed ingress, normal and early exits,
    and cleanup/pin-release regressions. Only after this gate and the remaining
    control-flow cases pass may

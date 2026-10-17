@@ -95,7 +95,8 @@ bool Verifier::nativeRefUnitCandidateShape(
         !function.isExported || function.packageId != module.name ||
         function.isExtern || function.isKernel || function.isSelector ||
         !function.typeParams.empty() || !function.abi.empty() ||
-        !function.linkName.empty() || function.params.size() != 1 ||
+        !function.linkName.empty() || function.params.empty() ||
+        function.params.size() > 2 ||
         function.returnsLinear ||
         function.returnUsage != luna::ownership::Usage::Copy)
         return false;
@@ -106,13 +107,43 @@ bool Verifier::nativeRefUnitCandidateShape(
     const auto* record = module.findDeclarationById(function.declarationId);
     if (!ref || ref->kind != TypeKind::RuntimeFragmentRef ||
         !result || result->kind != TypeKind::Unit || !target ||
-        !isPublicSlotTarget(module, *target) || parameter.isLinear ||
-        parameter.relation != luna::ownership::Relation::SharedBorrow ||
-        parameter.usage != luna::ownership::Usage::Copy || !record ||
+        !isPublicSlotTarget(module, *target) || !record ||
         record->kind != DeclarationKind::Function ||
         record->symbolId != function.symbolId ||
         record->contractId != function.contractId)
         return false;
+    for (const auto& borrowed : function.params)
+        if (borrowed.type != ref->id || borrowed.isLinear ||
+            borrowed.relation != luna::ownership::Relation::SharedBorrow ||
+            borrowed.usage != luna::ownership::Usage::Copy)
+            return false;
+    if (function.params.size() == 2) {
+        // This verifies a preparation artifact, not a two-Ref host candidate.
+        // The Native Ref/unit candidate facts still require one parameter.
+        const auto* graph = function.controlFlow.get();
+        if (!graph || graph->runtimeRefApplies.size() != 2 ||
+            !graph->cleanups.empty() ||
+            function.params[0].name == function.params[1].name)
+            return false;
+        for (const auto& borrowed : function.params) {
+            const auto matchesParameter = [&](const LocalRecord& item) {
+                return item.kind == LocalKind::Parameter &&
+                    item.name == borrowed.name && item.type == borrowed.type &&
+                    item.scope == graph->rootScope;
+            };
+            const auto local = std::find_if(graph->locals.begin(),
+                graph->locals.end(), matchesParameter);
+            if (local == graph->locals.end() ||
+                std::count_if(graph->locals.begin(), graph->locals.end(),
+                    matchesParameter) != 1 ||
+                std::count_if(graph->runtimeRefApplies.begin(),
+                    graph->runtimeRefApplies.end(), [&](const auto& apply) {
+                        return apply.reference == local->id &&
+                            apply.slot == *target;
+                    }) != 1)
+                return false;
+        }
+    }
     return std::any_of(module.exports.begin(), module.exports.end(),
         [&](const ExportRecord& exported) {
             return exported.kind == DeclarationKind::Function &&

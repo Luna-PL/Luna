@@ -1358,25 +1358,62 @@ int runCrossPackageContainerTest() {
     nestedPluginModule->dependencySlotPublications = dependencies;
     moon::Verifier nestedPluginPublicationVerifier(
         moon::VerificationPolicy::NativeRefUnitPreparation);
-    if (nestedPluginPublicationVerifier.verify(*nestedPluginModule) ||
-        std::none_of(nestedPluginPublicationVerifier.errors().begin(),
-                     nestedPluginPublicationVerifier.errors().end(),
-                     [](const auto& diagnostic) {
-            return diagnostic.message ==
-                "Native Ref/unit preparation has another Ref callable";
-        }))
-        return fail("two-Ref source escaped the one-Ref preparation boundary");
+    std::vector<uint8_t> nestedPluginBytes;
+    moon::ContainerManifest nestedPluginManifest;
+    moon::Module nestedPluginVerified;
+    if (!nestedPluginPublicationVerifier.verify(*nestedPluginModule) ||
+        !moon::ContainerModelCodec::encodeNativeRefUnitPreparationForTest(
+            makeManifest(*nestedPluginModule), *nestedPluginModule,
+            nestedPluginBytes, error) ||
+        nestedPluginBytes.empty() || nestedPluginBytes == refBytes ||
+        !moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTarget(
+            nestedPluginBytes, refManifest.targetTriple,
+            refManifest.dataLayout, dependencies,
+            nestedPluginManifest, nestedPluginVerified, error)) {
+        std::cerr << error << '\n';
+        return fail("two-Ref source failed owner-backed 0.4 preparation roundtrip");
+    }
+    luna::driver::VerifiedMoonSlotOwner nestedPluginOwner;
+    luna::driver::VerifiedMoonRefUnitPreparation rejectedTwoRefCandidate;
+    if (!luna::driver::loadVerifiedMoonSlotOwner(hostBytes,
+            hostManifest.targetTriple, hostManifest.dataLayout,
+            nestedPluginOwner, error) ||
+        luna::driver::loadVerifiedMoonRefUnitPreparation(
+            nestedPluginBytes, nestedPluginOwner,
+            refManifest.targetTriple, refManifest.dataLayout,
+            rejectedTwoRefCandidate, error) || rejectedTwoRefCandidate ||
+        error != "Native Ref/unit candidate has no sealed source callable")
+        return fail("two-Ref artifact entered the one-Ref candidate loader");
     moon::FunctionDecl* nestedPluginSourceFunction = nullptr;
-    for (auto& declaration : nestedPluginModule->declarations)
+    for (auto& declaration : nestedPluginVerified.declarations)
         if (auto* function = dynamic_cast<moon::FunctionDecl*>(
                 declaration.get()); function &&
             function->name == "nested_plugin_ref")
             nestedPluginSourceFunction = function;
     if (!nestedPluginSourceFunction)
         return fail("cross-package nested Ref/plugin source is missing");
+    auto& nestedRefApplies =
+        nestedPluginSourceFunction->controlFlow->runtimeRefApplies;
+    if (nestedRefApplies.size() != 2)
+        return fail("two-Ref artifact lost its exact Apply bindings");
+    const auto innerReference = nestedRefApplies[1].reference;
+    nestedRefApplies[1].reference = nestedRefApplies[0].reference;
+    moon::Verifier forgedPairVerifier(
+        moon::VerificationPolicy::NativeRefUnitPreparation);
+    const bool admittedForgedPair = forgedPairVerifier.verify(
+        nestedPluginVerified);
+    nestedRefApplies[1].reference = innerReference;
+    if (admittedForgedPair ||
+        std::none_of(forgedPairVerifier.errors().begin(),
+                     forgedPairVerifier.errors().end(),
+                     [](const auto& diagnostic) {
+            return diagnostic.message ==
+                "Native Ref/unit preparation has another Ref callable";
+        }))
+        return fail("two-Ref preparation admitted a reused parameter binding");
     auto nestedPluginJit =
         CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
-            *nestedPluginModule, *nestedPluginSourceFunction, error);
+            nestedPluginVerified, *nestedPluginSourceFunction, error);
     const void* nestedPluginAddress = nestedPluginJit
         ? nestedPluginJit->lookup("__luna_private_ref_apply_jit_test", error)
         : nullptr;
