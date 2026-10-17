@@ -2047,8 +2047,10 @@ against the declared Slot before calling the verified status wrapper. The
 internal staging verifier binds the callback to the exact immutable adapter
 state constructed from that proof; an independently wrapped callback with the
 same type and proof fails before activation. The cross-package regression
-checks that rejection and then installs the original caller successfully. The
-metadata-only pin remains noncallable; a candidate pin from the new generation
+checks that rejection and then installs the original caller successfully. Both
+internal staging verifiers require empty module relations; a test-only added
+absent-module dependency fails without replacing the metadata-only generation.
+The metadata-only pin remains noncallable; a candidate pin from the new generation
 continues to call after the loader-owned Runtime is destroyed. Public Ref
 admission is unchanged.
 An ordinary-build internal load function now runs the complete chain from

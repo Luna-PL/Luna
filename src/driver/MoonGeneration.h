@@ -252,6 +252,8 @@ public:
     // Attempt to stage an independently wrapped caller with the same adapter
     // and proof. The ordinary verifier must reject it before activation.
     bool installAlternateTypedCallerForTest(std::string& error);
+    // Inject a module dependency into the loader-owned caller request.
+    bool installTypedCallerWithRelationForTest(std::string& error);
 #endif
     // Compiler-internal owner projection, tied to this verified consumer
     // proof. It stages no Ref candidate in the host Runtime.
@@ -304,7 +306,8 @@ public:
 private:
     friend class VerifiedMoonImportedSlotRefUnitProof;
     bool installTypedCallerOnceImpl(
-        std::string& error, bool replaceCallerForTest);
+        std::string& error, bool replaceCallerForTest,
+        bool addRelationForTest);
     struct HostCandidatePlan {
         luna::runtime::GenerationStagingRequest request;
         luna::runtime::GenerationRefUnitCandidate facts;

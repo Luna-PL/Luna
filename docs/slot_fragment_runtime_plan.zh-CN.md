@@ -1520,6 +1520,8 @@ candidate 事实；旧 pin 仍无 candidate。再激活一个内部 generation�
 及 JIT 代码 lease；调用已验证状态 wrapper 前，先检查 parent context 和固定的 Ref handle 是否
 匹配声明的 Slot。内部 staging 验证器还要求回调保留由该凭据构造的精确不可变 adapter
 状态；另一份同类型、同凭据的封装回调在激活前被拒绝。跨包回归先验证拒绝，再安装原回调。
+两个内部 staging verifier 均要求 module 关系列表为空；仅测试用的额外 absent-module
+依赖被拒绝，且不替换原 metadata-only generation。
 仅含元数据的旧 pin 仍不可调用；新 generation 的 candidate pin 在 loader 自有 Runtime
 销毁后仍可重复调用。公开 Ref 准入不变。
 普通构建的内部装载函数现从已验证的 consumer 字节及已签发 owner 凭据走完整条链：

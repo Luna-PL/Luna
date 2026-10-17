@@ -1082,7 +1082,9 @@ bool VerifiedMoonImportedSlotGeneration::admitMetadataCandidateOnce(
                     candidate.refUnitCandidates.size() != 1 ||
                     !sameRefUnitCandidateFacts(
                         candidate.refUnitCandidates.front(), *expected) ||
-                    candidate.refUnitCaller) {
+                    candidate.refUnitCaller ||
+                    !candidate.requiredAbsentModuleIds.empty() ||
+                    !candidate.requiredActiveModules.empty()) {
                     verificationError =
                         "verified imported-Slot candidate changed before staging";
                     return false;
@@ -1138,18 +1140,24 @@ bool VerifiedMoonImportedSlotGeneration::admitMetadataCandidateOnce(
 
 bool VerifiedMoonImportedSlotGeneration::installTypedCallerOnce(
     std::string& error) {
-    return installTypedCallerOnceImpl(error, false);
+    return installTypedCallerOnceImpl(error, false, false);
 }
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 bool VerifiedMoonImportedSlotGeneration::installAlternateTypedCallerForTest(
     std::string& error) {
-    return installTypedCallerOnceImpl(error, true);
+    return installTypedCallerOnceImpl(error, true, false);
+}
+
+bool VerifiedMoonImportedSlotGeneration::installTypedCallerWithRelationForTest(
+    std::string& error) {
+    return installTypedCallerOnceImpl(error, false, true);
 }
 #endif
 
 bool VerifiedMoonImportedSlotGeneration::installTypedCallerOnceImpl(
-    std::string& error, bool replaceCallerForTest) {
+    std::string& error, bool replaceCallerForTest,
+    bool addRelationForTest) {
     error.clear();
     if (!hasMetadataCandidate() || typedCallerInstalled_ ||
         !generation_.matchesModuleLease(proof_) ||
@@ -1253,8 +1261,11 @@ bool VerifiedMoonImportedSlotGeneration::installTypedCallerOnceImpl(
             std::make_shared<const VerifiedImportedSlotCallerState>(
                 VerifiedImportedSlotCallerState{typedAdapter})};
     }
+    if (addRelationForTest)
+        request.requiredAbsentModuleIds = {"org.luna.test.foreign-owner"};
 #else
     static_cast<void>(replaceCallerForTest);
+    static_cast<void>(addRelationForTest);
 #endif
     request.refUnitCallerLease = proofLease;
     luna::runtime::MoonRuntime::StagedGeneration staged;
@@ -1272,7 +1283,9 @@ bool VerifiedMoonImportedSlotGeneration::installTypedCallerOnceImpl(
                     !sameVerifiedImportedSlotCaller(
                         candidate.refUnitCaller, trustedCaller) ||
                     !generation_.matchesModuleLease(
-                        candidate.refUnitCallerLease)) {
+                        candidate.refUnitCallerLease) ||
+                    !candidate.requiredAbsentModuleIds.empty() ||
+                    !candidate.requiredActiveModules.empty()) {
                     verificationError =
                         "verified imported-Slot caller changed before staging";
                     return false;

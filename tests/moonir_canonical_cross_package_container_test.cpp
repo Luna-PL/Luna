@@ -1932,6 +1932,13 @@ int runCrossPackageContainerTest() {
         error != "pinned Ref/unit candidate has no typed call adapter" ||
         candidateStatus != 777)
         return fail("metadata-only candidate became callable before installation");
+    if (verifiedSlotGeneration.installTypedCallerWithRelationForTest(error) ||
+        error != "verified imported-Slot caller changed before staging" ||
+        verifiedSlotGeneration.hasTypedCaller() ||
+        verifiedSlotGeneration.generationId() != oldMetadata.generationId() ||
+        metadataPin.call(noneContext, borrowedRef, candidateStatus, error) ||
+        candidateStatus != 777)
+        return fail("imported-Slot caller staged an extra module relation");
     if (verifiedSlotGeneration.installAlternateTypedCallerForTest(error) ||
         error != "verified imported-Slot caller changed before staging" ||
         verifiedSlotGeneration.hasTypedCaller() ||
