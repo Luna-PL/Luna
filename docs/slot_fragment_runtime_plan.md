@@ -2568,7 +2568,9 @@ not a public ABI decision or stable-release approval:
    not transfer ownership of either caller handle. With the same callback
    release, an injected inner dispatch failure propagates as execution failure;
    all four shells drop exactly once again, and later calls with the original
-   Runtime-issued Ref recover.
+   Runtime-issued Ref recover. On preflight failure at the second handle, the
+   first temporary pin drops; a wrong-target second handle drops both pins.
+   Neither case dispatches or consumes the valid caller handle.
    A separate private loader independently decodes the same 0.4 bytes against
    the exact verified owner, rederives pair facts, pins its imported Slot and
    an inert consumer generation to the artifact lease, then issues a typed

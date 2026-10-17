@@ -1652,6 +1652,21 @@ int runCrossPackageContainerTest() {
             LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST ||
         !flowProbe.values.empty())
         return fail("two-Ref typed ingress executed after a failed preflight");
+    const auto rejectedIngressDrops =
+        luna::runtime::runtimeFragmentRefDropCountForTest();
+    if (callPair(noneContext, borrowedRef, invalidPairRef) !=
+            LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST ||
+        luna::runtime::runtimeFragmentRefDropCountForTest() !=
+            rejectedIngressDrops + 1 ||
+        callPair(noneContext, borrowedRef, wrongSlotRef) !=
+            LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST ||
+        luna::runtime::runtimeFragmentRefDropCountForTest() !=
+            rejectedIngressDrops + 3 ||
+        !flowProbe.values.empty() ||
+        luna_runtime_fragment_ref_check_v1(borrowedRef.opaque(),
+            requirement.slotId.c_str(), requirement.contractId.c_str()) !=
+            LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
+        return fail("two-Ref rejected ingress retained or consumed a borrowed pin");
     if (luna_runtime_fragment_ref_check_v1(wrongSlotRef.opaque(),
             wrongSlotRequirement.slotId.c_str(),
             wrongSlotRequirement.contractId.c_str()) !=

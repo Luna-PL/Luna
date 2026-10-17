@@ -1873,6 +1873,8 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    Slot `2` 仍分派；测试确认两个调用方外壳及两个临时 pin 都被释放。这不转移调用方
    handle 的所有权。相同回调释放场景下注入的内层分派失败会传播为执行失败；
    四个外壳仍各释放一次，随后使用原始 Runtime 签发 Ref 的调用可恢复。
+   第二个 handle 预检失败时，第一个临时 pin 释放；第二个 handle 目标错误时，
+   两个临时 pin 均释放。两种情形均不分派，也不消耗调用方有效 handle。
    独立的私有 loader 以精确 verified owner 证据重新解码同一 0.4 字节，重推双 Ref 事实，
    固定 imported Slot 和绑定产物租约的无公开绑定 consumer generation，再签发类型化
    双 Ref candidate。调用方现须明确指定源码 SymbolId／ContractId 和 imported
