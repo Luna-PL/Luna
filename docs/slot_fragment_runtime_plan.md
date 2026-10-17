@@ -1120,9 +1120,10 @@ continues to reject `?` across the outlined Slot boundary.
 The current source builder enters and normally leaves each Ref Apply through
 Jump edges. It does not produce a source-level non-Jump context transition in
 these structured paths. The flow planner computes such obligations for all
-edge kinds, while private codegen rejects any non-Jump transition. Retain that
-gate until a future source lowering makes such an edge reachable and supplies
-an executable cleanup proof.
+edge kinds. The canonical verifier now rejects Branch/Switch transitions
+across Apply, Fragment and continuation owners; private codegen also rejects
+any non-Jump Apply transition. Retain these gates until a future source
+lowering makes such an edge reachable and supplies an executable cleanup proof.
 
 A separate test-only status entry now composes a read-only parent-context
 preflight and the exact native borrowed-Ref check with one sealed
@@ -2316,6 +2317,10 @@ not a public ABI decision or stable-release approval:
    after the outer Slot has resumed. Its raw failure status leaves the borrowed
    Ref live, and two fresh calls complete all three dispatches; the structural
    proof still checks the inner-to-outer context Drop stack.
+   The sealed CFG verifier now rejects forged Branch/Switch edges across
+   Apply, Fragment or continuation owners, ordinary external Jumps into a
+   continuation, and Jumps that skip a Fragment entry. This protects the
+   existing Jump-only source lowering without admitting a new edge kind.
    The narrow `Result<i32, i32>` `?` path now has
    an inner-before-outer CFG proof and private Ok/Err JIT
    evidence, including one affine source error converted to a scalar by its

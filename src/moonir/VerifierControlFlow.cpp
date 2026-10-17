@@ -46,6 +46,25 @@ void Verifier::verifyControlFlowBlocks(
         return nullptr;
     };
 
+    const auto verifyConditionalEdge =
+        [this, &graph, &enclosingRegion](
+            const BasicBlock& source, const ControlEdge& edge) {
+            const auto* target = graph.findBlock(edge.target);
+            if (!target) return;
+            for (const auto kind : {RegionKind::Apply,
+                                    RegionKind::Fragment,
+                                    RegionKind::Continuation}) {
+                const auto* from = enclosingRegion(source.region, kind);
+                const auto* to = enclosingRegion(target->region, kind);
+                if ((from ? from->id : RegionId{}) !=
+                    (to ? to->id : RegionId{})) {
+                    error(source.terminator.location,
+                          "conditional edge crosses an Apply, Fragment or continuation boundary");
+                    return;
+                }
+            }
+        };
+
     const auto localVisibleFrom = [&graph](
         ScopeId localScope, ScopeId useScope) {
         std::unordered_set<uint32_t> visited;
@@ -651,6 +670,13 @@ void Verifier::verifyControlFlowBlocks(
                             ? enclosingRegion(targetFragment->parent,
                                               RegionKind::Fragment)
                             : nullptr;
+                        if (!sourceFragment && targetContinuation)
+                            error(block.terminator.location,
+                                  "ordinary jump may not enter a fragment continuation");
+                        if (!sourceFragment && targetFragment &&
+                            target->id != targetFragment->entry)
+                            error(block.terminator.location,
+                                  "jump enters a fragment after its entry");
                         // Static Slot composition enters a nested Fragment,
                         // but must not bypass its parameter-initializing entry.
                         const bool entersNestedFragment = sourceFragment &&
@@ -693,6 +719,8 @@ void Verifier::verifyControlFlowBlocks(
                           "branch terminator carries a switch type");
                 verifyEdge(block, block.terminator.primary, "true edge");
                 verifyEdge(block, block.terminator.secondary, "false edge");
+                verifyConditionalEdge(block, block.terminator.primary);
+                verifyConditionalEdge(block, block.terminator.secondary);
                 appendSuccessor(block.terminator.primary);
                 appendSuccessor(block.terminator.secondary);
                 if (!block.terminator.cases.empty() ||
@@ -726,6 +754,7 @@ void Verifier::verifyControlFlowBlocks(
                     error(block.terminator.location,
                           "CFG switch has no cases");
                 verifyEdge(block, block.terminator.primary, "switch default edge");
+                verifyConditionalEdge(block, block.terminator.primary);
                 appendSuccessor(block.terminator.primary);
                 std::unordered_set<uint32_t> tags;
                 for (const auto& item : block.terminator.cases) {
@@ -733,6 +762,7 @@ void Verifier::verifyControlFlowBlocks(
                         error(block.terminator.location,
                               "switch terminator repeats a case tag");
                     verifyEdge(block, item.edge, "switch case edge");
+                    verifyConditionalEdge(block, item.edge);
                     appendSuccessor(item.edge);
                     const auto* target = graph.findBlock(item.edge.target);
                     std::vector<TypeRef> expectedBindings;

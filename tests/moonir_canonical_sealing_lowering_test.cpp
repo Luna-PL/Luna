@@ -4653,6 +4653,21 @@ int runLoweredCompositionTests(SealingTestContext& context) {
             *tryApply->controlFlow, *tryApplyModule, *tryFlow,
             trySwitchBlock->terminator.primary.target))
         return fail("Ref apply '?' default is not an exhaustive Result arm");
+    const auto switchDefault = trySwitchBlock->terminator.primary;
+    trySwitchBlock->terminator.primary.target = tryApply->controlFlow->entry;
+    if (refApplyCfgVerifier.verify(*tryApply->controlFlow, *tryApplyModule) ||
+        !std::any_of(
+            refApplyCfgVerifier.errors().begin(),
+            refApplyCfgVerifier.errors().end(),
+            [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "conditional edge crosses an Apply, Fragment or continuation boundary") !=
+                    std::string::npos;
+            }))
+        return fail("CFG verifier accepted a Switch across a Ref Apply boundary");
+    trySwitchBlock->terminator.primary = switchDefault;
+    if (!refApplyCfgVerifier.verify(*tryApply->controlFlow, *tryApplyModule))
+        return fail("restored Ref apply Result Switch no longer verifies");
     const auto originalTryTag = trySwitchBlock->terminator.cases[1].tag;
     trySwitchBlock->terminator.cases[1].tag =
         trySwitchBlock->terminator.cases[0].tag;

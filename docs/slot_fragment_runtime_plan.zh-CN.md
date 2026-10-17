@@ -857,8 +857,9 @@ outlined Slot 边界拒绝 `?`。
 
 当前源码 builder 通过 Jump 边进入 Ref Apply，并在正常结束时通过 Jump 边退出；
 这些结构化路径不生成源码级的非 Jump context 转换。flow planner 会计算所有边类型
-的义务，但私有 codegen 明确拒绝非 Jump 转换。保留此门禁，直到未来的源码 lowering
-产生可达的相应边，并有可执行的清理证明。
+的义务。规范验证器现拒绝跨 Apply、Fragment 和续体归属区域的 Branch／Switch
+转换；私有 codegen 也拒绝非 Jump Apply 转换。保留这些门禁，直到未来的源码
+lowering 产生可达的相应边，并有可执行的清理证明。
 
 另一仅测试用的状态入口现把只读 parent context 预检、精确的 native 借用 Ref
 检查与一个已封闭、返回 unit 的
@@ -1703,6 +1704,9 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    同一个借用 Ref 随后两次调用仍成功。同一 Ref 的嵌套 Apply JIT 也在外层 Slot
    已完成 resume 后的内层 Slot 分派注入失败：原始失败状态不消耗借用 Ref，随后
    两次全新调用均完成三次分派；结构证明仍核对内先外后的 context Drop 栈。
+   sealed CFG 验证器现拒绝跨越 Apply、Fragment 或续体归属区域的伪造
+   Branch／Switch 边、从外部直接进入续体的普通 Jump，以及跳过 Fragment
+   入口的 Jump。这保护现有仅用 Jump 转换的源码降级，不开放新的边类型。
    受限的 `Result<i32, i32>` `?` 路径已有
    先内后外的 CFG 证明和 Ok／Err 私有 JIT 证据，包括将一个仿射源码错误经冻结
    `From` 方法转换为标量并由源码 `Drop` 清理。双节点拥有型转换参数也已在

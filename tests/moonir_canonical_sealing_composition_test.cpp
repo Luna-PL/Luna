@@ -22,6 +22,7 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     compositionModule.name = "canonical.composition";
     const auto compositionUnit = compositionModule.registerType(TyUnit);
     const auto compositionI32 = compositionModule.registerType(TyI32);
+    const auto compositionBool = compositionModule.registerType(TyBool);
     const auto sharedI32Type = Type::makeReference(TyI32);
     const auto sharedI32TypeId =
         compositionModule.registerType(sharedI32Type);
@@ -83,7 +84,7 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     auto guardedReturn = std::make_unique<moon::IfStmt>();
     auto returnCondition = std::make_unique<moon::BoolLiteralExpr>();
     returnCondition->value = false;
-    returnCondition->type = compositionModule.registerType(TyBool);
+    returnCondition->type = compositionBool;
     guardedReturn->cond = std::move(returnCondition);
     guardedReturn->thenBlock = std::make_unique<moon::BlockStmt>();
     guardedReturn->thenBlock->stmts.push_back(
@@ -404,6 +405,73 @@ int runCompositionSealingTests(SealingTestContext& testContext) {
     if (cfgVerifier.verify(*contextCfg, compositionModule))
         return fail("CFG verifier accepted ordinary context jump into a continuation");
     contextResume->kind = moon::TerminatorKind::Resume;
+    auto forgedCondition = std::make_unique<moon::BoolLiteralExpr>();
+    forgedCondition->value = true;
+    forgedCondition->type = compositionBool;
+    contextResume->kind = moon::TerminatorKind::Branch;
+    contextResume->operand = std::move(forgedCondition);
+    contextResume->secondary = contextAbort->primary;
+    if (cfgVerifier.verify(*contextCfg, compositionModule) ||
+        !std::any_of(
+            cfgVerifier.errors().begin(), cfgVerifier.errors().end(),
+            [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "conditional edge crosses an Apply, Fragment or continuation boundary") !=
+                    std::string::npos;
+            }))
+        return fail("CFG verifier accepted a branch into a Fragment continuation");
+    contextResume->operand.reset();
+    contextResume->secondary = {};
+    contextResume->kind = moon::TerminatorKind::Resume;
+    moon::Terminator* outsideJump = nullptr;
+    for (auto& block : contextCfg->blocks) {
+        bool inControlRegion = false;
+        for (const auto* region = contextCfg->findRegion(block.region);
+             region; region = contextCfg->findRegion(region->parent)) {
+            if (region->kind == moon::RegionKind::Fragment ||
+                region->kind == moon::RegionKind::Continuation) {
+                inControlRegion = true;
+                break;
+            }
+            if (region->parent.empty()) break;
+        }
+        if (block.terminator.kind == moon::TerminatorKind::Jump &&
+            !inControlRegion) {
+            outsideJump = &block.terminator;
+            break;
+        }
+    }
+    if (!outsideJump)
+        return fail("static composition lost its ordinary entry Jump");
+    const auto outsideTarget = outsideJump->primary.target;
+    outsideJump->primary.target = contextContinuationEntry;
+    if (cfgVerifier.verify(*contextCfg, compositionModule) ||
+        !std::any_of(
+            cfgVerifier.errors().begin(), cfgVerifier.errors().end(),
+            [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "ordinary jump may not enter a fragment continuation") !=
+                    std::string::npos;
+            }))
+        return fail("CFG verifier accepted an external Jump into a continuation");
+    outsideJump->primary.target = outsideTarget;
+    const auto* continuationEntryBlock = contextCfg->findBlock(
+        contextContinuationEntry);
+    const auto* continuationRegion = continuationEntryBlock
+        ? contextCfg->findRegion(continuationEntryBlock->region) : nullptr;
+    if (!continuationRegion || continuationRegion->exit.empty())
+        return fail("static composition lost its post-resume Fragment block");
+    outsideJump->primary.target = continuationRegion->exit;
+    if (cfgVerifier.verify(*contextCfg, compositionModule) ||
+        !std::any_of(
+            cfgVerifier.errors().begin(), cfgVerifier.errors().end(),
+            [](const auto& diagnostic) {
+                return diagnostic.message.find(
+                    "jump enters a fragment after its entry") !=
+                    std::string::npos;
+            }))
+        return fail("CFG verifier accepted an external Jump past Fragment entry");
+    outsideJump->primary.target = outsideTarget;
     contextRegion->fragment = interceptorRef;
     if (cfgVerifier.verify(*contextCfg, compositionModule))
         return fail("CFG verifier accepted control under the wrong nominal fragment");
