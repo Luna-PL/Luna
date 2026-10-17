@@ -1562,22 +1562,44 @@ int runCrossPackageContainerTest() {
     luna::driver::PrivateImportedSlotRefPairUnitCandidateForTest pairCandidate;
     luna::driver::PrivateImportedSlotRefPairUnitCandidateForTest earlyPairCandidate;
     luna::driver::PrivateImportedSlotRefPairUnitCandidateForTest rejectedPair;
-    if (luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
-            nestedPluginBytes, {}, refManifest.targetTriple,
-            refManifest.dataLayout, rejectedPair, error) || rejectedPair ||
-        luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
-            nestedPluginBytes, nestedPluginOwner,
-            refManifest.targetTriple + "-wrong", refManifest.dataLayout,
-            rejectedPair, error) || rejectedPair ||
-        luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
-            refBytes, nestedPluginOwner, refManifest.targetTriple,
-            refManifest.dataLayout, rejectedPair, error) || rejectedPair ||
-        !luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
-            nestedPluginBytes, nestedPluginOwner, refManifest.targetTriple,
-            refManifest.dataLayout, pairCandidate, error) ||
-        !luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
-            earlyNestedBytes, nestedPluginOwner, refManifest.targetTriple,
-            refManifest.dataLayout, earlyPairCandidate, error)) {
+    const auto loadExpectedPair = [&](const auto& bytes,
+            const luna::driver::VerifiedMoonSlotOwner& issuer,
+            const auto& target, auto& output) {
+        return luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
+            bytes, issuer, target, refManifest.dataLayout,
+            pairFacts.functionSymbolId, pairFacts.functionContractId,
+            requirement, output, error);
+    };
+    const auto rejectsPairRequest = [&](const std::string& sourceSymbolId,
+                                        const std::string& sourceContractId,
+                                        const auto& requestedSlot) {
+        if (luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
+                nestedPluginBytes, nestedPluginOwner, refManifest.targetTriple,
+                refManifest.dataLayout, sourceSymbolId, sourceContractId,
+                requestedSlot, rejectedPair, error) || rejectedPair)
+            return false;
+        return error ==
+            "private two-Ref candidate differs from requested source or Slot";
+    };
+    if (loadExpectedPair(nestedPluginBytes, {}, refManifest.targetTriple,
+            rejectedPair) || rejectedPair ||
+        loadExpectedPair(nestedPluginBytes, nestedPluginOwner,
+            refManifest.targetTriple + "-wrong", rejectedPair) ||
+        rejectedPair ||
+        loadExpectedPair(refBytes, nestedPluginOwner, refManifest.targetTriple,
+            rejectedPair) || rejectedPair ||
+        !rejectsPairRequest(pairFacts.functionSymbolId + "-wrong",
+            pairFacts.functionContractId, requirement) ||
+        !rejectsPairRequest(pairFacts.functionSymbolId,
+            pairFacts.functionContractId + "-wrong", requirement) ||
+        !rejectsPairRequest(pairFacts.functionSymbolId,
+            pairFacts.functionContractId, wrongSlotRequirement) ||
+        !rejectsPairRequest(pairFacts.functionSymbolId,
+            pairFacts.functionContractId, wrongContractRequirement) ||
+        !loadExpectedPair(nestedPluginBytes, nestedPluginOwner,
+            refManifest.targetTriple, pairCandidate) ||
+        !loadExpectedPair(earlyNestedBytes, nestedPluginOwner,
+            refManifest.targetTriple, earlyPairCandidate)) {
         std::cerr << error << '\n';
         return fail("cross-package two-Ref candidate lost its owner-backed artifact");
     }
@@ -1593,9 +1615,8 @@ int runCrossPackageContainerTest() {
         pairCandidate.ownerGenerationId() != nestedPluginOwner.generationId() ||
         earlyPairCandidate.ownerGenerationId() !=
             nestedPluginOwner.generationId() ||
-        luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
-            nestedPluginBytes, nestedPluginOwner, refManifest.targetTriple,
-            refManifest.dataLayout, pairCandidate, error))
+        loadExpectedPair(nestedPluginBytes, nestedPluginOwner,
+            refManifest.targetTriple, pairCandidate))
         return fail("private two-Ref candidate changed its decoded source or generation");
     nestedPluginOwner = {};
     const auto callPair = [&](const auto& context, const auto& first,

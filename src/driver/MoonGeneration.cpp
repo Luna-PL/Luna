@@ -2023,6 +2023,9 @@ bool loadPrivateImportedSlotRefPairUnitCandidateForTest(
     const VerifiedMoonSlotOwner& owner,
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
+    const std::string& sourceSymbolId,
+    const std::string& sourceContractId,
+    const luna::runtime::RuntimeSlotRequirement& slot,
     PrivateImportedSlotRefPairUnitCandidateForTest& candidate,
     std::string& error) {
     error.clear();
@@ -2056,6 +2059,13 @@ bool loadPrivateImportedSlotRefPairUnitCandidateForTest(
     if (!source || !luna::codegen::deriveNativeRefPairUnitSourceFacts(
             prepared->module, *source, prepared->facts, error)) {
         if (!source) error = "private two-Ref consumer lost its Apply source";
+        return false;
+    }
+    if (prepared->facts.functionSymbolId != sourceSymbolId ||
+        prepared->facts.functionContractId != sourceContractId ||
+        prepared->facts.slotSymbolId != slot.slotId ||
+        prepared->facts.slotContractId != slot.contractId) {
+        error = "private two-Ref candidate differs from requested source or Slot";
         return false;
     }
     const moon::DeclarationRef slotReference{

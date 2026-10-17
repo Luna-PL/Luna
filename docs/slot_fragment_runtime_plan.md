@@ -2572,7 +2572,10 @@ not a public ABI decision or stable-release approval:
    A separate private loader independently decodes the same 0.4 bytes against
    the exact verified owner, rederives pair facts, pins its imported Slot and
    an inert consumer generation to the artifact lease, then issues a typed
-   pair candidate. Missing owner evidence, a wrong target, a one-Ref artifact
+   pair candidate. The caller now names the exact source SymbolId/ContractId
+   and imported SlotId/ContractId; all four must match the decoded facts before
+   JIT materialization. Wrong function or Slot requests leave the output empty.
+   Missing owner evidence, a wrong target, a one-Ref artifact
    and reuse of an initialized output are rejected. Calls remain valid after
    the original owner proof is released. A copied candidate remains callable
    after the original is cleared; a weak observer confirms the private

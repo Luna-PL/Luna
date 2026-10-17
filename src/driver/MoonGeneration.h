@@ -103,6 +103,8 @@ private:
     friend bool loadPrivateImportedSlotRefPairUnitCandidateForTest(
         const std::vector<uint8_t>&, const VerifiedMoonSlotOwner&,
         const std::string&, const std::string&,
+        const std::string&, const std::string&,
+        const luna::runtime::RuntimeSlotRequirement&,
         PrivateImportedSlotRefPairUnitCandidateForTest&, std::string&);
     friend bool stagePrivateNativeRefUnitPreparationForTest(
         luna::runtime::MoonRuntime&, const std::vector<uint8_t>&,
@@ -395,16 +397,22 @@ private:
     friend bool loadPrivateImportedSlotRefPairUnitCandidateForTest(
         const std::vector<uint8_t>&, const VerifiedMoonSlotOwner&,
         const std::string&, const std::string&,
+        const std::string&, const std::string&,
+        const luna::runtime::RuntimeSlotRequirement&,
         PrivateImportedSlotRefPairUnitCandidateForTest&, std::string&);
     std::shared_ptr<PrivateVerifiedRefPairCandidateStateForTest> state_;
     luna::runtime::MoonRuntime::PinnedGeneration consumer_;
 };
 
+// Require an exact caller-selected source and imported Slot before JIT work.
 bool loadPrivateImportedSlotRefPairUnitCandidateForTest(
     const std::vector<uint8_t>& containerBytes,
     const VerifiedMoonSlotOwner& owner,
     const std::string& expectedTargetTriple,
     const std::string& expectedDataLayout,
+    const std::string& sourceSymbolId,
+    const std::string& sourceContractId,
+    const luna::runtime::RuntimeSlotRequirement& slot,
     PrivateImportedSlotRefPairUnitCandidateForTest& candidate,
     std::string& error);
 
