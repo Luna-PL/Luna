@@ -2462,7 +2462,9 @@ not a public ABI decision or stable-release approval:
    owner evidence now pass the private 0.4 artifact encode and independent
    decode under a single-Ref-callable admission rule. A second bounded form
    with two borrowed parameters of the same Ref type now round-trips only
-   through test preparation; the one-Ref candidate facts still reject it.
+   through test preparation. Distinct pointer-free source facts can be
+   rederived from the decoded module; the one-Ref candidate facts still
+   reject it.
    MoonIR verification and
    Native module preparation also reject a second Ref-bearing declaration
    record without an executable body or export; the container check already
@@ -2549,6 +2551,8 @@ not a public ABI decision or stable-release approval:
    through owner-backed 0.4 preparation; the JIT runs its independently
    decoded module. Preparation accepts only two borrowed parameters of one
    exact Ref type, each used by its own Apply; a forged reused binding fails.
+   An independent two-Ref source-fact derivation binds the decoded function
+   signature and both Apply parameters without issuing a caller capability.
    The existing one-Ref candidate loader still rejects the two-Ref artifact,
    so no admitted host candidate is claimed. Owning transfer remains open.
    The focused Windows
@@ -2560,7 +2564,7 @@ not a public ABI decision or stable-release approval:
    and the sealed CFG verifier enforce one resume per path. The current Native
    v1 export registry also has no executable Fragment binding profile; its
    Fragment rows carry no entry. Promoting the prepared two-Ref source failure
-   path still requires candidate facts, typed ingress and host ABI review;
+   path still requires candidate issuance, typed ingress and host ABI review;
    the injected inner probe is not a publishable Fragment.
    Include nominal/contract mismatch, failed ingress, normal and early exits,
    and cleanup/pin-release regressions. Only after this gate and the remaining

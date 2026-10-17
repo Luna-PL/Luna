@@ -156,6 +156,128 @@ bool deriveNativeRefUnitSourceFacts(
     return true;
 }
 
+bool deriveNativeRefPairUnitSourceFacts(
+    const moon::Module& program, const moon::FunctionDecl& function,
+    NativeRefPairUnitSourceFacts& facts, std::string& error) {
+    const auto reject = [&](const char* reason) {
+        error = reason;
+        return false;
+    };
+    const auto* graph = function.controlFlow.get();
+    if (!program.typeTableSealed || !graph || !graph->sealed ||
+        graph->runtimeRefApplies.size() != 2 || !graph->cleanups.empty() ||
+        function.isExtern || function.isKernel || function.isSelector ||
+        !function.isExported || function.packageId != program.name ||
+        !function.typeParams.empty() || !function.abi.empty() ||
+        !function.linkName.empty() || function.generatedSymbolName.empty() ||
+        function.body || !function.requiresFragmentContext ||
+        function.params.size() != 2 || function.returnsLinear ||
+        function.returnUsage != luna::ownership::Usage::Copy ||
+        function.params[0].name == function.params[1].name ||
+        !std::any_of(program.declarations.begin(), program.declarations.end(),
+            [&function](const auto& declaration) {
+                return declaration.get() == &function;
+            }))
+        return reject("two-Ref/unit preparation has no sealed source callable");
+    moon::Verifier verifier(moon::VerificationPolicy::NativeRefUnitPreparation);
+    if (!verifier.verify(program))
+        return reject("two-Ref/unit preparation has no verified module");
+    const auto effects = moon::computeFragmentContextEffects(program);
+    const auto found = effects.find(moon::fragmentContextEffectKey(
+        {function.symbolId, function.contractId}));
+    if (found == effects.end() || !found->second)
+        return reject("two-Ref/unit preparation lost its context effect");
+
+    const auto* ref = program.findType(function.params[0].type);
+    const auto* result = program.findType(function.returnType);
+    const auto target = program.resolveRuntimeFragmentRefTarget(
+        function.params[0].type);
+    const auto* slot = target ? program.findDeclaration(*target) : nullptr;
+    if (!ref || ref->kind != TypeKind::RuntimeFragmentRef ||
+        !result || result->kind != TypeKind::Unit || !target || !slot ||
+        slot->kind != moon::DeclarationKind::Slot)
+        return reject("two-Ref/unit preparation has no exact Slot target");
+    for (const auto& parameter : function.params) {
+        if (parameter.type != ref->id || parameter.isLinear ||
+            parameter.relation != luna::ownership::Relation::SharedBorrow ||
+            parameter.usage != luna::ownership::Usage::Copy)
+            return reject("two-Ref/unit preparation has no exact borrowed parameters");
+        const auto matchesParameter = [&](const moon::LocalRecord& local) {
+            return local.kind == moon::LocalKind::Parameter &&
+                local.name == parameter.name && local.type == parameter.type &&
+                local.scope == graph->rootScope &&
+                local.relation == parameter.relation &&
+                local.usage == parameter.usage;
+        };
+        const auto local = std::find_if(graph->locals.begin(),
+            graph->locals.end(), matchesParameter);
+        if (local == graph->locals.end() ||
+            std::count_if(graph->locals.begin(), graph->locals.end(),
+                matchesParameter) != 1 ||
+            std::count_if(graph->runtimeRefApplies.begin(),
+                graph->runtimeRefApplies.end(), [&](const auto& apply) {
+                    return apply.reference == local->id && apply.slot == *target;
+                }) != 1)
+            return reject("two-Ref/unit preparation changed its Apply binding");
+    }
+
+    const auto* record = program.findDeclarationById(function.declarationId);
+    const auto* callable = record ? program.findType(record->type) : nullptr;
+    moon::TypeMaterializer materializer(program);
+    const TypePtr restoredCallable = callable
+        ? materializer.materialize(record->type) : nullptr;
+    if (!record || record->kind != moon::DeclarationKind::Function ||
+        record->id != function.declarationId ||
+        record->symbolId != function.symbolId ||
+        record->symbolId != luna::identity::symbolIdFromCanonical(record->id) ||
+        record->contractId != function.contractId ||
+        record->canonicalContract != moon::canonicalContract(*record) ||
+        record->contractId != luna::identity::contractIdFromCanonical(
+            record->canonicalContract) ||
+        record->sysmeta.identity.symbol != record->symbolId ||
+        record->sysmeta.identity.contract != record->contractId ||
+        record->linkageName != function.generatedSymbolName ||
+        !callable || callable->kind != TypeKind::Function ||
+        !restoredCallable ||
+        luna::types::typeId(restoredCallable) != callable->id ||
+        luna::types::canonicalType(restoredCallable) != callable->canonicalType ||
+        callable->parameterTypeIds.size() != 2 ||
+        callable->parameterContracts.size() != 2 ||
+        record->sysmeta.resource.parameters.size() != 2 ||
+        callable->returnTypeId != function.returnType ||
+        callable->returnContract != luna::ownership::Contract{
+            luna::ownership::Relation::Owned, function.returnUsage} ||
+        record->sysmeta.resource.result != callable->returnContract)
+        return reject("two-Ref/unit preparation differs from its frozen signature");
+    for (size_t index = 0; index < 2; ++index)
+        if (callable->parameterTypeIds[index] != function.params[index].type ||
+            callable->parameterContracts[index] !=
+                luna::ownership::Contract{function.params[index].relation,
+                                           function.params[index].usage} ||
+            record->sysmeta.resource.parameters[index] !=
+                callable->parameterContracts[index])
+            return reject("two-Ref/unit preparation differs from its frozen signature");
+
+    NativeRefPairUnitSourceFacts candidate;
+    candidate.moduleName = program.name;
+    candidate.packageId = function.packageId;
+    candidate.functionSymbolId = record->symbolId.value;
+    candidate.functionContractId = record->contractId.value;
+    candidate.functionTypeId = callable->id.value;
+    candidate.sourceLinkageName = record->linkageName;
+    candidate.refTypeId = ref->id.value;
+    candidate.slotSymbolId = target->symbol.value;
+    candidate.slotContractId = target->contract.value;
+    candidate.slotTypeId = slot->type.value;
+    candidate.contextEffect = 1;
+    const auto identities = candidate.identities();
+    if (!std::all_of(identities.begin(), identities.end(), boundedIdentity))
+        return reject("two-Ref/unit preparation has an invalid identity");
+    facts = std::move(candidate);
+    error.clear();
+    return true;
+}
+
 bool verifyNativeRefUnitModulePreparation(
     const moon::Module& program, std::string& error) {
     const auto reject = [&](const char* reason) {

@@ -1806,7 +1806,8 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    和 Apply region 的 wire 规则。无效或旧产物必须在发布 generation 前整体拒绝。
    源码 consumer 与独立 owner 证据现已在单一 Ref callable 准入规则下通过私有 0.4
    产物编码及独立解码。另一有界形状以同一 Ref 类型的两个借用参数通过仅测试用的
-   preparation 往返；单 Ref candidate facts 仍拒绝它。解码源码可进入由 generation pin 固定私有 JIT 的隔离测试
+   preparation 往返；可从解码模块独立重推不含指针的双 Ref 源码事实，单 Ref
+   candidate facts 仍拒绝它。解码源码可进入由 generation pin 固定私有 JIT 的隔离测试
    generation，同时保留精确 verified owner generation，并调用 verified plugin generation
    签发的借用 Ref。私有类型化 candidate 已绑定解码源码事实、精确 consumer lease，以及
    由编译器内部 verified owner loader 签发的凭据；该 loader 现无需测试开关也能编译。
@@ -1860,7 +1861,8 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    两个借用 Ref 均未被消耗。该源码现经 owner-backed 0.4 preparation 往返；
    JIT 执行独立解码后的模块。准备阶段只接受同一种精确 Ref 类型的两个借用参数，
    且每个参数各由一次 Apply 使用；伪造复用绑定会被拒绝。现有单 Ref candidate
-   loader 仍拒绝该双 Ref 产物，因此不能声称它已有宿主准入 candidate。
+   loader 仍拒绝该双 Ref 产物。独立的双 Ref 源码事实推导绑定解码后的函数签名和
+   两个 Apply 参数，但不签发 caller capability，因此不能声称它已有宿主准入 candidate。
    拥有型转移仍待完成。
    Windows Clang 20 ASan 的定向
    `--cross-package-container-test` 模式通过。两次本地完整 ASan canonical
@@ -1869,7 +1871,7 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    不能产生重复 resume 失败：Sema 与
    sealed CFG 验证器都限制每条路径至多一次 resume。当前 Native v1 export
    registry 也没有可执行 Fragment binding profile，其 Fragment 行不带 entry。
-   将已准备的双 Ref 源码失败路径提升为公开能力，仍需 candidate facts、
+   将已准备的双 Ref 源码失败路径提升为公开能力，仍需 candidate 签发、
    类型化入口及宿主 ABI 审查；注入的内层探针不是可发布 Fragment。
    仍须覆盖名义／contract 错配、入口失败、正常／提前退出及清理与 pin 释放。
    完成此门和剩余控制流用例后，

@@ -1402,8 +1402,13 @@ int runCrossPackageContainerTest() {
         moon::VerificationPolicy::NativeRefUnitPreparation);
     const bool admittedForgedPair = forgedPairVerifier.verify(
         nestedPluginVerified);
+    luna::codegen::NativeRefPairUnitSourceFacts forgedPairFacts;
+    const bool derivedForgedPair =
+        luna::codegen::deriveNativeRefPairUnitSourceFacts(
+            nestedPluginVerified, *nestedPluginSourceFunction,
+            forgedPairFacts, error);
     nestedRefApplies[1].reference = innerReference;
-    if (admittedForgedPair ||
+    if (admittedForgedPair || derivedForgedPair ||
         std::none_of(forgedPairVerifier.errors().begin(),
                      forgedPairVerifier.errors().end(),
                      [](const auto& diagnostic) {
@@ -1411,6 +1416,24 @@ int runCrossPackageContainerTest() {
                 "Native Ref/unit preparation has another Ref callable";
         }))
         return fail("two-Ref preparation admitted a reused parameter binding");
+    luna::codegen::NativeRefPairUnitSourceFacts pairFacts;
+    luna::codegen::NativeRefUnitSourceFacts wrongSingleFacts;
+    if (!luna::codegen::deriveNativeRefPairUnitSourceFacts(
+            nestedPluginVerified, *nestedPluginSourceFunction,
+            pairFacts, error) ||
+        pairFacts.moduleName != nestedPluginVerified.name ||
+        pairFacts.functionSymbolId != nestedPluginSourceFunction->symbolId.value ||
+        pairFacts.functionContractId !=
+            nestedPluginSourceFunction->contractId.value ||
+        pairFacts.refTypeId !=
+            nestedPluginSourceFunction->params[0].type.value ||
+        pairFacts.slotSymbolId != requirement.slotId ||
+        pairFacts.slotContractId != requirement.contractId ||
+        pairFacts.contextEffect != 1 ||
+        luna::codegen::deriveNativeRefUnitSourceFacts(
+            nestedPluginVerified, *nestedPluginSourceFunction,
+            wrongSingleFacts, error))
+        return fail("decoded two-Ref source lost its separate source facts");
     auto nestedPluginJit =
         CodeGenerator::materializePrivateRuntimeFragmentRefApplyForTest(
             nestedPluginVerified, *nestedPluginSourceFunction, error);
