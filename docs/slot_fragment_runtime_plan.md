@@ -1538,13 +1538,20 @@ with the exact public Slot in the same proof-bound package. The existing
 single-candidate and source-effect restrictions remain producer requirements;
 other Ref uses and owned Result returns need their own profiles and proofs.
 
-Native load-once cache reuse still needs provenance review before public v4
-admission. On a cache hit, `loadVerifiedNativeGenerationOnce` verifies the file
-but currently accepts an active generation by package ID and artifact digest;
-those values do not attest that the active code lease and complete binding set
-were issued by the verified Native loader. `MoonRuntime::loadOnce` compares
-resolved row identities, not the code owner. Require loader-issued provenance
-and a complete snapshot for reuse, or reject the cache hit.
+Native load-once cache reuse now verifies the current file and requires the
+active generation's exact lease to match a live Native library already verified
+by this loader, including the complete proof. A read-only Runtime snapshot
+checks the active identity, exact lease, all binding implementations and
+profiles, all Ref candidate facts, caller library identity and module relations.
+The Native artifact regression rejects a same-digest host generation with a
+foreign lease, changed rows under a verified lease, and a substituted v4 typed
+caller; unchanged v2 and v4 generations still reuse their pins. This closes
+the current cache provenance gap without approving the proposed public v4 ABI.
+A post-stage attestation also checks the generation actually returned by
+load-once or activation. A deterministic pre-publication hook stages a
+same-digest, same-row foreign lease after verified staging; Runtime's generic
+load-once reuses it, and the Native adapter rejects the returned pin with an
+empty output while leaving that competing active generation intact.
 
 | Review decision | Proposed contract and evidence still required |
 | --- | --- |

@@ -687,6 +687,53 @@ int inspectV4Candidate(int argc, char** argv) {
         if (!luna::driver::loadVerifiedNativeGenerationOnce(
                 runtime, argv[2], argv[3], loaded, error))
             return fail("Native v4 candidate could not enter a pinned generation");
+        luna::runtime::MoonRuntime::PinnedGeneration duplicate;
+        if (!luna::driver::loadVerifiedNativeGenerationOnce(
+                runtime, argv[2], argv[3], duplicate, error) ||
+            !duplicate.sameGeneration(loaded))
+            return fail("Native v4 cache hit lost its verified candidate generation");
+        luna::runtime::MoonRuntime firstSource, secondSource, foreignRuntime;
+        luna::runtime::GenerationStagingRequest firstRequest, secondRequest;
+        std::vector<luna::runtime::GenerationBinding> firstRows;
+        luna::runtime::MoonRuntime::StagedGeneration firstStaged, secondStaged;
+        if (!luna::driver::stageVerifiedNativeGeneration(
+                firstSource, argv[2], argv[3],
+                [&](const auto& request, const auto& rows, auto&) {
+                    firstRequest = request;
+                    firstRows = rows;
+                    return true;
+                }, firstStaged, error) ||
+            !luna::driver::stageVerifiedNativeGeneration(
+                secondSource, argv[2], argv[3],
+                [&](const auto& request, const auto&, auto&) {
+                    secondRequest = request;
+                    return true;
+                }, secondStaged, error) ||
+            !firstRequest.refUnitCaller ||
+            !secondRequest.refUnitCaller || firstRows.empty())
+            return fail("Native v4 cache caller fixture lost verified requests");
+        auto substituted = firstRequest;
+        substituted.refUnitCaller = secondRequest.refUnitCaller;
+        luna::runtime::MoonRuntime::StagedGeneration foreignStaged;
+        if (!foreignRuntime.stage(
+                substituted, [](const auto&, auto&) { return true; },
+                [firstRows](const auto&, auto& rows, auto&) {
+                    rows = firstRows;
+                    return true;
+                }, {}, foreignStaged, error))
+            return fail("Native v4 cache caller fixture could not stage");
+        const uint64_t foreignId = foreignStaged.generationId();
+        auto safePoint = foreignRuntime.safePoint();
+        if (!foreignRuntime.activate(foreignStaged, safePoint, error))
+            return fail("Native v4 cache caller fixture could not activate");
+        luna::runtime::MoonRuntime::PinnedGeneration substitutedAccepted;
+        if (luna::driver::loadVerifiedNativeGenerationOnce(
+                foreignRuntime, argv[2], argv[3],
+                substitutedAccepted, error) ||
+            substitutedAccepted ||
+            error != "same-content Native generation changed its verified snapshot" ||
+            foreignRuntime.activeGenerationId(firstRequest.moduleId) != foreignId)
+            return fail("Native v4 cache accepted a substituted typed caller");
         pinnedCandidate = loaded.findRefUnitCandidate(
             "symbol:unit-apply", "contract:unit-v4");
         if (!pinnedCandidate ||
@@ -840,6 +887,97 @@ int generationSwitch(int argc, char** argv) {
     if (!loadOnceRuntime.loadOnce(loadProbe, probeLoaded, error) ||
         probeLoaded.generationId() != loadedOnce.generationId())
         return fail("Native load-once probe did not reuse the first generation");
+
+    luna::runtime::MoonRuntime foreignRuntime;
+    luna::runtime::GenerationStagingRequest foreignRequest;
+    foreignRequest.moduleId = loadedOnce.moduleId();
+    foreignRequest.contentDigest = loadedOnce.contentDigest();
+    foreignRequest.moduleLease = std::make_shared<int>(0);
+    const luna::runtime::GenerationBinding matchingRow{
+        firstLoadedBinding.symbolId(), firstLoadedBinding.contractId(),
+        firstLoadedBinding.implementation(),
+        firstLoadedBinding.declarationKind(), firstLoadedBinding.flags(),
+        firstLoadedBinding.entryAbi()};
+    luna::runtime::MoonRuntime::StagedGeneration foreignStaged;
+    luna::runtime::MoonRuntime::PinnedGeneration foreignLoaded;
+    if (!foreignRuntime.stage(
+            foreignRequest, [](const auto&, auto&) { return true; },
+            [matchingRow](const auto&, auto& rows, auto&) {
+                rows.push_back(matchingRow);
+                return true;
+            }, {}, foreignStaged, error) ||
+        !foreignRuntime.loadOnce(foreignStaged, foreignLoaded, error))
+        return fail("Native cache provenance fixture could not publish a foreign lease");
+    luna::runtime::MoonRuntime::PinnedGeneration foreignAccepted;
+    if (luna::driver::loadVerifiedNativeGenerationOnce(
+            foreignRuntime, argv[2], argv[3], foreignAccepted, error) ||
+        foreignAccepted ||
+        error != "same-content Native generation has no verified loader lease" ||
+        !foreignRuntime.pin(foreignRequest.moduleId).sameGeneration(foreignLoaded))
+        return fail("Native cache accepted a same-digest foreign generation");
+
+    luna::runtime::MoonRuntime sourceRuntime;
+    std::shared_ptr<const void> verifiedLease;
+    std::vector<luna::runtime::GenerationBinding> verifiedRows;
+    luna::runtime::MoonRuntime::StagedGeneration sourceStaged;
+    if (!luna::driver::stageVerifiedNativeGeneration(
+            sourceRuntime, argv[2], argv[3],
+            [&](const auto& request, const auto& rows, auto&) {
+                verifiedLease = request.moduleLease;
+                verifiedRows = rows;
+                return true;
+            }, sourceStaged, error) ||
+        !verifiedLease || verifiedRows.empty())
+        return fail("Native cache snapshot fixture lost its verified lease");
+    luna::runtime::MoonRuntime changedSnapshotRuntime;
+    auto changedRequest = foreignRequest;
+    changedRequest.moduleLease = verifiedLease;
+    auto changedRows = verifiedRows;
+    changedRows.front().entryAbi =
+        luna::runtime::GenerationEntryAbiUnprofiled;
+    luna::runtime::MoonRuntime::StagedGeneration changedStaged;
+    luna::runtime::MoonRuntime::PinnedGeneration changedActive;
+    if (!changedSnapshotRuntime.stage(
+            changedRequest, [](const auto&, auto&) { return true; },
+            [changedRows](const auto&, auto& rows, auto&) {
+                rows = changedRows;
+                return true;
+            }, {}, changedStaged, error) ||
+        !changedSnapshotRuntime.loadOnce(changedStaged, changedActive, error))
+        return fail("Native cache snapshot fixture could not publish changed rows");
+    luna::runtime::MoonRuntime::PinnedGeneration changedAccepted;
+    if (luna::driver::loadVerifiedNativeGenerationOnce(
+            changedSnapshotRuntime, argv[2], argv[3], changedAccepted,
+            error) || changedAccepted ||
+        error != "same-content Native generation changed its verified snapshot" ||
+        !changedSnapshotRuntime.pin(changedRequest.moduleId)
+             .sameGeneration(changedActive))
+        return fail("Native cache accepted changed rows under a verified lease");
+
+    luna::runtime::MoonRuntime racingRuntime;
+    luna::runtime::MoonRuntime::PinnedGeneration competingActive, racedOutput;
+    if (luna::driver::loadVerifiedNativeGenerationOnceWithPrePublishHookForTest(
+            racingRuntime, argv[2], argv[3], racedOutput, error,
+            [&](const auto& stagedRequest, const auto& stagedRows,
+                std::string& hookError) {
+                auto competingRequest = stagedRequest;
+                competingRequest.moduleLease = std::make_shared<int>(0);
+                luna::runtime::MoonRuntime::StagedGeneration competingStaged;
+                return racingRuntime.stage(
+                           competingRequest,
+                           [](const auto&, auto&) { return true; },
+                           [stagedRows](const auto&, auto& rows, auto&) {
+                               rows = stagedRows;
+                               return true;
+                           }, {}, competingStaged, hookError) &&
+                    racingRuntime.loadOnce(
+                        competingStaged, competingActive, hookError);
+            }) || racedOutput ||
+        error != "verified Native load-once changed its staged snapshot" ||
+        !competingActive ||
+        !racingRuntime.pin(loadedOnce.moduleId())
+             .sameGeneration(competingActive))
+        return fail("Native load-once reused a generation published during staging");
 
     luna::runtime::MoonRuntime runtime;
     luna::runtime::MoonRuntime::StagedGeneration first;

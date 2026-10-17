@@ -301,6 +301,15 @@ public:
         const PinnedGeneration& active,
         const std::shared_ptr<const void>& lease,
         const std::vector<GenerationBinding>& bindings) const;
+    // Read-only attestation of the complete active generation. The caller
+    // supplies independently verified rows and must authenticate an opaque
+    // Ref/unit callback through callerMatches when one is expected.
+    bool matchesActiveGenerationSnapshot(
+        const PinnedGeneration& active,
+        const GenerationStagingRequest& expected,
+        const std::vector<GenerationBinding>& bindings,
+        const std::function<bool(const GenerationRefUnitCaller&)>&
+            callerMatches = {}) const;
     // Read-only structural attestation for one staged typed Ref/unit candidate.
     // The expected request and Slot row must come from a trusted loader; this
     // cannot authenticate the behavior of an opaque std::function callback.

@@ -1149,11 +1149,16 @@ v4 事实复制到 `PinnedRefUnitCandidate` 视图。该视图保留已验证库
 绑定的 package。现有单候选及源码 effect 限制仍是 producer 条件；其他 Ref 用法
 及拥有型 Result 返回须另设 profile 和证明。
 
-公开 v4 准入前还需审议 Native load-once 缓存复用的来源。缓存命中时，
-`loadVerifiedNativeGenerationOnce` 虽先验证文件，却只凭包 ID 与产物摘要接受 Runtime 中
-已有 generation；这些字段不能证明现存代码 lease 和完整 binding 集由已验证 Native loader
-签发。`MoonRuntime::loadOnce` 比较解析后的行身份，而不核对代码所有者。复用前应要求
-loader 签发的来源凭据及完整快照，否则拒绝缓存命中。
+Native load-once 缓存复用现先验证当前文件，并要求 active generation 的精确 lease
+匹配此 loader 已验证、仍存活且完整 proof 一致的 Native 库。Runtime 的只读快照核对
+active 身份、精确 lease、全部 binding 实现与 profile、全部 Ref candidate 事实、caller
+所属库及 module 关系。Native artifact 回归拒绝同摘要但外来 lease 的宿主 generation、
+已验证 lease 下改动的 binding 行，以及替换的 v4 类型化 caller；未改动的 v2、v4
+generation 仍复用原 pin。当前缓存来源缺口已封闭，提议中的公开 v4 ABI 尚未获批准。
+暂存后的核对还检查 load-once 或 activation 实际返回的 generation。确定性预发布钩子
+在已验证暂存后发布同摘要、同 binding 行但 lease 来自外部的 generation；Runtime 的
+通用 load-once 会复用它，Native 适配器则拒绝返回的 pin，保持输出为空，竞争的 active
+generation 不受改动。
 
 | 审议项 | 建议契约与仍需的证据 |
 | --- | --- |

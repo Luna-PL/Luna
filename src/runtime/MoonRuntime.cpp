@@ -91,6 +91,25 @@ bool validDigest(const std::string& digest) {
         });
 }
 
+bool sameRefUnitCandidate(
+    const GenerationRefUnitCandidate& left,
+    const GenerationRefUnitCandidate& right) {
+    return left.symbolId == right.symbolId &&
+        left.contractId == right.contractId &&
+        left.linkageName == right.linkageName &&
+        left.moduleName == right.moduleName &&
+        left.packageId == right.packageId &&
+        left.functionTypeId == right.functionTypeId &&
+        left.refTypeId == right.refTypeId &&
+        left.slotSymbolId == right.slotSymbolId &&
+        left.slotContractId == right.slotContractId &&
+        left.slotTypeId == right.slotTypeId &&
+        left.entryAbi == right.entryAbi &&
+        left.refMode == right.refMode &&
+        left.resultMode == right.resultMode &&
+        left.statusDomain == right.statusDomain;
+}
+
 } // namespace
 
 MoonRuntime::SafePoint::SafePoint(SafePoint&& other) noexcept
@@ -858,6 +877,87 @@ bool MoonRuntime::matchesActiveOwnerSnapshot(
     return found != modules_.end() &&
         found->second->active.load() == active.generation_ &&
         matchesOwnerSnapshot(*active.generation_, lease, bindings);
+}
+
+bool MoonRuntime::matchesActiveGenerationSnapshot(
+    const PinnedGeneration& active,
+    const GenerationStagingRequest& expected,
+    const std::vector<GenerationBinding>& bindings,
+    const std::function<bool(const GenerationRefUnitCaller&)>&
+        callerMatches) const {
+    if (!active.generation_ || !expected.moduleLease) return false;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        const auto found = modules_.find(active.generation_->moduleId);
+        if (found == modules_.end() ||
+            found->second->active.load() != active.generation_)
+            return false;
+    }
+    const auto& generation = *active.generation_;
+    const auto sameLease = [](const std::shared_ptr<const void>& left,
+                              const std::shared_ptr<const void>& right) {
+        return left && right && left.get() == right.get() &&
+            !left.owner_before(right) && !right.owner_before(left);
+    };
+    if (generation.moduleId != expected.moduleId ||
+        generation.contentDigest != expected.contentDigest ||
+        generation.materializationKey != expected.materializationKey ||
+        !sameLease(generation.moduleLease, expected.moduleLease) ||
+        generation.bindings.size() != bindings.size() ||
+        generation.refUnitCandidates.size() !=
+            expected.refUnitCandidates.size())
+        return false;
+    auto requiredAbsent = expected.requiredAbsentModuleIds;
+    std::sort(requiredAbsent.begin(), requiredAbsent.end());
+    auto requiredActive = expected.requiredActiveModules;
+    std::sort(requiredActive.begin(), requiredActive.end(),
+              [](const auto& left, const auto& right) {
+                  return left.moduleId < right.moduleId;
+              });
+    if (generation.requiredAbsentModuleIds != requiredAbsent ||
+        generation.requiredActiveModules != requiredActive)
+        return false;
+    auto expectedBindings = bindings;
+    std::sort(expectedBindings.begin(), expectedBindings.end(),
+              [](const auto& left, const auto& right) {
+                  return left.symbolId < right.symbolId;
+              });
+    for (size_t index = 0; index < expectedBindings.size(); ++index) {
+        const auto& actual = generation.bindings[index];
+        const auto& row = expectedBindings[index];
+        if (actual.symbolId != row.symbolId ||
+            actual.contractId != row.contractId ||
+            actual.implementation != row.implementation ||
+            actual.declarationKind != row.declarationKind ||
+            actual.flags != row.flags ||
+            actual.entryAbi != row.entryAbi)
+            return false;
+    }
+    auto expectedCandidates = expected.refUnitCandidates;
+    std::sort(expectedCandidates.begin(), expectedCandidates.end(),
+              [](const auto& left, const auto& right) {
+                  return left.symbolId < right.symbolId;
+              });
+    for (size_t index = 0; index < expectedCandidates.size(); ++index)
+        if (!sameRefUnitCandidate(
+                generation.refUnitCandidates[index], expectedCandidates[index]))
+            return false;
+    if (!expected.refUnitCaller)
+        return !generation.refUnitCaller &&
+            !generation.refUnitCallerLease &&
+            !expected.refUnitCallerLease;
+    if (!generation.refUnitCaller ||
+        !sameLease(generation.refUnitCallerLease,
+                   expected.refUnitCallerLease) ||
+        !sameLease(generation.moduleLease,
+                   generation.refUnitCallerLease) ||
+        !callerMatches)
+        return false;
+    try {
+        return callerMatches(generation.refUnitCaller);
+    } catch (...) {
+        return false;
+    }
 }
 
 bool MoonRuntime::matchesStagedRefUnitCandidateSnapshot(

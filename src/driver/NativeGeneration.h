@@ -24,11 +24,22 @@ bool verifyNativeRequestMutationForTest(
 bool verifyAlternateNativeCallerForTest(
     const std::string& artifactPath, const std::string& trustStorePath,
     std::string& error);
+// Publish a competing generation between verified staging and load-once.
+bool loadVerifiedNativeGenerationOnceWithPrePublishHookForTest(
+    luna::runtime::MoonRuntime& runtime,
+    const std::string& artifactPath, const std::string& trustStorePath,
+    luna::runtime::MoonRuntime::PinnedGeneration& loaded,
+    std::string& error,
+    const std::function<bool(
+        const luna::runtime::GenerationStagingRequest&,
+        const std::vector<luna::runtime::GenerationBinding>&,
+        std::string&)>& beforePublication);
 #endif
 
 // Complete verified artifact -> pinned module loop for the non-evolving case.
-// Re-loading identical content returns the existing generation; another image
-// with the same Package ID is rejected until the evolution API is requested.
+// Re-loading reuses only an active generation with the exact verified library
+// lease and full snapshot; another image or foreign same-digest generation is
+// rejected until the evolution API is requested.
 bool loadVerifiedNativeGenerationOnce(
     luna::runtime::MoonRuntime& runtime,
     const std::string& artifactPath, const std::string& trustStorePath,
