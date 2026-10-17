@@ -50,6 +50,16 @@ struct PrivatePreparedRefGenerationForTest {
     VerifiedMoonRefUnitPreparation verifiedPreparation;
     std::shared_ptr<LunaPrivateRefUnitApplyLoadedEntry> entry;
 };
+
+struct PrivateVerifiedRefPairCandidateStateForTest {
+    moon::ContainerManifest manifest;
+    moon::Module module;
+    std::string contentDigest;
+    luna::runtime::MoonRuntime::PinnedGeneration ownerGeneration;
+    std::shared_ptr<const VerifiedMoonSlotOwnerState> ownerState;
+    luna::codegen::NativeRefPairUnitSourceFacts facts;
+    std::unique_ptr<LunaPrivateRefPairUnitLoadedEntry> entry;
+};
 #endif
 
 namespace {
@@ -1967,6 +1977,152 @@ bool loadVerifiedMoonImportedSlotRefUnitOnce(
 }
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
+uint64_t PrivateImportedSlotRefPairUnitCandidateForTest::consumerGenerationId() const {
+    return consumer_.generationId();
+}
+
+uint64_t PrivateImportedSlotRefPairUnitCandidateForTest::ownerGenerationId() const {
+    return state_ ? state_->ownerGeneration.generationId() : 0;
+}
+
+std::optional<luna::codegen::NativeRefPairUnitSourceFacts>
+PrivateImportedSlotRefPairUnitCandidateForTest::facts() const {
+    const auto lease = std::shared_ptr<const void>(state_);
+    return state_ && consumer_.matchesModuleLease(lease)
+        ? std::optional{state_->facts} : std::nullopt;
+}
+
+bool PrivateImportedSlotRefPairUnitCandidateForTest::call(
+    const luna::runtime::RuntimeFragmentExecutionContext& parent,
+    const luna::runtime::RuntimeFragmentRefHandle& first,
+    const luna::runtime::RuntimeFragmentRefHandle& second,
+    int32_t& status, std::string& error) const {
+    const auto lease = std::shared_ptr<const void>(state_);
+    if (!state_ || !state_->ownerGeneration || !state_->entry ||
+        !consumer_.matchesModuleLease(lease) ||
+        consumer_.moduleId() != state_->manifest.packageId ||
+        consumer_.contentDigest() != state_->contentDigest) {
+        error = "private two-Ref candidate lost its owner or consumer lease";
+        return false;
+    }
+    status = state_->entry->call(parent, first, second);
+    error.clear();
+    return true;
+}
+
+bool loadPrivateImportedSlotRefPairUnitCandidateForTest(
+    const std::vector<uint8_t>& containerBytes,
+    const VerifiedMoonSlotOwner& owner,
+    const std::string& expectedTargetTriple,
+    const std::string& expectedDataLayout,
+    PrivateImportedSlotRefPairUnitCandidateForTest& candidate,
+    std::string& error) {
+    error.clear();
+    if (candidate || !owner.state_ || !owner.state_->generation ||
+        owner.state_->manifest.targetTriple != expectedTargetTriple ||
+        owner.state_->manifest.dataLayout != expectedDataLayout) {
+        error = "private two-Ref candidate requires an unused output and exact owner target";
+        return false;
+    }
+    auto prepared = std::make_shared<PrivateVerifiedRefPairCandidateStateForTest>();
+    if (!moon::ContainerModelCodec::decodeNativeRefUnitPreparationForTarget(
+            containerBytes, expectedTargetTriple, expectedDataLayout,
+            {owner.state_->module.localSlotPublication},
+            prepared->manifest, prepared->module, error))
+        return false;
+    if (prepared->manifest.packageId == owner.state_->manifest.packageId) {
+        error = "private two-Ref consumer must have a separate owner package";
+        return false;
+    }
+    moon::FunctionDecl* source = nullptr;
+    for (auto& declaration : prepared->module.declarations) {
+        auto* function = dynamic_cast<moon::FunctionDecl*>(declaration.get());
+        if (!function || !function->controlFlow ||
+            function->controlFlow->runtimeRefApplies.empty()) continue;
+        if (source) {
+            error = "private two-Ref consumer has another Apply source";
+            return false;
+        }
+        source = function;
+    }
+    if (!source || !luna::codegen::deriveNativeRefPairUnitSourceFacts(
+            prepared->module, *source, prepared->facts, error)) {
+        if (!source) error = "private two-Ref consumer lost its Apply source";
+        return false;
+    }
+    const moon::DeclarationRef slotReference{
+        luna::identity::SymbolId{prepared->facts.slotSymbolId},
+        luna::identity::ContractId{prepared->facts.slotContractId}};
+    const auto* importedSlot = prepared->module.findDeclaration(slotReference);
+    if (!importedSlot || importedSlot->type.value != prepared->facts.slotTypeId ||
+        !owner.pinImportedSlot(*importedSlot, expectedTargetTriple,
+            expectedDataLayout, prepared->ownerGeneration, error)) {
+        if (error.empty())
+            error = "private two-Ref owner lost its exact imported Slot";
+        return false;
+    }
+    prepared->ownerState = owner.state_;
+    prepared->entry =
+        CodeGenerator::materializePrivateNativeRefPairUnitPreparationForTest(
+            prepared->module, *source, error);
+    if (!prepared->entry) return false;
+    prepared->contentDigest = containerDigest(containerBytes);
+
+    const auto lease = std::shared_ptr<const void>(prepared);
+    luna::runtime::GenerationStagingRequest request;
+    request.moduleId = prepared->manifest.packageId;
+    request.contentDigest = prepared->contentDigest;
+    request.materializationKey =
+        std::string("luna.private-ref-pair-unit-preparation.v1:llvm=") +
+        LLVM_VERSION_STRING + ":ir=O0:orc=default";
+    request.moduleLease = lease;
+    luna::runtime::MoonRuntime runtime;
+    luna::runtime::MoonRuntime::StagedGeneration staged;
+    if (!runtime.stage(
+            request,
+            [&prepared, &lease](const auto& proposal,
+                                std::string& verificationError) {
+                if (proposal.moduleId != prepared->manifest.packageId ||
+                    proposal.contentDigest != prepared->contentDigest ||
+                    proposal.moduleLease.get() != lease.get() ||
+                    proposal.moduleLease.owner_before(lease) ||
+                    lease.owner_before(proposal.moduleLease) ||
+                    !proposal.refUnitCandidates.empty() ||
+                    proposal.refUnitCaller) {
+                    verificationError =
+                        "private two-Ref generation changed before staging";
+                    return false;
+                }
+                return true;
+            },
+            [](const auto&, auto& bindings, std::string& resolutionError) {
+                if (!bindings.empty()) {
+                    resolutionError =
+                        "private two-Ref generation cannot publish bindings";
+                    return false;
+                }
+                return true;
+            },
+            {}, staged, error))
+        return false;
+    luna::runtime::MoonRuntime::PinnedGeneration consumer;
+    if (!runtime.loadOnce(staged, consumer, error)) return false;
+    if (!consumer.matchesModuleLease(lease) ||
+        consumer.moduleId() != prepared->manifest.packageId ||
+        consumer.contentDigest() != prepared->contentDigest ||
+        consumer.materializationKey() != request.materializationKey ||
+        consumer.find(prepared->facts.functionSymbolId,
+                      prepared->facts.functionContractId) ||
+        consumer.findRefUnitCandidate(prepared->facts.functionSymbolId,
+                                      prepared->facts.functionContractId)) {
+        error = "private two-Ref generation lost its inert artifact lease";
+        return false;
+    }
+    candidate.state_ = std::move(prepared);
+    candidate.consumer_ = std::move(consumer);
+    return true;
+}
+
 bool stagePrivateNativeRefUnitPreparationForTest(
     luna::runtime::MoonRuntime& runtime,
     const std::vector<uint8_t>& containerBytes,

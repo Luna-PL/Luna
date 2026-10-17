@@ -1504,32 +1504,60 @@ int runCrossPackageContainerTest() {
             nestedPluginVerified, *nestedPluginSourceFunction,
             wrongSingleFacts, error))
         return fail("decoded two-Ref source lost its separate source facts");
-    auto nestedPluginEntry =
-        CodeGenerator::materializePrivateNativeRefPairUnitPreparationForTest(
-            nestedPluginVerified, *nestedPluginSourceFunction, error);
-    if (!nestedPluginEntry) {
+    luna::driver::PrivateImportedSlotRefPairUnitCandidateForTest pairCandidate;
+    luna::driver::PrivateImportedSlotRefPairUnitCandidateForTest rejectedPair;
+    if (luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
+            nestedPluginBytes, {}, refManifest.targetTriple,
+            refManifest.dataLayout, rejectedPair, error) || rejectedPair ||
+        luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
+            nestedPluginBytes, nestedPluginOwner,
+            refManifest.targetTriple + "-wrong", refManifest.dataLayout,
+            rejectedPair, error) || rejectedPair ||
+        luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
+            refBytes, nestedPluginOwner, refManifest.targetTriple,
+            refManifest.dataLayout, rejectedPair, error) || rejectedPair ||
+        !luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
+            nestedPluginBytes, nestedPluginOwner, refManifest.targetTriple,
+            refManifest.dataLayout, pairCandidate, error)) {
         std::cerr << error << '\n';
-        return fail("cross-package nested Ref/plugin source did not JIT");
+        return fail("cross-package two-Ref candidate lost its owner-backed artifact");
     }
+    const auto loadedPairFacts = pairCandidate.facts();
+    if (!loadedPairFacts ||
+        loadedPairFacts->identities() != pairFacts.identities() ||
+        loadedPairFacts->contextEffect != pairFacts.contextEffect ||
+        !pairCandidate.consumerGenerationId() ||
+        pairCandidate.ownerGenerationId() != nestedPluginOwner.generationId() ||
+        luna::driver::loadPrivateImportedSlotRefPairUnitCandidateForTest(
+            nestedPluginBytes, nestedPluginOwner, refManifest.targetTriple,
+            refManifest.dataLayout, pairCandidate, error))
+        return fail("private two-Ref candidate changed its decoded source or generation");
+    nestedPluginOwner = {};
+    const auto callPair = [&](const auto& context, const auto& first,
+                              const auto& second) {
+        int32_t status = -1;
+        return pairCandidate.call(context, first, second, status, error)
+            ? status : -1;
+    };
     const auto callNestedPlugin = [&] {
-        return nestedPluginEntry->call(noneContext, borrowedRef, flowRef);
+        return callPair(noneContext, borrowedRef, flowRef);
     };
     luna::runtime::RuntimeFragmentExecutionContext invalidPairContext;
     luna::runtime::RuntimeFragmentRefHandle invalidPairRef;
     flowProbe.values.clear();
-    if (nestedPluginEntry->call(invalidPairContext, borrowedRef, flowRef) !=
+    if (callPair(invalidPairContext, borrowedRef, flowRef) !=
             LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_CONTEXT_V1_TEST ||
-        nestedPluginEntry->call(noneContext, invalidPairRef, flowRef) !=
+        callPair(noneContext, invalidPairRef, flowRef) !=
             LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST ||
-        nestedPluginEntry->call(noneContext, borrowedRef, invalidPairRef) !=
+        callPair(noneContext, borrowedRef, invalidPairRef) !=
             LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_HANDLE_V1_TEST ||
-        nestedPluginEntry->call(noneContext, wrongSlotRef, flowRef) !=
+        callPair(noneContext, wrongSlotRef, flowRef) !=
             LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST ||
-        nestedPluginEntry->call(noneContext, borrowedRef, wrongSlotRef) !=
+        callPair(noneContext, borrowedRef, wrongSlotRef) !=
             LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST ||
-        nestedPluginEntry->call(noneContext, wrongContractRef, flowRef) !=
+        callPair(noneContext, wrongContractRef, flowRef) !=
             LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST ||
-        nestedPluginEntry->call(noneContext, borrowedRef, wrongContractRef) !=
+        callPair(noneContext, borrowedRef, wrongContractRef) !=
             LUNA_PRIVATE_REF_UNIT_APPLY_INVALID_TARGET_V1_TEST ||
         !flowProbe.values.empty())
         return fail("two-Ref typed ingress executed after a failed preflight");

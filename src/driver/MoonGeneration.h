@@ -13,6 +13,7 @@
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 class LunaPrivateRefUnitApplyLoadedEntry;
+class LunaPrivateRefPairUnitLoadedEntry;
 #endif
 
 namespace luna::runtime {
@@ -62,6 +63,8 @@ class VerifiedMoonImportedSlotRefUnitProof;
 class VerifiedMoonImportedSlotGeneration;
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
 struct PrivatePreparedRefGenerationForTest;
+struct PrivateVerifiedRefPairCandidateStateForTest;
+class PrivateImportedSlotRefPairUnitCandidateForTest;
 #endif
 
 // Internal loader-issued owner provenance. A fresh loader-owned Runtime stages
@@ -97,6 +100,10 @@ private:
         const std::string&, const std::string&,
         VerifiedMoonRefUnitPreparation&, std::string&);
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
+    friend bool loadPrivateImportedSlotRefPairUnitCandidateForTest(
+        const std::vector<uint8_t>&, const VerifiedMoonSlotOwner&,
+        const std::string&, const std::string&,
+        PrivateImportedSlotRefPairUnitCandidateForTest&, std::string&);
     friend bool stagePrivateNativeRefUnitPreparationForTest(
         luna::runtime::MoonRuntime&, const std::vector<uint8_t>&,
         const VerifiedMoonSlotOwner&, const std::string&,
@@ -367,6 +374,38 @@ bool pinVerifiedMoonImportedSlotRefUnitProof(
     std::string& error);
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
+// Owner-backed, test-only two-Ref candidate. Its private consumer generation
+// publishes no Runtime binding or public entry ABI.
+class PrivateImportedSlotRefPairUnitCandidateForTest {
+public:
+    explicit operator bool() const {
+        return state_ != nullptr && static_cast<bool>(consumer_);
+    }
+    uint64_t consumerGenerationId() const;
+    uint64_t ownerGenerationId() const;
+    std::optional<luna::codegen::NativeRefPairUnitSourceFacts> facts() const;
+    bool call(const luna::runtime::RuntimeFragmentExecutionContext& parent,
+              const luna::runtime::RuntimeFragmentRefHandle& first,
+              const luna::runtime::RuntimeFragmentRefHandle& second,
+              int32_t& status, std::string& error) const;
+
+private:
+    friend bool loadPrivateImportedSlotRefPairUnitCandidateForTest(
+        const std::vector<uint8_t>&, const VerifiedMoonSlotOwner&,
+        const std::string&, const std::string&,
+        PrivateImportedSlotRefPairUnitCandidateForTest&, std::string&);
+    std::shared_ptr<PrivateVerifiedRefPairCandidateStateForTest> state_;
+    luna::runtime::MoonRuntime::PinnedGeneration consumer_;
+};
+
+bool loadPrivateImportedSlotRefPairUnitCandidateForTest(
+    const std::vector<uint8_t>& containerBytes,
+    const VerifiedMoonSlotOwner& owner,
+    const std::string& expectedTargetTriple,
+    const std::string& expectedDataLayout,
+    PrivateImportedSlotRefPairUnitCandidateForTest& candidate,
+    std::string& error);
+
 // Compiler-private typed candidate. The consumer pin must own exactly the
 // preparation lease that holds its decoded facts, owner pin and JIT entry.
 class PrivateImportedSlotRefUnitCandidateForTest {

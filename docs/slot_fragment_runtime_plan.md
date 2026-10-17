@@ -2552,7 +2552,7 @@ not a public ABI decision or stable-release approval:
    decoded module. Preparation accepts only two borrowed parameters of one
    exact Ref type, each used by its own Apply; a forged reused binding fails.
    An independent two-Ref source-fact derivation binds the decoded function
-   signature and both Apply parameters without issuing a caller capability.
+   signature and both Apply parameters without itself issuing a caller capability.
    The dedicated test JIT rederives those facts before lowering and rejects
    a forged reused Apply binding without materializing executable code.
    Its test-only typed ingress retains the JIT lease, checks the parent
@@ -2560,8 +2560,14 @@ not a public ABI decision or stable-release approval:
    a nonzero body status to execution failure. Invalid context, either empty
    handle, and Runtime-issued handles with a mismatched Slot or Contract in
    either position do not dispatch. This does not define a public pair ABI.
-   The existing one-Ref candidate loader still rejects the two-Ref artifact,
-   so no admitted host candidate is claimed. Owning transfer remains open.
+   A separate private loader independently decodes the same 0.4 bytes against
+   the exact verified owner, rederives pair facts, pins its imported Slot and
+   an inert consumer generation to the artifact lease, then issues a typed
+   pair candidate. Missing owner evidence, a wrong target, a one-Ref artifact
+   and reuse of an initialized output are rejected. Calls remain valid after
+   the original owner proof is released. The existing one-Ref candidate
+   loader still rejects the two-Ref artifact; no public host candidate is claimed.
+   Owning transfer remains open.
    The focused Windows
    Clang 20 ASan `--cross-package-container-test` mode passes. Two full local
    ASan canonical attempts stopped earlier at the known LLVM 20 COFF
@@ -2571,7 +2577,7 @@ not a public ABI decision or stable-release approval:
    and the sealed CFG verifier enforce one resume per path. The current Native
    v1 export registry also has no executable Fragment binding profile; its
    Fragment rows carry no entry. Promoting the prepared two-Ref source failure
-   path still requires candidate issuance, public typed ingress and host ABI review;
+   path still requires public candidate issuance, public typed ingress and host ABI review;
    the injected inner probe is not a publishable Fragment.
    Extend nominal/contract mismatch and failed-ingress evidence to public
    candidate loading, then cover normal and early exits plus cleanup and
