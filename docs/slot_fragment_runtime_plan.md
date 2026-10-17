@@ -1538,6 +1538,14 @@ with the exact public Slot in the same proof-bound package. The existing
 single-candidate and source-effect restrictions remain producer requirements;
 other Ref uses and owned Result returns need their own profiles and proofs.
 
+Native load-once cache reuse still needs provenance review before public v4
+admission. On a cache hit, `loadVerifiedNativeGenerationOnce` verifies the file
+but currently accepts an active generation by package ID and artifact digest;
+those values do not attest that the active code lease and complete binding set
+were issued by the verified Native loader. `MoonRuntime::loadOnce` compares
+resolved row identities, not the code owner. Require loader-issued provenance
+and a complete snapshot for reuse, or reject the cache hit.
+
 | Review decision | Proposed contract and evidence still required |
 | --- | --- |
 | Binary entry | Use the existing v4 parallel query and C `int32_t(const void*, const void*)` entry, with parent before Ref. Require exact v4 sizes, reserved zero, profile `3`, shared-borrow mode `1`, unit mode `2`, status domain `1`, the ten proof-bound identifiers, and the resolved entry in the verified image. Do not add a Ref function to the unprofiled v1 callable registry. |
@@ -2594,7 +2602,11 @@ not a public ABI decision or stable-release approval:
    the original owner proof is released. A copied candidate remains callable
    after the original is cleared; a weak observer confirms the private
    artifact/code lease expires after the final candidate is cleared, and the
-   empty candidate fails without changing the caller's status. The existing
+   empty candidate fails without changing the caller's status. The test-only
+   single- and two-Ref inert preparation paths now share a staging verifier
+   requiring the exact materialization key and lease ownership, with empty
+   candidate, caller-lease and module-relation fields. Read-only mutations
+   reject a same-address foreign lease owner and added fields. The existing
    one-Ref candidate loader still rejects the two-Ref artifact; no public host
    candidate is claimed. A separately sealed and encoded two-Ref variant now
    returns from the inner Apply continuation. Its owner-backed candidate

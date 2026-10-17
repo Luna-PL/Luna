@@ -2094,6 +2094,52 @@ bool loadVerifiedMoonImportedSlotRefUnitOnce(
 }
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
+namespace {
+
+bool verifyPrivateInertRefRequest(
+    const luna::runtime::GenerationStagingRequest& candidate,
+    const luna::runtime::GenerationStagingRequest& expected,
+    const char* failure,
+    std::string& error) {
+    if (candidate.moduleId != expected.moduleId ||
+        candidate.contentDigest != expected.contentDigest ||
+        candidate.materializationKey != expected.materializationKey ||
+        candidate.moduleLease.get() != expected.moduleLease.get() ||
+        candidate.moduleLease.owner_before(expected.moduleLease) ||
+        expected.moduleLease.owner_before(candidate.moduleLease) ||
+        !candidate.refUnitCandidates.empty() || candidate.refUnitCaller ||
+        candidate.refUnitCallerLease ||
+        !candidate.requiredAbsentModuleIds.empty() ||
+        !candidate.requiredActiveModules.empty()) {
+        error = failure;
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
+bool verifyPrivateInertRefRequestMutationForTest(
+    const std::function<void(luna::runtime::GenerationStagingRequest&)>&
+        mutate,
+    std::string& error) {
+    error.clear();
+    if (!mutate) {
+        error = "private inert Ref request probe requires mutation";
+        return false;
+    }
+    luna::runtime::GenerationStagingRequest request;
+    request.moduleId = "org.luna.test.private-ref";
+    request.contentDigest = std::string(64, '0');
+    request.materializationKey = "luna.test.private-ref:ir=O0";
+    request.moduleLease = std::make_shared<int>(0);
+    const auto expected = request;
+    mutate(request);
+    return verifyPrivateInertRefRequest(
+        request, expected,
+        "private inert Ref generation changed before staging", error);
+}
+
 uint64_t PrivateImportedSlotRefPairUnitCandidateForTest::consumerGenerationId() const {
     return consumer_.generationId();
 }
@@ -2211,24 +2257,17 @@ bool loadPrivateImportedSlotRefPairUnitCandidateForTest(
         std::string("luna.private-ref-pair-unit-preparation.v1:llvm=") +
         LLVM_VERSION_STRING + ":ir=O0:orc=default";
     request.moduleLease = lease;
+    const auto expectedRequest = request;
     luna::runtime::MoonRuntime runtime;
     luna::runtime::MoonRuntime::StagedGeneration staged;
     if (!runtime.stage(
             request,
-            [&prepared, &lease](const auto& proposal,
-                                std::string& verificationError) {
-                if (proposal.moduleId != prepared->manifest.packageId ||
-                    proposal.contentDigest != prepared->contentDigest ||
-                    proposal.moduleLease.get() != lease.get() ||
-                    proposal.moduleLease.owner_before(lease) ||
-                    lease.owner_before(proposal.moduleLease) ||
-                    !proposal.refUnitCandidates.empty() ||
-                    proposal.refUnitCaller) {
-                    verificationError =
-                        "private two-Ref generation changed before staging";
-                    return false;
-                }
-                return true;
+            [&expectedRequest](const auto& proposal,
+                               std::string& verificationError) {
+                return verifyPrivateInertRefRequest(
+                    proposal, expectedRequest,
+                    "private two-Ref generation changed before staging",
+                    verificationError);
             },
             [](const auto&, auto& bindings, std::string& resolutionError) {
                 if (!bindings.empty()) {
@@ -2333,18 +2372,15 @@ bool stagePrivateNativeRefUnitPreparationForTest(
         std::string("luna.private-ref-unit-preparation.v1:llvm=") +
         LLVM_VERSION_STRING + ":ir=O0:orc=default";
     request.moduleLease = loaded;
+    const auto expectedRequest = request;
     if (!runtime.stage(
             request,
-            [loaded](const auto& candidate, std::string& verificationError) {
-                if (candidate.moduleId != loaded->manifest.packageId ||
-                    candidate.contentDigest != loaded->contentDigest ||
-                    candidate.moduleLease.get() != loaded.get() ||
-                    !candidate.refUnitCandidates.empty() || candidate.refUnitCaller) {
-                    verificationError =
-                        "private Ref/unit generation identity changed before staging";
-                    return false;
-                }
-                return true;
+            [&expectedRequest](const auto& candidate,
+                               std::string& verificationError) {
+                return verifyPrivateInertRefRequest(
+                    candidate, expectedRequest,
+                    "private Ref/unit generation identity changed before staging",
+                    verificationError);
             },
             [](const auto&, auto& bindings, std::string& resolutionError) {
                 if (!bindings.empty()) {

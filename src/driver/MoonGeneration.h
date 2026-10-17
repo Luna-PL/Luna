@@ -403,6 +403,12 @@ bool pinVerifiedMoonImportedSlotRefUnitProof(
     std::string& error);
 
 #ifdef LUNA_PRIVATE_REF_JIT_TEST
+// Exercise the shared verifier for both inert private Ref preparation paths.
+bool verifyPrivateInertRefRequestMutationForTest(
+    const std::function<void(luna::runtime::GenerationStagingRequest&)>&
+        mutate,
+    std::string& error);
+
 // Owner-backed, test-only two-Ref candidate. Its private consumer generation
 // publishes no Runtime binding or public entry ABI.
 class PrivateImportedSlotRefPairUnitCandidateForTest {

@@ -1149,6 +1149,12 @@ v4 事实复制到 `PinnedRefUnitCandidate` 视图。该视图保留已验证库
 绑定的 package。现有单候选及源码 effect 限制仍是 producer 条件；其他 Ref 用法
 及拥有型 Result 返回须另设 profile 和证明。
 
+公开 v4 准入前还需审议 Native load-once 缓存复用的来源。缓存命中时，
+`loadVerifiedNativeGenerationOnce` 虽先验证文件，却只凭包 ID 与产物摘要接受 Runtime 中
+已有 generation；这些字段不能证明现存代码 lease 和完整 binding 集由已验证 Native loader
+签发。`MoonRuntime::loadOnce` 比较解析后的行身份，而不核对代码所有者。复用前应要求
+loader 签发的来源凭据及完整快照，否则拒绝缓存命中。
+
 | 审议项 | 建议契约与仍需的证据 |
 | --- | --- |
 | 二进制入口 | 沿用并行 v4 query 与 C `int32_t(const void*, const void*)` 入口，parent 在 Ref 前。要求精确 v4 大小、保留字段为零、profile `3`、共享借用模式 `1`、unit 模式 `2`、状态域 `1`、十个 proof 绑定身份及位于已验证映像内的解析入口。Ref 函数不得加入无 profile 的 v1 可调用登记表。 |
@@ -1892,7 +1898,10 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    缺失 owner 证据、错误 target、单 Ref 产物和复用已初始化输出均被拒绝；
    释放原始 owner proof 后仍可调用。复制 candidate 并清空原对象后，副本仍可调用；
    弱引用确认最后一个 candidate 清空后私有产物／代码租约释放，空 candidate 的调用
-   不改写传入状态。现有单 Ref candidate loader 仍拒绝双 Ref 产物，
+   不改写传入状态。仅测试用的单、双 Ref inert 准备路径现共用暂存 verifier，要求精确
+   物化键、lease 共享所有权，以及空的 candidate、caller lease 和 module 关系字段。
+   只读篡改探针拒绝同地址但不同所有权的 lease 及新增字段。现有单 Ref candidate loader
+   仍拒绝双 Ref 产物，
    因而不能声称公开宿主 candidate 已准入。另一份独立密封、编码的双 Ref 变体从内层
    Apply 续体返回；其 owner-backed candidate 仅观察到 Slot 参数 `2`，跳过后续参数
    `3`，内层 handler 报告续体逃逸，清空候选后产物租约释放。另一轮嵌套分派中，

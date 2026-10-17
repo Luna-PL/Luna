@@ -127,6 +127,38 @@ void executeVerifiedRefFlowProbe(void*, void* activation) {
 
 int runCrossPackageContainerTest() {
     trace("verified cross-package Slot containers");
+    {
+        std::string probeError;
+        const auto rejected = [&](const auto& mutate) {
+            return !luna::driver::verifyPrivateInertRefRequestMutationForTest(
+                       mutate, probeError) &&
+                probeError ==
+                    "private inert Ref generation changed before staging";
+        };
+        if (!luna::driver::verifyPrivateInertRefRequestMutationForTest(
+                [](auto&) {}, probeError) ||
+            !rejected([](auto& request) {
+                request.materializationKey += ":foreign";
+            }) ||
+            !rejected([](auto& request) {
+                request.moduleLease = std::shared_ptr<const void>(
+                    request.moduleLease.get(), [](const void*) {});
+            }) ||
+            !rejected([](auto& request) {
+                request.requiredAbsentModuleIds = {"org.luna.test.foreign"};
+            }) ||
+            !rejected([](auto& request) {
+                request.requiredActiveModules =
+                    {{"org.luna.test.foreign", 1}};
+            }) ||
+            !rejected([](auto& request) {
+                request.refUnitCandidates.emplace_back();
+            }) ||
+            !rejected([](auto& request) {
+                request.refUnitCallerLease = request.moduleLease;
+            }))
+            return fail("private inert Ref verifier accepted a changed request");
+    }
     const auto fixtures = std::filesystem::path(LUNA_TEST_SOURCE_DIR) /
         "tests/fixtures/runtime_fragment_container";
     luna::driver::CompilerPipeline hostPipeline, pluginPipeline;
