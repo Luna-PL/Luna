@@ -1837,8 +1837,12 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    默认发布验证仍关闭。
 4. **通过真实双包执行门。** 从 verified generation 导入宿主创建且固定 generation
    的 Ref，在显式 parent context 中执行源码 apply。私有 JIT 已覆盖借用入口、无效
-   capability 拒绝及 Runtime 销毁后的重复调用。仍须将不可调用的 verified consumer
-   generation 接入准入的 candidate，完成拥有型参数／返回转移，并覆盖名义／contract
+   capability 拒绝及 Runtime 销毁后的重复调用。公开宿主 ABI 审查通过后，才能将
+   verified consumer 及其私有准入 candidate 提升至公开路径；还须完成拥有型
+   参数／返回转移。目前已验证的
+   imported-Slot consumer 夹具仅在正常出口分派一次 Slot。下一步用单独验证的
+   consumer 字节证明提前退出与可恢复的分派失败，并让精确 owner 凭据贯穿配对激活
+   和 Runtime 销毁；同时覆盖名义／contract
    错配、入口失败、正常／提前退出及清理与 pin 释放。完成此门和剩余控制流用例后，
    `source-ref-apply` 才可脱离
    `implementation-open`。

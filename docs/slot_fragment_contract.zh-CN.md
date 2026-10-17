@@ -2,7 +2,7 @@
 
 [English](slot_fragment_contract.md) | 简体中文
 
-> 状态：已实现的有界行为及回归证据；v1 验收快照更新于 2026-09-28。
+> 状态：已实现的有界行为及回归证据；v1 验收快照更新于 2026-09-28，源码 Ref 边界复核于 2026-10-17。
 > 本文记录 SFR001/v1 的实现，不是稳定版发布授权。
 
 ## SF008 有界规则（2026-09-26）
@@ -62,7 +62,7 @@ Contract，并不意味着 Luna 已有可传递的 `RuntimeFragmentRef<S>` 类�
 | 边界 | 状态 | 已有证据／实际剩余项 |
 | --- | --- | --- |
 | `host-ref` | `implemented` | C++ move-only 引用、owned／borrowed 环境、factory／cleanup、generation pin 及已校验的 native 拥有 carrier 转移；`luna.runtime-fragment-v1`。 |
-| `source-ref-apply` | `implementation-open` | Native singleton handle／校验／Drop／transfer、源码 `RuntimeFragmentRef<S>` 拼写／名义检查、LLVM Ref Drop／局部转移，以及前端精确 Slot 的 Ref apply 识别／词法借用检查已实现。内部 canonical CFG 记录能验证 Ref owner、精确导出的 Slot 和词法 Apply region；Slot 站点参与既有 context-effect 固定点。编译器私有 native 桥接可从借用的 Ref 派生、释放拥有型局部 context。不进入 wire 的 CFG 计划可验证确切入口和有序退出义务；一次性 LLVM module 验证私有的派生／状态／Drop 转换。另一一次性 CodeGenerator 可生成单一顶层 Ref-apply 源码 body 及可选的内层 region；内层可借用同一个或第二个 Ref，目标可为相同或不同的精确 Slot，支持正常及提前返回出口；私有证明核对派生、直接及 outlined RuntimeSlot 分派与每条出口的 Drop 的有效 context 栈，提前返回的 Drop 先于外层 Ref owner cleanup。仅测试目标启用的 JIT 入口还使用真实 Ref 执行正常和提前退出路径，并以两个不同 descriptor 验证双 Ref 的分派来源及双 Slot 的保留／还原（包括顺序与 outlined Slot 站点、一至两层 outlined return，以及两个嵌套 Apply region），确认派生的 generation pin 被释放。回调 frame 携带完整派生 context owner 栈；回调局部内层 Apply 经 Jump 边派生和释放自己的 owner，私有证明核对其派生、分派、return 及失败分支的 Drop。一次性 CodeGenerator module 也验证 unit 与直接 affine 返回函数体的私有宿主 carrier wrapper。非 Jump 转换及可恢复运行时失败清理证明、源码签名／import／参数／返回发布、公开宿主返回 ABI、完整 compiler dropGlue、wire round-trip 和端到端门仍未完成，内部 Ref 暂禁止发布；见实施切片。 |
+| `source-ref-apply` | `implementation-open` | 前端名义与词法借用检查、canonical Apply CFG／context effect，以及私有 JIT／codegen 已覆盖一至两个借用 Ref、嵌套／outlined Slot 站点、正常／提前退出和部分可恢复分派失败。仅测试用 MoonIR 0.4 codec 以精确的 verified owner 证据往返一个 imported-Slot Ref／unit consumer；普通构建中的内部 loader 可物化其 wrapper，并暂存绑定 owner 的类型化 candidate，包含配对激活。绑定 proof 的同包 Native v4 测试 producer 也已由独立宿主进程调用。这些仍是私有证明。公开源码发布尚需批准 Ref 入口／状态 ABI、完整 import／参数／返回与 Drop 契约、更广的失败清理和所有权转移，以及公开的两包执行门；见实施计划。 |
 | `candidate-snapshot` | `implemented` | `snapshotRuntimeFragmentCandidates(generation, slot, ...)` 按精确 Slot／Contract 过滤显式给定的单个 generation，快照不可变且固定 generation；不是所有已加载包的全局查询。 |
 | `candidate-aggregation` | `host-managed` | 宿主知道自己加载的包并可组合各 generation 的候选；Runtime 没有内建全局候选集合或跨 generation 聚合查询。便利 API 是后续范围选择，不是当前热路径缺陷。 |
 | `candidate-notification` | `host-managed` | 加载／激活结果和 generation identity 供宿主观察；没有内建候选变化事件总线，不自动发现、排序、选胜者或注入。 |
@@ -79,7 +79,7 @@ Contract，并不意味着 Luna 已有可传递的 `RuntimeFragmentRef<S>` 类�
 
 <!-- SLOT_FRAGMENT_V1_ACCEPTANCE_END -->
 
-## ABI 边界清单（2026-10-05）
+## ABI 边界清单（复核于 2026-10-17）
 
 此清单区分已版本化的原生接口、编译器内部验证和未定稿的源码 ABI；不扩大 v1 验收
 快照，也不批准稳定版发布。
@@ -88,8 +88,8 @@ Contract，并不意味着 Luna 已有可传递的 `RuntimeFragmentRef<S>` 类�
 | --- | --- |
 | 原生 Fragment ABI | 已实现 v1 descriptor 与 dispatch C ABI（`LRF1`、版本 1）：精确 Slot／Contract 和实参／环境布局、factory/destroy/execute 回调、显式 dispatch context、single-shot 续体。已发布 execute 回调不传 context。 |
 | 原生 Ref 桥 | 已实现 v1 check/transfer/drop，作用于验证过的拥有型 handle cell；不接受任意指针，也不是 Luna 源码导入／返回 ABI。 |
-| 编译器内部源码 Ref 验证 | 已有 `RuntimeFragmentRef<S>` 拼写和精确 Slot 名义检查；一次性 LLVM module 验证私有 unit 与 affine-return carrier wrapper，仅测试用的 JIT 执行受限的一至两层、单或双借用 Ref、相同或不同精确 Slot 的 Ref-apply 源码 body，包含回调局部内层 Apply、直接及 outlined Slot 站点及 outlined return 逃逸／清理。这些都不是公开符号、已发布 carrier 布局或 container 支持。 |
-| 跨包源码 Ref ABI | 未定稿且发布被阻止：源码签名／导入／返回、完整 drop glue、Moon Container 往返和 Ref operand `apply` 尚无可发布契约。 |
+| 编译器内部源码 Ref 验证 | 源码 `RuntimeFragmentRef<S>` 已有名义与词法检查。私有 CodeGenerator／JIT 证明覆盖受限 Ref／unit Apply、嵌套／outlined Slot 站点、部分失败清理与有界拥有型返回。这些路径不发布源码 ABI。 |
+| 跨包源码 Ref ABI | 未定稿的公开 ABI。仅测试用 MoonIR 0.4 imported-Slot Ref／unit container 可凭 verified owner 证据往返。普通构建中的内部 loader 可物化 wrapper 并暂存绑定 owner 的类型化 candidate；公开加载仍关闭。同包 Native v4 producer 与独立宿主调用也只在测试中启用。源码 import／export／return 与宿主 ABI 批准、完整 Drop／失败契约和公开两包准入仍待完成。 |
 
 真实的两层 Ref-apply 源码夹具现验证 `?` 的 CFG：Result Switch 留在两层 context 内，
 Err Return 记录先内后外的 context 退出。仅测试用的 JIT 入口也执行本地 Ok／Err 输入

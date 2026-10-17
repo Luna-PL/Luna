@@ -2,7 +2,7 @@
 
 [English](slot_fragment_contract.md) | [简体中文](slot_fragment_contract.zh-CN.md)
 
-> Status: implemented bounded behavior and regression evidence; v1 acceptance snapshot updated 2026-09-28.
+> Status: implemented bounded behavior and regression evidence; v1 acceptance snapshot updated 2026-09-28, source Ref boundary reviewed 2026-10-17.
 > This records the SFR001/v1 implementation; it is not stable-release approval.
 
 ## SF008 bounded profile (2026-09-26)
@@ -69,7 +69,7 @@ or release approval.
 | Boundary | State | Evidence / actual remaining work |
 | --- | --- | --- |
 | `host-ref` | `implemented` | C++ move-only refs, owned/borrowed environments, factories/cleanup, generation pins and validated native owning-carrier transfer; `luna.runtime-fragment-v1`. |
-| `source-ref-apply` | `implementation-open` | Native singleton handle/check/Drop/transfer, source `RuntimeFragmentRef<S>` spelling/nominal checks, LLVM Ref Drop/local transfer and frontend exact-Slot Ref-apply recognition/lexical borrow checks are implemented. An internal canonical CFG record verifies the Ref owner, exact exported Slot and lexical Apply region; Slot sites feed the existing context-effect fixed point. A compiler-private native bridge derives and drops an owned local context from a borrowed Ref. A wire-neutral CFG plan verifies exact context entry and ordered exit obligations; a disposable LLVM module proves private derive/status/Drop transitions. A second disposable CodeGenerator lowers one top-level Ref-apply source body with an optional nested region borrowing the same or a second Ref for the same or a different exact Slot across normal and early-return exits. The private proof checks that derive, direct and outlined RuntimeSlot dispatches, and per-exit Drops follow the active context stack and that early-return Drop precedes outer Ref owner cleanup. A test-target-only JIT hook executes normal and early-exit source bodies, including sequential and outlined Slot sites, one- or two-level outlined returns, and two nested Apply regions, against real Refs, checks two-Slot dispatch preservation and restoration, and confirms the derived generation pin is released. Callback frames carry the full derived context owner stack; a callback-local inner Apply derives and releases its own owner through Jump edges, and the private proof checks its derive, dispatch, return and failure Drops. Disposable CodeGenerator modules also pair unit and direct affine-return bodies with private status-returning host carrier wrappers. Non-Jump transitions and recoverable runtime-failure cleanup proofs, source signature/import/parameter/return publication, a public host return ABI, complete compiler dropGlue, wire round-trip and end-to-end gates remain unimplemented; internal Refs cannot yet be published; see implementation slices. |
+| `source-ref-apply` | `implementation-open` | Frontend nominal and lexical-borrow checks, canonical Apply CFG/context effects, and private JIT/codegen cover one or two borrowed Refs, nested/outlined Slot sites, normal and early exits, and selected recoverable dispatch failures. A test-only MoonIR 0.4 codec round-trips one imported-Slot Ref/unit consumer against exact verified owner evidence; the ordinary-build internal loader materializes its wrapper and stages an owner-bound typed candidate, including paired activation. A proof-bound same-package Native v4 test producer is called from an independent host process. These are private proofs. Public source publication still needs an approved Ref ingress/status ABI, complete import/parameter/return and Drop contracts, broader failure cleanup and ownership transfer, and the public two-package gate; see the implementation plan. |
 | `candidate-snapshot` | `implemented` | `snapshotRuntimeFragmentCandidates(generation, slot, ...)` filters one explicitly supplied generation by exact Slot/Contract and pins an immutable snapshot; not an all-loaded-package global query. |
 | `candidate-aggregation` | `host-managed` | Hosts know the packages they load and may compose per-generation candidates. Runtime has no built-in global candidate set/cross-generation aggregate query. A convenience API is a later scope choice, not a hot-path defect. |
 | `candidate-notification` | `host-managed` | Load/activation results and generation identities let hosts observe changes; no built-in candidate event bus or automatic discovery, ordering, winner selection or injection. |
@@ -86,7 +86,7 @@ or release approval.
 
 <!-- SLOT_FRAGMENT_V1_ACCEPTANCE_END -->
 
-## ABI boundary ledger (2026-10-05)
+## ABI boundary ledger (reviewed 2026-10-17)
 
 This ledger distinguishes a versioned native interface from compiler-internal
 proofs and an uncommitted source-language ABI. It does not expand the v1
@@ -96,8 +96,8 @@ acceptance snapshot or approve a stable release.
 | --- | --- |
 | Native Fragment ABI | Implemented v1 descriptor and dispatch C ABI (`LRF1`, version 1): exact Slot/Contract and argument/environment layouts, factory/destroy/execute callbacks, explicit dispatch context and single-shot continuation. Published execute callbacks have no context argument. |
 | Native Ref bridge | Implemented v1 check/transfer/drop on validated owning handle cells. This is not arbitrary-pointer adoption or a Luna source import/return ABI. |
-| Compiler-internal source Ref proofs | `RuntimeFragmentRef<S>` spelling and exact nominal Slot checking exist. Disposable LLVM modules exercise private unit and affine-return carrier wrappers; a test-only JIT executes a restricted one- or two-region Ref-apply source body using one or two borrowed Refs targeting the same or different exact Slots; it covers direct and outlined Slot sites, including callback-local inner Apply, outlined return escape and cleanup. None of these are public symbols, a published carrier layout or container support. |
-| Cross-package source Ref ABI | Uncommitted and blocked: source signatures/imports/returns, complete drop glue, Moon Container round-trip and Ref-operand `apply` have no publishable contract yet. |
+| Compiler-internal source Ref proofs | Source `RuntimeFragmentRef<S>` has nominal and lexical checks. Private CodeGenerator/JIT proofs cover restricted Ref/unit Apply, nested/outlined Slot sites, selected failure cleanup, and bounded owned returns. These paths do not publish a source ABI. |
+| Cross-package source Ref ABI | Uncommitted public ABI. A test-only MoonIR 0.4 imported-Slot Ref/unit container round-trips against verified owner evidence. An ordinary-build internal loader materializes its wrapper and stages an owner-bound typed candidate; public loading stays closed. The same-package Native v4 producer and independent host call are test-enabled only. Source import/export/return and host ABI approval, complete Drop/failure contracts, and public two-package admission remain open. |
 
 A real nested Ref-apply source fixture now verifies the CFG for `?`: its Result
 Switch stays within both contexts, and its Err Return records inner-before-outer

@@ -2515,9 +2515,13 @@ not a public ABI decision or stable-release approval:
 4. **Pass the two-package execution gate.** Import a host-created, pinned Ref
    from a verified generation; run source apply against an explicit parent
    context. The private JIT now covers borrowed ingress, invalid capability
-   rejection and repeated calls after Runtime teardown. Connect the inert
-   verified consumer generation to an admitted candidate and complete owning
-   parameter/return transfer. Include
+   rejection and repeated calls after Runtime teardown. Promote the verified
+   consumer and its private admitted candidate only after public host ABI
+   review, and complete owning parameter/return transfer. The current verified
+   imported-Slot consumer fixture dispatches one Slot on a normal exit. Next
+   prove an early exit and a recoverable dispatch failure through separately
+   verified consumer bytes,
+   keeping the exact owner proof across paired activation and teardown. Include
    nominal/contract mismatch, failed ingress, normal and early exits, and
    cleanup/pin-release regressions. Only after this gate and the remaining
    control-flow cases pass may
