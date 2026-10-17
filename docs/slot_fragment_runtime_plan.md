@@ -2221,7 +2221,10 @@ retain the owner pin before publication. The consumer proof retains a
 materialized code lease, but no entry pointer or candidate is exposed through
 ordinary public loading. Admitting a public Runtime candidate remains a
 separate gate. The ordinary wrapper is exercised by the quarantined typed
-candidate and the internal Runtime callback tests.
+candidate and the internal Runtime callback tests. The ordinary typed caller
+also survives a host Fragment callback releasing its caller's borrowed Ref
+handle before resume: its temporary pin keeps the source call live, and both
+handle shells drop exactly once.
 
 The narrow preparation round-trip now walks frozen type-table edges when
 checking whether another callable uses its sole Ref type. Function parameters,

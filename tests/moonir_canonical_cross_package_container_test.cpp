@@ -63,7 +63,9 @@ struct VerifiedRefFlowProbe {
     bool retainedPairLeaseDuringDispatch = false;
     luna::runtime::RuntimeFragmentRefHandle* releaseOuterRef = nullptr;
     luna::runtime::RuntimeFragmentRefHandle* releaseInnerRef = nullptr;
+    luna::runtime::RuntimeFragmentRefHandle* releaseSingleRef = nullptr;
     bool releasedRefsBeforeResume = false;
+    bool releasedSingleBeforeResume = false;
     bool valid = true;
 };
 
@@ -96,6 +98,11 @@ void executeVerifiedRefFlowProbe(void*, void* activation) {
     int32_t value = 0;
     std::memcpy(&value, arguments, sizeof(value));
     probe->values.push_back(value);
+    if (value == 0 && probe->releaseSingleRef) {
+        probe->releaseSingleRef->reset();
+        probe->releasedSingleBeforeResume = true;
+        probe->releaseSingleRef = nullptr;
+    }
     if (value == 0 && probe->releaseOuterRef && probe->releaseInnerRef) {
         probe->releaseOuterRef->reset();
         probe->releaseInnerRef->reset();
@@ -1422,6 +1429,28 @@ int runCrossPackageContainerTest() {
             LUNA_RUNTIME_FRAGMENT_REF_SUCCESS_V1)
         return fail("wrong-target Ref probes were not Runtime-issued handles");
     activeVerifiedRefFlowProbe = &flowProbe;
+    luna::runtime::RuntimeFragmentRefHandle singleCallerRef;
+    if (!luna::runtime::pinRuntimeFragmentRefHandle(
+            flowRef, singleCallerRef, error))
+        return fail("verified single-Ref callback release lacked a live handle");
+    flowProbe.releaseSingleRef = &singleCallerRef;
+    flowProbe.releasedSingleBeforeResume = false;
+    flowProbe.values.clear();
+    const auto singleDropsBefore =
+        luna::runtime::runtimeFragmentRefDropCountForTest();
+    auto singleCandidate = integratedRefGeneration.pinCandidateForTest();
+    int32_t singleStatus = 777;
+    const bool singleCall = singleCandidate.call(
+        noneContext, singleCallerRef, singleStatus, error);
+    flowProbe.releaseSingleRef = nullptr;
+    if (!singleCall ||
+        singleStatus != LUNA_PRIVATE_REF_UNIT_APPLY_SUCCESS_V1_TEST ||
+        !flowProbe.releasedSingleBeforeResume || singleCallerRef ||
+        flowProbe.values != std::vector<int32_t>{0} || !flowProbe.valid ||
+        luna::runtime::runtimeFragmentRefDropCountForTest() !=
+            singleDropsBefore + 2)
+        return fail("verified single-Ref caller lost its pin after callback release");
+    singleCandidate = {};
     const std::string nestedPluginSource =
         "package canonical.container.refprep; module effects; "
         "using canonical.container.host as host; "
