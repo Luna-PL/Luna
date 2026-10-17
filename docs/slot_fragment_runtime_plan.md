@@ -2943,6 +2943,11 @@ when one exists. Missing, wrong-kind or wrong-contract publication rows and
 foreign import/re-export attempts remain rejected. A full encode/decode/load
 test exercises generated Copy factories, None/One, resume/discard, capture
 writeback and return escape after Runtime teardown.
+The ordinary verified-container staging adapter now checks that its request
+retains the exact JIT module lease, including shared ownership, and carries no
+Ref candidate, caller lease or module relation. Read-only mutation probes cover
+a same-address foreign lease owner and added fields; the normal generation
+stage/load path remains executable.
 The source-to-JIT cross-package test above is distinct from artifact loading.
 The verified-container gap is now covered by a separate small host/plugin
 workspace: both packages encode into independent containers and load through

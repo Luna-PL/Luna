@@ -2153,6 +2153,9 @@ execution context 仍固定插件 generation；释放 context 后 generation 随
 对象仍存在时继续核对其公开标志。缺失、错误 kind／contract 的公开行与外包 import／
 re-export 冒充仍被拒绝。完整 encode／decode／load 测试覆盖生成的 Copy factory、None／
 One、resume／discard、capture 回写及 return 逃逸，且在 Runtime 销毁后继续执行。
+普通 verified-container 暂存适配器现核对请求保留精确的 JIT module lease（含共享所有权），
+且不携带 Ref candidate、caller lease 或 module 关系。只读篡改探针覆盖同地址但不同所有权的
+lease 及新增字段；正常 generation 暂存／加载路径仍可执行。
 上述跨包源码到 JIT 测试与产物加载是两条不同证据。独立的小型 host/plugin workspace
 现已覆盖 verified container 缺口：两包分别编码容器，使用已验证 generation 适配器加载，
 而非直接注册 JIT。Slot 公开事实仍持久化在所属包根 `Exports` 中；所属包完整解码验证后

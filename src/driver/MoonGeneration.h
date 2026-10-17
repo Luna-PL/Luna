@@ -45,6 +45,14 @@ bool stageVerifiedMoonGeneration(
     const moon::SlotPublicationDependencies& dependencies = {},
     MoonJitOptimization optimization = MoonJitOptimization::O0);
 
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+// Exercise the verified generation request verifier without JIT or staging.
+bool verifyMoonGenerationRequestMutationForTest(
+    const std::function<void(luna::runtime::GenerationStagingRequest&)>&
+        mutate,
+    std::string& error);
+#endif
+
 bool loadVerifiedMoonGenerationOnce(
     luna::runtime::MoonRuntime& runtime,
     const std::vector<uint8_t>& containerBytes,

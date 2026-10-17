@@ -151,6 +151,38 @@ fn main() -> i32 { return 0; }
 }
 
 int runPipelineContainerTests() {
+    {
+        std::string requestError;
+        const auto rejected = [&](const auto& mutate) {
+            return !luna::driver::verifyMoonGenerationRequestMutationForTest(
+                       mutate, requestError) &&
+                requestError ==
+                    "verified Moon generation identity changed before staging";
+        };
+        if (!luna::driver::verifyMoonGenerationRequestMutationForTest(
+                [](auto&) {}, requestError) ||
+            !rejected([](auto& request) {
+                request.materializationKey += ":foreign";
+            }) ||
+            !rejected([](auto& request) {
+                request.moduleLease = std::shared_ptr<const void>(
+                    request.moduleLease.get(), [](const void*) {});
+            }) ||
+            !rejected([](auto& request) {
+                request.requiredAbsentModuleIds = {"org.luna.test.foreign"};
+            }) ||
+            !rejected([](auto& request) {
+                request.requiredActiveModules =
+                    {{"org.luna.test.foreign", 1}};
+            }) ||
+            !rejected([](auto& request) {
+                request.refUnitCandidates.emplace_back();
+            }) ||
+            !rejected([](auto& request) {
+                request.refUnitCallerLease = request.moduleLease;
+            }))
+            return fail("verified Moon generation accepted a changed staging request");
+    }
     trace("pipeline container compile");
     // CompilerPipeline always seals production function bodies into canonical
     // CFGs. Verify that a simple program cannot retain a structured body.

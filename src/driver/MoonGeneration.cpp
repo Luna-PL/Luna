@@ -175,6 +175,36 @@ struct LoadedMoonGeneration {
     luna::runtime::RuntimeDescriptorRegistryView runtimeDescriptors;
 };
 
+luna::runtime::GenerationStagingRequest makeVerifiedMoonGenerationRequest(
+    const std::shared_ptr<LoadedMoonGeneration>& loaded) {
+    luna::runtime::GenerationStagingRequest request;
+    request.moduleId = loaded->manifest.packageId;
+    request.contentDigest = loaded->contentDigest;
+    request.materializationKey = loaded->materializationKey;
+    request.moduleLease = loaded;
+    return request;
+}
+
+bool verifyVerifiedMoonGenerationRequest(
+    const luna::runtime::GenerationStagingRequest& candidate,
+    const std::shared_ptr<LoadedMoonGeneration>& loaded,
+    std::string& error) {
+    if (candidate.moduleId != loaded->manifest.packageId ||
+        candidate.contentDigest != loaded->contentDigest ||
+        candidate.materializationKey != loaded->materializationKey ||
+        candidate.moduleLease.get() != loaded.get() ||
+        candidate.moduleLease.owner_before(loaded) ||
+        loaded.owner_before(candidate.moduleLease) ||
+        !candidate.refUnitCandidates.empty() || candidate.refUnitCaller ||
+        candidate.refUnitCallerLease ||
+        !candidate.requiredAbsentModuleIds.empty() ||
+        !candidate.requiredActiveModules.empty()) {
+        error = "verified Moon generation identity changed before staging";
+        return false;
+    }
+    return true;
+}
+
 bool jitConfiguration(MoonJitOptimization optimization,
                       LunaOptimizationLevel& level, std::string& key,
                       std::string& error) {
@@ -511,6 +541,26 @@ bool validateRuntimeDescriptors(
 
 } // namespace
 
+#ifdef LUNA_PRIVATE_REF_JIT_TEST
+bool verifyMoonGenerationRequestMutationForTest(
+    const std::function<void(luna::runtime::GenerationStagingRequest&)>&
+        mutate,
+    std::string& error) {
+    error.clear();
+    if (!mutate) {
+        error = "verified Moon generation request probe requires mutation";
+        return false;
+    }
+    auto loaded = std::make_shared<LoadedMoonGeneration>();
+    loaded->manifest.packageId = "org.luna.test.verified";
+    loaded->contentDigest = std::string(64, '0');
+    loaded->materializationKey = "luna.test.verified:ir=O0";
+    auto request = makeVerifiedMoonGenerationRequest(loaded);
+    mutate(request);
+    return verifyVerifiedMoonGenerationRequest(request, loaded, error);
+}
+#endif
+
 bool stageVerifiedMoonGeneration(
     luna::runtime::MoonRuntime& runtime,
     const std::vector<uint8_t>& containerBytes,
@@ -550,22 +600,12 @@ bool stageVerifiedMoonGeneration(
     }
     if (!validateRuntimeDescriptors(*loaded, error)) return false;
 
-    luna::runtime::GenerationStagingRequest request;
-    request.moduleId = loaded->manifest.packageId;
-    request.contentDigest = loaded->contentDigest;
-    request.materializationKey = loaded->materializationKey;
-    request.moduleLease = loaded;
+    auto request = makeVerifiedMoonGenerationRequest(loaded);
     return runtime.stage(
         request,
         [loaded](const auto& candidate, std::string& verificationError) {
-            if (candidate.moduleId != loaded->manifest.packageId ||
-                candidate.contentDigest != loaded->contentDigest ||
-                candidate.materializationKey != loaded->materializationKey) {
-                verificationError =
-                    "verified Moon generation identity changed before staging";
-                return false;
-            }
-            return true;
+            return verifyVerifiedMoonGenerationRequest(
+                candidate, loaded, verificationError);
         },
         [loaded](const auto&, auto& bindings, std::string& resolutionError) {
             const auto published = publishedDeclarations(
