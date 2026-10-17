@@ -2288,7 +2288,7 @@ activation without partial publication, and a pinned call after teardown on
 Windows, Linux and macOS. Existing private probes cover parts of this matrix;
 they do not establish the public loader contract.
 
-### Next source Ref/apply gates (updated 2026-10-16)
+### Next source Ref/apply gates (updated 2026-10-17)
 
 This is the proposed implementation order for the remaining source feature,
 not a public ABI decision or stable-release approval:
@@ -2308,7 +2308,11 @@ not a public ABI decision or stable-release approval:
    and succeeds on two subsequent calls. The structural proof accounts for
    the failed dispatch context Drop; the fixture releases its generation pin.
    Ordinary codegen still rejects the selector, and the public one-Ref/unit
-   entry profile is unchanged. The narrow `Result<i32, i32>` `?` path now has
+   entry profile is unchanged. A second runtime-selected body dispatches once
+   before its early return or twice when it continues. The later dispatch can
+   fail after the first completed resume; the private status body releases the
+   active context and the same borrowed Ref succeeds on two later calls.
+   The narrow `Result<i32, i32>` `?` path now has
    an inner-before-outer CFG proof and private Ok/Err JIT
    evidence, including one affine source error converted to a scalar by its
    frozen `From` method and cleaned by source `Drop`. A two-node owned

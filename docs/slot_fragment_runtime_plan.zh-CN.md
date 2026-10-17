@@ -1684,7 +1684,7 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
 以及 Windows、Linux、macOS 上销毁 loader 与 Runtime 后的固定调用。已有私有探针
 覆盖其中一部分，但不能代替公开 loader 契约。
 
-### 下一步源码 Ref／apply 完成门（更新于 2026-10-16）
+### 下一步源码 Ref／apply 完成门（更新于 2026-10-17）
 
 以下是剩余源码功能的建议实施顺序，不是公开 ABI 决议或稳定版发布批准：
 
@@ -1698,7 +1698,9 @@ Host import 指向已准入 Apply 的签名，确认准备阶段在代码生成�
    私有 body 返回原始失败状态，
    借用 Ref 仍有效，随后两次调用均成功。结构证明核对失败分派的 context Drop，
    fixture 最终释放 generation pin。普通 codegen 仍拒绝此 selector，公开的单 Ref／
-   unit 入口配置未改变。受限的 `Result<i32, i32>` `?` 路径已有
+   unit 入口配置未改变。第二个运行时条件 body 在提前返回前先分派一次，继续时分派
+   两次；第二次分派可在首次 resume 完成后失败。私有状态 body 释放活跃 context，
+   同一个借用 Ref 随后两次调用仍成功。受限的 `Result<i32, i32>` `?` 路径已有
    先内后外的 CFG 证明和 Ok／Err 私有 JIT 证据，包括将一个仿射源码错误经冻结
    `From` 方法转换为标量并由源码 `Drop` 清理。双节点拥有型转换参数也已在
    Windows 与 Linux 的 ASAN JIT 运行中证明两条标量返回分支均外层先于内层

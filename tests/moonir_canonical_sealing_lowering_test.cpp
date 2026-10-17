@@ -84,6 +84,7 @@ bool privateRefJitPayloadValid = true;
 std::vector<int32_t> privateRefJitObservedArguments;
 std::vector<unsigned> privateRefJitObservedSources;
 bool privateRefJitInjectRepeatedResumeFailure = false;
+int32_t privateRefJitRepeatedResumeFailureValue = 0;
 int32_t privateRefJitRepeatedResumeStatus = 0;
 std::array<const char*, 2> privateRefJitExpectedSlotIds{};
 std::array<const char*, 2> privateRefJitExpectedSlotContracts{};
@@ -116,7 +117,9 @@ void executePrivateRefJitFragmentFrom(unsigned source, void* activation) {
     if (privateRefJitResumeStatus ==
         LUNA_RUNTIME_FRAGMENT_CONTINUATION_COMPLETED_V1)
         ++privateRefJitCompletedResumes;
-    if (privateRefJitInjectRepeatedResumeFailure)
+    if (privateRefJitInjectRepeatedResumeFailure &&
+        (privateRefJitRepeatedResumeFailureValue == 0 ||
+         privateRefJitRepeatedResumeFailureValue == value))
         privateRefJitRepeatedResumeStatus =
             luna_runtime_fragment_activation_resume_v1(activation);
 }
@@ -273,7 +276,8 @@ bool exercisePrivateRefApplyJit(
     unsigned bodyDropCalls = 0,
     bool exerciseLoadedResult = false,
     std::optional<bool> branchSelector = std::nullopt,
-    bool exerciseSelectorFailure = false) {
+    bool exerciseSelectorFailure = false,
+    bool failSecondDispatch = false) {
     const moon::SlotDecl* slot = nullptr;
     const moon::SlotDecl* secondSlot = nullptr;
     for (const auto& declaration : module.declarations)
@@ -297,6 +301,8 @@ bool exercisePrivateRefApplyJit(
                                   !expectedResult || twoBorrowedReferences)) ||
         (branchSelector && twoBorrowedReferences) ||
         (exerciseSelectorFailure && (!branchSelector || *branchSelector)) ||
+        (failSecondDispatch &&
+         (!exerciseSelectorFailure || expectedDispatches != 2)) ||
         function.params.size() !=
             ((twoBorrowedReferences || branchSelector) ? 2u : 1u) ||
         !valueType || valueType->kind != TypeKind::I32 ||
@@ -1106,15 +1112,20 @@ bool exercisePrivateRefApplyJit(
             return false;
         }
         privateRefJitRepeatedResumeStatus = 0;
+        privateRefJitRepeatedResumeFailureValue =
+            failSecondDispatch ? 2 : 0;
         privateRefJitInjectRepeatedResumeFailure = true;
         const auto failedStatus = entrySelector(parent.opaque(),
             const_cast<void*>(handle.opaque()), false);
         privateRefJitInjectRepeatedResumeFailure = false;
+        privateRefJitRepeatedResumeFailureValue = 0;
+        const auto failedDispatches = failSecondDispatch ? 2u : 1u;
         if (failedStatus != LUNA_RUNTIME_FRAGMENT_CONTINUATION_FAILED_V1 ||
             privateRefJitRepeatedResumeStatus !=
                 LUNA_RUNTIME_FRAGMENT_DISPATCH_EXECUTION_FAILED_V1 ||
-            privateRefJitExecutions != before + 1 ||
-            privateRefJitCompletedResumes != resumesBefore + 1 ||
+            privateRefJitExecutions != before + failedDispatches ||
+            privateRefJitCompletedResumes !=
+                resumesBefore + failedDispatches ||
             generationLease.expired()) {
             std::ostringstream details;
             details << "private Ref selector failure lost its recoverable context"
@@ -5567,6 +5578,40 @@ int runLoweredCompositionTests(SealingTestContext& context) {
         for (const auto& diagnostic : blockedDynamicExit.errors())
             std::cerr << diagnostic.message << '\n';
         return fail("runtime-selected private selector escaped the public codegen gate");
+    }
+    auto postDispatchSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
+        "export slot checkpoint(value: i32);\n"
+        "runtime fn post_dispatch(selected: RuntimeFragmentRef<checkpoint>, leave: bool) {\n"
+        "  apply selected { checkpoint(1) {} if leave { return; } checkpoint(2) {} }\n"
+        "}\n",
+        "<canonical-ref-post-dispatch-exit>");
+    if (!postDispatchSnapshot.success())
+        return fail("frontend rejected runtime-selected post-dispatch exit");
+    moon::LunaLowerer postDispatchLowerer;
+    auto postDispatchModule = postDispatchLowerer.lower(
+        *postDispatchSnapshot.program(), *postDispatchSnapshot.symbolTable());
+    moon::Sealer postDispatchSealer;
+    if (!postDispatchModule || !postDispatchLowerer.errors().empty() ||
+        !postDispatchSealer.sealFunctionBodies(*postDispatchModule))
+        return fail("runtime-selected post-dispatch exit did not seal");
+    moon::FunctionDecl* postDispatch = nullptr;
+    for (auto& declaration : postDispatchModule->declarations)
+        if (auto* function = dynamic_cast<moon::FunctionDecl*>(
+                declaration.get()); function &&
+                function->name == "post_dispatch")
+            postDispatch = function;
+    const auto runPostDispatch = [&](bool leave, unsigned dispatches,
+                                     bool failSecond = false) {
+        return exercisePrivateRefApplyJit(
+            *postDispatchModule, *postDispatch, privateRefJitError,
+            dispatches, false, std::nullopt, false, false, {}, {},
+            std::nullopt, std::nullopt, false, false, false, nullptr, 0,
+            false, leave, failSecond, failSecond);
+    };
+    if (!postDispatch || !runPostDispatch(true, 1) ||
+        !runPostDispatch(false, 2, true)) {
+        std::cerr << privateRefJitError << '\n';
+        return fail("runtime-selected post-dispatch exit failed private JIT execution");
     }
     auto multipleExitSnapshot = luna::tooling::AnalysisSnapshot::analyzeSource(
         "export slot checkpoint(value: i32);\n"
